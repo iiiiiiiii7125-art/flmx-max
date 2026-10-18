@@ -14,7 +14,7 @@ import (
 func TestExternalInboundImportContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	relayNode := seedKernelNode(t, r, "relay")
 
 	good := "ss://" + base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:secret")) + "@198.51.100.20:8388#%E8%90%BD%E5%9C%B0"
@@ -102,7 +102,7 @@ func TestExternalInboundImportContract(t *testing.T) {
 func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	relayNode := seedKernelNode(t, r, "relay")
 
 	var gotUA string
@@ -164,7 +164,7 @@ func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 func TestExternalProbeContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -19,7 +19,7 @@ func TestUserListReturnsMaxConn(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

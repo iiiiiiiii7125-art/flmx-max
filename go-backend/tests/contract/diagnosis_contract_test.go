@@ -81,7 +81,7 @@ func TestDiagnosisChainCoverageContracts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate user token: %v", err)
 	}
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestDiagnosisUsesFederationRuntimeForRemoteNodes(t *testing.T) {
 		t.Fatalf("insert exit chain: %v", err)
 	}
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestTunnelDiagnosisUsesConfiguredConnectIPContract(t *testing.T) {
 		t.Fatalf("insert exit chain: %v", err)
 	}
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

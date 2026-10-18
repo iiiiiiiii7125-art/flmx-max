@@ -47,7 +47,7 @@ func TestJWTMiddlewareContracts(t *testing.T) {
 	})
 
 	t.Run("valid token reaches next", func(t *testing.T) {
-		token, err := auth.GenerateToken(1, "admin_user", 0, secret)
+		token, err := auth.GenerateToken(1, "admin@user", 0, secret)
 		if err != nil {
 			t.Fatalf("generate token: %v", err)
 		}

@@ -38,7 +38,7 @@ func TestIssue349_ForwardListFormatsIPv6EntryAddressesContract(t *testing.T) {
 	if err := repo.DB().Exec(`
 		INSERT INTO forward(user_id, user_name, name, tunnel_id, remote_addr, strategy, in_flow, out_flow, created_time, updated_time, status, inx)
 		VALUES(?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1, ?)
-	`, 1, "admin_user", "issue349-forward", tunnelID, "1.1.1.1:443", "fifo", now, now, 0).Error; err != nil {
+	`, 1, "admin@user", "issue349-forward", tunnelID, "1.1.1.1:443", "fifo", now, now, 0).Error; err != nil {
 		t.Fatalf("insert forward: %v", err)
 	}
 	forwardID := mustLastInsertID(t, repo, "issue349-forward")

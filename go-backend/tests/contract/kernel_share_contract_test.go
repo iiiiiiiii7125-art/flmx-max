@@ -78,7 +78,7 @@ func getSub(t *testing.T, router http.Handler, path, ua string) *httptest.Respon
 func TestInboundShareAndSubscriptionContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	landing := seedKernelNode(t, r, "东京落地")
 	relayNode := seedKernelNode(t, r, "香港中转")
 	if err := r.DB().Exec(`UPDATE node SET server_ip = '198.51.100.7' WHERE id = ?`, relayNode).Error; err != nil {
@@ -240,7 +240,7 @@ func TestInboundShareAndSubscriptionContract(t *testing.T) {
 func TestInboundRelayValidationContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	landing := seedKernelNode(t, r, "landing")
 	relayNode := seedKernelNode(t, r, "relay")
 	other := seedKernelNode(t, r, "other")
@@ -277,7 +277,7 @@ func TestInboundRelayValidationContract(t *testing.T) {
 func TestInboundProxyProtocolAndWhitelistContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	landing := seedKernelNode(t, r, "landing")
 	relayNode := seedKernelNode(t, r, "relay")
 	inboundID := seedInboundOnNode(t, router, r, admin, landing,
@@ -326,7 +326,7 @@ func TestInboundProxyProtocolAndWhitelistContract(t *testing.T) {
 func TestPhase3KernelsContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	nodeID := seedKernelNode(t, r, "landing")
 
 	// Offline node: kernels are registered, versions resolved.
@@ -417,7 +417,7 @@ func TestPhase3KernelsContract(t *testing.T) {
 func TestACMEAndNaiveContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	nodeID := seedKernelNode(t, r, "landing")
 	oldNode := seedKernelNode(t, r, "old")
 	n, o := jsonInt64(nodeID), jsonInt64(oldNode)

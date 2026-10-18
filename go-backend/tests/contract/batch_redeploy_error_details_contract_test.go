@@ -18,7 +18,7 @@ func TestForwardBatchRedeployReturnsFailureReasonsContract(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	now := time.Now().UnixMilli()
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestTunnelBatchRedeployReturnsFailureReasonsContract(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	now := time.Now().UnixMilli()
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

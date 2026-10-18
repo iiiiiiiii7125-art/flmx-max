@@ -14,7 +14,7 @@ import (
 func TestInboundBackupRoundTripContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	landing := seedKernelNode(t, r, "landing")
 	relayNode := seedKernelNode(t, r, "relay")
 
