@@ -21,6 +21,22 @@ import (
 
 var errForwardNotFound = errors.New("forward not found")
 
+// S-04: 节点离线错误，携带离线节点ID列表
+// 用于删除转发时明确告知调用方哪些节点未清理，避免静默成功
+type nodeOfflineError struct {
+	nodeIDs []int64
+}
+
+func (e *nodeOfflineError) Error() string {
+	return fmt.Sprintf("S-04: 节点离线，转发未完全删除，离线节点: %v", e.nodeIDs)
+}
+
+// IsNodeOfflineError 判断是否为节点离线错误
+func IsNodeOfflineError(err error) bool {
+	var target *nodeOfflineError
+	return errors.As(err, &target)
+}
+
 type forwardRecord = model.ForwardRecord
 type tunnelRecord = model.TunnelRecord
 type forwardPortRecord = model.ForwardPortRecord
@@ -563,6 +579,7 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 	bases := buildForwardServiceBaseCandidates(forward.ID, forward.UserID, userTunnelID, candidateTunnelIDs)
 	if strings.EqualFold(strings.TrimSpace(commandType), "DeleteService") {
 		seen := map[int64]struct{}{}
+		var offlineNodes []int64
 		for _, fp := range ports {
 			if _, ok := seen[fp.NodeID]; ok {
 				continue
@@ -570,6 +587,9 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 			seen[fp.NodeID] = struct{}{}
 			if err := h.deleteForwardServiceBasesOnNode(fp.NodeID, bases); err != nil {
 				if isNodeOfflineOrTimeoutError(err) {
+					// S-04: 节点离线时不得静默跳过，记录离线节点，调用方决定如何处理
+					// （调用方 forwardDelete 会检查此错误并避免删库）
+					offlineNodes = append(offlineNodes, fp.NodeID)
 					continue
 				}
 				if tolerateNotFound && isNotFoundError(err) {
@@ -577,6 +597,10 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 				}
 				return err
 			}
+		}
+		if len(offlineNodes) > 0 {
+			// S-04: 返回离线节点信息，调用方不得静默返回成功
+			return &nodeOfflineError{nodeIDs: offlineNodes}
 		}
 		return nil
 	}
