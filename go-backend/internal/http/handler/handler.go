@@ -340,6 +340,20 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/error", h.errorPage)
 }
 
+// isStoredDefaultPassword 判断存储的口令哈希是否为种子默认口令（M-05）。
+// 仅用于管理员账号；登录已做过一次 bcrypt，这里是通行密钥等无密码登录路径的补充检查。
+func isStoredDefaultPassword(roleID int, pwdHash string) bool {
+	if roleID != 0 {
+		return false
+	}
+	for _, def := range []string{"admin@user", "admin_user"} {
+		if ok, _ := security.VerifyPassword(pwdHash, def); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -423,7 +437,15 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	token, err := auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
+	// M-05: 管理员用种子默认口令登录时签发受限 token（仅允许改密），
+	// 服务端强制改密。此处用登录时实际提供的密码精确判断，无需额外 bcrypt。
+	pwdChangeRequired := user.RoleID == 0 && (req.Password == "admin@user" || req.Password == "admin_user")
+	var token string
+	if pwdChangeRequired {
+		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
+	} else {
+		token, err = auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
+	}
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

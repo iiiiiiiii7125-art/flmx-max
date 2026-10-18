@@ -206,7 +206,12 @@ build_download_url() {
 # 校验文件缺失时直接拒绝安装（fail-closed），不允许未校验的 root 二进制落地。
 build_checksum_url() {
     local ARCH=$(get_architecture)
-    maybe_proxy_url "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/gost-${ARCH}.sha256"
+    local version="${RESOLVED_VERSION:-}"
+    if [[ -z "$version" ]]; then
+        echo "❌ RESOLVED_VERSION 未设置，无法构造校验 URL。" >&2
+        return 1
+    fi
+    maybe_proxy_url "https://github.com/${REPO}/releases/download/${version}/gost-${ARCH}.sha256"
 }
 
 verify_downloaded_binary() {
@@ -215,11 +220,23 @@ verify_downloaded_binary() {
         echo "❌ 系统缺少 sha256sum，无法校验二进制完整性，拒绝继续。"
         return 1
     fi
+    local checksum_url
+    if ! checksum_url=$(build_checksum_url); then
+        return 1
+    fi
     echo "🔐 下载 SHA256 校验文件..."
-    local expected
-    expected=$(curl -fL --max-time 60 "$(build_checksum_url)" 2>/dev/null | awk '{print $1}')
-    if [[ -z "$expected" ]]; then
+    local checksum_file
+    checksum_file=$(mktemp)
+    if ! curl -fL --max-time 60 -o "$checksum_file" "$checksum_url" 2>/dev/null; then
+        rm -f "$checksum_file"
         echo "❌ 无法获取 ${RESOLVED_VERSION} 的 .sha256 校验文件，拒绝安装未校验的二进制。"
+        return 1
+    fi
+    local expected
+    expected=$(awk '{print $1}' "$checksum_file")
+    rm -f "$checksum_file"
+    if [[ -z "$expected" ]]; then
+        echo "❌ 校验文件为空，拒绝安装未校验的二进制。"
         return 1
     fi
     local actual

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"go-backend/internal/security"
 	"go-backend/internal/store/repo"
 )
 
@@ -71,5 +72,26 @@ func TestValidatePeerResourceReferencesRejectsShellHooks(t *testing.T) {
 	}
 	if err := validatePeerResourceReferences(okCfg, "service"); err != nil {
 		t.Fatalf("empty hook list rejected: %v", err)
+	}
+}
+
+// M-05: isStoredDefaultPassword 精确识别种子默认口令哈希。
+func TestIsStoredDefaultPassword(t *testing.T) {
+	hash, err := security.HashPassword("admin@user")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if !isStoredDefaultPassword(0, hash) {
+		t.Fatalf("default password not detected")
+	}
+	changed, err := security.HashPassword("my-secure-pwd-123")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if isStoredDefaultPassword(0, changed) {
+		t.Fatalf("changed password flagged as default")
+	}
+	if isStoredDefaultPassword(1, hash) {
+		t.Fatalf("non-admin flagged")
 	}
 }

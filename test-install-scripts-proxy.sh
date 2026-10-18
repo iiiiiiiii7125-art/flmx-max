@@ -25,6 +25,9 @@ load_script_without_main() {
   temp_file=$(mktemp)
   sed '/^# 执行主函数$/,$d' "$script_path" > "$temp_file"
   VERSION="v-test"
+  # H-01: verify_downloaded_binary 需要 RESOLVED_VERSION；绕过
+  # ensure_download_url_initialized 的测试用此前置设置
+  RESOLVED_VERSION="v-test"
   source "$temp_file"
   rm -f "$temp_file"
 }
@@ -119,6 +122,7 @@ EOF
 
   curl() {
     local output=""
+    local url=""
 
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == "-o" ]]; then
@@ -126,8 +130,18 @@ EOF
         shift 2
         continue
       fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
       shift
     done
+
+    # H-01: install.sh 下载后会校验 .sha256；mock 返回 fake 二进制的真实哈希
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
 
     cat > "$output" <<'EOF'
 #!/bin/bash
@@ -245,6 +259,7 @@ test_install_flux_agent_writes_json_safe_config() (
   SERVER_ADDR='panel"addr'
   SECRET='sec\ret"1'
   DOWNLOAD_URL="https://example.com/gost"
+  RESOLVED_VERSION="v-test"
 
   ask_proxy_config() { :; }
   ensure_download_url_initialized() { :; }
@@ -254,14 +269,25 @@ test_install_flux_agent_writes_json_safe_config() (
   systemctl() { return 0; }
   curl() {
     local output=""
+    local url=""
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == "-o" ]]; then
         output="$2"
         shift 2
         continue
       fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
       shift
     done
+
+    # H-01: install.sh 下载后会校验 .sha256；mock 返回 fake 二进制的真实哈希
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
 
     cat > "$output" <<'EOF'
 #!/bin/bash
@@ -315,14 +341,25 @@ test_install_flux_agent_uses_openrc() (
   cleanup_legacy_gost_installation() { :; }
   curl() {
     local output=""
+    local url=""
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == "-o" ]]; then
         output="$2"
         shift 2
         continue
       fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
       shift
     done
+
+    # H-01: install.sh 下载后会校验 .sha256；mock 返回 fake 二进制的真实哈希
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/sh\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
 
     cat > "$output" <<'EOF'
 #!/bin/sh
