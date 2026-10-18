@@ -374,7 +374,13 @@ func (h *Handler) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号不可用"))
 		return
 	}
-	token, err := auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
+	// M-05: 存储口令仍为默认时签发受限 token（仅允许改密）
+	var token string
+	if isStoredDefaultPassword(user.RoleID, user.Pwd) {
+		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
+	} else {
+		token, err = auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
+	}
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault("登录失败"))
 		return

@@ -23,6 +23,10 @@ type Claims struct {
 	User   string `json:"user"`
 	Name   string `json:"name"`
 	RoleID int    `json:"role_id"`
+	// PwdChangeRequired: 持此 token 者必须先改密（默认口令登录的管理员）。
+	// 中间件仅放行 /api/v1/user/updatePassword；改密后旧 token 因
+	// PasswordChangedAt 失效，需重新登录获取正常 token。
+	PwdChangeRequired bool `json:"pwd_change_required,omitempty"`
 }
 
 type tokenHeader struct {
@@ -35,15 +39,25 @@ func GenerateToken(userID int64, username string, roleID int, secret string) (st
 }
 
 func GenerateTokenAt(userID int64, username string, roleID int, secret string, now time.Time) (string, error) {
+	return generateTokenAt(userID, username, roleID, secret, now, false)
+}
+
+// GenerateTokenAtWithPwdChangeRequired 签发"需改密"受限 token（M-05）。
+func GenerateTokenAtWithPwdChangeRequired(userID int64, username string, roleID int, secret string, now time.Time) (string, error) {
+	return generateTokenAt(userID, username, roleID, secret, now, true)
+}
+
+func generateTokenAt(userID int64, username string, roleID int, secret string, now time.Time, pwdChangeRequired bool) (string, error) {
 	header := tokenHeader{Alg: algorithm, Typ: "JWT"}
 	claims := Claims{
-		Sub:    strconv.FormatInt(userID, 10),
-		Iat:    now.Unix(),
-		IatMs:  now.UnixMilli(),
-		Exp:    now.Add(expireTime).Unix(),
-		User:   username,
-		Name:   username,
-		RoleID: roleID,
+		Sub:               strconv.FormatInt(userID, 10),
+		Iat:               now.Unix(),
+		IatMs:             now.UnixMilli(),
+		Exp:               now.Add(expireTime).Unix(),
+		User:              username,
+		Name:              username,
+		RoleID:            roleID,
+		PwdChangeRequired: pwdChangeRequired,
 	}
 
 	headerPart, err := encodeJSON(header)
