@@ -15,7 +15,7 @@ import (
 func TestSubscriptionContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	landing := seedKernelNode(t, r, "landing")
 	if err := r.DB().Exec(`UPDATE node SET server_ip = '198.51.100.9' WHERE id = ?`, landing).Error; err != nil {
 		t.Fatal(err)

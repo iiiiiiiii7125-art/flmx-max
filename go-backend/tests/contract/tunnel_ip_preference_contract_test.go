@@ -18,7 +18,7 @@ func TestTunnelCreateWithIPPreferenceContract(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	now := time.Now().UnixMilli()
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestTunnelUpdateIPPreferenceContract(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	now := time.Now().UnixMilli()
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestTunnelListReturnsIPPreferenceContract(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	now := time.Now().UnixMilli()
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

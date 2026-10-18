@@ -20,7 +20,7 @@ func TestFederationForwardCardFlowLinkageContract(t *testing.T) {
 	secret := "federation-forward-flow-contract-jwt"
 	router, r := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestFederationForwardCardFlowLinkageContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO forward(user_id, user_name, name, tunnel_id, remote_addr, strategy, in_flow, out_flow, created_time, updated_time, status, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, 1, "admin_user", "flow-linkage-forward", tunnelID, "1.1.1.1:443", "fifo", 0, 0, now, now, 1, 0).Error; err != nil {
+	`, 1, "admin@user", "flow-linkage-forward", tunnelID, "1.1.1.1:443", "fifo", 0, 0, now, now, 1, 0).Error; err != nil {
 		t.Fatalf("insert forward: %v", err)
 	}
 	forwardID := mustLastInsertID(t, r, "flow-linkage-forward")
@@ -190,7 +190,7 @@ func TestFederationForwardCardFlowLinkageContractSplitShareFlowAcrossMultipleFor
 	secret := "federation-forward-split-flow-contract-jwt"
 	router, r := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestFederationForwardCardFlowLinkageContractSplitShareFlowAcrossMultipleFor
 		if err := r.DB().Exec(`
 			INSERT INTO forward(user_id, user_name, name, tunnel_id, remote_addr, strategy, in_flow, out_flow, created_time, updated_time, status, inx)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, 1, "admin_user", name, tunnelID, "1.1.1.1:443", "fifo", 0, 0, now, now, 1, 0).Error; err != nil {
+		`, 1, "admin@user", name, tunnelID, "1.1.1.1:443", "fifo", 0, 0, now, now, 1, 0).Error; err != nil {
 			t.Fatalf("insert forward: %v", err)
 		}
 		forwardID := mustLastInsertID(t, r, name)
@@ -390,7 +390,7 @@ func TestFederationForwardCardFlowLinkageContractResolvesShareByTunnelBindingWhe
 	secret := "federation-forward-binding-flow-contract-jwt"
 	router, r := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestFederationForwardCardFlowLinkageContractResolvesShareByTunnelBindingWhe
 	if err := r.DB().Exec(`
 		INSERT INTO forward(user_id, user_name, name, tunnel_id, remote_addr, strategy, in_flow, out_flow, created_time, updated_time, status, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, 1, "admin_user", "flow-binding-forward", tunnelID, "1.1.1.1:443", "fifo", 0, 0, now, now, 1, 0).Error; err != nil {
+	`, 1, "admin@user", "flow-binding-forward", tunnelID, "1.1.1.1:443", "fifo", 0, 0, now, now, 1, 0).Error; err != nil {
 		t.Fatalf("insert forward: %v", err)
 	}
 	forwardID := mustLastInsertID(t, r, "flow-binding-forward")

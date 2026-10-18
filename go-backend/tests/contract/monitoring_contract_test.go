@@ -18,7 +18,7 @@ func TestNodeMetricsEndpoints(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	seedContractUser(t, repo, 2, "normal_user", 1, 1)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestTunnelMetricsEndpoints(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestServiceMonitorCRUD(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestServiceMonitorResults(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -761,7 +761,7 @@ func TestServiceMonitorLatestResultsEndpoint(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -874,7 +874,7 @@ func TestServiceMonitorLimitsEndpoint(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, _ := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -914,7 +914,7 @@ func TestMonitorNodeAndTunnelListEndpoints(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -1038,7 +1038,7 @@ func TestMonitorPermissionAdminEndpoints(t *testing.T) {
 	secret := "monitoring-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -1305,7 +1305,7 @@ func TestMonitorAccessEndpoint(t *testing.T) {
 	router, repo := setupContractRouter(t, secret)
 	seedContractUser(t, repo, 2, "normal_user", 1, 1)
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

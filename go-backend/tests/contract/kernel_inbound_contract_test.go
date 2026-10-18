@@ -43,7 +43,7 @@ func seedKernelNode(t *testing.T, r *repo.Repository, name string) int64 {
 func TestKernelInboundLifecycleContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("token: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 func TestKernelRejectsIneligibleNodesContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	nodeID := seedKernelNode(t, r, "nft")
 	if err := r.DB().Exec(`UPDATE node SET forward_mode = 'nftables' WHERE id = ?`, nodeID).Error; err != nil {
 		t.Fatal(err)

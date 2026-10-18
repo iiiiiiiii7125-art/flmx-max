@@ -47,7 +47,7 @@ func TestGroupUserUnbindRevokesInheritedTunnelPermission(t *testing.T) {
 		t.Fatalf("insert group_permission: %v", err)
 	}
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestGroupPermissionRemoveRevokesInheritedTunnelPermission(t *testing.T) {
 	}
 	tunnelGroupID := mustLastInsertID(t, repo, "tg-remove-contract")
 
-	adminToken, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

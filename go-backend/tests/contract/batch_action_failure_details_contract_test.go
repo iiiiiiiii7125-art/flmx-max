@@ -92,7 +92,7 @@ type batchForwardSeedOptions struct {
 
 func mustAdminToken(t *testing.T, secret string) string {
 	t.Helper()
-	token, err := auth.GenerateToken(1, "admin_user", 0, secret)
+	token, err := auth.GenerateToken(1, "admin@user", 0, secret)
 	if err != nil {
 		t.Fatalf("generate admin token: %v", err)
 	}

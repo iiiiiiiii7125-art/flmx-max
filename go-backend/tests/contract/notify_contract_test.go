@@ -74,7 +74,7 @@ func setConfig(t *testing.T, r *repo.Repository, name, value string) {
 func TestNotifyTestEndpointContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, _ := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	user, _ := auth.GenerateToken(2, "normal_user", 1, secret)
 	sink := &notifySink{}
 	srv := sink.server(t)
@@ -118,7 +118,7 @@ func TestNotifyTestEndpointContract(t *testing.T) {
 func TestNotifyImportedNodeDownContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	sink := &notifySink{}
 	srv := sink.server(t)
 	setConfig(t, r, "notify_enabled", "true")

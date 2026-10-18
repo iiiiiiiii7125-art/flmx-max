@@ -19,7 +19,7 @@ func ssLink(host, port, name string) string {
 func TestRemoteSourceContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
-	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 
 	var mu sync.Mutex
 	body := strings.Join([]string{ssLink("203.0.113.1", "8388", "香港 01"), ssLink("203.0.113.2", "8388", "日本 01")}, "\n")
