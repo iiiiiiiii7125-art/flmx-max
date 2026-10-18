@@ -4,15 +4,15 @@ export default defineConfig({
   lang: "zh-CN",
   title: "FLVX",
   description: "转发 + 节点搭建面板",
-  base: "/flvx-mod/",
+  base: "/flvx-max/",
   cleanUrls: true,
   lastUpdated: true,
-  head: [["link", { rel: "icon", type: "image/png", href: "/flvx-mod/logo.png" }]],
+  head: [["link", { rel: "icon", type: "image/jpeg", href: "/flvx-max/logo.jpg" }]],
   themeConfig: {
-    logo: "/logo.png",
+    logo: "/logo.jpg",
     nav: [
       { text: "指南", link: "/guide/getting-started" },
-      { text: "下载", link: "https://github.com/iiiiiiiii7125-art/flvx-mod/releases" },
+      { text: "下载", link: "https://github.com/iiiiiiiii7125-art/flvx-max/releases" },
     ],
     sidebar: [
       {
@@ -43,7 +43,7 @@ export default defineConfig({
         ],
       },
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/iiiiiiiii7125-art/flvx-mod" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/iiiiiiiii7125-art/flvx-max" }],
     search: { provider: "local" },
     outline: { level: [2, 3], label: "本页目录" },
     docFooter: { prev: "上一页", next: "下一页" },
