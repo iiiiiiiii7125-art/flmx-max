@@ -1428,7 +1428,23 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	tmpPath := binaryPath + ".new"
 	backupPath := binaryPath + ".old"
 
-	resp, err := http.Get(downloadURL)
+	// S-02: 限制重定向只允许 github.com，防止跳转到恶意域名
+	// 限制下载大小 100MB，超时 60 秒
+	httpClient := &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("S-02: 重定向次数过多")
+			}
+			// 只允许 github.com 及其子域名
+			host := strings.ToLower(req.URL.Host)
+			if host != "github.com" && !strings.HasSuffix(host, ".github.com") {
+				return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+			}
+			return nil
+		},
+	}
+	resp, err := httpClient.Get(downloadURL)
 	if err != nil {
 		return fmt.Errorf("下载升级包失败: %v", err)
 	}
@@ -1438,7 +1454,14 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		return fmt.Errorf("下载升级包失败, HTTP状态码: %d", resp.StatusCode)
 	}
 
-	outFile, err := os.Create(tmpPath)
+	// S-02: 限制下载大小，防止超大文件耗尽磁盘
+	const maxAgentBinarySize = 100 << 20 // 100MB
+	if resp.ContentLength > maxAgentBinarySize {
+		return fmt.Errorf("S-02: 升级包过大 (%d bytes)，拒绝下载", resp.ContentLength)
+	}
+
+	// S-02: 临时文件权限 0700，仅所有者可读写
+	outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %v", err)
 	}
@@ -1453,6 +1476,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			// S-02: 下载过程中也检查大小（防 ContentLength 欺骗）
+			if downloaded+int64(n) > maxAgentBinarySize {
+				outFile.Close()
+				os.Remove(tmpPath)
+				return fmt.Errorf("S-02: 升级包超过大小限制 (%d bytes)", maxAgentBinarySize)
+			}
 			if _, wErr := outFile.Write(buf[:n]); wErr != nil {
 				outFile.Close()
 				os.Remove(tmpPath)
