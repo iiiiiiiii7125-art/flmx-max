@@ -14,7 +14,7 @@ hero:
       link: /guide/install
     - theme: alt
       text: GitHub
-      link: https://github.com/iiiiiiiii7125-art/flvx-mod
+      link: https://github.com/iiiiiiiii7125-art/flvx-max
 
 features:
   - title: 多内核节点

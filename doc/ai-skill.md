@@ -21,7 +21,7 @@ mkdir -p ~/.agents/skills
 ln -sf $(pwd)/skills/flvx-api ~/.agents/skills/
 
 # 或从 GitHub
-git clone https://github.com/iiiiiiiii7125-art/flvx-mod.git
+git clone https://github.com/iiiiiiiii7125-art/flvx-max.git
 cd flvx
 ln -sf $(pwd)/skills/flvx-api ~/.agents/skills/
 ```

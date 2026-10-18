@@ -48,7 +48,7 @@ FLVX — traffic forwarding panel: Go admin API + Vite/React UI + Go agent.
 
 ## Anti-patterns
 
-- `install.sh` / `panel_install.sh`: `REPO` must stay `iiiiiiiii7125-art/flvx-mod` (this is a fork; all deployment URLs point to this repo, not upstream). The release job rewrites `REPO`, the version and `PINNED_VERSION` in the release copies, so don't hand-edit those for a release.
+- `install.sh` / `panel_install.sh`: `REPO` must stay `iiiiiiiii7125-art/flvx-max` (this is a fork; all deployment URLs point to this repo, not upstream). The release job rewrites `REPO`, the version and `PINNED_VERSION` in the release copies, so don't hand-edit those for a release.
 - Don't edit `go-gost/x/internal/util/grpc/proto/*.pb.go` (generated).
 - Don't add frontend tests (no Vitest/Jest configured).
 - Don't reintroduce `@heroui/*` or `@nextui-org/*` packages.
