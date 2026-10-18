@@ -202,34 +202,26 @@ build_download_url() {
     echo "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/gost-${ARCH}"
 }
 
-# H-01: Release 与二进制同目录发布 gost-${ARCH}.sha256，下载后必须强校验。
+# H-01: Release 与二进制同目录发布 .sha256，下载后必须强校验。
+# 校验 URL 从实际下载地址派生（追加 .sha256），代理/直连/file 均适用。
 # 校验文件缺失时直接拒绝安装（fail-closed），不允许未校验的 root 二进制落地。
-build_checksum_url() {
-    local ARCH=$(get_architecture)
-    local version="${RESOLVED_VERSION:-}"
-    if [[ -z "$version" ]]; then
-        echo "❌ RESOLVED_VERSION 未设置，无法构造校验 URL。" >&2
-        return 1
-    fi
-    maybe_proxy_url "https://github.com/${REPO}/releases/download/${version}/gost-${ARCH}.sha256"
-}
-
 verify_downloaded_binary() {
     local binary_file="$1"
+    local download_url="$2"
     if ! command -v sha256sum >/dev/null 2>&1; then
         echo "❌ 系统缺少 sha256sum，无法校验二进制完整性，拒绝继续。"
         return 1
     fi
-    local checksum_url
-    if ! checksum_url=$(build_checksum_url); then
+    if [[ -z "$download_url" ]]; then
+        echo "❌ 下载地址为空，无法校验，拒绝继续。"
         return 1
     fi
     echo "🔐 下载 SHA256 校验文件..."
     local checksum_file
     checksum_file=$(mktemp)
-    if ! curl -fL --max-time 60 -o "$checksum_file" "$checksum_url" 2>/dev/null; then
+    if ! curl -fL --max-time 60 -o "$checksum_file" "${download_url}.sha256" 2>/dev/null; then
         rm -f "$checksum_file"
-        echo "❌ 无法获取 ${RESOLVED_VERSION} 的 .sha256 校验文件，拒绝安装未校验的二进制。"
+        echo "❌ 无法获取 .sha256 校验文件，拒绝安装未校验的二进制。"
         return 1
     fi
     local expected
@@ -682,7 +674,7 @@ install_flux_agent() {
     echo "❌ 下载失败，请检查网络或下载链接。"
     exit 1
   fi
-  verify_downloaded_binary "$tmp_binary" || { rm -f "$tmp_binary"; exit 1; }
+  verify_downloaded_binary "$tmp_binary" "$DOWNLOAD_URL" || { rm -f "$tmp_binary"; exit 1; }
   cleanup_legacy_gost_installation
   mv "$tmp_binary" "$INSTALL_DIR/flux_agent"
   chmod +x "$INSTALL_DIR/flux_agent"
@@ -754,7 +746,7 @@ update_flux_agent() {
     echo "❌ 下载失败。"
     return 1
   fi
-  verify_downloaded_binary "$INSTALL_DIR/flux_agent.new" || { rm -f "$INSTALL_DIR/flux_agent.new"; return 1; }
+  verify_downloaded_binary "$INSTALL_DIR/flux_agent.new" "$DOWNLOAD_URL" || { rm -f "$INSTALL_DIR/flux_agent.new"; return 1; }
   cleanup_legacy_gost_installation
 
   # 停止服务

@@ -47,6 +47,8 @@ fi
 pwd > ../working-directory
 exec sleep 300
 EOF
+# H-01: install.sh 下载后校验 .sha256；file:// 测试夹具需配套提供
+sha256sum "$TEST_DIR/agent" | awk '{print $1"  agent"}' > "$TEST_DIR/agent.sha256"
 
 # Keep the installer bootstrap, service detection and all lifecycle operations.
 # Substitute only the network download and optional tcpkill dependency.
