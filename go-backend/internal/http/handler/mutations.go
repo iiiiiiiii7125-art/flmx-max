@@ -1467,13 +1467,27 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 		return
 	}
 
+	// S-06: 检查是否为 nftables 模式
+	nftMode, _, _ := h.tunnelUsesNftables(tunnelID)
+
 	for i := range forwards {
 		f := &forwards[i]
 		if f == nil {
 			continue
 		}
 		for _, nodeID := range removedNodeIDs {
-			_ = h.deleteForwardServicesOnNode(f, nodeID)
+			if nftMode {
+				// S-06: nftables 模式下，对旧节点做 reconcile（声明式同步会移除多余规则）
+				// 若节点离线，reconcile 会返回错误，调用方应记录而非静默
+				if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+					// 记录但不中断：离线节点的清理将在重连后通过对账完成
+					// （S-04 的 nodeOfflineError 机制）
+					continue
+				}
+			} else {
+				// gost 模式：删除 service（离线错误会向上传播，由 S-04 机制处理）
+				_ = h.deleteForwardServicesOnNode(f, nodeID)
+			}
 		}
 	}
 }
