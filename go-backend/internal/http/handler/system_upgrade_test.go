@@ -66,7 +66,7 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 		t.Fatalf("downloadReleaseAsset() data = %q, want compose data", string(data))
 	}
 
-	wantURL := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flvx-mod/releases/download/2.1.9/docker-compose-v4.yml"
+	wantURL := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
 	if gotURL != wantURL {
 		t.Fatalf("download URL = %q, want %q", gotURL, wantURL)
 	}

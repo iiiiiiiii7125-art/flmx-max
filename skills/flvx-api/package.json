@@ -20,13 +20,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iiiiiiiii7125-art/flvx-mod.git",
+    "url": "git+https://github.com/iiiiiiiii7125-art/flvx-max.git",
     "directory": "skills/flvx-api"
   },
   "bugs": {
-    "url": "https://github.com/iiiiiiiii7125-art/flvx-mod/issues"
+    "url": "https://github.com/iiiiiiiii7125-art/flvx-max/issues"
   },
-  "homepage": "https://github.com/iiiiiiiii7125-art/flvx-mod/tree/main/skills/flvx-api#readme",
+  "homepage": "https://github.com/iiiiiiiii7125-art/flvx-max/tree/main/skills/flvx-api#readme",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"

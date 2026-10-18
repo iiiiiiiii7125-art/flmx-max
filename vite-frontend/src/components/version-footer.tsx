@@ -9,7 +9,7 @@ import {
   hasVersionUpdate,
 } from "@/utils/version-update";
 
-const FALLBACK_GITHUB_REPO = "https://github.com/iiiiiiiii7125-art/flvx-mod";
+const FALLBACK_GITHUB_REPO = "https://github.com/iiiiiiiii7125-art/flvx-max";
 
 interface VersionFooterProps {
   version: string;
