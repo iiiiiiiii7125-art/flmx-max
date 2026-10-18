@@ -131,6 +131,13 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		preDown = mdutil.GetStrings(md, parsing.MDKeyPreDown)
 		postUp = mdutil.GetStrings(md, parsing.MDKeyPostUp)
 		postDown = mdutil.GetStrings(md, parsing.MDKeyPostDown)
+		// S-01/S-03: 面板纳管的 agent 禁止 service shell hook。
+		// preUp/postUp/preDown/postDown 经 /bin/sh -c 以 root 执行，
+		// 经面板命令或联邦 peer 下发即为远程 root RCE。面板自身从不设置
+		// 这些键，此处 fail-closed 直接拒绝构造。
+		if len(preUp) > 0 || len(preDown) > 0 || len(postUp) > 0 || len(postDown) > 0 {
+			return nil, fmt.Errorf("service %q: shell hooks (preUp/postUp/preDown/postDown) are disabled on managed agents", cfg.Name)
+		}
 		ignoreChain = mdutil.GetBool(md, parsing.MDKeyIgnoreChain)
 
 		if md != nil && md.IsExists(parsing.MDKeyEnableStats) {

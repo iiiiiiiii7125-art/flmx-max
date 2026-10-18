@@ -346,6 +346,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// M-04: 登录限流（每 IP 每分钟 10 次），防暴力破解
+	if !h.checkLoginRateLimit(w, r) {
+		return
+	}
+
 	var req loginRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.Err(500, "请求参数错误"))

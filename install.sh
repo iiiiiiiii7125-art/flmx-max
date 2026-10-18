@@ -158,13 +158,15 @@ resolve_latest_release_tag() {
 
   effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L "$(maybe_proxy_url "$latest_url")" 2>/dev/null || true)
   tag="${effective_url##*/}"
-  if [[ -n "$tag" && "$tag" != "latest" ]]; then
+  # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
+  # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
+  if [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
     echo "$tag"
     return 0
   fi
 
   api_tag=$(curl -fsSL "$(maybe_proxy_url "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  if [[ -n "$api_tag" ]]; then
+  if [[ "$api_tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
     echo "$api_tag"
     return 0
   fi
@@ -198,6 +200,38 @@ resolve_version() {
 build_download_url() {
     local ARCH=$(get_architecture)
     echo "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/gost-${ARCH}"
+}
+
+# H-01: Release 与二进制同目录发布 gost-${ARCH}.sha256，下载后必须强校验。
+# 校验文件缺失时直接拒绝安装（fail-closed），不允许未校验的 root 二进制落地。
+build_checksum_url() {
+    local ARCH=$(get_architecture)
+    maybe_proxy_url "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/gost-${ARCH}.sha256"
+}
+
+verify_downloaded_binary() {
+    local binary_file="$1"
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        echo "❌ 系统缺少 sha256sum，无法校验二进制完整性，拒绝继续。"
+        return 1
+    fi
+    echo "🔐 下载 SHA256 校验文件..."
+    local expected
+    expected=$(curl -fL --max-time 60 "$(build_checksum_url)" 2>/dev/null | awk '{print $1}')
+    if [[ -z "$expected" ]]; then
+        echo "❌ 无法获取 ${RESOLVED_VERSION} 的 .sha256 校验文件，拒绝安装未校验的二进制。"
+        return 1
+    fi
+    local actual
+    actual=$(sha256sum "$binary_file" | awk '{print $1}')
+    if [[ "$actual" != "$expected" ]]; then
+        echo "❌ SHA256 校验失败，文件可能被篡改或下载损坏，拒绝安装。"
+        echo "   期望: $expected"
+        echo "   实际: $actual"
+        return 1
+    fi
+    echo "✅ SHA256 校验通过"
+    return 0
 }
 
 ensure_download_url_initialized() {
@@ -631,6 +665,7 @@ install_flux_agent() {
     echo "❌ 下载失败，请检查网络或下载链接。"
     exit 1
   fi
+  verify_downloaded_binary "$tmp_binary" || { rm -f "$tmp_binary"; exit 1; }
   cleanup_legacy_gost_installation
   mv "$tmp_binary" "$INSTALL_DIR/flux_agent"
   chmod +x "$INSTALL_DIR/flux_agent"
@@ -702,6 +737,7 @@ update_flux_agent() {
     echo "❌ 下载失败。"
     return 1
   fi
+  verify_downloaded_binary "$INSTALL_DIR/flux_agent.new" || { rm -f "$INSTALL_DIR/flux_agent.new"; return 1; }
   cleanup_legacy_gost_installation
 
   # 停止服务
@@ -710,18 +746,56 @@ update_flux_agent() {
     stop_flux_agent_service
   fi
 
+  # A9: 备份旧版本，失败可回滚
+  if [[ -f "$INSTALL_DIR/flux_agent" ]]; then
+    echo "💾 备份当前版本..."
+    cp -f "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flux_agent.bak"
+  fi
+
   # 替换文件
   mv "$INSTALL_DIR/flux_agent.new" "$INSTALL_DIR/flux_agent"
   chmod +x "$INSTALL_DIR/flux_agent"
-  
+
+  # 烟雾测试：新二进制必须可执行
+  if ! "$INSTALL_DIR/flux_agent" -V >/dev/null 2>&1; then
+    echo "❌ 新版本二进制无法执行，正在回滚..."
+    rollback_flux_agent
+    return 1
+  fi
+
   # 打印版本
   echo "🔎 新版本：$($INSTALL_DIR/flux_agent -V)"
 
   # 重启服务
   echo "🔄 重启服务..."
   start_flux_agent_service
-  
+
+  # 回滚检查：新版本服务起不来则恢复备份
+  sleep 2
+  if ! flux_agent_service_is_active; then
+    echo "❌ 新版本服务启动失败，正在回滚到备份版本..."
+    rollback_flux_agent
+    return 1
+  fi
+  rm -f "$INSTALL_DIR/flux_agent.bak"
+
   echo "✅ 更新完成，服务已重新启动。"
+}
+
+# A9: 更新失败时恢复备份的旧版本并重启
+rollback_flux_agent() {
+  if [[ -f "$INSTALL_DIR/flux_agent.bak" ]]; then
+    mv -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flux_agent"
+    chmod +x "$INSTALL_DIR/flux_agent"
+    start_flux_agent_service
+    if flux_agent_service_is_active; then
+      echo "✅ 已回滚到旧版本并重启成功。"
+    else
+      echo "❌ 回滚后服务仍未启动，请手动检查：$INSTALL_DIR"
+    fi
+  else
+    echo "⚠️ 无备份可回滚，请手动检查：$INSTALL_DIR"
+  fi
 }
 
 # 卸载功能
