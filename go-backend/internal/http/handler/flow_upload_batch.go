@@ -38,6 +38,11 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 	flowSeen := map[int64]int{}
 
 	for _, item := range items {
+		// H-17: 丢弃负流量值。/flow/upload 仅凭节点 secret 鉴权，攻击者可伪造
+		// {"d":-N} 经 gorm.Expr("in_flow + ?", 负数) 直接扣减计数器，绕过配额。
+		if item.U < 0 || item.D < 0 {
+			continue
+		}
 		serviceName := strings.TrimSpace(item.N)
 		if serviceName == "" || serviceName == "web_api" {
 			continue

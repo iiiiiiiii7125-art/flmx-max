@@ -657,6 +657,21 @@ func validatePeerResourceReferences(value interface{}, kind string) error {
 							return fmt.Errorf("unsupported shared registry reference: %s", key)
 						}
 					}
+				// S-03: 联邦 peer 经 service metadata 的 shell hook 可拿到宿主节点 root。
+				// 面板自身从不下发这些键，此处 fail-closed 直接拒绝。
+				case "preup", "predown", "postup", "postdown":
+					if child != nil {
+						empty := false
+						switch x := child.(type) {
+						case string:
+							empty = strings.TrimSpace(x) == ""
+						case []interface{}:
+							empty = len(x) == 0
+						}
+						if !empty {
+							return fmt.Errorf("shell hooks are not allowed in shared resources: %s", key)
+						}
+					}
 				case "forwarder":
 					if f, ok := child.(map[string]interface{}); ok {
 						for field, value := range f {

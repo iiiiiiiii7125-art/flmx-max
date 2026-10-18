@@ -52,6 +52,7 @@ func JWT(opts AuthOptions) func(http.Handler) http.Handler {
 				return
 			}
 
+			var authState *auth.UserAuthState
 			if opts.GetUserAuthState != nil {
 				userID, err := strconv.ParseInt(claims.Sub, 10, 64)
 				if err != nil {
@@ -71,10 +72,18 @@ func JWT(opts AuthOptions) func(http.Handler) http.Handler {
 					response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 					return
 				}
+				authState = state
 			}
 
 			if requiresAdmin(r.URL.Path) && claims.RoleID != 0 {
 				response.WriteJSON(w, response.Err(403, "权限不足，仅管理员可操作"))
+				return
+			}
+
+			// M-05: 种子默认口令未改时强制先改密。除改密接口外一律 403。
+			// 之前仅靠登录返回的 requirePasswordChange 标志提示前端，服务端无任何强制。
+			if isDefaultSeedAdminPassword(authState) && r.URL.Path != "/api/v1/user/updatePassword" {
+				response.WriteJSON(w, response.Err(403, "请先修改默认管理员密码"))
 				return
 			}
 
@@ -191,6 +200,8 @@ func requiresAdmin(path string) bool {
 	switch path {
 	case "/api/v1/user/create", "/api/v1/user/list", "/api/v1/user/update", "/api/v1/user/delete", "/api/v1/user/reset":
 		return true
+	case "/api/v1/user/quota/reset":
+		return true // H-12: 任意登录用户可清零任意用户配额，须仅管理员可调用
 	case "/api/v1/config/update", "/api/v1/config/update-single":
 		return true
 	case "/api/v1/announcement/update":
@@ -198,4 +209,20 @@ func requiresAdmin(path string) bool {
 	default:
 		return false
 	}
+}
+
+// seedAdminPasswordChangedAt 必须与 store/repo/repository.go seedData 中种子
+// 管理员的 PasswordChangedAt 保持一致：该值是"从未改过种子默认口令"的唯一信号
+//（updatePassword / UpdateUserPassword 都会更新 password_changed_at）。
+const seedAdminPasswordChangedAt = 1748914865000
+
+// isDefaultSeedAdminPassword 判断该用户是否仍在使用种子默认口令。
+func isDefaultSeedAdminPassword(state *auth.UserAuthState) bool {
+	if state == nil || state.RoleID != 0 {
+		return false
+	}
+	if state.Username != "admin@user" && state.Username != "admin_user" {
+		return false
+	}
+	return state.PasswordChangedAt == seedAdminPasswordChangedAt
 }

@@ -113,13 +113,15 @@ resolve_latest_release_tag() {
 
   effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L "$(maybe_proxy_url "$latest_url")" 2>/dev/null || true)
   tag="${effective_url##*/}"
-  if [[ -n "$tag" && "$tag" != "latest" ]]; then
+  # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
+  # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
+  if [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
     echo "$tag"
     return 0
   fi
 
   api_tag=$(curl -fsSL "$(maybe_proxy_url "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  if [[ -n "$api_tag" ]]; then
+  if [[ "$api_tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
     echo "$api_tag"
     return 0
   fi
@@ -926,6 +928,7 @@ POSTGRES_DB=$POSTGRES_DB
 POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 EOF
+  chmod 600 .env # M-01: .env 含 JWT_SECRET/数据库密码，禁止全局可读
 
   echo "🚀 启动 docker 服务..."
   if [[ "$DB_TYPE" == "postgres" ]]; then
