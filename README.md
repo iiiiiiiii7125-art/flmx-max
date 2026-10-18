@@ -8,7 +8,7 @@
 
 在一个面板里管理中转与落地：一键部署 Xray / sing-box / Snell 节点，对接中转，生成订阅。
 
-[使用文档](https://iiiiiiiii7125-art.github.io/flvx-mod/) · [快速上手](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/getting-started) · [下载](https://github.com/iiiiiiiii7125-art/flvx-max/releases)
+[使用文档](https://iiiiiiiii7125-art.github.io/flvx-max/) · [快速上手](https://iiiiiiiii7125-art.github.io/flvx-max/guide/getting-started) · [下载](https://github.com/iiiiiiiii7125-art/flvx-max/releases)
 
 </div>
 
@@ -59,7 +59,7 @@ curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flvx-m
 > - `https://mirror.ghproxy.com`
 > - `https://gh.llkk.cc`
 
-更多说明见 [使用文档](https://iiiiiiiii7125-art.github.io/flvx-mod/)：[安装部署](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/install) · [搭建节点](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/nodes) · [对接中转](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/relay) · [导入节点](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/import) · [升级](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/upgrade) · [常见问题](https://iiiiiiiii7125-art.github.io/flvx-mod/guide/faq)
+更多说明见 [使用文档](https://iiiiiiiii7125-art.github.io/flvx-max/)：[安装部署](https://iiiiiiiii7125-art.github.io/flvx-max/guide/install) · [搭建节点](https://iiiiiiiii7125-art.github.io/flvx-max/guide/nodes) · [对接中转](https://iiiiiiiii7125-art.github.io/flvx-max/guide/relay) · [导入节点](https://iiiiiiiii7125-art.github.io/flvx-max/guide/import) · [升级](https://iiiiiiiii7125-art.github.io/flvx-max/guide/upgrade) · [常见问题](https://iiiiiiiii7125-art.github.io/flvx-max/guide/faq)
 
 ## 免责声明
 
