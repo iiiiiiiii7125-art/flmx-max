@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -1388,20 +1389,36 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
+	// S-02: Agent 只接受 version 参数，不再接受面板传入的任意 URL
+	// 仓库路径为编译期常量，防止面板指定任意下载源
+	const agentRepo = "iiiiiiiii7125-art/flvx-max"
+	var agentVersionRe = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
+
 	var req struct {
+		Version string `json:"version"`
+		// 兼容旧面板：若仍发送 downloadUrl 则拒绝（不允许任意 URL）
 		DownloadURL string `json:"downloadUrl"`
 		ChecksumURL string `json:"checksumUrl"`
 	}
 	if err := json.Unmarshal(jsonData, &req); err != nil {
 		return fmt.Errorf("解析升级参数失败: %v", err)
 	}
-	if strings.TrimSpace(req.DownloadURL) == "" {
-		return fmt.Errorf("下载地址不能为空")
+	// S-02: 拒绝面板传入的任意 URL（旧面板兼容性检查）
+	if strings.TrimSpace(req.DownloadURL) != "" {
+		return fmt.Errorf("S-02: 不再接受面板指定的下载地址，请升级面板到修复版本")
+	}
+	version := strings.TrimSpace(req.Version)
+	if version == "" {
+		return fmt.Errorf("版本号不能为空")
+	}
+	if !agentVersionRe.MatchString(version) {
+		return fmt.Errorf("S-02: 版本号格式无效: %s", version)
 	}
 
-	// 替换架构占位符
-	downloadURL := strings.ReplaceAll(req.DownloadURL, "{ARCH}", runtime.GOARCH)
-	checksumURL := strings.ReplaceAll(req.ChecksumURL, "{ARCH}", runtime.GOARCH)
+	// S-02: Agent 本地用固定仓库 + 严格校验的版本号拼 URL
+	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", agentRepo, version)
+	downloadURL := base + "gost-" + runtime.GOARCH
+	checksumURL := base + "gost-" + runtime.GOARCH + ".sha256"
 
 	w.sendUpgradeProgress("downloading", 0, "开始下载升级包...")
 	fmt.Printf("📦 开始下载升级包: %s\n", downloadURL)
@@ -1469,28 +1486,37 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 
 	w.sendUpgradeProgress("downloading", 100, fmt.Sprintf("下载完成 (%d bytes)", downloaded))
 
-	// Checksum 校验
-	if checksumURL != "" {
-		w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-		checksumResp, err := http.Get(checksumURL)
-		if err == nil {
-			defer checksumResp.Body.Close()
-			if checksumResp.StatusCode == http.StatusOK {
-				checksumBody, err := io.ReadAll(checksumResp.Body)
-				if err == nil {
-					// 格式: "<hash>  <filename>" 或 "<hash>"
-					expectedHash := strings.TrimSpace(strings.Split(string(checksumBody), " ")[0])
-					actualHash := hex.EncodeToString(hasher.Sum(nil))
-					if !strings.EqualFold(expectedHash, actualHash) {
-						os.Remove(tmpPath)
-						return fmt.Errorf("校验失败: 期望 %s, 实际 %s", expectedHash, actualHash)
-					}
-					fmt.Printf("✅ Checksum 校验通过: %s\n", actualHash)
-				}
-			}
-		}
-		w.sendUpgradeProgress("verifying", 100, "校验通过")
+	// S-02: Checksum 校验强制，不再允许为空或跳过
+	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
+	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
+	checksumResp, err := http.Get(checksumURL)
+	if err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
 	}
+	defer checksumResp.Body.Close()
+	if checksumResp.StatusCode != http.StatusOK {
+		os.Remove(tmpPath)
+		return fmt.Errorf("S-02: 获取校验值失败, HTTP状态码: %d", checksumResp.StatusCode)
+	}
+	checksumBody, err := io.ReadAll(checksumResp.Body)
+	if err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("S-02: 读取校验值失败: %v", err)
+	}
+	// 格式: "<hash>  <filename>" 或 "<hash>"
+	expectedHash := strings.TrimSpace(strings.Split(string(checksumBody), " ")[0])
+	if expectedHash == "" {
+		os.Remove(tmpPath)
+		return fmt.Errorf("S-02: 校验值为空，拒绝安装")
+	}
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(expectedHash, actualHash) {
+		os.Remove(tmpPath)
+		return fmt.Errorf("S-02: 校验失败: 期望 %s, 实际 %s", expectedHash, actualHash)
+	}
+	fmt.Printf("✅ Checksum 校验通过: %s\n", actualHash)
+	w.sendUpgradeProgress("verifying", 100, "校验通过")
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		os.Remove(tmpPath)
