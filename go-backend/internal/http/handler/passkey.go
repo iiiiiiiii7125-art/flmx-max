@@ -376,7 +376,8 @@ func (h *Handler) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	// M-05: 存储口令仍为默认时签发受限 token（仅允许改密）
 	var token string
-	if isStoredDefaultPassword(user.RoleID, user.Pwd) {
+	requirePwdChange := isStoredDefaultPassword(user.RoleID, user.Pwd)
+	if requirePwdChange {
 		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
 	} else {
 		token, err = auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
@@ -385,7 +386,9 @@ func (h *Handler) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("登录失败"))
 		return
 	}
-	response.WriteJSON(w, response.OK(map[string]interface{}{"token": token, "name": user.User, "role_id": user.RoleID, "requirePasswordChange": user.User == "admin_user" || user.User == "admin@user"}))
+	// R-002: requirePasswordChange 按"是否改过密码"判断，而非用户名
+	// （避免已改密但保留 admin@user 用户名的管理员被误提示）
+	response.WriteJSON(w, response.OK(map[string]interface{}{"token": token, "name": user.User, "role_id": user.RoleID, "requirePasswordChange": requirePwdChange}))
 }
 
 func (h *Handler) passkeyList(w http.ResponseWriter, r *http.Request) {

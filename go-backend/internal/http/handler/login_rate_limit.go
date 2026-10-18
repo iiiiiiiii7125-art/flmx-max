@@ -57,7 +57,14 @@ func (h *Handler) checkLoginRateLimit(w http.ResponseWriter, r *http.Request) bo
 	if ip != nil {
 		key = ip.String()
 	} else {
-		key = r.RemoteAddr
+		// R-001: 降级时提取纯 IP，不含端口（防端口轮换绕过）
+		// parseIPLiteral 处理 "IP:port" 和 "[IPv6]:port" 格式
+		if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
+			key = parsed.String()
+		} else {
+			// 极端情况：无法解析则用 RemoteAddr（仍好于直接失败）
+			key = r.RemoteAddr
+		}
 	}
 	if !globalLoginLimiter.allow(key, time.Now()) {
 		w.Header().Set("Retry-After", "60")
