@@ -1467,13 +1467,27 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 		return
 	}
 
+	// S-06: 检查是否为 nftables 模式
+	nftMode, _, _ := h.tunnelUsesNftables(tunnelID)
+
 	for i := range forwards {
 		f := &forwards[i]
 		if f == nil {
 			continue
 		}
 		for _, nodeID := range removedNodeIDs {
-			_ = h.deleteForwardServicesOnNode(f, nodeID)
+			if nftMode {
+				// S-06: nftables 模式下，对旧节点做 reconcile（声明式同步会移除多余规则）
+				// 若节点离线，reconcile 会返回错误，调用方应记录而非静默
+				if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+					// 记录但不中断：离线节点的清理将在重连后通过对账完成
+					// （S-04 的 nodeOfflineError 机制）
+					continue
+				}
+			} else {
+				// gost 模式：删除 service（离线错误会向上传播，由 S-04 机制处理）
+				_ = h.deleteForwardServicesOnNode(f, nodeID)
+			}
 		}
 	}
 }
@@ -2610,11 +2624,29 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+	// S-05: nftables 模式下暂停必须真正使规则失效
+	// 通过更新DB状态 + reconcile 使规则被移除，而非仅操作 gost service
+	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
+		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
 		return
+	} else if nftMode {
+		if len(entryNodeIDs) == 0 {
+			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
+			return
+		}
+		// 先更新DB状态为暂停，reconcile 时会根据状态排除此转发
+		_ = h.repo.UpdateForwardStatus(id, 0, time.Now().UnixMilli())
+		if err := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	} else {
+		if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		_ = h.repo.UpdateForwardStatus(id, 0, time.Now().UnixMilli())
 	}
-	_ = h.repo.UpdateForwardStatus(id, 0, time.Now().UnixMilli())
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -2657,11 +2689,27 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+	// S-05: nftables 模式下恢复必须真正加回规则
+	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
+		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
 		return
+	} else if nftMode {
+		if len(entryNodeIDs) == 0 {
+			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
+			return
+		}
+		_ = h.repo.UpdateForwardStatus(id, 1, now)
+		if err := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	} else {
+		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		_ = h.repo.UpdateForwardStatus(id, 1, now)
 	}
-	_ = h.repo.UpdateForwardStatus(id, 1, now)
 	response.WriteJSON(w, response.OKEmpty())
 }
 

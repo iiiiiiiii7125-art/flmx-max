@@ -29,6 +29,59 @@ const maxImportNodes = 500
 // maxSubscriptionBytes bounds a fetched subscription body.
 const maxSubscriptionBytes = 5 << 20
 
+// H-15/R-005: SSRF 防护 - 检查 IP 是否为内网/保留地址
+func isPrivateIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	// 私有地址段
+	privateCIDRs := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16", // 链路本地 + 云元数据
+		"fc00::/7",        // IPv6 私有
+		"fe80::/10",       // IPv6 链路本地
+	}
+	for _, cidr := range privateCIDRs {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// H-15/R-005: 验证订阅 URL 不指向内网
+func validateSubscriptionURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("仅允许 http/https 协议")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("主机名为空")
+	}
+	// 解析 DNS（防 DNS 重绑定：解析后检查 IP）
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("DNS 解析失败: %v", err)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("H-15: 禁止访问内网地址: %s (%s)", host, ip.String())
+		}
+	}
+	// 明确拒绝云元数据地址
+	if host == "169.254.169.254" {
+		return fmt.Errorf("H-15: 禁止访问云元数据地址")
+	}
+	return nil
+}
+
 func isExternalInbound(row *model.NodeInbound) bool {
 	return row != nil && row.KernelID == 0
 }
@@ -164,6 +217,10 @@ func fetchSubscription(ctx context.Context, rawURL string) (string, error) {
 // fetchSubscriptionInfo is fetchSubscription plus the provider's
 // Subscription-Userinfo header (plan traffic and expiry).
 func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, error) {
+	// H-15/R-005: SSRF 防护，先验证 URL
+	if err := validateSubscriptionURL(rawURL); err != nil {
+		return "", "", err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -171,7 +228,20 @@ func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, 
 		return "", "", err
 	}
 	req.Header.Set("User-Agent", "clash.meta/1.19.0")
-	resp, err := http.DefaultClient.Do(req)
+	// H-15: 禁止重定向后跳转到内网（自定义 CheckRedirect）
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("重定向次数过多")
+			}
+			// 重定向后重新校验目标 URL
+			if err := validateSubscriptionURL(req.URL.String()); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", err
 	}

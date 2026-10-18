@@ -118,6 +118,14 @@ func (h *Handler) buildGithubDownloadURL(version, filename string) string {
 	return base
 }
 
+// S-02: Agent 版本号严格校验，防止路径穿越
+// 只允许 ^v?[0-9]+\.[0-9]+\.[0-9]+$ 格式
+var agentVersionRe = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
+
+func isValidAgentVersion(v string) bool {
+	return agentVersionRe.MatchString(v)
+}
+
 func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 	if perPage <= 0 {
 		perPage = 20
@@ -197,12 +205,16 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	downloadURL := h.buildGithubDownloadURL(version, "gost-{ARCH}")
-	checksumURL := h.buildGithubDownloadURL(version, "gost-{ARCH}.sha256")
+	// S-02: 严格校验版本号格式，防止路径穿越
+	if !isValidAgentVersion(version) {
+		response.WriteJSON(w, response.ErrDefault("版本号格式无效"))
+		return
+	}
 
+	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
+	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL
 	result, err := h.wsServer.SendCommand(req.ID, "UpgradeAgent", map[string]interface{}{
-		"downloadUrl": downloadURL,
-		"checksumUrl": checksumURL,
+		"version": version,
 	}, upgradeTimeout)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("升级失败: %v", err)))
@@ -255,8 +267,13 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	downloadURL := h.buildGithubDownloadURL(version, "gost-{ARCH}")
-	checksumURL := h.buildGithubDownloadURL(version, "gost-{ARCH}.sha256")
+	// S-02: 严格校验版本号格式，防止路径穿越
+	if !isValidAgentVersion(version) {
+		response.WriteJSON(w, response.ErrDefault("版本号格式无效"))
+		return
+	}
+
+	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
 
 	type upgradeResult struct {
 		ID      int64  `json:"id"`
@@ -276,8 +293,7 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 			defer func() { <-sem }()
 
 			result, err := h.wsServer.SendCommand(nodeID, "UpgradeAgent", map[string]interface{}{
-				"downloadUrl": downloadURL,
-				"checksumUrl": checksumURL,
+				"version": version,
 			}, upgradeTimeout)
 			if err != nil {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: err.Error()}
