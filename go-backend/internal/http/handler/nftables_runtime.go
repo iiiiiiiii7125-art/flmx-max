@@ -151,6 +151,15 @@ func (h *Handler) validateNftablesTunnelStateTx(tx *gorm.DB, entryNodeIDs []int6
 }
 
 func (h *Handler) buildNftablesNodePlan(nodeID int64) (runtimenft.NodePlan, *model.NodeSSHConfig, error) {
+	return h.buildNftablesNodePlanWithOverrides(nodeID, nil, nil)
+}
+
+// buildNftablesNodePlanWithOverrides builds the node plan with explicit
+// intent overrides for D6 pause/resume ordering (R5-B3 D1-012):
+//   - exclude: forward IDs to drop from the plan even if active (pause intent);
+//     the data plane is reconciled BEFORE the DB status flips.
+//   - include: specific forwards to add even if not active (resume intent).
+func (h *Handler) buildNftablesNodePlanWithOverrides(nodeID int64, exclude map[int64]bool, include []*forwardRecord) (runtimenft.NodePlan, *model.NodeSSHConfig, error) {
 	cfg, err := h.repo.GetNodeSSHConfig(nodeID)
 	if err != nil {
 		return runtimenft.NodePlan{}, nil, err
@@ -158,6 +167,28 @@ func (h *Handler) buildNftablesNodePlan(nodeID int64) (runtimenft.NodePlan, *mod
 	forwards, err := h.repo.ListActiveForwardsByNode(nodeID)
 	if err != nil {
 		return runtimenft.NodePlan{}, nil, err
+	}
+	if len(exclude) > 0 {
+		kept := forwards[:0]
+		for _, f := range forwards {
+			if !exclude[f.ID] {
+				kept = append(kept, f)
+			}
+		}
+		forwards = kept
+	}
+	if include != nil {
+		seen := make(map[int64]bool, len(forwards))
+		for _, f := range forwards {
+			seen[f.ID] = true
+		}
+		for _, inc := range include {
+			if inc == nil || seen[inc.ID] {
+				continue
+			}
+			seen[inc.ID] = true
+			forwards = append(forwards, *inc)
+		}
 	}
 	plan := runtimenft.NodePlan{NodeID: nodeID, Rules: make([]runtimenft.Rule, 0, len(forwards))}
 	for i := range forwards {
@@ -202,10 +233,17 @@ func (h *Handler) buildNftablesNodePlan(nodeID int64) (runtimenft.NodePlan, *mod
 }
 
 func (h *Handler) syncNftablesNode(nodeID int64) error {
+	return h.syncNftablesNodeWithOverrides(nodeID, nil, nil)
+}
+
+// syncNftablesNodeWithOverrides reconciles the node with explicit plan
+// overrides (see buildNftablesNodePlanWithOverrides). Used by D6 pause/resume
+// to converge the data plane BEFORE the DB status flips.
+func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]bool, include []*forwardRecord) error {
 	if h == nil || h.repo == nil {
 		return errors.New("handler not initialized")
 	}
-	plan, cfgModel, err := h.buildNftablesNodePlan(nodeID)
+	plan, cfgModel, err := h.buildNftablesNodePlanWithOverrides(nodeID, exclude, include)
 	if err != nil {
 		return err
 	}
