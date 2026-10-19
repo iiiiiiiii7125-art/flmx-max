@@ -317,6 +317,13 @@ jobs:
           sed -i "s|^PINNED_VERSION=\"\"|PINNED_VERSION=\"${VERSION}\"|" ./artifacts/install.sh
           sed -i "s|^PINNED_VERSION=\"\"|PINNED_VERSION=\"${VERSION}\"|" ./artifacts/panel_install.sh
 
+          # R5-B5B D19: 为下载资产发布 .sha256（panel_install.sh 校验用）。
+          cd ./artifacts
+          for f in docker-compose-v4.yml docker-compose-v6.yml install.sh panel_install.sh; do
+            sha256sum "$f" | awk '{print $1}' > "$f.sha256"
+          done
+          cd -
+
       - name: Verify release installer on Alpine OpenRC
         run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 sh /workspace/test-install-scripts-alpine.sh /workspace/artifacts/install.sh
 
