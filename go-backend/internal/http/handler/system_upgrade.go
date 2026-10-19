@@ -115,6 +115,8 @@ type systemUpgradeVersionData struct {
 	Channel        string                      `json:"channel"`
 	Reason         string                      `json:"reason,omitempty"`
 	Capability     systemUpgradeCapabilityData `json:"capability"`
+	// R5-B4C: 待执行的迁移（预检失败时非空）。
+	PendingMigrations []string `json:"pendingMigrations,omitempty"`
 }
 
 type systemUpgradeCheckData struct {
@@ -595,6 +597,8 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 	capability := exec.capability(r.Context())
 	latest, err := h.resolveSystemUpgradeLatestReleaseByChannel(channel)
 	data := systemUpgradeVersionResponse(current, channel, latest, err, capability)
+	// R5-B4C: 暴露待执行迁移状态。
+	data.PendingMigrations = h.repo.PendingMigrations()
 	response.WriteJSON(w, response.OK(data))
 }
 

@@ -495,19 +495,28 @@ func prepareSQLiteNftablesColumns(db *gorm.DB) error {
 func seedData(db *gorm.DB) {
 	var adminCount int64
 	if err := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error; err == nil && adminCount == 0 {
-		adminPwd, err := security.HashPassword("admin@user")
-		if err != nil {
-			log.Printf("seed admin password hash failed: %v", err)
+		// R5-B4C: 补建前检查用户名是否被占用（防改名后撞唯一约束）。
+		var nameCount int64
+		db.Model(&model.User{}).Where("\"user\" = ?", "admin@user").Count(&nameCount)
+		if nameCount > 0 {
+			log.Printf("seed skipped: username admin@user already taken by another user")
 		} else {
-			adminUser := model.User{
-				ID: 1, User: "admin@user", Pwd: adminPwd,
-				RoleID: 0, ExpTime: 2727251700000, Flow: 99999, InFlow: 0, OutFlow: 0,
-				FlowResetTime: 1, Num: 99999, CreatedTime: 1748914865000,
-				UpdatedTime:       sql.NullInt64{Int64: 1754011744252, Valid: true},
-				Status:            1,
-				PasswordChangedAt: 1748914865000,
+			adminPwd, err := security.HashPassword("admin@user")
+			if err != nil {
+				log.Printf("seed admin password hash failed: %v", err)
+			} else {
+				adminUser := model.User{
+					ID: 1, User: "admin@user", Pwd: adminPwd,
+					RoleID: 0, ExpTime: 2727251700000, Flow: 99999, InFlow: 0, OutFlow: 0,
+					FlowResetTime: 1, Num: 99999, CreatedTime: 1748914865000,
+					UpdatedTime:       sql.NullInt64{Int64: 1754011744252, Valid: true},
+					Status:            1,
+					PasswordChangedAt: 1748914865000,
+				}
+				if err := db.Create(&adminUser).Error; err != nil {
+					log.Printf("seed admin failed: %v", mapUniqueViolation(err, "username"))
+				}
 			}
-			db.Create(&adminUser)
 		}
 	}
 
