@@ -6,15 +6,18 @@
 
 ## 移植批次总览
 
-| 批次 | 功能 | 状态 |
-|------|------|------|
-| 1 | JWT 密钥持久化 | ✅ 完成 |
-| 2 | 节点延迟显示 | ✅ 完成（node.tsx 挂载位待精修） |
-| 3 | 节点调优 | ✅ 完成 |
-| 4 | 回程路由追踪 | ✅ 完成 |
-| 5 | GitHub 镜像代理 | ✅ 完成 |
-| 6 | 订阅规则引擎 + 订阅脚本 | ✅ 完成（渲染层规则模式精修待后续） |
-| 7 | 前端组件补齐 | ✅ 完成（4 组件零引用，未复制） |
+> 状态定义：`后端完成` = API/逻辑/路由/仓储就绪且可编译；`前端已挂载` = 组件在页面中有引用且用户可操作。
+> 挂载位缺失意味着功能对用户不可见，属于**未完成**，不记为"完成"。
+
+| 批次 | 功能 | 后端 | 前端 | 状态说明 |
+|------|------|------|------|----------|
+| 1 | JWT 密钥持久化 | ✅ | 不适用 | ✅ 完成（无界面，启动时自动生效） |
+| 2 | 节点延迟显示 | ✅ | ❌ 未挂载 | 后端 API/路由/探测全就绪；`LatencyCell`、`latency-card.tsx`、`latency-targets-modal.tsx` 零引用 → P1 修复 |
+| 3 | 节点调优 | ✅ | ❌ 未挂载 | agent 命令 + 面板 API 就绪；`tune-modal.tsx` 零引用，node.tsx 无入口 → P1 修复 |
+| 4 | 回程路由追踪 | ✅ | ❌ 未挂载 | agent 命令 + 面板 API 就绪；`RouteModal` 零引用，node.tsx 无入口 → P1 修复 |
+| 5 | GitHub 镜像代理 | ✅ | 不适用 | ✅ 完成（无界面，`/api/v1/open_api/gh/` 已注册） |
+| 6 | 订阅规则引擎 + 订阅脚本 | ⚠️ 部分 | ⚠️ 部分 | 规则引擎/脚本核心已移植；规则模式完整配置渲染缺失 → P2 修复；链式多选 UI 缺失 |
+| 7 | 前端组件补齐 | 不适用 | ✅ | ✅ 完成（4 组件零引用，未复制，见 P4 复核） |
 
 ## 适配点及原因
 
@@ -63,14 +66,53 @@
 
 ## 实测结果
 
+### 编译与静态检查（通过项）
+
 - `go build ./...`（go-backend、go-gost）：✅ 通过
 - `go vet ./internal/kernel/`：✅ 通过
 - `go test ./internal/kernel/`：✅ 通过（无回归）
 - `npx tsc --noEmit`：✅ 通过
 
-## 待精修项
+### 全量测试（失败项，未隐瞒）
 
-1. `node.tsx` 中 `LatencyCell` 在卡片/列表的具体挂载位置。
-2. `tune-modal.tsx` 在 `node.tsx` 操作菜单的入口。
-3. 订阅规则的完整配置渲染（`share_client_configs.go` 依赖补齐）。
-4. `clashProfile` 的规则模式集成。
+`go test ./internal/http/handler/ ./internal/store/repo/` 共 **66 个失败用例**。
+
+**失败原因分类**（均为 Windows 环境限制，非移植引入）：
+
+| 类别 | 表现 | 说明 |
+|------|------|------|
+| nftables 相关 | `nft` 命令不存在 | Windows 无 nftables |
+| 文件权限相关 | `0600`/POSIX mode 断言失败 | Windows 不认 POSIX 权限位 |
+| SQLite 临时文件清理 | 文件删除失败 | Windows 文件锁语义 |
+
+**基线对照结论**：移植前提交 `5e1edce8`（审计收敛合入 main 的提交）同样 **66 个失败**；
+逐个比对用例名后，**新增失败 0 个、消失 0 个**。这些用例需在 Linux 环境验证，
+Windows 上不作为回归判据。
+
+### 基线对照方法（可复现）
+
+```
+基线提交：5e1edce8adfb7c46124b17a7b3b2b3caa46302c4
+命令：go test ./internal/http/handler/ ./internal/store/repo/ 2>&1 | findstr "--- FAIL"
+比对：去掉耗时后缀后按用例名做集合差
+判定：差集为空 ⇒ 无回归
+```
+
+## P1–P4 遗留问题修复状态
+
+| 问题 | 内容 | 状态 |
+|------|------|------|
+| P1 | 前端挂载缺失（LatencyCell/tune-modal/RouteModal/latency-card/latency-targets-modal） | 待修复 |
+| P2 | 订阅规则完整配置渲染缺失（share_client_configs.go、clashProfile 规则模式） | 待修复 |
+| P3 | 文档实测记录失真 | ✅ 本轮已修复 |
+| P4 | 组件引用复核（P1 完成后重新扫描 4 组件引用） | 待 P1 完成后复核 |
+
+## 待精修项（明细）
+
+1. `node.tsx` 中 `LatencyCell` 在卡片/列表的挂载 → P1-1/P1-2。
+2. `tune-modal.tsx` 在 `node.tsx` 操作菜单的入口 → P1-3。
+3. `RouteModal` 入口 → P1-4；`latency-targets-modal.tsx` 入口 → P1-5。
+4. `latency-card.tsx` 挂载到 `config.tsx` → P1-6。
+5. 订阅规则的完整配置渲染（`share_client_configs.go` 依赖补齐）→ P2-1。
+6. `clashProfile` 的规则模式集成 → P2-2。
+7. 链式代理多选 UI（`chainLandingNames`/`chainRelayNames` 节点选择器）→ 后续按我方单页 `Editor` 结构单独设计。
