@@ -692,6 +692,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// AUDIT-R3 (F2X-001): per-node 端口分配锁必须覆盖"选端口→冲突检查→入库"
+	// 整个临界区。R5-B4 把锁放在 CreateNodeInbound 内部，检查在锁外，
+	// 并发下两请求可挑中同一随机端口，一个撞唯一索引报裸 DB 错误。
+	// 锁内禁止网络调用（以下均为本地计算与 DB 操作）。
+	portAllocMu := repo.AcquirePortAllocLock(row.NodeID)
+	defer repo.ReleasePortAllocLock(portAllocMu)
 	if in.Port == 0 {
 		port, err := h.pickFreeInboundPort(row.NodeID, row.ID)
 		if err != nil {
