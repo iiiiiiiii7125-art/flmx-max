@@ -3,7 +3,7 @@
 - 任务：flvx-max 自主审计-修复-复核 永续循环（Master Loop v6，2026-10-19 17:20 起取代 v5）
 - 仓库：https://github.com/iiiiiiiii7125-art/flvx-max
 - 基线分支：main @ 9a2810b（2026-10-19）
-- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R19（主视角=格式与兼容），分支 audit/loop-19
+- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R20（主视角=可观测性与性能），分支 audit/loop-20
 - 分支策略（v6）：每轮独立分支 `audit/loop-<轮次>`；通过复核的轮次合入 `audit/integration`（已建，基线 main@9a2810b）；**绝不直接动 main**；推送 audit 分支到远端只用非 force；禁止发布 release / 打 tag / force-push。
 - 主视角轮换：轮次 mod 7 → 0 脚本正确性 / 1 功能契约 / 2 安全 / 3 并发与资源 / 4 数据一致性 / 5 格式与兼容 / 6 可观测性与性能
 - 决策记录：`decisions.md`（v6 规范名；v5 的 DECISIONS_NEEDED.md 已删除）
@@ -36,3 +36,4 @@
 | R16 | audit/loop-16 | 安全（跨领域安全复审） | 0/0/0/0 | — | 零提交；build 通过；R5 复核通过 | 完成，已合入 audit/integration |
 | R17 | audit/loop-17 | 并发与资源（7 并发点专项） | 0/0/0/0 | — | 零提交；build 通过；R5 复核通过 | 完成，已合入 audit/integration |
 | R18 | audit/loop-18 | 数据一致性（级联删除专项） | 0/0/0/0 | DAT18-001/002/003 + R5R18-001 全部已修 | 全量回归（known-baseline 外零失败）；R5 首次退回后通过 | 完成，已合入 audit/integration |
+| R19 | audit/loop-19 | 格式与兼容（5 领域专项） | 0/0/0/0 | — | 零代码改动；build+kernel 测试通过；R5 复核通过 | 完成，已合入 audit/integration |
