@@ -184,6 +184,14 @@
 - 置信度：高
 - 修复：锁上移到调用方——`inboundSave` 在端口处理前 `AcquirePortAllocLock(row.NodeID)`（新建/更新全覆盖）；`CreateNodeInbound` 去内部锁（防死锁）；`remote_source.go`/`kernel_external.go` 两个外部调用点补锁。回归测试 `TestConcurrentInboundCreateAutoPortNoConflict`（10 并发 HTTP，-race 全绿）。
 
+### R5R5-001｜P3｜观察（不阻塞）｜geo 数据更新失败无主动告警，仅写 agent 本地日志
+
+- 位置：`go-gost/x/kernel/geodata.go:82`（`logGeo("分流数据更新失败")`）、`:211`（新文件无法启动内核时回滚）、`:221-227`（`logGeo` 仅写 `inst.logs` 本地缓冲）
+- 实际 vs 期望：实际——geo 更新失败（下载失败/checksum 不符/新文件无法启动）时 agent 本地记日志，面板无主动感知。期望——至少有失败计数上报或告警
+- 影响：P3 观察。fail-closed 完善（失败保留旧文件、无法启动则回滚）；用户可经面板"内核日志"手动看到。非缺陷
+- 建议：后轮考虑 agent 上报失败或面板展示 geo 数据版本/更新时间
+- 发现者：R5 R5 复核员（视角：可观测性与性能）
+
 ### R5R3-001｜P3｜可达｜锁范围过大（R3 修复引入，已修复）｜inboundSave 的 per-node 端口锁被 defer 持有穿越节点下发网络调用
 
 - 位置：
