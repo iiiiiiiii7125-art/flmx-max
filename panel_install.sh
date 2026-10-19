@@ -386,6 +386,22 @@ setup_domain_proxy() {
   echo "📝 配置 Caddy..."
   # 备份已有配置
   [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
+  # AUDIT-R1 (SCR-003): 菜单 5 是独立流程，不经过 get_config_params，
+  # 此处 FRONTEND_PORT 恒未设置。改为从部署目录 .env 读取用户实际安装的
+  # 前端端口（更新流程的 resolve_panel_deployment 已证明该信息可得）；
+  # 找不到才回退 6366。
+  local _env_file _port
+  if [[ -z "${FRONTEND_PORT:-}" ]]; then
+    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flvx-panel/.env"; do
+      [[ "$_env_file" == "/.env" ]] && continue
+      _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
+      if [[ "$_port" =~ ^[0-9]+$ ]] && (( _port >= 1 && _port <= 65535 )); then
+        FRONTEND_PORT="$_port"
+        echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
+        break
+      fi
+    done
+  fi
   cat > /etc/caddy/Caddyfile <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
