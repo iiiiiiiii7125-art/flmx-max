@@ -18,7 +18,7 @@ func TestReconcileDrainsCountersBeforeRebuild(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-drain", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7001")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7001", 20000)
 
 	// 第一次 reconcile：建立 binding（含 rule hash），使采样能关联。
 	if err := h.syncNftablesNode(fixture.nodeID); err != nil {
@@ -75,7 +75,7 @@ func TestReconcileDrainFailureDoesNotBlockApply(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-draingap", fixture.nodeID)
-	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7002")
+	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7002", 20000)
 
 	// drain 失败（CollectCounters 报错），apply 仍必须成功（记 gap）。
 	if err := h.syncNftablesNode(fixture.nodeID); err != nil {
@@ -93,7 +93,7 @@ func TestDrainAdvancesBaseline(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-baseline", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7003")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7003", 20000)
 
 	if err := h.syncNftablesNode(fixture.nodeID); err != nil {
 		t.Fatalf("initial reconcile: %v", err)
