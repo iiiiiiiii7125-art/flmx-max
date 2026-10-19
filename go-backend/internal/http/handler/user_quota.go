@@ -80,6 +80,12 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 		if err != nil || forward == nil {
 			continue
 		}
+		// R5-B5 D15: pending-delete 行不得被配额释放复活（删除流程由 pending
+		// 机制接管）。注意：不得在 getForwardRecord 全局过滤（会破坏清理任务）。
+		if isForwardPendingDelete(forward) {
+			log.Printf("quota release skipped op=pending_delete forward_id=%d", forwardID)
+			continue
+		}
 		if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
 			continue
 		}
@@ -91,7 +97,9 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
 			continue
 		}
-		if err := h.repo.UpdateForwardStatus(forwardID, model.ForwardStatusActive, now); err != nil {
+		// R5-B5 D15: 经 ActivateForwardIfNotPending（pending 已在循环顶过滤，
+		// 此处为纵深防御）。
+		if err := h.ActivateForwardIfNotPending(forwardID, now); err != nil {
 			log.Printf("quota release failed op=db_write forward_id=%d err=%v", forwardID, err)
 		}
 	}
@@ -101,7 +109,9 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 			continue
 		}
 		for _, forward := range forwards {
-			if err := h.repo.UpdateForwardStatus(forward.ID, model.ForwardStatusActive, now); err != nil {
+			// R5-B5 D15: 经 ActivateForwardIfNotPending（pending 已在循环顶过滤，
+			// 此处为纵深防御）。
+			if err := h.ActivateForwardIfNotPending(forward.ID, now); err != nil {
 				log.Printf("quota release failed op=db_write_after_reconcile forward_id=%d err=%v", forward.ID, err)
 			}
 		}
