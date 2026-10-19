@@ -108,3 +108,9 @@
 - 双后端：SQLite 实测；PG 无环境，标注未验证（锁为进程内 sync.Mutex，与 DB 无关）。
 - 回归测试：已入永久测试集。
 - 红线自查：端口复用规则未动；仅加锁范围，无行为变更。
+
+### AUDIT-R3: R5R3-001（commit 见 git log）
+- 根因：F2X-001 修复用 `defer ReleasePortAllocLock`，锁从临界区开始一直持有到 `inboundSave` 返回，穿越下游 `applyKernel`（`sendNodeCommandWithTimeout`，超时 20s/5min）等网络调用。违反三处"锁内禁止网络调用"声明（修复注释、port_alloc_lock.go:26、AcquirePortAllocLock 注释），且把并发入站保存串行化在网络 I/O 上。
+- 修复：defer 改显式释放——临界区内 8 个提前返回前 `releasePortAlloc()`，DB 写入（Save/CreateNodeInbound）后立即释放，下游下发无锁执行。Release 即 Unlock，9 个释放点互斥，已逐路径核对无双释放、无 defer 残留。
+- 回归：`TestConcurrentInboundCreateAutoPortNoConflict` -race -count=2 全绿；handler/contract 包 -race 失败全在 known-baseline。
+- 红线自查：锁范围收窄为纯本地临界区，符合设计契约；无行为变更（除消除串行化）。
