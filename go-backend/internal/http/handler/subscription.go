@@ -28,19 +28,24 @@ var subSyncMu sync.Mutex
 
 // subPipeline is the JSON form of kernel.SubOptions stored per subscription.
 type subPipeline struct {
-	Lines        string   `json:"lines"`
-	Regions      []string `json:"regions"`
-	Protocols    []string `json:"protocols"`
-	Include      string   `json:"include"`
-	Exclude      string   `json:"exclude"`
-	Rename       string   `json:"rename"`
-	AddFlag      bool     `json:"addFlag"`
-	Prefix       string   `json:"prefix"`
-	Dedupe       bool     `json:"dedupe"`
-	Sort         string   `json:"sort"`
-	RegionGroups bool     `json:"regionGroups"`
-	ChainLanding string   `json:"chainLanding"`
-	ChainRelay   string   `json:"chainRelay"`
+	Lines            string   `json:"lines"`
+	Regions          []string `json:"regions"`
+	Protocols        []string `json:"protocols"`
+	Include          string   `json:"include"`
+	Exclude          string   `json:"exclude"`
+	Rename           string   `json:"rename"`
+	AddFlag          bool     `json:"addFlag"`
+	Prefix           string   `json:"prefix"`
+	Dedupe           bool     `json:"dedupe"`
+	Sort             string   `json:"sort"`
+	RegionGroups     bool     `json:"regionGroups"`
+	ChainLanding     string   `json:"chainLanding"`
+	ChainRelay       string   `json:"chainRelay"`
+	Script           string   `json:"script"`
+	Rules            bool     `json:"rules"`
+	RuleGroups       []string `json:"ruleGroups"`
+	ChainLandingNames []string `json:"chainLandingNames"`
+	ChainRelayNames   []string `json:"chainRelayNames"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
@@ -48,6 +53,8 @@ func (p subPipeline) options() kernel.SubOptions {
 		Lines: p.Lines, Regions: p.Regions, Protocols: p.Protocols, Include: p.Include, Exclude: p.Exclude,
 		Rename: p.Rename, AddFlag: p.AddFlag, Prefix: p.Prefix, Dedupe: p.Dedupe, Sort: p.Sort,
 		RegionGroups: p.RegionGroups, ChainLanding: p.ChainLanding, ChainRelay: p.ChainRelay,
+		Script: p.Script, Rules: p.Rules, RuleGroups: p.RuleGroups,
+		ChainLandingNames: p.ChainLandingNames, ChainRelayNames: p.ChainRelayNames,
 	}
 }
 
@@ -75,6 +82,19 @@ func (p *subPipeline) normalize() error {
 	}
 	if p.Protocols == nil {
 		p.Protocols = []string{}
+	}
+	if p.RuleGroups == nil {
+		p.RuleGroups = []string{}
+	}
+	if p.ChainLandingNames == nil {
+		p.ChainLandingNames = []string{}
+	}
+	if p.ChainRelayNames == nil {
+		p.ChainRelayNames = []string{}
+	}
+	// 脚本长度限制（与执行时的 20000 一致，保存时提前拦截）
+	if len(p.Script) > 20000 {
+		return errText("脚本过长（最多 20000 字符）")
 	}
 	return p.options().Validate()
 }
@@ -448,8 +468,9 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 		items = append(items, h.subscriptionView(&subs[i], rows, now))
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"items":   items,
-		"regions": append(kernel.RegionNames(), kernel.RegionOther),
+		"items":      items,
+		"regions":    append(kernel.RegionNames(), kernel.RegionOther),
+		"ruleGroups": kernel.RuleGroups(),
 	}))
 }
 

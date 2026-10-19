@@ -621,6 +621,7 @@ type NodeBackup struct {
 	RemoteURL     string `json:"remoteUrl,omitempty"`
 	RemoteToken   string `json:"remoteToken,omitempty"`
 	RemoteConfig  string `json:"remoteConfig,omitempty"`
+	LatencyTargets string `json:"latencyTargets,omitempty"`
 }
 
 type TunnelBackup struct {
