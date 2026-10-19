@@ -3,7 +3,7 @@
 - 任务：flvx-max 自主审计-修复-复核 永续循环（Master Loop v6，2026-10-19 17:20 起取代 v5）
 - 仓库：https://github.com/iiiiiiiii7125-art/flvx-max
 - 基线分支：main @ 9a2810b（2026-10-19）
-- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R6（主视角=可观测性与性能），分支 audit/loop-6
+- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R7（主视角=脚本正确性 + 防假收敛阶梯），分支 audit/loop-7
 - 分支策略（v6）：每轮独立分支 `audit/loop-<轮次>`；通过复核的轮次合入 `audit/integration`（已建，基线 main@9a2810b）；**绝不直接动 main**；推送 audit 分支到远端只用非 force；禁止发布 release / 打 tag / force-push。
 - 主视角轮换：轮次 mod 7 → 0 脚本正确性 / 1 功能契约 / 2 安全 / 3 并发与资源 / 4 数据一致性 / 5 格式与兼容 / 6 可观测性与性能
 - 决策记录：`decisions.md`（v6 规范名；v5 的 DECISIONS_NEEDED.md 已删除）
@@ -23,3 +23,4 @@
 | R3 | audit/loop-3 | 并发与资源（F2 入站与模板） | 0/0/1/1（F2X-001 P2 可达；R5R3-001 P3） | F2X-001（P2，端口分配 TOCTOU）、R5R3-001（P3，锁范围过大） | R4 全量回归（known-baseline 外零失败）；R5 首次退回后 spot-check 通过 | 完成，已合入 audit/integration |
 | R4 | audit/loop-4 | 数据一致性（F3 证书与 ACME） | 0/0/0/0（零新增） | 无 | R4 build/vet 绿（零代码改动）；R5 四问全过 | 完成，已合入 audit/integration |
 | R5 | audit/loop-5 | 格式与兼容（F4 分流与出站） | 0/0/0/0（零新增；R5R5-001 为 P3 观察） | 无（R5R5-001 观察项不阻塞） | R4 build/vet 绿（零代码改动）；R5 四问全过 | 完成，已合入 audit/integration |
+| R6 | audit/loop-6 | 可观测性与性能（F5 中转与隧道） | 0/0/0/0（零新增） | 无 | R4 build/vet 绿（零代码改动）；R5 四问全过 | 完成，已合入 audit/integration |
