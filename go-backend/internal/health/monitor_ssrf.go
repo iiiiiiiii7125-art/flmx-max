@@ -97,19 +97,29 @@ func ValidateMonitorTCPTarget(target string) error {
 	if strings.TrimSpace(host) == "" {
 		return fmt.Errorf("目标主机为空")
 	}
+	_, err = resolveValidatedMonitorIPs(host)
+	return err
+}
+
+// resolveValidatedMonitorIPs 解析主机名并逐 IP 做 SSRF 判定，
+// 返回全部通过校验的 IP（fail-closed：任一命中即整体拒绝）。
+// R5R2-001: 调用方应直接拨号返回的 IP 字面量，不再二次解析
+// （防 validate 与 dial 之间 DNS 变化的 TOCTOU）。
+func resolveValidatedMonitorIPs(host string) ([]net.IP, error) {
 	var ips []net.IP
 	if ip := net.ParseIP(host); ip != nil {
 		ips = []net.IP{ip}
 	} else {
+		var err error
 		ips, err = net.LookupIP(host)
 		if err != nil || len(ips) == 0 {
-			return fmt.Errorf("目标主机无法解析: %s", host)
+			return nil, fmt.Errorf("目标主机无法解析: %s", host)
 		}
 	}
 	for _, ip := range ips {
 		if isMonitorBlockedIP(ip) && !isMonitorIPAllowlisted(ip) {
-			return fmt.Errorf("目标地址不允许（内网/保留地址）: %s", host)
+			return nil, fmt.Errorf("目标地址不允许（内网/保留地址）: %s", host)
 		}
 	}
-	return nil
+	return ips, nil
 }
