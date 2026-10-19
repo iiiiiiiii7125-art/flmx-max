@@ -695,45 +695,55 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// AUDIT-R3 (F2X-001): per-node 端口分配锁必须覆盖"选端口→冲突检查→入库"
 	// 整个临界区。R5-B4 把锁放在 CreateNodeInbound 内部，检查在锁外，
 	// 并发下两请求可挑中同一随机端口，一个撞唯一索引报裸 DB 错误。
-	// 锁内禁止网络调用（以下均为本地计算与 DB 操作）。
+	// R5R3-001: 锁在 DB 写入后立即显式释放，不用 defer——defer 会穿越
+	// 下游 applyKernel 等网络调用（最长 5min 超时），违反"锁内禁止网络调用"。
+	// 注意：临界区内每个提前返回前都必须先释放（Release 即 Unlock，不可双释放）。
 	portAllocMu := repo.AcquirePortAllocLock(row.NodeID)
-	defer repo.ReleasePortAllocLock(portAllocMu)
+	releasePortAlloc := func() { repo.ReleasePortAllocLock(portAllocMu) }
 	if in.Port == 0 {
 		port, err := h.pickFreeInboundPort(row.NodeID, row.ID)
 		if err != nil {
+			releasePortAlloc()
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 		in.Port = port
 	}
 	if err := kernel.Normalize(k.KernelType, &in); err != nil {
+		releasePortAlloc()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if in.Security.CertMode == kernel.CertModeACME && versionBelow(k.Version, 1, 14) {
+		releasePortAlloc()
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", k.Version)))
 		return
 	}
 	prevTargets := outboundTargets(row)
 	if err := h.setInboundRouting(&row, k.KernelType, req.OutboundID, req.SplitRules); err != nil {
+		releasePortAlloc()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if in.Protocol == kernel.ProtocolSnell {
 		if major := snellMajor(k.Version); in.Settings.SnellVersion > major {
+			releasePortAlloc()
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点安装的是 Snell %s，不支持 v%d 客户端", k.Version, in.Settings.SnellVersion)))
 			return
 		}
 	}
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
+		releasePortAlloc()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	} else if msg != "" {
+		releasePortAlloc()
 		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
 
 	if err := applyInboundToModel(in, &row); err != nil {
+		releasePortAlloc()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -759,6 +769,9 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	} else {
 		err = h.repo.CreateNodeInbound(&row)
 	}
+	// R5R3-001: 临界区结束，立即释放锁。下游 applyKernel/applyChainReferrers/
+	// applyChangedTargets 会做网络调用（节点下发），必须无锁执行。
+	releasePortAlloc()
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
