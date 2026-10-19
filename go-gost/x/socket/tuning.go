@@ -273,7 +273,9 @@ func applyTuning(groupIDs []string) (tuneStatus, error) {
 			}
 			if tuned {
 				failed[k] = true
-				delete(backup, k) // unchanged, nothing to restore
+				// O1-001：调优失败时不要 delete(backup, k)。
+				// backup[k] 存的是调优前原值，写入失败意味着系统仍保持原值，
+				// 必须保留备份以便后续恢复；删除会导致原值永久丢失无法恢复。
 			}
 			continue
 		}

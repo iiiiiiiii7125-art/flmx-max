@@ -454,6 +454,7 @@ type BackupData struct {
 	UserGroups   []UserGroupBackup   `json:"userGroups,omitempty"`
 	Permissions  []PermissionBackup  `json:"permissions,omitempty"`
 	Configs      map[string]string   `json:"configs,omitempty"`
+	UserInbounds []UserInboundBackup `json:"userInbounds,omitempty"`
 	// Inbounds carries node kernels, their inbounds (imported nodes too),
 	// relay links and traffic counter baselines; restored as one unit.
 	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
@@ -592,6 +593,15 @@ type UserBackup struct {
 	CreatedTime     int64  `json:"createdTime"`
 	UpdatedTime     int64  `json:"updatedTime,omitempty"`
 	Status          int    `json:"status"`
+	PasswordChangedAt int64 `json:"passwordChangedAt,omitempty"`
+	MaxConn         int    `json:"maxConn,omitempty"`
+}
+
+type UserInboundBackup struct {
+	ID        int64 `json:"id"`
+	UserID    int64 `json:"userId"`
+	InboundID int64 `json:"inboundId"`
+	RelayID   int64 `json:"relayId"`
 }
 
 type NodeBackup struct {
@@ -652,6 +662,7 @@ type ChainTunnelBackup struct {
 	Strategy  string `json:"strategy,omitempty"`
 	Inx       int    `json:"inx,omitempty"`
 	Protocol  string `json:"protocol,omitempty"`
+	ConnectIP string `json:"connectIp,omitempty"`
 }
 
 type ForwardBackup struct {
@@ -669,6 +680,7 @@ type ForwardBackup struct {
 	Status               int                  `json:"status"`
 	Inx                  int                  `json:"inx"`
 	SpeedID              *int64               `json:"speedId,omitempty"`
+	MaxConn              int                  `json:"maxConn,omitempty"`
 	IPMaxConn            int                  `json:"ipMaxConn,omitempty"`
 	IPSpeedID            *int64               `json:"ipSpeedId,omitempty"`
 	ForwardPorts         *[]ForwardPortBackup `json:"forwardPorts,omitempty"`
@@ -678,8 +690,9 @@ type ForwardBackup struct {
 }
 
 type ForwardPortBackup struct {
-	NodeID int64 `json:"nodeId"`
-	Port   int   `json:"port"`
+	NodeID int64  `json:"nodeId"`
+	Port   int    `json:"port"`
+	InIP   string `json:"inIp,omitempty"`
 }
 
 type UserTunnelBackup struct {
@@ -757,6 +770,7 @@ type ImportResult struct {
 	PermissionsImported  int         `json:"permissionsImported"`
 	ConfigsImported      int         `json:"configsImported"`
 	InboundsImported     int         `json:"inboundsImported"`
+	UserInboundsImported int         `json:"userInboundsImported"`
 	AutoBackup           *BackupData `json:"autoBackup,omitempty"`
 }
 

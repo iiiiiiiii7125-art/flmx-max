@@ -815,7 +815,10 @@ func (h *Handler) authPeer(next http.HandlerFunc) http.HandlerFunc {
 		token := parts[1]
 		share, err := h.repo.GetPeerShareByToken(token)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// O12-001：DB 错误详情不得返回给未鉴权调用方，记录日志后返回通用 500。
+			// 旧逻辑：response.Err(-2, err.Error()) 直接泄露 DB 错误详情。
+			log.Printf("authPeer: GetPeerShareByToken failed: %v", err)
+			response.WriteJSON(w, response.Err(-2, "Internal error"))
 			return
 		}
 		if share == nil {

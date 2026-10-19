@@ -2048,6 +2048,13 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.Inbounds = inbounds
 
+	// O7-001：导出 user_inbound 表（订阅分配关系）
+	userInbounds, err := r.exportUserInbounds()
+	if err != nil {
+		return nil, fmt.Errorf("export user inbounds failed: %w", err)
+	}
+	backup.UserInbounds = userInbounds
+
 	return backup, nil
 }
 
@@ -2158,6 +2165,7 @@ func (r *Repository) exportUsers() ([]model.UserBackup, error) {
 			ExpTime: u.ExpTime, Flow: u.Flow, FlowMiB: u.FlowMiB, InFlow: u.InFlow, OutFlow: u.OutFlow,
 			FlowResetTime: u.FlowResetTime, Num: u.Num,
 			CreatedTime: u.CreatedTime, Status: u.Status,
+			PasswordChangedAt: u.PasswordChangedAt, MaxConn: u.MaxConn,
 		}
 		if quota := quotaMap[u.ID]; quota != nil {
 			b.DailyQuotaGB = quota.DailyLimitGB
@@ -2271,6 +2279,9 @@ func (r *Repository) exportChainTunnels(tunnelID int64) ([]model.ChainTunnelBack
 		if c.Protocol.Valid {
 			b.Protocol = c.Protocol.String
 		}
+		if c.ConnectIP.Valid {
+			b.ConnectIP = c.ConnectIP.String
+		}
 		out = append(out, b)
 	}
 	return out, nil
@@ -2288,6 +2299,7 @@ func (r *Repository) exportForwards() ([]model.ForwardBackup, error) {
 			TunnelID: f.TunnelID, RemoteAddr: f.RemoteAddr, Strategy: f.Strategy,
 			InFlow: f.InFlow, OutFlow: f.OutFlow, CreatedTime: f.CreatedTime,
 			UpdatedTime: f.UpdatedTime, Status: f.Status, Inx: f.Inx,
+			MaxConn:              f.MaxConn,
 			IPMaxConn:            f.IPMaxConn,
 			ProxyProtocol:        f.ProxyProtocol,
 			ProxyProtocolReceive: f.ProxyProtocolReceive,
@@ -2319,7 +2331,11 @@ func (r *Repository) exportForwardPorts(forwardID int64) ([]model.ForwardPortBac
 	}
 	out := make([]model.ForwardPortBackup, 0, len(fps))
 	for _, fp := range fps {
-		out = append(out, model.ForwardPortBackup{NodeID: fp.NodeID, Port: fp.Port})
+		b := model.ForwardPortBackup{NodeID: fp.NodeID, Port: fp.Port}
+		if fp.InIP.Valid {
+			b.InIP = fp.InIP.String
+		}
+		out = append(out, b)
 	}
 	return out, nil
 }
@@ -2359,6 +2375,21 @@ func (r *Repository) exportSpeedLimits() ([]model.SpeedLimitBackup, error) {
 			b.UpdatedTime = sl.UpdatedTime.Int64
 		}
 		out = append(out, b)
+	}
+	return out, nil
+}
+
+// O7-001：导出 user_inbound 表（用户订阅分配关系）
+func (r *Repository) exportUserInbounds() ([]model.UserInboundBackup, error) {
+	var rows []model.UserInbound
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.UserInboundBackup, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, model.UserInboundBackup{
+			ID: row.ID, UserID: row.UserID, InboundID: row.InboundID, RelayID: row.RelayID,
+		})
 	}
 	return out, nil
 }
@@ -2515,6 +2546,14 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.InboundsImported = count
 		}
+		// O7-001：导入 user_inbound 表（用户订阅分配关系）
+		if typeSet["userInbounds"] && len(backup.UserInbounds) > 0 {
+			count, err := importUserInbounds(tx, backup.UserInbounds)
+			if err != nil {
+				return fmt.Errorf("import user inbounds failed: %w", err)
+			}
+			result.UserInboundsImported = count
+		}
 		return nil
 	})
 	if err != nil {
@@ -2529,6 +2568,13 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 		pwdHash, status, err := normalizeImportedUserPassword(u.Pwd, u.Status)
 		if err != nil {
 			return count, err
+		}
+		// O7-003：PasswordChangedAt 恢复策略
+		// - legacy MD5/空密码被重置为随机密码时：用导入时间作为吊销时间戳（安全语义，见 TestImportUsersDoesNotStoreLegacyMD5Passwords）
+		// - 正常 bcrypt 密码导入时：从备份恢复原始值（旧逻辑硬写 now 会丢失强制改密时间线）
+		passwordChangedAt := u.PasswordChangedAt
+		if security.IsLegacyPasswordHash(u.Pwd) || u.Pwd == "" {
+			passwordChangedAt = now
 		}
 		item := model.User{
 			ID:                u.ID,
@@ -2545,7 +2591,8 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			CreatedTime:       u.CreatedTime,
 			UpdatedTime:       sql.NullInt64{Int64: now, Valid: true},
 			Status:            status,
-			PasswordChangedAt: now,
+			PasswordChangedAt: passwordChangedAt,
+			MaxConn:           u.MaxConn,
 		}
 		// R5-B4C: 备份导入查重。重名时明确报错，不静默覆盖。
 		if err := ensureUsernameAvailable(tx, u.User, u.ID); err != nil {
@@ -2555,7 +2602,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user", "pwd", "role_id", "exp_time", "flow", "flow_mib", "in_flow", "out_flow",
-				"flow_reset_time", "num", "updated_time", "status", "password_changed_at",
+				"flow_reset_time", "num", "updated_time", "status", "password_changed_at", "max_conn",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -2713,11 +2760,12 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, e
 				Strategy:  sql.NullString{String: ct.Strategy, Valid: true},
 				Inx:       sql.NullInt64{Int64: int64(ct.Inx), Valid: true},
 				Protocol:  sql.NullString{String: ct.Protocol, Valid: true},
+				ConnectIP: sql.NullString{String: ct.ConnectIP, Valid: ct.ConnectIP != ""},
 			}
 			err = tx.Clauses(clause.OnConflict{
 				Columns: []clause.Column{{Name: "id"}},
 				DoUpdates: clause.AssignmentColumns([]string{
-					"chain_type", "node_id", "port", "strategy", "inx", "protocol",
+					"chain_type", "node_id", "port", "strategy", "inx", "protocol", "connect_ip",
 				}),
 			}).Create(&chainItem).Error
 			if err != nil {
@@ -2754,6 +2802,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int
 			Status:               f.Status,
 			Inx:                  f.Inx,
 			SpeedID:              sql.NullInt64{Int64: nullableBackupInt64(f.SpeedID), Valid: f.SpeedID != nil && *f.SpeedID > 0},
+			MaxConn:              f.MaxConn,
 			IPMaxConn:            f.IPMaxConn,
 			IPSpeedID:            sql.NullInt64{Int64: nullableBackupInt64(f.IPSpeedID), Valid: f.IPSpeedID != nil && *f.IPSpeedID > 0},
 			ProxyProtocol:        f.ProxyProtocol,
@@ -2764,7 +2813,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "user_name", "name", "tunnel_id", "remote_addr", "strategy",
-				"in_flow", "out_flow", "updated_time", "status", "inx", "speed_id", "ip_max_conn", "ip_speed_id", "proxy_protocol", "proxy_protocol_receive", "proxy_protocol_send",
+				"in_flow", "out_flow", "updated_time", "status", "inx", "speed_id", "max_conn", "ip_max_conn", "ip_speed_id", "proxy_protocol", "proxy_protocol_receive", "proxy_protocol_send",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -2775,7 +2824,11 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int
 				return count, err
 			}
 			for _, fp := range *f.ForwardPorts {
-				if err := tx.Create(&model.ForwardPort{ForwardID: f.ID, NodeID: fp.NodeID, Port: fp.Port}).Error; err != nil {
+				// O7-005：恢复 ForwardPort 的 InIP（sql.NullString）
+				if err := tx.Create(&model.ForwardPort{
+					ForwardID: f.ID, NodeID: fp.NodeID, Port: fp.Port,
+					InIP: sql.NullString{String: fp.InIP, Valid: fp.InIP != ""},
+				}).Error; err != nil {
 					return count, err
 				}
 			}
@@ -2834,6 +2887,30 @@ func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now in
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "speed", "tunnel_id", "tunnel_name", "updated_time", "status",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// O7-001：导入 user_inbound 表（用户订阅分配关系）
+func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup) (int, error) {
+	count := 0
+	for _, r := range rows {
+		item := model.UserInbound{
+			ID:        r.ID,
+			UserID:    r.UserID,
+			InboundID: r.InboundID,
+			RelayID:   r.RelayID,
+		}
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"user_id", "inbound_id", "relay_id",
 			}),
 		}).Create(&item).Error
 		if err != nil {

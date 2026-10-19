@@ -61,6 +61,10 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 			continue
 		}
 		if err := h.repo.UpdateForwardStatus(forward.ID, 0, now); err != nil {
+			// O6-001：DB 更新失败时服务已暂停，必须加入 pausedIDs 以便配额恢复时能恢复
+			// 旧逻辑：continue 跳过，服务暂停但 DB 显示活跃且不在 pausedIDs 中，永远无法恢复
+			log.Printf("applyUserQuotaBlock: UpdateForwardStatus failed for forward %d (service already paused), adding to pausedIDs for later recovery: %v", forward.ID, err)
+			pausedIDs = append(pausedIDs, forward.ID)
 			continue
 		}
 		pausedIDs = append(pausedIDs, forward.ID)
