@@ -114,9 +114,8 @@ func TestIssue313_EntryPortCrossTunnelConflictContract(t *testing.T) {
 
 	// Simulate legacy dirty data: tunnel A already occupies port 2000 on entryB2.
 	// When tunnel B adds entryB2, the inherited forward port should conflict cross-tunnel.
-	if err := repo.DB().Exec(`INSERT INTO forward_port(forward_id, node_id, port) VALUES(?, ?, ?)`, forwardAID, entryB2, 2000).Error; err != nil {
-		t.Fatalf("insert forward_port a on entryB2: %v", err)
-	}
+	// AUDIT-R1 (TST-004): 上面一行已建立该脏数据；此处曾重复插入完全相同的行，
+	// 在 forward_port(node_id,port) 唯一索引（批次 4，符合 §1.1）下非法，删除重复。
 
 	if err := repo.DB().Exec(`
 		INSERT INTO user_tunnel(id, user_id, tunnel_id, speed_id, num, flow, in_flow, out_flow, flow_reset_time, exp_time, status)

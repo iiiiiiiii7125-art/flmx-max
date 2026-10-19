@@ -640,7 +640,7 @@ func setupNftablesCollectionFixture(t *testing.T) nftablesCollectionFixture {
 	`, tunnelID).Error; err != nil {
 		t.Fatalf("seed user_tunnel: %v", err)
 	}
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	if err := h.repo.UpsertNftRuleBinding(repo.NftRuleBindingInput{
 		ForwardID:  forward.ID,
 		NodeID:     fixture.nodeID,

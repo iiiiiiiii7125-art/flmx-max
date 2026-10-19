@@ -125,7 +125,7 @@ func TestSyncForwardServicesWithWarningsUsesNftablesRuntime(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 
 	warnings, err := h.syncForwardServicesWithWarnings(forward, "UpdateService", true)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestNodeNftablesReconcileEndpointPersistsBindings(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	seedNftablesSSHConfig(t, fixture.handler, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, fixture.handler, "nft-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, fixture.handler, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, fixture.handler, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	manager := &fakeNftablesManager{}
 	fixture.handler.nftablesManager = newSerializedNftManager(manager)
 
@@ -185,7 +185,7 @@ func TestStartBackgroundJobsReconcilesNftablesRulesAtStartup(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-startup-tunnel", fixture.nodeID)
-	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
 
@@ -403,7 +403,7 @@ func TestForwardDeleteReconcilesNftablesAfterDBDelete(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
 
@@ -427,7 +427,7 @@ func TestForwardForceDeleteRemovesNftablesBindingAndReconciles(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	if err := h.repo.UpsertNftRuleBinding(repo.NftRuleBindingInput{
 		ForwardID:  forward.ID,
 		NodeID:     fixture.nodeID,
@@ -466,7 +466,7 @@ func TestForwardBatchDeleteReconcilesNftablesAfterDBDelete(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
 
@@ -490,7 +490,7 @@ func TestForwardBatchRedeployUsesNftablesReconcile(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
 
@@ -508,7 +508,7 @@ func TestTunnelBatchRedeployUsesNftablesReconcile(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
-	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
 
@@ -525,7 +525,7 @@ func TestDiagnoseForwardRuntimeReturnsNftablesRuleStatus(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	tunnelID := seedTunnelForNftables(t, h, "nft-diagnose-tunnel", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 	now := time.Now().UnixMilli()
 	if err := h.repo.UpsertNftRuleBinding(repo.NftRuleBindingInput{
 		ForwardID:  forward.ID,
@@ -640,12 +640,12 @@ func seedTunnelForNftables(t *testing.T, h *Handler, name string, nodeID int64) 
 	return tunnelID
 }
 
-func seedForwardForNftables(t *testing.T, h *Handler, tunnelID, nodeID int64, remoteAddr string) *forwardRecord {
+func seedForwardForNftables(t *testing.T, h *Handler, tunnelID, nodeID int64, remoteAddr string, port int) *forwardRecord {
 	t.Helper()
 	now := time.Now().UnixMilli()
 	forwardID, err := h.repo.CreateForwardTx(
 		1, "admin", "nft-forward", tunnelID, remoteAddr, "fifo", now, 1,
-		[]int64{nodeID}, 20000, "", nil, 0, 0, nil, 0, 0, 0,
+		[]int64{nodeID}, port, "", nil, 0, 0, nil, 0, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("create forward: %v", err)

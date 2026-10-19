@@ -332,23 +332,25 @@ func setupBestExitTunnelHandler(t *testing.T) *Handler {
 	insertTunnel(78, "best-single")
 	insertTunnel(79, "round-multi")
 
-	insertChain := func(tunnelID int64, chainType string, nodeID int64, strategy string, inx int64) {
+	insertChain := func(tunnelID int64, chainType string, nodeID int64, strategy string, inx int64, port int) {
 		t.Helper()
+		// AUDIT-R1 (TST-004): 端口按隧道区分。chain_tunnel(node_id,port) 唯一索引
+		//（批次 4，符合 §1.1 冲突域=同节点+同端口）下，多条隧道不可共用同一入口/出口端口。
 		if err := r.DB().Exec(`
 			INSERT INTO chain_tunnel(tunnel_id, chain_type, node_id, port, strategy, inx, protocol)
-			VALUES(?, ?, ?, 30001, ?, ?, 'tls')
-		`, tunnelID, chainType, nodeID, strategy, inx).Error; err != nil {
+			VALUES(?, ?, ?, ?, ?, ?, 'tls')
+		`, tunnelID, chainType, nodeID, port, strategy, inx).Error; err != nil {
 			t.Fatalf("insert chain tunnel %d/%s/%d: %v", tunnelID, chainType, nodeID, err)
 		}
 	}
-	insertChain(77, "1", 10, "round", 1)
-	insertChain(77, "3", 30, tunnelStrategyBest, 1)
-	insertChain(77, "3", 31, tunnelStrategyBest, 2)
-	insertChain(78, "1", 10, "round", 1)
-	insertChain(78, "3", 30, tunnelStrategyBest, 1)
-	insertChain(79, "1", 10, "round", 1)
-	insertChain(79, "3", 31, "round", 1)
-	insertChain(79, "3", 32, "round", 2)
+	insertChain(77, "1", 10, "round", 1, 30001)
+	insertChain(77, "3", 30, tunnelStrategyBest, 1, 30001)
+	insertChain(77, "3", 31, tunnelStrategyBest, 2, 30001)
+	insertChain(78, "1", 10, "round", 1, 30002)
+	insertChain(78, "3", 30, tunnelStrategyBest, 1, 30002)
+	insertChain(79, "1", 10, "round", 1, 30003)
+	insertChain(79, "3", 31, "round", 1, 30003)
+	insertChain(79, "3", 32, "round", 2, 30003)
 
 	h.bestExit.setApplied(bestExitOwnerKey{TunnelID: 77, OwnerNodeID: 10}, 30, time.UnixMilli(now))
 	return h
