@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go-backend/internal/health"
 	"go-backend/internal/http/response"
 	"go-backend/internal/monitoring"
 	"go-backend/internal/store/model"
@@ -446,6 +447,14 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("目标地址不能为空"))
 		return
 	}
+	// AUDIT-R2 (F1X-001): 面板本机执行的 TCP 探测由面板进程直接拨号，
+	// 目标须过 SSRF 校验（nodeId>0 走节点侧执行，信任边界不同，不限制）。
+	if monitorType == "tcp" && req.NodeID <= 0 {
+		if err := health.ValidateMonitorTCPTarget(target); err != nil {
+			response.WriteJSON(w, response.Err(-3, err.Error()))
+			return
+		}
+	}
 
 	limits := h.resolveServiceMonitorLimits()
 
@@ -594,6 +603,15 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		if *req.Enabled == 0 || *req.Enabled == 1 {
 			existing.Enabled = *req.Enabled
+		}
+	}
+
+	// AUDIT-R2 (F1X-001): 终态为面板本机 tcp 且目标/类型/执行位置被改动时做 SSRF 校验。
+	if (target != "" || req.NodeID != nil || monitorType == "tcp" || monitorType == "icmp") &&
+		existing.Type == "tcp" && existing.NodeID <= 0 {
+		if err := health.ValidateMonitorTCPTarget(existing.Target); err != nil {
+			response.WriteJSON(w, response.Err(-3, err.Error()))
+			return
 		}
 	}
 
