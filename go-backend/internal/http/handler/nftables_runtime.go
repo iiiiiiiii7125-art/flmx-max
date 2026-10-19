@@ -251,6 +251,11 @@ func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]
 	if err != nil {
 		return err
 	}
+	// R5-B3 D1-004/D8: reconcile（delete table + nft -f）会清零全部计数器。
+	// 先 best-effort drain：CollectCounters → delta 落库，再重建。
+	// drain 失败不阻塞 apply（记 gap），重建后重新基线。
+	// 取舍（写死）：可用性优先于计费精确性，但每次 gap 必须可观测。
+	h.drainNftCountersBeforeReconcile(nodeID, cfgModel, time.Now())
 	result, err := h.nftablesManager.Reconcile(context.Background(), sshCfg, plan)
 	now := time.Now().UnixMilli()
 	if err != nil {
