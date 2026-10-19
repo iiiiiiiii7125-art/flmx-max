@@ -169,10 +169,9 @@ func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	// R5-B4: per-node 端口分配锁（事务之前获取）。
-	// 锁内禁止网络调用。
-	mu := AcquirePortAllocLock(in.NodeID)
-	defer ReleasePortAllocLock(mu)
+	// AUDIT-R3 (F2X-001): per-node 端口分配锁已上移到调用方
+	//（inboundSave/remote_source/kernel_external），覆盖"检查→插入"
+	// 临界区。此处不再加锁（sync.Mutex 不可重入）。
 	return r.db.Create(in).Error
 }
 
