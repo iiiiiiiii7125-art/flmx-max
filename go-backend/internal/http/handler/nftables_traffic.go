@@ -14,6 +14,10 @@ import (
 	"go-backend/internal/store/repo"
 )
 
+// errDiscardedDueToApplying: 采集轮因处于 apply 窗口或 generation 变化而丢弃。
+// 调用方不得写 nft_counter_state、不推进基线。
+var errDiscardedDueToApplying = errors.New("discarded: applying window or generation changed")
+
 type nftTrafficDelta struct {
 	ForwardID int64
 	BytesIn   int64
@@ -73,8 +77,32 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		log.Printf("nftables traffic collection failed op=ssh_config node_id=%d err=%v", nodeID, err)
 		return nil, nil, 0, nil, err
 	}
-	samples, err := h.nftablesManager.CollectCounters(context.Background(), nodeID, sshCfg)
+	samples, err := func() ([]runtimenft.CounterSample, error) {
+		// R5-B5B D18: 采集前记录 generation（节点级单调计数器，独立于 applying）。
+		gen0 := h.nftablesManager.GetGeneration(nodeID)
+		samples, err := h.nftablesManager.CollectCounters(context.Background(), nodeID, sshCfg)
+		if err != nil {
+			return nil, err
+		}
+		// D18: 若处于 apply 窗口（未超时）→ 丢弃本轮，不阻塞。
+		if h.nftablesManager.IsApplying(nodeID) {
+			log.Printf("nftables traffic discarded op=applying_window node_id=%d", nodeID)
+			return nil, errDiscardedDueToApplying
+		}
+		// D18: 若 generation 变化（期间发生过完整 apply）→ 脏读，丢弃。
+		if h.nftablesManager.GetGeneration(nodeID) != gen0 {
+			log.Printf("nftables traffic discarded op=generation_changed node_id=%d", nodeID)
+			return nil, errDiscardedDueToApplying
+		}
+		return samples, nil
+	}()
 	if err != nil {
+		if err == errDiscardedDueToApplying {
+			// 丢弃轮：不写 nft_counter_state，不推进基线，下轮补回。
+			// （nft 计数器是累计值，跳过区间在下轮 delta 中补回；
+			// 若期间 apply 重建表，负 delta 走既有 reset 逻辑。）
+			return nil, nil, 0, nil, nil
+		}
 		// R5-B3 D1-003/D9(a): 表缺失（节点重启）→ 仅投递异步任务，由独立
 		// worker 执行；采集循环立即返回（R2：不在事务内做 SSH+DB）。
 		if isNftTableMissingError(err) {

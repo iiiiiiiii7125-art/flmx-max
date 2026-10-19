@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"sync"
+	"time"
 
 	runtimenft "go-backend/internal/runtime/nftables"
 )
@@ -20,12 +21,22 @@ type serializedNftManager struct {
 	inner nftablesRuntimeManager
 	mu    sync.Mutex
 	locks map[int64]*sync.Mutex
+	// R5-B5B D18: applying 标记（nodeID -> 置位时间戳）与 generation 计数器
+	// （nodeID -> 单调递增）。gen 独立于 applying，用于检测采集期间的脏读。
+	applying map[int64]time.Time
+	gen      map[int64]uint64
 }
+
+// applyingTimeout: applying 标记超时，超过即视为 stale（防 reconcile 崩溃
+// 后永久阻塞采集）。
+const applyingTimeout = 60 * time.Second
 
 func newSerializedNftManager(inner nftablesRuntimeManager) *serializedNftManager {
 	return &serializedNftManager{
-		inner: inner,
-		locks: make(map[int64]*sync.Mutex),
+		inner:    inner,
+		locks:    make(map[int64]*sync.Mutex),
+		applying: make(map[int64]time.Time),
+		gen:      make(map[int64]uint64),
 	}
 }
 
@@ -41,10 +52,36 @@ func (m *serializedNftManager) lockFor(nodeID int64) *sync.Mutex {
 }
 
 // ReleaseNode 释放 node_id 的锁表条目（节点删除时调用，防泄漏）。
+// 同时清理 applying/gen 条目（D18）。
 func (m *serializedNftManager) ReleaseNode(nodeID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.locks, nodeID)
+	delete(m.applying, nodeID)
+	delete(m.gen, nodeID)
+}
+
+// GetGeneration 返回节点级 generation 计数器（D18：独立于 applying）。
+func (m *serializedNftManager) GetGeneration(nodeID int64) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gen[nodeID]
+}
+
+// IsApplying 检查节点是否处于 apply 窗口（D18）。
+// 超时（60s）即视为 stale，返回 false。
+func (m *serializedNftManager) IsApplying(nodeID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ts, ok := m.applying[nodeID]
+	if !ok {
+		return false
+	}
+	// D18 修正：超时判断用 now - ts >= 60s。
+	if time.Since(ts) >= applyingTimeout {
+		return false
+	}
+	return true
 }
 
 // Unwrap 返回内层 manager（仅测试用，用于断言 fake 的状态）。
@@ -56,6 +93,17 @@ func (m *serializedNftManager) Reconcile(ctx context.Context, nodeID int64, cfg 
 	mu := m.lockFor(nodeID)
 	mu.Lock()
 	defer mu.Unlock()
+	// R5-B5B D18: 写路径。drain 已在 handler 层、Reconcile 调用之前完成。
+	// 置位 applying + 递增 gen（finally 清除，保证异常路径）。
+	m.mu.Lock()
+	m.gen[nodeID]++
+	m.applying[nodeID] = time.Now()
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.applying, nodeID)
+		m.mu.Unlock()
+	}()
 	return m.inner.Reconcile(ctx, cfg, plan)
 }
 
@@ -67,9 +115,8 @@ func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runt
 }
 
 func (m *serializedNftManager) CollectCounters(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error) {
-	mu := m.lockFor(nodeID)
-	mu.Lock()
-	defer mu.Unlock()
+	// R5-B5B D18: 采集不获取写锁，允许与 reconcile 并发读。
+	// 脏读由 handler 层的 generation 检查兜底（见 collectNftablesNodeTraffic）。
 	return m.inner.CollectCounters(ctx, cfg)
 }
 
