@@ -25,4 +25,4 @@
 | R5 | audit/loop-5 | 格式与兼容（F4 分流与出站） | 0/0/0/0（零新增；R5R5-001 为 P3 观察） | 无（R5R5-001 观察项不阻塞） | R4 build/vet 绿（零代码改动）；R5 四问全过 | 完成，已合入 audit/integration |
 | R6 | audit/loop-6 | 可观测性与性能（F5 中转与隧道） | 0/0/0/0（零新增） | 无 | R4 build/vet 绿（零代码改动）；R5 四问全过 | 完成，已合入 audit/integration |
 | R7 | audit/loop-7 | 脚本正确性（F6 转发业务）+ 防假收敛 L1-L6 | 0/1/0/0（R5R7-001，P2 可达） | R5R7-001（P2，限速 fail-open） | R4 全量回归（known-baseline 外零失败）；L6 spot-check 通过 | 完成，已合入 audit/integration |
-| R8 | audit/loop-8 | 功能契约（F7 订阅） | 0/2/0/0（F7X-001、R5R8-001，P2 可达） | F7X-001（P2，凭据下发失败无重试）、R5R8-001（P2，reset 无重试） | R4 全量回归（known-baseline 外零失败）；R5 首次退回后 spot-check 通过 | 进行中 |
+| R8 | audit/loop-8 | 功能契约（F7 订阅） | 0/2/0/0（F7X-001、R5R8-001，P2 可达） | F7X-001（P2，凭据下发失败无重试）、R5R8-001（P2，reset 无重试） | R4 全量回归（known-baseline 外零失败）；R5 spot-check 通过 | 完成，已合入 audit/integration |
