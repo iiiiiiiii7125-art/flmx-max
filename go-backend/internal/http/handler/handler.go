@@ -1567,11 +1567,14 @@ func (h *Handler) writeCaptchaVerifyResult(w http.ResponseWriter, success bool, 
 }
 
 func decodeJSON(body io.ReadCloser, out interface{}) error {
+	return decodeJSONWithLimit(body, out, 10<<20)
+}
+
+// decodeJSONWithLimit 与 decodeJSON 相同，但允许调用方指定 body 上限。
+// 备份导入需要更大的上限（面板备份可达数十 MB），而普通 API 保持 10MB 防 DoS。
+func decodeJSONWithLimit(body io.ReadCloser, out interface{}, limit int64) error {
 	defer body.Close()
-	// Cap request body at 10MB to prevent memory-exhaustion DoS from
-	// oversized payloads. Largest legitimate payloads are wallpaper data
-	// URLs (~2-3MB).
-	decoder := json.NewDecoder(http.MaxBytesReader(nil, body, 10<<20))
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, body, limit))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(out)
 }
@@ -1737,7 +1740,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req backupImportRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	// AUDIT-R22 (R5R22-001): 备份导入用 100MB 上限。面板备份（含数万用户/分配）
+	// 可达数十 MB，10MB 的通用上限会误拒合法备份。nginx 侧已放行 50m（SCR-002），
+	// 此处 100MB 与面板规模对齐；仍为有界值，防内存耗尽 DoS。
+	if err := decodeJSONWithLimit(r.Body, &req, 100<<20); err != nil {
 		response.WriteJSON(w, response.Err(500, "请求参数错误"))
 		return
 	}
