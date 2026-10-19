@@ -394,10 +394,20 @@ jobs:
           echo "📤 上传安装脚本..."
           gh release upload "${VERSION}" ./artifacts/install.sh --clobber
           gh release upload "${VERSION}" ./artifacts/panel_install.sh --clobber
+          # 生成安装脚本的校验文件（panel_install.sh 强制校验）
+          (cd ./artifacts && sha256sum install.sh > install.sh.sha256)
+          (cd ./artifacts && sha256sum panel_install.sh > panel_install.sh.sha256)
+          gh release upload "${VERSION}" ./artifacts/install.sh.sha256 --clobber
+          gh release upload "${VERSION}" ./artifacts/panel_install.sh.sha256 --clobber
 
           echo "📤 上传 Docker Compose 配置文件..."
           gh release upload "${VERSION}" ./artifacts/docker-compose-v4.yml --clobber
           gh release upload "${VERSION}" ./artifacts/docker-compose-v6.yml --clobber
+          # 生成 Compose 文件的校验文件
+          (cd ./artifacts && sha256sum docker-compose-v4.yml > docker-compose-v4.yml.sha256)
+          (cd ./artifacts && sha256sum docker-compose-v6.yml > docker-compose-v6.yml.sha256)
+          gh release upload "${VERSION}" ./artifacts/docker-compose-v4.yml.sha256 --clobber
+          gh release upload "${VERSION}" ./artifacts/docker-compose-v6.yml.sha256 --clobber
 
           echo "✅ Release ${VERSION} 创建完成"
 
