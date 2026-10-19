@@ -397,6 +397,9 @@ setup_domain_proxy() {
 
   # 写 Caddyfile（用 127.0.0.1 避免 docker-proxy IPv6 转发问题）
   echo "📝 配置 Caddy..."
+  # AUDIT-R1 (SCR-018): caddy 手动二进制安装时 /etc/caddy 不存在，
+  # 此处 cat 会 No such file or directory。先建目录（包管理器安装自带该目录，无害）。
+  mkdir -p /etc/caddy
   # 备份已有配置
   [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
   # AUDIT-R1 (SCR-003): 菜单 5 是独立流程，不经过 get_config_params，
