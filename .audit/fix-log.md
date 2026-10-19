@@ -148,3 +148,19 @@
 - 变体扫描：`DeleteForwardCascade` ✅ 在位；`DeleteTunnelCascade` ✅ 已补；`DeleteNodeCascade` ✅ 已补；`DeleteNodeKernel`（R1 已修）无此问题。
 - Pre-fix：代码审查确认遗漏；Post-fix：`go build` + `go vet` 通过。
 - 回滚：可独立 revert 本提交。
+
+## R22 修复（防假收敛阶梯 L1–L6）
+
+### LAD22-001（P3）— 已修复
+- 根因：`backupExport` 直接 `json.NewEncoder(w).Encode(backup)`，中途失败时 HTTP 200 已发出，错误信封追加到截断流后成损坏响应。
+- 修复：改 buffer-first（先 Encode 到 `bytes.Buffer`，成功后再发 headers+body）。失败分支在任何 Write 之前返回合法错误信封。
+- 变体扫描：全仓仅 `backupExport` 有此模式（流式 Encode 到 ResponseWriter），其余下载路径为文件服务。无遗漏。
+- Pre-fix：L3 动态复现确认损坏响应；Post-fix：`go build` 通过。
+- 回滚：可独立 revert。
+
+### R5R22-001（P2）— 已修复（L6 退回项）
+- 根因：`decodeJSON` 的 10MB `MaxBytesReader` 上限（为壁纸 2-3MB 设计）误拒合法大备份（Fermi 估算 2 万用户 ≈ 15MB；动态验证 11.44MB 被拒）。
+- 修复：新增 `decodeJSONWithLimit(body, out, limit)`；`backupImport` 改用 100MB 上限（≥ nginx 50m，使反代为 binding 约束；仍有界，需管理员鉴权）。
+- 变体扫描：其余约 40 个 `decodeJSON` 调用方（节点导入 ≤1MB、壁纸 2-3MB、联邦/配置/监控小 JSON）均远低于 10MB，无需放宽。备份是唯一 bulk 路径。
+- Pre-fix：动态验证确认 11.44MB 被拒"http: request body too large"；Post-fix：11.74MB 通过大小检查。
+- 回滚：可独立 revert。
