@@ -12,6 +12,7 @@ import (
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 // Remote sources are subscription URLs whose nodes the panel keeps as
@@ -139,7 +140,11 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 			row = take(byAddr[externalKey(node.Host, node.Port)])
 		}
 		if row == nil {
-			if err := h.repo.CreateNodeInbound(&fresh); err != nil {
+			// AUDIT-R3 (F2X-001): per-node 端口分配锁（CreateNodeInbound 内部已去锁）。
+			portMu := repo.AcquirePortAllocLock(fresh.NodeID)
+			err := h.repo.CreateNodeInbound(&fresh)
+			repo.ReleasePortAllocLock(portMu)
+			if err != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
 				continue
 			}

@@ -3,7 +3,7 @@
 - 任务：flvx-max 自主审计-修复-复核 永续循环（Master Loop v6，2026-10-19 17:20 起取代 v5）
 - 仓库：https://github.com/iiiiiiiii7125-art/flvx-max
 - 基线分支：main @ 9a2810b（2026-10-19）
-- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R3（主视角=并发与资源），分支 audit/loop-3
+- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R4（主视角=数据一致性），分支 audit/loop-4
 - 分支策略（v6）：每轮独立分支 `audit/loop-<轮次>`；通过复核的轮次合入 `audit/integration`（已建，基线 main@9a2810b）；**绝不直接动 main**；推送 audit 分支到远端只用非 force；禁止发布 release / 打 tag / force-push。
 - 主视角轮换：轮次 mod 7 → 0 脚本正确性 / 1 功能契约 / 2 安全 / 3 并发与资源 / 4 数据一致性 / 5 格式与兼容 / 6 可观测性与性能
 - 决策记录：`decisions.md`（v6 规范名；v5 的 DECISIONS_NEEDED.md 已删除）
@@ -20,3 +20,4 @@
 | R0 | audit/loop-1 | 基线（全量测试+脚本静态检查） | 0/3/4/14 | — | build/vet 绿；go test：gost 全绿，backend 18 失败（3 P1 真缺陷+7 测试债务+2 环境+2 已知+4 同根因）；前端构建绿 | 完成 |
 | R1 | audit/loop-1 | 功能契约（F14 数据面+S4 脚本动态） | 0/0/0/3（SCR-018/019/R5R1-001，P3 可达；SCR-009 由潜在升级可达） | TST-001/002/003（P1）、TST-004、SCR-001/002/003（P2）、SCR-004/005/007/008/009/011/013/014/015/017/018/019、R5R1-001（P3） | R4 全量回归绿（known-baseline 外零失败）；R5 四问全过 | 完成，已合入 audit/integration |
 | R2 | audit/loop-2 | 安全（F1 节点与内核） | 0/1/0/1（F1X-001 P1 可达；R5R2-001 P3 加固） | F1X-001（P1，监控 TCP SSRF）、R5R2-001（P3，DNS TOCTOU） | R4 全量回归绿（known-baseline 外零失败）；R5 四问全过 | 完成，已合入 audit/integration |
+| R3 | audit/loop-3 | 并发与资源（F2 入站与模板） | 0/0/1/1（F2X-001 P2 可达；R5R3-001 P3） | F2X-001（P2，端口分配 TOCTOU）、R5R3-001（P3，锁范围过大） | R4 全量回归（known-baseline 外零失败）；R5 首次退回后 spot-check 通过 | 完成，已合入 audit/integration |

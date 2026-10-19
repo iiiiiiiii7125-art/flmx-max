@@ -15,6 +15,7 @@ import (
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 // External inbounds are proxy nodes the panel does not deploy (built by a
@@ -176,7 +177,10 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 		seen[key] = true
 		row, err := externalRow(node, req.RelayOnly, now)
 		if err == nil {
+			// AUDIT-R3 (F2X-001): per-node 端口分配锁（CreateNodeInbound 内部已去锁）。
+			portMu := repo.AcquirePortAllocLock(row.NodeID)
 			err = h.repo.CreateNodeInbound(&row)
+			repo.ReleasePortAllocLock(portMu)
 		}
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
