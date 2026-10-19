@@ -2686,8 +2686,9 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	// S-05: nftables 模式下暂停必须真正使规则失效
-	// 通过更新DB状态 + reconcile 使规则被移除，而非仅操作 gost service
+	// S-05: nftables 模式下暂停必须真正使规则失效。
+	// R5-B3 D1-012 + D6: 数据面优先。按“已暂停”意图生成 plan（不含该转发）
+	// 先 reconcile，成功后再写 status=0；失败则 DB 保持 active。
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
 		return
@@ -2696,10 +2697,14 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
 			return
 		}
-		// 先更新DB状态为暂停，reconcile 时会根据状态排除此转发
-		_ = h.repo.UpdateForwardStatus(id, 0, time.Now().UnixMilli())
-		if err := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if err := h.syncNftablesNodeWithOverrides(entryNodeIDs[0], map[int64]bool{id: true}, nil); err != nil {			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusPaused, time.Now().UnixMilli()); err != nil {
+			// D6: DB 写失败但数据面已变更（规则已下线）。记日志，靠下一次
+			// reconcile 收敛；方向是“可用”而非“静默计费”，可接受。
+			log.Printf("nftables forward pause failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
+			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
 	} else {
@@ -2707,7 +2712,11 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
-		_ = h.repo.UpdateForwardStatus(id, 0, time.Now().UnixMilli())
+		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusPaused, time.Now().UnixMilli()); err != nil {
+			log.Printf("forward pause failed op=db_write_after_dplane forward_id=%d err=%v", id, err)
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -2751,7 +2760,9 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	// S-05: nftables 模式下恢复必须真正加回规则
+	// S-05: nftables 模式下恢复必须真正加回规则。
+	// R5-B3 D1-012 + D6: 数据面优先。按“已恢复”意图生成 plan（含该转发）
+	// 先 reconcile，成功后再写 status=1；失败则 DB 保持 paused，无黑洞。
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
 		return
@@ -2760,9 +2771,13 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
 			return
 		}
-		_ = h.repo.UpdateForwardStatus(id, 1, now)
-		if err := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); err != nil {
+		if err := h.syncNftablesNodeWithOverrides(entryNodeIDs[0], nil, []*forwardRecord{forward}); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusActive, now); err != nil {
+			log.Printf("nftables forward resume failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
+			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
 	} else {
@@ -2770,7 +2785,11 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
-		_ = h.repo.UpdateForwardStatus(id, 1, now)
+		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusActive, now); err != nil {
+			log.Printf("forward resume failed op=db_write_after_dplane forward_id=%d err=%v", id, err)
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -2954,6 +2973,17 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardBatchPause(w http.ResponseWriter, r *http.Request) {
+	h.batchForwardPauseResume(w, r, "pause")
+}
+
+func (h *Handler) forwardBatchResume(w http.ResponseWriter, r *http.Request) {
+	h.batchForwardPauseResume(w, r, "resume")
+}
+
+// batchForwardPauseResume 是批量暂停/恢复的统一实现（R5-B3 D1-012）。
+// nft 转发按 D6 数据面优先：按节点聚合，一节点只 reconcile 一次，成功后才写 DB。
+// gost 转发保持原语义（先动数据面后写库），仅补齐 DB 错误检查。
+func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request, action string) {
 	ids := idsFromBody(r, w)
 	if ids == nil {
 		return
@@ -2963,9 +2993,22 @@ func (h *Handler) forwardBatchPause(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 		return
 	}
+	targetStatus := model.ForwardStatusPaused
+	serviceCmd := "PauseService"
+	if action == "resume" {
+		targetStatus = model.ForwardStatusActive
+		serviceCmd = "ResumeService"
+	}
 	s := 0
 	f := 0
+	now := time.Now().UnixMilli()
 	failures := make([]batchFailureDetail, 0)
+	type nftIntent struct {
+		exclude map[int64]bool
+		include []*forwardRecord
+		names   map[int64]string
+	}
+	nftGroups := make(map[int64]*nftIntent)
 	for _, id := range ids {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
@@ -2973,56 +3016,67 @@ func (h *Handler) forwardBatchPause(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, "", accessErr)
 			continue
 		}
-		if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
+		if action == "resume" {
+			if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
+				f++
+				failures = appendBatchFailure(failures, id, forward.Name, err)
+				continue
+			}
+		}
+		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
+		if modeErr != nil {
+			f++
+			failures = appendBatchFailure(failures, id, forward.Name, modeErr)
+			continue
+		}
+		if nftMode {
+			if len(entryNodeIDs) == 0 {
+				f++
+				failures = appendBatchFailureReason(failures, id, forward.Name, "nftables 转发缺少入口节点")
+				continue
+			}
+			intent, ok := nftGroups[entryNodeIDs[0]]
+			if !ok {
+				intent = &nftIntent{exclude: make(map[int64]bool), names: make(map[int64]string)}
+				nftGroups[entryNodeIDs[0]] = intent
+			}
+			if action == "pause" {
+				intent.exclude[id] = true
+			} else {
+				intent.include = append(intent.include, forward)
+			}
+			intent.names[id] = forward.Name
+			continue
+		}
+		if err := h.controlForwardServices(forward, serviceCmd, false); err != nil {
 			f++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
-		if err := h.repo.UpdateForwardStatus(id, 0, time.Now().UnixMilli()); err != nil {
+		if err := h.repo.UpdateForwardStatus(id, targetStatus, now); err != nil {
+			log.Printf("forward batch %s failed op=db_write_after_dplane forward_id=%d err=%v", action, id, err)
 			f++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 		} else {
 			s++
 		}
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures}))
-}
-
-func (h *Handler) forwardBatchResume(w http.ResponseWriter, r *http.Request) {
-	ids := idsFromBody(r, w)
-	if ids == nil {
-		return
-	}
-	actorUserID, actorRole, err := userRoleFromRequest(r)
-	if err != nil {
-		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
-		return
-	}
-	s := 0
-	f := 0
-	now := time.Now().UnixMilli()
-	failures := make([]batchFailureDetail, 0)
-	for _, id := range ids {
-		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
-		if accessErr != nil {
-			f++
-			failures = appendBatchFailure(failures, id, "", accessErr)
+	// nft：每节点一次 reconcile，成功后写 DB；失败则整组 DB 不动。
+	for nodeID, intent := range nftGroups {
+		if err := h.syncNftablesNodeWithOverrides(nodeID, intent.exclude, intent.include); err != nil {
+			for id, name := range intent.names {
+				f++
+				failures = appendBatchFailureReason(failures, id, name, err.Error())
+			}
 			continue
 		}
-		if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
-			f++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-			continue
-		}
-		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
-			f++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-			continue
-		}
-		if err := h.repo.UpdateForwardStatus(id, 1, now); err != nil {
-			f++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-		} else {
+		for id, name := range intent.names {
+			if err := h.repo.UpdateForwardStatus(id, targetStatus, now); err != nil {
+				log.Printf("nftables forward batch %s failed op=db_write_after_reconcile forward_id=%d err=%v", action, id, err)
+				f++
+				failures = appendBatchFailure(failures, id, name, err)
+				continue
+			}
 			s++
 		}
 	}
