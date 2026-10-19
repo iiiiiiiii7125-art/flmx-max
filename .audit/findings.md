@@ -403,3 +403,9 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 
 ### LAD22-005（P3，观察，未修）
 - 导入前自动备份失败路径无测试覆盖（变异 M3 存活）。建议后轮补回归测试。
+
+### R5R22-001（P2，可达）— 已修复（L6 退回项）
+- 导出/导入 10MB 不对称：`decodeJSON` 的 10MB `MaxBytesReader` 上限会误拒合法大备份（Fermi 估算：2 万用户 ≈ 15MB；动态验证：11.44MB 合成备份被拒"http: request body too large"）。
+- 位置：`go-backend/internal/http/handler/handler.go:1569`（`decodeJSON`）→ `backupImport`（:1740）
+- 修复：新增 `decodeJSONWithLimit(body, out, limit)`；`backupImport` 改用 100MB 上限（与 nginx 50m 对齐，仍有界防 DoS）。动态验证：11.74MB 备份通过大小检查（仅因合成数据字段不匹配被拒，符合预期）。
+- 发现者：L6 对抗性审查员
