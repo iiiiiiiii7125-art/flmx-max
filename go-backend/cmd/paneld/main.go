@@ -20,7 +20,14 @@ import (
 
 func main() {
 	cfg := config.FromEnv()
-	if cfg.JWTEphemeral {
+	// 移植自 kure29/flyx：JWT 密钥持久化。未设 JWT_SECRET 时，优先从
+	// <DBPath 同级>/jwt_secret 文件加载，没有则生成并写入（0600），
+	// 保证重启后旧 token 仍有效。失败时回退到 FromEnv 的临时密钥。
+	if generated, err := config.EnsureJWTSecret(&cfg); err != nil {
+		log.Printf("warning: JWT 密钥持久化失败 (%v)，使用临时密钥（重启后会话失效）", err)
+	} else if generated {
+		log.Println("已生成 JWT 密钥并保存到 jwt_secret 文件（0600），重启后会话保持有效")
+	} else if cfg.JWTEphemeral {
 		log.Println("warning: JWT_SECRET is not set, using an ephemeral secret (sessions will not survive a restart)")
 	}
 	log.Printf("starting go-backend on %s (db=%s)", cfg.Addr, cfg.DBPath)
