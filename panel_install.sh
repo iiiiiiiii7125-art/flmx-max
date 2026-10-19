@@ -303,6 +303,12 @@ configure_docker_ipv6() {
       else
         # 如果没有 jq，使用 sed
         $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
+        # AUDIT-R1 (SCR-009): 该正则只匹配"整行仅为 {" 的多行 JSON；单行压缩
+        # JSON 无匹配时 sed 静默无操作但退出码为 0。
+        # 此处校验，不成功则明确告警，不谎报成功。
+        if ! $SUDO_CMD grep -q '"ipv6"[[:space:]]*:[[:space:]]*true' "$DOCKER_CONFIG" 2>/dev/null; then
+          echo "⚠️ 无法自动写入 IPv6 配置，请手动添加 \"ipv6\": true"
+        fi
       fi
 
       echo "🔄 重启 Docker 服务..."
@@ -346,6 +352,13 @@ setup_domain_proxy() {
     echo "❌ 域名不能为空"
     return 1
   fi
+  # AUDIT-R1 (SCR-019): 动态证实 DOMAIN 中的 $()/反引号不构成命令注入
+  #（heredoc 单遍展开），但非法字符串会原样写入 Caddyfile 导致 caddy
+  # 重启失败。写文件前做字符集校验，非法输入直接拒绝。
+  if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.*-]+$ ]]; then
+    echo "❌ 域名含非法字符（仅允许字母/数字/./-/*）：$DOMAIN"
+    return 1
+  fi
 
   # 检查域名是否解析到本机
   echo "🔍 检查域名解析..."
@@ -384,8 +397,27 @@ setup_domain_proxy() {
 
   # 写 Caddyfile（用 127.0.0.1 避免 docker-proxy IPv6 转发问题）
   echo "📝 配置 Caddy..."
+  # AUDIT-R1 (SCR-018): caddy 手动二进制安装时 /etc/caddy 不存在，
+  # 此处 cat 会 No such file or directory。先建目录（包管理器安装自带该目录，无害）。
+  mkdir -p /etc/caddy
   # 备份已有配置
   [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
+  # AUDIT-R1 (SCR-003): 菜单 5 是独立流程，不经过 get_config_params，
+  # 此处 FRONTEND_PORT 恒未设置。改为从部署目录 .env 读取用户实际安装的
+  # 前端端口（更新流程的 resolve_panel_deployment 已证明该信息可得）；
+  # 找不到才回退 6366。
+  local _env_file _port
+  if [[ -z "${FRONTEND_PORT:-}" ]]; then
+    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flvx-panel/.env"; do
+      [[ "$_env_file" == "/.env" ]] && continue
+      _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
+      if [[ "$_port" =~ ^[0-9]+$ ]] && (( _port >= 1 && _port <= 65535 )); then
+        FRONTEND_PORT="$_port"
+        echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
+        break
+      fi
+    done
+  fi
   cat > /etc/caddy/Caddyfile <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
@@ -888,7 +920,9 @@ get_public_ip() {
   fi
   # 兜底：取本机第一块非回环网卡的 IPv4
   if [ -z "$ip" ]; then
-    ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || true)
+    # AUDIT-R1 (SCR-011): 原 grep -oP 在 busybox/Alpine 下恒失败（无 -P 支持）。
+    # 改用 awk 提取，POSIX 兼容。
+    ip=$(ip -4 addr show scope global 2>/dev/null | awk '$1=="inet"{split($2,a,"/"); print a[1]; exit}' || true)
   fi
   echo "${ip:-服务器IP}"
 }
@@ -899,11 +933,24 @@ get_public_ip() {
 get_config_params() {
   echo "🔧 请输入配置参数："
 
+  local _pname _pval
   read -p "前端端口（默认 6366）: " FRONTEND_PORT
   FRONTEND_PORT=${FRONTEND_PORT:-6366}
 
   read -p "后端端口（默认 6365）: " BACKEND_PORT
   BACKEND_PORT=${BACKEND_PORT:-6365}
+
+  # AUDIT-R1 (SCR-008): 安装时即校验端口（与更新流程 validate_panel_update_environment
+  # 一致），避免非法值写入 .env 后在 docker compose up 时才暴露，报错远离输入点。
+  for _pname in FRONTEND_PORT BACKEND_PORT; do
+    _pval="${!_pname}"
+    # AUDIT-R1 (R5R1-001): 算术比较前加 10# 强制十进制。前导零输入（如 080）
+    # 否则被 bash 当八进制解析，stderr 报错但仍被接受，体验差。
+    if [[ ! "$_pval" =~ ^[0-9]+$ ]] || (( 10#$_pval < 1 || 10#$_pval > 65535 )); then
+      echo "❌ $_pname 不是有效端口（1-65535）：$_pval"
+      return 1
+    fi
+  done
 
   echo "请选择数据库类型："
   echo "1. SQLite（默认）"

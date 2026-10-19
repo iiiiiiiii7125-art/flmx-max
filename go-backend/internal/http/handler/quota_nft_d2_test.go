@@ -18,8 +18,8 @@ func TestQuotaPauseNftRemovesRules(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-quota", fixture.nodeID)
-	f1 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:9001")
-	f2 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:9002")
+	f1 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:9001", 20000)
+	f2 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:9002", 20001)
 
 	now := time.Now().UnixMilli()
 	h.pauseForwardRecords([]forwardRecord{*f1, *f2}, now)

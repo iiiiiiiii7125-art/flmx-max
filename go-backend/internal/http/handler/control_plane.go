@@ -367,15 +367,16 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if limiterID != nil && speed != nil {
 			totalLimiterName := strconv.FormatInt(*limiterID, 10)
 			if err := h.ensureLimiterOnNode(fp.NodeID, *limiterID, *speed); err != nil {
-				// If the limiter push fails because the node is offline, skip it with a warning
+				// AUDIT-R7 (R5R7-001): 限速是关键策略，不可静默跳过。
+				// 节点离线时直接失败（fail-closed），而非告警后继续——
+				// 后者会导致转发永久无速限运行（无补下发机制）。
 				if isNodeOfflineOrTimeoutError(err) {
 					node, _ := h.getNodeRecord(fp.NodeID)
 					nodeName := fmt.Sprintf("%d", fp.NodeID)
 					if node != nil && strings.TrimSpace(node.Name) != "" {
 						nodeName = strings.TrimSpace(node.Name)
 					}
-					warnings = append(warnings, fmt.Sprintf("节点 %s 不在线，已跳过下发", nodeName))
-					continue
+					return nil, fmt.Errorf("节点 %s 不在线，限速无法下发，请稍后重试", nodeName)
 				}
 				return nil, err
 			}
@@ -384,15 +385,14 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if ipSpeed != nil {
 			ruleLimiterName := fmt.Sprintf("rule_traffic_limit_%d", forward.ID)
 			if err := h.ensureTrafficLimiterOnNode(fp.NodeID, ruleLimiterName, nil, ipSpeed); err != nil {
-				// If the limiter push fails because the node is offline, skip it with a warning
+				// AUDIT-R7 (R5R7-001): 同上，IP 限速亦为关键策略，离线时 fail-closed。
 				if isNodeOfflineOrTimeoutError(err) {
 					node, _ := h.getNodeRecord(fp.NodeID)
 					nodeName := fmt.Sprintf("%d", fp.NodeID)
 					if node != nil && strings.TrimSpace(node.Name) != "" {
 						nodeName = strings.TrimSpace(node.Name)
 					}
-					warnings = append(warnings, fmt.Sprintf("节点 %s 不在线，已跳过下发", nodeName))
-					continue
+					return nil, fmt.Errorf("节点 %s 不在线，限速无法下发，请稍后重试", nodeName)
 				}
 				return nil, err
 			}

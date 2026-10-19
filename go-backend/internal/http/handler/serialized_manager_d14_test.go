@@ -51,7 +51,7 @@ func TestClearAndReconcileSerialized(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(inner)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-d14", fixture.nodeID)
-	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:9001")
+	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:9001", 20000)
 
 	var wg sync.WaitGroup
 	wg.Add(2)

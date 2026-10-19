@@ -232,20 +232,43 @@ func (r *Repository) AddUserQuotaUsage(userID int64, usedBytes int64, now time.T
 		if err != nil {
 			return err
 		}
-		applyUserQuotaWindowRoll(q, now)
-		if usedBytes > 0 {
-			q.DailyUsedBytes += usedBytes
-			q.MonthlyUsedBytes += usedBytes
-		}
+		rolled := applyUserQuotaWindowRoll(q, now)
 		q.UpdatedTime = now.UnixMilli()
-		if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
-			"daily_used_bytes":   q.DailyUsedBytes,
-			"monthly_used_bytes": q.MonthlyUsedBytes,
-			"day_key":            q.DayKey,
-			"month_key":          q.MonthKey,
-			"updated_time":       q.UpdatedTime,
-		}).Error; err != nil {
-			return err
+		if rolled {
+			// AUDIT-R10 (F9X-001): 窗口滚动时重置计数器。滚动为每日/每月一次的低频事件，
+			// 并发命中的概率极低，保持原有的写回逻辑（接受理论上的微小竞态）。
+			// 高频的稳态累加路径（下）已改为原子增量。
+			if usedBytes > 0 {
+				q.DailyUsedBytes += usedBytes
+				q.MonthlyUsedBytes += usedBytes
+			}
+			if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+				"daily_used_bytes":   q.DailyUsedBytes,
+				"monthly_used_bytes": q.MonthlyUsedBytes,
+				"day_key":            q.DayKey,
+				"month_key":          q.MonthKey,
+				"updated_time":       q.UpdatedTime,
+			}).Error; err != nil {
+				return err
+			}
+		} else {
+			// AUDIT-R10 (F9X-001): 稳态累加改用原子增量，避免 PG 下的 lost-update。
+			// SQLite 因 MaxOpenConns(1) 本就串行，此改动对双后端均安全。
+			if usedBytes > 0 {
+				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+					"daily_used_bytes":   gorm.Expr("daily_used_bytes + ?", usedBytes),
+					"monthly_used_bytes": gorm.Expr("monthly_used_bytes + ?", usedBytes),
+					"updated_time":       q.UpdatedTime,
+				}).Error; err != nil {
+					return err
+				}
+				q.DailyUsedBytes += usedBytes
+				q.MonthlyUsedBytes += usedBytes
+			} else {
+				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Update("updated_time", q.UpdatedTime).Error; err != nil {
+					return err
+				}
+			}
 		}
 		*result = *cloneUserQuotaView(*q)
 		return nil
@@ -298,20 +321,41 @@ func (r *Repository) addUserQuotaUsageBatchTx(tx *gorm.DB, usages map[int64]int6
 		if err != nil {
 			return nil, err
 		}
-		applyUserQuotaWindowRoll(q, now)
-		if usages[userID] > 0 {
-			q.DailyUsedBytes += usages[userID]
-			q.MonthlyUsedBytes += usages[userID]
-		}
+		rolled := applyUserQuotaWindowRoll(q, now)
 		q.UpdatedTime = now.UnixMilli()
-		if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
-			"daily_used_bytes":   q.DailyUsedBytes,
-			"monthly_used_bytes": q.MonthlyUsedBytes,
-			"day_key":            q.DayKey,
-			"month_key":          q.MonthKey,
-			"updated_time":       q.UpdatedTime,
-		}).Error; err != nil {
-			return nil, err
+		usedBytes := usages[userID]
+		if rolled {
+			// AUDIT-R10 (F9X-001): 窗口滚动时保持原有写回逻辑（低频事件，见 AddUserQuotaUsage 注释）。
+			if usedBytes > 0 {
+				q.DailyUsedBytes += usedBytes
+				q.MonthlyUsedBytes += usedBytes
+			}
+			if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+				"daily_used_bytes":   q.DailyUsedBytes,
+				"monthly_used_bytes": q.MonthlyUsedBytes,
+				"day_key":            q.DayKey,
+				"month_key":          q.MonthKey,
+				"updated_time":       q.UpdatedTime,
+			}).Error; err != nil {
+				return nil, err
+			}
+		} else {
+			// AUDIT-R10 (F9X-001): 稳态累加改用原子增量（同 AddUserQuotaUsage）。
+			if usedBytes > 0 {
+				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+					"daily_used_bytes":   gorm.Expr("daily_used_bytes + ?", usedBytes),
+					"monthly_used_bytes": gorm.Expr("monthly_used_bytes + ?", usedBytes),
+					"updated_time":       q.UpdatedTime,
+				}).Error; err != nil {
+					return nil, err
+				}
+				q.DailyUsedBytes += usedBytes
+				q.MonthlyUsedBytes += usedBytes
+			} else {
+				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Update("updated_time", q.UpdatedTime).Error; err != nil {
+					return nil, err
+				}
+			}
 		}
 		result[userID] = normalizeUserQuotaView(cloneUserQuotaView(*q), now)
 	}

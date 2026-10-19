@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -78,7 +80,21 @@ func newNotifier() *notifier {
 		offlineAlerted: make(map[int64]bool),
 		expiryAlerted:  make(map[int64]int64),
 		alerted:        make(map[string]bool),
-		client:         &http.Client{Timeout: notifySendTimeout},
+		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
+		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
+		// 同时限制最多 5 跳，防重定向环。
+		client: &http.Client{
+			Timeout: notifySendTimeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return errors.New("通知地址重定向次数过多")
+				}
+				if err := validateNotifyURL(req.URL.String()); err != nil {
+					return err
+				}
+				return nil
+			},
+		},
 	}
 }
 
@@ -204,16 +220,38 @@ func (n *notifier) sendWebhook(ctx context.Context, url string, msg notifyMessag
 func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, notifySendTimeout)
 	defer cancel()
+	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。复用 secure_fetch 的
+	// 元数据地址黑名单（isMetadataAddress），至少拒绝云元数据地址。
+	// 注意：合法 webhook 常为内网地址（企业微信/钉钉内网代理），故此处仅硬拒绝
+	// 元数据地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	if err := validateNotifyURL(url); err != nil {
+		return 0, nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		// AUDIT-R26 (LAD26-017): URL 解析错误含完整 URL（可能带 bot token），
+		// 脱敏后返回，与下方 client.Do() 错误处理一致。
+		return 0, nil, errors.New("通知地址无效")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.client.Do(req)
 	if err != nil {
+		// AUDIT-R27 (OBS27-001): CheckRedirect 返回的 validateNotifyURL 错误
+		// 不含 URL/token（"通知地址..." 系列），应透出而非脱敏，便于管理员排查。
+		// 其余 Do 错误可能含 URL（含 bot token），继续脱敏。
+		// 注意：不能用 url.Error 类型断言，因参数名 url 遮蔽了 net/url 包；
+		// 改用错误链消息匹配（validateNotifyURL 错误均为"通知地址"开头）。
+		if isNotifyValidationErrorInChain(err) {
+			// 从错误链中提取原始的校验错误
+			for e := err; e != nil; e = errors.Unwrap(e) {
+				if isNotifyValidationError(e) {
+					return 0, nil, e
+				}
+			}
+		}
 		// The error text carries the URL, which holds the bot token.
-		var urlErr interface{ Timeout() bool }
-		if errors.As(err, &urlErr) && urlErr.Timeout() {
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 			return 0, nil, errors.New("请求超时")
 		}
 		return 0, nil, errors.New("无法连接")
@@ -221,6 +259,56 @@ func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []by
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	return resp.StatusCode, raw, nil
+}
+
+// isNotifyValidationError 判断是否为 validateNotifyURL 返回的校验错误。
+// 这类错误信息不含 URL/token（均为"通知地址..."固定文案），可安全透出。
+func isNotifyValidationError(err error) bool {
+	msg := err.Error()
+	return strings.HasPrefix(msg, "通知地址")
+}
+
+// isNotifyValidationErrorInChain 检查错误链中是否包含通知校验错误。
+func isNotifyValidationErrorInChain(err error) bool {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if isNotifyValidationError(e) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateNotifyURL 校验通知 webhook URL，防 SSRF。
+// 拒绝：非 http/https scheme、云元数据地址（isMetadataAddress）。
+// 允许：公网与内网地址（企业微信/钉钉内网代理为合法场景）。
+func validateNotifyURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return errors.New("通知地址无效")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("通知地址 scheme 不支持: %s", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("通知地址主机为空")
+	}
+	// IP 字面量直接检查；域名解析后逐 IP 检查（fail-closed）。
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		ips, err = net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("通知地址无法解析: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if isMetadataAddress(ip) {
+			return errors.New("通知地址指向云元数据服务，已拒绝")
+		}
+	}
+	return nil
 }
 
 func (h *Handler) nodeLabel(nodeID int64) string {
