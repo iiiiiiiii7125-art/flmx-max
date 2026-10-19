@@ -443,6 +443,15 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareRuntime{}).Error; err != nil {
 			return err
 		}
+		// AUDIT-R18 (R5R18-001): PeerShare 与 PeerShareResource（node_id），
+		// 与 C-007 的 PeerShareRuntime 清理保持一致。已删节点的 share token
+		// 在 GetPeerShareByToken 中不校验节点存在性，残留即未吊销。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareResource{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShare{}).Error; err != nil {
+			return err
+		}
 		// C-008: 订阅计数器。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.SubscriptionCounter{}).Error; err != nil {
 			return err
