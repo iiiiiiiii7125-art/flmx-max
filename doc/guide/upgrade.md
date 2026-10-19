@@ -101,3 +101,24 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_unique;"
 ### 7. 停用用户名释放
 
 `POST /api/v1/user/update` 将停用用户改名后，新用户可注册原用户名（`user_id` 不变）。
+
+## GitHub 镜像代理
+
+面板内置了一个 GitHub 文件代理，地址是 `/api/v1/open_api/gh/`（面板域名后拼接，例如 `https://你的面板域名/api/v1/open_api/gh/...`），用于加速从 GitHub 下载内核、规则集等文件。节点安装内核时可以选择走这个代理，尤其适合 GitHub 直连慢的机器。
+
+只代理白名单内的仓库：
+
+| 仓库 | 用途 |
+|------|------|
+| 本面板仓库 | 面板/节点安装脚本、Release 资产 |
+| `xtls/xray-core` | Xray 内核 |
+| `sagernet/sing-box` | sing-box 内核 |
+| `ihciah/shadow-tls` | ShadowTLS |
+| `v2fly/geoip`、`v2fly/domain-list-community` | 路由规则数据 |
+| `sagernet/sing-geosite`、`sagernet/sing-geoip` | sing-box 规则数据 |
+| `metacubex/meta-rules-dat` | Mihomo 规则数据 |
+| `blackmatrix7/ios_rule_script` | 分流规则脚本 |
+
+- 单个文件上限 300MB，总缓存上限 2GB，缓存目录随数据库路径自动推导
+- release tag 的文件永久缓存；`latest`、raw 文件和 API 响应按 TTL 刷新
+- GitHub 不可达时返回已缓存的旧副本，不会直接报错
