@@ -40,7 +40,7 @@ func decodePendingEnvelopeCode(t *testing.T, res *httptest.ResponseRecorder) (in
 func seedNftForwardForDelete(t *testing.T, h *Handler, fixture nftablesTestFixture) *forwardRecord {
 	t.Helper()
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-del", fixture.nodeID)
 	return seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
@@ -53,7 +53,7 @@ func TestForwardDeleteNftNodeOfflineGoesPending(t *testing.T) {
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
 	manager := &fakeNftablesManager{reconcileErr: errFakeSSHDown}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
 	res := httptest.NewRecorder()
@@ -94,7 +94,7 @@ func TestForwardDeleteNftSuccessDeletesRow(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
-	manager := h.nftablesManager.(*fakeNftablesManager)
+	manager := h.nftablesManager.Unwrap().(*fakeNftablesManager)
 
 	// 先写入一条 counter state，验证删除时同步清理。
 	nowMs := time.Now().UnixMilli()
@@ -144,7 +144,7 @@ func TestPendingDeleteRetrySuccess(t *testing.T) {
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
 	manager := &fakeNftablesManager{reconcileErr: errFakeSSHDown}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	// 先走失败路径进入 pending。
 	req := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
@@ -173,7 +173,7 @@ func TestPendingDeleteRetryBackoff(t *testing.T) {
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
 	manager := &fakeNftablesManager{reconcileErr: errFakeSSHDown}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
 	h.forwardDelete(httptest.NewRecorder(), req)
@@ -229,7 +229,7 @@ func TestForceDeleteAdminOnly(t *testing.T) {
 
 	// 管理员对 pending 行 force-delete 成功。
 	manager := &fakeNftablesManager{reconcileErr: errFakeSSHDown}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	delReq := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
 	h.forwardDelete(httptest.NewRecorder(), delReq) // 进入 pending
 	forceReq := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
@@ -288,7 +288,7 @@ func TestBatchDeletePartialFailurePerItem(t *testing.T) {
 	// f1 走在线路径（manager 成功），f2 模拟离线：用两个 manager 切换。
 	// 简化：先让 f1 成功删除，再让 f2 进入 pending。
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	f2 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8082")
 	_ = f2
 
@@ -349,7 +349,7 @@ func TestSyncGuardsPendingForward(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
-	manager := h.nftablesManager.(*fakeNftablesManager)
+	manager := h.nftablesManager.Unwrap().(*fakeNftablesManager)
 	if err := h.repo.MarkForwardPendingDelete(forward.ID, fixture.nodeID, time.Now()); err != nil {
 		t.Fatalf("mark pending: %v", err)
 	}

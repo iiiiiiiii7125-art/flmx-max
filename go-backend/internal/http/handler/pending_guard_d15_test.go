@@ -15,7 +15,7 @@ func TestQuotaReleaseDoesNotResurrectPending(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-d15", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8001")

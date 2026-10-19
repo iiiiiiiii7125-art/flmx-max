@@ -15,7 +15,7 @@ func TestForwardPauseNftDataPlaneFirst(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
-	manager := h.nftablesManager.(*fakeNftablesManager)
+	manager := h.nftablesManager.Unwrap().(*fakeNftablesManager)
 
 	req := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
 	res := httptest.NewRecorder()
@@ -41,7 +41,7 @@ func TestForwardPauseNftReconcileFailKeepsActive(t *testing.T) {
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
 	manager := &fakeNftablesManager{reconcileErr: errFakeSSHDown}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
 	res := httptest.NewRecorder()
@@ -75,7 +75,7 @@ func TestForwardResumeNftReconcileFailKeepsPaused(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
-	manager := h.nftablesManager.(*fakeNftablesManager)
+	manager := h.nftablesManager.Unwrap().(*fakeNftablesManager)
 
 	// 先暂停成功。
 	pauseReq := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
@@ -101,7 +101,7 @@ func TestForwardResumeNftAddsRule(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	forward := seedNftForwardForDelete(t, h, fixture)
-	manager := h.nftablesManager.(*fakeNftablesManager)
+	manager := h.nftablesManager.Unwrap().(*fakeNftablesManager)
 
 	pauseReq := newAuthenticatedJSONRequest(t, map[string]any{"id": forward.ID})
 	h.forwardPause(httptest.NewRecorder(), pauseReq)

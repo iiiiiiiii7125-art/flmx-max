@@ -358,7 +358,7 @@ func TestCollectNftablesNodeTrafficFirstBaselineSavesStateWithoutFlow(t *testing
 		{ForwardID: fixture.forwardID, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 1000, Packets: 10},
 		{ForwardID: fixture.forwardID, Protocol: "tcp", Direction: runtimenft.CounterDirectionFromTarget, Bytes: 2000, Packets: 20},
 	}}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	h.collectNftablesNodeTraffic(fixture.nodeID, cfg, time.Unix(1700000000, 0))
@@ -385,7 +385,7 @@ func TestCollectNftablesNodeTrafficGrowthAppliesFlowAndUpdatesState(t *testing.T
 	fixture := setupNftablesCollectionFixture(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	manager.counterSamples = []runtimenft.CounterSample{
@@ -439,7 +439,7 @@ func TestCollectNftablesNodeTrafficSkippedBatchDeltaDoesNotAdvanceState(t *testi
 		t.Fatalf("update tunnel ratio: %v", err)
 	}
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	manager.counterSamples = []runtimenft.CounterSample{
@@ -471,7 +471,7 @@ func TestCollectNftablesNodeTrafficMetadataErrorDoesNotAdvanceState(t *testing.T
 	fixture := setupNftablesCollectionFixture(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	manager.counterSamples = []runtimenft.CounterSample{
@@ -531,9 +531,9 @@ func TestCollectNftablesNodeTrafficMissingMetaDoesNotAdvanceState(t *testing.T) 
 	}}, nowMs); err != nil {
 		t.Fatalf("seed counter state: %v", err)
 	}
-	h.nftablesManager = &fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
+	h.nftablesManager = newSerializedNftManager(&fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
 		{ForwardID: forwardID, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 1400, Packets: 14},
-	}}
+	}})
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	h.collectNftablesNodeTraffic(fixture.nodeID, cfg, time.Unix(1700000060, 0))
@@ -556,9 +556,9 @@ func TestCollectNftablesNodeTrafficSkipsSamplesWithoutBinding(t *testing.T) {
 	if err := h.repo.DeleteNftRuleBindingsByForward(fixture.forwardID); err != nil {
 		t.Fatalf("delete nft binding: %v", err)
 	}
-	h.nftablesManager = &fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
+	h.nftablesManager = newSerializedNftManager(&fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
 		{ForwardID: fixture.forwardID, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 1000, Packets: 10},
-	}}
+	}})
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	h.collectNftablesNodeTraffic(fixture.nodeID, cfg, time.Unix(1700000000, 0))
@@ -581,9 +581,9 @@ func TestCollectNftablesNodeTrafficSkipsNonAppliedBinding(t *testing.T) {
 	if err := h.repo.MarkNftRuleBindingError(fixture.forwardID, fixture.nodeID, "apply failed", time.Now().UnixMilli()); err != nil {
 		t.Fatalf("mark binding error: %v", err)
 	}
-	h.nftablesManager = &fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
+	h.nftablesManager = newSerializedNftManager(&fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
 		{ForwardID: fixture.forwardID, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 1000, Packets: 10},
-	}}
+	}})
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	h.collectNftablesNodeTraffic(fixture.nodeID, cfg, time.Unix(1700000000, 0))
@@ -603,7 +603,7 @@ func TestCollectNftablesNodeTrafficSkipsNonAppliedBinding(t *testing.T) {
 func TestCollectNftablesNodeTrafficCollectionErrorDoesNotWriteState(t *testing.T) {
 	fixture := setupNftablesCollectionFixture(t)
 	h := fixture.handler
-	h.nftablesManager = &fakeNftablesManager{collectErr: errors.New("ssh failed")}
+	h.nftablesManager = newSerializedNftManager(&fakeNftablesManager{collectErr: errors.New("ssh failed")})
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)
 
 	h.collectNftablesNodeTraffic(fixture.nodeID, cfg, time.Unix(1700000000, 0))

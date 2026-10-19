@@ -143,7 +143,7 @@ func (h *Handler) validateNftablesTunnelStateTx(tx *gorm.DB, entryNodeIDs []int6
 		if h.nftablesManager == nil {
 			return errors.New("nftables manager not initialized")
 		}
-		if err := h.nftablesManager.Test(context.Background(), sshCfg); err != nil {
+		if err := h.nftablesManager.Test(context.Background(), nodeID, sshCfg); err != nil {
 			return fmt.Errorf("nftables 节点能力校验失败: %w", err)
 		}
 	}
@@ -243,8 +243,9 @@ func (h *Handler) syncNftablesNode(nodeID int64) error {
 // R5-B3 §3/§4 顺序不变量（所有 reconcile 入口必经此处，新路径必须经此函数）：
 //  1. status=1 的转发，其规则应存在，或处于可观测的待 reconcile 状态。
 //  2. 不允许“DB 已删、规则仍在”且无 pending 记录（删库前必须数据面成功）。
-//  3. 任何 reconcile 都必须经 per-node single-flight（本函数内加锁，
-//     禁止并行执行 delete table + nft -f；锁粒度为 node_id，不用全局锁）。
+//  3. 任何触碰节点 nft 状态的操作都必须经 per-node single-flight
+//     （R5-B5 D14：下沉到 serializedNftManager 层，Reconcile/Clear/
+//     CollectCounters/Test 全覆盖；锁粒度为 node_id，不用全局锁）。
 //  4. 数据面失败时 DB 不前进（delete/pause/resume 一致；DB 写失败记日志，
 //     靠下一次 reconcile 收敛，方向为“可用”而非“静默计费”）。
 //
@@ -253,11 +254,9 @@ func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]
 	if h == nil || h.repo == nil {
 		return errors.New("handler not initialized")
 	}
-	// D1-003: per-node single-flight。drain（D1-004）与重建在同一锁内，
-	// 避免 drain 后、重建前被另一次 reconcile 插入。
-	mu := h.nftReconcileLockFor(nodeID)
-	mu.Lock()
-	defer mu.Unlock()
+	// R5-B5 D14: per-node 串行化已下沉到 serializedNftManager。
+	// drain（D1-004）经 CollectCounters 加锁，重建经 Reconcile 加锁，
+	// clearNftablesNode 经 Clear 加锁——三者互斥，无需调用方自觉。
 
 	plan, cfgModel, err := h.buildNftablesNodePlanWithOverrides(nodeID, exclude, include)
 	if err != nil {
@@ -272,7 +271,7 @@ func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]
 	// drain 失败不阻塞 apply（记 gap），重建后重新基线。
 	// 取舍（写死）：可用性优先于计费精确性，但每次 gap 必须可观测。
 	h.drainNftCountersBeforeReconcile(nodeID, cfgModel, time.Now())
-	result, err := h.nftablesManager.Reconcile(context.Background(), sshCfg, plan)
+	result, err := h.nftablesManager.Reconcile(context.Background(), nodeID, sshCfg, plan)
 	now := time.Now().UnixMilli()
 	if err != nil {
 		// D9(b): 记录 apply 失败，节点恢复后由采集循环触发自动 reconcile。
@@ -343,7 +342,7 @@ func (h *Handler) clearNftablesNode(nodeID int64) error {
 	if h.nftablesManager == nil {
 		return errors.New("nftables manager not initialized")
 	}
-	if err := h.nftablesManager.Clear(context.Background(), sshCfg); err != nil {
+	if err := h.nftablesManager.Clear(context.Background(), nodeID, sshCfg); err != nil {
 		return err
 	}
 	bindings, listErr := h.repo.ListNftRuleBindingsByNode(nodeID)
@@ -392,7 +391,7 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "nftables manager not initialized"))
 		return
 	}
-	if err := h.nftablesManager.Test(context.Background(), sshCfg); err != nil {
+	if err := h.nftablesManager.Test(context.Background(), nodeID, sshCfg); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}

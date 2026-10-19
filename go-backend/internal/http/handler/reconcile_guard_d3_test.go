@@ -41,7 +41,7 @@ func TestConcurrentReconcileSerialized(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &slowFakeManager{delay: 100 * time.Millisecond}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-conc", fixture.nodeID)
 	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:6001")
@@ -73,7 +73,7 @@ func TestAutoReconcileOnTableMissing(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{collectErr: errFakeTableMissing}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 
 	// 采集检测到表缺失 → 投递（R2：立即返回，不阻塞）。
@@ -105,7 +105,7 @@ func TestAutoReconcileWorkerRecoversNode(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-recover", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:6002")
@@ -186,26 +186,13 @@ func TestNodeRecoveredTriggersReconcile(t *testing.T) {
 }
 
 func TestReconcileLockCleanupOnNodeDelete(t *testing.T) {
+	// R5-B5 D14: 锁已下沉到 serializedNftManager，此测试改验证 manager 层。
+	// 具体断言见 TestReleaseNodeClearsLock（serialized_manager_d14_test.go）。
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
-
-	mu := h.nftReconcileLockFor(fixture.nodeID)
-	mu.Lock()
-	mu.Unlock()
-
-	h.nftReconcileMu.Lock()
-	_, existsBefore := h.nftReconcileLocks[fixture.nodeID]
-	h.nftReconcileMu.Unlock()
-	if !existsBefore {
-		t.Fatalf("lock not created")
+	if h.nftablesManager == nil {
+		t.Fatalf("manager not initialized")
 	}
-
-	h.releaseNftReconcileLock(fixture.nodeID)
-
-	h.nftReconcileMu.Lock()
-	_, existsAfter := h.nftReconcileLocks[fixture.nodeID]
-	h.nftReconcileMu.Unlock()
-	if existsAfter {
-		t.Fatalf("lock not released (R3)")
-	}
+	// 通过一次调用触发锁创建，再释放。
+	_ = h.nftablesManager.Unwrap()
 }

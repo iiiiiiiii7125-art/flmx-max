@@ -35,13 +35,12 @@ type Handler struct {
 	wsServer        *ws.Server
 	metrics         *metrics.IngestionService
 	healthCheck     *health.Checker
-	nftablesManager nftablesRuntimeManager
+	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
+	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
+	nftablesManager *serializedNftManager
 
-	// R5-B3 D1-003: per-node single-flight for reconcile (§3 不变量 3)。
-	// 所有 reconcile 入口（13+1）收敛于 syncNftablesNodeWithOverrides，
-	// 在此加按 node_id 的锁，禁止并行执行 delete table + nft -f。
-	nftReconcileMu    sync.Mutex
-	nftReconcileLocks map[int64]*sync.Mutex
+	// R5-B5 D14: per-node single-flight 已下沉到 serializedNftManager，
+	// 此处不再保留 handler 层锁。
 	// R5-B3 D1-003/D9: 异步自动 reconcile（R2：采集循环只投递，不在事务内执行）。
 	nftAutoMu      sync.Mutex
 	nftAutoPending map[int64]bool
@@ -124,8 +123,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		wsServer:                 ws.NewServer(repo, jwtSecret),
 		metrics:                  metrics.NewIngestionService(repo),
 		healthCheck:              nil,
-		nftablesManager:          runtimenft.NewManager(nil),
-		nftReconcileLocks:          make(map[int64]*sync.Mutex),
+		nftablesManager:          newSerializedNftManager(runtimenft.NewManager(nil)),
 		nftAutoPending:             make(map[int64]bool),
 		nftAutoQueue:               make(chan int64, 64),
 		nftAutoFail:                make(map[int64]*nftAutoFailState),
