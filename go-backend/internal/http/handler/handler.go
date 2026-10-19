@@ -645,19 +645,48 @@ func (h *Handler) speedLimitList(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(items))
 }
 
+// R5-B2 D1: sub_store 保留 + 90 天弃用窗口（Sunset: 2027-01-17）。
+// POST JSON body 为正式用法；GET 保留但限流 + Deprecation/Sunset 头。
+// 凭据曾长期走 URL query（进 access_log/代理日志），限流器独立于 login，
+// 键 = 真实客户端 IP + 用户名，避免攻击者耗尽 login 桶锁死正常登录。
+var subStoreLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
+
+const subStoreSunsetHTTPDate = "Sun, 17 Jan 2027 00:00:00 GMT"
+
 func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
 	if h == nil || h.repo == nil {
 		response.WriteJSON(w, response.Err(-2, "database unavailable"))
 		return
 	}
 
-	username := strings.TrimSpace(r.URL.Query().Get("user"))
-	password := strings.TrimSpace(r.URL.Query().Get("pwd"))
-	tunnel := strings.TrimSpace(r.URL.Query().Get("tunnel"))
+	var username, password, tunnel string
+	switch r.Method {
+	case http.MethodPost:
+		// 正式用法：凭据走 POST body，不进 URL/query 日志
+		var req struct {
+			User     string `json:"user"`
+			Password string `json:"password"`
+			Tunnel   string `json:"tunnel"`
+		}
+		if err := decodeJSON(r.Body, &req); err != nil {
+			response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+			return
+		}
+		username = strings.TrimSpace(req.User)
+		password = req.Password
+		tunnel = strings.TrimSpace(req.Tunnel)
+	case http.MethodGet:
+		// 弃用窗口：仍可用，但限流 + 标记弃用；窗口结束后删除
+		w.Header().Set("Deprecation", "true")
+		w.Header().Set("Sunset", subStoreSunsetHTTPDate)
+		q := r.URL.Query()
+		username = strings.TrimSpace(q.Get("user"))
+		password = q.Get("pwd")
+		tunnel = strings.TrimSpace(q.Get("tunnel"))
+	default:
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
 	if tunnel == "" {
 		tunnel = "-1"
 	}
@@ -670,6 +699,31 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("密码不能为空"))
 		return
 	}
+
+	// 独立限流（不与 login 共用桶）：键 = 真实客户端 IP + 用户名
+	clientIP := loginClientIP(r)
+	ipStr := ""
+	if clientIP != nil {
+		ipStr = clientIP.String()
+	} else if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
+		ipStr = parsed.String()
+	} else {
+		ipStr = r.RemoteAddr
+	}
+	if !subStoreLimiter.allow(ipStr+"\x00"+strings.ToLower(username), time.Now()) {
+		w.Header().Set("Retry-After", "60")
+		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
+		return
+	}
+
+	authOK := false
+	defer func() {
+		if !authOK {
+			// 失败审计：只记用户名、解析后 IP、时间戳；
+			// 绝不记录密码、原始 query 或完整 URL。
+			log.Printf("sub_store auth failed user=%q ip=%s at=%d", username, ipStr, time.Now().UnixMilli())
+		}
+	}()
 
 	user, err := h.repo.GetUserByUsername(username)
 	if err != nil {
@@ -697,6 +751,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 			log.Printf("legacy password rehash update skipped user_id=%d path=sub_store err=%v", user.ID, err)
 		}
 	}
+	authOK = true
 
 	const giga = int64(1024 * 1024 * 1024)
 	headerValue := ""
