@@ -1,0 +1,4 @@
+vless=203.0.113.10:443, method=none, password=0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e, obfs=over-tls, obfs-host=www.example.com, tls-verification=true, reality-base64-pubkey=B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw, reality-hex-shortid=0123456789abcdef, vless-flow=xtls-rprx-vision, udp-relay=true, tag=东京 Reality
+shadowsocks=2001:db8::1:8388, method=2022-blake3-aes-128-gcm, password=AAAAAAAAAAAAAAAAAAAAAA==, udp-relay=true, tag=SS
+vmess=cdn.example.com:8443, method=chacha20-poly1305, password=0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e, obfs=wss, obfs-uri=/ws, obfs-host=cdn.example.com, tls-verification=true, aead=true, tag=CDN
+vless=198.51.100.7:30001, method=none, password=0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e, obfs=over-tls, obfs-host=www.example.com, tls-verification=true, reality-base64-pubkey=B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw, reality-hex-shortid=0123456789abcdef, vless-flow=xtls-rprx-vision, udp-relay=true, tag=东京 Reality #2

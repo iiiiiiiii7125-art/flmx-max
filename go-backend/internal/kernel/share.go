@@ -534,7 +534,7 @@ func FormatForUserAgent(ua string) string {
 // returns the body with its content type.
 func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string, string, error) {
 	endpoints = uniqueNames(ApplySubOptions(endpoints, opts), opts.Rules)
-	groups := opts.RegionGroups
+	groups := opts.RegionGroups || opts.Rules
 	switch format {
 	case FormatBase64:
 		lines := make([]string, 0, len(endpoints))
@@ -545,15 +545,24 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		}
 		return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n"))), "text/plain; charset=utf-8", nil
 	case FormatClash:
-		return clashProfile(endpoints, groups), "text/yaml; charset=utf-8", nil
+		return clashProfile(endpoints, groups, opts), "text/yaml; charset=utf-8", nil
 	case FormatShadowrocket:
+		if opts.Rules {
+			return shadowrocketConfig(endpoints, opts), "text/yaml; charset=utf-8", nil
+		}
 		return shadowrocketProfile(endpoints), "text/yaml; charset=utf-8", nil
 	case FormatLoon:
+		if opts.Rules {
+			return loonConfig(endpoints, opts), "text/plain; charset=utf-8", nil
+		}
 		return loonList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatQX:
+		if opts.Rules {
+			return qxConfig(endpoints, opts), "text/plain; charset=utf-8", nil
+		}
 		return qxList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatSingbox:
-		body, err := singboxProfile(endpoints, groups)
+		body, err := singboxProfile(endpoints, groups, opts)
 		return body, "application/json; charset=utf-8", err
 	case FormatSurge:
 		lines := []string{"[Proxy]"}
@@ -577,9 +586,9 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		}
 		lines = append(lines, "", "[Proxy Group]")
 		var regionLines []string
+		var regionNames []string
 		choices := names
 		if groups {
-			var regionNames []string
 			for _, g := range regionGroups(names) {
 				regionNames = append(regionNames, g.name)
 				regionLines = append(regionLines, g.name+" = url-test, "+strings.Join(g.members, ", ")+
@@ -599,14 +608,22 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 			lines = append(lines, ChainLandingGroup+" = select, "+strings.Join(landing, ", "),
 				ChainRelayGroup+" = select, "+strings.Join(relay, ", "))
 		}
+		// 移植自 kure29/flyx：规则模式时追加规则策略组并替换规则。
+		rules := []string{"GEOIP,LAN,DIRECT", "FINAL,节点选择"}
+		if opts.Rules {
+			for _, g := range rulePolicyGroups(opts, regionNames) {
+				lines = append(lines, g.name+" = select, "+strings.Join(g.members, ", "))
+			}
+			rules = surgeRules(opts)
+		}
 		lines = append(lines, regionLines...)
-		lines = append(lines, "", "[Rule]", "GEOIP,LAN,DIRECT", "FINAL,节点选择", "")
+		lines = append(append(append(lines, "", "[Rule]"), rules...), "")
 		return strings.Join(lines, "\n"), "text/plain; charset=utf-8", nil
 	}
 	return "", "", fmt.Errorf("不支持的订阅格式 %s", format)
 }
 
-func clashProfile(endpoints []Endpoint, withRegions bool) string {
+func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) string {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
@@ -658,23 +675,49 @@ func clashProfile(endpoints []Endpoint, withRegions bool) string {
 		selectList = []interface{}{"DIRECT"}
 		autoList = []interface{}{"DIRECT"}
 	}
+	// 移植自 kure29/flyx：规则模式时注入策略组、规则提供方与规则。
+	ruleGroups := []interface{}{}
+	rules := []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}
+	var providers yamlNode
+	if opts.Rules {
+		var regionList []string
+		for _, g := range regionGroups(plain) {
+			regionList = append(regionList, g.name)
+		}
+		for _, g := range rulePolicyGroups(opts, regionList) {
+			members := make([]interface{}, len(g.members))
+			for i, m := range g.members {
+				members[i] = m
+			}
+			ruleGroups = append(ruleGroups, yamlNode{{"name", g.name}, {"type", "select"}, {"proxies", members}})
+		}
+		providers, rules = clashRules(opts)
+	}
 	profile := yamlNode{
 		{"mixed-port", 7890},
 		{"allow-lan", false},
 		{"mode", "rule"},
 		{"log-level", "warning"},
-		{"proxies", proxies},
-		{"proxy-groups", append([]interface{}{
+	}
+	if opts.Rules {
+		profile = append(profile, clashRuleSettings()...)
+	}
+	profile = append(profile,
+		yamlField{"proxies", proxies},
+		yamlField{"proxy-groups", append(append([]interface{}{
 			yamlNode{{"name", "节点选择"}, {"type", "select"}, {"proxies", selectList}},
 			yamlNode{{"name", "自动选择"}, {"type", "url-test"}, {"url", "https://www.gstatic.com/generate_204"},
 				{"interval", 300}, {"proxies", autoList}},
-		}, append(chainNodes, regionNodes...)...)},
-		{"rules", []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}},
+		}, ruleGroups...), append(chainNodes, regionNodes...)...)},
+	)
+	if opts.Rules {
+		profile = append(profile, yamlField{"rule-providers", providers})
 	}
+	profile = append(profile, yamlField{"rules", rules})
 	return marshalYAML(profile)
 }
 
-func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
+func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (string, error) {
 	var rendered []Endpoint
 	var obsList [][]map[string]interface{}
 	for _, e := range endpoints {
@@ -730,6 +773,23 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 		map[string]interface{}{"type": "urltest", "tag": "自动选择", "outbounds": autoList,
 			"url": "https://www.gstatic.com/generate_204", "interval": "5m"},
 	}, append(chainOutbounds, regionOutbounds...)...)
+	// 移植自 kure29/flyx：规则模式时追加规则策略组。
+	if opts.Rules {
+		var regionList []string
+		for _, g := range regionGroups(plain) {
+			regionList = append(regionList, g.name)
+		}
+		for _, g := range rulePolicyGroups(opts, regionList) {
+			if g.members[0] == "REJECT" {
+				continue // sing-box 在路由里直接 reject 广告
+			}
+			members := make([]string, len(g.members))
+			for i, m := range g.members {
+				members[i] = ruleTarget(m, "direct")
+			}
+			groups = append(groups, map[string]interface{}{"type": "selector", "tag": g.name, "outbounds": members})
+		}
+	}
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{"level": "warn"},
 		"inbounds": []interface{}{
@@ -747,6 +807,16 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 				map[string]interface{}{"ip_is_private": true, "outbound": "direct"},
 			},
 		},
+	}
+	// 移植自 kure29/flyx：规则模式时注入 sing-box 规则、规则集与 DNS。
+	if opts.Rules {
+		rules, sets, dns := singboxRules(opts)
+		route := cfg["route"].(map[string]interface{})
+		route["rules"] = append(route["rules"].([]interface{})[:2], rules...)
+		route["rule_set"] = sets
+		route["final"] = ruleFinalGroup
+		route["default_domain_resolver"] = "dns-local"
+		cfg["dns"] = dns
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

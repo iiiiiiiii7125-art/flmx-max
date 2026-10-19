@@ -71,6 +71,55 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 	return marshalYAML(yamlNode{{"proxies", proxies}})
 }
 
+// shadowrocketProxies renders Clash proxies for Shadowrocket, expanding
+// chained landing nodes into one copy per relay. Names are returned in
+// the same order. 移植自 kure29/flyx（供规则模式的 shadowrocketConfig 用）。
+func shadowrocketProxies(endpoints []Endpoint) ([]interface{}, []string) {
+	var rendered []Endpoint
+	var nodes []yamlNode
+	for _, e := range endpoints {
+		if p, ok := ClashProxy(e); ok && !shadowrocketSkips(Proxy(yamlToMap(p))) {
+			rendered = append(rendered, e)
+			nodes = append(nodes, p)
+		}
+	}
+	_, relays, chain := chainGroups(rendered)
+	proxies := []interface{}{}
+	names := []string{}
+	for i, e := range rendered {
+		if !chain || e.ChainRole != ChainRoleLanding {
+			proxies = append(proxies, nodes[i])
+			names = append(names, e.Name)
+			continue
+		}
+		for _, relay := range relays {
+			p := append(yamlNode{}, nodes[i]...)
+			name := e.Name
+			if len(relays) > 1 {
+				name = chainedName(e.Name, relay)
+				p[0] = yamlField{"name", name}
+			}
+			proxies = append(proxies, append(p, yamlField{"dialer-proxy", relay}))
+			names = append(names, name)
+		}
+	}
+	return proxies, names
+}
+
+// shadowrocketSkips reports nodes Shadowrocket cannot express.
+// 移植自 kure29/flyx。
+func shadowrocketSkips(p Proxy) bool {
+	return hasVLESSEncryption(p) || p.Type() == "wireguard"
+}
+
+// hasVLESSEncryption reports whether a VLESS proxy sets a non-none
+// encryption (which Shadowrocket/Loon cannot express).
+// 移植自 kure29/flyx。
+func hasVLESSEncryption(p Proxy) bool {
+	enc := p.str("encryption")
+	return enc != "" && enc != "none"
+}
+
 // chainedName names the copy of a landing node dialed through one relay.
 func chainedName(landing, relay string) string {
 	return landing + "（经 " + relay + "）"
@@ -406,4 +455,10 @@ func qxLine(p Proxy) (string, bool) {
 	}
 	tag := strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
 	return kind + "=" + strings.Join(append(parts, "tag="+tag), ", "), true
+}
+
+// qxName returns the Quantumult X-safe node name.
+// 移植自 kure29/flyx（供规则模式的 qxConfig 用）。
+func qxName(p Proxy) string {
+	return strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
 }
