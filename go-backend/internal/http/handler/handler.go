@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -1566,11 +1567,14 @@ func (h *Handler) writeCaptchaVerifyResult(w http.ResponseWriter, success bool, 
 }
 
 func decodeJSON(body io.ReadCloser, out interface{}) error {
+	return decodeJSONWithLimit(body, out, 10<<20)
+}
+
+// decodeJSONWithLimit 与 decodeJSON 相同，但允许调用方指定 body 上限。
+// 备份导入需要更大的上限（面板备份可达数十 MB），而普通 API 保持 10MB 防 DoS。
+func decodeJSONWithLimit(body io.ReadCloser, out interface{}, limit int64) error {
 	defer body.Close()
-	// Cap request body at 10MB to prevent memory-exhaustion DoS from
-	// oversized payloads. Largest legitimate payloads are wallpaper data
-	// URLs (~2-3MB).
-	decoder := json.NewDecoder(http.MaxBytesReader(nil, body, 10<<20))
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, body, limit))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(out)
 }
@@ -1709,8 +1713,17 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", "attachment; filename=backup.json")
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(backup); err != nil {
+	// AUDIT-R22 (LAD22-001): 先 Encode 到 buffer，成功后再发 headers+body。
+	// 直接 Encode 到 w 时若中途失败（如客户端断开），HTTP 200 已发出，
+	// 错误信封会追加到截断的残缺流后，客户端收到既非合法备份也非合法信封的损坏响应。
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(backup); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		// headers+body 已发出，此时只能记录日志，无法再返回错误信封。
+		log.Printf("backupExport: write response failed: %v", err)
 		return
 	}
 }
@@ -1727,7 +1740,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req backupImportRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	// AUDIT-R22 (R5R22-001): 备份导入用 100MB 上限。面板备份（含数万用户/分配）
+	// 可达数十 MB，10MB 的通用上限会误拒合法备份。nginx 侧已放行 50m（SCR-002），
+	// 此处 100MB 与面板规模对齐；仍为有界值，防内存耗尽 DoS。
+	if err := decodeJSONWithLimit(r.Body, &req, 100<<20); err != nil {
 		response.WriteJSON(w, response.Err(500, "请求参数错误"))
 		return
 	}

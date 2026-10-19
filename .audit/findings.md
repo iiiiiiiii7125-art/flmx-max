@@ -384,3 +384,28 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 - 位置：`go-backend/internal/store/repo/repository_mutations.go:392`
 - 修复：补两行级联删除（`PeerShareResource` 先于 `PeerShare`，子表优先）
 - 发现者：R5 复核员（67 模型系统性外键扫描）
+
+## R22 新增（防假收敛阶梯 L1–L5）
+
+### LAD22-001（P3）— 已修复
+- `backupExport` 的 `json.NewEncoder(w).Encode` 中途失败时，HTTP 200 已发出，错误信封追加到截断的残缺流后，客户端收到损坏响应。
+- 位置：`go-backend/internal/http/handler/handler.go:1708-1712`
+- 修复：改 buffer-first（先 Encode 到 `bytes.Buffer`，成功后再发 headers+body）
+
+### LAD22-002（P3，观察，未修）
+- 备份 round-trip 可空列 NULL→"" 漂移（`importNodes`/`importTunnels` 无条件 `Valid: true`）。读取侧等价，纯 cosmetic，属产品决策。
+
+### LAD22-003（P3，观察，未修）
+- `DisallowUnknownFields` 使含未知字段的备份被整单拒绝。当前 `"1.0"` 自闭环无影响，未来格式演进时的产品决策。
+
+### LAD22-004（P3，观察，未修）
+- `Import` nil-safe 分支（`backup.Inbounds != nil`）无测试覆盖（变异 M2 存活）。建议后轮补回归测试。
+
+### LAD22-005（P3，观察，未修）
+- 导入前自动备份失败路径无测试覆盖（变异 M3 存活）。建议后轮补回归测试。
+
+### R5R22-001（P2，可达）— 已修复（L6 退回项）
+- 导出/导入 10MB 不对称：`decodeJSON` 的 10MB `MaxBytesReader` 上限会误拒合法大备份（Fermi 估算：2 万用户 ≈ 15MB；动态验证：11.44MB 合成备份被拒"http: request body too large"）。
+- 位置：`go-backend/internal/http/handler/handler.go:1569`（`decodeJSON`）→ `backupImport`（:1740）
+- 修复：新增 `decodeJSONWithLimit(body, out, limit)`；`backupImport` 改用 100MB 上限（与 nginx 50m 对齐，仍有界防 DoS）。动态验证：11.74MB 备份通过大小检查（仅因合成数据字段不匹配被拒，符合预期）。
+- 发现者：L6 对抗性审查员
