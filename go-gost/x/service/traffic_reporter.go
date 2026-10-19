@@ -414,14 +414,14 @@ func getConfigData() ([]byte, error) {
 }
 
 // sendBatchTrafficReportWithSeq 带 seq 的上报（R5-B6 E-001）。
-// 旧面板忽略 seq 字段（向后兼容）。
+// seq 通过 HTTP 头 X-Flvx-Seq 传递（旧面板忽略未知头，body 保持数组格式）。
 func sendBatchTrafficReportWithSeq(ctx context.Context, reportItems []TrafficReportItem, seq int64) (bool, error) {
-	batch := TrafficReportBatch{Seq: seq, Items: reportItems}
 	if httpReportURL == "" {
 		return false, fmt.Errorf("流量上报URL未设置")
 	}
 
-	jsonData, err := json.Marshal(batch)
+	// Body 保持旧格式（数组），保证旧面板可解析。
+	jsonData, err := json.Marshal(reportItems)
 	if err != nil {
 		return false, fmt.Errorf("序列化报告数据失败: %v", err)
 	}
@@ -448,12 +448,68 @@ func sendBatchTrafficReportWithSeq(ctx context.Context, reportItems []TrafficRep
 		requestBody = jsonData
 	}
 
-	return postJSONWithFallback(
+	return postJSONWithFallbackAndHeader(
 		ctx,
 		strings.Split(httpReportURL, ","),
 		requestBody,
 		"GOST-Traffic-Reporter/1.0",
 		5*time.Second,
 		&preferredUploadURL,
+		"X-Flvx-Seq",
+		fmt.Sprintf("%d", seq),
 	)
+}
+
+// postJSONWithFallbackAndHeader 带额外头的上报（R5-B6 E-001）。
+func postJSONWithFallbackAndHeader(ctx context.Context, urls []string, requestBody []byte, userAgent string, timeout time.Duration, preferred *string, headerKey, headerValue string) (bool, error) {
+	if len(urls) == 0 {
+		return false, fmt.Errorf("上报URL未设置")
+	}
+
+	orderedURLs := prioritizeURLs(urls, loadPreferredURL(preferred))
+
+	var errs []string
+	for i, targetURL := range orderedURLs {
+		req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(requestBody))
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", targetURL, err))
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set(headerKey, headerValue)
+
+		resp, err := reportDo(ctx, req, timeout)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", targetURL, err))
+			continue
+		}
+
+		var responseBytes bytes.Buffer
+		_, readErr := responseBytes.ReadFrom(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", targetURL, readErr))
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			errs = append(errs, fmt.Sprintf("%s => HTTP响应错误: %d %s", targetURL, resp.StatusCode, resp.Status))
+			continue
+		}
+
+		responseText := strings.TrimSpace(responseBytes.String())
+		if responseText == "ok" {
+			if i > 0 {
+				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", targetURL)
+			}
+			storePreferredURL(preferred, targetURL)
+			return true, nil
+		}
+
+		errs = append(errs, fmt.Sprintf("%s => 服务器响应: %s (期望: ok)", targetURL, responseText))
+	}
+
+	return false, fmt.Errorf("发送HTTP请求失败: %s", strings.Join(errs, " | "))
 }
