@@ -1,0 +1,4 @@
+东京 Reality=vless,203.0.113.10,443,"0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e",transport=tcp,over-tls=true,flow=xtls-rprx-vision,sni=www.example.com,public-key="B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",short-id=0123456789abcdef,udp=true
+SS=shadowsocks,2001:db8::1,8388,2022-blake3-aes-128-gcm,"AAAAAAAAAAAAAAAAAAAAAA==",udp=true
+CDN=vmess,cdn.example.com,8443,auto,"0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e",transport=ws,path=/ws,host=cdn.example.com,over-tls=true,tls-name=cdn.example.com,alterId=0,udp=true
+东京 Reality #2=vless,198.51.100.7,30001,"0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e",transport=tcp,over-tls=true,flow=xtls-rprx-vision,sni=www.example.com,public-key="B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",short-id=0123456789abcdef,udp=true
