@@ -1056,7 +1056,9 @@ func TestAuthPeerAllowedIPs(t *testing.T) {
 		allowedIPs  string
 		remoteAddr  string
 		xff         string
-		wantAllowed bool
+		// R5-B2 D5: 联邦默认只用 RemoteAddr；仅显式配置可信代理 CIDR 才采信 XFF
+		trustedProxiesEnv string
+		wantAllowed       bool
 	}{
 		{
 			name:        "exact ip allowed",
@@ -1071,18 +1073,36 @@ func TestAuthPeerAllowedIPs(t *testing.T) {
 			wantAllowed: true,
 		},
 		{
-			name:        "trusted proxy xff allowed",
+			// D5: 默认不采信 XFF，私网对端伪造的白名单 IP 被忽略
+			name:        "proxy xff ignored by default",
 			allowedIPs:  "198.51.100.20",
 			remoteAddr:  "172.20.0.3:34567",
-			xff:         "198.51.100.20, 172.20.0.3",
-			wantAllowed: true,
+			xff:         "198.51.100.20",
+			wantAllowed: false,
 		},
 		{
-			name:        "ipv4-mapped proxy xff allowed",
-			allowedIPs:  "198.51.100.20",
-			remoteAddr:  "[::ffff:172.20.0.3]:34567",
-			xff:         "198.51.100.20, 172.20.0.3",
-			wantAllowed: true,
+			name:              "explicit trusted proxies honor xff",
+			allowedIPs:        "198.51.100.20",
+			remoteAddr:        "172.20.0.3:34567",
+			xff:               "198.51.100.20",
+			trustedProxiesEnv: "172.20.0.0/16",
+			wantAllowed:       true,
+		},
+		{
+			name:              "ipv4-mapped proxy xff honored via explicit cidr",
+			allowedIPs:        "198.51.100.20",
+			remoteAddr:        "[::ffff:172.20.0.3]:34567",
+			xff:               "198.51.100.20",
+			trustedProxiesEnv: "172.20.0.0/16",
+			wantAllowed:       true,
+		},
+		{
+			name:              "proxy outside configured cidr still denied",
+			allowedIPs:        "198.51.100.20",
+			remoteAddr:        "172.21.0.3:34567",
+			xff:               "198.51.100.20",
+			trustedProxiesEnv: "172.20.0.0/16",
+			wantAllowed:       false,
 		},
 		{
 			name:        "non whitelisted ip denied",
@@ -1094,6 +1114,8 @@ func TestAuthPeerAllowedIPs(t *testing.T) {
 
 	for idx, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("FLVX_FEDERATION_TRUSTED_PROXIES", tt.trustedProxiesEnv)
+			t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
 			token := fmt.Sprintf("share-token-%d", idx)
 			if err := r.CreatePeerShare(&repo.PeerShare{
 				Name:           "share-" + tt.name,
