@@ -21,7 +21,7 @@ func (h *Handler) StartBackgroundJobs() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.jobsCancel = cancel
 	h.jobsStarted = true
-	h.jobsWG.Add(13)
+	h.jobsWG.Add(15)
 	h.jobsMu.Unlock()
 
 	go h.runHourlyStatsLoop(ctx)
@@ -31,6 +31,8 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runHealthChecks(ctx)
 	go h.runTunnelQualityProber(ctx)
 	go h.runNftablesTrafficCollectLoop(ctx)
+	go h.runNftPendingDeleteRetryLoop(ctx)
+	go h.runNftAutoReconcileWorker(ctx)
 	go h.runFederationCleanupRetryLoop(ctx)
 	go h.runKernelStatusLoop(ctx)
 	go h.runExternalProbeLoop(ctx)
@@ -125,8 +127,7 @@ func (h *Handler) runTunnelQualityProber(ctx context.Context) {
 	h.qualityProber.Start(ctx)
 }
 
-func (h *Handler) runNftablesTrafficCollectLoop(ctx context.Context) {
-	defer h.jobsWG.Done()
+func (h *Handler) runNftablesTrafficCollectLoop(ctx context.Context) {	defer h.jobsWG.Done()
 	h.runNftablesStartupReconcile(ctx)
 	select {
 	case <-ctx.Done():
@@ -169,6 +170,79 @@ func (h *Handler) runNftablesStartupReconcile(ctx context.Context) {
 		}
 		if err := h.syncNftablesNode(node.NodeID); err != nil {
 			log.Printf("nftables startup reconcile failed node_id=%d err=%v", node.NodeID, err)
+		}
+	}
+}
+
+// runNftPendingDeleteRetryLoop 是 D7 的后台退避重试（R5-B3 D1-001）。
+// 每 60s 扫描到期的 pending 删除，按节点聚合后每节点只 reconcile 一次；
+// 成功则删库，失败则记录退避；达到 24h 上限转人工并输出可观测信号（补充 E）。
+func (h *Handler) runNftPendingDeleteRetryLoop(ctx context.Context) {
+	defer h.jobsWG.Done()
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		h.retryNftPendingDeletes(time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (h *Handler) retryNftPendingDeletes(now time.Time) {
+	if h == nil || h.repo == nil {
+		return
+	}
+	due, err := h.repo.ListDueNftPendingDeletes(now, 200)
+	if err != nil {
+		log.Printf("nftables pending-delete retry failed op=list err=%v", err)
+		return
+	}
+	if len(due) == 0 {
+		return
+	}
+	// 按节点聚合（与 R1 一致）：一节点一次 reconcile。
+	byNode := make(map[int64][]int64, len(due))
+	for _, row := range due {
+		byNode[row.NodeID] = append(byNode[row.NodeID], row.ForwardID)
+	}
+	for nodeID, forwardIDs := range byNode {
+		if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+			for _, fid := range forwardIDs {
+				exhausted, recErr := h.repo.RecordNftPendingDeleteAttempt(fid, err, now)
+				if recErr != nil {
+					log.Printf("nftables pending-delete retry failed op=record forward_id=%d err=%v", fid, recErr)
+					continue
+				}
+				if exhausted {
+					// 补充 E：退避耗尽的可计数信号（node_id、forward_id、
+					// 失败原因、已重试次数），转人工处理。
+					row, _ := h.repo.GetNftPendingDelete(fid)
+					retryCount := 0
+					lastErr := ""
+					if row != nil {
+						retryCount = row.RetryCount
+						lastErr = row.LastError
+					}
+					log.Printf("nftables pending-delete exhausted node_id=%d forward_id=%d retry_count=%d last_error=%q action=manual_cleanup_required",
+						nodeID, fid, retryCount, lastErr)
+				}
+			}
+			continue
+		}
+		for _, fid := range forwardIDs {
+			if err := h.deleteForwardByID(fid); err != nil {
+				log.Printf("nftables pending-delete retry failed op=db_delete forward_id=%d err=%v", fid, err)
+				continue
+			}
+			log.Printf("nftables pending-delete completed node_id=%d forward_id=%d", nodeID, fid)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -71,18 +72,49 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 	if h == nil || h.repo == nil || release == nil || release.UserID <= 0 || !release.UnblockUser {
 		return
 	}
+	// R5-B3 D1-002: 配额恢复时 nft 转发也要加回规则（原实现只调了 gost 路径）。
+	// 按节点聚合恢复，一节点一次 reconcile。
+	nftGroups := make(map[int64][]*forwardRecord)
 	for _, forwardID := range release.ForwardIDs {
 		forward, err := h.getForwardRecord(forwardID)
 		if err != nil || forward == nil {
 			continue
 		}
+		// R5-B5 D15: pending-delete 行不得被配额释放复活（删除流程由 pending
+		// 机制接管）。注意：不得在 getForwardRecord 全局过滤（会破坏清理任务）。
+		if isForwardPendingDelete(forward) {
+			log.Printf("quota release skipped op=pending_delete forward_id=%d", forwardID)
+			continue
+		}
 		if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
+			continue
+		}
+		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
+		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
 			continue
 		}
 		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
 			continue
 		}
-		_ = h.repo.UpdateForwardStatus(forwardID, 1, now)
+		// R5-B5 D15: 经 ActivateForwardIfNotPending（pending 已在循环顶过滤，
+		// 此处为纵深防御）。
+		if err := h.ActivateForwardIfNotPending(forwardID, now); err != nil {
+			log.Printf("quota release failed op=db_write forward_id=%d err=%v", forwardID, err)
+		}
+	}
+	for nodeID, forwards := range nftGroups {
+		if !h.reconcileNodeWithTimeout(nodeID, nil, forwards, 30*time.Second) {
+			log.Printf("quota release gap node_id=%d reason=reconcile_timeout_or_error", nodeID)
+			continue
+		}
+		for _, forward := range forwards {
+			// R5-B5 D15: 经 ActivateForwardIfNotPending（pending 已在循环顶过滤，
+			// 此处为纵深防御）。
+			if err := h.ActivateForwardIfNotPending(forward.ID, now); err != nil {
+				log.Printf("quota release failed op=db_write_after_reconcile forward_id=%d err=%v", forward.ID, err)
+			}
+		}
 	}
 }
 

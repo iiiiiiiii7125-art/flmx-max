@@ -166,6 +166,10 @@ func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	// R5-B4: per-node 端口分配锁（事务之前获取）。
+	// 锁内禁止网络调用。
+	mu := AcquirePortAllocLock(in.NodeID)
+	defer ReleasePortAllocLock(mu)
 	return r.db.Create(in).Error
 }
 

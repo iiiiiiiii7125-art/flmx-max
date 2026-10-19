@@ -54,17 +54,18 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 
 		router.ServeHTTP(verifyResp, verifyReq)
 
+		// R5-B2 D4: 统一信封 {code,msg,data,ts}，code 0 = 成功
 		var verifyOut struct {
-			Success bool `json:"success"`
-			Data    struct {
+			Code int `json:"code"`
+			Data struct {
 				ValidToken string `json:"validToken"`
 			} `json:"data"`
 		}
 		if err := json.NewDecoder(verifyResp.Body).Decode(&verifyOut); err != nil {
 			t.Fatalf("decode captcha verify response: %v", err)
 		}
-		if !verifyOut.Success || verifyOut.Data.ValidToken != "captcha-token-1" {
-			t.Fatalf("unexpected captcha verify payload: success=%v token=%q", verifyOut.Success, verifyOut.Data.ValidToken)
+		if verifyOut.Code != 0 || verifyOut.Data.ValidToken != "captcha-token-1" {
+			t.Fatalf("unexpected captcha verify payload: code=%d", verifyOut.Code)
 		}
 
 		verifiedToken = verifyOut.Data.ValidToken
@@ -96,7 +97,9 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 		assertCodeMsg(t, resp, -1, "验证码校验失败")
 	})
 
-	t.Run("whmcs api client bypasses captcha", func(t *testing.T) {
+	// R5-B2 D2: X-FLVX-API-Client 自声明头旁路已删除；验证码开启时，
+	// 带该头但无有效 token 必须同样失败。
+	t.Run("whmcs api client header no longer bypasses captcha", func(t *testing.T) {
 		body := bytes.NewBufferString(`{"username":"admin@user","password":"admin@user","captchaId":""}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/user/login", body)
 		req.Header.Set("Content-Type", "application/json")
@@ -105,7 +108,7 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 
 		router.ServeHTTP(resp, req)
 
-		assertCode(t, resp, 0)
+		assertCodeMsg(t, resp, -1, "验证码校验失败")
 	})
 
 	t.Run("captcha token is one-time and consumed by login", func(t *testing.T) {

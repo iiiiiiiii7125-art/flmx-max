@@ -172,16 +172,25 @@ func (r *Repository) DefaultSubscription(now int64) (*model.Subscription, error)
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
+	// R5-B4 C-011: 查 + 建在同一事务内。
+	// 注意：仅解决单进程并发。依赖单实例部署（passkey.md 已声明）；
+	// 多实例部署下仍有窗口，需外部协调（已知限制，不声称彻底解决）。
 	var s model.Subscription
-	res := r.db.Order("inx ASC, id ASC").Limit(1).Find(&s)
-	if res.Error != nil {
-		return nil, res.Error
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Order("inx ASC, id ASC").Limit(1).Find(&s)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected > 0 {
+			return nil
+		}
+		s = newDefaultSubscription(randomToken(), "", now)
+		return tx.Create(&s).Error
+	})
+	if err != nil {
+		return nil, err
 	}
-	if res.RowsAffected > 0 {
-		return &s, nil
-	}
-	s = newDefaultSubscription(randomToken(), "", now)
-	return &s, r.db.Create(&s).Error
+	return &s, nil
 }
 
 func (r *Repository) SaveSubscription(s *model.Subscription) error {

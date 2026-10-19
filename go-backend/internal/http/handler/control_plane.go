@@ -159,10 +159,40 @@ func (h *Handler) resolveForwardAccess(r *http.Request, forwardID int64) (*forwa
 	return forward, userID, roleID, nil
 }
 
+// isForwardPendingDelete 判定转发是否为 pending-delete 状态（R5-B3 D1-001）。
+// D15：所有"激活类"路径必须显式调用此守卫，禁止复活 pending 行。
+func isForwardPendingDelete(forward *forwardRecord) bool {
+	return forward != nil && forward.Status == model.ForwardStatusPendingDelete
+}
+
+// ActivateForwardIfNotPending 是 UpdateForwardStatus(id, 1, ...) 的语义化封装
+//（R5-B5 D15）。所有把 status 写成 1（active）的路径必须走此函数，
+// pending-delete 行会被拒绝并返回哨兵错误，调用方不得忽略。
+var errForwardPendingDelete = errors.New("forward is pending delete")
+
+func (h *Handler) ActivateForwardIfNotPending(forwardID int64, now int64) error {
+	if h == nil || h.repo == nil {
+		return errors.New("handler not initialized")
+	}
+	forward, err := h.getForwardRecord(forwardID)
+	if err != nil {
+		return err
+	}
+	if isForwardPendingDelete(forward) {
+		return errForwardPendingDelete
+	}
+	return h.repo.UpdateForwardStatus(forwardID, model.ForwardStatusActive, now)
+}
+
 func (h *Handler) ensureForwardAccessByActor(actorUserID int64, actorRole int, forwardID int64) (*forwardRecord, error) {
 	forward, err := h.getForwardRecord(forwardID)
 	if err != nil {
 		return nil, err
+	}
+	// R5-B3 D1-001 矩阵 #10: pending-delete 行对用户/管理员详情隐藏，
+	// 视为不存在（编辑/查看/再次删除都不可达）。
+	if isForwardPendingDelete(forward) {
+		return nil, errForwardNotFound
 	}
 	if actorRole != 0 && forward.UserID != actorUserID {
 		return nil, errForwardNotFound
@@ -252,6 +282,12 @@ func (h *Handler) syncForwardServices(forward *forwardRecord, method string, all
 func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method string, allowFallbackAdd bool) ([]string, error) {
 	if h == nil || forward == nil {
 		return nil, errors.New("invalid forward sync context")
+	}
+	// R5-B3 D1-001 补充 D 兜底：pending-delete 行不得被任何同步路径触碰
+	//（删除流程由 pending 机制接管）。直接调用 getForwardRecord 的后台路径
+	//（如 relay 修复）可能绕过 ensureForwardAccessByActor 的过滤。
+	if isForwardPendingDelete(forward) {
+		return nil, nil
 	}
 
 	tunnel, err := h.getTunnelRecord(forward.TunnelID)

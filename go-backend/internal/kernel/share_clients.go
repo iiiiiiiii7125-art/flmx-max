@@ -104,9 +104,13 @@ func loonLine(p Proxy) (string, bool) {
 	server, port := p.str("server"), p.num("port")
 	parts := []string{}
 	add := func(s ...string) { parts = append(parts, s...) }
+	// R5-B5 订阅转义：Loon 行式格式用逗号分隔、等号分隔键值。
+	loonEscape := func(s string) string {
+		return strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(s)
+	}
 	addIf := func(key, v string) {
 		if v != "" {
-			add(key + "=" + v)
+			add(key + "=" + loonEscape(v))
 		}
 	}
 	tlsTail := func() {
@@ -265,9 +269,13 @@ var qxSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "c
 func qxLine(p Proxy) (string, bool) {
 	parts := []string{fmt.Sprintf("%s:%d", p.str("server"), p.num("port"))}
 	add := func(s ...string) { parts = append(parts, s...) }
+	// R5-B5 订阅转义：QX 行式格式用逗号分隔、等号分隔键值。
+	qxEscape := func(s string) string {
+		return strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(s)
+	}
 	addIf := func(key, v string) {
 		if v != "" {
-			add(key + "=" + v)
+			add(key + "=" + qxEscape(v))
 		}
 	}
 	reality := func() {

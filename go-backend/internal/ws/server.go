@@ -727,6 +727,11 @@ func (s *Server) validateAdminSession(userID int64, claims auth.Claims) bool {
 	if s == nil {
 		return false
 	}
+	// R5-B2 A-005: 受限 token（M-05，默认口令登录签发）不得建立 WS 会话，
+	// 与 HTTP 侧中间件（middleware/auth.go:78）一致。
+	if claims.PwdChangeRequired {
+		return false
+	}
 	if claims.Exp <= time.Now().Unix() {
 		return false
 	}
@@ -742,6 +747,10 @@ func (s *Server) validateAdminSession(userID int64, claims auth.Claims) bool {
 
 func (s *Server) validateMonitorSession(userID int64, claims auth.Claims) bool {
 	if s == nil {
+		return false
+	}
+	// R5-B2 A-005: 同上，受限 token 不得建立 WS 会话。
+	if claims.PwdChangeRequired {
 		return false
 	}
 	if claims.Exp <= time.Now().Unix() {
