@@ -384,3 +384,22 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 - 位置：`go-backend/internal/store/repo/repository_mutations.go:392`
 - 修复：补两行级联删除（`PeerShareResource` 先于 `PeerShare`，子表优先）
 - 发现者：R5 复核员（67 模型系统性外键扫描）
+
+## R22 新增（防假收敛阶梯 L1–L5）
+
+### LAD22-001（P3）— 已修复
+- `backupExport` 的 `json.NewEncoder(w).Encode` 中途失败时，HTTP 200 已发出，错误信封追加到截断的残缺流后，客户端收到损坏响应。
+- 位置：`go-backend/internal/http/handler/handler.go:1708-1712`
+- 修复：改 buffer-first（先 Encode 到 `bytes.Buffer`，成功后再发 headers+body）
+
+### LAD22-002（P3，观察，未修）
+- 备份 round-trip 可空列 NULL→"" 漂移（`importNodes`/`importTunnels` 无条件 `Valid: true`）。读取侧等价，纯 cosmetic，属产品决策。
+
+### LAD22-003（P3，观察，未修）
+- `DisallowUnknownFields` 使含未知字段的备份被整单拒绝。当前 `"1.0"` 自闭环无影响，未来格式演进时的产品决策。
+
+### LAD22-004（P3，观察，未修）
+- `Import` nil-safe 分支（`backup.Inbounds != nil`）无测试覆盖（变异 M2 存活）。建议后轮补回归测试。
+
+### LAD22-005（P3，观察，未修）
+- 导入前自动备份失败路径无测试覆盖（变异 M3 存活）。建议后轮补回归测试。
