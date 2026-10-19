@@ -239,10 +239,26 @@ func (h *Handler) syncNftablesNode(nodeID int64) error {
 // syncNftablesNodeWithOverrides reconciles the node with explicit plan
 // overrides (see buildNftablesNodePlanWithOverrides). Used by D6 pause/resume
 // to converge the data plane BEFORE the DB status flips.
+//
+// R5-B3 §3/§4 顺序不变量（所有 reconcile 入口必经此处，新路径必须经此函数）：
+//  1. status=1 的转发，其规则应存在，或处于可观测的待 reconcile 状态。
+//  2. 不允许“DB 已删、规则仍在”且无 pending 记录（删库前必须数据面成功）。
+//  3. 任何 reconcile 都必须经 per-node single-flight（本函数内加锁，
+//     禁止并行执行 delete table + nft -f；锁粒度为 node_id，不用全局锁）。
+//  4. 数据面失败时 DB 不前进（delete/pause/resume 一致；DB 写失败记日志，
+//     靠下一次 reconcile 收敛，方向为“可用”而非“静默计费”）。
+//
+// R3: 锁内不持有 DB 事务；SSH 超时由 runner 的 15s 单操作超时兜底。
 func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]bool, include []*forwardRecord) error {
 	if h == nil || h.repo == nil {
 		return errors.New("handler not initialized")
 	}
+	// D1-003: per-node single-flight。drain（D1-004）与重建在同一锁内，
+	// 避免 drain 后、重建前被另一次 reconcile 插入。
+	mu := h.nftReconcileLockFor(nodeID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	plan, cfgModel, err := h.buildNftablesNodePlanWithOverrides(nodeID, exclude, include)
 	if err != nil {
 		return err
@@ -259,12 +275,15 @@ func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]
 	result, err := h.nftablesManager.Reconcile(context.Background(), sshCfg, plan)
 	now := time.Now().UnixMilli()
 	if err != nil {
+		// D9(b): 记录 apply 失败，节点恢复后由采集循环触发自动 reconcile。
+		h.markNftApplyFailed(nodeID, true)
 		bindings, _ := h.repo.ListNftRuleBindingsByNode(nodeID)
 		for _, binding := range bindings {
 			_ = h.repo.MarkNftRuleBindingError(binding.ForwardID, nodeID, err.Error(), now)
 		}
 		return err
 	}
+	h.markNftApplyFailed(nodeID, false)
 	activeForwardIDs := make(map[int64]struct{}, len(plan.Rules))
 	for _, rule := range plan.Rules {
 		activeForwardIDs[rule.ForwardID] = struct{}{}

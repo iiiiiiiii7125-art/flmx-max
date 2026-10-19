@@ -37,6 +37,20 @@ type Handler struct {
 	healthCheck     *health.Checker
 	nftablesManager nftablesRuntimeManager
 
+	// R5-B3 D1-003: per-node single-flight for reconcile (§3 不变量 3)。
+	// 所有 reconcile 入口（13+1）收敛于 syncNftablesNodeWithOverrides，
+	// 在此加按 node_id 的锁，禁止并行执行 delete table + nft -f。
+	nftReconcileMu    sync.Mutex
+	nftReconcileLocks map[int64]*sync.Mutex
+	// R5-B3 D1-003/D9: 异步自动 reconcile（R2：采集循环只投递，不在事务内执行）。
+	nftAutoMu      sync.Mutex
+	nftAutoPending map[int64]bool
+	nftAutoQueue   chan int64
+	nftAutoFail    map[int64]*nftAutoFailState
+	// R5-B3 D1-003/D9(b): 最近一次 apply 失败的节点（节点恢复后触发 reconcile）。
+	nftApplyFailedMu sync.Mutex
+	nftApplyFailed   map[int64]bool
+
 	peerResourceMu sync.Mutex
 	captchaMu      sync.Mutex
 	captchaTokens  map[string]int64
@@ -111,6 +125,11 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		metrics:                  metrics.NewIngestionService(repo),
 		healthCheck:              nil,
 		nftablesManager:          runtimenft.NewManager(nil),
+		nftReconcileLocks:          make(map[int64]*sync.Mutex),
+		nftAutoPending:             make(map[int64]bool),
+		nftAutoQueue:               make(chan int64, 64),
+		nftAutoFail:                make(map[int64]*nftAutoFailState),
+		nftApplyFailed:             make(map[int64]bool),
 		captchaTokens:            make(map[string]int64),
 		passkeyPending:           make(map[string]passkeyCeremony),
 		pendingUpgradeRedeploy:   make(map[int64]struct{}),
