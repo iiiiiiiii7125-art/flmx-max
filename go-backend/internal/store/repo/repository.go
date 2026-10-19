@@ -390,6 +390,14 @@ func autoMigrateAll(db *gorm.DB) error {
 		return err
 	}
 
+	// 移植功能新增列的显式迁移：SQLite 下 Node 表已存在时会被跳过 AutoMigrate，
+	// 导致新增列（如 latency_targets）无法自动添加。在此显式检查并补列。
+	if m.HasTable(&model.Node{}) && !m.HasColumn(&model.Node{}, "latency_targets") {
+		if err := m.AddColumn(&model.Node{}, "latency_targets"); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
