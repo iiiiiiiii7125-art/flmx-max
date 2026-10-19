@@ -121,3 +121,14 @@
 - 修复（方案 A，fail-closed）：离线/timeout 时直接 `return nil, fmt.Errorf("节点 %s 不在线，限速无法下发，请稍后重试")`，不再告警继续。用户明确知道限速未生效，可稍后重试。
 - 回归测试：`TestLimiterOfflineFailClosed`（离线错误识别）+ `TestLimiterOfflineErrorMessage`（文案）。完整端到端需真实离线节点，标注未验证。
 - 红线自查：fail-closed 语义；错误文案明确；无静默绕过。
+
+### AUDIT-R8: F7X-001 + R5R8-001（commit 见 git log）
+- 根因（F7X-001）：`AppliedActive` 在下发前乐观标记，且 `syncSubscriptions` 在下发失败后仍无条件更新。导致凭据撤销在单次下发失败后静默失效，永不重试。
+- 根因（R5R8-001）：`subscriptionReset` 轮换凭据后下发失败，`AppliedActive` 未变，循环见 active==AppliedActive 永不重试。
+- 变体扫描：`subscriptionSave`/`syncSubscriptions`（active 路径）+ `subscriptionReset`（凭据路径）均修；`subscriptionDelete`（DB 记录删除后无跟踪）为残余风险，需独立机制。
+- 修复：
+  - F7X-001：`syncSubscriptions` 仅成功时更新；`subscriptionSave` 移除乐观标记，成功后更新
+  - R5R8-001：失败时 `AppliedActive=-1` 强制重试，成功后恢复
+- 回归测试：未验证（需真实离线节点做端到端；单元测试无法 mock `applyKernelsForInbounds`）。代码路径经审计员/R5 复核员逐行确认。
+- 红线自查：fail-closed 方向（失败不标记成功）；-1 技巧经循环条件验证（active 为 0/1，-1 恒不等）。
+- 残余风险：`subscriptionDelete` 删除后下发失败无重试（DB 无记录可跟踪），需 pending-delete 队列（后轮）。
