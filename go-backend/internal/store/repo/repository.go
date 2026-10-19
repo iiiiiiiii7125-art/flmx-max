@@ -358,28 +358,20 @@ func autoMigrateAll(db *gorm.DB) error {
 	}
 
 	m := db.Migrator()
-	hasNode := m.HasTable(&model.Node{})
-	hasTunnel := m.HasTable(&model.Tunnel{})
-	hasForward := m.HasTable(&model.Forward{})
 
 	for _, item := range models {
-		if hasNode {
-			if _, ok := item.(*model.Node); ok {
-				continue
-			}
-		}
-		if hasTunnel {
-			if _, ok := item.(*model.Tunnel); ok {
-				continue
-			}
-		}
-		if hasForward {
-			if _, ok := item.(*model.Forward); ok {
-				continue
-			}
-		}
 		if err := db.AutoMigrate(item); err != nil {
 			return err
+		}
+	}
+
+	// 显式补列兜底：防止未来新增字段时 AutoMigrate 未生效（历史教训：latency_targets 事件）
+	// Node 表
+	if m.HasTable(&model.Node{}) {
+		if !m.HasColumn(&model.Node{}, "latency_targets") {
+			if err := m.AddColumn(&model.Node{}, "latency_targets"); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -388,14 +380,6 @@ func autoMigrateAll(db *gorm.DB) error {
 	// 本次执行于测试库；生产库需重跑 dry-run 并重新批准。
 	if err := migrateV1PortUserUnique(db); err != nil {
 		return err
-	}
-
-	// 移植功能新增列的显式迁移：SQLite 下 Node 表已存在时会被跳过 AutoMigrate，
-	// 导致新增列（如 latency_targets）无法自动添加。在此显式检查并补列。
-	if m.HasTable(&model.Node{}) && !m.HasColumn(&model.Node{}, "latency_targets") {
-		if err := m.AddColumn(&model.Node{}, "latency_targets"); err != nil {
-			return err
-		}
 	}
 
 	return nil
