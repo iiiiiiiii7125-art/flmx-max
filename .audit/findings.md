@@ -184,6 +184,18 @@
 - 置信度：高
 - 修复：锁上移到调用方——`inboundSave` 在端口处理前 `AcquirePortAllocLock(row.NodeID)`（新建/更新全覆盖）；`CreateNodeInbound` 去内部锁（防死锁）；`remote_source.go`/`kernel_external.go` 两个外部调用点补锁。回归测试 `TestConcurrentInboundCreateAutoPortNoConflict`（10 并发 HTTP，-race 全绿）。
 
+### F9X-001｜P2｜潜在｜PG 下用户配额更新的 lost-update 竞态（R10 已修复）
+
+- 位置：`go-backend/internal/store/repo/repository_user_quota.go:222-256` — `AddUserQuotaUsage`；`:279-340` — `addUserQuotaUsageBatchTx`（同模式）
+- 代码：read-modify-write（读 `DailyUsedBytes`→内存加→写回），无原子增量
+- 触发条件：PG 部署（`DB_TYPE=postgres`）+ 同一用户流量上报并发到达
+- 实际 vs 期望：实际——两并发各读 100、各加 50、各写回 150（应 200），配额被低估→用户获超额配额（fail-open 方向）；期望——原子增量
+- 影响：P2 潜在。SQLite 因 MaxOpenConns(1) 串行化安全，仅 PG 受影响。PG 环境无，标"潜在"
+- 可达性证据：代码级确认；按 §6.1 无动态复现故不定 P0/P1
+- 变体扫描：两路径（单条 + 批量）均修；`SaveUserQuotaConfigTx` 为配置写入不受影响
+- 修复：稳态累加改用 `gorm.Expr("daily_used_bytes + ?", usedBytes)` 原子增量；窗口滚动（低频）保持原有逻辑
+- 发现者：R10 F9 审计员（并发与资源视角）
+
 ### F7X-001｜P2｜可达｜订阅凭据下发失败后被记为"已下发"，永不重试（R8 已修复）
 
 - 位置：

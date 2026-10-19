@@ -132,3 +132,11 @@
 - 回归测试：未验证（需真实离线节点做端到端；单元测试无法 mock `applyKernelsForInbounds`）。代码路径经审计员/R5 复核员逐行确认。
 - 红线自查：fail-closed 方向（失败不标记成功）；-1 技巧经循环条件验证（active 为 0/1，-1 恒不等）。
 - 残余风险：`subscriptionDelete` 删除后下发失败无重试（DB 无记录可跟踪），需 pending-delete 队列（后轮）。
+
+### AUDIT-R10: F9X-001（commit 见 git log）
+- 根因：`AddUserQuotaUsage`/`addUserQuotaUsageBatchTx` 为 read-modify-write，PG 下并发时 lost-update。SQLite 因 MaxOpenConns(1) 安全。
+- 变体扫描：两路径均修；配置写入不受影响。
+- 修复：稳态用 `gorm.Expr` 原子增量；窗口滚动保持原逻辑（低频事件，注释说明接受理论微小竞态）。
+- 回归测试：未验证（需 PG 环境做并发复现；SQLite 无法复现）。`gorm.Expr` 模式在仓库他处已有先例（`repository.go:148`）。
+- 红线自查：双后端 SQL 均合法；`usedBytes<=0` 分支语义等价；无新竞态引入。
+- P3 观察（R5）：返回值内存值在极端 PG 并发下可能过期致 enforcement 延迟一个周期，建议后轮 UPDATE 后重读（优化项）。
