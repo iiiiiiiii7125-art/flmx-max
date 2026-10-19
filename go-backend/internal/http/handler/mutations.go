@@ -2786,7 +2786,7 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
-		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusActive, now); err != nil {
+		if err := h.ActivateForwardIfNotPending(id, now); err != nil {
 			log.Printf("nftables forward resume failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
@@ -2796,7 +2796,7 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
-		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusActive, now); err != nil {
+		if err := h.ActivateForwardIfNotPending(id, now); err != nil {
 			log.Printf("forward resume failed op=db_write_after_dplane forward_id=%d err=%v", id, err)
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
@@ -3064,8 +3064,14 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
-		if err := h.repo.UpdateForwardStatus(id, targetStatus, now); err != nil {
-			log.Printf("forward batch %s failed op=db_write_after_dplane forward_id=%d err=%v", action, id, err)
+		var statusErr error
+		if targetStatus == model.ForwardStatusActive {
+			statusErr = h.ActivateForwardIfNotPending(id, now)
+		} else {
+			statusErr = h.repo.UpdateForwardStatus(id, targetStatus, now)
+		}
+		if statusErr != nil {
+			log.Printf("forward batch %s failed op=db_write_after_dplane forward_id=%d err=%v", action, id, statusErr)
 			f++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 		} else {
@@ -3082,8 +3088,14 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		for id, name := range intent.names {
-			if err := h.repo.UpdateForwardStatus(id, targetStatus, now); err != nil {
-				log.Printf("nftables forward batch %s failed op=db_write_after_reconcile forward_id=%d err=%v", action, id, err)
+			var statusErr error
+			if targetStatus == model.ForwardStatusActive {
+				statusErr = h.ActivateForwardIfNotPending(id, now)
+			} else {
+				statusErr = h.repo.UpdateForwardStatus(id, targetStatus, now)
+			}
+			if statusErr != nil {
+				log.Printf("nftables forward batch %s failed op=db_write_after_reconcile forward_id=%d err=%v", action, id, statusErr)
 				f++
 				failures = appendBatchFailure(failures, id, name, err)
 				continue
