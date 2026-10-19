@@ -378,3 +378,9 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 - `DeleteNodeCascade` 遗漏 `NftPendingDelete`（node_id）、`ServiceMonitor`（node_id）、`ServiceMonitorResult`（node_id）。删除节点后孤儿监控任务持续产生"节点不在线"失败记录。
 - 位置：`go-backend/internal/store/repo/repository_mutations.go:392`
 - 修复：补三行级联删除
+
+### R5R18-001（P2，可达）— 已修复（R5 复核退回项）
+- `DeleteNodeCascade` 遗漏 `PeerShare` 与 `PeerShareResource`（node_id）。已删节点的 share token 在 `GetPeerShareByToken` 中不校验节点存在性，残留即未吊销。
+- 位置：`go-backend/internal/store/repo/repository_mutations.go:392`
+- 修复：补两行级联删除（`PeerShareResource` 先于 `PeerShare`，子表优先）
+- 发现者：R5 复核员（67 模型系统性外键扫描）
