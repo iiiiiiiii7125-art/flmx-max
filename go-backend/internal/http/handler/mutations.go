@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-backend/internal/http/client"
@@ -809,6 +810,36 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("tunnel")
 	localDomain := h.federationLocalDomain()
+
+	// R5-B4: per-node 端口分配锁（事务之前获取）。
+	// 从请求中解析节点 ID，排序后加锁防死锁。锁内禁止网络调用。
+	var tunnelNodeIDs []int64
+	if outNodes, ok := req["outNodeId"].([]interface{}); ok {
+		for _, item := range outNodes {
+			if m, ok := item.(map[string]interface{}); ok {
+				if nodeID := asInt64(m["nodeId"], 0); nodeID > 0 {
+					tunnelNodeIDs = append(tunnelNodeIDs, nodeID)
+				}
+			}
+		}
+	}
+	sort.Slice(tunnelNodeIDs, func(i, j int) bool { return tunnelNodeIDs[i] < tunnelNodeIDs[j] })
+	// 去重。
+	uniqueNodeIDs := tunnelNodeIDs[:0]
+	for i, id := range tunnelNodeIDs {
+		if i == 0 || id != tunnelNodeIDs[i-1] {
+			uniqueNodeIDs = append(uniqueNodeIDs, id)
+		}
+	}
+	tunnelLocks := make([]*sync.Mutex, 0, len(uniqueNodeIDs))
+	for _, nodeID := range uniqueNodeIDs {
+		tunnelLocks = append(tunnelLocks, repo.AcquirePortAllocLock(nodeID))
+	}
+	defer func() {
+		for i := len(tunnelLocks) - 1; i >= 0; i-- {
+			repo.ReleasePortAllocLock(tunnelLocks[i])
+		}
+	}()
 
 	tx := h.repo.BeginTx()
 	if tx.Error != nil {

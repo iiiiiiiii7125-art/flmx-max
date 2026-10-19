@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-backend/internal/store/model"
@@ -66,7 +67,8 @@ func (r *Repository) CreateUser(username, pwdHash string, roleID int, expTime, f
 		PasswordChangedAt: now,
 	}
 	if err := r.db.Create(&user).Error; err != nil {
-		return 0, err
+		// R5-B4 C-010: 唯一约束冲突 → "用户名已存在"（409 语义），不得 500。
+		return 0, mapUniqueViolation(err, "username")
 	}
 	return user.ID, nil
 }
@@ -1361,6 +1363,19 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
 	}
+	// R5-B4: per-node 端口分配锁（事务之前获取，排序后加锁防死锁）。
+	// 锁内禁止网络调用。
+	sortedNodes := append([]int64(nil), entryNodeIDs...)
+	sort.Slice(sortedNodes, func(i, j int) bool { return sortedNodes[i] < sortedNodes[j] })
+	locks := make([]*sync.Mutex, 0, len(sortedNodes))
+	for _, nodeID := range sortedNodes {
+		locks = append(locks, AcquirePortAllocLock(nodeID))
+	}
+	defer func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			ReleasePortAllocLock(locks[i])
+		}
+	}()
 	_, proxyProtocolSend = normalizeForwardProxyProtocol(proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	var forwardID int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
@@ -1402,6 +1417,10 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 		}
 		return nil
 	})
+	// R5-B4 C-002: 唯一约束冲突 → "端口已被占用"，不得 500。
+	if err != nil {
+		err = mapUniqueViolation(err, "port")
+	}
 	return forwardID, err
 }
 

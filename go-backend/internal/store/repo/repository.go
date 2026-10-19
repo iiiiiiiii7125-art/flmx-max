@@ -382,6 +382,13 @@ func autoMigrateAll(db *gorm.DB) error {
 		}
 	}
 
+	// R5-B4: 版本化迁移 v1（端口/用户名唯一索引）。
+	// 不在 model tag 上加 uniqueIndex，避免 AutoMigrate 在有重复数据时静默建索引失败导致启动崩溃。
+	// 本次执行于测试库；生产库需重跑 dry-run 并重新批准。
+	if err := migrateV1PortUserUnique(db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
