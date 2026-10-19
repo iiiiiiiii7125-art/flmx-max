@@ -127,3 +127,23 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 在 **网站配置 → 数据备份与恢复** 里勾选 **内核与入站**，会导出节点上的内核、所有入站（包括导入的节点）、中转线路和流量统计基准。所有订阅（包括分享出去的）也包含在内。恢复后面板会把内核配置重新推到在线的节点，离线的节点重连时自动补上。3.0.9 之前导出的备份不包含这部分，升级后请重新导出一次。
 
 下一步：[对接中转](./relay.md)
+
+## Pending Delete 管理接口（管理员）
+
+当节点离线时删除转发，系统会将其标记为 pending-delete（status=2），由后台任务按退避策略（1m/5m/30m/2h，上限 24h）自动重试清理。以下接口用于可观测性：
+
+### POST /api/v1/node/nftables/pending-deletes
+
+列出所有待清理的转发。
+
+- **权限**：仅管理员（roleID=0）
+- **请求**：POST，无参数（需 Authorization 头带 JWT）
+- **响应**：`{code, msg, data: [{forward_id, node_id, retry_count, next_retry_at, last_error}], ts}`
+- **用途**：退避耗尽转人工后，管理员在此查看哪些转发需要手动处理
+
+### 相关行为
+
+- pending 行在用户侧列表中隐藏（`ListForwards` 过滤 status=2）
+- 配额释放、恢复、批量操作均不会复活 pending 行
+- 隧道删除时，pending 行合并进同节点清理批次
+- 前端显示为"删除中"（status=2）
