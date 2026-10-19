@@ -66,7 +66,6 @@ import {
   type ReleaseChannel,
 } from "@/api";
 import type { InboundProbe } from "@/api/types";
-import { LatencyCell } from "@/components/latency-cell";
 import { PageEmptyState, PageLoadingState } from "@/components/page-state";
 import {
   getConnectionStatusMeta,

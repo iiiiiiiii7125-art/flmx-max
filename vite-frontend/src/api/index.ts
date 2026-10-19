@@ -861,3 +861,38 @@ export const setNodeLatencyTargets = (data: {
   points: string[];
   pinned: string[];
 }) => Network.post("/node/latency/targets", data, { timeout: 60000 });
+/** 节点调优的单个 sysctl 参数。 */
+export interface NodeTuneSetting {
+  key: string;
+  current: string;
+  target: string;
+  supported: boolean;
+  /** 已达到推荐值（AtLeast 只升不降）。 */
+  ok: boolean;
+}
+export interface NodeTuneGroup {
+  id: string;
+  name: string;
+  desc: string;
+  applied: boolean;
+  settings: NodeTuneSetting[];
+}
+export interface NodeTuneStatus {
+  kernel: string;
+  congestion: string;
+  available: string;
+  hasBackup: boolean;
+  groups: NodeTuneGroup[];
+  warnings?: string[];
+}
+/** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认（移植自 kure29/flyx）。 */
+export const nodeTune = (
+  id: number,
+  action: "status" | "apply" | "restore",
+  groups: string[] = [],
+) =>
+  Network.post<NodeTuneStatus>(
+    "/node/tune",
+    { id, action, groups },
+    { timeout: 40 * 1000 },
+  );

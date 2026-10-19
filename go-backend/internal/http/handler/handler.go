@@ -227,6 +227,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// 移植自 kure29/flyx：节点延迟测试。
 	mux.HandleFunc("/api/v1/node/latency/probe", h.nodeLatencyProbe)
 	mux.HandleFunc("/api/v1/node/latency/targets", h.nodeLatencyTargetsSet)
+	// 移植自 kure29/flyx：节点网络调优。
+	mux.HandleFunc("/api/v1/node/tune", h.nodeTune)
 	mux.HandleFunc("/api/v1/node/releases", h.listReleases)
 	mux.HandleFunc("/api/v1/node/nftables/test", h.nodeNftablesTest)
 	mux.HandleFunc("/api/v1/node/nftables/reconcile", h.nodeNftablesReconcile)
