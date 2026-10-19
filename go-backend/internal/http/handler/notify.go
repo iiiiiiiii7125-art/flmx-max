@@ -80,7 +80,21 @@ func newNotifier() *notifier {
 		offlineAlerted: make(map[int64]bool),
 		expiryAlerted:  make(map[int64]int64),
 		alerted:        make(map[string]bool),
-		client:         &http.Client{Timeout: notifySendTimeout},
+		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
+		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
+		// 同时限制最多 5 跳，防重定向环。
+		client: &http.Client{
+			Timeout: notifySendTimeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return errors.New("通知地址重定向次数过多")
+				}
+				if err := validateNotifyURL(req.URL.String()); err != nil {
+					return err
+				}
+				return nil
+			},
+		},
 	}
 }
 
