@@ -3,7 +3,7 @@
 - 任务：flvx-max 自主审计-修复-复核 永续循环（Master Loop v6，2026-10-19 17:20 起取代 v5）
 - 仓库：https://github.com/iiiiiiiii7125-art/flvx-max
 - 基线分支：main @ 9a2810b（2026-10-19）
-- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R28（主视角=脚本正确性），分支 audit/loop-28
+- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R29（主视角=功能契约 + C9 文档抽样），分支 audit/loop-29
 - 分支策略（v6）：每轮独立分支 `audit/loop-<轮次>`；通过复核的轮次合入 `audit/integration`（已建，基线 main@9a2810b）；**绝不直接动 main**；推送 audit 分支到远端只用非 force；禁止发布 release / 打 tag / force-push。
 - 主视角轮换：轮次 mod 7 → 0 脚本正确性 / 1 功能契约 / 2 安全 / 3 并发与资源 / 4 数据一致性 / 5 格式与兼容 / 6 可观测性与性能
 - 决策记录：`decisions.md`（v6 规范名；v5 的 DECISIONS_NEEDED.md 已删除）
@@ -45,3 +45,4 @@
 | R25 | audit/loop-25 | 数据一致性（备份导入） | 0/0/0/0 | — | 零代码改动；build 通过；R5 复核通过 | 完成，已合入 audit/integration |
 | R26 | audit/loop-26 | 功能契约（通知系统）+ 防假收敛 L1-L6 | 0/0/0/0 | LAD26-001/017 + R5R26-001 已修；6 项 P3 观察 | 通知测试通过；动态验证；L6 首次退回后通过 | 完成，已合入 audit/integration |
 | R27 | audit/loop-27 | 可观测性与性能（R26 新代码） | 0/0/0/0 | OBS27-001 已修；OBS27-002 观察 | 动态验证 3 场景；R5 复核通过 | 完成，已合入 audit/integration |
+| R28 | audit/loop-28 | 脚本正确性（快速复核） | 0/0/0/0 | — | 脚本零变更；shellcheck 零新增；build 通过 | 完成，已合入 audit/integration |
