@@ -89,7 +89,7 @@ func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, 
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.User{}).
+	err := r.db.Model(&model.User{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"user":                username,
@@ -104,13 +104,15 @@ func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, 
 			"password_changed_at": now,
 			"updated_time":        sql.NullInt64{Int64: now, Valid: true},
 		}).Error
+	// R5-B4C: 并发兜底（handler 已查重，但有竞态窗口）。
+	return mapUniqueViolation(err, "username")
 }
 
 func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.User{}).
+	err := r.db.Model(&model.User{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"user":            username,
@@ -123,6 +125,8 @@ func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow i
 			"max_conn":        maxConn,
 			"updated_time":    sql.NullInt64{Int64: now, Valid: true},
 		}).Error
+	// R5-B4C: 并发兜底。
+	return mapUniqueViolation(err, "username")
 }
 
 func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64) error {
