@@ -170,6 +170,14 @@
 - 置信度：高
 - 修复：`health.ValidateMonitorTCPTarget`（创建/修改时校验）+ `checkTCP` 拨号前重验（纵深）；节点侧（nodeId>0）不限制；支持 `FLVX_FETCH_PRIVATE_ALLOWLIST` 放行通道。回归测试：health 单元测试 + contract API 测试。
 
+### R5R2-001｜P3｜加固（R2 已修复）｜checkTCP 的 DNS TOCTOU 窗口
+
+- 位置：`go-backend/internal/health/checker.go` `checkTCP`
+- 问题：先 `ValidateMonitorTCPTarget(target)`（内部 resolve→校验），再 `net.DialTimeout("tcp", target)`（内部再次 resolve→拨号）。两次 resolve 之间若 DNS 变化（需攻击者控制目标域 DNS + 竞态），拨号可指向未校验 IP。
+- 影响：极低（创建时校验已封堵常规路径，本处为纵深加固）
+- 修复：拆出 `resolveValidatedMonitorIPs`，checkTCP 解析→校验→直接拨已校验的 IP 字面量（`net.JoinHostPort(ip.String(), port)`），不再二次解析。参照 H-15 `secureFetchDialContext` 模式。
+- 发现者：R2 R5 复核员（视角：功能契约+并发）
+
 ### R5R1-001｜P3｜体验（R1 已修复）｜SCR-008 端口校验对前导零输入打印 bash 八进制报错但仍接受
 
 - 位置：`panel_install.sh`（`get_config_params`，commit 12dc28c）
