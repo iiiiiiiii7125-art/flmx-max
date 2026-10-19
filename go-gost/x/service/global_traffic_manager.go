@@ -144,25 +144,25 @@ func (m *GlobalTrafficManager) collectAndReport() {
 		return
 	}
 
-	reportItems := make([]TrafficReportItem, 0, len(m.serviceTraffic))
+	// R5-B6 D1-010: 先收集不上报（不清零），发送成功后再清零。
+	// 失败则保留，下次重试。
+	type pendingItem struct {
+		name string
+		up   int64
+		down int64
+	}
+	var pending []pendingItem
 
 	for name, traffic := range m.serviceTraffic {
 		traffic.mu.Lock()
 		up := traffic.UpBytes
 		down := traffic.DownBytes
-		if up > 0 || down > 0 {
-			traffic.UpBytes = 0
-			traffic.DownBytes = 0
-		}
+		// D1-010: 不在此处清零。
 		traffic.mu.Unlock()
 		isStale := !registry.ServiceRegistry().IsRegistered(name)
 
 		if up > 0 || down > 0 {
-			reportItems = append(reportItems, TrafficReportItem{
-				N: name,
-				U: up,
-				D: down,
-			})
+			pending = append(pending, pendingItem{name: name, up: up, down: down})
 		}
 		if isStale {
 			delete(m.serviceTraffic, name)
@@ -171,25 +171,50 @@ func (m *GlobalTrafficManager) collectAndReport() {
 
 	m.mu.Unlock()
 
-	if len(reportItems) == 0 {
+	if len(pending) == 0 {
 		return
 	}
 
+	reportItems := make([]TrafficReportItem, 0, len(pending))
 	var totalUp, totalDown int64
-	for _, item := range reportItems {
-		totalUp += item.U
-		totalDown += item.D
+	for _, p := range pending {
+		reportItems = append(reportItems, TrafficReportItem{N: p.name, U: p.up, D: p.down})
+		totalUp += p.up
+		totalDown += p.down
 	}
 
-	success, err := sendBatchTrafficReport(m.ctx, reportItems)
+	// R5-B6 E-001: 携带 seq 上报。
+	seq := nextSeq()
+	success, err := sendBatchTrafficReportWithSeq(m.ctx, reportItems, seq)
 	if err != nil {
-		fmt.Printf("❌ 全局流量上报失败: %v (总流量: ↑%d ↓%d, %d个服务)\n", err, totalUp, totalDown, len(reportItems))
+		fmt.Printf("❌ 全局流量上报失败: %v (总流量: ↑%d ↓%d, %d个服务, seq=%d)\n", err, totalUp, totalDown, len(reportItems), seq)
+		// D1-010: 失败不清零，下次重试。
 		return
 	}
 
 	if !success {
-		fmt.Printf("⚠️ 全局流量上报未成功 (总流量: ↑%d ↓%d, %d个服务)\n", totalUp, totalDown, len(reportItems))
+		fmt.Printf("⚠️ 全局流量上报未成功 (总流量: ↑%d ↓%d, %d个服务, seq=%d)\n", totalUp, totalDown, len(reportItems), seq)
+		return
 	}
+
+	// D1-010: 成功后才清零。
+	m.mu.Lock()
+	for _, p := range pending {
+		if traffic, ok := m.serviceTraffic[p.name]; ok {
+			traffic.mu.Lock()
+			// 只减去已上报的部分（防止并发写入丢失）。
+			traffic.UpBytes -= p.up
+			traffic.DownBytes -= p.down
+			if traffic.UpBytes < 0 {
+				traffic.UpBytes = 0
+			}
+			if traffic.DownBytes < 0 {
+				traffic.DownBytes = 0
+			}
+			traffic.mu.Unlock()
+		}
+	}
+	m.mu.Unlock()
 }
 
 // Stop 停止全局流量管理器

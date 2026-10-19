@@ -316,6 +316,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NftRuleBinding{},
 		&model.NftCounterState{},
 		&model.NftPendingDelete{},
+		&NodeSeq{},
 		&model.SpeedLimit{},
 		&model.StatisticsFlow{},
 		&model.Tunnel{},
