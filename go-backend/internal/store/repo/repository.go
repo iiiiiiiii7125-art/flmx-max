@@ -2216,6 +2216,7 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 			b.RemoteConfig = n.RemoteConfig.String
 		}
 		b.LatencyTargets = n.LatencyTargets
+		b.ForwardMode = n.ForwardMode
 		out = append(out, b)
 	}
 	return out, nil
@@ -2656,13 +2657,14 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 			RemoteToken:   sql.NullString{String: n.RemoteToken, Valid: true},
 			RemoteConfig:  sql.NullString{String: n.RemoteConfig, Valid: true},
 			LatencyTargets: n.LatencyTargets,
+			ForwardMode:    n.ForwardMode,
 		}
 		err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "is_remote", "remote_url", "remote_token", "remote_config", "latency_targets",
+				"inx", "is_remote", "remote_url", "remote_token", "remote_config", "latency_targets", "forward_mode",
 			}),
 		}).Create(&item).Error
 		if err != nil {

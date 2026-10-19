@@ -70,6 +70,12 @@ export function getUsernameFromToken(token: string): string | null {
  * @param token JWT Token
  * @returns 是否有效
  */
+/**
+ * N-P1-1：注意：此函数仅检查 token 的过期时间，不验证签名！
+ * 前端无法验证 JWT 签名（密钥只在后端），攻击者可伪造未过期的 token 绕过前端路由守卫。
+ * 实际安全由后端 API 鉴权保证（返回 401 时前端会跳转登录）。
+ * 此函数仅用于 UI 层面的快速判断（如是否显示登录页），不作为安全边界。
+ */
 export function isTokenValid(token: string): boolean {
   const payload = getPayloadFromToken(token);
 

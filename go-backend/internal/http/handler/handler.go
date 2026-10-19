@@ -460,6 +460,10 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user == nil {
+		// K-001：用户不存在时也跑一次 dummy bcrypt，消除时序差，防止用户名枚举
+		// 旧逻辑：不存在用户立即返回（2-5ms），存在用户走 bcrypt（80-150ms），时序差可被利用
+		// dummy hash 为合法 bcrypt 格式（cost 10），确保耗时与真实验证相近
+		_, _ = security.VerifyPassword("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", req.Password)
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}

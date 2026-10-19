@@ -179,9 +179,11 @@ func validateUpgradeVersion(value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("upgrade version is empty")
 	}
+	// G-001：收紧为版本号字符集，防止路径注入（与工作流版本号校验一致）
+	// 旧逻辑仅拒绝控制字符，允许 "/" 等路径字符
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("unsafe upgrade version: contains control character")
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '.' || r == '-' || r == '_') {
+			return fmt.Errorf("unsafe upgrade version: invalid character %q", r)
 		}
 	}
 	return nil

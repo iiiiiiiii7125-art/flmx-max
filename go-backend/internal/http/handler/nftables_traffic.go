@@ -443,18 +443,28 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 			continue
 		}
 
-		scaledIn, ok := scaleNftTrafficBytes(delta.BytesIn, meta.TrafficRatio, meta.TunnelFlow)
+		scaledIn, ok := scaleNftTrafficBytes(delta.BytesIn, meta.TrafficRatio)
 		if !ok {
 			continue
 		}
-		scaledOut, ok := scaleNftTrafficBytes(delta.BytesOut, meta.TrafficRatio, meta.TunnelFlow)
-		if !ok {
-			continue
+		// Flow=1 单向：只计上传（BytesIn）；Flow=2 双向：计上传+下载
+		// 历史 bug：曾把 Flow 当乘数用，导致 Flow=2 双倍扣费
+		var quotaDelta int64
+		var scaledOut int64
+		if meta.TunnelFlow == 1 {
+			quotaDelta = scaledIn
+			// scaledOut 保持 0
+		} else {
+			var ok bool
+			scaledOut, ok = scaleNftTrafficBytes(delta.BytesOut, meta.TrafficRatio)
+			if !ok {
+				continue
+			}
+			if scaledIn > math.MaxInt64-scaledOut {
+				continue
+			}
+			quotaDelta = scaledIn + scaledOut
 		}
-		if scaledIn > math.MaxInt64-scaledOut {
-			continue
-		}
-		quotaDelta := scaledIn + scaledOut
 		if batch.quotaUsage[meta.UserID] > math.MaxInt64-quotaDelta {
 			continue
 		}
@@ -500,8 +510,8 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 	return batch
 }
 
-func scaleNftTrafficBytes(bytes int64, ratio float64, tunnelFlow int64) (int64, bool) {
-	if bytes < 0 || ratio < 0 || tunnelFlow < 0 {
+func scaleNftTrafficBytes(bytes int64, ratio float64) (int64, bool) {
+	if bytes < 0 || ratio < 0 {
 		return 0, false
 	}
 	var scaled int64
@@ -514,8 +524,5 @@ func scaleNftTrafficBytes(bytes int64, ratio float64, tunnelFlow int64) (int64, 
 		}
 		scaled = int64(scaledFloat)
 	}
-	if tunnelFlow != 0 && scaled > math.MaxInt64/tunnelFlow {
-		return 0, false
-	}
-	return scaled * tunnelFlow, true
+	return scaled, true
 }

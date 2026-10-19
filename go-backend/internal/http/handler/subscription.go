@@ -108,6 +108,16 @@ func parsePipeline(raw string) subPipeline {
 	if p.Protocols == nil {
 		p.Protocols = []string{}
 	}
+	// 新字段 nil→[] 默认值，防止前端收到 null 崩溃（H-001）
+	if p.RuleGroups == nil {
+		p.RuleGroups = []string{}
+	}
+	if p.ChainLandingNames == nil {
+		p.ChainLandingNames = []string{}
+	}
+	if p.ChainRelayNames == nil {
+		p.ChainRelayNames = []string{}
+	}
 	return p
 }
 
