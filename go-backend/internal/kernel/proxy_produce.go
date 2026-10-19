@@ -405,6 +405,17 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 
 // ---- Surge ----
 
+// surgeEscape 转义 Surge 行式格式中的值（R5-B5 订阅转义）。
+// Surge 用逗号分隔字段、用等号分隔键值，值中的 , = 换行会破坏解析。
+func surgeEscape(s string) string {
+	return strings.NewReplacer(
+		",", " ",
+		"=", " ",
+		"\n", " ",
+		"\r", " ",
+	).Replace(s)
+}
+
 func proxySurge(e Endpoint) (string, bool) {
 	p := e.Proxy.forEndpoint(e)
 	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
@@ -413,7 +424,7 @@ func proxySurge(e Endpoint) (string, bool) {
 	var parts []string
 	tlsTail := func() {
 		if sni := p.serverName(); sni != "" {
-			parts = append(parts, "sni="+sni)
+			parts = append(parts, "sni="+surgeEscape(sni))
 		}
 		if p.flag("skip-cert-verify") {
 			parts = append(parts, "skip-cert-verify=true")
@@ -428,9 +439,9 @@ func proxySurge(e Endpoint) (string, bool) {
 				return false
 			}
 			h, path, _, _ := transportFields(p)
-			parts = append(parts, "ws=true", "ws-path="+firstNonEmptyString(path, "/"))
+			parts = append(parts, "ws=true", "ws-path="+surgeEscape(firstNonEmptyString(path, "/")))
 			if h != "" {
-				parts = append(parts, "ws-headers=Host:"+h)
+				parts = append(parts, "ws-headers=Host:"+surgeEscape(h))
 			}
 			return true
 		}
@@ -444,12 +455,12 @@ func proxySurge(e Endpoint) (string, bool) {
 		if version == 0 {
 			version = 3
 		}
-		parts = append(parts, "shadow-tls-password="+po.str("password"), "shadow-tls-sni="+po.str("host"),
+		parts = append(parts, "shadow-tls-password="+surgeEscape(po.str("password")), "shadow-tls-sni="+surgeEscape(po.str("host")),
 			fmt.Sprintf("shadow-tls-version=%d", version))
 	}
 	switch p.Type() {
 	case "ss":
-		parts = append(parts, "ss", host, port, "encrypt-method="+p.str("cipher"), "password="+p.str("password"))
+		parts = append(parts, "ss", host, port, "encrypt-method="+p.str("cipher"), "password="+surgeEscape(p.str("password")))
 		po := p.sub("plugin-opts")
 		switch p.str("plugin") {
 		case "":
@@ -477,7 +488,7 @@ func proxySurge(e Endpoint) (string, bool) {
 			tlsTail()
 		}
 	case "trojan":
-		parts = append(parts, "trojan", host, port, "password="+p.str("password"))
+		parts = append(parts, "trojan", host, port, "password="+surgeEscape(p.str("password")))
 		if !ws() {
 			return "", false
 		}
@@ -495,7 +506,7 @@ func proxySurge(e Endpoint) (string, bool) {
 		if p.str("obfs") != "" && p.str("obfs") != "salamander" {
 			return "", false
 		}
-		parts = append(parts, "hysteria2", host, port, "password="+p.str("password"))
+		parts = append(parts, "hysteria2", host, port, "password="+surgeEscape(p.str("password")))
 		if pw := p.str("obfs-password"); pw != "" {
 			parts = append(parts, "salamander-password="+pw)
 		}
@@ -504,11 +515,11 @@ func proxySurge(e Endpoint) (string, bool) {
 		}
 		tlsTail()
 	case "tuic":
-		parts = append(parts, "tuic-v5", host, port, "password="+p.str("password"), "uuid="+p.str("uuid"),
+		parts = append(parts, "tuic-v5", host, port, "password="+surgeEscape(p.str("password")), "uuid="+surgeEscape(p.str("uuid")),
 			"alpn="+firstNonEmptyString(strings.Join(p.strs("alpn"), ","), "h3"))
 		tlsTail()
 	case "anytls":
-		parts = append(parts, "anytls", host, port, "password="+p.str("password"))
+		parts = append(parts, "anytls", host, port, "password="+surgeEscape(p.str("password")))
 		tlsTail()
 	case "socks5", "http":
 		kind := p.Type()
@@ -517,7 +528,7 @@ func proxySurge(e Endpoint) (string, bool) {
 		}
 		parts = append(parts, kind, host, port)
 		if u := p.str("username"); u != "" {
-			parts = append(parts, "username="+u, "password="+p.str("password"))
+			parts = append(parts, "username="+u, "password="+surgeEscape(p.str("password")))
 		}
 		if p.flag("tls") {
 			tlsTail()
