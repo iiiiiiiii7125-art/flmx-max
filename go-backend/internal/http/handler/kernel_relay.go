@@ -623,6 +623,8 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	if isShare(sub) {
 		up, down, total = sub.UploadBytes, sub.DownloadBytes, sub.TrafficLimit
 	} else {
+		// 非分享订阅：流量从入站汇总，总量取订阅的 TrafficLimit（0 表示不限量）
+		total = sub.TrafficLimit
 		want := map[int64]bool{}
 		for _, id := range subInboundIDs(sub, rows) {
 			want[id] = true
