@@ -43,7 +43,7 @@ func seedNftForwardForDelete(t *testing.T, h *Handler, fixture nftablesTestFixtu
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-del", fixture.nodeID)
-	return seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
+	return seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
 }
 
 // TestForwardDeleteNftNodeOfflineGoesPending: 节点离线时删除不得删库，
@@ -282,14 +282,14 @@ func TestBatchDeletePartialFailurePerItem(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-batch", fixture.nodeID)
-	f1 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8081")
+	f1 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8081", 20000)
 	_ = f1
 
 	// f1 走在线路径（manager 成功），f2 模拟离线：用两个 manager 切换。
 	// 简化：先让 f1 成功删除，再让 f2 进入 pending。
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
-	f2 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8082")
+	f2 := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8082", 20001)
 	_ = f2
 
 	// 批量删除 f1（成功）+ 999999（不存在，失败）。
@@ -333,7 +333,7 @@ func TestPendingDeltaDroppedButBaselineAdvances(t *testing.T) {
 	}
 
 	// 非 pending 的 delta 保留。
-	other := seedForwardForNftables(t, h, forward.TunnelID, fixture.nodeID, "203.0.113.9:8083")
+	other := seedForwardForNftables(t, h, forward.TunnelID, fixture.nodeID, "203.0.113.9:8083", 20001)
 	mixed := []nftTrafficDelta{
 		{ForwardID: forward.ID, BytesIn: 1000, BytesOut: 2000},
 		{ForwardID: other.ID, BytesIn: 3000, BytesOut: 4000},

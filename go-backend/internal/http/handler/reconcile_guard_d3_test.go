@@ -44,7 +44,7 @@ func TestConcurrentReconcileSerialized(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-conc", fixture.nodeID)
-	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:6001")
+	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:6001", 20000)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -108,7 +108,7 @@ func TestAutoReconcileWorkerRecoversNode(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-recover", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:6002")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:6002", 20000)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
