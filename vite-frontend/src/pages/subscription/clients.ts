@@ -1,10 +1,13 @@
 /** Clients a subscription can be imported into. format is the link's
- * ?format= value; importURL opens the app's own import (null: copy only). */
+ * ?format= value; importURL opens the app's own import (null: copy only).
+ * With routing rules, clients with configImportURL set get a full
+ * configuration instead of a node list, imported through it. */
 export interface SubClient {
   key: string;
   label: string;
   format: string;
   importURL: ((url: string, name: string) => string) | null;
+  configImportURL?: ((url: string, name: string) => string) | null;
 }
 
 const enc = encodeURIComponent;
@@ -30,12 +33,14 @@ export const SUB_CLIENTS: SubClient[] = [
     format: "shadowrocket",
     importURL: (url, name) =>
       `shadowrocket://add/sub://${btoa(url)}?remark=${enc(name)}`,
+    configImportURL: (url) => `shadowrocket://config/add/${url}`,
   },
   {
     key: "loon",
     label: "Loon",
     format: "loon",
     importURL: (url) => `loon://import?nodelist=${enc(url)}`,
+    configImportURL: null,
   },
   {
     key: "qx",
@@ -45,6 +50,7 @@ export const SUB_CLIENTS: SubClient[] = [
       `quantumult-x:///add-resource?remote-resource=${enc(
         JSON.stringify({ server_remote: [`${url}, tag=${name}`] }),
       )}`,
+    configImportURL: null,
   },
   {
     key: "surge",

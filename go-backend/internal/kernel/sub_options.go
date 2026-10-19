@@ -34,10 +34,20 @@ type SubOptions struct {
 	Sort string
 	// RegionGroups adds one auto-select group per detected region.
 	RegionGroups bool
-	// ChainLanding / ChainRelay match names (like Include): landing nodes
-	// are dialed through the relay group (see markChain).
-	ChainLanding string
-	ChainRelay   string
+	// ChainLandingNames / ChainRelayNames 按名称多选（新）：流水线之前按
+	// Endpoint.Original 精确匹配；ChainLanding / ChainRelay 是旧的表达式
+	// （如 Include），没有多选时继续兼容使用。落地节点经中转组拨号（见 markChain）。
+	// 移植自 kure29/flyx。
+	ChainLandingNames []string
+	ChainRelayNames   []string
+	ChainLanding      string
+	ChainRelay        string
+	// Script 是其他步骤之后运行的 JavaScript（见 sub_script.go）。
+	Script string
+	// Rules 给 Mihomo、sing-box 和 Surge 配置加上路由规则、DNS 和
+	// RuleGroups 中的服务组（见 sub_rules.go）；在这些格式里隐含 RegionGroups。
+	Rules      bool
+	RuleGroups []string
 }
 
 // RegionOther is the filter value for names without a recognized region.
@@ -129,7 +139,7 @@ func (o SubOptions) Validate() error {
 	if _, err := ParseMatcher(o.ChainRelay); err != nil {
 		return fmt.Errorf("中转节点：%v", err)
 	}
-	return nil
+	return ValidateSubScript(o.Script)
 }
 
 // FilterEndpoints applies the filter step only.
@@ -243,8 +253,25 @@ func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
 	if opts.Sort == "name" {
 		sort.SliceStable(out, func(i, j int) bool { return NaturalLess(out[i].Name, out[j].Name) })
 	}
+	// 脚本执行失败时保留其他步骤的结果；编辑器会显示错误（SubScriptError）。
+	// 移植自 kure29/flyx。
+	if scripted, err := ApplySubScript(out, opts.Script); err == nil {
+		out = scripted
+	}
 	markChain(out, opts)
 	return out
+}
+
+// SubScriptError 返回订阅脚本在这些节点上执行时的错误（如果有）。
+// 移植自 kure29/flyx。
+func SubScriptError(endpoints []Endpoint, opts SubOptions) error {
+	if strings.TrimSpace(opts.Script) == "" {
+		return nil
+	}
+	script := opts.Script
+	opts.Script = ""
+	_, err := ApplySubScript(ApplySubOptions(endpoints, opts), script)
+	return err
 }
 
 // NaturalLess compares names with digit runs compared numerically, so

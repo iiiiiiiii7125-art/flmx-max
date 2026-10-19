@@ -533,7 +533,7 @@ func FormatForUserAgent(ua string) string {
 // Subscription renders every supported endpoint in the requested format and
 // returns the body with its content type.
 func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string, string, error) {
-	endpoints = uniqueNames(ApplySubOptions(endpoints, opts))
+	endpoints = uniqueNames(ApplySubOptions(endpoints, opts), opts.Rules)
 	groups := opts.RegionGroups
 	switch format {
 	case FormatBase64:
@@ -757,10 +757,16 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 
 // uniqueNames suffixes duplicate endpoint names; Clash proxy names and
 // sing-box tags must be unique or the whole profile is rejected.
-func uniqueNames(endpoints []Endpoint) []Endpoint {
+// 移植自 kure29/flyx：rules 为 true 时预留规则组名，避免节点重名冲突。
+func uniqueNames(endpoints []Endpoint, rules bool) []Endpoint {
 	out := make([]Endpoint, len(endpoints))
 	seen := map[string]bool{"节点选择": true, "自动选择": true, "direct": true, "DIRECT": true, "REJECT": true,
 		ChainLandingGroup: true, ChainRelayGroup: true}
+	if rules {
+		for _, n := range ruleGroupNames() {
+			seen[n] = true
+		}
+	}
 	for _, r := range regions {
 		seen[r.name] = true
 	}
