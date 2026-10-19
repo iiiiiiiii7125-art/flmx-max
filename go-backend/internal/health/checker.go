@@ -387,6 +387,15 @@ func (c *Checker) checkOnNode(m *model.ServiceMonitor, timeoutSec int, timeout t
 func (c *Checker) checkTCP(target string, timeout time.Duration, result *model.ServiceMonitorResult) {
 	start := time.Now()
 
+	// AUDIT-R2 (F1X-001): 拨号前重验目标（纵深防御）。
+	// 拦截存量坏数据，并防创建后 DNS 解析结果变化（rebinding）。
+	if err := ValidateMonitorTCPTarget(target); err != nil {
+		result.LatencyMs = float64(time.Since(start).Milliseconds())
+		result.Success = 0
+		result.ErrorMessage = err.Error()
+		return
+	}
+
 	conn, err := net.DialTimeout("tcp", target, timeout)
 	latency := time.Since(start)
 
