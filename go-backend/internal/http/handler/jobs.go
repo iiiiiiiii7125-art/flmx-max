@@ -19,6 +19,7 @@ func (h *Handler) StartBackgroundJobs() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	h.jobsCtx = ctx
 	h.jobsCancel = cancel
 	h.jobsStarted = true
 	h.jobsWG.Add(15)

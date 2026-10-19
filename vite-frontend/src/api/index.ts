@@ -847,3 +847,17 @@ export const setUserInbounds = (userId: number, assignments: UserInboundAssignme
 export const setUserInboundsLegacy = (userId: number, inboundIds: number[]) =>
   Network.post("/user-inbound/set", { userId, inboundIds });
 export const getMyInbounds = () => Network.post("/user-inbound/mine", {});
+/** 立即探测节点到延迟测试点的延迟（移植自 kure29/flyx）。 */
+export const probeNodeLatency = (ids: number[] = []) =>
+  Network.post<Record<string, InboundProbe>>(
+    "/node/latency/probe",
+    { ids },
+    { timeout: 60000 },
+  );
+/** 设置节点的延迟测试点：自选或跟随默认。 */
+export const setNodeLatencyTargets = (data: {
+  ids: number[];
+  custom: boolean;
+  points: string[];
+  pinned: string[];
+}) => Network.post("/node/latency/targets", data, { timeout: 60000 });

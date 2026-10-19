@@ -58,6 +58,7 @@ type Handler struct {
 	passkeyPending map[string]passkeyCeremony
 
 	jobsMu              sync.Mutex
+	jobsCtx             context.Context
 	jobsCancel          context.CancelFunc
 	jobsStarted         bool
 	jobsWG              sync.WaitGroup
@@ -72,6 +73,8 @@ type Handler struct {
 
 	qualityProber  *tunnelQualityProber
 	externalProbes *externalProbeStore
+	// 移植自 kure29/flyx：节点延迟测试点测量结果缓存。
+	nodeLatency *nodeLatencyStore
 	notifier       *notifier
 	bestExit      *bestExitManager
 }
@@ -137,6 +140,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		nodeOnlineRedeploying:    make(map[int64]struct{}),
 		bestExit:                 newBestExitManager(),
 		externalProbes:           newExternalProbeStore(),
+		nodeLatency:              newNodeLatencyStore(),
 		notifier:                 newNotifier(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
@@ -220,6 +224,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/node/upgrade", h.nodeUpgrade)
 	mux.HandleFunc("/api/v1/node/batch-upgrade", h.nodeBatchUpgrade)
 	mux.HandleFunc("/api/v1/node/rollback", h.nodeRollback)
+	// 移植自 kure29/flyx：节点延迟测试。
+	mux.HandleFunc("/api/v1/node/latency/probe", h.nodeLatencyProbe)
+	mux.HandleFunc("/api/v1/node/latency/targets", h.nodeLatencyTargetsSet)
 	mux.HandleFunc("/api/v1/node/releases", h.listReleases)
 	mux.HandleFunc("/api/v1/node/nftables/test", h.nodeNftablesTest)
 	mux.HandleFunc("/api/v1/node/nftables/reconcile", h.nodeNftablesReconcile)
@@ -1120,11 +1127,13 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		prevPool := h.latencyPoolBefore(key)
 		if err := h.repo.UpsertConfig(key, value, now); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
 		h.notifyTunnelQualityConfigChanged(key)
+		h.onLatencyConfigChanged(key, prevPool)
 	}
 
 	response.WriteJSON(w, response.OKEmpty())
@@ -1166,11 +1175,13 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	prevPool := h.latencyPoolBefore(name)
 	if err := h.repo.UpsertConfig(name, value, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	h.notifyTunnelQualityConfigChanged(name)
+	h.onLatencyConfigChanged(name, prevPool)
 
 	response.WriteJSON(w, response.OKEmpty())
 }
