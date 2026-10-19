@@ -102,10 +102,10 @@ Windows 上不作为回归判据。
 
 | 问题 | 内容 | 状态 |
 |------|------|------|
-| P1 | 前端挂载缺失（LatencyCell/tune-modal/RouteModal/latency-card/latency-targets-modal） | 待修复 |
+| P1 | 前端挂载缺失（LatencyCell/tune-modal/RouteModal/latency-card/latency-targets-modal） | ✅ 已修复（commit 0550706） |
 | P2 | 订阅规则完整配置渲染缺失（share_client_configs.go、clashProfile 规则模式） | 待修复 |
-| P3 | 文档实测记录失真 | ✅ 本轮已修复 |
-| P4 | 组件引用复核（P1 完成后重新扫描 4 组件引用） | 待 P1 完成后复核 |
+| P3 | 文档实测记录失真 | ✅ 已修复 |
+| P4 | 组件引用复核（P1 完成后重新扫描 4 组件引用） | ✅ 已复核（2026-10-20 03:30 CST）：P1 完成后再次全局扫描，`@/components/view-mode`、`@/components/page-kit`、`@/components/info-card`、`@/components/action-sheet` 仍零引用。`inbound.tsx` 的 `ActionSheet` 是本地 `@/pages/inbound/action-sheet`（已存在，与 flyx 无关）；`view-mode` 仅为 localStorage 键名（`node-view-mode` 等），非组件引用；5 个新移植组件内部也零引用。4 组件按"被引用才移植"原则继续不复制。 |
 
 ## 待精修项（明细）
 
