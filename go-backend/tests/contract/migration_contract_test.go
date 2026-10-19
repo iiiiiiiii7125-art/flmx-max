@@ -54,17 +54,18 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 
 		router.ServeHTTP(verifyResp, verifyReq)
 
+		// R5-B2 D4: 统一信封 {code,msg,data,ts}，code 0 = 成功
 		var verifyOut struct {
-			Success bool `json:"success"`
-			Data    struct {
+			Code int `json:"code"`
+			Data struct {
 				ValidToken string `json:"validToken"`
 			} `json:"data"`
 		}
 		if err := json.NewDecoder(verifyResp.Body).Decode(&verifyOut); err != nil {
 			t.Fatalf("decode captcha verify response: %v", err)
 		}
-		if !verifyOut.Success || verifyOut.Data.ValidToken != "captcha-token-1" {
-			t.Fatalf("unexpected captcha verify payload: success=%v token=%q", verifyOut.Success, verifyOut.Data.ValidToken)
+		if verifyOut.Code != 0 || verifyOut.Data.ValidToken != "captcha-token-1" {
+			t.Fatalf("unexpected captcha verify payload: code=%d", verifyOut.Code)
 		}
 
 		verifiedToken = verifyOut.Data.ValidToken
