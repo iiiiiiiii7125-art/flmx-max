@@ -7,6 +7,12 @@
 - `TestExternalImportFromSubscriptionURLContract`：在纯净 main（b04a218）同样失败。原因：H-15 SSRF 拦截测试用 localhost URL，沙箱环境问题，与修复无关。
 - `TestRemoteSourceContract`：同上，同因。
 
+## 已知测试失败（2026-10-19 R1，-race 下发现，纯净 main@9a2810b 同样失败）
+
+- `TestPeerShareApplyPersistsBeforeCommand`（handler/peer_share_runtime_lifecycle_test.go:151）：`-race -count=3` 下稳定复现 DATA RACE。根因：测试内 `newCleanupAgent` 启动的 WS server，其 `handleNode.func2`（ws/server.go:355）在后台调 `UpdateNodeStatus`（GORM `processor.Execute` 读），与测试主 goroutine 注册 GORM 回调（`callback.Register` → `processor.compile` 写）竞态。测试注释已意识到 teardown 时的竞态但漏了注册时窗口。纯测试脚手架问题，产品代码无竞态（`UpdateNodeStatus` 与回调机制本身正常）。R1 未触碰相关文件（ws/server.go、repository.go UpdateNodeStatus、该测试文件均未改）。修测试脚手架需精确理解 WS 生命周期，风险收益比低，记基线；不报缺陷。
+- `TestTunnelUpdateRecoversFromAddressInUseContract`（tests/contract/limiter_sync_failure_contract_test.go:655）：`-race -count=3` 下复现。`expected exit AddService twice, got 4`——重试计数断言对 -race 负载下的时序敏感。隔离 `-count=1` 通过。纯净 main 同样失败。R1 未触碰隧道更新/服务下发路径。记基线；不报缺陷。
+- `TestDownloadReleaseAssetUsesGithubProxyWhenEnabled` / `TestDownloadReleaseAssetRejectsOversizedBody`（handler/system_upgrade_test.go:63/103）：`tls: first record does not look like a TLS handshake`——沙箱对 `example.invalid` 的 DNS/透明代理干扰。R0 已记 blocked.md，此处并入基线统一管理。
+
 ## 环境限制（本侧，2026-10-19 R0 确认）
 
 - 本侧出站 SSH 被平台阻断，无法连接用户服务器做真实节点/内核验证。
