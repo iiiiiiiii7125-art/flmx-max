@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -1709,8 +1710,17 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", "attachment; filename=backup.json")
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(backup); err != nil {
+	// AUDIT-R22 (LAD22-001): 先 Encode 到 buffer，成功后再发 headers+body。
+	// 直接 Encode 到 w 时若中途失败（如客户端断开），HTTP 200 已发出，
+	// 错误信封会追加到截断的残缺流后，客户端收到既非合法备份也非合法信封的损坏响应。
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(backup); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		// headers+body 已发出，此时只能记录日志，无法再返回错误信封。
+		log.Printf("backupExport: write response failed: %v", err)
 		return
 	}
 }
