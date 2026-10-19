@@ -114,3 +114,10 @@
 - 修复：defer 改显式释放——临界区内 8 个提前返回前 `releasePortAlloc()`，DB 写入（Save/CreateNodeInbound）后立即释放，下游下发无锁执行。Release 即 Unlock，9 个释放点互斥，已逐路径核对无双释放、无 defer 残留。
 - 回归：`TestConcurrentInboundCreateAutoPortNoConflict` -race -count=2 全绿；handler/contract 包 -race 失败全在 known-baseline。
 - 红线自查：锁范围收窄为纯本地临界区，符合设计契约；无行为变更（除消除串行化）。
+
+### AUDIT-R7: R5R7-001（commit 见 git log）
+- 根因：`syncForwardServicesWithWarnings` 中 `ensureLimiterOnNode`/`ensureTrafficLimiterOnNode` 失败时，若为节点离线/timeout 错误，仅告警"已跳过下发"并 `continue`。转发创建成功，但限速器永不下发（`ensureLimiterOnNode` 唯一调用点在创建/更新时，无重连/定时补下发机制）。L6 审查员深挖 F6.4 发现。
+- 变体扫描：两处同模式（用户/隧道限速 + IP 限速）均修；连接数限制走服务定义，不受影响。
+- 修复（方案 A，fail-closed）：离线/timeout 时直接 `return nil, fmt.Errorf("节点 %s 不在线，限速无法下发，请稍后重试")`，不再告警继续。用户明确知道限速未生效，可稍后重试。
+- 回归测试：`TestLimiterOfflineFailClosed`（离线错误识别）+ `TestLimiterOfflineErrorMessage`（文案）。完整端到端需真实离线节点，标注未验证。
+- 红线自查：fail-closed 语义；错误文案明确；无静默绕过。
