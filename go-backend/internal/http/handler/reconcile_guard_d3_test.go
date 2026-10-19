@@ -122,13 +122,13 @@ func TestAutoReconcileWorkerRecoversNode(t *testing.T) {
 	h.enqueueNftAutoReconcile(fixture.nodeID, "test")
 	// 等待 worker 执行。
 	deadline := time.Now().Add(5 * time.Second)
-	for manager.reconcileHit == 0 && time.Now().Before(deadline) {
+	for manager.reconcileCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	cancel()
 	wg.Wait()
 
-	if manager.reconcileHit == 0 {
+	if manager.reconcileCount() == 0 {
 		t.Fatalf("worker did not run reconcile")
 	}
 	found := false
