@@ -63,9 +63,14 @@ import {
   rollbackNode,
   getPeerRemoteUsageList,
   dismissNodeExpiryReminder,
+  probeNodeLatency,
   type ReleaseChannel,
 } from "@/api";
 import type { InboundProbe } from "@/api/types";
+import { LatencyCell } from "@/components/latency-cell";
+import { RouteModal } from "@/components/route-modal";
+import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
+import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { PageEmptyState, PageLoadingState } from "@/components/page-state";
 import {
   getConnectionStatusMeta,
@@ -430,6 +435,12 @@ export default function NodePage() {
   const [infoPopoverPlacement, setInfoPopoverPlacement] = useState<
     Record<number, "left" | "bottom">
   >({});
+
+  // 移植自 kure29/flyx：延迟探测、调优、路由追踪、测试点选择的状态。
+  const [tuneNode, setTuneNode] = useState<Node | null>(null);
+  const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
+  const [routeNode, setRouteNode] = useState<Node | null>(null);
+  const [targetNodes, setTargetNodes] = useState<Node[]>([]);
 
   const updateInfoPopoverPlacement = useCallback(
     (nodeId: number, triggerElement: HTMLElement | null) => {
@@ -1330,6 +1341,44 @@ export default function NodePage() {
   };
 
   // 处理拖拽结束
+  // 移植自 kure29/flyx：立即探测节点到延迟测试点的延迟。
+  const probeNode = async (id: number) => {
+    setProbingIds((prev) => new Set(prev).add(id));
+    try {
+      const res = await probeNodeLatency([id]);
+      const latency = res.code === 0 ? res.data?.[String(id)] : undefined;
+      if (!latency) {
+        toast.error(res.msg || "检测失败");
+        return;
+      }
+      setNodeList((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, latency } : n)),
+      );
+    } catch {
+      toast.error("检测失败");
+    } finally {
+      setProbingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  // 移植自 kure29/flyx：节点延迟单元格，卡片和列表两种变体。
+  const renderLatency = (node: Node, variant: "card" | "list") =>
+    node.isRemote !== 1 && node.connectionStatus === "online" ? (
+      <LatencyCell
+        note={node.latencyTargets ? "自定义" : undefined}
+        probe={node.latency}
+        probing={probingIds.has(node.id)}
+        variant={variant}
+        onEditTargets={() => setTargetNodes([node])}
+        onProbe={() => probeNode(node.id)}
+        onShowRoute={() => setRouteNode(node)}
+      />
+    ) : null;
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
@@ -1876,6 +1925,7 @@ export default function NodePage() {
               <TableColumn>节点名称</TableColumn>
               <TableColumn>地址</TableColumn>
               <TableColumn>版本</TableColumn>
+              <TableColumn>延迟</TableColumn>
               <TableColumn>操作</TableColumn>
             </TableHeader>
             <TableBody items={displayNodes}>
@@ -1944,6 +1994,7 @@ export default function NodePage() {
                         {node.version || "-"}
                       </span>
                     </TableCell>
+                    <TableCell>{renderLatency(node, "list")}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         {!isRemoteNode && (
@@ -1992,6 +2043,22 @@ export default function NodePage() {
                             onPress={() => handleEdit(node)}
                           >
                             编辑
+                          </Button>
+                        )}
+                        {!isRemoteNode && node.forwardMode !== "nftables" && (
+                          <Button
+                            className="h-6 px-2 min-w-0 text-xs bg-teal-50 text-teal-600 hover:bg-teal-100 dark:bg-teal-950/30 dark:text-teal-400"
+                            size="sm"
+                            variant="flat"
+                            isDisabled={node.connectionStatus !== "online"}
+                            title={
+                              node.forwardMode === "nftables"
+                                ? "nftables 模式不支持调优"
+                                : "网络调优"
+                            }
+                            onPress={() => setTuneNode(node)}
+                          >
+                            调优
                           </Button>
                         )}
                         <Button
@@ -2196,6 +2263,12 @@ export default function NodePage() {
                             </div>
                           </div>
                         </CardHeader>
+
+                        {node.latency && (
+                          <div className="px-4 empty:hidden">
+                            {renderLatency(node, "card")}
+                          </div>
+                        )}
 
                         <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
                           {isRemoteNode && node.syncError && (
@@ -2481,6 +2554,20 @@ export default function NodePage() {
                                     onPress={() => handleEdit(node)}
                                   >
                                     编辑
+                                  </Button>
+                                )}
+                                {!isRemoteNode && node.forwardMode !== "nftables" && (
+                                  <Button
+                                    className="min-h-8"
+                                    color="success"
+                                    isDisabled={
+                                      node.connectionStatus !== "online"
+                                    }
+                                    size="sm"
+                                    variant="flat"
+                                    onPress={() => setTuneNode(node)}
+                                  >
+                                    调优
                                   </Button>
                                 )}
                                 <Button
@@ -3472,6 +3559,19 @@ export default function NodePage() {
           )}
         </ModalContent>
       </Modal>
+
+      {/* 移植自 kure29/flyx：节点调优、回程路由、测试点选择 */}
+      <NodeTuneModal node={tuneNode} onClose={() => setTuneNode(null)} />
+      <RouteModal
+        nodeId={routeNode?.id ?? null}
+        nodeName={routeNode?.name}
+        onClose={() => setRouteNode(null)}
+      />
+      <LatencyTargetsModal
+        nodes={targetNodes}
+        onClose={() => setTargetNodes([])}
+        onSaved={() => loadNodes({ silent: true })}
+      />
     </AnimatedPage>
   );
 }
