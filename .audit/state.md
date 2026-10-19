@@ -46,3 +46,4 @@
 | R26 | audit/loop-26 | 功能契约（通知系统）+ 防假收敛 L1-L6 | 0/0/0/0 | LAD26-001/017 + R5R26-001 已修；6 项 P3 观察 | 通知测试通过；动态验证；L6 首次退回后通过 | 完成，已合入 audit/integration |
 | R27 | audit/loop-27 | 可观测性与性能（R26 新代码） | 0/0/0/0 | OBS27-001 已修；OBS27-002 观察 | 动态验证 3 场景；R5 复核通过 | 完成，已合入 audit/integration |
 | R28 | audit/loop-28 | 脚本正确性（快速复核） | 0/0/0/0 | — | 脚本零变更；shellcheck 零新增；build 通过 | 完成，已合入 audit/integration |
+| R29 | audit/loop-29 | C9 文档抽样核对 | 0/0/0/0 | — | 11/11 声明一致；C9 通过；C1-C9 全满足 | **收敛达成**，已合入 audit/integration |
