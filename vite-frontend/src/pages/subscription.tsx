@@ -2,6 +2,7 @@ import type {
   RemoteSourceItem,
   SubPipeline,
   SubPreviewItem,
+  SubRuleGroup,
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
@@ -71,6 +72,12 @@ const EMPTY_PIPELINE: SubPipeline = {
   regionGroups: false,
   chainLanding: "",
   chainRelay: "",
+  // 移植自 kure29/flyx：订阅规则、链式代理多选、脚本。
+  rules: false,
+  ruleGroups: [],
+  chainLandingNames: [],
+  chainRelayNames: [],
+  script: "",
 };
 
 function toDateInput(ms: number): string {
@@ -335,6 +342,7 @@ function Editor({
   inbounds,
   sources,
   regions,
+  ruleGroups,
   saving,
   onSave,
   onClose,
@@ -344,6 +352,7 @@ function Editor({
   inbounds: InboundApiItem[];
   sources: RemoteSourceItem[];
   regions: string[];
+  ruleGroups: SubRuleGroup[];
   saving: boolean;
   onSave: () => void;
   onClose: () => void;
@@ -727,6 +736,69 @@ function Editor({
           </div>
         </Section>
 
+        <Section
+          collapsible
+          defaultOpen={o.rules || o.script !== ""}
+          hint="给 Mihomo、sing-box、Surge 等客户端加分流规则与自定义脚本"
+          summary={o.rules ? "已开启" : o.script ? "有脚本" : "未开启"}
+          title="规则与脚本"
+        >
+          <ToggleRow
+            hint="国内直连、境外走代理，另加下面勾选的分组"
+            id="sub-rules"
+            label="开启分流规则"
+            value={o.rules}
+            onChange={(rules) =>
+              setOpts(
+                rules && !o.rules && o.ruleGroups.length === 0
+                  ? { rules, ruleGroups: ruleGroups.map((g) => g.key) }
+                  : { rules },
+              )
+            }
+          />
+          {o.rules && ruleGroups.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium">规则分组</p>
+              <p className="text-xs text-default-500">
+                每组可在客户端里单独选节点
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {ruleGroups.map((g) => (
+                  <Checkbox
+                    key={g.key}
+                    isSelected={o.ruleGroups.includes(g.key)}
+                    onValueChange={(on) =>
+                      setOpts({
+                        ruleGroups: on
+                          ? [...o.ruleGroups, g.key]
+                          : o.ruleGroups.filter((x) => x !== g.key),
+                      })
+                    }
+                  >
+                    <span className="text-sm">{g.name}</span>
+                  </Checkbox>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">自定义脚本</p>
+            <p className="text-xs text-default-500">
+              对处理后的节点再做筛选、改名、排序。写一个{" "}
+              <code className="rounded bg-default-100 px-1">function operator(nodes)</code>{" "}
+              函数返回新的节点数组；每个节点有 name（可改）、original、server、port、protocol、region、line 字段。
+            </p>
+            <Textarea
+              className="font-mono text-xs"
+              minRows={6}
+              placeholder={`// 示例：过滤并改名\nfunction operator(nodes) {\n  return nodes\n    .filter((n) => !/过期/.test(n.name))\n    .map((n) => {\n      n.name = n.name.replace("IEPL", "专线");\n      return n;\n    });\n}`}
+              value={o.script}
+              variant="bordered"
+              onChange={(e) => setOpts({ script: e.target.value })}
+            />
+          </div>
+        </Section>
+
         <Section title="预览">
           <Button
             className="w-full"
@@ -803,6 +875,8 @@ export default function SubscriptionPage() {
   const [tab, setTab] = useState<"manage" | "assign">("manage");
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
+  // 移植自 kure29/flyx：订阅规则组（后端下发）。
+  const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -825,6 +899,7 @@ export default function SubscriptionPage() {
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
         setRegions(subRes.data.regions ?? []);
+        setRuleGroups(subRes.data.ruleGroups ?? []);
       } else {
         toast.error(subRes.msg || "加载订阅失败");
       }
@@ -1229,6 +1304,7 @@ export default function SubscriptionPage() {
                 draft={draft}
                 inbounds={inbounds}
                 regions={regions}
+                ruleGroups={ruleGroups}
                 saving={saving}
                 setDraft={setDraft}
                 sources={sources}

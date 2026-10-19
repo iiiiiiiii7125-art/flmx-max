@@ -235,6 +235,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// 移植自 kure29/flyx：回程路由追踪。
 	mux.HandleFunc("/api/v1/node/route", h.nodeRouteGet)
 	mux.HandleFunc("/api/v1/node/route/probe", h.nodeRouteProbe)
+	// 移植自 kure29/flyx：GitHub 镜像代理。
+	mux.HandleFunc(ghMirrorPath, h.githubMirror)
 	mux.HandleFunc("/api/v1/node/releases", h.listReleases)
 	mux.HandleFunc("/api/v1/node/nftables/test", h.nodeNftablesTest)
 	mux.HandleFunc("/api/v1/node/nftables/reconcile", h.nodeNftablesReconcile)

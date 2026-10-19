@@ -673,6 +673,19 @@ export interface SubPipeline {
   /** Client-side chain: names matching chainLanding dial through the relay group. */
   chainLanding: string;
   chainRelay: string;
+  /** 路由规则、DNS 与所选服务组（Mihomo / sing-box / Surge），移植自 kure29/flyx。 */
+  rules: boolean;
+  ruleGroups: string[];
+  /** 链式代理所选节点，按 pipeline 处理前的原名。 */
+  chainLandingNames: string[];
+  chainRelayNames: string[];
+  /** JavaScript `function operator(nodes)`，在其他步骤后运行。 */
+  script: string;
+}
+/** 订阅规则组（后端下发）。 */
+export interface SubRuleGroup {
+  key: string;
+  name: string;
 }
 export interface SubscriptionItem {
   id: number;
@@ -721,9 +734,11 @@ export interface SubPreviewItem {
   chain?: "landing" | "relay";
 }
 export const getSubscriptions = () =>
-  Network.post<{ items: SubscriptionItem[]; regions: string[] }>(
-    "/subscription/list",
-  );
+  Network.post<{
+    items: SubscriptionItem[];
+    regions: string[];
+    ruleGroups: SubRuleGroup[];
+  }>("/subscription/list");
 export const saveSubscription = (data: SubscriptionDraft) =>
   Network.post<SubscriptionItem>("/subscription/save", data);
 export const deleteSubscription = (id: number) =>
