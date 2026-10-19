@@ -1028,18 +1028,45 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 
 	raw, err := readAndDecryptFlowBody(r.Body, secret)
 	if err == nil && strings.TrimSpace(raw) != "" {
+		// R5-B6 E-001: 解析 seq（新格式）或兼容旧格式（纯数组）。
+		var seq *int64
 		var items []flowItem
-		if json.Unmarshal([]byte(raw), &items) == nil {
+		// 先尝试新格式：{seq, items}。
+		var batch struct {
+			Seq   *int64     `json:"seq"`
+			Items []flowItem `json:"items"`
+		}
+		if json.Unmarshal([]byte(raw), &batch) == nil && batch.Items != nil {
+			seq = batch.Seq
+			items = batch.Items
+		} else if json.Unmarshal([]byte(raw), &items) == nil {
+			// 旧格式：纯数组，seq=nil（legacy）。
+		} else {
+			items = nil
+		}
+		if items != nil {
 			now := time.Now()
-			forwardIDs := collectFlowUploadForwardIDs(items)
-			metas, metaErr := h.repo.GetFlowUploadForwardMetas(forwardIDs)
-			if metaErr != nil {
-				log.Printf("flow upload metadata lookup failed node_id=%d err=%v", node.ID, metaErr)
-				metas = map[int64]repo.FlowUploadForwardMeta{}
+			// E-001: seq 幂等检查。
+			accepted, isReplay, isLegacy, seqErr := h.repo.CheckAndUpdateSeq(node.ID, seq, now.UnixMilli())
+			if seqErr != nil {
+				log.Printf("flow upload seq check failed node_id=%d err=%v", node.ID, seqErr)
+			} else if isReplay {
+				log.Printf("flow upload replay rejected node_id=%d seq=%d", node.ID, *seq)
+			} else {
+				if isLegacy {
+					log.Printf("flow upload legacy (no seq) node_id=%d", node.ID)
+				}
+				forwardIDs := collectFlowUploadForwardIDs(items)
+				metas, metaErr := h.repo.GetFlowUploadForwardMetas(forwardIDs)
+				if metaErr != nil {
+					log.Printf("flow upload metadata lookup failed node_id=%d err=%v", node.ID, metaErr)
+					metas = map[int64]repo.FlowUploadForwardMeta{}
+				}
+				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
+				h.applyFlowUploadBatch(node.ID, batch, now)
 			}
-			batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
-			h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
-			h.applyFlowUploadBatch(node.ID, batch, now)
+			_ = accepted
 		}
 	}
 

@@ -412,3 +412,48 @@ func getConfigData() ([]byte, error) {
 	resp.Config.Write(buf, "json")
 	return buf.Bytes(), nil
 }
+
+// sendBatchTrafficReportWithSeq 带 seq 的上报（R5-B6 E-001）。
+// 旧面板忽略 seq 字段（向后兼容）。
+func sendBatchTrafficReportWithSeq(ctx context.Context, reportItems []TrafficReportItem, seq int64) (bool, error) {
+	batch := TrafficReportBatch{Seq: seq, Items: reportItems}
+	if httpReportURL == "" {
+		return false, fmt.Errorf("流量上报URL未设置")
+	}
+
+	jsonData, err := json.Marshal(batch)
+	if err != nil {
+		return false, fmt.Errorf("序列化报告数据失败: %v", err)
+	}
+
+	var requestBody []byte
+	if httpAESCrypto != nil {
+		encryptedData, err := httpAESCrypto.Encrypt(jsonData)
+		if err != nil {
+			fmt.Printf("⚠️ 加密流量报告失败，发送原始数据: %v\n", err)
+			requestBody = jsonData
+		} else {
+			encryptedMessage := map[string]interface{}{
+				"encrypted": true,
+				"data":      encryptedData,
+				"timestamp": time.Now().Unix(),
+			}
+			requestBody, err = json.Marshal(encryptedMessage)
+			if err != nil {
+				fmt.Printf("⚠️ 序列化加密流量报告失败，发送原始数据: %v\n", err)
+				requestBody = jsonData
+			}
+		}
+	} else {
+		requestBody = jsonData
+	}
+
+	return postJSONWithFallback(
+		ctx,
+		strings.Split(httpReportURL, ","),
+		requestBody,
+		"GOST-Traffic-Reporter/1.0",
+		5*time.Second,
+		&preferredUploadURL,
+	)
+}
