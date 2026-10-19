@@ -536,17 +536,3 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	response.WriteJSON(w, response.OK(out))
 }
-
-// ===== 第四批（回程路由追踪）占位 =====
-// 以下两个函数是第四批的占位实现，路由批次会替换为真实实现。
-// 第二批先把 route 字段留空。
-
-// withRoutes 为延迟点填充回程路由名（占位：直接返回原值）。
-func (h *Handler) withRoutes(nodeID int64, p externalProbe) externalProbe {
-	return p
-}
-
-// traceNodeRoutes 追踪节点回程路由（占位：不做任何事）。
-func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) (map[int64]string, error) {
-	return nil, nil
-}
