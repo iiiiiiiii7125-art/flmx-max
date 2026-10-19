@@ -390,7 +390,8 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if captchaEnabled && !h.apiClientCaptchaBypassEnabled(r) {
+	// R5-B2 D2: 已删除 X-FLVX-API-Client 自声明头旁路；验证码开启时无例外。
+	if captchaEnabled {
 		captchaID := strings.TrimSpace(req.CaptchaID)
 		if captchaID == "" {
 			response.WriteJSON(w, response.ErrDefault("验证码校验失败"))
@@ -1441,19 +1442,6 @@ func (h *Handler) captchaEnabled() (bool, error) {
 	return true, nil
 }
 
-func (h *Handler) apiClientCaptchaBypassEnabled(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-
-	client := strings.ToLower(strings.TrimSpace(r.Header.Get("X-FLVX-API-Client")))
-	switch client {
-	case "whmcs", "whmcs-module":
-		return true
-	default:
-		return false
-	}
-}
 
 func (h *Handler) markCaptchaToken(token string) {
 	if h == nil {
