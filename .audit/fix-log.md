@@ -87,3 +87,15 @@
 ### AUDIT-R1: SCR-019（commit 734dacf）
 - 根因：见 findings（R1 S4 T5：动态证伪命令注入——heredoc 单遍展开；证实非法输入写坏 Caddyfile 致 caddy 重启失败）。
 - 修复：写文件前校验 `^[A-Za-z0-9.*-]+$`，非法直接拒绝。8 组输入桩测试验证（正常/通配符通过，$()/反引号/空格/斜杠/花括号拒绝）。
+
+## Round 2
+
+### AUDIT-R2: F1X-001（commit 见 git log）
+- 根因：`monitorServiceCreate/Update` 对 `target` 仅判空即入库；面板本机执行的 TCP 探测（nodeId<=0）由 `checker.checkTCP` 经 `net.DialTimeout` 直接拨号，无任何 SSRF 拦截。低权限监控用户可指定任意内网 host:port，面板成为探测跳板（F1 审计员端到端 PoC：monuser 建 127.0.0.1:33571 监控→面板拨号→桩收到 HIT→run 返回 success）。
+- 变体扫描：`monitorServiceUpdate` 同源同 sink（同修）；ICMP 类型强制要求 nodeId（节点侧执行，信任边界不同，不限制）；隧道质量探测目标为管理员配置的隧道端点（非用户任意输入）；H-15（远程源/外部导入）为另一入口，已有 SecureFetch，本处为遗漏的同类入口。
+- 修复（双层）：① `health.ValidateMonitorTCPTarget`（新文件 `internal/health/monitor_ssrf.go`）：`SplitHostPort` 解析，拒绝环回/链路本地/组播/未指定/私网段/元数据/CGNAT，域名逐 IP 判定（fail-closed），支持 `FLVX_FETCH_PRIVATE_ALLOWLIST` 放行通道（与 H-15 同源）；② `monitorServiceCreate`（nodeId<=0 的 tcp）和 `Update`（终态 tcp+本机且目标/类型/位置被改动时）在入库前校验；③ `checker.checkTCP` 拨号前重验（纵深防御，拦截存量坏数据 + 防 DNS rebinding）。
+- pre-fix 红：PoC（审计员动态）；post-fix 绿：`TestMonitorServiceCreateRejectsPrivateTargetForNonAdmin`（127.0.0.1/192.168 拒绝、8.8.8.8 放行、nodeId>0 不受限）+ `TestValidateMonitorTCPTarget`（18 用例 + allowlist）。
+- 双后端：SQLite 实测；PG 无环境，标注未验证（纯 Go 逻辑，无 SQL 方言）。
+- 回归测试：已入永久测试集（health 单元测试 + contract API 测试）。
+- 红线自查：端口复用未动；监控权限模型未变（仅加目标校验）；节点侧执行不受影响。
+- 附带：旧权限测试 `monitoring_contract_test.go` 的 createBody fixture `127.0.0.1:1` → `8.8.8.8:53`（该测试测权限授予非 SSRF，意图保留）。
