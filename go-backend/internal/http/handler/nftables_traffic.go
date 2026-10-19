@@ -136,10 +136,10 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 			log.Printf("nftables traffic collection failed op=load_flow_metas node_id=%d err=%v", nodeID, err)
 			return nil, nil, nowMs, nil, err
 		}
-		if missingForwardID, ok := firstNftDeltaMissingMeta(deltas, metas); ok {
-			log.Printf("nftables traffic collection skipped state advance op=missing_flow_meta node_id=%d forward_id=%d", nodeID, missingForwardID)
-			return nil, nil, nowMs, nil, nil
-		}
+		// R5-B3 D1-001(poison-scope)/D10: 缺 meta 的 forward 仅跳过其 delta
+		// （不计费），保留其旧基线（newStates 中剔除，下周期重试），warn 日志
+		// 带 forward_id；其他 forward 正常累积。不再整节点 return。
+		deltas, newStates = filterOutNftDeltasMissingMeta(deltas, newStates, metas, nodeID)
 	}
 	if len(deltas) == 0 {
 		if err := h.repo.UpsertNftCounterStates(newStates, nowMs); err != nil {
@@ -242,15 +242,42 @@ func (h *Handler) filterOutPendingDeleteDeltas(nodeID int64, deltas []nftTraffic
 	return kept
 }
 
-func firstNftDeltaMissingMeta(deltas []nftTrafficDelta, metas map[int64]repo.FlowUploadForwardMeta) (int64, bool) {	for _, delta := range deltas {
+// filterOutNftDeltasMissingMeta 是 D10：缺 meta 的 forward 仅跳过其 delta
+// （不产生计费），并从 newStates 剔除其基线更新（保留旧基线，下周期重试），
+// warn 日志带 forward_id；其他 forward 正常累积。
+// 注意：旧的整节点 return 逻辑（firstNftDeltaMissingMeta）已删除。
+func filterOutNftDeltasMissingMeta(deltas []nftTrafficDelta, newStates []repo.NftCounterStateInput, metas map[int64]repo.FlowUploadForwardMeta, nodeID int64) ([]nftTrafficDelta, []repo.NftCounterStateInput) {
+	if len(deltas) == 0 {
+		return deltas, newStates
+	}
+	skip := make(map[int64]bool)
+	for _, delta := range deltas {
 		if delta.ForwardID <= 0 {
 			continue
 		}
 		if _, ok := metas[delta.ForwardID]; !ok {
-			return delta.ForwardID, true
+			if !skip[delta.ForwardID] {
+				skip[delta.ForwardID] = true
+				log.Printf("nftables traffic skipped op=missing_flow_meta node_id=%d forward_id=%d action=delta_dropped_baseline_kept", nodeID, delta.ForwardID)
+			}
 		}
 	}
-	return 0, false
+	if len(skip) == 0 {
+		return deltas, newStates
+	}
+	keptDeltas := deltas[:0]
+	for _, delta := range deltas {
+		if !skip[delta.ForwardID] {
+			keptDeltas = append(keptDeltas, delta)
+		}
+	}
+	keptStates := newStates[:0]
+	for _, st := range newStates {
+		if !skip[st.ForwardID] {
+			keptStates = append(keptStates, st)
+		}
+	}
+	return keptDeltas, keptStates
 }
 
 func filterNftCounterSamplesWithBinding(samples []runtimenft.CounterSample, hashes map[int64]string) []runtimenft.CounterSample {
