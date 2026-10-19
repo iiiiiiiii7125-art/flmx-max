@@ -2264,11 +2264,9 @@ export default function NodePage() {
                           </div>
                         </CardHeader>
 
-                        {node.latency && (
-                          <div className="px-4 empty:hidden">
-                            {renderLatency(node, "card")}
-                          </div>
-                        )}
+                        <div className="px-4 empty:hidden">
+                          {renderLatency(node, "card")}
+                        </div>
 
                         <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
                           {isRemoteNode && node.syncError && (
