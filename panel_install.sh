@@ -910,7 +910,9 @@ get_public_ip() {
   fi
   # 兜底：取本机第一块非回环网卡的 IPv4
   if [ -z "$ip" ]; then
-    ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || true)
+    # AUDIT-R1 (SCR-011): 原 grep -oP 在 busybox/Alpine 下恒失败（无 -P 支持）。
+    # 改用 awk 提取，POSIX 兼容。
+    ip=$(ip -4 addr show scope global 2>/dev/null | awk '$1=="inet"{split($2,a,"/"); print a[1]; exit}' || true)
   fi
   echo "${ip:-服务器IP}"
 }
