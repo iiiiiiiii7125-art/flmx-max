@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"sort"
@@ -41,32 +42,51 @@ func (h *Handler) runNftablesTrafficCollectJob(now time.Time) {
 }
 
 func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
-	if h == nil || h.repo == nil {
+	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	if err != nil || batch == nil {
 		return
 	}
+	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
+	for userID, quota := range quotaViews {
+		h.enforceUserQuotaIfNeeded(userID, quota)
+	}
+	for _, target := range batch.policyTargets {
+		if target.UserID <= 0 || target.UserTunnelID <= 0 {
+			continue
+		}
+		h.enforceFlowPolicies(target.UserID, target.UserTunnelID)
+	}
+}
+
+// accountNftablesNodeTraffic 执行采集→增量→落库（不含执法），供采集循环与
+// reconcile 前 drain（R5-B3 D1-004/D8）复用。返回 batch+metas+nowMs+quotaViews 供调用方
+// 执法；无增量时返回 nil batch（基线已推进）。
+func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
+	if h == nil || h.repo == nil {
+		return nil, nil, 0, nil, errors.New("handler not initialized")
+	}
 	if h.nftablesManager == nil {
-		log.Printf("nftables traffic collection failed op=collect node_id=%d err=%v", nodeID, "nftables manager not initialized")
-		return
+		return nil, nil, 0, nil, errors.New("nftables manager not initialized")
 	}
 	sshCfg, err := sshConfigFromModel(cfgModel)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=ssh_config node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
 	samples, err := h.nftablesManager.CollectCounters(context.Background(), sshCfg)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=collect node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
 	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=list_states node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
 	bindings, err := h.repo.ListNftRuleBindingsByNode(nodeID)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=list_bindings node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
 	hashes := make(map[int64]string, len(bindings))
 	for _, binding := range bindings {
@@ -87,7 +107,7 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		if len(deltas) != 0 {
 			log.Printf("nftables traffic collection skipped suspicious deltas without states node_id=%d deltas=%d", nodeID, len(deltas))
 		}
-		return
+		return nil, nil, nowMs, nil, nil
 	}
 
 	// R5-B3 D1-001 矩阵 #9 / 补充 A: pending-delete 行的 delta 丢弃（不产生
@@ -106,41 +126,44 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		metas, err = h.repo.GetFlowUploadForwardMetas(forwardIDs)
 		if err != nil {
 			log.Printf("nftables traffic collection failed op=load_flow_metas node_id=%d err=%v", nodeID, err)
-			return
+			return nil, nil, nowMs, nil, err
 		}
 		if missingForwardID, ok := firstNftDeltaMissingMeta(deltas, metas); ok {
 			log.Printf("nftables traffic collection skipped state advance op=missing_flow_meta node_id=%d forward_id=%d", nodeID, missingForwardID)
-			return
+			return nil, nil, nowMs, nil, nil
 		}
 	}
 	if len(deltas) == 0 {
 		if err := h.repo.UpsertNftCounterStates(newStates, nowMs); err != nil {
 			log.Printf("nftables traffic collection failed op=upsert_states node_id=%d err=%v", nodeID, err)
-			return
+			return nil, nil, nowMs, nil, err
 		}
-		return
+		return nil, nil, nowMs, nil, nil
 	}
 
 	batch := buildNftFlowUploadBatch(deltas, metas)
 	if missingForwardID, ok := firstNftBatchMissingDelta(deltas, batch); ok {
 		log.Printf("nftables traffic collection skipped state advance op=unaccounted_delta node_id=%d forward_id=%d", nodeID, missingForwardID)
-		return
+		return nil, nil, nowMs, nil, nil
 	}
 	quotaViews, err := h.repo.ApplyNftTrafficAccounting(batch.flowDeltas, batch.quotaUsage, newStates, now)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=accounting node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, nowMs, nil, err
 	}
-	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
-	for userID, quota := range quotaViews {
-		h.enforceUserQuotaIfNeeded(userID, quota)
+	return &batch, metas, nowMs, quotaViews, nil
+}
+
+// drainNftCountersBeforeReconcile 是 D8：reconcile 删表重建前 best-effort
+// drain 计数器。成功返回 true；失败返回 false（调用方记 gap，
+// 不得阻塞 apply）。drain 与重建必须在同一 single-flight 内（D1-003）。
+func (h *Handler) drainNftCountersBeforeReconcile(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) bool {
+	_, _, _, _, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	if err != nil {
+		log.Printf("nftables reconcile drain gap node_id=%d err=%v action=apply_continues_baseline_reset", nodeID, err)
+		return false
 	}
-	for _, target := range batch.policyTargets {
-		if target.UserID <= 0 || target.UserTunnelID <= 0 {
-			continue
-		}
-		h.enforceFlowPolicies(target.UserID, target.UserTunnelID)
-	}
+	return true
 }
 
 func firstNftBatchMissingDelta(deltas []nftTrafficDelta, batch flowUploadBatch) (int64, bool) {
