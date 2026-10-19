@@ -415,3 +415,41 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 - 触发：管理员 A 导出时管理员 B 恰好导入（苛刻时序）；pre-existing（R22 前亦然）；admin-only 低频；恢复有格式校验。
 - 未修原因：修复需改 11 个 export 方法签名（接受 tx 参数），侵入式；P3 级别不值得。建议后轮评估或记入 accepted-risks。
 - 发现者：R24 并发审计员（动态验证：10 并发操作无死锁，-race 干净）
+
+## R26 新增（防假收敛阶梯 L1–L5，第四次，目标：通知系统）
+
+### LAD26-001（P2）— 已修复
+- 通知 Webhook（`sendWebhook`→`post`，notify.go:188-219）零 URL 校验，无 scheme 白名单、无 IP 段拒绝、无元数据黑名单；`http.Client` 默认跟随重定向。管理员可配置指向内网/元数据地址。
+- 位置：`go-backend/internal/http/handler/notify.go:204`（`post`）
+- 修复：新增 `validateNotifyURL()`——拒绝非 http/https scheme、拒绝云元数据地址（复用 `isMetadataAddress`）；允许内网地址（企业微信/钉钉内网代理为合法场景，产品决策）。
+- 变体扫描：`sendTelegram` 经 `TelegramAPIBase` 同样走 `post()`，已覆盖。
+
+### LAD26-017（P3）— 已修复
+- `post()` 的 `http.NewRequestWithContext` 解析错误直接返回含完整 URL 的原始错误（可能带 Telegram bot token），而同函数 `client.Do()` 错误已脱敏。
+- 位置：`go-backend/internal/http/handler/notify.go:204-210`
+- 修复：解析失败返回脱敏的"通知地址无效"，与 `Do()` 路径一致。
+
+### LAD26-005（P3，观察，未修）
+- 90s grace 默认值（notify.go:41）无测试锁定；测试覆盖为 50ms。建议后轮补测试。
+
+### LAD26-006（P3，观察，未修）
+- `externalProbeStore.track()` 连续失败阈值逻辑零测试覆盖（变异 2→1 存活且证非等价）。建议后轮补测试。
+
+### LAD26-009（P3，观察，未修）
+- `notifyTest`（notify.go:355）同步调用，目标 hang 时阻塞管理后台请求 10s/通道。建议后轮改异步或加更短超时。
+
+### LAD26-010（P3，观察，未修）
+- 通知发送失败仅 `log.Printf` 无重试；`notifyConfig` 的 `ListConfigs()` 出错时 `notify()` 静默丢弃连日志都没有。建议后轮加日志/重试。
+
+### LAD26-011（P3，观察，未修）
+- `checkNodeExpiry`、`maybeDailyReport` 用纯 wall-clock，NTP 跳变致误报/漏报（掉线 90s 本身用单调时钟不受影响）。建议后轮改单调时钟。
+
+### LAD26-013（P3，观察，未修）
+- `doc/guide/notify.md:16` 声明"同一个问题只提醒一次"未声明重启例外（内存 map 清空后重复告警）。建议后轮补文档。
+
+### R5R26-001（P2）— 已修复（L6 退回项）
+- `validateNotifyURL`（LAD26-001 修复）仅校验初始 URL；`n.client` 未设 `CheckRedirect`，Go 默认跟随最多 10 跳重定向且不重新校验。攻击者服务器返回 302 到元数据地址即可完全绕过 SSRF 控制（动态验证确认：302→"元数据服务"被击中）。
+- 位置：`go-backend/internal/http/handler/notify.go:83`（`n.client`）+ `:209`（`validateNotifyURL` 仅初始校验）
+- 修复：`n.client` 加 `CheckRedirect`——重定向目标同样走 `validateNotifyURL` 校验；同时限制最多 5 跳防重定向环。
+- 影响边界：响应不回传给攻击者（`sendWebhook` 丢弃 body），威胁模型需管理员权限。定 P2 理由：完全 nullify 了一个 P2 修复。
+- 发现者：L6 对抗性审查员（动态验证）
