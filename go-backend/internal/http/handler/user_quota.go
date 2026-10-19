@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -71,6 +72,9 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 	if h == nil || h.repo == nil || release == nil || release.UserID <= 0 || !release.UnblockUser {
 		return
 	}
+	// R5-B3 D1-002: 配额恢复时 nft 转发也要加回规则（原实现只调了 gost 路径）。
+	// 按节点聚合恢复，一节点一次 reconcile。
+	nftGroups := make(map[int64][]*forwardRecord)
 	for _, forwardID := range release.ForwardIDs {
 		forward, err := h.getForwardRecord(forwardID)
 		if err != nil || forward == nil {
@@ -79,10 +83,28 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 		if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
 			continue
 		}
+		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
+		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
+			continue
+		}
 		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
 			continue
 		}
-		_ = h.repo.UpdateForwardStatus(forwardID, 1, now)
+		if err := h.repo.UpdateForwardStatus(forwardID, model.ForwardStatusActive, now); err != nil {
+			log.Printf("quota release failed op=db_write forward_id=%d err=%v", forwardID, err)
+		}
+	}
+	for nodeID, forwards := range nftGroups {
+		if !h.reconcileNodeWithTimeout(nodeID, nil, forwards, 30*time.Second) {
+			log.Printf("quota release gap node_id=%d reason=reconcile_timeout_or_error", nodeID)
+			continue
+		}
+		for _, forward := range forwards {
+			if err := h.repo.UpdateForwardStatus(forward.ID, model.ForwardStatusActive, now); err != nil {
+				log.Printf("quota release failed op=db_write_after_reconcile forward_id=%d err=%v", forward.ID, err)
+			}
+		}
 	}
 }
 
