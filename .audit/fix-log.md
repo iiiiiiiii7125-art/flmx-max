@@ -140,3 +140,11 @@
 - 回归测试：未验证（需 PG 环境做并发复现；SQLite 无法复现）。`gorm.Expr` 模式在仓库他处已有先例（`repository.go:148`）。
 - 红线自查：双后端 SQL 均合法；`usedBytes<=0` 分支语义等价；无新竞态引入。
 - P3 观察（R5）：返回值内存值在极端 PG 并发下可能过期致 enforcement 延迟一个周期，建议后轮 UPDATE 后重读（优化项）。
+
+## R18 修复
+
+### DAT18-001/002/003（P2/P3/P2）— 已修复
+- 根因：`DeleteTunnelCascade` 与 `DeleteNodeCascade` 的级联删除表清单不全。`DeleteForwardCascade` 在 R5-B3 D1-001 时补充了 `NftPendingDelete`，但隧道级与节点级删除未同步。
+- 变体扫描：`DeleteForwardCascade` ✅ 在位；`DeleteTunnelCascade` ✅ 已补；`DeleteNodeCascade` ✅ 已补；`DeleteNodeKernel`（R1 已修）无此问题。
+- Pre-fix：代码审查确认遗漏；Post-fix：`go build` + `go vet` 通过。
+- 回滚：可独立 revert 本提交。
