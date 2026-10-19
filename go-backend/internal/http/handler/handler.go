@@ -1028,8 +1028,14 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 
 	raw, err := readAndDecryptFlowBody(r.Body, secret)
 	if err == nil && strings.TrimSpace(raw) != "" {
-		// R5-B6 E-001: 解析 seq（新格式）或兼容旧格式（纯数组）。
+		// R5-B6 E-001: seq 优先从 HTTP 头 X-Flvx-Seq 读取（agent 新格式），
+		// 其次从 body 的 {seq, items} 对象读取，最后兼容纯数组（legacy）。
 		var seq *int64
+		if h := r.Header.Get("X-Flvx-Seq"); h != "" {
+			if v, err := strconv.ParseInt(strings.TrimSpace(h), 10, 64); err == nil {
+				seq = &v
+			}
+		}
 		var items []flowItem
 		// 先尝试新格式：{seq, items}。
 		var batch struct {
@@ -1037,10 +1043,12 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			Items []flowItem `json:"items"`
 		}
 		if json.Unmarshal([]byte(raw), &batch) == nil && batch.Items != nil {
-			seq = batch.Seq
+			if seq == nil {
+				seq = batch.Seq
+			}
 			items = batch.Items
 		} else if json.Unmarshal([]byte(raw), &items) == nil {
-			// 旧格式：纯数组，seq=nil（legacy）。
+			// 旧格式：纯数组，seq 可能来自 header，否则为 nil（legacy）。
 		} else {
 			items = nil
 		}
