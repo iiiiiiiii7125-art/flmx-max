@@ -99,3 +99,12 @@
 - 回归测试：已入永久测试集（health 单元测试 + contract API 测试）。
 - 红线自查：端口复用未动；监控权限模型未变（仅加目标校验）；节点侧执行不受影响。
 - 附带：旧权限测试 `monitoring_contract_test.go` 的 createBody fixture `127.0.0.1:1` → `8.8.8.8:53`（该测试测权限授予非 SSRF，意图保留）。
+
+### AUDIT-R3: F2X-001（commit 见 git log）
+- 根因：R5-B4 的 per-node 端口锁放在 `CreateNodeInbound` 内部，而冲突检查（`inboundPortConflict`）与随机选端口（`pickFreeInboundPort`）在 handler 锁外。两并发 `inboundSave(port=0)` 可挑中同一端口，一个撞唯一索引 `idx_node_inbound_node_port` 报裸 DB 错误。F2 审计员 20 协程动态复现（1 成功 19 失败）。
+- 变体扫描：`SaveNodeInbound` 更新路径同源（本次同修，锁覆盖整个 inboundSave）；隧道（mutations.go:836）与转发（repository_mutations.go:1443）锁位置正确；`remote_source.go:142` 与 `kernel_external.go:179` 两个外部 `CreateNodeInbound` 调用点补锁。
+- 修复：锁上移到调用方——`inboundSave` 端口处理前 `AcquirePortAllocLock(row.NodeID)`（defer 释放）；`CreateNodeInbound` 去内部锁（sync.Mutex 不可重入，防死锁）。
+- pre-fix 红：审计员 PoC；post-fix 绿：`TestConcurrentInboundCreateAutoPortNoConflict`（10 并发 HTTP 创建 port=0，-race 下全成功且端口互异）。
+- 双后端：SQLite 实测；PG 无环境，标注未验证（锁为进程内 sync.Mutex，与 DB 无关）。
+- 回归测试：已入永久测试集。
+- 红线自查：端口复用规则未动；仅加锁范围，无行为变更。
