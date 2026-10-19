@@ -57,22 +57,17 @@ FROM grouped
 WHERE tbl_cnt > 1
 ORDER BY node_id, port;
 
-.print "=== 6. 用户名重复 ==="
-SELECT username, COUNT(*) AS cnt,
+.print "=== 6. 用户名重复（列名为 user） ==="
+SELECT "user", COUNT(*) AS cnt,
        GROUP_CONCAT(id) AS user_ids
 FROM "user"
-GROUP BY username
+GROUP BY "user"
 HAVING COUNT(*) > 1
 ORDER BY cnt DESC;
 
-.print "=== 7. 默认订阅重复（同 user_id 多条 is_default=1） ==="
-SELECT user_id, COUNT(*) AS cnt,
-       GROUP_CONCAT(id) AS sub_ids
-FROM subscription
-WHERE is_default = 1
-GROUP BY user_id
-HAVING COUNT(*) > 1
-ORDER BY user_id;
+.print "=== 7. subscription 概览（DefaultSubscription 取 inx 最小第一条，无 is_default 列） ==="
+SELECT COUNT(*) AS total_subs FROM subscription;
+SELECT id, name, inx FROM subscription ORDER BY inx ASC, id ASC LIMIT 5;
 
 .print "=== 汇总计数 ==="
 SELECT 'forward_port_dup_groups' AS item, COUNT(*) AS n FROM (
