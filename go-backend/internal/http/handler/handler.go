@@ -1495,15 +1495,15 @@ func (h *Handler) consumeCaptchaToken(token string) bool {
 	return exp > now
 }
 
+// R5-B2 D4/B-004: 统一信封 {code,msg,data,ts}，code 0 = 成功。
+// breaking change：旧裸形状 {success,data:{validToken}} 已移除，
+// 迁移时把对 success 字段的判断改为 code == 0。
 func (h *Handler) writeCaptchaVerifyResult(w http.ResponseWriter, success bool, token string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	payload := map[string]interface{}{
-		"success": success,
-		"data": map[string]interface{}{
-			"validToken": token,
-		},
+	if success {
+		response.WriteJSON(w, response.OK(map[string]interface{}{"validToken": token}))
+		return
 	}
-	_ = json.NewEncoder(w).Encode(payload)
+	response.WriteJSON(w, response.Err(-1, "验证码校验失败"))
 }
 
 func decodeJSON(body io.ReadCloser, out interface{}) error {
