@@ -44,7 +44,10 @@ get_architecture() {
             echo "arm64"
             ;;
         *)
-            echo "amd64"  # 默认使用 amd64
+            # AUDIT-R1 (SCR-007): 未知架构不得静默回退 amd64（releases 只有
+            # amd64/arm64 资产），否则下载的二进制无法执行，失败定位极晚。
+            echo "❌ 不支持的系统架构：$ARCH（仅支持 x86_64/amd64、aarch64/arm64）" >&2
+            return 1
             ;;
     esac
 }
@@ -198,7 +201,10 @@ resolve_version() {
 
 # 构建下载地址
 build_download_url() {
-    local ARCH=$(get_architecture)
+    # AUDIT-R1 (SCR-007): 分开声明与赋值，避免 local 吞掉 get_architecture 的
+    # 非零退出码（SC2155）；未知架构直接向上传播失败。
+    local ARCH
+    ARCH=$(get_architecture) || return 1
     echo "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/gost-${ARCH}"
 }
 
@@ -251,7 +257,11 @@ ensure_download_url_initialized() {
   fi
 
   RESOLVED_VERSION=$(resolve_version) || return 1
-  DOWNLOAD_URL=$(maybe_proxy_url "$(build_download_url)")
+  # AUDIT-R1 (SCR-007): 未知架构时 build_download_url 失败；内层 $() 失败不会
+  # 自动中断外层（无 set -e），必须分步检查，否则会拿空 ARCH 拼出错误 URL。
+  local _dl_url
+  _dl_url=$(build_download_url) || return 1
+  DOWNLOAD_URL=$(maybe_proxy_url "$_dl_url")
 }
 
 
