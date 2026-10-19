@@ -164,6 +164,11 @@ func (h *Handler) ensureForwardAccessByActor(actorUserID int64, actorRole int, f
 	if err != nil {
 		return nil, err
 	}
+	// R5-B3 D1-001 矩阵 #10: pending-delete 行对用户/管理员详情隐藏，
+	// 视为不存在（编辑/查看/再次删除都不可达）。
+	if forward.Status == model.ForwardStatusPendingDelete {
+		return nil, errForwardNotFound
+	}
 	if actorRole != 0 && forward.UserID != actorUserID {
 		return nil, errForwardNotFound
 	}
@@ -252,6 +257,12 @@ func (h *Handler) syncForwardServices(forward *forwardRecord, method string, all
 func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method string, allowFallbackAdd bool) ([]string, error) {
 	if h == nil || forward == nil {
 		return nil, errors.New("invalid forward sync context")
+	}
+	// R5-B3 D1-001 补充 D 兜底：pending-delete 行不得被任何同步路径触碰
+	//（删除流程由 pending 机制接管）。直接调用 getForwardRecord 的后台路径
+	//（如 relay 修复）可能绕过 ensureForwardAccessByActor 的过滤。
+	if forward.Status == model.ForwardStatusPendingDelete {
+		return nil, nil
 	}
 
 	tunnel, err := h.getTunnelRecord(forward.TunnelID)

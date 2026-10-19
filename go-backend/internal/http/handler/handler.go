@@ -206,6 +206,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/node/nftables/test", h.nodeNftablesTest)
 	mux.HandleFunc("/api/v1/node/nftables/reconcile", h.nodeNftablesReconcile)
 	mux.HandleFunc("/api/v1/node/nftables/clear", h.nodeNftablesClear)
+	mux.HandleFunc("/api/v1/node/nftables/pending-deletes", h.nftPendingDeleteList)
 	mux.HandleFunc("/api/v1/kernel/capabilities", h.kernelCapabilities)
 	mux.HandleFunc("/api/v1/kernel/list", h.kernelList)
 	mux.HandleFunc("/api/v1/kernel/install", h.kernelInstall)
