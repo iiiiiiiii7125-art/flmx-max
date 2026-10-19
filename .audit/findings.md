@@ -184,6 +184,21 @@
 - 置信度：高
 - 修复：锁上移到调用方——`inboundSave` 在端口处理前 `AcquirePortAllocLock(row.NodeID)`（新建/更新全覆盖）；`CreateNodeInbound` 去内部锁（防死锁）；`remote_source.go`/`kernel_external.go` 两个外部调用点补锁。回归测试 `TestConcurrentInboundCreateAutoPortNoConflict`（10 并发 HTTP，-race 全绿）。
 
+### R5R7-001｜P2｜可达｜限速 fail-open（R7 已修复）｜节点离线时创建的限速转发永不下发限速器
+
+- 位置：
+  - `go-backend/internal/http/handler/control_plane.go:369-380` — `ensureLimiterOnNode` 失败时 `isNodeOfflineOrTimeoutError` → 告警 + `continue` 跳过
+  - `go-backend/internal/http/handler/control_plane.go:386-397` — `ensureTrafficLimiterOnNode` 同模式
+  - `control_plane.go:2118` — `ensureLimiterOnNode` 唯一调用点（仅创建/更新时，无重连补下发）
+- 触发条件：节点离线时创建（或更新）带 `SpeedID`/`IPSpeedID` 的转发
+- 实际 vs 期望：实际——限速器下发失败仅告警"已跳过下发"→转发创建成功，但无任何机制在节点恢复后补下发，转发永久无速限运行。期望——节点恢复后补下发，或创建时直接失败（fail-closed）
+- 影响：P2。用户配置的限速策略被静默绕过（fail-open）；转发可用但不限速。非 P1：有告警（虽不充分）；非 P0：限速≠计费，无直接资金损失
+- 可达性证据：L6 审查员代码逐行确认；全仓 grep 确认无补下发机制
+- 变体扫描：`ensureTrafficLimiterOnNode`（IP 限速）同模式（同修）；`buildConnLimiterConfigs` 的连接数限制走服务定义下发，节点上线重建时自动带上，不受影响
+- 置信度：高
+- 修复（方案 A，fail-closed）：离线/timeout 时直接返回错误"节点 X 不在线，限速无法下发，请稍后重试"，不再告警继续。两处同模式均改。
+- 发现者：R7 L6 对抗性审查员
+
 ### R5R5-001｜P3｜观察（不阻塞）｜geo 数据更新失败无主动告警，仅写 agent 本地日志
 
 - 位置：`go-gost/x/kernel/geodata.go:82`（`logGeo("分流数据更新失败")`）、`:211`（新文件无法启动内核时回滚）、`:221-227`（`logGeo` 仅写 `inst.logs` 本地缓冲）
