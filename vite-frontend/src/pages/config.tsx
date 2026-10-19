@@ -39,6 +39,7 @@ import {
 } from "@/api";
 import { BackIcon, SettingsIcon } from "@/components/icons";
 import { NotifyCard } from "@/pages/config/notify-card";
+import { LatencySettings } from "@/pages/config/latency-card";
 import { ThemeSettings } from "@/components/theme-settings";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
@@ -1694,6 +1695,21 @@ export default function ConfigPage() {
         originalConfigs={originalConfigs}
         onChange={handleConfigChange}
       />
+
+      {/* 移植自 kure29/flyx：延迟测试点配置（仅管理员可见） */}
+      {isAdmin() && (
+        <Card className="mt-6 shadow-md">
+          <CardHeader className="pb-2">
+            <h3 className="text-base font-semibold">延迟测试点</h3>
+            <p className="text-xs text-default-500 mt-1">
+              配置节点测量延迟的参考点，节点页将显示各节点到这些点的延迟
+            </p>
+          </CardHeader>
+          <CardBody>
+            <LatencySettings configs={configs} onChange={handleConfigChange} />
+          </CardBody>
+        </Card>
+      )}
 
       {/* 主题设置 */}
       <div className="mt-6">
