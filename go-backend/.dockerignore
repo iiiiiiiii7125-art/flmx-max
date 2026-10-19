@@ -1,0 +1,9 @@
+# AUDIT-R1 (SCR-013): go-backend 构建上下文瘦身。
+# vite-frontend 有 .dockerignore，go-backend 缺失，`COPY . .` 会把整个
+# 上下文（含 .git 等）送进 builder 层。最终镜像只取 /out/paneld，
+# 此处仅减体积/提速，无密钥泄漏问题。
+.git
+.gitignore
+*.md
+Dockerfile
+.dockerignore
