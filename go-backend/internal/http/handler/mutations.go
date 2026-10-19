@@ -869,11 +869,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 						response.WriteJSON(w, response.ErrDefault(err.Error()))
 						return
 					}
-					domainCfg, _ := h.repo.GetConfigByName("panel_domain")
-					localDomain := ""
-					if domainCfg != nil {
-						localDomain = domainCfg.Value
-					}
+					// R5 C-001: the panel_domain lookup used to go through the
+					// global repo handle here, inside the open SQLite transaction.
+					// With MaxOpenConns(1) that self-deadlocks deterministically.
+					// localDomain was already resolved before BeginTx via
+					// federationLocalDomain(); reuse it instead of querying again.
 					_, err := fc.CreateTunnel(rUrl.String, rToken.String, localDomain, targetProto, targetPort, targetAddr)
 					if err != nil {
 						response.WriteJSON(w, response.ErrDefault("Remote tunnel creation failed: "+err.Error()))
