@@ -409,3 +409,9 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 - 位置：`go-backend/internal/http/handler/handler.go:1569`（`decodeJSON`）→ `backupImport`（:1740）
 - 修复：新增 `decodeJSONWithLimit(body, out, limit)`；`backupImport` 改用 100MB 上限（与 nginx 50m 对齐，仍有界防 DoS）。动态验证：11.74MB 备份通过大小检查（仅因合成数据字段不匹配被拒，符合预期）。
 - 发现者：L6 对抗性审查员
+
+### CON24-001（P3，观察，未修）
+- `ExportAll`（repository.go:1990）的 11 个 `exportXxx()` 为独立查询，未包裹在读事务中。并发 `Import` 事务若在导出中途提交，备份内部可能不一致（跨表快照时点不同）。
+- 触发：管理员 A 导出时管理员 B 恰好导入（苛刻时序）；pre-existing（R22 前亦然）；admin-only 低频；恢复有格式校验。
+- 未修原因：修复需改 11 个 export 方法签名（接受 tx 参数），侵入式；P3 级别不值得。建议后轮评估或记入 accepted-risks。
+- 发现者：R24 并发审计员（动态验证：10 并发操作无死锁，-race 干净）
