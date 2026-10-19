@@ -3,7 +3,7 @@ name: flvx-api
 description: Operate FLVX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management, federation clustering, and traffic monitoring. Use when user wants to manage FLVX panel programmatically or via natural language.
 metadata:
   author: FLVX Team
-  version: "2.1.5"
+  version: "2.1.9-rc4"
   requires_env:
     - FLVX_BASE_URL
     - FLVX_USERNAME
