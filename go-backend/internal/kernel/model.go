@@ -157,7 +157,7 @@ func (in Inbound) Network() string {
 
 const (
 	FlowVision                 = "xtls-rprx-vision"
-	DefaultRealitySNI          = "www.microsoft.com"
+	DefaultRealitySNI          = "www.amd.com"
 	DefaultSSMethod            = "2022-blake3-aes-128-gcm"
 	DefaultFingerprint         = "chrome"
 	DefaultTLSCertMode         = CertModeSelf
