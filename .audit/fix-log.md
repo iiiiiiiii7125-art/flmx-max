@@ -164,3 +164,25 @@
 - 变体扫描：其余约 40 个 `decodeJSON` 调用方（节点导入 ≤1MB、壁纸 2-3MB、联邦/配置/监控小 JSON）均远低于 10MB，无需放宽。备份是唯一 bulk 路径。
 - Pre-fix：动态验证确认 11.44MB 被拒"http: request body too large"；Post-fix：11.74MB 通过大小检查。
 - 回滚：可独立 revert。
+
+## R26 修复（防假收敛阶梯 L1–L6，第四次，目标：通知系统）
+
+### LAD26-001（P2）— 已修复
+- 根因：`notifier.post()`（notify.go:204）零 URL 校验，`http.Client` 默认跟随重定向。管理员可配置 Webhook/TelegramAPIBase 指向内网/元数据地址。
+- 修复：新增 `validateNotifyURL()`——拒绝非 http/https scheme、拒绝云元数据地址（复用 `isMetadataAddress`）；允许内网地址（企业微信/钉钉内网代理为合法场景）。
+- 变体扫描：`sendTelegram` 与 `sendWebhook` 均走 `n.client`→`post()`，已覆盖；全仓 handler 包 5 个 `http.Client` 中仅通知路径需此校验。
+- Pre-fix：L1 代码审查确认零校验；Post-fix：`go build` 通过，通知测试通过。
+- 回滚：可独立 revert。
+
+### LAD26-017（P3）— 已修复
+- 根因：`post()` 的 `http.NewRequestWithContext` 解析错误直接返回含完整 URL 的原始错误（可能带 Telegram bot token），而 `client.Do()` 错误已脱敏。
+- 修复：解析失败返回脱敏的"通知地址无效"。
+- 变体扫描：`post()` 仅 2 个调用点，全经脱敏路径；全仓 notify 路径无 WebhookURL/TelegramToken 日志。
+- 回滚：可独立 revert（与 LAD26-001 同一提交）。
+
+### R5R26-001（P2）— 已修复（L6 退回项）
+- 根因：`validateNotifyURL` 仅校验初始 URL；`n.client` 未设 `CheckRedirect`，Go 默认跟随最多 10 跳且不重新校验。302 到元数据地址可完全绕过 LAD26-001（动态验证确认）。
+- 修复：`n.client` 加 `CheckRedirect`——重定向目标同样走 `validateNotifyURL` 校验；最多 5 跳防重定向环。
+- 变体扫描：`sendTelegram`/`sendWebhook` 均走 `n.client`，已覆盖；DNS rebinding TOCTOU 为 pre-existing 局限，不属本次范围。
+- Pre-fix：动态验证 302→元数据地址被击中；Post-fix：动态验证 302 被拦截（"通知地址指向云元数据服务，已拒绝"）、重定向循环被限制（"通知地址重定向次数过多"）。
+- 回滚：可独立 revert。
