@@ -184,6 +184,30 @@
 - 置信度：高
 - 修复：锁上移到调用方——`inboundSave` 在端口处理前 `AcquirePortAllocLock(row.NodeID)`（新建/更新全覆盖）；`CreateNodeInbound` 去内部锁（防死锁）；`remote_source.go`/`kernel_external.go` 两个外部调用点补锁。回归测试 `TestConcurrentInboundCreateAutoPortNoConflict`（10 并发 HTTP，-race 全绿）。
 
+### F7X-001｜P2｜可达｜订阅凭据下发失败后被记为"已下发"，永不重试（R8 已修复）
+
+- 位置：
+  - `go-backend/internal/http/handler/subscription.go:570` — `s.AppliedActive` 在下发前乐观标记
+  - `go-backend/internal/http/handler/subscription.go:310-312` — `syncSubscriptions` 下发失败仅记日志，仍无条件 `UpdateSubscriptionApplied`
+- 触发条件：停用/删除/到期/流量超限（凭据应被删除的状态变迁）恰好遇到内核下发失败
+- 实际 vs 期望：实际——撤销凭据的操作在单次下发失败后静默失效且无恢复机制；期望——下发失败时不标记 AppliedActive（循环重试）
+- 影响：P2。已泄露/应回收的订阅凭据在节点离线窗口内被停用后，节点恢复后凭据依然有效
+- 可达性证据：F7 审计员代码逐跳链确认
+- 变体扫描：`subscriptionDelete` 同样乐观（DB 记录删除后无跟踪，需独立机制，记为残余风险）；`subscriptionResetTraffic` 走同一根因
+- 修复：`syncSubscriptions` 仅成功时更新；`subscriptionSave` 移除乐观标记，成功后更新
+- 发现者：R8 F7 审计员
+
+### R5R8-001｜P2｜可达｜subscriptionReset 凭据轮换下发失败无重试（R8 已修复）
+
+- 位置：`go-backend/internal/http/handler/subscription.go:625-652` — `subscriptionReset`
+- 触发条件：调用"重置链接"（轮换 Token/UUID/Password）时恰好遇到内核下发失败
+- 实际 vs 期望：实际——DB 有新凭据、节点只有旧凭据，新链接不可用、旧链接继续有效；期望——下发失败时触发重试
+- 影响：P2。违反 F7.14"重置链接后旧链接立即失效"；已泄露链接的应急吊销在离线窗口内失效
+- 可达性证据：R5 复核员代码逐跳链确认
+- 变体扫描：`subscriptionSave`/`syncSubscriptions` 已由 F7X-001 修复（active 状态路径）；本变体为凭据轮换路径
+- 修复（方案 A）：下发失败时 `UpdateSubscriptionApplied(s.ID, -1)` 强制标记需同步，循环重试；成功后恢复正常值
+- 发现者：R8 R5 复核员（退回项）
+
 ### R5R7-001｜P2｜可达｜限速 fail-open（R7 已修复）｜节点离线时创建的限速转发永不下发限速器
 
 - 位置：
