@@ -412,7 +412,8 @@ func (h *Handler) removeInboundRelays(inboundID int64) {
 func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint, []string) {
 	relays, err := h.relayViews(0)
 	if err != nil {
-		log.Printf("relay lookup failed: %v", err)
+		// M-003：中转视图查询失败会导致所有中转端点静默丢失，必须记录
+		log.Printf("inboundEndpoints: relayViews failed, relay endpoints will be missing: %v", err)
 	}
 	byInbound := make(map[int64][]relayView)
 	for _, rel := range relays {
@@ -428,11 +429,18 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		}
 		in, err := inboundFromModel(row)
 		if err != nil {
+			// M-002/M-003：入站解析失败会导致该入站从所有订阅中消失，必须记录
+			// 旧逻辑：静默 continue，管理员无从察觉
+			log.Printf("inboundEndpoints: inboundFromModel failed for inbound ID %d (node %d), skipping: %v", row.ID, row.NodeID, err)
 			continue
 		}
 		node, ok := nodes[row.NodeID]
 		if !ok {
-			node, _ = h.repo.GetNodeByID(row.NodeID)
+			var err error
+			node, err = h.repo.GetNodeByID(row.NodeID)
+			if err != nil {
+				log.Printf("inboundEndpoints: GetNodeByID failed for node %d: %v", row.NodeID, err)
+			}
 			nodes[row.NodeID] = node
 		}
 		proxy := importedProxy(&row)

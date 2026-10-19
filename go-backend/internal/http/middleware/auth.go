@@ -204,6 +204,10 @@ func requiresAdmin(path string) bool {
 		return true
 	case "/api/v1/announcement/update":
 		return true
+	// J-001: /user-inbound/list 与 /set 读写任意用户的订阅分配，须仅管理员可调用
+	// /user-inbound/mine 为普通用户自己的订阅，保持开放
+	case "/api/v1/user-inbound/list", "/api/v1/user-inbound/set":
+		return true
 	default:
 		return false
 	}

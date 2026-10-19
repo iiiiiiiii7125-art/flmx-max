@@ -80,8 +80,14 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		raw.bytesOut += item.U
 		batch.forwardTraffic[forwardID] = raw
 
-		scaledIn := int64(float64(item.D)*meta.TrafficRatio) * meta.TunnelFlow
-		scaledOut := int64(float64(item.U)*meta.TrafficRatio) * meta.TunnelFlow
+		// Flow=1 单向：仅上传；Flow=2 双向：上传+下载
+		// 历史 bug：曾把 Flow 当乘数用，导致 Flow=2 双倍扣费
+		// 注意：item.U=上传，item.D=下载；InFlow 对应下载，OutFlow 对应上传
+		var scaledIn int64
+		scaledOut := int64(float64(item.U) * meta.TrafficRatio)
+		if meta.TunnelFlow != 1 {
+			scaledIn = int64(float64(item.D) * meta.TrafficRatio)
+		}
 		if idx, ok := flowSeen[forwardID]; ok {
 			batch.flowDeltas[idx].InFlow += scaledIn
 			batch.flowDeltas[idx].OutFlow += scaledOut

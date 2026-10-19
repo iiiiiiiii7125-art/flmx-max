@@ -286,10 +286,12 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 
 	for i, id := range req.IDs {
+		// L-001：先获取信号量再启动 goroutine，避免大量 IDs 时 goroutine 数 = IDs 数导致内存 spike
+		// 旧逻辑：先启动所有 goroutine，信号量在内部限制并发，1000 个 IDs 就创建 1000 个 goroutine
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(index int, nodeID int64) {
 			defer wg.Done()
-			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			result, err := h.wsServer.SendCommand(nodeID, "UpgradeAgent", map[string]interface{}{

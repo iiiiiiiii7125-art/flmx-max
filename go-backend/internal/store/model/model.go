@@ -622,6 +622,7 @@ type NodeBackup struct {
 	RemoteToken   string `json:"remoteToken,omitempty"`
 	RemoteConfig  string `json:"remoteConfig,omitempty"`
 	LatencyTargets string `json:"latencyTargets,omitempty"`
+	ForwardMode   string `json:"forwardMode,omitempty"`
 }
 
 type TunnelBackup struct {
