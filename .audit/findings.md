@@ -155,6 +155,15 @@
 - 置信度：高（动态复现）
 - 修复：写文件前 `mkdir -p /etc/caddy`（commit `AUDIT-R1: SCR-018`）
 
+### R5R1-001｜P3｜体验（R1 已修复）｜SCR-008 端口校验对前导零输入打印 bash 八进制报错但仍接受
+
+- 位置：`panel_install.sh`（`get_config_params`，commit 12dc28c）
+- 触发条件：安装时输入 `080` 等前导零端口
+- 实际 vs 期望：实际——`(( 080 < 1 ))` 触发 bash "value too great for base" stderr，但 `(( ))` 返回非零使条件判假，端口被接受。期望——静默接受或明确拒绝，不要吓人的报错
+- 影响：纯体验；功能与更新流程一致（更新流程用 `-lt` 同样接受 `080` 为 80）
+- 置信度：高（R5 复核员桩实测）
+- 修复：算术比较加 `10#` 强制十进制（commit `AUDIT-R1: R5R1-001`）
+
 ### SCR-019｜P3｜可达（R1 已修复）｜`setup_domain_proxy` 的 DOMAIN 无字符集校验，非法输入写坏 Caddyfile
 
 - 位置：`panel_install.sh:350`（`read DOMAIN` + `tr -d`）→ 写 Caddyfile 的 heredoc
