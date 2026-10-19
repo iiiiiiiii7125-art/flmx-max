@@ -606,6 +606,10 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoints = filtered
 	}
+	if len(endpoints) == 0 {
+		http.Error(w, "订阅暂无可用节点（入站未启用或中转转发未建立）", http.StatusServiceUnavailable)
+		return
+	}
 	body, contentType, err := kernel.Subscription(format, endpoints, parsePipeline(sub.Options).options())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
