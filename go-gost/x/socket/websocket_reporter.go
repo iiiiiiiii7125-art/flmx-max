@@ -996,6 +996,13 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 		response.Type = "UdpPingResponse"
 		response.Data = udpPingResult
 
+	// 路由追踪（只读，回程线路识别用，移植自 kure29/flyx）
+	case "Traceroute":
+		var traceResult TracerouteResponse
+		traceResult, err = w.handleTraceroute(cmd.Data)
+		response.Type = "TracerouteResponse"
+		response.Data = traceResult
+
 	// Service monitor check (read-only)
 	case "ServiceMonitorCheck":
 		var checkResult ServiceMonitorCheckResult

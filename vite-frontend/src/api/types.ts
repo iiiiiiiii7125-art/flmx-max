@@ -873,3 +873,25 @@ export interface SubInfoApiData {
   token: string;
   path: string;
 }
+
+/** 回程路由追踪的一跳。 */
+export interface NodeRouteHop {
+  ttl: number;
+  ip?: string;
+  rttMs?: number;
+  /** 所属骨干网：CN2、163、4837、9929、CMI。 */
+  net?: string;
+}
+
+export interface NodeRoutePoint {
+  name: string;
+  route?: string;
+  reached: boolean;
+  hops?: NodeRouteHop[];
+  error?: string;
+}
+
+export interface NodeRoute {
+  checkedAt: number;
+  points: NodeRoutePoint[];
+}

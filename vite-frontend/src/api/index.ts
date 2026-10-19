@@ -55,6 +55,7 @@ import type {
   InboundShareEntry,
   InboundRelayApiItem,
   SubInfoApiData,
+  NodeRoute,
 } from "./types";
 
 import axios from "axios";
@@ -895,4 +896,14 @@ export const nodeTune = (
     "/node/tune",
     { id, action, groups },
     { timeout: 40 * 1000 },
+  );
+/** 节点到延迟测试点的回程路由追踪结果。 */
+export const getNodeRoute = (id: number) =>
+  Network.post<NodeRoute | null>("/node/route", { id });
+/** 立即追踪节点回程路由（逐个测试点）。 */
+export const probeNodeRoute = (id: number) =>
+  Network.post<NodeRoute | null>(
+    "/node/route/probe",
+    { id },
+    { timeout: 300000 },
   );
