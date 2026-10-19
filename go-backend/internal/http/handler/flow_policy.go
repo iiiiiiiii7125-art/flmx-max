@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go-backend/internal/store/model"
 )
 
 const bytesPerGB int64 = 1024 * 1024 * 1024
@@ -410,10 +412,56 @@ func (h *Handler) pauseUserTunnelForwards(userID int64, tunnelID int64, now int6
 }
 
 func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
+	// R5-B3 D1-002: 配额超限的 nft 转发必须真正移除规则。原实现只调了 gost 的
+	// controlForwardServices，nft 规则残留导致继续产生流量、继续扣配额。
+	// R1: 按入口节点聚合，每节点只 reconcile 一次，每节点 30s 总超时，
+	// 超时记 gap 并继续下一节点；不无限阻塞采集循环。
+	nftGroups := make(map[int64][]int64)
 	for i := range forwards {
-		forward := forwards[i]
-		_ = h.controlForwardServices(&forward, "PauseService", false)
-		_ = h.repo.UpdateForwardStatus(forward.ID, 0, now)
+		forward := &forwards[i]
+		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
+		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward.ID)
+			continue
+		}
+		if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
+			log.Printf("quota pause failed op=dplane forward_id=%d err=%v", forward.ID, err)
+			continue
+		}
+		if err := h.repo.UpdateForwardStatus(forward.ID, model.ForwardStatusPaused, now); err != nil {
+			log.Printf("quota pause failed op=db_write forward_id=%d err=%v", forward.ID, err)
+		}
+	}
+	for nodeID, ids := range nftGroups {
+		exclude := make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			exclude[id] = true
+		}
+		// D6: 先 reconcile（plan 不含这些转发），成功后再写 DB。
+		if !h.reconcileNodeWithTimeout(nodeID, exclude, nil, 30*time.Second) {
+			log.Printf("quota pause gap node_id=%d forward_ids=%v reason=reconcile_timeout_or_error", nodeID, ids)
+			continue
+		}
+		for _, id := range ids {
+			if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusPaused, now); err != nil {
+				log.Printf("quota pause failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
+			}
+		}
+	}
+}
+
+// reconcileNodeWithTimeout 按节点执行一次带总超时的 reconcile（R1）。
+// 成功返回 true；超时或失败返回 false（调用方记 gap 并继续）。
+func (h *Handler) reconcileNodeWithTimeout(nodeID int64, exclude map[int64]bool, include []*forwardRecord, timeout time.Duration) bool {
+	done := make(chan error, 1)
+	go func() {
+		done <- h.syncNftablesNodeWithOverrides(nodeID, exclude, include)
+	}()
+	select {
+	case err := <-done:
+		return err == nil
+	case <-time.After(timeout):
+		return false
 	}
 }
 
