@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/store/repo"
 )
 
 const (
@@ -115,8 +116,10 @@ type systemUpgradeVersionData struct {
 	Channel        string                      `json:"channel"`
 	Reason         string                      `json:"reason,omitempty"`
 	Capability     systemUpgradeCapabilityData `json:"capability"`
-	// R5-B4C: 待执行的迁移（预检失败时非空）。
-	PendingMigrations []string `json:"pendingMigrations,omitempty"`
+	// R5-B4C: 待执行的迁移（结构化，预检失败时非空）。
+	PendingMigrations *repo.PendingMigrationStatus `json:"pendingMigrations,omitempty"`
+	// 修正 A：需要人工补建管理员。
+	AdminBootstrapRequired bool `json:"adminBootstrapRequired,omitempty"`
 }
 
 type systemUpgradeCheckData struct {
@@ -597,8 +600,12 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 	capability := exec.capability(r.Context())
 	latest, err := h.resolveSystemUpgradeLatestReleaseByChannel(channel)
 	data := systemUpgradeVersionResponse(current, channel, latest, err, capability)
-	// R5-B4C: 暴露待执行迁移状态。
-	data.PendingMigrations = h.repo.PendingMigrations()
+	// R5-B4C: 暴露待执行迁移状态（结构化）。
+	if pm := h.repo.GetPendingMigrationStatus(); pm.Required {
+		data.PendingMigrations = pm
+	}
+	// 修正 A：管理员补建状态。
+	data.AdminBootstrapRequired = repo.IsAdminBootstrapRequired()
 	response.WriteJSON(w, response.OK(data))
 }
 

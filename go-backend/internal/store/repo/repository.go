@@ -492,6 +492,15 @@ func prepareSQLiteNftablesColumns(db *gorm.DB) error {
 	return nil
 }
 
+// adminBootstrapRequired: id=1 缺失且 admin@user 被占用时为 true。
+// 面板无管理员账号，需人工处理（不得自动提权）。
+var adminBootstrapRequired = false
+
+// IsAdminBootstrapRequired 返回是否需要人工补建管理员。
+func IsAdminBootstrapRequired() bool {
+	return adminBootstrapRequired
+}
+
 func seedData(db *gorm.DB) {
 	var adminCount int64
 	if err := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error; err == nil && adminCount == 0 {
@@ -499,7 +508,10 @@ func seedData(db *gorm.DB) {
 		var nameCount int64
 		db.Model(&model.User{}).Where("\"user\" = ?", "admin@user").Count(&nameCount)
 		if nameCount > 0 {
-			log.Printf("seed skipped: username admin@user already taken by another user")
+			// 修正 A：不得静默跳过。ERROR 日志 + API 状态可见。
+			adminBootstrapRequired = true
+			log.Printf("ERROR: seed skipped: id=1 missing and username admin@user already taken. " +
+				"面板缺少管理员账号，需人工处理（不得自动提权）。")
 		} else {
 			adminPwd, err := security.HashPassword("admin@user")
 			if err != nil {
