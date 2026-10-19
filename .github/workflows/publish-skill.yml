@@ -3,7 +3,9 @@ name: Publish Skill to npm
 on:
   push:
     tags:
-      - 'v*'
+      # AUDIT-R1 (SCR-001): 与仓库纯数字 tag 发版惯例对齐（docker-build.yml 用 '[0-9]*'）。
+      # 原 'v*' 触发器下该 workflow 永远不运行，skill 自动发布链死亡。
+      - '[0-9]*'
   workflow_dispatch:
 
 jobs:
@@ -28,10 +30,18 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION=$(node -p "require('./skills/flvx-api/package.json').version")
           else
-            VERSION="${GITHUB_REF#refs/tags/v}"
+            # AUDIT-R1 (SCR-001): 纯数字 tag（如 1.0.2）没有 v 前缀，
+            # 原 "${GITHUB_REF#refs/tags/v}" 剥不掉前缀，会得到完整 ref。
+            VERSION="${GITHUB_REF#refs/tags/}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing skill version: $VERSION"
+
+      - name: Sync package.json version with tag
+        # AUDIT-R1 (SCR-001): 原流程算出 version 却从不写回 package.json，
+        # npm publish 发布的是写死的版本号，与 tag 脱钩。
+        working-directory: skills/flvx-api
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Publish to npm
         working-directory: skills/flvx-api
@@ -43,6 +53,6 @@ jobs:
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v1
         with:
-          name: Skill v${{ steps.version.outputs.version }}
+          name: Skill ${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: skills/flvx-api/package.json
