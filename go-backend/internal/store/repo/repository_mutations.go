@@ -419,6 +419,19 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NftCounterState{}).Error; err != nil {
 			return err
 		}
+		// AUDIT-R18 (DAT18-003): NftPendingDelete（node_id），与 DeleteForwardCascade
+		// 的 R5-B3 D1-001 补充保持一致，避免孤儿 pending 行触发不必要 reconcile。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NftPendingDelete{}).Error; err != nil {
+			return err
+		}
+		// AUDIT-R18 (DAT18-003): 节点侧服务监控（NodeID>0）与监控结果，
+		// 删除节点后残留会持续产生"节点不在线"失败记录。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ServiceMonitor{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ServiceMonitorResult{}).Error; err != nil {
+			return err
+		}
 		// C-006: 指标。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeMetric{}).Error; err != nil {
 			return err
@@ -428,6 +441,15 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		}
 		// C-007: peer share。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareRuntime{}).Error; err != nil {
+			return err
+		}
+		// AUDIT-R18 (R5R18-001): PeerShare 与 PeerShareResource（node_id），
+		// 与 C-007 的 PeerShareRuntime 清理保持一致。已删节点的 share token
+		// 在 GetPeerShareByToken 中不校验节点存在性，残留即未吊销。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareResource{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShare{}).Error; err != nil {
 			return err
 		}
 		// C-008: 订阅计数器。
@@ -695,6 +717,11 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
 			return err
 		}
+		// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
+		// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致。
+		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.Forward{}).Error; err != nil {
 			return err
 		}
@@ -720,6 +747,10 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 			return err
 		}
 		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
+			return err
+		}
+		// AUDIT-R18 (DAT18-002): 隧道质量探测历史（tunnel_id 索引）。
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
