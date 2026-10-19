@@ -984,6 +984,11 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 		response.Data = tcpPingResult
 		// needSaveConfig = false (默认值)
 
+	// 节点调优：读取 / 应用 sysctl 网络参数（移植自 kure29/flyx）
+	case "TuneStatus", "TuneApply":
+		response.Type = cmd.Type + "Response"
+		response.Data, err = handleTuneCommand(cmd.Type, cmd.Data)
+
 	// UDP Ping 诊断命令（只读，不需要保存配置）
 	case "UdpPing":
 		var udpPingResult TcpPingResponse
