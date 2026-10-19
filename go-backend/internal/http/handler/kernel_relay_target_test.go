@@ -24,7 +24,7 @@ func seedRelayTargetNode(t *testing.T, r *repo.Repository, name, ip string) int6
 	return id
 }
 
-func seedRelayTargetTunnel(t *testing.T, r *repo.Repository, name string, entry int64, exits ...int64) int64 {
+func seedRelayTargetTunnel(t *testing.T, r *repo.Repository, name string, entry int64, exitPort int, exits ...int64) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
 	if err := r.DB().Exec(`
@@ -40,7 +40,9 @@ func seedRelayTargetTunnel(t *testing.T, r *repo.Repository, name string, entry 
 		t.Fatal(err)
 	}
 	for _, exit := range exits {
-		if err := r.DB().Exec(`INSERT INTO chain_tunnel(tunnel_id, chain_type, node_id, port, strategy, inx, protocol) VALUES(?, 3, ?, 31000, 'round', 1, 'tcp')`, id, exit).Error; err != nil {
+		// AUDIT-R1 (TST-004): 出口端口按隧道区分。chain_tunnel(node_id,port) 唯一索引
+		//（批次 4，符合 §1.1 冲突域=同节点+同端口）下，多条隧道不可共用同一出口端口。
+		if err := r.DB().Exec(`INSERT INTO chain_tunnel(tunnel_id, chain_type, node_id, port, strategy, inx, protocol) VALUES(?, 3, ?, ?, 'round', 1, 'tcp')`, id, exit, exitPort).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,9 +63,9 @@ func TestRelayTargetTunnelThroughIX(t *testing.T) {
 	ix := seedRelayTargetNode(t, r, "ix", "198.51.100.2")
 	landing := seedRelayTargetNode(t, r, "landing", "203.0.113.10")
 
-	viaIX := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "via-ix", front, ix), Type: 2}
-	direct := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "direct", front, landing), Type: 2}
-	mixed := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "mixed", front, landing, ix), Type: 2}
+	viaIX := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "via-ix", front, 31000, ix), Type: 2}
+	direct := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "direct", front, 31001, landing), Type: 2}
+	mixed := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "mixed", front, 31002, landing, ix), Type: 2}
 
 	public := &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443}
 	local := &model.NodeInbound{NodeID: landing, Listen: "127.0.0.1", Port: 444}

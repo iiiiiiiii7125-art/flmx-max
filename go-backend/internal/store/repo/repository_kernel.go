@@ -102,10 +102,9 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 		if err := tx.Where("kernel_id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
 			return err
 		}
-		// R5-B7: 清理 user_inbound 中的悬空 kernel_id。
-		if err := tx.Where("kernel_id = ?", id).Delete(&model.UserInbound{}).Error; err != nil {
-			return err
-		}
+		// AUDIT-R1 (TST-002): 删除 R5-B7 误加的行。UserInbound 模型没有 kernel_id 列
+		//（仅 user_id/inbound_id/relay_id），该删除恒以 "no such column" 失败并回滚
+		// 整个内核删除；NodeInbound 的 kernel_id 已由上一行清理，无悬空可清。
 		return tx.Where("id = ?", id).Delete(&model.NodeKernel{}).Error
 	})
 }
@@ -170,10 +169,9 @@ func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	// R5-B4: per-node 端口分配锁（事务之前获取）。
-	// 锁内禁止网络调用。
-	mu := AcquirePortAllocLock(in.NodeID)
-	defer ReleasePortAllocLock(mu)
+	// AUDIT-R3 (F2X-001): per-node 端口分配锁已上移到调用方
+	//（inboundSave/remote_source/kernel_external），覆盖"检查→插入"
+	// 临界区。此处不再加锁（sync.Mutex 不可重入）。
 	return r.db.Create(in).Error
 }
 

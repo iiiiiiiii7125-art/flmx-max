@@ -49,3 +49,24 @@ func TestA001b_FederationTrustedProxiesOptIn(t *testing.T) {
 		t.Fatalf("bare IP: got %v, want 10.0.0.1", got)
 	}
 }
+
+// AUDIT-R14 (L2 变异 M1)：多条目 XFF 必须从右按 hops 解析。
+// 变异将从右改为从左（entries[0]）后存活，因原测试仅用单条目 XFF。
+// 本测试锁定"从右解析"语义：hops=1 时取最右条目，hops=2 时取倒数第二。
+func TestA001b_FederationXFFMultiEntryFromRight(t *testing.T) {
+	t.Setenv("FLVX_FEDERATION_TRUSTED_PROXIES", "192.168.1.0/24")
+
+	// hops=1：取最右（10.0.0.1），而非最左（1.1.1.1）
+	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+	got := federationClientIP(fedReq("192.168.1.50:1234", "1.1.1.1, 10.0.0.1"))
+	if got == nil || got.String() != "10.0.0.1" {
+		t.Fatalf("hops=1 multi-entry: got %v, want 10.0.0.1 (rightmost)", got)
+	}
+
+	// hops=2：取倒数第二（1.1.1.1）
+	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "2")
+	got = federationClientIP(fedReq("192.168.1.50:1234", "1.1.1.1, 10.0.0.1"))
+	if got == nil || got.String() != "1.1.1.1" {
+		t.Fatalf("hops=2 multi-entry: got %v, want 1.1.1.1 (second from right)", got)
+	}
+}
