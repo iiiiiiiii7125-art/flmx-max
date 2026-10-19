@@ -1369,7 +1369,7 @@ func TestMonitoringPermissionRequired(t *testing.T) {
 	createBody, _ := json.Marshal(map[string]interface{}{
 		"name":        "NonAdmin Monitor",
 		"type":        "tcp",
-		"target":      "127.0.0.1:1",
+		"target":      "8.8.8.8:53",
 		"intervalSec": 60,
 		"timeoutSec":  5,
 		"nodeId":      0,
