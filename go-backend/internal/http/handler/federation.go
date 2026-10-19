@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
 	"net/http"
 	"net/url"
 	"sort"
@@ -822,12 +824,14 @@ func (h *Handler) authPeer(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if strings.TrimSpace(share.AllowedIPs) != "" {
-			clientIP := resolvePeerClientIP(r)
+			clientIP := federationClientIP(r)
 			if clientIP == nil {
 				response.WriteJSON(w, response.Err(403, "Unable to determine client IP"))
 				return
 			}
 			if !isPeerIPAllowed(clientIP, share.AllowedIPs) {
+				// R5-B2 D5: 拒绝时记录取证信息（解析后 IP、原始头、命中规则）
+				log.Printf("federation peer denied ip=%s xff=%q allowed=%q", clientIP.String(), r.Header.Get("X-Forwarded-For"), strings.TrimSpace(share.AllowedIPs))
 				response.WriteJSON(w, response.Err(403, "IP not allowed"))
 				return
 			}
@@ -1752,32 +1756,78 @@ func normalizePeerShareAllowedIPs(raw string) (string, error) {
 	return strings.Join(normalized, ","), nil
 }
 
-func resolvePeerClientIP(r *http.Request) net.IP {
+// federationClientIP 联邦侧客户端 IP 解析（D5）。
+//
+// 与浏览器侧（loginClientIP）是两种信任模型，分开实现、不共用函数：
+// 面板↔面板是机器对机器通信，默认只信任 r.RemoteAddr（直连对端 IP）。
+// 只有当显式配置 FLVX_FEDERATION_TRUSTED_PROXIES（逗号分隔 CIDR）且
+// RemoteAddr 落在其内时，才从右按 FLVX_TRUSTED_PROXY_HOPS 解析 XFF。
+// 把私网 RemoteAddr 一律视为可信代理，会让任意私网对端伪造 XFF 绕过
+// AllowedIPs 白名单——这正是旧 resolvePeerClientIP 的缺陷。
+func federationClientIP(r *http.Request) net.IP {
 	if r == nil {
 		return nil
 	}
-
 	remoteIP := parseIPLiteral(r.RemoteAddr)
-	if isTrustedProxyIP(remoteIP) {
-		if ip := parseForwardedFor(r.Header.Get("X-Forwarded-For")); ip != nil {
-			return ip
-		}
-		if ip := parseIPLiteral(r.Header.Get("X-Real-IP")); ip != nil {
-			return ip
-		}
+	if remoteIP == nil {
+		return nil
 	}
-
+	for _, cidr := range federationTrustedProxyCIDRs() {
+		if !cidr.Contains(remoteIP) {
+			continue
+		}
+		hops := TrustedProxyHops()
+		if hops <= 0 {
+			return remoteIP
+		}
+		entries := splitXFFEntries(r.Header.Get("X-Forwarded-For"))
+		if len(entries) >= hops {
+			if ip := parseIPLiteral(entries[len(entries)-hops]); ip != nil {
+				return ip
+			}
+		}
+		// XFF 缺失或选中条目非法：回退到 RemoteAddr，不信任整条链
+		return remoteIP
+	}
 	return remoteIP
 }
 
-func parseForwardedFor(raw string) net.IP {
-	for _, part := range strings.Split(raw, ",") {
-		if ip := parseIPLiteral(part); ip != nil {
-			return ip
-		}
+// federationTrustedProxyCIDRs 解析 FLVX_FEDERATION_TRUSTED_PROXIES。
+// 未配置或解析失败时返回空（= 默认只用 RemoteAddr）。
+func federationTrustedProxyCIDRs() []*net.IPNet {
+	raw := strings.TrimSpace(os.Getenv("FLVX_FEDERATION_TRUSTED_PROXIES"))
+	if raw == "" {
+		return nil
 	}
-	return nil
+	var out []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			// 裸 IP 视为 /32（或 /128）
+			if ip := net.ParseIP(part); ip != nil {
+				bits := 32
+				if ip.To4() == nil {
+					bits = 128
+				}
+				out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+				continue
+			}
+			log.Printf("warning: invalid FLVX_FEDERATION_TRUSTED_PROXIES entry %q, skipped", part)
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(part)
+		if err != nil {
+			log.Printf("warning: invalid FLVX_FEDERATION_TRUSTED_PROXIES entry %q, skipped", part)
+			continue
+		}
+		out = append(out, cidr)
+	}
+	return out
 }
+
 
 func parseIPLiteral(raw string) net.IP {
 	value := strings.Trim(strings.TrimSpace(raw), "\"")
