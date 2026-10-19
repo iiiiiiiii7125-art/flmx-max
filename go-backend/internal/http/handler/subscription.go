@@ -755,7 +755,19 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs)}
 	source := h.subEndpoints(draft, rows)
-	result := kernel.ApplySubOptions(source, req.Options.options())
+	opts := req.Options.options()
+	// O4-001：预览时检查脚本错误，失败时返回给前端（之前静默忽略）
+	// ApplySubOptions 在脚本失败时保留其他步骤结果，需显式调用 SubScriptError 获取错误
+	if scriptErr := kernel.SubScriptError(source, opts); scriptErr != nil {
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"items":       []subPreviewItem{},
+			"total":       len(source),
+			"dropped":     len(source),
+			"scriptError": scriptErr.Error(),
+		}))
+		return
+	}
+	result := kernel.ApplySubOptions(source, opts)
 	items := make([]subPreviewItem, 0, len(result))
 	for _, e := range result {
 		line := "relay"

@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,6 +167,44 @@ func currentPanelVersion() string {
 	return version
 }
 
+// compareVersions 比较两个版本号（如 "1.0.7"）。
+// 返回 -1 表示 v1 < v2，0 表示相等，1 表示 v1 > v2。
+// O9-001：用于升级前防止静默降级。
+func compareVersions(v1, v2 string) int {
+	// "dev" 视为最低版本，允许升级到任何正式版本
+	if v1 == "dev" && v2 == "dev" {
+		return 0
+	}
+	if v1 == "dev" {
+		return -1
+	}
+	if v2 == "dev" {
+		return 1
+	}
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+	for i := 0; i < maxLen; i++ {
+		var n1, n2 int
+		if i < len(parts1) {
+			n1, _ = strconv.Atoi(strings.TrimSpace(parts1[i]))
+		}
+		if i < len(parts2) {
+			n2, _ = strconv.Atoi(strings.TrimSpace(parts2[i]))
+		}
+		if n1 < n2 {
+			return -1
+		}
+		if n1 > n2 {
+			return 1
+		}
+	}
+	return 0
+}
+
 func validateBackendContainerName(value string) error {
 	if value == "" {
 		return fmt.Errorf("backend container name is empty")
@@ -252,6 +292,21 @@ func (e *systemUpgradeExecutor) helperScript() string {
 LOGFILE="$PANEL_DEPLOY_DIR/upgrade.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
 
+# O9-002：失败时自动恢复备份文件
+# 旧逻辑：pull/up 失败时直接 exit 1，已替换的 compose.yml/.env 不恢复，面板无法启动
+rollback() {
+  log "升级失败，正在回滚..."
+  if [ -f docker-compose.yml.upgrade.bak ]; then
+    cp docker-compose.yml.upgrade.bak docker-compose.yml
+    log "已恢复 docker-compose.yml"
+  fi
+  if [ -f .env.upgrade.bak ]; then
+    cp .env.upgrade.bak .env
+    log "已恢复 .env"
+  fi
+  log "回滚完成，请检查 upgrade.log 并手动处理"
+}
+
 cd "$PANEL_DEPLOY_DIR"
 echo "" > "$LOGFILE"
 log "开始面板升级"
@@ -270,6 +325,7 @@ fi
 log "拉取新镜像..."
 if ! docker compose pull backend frontend >> "$LOGFILE" 2>&1; then
   log "错误: 拉取镜像失败"
+  rollback
   exit 1
 fi
 
@@ -279,10 +335,13 @@ sleep 3
 log "重启服务（force-recreate）..."
 if ! docker compose up -d --force-recreate --remove-orphans backend frontend >> "$LOGFILE" 2>&1; then
   log "错误: 重启服务失败"
+  rollback
   exit 1
 fi
 
 log "升级完成"
+# 升级成功，清理备份文件
+rm -f docker-compose.yml.upgrade.bak .env.upgrade.bak
 `
 }
 
@@ -678,6 +737,16 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 			return
 		}
+	}
+	// O9-001：升级前比较目标版本与当前版本，防止静默降级
+	// 旧逻辑：接受任意版本号直接下载升级，允许降级到旧版本
+	currentVer := currentPanelVersion()
+	if cmp := compareVersions(version, currentVer); cmp < 0 {
+		log.Printf("systemUpgrade: 拒绝降级请求，目标版本 %s 低于当前版本 %s", version, currentVer)
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("目标版本 %s 低于当前版本 %s，不允许降级。如确需降级请手动操作。", version, currentVer)))
+		return
+	} else if cmp == 0 {
+		log.Printf("systemUpgrade: 目标版本 %s 与当前版本相同", version)
 	}
 	imageID, err := exec.currentBackendImage(r.Context())
 	if err != nil {

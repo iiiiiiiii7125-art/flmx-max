@@ -192,6 +192,11 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := tx.Where("user_id = ?", userID).Delete(&model.MonitorPermission{}).Error; err != nil {
 			return err
 		}
+		// O5-001：删除用户时清理 user_inbound，否则残留孤儿数据。
+		// 参考 repository_kernel.go 删除入站/中转时的清理模式。
+		if err := tx.Where("user_id = ?", userID).Delete(&model.UserInbound{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", userID).Delete(&model.User{}).Error
 	})
 }

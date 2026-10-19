@@ -1734,9 +1734,31 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cleanupTunnelRuntime(id)
+	// O3-001：删除前收集受影响的入站 ID（隧道删除会级联删除 NodeInboundRelay）。
+	// 参考中转删除时的 h.refreshInboundWhitelist(rel.InboundID) 调用。
+	var affectedInboundIDs []int64
+	if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
+		seen := make(map[int64]struct{})
+		for _, fwd := range forwards {
+			if rels, err := h.repo.ListNodeInboundRelays(); err == nil {
+				for _, rel := range rels {
+					if rel.ForwardID == fwd.ID {
+						if _, ok := seen[rel.InboundID]; !ok {
+							seen[rel.InboundID] = struct{}{}
+							affectedInboundIDs = append(affectedInboundIDs, rel.InboundID)
+						}
+					}
+				}
+			}
+		}
+	}
 	if err := h.deleteTunnelByID(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	// O3-001：删除后刷新受影响入站的白名单。
+	for _, inboundID := range affectedInboundIDs {
+		h.refreshInboundWhitelist(inboundID)
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -2271,6 +2293,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	if port <= 0 {
 		port = 10000
 	}
+	// O2-001：端口范围校验，防止 inPort=99999 等非法值绕过前端直接写入 DB
+	if port < 1 || port > 65535 {
+		response.WriteJSON(w, response.Err(-1, "端口必须在 1-65535 范围内"))
+		return
+	}
 	entryNodes, _ := h.tunnelEntryNodeIDs(tunnelID)
 	isNftTunnel, _, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {
@@ -2462,6 +2489,11 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		if port <= 0 {
 			port = h.pickTunnelPort(tunnelID)
 		}
+	}
+	// O2-001：端口范围校验，防止 inPort=99999 等非法值绕过前端直接写入 DB
+	if port < 1 || port > 65535 {
+		response.WriteJSON(w, response.Err(-1, "端口必须在 1-65535 范围内"))
+		return
 	}
 	hasInIP := false
 	inIp := ""
