@@ -75,9 +75,17 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 	}
 	samples, err := h.nftablesManager.CollectCounters(context.Background(), sshCfg)
 	if err != nil {
+		// R5-B3 D1-003/D9(a): 表缺失（节点重启）→ 仅投递异步任务，由独立
+		// worker 执行；采集循环立即返回（R2：不在事务内做 SSH+DB）。
+		if isNftTableMissingError(err) {
+			h.enqueueNftAutoReconcile(nodeID, "table_missing")
+		}
 		log.Printf("nftables traffic collection failed op=collect node_id=%d err=%v", nodeID, err)
 		return nil, nil, 0, nil, err
 	}
+	// R5-B3 D1-003/D9(b): 采集成功而最近一次 apply 失败过 → 节点已恢复可达，
+	// 触发自动 reconcile（投递后由 worker 异步执行）。
+	h.checkNftNodeRecovered(nodeID)
 	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=list_states node_id=%d err=%v", nodeID, err)

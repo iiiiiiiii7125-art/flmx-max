@@ -627,6 +627,8 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// R5-B3 D1-003 R3: 节点删除时释放 per-node 锁表条目，避免长期运行后 map 增长。
+	h.releaseNftReconcileLock(id)
 	response.WriteJSON(w, response.OKEmpty())
 }
 

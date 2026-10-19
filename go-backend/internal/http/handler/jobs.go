@@ -21,7 +21,7 @@ func (h *Handler) StartBackgroundJobs() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.jobsCancel = cancel
 	h.jobsStarted = true
-	h.jobsWG.Add(14)
+	h.jobsWG.Add(15)
 	h.jobsMu.Unlock()
 
 	go h.runHourlyStatsLoop(ctx)
@@ -32,6 +32,7 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runTunnelQualityProber(ctx)
 	go h.runNftablesTrafficCollectLoop(ctx)
 	go h.runNftPendingDeleteRetryLoop(ctx)
+	go h.runNftAutoReconcileWorker(ctx)
 	go h.runFederationCleanupRetryLoop(ctx)
 	go h.runKernelStatusLoop(ctx)
 	go h.runExternalProbeLoop(ctx)
