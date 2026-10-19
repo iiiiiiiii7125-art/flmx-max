@@ -236,8 +236,8 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 		Status    int
 	}
 	err := tx.Model(&model.ForwardPort{}).
-		Select("forward.id AS forward_id, forward.name AS name, forward.status AS status").
-		Joins("JOIN forward ON forward.id = forward_port.forward_id").
+		Select("forward_port.forward_id AS forward_id, forward.name AS name, COALESCE(forward.status, 1) AS status").
+		Joins("LEFT JOIN forward ON forward.id = forward_port.forward_id").
 		Where("forward_port.node_id = ? AND forward_port.port = ? AND forward_port.forward_id <> ?",
 			nodeID, port, currentForwardID).
 		Order("forward_port.forward_id ASC").
