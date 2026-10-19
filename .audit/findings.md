@@ -81,14 +81,15 @@
 - 变体扫描：无
 - 置信度：高
 
-### SCR-009｜P3｜潜在｜`configure_docker_ipv6` 的 sed 兜底在单行 JSON daemon.json 上静默无操作
+### SCR-009｜P3｜可达（R1 已修复）｜`configure_docker_ipv6` 的 sed 兜底在单行 JSON daemon.json 上静默无操作
 
 - 位置：`panel_install.sh:305`（`$SUDO_CMD sed -i 's/^{$/{...}/' "$DOCKER_CONFIG"`）
 - 触发条件：`/etc/docker/daemon.json` 存在、无 jq、且为压缩单行 JSON（如 `{"data-root": "…"}`）
 - 实际 vs 期望：实际——正则 `^{$}` 只匹配"整行仅为 `{`" 的情况，单行文件不匹配 → sed 无替换但退出码 0 → 脚本继续"重启 Docker"，IPv6 实际未启用，全程无告警。期望——无匹配时报错或回退提示。
 - 影响：IPv6 未启用但脚本宣称成功
 - 变体扫描：无
-- 置信度：高。替代验证：容器里放单行 daemon.json 跑该函数
+- 置信度：高。**R1 S4 动态复现确认**（T6：单行压缩 JSON + 无 jq → 备份已建但 sed 零匹配、文件逐字节不变，脚本仍打印"重启 Docker 服务"并 exit 0），由"潜在"升级为"可达"
+- 修复：sed 后校验 `"ipv6": true` 是否写入，失败则明确告警（commit `AUDIT-R1: SCR-009`）
 
 ### SCR-010｜P3｜潜在｜测试 sourcing `panel_install.sh` 会触发真实网络自更新；PR 场景可能覆盖测试脚本自身
 
@@ -143,6 +144,26 @@
 - 位置：`ci-build.yml` 用 `setup-go 1.23` 构建声明 `go 1.25.0` 的模块（AGENTS.md 已记录为已知 quirk，靠 GOTOOLCHAIN 自动拉取，脆弱但能工作）；前端 CI node `20.19.0` vs 镜像 `node:22-alpine`。
 - 影响：版本漂移类，建议对齐
 - 置信度：高
+
+### SCR-018｜P3｜可达（R1 已修复）｜`setup_domain_proxy` 写 Caddyfile 前无 `mkdir -p /etc/caddy`
+
+- 位置：`panel_install.sh:393`（`cat > /etc/caddy/Caddyfile <<EOF`）；前置只有 `[ -f … ] && cp` 备份行，无建目录
+- 触发条件：caddy 已安装（`command -v caddy` 通过）但 `/etc/caddy/` 不存在（手动二进制安装、非包管理器安装场景）
+- 实际 vs 期望：实际——`cat: …: No such file or directory`，函数非零退出（S4 T5 桩环境动态复现，首次运行即命中）。期望——先 `mkdir -p /etc/caddy`
+- 影响：菜单 5 在该场景下直接失败；包管理器安装的 caddy 自带该目录，主路径不受影响
+- 变体扫描：同函数备份行同样假设目录存在；`configure_docker_ipv6` 有 `$SUDO_CMD mkdir -p /etc/docker`，做法不一致
+- 置信度：高（动态复现）
+- 修复：写文件前 `mkdir -p /etc/caddy`（commit `AUDIT-R1: SCR-018`）
+
+### SCR-019｜P3｜可达（R1 已修复）｜`setup_domain_proxy` 的 DOMAIN 无字符集校验，非法输入写坏 Caddyfile
+
+- 位置：`panel_install.sh:350`（`read DOMAIN` + `tr -d`）→ 写 Caddyfile 的 heredoc
+- 触发条件：输入含 `$()`/反引号/空格外特殊字符的域名（复制粘贴污染等）
+- 实际 vs 期望：实际——S4 T5 动态证实**不构成命令注入**（bash heredoc 单遍展开，marker 文件未创建），但非法字符串原样写入 Caddyfile（如 `e.com$(touch /tmp/…) {`），caddy 重启失败，脚本返回 1 提示看日志，报错泛化定位绕远。期望——写文件前做字符集校验，非法输入直接拒绝
+- 影响：低（操作者自己输入；失败有处理）
+- 变体扫描：`getent hosts "$DOMAIN"` 引用安全；`echo "https://$DOMAIN"` 仅显示
+- 置信度：高（动态证伪注入、证实写坏路径）
+- 修复：校验 `^[A-Za-z0-9.*-]+$`，非法直接拒绝（commit `AUDIT-R1: SCR-019`）
 
 ### 明确"非缺陷"（基线一致，已验证）
 
