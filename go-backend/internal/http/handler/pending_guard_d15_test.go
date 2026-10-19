@@ -18,7 +18,7 @@ func TestQuotaReleaseDoesNotResurrectPending(t *testing.T) {
 	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-d15", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8001")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8001", 20000)
 
 	// 标记为 pending-delete。
 	nowTime := time.Now()
@@ -51,7 +51,7 @@ func TestActivateNormalPausedStillWorks(t *testing.T) {
 	h := fixture.handler
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-d15b", fixture.nodeID)
-	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8002")
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8002", 20000)
 
 	now := time.Now().UnixMilli()
 	if err := h.repo.UpdateForwardStatus(forward.ID, model.ForwardStatusPaused, now); err != nil {

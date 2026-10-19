@@ -36,9 +36,9 @@
     "installTo": "~/.agents/skills/flvx-api"
   },
   "scripts": {
-    "postinstall": "node -e \"const fs=require('fs');const path=require('path');const target=path.join(process.env.HOME,'.agents','skills','flvx-api');const src=process.cwd();try{fs.mkdirSync(path.dirname(target),{recursive:true});if(fs.existsSync(target)||fs.lstatSync(target).isSymbolicLink()){fs.unlinkSync(target)}fs.symlinkSync(src,target);console.log('✓ Installed to',target)}catch(e){console.error('Manual install: ln -s',src,target)}\"",
+    "postinstall": "node -e \"const fs=require('fs');const path=require('path');const target=path.join(process.env.HOME,'.agents','skills','flvx-api');const src=process.cwd();try{fs.mkdirSync(path.dirname(target),{recursive:true});try{fs.unlinkSync(target)}catch(_){}fs.symlinkSync(src,target);console.log('✓ Installed to',target)}catch(e){console.error('Manual install: ln -s',src,target)}\"",
     "preuninstall": "node -e \"const target=require('path').join(process.env.HOME,'.agents','skills','flvx-api');try{require('fs').unlinkSync(target);console.log('✓ Removed',target)}catch(e){}\"",
-    "link": "node -e \"const fs=require('fs');const path=require('path');const target=path.join(process.env.HOME,'.agents','skills','flvx-api');const src=process.cwd();try{fs.mkdirSync(path.dirname(target),{recursive:true});if(fs.existsSync(target)||fs.lstatSync(target).isSymbolicLink()){fs.unlinkSync(target)}fs.symlinkSync(src,target);console.log('✓ Linked to',target)}catch(e){console.error(e)}\"",
+    "link": "node -e \"const fs=require('fs');const path=require('path');const target=path.join(process.env.HOME,'.agents','skills','flvx-api');const src=process.cwd();try{fs.mkdirSync(path.dirname(target),{recursive:true});try{fs.unlinkSync(target)}catch(_){}fs.symlinkSync(src,target);console.log('✓ Linked to',target)}catch(e){console.error(e)}\"",
     "unlink": "node -e \"const target=require('path').join(process.env.HOME,'.agents','skills','flvx-api');try{require('fs').unlinkSync(target);console.log('✓ Unlinked',target)}catch(e){}\""
   }
 }

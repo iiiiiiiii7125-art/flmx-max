@@ -19,9 +19,12 @@ import (
 //   - 并发场景由唯一约束兜底。
 func ensureUsernameAvailable(tx *gorm.DB, username string, excludeID int64) error {
 	var count int64
+	// AUDIT-R1 (TST-003): 表名不得自带引号。GORM quoter 会对 Table() 参数再做一次
+	// 转义，`"\"user\""` 会生成 `FROM """user"""`（字面名为 "user" 的表），恒报
+	// `no such table: "user"`，导致备份导入用户必失败。GORM 会自行按方言加引号。
 	query := tx.Model(&struct {
 		ID int64
-	}{}).Table("\"user\"").Where("\"user\" = ?", username)
+	}{}).Table("user").Where("\"user\" = ?", username)
 	if excludeID > 0 {
 		query = query.Where("id != ?", excludeID)
 	}
