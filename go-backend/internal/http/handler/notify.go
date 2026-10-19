@@ -236,9 +236,22 @@ func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []by
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.client.Do(req)
 	if err != nil {
+		// AUDIT-R27 (OBS27-001): CheckRedirect 返回的 validateNotifyURL 错误
+		// 不含 URL/token（"通知地址..." 系列），应透出而非脱敏，便于管理员排查。
+		// 其余 Do 错误可能含 URL（含 bot token），继续脱敏。
+		// 注意：不能用 url.Error 类型断言，因参数名 url 遮蔽了 net/url 包；
+		// 改用错误链消息匹配（validateNotifyURL 错误均为"通知地址"开头）。
+		if isNotifyValidationErrorInChain(err) {
+			// 从错误链中提取原始的校验错误
+			for e := err; e != nil; e = errors.Unwrap(e) {
+				if isNotifyValidationError(e) {
+					return 0, nil, e
+				}
+			}
+		}
 		// The error text carries the URL, which holds the bot token.
-		var urlErr interface{ Timeout() bool }
-		if errors.As(err, &urlErr) && urlErr.Timeout() {
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 			return 0, nil, errors.New("请求超时")
 		}
 		return 0, nil, errors.New("无法连接")
@@ -246,6 +259,23 @@ func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []by
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	return resp.StatusCode, raw, nil
+}
+
+// isNotifyValidationError 判断是否为 validateNotifyURL 返回的校验错误。
+// 这类错误信息不含 URL/token（均为"通知地址..."固定文案），可安全透出。
+func isNotifyValidationError(err error) bool {
+	msg := err.Error()
+	return strings.HasPrefix(msg, "通知地址")
+}
+
+// isNotifyValidationErrorInChain 检查错误链中是否包含通知校验错误。
+func isNotifyValidationErrorInChain(err error) bool {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if isNotifyValidationError(e) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateNotifyURL 校验通知 webhook URL，防 SSRF。
