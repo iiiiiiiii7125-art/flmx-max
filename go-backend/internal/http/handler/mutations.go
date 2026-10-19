@@ -5467,7 +5467,16 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 	nftGroups := make(map[int64][]int64)
 	for i := range forwards {
 		f := &forwards[i]
-		if f.Status == model.ForwardStatusPendingDelete {
+		if isForwardPendingDelete(f) {
+			// R5-B5 补充 C 修正：已有 pending 行不跳过，合并进同节点清理批次，
+			// 统一重试时间表（避免分裂）。pending 记录中有 node_id。
+			if pending, err := h.repo.GetNftPendingDelete(f.ID); err == nil && pending != nil {
+				// 加入空批次触发该节点的 reconcile（pending 行会被 plan 排除，
+				// 但 reconcile 会尝试清理残留）。
+				if _, ok := nftGroups[pending.NodeID]; !ok {
+					nftGroups[pending.NodeID] = []int64{}
+				}
+			}
 			continue
 		}
 		if f.Status != model.ForwardStatusActive {
