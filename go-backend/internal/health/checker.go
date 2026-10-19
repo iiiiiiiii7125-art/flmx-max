@@ -386,8 +386,33 @@ func (c *Checker) checkOnNode(m *model.ServiceMonitor, timeoutSec int, timeout t
 
 func (c *Checker) checkTCP(target string, timeout time.Duration, result *model.ServiceMonitorResult) {
 	start := time.Now()
+	fail := func(msg string) {
+		result.LatencyMs = float64(time.Since(start).Milliseconds())
+		result.Success = 0
+		result.ErrorMessage = msg
+	}
 
-	conn, err := net.DialTimeout("tcp", target, timeout)
+	// AUDIT-R2 (F1X-001): 拨号前校验目标（纵深防御，拦截存量坏数据）。
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		fail("目标地址格式错误（应为 host:port）")
+		return
+	}
+	// AUDIT-R2 (R5R2-001): 解析→校验→直接拨已校验的 IP 字面量，
+	// 不再二次解析，消除 validate 与 dial 之间的 DNS TOCTOU 窗口
+	//（参照 H-15 secureFetchDialContext 模式；TCP 无 Host 头语义，直拨 IP 等价）。
+	ips, err := resolveValidatedMonitorIPs(host)
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	var conn net.Conn
+	for _, ip := range ips {
+		conn, err = net.DialTimeout("tcp", net.JoinHostPort(ip.String(), port), timeout)
+		if err == nil {
+			break
+		}
+	}
 	latency := time.Since(start)
 
 	result.LatencyMs = float64(latency.Milliseconds())

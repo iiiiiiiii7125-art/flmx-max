@@ -155,6 +155,29 @@
 - 置信度：高（动态复现）
 - 修复：写文件前 `mkdir -p /etc/caddy`（commit `AUDIT-R1: SCR-018`）
 
+### F1X-001｜P1｜可达｜SSRF（R2 已修复）｜服务监控 TCP 目标 SSRF——低权限监控用户可驱使面板向任意内网地址发起 TCP 连接
+
+- 位置：
+  - `go-backend/internal/http/handler/monitoring.go:417` `monitorServiceCreate`——`target` 仅判空即入库
+  - `go-backend/internal/http/handler/monitoring.go:526` `monitorServiceUpdate`——同样无校验
+  - `go-backend/internal/health/checker.go:387` `checkTCP`——`net.DialTimeout("tcp", target, timeout)` 直接拨号
+  - `go-backend/internal/http/handler/monitoring.go:657` `monitorServiceRun`——立即触发探测并返回 success/latency（oracle）
+- 触发条件：被 admin 授予监控权限的非管理员用户，创建 `{"type":"tcp","target":"<任意host:port>"}` 且不指定 nodeId（面板本机执行），或调 `/api/v1/monitor/services/run`
+- 实际 vs 期望：实际——面板无条件向指定内网目标发起 TCP 连接，返回连通性/时延（内网端口扫描能力）。期望——面板本机执行的探测目标做 SSRF 拦截
+- 影响：低权限用户获得以面板为跳板的内网 TCP 探测能力
+- 可达性证据：F1 审计员端到端动态验证（/tmp 真机启动面板，monuser 创建 127.0.0.1:33571 监控→面板拨号→桩收到连接→run 返回 success）
+- 变体扫描：update 同源同 sink；ICMP 强制要求 nodeId（节点侧，信任边界不同）；隧道质量探测目标为管理员配置；H-15 为另一入口已有 SecureFetch
+- 置信度：高
+- 修复：`health.ValidateMonitorTCPTarget`（创建/修改时校验）+ `checkTCP` 拨号前重验（纵深）；节点侧（nodeId>0）不限制；支持 `FLVX_FETCH_PRIVATE_ALLOWLIST` 放行通道。回归测试：health 单元测试 + contract API 测试。
+
+### R5R2-001｜P3｜加固（R2 已修复）｜checkTCP 的 DNS TOCTOU 窗口
+
+- 位置：`go-backend/internal/health/checker.go` `checkTCP`
+- 问题：先 `ValidateMonitorTCPTarget(target)`（内部 resolve→校验），再 `net.DialTimeout("tcp", target)`（内部再次 resolve→拨号）。两次 resolve 之间若 DNS 变化（需攻击者控制目标域 DNS + 竞态），拨号可指向未校验 IP。
+- 影响：极低（创建时校验已封堵常规路径，本处为纵深加固）
+- 修复：拆出 `resolveValidatedMonitorIPs`，checkTCP 解析→校验→直接拨已校验的 IP 字面量（`net.JoinHostPort(ip.String(), port)`），不再二次解析。参照 H-15 `secureFetchDialContext` 模式。
+- 发现者：R2 R5 复核员（视角：功能契约+并发）
+
 ### R5R1-001｜P3｜体验（R1 已修复）｜SCR-008 端口校验对前导零输入打印 bash 八进制报错但仍接受
 
 - 位置：`panel_install.sh`（`get_config_params`，commit 12dc28c）
