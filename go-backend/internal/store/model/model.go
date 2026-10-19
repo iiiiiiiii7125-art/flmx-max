@@ -95,6 +95,8 @@ type Node struct {
 	RemoteToken             sql.NullString `gorm:"column:remote_token;type:text"`
 	RemoteConfig            sql.NullString `gorm:"column:remote_config;type:text"`
 	ExpiryReminderDismissed int            `gorm:"column:expiry_reminder_dismissed;not null;default:0"`
+	// 移植自 kure29/flyx：节点自选的延迟测试点（JSON），空则跟随全局默认。
+	LatencyTargets string `gorm:"column:latency_targets;type:text;not null;default:''"`
 }
 
 func (Node) TableName() string { return "node" }

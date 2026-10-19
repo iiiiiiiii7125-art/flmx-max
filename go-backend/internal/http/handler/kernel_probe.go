@@ -31,6 +31,8 @@ type externalProbe struct {
 	LatencyMs int64  `json:"latencyMs,omitempty"`
 	Error     string `json:"error,omitempty"`
 	CheckedAt int64  `json:"checkedAt"`
+	// Points 是节点到各延迟测试点的延迟（node_latency.go 移植自 kure29/flyx）。
+	Points []latencyPoint `json:"points,omitempty"`
 }
 
 type externalProbeStore struct {

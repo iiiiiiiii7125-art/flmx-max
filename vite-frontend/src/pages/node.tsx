@@ -65,6 +65,8 @@ import {
   dismissNodeExpiryReminder,
   type ReleaseChannel,
 } from "@/api";
+import type { InboundProbe } from "@/api/types";
+import { LatencyCell } from "@/components/latency-cell";
 import { PageEmptyState, PageLoadingState } from "@/components/page-state";
 import {
   getConnectionStatusMeta,
@@ -93,6 +95,10 @@ interface Node {
   id: number;
   inx?: number;
   name: string;
+  /** 节点到各延迟测试点的延迟（移植自 kure29/flyx）。 */
+  latency?: InboundProbe;
+  /** 节点自选的测试点；null 表示跟随全局默认。 */
+  latencyTargets?: { points: string[]; pinned: string[] } | null;
   remark?: string;
   expiryTime?: number;
   renewalCycle?: NodeRenewalCycle;

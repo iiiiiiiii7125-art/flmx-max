@@ -749,8 +749,26 @@ export interface InboundProbe {
   ok: boolean;
   skipped?: boolean;
   latencyMs?: number;
+  /** 通过节点 agent 探测时的丢包率。 */
+  lossPct?: number;
+  /** 探测发起方（如"浙江移动"）；空表示面板服务器。 */
+  from?: string;
   error?: string;
   checkedAt: number;
+  /** 各测试点的延迟结果（节点延迟功能，移植自 kure29/flyx）。 */
+  points?: InboundProbePoint[];
+}
+
+export interface InboundProbePoint {
+  name: string;
+  /** 在设置中固定显示在卡片上。 */
+  pinned?: boolean;
+  ok: boolean;
+  latencyMs?: number;
+  lossPct?: number;
+  error?: string;
+  /** 到该测试点的回程路由，如"电信 CN2 GIA"（第四批填充）。 */
+  route?: string;
 }
 
 export interface InboundApiItem {
