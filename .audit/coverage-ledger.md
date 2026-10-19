@@ -269,5 +269,27 @@
 | F13.6 | 面板共享（peer share） | 通过 |
 | F13.7 | 联邦（federation） | 通过 |
 
+### 前端逐页（R15+，主视角：功能契约）— 17/17 通过，FEX-002 已修，FEX-001 观察
+
+| # | 页面 | 结论 |
+|---|---|---|
+| FE.1 | dashboard.tsx（仪表盘） | 通过 |
+| FE.2 | node.tsx（节点管理） | 通过 |
+| FE.3 | inbound.tsx（入站管理） | 通过 |
+| FE.4 | forward.tsx（端口转发） | 通过 |
+| FE.5 | tunnel.tsx（隧道/中转） | 通过 |
+| FE.6 | relay.tsx（中转线路） | 通过 |
+| FE.7 | subscription.tsx（订阅管理） | 通过 |
+| FE.8 | my-subscription.tsx（我的订阅） | 通过 |
+| FE.9 | user.tsx（用户管理） | 通过 |
+| FE.10 | group.tsx（用户组） | 通过 |
+| FE.11 | limit.tsx（限速） | 通过 |
+| FE.12 | monitor.tsx（监控） | 通过 |
+| FE.13 | config.tsx（系统配置） | 通过 |
+| FE.14 | panel-sharing.tsx（面板共享） | 通过 |
+| FE.15 | profile.tsx（个人资料） | 通过 |
+| FE.16 | change-password.tsx（修改密码） | 通过 |
+| FE.17 | index.tsx（入口/路由） | 通过 |
+
 
 
