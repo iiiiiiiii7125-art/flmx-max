@@ -143,4 +143,19 @@ sudo systemctl restart caddy
   FRONTEND_PORT=127.0.0.1:6366
   ```
 
+### 登录限流与可信代理跳数
+
+面板的登录限流按客户端真实 IP 生效。当面板前面有反向代理时，后端通过
+`X-Forwarded-For` 从右向左按可信跳数解析真实 IP：
+
+| 你的拓扑 | 跳数设置 |
+|---|---|
+| Caddy → 后端（`panel_install.sh` 默认） | `FLVX_TRUSTED_PROXY_HOPS=1`（默认，可不设） |
+| nginx（frontend 容器）→ 后端（docker 默认） | `1`（默认） |
+| Caddy → nginx → 后端 | `2` |
+
+跳数配少了，限流键会取到伪造的 XFF 条目（限流被绕过）；配多了，
+会取到代理自己的 IP（多用户共享一个桶）。启动日志会打印生效值，
+请核对它与你的实际拓扑一致。面板直连公网（无代理）时忽略 XFF。
+
 升级见 [升级](./upgrade.md)。

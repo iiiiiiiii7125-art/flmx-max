@@ -375,6 +375,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(500, "用户名不能为空"))
 		return
 	}
+	// R5-B2 A-001: 按用户名限流（与 IP 桶独立，对抗轮换 IP 的分布式爆破）。
+	// 无论用户名是否存在都计数，避免用限流行为做用户名枚举。
+	if !h.checkLoginUsernameRateLimit(w, req.Username) {
+		return
+	}
 	if strings.TrimSpace(req.Password) == "" {
 		response.WriteJSON(w, response.Err(500, "密码不能为空"))
 		return
@@ -452,6 +457,8 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requirePasswordChange := req.Username == "admin_user" || req.Password == "admin_user" || req.Username == "admin@user" || req.Password == "admin@user"
+	// R5-B2 A-001: 登录成功，清除该用户名的限流状态（含退避计数）。
+	h.noteLoginUsernameSuccess(req.Username)
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"token":                 token,
 		"name":                  user.User,
