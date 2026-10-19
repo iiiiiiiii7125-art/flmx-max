@@ -41,6 +41,20 @@
 
 ## F1–F14 功能基准（代码审查 + 实际验证）
 
-状态：R0 未开始；从 Round 1 按 R1 覆盖顺序推进（脚本清单 → F14 → F1-F3 → F4 → F5 → F6 → F7 → F8 → F9 → F10 → F11 → F12 → F13 → 前端页面）。
+### F14 数据面 agent（R1，主视角：功能契约）— 8/8 通过，零新增 material 缺陷
 
-详细条目见任务书 §2（F1.1–F14.8 共约 150 条），每条结论填入 rounds/R<N>.md 的功能基准表。
+| 条目 | 结论 | 验证方式 |
+|---|---|---|
+| F14.1 WS 建连鉴权/断线重连 | 通过 | 动态：kill panel→指数退避 1.5s→4.7s→9.4s 重连；wss→ws 回退；未知 secret 403 |
+| F14.2 命令下发 Add/Update/Delete/Pause/Resume | 通过 | 全动态：ss -ltn 端口状态+回环流量+success 响应；非法配置回滚旧服务；Delete 幂等 |
+| F14.3 流量上报累计/加密/重试 | 通过 | 全动态：100KB 上报恰一次；中断 80KB 恢复后 seq=16 一次性上报；AES 解密验证；X-Flvx-Seq 防重放 |
+| F14.4 热加载失败回滚 | 通过 | SIGHUP Reload 失败重放旧配置；WS 路径回滚；kernel Manager 坏配置回滚（13 项 harness） |
+| F14.5 SIGHUP 与 WS 互斥 | 通过 | 同一 LockMutation 串行化；8×HUP+5×Update 并发压测无死锁/panic/泄漏 |
+| F14.6 UDP 会话 TTL/回收 | 通过 | 代码+部分动态；曾疑似 P1（UDP 出口走 TCP）已证伪（沙箱 EPERM 假象）；完整回环受沙箱限制 |
+| F14.7 限流准入精度/并发 | 通过 | 512KB/s 限速 2MB 耗时 3.0s 精确吻合；rate.Limiter+sync.Map 并发安全；-race 全绿 |
+| F14.8 内核进程管理 | 通过 | harness 13 项全过：启动/幂等/回滚/崩溃 4.5s 内重启/0600 持久化/路径穿越拒绝 |
+
+观察（非缺陷）：tcpkill 缺失时仅告警（best-effort）；重连 secret 变更需重启（无密钥轮换功能，符合设计）。
+未验证（环境限制，附替代）：真实 Xray/sing-box/Snell 二进制（假二进制覆盖状态机）；nftables 流量计数（沙箱无 fib，`TestNftScriptPortHopping` 环境性失败）；双实例联邦（超 F14 范围）。
+
+详细条目见任务书 §2（F1.1–F14.8 共约 150 条），F1–F13 从 Round 2 起按覆盖顺序推进，每条结论填入 rounds/R<N>.md 的功能基准表。
