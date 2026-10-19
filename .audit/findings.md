@@ -170,6 +170,31 @@
 - 置信度：高
 - 修复：`health.ValidateMonitorTCPTarget`（创建/修改时校验）+ `checkTCP` 拨号前重验（纵深）；节点侧（nodeId>0）不限制；支持 `FLVX_FETCH_PRIVATE_ALLOWLIST` 放行通道。回归测试：health 单元测试 + contract API 测试。
 
+### F2X-001｜P2｜可达｜并发竞态（R3 已修复）｜入站自动端口分配的检查-插入 TOCTOU（R5-B4 锁放错位置）
+
+- 位置：
+  - `go-backend/internal/http/handler/kernel.go:695-701` `pickFreeInboundPort`（无锁）
+  - `go-backend/internal/http/handler/kernel.go:723-728` `inboundPortConflict`（无锁）
+  - `go-backend/internal/store/repo/repository_kernel.go:173-176` `CreateNodeInbound` 内部才 `AcquirePortAllocLock`（锁获取太晚）
+- 触发条件：同一节点上两个并发 `inboundSave`（新建，`port=0` 走自动分配），恰好挑中同一随机端口
+- 实际 vs 期望：实际——两请求都通过冲突检查，一个撞唯一索引 `idx_node_inbound_node_port`，用户看到 `UNIQUE constraint failed` 裸 DB 错误须手动重试。期望——端口分配在 per-node 锁内原子完成
+- 影响：低（无数据损坏，唯一索引兜底；可重试；概率低）。用户可见功能错误
+- 可达性证据：F2 审计员动态验证（20 协程并发同一 `(node_id,port)` → 1 成功 19 约束失败，-race 通过）
+- 变体扫描：`SaveNodeInbound` 更新路径同源（同修）；隧道路径（mutations.go:836）与转发路径（repository_mutations.go:1443）锁位置正确；仅入站路径错
+- 置信度：高
+- 修复：锁上移到调用方——`inboundSave` 在端口处理前 `AcquirePortAllocLock(row.NodeID)`（新建/更新全覆盖）；`CreateNodeInbound` 去内部锁（防死锁）；`remote_source.go`/`kernel_external.go` 两个外部调用点补锁。回归测试 `TestConcurrentInboundCreateAutoPortNoConflict`（10 并发 HTTP，-race 全绿）。
+
+### R5R3-001｜P3｜可达｜锁范围过大（R3 修复引入，已修复）｜inboundSave 的 per-node 端口锁被 defer 持有穿越节点下发网络调用
+
+- 位置：
+  - `go-backend/internal/http/handler/kernel.go:699-700`（acquire + defer 释放）
+  - `go-backend/internal/http/handler/kernel.go:771-777`（锁内下游：applyKernel / applyChainReferrers / applyChangedTargets）
+  - `applyKernel` → `sendNodeCommandWithTimeout`（control_plane.go:756，网络调用，超时 20s/5min）
+- 实际 vs 期望：实际——锁从端口临界区开始一直持有到函数返回，穿越"下发到节点"的网络调用，同一节点并发入站保存被串行化在网络 I/O 上。期望——DB 写入后即释放锁，下游下发无锁执行；且符合三处"锁内禁止网络调用"的既有声明
+- 影响：P3。无数据正确性问题（串行化是保守方向）；低频操作，实际性能影响有限。但注释与实现矛盾，违反锁的设计契约
+- 修复：defer 改为显式释放——临界区内 8 个提前返回前释放，DB 写入后立即释放（9 个释放点互斥，无双释放）
+- 发现者：R3 R5 复核员（视角：数据一致性+功能契约）；修复后 spot-check 通过
+
 ### R5R2-001｜P3｜加固（R2 已修复）｜checkTCP 的 DNS TOCTOU 窗口
 
 - 位置：`go-backend/internal/health/checker.go` `checkTCP`
