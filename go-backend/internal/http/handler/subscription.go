@@ -571,7 +571,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.UpdatedTime = now.UnixMilli()
 	// AUDIT-R8 (F7X-001): 不再乐观标记 AppliedActive。先保存（保持旧值），
-	// 下发成功后由 respondAfterSubPush 更新；失败则留待 syncSubscriptions 循环重试。
+	// 下发成功后直接更新 AppliedActive；失败则不更新，留待 syncSubscriptions 循环重试。
 	newAppliedActive := boolToInt(isShare(s) && subActive(s, now))
 	if err := h.repo.SaveSubscription(s); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -649,7 +649,16 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 	if isShare(s) {
 		push = subInboundIDs(s, rows)
 	}
-	h.respondAfterSubPush(w, push, h.subscriptionView(s, rows, time.Now()))
+	// AUDIT-R8 (R5R8-001): 凭据轮换后下发失败时，强制标记 AppliedActive=-1（需同步），
+	// 使 syncSubscriptions 循环的 active != AppliedActive 恒成立从而重试。
+	// 成功后恢复正常值。否则旧凭据永不失效（F7.14 承诺被违背）。
+	if err := h.applyKernelsForInbounds(push); err != nil {
+		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, time.Now()), TS: time.Now().UnixMilli()})
+		return
+	}
+	_ = h.repo.UpdateSubscriptionApplied(s.ID, boolToInt(isShare(s) && subActive(s, time.Now())))
+	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, time.Now()), TS: time.Now().UnixMilli()})
 }
 
 // subscriptionResetTraffic zeroes a share subscription's traffic and puts
