@@ -15,7 +15,7 @@ func TestReconcileDrainsCountersBeforeRebuild(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-drain", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7001")
@@ -72,7 +72,7 @@ func TestReconcileDrainFailureDoesNotBlockApply(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{collectErr: errFakeSSHDown}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-draingap", fixture.nodeID)
 	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7002")
@@ -90,7 +90,7 @@ func TestDrainAdvancesBaseline(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-baseline", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:7003")

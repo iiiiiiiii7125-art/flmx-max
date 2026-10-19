@@ -107,7 +107,7 @@ func TestTunnelUpdateRejectsNftablesEntryNodeWhenCapabilityTestFails(t *testing.
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{testErr: errors.New("ssh failed")}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	err := h.validateNftablesTunnelState([]int64{fixture.nodeID})
 	if err == nil {
@@ -122,7 +122,7 @@ func TestSyncForwardServicesWithWarningsUsesNftablesRuntime(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 	seedNftablesSSHConfig(t, h, fixture.nodeID)
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
@@ -149,7 +149,7 @@ func TestNodeNftablesTestEndpointRunsCapabilityCheck(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	seedNftablesSSHConfig(t, fixture.handler, fixture.nodeID)
 	manager := &fakeNftablesManager{}
-	fixture.handler.nftablesManager = manager
+	fixture.handler.nftablesManager = newSerializedNftManager(manager)
 
 	res := postJSONToHandler(t, fixture.handler.nodeNftablesTest, map[string]int64{"nodeId": fixture.nodeID})
 	assertNftablesSuccess(t, res)
@@ -164,7 +164,7 @@ func TestNodeNftablesReconcileEndpointPersistsBindings(t *testing.T) {
 	tunnelID := seedTunnelForNftables(t, fixture.handler, "nft-tunnel", fixture.nodeID)
 	forward := seedForwardForNftables(t, fixture.handler, tunnelID, fixture.nodeID, "203.0.113.9:8080")
 	manager := &fakeNftablesManager{}
-	fixture.handler.nftablesManager = manager
+	fixture.handler.nftablesManager = newSerializedNftManager(manager)
 
 	res := postJSONToHandler(t, fixture.handler.nodeNftablesReconcile, map[string]int64{"nodeId": fixture.nodeID})
 	assertNftablesSuccess(t, res)
@@ -187,7 +187,7 @@ func TestStartBackgroundJobsReconcilesNftablesRulesAtStartup(t *testing.T) {
 	tunnelID := seedTunnelForNftables(t, h, "nft-startup-tunnel", fixture.nodeID)
 	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	h.StartBackgroundJobs()
 	t.Cleanup(h.StopBackgroundJobs)
@@ -203,7 +203,7 @@ func TestStartBackgroundJobsCollectsNftablesTrafficImmediatelyAndUsesFastInterva
 	manager := &fakeNftablesManager{counterSamples: []runtimenft.CounterSample{
 		{ForwardID: fixture.forwardID, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 1000, Packets: 10},
 	}}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	oldInterval := nftablesTrafficCollectInterval
 	nftablesTrafficCollectInterval = 20 * time.Millisecond
@@ -238,7 +238,7 @@ func TestNodeNftablesClearEndpointClearsBindings(t *testing.T) {
 		t.Fatalf("seed binding: %v", err)
 	}
 	manager := &fakeNftablesManager{}
-	fixture.handler.nftablesManager = manager
+	fixture.handler.nftablesManager = newSerializedNftManager(manager)
 
 	res := postJSONToHandler(t, fixture.handler.nodeNftablesClear, map[string]int64{"nodeId": fixture.nodeID})
 	assertNftablesSuccess(t, res)
@@ -405,7 +405,7 @@ func TestForwardDeleteReconcilesNftablesAfterDBDelete(t *testing.T) {
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string]int64{"id": forward.ID})
 	res := httptest.NewRecorder()
@@ -439,7 +439,7 @@ func TestForwardForceDeleteRemovesNftablesBindingAndReconciles(t *testing.T) {
 		t.Fatalf("seed binding: %v", err)
 	}
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string]int64{"id": forward.ID})
 	req.URL.Path = "/api/v1/forward/force-delete"
@@ -468,7 +468,7 @@ func TestForwardBatchDeleteReconcilesNftablesAfterDBDelete(t *testing.T) {
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string][]int64{"ids": {forward.ID}})
 	res := httptest.NewRecorder()
@@ -492,7 +492,7 @@ func TestForwardBatchRedeployUsesNftablesReconcile(t *testing.T) {
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
 	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string][]int64{"ids": {forward.ID}})
 	res := httptest.NewRecorder()
@@ -510,7 +510,7 @@ func TestTunnelBatchRedeployUsesNftablesReconcile(t *testing.T) {
 	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel", fixture.nodeID)
 	seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080")
 	manager := &fakeNftablesManager{}
-	h.nftablesManager = manager
+	h.nftablesManager = newSerializedNftManager(manager)
 
 	req := newAuthenticatedJSONRequest(t, map[string][]int64{"ids": {tunnelID}})
 	res := httptest.NewRecorder()

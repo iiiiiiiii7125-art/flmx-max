@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -29,30 +28,6 @@ const (
 	nftAutoReconcileBaseBackoff = 30 * time.Second
 	nftAutoReconcileMaxBackoff  = 30 * time.Minute
 )
-
-// nftReconcileLockFor 返回 node_id 的 single-flight 锁（R3：按 node_id，
-/// 不用全局锁）。调用方必须 Lock/Unlock 配对使用。
-func (h *Handler) nftReconcileLockFor(nodeID int64) *sync.Mutex {
-	h.nftReconcileMu.Lock()
-	defer h.nftReconcileMu.Unlock()
-	if h.nftReconcileLocks == nil {
-		h.nftReconcileLocks = make(map[int64]*sync.Mutex)
-	}
-	mu, ok := h.nftReconcileLocks[nodeID]
-	if !ok {
-		mu = &sync.Mutex{}
-		h.nftReconcileLocks[nodeID] = mu
-	}
-	return mu
-}
-
-// releaseNftReconcileLock 释放 node_id 的锁表条目（R3：节点删除时调用，
-// 避免长期运行后 map 增长）。仅在确认无进行中 reconcile 时调用。
-func (h *Handler) releaseNftReconcileLock(nodeID int64) {
-	h.nftReconcileMu.Lock()
-	defer h.nftReconcileMu.Unlock()
-	delete(h.nftReconcileLocks, nodeID)
-}
 
 // isNftTableMissingError 判断是否为“表不存在”（节点重启后表丢失，D9(a)）。
 // nft 缺表时的典型错误含 "No such file or directory"。

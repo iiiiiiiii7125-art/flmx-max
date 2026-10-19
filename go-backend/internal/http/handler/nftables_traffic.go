@@ -73,7 +73,7 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		log.Printf("nftables traffic collection failed op=ssh_config node_id=%d err=%v", nodeID, err)
 		return nil, nil, 0, nil, err
 	}
-	samples, err := h.nftablesManager.CollectCounters(context.Background(), sshCfg)
+	samples, err := h.nftablesManager.CollectCounters(context.Background(), nodeID, sshCfg)
 	if err != nil {
 		// R5-B3 D1-003/D9(a): 表缺失（节点重启）→ 仅投递异步任务，由独立
 		// worker 执行；采集循环立即返回（R2：不在事务内做 SSH+DB）。
