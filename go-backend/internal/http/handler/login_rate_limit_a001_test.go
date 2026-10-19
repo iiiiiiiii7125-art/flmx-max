@@ -3,8 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
-	"encoding/json"
-	"net/http/httptest"
+		"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -113,66 +112,54 @@ func TestA001_XFFParsingRobustness(t *testing.T) {
 	}
 }
 
-// 场景 5：同一用户名跨 1000 个不同 IP，用户名限流仍触发。
+// 场景 5（R5-B5 D11-D13）：同一用户名跨 1000 个不同 IP，用户名桶触发信号，
+// 但永不硬拒。D11-D13 要求：用户名桶只升级验证，不拒绝。
 func TestA001_UsernameLimitAcrossIPs(t *testing.T) {
 	resetLoginLimitersForTest()
 	h := &Handler{}
-	blockedAt := -1
+	triggeredAt := -1
 	for i := 0; i < 1000; i++ {
-		w := httptest.NewRecorder()
-		if !h.checkLoginUsernameRateLimit(w, "VictimUser") {
-			blockedAt = i + 1
+		// captcha 未启用场景：触发后收紧 IP，但不返回 429。
+		if h.checkLoginUsernameRateLimit("VictimUser", fmt.Sprintf("10.0.0.%d", i%256), false) {
+			triggeredAt = i + 1
 			break
 		}
 	}
-	if blockedAt == -1 {
-		t.Fatal("username rate limit never triggered across 1000 attempts")
+	if triggeredAt == -1 {
+		t.Fatal("username bucket never triggered across 1000 attempts")
 	}
-	if blockedAt != usernameRateLimitMaxAttempts+1 {
-		t.Fatalf("blocked at attempt %d, want %d", blockedAt, usernameRateLimitMaxAttempts+1)
+	if triggeredAt != usernameRateLimitMaxAttempts+1 {
+		t.Fatalf("triggered at attempt %d, want %d", triggeredAt, usernameRateLimitMaxAttempts+1)
 	}
+	// D11-D13.3: 绝不返回 429（无"锁定"响应）。
+	// checkLoginUsernameRateLimit 不写 ResponseWriter，无 429 可能。
 	// 成功登录后清除
 	h.noteLoginUsernameSuccess("victimuser") // 大小写不敏感
-	w := httptest.NewRecorder()
-	if !h.checkLoginUsernameRateLimit(w, "VictimUser") {
+	if h.checkLoginUsernameRateLimit("VictimUser", "10.0.0.1", false) {
 		t.Fatal("username bucket not cleared after successful login")
 	}
 }
 
-// 场景 5b：退避而非永久锁；错误响应统一。
-func TestA001_UsernameBackoffNotPermanent(t *testing.T) {
+// 场景 5b（R5-B5 D11-D13）：用户名桶触发后，信号持续但永不硬拒。
+// D11-D13 要求：退避只作用于验证强度，不作用于可用性。
+func TestA001_UsernameSignalNotBlock(t *testing.T) {
 	resetLoginLimitersForTest()
 	h := &Handler{}
 	now := time.Now()
-	// 快速打满：31 次后进入退避
+	// 快速打满：触发阈值
 	for i := 0; i < usernameRateLimitMaxAttempts+1; i++ {
-		globalLoginUsernameLimiter.allow("u1", now)
+		globalLoginUsernameLimiter.recordAttempt("u1", now)
 	}
-	w := httptest.NewRecorder()
-	limited := !h.checkLoginUsernameRateLimit(w, "u1")
-	if !limited {
-		t.Fatal("expected username rate limit to trigger during backoff")
+	// 触发后：返回 true（信号），但不写 429。
+	if !h.checkLoginUsernameRateLimit("u1", "192.0.2.1", false) {
+		t.Fatal("expected username bucket to signal triggered")
 	}
-	// 限流信号在信封 body 的 code 字段（HTTP 状态恒为 200，见 response.WriteJSON）
-	var env struct {
-		Code int `json:"code"`
+	// D11-D13.3: 无 429 响应（函数不写 ResponseWriter）。
+	// 窗口过后信号清除
+	future := now.Add(usernameRateLimitWindow + time.Minute)
+	if globalLoginUsernameLimiter.recordAttempt("u1", future) {
+		t.Fatal("username signal should clear after window")
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("decode limit response: %v", err)
-	}
-	if env.Code != 429 {
-		t.Fatalf("want envelope code 429 during backoff, got %d", env.Code)
-	}
-	if w.Header().Get("Retry-After") == "" {
-		t.Fatal("missing Retry-After header on rate limit")
-	}
-	// 退避期过后（窗口+最大退避）恢复
-	w2 := httptest.NewRecorder()
-	future := now.Add(usernameRateLimitWindow + usernameBackoffMax + time.Minute)
-	if !globalLoginUsernameLimiter.allow("u1", future) {
-		t.Fatal("username still locked after backoff window; must not be permanent")
-	}
-	_ = w2
 }
 
 // 场景 6：桶满时不顶掉活跃桶（LRU），且有界。

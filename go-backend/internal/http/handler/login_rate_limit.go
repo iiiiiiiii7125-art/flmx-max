@@ -25,6 +25,8 @@ import (
 const (
 	loginRateLimitWindow      = time.Minute
 	loginRateLimitMaxAttempts = 10
+	// R5-B5 D11-D13: 紧缩 IP 的阈值（用户名桶触发且验证码未启用时）。
+	tightenedLoginMaxAttempts = 3
 	loginRateLimitMaxBuckets  = 10000
 
 	// 按用户名的第二道限流：对抗轮换源 IP 的分布式爆破，与 IP 桶独立。
@@ -136,9 +138,25 @@ type loginRateLimiter struct {
 
 var globalLoginLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
 
+// R5-B5 D11-D13: 用户名桶触发后收紧的 IP 集合（验证码未启用时）。
+// 这些 IP 的登录阈值从严，过期自动解除。
+var tightenedLoginIPs = struct {
+	sync.Mutex
+	m map[string]time.Time // ip -> 紧缩到期时间
+}{m: make(map[string]time.Time)}
+
+// tightenedIPRateLimitWindow 紧缩持续时间。
+const tightenedIPRateLimitWindow = 30 * time.Minute
+
 func (l *loginRateLimiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// R5-B5 D11-D13: 紧缩 IP 用更严格的阈值。
+	maxAttempts := loginRateLimitMaxAttempts
+	if isIPTightened(key) {
+		maxAttempts = tightenedLoginMaxAttempts
+	}
 
 	b, ok := l.buckets[key]
 	if !ok {
@@ -153,7 +171,7 @@ func (l *loginRateLimiter) allow(key string, now time.Time) bool {
 		return true
 	}
 	b.count++
-	return b.count <= loginRateLimitMaxAttempts
+	return b.count <= maxAttempts
 }
 
 // evictIfNeededLocked 淘汰策略：优先清理过期桶；
@@ -192,9 +210,10 @@ func (l *loginRateLimiter) evictIfNeededLocked(now time.Time) {
 type usernameAttemptBucket struct {
 	count        int
 	windowStart  time.Time
-	backoffUntil time.Time
+	backoffUntil time.Time // 保留字段（D11-D13 后仅用于验证强度冷却，不用于拒绝）
 	violations   int
 	lastSeen     time.Time
+	triggered    bool // R5-B5 D11-D13: 是否已触发阈值（信号）
 }
 
 type loginUsernameLimiter struct {
@@ -208,12 +227,13 @@ func normalizeLoginUsername(u string) string {
 	return strings.ToLower(strings.TrimSpace(u))
 }
 
-// allow 用户名限流：命中返回 false（调用方统一写 429）。
-// 注意：无论用户名是否存在都计数，避免用“429 与否”做用户名枚举。
-func (l *loginUsernameLimiter) allow(username string, now time.Time) bool {
+// recordAttempt 记录用户名尝试，返回是否触发阈值（信号，非门控）。
+// R5-B5 D11-D13: 用户名桶永不作为拒绝依据，只作为"升级验证"信号。
+// 注意：无论用户名是否存在都计数，避免用行为差异做用户名枚举。
+func (l *loginUsernameLimiter) recordAttempt(username string, now time.Time) (triggered bool) {
 	key := normalizeLoginUsername(username)
 	if key == "" {
-		return true // 空用户名由参数校验处理
+		return false // 空用户名由参数校验处理
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -222,29 +242,23 @@ func (l *loginUsernameLimiter) allow(username string, now time.Time) bool {
 	if !ok {
 		l.evictIfNeededLocked(now)
 		l.buckets[key] = &usernameAttemptBucket{count: 1, windowStart: now, lastSeen: now}
-		return true
-	}
-	b.lastSeen = now
-	if now.Before(b.backoffUntil) {
 		return false
 	}
+	b.lastSeen = now
 	if now.Sub(b.windowStart) >= usernameRateLimitWindow {
 		b.count = 1
 		b.windowStart = now
-		return true
-	}
-	b.count++
-	if b.count > usernameRateLimitMaxAttempts {
-		b.violations++
-		backoff := usernameBackoffBase << (b.violations - 1)
-		if backoff <= 0 || backoff > usernameBackoffMax {
-			backoff = usernameBackoffMax
-		}
-		b.backoffUntil = now.Add(backoff)
-		log.Printf("login username rate limit hit user=%q violations=%d backoff=%s", key, b.violations, backoff)
+		b.triggered = false
 		return false
 	}
-	return true
+	b.count++
+	if b.count > usernameRateLimitMaxAttempts && !b.triggered {
+		b.triggered = true
+		b.violations++
+		log.Printf("login username bucket triggered user=%q count=%d", key, b.count)
+		return true
+	}
+	return b.triggered
 }
 
 // noteSuccess 登录成功后清除该用户名的限流状态（含退避），
@@ -311,15 +325,47 @@ func (h *Handler) checkLoginRateLimit(w http.ResponseWriter, r *http.Request) bo
 	return true
 }
 
-// checkLoginUsernameRateLimit 用户名维度限流，与 IP 桶独立。
-// 错误响应与 IP 限流完全一致，不因用户名是否存在而变化。
-func (h *Handler) checkLoginUsernameRateLimit(w http.ResponseWriter, username string) bool {
-	if !globalLoginUsernameLimiter.allow(username, time.Now()) {
-		w.Header().Set("Retry-After", "60")
-		response.WriteJSON(w, response.Err(429, "登录尝试过于频繁，请稍后再试"))
+// tightenIPRateLimit 将 IP 加入紧缩集合（R5-B5 D11-D13）。
+func (h *Handler) tightenIPRateLimit(clientIP string) {
+	if clientIP == "" {
+		return
+	}
+	tightenedLoginIPs.Lock()
+	defer tightenedLoginIPs.Unlock()
+	tightenedLoginIPs.m[clientIP] = time.Now().Add(tightenedIPRateLimitWindow)
+	log.Printf("login ip tightened ip=%s reason=username_bucket_triggered", clientIP)
+}
+
+// isIPTightened 检查 IP 是否处于紧缩状态（过期自动清理）。
+func isIPTightened(clientIP string) bool {
+	tightenedLoginIPs.Lock()
+	defer tightenedLoginIPs.Unlock()
+	expiry, ok := tightenedLoginIPs.m[clientIP]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expiry) {
+		delete(tightenedLoginIPs.m, clientIP)
 		return false
 	}
 	return true
+}
+
+// checkLoginUsernameRateLimit 用户名维度信号（R5-B5 D11-D13）。
+// 永不硬拒：返回 triggered 信号，由调用方决定升级验证强度。
+// 错误响应与 IP 限流完全一致，不因用户名是否存在而变化（防枚举）。
+func (h *Handler) checkLoginUsernameRateLimit(username string, clientIP string, captchaEnabled bool) (triggered bool) {
+	triggered = globalLoginUsernameLimiter.recordAttempt(username, time.Now())
+	if triggered {
+		// D11-D13.2: 验证码未启用时，收紧该来源 IP 阈值 + 告警日志。
+		// 验证码已启用时，登录流程已强制要求 captcha，此处仅记日志。
+		if !captchaEnabled {
+			h.tightenIPRateLimit(clientIP)
+		}
+		log.Printf("login username bucket triggered user=%q ip=%s captcha_enabled=%v", username, clientIP, captchaEnabled)
+	}
+	// D11-D13.3: 绝不返回"账号已锁定"，无 429。
+	return triggered
 }
 
 // noteLoginUsernameSuccess 登录成功后清除用户名限流状态。

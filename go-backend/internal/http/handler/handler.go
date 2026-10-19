@@ -393,11 +393,17 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(500, "用户名不能为空"))
 		return
 	}
-	// R5-B2 A-001: 按用户名限流（与 IP 桶独立，对抗轮换 IP 的分布式爆破）。
-	// 无论用户名是否存在都计数，避免用限流行为做用户名枚举。
-	if !h.checkLoginUsernameRateLimit(w, req.Username) {
-		return
+	// R5-B5 D11-D13: 用户名桶只作为"升级验证"信号，永不硬拒。
+	// 触发后：验证码启用则强制 captcha（下方已有）；未启用则收紧该 IP 阈值。
+	// 无论用户名是否存在都计数，避免用行为差异做用户名枚举。
+	captchaEnabledForSignal, _ := h.captchaEnabled()
+	clientIPStr := ""
+	if ip := loginClientIP(r); ip != nil {
+		clientIPStr = ip.String()
+	} else {
+		clientIPStr = r.RemoteAddr
 	}
+	h.checkLoginUsernameRateLimit(req.Username, clientIPStr, captchaEnabledForSignal)
 	if strings.TrimSpace(req.Password) == "" {
 		response.WriteJSON(w, response.Err(500, "密码不能为空"))
 		return
