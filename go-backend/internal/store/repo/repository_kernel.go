@@ -102,6 +102,10 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 		if err := tx.Where("kernel_id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
 			return err
 		}
+		// R5-B7: 清理 user_inbound 中的悬空 kernel_id。
+		if err := tx.Where("kernel_id = ?", id).Delete(&model.UserInbound{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", id).Delete(&model.NodeKernel{}).Error
 	})
 }
