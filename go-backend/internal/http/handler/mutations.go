@@ -2742,6 +2742,16 @@ func (h *Handler) forwardDiagnose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
+	// R5-B2 A-002: 补归属检查。此前无任何鉴权，用户 A 可改用户 B 的转发排序。
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	actorUserID, actorRole, err := userRoleFromRequest(r)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
 	var req struct {
 		Forwards []struct {
 			ID  int64 `json:"id"`
@@ -2753,6 +2763,14 @@ func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, f := range req.Forwards {
+		if _, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, f.ID); accessErr != nil {
+			if errors.Is(accessErr, errForwardNotFound) {
+				response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			} else {
+				response.WriteJSON(w, response.Err(-2, accessErr.Error()))
+			}
+			return
+		}
 		h.repo.UpdateForwardOrder(f.ID, f.Inx, time.Now().UnixMilli())
 	}
 	response.WriteJSON(w, response.OKEmpty())
