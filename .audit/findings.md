@@ -446,3 +446,10 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 
 ### LAD26-013（P3，观察，未修）
 - `doc/guide/notify.md:16` 声明"同一个问题只提醒一次"未声明重启例外（内存 map 清空后重复告警）。建议后轮补文档。
+
+### R5R26-001（P2）— 已修复（L6 退回项）
+- `validateNotifyURL`（LAD26-001 修复）仅校验初始 URL；`n.client` 未设 `CheckRedirect`，Go 默认跟随最多 10 跳重定向且不重新校验。攻击者服务器返回 302 到元数据地址即可完全绕过 SSRF 控制（动态验证确认：302→"元数据服务"被击中）。
+- 位置：`go-backend/internal/http/handler/notify.go:83`（`n.client`）+ `:209`（`validateNotifyURL` 仅初始校验）
+- 修复：`n.client` 加 `CheckRedirect`——重定向目标同样走 `validateNotifyURL` 校验；同时限制最多 5 跳防重定向环。
+- 影响边界：响应不回传给攻击者（`sendWebhook` 丢弃 body），威胁模型需管理员权限。定 P2 理由：完全 nullify 了一个 P2 修复。
+- 发现者：L6 对抗性审查员（动态验证）
