@@ -609,11 +609,54 @@ validate_panel_update_environment() {
   fi
 }
 
+# R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
+# FLVX_VERIFY_DOWNLOADS=0 可跳过（过渡期），默认开启。
+download_verified() {
+  local url="$1"
+  local dest="$2"
+  local verify="${FLVX_VERIFY_DOWNLOADS:-1}"
+
+  if ! curl -fL -o "$dest" "$url"; then
+    echo "❌ 下载失败: $url" >&2
+    return 1
+  fi
+
+  if [ "$verify" != "1" ]; then
+    echo "⚠️  跳过校验 (FLVX_VERIFY_DOWNLOADS=0): $dest" >&2
+    return 0
+  fi
+
+  # 下载 .sha256 并校验。
+  local sha_url="${url}.sha256"
+  local sha_file="${dest}.sha256"
+  if ! curl -fL -o "$sha_file" "$sha_url"; then
+    rm -f "$dest" "$sha_file"
+    echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
+    echo "   （设置 FLVX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
+    return 1
+  fi
+
+  local expected=$(awk '{print $1}' "$sha_file" | tr -d ' \n')
+  local actual=$(sha256sum "$dest" | awk '{print $1}')
+  rm -f "$sha_file"
+
+  if [ "$expected" != "$actual" ]; then
+    rm -f "$dest"
+    echo "❌ 校验失败: $dest" >&2
+    echo "   期望: $expected" >&2
+    echo "   实际: $actual" >&2
+    return 1
+  fi
+
+  echo "✅ 校验通过: $dest" >&2
+  return 0
+}
+
 download_panel_update_compose() {
   local compose_url="$1"
 
   UPDATE_COMPOSE_CANDIDATE=$(mktemp "$PANEL_DEPLOY_DIR/.docker-compose.yml.update.XXXXXX")
-  if ! curl -fL -o "$UPDATE_COMPOSE_CANDIDATE" "$compose_url"; then
+  if ! download_verified "$compose_url" "$UPDATE_COMPOSE_CANDIDATE"; then
     rm -f "$UPDATE_COMPOSE_CANDIDATE"
     UPDATE_COMPOSE_CANDIDATE=""
     echo "❌ 下载最新 Compose 配置失败，更新终止"
@@ -906,7 +949,7 @@ install_panel() {
   echo "🔽 下载必要文件..."
   DOCKER_COMPOSE_URL=$(get_docker_compose_url)
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  curl -fL -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+  download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
   echo "✅ 文件准备完成"
 
   # 自动检测并配置 IPv6 支持
@@ -1032,7 +1075,7 @@ migrate_to_postgres() {
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    curl -fL -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+    download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
     echo "✅ docker-compose.yml 下载完成"
   fi
 
@@ -1109,7 +1152,7 @@ uninstall_panel() {
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    curl -fL -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+    download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
     echo "✅ docker-compose.yml 下载完成"
   fi
 
