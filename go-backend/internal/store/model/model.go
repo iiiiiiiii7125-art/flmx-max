@@ -134,6 +134,35 @@ type NftRuleBinding struct {
 
 func (NftRuleBinding) TableName() string { return "nft_rule_binding" }
 
+// Forward status values. Do not write bare integers; use these constants.
+// R5-B3 D1-001: ForwardStatusPendingDelete marks a forward whose data-plane
+// rule removal failed (e.g. node offline). The row is hidden from user/admin
+// lists, excluded from plan building (so reconcile removes its rule), but
+// still occupies its (node_id, port) until the retry job or force-delete
+// completes the removal. See the status consumption matrix in the R5-B3 report.
+const (
+	ForwardStatusPaused        = 0
+	ForwardStatusActive        = 1
+	ForwardStatusPendingDelete = 2
+)
+
+// NftPendingDelete tracks retry bookkeeping for forwards stuck in
+// ForwardStatusPendingDelete. The forward row itself (status=2) is the marker;
+// this side table holds the retry schedule and last error for observability
+// (R5-B3 D7 / 补充 E). Rows are removed when the forward is finally deleted
+// (reconcile success or force-delete).
+type NftPendingDelete struct {
+	ForwardID   int64  `gorm:"primaryKey;column:forward_id"`
+	NodeID      int64  `gorm:"column:node_id;not null;index"`
+	RetryCount  int    `gorm:"column:retry_count;not null;default:0"`
+	NextRetryAt int64  `gorm:"column:next_retry_at;not null;index"`
+	LastError   string `gorm:"column:last_error;type:text;not null;default:''"`
+	CreatedAt   int64  `gorm:"column:created_at;not null"`
+	UpdatedAt   int64  `gorm:"column:updated_at;not null"`
+}
+
+func (NftPendingDelete) TableName() string { return "nft_pending_delete" }
+
 type NftCounterState struct {
 	ID            int64  `gorm:"primaryKey;autoIncrement"`
 	NodeID        int64  `gorm:"column:node_id;not null;uniqueIndex:idx_nft_counter_state_key;index"`

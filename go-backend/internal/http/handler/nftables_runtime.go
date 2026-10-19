@@ -349,6 +349,51 @@ func (h *Handler) nodeNftablesReconcile(w http.ResponseWriter, r *http.Request) 
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// nftPendingDeleteList 是补充 E 的管理员可观测入口：列出所有待清理转发
+//（含节点、重试次数、下次重试时间、最后失败原因）。
+func (h *Handler) nftPendingDeleteList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	_, roleID, err := userRoleFromRequest(r)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	if roleID != 0 {
+		response.WriteJSON(w, response.Err(403, "无权限"))
+		return
+	}
+	rows, err := h.repo.ListAllNftPendingDeletes()
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	items := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		forwardName := ""
+		if fr, frErr := h.repo.GetForwardRecord(row.ForwardID); frErr == nil && fr != nil {
+			forwardName = fr.Name
+		}
+		nodeName := ""
+		if n, nErr := h.getNodeRecord(row.NodeID); nErr == nil && n != nil {
+			nodeName = n.Name
+		}
+		items = append(items, map[string]interface{}{
+			"forwardId":   row.ForwardID,
+			"forwardName": forwardName,
+			"nodeId":      row.NodeID,
+			"nodeName":    nodeName,
+			"retryCount":  row.RetryCount,
+			"nextRetryAt": row.NextRetryAt,
+			"lastError":   row.LastError,
+			"createdAt":   row.CreatedAt,
+		})
+	}
+	response.WriteJSON(w, response.OK(items))
+}
+
 func (h *Handler) nodeNftablesClear(w http.ResponseWriter, r *http.Request) {
 	nodeID, ok := h.nftablesNodeIDFromRequest(r, w)
 	if !ok {

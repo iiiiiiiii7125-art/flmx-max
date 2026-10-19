@@ -90,6 +90,11 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		return
 	}
 
+	// R5-B3 D1-001 矩阵 #9 / 补充 A: pending-delete 行的 delta 丢弃（不产生
+	// 任何计费增量），但 newStates 照常落库使基线推进，避免攒出巨大 delta。
+	// 注意：newStates 不在此处过滤，下游的 Upsert/Accounting 会推进其基线。
+	deltas = h.filterOutPendingDeleteDeltas(nodeID, deltas)
+
 	var metas map[int64]repo.FlowUploadForwardMeta
 	forwardIDs := make([]int64, 0, len(deltas))
 	for _, delta := range deltas {
@@ -175,8 +180,38 @@ func firstNftBatchMissingDelta(deltas []nftTrafficDelta, batch flowUploadBatch) 
 	return 0, false
 }
 
-func firstNftDeltaMissingMeta(deltas []nftTrafficDelta, metas map[int64]repo.FlowUploadForwardMeta) (int64, bool) {
-	for _, delta := range deltas {
+// filterOutPendingDeleteDeltas 丢弃 pending-delete 行的 delta（R5-B3 D1-001
+// 矩阵 #9 / 补充 A）。被丢弃的 delta 不产生计费增量；其 newStates 由调用方
+// 照常落库，基线继续推进。
+func (h *Handler) filterOutPendingDeleteDeltas(nodeID int64, deltas []nftTrafficDelta) []nftTrafficDelta {
+	if len(deltas) == 0 || h == nil || h.repo == nil {
+		return deltas
+	}
+	ids := make([]int64, 0, len(deltas))
+	for _, d := range deltas {
+		if d.ForwardID > 0 {
+			ids = append(ids, d.ForwardID)
+		}
+	}
+	statusMap, err := h.repo.GetForwardStatusMap(ids)
+	if err != nil {
+		log.Printf("nftables traffic collection failed op=pending_status node_id=%d err=%v", nodeID, err)
+		return deltas
+	}
+	kept := deltas[:0]
+	for _, d := range deltas {
+		if d.ForwardID > 0 && statusMap[d.ForwardID] == model.ForwardStatusPendingDelete {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if len(kept) != len(deltas) {
+		log.Printf("nftables traffic collection dropped pending-delete deltas node_id=%d dropped=%d", nodeID, len(deltas)-len(kept))
+	}
+	return kept
+}
+
+func firstNftDeltaMissingMeta(deltas []nftTrafficDelta, metas map[int64]repo.FlowUploadForwardMeta) (int64, bool) {	for _, delta := range deltas {
 		if delta.ForwardID <= 0 {
 			continue
 		}

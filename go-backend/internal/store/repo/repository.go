@@ -315,6 +315,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeSSHConfig{},
 		&model.NftRuleBinding{},
 		&model.NftCounterState{},
+		&model.NftPendingDelete{},
 		&model.SpeedLimit{},
 		&model.StatisticsFlow{},
 		&model.Tunnel{},
@@ -1032,6 +1033,8 @@ func (r *Repository) ListForwards() ([]map[string]interface{}, error) {
 		Select("forward.id, forward.user_id, forward.user_name, forward.name, forward.tunnel_id, COALESCE(tunnel.name, '') AS tunnel_name, COALESCE(tunnel.traffic_ratio, 1.0) AS traffic_ratio, forward.remote_addr, COALESCE(forward.strategy, 'fifo') AS strategy, forward.in_flow, forward.out_flow, forward.created_time, forward.status, forward.inx, forward.speed_id, forward.max_conn, forward.ip_max_conn, forward.ip_speed_id, COALESCE(ip_speed_limit.name, '') AS ip_speed_limit_name, forward.proxy_protocol, forward.proxy_protocol_receive, forward.proxy_protocol_send").
 		Joins("LEFT JOIN tunnel ON tunnel.id = forward.tunnel_id").
 		Joins("LEFT JOIN speed_limit AS ip_speed_limit ON ip_speed_limit.id = forward.ip_speed_id").
+		// R5-B3 D1-001 矩阵 #1: pending-delete 行对用户/管理员列表隐藏。
+		Where("forward.status <> ?", model.ForwardStatusPendingDelete).
 		Order("forward.inx ASC, forward.id ASC").
 		Find(&rows).Error
 	if err != nil {

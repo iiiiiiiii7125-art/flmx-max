@@ -816,6 +816,14 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftCounterState{}).Error; err != nil {
 			return err
 		}
+		// R5-B3 D1-001 补充 A.3: pending 行最终删除时同步清理 binding 与
+		// pending bookkeeping，避免残留基线与未来同 ID 新转发串号。
+		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftRuleBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftPendingDelete{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
