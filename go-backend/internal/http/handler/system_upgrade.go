@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/store/repo"
 )
 
 const (
@@ -113,6 +116,10 @@ type systemUpgradeVersionData struct {
 	Channel        string                      `json:"channel"`
 	Reason         string                      `json:"reason,omitempty"`
 	Capability     systemUpgradeCapabilityData `json:"capability"`
+	// R5-B4C: 待执行的迁移（结构化，预检失败时非空）。
+	PendingMigrations *repo.PendingMigrationStatus `json:"pendingMigrations,omitempty"`
+	// 修正 A：需要人工补建管理员。
+	AdminBootstrapRequired bool `json:"adminBootstrapRequired,omitempty"`
 }
 
 type systemUpgradeCheckData struct {
@@ -501,25 +508,26 @@ func (e *systemUpgradeExecutor) startHelper(ctx context.Context, imageID, helper
 
 func (h *Handler) downloadReleaseAsset(version, filename string) ([]byte, error) {
 	url := h.buildSystemUpgradeDownloadURL(version, filename)
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := systemUpgradeHTTPGet(client, url)
+	// R5-B5 D16: 经 SecureFetch（SSRF 防护 + 大小限制 + 超时）。
+	ctx, cancel := context.WithTimeout(context.Background(), secureFetchTotalTimeout)
+	defer cancel()
+	body, err := SecureFetch(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("下载%s失败: %v", filename, err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("下载%s返回 %d: %s", filename, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSystemUpgradeComposeAssetBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("读取%s失败: %v", filename, err)
-	}
-	if len(body) > maxSystemUpgradeComposeAssetBytes {
-		return nil, fmt.Errorf("下载%s过大", filename)
-	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, fmt.Errorf("下载%s内容为空", filename)
+	}
+	// R5-B5 D16: 校验和缺失即 fail-closed（与 H-01 对 gost 二进制的标准一致）。
+	shaURL := url + ".sha256"
+	shaBody, err := SecureFetch(ctx, shaURL)
+	if err != nil {
+		return nil, fmt.Errorf("下载%s的校验文件失败（fail-closed）: %v", filename, err)
+	}
+	expected := strings.TrimSpace(strings.Split(string(shaBody), " ")[0])
+	actual := fmt.Sprintf("%x", sha256.Sum256(body))
+	if !hmac.Equal([]byte(expected), []byte(actual)) {
+		return nil, fmt.Errorf("%s校验失败：期望 %s，实际 %s", filename, expected, actual)
 	}
 	return body, nil
 }
@@ -592,6 +600,12 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 	capability := exec.capability(r.Context())
 	latest, err := h.resolveSystemUpgradeLatestReleaseByChannel(channel)
 	data := systemUpgradeVersionResponse(current, channel, latest, err, capability)
+	// R5-B4C: 暴露待执行迁移状态（结构化）。
+	if pm := h.repo.GetPendingMigrationStatus(); pm.Required {
+		data.PendingMigrations = pm
+	}
+	// 修正 A：管理员补建状态。
+	data.AdminBootstrapRequired = repo.IsAdminBootstrapRequired()
 	response.WriteJSON(w, response.OK(data))
 }
 

@@ -40,3 +40,64 @@ curl -L https://github.com/iiiiiiiii7125-art/flvx-max/releases/download/1.0.1/pa
    ```
 
 也可以在该目录运行 3.0.7 及以后的安装脚本，选“更新面板”，会顺带修复。
+
+## 从旧版本升级（含 R5-B4 并发修复）
+
+### 1. 升级前备份
+
+```bash
+docker ps --format '{{.Names}}' | grep -i backend
+docker exec <backend容器> cp /app/data/gost.db /app/data/gost.db.bak
+docker cp <backend容器>:/app/data/gost.db.bak /tmp/gost.db.bak
+sqlite3 /tmp/gost.db.bak "PRAGMA integrity_check;"
+```
+
+### 2. 检查重复/孤儿数据
+
+```bash
+sqlite3 /tmp/gost.db.bak << 'SQLEOF'
+.headers on
+.mode column
+SELECT node_id, port, COUNT(*) FROM forward_port GROUP BY node_id, port HAVING COUNT(*) > 1;
+SELECT fp.node_id, fp.port FROM forward_port fp LEFT JOIN "forward" f ON f.id = fp.forward_id WHERE f.id IS NULL;
+SELECT node_id, port, COUNT(*) FROM chain_tunnel WHERE port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1;
+SELECT node_id, port, COUNT(*) FROM node_inbound GROUP BY node_id, port HAVING COUNT(*) > 1;
+SELECT "user", COUNT(*) FROM "user" GROUP BY "user" HAVING COUNT(*) > 1;
+SQLEOF
+```
+
+> 以上 SQL 与代码预检逻辑（`runV1Precheck`）一致。
+
+### 3. 清理步骤
+
+| 类型 | 保留 | 依据 |
+|------|------|------|
+| forward_port 重复 | status=1 的行；都有则保留 forward_id 最小 | 活跃优先 |
+| forward_port 孤儿 | 删除 | 转发已不存在 |
+| chain_tunnel 重复 | tunnel_id 最小 | 先建优先 |
+| node_inbound 重复 | enabled=1；都有则 id 最小 | 启用优先 |
+| 用户名重复 | 最早创建未停用；其余改名加 `_dup` | 不删账号 |
+
+### 4. 触发迁移
+
+```bash
+docker restart <backend容器>
+docker logs <backend容器> 2>&1 | grep -i migration
+```
+
+### 5. 索引未创建时的处理
+
+若日志显示 `PRECHECK FAILED`：面板正常启动，按 §2 重新检查清理后重启即可（迁移幂等，会重试）。
+
+### 6. 回滚
+
+```bash
+sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_forward_port_node_port;"
+sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_chain_tunnel_node_port;"
+sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_node_inbound_node_port;"
+sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_unique;"
+```
+
+### 7. 停用用户名释放
+
+`POST /api/v1/user/update` 将停用用户改名后，新用户可注册原用户名（`user_id` 不变）。

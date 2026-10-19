@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-backend/internal/store/model"
@@ -66,7 +67,8 @@ func (r *Repository) CreateUser(username, pwdHash string, roleID int, expTime, f
 		PasswordChangedAt: now,
 	}
 	if err := r.db.Create(&user).Error; err != nil {
-		return 0, err
+		// R5-B4 C-010: 唯一约束冲突 → "用户名已存在"（409 语义），不得 500。
+		return 0, mapUniqueViolation(err, "username")
 	}
 	return user.ID, nil
 }
@@ -87,7 +89,7 @@ func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, 
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.User{}).
+	err := r.db.Model(&model.User{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"user":                username,
@@ -102,13 +104,15 @@ func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, 
 			"password_changed_at": now,
 			"updated_time":        sql.NullInt64{Int64: now, Valid: true},
 		}).Error
+	// R5-B4C: 并发兜底（handler 已查重，但有竞态窗口）。
+	return mapUniqueViolation(err, "username")
 }
 
 func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.User{}).
+	err := r.db.Model(&model.User{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"user":            username,
@@ -121,6 +125,8 @@ func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow i
 			"max_conn":        maxConn,
 			"updated_time":    sql.NullInt64{Int64: now, Valid: true},
 		}).Error
+	// R5-B4C: 并发兜底。
+	return mapUniqueViolation(err, "username")
 }
 
 func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64) error {
@@ -816,6 +822,14 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftCounterState{}).Error; err != nil {
 			return err
 		}
+		// R5-B3 D1-001 补充 A.3: pending 行最终删除时同步清理 binding 与
+		// pending bookkeeping，避免残留基线与未来同 ID 新转发串号。
+		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftRuleBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftPendingDelete{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
@@ -1353,6 +1367,19 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
 	}
+	// R5-B4: per-node 端口分配锁（事务之前获取，排序后加锁防死锁）。
+	// 锁内禁止网络调用。
+	sortedNodes := append([]int64(nil), entryNodeIDs...)
+	sort.Slice(sortedNodes, func(i, j int) bool { return sortedNodes[i] < sortedNodes[j] })
+	locks := make([]*sync.Mutex, 0, len(sortedNodes))
+	for _, nodeID := range sortedNodes {
+		locks = append(locks, AcquirePortAllocLock(nodeID))
+	}
+	defer func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			ReleasePortAllocLock(locks[i])
+		}
+	}()
 	_, proxyProtocolSend = normalizeForwardProxyProtocol(proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	var forwardID int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
@@ -1394,6 +1421,10 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 		}
 		return nil
 	})
+	// R5-B4 C-002: 唯一约束冲突 → "端口已被占用"，不得 500。
+	if err != nil {
+		err = mapUniqueViolation(err, "port")
+	}
 	return forwardID, err
 }
 

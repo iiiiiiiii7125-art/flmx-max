@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"sort"
@@ -12,6 +13,10 @@ import (
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
+
+// errDiscardedDueToApplying: 采集轮因处于 apply 窗口或 generation 变化而丢弃。
+// 调用方不得写 nft_counter_state、不推进基线。
+var errDiscardedDueToApplying = errors.New("discarded: applying window or generation changed")
 
 type nftTrafficDelta struct {
 	ForwardID int64
@@ -41,32 +46,83 @@ func (h *Handler) runNftablesTrafficCollectJob(now time.Time) {
 }
 
 func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
-	if h == nil || h.repo == nil {
+	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	if err != nil || batch == nil {
 		return
 	}
+	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
+	for userID, quota := range quotaViews {
+		h.enforceUserQuotaIfNeeded(userID, quota)
+	}
+	for _, target := range batch.policyTargets {
+		if target.UserID <= 0 || target.UserTunnelID <= 0 {
+			continue
+		}
+		h.enforceFlowPolicies(target.UserID, target.UserTunnelID)
+	}
+}
+
+// accountNftablesNodeTraffic 执行采集→增量→落库（不含执法），供采集循环与
+// reconcile 前 drain（R5-B3 D1-004/D8）复用。返回 batch+metas+nowMs+quotaViews 供调用方
+// 执法；无增量时返回 nil batch（基线已推进）。
+func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
+	if h == nil || h.repo == nil {
+		return nil, nil, 0, nil, errors.New("handler not initialized")
+	}
 	if h.nftablesManager == nil {
-		log.Printf("nftables traffic collection failed op=collect node_id=%d err=%v", nodeID, "nftables manager not initialized")
-		return
+		return nil, nil, 0, nil, errors.New("nftables manager not initialized")
 	}
 	sshCfg, err := sshConfigFromModel(cfgModel)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=ssh_config node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
-	samples, err := h.nftablesManager.CollectCounters(context.Background(), sshCfg)
+	samples, err := func() ([]runtimenft.CounterSample, error) {
+		// R5-B5B D18: 采集前记录 generation（节点级单调计数器，独立于 applying）。
+		gen0 := h.nftablesManager.GetGeneration(nodeID)
+		samples, err := h.nftablesManager.CollectCounters(context.Background(), nodeID, sshCfg)
+		if err != nil {
+			return nil, err
+		}
+		// D18: 若处于 apply 窗口（未超时）→ 丢弃本轮，不阻塞。
+		if h.nftablesManager.IsApplying(nodeID) {
+			log.Printf("nftables traffic discarded op=applying_window node_id=%d", nodeID)
+			return nil, errDiscardedDueToApplying
+		}
+		// D18: 若 generation 变化（期间发生过完整 apply）→ 脏读，丢弃。
+		if h.nftablesManager.GetGeneration(nodeID) != gen0 {
+			log.Printf("nftables traffic discarded op=generation_changed node_id=%d", nodeID)
+			return nil, errDiscardedDueToApplying
+		}
+		return samples, nil
+	}()
 	if err != nil {
+		if err == errDiscardedDueToApplying {
+			// 丢弃轮：不写 nft_counter_state，不推进基线，下轮补回。
+			// （nft 计数器是累计值，跳过区间在下轮 delta 中补回；
+			// 若期间 apply 重建表，负 delta 走既有 reset 逻辑。）
+			return nil, nil, 0, nil, nil
+		}
+		// R5-B3 D1-003/D9(a): 表缺失（节点重启）→ 仅投递异步任务，由独立
+		// worker 执行；采集循环立即返回（R2：不在事务内做 SSH+DB）。
+		if isNftTableMissingError(err) {
+			h.enqueueNftAutoReconcile(nodeID, "table_missing")
+		}
 		log.Printf("nftables traffic collection failed op=collect node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
+	// R5-B3 D1-003/D9(b): 采集成功而最近一次 apply 失败过 → 节点已恢复可达，
+	// 触发自动 reconcile（投递后由 worker 异步执行）。
+	h.checkNftNodeRecovered(nodeID)
 	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=list_states node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
 	bindings, err := h.repo.ListNftRuleBindingsByNode(nodeID)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=list_bindings node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, 0, nil, err
 	}
 	hashes := make(map[int64]string, len(bindings))
 	for _, binding := range bindings {
@@ -87,8 +143,13 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		if len(deltas) != 0 {
 			log.Printf("nftables traffic collection skipped suspicious deltas without states node_id=%d deltas=%d", nodeID, len(deltas))
 		}
-		return
+		return nil, nil, nowMs, nil, nil
 	}
+
+	// R5-B3 D1-001 矩阵 #9 / 补充 A: pending-delete 行的 delta 丢弃（不产生
+	// 任何计费增量），但 newStates 照常落库使基线推进，避免攒出巨大 delta。
+	// 注意：newStates 不在此处过滤，下游的 Upsert/Accounting 会推进其基线。
+	deltas = h.filterOutPendingDeleteDeltas(nodeID, deltas)
 
 	var metas map[int64]repo.FlowUploadForwardMeta
 	forwardIDs := make([]int64, 0, len(deltas))
@@ -101,41 +162,44 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		metas, err = h.repo.GetFlowUploadForwardMetas(forwardIDs)
 		if err != nil {
 			log.Printf("nftables traffic collection failed op=load_flow_metas node_id=%d err=%v", nodeID, err)
-			return
+			return nil, nil, nowMs, nil, err
 		}
-		if missingForwardID, ok := firstNftDeltaMissingMeta(deltas, metas); ok {
-			log.Printf("nftables traffic collection skipped state advance op=missing_flow_meta node_id=%d forward_id=%d", nodeID, missingForwardID)
-			return
-		}
+		// R5-B3 D1-001(poison-scope)/D10: 缺 meta 的 forward 仅跳过其 delta
+		// （不计费），保留其旧基线（newStates 中剔除，下周期重试），warn 日志
+		// 带 forward_id；其他 forward 正常累积。不再整节点 return。
+		deltas, newStates = filterOutNftDeltasMissingMeta(deltas, newStates, metas, nodeID)
 	}
 	if len(deltas) == 0 {
 		if err := h.repo.UpsertNftCounterStates(newStates, nowMs); err != nil {
 			log.Printf("nftables traffic collection failed op=upsert_states node_id=%d err=%v", nodeID, err)
-			return
+			return nil, nil, nowMs, nil, err
 		}
-		return
+		return nil, nil, nowMs, nil, nil
 	}
 
 	batch := buildNftFlowUploadBatch(deltas, metas)
 	if missingForwardID, ok := firstNftBatchMissingDelta(deltas, batch); ok {
 		log.Printf("nftables traffic collection skipped state advance op=unaccounted_delta node_id=%d forward_id=%d", nodeID, missingForwardID)
-		return
+		return nil, nil, nowMs, nil, nil
 	}
 	quotaViews, err := h.repo.ApplyNftTrafficAccounting(batch.flowDeltas, batch.quotaUsage, newStates, now)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=accounting node_id=%d err=%v", nodeID, err)
-		return
+		return nil, nil, nowMs, nil, err
 	}
-	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
-	for userID, quota := range quotaViews {
-		h.enforceUserQuotaIfNeeded(userID, quota)
+	return &batch, metas, nowMs, quotaViews, nil
+}
+
+// drainNftCountersBeforeReconcile 是 D8：reconcile 删表重建前 best-effort
+// drain 计数器。成功返回 true；失败返回 false（调用方记 gap，
+// 不得阻塞 apply）。drain 与重建必须在同一 single-flight 内（D1-003）。
+func (h *Handler) drainNftCountersBeforeReconcile(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) bool {
+	_, _, _, _, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	if err != nil {
+		log.Printf("nftables reconcile drain gap node_id=%d err=%v action=apply_continues_baseline_reset", nodeID, err)
+		return false
 	}
-	for _, target := range batch.policyTargets {
-		if target.UserID <= 0 || target.UserTunnelID <= 0 {
-			continue
-		}
-		h.enforceFlowPolicies(target.UserID, target.UserTunnelID)
-	}
+	return true
 }
 
 func firstNftBatchMissingDelta(deltas []nftTrafficDelta, batch flowUploadBatch) (int64, bool) {
@@ -175,16 +239,73 @@ func firstNftBatchMissingDelta(deltas []nftTrafficDelta, batch flowUploadBatch) 
 	return 0, false
 }
 
-func firstNftDeltaMissingMeta(deltas []nftTrafficDelta, metas map[int64]repo.FlowUploadForwardMeta) (int64, bool) {
+// filterOutPendingDeleteDeltas 丢弃 pending-delete 行的 delta（R5-B3 D1-001
+// 矩阵 #9 / 补充 A）。被丢弃的 delta 不产生计费增量；其 newStates 由调用方
+// 照常落库，基线继续推进。
+func (h *Handler) filterOutPendingDeleteDeltas(nodeID int64, deltas []nftTrafficDelta) []nftTrafficDelta {
+	if len(deltas) == 0 || h == nil || h.repo == nil {
+		return deltas
+	}
+	ids := make([]int64, 0, len(deltas))
+	for _, d := range deltas {
+		if d.ForwardID > 0 {
+			ids = append(ids, d.ForwardID)
+		}
+	}
+	statusMap, err := h.repo.GetForwardStatusMap(ids)
+	if err != nil {
+		log.Printf("nftables traffic collection failed op=pending_status node_id=%d err=%v", nodeID, err)
+		return deltas
+	}
+	kept := deltas[:0]
+	for _, d := range deltas {
+		if d.ForwardID > 0 && statusMap[d.ForwardID] == model.ForwardStatusPendingDelete {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if len(kept) != len(deltas) {
+		log.Printf("nftables traffic collection dropped pending-delete deltas node_id=%d dropped=%d", nodeID, len(deltas)-len(kept))
+	}
+	return kept
+}
+
+// filterOutNftDeltasMissingMeta 是 D10：缺 meta 的 forward 仅跳过其 delta
+// （不产生计费），并从 newStates 剔除其基线更新（保留旧基线，下周期重试），
+// warn 日志带 forward_id；其他 forward 正常累积。
+// 注意：旧的整节点 return 逻辑（firstNftDeltaMissingMeta）已删除。
+func filterOutNftDeltasMissingMeta(deltas []nftTrafficDelta, newStates []repo.NftCounterStateInput, metas map[int64]repo.FlowUploadForwardMeta, nodeID int64) ([]nftTrafficDelta, []repo.NftCounterStateInput) {
+	if len(deltas) == 0 {
+		return deltas, newStates
+	}
+	skip := make(map[int64]bool)
 	for _, delta := range deltas {
 		if delta.ForwardID <= 0 {
 			continue
 		}
 		if _, ok := metas[delta.ForwardID]; !ok {
-			return delta.ForwardID, true
+			if !skip[delta.ForwardID] {
+				skip[delta.ForwardID] = true
+				log.Printf("nftables traffic skipped op=missing_flow_meta node_id=%d forward_id=%d action=delta_dropped_baseline_kept", nodeID, delta.ForwardID)
+			}
 		}
 	}
-	return 0, false
+	if len(skip) == 0 {
+		return deltas, newStates
+	}
+	keptDeltas := deltas[:0]
+	for _, delta := range deltas {
+		if !skip[delta.ForwardID] {
+			keptDeltas = append(keptDeltas, delta)
+		}
+	}
+	keptStates := newStates[:0]
+	for _, st := range newStates {
+		if !skip[st.ForwardID] {
+			keptStates = append(keptStates, st)
+		}
+	}
+	return keptDeltas, keptStates
 }
 
 func filterNftCounterSamplesWithBinding(samples []runtimenft.CounterSample, hashes map[int64]string) []runtimenft.CounterSample {

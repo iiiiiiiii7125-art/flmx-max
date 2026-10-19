@@ -315,6 +315,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeSSHConfig{},
 		&model.NftRuleBinding{},
 		&model.NftCounterState{},
+		&model.NftPendingDelete{},
 		&model.SpeedLimit{},
 		&model.StatisticsFlow{},
 		&model.Tunnel{},
@@ -379,6 +380,13 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := db.AutoMigrate(item); err != nil {
 			return err
 		}
+	}
+
+	// R5-B4: 版本化迁移 v1（端口/用户名唯一索引）。
+	// 不在 model tag 上加 uniqueIndex，避免 AutoMigrate 在有重复数据时静默建索引失败导致启动崩溃。
+	// 本次执行于测试库；生产库需重跑 dry-run 并重新批准。
+	if err := migrateV1PortUserUnique(db); err != nil {
+		return err
 	}
 
 	return nil
@@ -484,22 +492,43 @@ func prepareSQLiteNftablesColumns(db *gorm.DB) error {
 	return nil
 }
 
+// adminBootstrapRequired: id=1 缺失且 admin@user 被占用时为 true。
+// 面板无管理员账号，需人工处理（不得自动提权）。
+var adminBootstrapRequired = false
+
+// IsAdminBootstrapRequired 返回是否需要人工补建管理员。
+func IsAdminBootstrapRequired() bool {
+	return adminBootstrapRequired
+}
+
 func seedData(db *gorm.DB) {
 	var adminCount int64
 	if err := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error; err == nil && adminCount == 0 {
-		adminPwd, err := security.HashPassword("admin@user")
-		if err != nil {
-			log.Printf("seed admin password hash failed: %v", err)
+		// R5-B4C: 补建前检查用户名是否被占用（防改名后撞唯一约束）。
+		var nameCount int64
+		db.Model(&model.User{}).Where("\"user\" = ?", "admin@user").Count(&nameCount)
+		if nameCount > 0 {
+			// 修正 A：不得静默跳过。ERROR 日志 + API 状态可见。
+			adminBootstrapRequired = true
+			log.Printf("ERROR: seed skipped: id=1 missing and username admin@user already taken. " +
+				"面板缺少管理员账号，需人工处理（不得自动提权）。")
 		} else {
-			adminUser := model.User{
-				ID: 1, User: "admin@user", Pwd: adminPwd,
-				RoleID: 0, ExpTime: 2727251700000, Flow: 99999, InFlow: 0, OutFlow: 0,
-				FlowResetTime: 1, Num: 99999, CreatedTime: 1748914865000,
-				UpdatedTime:       sql.NullInt64{Int64: 1754011744252, Valid: true},
-				Status:            1,
-				PasswordChangedAt: 1748914865000,
+			adminPwd, err := security.HashPassword("admin@user")
+			if err != nil {
+				log.Printf("seed admin password hash failed: %v", err)
+			} else {
+				adminUser := model.User{
+					ID: 1, User: "admin@user", Pwd: adminPwd,
+					RoleID: 0, ExpTime: 2727251700000, Flow: 99999, InFlow: 0, OutFlow: 0,
+					FlowResetTime: 1, Num: 99999, CreatedTime: 1748914865000,
+					UpdatedTime:       sql.NullInt64{Int64: 1754011744252, Valid: true},
+					Status:            1,
+					PasswordChangedAt: 1748914865000,
+				}
+				if err := db.Create(&adminUser).Error; err != nil {
+					log.Printf("seed admin failed: %v", mapUniqueViolation(err, "username"))
+				}
 			}
-			db.Create(&adminUser)
 		}
 	}
 
@@ -1032,6 +1061,8 @@ func (r *Repository) ListForwards() ([]map[string]interface{}, error) {
 		Select("forward.id, forward.user_id, forward.user_name, forward.name, forward.tunnel_id, COALESCE(tunnel.name, '') AS tunnel_name, COALESCE(tunnel.traffic_ratio, 1.0) AS traffic_ratio, forward.remote_addr, COALESCE(forward.strategy, 'fifo') AS strategy, forward.in_flow, forward.out_flow, forward.created_time, forward.status, forward.inx, forward.speed_id, forward.max_conn, forward.ip_max_conn, forward.ip_speed_id, COALESCE(ip_speed_limit.name, '') AS ip_speed_limit_name, forward.proxy_protocol, forward.proxy_protocol_receive, forward.proxy_protocol_send").
 		Joins("LEFT JOIN tunnel ON tunnel.id = forward.tunnel_id").
 		Joins("LEFT JOIN speed_limit AS ip_speed_limit ON ip_speed_limit.id = forward.ip_speed_id").
+		// R5-B3 D1-001 矩阵 #1: pending-delete 行对用户/管理员列表隐藏。
+		Where("forward.status <> ?", model.ForwardStatusPendingDelete).
 		Order("forward.inx ASC, forward.id ASC").
 		Find(&rows).Error
 	if err != nil {
@@ -2521,6 +2552,10 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			Status:            status,
 			PasswordChangedAt: now,
 		}
+		// R5-B4C: 备份导入查重。重名时明确报错，不静默覆盖。
+		if err := ensureUsernameAvailable(tx, u.User, u.ID); err != nil {
+			return count, fmt.Errorf("import user %q: %w", u.User, err)
+		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
@@ -2529,7 +2564,8 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			}),
 		}).Create(&item).Error
 		if err != nil {
-			return count, err
+			// R5-B4C: 并发兜底，映射为友好错误。
+			return count, mapUniqueViolation(err, "username")
 		}
 		if u.DailyQuotaGB > 0 || u.MonthlyQuotaGB > 0 || u.DisabledByQuota != 0 || u.QuotaDisabledAt > 0 {
 			current := time.UnixMilli(now)

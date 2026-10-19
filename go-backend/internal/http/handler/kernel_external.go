@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,7 +30,22 @@ const maxSubscriptionBytes = 5 << 20
 
 // H-15/R-005: SSRF 防护 - 检查 IP 是否为内网/保留地址
 func isPrivateIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	// R5-B5 D16: IPv4-mapped IPv6 转为 IPv4 再判断。
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	// R5-B5 D16: 0.0.0.0/8（TD-IMP-001 绕过）。
+	if ip.IsUnspecified() {
+		return true
+	}
+	// R5-B5 D16: 组播。
+	if ip.IsMulticast() {
 		return true
 	}
 	// 私有地址段
@@ -40,8 +54,9 @@ func isPrivateIP(ip net.IP) bool {
 		"172.16.0.0/12",
 		"192.168.0.0/16",
 		"169.254.0.0/16", // 链路本地 + 云元数据
-		"fc00::/7",        // IPv6 私有
-		"fe80::/10",       // IPv6 链路本地
+		"100.64.0.0/10",  // R5-B5 D16: CGNAT
+		"fc00::/7",       // IPv6 私有
+		"fe80::/10",      // IPv6 链路本地
 	}
 	for _, cidr := range privateCIDRs {
 		_, network, _ := net.ParseCIDR(cidr)
@@ -217,46 +232,19 @@ func fetchSubscription(ctx context.Context, rawURL string) (string, error) {
 // fetchSubscriptionInfo is fetchSubscription plus the provider's
 // Subscription-Userinfo header (plan traffic and expiry).
 func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, error) {
-	// H-15/R-005: SSRF 防护，先验证 URL
-	if err := validateSubscriptionURL(rawURL); err != nil {
-		return "", "", err
-	}
+	// R5-B5 D16: 经 SecureFetch 统一硬化（H-15 残余缺口：0.0.0.0 绕过、
+	// DNS rebinding TOCTOU、逐跳重定向校验）。
+	// 注意：SecureFetch 强制 https；订阅 URL 为 http 时需用户改用 https。
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Set("User-Agent", "clash.meta/1.19.0")
-	// H-15: 禁止重定向后跳转到内网（自定义 CheckRedirect）
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("重定向次数过多")
-			}
-			// 重定向后重新校验目标 URL
-			if err := validateSubscriptionURL(req.URL.String()); err != nil {
-				return err
-			}
-			return nil
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
+	body, header, err := SecureFetchWithHeader(ctx, rawURL)
 	if err != nil {
 		return "", "", err
 	}
 	if len(body) > maxSubscriptionBytes {
 		return "", "", errors.New("订阅内容超过 5MB")
 	}
-	return string(body), truncate(strings.TrimSpace(resp.Header.Get("Subscription-Userinfo")), 255), nil
+	return string(body), truncate(strings.TrimSpace(header.Get("Subscription-Userinfo")), 255), nil
 }
 
 // inboundExternalUpdate edits an imported node: its name, address and

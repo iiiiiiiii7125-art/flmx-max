@@ -83,6 +83,20 @@ Verify captcha response (Cloudflare Turnstile or local captcha).
 }
 ```
 
+**Response:** unified envelope `{code, msg, data, ts}` — `code == 0` means success.
+
+```json
+{
+  "code": 0,
+  "msg": "操作成功",
+  "data": { "validToken": "captcha-session-id" },
+  "ts": 1792383219661
+}
+```
+
+> Breaking change (R5-B2): the old bare shape `{success, data: {validToken}}`
+> was removed. Migrate by checking `code == 0` instead of `success == true`.
+
 ## Token Usage
 
 Include the token in all authenticated requests:
