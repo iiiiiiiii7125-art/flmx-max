@@ -2643,9 +2643,18 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 
 	// DeleteForwardCascade 同步清理 forward / forward_port / nft_counter_state /
 	// nft_rule_binding / nft_pending_delete（R5-B3 补充 A.3）。
+	// R5-B3 D1-001 D7: 先删库（plan 不再含该转发），再 best-effort reconcile；
+	// 节点不可达时规则残留，残留信息进审计日志供人工清理。
 	if err := h.deleteForwardByID(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && nftMode {
+		for _, nodeID := range entryNodeIDs {
+			if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+				log.Printf("audit op=force_delete_forward_reconcile_skipped forward_id=%d node_id=%d err=%v", id, nodeID, err)
+			}
+		}
 	}
 	log.Printf("audit op=force_delete_forward operator_id=%d forward_id=%d name=%q user_id=%d %s",
 		operatorID, id, forward.Name, forward.UserID, residueHint)
