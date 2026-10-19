@@ -352,6 +352,13 @@ setup_domain_proxy() {
     echo "❌ 域名不能为空"
     return 1
   fi
+  # AUDIT-R1 (SCR-019): 动态证实 DOMAIN 中的 $()/反引号不构成命令注入
+  #（heredoc 单遍展开），但非法字符串会原样写入 Caddyfile 导致 caddy
+  # 重启失败。写文件前做字符集校验，非法输入直接拒绝。
+  if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.*-]+$ ]]; then
+    echo "❌ 域名含非法字符（仅允许字母/数字/./-/*）：$DOMAIN"
+    return 1
+  fi
 
   # 检查域名是否解析到本机
   echo "🔍 检查域名解析..."
