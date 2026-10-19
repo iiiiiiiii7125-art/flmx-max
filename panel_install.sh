@@ -915,11 +915,22 @@ get_public_ip() {
 get_config_params() {
   echo "🔧 请输入配置参数："
 
+  local _pname _pval
   read -p "前端端口（默认 6366）: " FRONTEND_PORT
   FRONTEND_PORT=${FRONTEND_PORT:-6366}
 
   read -p "后端端口（默认 6365）: " BACKEND_PORT
   BACKEND_PORT=${BACKEND_PORT:-6365}
+
+  # AUDIT-R1 (SCR-008): 安装时即校验端口（与更新流程 validate_panel_update_environment
+  # 一致），避免非法值写入 .env 后在 docker compose up 时才暴露，报错远离输入点。
+  for _pname in FRONTEND_PORT BACKEND_PORT; do
+    _pval="${!_pname}"
+    if [[ ! "$_pval" =~ ^[0-9]+$ ]] || (( _pval < 1 || _pval > 65535 )); then
+      echo "❌ $_pname 不是有效端口（1-65535）：$_pval"
+      return 1
+    fi
+  done
 
   echo "请选择数据库类型："
   echo "1. SQLite（默认）"
