@@ -29,7 +29,42 @@ type schemaMigration struct {
 
 func (schemaMigration) TableName() string { return "schema_migration" }
 
-// migrateV1PortUserUnique 执行 v1 迁移（幂等）。
+// precheckResult 预检结果。
+type precheckResult struct {
+	ForwardPortDups int64
+	ChainTunnelDups int64
+	NodeInboundDups int64
+	UsernameDups    int64
+}
+
+// runV1Precheck 运行只读预检（与 scripts/phase_a_dryrun.sql 逻辑一致）。
+func runV1Precheck(db *gorm.DB) (*precheckResult, error) {
+	r := &precheckResult{}
+	queries := []struct {
+		dest *int64
+		sql  string
+	}{
+		{&r.ForwardPortDups, `SELECT COUNT(*) FROM (SELECT 1 FROM forward_port GROUP BY node_id, port HAVING COUNT(*) > 1)`},
+		{&r.ChainTunnelDups, `SELECT COUNT(*) FROM (SELECT 1 FROM chain_tunnel WHERE port IS NOT NULL AND port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1)`},
+		{&r.NodeInboundDups, `SELECT COUNT(*) FROM (SELECT 1 FROM node_inbound GROUP BY node_id, port HAVING COUNT(*) > 1)`},
+		{&r.UsernameDups, `SELECT COUNT(*) FROM (SELECT 1 FROM "user" GROUP BY "user" HAVING COUNT(*) > 1)`},
+	}
+	for _, q := range queries {
+		if err := db.Raw(q.sql).Scan(q.dest).Error; err != nil {
+			return nil, fmt.Errorf("precheck query failed: %w", err)
+		}
+	}
+	return r, nil
+}
+
+// hasDups 是否有重复。
+func (r *precheckResult) hasDups() bool {
+	return r.ForwardPortDups > 0 || r.ChainTunnelDups > 0 || r.NodeInboundDups > 0 || r.UsernameDups > 0
+}
+
+// migrateV1PortUserUnique 执行 v1 迁移（幂等，带预检）。
+//
+// D23: 预检发现重复时不建索引，但面板正常启动；日志输出明确指引。
 func migrateV1PortUserUnique(db *gorm.DB) error {
 	if db.Migrator().HasTable(&schemaMigration{}) {
 		var m schemaMigration
@@ -41,6 +76,24 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 		if err := db.Migrator().CreateTable(&schemaMigration{}); err != nil {
 			return fmt.Errorf("create schema_migration: %w", err)
 		}
+	}
+
+	// D23: 预检。
+	precheck, err := runV1Precheck(db)
+	if err != nil {
+		return fmt.Errorf("migration %s precheck failed: %w", migrationV1Version, err)
+	}
+	if precheck.hasDups() {
+		// 发现重复：不建索引，面板正常启动，输出明确指引。
+		log.Printf("migration %s: PRECHECK FAILED - duplicate data found, skipping index creation",
+			migrationV1Version)
+		log.Printf("  forward_port dups: %d, chain_tunnel dups: %d, node_inbound dups: %d, username dups: %d",
+			precheck.ForwardPortDups, precheck.ChainTunnelDups, precheck.NodeInboundDups, precheck.UsernameDups)
+		log.Printf("  面板将正常启动，但唯一索引未创建。")
+		log.Printf("  清理步骤：运行 scripts/phase_a_dryrun.sql 定位重复，按手册清理后重启面板。")
+		log.Printf("  详见 doc/guide/upgrade.md「从旧版本升级」。")
+		// 记录预检失败（不标记为已应用，下次启动会重试）。
+		return nil
 	}
 
 	indexes := []struct {

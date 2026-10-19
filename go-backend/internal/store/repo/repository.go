@@ -2531,6 +2531,10 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			Status:            status,
 			PasswordChangedAt: now,
 		}
+		// R5-B4C: 备份导入查重。重名时明确报错，不静默覆盖。
+		if err := ensureUsernameAvailable(tx, u.User, u.ID); err != nil {
+			return count, fmt.Errorf("import user %q: %w", u.User, err)
+		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
@@ -2539,7 +2543,8 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			}),
 		}).Create(&item).Error
 		if err != nil {
-			return count, err
+			// R5-B4C: 并发兜底，映射为友好错误。
+			return count, mapUniqueViolation(err, "username")
 		}
 		if u.DailyQuotaGB > 0 || u.MonthlyQuotaGB > 0 || u.DisabledByQuota != 0 || u.QuotaDisabledAt > 0 {
 			current := time.UnixMilli(now)
