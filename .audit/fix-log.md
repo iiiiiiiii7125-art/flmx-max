@@ -186,3 +186,11 @@
 - 变体扫描：`sendTelegram`/`sendWebhook` 均走 `n.client`，已覆盖；DNS rebinding TOCTOU 为 pre-existing 局限，不属本次范围。
 - Pre-fix：动态验证 302→元数据地址被击中；Post-fix：动态验证 302 被拦截（"通知地址指向云元数据服务，已拒绝"）、重定向循环被限制（"通知地址重定向次数过多"）。
 - 回滚：可独立 revert。
+
+## R27 修复（可观测性与性能）
+
+### OBS27-001（P3）— 已修复
+- 根因：`post()` 的 `client.Do()` 错误脱敏（LAD26-017 引入）将 `CheckRedirect` 返回的 `validateNotifyURL` 校验错误（"通知地址..." 系列，不含 URL/token）统一吞成"无法连接"。管理员无法区分网络问题/SSRF 拦截/重定向环。
+- 修复：在 `Do()` 错误处理中，先用错误链匹配检查是否为通知校验错误（含则透出原错误），其余继续脱敏。动态验证：302 到元数据地址返回"通知地址指向云元数据服务，已拒绝"；真实网络错误仍返回"无法连接"（无泄露）；重定向环返回"通知地址重定向次数过多"。
+- 变体扫描：`validateNotifyURL` 的 5 种错误全部以"通知地址"开头，无 URL/token；`sendTelegram`/`sendWebhook` 均走同一 `post()`。
+- 回滚：可独立 revert。

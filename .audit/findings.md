@@ -453,3 +453,14 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 - 修复：`n.client` 加 `CheckRedirect`——重定向目标同样走 `validateNotifyURL` 校验；同时限制最多 5 跳防重定向环。
 - 影响边界：响应不回传给攻击者（`sendWebhook` 丢弃 body），威胁模型需管理员权限。定 P2 理由：完全 nullify 了一个 P2 修复。
 - 发现者：L6 对抗性审查员（动态验证）
+
+## R27 新增（可观测性与性能）
+
+### OBS27-001（P3）— 已修复
+- `CheckRedirect` 拦截时的 `validateNotifyURL` 错误（"通知地址..." 系列，不含 URL/token）被 `post()` 的脱敏逻辑统一吞成"无法连接"。管理员无法区分网络问题/SSRF 拦截/重定向环。
+- 位置：`go-backend/internal/http/handler/notify.go:239-245`
+- 修复：在 `client.Do()` 错误处理中，先检查错误链是否含通知校验错误（含则透出原错误），其余继续脱敏。动态验证：302 到元数据地址返回"通知地址指向云元数据服务，已拒绝"（非"无法连接"）。
+- 发现者：R27 可观测性审计员（动态验证）
+
+### OBS27-002（P3，观察，未修）
+- 通知系统无成功率/延迟/SSRF 拦截 metrics（`internal/metrics/` 无通知埋点）。属功能建议，非阻塞。建议后轮评估。
