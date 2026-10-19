@@ -3055,6 +3055,9 @@ export default function ForwardPage() {
         return { color: "success", text: "正常" };
       case 0:
         return { color: "warning", text: "暂停" };
+      case 2:
+        // R5-B5: pending-delete（节点不可达，等待后台清理）。
+        return { color: "primary", text: "删除中" };
       case -1:
         return { color: "danger", text: "异常" };
       default:
