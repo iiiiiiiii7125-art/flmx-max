@@ -303,6 +303,12 @@ configure_docker_ipv6() {
       else
         # 如果没有 jq，使用 sed
         $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
+        # AUDIT-R1 (SCR-009): 该正则只匹配"整行仅为 {" 的多行 JSON；单行压缩
+        # JSON 无匹配时 sed 静默无操作但退出码为 0。
+        # 此处校验，不成功则明确告警，不谎报成功。
+        if ! $SUDO_CMD grep -q '"ipv6"[[:space:]]*:[[:space:]]*true' "$DOCKER_CONFIG" 2>/dev/null; then
+          echo "⚠️ 无法自动写入 IPv6 配置，请手动添加 \"ipv6\": true"
+        fi
       fi
 
       echo "🔄 重启 Docker 服务..."
