@@ -361,3 +361,20 @@ query := tx.Model(&struct{ ID int64 }{}).Table("\"user\"").Where("\"user\" = ?",
 ### 与历史记忆的差异（诚实记录）
 
 - 记忆中 fix/r5-audit 时期"除 2 个预先存在失败外全过"，但本次在 main@9a2810b 测得 18 个失败。逐条归因：TST-003 的 `username_check.go` 来自 23c281b（在已合并的 17 提交批次内）；TST-001/TST-002 来自用户今日 16:36 的 R5-B7 两笔提交（合并之后）；TST-004 来自批次 4 唯一索引迁移。均非本次审计引入。
+
+## R18 新增
+
+### DAT18-001（P2，可达）— 已修复
+- `DeleteTunnelCascade` 遗漏 `NftPendingDelete`（forward_id），与 `DeleteForwardCascade` 的 R5-B3 D1-001 补充不一致。删除隧道后 nft_pending_delete 残留孤儿行，后台重试循环持续触发不必要 reconcile。
+- 位置：`go-backend/internal/store/repo/repository_mutations.go:669-713`
+- 修复：补 `tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{})`
+
+### DAT18-002（P3，观察）— 已修复
+- `DeleteTunnelCascade` 遗漏 `TunnelQuality`（tunnel_id）。删除隧道后 tunnel_quality 历史探测数据残留（有 `PruneTunnelQualityResults` 自愈，属数据卫生）。
+- 位置：同上
+- 修复：补 `tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{})`
+
+### DAT18-003（P2，可达）— 已修复
+- `DeleteNodeCascade` 遗漏 `NftPendingDelete`（node_id）、`ServiceMonitor`（node_id）、`ServiceMonitorResult`（node_id）。删除节点后孤儿监控任务持续产生"节点不在线"失败记录。
+- 位置：`go-backend/internal/store/repo/repository_mutations.go:392`
+- 修复：补三行级联删除
