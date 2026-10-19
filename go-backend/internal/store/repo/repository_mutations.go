@@ -188,6 +188,10 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := tx.Where("user_id = ?", userID).Delete(&model.UserQuota{}).Error; err != nil {
 			return err
 		}
+		// R5-B7: 补 monitor_permission。
+		if err := tx.Where("user_id = ?", userID).Delete(&model.MonitorPermission{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", userID).Delete(&model.User{}).Error
 	})
 }
@@ -390,6 +394,8 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		// R5-B7: 补全级联删除（C-004~C-008）。
+		// 注意：nft 节点上的转发/隧道由调用方走 pending 流程，此处只清 DB。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
@@ -400,6 +406,32 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 			return err
 		}
 		if err := deleteNodeKernelsTx(tx, nodeID); err != nil {
+			return err
+		}
+		// C-004: SSH 配置（含私钥）。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeSSHConfig{}).Error; err != nil {
+			return err
+		}
+		// C-005: nft 绑定与计数器。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NftRuleBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NftCounterState{}).Error; err != nil {
+			return err
+		}
+		// C-006: 指标。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeMetric{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.TunnelMetric{}).Error; err != nil {
+			return err
+		}
+		// C-007: peer share。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareRuntime{}).Error; err != nil {
+			return err
+		}
+		// C-008: 订阅计数器。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.SubscriptionCounter{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", nodeID).Delete(&model.Node{}).Error
@@ -653,6 +685,28 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 			return err
 		}
 		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
+			return err
+		}
+		// R5-B7 C-009: 补全隧道级联删除。
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.NftCounterState{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
