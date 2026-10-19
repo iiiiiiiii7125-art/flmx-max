@@ -944,7 +944,9 @@ get_config_params() {
   # 一致），避免非法值写入 .env 后在 docker compose up 时才暴露，报错远离输入点。
   for _pname in FRONTEND_PORT BACKEND_PORT; do
     _pval="${!_pname}"
-    if [[ ! "$_pval" =~ ^[0-9]+$ ]] || (( _pval < 1 || _pval > 65535 )); then
+    # AUDIT-R1 (R5R1-001): 算术比较前加 10# 强制十进制。前导零输入（如 080）
+    # 否则被 bash 当八进制解析，stderr 报错但仍被接受，体验差。
+    if [[ ! "$_pval" =~ ^[0-9]+$ ]] || (( 10#$_pval < 1 || 10#$_pval > 65535 )); then
       echo "❌ $_pname 不是有效端口（1-65535）：$_pval"
       return 1
     fi
