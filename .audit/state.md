@@ -3,7 +3,7 @@
 - 任务：flvx-max 自主审计-修复-复核 永续循环（Master Loop v6，2026-10-19 17:20 起取代 v5）
 - 仓库：https://github.com/iiiiiiiii7125-art/flvx-max
 - 基线分支：main @ 9a2810b（2026-10-19）
-- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R25（主视角=数据一致性），分支 audit/loop-25
+- 当前轮次：R2（完成，已合入 audit/integration）；下一轮：R26（主视角=格式与兼容），分支 audit/loop-26
 - 分支策略（v6）：每轮独立分支 `audit/loop-<轮次>`；通过复核的轮次合入 `audit/integration`（已建，基线 main@9a2810b）；**绝不直接动 main**；推送 audit 分支到远端只用非 force；禁止发布 release / 打 tag / force-push。
 - 主视角轮换：轮次 mod 7 → 0 脚本正确性 / 1 功能契约 / 2 安全 / 3 并发与资源 / 4 数据一致性 / 5 格式与兼容 / 6 可观测性与性能
 - 决策记录：`decisions.md`（v6 规范名；v5 的 DECISIONS_NEEDED.md 已删除）
@@ -42,3 +42,4 @@
 | R22 | audit/loop-22 | 功能契约（备份/恢复）+ 防假收敛 L1-L6 | 0/0/0/0 | LAD22-001 + R5R22-001 已修；4 项 P3 观察 | handler 测试（known-baseline 外零失败）；L6 首次退回后通过 | 完成，已合入 audit/integration |
 | R23 | audit/loop-23 | 安全（R18/R22 变更 + 授权覆盖） | 0/0/0/0 | — | 零代码改动；build 通过；R5 复核通过 | 完成，已合入 audit/integration |
 | R24 | audit/loop-24 | 并发与资源（备份路径 + DB 池） | 0/0/0/0 | CON24-001（P3 观察，未修） | 10 并发无死锁 -race 干净；R5 复核通过 | 完成，已合入 audit/integration |
+| R25 | audit/loop-25 | 数据一致性（备份导入） | 0/0/0/0 | — | 零代码改动；build 通过；R5 复核通过 | 完成，已合入 audit/integration |
