@@ -60,9 +60,17 @@ func seedF002Tunnel(t *testing.T, repo *storeRepo.Repository, now int64, name, n
 		t.Fatalf("insert tunnel: %v", err)
 	}
 	tunnelID = mustLastInsertID(t, repo, name)
+	// Node starts OFFLINE (status=0) on purpose: the WS connect handler
+	// registers the node session in s.nodes BEFORE UpdateNodeOnline flips
+	// status to 1, so waitNodeStatus(…, 1) is a real synchronization point
+	// for "the mock session can receive commands". Seeding status=1 made
+	// that wait vacuous and the delete request raced session registration
+	// (SendCommand fails fast with 节点不在线) — an intermittent failure
+	// in the gost sub-cases below and in the F-056/F-057 tests reusing
+	// this seed.
 	if err := repo.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, forward_mode)
-		VALUES(?, ?, '10.0.0.1', '10.0.0.1', '', '26000-26010', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0, ?)
+		VALUES(?, ?, '10.0.0.1', '10.0.0.1', '', '26000-26010', '', 'v1', 1, 1, 1, ?, ?, 0, '[::]', '[::]', 0, ?)
 	`, nodeName, secret, now, now, forwardMode).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
