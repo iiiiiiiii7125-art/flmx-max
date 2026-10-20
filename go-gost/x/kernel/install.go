@@ -3,6 +3,7 @@ package kernel
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -74,6 +75,41 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 		return fmt.Errorf("下载文件过大")
 	}
 	return nil
+}
+
+// stripMirrorPrefix 若 url 是镜像前缀形式（<前缀>/https://目标地址），
+// 返回其中的直连地址；否则返回空串。镜像对某些仓库有黑名单（如 ghfast
+// 拒绝 XTLS/Xray-core），下载失败时用直连地址兜底。
+func stripMirrorPrefix(url string) string {
+	for _, scheme := range []string{"/https://", "/http://"} {
+		if i := strings.Index(url, scheme); i > 0 {
+			return url[i+1:]
+		}
+	}
+	return ""
+}
+
+// fetchWithMirrorFallback 先按原地址下载；失败且地址是镜像前缀形式时，
+// 剥离前缀回退直连再试一次。内容先落缓冲、成功才写入 w，避免失败尝试的
+// 半截内容污染。仅用于小文件（校验文件/API 响应），大文件走 install 的
+// 可重置下载闭包。
+func fetchWithMirrorFallback(ctx context.Context, url string, limit int64, w io.Writer) error {
+	var buf bytes.Buffer
+	if err := fetch(ctx, url, limit, &buf); err == nil {
+		_, err = io.Copy(w, &buf)
+		return err
+	} else {
+		direct := stripMirrorPrefix(url)
+		if direct == "" {
+			return err
+		}
+		buf.Reset()
+		if ferr := fetch(ctx, direct, limit, &buf); ferr != nil {
+			return fmt.Errorf("%v；镜像失败后回退直连亦失败: %v", err, ferr)
+		}
+		_, ferr := io.Copy(w, &buf)
+		return ferr
+	}
 }
 
 // githubAPIBase is a variable so tests can point it at a local server.
@@ -161,12 +197,30 @@ func install(d *Download, binDir string) error {
 	defer tmp.Close()
 
 	hasher := sha256.New()
-	if err := fetch(ctx, url, maxDownloadBytes, io.MultiWriter(tmp, hasher)); err != nil {
-		return err
+	// download 把 url 下载到临时文件并同步计算 SHA256；每次尝试前重置
+	// 文件与哈希状态。镜像前缀地址失败时回退直连地址再试一次。
+	download := func(u string) error {
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		if err := tmp.Truncate(0); err != nil {
+			return err
+		}
+		hasher.Reset()
+		return fetch(ctx, u, maxDownloadBytes, io.MultiWriter(tmp, hasher))
+	}
+	if err := download(url); err != nil {
+		direct := stripMirrorPrefix(url)
+		if direct == "" {
+			return err
+		}
+		if ferr := download(direct); ferr != nil {
+			return fmt.Errorf("%v；镜像失败后回退直连亦失败: %v", err, ferr)
+		}
 	}
 	if want == "" {
 		var sb strings.Builder
-		if err := fetch(ctx, sumURL, 64<<10, &sb); err != nil {
+		if err := fetchWithMirrorFallback(ctx, sumURL, 64<<10, &sb); err != nil {
 			return fmt.Errorf("获取校验文件失败: %v", err)
 		}
 		var ok bool
