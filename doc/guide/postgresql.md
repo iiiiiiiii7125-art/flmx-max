@@ -217,22 +217,22 @@ docker exec -i flux-panel-postgres psql -U flux_panel flux_panel < backup_202601
 
 ### 定时备份（cron）
 
-创建备份脚本 `/opt/flvx/backup.sh`：
+创建备份脚本 `/opt/flmx/backup.sh`：
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/opt/flvx/backups"
+BACKUP_DIR="/opt/flmx/backups"
 mkdir -p "$BACKUP_DIR"
-docker exec flux-panel-postgres pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flvx_$(date +%Y%m%d_%H%M%S).sql.gz"
+docker exec flux-panel-postgres pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
 # 清理 30 天前的备份
-find "$BACKUP_DIR" -name "flvx_*.sql.gz" -mtime +30 -delete
+find "$BACKUP_DIR" -name "flmx_*.sql.gz" -mtime +30 -delete
 ```
 
 添加 cron 任务（每天凌晨 3 点执行）：
 
 ```bash
-chmod +x /opt/flvx/backup.sh
-echo "0 3 * * * /opt/flvx/backup.sh" | crontab -
+chmod +x /opt/flmx/backup.sh
+echo "0 3 * * * /opt/flmx/backup.sh" | crontab -
 ```
 
 ---
