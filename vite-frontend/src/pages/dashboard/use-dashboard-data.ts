@@ -18,7 +18,8 @@ export interface DashboardUserInfo {
   inFlow: number;
   outFlow: number;
   num: number;
-  expTime?: string | number;
+  /** 后端 int64 毫秒；旧声明 string | number 曾掩盖 types.ts 的错误（F-141）。 */
+  expTime?: number;
   flowResetTime?: number;
 }
 

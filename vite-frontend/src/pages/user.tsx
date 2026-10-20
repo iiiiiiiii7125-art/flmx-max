@@ -405,8 +405,10 @@ export default function UserPage() {
         const speedLimitList = Array.isArray(response.data)
           ? response.data.map((item) => ({
               ...item,
-              uploadSpeed: item.uploadSpeed ?? item.speed ?? 0,
-              downloadSpeed: item.downloadSpeed ?? item.speed ?? 0,
+              // 后端只有单一 speed、无分向限速字段（F-140）：本地模型的两
+              // 字段由 speed 派生，不再读线缆类型上已删除的幻影字段。
+              uploadSpeed: item.speed ?? 0,
+              downloadSpeed: item.speed ?? 0,
             }))
           : [];
 

@@ -153,9 +153,10 @@ interface Node {
   status: number; // 1: 在线, 0: 离线
   forwardMode?: "agent" | "nftables";
   serverIp?: string;
-  serverIpV4?: string;
-  serverIpV6?: string;
-  extraIPs?: string;
+  /** 与 NodeApiItem 同步：后端 nullable 下发（F-062）。 */
+  serverIpV4?: string | null;
+  serverIpV6?: string | null;
+  extraIPs?: string | null;
 }
 
 interface TunnelForm {
@@ -399,7 +400,7 @@ export default function TunnelPage() {
     }
 
     const values: string[] = [];
-    const push = (value?: string) => {
+    const push = (value?: string | null) => {
       const trimmed = (value || "").trim();
 
       if (trimmed) {

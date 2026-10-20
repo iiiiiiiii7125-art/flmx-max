@@ -91,8 +91,7 @@ export interface UserTunnelBatchAssignForm {
 export interface Tunnel {
   id: number;
   name: string;
-  entryNodeId: number;
-  exitNodeId: number;
+  // entryNodeId/exitNodeId 后端从不下发，已删除（F-142，与 api/types.ts 同步）。
   entryNodeName?: string;
   exitNodeName?: string;
   status?: number;

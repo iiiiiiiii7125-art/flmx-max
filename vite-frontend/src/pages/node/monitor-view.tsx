@@ -525,6 +525,8 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
 
 const DEFAULT_SERVICE_MONITOR_LIMITS: ServiceMonitorLimitsApiData = {
   checkerScanIntervalSec: 1,
+  // 与后端 DefaultServiceMonitorLimits 对齐（F-144 补声明后同步）。
+  workerLimit: 20,
   minIntervalSec: 1,
   defaultIntervalSec: 1,
   minTimeoutSec: 1,
