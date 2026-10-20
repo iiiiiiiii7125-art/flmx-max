@@ -24,6 +24,10 @@ type instance struct {
 	logs    *logRing
 	procs   []*process
 	err     string
+	// goodHash 是最近一次被确认 Running 的配置 Hash（F-032）。回滚判定
+	// 以它为准，不用下发瞬间的进程快照——旧进程正处崩溃退避间隙时
+	// 快照为 false，旧实现会因此放弃回滚并把坏配置 persist 固化。
+	goodHash string
 }
 
 // Manager owns every kernel instance on this agent. Apply/Control are
@@ -213,6 +217,9 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 	prev := prevApply{req: inst.req, binDir: inst.binDir, bins: inst.bins, version: inst.version, files: prevFiles}
+	// F-032: 上一版是否"曾确认可用"在覆盖 inst.req 前定格，与瞬时
+	// 进程快照无关（退避间隙 procs 不在运行，prev 仍是可回滚的好配置）。
+	prevGood := prev.req.Enabled && prev.req.Hash != "" && prev.req.Hash == inst.goodHash
 	inst.req = req
 	inst.binDir = binDir
 	inst.bins = bins
@@ -226,31 +233,52 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	stable := true
 	switch {
 	case !req.Enabled:
 		m.stopProcesses(inst)
 	case changed || !running:
 		m.stopProcesses(inst)
 		m.startProcesses(inst)
-		time.Sleep(startupProbeIn)
+		// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
+		// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
+		stable = m.waitStable(req.Type)
 	}
 
 	var failure error
-	if req.Enabled && !m.state(req.Type, false).Running {
+	confirmed := true
+	if req.Enabled && (!stable || !m.state(req.Type, false).Running) {
 		failed := lastLines(inst.logs, 5)
 		failure = fmt.Errorf("内核启动失败: %s", failed)
-		if running && prev.req.Enabled {
-			// It ran before this change: keep the node serving on the
-			// previous config instead of leaving it down.
+		confirmed = false
+		if prevGood {
+			// The previous config is known-good: keep the node serving
+			// on it instead of leaving it down.
 			m.rollback(inst, runDir, prev)
 			if m.state(req.Type, false).Running {
 				failure = fmt.Errorf("新配置无法启动，已恢复上一次的配置: %s", failed)
 				m.setErr(inst, failure)
+				confirmed = true
 			}
 		}
 	}
 
-	m.persist()
+	// 记录最近一次确认可用的配置，供后续回滚判定（F-032）。
+	if st := m.state(req.Type, false); st.Running {
+		m.mu.Lock()
+		if cur := m.instances[req.Type]; cur != nil && cur.req.Enabled {
+			cur.goodHash = cur.req.Hash
+		}
+		m.mu.Unlock()
+	}
+
+	if confirmed {
+		m.persist()
+	} else {
+		// F-032: 未确认可用的坏配置不得 persist 固化，否则 agent
+		// 重启 Restore 会反复拉起坏配置；保留上一次的持久状态。
+		inst.logs.add("[flmx] 新配置未确认可用，未写入持久状态；重启后将恢复上一次的配置")
+	}
 	if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
 		inst.logs.add("[flmx] 流量计数规则同步失败: " + err.Error())
 	}
@@ -284,7 +312,27 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 	m.mu.Unlock()
 	m.stopProcesses(inst)
 	m.startProcesses(inst)
-	time.Sleep(startupProbeIn)
+	m.waitStable(prev.req.Type)
+}
+
+// waitStable 在探活窗口（startupProbeIn）内持续观察进程存活：达到过
+// Running 后在窗口内退出即判失败；全程未 Running 也判失败。窗口长度
+// 与旧的单次 Sleep 一致，不增加 Apply/Control 时延（F-032）。
+func (m *Manager) waitStable(kernelType string) bool {
+	deadline := time.Now().Add(startupProbeIn)
+	seenRunning := false
+	for {
+		running := m.state(kernelType, false).Running
+		if running {
+			seenRunning = true
+		} else if seenRunning {
+			return false
+		}
+		if !time.Now().Before(deadline) {
+			return seenRunning && running
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // readFiles returns the current contents of the files an apply is about to
@@ -409,7 +457,12 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		inst.req.Enabled = true
 		m.mu.Unlock()
 		m.startProcesses(inst)
-		time.Sleep(startupProbeIn)
+		m.waitStable(kernelType)
+		if m.state(kernelType, false).Running {
+			m.mu.Lock()
+			inst.goodHash = inst.req.Hash
+			m.mu.Unlock()
+		}
 	default:
 		return State{}, fmt.Errorf("未知操作: %s", action)
 	}

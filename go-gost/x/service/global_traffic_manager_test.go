@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-gost/x/internal/util/crypto"
 )
 
 func TestGlobalTrafficManagerRemoveServicesDropsCachedEntries(t *testing.T) {
@@ -62,7 +65,12 @@ func TestGlobalTrafficManagerCollectAndReportDropsStaleEntriesAfterReporting(t *
 	}()
 
 	httpReportURL = "http://panel.example.com/flow/upload?secret=abc"
-	httpAESCrypto = nil
+	// F-089 后加密器缺失即拒绝发送，本用例装真实加密器并解密后断言。
+	c, err := crypto.NewAESCrypto("abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpAESCrypto = c
 
 	var requestBody string
 	reportDo = func(_ context.Context, req *http.Request, _ time.Duration) (*http.Response, error) {
@@ -70,7 +78,18 @@ func TestGlobalTrafficManagerCollectAndReportDropsStaleEntriesAfterReporting(t *
 		if err != nil {
 			t.Fatalf("read request body: %v", err)
 		}
-		requestBody = string(body)
+		var wrapper struct {
+			Encrypted bool   `json:"encrypted"`
+			Data      string `json:"data"`
+		}
+		if jerr := json.Unmarshal(body, &wrapper); jerr != nil || !wrapper.Encrypted {
+			t.Fatalf("上报必须是加密信封: %v %s", jerr, body)
+		}
+		plain, derr := c.Decrypt(wrapper.Data)
+		if derr != nil {
+			t.Fatalf("decrypt report body: %v", derr)
+		}
+		requestBody = string(plain)
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader("ok")),
