@@ -1333,7 +1333,7 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 		return kernelVersionCache.items[info.Type], nil
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo))
+	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=15", githubAPIBase, info.ReleaseRepo))
 	if err != nil {
 		return nil, fmt.Errorf("获取版本列表失败: %v", err)
 	}
@@ -1342,7 +1342,9 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 		return nil, fmt.Errorf("获取版本列表失败: GitHub 返回 %d", resp.StatusCode)
 	}
 	var releases []githubRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&releases); err != nil {
+	// 上限须远大于上游实际体积：sing-box 每版资产极多，per_page=30 的 JSON 曾达
+	// 10MiB，旧的 4MiB 上限会把解码截断成 unexpected EOF（版本列表必然失败）。
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&releases); err != nil {
 		return nil, fmt.Errorf("解析版本列表失败: %v", err)
 	}
 	out := make([]kernelVersionItem, 0, len(releases))
