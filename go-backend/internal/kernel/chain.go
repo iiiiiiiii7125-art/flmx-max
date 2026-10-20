@@ -183,11 +183,13 @@ type chainTarget struct {
 	Host     string
 	Port     int
 
-	UUID     string
-	Flow     string
-	Cipher   string // VMess security / Shadowsocks method
-	Username string
-	Password string
+	UUID string
+	Flow string
+	// Encryption 是 VLESS 加密的客户端串（链式出站 user 的 encryption 字段）。
+	Encryption string
+	Cipher     string // VMess security / Shadowsocks method
+	Username   string
+	Password   string
 
 	Network     string // tcp, ws, httpupgrade, grpc, xhttp
 	Path        string
@@ -226,6 +228,13 @@ func chainTargetFromInbound(e Endpoint) (chainTarget, error) {
 	switch in.Protocol {
 	case ProtocolVLESS:
 		t.Protocol, t.UUID, t.Flow = "vless", in.Settings.UUID, in.Settings.Flow
+		if in.Settings.EncryptionEnabled() {
+			enc, err := in.Settings.EncryptionString()
+			if err != nil {
+				return t, err
+			}
+			t.Encryption = enc
+		}
 	case ProtocolVMess:
 		t.Protocol, t.UUID, t.Cipher = "vmess", in.Settings.UUID, "auto"
 	case ProtocolTrojan:
@@ -271,6 +280,9 @@ func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 	switch p.Type() {
 	case "vless":
 		t.Protocol, t.UUID, t.Flow = "vless", p.str("uuid"), p.str("flow")
+		if enc := p.str("encryption"); enc != "" && enc != "none" {
+			t.Encryption = enc
+		}
 	case "vmess":
 		t.Protocol, t.UUID, t.Cipher = "vmess", p.str("uuid"), firstNonEmptyString(p.str("cipher"), "auto")
 	case "trojan":
@@ -348,6 +360,9 @@ func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 	switch t.Protocol {
 	case "vless":
 		user := obj{"id": t.UUID, "encryption": "none"}
+		if t.Encryption != "" {
+			user["encryption"] = t.Encryption
+		}
 		if t.Flow != "" {
 			user["flow"] = t.Flow
 		}

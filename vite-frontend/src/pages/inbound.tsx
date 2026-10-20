@@ -639,6 +639,11 @@ export default function InboundPage() {
             <Chip color="primary" size="sm" variant="flat">
               {describeInbound(item)}
             </Chip>
+            {item.settings.encryptionAuth && (
+              <Chip color="secondary" size="sm" variant="flat">
+                IX 中转专用协议
+              </Chip>
+            )}
             <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
               端口 {item.port}
             </span>

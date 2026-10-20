@@ -150,6 +150,9 @@ var loonSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", 
 	"chacha20", "chacha20-ietf", "rc4-md5"})
 
 func loonLine(p Proxy) (string, bool) {
+	if enc := p.str("encryption"); enc != "" && enc != "none" {
+		return "", false // Loon 无 VLESS 加密的已证实支持，跳过而非渲染坏节点
+	}
 	server, port := p.str("server"), p.num("port")
 	parts := []string{}
 	add := func(s ...string) { parts = append(parts, s...) }
@@ -316,6 +319,9 @@ var qxSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "c
 	"chacha20", "chacha20-ietf", "rc4-md5", "none"})
 
 func qxLine(p Proxy) (string, bool) {
+	if enc := p.str("encryption"); enc != "" && enc != "none" {
+		return "", false // QX 无 VLESS 加密的已证实支持，跳过而非渲染坏节点
+	}
 	parts := []string{fmt.Sprintf("%s:%d", p.str("server"), p.num("port"))}
 	add := func(s ...string) { parts = append(parts, s...) }
 	// R5-B5 订阅转义：QX 行式格式用逗号分隔、等号分隔键值。

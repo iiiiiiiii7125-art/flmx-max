@@ -67,7 +67,11 @@ func ShareURI(e Endpoint) (string, bool) {
 		q.Set("type", in.Transport.Type)
 		q.Set("security", in.Security.Type)
 		if in.Protocol == ProtocolVLESS {
-			q.Set("encryption", "none")
+			enc, err := in.Settings.EncryptionString()
+			if err != nil {
+				return "", false
+			}
+			q.Set("encryption", enc)
 			if in.Settings.Flow != "" {
 				q.Set("flow", in.Settings.Flow)
 			}
@@ -234,6 +238,13 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 		if in.Settings.Flow != "" {
 			p = append(p, yamlField{"flow", in.Settings.Flow})
 		}
+		if in.Settings.EncryptionEnabled() {
+			enc, err := in.Settings.EncryptionString()
+			if err != nil {
+				return nil, false
+			}
+			p = append(p, yamlField{"encryption", enc})
+		}
 	case ProtocolVMess:
 		p = append(p, yamlField{"uuid", in.Settings.UUID}, yamlField{"alterId", 0}, yamlField{"cipher", "auto"})
 	case ProtocolTrojan:
@@ -313,6 +324,11 @@ func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
 	}
 	in := e.Inbound
 	if in.Protocol == ProtocolSnell {
+		return nil, false
+	}
+	if in.Settings.EncryptionEnabled() {
+		// sing-box 不支持 VLESS 加密（官方 changelog 与字段文档均无），跳过而非
+		// 渲染出缺 encryption 的坏节点。
 		return nil, false
 	}
 	o, ok := singboxOutbound(e)

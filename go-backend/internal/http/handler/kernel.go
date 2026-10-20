@@ -724,6 +724,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", k.Version)))
 		return
 	}
+	if in.Settings.EncryptionEnabled() && versionBelow3(k.Version, 25, 6, 8) {
+		releasePortAlloc()
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", k.Version)))
+		return
+	}
 	prevTargets := outboundTargets(row)
 	if err := h.setInboundRouting(&row, k.KernelType, req.OutboundID, req.SplitRules); err != nil {
 		releasePortAlloc()
@@ -1219,6 +1224,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		if !kernel.ComboSupported(k.KernelType, in.Protocol, in.Transport.Type, in.Security.Type) {
 			return nil, "", fmt.Errorf("入站「%s」的协议组合（%s / %s / %s）与内核 %s 不匹配，已拒绝下发，请修正或删除该入站", row.Name, in.Protocol, in.Transport.Type, in.Security.Type, k.KernelType)
 		}
+		if in.Settings.EncryptionEnabled() && versionBelow3(k.Version, 25, 6, 8) {
+			return nil, "", fmt.Errorf("入站「%s」启用了 VLESS 加密，需要 Xray 25.6.8 及以上，节点安装的是 %s，已拒绝下发", row.Name, k.Version)
+		}
 		publicPorts[in.Port] = row.Name
 		if in.Protocol == kernel.ProtocolSnell && in.Security.Type == kernel.SecurityShadowTLS && in.Settings.BackendPort > 0 {
 			if prev, dup := backendPorts[in.Settings.BackendPort]; dup {
@@ -1407,6 +1415,28 @@ func versionBelow(version string, major, minor int) bool {
 		return false
 	}
 	return ma < major || (ma == major && mi < minor)
+}
+
+// versionBelow3 是 versionBelow 的三段版（Xray 的 25.6.8 这类下限需要精确到
+// 修订号）；"latest" 与不可解析的版本同样不视为过低。
+func versionBelow3(version string, major, minor, patch int) bool {
+	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
+	if len(parts) < 3 {
+		return false
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	pa, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return false
+	}
+	if ma != major {
+		return ma < major
+	}
+	if mi != minor {
+		return mi < minor
+	}
+	return pa < patch
 }
 
 // snellMajor returns the protocol major version a Snell binary serves.
