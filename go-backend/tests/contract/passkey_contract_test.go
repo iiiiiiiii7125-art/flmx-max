@@ -9,9 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"go-backend/internal/auth"
@@ -20,6 +23,9 @@ import (
 
 const passkeyTestOrigin = "https://panel.example.test"
 
+// passkeyReqSeq 为 passkeyPost 的每个请求分配独立源 IP（见下）。
+var passkeyReqSeq atomic.Uint32
+
 func passkeyPost(t *testing.T, router http.Handler, path, token string, body interface{}) response.R {
 	t.Helper()
 	raw, err := json.Marshal(body)
@@ -27,6 +33,13 @@ func passkeyPost(t *testing.T, router http.Handler, path, token string, body int
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	// 测试侧隔离限流桶键值：登录限流按客户端 IP 计数（globalLoginLimiter，
+	// 10/min/IP，K-005 有意设计，不得放宽）。passkey 契约单个用例的
+	// login begin/finish 调用数远超该阈值，且 httptest 默认 RemoteAddr 全包
+	// 共用会跨用例串扰同一桶。此处仅在测试侧让每个请求带独立源 IP，
+	// 使每个请求落入自己的限流桶；产品限流逻辑与阈值一字未动。
+	n := passkeyReqSeq.Add(1)
+	req.RemoteAddr = fmt.Sprintf("198.51.%d.%d:1234", (n>>8)&0xff, n&0xff)
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", token)
@@ -133,7 +146,11 @@ func TestPasskeyRegistrationAndOwnership(t *testing.T) {
 	// Deletion must not prevent the same account from binding a new key.
 	// O11-P3-1: passkey 删除会吊销该用户已签发的 JWT（防旧会话继续有效），
 	// 因此重绑前需要重新登录签发新 token（模拟用户删密钥后重新登录的流程）。
-	aliceToken, _ = auth.GenerateToken(9302, "passkey-alice", 1, "passkey-test-secret")
+	// 中间件以 IatMs <= PasswordChangedAt 判定吊销（同毫秒亦拒绝，产品有意
+	// 行为）；紧贴删除时刻签发的 token 会偶发同毫秒被拒（-count=10 下复现），
+	// 故测试侧把新 token 的签发时刻显式置于删除之后 2s，模拟真实重登录的
+	// 时间间隔，不依赖睡眠竞速。
+	aliceToken, _ = auth.GenerateTokenAt(9302, "passkey-alice", 1, "passkey-test-secret", time.Now().Add(2*time.Second))
 	rebind := passkeyData(t, passkeyPost(t, router, "/api/v1/user/passkey/register/begin", aliceToken, map[string]string{"password": "alice-password"}))
 	newID := make([]byte, 32)
 	if _, err := rand.Read(newID); err != nil {

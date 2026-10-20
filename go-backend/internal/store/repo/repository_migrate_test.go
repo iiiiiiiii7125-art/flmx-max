@@ -68,20 +68,7 @@ func TestOpenBackfillsSQLiteLegacyTunnelProbeTargetColumns(t *testing.T) {
 		t.Fatalf("open legacy sqlite: %v", err)
 	}
 
-	if err := db.Exec(`
-		CREATE TABLE tunnel (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name VARCHAR(100) NOT NULL,
-			traffic_ratio REAL NOT NULL DEFAULT 1.0,
-			type INTEGER NOT NULL,
-			protocol VARCHAR(10) NOT NULL DEFAULT 'tls',
-			flow INTEGER NOT NULL,
-			created_time INTEGER NOT NULL,
-			updated_time INTEGER NOT NULL,
-			status INTEGER NOT NULL,
-			in_ip TEXT
-		)
-	`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE tunnel (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, traffic_ratio REAL NOT NULL DEFAULT 1.0, type INTEGER NOT NULL, protocol VARCHAR(10) NOT NULL DEFAULT 'tls', flow INTEGER NOT NULL, created_time INTEGER NOT NULL, updated_time INTEGER NOT NULL, status INTEGER NOT NULL, in_ip TEXT)`).Error; err != nil {
 		t.Fatalf("create legacy tunnel table: %v", err)
 	}
 	if err := db.Exec(`
@@ -126,24 +113,7 @@ func TestOpenBackfillsSQLiteLegacyForwardColumns(t *testing.T) {
 		t.Fatalf("open legacy sqlite: %v", err)
 	}
 
-	if err := db.Exec(`
-		CREATE TABLE forward (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			user_name VARCHAR(100) NOT NULL,
-			name VARCHAR(100) NOT NULL,
-			tunnel_id INTEGER NOT NULL,
-			remote_addr TEXT NOT NULL,
-			strategy VARCHAR(100) NOT NULL DEFAULT 'fifo',
-			in_flow INTEGER NOT NULL DEFAULT 0,
-			out_flow INTEGER NOT NULL DEFAULT 0,
-			created_time INTEGER NOT NULL,
-			updated_time INTEGER NOT NULL,
-			status INTEGER NOT NULL,
-			inx INTEGER NOT NULL DEFAULT 0,
-			speed_id INTEGER
-		)
-	`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE forward (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, user_name VARCHAR(100) NOT NULL, name VARCHAR(100) NOT NULL, tunnel_id INTEGER NOT NULL, remote_addr TEXT NOT NULL, strategy VARCHAR(100) NOT NULL DEFAULT 'fifo', in_flow INTEGER NOT NULL DEFAULT 0, out_flow INTEGER NOT NULL DEFAULT 0, created_time INTEGER NOT NULL, updated_time INTEGER NOT NULL, status INTEGER NOT NULL, inx INTEGER NOT NULL DEFAULT 0, speed_id INTEGER)`).Error; err != nil {
 		t.Fatalf("create legacy forward table: %v", err)
 	}
 	if err := db.Exec(`
