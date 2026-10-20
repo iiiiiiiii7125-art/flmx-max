@@ -12,6 +12,7 @@ export default defineConfig({
     logo: "/logo.jpg",
     nav: [
       { text: "指南", link: "/guide/getting-started" },
+      { text: "在线演示", link: "https://iiiiiiiii7125-art.github.io/flmx-max/demo/" },
       { text: "下载", link: "https://github.com/iiiiiiiii7125-art/flmx-max/releases" },
     ],
     sidebar: [
