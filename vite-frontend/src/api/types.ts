@@ -716,6 +716,9 @@ export interface KernelStateApiData {
 export interface InboundSettings {
   uuid?: string;
   flow?: string;
+  encryptionAuth?: string;
+  encryptionMode?: string;
+  encryptionSecret?: string;
   password?: string;
   method?: string;
   snellVersion?: number;

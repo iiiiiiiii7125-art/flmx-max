@@ -39,6 +39,7 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
+import { Chip } from "@/shadcn-bridge/heroui/chip";
 
 interface Props {
   isOpen: boolean;
@@ -506,6 +507,73 @@ export function InboundFormModal({
                       onValueChange={(v) => set("flowVision", v)}
                     />
                     <span className="text-sm">启用 XTLS Vision 流控</span>
+                  </div>
+                )}
+                {form.kernelType === "xray" && form.protocol === "vless" && (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        isSelected={form.encryptionEnabled}
+                        size="sm"
+                        onValueChange={(v) => set("encryptionEnabled", v)}
+                      />
+                      <span className="text-sm">启用 VLESS 加密（ENC）</span>
+                      <Chip color="secondary" size="sm" variant="flat">
+                        IX 中转专用协议
+                      </Chip>
+                    </div>
+                    {form.encryptionEnabled && (
+                      <>
+                        <Select
+                          label="认证方式"
+                          selectedKeys={[form.encryptionAuth]}
+                          onSelectionChange={(keys) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              encryptionAuth: String(
+                                Array.from(keys)[0] ?? prev.encryptionAuth,
+                              ),
+                            }))
+                          }
+                        >
+                          <SelectItem key="x25519" textValue="X25519 认证（链接短）">
+                            X25519 认证（链接短）
+                          </SelectItem>
+                          <SelectItem
+                            key="mlkem768"
+                            textValue="ML-KEM-768 认证（后量子，链接长）"
+                          >
+                            ML-KEM-768 认证（后量子，链接长）
+                          </SelectItem>
+                        </Select>
+                        <Select
+                          label="流量外观"
+                          selectedKeys={[form.encryptionMode]}
+                          onSelectionChange={(keys) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              encryptionMode: String(
+                                Array.from(keys)[0] ?? prev.encryptionMode,
+                              ),
+                            }))
+                          }
+                        >
+                          <SelectItem key="native" textValue="native 原生">
+                            native 原生
+                          </SelectItem>
+                          <SelectItem key="xorpub" textValue="xorpub 公钥混淆">
+                            xorpub 公钥混淆
+                          </SelectItem>
+                          <SelectItem key="random" textValue="random 全随机">
+                            random 全随机
+                          </SelectItem>
+                        </Select>
+                        <p className="text-xs text-default-400">
+                          需要节点 Xray 25.6.8 及以上。启用后 sing-box、Surge、Loon、Quantumult
+                          X、小火箭格式的订阅不会包含此入站，请用 Clash 或通用链接分发。
+                        </p>
+                      </>
+                    )}
                   </div>
                 )}
                 {form.protocol === "shadowsocks" && (

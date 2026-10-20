@@ -85,7 +85,7 @@ func xraySettings(in Inbound) (obj, error) {
 		if s.Flow != "" {
 			client["flow"] = s.Flow
 		}
-		return obj{"clients": append([]interface{}{client}, xrayUserClients(in)...), "decryption": "none"}, nil
+		return obj{"clients": append([]interface{}{client}, xrayUserClients(in)...), "decryption": s.DecryptionString()}, nil
 	case ProtocolVMess:
 		return obj{"clients": append([]interface{}{obj{"id": s.UUID}}, xrayUserClients(in)...)}, nil
 	case ProtocolTrojan:

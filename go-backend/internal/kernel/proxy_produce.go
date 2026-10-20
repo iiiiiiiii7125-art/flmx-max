@@ -64,7 +64,11 @@ func proxyURI(e Endpoint) (string, bool) {
 		user := url.PathEscape(p.str("password"))
 		if p.Type() == "vless" {
 			user = p.str("uuid")
-			q.Set("encryption", "none")
+			if enc := p.str("encryption"); enc != "" {
+				q.Set("encryption", enc)
+			} else {
+				q.Set("encryption", "none")
+			}
 			if f := p.str("flow"); f != "" {
 				q.Set("flow", f)
 			}
@@ -343,6 +347,10 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		}
 		tls(p.usesTLS())
 	case "vless":
+		if enc := p.str("encryption"); enc != "" && enc != "none" {
+			// sing-box 不支持 VLESS 加密，跳过而非渲染坏节点。
+			return nil, false
+		}
 		o["type"] = "vless"
 		o["uuid"] = p.str("uuid")
 		if f := p.str("flow"); f != "" {

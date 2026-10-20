@@ -28,6 +28,13 @@ type Settings struct {
 	// PortHopping is a UDP range ("20000-30000") the agent redirects to the
 	// Hysteria2 port so clients can hop between ports.
 	PortHopping string `json:"portHopping,omitempty"`
+
+	// VLESS 加密（mlkem768x25519plus）：EncryptionAuth 为空表示禁用，
+	// 取 x25519（服务端存 X25519 私钥）或 mlkem768（服务端存 ML-KEM seed）；
+	// EncryptionSecret 是服务端认证秘密，客户端 encryption 串由它单向派生，不另存。
+	EncryptionAuth   string `json:"encryptionAuth,omitempty"`
+	EncryptionMode   string `json:"encryptionMode,omitempty"`
+	EncryptionSecret string `json:"encryptionSecret,omitempty"`
 }
 
 // HopRange returns the port-hopping range, or 0, 0 when disabled.
@@ -259,6 +266,9 @@ func Normalize(kernelType string, in *Inbound) error {
 	if in.Security.CertMode == CertModeACME && kernelType != TypeSingbox {
 		return errors.New("自动申请证书（ACME）目前只支持 sing-box 内核")
 	}
+	if in.Settings.EncryptionEnabled() && (kernelType != TypeXray || in.Protocol != ProtocolVLESS) {
+		return errors.New("VLESS 加密仅支持 Xray 内核的 VLESS 入站")
+	}
 	if in.Protocol == ProtocolNaive && in.Security.CertMode == CertModeSelf {
 		// Naive clients verify certificates and self-signed ones are
 		// trivially fingerprinted, which defeats NaïveProxy.
@@ -323,6 +333,32 @@ func normalizeSettings(in *Inbound) error {
 	s.Password = strings.TrimSpace(s.Password)
 	s.Method = strings.TrimSpace(s.Method)
 	s.Flow = strings.TrimSpace(s.Flow)
+	s.EncryptionAuth = strings.TrimSpace(s.EncryptionAuth)
+	s.EncryptionMode = strings.TrimSpace(s.EncryptionMode)
+	if s.EncryptionEnabled() {
+		if s.EncryptionAuth != EncryptionAuthX25519 && s.EncryptionAuth != EncryptionAuthMLKEM {
+			return fmt.Errorf("不支持的 VLESS 加密认证方式 %s", s.EncryptionAuth)
+		}
+		switch s.EncryptionMode {
+		case "", EncryptionModeNative, EncryptionModeXorpub, EncryptionModeRandom:
+		default:
+			return fmt.Errorf("不支持的 VLESS 加密外观模式 %s", s.EncryptionMode)
+		}
+		if s.EncryptionMode == "" {
+			s.EncryptionMode = EncryptionModeNative
+		}
+		if s.EncryptionSecret == "" {
+			secret, err := GenerateEncryptionSecret(s.EncryptionAuth)
+			if err != nil {
+				return err
+			}
+			s.EncryptionSecret = secret
+		} else if err := ValidateEncryptionSecret(s.EncryptionAuth, s.EncryptionSecret); err != nil {
+			return err
+		}
+	} else {
+		s.EncryptionMode, s.EncryptionSecret = "", ""
+	}
 	if in.Protocol != ProtocolNaive {
 		s.Username = ""
 	}
@@ -336,7 +372,7 @@ func normalizeSettings(in *Inbound) error {
 			return errors.New("UUID 格式错误")
 		}
 		s.Password, s.Method = "", ""
-		visionOK := in.Protocol == ProtocolVLESS && in.Transport.Type == TransportTCP && in.Security.Type != SecurityNone
+		visionOK := in.Protocol == ProtocolVLESS && in.Transport.Type == TransportTCP && (in.Security.Type != SecurityNone || s.EncryptionEnabled())
 		if s.Flow != "" && (s.Flow != FlowVision || !visionOK) {
 			s.Flow = ""
 		}
@@ -620,6 +656,7 @@ func normalizeACME(sec *Security) error {
 func Regenerate(kernelType string, in *Inbound) error {
 	in.Settings.UUID = ""
 	in.Settings.Password = ""
+	in.Settings.EncryptionSecret = ""
 	in.Security.RealityPrivateKey = ""
 	in.Security.RealityPublicKey = ""
 	in.Security.RealityShortIDs = nil

@@ -71,6 +71,10 @@ export interface InboundForm {
   port: string;
   uuid: string;
   flowVision: boolean;
+  encryptionEnabled: boolean;
+  encryptionAuth: string;
+  encryptionMode: string;
+  encryptionSecret: string;
   password: string;
   method: string;
   snellVersion: string;
@@ -267,6 +271,10 @@ export function emptyForm(
     port: "",
     uuid: "",
     flowVision: true,
+    encryptionEnabled: false,
+    encryptionAuth: "x25519",
+    encryptionMode: "native",
+    encryptionSecret: "",
     password: "",
     method: caps?.defaults.ssMethod ?? "2022-blake3-aes-128-gcm",
     snellVersion: "",
@@ -361,6 +369,10 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     port: String(item.port),
     uuid: item.settings.uuid ?? "",
     flowVision: Boolean(item.settings.flow),
+    encryptionEnabled: Boolean(item.settings.encryptionAuth),
+    encryptionAuth: item.settings.encryptionAuth ?? "x25519",
+    encryptionMode: item.settings.encryptionMode ?? "native",
+    encryptionSecret: item.settings.encryptionSecret ?? "",
     password: item.settings.password ?? "",
     method: item.settings.method ?? "",
     snellVersion: item.settings.snellVersion
@@ -453,7 +465,7 @@ export function visionAllowed(form: InboundForm): boolean {
   return (
     form.protocol === "vless" &&
     form.transportType === "tcp" &&
-    form.securityType !== "none"
+    (form.securityType !== "none" || form.encryptionEnabled)
   );
 }
 
@@ -473,6 +485,18 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
       uuid: usesUUID ? form.uuid.trim() : undefined,
       flow:
         visionAllowed(form) && form.flowVision ? "xtls-rprx-vision" : undefined,
+      encryptionAuth:
+        form.kernelType === "xray" && form.protocol === "vless" && form.encryptionEnabled
+          ? form.encryptionAuth
+          : undefined,
+      encryptionMode:
+        form.kernelType === "xray" && form.protocol === "vless" && form.encryptionEnabled
+          ? form.encryptionMode
+          : undefined,
+      encryptionSecret:
+        form.kernelType === "xray" && form.protocol === "vless" && form.encryptionEnabled
+          ? form.encryptionSecret || undefined
+          : undefined,
       password: usesPassword ? form.password.trim() : undefined,
       method: form.protocol === "shadowsocks" ? form.method : undefined,
       snellVersion:
