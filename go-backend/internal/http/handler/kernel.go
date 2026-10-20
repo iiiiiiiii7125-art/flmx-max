@@ -1325,6 +1325,13 @@ var kernelVersionCache = struct {
 // kernelReleaseVersions lists recent releases of a kernel from GitHub,
 // cached for 30 minutes. Kernels with a pinned list return that list.
 func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
+	return kernelReleaseVersionsWithProxy(info, "")
+}
+
+// F-059：内核版本列表是版本发现的第三个孪生实现，此前只直连 api.github.com
+// ——与 F-029 的节点侧列表同病。补同样的代理先行/直连降级；流式解码与
+// 256MiB 兜底保持不变（见 fetchKernelReleaseVersionsPage）。
+func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernelVersionItem, error) {
 	if len(info.Versions) > 0 {
 		out := make([]kernelVersionItem, 0, len(info.Versions))
 		for _, v := range info.Versions {
@@ -1340,8 +1347,28 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 	if at, ok := kernelVersionCache.at[info.Type]; ok && time.Since(at) < 30*time.Minute {
 		return kernelVersionCache.items[info.Type], nil
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo))
+	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo)
+	urls := []string{directURL}
+	if proxyURL != "" {
+		urls = []string{proxyURL + "/" + directURL, directURL}
+	}
+	var lastErr error
+	for _, url := range urls {
+		out, err := fetchKernelReleaseVersionsPage(url)
+		if err == nil {
+			kernelVersionCache.at[info.Type] = time.Now()
+			kernelVersionCache.items[info.Type] = out
+			return out, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func fetchKernelReleaseVersionsPage(url string) ([]kernelVersionItem, error) {
+	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）。
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("获取版本列表失败: %v", err)
 	}
@@ -1372,8 +1399,6 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 		}
 		out = append(out, kernelVersionItem{Version: v, Prerelease: r.Prerelease, PublishedAt: r.PublishedAt})
 	}
-	kernelVersionCache.at[info.Type] = time.Now()
-	kernelVersionCache.items[info.Type] = out
 	return out, nil
 }
 
@@ -1394,7 +1419,7 @@ func (h *Handler) kernelVersions(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("未知内核"))
 		return
 	}
-	items, err := kernelReleaseVersions(info)
+	items, err := kernelReleaseVersionsWithProxy(info, h.githubProxyURLForFetch())
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return

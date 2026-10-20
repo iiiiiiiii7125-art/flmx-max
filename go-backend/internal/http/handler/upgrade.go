@@ -160,7 +160,29 @@ func sliceReleases(releases []githubRelease, perPage int) []githubRelease {
 	return releases
 }
 
+// githubProxyURLForFetch 返回版本发现类请求应使用的代理前缀；
+// 代理未启用时返回 ""（调用方只直连）。
+func (h *Handler) githubProxyURLForFetch() string {
+	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
+		return proxyURL
+	}
+	return ""
+}
+
+// maxGitHubAPIResponseBytes 是版本列表解码的体积兜底（防异常端点无限
+// 灌数据），正常 releases 负载远低于此，与内核版本列表的 256MiB 同口径。
+const maxGitHubAPIResponseBytes = 256 << 20
+
 func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
+	return fetchGitHubReleasesWithProxy(perPage, "")
+}
+
+// F-029：节点侧版本列表拉取此前只有直连一条路，与面板侧
+// fetchSystemUpgradeReleases（U1-001 已有代理→直连降级）口径不一致：
+// gh-proxy 类服务不转发 api.github.com 时节点升级下拉整体失效；纯直连
+// 又在代理必经的网络里连不上。现在同口径：传了 proxyURL 先走代理
+// （proxyURL + "/" + apiURL），失败降级直连；无代理时与旧行为等价。
+func fetchGitHubReleasesWithProxy(perPage int, proxyURL string) ([]githubRelease, error) {
 	if perPage <= 0 {
 		perPage = 20
 	}
@@ -169,8 +191,33 @@ func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 		return sliceReleases(releases, perPage), nil
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, 50))
+	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, 50)
+	if proxyURL == "" {
+		releases, err := fetchGitHubReleasesPage(directURL)
+		if err != nil {
+			return nil, err
+		}
+		storeReleasesCache(cacheKey, releases)
+		return sliceReleases(releases, perPage), nil
+	}
+
+	releases, proxyErr := fetchGitHubReleasesPage(proxyURL + "/" + directURL)
+	if proxyErr == nil {
+		storeReleasesCache(cacheKey, releases)
+		return sliceReleases(releases, perPage), nil
+	}
+	releases, directErr := fetchGitHubReleasesPage(directURL)
+	if directErr != nil {
+		return nil, fmt.Errorf("代理与直连均失败（代理: %v；直连: %v）", proxyErr, directErr)
+	}
+	storeReleasesCache(cacheKey, releases)
+	return sliceReleases(releases, perPage), nil
+}
+
+func fetchGitHubReleasesPage(url string) ([]githubRelease, error) {
+	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）。
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
 	}
@@ -185,25 +232,45 @@ func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 	}
 
 	var releases []githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxGitHubAPIResponseBytes)).Decode(&releases); err != nil {
 		return nil, fmt.Errorf("解析GitHub API响应失败: %v", err)
 	}
-
-	storeReleasesCache(cacheKey, releases)
-	return sliceReleases(releases, perPage), nil
+	return releases, nil
 }
 
 // resolveLatestTagByRedirect 通过 github.com 的 releases/latest 重定向
 // 解析最新稳定版 tag。该端点不走 API、不消耗限流配额，用作 API 不可用
 // （限流等）时"最新版"解析的兜底。
 func resolveLatestTagByRedirect() (string, error) {
+	return resolveLatestTagByRedirectWithProxy("")
+}
+
+// F-029：重定向解析同样补代理先行/直连降级——stable 渠道的 API 兜底
+// 若只直连，代理必经网络里 API 与重定向会一起失效，兜底形同虚设。
+func resolveLatestTagByRedirectWithProxy(proxyURL string) (string, error) {
+	directURL := githubHTMLBase + "/" + githubRepo + "/releases/latest"
+	if proxyURL == "" {
+		return fetchLatestTagByRedirect(directURL)
+	}
+	tag, proxyErr := fetchLatestTagByRedirect(proxyURL + "/" + directURL)
+	if proxyErr == nil {
+		return tag, nil
+	}
+	tag, directErr := fetchLatestTagByRedirect(directURL)
+	if directErr != nil {
+		return "", fmt.Errorf("代理与直连均失败（代理: %v；直连: %v）", proxyErr, directErr)
+	}
+	return tag, nil
+}
+
+func fetchLatestTagByRedirect(url string) (string, error) {
 	client := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	resp, err := client.Get(githubHTMLBase + "/" + githubRepo + "/releases/latest")
+	resp, err := client.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -225,12 +292,17 @@ func resolveLatestTagByRedirect() (string, error) {
 }
 
 func resolveLatestReleaseByChannel(channel string) (string, error) {
+	return resolveLatestReleaseByChannelWithProxy(channel, "")
+}
+
+// F-029：渠道最新版解析的代理感知版（机制同 fetchGitHubReleasesWithProxy）。
+func resolveLatestReleaseByChannelWithProxy(channel string, proxyURL string) (string, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
-	releases, err := fetchGitHubReleases(50)
+	releases, err := fetchGitHubReleasesWithProxy(50, proxyURL)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
 		if normalizedChannel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil {
+			if tag, ferr := resolveLatestTagByRedirectWithProxy(proxyURL); ferr == nil {
 				return tag, nil
 			}
 		}
@@ -277,7 +349,7 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		var err error
-		version, err = resolveLatestReleaseByChannel(channel)
+		version, err = resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 			return
@@ -354,7 +426,7 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		var err error
-		version, err = resolveLatestReleaseByChannel(channel)
+		version, err = resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 			return
@@ -438,7 +510,7 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request) {
 
 	channel := normalizeReleaseChannel(req.Channel)
 
-	releases, err := fetchGitHubReleases(50)
+	releases, err := fetchGitHubReleasesWithProxy(50, h.githubProxyURLForFetch())
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取版本列表失败: %v", err)))
 		return
