@@ -1,6 +1,7 @@
 import type {
   SystemUpgradeCheckApiData,
   SystemUpgradeReleaseApiItem,
+  SystemUpgradeStatusApiData,
   SystemUpgradeVersionApiData,
 } from "@/api/types";
 
@@ -33,6 +34,7 @@ import {
   updateAnnouncement,
   getStorageSummary,
   getSystemUpgradeVersion,
+  getSystemUpgradeStatus,
   checkSystemUpgrade,
   runSystemUpgrade,
   type AnnouncementData,
@@ -351,6 +353,10 @@ export default function ConfigPage() {
     useState<UpdateReleaseChannel | null>(null);
   const [systemUpgradeSelectedVersion, setSystemUpgradeSelectedVersion] =
     useState("");
+  // P3-2：后端升级状态（进行中/上次结果），刷新页面后也能恢复展示
+  const [systemUpgradeStatus, setSystemUpgradeStatus] =
+    useState<SystemUpgradeStatusApiData | null>(null);
+  const systemUpgradePollRef = useRef<number | null>(null);
   const [previewLoadFailed, setPreviewLoadFailed] = useState<
     Partial<Record<BrandPreviewKey, boolean>>
   >({});
@@ -369,7 +375,9 @@ export default function ConfigPage() {
     !systemUpgradeLoading &&
       !systemUpgradeChecking &&
       !systemUpgradeExecuting &&
-      systemUpgradeInfo?.capability.capable !== false,
+      systemUpgradeInfo?.capability.capable !== false &&
+      // P3-1：已确认无更新且未手动指定版本时禁用，避免同版本全量重装白跑一次。
+      (systemUpgradeInfo?.hasUpdate || systemUpgradeSelectedVersion !== ""),
   );
   const canOpenSystemUpgradeModal = Boolean(
     systemUpgradeInfo?.capability.capable &&
@@ -478,15 +486,101 @@ export default function ConfigPage() {
     }
   };
 
+  // P3-2：拉取后端升级状态。升级中途后端容器重启会断连，请求失败静默忽略等下轮。
+  const fetchSystemUpgradeStatus =
+    async (): Promise<SystemUpgradeStatusApiData | null> => {
+      try {
+        const response = await getSystemUpgradeStatus();
+
+        if (response.code === 0 && response.data) {
+          setSystemUpgradeStatus(response.data);
+
+          return response.data;
+        }
+      } catch {
+        // 升级期间后端重启导致断连属正常，静默重试
+      }
+
+      return null;
+    };
+
+  const stopSystemUpgradePolling = () => {
+    if (systemUpgradePollRef.current !== null) {
+      window.clearInterval(systemUpgradePollRef.current);
+      systemUpgradePollRef.current = null;
+    }
+  };
+
+  // P3-2：升级发起后每 5 秒轮询后端状态，最长 10 分钟。观察到进行中→结束
+  // （或本次发起后产生新结果）即停止并刷新版本信息；超时自动停止。
+  const startSystemUpgradePolling = () => {
+    stopSystemUpgradePolling();
+    const startedAtMs = Date.now();
+    let ticks = 0;
+    let sawInProgress = false;
+    const maxTicks = 120; // 5s × 120 = 10 分钟
+
+    const pollOnce = async () => {
+      ticks += 1;
+      const status = await fetchSystemUpgradeStatus();
+
+      if (status?.inProgress) {
+        sawInProgress = true;
+      }
+
+      const finished =
+        status &&
+        !status.inProgress &&
+        (sawInProgress ||
+          (status.finishedAt &&
+            new Date(status.finishedAt).getTime() >= startedAtMs));
+
+      if (finished || ticks >= maxTicks) {
+        stopSystemUpgradePolling();
+
+        if (finished) {
+          void loadSystemUpgradeInfo();
+        }
+      }
+    };
+
+    void pollOnce();
+    systemUpgradePollRef.current = window.setInterval(pollOnce, 5000);
+  };
+
+  // 时间字符串兜底格式化，解析失败原样展示
+  const formatStatusTime = (value?: string): string => {
+    if (!value) {
+      return "";
+    }
+
+    const d = new Date(value);
+
+    return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => {
       loadConfigs(initialConfigs);
       loadAnnouncement();
       loadStorageSummary();
       void loadSystemUpgradeInfo();
+      // 页面加载即拉一次升级状态：刷新后也能看到进行中/上次结果
+      void (async () => {
+        const status = await fetchSystemUpgradeStatus();
+
+        if (status?.inProgress) {
+          startSystemUpgradePolling();
+        }
+      })();
     }, 100);
 
     return () => clearTimeout(timer);
+  }, []);
+
+  // 组件卸载时停止轮询
+  useEffect(() => {
+    return () => stopSystemUpgradePolling();
   }, []);
 
   const loadAnnouncement = async () => {
@@ -587,6 +681,8 @@ export default function ConfigPage() {
         setSystemUpgradeModalOpen(false);
         setSystemUpgradeSelectedVersion("");
         toast.success("升级已开始，约 1 分钟后刷新页面", { duration: 8000 });
+        // P3-2：随后轮询后端升级状态，卡片会展示进行中与最终结果
+        startSystemUpgradePolling();
       } else {
         toast.error(response.msg || "面板升级失败");
       }
@@ -632,10 +728,40 @@ export default function ConfigPage() {
       return;
     }
 
+    // P3-4：保存前归一化 GitHub 加速地址——去首尾空白；缺协议头补 https://；
+    // 带其他协议头视为非法直接拦截；去掉全部尾斜杠。与后端
+    // getGithubProxyConfig 的归一化对齐，避免拼出双斜杠路径或填错后
+    // 要到下载失败时才暴露。归一化结果同时写回界面输入框。
+    const effectiveConfigs = { ...configs };
+    const rawProxyUrl = (effectiveConfigs["github_proxy_url"] || "").trim();
+
+    if (rawProxyUrl) {
+      if (
+        /^[a-z][a-z0-9+.-]*:\/\//i.test(rawProxyUrl) &&
+        !/^https?:\/\//i.test(rawProxyUrl)
+      ) {
+        toast.error("加速地址格式不正确，请以 http:// 或 https:// 开头");
+
+        return;
+      }
+
+      let normalizedProxyUrl = rawProxyUrl;
+
+      if (!/^https?:\/\//i.test(normalizedProxyUrl)) {
+        normalizedProxyUrl = `https://${normalizedProxyUrl}`;
+      }
+      normalizedProxyUrl = normalizedProxyUrl.replace(/\/+$/, "");
+
+      if (normalizedProxyUrl !== effectiveConfigs["github_proxy_url"]) {
+        effectiveConfigs["github_proxy_url"] = normalizedProxyUrl;
+        setConfigs(effectiveConfigs);
+      }
+    }
+
     setSaving(true);
     try {
-      const changedKeys = Object.keys(configs).filter(
-        (key) => configs[key] !== originalConfigs[key],
+      const changedKeys = Object.keys(effectiveConfigs).filter(
+        (key) => effectiveConfigs[key] !== originalConfigs[key],
       );
 
       if (changedKeys.length === 0) {
@@ -647,7 +773,7 @@ export default function ConfigPage() {
       const changedPayload: Record<string, string> = {};
 
       changedKeys.forEach((key) => {
-        changedPayload[key] = configs[key] || "";
+        changedPayload[key] = effectiveConfigs[key] || "";
       });
 
       const response = await updateConfigs(changedPayload);
@@ -655,11 +781,11 @@ export default function ConfigPage() {
       if (response.code === 0) {
         toast.success("配置保存成功");
 
-        Object.entries(configs).forEach(([key, value]) => {
+        Object.entries(effectiveConfigs).forEach(([key, value]) => {
           configCache.set(key, value);
         });
 
-        setOriginalConfigs({ ...configs });
+        setOriginalConfigs({ ...effectiveConfigs });
         setHasChanges(false);
 
         if (
@@ -675,7 +801,7 @@ export default function ConfigPage() {
             ].includes(key),
           )
         ) {
-          await updateSiteConfig(configs);
+          await updateSiteConfig(effectiveConfigs);
         }
 
         // 触发配置更新事件，通知其他组件
@@ -716,6 +842,16 @@ export default function ConfigPage() {
   };
 
   // 检查配置项是否应该显示（依赖检查）
+  // P2-2：github_proxy_enabled 后端缺省默认开启（defaultGithubProxyEnabled=true），
+  // 前端从未保存该键（configs 无此值）时按开启处理，避免开关/地址框与实际相反。
+  const resolveSwitchSelected = (key: string): boolean => {
+    if (key === "github_proxy_enabled") {
+      return configs[key] !== "false";
+    }
+
+    return configs[key] === "true";
+  };
+
   const shouldShowItem = (item: ConfigItem): boolean => {
     // 品牌设置项在单独的卡片中展示
     if (
@@ -728,6 +864,14 @@ export default function ConfigPage() {
 
     if (!item.dependsOn || !item.dependsValue) {
       return true;
+    }
+
+    // github_proxy_enabled 未保存时后端默认开启，依赖项也按开启显示（P2-2）
+    if (
+      item.dependsOn === "github_proxy_enabled" &&
+      configs[item.dependsOn] === undefined
+    ) {
+      return item.dependsValue === "true";
     }
 
     return configs[item.dependsOn] === item.dependsValue;
@@ -1190,14 +1334,14 @@ export default function ConfigPage() {
             classNames={{
               wrapper: isChanged ? "border-warning-300" : "",
             }}
-            isSelected={configs[item.key] === "true"}
+            isSelected={resolveSwitchSelected(item.key)}
             size="sm"
             onValueChange={(checked) =>
               handleConfigChange(item.key, checked ? "true" : "false")
             }
           >
             <span className="text-sm text-gray-700 dark:text-gray-300">
-              {configs[item.key] === "true" ? "已启用" : "已禁用"}
+              {resolveSwitchSelected(item.key) ? "已启用" : "已禁用"}
             </span>
           </Switch>
         );
@@ -1604,6 +1748,49 @@ export default function ConfigPage() {
                   </div>
                 )}
 
+                {/* P3-2：升级状态来自后端状态接口，页面刷新/后端重启后不丢失 */}
+                {systemUpgradeStatus?.inProgress && (
+                  <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-primary-800 dark:border-primary-900/40 dark:bg-primary-950/30 dark:text-primary-200">
+                    <Spinner size="sm" />
+                    <p className="text-xs font-medium">
+                      升级进行中
+                      {systemUpgradeStatus.version
+                        ? `：目标版本 ${systemUpgradeStatus.version}`
+                        : ""}
+                      {systemUpgradeStatus.startedAt
+                        ? `（开始于 ${formatStatusTime(systemUpgradeStatus.startedAt)}）`
+                        : ""}
+                      ，请勿重复发起
+                    </p>
+                  </div>
+                )}
+
+                {systemUpgradeStatus?.result && (
+                  <div
+                    className={
+                      systemUpgradeStatus.result === "success"
+                        ? "rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-success-800 dark:border-success-900/40 dark:bg-success-950/30 dark:text-success-200"
+                        : "rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950/30 dark:text-danger-200"
+                    }
+                  >
+                    <p className="text-xs font-medium">
+                      上次升级
+                      {systemUpgradeStatus.result === "success"
+                        ? "成功"
+                        : systemUpgradeStatus.result === "rolled_back"
+                          ? "失败，已自动回滚到旧版本"
+                          : systemUpgradeStatus.result === "aborted"
+                            ? "已中止"
+                            : systemUpgradeStatus.result === "helper_start_failed"
+                              ? "失败（升级助手启动失败）"
+                              : `失败（${systemUpgradeStatus.result}）`}
+                      {systemUpgradeStatus.finishedAt
+                        ? `（${formatStatusTime(systemUpgradeStatus.finishedAt)}）`
+                        : ""}
+                    </p>
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   <div className="flex flex-col gap-1">
                     <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -1955,6 +2142,14 @@ export default function ConfigPage() {
               <ModalHeader>确认面板升级</ModalHeader>
               <ModalBody>
                 <div className="space-y-3 text-sm text-default-700 dark:text-default-300">
+                  {/* P3-1：回显本次升级的目标版本，避免点了确认还不知道装到哪一版 */}
+                  <p className="font-medium text-default-900 dark:text-default-100">
+                    {systemUpgradeSelectedVersion
+                      ? `本次将升级到指定版本 ${systemUpgradeSelectedVersion}`
+                      : systemUpgradeInfo?.latestVersion
+                        ? `本次将升级到最新版 ${systemUpgradeInfo.latestVersion}`
+                        : "本次将升级到最新版本"}
+                  </p>
                   <p>
                     升级过程需要访问 Docker
                     Socket，并会在短时间内中断当前面板服务。

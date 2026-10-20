@@ -28,11 +28,15 @@ import (
 //   3. 逐地址判定：每个 IP 单独走完整链（私网→allowlist→协议）
 //   4. 公网必须 https（allowlist 不提升公网协议）
 const (
-	secureFetchMaxBody        = 50 * 1024 * 1024 // 50MB
-	secureFetchMaxRedirects    = 5
-	secureFetchConnectTimeout  = 10 * time.Second
-	secureFetchTotalTimeout    = 60 * time.Second
+	secureFetchMaxRedirects   = 5
+	secureFetchConnectTimeout = 10 * time.Second
+	secureFetchTotalTimeout   = 60 * time.Second
 )
+
+// secureFetchMaxBody 是 SecureFetch 的响应体上限。
+// 为 var 而非 const 是为了让测试能临时调小做快速的超限回归（U1-004）；
+// 生产代码不得改动它。
+var secureFetchMaxBody = int64(50 * 1024 * 1024) // 50MB
 
 // metadataBlacklist: 云元数据地址，任何配置都不能放行。
 var metadataBlacklist = []net.IP{

@@ -6,7 +6,10 @@ export type SiteConfig = typeof siteConfig;
 // 缓存相关常量
 const CACHE_PREFIX = "vite_config_";
 const VERSION = import.meta.env.VITE_APP_VERSION || "dev";
-const APP_VERSION = "1.0.0";
+// P2-1：WebView 下的 app_version 同样取构建注入的真实版本（发版流水线注入
+// VITE_APP_VERSION）。原先硬编码 "1.0.0" 与实际发版脱节、导致 App 内更新
+// 红标常亮；未注入（本地开发）时回退 "dev"，与 VERSION 保持一致避免误报。
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 const DEFAULT_FAVICON = "/favicon.ico";
 const FAVICON_LINK_ID = "app-favicon";
 const PUBLIC_BRAND_CONFIG_KEYS = [

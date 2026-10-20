@@ -44,6 +44,7 @@ import type {
   StorageSummaryApiData,
   SystemUpgradeCheckApiData,
   SystemUpgradeRunApiData,
+  SystemUpgradeStatusApiData,
   SystemUpgradeVersionApiData,
   KernelCapabilitiesApiData,
   KernelApiItem,
@@ -337,6 +338,10 @@ export const runSystemUpgrade = (
     { version: version || "", channel },
     { timeout: 60 * 1000 },
   );
+
+// 面板升级状态查询：升级后后端容器重启期间请求会失败，调用方需静默重试
+export const getSystemUpgradeStatus = () =>
+  Network.get<SystemUpgradeStatusApiData>("/system/upgrade/status");
 
 export const exportBackupData = () => Network.post("/backup/export");
 export const importBackupData = (data: BackupImportPayload) =>

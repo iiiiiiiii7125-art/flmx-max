@@ -559,6 +559,16 @@ export interface SystemUpgradeRunApiData {
   message: string;
 }
 
+// 面板升级状态（后端 GET /api/v1/system/upgrade/status；进程重启后不丢失）。
+export interface SystemUpgradeStatusApiData {
+  inProgress: boolean;
+  startedAt?: string;
+  version?: string;
+  /** 后端落盘的升级终态：success / rolled_back / aborted / helper_start_failed */
+  result?: string;
+  finishedAt?: string;
+}
+
 export interface MonitorNodeApiItem {
   id: number;
   inx: number;
