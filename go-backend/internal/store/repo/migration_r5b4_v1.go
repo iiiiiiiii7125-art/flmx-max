@@ -112,7 +112,10 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 		// 同端口不同主机合法共存。存量库里已建的全量同名索引由 v2 迁移
 		// 显式 DROP + CREATE 转换（本函数的"同名跳过"不会重建它）。
 		{"node_inbound", "idx_node_inbound_node_port", "(node_id, port)", "WHERE kernel_id > 0"},
-		{"user", "idx_user_username_unique", "(user)", ""},
+		// PG-1: user 是 PostgreSQL 保留字，表名/列名裸拼会报 SQLSTATE 42601
+		// 使 PG 全新/升级启动必失败（SQLite 不保留该词故未暴露）。双引号
+		// 标识符在 PG 与 SQLite 下均合法，此处两方言同形加引号。
+		{`"user"`, "idx_user_username_unique", `("user")`, ""},
 	}
 
 	for _, idx := range indexes {
@@ -134,8 +137,8 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 		if err := db.Exec(sql).Error; err != nil {
 			return fmt.Errorf(
 				"migration %s: CREATE UNIQUE INDEX %s ON %s %s failed: %w\n"+
-					"可能原因：表中有重复数据。请先运行 scripts/phase_a_dryrun.sql 定位重复，"+
-					"清理后重新启动。",
+					"若原始错误为唯一约束冲突：表中可能有重复数据，请先运行 scripts/phase_a_dryrun.sql 定位重复，"+
+					"清理后重新启动；若为语法/方言类错误（原始错误非重复键），请连同原始错误上报，勿按重复数据排查。",
 				migrationV1Version, idx.name, idx.table, idx.cols, err)
 		}
 		log.Printf("migration %s: created index %s on %s %s (%v)",
