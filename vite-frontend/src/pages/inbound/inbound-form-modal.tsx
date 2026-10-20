@@ -200,6 +200,10 @@ export function InboundFormModal({
     if (!form.nodeId) return "请选择节点";
     if (!installedKernel) return "该节点还没有安装所选内核";
     if (!form.name.trim()) return "请输入名称";
+    // 与后端长度上限对齐（kernel.go：名称 ≤100、分享地址 ≤255）
+    if (form.name.trim().length > 100) return "名称不能超过 100 个字符";
+    if (form.shareHost.trim().length > 255)
+      return "分享地址不能超过 255 个字符";
     if (form.port.trim()) {
       const port = Number(form.port);
 
@@ -239,6 +243,19 @@ export function InboundFormModal({
         Number(m[1]) >= Number(m[2])
       ) {
         return "端口跳跃格式为 起始-结束（1024-65535），例如 20000-30000";
+      }
+
+      // 与后端及 doc/guide/nodes.md 口径一致：跳跃范围不能包含入站端口本身
+      if (form.port.trim()) {
+        const selfPort = Number(form.port);
+
+        if (
+          Number.isInteger(selfPort) &&
+          selfPort >= Number(m[1]) &&
+          selfPort <= Number(m[2])
+        ) {
+          return "端口跳跃范围不能包含入站端口本身";
+        }
       }
     }
     if (form.securityType === "tls" && certMode === "file") {

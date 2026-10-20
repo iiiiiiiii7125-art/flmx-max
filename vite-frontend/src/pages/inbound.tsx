@@ -6,7 +6,7 @@ import type {
   NodeApiItem,
 } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, LayoutGrid, List } from "lucide-react";
 
@@ -249,8 +249,17 @@ export default function InboundPage() {
   const [probing, setProbing] = useState(false);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
 
+  // loadData 代次：并发调用时只有最新一次的结果可以落 state，防旧快照乱序覆盖
+  const loadSeqRef = useRef(0);
+  // initial 代次单独计数：loading 只由最新一次 initial 调用清除，
+  // 非初始调用顶替数据代次时不能把 loading 永久留住
+  const loadInitialSeqRef = useRef(0);
+
   const loadData = useCallback(
     async (initial = false) => {
+      const seq = (loadSeqRef.current += 1);
+      const initialSeq = initial ? (loadInitialSeqRef.current += 1) : 0;
+
       if (initial) setLoading(true);
       try {
         const [capsRes, nodeRes, kernelRes, inboundRes, sourceRes] =
@@ -261,6 +270,10 @@ export default function InboundPage() {
             getInboundList(),
             getRemoteSources(),
           ]);
+
+        if (loadSeqRef.current !== seq) {
+          return;
+        }
 
         if (capsRes.code === 0) setCaps(capsRes.data);
         if (sourceRes.code === 0) setSources(sourceRes.data ?? []);
@@ -286,13 +299,18 @@ export default function InboundPage() {
 
             return new Set([...prev].filter((id) => alive.has(id)));
           });
-        } else {
+        } else if (initial) {
+          // 非初始（轮询/操作后刷新）失败静默，避免故障期每 30s toast 刷屏
           toast.error(inboundRes.msg || "获取入站列表失败");
         }
       } catch {
-        toast.error("加载数据失败");
+        if (initial && loadSeqRef.current === seq) {
+          toast.error("加载数据失败");
+        }
       } finally {
-        if (initial) setLoading(false);
+        if (initial && loadInitialSeqRef.current === initialSeq) {
+          setLoading(false);
+        }
       }
     },
     [setTab],
