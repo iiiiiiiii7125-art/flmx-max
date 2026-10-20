@@ -105,6 +105,9 @@ type inboundView struct {
 	OutboundMissing bool   `json:"outboundMissing,omitempty"`
 	// SplitRules are the inbound's 分流 rules.
 	SplitRules []kernel.SplitRule `json:"splitRules"`
+	// OutboundIPStrategy scopes the inbound's outbound connections to an
+	// IP family ("auto" = unrestricted).
+	OutboundIPStrategy string `json:"outboundIpStrategy"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -138,14 +141,17 @@ type inboundRequest struct {
 	WhitelistExtra      string             `json:"whitelistExtra"`
 	OutboundID          int64              `json:"outboundId"`
 	SplitRules          []kernel.SplitRule `json:"splitRules"`
-	Enabled             *bool              `json:"enabled"`
+	// OutboundIPStrategy is a pointer so an edit that omits the field
+	// keeps the stored strategy instead of resetting it to auto.
+	OutboundIPStrategy *string `json:"outboundIpStrategy"`
+	Enabled            *bool   `json:"enabled"`
 }
 
 // ---- conversion ----
 
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
-		AcceptProxyProtocol: row.AcceptProxyProtocol == 1}
+		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -184,6 +190,7 @@ func applyInboundToModel(in kernel.Inbound, row *model.NodeInbound) error {
 	row.Protocol = in.Protocol
 	row.Listen = in.Listen
 	row.Port = in.Port
+	row.OutboundIPStrategy = in.OutboundIPStrategy
 	row.Settings = string(settings)
 	row.Transport = string(transport)
 	row.Security = string(security)
@@ -549,37 +556,38 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		}
 		k := kernelByID[row.KernelID]
 		v := inboundView{
-			ID:             row.ID,
-			KernelID:       row.KernelID,
-			KernelType:     k.KernelType,
-			KernelStatus:   k.Status,
-			External:       isExternalInbound(&row),
-			NodeID:         row.NodeID,
-			Name:           row.Name,
-			Protocol:       row.Protocol,
-			Listen:         row.Listen,
-			Port:           row.Port,
-			Network:        in.Network(),
-			Settings:       in.Settings,
-			Transport:      in.Transport,
-			Security:       kernelSecurityView{Security: in.Security, ACMEDNSSet: in.Security.ACMEDNSKey != ""},
-			Extra:          row.Extra,
-			ShareHost:      row.ShareHost,
-			Remark:         row.Remark,
-			RelayOnly:      row.RelayOnly == 1,
-			RelayCount:     relayCounts[row.ID],
-			AcceptProxy:    row.AcceptProxyProtocol == 1,
-			Whitelist:      row.RelayWhitelist == 1,
-			WhitelistExtra: row.WhitelistExtra,
-			Enabled:        row.Enabled == 1,
-			UploadBytes:    row.UploadBytes,
-			DownloadBytes:  row.DownloadBytes,
-			CreatedTime:    row.CreatedTime,
-			UpdatedTime:    row.UpdatedTime,
-			SourceID:       row.SourceID,
-			SourceName:     sourceNames[row.SourceID],
-			OutboundID:     row.OutboundID,
-			SplitRules:     rowSplitRules(row),
+			ID:                 row.ID,
+			KernelID:           row.KernelID,
+			KernelType:         k.KernelType,
+			KernelStatus:       k.Status,
+			External:           isExternalInbound(&row),
+			NodeID:             row.NodeID,
+			Name:               row.Name,
+			Protocol:           row.Protocol,
+			Listen:             row.Listen,
+			Port:               row.Port,
+			Network:            in.Network(),
+			Settings:           in.Settings,
+			Transport:          in.Transport,
+			Security:           kernelSecurityView{Security: in.Security, ACMEDNSSet: in.Security.ACMEDNSKey != ""},
+			Extra:              row.Extra,
+			ShareHost:          row.ShareHost,
+			Remark:             row.Remark,
+			RelayOnly:          row.RelayOnly == 1,
+			RelayCount:         relayCounts[row.ID],
+			AcceptProxy:        row.AcceptProxyProtocol == 1,
+			Whitelist:          row.RelayWhitelist == 1,
+			WhitelistExtra:     row.WhitelistExtra,
+			Enabled:            row.Enabled == 1,
+			UploadBytes:        row.UploadBytes,
+			DownloadBytes:      row.DownloadBytes,
+			CreatedTime:        row.CreatedTime,
+			UpdatedTime:        row.UpdatedTime,
+			SourceID:           row.SourceID,
+			SourceName:         sourceNames[row.SourceID],
+			OutboundID:         row.OutboundID,
+			SplitRules:         rowSplitRules(row),
+			OutboundIPStrategy: row.OutboundIPStrategy,
 		}
 		if v.SplitRules == nil {
 			v.SplitRules = []kernel.SplitRule{}
@@ -694,6 +702,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		Extra:     json.RawMessage(strings.TrimSpace(req.Extra)),
 
 		AcceptProxyProtocol: req.AcceptProxyProtocol,
+		OutboundIPStrategy:  row.OutboundIPStrategy,
+	}
+	if req.OutboundIPStrategy != nil {
+		in.OutboundIPStrategy = *req.OutboundIPStrategy
 	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
@@ -728,18 +740,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		return
 	}
 	prevTargets := outboundTargets(row)
-	if err := h.setInboundRouting(&row, k.KernelType, req.OutboundID, req.SplitRules); err != nil {
+	if err := h.setInboundRouting(&row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
 		releasePortAlloc()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if in.Protocol == kernel.ProtocolSnell {
-		if major := snellMajor(k.Version); in.Settings.SnellVersion > major {
-			releasePortAlloc()
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点安装的是 Snell %s，不支持 v%d 客户端", k.Version, in.Settings.SnellVersion)))
-			return
-		}
-	}
+	// Snell 双向版本判定已并入 kernelVersionGate（上方同一调用点），
+	// 保存路径不再单设散点检查（S4 移植，原单向检查会放行 6.x+v4/v5）。
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		releasePortAlloc()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1261,7 +1268,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			return nil, "", err
 		}
 		inbounds = append(inbounds, in)
-		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
+		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.NetworkOn(k.KernelType)}
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
 		}
@@ -1282,6 +1289,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelow(k.Version, 1, 14),
+		SingboxSnell:      !versionBelow(k.Version, 1, 14),
 	})
 	if err != nil {
 		return nil, "", err
@@ -1494,8 +1502,24 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(version, 1, 12) {
 		return fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", version)
 	}
+	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelow(version, 1, 14) {
+		return fmt.Sprintf("sing-box 内置 Snell 需要 1.14 及以上，节点安装的是 %s", version)
+	}
 	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 6, 8) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
+	}
+	// 出站 IP 策略版本门（S4）：策略字段随入站一同进入 gate，保存/复检/
+	// 换版三处同拦；未知策略字符串也在此拒绝。
+	if err := validateOutboundIPVersion(kernelType, version, in.OutboundIPStrategy); err != nil {
+		return err.Error()
+	}
+	// Snell 独立内核：服务端/客户端版本双向判定（S4 移植）。6.x 只接
+	// v6 客户端，旧单向检查（客户端版本 > 服务端 major 才拦）会放行
+	// 「6.0.0 内核 + v4/v5 入站」这类必然连不上的组合。
+	if kernelType == kernel.TypeSnell && in.Protocol == kernel.ProtocolSnell {
+		if err := snellServes(version, in.Settings.SnellVersion); err != nil {
+			return err.Error()
+		}
 	}
 	return ""
 }
@@ -1515,30 +1539,57 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
 			return fmt.Errorf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)
 		}
+		// 经 Snell 节点出站（链式/分流目标）的入站同样要求 sing-box
+		// 1.14+；目标入站不在本内核上，gate 看不到，须单独扫描（S4）。
+		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 14) {
+			for _, id := range outboundTargets(row) {
+				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && t.Protocol == kernel.ProtocolSnell {
+					return fmt.Errorf("入站 %s 经 Snell 节点 %s 出站，需要 sing-box 1.14 及以上，不能安装 %s", row.Name, t.Name, version)
+				}
+			}
+		}
 	}
 	return nil
 }
 
 // snellMajor returns the protocol major version a Snell binary serves.
 func snellMajor(version string) int {
-	if strings.HasPrefix(version, "4.") {
+	switch {
+	case strings.HasPrefix(version, "4."):
 		return 4
+	case strings.HasPrefix(version, "6."):
+		return 6
 	}
 	return 5
 }
 
-// checkSnellVersions refuses to install a Snell binary older than the
-// protocol version an existing inbound advertises to clients.
+// snellServes reports whether a snell-server version accepts clients of a
+// protocol version: 5.x also serves v4, while 6.x serves v6 only（S4 移植，
+// 上游同名判定）。
+func snellServes(version string, client int) error {
+	major := snellMajor(version)
+	switch {
+	case major == 6 && client != 6:
+		return fmt.Errorf("Snell %s 只接受 v6 客户端：请把入站改成 v6，或安装 Snell 5.0.1", version)
+	case client > major:
+		return fmt.Errorf("节点安装的是 Snell %s，不支持 v%d 客户端", version, client)
+	}
+	return nil
+}
+
+// checkSnellVersions refuses to install a Snell binary that cannot serve
+// the protocol version an existing inbound advertises to clients.
 func (h *Handler) checkSnellVersions(kernelID int64, version string) error {
 	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
 	if err != nil {
 		return err
 	}
-	major := snellMajor(version)
 	for _, row := range rows {
 		in, err := inboundFromModel(row)
-		if err == nil && in.Settings.SnellVersion > major {
-			return fmt.Errorf("入站 %s 使用 Snell v%d，不能安装 %s", row.Name, in.Settings.SnellVersion, version)
+		if err == nil {
+			if serr := snellServes(version, in.Settings.SnellVersion); serr != nil {
+				return fmt.Errorf("入站 %s：%v，不能安装 %s", row.Name, serr, version)
+			}
 		}
 	}
 	return nil

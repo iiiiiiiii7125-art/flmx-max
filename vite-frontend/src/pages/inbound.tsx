@@ -150,6 +150,7 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   if (s.password)
     rows.push([item.protocol === "snell" ? "PSK" : "密码", s.password]);
   if (s.snellVersion) rows.push(["Snell 版本", `v${s.snellVersion}`]);
+  if (s.snellMode) rows.push(["流量整形", s.snellMode]);
   if (s.masquerade) rows.push(["伪装网站", s.masquerade]);
   if (s.portHopping) rows.push(["端口跳跃", `${s.portHopping}（UDP）`]);
   if (t.path) rows.push(["路径", t.path]);
@@ -670,6 +671,18 @@ export default function InboundPage() {
                 {where}
               </span>
             )}
+            {item.outboundIpStrategy && item.outboundIpStrategy !== "auto" && (
+              <Chip color="primary" size="sm" variant="flat">
+                {
+                  {
+                    ipv4_only: "IPv4 出站",
+                    ipv6_only: "IPv6 出站",
+                    prefer_ipv4: "优先 IPv4",
+                    prefer_ipv6: "优先 IPv6",
+                  }[item.outboundIpStrategy]
+                }
+              </Chip>
+            )}
             {item.relayCount > 0 && (
               <Chip color="secondary" size="sm" variant="flat">
                 {item.relayCount} 条中转
@@ -801,6 +814,23 @@ export default function InboundPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate font-medium">{item.name}</span>
+            {item.outboundIpStrategy && item.outboundIpStrategy !== "auto" && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="primary"
+                size="sm"
+                variant="flat"
+              >
+                {
+                  {
+                    ipv4_only: "IPv4 出站",
+                    ipv6_only: "IPv6 出站",
+                    prefer_ipv4: "优先 IPv4",
+                    prefer_ipv6: "优先 IPv6",
+                  }[item.outboundIpStrategy]
+                }
+              </Chip>
+            )}
             {item.relayCount > 0 && (
               <Chip
                 className="shrink-0 whitespace-nowrap"

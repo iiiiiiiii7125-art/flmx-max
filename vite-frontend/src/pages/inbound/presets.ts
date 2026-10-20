@@ -78,6 +78,7 @@ export interface InboundForm {
   password: string;
   method: string;
   snellVersion: string;
+  snellMode: string;
   masquerade: string;
   backendPort: number;
   portHopping: string;
@@ -113,6 +114,12 @@ export interface InboundForm {
   whitelistExtra: string;
   /** Chained outbound inbound id; "" leaves directly. */
   outboundId: string;
+  outboundIpStrategy:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
   splitRules: SplitRuleForm[];
   enabled: boolean;
 }
@@ -278,6 +285,7 @@ export function emptyForm(
     password: "",
     method: caps?.defaults.ssMethod ?? "2022-blake3-aes-128-gcm",
     snellVersion: "",
+    snellMode: "",
     masquerade: "",
     backendPort: 0,
     portHopping: "",
@@ -312,6 +320,7 @@ export function emptyForm(
     relayWhitelist: false,
     whitelistExtra: "",
     outboundId: "",
+    outboundIpStrategy: "auto",
     splitRules: [],
     enabled: true,
   };
@@ -378,6 +387,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     snellVersion: item.settings.snellVersion
       ? String(item.settings.snellVersion)
       : "",
+    snellMode: item.settings.snellMode ?? "",
     masquerade: item.settings.masquerade ?? "",
     backendPort: item.settings.backendPort ?? 0,
     portHopping: item.settings.portHopping ?? "",
@@ -412,6 +422,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     relayWhitelist: item.relayWhitelist,
     whitelistExtra: item.whitelistExtra,
     outboundId: item.outboundId ? String(item.outboundId) : "",
+    outboundIpStrategy: item.outboundIpStrategy || "auto",
     splitRules: splitFormFromItem(item),
     enabled: item.enabled,
   };
@@ -503,6 +514,10 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
         form.protocol === "snell" && form.snellVersion
           ? Number(form.snellVersion)
           : undefined,
+      snellMode:
+        form.protocol === "snell" && form.snellVersion === "6"
+          ? form.snellMode || undefined
+          : undefined,
       masquerade:
         form.protocol === "hysteria2" ? form.masquerade.trim() : undefined,
       backendPort: form.backendPort || undefined,
@@ -561,6 +576,7 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     relayWhitelist: form.relayWhitelist,
     whitelistExtra: form.relayWhitelist ? form.whitelistExtra.trim() : "",
     outboundId: Number(form.outboundId) || 0,
+    outboundIpStrategy: form.outboundIpStrategy,
     splitRules: splitPayload(form.splitRules),
     enabled: form.enabled,
   };
