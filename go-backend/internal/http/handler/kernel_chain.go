@@ -136,6 +136,14 @@ func (h *Handler) inboundSplit(row model.NodeInbound) ([]kernel.SplitRule, error
 // validateChain checks the outbound targets (chained outbound and 分流
 // targets) of an inbound about to be saved.
 func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error {
+	return h.validateChainVersion(row, kernelType, "")
+}
+
+// validateChainVersion is validateChain with the serving kernel's version,
+// so version-gated targets (Snell via sing-box needs 1.14+) are judged
+// against the version that will actually run them. An empty version is
+// not treated as too old (see versionBelow).
+func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernelVersion string) error {
 	check := func(targetID int64, what string) error {
 		if targetID == row.ID {
 			return fmt.Errorf("%s不能选择自己", what)
@@ -154,7 +162,12 @@ func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error 
 		if err != nil {
 			return fmt.Errorf("%s：%v", what, err)
 		}
-		if err := kernel.CheckChain(kernelType, e); err != nil {
+		// 出站 IP 策略是入站级的：链式/分流目标若是与策略族冲突的字面
+		// IP，保存期即拒绝（域名放行，由内核按同策略解析，S4）。
+		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, e.Host); err != nil {
+			return fmt.Errorf("%s：%w", what, err)
+		}
+		if err := kernel.CheckChainWith(kernelType, e, kernel.RenderOptions{SingboxSnell: !versionBelow(kernelVersion, 1, 14)}); err != nil {
 			return fmt.Errorf("%s：%v", what, err)
 		}
 		return nil
@@ -325,7 +338,7 @@ func changedTargets(before, after []int64) []int64 {
 
 // setInboundRouting sets an inbound's default exit and 分流 rules and checks
 // that its kernel can reach every target.
-func (h *Handler) setInboundRouting(row *model.NodeInbound, kernelType string, outboundID int64, rules []kernel.SplitRule) error {
+func (h *Handler) setInboundRouting(row *model.NodeInbound, kernelType, kernelVersion string, outboundID int64, rules []kernel.SplitRule) error {
 	if outboundID < 0 {
 		outboundID = 0
 	}
@@ -339,7 +352,7 @@ func (h *Handler) setInboundRouting(row *model.NodeInbound, kernelType string, o
 		raw, _ := json.Marshal(split)
 		row.SplitRules = string(raw)
 	}
-	return h.validateChain(*row, kernelType)
+	return h.validateChainVersion(*row, kernelType, kernelVersion)
 }
 
 // applyChangedTargets re-applies the whitelists of targets the inbound
@@ -359,9 +372,10 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID         int64              `json:"id"`
-		OutboundID int64              `json:"outboundId"`
-		SplitRules []kernel.SplitRule `json:"splitRules"`
+		ID                 int64              `json:"id"`
+		OutboundID         int64              `json:"outboundId"`
+		SplitRules         []kernel.SplitRule `json:"splitRules"`
+		OutboundIPStrategy *string            `json:"outboundIpStrategy"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -377,8 +391,26 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("内核不存在"))
 		return
 	}
+	// 出站 IP 策略是入站级字段，分流编辑界面同样提供修改入口（S4）：
+	// 归一化/版本门/Extra 三连校验与入站保存同口径。
+	if req.OutboundIPStrategy != nil {
+		strategy, err := kernel.NormalizeOutboundIPStrategy(k.KernelType, *req.OutboundIPStrategy)
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		row.OutboundIPStrategy = strategy
+	}
+	if err := validateOutboundIPVersion(k.KernelType, k.Version, row.OutboundIPStrategy); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := kernel.ValidateOutboundIPExtra(k.KernelType, row.OutboundIPStrategy, json.RawMessage(row.Extra)); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	prevTargets := outboundTargets(*row)
-	if err := h.setInboundRouting(row, k.KernelType, req.OutboundID, req.SplitRules); err != nil {
+	if err := h.setInboundRouting(row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}

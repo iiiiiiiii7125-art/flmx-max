@@ -25,6 +25,7 @@ import {
   uuidProtocols,
   visionAllowed,
 } from "./presets";
+import { OutboundIPSelect } from "./outbound-ip-select";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
 
 import { createInbound, updateInbound } from "@/api";
@@ -76,14 +77,16 @@ export function InboundFormModal({
   const [form, setForm] = useState<InboundForm>(initial);
   const [initialKey, setInitialKey] = useState(initial);
   const [saving, setSaving] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(
+    initial.outboundIpStrategy !== "auto",
+  );
   const isEdit = Boolean(initial.id);
 
   // Reset when the parent opens the modal with a different item.
   if (initialKey !== initial) {
     setInitialKey(initial);
     setForm(initial);
-    setShowAdvanced(false);
+    setShowAdvanced(initial.outboundIpStrategy !== "auto");
   }
 
   const set = <K extends keyof InboundForm>(key: K, value: InboundForm[K]) =>
@@ -97,6 +100,11 @@ export function InboundFormModal({
   const installedKernel = kernels.find(
     (k) => String(k.nodeId) === form.nodeId && k.kernelType === form.kernelType,
   );
+  // snell-server 6.x only serves v6 clients, so new inbounds default to it.
+  const defaultSnellVersion =
+    form.kernelType === "snell" && installedKernel?.version?.startsWith("6.")
+      ? "6"
+      : "5";
   // NaïveProxy needs a certificate clients trust, so no self-signed option.
   const certModes = (kernelInfo?.certModes ?? ["self", "file"]).filter(
     (m) => !(form.protocol === "naive" && m === "self"),
@@ -127,7 +135,16 @@ export function InboundFormModal({
     const first = presetsFor(caps, kernelType)[0];
 
     setForm((prev) => {
-      const next = { ...prev, kernelType };
+      const next: InboundForm = {
+        ...prev,
+        kernelType,
+        // 出站 IP 策略只有 Xray / sing-box 支持，切到其他内核时回到 auto，
+        // 避免保存时被后端归一化拒绝。
+        outboundIpStrategy:
+          kernelType === "xray" || kernelType === "singbox"
+            ? prev.outboundIpStrategy
+            : "auto",
+      };
 
       if (info?.protocols?.some((p) => p.protocol === prev.protocol)) {
         return next;
@@ -288,7 +305,11 @@ export function InboundFormModal({
     }
     setSaving(true);
     try {
-      const payload = toPayload({ ...form, certMode });
+      const payload = toPayload({
+        ...form,
+        certMode,
+        snellVersion: form.snellVersion || defaultSnellVersion,
+      });
       const res = isEdit
         ? await updateInbound(payload)
         : await createInbound(payload);
@@ -656,18 +677,40 @@ export function InboundFormModal({
 
                 {form.protocol === "snell" && (
                   <Select
-                    description="客户端使用的协议版本；v5 需要节点安装 Snell 5.x"
+                    description={
+                      form.kernelType === "singbox"
+                        ? "客户端使用的协议版本；sing-box 内置 Snell 需要 1.14 及以上，v6 的 PSK 至少 12 位"
+                        : "客户端使用的协议版本，要和节点上的 Snell 一致：v4 / v5 用 5.x（也可 4.x 跑 v4），v6 用 6.0.0（只接受 v6 客户端）"
+                    }
                     label="Snell 版本"
-                    selectedKeys={[form.snellVersion || "5"]}
+                    selectedKeys={[form.snellVersion || defaultSnellVersion]}
                     onSelectionChange={(keys) =>
                       set("snellVersion", String(Array.from(keys)[0] ?? "5"))
                     }
                   >
-                    <SelectItem key="5" textValue="v5">
-                      v5
+                    {["6", "5", "4"].map((v) => (
+                      <SelectItem key={v} textValue={`v${v}`}>
+                        {`v${v}`}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                )}
+                {form.protocol === "snell" && form.snellVersion === "6" && (
+                  <Select
+                    description="客户端要选同样的模式；unshaped 不做流量整形，更快但更容易被识别"
+                    label="流量整形"
+                    selectedKeys={[form.snellMode || "default"]}
+                    onSelectionChange={(keys) => {
+                      const v = String(Array.from(keys)[0] ?? "default");
+
+                      set("snellMode", v === "default" ? "" : v);
+                    }}
+                  >
+                    <SelectItem key="default" textValue="默认">
+                      默认
                     </SelectItem>
-                    <SelectItem key="4" textValue="v4">
-                      v4
+                    <SelectItem key="unshaped" textValue="unshaped">
+                      unshaped
                     </SelectItem>
                   </Select>
                 )}
@@ -984,6 +1027,11 @@ export function InboundFormModal({
                         onChange={(e) => set("shareHost", e.target.value)}
                       />
                     </div>
+                    <OutboundIPSelect
+                      kernelType={form.kernelType}
+                      value={form.outboundIpStrategy}
+                      onChange={(value) => set("outboundIpStrategy", value)}
+                    />
                     <div className="space-y-3 rounded-xl border border-divider p-3">
                       <p className="text-sm font-medium">中转相关</p>
                       <div className="flex items-start gap-2">

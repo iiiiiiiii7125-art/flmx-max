@@ -799,6 +799,8 @@ export interface InboundSettings {
   password?: string;
   method?: string;
   snellVersion?: number;
+  /** Snell v6 traffic shaping: unset (default) or "unshaped". */
+  snellMode?: string;
   masquerade?: string;
   backendPort?: number;
   portHopping?: string;
@@ -910,6 +912,13 @@ export interface InboundApiItem {
   outboundMissing?: boolean;
   /** 分流 rules, tried in order before the default exit. */
   splitRules: SplitRule[];
+  /** Local egress address family, independent of the inbound listener. */
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
 }
 
 export interface InboundMutationPayload {
@@ -932,6 +941,12 @@ export interface InboundMutationPayload {
   whitelistExtra: string;
   outboundId: number;
   splitRules: SplitRule[];
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
   enabled?: boolean;
 }
 
