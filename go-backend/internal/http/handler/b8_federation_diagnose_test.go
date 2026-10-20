@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -28,6 +29,11 @@ import (
 // 全拒属产品决策（FINAL §十一方向），不在本批。Count 钳制上限 10
 // （合法调用方恒传 4）。主机名目标面板侧无法预解析校验，原样放行
 // 并在报告登记为残余。
+//
+// W3/N-09（发版前阻塞轮）口径变更：上面「RFC1918 不拦、主机名放行」
+// 两点已被取代——判定改复用 isPrivateIP 全量拒绝内网/保留段（含
+// RFC1918），主机名解析后逐地址判定。本文件相应断言已同步更新，
+// 新增覆盖见 w3_federation_diagnose_ssrf_test.go。
 func TestFederationRuntimeDiagnoseTargetValidationF086(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "b8-diag.db"))
 	if err != nil {
@@ -60,7 +66,7 @@ func TestFederationRuntimeDiagnoseTargetValidationF086(t *testing.T) {
 		return out
 	}
 
-	for _, ip := range []string{"127.0.0.1", "169.254.169.254", "0.1.2.3", "::1", "fe80::1"} {
+	for _, ip := range []string{"127.0.0.1", "169.254.169.254", "0.1.2.3", "::1", "fe80::1", "10.0.0.5"} {
 		out := call("/api/v1/federation/runtime/diagnose",
 			fmt.Sprintf(`{"ip":%q,"port":80,"count":4}`, ip))
 		if out.Code == 0 || !strings.Contains(out.Msg, "保留地址") {
@@ -75,9 +81,9 @@ func TestFederationRuntimeDiagnoseTargetValidationF086(t *testing.T) {
 		t.Fatalf("runtime command tcpping to metadata address must be rejected, got %+v", out)
 	}
 
-	// 公网目标与内网目标（RFC1918 待产品决策）都应过校验层，失败只能
-	// 发生在节点命令层（本测试无在线节点）。
-	for _, ip := range []string{"203.0.113.5", "10.0.0.5"} {
+	// 公网目标应过校验层，失败只能发生在节点命令层（本测试无在线
+	// 节点）。RFC1918 自 W3/N-09 起在校验层拒绝（见上方拒绝表）。
+	for _, ip := range []string{"203.0.113.5"} {
 		out := call("/api/v1/federation/runtime/diagnose",
 			fmt.Sprintf(`{"ip":%q,"port":80,"count":4}`, ip))
 		if strings.Contains(out.Msg, "保留地址") || strings.Contains(out.Msg, "Invalid target") {
@@ -93,11 +99,18 @@ func TestValidateFederationDiagnoseTargetF086(t *testing.T) {
 	if c, err := validateFederationDiagnoseTarget("203.0.113.5", 0); err != nil || c != 4 {
 		t.Fatalf("count<=0 must default to 4, got %d, err=%v", c, err)
 	}
-	if c, err := validateFederationDiagnoseTarget("example.com", 4); err != nil || c != 4 {
-		t.Fatalf("hostname targets pass through (panel cannot pre-resolve), got %d, err=%v", c, err)
+	// W3/N-09：主机名解析后逐地址判定（注入公网解析结果保持测试
+	// 密封）；RFC1918 改为拒绝。
+	origLookup := federationDiagnoseLookupIP
+	federationDiagnoseLookupIP = func(string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
 	}
-	if _, err := validateFederationDiagnoseTarget("192.168.1.10", 4); err != nil {
-		t.Fatalf("RFC1918 stays allowed pending product decision, err=%v", err)
+	defer func() { federationDiagnoseLookupIP = origLookup }()
+	if c, err := validateFederationDiagnoseTarget("example.com", 4); err != nil || c != 4 {
+		t.Fatalf("hostname resolving to public IP must pass, got %d, err=%v", c, err)
+	}
+	if _, err := validateFederationDiagnoseTarget("192.168.1.10", 4); err == nil {
+		t.Fatalf("RFC1918 must be rejected since W3/N-09")
 	}
 	for _, ip := range []string{"127.0.0.1", "169.254.169.254", "0.0.0.0", "0.9.9.9", "224.0.0.1", "::1", "fe80::5"} {
 		if _, err := validateFederationDiagnoseTarget(ip, 4); err == nil {
