@@ -534,7 +534,8 @@ func FormatForUserAgent(ua string) string {
 		return FormatSingbox
 	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "stash") || strings.Contains(ua, "meta"):
 		return FormatClash
-	case strings.Contains(ua, "surge"):
+	case strings.Contains(ua, "surge") || strings.Contains(ua, "surfboard") || strings.Contains(ua, "egern"):
+		// Surfboard 与 Egern 消费 Surge 格式配置。
 		return FormatSurge
 	}
 	return FormatBase64

@@ -719,6 +719,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", k.Version)))
 		return
 	}
+	if k.KernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(k.Version, 1, 12) {
+		releasePortAlloc()
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", k.Version)))
+		return
+	}
 	prevTargets := outboundTargets(row)
 	if err := h.setInboundRouting(&row, k.KernelType, req.OutboundID, req.SplitRules); err != nil {
 		releasePortAlloc()
@@ -1200,6 +1205,8 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 	inbounds := make([]kernel.Inbound, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
 	users := h.activeUsersByInbound(time.Now())
+	backendPorts := make(map[int]string)
+	publicPorts := make(map[int]string)
 	for _, row := range rows {
 		if row.Enabled != 1 {
 			continue
@@ -1207,6 +1214,17 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		in, err := inboundFromModel(row)
 		if err != nil {
 			return nil, "", err
+		}
+		// 下发前复检：组合必须在内核 catalog 内，历史脏数据不得被渲染层静默降级。
+		if !kernel.ComboSupported(k.KernelType, in.Protocol, in.Transport.Type, in.Security.Type) {
+			return nil, "", fmt.Errorf("入站「%s」的协议组合（%s / %s / %s）与内核 %s 不匹配，已拒绝下发，请修正或删除该入站", row.Name, in.Protocol, in.Transport.Type, in.Security.Type, k.KernelType)
+		}
+		publicPorts[in.Port] = row.Name
+		if in.Protocol == kernel.ProtocolSnell && in.Security.Type == kernel.SecurityShadowTLS && in.Settings.BackendPort > 0 {
+			if prev, dup := backendPorts[in.Settings.BackendPort]; dup {
+				return nil, "", fmt.Errorf("入站「%s」与「%s」的 ShadowTLS 回环端口同为 %d，下发必然冲突，请删除其一后重试", row.Name, prev, in.Settings.BackendPort)
+			}
+			backendPorts[in.Settings.BackendPort] = row.Name
 		}
 		if in.SupportsUsers() {
 			in.Users = users[in.ID]
@@ -1226,6 +1244,11 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 			port["allow"] = h.inboundAllowList(row)
 		}
 		ports = append(ports, port)
+	}
+	for bp, name := range backendPorts {
+		if owner, clash := publicPorts[bp]; clash {
+			return nil, "", fmt.Errorf("入站「%s」的 ShadowTLS 回环端口 %d 与入站「%s」的监听端口冲突，已拒绝下发", name, bp, owner)
+		}
 	}
 	proxy := ""
 	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
