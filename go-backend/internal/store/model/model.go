@@ -1011,6 +1011,22 @@ type NodeMetric struct {
 
 func (NodeMetric) TableName() string { return "node_metric" }
 
+// NodeLatencySample is one measurement of a node's latency to a reference
+// point, kept for the latency trend chart. Retention is capped at 7 days
+// (see IngestionService.pruneMetricsAt) so the table cannot grow without
+// bound when many nodes measure many points.
+type NodeLatencySample struct {
+	ID          int64   `gorm:"primaryKey;autoIncrement"`
+	NodeID      int64   `gorm:"column:node_id;not null;index:idx_latency_sample_node_time,priority:1"`
+	CreatedTime int64   `gorm:"column:created_time;not null;index:idx_latency_sample_node_time,priority:2;index"`
+	Point       string  `gorm:"column:point;type:varchar(64);not null"`
+	OK          int     `gorm:"column:ok;not null;default:0"`
+	LatencyMs   int64   `gorm:"column:latency_ms;not null;default:0"`
+	LossPct     float64 `gorm:"column:loss_pct;not null;default:0"`
+}
+
+func (NodeLatencySample) TableName() string { return "node_latency_sample" }
+
 type TunnelMetric struct {
 	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`
 	TunnelID     int64   `gorm:"column:tunnel_id;not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:1" json:"tunnelId"`
