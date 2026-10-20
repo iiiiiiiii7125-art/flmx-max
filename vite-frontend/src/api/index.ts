@@ -838,10 +838,14 @@ export const deleteRemoteSource = (id: number, keepNodes: boolean) =>
 export const resetSubscriptionTraffic = (id: number) =>
   Network.post<SubscriptionItem>("/subscription/reset-traffic", { id });
 export const previewSubscription = (data: SubscriptionDraft) =>
-  Network.post<{ items: SubPreviewItem[]; total: number; dropped: number }>(
-    "/subscription/preview",
-    data,
-  );
+  Network.post<{
+    items: SubPreviewItem[];
+    total: number;
+    dropped: number;
+    // F-024：脚本步骤出错时后端保留其余步骤的节点并在此回告错误，
+    // 预览区必须展示，避免用户以为节点被脚本吞掉。
+    scriptError?: string;
+  }>("/subscription/preview", data);
 
 export const testNotify = (data: {
   telegramToken: string;
