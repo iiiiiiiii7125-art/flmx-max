@@ -234,6 +234,54 @@ func (r *Repository) ListActiveForwardsByNode(nodeID int64) ([]model.ForwardReco
 	return rows, nil
 }
 
+// ListRealmForwardsByNode lists the forwards, paused ones included, with a
+// port on the node in tunnels run by realm. Paused forwards stay in the list:
+// the handler's run decision (status + override) filters them, so the SQL
+// must not drop them.
+func (r *Repository) ListRealmForwardsByNode(nodeID int64) ([]model.ForwardRecord, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var forwards []model.Forward
+	err := r.db.Model(&model.Forward{}).
+		Joins("JOIN forward_port ON forward_port.forward_id = forward.id").
+		Joins("JOIN tunnel ON tunnel.id = forward.tunnel_id").
+		Where("forward_port.node_id = ? AND tunnel.engine = ?", nodeID, "realm").
+		Order("forward.id ASC").
+		Distinct("forward.*").
+		Find(&forwards).Error
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]model.ForwardRecord, 0, len(forwards))
+	for _, f := range forwards {
+		proxyProtocolReceive, proxyProtocolSend := normalizeForwardProxyProtocol(f.ProxyProtocol, f.ProxyProtocolReceive, f.ProxyProtocolSend)
+		rows = append(rows, model.ForwardRecord{
+			ID:                   f.ID,
+			UserID:               f.UserID,
+			UserName:             f.UserName,
+			Name:                 f.Name,
+			TunnelID:             f.TunnelID,
+			RemoteAddr:           f.RemoteAddr,
+			Strategy:             f.Strategy,
+			Status:               f.Status,
+			SpeedID:              f.SpeedID,
+			MaxConn:              f.MaxConn,
+			IPMaxConn:            f.IPMaxConn,
+			IPSpeedID:            f.IPSpeedID,
+			ProxyProtocol:        f.ProxyProtocol,
+			ProxyProtocolReceive: proxyProtocolReceive,
+			ProxyProtocolSend:    proxyProtocolSend,
+		})
+	}
+	for i := range rows {
+		if strings.TrimSpace(rows[i].Strategy) == "" {
+			rows[i].Strategy = "fifo"
+		}
+	}
+	return rows, nil
+}
+
 func defaultString(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
