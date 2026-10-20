@@ -112,7 +112,7 @@ const fetchPublicBrandConfigs = async (): Promise<Record<string, string>> => {
 const getInitialConfig = () => {
   if (typeof window === "undefined") {
     return {
-      name: "FLVX",
+      name: "FLVX-MAX",
       version: VERSION,
       app_version: APP_VERSION,
       github_repo: GITHUB_REPO,
@@ -160,7 +160,7 @@ const getInitialConfig = () => {
   }
 
   return {
-    name: "FLVX",
+    name: "FLVX-MAX",
     version: VERSION,
     app_version: APP_VERSION,
     github_repo: GITHUB_REPO,
@@ -458,7 +458,7 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
     ? String(resolvedConfigMap.login_bg_image || "").trim()
     : (siteConfig.login_bg_image || "").trim();
 
-  siteConfig.name = appName || "FLVX";
+  siteConfig.name = appName || "FLVX-MAX";
   siteConfig.app_logo = appLogo;
   siteConfig.app_favicon = appFavicon;
   siteConfig.app_bg_image = appBgImage;

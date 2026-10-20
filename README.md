@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="doc/public/logo.jpg" width="88" alt="FLVX" />
+<img src="doc/public/logo.jpg" width="88" alt="FLVX-MAX" />
 
-# FLVX-max
+# FLVX-MAX
 
 转发 + 节点搭建面板
 
