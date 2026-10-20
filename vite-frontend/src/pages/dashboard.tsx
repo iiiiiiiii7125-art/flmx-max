@@ -636,15 +636,13 @@ function UserDashboard() {
   }
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-2 lg:py-4">
+    <AnimatedPage className="px-3 lg:px-6 py-6">
       {/* 顶部个人状态和下拉菜单 */}
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4">
         <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-foreground">
-            Good morning, {username}
-          </h1>
-          <p className="text-sm text-default-500 mt-1">
-            Here&apos;s what&apos;s happening with your network today.
+          <h1 className="text-lg font-semibold">概览</h1>
+          <p className="text-xs text-default-500">
+            {username}，这里是你的流量和转发规则
           </p>
         </div>
         <div className="flex items-center gap-3">
