@@ -197,7 +197,7 @@ var catalog = []Info{
 			{Protocol: ProtocolVLESS, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityReality, SecurityTLS, SecurityNone}},
 				{Type: TransportWS, Securities: []string{SecurityTLS, SecurityNone}},
-				{Type: TransportGRPC, Securities: []string{SecurityTLS, SecurityNone}},
+				{Type: TransportGRPC, Securities: []string{SecurityTLS, SecurityNone, SecurityReality}},
 			}},
 			{Protocol: ProtocolVMess, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityTLS, SecurityNone}},
@@ -207,7 +207,7 @@ var catalog = []Info{
 			{Protocol: ProtocolTrojan, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityTLS, SecurityReality}},
 				{Type: TransportWS, Securities: []string{SecurityTLS}},
-				{Type: TransportGRPC, Securities: []string{SecurityTLS}},
+				{Type: TransportGRPC, Securities: []string{SecurityTLS, SecurityReality}},
 			}},
 			{Protocol: ProtocolShadowsocks, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityNone, SecurityShadowTLS}},
@@ -246,6 +246,36 @@ func Lookup(kernelType string) (Info, bool) {
 		}
 	}
 	return Info{}, false
+}
+
+// ComboSupported 只读判断 (协议, 传输, 安全层) 是否在该内核的 catalog 内，
+// 供下发前复检使用：历史脏数据不得在渲染层被静默降级，必须整单拒绝并报错。
+// transport 为空按 tcp、安全层为空按该传输的首个安全层（与 Normalize 的默认一致）。
+func ComboSupported(kernelType, protocol, transport, security string) bool {
+	info, ok := Lookup(kernelType)
+	if !ok {
+		return false
+	}
+	pc, ok := info.protocol(protocol)
+	if !ok {
+		return false
+	}
+	if transport == "" {
+		transport = TransportTCP
+	}
+	tc, ok := pc.transport(transport)
+	if !ok {
+		return false
+	}
+	if security == "" {
+		return true
+	}
+	for _, s := range tc.Securities {
+		if s == security {
+			return true
+		}
+	}
+	return false
 }
 
 func (info Info) protocol(name string) (ProtocolCap, bool) {

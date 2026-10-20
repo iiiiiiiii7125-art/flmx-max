@@ -225,8 +225,8 @@ func ssPluginString(p Proxy) string {
 
 func proxyClash(e Endpoint) (yamlNode, bool) {
 	p := e.Proxy.forEndpoint(e)
-	if p.network() == "xhttp" || (p.Type() == "snell" && p.num("version") > 3) {
-		// Mihomo XHTTP support is unstable; it only speaks Snell v1-v3.
+	if p.Type() == "snell" && p.num("version") > 3 {
+		// Mihomo speaks XHTTP (xhttp-opts) since 1.19; it only speaks Snell v1-v3.
 		return nil, false
 	}
 	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS
@@ -289,12 +289,15 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			o["transport"] = t
 		case "grpc":
 			o["transport"] = map[string]interface{}{"type": "grpc", "service_name": service}
-		case "h2":
+		case "h2", "http":
+			// Clash 的 h2 与 http 均为 HTTP 系传输，映射为 sing-box 的 http 传输。
 			t := map[string]interface{}{"type": "http", "path": path}
 			if host != "" {
 				t["host"] = []string{host}
 			}
 			o["transport"] = t
+		case "quic":
+			o["transport"] = map[string]interface{}{"type": "quic"}
 		default:
 			return false
 		}
