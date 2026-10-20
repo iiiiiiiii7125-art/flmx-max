@@ -416,12 +416,13 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 
 // ---- Surge ----
 
-// surgeEscape 转义 Surge 行式格式中的值（R5-B5 订阅转义）。
-// Surge 用逗号分隔字段、用等号分隔键值，值中的 , = 换行会破坏解析。
+// surgeEscape 转义 Surge 行式格式中的值（R5-B5 订阅转义，F-081 修正）。
+// 真正劈字段的是逗号（字段分隔符）与换行；键值按首个 = 切分，值内的 =
+// 合法且必须保留——SS 2022 密钥是 base64、自带 == 填充，此前把 = 一并
+// 替换成空格会把导入节点的 2022 密码改坏（金快照 p2 系列为据）。
 func surgeEscape(s string) string {
 	return strings.NewReplacer(
 		",", " ",
-		"=", " ",
 		"\n", " ",
 		"\r", " ",
 	).Replace(s)
@@ -505,7 +506,7 @@ func proxySurge(e Endpoint) (string, bool) {
 		}
 		tlsTail()
 	case "snell":
-		parts = append(parts, "snell", host, port, "psk="+p.str("psk"), fmt.Sprintf("version=%d", maxInt(p.num("version"), 1)))
+		parts = append(parts, "snell", host, port, "psk="+surgeEscape(p.str("psk")), fmt.Sprintf("version=%d", maxInt(p.num("version"), 1)))
 		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
 			parts = append(parts, "obfs="+oo.str("mode"))
 			if h := oo.str("host"); h != "" {
