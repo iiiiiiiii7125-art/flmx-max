@@ -10,7 +10,60 @@ export interface ParsedNyImportLine {
   error?: string;
 }
 
-const ADDRESS_PATTERN = /^[^:]+:\d+$/;
+// 目标地址校验：host:port。host 可为域名/IPv4，或方括号包裹的 IPv6
+// （与主表单 ipv6FullPattern、后端 SplitHostPort 口径一致）；端口须为 1-65535。
+export const isValidForwardDestAddress = (value: string): boolean => {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  let portPart: string;
+
+  if (trimmed.startsWith("[")) {
+    const closeIdx = trimmed.indexOf("]");
+
+    if (closeIdx <= 1) {
+      return false;
+    }
+
+    const host = trimmed.slice(1, closeIdx);
+    const rest = trimmed.slice(closeIdx + 1);
+
+    if (
+      !rest.startsWith(":") ||
+      host.includes("[") ||
+      host.includes("]")
+    ) {
+      return false;
+    }
+
+    portPart = rest.slice(1);
+  } else {
+    const colonIdx = trimmed.lastIndexOf(":");
+
+    if (colonIdx <= 0) {
+      return false;
+    }
+
+    const host = trimmed.slice(0, colonIdx);
+
+    if (host.includes(":") || host.includes("[") || host.includes("]")) {
+      return false;
+    }
+
+    portPart = trimmed.slice(colonIdx + 1);
+  }
+
+  if (!/^\d+$/.test(portPart)) {
+    return false;
+  }
+
+  const port = Number(portPart);
+
+  return port >= 1 && port <= 65535;
+};
 
 const getAliasField = (
   item: Record<string, unknown>,
@@ -123,7 +176,7 @@ const validateNyItem = (line: string, value: unknown): ParsedNyImportLine => {
   }
 
   const invalid = normalizedDest.find(
-    (itemValue) => !ADDRESS_PATTERN.test(itemValue),
+    (itemValue) => !isValidForwardDestAddress(itemValue),
   );
 
   if (invalid) {
