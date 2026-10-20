@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -558,6 +559,11 @@ func normalizeSecurity(in *Inbound) error {
 					return fmt.Errorf("生成自签证书失败: %v", err)
 				}
 				sec.CertPEM, sec.KeyPEM = cert, key
+			} else if _, err := tls.X509KeyPair([]byte(sec.CertPEM), []byte(sec.KeyPEM)); err != nil {
+				// F-078: certMatchesName 只保证证书域名/有效期对，不保证
+				// 与私钥配对——错配对原样落库后要到节点内核启动才炸。
+				// 保存期显式拦截（材料是用户主动粘贴的，不静默替换）。
+				return errors.New("证书与私钥不匹配，请确认粘贴的证书与私钥为一对")
 			}
 		case CertModeFile:
 			sec.CertPEM, sec.KeyPEM = "", ""

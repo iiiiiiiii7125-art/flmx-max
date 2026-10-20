@@ -495,10 +495,11 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 		targetPort = int(minPort.Int64)
 	}
 	if targetPort <= 0 {
-		targetPort = h.pickTunnelPort(targetTunnelID)
-	}
-	if targetPort <= 0 {
-		targetPort = 10000
+		picked, pickErr := h.pickTunnelPort(targetTunnelID)
+		if pickErr != nil {
+			return tunnelForwardMigrationPlan{}, pickErr
+		}
+		targetPort = picked
 	}
 
 	hasCustomInIP := false

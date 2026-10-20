@@ -219,12 +219,33 @@ func (h *Handler) monitorTunnelQualityHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// F-084 读取侧过滤（与 probeAll 每轮淘汰双保险）：已删除/停用的
+	// 隧道不得出现。enabled 集合查询失败时不过滤（保持原行为）。
+	var enabledSet map[int64]bool
+	if ids, lerr := h.repo.ListEnabledTunnelIDs(); lerr == nil {
+		enabledSet = make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			enabledSet[id] = true
+		}
+	}
+	qualityVisible := func(tunnelID int64) bool {
+		return enabledSet == nil || enabledSet[tunnelID]
+	}
+
 	// Try in-memory cache first
 	if h.qualityProber != nil {
 		items := h.qualityProber.GetAll()
 		if len(items) > 0 {
-			response.WriteJSON(w, response.OK(items))
-			return
+			filtered := make([]tunnelQualitySnapshot, 0, len(items))
+			for _, s := range items {
+				if qualityVisible(s.TunnelID) {
+					filtered = append(filtered, s)
+				}
+			}
+			if len(filtered) > 0 {
+				response.WriteJSON(w, response.OK(filtered))
+				return
+			}
 		}
 	}
 
@@ -247,6 +268,9 @@ func (h *Handler) monitorTunnelQualityHandler(w http.ResponseWriter, r *http.Req
 
 	snapshots := make([]tunnelQualitySnapshot, 0, len(qualities))
 	for _, q := range qualities {
+		if !qualityVisible(q.TunnelID) {
+			continue
+		}
 		target := targetsByTunnelID[q.TunnelID]
 		if target.Host == "" {
 			target = defaultTunnelProbeTarget()
@@ -781,12 +805,33 @@ func (h *Handler) monitorServiceLatestResultsHandler(w http.ResponseWriter, r *h
 		return
 	}
 
+	// F-084 读取侧过滤（与 Checker 每轮淘汰双保险）：已删除/停用的
+	// 监控不得出现。enabled 集合查询失败时不过滤（保持原行为）。
+	var enabledSet map[int64]bool
+	if monitors, lerr := h.repo.ListEnabledServiceMonitors(); lerr == nil {
+		enabledSet = make(map[int64]bool, len(monitors))
+		for _, m := range monitors {
+			enabledSet[m.ID] = true
+		}
+	}
+	resultVisible := func(monitorID int64) bool {
+		return enabledSet == nil || enabledSet[monitorID]
+	}
+
 	// Try in-memory cache first (updated every 1s)
 	if h.healthCheck != nil {
 		cached := h.healthCheck.GetLatestCached()
 		if len(cached) > 0 {
-			response.WriteJSON(w, response.OK(cached))
-			return
+			filtered := make([]*model.ServiceMonitorResult, 0, len(cached))
+			for _, res := range cached {
+				if res != nil && resultVisible(res.MonitorID) {
+					filtered = append(filtered, res)
+				}
+			}
+			if len(filtered) > 0 {
+				response.WriteJSON(w, response.OK(filtered))
+				return
+			}
 		}
 	}
 
@@ -796,7 +841,13 @@ func (h *Handler) monitorServiceLatestResultsHandler(w http.ResponseWriter, r *h
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	response.WriteJSON(w, response.OK(results))
+	filteredResults := make([]model.ServiceMonitorResult, 0, len(results))
+	for _, res := range results {
+		if resultVisible(res.MonitorID) {
+			filteredResults = append(filteredResults, res)
+		}
+	}
+	response.WriteJSON(w, response.OK(filteredResults))
 }
 
 func (h *Handler) monitorServiceLimitsHandler(w http.ResponseWriter, r *http.Request) {
