@@ -198,6 +198,21 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
+		// B4/F-057: 与 DeleteForwardCascade 对齐——删用户须同步清其转发的
+		// nft 台账三表与中转行，否则残留 pending 行会被后台重试循环反复
+		// 取出对不存在的 forward 报错。
+		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("user_id = ?", userID).Delete(&model.Forward{}).Error; err != nil {
 			return err
 		}
@@ -224,6 +239,11 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		// O5-001：删除用户时清理 user_inbound，否则残留孤儿数据。
 		// 参考 repository_kernel.go 删除入站/中转时的清理模式。
 		if err := tx.Where("user_id = ?", userID).Delete(&model.UserInbound{}).Error; err != nil {
+			return err
+		}
+		// B4/F-011: 1.0.12 订阅分配表 user_subscription 同步清理
+		// （与删订阅侧 DeleteUserSubscriptionsBySubscription 对称）。
+		if err := tx.Where("user_id = ?", userID).Delete(&model.UserSubscription{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", userID).Delete(&model.User{}).Error
@@ -434,7 +454,10 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// R5-B7: 补全级联删除（C-004~C-008）。
-		// 注意：nft 节点上的转发/隧道由调用方走 pending 流程，此处只清 DB。
+		// 数据面清理由 handler 的 deleteNodeByID 在调用本函数前尽力尝试
+		// （B4/F-056：删除其上转发服务 + nftables 节点清表，失败记录日志
+		// 不阻断——死节点必须能删）；本函数只负责 DB 行。此前注释声称的
+		// 「调用方 pending 流程」并不存在，已按实际改写。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}

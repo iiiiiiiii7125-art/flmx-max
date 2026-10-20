@@ -331,6 +331,16 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 func (h *Handler) syncSubscriptions(now time.Time) {
 	subSyncMu.Lock()
 	defer subSyncMu.Unlock()
+	// B4/F-058: 先重试未完成的订阅删除（墓碑）。下发成功才硬删行+分配；
+	// 失败留待下一轮。与下方凭据轮换/状态同步的 AppliedActive 机制相互
+	// 独立，本块不读写 AppliedActive。
+	if pending, err := h.repo.ListPendingDeleteSubscriptions(); err == nil {
+		for i := range pending {
+			if err := h.completePendingSubscriptionDelete(&pending[i]); err != nil {
+				log.Printf("subscription %d: pending delete push failed, will retry: %v", pending[i].ID, err)
+			}
+		}
+	}
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
 		return
@@ -338,6 +348,9 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 	var rows []model.NodeInbound
 	for i := range subs {
 		s := &subs[i]
+		if s.PendingDelete == 1 {
+			continue // 墓碑由上方 F-058 删除块独占处理
+		}
 		if subDueReset(s, now) {
 			if err := h.repo.ResetSubscriptionTraffic(s.ID, now.UnixMilli()); err == nil {
 				s.UploadBytes, s.DownloadBytes = 0, 0
@@ -697,21 +710,45 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
 		return
 	}
-	var push []int64
-	if isShare(s) {
-		if rows, err := h.repo.ListNodeInbounds(); err == nil {
-			push = subInboundIDs(s, rows)
-		}
-	}
-	if err := h.repo.DeleteSubscription(id); err != nil {
+	// B4/F-058: 删除改为两阶段。此前行先删、下发失败仅改响应文案，行已
+	// 不在，60s 同步循环无从重试，节点侧凭据成为孤儿。现在先落墓碑
+	// （pending_delete + 禁用，链接立即失效、凭据退出 payload），下发
+	// 成功后才硬删；失败则墓碑保留，由 syncSubscriptions 循环重试完成。
+	// B4/F-136: 硬删与清分配在同一 repo 事务内完成（旧两步第二步失败
+	// 仅打日志、分配行残留）。
+	if err := h.repo.MarkSubscriptionPendingDelete(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	// 1.0.12: 同步清掉指向该订阅的用户分配（失败仅记录，不阻断删除）。
-	if err := h.repo.DeleteUserSubscriptionsBySubscription(id); err != nil {
-		log.Printf("subscription %d: cleanup user subscription assignments failed: %v", id, err)
+	s.PendingDelete = 1
+	s.Enabled = 0
+	if err := h.completePendingSubscriptionDelete(s); err != nil {
+		log.Printf("subscription %d: delete push failed, tombstone kept for retry: %v", id, err)
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已标记删除，但下发到节点失败，后台将自动重试: " + err.Error(), Data: nil, TS: time.Now().UnixMilli()})
+		return
 	}
-	h.respondAfterSubPush(w, push, nil)
+	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: nil, TS: time.Now().UnixMilli()})
+}
+
+// completePendingSubscriptionDelete pushes the credential removal for a
+// tombstoned subscription and, only on success, hard-deletes the row
+// together with its assignments in one transaction. The push list is
+// computed from the subscription's (former) inbounds; the payload itself
+// is rendered from current DB state, in which the tombstone is disabled
+// and therefore already excluded.
+func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error {
+	var push []int64
+	if isShare(s) {
+		rows, err := h.repo.ListNodeInbounds()
+		if err != nil {
+			return err
+		}
+		push = subInboundIDs(s, rows)
+	}
+	if err := h.applyKernelsForInbounds(push); err != nil {
+		return err
+	}
+	return h.repo.DeleteSubscriptionWithAssignments(s.ID)
 }
 
 // subscriptionReset issues a new link; a share subscription also gets new

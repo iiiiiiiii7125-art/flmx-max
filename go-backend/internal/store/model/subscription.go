@@ -36,6 +36,11 @@ type Subscription struct {
 	// AppliedActive is the active state last pushed to the kernels, so the
 	// expiry loop knows whose credentials still have to be removed.
 	AppliedActive int `gorm:"column:applied_active;not null;default:0"`
+	// PendingDelete (B4/F-058) marks a subscription whose deletion was
+	// requested but whose credential-removal push has not succeeded yet.
+	// The row stays (disabled) until the sync loop completes the push,
+	// then it is hard-deleted together with its user assignments.
+	PendingDelete int `gorm:"column:pending_delete;not null;default:0"`
 	// Traffic of a share subscription, counted on the nodes per user.
 	// TrafficLimit (bytes, 0 = unlimited) cuts it off once reached;
 	// ResetDay (1-28, 0 = never) zeroes the traffic monthly.
