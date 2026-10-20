@@ -177,22 +177,37 @@ type federationRuntimeDiagnoseRequest struct {
 // control_plane 恒传 4，留一倍多余量）。
 const maxFederationDiagnoseCount = 10
 
+// federationDiagnoseLookupIP 是诊断目标主机名的解析入口（默认
+// net.LookupIP），抽成 var 以便测试注入假解析结果。解析口径与
+// SecureFetch 的 validateFetchURL 一致：解析后逐地址判定、任一
+// 不合法整体拒绝，防 DNS rebinding 把诊断引向内网。
+var federationDiagnoseLookupIP = net.LookupIP
+
 // validateFederationDiagnoseTarget 校验对端（持 peer token）发起的诊断
-// 目标并钳制次数（F-086）。字面 IP 命中硬保留段（回环/链路本地含云
-// 元数据 169.254.169.254/未指定/组播/0.0.0.0/8，与 F-023 修后的 SSRF
-// 口径对齐）一律拒绝——否则提供方节点会被对端当作探测内网的跳板。
-// RFC1918 私有段不拦：链路中间跳目标可能为内网地址，是否全拒属产品
-// 决策（FINAL §十一方向）。主机名无法在面板侧预解析校验，原样放行
-// （残余风险登记于 B8 报告）。返回钳制后的 count。
-func validateFederationDiagnoseTarget(ip string, count int) (int, error) {
-	if parsed := net.ParseIP(strings.TrimSpace(ip)); parsed != nil {
-		reserved := parsed.IsLoopback() || parsed.IsLinkLocalUnicast() ||
-			parsed.IsLinkLocalMulticast() || parsed.IsUnspecified() || parsed.IsMulticast()
-		if v4 := parsed.To4(); !reserved && v4 != nil && v4[0] == 0 {
-			reserved = true // 0.0.0.0/8（IsUnspecified 只覆盖 0.0.0.0 本身）
+// 目标并钳制次数（F-086；RFC1918 与主机名口径由发版前阻塞轮 W3/N-09
+// 补齐）。判定不新写一套：直接复用 isPrivateIP（kernel_external.go，
+// 即 SecureFetch 的 validateFetchIP 所依赖的同一份判定，含 F-023 的
+// 0.0.0.0/8 修正与 IPv4-mapped 展开）。命中内网/保留段（RFC1918、
+// 回环、链路本地含云元数据 169.254.169.254、ULA、CGNAT、未指定、
+// 组播、0.0.0.0/8）一律拒绝——否则提供方节点会被对端当作探测内网
+// 的跳板。目标是主机名时先解析，对每个返回地址逐一判定，任一不
+// 合法整体拒绝；解析失败无法验证，按 fail-closed 拒绝。返回钳制
+// 后的 count。
+func validateFederationDiagnoseTarget(target string, count int) (int, error) {
+	target = strings.TrimSpace(target)
+	if parsed := net.ParseIP(target); parsed != nil {
+		if isPrivateIP(parsed) {
+			return 0, errors.New("不允许对内网/保留地址发起诊断")
 		}
-		if reserved {
-			return 0, errors.New("不允许对回环/链路本地等保留地址发起诊断")
+	} else {
+		ips, err := federationDiagnoseLookupIP(target)
+		if err != nil || len(ips) == 0 {
+			return 0, fmt.Errorf("诊断目标无法解析: %s", target)
+		}
+		for _, ip := range ips {
+			if isPrivateIP(ip) {
+				return 0, errors.New("不允许对内网/保留地址发起诊断")
+			}
 		}
 	}
 	if count <= 0 {
@@ -1391,6 +1406,7 @@ func (h *Handler) federationRuntimeDiagnose(w http.ResponseWriter, r *http.Reque
 	}
 	clampedCount, targetErr := validateFederationDiagnoseTarget(req.IP, req.Count)
 	if targetErr != nil {
+		log.Printf("federation diagnose target rejected peer_share=%d name=%q target=%s reason=%v", share.ID, share.Name, req.IP, targetErr)
 		response.WriteJSON(w, response.ErrDefault(targetErr.Error()))
 		return
 	}
@@ -1486,6 +1502,7 @@ func (h *Handler) federationRuntimeCommand(w http.ResponseWriter, r *http.Reques
 		}
 		clampedCount, targetErr := validateFederationDiagnoseTarget(targetIP, asInt(dataMap["count"], 0))
 		if targetErr != nil {
+			log.Printf("federation runtime command tcpping target rejected peer_share=%d name=%q target=%s reason=%v", share.ID, share.Name, targetIP, targetErr)
 			response.WriteJSON(w, response.ErrDefault(targetErr.Error()))
 			return
 		}
