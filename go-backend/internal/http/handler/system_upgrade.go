@@ -598,6 +598,12 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	if perPage <= 0 {
 		perPage = 20
 	}
+	// 与 fetchGitHubReleases 共用 10 分钟缓存（版本列表不需要实时，
+	// 页脚检查更新每次打开页面都会调这里，是 API 配额的主要消耗方）。
+	cacheKey := "sysapi:" + strings.TrimRight(systemUpgradeAPIBaseURL, "/")
+	if releases, ok := cachedReleases(cacheKey); ok {
+		return sliceReleases(releases, perPage), nil
+	}
 
 	// U1-006：超时 15s → 30s（经代理多一跳 + 50 条 release JSON，慢代理下 15s 偏紧）。
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -618,7 +624,8 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 			if i > 0 {
 				log.Printf("system_upgrade: 代理版本API失败，已降级直连 api.github.com")
 			}
-			return releases, nil
+			storeReleasesCache(cacheKey, releases)
+			return sliceReleases(releases, perPage), nil
 		}
 		log.Printf("system_upgrade: 版本API请求失败（尝试 %d/%d）url=%s: %v", i+1, len(paths), url, err)
 		lastErr = err
@@ -635,6 +642,9 @@ func (h *Handler) fetchSystemUpgradeReleasePage(client *http.Client, url string)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(string(body), "rate limit") {
+			return nil, fmt.Errorf("GitHub API 已限流（未认证额度 60 次/小时/IP），请稍后再试")
+		}
 		return nil, fmt.Errorf("GitHub API返回 %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -651,6 +661,12 @@ func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (st
 	normalizedChannel := normalizeReleaseChannel(channel)
 	releases, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
+		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
+		if normalizedChannel == releaseChannelStable {
+			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil {
+				return tag, nil
+			}
+		}
 		return "", err
 	}
 
