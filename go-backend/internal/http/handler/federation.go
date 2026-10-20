@@ -964,6 +964,13 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// B4/F-031: 「查占用 → 建隧道+runtime」必须与兄弟入口
+	// federationRuntimeReservePort 一样在 peerRoleRuntimeMu 内串行，
+	// 此前无锁：两个并发请求可同时通过三处占用检查，为同节点同口
+	// 建出两条联邦隧道。
+	peerRoleRuntimeMu.Lock()
+	defer peerRoleRuntimeMu.Unlock()
+
 	usedPorts, err := h.repo.ListUsedPortsOnNode(share.NodeID)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))

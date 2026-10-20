@@ -169,8 +169,25 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 		// IMP-003：订阅源"只保留中转线路"开关变更要同步到已有节点。旧逻辑更新
 		// 分支从不写 RelayOnly，改了开关后老节点行为不变，必须删源重建才生效。
 		row.RelayOnly = fresh.RelayOnly
-		if err := h.repo.SaveNodeInbound(row); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
+		// B4/F-132: 更新分支此前无锁无去重——地址变更可与手动导入/编辑
+		// 并发撞出重复 (host,port)。在 0 号锁内复检去重后再保存（与
+		// 导入、编辑路径同一临界区口径）。
+		saveErr := func() error {
+			portMu := repo.AcquirePortAllocLock(0)
+			defer repo.ReleasePortAllocLock(portMu)
+			if rowsNow, err := h.repo.ListNodeInbounds(); err == nil {
+				key := externalKey(row.Listen, row.Port)
+				for i := range rowsNow {
+					other := &rowsNow[i]
+					if other.ID != row.ID && isExternalInbound(other) && externalKey(other.Listen, other.Port) == key {
+						return fmt.Errorf("已存在相同地址和端口的导入节点（%s）", key)
+					}
+				}
+			}
+			return h.repo.SaveNodeInbound(row)
+		}()
+		if saveErr != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, saveErr))
 			continue
 		}
 		res.Updated++

@@ -196,6 +196,49 @@ func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port
 	return count > 0, nil
 }
 
+// NodePortOccupiedForTunnelTx reports whether (nodeID, port) is occupied
+// for tunnel-port purposes: any forward_port row, any node_inbound row,
+// or a chain_tunnel row belonging to a DIFFERENT tunnel (excludeTunnelID
+// is the tunnel being created/updated; 0 excludes nothing). B4/F-015:
+// prepareTunnelCreateState validates explicit exit/chain ports with it —
+// HasOtherForwardOnNodePortTx cannot be reused because its chain branch
+// does not exclude the tunnel being updated (keeping the same port
+// during an update would false-positive).
+func (r *Repository) NodePortOccupiedForTunnelTx(tx *gorm.DB, nodeID int64, port int, excludeTunnelID int64) (bool, error) {
+	if tx == nil {
+		return false, errors.New("database unavailable")
+	}
+	if nodeID <= 0 || port <= 0 {
+		return false, nil
+	}
+	var count int64
+	if err := tx.Model(&model.ForwardPort{}).
+		Where("node_id = ? AND port = ?", nodeID, port).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	if count > 0 {
+		return true, nil
+	}
+	if err := tx.Model(&model.NodeInbound{}).
+		Where("node_id = ? AND port = ?", nodeID, port).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	if count > 0 {
+		return true, nil
+	}
+	chainQuery := tx.Model(&model.ChainTunnel{}).
+		Where("node_id = ? AND port = ?", nodeID, port)
+	if excludeTunnelID > 0 {
+		chainQuery = chainQuery.Where("tunnel_id != ?", excludeTunnelID)
+	}
+	if err := chainQuery.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *Repository) GetTunnelOutProtocol(tunnelID int64) (string, error) {
 	if r == nil || r.db == nil {
 		return "", errors.New("repository not initialized")

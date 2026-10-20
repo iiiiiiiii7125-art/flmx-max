@@ -1035,6 +1035,18 @@ func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
 		if len(entries) == 0 {
 			return nil
 		}
+		// B4/F-013: 锁内三表复检（forward_port/node_inbound/chain_tunnel）。
+		// handler 的预检在锁外，与并发的入站/隧道创建存在「先查后写」
+		// 窗口；旧端口已在本事务内删除，自占用天然排除。
+		for _, e := range entries {
+			occupied, err := r.HasOtherForwardOnNodePortTx(tx, e.NodeID, e.Port, forwardID)
+			if err != nil {
+				return err
+			}
+			if occupied {
+				return errPortInUse
+			}
+		}
 		rows := make([]model.ForwardPort, 0, len(entries))
 		for _, e := range entries {
 			rows = append(rows, model.ForwardPort{
@@ -1108,6 +1120,16 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 		return nil, err
 	}
 	for _, p := range chainPorts {
+		used[p] = true
+	}
+	// B4/F-013: 自动选港同样必须排除入站占用端口（此前只排除了
+	// forward_port 与 chain_tunnel，随机选中入站端口后转发建得出、
+	// 起不来）。external 行 node_id=0 天然不在本节点集合内。
+	var inboundPorts []int
+	if err := r.db.Model(&model.NodeInbound{}).Where("node_id = ?", nodeID).Pluck("port", &inboundPorts).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range inboundPorts {
 		used[p] = true
 	}
 	return used, nil
@@ -1568,6 +1590,17 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	_, proxyProtocolSend = normalizeForwardProxyProtocol(proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	var forwardID int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// B4/F-013: 锁内三表复检（同 ReplaceForwardPorts）。handler 预检
+		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
+		for _, nodeID := range entryNodeIDs {
+			occupied, err := r.HasOtherForwardOnNodePortTx(tx, nodeID, port, 0)
+			if err != nil {
+				return err
+			}
+			if occupied {
+				return errPortInUse
+			}
+		}
 		fwd := model.Forward{
 			UserID:               userID,
 			UserName:             userName,

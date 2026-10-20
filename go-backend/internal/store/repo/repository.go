@@ -2641,6 +2641,14 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		typeSet[t] = true
 	}
 
+	// B4/F-055: 端口预检 + per-node 锁（见 repository_backup_precheck.go）。
+	claims := backupClaims(backup, typeSet)
+	releasePortLocks := lockBackupPortNodes(claims)
+	defer releasePortLocks()
+	if err := r.precheckBackupPortConflicts(backup, typeSet, claims); err != nil {
+		return nil, err
+	}
+
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		now := unixMilliNow()
 

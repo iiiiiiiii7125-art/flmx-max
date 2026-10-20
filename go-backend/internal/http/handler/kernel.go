@@ -877,8 +877,18 @@ func (h *Handler) inboundPortConflict(nodeID int64, in kernel.Inbound, excludeIn
 		if err != nil {
 			return "", err
 		}
-		if lo, hi := parsePortRangeMinMax(spec); lo > 0 && sp.overlaps(portSpan{lo: lo, hi: hi}) {
-			return fmt.Sprintf("%s 与节点的转发端口段 %s 重叠", sp, spec), nil
+		// B4/F-016（变体）: 此前用 min-max 跨度判重叠，多段规格下段间
+		// 空隙会被误报重叠（合法入站被拒）。改为集合成员判定。
+		if ports, perr := parsePorts(spec); perr == nil && len(ports) > 0 {
+			inSpec := make(map[int]bool, len(ports))
+			for _, p := range ports {
+				inSpec[p] = true
+			}
+			for p := sp.lo; p <= sp.hi; p++ {
+				if inSpec[p] {
+					return fmt.Sprintf("%s 与节点的转发端口段 %s 重叠", sp, spec), nil
+				}
+			}
 		}
 	}
 	others, err := h.repo.ListNodeInboundsByNode(nodeID)
