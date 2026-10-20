@@ -86,7 +86,7 @@ interface ConfigItem {
   label: string;
   placeholder?: string;
   description?: string;
-  type: "input" | "switch" | "select" | "bg_image";
+  type: "input" | "password" | "switch" | "select" | "bg_image";
   options?: { label: string; value: string; description?: string }[];
   dependsOn?: string; // 依赖的配置项key
   dependsValue?: string; // 依赖的配置项值
@@ -217,7 +217,9 @@ const CONFIG_ITEMS: ConfigItem[] = [
     label: "Cloudflare Secret Key",
     placeholder: "请输入 Cloudflare Secret Key",
     description: "Cloudflare Turnstile 密钥",
-    type: "input",
+    // F-116：密钥字段必须掩码显示，此前以明文 text 渲染（后端
+    // config_policy 也将其列为敏感键，前端显示口径须一致）。
+    type: "password",
     dependsOn: "captcha_enabled",
     dependsValue: "true",
   },
@@ -1334,6 +1336,25 @@ export default function ConfigPage() {
           />
         );
       }
+
+      case "password":
+        // F-116：敏感字段掩码渲染，与普通 input 共用变更处理。
+        return (
+          <Input
+            classNames={{
+              input: "text-sm",
+              inputWrapper: isChanged
+                ? "border-warning-300 data-[hover=true]:border-warning-400"
+                : "",
+            }}
+            placeholder={item.placeholder}
+            size="md"
+            type="password"
+            value={configs[item.key] ?? ""}
+            variant="bordered"
+            onChange={(e) => handleConfigChange(item.key, e.target.value)}
+          />
+        );
 
       case "switch":
         return (

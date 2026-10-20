@@ -124,6 +124,58 @@ func marshalConfig(v interface{}) (string, error) {
 	return string(b) + "\n", nil
 }
 
+// extraProtectedTopKeys 是高级配置（Extra）不得覆盖的顶层键：这些字段是
+// 面板在保存期校验过的不变量（端口归属、监听、tag 引用、凭据集合、安全层），
+// 被 Extra 改掉会造成「面板显示正常、实际监听/安全层/凭据全变」的隐性不一致
+// （F-022）。集合取 Xray 与 sing-box 两种入站对象的并集，两边都不会误伤：
+// 预期用途只有 sniffing、streamSettings.sockopt 这类增量项。
+var extraProtectedTopKeys = map[string]bool{
+	"tag": true, "listen": true, "listen_port": true, "port": true,
+	"protocol": true, "type": true,
+	"settings": true, "users": true, "tls": true, "transport": true,
+	"method": true, "password": true,
+	"detour": true, "handshake": true, "version": true,
+}
+
+// extraProtectedStreamSubKeys 是 streamSettings 下同样受保护的子键
+// （安全层与传输形态）；sockopt 等增量子键不在其列。
+var extraProtectedStreamSubKeys = map[string]bool{
+	"security": true, "tlsSettings": true, "realitySettings": true,
+	"network": true,
+	"wsSettings": true, "grpcSettings": true, "xhttpSettings": true,
+	"splithttpSettings": true, "tcpSettings": true, "kcpSettings": true,
+	"quicSettings": true, "httpupgradeSettings": true,
+}
+
+// validateExtraProtectedKeys 拒绝含受保护键的 Extra（保存期与渲染期共用）。
+func validateExtraProtectedKeys(obj map[string]interface{}) error {
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if extraProtectedTopKeys[k] {
+			return fmt.Errorf("高级配置不能覆盖受保护字段 %q", k)
+		}
+		if k == "streamSettings" {
+			if sub, ok := obj[k].(map[string]interface{}); ok {
+				subKeys := make([]string, 0, len(sub))
+				for sk := range sub {
+					subKeys = append(subKeys, sk)
+				}
+				sort.Strings(subKeys)
+				for _, sk := range subKeys {
+					if extraProtectedStreamSubKeys[sk] {
+						return fmt.Errorf("高级配置不能覆盖受保护字段 %q", "streamSettings."+sk)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // mergeExtra deep-merges a user supplied JSON object into dst. Objects merge
 // recursively; any other value replaces the default.
 func mergeExtra(dst map[string]interface{}, extra json.RawMessage) error {
@@ -133,6 +185,10 @@ func mergeExtra(dst map[string]interface{}, extra json.RawMessage) error {
 	var src map[string]interface{}
 	if err := json.Unmarshal(extra, &src); err != nil {
 		return fmt.Errorf("高级配置解析失败: %v", err)
+	}
+	// F-022: 渲染期兜底（存量/导入行可能绕过 Normalize 的保存期校验）。
+	if err := validateExtraProtectedKeys(src); err != nil {
+		return err
 	}
 	deepMerge(dst, src)
 	return nil

@@ -218,6 +218,19 @@ func ParseRenameRules(text string) ([]renameRule, error) {
 // ApplySubOptions runs the pipeline. Invalid expressions are skipped
 // (they are validated when saved).
 func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
+	out, _ := applySubOptions(endpoints, opts)
+	return out
+}
+
+// ApplySubOptionsReport is ApplySubOptions plus the subscription script's
+// error, from a single pipeline run. A failing script keeps the other
+// steps' results (see ApplySubOptions); the error is reported separately
+// so previews/editors can display it without discarding the nodes (F-024).
+func ApplySubOptionsReport(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) {
+	return applySubOptions(endpoints, opts)
+}
+
+func applySubOptions(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) {
 	endpoints = FilterEndpoints(endpoints, opts)
 	rules, _ := ParseRenameRules(opts.Rename)
 	out := make([]Endpoint, 0, len(endpoints))
@@ -254,24 +267,21 @@ func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
 	if opts.Sort == "name" {
 		sort.SliceStable(out, func(i, j int) bool { return NaturalLess(out[i].Name, out[j].Name) })
 	}
-	// 脚本执行失败时保留其他步骤的结果；编辑器会显示错误（SubScriptError）。
+	// 脚本执行失败时保留其他步骤的结果；错误经返回值带出（编辑器/预览
+	// 显示），不再靠 SubScriptError 重跑一遍流水线才知道（F-024）。
 	// 移植自 kure29/flyx。
-	if scripted, err := ApplySubScript(out, opts.Script); err == nil {
+	scripted, scriptErr := ApplySubScript(out, opts.Script)
+	if scriptErr == nil {
 		out = scripted
 	}
 	markChain(out, opts)
-	return out
+	return out, scriptErr
 }
 
 // SubScriptError 返回订阅脚本在这些节点上执行时的错误（如果有）。
 // 移植自 kure29/flyx。
 func SubScriptError(endpoints []Endpoint, opts SubOptions) error {
-	if strings.TrimSpace(opts.Script) == "" {
-		return nil
-	}
-	script := opts.Script
-	opts.Script = ""
-	_, err := ApplySubScript(ApplySubOptions(endpoints, opts), script)
+	_, err := applySubOptions(endpoints, opts)
 	return err
 }
 

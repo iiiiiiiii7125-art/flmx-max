@@ -342,8 +342,20 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 			mu.Unlock()
 		}(id, j.targets, j.agent)
 	}
-	wg.Wait()
-	return results, nil
+	// F-079: 与 node_latency.go 的 L-002 同构——收尾等待也要响应 ctx
+	// 取消，否则请求方断开后仍等全部在途 traceroute 跑完。在途 worker
+	// 取消后自行收尾（结果经 mu 写入本地 map 与缓存，不再被读取）。
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return results, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // routeFresh reports whether a stored trace is recent and was made by the

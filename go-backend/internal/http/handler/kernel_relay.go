@@ -282,7 +282,11 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 	}
 	port := inPort
 	if port <= 0 {
-		port = h.pickTunnelPort(tunnel.ID)
+		picked, pickErr := h.pickTunnelPort(tunnel.ID)
+		if pickErr != nil {
+			return 0, pickErr
+		}
+		port = picked
 	}
 	if port <= 0 || port > 65535 {
 		return 0, errors.New("没有可用的入口端口")
@@ -626,10 +630,12 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoints = filtered
 	}
-	if len(endpoints) == 0 {
-		http.Error(w, "订阅暂无可用节点（入站未启用或中转转发未建立）", http.StatusServiceUnavailable)
-		return
-	}
+	// F-080: 不再对"端点为 0"单设 503。此前同一"无可用节点"状态有两种
+	// 语义：端点 0 个返回 503，端点被目标格式全过滤却返回 200 空体。
+	// 503 会被订阅客户端当服务端故障：保留上一份节点列表（可能含已删
+	// 节点）并反复重试；统一为 200 + 该格式的空渲染，客户端以空列表
+	// 如实更新，下个周期有节点时自动恢复。停用/过期仍由前置检查以
+	// 403 明确表达，不受影响。
 	body, contentType, err := kernel.Subscription(format, endpoints, parsePipeline(sub.Options).options())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

@@ -1893,7 +1893,13 @@ func (h *Handler) resolvePortForNewEntryNode(nodeID int64, referencePort int, fo
 	if newPort > 0 {
 		return newPort
 	}
-	return referencePort // last resort fallback
+	// F-074 变体：无随机可用端口时仍提交 referencePort 由下游
+	// ReplaceForwardPorts 的锁内权威复检裁决（F-013/F-133 已保证失败
+	// 留痕），但回退本身必须显式记日志，不再静默——referencePort 是
+	// 该转发既有条目的真实端口（非虚构值），与 pickTunnelPort 此前
+	// 编造 10000 的情形不同，故只记日志、不改提交语义。
+	log.Printf("resolvePortForNewEntryNode: no random port available node_id=%d forward_id=%d, falling back to reference port %d for authoritative recheck", nodeID, forwardID, referencePort)
+	return referencePort
 }
 
 // pickRandomPortForNode picks a random available port from a single node's
@@ -2533,10 +2539,12 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	port := asInt(req["inPort"], 0)
 	if port <= 0 {
-		port = h.pickTunnelPort(tunnelID)
-	}
-	if port <= 0 {
-		port = 10000
+		picked, pickErr := h.pickTunnelPort(tunnelID)
+		if pickErr != nil {
+			response.WriteJSON(w, response.ErrDefault(pickErr.Error()))
+			return
+		}
+		port = picked
 	}
 	// O2-001：端口范围校验，防止 inPort=99999 等非法值绕过前端直接写入 DB
 	if port < 1 || port > 65535 {
@@ -2732,7 +2740,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 			port = int(minPort.Int64)
 		}
 		if port <= 0 {
-			port = h.pickTunnelPort(tunnelID)
+			picked, pickErr := h.pickTunnelPort(tunnelID)
+			if pickErr != nil {
+				response.WriteJSON(w, response.ErrDefault(pickErr.Error()))
+				return
+			}
+			port = picked
 		}
 	}
 	// O2-001：端口范围校验，防止 inPort=99999 等非法值绕过前端直接写入 DB
@@ -3533,7 +3546,13 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			p = int(port.Int64)
 		}
 		if p <= 0 {
-			p = h.pickTunnelPort(req.TargetTunnelID)
+			picked, pickErr := h.pickTunnelPort(req.TargetTunnelID)
+			if pickErr != nil {
+				fail++
+				failures = appendBatchFailureReason(failures, id, forward.Name, pickErr.Error())
+				continue
+			}
+			p = picked
 		}
 		bctEntryNodes, _ := h.tunnelEntryNodeIDs(req.TargetTunnelID)
 		newNodeIDs := uniqueInt64s(bctEntryNodes)
@@ -5461,14 +5480,23 @@ func (h *Handler) tunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
 	return h.repo.TunnelEntryNodeIDs(tunnelID)
 }
 
-func (h *Handler) pickTunnelPort(tunnelID int64) int {
+// pickTunnelPort 在隧道的全部入口节点上挑一个公共可用端口。
+// F-074: 此前无公共可用端口（及无入口节点/查询失败）时静默回退虚构的
+// 10000，下游再逐节点报"超出范围/已被占用"，掩盖真实原因、误导排障，
+// 甚至在 10000 恰好可用时歪打正着。现在区分失败原因并显式返回错误，
+// 由各调用方按自身上下文报错，绝不编造端口。
+func (h *Handler) pickTunnelPort(tunnelID int64) (int, error) {
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnelID)
-	if err != nil || len(entryNodes) == 0 {
-		return 10000
+	if err != nil {
+		return 0, err
+	}
+	if len(entryNodes) == 0 {
+		return 0, errors.New("隧道没有入口节点")
 	}
 
 	var commonAvailable []int
 	firstNode := true
+	evaluated := 0
 
 	for _, nodeID := range entryNodes {
 		portRange, err := h.repo.GetNodePortRange(nodeID)
@@ -5488,6 +5516,7 @@ func (h *Handler) pickTunnelPort(tunnelID int64) int {
 		if err != nil {
 			continue
 		}
+		evaluated++
 
 		var available []int
 		for _, p := range nodePorts {
@@ -5518,12 +5547,14 @@ func (h *Handler) pickTunnelPort(tunnelID int64) int {
 		}
 	}
 
-	if len(commonAvailable) > 0 {
-		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(commonAvailable))))
-		return commonAvailable[idx.Int64()]
+	if evaluated == 0 {
+		return 0, errors.New("无法获取入口节点的端口范围或占用情况")
 	}
-
-	return 10000
+	if len(commonAvailable) == 0 {
+		return 0, errors.New("入口节点间无公共可用端口（端口范围无交集，或交集端口已被占用）")
+	}
+	idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(commonAvailable))))
+	return commonAvailable[idx.Int64()], nil
 }
 
 func (h *Handler) getUsedPorts(nodeID int64) (map[int]bool, error) {

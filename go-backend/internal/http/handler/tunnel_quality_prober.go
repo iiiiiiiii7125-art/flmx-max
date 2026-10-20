@@ -237,6 +237,18 @@ func (p *tunnelQualityProber) probeAll() {
 		log.Printf("tunnel_quality_prober: list enabled tunnels err=%v", err)
 		return
 	}
+	// F-084: 每轮按当前 enabled 集合淘汰缓存——隧道删除/停用后快照
+	// 不再残留（淘汰须在 len==0 早退之前，覆盖"最后一个隧道被删"）。
+	enabled := make(map[int64]bool, len(tunnelIDs))
+	for _, id := range tunnelIDs {
+		enabled[id] = true
+	}
+	p.cache.Range(func(key, _ interface{}) bool {
+		if id, ok := key.(int64); ok && !enabled[id] {
+			p.cache.Delete(key)
+		}
+		return true
+	})
 	if len(tunnelIDs) == 0 {
 		return
 	}

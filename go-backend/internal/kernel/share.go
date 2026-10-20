@@ -466,6 +466,9 @@ func SurgeLine(e Endpoint) (string, bool) {
 	if in.Security.Type == SecurityReality || in.Transport.Type == TransportGRPC || in.Transport.Type == TransportXHTTP {
 		return "", false
 	}
+	// F-081: 行式格式（逗号分字段、首个等号分键值）里全部用户可控值与
+	// proxySurge 同口径过 surgeEscape，否则凭据含逗号时字段错位。
+	// 名称仍用含 = 的旧替换器（名称出现在 " = " 分隔符之前，口径不同）。
 	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
 	host := strings.Trim(e.Host, "[]")
 	parts := []string{}
@@ -473,11 +476,11 @@ func SurgeLine(e Endpoint) (string, bool) {
 		if in.Security.Type != SecurityShadowTLS {
 			return nil
 		}
-		return []string{"shadow-tls-password=" + in.Security.ShadowTLSPassword,
-			"shadow-tls-sni=" + in.Security.SNI, "shadow-tls-version=3"}
+		return []string{"shadow-tls-password=" + surgeEscape(in.Security.ShadowTLSPassword),
+			"shadow-tls-sni=" + surgeEscape(in.Security.SNI), "shadow-tls-version=3"}
 	}
 	tlsTail := func() []string {
-		t := []string{"sni=" + in.Security.SNI}
+		t := []string{"sni=" + surgeEscape(in.Security.SNI)}
 		if e.selfSigned() {
 			t = append(t, "skip-cert-verify=true")
 		}
@@ -486,7 +489,7 @@ func SurgeLine(e Endpoint) (string, bool) {
 	switch in.Protocol {
 	case ProtocolShadowsocks:
 		parts = append(parts, "ss", host, strconv.Itoa(e.Port),
-			"encrypt-method="+in.Settings.Method, "password="+in.Settings.Password)
+			"encrypt-method="+in.Settings.Method, "password="+surgeEscape(in.Settings.Password))
 		if in.Security.Type == SecurityShadowTLS {
 			parts = append(parts, shadowTLS()...)
 		} else {
@@ -494,41 +497,41 @@ func SurgeLine(e Endpoint) (string, bool) {
 		}
 		return name + " = " + strings.Join(parts, ", "), true
 	case ProtocolSnell:
-		parts = append(parts, "snell", host, strconv.Itoa(e.Port), "psk="+in.Settings.Password,
+		parts = append(parts, "snell", host, strconv.Itoa(e.Port), "psk="+surgeEscape(in.Settings.Password),
 			fmt.Sprintf("version=%d", in.Settings.SnellVersion), "reuse=true", "tfo=true")
 		parts = append(parts, shadowTLS()...)
 		return name + " = " + strings.Join(parts, ", "), true
 	case ProtocolHysteria2:
-		parts = append(parts, "hysteria2", host, strconv.Itoa(e.Port), "password="+in.Settings.Password)
+		parts = append(parts, "hysteria2", host, strconv.Itoa(e.Port), "password="+surgeEscape(in.Settings.Password))
 		if lo, hi := e.hopRange(); lo > 0 {
 			parts = append(parts, fmt.Sprintf("port-hopping=\"%d-%d\"", lo, hi), "port-hopping-interval=30")
 		}
 		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
 	case ProtocolTUIC:
-		parts = append(parts, "tuic-v5", host, strconv.Itoa(e.Port), "password="+in.Settings.Password,
-			"uuid="+in.Settings.UUID, "alpn=h3")
+		parts = append(parts, "tuic-v5", host, strconv.Itoa(e.Port), "password="+surgeEscape(in.Settings.Password),
+			"uuid="+surgeEscape(in.Settings.UUID), "alpn=h3")
 		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
 	case ProtocolAnyTLS:
-		parts = append(parts, "anytls", host, strconv.Itoa(e.Port), "password="+in.Settings.Password)
+		parts = append(parts, "anytls", host, strconv.Itoa(e.Port), "password="+surgeEscape(in.Settings.Password))
 		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
 	case ProtocolVMess:
-		parts = append(parts, "vmess", host, strconv.Itoa(e.Port), "username="+in.Settings.UUID, "vmess-aead=true")
+		parts = append(parts, "vmess", host, strconv.Itoa(e.Port), "username="+surgeEscape(in.Settings.UUID), "vmess-aead=true")
 	case ProtocolTrojan:
-		parts = append(parts, "trojan", host, strconv.Itoa(e.Port), "password="+in.Settings.Password)
+		parts = append(parts, "trojan", host, strconv.Itoa(e.Port), "password="+surgeEscape(in.Settings.Password))
 	default:
 		return "", false
 	}
 	if in.Transport.Type == TransportWS {
-		parts = append(parts, "ws=true", "ws-path="+in.Transport.Path)
+		parts = append(parts, "ws=true", "ws-path="+surgeEscape(in.Transport.Path))
 		if in.Transport.Host != "" {
-			parts = append(parts, "ws-headers=Host:"+in.Transport.Host)
+			parts = append(parts, "ws-headers=Host:"+surgeEscape(in.Transport.Host))
 		}
 	}
 	if in.Security.Type == SecurityTLS {
 		if in.Protocol == ProtocolVMess {
 			parts = append(parts, "tls=true")
 		}
-		parts = append(parts, "sni="+in.Security.SNI)
+		parts = append(parts, "sni="+surgeEscape(in.Security.SNI))
 		if e.selfSigned() {
 			parts = append(parts, "skip-cert-verify=true")
 		}

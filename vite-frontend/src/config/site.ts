@@ -1,5 +1,11 @@
 import { getConfigByName, getConfigs, getPublicConfigByName } from "@/api";
+import {
+  SENSITIVE_CONFIG_KEYS,
+  purgeSensitiveConfigCache,
+} from "@/config/sensitive-keys";
 import { isLoggedIn } from "@/utils/auth";
+
+export { purgeSensitiveConfigCache };
 
 export type SiteConfig = typeof siteConfig;
 
@@ -22,24 +28,15 @@ const PUBLIC_BRAND_CONFIG_KEYS = [
   "login_bg_image",
   "hide_footer_brand",
 ] as const;
-const SENSITIVE_CONFIG_KEYS = new Set([
-  "jwt_secret",
-  "license_key",
-  "license_machine_id",
-  "machine_fingerprint",
-  "cloudflare_secret_key",
-]);
+// SENSITIVE_CONFIG_KEYS 与 purgeSensitiveConfigCache 已抽到零依赖的
+// @/config/sensitive-keys（单一真源在后端 config_policy.go，清单与
+// 同步要求见该文件注释），utils/session 的 clearSession 也要用它清除
+// 登出残留，抽成叶子模块避免循环导入（F-047）。
 const GITHUB_REPO =
   import.meta.env.VITE_GITHUB_REPO || "https://github.com/iiiiiiiii7125-art/flmx-max";
 
 const shouldPersistConfigKey = (key: string) => {
   return !SENSITIVE_CONFIG_KEYS.has(key.trim().toLowerCase());
-};
-
-const purgeSensitiveConfigCache = () => {
-  SENSITIVE_CONFIG_KEYS.forEach((key) => {
-    localStorage.removeItem(CACHE_PREFIX + key);
-  });
 };
 
 const readCachedConfigs = (keys: readonly string[]) => {

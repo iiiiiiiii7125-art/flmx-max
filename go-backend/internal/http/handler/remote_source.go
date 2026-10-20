@@ -135,6 +135,13 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 		return nil
 	}
 
+	// F-025: 批内去重（与手动导入的 seen 同口径并扩到名称键）。byName/byAddr
+	// 只是同步开始时的快照，本轮新建的行不回填映射——源内重复条目（同名或
+	// 同址）会第二条再走新建分支：重复建行（external 行 kernel_id=0，
+	// 部分唯一索引不兜底），后续轮次还在两行间漂移匹配。命中批内已处理
+	// 的名称/地址即跳过并在结果里提示，不再重复建行。
+	seen := map[string]bool{}
+
 	for _, node := range nodes {
 		fresh, err := externalRow(node, src.RelayOnly == 1, now)
 		if err != nil {
@@ -142,6 +149,14 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 			continue
 		}
 		fresh.SourceID = src.ID
+		nameKey := "name:" + strings.ToLower(fresh.Name)
+		addrKey := "addr:" + externalKey(node.Host, node.Port)
+		if seen[nameKey] || seen[addrKey] {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
+			continue
+		}
+		seen[nameKey] = true
+		seen[addrKey] = true
 		row := take(byName[strings.ToLower(fresh.Name)])
 		if row == nil {
 			row = take(byAddr[externalKey(node.Host, node.Port)])

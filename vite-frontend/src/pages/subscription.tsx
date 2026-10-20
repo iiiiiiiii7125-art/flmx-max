@@ -368,6 +368,7 @@ function Editor({
     items: SubPreviewItem[];
     total: number;
     dropped: number;
+    scriptError?: string;
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const o = draft.options;
@@ -938,6 +939,13 @@ function Editor({
           </Button>
           {preview && (
             <>
+              {preview.scriptError && (
+                <p className="rounded-lg bg-warning-100 px-3 py-2 text-xs text-warning-700 dark:bg-warning-500/20 dark:text-warning-300">
+                  {preview.scriptError}
+                  <br />
+                  已保留其余处理步骤生成的节点；修复脚本后请重新预览。
+                </p>
+              )}
               <p className="text-xs text-default-500">
                 共 {preview.items.length} 个节点
                 {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
