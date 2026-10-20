@@ -338,6 +338,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.Announcement{},
 		&model.SchemaVersion{},
 		&model.NodeMetric{},
+		&model.NodeLatencySample{},
 		&model.TunnelMetric{},
 		&model.ServiceMonitor{},
 		&model.ServiceMonitorResult{},
