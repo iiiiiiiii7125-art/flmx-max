@@ -132,6 +132,40 @@ export default function GroupPage() {
     onClose: onUserAssignModalClose,
     onOpenChange: onUserAssignModalChange,
   } = useDisclosure();
+  // 删除/回收统一确认弹窗（与全站口径一致：先确认、提交中防重）
+  const {
+    isOpen: confirmModalOpen,
+    onOpen: onConfirmModalOpen,
+    onClose: onConfirmModalClose,
+    onOpenChange: onConfirmModalChange,
+  } = useDisclosure();
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    description: string;
+    action: () => Promise<void>;
+  } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+
+  const askConfirm = (
+    title: string,
+    description: string,
+    action: () => Promise<void>,
+  ) => {
+    setPendingConfirm({ title, description, action });
+    onConfirmModalOpen();
+  };
+
+  const handleConfirmAction = async () => {
+    if (!pendingConfirm || confirmLoading) return;
+    setConfirmLoading(true);
+    try {
+      await pendingConfirm.action();
+      onConfirmModalClose();
+      setPendingConfirm(null);
+    } finally {
+      setConfirmLoading(false);
+    }
+  };
 
   const [editingTunnelGroup, setEditingTunnelGroup] =
     useState<TunnelGroup | null>(null);
@@ -544,7 +578,13 @@ export default function GroupPage() {
                             color="danger"
                             size="sm"
                             variant="light"
-                            onPress={() => handleDeleteTunnelGroup(item.id)}
+                            onPress={() =>
+                              askConfirm(
+                                "删除隧道分组",
+                                `确定要删除隧道分组「${item.name}」吗？其成员与权限关联将一并移除，此操作不可撤销。`,
+                                () => handleDeleteTunnelGroup(item.id),
+                              )
+                            }
                           >
                             删除
                           </Button>
@@ -625,7 +665,13 @@ export default function GroupPage() {
                             color="danger"
                             size="sm"
                             variant="light"
-                            onPress={() => handleDeleteUserGroup(item.id)}
+                            onPress={() =>
+                              askConfirm(
+                                "删除用户分组",
+                                `确定要删除用户分组「${item.name}」吗？其成员与权限关联将一并移除，此操作不可撤销。`,
+                                () => handleDeleteUserGroup(item.id),
+                              )
+                            }
                           >
                             删除
                           </Button>
@@ -716,7 +762,13 @@ export default function GroupPage() {
                           color="danger"
                           size="sm"
                           variant="light"
-                          onPress={() => handleRemovePermission(item.id)}
+                          onPress={() =>
+                            askConfirm(
+                              "回收权限",
+                              `确定要回收权限记录 #${item.id}（${item.userGroupName || item.userGroupId} → ${item.tunnelGroupName || item.tunnelGroupId}）吗？回收后该用户组将失去对应隧道的授权。`,
+                              () => handleRemovePermission(item.id),
+                            )
+                          }
                         >
                           回收
                         </Button>
@@ -727,6 +779,41 @@ export default function GroupPage() {
               </Table>
             </CardBody>
           </Card>
+
+          {/* 删除/回收统一确认弹窗 */}
+          <Modal
+            backdrop="blur"
+            classNames={{
+              base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
+            }}
+            isOpen={confirmModalOpen}
+            onOpenChange={onConfirmModalChange}
+          >
+            <ModalContent>
+              <ModalHeader>{pendingConfirm?.title}</ModalHeader>
+              <ModalBody>
+                <p className="text-sm text-default-600">
+                  {pendingConfirm?.description}
+                </p>
+              </ModalBody>
+              <ModalFooter>
+                <Button
+                  isDisabled={confirmLoading}
+                  variant="light"
+                  onPress={onConfirmModalClose}
+                >
+                  取消
+                </Button>
+                <Button
+                  color="danger"
+                  isLoading={confirmLoading}
+                  onPress={handleConfirmAction}
+                >
+                  确认
+                </Button>
+              </ModalFooter>
+            </ModalContent>
+          </Modal>
 
           <Modal
             backdrop="blur"
