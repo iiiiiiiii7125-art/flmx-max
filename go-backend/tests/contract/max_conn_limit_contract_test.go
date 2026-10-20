@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -462,38 +461,87 @@ func TestUserMaxConnWithPerIPRuleSplitsRuntimeLimiters(t *testing.T) {
 	}
 	expectedRuleName := fmt.Sprintf("rule_conn_limit_%d", forwardID)
 
-	commandMu.Lock()
-	defer commandMu.Unlock()
-	if len(addCLimitersData) != 2 {
-		t.Fatalf("expected two AddCLimiters commands. Received: %v", receivedCommands)
+	// B5 登记项（B3 发现，基线实测约 15% flaky）：见下方「续」注
+	// 的取证结论与断言改法（集合断言，同 B0 的增量断言模式）。
+	// B5 登记项续（取证结论）：flaky 的真实形态不是命令迟到，而是
+	// 节点上线重下发（onNodeOnline redeploy）与 forward/create 的
+	// 派发交错，把同一组 AddCLimiters 整组重发 2–3 次（实测收到
+	// 4–6 条，载荷完全一致）。派发是 at-least-once 语义，条数不是
+	// 契约；契约是「下发的限速载荷内容正确」。故断言改为集合语义
+	// （B0 的增量断言模式）：等两条期望载荷都出现后，断言出现过的
+	// (name, limit) 集合恰为期望集合——重复派发容忍，错误载荷
+	// 照样抓；UpdateService 取最后一份校验 climiter 绑定。
+	type limiterPair struct{ name, limit string }
+	expectedPairs := map[limiterPair]bool{
+		{"user_conn_limit_3", "$ 37"}: true,
+		{expectedRuleName, "$$ 7"}:    true,
 	}
-	if updateServiceData == nil {
-		t.Fatalf("expected UpdateService. Received: %v", receivedCommands)
+	snapshot := func() ([]json.RawMessage, json.RawMessage) {
+		commandMu.Lock()
+		defer commandMu.Unlock()
+		adds := make([]json.RawMessage, len(addCLimitersData))
+		copy(adds, addCLimitersData)
+		return adds, updateServiceData
 	}
-
-	gotLimits := make(map[string][]string)
-	for _, raw := range addCLimitersData {
-		var data map[string]interface{}
-		if err := json.Unmarshal(raw, &data); err != nil {
-			t.Fatalf("unmarshal AddCLimiters data: %v", err)
+	pairsOf := func(adds []json.RawMessage) map[limiterPair]bool {
+		pairs := make(map[limiterPair]bool)
+		for _, raw := range adds {
+			var data map[string]interface{}
+			if err := json.Unmarshal(raw, &data); err != nil {
+				t.Fatalf("unmarshal AddCLimiters data: %v", err)
+			}
+			limits, ok := data["limits"].([]interface{})
+			if !ok {
+				t.Fatalf("expected limits array, got %T", data["limits"])
+			}
+			for _, limit := range limits {
+				pairs[limiterPair{fmt.Sprint(data["name"]), fmt.Sprint(limit)}] = true
+			}
 		}
-		limits, ok := data["limits"].([]interface{})
-		if !ok {
-			t.Fatalf("expected limits array, got %T", data["limits"])
+		return pairs
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	var finalPairs map[limiterPair]bool
+	var finalUpdate json.RawMessage
+	for {
+		adds, upd := snapshot()
+		pairs := pairsOf(adds)
+		ready := upd != nil
+		for p := range expectedPairs {
+			if !pairs[p] {
+				ready = false
+			}
 		}
-		for _, limit := range limits {
-			gotLimits[fmt.Sprint(data["name"])] = append(gotLimits[fmt.Sprint(data["name"])], fmt.Sprint(limit))
+		if ready {
+			// 静默窗口后再取一份最终快照，抓迟到的分歧载荷。
+			time.Sleep(500 * time.Millisecond)
+			adds, upd = snapshot()
+			finalPairs = pairsOf(adds)
+			finalUpdate = upd
+			break
+		}
+		if time.Now().After(deadline) {
+			commandMu.Lock()
+			received := append([]string(nil), receivedCommands...)
+			commandMu.Unlock()
+			t.Fatalf("timed out waiting for limiter payloads (pairs=%v updateService=%v). Received: %v", pairs, upd != nil, received)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if len(finalPairs) != len(expectedPairs) {
+		t.Fatalf("expected limiter payload set %v, got %v", expectedPairs, finalPairs)
+	}
+	for p := range expectedPairs {
+		if !finalPairs[p] {
+			t.Fatalf("expected limiter payload set %v, got %v", expectedPairs, finalPairs)
 		}
 	}
-	if !reflect.DeepEqual(gotLimits["user_conn_limit_3"], []string{"$ 37"}) {
-		t.Fatalf("expected user max limiter payload, got %v", gotLimits["user_conn_limit_3"])
-	}
-	if !reflect.DeepEqual(gotLimits[expectedRuleName], []string{"$$ 7"}) {
-		t.Fatalf("expected rule per-IP limiter payload, got %v", gotLimits[expectedRuleName])
+	if finalUpdate == nil {
+		t.Fatal("expected UpdateService to arrive")
 	}
 
 	var services []map[string]interface{}
-	if err := json.Unmarshal(updateServiceData, &services); err != nil {
+	if err := json.Unmarshal(finalUpdate, &services); err != nil {
 		t.Fatalf("unmarshal UpdateService data: %v", err)
 	}
 	expectedCLimiter := "user_conn_limit_3," + expectedRuleName
