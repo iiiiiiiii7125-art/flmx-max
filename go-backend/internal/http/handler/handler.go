@@ -393,6 +393,19 @@ func isStoredDefaultPassword(roleID int, pwdHash string) bool {
 	return false
 }
 
+// tokenIssueTime 计算 token 签发时刻，保证 IatMs 严格大于
+// PasswordChangedAt（F-068）。中间件/WS 以 IatMs <= PasswordChangedAt
+// 判 token 失效（M-05 有意口径，不得放宽）：改密/吊销与重新登录落在
+// 同一毫秒时，按 time.Now() 签发的新 token 会出生即失效。签发侧把
+// 时刻单调推到 PasswordChangedAt+1，与 legacy rehash 的既有做法一致。
+func tokenIssueTime(passwordChangedAt int64) time.Time {
+	now := time.Now()
+	if passwordChangedAt >= now.UnixMilli() {
+		return time.UnixMilli(passwordChangedAt + 1)
+	}
+	return now
+}
+
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -479,7 +492,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
-	issueAt := time.Now()
+	issueAt := tokenIssueTime(user.PasswordChangedAt)
 	if passwordWasLegacy {
 		updatedAt := time.Now().UnixMilli()
 		hashedPassword, err := security.HashPassword(req.Password)

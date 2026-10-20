@@ -324,8 +324,19 @@ func (h *Handler) userGroups(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
+	// F-066：分组归属可辅助推断组织/权限结构，仅管理员或本人可查
+	// （同组其余 user 管理端点均仅管理员；此前任意登录用户可查任意用户）。
+	actorID, roleID, err := userRoleFromRequest(r)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
+		return
+	}
 	id := idFromBody(r, w)
 	if id <= 0 {
+		return
+	}
+	if roleID != 0 && actorID != id {
+		response.WriteJSON(w, response.Err(403, "无权限"))
 		return
 	}
 	ids, err := h.repo.GetUserGroupIDsByUserID(id)

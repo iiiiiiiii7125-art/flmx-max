@@ -159,6 +159,12 @@ func (h *Handler) passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
+	// F-069：注册侧与登录侧同一 IP 限流。challenge 池（1000 槽）注册/
+	// 登录共用，register/begin 此前无限流，已登录用户可灌满池子让所有人
+	// 无法新建挑战（K-005 当年只补了登录侧，属修 A 漏 B）。
+	if !h.checkLoginRateLimit(w, r) {
+		return
+	}
 	wa, origin := passkeyConfig()
 	if wa == nil {
 		response.WriteJSON(w, response.ErrDefault("通行证密钥未配置"))
@@ -212,6 +218,10 @@ type passkeyFinishRequest struct {
 func (h *Handler) passkeyRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	// F-069：finish 同样先过限流，与登录侧口径一致，防重放洪水。
+	if !h.checkLoginRateLimit(w, r) {
 		return
 	}
 	wa, origin := passkeyConfig()
@@ -388,10 +398,12 @@ func (h *Handler) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	// M-05: 存储口令仍为默认时签发受限 token（仅允许改密）
 	var token string
 	requirePwdChange := isStoredDefaultPassword(user.RoleID, user.Pwd)
+	// F-068：签发时刻须严格晚于 PasswordChangedAt，防同毫秒出生即失效。
+	issueAt := tokenIssueTime(user.PasswordChangedAt)
 	if requirePwdChange {
-		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
+		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
 	} else {
-		token, err = auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, time.Now())
+		token, err = auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
 	}
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault("登录失败"))
