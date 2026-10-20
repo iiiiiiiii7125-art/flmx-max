@@ -303,6 +303,9 @@ jobs:
           # 注入固定版本号，使从 Release 页下载的脚本只安装该版本
           sed -i "s|^PINNED_VERSION=\"\"|PINNED_VERSION=\"${VERSION}\"|" ./artifacts/install.sh
           sed -i "s|^PINNED_VERSION=\"\"|PINNED_VERSION=\"${VERSION}\"|" ./artifacts/panel_install.sh
+          # LANE1: 注入失效（字面量漂移等）时构建必须红——未定版资产一旦
+          # 发出，客户端自更新的定版一致校验会拒绝接管且旧通道无从察觉。
+          grep -q "^PINNED_VERSION=\"${VERSION}\"" ./artifacts/install.sh && grep -q "^PINNED_VERSION=\"${VERSION}\"" ./artifacts/panel_install.sh
 
           # R5-B5B D19: 为下载资产发布 .sha256（panel_install.sh 校验用）。
           cd ./artifacts
