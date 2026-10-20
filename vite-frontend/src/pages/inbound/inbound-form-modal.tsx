@@ -515,7 +515,23 @@ export function InboundFormModal({
                       <Switch
                         isSelected={form.encryptionEnabled}
                         size="sm"
-                        onValueChange={(v) => set("encryptionEnabled", v)}
+                        onValueChange={(v) => {
+                          if (!v) {
+                            set("encryptionEnabled", false);
+                            return;
+                          }
+                          // 开启 ENC 时一键套用 IX 中转标准配置，避免逐项点错
+                          // 导致组合不可用（TCP + 安全无 + Vision + 后量子认证）。
+                          setForm((prev) => ({
+                            ...prev,
+                            encryptionEnabled: true,
+                            encryptionAuth: "mlkem768",
+                            encryptionMode: "xorpub",
+                            transportType: "tcp",
+                            securityType: "none",
+                            flowVision: true,
+                          }));
+                        }}
                       />
                       <span className="text-sm">启用 VLESS 加密（ENC）</span>
                       <Chip color="secondary" size="sm" variant="flat">
@@ -569,7 +585,8 @@ export function InboundFormModal({
                           </SelectItem>
                         </Select>
                         <p className="text-xs text-default-400">
-                          需要节点 Xray 25.6.8 及以上。启用后 sing-box、Surge、Loon、Quantumult
+                          开启时自动套用 IX 中转标准配置（TCP、安全无、Vision 流控、ML-KEM-768
+                          认证、xorpub 外观），需要节点 Xray 25.6.8 及以上。启用后 sing-box、Surge、Loon、Quantumult
                           X、小火箭格式的订阅不会包含此入站，请用 Clash 或通用链接分发。
                         </p>
                       </>
