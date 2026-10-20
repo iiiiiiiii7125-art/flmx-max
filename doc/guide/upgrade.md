@@ -61,7 +61,7 @@ sqlite3 /tmp/gost.db.bak << 'SQLEOF'
 SELECT node_id, port, COUNT(*) FROM forward_port GROUP BY node_id, port HAVING COUNT(*) > 1;
 SELECT fp.node_id, fp.port FROM forward_port fp LEFT JOIN "forward" f ON f.id = fp.forward_id WHERE f.id IS NULL;
 SELECT node_id, port, COUNT(*) FROM chain_tunnel WHERE port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1;
-SELECT node_id, port, COUNT(*) FROM node_inbound GROUP BY node_id, port HAVING COUNT(*) > 1;
+SELECT node_id, port, COUNT(*) FROM node_inbound WHERE kernel_id > 0 GROUP BY node_id, port HAVING COUNT(*) > 1;
 SELECT "user", COUNT(*) FROM "user" GROUP BY "user" HAVING COUNT(*) > 1;
 SQLEOF
 ```
@@ -75,7 +75,7 @@ SQLEOF
 | forward_port 重复 | status=1 的行；都有则保留 forward_id 最小 | 活跃优先 |
 | forward_port 孤儿 | 删除 | 转发已不存在 |
 | chain_tunnel 重复 | tunnel_id 最小 | 先建优先 |
-| node_inbound 重复 | enabled=1；都有则 id 最小 | 启用优先 |
+| node_inbound 重复（仅 kernel_id > 0 的内核入站） | enabled=1；都有则 id 最小 | 启用优先；导入节点（kernel_id=0）同端口不同主机是合法数据，不要清理 |
 | 用户名重复 | 最早创建未停用；其余改名加 `_dup` | 不删账号 |
 
 ### 4. 触发迁移

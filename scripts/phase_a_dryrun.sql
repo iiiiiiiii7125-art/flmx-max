@@ -30,10 +30,11 @@ GROUP BY node_id, port
 HAVING COUNT(*) > 1
 ORDER BY node_id, port;
 
-.print "=== 4. node_inbound (node_id, port) 重复组 ==="
+.print "=== 4. node_inbound (node_id, port) 重复组（仅 kernel_id > 0：B4/F-003 后索引为部分唯一索引，导入行同端口合法） ==="
 SELECT node_id, port, COUNT(*) AS cnt,
        GROUP_CONCAT(id) AS inbound_ids
 FROM node_inbound
+WHERE kernel_id > 0
 GROUP BY node_id, port
 HAVING COUNT(*) > 1
 ORDER BY node_id, port;
@@ -79,7 +80,7 @@ SELECT 'chain_tunnel_dup_groups' AS item, COUNT(*) AS n FROM (
   SELECT 1 FROM chain_tunnel WHERE port IS NOT NULL AND port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1
 );
 SELECT 'node_inbound_dup_groups' AS item, COUNT(*) AS n FROM (
-  SELECT 1 FROM node_inbound GROUP BY node_id, port HAVING COUNT(*) > 1
+  SELECT 1 FROM node_inbound WHERE kernel_id > 0 GROUP BY node_id, port HAVING COUNT(*) > 1
 );
 SELECT 'username_dup_groups' AS item, COUNT(*) AS n FROM (
   SELECT 1 FROM "user" GROUP BY username HAVING COUNT(*) > 1
