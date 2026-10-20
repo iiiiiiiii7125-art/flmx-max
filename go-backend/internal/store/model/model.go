@@ -566,6 +566,7 @@ type InboundBackup struct {
 	SourceID            int64  `json:"sourceId,omitempty"`
 	OutboundID          int64  `json:"outboundId,omitempty"`
 	SplitRules          string `json:"splitRules,omitempty"`
+	OutboundIPStrategy  string `json:"outboundIpStrategy,omitempty"`
 }
 
 type RemoteSourceBackup struct {

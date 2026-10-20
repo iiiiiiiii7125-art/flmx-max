@@ -65,6 +65,13 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 	sorted := make([]Inbound, len(inbounds))
 	copy(sorted, inbounds)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	// 渲染期复检（与保存期 normalizeExtra 同口径）：指定出站 IP 策略的
+	// 入站，其 Extra 不得覆盖 tag/detour（S4）。
+	for _, in := range sorted {
+		if err := ValidateOutboundIPExtra(kernelType, in.OutboundIPStrategy, in.Extra); err != nil {
+			return Rendered{}, err
+		}
+	}
 
 	var out Rendered
 	switch kernelType {

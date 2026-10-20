@@ -105,6 +105,9 @@ type inboundView struct {
 	OutboundMissing bool   `json:"outboundMissing,omitempty"`
 	// SplitRules are the inbound's 分流 rules.
 	SplitRules []kernel.SplitRule `json:"splitRules"`
+	// OutboundIPStrategy scopes the inbound's outbound connections to an
+	// IP family ("auto" = unrestricted).
+	OutboundIPStrategy string `json:"outboundIpStrategy"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -138,14 +141,17 @@ type inboundRequest struct {
 	WhitelistExtra      string             `json:"whitelistExtra"`
 	OutboundID          int64              `json:"outboundId"`
 	SplitRules          []kernel.SplitRule `json:"splitRules"`
-	Enabled             *bool              `json:"enabled"`
+	// OutboundIPStrategy is a pointer so an edit that omits the field
+	// keeps the stored strategy instead of resetting it to auto.
+	OutboundIPStrategy *string `json:"outboundIpStrategy"`
+	Enabled            *bool   `json:"enabled"`
 }
 
 // ---- conversion ----
 
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
-		AcceptProxyProtocol: row.AcceptProxyProtocol == 1}
+		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -184,6 +190,7 @@ func applyInboundToModel(in kernel.Inbound, row *model.NodeInbound) error {
 	row.Protocol = in.Protocol
 	row.Listen = in.Listen
 	row.Port = in.Port
+	row.OutboundIPStrategy = in.OutboundIPStrategy
 	row.Settings = string(settings)
 	row.Transport = string(transport)
 	row.Security = string(security)
@@ -549,37 +556,38 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		}
 		k := kernelByID[row.KernelID]
 		v := inboundView{
-			ID:             row.ID,
-			KernelID:       row.KernelID,
-			KernelType:     k.KernelType,
-			KernelStatus:   k.Status,
-			External:       isExternalInbound(&row),
-			NodeID:         row.NodeID,
-			Name:           row.Name,
-			Protocol:       row.Protocol,
-			Listen:         row.Listen,
-			Port:           row.Port,
-			Network:        in.Network(),
-			Settings:       in.Settings,
-			Transport:      in.Transport,
-			Security:       kernelSecurityView{Security: in.Security, ACMEDNSSet: in.Security.ACMEDNSKey != ""},
-			Extra:          row.Extra,
-			ShareHost:      row.ShareHost,
-			Remark:         row.Remark,
-			RelayOnly:      row.RelayOnly == 1,
-			RelayCount:     relayCounts[row.ID],
-			AcceptProxy:    row.AcceptProxyProtocol == 1,
-			Whitelist:      row.RelayWhitelist == 1,
-			WhitelistExtra: row.WhitelistExtra,
-			Enabled:        row.Enabled == 1,
-			UploadBytes:    row.UploadBytes,
-			DownloadBytes:  row.DownloadBytes,
-			CreatedTime:    row.CreatedTime,
-			UpdatedTime:    row.UpdatedTime,
-			SourceID:       row.SourceID,
-			SourceName:     sourceNames[row.SourceID],
-			OutboundID:     row.OutboundID,
-			SplitRules:     rowSplitRules(row),
+			ID:                 row.ID,
+			KernelID:           row.KernelID,
+			KernelType:         k.KernelType,
+			KernelStatus:       k.Status,
+			External:           isExternalInbound(&row),
+			NodeID:             row.NodeID,
+			Name:               row.Name,
+			Protocol:           row.Protocol,
+			Listen:             row.Listen,
+			Port:               row.Port,
+			Network:            in.Network(),
+			Settings:           in.Settings,
+			Transport:          in.Transport,
+			Security:           kernelSecurityView{Security: in.Security, ACMEDNSSet: in.Security.ACMEDNSKey != ""},
+			Extra:              row.Extra,
+			ShareHost:          row.ShareHost,
+			Remark:             row.Remark,
+			RelayOnly:          row.RelayOnly == 1,
+			RelayCount:         relayCounts[row.ID],
+			AcceptProxy:        row.AcceptProxyProtocol == 1,
+			Whitelist:          row.RelayWhitelist == 1,
+			WhitelistExtra:     row.WhitelistExtra,
+			Enabled:            row.Enabled == 1,
+			UploadBytes:        row.UploadBytes,
+			DownloadBytes:      row.DownloadBytes,
+			CreatedTime:        row.CreatedTime,
+			UpdatedTime:        row.UpdatedTime,
+			SourceID:           row.SourceID,
+			SourceName:         sourceNames[row.SourceID],
+			OutboundID:         row.OutboundID,
+			SplitRules:         rowSplitRules(row),
+			OutboundIPStrategy: row.OutboundIPStrategy,
 		}
 		if v.SplitRules == nil {
 			v.SplitRules = []kernel.SplitRule{}
@@ -694,6 +702,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		Extra:     json.RawMessage(strings.TrimSpace(req.Extra)),
 
 		AcceptProxyProtocol: req.AcceptProxyProtocol,
+		OutboundIPStrategy:  row.OutboundIPStrategy,
+	}
+	if req.OutboundIPStrategy != nil {
+		in.OutboundIPStrategy = *req.OutboundIPStrategy
 	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
@@ -733,7 +745,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	// Snell 双向版本判定已并入 kernelVersionGate（上方 :725 同一调用点），
+	// Snell 双向版本判定已并入 kernelVersionGate（上方同一调用点），
 	// 保存路径不再单设散点检查（S4 移植，原单向检查会放行 6.x+v4/v5）。
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		releasePortAlloc()
@@ -1486,6 +1498,11 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	}
 	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 6, 8) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
+	}
+	// 出站 IP 策略版本门（S4）：策略字段随入站一同进入 gate，保存/复检/
+	// 换版三处同拦；未知策略字符串也在此拒绝。
+	if err := validateOutboundIPVersion(kernelType, version, in.OutboundIPStrategy); err != nil {
+		return err.Error()
 	}
 	// Snell 独立内核：服务端/客户端版本双向判定（S4 移植）。6.x 只接
 	// v6 客户端，旧单向检查（客户端版本 > 服务端 major 才拦）会放行
