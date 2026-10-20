@@ -648,11 +648,11 @@ validate_panel_update_environment() {
 }
 
 # R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
-# FLVX_VERIFY_DOWNLOADS=0 可跳过（过渡期），默认开启。
+# FLMX_VERIFY_DOWNLOADS=0 可跳过（过渡期），默认开启；旧名 FLVX_VERIFY_DOWNLOADS 仍兼容。
 download_verified() {
   local url="$1"
   local dest="$2"
-  local verify="${FLVX_VERIFY_DOWNLOADS:-1}"
+  local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
 
   if ! curl -fL -o "$dest" "$url"; then
     echo "❌ 下载失败: $url" >&2
@@ -660,7 +660,7 @@ download_verified() {
   fi
 
   if [ "$verify" != "1" ]; then
-    echo "⚠️  跳过校验 (FLVX_VERIFY_DOWNLOADS=0): $dest" >&2
+    echo "⚠️  跳过校验 (FLMX_VERIFY_DOWNLOADS=0): $dest" >&2
     return 0
   fi
 
@@ -670,7 +670,7 @@ download_verified() {
   if ! curl -fL -o "$sha_file" "$sha_url"; then
     rm -f "$dest" "$sha_file"
     echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
-    echo "   （设置 FLVX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
+    echo "   （设置 FLMX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
     return 1
   fi
 

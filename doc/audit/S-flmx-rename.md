@@ -104,3 +104,13 @@
 - tests/contract 的 TestPasskeyDiscoverableLoginAndOwnership 在干净 HEAD
   (559f0b6) 上同样失败（登录限流 429，合同测试间状态串扰），与改名无关，
   2026-10-20 经 worktree 基线对照确认，登记为预存失败。
+
+## C 路交叉核对补遗（2026-10-20 21:40）
+
+C 报告与实施侧自查互核后补修三处：panel_install.sh 自读的
+`FLVX_VERIFY_DOWNLOADS` 改双读（`${FLMX_VERIFY_DOWNLOADS:-${FLVX_…:-1}}`，
+A 路盘点只覆盖 Go 代码、实施侧 grep 漏检此项）；doc/guide/import.md 的
+UA 描述 `flvx-panel/1.0` → `flmx-panel/1.0`；nodes.md 的调优文件名、
+postgresql.md 的备份示例路径同步新名。C 报告其余高危项（卷名/容器名/
+项目名不动、Pages base、镜像同版切换、WEBAUTHN 三方一致）均已按其
+结论落实或本来就未触碰。
