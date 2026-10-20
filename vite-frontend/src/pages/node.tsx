@@ -103,19 +103,20 @@ interface Node {
   latency?: InboundProbe;
   /** 节点自选的测试点；null 表示跟随全局默认。 */
   latencyTargets?: { points: string[]; pinned: string[] } | null;
-  remark?: string;
-  expiryTime?: number;
-  renewalCycle?: NodeRenewalCycle;
+  // 后端 nullable* 下发：无值时为 null（列表经 any 映射透传，须按可空声明，B2 变体同步）。
+  remark?: string | null;
+  expiryTime?: number | null;
+  renewalCycle?: NodeRenewalCycle | null;
   expiryReminderDismissed?: number;
   ip: string;
   serverIp: string;
-  serverIpV4?: string;
-  serverIpV6?: string;
+  serverIpV4?: string | null;
+  serverIpV6?: string | null;
   port: string;
   tcpListenAddr?: string;
   udpListenAddr?: string;
-  extraIPs?: string;
-  version?: string;
+  extraIPs?: string | null;
+  version?: string | null;
   http?: number; // 0 关 1 开
   tls?: number; // 0 关 1 开
   socks?: number; // 0 关 1 开
@@ -132,7 +133,10 @@ interface Node {
     passphrase?: string;
     sudoMode?: "none" | "sudo" | "sudo_su";
   } | null;
-  remoteUrl?: string;
+  remoteUrl?: string | null;
+  remoteToken?: string | null;
+  remoteConfig?: string | null;
+  interfaceName?: string | null;
   syncError?: string;
   connectionStatus: "online" | "offline";
   systemInfo?: NodeSystemInfo | null;
@@ -208,7 +212,10 @@ const getNodeReminderEnabled = (node: Node): boolean => {
   return !!node.expiryTime && node.expiryTime > 0 && !!node.renewalCycle;
 };
 
-const getNodeExpiryMeta = (timestamp?: number, cycle?: NodeRenewalCycle) => {
+const getNodeExpiryMeta = (
+  timestamp?: number | null,
+  cycle?: NodeRenewalCycle | null,
+) => {
   const renewal = getNodeRenewalSnapshot(timestamp, cycle, EXPIRING_SOON_DAYS);
 
   if (renewal.state === "unset") {

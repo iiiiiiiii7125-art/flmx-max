@@ -5,9 +5,27 @@ export interface NodeApiItem {
   forwardMode?: "agent" | "nftables";
   sshConfig?: NodeSshConfigApiItem | null;
   inx?: number;
-  remark?: string;
-  expiryTime?: number;
-  renewalCycle?: "month" | "quarter" | "year" | "";
+  // 以下字段后端以 nullable* 下发：无值时为显式 null，不是键缺失（F-062）。
+  remark?: string | null;
+  expiryTime?: number | null;
+  renewalCycle?: "month" | "quarter" | "year" | "" | null;
+  ip?: string;
+  serverIp?: string;
+  serverIpV4?: string | null;
+  serverIpV6?: string | null;
+  extraIPs?: string | null;
+  port?: string;
+  tcpListenAddr?: string;
+  udpListenAddr?: string;
+  version?: string | null;
+  http?: number;
+  tls?: number;
+  socks?: number;
+  isRemote?: number;
+  remoteUrl?: string | null;
+  remoteToken?: string | null;
+  remoteConfig?: string | null;
+  interfaceName?: string | null;
   expiryReminderDismissed?: number;
   syncError?: string;
   [key: string]: unknown;
@@ -17,7 +35,11 @@ export interface UserApiItem {
   id: number;
   user: string;
   name?: string;
+  roleId?: number;
   status: number;
+  createdTime?: number;
+  /** 后端 nullableInt64 下发：从未更新过时为 null（F-062）。 */
+  updatedTime?: number | null;
   flow: number;
   flowMiB?: number;
   num: number;
@@ -47,18 +69,16 @@ export interface TunnelApiItem {
   name: string;
   type: number;
   status: number;
-  forwardMode?: "agent" | "nftables";
   flow?: number;
   trafficRatio?: number;
-  inIp?: string;
+  /** 后端 nullableString 下发：未设置时为 null（F-062）。 */
+  inIp?: string | null;
   ipPreference?: string;
   probeTargetHost?: string;
   probeTargetPort?: number;
   inNodeId?: TunnelChainNodePayload[];
   outNodeId?: TunnelChainNodePayload[];
   chainNodes?: TunnelChainNodePayload[][];
-  entryNodeId: number;
-  exitNodeId: number;
   inx?: number;
   [key: string]: unknown;
 }
@@ -67,11 +87,11 @@ export interface ForwardApiItem {
   id: number;
   name: string;
   status: number;
-  forwardMode?: "agent" | "nftables";
   tunnelName?: string;
   tunnelTrafficRatio?: number;
-  inIp?: string;
-  inPort?: number;
+  /** 后端 nullable 下发：无入口 IP/端口时为 null（F-062）。 */
+  inIp?: string | null;
+  inPort?: number | null;
   remoteAddr?: string;
   inFlow?: number;
   outFlow?: number;
@@ -92,11 +112,9 @@ export interface ForwardApiItem {
 export interface UserTunnelApiItem {
   id: number;
   name: string;
-  tunnelId?: number;
-  tunnelName?: string;
-  inNodePortSta?: number;
-  inNodePortEnd?: number;
-  speedId?: number | null;
+  /** /tunnel/user/tunnel 仅在隧道有入口转发时下发端口范围（F-144）。 */
+  portRangeMin?: number;
+  portRangeMax?: number;
   [key: string]: unknown;
 }
 
@@ -133,10 +151,9 @@ export interface SpeedLimitApiItem {
   name: string;
   speed: number;
   status: number;
-  createdTime: string;
-  updatedTime: string;
-  uploadSpeed?: number;
-  downloadSpeed?: number;
+  /** 后端 int64（毫秒）；updatedTime 经 nullableInt64 下发，未更新过为 null（F-140）。 */
+  createdTime: number;
+  updatedTime: number | null;
   [key: string]: unknown;
 }
 
@@ -163,15 +180,18 @@ export interface UserGroupApiItem {
 export interface GroupPermissionApiItem {
   id: number;
   userGroupId: number;
-  userGroupName: string;
+  /** 左连接无匹配（组已删）时后端下发 null（F-062）。 */
+  userGroupName: string | null;
   tunnelGroupId: number;
-  tunnelGroupName: string;
+  tunnelGroupName: string | null;
   createdTime: number;
   [key: string]: unknown;
 }
 
 export interface TunnelDiagnosisApiItem {
   success: boolean;
+  /** 流式诊断的起始帧标记（control_plane 起始项），页面本地类型早已自备（F-144）。 */
+  diagnosing?: boolean;
   description: string;
   nodeName: string;
   nodeId: string;
@@ -218,13 +238,21 @@ export interface SystemUpgradeReleaseApiItem {
 
 export interface UserPackageInfoApiData {
   userInfo: {
+    id: number;
+    name: string;
+    user: string;
+    status: number;
     flow: number;
+    flowMiB: number;
     inFlow: number;
     outFlow: number;
     num: number;
-    expTime?: string;
-    flowResetTime?: number;
-    maxConn?: number;
+    /** 后端 int64 毫秒（F-141）；后端不下发 maxConn，勿在此声明。 */
+    expTime: number;
+    flowResetTime: number;
+    createdTime: number;
+    /** 从未更新过时为 null。 */
+    updatedTime: number | null;
     [key: string]: unknown;
   };
   tunnelPermissions: UserTunnelPermissionApiItem[];
@@ -237,6 +265,9 @@ export interface BatchOperationResult {
   successCount: number;
   failCount: number;
   failures?: BatchOperationFailure[];
+  /** 批量删除中转为 pending-delete 的条数与明细（节点不可达时，后端 mutations.go）（F-144）。 */
+  pendingCount?: number;
+  pending?: BatchOperationFailure[];
   [key: string]: unknown;
 }
 
@@ -299,7 +330,8 @@ export interface UserMutationPayload {
   status?: number;
   flow?: number;
   num?: number;
-  expTime?: number | string;
+  /** 只收毫秒时间戳数字：字符串会被后端 asInt64 解析失败后静默回退默认到期（F-144）。 */
+  expTime?: number;
   flowResetTime?: number;
   maxConn?: number;
   dailyQuotaGB?: number;
@@ -441,7 +473,10 @@ export interface SpeedLimitMutationPayload {
 export interface UpdatePasswordPayload {
   currentPassword: string;
   newPassword: string;
-  newUsername?: string;
+  /** 后端必填：空值即拒绝「确认密码不能为空」（F-143）。 */
+  confirmPassword: string;
+  /** 后端必填：空值即拒绝「新用户名不能为空」（F-143）。 */
+  newUsername: string;
 }
 
 export interface BackupImportPayload {
@@ -469,7 +504,8 @@ export interface NodeMetricApiItem {
 }
 
 export interface TunnelMetricApiItem {
-  id: number;
+  /** 聚合查询不选 id 列，恒为 0；图表以 timestamp 为键，勿依赖此字段（F-144）。 */
+  id?: number;
   tunnelId: number;
   nodeId: number;
   timestamp: number;
@@ -497,6 +533,7 @@ export interface ServiceMonitorApiItem {
 export interface ServiceMonitorResultApiItem {
   id: number;
   monitorId: number;
+  nodeId: number;
   timestamp: number;
   success: number;
   latencyMs: number;
@@ -517,6 +554,7 @@ export interface ServiceMonitorMutationPayload {
 
 export interface ServiceMonitorLimitsApiData {
   checkerScanIntervalSec: number;
+  workerLimit: number;
   minIntervalSec: number;
   defaultIntervalSec: number;
   minTimeoutSec: number;
@@ -537,6 +575,17 @@ export interface SystemUpgradeCapabilityApiData {
   backendContainer: string;
 }
 
+/** 待执行迁移的预检状态（后端 repo.PendingMigrationStatus）（F-144）。 */
+export interface PendingMigrationStatusApiData {
+  required: boolean;
+  tables?: Array<{
+    table: string;
+    duplicateGroups: number;
+    sample?: string;
+  }>;
+  guide?: string;
+}
+
 export interface SystemUpgradeVersionApiData {
   currentVersion: string;
   latestVersion: string;
@@ -544,6 +593,10 @@ export interface SystemUpgradeVersionApiData {
   channel: "stable" | "dev";
   reason?: string;
   capability: SystemUpgradeCapabilityApiData;
+  /** 预检发现待执行迁移时非空（F-144）。 */
+  pendingMigrations?: PendingMigrationStatusApiData;
+  /** 需要人工补建管理员时为 true（F-144）。 */
+  adminBootstrapRequired?: boolean;
 }
 
 export interface SystemUpgradeCheckApiData extends SystemUpgradeVersionApiData {
@@ -622,6 +675,11 @@ export interface TunnelQualityChainDetailsApiItem {
   candidateHops?: TunnelQualityCandidateHopApiItem[];
 }
 
+/**
+ * 隧道质量（归一化形态）：快照端点的 success 本就是 bool；历史端点
+ * success 是 int(0/1)、且无 probeTarget*，由 api 层
+ * getMonitorTunnelQualityHistory 归一化成本形态后再交出（F-063）。
+ */
 export interface TunnelQualityApiItem {
   tunnelId: number;
   entryToExitLatency: number;
@@ -631,6 +689,20 @@ export interface TunnelQualityApiItem {
   probeTargetHost?: string;
   probeTargetPort?: number;
   success: boolean;
+  errorMessage?: string;
+  timestamp: number;
+  chainDetails?: string;
+}
+
+/** 隧道质量历史端点的线缆形态（model.TunnelQuality 原样返回）：success 为 int 0/1、有 id、无 probeTarget*。 */
+export interface TunnelQualityHistoryApiItem {
+  id: number;
+  tunnelId: number;
+  entryToExitLatency: number;
+  exitToBingLatency: number;
+  entryToExitLoss: number;
+  exitToBingLoss: number;
+  success: number;
   errorMessage?: string;
   timestamp: number;
   chainDetails?: string;
@@ -654,7 +726,8 @@ export interface KernelInfo {
   implemented: boolean;
   protocols: KernelProtocolCap[] | null;
   versions?: string[];
-  certModes?: string[];
+  /** 后端无 omitempty：未配置时下发 null 而非缺失（F-144）。 */
+  certModes?: string[] | null;
 }
 
 /** A preset 分流 category (geosite list, China IPs, BT). */
@@ -742,6 +815,9 @@ export interface InboundSecurity {
   alpn?: string[];
   fingerprint?: string;
   certMode?: string;
+  /** 仅请求侧：自签 PEM 内容；响应侧被后端遮蔽、从不回显（F-144）。 */
+  certPem?: string;
+  keyPem?: string;
   certFile?: string;
   keyFile?: string;
   realityDest?: string;

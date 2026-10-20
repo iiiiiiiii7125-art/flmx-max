@@ -31,7 +31,7 @@ const cycleToMonths = (cycle: NodeRenewalCycle): number => {
   }
 };
 
-export const getNodeRenewalCycleLabel = (cycle?: string): string => {
+export const getNodeRenewalCycleLabel = (cycle?: string | null): string => {
   switch (cycle) {
     case "month":
       return "月付";
@@ -45,8 +45,8 @@ export const getNodeRenewalCycleLabel = (cycle?: string): string => {
 };
 
 export const getNodeRenewalSnapshot = (
-  anchorTime?: number,
-  cycle?: string,
+  anchorTime?: number | null,
+  cycle?: string | null,
   warningDays = 7,
 ): NodeRenewalSnapshot => {
   const normalizedCycle =

@@ -142,7 +142,8 @@ interface Tunnel {
   name: string;
   forwardMode?: "agent" | "nftables";
   type?: number;
-  inIp?: string;
+  /** 与 TunnelApiItem 同步：后端未设置入口 IP 时下发 null（F-062）。 */
+  inIp?: string | null;
   inNodeId?: Array<{ nodeId: number }>;
   inNodePortSta?: number;
   inNodePortEnd?: number;
@@ -154,9 +155,10 @@ interface Node {
   id: number;
   name?: string;
   serverIp?: string;
-  serverIpV4?: string;
-  serverIpV6?: string;
-  extraIPs?: string;
+  /** 与 NodeApiItem 同步：后端 nullable 下发（F-062）。 */
+  serverIpV4?: string | null;
+  serverIpV6?: string | null;
+  extraIPs?: string | null;
 }
 
 interface ForwardForm {
@@ -1443,7 +1445,7 @@ export default function ForwardPage() {
     }
 
     const ips: string[] = [];
-    const add = (value?: string) => {
+    const add = (value?: string | null) => {
       const trimmed = (value || "").trim();
 
       if (trimmed) {

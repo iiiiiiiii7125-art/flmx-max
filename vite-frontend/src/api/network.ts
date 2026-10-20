@@ -53,6 +53,11 @@ interface RequestOptions {
   timeout?: number;
   /** 静默请求：403 时不弹全局「权限不足」提示（后台探测类请求用）。 */
   silent?: boolean;
+  /**
+   * 取消信号，透传给 axios（F-115）：调用方可用 AbortController 取消
+   * 在途请求，配合页面级 in-flight/序号守卫防止旧响应覆盖新状态。
+   */
+  signal?: AbortSignal;
 }
 
 // 处理token失效的逻辑
@@ -74,6 +79,7 @@ function handleForbidden(
   response: ApiResponse<unknown> | null,
   httpStatus?: number,
   silent?: boolean,
+  serverMsg?: string,
 ) {
   if (silent) return;
   if (response?.code === 403 || httpStatus === 403) {
@@ -81,19 +87,17 @@ function handleForbidden(
 
     if (now - lastForbiddenToastAt < 3000) return;
     lastForbiddenToastAt = now;
-    toast.error("权限不足");
+    // F-118：优先透出后端 msg（如「请先修改默认管理员密码」），
+    // 无具体原因时才回退通用文案，避免把受限改密等场景误标为权限问题。
+    toast.error(response?.msg || serverMsg || "权限不足");
   }
 }
 
-// 检查响应是否为token失效
+// 检查响应是否为token失效。
+// F-117：只以信封 code===401 判定，不再与后端三条中文文案逐字耦合
+//（后端改文案或新增 401 文案时，旧实现会漏判、用户卡在死会话里）。
 function isTokenExpired(response: ApiResponse<unknown>) {
-  return (
-    response &&
-    response.code === 401 &&
-    (response.msg === "未登录或token已过期" ||
-      response.msg === "无效的token或token已过期" ||
-      response.msg === "无法获取用户权限信息")
-  );
+  return !!response && response.code === 401;
 }
 
 const Network = {
@@ -114,6 +118,7 @@ const Network = {
         .get(path, {
           params: data,
           timeout: options.timeout ?? 30000,
+          signal: options.signal,
           headers: {
             Authorization: getToken(),
           },
@@ -130,6 +135,13 @@ const Network = {
           resolve(response.data);
         })
         .catch(function (error: unknown) {
+          // F-115：调用方主动取消（AbortSignal）不作失败处理，不弹任何提示。
+          if (axios.isCancel(error)) {
+            resolve({ code: -1, msg: "请求已取消", data: null as T });
+
+            return;
+          }
+
           const errorMessage = extractApiErrorMessage(error);
 
           // 检查是否是401错误（token失效）
@@ -147,7 +159,11 @@ const Network = {
 
           // N-003：HTTP 403 全局提示
           if (axios.isAxiosError(error) && error.response?.status === 403) {
-            handleForbidden(null, 403, options.silent);
+            const payload = error.response.data as
+              | { msg?: string }
+              | undefined;
+
+            handleForbidden(null, 403, options.silent, payload?.msg);
           }
 
           resolve({
@@ -175,6 +191,7 @@ const Network = {
       axios
         .post(path, data, {
           timeout: options.timeout ?? 30000,
+          signal: options.signal,
           headers: {
             Authorization: getToken(),
             "Content-Type": "application/json",
@@ -192,6 +209,13 @@ const Network = {
           resolve(response.data);
         })
         .catch(function (error: unknown) {
+          // F-115：调用方主动取消（AbortSignal）不作失败处理，不弹任何提示。
+          if (axios.isCancel(error)) {
+            resolve({ code: -1, msg: "请求已取消", data: null as T });
+
+            return;
+          }
+
           const errorMessage = extractApiErrorMessage(error);
 
           // 检查是否是401错误（token失效）
@@ -209,7 +233,11 @@ const Network = {
 
           // N-003：HTTP 403 全局提示
           if (axios.isAxiosError(error) && error.response?.status === 403) {
-            handleForbidden(null, 403, options.silent);
+            const payload = error.response.data as
+              | { msg?: string }
+              | undefined;
+
+            handleForbidden(null, 403, options.silent, payload?.msg);
           }
 
           resolve({

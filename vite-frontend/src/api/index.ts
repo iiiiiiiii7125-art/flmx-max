@@ -41,6 +41,7 @@ import type {
   MonitorPermissionApiItem,
   MonitorAccessApiData,
   TunnelQualityApiItem,
+  TunnelQualityHistoryApiItem,
   StorageSummaryApiData,
   SystemUpgradeCheckApiData,
   SystemUpgradeRunApiData,
@@ -470,6 +471,10 @@ export interface BackupTypes {
   permissions?: boolean;
   configs?: boolean;
   inbounds?: boolean;
+  // 后端 ExportPartial/Import 早已支持，前端清单曾漏列（F-026）。
+  userInbounds?: boolean;
+  announcements?: boolean;
+  monitorPermissions?: boolean;
 }
 
 export const exportBackup = async (types: string[] = []) => {
@@ -560,7 +565,7 @@ export const getMonitorTunnels = () =>
 export const getMonitorTunnelQuality = () =>
   Network.get<TunnelQualityApiItem[]>("/monitor/tunnels/quality");
 
-export const getMonitorTunnelQualityHistory = (
+export const getMonitorTunnelQualityHistory = async (
   tunnelId: number,
   start?: number,
   end?: number,
@@ -570,10 +575,29 @@ export const getMonitorTunnelQualityHistory = (
   if (start) params.start = String(start);
   if (end) params.end = String(end);
 
-  return Network.get<TunnelQualityApiItem[]>(
+  // 历史端点 success 是 int(0/1)（model.TunnelQuality），快照端点是 bool：
+  // 在 api 层归一化为 TunnelQualityApiItem 再交出，避免消费方混型（F-063）。
+  const response = await Network.get<TunnelQualityHistoryApiItem[]>(
     `/monitor/tunnels/${tunnelId}/quality`,
     params,
   );
+
+  return {
+    ...response,
+    data: (response.data || []).map(
+      (item): TunnelQualityApiItem => ({
+        tunnelId: item.tunnelId,
+        entryToExitLatency: item.entryToExitLatency,
+        exitToBingLatency: item.exitToBingLatency,
+        entryToExitLoss: item.entryToExitLoss,
+        exitToBingLoss: item.exitToBingLoss,
+        success: item.success !== 0,
+        errorMessage: item.errorMessage,
+        timestamp: item.timestamp,
+        chainDetails: item.chainDetails,
+      }),
+    ),
+  };
 };
 
 export const getServiceMonitorList = () =>

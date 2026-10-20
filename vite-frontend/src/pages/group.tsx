@@ -74,9 +74,10 @@ interface UserGroup {
 interface GroupPermission {
   id: number;
   userGroupId: number;
-  userGroupName: string;
+  /** 组被删后左连接无匹配，后端下发 null；渲染处以 || id 兜底（F-062）。 */
+  userGroupName: string | null;
   tunnelGroupId: number;
-  tunnelGroupName: string;
+  tunnelGroupName: string | null;
   createdTime: number;
 }
 

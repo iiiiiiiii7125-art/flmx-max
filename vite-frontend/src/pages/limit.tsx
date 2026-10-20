@@ -41,8 +41,9 @@ interface SpeedLimitRule {
   name: string;
   speed: number;
   status: number;
-  createdTime: string;
-  updatedTime: string;
+  /** 与后端一致：毫秒时间戳；updatedTime 未更新过为 null（F-140）。 */
+  createdTime: number;
+  updatedTime: number | null;
 }
 
 interface SpeedLimitForm {

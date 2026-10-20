@@ -257,6 +257,10 @@ const BACKUP_TYPE_OPTIONS = [
   { value: "permissions", label: "分组权限" },
   { value: "configs", label: "系统配置" },
   { value: "inbounds", label: "内核与入站" },
+  // 后端 ExportPartial/Import 早已支持，前端清单曾漏列致「全选」仍丢三表（F-026）。
+  { value: "userInbounds", label: "用户入站分配" },
+  { value: "announcements", label: "公告" },
+  { value: "monitorPermissions", label: "监控权限" },
 ] as const;
 
 const BACKUP_TYPE_VALUES = BACKUP_TYPE_OPTIONS.map((option) => option.value);
