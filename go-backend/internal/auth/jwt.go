@@ -87,6 +87,21 @@ func ParseClaims(token, secret string) (Claims, error) {
 		return Claims{}, errors.New("invalid token")
 	}
 
+	// F-067：显式校验 header alg 与签发端一致。签名恒按 HMAC-SHA256 比对，
+	// 算法头此前从不解码——当前不可利用，但若未来引入公钥验签或更换
+	// JWT 库，忽略 alg 会打开算法混淆面，故在验签前先断言。
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return Claims{}, err
+	}
+	var header tokenHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return Claims{}, err
+	}
+	if header.Alg != algorithm {
+		return Claims{}, errors.New("unexpected signing algorithm")
+	}
+
 	signedContent := parts[0] + "." + parts[1]
 	expected := sign(signedContent, secret)
 	if !hmac.Equal([]byte(expected), []byte(parts[2])) {
