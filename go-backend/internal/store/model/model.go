@@ -220,6 +220,9 @@ type Tunnel struct {
 	IPPreference    string         `gorm:"column:ip_preference;type:varchar(10);not null;default:''"`
 	ProbeTargetHost string         `gorm:"column:probe_target_host;type:text;not null;default:''"`
 	ProbeTargetPort int            `gorm:"column:probe_target_port;not null;default:0"`
+	// Engine runs the tunnel's forwards: "" = the agent's forwarder,
+	// "realm" = realm on the entry nodes (port forward tunnels only).
+	Engine string `gorm:"column:engine;type:varchar(20);not null;default:''"`
 }
 
 func (Tunnel) TableName() string { return "tunnel" }
@@ -877,6 +880,7 @@ type TunnelRecord struct {
 	Protocol        string
 	ProbeTargetHost string
 	ProbeTargetPort int
+	Engine          string
 }
 
 type UserQuotaView struct {

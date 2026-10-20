@@ -1207,9 +1207,18 @@ func remarshal(in interface{}, out interface{}) error {
 // buildKernelApplyPayload renders the kernel's enabled inbounds into the
 // KernelApply command body.
 func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]interface{}, string, error) {
+	return h.buildKernelApplyPayloadWith(k, nil)
+}
+
+// buildKernelApplyPayloadWith takes realm forwards to force on or off
+// (realm.go).
+func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride map[int64]bool) (map[string]interface{}, string, error) {
 	info, ok := kernel.Lookup(k.KernelType)
 	if !ok || !info.Implemented {
 		return nil, "", fmt.Errorf("暂不支持内核 %s", k.KernelType)
+	}
+	if info.Relay {
+		return h.buildRealmApplyPayload(k, info, realmOverride)
 	}
 	rows, err := h.repo.ListNodeInboundsByKernel(k.ID)
 	if err != nil {
@@ -1539,6 +1548,10 @@ func (h *Handler) checkSnellVersions(kernelID int64, version string) error {
 // offline node is not an error for persistence: the kernel stays pending and
 // is reconciled when the agent reconnects.
 func (h *Handler) applyKernel(kernelID int64, install bool) error {
+	return h.applyKernelWith(kernelID, install, nil)
+}
+
+func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride map[int64]bool) error {
 	unlock := lockKernelApply(kernelID)
 	defer unlock()
 
@@ -1549,7 +1562,7 @@ func (h *Handler) applyKernel(kernelID int64, install bool) error {
 	if k == nil {
 		return errors.New("内核不存在")
 	}
-	payload, hash, err := h.buildKernelApplyPayload(k)
+	payload, hash, err := h.buildKernelApplyPayloadWith(k, realmOverride)
 	now := time.Now().UnixMilli()
 	if err != nil {
 		_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
@@ -1714,7 +1727,15 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 		return
 	}
 	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
+	var realmCounters []agentKernelCounter
 	for _, c := range status.Counters {
+		// realm 转发端口的计数样本（InboundID = RealmCounterBase +
+		// forwardID）必须分流到 forward 入账链；落进入站样本会被当作
+		// 未知入站静默丢弃（仅剩 repo 层的 unaccounted warn 日志）。
+		if _, ok := kernel.RealmForwardID(c.InboundID); ok {
+			realmCounters = append(realmCounters, c)
+			continue
+		}
 		samples = append(samples, repo.InboundCounterSample{
 			InboundID: c.InboundID,
 			Protocol:  c.Proto,
@@ -1725,6 +1746,9 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	}
 	if err := h.repo.ApplyInboundCounterSamples(samples, now); err != nil {
 		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
+	}
+	if len(realmCounters) > 0 {
+		h.applyRealmCounters(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
 	}
 }
 
