@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, Check } from "lucide-react";
 
-import { getMyInbounds, getSubInfo } from "@/api";
+import { getMyInbounds, getMySubscriptions, getSubInfo } from "@/api";
+import type { MySubscriptionItem } from "@/api";
 import type { InboundApiItem } from "@/api/types";
 import { copyWithToast } from "@/utils/clipboard";
+import { formatTraffic } from "@/utils/traffic";
 import { QrCodeButton } from "@/pages/inbound/share";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
+import { Chip } from "@/shadcn-bridge/heroui/chip";
 
 const SUB_FORMATS = [
   { key: "", label: "通用" },
@@ -22,15 +25,27 @@ interface MyRelay {
   name: string;
 }
 
+function dateText(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export default function MySubscriptionPage() {
+  // 分配给我的订阅（新模型）：非空时只展示这些独立链接，不再展示个人链接。
+  const [assigned, setAssigned] = useState<MySubscriptionItem[]>([]);
   const [data, setData] = useState<{ userId: number; inbounds: InboundApiItem[]; relays?: MyRelay[]; sig?: string } | null>(null);
   const [subPath, setSubPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getMyInbounds(), getSubInfo()])
-      .then(([myRes, subRes]) => {
+    Promise.all([getMySubscriptions(), getMyInbounds(), getSubInfo()])
+      .then(([assignedRes, myRes, subRes]) => {
+        if (assignedRes.code === 0 && assignedRes.data) {
+          setAssigned(assignedRes.data.subscriptions ?? []);
+        }
         if (myRes.code === 0 && myRes.data) {
           setData(myRes.data as { userId: number; inbounds: InboundApiItem[]; relays?: MyRelay[]; sig?: string });
         }
@@ -54,6 +69,10 @@ export default function MySubscriptionPage() {
     return u;
   };
 
+  // 分配订阅的独立链接：path 自带 token，不带 ?user= 过滤。
+  const assignedUrl = (s: MySubscriptionItem, format?: string) =>
+    `${window.location.origin}${s.path}${format ? `?format=${format}` : ""}`;
+
   const handleCopy = async (url: string, key: string, label: string) => {
     const ok = await copyWithToast(url, `${label} 已复制`);
     if (ok) {
@@ -61,6 +80,41 @@ export default function MySubscriptionPage() {
       setTimeout(() => setCopiedKey(null), 2000);
     }
   };
+
+  const formatButtons = (
+    keyPrefix: string,
+    labelPrefix: string,
+    urlFor: (format?: string) => string,
+    primary: boolean,
+  ) => (
+    <div className="flex flex-wrap gap-2">
+      {SUB_FORMATS.map((f) => {
+        const key = `${keyPrefix}-${f.key || "auto"}`;
+        const url = urlFor(f.key || undefined);
+        const label = `${labelPrefix} ${f.label}`;
+        return (
+          <div key={key} className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="flat"
+              color={copiedKey === key ? "success" : primary ? "primary" : "default"}
+              onPress={() => handleCopy(url, key, label)}
+              startContent={
+                copiedKey === key ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )
+              }
+            >
+              {copiedKey === key ? "已复制" : primary ? `复制 ${f.label}` : f.label}
+            </Button>
+            <QrCodeButton url={url} label={label} />
+          </div>
+        );
+      })}
+    </div>
+  );
 
   if (loading) {
     return (
@@ -70,7 +124,12 @@ export default function MySubscriptionPage() {
     );
   }
 
-  if (!data || (!data.inbounds || data.inbounds.length === 0) && (!data.relays || data.relays.length === 0)) {
+  const hasLegacy =
+    data &&
+    ((data.inbounds && data.inbounds.length > 0) ||
+      (data.relays && data.relays.length > 0));
+
+  if (assigned.length === 0 && !hasLegacy) {
     return (
       <div className="p-6">
         <Card>
@@ -83,8 +142,8 @@ export default function MySubscriptionPage() {
     );
   }
 
-  const inbounds = data.inbounds ?? [];
-  const relays = data.relays ?? [];
+  const inbounds = data?.inbounds ?? [];
+  const relays = data?.relays ?? [];
 
   return (
     <div className="p-6 space-y-4 max-w-4xl mx-auto">
@@ -95,6 +154,57 @@ export default function MySubscriptionPage() {
         </p>
       </div>
 
+      {/* 分配给我的订阅（独立链接） */}
+      {assigned.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-base font-semibold">分配给我的订阅</h2>
+          {assigned.map((s) => {
+            const used = s.uploadBytes + s.downloadBytes;
+            const expired = s.expireTime > 0 && s.expireTime <= Date.now();
+            return (
+              <Card key={`assigned-${s.id}`}>
+                <CardBody className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">
+                      {s.name}
+                      {!s.enabled ? (
+                        <Chip className="ml-2" size="sm" variant="flat">
+                          已停用
+                        </Chip>
+                      ) : s.overQuota ? (
+                        <Chip className="ml-2" color="danger" size="sm" variant="flat">
+                          流量用完
+                        </Chip>
+                      ) : expired ? (
+                        <Chip className="ml-2" color="danger" size="sm" variant="flat">
+                          已过期
+                        </Chip>
+                      ) : null}
+                    </p>
+                    <span className="text-xs text-default-500">{s.nodeCount} 个节点</span>
+                  </div>
+                  <p className="text-xs text-default-500">
+                    {s.trafficLimit > 0
+                      ? `已用 ${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`
+                      : `已用 ${formatTraffic(used)} · 不限流量`}
+                    {s.expireTime > 0 ? ` · ${dateText(s.expireTime)} 到期` : ""}
+                  </p>
+                  <div className="rounded-lg bg-default-50 p-3">
+                    <p className="text-xs text-default-500 mb-2 break-all select-all">
+                      {assignedUrl(s)}
+                    </p>
+                    {formatButtons(`assigned-${s.id}`, s.name, (f) => assignedUrl(s, f), true)}
+                  </div>
+                </CardBody>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 旧个人链接（未分配订阅时的回退） */}
+      {assigned.length === 0 && hasLegacy && (
+        <>
       {/* 全部订阅 */}
       <Card>
         <CardHeader className="pb-2">
@@ -241,6 +351,8 @@ export default function MySubscriptionPage() {
             </Card>
           ))}
         </div>
+      )}
+        </>
       )}
     </div>
   );

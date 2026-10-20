@@ -51,6 +51,8 @@ interface ApiResponse<T = unknown> {
 
 interface RequestOptions {
   timeout?: number;
+  /** 静默请求：403 时不弹全局「权限不足」提示（后台探测类请求用）。 */
+  silent?: boolean;
 }
 
 // 处理token失效的逻辑
@@ -64,9 +66,21 @@ function handleTokenExpired() {
 }
 
 // N-003：403（权限不足）全局处理。业务信封 code=403 与 HTTP 403 均覆盖。
-// toast 只提示一次（同一请求只会触发一次拦截）。
-function handleForbidden(response: ApiResponse<unknown> | null, httpStatus?: number) {
+// 同一时间窗内只提示一次：页脚版本探测等后台请求在每个页面都会触发，
+// 3 秒节流 + silent 静默选项避免普通用户被「权限不足」刷屏。
+let lastForbiddenToastAt = 0;
+
+function handleForbidden(
+  response: ApiResponse<unknown> | null,
+  httpStatus?: number,
+  silent?: boolean,
+) {
+  if (silent) return;
   if (response?.code === 403 || httpStatus === 403) {
+    const now = Date.now();
+
+    if (now - lastForbiddenToastAt < 3000) return;
+    lastForbiddenToastAt = now;
     toast.error("权限不足");
   }
 }
@@ -111,7 +125,7 @@ const Network = {
           }
 
           // N-003：业务信封 403 全局提示
-          handleForbidden(response.data);
+          handleForbidden(response.data, undefined, options.silent);
 
           resolve(response.data);
         })
@@ -133,7 +147,7 @@ const Network = {
 
           // N-003：HTTP 403 全局提示
           if (axios.isAxiosError(error) && error.response?.status === 403) {
-            handleForbidden(null, 403);
+            handleForbidden(null, 403, options.silent);
           }
 
           resolve({
@@ -173,7 +187,7 @@ const Network = {
           }
 
           // N-003：业务信封 403 全局提示
-          handleForbidden(response.data);
+          handleForbidden(response.data, undefined, options.silent);
 
           resolve(response.data);
         })
@@ -195,7 +209,7 @@ const Network = {
 
           // N-003：HTTP 403 全局提示
           if (axios.isAxiosError(error) && error.response?.status === 403) {
-            handleForbidden(null, 403);
+            handleForbidden(null, 403, options.silent);
           }
 
           resolve({

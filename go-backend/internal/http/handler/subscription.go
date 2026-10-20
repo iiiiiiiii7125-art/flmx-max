@@ -46,6 +46,9 @@ type subPipeline struct {
 	RuleGroups        []string `json:"ruleGroups"`
 	ChainLandingNames []string `json:"chainLandingNames"`
 	ChainRelayNames   []string `json:"chainRelayNames"`
+	// RelayIDs 是端点白名单（1.0.12 中转范围过滤）：空/nil = 不过滤（旧行为）；
+	// 非空时仅保留 RelayID 命中的端点，0 表示直连端点，N>0 表示该中转的端点。
+	RelayIDs []int64 `json:"relayIds,omitempty"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
@@ -98,6 +101,19 @@ func (p *subPipeline) normalize() error {
 	// 脚本长度限制（与执行时的 20000 一致，保存时提前拦截）
 	if len(p.Script) > 20000 {
 		return errText("脚本过长（最多 20000 字符）")
+	}
+	// 中转范围白名单归一化：去重、剔除负数（0=直连合法）。
+	if len(p.RelayIDs) > 0 {
+		seen := make(map[int64]bool, len(p.RelayIDs))
+		clean := make([]int64, 0, len(p.RelayIDs))
+		for _, id := range p.RelayIDs {
+			if id < 0 || seen[id] {
+				continue
+			}
+			seen[id] = true
+			clean = append(clean, id)
+		}
+		p.RelayIDs = clean
 	}
 	return p.options().Validate()
 }
@@ -386,7 +402,28 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 			}
 		}
 	}
-	return endpoints
+	// 1.0.12: 中转范围过滤（Options.relayIds）。空 = 不过滤，保持旧行为。
+	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
+}
+
+// filterEndpointsByRelayIDs 按 relayIds 白名单过滤端点：
+// relayIDs 为空时原样返回；端点的 RelayID==0 视为直连（含导入端点），
+// 仅当 0 在白名单中才保留；RelayID>0 的中转端点同理按号命中。
+func filterEndpointsByRelayIDs(endpoints []kernel.Endpoint, relayIDs []int64) []kernel.Endpoint {
+	if len(relayIDs) == 0 {
+		return endpoints
+	}
+	allowed := make(map[int64]bool, len(relayIDs))
+	for _, id := range relayIDs {
+		allowed[id] = true
+	}
+	out := endpoints[:0]
+	for _, e := range endpoints {
+		if allowed[e.RelayID] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // ---- API ----
@@ -415,6 +452,10 @@ type subscriptionView struct {
 	TrafficLimit  int64 `json:"trafficLimit"`
 	ResetDay      int   `json:"resetDay"`
 	OverQuota     bool  `json:"overQuota"`
+	// RelayIDs 是该订阅的中转范围白名单（与 options.relayIds 同源，顶层暴露便于前端回显）。
+	RelayIDs []int64 `json:"relayIds"`
+	// IsDefault 标记"默认订阅"（个人订阅链接的载体）：排序第一条，由 subscriptionList 回填。
+	IsDefault bool `json:"isDefault"`
 }
 
 func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time) subscriptionView {
@@ -441,13 +482,17 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 		sourceIDs = append(sourceIDs, parseIDList(s.SourceIDs)...)
 	}
 	pipe := parsePipeline(s.Options)
+	relayIDs := pipe.RelayIDs
+	if relayIDs == nil {
+		relayIDs = []int64{}
+	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
 		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
 		NodeCount:   len(kernel.ApplySubOptions(h.subEndpoints(s, rows), pipe.options())),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
-		ResetDay: s.ResetDay, OverQuota: subOverQuota(s),
+		ResetDay: s.ResetDay, OverQuota: subOverQuota(s), RelayIDs: relayIDs,
 	}
 }
 
@@ -479,6 +524,14 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 	items := make([]subscriptionView, 0, len(subs))
 	for i := range subs {
 		items = append(items, h.subscriptionView(&subs[i], rows, now))
+	}
+	// 回填默认订阅标记（个人订阅链接的载体 = 排序第一条）。DefaultSubscription
+	// 在无订阅时会新建一条，与上方空列表分支的既有行为一致；此处失败不阻断
+	// 列表返回，标记保持 false。
+	if def, derr := h.repo.DefaultSubscription(now.UnixMilli()); derr == nil && def != nil {
+		for i := range items {
+			items[i].IsDefault = items[i].ID == def.ID
+		}
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"items":      items,
@@ -653,6 +706,10 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.DeleteSubscription(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	// 1.0.12: 同步清掉指向该订阅的用户分配（失败仅记录，不阻断删除）。
+	if err := h.repo.DeleteUserSubscriptionsBySubscription(id); err != nil {
+		log.Printf("subscription %d: cleanup user subscription assignments failed: %v", id, err)
 	}
 	h.respondAfterSubPush(w, push, nil)
 }

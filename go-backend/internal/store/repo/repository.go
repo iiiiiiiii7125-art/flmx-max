@@ -347,6 +347,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeInboundCounter{},
 		&model.NodeInboundRelay{},
 		&model.UserInbound{},
+		&model.UserSubscription{},
 		&model.SubUser{},
 		&model.Subscription{},
 		&model.SubscriptionCounter{},

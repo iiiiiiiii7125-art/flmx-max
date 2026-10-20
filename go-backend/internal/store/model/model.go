@@ -284,6 +284,18 @@ type UserInbound struct {
 
 func (UserInbound) TableName() string { return "user_inbound" }
 
+// UserSubscription grants a user access to a managed subscription
+// (1.0.12: "订阅分配" binds users to subscriptions from 订阅管理，
+// so traffic, expiry and deletion are scoped per subscription).
+type UserSubscription struct {
+	ID             int64 `gorm:"primaryKey;autoIncrement"`
+	UserID         int64 `gorm:"column:user_id;not null;uniqueIndex:idx_user_subscription_unique"`
+	SubscriptionID int64 `gorm:"column:subscription_id;not null;uniqueIndex:idx_user_subscription_unique"`
+	CreatedTime    int64 `gorm:"column:created_time;not null"`
+}
+
+func (UserSubscription) TableName() string { return "user_subscription" }
+
 type TunnelGroup struct {
 	ID          int64  `gorm:"primaryKey;autoIncrement"`
 	Name        string `gorm:"type:varchar(100);not null;uniqueIndex:idx_tunnel_group_name"`
@@ -579,26 +591,26 @@ type InboundCounterBackup struct {
 }
 
 type UserBackup struct {
-	ID              int64  `json:"id"`
-	User            string `json:"user"`
-	Pwd             string `json:"pwd"`
-	RoleID          int    `json:"roleId"`
-	ExpTime         int64  `json:"expTime"`
-	Flow            int64  `json:"flow"`
-	FlowMiB         int64  `json:"flowMiB,omitempty"`
-	InFlow          int64  `json:"inFlow"`
-	OutFlow         int64  `json:"outFlow"`
-	FlowResetTime   int64  `json:"flowResetTime"`
-	DailyQuotaGB    int64  `json:"dailyQuotaGB,omitempty"`
-	MonthlyQuotaGB  int64  `json:"monthlyQuotaGB,omitempty"`
-	DisabledByQuota int    `json:"disabledByQuota,omitempty"`
-	QuotaDisabledAt int64  `json:"quotaDisabledAt,omitempty"`
-	Num             int    `json:"num"`
-	CreatedTime     int64  `json:"createdTime"`
-	UpdatedTime     int64  `json:"updatedTime,omitempty"`
-	Status          int    `json:"status"`
-	PasswordChangedAt int64 `json:"passwordChangedAt,omitempty"`
-	MaxConn         int    `json:"maxConn,omitempty"`
+	ID                int64  `json:"id"`
+	User              string `json:"user"`
+	Pwd               string `json:"pwd"`
+	RoleID            int    `json:"roleId"`
+	ExpTime           int64  `json:"expTime"`
+	Flow              int64  `json:"flow"`
+	FlowMiB           int64  `json:"flowMiB,omitempty"`
+	InFlow            int64  `json:"inFlow"`
+	OutFlow           int64  `json:"outFlow"`
+	FlowResetTime     int64  `json:"flowResetTime"`
+	DailyQuotaGB      int64  `json:"dailyQuotaGB,omitempty"`
+	MonthlyQuotaGB    int64  `json:"monthlyQuotaGB,omitempty"`
+	DisabledByQuota   int    `json:"disabledByQuota,omitempty"`
+	QuotaDisabledAt   int64  `json:"quotaDisabledAt,omitempty"`
+	Num               int    `json:"num"`
+	CreatedTime       int64  `json:"createdTime"`
+	UpdatedTime       int64  `json:"updatedTime,omitempty"`
+	Status            int    `json:"status"`
+	PasswordChangedAt int64  `json:"passwordChangedAt,omitempty"`
+	MaxConn           int    `json:"maxConn,omitempty"`
 }
 
 type UserInboundBackup struct {
@@ -610,11 +622,11 @@ type UserInboundBackup struct {
 
 // AnnouncementBackup 是 O7-007 补齐的公告备份结构（字段对照 model.Announcement）。
 type AnnouncementBackup struct {
-	ID          int64 `json:"id"`
+	ID          int64  `json:"id"`
 	Content     string `json:"content"`
-	Enabled     int   `json:"enabled"`
-	CreatedTime int64 `json:"createdTime"`
-	UpdatedTime int64 `json:"updatedTime,omitempty"`
+	Enabled     int    `json:"enabled"`
+	CreatedTime int64  `json:"createdTime"`
+	UpdatedTime int64  `json:"updatedTime,omitempty"`
 }
 
 // MonitorPermissionBackup 是 O7-008 补齐的监控权限备份结构（字段对照 model.MonitorPermission）。
@@ -625,34 +637,34 @@ type MonitorPermissionBackup struct {
 }
 
 type NodeBackup struct {
-	ID            int64  `json:"id"`
-	Name          string `json:"name"`
-	Remark        string `json:"remark,omitempty"`
-	ExpiryTime    int64  `json:"expiryTime,omitempty"`
-	RenewalCycle  string `json:"renewalCycle,omitempty"`
-	Secret        string `json:"secret"`
-	ServerIP      string `json:"serverIp"`
-	ServerIPv4    string `json:"serverIpV4,omitempty"`
-	ServerIPv6    string `json:"serverIpV6,omitempty"`
-	ExtraIPs      string `json:"extraIPs,omitempty"`
-	Port          string `json:"port"`
-	InterfaceName string `json:"interfaceName,omitempty"`
-	Version       string `json:"version,omitempty"`
-	HTTP          int    `json:"http"`
-	TLS           int    `json:"tls"`
-	Socks         int    `json:"socks"`
-	CreatedTime   int64  `json:"createdTime"`
-	UpdatedTime   int64  `json:"updatedTime,omitempty"`
-	Status        int    `json:"status"`
-	TCPListenAddr string `json:"tcpListenAddr"`
-	UDPListenAddr string `json:"udpListenAddr"`
-	Inx           int    `json:"inx"`
-	IsRemote      int    `json:"isRemote"`
-	RemoteURL     string `json:"remoteUrl,omitempty"`
-	RemoteToken   string `json:"remoteToken,omitempty"`
-	RemoteConfig  string `json:"remoteConfig,omitempty"`
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	Remark         string `json:"remark,omitempty"`
+	ExpiryTime     int64  `json:"expiryTime,omitempty"`
+	RenewalCycle   string `json:"renewalCycle,omitempty"`
+	Secret         string `json:"secret"`
+	ServerIP       string `json:"serverIp"`
+	ServerIPv4     string `json:"serverIpV4,omitempty"`
+	ServerIPv6     string `json:"serverIpV6,omitempty"`
+	ExtraIPs       string `json:"extraIPs,omitempty"`
+	Port           string `json:"port"`
+	InterfaceName  string `json:"interfaceName,omitempty"`
+	Version        string `json:"version,omitempty"`
+	HTTP           int    `json:"http"`
+	TLS            int    `json:"tls"`
+	Socks          int    `json:"socks"`
+	CreatedTime    int64  `json:"createdTime"`
+	UpdatedTime    int64  `json:"updatedTime,omitempty"`
+	Status         int    `json:"status"`
+	TCPListenAddr  string `json:"tcpListenAddr"`
+	UDPListenAddr  string `json:"udpListenAddr"`
+	Inx            int    `json:"inx"`
+	IsRemote       int    `json:"isRemote"`
+	RemoteURL      string `json:"remoteUrl,omitempty"`
+	RemoteToken    string `json:"remoteToken,omitempty"`
+	RemoteConfig   string `json:"remoteConfig,omitempty"`
 	LatencyTargets string `json:"latencyTargets,omitempty"`
-	ForwardMode   string `json:"forwardMode,omitempty"`
+	ForwardMode    string `json:"forwardMode,omitempty"`
 	// O7-006：恢复后保留已忽略的到期提醒状态
 	ExpiryReminderDismissed int `json:"expiryReminderDismissed,omitempty"`
 }
@@ -781,21 +793,21 @@ type PermissionGrantBackup struct {
 
 // ImportResult contains the result of an import operation.
 type ImportResult struct {
-	UsersImported        int         `json:"usersImported"`
-	NodesImported        int         `json:"nodesImported"`
-	TunnelsImported      int         `json:"tunnelsImported"`
-	ForwardsImported     int         `json:"forwardsImported"`
-	UserTunnelsImported  int         `json:"userTunnelsImported"`
-	SpeedLimitsImported  int         `json:"speedLimitsImported"`
-	TunnelGroupsImported int         `json:"tunnelGroupsImported"`
-	UserGroupsImported   int         `json:"userGroupsImported"`
-	PermissionsImported  int         `json:"permissionsImported"`
-	ConfigsImported      int         `json:"configsImported"`
-	InboundsImported     int         `json:"inboundsImported"`
-	UserInboundsImported int         `json:"userInboundsImported"`
+	UsersImported        int `json:"usersImported"`
+	NodesImported        int `json:"nodesImported"`
+	TunnelsImported      int `json:"tunnelsImported"`
+	ForwardsImported     int `json:"forwardsImported"`
+	UserTunnelsImported  int `json:"userTunnelsImported"`
+	SpeedLimitsImported  int `json:"speedLimitsImported"`
+	TunnelGroupsImported int `json:"tunnelGroupsImported"`
+	UserGroupsImported   int `json:"userGroupsImported"`
+	PermissionsImported  int `json:"permissionsImported"`
+	ConfigsImported      int `json:"configsImported"`
+	InboundsImported     int `json:"inboundsImported"`
+	UserInboundsImported int `json:"userInboundsImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
-	AnnouncementsImported      int `json:"announcementsImported"`
-	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
+	AnnouncementsImported      int         `json:"announcementsImported"`
+	MonitorPermissionsImported int         `json:"monitorPermissionsImported"`
 	AutoBackup                 *BackupData `json:"autoBackup,omitempty"`
 }
 

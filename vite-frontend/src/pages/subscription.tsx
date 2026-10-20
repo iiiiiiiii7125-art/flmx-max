@@ -6,7 +6,7 @@ import type {
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
-import type { InboundApiItem } from "@/api/types";
+import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
@@ -15,6 +15,7 @@ import { ChevronDown, Copy } from "lucide-react";
 import {
   deleteSubscription,
   getInboundList,
+  getInboundRelays,
   getRemoteSources,
   getSubscriptions,
   previewSubscription,
@@ -78,6 +79,8 @@ const EMPTY_PIPELINE: SubPipeline = {
   chainLandingNames: [],
   chainRelayNames: [],
   script: "",
+  /** 中转范围：端点 ID（0=直连，>0=中转 ID）；空 = 全部端点。 */
+  relayIds: [],
 };
 
 function toDateInput(ms: number): string {
@@ -311,7 +314,11 @@ function draftFrom(s?: SubscriptionItem): Draft {
     sourceAll: s.sourceAll,
     inboundIds: s.inboundIds,
     sourceIds: s.sourceIds ?? [],
-    options: { ...EMPTY_PIPELINE, ...s.options },
+    options: {
+      ...EMPTY_PIPELINE,
+      ...s.options,
+      relayIds: s.relayIds ?? s.options?.relayIds ?? [],
+    },
     expireTime: s.expireTime,
     expire: toDateInput(s.expireTime),
     enabled: s.enabled,
@@ -391,6 +398,68 @@ function Editor({
           draft.sourceIds.includes(i.sourceId ?? 0)) &&
       (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
   ).length;
+
+  // 中转范围：每个入站的中转列表（端点多选用）。
+  const [relaysByInbound, setRelaysByInbound] = useState<
+    Record<number, InboundRelayApiItem[]>
+  >({});
+
+  useEffect(() => {
+    let active = true;
+
+    Promise.all(
+      inbounds.map((i) =>
+        getInboundRelays(i.id).then((r) => ({
+          id: i.id,
+          relays: r.code === 0 ? (r.data ?? []) : [],
+        })),
+      ),
+    ).then((results) => {
+      if (!active) return;
+      const map: Record<number, InboundRelayApiItem[]> = {};
+
+      for (const { id, relays } of results) map[id] = relays;
+      setRelaysByInbound(map);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [inbounds]);
+
+  // 当前订阅覆盖的入站（全部落地 = 全部入站；指定落地 = 已勾选的入站）。
+  const scopeInbounds = useMemo(
+    () =>
+      draft.sourceAll
+        ? inbounds
+        : inbounds.filter((i) => draft.inboundIds.includes(i.id)),
+    [inbounds, draft.sourceAll, draft.inboundIds],
+  );
+
+  // 当前覆盖的全部端点 ID：0=直连（任一入站可直连时纳入），>0=中转 ID。
+  const allEndpointIds = useCallback(() => {
+    const ids = new Set<number>();
+
+    for (const inbound of scopeInbounds) {
+      if (!inbound.relayOnly) ids.add(0);
+      for (const relay of relaysByInbound[inbound.id] ?? []) ids.add(relay.id);
+    }
+
+    return Array.from(ids);
+  }, [scopeInbounds, relaysByInbound]);
+
+  // relayIds 为空表示全部端点；勾选时先把全部端点展开为显式列表再增减。
+  const endpointChecked = (id: number) =>
+    o.relayIds.length === 0 || o.relayIds.includes(id);
+  const toggleEndpoint = (id: number) => {
+    const current = o.relayIds.length === 0 ? allEndpointIds() : o.relayIds;
+
+    setOpts({
+      relayIds: current.includes(id)
+        ? current.filter((x) => x !== id)
+        : [...current, id],
+    });
+  };
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -594,6 +663,65 @@ function Editor({
               其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
               Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
             </p>
+          )}
+        </Section>
+
+        <Section
+          collapsible
+          defaultOpen={o.relayIds.length > 0}
+          hint="默认包含所选落地的全部端点（直连 + 所有中转）；开始勾选后只保留选中的端点，与旧的按中转分配粒度一致"
+          summary={
+            o.relayIds.length ? `已选 ${o.relayIds.length} 个端点` : "全部端点"
+          }
+          title="中转范围"
+        >
+          {scopeInbounds.length === 0 ? (
+            <p className="text-xs text-default-500">
+              先在「来源」里选择落地，这里才能挑端点
+            </p>
+          ) : (
+            <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
+              {scopeInbounds.map((inbound) => {
+                const relays = relaysByInbound[inbound.id] ?? [];
+
+                if (inbound.relayOnly && relays.length === 0) return null;
+
+                return (
+                  <div key={inbound.id} className="space-y-1">
+                    <p className="text-xs text-default-500">
+                      {inbound.name}
+                      <span className="ml-1 text-default-400">
+                        {inbound.protocol} · {inbound.nodeName}
+                      </span>
+                    </p>
+                    {!inbound.relayOnly && (
+                      <Checkbox
+                        className="w-full"
+                        isSelected={endpointChecked(0)}
+                        onValueChange={() => toggleEndpoint(0)}
+                      >
+                        <span className="text-sm">直连</span>
+                      </Checkbox>
+                    )}
+                    {relays.map((relay) => (
+                      <Checkbox
+                        key={relay.id}
+                        className="w-full"
+                        isSelected={endpointChecked(relay.id)}
+                        onValueChange={() => toggleEndpoint(relay.id)}
+                      >
+                        <span className="text-sm">
+                          {relay.name || `中转 ${relay.id}`}
+                        </span>
+                        <span className="ml-1 text-xs text-default-400">
+                          中转
+                        </span>
+                      </Checkbox>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </Section>
 
@@ -1026,6 +1154,11 @@ export default function SubscriptionPage() {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate font-medium">{s.name}</span>
+          {s.isDefault && (
+            <Chip color="primary" size="sm" variant="flat">
+              默认 · 个人链接
+            </Chip>
+          )}
           {!s.enabled ? (
             <Chip size="sm" variant="flat">
               已停用
@@ -1339,6 +1472,11 @@ export default function SubscriptionPage() {
                     ? "旧链接和已导入的配置会立即失效，需要用新链接重新导入。"
                     : "订阅链接立即失效，无法恢复。"}
                 </p>
+                {confirm === "delete" && detail?.isDefault && (
+                  <p className="mt-2 text-sm font-medium text-danger">
+                    这是默认订阅，删除后所有用户的个人链接将切换到下一条订阅，旧链接立即失效。
+                  </p>
+                )}
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>

@@ -208,6 +208,10 @@ func requiresAdmin(path string) bool {
 	// /user-inbound/mine 为普通用户自己的订阅，保持开放
 	case "/api/v1/user-inbound/list", "/api/v1/user-inbound/set":
 		return true
+	// 1.0.12: /user-subscription/list 与 /set 同理（按订阅分配），仅管理员可调用
+	// /user-subscription/mine 为普通用户自己的订阅，保持开放
+	case "/api/v1/user-subscription/list", "/api/v1/user-subscription/set":
+		return true
 	default:
 		return false
 	}
