@@ -860,9 +860,10 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	userID, roleID, authErr := userRoleFromRequest(r)
 	if req.Reset {
-		// 换 token 是管理员操作；普通用户只允许读取 path（"我的订阅"页需要）
-		if _, roleID, err := userRoleFromRequest(r); err != nil || roleID != 0 {
+		// 换 token 是管理员操作（F-001 回归点：reset 仍仅管理员）。
+		if authErr != nil || roleID != 0 {
 			response.WriteJSON(w, response.Err(403, "无权限，仅管理员可操作"))
 			return
 		}
@@ -872,9 +873,51 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+	} else {
+		// F-001：读分支只给被分配的用户（用户 2026-10-20 裁决：默认订阅
+		// 只给被分配的用户）。未分配用户拿到 token 即可绕过订阅分配、
+		// 不带 ?user= 拉全量节点，故响应中不得包含 token。
+		// 注意 authErr 必须先判：claims 解析失败时 roleID 恒为 0，
+		// 若先看 roleID 会把未认证请求误当管理员放行。
+		if authErr != nil {
+			response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
+			return
+		}
+		if roleID != 0 {
+			allowed, err := h.canReadDefaultSubscription(userID, s.ID)
+			if err != nil {
+				response.WriteJSON(w, response.Err(-2, err.Error()))
+				return
+			}
+			if !allowed {
+				response.WriteJSON(w, response.Err(403, "无权限，默认订阅未分配给当前用户"))
+				return
+			}
+		}
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"token": s.Token,
 		"path":  "/api/v1/open_api/sub/" + s.Token,
 	}))
+}
+
+// canReadDefaultSubscription 判断普通用户是否有权读取默认订阅 token：
+// 被分配了该订阅（1.0.12 user_subscription），或持有旧入站分配
+// （user_inbound——「我的订阅」存量 ?user=+sig 回退链靠本端点的 path
+// 拼链接，分配为空集时 openSubscription 本就过滤为空，见 X1 §7）。
+func (h *Handler) canReadDefaultSubscription(userID, subscriptionID int64) (bool, error) {
+	ids, err := h.repo.ListUserSubscriptionIDs(userID)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if id == subscriptionID {
+			return true, nil
+		}
+	}
+	legacy, err := h.repo.ListUserInboundIDs(userID)
+	if err != nil {
+		return false, err
+	}
+	return len(legacy) > 0, nil
 }
