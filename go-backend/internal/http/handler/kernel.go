@@ -733,13 +733,8 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if in.Protocol == kernel.ProtocolSnell {
-		if major := snellMajor(k.Version); in.Settings.SnellVersion > major {
-			releasePortAlloc()
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点安装的是 Snell %s，不支持 v%d 客户端", k.Version, in.Settings.SnellVersion)))
-			return
-		}
-	}
+	// Snell 双向版本判定已并入 kernelVersionGate（上方 :725 同一调用点），
+	// 保存路径不再单设散点检查（S4 移植，原单向检查会放行 6.x+v4/v5）。
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		releasePortAlloc()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1488,6 +1483,14 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 6, 8) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
 	}
+	// Snell 独立内核：服务端/客户端版本双向判定（S4 移植）。6.x 只接
+	// v6 客户端，旧单向检查（客户端版本 > 服务端 major 才拦）会放行
+	// 「6.0.0 内核 + v4/v5 入站」这类必然连不上的组合。
+	if kernelType == kernel.TypeSnell && in.Protocol == kernel.ProtocolSnell {
+		if err := snellServes(version, in.Settings.SnellVersion); err != nil {
+			return err.Error()
+		}
+	}
 	return ""
 }
 
@@ -1512,24 +1515,42 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 
 // snellMajor returns the protocol major version a Snell binary serves.
 func snellMajor(version string) int {
-	if strings.HasPrefix(version, "4.") {
+	switch {
+	case strings.HasPrefix(version, "4."):
 		return 4
+	case strings.HasPrefix(version, "6."):
+		return 6
 	}
 	return 5
 }
 
-// checkSnellVersions refuses to install a Snell binary older than the
-// protocol version an existing inbound advertises to clients.
+// snellServes reports whether a snell-server version accepts clients of a
+// protocol version: 5.x also serves v4, while 6.x serves v6 only（S4 移植，
+// 上游同名判定）。
+func snellServes(version string, client int) error {
+	major := snellMajor(version)
+	switch {
+	case major == 6 && client != 6:
+		return fmt.Errorf("Snell %s 只接受 v6 客户端：请把入站改成 v6，或安装 Snell 5.0.1", version)
+	case client > major:
+		return fmt.Errorf("节点安装的是 Snell %s，不支持 v%d 客户端", version, client)
+	}
+	return nil
+}
+
+// checkSnellVersions refuses to install a Snell binary that cannot serve
+// the protocol version an existing inbound advertises to clients.
 func (h *Handler) checkSnellVersions(kernelID int64, version string) error {
 	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
 	if err != nil {
 		return err
 	}
-	major := snellMajor(version)
 	for _, row := range rows {
 		in, err := inboundFromModel(row)
-		if err == nil && in.Settings.SnellVersion > major {
-			return fmt.Errorf("入站 %s 使用 Snell v%d，不能安装 %s", row.Name, in.Settings.SnellVersion, version)
+		if err == nil {
+			if serr := snellServes(version, in.Settings.SnellVersion); serr != nil {
+				return fmt.Errorf("入站 %s：%v，不能安装 %s", row.Name, serr, version)
+			}
 		}
 	}
 	return nil
