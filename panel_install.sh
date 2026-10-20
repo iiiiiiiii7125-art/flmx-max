@@ -178,8 +178,12 @@ get_docker_compose_url() {
   fi
 }
 
-# 检查 docker-compose 或 docker compose 命令，未安装则自动安装
+# 检查 docker-compose 或 docker compose 命令。
+# 默认（安装路径）：未安装则自动安装。
+# noinstall（更新/迁移/卸载路径）：未检测到 Docker 时直接返回失败——没有
+# Docker 就不可能有容器化的面板部署，绝不为这些操作反向安装 Docker。
 check_docker() {
+  local noinstall="${1:-}"
   if command -v docker-compose &> /dev/null; then
     DOCKER_CMD="docker-compose"
   elif command -v docker &> /dev/null; then
@@ -189,6 +193,8 @@ check_docker() {
       echo "错误：检测到 docker，但不支持 'docker compose' 命令。请安装 docker-compose 或更新 docker 版本。"
       exit 1
     fi
+  elif [[ "$noinstall" == "noinstall" ]]; then
+    return 1
   else
     echo "⚠️  未检测到 Docker，正在自动安装..."
     install_docker || {
@@ -1044,7 +1050,10 @@ EOF
 # 更新功能
 update_panel() {
   echo "🔄 开始更新面板..."
-  check_docker
+  check_docker noinstall || {
+    echo "❌ 未检测到 Docker，本机没有面板部署，无法更新"
+    return 1
+  }
   resolve_panel_deployment || return 1
   ask_proxy_config
   validate_panel_update_environment || return 1
@@ -1109,7 +1118,10 @@ migrate_to_postgres() {
   local current_db_type postgres_db postgres_user postgres_password database_url
 
   echo "🔄 开始迁移 SQLite -> PostgreSQL..."
-  check_docker
+  check_docker noinstall || {
+    echo "❌ 未检测到 Docker，本机没有面板部署，无法迁移"
+    return 1
+  }
 
   if [[ ! -f ".env" ]]; then
     echo "❌ 未找到 .env 文件，请先安装面板"
@@ -1191,7 +1203,15 @@ migrate_to_postgres() {
 # 卸载功能
 uninstall_panel() {
   echo "🗑️ 开始卸载面板..."
-  check_docker
+  if ! check_docker noinstall; then
+    # 没有 Docker 就不可能有容器化的面板部署：只清理本地残留配置文件，
+    # 不为卸载反向安装 Docker，也不下载 compose 对空项目执行 down。
+    echo "未检测到 Docker，本机没有容器化的面板部署，无需卸载。"
+    echo "🧹 清理残留配置文件..."
+    rm -f docker-compose.yml .env
+    echo "✅ 清理完成"
+    return 0
+  fi
 
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "⚠️ 未找到 docker-compose.yml 文件，正在下载以完成卸载..."
