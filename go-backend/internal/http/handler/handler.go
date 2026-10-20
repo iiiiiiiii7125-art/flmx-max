@@ -79,8 +79,8 @@ type Handler struct {
 	// 移植自 kure29/flyx：延迟连续劣化告警的连击计数（node_latency_history.go）。
 	latencyAlerts *latencyAlertTracker
 	relayLatency  *relayLatencyStore
-	notifier   *notifier
-	bestExit   *bestExitManager
+	notifier      *notifier
+	bestExit      *bestExitManager
 }
 
 const monitorTunnelQualityEnabledConfigKey = "monitor_tunnel_quality_enabled"
