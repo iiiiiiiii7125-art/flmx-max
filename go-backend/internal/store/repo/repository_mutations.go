@@ -171,11 +171,11 @@ func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64)
 		}).Error
 }
 
-func (r *Repository) PropagateUserFlowToTunnels(userID int64, flow int64, num int, expTime, flowResetTime int64, flowMiB ...int64) {
+func (r *Repository) PropagateUserFlowToTunnels(userID int64, flow int64, num int, expTime, flowResetTime int64, flowMiB ...int64) error {
 	if r == nil || r.db == nil {
-		return
+		return errors.New("repository not initialized")
 	}
-	_ = r.db.Model(&model.UserTunnel{}).
+	return r.db.Model(&model.UserTunnel{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]interface{}{
 			"flow":            flow,
