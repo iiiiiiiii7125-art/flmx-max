@@ -258,6 +258,28 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 		return &ForwardPortConflict{ForwardID: row.ForwardID, Name: row.Name, Status: row.Status, Source: "forward"}, nil
 	}
 
+	// B4/F-013: 内核入站与转发共享节点端口空间（port_alloc_lock 设计
+	// 明示三表共享），本函数此前只查 forward_port + chain_tunnel，
+	// 入站占用对转发预检不可见——与 HasOtherForwardOnNodePortTx 的
+	// 三表口径分叉。补 node_inbound 分支（external 行 node_id=0 不在此
+	// 列：其端口在远端主机上，不占本地节点端口）。
+	var ib struct {
+		ID   int64
+		Name string
+	}
+	err = tx.Model(&model.NodeInbound{}).
+		Select("id, name").
+		Where("node_id = ? AND port = ?", nodeID, port).
+		Order("id ASC").
+		Limit(1).
+		Scan(&ib).Error
+	if err != nil {
+		return nil, err
+	}
+	if ib.ID != 0 {
+		return &ForwardPortConflict{ForwardID: ib.ID, Name: ib.Name, Status: 1, Source: "inbound"}, nil
+	}
+
 	// O2-003：chain_tunnel 也有 idx_chain_tunnel_node_port 唯一索引，同样占用节点端口。
 	// 预检遗漏它会导致跨表端口冲突漏检。chain_tunnel 的 Port 是 NullInt64，
 	// 只有 port > 0 才真实占用监听端口（GetUsedPortsOnNodeAsMap 同样语义）。

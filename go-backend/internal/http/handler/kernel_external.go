@@ -130,6 +130,13 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// B4/F-132: 去重快照与逐条创建必须在同一临界区——external 行共用
+	// 0 号端口锁。此前快照在锁外、锁仅罩单条 Create，两个并发导入
+	// （或导入与编辑/订阅源更新并发）可同时通过去重检查建出重复行
+	// （F-003 后 DB 索引不再兜底 external 行，应用层去重是唯一防线）。
+	externalMu := repo.AcquirePortAllocLock(0)
+	defer repo.ReleasePortAllocLock(externalMu)
+
 	existing, err := h.repo.ListNodeInbounds()
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -153,10 +160,7 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 		seen[key] = true
 		row, err := externalRow(node, req.RelayOnly, now)
 		if err == nil {
-			// AUDIT-R3 (F2X-001): per-node 端口分配锁（CreateNodeInbound 内部已去锁）。
-			portMu := repo.AcquirePortAllocLock(row.NodeID)
 			err = h.repo.CreateNodeInbound(&row)
-			repo.ReleasePortAllocLock(portMu)
 		}
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
@@ -335,6 +339,9 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 	// IMP-004：修改地址后做去重校验。地址变更不经过导入的 seen 去重表，
 	// 之前可以直接改出与另一个导入节点相同的 host:port，违背"同一地址和
 	// 端口不会重复导入"的约束。
+	// B4/F-132: 去重检查与保存须与导入路径共用 0 号锁串行，此前无锁：
+	// 并发导入可在检查后、保存前建出同 (host,port) 行。
+	externalMu := repo.AcquirePortAllocLock(0)
 	if rows, err := h.repo.ListNodeInbounds(); err == nil {
 		key := externalKey(row.Listen, row.Port)
 		for i := range rows {
@@ -343,15 +350,18 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 			if externalKey(other.Listen, other.Port) == key {
+				repo.ReleasePortAllocLock(externalMu)
 				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在相同地址和端口的导入节点（%s），不能重复", key)))
 				return
 			}
 		}
 	}
 	if err := h.repo.SaveNodeInbound(row); err != nil {
+		repo.ReleasePortAllocLock(externalMu)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	repo.ReleasePortAllocLock(externalMu)
 	// Relay forwards dial the stored address; point them at the new one.
 	if problems := h.retargetRelays(row); len(problems) > 0 {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但部分中转更新失败: " + strings.Join(problems, "；"), TS: row.UpdatedTime})

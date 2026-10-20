@@ -882,45 +882,25 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	inx := h.repo.NextIndex("tunnel")
 	localDomain := h.federationLocalDomain()
 
-	// R5-B4: per-node 端口分配锁（事务之前获取）。
-	// 从请求中解析节点 ID，排序后加锁防死锁。锁内禁止网络调用。
-	var tunnelNodeIDs []int64
-	if outNodes, ok := req["outNodeId"].([]interface{}); ok {
-		for _, item := range outNodes {
-			if m, ok := item.(map[string]interface{}); ok {
-				if nodeID := asInt64(m["nodeId"], 0); nodeID > 0 {
-					tunnelNodeIDs = append(tunnelNodeIDs, nodeID)
-				}
-			}
-		}
-	}
-	sort.Slice(tunnelNodeIDs, func(i, j int) bool { return tunnelNodeIDs[i] < tunnelNodeIDs[j] })
-	// 去重。
-	uniqueNodeIDs := tunnelNodeIDs[:0]
-	for i, id := range tunnelNodeIDs {
-		if i == 0 || id != tunnelNodeIDs[i-1] {
-			uniqueNodeIDs = append(uniqueNodeIDs, id)
-		}
-	}
-	tunnelLocks := make([]*sync.Mutex, 0, len(uniqueNodeIDs))
-	for _, nodeID := range uniqueNodeIDs {
-		tunnelLocks = append(tunnelLocks, repo.AcquirePortAllocLock(nodeID))
-	}
-	defer func() {
-		for i := len(tunnelLocks) - 1; i >= 0; i-- {
-			repo.ReleasePortAllocLock(tunnelLocks[i])
-		}
-	}()
-
-	tx := h.repo.BeginTx()
-	if tx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, tx.Error.Error()))
+	// B4/F-012: 创建流程重排为四段。此前整个创建共用一把「仅含出口
+	// 节点」的端口锁 + 一个长事务，联邦 HTTP（fc.CreateTunnel 与
+	// applyFederationRuntime，单次最长 10s）全在锁+事务内执行——
+	// SQLite 单连接下远端慢响应让全站 DB 排队，且入口/链式节点根本
+	// 不在锁内，违背 port_alloc_lock「锁内禁止网络调用」的自述约束。
+	// 现在：1) 验证段（无锁、throwaway 事务 prepare+校验，算出联邦
+	// CreateTunnel 参数后回滚）；2) 联邦 CreateTunnel 在锁/事务外；
+	// 3) 提交段（锁覆盖入/出/链全部节点，事务内重新 prepare 定型端口
+	// 后建隧道+链路，提交即释锁）；4) applyFederationRuntime 在锁外，
+	// 成功后以短事务落链路（联邦分配口）与绑定，失败释放远端预留并
+	// 删除刚建的隧道，保持「失败不留半成品」的原语义。
+	validationTx := h.repo.BeginTx()
+	if validationTx.Error != nil {
+		response.WriteJSON(w, response.Err(-2, validationTx.Error.Error()))
 		return
 	}
-	defer func() { tx.Rollback() }()
-
-	runtimeState, err := h.prepareTunnelCreateState(tx, req, typeVal, 0)
+	runtimeState, err := h.prepareTunnelCreateState(validationTx, req, typeVal, 0)
 	if err != nil {
+		validationTx.Rollback()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -934,61 +914,102 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 			entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
 		}
 	}
-	if err := h.validateNftablesTunnelStateTx(tx, entryNodeIDs); err != nil {
+	if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
+		validationTx.Rollback()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if err := validateTunnelRuntimeBeforeApply(runtimeState); err != nil {
+		validationTx.Rollback()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 
+	// 联邦 CreateTunnel 参数：只依赖请求与节点记录，在事务内算出、
+	// 回滚后才真正发出 HTTP（R5 C-001 的 localDomain 复用保持不变）。
+	type federationCreateCall struct {
+		url, token, proto, addr string
+		port                    int
+	}
+	var fcCall *federationCreateCall
 	if len(runtimeState.InNodes) > 0 {
 		firstNodeID := runtimeState.InNodes[0].NodeID
-		isRemote, rUrl, rToken, _ := h.repo.GetNodeRemoteFieldsTx(tx, firstNodeID)
-		if isRemote == 1 {
-			fc := client.NewFederationClient()
-
+		isRemote, rUrl, rToken, _ := h.repo.GetNodeRemoteFieldsTx(validationTx, firstNodeID)
+		if isRemote == 1 && typeVal == 1 {
 			targetProto := "tcp"
 			targetPort := 0
 			targetAddr := ""
-
-			if typeVal == 1 {
-				if len(runtimeState.OutNodes) > 0 {
-					outNode := runtimeState.OutNodes[0]
-					outNodeRec := runtimeState.Nodes[outNode.NodeID]
-					targetAddr = processServerAddress(outNodeRec.ServerIP)
-					if outNode.Port > 0 {
-						targetAddr = fmt.Sprintf("%s:%d", targetAddr, outNode.Port)
-					}
-				}
-				if len(runtimeState.InNodes) > 0 {
-					inNodesRaw := asMapSlice(req["inNodeId"])
-					if len(inNodesRaw) > 0 {
-						targetPort = asInt(inNodesRaw[0]["port"], 0)
-						targetProto = defaultString(asString(inNodesRaw[0]["protocol"]), "tcp")
-					}
-				}
-
-				if targetPort > 0 && targetAddr != "" {
-					inNodeRec := runtimeState.Nodes[firstNodeID]
-					if err := validateRemoteNodePort(inNodeRec, targetPort); err != nil {
-						response.WriteJSON(w, response.ErrDefault(err.Error()))
-						return
-					}
-					// R5 C-001: the panel_domain lookup used to go through the
-					// global repo handle here, inside the open SQLite transaction.
-					// With MaxOpenConns(1) that self-deadlocks deterministically.
-					// localDomain was already resolved before BeginTx via
-					// federationLocalDomain(); reuse it instead of querying again.
-					_, err := fc.CreateTunnel(rUrl.String, rToken.String, localDomain, targetProto, targetPort, targetAddr)
-					if err != nil {
-						response.WriteJSON(w, response.ErrDefault("Remote tunnel creation failed: "+err.Error()))
-						return
-					}
+			if len(runtimeState.OutNodes) > 0 {
+				outNode := runtimeState.OutNodes[0]
+				outNodeRec := runtimeState.Nodes[outNode.NodeID]
+				targetAddr = processServerAddress(outNodeRec.ServerIP)
+				if outNode.Port > 0 {
+					targetAddr = fmt.Sprintf("%s:%d", targetAddr, outNode.Port)
 				}
 			}
+			inNodesRaw := asMapSlice(req["inNodeId"])
+			if len(inNodesRaw) > 0 {
+				targetPort = asInt(inNodesRaw[0]["port"], 0)
+				targetProto = defaultString(asString(inNodesRaw[0]["protocol"]), "tcp")
+			}
+			if targetPort > 0 && targetAddr != "" {
+				inNodeRec := runtimeState.Nodes[firstNodeID]
+				if err := validateRemoteNodePort(inNodeRec, targetPort); err != nil {
+					validationTx.Rollback()
+					response.WriteJSON(w, response.ErrDefault(err.Error()))
+					return
+				}
+				fcCall = &federationCreateCall{url: rUrl.String, token: rToken.String, proto: targetProto, addr: targetAddr, port: targetPort}
+			}
 		}
+	}
+	validationTx.Rollback()
+
+	if fcCall != nil {
+		fc := client.NewFederationClient()
+		if _, err := fc.CreateTunnel(fcCall.url, fcCall.token, localDomain, fcCall.proto, fcCall.port, fcCall.addr); err != nil {
+			response.WriteJSON(w, response.ErrDefault("Remote tunnel creation failed: "+err.Error()))
+			return
+		}
+	}
+
+	// 提交段：全节点锁内重新 prepare 定型端口（验证段的选口结果不
+	// 跨段复用，避免锁外窗口被并发占用）。
+	releasePortLocks := acquireSortedPortLocks(tunnelRequestNodeIDs(req))
+	tx := h.repo.BeginTx()
+	if tx.Error != nil {
+		releasePortLocks()
+		response.WriteJSON(w, response.Err(-2, tx.Error.Error()))
+		return
+	}
+	runtimeState, err = h.prepareTunnelCreateState(tx, req, typeVal, 0)
+	if err != nil {
+		tx.Rollback()
+		releasePortLocks()
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	runtimeState.IPPreference = ipPreference
+	if strings.TrimSpace(inIP) == "" {
+		inIP = buildTunnelInIP(runtimeState.InNodes, runtimeState.Nodes, ipPreference)
+	}
+	entryNodeIDs = entryNodeIDs[:0]
+	for _, inNode := range runtimeState.InNodes {
+		if inNode.NodeID > 0 {
+			entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
+		}
+	}
+	if err := h.validateNftablesTunnelStateTx(tx, entryNodeIDs); err != nil {
+		tx.Rollback()
+		releasePortLocks()
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := validateTunnelRuntimeBeforeApply(runtimeState); err != nil {
+		tx.Rollback()
+		releasePortLocks()
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 
 	var tunnelInIP sql.NullString
@@ -1015,38 +1036,65 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		ProbeTargetPort: probeTargetPort,
 	}
 	if err := tx.Create(&tunnel).Error; err != nil {
+		tx.Rollback()
+		releasePortLocks()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	tunnelID := tunnel.ID
 	runtimeState.TunnelID = tunnelID
-	var federationBindings []repo.FederationTunnelBinding
-	var federationReleaseRefs []federationRuntimeReleaseRef
-	federationBindings, federationReleaseRefs, err = h.applyFederationRuntime(runtimeState, localDomain)
-	if err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
 	applyTunnelPortsToRequest(req, runtimeState)
 	if err := h.replaceTunnelChainsTx(tx, tunnelID, req); err != nil {
 		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := h.repo.ReplaceFederationTunnelBindingsTx(tx, tunnelID, federationBindings); err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
+		releasePortLocks()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
+		releasePortLocks()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	releasePortLocks()
+
+	// 联邦运行时（HTTP）在锁/事务之外执行；成功后以短事务落链路
+	// （含联邦分配口）与绑定。失败释放远端预留并删除刚建的隧道。
+	federationBindings, federationReleaseRefs, err := h.applyFederationRuntime(runtimeState, localDomain)
+	if err != nil {
+		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
+		_ = h.deleteTunnelByID(tunnelID)
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if len(federationBindings) > 0 || len(federationReleaseRefs) > 0 {
+		applyTunnelPortsToRequest(req, runtimeState)
+		bindTx := h.repo.BeginTx()
+		if bindTx.Error != nil {
+			err := errors.Join(bindTx.Error, h.releaseFederationRuntimeRefs(federationReleaseRefs))
+			_ = h.deleteTunnelByID(tunnelID)
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		bindErr := func() error {
+			defer bindTx.Rollback()
+			if err := h.repo.DeleteChainTunnelsByTunnelTx(bindTx, tunnelID); err != nil {
+				return err
+			}
+			if err := h.replaceTunnelChainsTx(bindTx, tunnelID, req); err != nil {
+				return err
+			}
+			if err := h.repo.ReplaceFederationTunnelBindingsTx(bindTx, tunnelID, federationBindings); err != nil {
+				return err
+			}
+			return bindTx.Commit().Error
+		}()
+		if bindErr != nil {
+			err := errors.Join(bindErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
+			_ = h.deleteTunnelByID(tunnelID)
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	if typeVal == 2 {
 		createdChains, createdServices, applyErr := h.applyTunnelRuntime(runtimeState)
@@ -1177,6 +1225,49 @@ func (h *Handler) tunnelGet(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 }
 
+// acquireSortedPortLocks takes the per-node port-allocation locks for
+// the given node IDs in ascending order (deadlock-free) and returns the
+// release function. B4/F-014.
+func acquireSortedPortLocks(nodeIDs []int64) func() {
+	ids := uniqueInt64s(nodeIDs)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	locks := make([]*sync.Mutex, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			locks = append(locks, repo.AcquirePortAllocLock(id))
+		}
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			repo.ReleasePortAllocLock(locks[i])
+		}
+	}
+}
+
+// tunnelRequestNodeIDs collects every node ID referenced by a tunnel
+// create/update request (entry, exit, and chain hops).
+func tunnelRequestNodeIDs(req map[string]interface{}) []int64 {
+	ids := make([]int64, 0)
+	for _, item := range asMapSlice(req["inNodeId"]) {
+		if id := asInt64(item["nodeId"], 0); id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	for _, item := range asMapSlice(req["outNodeId"]) {
+		if id := asInt64(item["nodeId"], 0); id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	for _, hopRaw := range asAnySlice(req["chainNodes"]) {
+		for _, item := range asMapSlice(hopRaw) {
+			if id := asInt64(item["nodeId"], 0); id > 0 {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
 func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -1237,61 +1328,79 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UnixMilli()
 	localDomain := h.federationLocalDomain()
 
-	// Check the complete request and known database constraints before changing
-	// any existing listener or remote binding.
-	validationTx := h.repo.BeginTx()
-	if validationTx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, validationTx.Error.Error()))
-		return
+	// B4/F-014: 隧道更新此前全程无 per-node 端口锁——验证事务与正式
+	// 提交之间隔着联邦网络调用，与并发的转发/入站/隧道创建存在跨表
+	// 「先查后写」窗口。现在按 A3 口径两段加锁：验证段持锁（旧+新全部
+	// 涉及节点，排序获取），网络段锁外，提交段重新持锁并在锁内复检
+	// 最终显式端口占用后再提交。errCode 复刻原各失败点的响应口径
+	// （-2 = 系统错，0 = 默认业务错）。
+	lockNodeIDs := append([]int64{}, oldEntryNodeIDs...)
+	for _, row := range oldChainRows {
+		lockNodeIDs = append(lockNodeIDs, row.NodeID)
 	}
-	defer validationTx.Rollback()
-	runtimeState, err := h.prepareTunnelCreateState(validationTx, req, typeVal, id)
-	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-	runtimeState.TunnelID = id
-	runtimeState.IPPreference = ipPreference
-	entryNodeIDs := make([]int64, 0, len(runtimeState.InNodes))
-	for _, inNode := range runtimeState.InNodes {
-		if inNode.NodeID > 0 {
-			entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
+	lockNodeIDs = append(lockNodeIDs, tunnelRequestNodeIDs(req)...)
+
+	var runtimeState *tunnelCreateState
+	var inIp string
+	var updateProtocol string
+	vErr, vCode := func() (error, int) {
+		release := acquireSortedPortLocks(lockNodeIDs)
+		defer release()
+		// Check the complete request and known database constraints before changing
+		// any existing listener or remote binding.
+		validationTx := h.repo.BeginTx()
+		if validationTx.Error != nil {
+			return validationTx.Error, -2
 		}
-	}
-	if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-
-	if err := h.validateTunnelEntryPortConflictsForNewEntriesTx(validationTx, id, oldEntryNodeIDs, entryNodeIDs); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-	if err := validateTunnelRuntimeBeforeApply(runtimeState); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-
-	inIp := buildTunnelInIP(runtimeState.InNodes, runtimeState.Nodes, ipPreference)
-
-	updateProtocol := "tls"
-	if len(runtimeState.OutNodes) > 0 && strings.TrimSpace(runtimeState.OutNodes[0].Protocol) != "" {
-		updateProtocol = strings.TrimSpace(runtimeState.OutNodes[0].Protocol)
-	} else if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
-		updateProtocol = strings.TrimSpace(runtimeState.InNodes[0].Protocol)
-	}
-	if err := h.repo.UpdateTunnelTx(validationTx, id, asString(req["name"]), typeVal,
-		asInt64(req["flow"], 1), asFloat(req["trafficRatio"], 1.0), asInt(req["status"], 1),
-		inIp, ipPreference, updateProtocol, probeTargetHost, probeTargetPort, now); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := h.validateTunnelChainReplacementTx(validationTx, runtimeState); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := validationTx.Rollback().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		defer validationTx.Rollback()
+		var err error
+		runtimeState, err = h.prepareTunnelCreateState(validationTx, req, typeVal, id)
+		if err != nil {
+			return err, 0
+		}
+		runtimeState.TunnelID = id
+		runtimeState.IPPreference = ipPreference
+		entryNodeIDs := make([]int64, 0, len(runtimeState.InNodes))
+		for _, inNode := range runtimeState.InNodes {
+			if inNode.NodeID > 0 {
+				entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
+			}
+		}
+		if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
+			return err, 0
+		}
+		if err := h.validateTunnelEntryPortConflictsForNewEntriesTx(validationTx, id, oldEntryNodeIDs, entryNodeIDs); err != nil {
+			return err, 0
+		}
+		if err := validateTunnelRuntimeBeforeApply(runtimeState); err != nil {
+			return err, 0
+		}
+		inIp = buildTunnelInIP(runtimeState.InNodes, runtimeState.Nodes, ipPreference)
+		updateProtocol = "tls"
+		if len(runtimeState.OutNodes) > 0 && strings.TrimSpace(runtimeState.OutNodes[0].Protocol) != "" {
+			updateProtocol = strings.TrimSpace(runtimeState.OutNodes[0].Protocol)
+		} else if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
+			updateProtocol = strings.TrimSpace(runtimeState.InNodes[0].Protocol)
+		}
+		if err := h.repo.UpdateTunnelTx(validationTx, id, asString(req["name"]), typeVal,
+			asInt64(req["flow"], 1), asFloat(req["trafficRatio"], 1.0), asInt(req["status"], 1),
+			inIp, ipPreference, updateProtocol, probeTargetHost, probeTargetPort, now); err != nil {
+			return err, -2
+		}
+		if err := h.validateTunnelChainReplacementTx(validationTx, runtimeState); err != nil {
+			return err, -2
+		}
+		if err := validationTx.Rollback().Error; err != nil {
+			return err, -2
+		}
+		return nil, 0
+	}()
+	if vErr != nil {
+		if vCode == -2 {
+			response.WriteJSON(w, response.Err(-2, vErr.Error()))
+		} else {
+			response.WriteJSON(w, response.ErrDefault(vErr.Error()))
+		}
 		return
 	}
 	if err := h.cleanupFederationRuntime(id); err != nil {
@@ -1312,76 +1421,93 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	applyTunnelPortsToRequest(req, runtimeState)
 
-	tx := h.repo.BeginTx()
-	if tx.Error != nil {
-		tx.Rollback()
-		err := errors.Join(tx.Error, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	defer func() { tx.Rollback() }()
-
-	if err := h.repo.UpdateTunnelTx(
-		tx,
-		id,
-		asString(req["name"]),
-		typeVal,
-		asInt64(req["flow"], 1),
-		asFloat(req["trafficRatio"], 1.0),
-		asInt(req["status"], 1),
-		inIp,
-		ipPreference,
-		updateProtocol,
-		probeTargetHost,
-		probeTargetPort,
-		now,
-	); err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-
-	if err := h.repo.DeleteChainTunnelsByTunnelTx(tx, id); err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := h.replaceTunnelChainsTx(tx, id, req); err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := h.repo.ReplaceFederationTunnelBindingsTx(tx, id, federationBindings); err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-
-	newEntryNodeIDs := make([]int64, 0, len(runtimeState.InNodes))
-	for _, in := range runtimeState.InNodes {
-		if in.NodeID > 0 {
-			newEntryNodeIDs = append(newEntryNodeIDs, in.NodeID)
+	// B4/F-014 提交段：重新持锁，锁内先复检最终显式端口（联邦下发后
+	// 的 runtimeState 口径）的跨表占用，再执行正式写入并提交；锁在
+	// 提交/回滚后即释放，后续运行时下发（网络）不持锁。
+	cErr, cCode := func() (error, int) {
+		release := acquireSortedPortLocks(lockNodeIDs)
+		defer release()
+		tx := h.repo.BeginTx()
+		if tx.Error != nil {
+			return tx.Error, -2
 		}
-	}
-	if err := h.validateTunnelEntryPortConflictsForNewEntriesTx(tx, id, oldEntryNodeIDs, newEntryNodeIDs); err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		defer func() { tx.Rollback() }()
+
+		finalPortNodes := append([]tunnelRuntimeNode{}, runtimeState.OutNodes...)
+		for _, hop := range runtimeState.ChainHops {
+			finalPortNodes = append(finalPortNodes, hop...)
+		}
+		for _, n := range finalPortNodes {
+			if n.Port <= 0 {
+				continue
+			}
+			node := runtimeState.Nodes[n.NodeID]
+			if node == nil || node.IsRemote == 1 {
+				continue
+			}
+			occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, id)
+			if err != nil {
+				return err, -2
+			}
+			if occupied {
+				return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, n.Port), 0
+			}
+		}
+
+		if err := h.repo.UpdateTunnelTx(
+			tx,
+			id,
+			asString(req["name"]),
+			typeVal,
+			asInt64(req["flow"], 1),
+			asFloat(req["trafficRatio"], 1.0),
+			asInt(req["status"], 1),
+			inIp,
+			ipPreference,
+			updateProtocol,
+			probeTargetHost,
+			probeTargetPort,
+			now,
+		); err != nil {
+			return err, -2
+		}
+
+		if err := h.repo.DeleteChainTunnelsByTunnelTx(tx, id); err != nil {
+			return err, -2
+		}
+		if err := h.replaceTunnelChainsTx(tx, id, req); err != nil {
+			return err, -2
+		}
+		if err := h.repo.ReplaceFederationTunnelBindingsTx(tx, id, federationBindings); err != nil {
+			return err, -2
+		}
+
+		newEntryNodeIDs := make([]int64, 0, len(runtimeState.InNodes))
+		for _, in := range runtimeState.InNodes {
+			if in.NodeID > 0 {
+				newEntryNodeIDs = append(newEntryNodeIDs, in.NodeID)
+			}
+		}
+		if err := h.validateTunnelEntryPortConflictsForNewEntriesTx(tx, id, oldEntryNodeIDs, newEntryNodeIDs); err != nil {
+			return err, 0
+		}
+
+		if err := tx.Commit().Error; err != nil {
+			return err, -2
+		}
+		return nil, 0
+	}()
+	if cErr != nil {
+		joined := errors.Join(cErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
+		if cCode == -2 {
+			response.WriteJSON(w, response.Err(-2, joined.Error()))
+		} else {
+			response.WriteJSON(w, response.ErrDefault(joined.Error()))
+		}
 		return
 	}
 
-	if err := tx.Commit().Error; err != nil {
-		tx.Rollback()
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-
-	newEntryNodeIDs, _ = h.tunnelEntryNodeIDs(id)
+	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
 		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
 		h.syncTunnelForwardsEntryPorts(id, newEntryNodeIDs)
@@ -1723,7 +1849,15 @@ func (h *Handler) syncTunnelForwardsEntryPorts(tunnelID int64, entryNodeIDs []in
 			}
 			entries = append(entries, forwardPortReplaceEntry{NodeID: nid, Port: port, InIP: inIP})
 		}
-		_ = h.repo.ReplaceForwardPorts(f.ID, entries)
+		// B4/F-133: 此前 `_ =` 吞掉 ReplaceForwardPorts 的错误——新入口
+		// 选口在锁外（resolvePortForNewEntryNode 仅建议性预检），与并发
+		// 分配撞口时替换静默失败、转发留在旧入口集合上无人知晓。现在
+		// ReplaceForwardPorts 已在自身锁内三表复检（F-013），失败必须
+		// 留痕：记录 tunnel/forward 以便排查（本函数是提交后同步，无
+		// 法再回滚隧道更新，但绝不静默）。
+		if err := h.repo.ReplaceForwardPorts(f.ID, entries); err != nil {
+			log.Printf("sync tunnel forwards entry ports failed tunnel_id=%d forward_id=%d err=%v", tunnelID, f.ID, err)
+		}
 	}
 }
 
@@ -3382,12 +3516,11 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		oldNodeIDs := forwardPortNodeIDs(oldPorts)
+		// B4/F-013: 此前先 UpdateForwardTunnel 落库再验口，验不过靠回滚
+		// 恢复——写后验的窗口里转发短暂归属错误隧道且回滚本身可失败。
+		// 改为先定口、先验口（目标入口节点的范围 + 三表占用，排除自身），
+		// 全部通过后才执行换隧道与端口替换。
 		port := h.repo.GetMinForwardPort(id)
-		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
-			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-			continue
-		}
 		p := 0
 		if port.Valid {
 			p = int(port.Int64)
@@ -3427,7 +3560,11 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		if !portRangeOk {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, portRangeErr)
-			h.rollbackForwardMutation(forward, oldPorts)
+			continue
+		}
+		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
 		if err := h.replaceForwardPorts(id, req.TargetTunnelID, p, ""); err != nil {
@@ -3960,6 +4097,47 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 	for _, hop := range state.ChainHops {
 		for _, chainNode := range hop {
 			if err := validateRemoteNodePort(state.Nodes[chainNode.NodeID], chainNode.Port); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// B4/F-015: 显式指定出口/链式端口此前只过 validateRemoteNodePort
+	// （对本地节点恒 nil）——范围外、超 65535、与转发/入站/其他隧道
+	// 链路撞口全部落库，运行时才 bind 失败。本地节点显式口补齐
+	// 「有效范围 + 节点规格 + 跨表占用」三检（与转发 inPort 的
+	// O2-001 口径一致）；自动分配的口由 Pick* 保证，不重复检。
+	validateExplicitPort := func(n tunnelRuntimeNode) error {
+		if n.Port <= 0 {
+			return nil
+		}
+		if n.Port > 65535 {
+			return fmt.Errorf("端口 %d 超出有效范围 1-65535", n.Port)
+		}
+		node := state.Nodes[n.NodeID]
+		if node == nil || node.IsRemote == 1 {
+			return nil
+		}
+		if err := validateLocalNodePort(node, n.Port); err != nil {
+			return err
+		}
+		occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, excludeTunnelID)
+		if err != nil {
+			return err
+		}
+		if occupied {
+			return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, n.Port)
+		}
+		return nil
+	}
+	for _, outNode := range state.OutNodes {
+		if err := validateExplicitPort(outNode); err != nil {
+			return nil, err
+		}
+	}
+	for _, hop := range state.ChainHops {
+		for _, chainNode := range hop {
+			if err := validateExplicitPort(chainNode); err != nil {
 				return nil, err
 			}
 		}
@@ -5947,14 +6125,19 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 	if portRange == "" {
 		return nil
 	}
-	minPort, maxPort := parsePortRangeMinMax(portRange)
-	if minPort <= 0 || maxPort <= 0 {
-		return nil
+	// B4/F-016: 端口规格是逗号多段的集合语义（与自动分配
+	// parsePortRangeSpec 一致）。此前压成 min-max 区间校验，段间空隙
+	// 端口被误放行——校验通过但自动分配永不选、agent 按规格不认。
+	ports, err := parsePorts(portRange)
+	if err != nil || len(ports) == 0 {
+		return nil // 规格不可解析时保持既有宽松行为，不新设拒绝面
 	}
-	if port < minPort || port > maxPort {
-		return fmt.Errorf("端口 %d 超出节点 %s 允许范围 %d-%d", port, node.Name, minPort, maxPort)
+	for _, p := range ports {
+		if p == port {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内", port, node.Name, portRange)
 }
 
 func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, currentForwardID int64) error {

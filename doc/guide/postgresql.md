@@ -1,6 +1,11 @@
 # PostgreSQL 数据库指南
 
-FLMX 默认使用 SQLite 作为数据库，同时也内置了对 PostgreSQL 的完整支持。本文档介绍如何使用 PostgreSQL 部署面板、从 SQLite 迁移以及日常维护。
+FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构与 R5-B4 端口/用户名唯一索引（含 node_inbound 部分唯一索引）在启动时对两种数据库同等建立，迁移状态接口的报告对 PostgreSQL 同样有效。本文档介绍如何使用 PostgreSQL 部署面板、从 SQLite 迁移以及日常维护。
+
+已知限制（与 SQLite 部署相同或特有）：
+
+- 面板当前按**单实例**部署设计：端口分配等进程内锁不跨实例协调，PostgreSQL 部署同样不要多实例并行运行面板。
+- PostgreSQL 侧的自动化回归覆盖小于 SQLite（CI 仅含一条 PostgreSQL 契约测试），升级前建议先在测试环境验证备份恢复与订阅下发。
 
 ## 一、SQLite 与 PostgreSQL 对比
 
