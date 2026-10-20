@@ -58,6 +58,8 @@ import type {
   InboundRelayApiItem,
   SubInfoApiData,
   NodeRoute,
+  LatencyTrend,
+  RelayLatency,
 } from "./types";
 
 import axios from "axios";
@@ -893,6 +895,13 @@ export const getSubInfo = (reset = false) =>
   Network.post<SubInfoApiData>("/inbound/sub/info", { reset });
 export const getInboundRelays = (inboundId: number) =>
   Network.post<InboundRelayApiItem[]>("/inbound/relay/list", { inboundId });
+/** 立即测量中转线路（空 ids = 全部）及其入口节点的延迟。 */
+export const probeInboundRelays = (ids: number[] = []) =>
+  Network.post<Record<string, RelayLatency>>(
+    "/inbound/relay/probe",
+    { ids },
+    { timeout: 90000 },
+  );
 export const createInboundRelay = (data: {
   inboundId: number;
   tunnelId: number;
@@ -962,6 +971,9 @@ export const setNodeLatencyTargets = (data: {
   points: string[];
   pinned: string[];
 }) => Network.post("/node/latency/targets", data, { timeout: 60000 });
+/** 节点到各测试点最近 hours 小时的延迟趋势。 */
+export const getNodeLatencyHistory = (id: number, hours: number) =>
+  Network.post<LatencyTrend>("/node/latency/history", { id, hours });
 /** 节点调优的单个 sysctl 参数。 */
 export interface NodeTuneSetting {
   key: string;
