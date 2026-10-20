@@ -59,7 +59,7 @@ func passkeyConfig() (*webauthn.WebAuthn, string) {
 	origin := u.Scheme + "://" + u.Host
 	wa, err := webauthn.New(&webauthn.Config{
 		RPID:                   host,
-		RPDisplayName:          "FLVX",
+		RPDisplayName:          "FLVX-MAX",
 		RPOrigins:              []string{origin},
 		AuthenticatorSelection: protocol.AuthenticatorSelection{UserVerification: protocol.VerificationRequired, ResidentKey: protocol.ResidentKeyRequirementRequired},
 		Timeouts: webauthn.TimeoutsConfig{

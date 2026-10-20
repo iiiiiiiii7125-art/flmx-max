@@ -2,7 +2,7 @@ import { defineConfig } from "vitepress";
 
 export default defineConfig({
   lang: "zh-CN",
-  title: "FLVX",
+  title: "FLVX-MAX",
   description: "转发 + 节点搭建面板",
   base: "/flvx-max/",
   cleanUrls: true,

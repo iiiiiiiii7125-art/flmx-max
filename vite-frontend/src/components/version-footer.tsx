@@ -110,7 +110,7 @@ export function VersionFooter({
             rel="noopener noreferrer"
             target="_blank"
           >
-            FLVX
+            FLVX-MAX
           </a>
         </p>
       )}
