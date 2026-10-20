@@ -76,6 +76,9 @@ type Handler struct {
 	nodeLatency *nodeLatencyStore
 	// 移植自 kure29/flyx：节点回程路由追踪结果缓存。
 	nodeRoutes *nodeRouteStore
+	// 移植自 kure29/flyx：延迟连续劣化告警的连击计数（node_latency_history.go）。
+	latencyAlerts *latencyAlertTracker
+	relayLatency  *relayLatencyStore
 	notifier   *notifier
 	bestExit   *bestExitManager
 }
@@ -143,6 +146,8 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		externalProbes:           newExternalProbeStore(),
 		nodeLatency:              newNodeLatencyStore(),
 		nodeRoutes:               newNodeRouteStore(),
+		latencyAlerts:            newLatencyAlertTracker(),
+		relayLatency:             newRelayLatencyStore(),
 		notifier:                 newNotifier(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
@@ -230,6 +235,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// 移植自 kure29/flyx：节点延迟测试。
 	mux.HandleFunc("/api/v1/node/latency/probe", h.nodeLatencyProbe)
 	mux.HandleFunc("/api/v1/node/latency/targets", h.nodeLatencyTargetsSet)
+	mux.HandleFunc("/api/v1/node/latency/history", h.nodeLatencyHistory)
 	// 移植自 kure29/flyx：节点网络调优。
 	mux.HandleFunc("/api/v1/node/tune", h.nodeTune)
 	// 移植自 kure29/flyx：回程路由追踪。
@@ -277,6 +283,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/inbound/relay/list", h.inboundRelayList)
 	mux.HandleFunc("/api/v1/inbound/relay/create", h.inboundRelayCreate)
 	mux.HandleFunc("/api/v1/inbound/relay/delete", h.inboundRelayDelete)
+	mux.HandleFunc("/api/v1/inbound/relay/probe", h.inboundRelayProbe)
 	mux.HandleFunc("/api/v1/user-inbound/list", h.getUserInbounds)
 	mux.HandleFunc("/api/v1/user-inbound/set", h.setUserInbounds)
 	mux.HandleFunc("/api/v1/user-inbound/mine", h.getMyInbounds)
