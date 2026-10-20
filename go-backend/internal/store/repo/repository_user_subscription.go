@@ -85,3 +85,47 @@ func (r *Repository) DeleteUserSubscriptionsBySubscription(subscriptionID int64)
 	}
 	return r.db.Where("subscription_id = ?", subscriptionID).Delete(&model.UserSubscription{}).Error
 }
+
+// --- B4/F-058 + F-136: 订阅删除的墓碑与原子完成 -------------------------
+
+// MarkSubscriptionPendingDelete marks a subscription for deletion and
+// disables it immediately (link stops working, credentials leave the
+// rendered payload). The row is hard-deleted only after the credential
+// removal push succeeds (see DeleteSubscriptionWithAssignments).
+func (r *Repository) MarkSubscriptionPendingDelete(id int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.Subscription{}).Where("id = ?", id).
+		Updates(map[string]interface{}{"pending_delete": 1, "enabled": 0}).Error
+}
+
+// ListPendingDeleteSubscriptions returns subscriptions waiting for their
+// deletion push to complete.
+func (r *Repository) ListPendingDeleteSubscriptions() ([]model.Subscription, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []model.Subscription
+	err := r.db.Where("pending_delete = ?", 1).Order("id ASC").Find(&rows).Error
+	return rows, err
+}
+
+// DeleteSubscriptionWithAssignments hard-deletes a subscription together
+// with its traffic counters and user assignments in ONE transaction
+// (F-136: the previous two-step handler flow could strand assignments
+// when the second call failed).
+func (r *Repository) DeleteSubscriptionWithAssignments(id int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("subscription_id = ?", id).Delete(&model.SubscriptionCounter{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("subscription_id = ?", id).Delete(&model.UserSubscription{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", id).Delete(&model.Subscription{}).Error
+	})
+}

@@ -218,13 +218,18 @@ func (r *Repository) ListUsedPortsOnNode(nodeID int64) ([]int, error) {
 }
 
 // ListTunnelIDsByNamePrefix returns all tunnel IDs whose name starts with the given prefix.
+//
+// B4/F-072: 此前用 LIKE prefix+"%"，存在双后端语义分叉——SQLite 的 LIKE
+// 对 ASCII 大小写不敏感、PostgreSQL 敏感；且前缀中的 %/_ 未转义会被当
+// 通配符（联邦隧道名含下划线时误匹配）。改用 substr 前缀比较：两后端
+// 均为「按字符的前缀精确匹配、大小写敏感」，且天然免疫通配符。
 func (r *Repository) ListTunnelIDsByNamePrefix(prefix string) ([]int64, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
 	var ids []int64
 	err := r.db.Model(&model.Tunnel{}).
-		Where("name LIKE ?", prefix+"%").
+		Where("substr(name, 1, ?) = ?", len([]rune(prefix)), prefix).
 		Order("id ASC").
 		Pluck("id", &ids).Error
 	if err != nil {

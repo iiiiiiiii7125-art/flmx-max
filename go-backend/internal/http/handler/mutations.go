@@ -371,6 +371,31 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// B4/F-057: 此前删用户直接 DB 级联其全部转发，gost 服务不删、nft 不
+	// 标 pending，孤儿监听继续转发。先按隧道分组逐条走与删隧道相同
+	// 的数据面清理（cleanupForwardsDataPlane），全部成功后才级联删库；
+	// 任一失败中止删用户（单条转发可用 force-delete 兜底）。
+	userForwards, err := h.repo.ListForwardsByUser(id)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	byTunnel := make(map[int64][]model.ForwardRecord)
+	tunnelOrder := make([]int64, 0)
+	for _, fwd := range userForwards {
+		if _, ok := byTunnel[fwd.TunnelID]; !ok {
+			tunnelOrder = append(tunnelOrder, fwd.TunnelID)
+		}
+		byTunnel[fwd.TunnelID] = append(byTunnel[fwd.TunnelID], fwd)
+	}
+	sort.Slice(tunnelOrder, func(i, j int) bool { return tunnelOrder[i] < tunnelOrder[j] })
+	for _, tunnelID := range tunnelOrder {
+		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户"); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	}
+
 	if err := h.repo.DeleteUserCascade(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -785,6 +810,11 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, id := range ids {
 		_ = h.deleteNodeByID(id)
+		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
+		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
+		if h.nftablesManager != nil {
+			h.nftablesManager.ReleaseNode(id)
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -5162,8 +5192,45 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 	return nil
 }
 
+// deleteNodeByID removes a node. B4/F-056: 此前只有 DB 级联，注释声称
+// 的「调用方 pending 流程」全仓不存在——节点上驻留的转发服务、nft 规则
+// 与内核在 DB 删除后成为无人收敛的孤儿。现在删库前做数据面清理尝试：
+//   - 在该节点上有入口的转发：逐条删除该节点上的服务
+//     （deleteForwardServicesOnNodeBatch，覆盖隧道入口在其他节点时
+//     本节点上的跨节点残留）；
+//   - nftables 节点：尝试 clearNftablesNode（清节点 nft 表 + 绑定）。
+//
+// 与删隧道/删用户不同，这里失败只记录不中止：删除「已经死掉的节点」
+// 本身就是删节点的主要场景，不能因节点不可达而永远删不掉；节点自身
+// 的数据面随节点下线消亡，未清成功的残留以日志形式留痕（节点 ID +
+// 转发 ID），不静默丢失。
 func (h *Handler) deleteNodeByID(id int64) error {
-	return h.repo.DeleteNodeCascade(id)
+	if h != nil && h.repo != nil {
+		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
+			for _, forwardID := range forwardIDs {
+				fwd, err := h.repo.GetForwardRecord(forwardID)
+				if err != nil || fwd == nil {
+					continue
+				}
+				if delErr := h.deleteForwardServicesOnNodeBatch(fwd, id); delErr != nil {
+					log.Printf("node delete: forward service cleanup failed node_id=%d forward_id=%d err=%v (continuing; node may be offline)", id, forwardID, delErr)
+				}
+			}
+		} else {
+			log.Printf("node delete: list forwards failed node_id=%d err=%v (continuing)", id, err)
+		}
+		if usesNft, err := h.nodeUsesNftables(id); err == nil && usesNft {
+			if clearErr := h.clearNftablesNode(id); clearErr != nil {
+				log.Printf("node delete: nftables clear failed node_id=%d err=%v (continuing; node may be offline)", id, clearErr)
+			}
+		}
+	}
+	if err := h.repo.DeleteNodeCascade(id); err != nil {
+		return err
+	}
+	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
+	repo.CleanupPortAllocLock(id)
+	return nil
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {

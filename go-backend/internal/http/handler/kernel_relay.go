@@ -519,6 +519,12 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// B4/F-058: 删除墓碑对订阅链接等同已删除（404）——删除对用户立即
+	// 生效，只有节点侧凭据下发允许后台重试。
+	if sub.PendingDelete == 1 {
+		http.NotFound(w, r)
+		return
+	}
 	if !subActive(sub, time.Now()) {
 		http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
 		return

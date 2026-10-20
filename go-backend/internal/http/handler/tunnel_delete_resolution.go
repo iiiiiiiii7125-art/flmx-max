@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/store/model"
 )
 
 const tunnelDeletePreviewSampleLimit = 5
@@ -659,6 +660,13 @@ func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
 	if err != nil {
 		return err
 	}
+	return h.cleanupForwardsDataPlane(tunnelID, forwards, "隧道")
+}
+
+// cleanupForwardsDataPlane cleans the data plane for an explicit list of
+// forwards that all belong to one tunnel, then deletes their DB rows.
+// scope names the owning object in abort messages ("隧道" / "用户").
+func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string) error {
 	if len(forwards) == 0 {
 		return nil
 	}
@@ -678,13 +686,13 @@ func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
 			}
 		}
 		if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
-			return fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，隧道未删除", len(forwards))
+			return fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，%s未删除", len(forwards), scope)
 		}
 		for i := range forwards {
 			if err := h.deleteForwardByID(forwards[i].ID); err != nil {
 				// 同 forwardDelete 的 D6：数据面已变更（规则已下线），
 				// DB 删除失败记日志，靠后续对账收敛。
-				log.Printf("tunnel delete: forward db delete after nft reconcile failed tunnel_id=%d forward_id=%d err=%v", tunnelID, forwards[i].ID, err)
+				log.Printf("forward delete: db delete after nft reconcile failed tunnel_id=%d forward_id=%d err=%v", tunnelID, forwards[i].ID, err)
 				return err
 			}
 		}
@@ -693,7 +701,7 @@ func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
 	for i := range forwards {
 		fwd := forwards[i]
 		if err := h.controlForwardServices(&fwd, "DeleteService", true); err != nil {
-			return fmt.Errorf("转发 %s 数据面清理失败，隧道未删除: %w", fwd.Name, err)
+			return fmt.Errorf("转发 %s 数据面清理失败，%s未删除: %w", fwd.Name, scope, err)
 		}
 		if err := h.deleteForwardByID(fwd.ID); err != nil {
 			return err

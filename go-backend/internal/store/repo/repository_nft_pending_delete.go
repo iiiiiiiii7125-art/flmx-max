@@ -141,7 +141,10 @@ func (r *Repository) ListDueNftPendingDeletes(now time.Time, limit int) ([]model
 		limit = 100
 	}
 	var rows []model.NftPendingDelete
-	err := r.db.Where("next_retry_at <= ?", now.UnixMilli()).
+	// B4/F-017: next_retry_at=0 是 RecordNftPendingDeleteAttempt 在 24h
+	// 耗尽时写入的「停止调度」哨兵；0 <= 任意 now 恒真，不排除会让耗尽行
+	// 每 60s 被反复扫出、retry_count 无界增长，与注释声明矛盾。
+	err := r.db.Where("next_retry_at > 0 AND next_retry_at <= ?", now.UnixMilli()).
 		Order("next_retry_at ASC").Limit(limit).Find(&rows).Error
 	return rows, err
 }

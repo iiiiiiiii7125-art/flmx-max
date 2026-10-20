@@ -98,6 +98,11 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 				return err
 			}
+			// B4/F-010（变体）: 单删入站（DeleteNodeInbound）会清 user_inbound，
+			// 删内核/删节点级联此前独漏，孤儿分配行可阻断后续订阅分配保存。
+			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
+				return err
+			}
 		}
 		if err := tx.Where("kernel_id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
 			return err
@@ -119,6 +124,15 @@ func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
 			return err
 		}
 		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+			return err
+		}
+		// B4/F-010: 节点级联删入站时同步清 user_inbound（按 inbound_id），
+		// 与 DeleteNodeInbound 的口径一致；以本节点入站为中转目标的分配行
+		// （relay_id）同样成为孤儿，一并清理。
+		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("relay_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
 			return err
 		}
 	}
