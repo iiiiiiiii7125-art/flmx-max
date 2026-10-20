@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -126,6 +127,12 @@ func main() {
 	distro := socket.DetectDistro()
 	fullVersion := fmt.Sprintf("%s (%s/%s)", version, distro, runtime.GOARCH)
 	service.SetHTTPReportURL(config.Addr, config.Secret)
+	// F-005: 流量上报 seq 落盘到 config.json 同目录（与 gost.json、
+	// 内核 state.json 同级的持久目录），不再放 os.TempDir()——/tmp
+	// 被清空后 seq 归零会被面板按重放静默丢弃、流量漏计。
+	if abs, err := filepath.Abs("config.json"); err == nil {
+		service.SetSeqFilePath(filepath.Join(filepath.Dir(abs), "flmx_agent_seq.json"))
+	}
 
 	p := &program{
 		startReporter: func() reporter {

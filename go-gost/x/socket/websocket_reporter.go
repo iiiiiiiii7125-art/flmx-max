@@ -638,16 +638,17 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 	}
 }
 
-// encryptPayload 加密 JSON 数据，返回加密后的消息字节（若加密失败则回退到原始数据）
-func (w *WebSocketReporter) encryptPayload(jsonData []byte) []byte {
+// encryptPayload 加密 JSON 数据，返回加密后的消息字节。
+// F-089: fail-closed——加密器缺失或加密失败时返回错误，调用方不得
+// 回退明文发送（旧回退与全仓 fail-closed 基调不一致且掩盖配置错误）。
+func (w *WebSocketReporter) encryptPayload(jsonData []byte) ([]byte, error) {
 	if w.aesCrypto == nil {
-		return jsonData
+		return nil, fmt.Errorf("加密器未初始化（节点 secret 为空或无效），拒绝明文发送")
 	}
 
 	encryptedData, err := w.aesCrypto.Encrypt(jsonData)
 	if err != nil {
-		fmt.Printf("⚠️ 加密失败，发送原始数据: %v\n", err)
-		return jsonData
+		return nil, fmt.Errorf("加密失败: %v", err)
 	}
 
 	encryptedMessage := map[string]interface{}{
@@ -657,10 +658,9 @@ func (w *WebSocketReporter) encryptPayload(jsonData []byte) []byte {
 	}
 	messageData, err := json.Marshal(encryptedMessage)
 	if err != nil {
-		fmt.Printf("⚠️ 序列化加密消息失败，发送原始数据: %v\n", err)
-		return jsonData
+		return nil, fmt.Errorf("序列化加密消息失败: %v", err)
 	}
-	return messageData
+	return messageData, nil
 }
 
 // metricEnvelope wraps SystemInfo with a type field for fast identification on the panel side.
@@ -685,7 +685,10 @@ func (w *WebSocketReporter) sendSystemInfo(sysInfo SystemInfo) error {
 		return fmt.Errorf("序列化系统信息失败: %v", err)
 	}
 
-	messageData := w.encryptPayload(jsonData)
+	messageData, err := w.encryptPayload(jsonData)
+	if err != nil {
+		return err
+	}
 
 	w.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
@@ -1765,7 +1768,11 @@ func (w *WebSocketReporter) sendResponse(response CommandResponse) {
 		return
 	}
 
-	messageData := w.encryptPayload(jsonData)
+	messageData, err := w.encryptPayload(jsonData)
+	if err != nil {
+		fmt.Printf("❌ 无法发送响应: %v\n", err)
+		return
+	}
 
 	// 检查消息大小，如果超过10MB则记录警告
 	if len(messageData) > 10*1024*1024 {
@@ -1963,6 +1970,31 @@ func EnableConfigPersist() {
 	fmt.Printf("🔒 节点配置持久化已启用，运行时变更将自动保存到 %s\n", path)
 }
 
+// F-088: 诊断 ping 的 count/timeout 上限（与仓库其他上限风格一致：
+// 延迟测试点上限 10、导入上限 500）。未钳制时面板下发 count=100000
+// 可让单个只读命令按 count×(timeout+100ms 间隔) 长期占用命令槽。
+const (
+	maxPingCount     = 20
+	maxPingTimeoutMs = 10000
+)
+
+// clampPingParams 归一化 ping 参数：非正值回退默认，超出上限钳制。
+func clampPingParams(count, timeout int) (int, int) {
+	if count <= 0 {
+		count = 4
+	}
+	if count > maxPingCount {
+		count = maxPingCount
+	}
+	if timeout <= 0 {
+		timeout = 5000 // 默认5秒超时
+	}
+	if timeout > maxPingTimeoutMs {
+		timeout = maxPingTimeoutMs
+	}
+	return count, timeout
+}
+
 // handleTcpPing 处理TCP ping诊断命令
 func (w *WebSocketReporter) handleTcpPing(data interface{}) (TcpPingResponse, error) {
 	jsonData, err := json.Marshal(data)
@@ -1997,13 +2029,8 @@ func (w *WebSocketReporter) handleTcpPing(data interface{}) (TcpPingResponse, er
 		}, nil
 	}
 
-	// 设置默认值
-	if req.Count <= 0 {
-		req.Count = 4
-	}
-	if req.Timeout <= 0 {
-		req.Timeout = 5000 // 默认5秒超时
-	}
+	// 设置默认值并钳制上限（F-088）
+	req.Count, req.Timeout = clampPingParams(req.Count, req.Timeout)
 
 	// 执行TCP ping操作
 	avgTime, packetLoss, err := tcpPingHost(req.IP, req.Port, req.Count, req.Timeout)
@@ -2057,12 +2084,7 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 		}, nil
 	}
 
-	if req.Count <= 0 {
-		req.Count = 4
-	}
-	if req.Timeout <= 0 {
-		req.Timeout = 5000
-	}
+	req.Count, req.Timeout = clampPingParams(req.Count, req.Timeout)
 
 	avgTime, packetLoss, err := udpPingHost(req.IP, req.Port, req.Count, req.Timeout)
 
