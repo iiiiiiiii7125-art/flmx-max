@@ -368,7 +368,6 @@ export function LatencyCell({
             </DropdownItem>
             {onShowTrend && (
               <DropdownItem
-                closeOnSelect
                 className="justify-center whitespace-nowrap px-1 text-xs text-primary"
                 startContent={<ChartLine className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onShowTrend, 0)}
