@@ -114,14 +114,17 @@ type Security struct {
 
 // Inbound is the kernel-independent description of one listening service.
 type Inbound struct {
-	ID        int64           `json:"id"`
-	Protocol  string          `json:"protocol"`
-	Listen    string          `json:"listen"`
-	Port      int             `json:"port"`
-	Settings  Settings        `json:"settings"`
-	Transport Transport       `json:"transport"`
-	Security  Security        `json:"security"`
-	Extra     json.RawMessage `json:"extra,omitempty"`
+	ID       int64  `json:"id"`
+	Protocol string `json:"protocol"`
+	Listen   string `json:"listen"`
+	// OutboundIPStrategy scopes this inbound's outbound connections to an
+	// IP family ("" / "auto" = no restriction; see egress.go).
+	OutboundIPStrategy string          `json:"outboundIpStrategy,omitempty"`
+	Port               int             `json:"port"`
+	Settings           Settings        `json:"settings"`
+	Transport          Transport       `json:"transport"`
+	Security           Security        `json:"security"`
+	Extra              json.RawMessage `json:"extra,omitempty"`
 	// AcceptProxyProtocol makes the inbound require a PROXY protocol header
 	// (sent by relay forwards) so the kernel sees the real client address.
 	AcceptProxyProtocol bool `json:"acceptProxyProtocol,omitempty"`
@@ -227,6 +230,11 @@ func Normalize(kernelType string, in *Inbound) error {
 	if !ok || !info.Implemented {
 		return fmt.Errorf("暂不支持内核 %s", kernelType)
 	}
+	strategy, err := NormalizeOutboundIPStrategy(kernelType, in.OutboundIPStrategy)
+	if err != nil {
+		return err
+	}
+	in.OutboundIPStrategy = strategy
 
 	in.Protocol = strings.ToLower(strings.TrimSpace(in.Protocol))
 	proto, ok := info.protocol(in.Protocol)
@@ -318,7 +326,8 @@ func normalizeExtra(kernelType string, in *Inbound) error {
 		return err
 	}
 	in.Extra = json.RawMessage(raw)
-	return nil
+	// S4: 指定出站 IP 策略时 Extra 不得覆盖 tag/detour（会绕过策略作用域）。
+	return ValidateOutboundIPExtra(kernelType, in.OutboundIPStrategy, in.Extra)
 }
 
 func normalizeTransport(t *Transport) error {

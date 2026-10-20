@@ -53,6 +53,11 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 		}
 		cfg["route"] = route
 	}
+	// preferGoDNS 传 false：我方无 GoDNS 特性（见 S4 方案 2.5 注，启用 IP
+	// 策略的入站在无 systemd-resolved 的节点上解析走默认 local resolver）。
+	if err := applyOutboundIPPolicies(TypeSingbox, cfg, inbounds, false); err != nil {
+		return "", err
+	}
 	return marshalConfig(cfg)
 }
 
