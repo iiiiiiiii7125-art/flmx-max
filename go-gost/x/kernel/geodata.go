@@ -111,7 +111,9 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 
 func stageGeoFile(ctx context.Context, binDir string, f GeoFile) (bool, error) {
 	var sumBody strings.Builder
-	if err := fetch(ctx, f.ChecksumURL, 4096, &sumBody); err != nil {
+	// F-139：校验文件此前裸 fetch 单次尝试，镜像不可用整轮失败；改走
+	// install.go 的镜像回退（小文件路径，与 verifyChecksum 同口径）。
+	if err := fetchWithMirrorFallback(ctx, f.ChecksumURL, 4096, &sumBody); err != nil {
 		return false, err
 	}
 	want, ok := parseChecksum(sumBody.String())
@@ -123,24 +125,37 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile) (bool, error) {
 		return false, nil
 	}
 
+	// F-139：数据文件（大文件流式）同样的双试：先原址（可为镜像前缀
+	// 形式），失败剥镜像前缀直连；每次尝试都重建临时文件与哈希。
+	urls := []string{f.URL}
+	if direct := stripMirrorPrefix(f.URL); direct != "" {
+		urls = append(urls, direct)
+	}
 	tmp := path + ".new"
+	var lastErr error
+	for _, u := range urls {
+		if lastErr = downloadGeoFile(ctx, u, tmp, want); lastErr == nil {
+			return true, nil
+		}
+	}
+	_ = os.Remove(tmp)
+	return false, lastErr
+}
+
+func downloadGeoFile(ctx context.Context, url, tmp, want string) error {
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
-		return false, err
+		return err
 	}
 	h := sha256.New()
-	err = fetch(ctx, f.URL, geoMaxSize, io.MultiWriter(out, h))
+	err = fetch(ctx, url, geoMaxSize, io.MultiWriter(out, h))
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil && hex.EncodeToString(h.Sum(nil)) != want {
 		err = errors.New("SHA256 校验失败")
 	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		return false, err
-	}
-	return true, nil
+	return err
 }
 
 func fileSHA256(path string) (string, error) {

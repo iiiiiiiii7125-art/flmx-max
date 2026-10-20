@@ -241,19 +241,63 @@ check_docker() {
   echo "检测到 Docker 命令：$DOCKER_CMD"
 }
 
+# F-050: Docker 官方安装脚本的 pin 校验值（get.docker.com 脚本，
+# 2026-10-21 实测抓取计算；官方脚本变更后须人工更新此值）。旧实现
+# curl|sh 不经任何校验以 root 执行，与本文件对自家资产的 fail-closed
+# 标准双标。现改为：下载到临时文件 → sha256 与 pin 值比对 → 通过才
+# 执行；校验不过/无校验值/缺 sha256sum 一律不执行，回退系统包管理器
+# 签名通道。阿里云镜像脚本暂无可信 pin 值（其 URL 2026-10-21 实测
+# 404），默认不执行；确需使用时经 FLMX_DOCKER_INSTALL_SHA256 显式
+# 提供该来源脚本的 sha256（该变量对两个来源都可覆盖 pin 值）。
+DOCKER_INSTALL_SCRIPT_SHA256="7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258"
+
+run_verified_installer_script() {
+  local url="$1"
+  local expected="$2"
+  if [[ -z "$expected" ]]; then
+    echo "⚠️ 未配置该来源的脚本校验值，跳过脚本安装: $url"
+    return 1
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "⚠️ 缺少 sha256sum，无法校验安装脚本，跳过脚本安装: $url"
+    return 1
+  fi
+  local tmp actual rc
+  tmp=$(mktemp) || return 1
+  if ! curl -fsSL "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "⚠️ 安装脚本下载失败: $url"
+    return 1
+  fi
+  actual=$(sha256sum "$tmp" | awk '{print $1}')
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f "$tmp"
+    echo "❌ 安装脚本校验失败（期望 $expected，实际 $actual），拒绝执行: $url"
+    return 1
+  fi
+  echo "✅ 安装脚本校验通过: $url"
+  sh "$tmp"
+  rc=$?
+  rm -f "$tmp"
+  return $rc
+}
+
 # 自动安装 Docker（支持 Debian/Ubuntu、RHEL 系、Alpine）
 install_docker() {
   echo "🔧 正在安装 Docker..."
 
-  # 优先使用官方一键脚本（自动识别发行版）
+  # 优先使用官方一键脚本（自动识别发行版，经 F-050 pin 校验后才执行）
   # 国内服务器可设置 DOCKER_MIRROR=aliyun 使用阿里云镜像加速
   local docker_url="https://get.docker.com"
+  local docker_script_sha="$DOCKER_INSTALL_SCRIPT_SHA256"
   if [ "${DOCKER_MIRROR:-}" = "aliyun" ]; then
     docker_url="https://mirrors.aliyun.com/docker-ce/linux/docker-install.sh"
+    docker_script_sha=""
   fi
+  docker_script_sha="${FLMX_DOCKER_INSTALL_SHA256:-$docker_script_sha}"
 
   if command -v curl &> /dev/null; then
-    if curl -fsSL "$docker_url" | sh; then
+    if run_verified_installer_script "$docker_url" "$docker_script_sha"; then
       echo "✅ Docker 安装完成"
       # 启动并设置开机自启
       systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true
@@ -261,7 +305,7 @@ install_docker() {
     fi
   fi
 
-  echo "官方脚本安装失败，尝试系统包管理器..."
+  echo "官方脚本安装失败或未通过校验，尝试系统包管理器..."
   if [ -f /etc/debian_version ]; then
     apt-get update && apt-get install -y docker.io docker-compose-plugin && return 0
   elif [ -f /etc/redhat-release ]; then
@@ -336,21 +380,19 @@ configure_docker_ipv6() {
         # 如果没有 jq，使用 sed
         $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
         # AUDIT-R1 (SCR-009): 该正则只匹配"整行仅为 {" 的多行 JSON；单行压缩
-        # JSON 无匹配时 sed 静默无操作但退出码为 0。
-        # 此处校验，不成功则明确告警，不谎报成功。
-        if ! $SUDO_CMD grep -q '"ipv6"[[:space:]]*:[[:space:]]*true' "$DOCKER_CONFIG" 2>/dev/null; then
-          echo "⚠️ 无法自动写入 IPv6 配置，请手动添加 \"ipv6\": true"
-        fi
+        # JSON 无匹配时 sed 静默无操作但退出码为 0。写后由下方统一校验兜底。
+      fi
+
+      # F-052: 写后校验（jq 与 sed 两条路径都过这里）：配置里没有
+      # "ipv6": true 就算失败并返回非 0，让安装路径据此降级 v4，
+      # 不再带着未生效的配置按 v6 继续（旧行为只告警）。
+      if ! $SUDO_CMD grep -q '"ipv6"[[:space:]]*:[[:space:]]*true' "$DOCKER_CONFIG" 2>/dev/null; then
+        echo "❌ IPv6 配置写入失败，请手动在 $DOCKER_CONFIG 添加 \"ipv6\": true 后重试"
+        return 1
       fi
 
       echo "🔄 重启 Docker 服务..."
-      if command -v systemctl &> /dev/null; then
-        $SUDO_CMD systemctl restart docker
-      elif command -v service &> /dev/null; then
-        $SUDO_CMD service docker restart
-      else
-        echo "⚠️ 请手动重启 Docker 服务"
-      fi
+      restart_docker_checked || return 1
       sleep 5
     fi
   else
@@ -363,15 +405,33 @@ configure_docker_ipv6() {
 }' | $SUDO_CMD tee "$DOCKER_CONFIG" > /dev/null
 
     echo "🔄 重启 Docker 服务..."
-    if command -v systemctl &> /dev/null; then
-      $SUDO_CMD systemctl restart docker
-    elif command -v service &> /dev/null; then
-      $SUDO_CMD service docker restart
-    else
-      echo "⚠️ 请手动重启 Docker 服务"
-    fi
+    restart_docker_checked || return 1
     sleep 5
   fi
+}
+
+# F-052: 重启 Docker 并检查结果。重启失败/无可用重启方式时返回非 0，
+# 让调用方能据此降级，而不是带着未生效的配置继续。
+restart_docker_checked() {
+  : "${SUDO_CMD:=}"
+  if command -v systemctl &> /dev/null; then
+    $SUDO_CMD systemctl restart docker
+  elif command -v service &> /dev/null; then
+    $SUDO_CMD service docker restart
+  else
+    echo "⚠️ 未找到 systemctl/service，无法自动重启 Docker，请手动重启后重试"
+    return 1
+  fi
+}
+
+# F-052: 验证 Docker IPv6 是否真的可用：daemon 可达且默认 bridge 网络
+# 启用了 IPv6。主机有 IPv6 地址不等于 Docker 能建 v6 网络（daemon 未
+# 启用、重启失败都会让 v6 compose 在建网一步才炸），选版前先证实。
+docker_ipv6_usable() {
+  docker info >/dev/null 2>&1 || return 1
+  local bridge_v6
+  bridge_v6=$(docker network inspect bridge --format '{{.EnableIPv6}}' 2>/dev/null || echo "")
+  [[ "$bridge_v6" == "true" ]]
 }
 
 # 配置域名反向代理（Caddy 自动 HTTPS）
@@ -408,13 +468,27 @@ setup_domain_proxy() {
   if ! command -v caddy &> /dev/null; then
     echo "🔧 正在安装 Caddy..."
     apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl 2>/dev/null || true
-    curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/gpg.key' 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || {
-      echo "❌ Caddy 官方源不可用，尝试 Debian 仓库版本..."
+    # F-050 变体（X1-407）：Caddy 官方源 GPG key 不再直灌 keyring——先落
+    # 临时文件核对主指纹（65760C51…EA34，Caddy stable 发布密钥，
+    # 2026-10-21 实测），不符即视为官方源不可用、走 Debian 仓库回退，
+    # 避免用未核对的 key 当后续 apt 验签的信任锚。
+    local caddy_key_tmp caddy_key_fp=""
+    caddy_key_tmp=$(mktemp)
+    if curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/gpg.key' -o "$caddy_key_tmp" 2>/dev/null; then
+      caddy_key_fp=$(gpg --show-keys --with-colons "$caddy_key_tmp" 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')
+    fi
+    if [[ "$caddy_key_fp" == "65760C51EDEA2017CEA2CA15155B6D79CA56EA34" ]] \
+      && gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$caddy_key_tmp" 2>/dev/null; then
+      echo "✅ Caddy 官方源 GPG key 指纹校验通过"
+    else
+      echo "❌ Caddy 官方源 GPG key 获取失败或指纹不符，尝试 Debian 仓库版本..."
       apt-get update && apt-get install -y caddy || {
+        rm -f "$caddy_key_tmp"
         echo "❌ Caddy 安装失败"
         return 1
       }
-    }
+    fi
+    rm -f "$caddy_key_tmp"
     if ! command -v caddy &> /dev/null; then
       curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' 2>/dev/null | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
       apt-get update && apt-get install -y caddy || {
@@ -489,7 +563,9 @@ show_menu() {
 }
 
 generate_random() {
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c16
+  # F-120: 16 字符（约 95 bit）对 JWT_SECRET/PG 口令余量偏薄，提升到 32
+  # 字符（约 190 bit）。字符集不变（URL 安全，进 DATABASE_URL 无需转义）。
+  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c32
 }
 
 upsert_env_var() {
@@ -675,6 +751,9 @@ validate_panel_update_environment() {
 
 # R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
 # FLMX_VERIFY_DOWNLOADS=0 可跳过（过渡期），默认开启；旧名 FLVX_VERIFY_DOWNLOADS 仍兼容。
+# F-138: 边角组合收紧为 fail-closed——仅显式 "0" 可关闭校验（误填
+# true/yes 等不再静默跳过）；缺少 sha256sum 时拒绝（否则空 .sha256 与
+# 空 actual 会 ""=="" 误判通过）；.sha256 内容必须是 64 位十六进制。
 download_verified() {
   local url="$1"
   local dest="$2"
@@ -685,9 +764,17 @@ download_verified() {
     return 1
   fi
 
-  if [ "$verify" != "1" ]; then
+  if [ "$verify" = "0" ]; then
     echo "⚠️  跳过校验 (FLMX_VERIFY_DOWNLOADS=0): $dest" >&2
     return 0
+  fi
+  if [ "$verify" != "1" ]; then
+    echo "⚠️  FLMX_VERIFY_DOWNLOADS 取值无法识别（\"$verify\"），按开启校验处理（仅 0 可关闭）" >&2
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    rm -f "$dest"
+    echo "❌ 缺少 sha256sum，无法校验下载完整性，拒绝安装（fail-closed）" >&2
+    return 1
   fi
 
   # 下载 .sha256 并校验。
@@ -700,7 +787,12 @@ download_verified() {
     return 1
   fi
 
-  local expected=$(awk '{print $1}' "$sha_file" | tr -d ' \n')
+  local expected=$(awk '{print $1}' "$sha_file" | tr -d ' \n' | tr 'A-F' 'a-f')
+  if ! [[ "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+    rm -f "$dest" "$sha_file"
+    echo "❌ 校验文件内容无效（不是 64 位 SHA256），拒绝安装: $sha_url" >&2
+    return 1
+  fi
   local actual=$(sha256sum "$dest" | awk '{print $1}')
   rm -f "$sha_file"
 
@@ -1019,6 +1111,24 @@ get_config_params() {
 install_panel() {
   echo "🚀 开始安装面板..."
 
+  # F-049: 已有部署守卫。安装路径会重生成 POSTGRES_PASSWORD/JWT_SECRET
+  # 并无条件覆写 .env 与 docker-compose.yml；而 PG 数据卷里的口令只在
+  # 首次初始化时生效——在已部署机器上误走安装，.env 新口令与旧卷脱钩，
+  # 后端必然以 28P01 连不上库。检测到同目录已有部署时默认拒绝并引导
+  # 去更新；确需重装须显式 PANEL_FORCE_REINSTALL=1，且先备份原 .env。
+  if [[ -f .env && -f docker-compose.yml ]]; then
+    if [[ "${PANEL_FORCE_REINSTALL:-}" != "1" ]]; then
+      echo "❌ 检测到当前目录已有面板部署（.env 与 docker-compose.yml 同时存在）"
+      echo "   如需升级请使用菜单「2. 更新面板」；继续安装将覆写 .env 并轮换密钥，"
+      echo "   PostgreSQL 部署会因口令与数据卷脱钩而无法启动。"
+      echo "   确需重装请先自行备份 .env，或设置 PANEL_FORCE_REINSTALL=1 后重试。"
+      return 1
+    fi
+    local env_bak=".env.bak.$(date +%Y%m%d%H%M%S)"
+    cp .env "$env_bak"
+    echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 .env 到 $env_bak，继续重装"
+  fi
+
   ask_proxy_config
   ensure_compose_urls_initialized || return 1
 
@@ -1026,16 +1136,29 @@ install_panel() {
   get_config_params
 
   echo "🔽 下载必要文件..."
-  DOCKER_COMPOSE_URL=$(get_docker_compose_url)
+  # F-052: 选版时机后移——主机有 IPv6 地址不等于 Docker 能用 IPv6。
+  # 先配置并验证 Docker IPv6（configure_docker_ipv6 写后校验+重启检查、
+  # docker_ipv6_usable 查 daemon 与 bridge），确认可用才选 v6 版；
+  # 任一步不通过都明确降级 v4 版并告知，不再让安装死在建网一步、
+  # 报错还远离根因。
+  local use_ipv6=0
+  if check_ipv6_support; then
+    echo "🚀 系统支持 IPv6，尝试启用并验证 Docker IPv6..."
+    if configure_docker_ipv6 && docker_ipv6_usable; then
+      use_ipv6=1
+      echo "✅ Docker IPv6 验证可用，使用 IPv6 版 Compose"
+    else
+      echo "⚠️ Docker IPv6 配置/验证未通过，降级使用 IPv4 版 Compose（面板功能不受影响）"
+    fi
+  fi
+  if [[ "$use_ipv6" == "1" ]]; then
+    DOCKER_COMPOSE_URL="$DOCKER_COMPOSEV6_URL"
+  else
+    DOCKER_COMPOSE_URL="$DOCKER_COMPOSEV4_URL"
+  fi
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
   download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
   echo "✅ 文件准备完成"
-
-  # 自动检测并配置 IPv6 支持
-  if check_ipv6_support; then
-    echo "🚀 系统支持 IPv6，自动启用 IPv6 配置..."
-    configure_docker_ipv6
-  fi
 
   cat > .env <<EOF
 JWT_SECRET=$JWT_SECRET
@@ -1096,7 +1219,17 @@ update_panel() {
   set_compose_urls_by_version "$LATEST_VERSION"
 
   echo "🔽 下载最新配置文件..."
-  DOCKER_COMPOSE_URL=$(get_docker_compose_url)
+  # F-052 变体：更新不随主机 IPv6 现状擅自切换 compose 版本——已有部署
+  # 的网络是按原版本创建的，v4→v6（或反之）切换会重建网络。现有
+  # compose 带 v6 子网标记就继续 v6、否则继续 v4；无现有文件时才按
+  # 主机能力选版。
+  if [[ -f "$PANEL_DEPLOY_DIR/docker-compose.yml" ]] && grep -q "fd00:dead:beef" "$PANEL_DEPLOY_DIR/docker-compose.yml"; then
+    DOCKER_COMPOSE_URL="$DOCKER_COMPOSEV6_URL"
+  elif [[ -f "$PANEL_DEPLOY_DIR/docker-compose.yml" ]]; then
+    DOCKER_COMPOSE_URL="$DOCKER_COMPOSEV4_URL"
+  else
+    DOCKER_COMPOSE_URL=$(get_docker_compose_url)
+  fi
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
   download_panel_update_compose "$DOCKER_COMPOSE_URL" || return 1
   if ! validate_panel_update_compose; then
@@ -1270,6 +1403,15 @@ main() {
   # 加载本脚本的函数，顶层调用会误入夹具；main 不会被夹具调用。
   if [ "${SELF_UPDATE_SKIP:-}" != "1" ]; then
     self_update_check "$@"
+  fi
+
+  # F-125: 前置 root 检查。非 root 运行会在 apt/systemctl/docker 写操作
+  # 处中途失败、留下半成品（已下载的 compose、改了一半的 daemon.json），
+  # 这里在任何落盘动作之前 fail-fast。
+  if [[ $EUID -ne 0 ]]; then
+    echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
+    echo "   请使用 root 用户或 sudo 重新执行"
+    exit 1
   fi
 
   # 显示交互式菜单

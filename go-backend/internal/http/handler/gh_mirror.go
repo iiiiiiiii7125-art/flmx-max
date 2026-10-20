@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -35,6 +36,10 @@ const (
 	ghMirrorFreshRaw = 6 * time.Hour
 	ghMirrorLatest   = 10 * time.Minute
 	ghMirrorServeFor = 30 * time.Minute
+	// F-137：下载失败时 stale 回退的年龄上限。tag 下的 release 文件是
+	// 不可变的（fresh==0，永不重下），不受此限；此限只约束 API/raw/
+	// latest 这类可变内容的旧副本最多能旧到什么程度。
+	ghMirrorMaxStaleAge = 24 * time.Hour
 )
 
 // J-002：镜像代理是无鉴权的开放代理，文件可达 300MB、总缓存 2GB，
@@ -350,12 +355,21 @@ func ghMirrorFetch(up *ghMirrorUpstream) (string, error) {
 
 	f.err = ghMirrorDownload(up.url, path)
 	if f.err != nil {
-		if _, err := os.Stat(path); err == nil {
-			// GitHub 不可达：返回旧副本，并把它算作刚刷新过，
-			// 免得每个请求都去等 GitHub。
-			now := time.Now()
-			_ = os.Chtimes(path, now, now)
-			f.err = nil
+		if st, err := os.Stat(path); err == nil {
+			// F-137：stale 回退必须可见且有年龄上限。此前静默返回任意
+			// 年龄的旧副本（并 Chtimes 续期），故障可被长期掩盖。
+			// 超过上限不再回退、保留下载错误；上限内回退时打警告日志。
+			//（本层只做可用性缓存：内容完整性由下游各自的 sha256 校验
+			// 负责——节点安装命令已在 F-060 补齐校验，不再裸奔。）
+			if age := time.Since(st.ModTime()); age <= ghMirrorMaxStaleAge {
+				log.Printf("gh_mirror: 下载失败（%v），回退 %s 的缓存副本（年龄 %s，上限 %s）", f.err, up.url, age.Round(time.Second), ghMirrorMaxStaleAge)
+				// 把它算作刚刷新过，免得每个请求都去等 GitHub。
+				now := time.Now()
+				_ = os.Chtimes(path, now, now)
+				f.err = nil
+			} else {
+				log.Printf("gh_mirror: 下载失败（%v），%s 的缓存副本年龄 %s 超过上限 %s，不回退", f.err, up.url, age.Round(time.Second), ghMirrorMaxStaleAge)
+			}
 		}
 	}
 	ghMirrorFlightMu.Lock()

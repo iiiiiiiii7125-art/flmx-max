@@ -12,6 +12,51 @@ import (
 	"testing"
 )
 
+// F-139：geodata 下载的镜像回退——校验文件与数据文件在镜像不可用时
+// 都应剥离镜像前缀直连成功（此前 stageGeoFile 两处都是裸 fetch 单次
+// 尝试，镜像一挂整轮更新失败）。
+func TestStageGeoFileFallsBackToDirectWhenMirrorFails(t *testing.T) {
+	data := []byte("geo data via direct")
+	sum := sha256.Sum256(data)
+	checksum := hex.EncodeToString(sum[:]) + "  geosite.dat\n"
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/geosite.dat":
+			_, _ = w.Write(data)
+		case "/geosite.dat.sha256sum":
+			_, _ = w.Write([]byte(checksum))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer direct.Close()
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer mirror.Close()
+
+	binDir := t.TempDir()
+	f := GeoFile{
+		Name:        "geosite.dat",
+		URL:         mirror.URL + "/" + direct.URL + "/geosite.dat",
+		ChecksumURL: mirror.URL + "/" + direct.URL + "/geosite.dat.sha256sum",
+	}
+	changed, err := stageGeoFile(context.Background(), binDir, f)
+	if err != nil {
+		t.Fatalf("镜像失败时应回退直连: %v", err)
+	}
+	if !changed {
+		t.Fatal("应报告文件已更新")
+	}
+	b, err := os.ReadFile(filepath.Join(binDir, "geosite.dat.new"))
+	if err != nil {
+		t.Fatalf("暂存文件应存在: %v", err)
+	}
+	if string(b) != string(data) {
+		t.Fatalf("暂存内容不符: %q", b)
+	}
+}
+
 func TestUpdateGeoData(t *testing.T) {
 	data := []byte("new geosite data")
 	sum := sha256.Sum256(data)

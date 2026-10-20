@@ -697,7 +697,7 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channel := normalizeReleaseChannel(req.Channel)
-	version, err := resolveLatestReleaseByChannel(channel)
+	version, err := resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 		return
@@ -719,13 +719,20 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	enabled, proxyURL := h.getGithubProxyConfig()
 
+	// F-060：生成的命令此前对将以 root 执行的 install.sh 本体零校验
+	// （curl -L 连 HTTP 错误都会把错误页存下来执行）。现在与全仓
+	// fail-closed 标准对齐：同下 release 的 install.sh.sha256（流水线
+	// 为每个脚本资产生成，内容为纯哈希），sha256sum 比对通过才 chmod
+	// 执行；任一步失败整条 && 链中止。校验锚与被校验文件同源同版本，
+	// 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
+	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
 	var cmd string
 	if enabled {
-		cmd = fmt.Sprintf("curl -L %s/https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && chmod +x ./install.sh && PROXY_ENABLED=true PROXY_URL=%s VERSION=%s ./install.sh -a %s -s %s",
-			proxyURL, githubRepo, version, proxyURL, version, processServerAddress(panelAddr), secret)
+		cmd = fmt.Sprintf("curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=true PROXY_URL=%s VERSION=%s ./install.sh -a %s -s %s",
+			proxyURL, githubRepo, version, proxyURL, githubRepo, version, proxyURL, version, processServerAddress(panelAddr), secret)
 	} else {
-		cmd = fmt.Sprintf("curl -L https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
-			githubRepo, version, version, processServerAddress(panelAddr), secret)
+		cmd = fmt.Sprintf("curl -fsSL https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
+			githubRepo, version, githubRepo, version, version, processServerAddress(panelAddr), secret)
 	}
 	response.WriteJSON(w, response.OK(cmd))
 }
