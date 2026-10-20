@@ -3,7 +3,7 @@ name: flmx-api
 description: Operate FLMX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management, federation clustering, and traffic monitoring. Use when user wants to manage FLMX panel programmatically or via natural language.
 metadata:
   author: FLMX Team
-  version: "1.0.24"
+  version: "1.1.0"
   requires_env:
     - FLMX_BASE_URL
     - FLMX_USERNAME
@@ -15,7 +15,7 @@ metadata:
 Operate FLMX panel through REST API. All endpoints use POST method and return JSON with `{code, msg, data, ts}` envelope.
 
 > **Versioning:** this skill's version follows the FLMX product release line
-> (skill `1.0.24` ↔ panel `1.0.24`). Releases are tagged `skill-v<version>`.
+> (skill `1.1.0` ↔ panel `1.1.0`). Releases are tagged `skill-v<version>`.
 > The endpoint list is checked against the backend route table by
 > `scripts/check-doc-consistency.sh` — if you add a route, add it here too.
 
