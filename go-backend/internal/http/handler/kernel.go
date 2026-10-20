@@ -1333,7 +1333,7 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 		return kernelVersionCache.items[info.Type], nil
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=15", githubAPIBase, info.ReleaseRepo))
+	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo))
 	if err != nil {
 		return nil, fmt.Errorf("获取版本列表失败: %v", err)
 	}
@@ -1341,14 +1341,20 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("获取版本列表失败: GitHub 返回 %d", resp.StatusCode)
 	}
-	var releases []githubRelease
-	// 上限须远大于上游实际体积：sing-box 每版资产极多，per_page=30 的 JSON 曾达
-	// 10MiB，旧的 4MiB 上限会把解码截断成 unexpected EOF（版本列表必然失败）。
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&releases); err != nil {
+	// 流式逐条解码、凑够 15 条即停：正确性不再依赖响应体积上限——sing-box 的
+	// releases JSON 已达 10MiB 且持续膨胀，任何固定上限迟早被突破（旧 4MiB
+	// 上限曾把解码截断成 unexpected EOF，版本列表必然失败）。
+	// 256MiB 仅为防异常代理无限灌数据的兜底，正常路径永远触不到。
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 256<<20))
+	if _, err := decoder.Token(); err != nil {
 		return nil, fmt.Errorf("解析版本列表失败: %v", err)
 	}
-	out := make([]kernelVersionItem, 0, len(releases))
-	for _, r := range releases {
+	out := make([]kernelVersionItem, 0, 15)
+	for len(out) < 15 && decoder.More() {
+		var r githubRelease
+		if err := decoder.Decode(&r); err != nil {
+			return nil, fmt.Errorf("解析版本列表失败: %v", err)
+		}
 		if r.Draft {
 			continue
 		}
