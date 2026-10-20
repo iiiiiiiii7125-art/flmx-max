@@ -25,9 +25,13 @@ type failedForward struct {
 // that built them via -ldflags "-X go-backend/internal/http/handler.githubRepo=owner/repo".
 var githubRepo = "iiiiiiiii7125-art/flvx-max"
 
-const (
+// githubAPIBase / githubHTMLBase 是 var 以便测试指向本地 stub 服务器。
+var (
 	githubAPIBase  = "https://api.github.com"
 	githubHTMLBase = "https://github.com"
+)
+
+const (
 	upgradeTimeout = 5 * time.Minute
 	batchWorkers   = 5
 
@@ -117,13 +121,56 @@ func isValidAgentVersion(v string) bool {
 	return agentVersionRe.MatchString(v)
 }
 
+// ---- GitHub 版本列表缓存 ----
+// 未认证 GitHub API 限流 60 次/小时/IP（面板出口常为共享 NAT，更易耗尽）。
+// 版本列表不需要实时：成功结果缓存 10 分钟，节点升级下拉、系统检查更新、
+// 页脚探测共用同一份配额预算。
+const releasesCacheTTL = 10 * time.Minute
+
+var releasesCache = struct {
+	sync.Mutex
+	entries map[string]releasesCacheEntry
+}{entries: map[string]releasesCacheEntry{}}
+
+type releasesCacheEntry struct {
+	at       time.Time
+	releases []githubRelease
+}
+
+func cachedReleases(key string) ([]githubRelease, bool) {
+	releasesCache.Lock()
+	defer releasesCache.Unlock()
+	e, ok := releasesCache.entries[key]
+	if !ok || time.Since(e.at) >= releasesCacheTTL {
+		return nil, false
+	}
+	return e.releases, true
+}
+
+func storeReleasesCache(key string, releases []githubRelease) {
+	releasesCache.Lock()
+	defer releasesCache.Unlock()
+	releasesCache.entries[key] = releasesCacheEntry{at: time.Now(), releases: releases}
+}
+
+func sliceReleases(releases []githubRelease, perPage int) []githubRelease {
+	if perPage > 0 && len(releases) > perPage {
+		return releases[:perPage]
+	}
+	return releases
+}
+
 func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 	if perPage <= 0 {
 		perPage = 20
 	}
+	cacheKey := "api:" + githubAPIBase
+	if releases, ok := cachedReleases(cacheKey); ok {
+		return sliceReleases(releases, perPage), nil
+	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, perPage))
+	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, 50))
 	if err != nil {
 		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
 	}
@@ -131,6 +178,9 @@ func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(string(body), "rate limit") {
+			return nil, fmt.Errorf("GitHub API 已限流（未认证额度 60 次/小时/IP），请稍后再试")
+		}
 		return nil, fmt.Errorf("GitHub API返回 %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -139,13 +189,51 @@ func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 		return nil, fmt.Errorf("解析GitHub API响应失败: %v", err)
 	}
 
-	return releases, nil
+	storeReleasesCache(cacheKey, releases)
+	return sliceReleases(releases, perPage), nil
+}
+
+// resolveLatestTagByRedirect 通过 github.com 的 releases/latest 重定向
+// 解析最新稳定版 tag。该端点不走 API、不消耗限流配额，用作 API 不可用
+// （限流等）时"最新版"解析的兜底。
+func resolveLatestTagByRedirect() (string, error) {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(githubHTMLBase + "/" + githubRepo + "/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	const marker = "/releases/tag/"
+	i := strings.Index(loc, marker)
+	if i < 0 {
+		return "", fmt.Errorf("无法从重定向解析最新版本: %q", loc)
+	}
+	tag := strings.TrimSpace(loc[i+len(marker):])
+	if q := strings.IndexAny(tag, "?#"); q >= 0 {
+		tag = tag[:q]
+	}
+	if tag == "" {
+		return "", fmt.Errorf("无法从重定向解析最新版本: %q", loc)
+	}
+	return tag, nil
 }
 
 func resolveLatestReleaseByChannel(channel string) (string, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
 	releases, err := fetchGitHubReleases(50)
 	if err != nil {
+		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
+		if normalizedChannel == releaseChannelStable {
+			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil {
+				return tag, nil
+			}
+		}
 		return "", err
 	}
 
