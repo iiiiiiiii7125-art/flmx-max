@@ -173,6 +173,37 @@ type federationRuntimeDiagnoseRequest struct {
 	Protocol string `json:"protocol"`
 }
 
+// maxFederationDiagnoseCount 是对端诊断的 ping 次数上限（合法调用方
+// control_plane 恒传 4，留一倍多余量）。
+const maxFederationDiagnoseCount = 10
+
+// validateFederationDiagnoseTarget 校验对端（持 peer token）发起的诊断
+// 目标并钳制次数（F-086）。字面 IP 命中硬保留段（回环/链路本地含云
+// 元数据 169.254.169.254/未指定/组播/0.0.0.0/8，与 F-023 修后的 SSRF
+// 口径对齐）一律拒绝——否则提供方节点会被对端当作探测内网的跳板。
+// RFC1918 私有段不拦：链路中间跳目标可能为内网地址，是否全拒属产品
+// 决策（FINAL §十一方向）。主机名无法在面板侧预解析校验，原样放行
+// （残余风险登记于 B8 报告）。返回钳制后的 count。
+func validateFederationDiagnoseTarget(ip string, count int) (int, error) {
+	if parsed := net.ParseIP(strings.TrimSpace(ip)); parsed != nil {
+		reserved := parsed.IsLoopback() || parsed.IsLinkLocalUnicast() ||
+			parsed.IsLinkLocalMulticast() || parsed.IsUnspecified() || parsed.IsMulticast()
+		if v4 := parsed.To4(); !reserved && v4 != nil && v4[0] == 0 {
+			reserved = true // 0.0.0.0/8（IsUnspecified 只覆盖 0.0.0.0 本身）
+		}
+		if reserved {
+			return 0, errors.New("不允许对回环/链路本地等保留地址发起诊断")
+		}
+	}
+	if count <= 0 {
+		count = 4
+	}
+	if count > maxFederationDiagnoseCount {
+		count = maxFederationDiagnoseCount
+	}
+	return count, nil
+}
+
 type federationRuntimeCommandRequest struct {
 	CommandType string      `json:"commandType"`
 	Data        interface{} `json:"data"`
@@ -566,39 +597,76 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 	fc := client.NewFederationClient()
 	localDomain := h.federationLocalDomain()
 
+	// F-085: 此前逐节点串行 Connect（单个超时 10s），远端多/慢时接口
+	// 线性变慢。改为有界并发预取（上限 10，与 syncRemoteNodeStatuses
+	// 的 O12-003 信号量同口径），结果按下标回填，随后仍按原顺序串行
+	// 组装——结果顺序与错误语义不变。
+	type remoteUsageSync struct {
+		shareID        int64
+		maxBandwidth   int64
+		currentFlow    int64
+		expiryTime     int64
+		portRangeStart int
+		portRangeEnd   int
+		syncError      string
+	}
+	syncs := make([]remoteUsageSync, len(remoteNodes))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+	for i, node := range remoteNodes {
+		s := &syncs[i]
+		s.shareID, s.maxBandwidth, s.currentFlow, s.expiryTime, s.portRangeStart, s.portRangeEnd = parseRemoteShareUsageConfig(node.RemoteConfig.String)
+		url := strings.TrimSpace(node.RemoteURL.String)
+		token := strings.TrimSpace(node.RemoteToken.String)
+		if url == "" || token == "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, nodeID int64, url, token string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			info, connectErr := fc.Connect(url, token, localDomain)
+			if connectErr != nil {
+				syncs[idx].syncError = connectErr.Error()
+				return
+			}
+			if info == nil {
+				return
+			}
+			syncs[idx].shareID = info.ShareID
+			syncs[idx].maxBandwidth = info.MaxBandwidth
+			syncs[idx].currentFlow = info.CurrentFlow
+			syncs[idx].expiryTime = info.ExpiryTime
+			syncs[idx].portRangeStart = info.PortRangeStart
+			syncs[idx].portRangeEnd = info.PortRangeEnd
+
+			configData, _ := json.Marshal(map[string]interface{}{
+				"shareId":        info.ShareID,
+				"maxBandwidth":   info.MaxBandwidth,
+				"currentFlow":    info.CurrentFlow,
+				"expiryTime":     info.ExpiryTime,
+				"portRangeStart": info.PortRangeStart,
+				"portRangeEnd":   info.PortRangeEnd,
+			})
+			_ = h.repo.UpdateNodeRemoteConfig(nodeID, string(configData))
+		}(i, node.ID, url, token)
+	}
+	wg.Wait()
+
 	items := make([]remoteUsageNodeItem, 0)
-	for _, node := range remoteNodes {
+	for i, node := range remoteNodes {
 		nodeID := node.ID
 		nodeName := node.Name
 
-		shareID, maxBandwidth, currentFlow, expiryTime, portRangeStart, portRangeEnd := parseRemoteShareUsageConfig(node.RemoteConfig.String)
-
-		var syncError string
+		shareID := syncs[i].shareID
+		maxBandwidth := syncs[i].maxBandwidth
+		currentFlow := syncs[i].currentFlow
+		expiryTime := syncs[i].expiryTime
+		portRangeStart := syncs[i].portRangeStart
+		portRangeEnd := syncs[i].portRangeEnd
+		syncError := syncs[i].syncError
 		url := strings.TrimSpace(node.RemoteURL.String)
-		token := strings.TrimSpace(node.RemoteToken.String)
-		if url != "" && token != "" {
-			info, connectErr := fc.Connect(url, token, localDomain)
-			if connectErr != nil {
-				syncError = connectErr.Error()
-			} else if info != nil {
-				shareID = info.ShareID
-				maxBandwidth = info.MaxBandwidth
-				currentFlow = info.CurrentFlow
-				expiryTime = info.ExpiryTime
-				portRangeStart = info.PortRangeStart
-				portRangeEnd = info.PortRangeEnd
-
-				configData, _ := json.Marshal(map[string]interface{}{
-					"shareId":        info.ShareID,
-					"maxBandwidth":   info.MaxBandwidth,
-					"currentFlow":    info.CurrentFlow,
-					"expiryTime":     info.ExpiryTime,
-					"portRangeStart": info.PortRangeStart,
-					"portRangeEnd":   info.PortRangeEnd,
-				})
-				_ = h.repo.UpdateNodeRemoteConfig(nodeID, string(configData))
-			}
-		}
 
 		bindingRows, err := h.repo.ListActiveBindingsForNode(nodeID)
 		if err != nil {
@@ -1321,9 +1389,12 @@ func (h *Handler) federationRuntimeDiagnose(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, response.ErrDefault("Invalid target"))
 		return
 	}
-	if req.Count <= 0 {
-		req.Count = 4
+	clampedCount, targetErr := validateFederationDiagnoseTarget(req.IP, req.Count)
+	if targetErr != nil {
+		response.WriteJSON(w, response.ErrDefault(targetErr.Error()))
+		return
 	}
+	req.Count = clampedCount
 	if req.Timeout <= 0 || req.Timeout > int(diagnosisCommandTimeout/time.Millisecond) {
 		req.Timeout = int(diagnosisCommandTimeout / time.Millisecond)
 	}
@@ -1405,6 +1476,21 @@ func (h *Handler) federationRuntimeCommand(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if strings.EqualFold(cmd, "tcpping") {
+		// F-086 变体：此分支此前把 req.Data 直通节点，与 diagnose
+		// 入口同口径校验目标地址并钳制 count 后再下发。
+		dataMap, _ := req.Data.(map[string]interface{})
+		targetIP := strings.TrimSpace(asString(dataMap["ip"]))
+		if targetIP == "" {
+			response.WriteJSON(w, response.ErrDefault("tcpping 需要目标 ip"))
+			return
+		}
+		clampedCount, targetErr := validateFederationDiagnoseTarget(targetIP, asInt(dataMap["count"], 0))
+		if targetErr != nil {
+			response.WriteJSON(w, response.ErrDefault(targetErr.Error()))
+			return
+		}
+		dataMap["count"] = clampedCount
+		req.Data = dataMap
 		res, err := h.sendNodeCommand(share.NodeID, "TcpPing", req.Data, false, false)
 		if err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))

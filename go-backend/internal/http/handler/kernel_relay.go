@@ -282,7 +282,11 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 	}
 	port := inPort
 	if port <= 0 {
-		port = h.pickTunnelPort(tunnel.ID)
+		picked, pickErr := h.pickTunnelPort(tunnel.ID)
+		if pickErr != nil {
+			return 0, pickErr
+		}
+		port = picked
 	}
 	if port <= 0 || port > 65535 {
 		return 0, errors.New("没有可用的入口端口")
