@@ -34,11 +34,17 @@ export function NodeTuneModal({
 
   useEffect(() => {
     if (!node) return;
+    // 归属守卫：切节点后旧节点的迟到响应不得落 state，
+    // 否则 run() 会把 A 的调优勾选提交给 B
+    let alive = true;
+
     setStatus(null);
     setError("");
     setDetail(null);
+    setChosen(new Set());
     nodeTune(node.id, "status")
       .then((res) => {
+        if (!alive) return;
         if (res.code !== 0 || !res.data) {
           setError(res.msg || "读取节点状态失败");
 
@@ -48,7 +54,13 @@ export function NodeTuneModal({
         // Everything checked by default, as recommended.
         setChosen(new Set(res.data.groups.map((g) => g.id)));
       })
-      .catch(() => setError("读取节点状态失败"));
+      .catch(() => {
+        if (alive) setError("读取节点状态失败");
+      });
+
+    return () => {
+      alive = false;
+    };
   }, [node]);
 
   const run = async (action: "apply" | "restore") => {

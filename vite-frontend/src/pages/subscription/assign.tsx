@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   getAllUsers,
@@ -36,6 +36,9 @@ export default function SubscriptionAssignSection() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 当前用户的已分配集合是否还在加载（加载完成前禁止保存，防止串户）
+  const [assignLoading, setAssignLoading] = useState(false);
+  const assignSeqRef = useRef(0);
 
   // 加载用户与订阅列表
   useEffect(() => {
@@ -52,29 +55,57 @@ export default function SubscriptionAssignSection() {
   // 加载选中用户已被分配的订阅
   useEffect(() => {
     if (!userId) {
+      assignSeqRef.current += 1;
       setSelected(new Set());
+      setAssignLoading(false);
 
       return;
     }
-    getUserSubscriptions(userId).then((res) => {
-      if (res.code === 0) {
-        setSelected(new Set(res.data?.subscriptionIds ?? []));
-      }
-    });
+
+    // 切换用户立即清空已选集并进入加载态；响应用序号守卫，
+    // 迟到的旧用户响应直接丢弃，避免把 A 的集合保存给 B
+    const seq = (assignSeqRef.current += 1);
+
+    setSelected(new Set());
+    setAssignLoading(true);
+    getUserSubscriptions(userId)
+      .then((res) => {
+        if (assignSeqRef.current !== seq) {
+          return;
+        }
+        if (res.code === 0) {
+          setSelected(new Set(res.data?.subscriptionIds ?? []));
+        }
+      })
+      .catch(() => {
+        // 拉取失败保持空集 + 保存禁用解除后由管理员重试切换
+      })
+      .finally(() => {
+        if (assignSeqRef.current === seq) {
+          setAssignLoading(false);
+        }
+      });
   }, [userId]);
 
   const toggle = (id: number) => {
-    const next = new Set(selected);
+    setSelected((prev) => {
+      const next = new Set(prev);
 
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelected(next);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+
+      return next;
+    });
   };
 
   const handleSave = async () => {
     if (!userId) {
       toast.error("请先选择用户");
 
+      return;
+    }
+    if (assignLoading) {
+      // 已选集尚未按当前用户加载完成，禁止保存（防串户的最后一道闸）
       return;
     }
     setSaving(true);
@@ -154,6 +185,7 @@ export default function SubscriptionAssignSection() {
                           aria-label={`分配订阅 ${s.name}`}
                           checked={isSelected}
                           className="h-4 w-4 shrink-0 rounded"
+                          disabled={assignLoading}
                           type="checkbox"
                           onChange={() => toggle(s.id)}
                         />
@@ -192,11 +224,14 @@ export default function SubscriptionAssignSection() {
               <div className="flex items-center gap-3">
                 <Button
                   color="primary"
+                  isDisabled={assignLoading}
                   isLoading={saving}
                   size="sm"
                   onPress={handleSave}
                 >
-                  保存订阅分配（已选 {selected.size} 个）
+                  {assignLoading
+                    ? "正在加载该用户的分配..."
+                    : `保存订阅分配（已选 ${selected.size} 个）`}
                 </Button>
                 {selectedUser && (
                   <span className="text-xs text-default-500">

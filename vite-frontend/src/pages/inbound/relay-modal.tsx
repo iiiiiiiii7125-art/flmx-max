@@ -4,7 +4,7 @@ import type {
   TunnelApiItem,
 } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 import {
@@ -88,19 +88,31 @@ export function RelayModal({
   const [removeFailed, setRemoveFailed] = useState(false);
   const [removeLoading, setRemoveLoading] = useState(false);
 
+  // load 序号：切换入站后旧入站的迟到响应不得覆盖当前入站的中转列表
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
     if (!item) return;
+    const seq = (loadSeqRef.current += 1);
+    const itemId = item.id;
+
     setLoading(true);
     try {
       const [relRes, tunRes] = await Promise.all([
-        getInboundRelays(item.id),
+        getInboundRelays(itemId),
         getTunnelList(),
       ]);
+
+      if (loadSeqRef.current !== seq) {
+        return;
+      }
 
       if (relRes.code === 0) setRelays(relRes.data || []);
       if (tunRes.code === 0) setTunnels(tunRes.data || []);
     } finally {
-      setLoading(false);
+      if (loadSeqRef.current === seq) {
+        setLoading(false);
+      }
     }
   }, [item]);
 
