@@ -12,34 +12,60 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261016.05"
+SCRIPT_VERSION="20261021.01"
 
 # --- 自更新检查 ---
-# 防止 CDN 缓存导致用户执行旧版本脚本。
-# 启动时用 cache-buster 拉取仓库中的脚本，比对 SCRIPT_VERSION，
-# 不一致则替换当前执行的脚本并重新执行。
+# F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
+# 覆写自身以 root 重执行，无任何完整性校验，绕过同文件 download_verified
+# 的 fail-closed 标准与 PINNED_VERSION 定版语义。现改为只走 Release 资产：
+#   目标版本由 resolve_version() 解析（VERSION > FLUX_VERSION >
+#   PINNED_VERSION > 最新 Release）。Release 副本带 PINNED_VERSION 时目标
+#   恒为其自身版本，定版脚本不会被自更新带跑偏到更新的版本。
+#   新脚本经 download_verified 拉取同版本资产的 .sha256 校验，通过才覆写。
+# 缓存与校验如何兼得：旧实现用 cache-buster 是因为 main 分支 raw 内容
+# 可变、CDN 可能发回旧副本。版本号资产 URL 不可变——新版本必然是新 URL；
+# 缓存最多发回「该版本自己的脚本 + 该版本自己的 .sha256」，二者自洽且
+# 仍须过 sha256 校验，不存在新旧混杂，无需 cache-buster。
+# 校验被显式关闭（FLMX_VERIFY_DOWNLOADS!=1）时跳过自更新：绝不执行
+# 未校验的新脚本，继续使用当前版本（fail-closed）。
+# 注：调用点在本文件末尾（main 之前）——此处仅定义函数，因为
+# resolve_version / maybe_proxy_url / download_verified 定义在后面。
 self_update_check() {
-  # 通过进程替换 bash <(...) 执行时，$0 不是文件路径，跳过自更新
-  # （这种情况由外层命令的 cache-buster 参数保证新鲜度）
-  if [ ! -f "$0" ]; then
+  # 通过进程替换 bash <(...) 执行时 $0 不是常规文件，跳过自更新；
+  # 被 source 加载（测试夹具）时 BASH_SOURCE 与 $0 不一致，同样跳过。
+  if [ ! -f "$0" ] || [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
   fi
-  local latest_version
-  latest_version=$(curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/panel_install.sh?$(date +%s)" 2>/dev/null \
-    | grep -m1 '^SCRIPT_VERSION=' | cut -d'"' -f2 || true)
-  if [ -n "$latest_version" ] && [ "$latest_version" != "$SCRIPT_VERSION" ]; then
-    echo "🔄 检测到新版本脚本 (v$latest_version，当前 v$SCRIPT_VERSION)，正在更新..."
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/panel_install.sh?$(date +%s)" -o "$0" 2>/dev/null \
-      && chmod +x "$0" \
-      && echo "✅ 已更新到 v$latest_version，重新执行..." \
-      && exec bash "$0" "$@"
-    echo "⚠️  自动更新失败，继续使用当前版本"
+  if [ "${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}" != "1" ]; then
+    echo "⚠️ 下载校验未开启，跳过脚本自更新（不执行未校验的新脚本）"
+    return 0
   fi
+  local version tmp_script url latest_version
+  version=$(resolve_version 2>/dev/null) || {
+    echo "⚠️ 无法解析目标版本，跳过脚本自更新"
+    return 0
+  }
+  tmp_script=$(mktemp) || return 0
+  url=$(maybe_proxy_url "https://github.com/${REPO}/releases/download/${version}/panel_install.sh")
+  if ! download_verified "$url" "$tmp_script"; then
+    rm -f "$tmp_script"
+    echo "⚠️ 新版脚本下载或校验失败，继续使用当前版本"
+    return 0
+  fi
+  latest_version=$(grep -m1 '^SCRIPT_VERSION=' "$tmp_script" | cut -d'"' -f2 || true)
+  if [ -z "$latest_version" ] || [ "$latest_version" = "$SCRIPT_VERSION" ]; then
+    rm -f "$tmp_script"
+    return 0
+  fi
+  echo "🔄 检测到新版本脚本 (v$latest_version，当前 v$SCRIPT_VERSION)，正在更新..."
+  if cat "$tmp_script" > "$0" && chmod +x "$0"; then
+    rm -f "$tmp_script"
+    echo "✅ 已更新到 v$latest_version，重新执行..."
+    exec bash "$0" "$@"
+  fi
+  rm -f "$tmp_script"
+  echo "⚠️ 自动更新失败，继续使用当前版本"
 }
-# 仅在直接执行脚本文件时检查（非管道/进程替换）
-if [ -f "$0" ] && [ "${SELF_UPDATE_SKIP:-}" != "1" ]; then
-  self_update_check "$@"
-fi
 
 # 固定版本号（Release 构建时自动填充，留空则获取最新版）
 PINNED_VERSION=""
@@ -1238,6 +1264,13 @@ uninstall_panel() {
 
 # 主逻辑
 main() {
+  # F-006: 自更新检查放在 main 入口（自更新依赖 resolve_version /
+  # maybe_proxy_url / download_verified，均已在上文定义）。放在 main 内
+  # 而非顶层还有一层考虑：测试夹具以「截断到 main 之前 + source」方式
+  # 加载本脚本的函数，顶层调用会误入夹具；main 不会被夹具调用。
+  if [ "${SELF_UPDATE_SKIP:-}" != "1" ]; then
+    self_update_check "$@"
+  fi
 
   # 显示交互式菜单
   while true; do
@@ -1284,4 +1317,4 @@ main() {
 }
 
 # 执行主函数
-main
+main "$@"
