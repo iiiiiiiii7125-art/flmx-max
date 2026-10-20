@@ -1395,6 +1395,45 @@ func (w *WebSocketReporter) sendUpgradeProgress(stage string, percent int, messa
 	w.sendResponse(response)
 }
 
+// resolveAgentUpgradeProxy 返回升级下载用的代理前缀（无尾斜杠），无代理时返回 ""。
+// 来源优先级：面板下发 > 本地 config.json 的 proxy 字段（安装时落盘）。
+// 候选必须能解析为 http/https URL 且 host 非空，否则忽略并打日志（不硬失败，
+// 直连兜底让错误暴露在下载阶段而不是配置阶段）。
+func resolveAgentUpgradeProxy(panelProxy string) string {
+	candidates := []string{panelProxy}
+	type proxyConfig struct {
+		Proxy string `json:"proxy"`
+	}
+	var cfg proxyConfig
+	if b, err := os.ReadFile("config.json"); err == nil {
+		_ = json.Unmarshal(b, &cfg)
+	}
+	candidates = append(candidates, cfg.Proxy)
+	for _, c := range candidates {
+		c = strings.TrimSuffix(strings.TrimSpace(c), "/")
+		if c == "" {
+			continue
+		}
+		u, err := url.Parse(c)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			fmt.Printf("⚠️ 忽略无效的升级代理配置: %q\n", c)
+			continue
+		}
+		return c
+	}
+	return ""
+}
+
+// isGitHubDownloadHost 判断重定向目标是否为 GitHub 官方下载域名。
+// release 文件会先 302 到 release-assets.githubusercontent.com
+// （*.githubusercontent.com），这是 GitHub 的资产分发域名，必须放行，
+// 否则升级包永远下载不了（S-02 初版白名单遗漏此域名导致面板内升级全灭）。
+func isGitHubDownloadHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "github.com" || strings.HasSuffix(host, ".github.com") ||
+		host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com")
+}
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -1411,6 +1450,10 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		// 兼容旧面板：若仍发送 downloadUrl 则拒绝（不允许任意 URL）
 		DownloadURL string `json:"downloadUrl"`
 		ChecksumURL string `json:"checksumUrl"`
+		// 代理前缀（可选）：面板在系统设置开启 GitHub 代理时下发，或 agent
+		// 本地 config.json 的 proxy 字段（安装时落盘）。仅作前缀拼接，
+		// 下载地址仍由 agent 用固定仓库+版本号本地构造，S-02 模型不变。
+		ProxyURL string `json:"proxyUrl"`
 	}
 	if err := json.Unmarshal(jsonData, &req); err != nil {
 		return fmt.Errorf("解析升级参数失败: %v", err)
@@ -1432,6 +1475,20 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	downloadURL := base + "gost-" + runtime.GOARCH
 	checksumURL := base + "gost-" + runtime.GOARCH + ".sha256"
 
+	// 代理支持：国内节点直连 GitHub 不通时经代理前缀下载（与 install.sh 的
+	// maybe_proxy_url 同一模式：<proxy>/https://github.com/...）。
+	// 代理仅作前缀，路径仍由固定仓库+已校验版本号构造；完整性由 SHA256 兜底。
+	proxyPrefix := resolveAgentUpgradeProxy(req.ProxyURL)
+	proxyHost := ""
+	if proxyPrefix != "" {
+		downloadURL = proxyPrefix + "/" + downloadURL
+		checksumURL = proxyPrefix + "/" + checksumURL
+		if u, err := url.Parse(proxyPrefix); err == nil {
+			proxyHost = strings.ToLower(u.Host)
+		}
+		fmt.Printf("📦 升级包经代理下载: %s\n", proxyPrefix)
+	}
+
 	w.sendUpgradeProgress("downloading", 0, "开始下载升级包...")
 	fmt.Printf("📦 开始下载升级包: %s\n", downloadURL)
 
@@ -1440,7 +1497,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	tmpPath := binaryPath + ".new"
 	backupPath := binaryPath + ".old"
 
-	// S-02: 限制重定向只允许 github.com，防止跳转到恶意域名
+	// S-02: 限制重定向只允许 GitHub 官方域名，防止跳转到恶意域名
 	// 限制下载大小 100MB，超时 60 秒
 	httpClient := &http.Client{
 		Timeout: 60 * time.Second,
@@ -1448,12 +1505,14 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 			if len(via) >= 3 {
 				return fmt.Errorf("S-02: 重定向次数过多")
 			}
-			// 只允许 github.com 及其子域名
+			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
+			// githubusercontent.com 及其子域名（release 下载必经此域名）；
+			// 经代理下载时额外允许代理自身域名（镜像站内跳转）。
 			host := strings.ToLower(req.URL.Host)
-			if host != "github.com" && !strings.HasSuffix(host, ".github.com") {
-				return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+			if isGitHubDownloadHost(host) || (proxyHost != "" && host == proxyHost) {
+				return nil
 			}
-			return nil
+			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
 		},
 	}
 	resp, err := httpClient.Get(downloadURL)
@@ -1530,7 +1589,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// S-02: Checksum 校验强制，不再允许为空或跳过
 	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
 	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-	checksumResp, err := http.Get(checksumURL)
+	checksumResp, err := httpClient.Get(checksumURL)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)

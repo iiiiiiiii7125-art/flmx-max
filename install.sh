@@ -368,9 +368,23 @@ json_escape() {
 
 write_flux_agent_config() {
   local path="$1"
-  printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' \
+  # GitHub 代理落盘：agent 的面板内升级下载会读 config.json 的 proxy 字段
+  # （国内节点直连 GitHub 不通）。归一化与 maybe_proxy_url 一致：
+  # 无协议头补 https://、去尾斜杠；未开启代理时不写该字段。
+  local proxy_json=""
+  if [[ "$PROXY_ENABLED" == "true" ]]; then
+    local proxy="${PROXY_URL:-gcode.hostcentral.cc}"
+    if [[ "$proxy" == https://* || "$proxy" == http://* ]]; then
+      proxy="${proxy%/}"
+    else
+      proxy="https://${proxy%/}"
+    fi
+    proxy_json=$(printf ',\n  "proxy": "%s"' "$(json_escape "$proxy")")
+  fi
+  printf '{\n  "addr": "%s",\n  "secret": "%s"%s\n}\n' \
     "$(json_escape "$SERVER_ADDR")" \
-    "$(json_escape "$SECRET")" > "$path"
+    "$(json_escape "$SECRET")" \
+    "$proxy_json" > "$path"
 }
 
 ensure_service_manager() {

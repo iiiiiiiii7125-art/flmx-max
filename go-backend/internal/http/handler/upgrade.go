@@ -222,9 +222,15 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
 	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL
-	result, err := h.wsServer.SendCommand(req.ID, "UpgradeAgent", map[string]interface{}{
+	// 代理支持：系统设置开启 GitHub 代理时下发 proxyUrl 前缀（与内核下载同模式），
+	// agent 仅作前缀拼接，路径仍由其本地构造。
+	upgradeData := map[string]interface{}{
 		"version": version,
-	}, upgradeTimeout)
+	}
+	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
+		upgradeData["proxyUrl"] = proxyURL
+	}
+	result, err := h.wsServer.SendCommand(req.ID, "UpgradeAgent", upgradeData, upgradeTimeout)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("升级失败: %v", err)))
 		return
@@ -284,6 +290,15 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
 
+	// 代理支持：系统设置开启 GitHub 代理时下发 proxyUrl 前缀（与单节点升级同模式）。
+	// 在循环外计算一次，避免每个 goroutine 重复读配置。
+	batchUpgradeData := map[string]interface{}{
+		"version": version,
+	}
+	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
+		batchUpgradeData["proxyUrl"] = proxyURL
+	}
+
 	type upgradeResult struct {
 		ID      int64  `json:"id"`
 		Success bool   `json:"success"`
@@ -311,9 +326,7 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			result, err := h.wsServer.SendCommand(nodeID, "UpgradeAgent", map[string]interface{}{
-				"version": version,
-			}, upgradeTimeout)
+			result, err := h.wsServer.SendCommand(nodeID, "UpgradeAgent", batchUpgradeData, upgradeTimeout)
 			if err != nil {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: err.Error()}
 				return
