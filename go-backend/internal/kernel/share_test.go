@@ -75,8 +75,8 @@ func TestSubscriptionFormats(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertGolden(t, "clash.golden.yaml", clash)
-	if strings.Contains(clash, "XHTTP") {
-		t.Fatal("xhttp must be skipped for clash")
+	if !strings.Contains(clash, "xhttp-opts") {
+		t.Fatal("xhttp must be rendered for clash (Mihomo supports xhttp-opts)")
 	}
 
 	sb, _, err := Subscription(FormatSingbox, eps, SubOptions{})
@@ -237,5 +237,31 @@ func TestHysteria2PortHopping(t *testing.T) {
 		Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS}}
 	if err := Normalize(TypeSingbox, &tuic); err != nil || tuic.Settings.PortHopping != "" {
 		t.Fatalf("hopping is Hysteria2 only: %v %q", err, tuic.Settings.PortHopping)
+	}
+}
+
+// XHTTP 回归（2026-10-20 实测）：ClashProxy 曾以"Mihomo 支持不稳定"为由
+// 整体跳过 XHTTP 入站，导致 Clash 格式订阅 proxies 为空、客户端拉不到
+// 节点（通用/sing-box 格式正常）。Mihomo ≥1.19 已支持 xhttp-opts。
+func TestClashProxyRendersXHTTP(t *testing.T) {
+	in := Inbound{
+		Protocol:  ProtocolVLESS,
+		Port:      32806,
+		Transport: Transport{Type: TransportXHTTP, Path: "/15ef2276", Mode: "auto"},
+		Security: Security{Type: SecurityReality, SNI: "www.amd.com", Fingerprint: "chrome",
+			RealityPublicKey: "HQqdDdmS6So2OgKIwt7HYpq-mebJKRtkRYUvRViLQ2Q",
+			RealityShortIDs:  []string{"9e1910a3"}},
+		Settings: Settings{UUID: "c88bead1-0c52-45ef-b5f9-0e10698f1546"},
+	}
+	e := Endpoint{Name: "测试", Host: "fast.speedtest.0v0.baby", Port: 32806, Inbound: in}
+	node, ok := ClashProxy(e)
+	if !ok {
+		t.Fatal("XHTTP 节点应被 Clash 渲染，不应跳过")
+	}
+	out := marshalYAML(node)
+	for _, want := range []string{"\"xhttp\"", "xhttp-opts", "/15ef2276", "\"auto\"", "reality-opts", "c88bead1-0c52-45ef-b5f9-0e10698f1546"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Clash 输出缺 %q:\n%s", want, out)
+		}
 	}
 }

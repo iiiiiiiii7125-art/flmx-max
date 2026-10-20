@@ -202,14 +202,15 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 	}
 }
 
-// ClashProxy renders a Mihomo (Clash Meta) proxy entry. XHTTP is skipped
-// because Mihomo support for it is not stable across client versions.
+// ClashProxy renders a Mihomo (Clash Meta) proxy entry. XHTTP is rendered
+// with xhttp-opts (Mihomo ≥1.19 supports it; the same shape proxy_produce
+// emits for imported nodes).
 func ClashProxy(e Endpoint) (yamlNode, bool) {
 	if e.Proxy != nil {
 		return proxyClash(e)
 	}
 	in := e.Inbound
-	if in.Transport.Type == TransportXHTTP || in.Protocol == ProtocolSnell || in.Protocol == ProtocolNaive {
+	if in.Protocol == ProtocolSnell || in.Protocol == ProtocolNaive {
 		// Mihomo only speaks Snell v1-v3 and has no NaïveProxy client.
 		return nil, false
 	}
@@ -265,6 +266,15 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 		p = append(p, yamlField{"ws-opts", ws})
 	case TransportGRPC:
 		p = append(p, yamlField{"grpc-opts", yamlNode{{"grpc-service-name", in.Transport.ServiceName}}})
+	case TransportXHTTP:
+		xo := yamlNode{{"path", in.Transport.Path}}
+		if in.Transport.Host != "" {
+			xo = append(xo, yamlField{"host", in.Transport.Host})
+		}
+		if in.Transport.Mode != "" {
+			xo = append(xo, yamlField{"mode", in.Transport.Mode})
+		}
+		p = append(p, yamlField{"xhttp-opts", xo})
 	}
 
 	sec := in.Security

@@ -50,6 +50,16 @@ proxies:
     alpn:
       - "h2"
     skip-cert-verify: true
+  - name: "XHTTP"
+    type: "vless"
+    server: "203.0.113.10"
+    port: 9443
+    udp: true
+    uuid: "0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e"
+    network: "xhttp"
+    xhttp-opts:
+      path: "/x"
+      mode: "auto"
   - name: "东京 Reality #2"
     type: "vless"
     server: "198.51.100.7"
