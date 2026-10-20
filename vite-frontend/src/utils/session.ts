@@ -1,3 +1,5 @@
+import { purgeSensitiveConfigCache } from "@/config/sensitive-keys";
+
 import { getRoleIdFromToken, getUsernameFromToken, isTokenValid } from "./jwt";
 
 // N-002：角色/管理员标志不再单独写入 localStorage（role_id/admin 键可被
@@ -81,6 +83,9 @@ export const clearSession = (): void => {
   localStorage.removeItem(SESSION_STORAGE_KEYS.token);
   localStorage.removeItem(SESSION_STORAGE_KEYS.name);
   purgeLegacySessionKeys();
+  // F-047：登出（含 401 强制登出）时一并清掉敏感配置的本地缓存，
+  // 避免 jwt_secret / 通知令牌等在共享浏览器上残留到下次登录前。
+  purgeSensitiveConfigCache();
   window.dispatchEvent(new Event(SESSION_EVENT_NAME));
 };
 
