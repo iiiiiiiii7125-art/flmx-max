@@ -3,7 +3,7 @@ name: flmx-api
 description: Operate FLMX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management, federation clustering, and traffic monitoring. Use when user wants to manage FLMX panel programmatically or via natural language.
 metadata:
   author: FLMX Team
-  version: "2.1.9-rc4"
+  version: "1.0.24"
   requires_env:
     - FLMX_BASE_URL
     - FLMX_USERNAME
@@ -13,6 +13,11 @@ metadata:
 # FLMX API Operations
 
 Operate FLMX panel through REST API. All endpoints use POST method and return JSON with `{code, msg, data, ts}` envelope.
+
+> **Versioning:** this skill's version follows the FLMX product release line
+> (skill `1.0.24` ↔ panel `1.0.24`). Releases are tagged `skill-v<version>`.
+> The endpoint list is checked against the backend route table by
+> `scripts/check-doc-consistency.sh` — if you add a route, add it here too.
 
 ## Supported AI Tools
 
@@ -125,6 +130,25 @@ User request → Check env vars → Auto-login if needed → Call API → Return
 | "联邦共享" / "节点共享" | `/api/v1/federation/share/create` | [federation](references/federation.md) |
 | "导出备份" | `/api/v1/backup/export` | [backup](references/backup.md) |
 | "导入备份" | `/api/v1/backup/import` | [backup](references/backup.md) |
+| "安装内核" / "装 Xray / sing-box / Snell" | `/api/v1/kernel/install` | [kernels](references/kernels.md) |
+| "内核版本" / "内核能力" | `/api/v1/kernel/versions` / `/api/v1/kernel/capabilities` | [kernels](references/kernels.md) |
+| "创建入站" / "新建入站" / "加节点配置" | `/api/v1/inbound/create` | [inbounds](references/inbounds.md) |
+| "查看入站" / "入站列表" | `/api/v1/inbound/list` | [inbounds](references/inbounds.md) |
+| "导入节点" / "导入分享链接" | `/api/v1/inbound/import` | [inbounds](references/inbounds.md) |
+| "入站分享链接" | `/api/v1/inbound/share` | [inbounds](references/inbounds.md) |
+| "新建订阅" / "创建订阅" | `/api/v1/subscription/save` | [subscriptions](references/subscriptions.md) |
+| "查看订阅" / "订阅列表" | `/api/v1/subscription/list` | [subscriptions](references/subscriptions.md) |
+| "分配订阅给用户" | `/api/v1/user-subscription/set` | [subscriptions](references/subscriptions.md) |
+| "我的订阅" | `/api/v1/user-subscription/mine` | [subscriptions](references/subscriptions.md) |
+| "添加订阅源" / "同步订阅源" | `/api/v1/subscription/source/save` / `/api/v1/subscription/source/refresh` | [subscriptions](references/subscriptions.md) |
+| "监控" / "节点指标" / "服务监控" | `/api/v1/monitor/nodes` / `/api/v1/monitor/services` | [monitoring](references/monitoring.md) |
+| "监控权限" | `/api/v1/monitor/permission/assign` | [monitoring](references/monitoring.md) |
+| "Passkey 登录" / "注册 Passkey" | `/api/v1/user/passkey/login/begin` / `/api/v1/user/passkey/register/begin` | [passkeys](references/passkeys.md) |
+| "检查更新" / "面板升级" | `/api/v1/system/check-updates` / `/api/v1/system/upgrade` | [system](references/system.md) |
+| "修改公告" | `/api/v1/announcement/update` | [system](references/system.md) |
+| "节点调优" | `/api/v1/node/tune` | [nodes](references/nodes.md) |
+| "回程路由" | `/api/v1/node/route` | [nodes](references/nodes.md) |
+| "待删除转发" / "pending-delete" | `/api/v1/node/nftables/pending-deletes` | [nodes](references/nodes.md) |
 
 ## HTTP Request Template
 
@@ -253,6 +277,12 @@ Non-admin users can only see/modify their own resources.
 | Groups | User/tunnel groups, permissions | [groups.md](references/groups.md) |
 | Speed Limits | CRUD | [speed-limits.md](references/speed-limits.md) |
 | Federation | Share, remote nodes | [federation.md](references/federation.md) |
+| Kernels | Capabilities, install, versions, control, logs | [kernels.md](references/kernels.md) |
+| Inbounds | CRUD, import, share, split, relay lines | [inbounds.md](references/inbounds.md) |
+| Subscriptions | CRUD, sources, user assignment, public fetch | [subscriptions.md](references/subscriptions.md) |
+| Monitoring | Node/tunnel metrics, service monitors, permissions | [monitoring.md](references/monitoring.md) |
+| Passkeys | WebAuthn login / register / list / delete | [passkeys.md](references/passkeys.md) |
+| System | Version, storage, self-upgrade, announcement, notify | [system.md](references/system.md) |
 | Backup | Export/import | [backup.md](references/backup.md) |
 | Config | System settings | [config.md](references/config.md) |
 | Types | TypeScript interfaces | [types.md](references/types.md) |

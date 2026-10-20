@@ -268,3 +268,12 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/forward/list" \
     download_gb: (.out_flow / 1073741824 | floor)
   }'
 ```
+
+## POST /api/v1/forward/reset-flow
+
+Reset a forward's traffic counters (in_flow / out_flow).
+
+## POST /api/v1/forward/diagnose/stream
+
+Streaming variant of forward diagnose: progress and hop results are pushed as a
+stream instead of one blocking response.

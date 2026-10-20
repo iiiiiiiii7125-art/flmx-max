@@ -264,3 +264,53 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/list" \
   -H "Content-Type: application/json" \
   -d '{}' | jq ".data.list[] | select(.id == $NODE_ID) | {name, status}"
 ```
+
+## POST /api/v1/node/dismiss-expiry-reminder
+
+Dismiss the expiry reminder for a node (the dismissed state survives backup /
+restore).
+
+## POST /api/v1/node/latency/targets
+
+Get / set latency test targets. A node may pick its own targets; empty means the
+global default. Limits: at most 10 targets, names up to 20 chars, one call may
+cover at most 200 nodes.
+
+## POST /api/v1/node/latency/probe
+
+Trigger an immediate latency probe for a node.
+
+## POST /api/v1/node/tune
+
+Apply or revert the 6 sysctl tuning groups (BBR, buffers, TCP, …) on a node.
+Applied values persist across reboots.
+
+## POST /api/v1/node/route
+
+Get the node's cached return-route classification (CN2 / 163 / 4837 / 9929 /
+CMI / CMIN2 …). Results refresh every 24h; failures retry after 6h.
+
+## POST /api/v1/node/route/probe
+
+Trigger an immediate return-route probe (requires raw-socket permission on the
+node: root or CAP_NET_RAW).
+
+## POST /api/v1/node/nftables/test
+
+Dry-run / test nftables rule application for a node's forwards.
+
+## POST /api/v1/node/nftables/reconcile
+
+Force reconciliation between desired forward rules and the node's actual
+nftables state.
+
+## POST /api/v1/node/nftables/clear
+
+Clear the node's panel-managed nftables rules.
+
+## POST /api/v1/node/nftables/pending-deletes
+
+List forwards stuck in pending-delete (status=2) awaiting data-plane cleanup,
+with retry count, next retry time and last error. Admin only. Deleting a forward
+while its node is offline marks it pending-delete; a background job retries with
+1m/5m/30m/2h backoff, capped at 24h.
