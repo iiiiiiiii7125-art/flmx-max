@@ -34,13 +34,13 @@
 面板（需要 Docker，脚本会自动安装缺失的 Docker，支持 `DOCKER_MIRROR=aliyun`）：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 国内机器 GitHub 直连慢的话，用代理加速下载：
 
 ```bash
-curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 选 `1. 安装面板`，完成后访问 `http://服务器IP:6366`，默认账号 `admin@user` / `admin@user`，登录后请立即修改密码。
@@ -52,7 +52,7 @@ curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-m
 中转机 / 落地机（国内机器代理加速版，把下面命令里的面板地址和密钥换成你自己的）：
 
 ```bash
-curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && PROXY_ENABLED=true PROXY_URL=https://gcode.hostcentral.cc ./install.sh -a 面板地址 -s 密钥
+curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && PROXY_ENABLED=true PROXY_URL=https://gcode.hostcentral.cc ./install.sh -a 面板地址 -s 密钥
 ```
 
 > 提示：面板 **节点** 页生成的安装命令已按你的代理设置自动拼接好，直接复制用就行。
