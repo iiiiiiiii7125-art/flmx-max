@@ -43,6 +43,7 @@ import {
   type ReleaseChannel,
 } from "@/api";
 import { LatencyCell } from "@/components/latency-cell";
+import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
 import { PageLoadingState } from "@/components/page-state";
@@ -215,6 +216,7 @@ export default function NodePage() {
   const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
   const [routeNode, setRouteNode] = useState<Node | null>(null);
+  const [trendNode, setTrendNode] = useState<Node | null>(null);
   const [targetNodes, setTargetNodes] = useState<Node[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
@@ -1186,6 +1188,7 @@ export default function NodePage() {
         onEditTargets={() => setTargetNodes([node])}
         onProbe={() => probeNode(node.id)}
         onShowRoute={() => setRouteNode(node)}
+        onShowTrend={() => setTrendNode(node)}
       />
     ) : null;
 
@@ -2459,9 +2462,13 @@ export default function NodePage() {
         nodeName={routeNode?.name}
         onClose={() => setRouteNode(null)}
       />
-      {/* 集成点（Lane D）：延迟趋势入口待后端 POST /node/latency/history 就绪后接入——
-          届时引入 @/components/latency-trend-modal 的 LatencyTrendModal 与 trendNode 状态，
-          并在 LatencyCell 上挂 onShowTrend。本次节点页拆分刻意解耦，不挂趋势入口。 */}
+      {/* 延迟趋势：数据来自后端 POST /node/latency/history（Lane D），
+          入口在 LatencyCell 的 onShowTrend（renderLatency 挂载）。 */}
+      <LatencyTrendModal
+        nodeId={trendNode?.id ?? null}
+        nodeName={trendNode?.name}
+        onClose={() => setTrendNode(null)}
+      />
       <LatencyTargetsModal
         nodes={targetNodes}
         onClose={() => setTargetNodes([])}
