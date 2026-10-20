@@ -38,6 +38,10 @@ const (
 	notifySendTimeout       = 10 * time.Second
 	notifyExpiryWindow      = 3 * 24 * time.Hour
 	notifyInboundDownStreak = 2
+	// O8-004：已过期超过该时长的条目不再补发到期通知。到期告警状态（expiryAlerted /
+	// alertOnce 键）只在内存中，面板重启后会把历史已过期的节点/用户/订阅再报一次；
+	// 加上这条下界后，重启只重报"刚到期"的，久已过期的直接跳过。
+	notifyLongExpired = 24 * time.Hour
 )
 
 // nodeOfflineGrace keeps short reconnects (agent restart, upgrade) quiet.
@@ -71,7 +75,10 @@ type notifier struct {
 	expiryAlerted  map[int64]int64
 	// alerted holds keys of reminders already sent (traffic, expiry).
 	alerted map[string]bool
-	client  *http.Client
+	// recentSent 记录最近成功发送过的通知指纹与时间（O8-005），用于抑制
+	// 同一问题在短时间内抖动重复触发的通知（如内核错误状态反复翻转）。
+	recentSent map[string]time.Time
+	client     *http.Client
 }
 
 func newNotifier() *notifier {
@@ -80,6 +87,7 @@ func newNotifier() *notifier {
 		offlineAlerted: make(map[int64]bool),
 		expiryAlerted:  make(map[int64]int64),
 		alerted:        make(map[string]bool),
+		recentSent:     make(map[string]time.Time),
 		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
 		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
 		// 同时限制最多 5 跳，防重定向环。
@@ -119,6 +127,11 @@ func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 		return settings, app, false
 	}
 	if events := strings.TrimSpace(cfg[notifyConfigEvents]); events != "" {
+		// O8-006：兼容旧前端"全不选"时写入的字面量 "none"。之前前端靠"没有事件叫
+		// none"实现全禁用，属于脆弱的隐式约定；此处显式视为禁用全部事件。
+		if events == "none" {
+			return settings, app, false
+		}
 		selected := false
 		for _, e := range strings.Split(events, ",") {
 			if strings.TrimSpace(e) == event {
@@ -133,21 +146,91 @@ func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 	return settings, app, true
 }
 
-// notify sends an event in the background when it is enabled.
-func (h *Handler) notify(event, title, message string) {
+// notifyDupWindow 内事件+标题+内容完全相同的通知只发送一次（O8-005）。
+const notifyDupWindow = 30 * time.Minute
+
+// notifyRetryDelay 是通知发送失败后重试一次的间隔（O8-002）。
+const notifyRetryDelay = 3 * time.Second
+
+// fingerprint 是通知的去重指纹：同一事件、同一标题、同一内容视为同一问题。
+func notifyFingerprint(event, title, message string) string {
+	return event + "\x00" + title + "\x00" + message
+}
+
+// recentlySent 报告该指纹是否在去重窗口内已成功发送过（O8-005）。
+func (n *notifier) recentlySent(fp string, now time.Time) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if t, ok := n.recentSent[fp]; ok && now.Sub(t) < notifyDupWindow {
+		return true
+	}
+	return false
+}
+
+// markSent 记录一次成功发送，并顺带清理过期的指纹条目。
+func (n *notifier) markSent(fp string, now time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.recentSent == nil {
+		n.recentSent = make(map[string]time.Time)
+	}
+	n.recentSent[fp] = now
+	if len(n.recentSent) > 512 {
+		for k, t := range n.recentSent {
+			if now.Sub(t) >= notifyDupWindow {
+				delete(n.recentSent, k)
+			}
+		}
+	}
+}
+
+// sendWithRetry 发送通知，失败后间隔 notifyRetryDelay 重试一次（O8-002）。
+func (n *notifier) sendWithRetry(ctx context.Context, s notifySettings, msg notifyMessage) error {
+	err := n.send(ctx, s, msg)
+	if err == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return err
+	case <-time.After(notifyRetryDelay):
+	}
+	if err2 := n.send(ctx, s, msg); err2 != nil {
+		return err2
+	}
+	return nil
+}
+
+// notifySync 同步发送一条通知并返回是否发送成功（配置未启用也视为未发送）。
+// 测试事件不参与去重，管理员可反复发送测试消息。
+func (h *Handler) notifySync(event, title, message string) bool {
 	if h == nil || h.repo == nil || h.notifier == nil {
-		return
+		return false
 	}
 	settings, app, ok := h.notifyConfig(event)
 	if !ok {
-		return
+		return false
+	}
+	fp := notifyFingerprint(event, title, message)
+	// O8-005：同一问题只提醒一次。内核错误等事件只按状态翻转触发，状态抖动
+	// （error→正常→error）会重复发送相同内容，这里按内容指纹在窗口内抑制。
+	if event != notifyEventTest && h.notifier.recentlySent(fp, time.Now()) {
+		return false
 	}
 	msg := notifyMessage{Event: event, Title: title, Message: message, Time: time.Now().UnixMilli(), App: app}
-	go func() {
-		if err := h.notifier.send(context.Background(), settings, msg); err != nil {
-			log.Printf("notify %s failed: %v", event, err)
-		}
-	}()
+	if err := h.notifier.sendWithRetry(context.Background(), settings, msg); err != nil {
+		log.Printf("notify %s failed: %v", event, err)
+		return false
+	}
+	if event != notifyEventTest {
+		h.notifier.markSent(fp, time.Now())
+	}
+	return true
+}
+
+// notify sends an event in the background when it is enabled.
+func (h *Handler) notify(event, title, message string) {
+	go h.notifySync(event, title, message)
 }
 
 // send delivers to every configured channel and reports the failures.
@@ -320,6 +403,93 @@ func (h *Handler) nodeLabel(nodeID int64) string {
 
 // ---- node online / offline ----
 
+// forgetNode 清理已删除节点的通知状态（O8-003/O12-002）：停止等待中的
+// 掉线定时器（防止给已删节点发送幽灵"掉线"告警），清除告警标记，避免内存泄漏。
+func (h *Handler) forgetNode(nodeID int64) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if t := n.offlineTimers[nodeID]; t != nil {
+		t.Stop()
+		delete(n.offlineTimers, nodeID)
+	}
+	delete(n.offlineAlerted, nodeID)
+	delete(n.expiryAlerted, nodeID)
+}
+
+// pruneStaleNodeAlerts 清理数据库中已不存在节点的通知状态（O8-003/O12-002）。
+// 删除入口如果没有调用 forgetNode，这里兜底，防止定时器泄漏与幽灵告警。
+func (h *Handler) pruneStaleNodeAlerts() {
+	n := h.notifier
+	if n == nil || h.repo == nil {
+		return
+	}
+	nodes, err := h.repo.ListMonitorNodes()
+	if err != nil {
+		return
+	}
+	alive := make(map[int64]bool, len(nodes))
+	for _, node := range nodes {
+		alive[node.ID] = true
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for id := range n.offlineTimers {
+		if !alive[id] {
+			if t := n.offlineTimers[id]; t != nil {
+				t.Stop()
+			}
+			delete(n.offlineTimers, id)
+		}
+	}
+	for id := range n.offlineAlerted {
+		if !alive[id] {
+			delete(n.offlineAlerted, id)
+		}
+	}
+	for id := range n.expiryAlerted {
+		if !alive[id] {
+			delete(n.expiryAlerted, id)
+		}
+	}
+}
+
+// checkStartupOfflineNodes 在面板启动时扫描仍离线的节点并补发通知（O8-001）。
+// 离线状态全部在内存（offlineTimers/offlineAlerted），面板重启前已掉线的节点
+// 在重启后从未"断开"过，因而永不告警。启动时等待一个离线宽限期（让 agent
+// 重连），仍未上线的节点视为持续离线，发送一次"重启后仍离线"，并标记已告警
+// 以便节点恢复在线时发送恢复通知。
+func (h *Handler) checkStartupOfflineNodes() {
+	if h.notifier == nil || h.wsServer == nil || h.repo == nil {
+		return
+	}
+	nodes, err := h.repo.ListMonitorNodes()
+	if err != nil {
+		return
+	}
+	for _, node := range nodes {
+		if node.Status != 1 {
+			continue
+		}
+		if h.wsServer.IsNodeOnline(node.ID) {
+			continue
+		}
+		h.notifier.mu.Lock()
+		already := h.notifier.offlineAlerted[node.ID]
+		if !already {
+			h.notifier.offlineAlerted[node.ID] = true
+		}
+		h.notifier.mu.Unlock()
+		if already {
+			continue
+		}
+		h.notify(notifyEventNodeOffline, "节点掉线（面板重启后仍离线）", "节点："+node.Name)
+	}
+}
+
 func (h *Handler) notifyNodeOffline(nodeID int64) {
 	n := h.notifier
 	if n == nil {
@@ -334,6 +504,13 @@ func (h *Handler) notifyNodeOffline(nodeID int64) {
 		n.mu.Lock()
 		delete(n.offlineTimers, nodeID)
 		if n.offlineAlerted[nodeID] || (h.wsServer != nil && h.wsServer.IsNodeOnline(nodeID)) {
+			n.mu.Unlock()
+			return
+		}
+		// O8-003：节点在宽限期内被删除则不发告警（否则会发出标签退化为
+		// "节点 {id}" 的幽灵掉线通知）。删除入口应调用 forgetNode 提前清理，
+		// 此处为发送侧的最终兜底。
+		if node, err := h.repo.GetNodeByID(nodeID); err != nil || node == nil {
 			n.mu.Unlock()
 			return
 		}
@@ -380,6 +557,10 @@ func (h *Handler) checkNodeExpiry(now time.Time) {
 		expiry := time.UnixMilli(node.ExpiryTime.Int64)
 		left := expiry.Sub(now)
 		if left > notifyExpiryWindow {
+			continue
+		}
+		// O8-004：已过期很久的节点跳过，避免面板重启后把历史过期记录重新报一遍。
+		if left < -notifyLongExpired {
 			continue
 		}
 		h.notifier.mu.Lock()

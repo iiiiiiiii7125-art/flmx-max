@@ -377,7 +377,8 @@ func (r *Repository) SpeedLimitExists(id int64) (bool, error) {
 		return false, errors.New("repository not initialized")
 	}
 	var count int64
-	err := r.db.Model(&model.SpeedLimit{}).Where("id = ?", id).Count(&count).Error
+	// O2-005：只查询已启用的限速规则，已禁用的不得被引用生效。
+	err := r.db.Model(&model.SpeedLimit{}).Where("id = ? AND status = 1", id).Count(&count).Error
 	if err != nil {
 		return false, err
 	}
@@ -407,7 +408,8 @@ func (r *Repository) GetSpeedLimitSpeed(id int64) (int, error) {
 		return 0, errors.New("repository not initialized")
 	}
 	var sl model.SpeedLimit
-	err := r.db.Select("speed").Where("id = ?", id).First(&sl).Error
+	// O2-005：只读取已启用的限速规则，已禁用的不得被引用生效。
+	err := r.db.Select("speed").Where("id = ? AND status = 1", id).First(&sl).Error
 	if err != nil {
 		return 0, err
 	}

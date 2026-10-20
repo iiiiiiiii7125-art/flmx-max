@@ -15,7 +15,7 @@ func TestNftablesNodeModeSSHConfigAndBindingPersistence(t *testing.T) {
 	defer r.Close()
 
 	now := time.Now().UnixMilli()
-	if err := r.CreateNode(
+	if _, err := r.CreateNode(
 		"nft-node",
 		"secret",
 		"203.0.113.10",
@@ -164,7 +164,7 @@ func TestNftablesNodeSSHConfigSurvivesRepositoryReopen(t *testing.T) {
 			}
 
 			now := time.Now().UnixMilli()
-			if err := r.CreateNode(
+			if _, err := r.CreateNode(
 				"nft-node",
 				"secret",
 				tt.cfg.Host,
@@ -240,7 +240,7 @@ func TestUpdateNodeWithoutForwardModePreservesExistingMode(t *testing.T) {
 	defer r.Close()
 
 	now := time.Now().UnixMilli()
-	if err := r.CreateNode(
+	if _, err := r.CreateNode(
 		"nft-node",
 		"secret",
 		"203.0.113.11",

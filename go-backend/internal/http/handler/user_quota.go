@@ -48,6 +48,8 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 
 	forwards, err := h.listActiveForwardsByUser(userID)
 	if err != nil {
+		// O6-004：列举活跃转发失败则本次执法无从执行，记录以便排查（旧逻辑静默返回）
+		log.Printf("applyUserQuotaBlock: list active forwards failed user_id=%d err=%v", userID, err)
 		return
 	}
 	pausedIDs := make([]int64, 0, len(forwards))
@@ -58,6 +60,8 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 			continue
 		}
 		if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
+			// O6-004：暂停服务失败时记录日志（旧逻辑静默 continue，造成"用户被禁用但转发仍在跑"的不一致且无迹可查）
+			log.Printf("applyUserQuotaBlock: pause service failed forward_id=%d err=%v action=skip", forward.ID, err)
 			continue
 		}
 		if err := h.repo.UpdateForwardStatus(forward.ID, 0, now); err != nil {

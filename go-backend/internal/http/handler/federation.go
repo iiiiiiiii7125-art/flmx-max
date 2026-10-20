@@ -1939,10 +1939,14 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 
 	results := make([]syncResult, len(remotes))
 	var wg sync.WaitGroup
+	// O12-003：限制并发同步数，避免远端节点很多时同时发起大量连接耗尽资源。
+	sem := make(chan struct{}, 10)
 	for i, entry := range remotes {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(idx int, e remoteEntry) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			info, err := fc.Connect(e.remoteURL, e.remoteToken, localDomain)
 			if err != nil {
 				errMsg := err.Error()

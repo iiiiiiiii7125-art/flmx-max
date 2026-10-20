@@ -26,10 +26,13 @@ func TestBuildFlowUploadBatchDropsNegativeValues(t *testing.T) {
 		t.Fatalf("expected 1 flow delta, got %d", len(batch.flowDeltas))
 	}
 	d := batch.flowDeltas[0]
-	if d.InFlow != 200 || d.OutFlow != 100 {
+	// O6-002（2026-10-20 修）：InFlow=上传、OutFlow=下载。合法上报 U=100（上传）、D=200（下载），
+	// Flow=1（单向）只计上传 → InFlow=100、OutFlow=0、quota=100。负值上报均被丢弃。
+	// 本测试曾断言 in=200/out=100/quota=300，那是 M-001 移除前的乘数 bug 语义。
+	if d.InFlow != 100 || d.OutFlow != 0 {
 		t.Fatalf("negative values leaked into deltas: %+v", d)
 	}
-	if got := batch.quotaUsage[2]; got != 300 {
+	if got := batch.quotaUsage[2]; got != 100 {
 		t.Fatalf("negative values leaked into quota usage: %d", got)
 	}
 }

@@ -170,7 +170,10 @@ func TestFlowOwnershipLocalForwardRequiresReportingNode(t *testing.T) {
 		}
 		want := int64(0)
 		if nodeID == 2 {
-			want = 200
+			// O6-002/M-001：该测试不创建隧道，GetFlowUploadForwardMetas 将缺失隧道行默认
+			// TunnelFlow=1（单向=仅计上传），故节点 2 上报 U=120、D=80 只计上传 120。
+			// 旧期望 200 是 M-001 移除前的乘数语义（Flow=1 时双向都计×1）。
+			want = 120
 		}
 		if forward.InFlow+forward.OutFlow != want {
 			t.Fatalf("node %d local traffic=%d want=%d", nodeID, forward.InFlow+forward.OutFlow, want)

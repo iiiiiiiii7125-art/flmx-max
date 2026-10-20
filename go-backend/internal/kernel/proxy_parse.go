@@ -493,6 +493,10 @@ func parseClashProfile(text string) ([]ImportedNode, []string) {
 	var doc struct {
 		Proxies []map[string]interface{} `yaml:"proxies"`
 	}
+	// IMP-010：yaml.v3 默认支持锚点/别名（anchor/alias），理论上有别名放大
+	// （billion laughs）风险。已实测评估：9 级倍增展开仅约 0.3ms，且本函数只经
+	// 管理员接口调用、请求体有 10MB 上限、订阅体有 5MB 上限，风险可接受，
+	// 因此不引入 KnownFields/别名禁用等额外限制（会误伤合法 Clash 配置）。
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
 		return nil, []string{"Clash 配置解析失败：" + err.Error()}
 	}

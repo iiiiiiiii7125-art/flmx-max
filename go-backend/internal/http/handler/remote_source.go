@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -65,7 +67,11 @@ func (r remoteSyncResult) summary() string {
 }
 
 func sameImported(row *model.NodeInbound, node kernel.ImportedNode, extra string) bool {
-	return row.Name == truncateRunes(node.Name, 100) && row.Listen == node.Host && row.Port == node.Port && row.Extra == extra
+	// IMP-009：名称/地址匹配大小写不敏感。服务商改名或主机名大小写抖动时，
+	// 严格相等会把同一节点误判为"已更新"（甚至重复导入）；地址侧 externalKey
+	// 本就小写归一化，这里统一用 EqualFold 与之对齐。
+	return strings.EqualFold(row.Name, truncateRunes(node.Name, 100)) &&
+		strings.EqualFold(row.Listen, node.Host) && row.Port == node.Port && row.Extra == extra
 }
 
 // syncRemoteSource fetches the source and brings its imported nodes in line:
@@ -114,7 +120,8 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 			continue
 		}
 		mine = append(mine, row)
-		byName[row.Name] = append(byName[row.Name], row)
+		// IMP-009：按名称匹配时大小写不敏感（providers 会抖动名称大小写）。
+		byName[strings.ToLower(row.Name)] = append(byName[strings.ToLower(row.Name)], row)
 		byAddr[externalKey(row.Listen, row.Port)] = append(byAddr[externalKey(row.Listen, row.Port)], row)
 	}
 	used := map[int64]bool{}
@@ -135,7 +142,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 			continue
 		}
 		fresh.SourceID = src.ID
-		row := take(byName[fresh.Name])
+		row := take(byName[strings.ToLower(fresh.Name)])
 		if row == nil {
 			row = take(byAddr[externalKey(node.Host, node.Port)])
 		}
@@ -151,12 +158,17 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 			res.Added++
 			continue
 		}
-		if sameImported(row, node, fresh.Extra) {
+		// IMP-003：RelayOnly 变化也必须走更新分支，否则 sameImported 判"相同"
+		// 直接跳过，订阅源的"只保留中转线路"开关不会同步到已有节点。
+		if sameImported(row, node, fresh.Extra) && row.RelayOnly == fresh.RelayOnly {
 			continue
 		}
 		moved := row.Listen != fresh.Listen || row.Port != fresh.Port
 		row.Name, row.Protocol, row.Listen, row.Port = fresh.Name, fresh.Protocol, fresh.Listen, fresh.Port
 		row.ShareHost, row.Extra, row.UpdatedTime = fresh.ShareHost, fresh.Extra, now
+		// IMP-003：订阅源"只保留中转线路"开关变更要同步到已有节点。旧逻辑更新
+		// 分支从不写 RelayOnly，改了开关后老节点行为不变，必须删源重建才生效。
+		row.RelayOnly = fresh.RelayOnly
 		if err := h.repo.SaveNodeInbound(row); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
 			continue
@@ -259,8 +271,8 @@ func (h *Handler) remoteSourceList(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(out))
 }
 
-// remoteSourceSave creates or edits a source; a new one (or a changed URL)
-// is fetched right away.
+// remoteSourceSave creates or edits a source; a new one (or a changed URL, or a
+// changed relayOnly flag — IMP-003) is fetched right away.
 func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -301,7 +313,8 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	fetch := src.ID == 0 || src.URL != req.URL
+	// IMP-003：RelayOnly 变更也触发立即同步（之前还需删源重建才生效）。
+	fetch := src.ID == 0 || src.URL != req.URL || src.RelayOnly != boolToInt(req.RelayOnly)
 	src.Name, src.URL, src.IntervalHours = req.Name, req.URL, req.IntervalHours
 	src.RelayOnly = boolToInt(req.RelayOnly)
 	if req.Enabled != nil {
@@ -314,10 +327,33 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if !fetch {
 		src, _ = h.repo.GetRemoteSource(src.ID)
+		// IMP-006：保存时若为公网 http 地址，提前提示同步必败（SecureFetch 对
+		// 公网强制 https）。精确判定在同步时由 SecureFetch 按解析 IP 做。
+		if isLikelyPublicHTTP(req.URL) {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "订阅源已保存。注意：公网 http 地址在同步时会被拒绝，建议改用 https 地址。", Data: remoteSourceViewOf(src), TS: now})
+			return
+		}
 		response.WriteJSON(w, response.OK(remoteSourceViewOf(src)))
 		return
 	}
 	h.respondRemoteSync(w, r.Context(), src)
+}
+
+// isLikelyPublicHTTP 粗略判断订阅地址是否为公网 http（IMP-006，保存时提示用）。
+// 域名在保存时不做 DNS 解析，一律按"可能公网"提示；IP 字面量则按私网/回环豁免。
+func isLikelyPublicHTTP(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !isPrivateIP(ip)
+	}
+	return true
 }
 
 func (h *Handler) respondRemoteSync(w http.ResponseWriter, ctx context.Context, src *model.RemoteSource) {

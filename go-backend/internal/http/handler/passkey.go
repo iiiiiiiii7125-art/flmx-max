@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -281,6 +282,12 @@ func (h *Handler) passkeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
+	// K-005/O11-P2-1：通行证密钥挑战池（1000 槽位）曾无任何限流，
+	// 攻击者约 8.3 req/s 即可填满导致合法用户无法创建挑战。
+	// 复用密码登录的 IP 维度限流（10/min），未达到挑战创建阶段前即拦。
+	if !h.checkLoginRateLimit(w, r) {
+		return
+	}
 	wa, origin := passkeyConfig()
 	if wa == nil {
 		response.WriteJSON(w, response.ErrDefault("通行证密钥未配置"))
@@ -309,6 +316,10 @@ func (h *Handler) passkeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	// K-005：finish 侧同样走 IP 维度限流（与 begin 一致），防凭证猜测洪水。
+	if !h.checkLoginRateLimit(w, r) {
 		return
 	}
 	wa, origin := passkeyConfig()
@@ -444,6 +455,12 @@ func (h *Handler) passkeyDelete(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !deleted {
 		response.WriteJSON(w, response.ErrDefault("通行证密钥不存在"))
 		return
+	}
+	// O11-P3-1：删除通行证密钥后吊销该用户已签发的 JWT 会话。
+	// 此前删除仅删密钥，7 天有效期内的 token 仍可用。
+	// RevokeUserSessions 推进 password_changed_at，中间件据此拒绝旧 token。
+	if err := h.repo.RevokeUserSessions(userID, time.Now().UnixMilli()); err != nil {
+		log.Printf("passkeyDelete: revoke sessions failed user=%d: %v", userID, err)
 	}
 	response.WriteJSON(w, response.OK(nil))
 }

@@ -6,28 +6,74 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
+	"sync"
+	"time"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/repo"
 )
 
+// K-002: v1 签名弃用提示只记一次，避免日志刷屏。
+var subSigV1DeprecationOnce sync.Once
+
+func logSubSigV1Used() {
+	subSigV1DeprecationOnce.Do(func() {
+		log.Printf("warning: legacy flvx-subsig-v1 signature accepted; regenerate the subscription link to use token-bound v2")
+	})
+}
+
 // subURLSig returns the HMAC signature binding a subscription URL to a user.
 // The open subscription endpoint verifies it before applying ?user= filtering,
 // so the user parameter cannot be tampered with (IDOR) by anyone holding the
 // subscription token.
+//
+// K-002: v2 signatures bind the subscription token as well
+// (flvx-subsig-v2:{token}:{userID}), so a sig issued for one subscription
+// cannot be replayed against another subscription's token. v1 signatures
+// (flvx-subsig-v1:{userID}) are still accepted for backwards compatibility,
+// with a deprecation log. Existing links keep working.
 func (h *Handler) subURLSig(userID int64) string {
 	mac := hmac.New(sha256.New, []byte(h.jwtSecret))
 	fmt.Fprintf(mac, "flvx-subsig-v1:%d", userID)
 	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
+// K-002: subURLSigForToken issues a v2 signature bound to a subscription token.
+func (h *Handler) subURLSigForToken(token string, userID int64) string {
+	mac := hmac.New(sha256.New, []byte(h.jwtSecret))
+	fmt.Fprintf(mac, "flvx-subsig-v2:%s:%d", token, userID)
+	return hex.EncodeToString(mac.Sum(nil))[:32]
+}
+
 func (h *Handler) verifySubURLSig(userID int64, sig string) bool {
+	// v1（遗留格式）：仅绑定 userID。
 	want := h.subURLSig(userID)
 	if len(sig) != len(want) {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(sig), []byte(want)) == 1
+	ok := subtle.ConstantTimeCompare([]byte(sig), []byte(want)) == 1
+	if ok {
+		// K-002: 记录弃用，提醒该链接可升级为 token 绑定的 v2 签名。
+		logSubSigV1Used()
+	}
+	return ok
+}
+
+// verifySubURLSigForToken verifies a sig against the v2 (token-bound) format
+// first, then falls back to the v1 legacy format.
+func (h *Handler) verifySubURLSigForToken(token string, userID int64, sig string) bool {
+	if len(sig) != 32 {
+		return false
+	}
+	want := h.subURLSigForToken(token, userID)
+	if subtle.ConstantTimeCompare([]byte(sig), []byte(want)) == 1 {
+		return true
+	}
+	// 兼容旧链接：回退 v1。
+	return h.verifySubURLSig(userID, sig)
 }
 
 // getUserInbounds returns the inbound/relay assignments for a user (admin only).
@@ -79,8 +125,8 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw struct {
-		UserID      int64             `json:"userId"`
-		InboundIDs  []int64           `json:"inboundIds"`
+		UserID      int64            `json:"userId"`
+		InboundIDs  []int64          `json:"inboundIds"`
 		Assignments []jsonAssignment `json:"assignments"`
 	}
 	if err := decodeJSON(r.Body, &raw); err != nil || raw.UserID <= 0 {
@@ -121,6 +167,18 @@ func (h *Handler) getMyInbounds(w http.ResponseWriter, r *http.Request) {
 	if err != nil || userID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("未登录"))
 		return
+	}
+	// K-002: 可选 token 参数（前端把将要拼接的订阅 token 一并提交），
+	// 以便签发与该 token 绑定的 v2 签名；缺省时绑定默认订阅 token。
+	var mineReq struct {
+		Token string `json:"token"`
+	}
+	_ = decodeJSON(r.Body, &mineReq)
+	sigToken := strings.TrimSpace(mineReq.Token)
+	if sigToken == "" {
+		if def, derr := h.repo.DefaultSubscription(time.Now().UnixMilli()); derr == nil && def != nil {
+			sigToken = def.Token
+		}
 	}
 	assignments, err := h.repo.ListUserInboundAssignments(userID)
 	if err != nil {
@@ -194,6 +252,12 @@ func (h *Handler) getMyInbounds(w http.ResponseWriter, r *http.Request) {
 		"userId":   userID,
 		"inbounds": inbounds,
 		"relays":   relays,
-		"sig":      h.subURLSig(userID),
+		// K-002：优先签发 token 绑定的 v2 签名；无可用 token 时退回 v1。
+		"sig": func() string {
+			if sigToken != "" {
+				return h.subURLSigForToken(sigToken, userID)
+			}
+			return h.subURLSig(userID)
+		}(),
 	}))
 }

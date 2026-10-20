@@ -27,15 +27,14 @@ import (
 	"go-backend/internal/security"
 	"go-backend/internal/store/repo"
 	"go-backend/internal/ws"
-
 )
 
 type Handler struct {
-	repo            *repo.Repository
-	jwtSecret       string
-	wsServer        *ws.Server
-	metrics         *metrics.IngestionService
-	healthCheck     *health.Checker
+	repo        *repo.Repository
+	jwtSecret   string
+	wsServer    *ws.Server
+	metrics     *metrics.IngestionService
+	healthCheck *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
 	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
 	nftablesManager *serializedNftManager
@@ -57,11 +56,11 @@ type Handler struct {
 	passkeyMu      sync.Mutex
 	passkeyPending map[string]passkeyCeremony
 
-	jobsMu              sync.Mutex
-	jobsCtx             context.Context
-	jobsCancel          context.CancelFunc
-	jobsStarted         bool
-	jobsWG              sync.WaitGroup
+	jobsMu      sync.Mutex
+	jobsCtx     context.Context
+	jobsCancel  context.CancelFunc
+	jobsStarted bool
+	jobsWG      sync.WaitGroup
 
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
@@ -77,8 +76,8 @@ type Handler struct {
 	nodeLatency *nodeLatencyStore
 	// 移植自 kure29/flyx：节点回程路由追踪结果缓存。
 	nodeRoutes *nodeRouteStore
-	notifier       *notifier
-	bestExit      *bestExitManager
+	notifier   *notifier
+	bestExit   *bestExitManager
 }
 
 const monitorTunnelQualityEnabledConfigKey = "monitor_tunnel_quality_enabled"
@@ -130,10 +129,10 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		metrics:                  metrics.NewIngestionService(repo),
 		healthCheck:              nil,
 		nftablesManager:          newSerializedNftManager(runtimenft.NewManager(nil)),
-		nftAutoPending:             make(map[int64]bool),
-		nftAutoQueue:               make(chan int64, 64),
-		nftAutoFail:                make(map[int64]*nftAutoFailState),
-		nftApplyFailed:             make(map[int64]bool),
+		nftAutoPending:           make(map[int64]bool),
+		nftAutoQueue:             make(chan int64, 64),
+		nftAutoFail:              make(map[int64]*nftAutoFailState),
+		nftApplyFailed:           make(map[int64]bool),
 		captchaTokens:            make(map[string]int64),
 		passkeyPending:           make(map[string]passkeyCeremony),
 		pendingUpgradeRedeploy:   make(map[int64]struct{}),
@@ -569,8 +568,10 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctxClaims := r.Context().Value(middleware.ClaimsContextKey)
-	claims, isAdmin := ctxClaims.(auth.Claims)
-	if !isAdmin || claims.RoleID != 0 {
+	// O11-P3-3：变量更名为 isAuthenticated（旧名 isAdmin 实为"断言成功"，
+	// 命名误导易被后人改错；逻辑不变，非 admin 仍走敏感配置过滤）。
+	claims, isAuthenticated := ctxClaims.(auth.Claims)
+	if !isAuthenticated || claims.RoleID != 0 {
 		cfgMap = repo.FilterSensitiveConfigs(cfgMap)
 	}
 	delete(cfgMap, "license_key")
@@ -612,6 +613,20 @@ func (h *Handler) userList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		users = filtered
+	}
+
+	// O5-003：正确使用 current/size 分页。旧逻辑解析了参数却完全忽略、全量返回。
+	// 未传分页参数（current/size 为 0）时保持旧全量行为兼容。
+	if req.Current > 0 && req.Size > 0 {
+		start := (req.Current - 1) * req.Size
+		if start > len(users) {
+			start = len(users)
+		}
+		end := start + req.Size
+		if end > len(users) {
+			end = len(users)
+		}
+		users = users[start:end]
 	}
 
 	response.WriteJSON(w, response.OK(users))
@@ -1121,6 +1136,13 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UnixMilli()
+
+	// O11-P3-2：先完成全部校验（敏感/系统管理/合法性/空值拒绝，与 updateSingleConfig
+	// 一致：空值仅 app_logo/app_favicon 允许），全部通过后再一次性事务写入。
+	// 旧逻辑逐个 UpsertConfig 且无事务：中途失败会留下部分写入，且空值直接入库。
+	validated := make(map[string]string, len(payload))
+	hooks := make([]string, 0, len(payload))
+	prevPools := make(map[string][]latencyTarget, len(payload))
 	for k, v := range payload {
 		key := strings.TrimSpace(k)
 		if key == "" {
@@ -1141,13 +1163,22 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		prevPool := h.latencyPoolBefore(key)
-		if err := h.repo.UpsertConfig(key, value, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+		if value == "" && key != "app_logo" && key != "app_favicon" {
+			response.WriteJSON(w, response.ErrDefault("配置值不能为空"))
 			return
 		}
+		validated[key] = value
+		hooks = append(hooks, key)
+		prevPools[key] = h.latencyPoolBefore(key)
+	}
+
+	if err := h.repo.UpsertConfigs(validated, now); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	for _, key := range hooks {
 		h.notifyTunnelQualityConfigChanged(key)
-		h.onLatencyConfigChanged(key, prevPool)
+		h.onLatencyConfigChanged(key, prevPools[key])
 	}
 
 	response.WriteJSON(w, response.OKEmpty())
@@ -1527,7 +1558,6 @@ func (h *Handler) captchaEnabled() (bool, error) {
 	return true, nil
 }
 
-
 func (h *Handler) markCaptchaToken(token string) {
 	if h == nil {
 		return
@@ -1769,23 +1799,29 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// 可达数十 MB，10MB 的通用上限会误拒合法备份。nginx 侧已放行 50m（SCR-002），
 	// 此处 100MB 与面板规模对齐；仍为有界值，防内存耗尽 DoS。
 	if err := decodeJSONWithLimit(r.Body, &req, 100<<20); err != nil {
-		response.WriteJSON(w, response.Err(500, "请求参数错误"))
+		// J-008：错误码统一为 -2（原混用 500 与 -2）
+		response.WriteJSON(w, response.Err(-2, "请求参数错误"))
 		return
 	}
 
 	if len(req.Types) == 0 {
-		response.WriteJSON(w, response.Err(500, "请选择要导入的数据类型"))
+		// J-008：错误码统一为 -2
+		response.WriteJSON(w, response.Err(-2, "请选择要导入的数据类型"))
 		return
 	}
 
 	autoBackup, err := h.repo.ExportAll()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入前自动备份失败: %v", err)))
-		return
+		// O7-010：导入前自动备份失败时只记录警告、继续导入流程。
+		// 旧逻辑直接中断恢复——但数据库损坏时正是备份失败的时候，
+		// 此时最需要从完好的外部备份恢复。
+		log.Printf("backupImport: pre-import auto backup failed, continuing: %v", err)
 	}
 
-	if req.BackupData.Version == "" {
-		response.WriteJSON(w, response.Err(500, "备份数据格式错误"))
+	// O7-009：版本兼容性检查（repo.Import 同样校验，此处提前给中文提示）。
+	if req.BackupData.Version != "1.0" {
+		// J-008：错误码统一为 -2
+		response.WriteJSON(w, response.Err(-2, "备份版本不支持（仅支持 1.0）"))
 		return
 	}
 
