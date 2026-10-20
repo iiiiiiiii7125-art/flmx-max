@@ -35,9 +35,12 @@ func (r *Repository) CheckAndUpdateSeq(nodeID int64, seq *int64, now int64) (acc
 	if seq == nil {
 		// 计数+1。B4/F-071: 此前 Exec 的错误被直接丢弃，计数失败无声；
 		// 现在把错误返回给调用方（上报路径会记录并按失败处理）。
+		// PG-2: DO UPDATE 的右值必须用表名限定原行列（node_seq.legacy_count）；
+		// 裸列名在 PG 解析期于目标行与 EXCLUDED 间歧义（SQLSTATE 42702），
+		// 空表首插亦报错。限定形式 SQLite 同样接受，两方言同形。
 		if err := r.db.Exec(`INSERT INTO node_seq (node_id, last_seq, legacy_count, updated_time)
 			VALUES (?, 0, 1, ?)
-			ON CONFLICT (node_id) DO UPDATE SET legacy_count = legacy_count + 1, updated_time = ?`,
+			ON CONFLICT (node_id) DO UPDATE SET legacy_count = node_seq.legacy_count + 1, updated_time = ?`,
 			nodeID, now, now).Error; err != nil {
 			return false, false, true, err
 		}
