@@ -1770,13 +1770,9 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	if id <= 0 {
 		return
 	}
-	if err := h.cleanupFederationRuntime(id); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-	h.cleanupTunnelRuntime(id)
 	// O3-001：删除前收集受影响的入站 ID（隧道删除会级联删除 NodeInboundRelay）。
 	// 参考中转删除时的 h.refreshInboundWhitelist(rel.InboundID) 调用。
+	// F-002：收集必须在转发数据面清理之前（清理会删转发行）。
 	var affectedInboundIDs []int64
 	if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
 		seen := make(map[int64]struct{})
@@ -1793,6 +1789,17 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// F-002：先逐条清理名下转发的数据面（gost DeleteService / nft
+	// pending 台账），清理未完成则中止删隧道，避免孤儿监听脱离计数。
+	if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if err := h.cleanupFederationRuntime(id); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	h.cleanupTunnelRuntime(id)
 	if err := h.deleteTunnelByID(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1875,6 +1882,12 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		tunnelName, _ := h.repo.GetTunnelName(id)
 		if _, err := h.getTunnelRecord(id); err != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, tunnelName, err)
+			continue
+		}
+		// F-002：与单条删隧道同一口径，先清名下转发的数据面。
+		if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, tunnelName, err)
 			continue

@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -638,7 +639,73 @@ func (h *Handler) rollbackTunnelForwardMigrationPlans(plans []tunnelForwardMigra
 	}
 }
 
+// cleanupTunnelForwardsDataPlane 是 F-002 的修复核心：删隧道前先枚举其
+// 全部转发，逐条走与单条 forwardDelete 相同的数据面清理，再允许删库。
+//
+// 此前所有删隧道入口都只清隧道自身的 chain/service 并直接 DB 级联：
+// gost 转发服务收不到 DeleteService，孤儿监听继续转发且脱离计数/配额；
+// nft 转发连 pending 台账被级联一并删除，孤儿规则永不重试。
+//
+// 语义与 forwardDelete 对齐（S-04 / R5-B3 D1-001）：
+//   - gost：逐条 controlForwardServices(DeleteService) 后删转发行；任一
+//     转发清理失败（节点离线等）返回错误，调用方不得继续删隧道——宁可
+//     删不掉，也不能静默留下孤儿（单条转发有 force-delete 兜底）。
+//   - nft：先把全部转发标 pending 并登记台账，再对入口节点 reconcile
+//     一次；reconcile 失败返回错误，转发留在台账里由后台退避重试
+//     （runNftPendingDeleteRetryLoop），隧道行保留；成功后逐条删转发行
+//     （DeleteForwardCascade 会一并清台账/计数/绑定）。
+func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
+	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
+	if err != nil {
+		return err
+	}
+	if len(forwards) == 0 {
+		return nil
+	}
+	nftMode, entryNodeIDs, err := h.tunnelUsesNftables(tunnelID)
+	if err != nil {
+		return err
+	}
+	if nftMode {
+		if len(entryNodeIDs) == 0 {
+			return errors.New("nftables 转发缺少入口节点")
+		}
+		nodeID := entryNodeIDs[0]
+		now := time.Now()
+		for i := range forwards {
+			if err := h.repo.MarkForwardPendingDelete(forwards[i].ID, nodeID, now); err != nil {
+				return err
+			}
+		}
+		if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+			return fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，隧道未删除", len(forwards))
+		}
+		for i := range forwards {
+			if err := h.deleteForwardByID(forwards[i].ID); err != nil {
+				// 同 forwardDelete 的 D6：数据面已变更（规则已下线），
+				// DB 删除失败记日志，靠后续对账收敛。
+				log.Printf("tunnel delete: forward db delete after nft reconcile failed tunnel_id=%d forward_id=%d err=%v", tunnelID, forwards[i].ID, err)
+				return err
+			}
+		}
+		return nil
+	}
+	for i := range forwards {
+		fwd := forwards[i]
+		if err := h.controlForwardServices(&fwd, "DeleteService", true); err != nil {
+			return fmt.Errorf("转发 %s 数据面清理失败，隧道未删除: %w", fwd.Name, err)
+		}
+		if err := h.deleteForwardByID(fwd.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *Handler) deleteTunnelAndCleanup(tunnelID int64) error {
+	if err := h.cleanupTunnelForwardsDataPlane(tunnelID); err != nil {
+		return err
+	}
 	h.cleanupTunnelRuntime(tunnelID)
 	h.cleanupFederationRuntime(tunnelID)
 	if err := h.deleteTunnelByID(tunnelID); err != nil {

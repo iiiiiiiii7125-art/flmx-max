@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +50,13 @@ func TestTunnelDeletePreviewIncludesDependentRulesContract(t *testing.T) {
 	}
 }
 
-func TestTunnelDeleteWithForwardsDeleteActionRemovesTunnelAndRulesContract(t *testing.T) {
+// B4/F-002 改写：本用例原先断言"节点不可达时 delete_forwards 也能把隧道与
+// 规则从 DB 静默删掉"——那正是 F-002 的缺陷行为（数据面从未清理、孤儿
+// 监听脱离计数）。新语义与单条 forwardDelete 的 S-04 对齐：数据面清理
+// 未完成（节点离线）必须报错且保留全部行；成功路径（节点在线、
+// DeleteService 真实下发后删行）由
+// TestTunnelDeleteSendsDeleteServiceForForwardsContract 覆盖。
+func TestTunnelDeleteWithForwardsDeleteActionBlockedWhileNodeUnreachableContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, repo := setupContractRouter(t, secret)
 	adminToken := mustAdminToken(t, secret)
@@ -62,18 +69,21 @@ func TestTunnelDeleteWithForwardsDeleteActionRemovesTunnelAndRulesContract(t *te
 		"id":     sourceTunnelID,
 		"action": "delete_forwards",
 	})
-	if out.Code != 0 {
-		t.Fatalf("expected success, got code=%d msg=%q", out.Code, out.Msg)
+	if out.Code == 0 {
+		t.Fatalf("expected failure while the forward's node is unreachable, got success")
+	}
+	if !strings.Contains(out.Msg, "数据面清理失败") {
+		t.Fatalf("expected data-plane cleanup failure message, got %q", out.Msg)
 	}
 
-	if count := mustQueryInt(t, repo, `SELECT COUNT(1) FROM tunnel WHERE id = ?`, sourceTunnelID); count != 0 {
-		t.Fatalf("expected tunnel deleted, got count=%d", count)
+	if count := mustQueryInt(t, repo, `SELECT COUNT(1) FROM tunnel WHERE id = ?`, sourceTunnelID); count != 1 {
+		t.Fatalf("expected tunnel kept, got count=%d", count)
 	}
-	if count := mustQueryInt(t, repo, `SELECT COUNT(1) FROM forward WHERE id = ?`, forwardID); count != 0 {
-		t.Fatalf("expected forward deleted, got count=%d", count)
+	if count := mustQueryInt(t, repo, `SELECT COUNT(1) FROM forward WHERE id = ?`, forwardID); count != 1 {
+		t.Fatalf("expected forward kept, got count=%d", count)
 	}
-	if count := mustQueryInt(t, repo, `SELECT COUNT(1) FROM forward_port WHERE forward_id = ?`, forwardID); count != 0 {
-		t.Fatalf("expected forward ports deleted, got count=%d", count)
+	if count := mustQueryInt(t, repo, `SELECT COUNT(1) FROM forward_port WHERE forward_id = ?`, forwardID); count != 1 {
+		t.Fatalf("expected forward ports kept, got count=%d", count)
 	}
 }
 
