@@ -728,7 +728,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		return
 	}
 	prevTargets := outboundTargets(row)
-	if err := h.setInboundRouting(&row, k.KernelType, req.OutboundID, req.SplitRules); err != nil {
+	if err := h.setInboundRouting(&row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
 		releasePortAlloc()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -1247,7 +1247,7 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 			return nil, "", err
 		}
 		inbounds = append(inbounds, in)
-		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
+		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.NetworkOn(k.KernelType)}
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
 		}
@@ -1268,6 +1268,7 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelow(k.Version, 1, 14),
+		SingboxSnell:      !versionBelow(k.Version, 1, 14),
 	})
 	if err != nil {
 		return nil, "", err
@@ -1480,6 +1481,9 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(version, 1, 12) {
 		return fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", version)
 	}
+	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelow(version, 1, 14) {
+		return fmt.Sprintf("sing-box 内置 Snell 需要 1.14 及以上，节点安装的是 %s", version)
+	}
 	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 6, 8) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
 	}
@@ -1508,6 +1512,15 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		}
 		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
 			return fmt.Errorf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)
+		}
+		// 经 Snell 节点出站（链式/分流目标）的入站同样要求 sing-box
+		// 1.14+；目标入站不在本内核上，gate 看不到，须单独扫描（S4）。
+		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 14) {
+			for _, id := range outboundTargets(row) {
+				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && t.Protocol == kernel.ProtocolSnell {
+					return fmt.Errorf("入站 %s 经 Snell 节点 %s 出站，需要 sing-box 1.14 及以上，不能安装 %s", row.Name, t.Name, version)
+				}
+			}
 		}
 	}
 	return nil
