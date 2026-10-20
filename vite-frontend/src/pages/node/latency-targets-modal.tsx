@@ -1,15 +1,10 @@
+import type { Node } from "@/pages/node/types";
+
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Pin } from "lucide-react";
 
 import { getConfigByName, setNodeLatencyTargets } from "@/api";
-
-// 节点类型（精简版，仅含延迟目标设置需要的字段）。
-interface Node {
-  id: number;
-  name: string;
-  latencyTargets?: { points: string[]; pinned: string[] } | null;
-}
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import {
