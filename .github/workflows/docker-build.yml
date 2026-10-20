@@ -1,7 +1,8 @@
 name: Build and Push Images
 
 env:
-  VERSION: "2.0.7-beta"  # 分支推送时使用的默认版本
+  # F-123: 原残留 VERSION "2.0.7-beta" 已删除——本 workflow 只由 tag 与
+  # workflow_dispatch 触发，分支触发分支（唯一消费者）不可达。
   REGISTRY: ghcr.io
 
 on:
@@ -20,6 +21,9 @@ jobs:
   check-version:
     name: Check Version and Decide Build
     runs-on: ubuntu-latest
+    # F-125: 与 build-vite/build-go-backend 对齐，收敛默认权限。
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_build: ${{ steps.version.outputs.should_build }}
@@ -27,7 +31,7 @@ jobs:
       is_tag: ${{ steps.version.outputs.is_tag }}
       image_owner: ${{ steps.version.outputs.image_owner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -38,62 +42,44 @@ jobs:
           IMAGE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "image_owner=$IMAGE_OWNER" >> $GITHUB_OUTPUT
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.ref_type }}" == "tag" ]]; then
-            # Tag 或手动触发：使用 tag 名 / 填写的版本号，全量构建并发版
-            VERSION="${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}"
-            if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
-              echo "::error::版本号必须以数字开头，例如 3.0.0"
-              exit 1
-            fi
-            echo "🏷️ Release version: $VERSION"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "is_tag=true" >> $GITHUB_OUTPUT
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "should_build_gost=true" >> $GITHUB_OUTPUT
-          else
-            # 分支触发：使用 env.VERSION，检查是否需要构建
-            VERSION="${{ env.VERSION }}"
-            echo "🌿 Branch trigger detected, using version: $VERSION"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "is_tag=false" >> $GITHUB_OUTPUT
-
-            # 检查 tag 是否已存在
-            if git rev-parse "$VERSION" >/dev/null 2>&1; then
-              echo "Tag $VERSION already exists"
-              echo "should_build=false" >> $GITHUB_OUTPUT
-
-              # 检查 go-gost 目录是否有变化
-              TAG_COMMIT=$(git rev-list -n 1 "$VERSION")
-              if git diff --quiet --ignore-all-space --ignore-blank-lines $TAG_COMMIT HEAD -- go-gost/ 2>/dev/null; then
-                echo "✅ GOST files unchanged since tag"
-                echo "should_build_gost=false" >> $GITHUB_OUTPUT
-              else
-                echo "🔄 Detected changes in go-gost directory"
-                git diff --stat $TAG_COMMIT HEAD -- go-gost/ || true
-                echo "should_build_gost=true" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "Tag $VERSION does not exist, will build all components"
-              echo "should_build=true" >> $GITHUB_OUTPUT
-              echo "should_build_gost=true" >> $GITHUB_OUTPUT
-            fi
+          # F-123: 本 workflow 的 on: 只有 tag push 与 workflow_dispatch，
+          # 原 else 分支（分支触发 + env.VERSION + should_build=false 的
+          # GOST-only 更新路径）不可达，已删除；update-release-gost job
+          # 的触发条件（is_tag == 'false'）因此恒假、该 job 现为静态
+          # 不可达，保留待产品侧决定是否整体移除。
+          # Tag 或手动触发：使用 tag 名 / 填写的版本号，全量构建并发版
+          VERSION="${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
+            echo "::error::版本号必须以数字开头，例如 3.0.0"
+            exit 1
           fi
+          echo "🏷️ Release version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_tag=true" >> $GITHUB_OUTPUT
+          echo "should_build=true" >> $GITHUB_OUTPUT
+          echo "should_build_gost=true" >> $GITHUB_OUTPUT
 
   build-gost:
     name: Build & Compress GOST Binary
     needs: check-version
     if: needs.check-version.outputs.should_build_gost == 'true'
     runs-on: ubuntu-latest
+    # F-125: 只读源码 + artifact 上传（走 Actions runtime，不需要
+    # contents: write），收敛默认权限。
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.23'
+          # F-007: 与三处 go.mod（1.25）及 ci-build 对齐（原 1.23 会让
+          # go.mod toolchain 检查直接失败或悄悄降格构建）。
+          go-version: '1.25'
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/go-build
@@ -130,25 +116,25 @@ jobs:
           sha256sum gost-arm64 > gost-arm64.sha256
 
       - name: Upload GOST AMD64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gost-binary-amd64
           path: ./go-gost/gost-amd64
 
       - name: Upload GOST ARM64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gost-binary-arm64
           path: ./go-gost/gost-arm64
 
       - name: Upload GOST AMD64 checksum artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gost-checksum-amd64
           path: ./go-gost/gost-amd64.sha256
 
       - name: Upload GOST ARM64 checksum artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gost-checksum-arm64
           path: ./go-gost/gost-arm64.sha256
@@ -162,13 +148,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -203,15 +189,16 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.23'
+          # F-007: 同 build-gost，与 go.mod/ci-build 的 1.25 对齐。
+          go-version: '1.25'
 
       - name: Cache Go dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/go-build
@@ -224,10 +211,10 @@ jobs:
         run: go mod download
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -254,28 +241,28 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download GOST AMD64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-binary-amd64
           path: ./artifacts/amd64
 
       - name: Download GOST ARM64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-binary-arm64
           path: ./artifacts/arm64
 
       - name: Download GOST AMD64 checksum
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-checksum-amd64
           path: ./artifacts/
 
       - name: Download GOST ARM64 checksum
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-checksum-arm64
           path: ./artifacts/
@@ -310,8 +297,8 @@ jobs:
           # upstream name the checked-in scripts carry.
           sed -i -E "s|^REPO=\"[^\"]*\"|REPO=\"${REPO}\"|" ./artifacts/install.sh ./artifacts/panel_install.sh
           grep -q "^REPO=\"${REPO}\"" ./artifacts/install.sh && grep -q "^REPO=\"${REPO}\"" ./artifacts/panel_install.sh
-          sed -i "s|2.0.7-beta|${VERSION}|g" ./artifacts/install.sh
-          sed -i "s|2.0.7-beta|${VERSION}|g" ./artifacts/panel_install.sh
+          # F-123: 原两行 sed "s|2.0.7-beta|...|" 已删除——两个脚本中
+          # 均无该字面量（版本注入走下方 PINNED_VERSION），属失效替换。
 
           # 注入固定版本号，使从 Release 页下载的脚本只安装该版本
           sed -i "s|^PINNED_VERSION=\"\"|PINNED_VERSION=\"${VERSION}\"|" ./artifacts/install.sh
@@ -419,28 +406,28 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download GOST AMD64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-binary-amd64
           path: ./artifacts/amd64
 
       - name: Download GOST ARM64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-binary-arm64
           path: ./artifacts/arm64
 
       - name: Download GOST AMD64 checksum
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-checksum-amd64
           path: ./artifacts/
 
       - name: Download GOST ARM64 checksum
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gost-checksum-arm64
           path: ./artifacts/

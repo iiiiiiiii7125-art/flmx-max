@@ -777,6 +777,241 @@ test_panel_install_script_uses_default_proxy() (
     "panel_install.sh should keep the default proxy when enabled"
 )
 
+# F-006: panel_install 自更新必须走带 sha256 校验的 Release 通道。
+# 夹具：stub curl 按 URL 供数——releases/latest 提供版本重定向，
+# 版本化资产提供脚本本体与 .sha256。
+#   tamper：脚本本体与 .sha256 不符（被篡改）→ 不得覆写 $0、不得执行新脚本。
+#   legit ：脚本与 .sha256 自洽 → 应正常自更新并执行新脚本（哨兵出现）。
+panel_self_update_fixture() {
+  local mode="$1"
+  local work stubbin good_script
+  work=$(mktemp -d)
+  stubbin=$(mktemp -d)
+  good_script="$work/good_panel.sh"
+  cat > "$good_script" <<'EOF'
+#!/bin/bash
+SCRIPT_VERSION="99999999.99"
+echo "updated" > "$SELF_UPDATE_SENTINEL"
+EOF
+  if [[ "$mode" == "legit" ]]; then
+    STUB_SHA256=$(sha256sum "$good_script" | awk '{print $1}')
+  else
+    STUB_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
+  fi
+  export STUB_SHA256
+  export STUB_GOOD_SCRIPT="$good_script"
+  cat > "$stubbin/curl" <<'EOF'
+#!/bin/bash
+out=""; url=""; want_effective=0
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  a="${args[i]}"
+  case "$a" in
+    -o) out="${args[i+1]}" ;;
+    *url_effective*) want_effective=1 ;;
+    http*://*) url="$a" ;;
+  esac
+done
+if [[ "$want_effective" == "1" ]]; then
+  printf 'https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/9.9.9'
+  exit 0
+fi
+case "$url" in
+  *.sha256*)
+    if [[ -n "$out" ]]; then printf '%s' "$STUB_SHA256" > "$out"; else printf '%s' "$STUB_SHA256"; fi
+    ;;
+  *panel_install.sh*)
+    if [[ -n "$out" ]]; then cat "$STUB_GOOD_SCRIPT" > "$out"; else cat "$STUB_GOOD_SCRIPT"; fi
+    ;;
+  *)
+    exit 22
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$stubbin/curl"
+  cp "$ROOT_DIR/panel_install.sh" "$work/panel_install.sh"
+  export SELF_UPDATE_SENTINEL="$work/sentinel"
+  rm -f "$SELF_UPDATE_SENTINEL"
+  ( cd "$work" && printf '6\n' | PATH="$stubbin:$PATH" PROXY_ENABLED=false bash ./panel_install.sh >/dev/null 2>&1 ) || true
+  echo "$work"
+}
+
+test_panel_install_self_update_rejects_tampered_script() {
+  local work
+  work=$(panel_self_update_fixture tamper)
+  [[ ! -f "$work/sentinel" ]] || fail "F-006: tampered self-update script must not be executed (sentinel present)"
+  if [[ -f "$work/panel_install.sh" ]]; then
+    grep -q 'SCRIPT_VERSION="99999999.99"' "$work/panel_install.sh" && fail "F-006: tampered self-update must not overwrite \$0"
+    :
+  fi
+  echo "ok: self-update rejects tampered script"
+}
+
+test_panel_install_self_update_accepts_verified_script() {
+  local work
+  work=$(panel_self_update_fixture legit)
+  [[ -f "$work/sentinel" ]] || fail "F-006: verified self-update script should be executed (sentinel missing)"
+  echo "ok: self-update accepts verified script"
+}
+
+test_panel_install_self_update_rejects_tampered_script
+test_panel_install_self_update_accepts_verified_script
+
+# F-048: install 路径下载失败时不得先停/禁用已有服务（与 update 路径同序）。
+test_install_flux_agent_keeps_service_when_download_fails() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  printf '#!/bin/bash\necho "old version"\n' > "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flux_agent"
+  SERVER_ADDR="panel.example.com:443"
+  SECRET="<redacted>"
+  DOWNLOAD_URL="https://example.com/gost"
+
+  # 调用记录走文件：install_flux_agent 在子 shell 里跑，变量赋值传不回来
+  local calls_log
+  calls_log=$(mktemp)
+  ask_proxy_config() { :; }
+  ensure_download_url_initialized() { :; }
+  get_config_params() { :; }
+  check_and_install_tcpkill() { :; }
+  ensure_service_manager() { return 0; }
+  cleanup_legacy_gost_installation() { :; }
+  flux_agent_service_exists() { return 0; }
+  stop_flux_agent_service() { echo stop >> "$calls_log"; }
+  disable_flux_agent_service() { echo disable >> "$calls_log"; }
+  curl() { return 0; }
+
+  local rc="0"
+  ( install_flux_agent >/dev/null ) || rc="$?"
+
+  assert_equals "1" "$rc" "F-048: install should fail when the download artifact is missing"
+  if grep -q '^stop$' "$calls_log"; then
+    fail "F-048: install must not stop the running service when download fails"
+  fi
+  if grep -q '^disable$' "$calls_log"; then
+    fail "F-048: install must not disable the running service when download fails"
+  fi
+)
+
+# F-049: 已有部署时 install_panel 必须拒绝（除非显式强制并先备份 .env）。
+test_install_panel_refuses_existing_deployment() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  printf 'JWT_SECRET=keepme\nPOSTGRES_PASSWORD=keeppw\n' > "$work/.env"
+  printf 'services: {}\n' > "$work/docker-compose.yml"
+
+  ask_proxy_config() { :; }
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+    POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="brandnew"; JWT_SECRET="brandnewsecret"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() { return 0; }
+
+  local rc="0"
+  ( cd "$work" && install_panel >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "F-049: install_panel must refuse when a deployment already exists"
+  grep -q "keepme" "$work/.env" || fail "F-049: install_panel must not overwrite .env of an existing deployment"
+
+  # 显式强制重装：放行，但原 .env 必须先备份
+  local rc2="0"
+  ( cd "$work" && PANEL_FORCE_REINSTALL=1 install_panel >/dev/null 2>&1 ) || rc2="$?"
+  assert_equals "0" "$rc2" "F-049: PANEL_FORCE_REINSTALL=1 should allow reinstall"
+  ls "$work"/.env.bak.* >/dev/null 2>&1 || fail "F-049: forced reinstall must back up the old .env first"
+  grep -q "keepme" "$work"/.env.bak.* || fail "F-049: .env backup must contain the old secrets"
+)
+
+# F-050: Docker 安装脚本未通过 pin 校验时不得执行（哨兵法）。
+test_install_docker_rejects_unverified_script() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local sentinel
+  sentinel=$(mktemp -u)
+  export DOCKER_INSTALL_SENTINEL="$sentinel"
+  curl() {
+    local out="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      prev="$a"
+    done
+    if [[ -n "$out" ]]; then
+      printf '#!/bin/sh\ntouch "%s"\n' "$DOCKER_INSTALL_SENTINEL" > "$out"
+    else
+      printf '#!/bin/sh\ntouch "%s"\n' "$DOCKER_INSTALL_SENTINEL"
+    fi
+    return 0
+  }
+  systemctl() { return 0; }
+  service() { return 0; }
+  apt-get() { return 1; }
+  dnf() { return 1; }
+  yum() { return 1; }
+  apk() { return 1; }
+
+  local rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  [[ ! -f "$sentinel" ]] || fail "F-050: unverified Docker installer script must not be executed"
+  assert_equals "1" "$rc" "F-050: install_docker should fail when script is unverified and package fallback fails"
+)
+
+# F-138: download_verified 边角——空 .sha256 必须拒；逃生口误填 yes 不得静默跳过校验。
+test_download_verified_fail_closed_edges() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work dest
+  work=$(mktemp -d)
+  dest="$work/f.bin"
+  curl() {
+    local out="" prev="" url=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      case "$a" in http*://*) url="$a";; esac
+      prev="$a"
+    done
+    case "$url" in
+      *.sha256) : > "$out" ;;
+      *) printf 'payload' > "$out" ;;
+    esac
+    return 0
+  }
+
+  local rc="0"
+  ( FLMX_VERIFY_DOWNLOADS=1 download_verified "https://example.com/f.bin" "$dest" >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "F-138: empty .sha256 must be rejected"
+  [[ ! -f "$dest" ]] || fail "F-138: rejected download must be removed"
+
+  # 误填 yes：不得跳过校验（.sha256 仍为空 → 必须拒）
+  rc="0"
+  ( FLMX_VERIFY_DOWNLOADS=yes download_verified "https://example.com/f.bin" "$dest" >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "F-138: FLMX_VERIFY_DOWNLOADS=yes must not silently skip verification"
+)
+
+test_install_flux_agent_keeps_service_when_download_fails
+test_install_panel_refuses_existing_deployment
+test_install_docker_rejects_unverified_script
+test_download_verified_fail_closed_edges
 test_install_script_respects_disabled_proxy
 test_install_script_asks_for_proxy_config
 test_install_script_recomputes_download_url_after_prompt

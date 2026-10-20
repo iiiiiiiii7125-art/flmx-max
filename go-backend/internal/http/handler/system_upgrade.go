@@ -381,6 +381,11 @@ write_status() {
 
 # O9-002：失败时自动恢复备份文件
 # 旧逻辑：pull/up 失败时直接 exit 1，已替换的 compose.yml/.env 不恢复，面板无法启动
+# F-028（A7-004）：只恢复文件不算回滚——容器仍按新定义运行（或已退出），
+# 终态却写 rolled_back 造成「假回滚成功」。$1=recreate（默认）时恢复文件后
+# 用旧定义重建容器并复跑健康检查，成功才写 rolled_back；重建或健康失败
+# 写 rollback_failed 并保留 .bak 告警人工介入。pull 阶段失败时新容器
+# 从未创建，调用方传 files 只恢复文件、不做无谓重建。
 rollback() {
   log "升级失败，正在回滚..."
   if [ -f docker-compose.yml.upgrade.bak ]; then
@@ -391,9 +396,20 @@ rollback() {
     cp .env.upgrade.bak .env
     log "已恢复 .env"
   fi
-  # U1-003：回滚终态回写状态文件，.bak 保留供人工排查（不删除）。
-  write_status "false" "rolled_back"
-  log "回滚完成，请检查 upgrade.log 并手动处理"
+  if [ "${1:-recreate}" = "files" ]; then
+    # U1-003：回滚终态回写状态文件，.bak 保留供人工排查（不删除）。
+    write_status "false" "rolled_back"
+    log "回滚完成（仅文件恢复，容器未重建），请检查 upgrade.log"
+    return 0
+  fi
+  log "用恢复后的配置重建旧容器..."
+  if docker compose up -d --force-recreate --remove-orphans backend frontend >> "$LOGFILE" 2>&1 && wait_backend_healthy; then
+    write_status "false" "rolled_back"
+    log "回滚完成：旧容器已按恢复后的配置重建并通过健康检查（.bak 保留）"
+  else
+    write_status "false" "rollback_failed"
+    log "错误: 回滚重建旧容器或健康检查失败，请立即手动处理（.bak 已保留）"
+  fi
 }
 
 # U1-002：健康校验。up 返回 0 只代表容器已创建，不能证明新后端进程健康：
@@ -453,7 +469,7 @@ fi
 log "拉取新镜像..."
 if ! docker compose pull backend frontend >> "$LOGFILE" 2>&1; then
   log "错误: 拉取镜像失败"
-  rollback
+  rollback files
   exit 1
 fi
 
@@ -680,8 +696,9 @@ func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (st
 	releases, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
+		// F-029：重定向解析也走代理感知变体，与节点侧同口径。
 		if normalizedChannel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil {
+			if tag, ferr := resolveLatestTagByRedirectWithProxy(h.githubProxyURLForFetch()); ferr == nil {
 				return tag, nil
 			}
 		}
@@ -754,7 +771,31 @@ func (e *systemUpgradeExecutor) startHelper(ctx context.Context, imageID, helper
 }
 
 func (h *Handler) downloadReleaseAsset(version, filename string) ([]byte, error) {
-	url := h.buildSystemUpgradeDownloadURL(version, filename)
+	// F-139：buildSystemUpgradeDownloadURL 在代理开启时只产出代理 URL，
+	// 代理对该资产不可用时无直连重试（版本发现侧 U1-001 已有降级、资产
+	// 侧独缺）。候选按 [构建 URL（代理或直连）, 直连 URL] 依次尝试；
+	// 资产与 .sha256 必须同源同次取得——每个候选内部独立完成下载+校验，
+	// 不跨源混搭。
+	urls := []string{h.buildSystemUpgradeDownloadURL(version, filename)}
+	if enabled, _ := h.getGithubProxyConfig(); enabled {
+		direct := fmt.Sprintf("%s/%s/releases/download/%s/%s",
+			strings.TrimRight(systemUpgradeReleaseBaseURL, "/"), githubRepo, version, filename)
+		if direct != urls[0] {
+			urls = append(urls, direct)
+		}
+	}
+	var lastErr error
+	for _, url := range urls {
+		body, err := h.downloadReleaseAssetFrom(url, filename)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (h *Handler) downloadReleaseAssetFrom(url, filename string) ([]byte, error) {
 	// R5-B5 D16: 经 SecureFetch（SSRF 防护 + 大小限制 + 超时）。
 	ctx, cancel := context.WithTimeout(context.Background(), secureFetchTotalTimeout)
 	defer cancel()
