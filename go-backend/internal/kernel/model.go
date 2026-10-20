@@ -251,7 +251,7 @@ func Normalize(kernelType string, in *Inbound) error {
 		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
 	}
 
-	if err := normalizeExtra(in); err != nil {
+	if err := normalizeExtra(kernelType, in); err != nil {
 		return err
 	}
 	if err := normalizeTransport(&in.Transport); err != nil {
@@ -277,7 +277,7 @@ func Normalize(kernelType string, in *Inbound) error {
 	return nil
 }
 
-func normalizeExtra(in *Inbound) error {
+func normalizeExtra(kernelType string, in *Inbound) error {
 	raw := strings.TrimSpace(string(in.Extra))
 	if raw == "" || raw == "null" || raw == "{}" {
 		in.Extra = nil
@@ -289,6 +289,15 @@ func normalizeExtra(in *Inbound) error {
 	var obj map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
 		return errors.New("高级配置必须是 JSON 对象")
+	}
+	// F-022: Snell 的 INI 渲染根本不消费 Extra，填了只会静默无效；
+	// 保存期明确拒绝，提示清空，而不是让用户以为已生效。
+	if kernelType == TypeSnell {
+		return errors.New("Snell 内核不支持高级配置（Extra 会被忽略），请清空高级配置")
+	}
+	// F-022: 受保护键在保存期就拒绝，不要等到下发渲染才暴露。
+	if err := validateExtraProtectedKeys(obj); err != nil {
+		return err
 	}
 	in.Extra = json.RawMessage(raw)
 	return nil

@@ -336,6 +336,14 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if k != nil {
+		// F-021: 换版同样要过入站版本门（AnyTLS/ACME/ENC），不能把存量
+		// 入站降到其最低版本之下再靠下发失败暴露。
+		if err := h.checkKernelVersionGates(k.ID, info.Type, version); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 	if k == nil {
 		k = &model.NodeKernel{
 			NodeID:      req.NodeID,
@@ -714,19 +722,9 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if in.Security.CertMode == kernel.CertModeACME && versionBelow(k.Version, 1, 14) {
+	if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
 		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", k.Version)))
-		return
-	}
-	if k.KernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(k.Version, 1, 12) {
-		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", k.Version)))
-		return
-	}
-	if in.Settings.EncryptionEnabled() && versionBelow3(k.Version, 25, 6, 8) {
-		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", k.Version)))
+		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
 	prevTargets := outboundTargets(row)
@@ -1234,8 +1232,8 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		if !kernel.ComboSupported(k.KernelType, in.Protocol, in.Transport.Type, in.Security.Type) {
 			return nil, "", fmt.Errorf("入站「%s」的协议组合（%s / %s / %s）与内核 %s 不匹配，已拒绝下发，请修正或删除该入站", row.Name, in.Protocol, in.Transport.Type, in.Security.Type, k.KernelType)
 		}
-		if in.Settings.EncryptionEnabled() && versionBelow3(k.Version, 25, 6, 8) {
-			return nil, "", fmt.Errorf("入站「%s」启用了 VLESS 加密，需要 Xray 25.6.8 及以上，节点安装的是 %s，已拒绝下发", row.Name, k.Version)
+		if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
+			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		publicPorts[in.Port] = row.Name
 		if in.Protocol == kernel.ProtocolSnell && in.Security.Type == kernel.SecurityShadowTLS && in.Settings.BackendPort > 0 {
@@ -1472,6 +1470,44 @@ func versionBelow3(version string, major, minor, patch int) bool {
 		return mi < minor
 	}
 	return pa < patch
+}
+
+// kernelVersionGate 是入站对内核版本的硬性要求（单一真源）：入站保存
+// （inboundSave）、内核换版（kernelInstall）与下发前复检
+// （buildKernelApplyPayload）三处共用同一口径，避免"修一处漏一处"
+// （F-021：此前只有保存期查 AnyTLS/ACME 两门，换版与复检均未覆盖）。
+// 返回空串表示通过；非空为拒绝原因（不含入站名，调用方按上下文包装）。
+// "latest" 与不可解析版本按 versionBelow 既有语义不视为过低、不拦。
+func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
+	if in.Security.CertMode == kernel.CertModeACME && versionBelow(version, 1, 14) {
+		return fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", version)
+	}
+	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(version, 1, 12) {
+		return fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", version)
+	}
+	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 6, 8) {
+		return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
+	}
+	return ""
+}
+
+// checkKernelVersionGates refuses a kernel (re)install whose target version
+// would break an existing inbound's version gate（F-021，仿 checkSnellVersions）。
+func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version string) error {
+	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		in, err := inboundFromModel(row)
+		if err != nil {
+			continue
+		}
+		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
+			return fmt.Errorf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)
+		}
+	}
+	return nil
 }
 
 // snellMajor returns the protocol major version a Snell binary serves.
