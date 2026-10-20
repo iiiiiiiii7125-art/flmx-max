@@ -333,6 +333,7 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 		if typ == "vless" {
 			p["uuid"] = user
 			p.set("flow", q.Get("flow"))
+			p.set("encryption", q.Get("encryption"))
 		} else {
 			p["password"] = user
 		}

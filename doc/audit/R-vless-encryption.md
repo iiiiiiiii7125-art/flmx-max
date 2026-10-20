@@ -53,3 +53,25 @@
 开启 ENC 开关时表单自动套用 IX 中转标准组合（TCP + 安全无 + Vision 流控 +
 ML-KEM-768 认证 + xorpub 外观），避免逐项误选导致组合不可用；开启后仍可
 手动调整单项（后端 Normalize 与版本门继续兜底校验）。
+
+## 1.0.23：生态标准对齐 + E2 独立复审修复
+
+- **生态标准配置核对**（argosbx / yahuisme 脚本源码、官方文档三方互证）：
+  一键默认 8 项中 7 项与通行做法一致（TCP、安全无、Vision、ML-KEM-768、
+  600s、0rtt、默认填充链），唯外观 `xorpub` 偏离——两脚本与官方示例的默认
+  落点均为 `native`，一键默认已改回 `native`（顺带消除 xorpub 未做真机
+  互通实测的未验证面）。
+- **E2 复审 P1（已修）**：`parseUserURI` 未读取 `encryption` 查询参数，
+  vless:// 导入的 ENC 节点全格式静默退化为普通 VLESS 坏节点，且以 Proxy
+  字段为据的防坏节点守卫（sing-box/Loon/QX/SR）被一并绕过。已补透传，
+  回归测试 TestParseImportPreservesVLESSEncryption 覆盖解析→再导出→守卫。
+- **E2 复审 P2（已修）**：Shadowrocket profile 路径未过 shadowrocketSkips
+  过滤（config 路径有），ENC 与 WireGuard 节点会以坏形态进入 profile。
+  已改为与 config 同口径跳过，回归测试 TestShadowrocketProfileSkipsEncryption。
+- **E2 登记（P3，不修）**：旧 Mihomo 核心忽略未知 encryption 键（不会整表
+  失败），但该节点会被当普通 VLESS 静默握手失败；面板无可信版本信号可
+  门控——表单文案已提示"使用近一年内的 Mihomo 核心"。Mihomo 支持 ENC 的
+  确切版本下限经查官方 wiki/changelog 无法钉死（wiki 有字段文档、无版本
+  标注），不臆测。
+- 长串健壮性经 E2 实测无坑：URI/Clash YAML/链式 JSON 逐字一致，goja
+  脚本引擎不接触节点串。
