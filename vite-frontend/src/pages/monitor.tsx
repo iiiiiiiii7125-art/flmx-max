@@ -1,6 +1,6 @@
 import type { MonitorNodeApiItem } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   RefreshCw,
@@ -101,12 +101,20 @@ export default function MonitorPage() {
     enabled: true,
   });
 
+  // loadNodes 序号：手动刷新与 30s 轮询可在途并发，只有最新一轮可落 state
+  const loadNodesSeqRef = useRef(0);
+
   const loadNodes = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
+    const seq = (loadNodesSeqRef.current += 1);
 
     if (!silent) setNodesLoading(true);
     try {
       const response = await getMonitorNodes();
+
+      if (loadNodesSeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code === 0 && Array.isArray(response.data)) {
         setNodesError(null);
@@ -124,9 +132,13 @@ export default function MonitorPage() {
 
       if (!silent) toast.error(response.msg || "加载节点失败");
     } catch {
-      if (!silent) toast.error("加载节点失败");
+      if (!silent && loadNodesSeqRef.current === seq) {
+        toast.error("加载节点失败");
+      }
     } finally {
-      if (!silent) setNodesLoading(false);
+      if (!silent && loadNodesSeqRef.current === seq) {
+        setNodesLoading(false);
+      }
     }
   }, []);
 
@@ -136,10 +148,28 @@ export default function MonitorPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      // 后台标签暂停轮询，切回前台立即补一轮
+      if (document.hidden) {
+        return;
+      }
       void loadNodes({ silent: true });
     }, 30_000);
 
-    return () => window.clearInterval(timer);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void loadNodes({ silent: true });
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
   }, [loadNodes]);
 
   const nodeMap = useMemo(() => {

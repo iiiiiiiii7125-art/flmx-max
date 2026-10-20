@@ -6,7 +6,7 @@ import type {
   NodeApiItem,
 } from "@/api/types";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -84,7 +84,14 @@ export function AdminOverview() {
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
 
+  // 在途守卫：五接口聚合慢于轮询间隔时不得叠加（与普通用户侧同范式）
+  const loadInFlightRef = useRef(false);
+
   const load = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      return;
+    }
+    loadInFlightRef.current = true;
     try {
       const [n, k, i, r, s] = await Promise.all([
         getNodeList(),
@@ -100,15 +107,36 @@ export function AdminOverview() {
       if (r.code === 0) setRelays(r.data ?? []);
       if (s.code === 0) setSubs(s.data?.items ?? []);
     } finally {
+      loadInFlightRef.current = false;
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     load();
-    const timer = window.setInterval(load, 30000);
+    const timer = window.setInterval(() => {
+      // 后台标签暂停轮询，切回前台立即补一轮
+      if (document.hidden) {
+        return;
+      }
+      void load();
+    }, 30000);
 
-    return () => window.clearInterval(timer);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void load();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
   }, [load]);
 
   if (loading) return <PageLoadingState message="正在加载..." />;

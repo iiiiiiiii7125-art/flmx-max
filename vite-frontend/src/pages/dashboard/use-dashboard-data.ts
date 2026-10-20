@@ -123,32 +123,36 @@ const checkExpirationNotifications = (
     const expDate = new Date(userInfo.expTime);
     const now = new Date();
 
-    if (!isNaN(expDate.getTime()) && expDate > now) {
-      const diffTime = expDate.getTime() - now.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-      if (diffDays <= 7 && diffDays > 0) {
-        hasNotification = true;
-        if (diffDays === 1) {
-          toast("账户将于明天过期，请及时续费", {
-            icon: "⚠️",
-            duration: 6000,
-            style: { background: "#f59e0b", color: "#fff" },
-          });
-        } else {
-          toast(`账户将于${diffDays}天后过期，请及时续费`, {
-            icon: "⚠️",
-            duration: 6000,
-            style: { background: "#f59e0b", color: "#fff" },
-          });
-        }
-      } else if (diffDays <= 0) {
+    if (!isNaN(expDate.getTime())) {
+      // 已过期必须先于「未过期」判断：旧写法外层 expDate > now 把
+      // diffDays<=0 的已过期分支变成永不可达的死代码
+      if (expDate <= now) {
         hasNotification = true;
         toast("账户已过期，请立即续费", {
           icon: "⚠️",
           duration: 8000,
           style: { background: "#ef4444", color: "#fff" },
         });
+      } else {
+        const diffTime = expDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays <= 7 && diffDays > 0) {
+          hasNotification = true;
+          if (diffDays === 1) {
+            toast("账户将于明天过期，请及时续费", {
+              icon: "⚠️",
+              duration: 6000,
+              style: { background: "#f59e0b", color: "#fff" },
+            });
+          } else {
+            toast(`账户将于${diffDays}天后过期，请及时续费`, {
+              icon: "⚠️",
+              duration: 6000,
+              style: { background: "#f59e0b", color: "#fff" },
+            });
+          }
+        }
       }
     }
   }
@@ -161,32 +165,35 @@ const checkExpirationNotifications = (
     const expDate = new Date(tunnel.expTime);
     const now = new Date();
 
-    if (!isNaN(expDate.getTime()) && expDate > now) {
-      const diffTime = expDate.getTime() - now.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-      if (diffDays <= 7 && diffDays > 0) {
-        hasNotification = true;
-        if (diffDays === 1) {
-          toast(`隧道"${tunnel.tunnelName}"将于明天过期`, {
-            icon: "⚠️",
-            duration: 5000,
-            style: { background: "#f59e0b", color: "#fff" },
-          });
-        } else {
-          toast(`隧道"${tunnel.tunnelName}"将于${diffDays}天后过期`, {
-            icon: "⚠️",
-            duration: 5000,
-            style: { background: "#f59e0b", color: "#fff" },
-          });
-        }
-      } else if (diffDays <= 0) {
+    if (!isNaN(expDate.getTime())) {
+      // 同账户段：已过期先行判断，避免被 expDate > now 外层守卫吞掉
+      if (expDate <= now) {
         hasNotification = true;
         toast(`隧道"${tunnel.tunnelName}"已过期`, {
           icon: "⚠️",
           duration: 6000,
           style: { background: "#ef4444", color: "#fff" },
         });
+      } else {
+        const diffTime = expDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays <= 7 && diffDays > 0) {
+          hasNotification = true;
+          if (diffDays === 1) {
+            toast(`隧道"${tunnel.tunnelName}"将于明天过期`, {
+              icon: "⚠️",
+              duration: 5000,
+              style: { background: "#f59e0b", color: "#fff" },
+            });
+          } else {
+            toast(`隧道"${tunnel.tunnelName}"将于${diffDays}天后过期`, {
+              icon: "⚠️",
+              duration: 5000,
+              style: { background: "#f59e0b", color: "#fff" },
+            });
+          }
+        }
       }
     }
   });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -25,6 +25,16 @@ export default function ChangePasswordPage() {
   });
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Partial<PasswordForm>>({});
+  // 改密成功后的跳转定时器：ref 持有，组件卸载时统一清理
+  const redirectTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    const timers = redirectTimersRef.current;
+
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
 
   const validateForm = (): boolean => {
     const newErrors: Partial<PasswordForm> = {};
@@ -77,13 +87,17 @@ export default function ChangePasswordPage() {
       if (response.code === 0) {
         toast.success(response.msg || "账号密码修改成功");
 
-        // 使用 toast 确认对话框的替代方案
-        setTimeout(() => {
-          toast.success("即将跳转到登陆页面，请重新登录");
+        // 延迟提示并登出；定时器登记到 ref，卸载时清理避免游离回调
+        redirectTimersRef.current.push(
           setTimeout(() => {
-            logout();
-          }, 1000);
-        }, 1000);
+            toast.success("即将跳转到登陆页面，请重新登录");
+            redirectTimersRef.current.push(
+              setTimeout(() => {
+                logout();
+              }, 1000),
+            );
+          }, 1000),
+        );
       } else {
         toast.error(response.msg || "账号密码修改失败");
       }

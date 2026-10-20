@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, QrCode } from "lucide-react";
 
 import { getMyInbounds, getMySubscriptions, getSubInfo } from "@/api";
 import type { MySubscriptionItem } from "@/api";
@@ -86,6 +86,9 @@ export default function MySubscriptionPage() {
     labelPrefix: string,
     urlFor: (format?: string) => string,
     primary: boolean,
+    // 已停用/已过期/流量用完时传入原因：复制禁用、二维码点击给失效提示，
+    // 不再把注定拉不到节点的死链接递到用户手里
+    inactiveReason?: string,
   ) => (
     <div className="flex flex-wrap gap-2">
       {SUB_FORMATS.map((f) => {
@@ -99,6 +102,7 @@ export default function MySubscriptionPage() {
               variant="flat"
               color={copiedKey === key ? "success" : primary ? "primary" : "default"}
               onPress={() => handleCopy(url, key, label)}
+              isDisabled={Boolean(inactiveReason)}
               startContent={
                 copiedKey === key ? (
                   <Check className="w-3 h-3" />
@@ -109,7 +113,20 @@ export default function MySubscriptionPage() {
             >
               {copiedKey === key ? "已复制" : primary ? `复制 ${f.label}` : f.label}
             </Button>
-            <QrCodeButton url={url} label={label} />
+            {inactiveReason ? (
+              <button
+                type="button"
+                title={`订阅${inactiveReason}，链接不可用`}
+                className="inline-flex items-center justify-center w-10 h-10 rounded text-default-300 cursor-not-allowed"
+                onClick={() =>
+                  toast.error(`订阅${inactiveReason}，链接不可用`)
+                }
+              >
+                <QrCode className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              <QrCodeButton url={url} label={label} />
+            )}
           </div>
         );
       })}
@@ -161,6 +178,13 @@ export default function MySubscriptionPage() {
           {assigned.map((s) => {
             const used = s.uploadBytes + s.downloadBytes;
             const expired = s.expireTime > 0 && s.expireTime <= Date.now();
+            const inactiveReason = !s.enabled
+              ? "已停用"
+              : s.overQuota
+                ? "流量已用完"
+                : expired
+                  ? "已过期"
+                  : undefined;
             return (
               <Card key={`assigned-${s.id}`}>
                 <CardBody className="space-y-2">
@@ -193,7 +217,7 @@ export default function MySubscriptionPage() {
                     <p className="text-xs text-default-500 mb-2 break-all select-all">
                       {assignedUrl(s)}
                     </p>
-                    {formatButtons(`assigned-${s.id}`, s.name, (f) => assignedUrl(s, f), true)}
+                    {formatButtons(`assigned-${s.id}`, s.name, (f) => assignedUrl(s, f), true, inactiveReason)}
                   </div>
                 </CardBody>
               </Card>
