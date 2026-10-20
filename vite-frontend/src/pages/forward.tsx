@@ -98,6 +98,7 @@ import {
 } from "@/pages/forward/batch-actions";
 import {
   convertNyItemToForwardInput,
+  isValidForwardDestAddress,
   parseNyFormatData,
 } from "@/pages/forward/import-format";
 import { buildForwardOrder, FORWARD_ORDER_KEY } from "@/pages/forward/order";
@@ -1366,6 +1367,10 @@ export default function ForwardPage() {
     timedOut: false,
   });
   const diagnosisAbortRef = useRef<AbortController | null>(null);
+  // 服务开关在途集合：同一规则请求未回时连点直接忽略，防止重复下发
+  const serviceToggleInFlightRef = useRef<Set<number>>(new Set());
+  // 紧凑模式是否已被用户事件切换过（迟到的配置拉取不得再覆盖）
+  const compactModeTouchedRef = useRef(false);
   const [addressModalTitle, setAddressModalTitle] = useState("");
   const [addressList, setAddressList] = useState<ForwardAddressItem[]>([]);
 
@@ -1735,9 +1740,17 @@ export default function ForwardPage() {
   }, [tokenUserId, isAdmin]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadForwardCompactMode = async () => {
       try {
         const response = await getConfigByName(FORWARD_COMPACT_MODE_CONFIG_KEY);
+
+        // 卸载后、或用户已通过事件切换过时，迟到响应不得覆盖当前值
+        if (cancelled || compactModeTouchedRef.current) {
+          return;
+        }
+
         const enabled =
           response.code === 0 &&
           typeof response.data?.value === "string" &&
@@ -1745,7 +1758,9 @@ export default function ForwardPage() {
 
         setCompactMode(enabled);
       } catch {
-        setCompactMode(false);
+        if (!cancelled && !compactModeTouchedRef.current) {
+          setCompactMode(false);
+        }
       }
     };
 
@@ -1753,6 +1768,7 @@ export default function ForwardPage() {
       const customEvent = event as CustomEvent<{ enabled?: boolean }>;
 
       if (typeof customEvent.detail?.enabled === "boolean") {
+        compactModeTouchedRef.current = true;
         setCompactMode(customEvent.detail.enabled);
       }
     };
@@ -1764,6 +1780,7 @@ export default function ForwardPage() {
     );
 
     return () => {
+      cancelled = true;
       window.removeEventListener(
         FORWARD_COMPACT_MODE_EVENT,
         handleCompactModeChanged,
@@ -2141,14 +2158,18 @@ export default function ForwardPage() {
     if (
       form.inPort !== null &&
       form.inPort !== undefined &&
-      form.inPort > 0 &&
-      currentTunnelPortRange
+      form.inPort > 0
     ) {
-      if (
-        form.inPort < currentTunnelPortRange.min ||
-        form.inPort > currentTunnelPortRange.max
+      // 与后端 mutations.go 口径一致：端口本身须在 1-65535，
+      // 有隧道端口范围时还须落在范围内（留空/0 走后端自动分配，不校验）。
+      if (form.inPort < 1 || form.inPort > 65535) {
+        newErrors.inPort = `端口 ${form.inPort} 超出允许范围 1-65535`;
+      } else if (
+        currentTunnelPortRange &&
+        (form.inPort < currentTunnelPortRange.min ||
+          form.inPort > currentTunnelPortRange.max)
       ) {
-        newErrors.inPort = `端口 ${currentTunnelPortRange.min}-${currentTunnelPortRange.max} 超出允许范围`;
+        newErrors.inPort = `端口 ${form.inPort} 超出允许范围 ${currentTunnelPortRange.min}-${currentTunnelPortRange.max}`;
       }
     }
 
@@ -2176,6 +2197,15 @@ export default function ForwardPage() {
           !domainPattern.test(addr)
         ) {
           newErrors.remoteAddr = `第${i + 1}行地址格式错误`;
+          break;
+        }
+
+        // 三个格式正则的端口段只限定 \d+，此处再与后端对齐校验 1-65535
+        const portMatch = addr.match(/:(\d+)$/);
+        const port = portMatch ? Number(portMatch[1]) : NaN;
+
+        if (!(port >= 1 && port <= 65535)) {
+          newErrors.remoteAddr = `第${i + 1}行地址端口超出允许范围 1-65535`;
           break;
         }
       }
@@ -2477,7 +2507,24 @@ export default function ForwardPage() {
       return;
     }
 
+    // 同一规则已有切换请求在途时忽略连点，避免重复下发与回滚互踩
+    if (serviceToggleInFlightRef.current.has(forward.id)) {
+      return;
+    }
+    serviceToggleInFlightRef.current.add(forward.id);
+
     const targetState = !forward.serviceRunning;
+
+    // 失败回滚仅在当前值仍是本次乐观值时执行，防止覆盖后续已成功的状态
+    const rollbackOptimistic = () => {
+      setForwards((prev) =>
+        prev.map((f) =>
+          f.id === forward.id && f.serviceRunning === targetState
+            ? { ...f, serviceRunning: !targetState }
+            : f,
+        ),
+      );
+    };
 
     try {
       // 乐观更新UI
@@ -2505,21 +2552,15 @@ export default function ForwardPage() {
         );
       } else {
         // 操作失败，恢复UI状态
-        setForwards((prev) =>
-          prev.map((f) =>
-            f.id === forward.id ? { ...f, serviceRunning: !targetState } : f,
-          ),
-        );
+        rollbackOptimistic();
         toast.error(res.msg || "操作失败");
       }
     } catch {
       // 操作失败，恢复UI状态
-      setForwards((prev) =>
-        prev.map((f) =>
-          f.id === forward.id ? { ...f, serviceRunning: !targetState } : f,
-        ),
-      );
+      rollbackOptimistic();
       toast.error("网络错误，操作失败");
+    } finally {
+      serviceToggleInFlightRef.current.delete(forward.id);
     }
   };
 
@@ -2842,6 +2883,23 @@ export default function ForwardPage() {
     setImportLoading(true);
     setImportResults([]);
 
+    // 本地计数逐行成败，收尾 toast 按计数分级（全失败不得报成功）
+    let importSuccessCount = 0;
+    let importFailCount = 0;
+    const recordImportResult = (item: {
+      line: string;
+      success: boolean;
+      message: string;
+      forwardName?: string;
+    }) => {
+      if (item.success) {
+        importSuccessCount += 1;
+      } else {
+        importFailCount += 1;
+      }
+      setImportResults((prev) => [item, ...prev]);
+    };
+
     try {
       if (importFormat === "ny") {
         const parsedItems = parseNyFormatData(importData);
@@ -2856,27 +2914,21 @@ export default function ForwardPage() {
 
         for (const item of parsedItems) {
           if (item.error) {
-            setImportResults((prev) => [
-              {
-                line: item.line,
-                success: false,
-                message: item.error || "解析失败",
-              },
-              ...prev,
-            ]);
+            recordImportResult({
+              line: item.line,
+              success: false,
+              message: item.error || "解析失败",
+            });
 
             continue;
           }
 
           if (!item.parsed) {
-            setImportResults((prev) => [
-              {
-                line: item.line,
-                success: false,
-                message: "解析失败",
-              },
-              ...prev,
-            ]);
+            recordImportResult({
+              line: item.line,
+              success: false,
+              message: "解析失败",
+            });
 
             continue;
           }
@@ -2894,34 +2946,25 @@ export default function ForwardPage() {
             });
 
             if (response.code === 0) {
-              setImportResults((prev) => [
-                {
-                  line: item.line,
-                  success: true,
-                  message: `创建成功 (${parsedNyItem.dest.length}个目标)`,
-                  forwardName: nyForwardInput.name,
-                },
-                ...prev,
-              ]);
+              recordImportResult({
+                line: item.line,
+                success: true,
+                message: `创建成功 (${parsedNyItem.dest.length}个目标)`,
+                forwardName: nyForwardInput.name,
+              });
             } else {
-              setImportResults((prev) => [
-                {
-                  line: item.line,
-                  success: false,
-                  message: response.msg || "创建失败",
-                },
-                ...prev,
-              ]);
-            }
-          } catch {
-            setImportResults((prev) => [
-              {
+              recordImportResult({
                 line: item.line,
                 success: false,
-                message: "网络错误，创建失败",
-              },
-              ...prev,
-            ]);
+                message: response.msg || "创建失败",
+              });
+            }
+          } catch {
+            recordImportResult({
+              line: item.line,
+              success: false,
+              message: "网络错误，创建失败",
+            });
           }
         }
       } else {
@@ -2935,47 +2978,37 @@ export default function ForwardPage() {
           const parts = line.split("|");
 
           if (parts.length < 2) {
-            setImportResults((prev) => [
-              {
-                line,
-                success: false,
-                message: "格式错误：需要至少包含目标地址和规则名称",
-              },
-              ...prev,
-            ]);
+            recordImportResult({
+              line,
+              success: false,
+              message: "格式错误：需要至少包含目标地址和规则名称",
+            });
             continue;
           }
 
           const [remoteAddr, name, inPort] = parts;
 
           if (!remoteAddr.trim() || !name.trim()) {
-            setImportResults((prev) => [
-              {
-                line,
-                success: false,
-                message: "目标地址和规则名称不能为空",
-              },
-              ...prev,
-            ]);
+            recordImportResult({
+              line,
+              success: false,
+              message: "目标地址和规则名称不能为空",
+            });
             continue;
           }
 
           const addresses = remoteAddr.trim().split(",");
-          const addressPattern = /^[^:]+:\d+$/;
           const isValidFormat = addresses.every((addr) =>
-            addressPattern.test(addr.trim()),
+            isValidForwardDestAddress(addr),
           );
 
           if (!isValidFormat) {
-            setImportResults((prev) => [
-              {
-                line,
-                success: false,
-                message:
-                  "目标地址格式错误，应为 地址:端口 格式，多个地址用逗号分隔",
-              },
-              ...prev,
-            ]);
+            recordImportResult({
+              line,
+              success: false,
+              message:
+                "目标地址格式错误，应为 地址:端口 格式，多个地址用逗号分隔",
+            });
             continue;
           }
 
@@ -2986,14 +3019,11 @@ export default function ForwardPage() {
               const port = parseInt(inPort.trim());
 
               if (isNaN(port) || port < 1 || port > 65535) {
-                setImportResults((prev) => [
-                  {
-                    line,
-                    success: false,
-                    message: "入口端口格式错误，应为1-65535之间的数字",
-                  },
-                  ...prev,
-                ]);
+                recordImportResult({
+                  line,
+                  success: false,
+                  message: "入口端口格式错误，应为1-65535之间的数字",
+                });
                 continue;
               }
               portNumber = port;
@@ -3008,39 +3038,40 @@ export default function ForwardPage() {
             });
 
             if (response.code === 0) {
-              setImportResults((prev) => [
-                {
-                  line,
-                  success: true,
-                  message: "创建成功",
-                  forwardName: name.trim(),
-                },
-                ...prev,
-              ]);
+              recordImportResult({
+                line,
+                success: true,
+                message: "创建成功",
+                forwardName: name.trim(),
+              });
             } else {
-              setImportResults((prev) => [
-                {
-                  line,
-                  success: false,
-                  message: response.msg || "创建失败",
-                },
-                ...prev,
-              ]);
-            }
-          } catch {
-            setImportResults((prev) => [
-              {
+              recordImportResult({
                 line,
                 success: false,
-                message: "网络错误，创建失败",
-              },
-              ...prev,
-            ]);
+                message: response.msg || "创建失败",
+              });
+            }
+          } catch {
+            recordImportResult({
+              line,
+              success: false,
+              message: "网络错误，创建失败",
+            });
           }
         }
       }
 
-      toast.success("导入执行完成");
+      // 收尾提示按成败计数分级：全成功才报成功，部分失败汇总、全失败报错
+      if (importFailCount === 0) {
+        toast.success(`导入完成，成功 ${importSuccessCount} 条`);
+      } else if (importSuccessCount === 0) {
+        toast.error(`导入失败，${importFailCount} 条均未创建成功`);
+      } else {
+        toast(
+          `导入完成，成功 ${importSuccessCount} 条，失败 ${importFailCount} 条`,
+          { icon: "⚠️", duration: 5000 },
+        );
+      }
 
       await refreshForwardList(false);
     } catch {
@@ -3211,9 +3242,18 @@ export default function ForwardPage() {
             }),
           );
         } else {
+          // 保存失败回滚乐观更新的本地顺序（状态 + localStorage），与 DB 保持一致
+          if (!compactMode) {
+            setForwardOrder(currentOrder);
+            saveOrder(FORWARD_ORDER_KEY, currentOrder);
+          }
           toast.error("保存排序失败：" + (response.msg || "未知错误"));
         }
       } catch {
+        if (!compactMode) {
+          setForwardOrder(currentOrder);
+          saveOrder(FORWARD_ORDER_KEY, currentOrder);
+        }
         toast.error("保存排序失败，请重试");
       }
     }
@@ -3315,11 +3355,7 @@ export default function ForwardPage() {
         enable,
       );
 
-      if (outcome.toastVariant === "success") {
-        toast.success(outcome.toastMessage);
-      } else {
-        toast.error(outcome.toastMessage);
-      }
+      presentBatchOutcome(outcome);
 
       if (outcome.shouldRefresh) {
         setBatchProgress({
@@ -3350,11 +3386,7 @@ export default function ForwardPage() {
         Array.from(selectedIds),
       );
 
-      if (outcome.toastVariant === "success") {
-        toast.success(outcome.toastMessage);
-      } else {
-        toast.error(outcome.toastMessage);
-      }
+      presentBatchOutcome(outcome);
 
       if (outcome.shouldRefresh) {
         setBatchProgress({
@@ -3386,11 +3418,7 @@ export default function ForwardPage() {
         batchTargetTunnelId,
       );
 
-      if (outcome.toastVariant === "success") {
-        toast.success(outcome.toastMessage);
-      } else {
-        toast.error(outcome.toastMessage);
-      }
+      presentBatchOutcome(outcome);
 
       if (outcome.shouldRefresh) {
         setBatchProgress({
