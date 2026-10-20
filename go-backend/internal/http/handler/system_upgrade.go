@@ -649,8 +649,9 @@ func (h *Handler) fetchSystemUpgradeReleasePage(client *http.Client, url string)
 	}
 
 	var releases []githubRelease
-	// U1-006：解码体积上限 4MB，防异常代理返回超大 body。
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, 4<<20))
+	// U1-006：解码体积兜底，防异常代理返回超大 body；上限取 256MiB 仅作兜底，
+	// 正常 releases 负载远低于此，避免重演内核版本列表被小上限截断的故障。
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 256<<20))
 	if err := decoder.Decode(&releases); err != nil {
 		return nil, fmt.Errorf("解析GitHub API响应失败: %v", err)
 	}
