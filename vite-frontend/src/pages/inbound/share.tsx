@@ -221,17 +221,27 @@ export function ShareModal({
 
   useEffect(() => {
     if (!item) return;
+    // 归属守卫：切换入站后旧请求迟到响应一律丢弃，防止 A 的链接串进 B 的弹窗
+    let alive = true;
+
     setEntries([]);
     setLoading(true);
     getInboundShare(item.id)
       .then((res) => {
+        if (!alive) return;
         if (res.code === 0) {
           setEntries(res.data || []);
         } else {
           toast.error(res.msg || "获取分享链接失败");
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
   }, [item]);
 
   return (

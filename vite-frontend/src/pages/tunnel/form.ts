@@ -157,7 +157,7 @@ export const validateTunnelForm = (
   }
 
   if (form.trafficRatio <= 0 || form.trafficRatio > 100.0) {
-    errors.trafficRatio = "流量倍率须大于0，支持小数（如 0.5）";
+    errors.trafficRatio = "流量倍率须大于 0 且不超过 100，支持小数（如 0.5）";
   }
 
   const rawProbeHost = form.probeTargetHost || "";

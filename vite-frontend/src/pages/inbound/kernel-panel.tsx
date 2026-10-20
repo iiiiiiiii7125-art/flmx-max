@@ -5,7 +5,7 @@ import type {
   NodeApiItem,
 } from "@/api/types";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { MoreHorizontal } from "lucide-react";
 
@@ -80,6 +80,8 @@ export function KernelPanel({
   const [installing, setInstalling] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [logsFor, setLogsFor] = useState<KernelApiItem | null>(null);
+  // 日志请求序号：连点两个内核时，迟到的旧日志不得落到新内核标题下
+  const logsSeqRef = useRef(0);
   const [logs, setLogs] = useState<KernelStateApiData | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<KernelApiItem | null>(null);
@@ -156,11 +158,17 @@ export function KernelPanel({
   };
 
   const openLogs = async (k: KernelApiItem) => {
+    const seq = (logsSeqRef.current += 1);
+
     setLogsFor(k);
     setLogs(null);
     setLogsLoading(true);
     try {
       const res = await getKernelLogs(k.id);
+
+      if (logsSeqRef.current !== seq) {
+        return;
+      }
 
       if (res.code === 0) {
         setLogs(res.data);
@@ -168,7 +176,9 @@ export function KernelPanel({
         toast.error(res.msg || "获取日志失败");
       }
     } finally {
-      setLogsLoading(false);
+      if (logsSeqRef.current === seq) {
+        setLogsLoading(false);
+      }
     }
   };
 

@@ -272,6 +272,24 @@ export function ExternalEditModal({
 
   const submit = async () => {
     if (!item || !form) return;
+    // 提交前校验（此前零校验，空名/空 host/NaN 端口直接上送被后端笼统打回）
+    if (!form.name.trim()) {
+      toast.error("名称不能为空");
+
+      return;
+    }
+    if (!form.host.trim()) {
+      toast.error("地址不能为空");
+
+      return;
+    }
+    const port = Number(form.port);
+
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      toast.error("端口必须在 1-65535 之间");
+
+      return;
+    }
     setSaving(true);
     try {
       const res = await updateExternalInbound({
