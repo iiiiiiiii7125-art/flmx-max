@@ -121,11 +121,6 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 	// R5-B3 D1-003/D9(b): 采集成功而最近一次 apply 失败过 → 节点已恢复可达，
 	// 触发自动 reconcile（投递后由 worker 异步执行）。
 	h.checkNftNodeRecovered(nodeID)
-	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
-	if err != nil {
-		log.Printf("nftables traffic collection failed op=list_states node_id=%d err=%v", nodeID, err)
-		return nil, nil, 0, nil, err
-	}
 	bindings, err := h.repo.ListNftRuleBindingsByNode(nodeID)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=list_bindings node_id=%d err=%v", nodeID, err)
@@ -143,12 +138,33 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 		hashes[binding.ForwardID] = ruleHash
 	}
 
-	nowMs := now.UnixMilli()
 	boundSamples := filterNftCounterSamplesWithBinding(samples, hashes)
-	deltas, newStates := buildNftCounterDeltas(nodeID, boundSamples, oldStates, hashes, nowMs)
+	return h.accountForwardCounterSamples(nodeID, boundSamples, hashes, now)
+}
+
+// accountForwardCounterSamples 是 nftables 转发与 realm 转发共用的入账段：
+// 把按 forward 归属的累计计数样本转成流量增量并单事务落库（基线推进 +
+// forward 流量 + 用户配额）。hashes 给出每个 forward 的计数代际标识，
+// 代际变化即基线重置（nftables 是规则 hash，realm 是 "realm:"+agent
+// epoch，样本不经 filterNftCounterSamplesWithBinding）。本方法只做入账；
+// 执法尾（隧道指标、配额强制、流量策略）由调用方按返回的 batch 执行，
+// 与采集路径既有分工一致。我方审计加固全部保留在此段内：pending-delete
+// delta 过滤、缺 meta 按 forward 跳过（D10 poison-scope）、有 delta 未被
+// batch 覆盖时不推进基线。
+func (h *Handler) accountForwardCounterSamples(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
+	if h == nil || h.repo == nil {
+		return nil, nil, 0, nil, errors.New("handler not initialized")
+	}
+	nowMs := now.UnixMilli()
+	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
+	if err != nil {
+		log.Printf("forward counter accounting failed op=list_states node_id=%d err=%v", nodeID, err)
+		return nil, nil, nowMs, nil, err
+	}
+	deltas, newStates := buildNftCounterDeltas(nodeID, samples, oldStates, hashes, nowMs)
 	if len(newStates) == 0 {
 		if len(deltas) != 0 {
-			log.Printf("nftables traffic collection skipped suspicious deltas without states node_id=%d deltas=%d", nodeID, len(deltas))
+			log.Printf("forward counter accounting skipped suspicious deltas without states node_id=%d deltas=%d", nodeID, len(deltas))
 		}
 		return nil, nil, nowMs, nil, nil
 	}
@@ -168,7 +184,7 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 	if len(deltas) != 0 {
 		metas, err = h.repo.GetFlowUploadForwardMetas(forwardIDs)
 		if err != nil {
-			log.Printf("nftables traffic collection failed op=load_flow_metas node_id=%d err=%v", nodeID, err)
+			log.Printf("forward counter accounting failed op=load_flow_metas node_id=%d err=%v", nodeID, err)
 			return nil, nil, nowMs, nil, err
 		}
 		// R5-B3 D1-001(poison-scope)/D10: 缺 meta 的 forward 仅跳过其 delta
@@ -178,7 +194,7 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 	}
 	if len(deltas) == 0 {
 		if err := h.repo.UpsertNftCounterStates(newStates, nowMs); err != nil {
-			log.Printf("nftables traffic collection failed op=upsert_states node_id=%d err=%v", nodeID, err)
+			log.Printf("forward counter accounting failed op=upsert_states node_id=%d err=%v", nodeID, err)
 			return nil, nil, nowMs, nil, err
 		}
 		return nil, nil, nowMs, nil, nil
@@ -186,12 +202,12 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 
 	batch := buildNftFlowUploadBatch(deltas, metas)
 	if missingForwardID, ok := firstNftBatchMissingDelta(deltas, batch); ok {
-		log.Printf("nftables traffic collection skipped state advance op=unaccounted_delta node_id=%d forward_id=%d", nodeID, missingForwardID)
+		log.Printf("forward counter accounting skipped state advance op=unaccounted_delta node_id=%d forward_id=%d", nodeID, missingForwardID)
 		return nil, nil, nowMs, nil, nil
 	}
 	quotaViews, err := h.repo.ApplyNftTrafficAccounting(batch.flowDeltas, batch.quotaUsage, newStates, now)
 	if err != nil {
-		log.Printf("nftables traffic collection failed op=accounting node_id=%d err=%v", nodeID, err)
+		log.Printf("forward counter accounting failed op=accounting node_id=%d err=%v", nodeID, err)
 		return nil, nil, nowMs, nil, err
 	}
 	return &batch, metas, nowMs, quotaViews, nil

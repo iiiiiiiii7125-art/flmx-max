@@ -1328,6 +1328,7 @@ func (r *Repository) ListTunnels() ([]map[string]interface{}, error) {
 			"id": t.ID, "inx": t.Inx, "name": t.Name,
 			"type": t.Type, "flow": t.Flow, "trafficRatio": t.TrafficRatio,
 			"status": t.Status, "createdTime": t.CreatedTime,
+			"engine":          t.Engine,
 			"inIp":            nullableString(t.InIP),
 			"ipPreference":    t.IPPreference,
 			"probeTargetHost": t.ProbeTargetHost,
