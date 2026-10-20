@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import {
   DndContext,
@@ -813,6 +813,17 @@ export default function NodePage() {
       return { valid: false, error: "请输入有效的端口" };
     }
 
+    // 严格整数：parseInt 是部分解析（80abc/10.9/0x50 都会被判合法后
+    // 落库再被 agent 展开成错端口集），只接受纯十进制数字段
+    const parseStrictPort = (raw: string): number | null => {
+      if (!/^\d+$/.test(raw)) {
+        return null;
+      }
+      const value = Number(raw);
+
+      return Number.isSafeInteger(value) ? value : null;
+    };
+
     for (const part of parts) {
       // 检查是否是端口范围 (如 100-600)
       if (part.includes("-")) {
@@ -822,10 +833,10 @@ export default function NodePage() {
           return { valid: false, error: `端口范围格式错误: ${part}` };
         }
 
-        const start = parseInt(range[0]);
-        const end = parseInt(range[1]);
+        const start = parseStrictPort(range[0]);
+        const end = parseStrictPort(range[1]);
 
-        if (isNaN(start) || isNaN(end)) {
+        if (start === null || end === null) {
           return { valid: false, error: `端口必须是数字: ${part}` };
         }
 
@@ -841,9 +852,9 @@ export default function NodePage() {
         }
       } else {
         // 单个端口
-        const port = parseInt(part);
+        const port = parseStrictPort(part);
 
-        if (isNaN(port)) {
+        if (port === null) {
           return { valid: false, error: `端口必须是数字: ${part}` };
         }
 
@@ -1115,8 +1126,23 @@ export default function NodePage() {
     await loadReleasesByChannel(defaultChannel);
   };
 
+  // 升级/回退确认在途守卫：弹窗关闭动画期间的连点不得重复下发破坏性命令
+  const upgradeConfirmInFlightRef = useRef(false);
+  const rollbackConfirmInFlightRef = useRef(false);
+
   // 确认升级（从版本弹窗）
   const handleConfirmUpgrade = async () => {
+    if (upgradeConfirmInFlightRef.current) return;
+    upgradeConfirmInFlightRef.current = true;
+
+    try {
+      await runConfirmUpgrade();
+    } finally {
+      upgradeConfirmInFlightRef.current = false;
+    }
+  };
+
+  const runConfirmUpgrade = async () => {
     const version = selectedVersion || undefined;
 
     if (upgradeTarget === "single" && upgradeTargetNodeId) {
@@ -1196,7 +1222,8 @@ export default function NodePage() {
   };
 
   const confirmRollback = async () => {
-    if (!nodeToRollback) return;
+    if (!nodeToRollback || rollbackConfirmInFlightRef.current) return;
+    rollbackConfirmInFlightRef.current = true;
     const node = nodeToRollback;
 
     setRollbackModalOpen(false);
@@ -1214,6 +1241,7 @@ export default function NodePage() {
     } catch {
       toast.error("网络错误，请重试");
     } finally {
+      rollbackConfirmInFlightRef.current = false;
       setNodeList((prev) =>
         prev.map((n) =>
           n.id === node.id ? { ...n, rollbackLoading: false } : n,

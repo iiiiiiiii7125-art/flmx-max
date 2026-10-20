@@ -391,6 +391,9 @@ export default function TunnelPage() {
     timedOut: false,
   });
   const diagnosisAbortRef = useRef<AbortController | null>(null);
+  // 删除预览请求序号：关弹窗/改删另一条时递增，迟到响应一律丢弃
+  const deletePreviewSeqRef = useRef(0);
+  const batchDeletePreviewSeqRef = useRef(0);
 
   const getNodeIpOptions = (nodeId: number): string[] => {
     const node = nodes.find((item) => item.id === nodeId);
@@ -548,6 +551,7 @@ export default function TunnelPage() {
   }, [loadData]);
 
   const resetDeleteState = useCallback(() => {
+    deletePreviewSeqRef.current += 1;
     setDeleteLoading(false);
     setDeletePreviewLoading(false);
     setTunnelToDelete(null);
@@ -567,6 +571,7 @@ export default function TunnelPage() {
   );
 
   const resetBatchDeleteState = useCallback(() => {
+    batchDeletePreviewSeqRef.current += 1;
     setBatchDeletePreviewLoading(false);
     setBatchDeletePreview(null);
     setBatchDeleteAction(DEFAULT_TUNNEL_DELETE_ACTION);
@@ -639,6 +644,8 @@ export default function TunnelPage() {
 
   // 删除隧道
   const handleDelete = async (tunnel: Tunnel) => {
+    const seq = (deletePreviewSeqRef.current += 1);
+
     setTunnelToDelete(tunnel);
     setDeleteModalOpen(true);
 
@@ -650,6 +657,11 @@ export default function TunnelPage() {
     try {
       const response = await previewTunnelDelete(tunnel.id);
 
+      // 已关弹窗或已改删另一条隧道：迟到响应丢弃，不得关掉/污染新弹窗
+      if (deletePreviewSeqRef.current !== seq) {
+        return;
+      }
+
       if (response.code !== 0 || !response.data) {
         toast.error(response.msg || "获取删除依赖失败");
         setDeleteModalOpen(false);
@@ -660,11 +672,16 @@ export default function TunnelPage() {
 
       setTunnelDeletePreview(response.data);
     } catch (error) {
+      if (deletePreviewSeqRef.current !== seq) {
+        return;
+      }
       toast.error(extractApiErrorMessage(error, "获取删除依赖失败"));
       setDeleteModalOpen(false);
       resetDeleteState();
     } finally {
-      setDeletePreviewLoading(false);
+      if (deletePreviewSeqRef.current === seq) {
+        setDeletePreviewLoading(false);
+      }
     }
   };
 
@@ -1173,9 +1190,14 @@ export default function TunnelPage() {
           }),
         );
       } else {
+        // 保存失败回滚乐观更新的本地顺序（状态 + localStorage），与 DB 保持一致
+        setTunnelOrder(tunnelOrder);
+        saveOrder(TUNNEL_ORDER_KEY, tunnelOrder);
         toast.error("保存排序失败：" + (response.msg || "未知错误"));
       }
     } catch {
+      setTunnelOrder(tunnelOrder);
+      saveOrder(TUNNEL_ORDER_KEY, tunnelOrder);
       toast.error("保存排序失败，请重试");
     }
   };
@@ -1188,14 +1210,18 @@ export default function TunnelPage() {
   };
 
   const toggleSelect = (id: number) => {
-    const newSet = new Set(selectedIds);
+    // 函数式更新，避免连选时读到渲染期旧快照丢选
+    setSelectedIds((prev) => {
+      const newSet = new Set(prev);
 
-    if (newSet.has(id)) {
-      newSet.delete(id);
-    } else {
-      newSet.add(id);
-    }
-    setSelectedIds(newSet);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+
+      return newSet;
+    });
   };
 
   const selectAll = () => {
@@ -1223,6 +1249,8 @@ export default function TunnelPage() {
   const handleOpenBatchDeleteModal = async () => {
     if (selectedIds.size === 0) return;
 
+    const seq = (batchDeletePreviewSeqRef.current += 1);
+
     setBatchDeleteModalOpen(true);
     setBatchDeletePreviewLoading(true);
     setBatchDeletePreview(null);
@@ -1231,6 +1259,10 @@ export default function TunnelPage() {
 
     try {
       const response = await previewBatchTunnelDelete(selectedTunnelIdList);
+
+      if (batchDeletePreviewSeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code !== 0 || !response.data) {
         toast.error(response.msg || "获取批量删除依赖失败");
@@ -1242,11 +1274,16 @@ export default function TunnelPage() {
 
       setBatchDeletePreview(response.data);
     } catch (error) {
+      if (batchDeletePreviewSeqRef.current !== seq) {
+        return;
+      }
       toast.error(extractApiErrorMessage(error, "获取批量删除依赖失败"));
       setBatchDeleteModalOpen(false);
       resetBatchDeleteState();
     } finally {
-      setBatchDeletePreviewLoading(false);
+      if (batchDeletePreviewSeqRef.current === seq) {
+        setBatchDeletePreviewLoading(false);
+      }
     }
   };
 

@@ -209,7 +209,19 @@ export default function UserPage() {
     size: 10,
     total: 0,
   });
+  // 后端列表只回切片不回 total：多取 1 条探针判断是否还有下一页
+  const [hasNextPage, setHasNextPage] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // loadUsers 序号守卫 + 最新关键词/分页 ref（避免闭包捕获旧值）
+  const loadUsersSeqRef = useRef(0);
+  const searchKeywordRef = useRef(searchKeyword);
+  const paginationRef = useRef(pagination);
+
+  searchKeywordRef.current = searchKeyword;
+  paginationRef.current = pagination;
+  // 删除确认防重复提交
+  const [deleteUserLoading, setDeleteUserLoading] = useState(false);
+  const [removeTunnelLoading, setRemoveTunnelLoading] = useState(false);
 
   // 用户表单相关状态
   const {
@@ -356,35 +368,57 @@ export default function UserPage() {
     return !speedLimitIds.has(speedId);
   };
 
-  // 数据加载函数
+  // 数据加载函数：序号守卫防搜索竞态（慢的旧关键词响应不得覆盖新结果），
+  // 关键词/页码默认读最新 ref，调用方也可显式覆盖
   const loadUsers = useCallback(
-    async (keywordOverride?: string) => {
+    async (keywordOverride?: string, pageOverride?: number) => {
+      const seq = (loadUsersSeqRef.current += 1);
+      const keyword = keywordOverride ?? searchKeywordRef.current;
+      const current = pageOverride ?? paginationRef.current.current;
+      const size = paginationRef.current.size;
+
       setLoading(true);
       try {
-        const keyword = keywordOverride ?? searchKeyword;
+        // size+1 探针：多回的 1 条只用于判断还有下一页，不展示
         const response = await getAllUsers({
-          current: pagination.current,
-          size: pagination.size,
+          current,
+          size: size + 1,
           keyword,
         });
 
-        if (response.code === 0) {
-          const nextUsers = Array.isArray(response.data)
-            ? response.data.map((item) => normalizeUserItem(item))
-            : [];
+        if (loadUsersSeqRef.current !== seq) {
+          return;
+        }
 
+        if (response.code === 0) {
+          const rawUsers = Array.isArray(response.data) ? response.data : [];
+          const nextHasNext = rawUsers.length > size;
+          const nextUsers = (nextHasNext ? rawUsers.slice(0, size) : rawUsers)
+            .map((item) => normalizeUserItem(item));
+
+          setHasNextPage(nextHasNext);
           setUsers(nextUsers);
-          setPagination((prev) => ({ ...prev, total: nextUsers.length }));
+          setPagination((prev) => ({
+            ...prev,
+            current,
+            total: nextHasNext
+              ? prev.total
+              : (current - 1) * size + nextUsers.length,
+          }));
         } else {
           toast.error(response.msg || "获取用户列表失败");
         }
       } catch {
-        toast.error("获取用户列表失败");
+        if (loadUsersSeqRef.current === seq) {
+          toast.error("获取用户列表失败");
+        }
       } finally {
-        setLoading(false);
+        if (loadUsersSeqRef.current === seq) {
+          setLoading(false);
+        }
       }
     },
-    [pagination.current, pagination.size],
+    [],
   );
 
   const loadTunnels = useCallback(async () => {
@@ -488,15 +522,8 @@ export default function UserPage() {
     }
 
     searchDebounceRef.current = setTimeout(() => {
-      setPagination((prev) => {
-        if (prev.current === 1) {
-          void loadUsers(searchKeyword);
-
-          return prev;
-        }
-
-        return { ...prev, current: 1 };
-      });
+      setPagination((prev) => ({ ...prev, current: 1 }));
+      void loadUsers(searchKeyword, 1);
     }, USER_SEARCH_DEBOUNCE_MS);
 
     return () => {
@@ -515,7 +542,15 @@ export default function UserPage() {
     }
 
     setPagination((prev) => ({ ...prev, current: 1 }));
-    void loadUsers(searchKeyword);
+    void loadUsers(searchKeyword, 1);
+  };
+
+  const handlePageChange = (page: number) => {
+    if (page < 1 || page === pagination.current) return;
+    if (page > pagination.current && !hasNextPage) return;
+
+    setPagination((prev) => ({ ...prev, current: page }));
+    void loadUsers(undefined, page);
   };
 
   const handleAdd = () => {
@@ -578,8 +613,9 @@ export default function UserPage() {
   };
 
   const handleConfirmDelete = async () => {
-    if (!userToDelete) return;
+    if (!userToDelete || deleteUserLoading) return;
 
+    setDeleteUserLoading(true);
     try {
       const response = await deleteUser(userToDelete.id);
 
@@ -601,12 +637,30 @@ export default function UserPage() {
       }
     } catch {
       toast.error("删除失败");
+    } finally {
+      setDeleteUserLoading(false);
     }
   };
 
   const handleSubmitUser = async () => {
-    if (!userForm.user || (!userForm.pwd && !isEdit) || !userForm.expTime) {
-      toast.error("请填写完整信息");
+    // 与全站口径对齐：用户名 trim 判空、密码最低 6 位（登录/改密同口径）
+    if (!userForm.user.trim()) {
+      toast.error("请输入用户名");
+
+      return;
+    }
+    if (!isEdit && !userForm.pwd) {
+      toast.error("请输入密码");
+
+      return;
+    }
+    if (userForm.pwd && userForm.pwd.length < 6) {
+      toast.error("密码至少 6 位");
+
+      return;
+    }
+    if (!userForm.expTime) {
+      toast.error("请选择到期时间");
 
       return;
     }
@@ -623,6 +677,7 @@ export default function UserPage() {
     try {
       const submitData: any = {
         ...userForm,
+        user: userForm.user.trim(),
         flow: Math.ceil(flowMiB / 1024),
         flowMiB:
           userFlowInput === "99999" && userFlowUnit === "GB" ? 0 : flowMiB,
@@ -870,8 +925,9 @@ export default function UserPage() {
   };
 
   const handleConfirmRemoveTunnel = async () => {
-    if (!tunnelToDelete) return;
+    if (!tunnelToDelete || removeTunnelLoading) return;
 
+    setRemoveTunnelLoading(true);
     try {
       const response = await removeUserTunnel({ id: tunnelToDelete.id });
 
@@ -887,6 +943,8 @@ export default function UserPage() {
       }
     } catch {
       toast.error("删除失败");
+    } finally {
+      setRemoveTunnelLoading(false);
     }
   };
 
@@ -1517,6 +1575,34 @@ export default function UserPage() {
             );
           })}
         </StaggerList>
+      )}
+
+      {/* 分页条：后端只回切片不回 total，用探针判断下一页；
+          到达末页时总数精确可算，未到达时只显示页码与本页条数 */}
+      {!loading && (users.length > 0 || pagination.current > 1) && (
+        <div className="flex items-center justify-center gap-3 py-2">
+          <Button
+            isDisabled={pagination.current <= 1}
+            size="sm"
+            variant="flat"
+            onPress={() => handlePageChange(pagination.current - 1)}
+          >
+            上一页
+          </Button>
+          <span className="text-sm text-default-500">
+            第 {pagination.current} 页 · 本页 {users.length} 条
+            {!hasNextPage &&
+              ` · 共 ${(pagination.current - 1) * pagination.size + users.length} 个用户`}
+          </span>
+          <Button
+            isDisabled={!hasNextPage}
+            size="sm"
+            variant="flat"
+            onPress={() => handlePageChange(pagination.current + 1)}
+          >
+            下一页
+          </Button>
+        </div>
       )}
 
       {/* 用户表单模态框 */}
@@ -2323,7 +2409,11 @@ export default function UserPage() {
             <Button variant="light" onPress={onDeleteModalClose}>
               取消
             </Button>
-            <Button color="danger" onPress={handleConfirmDelete}>
+            <Button
+              color="danger"
+              isLoading={deleteUserLoading}
+              onPress={handleConfirmDelete}
+            >
               确认删除
             </Button>
           </ModalFooter>
@@ -2371,7 +2461,11 @@ export default function UserPage() {
             <Button variant="light" onPress={onDeleteTunnelModalClose}>
               取消
             </Button>
-            <Button color="danger" onPress={handleConfirmRemoveTunnel}>
+            <Button
+              color="danger"
+              isLoading={removeTunnelLoading}
+              onPress={handleConfirmRemoveTunnel}
+            >
               确认删除
             </Button>
           </ModalFooter>
