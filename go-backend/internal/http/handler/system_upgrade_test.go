@@ -43,7 +43,7 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
 
 	// 默认（无配置行）：代理开启，默认代理地址
-	wantDefault := "https://gcode.hostcentral.cc/https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	wantDefault := "https://gcode.hostcentral.cc/https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
 	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantDefault {
 		t.Fatalf("default download URL = %q, want %q", got, wantDefault)
 	}
@@ -55,7 +55,7 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 	if err := repoStore.UpsertConfig("github_proxy_url", "https://proxy.example.com", now); err != nil {
 		t.Fatalf("UpsertConfig() github_proxy_url error = %v", err)
 	}
-	wantProxy := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	wantProxy := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
 	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantProxy {
 		t.Fatalf("proxied download URL = %q, want %q", got, wantProxy)
 	}
@@ -64,7 +64,7 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 	if err := repoStore.UpsertConfig("github_proxy_enabled", "false", now); err != nil {
 		t.Fatalf("UpsertConfig() github_proxy_enabled=false error = %v", err)
 	}
-	wantDirect := "https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	wantDirect := "https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
 	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantDirect {
 		t.Fatalf("direct download URL = %q, want %q", got, wantDirect)
 	}
@@ -97,7 +97,7 @@ func TestDownloadReleaseAssetRejectsOversizedBody(t *testing.T) {
 	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
 
 	// 本地服务器是回环地址，需按 D17 策略放行私网；上限临时调小避免真传 50MB。
-	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
+	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
 	originalMax := secureFetchMaxBody
 	secureFetchMaxBody = 1024
 	t.Cleanup(func() { secureFetchMaxBody = originalMax })
@@ -647,7 +647,7 @@ func TestWrapUpgradeDownloadError(t *testing.T) {
 		t.Fatalf("unrelated error must pass through, got %v", err)
 	}
 	wrapped := wrapUpgradeDownloadError(errPrivateForTest{})
-	if !strings.Contains(wrapped.Error(), "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true") {
+	if !strings.Contains(wrapped.Error(), "FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true") {
 		t.Fatalf("expected guidance in wrapped error, got %v", wrapped)
 	}
 	if wrapUpgradeDownloadError(nil) != nil {

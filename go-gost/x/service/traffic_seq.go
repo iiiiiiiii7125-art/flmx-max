@@ -13,8 +13,11 @@ import (
 // D1-010: 上报成功后再清零本地计数器；失败则保留并重试。
 
 var (
-	seqMu   sync.Mutex
-	seqFile = filepath.Join(os.TempDir(), "flvx_agent_seq.json")
+	seqMu sync.Mutex
+	// 改名过渡：seq 落盘改用 flmx 文件名；新文件不存在时回退读旧文件，
+	// 避免 seq 归零导致面板去重失效、流量重复计账。
+	seqFile       = filepath.Join(os.TempDir(), "flmx_agent_seq.json")
+	legacySeqFile = filepath.Join(os.TempDir(), "flvx_agent_seq.json")
 	// 内存中的 seq（启动时从文件加载）。
 	currentSeq int64
 	seqLoaded  bool
@@ -28,6 +31,9 @@ func loadSeq() int64 {
 		return currentSeq
 	}
 	data, err := os.ReadFile(seqFile)
+	if err != nil {
+		data, err = os.ReadFile(legacySeqFile)
+	}
 	if err == nil {
 		var s struct {
 			Seq int64 `json:"seq"`

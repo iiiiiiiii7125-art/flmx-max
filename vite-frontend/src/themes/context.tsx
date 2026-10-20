@@ -120,6 +120,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const resetTheme = useCallback(() => {
     deactivateTheme();
     reapplyActiveTheme();
+    localStorage.removeItem("flmx:active-theme");
     localStorage.removeItem("flvx:active-theme");
   }, []);
   const setMode = useCallback((m: ThemeMode) => {

@@ -28,7 +28,7 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=$(node -p "require('./skills/flvx-api/package.json').version")
+            VERSION=$(node -p "require('./skills/flmx-api/package.json').version")
           else
             # AUDIT-R1 (SCR-001): 纯数字 tag（如 1.0.2）没有 v 前缀，
             # 原 "${GITHUB_REF#refs/tags/v}" 剥不掉前缀，会得到完整 ref。
@@ -40,11 +40,11 @@ jobs:
       - name: Sync package.json version with tag
         # AUDIT-R1 (SCR-001): 原流程算出 version 却从不写回 package.json，
         # npm publish 发布的是写死的版本号，与 tag 脱钩。
-        working-directory: skills/flvx-api
+        working-directory: skills/flmx-api
         run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Publish to npm
-        working-directory: skills/flvx-api
+        working-directory: skills/flmx-api
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -55,4 +55,4 @@ jobs:
         with:
           name: Skill ${{ steps.version.outputs.version }}
           generate_release_notes: true
-          files: skills/flvx-api/package.json
+          files: skills/flmx-api/package.json

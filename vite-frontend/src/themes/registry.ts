@@ -23,8 +23,31 @@ const installed = new Map<string, ThemePackage>();
 let activeId: string | null = null;
 let injectedStyleEl: HTMLStyleElement | null = null;
 
-const STORAGE_KEY = "flvx:active-theme";
-const MODE_KEY = "flvx:theme"; // backwards-compat with old use-theme
+const STORAGE_KEY = "flmx:active-theme";
+const LEGACY_STORAGE_KEY = "flvx:active-theme";
+const MODE_KEY = "flmx:theme"; // backwards-compat with old use-theme
+const LEGACY_MODE_KEY = "flvx:theme";
+
+// 改名迁移：新键无值时回退读旧键，并把值搬运到新键（一次性无感迁移）。
+function readMigrated(key: string, legacyKey: string): string | null {
+  try {
+    const v = localStorage.getItem(key);
+
+    if (v != null) return v;
+    const legacy = localStorage.getItem(legacyKey);
+
+    if (legacy != null) {
+      localStorage.setItem(key, legacy);
+      localStorage.removeItem(legacyKey);
+
+      return legacy;
+    }
+  } catch {
+    // storage unavailable (privacy mode etc.)
+  }
+
+  return null;
+}
 
 type ChangeListener = () => void;
 const changeListeners = new Set<ChangeListener>();
@@ -85,7 +108,7 @@ export function resolveSystemMode(): "light" | "dark" {
 
 export function getSavedMode(): ThemeMode {
   if (typeof window === "undefined") return "system";
-  const raw = localStorage.getItem(MODE_KEY);
+  const raw = readMigrated(MODE_KEY, LEGACY_MODE_KEY);
 
   if (raw === "light" || raw === "dark" || raw === "system") return raw;
 
@@ -134,7 +157,7 @@ export function activateTheme(id: string): void {
   // Inject custom CSS
   if (pkg.css) {
     injectedStyleEl = document.createElement("style");
-    injectedStyleEl.setAttribute("data-flvx-theme", id);
+    injectedStyleEl.setAttribute("data-flmx-theme", id);
     injectedStyleEl.textContent = pkg.css;
     document.head.appendChild(injectedStyleEl);
   }
@@ -254,7 +277,7 @@ export function subscribe(listener: ChangeListener): () => void {
  * localStorage (if the theme is registered).
  */
 export function initThemeSystem(): void {
-  const savedId = localStorage.getItem(STORAGE_KEY);
+  const savedId = readMigrated(STORAGE_KEY, LEGACY_STORAGE_KEY);
 
   if (savedId && installed.has(savedId)) {
     activateTheme(savedId);

@@ -5,7 +5,7 @@
 ### S-02 (commit 39235fa)
 关闭 UpgradeAgent 下载链：
 - 面板：`isValidAgentVersion` 严格校验 `^v?[0-9]+\.[0-9]+\.[0-9]+$`，只发送 `version` 参数
-- Agent：拒绝面板传入的 `downloadUrl`，用编译期常量 `iiiiiiiii7125-art/flvx-max` 本地拼 URL
+- Agent：拒绝面板传入的 `downloadUrl`，用编译期常量 `iiiiiiiii7125-art/flmx-max` 本地拼 URL
 - Checksum 强制：拿不到/为空/不匹配 → 删除临时文件并中止，不再降级跳过
 
 测试：

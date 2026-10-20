@@ -1,6 +1,6 @@
 # vite-frontend
 
-React dashboard for FLVX. rolldown-vite + TypeScript + Tailwind v4 + shadcn/radix.
+React dashboard for FLMX. rolldown-vite + TypeScript + Tailwind v4 + shadcn/radix.
 
 ## Structure
 

@@ -23,15 +23,20 @@ import (
 )
 
 const (
-	panelDeployDirEnv          = "PANEL_DEPLOY_DIR"
-	panelBackendContainerEnv   = "PANEL_BACKEND_CONTAINER"
-	defaultPanelDeployDir      = "/opt/flvx-panel"
+	panelDeployDirEnv        = "PANEL_DEPLOY_DIR"
+	panelBackendContainerEnv = "PANEL_BACKEND_CONTAINER"
+	// 改名过渡：新装部署目录为 /opt/flmx-panel；存量面板装在
+	// /opt/flvx-panel，自升级探测时双认（见 newSystemUpgradeExecutor）。
+	defaultPanelDeployDir      = "/opt/flmx-panel"
+	legacyPanelDeployDir       = "/opt/flvx-panel"
 	defaultPanelBackendName    = "flux-panel-backend"
 	dockerSocketPath           = "/var/run/docker.sock"
 	systemUpgradeMessage       = "升级 helper 已启动，面板服务将短暂重启"
 	systemUpgradeConflictError = "已有面板升级任务执行中"
 	// U1-003：升级状态文件名（落盘于部署目录，跨进程/重启可查）。
-	systemUpgradeStatusFileName = ".flvx_upgrade_status.json"
+	systemUpgradeStatusFileName = ".flmx_upgrade_status.json"
+	// 改名前的状态文件名：读取时回退，保证升级跨越改名版本时状态不丢。
+	legacySystemUpgradeStatusFileName = ".flvx_upgrade_status.json"
 	// U1-003：状态文件显示进行中但开始时间早于此时长，视为残留
 	// （helper 被强杀等异常情况），允许新升级覆盖，避免永久锁死。
 	systemUpgradeStaleAfter = 30 * time.Minute
@@ -166,10 +171,14 @@ func (e *systemUpgradeExecutor) statusPath() string {
 }
 
 // readUpgradeStatus 读取落盘的升级状态；文件不存在或损坏时返回零值
-// （inProgress=false），不视为错误。
+// （inProgress=false），不视为错误。新名文件缺失时回退读改名前的旧名
+// 文件（跨改名版本升级中的状态由旧 helper 写在旧名下）。
 func (e *systemUpgradeExecutor) readUpgradeStatus() systemUpgradeStatusData {
 	var st systemUpgradeStatusData
 	data, err := os.ReadFile(e.statusPath())
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join(e.deployDir, legacySystemUpgradeStatusFileName))
+	}
 	if err != nil {
 		return st
 	}
@@ -207,7 +216,15 @@ type systemUpgradeRequest struct {
 func newSystemUpgradeExecutor() *systemUpgradeExecutor {
 	deployDir := strings.TrimSpace(os.Getenv(panelDeployDirEnv))
 	if deployDir == "" {
+		// 未显式指定时按新名优先、旧名兜底探测实际部署目录；
+		// 都不存在（如全新部署尚未落盘）时用新名默认值。
 		deployDir = defaultPanelDeployDir
+		for _, cand := range []string{defaultPanelDeployDir, legacyPanelDeployDir} {
+			if st, err := os.Stat(cand); err == nil && st.IsDir() {
+				deployDir = cand
+				break
+			}
+		}
 	}
 	backendContainer := strings.TrimSpace(os.Getenv(panelBackendContainerEnv))
 	if backendContainer == "" {
@@ -351,7 +368,7 @@ func (e *systemUpgradeExecutor) selectComposeAsset(current []byte) string {
 func (e *systemUpgradeExecutor) helperScript() string {
 	return `set -eu
 LOGFILE="$PANEL_DEPLOY_DIR/upgrade.log"
-STATUS_FILE="$PANEL_DEPLOY_DIR/.flvx_upgrade_status.json"
+STATUS_FILE="$PANEL_DEPLOY_DIR/.flmx_upgrade_status.json"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
 
 # U1-003：回写升级状态文件（与后端 systemUpgradeStatusData 结构体对应）。
@@ -992,7 +1009,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "写入升级状态失败: "+err.Error()))
 		return
 	}
-	helperName := fmt.Sprintf("flvx-upgrade-helper-%d", time.Now().Unix())
+	helperName := fmt.Sprintf("flmx-upgrade-helper-%d", time.Now().Unix())
 	helperContainer, err := exec.startHelper(r.Context(), imageID, helperName)
 	if err != nil {
 		// U1-003：helper 未启动成功，立即解除落盘的「升级中」状态，避免永久拦截后续升级。
@@ -1028,7 +1045,7 @@ func wrapUpgradeDownloadError(err error) error {
 		return nil
 	}
 	if strings.Contains(err.Error(), "private network not allowlisted") {
-		return fmt.Errorf("%v（提示：GitHub 代理地址解析为内网/回环地址，被安全下载策略拒绝；如确为可信自建代理，请在面板部署环境设置 FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或 FLVX_FETCH_PRIVATE_ALLOWLIST 后重试）", err)
+		return fmt.Errorf("%v（提示：GitHub 代理地址解析为内网/回环地址，被安全下载策略拒绝；如确为可信自建代理，请在面板部署环境设置 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或 FLMX_FETCH_PRIVATE_ALLOWLIST（旧名 FLVX_* 亦可）后重试）", err)
 	}
 	return err
 }

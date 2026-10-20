@@ -8,7 +8,7 @@ export LC_ALL=C
 
 
 # GitHub repo used for release downloads
-REPO="iiiiiiiii7125-art/flvx-max"
+REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
@@ -414,7 +414,7 @@ setup_domain_proxy() {
   # 找不到才回退 6366。
   local _env_file _port
   if [[ -z "${FRONTEND_PORT:-}" ]]; then
-    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flvx-panel/.env"; do
+    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
       [[ "$_env_file" == "/.env" ]] && continue
       _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
       if [[ "$_port" =~ ^[0-9]+$ ]] && (( _port >= 1 && _port <= 65535 )); then
@@ -534,7 +534,7 @@ resolve_panel_deployment() {
   label_project=$(get_container_compose_label "$backend_container" "com.docker.compose.project")
 
   # Older in-panel upgrades ran Compose inside a helper container, which left
-  # the label pointing at the container path (/opt/flvx-panel) instead of the
+  # the label pointing at the container path (/opt/flmx-panel) instead of the
   # real deployment. Prefer the current directory when only it has the files.
   if [[ -n "$label_dir" && ! -f "$label_dir/docker-compose.yml" && -f ".env" && -f "docker-compose.yml" ]]; then
     echo "⚠️ 容器标签记录的部署目录 $label_dir 中没有 docker-compose.yml，改用当前目录 $(pwd -P)"
@@ -1040,7 +1040,7 @@ EOF
   _pub_ip=$(get_public_ip)
   echo "🌐 访问地址: http://${_pub_ip}:$FRONTEND_PORT"
   echo "📖 部署完成后请阅读下使用文档，求求了啊，不要上去就是一顿操作"
-  echo "📚 文档地址: https://iiiiiiiii7125-art.github.io/flvx-max/guide.html"
+  echo "📚 文档地址: https://iiiiiiiii7125-art.github.io/flmx-max/guide.html"
   echo "💡 默认管理员账号: admin@user / admin@user"
   echo "⚠️  登录后请立即修改默认密码！"
 

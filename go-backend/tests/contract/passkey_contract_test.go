@@ -55,7 +55,7 @@ func passkeyChallenge(t *testing.T, data map[string]interface{}) string {
 }
 
 func TestPasskeyConfigurationFailsClosedAndPasswordLoginStillWorks(t *testing.T) {
-	t.Setenv("FLVX_WEBAUTHN_ORIGIN", "https://panel.example.test/path")
+	t.Setenv("FLMX_WEBAUTHN_ORIGIN", "https://panel.example.test/path")
 	router, r := setupContractRouter(t, "passkey-test-secret")
 	seedLegacyUser(t, r, 9301, "passkey-disabled", "test-password")
 	status := passkeyData(t, passkeyPost(t, router, "/api/v1/user/passkey/status", "", map[string]string{}))
@@ -71,7 +71,7 @@ func TestPasskeyConfigurationFailsClosedAndPasswordLoginStillWorks(t *testing.T)
 }
 
 func TestPasskeyRegistrationAndOwnership(t *testing.T) {
-	t.Setenv("FLVX_WEBAUTHN_ORIGIN", passkeyTestOrigin)
+	t.Setenv("FLMX_WEBAUTHN_ORIGIN", passkeyTestOrigin)
 	router, r := setupContractRouter(t, "passkey-test-secret")
 	seedLegacyUser(t, r, 9302, "passkey-alice", "alice-password")
 	seedLegacyUser(t, r, 9303, "passkey-bob", "bob-password")
@@ -149,7 +149,7 @@ func TestPasskeyRegistrationAndOwnership(t *testing.T) {
 }
 
 func TestPasskeyDiscoverableLoginAndOwnership(t *testing.T) {
-	t.Setenv("FLVX_WEBAUTHN_ORIGIN", passkeyTestOrigin)
+	t.Setenv("FLMX_WEBAUTHN_ORIGIN", passkeyTestOrigin)
 	router, r := setupContractRouter(t, "passkey-test-secret")
 	seedLegacyUser(t, r, 9311, "discover-alice", "alice-password")
 	seedLegacyUser(t, r, 9312, "discover-bob", "bob-password")

@@ -72,11 +72,14 @@ var tuneGroups = []tuneGroup{
 
 // Paths are variables so tests can use a temporary tree.
 var (
-	tuneProcRoot   = "/proc/sys"
-	tuneConfPath   = "/etc/sysctl.d/99-flvx-tuning.conf"
-	tuneBackupPath = "/etc/flux_agent/tuning-backup.json"
-	tuneModprobe   = func(module string) error { return exec.Command("modprobe", module).Run() }
-	tuneWrite      = writeSysctl
+	tuneProcRoot = "/proc/sys"
+	tuneConfPath = "/etc/sysctl.d/99-flmx-tuning.conf"
+	// 改名前的调优文件路径：应用/还原时顺带删除。99-flmx 在字典序上
+	// 先于 99-flvx 加载，残留旧文件会在开机时静默覆盖新值，必须清理。
+	legacyTuneConfPath = "/etc/sysctl.d/99-flvx-tuning.conf"
+	tuneBackupPath     = "/etc/flux_agent/tuning-backup.json"
+	tuneModprobe       = func(module string) error { return exec.Command("modprobe", module).Run() }
+	tuneWrite          = writeSysctl
 )
 
 type tuneSettingStatus struct {
@@ -295,12 +298,16 @@ func applyTuning(groupIDs []string) (tuneStatus, error) {
 		return tuneStatus{}, err
 	}
 	if len(conf) > 0 {
-		body := "# Written by the FLYX panel (节点调优); remove via the panel to restore.\n" + strings.Join(conf, "\n") + "\n"
+		body := "# Written by the FLMX panel (节点调优); remove via the panel to restore.\n" + strings.Join(conf, "\n") + "\n"
 		if err := os.WriteFile(tuneConfPath, []byte(body), 0o644); err != nil {
 			return tuneStatus{}, fmt.Errorf("写入 %s 失败: %v", tuneConfPath, err)
 		}
 	} else if err := os.Remove(tuneConfPath); err != nil && !os.IsNotExist(err) {
 		return tuneStatus{}, err
+	}
+	// 清理改名前的 legacy 调优文件（存在才删，失败不阻断主流程）。
+	if legacyTuneConfPath != tuneConfPath {
+		_ = os.Remove(legacyTuneConfPath)
 	}
 
 	if len(backup) > 0 {

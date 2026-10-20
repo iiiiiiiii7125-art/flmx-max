@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go-backend/internal/config"
 	"io"
 	"log"
 	"net"
-	"os"
 	"net/http"
 	"net/url"
 	"sort"
@@ -1763,8 +1763,8 @@ func normalizePeerShareAllowedIPs(raw string) (string, error) {
 //
 // 与浏览器侧（loginClientIP）是两种信任模型，分开实现、不共用函数：
 // 面板↔面板是机器对机器通信，默认只信任 r.RemoteAddr（直连对端 IP）。
-// 只有当显式配置 FLVX_FEDERATION_TRUSTED_PROXIES（逗号分隔 CIDR）且
-// RemoteAddr 落在其内时，才从右按 FLVX_TRUSTED_PROXY_HOPS 解析 XFF。
+// 只有当显式配置 FLMX_FEDERATION_TRUSTED_PROXIES（逗号分隔 CIDR）且
+// RemoteAddr 落在其内时，才从右按 FLMX_TRUSTED_PROXY_HOPS 解析 XFF。
 // 把私网 RemoteAddr 一律视为可信代理，会让任意私网对端伪造 XFF 绕过
 // AllowedIPs 白名单——这正是旧 resolvePeerClientIP 的缺陷。
 func federationClientIP(r *http.Request) net.IP {
@@ -1795,10 +1795,10 @@ func federationClientIP(r *http.Request) net.IP {
 	return remoteIP
 }
 
-// federationTrustedProxyCIDRs 解析 FLVX_FEDERATION_TRUSTED_PROXIES。
+// federationTrustedProxyCIDRs 解析 FLMX_FEDERATION_TRUSTED_PROXIES。
 // 未配置或解析失败时返回空（= 默认只用 RemoteAddr）。
 func federationTrustedProxyCIDRs() []*net.IPNet {
-	raw := strings.TrimSpace(os.Getenv("FLVX_FEDERATION_TRUSTED_PROXIES"))
+	raw := strings.TrimSpace(config.GetEnvAny("FLMX_FEDERATION_TRUSTED_PROXIES", "FLVX_FEDERATION_TRUSTED_PROXIES"))
 	if raw == "" {
 		return nil
 	}
@@ -1818,19 +1818,18 @@ func federationTrustedProxyCIDRs() []*net.IPNet {
 				out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 				continue
 			}
-			log.Printf("warning: invalid FLVX_FEDERATION_TRUSTED_PROXIES entry %q, skipped", part)
+			log.Printf("warning: invalid FLMX_FEDERATION_TRUSTED_PROXIES entry %q, skipped", part)
 			continue
 		}
 		_, cidr, err := net.ParseCIDR(part)
 		if err != nil {
-			log.Printf("warning: invalid FLVX_FEDERATION_TRUSTED_PROXIES entry %q, skipped", part)
+			log.Printf("warning: invalid FLMX_FEDERATION_TRUSTED_PROXIES entry %q, skipped", part)
 			continue
 		}
 		out = append(out, cidr)
 	}
 	return out
 }
-
 
 func parseIPLiteral(raw string) net.IP {
 	value := strings.Trim(strings.TrimSpace(raw), "\"")

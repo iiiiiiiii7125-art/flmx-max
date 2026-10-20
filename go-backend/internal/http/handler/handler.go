@@ -1069,12 +1069,16 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 
 	raw, err := readAndDecryptFlowBody(r.Body, secret)
 	if err == nil && strings.TrimSpace(raw) != "" {
-		// R5-B6 E-001: seq 优先从 HTTP 头 X-Flvx-Seq 读取（agent 新格式），
-		// 其次从 body 的 {seq, items} 对象读取，最后兼容纯数组（legacy）。
+		// R5-B6 E-001: seq 优先从 HTTP 头 X-Flmx-Seq 读取（改名后新头），
+		// 回退旧头 X-Flvx-Seq，其次从 body 的 {seq, items} 对象读取，
+		// 最后兼容纯数组（legacy）。
 		var seq *int64
-		if h := r.Header.Get("X-Flvx-Seq"); h != "" {
-			if v, err := strconv.ParseInt(strings.TrimSpace(h), 10, 64); err == nil {
-				seq = &v
+		for _, hdr := range []string{"X-Flmx-Seq", "X-Flvx-Seq"} {
+			if hv := r.Header.Get(hdr); hv != "" {
+				if v, err := strconv.ParseInt(strings.TrimSpace(hv), 10, 64); err == nil {
+					seq = &v
+				}
+				break
 			}
 		}
 		var items []flowItem

@@ -1,10 +1,10 @@
 package handler
 
 import (
+	"go-backend/internal/config"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,22 +45,22 @@ const (
 	loginProgressiveDelayMax = 5 * time.Second
 )
 
-// TrustedProxyHops 读取 FLVX_TRUSTED_PROXY_HOPS，默认 1。
+// TrustedProxyHops 读取 FLMX_TRUSTED_PROXY_HOPS，默认 1。
 // 覆盖两种默认拓扑：panel_install.sh 的 Caddy→backend，
 // docker-compose 的 nginx(frontend 容器)→backend。
 // 多一跳（如 Caddy→nginx→backend）请设为 2，并见部署文档。
 func TrustedProxyHops() int {
-	raw := strings.TrimSpace(os.Getenv("FLVX_TRUSTED_PROXY_HOPS"))
+	raw := strings.TrimSpace(config.GetEnvAny("FLMX_TRUSTED_PROXY_HOPS", "FLVX_TRUSTED_PROXY_HOPS"))
 	if raw == "" {
 		return 1
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 0 {
-		log.Printf("warning: invalid FLVX_TRUSTED_PROXY_HOPS=%q, using 1", raw)
+		log.Printf("warning: invalid FLMX_TRUSTED_PROXY_HOPS=%q, using 1", raw)
 		return 1
 	}
 	if n > 16 {
-		log.Printf("warning: FLVX_TRUSTED_PROXY_HOPS=%d too large, capped at 16", n)
+		log.Printf("warning: FLMX_TRUSTED_PROXY_HOPS=%d too large, capped at 16", n)
 		return 16
 	}
 	return n
@@ -95,7 +95,7 @@ func loginClientIP(r *http.Request) net.IP {
 		// 旧逻辑取最左条目（fail-open）：攻击者可控的 XFF 任意条目都可能被
 		// 当作客户端 IP，限流桶随之可任意伪造。改为 fail-closed：
 		// 不信任 XFF任何条目，回退 RemoteAddr，并告警提示检查配置。
-		log.Printf("warning: XFF has %d entries but FLVX_TRUSTED_PROXY_HOPS=%d; ignoring XFF (fail-closed), using RemoteAddr", len(entries), hops)
+		log.Printf("warning: XFF has %d entries but FLMX_TRUSTED_PROXY_HOPS=%d; ignoring XFF (fail-closed), using RemoteAddr", len(entries), hops)
 		return remoteIP
 	}
 	if ip := parseIPLiteral(entries[idx]); ip != nil {

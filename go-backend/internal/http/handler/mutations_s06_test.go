@@ -6,9 +6,12 @@ import (
 
 // S-06: 隧道更换入口节点后，旧节点规则必须被清理
 // 修复前：cleanupTunnelForwardRuntimesOnRemovedEntryNodes 只调 deleteForwardServicesOnNode，
-//        nftables 模式下不生效，离线节点静默跳过。
+//
+//	nftables 模式下不生效，离线节点静默跳过。
+//
 // 修复后：nftables 模式下对旧节点做 reconcile（声明式同步移除多余规则）；
-//        离线节点错误不再静默，由 S-04 机制处理。
+//
+//	离线节点错误不再静默，由 S-04 机制处理。
 func TestS06_RemovedNodesGetCleanup(t *testing.T) {
 	// 验证 diffInt64s 正确计算差集
 	old := []int64{1, 2, 3}

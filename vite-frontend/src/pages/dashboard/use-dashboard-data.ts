@@ -354,7 +354,7 @@ export const useDashboardData = (): DashboardDataState => {
 
         try {
           const storedTimeStr = localStorage.getItem(
-            "flvx_announcement_seen_time",
+            "flmx_announcement_seen_time",
           );
           const storedTime = storedTimeStr ? parseInt(storedTimeStr, 10) : 0;
           const updateTime = res.data.update_time || 0;
@@ -380,7 +380,7 @@ export const useDashboardData = (): DashboardDataState => {
     if (announcement && announcement.update_time) {
       try {
         localStorage.setItem(
-          "flvx_announcement_seen_time",
+          "flmx_announcement_seen_time",
           announcement.update_time.toString(),
         );
       } catch {

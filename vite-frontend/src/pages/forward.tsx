@@ -1376,11 +1376,11 @@ export default function ForwardPage() {
   >(null);
 
   // 导入相关状态
-  type ImportFormat = "flvx" | "ny";
+  type ImportFormat = "flmx" | "ny";
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importData, setImportData] = useState("");
   const [importLoading, setImportLoading] = useState(false);
-  const [importFormat, setImportFormat] = useState<ImportFormat>("flvx");
+  const [importFormat, setImportFormat] = useState<ImportFormat>("flmx");
   const [selectedTunnelForImport, setSelectedTunnelForImport] = useState<
     number | null
   >(null);
@@ -5540,7 +5540,7 @@ export default function ForwardPage() {
         <ModalContent>
           <ModalHeader className="flex flex-col gap-1">
             <h2 className="text-xl font-bold">导入规则数据</h2>
-            {importFormat === "flvx" ? (
+            {importFormat === "flmx" ? (
               <>
                 <p className="text-small text-default-500">
                   格式：目标地址|规则名称|入口端口，每行一个，入口端口留空将自动分配可用端口
@@ -5580,8 +5580,8 @@ export default function ForwardPage() {
                   }
                 }}
               >
-                <SelectItem key="flvx" textValue="flvx格式">
-                  flvx格式（管道分隔）
+                <SelectItem key="flmx" textValue="flmx格式">
+                  flmx格式（管道分隔）
                 </SelectItem>
                 <SelectItem key="ny" textValue="ny格式">
                   ny格式（JSON）
@@ -5626,7 +5626,7 @@ export default function ForwardPage() {
                 maxRows={12}
                 minRows={8}
                 placeholder={
-                  importFormat === "flvx"
+                  importFormat === "flmx"
                     ? "请输入要导入的规则数据，格式：目标地址|规则名称|入口端口"
                     : '请输入ny格式数据，每行一个JSON对象，如：{"dest":["1.2.3.4:80"],"listen_port":8080,"name":"规则1"}；listen_port可省略自动分配'
                 }

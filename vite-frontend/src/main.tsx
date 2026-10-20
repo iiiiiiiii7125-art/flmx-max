@@ -11,7 +11,7 @@ import "@/styles/globals.css";
 // to pick up the new build instead of showing a blank page. At most once
 // a minute, so a chunk that is really missing doesn't loop.
 window.addEventListener("vite:preloadError", (event) => {
-  const key = "flvx_chunk_reload";
+  const key = "flmx_chunk_reload";
 
   try {
     const last = Number(sessionStorage.getItem(key) || 0);

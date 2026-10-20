@@ -35,14 +35,25 @@ func logSubSigV1Used() {
 // cannot be replayed against another subscription's token. v1 signatures
 // (flvx-subsig-v1:{userID}) are still accepted for backwards compatibility,
 // with a deprecation log. Existing links keep working.
+//
+// 改名 FLMX 后新链接改用 v3 前缀（flmx-subsig-v3:{token}:{userID}）；
+// 校验侧 v3 → v2 → v1 依次回退，三代链接全部有效。
 func (h *Handler) subURLSig(userID int64) string {
 	mac := hmac.New(sha256.New, []byte(h.jwtSecret))
 	fmt.Fprintf(mac, "flvx-subsig-v1:%d", userID)
 	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
-// K-002: subURLSigForToken issues a v2 signature bound to a subscription token.
+// subURLSigForToken issues the current (v3, FLMX) token-bound signature.
 func (h *Handler) subURLSigForToken(token string, userID int64) string {
+	mac := hmac.New(sha256.New, []byte(h.jwtSecret))
+	fmt.Fprintf(mac, "flmx-subsig-v3:%s:%d", token, userID)
+	return hex.EncodeToString(mac.Sum(nil))[:32]
+}
+
+// subURLSigV2ForToken is the legacy FLVX-era token-bound signature,
+// kept for verification of links issued before the FLMX rename.
+func (h *Handler) subURLSigV2ForToken(token string, userID int64) string {
 	mac := hmac.New(sha256.New, []byte(h.jwtSecret))
 	fmt.Fprintf(mac, "flvx-subsig-v2:%s:%d", token, userID)
 	return hex.EncodeToString(mac.Sum(nil))[:32]
@@ -62,14 +73,17 @@ func (h *Handler) verifySubURLSig(userID int64, sig string) bool {
 	return ok
 }
 
-// verifySubURLSigForToken verifies a sig against the v2 (token-bound) format
-// first, then falls back to the v1 legacy format.
+// verifySubURLSigForToken verifies a sig against the current v3
+// (flmx-subsig) format first, then the legacy v2 (flvx-subsig), then v1.
 func (h *Handler) verifySubURLSigForToken(token string, userID int64, sig string) bool {
 	if len(sig) != 32 {
 		return false
 	}
 	want := h.subURLSigForToken(token, userID)
 	if subtle.ConstantTimeCompare([]byte(sig), []byte(want)) == 1 {
+		return true
+	}
+	if wantV2 := h.subURLSigV2ForToken(token, userID); subtle.ConstantTimeCompare([]byte(sig), []byte(wantV2)) == 1 {
 		return true
 	}
 	// 兼容旧链接：回退 v1。

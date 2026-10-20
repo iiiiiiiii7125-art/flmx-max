@@ -33,7 +33,7 @@ func main() {
 	log.Printf("starting go-backend on %s (db=%s)", cfg.Addr, cfg.DBPath)
 	// R5-B2 A-001: 登录限流 XFF 解析的可信跳数（默认 1，覆盖 Caddy→backend
 	// 与 nginx→backend 两种默认拓扑；Caddy→nginx→backend 请设为 2）。
-	log.Printf("proxy trust: FLVX_TRUSTED_PROXY_HOPS=%d (login XFF parsed right-to-left)", handler.TrustedProxyHops())
+	log.Printf("proxy trust: FLMX_TRUSTED_PROXY_HOPS=%d (login XFF parsed right-to-left)", handler.TrustedProxyHops())
 
 	a, err := app.New(cfg)
 	if err != nil {

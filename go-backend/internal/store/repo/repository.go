@@ -526,12 +526,12 @@ func seedData(db *gorm.DB) {
 		}
 	}
 
-	appNameConfig := model.ViteConfig{ID: 1, Name: "app_name", Value: "FLVX-MAX", Time: 1755147963000}
+	appNameConfig := model.ViteConfig{ID: 1, Name: "app_name", Value: "FLMX", Time: 1755147963000}
 	db.Where("id = ?", 1).FirstOrCreate(&appNameConfig)
 	// "flux" was the seeded name, hidden behind the old commercial license
 	// (it could not be changed without one); show the product name instead.
-	// "FLVX" was the seeded name before the FLVX-MAX rename; same treatment.
-	db.Model(&model.ViteConfig{}).Where("name = ? AND value IN ?", "app_name", []string{"flux", "FLVX"}).Update("value", "FLVX-MAX")
+	// "FLVX"/"FLVX-MAX" were the seeded names before the FLMX rename; same treatment.
+	db.Model(&model.ViteConfig{}).Where("name = ? AND value IN ?", "app_name", []string{"flux", "FLVX", "FLVX-MAX"}).Update("value", "FLMX")
 	now := time.Now().UnixMilli()
 	for name, value := range map[string]string{
 		"hide_footer_brand": "false",
@@ -2783,31 +2783,31 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 	count := 0
 	for _, n := range nodes {
 		item := model.Node{
-			ID:            n.ID,
-			Name:          n.Name,
-			Remark:        sql.NullString{String: n.Remark, Valid: n.Remark != ""},
-			ExpiryTime:    sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
-			RenewalCycle:  sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
-			Secret:        n.Secret,
-			ServerIP:      n.ServerIP,
-			ServerIPV4:    sql.NullString{String: n.ServerIPv4, Valid: true},
-			ServerIPV6:    sql.NullString{String: n.ServerIPv6, Valid: true},
-			Port:          n.Port,
-			InterfaceName: sql.NullString{String: n.InterfaceName, Valid: true},
-			Version:       sql.NullString{String: n.Version, Valid: true},
-			HTTP:          n.HTTP,
-			TLS:           n.TLS,
-			Socks:         n.Socks,
-			CreatedTime:   n.CreatedTime,
-			UpdatedTime:   sql.NullInt64{Int64: now, Valid: true},
-			Status:        n.Status,
-			TCPListenAddr: n.TCPListenAddr,
-			UDPListenAddr: n.UDPListenAddr,
-			Inx:           n.Inx,
-			IsRemote:      n.IsRemote,
-			RemoteURL:     sql.NullString{String: n.RemoteURL, Valid: true},
-			RemoteToken:   sql.NullString{String: n.RemoteToken, Valid: true},
-			RemoteConfig:  sql.NullString{String: n.RemoteConfig, Valid: true},
+			ID:             n.ID,
+			Name:           n.Name,
+			Remark:         sql.NullString{String: n.Remark, Valid: n.Remark != ""},
+			ExpiryTime:     sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
+			RenewalCycle:   sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
+			Secret:         n.Secret,
+			ServerIP:       n.ServerIP,
+			ServerIPV4:     sql.NullString{String: n.ServerIPv4, Valid: true},
+			ServerIPV6:     sql.NullString{String: n.ServerIPv6, Valid: true},
+			Port:           n.Port,
+			InterfaceName:  sql.NullString{String: n.InterfaceName, Valid: true},
+			Version:        sql.NullString{String: n.Version, Valid: true},
+			HTTP:           n.HTTP,
+			TLS:            n.TLS,
+			Socks:          n.Socks,
+			CreatedTime:    n.CreatedTime,
+			UpdatedTime:    sql.NullInt64{Int64: now, Valid: true},
+			Status:         n.Status,
+			TCPListenAddr:  n.TCPListenAddr,
+			UDPListenAddr:  n.UDPListenAddr,
+			Inx:            n.Inx,
+			IsRemote:       n.IsRemote,
+			RemoteURL:      sql.NullString{String: n.RemoteURL, Valid: true},
+			RemoteToken:    sql.NullString{String: n.RemoteToken, Valid: true},
+			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: true},
 			LatencyTargets: n.LatencyTargets,
 			ForwardMode:    n.ForwardMode,
 			// O7-006：恢复后保留已忽略的到期提醒状态

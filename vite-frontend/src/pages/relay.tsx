@@ -17,7 +17,7 @@ import { Chip } from "@/shadcn-bridge/heroui/chip";
 
 type RelayTab = "lines" | "tunnels" | "rules";
 
-const TAB_KEY = "flvx_relay_tab";
+const TAB_KEY = "flmx_relay_tab";
 
 function readTab(): RelayTab {
   try {

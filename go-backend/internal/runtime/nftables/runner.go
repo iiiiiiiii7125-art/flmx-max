@@ -27,11 +27,11 @@ func NewSSHRunner() *SSHRunner {
 
 func (r *SSHRunner) Test(ctx context.Context, cfg SSHConfig) error {
 	nft := nftBinary(cfg)
-	tableName := fmt.Sprintf("flvx_capability_%d", time.Now().UnixNano())
-	return r.run(ctx, cfg, buildCapabilityCheckCommand(nft, tableName))
+	probeName := fmt.Sprintf("flmx_capability_%d", time.Now().UnixNano())
+	return r.run(ctx, cfg, buildCapabilityCheckCommand(nft, probeName))
 }
 
-func buildCapabilityCheckCommand(nft, tableName string) string {
+func buildCapabilityCheckCommand(nft, probeName string) string {
 	script := RenderTable(NodePlan{
 		Rules: []Rule{{
 			ForwardID:  1,
@@ -41,15 +41,15 @@ func buildCapabilityCheckCommand(nft, tableName string) string {
 			Protocols:  []string{"tcp", "udp"},
 		}},
 	})
-	script = strings.Replace(script, "table inet flvx {", "table inet "+tableName+" {", 1)
+	script = strings.Replace(script, "table inet "+tableName+" {", "table inet "+probeName+" {", 1)
 	return "set -eu\n" +
 		"command -v nft >/dev/null 2>&1\n" +
 		nft + " --version >/dev/null 2>&1\n" +
-		"tmp=$(mktemp /tmp/flvx-nft-capability-XXXXXX.nft)\n" +
+		"tmp=$(mktemp /tmp/flmx-nft-capability-XXXXXX.nft)\n" +
 		"trap 'rm -f \"$tmp\"' EXIT\n" +
 		"cat > \"$tmp\" <<'EOF'\n" + script + "\nEOF\n" +
 		"if ! " + nft + " -c -f \"$tmp\"; then\n" +
-		"  echo 'nftables cannot validate the generated FLVX rules' >&2\n" +
+		"  echo 'nftables cannot validate the generated FLMX rules' >&2\n" +
 		"  exit 1\n" +
 		"fi"
 }
@@ -61,18 +61,23 @@ func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, script strin
 
 func buildApplyCommand(nft, script string) string {
 	return "set -eu\n" +
-		"tmp=$(mktemp /tmp/flvx-nft-XXXXXX.nft)\n" +
-		"batch=$(mktemp /tmp/flvx-nft-batch-XXXXXX.nft) || { rm -f \"$tmp\"; exit 1; }\n" +
+		"tmp=$(mktemp /tmp/flmx-nft-XXXXXX.nft)\n" +
+		"batch=$(mktemp /tmp/flmx-nft-batch-XXXXXX.nft) || { rm -f \"$tmp\"; exit 1; }\n" +
 		"cleanup() {\n" +
 		"  rm -f \"$tmp\" \"$batch\"\n" +
 		"}\n" +
 		"trap cleanup EXIT\n" +
 		"cat > \"$tmp\" <<'EOF'\n" + script + "\nEOF\n" +
-		"if " + nft + " list table inet flvx >/dev/null 2>&1; then\n" +
-		"  { printf '%s\\n' 'delete table inet flvx'; cat \"$tmp\"; } > \"$batch\"\n" +
-		"else\n" +
-		"  cp \"$tmp\" \"$batch\"\n" +
+		// 改名过渡：新表与 legacy 表（flvx）谁存在就先删谁，再整体加载新表，
+		// 避免改名后旧表残留在内核中与新表双份生效。
+		": > \"$batch\"\n" +
+		"if " + nft + " list table inet " + tableName + " >/dev/null 2>&1; then\n" +
+		"  printf '%s\\n' 'delete table inet " + tableName + "' >> \"$batch\"\n" +
 		"fi\n" +
+		"if " + nft + " list table inet " + legacyTableName + " >/dev/null 2>&1; then\n" +
+		"  printf '%s\\n' 'delete table inet " + legacyTableName + "' >> \"$batch\"\n" +
+		"fi\n" +
+		"cat \"$tmp\" >> \"$batch\"\n" +
 		"if ! " + nft + " -c -f \"$batch\"; then\n" +
 		"  echo 'nftables rule validation failed; active rules were preserved' >&2\n" +
 		"  exit 1\n" +
@@ -81,7 +86,7 @@ func buildApplyCommand(nft, script string) string {
 }
 
 func (r *SSHRunner) ListTableJSON(ctx context.Context, cfg SSHConfig) ([]byte, error) {
-	return r.runOutput(ctx, cfg, nftBinary(cfg)+" -j list table inet flvx")
+	return r.runOutput(ctx, cfg, nftBinary(cfg)+" -j list table inet "+tableName)
 }
 
 func (r *SSHRunner) run(ctx context.Context, cfg SSHConfig, command string) error {

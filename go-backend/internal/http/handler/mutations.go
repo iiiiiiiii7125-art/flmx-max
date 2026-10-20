@@ -2824,7 +2824,8 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
 			return
 		}
-		if err := h.syncNftablesNodeWithOverrides(entryNodeIDs[0], map[int64]bool{id: true}, nil); err != nil {			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if err := h.syncNftablesNodeWithOverrides(entryNodeIDs[0], map[int64]bool{id: true}, nil); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusPaused, time.Now().UnixMilli()); err != nil {
@@ -2994,7 +2995,7 @@ const (
 )
 
 // reconcileGroupedNftDeletes 按节点聚合执行 nft 删除：每节点只 reconcile 一次
-//（R5-B3 D1-001）。调用方须已将 forward 标记为 pending。reconcile 成功则删库，
+// （R5-B3 D1-001）。调用方须已将 forward 标记为 pending。reconcile 成功则删库，
 // 失败则整组留在 pending 由后台 job 退避重试。返回每条 forward 的结果。
 func (h *Handler) reconcileGroupedNftDeletes(groups map[int64][]int64) map[int64]nftDeleteOutcome {
 	outcomes := make(map[int64]nftDeleteOutcome, len(groups))

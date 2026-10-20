@@ -1,5 +1,5 @@
 """
-Pytest configuration and fixtures for FLVX E2E tests.
+Pytest configuration and fixtures for FLMX E2E tests.
 """
 
 import json

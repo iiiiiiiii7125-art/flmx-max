@@ -8,13 +8,13 @@
     <meta name="theme-color" content="#2563eb" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="FLVX" />
+    <meta name="apple-mobile-web-app-title" content="FLMX" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&display=swap" rel="stylesheet">
     
-    <title>FLVX</title>
+    <title>FLMX</title>
     <script>
       // 防止暗黑模式闪烁：在页面加载前立即应用系统主题
       (function() {
@@ -90,7 +90,7 @@
 
         // 立即检测主题并应用（优先读取 localStorage 中的用户偏好）
         var savedMode = '';
-        try { savedMode = localStorage.getItem('flvx:theme') || ''; } catch (_) {}
+        try { savedMode = localStorage.getItem('flmx:theme') || localStorage.getItem('flvx:theme') || ''; } catch (_) {}
 
         var useDark;
         if (savedMode === 'dark') {
@@ -116,7 +116,7 @@
           window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
             // 运行时可能已由 React 接管，这里仅做 fallback
             var currentMode = '';
-            try { currentMode = localStorage.getItem('flvx:theme') || ''; } catch (_) {}
+            try { currentMode = localStorage.getItem('flmx:theme') || localStorage.getItem('flvx:theme') || ''; } catch (_) {}
             if (currentMode && currentMode !== 'system') return; // 用户已手动选择，不干预
             if (e.matches) {
               document.documentElement.classList.add('dark');
@@ -232,13 +232,13 @@
         }
       }
     </style>
-    <meta key="title" content="FLVX" property="og:title" />
+    <meta key="title" content="FLMX" property="og:title" />
     <meta
-      content="FLVX"
+      content="FLMX"
       property="og:description"
     />
     <meta
-      content="FLVX"
+      content="FLMX"
       name="description"
     />
     <meta

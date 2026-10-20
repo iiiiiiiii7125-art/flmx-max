@@ -23,7 +23,7 @@ type failedForward struct {
 // githubRepo is where releases (node installer, agent binaries, panel
 // compose files) are fetched from. Release builds set it to the repository
 // that built them via -ldflags "-X go-backend/internal/http/handler.githubRepo=owner/repo".
-var githubRepo = "iiiiiiiii7125-art/flvx-max"
+var githubRepo = "iiiiiiiii7125-art/flmx-max"
 
 // githubAPIBase / githubHTMLBase 是 var 以便测试指向本地 stub 服务器。
 var (

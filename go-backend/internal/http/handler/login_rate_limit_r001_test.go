@@ -6,7 +6,9 @@ import (
 
 // R-001: 限流键去掉端口
 // 修复前：resolvePeerClientIP 返回 nil 时用 r.RemoteAddr（含端口）做键，
-//        攻击者轮换源端口可绕过 10次/分钟限制。
+//
+//	攻击者轮换源端口可绕过 10次/分钟限制。
+//
 // 修复后：降级时用 parseIPLiteral 提取纯 IP。
 func TestR001_RateLimitKeyHasNoPort(t *testing.T) {
 	// parseIPLiteral 应正确提取 IP

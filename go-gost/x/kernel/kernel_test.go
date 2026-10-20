@@ -204,7 +204,7 @@ func TestManagerLifecycle(t *testing.T) {
 		t.Fatalf("disabled kernel still running: %+v %v", st, err)
 	}
 
-	rec.listOut = `{"nftables":[{"metainfo":{}},{"counter":{"family":"inet","name":"in_7_tcp","table":"flvx_kernel","packets":3,"bytes":1200}},{"counter":{"family":"inet","name":"out_7_tcp","table":"flvx_kernel","bytes":99}},{"counter":{"name":"in_9_tcp","table":"other","bytes":5}}]}`
+	rec.listOut = `{"nftables":[{"metainfo":{}},{"counter":{"family":"inet","name":"in_7_tcp","table":"flmx_kernel","packets":3,"bytes":1200}},{"counter":{"family":"inet","name":"out_7_tcp","table":"flmx_kernel","bytes":99}},{"counter":{"name":"in_9_tcp","table":"other","bytes":5}}]}`
 	status := m.Status("xray")
 	if !status.NftAvailable || len(status.Counters) != 2 || status.Epoch == "" {
 		t.Fatalf("status counters: %+v", status)
@@ -310,7 +310,7 @@ func TestNftScriptOnlyCounts(t *testing.T) {
 	if strings.Index(script, "in_1_tcp") > strings.Index(script, "in_2_tcp") {
 		t.Fatal("rules must be sorted for a stable signature")
 	}
-	if !strings.HasPrefix(script, "table inet flvx_kernel {}\ndelete table inet flvx_kernel\n") {
+	if !strings.HasPrefix(script, "table inet flmx_kernel {}\ndelete table inet flmx_kernel\ntable inet flvx_kernel {}\ndelete table inet flvx_kernel\n") {
 		t.Fatalf("script must recreate the table atomically: %s", script)
 	}
 }
@@ -575,9 +575,9 @@ func TestNftScriptUserMarks(t *testing.T) {
 			t.Fatalf("missing %q:\n%s", want, script)
 		}
 	}
-	raw := `{"nftables":[{"counter":{"name":"uup_7","table":"flvx_kernel","bytes":10}},
-		{"counter":{"name":"udown_7","table":"flvx_kernel","bytes":20}},
-		{"counter":{"name":"in_1_tcp","table":"flvx_kernel","bytes":5}}]}`
+	raw := `{"nftables":[{"counter":{"name":"uup_7","table":"flmx_kernel","bytes":10}},
+		{"counter":{"name":"udown_7","table":"flmx_kernel","bytes":20}},
+		{"counter":{"name":"in_1_tcp","table":"flmx_kernel","bytes":5}}]}`
 	counters, us, err := parseCounters([]byte(raw))
 	if err != nil || len(counters) != 1 || len(us) != 2 || us[0] != (UserCounter{ID: 7, Dir: "up", Bytes: 10}) || us[1].Dir != "down" {
 		t.Fatalf("parse: %v %v %v", counters, us, err)
