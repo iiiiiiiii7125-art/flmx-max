@@ -777,6 +777,86 @@ test_panel_install_script_uses_default_proxy() (
     "panel_install.sh should keep the default proxy when enabled"
 )
 
+# F-006: panel_install 自更新必须走带 sha256 校验的 Release 通道。
+# 夹具：stub curl 按 URL 供数——releases/latest 提供版本重定向，
+# 版本化资产提供脚本本体与 .sha256。
+#   tamper：脚本本体与 .sha256 不符（被篡改）→ 不得覆写 $0、不得执行新脚本。
+#   legit ：脚本与 .sha256 自洽 → 应正常自更新并执行新脚本（哨兵出现）。
+panel_self_update_fixture() {
+  local mode="$1"
+  local work stubbin good_script
+  work=$(mktemp -d)
+  stubbin=$(mktemp -d)
+  good_script="$work/good_panel.sh"
+  cat > "$good_script" <<'EOF'
+#!/bin/bash
+SCRIPT_VERSION="99999999.99"
+echo "updated" > "$SELF_UPDATE_SENTINEL"
+EOF
+  if [[ "$mode" == "legit" ]]; then
+    STUB_SHA256=$(sha256sum "$good_script" | awk '{print $1}')
+  else
+    STUB_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
+  fi
+  export STUB_SHA256
+  export STUB_GOOD_SCRIPT="$good_script"
+  cat > "$stubbin/curl" <<'EOF'
+#!/bin/bash
+out=""; url=""; want_effective=0
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  a="${args[i]}"
+  case "$a" in
+    -o) out="${args[i+1]}" ;;
+    *url_effective*) want_effective=1 ;;
+    http*://*) url="$a" ;;
+  esac
+done
+if [[ "$want_effective" == "1" ]]; then
+  printf 'https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/9.9.9'
+  exit 0
+fi
+case "$url" in
+  *.sha256*)
+    if [[ -n "$out" ]]; then printf '%s' "$STUB_SHA256" > "$out"; else printf '%s' "$STUB_SHA256"; fi
+    ;;
+  *panel_install.sh*)
+    if [[ -n "$out" ]]; then cat "$STUB_GOOD_SCRIPT" > "$out"; else cat "$STUB_GOOD_SCRIPT"; fi
+    ;;
+  *)
+    exit 22
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$stubbin/curl"
+  cp "$ROOT_DIR/panel_install.sh" "$work/panel_install.sh"
+  export SELF_UPDATE_SENTINEL="$work/sentinel"
+  rm -f "$SELF_UPDATE_SENTINEL"
+  ( cd "$work" && printf '6\n' | PATH="$stubbin:$PATH" PROXY_ENABLED=false bash ./panel_install.sh >/dev/null 2>&1 ) || true
+  echo "$work"
+}
+
+test_panel_install_self_update_rejects_tampered_script() {
+  local work
+  work=$(panel_self_update_fixture tamper)
+  [[ ! -f "$work/sentinel" ]] || fail "F-006: tampered self-update script must not be executed (sentinel present)"
+  if [[ -f "$work/panel_install.sh" ]]; then
+    grep -q 'SCRIPT_VERSION="99999999.99"' "$work/panel_install.sh" && fail "F-006: tampered self-update must not overwrite \$0"
+    :
+  fi
+  echo "ok: self-update rejects tampered script"
+}
+
+test_panel_install_self_update_accepts_verified_script() {
+  local work
+  work=$(panel_self_update_fixture legit)
+  [[ -f "$work/sentinel" ]] || fail "F-006: verified self-update script should be executed (sentinel missing)"
+  echo "ok: self-update accepts verified script"
+}
+
+test_panel_install_self_update_rejects_tampered_script
+test_panel_install_self_update_accepts_verified_script
 test_install_script_respects_disabled_proxy
 test_install_script_asks_for_proxy_config
 test_install_script_recomputes_download_url_after_prompt
