@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -445,15 +446,23 @@ func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
 
 // reconcileNodeWithTimeout 按节点执行一次带总超时的 reconcile（R1）。
 // 成功返回 true；超时或失败返回 false（调用方记 gap 并继续）。
+// F-135（X1-206）：超时必须是真取消。旧实现仅停止等待，底层
+// goroutine 拿 context.Background() 继续执行并持有 per-node 锁，
+// 同节点后续下发被无声排队（且锁持有者不知情）。现把带超时的
+// ctx 透传到 drain 采集与 manager.Reconcile，取消随 SSH 操作
+// 退出而生效、锁随之释放；单次 SSH 操作另有 runner 的 15s 超时
+// 兜底，取消最迟在一个操作边界生效。
 func (h *Handler) reconcileNodeWithTimeout(nodeID int64, exclude map[int64]bool, include []*forwardRecord, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- h.syncNftablesNodeWithOverrides(nodeID, exclude, include)
+		done <- h.syncNftablesNodeWithOverridesCtx(ctx, nodeID, exclude, include)
 	}()
 	select {
 	case err := <-done:
 		return err == nil
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		return false
 	}
 }

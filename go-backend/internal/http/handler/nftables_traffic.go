@@ -66,6 +66,13 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 // reconcile 前 drain（R5-B3 D1-004/D8）复用。返回 batch+metas+nowMs+quotaViews 供调用方
 // 执法；无增量时返回 nil batch（基线已推进）。
 func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
+	return h.accountNftablesNodeTrafficCtx(context.Background(), nodeID, cfgModel, now)
+}
+
+// accountNftablesNodeTrafficCtx 与 accountNftablesNodeTraffic 相同，
+// 但采集的 CollectCounters 使用调用方 ctx（F-135：超时取消可达
+// 底层 SSH 读）。
+func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
 	if h == nil || h.repo == nil {
 		return nil, nil, 0, nil, errors.New("handler not initialized")
 	}
@@ -80,7 +87,7 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 	samples, err := func() ([]runtimenft.CounterSample, error) {
 		// R5-B5B D18: 采集前记录 generation（节点级单调计数器，独立于 applying）。
 		gen0 := h.nftablesManager.GetGeneration(nodeID)
-		samples, err := h.nftablesManager.CollectCounters(context.Background(), nodeID, sshCfg)
+		samples, err := h.nftablesManager.CollectCounters(ctx, nodeID, sshCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -192,9 +199,19 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 
 // drainNftCountersBeforeReconcile 是 D8：reconcile 删表重建前 best-effort
 // drain 计数器。成功返回 true；失败返回 false（调用方记 gap，
-// 不得阻塞 apply）。drain 与重建必须在同一 single-flight 内（D1-003）。
+// 不得阻塞 apply）。
+// F-134（X1-205）注释订正：旧注释称「drain 与重建必须在同一
+// single-flight 内」与实现不符——drain 实际在 handler 层、
+// Reconcile/Clear 取 per-node 锁之前执行，采集本身按 D18 不取锁。
+// 并发安全靠两点兜底：写路径（Reconcile/Clear）置 applying+gen++
+// 使在途普通采集丢弃脏读；drain 落库走计数器基线事务，增量只结算
+// 一次（重建后样本小于基线时走 reset 分支只推进基线）。
 func (h *Handler) drainNftCountersBeforeReconcile(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) bool {
-	_, _, _, _, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	return h.drainNftCountersBeforeReconcileCtx(context.Background(), nodeID, cfgModel, now)
+}
+
+func (h *Handler) drainNftCountersBeforeReconcileCtx(ctx context.Context, nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) bool {
+	_, _, _, _, err := h.accountNftablesNodeTrafficCtx(ctx, nodeID, cfgModel, now)
 	if err != nil {
 		// M-005：告警级 gap：删表重建前 drain 失败，本轮到重建之间的流量将漏计（计数器已知局限）
 		log.Printf("nftables reconcile drain gap node_id=%d err=%v action=apply_continues_baseline_reset ALERT=traffic_may_be_lost", nodeID, err)

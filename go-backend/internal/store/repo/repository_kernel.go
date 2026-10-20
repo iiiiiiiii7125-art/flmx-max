@@ -327,9 +327,34 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 			prev[key{st.InboundID, st.Protocol, st.Direction}] = st
 		}
 
+		// F-075（A4-004）：同一批内同 (inbound, protocol, direction)
+		// 的重复样本先合并再算增量（同 epoch 取最大 Bytes；epoch
+		// 变化说明计数器已重置，取后到样本为最新化身）。旧实现
+		// prev 只读 DB 基线、批次内不推进，重复样本会重复计入。
+		merged := make(map[key]InboundCounterSample, len(samples))
+		mergedOrder := make([]key, 0, len(samples))
+		for _, s := range samples {
+			k := key{s.InboundID, s.Protocol, s.Direction}
+			if cur, ok := merged[k]; ok {
+				switch {
+				case s.Epoch != cur.Epoch:
+					merged[k] = s
+				case s.Bytes > cur.Bytes:
+					merged[k] = s
+				}
+				continue
+			}
+			merged[k] = s
+			mergedOrder = append(mergedOrder, k)
+		}
+		ordered := make([]InboundCounterSample, 0, len(mergedOrder))
+		for _, k := range mergedOrder {
+			ordered = append(ordered, merged[k])
+		}
+
 		upload := make(map[int64]int64)
 		download := make(map[int64]int64)
-		for _, s := range samples {
+		for _, s := range ordered {
 			if _, ok := known[s.InboundID]; !ok || s.Bytes < 0 {
 				continue
 			}
