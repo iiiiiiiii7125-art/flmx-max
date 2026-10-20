@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -114,6 +115,77 @@ func sortedUsers(ids []int64) []int64 {
 // hopRule redirects a UDP port range to an inbound port (port hopping).
 type hopRule struct {
 	From, To, Port int
+}
+
+// expr is the single nft statement this rule expands to. It is identical in
+// the prerouting and output hop chains, and nftScript renders it through
+// here so the per-rule probe below can never drift from production output.
+func (h hopRule) expr() string {
+	return fmt.Sprintf("fib daddr type local udp dport %d-%d redirect to :%d", h.From, h.To, h.Port)
+}
+
+// name identifies the rule in logs and errors: its position in the sorted
+// rule list plus its range and target port.
+func (h hopRule) name(idx int) string {
+	return fmt.Sprintf("hop[%d] udp %d-%d -> :%d", idx, h.From, h.To, h.Port)
+}
+
+// hopSkip records one hop rule the running kernel rejected, with the reason.
+type hopSkip struct {
+	index int
+	rule  hopRule
+	err   error
+}
+
+func (s hopSkip) String() string {
+	return fmt.Sprintf("%s (%s): %s", s.rule.name(s.index), s.rule.expr(), truncateNftErr(s.err.Error()))
+}
+
+// truncateNftErr caps nft's stderr for logs and error messages so one bad
+// rule cannot flood them.
+func truncateNftErr(s string) string {
+	const max = 200
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+const nftHopProbeTable = "flmx_hop_probe"
+
+// nftHopCheck validates a single hop rule against the running kernel by
+// asking nft to check (-c) a minimal script containing only that rule.
+// It is a variable so tests can inject a fake validator without nft.
+// F-091 补强：hop 规则的 fib 表达式依赖内核 nft_fib，老内核整表下发会
+// 因一条不支持的规则全盘失败，故下发前逐条预检、坏条单独摘除。
+var nftHopCheck = func(ctx context.Context, h hopRule) error {
+	_, err := nftRunner(ctx, hopProbeScript(h), "-c", "-f", "-")
+	return err
+}
+
+func hopProbeScript(h hopRule) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "table inet %s {\n", nftHopProbeTable)
+	for _, hook := range []string{"prerouting", "output"} {
+		fmt.Fprintf(&b, "\tchain hop_%s {\n\t\ttype nat hook %s priority -100; policy accept;\n\t\t%s\n\t}\n", hook, hook, h.expr())
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// filterHopRules partitions hops into those the kernel accepts and those it
+// rejects, preserving order and each rejected rule's original index.
+func filterHopRules(ctx context.Context, hops []hopRule) (kept []hopRule, skipped []hopSkip) {
+	kept = make([]hopRule, 0, len(hops))
+	for i, h := range hops {
+		if err := nftHopCheck(ctx, h); err != nil {
+			skipped = append(skipped, hopSkip{index: i, rule: h, err: err})
+			continue
+		}
+		kept = append(kept, h)
+	}
+	return kept, skipped
 }
 
 func expandHops(ports []Port) []hopRule {
@@ -228,7 +300,7 @@ func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule,
 		for _, hook := range []string{"prerouting", "output"} {
 			fmt.Fprintf(&b, "\tchain hop_%s {\n\t\ttype nat hook %s priority -100; policy accept;\n", hook, hook)
 			for _, h := range hops {
-				fmt.Fprintf(&b, "\t\tfib daddr type local udp dport %d-%d redirect to :%d\n", h.From, h.To, h.Port)
+				fmt.Fprintf(&b, "\t\t%s\n", h.expr())
 			}
 			b.WriteString("\t}\n")
 		}
@@ -273,11 +345,33 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 	}
 	rules := expandPorts(ports)
 	users = sortedUsers(users)
-	script := nftScript(rules, expandGuards(ports), expandHops(ports), users)
-	sig := hashString(script)
+	hops := expandHops(ports)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// F-091 补强：逐条预检 hop 规则。单条被内核拒绝（典型：老内核无
+	// nft_fib）时只摘除该条并告警，其余 hop 与计数/白名单照常下发，不再
+	// 整表陪葬；全部被拒时计数仍下发，但返回逐条点名的错误让失败可见。
+	var hopErr error
+	if len(hops) > 0 {
+		var skipped []hopSkip
+		hops, skipped = filterHopRules(ctx, hops)
+		for _, s := range skipped {
+			log.Printf("WARN: hop rule skipped: %s", s)
+		}
+		if len(hops) == 0 {
+			parts := make([]string, len(skipped))
+			for i, s := range skipped {
+				parts[i] = s.String()
+			}
+			hopErr = fmt.Errorf("全部 %d 条 hop 规则被内核拒绝，端口跳跃未生效（计数与白名单规则已照常下发）: %s",
+				len(skipped), strings.Join(parts, "; "))
+		}
+	}
+
+	script := nftScript(rules, expandGuards(ports), hops, users)
+	sig := hashString(script)
 	if sig == n.state.Signature && ((len(rules) == 0 && len(users) == 0) || n.tableExists(ctx)) {
 		n.lastErr = ""
 		return nil
@@ -286,11 +380,15 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 		n.lastErr = err.Error()
 		return err
 	}
-	n.lastErr = ""
 	n.state = nftState{Signature: sig, Epoch: newEpoch()}
 	if b, err := json.Marshal(n.state); err == nil {
 		_ = writeFileAtomic(n.statePath, b, 0o600)
 	}
+	if hopErr != nil {
+		n.lastErr = hopErr.Error()
+		return hopErr
+	}
+	n.lastErr = ""
 	return nil
 }
 
