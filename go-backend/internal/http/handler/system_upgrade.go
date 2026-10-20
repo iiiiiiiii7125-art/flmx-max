@@ -23,14 +23,18 @@ import (
 )
 
 const (
-	panelDeployDirEnv                 = "PANEL_DEPLOY_DIR"
-	panelBackendContainerEnv          = "PANEL_BACKEND_CONTAINER"
-	defaultPanelDeployDir             = "/opt/flvx-panel"
-	defaultPanelBackendName           = "flux-panel-backend"
-	dockerSocketPath                  = "/var/run/docker.sock"
-	maxSystemUpgradeComposeAssetBytes = 1 << 20
-	systemUpgradeMessage              = "升级 helper 已启动，面板服务将短暂重启"
-	systemUpgradeConflictError        = "已有面板升级任务执行中"
+	panelDeployDirEnv          = "PANEL_DEPLOY_DIR"
+	panelBackendContainerEnv   = "PANEL_BACKEND_CONTAINER"
+	defaultPanelDeployDir      = "/opt/flvx-panel"
+	defaultPanelBackendName    = "flux-panel-backend"
+	dockerSocketPath           = "/var/run/docker.sock"
+	systemUpgradeMessage       = "升级 helper 已启动，面板服务将短暂重启"
+	systemUpgradeConflictError = "已有面板升级任务执行中"
+	// U1-003：升级状态文件名（落盘于部署目录，跨进程/重启可查）。
+	systemUpgradeStatusFileName = ".flvx_upgrade_status.json"
+	// U1-003：状态文件显示进行中但开始时间早于此时长，视为残留
+	// （helper 被强杀等异常情况），允许新升级覆盖，避免永久锁死。
+	systemUpgradeStaleAfter = 30 * time.Minute
 )
 
 var safeBackendContainerPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -44,6 +48,10 @@ var systemUpgradeHTTPGet = func(client *http.Client, url string) (*http.Response
 type systemUpgradeExecutor struct {
 	deployDir        string
 	backendContainer string
+	// U1-003：本次升级的目标版本与开始时间，透传给 helper 容器的环境变量，
+	// helper 在结束/回滚时据此回写升级状态文件。
+	upgradeVersion   string
+	upgradeStartedAt string
 	// composeProject is the Compose project the running containers belong
 	// to. It need not match the deploy directory's name (e.g. installed
 	// from /root, deployed in /opt/flvx-panel); without it Compose would
@@ -140,6 +148,55 @@ type systemUpgradeRunData struct {
 	HelperContainer string `json:"helperContainer"`
 	BackendImageID  string `json:"backendImageId"`
 	Message         string `json:"message"`
+}
+
+// systemUpgradeStatusData 是落盘于部署目录的升级状态（U1-003/U1-007）。
+// 同步段由 handler 写入 inProgress=true；helper 在成功/回滚时回写终态，
+// 使面板重启后仍能回答「是否正在升级 / 上次升级结果」。
+type systemUpgradeStatusData struct {
+	InProgress bool   `json:"inProgress"`
+	Version    string `json:"version,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	Result     string `json:"result,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+}
+
+func (e *systemUpgradeExecutor) statusPath() string {
+	return filepath.Join(e.deployDir, systemUpgradeStatusFileName)
+}
+
+// readUpgradeStatus 读取落盘的升级状态；文件不存在或损坏时返回零值
+// （inProgress=false），不视为错误。
+func (e *systemUpgradeExecutor) readUpgradeStatus() systemUpgradeStatusData {
+	var st systemUpgradeStatusData
+	data, err := os.ReadFile(e.statusPath())
+	if err != nil {
+		return st
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return systemUpgradeStatusData{}
+	}
+	return st
+}
+
+// writeUpgradeStatus 以 0600 权限落盘升级状态。
+func (e *systemUpgradeExecutor) writeUpgradeStatus(st systemUpgradeStatusData) error {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	return writeFileWithMode(e.statusPath(), append(data, '\n'), 0o600)
+}
+
+// upgradeStatusStale 判断进行中状态是否为残留（开始时间解析失败或距今
+// 超过 systemUpgradeStaleAfter）。helper 异常退出时状态文件可能永久停在
+// inProgress=true，残留状态不拦截新升级，避免面板升级被永久锁死。
+func upgradeStatusStale(st systemUpgradeStatusData, now time.Time) bool {
+	started, err := time.Parse(time.RFC3339, st.StartedAt)
+	if err != nil {
+		return true
+	}
+	return now.Sub(started) > systemUpgradeStaleAfter
 }
 
 type systemUpgradeRequest struct {
@@ -294,7 +351,16 @@ func (e *systemUpgradeExecutor) selectComposeAsset(current []byte) string {
 func (e *systemUpgradeExecutor) helperScript() string {
 	return `set -eu
 LOGFILE="$PANEL_DEPLOY_DIR/upgrade.log"
+STATUS_FILE="$PANEL_DEPLOY_DIR/.flvx_upgrade_status.json"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
+
+# U1-003：回写升级状态文件（与后端 systemUpgradeStatusData 结构体对应）。
+# $1=inProgress(true/false)，$2=result。version/startedAt 由环境变量传入。
+write_status() {
+  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"}\n' \
+    "$1" "${FLUX_UPGRADE_VERSION:-}" "${FLUX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$STATUS_FILE"
+  chmod 600 "$STATUS_FILE" 2>/dev/null || true
+}
 
 # O9-002：失败时自动恢复备份文件
 # 旧逻辑：pull/up 失败时直接 exit 1，已替换的 compose.yml/.env 不恢复，面板无法启动
@@ -308,7 +374,46 @@ rollback() {
     cp .env.upgrade.bak .env
     log "已恢复 .env"
   fi
+  # U1-003：回滚终态回写状态文件，.bak 保留供人工排查（不删除）。
+  write_status "false" "rolled_back"
   log "回滚完成，请检查 upgrade.log 并手动处理"
+}
+
+# U1-002：健康校验。up 返回 0 只代表容器已创建，不能证明新后端进程健康：
+# 连续 30s 内 compose ps 状态为 running 且镜像自带健康探针
+# （http://localhost:6365/flow/test，与镜像 healthcheck 同一锚点）通过，才算升级成功。
+# 最长等 5 分钟，超时视为升级失败并回滚。
+wait_backend_healthy() {
+  health_deadline=$(( $(date +%s) + 300 ))
+  stable_since=0
+  while [ "$(date +%s)" -lt "$health_deadline" ]; do
+    state=$(docker compose ps backend --format '{{.State}}' 2>/dev/null | head -n 1)
+    if [ "$state" = "running" ]; then
+      container=$(docker compose ps backend --format '{{.Name}}' 2>/dev/null | head -n 1)
+      probe_ok=1
+      if [ -n "$container" ]; then
+        if docker exec "$container" wget --no-verbose --tries=1 --spider http://localhost:6365/flow/test >/dev/null 2>&1; then
+          probe_ok=0
+        fi
+      fi
+      if [ "$probe_ok" -eq 0 ]; then
+        if [ "$stable_since" -eq 0 ]; then
+          stable_since=$(date +%s)
+        fi
+        if [ $(( $(date +%s) - stable_since )) -ge 30 ]; then
+          log "新后端健康检查通过（持续 running 且进程探针成功）"
+          return 0
+        fi
+      else
+        stable_since=0
+      fi
+    else
+      stable_since=0
+    fi
+    sleep 5
+  done
+  log "错误: 后端健康检查超时（5 分钟内未稳定）"
+  return 1
 }
 
 cd "$PANEL_DEPLOY_DIR"
@@ -319,10 +424,12 @@ log "Compose 项目: ${COMPOSE_PROJECT_NAME:-（按目录名）}"
 
 if [ ! -f docker-compose.yml ]; then
   log "错误: docker-compose.yml 不存在"
+  write_status "false" "aborted"
   exit 1
 fi
 if [ ! -f .env ]; then
   log "错误: .env 不存在"
+  write_status "false" "aborted"
   exit 1
 fi
 
@@ -343,8 +450,15 @@ if ! docker compose up -d --force-recreate --remove-orphans backend frontend >> 
   exit 1
 fi
 
+if ! wait_backend_healthy; then
+  log "错误: 新后端未通过健康检查"
+  rollback
+  exit 1
+fi
+
 log "升级完成"
-# 升级成功，清理备份文件
+# U1-002：只有健康检查通过才清理备份文件；升级终态写入状态文件
+write_status "false" "success"
 rm -f docker-compose.yml.upgrade.bak .env.upgrade.bak
 `
 }
@@ -368,6 +482,12 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 	if composeProjectPattern.MatchString(e.composeProject) {
 		args = append(args, "-e", "COMPOSE_PROJECT_NAME="+e.composeProject)
 	}
+	// U1-003：透传目标版本/开始时间，helper 回写升级状态文件时用。
+	if e.upgradeVersion != "" {
+		args = append(args,
+			"-e", "FLUX_UPGRADE_VERSION="+e.upgradeVersion,
+			"-e", "FLUX_UPGRADE_STARTED_AT="+e.upgradeStartedAt)
+	}
 	return append(args,
 		"--entrypoint", "/bin/sh", imageID,
 		"-c", e.helperScript(),
@@ -389,7 +509,12 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 	lines := strings.Split(string(data), "\n")
 	replaced := false
 	for i, line := range lines {
-		if strings.HasPrefix(line, "FLUX_VERSION=") {
+		// U1-009：按键名精确匹配（旧逻辑 HasPrefix 会误伤 FLUX_VERSION_EXTRA= 等同前缀变量）。
+		key := line
+		if idx := strings.Index(line, "="); idx >= 0 {
+			key = line[:idx]
+		}
+		if strings.TrimSpace(key) == "FLUX_VERSION" {
 			lines[i] = "FLUX_VERSION=" + version
 			replaced = true
 		}
@@ -474,12 +599,34 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 		perPage = 20
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	url := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, perPage)
+	// U1-006：超时 15s → 30s（经代理多一跳 + 50 条 release JSON，慢代理下 15s 偏紧）。
+	client := &http.Client{Timeout: 30 * time.Second}
+	apiURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, perPage)
+
+	// U1-001：代理开启时先试代理路径，失败降级直连。
+	// gh-proxy 类服务不一定转发 api.github.com（实测 ghfast.top 返回 403
+	// "Invalid input."），此前全链路无 fallback，版本发现直接整体失效。
+	paths := []string{apiURL}
 	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		url = fmt.Sprintf("%s/%s", proxyURL, url)
+		paths = []string{fmt.Sprintf("%s/%s", proxyURL, apiURL), apiURL}
 	}
 
+	var lastErr error
+	for i, url := range paths {
+		releases, err := h.fetchSystemUpgradeReleasePage(client, url)
+		if err == nil {
+			if i > 0 {
+				log.Printf("system_upgrade: 代理版本API失败，已降级直连 api.github.com")
+			}
+			return releases, nil
+		}
+		log.Printf("system_upgrade: 版本API请求失败（尝试 %d/%d）url=%s: %v", i+1, len(paths), url, err)
+		lastErr = err
+	}
+	return nil, fmt.Errorf("请求GitHub API失败（代理/直连均已尝试）: %v", lastErr)
+}
+
+func (h *Handler) fetchSystemUpgradeReleasePage(client *http.Client, url string) ([]githubRelease, error) {
 	resp, err := systemUpgradeHTTPGet(client, url)
 	if err != nil {
 		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
@@ -492,10 +639,11 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	}
 
 	var releases []githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+	// U1-006：解码体积上限 4MB，防异常代理返回超大 body。
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 4<<20))
+	if err := decoder.Decode(&releases); err != nil {
 		return nil, fmt.Errorf("解析GitHub API响应失败: %v", err)
 	}
-
 	return releases, nil
 }
 
@@ -723,13 +871,22 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.systemUpgradeMu.Unlock()
 
+	// U1-003：落盘状态检查。systemUpgradeMu 只覆盖同步段，helper 异步执行数分钟，
+	// 期间必须靠状态文件拦截二次升级（否则 .bak 会被中间态覆盖污染）。
+	exec := newSystemUpgradeExecutor()
+	if st := exec.readUpgradeStatus(); st.InProgress && !upgradeStatusStale(st, time.Now()) {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s（目标版本 %s，开始于 %s）", systemUpgradeConflictError, st.Version, st.StartedAt)))
+		return
+	} else if st.InProgress {
+		log.Printf("system_upgrade: 检测到残留的升级中状态（版本 %s，开始于 %s），视为已中断，允许新升级", st.Version, st.StartedAt)
+	}
+
 	var req systemUpgradeRequest
 	if err := decodeSystemUpgradeRequest(r, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
 	channel := normalizeReleaseChannel(req.Channel)
-	exec := newSystemUpgradeExecutor()
 	capability := exec.capability(r.Context())
 	if !capability.Capable {
 		response.WriteJSON(w, response.ErrDefault("当前环境不支持面板自升级: "+strings.Join(capability.Reasons, "; ")))
@@ -752,8 +909,9 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	// O9-001：升级前比较目标版本与当前版本，防止静默降级
 	// 旧逻辑：接受任意版本号直接下载升级，允许降级到旧版本
+	// U1-005：比较前剥离 "v" 前缀（与节点侧 upgrade.go 一致），避免手填 v1.0.10 被误判降级
 	currentVer := currentPanelVersion()
-	if cmp := compareVersions(version, currentVer); cmp < 0 {
+	if cmp := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(currentVer, "v")); cmp < 0 {
 		log.Printf("systemUpgrade: 拒绝降级请求，目标版本 %s 低于当前版本 %s", version, currentVer)
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("目标版本 %s 低于当前版本 %s，不允许降级。如确需降级请手动操作。", version, currentVer)))
 		return
@@ -776,7 +934,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	composeAsset := exec.selectComposeAsset(composeData)
 	newCompose, err := h.downloadReleaseAsset(version, composeAsset)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		response.WriteJSON(w, response.Err(-2, wrapUpgradeDownloadError(err).Error()))
 		return
 	}
 	if _, err := exec.backupFile(composePath); err != nil {
@@ -803,9 +961,31 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	exec.composeProject = exec.detectComposeProject(r.Context())
 	exec.hostDeployDir = exec.detectHostDeployDir(r.Context())
+	// U1-003：启动 helper 前落盘「升级中」状态，并透传给 helper 由其回写终态。
+	exec.upgradeVersion = version
+	exec.upgradeStartedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := exec.writeUpgradeStatus(systemUpgradeStatusData{
+		InProgress: true,
+		Version:    version,
+		StartedAt:  exec.upgradeStartedAt,
+	}); err != nil {
+		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
+			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
+		}
+		response.WriteJSON(w, response.Err(-2, "写入升级状态失败: "+err.Error()))
+		return
+	}
 	helperName := fmt.Sprintf("flvx-upgrade-helper-%d", time.Now().Unix())
 	helperContainer, err := exec.startHelper(r.Context(), imageID, helperName)
 	if err != nil {
+		// U1-003：helper 未启动成功，立即解除落盘的「升级中」状态，避免永久拦截后续升级。
+		_ = exec.writeUpgradeStatus(systemUpgradeStatusData{
+			InProgress: false,
+			Version:    version,
+			StartedAt:  exec.upgradeStartedAt,
+			Result:     "helper_start_failed",
+			FinishedAt: time.Now().UTC().Format(time.RFC3339),
+		})
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
 		}
@@ -821,4 +1001,28 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		BackendImageID:  imageID,
 		Message:         systemUpgradeMessage,
 	}))
+}
+
+// wrapUpgradeDownloadError 包装升级下载错误（U1-008）。
+// 代理地址解析到内网/回环时 SecureFetch 默认按 SSRF 策略拒绝，错误原文
+// （private network not allowlisted）对运维无指引，这里追加可操作说明。
+func wrapUpgradeDownloadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "private network not allowlisted") {
+		return fmt.Errorf("%v（提示：GitHub 代理地址解析为内网/回环地址，被安全下载策略拒绝；如确为可信自建代理，请在面板部署环境设置 FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或 FLVX_FETCH_PRIVATE_ALLOWLIST 后重试）", err)
+	}
+	return err
+}
+
+// systemUpgradeStatus 返回落盘的升级状态（U1-007）：是否正在升级、目标版本、
+// 上次升级结果。无状态文件时返回 {inProgress:false}。
+func (h *Handler) systemUpgradeStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	exec := newSystemUpgradeExecutor()
+	response.WriteJSON(w, response.OK(exec.readUpgradeStatus()))
 }

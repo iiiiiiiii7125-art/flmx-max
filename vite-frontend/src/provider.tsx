@@ -36,10 +36,14 @@ export function Provider({ children }: ProvidersProps) {
                 },
               },
               error: {
-                duration: 2000,
+                // P2-3：错误常含长 URL/堆栈，2 秒看不全且不折行会被截断；
+                // 延长到 8 秒并允许长串断行、限制最大宽度。
+                duration: 8000,
                 style: {
                   background: "#ef4444",
                   color: "#ffffff",
+                  maxWidth: "90vw",
+                  wordBreak: "break-all",
                 },
               },
             }}

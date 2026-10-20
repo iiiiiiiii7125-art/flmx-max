@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 
+import { checkSystemUpgrade } from "@/api";
 import { siteConfig } from "@/config/site";
 import {
   UPDATE_CHANNEL_CHANGED_EVENT,
   type UpdateReleaseChannel,
-  getLatestVersionByChannel,
   getUpdateReleaseChannel,
-  hasVersionUpdate,
 } from "@/utils/version-update";
-
-const FALLBACK_GITHUB_REPO = "https://github.com/iiiiiiiii7125-art/flvx-max";
 
 interface VersionFooterProps {
   version: string;
@@ -55,26 +52,35 @@ export function VersionFooter({
     let active = true;
 
     const checkUpdate = async () => {
-      const latestVersion = await getLatestVersionByChannel(
-        channel,
-        siteConfig.github_repo || FALLBACK_GITHUB_REPO,
-      );
+      // P3-3：更新检测改走后端检查接口，与配置页同一条路径（可经面板代理），
+      // 不再由浏览器直连 api.github.com，避免两边结果不一致。
+      // 请求失败（未登录/无权限/后端异常）时静默不显示红标。
+      try {
+        const response = await checkSystemUpgrade(channel);
 
-      if (!active) {
-        return;
-      }
+        if (!active) {
+          return;
+        }
 
-      if (!latestVersion) {
+        if (
+          response.code === 0 &&
+          response.data?.hasUpdate &&
+          response.data.latestVersion
+        ) {
+          setUpdateAvailable(true);
+          setLatestUpdateVersion(response.data.latestVersion);
+        } else {
+          setUpdateAvailable(false);
+          setLatestUpdateVersion(null);
+        }
+      } catch {
+        if (!active) {
+          return;
+        }
+
         setUpdateAvailable(false);
         setLatestUpdateVersion(null);
-
-        return;
       }
-
-      const hasUpdate = hasVersionUpdate(version, latestVersion);
-
-      setUpdateAvailable(hasUpdate);
-      setLatestUpdateVersion(hasUpdate ? latestVersion : null);
     };
 
     void checkUpdate();

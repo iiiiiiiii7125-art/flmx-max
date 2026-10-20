@@ -25,6 +25,10 @@ func TestSelectComposeAssetUsesIPv6Template(t *testing.T) {
 	}
 }
 
+// U1-004 重写：原测试 stub 的 systemUpgradeHTTPGet 自 D16 起已不在
+// downloadReleaseAsset 的实际路径上（实际走 SecureFetch），断言永不命中。
+// 改为直接断言 buildSystemUpgradeDownloadURL 在代理开/关/默认三种配置下的
+// URL 形态——这正是原测试想守护的「代理前缀拼接」行为。
 func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	repoStore, err := repo.Open(dbPath)
@@ -38,16 +42,10 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 	systemUpgradeReleaseBaseURL = "https://example.invalid"
 	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
 
-	originalGet := systemUpgradeHTTPGet
-	defer func() { systemUpgradeHTTPGet = originalGet }()
-
-	var gotURL string
-	systemUpgradeHTTPGet = func(client *http.Client, url string) (*http.Response, error) {
-		gotURL = url
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("services:\n  backend:\n    image: test\n")),
-		}, nil
+	// 默认（无配置行）：代理开启，默认代理地址
+	wantDefault := "https://gcode.hostcentral.cc/https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantDefault {
+		t.Fatalf("default download URL = %q, want %q", got, wantDefault)
 	}
 
 	now := time.Now().UnixMilli()
@@ -57,21 +55,25 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 	if err := repoStore.UpsertConfig("github_proxy_url", "https://proxy.example.com", now); err != nil {
 		t.Fatalf("UpsertConfig() github_proxy_url error = %v", err)
 	}
-
-	data, err := h.downloadReleaseAsset("2.1.9", "docker-compose-v4.yml")
-	if err != nil {
-		t.Fatalf("downloadReleaseAsset() error = %v", err)
-	}
-	if !strings.Contains(string(data), "backend") {
-		t.Fatalf("downloadReleaseAsset() data = %q, want compose data", string(data))
+	wantProxy := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantProxy {
+		t.Fatalf("proxied download URL = %q, want %q", got, wantProxy)
 	}
 
-	wantURL := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
-	if gotURL != wantURL {
-		t.Fatalf("download URL = %q, want %q", gotURL, wantURL)
+	// 关闭代理：直连形态，无前缀
+	if err := repoStore.UpsertConfig("github_proxy_enabled", "false", now); err != nil {
+		t.Fatalf("UpsertConfig() github_proxy_enabled=false error = %v", err)
+	}
+	wantDirect := "https://example.invalid/iiiiiiiii7125-art/flvx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantDirect {
+		t.Fatalf("direct download URL = %q, want %q", got, wantDirect)
 	}
 }
 
+// U1-004 重写：原测试断言的 1MB 上限（maxSystemUpgradeComposeAssetBytes）在
+// 生产代码中不存在，实际的体积上限是 SecureFetch 的 secureFetchMaxBody（50MB）。
+// 改为走真实路径：本地 HTTP 服务器 + 放行私网 + 临时调小上限，验证
+// downloadReleaseAsset 对超限资产的拒绝。
 func TestDownloadReleaseAssetRejectsOversizedBody(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	repoStore, err := repo.Open(dbPath)
@@ -84,23 +86,26 @@ func TestDownloadReleaseAssetRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("UpsertConfig() github_proxy_enabled error = %v", err)
 	}
 
+	big := bytes.Repeat([]byte("a"), 4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(big)
+	}))
+	defer srv.Close()
+
 	originalBase := systemUpgradeReleaseBaseURL
-	systemUpgradeReleaseBaseURL = "https://example.invalid"
+	systemUpgradeReleaseBaseURL = srv.URL
 	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
 
-	originalGet := systemUpgradeHTTPGet
-	defer func() { systemUpgradeHTTPGet = originalGet }()
-	systemUpgradeHTTPGet = func(client *http.Client, url string) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("a"), maxSystemUpgradeComposeAssetBytes+1))),
-		}, nil
-	}
+	// 本地服务器是回环地址，需按 D17 策略放行私网；上限临时调小避免真传 50MB。
+	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
+	originalMax := secureFetchMaxBody
+	secureFetchMaxBody = 1024
+	t.Cleanup(func() { secureFetchMaxBody = originalMax })
 
 	h := &Handler{repo: repoStore}
 	_, err = h.downloadReleaseAsset("2.1.9", "docker-compose-v4.yml")
-	if err == nil || !strings.Contains(err.Error(), "过大") {
-		t.Fatalf("downloadReleaseAsset() error = %v, want oversized error", err)
+	if err == nil || !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("downloadReleaseAsset() error = %v, want SecureFetch oversized error", err)
 	}
 }
 
@@ -480,4 +485,172 @@ func mustArgs(t *testing.T, e *systemUpgradeExecutor) []string {
 		t.Fatal(err)
 	}
 	return args
+}
+
+// U1-001：代理路径失败（ghfast 对 api.github.com 返回 403）时降级直连。
+func TestFetchSystemUpgradeReleasesFallsBackToDirect(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	repoStore, err := repo.Open(dbPath)
+	if err != nil {
+		t.Fatalf("repo.Open() error = %v", err)
+	}
+	defer repoStore.Close()
+	now := time.Now().UnixMilli()
+	if err := repoStore.UpsertConfig("github_proxy_enabled", "true", now); err != nil {
+		t.Fatalf("UpsertConfig() error = %v", err)
+	}
+	if err := repoStore.UpsertConfig("github_proxy_url", "https://ghfast.example", now); err != nil {
+		t.Fatalf("UpsertConfig() error = %v", err)
+	}
+
+	originalGet := systemUpgradeHTTPGet
+	defer func() { systemUpgradeHTTPGet = originalGet }()
+	var tried []string
+	systemUpgradeHTTPGet = func(client *http.Client, url string) (*http.Response, error) {
+		tried = append(tried, url)
+		if strings.HasPrefix(url, "https://ghfast.example/") {
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Body:       io.NopCloser(strings.NewReader("Invalid input.")),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`[{"tag_name":"1.0.10","name":"v","published_at":"2026-10-20T00:00:00Z"}]`)),
+		}, nil
+	}
+
+	h := &Handler{repo: repoStore}
+	releases, err := h.fetchSystemUpgradeReleases(50)
+	if err != nil {
+		t.Fatalf("fetchSystemUpgradeReleases() error = %v", err)
+	}
+	if len(releases) != 1 || releases[0].TagName != "1.0.10" {
+		t.Fatalf("releases = %+v, want one 1.0.10 release", releases)
+	}
+	if len(tried) != 2 || !strings.HasPrefix(tried[0], "https://ghfast.example/https://api.github.com/") ||
+		!strings.HasPrefix(tried[1], "https://api.github.com/") {
+		t.Fatalf("tried paths = %v, want proxy first then direct", tried)
+	}
+}
+
+// U1-003/U1-007：状态文件往返与 0600 权限。
+func TestUpgradeStatusRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+
+	if st := exec.readUpgradeStatus(); st.InProgress {
+		t.Fatalf("no status file should read as not-in-progress, got %+v", st)
+	}
+	want := systemUpgradeStatusData{
+		InProgress: true,
+		Version:    "1.0.10",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := exec.writeUpgradeStatus(want); err != nil {
+		t.Fatalf("writeUpgradeStatus() error = %v", err)
+	}
+	if got := exec.readUpgradeStatus(); got != want {
+		t.Fatalf("readUpgradeStatus() = %+v, want %+v", got, want)
+	}
+	info, err := os.Stat(filepath.Join(dir, systemUpgradeStatusFileName))
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("status file mode = %o, want 0600", got)
+	}
+}
+
+// U1-003：状态文件显示升级中时 POST /system/upgrade 被拒绝。
+func TestSystemUpgradeRejectsWhenStatusFileInProgress(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(panelDeployDirEnv, dir)
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	if err := exec.writeUpgradeStatus(systemUpgradeStatusData{
+		InProgress: true,
+		Version:    "1.0.10",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("writeUpgradeStatus() error = %v", err)
+	}
+
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/upgrade", strings.NewReader(`{"channel":"stable"}`))
+	rr := httptest.NewRecorder()
+	h.systemUpgrade(rr, req)
+	if !strings.Contains(rr.Body.String(), systemUpgradeConflictError) {
+		t.Fatalf("expected conflict message, got %s", rr.Body.String())
+	}
+}
+
+// U1-007：GET 状态接口无文件时返回 inProgress=false。
+func TestSystemUpgradeStatusHandler(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(panelDeployDirEnv, dir)
+
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/upgrade/status", nil)
+	rr := httptest.NewRecorder()
+	h.systemUpgradeStatus(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, `"inProgress":false`) || !strings.Contains(body, `"code":0`) {
+		t.Fatalf("expected OK envelope with inProgress=false, got %s", body)
+	}
+}
+
+// U1-009：updateEnvVersion 不得误伤 FLUX_VERSION_EXTRA。
+func TestUpdateEnvVersionDoesNotTouchExtraKey(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	original := "FLUX_VERSION_EXTRA=9.9.9\nFLUX_VERSION=1.0.0\n"
+	if err := os.WriteFile(envPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	if err := exec.updateEnvVersion(envPath, "1.0.10"); err != nil {
+		t.Fatalf("updateEnvVersion() error = %v", err)
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	want := "FLUX_VERSION_EXTRA=9.9.9\nFLUX_VERSION=1.0.10\n"
+	if string(data) != want {
+		t.Fatalf("env content = %q, want %q", string(data), want)
+	}
+}
+
+// U1-002：helper 脚本必须先健康校验再删备份，且各终态回写状态文件。
+func TestHelperScriptHealthGateAndStatusWrites(t *testing.T) {
+	exec := &systemUpgradeExecutor{deployDir: "/opt/flvx-panel", backendContainer: "flux-panel-backend"}
+	script := exec.helperScript()
+	for _, needle := range []string{"wait_backend_healthy", "write_status", "rolled_back", `"success"`} {
+		if !strings.Contains(script, needle) {
+			t.Fatalf("helper script missing %q", needle)
+		}
+	}
+	healthIdx := strings.Index(script, "if ! wait_backend_healthy")
+	rmIdx := strings.Index(script, "rm -f docker-compose.yml.upgrade.bak")
+	if healthIdx < 0 || rmIdx < 0 || healthIdx > rmIdx {
+		t.Fatalf("backups must be removed only after the health gate")
+	}
+}
+
+// U1-008：内网代理被拒错误追加中文指引，其他错误原样返回。
+type errPrivateForTest struct{}
+
+func (errPrivateForTest) Error() string { return "private network not allowlisted: 192.168.1.1" }
+
+func TestWrapUpgradeDownloadError(t *testing.T) {
+	if err := wrapUpgradeDownloadError(os.ErrNotExist); err != os.ErrNotExist {
+		t.Fatalf("unrelated error must pass through, got %v", err)
+	}
+	wrapped := wrapUpgradeDownloadError(errPrivateForTest{})
+	if !strings.Contains(wrapped.Error(), "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true") {
+		t.Fatalf("expected guidance in wrapped error, got %v", wrapped)
+	}
+	if wrapUpgradeDownloadError(nil) != nil {
+		t.Fatal("nil error must stay nil")
+	}
 }

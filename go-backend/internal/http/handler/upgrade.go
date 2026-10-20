@@ -102,20 +102,11 @@ func (h *Handler) getGithubProxyConfig() (enabled bool, proxyURL string) {
 		if !strings.HasPrefix(proxyURL, "http://") && !strings.HasPrefix(proxyURL, "https://") {
 			proxyURL = "https://" + proxyURL
 		}
-		proxyURL = strings.TrimSuffix(proxyURL, "/")
+		// U2-P3-4：去全部尾斜杠（旧逻辑 TrimSuffix 只去一个，双尾斜杠会拼出双斜杠路径）
+		proxyURL = strings.TrimRight(proxyURL, "/")
 	}
 
 	return
-}
-
-func (h *Handler) buildGithubDownloadURL(version, filename string) string {
-	enabled, proxyURL := h.getGithubProxyConfig()
-	base := fmt.Sprintf("%s/%s/releases/download/%s/%s", githubHTMLBase, githubRepo, version, filename)
-
-	if enabled {
-		return fmt.Sprintf("%s/%s", proxyURL, base)
-	}
-	return base
 }
 
 // S-02: Agent 版本号严格校验，防止路径穿越
