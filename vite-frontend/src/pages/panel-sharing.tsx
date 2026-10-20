@@ -141,6 +141,59 @@ export default function PanelSharingPage() {
   const [editOriginalMaxBandwidth, setEditOriginalMaxBandwidth] = useState(0);
   const [editBandwidthChanged, setEditBandwidthChanged] = useState(false);
 
+  // 写操作提交态：防重复创建/保存/导入
+  const [creatingShare, setCreatingShare] = useState(false);
+  const [editingShare, setEditingShare] = useState(false);
+  const [importingNode, setImportingNode] = useState(false);
+  // 删除/重置流量确认弹窗
+  const [shareConfirmOpen, setShareConfirmOpen] = useState(false);
+  const [shareConfirmLoading, setShareConfirmLoading] = useState(false);
+  const [pendingShareConfirm, setPendingShareConfirm] = useState<{
+    title: string;
+    description: string;
+    action: () => Promise<void>;
+  } | null>(null);
+
+  const askShareConfirm = (
+    title: string,
+    description: string,
+    action: () => Promise<void>,
+  ) => {
+    setPendingShareConfirm({ title, description, action });
+    setShareConfirmOpen(true);
+  };
+
+  const handleShareConfirm = async () => {
+    if (!pendingShareConfirm || shareConfirmLoading) return;
+    setShareConfirmLoading(true);
+    try {
+      await pendingShareConfirm.action();
+      setShareConfirmOpen(false);
+      setPendingShareConfirm(null);
+    } finally {
+      setShareConfirmLoading(false);
+    }
+  };
+
+  // 端口范围校验（与后端 peer-sharing 消费口径一致：1-65535 且 start<=end）
+  const validateSharePortRange = (start: number, end: number): string | null => {
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < 1 ||
+      start > 65535 ||
+      end < 1 ||
+      end > 65535
+    ) {
+      return "端口范围须为 1-65535 之间的整数";
+    }
+    if (start > end) {
+      return "起始端口不能大于结束端口";
+    }
+
+    return null;
+  };
+
   const loadShares = useCallback(async () => {
     setLoading(true);
     try {
@@ -216,8 +269,24 @@ export default function PanelSharingPage() {
   }, [selectedTab, loadShares, loadNodes, loadRemoteUsage]);
 
   const handleCreateShare = async () => {
+    if (creatingShare) return;
     if (!shareForm.name || !shareForm.nodeId) {
       toast.error("请填写必要信息");
+
+      return;
+    }
+    const rangeError = validateSharePortRange(
+      shareForm.portRangeStart,
+      shareForm.portRangeEnd,
+    );
+
+    if (rangeError) {
+      toast.error(rangeError);
+
+      return;
+    }
+    if (!Number.isInteger(shareForm.expiryDays) || shareForm.expiryDays < 0) {
+      toast.error("有效期须为不小于 0 的整数天数（0 表示永久）");
 
       return;
     }
@@ -242,6 +311,7 @@ export default function PanelSharingPage() {
 
       return;
     }
+    setCreatingShare(true);
     try {
       const expiryTime =
         Date.now() + shareForm.expiryDays * 24 * 60 * 60 * 1000;
@@ -265,6 +335,8 @@ export default function PanelSharingPage() {
       }
     } catch {
       toast.error("网络错误");
+    } finally {
+      setCreatingShare(false);
     }
   };
 
@@ -319,8 +391,24 @@ export default function PanelSharingPage() {
   };
 
   const handleEditShare = async () => {
+    if (editingShare) return;
     if (!editForm.name) {
       toast.error("名称不能为空");
+
+      return;
+    }
+    const rangeError = validateSharePortRange(
+      editForm.portRangeStart,
+      editForm.portRangeEnd,
+    );
+
+    if (rangeError) {
+      toast.error(rangeError);
+
+      return;
+    }
+    if (!Number.isFinite(editForm.expiryTime) || editForm.expiryTime < 0) {
+      toast.error("过期时间无效");
 
       return;
     }
@@ -339,6 +427,7 @@ export default function PanelSharingPage() {
 
       return;
     }
+    setEditingShare(true);
     try {
       const res = await updatePeerShare({
         id: editForm.id,
@@ -362,15 +451,19 @@ export default function PanelSharingPage() {
       }
     } catch {
       toast.error("网络错误");
+    } finally {
+      setEditingShare(false);
     }
   };
 
   const handleImportNode = async () => {
+    if (importingNode) return;
     if (!importForm.remoteUrl || !importForm.token) {
       toast.error("请填写完整信息");
 
       return;
     }
+    setImportingNode(true);
     try {
       // Automatically add http/https if missing
       let url = importForm.remoteUrl.trim();
@@ -394,6 +487,8 @@ export default function PanelSharingPage() {
       }
     } catch {
       toast.error("网络错误");
+    } finally {
+      setImportingNode(false);
     }
   };
 
@@ -500,7 +595,13 @@ export default function PanelSharingPage() {
                           <Button
                             size="sm"
                             variant="flat"
-                            onPress={() => handleResetShareFlow(share.id)}
+                            onPress={() =>
+                              askShareConfirm(
+                                "重置共享流量",
+                                `确定要重置共享「${share.name}」的已用流量吗？重置后计数从 0 重新开始。`,
+                                () => handleResetShareFlow(share.id),
+                              )
+                            }
                           >
                             重置流量
                           </Button>
@@ -508,7 +609,13 @@ export default function PanelSharingPage() {
                             color="danger"
                             size="sm"
                             variant="flat"
-                            onPress={() => handleDeleteShare(share.id)}
+                            onPress={() =>
+                              askShareConfirm(
+                                "删除共享",
+                                `确定要删除共享「${share.name}」吗？其 Token 将立即失效，此操作不可撤销。`,
+                                () => handleDeleteShare(share.id),
+                              )
+                            }
                           >
                             删除
                           </Button>
@@ -742,7 +849,8 @@ export default function PanelSharingPage() {
                 onChange={(e) =>
                   setShareForm({
                     ...shareForm,
-                    portRangeStart: parseInt(e.target.value),
+                    // 清空输入不得变成 NaN 提交：回落 0，提交时统一校验拦截
+                    portRangeStart: parseInt(e.target.value) || 0,
                   })
                 }
               />
@@ -753,7 +861,7 @@ export default function PanelSharingPage() {
                 onChange={(e) =>
                   setShareForm({
                     ...shareForm,
-                    portRangeEnd: parseInt(e.target.value),
+                    portRangeEnd: parseInt(e.target.value) || 0,
                   })
                 }
               />
@@ -766,7 +874,7 @@ export default function PanelSharingPage() {
               onChange={(e) =>
                 setShareForm({
                   ...shareForm,
-                  expiryDays: parseInt(e.target.value),
+                  expiryDays: parseInt(e.target.value) || 0,
                 })
               }
             />
@@ -804,7 +912,11 @@ export default function PanelSharingPage() {
           </ModalBody>
           <ModalFooter>
             <Button onPress={() => setCreateShareOpen(false)}>取消</Button>
-            <Button color="primary" onPress={handleCreateShare}>
+            <Button
+              color="primary"
+              isLoading={creatingShare}
+              onPress={handleCreateShare}
+            >
               创建
             </Button>
           </ModalFooter>
@@ -909,7 +1021,11 @@ export default function PanelSharingPage() {
           </ModalBody>
           <ModalFooter>
             <Button onPress={() => setEditShareOpen(false)}>取消</Button>
-            <Button color="primary" onPress={handleEditShare}>
+            <Button
+              color="primary"
+              isLoading={editingShare}
+              onPress={handleEditShare}
+            >
               保存
             </Button>
           </ModalFooter>
@@ -947,8 +1063,47 @@ export default function PanelSharingPage() {
           </ModalBody>
           <ModalFooter>
             <Button onPress={() => setImportNodeOpen(false)}>取消</Button>
-            <Button color="secondary" onPress={handleImportNode}>
+            <Button
+              color="secondary"
+              isLoading={importingNode}
+              onPress={handleImportNode}
+            >
               导入
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* 删除/重置流量确认弹窗 */}
+      <Modal
+        backdrop="blur"
+        classNames={{
+          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
+        }}
+        isOpen={shareConfirmOpen}
+        onClose={() => setShareConfirmOpen(false)}
+      >
+        <ModalContent>
+          <ModalHeader>{pendingShareConfirm?.title}</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-default-600">
+              {pendingShareConfirm?.description}
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              isDisabled={shareConfirmLoading}
+              variant="light"
+              onPress={() => setShareConfirmOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              color="danger"
+              isLoading={shareConfirmLoading}
+              onPress={handleShareConfirm}
+            >
+              确认
             </Button>
           </ModalFooter>
         </ModalContent>

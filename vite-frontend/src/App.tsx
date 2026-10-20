@@ -315,6 +315,8 @@ function App() {
           }
           path="/panel-sharing"
         />
+        {/* 兜底：未知路径回仪表盘，避免落进受保护布局里渲染空白内容区 */}
+        <Route element={<Navigate replace to="/dashboard" />} path="*" />
       </Routes>
     </AnimatePresence>
   );

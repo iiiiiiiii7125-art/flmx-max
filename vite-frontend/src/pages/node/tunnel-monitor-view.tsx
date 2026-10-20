@@ -1008,9 +1008,14 @@ export function TunnelMonitorView({
   }, [loadQuality, monitorTunnelQualityEnabled, tunnelQualityIntervalSec]);
 
   // --- Load quality history for detail chart ---
+  // 序号守卫：切隧道/切范围后旧响应不得覆盖新图表（两 loader 各自独立序号域）
+  const qualityHistorySeqRef = useRef(0);
+  const tunnelMetricsSeqRef = useRef(0);
+
   const loadQualityHistory = useCallback(
     async (tunnelId: number, options?: { silent?: boolean }) => {
       const silent = options?.silent ?? false;
+      const seq = (qualityHistorySeqRef.current += 1);
 
       if (!silent) setQualityHistoryLoading(true);
       try {
@@ -1021,6 +1026,10 @@ export function TunnelMonitorView({
           start,
           end,
         );
+
+        if (qualityHistorySeqRef.current !== seq) {
+          return;
+        }
 
         if (response.code === 0 && Array.isArray(response.data)) {
           setQualityHistoryError(null);
@@ -1036,11 +1045,13 @@ export function TunnelMonitorView({
         setQualityHistoryError(response.msg || "加载质量历史失败");
         if (!silent) toast.error(response.msg || "加载质量历史失败");
       } catch {
-        if (!silent) {
+        if (!silent && qualityHistorySeqRef.current === seq) {
           setQualityHistoryError("加载质量历史失败");
         }
       } finally {
-        if (!silent) setQualityHistoryLoading(false);
+        if (!silent && qualityHistorySeqRef.current === seq) {
+          setQualityHistoryLoading(false);
+        }
       }
     },
     [qualityRangeMs],
@@ -1050,12 +1061,17 @@ export function TunnelMonitorView({
   const loadTunnelMetrics = useCallback(
     async (tunnelId: number, options?: { silent?: boolean }) => {
       const silent = options?.silent ?? false;
+      const seq = (tunnelMetricsSeqRef.current += 1);
 
       if (!silent) setTunnelMetricsLoading(true);
       try {
         const end = Date.now();
         const start = end - tunnelRangeMs;
         const response = await getTunnelMetrics(tunnelId, start, end);
+
+        if (tunnelMetricsSeqRef.current !== seq) {
+          return;
+        }
 
         if (response.code === 0 && Array.isArray(response.data)) {
           setTunnelMetricsError(null);
@@ -1069,9 +1085,13 @@ export function TunnelMonitorView({
         }
         setTunnelMetricsError(response.msg || "加载流量数据失败");
       } catch {
-        if (!silent) setTunnelMetricsError("加载流量数据失败");
+        if (!silent && tunnelMetricsSeqRef.current === seq) {
+          setTunnelMetricsError("加载流量数据失败");
+        }
       } finally {
-        if (!silent) setTunnelMetricsLoading(false);
+        if (!silent && tunnelMetricsSeqRef.current === seq) {
+          setTunnelMetricsLoading(false);
+        }
       }
     },
     [tunnelRangeMs],

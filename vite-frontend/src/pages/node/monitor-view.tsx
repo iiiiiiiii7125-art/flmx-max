@@ -6,7 +6,13 @@ import type {
   ServiceMonitorLimitsApiData,
 } from "@/api/types";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   LineChart,
   Line,
@@ -703,15 +709,25 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
     }
   }, [preferredNodeId, selectedNodeId]);
 
+  // loadMetrics 序号：切节点/切范围后旧响应不得覆盖新图表
+  const metricsSeqRef = useRef(0);
+  // loadServiceMonitors 在途守卫：5s 轮询下慢请求不得叠加
+  const serviceMonitorsInFlightRef = useRef(false);
+
   const loadMetrics = useCallback(
     async (nodeId: number, options?: { silent?: boolean }) => {
       const silent = options?.silent ?? false;
+      const seq = (metricsSeqRef.current += 1);
 
       if (!silent) setMetricsLoading(true);
       try {
         const end = Date.now();
         const start = end - metricsRangeMs;
         const response = await getNodeMetrics(nodeId, start, end);
+
+        if (metricsSeqRef.current !== seq) {
+          return;
+        }
 
         if (response.code === 0 && Array.isArray(response.data)) {
           setAccessDenied(null);
@@ -742,10 +758,14 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
         setMetricsError(friendlyMsg);
         if (!silent) toast.error(friendlyMsg);
       } catch {
-        setMetricsTruncated(false);
-        if (!silent) setMetricsError("加载指标失败");
+        if (metricsSeqRef.current === seq) {
+          setMetricsTruncated(false);
+          if (!silent) setMetricsError("加载指标失败");
+        }
       } finally {
-        if (!silent) setMetricsLoading(false);
+        if (!silent && metricsSeqRef.current === seq) {
+          setMetricsLoading(false);
+        }
       }
     },
     [metricsRangeMs],
@@ -754,6 +774,12 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
   const loadServiceMonitors = useCallback(
     async (options?: { silent?: boolean }) => {
       const silent = options?.silent ?? false;
+
+      // 在途守卫：上一轮未返回时跳过本轮，避免 5s 轮询下请求叠加
+      if (serviceMonitorsInFlightRef.current) {
+        return;
+      }
+      serviceMonitorsInFlightRef.current = true;
 
       if (!silent) setMonitorsLoading(true);
       try {
@@ -777,6 +803,7 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
       } catch {
         if (!silent) setMonitorsError("加载服务监控失败");
       } finally {
+        serviceMonitorsInFlightRef.current = false;
         if (!silent) setMonitorsLoading(false);
       }
     },
@@ -899,6 +926,10 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      // 后台标签暂停轮询
+      if (document.hidden) {
+        return;
+      }
       void loadServiceMonitors({ silent: true });
       void loadLatestMonitorResults();
     }, 5_000);
@@ -926,7 +957,11 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
     void loadResultsForModal();
   }, [resultsModalOpen, resultsMonitorId, resultsLimit, loadResultsForModal]);
 
-  // Auto-load results for the resolved default monitor when entering detail view
+  // Auto-load results for the resolved default monitor when entering detail view.
+  // 依赖补全到实际使用的全部值；同一 (节点,监控项,范围) 只自动拉一次——
+  // serviceMonitors 每 5s 轮询换新数组身份、结果 ≤1 条时不得反复重拉
+  const detailAutoLoadKeyRef = useRef("");
+
   useEffect(() => {
     if (!detailNodeId) return;
     if (activeServiceMonitorId) return; // user already selected one
@@ -935,16 +970,29 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
       (m) => m.nodeId === detailNodeId || m.nodeId === 0,
     );
 
+    if (!firstMonitor) return;
+
+    const loadKey = `${detailNodeId}:${firstMonitor.id}:${serviceMonitorRangeMs}`;
+
+    if (detailAutoLoadKeyRef.current === loadKey) return;
+
     if (
-      firstMonitor &&
-      (!monitorResults[firstMonitor.id] ||
-        monitorResults[firstMonitor.id].length <= 1)
+      !monitorResults[firstMonitor.id] ||
+      monitorResults[firstMonitor.id].length <= 1
     ) {
+      detailAutoLoadKeyRef.current = loadKey;
       void loadMonitorResults(firstMonitor.id, {
         rangeMs: serviceMonitorRangeMs,
       });
     }
-  }, [detailNodeId, serviceMonitors]);
+  }, [
+    detailNodeId,
+    serviceMonitors,
+    activeServiceMonitorId,
+    monitorResults,
+    serviceMonitorRangeMs,
+    loadMonitorResults,
+  ]);
 
   // Reload results for the active service monitor chart when time range changes
   useEffect(() => {
