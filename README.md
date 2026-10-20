@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="doc/public/logo.jpg" width="88" alt="FLVX-MAX" />
+<img src="doc/public/logo.jpg" width="88" alt="FLMX" />
 
-# FLVX-MAX
+# FLMX
 
 转发 + 节点搭建面板
 
 在一个面板里管理中转与落地：一键部署 Xray / sing-box / Snell 节点，对接中转，生成订阅。
 
-[使用文档](https://iiiiiiiii7125-art.github.io/flvx-max/) · [快速上手](https://iiiiiiiii7125-art.github.io/flvx-max/guide/getting-started) · [下载](https://github.com/iiiiiiiii7125-art/flvx-max/releases)
+[使用文档](https://iiiiiiiii7125-art.github.io/flmx-max/) · [快速上手](https://iiiiiiiii7125-art.github.io/flmx-max/guide/getting-started) · [下载](https://github.com/iiiiiiiii7125-art/flmx-max/releases)
 
 </div>
 
@@ -34,13 +34,13 @@
 面板（需要 Docker，脚本会自动安装缺失的 Docker，支持 `DOCKER_MIRROR=aliyun`）：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flvx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 国内机器 GitHub 直连慢的话，用代理加速下载：
 
 ```bash
-curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flvx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 选 `1. 安装面板`，完成后访问 `http://服务器IP:6366`，默认账号 `admin@user` / `admin@user`，登录后请立即修改密码。
@@ -52,7 +52,7 @@ curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flvx-m
 中转机 / 落地机（国内机器代理加速版，把下面命令里的面板地址和密钥换成你自己的）：
 
 ```bash
-curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flvx-max/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && PROXY_ENABLED=true PROXY_URL=https://gcode.hostcentral.cc ./install.sh -a 面板地址 -s 密钥
+curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && PROXY_ENABLED=true PROXY_URL=https://gcode.hostcentral.cc ./install.sh -a 面板地址 -s 密钥
 ```
 
 > 提示：面板 **节点** 页生成的安装命令已按你的代理设置自动拼接好，直接复制用就行。
@@ -65,7 +65,7 @@ curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flvx-m
 > - `https://mirror.ghproxy.com`
 > - `https://gh.llkk.cc`
 
-更多说明见 [使用文档](https://iiiiiiiii7125-art.github.io/flvx-max/)：[安装部署](https://iiiiiiiii7125-art.github.io/flvx-max/guide/install) · [搭建节点](https://iiiiiiiii7125-art.github.io/flvx-max/guide/nodes) · [对接中转](https://iiiiiiiii7125-art.github.io/flvx-max/guide/relay) · [导入节点](https://iiiiiiiii7125-art.github.io/flvx-max/guide/import) · [升级](https://iiiiiiiii7125-art.github.io/flvx-max/guide/upgrade) · [常见问题](https://iiiiiiiii7125-art.github.io/flvx-max/guide/faq)
+更多说明见 [使用文档](https://iiiiiiiii7125-art.github.io/flmx-max/)：[安装部署](https://iiiiiiiii7125-art.github.io/flmx-max/guide/install) · [搭建节点](https://iiiiiiiii7125-art.github.io/flmx-max/guide/nodes) · [对接中转](https://iiiiiiiii7125-art.github.io/flmx-max/guide/relay) · [导入节点](https://iiiiiiiii7125-art.github.io/flmx-max/guide/import) · [升级](https://iiiiiiiii7125-art.github.io/flmx-max/guide/upgrade) · [常见问题](https://iiiiiiiii7125-art.github.io/flmx-max/guide/faq)
 
 ## 免责声明
 

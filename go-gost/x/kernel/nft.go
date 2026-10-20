@@ -18,7 +18,11 @@ import (
 	"time"
 )
 
-const nftTable = "flvx_kernel"
+const nftTable = "flmx_kernel"
+
+// legacyNFTTable 是改名前的计数表名；nftScript 每次构建时顺带清理，
+// 避免旧表残留在节点内核中（仅计数残留，无转发影响，但保持干净）。
+const legacyNFTTable = "flvx_kernel"
 
 // nftRunner executes `nft` with a script on stdin (or arguments). It is a
 // variable so tests can capture scripts without root.
@@ -175,6 +179,8 @@ func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule,
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", nftTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", nftTable)
+	fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
+	fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
 	if len(rules) == 0 && len(users) == 0 {
 		return b.String()
 	}

@@ -1442,7 +1442,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 
 	// S-02: Agent 只接受 version 参数，不再接受面板传入的任意 URL
 	// 仓库路径为编译期常量，防止面板指定任意下载源
-	const agentRepo = "iiiiiiiii7125-art/flvx-max"
+	const agentRepo = "iiiiiiiii7125-art/flmx-max"
 	var agentVersionRe = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
 
 	var req struct {
@@ -2225,7 +2225,7 @@ func icmpPing(target string, timeout time.Duration) (time.Duration, error) {
 		Body: &icmp.Echo{
 			ID:   id,
 			Seq:  seq,
-			Data: []byte("FLVX-PING"),
+			Data: []byte("FLMX-PING"),
 		},
 	}
 	wb, err := wm.Marshal(nil)

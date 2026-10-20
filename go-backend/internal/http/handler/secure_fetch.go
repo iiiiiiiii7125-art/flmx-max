@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"go-backend/internal/config"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -18,15 +18,15 @@ import (
 //
 // 策略矩阵（默认全部拒绝私网）：
 //   - 公网：强制 https，http 一律拒绝
-//   - 私网/回环/链路本地：需 FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true
-//     或 FLVX_FETCH_PRIVATE_ALLOWLIST 含对应 CIDR
+//   - 私网/回环/链路本地：需 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true
+//     或 FLMX_FETCH_PRIVATE_ALLOWLIST 含对应 CIDR
 //   - 元数据地址（169.254.169.254、fd00:ec2::254）：永远拒绝
 //
 // 检查顺序（写死）：
-//   1. scheme 白名单（仅 http/https）
-//   2. 元数据黑名单（硬编码，先于 allowlist）
-//   3. 逐地址判定：每个 IP 单独走完整链（私网→allowlist→协议）
-//   4. 公网必须 https（allowlist 不提升公网协议）
+//  1. scheme 白名单（仅 http/https）
+//  2. 元数据黑名单（硬编码，先于 allowlist）
+//  3. 逐地址判定：每个 IP 单独走完整链（私网→allowlist→协议）
+//  4. 公网必须 https（allowlist 不提升公网协议）
 const (
 	secureFetchMaxRedirects   = 5
 	secureFetchConnectTimeout = 10 * time.Second
@@ -63,9 +63,9 @@ func isMetadataAddress(ip net.IP) bool {
 	return false
 }
 
-// getPrivateAllowlist 解析 FLVX_FETCH_PRIVATE_ALLOWLIST（逗号分隔的 CIDR）。
+// getPrivateAllowlist 解析 FLMX_FETCH_PRIVATE_ALLOWLIST（逗号分隔的 CIDR）。
 func getPrivateAllowlist() []*net.IPNet {
-	raw := os.Getenv("FLVX_FETCH_PRIVATE_ALLOWLIST")
+	raw := config.GetEnvAny("FLMX_FETCH_PRIVATE_ALLOWLIST", "FLVX_FETCH_PRIVATE_ALLOWLIST")
 	if raw == "" {
 		return nil
 	}
@@ -98,7 +98,7 @@ func getPrivateAllowlist() []*net.IPNet {
 // isPrivateAllowed 检查 IP 是否被 allowlist 放行。
 func isPrivateAllowed(ip net.IP) bool {
 	// 全局开关。
-	if os.Getenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
+	if config.GetEnvAny("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
 		return true
 	}
 	// CIDR allowlist。
@@ -255,7 +255,7 @@ func SecureFetchWithHeader(ctx context.Context, rawURL string) ([]byte, http.Hea
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("User-Agent", "flvx-panel/1.0")
+	req.Header.Set("User-Agent", "flmx-panel/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

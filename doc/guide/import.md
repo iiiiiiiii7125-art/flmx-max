@@ -39,8 +39,8 @@
 
 订阅源 URL 默认仅支持 **https 公网地址**。如需使用 http 或内网地址，需管理员显式配置：
 
-- `FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
-- `FLVX_FETCH_PRIVATE_ALLOWLIST=192.168.0.0/16,10.0.0.0/8`：仅放行指定 CIDR（推荐）
+- `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
+- `FLMX_FETCH_PRIVATE_ALLOWLIST=192.168.0.0/16,10.0.0.0/8`：仅放行指定 CIDR（推荐）
 
 **风险说明**：放行私网地址会允许面板服务器访问内网资源。请确保订阅源可信，并注意：
 - 云元数据地址（`169.254.169.254`）在任何配置下都被拒绝

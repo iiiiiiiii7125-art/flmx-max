@@ -203,7 +203,7 @@ func isSubscriptionURL(text string) bool {
 }
 
 // fetchSubscription downloads a subscription. The user agent is
-// "flvx-panel/1.0" (see secure_fetch.go), not a Clash/Mihomo impersonation
+// "flmx-panel/1.0" (see secure_fetch.go), not a Clash/Mihomo impersonation
 // (IMP-002: the old comment claiming a Mihomo UA was outdated; doc/guide/import.md
 // said the same and has been corrected).
 func fetchSubscription(ctx context.Context, rawURL string) (string, error) {

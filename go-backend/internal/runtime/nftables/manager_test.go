@@ -43,7 +43,7 @@ func TestManagerReconcileAppliesRenderedScript(t *testing.T) {
 	if len(runner.scripts) != 1 {
 		t.Fatalf("expected 1 script, got %d", len(runner.scripts))
 	}
-	if !strings.Contains(runner.scripts[0], `flvx forward:42 dnat tcp`) {
+	if !strings.Contains(runner.scripts[0], `flmx forward:42 dnat tcp`) {
 		t.Fatalf("script missing forward comment:\n%s", runner.scripts[0])
 	}
 	if result.NodeID != 7 || result.Hashes[42] == "" {
@@ -91,9 +91,9 @@ func TestManagerCollectCountersParsesRunnerTableJSON(t *testing.T) {
 		"nftables": [
 			{"rule": {
 				"family": "inet",
-				"table": "flvx",
+				"table": "flmx",
 				"chain": "forward",
-				"comment": "flvx forward:77 to-target tcp",
+				"comment": "flmx forward:77 to-target tcp",
 				"expr": [
 					{"counter": {"packets": 3, "bytes": 2048}}
 				]

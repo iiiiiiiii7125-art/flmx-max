@@ -1,29 +1,29 @@
 # AI Skill 使用指南
 
-让大模型直接操作 FLVX 面板的技能包。支持 OpenCode、OpenClaw、Claude Code 等工具。
+让大模型直接操作 FLMX 面板的技能包。支持 OpenCode、OpenClaw、Claude Code 等工具。
 
 ## 安装
 
 ### 方式 1: npm (推荐)
 
 ```bash
-npm install -g @flvx/skill-api
+npm install -g @flmx/skill-api
 ```
 
-postinstall 脚本会自动链接到 `~/.agents/skills/flvx-api/`。
+postinstall 脚本会自动链接到 `~/.agents/skills/flmx-api/`。
 
 ### 方式 2: 手动链接
 
 ```bash
-# 从 FLVX 源码
-cd /path/to/flvx
+# 从 FLMX 源码
+cd /path/to/flmx
 mkdir -p ~/.agents/skills
-ln -sf $(pwd)/skills/flvx-api ~/.agents/skills/
+ln -sf $(pwd)/skills/flmx-api ~/.agents/skills/
 
 # 或从 GitHub
-git clone https://github.com/iiiiiiiii7125-art/flvx-max.git
-cd flvx
-ln -sf $(pwd)/skills/flvx-api ~/.agents/skills/
+git clone https://github.com/iiiiiiiii7125-art/flmx-max.git
+cd flmx
+ln -sf $(pwd)/skills/flmx-api ~/.agents/skills/
 ```
 
 ## 配置
@@ -31,22 +31,22 @@ ln -sf $(pwd)/skills/flvx-api ~/.agents/skills/
 设置环境变量：
 
 ```bash
-export FLVX_BASE_URL="https://your-panel.example.com"
-export FLVX_USERNAME="admin"
-export FLVX_PASSWORD="your-password"
+export FLMX_BASE_URL="https://your-panel.example.com"
+export FLMX_USERNAME="admin"
+export FLMX_PASSWORD="your-password"
 ```
 
 或使用凭证文件：
 
 ```bash
-mkdir -p ~/.flvx
-cat > ~/.flvx/.env << 'EOF'
-export FLVX_BASE_URL="https://panel.example.com"
-export FLVX_USERNAME="admin"
-export FLVX_PASSWORD="your-password"
+mkdir -p ~/.flmx
+cat > ~/.flmx/.env << 'EOF'
+export FLMX_BASE_URL="https://panel.example.com"
+export FLMX_USERNAME="admin"
+export FLMX_PASSWORD="your-password"
 EOF
-chmod 600 ~/.flvx/.env
-source ~/.flvx/.env
+chmod 600 ~/.flmx/.env
+source ~/.flmx/.env
 ```
 
 ---
@@ -59,14 +59,14 @@ OpenCode 是命令行 AI 编程助手，支持通过 skills 扩展能力。
 
 **安装 skill:**
 ```bash
-npm install -g @flvx/skill-api
+npm install -g @flmx/skill-api
 ```
 
 **使用:**
 ```bash
-export FLVX_BASE_URL="https://panel.example.com"
-export FLVX_USERNAME="admin"
-export FLVX_PASSWORD="your-password"
+export FLMX_BASE_URL="https://panel.example.com"
+export FLMX_USERNAME="admin"
+export FLMX_PASSWORD="your-password"
 
 opencode
 ```
@@ -87,11 +87,11 @@ OpenClaw 同样支持 skills 机制。
 
 **安装 skill:**
 ```bash
-npm install -g @flvx/skill-api
+npm install -g @flmx/skill-api
 
 # 或手动链接
 mkdir -p ~/.openclaw/skills
-ln -sf /path/to/flvx/skills/flvx-api ~/.openclaw/skills/flvx-api
+ln -sf /path/to/flmx/skills/flmx-api ~/.openclaw/skills/flmx-api
 ```
 
 **使用:**
@@ -114,14 +114,14 @@ Claude Code 是 Anthropic 官方的命令行工具，支持通过 CLAUDE.md 扩�
 在项目根目录创建 `CLAUDE.md`：
 
 ```markdown
-# FLVX API Skill
+# FLMX API Skill
 
-你可以通过 REST API 操作 FLVX 面板。
+你可以通过 REST API 操作 FLMX 面板。
 
 ## 环境变量
-- FLVX_BASE_URL: 面板地址
-- FLVX_USERNAME: 用户名
-- FLVX_PASSWORD: 密码
+- FLMX_BASE_URL: 面板地址
+- FLMX_USERNAME: 用户名
+- FLMX_PASSWORD: 密码
 
 ## 认证规则
 - Authorization 头使用原始 JWT token，不加 "Bearer " 前缀
@@ -158,12 +158,12 @@ claude
 ```bash
 mkdir -p ~/.claude
 cat > ~/.claude/CLAUDE.md << 'EOF'
-# FLVX Panel Operations
+# FLMX Panel Operations
 
-使用 FLVX REST API 操作流量转发面板。
+使用 FLMX REST API 操作流量转发面板。
 
-环境变量: FLVX_BASE_URL, FLVX_USERNAME, FLVX_PASSWORD
-调用方式: curl -X POST "$FLVX_BASE_URL/api/v1/..." -H "Authorization: $TOKEN"
+环境变量: FLMX_BASE_URL, FLMX_USERNAME, FLMX_PASSWORD
+调用方式: curl -X POST "$FLMX_BASE_URL/api/v1/..." -H "Authorization: $TOKEN"
 注意: Authorization 不要加 Bearer 前缀
 EOF
 ```
@@ -171,12 +171,12 @@ EOF
 #### 方式 3: 复制 SKILL.md
 
 ```bash
-cat ~/.agents/skills/flvx-api/SKILL.md >> ~/.claude/CLAUDE.md
+cat ~/.agents/skills/flmx-api/SKILL.md >> ~/.claude/CLAUDE.md
 ```
 
 **示例对话:**
 ```
->>> 帮我查看 FLVX 面板上有哪些节点
+>>> 帮我查看 FLMX 面板上有哪些节点
 >>> 创建一个名为 test 的转发，目标地址 10.0.0.1:80
 >>> 查看我的流量使用情况
 ```
@@ -200,8 +200,8 @@ cat ~/.agents/skills/flvx-api/SKILL.md >> ~/.claude/CLAUDE.md
 ## 安全提示
 
 - ⚠️ 环境变量在进程列表中可见
-- 使用 `~/.flvx/.env` 文件并设置 `chmod 600`
-- 添加 `export HISTIGNORE="*FLVX_PASSWORD*"` 防止密码进入历史记录
+- 使用 `~/.flmx/.env` 文件并设置 `chmod 600`
+- 添加 `export HISTIGNORE="*FLMX_PASSWORD*"` 防止密码进入历史记录
 - Token 仅在会话内存中缓存，不写入磁盘
 
 ## 发布

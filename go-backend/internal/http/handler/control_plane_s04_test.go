@@ -7,7 +7,9 @@ import (
 
 // S-04: 节点离线时删除转发不得静默返回"成功"
 // 修复前：control_plane.go 的 DeleteService 分支中，isNodeOfflineOrTimeoutError 时 continue，
-//        最终返回 nil，forwardDelete 继续删库，导致 Agent 侧残留。
+//
+//	最终返回 nil，forwardDelete 继续删库，导致 Agent 侧残留。
+//
 // 修复后：离线节点被收集并返回 nodeOfflineError，forwardDelete 中止，不删库。
 func TestS04_NodeOfflineErrorType(t *testing.T) {
 	err := &nodeOfflineError{nodeIDs: []int64{1, 2, 3}}

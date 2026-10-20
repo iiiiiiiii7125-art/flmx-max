@@ -448,20 +448,22 @@ func sendBatchTrafficReportWithSeq(ctx context.Context, reportItems []TrafficRep
 		requestBody = jsonData
 	}
 
-	return postJSONWithFallbackAndHeader(
+	// 改名过渡：seq 头双发（新头 X-Flmx-Seq + 旧头 X-Flvx-Seq），
+	// 新旧面板都能读到，去重逻辑不受版本错位影响。
+	seqStr := fmt.Sprintf("%d", seq)
+	return postJSONWithFallbackAndHeaders(
 		ctx,
 		strings.Split(httpReportURL, ","),
 		requestBody,
 		"GOST-Traffic-Reporter/1.0",
 		5*time.Second,
 		&preferredUploadURL,
-		"X-Flvx-Seq",
-		fmt.Sprintf("%d", seq),
+		map[string]string{"X-Flmx-Seq": seqStr, "X-Flvx-Seq": seqStr},
 	)
 }
 
-// postJSONWithFallbackAndHeader 带额外头的上报（R5-B6 E-001）。
-func postJSONWithFallbackAndHeader(ctx context.Context, urls []string, requestBody []byte, userAgent string, timeout time.Duration, preferred *string, headerKey, headerValue string) (bool, error) {
+// postJSONWithFallbackAndHeaders 带额外头的上报（R5-B6 E-001）。
+func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestBody []byte, userAgent string, timeout time.Duration, preferred *string, headers map[string]string) (bool, error) {
 	if len(urls) == 0 {
 		return false, fmt.Errorf("上报URL未设置")
 	}
@@ -478,7 +480,9 @@ func postJSONWithFallbackAndHeader(ctx context.Context, urls []string, requestBo
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set(headerKey, headerValue)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
 
 		resp, err := reportDo(ctx, req, timeout)
 		if err != nil {

@@ -2,8 +2,8 @@ package health
 
 import (
 	"fmt"
+	"go-backend/internal/config"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -51,13 +51,13 @@ func isMonitorBlockedIP(ip net.IP) bool {
 }
 
 // isMonitorIPAllowlisted 与 H-15 SecureFetch 同源的运维放行通道：
-// FLVX_FETCH_ALLOW_PRIVATE_NETWORKS=true 全放行，
-// FLVX_FETCH_PRIVATE_ALLOWLIST="cidr,ip,..." 按条目放行。
+// FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true 全放行，
+// FLMX_FETCH_PRIVATE_ALLOWLIST="cidr,ip,..." 按条目放行。
 func isMonitorIPAllowlisted(ip net.IP) bool {
-	if os.Getenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
+	if config.GetEnvAny("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
 		return true
 	}
-	raw := os.Getenv("FLVX_FETCH_PRIVATE_ALLOWLIST")
+	raw := config.GetEnvAny("FLMX_FETCH_PRIVATE_ALLOWLIST", "FLVX_FETCH_PRIVATE_ALLOWLIST")
 	if raw == "" {
 		return false
 	}

@@ -3,6 +3,9 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"go-backend/internal/auth"
+	"go-backend/internal/http/middleware"
+	"go-backend/internal/store/repo"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -10,9 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"go-backend/internal/auth"
-	"go-backend/internal/http/middleware"
-	"go-backend/internal/store/repo"
 )
 
 // R5-B2 A-002 回归测试：forward/update-order 归属检查。

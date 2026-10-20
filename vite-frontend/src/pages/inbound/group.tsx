@@ -3,8 +3,8 @@ import { ChevronDown } from "lucide-react";
 
 export type GroupBy = "node" | "kernel";
 
-const GROUP_BY_KEY = "flvx_inbound_group_by";
-const COLLAPSED_KEY = "flvx_inbound_collapsed";
+const GROUP_BY_KEY = "flmx_inbound_group_by";
+const COLLAPSED_KEY = "flmx_inbound_collapsed";
 
 function readStorage(key: string): string | null {
   try {

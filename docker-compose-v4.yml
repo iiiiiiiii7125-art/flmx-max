@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/iiiiiiiii7125-art/flvx-flux-panel-backend:${FLUX_VERSION:-latest}
+    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:${FLUX_VERSION:-latest}
     container_name: flux-panel-backend
     restart: unless-stopped
     logging:
@@ -13,18 +13,19 @@ services:
       DB_PATH: /app/data/gost.db
       DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
+      FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-${FLVX_WEBAUTHN_ORIGIN:-}}
       FLVX_WEBAUTHN_ORIGIN: ${FLVX_WEBAUTHN_ORIGIN:-}
       SERVER_ADDR: :6365
       TZ: Asia/Shanghai
       FLUX_VERSION: ${FLUX_VERSION:-dev}
-      PANEL_DEPLOY_DIR: /opt/flvx-panel
+      PANEL_DEPLOY_DIR: /opt/flmx-panel
       PANEL_BACKEND_CONTAINER: flux-panel-backend
     ports:
       - "${BACKEND_PORT}:6365"
     volumes:
       - sqlite_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./:/opt/flvx-panel
+      - ./:/opt/flmx-panel
     networks:
       - gost-network
     stop_grace_period: 30s
@@ -61,7 +62,7 @@ services:
       start_period: 20s
 
   frontend:
-    image: ghcr.io/iiiiiiiii7125-art/flvx-vite-frontend:${FLUX_VERSION:-latest}
+    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:${FLUX_VERSION:-latest}
     container_name: vite-frontend
     restart: unless-stopped
     logging:

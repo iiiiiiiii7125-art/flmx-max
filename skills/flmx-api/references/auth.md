@@ -102,7 +102,7 @@ Verify captcha response (Cloudflare Turnstile or local captcha).
 Include the token in all authenticated requests:
 
 ```bash
-curl -X POST "${FLVX_BASE_URL}/api/v1/node/list" \
+curl -X POST "${FLMX_BASE_URL}/api/v1/node/list" \
   -H "Authorization: eyJhbGciOiJIUzI1NiIs..." \
   -H "Content-Type: application/json" \
   -d '{}'

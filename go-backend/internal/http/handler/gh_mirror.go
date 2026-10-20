@@ -323,7 +323,7 @@ func ghMirrorCacheDir() string {
 	if p := strings.TrimSpace(os.Getenv("DB_PATH")); p != "" {
 		return filepath.Join(filepath.Dir(p), "github-cache")
 	}
-	return filepath.Join(os.TempDir(), "flvx-github-cache")
+	return filepath.Join(os.TempDir(), "flmx-github-cache")
 }
 
 // ghMirrorFetch 返回 up 对应的缓存文件；缺失或过期时下载。

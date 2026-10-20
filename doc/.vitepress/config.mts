@@ -2,17 +2,17 @@ import { defineConfig } from "vitepress";
 
 export default defineConfig({
   lang: "zh-CN",
-  title: "FLVX-MAX",
+  title: "FLMX",
   description: "转发 + 节点搭建面板",
-  base: "/flvx-max/",
+  base: "/flmx-max/",
   cleanUrls: true,
   lastUpdated: true,
-  head: [["link", { rel: "icon", type: "image/jpeg", href: "/flvx-max/logo.jpg" }]],
+  head: [["link", { rel: "icon", type: "image/jpeg", href: "/flmx-max/logo.jpg" }]],
   themeConfig: {
     logo: "/logo.jpg",
     nav: [
       { text: "指南", link: "/guide/getting-started" },
-      { text: "下载", link: "https://github.com/iiiiiiiii7125-art/flvx-max/releases" },
+      { text: "下载", link: "https://github.com/iiiiiiiii7125-art/flmx-max/releases" },
     ],
     sidebar: [
       {
@@ -43,7 +43,7 @@ export default defineConfig({
         ],
       },
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/iiiiiiiii7125-art/flvx-max" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/iiiiiiiii7125-art/flmx-max" }],
     search: { provider: "local" },
     outline: { level: [2, 3], label: "本页目录" },
     docFooter: { prev: "上一页", next: "下一页" },

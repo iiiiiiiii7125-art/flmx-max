@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: FLVX-MAX
+  name: FLMX
   text: 转发 + 节点搭建面板
   tagline: 在一个面板里管理中转与落地，一键部署 Xray / sing-box / Snell 节点并对接中转
   actions:
@@ -14,7 +14,7 @@ hero:
       link: /guide/install
     - theme: alt
       text: GitHub
-      link: https://github.com/iiiiiiiii7125-art/flvx-max
+      link: https://github.com/iiiiiiiii7125-art/flmx-max
 
 features:
   - title: 多内核节点

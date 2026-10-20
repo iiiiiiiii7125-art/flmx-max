@@ -9,9 +9,16 @@ import (
 	"strings"
 )
 
+// 改名过渡：表名由 flvx 改为 flmx。runner 的应用脚本会同时删除 legacy
+// 表，避免旧表残留在内核中继续生效（转发/计数双份）。
+const (
+	tableName       = "flmx"
+	legacyTableName = "flvx"
+)
+
 func RenderTable(plan NodePlan) string {
 	var b strings.Builder
-	b.WriteString("table inet flvx {\n")
+	b.WriteString("table inet " + tableName + " {\n")
 	b.WriteString("  chain prerouting {\n")
 	b.WriteString("    type nat hook prerouting priority dstnat; policy accept;\n")
 	for _, rule := range sortedRules(plan.Rules) {
@@ -34,7 +41,7 @@ func RenderTable(plan NodePlan) string {
 	b.WriteString("  chain postrouting {\n")
 	b.WriteString("    type nat hook postrouting priority srcnat; policy accept;\n")
 	if len(plan.Rules) > 0 {
-		b.WriteString("    masquerade comment \"flvx masquerade\"\n")
+		b.WriteString("    masquerade comment \"" + tableName + " masquerade\"\n")
 	}
 	b.WriteString("  }\n\n")
 	b.WriteString("  chain forward {\n")
@@ -72,7 +79,7 @@ func RenderTable(plan NodePlan) string {
 }
 
 func counterComment(forwardID int64, direction, protocol string) string {
-	return fmt.Sprintf("flvx forward:%d %s %s", forwardID, direction, protocol)
+	return fmt.Sprintf("%s forward:%d %s %s", tableName, forwardID, direction, protocol)
 }
 
 func RuleHash(rule Rule) string {

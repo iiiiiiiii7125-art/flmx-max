@@ -1,5 +1,5 @@
 """
-Test authentication flow for FLVX.
+Test authentication flow for FLMX.
 Tests login, logout, session management, and protected routes.
 """
 

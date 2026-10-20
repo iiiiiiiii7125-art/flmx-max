@@ -128,7 +128,8 @@ func (h *Handler) runTunnelQualityProber(ctx context.Context) {
 	h.qualityProber.Start(ctx)
 }
 
-func (h *Handler) runNftablesTrafficCollectLoop(ctx context.Context) {	defer h.jobsWG.Done()
+func (h *Handler) runNftablesTrafficCollectLoop(ctx context.Context) {
+	defer h.jobsWG.Done()
 	h.runNftablesStartupReconcile(ctx)
 	select {
 	case <-ctx.Done():

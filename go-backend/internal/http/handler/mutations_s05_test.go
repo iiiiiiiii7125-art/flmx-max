@@ -6,9 +6,12 @@ import (
 
 // S-05: nftables 模式下暂停/恢复必须真正使规则失效/恢复
 // 修复前：forwardPause/forwardResume 只调用 controlForwardServices (操作 gost service)，
-//        nftables 模式下为空操作，暂停后流量仍通。
+//
+//	nftables 模式下为空操作，暂停后流量仍通。
+//
 // 修复后：nftables 模式下调用 reconcileNftablesNodeByRequest，
-//        根据 DB status (1=active, 0=paused) 重建规则，暂停的转发被排除。
+//
+//	根据 DB status (1=active, 0=paused) 重建规则，暂停的转发被排除。
 func TestS05_NftPauseUsesReconcile(t *testing.T) {
 	// 验证 ListActiveForwardsByNode 按 status=1 过滤
 	// (repository_nftables.go:199: Where("forward_port.node_id = ? AND forward.status = 1"))
