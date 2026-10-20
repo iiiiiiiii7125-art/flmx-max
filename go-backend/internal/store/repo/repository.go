@@ -2055,6 +2055,20 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.UserInbounds = userInbounds
 
+	// O7-007：导出 announcement 整表（公告）
+	announcements, err := r.exportAnnouncements()
+	if err != nil {
+		return nil, fmt.Errorf("export announcements failed: %w", err)
+	}
+	backup.Announcements = announcements
+
+	// O7-008：导出 monitor_permission 整表（监控权限）
+	monitorPermissions, err := r.exportMonitorPermissions()
+	if err != nil {
+		return nil, fmt.Errorf("export monitor permissions failed: %w", err)
+	}
+	backup.MonitorPermissions = monitorPermissions
+
 	return backup, nil
 }
 
@@ -2142,6 +2156,29 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 		}
 		backup.Inbounds = v
 	}
+	// O7-001/O7-007/O7-008：补齐 user_inbound/announcement/monitor_permission 三表
+	// （O7-001 时 ExportPartial 遗漏，此处一并补上）
+	if typeSet["userInbounds"] {
+		v, err := r.exportUserInbounds()
+		if err != nil {
+			return nil, fmt.Errorf("export user inbounds failed: %w", err)
+		}
+		backup.UserInbounds = v
+	}
+	if typeSet["announcements"] {
+		v, err := r.exportAnnouncements()
+		if err != nil {
+			return nil, fmt.Errorf("export announcements failed: %w", err)
+		}
+		backup.Announcements = v
+	}
+	if typeSet["monitorPermissions"] {
+		v, err := r.exportMonitorPermissions()
+		if err != nil {
+			return nil, fmt.Errorf("export monitor permissions failed: %w", err)
+		}
+		backup.MonitorPermissions = v
+	}
 	return backup, nil
 }
 
@@ -2225,6 +2262,8 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		}
 		b.LatencyTargets = n.LatencyTargets
 		b.ForwardMode = n.ForwardMode
+		// O7-006：恢复后保留已忽略的到期提醒状态
+		b.ExpiryReminderDismissed = n.ExpiryReminderDismissed
 		out = append(out, b)
 	}
 	return out, nil
@@ -2394,6 +2433,45 @@ func (r *Repository) exportUserInbounds() ([]model.UserInboundBackup, error) {
 	return out, nil
 }
 
+// O7-007：导出 announcement 整表（公告备份）
+func (r *Repository) exportAnnouncements() ([]model.AnnouncementBackup, error) {
+	var rows []model.Announcement
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.AnnouncementBackup, 0, len(rows))
+	for _, a := range rows {
+		b := model.AnnouncementBackup{
+			ID:          a.ID,
+			Content:     a.Content,
+			Enabled:     a.Enabled,
+			CreatedTime: a.CreatedTime,
+		}
+		if a.UpdatedTime.Valid {
+			b.UpdatedTime = a.UpdatedTime.Int64
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// O7-008：导出 monitor_permission 整表（监控权限备份）
+func (r *Repository) exportMonitorPermissions() ([]model.MonitorPermissionBackup, error) {
+	var rows []model.MonitorPermission
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.MonitorPermissionBackup, 0, len(rows))
+	for _, mp := range rows {
+		out = append(out, model.MonitorPermissionBackup{
+			ID:          mp.ID,
+			UserID:      mp.UserID,
+			CreatedTime: mp.CreatedTime,
+		})
+	}
+	return out, nil
+}
+
 func (r *Repository) exportTunnelGroups() ([]model.TunnelGroupBackup, error) {
 	var groups []model.TunnelGroup
 	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
@@ -2460,6 +2538,15 @@ func (r *Repository) exportPermissions() ([]model.PermissionBackup, error) {
 // ─── Import Methods ──────────────────────────────────────────────────
 
 func (r *Repository) Import(backup *model.BackupData, types []string) (*model.ImportResult, error) {
+	// O7-009：版本兼容性检查（导出仅写 "1.0"），未知版本拒绝导入，
+	// 避免不兼容格式被错误恢复。
+	if backup == nil || backup.Version != "1.0" {
+		version := ""
+		if backup != nil {
+			version = backup.Version
+		}
+		return nil, fmt.Errorf("不支持的备份版本 %q（仅支持 1.0）", version)
+	}
 	result := &model.ImportResult{}
 	typeSet := make(map[string]bool)
 	for _, t := range types {
@@ -2553,6 +2640,22 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				return fmt.Errorf("import user inbounds failed: %w", err)
 			}
 			result.UserInboundsImported = count
+		}
+		// O7-007：导入 announcement 表（公告）
+		if typeSet["announcements"] && len(backup.Announcements) > 0 {
+			count, err := importAnnouncements(tx, backup.Announcements, now)
+			if err != nil {
+				return fmt.Errorf("import announcements failed: %w", err)
+			}
+			result.AnnouncementsImported = count
+		}
+		// O7-008：导入 monitor_permission 表（监控权限）
+		if typeSet["monitorPermissions"] && len(backup.MonitorPermissions) > 0 {
+			count, err := importMonitorPermissions(tx, backup.MonitorPermissions)
+			if err != nil {
+				return fmt.Errorf("import monitor permissions failed: %w", err)
+			}
+			result.MonitorPermissionsImported = count
 		}
 		return nil
 	})
@@ -2705,13 +2808,15 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 			RemoteConfig:  sql.NullString{String: n.RemoteConfig, Valid: true},
 			LatencyTargets: n.LatencyTargets,
 			ForwardMode:    n.ForwardMode,
+			// O7-006：恢复后保留已忽略的到期提醒状态
+			ExpiryReminderDismissed: n.ExpiryReminderDismissed,
 		}
 		err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "is_remote", "remote_url", "remote_token", "remote_config", "latency_targets", "forward_mode",
+				"inx", "is_remote", "remote_url", "remote_token", "remote_config", "latency_targets", "forward_mode", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -2911,6 +3016,54 @@ func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup) (int, error
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "inbound_id", "relay_id",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// O7-007：导入 announcement 表（公告）
+func importAnnouncements(tx *gorm.DB, rows []model.AnnouncementBackup, now int64) (int, error) {
+	count := 0
+	for _, a := range rows {
+		item := model.Announcement{
+			ID:          a.ID,
+			Content:     a.Content,
+			Enabled:     a.Enabled,
+			CreatedTime: a.CreatedTime,
+			UpdatedTime: sql.NullInt64{Int64: now, Valid: true},
+		}
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"content", "enabled", "updated_time",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// O7-008：导入 monitor_permission 表（监控权限）
+func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup) (int, error) {
+	count := 0
+	for _, mp := range rows {
+		item := model.MonitorPermission{
+			ID:          mp.ID,
+			UserID:      mp.UserID,
+			CreatedTime: mp.CreatedTime,
+		}
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"user_id", "created_time",
 			}),
 		}).Create(&item).Error
 		if err != nil {

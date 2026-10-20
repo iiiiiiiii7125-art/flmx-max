@@ -1,9 +1,15 @@
+import { getRoleIdFromToken, getUsernameFromToken, isTokenValid } from "./jwt";
+
+// N-002：角色/管理员标志不再单独写入 localStorage（role_id/admin 键可被
+// 控制台任意篡改，前端 UI 门控会因此失真）。统一从 JWT 解析：
+// token 是唯一事实来源，localStorage 只存 token 本身与显示用 name。
 export const SESSION_STORAGE_KEYS = {
   token: "token",
-  roleId: "role_id",
   name: "name",
-  admin: "admin",
 } as const;
+
+// 旧版本写入的键，仅用于登录/登出时清理残留。
+const LEGACY_SESSION_KEYS = ["role_id", "admin"] as const;
 
 export interface SessionData {
   token: string | null;
@@ -20,43 +26,34 @@ export interface LoginSessionPayload {
 
 const SESSION_EVENT_NAME = "sessionUpdated";
 
-const parseRoleId = (value: string | null): number | null => {
-  if (value === null) {
-    return null;
-  }
-
-  const roleId = Number.parseInt(value, 10);
-
-  return Number.isNaN(roleId) ? null : roleId;
-};
-
 export const getToken = (): string | null => {
   return localStorage.getItem(SESSION_STORAGE_KEYS.token);
 };
 
 export const getRoleId = (): number | null => {
-  return parseRoleId(localStorage.getItem(SESSION_STORAGE_KEYS.roleId));
+  const token = getToken();
+
+  if (!token || !isTokenValid(token)) {
+    return null;
+  }
+
+  return getRoleIdFromToken(token);
 };
 
 export const getSessionName = (): string | null => {
+  const token = getToken();
+  const nameFromToken = token ? getUsernameFromToken(token) : null;
+
+  if (nameFromToken) {
+    return nameFromToken;
+  }
+
   return localStorage.getItem(SESSION_STORAGE_KEYS.name);
 };
 
 export const getAdminFlag = (): boolean => {
-  const adminValue = localStorage.getItem(SESSION_STORAGE_KEYS.admin);
-
-  if (adminValue !== null) {
-    return adminValue === "true";
-  }
-
-  const roleId = getRoleId();
-  const isAdmin = roleId === 0;
-
-  if (roleId !== null) {
-    localStorage.setItem(SESSION_STORAGE_KEYS.admin, String(isAdmin));
-  }
-
-  return isAdmin;
+  // N-002：从 token 解析，不再读可篡改的 admin/role_id 键。
+  return getRoleId() === 0;
 };
 
 export const readSession = (): SessionData => {
@@ -68,22 +65,22 @@ export const readSession = (): SessionData => {
   };
 };
 
+const purgeLegacySessionKeys = (): void => {
+  LEGACY_SESSION_KEYS.forEach((key) => localStorage.removeItem(key));
+};
+
 export const writeLoginSession = (payload: LoginSessionPayload): void => {
   localStorage.setItem(SESSION_STORAGE_KEYS.token, payload.token);
-  localStorage.setItem(SESSION_STORAGE_KEYS.roleId, String(payload.role_id));
   localStorage.setItem(SESSION_STORAGE_KEYS.name, payload.name);
-  localStorage.setItem(
-    SESSION_STORAGE_KEYS.admin,
-    String(payload.role_id === 0),
-  );
+  // N-002：不再写入 role_id/admin；顺手清除旧残留，防止被篡改值继续生效。
+  purgeLegacySessionKeys();
   window.dispatchEvent(new Event(SESSION_EVENT_NAME));
 };
 
 export const clearSession = (): void => {
   localStorage.removeItem(SESSION_STORAGE_KEYS.token);
-  localStorage.removeItem(SESSION_STORAGE_KEYS.roleId);
   localStorage.removeItem(SESSION_STORAGE_KEYS.name);
-  localStorage.removeItem(SESSION_STORAGE_KEYS.admin);
+  purgeLegacySessionKeys();
   window.dispatchEvent(new Event(SESSION_EVENT_NAME));
 };
 

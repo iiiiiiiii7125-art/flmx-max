@@ -80,13 +80,17 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		raw.bytesOut += item.U
 		batch.forwardTraffic[forwardID] = raw
 
-		// Flow=1 单向：仅上传；Flow=2 双向：上传+下载
-		// 历史 bug：曾把 Flow 当乘数用，导致 Flow=2 双倍扣费
-		// 注意：item.U=上传，item.D=下载；InFlow 对应下载，OutFlow 对应上传
-		var scaledIn int64
-		scaledOut := int64(float64(item.U) * meta.TrafficRatio)
+		// O6-002：InFlow/OutFlow 语义统一为 InFlow=上传、OutFlow=下载（与 nftables 路径一致）。
+		// 现状不一致：nftables 路径 BytesIn=到目标方向=上传→InFlow；本路径原先 InFlow=item.D（下载）、
+		// OutFlow=item.U（上传），方向相反，统计展示混淆。现交换为 InFlow=item.U（上传）、OutFlow=item.D（下载）。
+		// Flow=1 单向：仅上传（InFlow）；Flow=2 双向：上传+下载。
+		// 历史 bug：曾把 Flow 当乘数用，导致 Flow=2 双倍扣费（1.0.7 M-001 已修复，计费总额语义不变：
+		// quotaUsage 始终为 scaledIn+scaledOut，仅展示方向归属交换）。
+		// raw.bytesIn/bytesOut 保持原样（供隧道 metrics 聚合使用，不属于本次语义统一范围）。
+		scaledIn := int64(float64(item.U) * meta.TrafficRatio)
+		var scaledOut int64
 		if meta.TunnelFlow != 1 {
-			scaledIn = int64(float64(item.D) * meta.TrafficRatio)
+			scaledOut = int64(float64(item.D) * meta.TrafficRatio)
 		}
 		if idx, ok := flowSeen[forwardID]; ok {
 			batch.flowDeltas[idx].InFlow += scaledIn

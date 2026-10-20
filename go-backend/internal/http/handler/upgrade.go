@@ -211,6 +211,15 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// O9-005：目标版本低于节点当前版本时拒绝升级（防误降级；有意降级请用独立的
+	// nodeRollback 接口）。节点版本未知（未上报）时不拦截。
+	if node, err := h.repo.GetNodeByID(req.ID); err == nil && node != nil && node.Version.Valid {
+		if cur := strings.TrimSpace(node.Version.String); cur != "" && compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(cur, "v")) < 0 {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("目标版本 %s 低于节点当前版本 %s，已拒绝。如确需降级请使用节点回滚功能。", version, cur)))
+			return
+		}
+	}
+
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
 	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL
 	result, err := h.wsServer.SendCommand(req.ID, "UpgradeAgent", map[string]interface{}{
@@ -293,6 +302,14 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		go func(index int, nodeID int64) {
 			defer wg.Done()
 			defer func() { <-sem }()
+
+			// O9-005：目标版本低于该节点当前版本时拒绝（防误降级；有意降级请用 nodeRollback）
+			if node, err := h.repo.GetNodeByID(nodeID); err == nil && node != nil && node.Version.Valid {
+				if cur := strings.TrimSpace(node.Version.String); cur != "" && compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(cur, "v")) < 0 {
+					results[index] = upgradeResult{ID: nodeID, Success: false, Message: fmt.Sprintf("目标版本 %s 低于节点当前版本 %s，已拒绝（降级请用回滚功能）", version, cur)}
+					return
+				}
+			}
 
 			result, err := h.wsServer.SendCommand(nodeID, "UpgradeAgent", map[string]interface{}{
 				"version": version,

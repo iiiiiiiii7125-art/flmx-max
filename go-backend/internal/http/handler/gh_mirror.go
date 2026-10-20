@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,6 +36,42 @@ const (
 	ghMirrorLatest   = 10 * time.Minute
 	ghMirrorServeFor = 30 * time.Minute
 )
+
+// J-002：镜像代理是无鉴权的开放代理，文件可达 300MB、总缓存 2GB，
+// 不限流会被刷带宽/磁盘。按源 IP 做固定窗口限流（60 次/分钟，
+// 节点正常安装升级远用不满）；超限返回 429。
+var (
+	ghMirrorRateMu       sync.Mutex
+	ghMirrorRate         = make(map[string]*ghMirrorBucket)
+	ghMirrorRateMax      = 60
+	ghMirrorRateWindow   = time.Minute
+	ghMirrorRateMaxHosts = 10000
+)
+
+type ghMirrorBucket struct {
+	count     int
+	windowEnd time.Time
+}
+
+func ghMirrorAllow(ip string) bool {
+	now := time.Now()
+	ghMirrorRateMu.Lock()
+	defer ghMirrorRateMu.Unlock()
+	b, ok := ghMirrorRate[ip]
+	if !ok || now.After(b.windowEnd) {
+		if !ok && len(ghMirrorRate) >= ghMirrorRateMaxHosts {
+			// 极端情况下不无限增长 map：直接拒绝新 IP（fail-closed）。
+			return false
+		}
+		ghMirrorRate[ip] = &ghMirrorBucket{count: 1, windowEnd: now.Add(ghMirrorRateWindow)}
+		return true
+	}
+	if b.count >= ghMirrorRateMax {
+		return false
+	}
+	b.count++
+	return true
+}
 
 // ghMirrorRepos 是面板安装用到的仓库：自身 release（agent、install.sh）、
 // 内核，以及内核读取的数据文件。
@@ -169,6 +206,13 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+	// J-002：开放代理限流，防带宽/磁盘被刷。
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if !ghMirrorAllow(host) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 	}
 	up, err := parseGHMirrorPath(strings.TrimPrefix(r.URL.Path, ghMirrorPath), r.URL.RawQuery)
 	if err != nil {

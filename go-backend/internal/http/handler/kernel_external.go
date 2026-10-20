@@ -68,35 +68,11 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// H-15/R-005: 验证订阅 URL 不指向内网
-func validateSubscriptionURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("URL 解析失败: %v", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("仅允许 http/https 协议")
-	}
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("主机名为空")
-	}
-	// 解析 DNS（防 DNS 重绑定：解析后检查 IP）
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("DNS 解析失败: %v", err)
-	}
-	for _, ip := range ips {
-		if isPrivateIP(ip) {
-			return fmt.Errorf("H-15: 禁止访问内网地址: %s (%s)", host, ip.String())
-		}
-	}
-	// 明确拒绝云元数据地址
-	if host == "169.254.169.254" {
-		return fmt.Errorf("H-15: 禁止访问云元数据地址")
-	}
-	return nil
-}
+// IMP-005：原 validateSubscriptionURL 已删除。该函数是 H-15 时期的订阅 URL
+// 校验（DNS 预解析 + 私网判定），早已被 SecureFetch（secure_fetch.go，含逐跳
+// 重定向校验、拨号时重解析、元数据硬黑名单）完整取代，但未被生产路径调用，
+// 继续保留会误导维护者以为订阅抓取走的是这条通道。SSRF 回归测试见
+// secure_fetch_d17_test.go 与本文件的 isPrivateIP 测试。
 
 func isExternalInbound(row *model.NodeInbound) bool {
 	return row != nil && row.KernelID == 0
@@ -226,8 +202,10 @@ func isSubscriptionURL(text string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-// fetchSubscription downloads a subscription. The Mihomo user agent makes
-// most providers return a Clash profile, which carries every parameter.
+// fetchSubscription downloads a subscription. The user agent is
+// "flvx-panel/1.0" (see secure_fetch.go), not a Clash/Mihomo impersonation
+// (IMP-002: the old comment claiming a Mihomo UA was outdated; doc/guide/import.md
+// said the same and has been corrected).
 func fetchSubscription(ctx context.Context, rawURL string) (string, error) {
 	body, _, err := fetchSubscriptionInfo(ctx, rawURL)
 	return body, err
@@ -243,6 +221,12 @@ func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, 
 	defer cancel()
 	body, header, err := SecureFetchWithHeader(ctx, rawURL)
 	if err != nil {
+		// IMP-007：公网 http 拒绝错误改中文。SecureFetch 内部返回英文
+		// "public http not allowed (use https)"，此处在对外透出前翻译，
+		// 与中文 UI 保持一致。
+		if strings.Contains(err.Error(), "public http not allowed") {
+			return "", "", errors.New("公网 http 订阅地址被拒绝，请改用 https 地址")
+		}
 		return "", "", err
 	}
 	if len(body) > maxSubscriptionBytes {
@@ -348,6 +332,22 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 	row.Remark = strings.TrimSpace(req.Remark)
 	row.RelayOnly = boolToInt(req.RelayOnly)
 	row.UpdatedTime = time.Now().UnixMilli()
+	// IMP-004：修改地址后做去重校验。地址变更不经过导入的 seen 去重表，
+	// 之前可以直接改出与另一个导入节点相同的 host:port，违背"同一地址和
+	// 端口不会重复导入"的约束。
+	if rows, err := h.repo.ListNodeInbounds(); err == nil {
+		key := externalKey(row.Listen, row.Port)
+		for i := range rows {
+			other := &rows[i]
+			if other.ID == row.ID || !isExternalInbound(other) {
+				continue
+			}
+			if externalKey(other.Listen, other.Port) == key {
+				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在相同地址和端口的导入节点（%s），不能重复", key)))
+				return
+			}
+		}
+	}
 	if err := h.repo.SaveNodeInbound(row); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

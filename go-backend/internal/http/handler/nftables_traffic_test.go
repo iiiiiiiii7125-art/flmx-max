@@ -215,14 +215,19 @@ func TestBuildNftFlowUploadBatchScalesFlowAndPreservesRawTunnelTraffic(t *testin
 	if len(batch.flowDeltas) != 2 {
 		t.Fatalf("expected two flow deltas, got %#v", batch.flowDeltas)
 	}
-	if batch.flowDeltas[0].ForwardID != 20 || batch.flowDeltas[0].InFlow != 600 || batch.flowDeltas[0].OutFlow != 720 {
+	// O6-002（2026-10-20 修）：以下断言曾编码 M-001 移除前的乘数 bug（Flow 当乘数：
+	// InFlow=BytesIn*ratio*Flow=600/720、quota=1372）。新语义 Flow 为选择器（1=单向仅上传，
+	// 其他=双向）：Forward 20（ratio=2, Flow=3）→ InFlow=100*2=200、OutFlow=120*2=240；
+	// Forward 21（ratio=1.5, Flow=2）→ InFlow=int64(7*1.5)=10、OutFlow=int64(11*1.5)=16；
+	// quota 总计 440+26=466。
+	if batch.flowDeltas[0].ForwardID != 20 || batch.flowDeltas[0].InFlow != 200 || batch.flowDeltas[0].OutFlow != 240 {
 		t.Fatalf("unexpected first flow delta: %#v", batch.flowDeltas[0])
 	}
-	if batch.flowDeltas[1].ForwardID != 21 || batch.flowDeltas[1].InFlow != 20 || batch.flowDeltas[1].OutFlow != 32 {
+	if batch.flowDeltas[1].ForwardID != 21 || batch.flowDeltas[1].InFlow != 10 || batch.flowDeltas[1].OutFlow != 16 {
 		t.Fatalf("unexpected second flow delta: %#v", batch.flowDeltas[1])
 	}
-	if batch.quotaUsage[2] != 1372 {
-		t.Fatalf("expected quota usage 1372, got %d", batch.quotaUsage[2])
+	if batch.quotaUsage[2] != 466 {
+		t.Fatalf("expected quota usage 466, got %d", batch.quotaUsage[2])
 	}
 	if len(batch.policyTargets) != 1 || batch.policyTargets[0].UserID != 2 || batch.policyTargets[0].UserTunnelID != 10 {
 		t.Fatalf("expected deduped policy target, got %#v", batch.policyTargets)
@@ -384,6 +389,12 @@ func TestCollectNftablesNodeTrafficFirstBaselineSavesStateWithoutFlow(t *testing
 func TestCollectNftablesNodeTrafficGrowthAppliesFlowAndUpdatesState(t *testing.T) {
 	fixture := setupNftablesCollectionFixture(t)
 	h := fixture.handler
+	// O6-002/M-001：seedTunnelForNftables 建的隧道 Flow=1（单向=仅计上传），旧断言
+	// out_flow=600 是乘数语义残留。本测试意在验证采集→计费→状态全链路，把隧道改成
+	// Flow=2（双向）后 in/out 两个方向都被计入，覆盖不变。
+	if err := h.repo.DB().Model(&model.Tunnel{}).Where("name = ?", "nft-traffic-tunnel").Update("flow", 2).Error; err != nil {
+		t.Fatalf("update tunnel flow: %v", err)
+	}
 	manager := &fakeNftablesManager{}
 	h.nftablesManager = newSerializedNftManager(manager)
 	cfg := mustCollectionSSHConfig(t, h, fixture.nodeID)

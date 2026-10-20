@@ -196,7 +196,8 @@ func (h *Handler) accountNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 func (h *Handler) drainNftCountersBeforeReconcile(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) bool {
 	_, _, _, _, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
 	if err != nil {
-		log.Printf("nftables reconcile drain gap node_id=%d err=%v action=apply_continues_baseline_reset", nodeID, err)
+		// M-005：告警级 gap：删表重建前 drain 失败，本轮到重建之间的流量将漏计（计数器已知局限）
+		log.Printf("nftables reconcile drain gap node_id=%d err=%v action=apply_continues_baseline_reset ALERT=traffic_may_be_lost", nodeID, err)
 		return false
 	}
 	return true
@@ -377,6 +378,9 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 		}
 		oldBytes := uint64(old.Bytes)
 		if sample.Bytes < oldBytes {
+			// M-004/O6-003：已知局限——计数器重置（节点重启/规则重建）时，
+			// 上次采样到重置之间的流量无法回收，直接以新值更新基线、不计费（漏计）。
+			// 计数器方案天然无法感知重置前未采集的增量，无法完美解决，此处只更新基线。
 			stateInputs = append(stateInputs, stateInput)
 			continue
 		}
@@ -391,11 +395,15 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 		rawDeltaInt := int64(rawDelta)
 		if direction == runtimenft.CounterDirectionToTarget {
 			if delta.BytesIn > math.MaxInt64-rawDeltaInt {
+				// M-006：溢出保护触发，丢弃本次增量（极低频），记录以便排查
+				log.Printf("nftables overflow discard forward_id=%d direction=in dropped_bytes=%d", sample.ForwardID, rawDeltaInt)
 				continue
 			}
 			delta.BytesIn += rawDeltaInt
 		} else {
 			if delta.BytesOut > math.MaxInt64-rawDeltaInt {
+				// M-006：溢出保护触发，丢弃本次增量（极低频），记录以便排查
+				log.Printf("nftables overflow discard forward_id=%d direction=out dropped_bytes=%d", sample.ForwardID, rawDeltaInt)
 				continue
 			}
 			delta.BytesOut += rawDeltaInt
@@ -438,13 +446,22 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 			continue
 		}
 
+		// O6-005：TrafficRatio=0 会产生零计费（不拒绝，可能为有意免费配置），记录警告以便管理员发现误配置
+		if meta.TrafficRatio == 0 && (delta.BytesIn > 0 || delta.BytesOut > 0) {
+			log.Printf("nftables zero billing forward_id=%d traffic_bytes=%d zero_ratio_config_confirm_intended", delta.ForwardID, delta.BytesIn+delta.BytesOut)
+		}
+
 		raw := batch.forwardTraffic[delta.ForwardID]
 		if delta.BytesIn < 0 || delta.BytesOut < 0 || raw.bytesIn > math.MaxInt64-delta.BytesIn || raw.bytesOut > math.MaxInt64-delta.BytesOut {
+			// M-006：负值/溢出保护触发，丢弃本条增量（极低频），记录以便排查
+			log.Printf("nftables invalid delta discard forward_id=%d bytes_in=%d bytes_out=%d", delta.ForwardID, delta.BytesIn, delta.BytesOut)
 			continue
 		}
 
 		scaledIn, ok := scaleNftTrafficBytes(delta.BytesIn, meta.TrafficRatio)
 		if !ok {
+			// M-006：倍率缩放溢出（极低频），丢弃本条增量并记录
+			log.Printf("nftables scale overflow discard forward_id=%d bytes=%d ratio=%v", delta.ForwardID, delta.BytesIn, meta.TrafficRatio)
 			continue
 		}
 		// Flow=1 单向：只计上传（BytesIn）；Flow=2 双向：计上传+下载
@@ -458,6 +475,8 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 			var ok bool
 			scaledOut, ok = scaleNftTrafficBytes(delta.BytesOut, meta.TrafficRatio)
 			if !ok {
+				// M-006：倍率缩放溢出（极低频），丢弃本条增量并记录
+				log.Printf("nftables scale overflow discard forward_id=%d bytes=%d ratio=%v", delta.ForwardID, delta.BytesOut, meta.TrafficRatio)
 				continue
 			}
 			if scaledIn > math.MaxInt64-scaledOut {

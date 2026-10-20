@@ -32,14 +32,17 @@ const (
 	// 按用户名的第二道限流：对抗轮换源 IP 的分布式爆破，与 IP 桶独立。
 	// 阈值低于 IP 桶（30/10min < 10/min）；超限后指数退避，不做永久锁定，
 	// 防止攻击者用错误密码把正常用户长期锁死。
-	usernameRateLimitWindow       = 10 * time.Minute
-	usernameRateLimitMaxAttempts  = 30
-	usernameRateLimitMaxBuckets   = 10000
-	usernameBackoffBase           = time.Minute
-	usernameBackoffMax            = 30 * time.Minute
+	usernameRateLimitWindow      = 10 * time.Minute
+	usernameRateLimitMaxAttempts = 30
+	usernameRateLimitMaxBuckets  = 10000
+	usernameBackoffBase          = time.Minute
+	usernameBackoffMax           = 30 * time.Minute
 
 	maxXFFHeaderBytes = 4096
 	maxXFFEntries     = 64
+
+	// K-003: 用户名桶触发后的渐进式延迟上限。
+	loginProgressiveDelayMax = 5 * time.Second
 )
 
 // TrustedProxyHops 读取 FLVX_TRUSTED_PROXY_HOPS，默认 1。
@@ -88,10 +91,12 @@ func loginClientIP(r *http.Request) net.IP {
 	}
 	idx := len(entries) - hops
 	if idx < 0 {
-		// 链长 < 配置跳数：说明实际拓扑少于配置，可信条目不足。
-		// 取最左可用条目是次优但可用的选择，同时告警提示检查配置。
-		log.Printf("warning: XFF has %d entries but FLVX_TRUSTED_PROXY_HOPS=%d; using leftmost entry", len(entries), hops)
-		idx = 0
+		// K-004: 链长 < 配置跳数：实际拓扑少于配置，可信条目不足。
+		// 旧逻辑取最左条目（fail-open）：攻击者可控的 XFF 任意条目都可能被
+		// 当作客户端 IP，限流桶随之可任意伪造。改为 fail-closed：
+		// 不信任 XFF任何条目，回退 RemoteAddr，并告警提示检查配置。
+		log.Printf("warning: XFF has %d entries but FLVX_TRUSTED_PROXY_HOPS=%d; ignoring XFF (fail-closed), using RemoteAddr", len(entries), hops)
+		return remoteIP
 	}
 	if ip := parseIPLiteral(entries[idx]); ip != nil {
 		return ip
@@ -261,6 +266,46 @@ func (l *loginUsernameLimiter) recordAttempt(username string, now time.Time) (tr
 	return b.triggered
 }
 
+// K-003: violationsOf 返回该用户名的累计触发次数（用于渐进延迟与新触发判定）。
+func (l *loginUsernameLimiter) violationsOf(username string) int {
+	key := normalizeLoginUsername(username)
+	if key == "" {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.buckets[key]; ok {
+		return b.violations
+	}
+	return 0
+}
+
+// K-003: progressiveDelay 返回该用户名的渐进式登录延迟。
+// 旧实现用户名桶只是信号（收紧来源 IP 阈值），分布式 botnet 仍可获约
+// 3N 次/分钟 的总预算。触发后按累计触发次数增加延迟（1s→2s→4s，上限 5s），
+// 让慢速喷洒的每次尝试都付出时间成本。
+// 未触发返回 0；窗口重置不清空 violations，故长期攻击会停在 5s 档。
+func (l *loginUsernameLimiter) progressiveDelay(username string) time.Duration {
+	key := normalizeLoginUsername(username)
+	if key == "" {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	if !ok || !b.triggered {
+		return 0
+	}
+	d := time.Second
+	for i := 1; i < b.violations && d < loginProgressiveDelayMax; i++ {
+		d *= 2
+	}
+	if d > loginProgressiveDelayMax {
+		d = loginProgressiveDelayMax
+	}
+	return d
+}
+
 // noteSuccess 登录成功后清除该用户名的限流状态（含退避），
 // 防止正常用户被历史失败计数误伤。
 func (l *loginUsernameLimiter) noteSuccess(username string) {
@@ -355,6 +400,7 @@ func isIPTightened(clientIP string) bool {
 // 永不硬拒：返回 triggered 信号，由调用方决定升级验证强度。
 // 错误响应与 IP 限流完全一致，不因用户名是否存在而变化（防枚举）。
 func (h *Handler) checkLoginUsernameRateLimit(username string, clientIP string, captchaEnabled bool) (triggered bool) {
+	violationsBefore := globalLoginUsernameLimiter.violationsOf(username)
 	triggered = globalLoginUsernameLimiter.recordAttempt(username, time.Now())
 	if triggered {
 		// D11-D13.2: 验证码未启用时，收紧该来源 IP 阈值 + 告警日志。
@@ -363,6 +409,15 @@ func (h *Handler) checkLoginUsernameRateLimit(username string, clientIP string, 
 			h.tightenIPRateLimit(clientIP)
 		}
 		log.Printf("login username bucket triggered user=%q ip=%s captcha_enabled=%v", username, clientIP, captchaEnabled)
+		// K-003：本次调用刚触发阈值（violations 递增）时施加渐进式延迟，
+		// 延迟随累计触发次数增长（1s→2s→4s，上限 5s）。
+		// 只在新触发点延迟：避免已触发状态下每次尝试都 sleep，
+		// 同时让分布式慢速喷洒在每个窗口的触发点付出时间成本。
+		if globalLoginUsernameLimiter.violationsOf(username) > violationsBefore {
+			if delay := globalLoginUsernameLimiter.progressiveDelay(username); delay > 0 {
+				time.Sleep(delay)
+			}
+		}
 	}
 	// D11-D13.3: 绝不返回"账号已锁定"，无 429。
 	return triggered

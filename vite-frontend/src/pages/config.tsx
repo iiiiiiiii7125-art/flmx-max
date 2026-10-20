@@ -53,6 +53,7 @@ import {
 } from "@/config/tunnel-quality";
 import {
   type UpdateReleaseChannel,
+  compareVersions,
   getUpdateReleaseChannel,
 } from "@/utils/version-update";
 import {
@@ -1962,6 +1963,23 @@ export default function ConfigPage() {
                     请确认已经允许面板管理容器与宿主机 Docker
                     交互，并且可以接受升级期间的临时不可用。
                   </p>
+                  {/* O9-006：目标版本低于当前版本时显示降级警告。
+                      后端（O9-001）已拒绝降级；前端此处提前提示，避免白跑一次。 */}
+                  {systemUpgradeSelectedVersion &&
+                    systemUpgradeInfo?.currentVersion &&
+                    compareVersions(
+                      systemUpgradeSelectedVersion,
+                      systemUpgradeInfo.currentVersion,
+                    ) < 0 && (
+                      <div className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950/30 dark:text-danger-200">
+                        <p className="text-xs font-medium">
+                          降级警告：目标版本（
+                          {systemUpgradeSelectedVersion}）低于当前版本（
+                          {systemUpgradeInfo.currentVersion}
+                          ），后端将拒绝执行。请选择更高版本或留空使用最新版本。
+                        </p>
+                      </div>
+                    )}
                   <div className="space-y-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950/30 dark:text-warning-200">
                     <p className="text-xs font-medium">升级前请确认</p>
                     <ul className="list-disc space-y-1 pl-4 text-xs">

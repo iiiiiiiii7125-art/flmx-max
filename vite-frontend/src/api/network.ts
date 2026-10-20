@@ -1,4 +1,5 @@
 import axios, { AxiosResponse } from "axios";
+import toast from "react-hot-toast";
 
 import {
   extractApiErrorMessage,
@@ -62,6 +63,14 @@ function handleTokenExpired() {
   }
 }
 
+// N-003：403（权限不足）全局处理。业务信封 code=403 与 HTTP 403 均覆盖。
+// toast 只提示一次（同一请求只会触发一次拦截）。
+function handleForbidden(response: ApiResponse<unknown> | null, httpStatus?: number) {
+  if (response?.code === 403 || httpStatus === 403) {
+    toast.error("权限不足");
+  }
+}
+
 // 检查响应是否为token失效
 function isTokenExpired(response: ApiResponse<unknown>) {
   return (
@@ -101,6 +110,9 @@ const Network = {
             handleTokenExpired();
           }
 
+          // N-003：业务信封 403 全局提示
+          handleForbidden(response.data);
+
           resolve(response.data);
         })
         .catch(function (error: unknown) {
@@ -117,6 +129,11 @@ const Network = {
             });
 
             return;
+          }
+
+          // N-003：HTTP 403 全局提示
+          if (axios.isAxiosError(error) && error.response?.status === 403) {
+            handleForbidden(null, 403);
           }
 
           resolve({
@@ -155,6 +172,9 @@ const Network = {
             handleTokenExpired();
           }
 
+          // N-003：业务信封 403 全局提示
+          handleForbidden(response.data);
+
           resolve(response.data);
         })
         .catch(function (error: unknown) {
@@ -171,6 +191,11 @@ const Network = {
             });
 
             return;
+          }
+
+          // N-003：HTTP 403 全局提示
+          if (axios.isAxiosError(error) && error.response?.status === 403) {
+            handleForbidden(null, 403);
           }
 
           resolve({

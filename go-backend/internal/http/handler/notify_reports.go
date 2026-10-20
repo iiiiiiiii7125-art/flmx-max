@@ -102,8 +102,10 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			default:
 				h.notifier.clearAlerts(flowKey)
 			}
-			if u.ExpTime > 0 && time.UnixMilli(u.ExpTime).Sub(now) <= window {
-				if h.notifier.alertOnce(fmt.Sprintf("exp:%d:%d", u.ID, u.ExpTime)) {
+			if u.ExpTime > 0 {
+				// O8-004：已过期很久的用户跳过，避免面板重启后重报历史过期记录。
+				left := time.UnixMilli(u.ExpTime).Sub(now)
+				if left <= window && left >= -notifyLongExpired && h.notifier.alertOnce(fmt.Sprintf("exp:%d:%d", u.ID, u.ExpTime)) {
 					text, expired := expiryText(u.ExpTime, now)
 					title := "用户即将到期"
 					if expired {
@@ -119,7 +121,9 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			if isShare(&s) && s.Enabled == 1 {
 				h.checkSubQuota(&s)
 			}
-			if !isShare(&s) || s.Enabled != 1 || s.ExpireTime == 0 || time.UnixMilli(s.ExpireTime).Sub(now) > window {
+			// O8-004：已过期很久的订阅跳过，避免面板重启后重报历史过期记录。
+			subLeft := time.UnixMilli(s.ExpireTime).Sub(now)
+			if !isShare(&s) || s.Enabled != 1 || s.ExpireTime == 0 || subLeft > window || subLeft < -notifyLongExpired {
 				continue
 			}
 			if !h.notifier.alertOnce(fmt.Sprintf("sub:%d:%d", s.ID, s.ExpireTime)) {
@@ -184,8 +188,12 @@ func (h *Handler) maybeDailyReport(now time.Time) {
 	if cfg, err := h.repo.GetConfigByName(notifyConfigDailyLast); err == nil && cfg != nil && cfg.Value == today {
 		return
 	}
-	_ = h.repo.UpsertConfig(notifyConfigDailyLast, today, now.UnixMilli())
-	h.notify(notifyEventDailyReport, "每日汇总 "+today, h.dailyReportText(now))
+	// O8-002：先同步发送成功、再落盘"今日已发"标记。旧逻辑先落盘后异步发送，
+	// 发送失败当天便永不补发，日报静默丢失。现在失败时不落盘，下一个 tick
+	// （同小时内）会重试补发。
+	if h.notifySync(notifyEventDailyReport, "每日汇总 "+today, h.dailyReportText(now)) {
+		_ = h.repo.UpsertConfig(notifyConfigDailyLast, today, now.UnixMilli())
+	}
 }
 
 func (h *Handler) dailyReportText(now time.Time) string {
@@ -260,10 +268,20 @@ func (h *Handler) dailyReportText(now time.Time) string {
 // traffic limits and the daily summary.
 func (h *Handler) runNotifyLoop(ctx context.Context) {
 	defer h.jobsWG.Done()
+	// O8-001：启动后先等一个离线宽限期让 agent 完成重连，再扫描仍离线的节点
+	// 并补发一次通知（重启前已掉线的节点否则永不告警）。
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(nodeOfflineGrace):
+	}
+	h.checkStartupOfflineNodes()
 	ticker := time.NewTicker(notifyCheckInterval)
 	defer ticker.Stop()
 	for {
 		now := time.Now()
+		// O8-003：每轮兜底清理已删除节点的通知状态（删除入口未调用 forgetNode 时）。
+		h.pruneStaleNodeAlerts()
 		h.checkNodeExpiry(now)
 		h.checkUserReminders(now)
 		h.maybeDailyReport(now)

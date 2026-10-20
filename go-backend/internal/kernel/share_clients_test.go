@@ -40,7 +40,7 @@ func TestLoonList(t *testing.T) {
 	pub := eps[0].Inbound.Security.RealityPublicKey
 	sid := eps[0].Inbound.Security.RealityShortIDs[0]
 	for _, want := range []string{
-		`美国 落地=vless,9.9.9.9,443,"` + eps[0].Inbound.Settings.UUID + `",transport=tcp,over-tls=true,flow=xtls-rprx-vision,sni=www.microsoft.com,public-key="` + pub + `",short-id=` + sid + `,udp=true`,
+		`美国 落地=vless,9.9.9.9,443,"` + eps[0].Inbound.Settings.UUID + `",transport=tcp,over-tls=true,flow=xtls-rprx-vision,sni=www.amd.com,public-key="` + pub + `",short-id=` + sid + `,udp=true`,
 		`香港 中转 1=trojan,8.8.8.8,8443,"` + eps[1].Inbound.Settings.Password + `",transport=ws,path=/ws,skip-cert-verify=true,tls-name=b.example.com,udp=true`,
 		`香港 中转 2=Hysteria2,8.8.4.4,4443,"` + eps[2].Inbound.Settings.Password + `",skip-cert-verify=true,tls-name=www.bing.com,udp=true`,
 		`机场 ss=shadowsocks,5.6.7.8,8388,aes-128-gcm,"pw",udp=true`,
@@ -59,7 +59,7 @@ func TestQXList(t *testing.T) {
 	body, _, _ := Subscription(FormatQX, eps, SubOptions{})
 	pub := eps[0].Inbound.Security.RealityPublicKey
 	for _, want := range []string{
-		"vless=9.9.9.9:443, method=none, password=" + eps[0].Inbound.Settings.UUID + ", obfs=over-tls, obfs-host=www.microsoft.com, tls-verification=true, reality-base64-pubkey=" + pub,
+		"vless=9.9.9.9:443, method=none, password=" + eps[0].Inbound.Settings.UUID + ", obfs=over-tls, obfs-host=www.amd.com, tls-verification=true, reality-base64-pubkey=" + pub,
 		"vless-flow=xtls-rprx-vision, udp-relay=true, tag=美国 落地\n",
 		"trojan=8.8.8.8:8443, password=" + eps[1].Inbound.Settings.Password + ", obfs=wss, obfs-uri=/ws, obfs-host=b.example.com, tls-verification=false, tag=香港 中转 1\n",
 		"shadowsocks=5.6.7.8:8388, method=aes-128-gcm, password=pw, udp-relay=true, tag=机场 ss\n",

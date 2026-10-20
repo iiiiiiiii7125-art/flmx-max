@@ -73,6 +73,35 @@ func (r *Repository) CreateUser(username, pwdHash string, roleID int, expTime, f
 	return user.ID, nil
 }
 
+// CreateUserTx 是 O5-004 的事务版：与 CreateUser 相同的写入，但跑在调用方事务内，
+// 让 CreateUser + 配额配置 + 分组三步同成同败。
+func (r *Repository) CreateUserTx(tx *gorm.DB, username, pwdHash string, roleID int, expTime, flow, flowResetTime int64, num, status, maxConn int, now int64, flowMiB ...int64) (int64, error) {
+	if tx == nil {
+		return 0, errors.New("database unavailable")
+	}
+	user := model.User{
+		User:              username,
+		Pwd:               pwdHash,
+		RoleID:            roleID,
+		ExpTime:           expTime,
+		Flow:              flow,
+		FlowMiB:           optionalFlowMiB(flowMiB),
+		InFlow:            0,
+		OutFlow:           0,
+		FlowResetTime:     flowResetTime,
+		Num:               num,
+		MaxConn:           maxConn,
+		CreatedTime:       now,
+		UpdatedTime:       sql.NullInt64{Int64: now, Valid: true},
+		Status:            status,
+		PasswordChangedAt: now,
+	}
+	if err := tx.Create(&user).Error; err != nil {
+		return 0, mapUniqueViolation(err, "username")
+	}
+	return user.ID, nil
+}
+
 func (r *Repository) GetUserRoleID(userID int64) (int, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
@@ -262,9 +291,9 @@ func (r *Repository) GetUserDefaultsForTunnel(userID int64) (flow int64, num int
 	return user.Flow, user.Num, user.ExpTime, user.FlowResetTime, nil
 }
 
-func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serverIPV6, port, interfaceName, version, remark, expiryTime, renewalCycle interface{}, httpFlag, tlsFlag, socksFlag int, now int64, status int, tcpAddr, udpAddr string, inx, isRemote int, remoteURL, remoteToken, remoteConfig, extraIPs interface{}, forwardMode string) error {
+func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serverIPV6, port, interfaceName, version, remark, expiryTime, renewalCycle interface{}, httpFlag, tlsFlag, socksFlag int, now int64, status int, tcpAddr, udpAddr string, inx, isRemote int, remoteURL, remoteToken, remoteConfig, extraIPs interface{}, forwardMode string) (int64, error) {
 	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
+		return 0, errors.New("repository not initialized")
 	}
 	node := model.Node{
 		Name:          name,
@@ -294,7 +323,12 @@ func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serve
 		RemoteToken:   nullStringFromInterface(remoteToken),
 		RemoteConfig:  nullStringFromInterface(remoteConfig),
 	}
-	return r.db.Create(&node).Error
+	// O1-002：Create 返回的 node.ID 即新节点 ID，避免按 name+serverIP 反查
+	//（并发创建同名同 IP 节点时可能查到错误的节点）。
+	if err := r.db.Create(&node).Error; err != nil {
+		return 0, err
+	}
+	return int64(node.ID), nil
 }
 
 func (r *Repository) GetNodeStatusFields(nodeID int64) (status, httpFlag, tlsFlag, socksFlag int, err error) {
@@ -951,7 +985,27 @@ func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	// O2-004：加 per-node 端口分配锁（与 CreateForwardTx 的 R5-B4 模式一致）。
+	// 旧逻辑未加锁，并发更新端口时靠唯一索引兜底，错误不友好。
+	nodeIDs := make([]int64, 0, len(entries))
+	seen := make(map[int64]struct{})
+	for _, e := range entries {
+		if _, ok := seen[e.NodeID]; !ok {
+			seen[e.NodeID] = struct{}{}
+			nodeIDs = append(nodeIDs, e.NodeID)
+		}
+	}
+	sort.Slice(nodeIDs, func(i, j int) bool { return nodeIDs[i] < nodeIDs[j] })
+	locks := make([]*sync.Mutex, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		locks = append(locks, AcquirePortAllocLock(nodeID))
+	}
+	defer func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			ReleasePortAllocLock(locks[i])
+		}
+	}()
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
@@ -969,6 +1023,11 @@ func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
 		}
 		return tx.Create(&rows).Error
 	})
+	if err != nil {
+		// O2-004：唯一冲突翻译为中文友好错误（与 CreateForwardTx 的 R5-B4 C-002 一致）。
+		return mapUniqueViolation(err, "port")
+	}
+	return nil
 }
 
 func (r *Repository) UpdateForwardPortBindIP(forwardID, nodeID int64, port int, inIP string) error {
@@ -1732,6 +1791,27 @@ func (r *Repository) AddUserToGroups(userID int64, groupIDs []int64, now int64) 
 		return nil
 	}
 	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
+}
+
+// AddUserToGroupsTx 是 O5-004 的事务版：跑在调用方事务内（与 CreateUserTx 同 tx）。
+func (r *Repository) AddUserToGroupsTx(tx *gorm.DB, userID int64, groupIDs []int64, now int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	rows := make([]model.UserGroupUser, 0, len(groupIDs))
+	for _, gid := range groupIDs {
+		if gid <= 0 {
+			continue
+		}
+		rows = append(rows, model.UserGroupUser{UserGroupID: gid, UserID: userID, CreatedTime: now})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
 }
 
 func (r *Repository) ReplaceUserGroupsByUserID(userID int64, newGroupIDs []int64, now int64) (affectedGroupIDs []int64, err error) {

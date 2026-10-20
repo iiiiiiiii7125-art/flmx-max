@@ -46,6 +46,11 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("用户名或密码不能为空"))
 		return
 	}
+	// O5-002：用户名长度校验（DB 列 varchar(100)，超出会让 PG 报 500、SQLite 静默存入）
+	if n := len([]rune(username)); n < 1 || n > 100 {
+		response.WriteJSON(w, response.ErrDefault("用户名长度必须为 1-100 个字符"))
+		return
+	}
 	if len([]rune(pwd)) < 6 {
 		response.WriteJSON(w, response.ErrDefault("密码至少6位"))
 		return
@@ -62,14 +67,29 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := asInt(req["status"], 1)
+	// O5-007：status 枚举校验（仅 0/1 有意义）
+	if status != 0 && status != 1 {
+		response.WriteJSON(w, response.ErrDefault("状态值无效，仅允许 0 或 1"))
+		return
+	}
 	flow, flowMiB, flowErr := parseTrafficLimit(req, 100)
 	if flowErr != nil {
 		response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
 		return
 	}
 	num := asInt(req["num"], 10)
+	// O5-005：num（设备数限制）拒绝负值
+	if num < 0 {
+		response.WriteJSON(w, response.ErrDefault("设备数限制不能小于0"))
+		return
+	}
 	expTime := asInt64(req["expTime"], time.Now().Add(365*24*time.Hour).UnixMilli())
 	flowResetTime := asInt64(req["flowResetTime"], 1)
+	// O5-008：flowResetTime 有效值校验：0=不自动重置，1-31=每月几号重置
+	if flowResetTime < 0 || flowResetTime > 31 {
+		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
+		return
+	}
 	dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
 	monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
 	if dailyQuotaGB < 0 || monthlyQuotaGB < 0 {
@@ -79,41 +99,52 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 	roleID := 1
 	now := time.Now().UnixMilli()
 	maxConn := asInt(req["maxConn"], 0)
+	// O5-006：maxConn 拒绝负值
+	if maxConn < 0 {
+		response.WriteJSON(w, response.ErrDefault("连接数限制不能小于0"))
+		return
+	}
 
 	hashedPassword, err := security.HashPassword(pwd)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	userID, err := h.repo.CreateUser(username, hashedPassword, roleID, expTime, flow, flowResetTime, num, status, maxConn, now, flowMiB)
+
+	// O5-004：CreateUser + 配额配置 + 分组三步包在同一个事务里，任一步失败整体回滚。
+	// 旧逻辑三步各自提交，后续失败会留下半成品账号（重试时用户名已被占用）。
+	groupIDs := asInt64Slice(req["groupIds"])
+	tx := h.repo.BeginTx()
+	if tx == nil || tx.Error != nil {
+		response.WriteJSON(w, response.Err(-2, "database unavailable"))
+		return
+	}
+	defer func() { tx.Rollback() }()
+	userID, err := h.repo.CreateUserTx(tx, username, hashedPassword, roleID, expTime, flow, flowResetTime, num, status, maxConn, now, flowMiB)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if dailyQuotaGB > 0 || monthlyQuotaGB > 0 {
-		tx := h.repo.BeginTx()
-		if tx == nil || tx.Error != nil {
-			response.WriteJSON(w, response.Err(-2, "database unavailable"))
-			return
-		}
-		defer func() { tx.Rollback() }()
 		if err := h.repo.SaveUserQuotaConfigTx(tx, userID, dailyQuotaGB, monthlyQuotaGB, now); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
-		if err := tx.Commit().Error; err != nil {
+	}
+	if len(groupIDs) > 0 {
+		if err := h.repo.AddUserToGroupsTx(tx, userID, groupIDs, now); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
 	}
+	if err := tx.Commit().Error; err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 
-	groupIDs := asInt64Slice(req["groupIds"])
-	if len(groupIDs) > 0 {
-		if addErr := h.repo.AddUserToGroups(userID, groupIDs, now); addErr == nil {
-			for _, gid := range groupIDs {
-				_ = h.syncPermissionsByUserGroup(gid)
-			}
-		}
+	// 分组父权限同步是提交后的副作用，不纳入事务。
+	for _, gid := range groupIDs {
+		_ = h.syncPermissionsByUserGroup(gid)
 	}
 
 	response.WriteJSON(w, response.OKEmpty())
@@ -137,6 +168,11 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	username := asString(req["user"])
 	if username == "" {
 		response.WriteJSON(w, response.ErrDefault("用户名不能为空"))
+		return
+	}
+	// O5-002：用户名长度校验（1-100），语义同 userCreate
+	if n := len([]rune(username)); n < 1 || n > 100 {
+		response.WriteJSON(w, response.ErrDefault("用户名长度必须为 1-100 个字符"))
 		return
 	}
 
@@ -184,13 +220,33 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	num := asInt(req["num"], 10)
+	// O5-005：num 拒绝负值
+	if num < 0 {
+		response.WriteJSON(w, response.ErrDefault("设备数限制不能小于0"))
+		return
+	}
 	expTime := asInt64(req["expTime"], time.Now().Add(365*24*time.Hour).UnixMilli())
 	flowResetTime := asInt64(req["flowResetTime"], 1)
+	// O5-008：flowResetTime 有效值校验：0=不自动重置，1-31=每月几号重置
+	if flowResetTime < 0 || flowResetTime > 31 {
+		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
+		return
+	}
 	status := asInt(req["status"], 1)
+	// O5-007：status 枚举校验（仅 0/1）
+	if status != 0 && status != 1 {
+		response.WriteJSON(w, response.ErrDefault("状态值无效，仅允许 0 或 1"))
+		return
+	}
 	_, hasDailyQuota := req["dailyQuotaGB"]
 	_, hasMonthlyQuota := req["monthlyQuotaGB"]
 	now := time.Now().UnixMilli()
 	maxConn := asInt(req["maxConn"], 0)
+	// O5-006：maxConn 拒绝负值
+	if maxConn < 0 {
+		response.WriteJSON(w, response.ErrDefault("连接数限制不能小于0"))
+		return
+	}
 
 	pwd := asString(req["pwd"])
 	if strings.TrimSpace(pwd) == "" {
@@ -364,7 +420,8 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if forwardMode == "nftables" {
 		status = 1
 	}
-	if err := h.repo.CreateNode(
+	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
+	nodeID, err := h.repo.CreateNode(
 		name,
 		randomToken(16),
 		serverIP,
@@ -390,11 +447,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		nullableText(asString(req["remoteConfig"])),
 		nullableText(asString(req["extraIPs"])),
 		forwardMode,
-	); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	nodeID, err := h.findCreatedNodeID(name, serverIP)
+	)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -490,29 +543,6 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) findCreatedNodeID(name, serverIP string) (int64, error) {
-	if h == nil || h.repo == nil {
-		return 0, errors.New("handler not initialized")
-	}
-	nodes, err := h.repo.ListNodes()
-	if err != nil {
-		return 0, err
-	}
-	for i := len(nodes) - 1; i >= 0; i-- {
-		item := nodes[i]
-		if asString(item["name"]) != name {
-			continue
-		}
-		if asString(item["serverIp"]) != serverIP {
-			continue
-		}
-		if nodeID := asInt64(item["id"], 0); nodeID > 0 {
-			return nodeID, nil
-		}
-	}
-	return 0, errors.New("节点创建成功，但未能查询到节点记录")
 }
 
 func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{}, forwardMode string, now int64, preserveSecrets bool) error {
@@ -1812,6 +1842,22 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if ids == nil {
 		return
 	}
+	// O3-003：批量删除同样收集受影响的入站 ID（与 tunnelDelete 的 O3-001 同逻辑），
+	// 删除完成后统一刷新白名单，避免残留已删中转机 IP。
+	seenInbound := make(map[int64]struct{})
+	for _, id := range ids {
+		if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
+			if rels, err := h.repo.ListNodeInboundRelays(); err == nil {
+				for _, fwd := range forwards {
+					for _, rel := range rels {
+						if rel.ForwardID == fwd.ID {
+							seenInbound[rel.InboundID] = struct{}{}
+						}
+					}
+				}
+			}
+		}
+	}
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
@@ -1834,6 +1880,10 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 		} else {
 			success++
 		}
+	}
+	// O3-003：删除后刷新所有受影响入站的白名单。
+	for inboundID := range seenInbound {
+		h.refreshInboundWhitelist(inboundID)
 	}
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
 }

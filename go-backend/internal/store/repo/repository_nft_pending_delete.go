@@ -204,10 +204,15 @@ func (r *Repository) DeleteNftPendingDelete(forwardID int64) error {
 
 // ForwardPortConflict describes one forward occupying a (node_id, port).
 // R5-B3 补充 B: returned inside the caller's tx — never open a second query.
+//
+// O2-003: chain_tunnel 同样占用节点端口。命中 chain_tunnel 时 ForwardID 为
+// 对应链式记录的 ID，Source 为 "chain_tunnel"；命中 forward_port 时 Source
+// 为 "forward"。
 type ForwardPortConflict struct {
 	ForwardID int64
 	Name      string
 	Status    int
+	Source    string
 }
 
 // FindOtherForwardOnNodePort is the non-tx wrapper. Safe only when the caller
@@ -246,8 +251,30 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 	if err != nil {
 		return nil, err
 	}
-	if row.ForwardID == 0 {
+	if row.ForwardID != 0 {
+		return &ForwardPortConflict{ForwardID: row.ForwardID, Name: row.Name, Status: row.Status, Source: "forward"}, nil
+	}
+
+	// O2-003：chain_tunnel 也有 idx_chain_tunnel_node_port 唯一索引，同样占用节点端口。
+	// 预检遗漏它会导致跨表端口冲突漏检。chain_tunnel 的 Port 是 NullInt64，
+	// 只有 port > 0 才真实占用监听端口（GetUsedPortsOnNodeAsMap 同样语义）。
+	var ct struct {
+		ID       int64
+		TunnelID int64
+	}
+	err = tx.Model(&model.ChainTunnel{}).
+		Select("id, tunnel_id").
+		Where("node_id = ? AND port = ?", nodeID, port).
+		Order("id ASC").
+		Limit(1).
+		Scan(&ct).Error
+	if err != nil {
+		return nil, err
+	}
+	if ct.ID == 0 {
 		return nil, nil
 	}
-	return &ForwardPortConflict{ForwardID: row.ForwardID, Name: row.Name, Status: row.Status}, nil
+	var tunnelName string
+	_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
+	return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: "chain_tunnel"}, nil
 }

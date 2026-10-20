@@ -28,22 +28,22 @@ var subSyncMu sync.Mutex
 
 // subPipeline is the JSON form of kernel.SubOptions stored per subscription.
 type subPipeline struct {
-	Lines            string   `json:"lines"`
-	Regions          []string `json:"regions"`
-	Protocols        []string `json:"protocols"`
-	Include          string   `json:"include"`
-	Exclude          string   `json:"exclude"`
-	Rename           string   `json:"rename"`
-	AddFlag          bool     `json:"addFlag"`
-	Prefix           string   `json:"prefix"`
-	Dedupe           bool     `json:"dedupe"`
-	Sort             string   `json:"sort"`
-	RegionGroups     bool     `json:"regionGroups"`
-	ChainLanding     string   `json:"chainLanding"`
-	ChainRelay       string   `json:"chainRelay"`
-	Script           string   `json:"script"`
-	Rules            bool     `json:"rules"`
-	RuleGroups       []string `json:"ruleGroups"`
+	Lines             string   `json:"lines"`
+	Regions           []string `json:"regions"`
+	Protocols         []string `json:"protocols"`
+	Include           string   `json:"include"`
+	Exclude           string   `json:"exclude"`
+	Rename            string   `json:"rename"`
+	AddFlag           bool     `json:"addFlag"`
+	Prefix            string   `json:"prefix"`
+	Dedupe            bool     `json:"dedupe"`
+	Sort              string   `json:"sort"`
+	RegionGroups      bool     `json:"regionGroups"`
+	ChainLanding      string   `json:"chainLanding"`
+	ChainRelay        string   `json:"chainRelay"`
+	Script            string   `json:"script"`
+	Rules             bool     `json:"rules"`
+	RuleGroups        []string `json:"ruleGroups"`
 	ChainLandingNames []string `json:"chainLandingNames"`
 	ChainRelayNames   []string `json:"chainRelayNames"`
 }
@@ -86,6 +86,9 @@ func (p *subPipeline) normalize() error {
 	if p.RuleGroups == nil {
 		p.RuleGroups = []string{}
 	}
+	// O4-005/H-003：保存时过滤非法规则组 key（此前只在渲染侧 fail-safe，
+	// 非法值会原样落库）。NormalizeRuleGroups 只保留已知 key 并按展示顺序排列。
+	p.RuleGroups = kernel.NormalizeRuleGroups(p.RuleGroups)
 	if p.ChainLandingNames == nil {
 		p.ChainLandingNames = []string{}
 	}

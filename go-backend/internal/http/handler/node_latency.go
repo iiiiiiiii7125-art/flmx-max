@@ -27,6 +27,8 @@ const (
 	latencyPingCount        = 4
 	latencyPingTimeoutMS    = 2000
 	latencyParallel         = 16
+	// O1-004/J-003：空 IDs 全量探测时收敛上限，防止大规模节点下无确认的出站风暴
+	maxProbeAllNodes = 50
 )
 
 // latencyTarget is one reference point, e.g. a province's carrier CDN node.
@@ -279,7 +281,15 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 			}(nodeID, i, t)
 		}
 	}
-	wg.Wait()
+	// L-002：ctx 取消后不等在途探测（单个 TcpPing 最长约 14s），直接返回 ctx 错误；
+	// 在途 goroutine 各自写独立 slot，调用方不再读取 points，无数据竞争
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	now := time.Now().UnixMilli()
 	results := make(map[int64]externalProbe, len(points))
 	for nodeID, list := range points {
@@ -291,6 +301,8 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 
 // latencyProbe summarizes a node's points: OK when any point answered,
 // with the worst answering point's latency.
+// O1-006/L-007：此处刻意取「最差（最大）延迟」而非平均值——节点卡片显示的延迟代表
+// 到最远测试点的上界，语义为保守估计；勿改为平均值（会掩盖个别测试点的高延迟）。
 func latencyProbe(points []latencyPoint, checkedAt int64) externalProbe {
 	p := externalProbe{CheckedAt: checkedAt, Points: points}
 	for _, pt := range points {
@@ -448,6 +460,30 @@ func (h *Handler) nodeLatencyTargetsSet(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// J-004：ids 数组长度上限，防止超大批量请求放大 DB/探测负载
+	const maxLatencyTargetSetIDs = 200
+	if len(req.IDs) > maxLatencyTargetSetIDs {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("一次最多设置 %d 个节点的测试点", maxLatencyTargetSetIDs)))
+		return
+	}
+	// O1-005/L-008：验证节点 ID 存在性，避免对不存在的节点静默写入/探测无响应
+	{
+		existing, err := h.repo.ListMonitorNodes()
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		exists := make(map[int64]bool, len(existing))
+		for _, n := range existing {
+			exists[n.ID] = true
+		}
+		for _, id := range req.IDs {
+			if !exists[id] {
+				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点不存在：%d", id)))
+				return
+			}
+		}
+	}
 	value := ""
 	if req.Custom {
 		pool := h.latencyPool()
@@ -525,7 +561,27 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("还没有设置延迟测试点，请到网站配置添加"))
 		return
 	}
-	results, err := h.probeNodeLatency(r.Context(), req.IDs)
+	ids := req.IDs
+	truncated := false
+	if len(ids) == 0 {
+		// O1-004/J-003：空 IDs 收敛为前 50 个在线节点，避免全量出站风暴；
+		// 显式传 IDs 也使缓存按合并而非整体替换更新（probeNodeLatency: len(ids)==0 时 replace）
+		nodes, err := h.repo.ListMonitorNodes()
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		for _, n := range nodes {
+			if n.Status == 1 {
+				ids = append(ids, n.ID)
+				if len(ids) >= maxProbeAllNodes {
+					truncated = true
+					break
+				}
+			}
+		}
+	}
+	results, err := h.probeNodeLatency(r.Context(), ids)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -533,6 +589,15 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 	out := make(map[string]externalProbe, len(results))
 	for id, p := range results {
 		out[strconv.FormatInt(id, 10)] = h.withRoutes(id, p)
+	}
+	if truncated {
+		response.WriteJSON(w, response.R{
+			Code: 0,
+			Msg:  fmt.Sprintf("节点较多，本次仅探测前 %d 个在线节点，剩余节点将由后台任务轮询", maxProbeAllNodes),
+			TS:   time.Now().UnixMilli(),
+			Data: out,
+		})
+		return
 	}
 	response.WriteJSON(w, response.OK(out))
 }

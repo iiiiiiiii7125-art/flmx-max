@@ -146,7 +146,7 @@ func TestImportIgnoresSensitiveConfigs(t *testing.T) {
 	seedConfig(t, r, "machine_fingerprint", "fingerprint-before")
 	seedConfig(t, r, "cloudflare_secret_key", "cloudflare-before")
 
-	backup := &model.BackupData{Configs: map[string]string{
+	backup := &model.BackupData{Version: "1.0", Configs: map[string]string{
 		"app_name":              "after",
 		"jwt_secret":            "jwt-after",
 		"license_key":           "license-after",

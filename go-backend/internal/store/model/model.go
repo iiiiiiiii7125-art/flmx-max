@@ -455,6 +455,10 @@ type BackupData struct {
 	Permissions  []PermissionBackup  `json:"permissions,omitempty"`
 	Configs      map[string]string   `json:"configs,omitempty"`
 	UserInbounds []UserInboundBackup `json:"userInbounds,omitempty"`
+	// O7-007：announcement 整表备份（公告丢失修复）
+	Announcements []AnnouncementBackup `json:"announcements,omitempty"`
+	// O7-008：monitor_permission 整表备份（监控权限丢失修复）
+	MonitorPermissions []MonitorPermissionBackup `json:"monitorPermissions,omitempty"`
 	// Inbounds carries node kernels, their inbounds (imported nodes too),
 	// relay links and traffic counter baselines; restored as one unit.
 	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
@@ -604,6 +608,22 @@ type UserInboundBackup struct {
 	RelayID   int64 `json:"relayId"`
 }
 
+// AnnouncementBackup 是 O7-007 补齐的公告备份结构（字段对照 model.Announcement）。
+type AnnouncementBackup struct {
+	ID          int64 `json:"id"`
+	Content     string `json:"content"`
+	Enabled     int   `json:"enabled"`
+	CreatedTime int64 `json:"createdTime"`
+	UpdatedTime int64 `json:"updatedTime,omitempty"`
+}
+
+// MonitorPermissionBackup 是 O7-008 补齐的监控权限备份结构（字段对照 model.MonitorPermission）。
+type MonitorPermissionBackup struct {
+	ID          int64 `json:"id"`
+	UserID      int64 `json:"userId"`
+	CreatedTime int64 `json:"createdTime"`
+}
+
 type NodeBackup struct {
 	ID            int64  `json:"id"`
 	Name          string `json:"name"`
@@ -633,6 +653,8 @@ type NodeBackup struct {
 	RemoteConfig  string `json:"remoteConfig,omitempty"`
 	LatencyTargets string `json:"latencyTargets,omitempty"`
 	ForwardMode   string `json:"forwardMode,omitempty"`
+	// O7-006：恢复后保留已忽略的到期提醒状态
+	ExpiryReminderDismissed int `json:"expiryReminderDismissed,omitempty"`
 }
 
 type TunnelBackup struct {
@@ -771,7 +793,10 @@ type ImportResult struct {
 	ConfigsImported      int         `json:"configsImported"`
 	InboundsImported     int         `json:"inboundsImported"`
 	UserInboundsImported int         `json:"userInboundsImported"`
-	AutoBackup           *BackupData `json:"autoBackup,omitempty"`
+	// O7-007/O7-008：公告与监控权限导入计数
+	AnnouncementsImported      int `json:"announcementsImported"`
+	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
+	AutoBackup                 *BackupData `json:"autoBackup,omitempty"`
 }
 
 // ─── View Structs (used by Repository, not GORM models) ─────────────

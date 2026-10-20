@@ -36,11 +36,15 @@ func TestBuildFlowUploadBatchAggregatesForwardQuotaPeerShareAndCleanupTargets(t 
 	if delta.ForwardID != 20 || delta.UserID != 2 || delta.UserTunnelID != 10 {
 		t.Fatalf("unexpected flow delta identity: %#v", delta)
 	}
-	if delta.InFlow != 480 || delta.OutFlow != 660 {
-		t.Fatalf("expected scaled flow in=480 out=660, got in=%d out=%d", delta.InFlow, delta.OutFlow)
+	// O6-002（2026-10-20 修）：InFlow/OutFlow 语义统一为 InFlow=上传、OutFlow=下载（与 nftables 路径一致）。
+	// 本测试曾断言旧值 in=480/out=660/quota=1140，那是 M-001 移除前的乘数 bug
+	// （TunnelFlow=3 当乘数：U*2*3、D*2*3）。新语义：U=110,D=80,ratio=2,Flow=3(≠1 记双向)
+	// → InFlow=110*2=220（上传）、OutFlow=80*2=160（下载）、quota=380。
+	if delta.InFlow != 220 || delta.OutFlow != 160 {
+		t.Fatalf("expected scaled flow in=220 out=160, got in=%d out=%d", delta.InFlow, delta.OutFlow)
 	}
-	if batch.quotaUsage[2] != 1140 {
-		t.Fatalf("expected quota usage 1140, got %d", batch.quotaUsage[2])
+	if batch.quotaUsage[2] != 380 {
+		t.Fatalf("expected quota usage 380, got %d", batch.quotaUsage[2])
 	}
 	if len(batch.policyTargets) != 1 {
 		t.Fatalf("expected 1 policy target, got %d", len(batch.policyTargets))

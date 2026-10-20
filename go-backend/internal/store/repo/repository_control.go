@@ -181,6 +181,18 @@ func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port
 	if err != nil {
 		return false, err
 	}
+	if count > 0 {
+		return true, nil
+	}
+
+	// O2-003：chain_tunnel 占用节点端口（idx_chain_tunnel_node_port 唯一索引），
+	// 预检必须纳入，否则跨表冲突漏检。Port 为 NullInt64，仅 > 0 视为占用。
+	err = tx.Model(&model.ChainTunnel{}).
+		Where("node_id = ? AND port = ? AND port > 0", nodeID, port).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
 	return count > 0, nil
 }
 

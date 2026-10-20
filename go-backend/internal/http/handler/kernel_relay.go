@@ -157,6 +157,10 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 		if v4 := strings.TrimSpace(node.ServerIPV4.String); host == "" && v4 != "" {
 			host = v4
 		}
+		// O3-002：IPv4 为空时回退尝试 IPv6，避免纯 IPv6 节点无法做端口转发
+		if v6 := strings.TrimSpace(node.ServerIPV6.String); host == "" && v6 != "" {
+			host = v6
+		}
 	}
 	if host == "" {
 		return "", errors.New("落地节点没有可用地址")
@@ -544,7 +548,8 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	// Filter by user's assigned inbounds/relays: ?user=<userID>&sig=<hmac>
 	// The sig binds the user ID to the backend secret (issued by the
-	// authenticated /user-inbound/mine endpoint). Without a valid signature
+	// authenticated /user-inbound/mine endpoint); v2 sigs additionally bind
+	// the subscription token (K-002). Without a valid signature
 	// the user parameter is rejected, so a leaked subscription token cannot
 	// be used to enumerate other users' nodes (IDOR).
 	// An assignment with relayID=0 grants the inbound's direct endpoints;
@@ -552,7 +557,8 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	var userAssignments []repo.UserInboundAssignment
 	if userFilter := r.URL.Query().Get("user"); userFilter != "" {
 		if userID, err := strconv.ParseInt(userFilter, 10, 64); err == nil && userID > 0 {
-			if !h.verifySubURLSig(userID, r.URL.Query().Get("sig")) {
+			// K-002：先验 token 绑定的 v2 签名，再兼容 v1 遗留签名。
+			if !h.verifySubURLSigForToken(token, userID, r.URL.Query().Get("sig")) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

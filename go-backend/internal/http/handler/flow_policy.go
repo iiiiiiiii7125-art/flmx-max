@@ -227,21 +227,9 @@ func (h *Handler) enforcePeerShareFlowLimit(shareID int64) {
 	}
 }
 
-func (h *Handler) scaleFlowByTunnel(forwardID int64, inFlow int64, outFlow int64) (int64, int64) {
-	forward, err := h.getForwardRecord(forwardID)
-	if err != nil || forward == nil {
-		return inFlow, outFlow
-	}
-
-	tunnel, err := h.getTunnelRecord(forward.TunnelID)
-	if err != nil || tunnel == nil {
-		return inFlow, outFlow
-	}
-
-	scaledIn := int64(float64(inFlow)*tunnel.TrafficRatio) * tunnel.Flow
-	scaledOut := int64(float64(outFlow)*tunnel.TrafficRatio) * tunnel.Flow
-	return scaledIn, scaledOut
-}
+// O2-002：已删除 scaleFlowByTunnel 死代码（原含 M-001 同类 bug：把 tunnel.Flow 当乘数用，
+// Flow=2 时会双倍计费）。全仓确认无调用方；实际计费路径已在 1.0.7 由 M-001 修复
+// （nftables_traffic.go / flow_upload_batch.go：Flow=1 仅计上传，Flow=2 计双向）。
 
 func (h *Handler) enforceFlowPolicies(userID int64, userTunnelID int64) {
 	now := time.Now().UnixMilli()
@@ -285,7 +273,9 @@ func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, n
 
 	flowLimit := flowLimitBytes(user.Flow, user.FlowMiB)
 	current := user.InFlow + user.OutFlow
-	if flowLimit < current {
+	// O2-006：配额边界统一为 fail-closed：等于上限也拦截，与隧道级 utCurrent >= utFlowLimit 一致
+	// 旧逻辑 flowLimit < current 允许"刚好用满"时开启新转发
+	if flowLimit <= current {
 		return errors.New("流量已超额，禁止开启转发")
 	}
 	if err := h.ensureUserForwardAllowedByQuota(userID, now); err != nil {
@@ -352,7 +342,8 @@ func (h *Handler) shouldPauseUser(userID int64, now int64) bool {
 
 	flowLimit := flowLimitBytes(user.Flow, user.FlowMiB)
 	current := user.InFlow + user.OutFlow
-	if flowLimit < current {
+	// O2-006：与创建检查一致，等于上限也暂停（fail-closed）
+	if flowLimit <= current {
 		return true
 	}
 	if user.ExpTime > 0 && user.ExpTime <= now {
@@ -439,7 +430,9 @@ func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
 		}
 		// D6: 先 reconcile（plan 不含这些转发），成功后再写 DB。
 		if !h.reconcileNodeWithTimeout(nodeID, exclude, nil, 30*time.Second) {
-			log.Printf("quota pause gap node_id=%d forward_ids=%v reason=reconcile_timeout_or_error", nodeID, ids)
+			// M-005：告警级 gap：reconcile 超时/失败时 DB 仍显示 Active 而实际规则可能已部分移除，
+			// DB 与实际状态不一致，下次计费周期会自愈重试，但 gap 期间流量可能漏计
+			log.Printf("quota pause gap node_id=%d forward_ids=%v reason=reconcile_timeout_or_error ALERT=db_state_may_diverge", nodeID, ids)
 			continue
 		}
 		for _, id := range ids {

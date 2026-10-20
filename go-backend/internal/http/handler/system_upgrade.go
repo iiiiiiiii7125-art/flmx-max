@@ -226,6 +226,10 @@ func validateUpgradeVersion(value string) error {
 			return fmt.Errorf("unsafe upgrade version: invalid character %q", r)
 		}
 	}
+	// O9-007：拒绝全由 "." 组成的版本（如 "."、".."、"..."），避免路径/URL 语义歧义
+	if strings.Trim(value, ".") == "" {
+		return fmt.Errorf("unsafe upgrade version: no version digits")
+	}
 	return nil
 }
 
@@ -637,9 +641,10 @@ func systemUpgradeVersionResponse(current, channel, latest string, lookupErr err
 	data := systemUpgradeVersionData{
 		CurrentVersion: current,
 		LatestVersion:  latest,
-		HasUpdate:      latest != "" && latest != current,
-		Channel:        channel,
-		Capability:     capability,
+		// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
+		HasUpdate:  latest != "" && compareVersions(latest, current) > 0,
+		Channel:    channel,
+		Capability: capability,
 	}
 	if lookupErr != nil {
 		data.LatestVersion = ""
@@ -699,10 +704,11 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(systemUpgradeCheckData{
 		CurrentVersion: current,
 		LatestVersion:  latest,
-		HasUpdate:      latest != "" && latest != current,
-		Channel:        channel,
-		Capability:     capability,
-		Releases:       releases,
+		// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
+		HasUpdate:  latest != "" && compareVersions(latest, current) > 0,
+		Channel:    channel,
+		Capability: capability,
+		Releases:   releases,
 	}))
 }
 
@@ -737,6 +743,12 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 			return
 		}
+	}
+	// O9-003：version 确定后立即校验格式（之前只在下载后的 updateEnvVersion 中校验，
+	// 属于下载后才触发，防御纵深缺失；现提前到下载前）
+	if err := validateUpgradeVersion(version); err != nil {
+		response.WriteJSON(w, response.ErrDefault("版本号不合法: "+err.Error()))
+		return
 	}
 	// O9-001：升级前比较目标版本与当前版本，防止静默降级
 	// 旧逻辑：接受任意版本号直接下载升级，允许降级到旧版本

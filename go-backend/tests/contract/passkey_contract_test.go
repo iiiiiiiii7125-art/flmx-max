@@ -131,6 +131,9 @@ func TestPasskeyRegistrationAndOwnership(t *testing.T) {
 		t.Fatal("deleted credential could still complete login")
 	}
 	// Deletion must not prevent the same account from binding a new key.
+	// O11-P3-1: passkey 删除会吊销该用户已签发的 JWT（防旧会话继续有效），
+	// 因此重绑前需要重新登录签发新 token（模拟用户删密钥后重新登录的流程）。
+	aliceToken, _ = auth.GenerateToken(9302, "passkey-alice", 1, "passkey-test-secret")
 	rebind := passkeyData(t, passkeyPost(t, router, "/api/v1/user/passkey/register/begin", aliceToken, map[string]string{"password": "alice-password"}))
 	newID := make([]byte, 32)
 	if _, err := rand.Read(newID); err != nil {

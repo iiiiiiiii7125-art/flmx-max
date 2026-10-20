@@ -54,6 +54,8 @@ func routeHopNet(ip string) string {
 var (
 	hopASNMu    sync.Mutex
 	hopASNCache = make(map[string]string)
+	// L-003：缓存上限，超限清空（IP 空间有限，整体重建代价可接受）
+	maxHopASNCacheSize = 10000
 )
 
 // hopASNLookup returns the TXT records for an origin AS query; tests
@@ -86,9 +88,33 @@ func hopOriginASN(ip string) string {
 		}
 	}
 	hopASNMu.Lock()
+	// L-003：防止长期运行无界增长导致内存泄漏，超限直接清空重建
+	if len(hopASNCache) >= maxHopASNCacheSize {
+		hopASNCache = make(map[string]string)
+	}
 	hopASNCache[ip] = asn
 	hopASNMu.Unlock()
 	return asn
+}
+
+// O1-008：并发预热 ASN 缓存（信号量限 4），避免 routePointFrom 逐 hop 串行 DNS 查询
+// （10 个 CMI hop 最长可达 20 秒）。保持 24h 缓存语义不变，仅把首次查询并行化。
+func warmHopASNCache(ips []string) {
+	if len(ips) == 0 {
+		return
+	}
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, ip := range ips {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ip string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			hopOriginASN(ip)
+		}(ip)
+	}
+	wg.Wait()
 }
 
 // refineHopNet splits CMI hops into CMI and CMIN2 by origin AS; others
@@ -207,6 +233,27 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 	}
 	p.Reached = asBool(data["reached"], false)
 	rawHops, _ := data["hops"].([]interface{})
+	// O1-008：先收集所有可能需要 ASN 查询的 CMI hop IP，并发预热缓存，
+	// 后续逐 hop 的 refineHopNet 全部命中缓存，不再串行等待 DNS
+	{
+		seen := make(map[string]bool)
+		var cmiIPs []string
+		for _, raw := range rawHops {
+			m, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ip := asString(m["ip"])
+			if ip == "" || net.ParseIP(ip) == nil {
+				continue
+			}
+			if routeHopNet(ip) == "CMI" && !seen[ip] {
+				seen[ip] = true
+				cmiIPs = append(cmiIPs, ip)
+			}
+		}
+		warmHopASNCache(cmiIPs)
+	}
 	for _, raw := range rawHops {
 		m, ok := raw.(map[string]interface{})
 		if !ok {
