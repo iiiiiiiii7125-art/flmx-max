@@ -97,12 +97,17 @@ func (p *program) Start() (err error) {
 	signal.Notify(c, syscall.SIGHUP)
 	go p.reload(ctx, c)
 
+	// F-033: Restore 必须在 reporter 启动前同步完成。旧实现异步 Restore
+	// 与面板上线重下发（plans/070 B5）无序竞争：面板的 KernelApply 先
+	// 落地后，Restore 再按 state.json 的旧配置逐个 Apply，谁后执行谁
+	// 生效，面板新配置会被旧配置覆盖（60s 周期重下发才自愈）。
+	kernel.Default().Restore()
+
 	// A connected panel may immediately send commands. Only expose the agent
 	// after initial config loading, runtime startup and persistence are ready.
 	if p.startReporter != nil {
 		p.reporter = p.startReporter()
 	}
-	go kernel.Default().Restore()
 
 	go func() {
 		select {

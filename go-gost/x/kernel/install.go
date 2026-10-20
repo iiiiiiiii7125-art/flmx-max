@@ -131,8 +131,18 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 	if g.Tag != "" {
 		path = "tags/" + g.Tag
 	}
+	apiURL := fmt.Sprintf("%s/repos/%s/releases/%s", githubAPIBase, g.Repo, path)
 	var body strings.Builder
-	if err := fetch(ctx, fmt.Sprintf("%s/repos/%s/releases/%s", githubAPIBase, g.Repo, path), 4<<20, &body); err != nil {
+	if p := strings.TrimSuffix(strings.TrimSpace(g.Proxy), "/"); p != "" {
+		// F-061: API 请求与下载/校验走同一网络策略——先经代理前缀，
+		// 镜像不转发 API（如 ghfast 回 403）时 fetchWithMirrorFallback
+		// 剥离前缀回退直连。此前 API 直连 api.github.com，镜像-only
+		// 节点在此一步整单失败。
+		err = fetchWithMirrorFallback(ctx, p+"/"+apiURL, 4<<20, &body)
+	} else {
+		err = fetch(ctx, apiURL, 4<<20, &body)
+	}
+	if err != nil {
 		return "", "", fmt.Errorf("查询 GitHub 发布信息失败: %v", err)
 	}
 	var rel githubReleaseJSON

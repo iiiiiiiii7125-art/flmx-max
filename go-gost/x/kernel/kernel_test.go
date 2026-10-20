@@ -524,6 +524,18 @@ func TestLogRingStripsANSI(t *testing.T) {
 	}
 }
 
+// nftFibSupported 用最小脚本探测当前内核是否支持 nft fib 表达式。
+func nftFibSupported() bool {
+	probe := "table inet flmx_fib_probe {\n" +
+		" chain c {\n" +
+		"  type nat hook prerouting priority -100; policy accept;\n" +
+		"  fib daddr type local udp dport 20000-30000 redirect to :443\n" +
+		" }\n}\n"
+	cmd := exec.Command("nft", "-c", "-f", "-")
+	cmd.Stdin = strings.NewReader(probe)
+	return cmd.Run() == nil
+}
+
 func TestNftScriptPortHopping(t *testing.T) {
 	ports := []Port{
 		{InboundID: 3, Port: 443, Network: "udp", HopFrom: 20000, HopTo: 30000, Allow: []string{"127.0.0.0/8"}},
@@ -546,6 +558,14 @@ func TestNftScriptPortHopping(t *testing.T) {
 		t.Fatal("no hop chains without hop ranges")
 	}
 	if _, err := exec.LookPath("nft"); err == nil && os.Geteuid() == 0 {
+		// F-091 定性：本机（受限 VM 内核）nft_fib 未加载，最小 fib
+		// 脚本即被 nft -c 以 ENOENT 拒绝——属环境缺失而非脚本缺陷
+		// （plans/070 记录同一脚本曾在真实节点 nft -c 通过）。环境
+		// 不支持 fib 时跳过实机校验并注明，避免把环境问题误报为
+		// 代码缺陷；真实节点验证步骤见 B6 报告登记。
+		if !nftFibSupported() {
+			t.Skip("当前环境内核不支持 nft fib 表达式（nft_fib 未加载），跳过 nft -c 实机校验（F-091 环境定性）")
+		}
 		cmd := exec.Command("nft", "-c", "-f", "-")
 		cmd.Stdin = strings.NewReader(script)
 		if out, err := cmd.CombinedOutput(); err != nil {

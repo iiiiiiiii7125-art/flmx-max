@@ -164,7 +164,10 @@ func (m *GlobalTrafficManager) collectAndReport() {
 		if up > 0 || down > 0 {
 			pending = append(pending, pendingItem{name: name, up: up, down: down})
 		}
-		if isStale {
+		if isStale && up == 0 && down == 0 {
+			// F-087: 无待上报流量时才可立即清理。有流量的 stale 条目
+			// 必须等发送成功后再删（见下方清零段）——旧实现先删后发，
+			// 发送失败时该批流量随条目一起永久丢失，违 D1-010 本意。
 			delete(m.serviceTraffic, name)
 		}
 	}
@@ -211,7 +214,13 @@ func (m *GlobalTrafficManager) collectAndReport() {
 			if traffic.DownBytes < 0 {
 				traffic.DownBytes = 0
 			}
+			drained := traffic.UpBytes == 0 && traffic.DownBytes == 0
 			traffic.mu.Unlock()
+			// F-087: stale 服务在发送成功且计数清零后才移除条目；
+			// 发送失败走上方 return，条目与计数原样保留待重试。
+			if drained && !registry.ServiceRegistry().IsRegistered(p.name) {
+				delete(m.serviceTraffic, p.name)
+			}
 		}
 	}
 	m.mu.Unlock()
