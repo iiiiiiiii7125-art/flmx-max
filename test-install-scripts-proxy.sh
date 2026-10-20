@@ -788,10 +788,11 @@ panel_self_update_fixture() {
   work=$(mktemp -d)
   stubbin=$(mktemp -d)
   good_script="$work/good_panel.sh"
-  cat > "$good_script" <<'EOF'
+  cat > "$good_script" <<EOF
 #!/bin/bash
-SCRIPT_VERSION="99999999.99"
-echo "updated" > "$SELF_UPDATE_SENTINEL"
+SCRIPT_VERSION="${STUB_GOOD_SV:-99999999.99}"
+PINNED_VERSION="${STUB_GOOD_PINNED-9.9.9}"
+echo "updated" > "\$SELF_UPDATE_SENTINEL"
 EOF
   if [[ "$mode" == "legit" ]]; then
     STUB_SHA256=$(sha256sum "$good_script" | awk '{print $1}')
@@ -857,6 +858,33 @@ test_panel_install_self_update_accepts_verified_script() {
 
 test_panel_install_self_update_rejects_tampered_script
 test_panel_install_self_update_accepts_verified_script
+
+# LANE1: 自更新三不变量——定版一致、方向单调、（单跳由 HOPS 保证）。
+# 以下三种「sha 自洽但不应接管」的资产都必须被拒：降级、未定版、定版不符。
+test_panel_install_self_update_rejects_downgrade() {
+  local work
+  work=$(STUB_GOOD_SV="20200101.01" panel_self_update_fixture legit)
+  [[ ! -f "$work/sentinel" ]] || fail "LANE1: downgrade self-update must not be executed (sentinel present)"
+  echo "ok: self-update rejects downgrade script"
+}
+
+test_panel_install_self_update_rejects_unpinned() {
+  local work
+  work=$(STUB_GOOD_PINNED="" panel_self_update_fixture legit)
+  [[ ! -f "$work/sentinel" ]] || fail "LANE1: unpinned self-update must not be executed (sentinel present)"
+  echo "ok: self-update rejects unpinned script"
+}
+
+test_panel_install_self_update_rejects_pin_mismatch() {
+  local work
+  work=$(STUB_GOOD_PINNED="8.8.8" panel_self_update_fixture legit)
+  [[ ! -f "$work/sentinel" ]] || fail "LANE1: pin-mismatched self-update must not be executed (sentinel present)"
+  echo "ok: self-update rejects pin-mismatched script"
+}
+
+test_panel_install_self_update_rejects_downgrade
+test_panel_install_self_update_rejects_unpinned
+test_panel_install_self_update_rejects_pin_mismatch
 
 # F-048: install 路径下载失败时不得先停/禁用已有服务（与 update 路径同序）。
 test_install_flux_agent_keeps_service_when_download_fails() (

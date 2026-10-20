@@ -28,6 +28,19 @@ SCRIPT_VERSION="20261021.01"
 # 仍须过 sha256 校验，不存在新旧混杂，无需 cache-buster。
 # 校验被显式关闭（FLMX_VERIFY_DOWNLOADS!=1）时跳过自更新：绝不执行
 # 未校验的新脚本，继续使用当前版本（fail-closed）。
+# LANE1（2026-10-21 横跳事故复盘）：sha256 只能证明「下载的脚本与它的
+# .sha256 自洽」，证明不了「这份资产就是目标 Release 的定版脚本」；
+# 且旧比对只判字符串不等、无方向。镜像缓存混杂/定版注入失效时，
+# 未定版副本 + latest 逐次翻转可让两个版本互相「更新」无限横跳，
+# latest 回退时还会把脚本静默降级。三条不变量收口（任一不过即跳过
+# 本次自更新、继续用当前脚本，fail-closed）：
+#   1) 定版一致：下载副本的 PINNED_VERSION 必须等于本次解析的目标
+#      版本——资产不是该 Release 的定版脚本就不接管；
+#   2) 方向单调：仅当下载副本 SCRIPT_VERSION（YYYYMMDD.NN 定宽格式，
+#      字典序即时间序）严格大于当前版才换；格式不可辨认同样拒绝
+#      （无法确认方向就不动）；
+#   3) 单跳上限：换版 exec 时置 FLMX_SELF_UPDATE_HOPS=1，新进程据此
+#      不再自更新——任何未知翻转模式下至多跳一次。
 # 注：调用点在本文件末尾（main 之前）——此处仅定义函数，因为
 # resolve_version / maybe_proxy_url / download_verified 定义在后面。
 self_update_check() {
@@ -36,11 +49,14 @@ self_update_check() {
   if [ ! -f "$0" ] || [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
   fi
+  if [ "${FLMX_SELF_UPDATE_HOPS:-0}" != "0" ]; then
+    return 0
+  fi
   if [ "${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}" != "1" ]; then
     echo "⚠️ 下载校验未开启，跳过脚本自更新（不执行未校验的新脚本）"
     return 0
   fi
-  local version tmp_script url latest_version
+  local version tmp_script url latest_version pinned_version
   version=$(resolve_version 2>/dev/null) || {
     echo "⚠️ 无法解析目标版本，跳过脚本自更新"
     return 0
@@ -57,11 +73,27 @@ self_update_check() {
     rm -f "$tmp_script"
     return 0
   fi
+  pinned_version=$(grep -m1 '^PINNED_VERSION=' "$tmp_script" | cut -d'"' -f2 || true)
+  if [ "$pinned_version" != "$version" ]; then
+    rm -f "$tmp_script"
+    echo "⚠️ 下载的脚本未定版到 v$version（PINNED_VERSION=${pinned_version:-空}），跳过脚本自更新"
+    return 0
+  fi
+  if ! [[ "$SCRIPT_VERSION" =~ ^[0-9]{8}\.[0-9]{2}$ && "$latest_version" =~ ^[0-9]{8}\.[0-9]{2}$ ]]; then
+    rm -f "$tmp_script"
+    echo "⚠️ 脚本版本号格式不可辨认（当前 v$SCRIPT_VERSION / 目标 v$latest_version），无法确认更新方向，跳过脚本自更新"
+    return 0
+  fi
+  if [[ ! "$latest_version" > "$SCRIPT_VERSION" ]]; then
+    rm -f "$tmp_script"
+    echo "⚠️ 目标脚本 v$latest_version 不高于当前 v$SCRIPT_VERSION，跳过脚本自更新（防降级）"
+    return 0
+  fi
   echo "🔄 检测到新版本脚本 (v$latest_version，当前 v$SCRIPT_VERSION)，正在更新..."
   if cat "$tmp_script" > "$0" && chmod +x "$0"; then
     rm -f "$tmp_script"
     echo "✅ 已更新到 v$latest_version，重新执行..."
-    exec bash "$0" "$@"
+    FLMX_SELF_UPDATE_HOPS=1 exec bash "$0" "$@"
   fi
   rm -f "$tmp_script"
   echo "⚠️ 自动更新失败，继续使用当前版本"
