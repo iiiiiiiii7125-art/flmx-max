@@ -475,6 +475,9 @@ export interface BackupTypes {
   userInbounds?: boolean;
   announcements?: boolean;
   monitorPermissions?: boolean;
+  // B4/F-004/F-030：订阅分配与监控定义。
+  userSubscriptions?: boolean;
+  serviceMonitors?: boolean;
 }
 
 export const exportBackup = async (types: string[] = []) => {
