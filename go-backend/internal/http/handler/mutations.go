@@ -266,7 +266,9 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB)
+	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
+		log.Printf("propagate user flow to tunnels failed user_id=%d err=%v", id, err)
+	}
 	if hasDailyQuota || hasMonthlyQuota {
 		dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
 		monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
