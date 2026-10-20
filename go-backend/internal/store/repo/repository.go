@@ -355,7 +355,20 @@ func autoMigrateAll(db *gorm.DB) error {
 	}
 
 	if db.Dialector.Name() != "sqlite" {
-		return db.AutoMigrate(models...)
+		if err := db.AutoMigrate(models...); err != nil {
+			return err
+		}
+		// B4/F-009: PG 此前在此提前 return，R5-B4 版本化迁移从未在 PG 上
+		// 执行——四个唯一索引在 PG 永远建不上，migration_status 却按
+		// "下次启动会自动建"汇报。迁移函数本身是双言写的（索引存在性
+		// 检查有 pg_indexes 分支），在此与 SQLite 同口径执行。
+		if err := migrateV1PortUserUnique(db); err != nil {
+			return err
+		}
+		if err := migrateV2NodeInboundPartialUnique(db); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	m := db.Migrator()
@@ -380,6 +393,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// 不在 model tag 上加 uniqueIndex，避免 AutoMigrate 在有重复数据时静默建索引失败导致启动崩溃。
 	// 本次执行于测试库；生产库需重跑 dry-run 并重新批准。
 	if err := migrateV1PortUserUnique(db); err != nil {
+		return err
+	}
+
+	// R5-B4 v2（B4/F-003）: node_inbound 唯一索引转部分索引
+	// （WHERE kernel_id > 0），存量全量索引显式 DROP + CREATE 转换。
+	if err := migrateV2NodeInboundPartialUnique(db); err != nil {
 		return err
 	}
 

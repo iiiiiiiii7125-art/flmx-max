@@ -46,7 +46,10 @@ func runV1Precheck(db *gorm.DB) (*precheckResult, error) {
 	}{
 		{&r.ForwardPortDups, `SELECT COUNT(*) FROM (SELECT 1 FROM forward_port GROUP BY node_id, port HAVING COUNT(*) > 1)`},
 		{&r.ChainTunnelDups, `SELECT COUNT(*) FROM (SELECT 1 FROM chain_tunnel WHERE port IS NOT NULL AND port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1)`},
-		{&r.NodeInboundDups, `SELECT COUNT(*) FROM (SELECT 1 FROM node_inbound GROUP BY node_id, port HAVING COUNT(*) > 1)`},
+		// B4/F-003: node_inbound 的唯一索引是部分索引（WHERE kernel_id > 0，
+		// 见 migrateV2NodeInboundPartialUnique），预检口径必须一致——导入行
+		// （kernel_id=0）同端口重复是合法数据，不能让它挡住全部四个索引。
+		{&r.NodeInboundDups, `SELECT COUNT(*) FROM (SELECT 1 FROM node_inbound WHERE kernel_id > 0 GROUP BY node_id, port HAVING COUNT(*) > 1)`},
 		{&r.UsernameDups, `SELECT COUNT(*) FROM (SELECT 1 FROM "user" GROUP BY "user" HAVING COUNT(*) > 1)`},
 	}
 	for _, q := range queries {
@@ -100,11 +103,16 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 		table string
 		name  string
 		cols  string
+		where string
 	}{
-		{"forward_port", "idx_forward_port_node_port", "(node_id, port)"},
-		{"chain_tunnel", "idx_chain_tunnel_node_port", "(node_id, port)"},
-		{"node_inbound", "idx_node_inbound_node_port", "(node_id, port)"},
-		{"user", "idx_user_username_unique", "(user)"},
+		{"forward_port", "idx_forward_port_node_port", "(node_id, port)", ""},
+		{"chain_tunnel", "idx_chain_tunnel_node_port", "(node_id, port)", ""},
+		// B4/F-003: node_inbound 直接建部分唯一索引——唯一性只对内核托管
+		// 入站（kernel_id > 0，真实本地监听）有意义；导入行 kernel_id=0，
+		// 同端口不同主机合法共存。存量库里已建的全量同名索引由 v2 迁移
+		// 显式 DROP + CREATE 转换（本函数的"同名跳过"不会重建它）。
+		{"node_inbound", "idx_node_inbound_node_port", "(node_id, port)", "WHERE kernel_id > 0"},
+		{"user", "idx_user_username_unique", "(user)", ""},
 	}
 
 	for _, idx := range indexes {
@@ -122,7 +130,7 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 
 		start := time.Now()
 		// 注意：chain_tunnel.port 可为空，NULL 不参与唯一约束（SQL 标准）。
-		sql := fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s %s", idx.name, idx.table, idx.cols)
+		sql := fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s %s %s", idx.name, idx.table, idx.cols, idx.where)
 		if err := db.Exec(sql).Error; err != nil {
 			return fmt.Errorf(
 				"migration %s: CREATE UNIQUE INDEX %s ON %s %s failed: %w\n"+
