@@ -324,10 +324,17 @@ export const getStorageSummary = () =>
 export const getSystemUpgradeVersion = () =>
   Network.post<SystemUpgradeVersionApiData>("/system/version");
 
-export const checkSystemUpgrade = (channel: ReleaseChannel = "stable") =>
-  Network.post<SystemUpgradeCheckApiData>("/system/check-updates", {
-    channel,
-  });
+export const checkSystemUpgrade = (
+  channel: ReleaseChannel = "stable",
+  options?: { timeout?: number; silent?: boolean },
+) =>
+  Network.post<SystemUpgradeCheckApiData>(
+    "/system/check-updates",
+    {
+      channel,
+    },
+    options,
+  );
 
 export const runSystemUpgrade = (
   version?: string,
@@ -684,6 +691,11 @@ export interface SubPipeline {
   /** 链式代理所选节点，按 pipeline 处理前的原名。 */
   chainLandingNames: string[];
   chainRelayNames: string[];
+  /**
+   * 中转范围：订阅包含的端点 ID（0=直连，>0=中转 ID）。
+   * 空数组 = 全部端点（不做范围过滤）。
+   */
+  relayIds: number[];
   /** JavaScript `function operator(nodes)`，在其他步骤后运行。 */
   script: string;
 }
@@ -715,6 +727,10 @@ export interface SubscriptionItem {
   /** Day of month (1-28) the traffic resets; 0 = never. */
   resetDay: number;
   overQuota: boolean;
+  /** 默认订阅：普通用户的个人链接（?user=&sig=）挂在它上面。 */
+  isDefault: boolean;
+  /** 中转范围（与 options.relayIds 同步下发）：空 = 全部端点。 */
+  relayIds: number[];
 }
 export interface SubscriptionDraft {
   id?: number;
@@ -868,6 +884,39 @@ export const setUserInbounds = (userId: number, assignments: UserInboundAssignme
 export const setUserInboundsLegacy = (userId: number, inboundIds: number[]) =>
   Network.post("/user-inbound/set", { userId, inboundIds });
 export const getMyInbounds = () => Network.post("/user-inbound/mine", {});
+
+/** 按订阅分配：某用户被分配的订阅 ID 列表（管理员）。 */
+export interface UserSubscriptionListData {
+  userId: number;
+  subscriptionIds: number[];
+}
+export const getUserSubscriptions = (userId: number) =>
+  Network.post<UserSubscriptionListData>("/user-subscription/list", { userId });
+export const setUserSubscriptions = (
+  userId: number,
+  subscriptionIds: number[],
+) => Network.post("/user-subscription/set", { userId, subscriptionIds });
+
+/** 我的订阅：分配给当前用户的订阅（自带独立链接，不走个人链接过滤）。 */
+export interface MySubscriptionItem {
+  id: number;
+  name: string;
+  path: string;
+  nodeCount: number;
+  uploadBytes: number;
+  downloadBytes: number;
+  /** Bytes; 0 = unlimited. */
+  trafficLimit: number;
+  /** 过期时间（毫秒）；0 = 永不过期。 */
+  expireTime: number;
+  overQuota: boolean;
+  enabled: boolean;
+}
+export const getMySubscriptions = () =>
+  Network.post<{ subscriptions: MySubscriptionItem[] }>(
+    "/user-subscription/mine",
+    {},
+  );
 /** 立即探测节点到延迟测试点的延迟（移植自 kure29/flyx）。 */
 export const probeNodeLatency = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(

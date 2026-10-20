@@ -55,8 +55,9 @@ export function VersionFooter({
       // P3-3：更新检测改走后端检查接口，与配置页同一条路径（可经面板代理），
       // 不再由浏览器直连 api.github.com，避免两边结果不一致。
       // 请求失败（未登录/无权限/后端异常）时静默不显示红标。
+      // 普通用户没有 /system 权限，silent 避免全局「权限不足」提示打扰。
       try {
-        const response = await checkSystemUpgrade(channel);
+        const response = await checkSystemUpgrade(channel, { silent: true });
 
         if (!active) {
           return;
