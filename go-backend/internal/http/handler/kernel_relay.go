@@ -636,7 +636,11 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	// 节点）并反复重试；统一为 200 + 该格式的空渲染，客户端以空列表
 	// 如实更新，下个周期有节点时自动恢复。停用/过期仍由前置检查以
 	// 403 明确表达，不受影响。
-	body, contentType, err := kernel.Subscription(format, endpoints, parsePipeline(sub.Options).options())
+	subOpts := parsePipeline(sub.Options).options()
+	// sing-box 客户端 ≥1.14 才下发 Snell 节点；UA 解析不出版本一律不给
+	// （fail-closed，老客户端拿到也渲染不了）。
+	subOpts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())
+	body, contentType, err := kernel.Subscription(format, endpoints, subOpts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
