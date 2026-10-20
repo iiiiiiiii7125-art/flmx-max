@@ -16,6 +16,9 @@ import (
 
 // monitorBlockedCIDRs 面板本机拨号拒绝的地址段。
 var monitorBlockedCIDRs = []string{
+	// F-023 变体：与 SecureFetch isPrivateIP 同口径补 0.0.0.0/8 整段
+	// （IsUnspecified 只命中 0.0.0.0 单地址，Linux 下 0/8 拨号直达本机）。
+	"0.0.0.0/8",
 	"10.0.0.0/8",
 	"172.16.0.0/12",
 	"192.168.0.0/16",

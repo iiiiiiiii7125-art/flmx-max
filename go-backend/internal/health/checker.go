@@ -125,6 +125,30 @@ func (c *Checker) runChecks(ctx context.Context) {
 		log.Printf("service monitor scheduler failed op=list_enabled err=%v", err)
 		return
 	}
+	// F-084（变体同修）: 每轮按当前 enabled 集合淘汰缓存——监控删除/
+	// 停用后其实测结果不再被 cache 优先的读取路径返回。淘汰须在
+	// len==0 早退之前；在途检查完成时可能回写已停用条目，下一轮再淘。
+	enabled := make(map[int64]bool, len(monitors))
+	for _, m := range monitors {
+		enabled[m.ID] = true
+	}
+	c.mu.Lock()
+	for id := range c.latestResults {
+		if !enabled[id] {
+			delete(c.latestResults, id)
+		}
+	}
+	for id := range c.lastRun {
+		if !enabled[id] {
+			delete(c.lastRun, id)
+		}
+	}
+	for id := range c.lastDBWrite {
+		if !enabled[id] {
+			delete(c.lastDBWrite, id)
+		}
+	}
+	c.mu.Unlock()
 	if len(monitors) == 0 {
 		return
 	}

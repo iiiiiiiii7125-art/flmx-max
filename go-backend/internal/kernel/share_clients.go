@@ -161,9 +161,11 @@ func loonLine(p Proxy) (string, bool) {
 	server, port := p.str("server"), p.num("port")
 	parts := []string{}
 	add := func(s ...string) { parts = append(parts, s...) }
-	// R5-B5 订阅转义：Loon 行式格式用逗号分隔、等号分隔键值。
+	// R5-B5 订阅转义：Loon 行式格式用逗号分隔字段、首个等号分隔键值。
+	// F-081: 与 surgeEscape 同口径——只处理逗号/换行，值内的 = 必须保留
+	// （SS 2022 base64 密钥自带 == 填充）。
 	loonEscape := func(s string) string {
-		return strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(s)
+		return strings.NewReplacer(",", " ", "\n", " ", "\r", " ").Replace(s)
 	}
 	addIf := func(key, v string) {
 		if v != "" {
@@ -219,7 +221,7 @@ func loonLine(p Proxy) (string, bool) {
 			addIf("obfs-host", po.str("host"))
 			addIf("obfs-uri", po.str("path"))
 		case "shadow-tls":
-			add("shadow-tls-password=" + po.str("password"))
+			add("shadow-tls-password=" + loonEscape(po.str("password")))
 			addIf("shadow-tls-sni", po.str("host"))
 			if v := po.num("version"); v > 0 {
 				add(fmt.Sprintf("shadow-tls-version=%d", v))
@@ -329,9 +331,11 @@ func qxLine(p Proxy) (string, bool) {
 	}
 	parts := []string{fmt.Sprintf("%s:%d", p.str("server"), p.num("port"))}
 	add := func(s ...string) { parts = append(parts, s...) }
-	// R5-B5 订阅转义：QX 行式格式用逗号分隔、等号分隔键值。
+	// R5-B5 订阅转义：QX 行式格式用逗号分隔字段、首个等号分隔键值。
+	// F-081: 与 surgeEscape 同口径——只处理逗号/换行，值内的 = 必须保留
+	// （SS 2022 base64 密钥自带 == 填充）。
 	qxEscape := func(s string) string {
-		return strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(s)
+		return strings.NewReplacer(",", " ", "\n", " ", "\r", " ").Replace(s)
 	}
 	addIf := func(key, v string) {
 		if v != "" {
@@ -390,7 +394,7 @@ func qxLine(p Proxy) (string, bool) {
 			return "", false
 		}
 		kind = "shadowsocks"
-		add("method="+p.str("cipher"), "password="+p.str("password"))
+		add("method="+p.str("cipher"), "password="+qxEscape(p.str("password")))
 		po := p.sub("plugin-opts")
 		switch p.str("plugin") {
 		case "":
@@ -410,7 +414,7 @@ func qxLine(p Proxy) (string, bool) {
 		if method == "" || method == "auto" {
 			method = "chacha20-poly1305"
 		}
-		add("method="+method, "password="+p.str("uuid"))
+		add("method="+method, "password="+qxEscape(p.str("uuid")))
 		if !obfs() {
 			return "", false
 		}
@@ -420,7 +424,7 @@ func qxLine(p Proxy) (string, bool) {
 			return "", false
 		}
 		kind = "vless"
-		add("method=none", "password="+p.str("uuid"))
+		add("method=none", "password="+qxEscape(p.str("uuid")))
 		if !obfs() {
 			return "", false
 		}
@@ -430,7 +434,7 @@ func qxLine(p Proxy) (string, bool) {
 		}
 	case "trojan":
 		kind = "trojan"
-		add("password=" + p.str("password"))
+		add("password=" + qxEscape(p.str("password")))
 		switch p.network() {
 		case "ws":
 			if !obfs() {
@@ -446,7 +450,7 @@ func qxLine(p Proxy) (string, bool) {
 		}
 	case "anytls":
 		kind = "anytls"
-		add("password="+p.str("password"), "over-tls=true")
+		add("password="+qxEscape(p.str("password")), "over-tls=true")
 		addIf("tls-host", p.serverName())
 		verify()
 		reality()
@@ -454,7 +458,7 @@ func qxLine(p Proxy) (string, bool) {
 	case "http", "socks5":
 		kind = p.Type()
 		if u := p.str("username"); u != "" {
-			add("username="+u, "password="+p.str("password"))
+			add("username="+qxEscape(u), "password="+qxEscape(p.str("password")))
 		}
 		if p.flag("tls") {
 			add("over-tls=true")

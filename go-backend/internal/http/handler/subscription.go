@@ -853,18 +853,11 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs)}
 	source := h.subEndpoints(draft, rows)
 	opts := req.Options.options()
-	// O4-001：预览时检查脚本错误，失败时返回给前端（之前静默忽略）
-	// ApplySubOptions 在脚本失败时保留其他步骤结果，需显式调用 SubScriptError 获取错误
-	if scriptErr := kernel.SubScriptError(source, opts); scriptErr != nil {
-		response.WriteJSON(w, response.OK(map[string]interface{}{
-			"items":       []subPreviewItem{},
-			"total":       len(source),
-			"dropped":     len(source),
-			"scriptError": scriptErr.Error(),
-		}))
-		return
-	}
-	result := kernel.ApplySubOptions(source, opts)
+	// F-024（O4-001 的另一半）：脚本出错时预览必须保留其他步骤的节点并
+	// 附带 scriptError——此前实现直接返回空 items + dropped=全部，与
+	// guide「脚本执行失败不影响其他步骤的结果」相悖，还误导用户以为
+	// 节点全被过滤。单次流水线同时拿结果与脚本错误，不再重跑。
+	result, scriptErr := kernel.ApplySubOptionsReport(source, opts)
 	items := make([]subPreviewItem, 0, len(result))
 	for _, e := range result {
 		line := "relay"
@@ -874,11 +867,15 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		items = append(items, subPreviewItem{Name: e.Name, Original: e.Original, Region: kernel.RegionOf(e.Name),
 			Protocol: kernel.EndpointProtocol(e), Line: line, Chain: e.ChainRole})
 	}
-	response.WriteJSON(w, response.OK(map[string]interface{}{
+	resp := map[string]interface{}{
 		"items":   items,
 		"total":   len(source),
 		"dropped": len(source) - len(items),
-	}))
+	}
+	if scriptErr != nil {
+		resp["scriptError"] = scriptErr.Error()
+	}
+	response.WriteJSON(w, response.OK(resp))
 }
 
 // inboundSubInfo is the pre-3.1 single-subscription API: the default
