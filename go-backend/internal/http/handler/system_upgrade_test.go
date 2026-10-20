@@ -2,14 +2,18 @@ package handler
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -634,6 +638,161 @@ func TestHelperScriptHealthGateAndStatusWrites(t *testing.T) {
 	rmIdx := strings.Index(script, "rm -f docker-compose.yml.upgrade.bak")
 	if healthIdx < 0 || rmIdx < 0 || healthIdx > rmIdx {
 		t.Fatalf("backups must be removed only after the health gate")
+	}
+}
+
+// F-028（A7-004）：helper 回滚必须用恢复后的文件重建旧容器并复跑健康
+// 检查；重建后仍不健康时终态必须是 rollback_failed 且保留 .bak，不许
+// 只恢复文件就写 rolled_back 冒充回滚成功。用 stub docker/date/sleep
+// 真跑一遍 helperScript：新后端始终 exited ⇒ 首轮健康检查超时 ⇒ 回滚
+// 应再次 compose up 并以 rollback_failed 收尾。date 桩每次 +%s 跳 +400
+// 让 300s 健康窗口立即超时。
+func TestHelperScriptRollbackRecreatesAndReportsFailure(t *testing.T) {
+	deployDir := t.TempDir()
+	stubDir := t.TempDir()
+	callsPath := filepath.Join(stubDir, "docker-calls.log")
+	counterPath := filepath.Join(stubDir, "date-counter")
+
+	write := func(path, content string, perm os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), perm); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	write(filepath.Join(deployDir, "docker-compose.yml"), "new-compose\n", 0o644)
+	write(filepath.Join(deployDir, "docker-compose.yml.upgrade.bak"), "old-compose\n", 0o644)
+	write(filepath.Join(deployDir, ".env"), "FLUX_VERSION=9.9.9\n", 0o600)
+	write(filepath.Join(deployDir, ".env.upgrade.bak"), "FLUX_VERSION=1.0.0\n", 0o600)
+	write(counterPath, "1000", 0o644)
+
+	dockerStub := `#!/bin/sh
+echo "$@" >> "` + callsPath + `"
+case "$*" in
+  "compose pull"*) exit 0 ;;
+  "compose up"*) exit 0 ;;
+  "compose ps"*)
+    case "$*" in
+      *State*) echo "exited" ;;
+      *Name*) echo "backend-1" ;;
+    esac
+    exit 0 ;;
+  "exec"*) exit 1 ;;
+esac
+exit 0
+`
+	write(filepath.Join(stubDir, "docker"), dockerStub, 0o755)
+	dateStub := `#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    *%s*)
+      n=$(cat "` + counterPath + `")
+      n=$((n + 400))
+      echo "$n" > "` + counterPath + `"
+      echo "$n"
+      exit 0
+      ;;
+  esac
+done
+echo "2026-01-01T00:00:00Z"
+`
+	write(filepath.Join(stubDir, "date"), dateStub, 0o755)
+	write(filepath.Join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n", 0o755)
+
+	executor := &systemUpgradeExecutor{deployDir: deployDir, backendContainer: "flux-panel-backend"}
+	scriptPath := filepath.Join(stubDir, "helper.sh")
+	write(scriptPath, executor.helperScript(), 0o755)
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PANEL_DEPLOY_DIR="+deployDir,
+		"FLUX_UPGRADE_VERSION=9.9.9",
+		"FLUX_UPGRADE_STARTED_AT=2026-01-01T00:00:00Z",
+	)
+	out, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("helper script should exit non-zero when the new backend never becomes healthy, output:\n%s", out)
+	}
+
+	calls, err := os.ReadFile(callsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker calls) error = %v", err)
+	}
+	if ups := strings.Count(string(calls), "compose up"); ups < 2 {
+		t.Fatalf("rollback must re-run compose up with the restored files; docker calls:\n%s", calls)
+	}
+	status, err := os.ReadFile(filepath.Join(deployDir, ".flmx_upgrade_status.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(status) error = %v", err)
+	}
+	if !strings.Contains(string(status), `"result": "rollback_failed"`) {
+		t.Fatalf("status = %s, want rollback_failed after failed rollback health check", status)
+	}
+	compose, err := os.ReadFile(filepath.Join(deployDir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("ReadFile(compose) error = %v", err)
+	}
+	if string(compose) != "old-compose\n" {
+		t.Fatalf("compose = %q, want restored backup content", compose)
+	}
+	if _, err := os.Stat(filepath.Join(deployDir, "docker-compose.yml.upgrade.bak")); err != nil {
+		t.Fatalf("backup must be preserved after rollback_failed: %v", err)
+	}
+}
+
+// F-139：代理开启时 downloadReleaseAsset 此前只有代理 URL 一条路，
+// 代理对该资产不可用即整体失败。现应先试代理、失败后以直连 URL 重试
+// 整组（资产 + .sha256 同源同次），本用例代理全 502、直连提供正确
+// 资产与校验，断言最终成功且代理确实被先试过。
+func TestDownloadReleaseAssetFallsBackToDirectWhenProxyFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	repoStore, err := repo.Open(dbPath)
+	if err != nil {
+		t.Fatalf("repo.Open() error = %v", err)
+	}
+	defer repoStore.Close()
+	now := time.Now().UnixMilli()
+
+	content := []byte("services: {}\n")
+	sum := fmt.Sprintf("%x", sha256.Sum256(content))
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			fmt.Fprint(w, sum)
+			return
+		}
+		_, _ = w.Write(content)
+	}))
+	defer direct.Close()
+
+	var proxyHits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	if err := repoStore.UpsertConfig("github_proxy_enabled", "true", now); err != nil {
+		t.Fatalf("UpsertConfig() github_proxy_enabled error = %v", err)
+	}
+	if err := repoStore.UpsertConfig("github_proxy_url", proxy.URL, now); err != nil {
+		t.Fatalf("UpsertConfig() github_proxy_url error = %v", err)
+	}
+
+	originalBase := systemUpgradeReleaseBaseURL
+	systemUpgradeReleaseBaseURL = direct.URL
+	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
+	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
+
+	h := &Handler{repo: repoStore}
+	body, err := h.downloadReleaseAsset("9.9.9", "docker-compose-v4.yml")
+	if err != nil {
+		t.Fatalf("代理失败时应降级直连下载资产: %v", err)
+	}
+	if string(body) != string(content) {
+		t.Fatalf("asset body = %q, want %q", body, content)
+	}
+	if proxyHits.Load() == 0 {
+		t.Fatal("应先经代理尝试下载")
 	}
 }
 
