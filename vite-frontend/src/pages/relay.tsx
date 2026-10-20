@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { LayoutGrid, List } from "lucide-react";
 
-import { getInboundList, getInboundRelays } from "@/api";
+import { getInboundList, getInboundRelays, probeInboundRelays } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
+import { RelayLatencyCell } from "@/components/relay-latency";
 import { PageLoadingState } from "@/components/page-state";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import ForwardPage from "@/pages/forward";
@@ -43,6 +44,7 @@ function LinesView() {
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
   const [editing, setEditing] = useState<InboundApiItem | null>(null);
+  const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
   const [onlyWithRelays, setOnlyWithRelays] = useState(false);
   const [viewMode, setViewMode] = useLocalStorageState<"list" | "grid">(
     "relay-lines-view-mode",
@@ -67,6 +69,51 @@ function LinesView() {
   useEffect(() => {
     load();
   }, [load]);
+
+  /** 移植自 kure29/flyx：测中转线路的分段延迟（Lane D），结果按线路 id 合并回列表。 */
+  const probe = useCallback(
+    async (ids: number[]) => {
+      const busy = ids.length > 0 ? ids : relays.map((r) => r.id);
+
+      setProbingIds((prev) => new Set([...prev, ...busy]));
+      try {
+        const res = await probeInboundRelays(ids);
+
+        if (res.code !== 0) {
+          toast.error(res.msg || "检测失败");
+
+          return;
+        }
+        const data = res.data ?? {};
+
+        setRelays((prev) =>
+          prev.map((r) =>
+            data[String(r.id)] ? { ...r, latency: data[String(r.id)] } : r,
+          ),
+        );
+      } catch {
+        toast.error("检测失败");
+      } finally {
+        setProbingIds((prev) => {
+          const next = new Set(prev);
+
+          busy.forEach((id) => next.delete(id));
+
+          return next;
+        });
+      }
+    },
+    [relays],
+  );
+
+  const latencyOf = (l: InboundRelayApiItem) =>
+    l.forwardExists ? (
+      <RelayLatencyCell
+        latency={l.latency}
+        probing={probingIds.has(l.id)}
+        onProbe={() => probe([l.id])}
+      />
+    ) : null;
 
   const byInbound = useMemo(() => {
     const m = new Map<number, InboundRelayApiItem[]>();
@@ -99,6 +146,16 @@ function LinesView() {
           >
             {onlyWithRelays ? "显示全部" : "只看有中转的"}
           </Button>
+          {total > 0 && (
+            <Button
+              isLoading={probingIds.size > 0}
+              size="sm"
+              variant="flat"
+              onPress={() => probe([])}
+            >
+              测延迟
+            </Button>
+          )}
           <Button
             isIconOnly
             aria-label={viewMode === "list" ? "卡片视图" : "列表视图"}
@@ -181,6 +238,11 @@ function LinesView() {
                               {l.forwardExists ? "转发已暂停" : "转发已被删除"}
                             </div>
                           )}
+                          {l.forwardExists && (
+                            <div className="mt-1.5 flex justify-end">
+                              {latencyOf(l)}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -256,6 +318,7 @@ function LinesView() {
                               {l.shareHost || entry.Host}:{entry.Port}
                             </span>
                           )}
+                          {latencyOf(l)}
                         </div>
                       );
                     })}
