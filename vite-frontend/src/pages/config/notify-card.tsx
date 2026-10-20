@@ -31,6 +31,17 @@ const NOTIFY_EVENTS = [
     description: "到期前 3 天提醒一次",
   },
   {
+    key: "latency_bad",
+    label: "延迟 / 丢包异常",
+    description:
+      "某测试点连续 3 次检测（约 9 分钟）丢包 ≥ 20% 或延迟超阈值才提醒，恢复时再提醒一次；阈值可用 notify_latency_loss_pct / notify_latency_ms 配置",
+  },
+  {
+    key: "route_change",
+    label: "回程线路变化",
+    description: "识别出的回程线路（如 CN2 GIA → 163）变化时提醒",
+  },
+  {
     key: "user_quota",
     label: "用户流量 / 到期",
     description: "转发用户流量用到 90%、用完或 3 天内到期，共享用户 3 天内到期",

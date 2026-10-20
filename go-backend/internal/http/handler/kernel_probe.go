@@ -207,6 +207,11 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 	return results, nil
 }
 
+// runExternalProbeLoop runs one reachability round every
+// externalProbeInterval: imported inbounds from the panel, then every
+// node's latency to its reference points and its return routes. The
+// latency round also records history samples and latency alerts (see
+// probeNodeLatency); routes self-throttle to 24h per node.
 func (h *Handler) runExternalProbeLoop(ctx context.Context) {
 	defer h.jobsWG.Done()
 	ticker := time.NewTicker(externalProbeInterval)
@@ -214,6 +219,15 @@ func (h *Handler) runExternalProbeLoop(ctx context.Context) {
 	for {
 		if _, err := h.probeExternalInbounds(ctx, nil); err != nil && ctx.Err() == nil {
 			log.Printf("imported node probe failed: %v", err)
+		}
+		if _, err := h.probeNodeLatency(ctx, nil); err != nil && ctx.Err() == nil {
+			log.Printf("node latency probe failed: %v", err)
+		}
+		if _, err := h.probeRelayLatency(ctx, nil); err != nil && ctx.Err() == nil {
+			log.Printf("relay latency probe failed: %v", err)
+		}
+		if _, err := h.traceNodeRoutes(ctx, nil, false); err != nil && ctx.Err() == nil {
+			log.Printf("node route trace failed: %v", err)
 		}
 		select {
 		case <-ctx.Done():
