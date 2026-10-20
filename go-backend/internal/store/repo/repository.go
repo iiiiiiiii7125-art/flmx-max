@@ -2090,6 +2090,20 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.MonitorPermissions = monitorPermissions
 
+	// B4/F-004：导出 user_subscription 整表（订阅分配关系）
+	userSubscriptions, err := r.exportUserSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("export user subscriptions failed: %w", err)
+	}
+	backup.UserSubscriptions = userSubscriptions
+
+	// B4/F-030：导出 service_monitor 整表（监控定义）
+	serviceMonitors, err := r.exportServiceMonitors()
+	if err != nil {
+		return nil, fmt.Errorf("export service monitors failed: %w", err)
+	}
+	backup.ServiceMonitors = serviceMonitors
+
 	return backup, nil
 }
 
@@ -2200,6 +2214,21 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 		}
 		backup.MonitorPermissions = v
 	}
+	// B4/F-004/F-030：补齐 user_subscription/service_monitor 两表
+	if typeSet["userSubscriptions"] {
+		v, err := r.exportUserSubscriptions()
+		if err != nil {
+			return nil, fmt.Errorf("export user subscriptions failed: %w", err)
+		}
+		backup.UserSubscriptions = v
+	}
+	if typeSet["serviceMonitors"] {
+		v, err := r.exportServiceMonitors()
+		if err != nil {
+			return nil, fmt.Errorf("export service monitors failed: %w", err)
+		}
+		backup.ServiceMonitors = v
+	}
 	return backup, nil
 }
 
@@ -2265,6 +2294,11 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		}
 		if n.ServerIPV6.Valid {
 			b.ServerIPv6 = n.ServerIPV6.String
+		}
+		// B4/F-027：ExtraIPs 字段在 NodeBackup 中存在但导出曾漏写，
+		// 多 IP 节点恢复后附加 IP 全丢。
+		if n.ExtraIPs.Valid {
+			b.ExtraIPs = n.ExtraIPs.String
 		}
 		if n.InterfaceName.Valid {
 			b.InterfaceName = n.InterfaceName.String
@@ -2449,6 +2483,39 @@ func (r *Repository) exportUserInbounds() ([]model.UserInboundBackup, error) {
 	for _, row := range rows {
 		out = append(out, model.UserInboundBackup{
 			ID: row.ID, UserID: row.UserID, InboundID: row.InboundID, RelayID: row.RelayID,
+		})
+	}
+	return out, nil
+}
+
+// B4/F-004：导出 user_subscription 整表（订阅分配关系）
+func (r *Repository) exportUserSubscriptions() ([]model.UserSubscriptionBackup, error) {
+	var rows []model.UserSubscription
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.UserSubscriptionBackup, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, model.UserSubscriptionBackup{
+			ID: row.ID, UserID: row.UserID, SubscriptionID: row.SubscriptionID, CreatedTime: row.CreatedTime,
+		})
+	}
+	return out, nil
+}
+
+// B4/F-030：导出 service_monitor 整表（监控定义）
+func (r *Repository) exportServiceMonitors() ([]model.ServiceMonitorBackup, error) {
+	var rows []model.ServiceMonitor
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.ServiceMonitorBackup, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, model.ServiceMonitorBackup{
+			ID: row.ID, Name: row.Name, Type: row.Type, Target: row.Target,
+			IntervalSec: row.IntervalSec, TimeoutSec: row.TimeoutSec,
+			NodeID: row.NodeID, Enabled: row.Enabled,
+			CreatedTime: row.CreatedTime, UpdatedTime: row.UpdatedTime,
 		})
 	}
 	return out, nil
@@ -2678,6 +2745,23 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.MonitorPermissionsImported = count
 		}
+		// B4/F-004：导入 user_subscription 表（订阅分配关系）。
+		// 旧备份无该字段时 len=0 自动跳过，不报错。
+		if typeSet["userSubscriptions"] && len(backup.UserSubscriptions) > 0 {
+			count, err := importUserSubscriptions(tx, backup.UserSubscriptions)
+			if err != nil {
+				return fmt.Errorf("import user subscriptions failed: %w", err)
+			}
+			result.UserSubscriptionsImported = count
+		}
+		// B4/F-030：导入 service_monitor 表（监控定义）
+		if typeSet["serviceMonitors"] && len(backup.ServiceMonitors) > 0 {
+			count, err := importServiceMonitors(tx, backup.ServiceMonitors, now)
+			if err != nil {
+				return fmt.Errorf("import service monitors failed: %w", err)
+			}
+			result.ServiceMonitorsImported = count
+		}
 		return nil
 	})
 	if err != nil {
@@ -2811,6 +2895,8 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 			ServerIP:       n.ServerIP,
 			ServerIPV4:     sql.NullString{String: n.ServerIPv4, Valid: true},
 			ServerIPV6:     sql.NullString{String: n.ServerIPv6, Valid: true},
+			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。
+			ExtraIPs:       sql.NullString{String: n.ExtraIPs, Valid: n.ExtraIPs != ""},
 			Port:           n.Port,
 			InterfaceName:  sql.NullString{String: n.InterfaceName, Valid: true},
 			Version:        sql.NullString{String: n.Version, Valid: true},
@@ -2835,7 +2921,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 		err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "port", "interface_name", "version",
+				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
 				"inx", "is_remote", "remote_url", "remote_token", "remote_config", "latency_targets", "forward_mode", "expiry_reminder_dismissed",
 			}),
@@ -3037,6 +3123,65 @@ func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup) (int, error
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "inbound_id", "relay_id",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// B4/F-004：导入 user_subscription 表（订阅分配关系）
+func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup) (int, error) {
+	count := 0
+	for _, r := range rows {
+		item := model.UserSubscription{
+			ID:             r.ID,
+			UserID:         r.UserID,
+			SubscriptionID: r.SubscriptionID,
+			CreatedTime:    r.CreatedTime,
+		}
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"user_id", "subscription_id", "created_time",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// B4/F-030：导入 service_monitor 表（监控定义）
+func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now int64) (int, error) {
+	count := 0
+	for _, r := range rows {
+		updated := r.UpdatedTime
+		if updated == 0 {
+			updated = now
+		}
+		item := model.ServiceMonitor{
+			ID:          r.ID,
+			Name:        r.Name,
+			Type:        r.Type,
+			Target:      r.Target,
+			IntervalSec: r.IntervalSec,
+			TimeoutSec:  r.TimeoutSec,
+			NodeID:      r.NodeID,
+			Enabled:     r.Enabled,
+			CreatedTime: r.CreatedTime,
+			UpdatedTime: updated,
+		}
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"name", "type", "target", "interval_sec", "timeout_sec",
+				"node_id", "enabled", "created_time", "updated_time",
 			}),
 		}).Create(&item).Error
 		if err != nil {

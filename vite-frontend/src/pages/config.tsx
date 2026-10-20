@@ -261,6 +261,9 @@ const BACKUP_TYPE_OPTIONS = [
   { value: "userInbounds", label: "用户入站分配" },
   { value: "announcements", label: "公告" },
   { value: "monitorPermissions", label: "监控权限" },
+  // B4/F-004/F-030：订阅分配与监控定义（后端本轮补齐备份，前端同步列出）。
+  { value: "userSubscriptions", label: "订阅分配" },
+  { value: "serviceMonitors", label: "监控定义" },
 ] as const;
 
 const BACKUP_TYPE_VALUES = BACKUP_TYPE_OPTIONS.map((option) => option.value);

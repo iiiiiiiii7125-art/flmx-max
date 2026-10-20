@@ -471,6 +471,12 @@ type BackupData struct {
 	Announcements []AnnouncementBackup `json:"announcements,omitempty"`
 	// O7-008：monitor_permission 整表备份（监控权限丢失修复）
 	MonitorPermissions []MonitorPermissionBackup `json:"monitorPermissions,omitempty"`
+	// B4/F-004：user_subscription 整表备份（1.0.12 订阅分配关系；
+	// 此前整表漏列，恢复后全部分配丢失）
+	UserSubscriptions []UserSubscriptionBackup `json:"userSubscriptions,omitempty"`
+	// B4/F-030：service_monitor 监控定义整表备份（此前只有结果表口径，
+	// 定义未备，恢复后监控项全丢）
+	ServiceMonitors []ServiceMonitorBackup `json:"serviceMonitors,omitempty"`
 	// Inbounds carries node kernels, their inbounds (imported nodes too),
 	// relay links and traffic counter baselines; restored as one unit.
 	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
@@ -618,6 +624,31 @@ type UserInboundBackup struct {
 	UserID    int64 `json:"userId"`
 	InboundID int64 `json:"inboundId"`
 	RelayID   int64 `json:"relayId"`
+}
+
+// UserSubscriptionBackup 是 B4/F-004 补齐的订阅分配备份结构
+// （字段对照 model.UserSubscription）。
+type UserSubscriptionBackup struct {
+	ID             int64 `json:"id"`
+	UserID         int64 `json:"userId"`
+	SubscriptionID int64 `json:"subscriptionId"`
+	CreatedTime    int64 `json:"createdTime"`
+}
+
+// ServiceMonitorBackup 是 B4/F-030 补齐的监控定义备份结构
+// （字段对照 model.ServiceMonitor；结果表 service_monitor_result
+// 是遥测时序，不在备份范围）。
+type ServiceMonitorBackup struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Target      string `json:"target"`
+	IntervalSec int    `json:"intervalSec"`
+	TimeoutSec  int    `json:"timeoutSec"`
+	NodeID      int64  `json:"nodeId"`
+	Enabled     int    `json:"enabled"`
+	CreatedTime int64  `json:"createdTime"`
+	UpdatedTime int64  `json:"updatedTime,omitempty"`
 }
 
 // AnnouncementBackup 是 O7-007 补齐的公告备份结构（字段对照 model.Announcement）。
@@ -808,6 +839,9 @@ type ImportResult struct {
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int         `json:"announcementsImported"`
 	MonitorPermissionsImported int         `json:"monitorPermissionsImported"`
+	// B4/F-004/F-030：订阅分配与监控定义导入计数
+	UserSubscriptionsImported int `json:"userSubscriptionsImported"`
+	ServiceMonitorsImported   int `json:"serviceMonitorsImported"`
 	AutoBackup                 *BackupData `json:"autoBackup,omitempty"`
 }
 
