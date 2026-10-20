@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 
+import { IS_DEMO, startDemoRealtime } from "@/demo";
 import { getToken } from "@/utils/session";
 
 interface NodeRealtimeMessage {
@@ -48,6 +49,8 @@ interface RealtimeSubscriber {
 // 监控页父组件与 MonitorView 各自调用 useNodeRealtime 时不再各连一条
 // （同一广播此前会被推送/处理两遍，且两条连接状态来源不唯一）。
 let sharedSocket: WebSocket | null = null;
+// 在线演示没有后端 WebSocket：startDemoRealtime 伪造指标喂给同一套订阅扇出。
+let stopDemoRealtime: (() => void) | null = null;
 let sharedState: RealtimeConnectionState = {
   connected: false,
   connecting: false,
@@ -98,6 +101,25 @@ const scheduleSharedReconnect = () => {
 
 const connectShared = () => {
   if (sharedSubscribers.size === 0) {
+    return;
+  }
+
+  if (IS_DEMO) {
+    // 短路：不建 WebSocket、状态直接置已连接——usingPollingFallback 恒假，
+    // node 页的 REST 轮询兜底也不会启动（演示下它只会反复打录制外的接口）。
+    if (!stopDemoRealtime) {
+      stopDemoRealtime = startDemoRealtime((message) => {
+        sharedSubscribers.forEach((subscriber) => {
+          subscriber.onMessage(message as NodeRealtimeMessage);
+        });
+      });
+      setSharedState({
+        connected: true,
+        connecting: false,
+        usingPollingFallback: false,
+      });
+    }
+
     return;
   }
 
@@ -162,6 +184,11 @@ const connectShared = () => {
 const disconnectShared = () => {
   clearSharedReconnectTimer();
   sharedReconnectAttempts = 0;
+
+  if (stopDemoRealtime) {
+    stopDemoRealtime();
+    stopDemoRealtime = null;
+  }
 
   if (sharedSocket) {
     sharedSocket.onopen = null;
