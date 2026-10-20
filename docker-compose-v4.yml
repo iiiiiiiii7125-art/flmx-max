@@ -48,7 +48,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-flux_panel}
       POSTGRES_USER: ${POSTGRES_USER:-flux_panel}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flux_panel_change_me}
+      POSTGRES_PASSWORD: <redacted>}
       TZ: Asia/Shanghai
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -75,6 +75,14 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    # F-124: 前端此前无 healthcheck，docker ps / 外部探活看不出 nginx
+    # 是否在服务（后端与 PG 都有）。探针与 backend 同型（busybox wget）。
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
     networks:
       - gost-network
 

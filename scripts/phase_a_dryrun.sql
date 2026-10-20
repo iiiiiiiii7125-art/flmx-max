@@ -1,6 +1,9 @@
 -- R5-B4 阶段 A: 只读 dry-run（7 类清单）
 -- 用法：sqlite3 gost.db < phase_a_dryrun.sql
--- 或 PG: psql -d <db> -f phase_a_dryrun.sql
+-- F-122: 本脚本是 sqlite3 CLI 专用（.headers/.mode/.print 点命令与
+-- GROUP_CONCAT 均为 SQLite 方言）。此前头部宣称可用于 PG 属误导：
+-- psql 既不认点命令也没有 GROUP_CONCAT。PG 环境请手工适配后再跑
+-- （去掉点命令、GROUP_CONCAT 改 string_agg、.print 改注释）。
 -- 只读 SELECT，无 DDL，无 DELETE。
 
 .headers on
@@ -81,9 +84,12 @@ SELECT 'chain_tunnel_dup_groups' AS item, COUNT(*) AS n FROM (
 SELECT 'node_inbound_dup_groups' AS item, COUNT(*) AS n FROM (
   SELECT 1 FROM node_inbound GROUP BY node_id, port HAVING COUNT(*) > 1
 );
+-- F-122: 用户名列名为 "user"（与第 6 节同口径）；原汇总写 username，
+-- 在真实 schema 上直接报错、整段汇总中断。
 SELECT 'username_dup_groups' AS item, COUNT(*) AS n FROM (
-  SELECT 1 FROM "user" GROUP BY username HAVING COUNT(*) > 1
+  SELECT 1 FROM "user" GROUP BY "user" HAVING COUNT(*) > 1
 );
-SELECT 'default_sub_dup_groups' AS item, COUNT(*) AS n FROM (
-  SELECT 1 FROM subscription WHERE is_default = 1 GROUP BY user_id HAVING COUNT(*) > 1
-);
+-- F-122: subscription 既无 is_default 列也无 user_id 列——「默认订阅」
+-- 是运行时按排序第一条计算的概念（见第 7 节），原汇总查询必然报错。
+-- 这里以订阅总数代替该不存在的分组统计。
+SELECT 'subscriptions_total' AS item, COUNT(*) AS n FROM subscription;

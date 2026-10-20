@@ -1,0 +1,9 @@
+# F-051: workflow 的 uses: 已全部 pin 到 commit SHA（版本以行尾注释
+# 保留）。pin 的代价是升级不再自动跟随——由 Dependabot 每周检查
+# github-actions 生态并开 PR 把 SHA 与注释版本一并更新。
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
