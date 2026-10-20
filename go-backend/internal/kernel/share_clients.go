@@ -48,6 +48,11 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
+		// 与 config 路径同口径：SR 无法表达的节点（VLESS 加密、WireGuard）不进
+		// profile，避免用户拿到能显示却握手必失败的坏节点。
+		if p, ok := endpointProxy(e); ok && shadowrocketSkips(p) {
+			continue
+		}
 		if p, ok := ClashProxy(e); ok {
 			rendered = append(rendered, e)
 			nodes = append(nodes, p)

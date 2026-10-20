@@ -161,3 +161,60 @@ func TestImportedEncryptionPreserved(t *testing.T) {
 		t.Fatalf("bogus auth must be rejected, got %v", err)
 	}
 }
+
+// P1 回归（E2 复审）：vless:// 导入必须保留 encryption 参数——曾因解析器
+// 未读取该参数，URI 导入的 ENC 节点在全部格式静默退化为普通 VLESS 坏节点，
+// 且所有以 Proxy 字段为据的防坏节点守卫被一并绕过。
+func TestParseImportPreservesVLESSEncryption(t *testing.T) {
+	encStr := "mlkem768x25519plus.native.0rtt.100-111-1111.75-0-111.50-0-3333." + strings.Repeat("A", 1579)
+	link := "vless://" + testUUID + "@203.0.113.30:443?encryption=" + encStr + "&security=none&type=tcp#ENC"
+	nodes, errs := ParseImport(link)
+	if len(nodes) != 1 {
+		t.Fatalf("parsed %d nodes, errs=%v", len(nodes), errs)
+	}
+	p := nodes[0].Proxy
+	if p.str("encryption") != encStr {
+		t.Fatalf("encryption lost on import: %q", p.str("encryption"))
+	}
+	e := Endpoint{Name: nodes[0].Name, Host: nodes[0].Host, Port: nodes[0].Port, Direct: true, Proxy: p}
+	uri, ok := proxyURI(e)
+	if !ok || !strings.Contains(uri, "encryption="+encStr) {
+		t.Fatalf("re-exported URI lost encryption: ok=%v", ok)
+	}
+	if _, ok := proxySingbox(e); ok {
+		t.Fatal("proxySingbox must skip URI-imported enc node")
+	}
+	if _, ok := loonLine(p); ok {
+		t.Fatal("loon must skip URI-imported enc node")
+	}
+	if _, ok := qxLine(p); ok {
+		t.Fatal("qx must skip URI-imported enc node")
+	}
+}
+
+// P2 回归（E2 复审）：Shadowrocket 的 profile 与 config 口径一致——SR 无法
+// 表达的 ENC 节点两条路径都跳过，不得只在 config 跳、profile 塞坏节点。
+func TestShadowrocketProfileSkipsEncryption(t *testing.T) {
+	secret, _ := GenerateEncryptionSecret(EncryptionAuthX25519)
+	encIn := Inbound{ID: 11, Protocol: ProtocolVLESS, Port: 443,
+		Settings: Settings{UUID: testUUID, EncryptionAuth: EncryptionAuthX25519, EncryptionMode: EncryptionModeNative, EncryptionSecret: secret},
+		Security: Security{Type: SecurityNone}}
+	encIn.Transport.Type = TransportTCP
+	plainIn := Inbound{ID: 12, Protocol: ProtocolVLESS, Port: 8443,
+		Settings: Settings{UUID: testUUID}, Security: Security{Type: SecurityNone}}
+	plainIn.Transport.Type = TransportTCP
+	eps := []Endpoint{
+		{Name: "enc-node", Host: "203.0.113.31", Port: 443, Direct: true, Inbound: encIn},
+		{Name: "plain-node", Host: "203.0.113.31", Port: 8443, Direct: true, Inbound: plainIn},
+	}
+	body, _, err := Subscription(FormatShadowrocket, eps, SubOptions{})
+	if err != nil {
+		t.Fatalf("subscription: %v", err)
+	}
+	if strings.Contains(body, "enc-node") {
+		t.Fatalf("shadowrocket profile must skip enc node:\n%s", body)
+	}
+	if !strings.Contains(body, "plain-node") {
+		t.Fatalf("shadowrocket profile must keep plain node:\n%s", body)
+	}
+}
