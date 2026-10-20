@@ -124,8 +124,8 @@ func TestPerIPSpeedLimitRuntimePayload(t *testing.T) {
 	}
 	expectedName := fmt.Sprintf("rule_traffic_limit_%d", forwardID)
 	expectedTotalName := fmt.Sprint(totalSpeedID)
-	expectedRuleLimits := []string{"0.0.0.0/0 5.0MB 5.0MB", "::/0 5.0MB 5.0MB"}
-	expectedTotalLimits := []string{"$ 10.0MB 10.0MB"}
+	expectedRuleLimits := []string{"0.0.0.0/0 4.768MB 4.768MB", "::/0 4.768MB 4.768MB"}
+	expectedTotalLimits := []string{"$ 9.537MB 9.537MB"}
 
 	commandMu.Lock()
 	defer commandMu.Unlock()

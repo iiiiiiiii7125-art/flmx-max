@@ -100,6 +100,20 @@ func (h *Handler) buildNodeFlowUploadBatch(nodeID int64, items []flowItem, metas
 	return batch
 }
 
+// addPeerShareFlow 是 peer share 流量的唯一汇总点（四入口：
+// processPeerShareFlow / processPeerShareFlowFromForward /
+// processPeerShareFlowByServiceName 的 U+D，以及 buildNodeFlowUploadBatch
+// 的 peerShareUsage）。
+// 口径（F-077 核查后写明）：share 的 current_flow 记的是**提供方
+// 节点**被该 share 实际消耗的原始字节（U+D，不缩放）。不套用本地
+// 隧道计费口径（TrafficRatio/Flow 方向选择）的理由：这些流量在
+// 提供方没有对应的本地隧道/转发计量对象——消费方的 user/tunnel ID
+// 在提供方库中不存在（见 buildNodeFlowUploadBatch 头注释），ratio
+// 与 Flow 是消费方面板对其自有用户计费的参数，提供方无从取得；
+// share 上限（MaxBandwidth，isPeerShareFlowExceeded 按字节比较）
+// 的语义即「经本节点共享出去的物理流量上限」。四入口经核查口径
+// 一致；若产品日后定义为与消费方计费一致，改此一处汇总口径即可，
+// 各入口不得再自行缩放（防二次缩放）。
 func (h *Handler) addPeerShareFlow(nodeID, shareID, delta int64) {
 	if nodeID <= 0 || shareID <= 0 || delta <= 0 {
 		return

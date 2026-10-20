@@ -548,7 +548,7 @@ func TestBuildConnLimiterConfigUsesUserTotalWithRulePerIP(t *testing.T) {
 
 func TestBuildTrafficLimiterPayloadUsesOnlyPerIPRulesWhenTotalIsSeparate(t *testing.T) {
 	payload := buildTrafficLimiterPayload("rule_traffic_limit_42", nil, intPtr(40))
-	wantLimits := []string{"0.0.0.0/0 5.0MB 5.0MB", "::/0 5.0MB 5.0MB"}
+	wantLimits := []string{"0.0.0.0/0 4.768MB 4.768MB", "::/0 4.768MB 4.768MB"}
 	if payload["name"] != "rule_traffic_limit_42" {
 		t.Fatalf("expected name rule_traffic_limit_42, got %v", payload["name"])
 	}

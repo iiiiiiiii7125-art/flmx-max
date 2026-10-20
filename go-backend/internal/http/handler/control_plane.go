@@ -2172,8 +2172,13 @@ func joinLimiterNames(configs []forwardLimiterConfig) string {
 }
 
 func speedToLimitLine(key string, speed int) string {
-	rate := float64(speed) / 8.0
-	return fmt.Sprintf("%s %.1fMB %.1fMB", key, rate, rate)
+	// F-019（A4-002）：换算必须与 agent 侧解析口径一致——agent 用
+	// alecthomas/units.ParseBase2Bytes（1MB = 1024*1024 B）还原速率。
+	// 旧实现 speed/8 后用 %.1f 量化到 0.1MiB（≈0.84Mbps）步进，
+	// 1 Mbps 实际只剩约 0.84 Mbps（偏低约 16%）。现按目标 B/s
+	// （Mbps×10^6/8）折算 MiB/s 并保留 3 位小数，还原误差 <0.2%。
+	rate := float64(speed) * 1000000 / 8 / (1024 * 1024)
+	return fmt.Sprintf("%s %.3fMB %.3fMB", key, rate, rate)
 }
 
 func buildTrafficLimiterPayload(name string, totalSpeed *int, ipSpeed *int) map[string]interface{} {

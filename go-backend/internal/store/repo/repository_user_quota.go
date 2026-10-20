@@ -369,12 +369,22 @@ func (r *Repository) MarkUserQuotaDisabled(userID int64, pausedForwardIDs []int6
 	if userID <= 0 {
 		return errors.New("user id is required")
 	}
-	return r.db.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+	res := r.db.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
 		"disabled_by_quota":  1,
 		"disabled_at":        now,
 		"paused_forward_ids": joinPausedForwardIDs(pausedForwardIDs),
 		"updated_time":       now,
-	}).Error
+	})
+	if res.Error != nil {
+		return res.Error
+	}
+	// F-018：Updates 命中 0 行时 GORM 返回 nil error，调用方会误以为
+	// 已落库。配额行不存在即视为写失败上抛（执法调用方的 quota view
+	// 均来自已落库的行，此处 0 行必为异常）。
+	if res.RowsAffected == 0 {
+		return errors.New("user quota row not found")
+	}
+	return nil
 }
 
 func (r *Repository) ResetUserQuotaUsage(userID int64, scope string, now time.Time) (*UserQuotaRelease, error) {
