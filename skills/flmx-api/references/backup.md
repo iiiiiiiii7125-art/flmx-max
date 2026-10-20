@@ -141,3 +141,14 @@ curl -s -X POST "${TARGET_URL}/api/v1/backup/import" \
 1. Reinstall node agents with new panel URL
 2. Update node secrets if they differ
 3. Reassign federation tokens
+
+## Compatibility aliases
+
+The three backup endpoints are also registered under a doubled prefix for
+backward compatibility with older clients; behavior is identical:
+
+- `POST /api/v1/api/v1/backup/export`
+- `POST /api/v1/api/v1/backup/import`
+- `POST /api/v1/api/v1/backup/restore`
+
+New integrations should use the canonical backup paths listed above.

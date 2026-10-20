@@ -30,7 +30,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/1.0.1/pa
 
 ## 修复面板内升级
 
-面板内升级提示“部署docker-compose.yml不可用”时：3.0.6 及更早版本的面板内升级会把后端容器的部署目录挂载弄丢，之后面板内升级会一直提示这个错误。数据不受影响，修复一次即可：
+面板内升级提示“部署docker-compose.yml不可用”时：3.0.6 及更早版本的面板内升级会把后端容器的部署目录挂载弄丢，之后面板内升级会一直提示这个错误。（注：3.0.x 指本项目上游的旧版本线；现行 1.0.x 版本均晚于该节点，全新安装的 1.0.x 不受影响，本节只针对从旧版本线一路升级上来的存量部署。）数据不受影响，修复一次即可：
 
 1. 在服务器上进入存放 `docker-compose.yml` 和 `.env` 的目录（常见为 `/root`，或当初运行安装脚本的目录），用 `ls` 确认这两个文件都在
 2. 执行：
@@ -39,7 +39,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/1.0.1/pa
    docker compose up -d --force-recreate backend frontend
    ```
 
-也可以在该目录运行 3.0.7 及以后的安装脚本，选“更新面板”，会顺带修复。
+也可以在该目录运行 3.0.7 及以后的安装脚本（现行 1.0.x 的安装脚本同样适用），选“更新面板”，会顺带修复。
 
 ## 从旧版本升级（含 R5-B4 并发修复）
 
@@ -66,7 +66,7 @@ SELECT "user", COUNT(*) FROM "user" GROUP BY "user" HAVING COUNT(*) > 1;
 SQLEOF
 ```
 
-> 以上 SQL 与代码预检逻辑（`runV1Precheck`）一致。
+> 以上 SQL 中的 4 条重复检查与代码启动预检逻辑（`runV1Precheck`）一致；`forward_port` 孤儿检查不在启动预检内，只包含在 `scripts/phase_a_dryrun.sql` 的 dry-run 清单中。
 
 ### 3. 清理步骤
 

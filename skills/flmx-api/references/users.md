@@ -185,3 +185,13 @@ curl -X POST "${FLMX_BASE_URL}/api/v1/user/create" \
     "flowResetTime": 1
   }'
 ```
+
+## POST /api/v1/user/updatePassword
+
+Change the current user's own password. A token flagged `PwdChangeRequired`
+(forced change after reset / first login) may call only this endpoint.
+
+## POST /api/v1/user/quota/reset
+
+Reset a user's quota usage counters (daily / monthly) without touching the
+account's total flow counters — see `/api/v1/user/reset` for the latter.

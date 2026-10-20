@@ -8,8 +8,9 @@ import (
 )
 
 // SubOptions is a subscription's processing pipeline. The steps run in a
-// fixed order: filter → rename → flag → prefix → dedupe → sort; region
-// groups are added when the profile is rendered.
+// fixed order: filter → rename → flag → dedupe → prefix → sort; region
+// groups are added when the profile is rendered. Dedupe runs before the
+// prefix is applied and its key is host|port|protocol only (no name).
 type SubOptions struct {
 	// Lines keeps "relay" or "direct" endpoints only; "" keeps both.
 	Lines string

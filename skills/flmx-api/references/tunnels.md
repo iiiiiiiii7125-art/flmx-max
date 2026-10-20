@@ -311,3 +311,24 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/user/assign" \
   -H "Content-Type: application/json" \
   -d "{\"userId\":2,\"tunnelId\":${TUNNEL_ID},\"flow\":30}"
 ```
+
+## POST /api/v1/tunnel/delete-preview
+
+Preview what deleting a tunnel would affect (its forwards and assignments)
+before actually deleting.
+
+## POST /api/v1/tunnel/delete-with-forwards
+
+Delete a tunnel together with the forwards running on it, in one operation.
+
+## POST /api/v1/tunnel/batch-delete-preview
+
+Preview the impact of deleting multiple tunnels.
+
+## POST /api/v1/tunnel/batch-delete-with-forwards
+
+Delete multiple tunnels together with their forwards.
+
+## POST /api/v1/tunnel/diagnose/stream
+
+Streaming variant of tunnel diagnose (per-hop results pushed incrementally).

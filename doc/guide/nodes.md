@@ -110,9 +110,9 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 | 订阅格式 | 适用客户端 | 不包含 |
 |----------|------------|--------|
 | 自动识别 | 按客户端 UA 返回对应格式 | |
-| Clash / Mihomo | Clash Verge、Stash、FlClash | XHTTP、Snell、NaïveProxy |
+| Clash / Mihomo | Clash Verge、Stash、FlClash | Snell、NaïveProxy |
 | sing-box | SFA / SFI / SFM | XHTTP、Snell |
-| Shadowrocket | Shadowrocket | XHTTP、Snell、NaïveProxy |
+| Shadowrocket | Shadowrocket | Snell、NaïveProxy |
 | Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy |
 | Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy |
 | 通用 base64 | v2rayN、NekoBox | Snell |
@@ -184,7 +184,7 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 
 ## 备份
 
-在 **网站配置 → 数据备份与恢复** 里勾选 **内核与入站**，会导出节点上的内核、所有入站（包括导入的节点）、中转线路和流量统计基准。所有订阅（包括分享出去的）也包含在内。恢复后面板会把内核配置重新推到在线的节点，离线的节点重连时自动补上。3.0.9 之前导出的备份不包含这部分，升级后请重新导出一次。
+在 **网站配置 → 数据备份与恢复** 里勾选 **内核与入站**，会导出节点上的内核、所有入站（包括导入的节点）、中转线路和流量统计基准。所有订阅（包括分享出去的）也包含在内。恢复后面板会把内核配置重新推到在线的节点，离线的节点重连时自动补上。3.0.9 之前导出的备份不包含这部分，升级后请重新导出一次。（注：3.0.x 是本项目上游的旧版本线；现行 1.0.x 版本导出的备份均包含这部分，这句只针对从旧版本线带过来的存量备份。）
 
 下一步：[对接中转](./relay.md)
 
@@ -203,7 +203,6 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 
 ### 相关行为
 
-- pending 行在用户侧列表中隐藏（`ListForwards` 过滤 status=2）
+- pending 行不会出现在转发列表中（`ListForwards` 恒过滤 status=2），只能通过上面的 pending-deletes 接口查看
 - 配额释放、恢复、批量操作均不会复活 pending 行
 - 隧道删除时，pending 行合并进同节点清理批次
-- 前端显示为"删除中"（status=2）

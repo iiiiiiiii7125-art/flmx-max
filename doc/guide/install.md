@@ -44,7 +44,8 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 2. 更新面板
 3. 卸载面板
 4. 迁移到 PostgreSQL
-5. 退出
+5. 配置域名反向代理（自动 HTTPS）
+6. 退出
 
 
 ## 节点端
@@ -122,11 +123,11 @@ sudo nano /etc/caddy/Caddyfile
 
 ```txt
 panel.example.com {
-    reverse_proxy localhost:6366
+    reverse_proxy 127.0.0.1:6366
 }
 ```
 
-Caddy 会自动为域名申请和续期 HTTPS 证书，无需额外配置。
+Caddy 会自动为域名申请和续期 HTTPS 证书，无需额外配置。反代目标请写 `127.0.0.1` 不要写 `localhost`：`localhost` 可能先解析到 IPv6 `[::1]`，经 docker-proxy 转发时连接会被重置导致 502（脚本自动生成的 Caddyfile 用的也是 `127.0.0.1`）。
 
 ### 重启 Caddy
 
