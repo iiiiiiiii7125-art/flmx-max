@@ -52,8 +52,27 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 		log.Printf("applyUserQuotaBlock: list active forwards failed user_id=%d err=%v", userID, err)
 		return
 	}
-	pausedIDs := make([]int64, 0, len(forwards))
+	candidateIDs := make([]int64, 0, len(forwards))
+	for i := range forwards {
+		if forwards[i].Status == 1 {
+			candidateIDs = append(candidateIDs, forwards[i].ID)
+		}
+	}
 	now := time.Now().UnixMilli()
+	// F-018（A4-001，O6-001 变体）：执法顺序改为先落库再暂停。
+	// 旧顺序先逐个暂停、最后以 `_ =` 吞错调用 MarkUserQuotaDisabled：
+	// Mark 一旦写失败，转发已停而 disabled/paused 列表未落库；此后
+	// 第二次执法时 listActiveForwardsByUser 只查 status=1，已停转发
+	// 不在列，pausedIDs=[] 会再次 Mark 成功并把空列表落库，恢复依据
+	// 被彻底覆写——这批转发永久无法自动恢复且无任何日志。
+	// 现顺序：先以候选全集 Mark 落库（失败即整轮中止并记 ALERT，
+	// 不动任何转发；disabled 未置位，下一次流量上报会重新触发执法，
+	// 自愈），再逐个暂停，最后把落库列表回写为实际暂停集合。
+	if err := h.repo.MarkUserQuotaDisabled(userID, candidateIDs, now); err != nil {
+		log.Printf("applyUserQuotaBlock: ALERT mark quota disabled failed user_id=%d err=%v action=abort_enforce_retry_on_next_report", userID, err)
+		return
+	}
+	pausedIDs := make([]int64, 0, len(forwards))
 	for i := range forwards {
 		forward := &forwards[i]
 		if forward.Status != 1 {
@@ -73,7 +92,15 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 		}
 		pausedIDs = append(pausedIDs, forward.ID)
 	}
-	_ = h.repo.MarkUserQuotaDisabled(userID, pausedIDs, now)
+	// pausedIDs 是 candidateIDs 的保序子序列（同源同序追加，暂停失败
+	// 仅跳过），长度不等即集合不等：回写实际集合使恢复列表精确。
+	// 回写失败仅记日志——此时库中仍是候选超集，恢复时对未暂停转发
+	// 置 status=1 为无害空操作，恢复依据只多不少，不会重蹈覆写丢失。
+	if len(pausedIDs) != len(candidateIDs) {
+		if err := h.repo.MarkUserQuotaDisabled(userID, pausedIDs, now); err != nil {
+			log.Printf("applyUserQuotaBlock: trim paused list failed user_id=%d err=%v action=keep_candidate_superset", userID, err)
+		}
+	}
 }
 
 func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int64) {

@@ -13,9 +13,12 @@ import (
 // 问题：批次 3 把 per-node 锁放在 syncNftablesNodeWithOverrides 内，
 // clearNftablesNode 直接调 nftablesManager.Clear() 绕过锁。
 //
-// 新设计：serializedNftManager 包装 nftablesRuntimeManager，所有触碰节点
-// nft 状态的方法（Reconcile/Clear/CollectCounters/Test）都必须经 per-node
-// 锁。调用方必须传 nodeID，不依赖自觉。锁表清理策略保留（ReleaseNode）。
+// 新设计：serializedNftManager 包装 nftablesRuntimeManager，写方法
+// （Reconcile/Clear/Test）都必须经 per-node 锁，并置 applying+递增
+// generation（D18）。CollectCounters 为只读采集，按 D18 例外不取锁
+// （F-134 订正：旧注释称其同样经锁，与实现不符），靠 handler 层
+// generation/applying 检查丢弃脏读。调用方必须传 nodeID，不依赖
+// 自觉。锁表清理策略保留（ReleaseNode）。
 // 锁内不得持有 DB 事务（本层只做 SSH，无 DB 操作）。
 type serializedNftManager struct {
 	inner nftablesRuntimeManager
@@ -111,6 +114,20 @@ func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runt
 	mu := m.lockFor(nodeID)
 	mu.Lock()
 	defer mu.Unlock()
+	// F-020（A4-003/X1-202）：Clear 与 Reconcile 同为删表重建型写
+	// 操作，必须同样置 applying + 递增 gen。旧实现只有锁：采集侧的
+	// D18 脏读防护（查 IsApplying/GetGeneration）对 Clear 全程失明，
+	// 在途采集可把清表前的累计样本当 delta 落库并把旧累计值写回
+	// nft_counter_state 基线，清表后一段流量被静默漏计。
+	m.mu.Lock()
+	m.gen[nodeID]++
+	m.applying[nodeID] = time.Now()
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.applying, nodeID)
+		m.mu.Unlock()
+	}()
 	return m.inner.Clear(ctx, cfg)
 }
 

@@ -251,12 +251,24 @@ func (h *Handler) syncNftablesNode(nodeID int64) error {
 //
 // R3: 锁内不持有 DB 事务；SSH 超时由 runner 的 15s 单操作超时兜底。
 func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]bool, include []*forwardRecord) error {
+	return h.syncNftablesNodeWithOverridesCtx(context.Background(), nodeID, exclude, include)
+}
+
+// syncNftablesNodeWithOverridesCtx 与 syncNftablesNodeWithOverrides
+// 相同，但把 ctx 透传给 drain 采集与 manager.Reconcile：带超时的
+// 调用方（reconcileNodeWithTimeout，F-135）取消时，底层 SSH 操作
+// 随之退出、per-node 锁释放，而不是继续持锁执行到完成。
+func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID int64, exclude map[int64]bool, include []*forwardRecord) error {
 	if h == nil || h.repo == nil {
 		return errors.New("handler not initialized")
 	}
 	// R5-B5 D14: per-node 串行化已下沉到 serializedNftManager。
-	// drain（D1-004）经 CollectCounters 加锁，重建经 Reconcile 加锁，
-	// clearNftablesNode 经 Clear 加锁——三者互斥，无需调用方自觉。
+	// F-134（X1-205）注释订正：旧注释称「drain 经 CollectCounters
+	// 加锁」与实现不符。真实口径——Reconcile/Clear/Test 经 per-node
+	// 锁互斥；CollectCounters 按 D18 设计不取锁，采集靠
+	// generation/applying 协议丢弃脏读；drain（D1-004）在本函数内、
+	// Reconcile 取锁之前执行，其采集同为不取锁路径，靠累计计数器
+	// 语义兜底（重建后负 delta 走 reset 分支只推进基线、不重复计费）。
 
 	plan, cfgModel, err := h.buildNftablesNodePlanWithOverrides(nodeID, exclude, include)
 	if err != nil {
@@ -270,8 +282,8 @@ func (h *Handler) syncNftablesNodeWithOverrides(nodeID int64, exclude map[int64]
 	// 先 best-effort drain：CollectCounters → delta 落库，再重建。
 	// drain 失败不阻塞 apply（记 gap），重建后重新基线。
 	// 取舍（写死）：可用性优先于计费精确性，但每次 gap 必须可观测。
-	h.drainNftCountersBeforeReconcile(nodeID, cfgModel, time.Now())
-	result, err := h.nftablesManager.Reconcile(context.Background(), nodeID, sshCfg, plan)
+	h.drainNftCountersBeforeReconcileCtx(ctx, nodeID, cfgModel, time.Now())
+	result, err := h.nftablesManager.Reconcile(ctx, nodeID, sshCfg, plan)
 	now := time.Now().UnixMilli()
 	if err != nil {
 		// D9(b): 记录 apply 失败，节点恢复后由采集循环触发自动 reconcile。
@@ -335,13 +347,25 @@ func (h *Handler) clearNftablesNode(nodeID int64) error {
 	if h == nil || h.repo == nil {
 		return errors.New("handler not initialized")
 	}
-	sshCfg, err := h.loadNftablesSSHConfig(nodeID)
+	cfgModel, err := h.repo.GetNodeSSHConfig(nodeID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("nftables 节点缺少 SSH 配置")
+		}
+		return err
+	}
+	sshCfg, err := sshConfigFromModel(cfgModel)
 	if err != nil {
 		return err
 	}
 	if h.nftablesManager == nil {
 		return errors.New("nftables manager not initialized")
 	}
+	// F-020：与 sync/reconcile 路径一致，清表前先 best-effort drain
+	// 把最近一个采集周期内的增量落库并推进基线；drain 失败已在其
+	// 内部记 M-005 gap 告警，不阻塞 Clear（可用性优先口径与 sync
+	// 路径相同）。旧实现直接 Clear，最近一周期流量随清表静默丢失。
+	h.drainNftCountersBeforeReconcile(nodeID, cfgModel, time.Now())
 	if err := h.nftablesManager.Clear(context.Background(), nodeID, sshCfg); err != nil {
 		return err
 	}

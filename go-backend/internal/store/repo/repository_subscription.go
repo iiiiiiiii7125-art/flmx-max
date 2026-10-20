@@ -254,9 +254,32 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 		for _, st := range states {
 			prev[key{st.SubscriptionID, st.Direction}] = st
 		}
+		// F-075（A4-004）：同一批内同 (subscription, direction) 的
+		// 重复样本先合并（保留最大 Bytes）再算增量。旧实现 prev 只
+		// 由 DB 旧状态构建、批次内不推进，两条样本各按同一旧基线算
+		// delta 并累加，增量被重复计入一次（流量虚增、可提前触发
+		// 订阅流量上限断开）。
+		merged := make(map[key]SubscriptionCounterSample, len(samples))
+		mergedOrder := make([]key, 0, len(samples))
+		for _, s := range samples {
+			k := key{s.SubscriptionID, s.Direction}
+			if cur, ok := merged[k]; ok {
+				if s.Bytes > cur.Bytes {
+					merged[k] = s
+				}
+				continue
+			}
+			merged[k] = s
+			mergedOrder = append(mergedOrder, k)
+		}
+		ordered := make([]SubscriptionCounterSample, 0, len(mergedOrder))
+		for _, k := range mergedOrder {
+			ordered = append(ordered, merged[k])
+		}
+
 		up := map[int64]int64{}
 		down := map[int64]int64{}
-		for _, s := range samples {
+		for _, s := range ordered {
 			if s.Bytes < 0 || (s.Direction != "up" && s.Direction != "down") {
 				continue
 			}
