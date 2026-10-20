@@ -17,6 +17,9 @@ func ssLink(host, port, name string) string {
 }
 
 func TestRemoteSourceContract(t *testing.T) {
+	// 订阅源是本机 httptest 服务（127.0.0.1），须经 allowlist 放行私网抓取；
+	// 产品默认拒绝未 allowlist 的私网地址（import.md 明文行为），契约侧显式放行。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)

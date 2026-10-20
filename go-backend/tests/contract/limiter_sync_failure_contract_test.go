@@ -591,6 +591,10 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	var commandMu sync.Mutex
 	commandCounts := map[string]int{}
 	var addServiceAddrs []string
+	// bindFailArmed/bindFailUsed：bind 失败注入改为「武装后的第一次 AddService
+	// 才失败」。原实现按全局第 1 次 AddService 注入，会被节点上线的异步
+	// redeploy 抢先消费，与 update 路径的计数断言竞态（A3-BASE-001）。
+	var bindFailArmed, bindFailUsed bool
 	stopEntry := startMockNodeSessionWithCommandRecorder(t, server.URL, "tunnel-bind-entry-secret", func(cmdType string, data json.RawMessage) (bool, string) {
 		commandMu.Lock()
 		defer commandMu.Unlock()
@@ -602,7 +606,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 		key := "exit:" + strings.ToLower(strings.TrimSpace(cmdType))
 		commandMu.Lock()
 		commandCounts[key]++
-		attempt := commandCounts[key]
+		failBind := false
 		if strings.EqualFold(strings.TrimSpace(cmdType), "AddService") {
 			var services []map[string]interface{}
 			if err := json.Unmarshal(data, &services); err == nil {
@@ -612,9 +616,13 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 					}
 				}
 			}
+			if bindFailArmed && !bindFailUsed {
+				bindFailUsed = true
+				failBind = true
+			}
 		}
 		commandMu.Unlock()
-		if strings.EqualFold(strings.TrimSpace(cmdType), "AddService") && attempt == 1 {
+		if failBind {
 			return true, "listen tcp 10.41.0.99:43101: bind: address already in use"
 		}
 		return false, ""
@@ -622,6 +630,44 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	defer stopExit()
 	waitNodeStatus(t, r, entryNodeID, 1)
 	waitNodeStatus(t, r, exitNodeID, 1)
+
+	// 等待节点上线触发的异步 redeploy 静默（计数在安静窗口内不再变化）后
+	// 再取基线快照，断言只看 update 期间的增量，消除与 onlineHook 的竞态。
+	waitQuiescent := func() (map[string]int, int) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		var lastKey string
+		var lastCounts map[string]int
+		var lastAddrN int
+		quietPolls := 0
+		for {
+			commandMu.Lock()
+			snap := make(map[string]int, len(commandCounts))
+			for k, v := range commandCounts {
+				snap[k] = v
+			}
+			addrN := len(addServiceAddrs)
+			commandMu.Unlock()
+			key := strings.Join(sortedCommandCounts(snap), ",") + fmt.Sprintf("|addrs=%d", addrN)
+			if key == lastKey {
+				quietPolls++
+				if quietPolls >= 3 {
+					return lastCounts, lastAddrN
+				}
+			} else {
+				quietPolls = 0
+				lastKey, lastCounts, lastAddrN = key, snap, addrN
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("node commands did not quiesce: %v", sortedCommandCounts(snap))
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	baseCounts, baseAddrN := waitQuiescent()
+	commandMu.Lock()
+	bindFailArmed = true
+	commandMu.Unlock()
 
 	payload := map[string]interface{}{
 		"id":           tunnelID,
@@ -649,18 +695,20 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	router.ServeHTTP(res, req)
 	assertCode(t, res, 0)
 
+	finalCounts, _ := waitQuiescent()
+	if got := finalCounts["exit:addservice"] - baseCounts["exit:addservice"]; got != 2 {
+		t.Fatalf("expected exit AddService twice during update, got %d (%v)", got, sortedCommandCounts(finalCounts))
+	}
+	if got := finalCounts["exit:deleteservice"] - baseCounts["exit:deleteservice"]; got == 0 {
+		t.Fatalf("expected exit DeleteService retry cleanup to run (%v)", sortedCommandCounts(finalCounts))
+	}
 	commandMu.Lock()
-	defer commandMu.Unlock()
-	if commandCounts["exit:addservice"] != 2 {
-		t.Fatalf("expected exit AddService twice, got %d (%v)", commandCounts["exit:addservice"], sortedCommandCounts(commandCounts))
+	newAddrs := append([]string(nil), addServiceAddrs[baseAddrN:]...)
+	commandMu.Unlock()
+	if len(newAddrs) < 2 {
+		t.Fatalf("expected recorded AddService addresses during update, got %v", newAddrs)
 	}
-	if commandCounts["exit:deleteservice"] == 0 {
-		t.Fatalf("expected exit DeleteService retry cleanup to run (%v)", sortedCommandCounts(commandCounts))
-	}
-	if len(addServiceAddrs) < 2 {
-		t.Fatalf("expected recorded AddService addresses, got %v", addServiceAddrs)
-	}
-	for _, addr := range addServiceAddrs {
+	for _, addr := range newAddrs {
 		if addr != "10.41.0.99:43101" {
 			t.Fatalf("expected connectIp to stay preferred in AddService addr, got %q", addr)
 		}

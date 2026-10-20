@@ -922,42 +922,11 @@ func TestOpenMigratesLegacyNodeDualStackColumns(t *testing.T) {
 		_ = legacyDB.Close()
 	})
 
-	if _, err := legacyDB.Exec(`
-		CREATE TABLE IF NOT EXISTS node (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name VARCHAR(100) NOT NULL,
-			secret VARCHAR(100) NOT NULL,
-			server_ip VARCHAR(100) NOT NULL,
-			port TEXT NOT NULL,
-			interface_name VARCHAR(200),
-			version VARCHAR(100),
-			http INTEGER NOT NULL DEFAULT 0,
-			tls INTEGER NOT NULL DEFAULT 0,
-			socks INTEGER NOT NULL DEFAULT 0,
-			created_time INTEGER NOT NULL,
-			updated_time INTEGER,
-			status INTEGER NOT NULL,
-			tcp_listen_addr VARCHAR(100) NOT NULL DEFAULT '[::]',
-			udp_listen_addr VARCHAR(100) NOT NULL DEFAULT '[::]'
-		)
-	`); err != nil {
+	if _, err := legacyDB.Exec(`CREATE TABLE IF NOT EXISTS node (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, secret VARCHAR(100) NOT NULL, server_ip VARCHAR(100) NOT NULL, port TEXT NOT NULL, interface_name VARCHAR(200), version VARCHAR(100), http INTEGER NOT NULL DEFAULT 0, tls INTEGER NOT NULL DEFAULT 0, socks INTEGER NOT NULL DEFAULT 0, created_time INTEGER NOT NULL, updated_time INTEGER, status INTEGER NOT NULL, tcp_listen_addr VARCHAR(100) NOT NULL DEFAULT '[::]', udp_listen_addr VARCHAR(100) NOT NULL DEFAULT '[::]')`); err != nil {
 		t.Fatalf("create legacy node table: %v", err)
 	}
 
-	if _, err := legacyDB.Exec(`
-		CREATE TABLE IF NOT EXISTS tunnel (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name VARCHAR(100) NOT NULL,
-			traffic_ratio REAL NOT NULL DEFAULT 1.0,
-			type INTEGER NOT NULL,
-			protocol VARCHAR(10) NOT NULL DEFAULT 'tls',
-			flow INTEGER NOT NULL,
-			created_time INTEGER NOT NULL,
-			updated_time INTEGER NOT NULL,
-			status INTEGER NOT NULL,
-			in_ip TEXT
-		)
-	`); err != nil {
+	if _, err := legacyDB.Exec(`CREATE TABLE IF NOT EXISTS tunnel (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, traffic_ratio REAL NOT NULL DEFAULT 1.0, type INTEGER NOT NULL, protocol VARCHAR(10) NOT NULL DEFAULT 'tls', flow INTEGER NOT NULL, created_time INTEGER NOT NULL, updated_time INTEGER NOT NULL, status INTEGER NOT NULL, in_ip TEXT)`); err != nil {
 		t.Fatalf("create legacy tunnel table: %v", err)
 	}
 
@@ -1012,40 +981,11 @@ func TestOpenMigratesVeryLegacyNodeAndTunnelColumns(t *testing.T) {
 		_ = legacyDB.Close()
 	})
 
-	if _, err := legacyDB.Exec(`
-		CREATE TABLE IF NOT EXISTS node (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name VARCHAR(100) NOT NULL,
-			secret VARCHAR(100) NOT NULL,
-			server_ip VARCHAR(100) NOT NULL,
-			port TEXT NOT NULL,
-			interface_name VARCHAR(200),
-			version VARCHAR(100),
-			http INTEGER NOT NULL DEFAULT 0,
-			tls INTEGER NOT NULL DEFAULT 0,
-			socks INTEGER NOT NULL DEFAULT 0,
-			created_time INTEGER NOT NULL,
-			updated_time INTEGER,
-			status INTEGER NOT NULL
-		)
-	`); err != nil {
+	if _, err := legacyDB.Exec(`CREATE TABLE IF NOT EXISTS node (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, secret VARCHAR(100) NOT NULL, server_ip VARCHAR(100) NOT NULL, port TEXT NOT NULL, interface_name VARCHAR(200), version VARCHAR(100), http INTEGER NOT NULL DEFAULT 0, tls INTEGER NOT NULL DEFAULT 0, socks INTEGER NOT NULL DEFAULT 0, created_time INTEGER NOT NULL, updated_time INTEGER, status INTEGER NOT NULL)`); err != nil {
 		t.Fatalf("create very legacy node table: %v", err)
 	}
 
-	if _, err := legacyDB.Exec(`
-		CREATE TABLE IF NOT EXISTS tunnel (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name VARCHAR(100) NOT NULL,
-			traffic_ratio REAL NOT NULL DEFAULT 1.0,
-			type INTEGER NOT NULL,
-			protocol VARCHAR(10) NOT NULL DEFAULT 'tls',
-			flow INTEGER NOT NULL,
-			created_time INTEGER NOT NULL,
-			updated_time INTEGER NOT NULL,
-			status INTEGER NOT NULL,
-			in_ip TEXT
-		)
-	`); err != nil {
+	if _, err := legacyDB.Exec(`CREATE TABLE IF NOT EXISTS tunnel (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, traffic_ratio REAL NOT NULL DEFAULT 1.0, type INTEGER NOT NULL, protocol VARCHAR(10) NOT NULL DEFAULT 'tls', flow INTEGER NOT NULL, created_time INTEGER NOT NULL, updated_time INTEGER NOT NULL, status INTEGER NOT NULL, in_ip TEXT)`); err != nil {
 		t.Fatalf("create very legacy tunnel table: %v", err)
 	}
 

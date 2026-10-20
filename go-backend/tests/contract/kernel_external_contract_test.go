@@ -100,6 +100,9 @@ func TestExternalInboundImportContract(t *testing.T) {
 }
 
 func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
+	// 订阅源是本机 httptest 服务（127.0.0.1），须经 allowlist 放行私网抓取；
+	// 产品默认拒绝未 allowlist 的私网地址（import.md 明文行为），契约侧显式放行。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
@@ -116,8 +119,8 @@ func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 	if out.Code != 0 || len(out.Data.(map[string]interface{})["created"].([]interface{})) != 2 {
 		t.Fatalf("import from URL: %+v", out)
 	}
-	if !strings.Contains(gotUA, "clash") {
-		t.Fatalf("subscriptions are fetched as Mihomo to get full parameters: %q", gotUA)
+	if !strings.Contains(gotUA, "flmx-panel/1.0") {
+		t.Fatalf("subscriptions are fetched with the panel UA (IMP-002): %q", gotUA)
 	}
 
 	list := kernelContractPost(t, router, admin, "/api/v1/inbound/list", `{}`).Data.([]interface{})

@@ -27,7 +27,9 @@ func TestFlowUploadAggregatesRepeatedItemsAndDisablesQuotaImmediately(t *testing
 	if err := repo.DB().Exec(`INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, updated_time, status) VALUES(2, 'flow_user', 'pwd', 1, 2727251700000, 99999, 0, 0, 1, 99999, ?, ?, 1)`, nowMs, nowMs).Error; err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	tunnel := &model.Tunnel{Name: "tunnel-1", TrafficRatio: 1.0, Type: 1, Protocol: "tls", Flow: 1, CreatedTime: nowMs, UpdatedTime: nowMs, Status: 1}
+	// Flow=2（双向）：Flow=1 单向隧道按现行口径只计上传（InFlow），OutFlow 恒为 0
+	// （flow_upload_batch.go O6-002 语义），无法验证双向聚合，故夹具用双向隧道。
+	tunnel := &model.Tunnel{Name: "tunnel-1", TrafficRatio: 1.0, Type: 1, Protocol: "tls", Flow: 2, CreatedTime: nowMs, UpdatedTime: nowMs, Status: 1}
 	if err := repo.DB().Create(tunnel).Error; err != nil {
 		t.Fatalf("seed tunnel: %v", err)
 	}
@@ -65,11 +67,11 @@ func TestFlowUploadAggregatesRepeatedItemsAndDisablesQuotaImmediately(t *testing
 	if got := mustQueryInt(t, repo, `SELECT disabled_by_quota FROM user_quota WHERE user_id = 2`); got != 1 {
 		t.Fatalf("expected quota disabled flag=1, got %d", got)
 	}
-	if got := mustQueryInt(t, repo, `SELECT in_flow FROM forward WHERE id = 20`); got != 80 {
-		t.Fatalf("expected forward in_flow=80, got %d", got)
+	if got := mustQueryInt(t, repo, `SELECT in_flow FROM forward WHERE id = 20`); got != 110 {
+		t.Fatalf("expected forward in_flow=110, got %d", got)
 	}
-	if got := mustQueryInt(t, repo, `SELECT out_flow FROM forward WHERE id = 20`); got != 110 {
-		t.Fatalf("expected forward out_flow=110, got %d", got)
+	if got := mustQueryInt(t, repo, `SELECT out_flow FROM forward WHERE id = 20`); got != 80 {
+		t.Fatalf("expected forward out_flow=80, got %d", got)
 	}
 	metrics, err := repo.GetTunnelMetrics(tunnel.ID, 0, nowMs+60_000)
 	if err != nil {
