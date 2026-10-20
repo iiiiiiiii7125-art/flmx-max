@@ -41,6 +41,12 @@ func LoadConfig(configPath string) (*Config, error) {
 	if config.Addr == "" {
 		return nil, fmt.Errorf("服务器地址不能为空")
 	}
+	// F-089: secret 是与面板通信的 AES 预共享密钥，为空时加密器无法
+	// 建立。必须在加载期 fail-closed，而不是带着不可用的加密器启动
+	// 后再在各上报路径静默回退明文（且会掩盖配置错误）。
+	if config.Secret == "" {
+		return nil, fmt.Errorf("节点密钥(secret)不能为空")
+	}
 
 	return &config, nil
 }

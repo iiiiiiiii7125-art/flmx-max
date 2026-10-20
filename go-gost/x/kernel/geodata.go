@@ -35,8 +35,12 @@ func (g GeoFile) validate() error {
 		return fmt.Errorf("非法数据文件名: %s", g.Name)
 	}
 	for _, u := range []string{g.URL, g.ChecksumURL} {
-		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
-			return fmt.Errorf("非法数据文件地址: %s", u)
+		// F-090: 只允许 https。http 明文通道下数据文件与校验文件同源
+		// 同通道，SHA256 只能防传输损坏，中间人可同时替换两者，
+		// 校验和不提供真实性（面板下发的 geo 地址均为 https，含
+		// 镜像前缀形式；与内核二进制 digest 走可信通道的口径一致）。
+		if !strings.HasPrefix(u, "https://") {
+			return fmt.Errorf("数据文件地址必须使用 https: %s", u)
 		}
 	}
 	return nil
@@ -175,17 +179,21 @@ func (m *Manager) swapGeoFiles(job geoJob, staged []string) {
 	}
 
 	var swapped []string
+	hadOrig := map[string]bool{}
 	for _, name := range staged {
 		path := filepath.Join(job.binDir, name)
 		_ = os.Remove(path + ".bak")
 		if _, err := os.Stat(path); err == nil {
+			hadOrig[name] = true
 			if err := os.Rename(path, path+".bak"); err != nil {
 				_ = os.Remove(path + ".new")
 				continue
 			}
 		}
 		if err := os.Rename(path+".new", path); err != nil {
-			_ = os.Rename(path+".bak", path)
+			if hadOrig[name] {
+				_ = os.Rename(path+".bak", path)
+			}
 			continue
 		}
 		swapped = append(swapped, name)
@@ -200,11 +208,17 @@ func (m *Manager) swapGeoFiles(job geoJob, staged []string) {
 	if enabled {
 		m.stopProcesses(inst)
 		m.startProcesses(inst)
-		time.Sleep(startupProbeIn)
-		if !m.state(job.kernelType, false).Running {
+		// F-032 变体：与 Apply 同口径的持续存活探活，不再单点快照。
+		if !m.waitStable(job.kernelType) {
 			for _, name := range swapped {
 				path := filepath.Join(job.binDir, name)
-				_ = os.Rename(path+".bak", path)
+				if hadOrig[name] {
+					_ = os.Rename(path+".bak", path)
+				} else {
+					// 原文件此前不存在时没有 .bak 可恢复：删掉新文件，
+					// 否则坏文件会被静默留下（旧实现此路径失效）。
+					_ = os.Remove(path)
+				}
 			}
 			m.stopProcesses(inst)
 			m.startProcesses(inst)

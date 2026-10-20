@@ -83,6 +83,10 @@ func TestGeoFileValidation(t *testing.T) {
 		{Name: "../x.dat", URL: "https://a/x", ChecksumURL: "https://a/x.sha256sum"},
 		{Name: "geosite.txt", URL: "https://a/x", ChecksumURL: "https://a/x.sha256sum"},
 		{Name: "geosite.dat", URL: "file:///etc/passwd", ChecksumURL: "https://a/x.sha256sum"},
+		// F-090: http 明文通道下数据文件与校验文件同源同通道，校验和
+		// 不提供真实性，必须拒绝（面板下发的 geo 地址均为 https）。
+		{Name: "geosite.dat", URL: "http://a/x", ChecksumURL: "https://a/x.sha256sum"},
+		{Name: "geosite.dat", URL: "https://a/x", ChecksumURL: "http://a/x.sha256sum"},
 	} {
 		if g.validate() == nil {
 			t.Fatalf("must reject %+v", g)

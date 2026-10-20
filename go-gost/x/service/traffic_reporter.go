@@ -222,6 +222,26 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 	return false, fmt.Errorf("发送HTTP请求失败: %s", strings.Join(errs, " | "))
 }
 
+// encryptReportPayload 加密上报数据（F-089: fail-closed）。
+// 加密器缺失或加密失败时返回错误——上报宁可失败待重试，也不得静默
+// 回退明文发送。旧实现三处发送函数都是 fail-open，与全仓下载校验
+// fail-closed 的基调不一致，且会掩盖 secret 为空/不一致的配置错误。
+func encryptReportPayload(data []byte) ([]byte, error) {
+	if httpAESCrypto == nil {
+		return nil, fmt.Errorf("上报加密器未初始化（节点 secret 为空或无效），拒绝明文发送")
+	}
+	encryptedData, err := httpAESCrypto.Encrypt(data)
+	if err != nil {
+		return nil, fmt.Errorf("加密上报数据失败: %v", err)
+	}
+	encryptedMessage := map[string]interface{}{
+		"encrypted": true,
+		"data":      encryptedData,
+		"timestamp": time.Now().Unix(),
+	}
+	return json.Marshal(encryptedMessage)
+}
+
 // sendBatchTrafficReport 批量发送多个服务的流量报告到HTTP接口
 func sendBatchTrafficReport(ctx context.Context, reportItems []TrafficReportItem) (bool, error) {
 	if httpReportURL == "" {
@@ -233,29 +253,9 @@ func sendBatchTrafficReport(ctx context.Context, reportItems []TrafficReportItem
 		return false, fmt.Errorf("序列化报告数据失败: %v", err)
 	}
 
-	var requestBody []byte
-
-	// 如果有加密器，则加密数据
-	if httpAESCrypto != nil {
-		encryptedData, err := httpAESCrypto.Encrypt(jsonData)
-		if err != nil {
-			fmt.Printf("⚠️ 加密流量报告失败，发送原始数据: %v\n", err)
-			requestBody = jsonData
-		} else {
-			// 创建加密消息包装器
-			encryptedMessage := map[string]interface{}{
-				"encrypted": true,
-				"data":      encryptedData,
-				"timestamp": time.Now().Unix(),
-			}
-			requestBody, err = json.Marshal(encryptedMessage)
-			if err != nil {
-				fmt.Printf("⚠️ 序列化加密流量报告失败，发送原始数据: %v\n", err)
-				requestBody = jsonData
-			}
-		}
-	} else {
-		requestBody = jsonData
+	requestBody, err := encryptReportPayload(jsonData)
+	if err != nil {
+		return false, err
 	}
 
 	return postJSONWithFallback(
@@ -280,29 +280,9 @@ func sendConfigReport(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("获取配置数据失败: %v", err)
 	}
 
-	var requestBody []byte
-
-	// 如果有加密器，则加密数据
-	if httpAESCrypto != nil {
-		encryptedData, err := httpAESCrypto.Encrypt(configData)
-		if err != nil {
-			fmt.Printf("⚠️ 加密配置报告失败，发送原始数据: %v\n", err)
-			requestBody = configData
-		} else {
-			// 创建加密消息包装器
-			encryptedMessage := map[string]interface{}{
-				"encrypted": true,
-				"data":      encryptedData,
-				"timestamp": time.Now().Unix(),
-			}
-			requestBody, err = json.Marshal(encryptedMessage)
-			if err != nil {
-				fmt.Printf("⚠️ 序列化加密配置报告失败，发送原始数据: %v\n", err)
-				requestBody = configData
-			}
-		}
-	} else {
-		requestBody = configData
+	requestBody, err := encryptReportPayload(configData)
+	if err != nil {
+		return false, err
 	}
 
 	return postJSONWithFallback(
@@ -426,26 +406,9 @@ func sendBatchTrafficReportWithSeq(ctx context.Context, reportItems []TrafficRep
 		return false, fmt.Errorf("序列化报告数据失败: %v", err)
 	}
 
-	var requestBody []byte
-	if httpAESCrypto != nil {
-		encryptedData, err := httpAESCrypto.Encrypt(jsonData)
-		if err != nil {
-			fmt.Printf("⚠️ 加密流量报告失败，发送原始数据: %v\n", err)
-			requestBody = jsonData
-		} else {
-			encryptedMessage := map[string]interface{}{
-				"encrypted": true,
-				"data":      encryptedData,
-				"timestamp": time.Now().Unix(),
-			}
-			requestBody, err = json.Marshal(encryptedMessage)
-			if err != nil {
-				fmt.Printf("⚠️ 序列化加密流量报告失败，发送原始数据: %v\n", err)
-				requestBody = jsonData
-			}
-		}
-	} else {
-		requestBody = jsonData
+	requestBody, err := encryptReportPayload(jsonData)
+	if err != nil {
+		return false, err
 	}
 
 	// 改名过渡：seq 头双发（新头 X-Flmx-Seq + 旧头 X-Flvx-Seq），
