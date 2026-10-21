@@ -165,7 +165,23 @@ func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 	if cfg[notifyConfigEnabled] != "true" || settings.empty() {
 		return settings, app, false
 	}
-	if events := strings.TrimSpace(cfg[notifyConfigEvents]); events != "" {
+	// 集成修正（integration fix）：事件选择（notify_events）每次现读
+	// 单行，不走 5s 缓存。理由：选择门是「发不发」的授权面——缓存
+	// 陈旧的后果不是延迟发送而是误发未选事件，契约
+	// TestNotifyImportedNodeDownContract 锁定其即时生效语义（该契约
+	// 经直写 DB 改配置，绕过 updateConfigs 的失效钩子）；其余键仍按
+	// FIX-D 的 D6-07 缓存语义（TTL 内直写为旧值、写入口失效后即时
+	// 生效，TestFixdNotifyConfigCacheInvalidation 锁定）。现读失败
+	// 时回退缓存值，不因一次查询失败丢通知。
+	eventsValue := cfg[notifyConfigEvents]
+	if row, ferr := h.repo.GetConfigByName(notifyConfigEvents); ferr == nil {
+		if row == nil {
+			eventsValue = ""
+		} else {
+			eventsValue = row.Value
+		}
+	}
+	if events := strings.TrimSpace(eventsValue); events != "" {
 		// O8-006：兼容旧前端"全不选"时写入的字面量 "none"。之前前端靠"没有事件叫
 		// none"实现全禁用，属于脆弱的隐式约定；此处显式视为禁用全部事件。
 		if events == "none" {
