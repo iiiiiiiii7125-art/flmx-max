@@ -30,16 +30,37 @@ func TestSelectTunnelDialHost_ConnectIpPriority(t *testing.T) {
 	}
 }
 
-func TestBuildTunnelChainServiceConfig_UsesConnectIPForListen(t *testing.T) {
-	node := &nodeRecord{TCPListenAddr: "[::]"}
-	chain := tunnelRuntimeNode{Protocol: "tls", Port: 21000, ConnectIP: "2001:db8::88"}
-	services := buildTunnelChainServiceConfig(99, chain, node, 1)
-	if len(services) != 1 {
-		t.Fatalf("expected 1 service, got %d", len(services))
+// 连接IP 是拨号语义（上一跳拨它到达本节点），不是本节点的监听地址：
+// 即使 ConnectIP 指向非本地地址（如 CNIX/NAT 线路入口 IP），服务 addr
+// 也必须恒用节点自己的 TCPListenAddr，否则 agent 绑非本地地址必失败
+// （cannot assign requested address）。拨号侧优先用 ConnectIP 的行为
+// 由 TestSelectTunnelDialHost_ConnectIpPriority 钉住，不受此影响。
+func TestBuildTunnelChainServiceConfig_IgnoresConnectIPForListen(t *testing.T) {
+	cases := []struct {
+		name      string
+		listen    string
+		connectIP string
+		port      int
+		want      string
+	}{
+		{name: "v6 doc addr connect ip, default listen", listen: "[::]", connectIP: "2001:db8::88", port: 21000, want: "[::]:21000"},
+		{name: "non-local v4 connect ip, default listen", listen: "[::]", connectIP: "203.0.113.7", port: 21000, want: "[::]:21000"},
+		{name: "non-local connect ip, node-specific listen", listen: "10.8.0.5", connectIP: "203.0.113.7", port: 21002, want: "10.8.0.5:21002"},
+		{name: "nat line entrance ip, default listen", listen: "[::]", connectIP: "138.252.162.176", port: 12688, want: "[::]:12688"},
 	}
-	addr, _ := services[0]["addr"].(string)
-	if addr != "[2001:db8::88]:21000" {
-		t.Fatalf("expected connectIp listen [2001:db8::88]:21000, got %q", addr)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &nodeRecord{TCPListenAddr: tc.listen}
+			chain := tunnelRuntimeNode{Protocol: "tls", Port: tc.port, ConnectIP: tc.connectIP}
+			services := buildTunnelChainServiceConfig(99, chain, node, 1)
+			if len(services) != 1 {
+				t.Fatalf("expected 1 service, got %d", len(services))
+			}
+			addr, _ := services[0]["addr"].(string)
+			if addr != tc.want {
+				t.Fatalf("service addr must use node listen addr, got %q, want %q", addr, tc.want)
+			}
+		})
 	}
 }
 

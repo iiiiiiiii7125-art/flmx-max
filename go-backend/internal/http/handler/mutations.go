@@ -5213,8 +5213,13 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 		handlerCfg["retries"] = nextHopCandidateCount - 1
 	}
 	service := map[string]interface{}{
-		"name":     fmt.Sprintf("tunnel_%d", tunnelID),
-		"addr":     processServerAddress(fmt.Sprintf("%s:%d", defaultString(strings.TrimSpace(chainNode.ConnectIP), node.TCPListenAddr), chainNode.Port)),
+		"name": fmt.Sprintf("tunnel_%d", tunnelID),
+		// 监听地址恒用节点自身的 TCPListenAddr：chainNode.ConnectIP 是拨号
+		// 语义（上一跳拨它到达本节点，见 buildTunnelChainConfig /
+		// selectTunnelDialHost），不是本节点的本地地址。CNIX/NAT 线路入口
+		// IP 在目标机上不可绑，拿它当监听地址 agent 必报
+		// "cannot assign requested address"。
+		"addr":     processServerAddress(fmt.Sprintf("%s:%d", node.TCPListenAddr, chainNode.Port)),
 		"handler":  handlerCfg,
 		"listener": buildTunnelListenerConfig(protocol),
 	}
