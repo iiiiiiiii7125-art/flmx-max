@@ -1,8 +1,9 @@
 """Step 1: nodes, kernels, inbounds and imported nodes (see README.md).
 
-Adapted to FLMX: the seeded panel's admin is admin@user / admin@user,
-node IPs stay in the documentation ranges, and one extra Snell v6
-kernel+inbound shows the sing-box Snell port (Lane B).
+Adapted to FLMX: the seeded panel's admin starts as admin@user /
+admin@user and is forced to change it on first login (M-05), node IPs
+stay in the documentation ranges, and one extra Snell v6 kernel+inbound
+shows the sing-box Snell port (Lane B).
 """
 import json, sqlite3, sys, time, urllib.request, urllib.parse, base64
 
@@ -16,7 +17,12 @@ def post(path, body=None, token=None):
     with urllib.request.urlopen(req) as r:
         return json.load(r)
 
+# 我方面板首登强制改默认口令（M-05）：受限 token 只能调改密接口，
+# 改完重新登录拿全权 token。种子面板是抛弃型的，演示口令就写在这里。
+ADMIN_PWD = "demo-admin-123"
 tok = post("/user/login", {"username": "admin@user", "password": "admin@user"})["data"]["token"]
+post("/user/updatePassword", {"newUsername": "admin@user", "currentPassword": "admin@user", "newPassword": ADMIN_PWD, "confirmPassword": ADMIN_PWD}, tok)
+tok = post("/user/login", {"username": "admin@user", "password": ADMIN_PWD})["data"]["token"]
 api = lambda p, b=None: post(p, b, tok)
 db = sqlite3.connect(DB)
 x = db.execute
@@ -48,11 +54,11 @@ INB = [
     ("日本 东京", "snell", {"name": "东京 Snell", "protocol": "snell", "port": 6160, "settings": {"snellVersion": 5}}),
     ("新加坡", "snell", {"name": "新加坡 Snell v6", "protocol": "snell", "port": 6161, "settings": {"snellVersion": 6}}),
     ("美国 圣何塞", "singbox", {"name": "圣何塞 Hysteria2", "protocol": "hysteria2", "port": 443, "settings": {"portHopping": "40000-50000"},
-                              "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
+                              "transport": {"type": "quic"}, "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
     ("美国 圣何塞", "singbox", {"name": "圣何塞 AnyTLS", "protocol": "anytls", "port": 8443,
                               "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
     ("新加坡", "singbox", {"name": "新加坡 TUIC", "protocol": "tuic", "port": 443,
-                         "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
+                         "transport": {"type": "quic"}, "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
     ("新加坡", "singbox", {"name": "新加坡 Shadowsocks", "protocol": "shadowsocks", "port": 8388,
                          "settings": {"method": "2022-blake3-aes-128-gcm"}}),
 ]

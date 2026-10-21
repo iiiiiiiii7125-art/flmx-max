@@ -43,6 +43,9 @@ s4 = sub("机场备用", kind="share", sourceAll=False,
          inboundIds=[inb["机场 · 台湾 01"], inb["机场 · 韩国 01"], inb["机场 · 英国 01"]])
 x("UPDATE subscription SET upload_bytes=?, download_bytes=? WHERE id=?", (6 * G, 62 * G, s2))
 x("UPDATE subscription SET upload_bytes=?, download_bytes=? WHERE id=?", (9 * G, 83 * G, s3))
+# Commit before the API calls below: an open python write transaction
+# holds the SQLite write lock and the panel's own writes hit SQLITE_BUSY.
+db.commit()
 # Assignments in our model: xiaoming and aqiang get their subscription;
 # lili deliberately gets none (her 我的订阅 falls back to the personal link).
 api("/user-subscription/set", {"userId": users["xiaoming"], "subscriptionIds": [s2]})

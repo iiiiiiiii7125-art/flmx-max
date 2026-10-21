@@ -36,8 +36,10 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 const onPath = (bin) => (process.env.PATH || "").split(path.delimiter).some((d) => fs.existsSync(path.join(d, bin)));
 const chromeBin = process.env.CHROME || ["google-chrome", "chromium", "chromium-browser"].find(onPath) || "google-chrome";
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "demo-check-"));
+const browserEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/proxy/i.test(k)));
 const chrome = spawn(chromeBin, ["--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-  "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--window-size=1366,900", "about:blank"]);
+  "--disable-features=LocalNetworkAccessChecks",
+  "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--window-size=1366,900", "about:blank"], { env: browserEnv });
 const wsURL = await new Promise((resolve, reject) => {
   let err = "";
   chrome.stderr.on("data", (d) => {
