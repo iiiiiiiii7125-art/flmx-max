@@ -22,6 +22,20 @@ var (
 	ErrEmptyRoute = errors.New("empty route")
 )
 
+// emptyRouteError wraps ErrEmptyRoute with the chain name so the error
+// that surfaces at handlers/operators identifies the failing chain on
+// its own (FIX2-C #7 / V6 P3). Previously the bare sentinel forced
+// operators to correlate the Router error with the separate Errorf
+// line Chain.Route logs (the only place naming chain + hop). The hop
+// index stays in that log line; the name now travels with the error.
+// errors.Is(err, ErrEmptyRoute) semantics are unchanged.
+func emptyRouteError(chainer chain.Chainer) error {
+	if namer, ok := chainer.(chainNamer); ok && namer.Name() != "" {
+		return fmt.Errorf("chain %s: %w", namer.Name(), ErrEmptyRoute)
+	}
+	return ErrEmptyRoute
+}
+
 var (
 	DefaultRoute chain.Route = &defaultRoute{}
 )
@@ -131,7 +145,7 @@ func (r *chainRoute) Dial(ctx context.Context, network, address string, opts ...
 		// Fail closed (D1-H4): an empty chain route means every hop was
 		// unavailable. It must never degrade to a direct connection;
 		// direct dialing is what DefaultRoute (no chain configured) is for.
-		return nil, ErrEmptyRoute
+		return nil, emptyRouteError(r.options.Chain)
 	}
 
 	var options chain.DialOptions
@@ -159,7 +173,7 @@ func (r *chainRoute) Bind(ctx context.Context, network, address string, opts ...
 	if len(r.Nodes()) == 0 {
 		// Fail closed (D1-H4), same as Dial: never bind directly when a
 		// chain was configured but produced no route.
-		return nil, ErrEmptyRoute
+		return nil, emptyRouteError(r.options.Chain)
 	}
 
 	var options chain.BindOptions

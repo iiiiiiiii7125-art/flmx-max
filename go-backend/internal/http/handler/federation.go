@@ -295,6 +295,37 @@ type remoteUsageNodeItem struct {
 	VersionWarning string `json:"versionWarning,omitempty"`
 }
 
+// flmxNoPrivateBypassName 是 agent 内置 bypass 的名字（FIX2-C #8，
+// FIX-I 未竟项）：exit 角色服务带上它后，agent 在 relay 连接时拒绝
+// 目标为私网/特殊地址的连接（agent 侧实现见 go-gost/x/bypass 的
+// NewNoPrivateBypass，名字在解析层认领、不依赖配置下发 bypass
+// 定义）。没有这层时 exit 服务的目标完全由连接方决定（D3-04 的
+// 开放中继面只能靠 share auth 收窄到持凭据方，目标面仍任意）。
+const flmxNoPrivateBypassName = "flmx-no-private"
+
+// flmxNoPrivateMinAgentVersion 是首个内置 flmx-no-private 的 agent
+// 版本（与面板同仓同版发布，即本版 1.3.3）。
+const flmxNoPrivateMinAgentVersion = "1.3.3"
+
+// agentSupportsNoPrivateBypass 判断节点 agent 是否内置了
+// flmx-no-private。版本未知/不可解析一律按不支持处理：旧 agent
+// 对未知 bypass 名是 fail-open（注册表 wrapper 对未注册名的
+// Contains 恒 false——已在 go-gost/x/registry 源码核实），向其
+// 下发该字段只会造成「以为已防护」的假象，故宁可不发，待节点
+// 升级到 1.3.3 后由期望状态重下发自动补上。
+func agentSupportsNoPrivateBypass(agentVersion string) bool {
+	cmp, err := compareVersions(flmxNoPrivateMinAgentVersion, strings.TrimSpace(agentVersion))
+	return err == nil && cmp <= 0
+}
+
+// applyFederationExitPrivateGuard 为 exit 角色服务挂上私网目标
+// 防护（仅当目标节点 agent 版本支持内置 bypass 时）。
+func applyFederationExitPrivateGuard(service map[string]interface{}, role, agentVersion string) {
+	if role == "exit" && agentSupportsNoPrivateBypass(agentVersion) {
+		service["bypass"] = flmxNoPrivateBypassName
+	}
+}
+
 func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName string, targetCount int, interfaceName string) map[string]interface{} {
 	service := map[string]interface{}{
 		"name": serviceName,
