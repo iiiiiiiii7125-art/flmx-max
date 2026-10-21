@@ -720,6 +720,19 @@ export interface SubPipeline {
   /** 链式代理所选节点，按 pipeline 处理前的原名。 */
   chainLandingNames: string[];
   chainRelayNames: string[];
+  /** 整个订阅源进链式：源内节点全作落地 / 全作中转（87-d）。 */
+  chainLandingSources: number[];
+  chainRelaySources: number[];
+  /** 自建节点全部作落地。 */
+  chainLandingOwn: boolean;
+  /** 被源/自建落地带入又单独设为「不用」的节点名（二期 UI 设置，一期只透传）。 */
+  chainNoneNames: string[];
+  /** 中转节点不进普通节点名单（二期 UI 设置，一期只透传）。 */
+  chainHideRelays: boolean;
+  /** 按源的名称筛选表达式，键为订阅源 ID（二期 UI 设置，一期只透传）。 */
+  chainSourceFilters?: Record<string, string>;
+  /** 链式源里没角色的节点不放进订阅（二期 UI 设置，一期只透传）。 */
+  chainDropUnused: boolean;
   /**
    * 中转范围：订阅包含的端点 ID（0=直连，>0=中转 ID）。
    * 空数组 = 全部端点（不做范围过滤）。
@@ -782,6 +795,10 @@ export interface SubPreviewItem {
   protocol: string;
   line: "direct" | "relay";
   chain?: "landing" | "relay";
+  /** 导入节点的订阅源 ID；0/缺省 = 非订阅源节点。 */
+  sourceId?: number;
+  /** 自建入站的端点（非导入节点）。 */
+  own?: boolean;
 }
 export const getSubscriptions = () =>
   Network.post<{
@@ -795,10 +812,15 @@ export const deleteSubscription = (id: number) =>
   Network.post("/subscription/delete", { id });
 export const resetSubscription = (id: number) =>
   Network.post<SubscriptionItem>("/subscription/reset", { id });
+export type RemoteSourceRole = "" | "relay" | "landing";
 export interface RemoteSourceItem {
   id: number;
   name: string;
   url: string;
+  /** "url" = fetched from the URL; "file" = uploaded, updated by uploading again. */
+  kind: "url" | "file";
+  /** 用途：新建订阅链式代理的默认带入（"" 普通 / "relay" 中转 / "landing" 落地）。 */
+  role: RemoteSourceRole;
   /** 0 = refresh by hand only. */
   intervalHours: number;
   relayOnly: boolean;
@@ -822,6 +844,10 @@ export const saveRemoteSource = (data: {
   id?: number;
   name: string;
   url: string;
+  kind?: "url" | "file";
+  role?: RemoteSourceRole;
+  /** Uploaded file contents (file sources). */
+  content?: string;
   intervalHours: number;
   relayOnly: boolean;
   enabled?: boolean;
@@ -962,6 +988,34 @@ export const getMySubscriptions = () =>
   Network.post<{ subscriptions: MySubscriptionItem[] }>(
     "/user-subscription/mine",
     {},
+  );
+
+/** 订阅流量统计的时间粒度。 */
+export type SubTrafficRange = "hour" | "day" | "month";
+/** 一条订阅的流量统计：近 24 小时 / 30 天 / 12 个月，按浏览器时区对齐分桶。 */
+export interface SubTraffic {
+  range: SubTrafficRange;
+  /** 每个时间桶的起点（unix 毫秒）与该桶的上传/下载字节数。 */
+  points: Array<{ time: number; up: number; down: number }>;
+  up: number;
+  down: number;
+}
+const trafficQuery = (id: number, range: SubTrafficRange) => ({
+  id,
+  range,
+  tzOffset: -new Date().getTimezoneOffset(),
+});
+/** 管理端：任一订阅的流量统计。 */
+export const getSubscriptionTraffic = (id: number, range: SubTrafficRange) =>
+  Network.post<SubTraffic>("/subscription/traffic", trafficQuery(id, range));
+/** 用户端：分配给当前用户的一条订阅的流量统计（整条订阅合计）。 */
+export const getMySubscriptionTraffic = (
+  id: number,
+  range: SubTrafficRange,
+) =>
+  Network.post<SubTraffic>(
+    "/user/subscription/traffic",
+    trafficQuery(id, range),
   );
 /** 立即探测节点到延迟测试点的延迟（移植自 kure29/flyx）。 */
 export const probeNodeLatency = (ids: number[] = []) =>
