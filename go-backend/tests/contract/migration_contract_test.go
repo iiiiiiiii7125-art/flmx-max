@@ -527,6 +527,18 @@ func TestBackupExportImportRestoreContracts(t *testing.T) {
 			2001: 21001,
 			2002: 21002,
 		}
+		// FIX132-C 订正：补齐端口引用的节点行。原夹具只插端口行、
+		// 节点从未创建（真实面板中 forward_port 只能为已存在节点
+		// 创建，删节点级联亦会清其端口行）；D4-03 起导入对不存在
+		// 的节点引用跳过该端口行，悬空夹具会误报契约破坏。
+		for nodeID := range expected {
+			if err := r.DB().Exec(`
+				INSERT INTO node(id, name, secret, server_ip, port, created_time, updated_time, status)
+				VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+			`, nodeID, "backup-port-node", "nsecret", "10.0.0.1", "21000-21100", now, now, 1).Error; err != nil {
+				t.Fatalf("seed node %d for forward backup: %v", nodeID, err)
+			}
+		}
 		for nodeID, port := range expected {
 			if err := r.DB().Exec(`INSERT INTO forward_port(forward_id, node_id, port) VALUES(?, ?, ?)`, forwardID, nodeID, port).Error; err != nil {
 				t.Fatalf("seed forward_port %d:%d: %v", nodeID, port, err)
