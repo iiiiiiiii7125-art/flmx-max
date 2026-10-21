@@ -36,7 +36,7 @@ func TestTraceNodeRoutesHonorsContextCancelF079(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	exited := make(chan struct{}, 1)
 	orig := nodeTraceroute
-	nodeTraceroute = func(h *Handler, nodeID int64, host string) (map[string]interface{}, error) {
+	nodeTraceroute = func(h *Handler, nodeID int64, host string, family int) (map[string]interface{}, error) {
 		entered <- struct{}{}
 		<-release // 阻塞，模拟慢速在途 traceroute
 		exited <- struct{}{}
