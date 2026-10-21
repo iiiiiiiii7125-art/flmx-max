@@ -403,7 +403,11 @@ func (s *defaultService) observeStats(ctx context.Context) {
 					},
 				}
 
-				// 将流量累积到全局管理器，而不是立即上报
+				// 将流量累积到全局管理器，而不是立即上报。
+				// 注意 AddTraffic(up, down) 的实参顺序：up=gost
+				// OutputBytes（远端→客户端）、down=gost InputBytes
+				// （客户端→远端）。上报线格式 U/D 沿用此映射，面板按
+				// U=出、D=入解读（N-01 钉死，勿按 U=上行字面修改）。
 				if outputBytes > 0 || inputBytes > 0 {
 					globalManager := GetGlobalTrafficManager()
 					globalManager.AddTraffic(s.name, int64(outputBytes), int64(inputBytes))
