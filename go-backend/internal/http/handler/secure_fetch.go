@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"go-backend/internal/config"
+	"go-backend/internal/logredact"
 	"io"
 	"log"
 	"net"
@@ -112,8 +113,9 @@ func isPrivateAllowed(ip net.IP) bool {
 }
 
 // auditFetchLog 审计日志（放行与拒绝都记）。
+// A8-01：源 URL 常带 ?token= 类凭据，只记 host+路径模板，禁止原文落盘。
 func auditFetchLog(action, rawURL, ip, reason string) {
-	log.Printf("fetch_audit action=%s url=%s ip=%s reason=%s", action, rawURL, ip, reason)
+	log.Printf("fetch_audit action=%s url=%s ip=%s reason=%s", action, logredact.URL(rawURL), ip, reason)
 }
 
 // validateFetchIP 逐地址判定（D17 2.1）：每个 IP 单独走完整链。
@@ -276,6 +278,6 @@ func SecureFetchWithHeader(ctx context.Context, rawURL string) ([]byte, http.Hea
 		return nil, nil, fmt.Errorf("response too large (>%d bytes)", secureFetchMaxBody)
 	}
 
-	log.Printf("secure_fetch ok url=%s bytes=%d", rawURL, len(body))
+	log.Printf("secure_fetch ok url=%s bytes=%d", logredact.URL(rawURL), len(body))
 	return body, resp.Header, nil
 }
