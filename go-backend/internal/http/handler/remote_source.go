@@ -389,6 +389,14 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	}
 	// IMP-003：RelayOnly 变更也触发立即同步（之前还需删源重建才生效）。
 	fetch := src.ID == 0 || src.URL != req.URL || sourceKind(src) != req.Kind || req.Content != "" || src.RelayOnly != boolToInt(req.RelayOnly)
+	// A6-001：文件源无新上传时唯一的 fetch 触发只可能是 RelayOnly 变化，
+	// 而整源同步对文件源无 upload 必然失败（"文件订阅源不能自动更新"）—
+	// 旧路径把假 last_error 写回源记录，且节点行 RelayOnly 永不更新，
+	// 管理员与实际收紧状态分叉。覆写前先记住是否为这种「仅改
+	// RelayOnly」的情形，保存后直接把新值落到导入节点行。
+	relayOnlyOnlyChange := src.ID > 0 && sourceKind(src) == model.RemoteSourceFile &&
+		req.Kind == model.RemoteSourceFile && strings.TrimSpace(req.Content) == "" &&
+		src.RelayOnly != boolToInt(req.RelayOnly)
 	src.Name, src.URL, src.IntervalHours, src.Kind, src.Role = req.Name, req.URL, req.IntervalHours, req.Kind, req.Role
 	src.RelayOnly = boolToInt(req.RelayOnly)
 	if req.Enabled != nil {
@@ -397,6 +405,15 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	src.UpdatedTime = now
 	if err := h.repo.SaveRemoteSource(src); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if relayOnlyOnlyChange {
+		h.applyRemoteSourceRelayOnly(src)
+		saved, _ := h.repo.GetRemoteSource(src.ID)
+		if saved != nil {
+			src = saved
+		}
+		response.WriteJSON(w, response.OK(remoteSourceViewOf(src)))
 		return
 	}
 	if !fetch {
@@ -428,6 +445,39 @@ func isLikelyPublicHTTP(rawURL string) bool {
 		return !isPrivateIP(ip)
 	}
 	return true
+}
+
+// applyRemoteSourceRelayOnly 把订阅源的 RelayOnly 新值直接落到其导入
+// 节点行（A6-001）：与同步路径的更新分支同口径——改值后对引用了该
+// 入站的链式中转补一次 applyChainReferrers（地址未变，无需 retarget）。
+// 与整源同步共用 remoteSourceMu 串行化，避免与定时刷新竞态。
+func (h *Handler) applyRemoteSourceRelayOnly(src *model.RemoteSource) {
+	remoteSourceMu.Lock()
+	defer remoteSourceMu.Unlock()
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		log.Printf("remote source %d relay-only apply list failed: %v", src.ID, err)
+		return
+	}
+	now := time.Now().UnixMilli()
+	for i := range rows {
+		row := &rows[i]
+		if row.SourceID != src.ID || !isExternalInbound(row) {
+			continue
+		}
+		if row.RelayOnly == src.RelayOnly {
+			continue
+		}
+		row.RelayOnly = src.RelayOnly
+		row.UpdatedTime = now
+		if err := h.repo.SaveNodeInbound(row); err != nil {
+			log.Printf("remote source %d relay-only apply inbound %d failed: %v", src.ID, row.ID, err)
+			continue
+		}
+		for _, problem := range h.applyChainReferrers(row.ID) {
+			log.Printf("remote source %d relay-only chain re-apply inbound %d: %s", src.ID, row.ID, problem)
+		}
+	}
 }
 
 func (h *Handler) respondRemoteSync(w http.ResponseWriter, ctx context.Context, src *model.RemoteSource, upload string) {

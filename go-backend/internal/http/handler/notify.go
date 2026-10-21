@@ -80,7 +80,11 @@ type notifier struct {
 	// recentSent 记录最近成功发送过的通知指纹与时间（O8-005），用于抑制
 	// 同一问题在短时间内抖动重复触发的通知（如内核错误状态反复翻转）。
 	recentSent map[string]time.Time
-	client     *http.Client
+	// inflight 是正在派发中的指纹集合（A7-04）：旧实现只在发送成功后
+	// markSent，同一通知被并发触发时全部穿透去重、各发一份；改为在
+	// 派发前先占位，后到者直接按已抑制处理。
+	inflight map[string]bool
+	client   *http.Client
 }
 
 func newNotifier() *notifier {
@@ -90,6 +94,7 @@ func newNotifier() *notifier {
 		expiryAlerted:  make(map[int64]int64),
 		alerted:        make(map[string]bool),
 		recentSent:     make(map[string]time.Time),
+		inflight:       make(map[string]bool),
 		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
 		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
 		// 同时限制最多 5 跳，防重定向环。
@@ -108,10 +113,42 @@ func newNotifier() *notifier {
 	}
 }
 
+// notifyConfigCacheTTL 是通知配置缓存的有效期（D6-07）：旧实现每条
+// 通知都 ListConfigs 全表扫一遍 vite_config。配置更新的两个写入口
+// （updateConfigs/updateSingleConfig）会显式失效缓存，TTL 只兜底
+// 其他写路径（如日报落盘键）。
+const notifyConfigCacheTTL = 5 * time.Second
+
+// cachedConfigs 返回 vite_config 的短时缓存副本。
+func (h *Handler) cachedConfigs() (map[string]string, error) {
+	h.notifyCfgMu.Lock()
+	defer h.notifyCfgMu.Unlock()
+	if h.notifyCfgVals != nil && time.Since(h.notifyCfgAt) < notifyConfigCacheTTL {
+		return h.notifyCfgVals, nil
+	}
+	cfg, err := h.repo.ListConfigs()
+	if err != nil {
+		return nil, err
+	}
+	h.notifyCfgVals = cfg
+	h.notifyCfgAt = time.Now()
+	return cfg, nil
+}
+
+// invalidateNotifyConfigCache 在配置写成功后调用，使通知立即用新配置。
+func (h *Handler) invalidateNotifyConfigCache() {
+	if h == nil {
+		return
+	}
+	h.notifyCfgMu.Lock()
+	defer h.notifyCfgMu.Unlock()
+	h.notifyCfgVals = nil
+}
+
 // notifyConfig reads the saved settings; ok is false when notifications
 // are off or the event is not selected.
 func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
-	cfg, err := h.repo.ListConfigs()
+	cfg, err := h.cachedConfigs()
 	if err != nil {
 		return notifySettings{}, "", false
 	}
@@ -186,72 +223,308 @@ func (n *notifier) markSent(fp string, now time.Time) {
 	}
 }
 
+// claimInflight 占位一个正在派发的指纹；已有同指纹在途时返回 false，
+// 调用方按「已抑制」处理（在途的那一份代表本次触发投递）。
+func (n *notifier) claimInflight(fp string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.inflight == nil {
+		n.inflight = make(map[string]bool)
+	}
+	if n.inflight[fp] {
+		return false
+	}
+	n.inflight[fp] = true
+	return true
+}
+
+func (n *notifier) releaseInflight(fp string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.inflight, fp)
+}
+
+// forgetFingerprints 删除满足 match 的已发送指纹（A7-02）。
+// 通知文档承诺「同一个问题只提醒一次，恢复后才会再次提醒」，但旧实现
+// 的指纹窗口在恢复后仍继续拦截：掉线→恢复→30 分钟内再掉线的第二次
+// 告警（及第二次恢复）被成对吞掉（T26 真机定案）。恢复送达时必须把
+// 该问题的指纹清掉、重新武装下一次告警。
+func (n *notifier) forgetFingerprints(match func(fp string) bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for fp := range n.recentSent {
+		if match(fp) {
+			delete(n.recentSent, fp)
+		}
+	}
+}
+
+// forgetEventMessage 清掉某事件下消息体完全相同的所有指纹（不限标题：
+// 同一问题的「掉线」与「恢复」标题不同、消息体同为「节点：X」）。
+func (n *notifier) forgetEventMessage(event, message string) {
+	prefix := event + "\x00"
+	suffix := "\x00" + message
+	n.forgetFingerprints(func(fp string) bool {
+		return strings.HasPrefix(fp, prefix) && strings.HasSuffix(fp, suffix)
+	})
+}
+
+// forgetFingerprintPrefix 清掉指纹前缀命中的条目（event\x00标题\x00消息前缀）。
+func (n *notifier) forgetFingerprintPrefix(prefix string) {
+	n.forgetFingerprints(func(fp string) bool {
+		return strings.HasPrefix(fp, prefix)
+	})
+}
+
+// clearExpiryAlert 回滚节点到期告警的已标记状态（A7-03：发送失败不置位）。
+func (n *notifier) clearExpiryAlert(nodeID int64, expiryMs int64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.expiryAlerted[nodeID] == expiryMs {
+		delete(n.expiryAlerted, nodeID)
+	}
+}
+
+// 通知通道名（sendChannels 的 only/failed 集合键）。
+const (
+	notifyChannelTelegram = "telegram"
+	notifyChannelWebhook  = "webhook"
+)
+
 // sendWithRetry 发送通知，失败后间隔 notifyRetryDelay 重试一次（O8-002）。
+// A7-04：重试粒度按通道——旧实现以整条消息为粒度，单通道失败会把已
+// 成功的通道再发一份（一次告警变两份；日报补发时每 tick 再叠加）。
+// 现改为只重发仍失败的通道，成功通道每次调用至多投递一次。
 func (n *notifier) sendWithRetry(ctx context.Context, s notifySettings, msg notifyMessage) error {
-	err := n.send(ctx, s, msg)
-	if err == nil {
+	failed := n.sendChannels(ctx, s, msg, nil)
+	if len(failed) == 0 {
 		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return err
+		return notifyChannelsError(failed)
 	case <-time.After(notifyRetryDelay):
 	}
-	if err2 := n.send(ctx, s, msg); err2 != nil {
-		return err2
+	failed = n.sendChannels(ctx, s, msg, failed)
+	if len(failed) > 0 {
+		return notifyChannelsError(failed)
 	}
 	return nil
 }
 
-// notifySync 同步发送一条通知并返回是否发送成功（配置未启用也视为未发送）。
-// 测试事件不参与去重，管理员可反复发送测试消息。
-func (h *Handler) notifySync(event, title, message string) bool {
+// sendChannels 向 only 指定的通道集合投递（nil = 全部已配置通道；
+// only 只看键集合，其值即上轮的错误映射，可直接回喂），返回仍失败
+// 的通道→错误映射。
+func (n *notifier) sendChannels(ctx context.Context, s notifySettings, msg notifyMessage, only map[string]error) map[string]error {
+	failed := make(map[string]error)
+	want := func(ch string) bool {
+		if only == nil {
+			return true
+		}
+		_, ok := only[ch]
+		return ok
+	}
+	if want(notifyChannelTelegram) && s.TelegramToken != "" && s.TelegramChatID != "" {
+		if err := n.sendTelegram(ctx, s, msg); err != nil {
+			failed[notifyChannelTelegram] = err
+		}
+	}
+	if want(notifyChannelWebhook) && s.WebhookURL != "" {
+		if err := n.sendWebhook(ctx, s.WebhookURL, msg); err != nil {
+			failed[notifyChannelWebhook] = err
+		}
+	}
+	return failed
+}
+
+// notifyChannelsError 把按通道的失败拼成与旧 send 相同的文案
+// （"Telegram: ...；Webhook: ..."）。
+func notifyChannelsError(failed map[string]error) error {
+	var errs []string
+	if err, ok := failed[notifyChannelTelegram]; ok {
+		errs = append(errs, "Telegram: "+err.Error())
+	}
+	if err, ok := failed[notifyChannelWebhook]; ok {
+		errs = append(errs, "Webhook: "+err.Error())
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(errs, "；"))
+}
+
+// notifyOutcome 是一次派发的结果，供告警状态机决定是否置位（A7-03）。
+type notifyOutcome int
+
+const (
+	// notifyOutcomeFailed 实际尝试发送但失败（通道故障）——状态机必须
+	// 回滚已标记状态，让问题在下一轮检查/触发时重新告警（BC-16）。
+	notifyOutcomeFailed notifyOutcome = iota
+	// notifyOutcomeSent 已投递成功。
+	notifyOutcomeSent
+	// notifyOutcomeSuppressed 被去重抑制：窗口内同指纹已成功发送过，
+	// 或有同指纹正在派发。本问题视为已通知，状态标记成立。
+	notifyOutcomeSuppressed
+	// notifyOutcomeDisabled 通知未启用或事件未勾选（配置面决定，
+	// 不是发送失败）：保持既有标记语义，避免每轮重复无谓尝试。
+	notifyOutcomeDisabled
+)
+
+// dispatchNotify 执行一次派发：配置检查 → 指纹去重（含在途占位）→
+// 按通道发送。测试事件不参与去重，管理员可反复发送测试消息。
+func (h *Handler) dispatchNotify(ctx context.Context, event, title, message string) notifyOutcome {
 	if h == nil || h.repo == nil || h.notifier == nil {
-		return false
+		return notifyOutcomeFailed
 	}
 	settings, app, ok := h.notifyConfig(event)
 	if !ok {
-		return false
+		return notifyOutcomeDisabled
 	}
 	fp := notifyFingerprint(event, title, message)
 	// O8-005：同一问题只提醒一次。内核错误等事件只按状态翻转触发，状态抖动
 	// （error→正常→error）会重复发送相同内容，这里按内容指纹在窗口内抑制。
-	if event != notifyEventTest && h.notifier.recentlySent(fp, time.Now()) {
-		return false
+	if event != notifyEventTest {
+		if h.notifier.recentlySent(fp, time.Now()) {
+			return notifyOutcomeSuppressed
+		}
+		// A7-04：并发同指纹只有一个能占位派发，其余按已抑制处理，
+		// 不再出现 16 个并发各发一份的穿透。
+		if !h.notifier.claimInflight(fp) {
+			return notifyOutcomeSuppressed
+		}
+		defer h.notifier.releaseInflight(fp)
 	}
 	msg := notifyMessage{Event: event, Title: title, Message: message, Time: time.Now().UnixMilli(), App: app}
-	if err := h.notifier.sendWithRetry(context.Background(), settings, msg); err != nil {
+	if err := h.notifier.sendWithRetry(ctx, settings, msg); err != nil {
 		log.Printf("notify %s failed: %v", event, err)
-		return false
+		return notifyOutcomeFailed
 	}
 	if event != notifyEventTest {
 		h.notifier.markSent(fp, time.Now())
 	}
-	return true
+	return notifyOutcomeSent
+}
+
+// notifySync 同步派发并返回是否可视为已通知（日报落盘判定沿用此口径：
+// 成功，或窗口内刚成功发送过同一条）。
+func (h *Handler) notifySync(event, title, message string) bool {
+	outcome := h.dispatchNotify(context.Background(), event, title, message)
+	return outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed
+}
+
+// notifyQueueSize 是派发队列容量（D6-07）：旧实现每条通知起一个无界
+// goroutine 且用 context.Background() 发送，节点群集体抖动时 goroutine
+// 与配置全表扫描同时放大。现改为有界队列 + 固定 worker 池，worker 的
+// ctx 归 jobs 管辖（派生自 StartBackgroundJobs 的 ctx）。
+const notifyQueueSize = 128
+
+const notifyWorkerCount = 4
+
+type notifyJob struct {
+	event, title, message string
+	onDone                func(notifyOutcome)
+}
+
+// ensureNotifyDispatcher 懒启动派发 worker（StartBackgroundJobs 会显式
+// 调用以绑定 jobs ctx；其余路径——如单元测试与 jobs 启动前——首次通知
+// 时以当前可用 ctx 启动）。
+func (h *Handler) ensureNotifyDispatcher() {
+	if h == nil {
+		return
+	}
+	h.notifyMu.Lock()
+	defer h.notifyMu.Unlock()
+	if h.notifyRunning {
+		return
+	}
+	if h.notifyQueue == nil {
+		h.notifyQueue = make(chan notifyJob, notifyQueueSize)
+	}
+	h.jobsMu.Lock()
+	base := h.jobsCtx
+	h.jobsMu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
+	h.notifyCancel = cancel
+	h.notifyRunning = true
+	for i := 0; i < notifyWorkerCount; i++ {
+		h.notifyWG.Add(1)
+		go h.runNotifyWorker(ctx)
+	}
+}
+
+// stopNotifyDispatcher 停掉派发 worker（StopBackgroundJobs 调用）。
+func (h *Handler) stopNotifyDispatcher() {
+	if h == nil {
+		return
+	}
+	h.notifyMu.Lock()
+	cancel := h.notifyCancel
+	h.notifyCancel = nil
+	h.notifyMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	h.notifyWG.Wait()
+	h.notifyMu.Lock()
+	h.notifyRunning = false
+	h.notifyMu.Unlock()
+}
+
+func (h *Handler) runNotifyWorker(ctx context.Context) {
+	defer h.notifyWG.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-h.notifyQueue:
+			outcome := h.dispatchNotify(ctx, job.event, job.title, job.message)
+			if job.onDone != nil {
+				job.onDone(outcome)
+			}
+		}
+	}
+}
+
+// enqueueNotify 把一条通知放入有界队列；队列满时按发送失败处理
+// （回滚状态机标记并记日志），绝不阻塞调用方、绝不无界起 goroutine。
+func (h *Handler) enqueueNotify(job notifyJob) {
+	if h == nil || h.notifier == nil {
+		if job.onDone != nil {
+			job.onDone(notifyOutcomeFailed)
+		}
+		return
+	}
+	h.ensureNotifyDispatcher()
+	h.notifyMu.Lock()
+	queue := h.notifyQueue
+	h.notifyMu.Unlock()
+	select {
+	case queue <- job:
+	default:
+		log.Printf("notify %s dropped: dispatch queue full", job.event)
+		if job.onDone != nil {
+			job.onDone(notifyOutcomeFailed)
+		}
+	}
 }
 
 // notify sends an event in the background when it is enabled.
 func (h *Handler) notify(event, title, message string) {
-	go h.notifySync(event, title, message)
+	h.enqueueNotify(notifyJob{event: event, title: title, message: message})
+}
+
+// notifyTracked 与 notify 相同，但派发结束后以 outcome 回调调用方，
+// 供告警状态机实现「发送成功才置位、失败回滚重试」（A7-03/BC-16）。
+func (h *Handler) notifyTracked(event, title, message string, onDone func(notifyOutcome)) {
+	h.enqueueNotify(notifyJob{event: event, title: title, message: message, onDone: onDone})
 }
 
 // send delivers to every configured channel and reports the failures.
 func (n *notifier) send(ctx context.Context, s notifySettings, msg notifyMessage) error {
-	var errs []string
-	if s.TelegramToken != "" && s.TelegramChatID != "" {
-		if err := n.sendTelegram(ctx, s, msg); err != nil {
-			errs = append(errs, "Telegram: "+err.Error())
-		}
-	}
-	if s.WebhookURL != "" {
-		if err := n.sendWebhook(ctx, s.WebhookURL, msg); err != nil {
-			errs = append(errs, "Webhook: "+err.Error())
-		}
-	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "；"))
-	}
-	return nil
+	return notifyChannelsError(n.sendChannels(ctx, s, msg, nil))
 }
 
 func notifyText(msg notifyMessage) string {
@@ -479,18 +752,12 @@ func (h *Handler) checkStartupOfflineNodes() {
 		if h.wsServer.IsNodeOnline(node.ID) {
 			continue
 		}
-		h.notifier.mu.Lock()
-		already := h.notifier.offlineAlerted[node.ID]
-		if !already {
-			h.notifier.offlineAlerted[node.ID] = true
-		}
-		h.notifier.mu.Unlock()
-		if already {
-			continue
-		}
-		h.notify(notifyEventNodeOffline, "节点掉线（面板重启后仍离线）", "节点："+node.Name)
+		h.dispatchNodeOfflineAlert(node.ID, "节点掉线（面板重启后仍离线）")
 	}
 }
+
+// notifyOfflineRetryDelay 是掉线告警发送失败后的重排间隔（A7-03）。
+var notifyOfflineRetryDelay = time.Minute
 
 func (h *Handler) notifyNodeOffline(nodeID int64) {
 	n := h.notifier
@@ -503,22 +770,55 @@ func (h *Handler) notifyNodeOffline(nodeID int64) {
 		t.Stop()
 	}
 	n.offlineTimers[nodeID] = time.AfterFunc(nodeOfflineGrace, func() {
-		n.mu.Lock()
-		delete(n.offlineTimers, nodeID)
-		if n.offlineAlerted[nodeID] || (h.wsServer != nil && h.wsServer.IsNodeOnline(nodeID)) {
-			n.mu.Unlock()
-			return
-		}
-		// O8-003：节点在宽限期内被删除则不发告警（否则会发出标签退化为
-		// "节点 {id}" 的幽灵掉线通知）。删除入口应调用 forgetNode 提前清理，
-		// 此处为发送侧的最终兜底。
-		if node, err := h.repo.GetNodeByID(nodeID); err != nil || node == nil {
-			n.mu.Unlock()
-			return
-		}
-		n.offlineAlerted[nodeID] = true
+		h.dispatchNodeOfflineAlert(nodeID, "节点掉线")
+	})
+}
+
+// dispatchNodeOfflineAlert 校验节点仍离线/仍存在后标记已告警并派发；
+// 发送失败时回滚标记并重排一次延迟重试（A7-03/BC-16：旧实现先标记后
+// 异步发送，通道短暂故障会把整段掉线告警永久吞掉）。title 区分首次
+// 掉线与面板重启后仍离线两种文案。节点标签取自 DB 行名（调用方语境）。
+func (h *Handler) dispatchNodeOfflineAlert(nodeID int64, title string) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	delete(n.offlineTimers, nodeID)
+	if n.offlineAlerted[nodeID] || (h.wsServer != nil && h.wsServer.IsNodeOnline(nodeID)) {
 		n.mu.Unlock()
-		h.notify(notifyEventNodeOffline, "节点掉线", "节点："+h.nodeLabel(nodeID))
+		return
+	}
+	// O8-003：节点在宽限期内被删除则不发告警（否则会发出标签退化为
+	// "节点 {id}" 的幽灵掉线通知）。删除入口应调用 forgetNode 提前清理，
+	// 此处为发送侧的最终兜底。
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		n.mu.Unlock()
+		return
+	}
+	n.offlineAlerted[nodeID] = true
+	n.mu.Unlock()
+	msg := "节点：" + node.Name
+	if title == "节点掉线" {
+		// 首次掉线沿用 nodeLabel（与历史文案一致，含名称回退）。
+		msg = "节点：" + h.nodeLabel(nodeID)
+	}
+	h.notifyTracked(notifyEventNodeOffline, title, msg, func(outcome notifyOutcome) {
+		if outcome != notifyOutcomeFailed {
+			return
+		}
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if !n.offlineAlerted[nodeID] || (h.wsServer != nil && h.wsServer.IsNodeOnline(nodeID)) {
+			return
+		}
+		delete(n.offlineAlerted, nodeID)
+		if _, pending := n.offlineTimers[nodeID]; !pending {
+			n.offlineTimers[nodeID] = time.AfterFunc(notifyOfflineRetryDelay, func() {
+				h.dispatchNodeOfflineAlert(nodeID, title)
+			})
+		}
 	})
 }
 
@@ -536,7 +836,17 @@ func (h *Handler) notifyNodeOnline(nodeID int64) {
 	delete(n.offlineAlerted, nodeID)
 	n.mu.Unlock()
 	if alerted {
-		h.notify(notifyEventNodeOffline, "节点恢复在线", "节点："+h.nodeLabel(nodeID))
+		label := h.nodeLabel(nodeID)
+		h.notifyTracked(notifyEventNodeOffline, "节点恢复在线", "节点："+label, func(outcome notifyOutcome) {
+			if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
+				// A7-02（BC-15）：恢复送达后清掉该节点的问题指纹——
+				// 掉线与恢复同事件、同消息体（差异只在标题，经
+				// forgetEventMessage 一并清除）。否则指纹窗口内第二次
+				// 掉线与第二次恢复会被成对吞掉（T26 真机定案）。
+				// 未恢复的问题其指纹一直有效，防抖语义不变。
+				h.notifier.forgetEventMessage(notifyEventNodeOffline, "节点："+label)
+			}
+		})
 	}
 }
 
@@ -580,8 +890,14 @@ func (h *Handler) checkNodeExpiry(now time.Time) {
 			title = "节点已到期"
 			detail = "已过期"
 		}
-		h.notify(notifyEventNodeExpiry, title, fmt.Sprintf("节点：%s\n到期：%s（%s）",
-			node.Name, expiry.Format("2006-01-02"), detail))
+		nodeID, expiryMs := node.ID, node.ExpiryTime.Int64
+		h.notifyTracked(notifyEventNodeExpiry, title, fmt.Sprintf("节点：%s\n到期：%s（%s）",
+			node.Name, expiry.Format("2006-01-02"), detail), func(outcome notifyOutcome) {
+			// A7-03：发送失败回滚标记，下一轮 10 分钟检查时重试。
+			if outcome == notifyOutcomeFailed {
+				h.notifier.clearExpiryAlert(nodeID, expiryMs)
+			}
+		})
 	}
 }
 

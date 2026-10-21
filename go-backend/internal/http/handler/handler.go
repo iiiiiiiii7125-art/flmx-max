@@ -62,6 +62,18 @@ type Handler struct {
 	jobsStarted bool
 	jobsWG      sync.WaitGroup
 
+	// FIX-D（D6-07）：通知派发有界队列 + worker 池状态（notify.go）。
+	notifyMu      sync.Mutex
+	notifyQueue   chan notifyJob
+	notifyCancel  context.CancelFunc
+	notifyRunning bool
+	notifyWG      sync.WaitGroup
+	// 通知配置读取缓存（短 TTL + 配置写路径显式失效），消除每条通知
+	// 一次 vite_config 全表扫描。
+	notifyCfgMu   sync.Mutex
+	notifyCfgVals map[string]string
+	notifyCfgAt   time.Time
+
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
 	pendingUpgradeRedeploy      map[int64]struct{}
@@ -1227,6 +1239,7 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.invalidateNotifyConfigCache()
 	for _, key := range hooks {
 		h.notifyTunnelQualityConfigChanged(key)
 		h.onLatencyConfigChanged(key, prevPools[key])
@@ -1278,6 +1291,7 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		h.invalidateNotifyConfigCache()
 		h.notifyTunnelQualityConfigChanged(name)
 		h.onLatencyConfigChanged(name, prevPool)
 
@@ -1290,6 +1304,7 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.invalidateNotifyConfigCache()
 	h.notifyTunnelQualityConfigChanged(name)
 	h.onLatencyConfigChanged(name, prevPool)
 
@@ -1330,6 +1345,13 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		}
 
 		return pngDataURLPrefix + payload, nil
+	case latencyTargetsConfigKey:
+		// A2-01=A7-01：此键此前走 default 原样放行，非法值保存成功后
+		// latencyPool 解析失败恒空——全部延迟/回程测量静默停摆，且
+		// onLatencyConfigChanged 以空池同步会清掉每个节点的自选测试点。
+		// normalizeLatencyTargetsConfig 本为此写就，现正式接线（空串
+		// 返回 ""，与既有可清空语义兼容）。
+		return normalizeLatencyTargetsConfig(value)
 	case monitorTunnelQualityEnabledConfigKey:
 		normalized := strings.TrimSpace(strings.ToLower(value))
 		switch normalized {
