@@ -113,6 +113,11 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("未登录"))
 		return
 	}
+	// 请求体可选：format 指定 NodeCount 的目标格式口径（A5-02/BC-11）。
+	var mineReq struct {
+		Format string `json:"format"`
+	}
+	_ = decodeJSON(r.Body, &mineReq)
 	subs, err := h.repo.ListUserSubscriptions(userID)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -128,7 +133,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 	for i := range subs {
 		var s *model.Subscription = &subs[i]
 		// 复用 subscriptionView 保证 path 与 nodeCount（中转过滤后）口径一致。
-		v := h.subscriptionView(s, rows, now)
+		v := h.subscriptionView(s, rows, now, mineReq.Format)
 		items = append(items, userSubscriptionMineView{
 			ID: v.ID, Name: v.Name, Path: v.Path, NodeCount: v.NodeCount,
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
