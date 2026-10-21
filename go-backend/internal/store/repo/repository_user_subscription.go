@@ -123,6 +123,9 @@ func (r *Repository) DeleteSubscriptionWithAssignments(id int64) error {
 		if err := tx.Where("subscription_id = ?", id).Delete(&model.SubscriptionCounter{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("subscription_id = ?", id).Delete(&model.SubscriptionTraffic{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("subscription_id = ?", id).Delete(&model.UserSubscription{}).Error; err != nil {
 			return err
 		}

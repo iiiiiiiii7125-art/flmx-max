@@ -46,6 +46,18 @@ type subPipeline struct {
 	RuleGroups        []string `json:"ruleGroups"`
 	ChainLandingNames []string `json:"chainLandingNames"`
 	ChainRelayNames   []string `json:"chainRelayNames"`
+	// ChainLandingSources / ChainRelaySources take whole remote sources
+	// (their nodes join the subscription), ChainLandingOwn the panel's own
+	// nodes; ChainNoneNames are nodes set to 不用 that those would take.
+	ChainLandingSources []int64  `json:"chainLandingSources"`
+	ChainRelaySources   []int64  `json:"chainRelaySources"`
+	ChainLandingOwn     bool     `json:"chainLandingOwn"`
+	ChainNoneNames      []string `json:"chainNoneNames"`
+	ChainHideRelays     bool     `json:"chainHideRelays"`
+	// ChainSourceFilters narrows a chain source to the nodes whose name
+	// matches; ChainDropUnused leaves the rest of its nodes out.
+	ChainSourceFilters map[int64]string `json:"chainSourceFilters,omitempty"`
+	ChainDropUnused    bool             `json:"chainDropUnused"`
 	// RelayIDs 是端点白名单（1.0.12 中转范围过滤）：空/nil = 不过滤（旧行为）；
 	// 非空时仅保留 RelayID 命中的端点，0 表示直连端点，N>0 表示该中转的端点。
 	RelayIDs []int64 `json:"relayIds,omitempty"`
@@ -58,6 +70,9 @@ func (p subPipeline) options() kernel.SubOptions {
 		RegionGroups: p.RegionGroups, ChainLanding: p.ChainLanding, ChainRelay: p.ChainRelay,
 		Script: p.Script, Rules: p.Rules, RuleGroups: p.RuleGroups,
 		ChainLandingNames: p.ChainLandingNames, ChainRelayNames: p.ChainRelayNames,
+		ChainLandingSources: p.ChainLandingSources, ChainRelaySources: p.ChainRelaySources,
+		ChainLandingOwn: p.ChainLandingOwn, ChainNoneNames: p.ChainNoneNames, ChainHideRelays: p.ChainHideRelays,
+		ChainSourceFilters: p.ChainSourceFilters, ChainDropUnused: p.ChainDropUnused,
 	}
 }
 
@@ -98,6 +113,41 @@ func (p *subPipeline) normalize() error {
 	if p.ChainRelayNames == nil {
 		p.ChainRelayNames = []string{}
 	}
+	if p.ChainNoneNames == nil {
+		p.ChainNoneNames = []string{}
+	}
+	// 链式按源（3.3.29 #87）：新字段归一化——None 名单修剪去重、来源 ID
+	// 去零去重；筛选表达式只保留链内来源的（其余静默丢弃）。
+	noneNames, err := normalizeNames(p.ChainNoneNames)
+	if err != nil {
+		return err
+	}
+	p.ChainNoneNames = noneNames
+	landingSources, err := normalizeIDs(p.ChainLandingSources)
+	if err != nil {
+		return err
+	}
+	p.ChainLandingSources = landingSources
+	relaySources, err := normalizeIDs(p.ChainRelaySources)
+	if err != nil {
+		return err
+	}
+	p.ChainRelaySources = relaySources
+	// Filters are kept for the sources in the chain only.
+	inChain := map[int64]bool{}
+	for _, id := range append(append([]int64{}, p.ChainLandingSources...), p.ChainRelaySources...) {
+		inChain[id] = true
+	}
+	filters := map[int64]string{}
+	for id, expr := range p.ChainSourceFilters {
+		if expr = strings.TrimSpace(expr); expr != "" && inChain[id] {
+			if len(expr) > 1000 {
+				return errText("规则太长")
+			}
+			filters[id] = expr
+		}
+	}
+	p.ChainSourceFilters = filters
 	// 脚本长度限制（与执行时的 20000 一致，保存时提前拦截）
 	if len(p.Script) > 20000 {
 		return errText("脚本过长（最多 20000 字符）")
@@ -137,7 +187,54 @@ func parsePipeline(raw string) subPipeline {
 	if p.ChainRelayNames == nil {
 		p.ChainRelayNames = []string{}
 	}
+	if p.ChainNoneNames == nil {
+		p.ChainNoneNames = []string{}
+	}
+	if p.ChainLandingSources == nil {
+		p.ChainLandingSources = []int64{}
+	}
+	if p.ChainRelaySources == nil {
+		p.ChainRelaySources = []int64{}
+	}
 	return p
+}
+
+// normalizeIDs drops zero and repeated ids.
+func normalizeIDs(ids []int64) ([]int64, error) {
+	if len(ids) > 100 {
+		return nil, errText("选的订阅源太多")
+	}
+	out := []int64{}
+	seen := map[int64]bool{}
+	for _, id := range ids {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// normalizeNames trims and dedupes picked node names; a node picked as
+// both landing and relay counts as landing (see markChain).
+func normalizeNames(names []string) ([]string, error) {
+	if len(names) > 1000 {
+		return nil, errText("选的节点太多")
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		if len([]rune(n)) > 200 {
+			return nil, errText("节点名称太长")
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 type errText string
@@ -255,7 +352,9 @@ func subInboundIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 		picked[id] = true
 	}
 	sources := map[int64]bool{}
-	for _, id := range parseIDList(s.SourceIDs) {
+	pipeline := parsePipeline(s.Options)
+	// The chain's sources come with their nodes.
+	for _, id := range append(append(parseIDList(s.SourceIDs), pipeline.ChainLandingSources...), pipeline.ChainRelaySources...) {
 		sources[id] = true
 	}
 	for _, r := range rows {
@@ -606,7 +705,8 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 		}
 	}
 	req.SourceIDs = sources
-	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 {
+	chainSources := len(req.Options.ChainLandingSources) + len(req.Options.ChainRelaySources)
+	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 {
 		return nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
 	return ids, nil
@@ -823,6 +923,10 @@ type subPreviewItem struct {
 	Line     string `json:"line"` // "direct" or "relay"
 	// Chain is "landing" or "relay" when the subscription chains proxies.
 	Chain string `json:"chain,omitempty"`
+	// SourceID is the remote source of an imported node; Own marks the
+	// panel's own nodes.
+	SourceID int64 `json:"sourceId,omitempty"`
+	Own      bool  `json:"own,omitempty"`
 }
 
 // subscriptionPreview runs an (unsaved) subscription's pipeline and lists
@@ -850,7 +954,9 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs)}
+	options, _ := json.Marshal(req.Options)
+	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs),
+		Options: string(options)}
 	source := h.subEndpoints(draft, rows)
 	opts := req.Options.options()
 	// F-024（O4-001 的另一半）：脚本出错时预览必须保留其他步骤的节点并
@@ -865,7 +971,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 			line = "direct"
 		}
 		items = append(items, subPreviewItem{Name: e.Name, Original: e.Original, Region: kernel.RegionOf(e.Name),
-			Protocol: kernel.EndpointProtocol(e), Line: line, Chain: e.ChainRole})
+			Protocol: kernel.EndpointProtocol(e), Line: line, Chain: e.ChainRole, SourceID: e.SourceID, Own: e.Proxy == nil && e.SourceID == 0})
 	}
 	resp := map[string]interface{}{
 		"items":   items,
