@@ -2463,6 +2463,7 @@ func (r *Repository) exportPeerShares() ([]model.PeerShareBackup, error) {
 			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
 			CreatedTime: s.CreatedTime, UpdatedTime: s.UpdatedTime,
 			AllowedDomains: s.AllowedDomains, AllowedIPs: s.AllowedIPs,
+			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
 		})
 	}
 	return out, nil
@@ -3113,9 +3114,12 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 				return count, err
 			}
 		} else {
-			if err := tx.Where("user_id = ?", u.ID).Delete(&model.UserQuota{}).Error; err != nil {
-				return count, err
-			}
+			// FIX2-B（D4-11）：处置选择「保行」。备份无任何配额信号
+			// 只说明备份侧没有可恢复的配额数据（旧备份根本没有这批
+			// 字段），不构成「该用户应无配额」的断言；旧实现据此删
+			// 除目标库现存配额行，同实例重导入一份旧备份即静默剥
+			// 掉用户的日/月限额。导入其余段均为 upsert 语义（备份
+			// 里没有的行从不反删），此处与之对齐：无信号即不动。
 		}
 		count++
 	}
@@ -3297,18 +3301,34 @@ func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep 
 			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
 			CreatedTime: s.CreatedTime, UpdatedTime: updated,
 			AllowedDomains: s.AllowedDomains, AllowedIPs: s.AllowedIPs,
+			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
 		}
 		if item.CreatedTime == 0 {
 			item.CreatedTime = now
 		}
+		// FIX2-B（V3-01）：凭据列仅在备份确实携带时才进 DoUpdates；
+		// 旧备份无此二字段（恒空），无条件更新会把同实例现存凭据
+		// 清零（与 D4-11「无信号即不动」同口径）。全新恢复走插入
+		// 分支，凭据随 item 落库，不受此限。
+		peerShareDoUpdates := []string{
+			"name", "node_id", "token", "max_bandwidth", "expiry_time",
+			"port_range_start", "port_range_end", "current_flow", "is_active",
+			"updated_time", "allowed_domains", "allowed_ips",
+		}
+		if s.RelayUsername != "" || s.RelayPassword != "" {
+			peerShareDoUpdates = append(peerShareDoUpdates, "relay_username", "relay_password")
+		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "node_id", "token", "max_bandwidth", "expiry_time",
-				"port_range_start", "port_range_end", "current_flow", "is_active",
-				"updated_time", "allowed_domains", "allowed_ips",
-			}),
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns(peerShareDoUpdates),
 		}).Create(&item).Error; err != nil {
+			return count, err
+		}
+		// FIX2-B（V4-N2）：is_active 带 default:1，新插入分支会吞掉
+		// 停用共享的显式 0 并静默重新激活（原 token 立即可用）——
+		// 与 kernel/inbound 等恢复路径同口径补写回。意图必须取备份
+		// 行 s（Create 后 GORM 会把默认值回填进 item，不可读）。
+		if err := restoreZeroValuedInt(tx, &model.PeerShare{}, item.ID, "is_active", s.IsActive); err != nil {
 			return count, err
 		}
 		count++
