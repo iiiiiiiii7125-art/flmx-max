@@ -418,7 +418,10 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 			for i, t := range targets {
 				data, err := nodeTraceroute(h, nodeID, t.Host, 0)
 				r.Points[i] = routePointFrom(t, data, err)
-				if r.Points[i].Error == "" && r.Points[i].Family == "" {
+				// F-079: once ctx is cancelled the caller has already
+				// returned, so the in-flight worker must not start a new
+				// traceroute — skip the optional IPv6 leg.
+				if r.Points[i].Error == "" && r.Points[i].Family == "" && ctx.Err() == nil {
 					r.Points[i].IPv6 = traceIPv6Leg(h, nodeID, t)
 				}
 				if r.Points[i].Error != "" {
