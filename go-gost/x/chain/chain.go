@@ -100,14 +100,21 @@ func (c *Chain) Route(ctx context.Context, network, address string, opts ...chai
 	}
 
 	rt := NewRoute(ChainRouteOption(c))
-	for _, h := range c.hops {
+	for i, h := range c.hops {
 		node := h.Select(ctx,
 			hop.NetworkSelectOption(network),
 			hop.AddrSelectOption(address),
 			hop.HostSelectOption(options.Host),
 		)
 		if node == nil {
-			return rt
+			// Fail closed (D1-H4): a hop with no available node must abort
+			// the whole route. Returning the partial route would silently
+			// bypass the remaining hops, and an empty route degrades to a
+			// direct connection. Callers treat a nil route as an error.
+			if c.logger != nil {
+				c.logger.Errorf("chain %s: hop %d has no available node, aborting route to %s/%s", c.name, i, network, address)
+			}
+			return nil
 		}
 		if node.Options().Transport.Multiplex() {
 			tr := node.Options().Transport.Copy()

@@ -2,6 +2,7 @@ package ss
 
 import (
 	"bytes"
+	"errors"
 	"net"
 
 	"github.com/shadowsocks/go-shadowsocks2/core"
@@ -20,9 +21,13 @@ func (c *shadowCipher) PacketConn(conn net.PacketConn) net.PacketConn {
 	return ss.NewSecurePacketConn(conn, c.cipher.Copy())
 }
 
+// ShadowCipher builds the shadowsocks cipher for the given method/password.
+// It fails closed: an empty method or password is a configuration error, not
+// a request for plaintext. Returning (nil, nil) here previously made every
+// caller silently run unencrypted (D1-H1).
 func ShadowCipher(method, password string, key string) (core.Cipher, error) {
 	if method == "" || password == "" {
-		return nil, nil
+		return nil, errors.New("shadowsocks: cipher method and password are required (refusing to run unencrypted)")
 	}
 
 	c, _ := ss.NewCipher(method, password)

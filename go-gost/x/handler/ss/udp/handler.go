@@ -47,12 +47,20 @@ func (h *ssuHandler) Init(md md.Metadata) (err error) {
 		return
 	}
 
-	if h.options.Auth != nil {
+	// Fail closed (D1-H1): without auth there is no cipher, and accepting
+	// traffic without a cipher means plaintext. Refuse to initialize.
+	if h.options.Auth == nil {
+		return errors.New("shadowsocks: auth (method/password) is required, refusing to run unencrypted")
+	}
+	{
 		method := h.options.Auth.Username()
 		password, _ := h.options.Auth.Password()
 		h.cipher, err = ss.ShadowCipher(method, password, h.md.key)
 		if err != nil {
 			return
+		}
+		if h.cipher == nil {
+			return errors.New("shadowsocks: failed to create cipher for method " + method)
 		}
 	}
 
