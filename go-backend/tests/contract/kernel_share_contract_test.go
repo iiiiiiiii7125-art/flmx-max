@@ -409,7 +409,10 @@ func TestPhase3KernelsContract(t *testing.T) {
 		t.Fatalf("surge sub: %s", surge)
 	}
 	clash := getSub(t, router, "/api/v1/open_api/sub/"+token, "clash-verge").Body.String()
-	if strings.Contains(clash, "snell") || !strings.Contains(clash, `type: "hysteria2"`) {
+	// B1 订正（1.3.1）：原断言要求 Clash 订阅不得含 snell——依据（Mihomo
+	// 不支持 Snell v4/v5）已被 Mihomo v1.19.32 源码证伪，v5 入站现按
+	// v4 口径下发，断言反转为必须包含。
+	if !strings.Contains(clash, `type: "snell"`) || !strings.Contains(clash, `type: "hysteria2"`) {
 		t.Fatalf("clash sub: %s", clash)
 	}
 }
