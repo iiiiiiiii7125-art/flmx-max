@@ -62,8 +62,13 @@ func TestFix132SubscriptionCounterMissingBaselineOnlyEstablishesBaseline(t *test
 		t.Fatalf("incremental sample must count delta only, upload = %d, want 1500", got.UploadBytes)
 	}
 
-	// epoch 变化（agent 重建计数表）语义不变：新 epoch 累计从零起，
-	// 首样本全量即新 epoch 的真实新增流量，照旧全量计。
+	// FIX2-A（V2-05，主控裁定）改写本段：epoch 变化视同基线重建，
+	// 与转发侧（nft/realm hash 变化）同口径——只推进基线、不把新
+	// epoch 累计计入用量。本段原断言「epoch 变化全量计」（首样本
+	// 300 全量入账 → 1800）为 FIX132-C 时代保留的旧语义，已被
+	// V2-05 裁定 supersede（理由与代价见 repository_subscription.go
+	// 的 epoch 分支注释）。新断言：累计不变（1500），基线推进到
+	// (e2, 300)；其后同 epoch 样本照常差分（300→500 计 +200）。
 	if err := r.ApplySubscriptionCounterSamples(7, "e2", []SubscriptionCounterSample{
 		{SubscriptionID: sub.ID, Direction: "up", Bytes: 300},
 	}, 1700000120000); err != nil {
@@ -72,7 +77,24 @@ func TestFix132SubscriptionCounterMissingBaselineOnlyEstablishesBaseline(t *test
 	if err := r.DB().First(&got, sub.ID).Error; err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if got.UploadBytes != 1800 {
-		t.Fatalf("epoch rollover must keep full-count semantics, upload = %d, want 1800", got.UploadBytes)
+	if got.UploadBytes != 1500 {
+		t.Fatalf("V2-05: epoch jump must only rebuild baseline, upload = %d, want 1500", got.UploadBytes)
+	}
+	if err := r.DB().Where("node_id = ? AND subscription_id = ? AND direction = ?", 7, sub.ID, "up").First(&counter).Error; err != nil {
+		t.Fatalf("baseline row after epoch jump: %v", err)
+	}
+	if counter.Epoch != "e2" || counter.Bytes != 300 {
+		t.Fatalf("baseline after epoch jump = %+v, want epoch e2 bytes 300", counter)
+	}
+	if err := r.ApplySubscriptionCounterSamples(7, "e2", []SubscriptionCounterSample{
+		{SubscriptionID: sub.ID, Direction: "up", Bytes: 500},
+	}, 1700000180000); err != nil {
+		t.Fatalf("apply same-epoch sample after jump: %v", err)
+	}
+	if err := r.DB().First(&got, sub.ID).Error; err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.UploadBytes != 1700 {
+		t.Fatalf("same-epoch sample after epoch jump must count delta only, upload = %d, want 1700", got.UploadBytes)
 	}
 }

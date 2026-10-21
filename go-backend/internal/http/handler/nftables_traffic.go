@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	runtimenft "go-backend/internal/runtime/nftables"
@@ -151,10 +152,37 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 // 与采集路径既有分工一致。我方审计加固全部保留在此段内：pending-delete
 // delta 过滤、缺 meta 按 forward 跳过（D10 poison-scope）、有 delta 未被
 // batch 覆盖时不推进基线。
+// lockNodeForwardAccounting 取某节点的转发计数入账串行锁
+// （FIX2-A V2-08）。锁表懒初始化，Handler 未经 New 构造时亦可用。
+func (h *Handler) lockNodeForwardAccounting(nodeID int64) func() {
+	h.nodeAccountingMu.Lock()
+	if h.nodeAccountingLocks == nil {
+		h.nodeAccountingLocks = make(map[int64]*sync.Mutex)
+	}
+	mu, ok := h.nodeAccountingLocks[nodeID]
+	if !ok {
+		mu = &sync.Mutex{}
+		h.nodeAccountingLocks[nodeID] = mu
+	}
+	h.nodeAccountingMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (h *Handler) accountForwardCounterSamples(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
 	if h == nil || h.repo == nil {
 		return nil, nil, 0, nil, errors.New("handler not initialized")
 	}
+	// FIX2-A（V2-08）：per-node 串行化「读基线→差分→落库」整段。
+	// 切换 settle 轮询、60s 周期轮询、重连对账轮询三路都经本段入
+	// 账，旧实现无串行化且基线在事务外读（ApplyNftTrafficAccounting
+	// 事务内不复检基线）：两轮并发拿到同一旧基线会各差分一次，同
+	// 一样本被重复入账（探针：8 并发同一样本入账 8 次 4800/4800，
+	// 期望 600/600）。锁内读到的恒为最新已提交基线，即入账路径的
+	// 基线复检。执法在调用方拿到 batch 后执行（不在锁内），不会
+	// 与 reconcile→drain 路径构环。
+	unlock := h.lockNodeForwardAccounting(nodeID)
+	defer unlock()
 	nowMs := now.UnixMilli()
 	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
 	if err != nil {
