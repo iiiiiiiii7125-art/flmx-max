@@ -229,6 +229,11 @@ func ssPluginString(p Proxy) string {
 
 func proxyClash(e Endpoint) (yamlNode, bool) {
 	p := e.Proxy.forEndpoint(e)
+	if p.Type() == "naive" {
+		// Mihomo has no NaïveProxy client; emitting type: naive would
+		// poison the whole profile (same rule as built inbounds).
+		return nil, false
+	}
 	if p.Type() == "snell" {
 		// Mihomo's snell client (v1.19.32, NewSnell) accepts versions
 		// 1-4, normalizes 5 to 4 (v5 servers accept v4 clients) and
@@ -413,6 +418,11 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		o["type"] = "anytls"
 		o["password"] = p.str("password")
 		tls(true)
+	case "naive":
+		o["type"] = "naive"
+		o["username"] = p.str("username")
+		o["password"] = p.str("password")
+		tls(true)
 	case "snell":
 		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
 			// sing-box's snell client has no obfs modes; skip rather
@@ -460,8 +470,8 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 	default:
 		return nil, false
 	}
-	if t, ok := o["tls"].(map[string]interface{}); ok && (p.Type() == "hysteria2" || p.Type() == "tuic") {
-		delete(t, "utls") // sing-box rejects uTLS on QUIC outbounds
+	if t, ok := o["tls"].(map[string]interface{}); ok && (p.Type() == "hysteria2" || p.Type() == "tuic" || p.Type() == "naive") {
+		delete(t, "utls") // sing-box rejects uTLS on QUIC outbounds; naive uses Chromium's own TLS stack
 	}
 	return []map[string]interface{}{o}, true
 }
