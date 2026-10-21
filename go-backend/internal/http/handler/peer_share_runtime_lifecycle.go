@@ -35,6 +35,37 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 			return err
 		}
 	}
+	// D3-04: 角色服务必须带本 share 的 relay 凭据（handler auth）。
+	// share 加载失败时不静默降级为无鉴权服务——直接失败，让 runtime
+	// 保持未 applied 状态等重试，而不是留下一个开放中继。
+	share, err := h.repo.GetPeerShare(runtime.ShareID)
+	if err != nil {
+		return err
+	}
+	if share == nil {
+		return errors.New("share not found for role runtime")
+	}
+	h.ensurePeerShareRelayCredentials(share)
+	if runtime.Role == "middle" {
+		// 同 share 兜底：多跳链的下一跳若就是本 share 在同节点的另
+		// 一个角色服务（端口命中本 share 的其他 active runtime），
+		// 消费方未必知道那是同 share 的服务、不会附凭据——由提供方
+		// 按端口归属补上本 share 凭据。
+		ownPorts := map[int]bool{}
+		if runtimes, listErr := h.repo.ListActivePeerShareRuntimesByShareID(share.ID); listErr == nil {
+			for _, rt := range runtimes {
+				if rt.Port > 0 && rt.ID != runtime.ID {
+					ownPorts[rt.Port] = true
+				}
+			}
+		}
+		for i := range targets {
+			if strings.TrimSpace(targets[i].RelayPassword) == "" && ownPorts[targets[i].Port] {
+				targets[i].RelayUsername = share.RelayUsername
+				targets[i].RelayPassword = share.RelayPassword
+			}
+		}
+	}
 	var chain map[string]interface{}
 	if runtime.Role == "middle" {
 		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName)
@@ -43,6 +74,9 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 		}
 	}
 	service := buildFederationServiceConfig(runtime.ServiceName, fmt.Sprintf("%s:%d", node.TCPListenAddr, runtime.Port), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName)
+	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
+		service["handler"].(map[string]interface{})["auth"] = auth
+	}
 	runtime.Applied = 0
 	runtime.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.UpdatePeerShareRuntime(runtime); err != nil {

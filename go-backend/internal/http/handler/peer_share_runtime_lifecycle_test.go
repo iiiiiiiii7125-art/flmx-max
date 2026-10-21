@@ -77,7 +77,9 @@ func TestPeerShareAppliedRuntimeRepairsEmptyAgent(t *testing.T) {
 			}
 			targets := ""
 			if role == "middle" {
-				targets = `,"targets":[{"host":"127.0.0.1","port":32000,"protocol":"tls"}]`
+				// FIX-132 D3-04: middle 目标过私网校验，示例目标改用
+				// 公网地址（假 agent 不实际拨号，目标仅作链配置数据）。
+				targets = `,"targets":[{"host":"203.0.113.9","port":32000,"protocol":"tls"}]`
 			}
 			if code := roleRuntimeRequest(t, agent.h, `{"reservationId":"role-reservation","role":"`+role+`","protocol":"tls"`+targets+`}`, false); code != 0 {
 				t.Fatalf("apply failed: %d", code)
@@ -191,7 +193,9 @@ func TestPeerShareUnacknowledgedApplyRecoversOrReleases(t *testing.T) {
 			runtime := roleRuntimeFixture(t, agent, "middle")
 			liveServer := agent.h.wsServer
 			agent.h.wsServer = ws.NewServer(agent.h.repo, "offline-test")
-			if code := roleRuntimeRequest(t, agent.h, `{"reservationId":"role-reservation","role":"middle","targets":[{"host":"127.0.0.1","port":32001,"protocol":"tls"}]}`, false); code == 0 {
+			// FIX-132 D3-04: 目标改用公网地址过 middle 私网校验，
+			// 使失败点回到本用例的主题（离线下发失败）。
+			if code := roleRuntimeRequest(t, agent.h, `{"reservationId":"role-reservation","role":"middle","targets":[{"host":"203.0.113.9","port":32001,"protocol":"tls"}]}`, false); code == 0 {
 				t.Fatal("offline apply reported success")
 			}
 			stored, err := agent.h.repo.GetPeerShareRuntimeByID(runtime.ID)

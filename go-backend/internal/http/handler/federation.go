@@ -73,6 +73,10 @@ type federationRuntimeTarget struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Protocol string `json:"protocol"`
+	// D3-04: 目标是另一个 share 的角色服务时，消费方附上目标 share
+	// 的 relay 凭据，提供方据此为 middle 的 chain connector 写 auth。
+	RelayUsername string `json:"relayUsername,omitempty"`
+	RelayPassword string `json:"relayPassword,omitempty"`
 }
 
 type federationRuntimeApplyRoleRequest struct {
@@ -116,6 +120,11 @@ func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protoco
 		targetProtocol := defaultString(target.Protocol, protocol)
 		connector := map[string]interface{}{
 			"type": "relay",
+		}
+		// D3-04: 目标是带鉴权的角色服务时必须携带其 share 凭据，
+		// 否则新版提供方的 relay handler 会拒绝连接。
+		if auth := relayAuthConfig(target.RelayUsername, target.RelayPassword); auth != nil {
+			connector["auth"] = auth
 		}
 		if isTCPTunnelProtocol(targetProtocol) {
 			connector["metadata"] = map[string]interface{}{
@@ -183,32 +192,46 @@ const maxFederationDiagnoseCount = 10
 // 不合法整体拒绝，防 DNS rebinding 把诊断引向内网。
 var federationDiagnoseLookupIP = net.LookupIP
 
-// validateFederationDiagnoseTarget 校验对端（持 peer token）发起的诊断
-// 目标并钳制次数（F-086；RFC1918 与主机名口径由发版前阻塞轮 W3/N-09
-// 补齐）。判定不新写一套：直接复用 isPrivateIP（kernel_external.go，
-// 即 SecureFetch 的 validateFetchIP 所依赖的同一份判定，含 F-023 的
-// 0.0.0.0/8 修正与 IPv4-mapped 展开）。命中内网/保留段（RFC1918、
-// 回环、链路本地含云元数据 169.254.169.254、ULA、CGNAT、未指定、
-// 组播、0.0.0.0/8）一律拒绝——否则提供方节点会被对端当作探测内网
-// 的跳板。目标是主机名时先解析，对每个返回地址逐一判定，任一不
-// 合法整体拒绝；解析失败无法验证，按 fail-closed 拒绝。返回钳制
-// 后的 count。
-func validateFederationDiagnoseTarget(target string, count int) (int, error) {
+// resolveFederationDiagnoseTarget 校验诊断目标并把它钉死为一个已
+// 校验的 IP 字面量（F-086 + D3-07）。判定不新写一套：直接复用
+// isPrivateIP（kernel_external.go，即 SecureFetch 的 validateFetchIP
+// 所依赖的同一份判定，含 F-023 的 0.0.0.0/8 修正与 IPv4-mapped
+// 展开）。命中内网/保留段（RFC1918、回环、链路本地含云元数据
+// 169.254.169.254、ULA、CGNAT、未指定、组播、0.0.0.0/8）一律拒绝
+// ——否则提供方节点会被对端当作探测内网的跳板。目标是主机名时先
+// 解析，对每个返回地址逐一判定，任一不合法整体拒绝；解析失败无法
+// 验证，按 fail-closed 拒绝。
+//
+// D3-07：此前两个下发点只做校验、却把原始主机名发给节点，节点侧
+// 二次解析与面板校验之间存在 DNS rebinding 窗口（校验时公网、节点
+// 解析时内网）。现在校验与钉死同体：下发的一律是此处解析并通过
+// 判定的 IP，主机名不再离开面板（TcpPing 协议字段 ip 本就收 IP
+// 字面量，节点侧无需改动）。
+func resolveFederationDiagnoseTarget(target string) (string, error) {
 	target = strings.TrimSpace(target)
 	if parsed := net.ParseIP(target); parsed != nil {
 		if isPrivateIP(parsed) {
-			return 0, errors.New("不允许对内网/保留地址发起诊断")
+			return "", errors.New("不允许对内网/保留地址发起诊断")
 		}
-	} else {
-		ips, err := federationDiagnoseLookupIP(target)
-		if err != nil || len(ips) == 0 {
-			return 0, fmt.Errorf("诊断目标无法解析: %s", target)
+		return parsed.String(), nil
+	}
+	ips, err := federationDiagnoseLookupIP(target)
+	if err != nil || len(ips) == 0 {
+		return "", fmt.Errorf("诊断目标无法解析: %s", target)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return "", errors.New("不允许对内网/保留地址发起诊断")
 		}
-		for _, ip := range ips {
-			if isPrivateIP(ip) {
-				return 0, errors.New("不允许对内网/保留地址发起诊断")
-			}
-		}
+	}
+	return ips[0].String(), nil
+}
+
+// validateFederationDiagnoseTarget 校验诊断目标并钳制次数，返回
+// 钳制后的 count（签名保留，既有调用方与测试的契约不变）。
+func validateFederationDiagnoseTarget(target string, count int) (int, error) {
+	if _, err := resolveFederationDiagnoseTarget(target); err != nil {
+		return 0, err
 	}
 	if count <= 0 {
 		count = 4
@@ -300,6 +323,85 @@ func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName s
 		service["metadata"] = map[string]interface{}{"interface": interfaceName}
 	}
 	return service
+}
+
+// writePeerInternalError 是 peer 面向端点（authPeer 之后）的内部错误
+// 出口（D3-08）：原始 DB/存储错误只记日志、只回分类文案，与 authPeer
+// 的 O12-001 硬化口径一致。此前 reserve-port / tunnel/create 等端点以
+// response.Err(-2, err.Error()) 把 SQLite 约束原文直接回吐给持 token
+// 对端（R5 T1.3 实测坐实）。仅用于 peer 端点；管理员端点不在此列。
+// 注意：节点命令类错误（节点不在线、agent 返回的业务消息）是消费方
+// 排障必需的操作信息，不走本出口、保持原文透传。
+func writePeerInternalError(w http.ResponseWriter, op string, err error) {
+	log.Printf("federation peer endpoint %s failed: %v", op, err)
+	response.WriteJSON(w, response.Err(-2, "Internal error"))
+}
+
+// relayAuthConfig 组装 GOST 的内联 auth 配置（handler/connector 的
+// auth 字段同形：{username, password}，见 go-gost/x 的 AuthConfig 与
+// ParseAutherFromAuth / connector.AuthOption）。凭据不全时返回 nil
+// （不下发半截 auth，避免把服务锁死在错误凭据上）。
+func relayAuthConfig(username, password string) map[string]interface{} {
+	username = strings.TrimSpace(username)
+	password = strings.TrimSpace(password)
+	if username == "" || password == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"username": username,
+		"password": password,
+	}
+}
+
+// ensurePeerShareRelayCredentials 是 D3-04 凭据的懒补发：share 缺
+// relay 凭据时生成并落库（新 share 在创建时生成、存量 share 由
+// repo 启动回填，两处之外的路径——如回填失败——由此兜底）。补发
+// 失败只记日志并返回现有值：Connect/apply 流程不因凭据落库失败而
+// 整体失败，但凭据为空时角色服务不会带 auth（见 apply 侧注入），
+// 运维可从日志定位。
+func (h *Handler) ensurePeerShareRelayCredentials(share *repo.PeerShare) {
+	if share == nil || strings.TrimSpace(share.RelayPassword) != "" {
+		return
+	}
+	share.RelayUsername = "share_" + randomToken(6)
+	share.RelayPassword = randomToken(24)
+	share.UpdatedTime = time.Now().UnixMilli()
+	if err := h.repo.UpdatePeerShareRelayCredentials(share.ID, share.RelayUsername, share.RelayPassword, share.UpdatedTime); err != nil {
+		log.Printf("federation: backfill relay credentials for share %d failed: %v", share.ID, err)
+	}
+}
+
+// validateFederationRoleTargets 校验 middle 角色的 relay 目标
+// （D3-04）：目标主机逐个判定——字面 IP 直接判定，主机名解析后逐
+// 地址判定，任一命中私网/保留段（isPrivateIP，与 SecureFetch 同
+// 判定）整体拒绝；仅 SecureFetch 的私网放行策略（isPrivateAllowed，
+// 同 env）命中时放行。此前 middle 的 chain 由提供方节点按消费方
+// 给定的任意 host:port 出站，等于让持 token 对端借提供方节点探测/
+// 连接其内网（agent 侧 bypass 私网过滤需 FIX-H 的 agent 配合，本
+// 层校验是面板侧的主要防线）。
+func validateFederationRoleTargets(targets []federationRuntimeTarget) error {
+	for _, target := range targets {
+		host := strings.TrimSpace(target.Host)
+		if host == "" {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if isPrivateIP(ip) && !isPrivateAllowed(ip) {
+				return fmt.Errorf("relay target %s is a private or reserved address", host)
+			}
+			continue
+		}
+		ips, err := federationDiagnoseLookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("relay target %s cannot be resolved", host)
+		}
+		for _, ip := range ips {
+			if isPrivateIP(ip) && !isPrivateAllowed(ip) {
+				return fmt.Errorf("relay target %s resolves to a private or reserved address", host)
+			}
+		}
+	}
+	return nil
 }
 
 func (h *Handler) federationShareList(w http.ResponseWriter, r *http.Request) {
@@ -437,6 +539,9 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 		UpdatedTime:    now,
 		AllowedDomains: req.AllowedDomains,
 		AllowedIPs:     allowedIPs,
+		// D3-04: 每个 share 创建时即生成独立 relay 凭据。
+		RelayUsername: "share_" + randomToken(6),
+		RelayPassword: randomToken(24),
 	}
 
 	if err := h.repo.CreatePeerShare(share); err != nil {
@@ -663,6 +768,10 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 				"expiryTime":     info.ExpiryTime,
 				"portRangeStart": info.PortRangeStart,
 				"portRangeEnd":   info.PortRangeEnd,
+				// D3-04: 同步刷新 relay 凭据（存量 RemoteConfig 的
+				// 凭据自愈路径之一，另一处见 applyFederationRuntime）。
+				"relayUsername": info.RelayUsername,
+				"relayPassword": info.RelayPassword,
 			})
 			_ = h.repo.UpdateNodeRemoteConfig(nodeID, string(configData))
 		}(i, node.ID, url, token)
@@ -804,6 +913,49 @@ func parseRemoteShareUsageConfig(raw string) (int64, int64, int64, int64, int, i
 	return shareID, maxBandwidth, currentFlow, expiryTime, portRangeStart, portRangeEnd
 }
 
+// parseRemoteShareRelayAuth 从远端节点的 RemoteConfig 中取该 share
+// 的 relay 凭据（D3-04；Connect 时由 nodeImport / 用量同步写入）。
+func parseRemoteShareRelayAuth(raw string) (string, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ""
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(asString(cfg["relayUsername"])), strings.TrimSpace(asString(cfg["relayPassword"]))
+}
+
+var (
+	errInvalidRemoteURLFormat = errors.New("Invalid Remote URL format")
+	errUnsafeRemoteURL        = errors.New("禁止将远程节点地址设置为内部网络")
+)
+
+// validateRemoteNodeURL 是远端节点 URL 的唯一校验实现（D3-02）：
+// nodeImport 与 nodeCreate 直填 remoteUrl 共用。格式（http/https
+// scheme）+ IsSafeRemoteAddr（解析后逐 IP 拒 loopback/private）两段，
+// 任一入口不得绕过。此前 nodeCreate 直填路径零校验，对端给什么就
+// 存什么、后续 Connect/同步/命令通道照单全打。
+func validateRemoteNodeURL(raw string) error {
+	rURL, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (rURL.Scheme != "http" && rURL.Scheme != "https") || rURL.Host == "" {
+		return errInvalidRemoteURLFormat
+	}
+	if err := IsSafeRemoteAddr(rURL.Host); err != nil {
+		return errUnsafeRemoteURL
+	}
+	return nil
+}
+
+func writeRemoteURLValidationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errUnsafeRemoteURL) {
+		response.WriteJSON(w, response.Err(403, err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.ErrDefault(err.Error()))
+}
+
 func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("Invalid method"))
@@ -820,13 +972,8 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("Remote URL and Token are required"))
 		return
 	}
-	rURL, err := url.Parse(req.RemoteURL)
-	if err != nil || (rURL.Scheme != "http" && rURL.Scheme != "https") {
-		response.WriteJSON(w, response.ErrDefault("Invalid Remote URL format"))
-		return
-	}
-	if err := IsSafeRemoteAddr(rURL.Host); err != nil {
-		response.WriteJSON(w, response.Err(403, "禁止将远程节点地址设置为内部网络"))
+	if err := validateRemoteNodeURL(req.RemoteURL); err != nil {
+		writeRemoteURLValidationError(w, err)
 		return
 	}
 
@@ -851,6 +998,9 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		"expiryTime":     info.ExpiryTime,
 		"portRangeStart": info.PortRangeStart,
 		"portRangeEnd":   info.PortRangeEnd,
+		// D3-04: 该 share 的 relay 凭据，建链时写入 connector auth。
+		"relayUsername": info.RelayUsername,
+		"relayPassword": info.RelayPassword,
 	}
 	configBytes, _ := json.Marshal(configData)
 
@@ -1004,11 +1154,18 @@ func (h *Handler) federationConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// D3-04: 消费方在 Connect 时取得本 share 的 relay 凭据并存入其
+	// RemoteConfig，之后建链时写入 connector auth。存量 share 在此
+	// 懒补发（repo 启动回填之外的第二道网）。
+	h.ensurePeerShareRelayCredentials(share)
+
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"shareId":        share.ID,
 		"shareName":      share.Name,
 		"nodeId":         share.NodeID,
 		"nodeName":       nodeInfo.Name,
+		"relayUsername":  share.RelayUsername,
+		"relayPassword":  share.RelayPassword,
 		"serverIp":       nodeInfo.ServerIP,
 		"status":         nodeInfo.Status,
 		"maxBandwidth":   share.MaxBandwidth,
@@ -1056,7 +1213,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 
 	usedPorts, err := h.repo.ListUsedPortsOnNode(share.NodeID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "tunnel/create list used ports", err)
 		return
 	}
 	for _, port := range usedPorts {
@@ -1068,7 +1225,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 
 	runtimeOnPort, err := h.repo.GetActiveForwardPeerShareRuntimeByPort(share.ID, req.RemotePort)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "tunnel/create runtime lookup", err)
 		return
 	}
 	if runtimeOnPort != nil {
@@ -1077,7 +1234,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 	}
 	existsOnNodePort, err := h.repo.ExistsActivePeerShareRuntimeOnNodePort(share.NodeID, req.RemotePort)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "tunnel/create runtime port check", err)
 		return
 	}
 	if existsOnNodePort {
@@ -1095,7 +1252,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		req.RemotePort,
 	)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "tunnel/create create tunnel", err)
 		return
 	}
 
@@ -1119,7 +1276,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 	}
 	if err := h.repo.CreatePeerShareRuntime(runtime); err != nil {
 		_ = h.deleteTunnelByID(tunnelID)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "tunnel/create create runtime", err)
 		return
 	}
 
@@ -1167,7 +1324,7 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 
 	existing, err := h.repo.GetPeerShareRuntimeByResourceKey(share.ID, req.ResourceKey)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "reserve-port runtime lookup", err)
 		return
 	}
 	if existing != nil && existing.ReleasePending != 0 {
@@ -1185,7 +1342,14 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 
 	allocatedPort, err := h.pickPeerSharePort(share, req.RequestedPort)
 	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		// pickPeerSharePort 的分类文案（无可用端口/越界）是给对端的操作
+		// 信息，保持透传；其余为 repo 原始错误，按 D3-08 脱敏。
+		switch err.Error() {
+		case "No available port", "Port out of range", "share not found":
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		default:
+			writePeerInternalError(w, "reserve-port pick port", err)
+		}
 		return
 	}
 
@@ -1204,7 +1368,7 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 		existing.Status = 1
 		existing.UpdatedTime = now
 		if err := h.repo.UpdatePeerShareRuntime(existing); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			writePeerInternalError(w, "reserve-port runtime update", err)
 			return
 		}
 		response.WriteJSON(w, response.OK(map[string]interface{}{
@@ -1234,7 +1398,7 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 		UpdatedTime:   now,
 	}
 	if err := h.repo.CreatePeerShareRuntime(runtime); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "reserve-port runtime create", err)
 		return
 	}
 
@@ -1284,7 +1448,7 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 		runtime, err = h.repo.GetPeerShareRuntimeByResourceKey(share.ID, strings.TrimSpace(req.ResourceKey))
 	}
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "apply-role runtime lookup", err)
 		return
 	}
 	if runtime == nil || runtime.Status == 0 {
@@ -1307,6 +1471,13 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 	if share.PortRangeStart > 0 && share.PortRangeEnd > 0 && (runtime.Port < share.PortRangeStart || runtime.Port > share.PortRangeEnd) {
 		response.WriteJSON(w, response.ErrDefault("Reserved port is outside share range"))
 		return
+	}
+	// D3-04: middle 的 relay 目标不得指向提供方内网/保留地址。
+	if req.Role == "middle" {
+		if err := validateFederationRoleTargets(req.Targets); err != nil {
+			response.WriteJSON(w, response.Err(403, err.Error()))
+			return
+		}
 	}
 	if strings.TrimSpace(runtime.BindingID) == "" {
 		runtime.BindingID = randomToken(24)
@@ -1364,7 +1535,7 @@ func (h *Handler) federationRuntimeReleaseRole(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		writePeerInternalError(w, "release-role runtime lookup", err)
 		return
 	}
 	if runtime == nil {
@@ -1404,13 +1575,20 @@ func (h *Handler) federationRuntimeDiagnose(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, response.ErrDefault("Invalid target"))
 		return
 	}
-	clampedCount, targetErr := validateFederationDiagnoseTarget(req.IP, req.Count)
+	pinnedIP, targetErr := resolveFederationDiagnoseTarget(req.IP)
 	if targetErr != nil {
 		log.Printf("federation diagnose target rejected peer_share=%d name=%q target=%s reason=%v", share.ID, share.Name, req.IP, targetErr)
 		response.WriteJSON(w, response.ErrDefault(targetErr.Error()))
 		return
 	}
-	req.Count = clampedCount
+	// D3-07: 下发钉死后的 IP（原始目标仅保留在响应语境/日志中）。
+	req.IP = pinnedIP
+	if req.Count <= 0 {
+		req.Count = 4
+	}
+	if req.Count > maxFederationDiagnoseCount {
+		req.Count = maxFederationDiagnoseCount
+	}
 	if req.Timeout <= 0 || req.Timeout > int(diagnosisCommandTimeout/time.Millisecond) {
 		req.Timeout = int(diagnosisCommandTimeout / time.Millisecond)
 	}
@@ -1500,12 +1678,21 @@ func (h *Handler) federationRuntimeCommand(w http.ResponseWriter, r *http.Reques
 			response.WriteJSON(w, response.ErrDefault("tcpping 需要目标 ip"))
 			return
 		}
-		clampedCount, targetErr := validateFederationDiagnoseTarget(targetIP, asInt(dataMap["count"], 0))
+		pinnedIP, targetErr := resolveFederationDiagnoseTarget(targetIP)
 		if targetErr != nil {
 			log.Printf("federation runtime command tcpping target rejected peer_share=%d name=%q target=%s reason=%v", share.ID, share.Name, targetIP, targetErr)
 			response.WriteJSON(w, response.ErrDefault(targetErr.Error()))
 			return
 		}
+		clampedCount := asInt(dataMap["count"], 0)
+		if clampedCount <= 0 {
+			clampedCount = 4
+		}
+		if clampedCount > maxFederationDiagnoseCount {
+			clampedCount = maxFederationDiagnoseCount
+		}
+		// D3-07: 与 diagnose 入口同口径，下发钉死后的 IP。
+		dataMap["ip"] = pinnedIP
 		dataMap["count"] = clampedCount
 		req.Data = dataMap
 		res, err := h.sendNodeCommand(share.NodeID, "TcpPing", req.Data, false, false)
@@ -1733,13 +1920,20 @@ func isFederationServiceCommand(commandType string) bool {
 }
 
 func validateFederationCommandPorts(share *repo.PeerShare, data interface{}) error {
-	if share == nil || (share.PortRangeStart <= 0 && share.PortRangeEnd <= 0) {
-		return nil
+	if share == nil {
+		return fmt.Errorf("share not found")
 	}
 
 	serviceList := extractFederationServiceEntries(data)
 	if len(serviceList) == 0 {
 		return nil
+	}
+
+	// D3-06: 端口范围未设/无效时与 tunnel/create、reserve-port 统一
+	// fail-closed。此前 0/0 直接 return nil，peer 可经 command 路径在
+	// 节点任意端口下发服务（R5 真机坐实 :39999 被接受并落库）。
+	if share.PortRangeStart <= 0 || share.PortRangeEnd <= 0 || share.PortRangeEnd < share.PortRangeStart {
+		return fmt.Errorf("share port range is not configured; service ports are not authorized")
 	}
 	for _, svcMap := range serviceList {
 		addr := asString(svcMap["addr"])
