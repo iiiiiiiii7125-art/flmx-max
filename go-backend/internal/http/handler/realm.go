@@ -63,6 +63,31 @@ func (h *Handler) validateRealmTunnelTx(tx *gorm.DB, typeVal int, entryNodeIDs [
 // or IP hash.
 func realmIPHash(strategy string) bool { return strings.TrimSpace(strategy) == "hash" }
 
+// validateRealmForwardStrategy（A4-004 / BC-26）：realm 渲染多目标时非
+// iphash 一律 roundrobin——fifo（主备）/rand（随机）曾被静默改写为轮询，
+// 备目标在主目标健康时持续收到生产流量且用户无感知。改为明确拒绝：
+// 仅当隧道为 realm、目标 ≥2 且策略 ∉ {round, hash} 时报错（单目标无
+// 负载语义、策略不参与渲染，不拦，避免误伤存量默认 fifo 的单目标转发）。
+func validateRealmForwardStrategy(tunnel *tunnelRecord, remoteAddr, strategy string) error {
+	if !tunnelIsRealm(tunnel) {
+		return nil
+	}
+	switch strings.TrimSpace(strategy) {
+	case "", "round", "hash":
+		return nil
+	}
+	targets := 0
+	for _, part := range strings.Split(remoteAddr, ",") {
+		if strings.TrimSpace(part) != "" {
+			targets++
+		}
+	}
+	if targets < 2 {
+		return nil
+	}
+	return fmt.Errorf("realm 引擎仅支持轮询（round）与 IP 哈希（hash）负载策略，多目标转发不能使用 %s 策略", strings.TrimSpace(strategy))
+}
+
 func realmListenAddr(node *nodeRecord, port int, bindIP string) string {
 	if bindIP = strings.TrimSpace(bindIP); bindIP != "" {
 		if _, _, err := net.SplitHostPort(bindIP); err == nil {
