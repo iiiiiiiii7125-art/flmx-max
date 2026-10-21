@@ -89,8 +89,15 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Install UPX
+        env:
+          # A8-02: 钉死官方 release 资产的 sha256（自官方 GitHub Release
+          # v4.2.1 下载实测，解压后 upx --version 自报 4.2.1）。
+          # UPX 官方未为该资产提供独立 checksum 文件，故在此钉死校验，
+          # 不符即红，禁止未校验的可执行文件进入发布构建。
+          UPX_SHA256: "936e67a23d72338dad3304526a29f405e44e440a9983bbdb2566657d015cc56d"
         run: |
           wget -q https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-amd64_linux.tar.xz
+          echo "${UPX_SHA256}  upx-4.2.1-amd64_linux.tar.xz" | sha256sum -c -
           tar -xf upx-4.2.1-amd64_linux.tar.xz
           sudo mv upx-4.2.1-amd64_linux/upx /usr/local/bin/
           rm -rf upx-4.2.1-amd64_linux*

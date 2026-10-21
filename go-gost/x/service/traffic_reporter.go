@@ -64,6 +64,40 @@ func SetHTTPReportURL(addr string, secret string) {
 	}
 }
 
+// sanitizeReportURL 脱敏上报 URL 后再进日志/错误聚合（D1-01）：
+// URL 的 query 含明文节点 secret，WS 侧早有 sanitizeWebSocketURL，
+// HTTP 上报侧此前漏网——失败日志与聚合 error 都会把 secret 打进
+// journal 并被上层以 %v 再次打印。集成口径（FIX-A 与 FIX-H 两路同修
+// 合并）：先按文本掩码 secret 参数值（保留其余字节、对畸形 URL 同样
+// 有效，绝不回退原文），再在可解析时掩码 userinfo；host/path 保留
+// 供排障。
+func sanitizeReportURL(rawURL string) string {
+	masked := rawURL
+	if idx := strings.Index(masked, "secret="); idx >= 0 {
+		start := idx + len("secret=")
+		if end := strings.IndexAny(masked[start:], "&# "); end < 0 {
+			masked = masked[:start] + "***"
+		} else {
+			masked = masked[:start] + "***" + masked[start+end:]
+		}
+	}
+	if u, err := url.Parse(masked); err == nil && u.User != nil {
+		u.User = url.User("***")
+		masked = u.String()
+	}
+	return masked
+}
+
+// redactReportError 清洗 error 文本：http.Client 的 *url.Error 会把
+// 完整请求 URL（含明文 secret）嵌进 Error() 字符串，仅脱敏日志前缀
+// 不够，必须把文本中的原始 URL 替换为脱敏版。
+func redactReportError(err error, rawURL, displayURL string) string {
+	if err == nil {
+		return ""
+	}
+	return strings.ReplaceAll(err.Error(), rawURL, displayURL)
+}
+
 func buildReportURLCandidates(addr string, secret string) (upload []string, config []string) {
 	normalizedAddr, explicitScheme := normalizeReportAddress(addr)
 	if normalizedAddr == "" {
@@ -120,27 +154,6 @@ func mapToHTTPScheme(scheme string) string {
 	}
 }
 
-// sanitizeReportURL masks the node secret embedded in report URLs before
-// the URL reaches any log line or aggregated error (D1-01). The secret is
-// the node's identity credential and the AES key seed; the WebSocket side
-// already sanitized its URLs (sanitizeWebSocketURL), the HTTP report side
-// printed them in clear — same masking policy: secret value becomes ***.
-func sanitizeReportURL(rawURL string) string {
-	// Textual masking: keeps the rest of the URL byte-for-byte intact and
-	// works even for malformed URLs. Report URLs always carry the secret
-	// as a query parameter.
-	idx := strings.Index(rawURL, "secret=")
-	if idx < 0 {
-		return rawURL
-	}
-	start := idx + len("secret=")
-	end := strings.IndexAny(rawURL[start:], "&# ")
-	if end < 0 {
-		return rawURL[:start] + "***"
-	}
-	return rawURL[:start] + "***" + rawURL[start+end:]
-}
-
 func loadPreferredURL(preferred *string) string {
 	if preferred == nil {
 		return ""
@@ -188,13 +201,12 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 
 	var errs []string
 	for i, targetURL := range orderedURLs {
-		// D1-01: 日志与聚合错误只出现脱敏后的 URL（真实 URL 仅用于请求本身）。
 		displayURL := sanitizeReportURL(targetURL)
 		req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(requestBody))
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", displayURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", displayURL, redactReportError(err, targetURL, displayURL)))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 创建请求失败: %v\n", displayURL, err)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 创建请求失败: %v\n", displayURL, redactReportError(err, targetURL, displayURL))
 			}
 			continue
 		}
@@ -204,9 +216,9 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 
 		resp, err := reportDo(ctx, req, timeout)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", displayURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", displayURL, redactReportError(err, targetURL, displayURL)))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 请求失败: %v\n", displayURL, err)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 请求失败: %v\n", displayURL, redactReportError(err, targetURL, displayURL))
 			}
 			continue
 		}
@@ -215,9 +227,9 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 		_, readErr := responseBytes.ReadFrom(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, readErr))
+			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, redactReportError(readErr, targetURL, displayURL)))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 读取响应失败: %v\n", displayURL, readErr)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 读取响应失败: %v\n", displayURL, redactReportError(readErr, targetURL, displayURL))
 			}
 			continue
 		}
@@ -461,11 +473,10 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 
 	var errs []string
 	for i, targetURL := range orderedURLs {
-		// D1-01: 日志与聚合错误只出现脱敏后的 URL（真实 URL 仅用于请求本身）。
 		displayURL := sanitizeReportURL(targetURL)
 		req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(requestBody))
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", displayURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", displayURL, redactReportError(err, targetURL, displayURL)))
 			continue
 		}
 
@@ -477,7 +488,7 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 
 		resp, err := reportDo(ctx, req, timeout)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", displayURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", displayURL, redactReportError(err, targetURL, displayURL)))
 			continue
 		}
 
@@ -485,7 +496,7 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 		_, readErr := responseBytes.ReadFrom(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, readErr))
+			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, redactReportError(readErr, targetURL, displayURL)))
 			continue
 		}
 
