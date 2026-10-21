@@ -30,6 +30,7 @@ List all tunnels.
         "traffic_ratio": 1,
         "status": 1,
         "ip_preference": "ipv4",
+        "engine": "",
         "in_ip": "",
         "in_node_id": [1],
         "chain_node_id": [],
@@ -81,6 +82,7 @@ Create a new tunnel.
 | trafficRatio | number | No | Traffic ratio (default: 1) |
 | status | number | No | 1=active, 0=disabled (default: 1) |
 | ipPreference | string | No | "ipv4", "ipv6", or "" (both) |
+| engine | string | No | Forwarding engine: "" / "gost" (panel forwarder, default) or "realm" (see below) |
 | inIp | string | No | Custom entry IP |
 | inNodeId | number[] | Yes | Entry node IDs |
 | chainNodeId | number[] | No | Chain/relay node IDs |
@@ -89,6 +91,14 @@ Create a new tunnel.
 **Tunnel Types:**
 - `1` = Port Forward: Simple port-to-port forwarding
 - `2` = Tunnel Forward: Multi-hop tunnel forwarding
+
+**Forwarding engine (`engine`):** `""` / `"gost"` runs the tunnel's forwards
+with the node agent's forwarder (full feature set, per-forward rate / connection
+limits). `"realm"` runs them with realm on the entry nodes instead — port
+forward tunnels (type 1) only, entry nodes must not be remote or
+nftables-mode, no per-forward rate / connection limits, balancing is round
+robin or IP hash only. Billing differs: realm forward traffic is counted
+toward user quota; panel-forwarder (gost) port-forward traffic is not.
 
 **Response:**
 ```json

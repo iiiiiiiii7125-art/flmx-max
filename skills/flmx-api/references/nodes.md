@@ -280,6 +280,15 @@ cover at most 200 nodes.
 
 Trigger an immediate latency probe for a node.
 
+## POST /api/v1/node/latency/history
+
+A node's latency trend to each reference point over a time window: bucketed
+samples with per-point average / max / loss. Samples are retained for at most
+7 days. Request: `{"id": 1, "hours": 24}` (`hours` optional, default 24, max
+168). Response `data`: `{since, until, points: [{name, samples: [{t, ms,
+lossPct}], avgMs, maxMs, lossPct}]}`; a bucket's `ms` is `null` when every
+probe in that bucket failed.
+
 ## POST /api/v1/node/tune
 
 Apply or revert the 6 sysctl tuning groups (BBR, buffers, TCP, …) on a node.
