@@ -1587,7 +1587,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if engine != oldTunnel.Engine {
-		h.switchTunnelEngine(id, tunnelIsRealm(oldTunnel), oldEntryNodeIDs, newEntryNodeIDs)
+		// A4-003：切换的数据面硬失败必须让用户可见（与下方引擎未变分支
+		// 返回 syncRealmNodes 错误的口径一致），不再恒报成功。
+		if err := h.switchTunnelEngine(id, tunnelIsRealm(oldTunnel), oldEntryNodeIDs, newEntryNodeIDs); err != nil {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("引擎已切换，但数据面同步失败: %v", err)))
+			return
+		}
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
@@ -1679,6 +1684,13 @@ func forwardPortNodeIDs(ports []forwardPortRecord) []int64 {
 func (h *Handler) deleteForwardServicesOnNodeBatch(forward *forwardRecord, nodeID int64) error {
 	if h == nil || forward == nil || nodeID <= 0 {
 		return errors.New("invalid forward service cleanup context")
+	}
+	// A4-006：forward 所属（换隧道/迁移前的快照）隧道为 nft 模式时，该
+	// 节点上没有 gost 服务可删——旧实现径直 DeleteService 落空，旧 DNAT
+	// 与 nft_rule_binding 残留并继续计费。与 S-06 同款：对该节点做一次
+	// 声明式 reconcile（plan 按当前 DB 构建，已不含本转发，规则收敛移除）。
+	if nftMode, _, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && nftMode {
+		return h.reconcileNftablesNodeByRequest(nodeID)
 	}
 	if tunnel, err := h.getTunnelRecord(forward.TunnelID); err == nil && tunnelIsRealm(tunnel) {
 		// The forward left a realm tunnel: re-rendering drops it there.

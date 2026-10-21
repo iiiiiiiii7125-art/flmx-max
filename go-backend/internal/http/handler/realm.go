@@ -271,30 +271,48 @@ func (h *Handler) controlRealmForward(forward *forwardRecord, commandType string
 
 // switchTunnelEngine moves a tunnel's forwards between realm and the agent's
 // forwarder on its old and new entry nodes.
-func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNodeIDs, newEntryNodeIDs []int64) {
+//
+// A4-003：原实现全程吞错恒报成功——realm 下发硬失败（agent 版本过旧等）
+// 或旧引擎服务删除硬失败时 DB 已切引擎、数据面未切，用户无感知且长期
+// 分叉。现在聚合硬失败返回给调用方呈现；节点离线/超时属既有自愈语义
+// （重连后对账收敛），仍只记日志不算失败，与 syncRealmNodes 的
+// warnings 口径一致。
+func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNodeIDs, newEntryNodeIDs []int64) error {
 	forwards, err := h.listForwardsByTunnel(tunnelID)
 	if err != nil {
-		return
+		return err
 	}
 	nodes := append(append([]int64{}, oldEntryNodeIDs...), newEntryNodeIDs...)
+	var hardErrs []error
+	collect := func(op string, err error) {
+		if err == nil {
+			return
+		}
+		if isNodeOfflineOrTimeoutError(err) {
+			log.Printf("realm engine switch tunnel_id=%d op=%s deferred (node offline, converges on reconnect): %v", tunnelID, op, err)
+			return
+		}
+		hardErrs = append(hardErrs, fmt.Errorf("%s: %w", op, err))
+	}
 	if fromRealm {
 		// Free the ports first, then start the agent's services.
 		if _, err := h.syncRealmNodes(nodes, nil); err != nil {
-			log.Printf("realm engine switch tunnel_id=%d err=%v", tunnelID, err)
+			collect("realm 收敛", err)
 		}
 		for i := range forwards {
-			_ = h.syncForwardServices(&forwards[i], "UpdateService", true)
+			collect("gost 服务同步", h.syncForwardServices(&forwards[i], "UpdateService", true))
 		}
-		return
+		return errors.Join(hardErrs...)
 	}
 	for i := range forwards {
 		for _, nodeID := range uniqueInt64s(nodes) {
-			_ = h.deleteForwardServicesOnNode(&forwards[i], nodeID)
+			collect("旧引擎服务删除", h.deleteForwardServicesOnNode(&forwards[i], nodeID))
 		}
 	}
 	if _, err := h.syncRealmNodes(nodes, nil); err != nil {
-		log.Printf("realm engine switch tunnel_id=%d err=%v", tunnelID, err)
+		collect("realm 下发", err)
 	}
+	return errors.Join(hardErrs...)
 }
 
 // applyRealmCounters credits realm forwards with the traffic the agent
