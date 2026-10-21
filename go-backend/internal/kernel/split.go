@@ -228,7 +228,12 @@ func xraySplitRoutes(in Inbound) ([]interface{}, []interface{}, error) {
 			}
 			outbounds = append(outbounds, ob)
 			for _, id := range users {
-				ob, _ := xrayChainOutbound(*r.Via, splitUserTag(in, i, id))
+				// A5-04：按用户出站渲染失败必须与属主路径同口径整单
+				// 报错——此前吞掉 err 后对 nil ob 做类型断言可 panic。
+				ob, err := xrayChainOutbound(*r.Via, splitUserTag(in, i, id))
+				if err != nil {
+					return nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
+				}
 				ob["streamSettings"].(obj)["sockopt"] = obj{"mark": UserMark(id)}
 				outbounds = append(outbounds, ob)
 			}
@@ -314,7 +319,12 @@ func singboxSplitRoutes(in Inbound, snell bool) ([]interface{}, []interface{}, [
 			}
 			outbounds = append(outbounds, obs...)
 			for _, id := range users {
-				obs, _ := singboxChainOutbounds(*r.Via, splitUserTag(in, i, id), UserMark(id), snell)
+				// A5-04：同 xray 侧——失败整单报错，不再静默少一个
+				// outbound 却仍生成引用它的规则（sing-box 整份拒绝）。
+				obs, err := singboxChainOutbounds(*r.Via, splitUserTag(in, i, id), UserMark(id), snell)
+				if err != nil {
+					return nil, nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
+				}
 				outbounds = append(outbounds, obs...)
 			}
 			ownerRoute = route(splitTag(in, i))
