@@ -63,8 +63,11 @@ ROUTES = {node: {p: _FULL[r] for p, r in pts.items()} for node, pts in {
     "美国 圣何塞": {"北京电信": "CN2 GIA", "上海电信": "CN2 GIA", "广东电信": "CN2 GIA", "上海联通": "9929", "北京联通": "4837", "广东移动": "CMIN2"},
     "新加坡": {"北京电信": "163", "上海电信": "163", "广东电信": "163", "上海联通": "4837", "北京联通": "4837", "广东移动": "CMI"},
 }.items()}
-# A dual-stack node's IPv6 routes where they differ from IPv4.
-ROUTES_V6 = {"日本 东京": {"北京电信": "电信 CN2 GIA", "上海电信": "电信 163", "广东电信": "电信 CN2 GIA", "上海联通": "联通 9929"}}
+# A dual-stack node's IPv6 routes. Four Tokyo points differ from IPv4
+# (the card shows the small v6 tag); 广东移动 deliberately equals its
+# IPv4 route (移动 CMI) so the "leg exists but same route" form — tag
+# hidden — is in the data too.
+ROUTES_V6 = {"日本 东京": {"北京电信": "电信 CN2 GIA", "上海电信": "电信 163", "广东电信": "电信 CN2 GIA", "上海联通": "联通 9929", "广东移动": "移动 CMI"}}
 POINT_IDX = {"北京电信": 0, "上海联通": 1, "广东移动": 2, "北京联通": 3, "上海电信": 4, "广东电信": 5}
 
 def jitter(*parts):
