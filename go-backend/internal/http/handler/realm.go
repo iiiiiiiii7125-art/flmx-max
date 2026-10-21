@@ -300,6 +300,18 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 		// （A4-010 的 realm 侧窗口）。轮询失败（离线）不阻塞切换，
 		// 与离线自愈口径一致。
 		h.settleRealmCountersAtSwitch(nodes)
+		// FIX2-A（V2-04）：settle 对离线节点是静默跳过——DB 引擎已
+		// 切 gost、切换照常报成功，但自上次成功轮询以来的 realm 增
+		// 量还只存在于 agent 侧。给离线节点打待结算标记，节点重连
+		// 时 onNodeOnline 先结算再放行对账/重下发（见 upgrade.go），
+		// 否则重连后 redeploy 先让 agent 弃 realm 计数、增量永久
+		// 漏计且无任何日志。
+		for _, nodeID := range uniqueInt64s(nodes) {
+			if nodeID > 0 && (h.wsServer == nil || !h.wsServer.IsNodeOnline(nodeID)) {
+				h.markPendingRealmSettle(nodeID)
+				log.Printf("realm engine switch tunnel_id=%d node_id=%d offline: settle deferred to reconnect (pending marker set)", tunnelID, nodeID)
+			}
+		}
 		// Free the ports first, then start the agent's services.
 		if _, err := h.syncRealmNodes(nodes, nil); err != nil {
 			collect("realm 收敛", err)
@@ -323,6 +335,47 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 	// 部分入账）。
 	h.settleRealmCountersAtSwitch(nodes)
 	return errors.Join(hardErrs...)
+}
+
+// markPendingRealmSettle / consumePendingRealmSettle /
+// hasPendingRealmSettle 是 V2-04 的待结算标记（upgradeMu 保护，与
+// pendingUpgradeRedeploy 同族）：realm→gost 切换时节点离线、settle
+// 轮询静默跳过，则给节点打标记；节点重连（onNodeOnline）在放行
+// 异步对账与 redeploy 之前先消费标记做一次同步结算，保证「先结算
+// 后下发」的顺序，增量不随 agent 弃 realm 计数丢失。
+func (h *Handler) markPendingRealmSettle(nodeID int64) {
+	if h == nil || nodeID <= 0 {
+		return
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	if h.pendingRealmSettle == nil {
+		h.pendingRealmSettle = make(map[int64]struct{})
+	}
+	h.pendingRealmSettle[nodeID] = struct{}{}
+}
+
+func (h *Handler) consumePendingRealmSettle(nodeID int64) bool {
+	if h == nil || nodeID <= 0 {
+		return false
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	if _, ok := h.pendingRealmSettle[nodeID]; !ok {
+		return false
+	}
+	delete(h.pendingRealmSettle, nodeID)
+	return true
+}
+
+func (h *Handler) hasPendingRealmSettle(nodeID int64) bool {
+	if h == nil || nodeID <= 0 {
+		return false
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	_, ok := h.pendingRealmSettle[nodeID]
+	return ok
 }
 
 // settleRealmCountersAtSwitch 主动拉一次各节点的内核状态，把 realm
