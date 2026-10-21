@@ -38,6 +38,7 @@ export default defineConfig({
         items: [
           { text: "流量转发与管理", link: "/guide/forward" },
           { text: "通知", link: "/guide/notify" },
+          { text: "监控", link: "/guide/monitoring" },
           { text: "PostgreSQL", link: "/guide/postgresql" },
           { text: "通行证密钥登录", link: "/guide/passkey" },
           { text: "常见问题", link: "/guide/faq" },

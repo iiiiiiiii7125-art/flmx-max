@@ -14,7 +14,7 @@
 
 ## 功能
 
-- **多内核节点**：Xray、sing-box、Snell v4 / v5 按节点安装；VLESS Reality、Hysteria2（端口跳跃）、TUIC、AnyTLS、NaïveProxy、ShadowTLS 等模板一键创建
+- **多内核节点**：Xray、sing-box、Snell v4 / v5 / v6 按节点安装；VLESS Reality、Hysteria2（端口跳跃）、TUIC、AnyTLS、NaïveProxy、ShadowTLS 等模板一键创建
 - **证书**：自签、节点上的证书文件，或由 sing-box 自动申请（ACME，HTTP / Cloudflare / 阿里云 DNS 验证）
 - **对接中转**：端口转发、隧道转发（gost / realm 双引擎），或"前置 → IX → 落地"多跳线路；入站白名单、真实客户端 IP
 - **导入节点**：粘贴分享链接、Clash / sing-box / Surge 配置或订阅地址，别处搭好的节点也能对接中转

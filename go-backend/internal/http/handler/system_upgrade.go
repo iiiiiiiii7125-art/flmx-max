@@ -241,22 +241,54 @@ func currentPanelVersion() string {
 	return version
 }
 
+// parseVersionParts 把版本号解析成数字段序列（严格语义，供 compareVersions）。
+// 剥可选的 "v" 前缀后，每段必须是非负整数；含字母/连字符后缀、空段、
+// 超长溢出段等不可解析形态一律返回错误。
+func parseVersionParts(v string) ([]int, error) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	if v == "" {
+		return nil, fmt.Errorf("version is empty")
+	}
+	raw := strings.Split(v, ".")
+	parts := make([]int, len(raw))
+	for i, s := range raw {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("version segment %q is not a non-negative integer", s)
+		}
+		parts[i] = n
+	}
+	return parts, nil
+}
+
 // compareVersions 比较两个版本号（如 "1.0.7"）。
 // 返回 -1 表示 v1 < v2，0 表示相等，1 表示 v1 > v2。
 // O9-001：用于升级前防止静默降级。
-func compareVersions(v1, v2 string) int {
+// A11-132-06：旧实现用 Atoi 且吞掉错误，解析失败的段按 0 计——
+// "1.3.2-beta1" 会被当成 1.3.0、溢出段被当成 0、"v" 前缀段被当成 0，
+// 防降级与 HasUpdate 都可被构造版本号误判。现改为严格语义：任一侧
+// 不可解析即返回错误，调用方必须 fail-closed（拒绝升级 / 不报有更新），
+// 不再返回一个貌似可信的大小关系。
+func compareVersions(v1, v2 string) (int, error) {
 	// "dev" 视为最低版本，允许升级到任何正式版本
 	if v1 == "dev" && v2 == "dev" {
-		return 0
+		return 0, nil
 	}
 	if v1 == "dev" {
-		return -1
+		return -1, nil
 	}
 	if v2 == "dev" {
-		return 1
+		return 1, nil
 	}
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
+	parts1, err := parseVersionParts(v1)
+	if err != nil {
+		return 0, fmt.Errorf("invalid version %q: %w", v1, err)
+	}
+	parts2, err := parseVersionParts(v2)
+	if err != nil {
+		return 0, fmt.Errorf("invalid version %q: %w", v2, err)
+	}
 	maxLen := len(parts1)
 	if len(parts2) > maxLen {
 		maxLen = len(parts2)
@@ -264,19 +296,19 @@ func compareVersions(v1, v2 string) int {
 	for i := 0; i < maxLen; i++ {
 		var n1, n2 int
 		if i < len(parts1) {
-			n1, _ = strconv.Atoi(strings.TrimSpace(parts1[i]))
+			n1 = parts1[i]
 		}
 		if i < len(parts2) {
-			n2, _ = strconv.Atoi(strings.TrimSpace(parts2[i]))
+			n2 = parts2[i]
 		}
 		if n1 < n2 {
-			return -1
+			return -1, nil
 		}
 		if n1 > n2 {
-			return 1
+			return 1, nil
 		}
 	}
-	return 0
+	return 0, nil
 }
 
 func validateBackendContainerName(value string) error {
@@ -861,13 +893,20 @@ func decodeSystemUpgradeRequest(r *http.Request, req *systemUpgradeRequest) erro
 }
 
 func systemUpgradeVersionResponse(current, channel, latest string, lookupErr error, capability systemUpgradeCapabilityData) systemUpgradeVersionData {
+	// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
+	// A11-132-06：版本不可比（解析失败）时 fail-closed，不报有更新。
+	hasUpdate := false
+	if latest != "" {
+		if cmp, err := compareVersions(latest, current); err == nil && cmp > 0 {
+			hasUpdate = true
+		}
+	}
 	data := systemUpgradeVersionData{
 		CurrentVersion: current,
 		LatestVersion:  latest,
-		// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
-		HasUpdate:  latest != "" && compareVersions(latest, current) > 0,
-		Channel:    channel,
-		Capability: capability,
+		HasUpdate:      hasUpdate,
+		Channel:        channel,
+		Capability:     capability,
 	}
 	if lookupErr != nil {
 		data.LatestVersion = ""
@@ -924,14 +963,21 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	if len(releases) > 0 {
 		latest = releases[0].Version
 	}
+	// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
+	// A11-132-06：版本不可比（解析失败）时 fail-closed，不报有更新。
+	hasUpdate := false
+	if latest != "" {
+		if cmp, err := compareVersions(latest, current); err == nil && cmp > 0 {
+			hasUpdate = true
+		}
+	}
 	response.WriteJSON(w, response.OK(systemUpgradeCheckData{
 		CurrentVersion: current,
 		LatestVersion:  latest,
-		// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
-		HasUpdate:  latest != "" && compareVersions(latest, current) > 0,
-		Channel:    channel,
-		Capability: capability,
-		Releases:   releases,
+		HasUpdate:      hasUpdate,
+		Channel:        channel,
+		Capability:     capability,
+		Releases:       releases,
 	}))
 }
 
@@ -986,7 +1032,15 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 旧逻辑：接受任意版本号直接下载升级，允许降级到旧版本
 	// U1-005：比较前剥离 "v" 前缀（与节点侧 upgrade.go 一致），避免手填 v1.0.10 被误判降级
 	currentVer := currentPanelVersion()
-	if cmp := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(currentVer, "v")); cmp < 0 {
+	// A11-132-06：不可比版本 fail-closed 拒绝（旧实现把解析失败的段按 0
+	// 计，构造版本号可绕过这道防降级比较）。
+	cmp, cmpErr := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(currentVer, "v"))
+	if cmpErr != nil {
+		log.Printf("systemUpgrade: 版本不可比较，拒绝升级：%v", cmpErr)
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("版本号 %s 或当前版本 %s 无法比较，已拒绝升级: %v", version, currentVer, cmpErr)))
+		return
+	}
+	if cmp < 0 {
 		log.Printf("systemUpgrade: 拒绝降级请求，目标版本 %s 低于当前版本 %s", version, currentVer)
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("目标版本 %s 低于当前版本 %s，不允许降级。如确需降级请手动操作。", version, currentVer)))
 		return
