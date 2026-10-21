@@ -623,7 +623,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 		}
 		commandMu.Unlock()
 		if failBind {
-			return true, "listen tcp 10.41.0.99:43101: bind: address already in use"
+			return true, "listen tcp 10.41.0.9:43101: bind: address already in use"
 		}
 		return false, ""
 	})
@@ -709,8 +709,8 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 		t.Fatalf("expected recorded AddService addresses during update, got %v", newAddrs)
 	}
 	for _, addr := range newAddrs {
-		if addr != "10.41.0.99:43101" {
-			t.Fatalf("expected connectIp to stay preferred in AddService addr, got %q", addr)
+		if addr != "10.41.0.9:43101" {
+			t.Fatalf("expected AddService addr to use node TCPListenAddr (connectIp is dial-only), got %q", addr)
 		}
 	}
 }
