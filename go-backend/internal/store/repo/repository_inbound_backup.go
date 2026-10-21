@@ -92,7 +92,14 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // importInbounds upserts kernels, inbounds and relay links by id. Kernels
 // come back as pending with no applied config, so the panel pushes them to
 // the nodes again (and installs the kernel where it is missing).
-func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error) {
+//
+// subRemap (BUG-A2-4) collects backup subscription id -> restored row id.
+// Subscriptions are matched by token, not by backup id: a subscription
+// that was deleted after the backup comes back under a fresh id, and
+// user_subscription rows in the same backup still carry the old id.
+// Import() feeds this map to importUserSubscriptions so assignments are
+// rewritten onto the restored rows instead of dangling.
+func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64) (int, error) {
 	for _, k := range b.Kernels {
 		// One kernel per node and type: drop a different row in the way.
 		if err := tx.Where("node_id = ? AND kernel_type = ? AND id <> ?", k.NodeID, k.KernelType, k.ID).
@@ -114,6 +121,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 				"config_hash", "applied_hash", "enabled", "updated_time",
 			}),
 		}).Create(&item).Error; err != nil {
+			return 0, err
+		}
+		if err := restoreZeroValuedInt(tx, &model.NodeKernel{}, k.ID, "enabled", k.Enabled); err != nil {
 			return 0, err
 		}
 	}
@@ -168,6 +178,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}
+		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
+			return 0, err
+		}
 	}
 
 	for _, rel := range b.Relays {
@@ -183,6 +196,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"inbound_id", "forward_id", "name", "share_host", "managed"}),
 		}).Create(&item).Error; err != nil {
+			return 0, err
+		}
+		if err := restoreZeroValuedInt(tx, &model.NodeInboundRelay{}, rel.ID, "managed", rel.Managed); err != nil {
 			return 0, err
 		}
 	}
@@ -239,6 +255,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		}
 		if err := tx.Save(&item).Error; err != nil {
 			return 0, err
+		}
+		// BUG-A2-4：登记备份 id -> 实际落库 id（按 token 命中旧行时
+		// 两者可不同；用户派生订阅 sb.ID=0 不参与分配引用，跳过）。
+		if sb.ID > 0 && subRemap != nil {
+			subRemap[sb.ID] = item.ID
 		}
 	}
 	return len(b.Inbounds), nil
