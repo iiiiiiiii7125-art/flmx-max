@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1388,7 +1389,9 @@ func (h *Handler) notifyTunnelQualityConfigChanged(key string) {
 		return
 	}
 	switch strings.TrimSpace(key) {
-	case monitorTunnelQualityEnabledConfigKey, monitoring.ConfigTunnelQualityProbeIntervalSec:
+	// FIX2-B（V4-O1）：retention 键补入——probeConfig 三键合读，漏此
+	// 键时保留期新值只能等 5s TTL 兜底，与另两键的即时口径不一致。
+	case monitorTunnelQualityEnabledConfigKey, monitoring.ConfigTunnelQualityProbeIntervalSec, monitoring.ConfigMonitorRetentionDays:
 		h.qualityProber.NotifyConfigChanged()
 	}
 }
@@ -1930,6 +1933,16 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return
+	}
+
+	// FIX2-B（V4-N1）：configs 段写库后与 UI 两写入口同口径失效配置
+	// 缓存。此前导入绕过全部失效钩子：notify_enabled 与 prober 三键
+	// 只能等 5s TTL 兜底（notify_events 因派发时现读已对冲，不在此列）。
+	if slices.Contains(req.Types, "configs") && len(req.BackupData.Configs) > 0 {
+		h.invalidateNotifyConfigCache()
+		for key := range req.BackupData.Configs {
+			h.notifyTunnelQualityConfigChanged(key)
+		}
 	}
 
 	if result.InboundsImported > 0 || req.BackupData.Inbounds != nil && len(req.BackupData.Inbounds.Kernels) > 0 {

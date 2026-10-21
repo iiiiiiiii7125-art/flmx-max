@@ -4762,12 +4762,17 @@ func (h *Handler) ensureRemoteNodeRelayAuth(fc *client.FederationClient, node *n
 	if err != nil || info == nil || strings.TrimSpace(info.RelayPassword) == "" {
 		return
 	}
+	// FIX2-B（V5-3）：版本提示记日志、对端版本随凭据自愈一并留痕。
+	logFederationVersionWarning(info)
 	cfg := map[string]interface{}{}
 	if raw := strings.TrimSpace(node.RemoteConfig); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &cfg)
 	}
 	cfg["relayUsername"] = info.RelayUsername
 	cfg["relayPassword"] = info.RelayPassword
+	if strings.TrimSpace(info.PanelVersion) != "" {
+		cfg["panelVersion"] = info.PanelVersion
+	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -29,6 +30,11 @@ type RemoteNodeInfo struct {
 	// 消费方存入 RemoteConfig，建链时写入 relay connector 的 auth）。
 	RelayUsername string `json:"relayUsername"`
 	RelayPassword string `json:"relayPassword"`
+	// FIX2-B（V5-3）：提供方面板版本与版本提示（纯加法字段，旧对端
+	// 忽略）。VersionWarning 在对端判定本方版本低于凭据感知版本时
+	// 给出，把「旧消费方 + 新提供方」的静默断裂变成显式信号。
+	PanelVersion   string `json:"panelVersion"`
+	VersionWarning string `json:"versionWarning"`
 }
 
 type RemoteTunnelResponse struct {
@@ -111,6 +117,16 @@ func NewFederationClientWithTimeout(timeout time.Duration) *FederationClient {
 	}
 }
 
+// localPanelVersion 与 handler.currentPanelVersion 同源（FLUX_VERSION
+// 环境变量，未设为 "dev"），供 Connect 上报本方面板版本（V5-3）。
+func localPanelVersion() string {
+	version := strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	if version == "" {
+		return "dev"
+	}
+	return version
+}
+
 func (c *FederationClient) Connect(url, token, localDomain string) (*RemoteNodeInfo, error) {
 	url = strings.TrimSuffix(url, "/")
 	req, err := http.NewRequest("POST", url+"/api/v1/federation/connect", nil)
@@ -118,6 +134,9 @@ func (c *FederationClient) Connect(url, token, localDomain string) (*RemoteNodeI
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	// FIX2-B（V5-3）：上报本方版本，提供方据此对过旧消费方回执
+	// versionWarning 并记日志（旧提供方忽略未知头，无兼容影响）。
+	req.Header.Set("X-Panel-Version", localPanelVersion())
 	if localDomain != "" {
 		req.Header.Set("X-Panel-Domain", localDomain)
 	}

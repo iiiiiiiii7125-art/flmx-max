@@ -535,6 +535,11 @@ type PeerShareBackup struct {
 	UpdatedTime    int64  `json:"updatedTime,omitempty"`
 	AllowedDomains string `json:"allowedDomains,omitempty"`
 	AllowedIPs     string `json:"allowedIps,omitempty"`
+	// FIX2-B（V3-01）：FIX-I 的 relay 凭据列随备份往返。缺失时全新
+	// 恢复后提供方补发新凭据、消费方存量凭据失配至其重新 Connect
+	// 才自愈，且回执无提示。
+	RelayUsername string `json:"relayUsername,omitempty"`
+	RelayPassword string `json:"relayPassword,omitempty"`
 }
 
 type InboundsBackup struct {
@@ -568,6 +573,9 @@ type SubscriptionBackup struct {
 	Remark      string `json:"remark"`
 	Inx         int    `json:"inx"`
 	CreatedTime int64  `json:"createdTime"`
+	// FIX2-B（D4-06）：待删墓碑随备份往返，恢复后不得复活成可拉取
+	// 的正常订阅（openSubscription 对 PendingDelete=1 返回 404）。
+	PendingDelete int `json:"pendingDelete,omitempty"`
 	// Traffic (share subscriptions).
 	UploadBytes      int64 `json:"uploadBytes,omitempty"`
 	DownloadBytes    int64 `json:"downloadBytes,omitempty"`
@@ -596,6 +604,10 @@ type KernelBackup struct {
 	Version     string `json:"version"`
 	Enabled     int    `json:"enabled"`
 	CreatedTime int64  `json:"createdTime"`
+	// FIX2-B（D4-05/V3-02）：已装版本随备份往返。此前 DTO 无此字段，
+	// 导入 item 恒空而 DoUpdates 含 installed_version——全新恢复丢
+	// 值、同实例重复导入更会把已有值主动清空。
+	InstalledVersion string `json:"installedVersion,omitempty"`
 }
 
 type InboundBackup struct {
@@ -637,6 +649,9 @@ type RemoteSourceBackup struct {
 	Role          string `json:"role,omitempty"`
 	Enabled       int    `json:"enabled"`
 	CreatedTime   int64  `json:"createdTime"`
+	// FIX2-B（D4-04）：机场套餐 Subscription-Userinfo 随备份往返；
+	// file 源无刷新自愈，丢失即永久。
+	Userinfo string `json:"userinfo,omitempty"`
 }
 
 type InboundRelayBackup struct {
