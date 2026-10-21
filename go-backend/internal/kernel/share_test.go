@@ -185,8 +185,12 @@ func TestSharePhase3(t *testing.T) {
 			t.Fatalf("sing-box rejects uTLS on QUIC outbound %s", e.Name)
 		}
 	}
-	if strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
-		t.Fatal("snell v5 must not be offered to Mihomo")
+	// B1 订正（1.3.1）：原断言把「Snell 不下发 Mihomo」钉成期望，其依据
+	// （Mihomo 只会 Snell v1-v3）已被 Mihomo v1.19.32 源码证伪——
+	// NewSnell 接受版本 1-4 并把 5 归一到 4（v5 服务端兼容 v4 客户端）。
+	// v5 入站现在必须出现在 Clash 段（黄金已同步更新）。
+	if !strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
+		t.Fatal("snell v5 must be offered to Mihomo (B1)")
 	}
 }
 

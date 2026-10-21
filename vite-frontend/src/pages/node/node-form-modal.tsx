@@ -187,7 +187,7 @@ export function NodeFormModal({
               classNames={{
                 input: "font-mono",
               }}
-              description="支持单个端口(80)、多个端口(80,443)或端口范围(10000-65535)，多个可用逗号分隔"
+              description="支持单个端口(80)、多个端口(80,443)或端口范围(10000-65535)，多个可用逗号分隔；转发/中转/隧道入口端口从此范围分配与校验，内核入站的监听端口不在此限"
               errorMessage={errors.port}
               isInvalid={!!errors.port}
               label="可用端口"

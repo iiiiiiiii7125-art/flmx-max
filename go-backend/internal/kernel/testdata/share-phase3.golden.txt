@@ -53,6 +53,19 @@ proxies:
       host: "www.microsoft.com"
       password: "stls-secret-123"
       version: 3
+  - name: "snell"
+    type: "snell"
+    server: "203.0.113.10"
+    port: 6160
+    udp: false
+    psk: "psk-cccccccc"
+    version: 4
+    client-fingerprint: "chrome"
+    obfs-opts:
+      host: "www.microsoft.com"
+      mode: "shadowtls"
+      password: "stls-pass-2"
+      version: 3
 proxy-groups:
   - name: "节点选择"
     type: "select"
@@ -62,6 +75,7 @@ proxy-groups:
       - "tuic"
       - "anytls"
       - "shadowsocks"
+      - "snell"
   - name: "自动选择"
     type: "url-test"
     url: "https://www.gstatic.com/generate_204"
@@ -71,6 +85,7 @@ proxy-groups:
       - "tuic"
       - "anytls"
       - "shadowsocks"
+      - "snell"
 rules:
   - "GEOIP,LAN,DIRECT,no-resolve"
   - "MATCH,节点选择"
