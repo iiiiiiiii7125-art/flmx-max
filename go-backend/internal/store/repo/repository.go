@@ -762,10 +762,21 @@ func (r *Repository) UpsertAnnouncement(content string, enabled int, now int64) 
 		return err
 	}
 	if count == 0 {
-		return r.db.Create(&model.Announcement{
+		// A2-02（零值家族）：Announcement.Enabled 带 `default:1`，首建时
+		// 显式 enabled=0 会被 Create 当未设置丢弃、落库为 1——想首发
+		// 「停用」公告实际直接上线。仿 CreateNodeInbound（BUG-A4-1）
+		// 留意图、创建后写回。
+		ann := &model.Announcement{
 			Content: content, Enabled: enabled,
 			CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true},
-		}).Error
+		}
+		if err := r.db.Create(ann).Error; err != nil {
+			return err
+		}
+		if enabled == 0 {
+			return r.db.Model(&model.Announcement{}).Where("id = ?", ann.ID).Update("enabled", 0).Error
+		}
+		return nil
 	}
 	return r.db.Model(&model.Announcement{}).Where("1=1").Updates(map[string]interface{}{
 		"content": content, "enabled": enabled, "updated_time": now,
@@ -4528,7 +4539,20 @@ func (r *Repository) CreateServiceMonitor(m *model.ServiceMonitor) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Create(m).Error
+	// A2-03（零值家族）：ServiceMonitor.Enabled 带 `default:1`，以停用
+	// 状态创建的监控会被 Create 吞掉 0、落库为 1 并立即开始探测。
+	// 仿 CreateNodeInbound（BUG-A4-1）留意图、创建后写回。
+	wantEnabled := m.Enabled
+	if err := r.db.Create(m).Error; err != nil {
+		return err
+	}
+	if wantEnabled == 0 {
+		if err := r.db.Model(&model.ServiceMonitor{}).Where("id = ?", m.ID).Update("enabled", 0).Error; err != nil {
+			return err
+		}
+		m.Enabled = 0
+	}
+	return nil
 }
 
 func (r *Repository) UpdateServiceMonitor(m *model.ServiceMonitor) error {

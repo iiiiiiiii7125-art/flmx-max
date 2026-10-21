@@ -15,7 +15,21 @@ func (r *Repository) InsertTunnelQuality(q *model.TunnelQuality) error {
 	if q == nil || q.TunnelID <= 0 {
 		return nil
 	}
-	return r.db.Create(q).Error
+	// A13-01（零值家族第六处）：TunnelQuality.Success 带 `default:1`，
+	// 失败样本以 Success=0 插入会被 Create 吞掉、恒落库为 1，监控历史
+	// 与重启后 DB 回退路径把失败显示成成功。仿 CreateNodeInbound
+	// （BUG-A4-1）留意图、创建后写回。
+	wantSuccess := q.Success
+	if err := r.db.Create(q).Error; err != nil {
+		return err
+	}
+	if wantSuccess == 0 {
+		if err := r.db.Model(&model.TunnelQuality{}).Where("id = ?", q.ID).Update("success", 0).Error; err != nil {
+			return err
+		}
+		q.Success = 0
+	}
+	return nil
 }
 
 // GetTunnelQualityHistory returns quality probe results for a tunnel
