@@ -128,7 +128,10 @@ func (r *chainRoute) addNode(nodes ...*chain.Node) {
 
 func (r *chainRoute) Dial(ctx context.Context, network, address string, opts ...chain.DialOption) (net.Conn, error) {
 	if len(r.Nodes()) == 0 {
-		return DefaultRoute.Dial(ctx, network, address, opts...)
+		// Fail closed (D1-H4): an empty chain route means every hop was
+		// unavailable. It must never degrade to a direct connection;
+		// direct dialing is what DefaultRoute (no chain configured) is for.
+		return nil, ErrEmptyRoute
 	}
 
 	var options chain.DialOptions
@@ -154,7 +157,9 @@ func (r *chainRoute) Dial(ctx context.Context, network, address string, opts ...
 
 func (r *chainRoute) Bind(ctx context.Context, network, address string, opts ...chain.BindOption) (net.Listener, error) {
 	if len(r.Nodes()) == 0 {
-		return DefaultRoute.Bind(ctx, network, address, opts...)
+		// Fail closed (D1-H4), same as Dial: never bind directly when a
+		// chain was configured but produced no route.
+		return nil, ErrEmptyRoute
 	}
 
 	var options chain.BindOptions
