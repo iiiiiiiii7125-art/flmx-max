@@ -2,6 +2,7 @@ import type * as React from "react";
 
 import { MoreHorizontal, Search, X } from "lucide-react";
 
+import { AnimatedPage } from "@/components/animated-page";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import {
@@ -407,4 +408,22 @@ export function formatDate(ms?: number | string | null, withTime = false) {
   return withTime
     ? `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`
     : date;
+}
+
+/**
+ * A page that can also sit inside another page's tab (the 用户 page hosts
+ * 分组 and 限速): embedded, it drops its own padding and header.
+ */
+export function PageShell({
+  embedded,
+  children,
+}: {
+  embedded?: boolean;
+  children: React.ReactNode;
+}) {
+  return embedded ? (
+    <div>{children}</div>
+  ) : (
+    <AnimatedPage className="px-3 lg:px-6 py-6">{children}</AnimatedPage>
+  );
 }
