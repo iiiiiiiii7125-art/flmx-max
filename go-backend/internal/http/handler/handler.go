@@ -77,6 +77,17 @@ type Handler struct {
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
 	pendingUpgradeRedeploy      map[int64]struct{}
+	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
+	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
+	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
+	pendingRealmSettle map[int64]struct{}
+	// FIX2-A（V2-01/V2-02）：配额执法 per-user 串行化锁。
+	quotaEnforceMu    sync.Mutex
+	quotaEnforceLocks map[int64]*sync.Mutex
+	// FIX2-A（V2-08）：转发计数入账 per-node 串行化锁（基线读→差分
+	// →落库整段），防 settle/周期/重连多路轮询以同一旧基线重复差分。
+	nodeAccountingMu    sync.Mutex
+	nodeAccountingLocks map[int64]*sync.Mutex
 	nodeOnlineRedeployAt        map[int64]time.Time
 	nodeOnlineRedeployQueued    map[int64]struct{}
 	nodeOnlineRedeploying       map[int64]struct{}
@@ -151,6 +162,9 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		captchaTokens:            make(map[string]int64),
 		passkeyPending:           make(map[string]passkeyCeremony),
 		pendingUpgradeRedeploy:   make(map[int64]struct{}),
+		pendingRealmSettle:       make(map[int64]struct{}),
+		quotaEnforceLocks:        make(map[int64]*sync.Mutex),
+		nodeAccountingLocks:      make(map[int64]*sync.Mutex),
 		nodeOnlineRedeployAt:     make(map[int64]time.Time),
 		nodeOnlineRedeployQueued: make(map[int64]struct{}),
 		nodeOnlineRedeploying:    make(map[int64]struct{}),
