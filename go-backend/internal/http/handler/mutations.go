@@ -887,6 +887,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		probeTargetHost = probeTarget.Host
 		probeTargetPort = probeTarget.Port
 	}
+	engine, err := normalizeTunnelEngine(asString(req["engine"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("tunnel")
 	localDomain := h.federationLocalDomain()
@@ -927,6 +932,13 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		validationTx.Rollback()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
+	}
+	if engine == tunnelEngineRealm {
+		if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
+			validationTx.Rollback()
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 	}
 	if err := validateTunnelRuntimeBeforeApply(runtimeState); err != nil {
 		validationTx.Rollback()
@@ -1014,6 +1026,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	if engine == tunnelEngineRealm {
+		if err := h.validateRealmTunnelTx(tx, typeVal, entryNodeIDs); err != nil {
+			tx.Rollback()
+			releasePortLocks()
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 	if err := validateTunnelRuntimeBeforeApply(runtimeState); err != nil {
 		tx.Rollback()
 		releasePortLocks()
@@ -1043,6 +1063,7 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		IPPreference:    ipPreference,
 		ProbeTargetHost: probeTargetHost,
 		ProbeTargetPort: probeTargetPort,
+		Engine:          engine,
 	}
 	if err := tx.Create(&tunnel).Error; err != nil {
 		tx.Rollback()
@@ -1328,6 +1349,15 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		probeTargetHost = oldTunnel.ProbeTargetHost
 		probeTargetPort = oldTunnel.ProbeTargetPort
 	}
+	engine := oldTunnel.Engine
+	if raw, ok := req["engine"]; ok {
+		parsedEngine, pErr := normalizeTunnelEngine(asString(raw))
+		if pErr != nil {
+			response.WriteJSON(w, response.ErrDefault(pErr.Error()))
+			return
+		}
+		engine = parsedEngine
+	}
 	oldChainRows, err := h.listChainNodesForTunnel(id)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -1377,6 +1407,11 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
 			return err, 0
+		}
+		if engine == tunnelEngineRealm {
+			if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
+				return err, 0
+			}
 		}
 		if err := h.validateTunnelEntryPortConflictsForNewEntriesTx(validationTx, id, oldEntryNodeIDs, entryNodeIDs); err != nil {
 			return err, 0
@@ -1480,6 +1515,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		); err != nil {
 			return err, -2
 		}
+		if err := h.repo.SetTunnelEngineTx(tx, id, engine); err != nil {
+			return err, -2
+		}
 
 		if err := h.repo.DeleteChainTunnelsByTunnelTx(tx, id); err != nil {
 			return err, -2
@@ -1546,6 +1584,22 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		newChainRows, _ := h.listChainNodesForTunnel(id)
 		h.cleanupObsoleteTunnelRuntime(id, oldChainRows, newChainRows)
+	}
+
+	if engine != oldTunnel.Engine {
+		h.switchTunnelEngine(id, tunnelIsRealm(oldTunnel), oldEntryNodeIDs, newEntryNodeIDs)
+		response.WriteJSON(w, response.OKEmpty())
+		return
+	}
+	if engine == tunnelEngineRealm {
+		// realm renders whole nodes: re-render the old and new entries
+		// (forward ports, tunnel status).
+		if _, err := h.syncRealmNodes(append(append([]int64{}, oldEntryNodeIDs...), newEntryNodeIDs...), nil); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		response.WriteJSON(w, response.OKEmpty())
+		return
 	}
 
 	oldType := 0
@@ -1625,6 +1679,14 @@ func forwardPortNodeIDs(ports []forwardPortRecord) []int64 {
 func (h *Handler) deleteForwardServicesOnNodeBatch(forward *forwardRecord, nodeID int64) error {
 	if h == nil || forward == nil || nodeID <= 0 {
 		return errors.New("invalid forward service cleanup context")
+	}
+	if tunnel, err := h.getTunnelRecord(forward.TunnelID); err == nil && tunnelIsRealm(tunnel) {
+		// The forward left a realm tunnel: re-rendering drops it there.
+		// 引擎切换（realm.go switchTunnelEngine）走纯 gost 版
+		// deleteForwardServicesOnNode——切换时隧道行已落库为新引擎，
+		// 在这里拦截会把 gost 服务漏删、端口被占致新引擎监听失败。
+		_, err := h.syncRealmNodes([]int64{nodeID}, nil)
+		return err
 	}
 	bases, err := h.forwardServiceBaseCandidates(forward)
 	if err != nil {
@@ -1727,8 +1789,9 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 					continue
 				}
 			} else {
-				// gost 模式：删除 service（离线错误会向上传播，由 S-04 机制处理）
-				_ = h.deleteForwardServicesOnNode(f, nodeID)
+				// gost 模式：删除 service（离线错误会向上传播，由 S-04 机制处理）；
+				// realm 隧道走 Batch 变体的重渲染清理。
+				_ = h.deleteForwardServicesOnNodeBatch(f, nodeID)
 			}
 		}
 	}
@@ -2966,6 +3029,7 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 
 	// 审计所需：节点与端口（删库前采集，供残留规则人工清理）。
 	residueHint := h.buildForwardResidueHint(forward)
+	oldPorts, _ := h.listForwardPorts(id)
 
 	// DeleteForwardCascade 同步清理 forward / forward_port / nft_counter_state /
 	// nft_rule_binding / nft_pending_delete（R5-B3 补充 A.3）。
@@ -2974,6 +3038,11 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	if err := h.deleteForwardByID(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if tunnel, terr := h.getTunnelRecord(forward.TunnelID); terr == nil && tunnelIsRealm(tunnel) {
+		// realm renders from the database: the forward drops out on the
+		// next apply, now or when the node reconnects.
+		_, _ = h.syncRealmNodes(forwardPortNodeIDs(oldPorts), nil)
 	}
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && nftMode {
 		for _, nodeID := range entryNodeIDs {
@@ -5445,8 +5514,14 @@ func (h *Handler) deleteTunnelByID(id int64) error {
 	}
 
 	tunnelName, _ := h.repo.GetTunnelName(id)
+	tunnel, _ := h.repo.GetTunnelRecord(id)
+	entryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if err := h.repo.DeleteTunnelCascade(id); err != nil {
 		return err
+	}
+	if tunnelIsRealm(tunnel) {
+		// 级联删除后 realm 渲染源已无此隧道：让入口节点收敛到无端点。
+		_, _ = h.syncRealmNodes(entryNodeIDs, nil)
 	}
 
 	shareID, port, ok := parsePeerShareInfoFromFederationTunnelName(tunnelName)

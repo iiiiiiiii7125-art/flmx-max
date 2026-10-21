@@ -5,6 +5,7 @@ on:
       - main
     paths:
       - 'doc/**'
+      - 'vite-frontend/**'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
@@ -34,6 +35,20 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      # The online demo: the panel with recorded sample data and no backend
+      # (vite-frontend/src/demo), served at /flmx-max/demo/. It must be
+      # rebuilt into the same dist tree on every run: the deploy below is
+      # force_orphan, so a skipped demo build would delete the demo.
+      - name: Build demo
+        working-directory: vite-frontend
+        run: |
+          npm install -g pnpm@10.28.1
+          pnpm install --frozen-lockfile
+          VITE_DEMO=true VITE_BASE=/flmx-max/demo/ \
+          VITE_APP_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo dev)" \
+          VITE_GITHUB_REPO="https://github.com/${{ github.repository }}" \
+            pnpm exec vite build --outDir ../doc/.vitepress/dist/demo --emptyOutDir
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4

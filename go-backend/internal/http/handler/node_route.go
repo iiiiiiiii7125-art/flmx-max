@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -47,6 +48,51 @@ func routeHopNet(ip string) string {
 	return ""
 }
 
+// IPv6 has no backbone-only prefixes, so IPv6 hops are named by origin AS.
+// AS4134 carries both the 163 backbone and provincial ChinaNet: it is "CT",
+// and classifyRoute tells CN2 GIA from GT by whether CT comes before CN2.
+var routeASNs = map[string]string{
+	"4809":  "CN2",
+	"4134":  "CT",
+	"9929":  "9929",
+	"4837":  "4837",
+	"58453": "CMI",
+	"58807": "CMIN2",
+}
+
+// hopNet names the network a hop belongs to, or "".
+func hopNet(ip string) string {
+	addr := net.ParseIP(ip)
+	switch {
+	case addr == nil:
+		return ""
+	case addr.To4() != nil:
+		return refineHopNet(ip, routeHopNet(ip))
+	case !addr.IsGlobalUnicast() || addr.IsPrivate():
+		return ""
+	}
+	return routeASNs[hopOriginASN(ip)]
+}
+
+// asnQueryName is the Team Cymru origin query for an address:
+// d.c.b.a.origin.asn.cymru.com, or the reversed nibbles of an IPv6 address
+// under origin6.asn.cymru.com.
+func asnQueryName(ip string) string {
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return ""
+	}
+	if v4 := addr.To4(); v4 != nil {
+		return fmt.Sprintf("%d.%d.%d.%d.origin.asn.cymru.com", v4[3], v4[2], v4[1], v4[0])
+	}
+	var b strings.Builder
+	v6 := addr.To16()
+	for i := len(v6) - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, "%x.%x.", v6[i]&0x0f, v6[i]>>4)
+	}
+	return b.String() + "origin6.asn.cymru.com"
+}
+
 // China Mobile's international networks share address space, so CMI hops
 // are told apart by origin AS: AS58807 is CMIN2, AS58453 CMI. Team Cymru's
 // DNS service answers "58807 | 223.x.x.0/24 | HK | apnic | ..." for
@@ -73,11 +119,11 @@ func hopOriginASN(ip string) string {
 	if ok {
 		return asn
 	}
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
+	name := asnQueryName(ip)
+	if name == "" {
 		return ""
 	}
-	txt, err := hopASNLookup(parts[3] + "." + parts[2] + "." + parts[1] + "." + parts[0] + ".origin.asn.cymru.com")
+	txt, err := hopASNLookup(name)
 	if err != nil {
 		return "" // not cached, so a later trace asks again
 	}
@@ -132,17 +178,21 @@ func refineHopNet(ip, prefixNet string) string {
 // classifyRoute names a return route from the backbones its hops cross.
 func classifyRoute(hops []routeHop) string {
 	seen := make(map[string]bool)
+	ctBeforeCN2 := false
 	for _, h := range hops {
+		if h.Net == "CT" && !seen["CN2"] {
+			ctBeforeCN2 = true
+		}
 		if h.Net != "" {
 			seen[h.Net] = true
 		}
 	}
 	switch {
-	case seen["CN2"] && !seen["163"]:
+	case seen["CN2"] && !seen["163"] && !ctBeforeCN2:
 		return "电信 CN2 GIA"
 	case seen["CN2"]:
 		return "电信 CN2 GT"
-	case seen["163"]:
+	case seen["163"] || seen["CT"]:
 		return "电信 163"
 	case seen["9929"]:
 		return "联通 9929"
@@ -164,11 +214,16 @@ type routeHop struct {
 }
 
 type routePoint struct {
-	Name    string     `json:"name"`
-	Route   string     `json:"route,omitempty"`
-	Reached bool       `json:"reached"`
-	Hops    []routeHop `json:"hops,omitempty"`
-	Error   string     `json:"error,omitempty"`
+	Name    string `json:"name"`
+	Route   string `json:"route,omitempty"`
+	Reached bool   `json:"reached"`
+	// Family is "IPv6" when the route was traced over IPv6.
+	Family string     `json:"family,omitempty"`
+	Hops   []routeHop `json:"hops,omitempty"`
+	// IPv6 is a dual-stack node's IPv6 route to the same point, traced
+	// next to the IPv4 one.
+	IPv6  *routePoint `json:"ipv6,omitempty"`
+	Error string      `json:"error,omitempty"`
 	// host is the address traced, so an edited point is traced again.
 	host string
 }
@@ -205,10 +260,13 @@ func (s *nodeRouteStore) set(nodeID int64, r nodeRoute) {
 }
 
 // nodeTraceroute runs one Traceroute from a node; tests replace it.
-var nodeTraceroute = func(h *Handler, nodeID int64, host string) (map[string]interface{}, error) {
-	res, err := h.sendNodeCommandWithTimeout(nodeID, "Traceroute", map[string]interface{}{
-		"host": host,
-	}, routeCommandTimeout, false, false)
+// family 4 / 6 asks for that IP version only, 0 lets the node pick.
+var nodeTraceroute = func(h *Handler, nodeID int64, host string, family int) (map[string]interface{}, error) {
+	payload := map[string]interface{}{"host": host}
+	if family != 0 {
+		payload["family"] = family
+	}
+	res, err := h.sendNodeCommandWithTimeout(nodeID, "Traceroute", payload, routeCommandTimeout, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +282,12 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 			p.Error = "节点 agent 版本过旧，升级后可检测回程"
 		case strings.Contains(msg, "NET_RAW"):
 			p.Error = "节点没有 root / NET_RAW 权限"
+		case strings.Contains(msg, "没有 IPv6 地址"):
+			p.Error = "节点只有 IPv6，测试点没有 IPv6 地址"
+		case strings.Contains(msg, "没有 IPv4 地址"):
+			p.Error = "测试点只有 IPv6 地址，节点没有 IPv6"
+		case strings.Contains(msg, "路由"):
+			p.Error = "节点到测试点没有路由"
 		case strings.Contains(msg, "DNS"):
 			p.Error = "域名解析失败"
 		default:
@@ -232,27 +296,34 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 		return p
 	}
 	p.Reached = asBool(data["reached"], false)
+	if addr := net.ParseIP(asString(data["ip"])); addr != nil && addr.To4() == nil {
+		p.Family = "IPv6"
+	}
 	rawHops, _ := data["hops"].([]interface{})
-	// O1-008：先收集所有可能需要 ASN 查询的 CMI hop IP，并发预热缓存，
-	// 后续逐 hop 的 refineHopNet 全部命中缓存，不再串行等待 DNS
+	// O1-008：先收集所有可能需要 ASN 查询的 hop IP（CMI 的 IPv4 跳靠前缀表
+	// 细分 CMIN2，IPv6 跳无前缀表、全靠 ASN），并发预热缓存（信号量限 4），
+	// 后续逐 hop 的 hopNet 全部命中缓存，不再串行等待 DNS
 	{
 		seen := make(map[string]bool)
-		var cmiIPs []string
+		var asnIPs []string
 		for _, raw := range rawHops {
 			m, ok := raw.(map[string]interface{})
 			if !ok {
 				continue
 			}
 			ip := asString(m["ip"])
-			if ip == "" || net.ParseIP(ip) == nil {
+			addr := net.ParseIP(ip)
+			if addr == nil || seen[ip] {
 				continue
 			}
-			if routeHopNet(ip) == "CMI" && !seen[ip] {
+			need := routeHopNet(ip) == "CMI" ||
+				(addr.To4() == nil && addr.IsGlobalUnicast() && !addr.IsPrivate())
+			if need {
 				seen[ip] = true
-				cmiIPs = append(cmiIPs, ip)
+				asnIPs = append(asnIPs, ip)
 			}
 		}
-		warmHopASNCache(cmiIPs)
+		warmHopASNCache(asnIPs)
 	}
 	for _, raw := range rawHops {
 		m, ok := raw.(map[string]interface{})
@@ -267,11 +338,26 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 			TTL:   int(asInt64(m["ttl"], 0)),
 			IP:    ip,
 			RttMs: asFloat(m["rttMs"], 0),
-			Net:   refineHopNet(ip, routeHopNet(ip)),
+			Net:   hopNet(ip),
 		})
 	}
 	p.Route = classifyRoute(p.Hops)
 	return p
+}
+
+// traceIPv6Leg traces a point again over IPv6 after an IPv4 trace. Nodes or
+// points without IPv6 have no IPv6 leg; an old agent that ignores the
+// family answers over IPv4 again, which is dropped.
+func traceIPv6Leg(h *Handler, nodeID int64, t latencyTarget) *routePoint {
+	data, err := nodeTraceroute(h, nodeID, t.Host, 6)
+	if err != nil {
+		return nil
+	}
+	leg := routePointFrom(t, data, nil)
+	if leg.Family != "IPv6" {
+		return nil
+	}
+	return &leg
 }
 
 // traceNodeRoutes traces the given local online nodes (all when ids is
@@ -294,6 +380,7 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 	type job struct {
 		targets []latencyTarget
 		agent   string
+		name    string
 	}
 	todo := make(map[int64]job)
 	for _, n := range nodes {
@@ -310,7 +397,7 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 				continue
 			}
 		}
-		todo[n.ID] = job{targets: targets, agent: agent}
+		todo[n.ID] = job{targets: targets, agent: agent, name: n.Name}
 	}
 
 	results := make(map[int64]nodeRoute, len(todo))
@@ -323,24 +410,39 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(nodeID int64, targets []latencyTarget, agent string) {
+		go func(nodeID int64, targets []latencyTarget, agent, name string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			r := nodeRoute{Points: make([]routePoint, len(targets)), agent: agent}
 			// One trace at a time per node keeps the agent's raw socket quiet.
 			for i, t := range targets {
-				data, err := nodeTraceroute(h, nodeID, t.Host)
+				data, err := nodeTraceroute(h, nodeID, t.Host, 0)
 				r.Points[i] = routePointFrom(t, data, err)
+				// F-079: once ctx is cancelled the caller has already
+				// returned, so the in-flight worker must not start a new
+				// traceroute — skip the optional IPv6 leg.
+				if r.Points[i].Error == "" && r.Points[i].Family == "" && ctx.Err() == nil {
+					r.Points[i].IPv6 = traceIPv6Leg(h, nodeID, t)
+				}
 				if r.Points[i].Error != "" {
 					r.failed = true
 				}
 			}
 			r.CheckedAt = time.Now().UnixMilli()
+			// 回程变化通知：只与上一次成功识别的结果比（routeChanges 已排除
+			// 未识别/失败），且与 node_offline 互不重叠——离线节点根本不会
+			// 被 trace。同一变化的重复投递另有 notify 指纹去重（30 分钟）。
+			if prev, ok := h.nodeRoutes.get(nodeID); ok {
+				if changes := routeChanges(prev, r); len(changes) > 0 {
+					h.notify(notifyEventRouteChange, "回程线路变化",
+						fmt.Sprintf("节点：%s\n%s", name, strings.Join(changes, "\n")))
+				}
+			}
 			h.nodeRoutes.set(nodeID, r)
 			mu.Lock()
 			results[nodeID] = r
 			mu.Unlock()
-		}(id, j.targets, j.agent)
+		}(id, j.targets, j.agent, j.name)
 	}
 	// F-079: 与 node_latency.go 的 L-002 同构——收尾等待也要响应 ctx
 	// 取消，否则请求方断开后仍等全部在途 traceroute 跑完。在途 worker
@@ -382,13 +484,17 @@ func (h *Handler) withRoutes(nodeID int64, p externalProbe) externalProbe {
 	if !ok || len(p.Points) == 0 {
 		return p
 	}
-	routes := make(map[string]string, len(r.Points))
+	byName := make(map[string]routePoint, len(r.Points))
 	for _, rp := range r.Points {
-		routes[rp.Name] = rp.Route
+		byName[rp.Name] = rp
 	}
 	points := make([]latencyPoint, len(p.Points))
 	for i, pt := range p.Points {
-		pt.Route = routes[pt.Name]
+		rp := byName[pt.Name]
+		pt.Route, pt.RouteV6 = rp.Route, ""
+		if rp.IPv6 != nil && rp.IPv6.Error == "" {
+			pt.RouteV6 = rp.IPv6.Route
+		}
 		points[i] = pt
 	}
 	p.Points = points

@@ -27,7 +27,7 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	}
 	// Chained inbounds leave through their target; their rules come first
 	// so their users do not match the direct per-user rules below.
-	chained, rules, sets, err := singboxChainRoutes(inbounds)
+	chained, rules, sets, err := singboxChainRoutes(inbounds, opts.SingboxSnell)
 	if err != nil {
 		return "", err
 	}
@@ -52,6 +52,11 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 			}
 		}
 		cfg["route"] = route
+	}
+	// preferGoDNS 传 false：我方无 GoDNS 特性（见 S4 方案 2.5 注，启用 IP
+	// 策略的入站在无 systemd-resolved 的节点上解析走默认 local resolver）。
+	if err := applyOutboundIPPolicies(TypeSingbox, cfg, inbounds, false); err != nil {
+		return "", err
 	}
 	return marshalConfig(cfg)
 }
@@ -94,8 +99,8 @@ func (a *acmeProviders) tag(sec Security) string {
 }
 
 // singboxInbounds returns the inbound objects for one panel inbound. A
-// ShadowTLS-fronted Shadowsocks becomes two: the public shadowtls inbound
-// and a loopback shadowsocks backend it detours to.
+// ShadowTLS-fronted Shadowsocks or Snell becomes two: the public shadowtls
+// inbound and a loopback backend it detours to.
 func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 	item := obj{
 		"tag":         in.Tag(),
@@ -119,32 +124,31 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 		item["users"] = []interface{}{obj{"password": s.Password}}
 	case ProtocolShadowsocks:
 		if in.Security.Type == SecurityShadowTLS {
-			backendTag := in.Tag() + "-ss"
-			front := obj{
-				"type":        "shadowtls",
-				"tag":         in.Tag(),
-				"listen":      in.Listen,
-				"listen_port": in.Port,
-				"version":     3,
-				"users":       []interface{}{obj{"password": in.Security.ShadowTLSPassword}},
-				"handshake":   obj{"server": in.Security.SNI, "server_port": 443},
-				"detour":      backendTag,
-			}
-			backend := obj{
+			return singboxShadowTLSFront(in, obj{
 				"type":     "shadowsocks",
-				"tag":      backendTag,
-				"listen":   "127.0.0.1",
 				"method":   s.Method,
 				"password": s.Password,
-			}
-			if err := mergeExtra(front, in.Extra); err != nil {
-				return nil, err
-			}
-			return []interface{}{front, backend}, nil
+			})
 		}
 		item["type"] = "shadowsocks"
 		item["method"] = s.Method
 		item["password"] = s.Password
+	case ProtocolSnell:
+		// Server version 5 also serves v4 clients (the same wire protocol
+		// without QUIC proxy mode, which sing-box does not offer).
+		snell := obj{"type": "snell", "version": 5, "psk": s.Password}
+		if s.SnellVersion == 6 {
+			snell["version"] = 6
+			if s.SnellMode != "" {
+				snell["mode"] = s.SnellMode
+			}
+		}
+		if in.Security.Type == SecurityShadowTLS {
+			return singboxShadowTLSFront(in, snell)
+		}
+		for k, v := range snell {
+			item[k] = v
+		}
 	case ProtocolHysteria2:
 		item["type"] = "hysteria2"
 		item["users"] = []interface{}{obj{"password": s.Password}}
@@ -188,6 +192,28 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 		return nil, err
 	}
 	return []interface{}{item}, nil
+}
+
+// singboxShadowTLSFront returns the public shadowtls v3 inbound and the
+// loopback backend (a Shadowsocks or Snell inbound) it detours to.
+func singboxShadowTLSFront(in Inbound, backend obj) ([]interface{}, error) {
+	backendTag := singboxShadowTLSBackendTag(in)
+	front := obj{
+		"type":        "shadowtls",
+		"tag":         in.Tag(),
+		"listen":      in.Listen,
+		"listen_port": in.Port,
+		"version":     3,
+		"users":       []interface{}{obj{"password": in.Security.ShadowTLSPassword}},
+		"handshake":   obj{"server": in.Security.SNI, "server_port": 443},
+		"detour":      backendTag,
+	}
+	backend["tag"] = backendTag
+	backend["listen"] = "127.0.0.1"
+	if err := mergeExtra(front, in.Extra); err != nil {
+		return nil, err
+	}
+	return []interface{}{front, backend}, nil
 }
 
 func singboxTLS(sec Security, acme *acmeProviders) (obj, error) {

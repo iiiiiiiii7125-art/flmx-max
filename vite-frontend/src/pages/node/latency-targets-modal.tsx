@@ -1,15 +1,10 @@
+import type { Node } from "@/pages/node/types";
+
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Pin } from "lucide-react";
 
 import { getConfigByName, setNodeLatencyTargets } from "@/api";
-
-// 节点类型（精简版，仅含延迟目标设置需要的字段）。
-interface Node {
-  id: number;
-  name: string;
-  latencyTargets?: { points: string[]; pinned: string[] } | null;
-}
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import {
@@ -91,11 +86,6 @@ export function LatencyTargetsModal({
     );
 
   const save = async () => {
-    if (custom && points.length === 0) {
-      toast.error("至少选一个测试点");
-
-      return;
-    }
     setSaving(true);
     try {
       const res = await setNodeLatencyTargets({
@@ -249,6 +239,12 @@ export function LatencyTargetsModal({
                 })}
               </div>
             </div>
+          )}
+          {custom && pool.length > 0 && points.length === 0 && (
+            <p className="text-xs text-default-500">
+              一个都不选：{batch ? "这些节点" : "这台节点"}
+              不测延迟和回程，卡片上显示“不测延迟”。
+            </p>
           )}
           {batch && (
             <p className="text-xs text-warning-600">

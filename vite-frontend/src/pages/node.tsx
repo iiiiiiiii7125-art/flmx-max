@@ -14,41 +14,16 @@ import {
   arrayMove,
   rectSortingStrategy,
   sortableKeyboardCoordinates,
-  useSortable,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { LayoutGrid, List } from "lucide-react";
+import { GripVertical } from "lucide-react";
 
-import { SearchBar } from "@/components/search-bar";
 import { formatTraffic } from "@/utils/traffic";
-import { AnimatedPage } from "@/components/animated-page";
-import {
-  Table,
-  TableHeader,
-  TableColumn,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@/shadcn-bridge/heroui/table";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Input } from "@/shadcn-bridge/heroui/input";
-import { Textarea } from "@/shadcn-bridge/heroui/input";
-import {
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-} from "@/shadcn-bridge/heroui/modal";
+import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
+import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
-import { Switch } from "@/shadcn-bridge/heroui/switch";
-import { Spinner } from "@/shadcn-bridge/heroui/spinner";
 import { Alert } from "@/shadcn-bridge/heroui/alert";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
-import { Accordion, AccordionItem } from "@/shadcn-bridge/heroui/accordion";
-import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import {
   createNode,
   getNodeList,
@@ -66,265 +41,73 @@ import {
   probeNodeLatency,
   type ReleaseChannel,
 } from "@/api";
-import type { InboundProbe } from "@/api/types";
 import { LatencyCell } from "@/components/latency-cell";
+import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
-import { NodeTuneModal } from "@/pages/node/tune-modal";
-import { PageEmptyState, PageLoadingState } from "@/components/page-state";
+import { PageLoadingState } from "@/components/page-state";
+import { ActionSheet } from "@/components/action-sheet";
+import {
+  EmptyHint,
+  ListRow,
+  PageHeader,
+  PageShell,
+  PageTabs,
+  PageToolbar,
+  SelectionBar,
+} from "@/components/page-kit";
+import { CARD_GRID } from "@/components/info-card";
+import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import {
   getConnectionStatusMeta,
   getRemoteSyncErrorMessage,
 } from "@/pages/node/display";
 import { tryCopyInstallCommand } from "@/pages/node/install-command";
+import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { copyWithToast } from "@/utils/clipboard";
 import {
-  getNodeRenewalSnapshot,
   formatNodeRenewalTime,
   getNodeRenewalCycleLabel,
-  type NodeRenewalCycle,
 } from "@/pages/node/renewal";
-import {
-  buildNodeSystemInfo,
-  type NodeSystemInfo,
-} from "@/pages/node/system-info";
+import { buildNodeSystemInfo } from "@/pages/node/system-info";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
+import {
+  Node,
+  NodeForm,
+  NodeTab,
+  RemoteUsageNode,
+  NodeFilterMode,
+} from "@/pages/node/types";
+import {
+  NODE_FALLBACK_REFRESH_INTERVAL_MS,
+  getNodeReminderEnabled,
+  getNodeExpiryMeta,
+  mergeNodeRealtimeState,
+  SortableItem,
+} from "@/pages/node/helpers";
+import { NodeFormModal } from "@/pages/node/node-form-modal";
+import {
+  BatchDeleteNodesModal,
+  DeleteNodeModal,
+  RollbackNodeModal,
+} from "@/pages/node/confirm-modals";
+import {
+  InstallCommandModal,
+  UpgradeNodeModal,
+} from "@/pages/node/agent-modals";
+import { NodeFilterModal } from "@/pages/node/filter-modal";
 
-const NODE_FALLBACK_REFRESH_INTERVAL_MS = 15000;
-
-interface Node {
-  id: number;
-  inx?: number;
-  name: string;
-  /** 节点到各延迟测试点的延迟（移植自 kure29/flyx）。 */
-  latency?: InboundProbe;
-  /** 节点自选的测试点；null 表示跟随全局默认。 */
-  latencyTargets?: { points: string[]; pinned: string[] } | null;
-  // 后端 nullable* 下发：无值时为 null（列表经 any 映射透传，须按可空声明，B2 变体同步）。
-  remark?: string | null;
-  expiryTime?: number | null;
-  renewalCycle?: NodeRenewalCycle | null;
-  expiryReminderDismissed?: number;
-  ip: string;
-  serverIp: string;
-  serverIpV4?: string | null;
-  serverIpV6?: string | null;
-  port: string;
-  tcpListenAddr?: string;
-  udpListenAddr?: string;
-  extraIPs?: string | null;
-  version?: string | null;
-  http?: number; // 0 关 1 开
-  tls?: number; // 0 关 1 开
-  socks?: number; // 0 关 1 开
-  status: number;
-  isRemote?: number;
-  forwardMode?: "agent" | "nftables";
-  sshConfig?: {
-    host?: string;
-    port?: number;
-    username?: string;
-    authType?: "password" | "private_key";
-    password?: string;
-    privateKey?: string;
-    passphrase?: string;
-    sudoMode?: "none" | "sudo" | "sudo_su";
-  } | null;
-  remoteUrl?: string | null;
-  remoteToken?: string | null;
-  remoteConfig?: string | null;
-  interfaceName?: string | null;
-  syncError?: string;
-  connectionStatus: "online" | "offline";
-  systemInfo?: NodeSystemInfo | null;
-  copyLoading?: boolean;
-  upgradeLoading?: boolean;
-  rollbackLoading?: boolean;
-}
-
-interface NodeForm {
-  id: number | null;
-  name: string;
-  remark: string;
-  expiryTime: number;
-  renewalCycle: NodeRenewalCycle;
-  serverHost: string;
-  serverIpV4: string;
-  serverIpV6: string;
-  port: string;
-  tcpListenAddr: string;
-  udpListenAddr: string;
-  interfaceName: string;
-  extraIPs: string;
-  forwardMode: "agent" | "nftables";
-  sshHost: string;
-  sshPort: string;
-  sshUsername: string;
-  sshAuthType: "password" | "private_key";
-  sshPassword: string;
-  sshPrivateKey: string;
-  sshPassphrase: string;
-  sshSudoMode: "none" | "sudo" | "sudo_su";
-  http: number; // 0 关 1 开
-  tls: number; // 0 关 1 开
-  socks: number; // 0 关 1 开
-}
-
-type NodeTab = "local" | "remote";
-
-interface RemoteUsageBinding {
-  bindingId: number;
-  tunnelId: number;
-  tunnelName: string;
-  chainType: number;
-  hopInx: number;
-  allocatedPort: number;
-  resourceKey: string;
-  remoteBindingId: string;
-  updatedTime: number;
-}
-
-interface RemoteUsageNode {
-  nodeId: number;
-  nodeName: string;
-  remoteUrl: string;
-  shareId: number;
-  portRangeStart: number;
-  portRangeEnd: number;
-  maxBandwidth: number;
-  currentFlow: number;
-  usedPorts: number[];
-  bindings: RemoteUsageBinding[];
-  activeBindingNum: number;
-  syncError?: string;
-}
-
-const EXPIRING_SOON_DAYS = 7;
-
-type NodeExpiryState = "permanent" | "healthy" | "expiringSoon" | "expired";
-
-type NodeFilterMode = "all" | "expiringSoon" | "expired" | "withExpiry";
-
-const getNodeReminderEnabled = (node: Node): boolean => {
-  return !!node.expiryTime && node.expiryTime > 0 && !!node.renewalCycle;
-};
-
-const getNodeExpiryMeta = (
-  timestamp?: number | null,
-  cycle?: NodeRenewalCycle | null,
-) => {
-  const renewal = getNodeRenewalSnapshot(timestamp, cycle, EXPIRING_SOON_DAYS);
-
-  if (renewal.state === "unset") {
-    return {
-      state: "permanent" as NodeExpiryState,
-      label: "未设置续费周期",
-      tone: "default" as const,
-      accentClassName: "",
-      bannerClassName: "",
-      isHighlighted: false,
-      sortWeight: 3,
-      nextDueTime: undefined,
-    };
-  }
-
-  if (renewal.state === "expired") {
-    return {
-      state: "expired" as NodeExpiryState,
-      label: "已过期",
-      tone: "danger" as const,
-      accentClassName:
-        "border-red-300/80 bg-red-50/70 shadow-red-100 dark:border-red-500/40 dark:bg-red-950/20",
-      bannerClassName:
-        "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300",
-      isHighlighted: true,
-      sortWeight: 0,
-      nextDueTime: renewal.nextDueTime,
-    };
-  }
-
-  if (renewal.state === "dueSoon") {
-    return {
-      state: "expiringSoon" as NodeExpiryState,
-      label: renewal.label,
-      tone: "warning" as const,
-      accentClassName:
-        "border-amber-300/80 bg-amber-50/80 shadow-amber-100 dark:border-amber-500/40 dark:bg-amber-950/20",
-      bannerClassName:
-        "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300",
-      isHighlighted: true,
-      sortWeight: 1,
-      nextDueTime: renewal.nextDueTime,
-    };
-  }
-
-  return {
-    state: "healthy" as NodeExpiryState,
-    label: renewal.label,
-    tone: "success" as const,
-    accentClassName: "",
-    bannerClassName: "",
-    isHighlighted: false,
-    sortWeight: 2,
-    nextDueTime: renewal.nextDueTime,
-  };
-};
-
-const mergeNodeRealtimeState = (
-  incomingNode: Node,
-  existingNode?: Node,
-): Node => {
-  return {
-    ...incomingNode,
-    systemInfo: existingNode?.systemInfo ?? incomingNode.systemInfo ?? null,
-    copyLoading: existingNode?.copyLoading ?? incomingNode.copyLoading ?? false,
-    upgradeLoading:
-      existingNode?.upgradeLoading ?? incomingNode.upgradeLoading ?? false,
-    rollbackLoading:
-      existingNode?.rollbackLoading ?? incomingNode.rollbackLoading ?? false,
-  };
-};
-
-const SortableItem = ({
-  id,
-  children,
+export default function NodePage({
+  embedded = false,
+  addRequest = 0,
 }: {
-  id: number;
-  children: (listeners: any, attributes?: any) => any;
-}) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id });
-
-  const style: React.CSSProperties = {
-    transform: transform
-      ? CSS.Transform.toString({
-          ...transform,
-          x: Math.round(transform.x),
-          y: Math.round(transform.y),
-        })
-      : undefined,
-    transition: isDragging ? undefined : transition || undefined,
-    opacity: isDragging ? 0.5 : 1,
-    willChange: isDragging ? "transform" : undefined,
-  };
-
-  return (
-    <div ref={setNodeRef} className="overflow-visible h-full" style={style}>
-      {children(listeners, attributes)}
-    </div>
-  );
-};
-
-export default function NodePage() {
+  embedded?: boolean;
+  /** Bumped by the 节点 page header's 新建节点 when embedded. */
+  addRequest?: number;
+}) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
@@ -340,10 +123,6 @@ export default function NodePage() {
     "node-active-tab",
     "local",
   );
-  const [viewMode, setViewMode] = useLocalStorageState<"list" | "grid">(
-    "node-view-mode",
-    "grid",
-  );
 
   // Backward-compat: older versions stored extra tab values.
   useEffect(() => {
@@ -356,7 +135,6 @@ export default function NodePage() {
   >({});
   const [nodeFilterMode, setNodeFilterMode, resetNodeFilterMode] =
     useLocalStorageState<NodeFilterMode>("node-expiry-filter-mode", "all");
-  const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [dialogVisible, setDialogVisible] = useState(false);
   const [dialogTitle, setDialogTitle] = useState("");
@@ -365,6 +143,7 @@ export default function NodePage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [rollbackModalOpen, setRollbackModalOpen] = useState(false);
+  const [tuneNode, setTuneNode] = useState<Node | null>(null);
   const [nodeToRollback, setNodeToRollback] = useState<Node | null>(null);
   const [nodeToDelete, setNodeToDelete] = useState<Node | null>(null);
   const [protocolDisabled, setProtocolDisabled] = useState(false);
@@ -404,6 +183,48 @@ export default function NodePage() {
     : protocolDisabledReason || "等待节点上线后再设置";
 
   const [selectMode, setSelectMode] = useState(false);
+  const [viewMode, setViewMode] = useViewMode("node");
+  const card = viewMode === "card";
+  const [infoPopoverPlacement, setInfoPopoverPlacement] = useState<
+    Record<number, "left" | "bottom">
+  >({});
+
+  const updateInfoPopoverPlacement = useCallback(
+    (nodeId: number, triggerElement: HTMLElement | null) => {
+      if (!triggerElement) {
+        return;
+      }
+
+      const rect = triggerElement.getBoundingClientRect();
+      const cardElement = triggerElement.closest("[data-node-card='true']");
+      const cardRect =
+        cardElement instanceof HTMLElement
+          ? cardElement.getBoundingClientRect()
+          : null;
+      const estimatedPanelWidth = 288;
+      const containerPadding = 16;
+      const availableLeftSpace = cardRect
+        ? rect.left - cardRect.left
+        : rect.left;
+      const nextPlacement: "left" | "bottom" =
+        availableLeftSpace >= estimatedPanelWidth + containerPadding
+          ? "left"
+          : "bottom";
+
+      setInfoPopoverPlacement((prev) =>
+        prev[nodeId] === nextPlacement
+          ? prev
+          : { ...prev, [nodeId]: nextPlacement },
+      );
+    },
+    [],
+  );
+
+  const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
+  const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
+  const [routeNode, setRouteNode] = useState<Node | null>(null);
+  const [trendNode, setTrendNode] = useState<Node | null>(null);
+  const [targetNodes, setTargetNodes] = useState<Node[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
@@ -438,47 +259,6 @@ export default function NodePage() {
   const [upgradeProgress, setUpgradeProgress] = useState<
     Record<number, { stage: string; percent: number; message: string }>
   >({});
-
-  const [infoPopoverPlacement, setInfoPopoverPlacement] = useState<
-    Record<number, "left" | "bottom">
-  >({});
-
-  // 移植自 kure29/flyx：延迟探测、调优、路由追踪、测试点选择的状态。
-  const [tuneNode, setTuneNode] = useState<Node | null>(null);
-  const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
-  const [routeNode, setRouteNode] = useState<Node | null>(null);
-  const [targetNodes, setTargetNodes] = useState<Node[]>([]);
-
-  const updateInfoPopoverPlacement = useCallback(
-    (nodeId: number, triggerElement: HTMLElement | null) => {
-      if (!triggerElement) {
-        return;
-      }
-
-      const rect = triggerElement.getBoundingClientRect();
-      const cardElement = triggerElement.closest("[data-node-card='true']");
-      const cardRect =
-        cardElement instanceof HTMLElement
-          ? cardElement.getBoundingClientRect()
-          : null;
-      const estimatedPanelWidth = 288;
-      const containerPadding = 16;
-      const availableLeftSpace = cardRect
-        ? rect.left - cardRect.left
-        : rect.left;
-      const nextPlacement: "left" | "bottom" =
-        availableLeftSpace >= estimatedPanelWidth + containerPadding
-          ? "left"
-          : "bottom";
-
-      setInfoPopoverPlacement((prev) =>
-        prev[nodeId] === nextPlacement
-          ? prev
-          : { ...prev, [nodeId]: nextPlacement },
-      );
-    },
-    [],
-  );
 
   const handleNodeOffline = useCallback((nodeId: number) => {
     setNodeList((prev) =>
@@ -950,6 +730,11 @@ export default function NodePage() {
     setProtocolDisabledReason("节点未在线，等待节点上线后再设置");
   };
 
+  useEffect(() => {
+    if (addRequest > 0) handleAdd();
+    // Only a new request opens the dialog.
+  }, [addRequest]);
+
   // 编辑节点
   const handleEdit = (node: Node) => {
     setDialogTitle("编辑节点");
@@ -1382,8 +1167,10 @@ export default function NodePage() {
     try {
       const res = await probeNodeLatency([id]);
       const latency = res.code === 0 ? res.data?.[String(id)] : undefined;
+
       if (!latency) {
         toast.error(res.msg || "检测失败");
+
         return;
       }
       setNodeList((prev) =>
@@ -1394,24 +1181,44 @@ export default function NodePage() {
     } finally {
       setProbingIds((prev) => {
         const next = new Set(prev);
+
         next.delete(id);
+
         return next;
       });
     }
   };
 
   // 移植自 kure29/flyx：节点延迟单元格，卡片和列表两种变体。
+  // 显式空选测试点（latencyTargets.points 为空数组）= 不测延迟：渲染
+  // 「不测延迟」药丸（点击打开测试点设置），与测试点弹窗的文案承诺一致；
+  // 不能落进 LatencyCell 显示一个点了没反应的「检测」按钮（A1-015）。
   const renderLatency = (node: Node, variant: "card" | "list") =>
     node.isRemote !== 1 && node.connectionStatus === "online" ? (
-      <LatencyCell
-        note={node.latencyTargets ? "自定义" : undefined}
-        probe={node.latency}
-        probing={probingIds.has(node.id)}
-        variant={variant}
-        onEditTargets={() => setTargetNodes([node])}
-        onProbe={() => probeNode(node.id)}
-        onShowRoute={() => setRouteNode(node)}
-      />
+      node.latencyTargets?.points.length === 0 ? (
+        <button
+          className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
+          title="这台节点没选测试点，点此设置"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setTargetNodes([node]);
+          }}
+        >
+          不测延迟
+        </button>
+      ) : (
+        <LatencyCell
+          note={node.latencyTargets ? "自定义" : undefined}
+          probe={node.latency}
+          probing={probingIds.has(node.id)}
+          variant={variant}
+          onEditTargets={() => setTargetNodes([node])}
+          onProbe={() => probeNode(node.id)}
+          onShowRoute={() => setRouteNode(node)}
+          onShowTrend={() => setTrendNode(node)}
+        />
+      )
     ) : null;
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -1690,208 +1497,100 @@ export default function NodePage() {
   );
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
-      <div className="mb-6 space-y-3">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <Button
-            className="shrink-0"
-            color={activeTab === "local" ? "primary" : "default"}
-            size="sm"
-            variant={activeTab === "local" ? "solid" : "flat"}
-            onPress={() => setActiveTab("local")}
-          >
-            本地节点
-            <Chip
-              className="ml-1 shrink-0 whitespace-nowrap"
+    <PageShell embedded={embedded}>
+      {!embedded && (
+        <PageHeader
+          description="装了 agent 的服务器，用来搭建落地和中转"
+          primary={{ key: "add", label: "新建节点", onPress: handleAdd }}
+          title="节点"
+        />
+      )}
+      {remoteNodes.length > 0 && (
+        <PageTabs
+          tabs={[
+            { key: "local", label: "本地节点", badge: localNodes.length },
+            { key: "remote", label: "远程节点", badge: remoteNodes.length },
+          ]}
+          value={activeTab}
+          onChange={setActiveTab}
+        />
+      )}
+
+      {selectMode ? (
+        <SelectionBar
+          actions={[
+            {
+              key: "upgrade",
+              label: "升级",
+              disabled: !canBatchUpgrade || batchUpgradeLoading,
+              onPress: () => openUpgradeModal("batch"),
+            },
+            {
+              key: "targets",
+              label: "测试点",
+              disabled: !displayNodes.some(
+                (n) => selectedIds.has(n.id) && n.isRemote !== 1,
+              ),
+              onPress: () =>
+                setTargetNodes(
+                  displayNodes.filter(
+                    (n) => selectedIds.has(n.id) && n.isRemote !== 1,
+                  ),
+                ),
+            },
+            {
+              key: "delete",
+              label: "删除",
+              danger: true,
+              onPress: () => setBatchDeleteModalOpen(true),
+            },
+          ]}
+          allSelected={
+            displayNodes.length > 0 &&
+            displayNodes.every((n) => selectedIds.has(n.id))
+          }
+          count={selectedIds.size}
+          onExit={toggleSelectMode}
+          onToggleAll={() =>
+            displayNodes.every((n) => selectedIds.has(n.id))
+              ? deselectAll()
+              : selectAll()
+          }
+        />
+      ) : (
+        <PageToolbar
+          more={[
+            {
+              key: "batch",
+              label: "批量操作",
+              disabled: displayNodes.length === 0,
+              onPress: toggleSelectMode,
+            },
+          ]}
+          placeholder={
+            activeTab === "remote" ? "搜索远程节点名称或 IP" : "搜索名称或 IP"
+          }
+          search={currentSearchKeyword}
+          onSearch={setCurrentSearchKeyword}
+        >
+          {canUseExpiryFilter && (
+            <Button
+              className="shrink-0"
+              color={nodeFilterMode !== "all" ? "primary" : "default"}
               size="sm"
               variant="flat"
+              onPress={() => setIsFilterModalOpen(true)}
             >
-              {localNodes.length}
-            </Chip>
-          </Button>
-          <Button
-            className="shrink-0"
-            color={activeTab === "remote" ? "primary" : "default"}
-            size="sm"
-            variant={activeTab === "remote" ? "solid" : "flat"}
-            onPress={() => setActiveTab("remote")}
-          >
-            远程节点
-            <Chip
-              className="ml-1 shrink-0 whitespace-nowrap"
-              size="sm"
-              variant="flat"
-            >
-              {remoteNodes.length}
-            </Chip>
-          </Button>
-        </div>
-
-        <div className="flex flex-row items-center justify-between gap-3 overflow-x-auto pb-1">
-          <div
-            className={`flex-1 max-w-sm flex items-center gap-2 shrink-0 ${
-              isSearchVisible ? "min-w-[200px]" : "min-w-0"
-            }`}
-          >
-            <SearchBar
-              isVisible={isSearchVisible}
-              placeholder={
-                activeTab === "remote"
-                  ? "搜索远程节点名称或IP"
-                  : "搜索本地节点名称或IP"
-              }
-              value={currentSearchKeyword}
-              onChange={setCurrentSearchKeyword}
-              onClose={() => setIsSearchVisible(false)}
-              onOpen={() => {
-                setIsSearchVisible(true);
-                setTimeout(() => {
-                  // 精准抓取带有“搜索”字样的输入框并强制聚焦
-                  const searchInput = document.querySelector(
-                    'input[placeholder*="搜索"]',
-                  );
-
-                  if (searchInput) (searchInput as HTMLElement).focus();
-                }, 150); // 150ms 刚好是 CSS 展开动画的时间
-              }}
-            />
-          </div>
-
-          <div className="flex h-8 items-center justify-end gap-2 whitespace-nowrap shrink-0">
-            {selectMode ? (
-              <>
-                <span className="text-sm text-default-600 shrink-0">
-                  已选择 {selectedIds.size} 项
-                </span>
-                <Button
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={selectAll}
-                >
-                  全选
-                </Button>
-                <Button
-                  color="secondary"
-                  size="sm"
-                  variant="flat"
-                  onPress={deselectAll}
-                >
-                  清空
-                </Button>
-                <Button
-                  color="warning"
-                  isDisabled={selectedIds.size === 0 || !canBatchUpgrade}
-                  isLoading={batchUpgradeLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => openUpgradeModal("batch")}
-                >
-                  升级
-                </Button>
-                <Button
-                  color="danger"
-                  isDisabled={selectedIds.size === 0}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setBatchDeleteModalOpen(true)}
-                >
-                  删除
-                </Button>
-                <Button
-                  color="secondary"
-                  size="sm"
-                  variant="solid"
-                  onPress={toggleSelectMode}
-                >
-                  退出
-                </Button>
-              </>
-            ) : (
-              <>
-                {/* 视图切换按钮 */}
-                <Button
-                  isIconOnly
-                  className="text-default-600 hidden sm:flex"
-                  size="sm"
-                  variant="flat"
-                  onPress={() =>
-                    setViewMode(viewMode === "list" ? "grid" : "list")
-                  }
-                >
-                  {viewMode === "list" ? (
-                    <LayoutGrid className="w-4 h-4" />
-                  ) : (
-                    <List className="w-4 h-4" />
-                  )}
-                </Button>
-
-                {/* 筛选按钮 */}
-                <Button
-                  isIconOnly
-                  aria-label="筛选条件"
-                  className={
-                    canUseExpiryFilter && nodeFilterMode !== "all"
-                      ? "bg-primary/20 text-primary relative"
-                      : "text-default-600 relative"
-                  }
-                  color={
-                    canUseExpiryFilter && nodeFilterMode !== "all"
-                      ? "primary"
-                      : "default"
-                  }
-                  isDisabled={!canUseExpiryFilter}
-                  size="sm"
-                  title={
-                    canUseExpiryFilter ? "筛选条件" : "远程节点不支持到期筛选"
-                  }
-                  variant="flat"
-                  onPress={() => setIsFilterModalOpen(true)}
-                >
-                  <svg
-                    aria-hidden="true"
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                    />
-                  </svg>
-                  {canUseExpiryFilter && nodeFilterMode !== "all" && (
-                    <span className="absolute top-1.5 right-1.5 flex h-1.5 w-1.5 rounded-full bg-primary" />
-                  )}
-                </Button>
-                <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/45"
-                  color="default"
-                  size="sm"
-                  variant="flat"
-                  onPress={toggleSelectMode}
-                >
-                  批量
-                </Button>
-                <Button
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={handleAdd}
-                >
-                  新增
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+              {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
+            </Button>
+          )}
+          <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        </PageToolbar>
+      )}
 
       {!wsConnected && (
         <Alert
-          className="mb-4"
+          className="mb-3"
           color="warning"
           description={
             wsConnecting
@@ -1904,719 +1603,633 @@ export default function NodePage() {
         />
       )}
 
-      {/* 节点列表 */}
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : nodeList.length === 0 ? (
-        <PageEmptyState
-          className="h-64"
-          message="暂无节点配置，点击上方按钮开始创建"
+        <EmptyHint
+          action={{ key: "add", label: "新建节点", onPress: handleAdd }}
+          text="还没有节点。新建后在服务器上运行安装命令，节点就会连上面板"
         />
       ) : displayNodes.length === 0 ? (
-        <PageEmptyState
-          className="h-64"
-          message={
+        <EmptyHint
+          text={
             isDisplayFiltered
-              ? activeTab === "remote"
-                ? "未找到匹配的远程节点"
-                : "未找到匹配的本地节点"
+              ? "没有匹配的节点"
               : activeTab === "remote"
                 ? "暂无远程节点"
-                : "暂无本地节点，点击上方按钮开始创建"
+                : "暂无本地节点"
           }
         />
-      ) : viewMode === "list" ? (
-        <Card>
-          <Table
-            aria-label="节点列表"
-            className="overflow-x-auto min-w-full"
-            classNames={{
-              wrapper:
-                "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-              th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-              td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-              tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors",
-            }}
-          >
-            <TableHeader>
-              <TableColumn className="w-12 px-4 whitespace-nowrap overflow-hidden">
-                <Checkbox
-                  isSelected={
-                    selectMode &&
-                    selectedIds.size === displayNodes.length &&
-                    displayNodes.length > 0
-                  }
-                  onValueChange={(checked) => {
-                    if (checked) {
-                      selectAll();
-                      setSelectMode(true);
-                    } else {
-                      deselectAll();
-                      setSelectMode(false);
-                    }
-                  }}
-                />
-              </TableColumn>
-              <TableColumn>节点名称</TableColumn>
-              <TableColumn>地址</TableColumn>
-              <TableColumn>版本</TableColumn>
-              <TableColumn>延迟</TableColumn>
-              <TableColumn>操作</TableColumn>
-            </TableHeader>
-            <TableBody items={displayNodes}>
-              {(node) => {
-                const isRemoteNode = node.isRemote === 1;
-                const hasRemark = Boolean(node.remark?.trim());
-
-                return (
-                  <TableRow key={node.id}>
-                    <TableCell className="px-4">
-                      <Checkbox
-                        isSelected={selectedIds.has(node.id)}
-                        onValueChange={(checked) => {
-                          if (checked) {
-                            setSelectMode(true);
-                            setSelectedIds(
-                              (prev) => new Set([...prev, node.id]),
-                            );
-                          } else {
-                            setSelectedIds((prev) => {
-                              const next = new Set(prev);
-
-                              next.delete(node.id);
-                              if (next.size === 0) setSelectMode(false);
-
-                              return next;
-                            });
-                          }
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <div
-                          className={`shrink-0 w-2 h-2 rounded-full ${
-                            node.connectionStatus === "online"
-                              ? "bg-success"
-                              : node.syncError
-                                ? "bg-danger"
-                                : "bg-default-400"
-                          } ${node.systemInfo && node.connectionStatus === "online" ? "animate-pulse" : ""}`}
-                        />
-                        <span className="font-medium text-foreground text-sm">
-                          {node.name}
-                        </span>
-                        {hasRemark && (
-                          <Chip
-                            className="h-4 px-1 text-[10px]"
-                            size="sm"
-                            variant="flat"
-                          >
-                            {node.remark}
-                          </Chip>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm font-mono text-default-600">
-                        {isRemoteNode
-                          ? new URL(node.remoteUrl || "").hostname
-                          : node.serverIp}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-default-500">
-                        {node.version || "-"}
-                      </span>
-                    </TableCell>
-                    <TableCell>{renderLatency(node, "list")}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-1.5 min-w-max">
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400"
-                            isLoading={node.copyLoading}
-                            size="sm"
-                            variant="flat"
-                            onPress={() => openInstallSelector(node)}
-                          >
-                            安装
-                          </Button>
-                        )}
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-400"
-                            isDisabled={node.connectionStatus !== "online"}
-                            isLoading={node.upgradeLoading}
-                            size="sm"
-                            variant="flat"
-                            onPress={() => {
-                              setUpgradeTargetNodeId(node.id);
-                              openUpgradeModal("single");
-                            }}
-                          >
-                            升级
-                          </Button>
-                        )}
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-400"
-                            isDisabled={node.connectionStatus !== "online"}
-                            isLoading={node.rollbackLoading}
-                            size="sm"
-                            variant="flat"
-                            onPress={() => handleRollbackNode(node)}
-                          >
-                            回退
-                          </Button>
-                        )}
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:text-indigo-400"
-                            size="sm"
-                            variant="flat"
-                            onPress={() => handleEdit(node)}
-                          >
-                            编辑
-                          </Button>
-                        )}
-                        {!isRemoteNode && node.forwardMode !== "nftables" && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-teal-50 text-teal-600 hover:bg-teal-100 dark:bg-teal-950/30 dark:text-teal-400"
-                            size="sm"
-                            variant="flat"
-                            isDisabled={node.connectionStatus !== "online"}
-                            title={
-                              node.forwardMode === "nftables"
-                                ? "nftables 模式不支持调优"
-                                : "网络调优"
-                            }
-                            onPress={() => setTuneNode(node)}
-                          >
-                            调优
-                          </Button>
-                        )}
-                        <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/30 dark:text-rose-400"
-                          size="sm"
-                          variant="flat"
-                          onPress={() => handleDelete(node)}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              }}
-            </TableBody>
-          </Table>
-        </Card>
       ) : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <SortableContext
             items={sortableNodeIds}
             strategy={rectSortingStrategy}
           >
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+            <div
+              className={
+                card ? CARD_GRID : "grid grid-cols-1 gap-2 2xl:grid-cols-2"
+              }
+            >
               {displayNodes.map((node) => {
+                if (card) {
+                  const isRemoteNode = node.isRemote === 1;
+                  const remoteUsage = isRemoteNode
+                    ? remoteUsageMap[node.id]
+                    : null;
+                  const expiryMeta = getNodeExpiryMeta(
+                    node.expiryTime,
+                    node.renewalCycle,
+                  );
+                  const connectionStatusMeta = getConnectionStatusMeta(
+                    node.connectionStatus,
+                  );
+                  const hasRemark = Boolean(node.remark?.trim());
+                  const hasExpiryInfo = Boolean(
+                    node.expiryTime &&
+                      node.expiryTime > 0 &&
+                      node.renewalCycle &&
+                      !node.expiryReminderDismissed,
+                  );
+                  const hasInfoTrigger = hasRemark || hasExpiryInfo;
+                  const infoCount = Number(hasExpiryInfo) + Number(hasRemark);
+                  const infoPlacement = infoPopoverPlacement[node.id] ?? "left";
+
+                  return (
+                    <SortableItem key={node.id} id={node.id}>
+                      {(listeners) => (
+                        <Card
+                          key={node.id}
+                          className={`group relative overflow-visible h-full flex flex-col ${node.expiryReminderDismissed ? "" : expiryMeta.accentClassName}`}
+                          data-node-card="true"
+                        >
+                          <CardHeader className="pb-3 md:pb-3">
+                            <div className="flex justify-between items-start w-full gap-3">
+                              <div className="flex items-start gap-2 flex-1 min-w-0">
+                                <div
+                                  className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
+                                  {...listeners}
+                                  style={{ touchAction: "none" }}
+                                  title="拖拽排序"
+                                >
+                                  <svg
+                                    aria-hidden="true"
+                                    className="w-4 h-4"
+                                    fill="currentColor"
+                                    viewBox="0 0 20 20"
+                                  >
+                                    <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
+                                  </svg>
+                                </div>
+                                {selectMode && (
+                                  <Checkbox
+                                    className="mt-0.5"
+                                    isSelected={selectedIds.has(node.id)}
+                                    onValueChange={() => toggleSelect(node.id)}
+                                  />
+                                )}
+                                <div className="min-w-0 flex-1 pt-0.5">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <h3 className="font-semibold text-foreground truncate text-lg leading-5">
+                                      {node.name}
+                                    </h3>
+                                    <div
+                                      className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0
+                                      ${connectionStatusMeta.color === "success" ? "bg-emerald-500/20 text-emerald-600" : "bg-rose-500/20 text-rose-600"}
+                                    `}
+                                      title={connectionStatusMeta.text}
+                                    >
+                                      <span
+                                        className={`h-1.5 w-1.5 rounded-full ${connectionStatusMeta.color === "success" ? "bg-emerald-500" : "bg-rose-500"}`}
+                                      />
+                                      {connectionStatusMeta.text}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="ml-2 flex-shrink-0 self-start">
+                                {hasInfoTrigger && (
+                                  <div className="group/info relative">
+                                    <button
+                                      aria-label={`查看节点信息，共 ${infoCount} 项`}
+                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-background/95 text-default-500 shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
+                                      type="button"
+                                      onFocus={(event) =>
+                                        updateInfoPopoverPlacement(
+                                          node.id,
+                                          event.currentTarget,
+                                        )
+                                      }
+                                      onMouseEnter={(event) =>
+                                        updateInfoPopoverPlacement(
+                                          node.id,
+                                          event.currentTarget,
+                                        )
+                                      }
+                                    >
+                                      <svg
+                                        aria-hidden="true"
+                                        className="h-3.5 w-3.5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                      >
+                                        <path
+                                          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          strokeWidth={1.8}
+                                        />
+                                      </svg>
+                                      {hasRemark && (
+                                        <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5 rounded-full border border-background bg-default-300 shadow-sm dark:bg-default-500" />
+                                      )}
+                                    </button>
+                                    <div
+                                      className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl border border-divider/80 bg-background/98 p-3 opacity-0 shadow-xl backdrop-blur transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
+                                        infoPlacement === "bottom"
+                                          ? "right-0 top-[calc(100%+0.75rem)] translate-y-1 group-hover/info:translate-y-0 group-focus-within/info:translate-y-0"
+                                          : "right-[calc(100%+0.75rem)] top-1/2 -translate-y-1/2 translate-x-1 group-hover/info:translate-x-0 group-focus-within/info:translate-x-0"
+                                      }`}
+                                    >
+                                      <div className="space-y-3">
+                                        {hasExpiryInfo && (
+                                          <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                              <div className="text-[11px] font-medium text-default-500">
+                                                到期提醒
+                                              </div>
+                                              <button
+                                                className="text-[10px] text-default-400 hover:text-default-600 transition-colors"
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleDismissExpiryReminder(
+                                                    node.id,
+                                                  );
+                                                }}
+                                              >
+                                                关闭提醒
+                                              </button>
+                                            </div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                              <Chip
+                                                className="text-[10px] h-5 px-1 flex-shrink-0"
+                                                color={expiryMeta.tone}
+                                                size="sm"
+                                                title={`${formatNodeRenewalTime(expiryMeta.nextDueTime)} (${getNodeRenewalCycleLabel(node.renewalCycle)})`}
+                                                variant="flat"
+                                              >
+                                                {expiryMeta.label}
+                                              </Chip>
+                                            </div>
+                                            <div className="rounded-lg border border-divider/80 bg-default-50/80 px-3 py-2 text-xs leading-5 text-default-700">
+                                              {formatNodeRenewalTime(
+                                                expiryMeta.nextDueTime,
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {hasRemark && (
+                                          <div className="space-y-2">
+                                            <div className="text-[11px] font-medium text-default-500">
+                                              备注
+                                            </div>
+                                            <div
+                                              className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 bg-default-50/80 px-3 py-2 text-xs leading-5 text-default-700 break-all [scrollbar-width:thin]"
+                                              title={node.remark?.trim()}
+                                            >
+                                              {node.remark?.trim()}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </CardHeader>
+
+                          <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
+                            {isRemoteNode && node.syncError && (
+                              <div className="mb-3 px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-100/10 text-warning-700 dark:text-warning-400 text-xs">
+                                {getRemoteSyncErrorMessage(node.syncError)}
+                              </div>
+                            )}
+                            {/* 基础信息 */}
+                            <div className="space-y-2 mb-4">
+                              {node.expiryTime &&
+                                node.expiryTime > 0 &&
+                                node.renewalCycle && <div className="hidden" />}
+                              <div className="flex justify-between items-center text-sm min-w-0">
+                                <span className="text-default-600 flex-shrink-0">
+                                  IP
+                                </span>
+                                <div className="text-right text-xs min-w-0 flex-1 ml-2 min-h-[2.125rem]">
+                                  {node.serverIpV4?.trim() ||
+                                  node.serverIpV6?.trim() ? (
+                                    <div className="space-y-0.5">
+                                      {node.serverIpV4?.trim() && (
+                                        <span
+                                          className="font-mono truncate block"
+                                          title={node.serverIpV4.trim()}
+                                        >
+                                          {node.serverIpV4.trim()}
+                                        </span>
+                                      )}
+                                      {node.serverIpV6?.trim() && (
+                                        <span
+                                          className="font-mono truncate block"
+                                          title={node.serverIpV6.trim()}
+                                        >
+                                          {node.serverIpV6.trim()}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span
+                                      className="font-mono truncate block"
+                                      title={node.serverIp.trim()}
+                                    >
+                                      {node.serverIp.trim()}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              {!isRemoteNode && (
+                                <>
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-default-600">
+                                      版本
+                                    </span>
+                                    <span className="text-xs">
+                                      {node.version || "未知"}
+                                    </span>
+                                  </div>
+                                  {upgradeProgress[node.id] &&
+                                    upgradeProgress[node.id].percent < 100 && (
+                                      <div className="mt-1">
+                                        <Progress
+                                          showValueLabel
+                                          aria-label="升级进度"
+                                          color="warning"
+                                          label={
+                                            upgradeProgress[node.id].message
+                                          }
+                                          size="sm"
+                                          value={
+                                            upgradeProgress[node.id].percent
+                                          }
+                                        />
+                                      </div>
+                                    )}
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-default-600">
+                                      开机时间
+                                    </span>
+                                    <span className="text-xs">
+                                      {node.connectionStatus === "online" &&
+                                      node.systemInfo
+                                        ? formatUptime(node.systemInfo.uptime)
+                                        : "-"}
+                                    </span>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
+                            {isRemoteNode && (
+                              <div className="space-y-3 mb-4">
+                                {remoteUsage ? (
+                                  <>
+                                    <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5 space-y-2">
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-default-500">
+                                          远程地址
+                                        </span>
+                                        <span
+                                          className="font-mono text-right truncate"
+                                          title={
+                                            remoteUsage.remoteUrl ||
+                                            node.remoteUrl ||
+                                            "-"
+                                          }
+                                        >
+                                          {remoteUsage.remoteUrl ||
+                                            node.remoteUrl ||
+                                            "-"}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-default-500">
+                                          共享ID
+                                        </span>
+                                        <span className="font-mono">
+                                          #{remoteUsage.shareId}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-default-500">
+                                          流量
+                                        </span>
+                                        <span className="font-mono">
+                                          {formatFlow(remoteUsage.currentFlow)}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-default-500">
+                                          带宽上限
+                                        </span>
+                                        <span className="font-mono">
+                                          {remoteUsage.maxBandwidth > 0
+                                            ? formatSpeed(
+                                                remoteUsage.maxBandwidth,
+                                              )
+                                            : "不限"}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <span className="text-default-500">
+                                          占用端口
+                                        </span>
+                                        <span className="font-mono text-default-700 dark:text-default-300">
+                                          {remoteUsage.usedPorts.length}/
+                                          {Math.max(
+                                            remoteUsage.portRangeEnd -
+                                              remoteUsage.portRangeStart +
+                                              1,
+                                            0,
+                                          )}
+                                        </span>
+                                      </div>
+                                      <div className="max-h-20 overflow-y-auto rounded bg-white/10 dark:bg-black/10 p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
+                                        {remoteUsage.usedPorts.length > 0 ? (
+                                          <div className="flex flex-wrap gap-1">
+                                            {remoteUsage.usedPorts.map(
+                                              (port) => (
+                                                <Chip
+                                                  key={`${node.id}-port-${port}`}
+                                                  className="font-mono shrink-0 whitespace-nowrap"
+                                                  size="sm"
+                                                  variant="flat"
+                                                >
+                                                  {port}
+                                                </Chip>
+                                              ),
+                                            )}
+                                          </div>
+                                        ) : (
+                                          <div className="text-default-400">
+                                            暂无占用端口
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <span className="text-default-500">
+                                          绑定明细
+                                        </span>
+                                        <span className="font-mono text-default-700 dark:text-default-300">
+                                          {remoteUsage.activeBindingNum}
+                                        </span>
+                                      </div>
+                                      <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
+                                        {remoteUsage.bindings.length > 0 ? (
+                                          remoteUsage.bindings.map(
+                                            (binding) => (
+                                              <div
+                                                key={binding.bindingId}
+                                                className="rounded border border-default-200 dark:border-default-100/30 bg-white/10 dark:bg-black/10 p-2"
+                                              >
+                                                <div className="flex items-center justify-between gap-2">
+                                                  <span
+                                                    className="font-medium truncate"
+                                                    title={binding.tunnelName}
+                                                  >
+                                                    {binding.tunnelName}
+                                                  </span>
+                                                  <span className="font-mono text-[11px]">
+                                                    #{binding.tunnelId}
+                                                  </span>
+                                                </div>
+                                                <div className="mt-1 text-[11px] text-default-500 flex items-center justify-between gap-2">
+                                                  <span>
+                                                    {formatChainType(
+                                                      binding.chainType,
+                                                      binding.hopInx,
+                                                    )}
+                                                  </span>
+                                                  <span className="font-mono">
+                                                    端口 {binding.allocatedPort}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            ),
+                                          )
+                                        ) : (
+                                          <div className="text-default-400">
+                                            暂无绑定明细
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5 text-default-500">
+                                    暂未获取到远程占用数据
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {node.latency && (
+                              <div className="mb-4 empty:hidden">
+                                {renderLatency(node, "card")}
+                              </div>
+                            )}
+
+                            <div className="mt-auto space-y-3">
+                              {/* 操作按钮 */}
+                              <div className="space-y-1.5">
+                                {!isRemoteNode && (
+                                  <div className="grid grid-cols-3 gap-1.5">
+                                    <Button
+                                      className="min-h-8"
+                                      color="success"
+                                      isLoading={node.copyLoading}
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() => openInstallSelector(node)}
+                                    >
+                                      安装
+                                    </Button>
+                                    <Button
+                                      className="min-h-8"
+                                      color="warning"
+                                      isDisabled={
+                                        node.connectionStatus !== "online"
+                                      }
+                                      isLoading={node.upgradeLoading}
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() =>
+                                        openUpgradeModal("single", node.id)
+                                      }
+                                    >
+                                      升级
+                                    </Button>
+                                    <Button
+                                      className="min-h-8"
+                                      color="secondary"
+                                      isDisabled={
+                                        node.connectionStatus !== "online"
+                                      }
+                                      isLoading={node.rollbackLoading}
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() => handleRollbackNode(node)}
+                                    >
+                                      回退
+                                    </Button>
+                                  </div>
+                                )}
+                                <div
+                                  className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-3"}`}
+                                >
+                                  {!isRemoteNode && (
+                                    <Button
+                                      className="min-h-8"
+                                      color="success"
+                                      isDisabled={
+                                        node.connectionStatus !== "online"
+                                      }
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() => setTuneNode(node)}
+                                    >
+                                      调优
+                                    </Button>
+                                  )}
+                                  {!isRemoteNode && (
+                                    <Button
+                                      className="min-h-8"
+                                      color="primary"
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() => handleEdit(node)}
+                                    >
+                                      编辑
+                                    </Button>
+                                  )}
+                                  <Button
+                                    className="min-h-8"
+                                    color="danger"
+                                    size="sm"
+                                    variant="flat"
+                                    onPress={() => handleDelete(node)}
+                                  >
+                                    删除
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          </CardBody>
+                        </Card>
+                      )}
+                    </SortableItem>
+                  );
+                }
+
                 const isRemoteNode = node.isRemote === 1;
-                const remoteUsage = isRemoteNode
-                  ? remoteUsageMap[node.id]
-                  : null;
+                const online = node.connectionStatus === "online";
                 const expiryMeta = getNodeExpiryMeta(
                   node.expiryTime,
                   node.renewalCycle,
                 );
-                const connectionStatusMeta = getConnectionStatusMeta(
-                  node.connectionStatus,
-                );
-                const hasRemark = Boolean(node.remark?.trim());
-                const hasExpiryInfo = Boolean(
+                const showExpiry = Boolean(
                   node.expiryTime &&
                     node.expiryTime > 0 &&
                     node.renewalCycle &&
-                    !node.expiryReminderDismissed,
+                    !node.expiryReminderDismissed &&
+                    expiryMeta.isHighlighted,
                 );
-                const hasInfoTrigger = hasRemark || hasExpiryInfo;
-                const infoCount = Number(hasExpiryInfo) + Number(hasRemark);
-                const infoPlacement = infoPopoverPlacement[node.id] ?? "left";
+                const progress = upgradeProgress[node.id];
+                const upgrading = progress && progress.percent < 100;
+                const address =
+                  node.serverIpV4?.trim() ||
+                  node.serverIpV6?.trim() ||
+                  node.serverIp.trim();
+                const meta = isRemoteNode
+                  ? [address, node.syncError ? "同步失败" : ""]
+                  : [
+                      address,
+                      upgrading
+                        ? `升级中 ${progress.percent}%`
+                        : node.version || "未连接过",
+                      online && node.systemInfo
+                        ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
+                        : "",
+                    ];
 
                 return (
                   <SortableItem key={node.id} id={node.id}>
                     {(listeners) => (
-                      <Card
-                        key={node.id}
-                        className={`group relative overflow-visible h-full flex flex-col ${node.expiryReminderDismissed ? "" : expiryMeta.accentClassName}`}
-                        data-node-card="true"
-                      >
-                        <CardHeader className="pb-3 md:pb-3">
-                          <div className="flex justify-between items-start w-full gap-3">
-                            <div className="flex items-start gap-2 flex-1 min-w-0">
-                              <div
-                                className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
-                                {...listeners}
-                                style={{ touchAction: "none" }}
-                                title="拖拽排序"
+                      <ListRow
+                        badges={
+                          <>
+                            {isRemoteNode && (
+                              <Chip
+                                className="shrink-0"
+                                size="sm"
+                                variant="flat"
                               >
-                                <svg
-                                  aria-hidden="true"
-                                  className="w-4 h-4"
-                                  fill="currentColor"
-                                  viewBox="0 0 20 20"
-                                >
-                                  <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
-                                </svg>
-                              </div>
-                              {selectMode && (
-                                <Checkbox
-                                  className="mt-0.5"
-                                  isSelected={selectedIds.has(node.id)}
-                                  onValueChange={() => toggleSelect(node.id)}
-                                />
-                              )}
-                              <div className="min-w-0 flex-1 pt-0.5">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <h3 className="font-semibold text-foreground truncate text-lg leading-5">
-                                    {node.name}
-                                  </h3>
-                                  <div
-                                    className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0
-                                      ${connectionStatusMeta.color === "success" ? "bg-emerald-500/20 text-emerald-600" : "bg-rose-500/20 text-rose-600"}
-                                    `}
-                                    title={connectionStatusMeta.text}
-                                  >
-                                    <span
-                                      className={`h-1.5 w-1.5 rounded-full ${connectionStatusMeta.color === "success" ? "bg-emerald-500" : "bg-rose-500"}`}
-                                    />
-                                    {connectionStatusMeta.text}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="ml-2 flex-shrink-0 self-start">
-                              {hasInfoTrigger && (
-                                <div className="group/info relative">
-                                  <button
-                                    aria-label={`查看节点信息，共 ${infoCount} 项`}
-                                    className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-background/95 text-default-500 shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
-                                    type="button"
-                                    onFocus={(event) =>
-                                      updateInfoPopoverPlacement(
-                                        node.id,
-                                        event.currentTarget,
-                                      )
-                                    }
-                                    onMouseEnter={(event) =>
-                                      updateInfoPopoverPlacement(
-                                        node.id,
-                                        event.currentTarget,
-                                      )
-                                    }
-                                  >
-                                    <svg
-                                      aria-hidden="true"
-                                      className="h-3.5 w-3.5"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={1.8}
-                                      />
-                                    </svg>
-                                    {hasRemark && (
-                                      <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5 rounded-full border border-background bg-default-300 shadow-sm dark:bg-default-500" />
-                                    )}
-                                  </button>
-                                  <div
-                                    className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl border border-divider/80 bg-background/98 p-3 opacity-0 shadow-xl backdrop-blur transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
-                                      infoPlacement === "bottom"
-                                        ? "right-0 top-[calc(100%+0.75rem)] translate-y-1 group-hover/info:translate-y-0 group-focus-within/info:translate-y-0"
-                                        : "right-[calc(100%+0.75rem)] top-1/2 -translate-y-1/2 translate-x-1 group-hover/info:translate-x-0 group-focus-within/info:translate-x-0"
-                                    }`}
-                                  >
-                                    <div className="space-y-3">
-                                      {hasExpiryInfo && (
-                                        <div className="space-y-2">
-                                          <div className="flex items-center justify-between">
-                                            <div className="text-[11px] font-medium text-default-500">
-                                              到期提醒
-                                            </div>
-                                            <button
-                                              className="text-[10px] text-default-400 hover:text-default-600 transition-colors"
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleDismissExpiryReminder(
-                                                  node.id,
-                                                );
-                                              }}
-                                            >
-                                              关闭提醒
-                                            </button>
-                                          </div>
-                                          <div className="flex flex-wrap gap-1.5">
-                                            <Chip
-                                              className="text-[10px] h-5 px-1 flex-shrink-0"
-                                              color={expiryMeta.tone}
-                                              size="sm"
-                                              title={`${formatNodeRenewalTime(expiryMeta.nextDueTime)} (${getNodeRenewalCycleLabel(node.renewalCycle)})`}
-                                              variant="flat"
-                                            >
-                                              {expiryMeta.label}
-                                            </Chip>
-                                          </div>
-                                          <div className="rounded-lg border border-divider/80 bg-default-50/80 px-3 py-2 text-xs leading-5 text-default-700">
-                                            {formatNodeRenewalTime(
-                                              expiryMeta.nextDueTime,
-                                            )}
-                                          </div>
-                                        </div>
-                                      )}
-
-                                      {hasRemark && (
-                                        <div className="space-y-2">
-                                          <div className="text-[11px] font-medium text-default-500">
-                                            备注
-                                          </div>
-                                          <div
-                                            className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 bg-default-50/80 px-3 py-2 text-xs leading-5 text-default-700 break-all [scrollbar-width:thin]"
-                                            title={node.remark?.trim()}
-                                          >
-                                            {node.remark?.trim()}
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </CardHeader>
-
-                        <div className="px-4 empty:hidden">
-                          {renderLatency(node, "card")}
-                        </div>
-
-                        <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
-                          {isRemoteNode && node.syncError && (
-                            <div className="mb-3 px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-100/10 text-warning-700 dark:text-warning-400 text-xs">
-                              {getRemoteSyncErrorMessage(node.syncError)}
-                            </div>
-                          )}
-                          {/* 基础信息 */}
-                          <div className="space-y-2 mb-4">
-                            {node.expiryTime &&
-                              node.expiryTime > 0 &&
-                              node.renewalCycle && <div className="hidden" />}
-                            <div className="flex justify-between items-center text-sm min-w-0">
-                              <span className="text-default-600 flex-shrink-0">
-                                IP
-                              </span>
-                              <div className="text-right text-xs min-w-0 flex-1 ml-2 min-h-[2.125rem]">
-                                {node.serverIpV4?.trim() ||
-                                node.serverIpV6?.trim() ? (
-                                  <div className="space-y-0.5">
-                                    {node.serverIpV4?.trim() && (
-                                      <span
-                                        className="font-mono truncate block"
-                                        title={node.serverIpV4.trim()}
-                                      >
-                                        {node.serverIpV4.trim()}
-                                      </span>
-                                    )}
-                                    {node.serverIpV6?.trim() && (
-                                      <span
-                                        className="font-mono truncate block"
-                                        title={node.serverIpV6.trim()}
-                                      >
-                                        {node.serverIpV6.trim()}
-                                      </span>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <span
-                                    className="font-mono truncate block"
-                                    title={node.serverIp.trim()}
-                                  >
-                                    {node.serverIp.trim()}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            {!isRemoteNode && (
-                              <>
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-default-600">版本</span>
-                                  <span className="text-xs">
-                                    {node.version || "未知"}
-                                  </span>
-                                </div>
-                                {upgradeProgress[node.id] &&
-                                  upgradeProgress[node.id].percent < 100 && (
-                                    <div className="mt-1">
-                                      <Progress
-                                        showValueLabel
-                                        aria-label="升级进度"
-                                        color="warning"
-                                        label={upgradeProgress[node.id].message}
-                                        size="sm"
-                                        value={upgradeProgress[node.id].percent}
-                                      />
-                                    </div>
-                                  )}
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-default-600">
-                                    开机时间
-                                  </span>
-                                  <span className="text-xs">
-                                    {node.connectionStatus === "online" &&
-                                    node.systemInfo
-                                      ? formatUptime(node.systemInfo.uptime)
-                                      : "-"}
-                                  </span>
-                                </div>
-                              </>
+                                远程
+                              </Chip>
                             )}
-                          </div>
-
-                          {isRemoteNode && (
-                            <div className="space-y-3 mb-4">
-                              {remoteUsage ? (
-                                <>
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5 space-y-2">
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        远程地址
-                                      </span>
-                                      <span
-                                        className="font-mono text-right truncate"
-                                        title={
-                                          remoteUsage.remoteUrl ||
-                                          node.remoteUrl ||
-                                          "-"
-                                        }
-                                      >
-                                        {remoteUsage.remoteUrl ||
-                                          node.remoteUrl ||
-                                          "-"}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        共享ID
-                                      </span>
-                                      <span className="font-mono">
-                                        #{remoteUsage.shareId}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        流量
-                                      </span>
-                                      <span className="font-mono">
-                                        {formatFlow(remoteUsage.currentFlow)}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        带宽上限
-                                      </span>
-                                      <span className="font-mono">
-                                        {remoteUsage.maxBandwidth > 0
-                                          ? formatSpeed(
-                                              remoteUsage.maxBandwidth,
-                                            )
-                                          : "不限"}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <span className="text-default-500">
-                                        占用端口
-                                      </span>
-                                      <span className="font-mono text-default-700 dark:text-default-300">
-                                        {remoteUsage.usedPorts.length}/
-                                        {Math.max(
-                                          remoteUsage.portRangeEnd -
-                                            remoteUsage.portRangeStart +
-                                            1,
-                                          0,
-                                        )}
-                                      </span>
-                                    </div>
-                                    <div className="max-h-20 overflow-y-auto rounded bg-white/10 dark:bg-black/10 p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
-                                      {remoteUsage.usedPorts.length > 0 ? (
-                                        <div className="flex flex-wrap gap-1">
-                                          {remoteUsage.usedPorts.map((port) => (
-                                            <Chip
-                                              key={`${node.id}-port-${port}`}
-                                              className="font-mono shrink-0 whitespace-nowrap"
-                                              size="sm"
-                                              variant="flat"
-                                            >
-                                              {port}
-                                            </Chip>
-                                          ))}
-                                        </div>
-                                      ) : (
-                                        <div className="text-default-400">
-                                          暂无占用端口
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <span className="text-default-500">
-                                        绑定明细
-                                      </span>
-                                      <span className="font-mono text-default-700 dark:text-default-300">
-                                        {remoteUsage.activeBindingNum}
-                                      </span>
-                                    </div>
-                                    <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
-                                      {remoteUsage.bindings.length > 0 ? (
-                                        remoteUsage.bindings.map((binding) => (
-                                          <div
-                                            key={binding.bindingId}
-                                            className="rounded border border-default-200 dark:border-default-100/30 bg-white/10 dark:bg-black/10 p-2"
-                                          >
-                                            <div className="flex items-center justify-between gap-2">
-                                              <span
-                                                className="font-medium truncate"
-                                                title={binding.tunnelName}
-                                              >
-                                                {binding.tunnelName}
-                                              </span>
-                                              <span className="font-mono text-[11px]">
-                                                #{binding.tunnelId}
-                                              </span>
-                                            </div>
-                                            <div className="mt-1 text-[11px] text-default-500 flex items-center justify-between gap-2">
-                                              <span>
-                                                {formatChainType(
-                                                  binding.chainType,
-                                                  binding.hopInx,
-                                                )}
-                                              </span>
-                                              <span className="font-mono">
-                                                端口 {binding.allocatedPort}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <div className="text-default-400">
-                                          暂无绑定明细
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5 text-default-500">
-                                  暂未获取到远程占用数据
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="mt-auto space-y-3">
-                            {/* 操作按钮 */}
-                            <div className="space-y-1.5">
-                              {!isRemoteNode && (
-                                <div className="grid grid-cols-3 gap-1.5">
-                                  <Button
-                                    className="min-h-8"
-                                    color="success"
-                                    isLoading={node.copyLoading}
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => openInstallSelector(node)}
-                                  >
-                                    安装
-                                  </Button>
-                                  <Button
-                                    className="min-h-8"
-                                    color="warning"
-                                    isDisabled={
-                                      node.connectionStatus !== "online"
-                                    }
-                                    isLoading={node.upgradeLoading}
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() =>
-                                      openUpgradeModal("single", node.id)
-                                    }
-                                  >
-                                    升级
-                                  </Button>
-                                  <Button
-                                    className="min-h-8"
-                                    color="secondary"
-                                    isDisabled={
-                                      node.connectionStatus !== "online"
-                                    }
-                                    isLoading={node.rollbackLoading}
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => handleRollbackNode(node)}
-                                  >
-                                    回退
-                                  </Button>
-                                </div>
-                              )}
-                              <div
-                                className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-2"}`}
+                            {showExpiry && (
+                              <Chip
+                                className="shrink-0"
+                                color={expiryMeta.tone}
+                                size="sm"
+                                variant="flat"
                               >
-                                {!isRemoteNode && (
-                                  <Button
-                                    className="min-h-8"
-                                    color="primary"
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => handleEdit(node)}
-                                  >
-                                    编辑
-                                  </Button>
-                                )}
-                                {!isRemoteNode && node.forwardMode !== "nftables" && (
-                                  <Button
-                                    className="min-h-8"
-                                    color="success"
-                                    isDisabled={
-                                      node.connectionStatus !== "online"
-                                    }
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => setTuneNode(node)}
-                                  >
-                                    调优
-                                  </Button>
-                                )}
-                                <Button
-                                  className="min-h-8"
-                                  color="danger"
-                                  size="sm"
-                                  variant="flat"
-                                  onPress={() => handleDelete(node)}
-                                >
-                                  删除
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        </CardBody>
-                      </Card>
+                                {expiryMeta.label}
+                              </Chip>
+                            )}
+                          </>
+                        }
+                        meta={meta.filter(Boolean).join(" · ")}
+                        right={
+                          <>
+                            {renderLatency(node, "list")}
+                            {!isDisplayFiltered && (
+                              <span
+                                className="cursor-grab touch-none p-1 text-default-300 hover:text-default-500 active:cursor-grabbing"
+                                title="拖动排序"
+                                {...listeners}
+                              >
+                                <GripVertical className="h-4 w-4" />
+                              </span>
+                            )}
+                          </>
+                        }
+                        selectMode={selectMode}
+                        selected={selectedIds.has(node.id)}
+                        status={upgrading ? "warn" : online ? "ok" : "bad"}
+                        statusTitle={
+                          getConnectionStatusMeta(node.connectionStatus).text
+                        }
+                        title={node.name}
+                        onPress={() => setSheetNodeId(node.id)}
+                        onSelect={() => toggleSelect(node.id)}
+                      />
                     )}
                   </SortableItem>
                 );
@@ -2625,986 +2238,273 @@ export default function NodePage() {
           </SortableContext>
         </DndContext>
       )}
-      {/* 新增/编辑节点对话框 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={dialogVisible}
-        placement="center"
-        scrollBehavior="inside"
-        size="2xl"
-        onClose={() => setDialogVisible(false)}
-      >
-        <ModalContent>
-          <ModalHeader>{dialogTitle}</ModalHeader>
-          <ModalBody>
-            <div className="space-y-4">
-              <Input
-                errorMessage={errors.name}
-                isInvalid={!!errors.name}
-                label="节点名称"
-                placeholder="请输入节点名称"
-                value={form.name}
-                variant="bordered"
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, name: e.target.value }))
-                }
-              />
 
-              <Textarea
-                description="可记录供应商、用途、续费说明等补充信息"
-                label="备注"
-                maxRows={4}
-                minRows={3}
-                placeholder="例如: 搬瓦工年付，2026-12 续费，日本中转"
-                value={form.remark}
-                variant="bordered"
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, remark: e.target.value }))
-                }
-              />
+      {(() => {
+        const node = nodeList.find((n) => n.id === sheetNodeId) ?? null;
+        const isRemoteNode = node?.isRemote === 1;
+        const online = node?.connectionStatus === "online";
+        const usage = node ? remoteUsageMap[node.id] : undefined;
+        const progress = node ? upgradeProgress[node.id] : undefined;
+        const expiryMeta = node
+          ? getNodeExpiryMeta(node.expiryTime, node.renewalCycle)
+          : null;
+        const close = () => setSheetNodeId(null);
+        const rows: Array<[string, React.ReactNode]> = node
+          ? isRemoteNode
+            ? [
+                ["地址", usage?.remoteUrl || node.remoteUrl || "-"],
+                ...(usage
+                  ? ([
+                      ["流量", formatFlow(usage.currentFlow)],
+                      [
+                        "带宽上限",
+                        usage.maxBandwidth > 0
+                          ? formatSpeed(usage.maxBandwidth)
+                          : "不限",
+                      ],
+                      [
+                        "占用端口",
+                        `${usage.usedPorts.length} / ${Math.max(
+                          usage.portRangeEnd - usage.portRangeStart + 1,
+                          0,
+                        )}`,
+                      ],
+                      ["绑定", `${usage.activeBindingNum} 条`],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+              ]
+            : [
+                [
+                  "IP",
+                  [node.serverIpV4?.trim(), node.serverIpV6?.trim()]
+                    .filter(Boolean)
+                    .join(" / ") || node.serverIp.trim(),
+                ],
+                ["版本", node.version || "未知"],
+                ...(online && node.systemInfo
+                  ? ([
+                      ["已运行", formatUptime(node.systemInfo.uptime)],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+                ...(node.expiryTime && node.renewalCycle && expiryMeta
+                  ? ([
+                      [
+                        "续费",
+                        `${expiryMeta.label} · ${formatNodeRenewalTime(
+                          expiryMeta.nextDueTime,
+                        )}（${getNodeRenewalCycleLabel(node.renewalCycle)}）`,
+                      ],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+              ]
+          : [];
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Select
-                  label="续费周期"
-                  placeholder="选择续费周期"
-                  selectedKeys={form.renewalCycle ? [form.renewalCycle] : []}
-                  variant="bordered"
-                  onSelectionChange={(keys) => {
-                    const selected = Array.from(keys)[0] as
-                      | NodeRenewalCycle
-                      | undefined;
-
-                    setForm((prev) => ({
-                      ...prev,
-                      renewalCycle: selected || "",
-                    }));
-                  }}
-                >
-                  <SelectItem key="month" textValue="month">
-                    月付
-                  </SelectItem>
-                  <SelectItem key="quarter" textValue="quarter">
-                    季付
-                  </SelectItem>
-                  <SelectItem key="year" textValue="year">
-                    年付
-                  </SelectItem>
-                </Select>
-              </div>
-
-              <Input
-                description="填写最近一次续费时间或周期起始时间，系统会按月/季/年自动推算下次续费"
-                errorMessage={errors.expiryTime}
-                isInvalid={!!errors.expiryTime}
-                label="续费基准时间"
-                max="9999-12-31"
-                type="date"
-                value={
-                  form.expiryTime > 0
-                    ? new Date(form.expiryTime).toISOString().slice(0, 10)
-                    : ""
-                }
-                variant="bordered"
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    expiryTime: e.target.value
-                      ? new Date(e.target.value).getTime()
-                      : 0,
-                  }))
-                }
-              />
-
-              <Alert
-                color="primary"
-                description="例如选择月付并填写 2026-03-01，系统会自动按每月同日推算下次续费时间。"
-                variant="flat"
-              />
-
-              <Input
-                description="可选：不带协议、不带端口。建议在 IPv4 和 IPv6 都未填写时使用。至少填写一个 IPv4/IPv6 域名"
-                errorMessage={errors.serverHost}
-                isInvalid={!!errors.serverHost}
-                label="域名/主机名"
-                placeholder="例如: test.example.com"
-                value={form.serverHost}
-                variant="bordered"
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, serverHost: e.target.value }))
-                }
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  description="填写一个 IPv4 地址"
-                  errorMessage={errors.serverIpV4}
-                  isInvalid={!!errors.serverIpV4}
-                  label="IPv4 地址"
-                  placeholder="例如: 192.168.1.100"
-                  value={form.serverIpV4}
-                  variant="bordered"
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, serverIpV4: e.target.value }))
-                  }
-                />
-
-                <Input
-                  description="填写一个 IPv6 地址"
-                  errorMessage={errors.serverIpV6}
-                  isInvalid={!!errors.serverIpV6}
-                  label="IPv6 地址"
-                  placeholder="例如: 2001:db8::10"
-                  value={form.serverIpV6}
-                  variant="bordered"
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, serverIpV6: e.target.value }))
-                  }
-                />
-              </div>
-
-              <Input
-                classNames={{
-                  input: "font-mono",
-                }}
-                description="支持单个端口(80)、多个端口(80,443)或端口范围(10000-65535)，多个可用逗号分隔"
-                errorMessage={errors.port}
-                isInvalid={!!errors.port}
-                label="可用端口"
-                placeholder="例如: 80,443,10000-65535"
-                value={form.port}
-                variant="bordered"
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, port: e.target.value }))
-                }
-              />
-
-              <Select
-                label="转发模式"
-                selectedKeys={[form.forwardMode]}
-                variant="bordered"
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys)[0] as
-                    | NodeForm["forwardMode"]
-                    | undefined;
-
-                  setForm((prev) => ({
-                    ...prev,
-                    forwardMode: selected || "agent",
-                  }));
-                }}
-              >
-                <SelectItem key="agent" textValue="agent">
-                  agent 模式
-                </SelectItem>
-                <SelectItem key="nftables" textValue="nftables">
-                  nftables 模式
-                </SelectItem>
-              </Select>
-
-              {form.forwardMode === "nftables" ? (
-                <Alert
-                  color="warning"
-                  description="nftables 模式仅支持纯转发，不支持隧道、流量控制和 agent 安装，规则将由面板通过 SSH 下发。"
-                  variant="flat"
-                />
-              ) : (
-                <Alert
-                  color="primary"
-                  description="agent 模式会继续使用节点 agent 执行转发与管理操作。"
-                  variant="flat"
-                />
-              )}
-
-              {/* 高级配置 */}
-              <Accordion className="px-0" variant="light">
-                <AccordionItem
-                  key="advanced"
-                  aria-label="高级配置"
-                  className="border-b-0 [&_[data-slot=accordion-trigger]]:no-underline [&_[data-slot=accordion-trigger]]:hover:no-underline"
-                  title={
-                    <span className="text-small text-default-500 font-medium">
-                      高级配置
+        return (
+          <ActionSheet
+            actions={
+              !node
+                ? []
+                : isRemoteNode
+                  ? [
+                      {
+                        key: "delete",
+                        label: "删除",
+                        color: "danger" as const,
+                        onPress: () => handleDelete(node),
+                      },
+                    ]
+                  : [
+                      {
+                        key: "install",
+                        label: "安装命令",
+                        color: "primary" as const,
+                        onPress: () => openInstallSelector(node),
+                      },
+                      {
+                        key: "tune",
+                        label: "调优",
+                        disabled: !online,
+                        onPress: () => setTuneNode(node),
+                      },
+                      {
+                        key: "edit",
+                        label: "编辑",
+                        onPress: () => handleEdit(node),
+                      },
+                      {
+                        key: "targets",
+                        label: "测试点",
+                        onPress: () => setTargetNodes([node]),
+                      },
+                      {
+                        key: "upgrade",
+                        label: "升级",
+                        disabled: !online,
+                        onPress: () => openUpgradeModal("single", node.id),
+                      },
+                      {
+                        key: "rollback",
+                        label: "回退",
+                        disabled: !online,
+                        onPress: () => handleRollbackNode(node),
+                      },
+                      ...(node.expiryTime &&
+                      node.renewalCycle &&
+                      !node.expiryReminderDismissed &&
+                      expiryMeta?.isHighlighted
+                        ? [
+                            {
+                              key: "dismiss",
+                              label: "关闭到期提醒",
+                              onPress: () =>
+                                handleDismissExpiryReminder(node.id),
+                            },
+                          ]
+                        : []),
+                      {
+                        key: "delete",
+                        label: "删除",
+                        color: "danger" as const,
+                        onPress: () => handleDelete(node),
+                      },
+                    ]
+            }
+            isOpen={Boolean(node)}
+            subtitle={
+              node &&
+              (isRemoteNode
+                ? "远程节点"
+                : online
+                  ? "在线"
+                  : "离线 · agent 没有连上面板")
+            }
+            title={node?.name ?? ""}
+            onClose={close}
+          >
+            {node && (
+              <div className="space-y-2 text-sm">
+                {isRemoteNode && node.syncError && (
+                  <p className="rounded-lg bg-warning-50 px-2 py-1.5 text-xs text-warning-700 dark:bg-warning-100/10 dark:text-warning-400">
+                    {getRemoteSyncErrorMessage(node.syncError)}
+                  </p>
+                )}
+                {rows.map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3">
+                    <span className="shrink-0 text-default-500">{k}</span>
+                    <span className="min-w-0 break-all text-right font-mono text-xs leading-5">
+                      {v}
                     </span>
-                  }
-                >
-                  <div className="space-y-4 pb-2">
-                    {form.forwardMode === "nftables" ? (
-                      <div className="space-y-4 rounded-xl border border-warning-200 bg-warning-50/60 p-4 dark:border-warning-500/30 dark:bg-warning-950/20">
-                        <div>
-                          <div className="text-sm font-medium text-warning-700 dark:text-warning-300">
-                            SSH 配置
-                          </div>
-                          <div className="text-xs text-default-500">
-                            面板会通过 SSH 下发 nftables 规则，不会安装 agent。
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <Input
-                            errorMessage={errors.sshHost}
-                            isInvalid={!!errors.sshHost}
-                            label="SSH 主机"
-                            placeholder="例如: 192.0.2.10"
-                            value={form.sshHost}
-                            variant="bordered"
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                sshHost: e.target.value,
-                              }))
-                            }
-                          />
-
-                          <Input
-                            errorMessage={errors.sshPort}
-                            isInvalid={!!errors.sshPort}
-                            label="SSH 端口"
-                            placeholder="22"
-                            value={form.sshPort}
-                            variant="bordered"
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                sshPort: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <Input
-                            errorMessage={errors.sshUsername}
-                            isInvalid={!!errors.sshUsername}
-                            label="SSH 用户名"
-                            placeholder="例如: root"
-                            value={form.sshUsername}
-                            variant="bordered"
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                sshUsername: e.target.value,
-                              }))
-                            }
-                          />
-
-                          <Select
-                            label="SSH 认证方式"
-                            selectedKeys={[form.sshAuthType]}
-                            variant="bordered"
-                            onSelectionChange={(keys) => {
-                              const selected = Array.from(keys)[0] as
-                                | "password"
-                                | "private_key"
-                                | undefined;
-
-                              setForm((prev) => ({
-                                ...prev,
-                                sshAuthType: selected || "private_key",
-                              }));
-                            }}
-                          >
-                            <SelectItem
-                              key="private_key"
-                              textValue="private_key"
-                            >
-                              私钥
-                            </SelectItem>
-                            <SelectItem key="password" textValue="password">
-                              密码
-                            </SelectItem>
-                          </Select>
-                        </div>
-
-                        {form.sshAuthType === "password" ? (
-                          <Input
-                            errorMessage={errors.sshPassword}
-                            isInvalid={!!errors.sshPassword}
-                            label="SSH 密码"
-                            placeholder="请输入 SSH 密码"
-                            type="password"
-                            value={form.sshPassword}
-                            variant="bordered"
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                sshPassword: e.target.value,
-                              }))
-                            }
-                          />
-                        ) : (
-                          <Textarea
-                            errorMessage={errors.sshPrivateKey}
-                            isInvalid={!!errors.sshPrivateKey}
-                            label="SSH 私钥"
-                            minRows={6}
-                            placeholder="粘贴 PEM 格式私钥内容"
-                            value={form.sshPrivateKey}
-                            variant="bordered"
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                sshPrivateKey: e.target.value,
-                              }))
-                            }
-                          />
-                        )}
-
-                        <Input
-                          label="SSH 私钥密码短语"
-                          placeholder="可选"
-                          type="password"
-                          value={form.sshPassphrase}
-                          variant="bordered"
-                          onChange={(e) =>
-                            setForm((prev) => ({
-                              ...prev,
-                              sshPassphrase: e.target.value,
-                            }))
-                          }
-                        />
-
-                        <Select
-                          label="sudo 提权方式"
-                          selectedKeys={[form.sshSudoMode]}
-                          variant="bordered"
-                          onSelectionChange={(keys) => {
-                            const selected = Array.from(keys)[0] as
-                              | "none"
-                              | "sudo"
-                              | "sudo_su"
-                              | undefined;
-
-                            setForm((prev) => ({
-                              ...prev,
-                              sshSudoMode: selected || "none",
-                            }));
-                          }}
-                        >
-                          <SelectItem key="none" textValue="none">
-                            无需提权
-                          </SelectItem>
-                          <SelectItem key="sudo" textValue="sudo">
-                            sudo
-                          </SelectItem>
-                          <SelectItem key="sudo_su" textValue="sudo_su">
-                            sudo su
-                          </SelectItem>
-                        </Select>
-                      </div>
-                    ) : (
-                      <Alert
-                        color="primary"
-                        description="agent 模式下无需填写 SSH 配置；节点安装 agent 后会自行接管转发。"
-                        variant="flat"
-                      />
-                    )}
-
-                    <Input
-                      description="用于多IP服务器指定使用那个IP请求远程地址，不懂的默认为空就行"
-                      errorMessage={errors.interfaceName}
-                      isInvalid={!!errors.interfaceName}
-                      label="出口网卡名或IP"
-                      placeholder="请输入出口网卡名或IP"
-                      value={form.interfaceName}
-                      variant="bordered"
-                      onChange={(e) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          interfaceName: e.target.value,
-                        }))
-                      }
-                    />
-
-                    <Input
-                      description="多IP服务器可填写额外IP地址，逗号分隔"
-                      label="额外IP地址"
-                      placeholder="例如: 192.168.1.100, 10.0.0.5"
-                      value={form.extraIPs}
-                      variant="bordered"
-                      onChange={(e) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          extraIPs: e.target.value,
-                        }))
-                      }
-                    />
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Input
-                        errorMessage={errors.tcpListenAddr}
-                        isInvalid={!!errors.tcpListenAddr}
-                        label="TCP监听地址"
-                        placeholder="请输入TCP监听地址"
-                        startContent={
-                          <div className="pointer-events-none flex items-center">
-                            <span className="text-default-400 text-small">
-                              TCP
-                            </span>
-                          </div>
-                        }
-                        value={form.tcpListenAddr}
-                        variant="bordered"
-                        onChange={(e) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            tcpListenAddr: e.target.value,
-                          }))
-                        }
-                      />
-
-                      <Input
-                        errorMessage={errors.udpListenAddr}
-                        isInvalid={!!errors.udpListenAddr}
-                        label="UDP监听地址"
-                        placeholder="请输入UDP监听地址"
-                        startContent={
-                          <div className="pointer-events-none flex items-center">
-                            <span className="text-default-400 text-small">
-                              UDP
-                            </span>
-                          </div>
-                        }
-                        value={form.udpListenAddr}
-                        variant="bordered"
-                        onChange={(e) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            udpListenAddr: e.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                    {/* 屏蔽协议 */}
-                    <div>
-                      <div className="text-sm font-medium text-default-700 mb-2">
-                        屏蔽协议
-                      </div>
-                      <div className="text-xs text-default-500 mb-2">
-                        开启开关以屏蔽对应协议
-                      </div>
-                      {protocolControlsDisabled && (
-                        <Alert
-                          className="mb-2"
-                          color="warning"
-                          description={protocolControlsReason}
-                          variant="flat"
-                        />
-                      )}
-                      <div
-                        className={`grid grid-cols-1 sm:grid-cols-3 gap-3 bg-content1/30 dark:bg-content1/20 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
-                      >
-                        {/* HTTP tile */}
-                        <div className="px-3 py-3 rounded-lg bg-content1/55 dark:bg-content1/35 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
-                          <div className="flex items-center gap-2 mb-2">
-                            <svg
-                              aria-hidden="true"
-                              className="w-4 h-4 text-default-500"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              viewBox="0 0 24 24"
-                            >
-                              <rect height="16" rx="2" width="20" x="2" y="4" />
-                              <path d="M2 10h20" />
-                            </svg>
-                            <div className="text-sm font-medium text-default-700">
-                              HTTP
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs text-default-500">
-                              禁用/启用
-                            </div>
-                            <Switch
-                              isDisabled={protocolControlsDisabled}
-                              isSelected={form.http === 1}
-                              size="sm"
-                              onValueChange={(v) =>
-                                setForm((prev) => ({
-                                  ...prev,
-                                  http: v ? 1 : 0,
-                                }))
-                              }
-                            />
-                          </div>
-                          <div className="mt-1 text-xs text-default-400">
-                            {form.http === 1 ? "已开启" : "已关闭"}
-                          </div>
-                        </div>
-
-                        {/* TLS tile */}
-                        <div className="px-3 py-3 rounded-lg bg-content1/55 dark:bg-content1/35 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
-                          <div className="flex items-center gap-2 mb-2">
-                            <svg
-                              aria-hidden="true"
-                              className="w-4 h-4 text-default-500"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              viewBox="0 0 24 24"
-                            >
-                              <path d="M6 10V7a6 6 0 1 1 12 0v3" />
-                              <rect
-                                height="10"
-                                rx="2"
-                                width="16"
-                                x="4"
-                                y="10"
-                              />
-                            </svg>
-                            <div className="text-sm font-medium text-default-700">
-                              TLS
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs text-default-500">
-                              禁用/启用
-                            </div>
-                            <Switch
-                              isDisabled={protocolControlsDisabled}
-                              isSelected={form.tls === 1}
-                              size="sm"
-                              onValueChange={(v) =>
-                                setForm((prev) => ({ ...prev, tls: v ? 1 : 0 }))
-                              }
-                            />
-                          </div>
-                          <div className="mt-1 text-xs text-default-400">
-                            {form.tls === 1 ? "已开启" : "已关闭"}
-                          </div>
-                        </div>
-
-                        {/* SOCKS tile */}
-                        <div className="px-3 py-3 rounded-lg bg-content1/55 dark:bg-content1/35 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
-                          <div className="flex items-center gap-2 mb-2">
-                            <svg
-                              aria-hidden="true"
-                              className="w-4 h-4 text-default-500"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              viewBox="0 0 24 24"
-                            >
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" x2="12" y1="15" y2="3" />
-                            </svg>
-                            <div className="text-sm font-medium text-default-700">
-                              SOCKS
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs text-default-500">
-                              禁用/启用
-                            </div>
-                            <Switch
-                              isDisabled={protocolControlsDisabled}
-                              isSelected={form.socks === 1}
-                              size="sm"
-                              onValueChange={(v) =>
-                                setForm((prev) => ({
-                                  ...prev,
-                                  socks: v ? 1 : 0,
-                                }))
-                              }
-                            />
-                          </div>
-                          <div className="mt-1 text-xs text-default-400">
-                            {form.socks === 1 ? "已开启" : "已关闭"}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Alert
-                      color="danger"
-                      description="请不要在出口节点执行屏蔽协议，否则可能影响转发；屏蔽协议仅需在入口节点执行。"
-                      variant="flat"
-                    />
                   </div>
-                </AccordionItem>
-              </Accordion>
+                ))}
+                {progress && progress.percent < 100 && (
+                  <Progress
+                    showValueLabel
+                    aria-label="升级进度"
+                    color="warning"
+                    label={progress.message}
+                    size="sm"
+                    value={progress.percent}
+                  />
+                )}
+                {node.remark?.trim() && (
+                  <p className="whitespace-pre-wrap break-all text-xs text-default-500">
+                    {node.remark.trim()}
+                  </p>
+                )}
+              </div>
+            )}
+          </ActionSheet>
+        );
+      })()}
+      {/* 新增/编辑节点对话框 */}
+      <NodeFormModal
+        dialogTitle={dialogTitle}
+        dialogVisible={dialogVisible}
+        errors={errors}
+        form={form}
+        handleSubmit={handleSubmit}
+        protocolControlsDisabled={protocolControlsDisabled}
+        protocolControlsReason={protocolControlsReason}
+        setDialogVisible={setDialogVisible}
+        setForm={setForm}
+        submitLoading={submitLoading}
+      />
 
-              <Alert
-                className="mt-4"
-                color="primary"
-                description="节点ip地址是你要添加的入口/出口的ip地址，不是面板的ip地址。"
-                variant="flat"
-              />
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="flat" onPress={() => setDialogVisible(false)}>
-              取消
-            </Button>
-            <Button
-              color="primary"
-              isLoading={submitLoading}
-              onPress={handleSubmit}
-            >
-              {submitLoading ? "提交中..." : "确定"}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      <NodeTuneModal node={tuneNode} onClose={() => setTuneNode(null)} />
 
       {/* 回退确认模态框 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={rollbackModalOpen}
-        placement="center"
-        scrollBehavior="inside"
-        size="2xl"
-        onOpenChange={setRollbackModalOpen}
-      >
-        <ModalContent>
-          {(onClose) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-xl font-bold">确认回退</h2>
-              </ModalHeader>
-              <ModalBody>
-                <p>
-                  确定要将节点{" "}
-                  <strong>&quot;{nodeToRollback?.name}&quot;</strong>{" "}
-                  回退到上一个版本吗？
-                </p>
-                <p className="text-small text-default-500">
-                  节点将执行版本回退并自动重启，期间会导致节点短暂离线。
-                </p>
-              </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={onClose}>
-                  取消
-                </Button>
-                <Button color="secondary" onPress={confirmRollback}>
-                  确认回退
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
+      <RollbackNodeModal
+        confirmRollback={confirmRollback}
+        nodeToRollback={nodeToRollback}
+        rollbackModalOpen={rollbackModalOpen}
+        setRollbackModalOpen={setRollbackModalOpen}
+      />
 
       {/* 删除确认模态框 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={deleteModalOpen}
-        placement="center"
-        scrollBehavior="inside"
-        size="2xl"
-        onOpenChange={setDeleteModalOpen}
-      >
-        <ModalContent>
-          {(onClose) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-xl font-bold">确认删除</h2>
-              </ModalHeader>
-              <ModalBody>
-                <p>
-                  确定要删除节点{" "}
-                  <strong>&quot;{nodeToDelete?.name}&quot;</strong> 吗？
-                </p>
-                <p className="text-small text-default-500">
-                  此操作不可恢复，请谨慎操作。
-                </p>
-              </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={onClose}>
-                  取消
-                </Button>
-                <Button
-                  color="danger"
-                  isLoading={deleteLoading}
-                  onPress={confirmDelete}
-                >
-                  {deleteLoading ? "删除中..." : "确认删除"}
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
+      <DeleteNodeModal
+        confirmDelete={confirmDelete}
+        deleteLoading={deleteLoading}
+        deleteModalOpen={deleteModalOpen}
+        nodeToDelete={nodeToDelete}
+        setDeleteModalOpen={setDeleteModalOpen}
+      />
 
       {/* 安装命令模态框 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={installCommandModal}
-        placement="center"
-        scrollBehavior="inside"
-        size="2xl"
-        onClose={() => setInstallCommandModal(false)}
-      >
-        <ModalContent>
-          <ModalHeader>安装命令 - {currentNodeName}</ModalHeader>
-          <ModalBody>
-            <div className="space-y-4">
-              <p className="text-sm text-default-600">
-                请复制以下安装命令到服务器上执行：
-              </p>
-              <div className="relative">
-                <Textarea
-                  readOnly
-                  className="font-mono text-sm"
-                  classNames={{
-                    input: "font-mono text-sm",
-                  }}
-                  maxRows={10}
-                  minRows={6}
-                  value={installCommand}
-                  variant="bordered"
-                />
-                <Button
-                  className="absolute top-2 right-2"
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={handleManualCopy}
-                >
-                  复制
-                </Button>
-              </div>
-              <div className="text-xs text-default-500">
-                💡 提示：如果复制按钮失效，请手动选择上方文本进行复制
-              </div>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button
-              variant="flat"
-              onPress={() => setInstallCommandModal(false)}
-            >
-              关闭
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      <InstallCommandModal
+        currentNodeName={currentNodeName}
+        handleManualCopy={handleManualCopy}
+        installCommand={installCommand}
+        installCommandModal={installCommandModal}
+        setInstallCommandModal={setInstallCommandModal}
+      />
 
       {/* 版本选择升级模态框 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={upgradeModalOpen}
-        placement="center"
-        scrollBehavior="inside"
-        size="md"
-        onOpenChange={setUpgradeModalOpen}
-      >
-        <ModalContent>
-          {(onClose) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-xl font-bold">
-                  {upgradeTarget === "batch"
-                    ? `批量升级 (${selectedIds.size} 个节点)`
-                    : "升级节点"}
-                </h2>
-              </ModalHeader>
-              <ModalBody>
-                {releasesLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Spinner size="lg" />
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <Select
-                      label="选择版本"
-                      placeholder="留空则使用最新版本"
-                      selectedKeys={selectedVersion ? [selectedVersion] : []}
-                      onSelectionChange={(keys) => {
-                        const selected = Array.from(keys)[0] as string;
-
-                        setSelectedVersion(selected || "");
-                      }}
-                    >
-                      {releases.map((r) => (
-                        <SelectItem key={r.version} textValue={r.version}>
-                          <div className="flex justify-between items-center">
-                            <span>{r.version}</span>
-                            <span className="text-xs text-default-400">
-                              {r.publishedAt
-                                ? new Date(r.publishedAt).toLocaleDateString()
-                                : ""}
-                              {r.channel === "dev" && (
-                                <Chip
-                                  className="ml-1 shrink-0 whitespace-nowrap"
-                                  color="warning"
-                                  size="sm"
-                                  variant="flat"
-                                >
-                                  测试
-                                </Chip>
-                              )}
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </Select>
-                    <p className="text-sm text-default-500">
-                      {selectedVersion
-                        ? `将升级到版本 ${selectedVersion}`
-                        : "未选择版本，将自动使用最新版"}
-                    </p>
-                  </div>
-                )}
-              </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={onClose}>
-                  取消
-                </Button>
-                <Button
-                  color="warning"
-                  isDisabled={releasesLoading}
-                  onPress={handleConfirmUpgrade}
-                >
-                  确认升级
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
+      <UpgradeNodeModal
+        handleConfirmUpgrade={handleConfirmUpgrade}
+        releases={releases}
+        releasesLoading={releasesLoading}
+        selectedIds={selectedIds}
+        selectedVersion={selectedVersion}
+        setSelectedVersion={setSelectedVersion}
+        setUpgradeModalOpen={setUpgradeModalOpen}
+        upgradeModalOpen={upgradeModalOpen}
+        upgradeTarget={upgradeTarget}
+      />
 
       {/* 批量删除确认模态框 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={batchDeleteModalOpen}
-        placement="center"
-        scrollBehavior="inside"
-        size="md"
-        onOpenChange={setBatchDeleteModalOpen}
-      >
-        <ModalContent>
-          {(onClose) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-xl font-bold">确认删除</h2>
-              </ModalHeader>
-              <ModalBody>
-                <p>
-                  确定要删除选中的 <strong>{selectedIds.size}</strong>{" "}
-                  个节点吗？
-                </p>
-                <p className="text-small text-default-500">
-                  此操作不可恢复，请谨慎操作。
-                </p>
-              </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={onClose}>
-                  取消
-                </Button>
-                <Button
-                  color="danger"
-                  isLoading={batchLoading}
-                  onPress={handleBatchDelete}
-                >
-                  {batchLoading ? "删除中..." : "确认删除"}
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
+      <BatchDeleteNodesModal
+        batchDeleteModalOpen={batchDeleteModalOpen}
+        batchLoading={batchLoading}
+        handleBatchDelete={handleBatchDelete}
+        selectedIds={selectedIds}
+        setBatchDeleteModalOpen={setBatchDeleteModalOpen}
+      />
 
-      <Modal
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={isFilterModalOpen}
-        placement="center"
-        size="md"
-        onOpenChange={setIsFilterModalOpen}
-      >
-        <ModalContent>
-          {(onClose) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                筛选条件
-              </ModalHeader>
-              <ModalBody>
-                <div className="flex flex-col gap-4 py-2">
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm font-medium">按到期状态筛选</p>
-                    <Select
-                      aria-label="按到期状态筛选"
-                      className="w-full"
-                      selectedKeys={[nodeFilterMode]}
-                      variant="bordered"
-                      onSelectionChange={(keys) => {
-                        const selected = Array.from(keys)[0] as
-                          | NodeFilterMode
-                          | undefined;
-
-                        setNodeFilterMode(selected || "all");
-                      }}
-                    >
-                      <SelectItem key="all">全部节点</SelectItem>
-                      <SelectItem key="expiringSoon">
-                        7天内续费 ({nodeExpiryStats.expiringSoon})
-                      </SelectItem>
-                      <SelectItem key="expired">
-                        已逾期 ({nodeExpiryStats.expired})
-                      </SelectItem>
-                      <SelectItem key="withExpiry">
-                        已启用续费提醒 ({nodeExpiryStats.withExpiry})
-                      </SelectItem>
-                    </Select>
-                  </div>
-                </div>
-              </ModalBody>
-              <ModalFooter>
-                <Button
-                  color="default"
-                  variant="flat"
-                  onPress={resetNodeFilterMode}
-                >
-                  重置
-                </Button>
-                <Button color="primary" onPress={onClose}>
-                  完成
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
-
-      {/* 移植自 kure29/flyx：节点调优、回程路由、测试点选择 */}
-      <NodeTuneModal node={tuneNode} onClose={() => setTuneNode(null)} />
+      <NodeFilterModal
+        isFilterModalOpen={isFilterModalOpen}
+        nodeExpiryStats={nodeExpiryStats}
+        nodeFilterMode={nodeFilterMode}
+        resetNodeFilterMode={resetNodeFilterMode}
+        setIsFilterModalOpen={setIsFilterModalOpen}
+        setNodeFilterMode={setNodeFilterMode}
+      />
       <RouteModal
         nodeId={routeNode?.id ?? null}
         nodeName={routeNode?.name}
         onClose={() => setRouteNode(null)}
+      />
+      {/* 延迟趋势：数据来自后端 POST /node/latency/history（Lane D），
+          入口在 LatencyCell 的 onShowTrend（renderLatency 挂载）。 */}
+      <LatencyTrendModal
+        nodeId={trendNode?.id ?? null}
+        nodeName={trendNode?.name}
+        onClose={() => setTrendNode(null)}
       />
       <LatencyTargetsModal
         nodes={targetNodes}
         onClose={() => setTargetNodes([])}
         onSaved={() => loadNodes({ silent: true })}
       />
-    </AnimatedPage>
+    </PageShell>
   );
 }

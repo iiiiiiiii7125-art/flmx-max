@@ -4,6 +4,7 @@ import type { SplitRuleForm } from "./split-rules";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
+import { OutboundIPSelect } from "./outbound-ip-select";
 import { splitFormFromItem, splitPayload } from "./presets";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
 import { ruleFromTarget, ruleTarget, SplitRulesEditor } from "./split-rules";
@@ -19,7 +20,7 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 
-/** Edits where an inbound's traffic leaves: its default exit and 分流 rules. */
+/** 出站: where an inbound's traffic leaves — IP version, default exit and 分流 rules. */
 export function SplitModal({
   item,
   inbounds,
@@ -81,6 +82,9 @@ function SplitForm({
     splitFormFromItem(item),
   );
   const [saving, setSaving] = useState(false);
+  const [outboundIpStrategy, setOutboundIpStrategy] = useState(
+    item.outboundIpStrategy || "auto",
+  );
   // Which picker is open: the default exit or rule i.
   const [picking, setPicking] = useState<"default" | number | null>(null);
 
@@ -102,6 +106,7 @@ function SplitForm({
         id: item.id,
         outboundId: Number(outboundId) || 0,
         splitRules: splitPayload(rules) ?? [],
+        outboundIpStrategy,
       });
 
       if (res.code !== 0) {
@@ -131,14 +136,19 @@ function SplitForm({
   return (
     <>
       <ModalHeader className="flex flex-col gap-1">
-        <h2 className="text-lg font-bold">分流</h2>
+        <h2 className="text-lg font-bold">出站</h2>
         <p className="truncate text-small font-normal text-default-500">
           {item.name}
         </p>
       </ModalHeader>
       <ModalBody className="space-y-5">
+        <OutboundIPSelect
+          kernelType={item.kernelType}
+          value={outboundIpStrategy}
+          onChange={setOutboundIpStrategy}
+        />
         <section className="space-y-2">
-          <p className="text-sm font-medium">默认出口</p>
+          <p className="text-sm font-medium">默认去向</p>
           <TargetButton
             missing={outboundMissing}
             targets={targets}
@@ -174,7 +184,7 @@ function SplitForm({
         <TargetPicker
           isOpen={picking !== null}
           targets={targets}
-          title={picking === "default" ? "默认出口" : "去向"}
+          title={picking === "default" ? "默认去向" : "去向"}
           value={
             picking === "default"
               ? outboundId || "direct"

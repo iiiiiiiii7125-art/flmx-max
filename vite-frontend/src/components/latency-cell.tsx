@@ -1,6 +1,6 @@
 import type { InboundProbe, InboundProbePoint } from "@/api/types";
 
-import { Loader2, ListChecks, RefreshCw, Route } from "lucide-react";
+import { ChartLine, Loader2, ListChecks, RefreshCw, Route } from "lucide-react";
 
 import {
   Dropdown,
@@ -19,7 +19,7 @@ const CARD_POINTS = 3;
 
 type Tone = "success" | "warning" | "danger" | "default";
 
-const TONE: Record<Tone, [string, string]> = {
+export const TONE: Record<Tone, [string, string]> = {
   success: ["bg-emerald-500/15 text-emerald-600", "bg-emerald-500"],
   warning: ["bg-amber-500/15 text-amber-600", "bg-amber-500"],
   danger: ["bg-rose-500/15 text-rose-600", "bg-rose-500"],
@@ -181,10 +181,29 @@ function Tile({
       </span>
       {/* Always its own line so tiles line up whatever the width. */}
       {point.route && point.route !== "未识别" && (
-        <span className="mt-0.5">
+        <span className="mt-0.5 flex items-center gap-1">
           <RouteTag short route={point.route} />
+          <V6Route point={point} />
         </span>
       )}
+    </span>
+  );
+}
+
+/** A dual-stack node's IPv6 route, shown only when it differs from IPv4. */
+function V6Route({ point }: { point: InboundProbePoint }) {
+  if (
+    !point.routeV6 ||
+    point.routeV6 === "未识别" ||
+    point.routeV6 === point.route
+  ) {
+    return null;
+  }
+
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <span className="text-[10px] opacity-70">v6</span>
+      <RouteTag short route={point.routeV6} />
     </span>
   );
 }
@@ -202,8 +221,11 @@ export function LatencyCell({
   variant,
   onProbe,
   onShowRoute,
+  onShowTrend,
   onEditTargets,
   note,
+  title = "到各测试点的延迟",
+  footer,
 }: {
   probe?: InboundProbe;
   probing?: boolean;
@@ -211,10 +233,20 @@ export function LatencyCell({
   onProbe: () => void;
   /** Opens the node's return routes; omitted where there is no node. */
   onShowRoute?: () => void;
+  /**
+   * Opens the node's latency trend (LatencyTrendModal). Integration point:
+   * the node page (Lane E) passes this and renders the modal; the cell only
+   * shows the menu entry.
+   */
+  onShowTrend?: () => void;
   /** Opens the node's reference point choice. */
   onEditTargets?: () => void;
   /** Shown before the time on cards, e.g. "自定义". */
   note?: string;
+  /** Heading of the details. */
+  title?: string;
+  /** Shown under the points in the details, e.g. a relay line's legs. */
+  footer?: React.ReactNode;
 }) {
   const points = probePoints(probe);
 
@@ -307,7 +339,7 @@ export function LatencyCell({
       >
         <div role="presentation" onClick={stop} onPointerDown={stop}>
           <div className="flex items-center justify-between px-2 pb-1.5 pt-1 text-xs text-default-500">
-            <span>到各测试点的延迟</span>
+            <span>{title}</span>
             {probe && <span>{ago(probe.checkedAt)}</span>}
           </div>
           <div className="space-y-1 px-2 pb-2">
@@ -321,8 +353,11 @@ export function LatencyCell({
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
-                    <span className="truncate">{p.name}</span>
-                    <RouteTag short route={p.route} />
+                    <span className="shrink-0">{p.name}</span>
+                    <span className="flex min-w-0 flex-wrap items-center gap-1">
+                      <RouteTag short route={p.route} />
+                      <V6Route point={p} />
+                    </span>
                   </span>
                   <span className="shrink-0 font-mono text-xs">
                     <span className={TONE[pointTone(p)][0].split(" ")[1]}>
@@ -338,6 +373,7 @@ export function LatencyCell({
               );
             })}
           </div>
+          {footer}
           <div className="grid auto-cols-fr grid-flow-col border-t border-divider">
             <DropdownItem
               className="justify-center whitespace-nowrap px-1 text-xs text-primary"
@@ -352,6 +388,15 @@ export function LatencyCell({
             >
               {probing ? "检测中…" : "重新检测"}
             </DropdownItem>
+            {onShowTrend && (
+              <DropdownItem
+                className="justify-center whitespace-nowrap px-1 text-xs text-primary"
+                startContent={<ChartLine className="h-3.5 w-3.5" />}
+                onPress={() => setTimeout(onShowTrend, 0)}
+              >
+                趋势
+              </DropdownItem>
+            )}
             {onShowRoute && (
               <DropdownItem
                 

@@ -38,6 +38,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, SourceID: i.SourceID, OutboundID: i.OutboundID, SplitRules: i.SplitRules,
+			OutboundIPStrategy: i.OutboundIPStrategy,
 		})
 	}
 
@@ -137,6 +138,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		if listen == "" {
 			listen = "::"
 		}
+		// 旧备份没有该字段；空值按 auto（与 Normalize 口径一致）。
+		strategy := i.OutboundIPStrategy
+		if strategy == "" {
+			strategy = "auto"
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
@@ -145,7 +151,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
-			SplitRules: i.SplitRules,
+			SplitRules: i.SplitRules, OutboundIPStrategy: strategy,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -153,7 +159,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 				"kernel_id", "node_id", "name", "protocol", "listen", "port", "transport", "security",
 				"settings", "extra", "share_host", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
-				"inx", "updated_time", "source_id", "outbound_id", "split_rules",
+				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
 			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err

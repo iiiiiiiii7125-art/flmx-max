@@ -220,6 +220,9 @@ type Tunnel struct {
 	IPPreference    string         `gorm:"column:ip_preference;type:varchar(10);not null;default:''"`
 	ProbeTargetHost string         `gorm:"column:probe_target_host;type:text;not null;default:''"`
 	ProbeTargetPort int            `gorm:"column:probe_target_port;not null;default:0"`
+	// Engine runs the tunnel's forwards: "" = the agent's forwarder,
+	// "realm" = realm on the entry nodes (port forward tunnels only).
+	Engine string `gorm:"column:engine;type:varchar(20);not null;default:''"`
 }
 
 func (Tunnel) TableName() string { return "tunnel" }
@@ -566,6 +569,7 @@ type InboundBackup struct {
 	SourceID            int64  `json:"sourceId,omitempty"`
 	OutboundID          int64  `json:"outboundId,omitempty"`
 	SplitRules          string `json:"splitRules,omitempty"`
+	OutboundIPStrategy  string `json:"outboundIpStrategy,omitempty"`
 }
 
 type RemoteSourceBackup struct {
@@ -715,6 +719,7 @@ type TunnelBackup struct {
 	IPPreference    string              `json:"ipPreference,omitempty"`
 	ProbeTargetHost string              `json:"probeTargetHost,omitempty"`
 	ProbeTargetPort int                 `json:"probeTargetPort,omitempty"`
+	Engine          string              `json:"engine,omitempty"`
 	ChainTunnels    []ChainTunnelBackup `json:"chainTunnels,omitempty"`
 }
 
@@ -877,6 +882,7 @@ type TunnelRecord struct {
 	Protocol        string
 	ProbeTargetHost string
 	ProbeTargetPort int
+	Engine          string
 }
 
 type UserQuotaView struct {
@@ -1005,6 +1011,22 @@ type NodeMetric struct {
 }
 
 func (NodeMetric) TableName() string { return "node_metric" }
+
+// NodeLatencySample is one measurement of a node's latency to a reference
+// point, kept for the latency trend chart. Retention is capped at 7 days
+// (see IngestionService.pruneMetricsAt) so the table cannot grow without
+// bound when many nodes measure many points.
+type NodeLatencySample struct {
+	ID          int64   `gorm:"primaryKey;autoIncrement"`
+	NodeID      int64   `gorm:"column:node_id;not null;index:idx_latency_sample_node_time,priority:1"`
+	CreatedTime int64   `gorm:"column:created_time;not null;index:idx_latency_sample_node_time,priority:2;index"`
+	Point       string  `gorm:"column:point;type:varchar(64);not null"`
+	OK          int     `gorm:"column:ok;not null;default:0"`
+	LatencyMs   int64   `gorm:"column:latency_ms;not null;default:0"`
+	LossPct     float64 `gorm:"column:loss_pct;not null;default:0"`
+}
+
+func (NodeLatencySample) TableName() string { return "node_latency_sample" }
 
 type TunnelMetric struct {
 	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`

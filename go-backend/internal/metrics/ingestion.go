@@ -138,6 +138,16 @@ func (s *IngestionService) pruneMetricsAt(now time.Time) {
 	if err := s.repo.PruneServiceMonitorResults(cutoff); err != nil {
 		log.Printf("monitoring prune failed op=service_monitor_result cutoff=%d err=%v", cutoff, err)
 	}
+	// Latency samples grow by one row per node/point/round (3 min), so
+	// their retention is capped at 7 days even when the monitoring
+	// retention is configured longer.
+	latencyCutoff := now.Add(-7 * 24 * time.Hour).UnixMilli()
+	if latencyCutoff < cutoff {
+		latencyCutoff = cutoff
+	}
+	if err := s.repo.PruneNodeLatencySamples(latencyCutoff); err != nil {
+		log.Printf("monitoring prune failed op=node_latency_sample cutoff=%d err=%v", latencyCutoff, err)
+	}
 }
 
 func (s *IngestionService) GetLatestMetric(nodeID int64) (*model.NodeMetric, error) {

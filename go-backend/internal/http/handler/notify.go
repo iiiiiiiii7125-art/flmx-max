@@ -24,6 +24,8 @@ const (
 	notifyEventInboundDown = "inbound_down"
 	notifyEventKernelError = "kernel_error"
 	notifyEventNodeExpiry  = "node_expiry"
+	notifyEventLatencyBad  = "latency_bad"
+	notifyEventRouteChange = "route_change"
 	notifyEventTest        = "test"
 )
 

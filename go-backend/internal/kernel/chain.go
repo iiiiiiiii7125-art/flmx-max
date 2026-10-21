@@ -41,10 +41,19 @@ func (in Inbound) countedUsers() []int64 {
 // CheckChain reports whether a kernel can dial the given endpoint as a
 // chained outbound.
 func CheckChain(kernelType string, via Endpoint) error {
+	return CheckChainWith(kernelType, via, RenderOptions{})
+}
+
+// CheckChainWith is CheckChain for a kernel with the given options (what
+// its version supports).
+func CheckChainWith(kernelType string, via Endpoint, opts RenderOptions) error {
 	via.Name = "check"
 	switch kernelType {
 	case TypeSingbox:
-		_, err := singboxChainOutbounds(via, "check", 0)
+		if via.Proxy == nil && via.Inbound.Protocol == ProtocolSnell && !opts.SingboxSnell {
+			return errors.New("sing-box 1.14 及以上才能连接 Snell 节点，请先更新内核")
+		}
+		_, err := singboxChainOutbounds(via, "check", 0, opts.SingboxSnell)
 		return err
 	case TypeXray:
 		_, err := xrayChainOutbound(via, "check")
@@ -62,9 +71,9 @@ func CheckChain(kernelType string, via Endpoint) error {
 
 // singboxChainOutbounds renders the outbounds that dial the chain target;
 // a non-zero mark goes on the one that opens the socket.
-func singboxChainOutbounds(via Endpoint, tag string, mark int64) ([]interface{}, error) {
+func singboxChainOutbounds(via Endpoint, tag string, mark int64, snell bool) ([]interface{}, error) {
 	via.Name = tag
-	obs, ok := SingboxOutbounds(via)
+	obs, ok := singboxOutbounds(via, snell)
 	if !ok {
 		return nil, fmt.Errorf("sing-box 无法连接 %s 类型的出站节点", chainTargetLabel(via))
 	}
@@ -79,18 +88,33 @@ func singboxChainOutbounds(via Endpoint, tag string, mark int64) ([]interface{},
 }
 
 // singboxInboundTags lists the tags a panel inbound's connections carry; a
-// ShadowTLS front hands them to its loopback Shadowsocks backend.
+// ShadowTLS front hands them to its loopback Shadowsocks / Snell backend.
 func singboxInboundTags(in Inbound) []string {
-	if in.Protocol == ProtocolShadowsocks && in.Security.Type == SecurityShadowTLS {
-		return []string{in.Tag(), in.Tag() + "-ss"}
+	if backend := singboxShadowTLSBackendTag(in); backend != "" {
+		return []string{in.Tag(), backend}
 	}
 	return []string{in.Tag()}
+}
+
+// singboxShadowTLSBackendTag is the tag of the inbound a ShadowTLS front
+// detours to, or "" when the inbound has no front.
+func singboxShadowTLSBackendTag(in Inbound) string {
+	if in.Security.Type != SecurityShadowTLS {
+		return ""
+	}
+	switch in.Protocol {
+	case ProtocolShadowsocks:
+		return in.Tag() + "-ss"
+	case ProtocolSnell:
+		return in.Tag() + "-snell"
+	}
+	return ""
 }
 
 // singboxChainRoutes returns the outbounds, route rules and rule-set tags of
 // the chained and split-routed inbounds. The rules must precede the per-user
 // direct rules.
-func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, []string, error) {
+func singboxChainRoutes(inbounds []Inbound, snell bool) ([]interface{}, []interface{}, []string, error) {
 	var outbounds, rules []interface{}
 	var sets []string
 	for _, in := range inbounds {
@@ -101,7 +125,7 @@ func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, []str
 		if in.splitRequiresSniff() {
 			rules = append(rules, obj{"inbound": tags, "action": "sniff"})
 		}
-		obs, rs, ss, err := singboxSplitRoutes(in)
+		obs, rs, ss, err := singboxSplitRoutes(in, snell)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -115,7 +139,7 @@ func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, []str
 		}
 		for _, id := range in.countedUsers() {
 			tag := chainUserTag(in, id)
-			obs, err := singboxChainOutbounds(*in.Via, tag, UserMark(id))
+			obs, err := singboxChainOutbounds(*in.Via, tag, UserMark(id), snell)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 			}
@@ -123,7 +147,7 @@ func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, []str
 			rules = append(rules, obj{"inbound": tags, "auth_user": []string{User{ID: id}.Name()}, "outbound": tag})
 		}
 		tag := chainTag(in)
-		obs, err = singboxChainOutbounds(*in.Via, tag, 0)
+		obs, err = singboxChainOutbounds(*in.Via, tag, 0, snell)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 		}

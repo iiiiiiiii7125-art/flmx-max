@@ -9,6 +9,7 @@ interface TunnelFormInput {
   outNodeId?: TunnelChainNode[];
   trafficRatio: number;
   forwardMode?: "agent" | "nftables";
+  engine?: string;
   probeTargetHost?: string;
   probeTargetPort?: number;
 }
@@ -119,6 +120,7 @@ export const createTunnelFormDefaults = () => {
     flow: 1,
     trafficRatio: 1.0,
     forwardMode: "agent",
+    engine: "",
     inIp: "",
     ipPreference: "",
     probeTargetHost: "",
@@ -183,6 +185,10 @@ export const validateTunnelForm = (
     if (!Number.isInteger(probePort) || probePort < 1 || probePort > 65535) {
       errors.probeTargetPort = "端口必须是 1-65535";
     }
+  }
+
+  if (form.engine === "realm" && form.type !== 1) {
+    errors.type = "realm 引擎仅支持端口转发隧道";
   }
 
   if (form.type === 2) {
