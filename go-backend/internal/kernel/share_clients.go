@@ -79,7 +79,11 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 // shadowrocketProxies renders Clash proxies for Shadowrocket, expanding
 // chained landing nodes into one copy per relay. Names are returned in
 // the same order. 移植自 kure29/flyx（供规则模式的 shadowrocketConfig 用）。
-func shadowrocketProxies(endpoints []Endpoint) ([]interface{}, []string) {
+//
+// A5-03：proxies 保留全部条目（中转条目是落地副本 dialer-proxy 的指向
+// 目标，删之整链悬空，与 Clash 把中转保留在 proxies 同口径）；names
+// （进普通策略组的那份）按 listed() 过滤，隐藏的中转不进任何组。
+func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, []string) {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
@@ -94,7 +98,9 @@ func shadowrocketProxies(endpoints []Endpoint) ([]interface{}, []string) {
 	for i, e := range rendered {
 		if !chain || e.ChainRole != ChainRoleLanding {
 			proxies = append(proxies, nodes[i])
-			names = append(names, e.Name)
+			if listed(e, chain, opts) {
+				names = append(names, e.Name)
+			}
 			continue
 		}
 		for _, relay := range relays {
@@ -134,9 +140,15 @@ func chainedName(landing, relay string) string {
 
 // loonList renders Loon node lines. Loon nodes cannot name a front proxy,
 // so landing nodes connect directly.
-func loonList(endpoints []Endpoint) string {
+func loonList(endpoints []Endpoint, opts SubOptions) string {
+	_, _, chain := chainGroups(endpoints)
 	var lines []string
 	for _, e := range endpoints {
+		// A5-03：列表无组概念，ChainHideRelays 的隐藏即不下发该行
+		// （落地直连、无引用悬空），与三主格式的 listed() 语义对齐。
+		if !listed(e, chain, opts) {
+			continue
+		}
 		if p, ok := endpointProxy(e); ok {
 			if line, ok := loonLine(p); ok {
 				lines = append(lines, line)
@@ -309,9 +321,13 @@ func loonLine(p Proxy) (string, bool) {
 
 // qxList renders Quantumult X server lines ([server_remote] resource). QX
 // has no front-proxy option, so landing nodes connect directly.
-func qxList(endpoints []Endpoint) string {
+func qxList(endpoints []Endpoint, opts SubOptions) string {
+	_, _, chain := chainGroups(endpoints)
 	var lines []string
 	for _, e := range endpoints {
+		if !listed(e, chain, opts) { // A5-03：同 loonList
+			continue
+		}
 		if p, ok := endpointProxy(e); ok {
 			if line, ok := qxLine(p); ok {
 				lines = append(lines, line)
