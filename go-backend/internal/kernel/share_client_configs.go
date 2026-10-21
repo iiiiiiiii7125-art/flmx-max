@@ -47,8 +47,12 @@ func clientGroups(names []string, opts SubOptions) []clientGroup {
 // ---- Loon ----
 
 func loonConfig(endpoints []Endpoint, opts SubOptions) string {
+	_, _, chain := chainGroups(endpoints)
 	var proxies, names []string
 	for _, e := range endpoints {
+		if !listed(e, chain, opts) { // A5-03：隐藏的中转不进行与组
+			continue
+		}
 		if p, ok := endpointProxy(e); ok {
 			if line, ok := loonLine(p); ok {
 				proxies = append(proxies, line)
@@ -102,8 +106,12 @@ func qxPolicy(name string) string {
 }
 
 func qxConfig(endpoints []Endpoint, opts SubOptions) string {
+	_, _, chain := chainGroups(endpoints)
 	var servers, names []string
 	for _, e := range endpoints {
+		if !listed(e, chain, opts) { // A5-03：同 loonConfig
+			continue
+		}
 		if p, ok := endpointProxy(e); ok {
 			if line, ok := qxLine(p); ok {
 				servers = append(servers, line)
@@ -154,7 +162,7 @@ func qxConfig(endpoints []Endpoint, opts SubOptions) string {
 // directly in chained copies (see shadowrocketProxies), so there are no
 // chain groups.
 func shadowrocketConfig(endpoints []Endpoint, opts SubOptions) string {
-	proxies, names := shadowrocketProxies(endpoints)
+	proxies, names := shadowrocketProxies(endpoints, opts)
 	var groups []interface{}
 	for _, g := range clientGroups(names, opts) {
 		node := yamlNode{{"name", g.name}, {"type", "select"}}
