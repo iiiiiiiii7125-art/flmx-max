@@ -229,16 +229,21 @@ func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	// 必是显式禁用。改模型标签去掉 default 会触发存量库 AutoMigrate 的
 	// 列变更（SQLite 需重建表），故在仓库层收口。
 	wantEnabled := in.Enabled
-	if err := r.db.Create(in).Error; err != nil {
-		return err
-	}
-	if wantEnabled == 0 {
-		if err := r.db.Model(&model.NodeInbound{}).Where("id = ?", in.ID).Update("enabled", 0).Error; err != nil {
+	// FIX132-C（A3-06）：建行与 enabled 写回包进同一事务。旧实现
+	// 两步非原子，写回失败时行已落库且 enabled=1（与调用方显式
+	// 禁用意图相反）并已上线。
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(in).Error; err != nil {
 			return err
 		}
-		in.Enabled = 0
-	}
-	return nil
+		if wantEnabled == 0 {
+			if err := tx.Model(&model.NodeInbound{}).Where("id = ?", in.ID).Update("enabled", 0).Error; err != nil {
+				return err
+			}
+			in.Enabled = 0
+		}
+		return nil
+	})
 }
 
 // SaveNodeInbound writes the editable columns; traffic is left untouched so a
