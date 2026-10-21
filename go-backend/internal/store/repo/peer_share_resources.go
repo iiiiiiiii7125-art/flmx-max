@@ -39,6 +39,14 @@ func (r *Repository) ListPeerShareResourcesByNode(nodeID int64) ([]PeerShareReso
 	return items, err
 }
 
+// ListAllPeerShareResources 返回全部 share 的资源期望状态（FIX2-B/V5-3
+// 启动复检专用；日常对账按节点走 ListPeerShareResourcesByNode）。
+func (r *Repository) ListAllPeerShareResources() ([]PeerShareResource, error) {
+	var items []PeerShareResource
+	err := r.db.Order("id").Find(&items).Error
+	return items, err
+}
+
 func (r *Repository) MarkPeerShareResourceApplied(shareID int64, kind, name string) error {
 	return r.db.Model(&model.PeerShareResource{}).Where("share_id = ? AND kind = ? AND original_name = ?", shareID, kind, name).Update("applied", 1).Error
 }
