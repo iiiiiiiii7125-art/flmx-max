@@ -2050,6 +2050,19 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.Nodes = nodes
 
+	// FIX132-C（A3-05）：SSH 配置与面板共享定义随 nodes 段导出。
+	nodeSSHConfigs, err := r.exportNodeSSHConfigs()
+	if err != nil {
+		return nil, fmt.Errorf("export node ssh configs failed: %w", err)
+	}
+	backup.NodeSSHConfigs = nodeSSHConfigs
+
+	peerShares, err := r.exportPeerShares()
+	if err != nil {
+		return nil, fmt.Errorf("export peer shares failed: %w", err)
+	}
+	backup.PeerShares = peerShares
+
 	tunnels, err := r.exportTunnels()
 	if err != nil {
 		return nil, fmt.Errorf("export tunnels failed: %w", err)
@@ -2162,6 +2175,17 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export nodes failed: %w", err)
 		}
 		backup.Nodes = v
+		// A3-05：SSH 配置与面板共享定义随 nodes 段。
+		sc, err := r.exportNodeSSHConfigs()
+		if err != nil {
+			return nil, fmt.Errorf("export node ssh configs failed: %w", err)
+		}
+		backup.NodeSSHConfigs = sc
+		ps, err := r.exportPeerShares()
+		if err != nil {
+			return nil, fmt.Errorf("export peer shares failed: %w", err)
+		}
+		backup.PeerShares = ps
 	}
 	if typeSet["tunnels"] {
 		v, err := r.exportTunnels()
@@ -2294,6 +2318,13 @@ func (r *Repository) exportUsers() ([]model.UserBackup, error) {
 			b.MonthlyQuotaGB = quota.MonthlyLimitGB
 			b.DisabledByQuota = quota.DisabledByQuota
 			b.QuotaDisabledAt = quota.DisabledAt
+			// D4-01：已用量、暂停清单与窗口键一并导出（视图已按当前
+			// 窗口归一，过期窗口的已用量在视图层即为 0）。
+			b.DailyUsedBytes = quota.DailyUsedBytes
+			b.MonthlyUsedBytes = quota.MonthlyUsedBytes
+			b.PausedForwardIDs = quota.PausedForwardIDs
+			b.QuotaDayKey = quota.DayKey
+			b.QuotaMonthKey = quota.MonthKey
 		}
 		if u.UpdatedTime.Valid {
 			b.UpdatedTime = u.UpdatedTime.Int64
@@ -2355,6 +2386,44 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		// O7-006：恢复后保留已忽略的到期提醒状态
 		b.ExpiryReminderDismissed = n.ExpiryReminderDismissed
 		out = append(out, b)
+	}
+	return out, nil
+}
+
+// exportNodeSSHConfigs 导出 node_ssh_config 全表（A3-05）。
+func (r *Repository) exportNodeSSHConfigs() ([]model.NodeSSHConfigBackup, error) {
+	var rows []model.NodeSSHConfig
+	if err := r.db.Order("node_id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.NodeSSHConfigBackup, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, model.NodeSSHConfigBackup{
+			NodeID: c.NodeID, Host: c.Host, Port: c.Port, Username: c.Username,
+			AuthType: c.AuthType, Password: c.Password.String, PrivateKey: c.PrivateKey.String,
+			Passphrase: c.Passphrase.String, SudoMode: c.SudoMode, CreatedTime: c.CreatedTime,
+		})
+	}
+	return out, nil
+}
+
+// exportPeerShares 导出 peer_share 定义全表（A3-05；runtime/resource
+// 等运行时表按登记排除，不在此列）。
+func (r *Repository) exportPeerShares() ([]model.PeerShareBackup, error) {
+	var rows []model.PeerShare
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.PeerShareBackup, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, model.PeerShareBackup{
+			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
+			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
+			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
+			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
+			CreatedTime: s.CreatedTime, UpdatedTime: s.UpdatedTime,
+			AllowedDomains: s.AllowedDomains, AllowedIPs: s.AllowedIPs,
+		})
 	}
 	return out, nil
 }
@@ -2697,6 +2766,46 @@ func (r *Repository) exportPermissions() ([]model.PermissionBackup, error) {
 
 // ─── Import Methods ──────────────────────────────────────────────────
 
+// importReport 收集一次 Import 的跳过与提示，最终落入 ImportResult
+// 回执（FIX132-C / D4-03：恢复不再静默写悬空行、静默顶替或整单回滚，
+// 无法落位的行跳过并如实计数、顶替与降级如实提示，对齐订阅段
+// BUG-A2-4 的标杆口径）。
+type importReport struct {
+	skipped            map[string]int
+	warnings           []string
+	restoredSSHNodeIDs []int64
+}
+
+func newImportReport() *importReport {
+	return &importReport{skipped: make(map[string]int)}
+}
+
+func (rep *importReport) skip(segment string) {
+	if rep == nil {
+		return
+	}
+	rep.skipped[segment]++
+}
+
+func (rep *importReport) warnf(format string, args ...interface{}) {
+	if rep == nil {
+		return
+	}
+	rep.warnings = append(rep.warnings, fmt.Sprintf(format, args...))
+}
+
+// rowExistsTx 判断 id 行是否存在（引用存在性校验，D4-03）。
+func rowExistsTx(tx *gorm.DB, model interface{}, id int64) (bool, error) {
+	if id <= 0 {
+		return false, nil
+	}
+	var n int64
+	if err := tx.Model(model).Where("id = ?", id).Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (r *Repository) Import(backup *model.BackupData, types []string) (*model.ImportResult, error) {
 	// O7-009：版本兼容性检查（导出仅写 "1.0"），未知版本拒绝导入，
 	// 避免不兼容格式被错误恢复。
@@ -2721,6 +2830,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		return nil, err
 	}
 
+	rep := newImportReport()
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		now := unixMilliNow()
 		// BUG-A2-4：订阅在 inbounds 段按 token 重建、可能换 id；
@@ -2736,56 +2846,71 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.UsersImported = count
 		}
 		if typeSet["nodes"] && len(backup.Nodes) > 0 {
-			count, err := importNodes(tx, backup.Nodes, now)
+			count, err := importNodes(tx, backup.Nodes, now, rep)
 			if err != nil {
 				return fmt.Errorf("import nodes failed: %w", err)
 			}
 			result.NodesImported = count
 		}
+		// FIX132-C（A3-05）：SSH 配置与面板共享定义随 nodes 段恢复。
+		if typeSet["nodes"] && len(backup.NodeSSHConfigs) > 0 {
+			count, err := importNodeSSHConfigs(tx, backup.NodeSSHConfigs, now, rep)
+			if err != nil {
+				return fmt.Errorf("import node ssh configs failed: %w", err)
+			}
+			result.NodeSSHConfigsImported = count
+		}
+		if typeSet["nodes"] && len(backup.PeerShares) > 0 {
+			count, err := importPeerShares(tx, backup.PeerShares, now, rep)
+			if err != nil {
+				return fmt.Errorf("import peer shares failed: %w", err)
+			}
+			result.PeerSharesImported = count
+		}
 		if typeSet["tunnels"] && len(backup.Tunnels) > 0 {
-			count, err := importTunnels(tx, backup.Tunnels, now)
+			count, err := importTunnels(tx, backup.Tunnels, now, rep)
 			if err != nil {
 				return fmt.Errorf("import tunnels failed: %w", err)
 			}
 			result.TunnelsImported = count
 		}
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
-			count, err := importForwards(tx, backup.Forwards, now)
+			count, err := importForwards(tx, backup.Forwards, now, rep)
 			if err != nil {
 				return fmt.Errorf("import forwards failed: %w", err)
 			}
 			result.ForwardsImported = count
 		}
 		if typeSet["userTunnels"] && len(backup.UserTunnels) > 0 {
-			count, err := importUserTunnels(tx, backup.UserTunnels, now)
+			count, err := importUserTunnels(tx, backup.UserTunnels, now, rep)
 			if err != nil {
 				return fmt.Errorf("import user tunnels failed: %w", err)
 			}
 			result.UserTunnelsImported = count
 		}
 		if typeSet["speedLimits"] && len(backup.SpeedLimits) > 0 {
-			count, err := importSpeedLimits(tx, backup.SpeedLimits, now)
+			count, err := importSpeedLimits(tx, backup.SpeedLimits, now, rep)
 			if err != nil {
 				return fmt.Errorf("import speed limits failed: %w", err)
 			}
 			result.SpeedLimitsImported = count
 		}
 		if typeSet["tunnelGroups"] && len(backup.TunnelGroups) > 0 {
-			count, err := importTunnelGroups(tx, backup.TunnelGroups, now)
+			count, err := importTunnelGroups(tx, backup.TunnelGroups, now, rep)
 			if err != nil {
 				return fmt.Errorf("import tunnel groups failed: %w", err)
 			}
 			result.TunnelGroupsImported = count
 		}
 		if typeSet["userGroups"] && len(backup.UserGroups) > 0 {
-			count, err := importUserGroups(tx, backup.UserGroups, now)
+			count, err := importUserGroups(tx, backup.UserGroups, now, rep)
 			if err != nil {
 				return fmt.Errorf("import user groups failed: %w", err)
 			}
 			result.UserGroupsImported = count
 		}
 		if typeSet["permissions"] && len(backup.Permissions) > 0 {
-			count, err := importPermissions(tx, backup.Permissions, now)
+			count, err := importPermissions(tx, backup.Permissions, now, rep)
 			if err != nil {
 				return fmt.Errorf("import permissions failed: %w", err)
 			}
@@ -2799,7 +2924,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.ConfigsImported = count
 		}
 		if typeSet["inbounds"] && backup.Inbounds != nil {
-			count, err := importInbounds(tx, backup.Inbounds, now, subRemap)
+			count, err := importInbounds(tx, backup.Inbounds, now, subRemap, rep)
 			if err != nil {
 				return fmt.Errorf("import inbounds failed: %w", err)
 			}
@@ -2807,7 +2932,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		}
 		// O7-001：导入 user_inbound 表（用户订阅分配关系）
 		if typeSet["userInbounds"] && len(backup.UserInbounds) > 0 {
-			count, err := importUserInbounds(tx, backup.UserInbounds)
+			count, err := importUserInbounds(tx, backup.UserInbounds, rep)
 			if err != nil {
 				return fmt.Errorf("import user inbounds failed: %w", err)
 			}
@@ -2823,7 +2948,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		}
 		// O7-008：导入 monitor_permission 表（监控权限）
 		if typeSet["monitorPermissions"] && len(backup.MonitorPermissions) > 0 {
-			count, err := importMonitorPermissions(tx, backup.MonitorPermissions)
+			count, err := importMonitorPermissions(tx, backup.MonitorPermissions, rep)
 			if err != nil {
 				return fmt.Errorf("import monitor permissions failed: %w", err)
 			}
@@ -2843,7 +2968,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		}
 		// B4/F-030：导入 service_monitor 表（监控定义）
 		if typeSet["serviceMonitors"] && len(backup.ServiceMonitors) > 0 {
-			count, err := importServiceMonitors(tx, backup.ServiceMonitors, now)
+			count, err := importServiceMonitors(tx, backup.ServiceMonitors, now, rep)
 			if err != nil {
 				return fmt.Errorf("import service monitors failed: %w", err)
 			}
@@ -2854,6 +2979,11 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 	if err != nil {
 		return nil, err
 	}
+	if len(rep.skipped) > 0 {
+		result.SkippedRows = rep.skipped
+	}
+	result.ImportWarnings = rep.warnings
+	result.RestoredSSHNodeIDs = rep.restoredSSHNodeIDs
 	return result, nil
 }
 
@@ -2904,21 +3034,31 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			// R5-B4C: 并发兜底，映射为友好错误。
 			return count, mapUniqueViolation(err, "username")
 		}
-		if u.DailyQuotaGB > 0 || u.MonthlyQuotaGB > 0 || u.DisabledByQuota != 0 || u.QuotaDisabledAt > 0 {
-			current := time.UnixMilli(now)
-			dayKey := int64(current.Year()*10000 + int(current.Month())*100 + current.Day())
-			monthKey := int64(current.Year()*100 + int(current.Month()))
+		if u.DailyQuotaGB > 0 || u.MonthlyQuotaGB > 0 || u.DisabledByQuota != 0 || u.QuotaDisabledAt > 0 ||
+			u.PausedForwardIDs != "" || u.DailyUsedBytes != 0 || u.MonthlyUsedBytes != 0 {
+			// D4-01：新备份带窗口键时，已用量与暂停清单原样恢复
+			//（跨日恢复由配额视图的滚动归零兜底）；旧备份无这批
+			// 字段，沿用旧口径（导入日窗口 + 已用量清零）。
+			dayKey, monthKey := u.QuotaDayKey, u.QuotaMonthKey
+			dailyUsed, monthlyUsed := u.DailyUsedBytes, u.MonthlyUsedBytes
+			pausedForwardIDs := u.PausedForwardIDs
+			if dayKey <= 0 || monthKey <= 0 {
+				current := time.UnixMilli(now)
+				dayKey = int64(current.Year()*10000 + int(current.Month())*100 + current.Day())
+				monthKey = int64(current.Year()*100 + int(current.Month()))
+				dailyUsed, monthlyUsed, pausedForwardIDs = 0, 0, ""
+			}
 			quotaItem := model.UserQuota{
 				UserID:           u.ID,
 				DailyLimitGB:     u.DailyQuotaGB,
 				MonthlyLimitGB:   u.MonthlyQuotaGB,
-				DailyUsedBytes:   0,
-				MonthlyUsedBytes: 0,
+				DailyUsedBytes:   dailyUsed,
+				MonthlyUsedBytes: monthlyUsed,
 				DayKey:           dayKey,
 				MonthKey:         monthKey,
 				DisabledByQuota:  u.DisabledByQuota,
 				DisabledAt:       u.QuotaDisabledAt,
-				PausedForwardIDs: "",
+				PausedForwardIDs: pausedForwardIDs,
 				CreatedTime:      now,
 				UpdatedTime:      now,
 			}
@@ -2969,9 +3109,20 @@ func randomPasswordHash() (string, error) {
 	return security.HashPassword(hex.EncodeToString(buf))
 }
 
-func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) {
+func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, n := range nodes {
+		// D4-03：同 id 异源顶替不再静默——覆盖前比对既有行的身份
+		// 字段（名称/密钥），不同则在回执中如实提示（备份为准的
+		// 恢复语义不变，仅补披露，同订阅段 BUG-A2-4 的回执口径）。
+		var existing model.Node
+		existingRes := tx.Select("id", "name", "secret").Where("id = ?", n.ID).Limit(1).Find(&existing)
+		if existingRes.Error != nil {
+			return count, existingRes.Error
+		}
+		if existingRes.RowsAffected > 0 && (existing.Name != n.Name || existing.Secret != n.Secret) {
+			rep.warnf("节点 #%d 已被备份覆盖：目标库原记录（名称 %q）与备份（名称 %q）的名称/密钥不同，已按备份为准恢复", n.ID, existing.Name, n.Name)
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3024,6 +3175,110 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 	return count, nil
 }
 
+// importNodeSSHConfigs 恢复 node_ssh_config（A3-05）。以 node_id 为
+// 业务键 upsert；节点不存在的行跳过并计数（D4-03）。每个恢复成功的
+// 节点都登记进回执的「需重新下发」清单并附提示：SSH 配置回来了，
+// 但数据面（nft 规则绑定/内核状态）不随备份，须经启动 reconcile
+// 或下一次下发重新校验——不再静默降级。
+func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int64, rep *importReport) (int, error) {
+	count := 0
+	for _, c := range rows {
+		nodeExists, err := rowExistsTx(tx, &model.Node{}, c.NodeID)
+		if err != nil {
+			return count, err
+		}
+		if !nodeExists {
+			rep.skip("nodeSSHConfigs")
+			continue
+		}
+		item := model.NodeSSHConfig{
+			NodeID:      c.NodeID,
+			Host:        c.Host,
+			Port:        c.Port,
+			Username:    c.Username,
+			AuthType:    c.AuthType,
+			Password:    sql.NullString{String: c.Password, Valid: c.Password != ""},
+			PrivateKey:  sql.NullString{String: c.PrivateKey, Valid: c.PrivateKey != ""},
+			Passphrase:  sql.NullString{String: c.Passphrase, Valid: c.Passphrase != ""},
+			SudoMode:    c.SudoMode,
+			CreatedTime: c.CreatedTime,
+			UpdatedTime: now,
+		}
+		if item.CreatedTime == 0 {
+			item.CreatedTime = now
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "node_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"host", "port", "username", "auth_type", "password", "private_key",
+				"passphrase", "sudo_mode", "updated_time",
+			}),
+		}).Create(&item).Error; err != nil {
+			return count, err
+		}
+		rep.restoredSSHNodeIDs = append(rep.restoredSSHNodeIDs, c.NodeID)
+		count++
+	}
+	if count > 0 {
+		rep.warnf("已恢复 %d 个节点的 SSH 配置；这些节点的数据面（nftables 规则/计数基线）不随备份恢复，将在启动 reconcile 或下一次下发时重新校验（需重新下发），节点清单见 restoredSSHNodeIds", count)
+	}
+	return count, nil
+}
+
+// importPeerShares 恢复 peer_share 定义（A3-05）。token 是全局唯一
+// 业务键：同 token 异 id 的既有行先删占位（与 user_subscriptions
+// 导入的既有处理一致）；节点不存在的定义跳过并计数（D4-03）。
+// runtime/resource 等运行时表不随备份，对端凭原 token 重新接入后
+// 由运行时重建，回执如实提示。
+func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep *importReport) (int, error) {
+	count := 0
+	for _, s := range rows {
+		nodeExists, err := rowExistsTx(tx, &model.Node{}, s.NodeID)
+		if err != nil {
+			return count, err
+		}
+		if !nodeExists {
+			rep.skip("peerShares")
+			continue
+		}
+		if s.Token != "" {
+			if err := tx.Where("token = ? AND id <> ?", s.Token, s.ID).Delete(&model.PeerShare{}).Error; err != nil {
+				return count, err
+			}
+		}
+		updated := s.UpdatedTime
+		if updated == 0 {
+			updated = now
+		}
+		item := model.PeerShare{
+			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
+			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
+			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
+			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
+			CreatedTime: s.CreatedTime, UpdatedTime: updated,
+			AllowedDomains: s.AllowedDomains, AllowedIPs: s.AllowedIPs,
+		}
+		if item.CreatedTime == 0 {
+			item.CreatedTime = now
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"name", "node_id", "token", "max_bandwidth", "expiry_time",
+				"port_range_start", "port_range_end", "current_flow", "is_active",
+				"updated_time", "allowed_domains", "allowed_ips",
+			}),
+		}).Create(&item).Error; err != nil {
+			return count, err
+		}
+		count++
+	}
+	if count > 0 {
+		rep.warnf("已恢复 %d 条面板共享（联邦）定义；运行时状态未随备份恢复，对端凭原 token 重新接入后自动重建", count)
+	}
+	return count, nil
+}
+
 // normalizeBackupTunnelEngine mirrors handler.normalizeTunnelEngine (the repo
 // layer cannot import the handler): "" or "gost" select the agent's
 // forwarder, "realm" selects realm; anything else is an error, never
@@ -3039,7 +3294,7 @@ func normalizeBackupTunnelEngine(raw string) (string, error) {
 	}
 }
 
-func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, error) {
+func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *importReport) (int, error) {
 	// BUG-A2-3：chain 行先删后插。本批隧道在当前 DB 中的既有 chain 行
 	// 整体删除后再按备份重建——既避免恢复到已漂移状态时残留行与新行
 	// 在 (node_id, port) 唯一索引上互撞，也保证恢复结果与备份严格
@@ -3089,6 +3344,15 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, e
 			return count, err
 		}
 		for _, ct := range t.ChainTunnels {
+			// D4-03：链路引用的节点不存在时跳过该行并计数，不写悬空行。
+			nodeExists, err := rowExistsTx(tx, &model.Node{}, ct.NodeID)
+			if err != nil {
+				return count, err
+			}
+			if !nodeExists {
+				rep.skip("chainTunnels")
+				continue
+			}
 			// BUG-A2-3：可空列按指针还原 NULL（旧实现一律 Valid:true，
 			// NULL port 被写成 0，两条同节点 NULL 链路即撞唯一索引
 			// 整单回滚）。chain 行已在上方整批删除，这里直接插入。
@@ -3142,9 +3406,22 @@ func restoreZeroValuedInt(tx *gorm.DB, model interface{}, id int64, column strin
 	return tx.Model(model).Where("id = ?", id).Update(column, 0).Error
 }
 
-func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int, error) {
+func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, f := range forwards {
+		// D4-03：引用（用户/隧道）不存在时整行跳过并计数，不写悬空行。
+		userExists, err := rowExistsTx(tx, &model.User{}, f.UserID)
+		if err != nil {
+			return count, err
+		}
+		tunnelExists, err := rowExistsTx(tx, &model.Tunnel{}, f.TunnelID)
+		if err != nil {
+			return count, err
+		}
+		if !userExists || !tunnelExists {
+			rep.skip("forwards")
+			continue
+		}
 		item := model.Forward{
 			ID:                   f.ID,
 			UserID:               f.UserID,
@@ -3167,7 +3444,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int
 			ProxyProtocolReceive: f.ProxyProtocolReceive,
 			ProxyProtocolSend:    f.ProxyProtocolSend,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "user_name", "name", "tunnel_id", "remote_addr", "strategy",
@@ -3182,6 +3459,15 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int
 				return count, err
 			}
 			for _, fp := range *f.ForwardPorts {
+				// D4-03：端口引用的节点不存在时跳过该端口行并计数。
+				portNodeExists, err := rowExistsTx(tx, &model.Node{}, fp.NodeID)
+				if err != nil {
+					return count, err
+				}
+				if !portNodeExists {
+					rep.skip("forwardPorts")
+					continue
+				}
 				// O7-005：恢复 ForwardPort 的 InIP（sql.NullString）
 				if err := tx.Create(&model.ForwardPort{
 					ForwardID: f.ID, NodeID: fp.NodeID, Port: fp.Port,
@@ -3196,9 +3482,22 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int
 	return count, nil
 }
 
-func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int64) (int, error) {
+func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int64, rep *importReport) (int, error) {
 	count := 0
 	for _, ut := range userTunnels {
+		// D4-03：引用（用户/隧道）不存在时整行跳过并计数。
+		userExists, err := rowExistsTx(tx, &model.User{}, ut.UserID)
+		if err != nil {
+			return count, err
+		}
+		tunnelExists, err := rowExistsTx(tx, &model.Tunnel{}, ut.TunnelID)
+		if err != nil {
+			return count, err
+		}
+		if !userExists || !tunnelExists {
+			rep.skip("userTunnels")
+			continue
+		}
 		item := model.UserTunnel{
 			ID:            ut.ID,
 			UserID:        ut.UserID,
@@ -3213,7 +3512,7 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int6
 			ExpTime:       ut.ExpTime,
 			Status:        ut.Status,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "tunnel_id", "speed_id", "num", "flow", "flow_mib", "in_flow", "out_flow",
@@ -3228,9 +3527,21 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int6
 	return count, nil
 }
 
-func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now int64) (int, error) {
+func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, sl := range speedLimits {
+		// D4-03：绑定了隧道而隧道不存在时整行跳过并计数（未绑定
+		// 的全局限速不受影响）。
+		if sl.TunnelID != nil {
+			tunnelExists, err := rowExistsTx(tx, &model.Tunnel{}, *sl.TunnelID)
+			if err != nil {
+				return count, err
+			}
+			if !tunnelExists {
+				rep.skip("speedLimits")
+				continue
+			}
+		}
 		item := model.SpeedLimit{
 			ID:          sl.ID,
 			Name:        sl.Name,
@@ -3256,16 +3567,47 @@ func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now in
 }
 
 // O7-001：导入 user_inbound 表（用户订阅分配关系）
-func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup) (int, error) {
+//
+// FIX132-C（D4-03）：引用存在性校验对齐订阅段标杆——用户/入站
+// 不存在，或 relay 不存在/不属于该入站时，整行跳过并计入
+// SkippedRows["userInbounds"]，不写悬空行（旧实现原样落库且回执
+// 假报成功，D4 探针 C 坐实）。D4-02：(user_id, inbound_id, relay_id)
+// 复合唯一占位预处理，同键异 id 先删。
+func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup, rep *importReport) (int, error) {
 	count := 0
 	for _, r := range rows {
+		userExists, err := rowExistsTx(tx, &model.User{}, r.UserID)
+		if err != nil {
+			return count, err
+		}
+		inboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, r.InboundID)
+		if err != nil {
+			return count, err
+		}
+		relayOK := true
+		if r.RelayID > 0 {
+			var relay model.NodeInboundRelay
+			res := tx.Where("id = ?", r.RelayID).Limit(1).Find(&relay)
+			if res.Error != nil {
+				return count, res.Error
+			}
+			relayOK = res.RowsAffected > 0 && relay.InboundID == r.InboundID
+		}
+		if !userExists || !inboundExists || !relayOK {
+			rep.skip("userInbounds")
+			continue
+		}
+		if err := tx.Where("user_id = ? AND inbound_id = ? AND relay_id = ? AND id <> ?", r.UserID, r.InboundID, r.RelayID, r.ID).
+			Delete(&model.UserInbound{}).Error; err != nil {
+			return count, err
+		}
 		item := model.UserInbound{
 			ID:        r.ID,
 			UserID:    r.UserID,
 			InboundID: r.InboundID,
 			RelayID:   r.RelayID,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "inbound_id", "relay_id",
@@ -3328,9 +3670,21 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, s
 }
 
 // B4/F-030：导入 service_monitor 表（监控定义）
-func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now int64) (int, error) {
+func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, r := range rows {
+		// D4-03：绑定了节点而节点不存在时整行跳过并计数
+		//（NodeID=0 的面板本地监控不受影响）。
+		if r.NodeID > 0 {
+			nodeExists, err := rowExistsTx(tx, &model.Node{}, r.NodeID)
+			if err != nil {
+				return count, err
+			}
+			if !nodeExists {
+				rep.skip("serviceMonitors")
+				continue
+			}
+		}
 		updated := r.UpdatedTime
 		if updated == 0 {
 			updated = now
@@ -3394,15 +3748,30 @@ func importAnnouncements(tx *gorm.DB, rows []model.AnnouncementBackup, now int64
 }
 
 // O7-008：导入 monitor_permission 表（监控权限）
-func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup) (int, error) {
+//
+// FIX132-C（D4-02）：user_id 全局唯一——同用户异 id 的既有行先删
+// 占位，以备份为准（旧实现只有 OnConflict(id)，业务键冲突即整单
+// 回滚，D4 探针 B 坐实）。D4-03：用户不存在时跳过并计数。
+func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup, rep *importReport) (int, error) {
 	count := 0
 	for _, mp := range rows {
+		userExists, err := rowExistsTx(tx, &model.User{}, mp.UserID)
+		if err != nil {
+			return count, err
+		}
+		if !userExists {
+			rep.skip("monitorPermissions")
+			continue
+		}
+		if err := tx.Where("user_id = ? AND id <> ?", mp.UserID, mp.ID).Delete(&model.MonitorPermission{}).Error; err != nil {
+			return count, err
+		}
 		item := model.MonitorPermission{
 			ID:          mp.ID,
 			UserID:      mp.UserID,
 			CreatedTime: mp.CreatedTime,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "created_time",
@@ -3416,9 +3785,14 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup)
 	return count, nil
 }
 
-func importTunnelGroups(tx *gorm.DB, tunnelGroups []model.TunnelGroupBackup, now int64) (int, error) {
+func importTunnelGroups(tx *gorm.DB, tunnelGroups []model.TunnelGroupBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, tg := range tunnelGroups {
+		// D4-02：组名唯一——同名异 id 的既有组先删占位（含其成员），
+		// 以备份为准（与 kernels/relays/user_subscriptions 既有处理一致）。
+		if err := deleteSameNameGroupTx(tx, &model.TunnelGroup{}, "tunnel_group_id", tg.Name, tg.ID); err != nil {
+			return count, err
+		}
 		item := model.TunnelGroup{
 			ID:          tg.ID,
 			Name:        tg.Name,
@@ -3437,6 +3811,15 @@ func importTunnelGroups(tx *gorm.DB, tunnelGroups []model.TunnelGroupBackup, now
 			return count, err
 		}
 		for _, tunnelID := range tg.Tunnels {
+			// D4-03：成员引用的隧道不存在时跳过该成员并计数。
+			tunnelExists, err := rowExistsTx(tx, &model.Tunnel{}, tunnelID)
+			if err != nil {
+				return count, err
+			}
+			if !tunnelExists {
+				rep.skip("tunnelGroupMembers")
+				continue
+			}
 			if err := tx.Create(&model.TunnelGroupTunnel{TunnelGroupID: tg.ID, TunnelID: tunnelID, CreatedTime: now}).Error; err != nil {
 				return count, err
 			}
@@ -3446,9 +3829,41 @@ func importTunnelGroups(tx *gorm.DB, tunnelGroups []model.TunnelGroupBackup, now
 	return count, nil
 }
 
-func importUserGroups(tx *gorm.DB, userGroups []model.UserGroupBackup, now int64) (int, error) {
+// deleteSameNameGroupTx 删除与待恢复分组同名、异 id 的既有分组行
+// （分组名全局唯一，占位行不删则 upsert 撞唯一约束整单回滚——
+// D4-02）。成员行按组 id 一并删除（成员随后按备份重建）。
+// groupModel 为 TunnelGroup/UserGroup，memberGroupColumn 为成员表
+// 的组外键列名。
+func deleteSameNameGroupTx(tx *gorm.DB, groupModel interface{}, memberGroupColumn, name string, keepID int64) error {
+	var occupying []int64
+	if err := tx.Model(groupModel).Where("name = ? AND id <> ?", name, keepID).Pluck("id", &occupying).Error; err != nil {
+		return err
+	}
+	if len(occupying) == 0 {
+		return nil
+	}
+	var memberModel interface{}
+	switch groupModel.(type) {
+	case *model.TunnelGroup:
+		memberModel = &model.TunnelGroupTunnel{}
+	case *model.UserGroup:
+		memberModel = &model.UserGroupUser{}
+	default:
+		return nil
+	}
+	if err := tx.Where(memberGroupColumn+" IN ?", occupying).Delete(memberModel).Error; err != nil {
+		return err
+	}
+	return tx.Where("id IN ?", occupying).Delete(groupModel).Error
+}
+
+func importUserGroups(tx *gorm.DB, userGroups []model.UserGroupBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, ug := range userGroups {
+		// D4-02：组名唯一占位预处理（同 importTunnelGroups）。
+		if err := deleteSameNameGroupTx(tx, &model.UserGroup{}, "user_group_id", ug.Name, ug.ID); err != nil {
+			return count, err
+		}
 		item := model.UserGroup{
 			ID:          ug.ID,
 			Name:        ug.Name,
@@ -3467,6 +3882,15 @@ func importUserGroups(tx *gorm.DB, userGroups []model.UserGroupBackup, now int64
 			return count, err
 		}
 		for _, userID := range ug.Users {
+			// D4-03：成员引用的用户不存在时跳过该成员并计数。
+			userExists, err := rowExistsTx(tx, &model.User{}, userID)
+			if err != nil {
+				return count, err
+			}
+			if !userExists {
+				rep.skip("userGroupMembers")
+				continue
+			}
 			if err := tx.Create(&model.UserGroupUser{UserGroupID: ug.ID, UserID: userID, CreatedTime: now}).Error; err != nil {
 				return count, err
 			}
@@ -3476,16 +3900,35 @@ func importUserGroups(tx *gorm.DB, userGroups []model.UserGroupBackup, now int64
 	return count, nil
 }
 
-func importPermissions(tx *gorm.DB, permissions []model.PermissionBackup, _ int64) (int, error) {
+func importPermissions(tx *gorm.DB, permissions []model.PermissionBackup, _ int64, rep *importReport) (int, error) {
 	count := 0
 	for _, p := range permissions {
+		// D4-03：引用的用户组/隧道组不存在时整行跳过并计数。
+		ugExists, err := rowExistsTx(tx, &model.UserGroup{}, p.UserGroupID)
+		if err != nil {
+			return count, err
+		}
+		tgExists, err := rowExistsTx(tx, &model.TunnelGroup{}, p.TunnelGroupID)
+		if err != nil {
+			return count, err
+		}
+		if !ugExists || !tgExists {
+			rep.skip("permissions")
+			continue
+		}
+		// D4-02：(user_group_id, tunnel_group_id) 复合唯一——同键
+		// 异 id 的既有行先删占位，以备份为准。
+		if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND id <> ?", p.UserGroupID, p.TunnelGroupID, p.ID).
+			Delete(&model.GroupPermission{}).Error; err != nil {
+			return count, err
+		}
 		item := model.GroupPermission{
 			ID:            p.ID,
 			UserGroupID:   p.UserGroupID,
 			TunnelGroupID: p.TunnelGroupID,
 			CreatedTime:   p.CreatedTime,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"user_group_id", "tunnel_group_id"}),
 		}).Create(&item).Error
@@ -3493,6 +3936,22 @@ func importPermissions(tx *gorm.DB, permissions []model.PermissionBackup, _ int6
 			return count, err
 		}
 		for _, g := range p.Grants {
+			// D4-03：grant 引用的 user_tunnel 不存在时跳过该条并计数。
+			utExists, err := rowExistsTx(tx, &model.UserTunnel{}, g.UserTunnelID)
+			if err != nil {
+				return count, err
+			}
+			if !utExists {
+				rep.skip("permissionGrants")
+				continue
+			}
+			// D4-02：(user_group_id, tunnel_group_id, user_tunnel_id)
+			// 复合唯一占位预处理。
+			if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND user_tunnel_id = ? AND id <> ?",
+				g.UserGroupID, g.TunnelGroupID, g.UserTunnelID, g.ID).
+				Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+				return count, err
+			}
 			grantItem := model.GroupPermissionGrant{
 				ID:             g.ID,
 				UserGroupID:    g.UserGroupID,
