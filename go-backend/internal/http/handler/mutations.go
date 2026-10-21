@@ -2488,22 +2488,59 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("隧道权限不存在"))
 		return
 	}
-	flow, flowMiB, flowErr := parseTrafficLimit(req, 0)
-	if flowErr != nil {
-		response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
-		return
+	// G3-131（BUG-A2-5）：真部分更新，与 upsertUserTunnel 同一约定——
+	// 未传的字段保持原值，只有显式传入才覆盖；数值字段用 -1 哨兵区分
+	// 「未传」与「传 0」，speedId 显式传 null 表示清除限速引用。
+	// 旧实现对未传字段套硬编码默认值（num→0、expTime→+365 天、
+	// flowResetTime→1、status→1、flow→parseTrafficLimit 缺省值），
+	// 部分更新会静默重置既有配置。
+	flow := oldTunnel.Flow
+	flowMiB := oldTunnel.FlowMiB
+	_, flowSupplied := req["flow"]
+	_, flowMiBSupplied := req["flowMiB"]
+	if flowSupplied || flowMiBSupplied {
+		var flowErr error
+		flow, flowMiB, flowErr = parseTrafficLimit(req, 0)
+		if flowErr != nil {
+			response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
+			return
+		}
+		if !flowMiBSupplied && oldTunnel.Flow == flow {
+			flowMiB = oldTunnel.FlowMiB
+		}
 	}
-	if _, supplied := req["flowMiB"]; !supplied && oldTunnel.Flow == flow {
-		flowMiB = oldTunnel.FlowMiB
+
+	num := int(oldNum)
+	if v := asInt(req["num"], -1); v >= 0 {
+		num = v
+	}
+	expTime := oldExpTime
+	if v := asInt64(req["expTime"], -1); v >= 0 {
+		expTime = v
+	}
+	flowResetTime := oldFlowReset
+	if v := asInt64(req["flowResetTime"], -1); v >= 0 {
+		flowResetTime = v
+	}
+	status := oldStatus
+	if v := asInt(req["status"], -1); v >= 0 {
+		status = v
+	}
+
+	effectiveSpeedID := interface{}(oldSpeedID)
+	if speedID != nil {
+		effectiveSpeedID = nullableInt(speedID)
+	} else if _, supplied := req["speedId"]; supplied {
+		effectiveSpeedID = nil
 	}
 
 	if err := h.repo.UpdateUserTunnel(id,
 		flow,
-		asInt(req["num"], 0),
-		asInt64(req["expTime"], time.Now().Add(365*24*time.Hour).UnixMilli()),
-		asInt64(req["flowResetTime"], 1),
-		nullableInt(speedID),
-		asInt(req["status"], 1),
+		num,
+		expTime,
+		flowResetTime,
+		effectiveSpeedID,
+		status,
 		flowMiB,
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -6240,6 +6277,11 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 	if portRange == "" {
 		return nil
 	}
+	// B3 口径判定（W10 复审 A1）：节点端口规格是「可分配端口池」——自动
+	// 分配（parsePortRangeSpec）从中取口，本函数也只被转发/中转/隧道入口
+	// 路径调用；内核入站监听端口是管理员显式配置、自始只做占用冲突校验
+	// （inboundPortConflict），不在此池口径内。故报错文案明示约束范围，
+	// 不给入站新增拦截（存量入站多在池外，新增拦截会在编辑时误伤）。
 	// B4/F-016: 端口规格是逗号多段的集合语义（与自动分配
 	// parsePortRangeSpec 一致）。此前压成 min-max 区间校验，段间空隙
 	// 端口被误放行——校验通过但自动分配永不选、agent 按规格不认。
@@ -6252,7 +6294,7 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内", port, node.Name, portRange)
+	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内（该范围仅约束转发/中转/隧道入口端口）", port, node.Name, portRange)
 }
 
 func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, currentForwardID int64) error {

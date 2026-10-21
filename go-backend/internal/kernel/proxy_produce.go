@@ -229,11 +229,31 @@ func ssPluginString(p Proxy) string {
 
 func proxyClash(e Endpoint) (yamlNode, bool) {
 	p := e.Proxy.forEndpoint(e)
-	if p.Type() == "snell" && p.num("version") > 3 {
-		// Mihomo speaks XHTTP (xhttp-opts) since 1.19; it only speaks Snell v1-v3.
-		return nil, false
+	if p.Type() == "snell" {
+		// Mihomo's snell client (v1.19.32, NewSnell) accepts versions
+		// 1-4, normalizes 5 to 4 (v5 servers accept v4 clients) and
+		// rejects 6 outright — keep 6 out, render the rest. 此前按
+		// v1-v3 的旧口径把 v4/v5 一并丢弃，与自建入站的 Clash 渲染
+		// (clashSnell) 同批订正。
+		switch v := p.num("version"); {
+		case v == 5:
+			p["version"] = 4
+		case v > 5:
+			return nil, false
+		}
+		// Snell over ShadowTLS is stored panel-side under "shadow-tls";
+		// Mihomo expresses it as a snell obfs mode. An existing obfs
+		// mode wins: obfs-opts holds a single mode.
+		if st := p.sub("shadow-tls"); st.str("password") != "" && p.sub("obfs-opts").str("mode") == "" {
+			version := st.num("version")
+			if version == 0 {
+				version = 3
+			}
+			p["obfs-opts"] = map[string]interface{}{"mode": "shadowtls", "host": st.str("host"),
+				"password": st.str("password"), "version": version}
+		}
 	}
-	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS
+	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS (converted above)
 	node := yamlNode{{"name", e.Name}, {"type", p.Type()}, {"server", p.str("server")}, {"port", e.Port}}
 	keys := make([]string, 0, len(p))
 	for k := range p {
@@ -393,6 +413,38 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		o["type"] = "anytls"
 		o["password"] = p.str("password")
 		tls(true)
+	case "snell":
+		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
+			// sing-box's snell client has no obfs modes; skip rather
+			// than emit a node stripped of its obfuscation layer.
+			return nil, false
+		}
+		o["type"] = "snell"
+		// Same client version mapping as singboxOutbound: the v4 wire
+		// speaks to v4 and v5 servers, so 5 renders as 4; 6 stays 6.
+		switch v := p.num("version"); {
+		case v == 5:
+			o["version"] = 4
+		case v >= 1:
+			o["version"] = v
+		}
+		o["psk"] = p.str("psk")
+		if st := p.sub("shadow-tls"); st.str("password") != "" {
+			tag := e.Name + " (shadowtls)"
+			delete(o, "server")
+			delete(o, "server_port")
+			o["detour"] = tag
+			version := st.num("version")
+			if version == 0 {
+				version = 3
+			}
+			return []map[string]interface{}{o, {
+				"type": "shadowtls", "tag": tag, "server": strings.Trim(e.Host, "[]"), "server_port": e.Port,
+				"version": version, "password": st.str("password"),
+				"tls": map[string]interface{}{"enabled": true, "server_name": st.str("host"),
+					"utls": map[string]interface{}{"enabled": true, "fingerprint": firstNonEmptyString(p.str("client-fingerprint"), "chrome")}},
+			}}, true
+		}
 	case "socks5":
 		o["type"] = "socks"
 		o["version"] = "5"

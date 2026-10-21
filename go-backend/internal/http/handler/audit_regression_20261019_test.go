@@ -18,21 +18,22 @@ func TestBuildFlowUploadBatchDropsNegativeValues(t *testing.T) {
 	}
 	items := []flowItem{
 		{N: "70_2_1_tcp", U: 100, D: 200},    // 合法上报
-		{N: "70_2_1_tcp", U: 0, D: -1000000}, // 伪造负下行
-		{N: "70_2_1_tcp", U: -50, D: 0},      // 伪造负上行
+		{N: "70_2_1_tcp", U: 0, D: -1000000}, // 伪造负入向（D=客户端→远端）
+		{N: "70_2_1_tcp", U: -50, D: 0},      // 伪造负出向（U=远端→客户端）
 	}
 	batch := h.buildFlowUploadBatch(items, metas)
 	if len(batch.flowDeltas) != 1 {
 		t.Fatalf("expected 1 flow delta, got %d", len(batch.flowDeltas))
 	}
 	d := batch.flowDeltas[0]
-	// O6-002（2026-10-20 修）：InFlow=上传、OutFlow=下载。合法上报 U=100（上传）、D=200（下载），
-	// Flow=1（单向）只计上传 → InFlow=100、OutFlow=0、quota=100。负值上报均被丢弃。
-	// 本测试曾断言 in=200/out=100/quota=300，那是 M-001 移除前的乘数 bug 语义。
-	if d.InFlow != 100 || d.OutFlow != 0 {
+	// N-01 方向口径：线格式 U=出、D=入。合法上报 D=200（入）、U=100
+	// （出），Flow=1（单向）只计入方向 → InFlow=200、OutFlow=0、
+	// quota=200。负值上报均被丢弃（本测试的 H-17 本体不变）。
+	// 旧断言 in=100/quota=100 是方向颠倒时的值，本修复下不成立。
+	if d.InFlow != 200 || d.OutFlow != 0 {
 		t.Fatalf("negative values leaked into deltas: %+v", d)
 	}
-	if got := batch.quotaUsage[2]; got != 100 {
+	if got := batch.quotaUsage[2]; got != 200 {
 		t.Fatalf("negative values leaked into quota usage: %d", got)
 	}
 }

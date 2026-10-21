@@ -36,12 +36,14 @@ func TestBuildFlowUploadBatchAggregatesForwardQuotaPeerShareAndCleanupTargets(t 
 	if delta.ForwardID != 20 || delta.UserID != 2 || delta.UserTunnelID != 10 {
 		t.Fatalf("unexpected flow delta identity: %#v", delta)
 	}
-	// O6-002（2026-10-20 修）：InFlow/OutFlow 语义统一为 InFlow=上传、OutFlow=下载（与 nftables 路径一致）。
-	// 本测试曾断言旧值 in=480/out=660/quota=1140，那是 M-001 移除前的乘数 bug
-	// （TunnelFlow=3 当乘数：U*2*3、D*2*3）。新语义：U=110,D=80,ratio=2,Flow=3(≠1 记双向)
-	// → InFlow=110*2=220（上传）、OutFlow=80*2=160（下载）、quota=380。
-	if delta.InFlow != 220 || delta.OutFlow != 160 {
-		t.Fatalf("expected scaled flow in=220 out=160, got in=%d out=%d", delta.InFlow, delta.OutFlow)
+	// N-01（方向订正）：线格式 U=远端→客户端（出）、D=客户端→远端
+	// （入），见 flow_upload_batch.go 的钉死注释。合并后 U=110（出）、
+	// D=80（入），ratio=2、Flow=3（≠1 双向）→ InFlow=80*2=160、
+	// OutFlow=110*2=220、quota=380（总额与旧断言一致，仅方向归属
+	// 对调）。旧断言 in=220/out=160 是 O6-002 按「U=入」字面假设交换
+	// 后的值，在本修复下不成立——这正是区分修复前/后的断言。
+	if delta.InFlow != 160 || delta.OutFlow != 220 {
+		t.Fatalf("expected scaled flow in=160 out=220, got in=%d out=%d", delta.InFlow, delta.OutFlow)
 	}
 	if batch.quotaUsage[2] != 380 {
 		t.Fatalf("expected quota usage 380, got %d", batch.quotaUsage[2])
@@ -256,5 +258,76 @@ func TestApplyFlowUploadBatchFallsBackToPerUserQuotaUpdates(t *testing.T) {
 	}
 	if got := mustQueryInt(t, r, `SELECT daily_used_bytes FROM user_quota WHERE user_id = 3`); got != 0 {
 		t.Fatalf("expected failed user 3 quota delta to remain unapplied, got %d", got)
+	}
+}
+
+// TestFlowDirectionParityAcrossEngines 是 N-01 的回归测试：同一笔物理
+// 流量（入=客户端→远端 inBytes、出=远端→客户端 outBytes）分别经
+// gost 上报路径（线格式 U=出、D=入）与 nftables/realm 路径
+// （BytesIn=入、BytesOut=出）入账时，flowDeltas、quotaUsage 与
+// 隧道指标原料必须逐项一致。
+// 修复前（O6-002 字面交换）gost 路径把入/出对调：场景 A 下 InFlow
+// 会得到 12,583,527、quota 同值，与 nft 路径的 267 相悖，本测试 FAIL；
+// 修复后两路一致，PASS。场景参数取自 w10-run/N-01 真机实证。
+func TestFlowDirectionParityAcrossEngines(t *testing.T) {
+	h := &Handler{}
+	const fwdID, userID, userTunnelID, tunnelID = 20, 2, 10, 1
+
+	scenarios := []struct {
+		name        string
+		tunnelFlow  int64
+		inBytes     int64 // 客户端→远端
+		outBytes    int64 // 远端→客户端
+		wantInFlow  int64
+		wantOutFlow int64
+		wantQuota   int64
+	}{
+		// W10 阶段 G1/G2（gost）与 R（realm）所在隧道的真实形态：
+		// Flow=1 单向。修复前 gost 按出方向 12,583,527 扣配额，
+		// realm 只按入方向 11,568 扣——同隧道两引擎口径相反。
+		{name: "single-direction download-heavy", tunnelFlow: 1, inBytes: 267, outBytes: 12583527, wantInFlow: 267, wantOutFlow: 0, wantQuota: 267},
+		{name: "single-direction realm-shaped", tunnelFlow: 1, inBytes: 11568, outBytes: 16805264, wantInFlow: 11568, wantOutFlow: 0, wantQuota: 11568},
+		{name: "bidirectional download-heavy", tunnelFlow: 2, inBytes: 267, outBytes: 12583527, wantInFlow: 267, wantOutFlow: 12583527, wantQuota: 12583794},
+	}
+
+	for _, sc := range scenarios {
+		metas := map[int64]repo.FlowUploadForwardMeta{
+			fwdID: {
+				ForwardID:    fwdID,
+				UserID:       userID,
+				UserTunnelID: userTunnelID,
+				TunnelID:     tunnelID,
+				TrafficRatio: 1,
+				TunnelFlow:   sc.tunnelFlow,
+			},
+		}
+
+		// gost 路径：线格式 U=出（远端→客户端）、D=入（客户端→远端）。
+		gostBatch := h.buildFlowUploadBatch([]flowItem{
+			{N: "20_2_10", U: sc.outBytes, D: sc.inBytes},
+		}, metas)
+		// nftables/realm 路径：BytesIn=入、BytesOut=出。
+		nftBatch := buildNftFlowUploadBatch([]nftTrafficDelta{
+			{ForwardID: fwdID, BytesIn: sc.inBytes, BytesOut: sc.outBytes},
+		}, metas)
+
+		for label, batch := range map[string]flowUploadBatch{"gost": gostBatch, "nft": nftBatch} {
+			if len(batch.flowDeltas) != 1 {
+				t.Fatalf("%s/%s: expected 1 flow delta, got %d", sc.name, label, len(batch.flowDeltas))
+			}
+			delta := batch.flowDeltas[0]
+			if delta.InFlow != sc.wantInFlow || delta.OutFlow != sc.wantOutFlow {
+				t.Fatalf("%s/%s: expected flow in=%d out=%d, got in=%d out=%d",
+					sc.name, label, sc.wantInFlow, sc.wantOutFlow, delta.InFlow, delta.OutFlow)
+			}
+			if batch.quotaUsage[userID] != sc.wantQuota {
+				t.Fatalf("%s/%s: expected quota %d, got %d", sc.name, label, sc.wantQuota, batch.quotaUsage[userID])
+			}
+			raw := batch.forwardTraffic[fwdID]
+			if raw.bytesIn != sc.inBytes || raw.bytesOut != sc.outBytes {
+				t.Fatalf("%s/%s: expected raw traffic in=%d out=%d, got in=%d out=%d",
+					sc.name, label, sc.inBytes, sc.outBytes, raw.bytesIn, raw.bytesOut)
+			}
+		}
 	}
 }

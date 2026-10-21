@@ -1167,10 +1167,14 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UnixMilli()
 
-	// O11-P3-2：先完成全部校验（敏感/系统管理/合法性/空值拒绝，与 updateSingleConfig
-	// 一致：空值仅 app_logo/app_favicon 允许），全部通过后再一次性事务写入。
-	// 旧逻辑逐个 UpsertConfig 且无事务：中途失败会留下部分写入，且空值直接入库。
+	// O11-P3-2：先完成全部校验（敏感/系统管理/合法性），全部通过后再一次性
+	// 事务写入。旧逻辑逐个 UpsertConfig 且无事务：中途失败会留下部分写入。
+	// G3-131（A3 F-1）：空值不再整批拒绝。可清空键（凭据/URL/可选文本，
+	// 见 repo.IsClearableConfigKey）传空 = 删除该键、读取回落默认——
+	// Bot Token/Webhook 等凭据由此可以经 UI 撤下；必填键传空仍拒绝，
+	// 且错误信息带上键名以便定位。
 	validated := make(map[string]string, len(payload))
+	cleared := make([]string, 0, len(payload))
 	hooks := make([]string, 0, len(payload))
 	prevPools := make(map[string][]latencyTarget, len(payload))
 	for k, v := range payload {
@@ -1193,16 +1197,22 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if value == "" && key != "app_logo" && key != "app_favicon" {
-			response.WriteJSON(w, response.ErrDefault("配置值不能为空"))
-			return
+		if value == "" {
+			if !repo.IsClearableConfigKey(key) {
+				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("配置值不能为空：%s", key)))
+				return
+			}
+			cleared = append(cleared, key)
+			hooks = append(hooks, key)
+			prevPools[key] = h.latencyPoolBefore(key)
+			continue
 		}
 		validated[key] = value
 		hooks = append(hooks, key)
 		prevPools[key] = h.latencyPoolBefore(key)
 	}
 
-	if err := h.repo.UpsertConfigs(validated, now); err != nil {
+	if err := h.repo.ApplyConfigBatch(validated, cleared, now); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1245,8 +1255,22 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if value == "" && name != "app_logo" && name != "app_favicon" {
-		response.WriteJSON(w, response.ErrDefault("配置值不能为空"))
+	// G3-131（A3 F-1）：与 updateConfigs 同一清空语义——可清空键传空 =
+	// 删除该键回落默认；必填键传空拒绝并在错误中带上键名。
+	if value == "" {
+		if !repo.IsClearableConfigKey(name) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("配置值不能为空：%s", name)))
+			return
+		}
+		prevPool := h.latencyPoolBefore(name)
+		if err := h.repo.DeleteConfig(name); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		h.notifyTunnelQualityConfigChanged(name)
+		h.onLatencyConfigChanged(name, prevPool)
+
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 
