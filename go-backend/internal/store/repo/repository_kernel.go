@@ -346,9 +346,68 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 	if len(samples) == 0 {
 		return nil
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		ids := make([]int64, 0, len(samples))
-		for _, s := range samples {
+
+	// F-075（A4-004）：同一批内同 (inbound, protocol, direction)
+	// 的重复样本先合并再算增量（同 epoch 取最大 Bytes；epoch
+	// 变化说明计数器已重置，取后到样本为最新化身）。旧实现
+	// prev 只读 DB 基线、批次内不推进，重复样本会重复计入。
+	// 合并是纯函数，先于分片完成：合并后每个键在整批中只出现一次，
+	// 这是 D6-03 分片后片间互不依赖的前提。
+	merged := make(map[inboundCounterKey]InboundCounterSample, len(samples))
+	mergedOrder := make([]inboundCounterKey, 0, len(samples))
+	for _, s := range samples {
+		k := inboundCounterKey{s.InboundID, s.Protocol, s.Direction}
+		if cur, ok := merged[k]; ok {
+			switch {
+			case s.Epoch != cur.Epoch:
+				merged[k] = s
+			case s.Bytes > cur.Bytes:
+				merged[k] = s
+			}
+			continue
+		}
+		merged[k] = s
+		mergedOrder = append(mergedOrder, k)
+	}
+	ordered := make([]InboundCounterSample, 0, len(mergedOrder))
+	for _, k := range mergedOrder {
+		ordered = append(ordered, merged[k])
+	}
+
+	// D6-03：原实现把整批（实测 1200–2300 条 upsert + 数百条 UPDATE）
+	// 塞进单个事务，串行占库 0.25–0.9s。改为按 200 条分片提交：
+	// 每片内「基线推进 + 总量入账」仍是同一事务（原子性不变），
+	// 片间键互不重叠、总量是可加表达式，故结果与单事务等价；
+	// 某片失败时已提交片的基线与总量同步前进，以同批样本重试时
+	// 已结算部分 delta=0，不会重复计入。
+	const chunkSize = 200
+	for start := 0; start < len(ordered); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		chunk := ordered[start:end]
+		if err := r.db.Transaction(func(tx *gorm.DB) error {
+			return applyInboundCounterChunk(tx, chunk, now)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type inboundCounterKey struct {
+	id        int64
+	proto     string
+	direction string
+}
+
+// applyInboundCounterChunk settles one chunk of merged samples in a
+// single transaction: baseline upserts and inbound totals move together.
+func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now int64) error {
+	{
+		ids := make([]int64, 0, len(ordered))
+		for _, s := range ordered {
 			ids = append(ids, s.InboundID)
 		}
 		var existing []int64
@@ -364,39 +423,9 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 		if err := tx.Where("inbound_id IN ?", ids).Find(&states).Error; err != nil {
 			return err
 		}
-		type key struct {
-			id        int64
-			proto     string
-			direction string
-		}
-		prev := make(map[key]model.NodeInboundCounter, len(states))
+		prev := make(map[inboundCounterKey]model.NodeInboundCounter, len(states))
 		for _, st := range states {
-			prev[key{st.InboundID, st.Protocol, st.Direction}] = st
-		}
-
-		// F-075（A4-004）：同一批内同 (inbound, protocol, direction)
-		// 的重复样本先合并再算增量（同 epoch 取最大 Bytes；epoch
-		// 变化说明计数器已重置，取后到样本为最新化身）。旧实现
-		// prev 只读 DB 基线、批次内不推进，重复样本会重复计入。
-		merged := make(map[key]InboundCounterSample, len(samples))
-		mergedOrder := make([]key, 0, len(samples))
-		for _, s := range samples {
-			k := key{s.InboundID, s.Protocol, s.Direction}
-			if cur, ok := merged[k]; ok {
-				switch {
-				case s.Epoch != cur.Epoch:
-					merged[k] = s
-				case s.Bytes > cur.Bytes:
-					merged[k] = s
-				}
-				continue
-			}
-			merged[k] = s
-			mergedOrder = append(mergedOrder, k)
-		}
-		ordered := make([]InboundCounterSample, 0, len(mergedOrder))
-		for _, k := range mergedOrder {
-			ordered = append(ordered, merged[k])
+			prev[inboundCounterKey{st.InboundID, st.Protocol, st.Direction}] = st
 		}
 
 		upload := make(map[int64]int64)
@@ -417,7 +446,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 				continue
 			}
 			delta := s.Bytes
-			if old, ok := prev[key{s.InboundID, s.Protocol, s.Direction}]; ok && old.Epoch == s.Epoch && s.Bytes >= old.Bytes {
+			if old, ok := prev[inboundCounterKey{s.InboundID, s.Protocol, s.Direction}]; ok && old.Epoch == s.Epoch && s.Bytes >= old.Bytes {
 				delta = s.Bytes - old.Bytes
 			}
 			if delta > 0 {
@@ -458,7 +487,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 			}
 		}
 		return nil
-	})
+	}
 }
 
 // InboundRelayView is a relay joined with the forward and tunnel behind it.

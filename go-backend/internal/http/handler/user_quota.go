@@ -72,10 +72,20 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 		log.Printf("applyUserQuotaBlock: ALERT mark quota disabled failed user_id=%d err=%v action=abort_enforce_retry_on_next_report", userID, err)
 		return
 	}
-	pausedIDs := make([]int64, 0, len(forwards))
+	pausedSet := make(map[int64]bool, len(forwards))
+	// A4-001：nft 转发没有 gost 服务可 PauseService——旧实现对 nft 转发
+	// 必然 not-found 后仅记日志 continue，规则不撤、流量与扣费继续，
+	// 且不进 pausedIDs。按 pauseForwardRecords（flow 策略路径，D1-002）
+	// 同款：按入口节点分组 reconcile-exclude 先撤规则，成功后写 paused。
+	nftGroups := make(map[int64][]*forwardRecord)
 	for i := range forwards {
 		forward := &forwards[i]
 		if forward.Status != 1 {
+			continue
+		}
+		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
+		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
 			continue
 		}
 		if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
@@ -87,10 +97,36 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 			// O6-001：DB 更新失败时服务已暂停，必须加入 pausedIDs 以便配额恢复时能恢复
 			// 旧逻辑：continue 跳过，服务暂停但 DB 显示活跃且不在 pausedIDs 中，永远无法恢复
 			log.Printf("applyUserQuotaBlock: UpdateForwardStatus failed for forward %d (service already paused), adding to pausedIDs for later recovery: %v", forward.ID, err)
-			pausedIDs = append(pausedIDs, forward.ID)
+		}
+		pausedSet[forward.ID] = true
+	}
+	for nodeID, group := range nftGroups {
+		exclude := make(map[int64]bool, len(group))
+		ids := make([]int64, 0, len(group))
+		for _, forward := range group {
+			exclude[forward.ID] = true
+			ids = append(ids, forward.ID)
+		}
+		// D6 数据面优先：先 reconcile 撤规则，成功后再写 DB；失败则
+		// DB 保持 active、不进 pausedSet，下次流量上报重新触发执法自愈。
+		if !h.reconcileNodeWithTimeout(nodeID, exclude, nil, 30*time.Second) {
+			log.Printf("applyUserQuotaBlock: nft pause gap node_id=%d forward_ids=%v reason=reconcile_timeout_or_error ALERT=db_state_may_diverge", nodeID, ids)
 			continue
 		}
-		pausedIDs = append(pausedIDs, forward.ID)
+		for _, forward := range group {
+			if err := h.repo.UpdateForwardStatus(forward.ID, 0, now); err != nil {
+				// 同 O6-001：规则已撤，必须进 pausedSet 以便恢复时加回。
+				log.Printf("applyUserQuotaBlock: UpdateForwardStatus failed for nft forward %d (rules already removed), adding to pausedIDs for later recovery: %v", forward.ID, err)
+			}
+			pausedSet[forward.ID] = true
+		}
+	}
+	// 按 candidateIDs 原序重建 pausedIDs（保持「保序子序列」不变式）。
+	pausedIDs := make([]int64, 0, len(pausedSet))
+	for _, id := range candidateIDs {
+		if pausedSet[id] {
+			pausedIDs = append(pausedIDs, id)
+		}
 	}
 	// pausedIDs 是 candidateIDs 的保序子序列（同源同序追加，暂停失败
 	// 仅跳过），长度不等即集合不等：回写实际集合使恢复列表精确。

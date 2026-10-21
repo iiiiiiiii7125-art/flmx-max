@@ -159,18 +159,6 @@ func TestRuleHashIsStable(t *testing.T) {
 	}
 }
 
-func TestRuleHashIgnoresBindIPWhenRenderingDoesNotUseIt(t *testing.T) {
-	base := Rule{
-		ForwardID:  42,
-		InPort:     24000,
-		TargetHost: "198.51.100.20",
-		TargetPort: 443,
-		Protocols:  []string{"tcp", "udp"},
-	}
-	withBind := base
-	withBind.BindIP = "192.0.2.10"
-
-	if RuleHash(base) != RuleHash(withBind) {
-		t.Fatalf("expected bind IP to be ignored by hash when it is not rendered")
-	}
-}
+// 历史：本用例曾固化「渲染不用 BindIP、hash 亦忽略」的缺陷现状
+//（A4-005）；渲染已按 BC-03 使用 BindIP，hash 语义见
+// renderer_bindip_a4005_test.go 的 TestRuleHashIncludesBindIP。
