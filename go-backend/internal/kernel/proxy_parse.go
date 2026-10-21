@@ -98,9 +98,30 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 	if err := ValidateImportHost(host); err != nil {
 		return ImportedNode{}, err
 	}
+	// D4-08：数值不确定即拒绝——小数端口被 num() 截断、溢出值被包成
+	// 垃圾 int 都是「误解析成功」，必须在落库前拦下。
 	port := p.num("port")
+	if n, present, exact := p.exactInt("port"); present {
+		if !exact {
+			return ImportedNode{}, errors.New("端口不正确")
+		}
+		port = n
+	}
 	if port < 1 || port > 65535 {
 		return ImportedNode{}, errors.New("端口不正确")
+	}
+	if t == "vmess" {
+		if n, present, exact := p.exactInt("alterId"); present && (!exact || n < 0 || n > 65535) {
+			return ImportedNode{}, errors.New("alterId 不正确")
+		}
+	}
+	if t == "snell" {
+		// A5-07：与行格式同口径，缺省/为 0 时补默认版本 4，否则再导出
+		// 时整键缺失、客户端缺省语义不明（clashSnell 对自建入站亦有
+		// version==0 兜底）。
+		if p.num("version") == 0 {
+			p["version"] = 4
+		}
 	}
 	if err := validateProxyCredentials(p); err != nil {
 		return ImportedNode{}, err
@@ -145,6 +166,10 @@ func validateProxyCredentials(p Proxy) error {
 	case "snell":
 		if p.str("psk") == "" {
 			return errors.New("缺少 PSK")
+		}
+	case "naive":
+		if p.str("username") == "" || p.str("password") == "" {
+			return errors.New("缺少用户名或密码")
 		}
 	}
 	return nil
@@ -301,6 +326,13 @@ func parseVMessURI(rest string) (Proxy, error) {
 		return nil, errors.New("vmess 链接格式不正确（只支持 v2rayN 格式）")
 	}
 	j := Proxy(v)
+	// D4-08：port/aid 在原始 JSON 里就必须是不溢出的整数，num() 的
+	// 截断/回绕结果不能带进 finishProxy。
+	for _, k := range []string{"port", "aid"} {
+		if _, present, exact := j.exactInt(k); present && !exact {
+			return nil, errors.New("vmess 链接中的 " + k + " 不正确")
+		}
+	}
 	p := Proxy{"type": "vmess", "name": j.str("ps"), "server": j.str("add"), "port": j.num("port"),
 		"uuid": j.str("id"), "alterId": j.num("aid"), "cipher": "auto", "udp": true}
 	if c := j.str("scy"); c != "" {
@@ -500,19 +532,43 @@ func firstNonEmptyString(values ...string) string {
 // ---- Clash / Mihomo ----
 
 func parseClashProfile(text string) ([]ImportedNode, []string) {
-	var doc struct {
-		Proxies []map[string]interface{} `yaml:"proxies"`
-	}
 	// IMP-010：yaml.v3 默认支持锚点/别名（anchor/alias），理论上有别名放大
 	// （billion laughs）风险。已实测评估：9 级倍增展开仅约 0.3ms，且本函数只经
 	// 管理员接口调用、请求体有 10MB 上限、订阅体有 5MB 上限，风险可接受，
 	// 因此不引入 KnownFields/别名禁用等额外限制（会误伤合法 Clash 配置）。
-	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+	//
+	// D4-07：先解到 yaml.Node 再逐条 Decode——整份强类型 Unmarshal 会被
+	// 单个条目内的重复键 / 标量条目短路成整单 0 节点，与 sing-box、行格式
+	// 的条目级容错口径不一致。文档级语法错误仍整单拒绝，条目级错误只丢
+	// 该条并计入回执。
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(text), &root); err != nil {
 		return nil, []string{"Clash 配置解析失败：" + err.Error()}
+	}
+	var seq *yaml.Node
+	if len(root.Content) > 0 {
+		doc := root.Content[0]
+		for i := 0; i+1 < len(doc.Content); i += 2 {
+			if doc.Content[i].Value == "proxies" {
+				seq = doc.Content[i+1]
+				break
+			}
+		}
+	}
+	if seq != nil && seq.Kind == yaml.AliasNode && seq.Alias != nil {
+		seq = seq.Alias
+	}
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return nil, []string{"Clash 配置里没有 proxies"}
 	}
 	var nodes []ImportedNode
 	var errs []string
-	for i, raw := range doc.Proxies {
+	for i, item := range seq.Content {
+		var raw map[string]interface{}
+		if err := item.Decode(&raw); err != nil {
+			errs = append(errs, fmt.Sprintf("第 %d 个节点：%v", i+1, err))
+			continue
+		}
 		node, err := finishProxy(normalizeYAML(raw).(map[string]interface{}))
 		if err != nil {
 			name := Proxy(raw).str("name")
@@ -524,7 +580,7 @@ func parseClashProfile(text string) ([]ImportedNode, []string) {
 		}
 		nodes = append(nodes, node)
 	}
-	if len(doc.Proxies) == 0 {
+	if len(seq.Content) == 0 {
 		errs = append(errs, "Clash 配置里没有 proxies")
 	}
 	return nodes, errs
@@ -594,10 +650,23 @@ func parseSingboxProfile(text string) ([]ImportedNode, []string) {
 
 func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 	types := map[string]string{"shadowsocks": "ss", "vmess": "vmess", "vless": "vless", "trojan": "trojan",
-		"hysteria2": "hysteria2", "tuic": "tuic", "anytls": "anytls", "socks": "socks5", "http": "http"}
+		"hysteria2": "hysteria2", "tuic": "tuic", "anytls": "anytls", "snell": "snell", "naive": "naive",
+		"socks": "socks5", "http": "http"}
 	typ, ok := types[o.str("type")]
 	if !ok {
 		return nil, fmt.Errorf("暂不支持 %s 类型的节点", o.str("type"))
+	}
+	// D4-08：数值/嵌套块不确定即拒绝该条目——小数端口截断、alter_id
+	// 溢出、tls/transport/obfs 块类型错位都不许静默降级成「解析成功」。
+	if _, present, exact := o.exactInt("server_port"); present && !exact {
+		return nil, errors.New("server_port 不是整数")
+	}
+	for _, k := range []string{"tls", "transport", "obfs"} {
+		if v, present := o[k]; present && v != nil {
+			if _, isObj := v.(map[string]interface{}); !isObj {
+				return nil, fmt.Errorf("%s 字段格式不正确", k)
+			}
+		}
 	}
 	p := Proxy{"type": typ, "name": o.str("tag"), "server": o.str("server"), "port": o.num("server_port"), "udp": true}
 	switch typ {
@@ -610,6 +679,9 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 			}
 		}
 		if detour := byTag[o.str("detour")]; detour.str("type") == "shadowtls" {
+			if _, present, exact := detour.exactInt("server_port"); present && !exact {
+				return nil, errors.New("server_port 不是整数")
+			}
 			// ss over ShadowTLS: the shadowtls outbound holds the address.
 			p["server"], p["port"] = detour.str("server"), detour.num("server_port")
 			po := Proxy{"version": detour.num("version"), "password": detour.str("password"),
@@ -619,6 +691,9 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 			p["client-fingerprint"] = "chrome"
 		}
 	case "vmess":
+		if _, present, exact := o.exactInt("alter_id"); present && !exact {
+			return nil, errors.New("alter_id 不正确")
+		}
 		p["uuid"] = o.str("uuid")
 		p["alterId"] = o.num("alter_id")
 		p["cipher"] = firstNonEmptyString(o.str("security"), "auto")
@@ -632,6 +707,27 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		p["password"] = o.str("password")
 		p.set("congestion-controller", o.str("congestion_control"))
 		p.set("udp-relay-mode", o.str("udp_relay_mode"))
+	case "snell":
+		// A5-01：与 ss 分支同型——snell 本体字段 + detour 到 shadowtls
+		// 时地址在 detour 出站上（面板自产的 snell+ShadowTLS 订阅正是
+		// 此形态，本体不带 server/server_port）。
+		p["psk"] = o.str("psk")
+		if v := o.num("version"); v != 0 {
+			p["version"] = v
+		}
+		if detour := byTag[o.str("detour")]; detour.str("type") == "shadowtls" {
+			if _, present, exact := detour.exactInt("server_port"); present && !exact {
+				return nil, errors.New("server_port 不是整数")
+			}
+			p["server"], p["port"] = detour.str("server"), detour.num("server_port")
+			p["shadow-tls"] = map[string]interface{}{"version": detour.num("version"), "password": detour.str("password"),
+				"host": detour.sub("tls").str("server_name")}
+		}
+	case "naive":
+		// A5-01：NaïveProxy 恒为 HTTPS，tls 块字段由下方通用段落读取。
+		p.set("username", o.str("username"))
+		p["password"] = o.str("password")
+		p["tls"] = true
 	case "socks5", "http":
 		p.set("username", o.str("username"))
 		p.set("password", o.str("password"))
@@ -646,7 +742,7 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 	}
 	if tls := o.sub("tls"); tls.flag("enabled") {
 		sniKey := "sni"
-		if typ == "vmess" || typ == "vless" || typ == "socks5" || typ == "http" {
+		if typ == "vmess" || typ == "vless" || typ == "socks5" || typ == "http" || typ == "naive" {
 			p["tls"] = true
 			sniKey = "servername"
 		}
