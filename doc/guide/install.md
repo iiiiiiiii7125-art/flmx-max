@@ -15,7 +15,7 @@
 使用以下命令即可快速安装面板：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 **安装过程中会提示输入以下信息：**
@@ -63,7 +63,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 在节点服务器上运行：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
 ```
 
 Alpine Linux 最小化安装若未包含 `curl`，可使用系统自带的 `wget` 下载：
@@ -158,5 +158,21 @@ sudo systemctl restart caddy
 跳数配少了，限流键会取到伪造的 XFF 条目（限流被绕过）；配多了，
 会取到代理自己的 IP（多用户共享一个桶）。启动日志会打印生效值，
 请核对它与你的实际拓扑一致。面板直连公网（无代理）时忽略 XFF。
+
+限流的具体阈值（固定值，不在设置里开放调整）：
+
+| 维度 | 阈值 | 说明 |
+|---|---|---|
+| 来源 IP | 10 次 / 分钟 | 每个 IP 独立计数，超限返回 429 |
+| 来源 IP（被收紧后） | 3 次 / 30 分钟 | 某用户名触发下方信号且未启用登录验证码时，该来源 IP 被收紧 |
+| 用户名 | 30 次 / 10 分钟 | 只作信号与渐进延迟依据，**永不直接锁账号**（防用错密码把正常用户锁死） |
+
+登录成功签发的会话（JWT）有效期为 **7 天**。
+
+> 子网提示：旧版本部署的容器网络子网是 `172.80.0.0/16`，它不在 RFC1918 私网段内，后端不把该网段当作可信代理来源，经前端进来的登录请求限流键会坍缩成少数共享桶（有效预算翻倍、且可被单点洪泛耗尽）。新安装已改用 `172.30.0.0/16`。**存量部署不要直接改在用子网**（会重建容器网络）；在意此问题的存量部署，可改用宿主机 Caddy / nginx 直接反代后端、或等待后续版本的迁移指引。
+
+### 登录验证码（Cloudflare Turnstile）
+
+在 **网站配置 → 安全** 里可以开启登录验证码：填入 Cloudflare Turnstile 的 Site Key 与 Secret Key 后，登录页会出现人机验证，登录请求必须携带有效验证结果才会被处理。未配置密钥时该功能不启用、登录流程与原来一致。Turnstile 密钥只存面板配置、仅管理员可见；它同时影响上文的限流收紧逻辑（启用验证码后，用户名信号不再触发 IP 收紧）。
 
 升级见 [升级](./upgrade.md)。

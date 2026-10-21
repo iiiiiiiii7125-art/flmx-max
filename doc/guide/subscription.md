@@ -32,7 +32,7 @@
 - Loon 和 Quantumult X 的节点格式没有前置代理参数，订阅里的落地节点是直连
 - 指定格式的链接：在订阅链接后加 `?format=clash`（或 `singbox`、`shadowrocket`、`loon`、`qx`、`surge`、`stash`、`base64`）
 - VLESS 加密（ENC）入站只出现在 Clash / Stash / 通用 base64 输出里（携带完整 `encryption` 参数），其他格式会略过这类入站
-- Snell 入站的下发按客户端区分：Clash / Stash / Shadowrocket 按 v4 口径下发（v4 / v5 入站可下发，v6 入站不下发，客户端不支持 v6）；sing-box 需要 1.14 以上版本、按客户端 UA 判定下发，`?format=singbox` 这类指定格式链接不带版本信息、不含 Snell；Surge 原生支持；Loon、Quantumult X、通用 base64 不下发 Snell
+- Snell 入站的下发按客户端区分：Clash / Stash / Shadowrocket 按 v4 口径下发（v4 / v5 入站可下发，v6 入站不下发，客户端不支持 v6）；sing-box 需要 1.14 以上版本、按拉取请求的 UA 判定下发——与是否用 `?format=singbox` 指定格式无关，用浏览器等普通工具拉取（UA 不带 sing-box 版本）时不含 Snell 属正常现象；Surge 原生支持；Loon、Quantumult X、通用 base64 不下发 Snell
 
 ## 来源
 
@@ -141,6 +141,7 @@ proxies:
 |--------|------------------|
 | Clash / Mihomo | 配置含策略组（`proxy-groups`）和规则（`rules`） |
 | sing-box | 配置含路由规则和规则集 |
+| Surge | 配置含自动选择策略组与规则，输出完整配置 |
 | Loon / Quantumult X / Shadowrocket | 输出**完整配置**（含策略组、规则、DNS），而不是纯节点列表 |
 
 只开分流规则、没开「按地区分组」时，Clash / sing-box 输出里仍会附带地区分组（规则的落点需要地区组），这是预期行为。
@@ -151,7 +152,7 @@ proxies:
 
 用 JavaScript 给节点批量改名，适合改名规则表达不了的逻辑。
 
-- 在 **自定义脚本** 文本框里写 `operator(nodes)` 函数；脚本里能看到每个节点的 `id`、`name`、`original`（原名）、`server`、`port`、`protocol`、`region`、`line`，**只有 `name` 的改动会被采纳**
+- 在 **自定义脚本** 文本框里写 `operator(nodes)` 函数；脚本里能看到每个节点的 `id`、`name`、`original`（原名）、`server`、`port`、`protocol`、`region`、`line`；逐字段层面只有 `name` 的改动会被采纳，但脚本**返回的数组决定最终的节点集合与顺序**——从数组里去掉的节点会被过滤、调整数组顺序即完成排序
 - 运行在 goja 沙箱里：无网络、无文件、无定时器；`console.log` 可用
 - 单次执行 1 秒超时：死循环脚本会被终止，编辑器会显示错误
 - 脚本上限 20000 字符，超长会被拒绝
@@ -181,6 +182,7 @@ proxies:
 - 曲线是 **整条订阅的合计**：一条订阅分给多人时，凭据是同一套，流量拆不到个人，每位被分配用户看到的是同一条合计曲线
 - 统计口径和「已用」一致（只统计独立凭据协议，共用凭据不计入）
 - 自 1.3.0 起开始记录，上线之前的时段没有数据
+- 小时级统计数据保留 400 天，更早的数据会被自动清理
 
 ## 分配给用户与撤销
 
@@ -196,6 +198,7 @@ proxies:
 
 - 点订阅可以导入到客户端、复制各种格式的链接、编辑、重置链接或删除
 - 所有订阅都包含在 **网站配置 → 数据备份与恢复** 的“内核与入站”里
+- 订阅当前没有可用节点时（节点全停用、被过滤光或订阅本身为空），拉取返回 HTTP 200 和一份**空节点列表**，而不是错误码——这是刻意的：返回 503 会被客户端当成订阅源故障并保留旧节点，返回空列表能让客户端及时清空
 
 ## 联邦远端用量的统计口径
 
