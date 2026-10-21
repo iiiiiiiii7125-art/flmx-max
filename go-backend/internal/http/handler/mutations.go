@@ -687,12 +687,30 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if forwardMode != "nftables" {
 		return h.repo.DeleteNodeSSHConfig(nodeID)
 	}
+	// V2-06：部分更新（preserveSecrets=true）未带 sshConfig 整段时
+	// 整段不动——旧实现仍会用请求值重建并 upsert，其中 port 被
+	// asInt(...,22) 填成 22 后保值分支（port<=0 才保值）永不触发，
+	// 任何不带完整 sshConfig 的 nodeUpdate 都把非 22 端口的 nft
+	// 节点 SSH 配置静默改回 22，数据面随之失联。
+	if preserveSecrets {
+		if _, ok := req["sshConfig"]; !ok {
+			return nil
+		}
+	}
 	cfgMap := asMap(req["sshConfig"])
 	host := strings.TrimSpace(asString(cfgMap["host"]))
 	if host == "" {
 		host = strings.TrimSpace(asString(req["serverIp"]))
 	}
-	port := asInt(cfgMap["port"], 22)
+	// V2-06/V2-07：port 改 presence/零值语义——缺席即 0，更新路径
+	// 由下方保值分支回填既有值，create 路径由既有校验（port<=0
+	// 报错）明确拒绝，不再静默默认 22；在场但不可解析直接报错。
+	if rawPort, ok := cfgMap["port"]; ok && asString(rawPort) != "" {
+		if _, err := strconv.ParseInt(asString(rawPort), 10, 64); err != nil {
+			return errors.New("nftables 节点 SSH 端口无效")
+		}
+	}
+	port := asInt(cfgMap["port"], 0)
 	username := strings.TrimSpace(asString(cfgMap["username"]))
 	authType := strings.TrimSpace(asString(cfgMap["authType"]))
 	password := asString(cfgMap["password"])
