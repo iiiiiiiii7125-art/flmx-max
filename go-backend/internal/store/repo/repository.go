@@ -681,7 +681,11 @@ func (r *Repository) UpsertConfig(name, value string, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Clauses(clause.OnConflict{
+	return upsertConfigTx(r.db, name, value, now)
+}
+
+func upsertConfigTx(db *gorm.DB, name, value string, now int64) error {
+	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "name"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
 	}).Create(&model.ViteConfig{Name: name, Value: value, Time: now}).Error
@@ -693,10 +697,38 @@ func (r *Repository) UpsertConfigs(values map[string]string, now int64) error {
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for name, value := range values {
-			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "name"}},
-				DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
-			}).Create(&model.ViteConfig{Name: name, Value: value, Time: now}).Error; err != nil {
+			if err := upsertConfigTx(tx, name, value, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteConfig removes a config row so subsequent reads fall back to the
+// built-in default for the key. Deleting a key that is not stored is a
+// no-op, which makes "clear this setting" idempotent.
+func (r *Repository) DeleteConfig(name string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Where("name = ?", name).Delete(&model.ViteConfig{}).Error
+}
+
+// ApplyConfigBatch applies config upserts and clear-deletions in a single
+// transaction: a settings save either lands completely or not at all.
+func (r *Repository) ApplyConfigBatch(values map[string]string, deleteKeys []string, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for name, value := range values {
+			if err := upsertConfigTx(tx, name, value, now); err != nil {
+				return err
+			}
+		}
+		for _, name := range deleteKeys {
+			if err := tx.Where("name = ?", name).Delete(&model.ViteConfig{}).Error; err != nil {
 				return err
 			}
 		}
@@ -2362,27 +2394,53 @@ func (r *Repository) exportChainTunnels(tunnelID int64) ([]model.ChainTunnelBack
 	}
 	out := make([]model.ChainTunnelBackup, 0, len(chains))
 	for _, c := range chains {
+		// BUG-A2-3：可空列仅在 Valid 时写指针，NULL 在备份中缺失，
+		// 与零值严格区分（旧实现把 NULL 与 0/'' 一并丢弃）。
 		b := model.ChainTunnelBackup{
 			ID: c.ID, TunnelID: c.TunnelID, ChainType: c.ChainType, NodeID: c.NodeID,
-		}
-		if c.Port.Valid {
-			b.Port = int(c.Port.Int64)
-		}
-		if c.Strategy.Valid {
-			b.Strategy = c.Strategy.String
-		}
-		if c.Inx.Valid {
-			b.Inx = int(c.Inx.Int64)
-		}
-		if c.Protocol.Valid {
-			b.Protocol = c.Protocol.String
-		}
-		if c.ConnectIP.Valid {
-			b.ConnectIP = c.ConnectIP.String
+			Port:      nullInt64Ptr(c.Port),
+			Strategy:  nullStringPtr(c.Strategy),
+			Inx:       nullInt64Ptr(c.Inx),
+			Protocol:  nullStringPtr(c.Protocol),
+			ConnectIP: nullStringPtr(c.ConnectIP),
 		}
 		out = append(out, b)
 	}
 	return out, nil
+}
+
+// nullInt64Ptr / nullStringPtr：导出侧把 sql.Null* 转为备份指针
+// （NULL → nil，备份 JSON 中缺失）。
+func nullInt64Ptr(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int64)
+	return &n
+}
+
+func nullStringPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
+}
+
+// ptrToNullInt64 / ptrToNullString：导入侧把备份指针还原为
+// sql.Null*（nil → NULL），与导出严格互逆。
+func ptrToNullInt64(p *int) sql.NullInt64 {
+	if p == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*p), Valid: true}
+}
+
+func ptrToNullString(p *string) sql.NullString {
+	if p == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *p, Valid: true}
 }
 
 func (r *Repository) exportForwards() ([]model.ForwardBackup, error) {
@@ -2468,6 +2526,16 @@ func (r *Repository) exportSpeedLimits() ([]model.SpeedLimitBackup, error) {
 		b := model.SpeedLimitBackup{
 			ID: sl.ID, Name: sl.Name, Speed: int64(sl.Speed),
 			CreatedTime: sl.CreatedTime, Status: sl.Status,
+		}
+		// G2 审计补漏：TunnelID/TunnelName 字段在备份结构里早已存在，
+		// 但导出从不赋值、导入写死 NULL——绑定隧道的限速规则恢复后
+		// 会静默变成全局规则。与 BUG-A2-3 同属备份往返丢可空字段。
+		if sl.TunnelID.Valid {
+			v := sl.TunnelID.Int64
+			b.TunnelID = &v
+		}
+		if sl.TunnelName.Valid {
+			b.TunnelName = sl.TunnelName.String
 		}
 		if sl.UpdatedTime.Valid {
 			b.UpdatedTime = sl.UpdatedTime.Int64
@@ -2655,6 +2723,10 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		now := unixMilliNow()
+		// BUG-A2-4：订阅在 inbounds 段按 token 重建、可能换 id；
+		// subRemap 把备份订阅 id 映射到落库 id，供 userSubscriptions
+		// 段重写分配引用（inbounds 段在本事务中先于该段执行）。
+		subRemap := make(map[int64]int64)
 
 		if typeSet["users"] && len(backup.Users) > 0 {
 			count, err := importUsers(tx, backup.Users, now)
@@ -2727,7 +2799,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.ConfigsImported = count
 		}
 		if typeSet["inbounds"] && backup.Inbounds != nil {
-			count, err := importInbounds(tx, backup.Inbounds, now)
+			count, err := importInbounds(tx, backup.Inbounds, now, subRemap)
 			if err != nil {
 				return fmt.Errorf("import inbounds failed: %w", err)
 			}
@@ -2759,12 +2831,15 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		}
 		// B4/F-004：导入 user_subscription 表（订阅分配关系）。
 		// 旧备份无该字段时 len=0 自动跳过，不报错。
+		// BUG-A2-4：分配引用经 subRemap 重写到重建后的订阅 id；
+		// 无法落位的分配跳过并计入 UserSubscriptionsSkipped 如实回执。
 		if typeSet["userSubscriptions"] && len(backup.UserSubscriptions) > 0 {
-			count, err := importUserSubscriptions(tx, backup.UserSubscriptions)
+			count, skipped, err := importUserSubscriptions(tx, backup.UserSubscriptions, subRemap)
 			if err != nil {
 				return fmt.Errorf("import user subscriptions failed: %w", err)
 			}
 			result.UserSubscriptionsImported = count
+			result.UserSubscriptionsSkipped = skipped
 		}
 		// B4/F-030：导入 service_monitor 表（监控定义）
 		if typeSet["serviceMonitors"] && len(backup.ServiceMonitors) > 0 {
@@ -2898,33 +2973,36 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 	count := 0
 	for _, n := range nodes {
 		item := model.Node{
-			ID:             n.ID,
-			Name:           n.Name,
-			Remark:         sql.NullString{String: n.Remark, Valid: n.Remark != ""},
-			ExpiryTime:     sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
-			RenewalCycle:   sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
-			Secret:         n.Secret,
-			ServerIP:       n.ServerIP,
-			ServerIPV4:     sql.NullString{String: n.ServerIPv4, Valid: true},
-			ServerIPV6:     sql.NullString{String: n.ServerIPv6, Valid: true},
+			ID:           n.ID,
+			Name:         n.Name,
+			Remark:       sql.NullString{String: n.Remark, Valid: n.Remark != ""},
+			ExpiryTime:   sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
+			RenewalCycle: sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
+			Secret:       n.Secret,
+			ServerIP:     n.ServerIP,
+			ServerIPV4:   sql.NullString{String: n.ServerIPv4, Valid: n.ServerIPv4 != ""},
+			ServerIPV6:   sql.NullString{String: n.ServerIPv6, Valid: n.ServerIPv6 != ""},
 			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。
-			ExtraIPs:       sql.NullString{String: n.ExtraIPs, Valid: n.ExtraIPs != ""},
-			Port:           n.Port,
-			InterfaceName:  sql.NullString{String: n.InterfaceName, Valid: true},
-			Version:        sql.NullString{String: n.Version, Valid: true},
-			HTTP:           n.HTTP,
-			TLS:            n.TLS,
-			Socks:          n.Socks,
-			CreatedTime:    n.CreatedTime,
-			UpdatedTime:    sql.NullInt64{Int64: now, Valid: true},
-			Status:         n.Status,
-			TCPListenAddr:  n.TCPListenAddr,
-			UDPListenAddr:  n.UDPListenAddr,
-			Inx:            n.Inx,
-			IsRemote:       n.IsRemote,
-			RemoteURL:      sql.NullString{String: n.RemoteURL, Valid: true},
-			RemoteToken:    sql.NullString{String: n.RemoteToken, Valid: true},
-			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: true},
+			ExtraIPs:      sql.NullString{String: n.ExtraIPs, Valid: n.ExtraIPs != ""},
+			Port:          n.Port,
+			InterfaceName: sql.NullString{String: n.InterfaceName, Valid: n.InterfaceName != ""},
+			Version:       sql.NullString{String: n.Version, Valid: n.Version != ""},
+			HTTP:          n.HTTP,
+			TLS:           n.TLS,
+			Socks:         n.Socks,
+			CreatedTime:   n.CreatedTime,
+			UpdatedTime:   sql.NullInt64{Int64: now, Valid: true},
+			Status:        n.Status,
+			TCPListenAddr: n.TCPListenAddr,
+			UDPListenAddr: n.UDPListenAddr,
+			Inx:           n.Inx,
+			IsRemote:      n.IsRemote,
+			// 导出仅在 Valid 时写 remote* 三字段，'' 不是合法取值：
+			// 空即 NULL（旧实现无条件 Valid:true 把 NULL 写成 ''，
+			// 同 BUG-A2-3 的丢 NULL 类）。
+			RemoteURL:      sql.NullString{String: n.RemoteURL, Valid: n.RemoteURL != ""},
+			RemoteToken:    sql.NullString{String: n.RemoteToken, Valid: n.RemoteToken != ""},
+			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: n.RemoteConfig != ""},
 			LatencyTargets: n.LatencyTargets,
 			ForwardMode:    n.ForwardMode,
 			// O7-006：恢复后保留已忽略的到期提醒状态
@@ -2962,6 +3040,19 @@ func normalizeBackupTunnelEngine(raw string) (string, error) {
 }
 
 func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, error) {
+	// BUG-A2-3：chain 行先删后插。本批隧道在当前 DB 中的既有 chain 行
+	// 整体删除后再按备份重建——既避免恢复到已漂移状态时残留行与新行
+	// 在 (node_id, port) 唯一索引上互撞，也保证恢复结果与备份严格
+	// 一致（被删掉的链路行不会在恢复后残留）。
+	if len(tunnels) > 0 {
+		tunnelIDs := make([]int64, 0, len(tunnels))
+		for _, t := range tunnels {
+			tunnelIDs = append(tunnelIDs, t.ID)
+		}
+		if err := tx.Where("tunnel_id IN ?", tunnelIDs).Delete(&model.ChainTunnel{}).Error; err != nil {
+			return 0, err
+		}
+	}
 	count := 0
 	for _, t := range tunnels {
 		engine, err := normalizeBackupTunnelEngine(t.Engine)
@@ -2969,16 +3060,19 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, e
 			return count, err
 		}
 		item := model.Tunnel{
-			ID:              t.ID,
-			Name:            t.Name,
-			TrafficRatio:    t.TrafficRatio,
-			Type:            t.Type,
-			Protocol:        t.Protocol,
-			Flow:            t.Flow,
-			CreatedTime:     t.CreatedTime,
-			UpdatedTime:     now,
-			Status:          t.Status,
-			InIP:            sql.NullString{String: t.InIP, Valid: true},
+			ID:           t.ID,
+			Name:         t.Name,
+			TrafficRatio: t.TrafficRatio,
+			Type:         t.Type,
+			Protocol:     t.Protocol,
+			Flow:         t.Flow,
+			CreatedTime:  t.CreatedTime,
+			UpdatedTime:  now,
+			Status:       t.Status,
+			// 导出仅在 Valid 时写 inIp，'' 不是合法 IP：空即 NULL，
+			// 与 ConnectIP 的既有口径一致（旧实现无条件 Valid:true
+			// 把 NULL 写成 ''，同 BUG-A2-3 的丢 NULL 类）。
+			InIP:            sql.NullString{String: t.InIP, Valid: t.InIP != ""},
 			Inx:             t.Inx,
 			IPPreference:    t.IPPreference,
 			ProbeTargetHost: t.ProbeTargetHost,
@@ -2995,24 +3089,26 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, e
 			return count, err
 		}
 		for _, ct := range t.ChainTunnels {
+			// BUG-A2-3：可空列按指针还原 NULL（旧实现一律 Valid:true，
+			// NULL port 被写成 0，两条同节点 NULL 链路即撞唯一索引
+			// 整单回滚）。chain 行已在上方整批删除，这里直接插入。
 			chainItem := model.ChainTunnel{
 				ID:        ct.ID,
 				TunnelID:  ct.TunnelID,
 				ChainType: ct.ChainType,
 				NodeID:    ct.NodeID,
-				Port:      sql.NullInt64{Int64: int64(ct.Port), Valid: true},
-				Strategy:  sql.NullString{String: ct.Strategy, Valid: true},
-				Inx:       sql.NullInt64{Int64: int64(ct.Inx), Valid: true},
-				Protocol:  sql.NullString{String: ct.Protocol, Valid: true},
-				ConnectIP: sql.NullString{String: ct.ConnectIP, Valid: ct.ConnectIP != ""},
+				Port:      ptrToNullInt64(ct.Port),
+				Strategy:  ptrToNullString(ct.Strategy),
+				Inx:       ptrToNullInt64(ct.Inx),
+				Protocol:  ptrToNullString(ct.Protocol),
+				ConnectIP: ptrToNullString(ct.ConnectIP),
 			}
-			err = tx.Clauses(clause.OnConflict{
+			if err := tx.Clauses(clause.OnConflict{
 				Columns: []clause.Column{{Name: "id"}},
 				DoUpdates: clause.AssignmentColumns([]string{
-					"chain_type", "node_id", "port", "strategy", "inx", "protocol", "connect_ip",
+					"tunnel_id", "chain_type", "node_id", "port", "strategy", "inx", "protocol", "connect_ip",
 				}),
-			}).Create(&chainItem).Error
-			if err != nil {
+			}).Create(&chainItem).Error; err != nil {
 				return count, err
 			}
 		}
@@ -3026,6 +3122,24 @@ func nullableBackupInt64(v *int64) int64 {
 		return 0
 	}
 	return *v
+}
+
+// restoreZeroValuedInt undoes GORM's default-tag swallowing after an
+// OnConflict Create during backup import: an int column tagged
+// `default:1` (Enabled / Managed) whose backup intent is 0 is dropped
+// from the INSERT, and the conflict-update assignments reuse the insert
+// values, so the row lands as 1 on BOTH branches (disabled inbounds,
+// kernels, announcements and monitors came back enabled; unmanaged
+// relays came back managed — W10 follow-up probe, both branches
+// reproduced). Reading the struct after Create cannot detect it —
+// GORM backfills the default into it — so the intent is captured by
+// the caller beforehand and written back explicitly here.
+// Same root as BUG-A4-1.
+func restoreZeroValuedInt(tx *gorm.DB, model interface{}, id int64, column string, intent int) error {
+	if intent != 0 {
+		return nil
+	}
+	return tx.Model(model).Where("id = ?", id).Update(column, 0).Error
 }
 
 func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64) (int, error) {
@@ -3121,8 +3235,8 @@ func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now in
 			ID:          sl.ID,
 			Name:        sl.Name,
 			Speed:       int(sl.Speed),
-			TunnelID:    sql.NullInt64{Int64: 0, Valid: false},
-			TunnelName:  sql.NullString{String: "", Valid: false},
+			TunnelID:    sql.NullInt64{Int64: nullableBackupInt64(sl.TunnelID), Valid: sl.TunnelID != nil},
+			TunnelName:  sql.NullString{String: sl.TunnelName, Valid: sl.TunnelName != ""},
 			CreatedTime: sl.CreatedTime,
 			UpdatedTime: sql.NullInt64{Int64: now, Valid: true},
 			Status:      sl.Status,
@@ -3166,13 +3280,37 @@ func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup) (int, error
 }
 
 // B4/F-004：导入 user_subscription 表（订阅分配关系）
-func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup) (int, error) {
-	count := 0
+//
+// BUG-A2-4：备份里的 subscription_id 是备份侧的订阅 id。订阅在
+// inbounds 段按 token 匹配重建，被删过的订阅会换新 id——分配必须
+// 先经 subRemap 重写再落库，否则全部悬空且回执假报成功。重写后仍
+// 不存在的订阅（备份不含该订阅、当前库也没有）无法落位：跳过该行
+// 并计入 skipped 由回执如实报告，不写悬空行、不报假成功。
+func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, subRemap map[int64]int64) (imported int, skipped int, err error) {
 	for _, r := range rows {
+		subID := r.SubscriptionID
+		if mapped, ok := subRemap[subID]; ok {
+			subID = mapped
+		}
+		var exists int64
+		if err := tx.Model(&model.Subscription{}).Where("id = ?", subID).Count(&exists).Error; err != nil {
+			return imported, skipped, err
+		}
+		if exists == 0 {
+			skipped++
+			continue
+		}
+		// (user_id, subscription_id) 唯一对若被另一行占用（例如恢复
+		// 期间管理员已把同一订阅手工分配给同一用户），先删占位行，
+		// 以备份为准——与 kernels/relays 导入的既有处理一致。
+		if err := tx.Where("user_id = ? AND subscription_id = ? AND id <> ?", r.UserID, subID, r.ID).
+			Delete(&model.UserSubscription{}).Error; err != nil {
+			return imported, skipped, err
+		}
 		item := model.UserSubscription{
 			ID:             r.ID,
 			UserID:         r.UserID,
-			SubscriptionID: r.SubscriptionID,
+			SubscriptionID: subID,
 			CreatedTime:    r.CreatedTime,
 		}
 		err := tx.Clauses(clause.OnConflict{
@@ -3182,11 +3320,11 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup) (
 			}),
 		}).Create(&item).Error
 		if err != nil {
-			return count, err
+			return imported, skipped, err
 		}
-		count++
+		imported++
 	}
-	return count, nil
+	return imported, skipped, nil
 }
 
 // B4/F-030：导入 service_monitor 表（监控定义）
@@ -3219,6 +3357,9 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 		if err != nil {
 			return count, err
 		}
+		if err := restoreZeroValuedInt(tx, &model.ServiceMonitor{}, r.ID, "enabled", r.Enabled); err != nil {
+			return count, err
+		}
 		count++
 	}
 	return count, nil
@@ -3242,6 +3383,9 @@ func importAnnouncements(tx *gorm.DB, rows []model.AnnouncementBackup, now int64
 			}),
 		}).Create(&item).Error
 		if err != nil {
+			return count, err
+		}
+		if err := restoreZeroValuedInt(tx, &model.Announcement{}, a.ID, "enabled", a.Enabled); err != nil {
 			return count, err
 		}
 		count++

@@ -187,7 +187,23 @@ func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	// AUDIT-R3 (F2X-001): per-node 端口分配锁已上移到调用方
 	//（inboundSave/remote_source/kernel_external），覆盖"检查→插入"
 	// 临界区。此处不再加锁（sync.Mutex 不可重入）。
-	return r.db.Create(in).Error
+	// BUG-A4-1: Enabled 带 gorm `default:1`，db.Create 会把显式 0 当未设置
+	// 丢弃、由列默认值 1 接管并回填结构体——enabled:false 建出来的入站
+	// 直接启用上线。故先留住调用方意图，创建后再写回。所有调用方都显式
+	// 给 Enabled 赋值（inboundSave 默认 1、externalRow 恒 1），意图为 0
+	// 必是显式禁用。改模型标签去掉 default 会触发存量库 AutoMigrate 的
+	// 列变更（SQLite 需重建表），故在仓库层收口。
+	wantEnabled := in.Enabled
+	if err := r.db.Create(in).Error; err != nil {
+		return err
+	}
+	if wantEnabled == 0 {
+		if err := r.db.Model(&model.NodeInbound{}).Where("id = ?", in.ID).Update("enabled", 0).Error; err != nil {
+			return err
+		}
+		in.Enabled = 0
+	}
+	return nil
 }
 
 // SaveNodeInbound writes the editable columns; traffic is left untouched so a
@@ -214,7 +230,10 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"enabled":               in.Enabled,
 		"outbound_id":           in.OutboundID,
 		"split_rules":           in.SplitRules,
-		"updated_time":          in.UpdatedTime,
+		// BUG-A2-1: 此列曾漏在白名单外——inboundSave 与 inboundSplitSave
+		// 都赋值 row.OutboundIPStrategy，落库时被静默丢弃，编辑策略永不生效。
+		"outbound_ip_strategy": in.OutboundIPStrategy,
+		"updated_time":         in.UpdatedTime,
 	}).Error
 }
 
