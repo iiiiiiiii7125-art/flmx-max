@@ -124,6 +124,12 @@ func TestSubscriptionContract(t *testing.T) {
 			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"resetDay":31}`); out.Code == 0 {
 			t.Fatal("reset day 31 must be rejected")
 		}
+		// FIX132-C（A3-04）：基线缺失只建基线。先以零值样本建基线，
+		// 后续 200/500 才全额成为已计流量（本用例的原断言不变）。
+		if err := r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{
+			{SubscriptionID: id, Direction: "up", Bytes: 0}, {SubscriptionID: id, Direction: "down", Bytes: 0}}, time.Now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
 		if err := r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{
 			{SubscriptionID: id, Direction: "up", Bytes: 200}, {SubscriptionID: id, Direction: "down", Bytes: 500}}, time.Now().UnixMilli()); err != nil {
 			t.Fatal(err)
