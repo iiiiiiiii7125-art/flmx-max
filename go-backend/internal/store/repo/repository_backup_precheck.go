@@ -42,8 +42,8 @@ func backupClaims(backup *model.BackupData, typeSet map[string]bool) []backupPor
 	if typeSet["tunnels"] {
 		for _, t := range backup.Tunnels {
 			for _, ct := range t.ChainTunnels {
-				if ct.NodeID > 0 && ct.Port > 0 {
-					claims = append(claims, backupPortClaim{ct.NodeID, ct.Port, fmt.Sprintf("隧道「%s」的链路", t.Name)})
+				if ct.NodeID > 0 && ct.Port != nil && *ct.Port > 0 {
+					claims = append(claims, backupPortClaim{ct.NodeID, *ct.Port, fmt.Sprintf("隧道「%s」的链路", t.Name)})
 				}
 			}
 		}
