@@ -79,8 +79,8 @@ const KINDS: Record<
   },
   kernel: {
     label: (n) => `${n} 个内核出错`,
-    hint: "在落地 → 内核里查看日志",
-    path: "/inbound",
+    hint: "在节点 → 内核里查看日志",
+    path: "/node",
   },
   inbound: {
     label: (n) => `${n} 个落地未运行`,
