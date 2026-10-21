@@ -2691,6 +2691,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A4-004（BC-26）：realm 不支持的负载策略明确拒绝，不再静默改写。
+	if err := validateRealmForwardStrategy(tunnel, remoteAddr, defaultString(asString(req["strategy"]), "fifo")); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("forward")
 	userName := h.repo.GetUsernameByID(userID)
@@ -2805,6 +2810,11 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	strategy := strings.TrimSpace(asString(req["strategy"]))
 	if strategy == "" {
 		strategy = forward.Strategy
+	}
+	// A4-004（BC-26）：编辑路径同建——合并后的策略/目标对 realm 隧道校验。
+	if err := validateRealmForwardStrategy(tunnel, remoteAddr, strategy); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	rawSpeedID, hasSpeedID := req["speedId"]
 	requestedSpeedID := asAnyToInt64Ptr(rawSpeedID)
@@ -3709,6 +3719,12 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		if !portRangeOk {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, portRangeErr)
+			continue
+		}
+		// A4-004（BC-26）：换入 realm 隧道同受策略校验（编辑路径之一）。
+		if err := validateRealmForwardStrategy(targetTunnel, forward.RemoteAddr, forward.Strategy); err != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
 		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
