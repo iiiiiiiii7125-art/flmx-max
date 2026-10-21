@@ -842,6 +842,61 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// panelRequestScheme 推断本次管理请求所见的面板实际服务方式
+// （"http"/"https"）：可信代理（回环/私网/链路本地，与登录限流
+// XFF 同一信任口径）的 X-Forwarded-Proto 优先，其次连接自身 TLS。
+// 配套：vite-frontend/nginx.conf 已改为透传上游 X-Forwarded-Proto
+// （此前被覆写为 nginx 自身 $scheme，Caddy 终止 TLS 的部署里后端
+// 永远只能看到 http）。
+func panelRequestScheme(r *http.Request) string {
+	if r != nil {
+		if ip := parseIPLiteral(r.RemoteAddr); ip != nil && isTrustedProxyIP(ip) {
+			proto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
+			if proto == "http" || proto == "https" {
+				return proto
+			}
+		}
+		if r.TLS != nil {
+			return "https"
+		}
+	}
+	return "http"
+}
+
+// normalizeNodeInstallAddr 把站点配置的面板地址归一为带显式
+// scheme 的 agent 连接地址（FIX2-C #2 / V6 §4）：
+//   - 地址自带 scheme：http/ws → ws://、https/wss → wss:// 显式化；
+//   - 裸地址：按面板实际服务方式（panelScheme）补 ws:// 或 wss://。
+//
+// 此前生成命令把地址原样写入节点 config.json，而 processServerAddress
+// 还会把自带 scheme 剥掉——FIX-H 禁止 agent 自动降级后，裸地址默认
+// wss，无 TLS 面板的新装节点重启即离线、只能人工改 config。归一只
+// 作用于新生成的安装命令，存量节点 config 不动。
+func normalizeNodeInstallAddr(panelAddr, panelScheme string) string {
+	raw := strings.TrimSpace(panelAddr)
+	scheme := ""
+	if idx := strings.Index(raw, "://"); idx > 0 {
+		switch strings.ToLower(raw[:idx]) {
+		case "http", "https", "ws", "wss":
+			scheme = strings.ToLower(raw[:idx])
+		}
+	}
+	host := processServerAddress(raw)
+	if host == "" {
+		return raw
+	}
+	switch scheme {
+	case "https", "wss":
+		return "wss://" + host
+	case "http", "ws":
+		return "ws://" + host
+	}
+	if panelScheme == "https" {
+		return "wss://" + host
+	}
+	return "ws://" + host
+}
+
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -891,13 +946,15 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	// 执行；任一步失败整条 && 链中止。校验锚与被校验文件同源同版本，
 	// 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
+	// FIX2-C #2：节点 addr 归一为显式 scheme（见 normalizeNodeInstallAddr）。
+	agentAddr := normalizeNodeInstallAddr(panelAddr, panelRequestScheme(r))
 	var cmd string
 	if enabled {
 		cmd = fmt.Sprintf("curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=true PROXY_URL=%s VERSION=%s ./install.sh -a %s -s %s",
-			proxyURL, githubRepo, version, proxyURL, githubRepo, version, proxyURL, version, processServerAddress(panelAddr), secret)
+			proxyURL, githubRepo, version, proxyURL, githubRepo, version, proxyURL, version, agentAddr, secret)
 	} else {
 		cmd = fmt.Sprintf("curl -fsSL https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
-			githubRepo, version, githubRepo, version, version, processServerAddress(panelAddr), secret)
+			githubRepo, version, githubRepo, version, version, agentAddr, secret)
 	}
 	response.WriteJSON(w, response.OK(cmd))
 }

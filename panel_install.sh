@@ -984,7 +984,71 @@ pull_panel_update_images() {
   fi
 }
 
+# FIX2-C #1（V6-01）：升级替换 compose 前，把存量 compose 的网络名
+# 与子网搬进候选文件。FIX-G 已把模板子网改为 172.30.0.0/16，但那
+# 只应作用于全新安装；整份覆写会连在用子网一起换掉，等于升级即
+# 重建面板网络（容器 IP 全变、可信代理判定随子网是否 RFC1918 静默
+# 翻转）。规则与面板内升级（preserveComposeNetworks）一致：存量有
+# 子网就整体搬入；存量无显式子网则删掉候选的子网行、不强加模板
+# 子网；存量无 networks 段则不动候选。best-effort：任何一步失败都
+# 不阻断升级本身（行为不劣于此前的整份覆写）。
+# 用法：preserve_compose_networks <candidate> <current>
+preserve_compose_networks() {
+  local candidate="$1" current="$2"
+  [[ -f "$candidate" && -f "$current" ]] || return 0
+  grep -q "^networks:" "$current" || return 0
+
+  # networks 是模板的最后一个顶层段；段内抽网络名与全部子网。
+  local old_name old_subnets
+  old_name=$(awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ { sub(/^    name:[[:space:]]*/, ""); print; exit }
+  ' "$current")
+  old_subnets=$(awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /- subnet:/ { sub(/.*- subnet:[[:space:]]*/, ""); print }
+  ' "$current")
+
+  local tmp
+  tmp=$(mktemp) || return 0
+  if ! OLD_NAME="$old_name" OLD_SUBNETS="$old_subnets" awk '
+    BEGIN {
+      old_name = ENVIRON["OLD_NAME"]
+      n = split(ENVIRON["OLD_SUBNETS"], subs, "\n")
+      if (n == 1 && subs[1] == "") n = 0
+      emitted = 0
+    }
+    /^networks:/ { in_net=1; print; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ && old_name != "" {
+      print "    name: " old_name
+      next
+    }
+    in_net && /- subnet:/ {
+      if (!emitted) {
+        indent = $0
+        sub(/- subnet:.*/, "", indent)
+        for (i = 1; i <= n; i++) print indent "- subnet: " subs[i]
+        emitted = 1
+      }
+      next
+    }
+    { print }
+  ' "$candidate" > "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  cat "$tmp" > "$candidate"
+  rm -f "$tmp"
+  if [[ -n "$old_subnets" ]]; then
+    echo "🌐 已保留现有部署的网络子网（${old_subnets//$'\n'/, }），模板子网仅对全新安装生效"
+  fi
+}
+
 activate_panel_update_files() {
+  preserve_compose_networks "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml
   if ! chmod 0644 "$UPDATE_COMPOSE_CANDIDATE" || ! mv "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml; then
     echo "❌ 替换 Compose 配置失败"
     return 1
@@ -1263,6 +1327,25 @@ EOF
 }
 
 # 更新功能
+# FIX2-C #9（V6 P3）：读取实际运行中的后端容器镜像 tag 作为部署
+# 版本。.env 的 FLUX_VERSION 是「打算跑的版本」，可能与正在跑的
+# 镜像不一致（手改 .env、升级中途失败）；防降级判定若只信 .env
+# 会被这种不一致绕过。取不到（容器不在、无 tag 等）时返回非 0，
+# 调用方回退 .env 口径。
+get_deployed_panel_version() {
+  local container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local image tag
+  image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null) || return 1
+  [[ -n "$image" ]] || return 1
+  image="${image%%@*}"   # 去 digest
+  tag="${image##*:}"     # 去 registry/repo 前缀，只留 tag
+  # 无 tag（tag 与整串相同）、或误把注册表端口当 tag（含 /）都算取不到。
+  if [[ -z "$tag" || "$tag" == "$image" || "$tag" == */* ]]; then
+    return 1
+  fi
+  printf '%s' "$tag"
+}
+
 update_panel() {
   echo "🔄 开始更新面板..."
   check_docker noinstall || {
@@ -1283,6 +1366,15 @@ update_panel() {
   # 两侧都可解析且目标更低时拒绝；同版本按重装继续（与面板口径一致）。
   local current_version cmp_result
   current_version=$(get_env_var "FLUX_VERSION" || true)
+  # FIX2-C #9：与实际运行版本交叉核对——两者不一致时告警并以实际
+  # 运行版本为准做防降级判定（.env 可能被手改或停留在失败的升级
+  # 目标上，只信它会放过真实降级）。取不到实际版本时保持 .env 口径。
+  local deployed_version
+  deployed_version=$(get_deployed_panel_version || true)
+  if [[ -n "$deployed_version" && "$deployed_version" != "$current_version" ]]; then
+    echo "⚠️ .env 记录版本（${current_version:-未知}）与实际运行版本（$deployed_version）不一致，防降级判定以实际运行版本为准"
+    current_version="$deployed_version"
+  fi
   if [[ -n "${VERSION:-}" ]]; then
     LATEST_VERSION="$VERSION"
     echo "📌 指定更新版本：$LATEST_VERSION（当前版本：${current_version:-未知}）"
