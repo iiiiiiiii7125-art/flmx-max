@@ -2374,8 +2374,8 @@ export default function TunnelPage() {
                       <Select
                         description={
                           form.engine === "realm"
-                            ? "入口节点自动安装 realm 运行这条隧道的转发；不支持限速和连接数限制，节点 agent 需为支持 realm 的版本"
-                            : "节点 agent 直接转发，支持限速和连接数限制"
+                            ? "入口节点自动安装 realm 运行这条隧道的转发；不支持限速和连接数限制，节点 agent 需为支持 realm 的版本；切换为 realm 后该隧道的转发流量开始计入用户配额，切回面板转发（gost）则不计费"
+                            : "节点 agent 直接转发，支持限速和连接数限制；面板转发（gost）的隧道流量不计入用户配额"
                         }
                         label="转发引擎"
                         selectedKeys={[
