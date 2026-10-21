@@ -3,7 +3,7 @@
 ## 面板与安装
 
 ### 安装脚本提示 "Docker command not found"？
-请确保您的系统已安装 Docker 和 Docker Compose。
+使用一键安装脚本时，Docker 缺失会由脚本自动安装，正常不会看到这条提示；它多见于手动用 docker compose 部署的场景。这种情况请确保您的系统已安装 Docker 和 Docker Compose。
 - Ubuntu/Debian 安装 Docker: `curl -fsSL https://get.docker.com | bash`
 
 ### 面板无法访问 (Connection Refused)？
@@ -33,7 +33,7 @@
 4. 详细迁移步骤参考 [PostgreSQL](./postgresql.md)。
 
 ### PostgreSQL 容器启动失败？
-1. 检查 `POSTGRES_PASSWORD` 是否已设置（不能为空）。
+1. 检查 `POSTGRES_PASSWORD` 是否已设置：不能为空，**也不能仍是默认值 `flux_panel_change_me` 或 `postgres`**——1.2.0 起后端遇到空/默认口令会直接拒绝启动。
 2. 查看容器日志：`docker logs flux-panel-postgres`。
 3. 如果是首次启动后修改了密码，需要删除旧的数据卷重新初始化：`docker volume rm postgres_data`。
 
@@ -53,7 +53,7 @@
 
 ### Snell 用哪个版本
 
-入站的 Snell 版本不能高于节点安装的 Snell 主版本，v5 入站需要节点安装 Snell 5.x。
+入站的 Snell 版本不能高于节点安装的 Snell 主版本，v5 入站需要节点安装 Snell 5.x，v6 入站需要节点安装 Snell 6.0.0（beta，仅 v6 客户端可用）。
 
 ### Reality 用 Clash / Mihomo 连不上
 
