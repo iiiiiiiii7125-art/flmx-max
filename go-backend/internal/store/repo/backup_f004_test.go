@@ -200,6 +200,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"tunnel_quality":             "质量探测时序",
 		"service_monitor_result":     "监控结果时序（定义在 service_monitor，已备份）",
 		"subscription_counter":       "订阅流量计数基线，运行时状态",
+		"subscription_traffic":       "订阅流量时序遥测，非配置数据（400 天保留，计数样本持续重建）",
 		"peer_share":                 "联邦共享定义绑定对端实例，跨实例恢复无语义",
 		"peer_share_runtime":         "联邦运行时状态",
 		"peer_share_resource":        "联邦运行时状态",
