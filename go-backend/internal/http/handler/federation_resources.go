@@ -210,6 +210,9 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 			if err := validatePeerResourceReferences(config, kind); err != nil {
 				return nil, err
 			}
+			if err := validatePeerResourceTypes(config, kind); err != nil {
+				return nil, err
+			}
 			scopePeerResourceReferences(config, share.ID)
 			config["name"] = item.RuntimeName
 			encoded, err := json.Marshal(config)
@@ -631,6 +634,94 @@ func (h *Handler) releasePeerShareForwardRuntimeResources(runtime *repo.PeerShar
 	for _, item := range items {
 		if _, err = h.applyPeerShareResource(item); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// D3-03: peer 服务/链配置的类型白名单。validatePeerResourceReferences
+// 只堵了注册表引用与 shell hook（黑名单），handler/listener 类型本身
+// 此前无任何限制——fork 注册表里的 file（任意目录 FileServer）、sshd、
+// tun、dns、redirect 等高危类型可由持 token 对端原样下发到提供方节点
+// （R5 真机坐实：file/sshd 被校验层接受并落库为期望状态）。
+//
+// 白名单按「面板自身构建路径实际会下发的类型全集」反查得出：
+//   - 转发服务（buildForwardServiceConfigs）：handler tcp/udp
+//     （forward 是同一处理器的注册别名）、listener tcp/udp；
+//   - 隧道链服务（buildTunnelChainServiceConfig）：handler relay、
+//     listener 为隧道协议；
+//   - 转发链（buildTunnelChainConfig / buildFederationMiddleChainConfig）：
+//     hop 节点 connector 恒 relay、dialer 为隧道协议。
+//
+// 隧道协议全集与前端 tunnel 协议枚举及 fork 注册表一致：
+// tcp/tls/mtls/mtcp/kcp/ws/wss/mws/mwss。
+var peerServiceHandlerTypes = map[string]bool{
+	"tcp": true, "udp": true, "forward": true, "relay": true,
+}
+
+// listener/dialer 放行集合：转发服务的 listener 是 tcp/udp（按转发
+// 协议），隧道链服务 listener 与链 dialer 是隧道协议全集。
+var peerTunnelTransportTypes = map[string]bool{
+	"tcp": true, "udp": true, "tls": true, "mtls": true, "mtcp": true, "kcp": true,
+	"ws": true, "wss": true, "mws": true, "mwss": true,
+}
+
+var peerChainConnectorTypes = map[string]bool{
+	"relay": true,
+}
+
+// validatePeerResourceTypes 递归走遍服务/链配置，凡出现 handler /
+// listener / connector / dialer 段，其 type 必须落在对应白名单内；
+// 段存在但 type 缺失同样拒绝（面板构建路径恒带 type，缺失即手工构造）。
+// 只对 service/chain 两类资源生效（limiter 配置无此类段）。
+func validatePeerResourceTypes(value interface{}, kind string) error {
+	if kind != "service" && kind != "chain" {
+		return nil
+	}
+	return walkPeerResourceTypes(value)
+}
+
+func walkPeerResourceTypes(value interface{}) error {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, child := range v {
+			var allowed map[string]bool
+			var label string
+			switch strings.ToLower(key) {
+			case "handler":
+				allowed, label = peerServiceHandlerTypes, "handler"
+			case "listener":
+				allowed, label = peerTunnelTransportTypes, "listener"
+			case "connector":
+				allowed, label = peerChainConnectorTypes, "connector"
+			case "dialer":
+				allowed, label = peerTunnelTransportTypes, "dialer"
+			default:
+				if err := walkPeerResourceTypes(child); err != nil {
+					return err
+				}
+				continue
+			}
+			section, ok := child.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("shared %s configuration is invalid", label)
+			}
+			typ := strings.ToLower(strings.TrimSpace(asString(section["type"])))
+			if typ == "" {
+				return fmt.Errorf("shared %s type is required", label)
+			}
+			if !allowed[typ] {
+				return fmt.Errorf("shared %s type %q is not allowed", label, typ)
+			}
+			if err := walkPeerResourceTypes(child); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, child := range v {
+			if err := walkPeerResourceTypes(child); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
