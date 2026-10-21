@@ -19,6 +19,11 @@ import (
 // 信号量同口径），结果顺序与错误语义不变。
 // 修复前本测试失败：3 个各延迟 2s 的远端串行耗时 ≥6s。
 func TestFederationRemoteUsageListConcurrentF085(t *testing.T) {
+	// FIX-132 D3-01 后联邦出站客户端在拨号期复检目标地址；本用例的
+	// 假提供方是 httptest 回环服务，与 tests/contract 同口径开启测试
+	// 旁路（主题是并发预取，不是 SSRF 校验本身）。
+	DisableSafeRemoteAddrCheckForTesting = true
+	defer func() { DisableSafeRemoteAddrCheckForTesting = false }()
 	r, err := repo.Open(filepath.Join(t.TempDir(), "b8-fed.db"))
 	if err != nil {
 		t.Fatal(err)

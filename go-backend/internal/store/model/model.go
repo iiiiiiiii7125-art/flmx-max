@@ -407,16 +407,27 @@ type PeerShare struct {
 	UpdatedTime    int64  `gorm:"column:updated_time;not null" json:"updatedTime"`
 	AllowedDomains string `gorm:"column:allowed_domains;type:text;default:''" json:"allowedDomains"`
 	AllowedIPs     string `gorm:"column:allowed_ips;type:text;default:''" json:"allowedIps"`
+	// D3-04: 本 share 的 middle/exit 角色服务凭据（每 share 独立）。
+	// 角色服务 handler 恒带此 auth，消费方经 Connect 取得后在建链时
+	// 写入 relay connector。存量 share 由 repo 启动回填 + handler 懒
+	// 补发，见 migration_fix132_v3.go 的 backfill 与
+	// ensurePeerShareRelayCredentials。
+	RelayUsername string `gorm:"column:relay_username;type:text;default:''" json:"relayUsername"`
+	RelayPassword string `gorm:"column:relay_password;type:text;default:''" json:"relayPassword"`
 }
 
 func (PeerShare) TableName() string { return "peer_share" }
 
 type PeerShareRuntime struct {
-	ID             int64  `gorm:"primaryKey;autoIncrement"`
-	ShareID        int64  `gorm:"column:share_id;not null;index:idx_peer_share_runtime_share_node_status"`
-	NodeID         int64  `gorm:"column:node_id;not null;index:idx_peer_share_runtime_share_node_status"`
-	ReservationID  string `gorm:"column:reservation_id;type:text;not null;uniqueIndex"`
-	ResourceKey    string `gorm:"column:resource_key;type:text;not null;uniqueIndex"`
+	ID            int64  `gorm:"primaryKey;autoIncrement"`
+	ShareID       int64  `gorm:"column:share_id;not null;index:idx_peer_share_runtime_share_node_status"`
+	NodeID        int64  `gorm:"column:node_id;not null;index:idx_peer_share_runtime_share_node_status"`
+	ReservationID string `gorm:"column:reservation_id;type:text;not null;uniqueIndex"`
+	// D3-05: resource_key 的唯一性是 (share_id, resource_key) 复合口径，
+	// 由版本化迁移 fix132_v3 维护（与 R5-B4 同规矩：唯一索引不放 model
+	// tag，避免 AutoMigrate 在存量数据上静默建索引失败）。旧单列全局
+	// 唯一索引会让第二个消费方面板必然撞键。
+	ResourceKey    string `gorm:"column:resource_key;type:text;not null"`
 	BindingID      string `gorm:"column:binding_id;type:text;not null;default:'';index:idx_peer_share_runtime_binding_id"`
 	Role           string `gorm:"type:text;not null;default:''"`
 	ChainName      string `gorm:"column:chain_name;type:text;not null;default:''"`

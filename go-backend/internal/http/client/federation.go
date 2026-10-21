@@ -25,6 +25,10 @@ type RemoteNodeInfo struct {
 	ExpiryTime     int64  `json:"expiryTime"`
 	PortRangeStart int    `json:"portRangeStart"`
 	PortRangeEnd   int    `json:"portRangeEnd"`
+	// D3-04: 该 share 的 relay 角色服务凭据（提供方在 Connect 时下发，
+	// 消费方存入 RemoteConfig，建链时写入 relay connector 的 auth）。
+	RelayUsername string `json:"relayUsername"`
+	RelayPassword string `json:"relayPassword"`
 }
 
 type RemoteTunnelResponse struct {
@@ -47,6 +51,11 @@ type RuntimeTarget struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Protocol string `json:"protocol"`
+	// D3-04: 当该 target 是另一个 share 的 middle/exit 角色服务时，
+	// 消费方附上目标 share 的 relay 凭据，提供方据此为本机 middle 的
+	// chain connector 写入 auth。目标为本方本地节点时留空。
+	RelayUsername string `json:"relayUsername,omitempty"`
+	RelayPassword string `json:"relayPassword,omitempty"`
 }
 
 type RuntimeApplyRoleRequest struct {
@@ -92,17 +101,13 @@ type RuntimeNodeCommandResponse struct {
 
 func NewFederationClient() *FederationClient {
 	return &FederationClient{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client: newFederationHTTPClient(10 * time.Second),
 	}
 }
 
 func NewFederationClientWithTimeout(timeout time.Duration) *FederationClient {
 	return &FederationClient{
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client: newFederationHTTPClient(timeout),
 	}
 }
 

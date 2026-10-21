@@ -474,6 +474,16 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// D3-02: 直填 remoteUrl 与 nodeImport 共用同一校验（validateRemoteNodeURL），
+	// 此前该路径零校验，可把内网/元数据地址写成远端节点 URL。
+	if asInt(req["isRemote"], 0) == 1 {
+		if remoteURL := strings.TrimSpace(asString(req["remoteUrl"])); remoteURL != "" {
+			if err := validateRemoteNodeURL(remoteURL); err != nil {
+				writeRemoteURLValidationError(w, err)
+				return
+			}
+		}
+	}
 
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("node")
@@ -4675,6 +4685,41 @@ func (h *Handler) federationLocalDomain() string {
 	return strings.TrimSpace(cfg.Value)
 }
 
+// ensureRemoteNodeRelayAuth 是消费方凭据自愈（D3-04）：升级前导入
+// 的远端节点 RemoteConfig 没有 relay 凭据，缺失时向提供方做一次
+// Connect 刷新并合并写回 DB 与内存副本。best-effort：失败保留存量
+// 值继续下发——目标服务若已强制鉴权，缺凭据的连接会在提供方被拒
+// 并显形为隧道错误，不会静默放行。
+func (h *Handler) ensureRemoteNodeRelayAuth(fc *client.FederationClient, node *nodeRecord, localDomain string) {
+	if node == nil || node.IsRemote != 1 {
+		return
+	}
+	if _, password := parseRemoteShareRelayAuth(node.RemoteConfig); password != "" {
+		return
+	}
+	remoteURL := strings.TrimSpace(node.RemoteURL)
+	remoteToken := strings.TrimSpace(node.RemoteToken)
+	if remoteURL == "" || remoteToken == "" {
+		return
+	}
+	info, err := fc.Connect(remoteURL, remoteToken, localDomain)
+	if err != nil || info == nil || strings.TrimSpace(info.RelayPassword) == "" {
+		return
+	}
+	cfg := map[string]interface{}{}
+	if raw := strings.TrimSpace(node.RemoteConfig); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &cfg)
+	}
+	cfg["relayUsername"] = info.RelayUsername
+	cfg["relayPassword"] = info.RelayPassword
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return
+	}
+	node.RemoteConfig = string(data)
+	_ = h.repo.UpdateNodeRemoteConfig(node.ID, string(data))
+}
+
 func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain string) ([]repo.FederationTunnelBinding, []federationRuntimeReleaseRef, error) {
 	bindings := make([]repo.FederationTunnelBinding, 0)
 	releaseRefs := make([]federationRuntimeReleaseRef, 0)
@@ -4683,6 +4728,12 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 	}
 	fc := client.NewFederationClient()
 	now := time.Now().UnixMilli()
+
+	// D3-04: 下发前为所有远端节点自愈 relay 凭据（每个节点至多一次
+	// Connect），供下方 middle 目标与本地链构建取用。
+	for _, node := range state.Nodes {
+		h.ensureRemoteNodeRelayAuth(fc, node, localDomain)
+	}
 
 	for outIdx := range state.OutNodes {
 		outNode := state.OutNodes[outIdx]
@@ -4806,11 +4857,17 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 				if target.Port <= 0 {
 					return bindings, releaseRefs, errors.New("节点端口不能为空")
 				}
-				applyTargets = append(applyTargets, client.RuntimeTarget{
+				rt := client.RuntimeTarget{
 					Host:     host,
 					Port:     target.Port,
 					Protocol: defaultString(target.Protocol, "tls"),
-				})
+				}
+				// D3-04: 目标是远端节点时附上其 share 凭据，供提供方
+				// 为 middle 的 chain connector 写 auth。
+				if targetNode.IsRemote == 1 {
+					rt.RelayUsername, rt.RelayPassword = parseRemoteShareRelayAuth(targetNode.RemoteConfig)
+				}
+				applyTargets = append(applyTargets, rt)
 			}
 
 			applyReq := client.RuntimeApplyRoleRequest{
@@ -5151,11 +5208,16 @@ func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, own
 		if target.Port <= 0 {
 			return errors.New("节点端口不能为空")
 		}
-		applyTargets = append(applyTargets, client.RuntimeTarget{
+		rt := client.RuntimeTarget{
 			Host:     host,
 			Port:     target.Port,
 			Protocol: defaultString(target.Protocol, "tls"),
-		})
+		}
+		// D3-04: 与 applyFederationRuntime 同口径附目标 share 凭据。
+		if targetNode.IsRemote == 1 {
+			rt.RelayUsername, rt.RelayPassword = parseRemoteShareRelayAuth(targetNode.RemoteConfig)
+		}
+		applyTargets = append(applyTargets, rt)
 	}
 
 	ownerRuntimeNode := tunnelRuntimeNode{NodeID: ownerNodeID, Protocol: "tls", Strategy: "round", ChainType: 2}
@@ -5329,6 +5391,13 @@ func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRu
 		protocol := defaultString(target.Protocol, "tls")
 		connector := map[string]interface{}{
 			"type": "relay",
+		}
+		// D3-04: 目标是远端节点（其角色服务带鉴权）时写入该 share
+		// 的 relay 凭据；本地节点目标不带。
+		if targetNode.IsRemote == 1 {
+			if auth := relayAuthConfig(parseRemoteShareRelayAuth(targetNode.RemoteConfig)); auth != nil {
+				connector["auth"] = auth
+			}
 		}
 		connectorMetadata := map[string]interface{}{}
 		if isTCPTunnelProtocol(protocol) {
