@@ -209,30 +209,51 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A2-04（BC-06）：真部分更新——未传字段保持现值（oldUser），不再
+	// 「缺省即重置」（旧口径：未传 status 把停用用户重新启用、未传
+	// expTime 自动续期一年、未传 flow 改回 100GB）。与 userTunnelUpdate
+	// 的 presence 语义一致；显式传值（含 0）照常生效。
 	flow, flowMiB, flowErr := parseTrafficLimit(req, 100)
 	if flowErr != nil {
 		response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
 		return
+	}
+	if _, hasFlow := req["flow"]; !hasFlow {
+		if _, hasFlowMiB := req["flowMiB"]; !hasFlowMiB {
+			flow, flowMiB = oldUser.Flow, oldUser.FlowMiB
+		}
 	}
 	if _, supplied := req["flowMiB"]; !supplied {
 		if current, err := h.repo.GetUserByID(id); err == nil && current != nil && current.Flow == flow {
 			flowMiB = current.FlowMiB
 		}
 	}
-	num := asInt(req["num"], 10)
+	num := oldUser.Num
+	if _, ok := req["num"]; ok {
+		num = asInt(req["num"], 10)
+	}
 	// O5-005：num 拒绝负值
 	if num < 0 {
 		response.WriteJSON(w, response.ErrDefault("设备数限制不能小于0"))
 		return
 	}
-	expTime := asInt64(req["expTime"], time.Now().Add(365*24*time.Hour).UnixMilli())
-	flowResetTime := asInt64(req["flowResetTime"], 1)
+	expTime := oldUser.ExpTime
+	if _, ok := req["expTime"]; ok {
+		expTime = asInt64(req["expTime"], oldUser.ExpTime)
+	}
+	flowResetTime := oldUser.FlowResetTime
+	if _, ok := req["flowResetTime"]; ok {
+		flowResetTime = asInt64(req["flowResetTime"], oldUser.FlowResetTime)
+	}
 	// O5-008：flowResetTime 有效值校验：0=不自动重置，1-31=每月几号重置
 	if flowResetTime < 0 || flowResetTime > 31 {
 		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
 		return
 	}
-	status := asInt(req["status"], 1)
+	status := oldUser.Status
+	if _, ok := req["status"]; ok {
+		status = asInt(req["status"], oldUser.Status)
+	}
 	// O5-007：status 枚举校验（仅 0/1）
 	if status != 0 && status != 1 {
 		response.WriteJSON(w, response.ErrDefault("状态值无效，仅允许 0 或 1"))
@@ -241,7 +262,10 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	_, hasDailyQuota := req["dailyQuotaGB"]
 	_, hasMonthlyQuota := req["monthlyQuotaGB"]
 	now := time.Now().UnixMilli()
-	maxConn := asInt(req["maxConn"], 0)
+	maxConn := oldUser.MaxConn
+	if _, ok := req["maxConn"]; ok {
+		maxConn = asInt(req["maxConn"], oldUser.MaxConn)
+	}
 	// O5-006：maxConn 拒绝负值
 	if maxConn < 0 {
 		response.WriteJSON(w, response.ErrDefault("连接数限制不能小于0"))
@@ -526,13 +550,28 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	newHTTP := asInt(req["http"], currentHTTP)
 	newTLS := asInt(req["tls"], currentTLS)
 	newSocks := asInt(req["socks"], currentSocks)
-	forwardMode := defaultNodeForwardMode(strings.TrimSpace(asString(req["forwardMode"])))
 	currentForwardMode, err := h.repo.GetNodeForwardMode(id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	serverIP := asString(req["serverIp"])
+	// A2-04（BC-06）：真部分更新——未传字段保持现值。旧口径未传
+	// forwardMode 时 defaultNodeForwardMode("") 恒回 "agent"，会把
+	// nftables 节点静默翻回 agent 模式；name/serverIp/port/监听地址/
+	// 附加字段同理被清空或复位。currentNode 为保值来源。
+	currentNode, err := h.repo.GetNodeByID(id)
+	if err != nil || currentNode == nil {
+		response.WriteJSON(w, response.Err(-2, errString(err)))
+		return
+	}
+	forwardMode := defaultNodeForwardMode(currentForwardMode)
+	if _, ok := req["forwardMode"]; ok {
+		forwardMode = defaultNodeForwardMode(strings.TrimSpace(asString(req["forwardMode"])))
+	}
+	serverIP := currentNode.ServerIP
+	if _, ok := req["serverIp"]; ok {
+		serverIP = asString(req["serverIp"])
+	}
 	if serverIP != "" {
 		if err := IsValidNodeAddress(serverIP); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -547,24 +586,69 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A2-04：其余字段同理按 presence 解析（未传用现值，含 sql.Null* 直传）。
+	resolveText := func(key string, current interface{}) interface{} {
+		if _, ok := req[key]; ok {
+			return nullableText(asString(req[key]))
+		}
+		return current
+	}
+	nodeName := currentNode.Name
+	if _, ok := req["name"]; ok {
+		nodeName = asString(req["name"])
+	}
+	nodePort := currentNode.Port
+	if _, ok := req["port"]; ok {
+		nodePort = defaultString(asString(req["port"]), "1000-65535")
+	}
+	if strings.TrimSpace(nodePort) == "" {
+		nodePort = "1000-65535"
+	}
+	remarkVal := interface{}(currentNode.Remark)
+	if _, ok := req["remark"]; ok {
+		remarkVal = nullableText(strings.TrimSpace(asString(req["remark"])))
+	}
+	expiryVal := interface{}(currentNode.ExpiryTime)
+	if _, ok := req["expiryTime"]; ok {
+		expiryVal = nullableUnixMilli(asInt64(req["expiryTime"], 0))
+	}
+	renewalVal := interface{}(currentNode.RenewalCycle)
+	if _, ok := req["renewalCycle"]; ok {
+		renewalVal = nullableText(normalizeNodeRenewalCycle(asString(req["renewalCycle"])))
+	}
+	tcpAddr := currentNode.TCPListenAddr
+	if _, ok := req["tcpListenAddr"]; ok {
+		tcpAddr = defaultString(asString(req["tcpListenAddr"]), "[::]")
+	}
+	if strings.TrimSpace(tcpAddr) == "" {
+		tcpAddr = "[::]"
+	}
+	udpAddr := currentNode.UDPListenAddr
+	if _, ok := req["udpListenAddr"]; ok {
+		udpAddr = defaultString(asString(req["udpListenAddr"]), "[::]")
+	}
+	if strings.TrimSpace(udpAddr) == "" {
+		udpAddr = "[::]"
+	}
+
 	now := time.Now().UnixMilli()
 	if err := h.repo.UpdateNode(id,
-		asString(req["name"]),
+		nodeName,
 		serverIP,
-		nullableText(asString(req["serverIpV4"])),
-		nullableText(asString(req["serverIpV6"])),
-		defaultString(asString(req["port"]), "1000-65535"),
-		nullableText(asString(req["interfaceName"])),
-		nullableText(asString(req["extraIPs"])),
-		nullableText(strings.TrimSpace(asString(req["remark"]))),
-		nullableUnixMilli(asInt64(req["expiryTime"], 0)),
-		nullableText(normalizeNodeRenewalCycle(asString(req["renewalCycle"]))),
+		resolveText("serverIpV4", currentNode.ServerIPV4),
+		resolveText("serverIpV6", currentNode.ServerIPV6),
+		nodePort,
+		resolveText("interfaceName", currentNode.InterfaceName),
+		resolveText("extraIPs", currentNode.ExtraIPs),
+		remarkVal,
+		expiryVal,
+		renewalVal,
 		forwardMode,
 		newHTTP,
 		newTLS,
 		newSocks,
-		defaultString(asString(req["tcpListenAddr"]), "[::]"),
-		defaultString(asString(req["udpListenAddr"]), "[::]"),
+		tcpAddr,
+		udpAddr,
 		now,
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -817,15 +901,38 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if ids == nil {
 		return
 	}
+	// A2-05（=A9-04 后端半）：逐条收集成败并以 batchOperationResult
+	// 回执（与 forward/tunnel/inbound 批量接口同口径）。旧实现吞掉全部
+	// 错误恒 OKEmpty，前端只能按选中数虚报全成功、失败节点刷新后
+	// 「复活」。响应体新增字段，向后兼容。
+	success := 0
+	fail := 0
+	failures := make([]batchFailureDetail, 0)
 	for _, id := range ids {
-		_ = h.deleteNodeByID(id)
+		nodeName := ""
+		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
+			nodeName = n.Name
+		} else {
+			// 节点不存在：DeleteNodeCascade 删 0 行不报错，必须在这一层
+			// 如实记失败，否则回执仍会把未删项报成功。
+			fail++
+			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
+			continue
+		}
+		delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
 			h.nftablesManager.ReleaseNode(id)
 		}
+		if delErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, nodeName, delErr)
+			continue
+		}
+		success++
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -1318,7 +1425,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	typeVal := asInt(req["type"], 1)
+	_, hasType := req["type"]
 	ipPreference := asString(req["ipPreference"])
+	_, hasIPPreference := req["ipPreference"]
 	_, hasProbeTargetHost := req["probeTargetHost"]
 	_, hasProbeTargetPort := req["probeTargetPort"]
 	probeTargetFieldsPresent := hasProbeTargetHost || hasProbeTargetPort
@@ -1362,6 +1471,33 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
+	}
+
+	// A2-04（BC-06）：真部分更新——标量字段未传保持现值，不再被硬默认
+	// 覆写（旧口径：未传 name 清空、flow→1、trafficRatio→1.0、
+	// status→1、type→1、ipPreference 清空）。链结构仍按请求重建
+	// （inNodeId 等结构字段是本接口的全量语义，不在本条范围）。
+	resolvedName := asString(req["name"])
+	if _, ok := req["name"]; !ok {
+		resolvedName, _ = h.repo.GetTunnelName(id)
+	}
+	resolvedFlow := asInt64(req["flow"], 1)
+	if _, ok := req["flow"]; !ok {
+		resolvedFlow = oldTunnel.Flow
+	}
+	resolvedRatio := asFloat(req["trafficRatio"], 1.0)
+	if _, ok := req["trafficRatio"]; !ok {
+		resolvedRatio = oldTunnel.TrafficRatio
+	}
+	resolvedStatus := asInt(req["status"], 1)
+	if _, ok := req["status"]; !ok {
+		resolvedStatus = oldTunnel.Status
+	}
+	if !hasType {
+		typeVal = oldTunnel.Type
+	}
+	if !hasIPPreference {
+		ipPreference = h.repo.GetTunnelIPPreference(id)
 	}
 
 	now := time.Now().UnixMilli()
@@ -1420,14 +1556,20 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			return err, 0
 		}
 		inIp = buildTunnelInIP(runtimeState.InNodes, runtimeState.Nodes, ipPreference)
+		// A9-05（BC-21）：与 create 对齐——请求显式给出 inIp 时保留自定义
+		// 入口 IP，不再无条件被系统采集值覆盖（旧实现编辑即丢失自定义值，
+		// 前端回填的旧值也因此恒被重算）。
+		if v := strings.TrimSpace(asString(req["inIp"])); v != "" {
+			inIp = v
+		}
 		updateProtocol = "tls"
 		if len(runtimeState.OutNodes) > 0 && strings.TrimSpace(runtimeState.OutNodes[0].Protocol) != "" {
 			updateProtocol = strings.TrimSpace(runtimeState.OutNodes[0].Protocol)
 		} else if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
 			updateProtocol = strings.TrimSpace(runtimeState.InNodes[0].Protocol)
 		}
-		if err := h.repo.UpdateTunnelTx(validationTx, id, asString(req["name"]), typeVal,
-			asInt64(req["flow"], 1), asFloat(req["trafficRatio"], 1.0), asInt(req["status"], 1),
+		if err := h.repo.UpdateTunnelTx(validationTx, id, resolvedName, typeVal,
+			resolvedFlow, resolvedRatio, resolvedStatus,
 			inIp, ipPreference, updateProtocol, probeTargetHost, probeTargetPort, now); err != nil {
 			return err, -2
 		}
@@ -1501,11 +1643,11 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		if err := h.repo.UpdateTunnelTx(
 			tx,
 			id,
-			asString(req["name"]),
+			resolvedName,
 			typeVal,
-			asInt64(req["flow"], 1),
-			asFloat(req["trafficRatio"], 1.0),
-			asInt(req["status"], 1),
+			resolvedFlow,
+			resolvedRatio,
+			resolvedStatus,
 			inIp,
 			ipPreference,
 			updateProtocol,
