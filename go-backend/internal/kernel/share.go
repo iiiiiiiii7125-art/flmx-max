@@ -28,6 +28,9 @@ type Endpoint struct {
 	// ChainRole is ChainRoleLanding / ChainRoleRelay when the subscription
 	// chains proxies (set by ApplySubOptions).
 	ChainRole string
+	// SourceID is the remote source an imported node comes from (0 for
+	// none).
+	SourceID int64
 	// RelayID identifies which relay this endpoint belongs to (0 = direct).
 	RelayID int64
 }
@@ -647,7 +650,6 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 				proxyLines = append(proxyLines, line)
 				e.Name = strings.SplitN(line, " = ", 2)[0]
 				rendered = append(rendered, e)
-				names = append(names, e.Name)
 			}
 		}
 		landing, relay, chain := chainGroups(rendered)
@@ -656,6 +658,9 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 				line += ", underlying-proxy=" + ChainRelayGroup
 			}
 			lines = append(lines, line)
+			if listed(rendered[i], chain, opts) {
+				names = append(names, rendered[i].Name)
+			}
 		}
 		lines = append(lines, "", "[Proxy Group]")
 		var regionLines []string
@@ -724,8 +729,10 @@ func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) strin
 			p = append(p, yamlField{"dialer-proxy", ChainRelayGroup})
 		}
 		proxies = append(proxies, p)
-		names = append(names, e.Name)
-		plain = append(plain, e.Name)
+		if listed(e, chain, opts) {
+			names = append(names, e.Name)
+			plain = append(plain, e.Name)
+		}
 	}
 	var chainNodes []interface{}
 	if chain {
@@ -821,8 +828,10 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 			}
 			outbounds = append(outbounds, o)
 		}
-		names = append(names, e.Name)
-		plain = append(plain, e.Name)
+		if listed(e, chain, opts) {
+			names = append(names, e.Name)
+			plain = append(plain, e.Name)
+		}
 	}
 	var chainOutbounds []interface{}
 	if chain {
