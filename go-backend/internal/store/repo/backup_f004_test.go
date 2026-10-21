@@ -77,12 +77,22 @@ func TestBackupRoundTripsUserSubscriptions(t *testing.T) {
 
 	dest := openBackupRepo(t, "dst.db")
 	roundTripBackup(t, source, dest)
+	// BUG-A2-4 订正：订阅按 token 重建会换新 id（空库里不是备份的 10），
+	// 分配必须被重写到新 id——旧断言把 subscription_id 钉在 10，断言的
+	// 正是分配悬空/错指的缺陷结果，故改为按 token 解析实际落库 id 后核对。
+	var restoredSubID int64
+	if err := dest.DB().Raw(`SELECT id FROM subscription WHERE token = 'tok-a'`).Scan(&restoredSubID).Error; err != nil {
+		t.Fatalf("read restored subscription: %v", err)
+	}
+	if restoredSubID == 0 {
+		t.Fatalf("restored subscription tok-a must exist")
+	}
 	var n int64
-	if err := dest.DB().Raw(`SELECT COUNT(1) FROM user_subscription WHERE id = 5 AND user_id = 1 AND subscription_id = 10`).Scan(&n).Error; err != nil {
+	if err := dest.DB().Raw(`SELECT COUNT(1) FROM user_subscription WHERE id = 5 AND user_id = 1 AND subscription_id = ?`, restoredSubID).Scan(&n).Error; err != nil {
 		t.Fatalf("count restored user_subscription: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("user_subscription assignment must survive backup round-trip, got %d rows", n)
+		t.Fatalf("user_subscription assignment must survive backup round-trip pointing at the restored subscription (id %d), got %d rows", restoredSubID, n)
 	}
 }
 
