@@ -6240,6 +6240,11 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 	if portRange == "" {
 		return nil
 	}
+	// B3 口径判定（W10 复审 A1）：节点端口规格是「可分配端口池」——自动
+	// 分配（parsePortRangeSpec）从中取口，本函数也只被转发/中转/隧道入口
+	// 路径调用；内核入站监听端口是管理员显式配置、自始只做占用冲突校验
+	// （inboundPortConflict），不在此池口径内。故报错文案明示约束范围，
+	// 不给入站新增拦截（存量入站多在池外，新增拦截会在编辑时误伤）。
 	// B4/F-016: 端口规格是逗号多段的集合语义（与自动分配
 	// parsePortRangeSpec 一致）。此前压成 min-max 区间校验，段间空隙
 	// 端口被误放行——校验通过但自动分配永不选、agent 按规格不认。
@@ -6252,7 +6257,7 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内", port, node.Name, portRange)
+	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内（该范围仅约束转发/中转/隧道入口端口）", port, node.Name, portRange)
 }
 
 func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, currentForwardID int64) error {
