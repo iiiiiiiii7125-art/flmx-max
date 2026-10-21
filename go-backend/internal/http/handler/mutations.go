@@ -928,7 +928,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 			entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
 		}
 	}
-	if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
+	// A3-01：验证段内只收集 nftables 入口的 SSH 配置快照（纯 DB），
+	// SSH 能力校验（网络调用）在验证事务回滚后、提交段持锁前执行，
+	// 与下方联邦 HTTP 的出锁口径一致。
+	nftPairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
+	if err != nil {
 		validationTx.Rollback()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -985,6 +989,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	validationTx.Rollback()
+
+	// A3-01：SSH 能力校验在此执行（无事务、无端口锁）。提交段内只
+	// 保留 validateNftablesTunnelStateTx 的 DB 侧复检（模式与配置
+	// 存在性），不再重复网络校验。
+	if err := h.testNftablesNodeCapabilities(nftPairs); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	if fcCall != nil {
 		fc := client.NewFederationClient()
@@ -1382,6 +1394,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	var runtimeState *tunnelCreateState
 	var inIp string
 	var updateProtocol string
+	var nftPairs []nftablesNodeSSHConfig
 	vErr, vCode := func() (error, int) {
 		release := acquireSortedPortLocks(lockNodeIDs)
 		defer release()
@@ -1405,9 +1418,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 				entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
 			}
 		}
-		if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
+		// A3-01：验证段持锁+持事务，只收集 SSH 配置快照（纯 DB）；
+		// 能力校验（网络调用）在本段结束、锁与事务释放后执行。
+		pairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
+		if err != nil {
 			return err, 0
 		}
+		nftPairs = pairs
 		if engine == tunnelEngineRealm {
 			if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
 				return err, 0
@@ -1445,6 +1462,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		} else {
 			response.WriteJSON(w, response.ErrDefault(vErr.Error()))
 		}
+		return
+	}
+	// A3-01：SSH 能力校验在验证段的锁与事务都释放后执行（网络调用
+	// 不进临界区）；失败时尚未触碰任何运行时/DB 状态，语义与原
+	// 验证段内校验一致。
+	if err := h.testNftablesNodeCapabilities(nftPairs); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if err := h.cleanupFederationRuntime(id); err != nil {
