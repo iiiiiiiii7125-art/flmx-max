@@ -264,6 +264,10 @@ export default function UserPage({
     maxConn: 0,
   });
   const [userFormLoading, setUserFormLoading] = useState(false);
+  // 编辑时 per-user 分组归属拉取失败标志：失败被装成空集会随全量提交
+  // 清掉该用户全部分组（X1-02）；失败时提交不带 groupIds，后端 presence
+  // 语义下不带即不替换，归属保持原样。
+  const [userGroupLoadFailed, setUserGroupLoadFailed] = useState(false);
   const [userFlowInput, setUserFlowInput] = useState("1000");
   const [userFlowUnit, setUserFlowUnit] = useState<TrafficUnit>("GB");
   const [quotaResetLoading, setQuotaResetLoading] = useState(false);
@@ -576,6 +580,7 @@ export default function UserPage({
 
   const handleAdd = () => {
     setIsEdit(false);
+    setUserGroupLoadFailed(false);
     setUserFlowInput("1000");
     setUserFlowUnit("GB");
     setUserForm({
@@ -601,14 +606,24 @@ export default function UserPage({
     setUserFlowInput(trafficInput.value);
     setUserFlowUnit(trafficInput.unit);
     let currentGroupIds: number[] = [];
+    let groupLoadFailed = false;
 
     try {
       const groupRes = await getUserGroups(user.id);
 
       if (groupRes.code === 0) {
         currentGroupIds = groupRes.data || [];
+      } else {
+        groupLoadFailed = true;
       }
-    } catch {}
+    } catch {
+      groupLoadFailed = true;
+    }
+
+    setUserGroupLoadFailed(groupLoadFailed);
+    if (groupLoadFailed) {
+      toast.error("该用户的分组归属加载失败，本次保存将不修改其分组");
+    }
 
     setUserForm({
       id: user.id,
@@ -705,6 +720,12 @@ export default function UserPage({
         expTime: userForm.expTime.getTime(),
         groupIds: userForm.groupIds ?? [],
       };
+
+      // 分组归属拉取失败时不下发 groupIds：后端按 presence 语义处理，
+      // 字段缺席即不替换分组，避免把失败装成的空集写成「清空分组」（X1-02）
+      if (isEdit && userGroupLoadFailed) {
+        delete submitData.groupIds;
+      }
 
       if (isEdit && !submitData.pwd) {
         delete submitData.pwd;
@@ -1846,6 +1867,7 @@ export default function UserPage({
 
             {userGroups.length > 0 && (
               <Select
+                isDisabled={isEdit && userGroupLoadFailed}
                 label="用户分组（可选）"
                 placeholder="选择要加入的分组"
                 selectedKeys={new Set((userForm.groupIds ?? []).map(String))}
@@ -1862,6 +1884,12 @@ export default function UserPage({
                   </SelectItem>
                 ))}
               </Select>
+            )}
+
+            {isEdit && userGroupLoadFailed && (
+              <p className="text-xs text-danger-500">
+                该用户的分组归属加载失败，上方分组选择不可信；本次保存不会修改其分组归属。
+              </p>
             )}
           </ModalBody>
           <ModalFooter>
