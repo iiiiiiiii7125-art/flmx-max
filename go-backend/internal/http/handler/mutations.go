@@ -209,6 +209,15 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed 报错、
+	// 不落库（同族全扫：含配额两键），不再静默套硬默认/旧值。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+
 	// A2-04（BC-06）：真部分更新——未传字段保持现值（oldUser），不再
 	// 「缺省即重置」（旧口径：未传 status 把停用用户重新启用、未传
 	// expTime 自动续期一年、未传 flow 改回 100GB）。与 userTunnelUpdate
@@ -297,7 +306,16 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
 		monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
 		if !(hasDailyQuota && hasMonthlyQuota) {
-			if currentQuota, err := h.repo.GetUserQuotaView(id, time.Now()); err == nil && currentQuota != nil {
+			// FIX2-A（V2-07 同族）：单传一侧时另一侧从当前视图补齐；
+			// 旧实现视图读取失败/为空时静默以 0 落库（把另一侧限额
+			// 清零）。读取失败改为报错中止；视图为空（尚无配额行）
+			// 才是合法的 0。
+			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
+			if qErr != nil {
+				response.WriteJSON(w, response.Err(-2, qErr.Error()))
+				return
+			}
+			if currentQuota != nil {
 				if !hasDailyQuota {
 					dailyQuotaGB = currentQuota.DailyLimitGB
 				}
@@ -545,6 +563,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	if id <= 0 {
 		response.WriteJSON(w, response.ErrDefault("节点ID不能为空"))
 		return
+	}
+	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed，不落
+	// 库（expiryTime 旧口径静默套 0 = 清空到期，http/tls/socks 同族）。
+	for _, key := range []string{"http", "tls", "socks", "expiryTime"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
 	}
 
 	currentStatus, currentHTTP, currentTLS, currentSocks, err := h.repo.GetNodeStatusFields(id)
@@ -1462,6 +1488,18 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	id := asInt64(req["id"], 0)
 	if id <= 0 {
 		response.WriteJSON(w, response.ErrDefault("隧道ID不能为空"))
+		return
+	}
+	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed，不落
+	// 库（flow 旧口径静默套硬默认 1，type/status/trafficRatio 同族）。
+	for _, key := range []string{"type", "flow", "status"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	if presentFloatFieldInvalid(req, "trafficRatio") {
+		response.WriteJSON(w, response.ErrDefault("trafficRatio 参数无效"))
 		return
 	}
 	typeVal := asInt(req["type"], 1)
@@ -6411,6 +6449,40 @@ func asString(v interface{}) string {
 		b, _ := json.Marshal(t)
 		return strings.Trim(string(b), "\"")
 	}
+}
+
+// presentNumericFieldInvalid 是 FIX2-A（V2-07）的 fail-closed 守
+// 卫：部分更新中字段「在场、非空、但不可解析为整数」时返回 true，
+// 调用方必须报错且不落库。旧实现对这类输入静默套用硬默认
+// （userUpdate.num→10、tunnelUpdate.flow→1、nodeUpdate.expiryTime
+// →0 清空到期），与「未传保旧」的部分更新口径不一致且无任何提
+// 示。空值（缺失/null/空串）不算在场有值，沿用各字段既有缺省语
+// 义；合法数值（含 JSON 数字、数字字符串）不受影响。
+func presentNumericFieldInvalid(req map[string]interface{}, key string) bool {
+	raw, ok := req[key]
+	if !ok {
+		return false
+	}
+	s := asString(raw)
+	if s == "" {
+		return false
+	}
+	_, err := strconv.ParseInt(s, 10, 64)
+	return err != nil
+}
+
+// presentFloatFieldInvalid 同上，针对浮点字段（如 trafficRatio）。
+func presentFloatFieldInvalid(req map[string]interface{}, key string) bool {
+	raw, ok := req[key]
+	if !ok {
+		return false
+	}
+	s := asString(raw)
+	if s == "" {
+		return false
+	}
+	_, err := strconv.ParseFloat(s, 64)
+	return err != nil
 }
 
 func asInt(v interface{}, def int) int {
