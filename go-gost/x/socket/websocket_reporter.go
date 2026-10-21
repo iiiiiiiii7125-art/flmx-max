@@ -18,9 +18,11 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/x/config"
@@ -181,6 +183,9 @@ type WebSocketReporter struct {
 	readCommandSem    chan struct{}     // 限制只读命令并发，避免诊断请求耗尽资源
 	mutationQueue     chan CommandMessage
 	workers           sync.WaitGroup
+	// plaintextCommandWarned ensures the D1-02 plaintext-command security
+	// warning is printed once per process, not per command.
+	plaintextCommandWarned atomic.Bool
 }
 
 var wsDial = func(dialer *websocket.Dialer, rawURL string) (*websocket.Conn, *http.Response, error) {
@@ -398,18 +403,25 @@ func buildWebSocketCandidates(addr string, secret string, version string, http i
 	query := "/system-info?type=1&secret=" + url.QueryEscape(secret) + "&version=" + url.QueryEscape(version) +
 		"&http=" + strconv.Itoa(http) + "&tls=" + strconv.Itoa(tls) + "&socks=" + strconv.Itoa(socks)
 
-	schemes := []string{"wss", "ws"}
-	if mappedScheme := mapToWebSocketScheme(explicitScheme); mappedScheme != "" {
-		if mappedScheme == "ws" {
-			schemes = []string{"ws", "wss"}
-		}
-	} else if preferredScheme == "ws" {
-		schemes = []string{"ws", "wss"}
+	// No silent downgrade (D1-02, behavior change): exactly one scheme is
+	// ever attempted. Previously a wss failure silently fell back to
+	// plaintext ws, letting anyone who can block/break TLS (or the panel's
+	// certificate) force the node secret and the whole command channel
+	// onto a plaintext, injectable connection. Scheme selection order:
+	// explicit scheme in the configured address > scheme learned from the
+	// last successful connection > secure default (wss). Operators whose
+	// panel is intentionally plain ws must say so explicitly via a ws://
+	// (or http://) prefix in config.json's addr.
+	scheme := mapToWebSocketScheme(explicitScheme)
+	if scheme == "" {
+		scheme = preferredScheme
+	}
+	if scheme != "ws" && scheme != "wss" {
+		scheme = "wss"
 	}
 
 	return []string{
-		schemes[0] + "://" + normalizedAddr + query,
-		schemes[1] + "://" + normalizedAddr + query,
+		scheme + "://" + normalizedAddr + query,
 	}
 }
 
@@ -463,27 +475,40 @@ func dialWebSocketWithFallback(dialer *websocket.Dialer, candidates []string) (*
 	}
 
 	var errs []string
-	for i, targetURL := range candidates {
+	for _, targetURL := range candidates {
 		conn, resp, err := wsDial(dialer, targetURL)
 		if err == nil {
-			if i > 0 {
-				fmt.Printf("↪️ WebSocket已自动回退成功: %s\n", sanitizeWebSocketURL(targetURL))
-			}
 			return conn, targetURL, nil
 		}
 		errMsg := formatWebSocketDialError(err, resp)
 		errs = append(errs, fmt.Sprintf("%s => %s", sanitizeWebSocketURL(targetURL), errMsg))
-		if i < len(candidates)-1 {
-			fmt.Printf(
-				"⚠️ WebSocket连接失败，准备从 %s 回退到 %s: %s\n",
-				strings.ToUpper(detectWebSocketScheme(targetURL)),
-				strings.ToUpper(detectWebSocketScheme(candidates[i+1])),
-				errMsg,
-			)
-		}
 	}
 
-	return nil, "", fmt.Errorf("连接WebSocket失败（已尝试%d种协议）: %s", len(candidates), strings.Join(errs, " | "))
+	err := fmt.Errorf("连接WebSocket失败: %s", strings.Join(errs, " | "))
+	// Fail loudly on the secure path (D1-02): never retry over plaintext,
+	// and tell the operator exactly what the alternatives are.
+	if len(candidates) > 0 && detectWebSocketScheme(candidates[0]) == "wss" {
+		err = fmt.Errorf("%w（已禁止从 wss 自动降级到 ws 明文连接；请检查面板 TLS/证书，或在 config.json 的 addr 中显式使用 ws:// 前缀以确认明文部署）", err)
+	}
+	return nil, "", err
+}
+
+var (
+	// JSON string values of credential-bearing keys.
+	sensitiveJSONValueRe = regexp.MustCompile(`(?i)("(?:[^"]*(?:secret|password|passwd|token|auth|private_?key)[^"]*)"\s*:\s*")[^"]*(")`)
+	// URL query parameters carrying credentials (defense in depth for URLs
+	// embedded inside command payloads).
+	sensitiveQueryValueRe = regexp.MustCompile(`(?i)((?:secret|token|password)=)[^&"\s]+`)
+)
+
+// redactSensitiveForLog masks credential values in a log rendering while
+// keeping the structure (types, names, ids) identifiable. Same masking
+// policy as the panel side (FIX-A): values of secret/token/password-class
+// keys become ***.
+func redactSensitiveForLog(s string) string {
+	s = sensitiveJSONValueRe.ReplaceAllString(s, "${1}***${2}")
+	s = sensitiveQueryValueRe.ReplaceAllString(s, "${1}***")
+	return s
 }
 
 func sanitizeWebSocketURL(rawURL string) string {
@@ -732,6 +757,64 @@ func (w *WebSocketReporter) receiveMessages() {
 	}
 }
 
+// maxEncryptedCommandSkew bounds the accepted age of an encrypted command
+// envelope (D1-02). Without a window, a captured envelope could be replayed
+// verbatim on any later connection.
+const maxEncryptedCommandSkew = 5 * time.Minute
+
+// maxDecompressedCommandSize caps gzip command decompression (D1-03),
+// aligned with the 10MB large-message threshold in sendResponse. A small
+// compressed blob must not be able to inflate unboundedly into memory.
+const maxDecompressedCommandSize = 10 << 20
+
+// validateEncryptedTimestamp checks an encrypted envelope's timestamp
+// against the acceptance window. The panel sends Unix milliseconds; plain
+// Unix seconds are also accepted for robustness.
+func validateEncryptedTimestamp(timestamp int64, now time.Time) error {
+	if timestamp <= 0 {
+		return fmt.Errorf("加密命令缺少有效时间戳，拒绝执行")
+	}
+	ts := time.UnixMilli(timestamp)
+	if timestamp < 1e12 {
+		// Seconds-scale value (panel currently sends milliseconds; tolerate
+		// seconds so a unit fix on either side does not break the channel).
+		ts = time.Unix(timestamp, 0)
+	}
+	if now.Sub(ts) > maxEncryptedCommandSkew || ts.Sub(now) > maxEncryptedCommandSkew {
+		return fmt.Errorf("加密命令时间戳超出允许窗口 (±%v)，疑似重放或时钟偏差过大，拒绝执行", maxEncryptedCommandSkew)
+	}
+	return nil
+}
+
+// decompressCommandPayload inflates a gzip command payload with a hard size
+// cap (D1-03).
+func decompressCommandPayload(data []byte) ([]byte, error) {
+	gzipReader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer gzipReader.Close()
+
+	out, err := io.ReadAll(io.LimitReader(gzipReader, maxDecompressedCommandSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxDecompressedCommandSize {
+		return nil, fmt.Errorf("解压后数据超过大小上限 (%d bytes)", maxDecompressedCommandSize)
+	}
+	return out, nil
+}
+
+// warnPlaintextCommandOnce loudly notes, once per process, that commands
+// are being accepted over an unencrypted channel (D1-02). Plaintext
+// commands remain accepted for intentionally plain deployments (explicit
+// ws:// addr), but never silently.
+func (w *WebSocketReporter) warnPlaintextCommandOnce() {
+	if w.plaintextCommandWarned.CompareAndSwap(false, true) {
+		fmt.Println("⚠️ 安全警告: 正在通过未加密的明文 WebSocket 通道接收面板命令。明文通道可被链路中间人窃听节点 secret 并注入任意命令（含升级指令）；如非有意部署，请为面板配置 TLS 并使用 wss 地址。")
+	}
+}
+
 // handleReceivedMessage 处理接收到的消息
 func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byte) {
 	switch messageType {
@@ -744,7 +827,14 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 		}
 
 		// 尝试解析为加密消息格式
+		wasEncrypted := false
 		if err := json.Unmarshal(message, &encryptedWrapper); err == nil && encryptedWrapper.Encrypted {
+			// D1-02: 校验时间戳窗口，拒绝重放的加密信封。
+			if err := validateEncryptedTimestamp(encryptedWrapper.Timestamp, time.Now()); err != nil {
+				fmt.Printf("❌ 拒绝加密命令: %v\n", err)
+				w.sendErrorResponse("StaleTimestamp", err.Error())
+				return
+			}
 			if w.aesCrypto != nil {
 				// 解密数据
 				decryptedData, err := w.aesCrypto.Decrypt(encryptedWrapper.Data)
@@ -754,11 +844,15 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 					return
 				}
 				message = decryptedData
+				wasEncrypted = true
 			} else {
 				fmt.Printf("❌ 收到加密消息但没有加密器\n")
 				w.sendErrorResponse("NoDecryptor", "没有可用的解密器")
 				return
 			}
+		}
+		if !wasEncrypted {
+			w.warnPlaintextCommandOnce()
 		}
 		// 先尝试解析是否是压缩消息
 		var compressedMsg struct {
@@ -772,24 +866,16 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			// 处理压缩消息
 			fmt.Printf("📥 收到压缩消息，正在解压...\n")
 
-			// 解压数据
-			gzipReader, err := gzip.NewReader(bytes.NewReader(compressedMsg.Data))
+			// 解压数据（带大小上限，防 gzip bomb，D1-03）
+			decompressedData, err := decompressCommandPayload(compressedMsg.Data)
 			if err != nil {
-				fmt.Printf("❌ 创建解压读取器失败: %v\n", err)
-				w.sendErrorResponse("DecompressError", fmt.Sprintf("解压失败: %v", err))
-				return
-			}
-			defer gzipReader.Close()
-
-			var decompressedData bytes.Buffer
-			if _, err := decompressedData.ReadFrom(gzipReader); err != nil {
 				fmt.Printf("❌ 解压数据失败: %v\n", err)
 				w.sendErrorResponse("DecompressError", fmt.Sprintf("解压失败: %v", err))
 				return
 			}
 
 			// 使用解压后的数据继续处理
-			message = decompressedData.Bytes()
+			message = decompressedData
 
 			// 构建解压后的命令消息
 			var cmdMsg CommandMessage
@@ -918,7 +1004,10 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 		return
 	}
 
-	fmt.Println("🔔 收到命令: ", string(jsonBytes))
+	// D1-01: never print the raw command body — service configs inside it
+	// carry credentials (proxy passwords, SS keys, node secrets) and this
+	// output lands in the service journal. Log a redacted rendering.
+	fmt.Println("🔔 收到命令: ", redactSensitiveForLog(string(jsonBytes)))
 	var err error
 	var response CommandResponse
 
@@ -1437,6 +1526,205 @@ func isGitHubDownloadHost(host string) bool {
 		host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com")
 }
 
+// --- Agent in-panel upgrade: init-system abstraction & safety chain ---
+//
+// A11-132-01: the restart/rollback scripts used to hardcode systemd-run /
+// systemctl, so panel-initiated upgrades could never work on OpenRC
+// (Alpine) nodes even though install.sh installs the agent under OpenRC
+// there. A11-132-02: the downloaded binary was swapped in with no
+// executability smoke test, backup write failures were swallowed, and if
+// the new binary failed to start the node stayed dead — the panel's
+// rollback command needs a live agent, so recovery required SSH. The
+// helpers below mirror install.sh's established standard: detect the
+// service manager the same way, smoke test with -V before swapping,
+// abort when the backup cannot be written, and let the detached restart
+// script itself roll back when the new binary does not come up.
+
+type serviceManager string
+
+const (
+	serviceManagerSystemd serviceManager = "systemd"
+	serviceManagerOpenRC  serviceManager = "openrc"
+)
+
+// serviceManagerProbe abstracts the environment checks of
+// detectServiceManagerWith so they can be unit tested.
+type serviceManagerProbe struct {
+	lookPath   func(string) (string, error)
+	fileExists func(string) bool
+	dirExists  func(string) bool
+}
+
+func detectServiceManager() (serviceManager, error) {
+	return detectServiceManagerWith(serviceManagerProbe{
+		lookPath: exec.LookPath,
+		fileExists: func(path string) bool {
+			_, err := os.Stat(path)
+			return err == nil
+		},
+		dirExists: func(path string) bool {
+			st, err := os.Stat(path)
+			return err == nil && st.IsDir()
+		},
+	})
+}
+
+// detectServiceManagerWith mirrors install.sh's ensure_service_manager:
+// Alpine implies OpenRC even if a systemctl compatibility binary exists;
+// otherwise a live systemd runtime wins; OpenRC tools are the fallback.
+// Anything else is an explicit error — panel upgrades must say so instead
+// of failing obscurely inside a shell script.
+func detectServiceManagerWith(p serviceManagerProbe) (serviceManager, error) {
+	hasOpenRC := false
+	if p.lookPath != nil {
+		_, e1 := p.lookPath("rc-service")
+		_, e2 := p.lookPath("rc-update")
+		hasOpenRC = e1 == nil && e2 == nil
+	}
+	if p.fileExists != nil && p.fileExists("/etc/alpine-release") {
+		if hasOpenRC {
+			return serviceManagerOpenRC, nil
+		}
+	} else if p.lookPath != nil && p.dirExists != nil {
+		if _, err := p.lookPath("systemctl"); err == nil && p.dirExists("/run/systemd/system") {
+			return serviceManagerSystemd, nil
+		}
+	}
+	if hasOpenRC {
+		return serviceManagerOpenRC, nil
+	}
+	return "", fmt.Errorf("未检测到受支持的服务管理器（systemd 或 OpenRC），面板内升级不可用，请使用 install.sh 更新节点")
+}
+
+// serviceManagerCommands returns the stop/start/is-active shell commands
+// for the manager, spelled exactly as install.sh spells them.
+func serviceManagerCommands(manager serviceManager) (stop, start, active string, err error) {
+	switch manager {
+	case serviceManagerSystemd:
+		return "systemctl stop flux_agent", "systemctl start flux_agent", "systemctl is-active --quiet flux_agent", nil
+	case serviceManagerOpenRC:
+		return "rc-service flux_agent stop", "rc-service flux_agent start", "rc-service flux_agent status >/dev/null 2>&1", nil
+	default:
+		return "", "", "", fmt.Errorf("不支持的服务管理器: %q", string(manager))
+	}
+}
+
+// agentControlScriptCommand returns the detached launcher for a control
+// script. systemd runs it in a transient unit (systemd-run) so that
+// stopping flux_agent cannot kill the script via its own cgroup; OpenRC
+// has no cgroups, so a new session (setsid) provides the same escape.
+func agentControlScriptCommand(manager serviceManager, script string) (string, []string, error) {
+	switch manager {
+	case serviceManagerSystemd:
+		return "systemd-run", []string{"--quiet", "/bin/sh", "-c", script}, nil
+	case serviceManagerOpenRC:
+		return "setsid", []string{"/bin/sh", "-c", script}, nil
+	default:
+		return "", nil, fmt.Errorf("不支持的服务管理器: %q", string(manager))
+	}
+}
+
+func launchAgentControlScript(manager serviceManager, script string) error {
+	name, args, err := agentControlScriptCommand(manager, script)
+	if err != nil {
+		return err
+	}
+	return exec.Command(name, args...).Start()
+}
+
+// buildAgentRestartScriptFor builds the self-contained upgrade restart
+// script: stop, swap the binary in, start, then verify the service
+// actually came up — if it did not, restore the backup copy and start
+// again, all locally on the node without any panel round-trip
+// (A11-132-02). Progress is appended to agent-upgrade.log next to the
+// binary for post-mortem diagnosis.
+func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, backupPath string) (string, error) {
+	stop, start, active, err := serviceManagerCommands(manager)
+	if err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "exec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; sleep 1; %s; ", logPath, stop)
+	if manager == serviceManagerSystemd {
+		// Legacy pre-FLMX gost cleanup (systemd units only).
+		b.WriteString("legacy_service='' && for service_file in /etc/systemd/system/gost.service /lib/systemd/system/gost.service /usr/lib/systemd/system/gost.service; do if [ -f \"$service_file\" ] && grep -Fq \"WorkingDirectory=/etc/gost\" \"$service_file\" && (grep -Fq \"ExecStart=/etc/gost/gost\" \"$service_file\" || (grep -Fq \"ExecStart=/usr/local/bin/gost\" \"$service_file\" && [ -f /etc/gost/config.json ] && [ -f /etc/gost/gost.json ])); then legacy_service=\"$service_file\"; break; fi; done; if [ -n \"$legacy_service\" ]; then (systemctl stop gost 2>/dev/null || true) && (systemctl disable gost 2>/dev/null || true) && rm -f /usr/local/bin/gost /etc/gost/gost \"$legacy_service\" && (systemctl daemon-reload 2>/dev/null || true); fi; ")
+	}
+	fmt.Fprintf(&b, "mv %s %s; %s; sleep 3; if ! %s; then echo 'new agent failed to start, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if %s; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; else echo 'agent upgrade restart ok'; fi",
+		tmpPath, binaryPath, start, active, backupPath, backupPath, binaryPath, start, active)
+	return b.String(), nil
+}
+
+// buildAgentRollbackScriptFor builds the manual rollback script with the
+// same init abstraction as the upgrade path.
+func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath string) (string, error) {
+	stop, start, active, err := serviceManagerCommands(manager)
+	if err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
+	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; sleep 1; %s; cp %s %s; %s; sleep 2; if %s; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi",
+		logPath, stop, backupPath, binaryPath, start, active), nil
+}
+
+// smokeTestAgentBinary verifies a downloaded binary actually executes on
+// this node (-V) before it is swapped in. A checksum proves integrity,
+// not executability (wrong-arch asset, corrupted UPX payload, libc
+// mismatch all pass sha256 and brick the node without this).
+func smokeTestAgentBinary(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-V").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("新版本二进制冒烟测试失败 (%s -V): %v, 输出: %s", path, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// backupCurrentAgentBinary copies the running binary to the rollback path.
+// Any failure aborts the upgrade: proceeding without a backup would leave
+// nothing to roll back to. A not-yet-existing binary is not an error
+// (nothing to preserve).
+func backupCurrentAgentBinary(binaryPath, backupPath string) error {
+	if _, err := os.Stat(binaryPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("检查当前二进制失败: %v", err)
+	}
+	oldData, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return fmt.Errorf("读取当前二进制用于备份失败: %v", err)
+	}
+	if err := os.WriteFile(backupPath, oldData, 0755); err != nil {
+		return fmt.Errorf("写入旧版本备份失败: %v", err)
+	}
+	return nil
+}
+
+// maxAgentChecksumSize bounds the checksum download (D1-08): the body is a
+// single hash line; the binary download next to it was already capped at
+// 100MB while this read was unbounded.
+const maxAgentChecksumSize = 4096
+
+// readAgentChecksum reads and parses the expected sha256 from a checksum
+// response body with a hard size cap.
+func readAgentChecksum(r io.Reader) (string, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxAgentChecksumSize+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > maxAgentChecksumSize {
+		return "", fmt.Errorf("校验文件过大 (%d bytes)，拒绝安装", len(body))
+	}
+	fields := strings.Fields(string(body))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("校验值为空，拒绝安装")
+	}
+	return fields[0], nil
+}
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -1602,16 +1890,11 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败, HTTP状态码: %d", checksumResp.StatusCode)
 	}
-	checksumBody, err := io.ReadAll(checksumResp.Body)
+	// 格式: "<hash>  <filename>" 或 "<hash>"；读取带上限 (D1-08)
+	expectedHash, err := readAgentChecksum(checksumResp.Body)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 读取校验值失败: %v", err)
-	}
-	// 格式: "<hash>  <filename>" 或 "<hash>"
-	expectedHash := strings.TrimSpace(strings.Split(string(checksumBody), " ")[0])
-	if expectedHash == "" {
-		os.Remove(tmpPath)
-		return fmt.Errorf("S-02: 校验值为空，拒绝安装")
 	}
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if !strings.EqualFold(expectedHash, actualHash) {
@@ -1626,26 +1909,44 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		return fmt.Errorf("设置执行权限失败: %v", err)
 	}
 
-	// 备份旧版本
-	w.sendUpgradeProgress("installing", 50, "备份旧版本...")
-	if _, err := os.Stat(binaryPath); err == nil {
-		// 复制旧文件作为备份（不用 rename，因为可能正在运行）
-		oldData, err := os.ReadFile(binaryPath)
-		if err == nil {
-			_ = os.WriteFile(backupPath, oldData, 0755)
-			fmt.Println("📦 旧版本已备份到", backupPath)
-		}
+	// A11-132-02: 替换前先做可执行冒烟（-V）。sha256 只证明完整性，
+	// 不证明新二进制在本机可执行（错架构/UPX 损坏/libc 不兼容）。
+	w.sendUpgradeProgress("installing", 30, "冒烟测试新版本...")
+	if err := smokeTestAgentBinary(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
 	}
+	fmt.Println("✅ 新版本二进制冒烟测试通过")
+
+	// 备份旧版本（复制，不用 rename，因为可能正在运行）。
+	// A11-132-02: 备份失败必须中止升级——没有备份就没有回滚路径，
+	// 旧实现吞掉写错误继续替换是节点变砖的直接原因。
+	w.sendUpgradeProgress("installing", 50, "备份旧版本...")
+	if err := backupCurrentAgentBinary(binaryPath, backupPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	fmt.Println("📦 旧版本已备份到", backupPath)
 
 	w.sendUpgradeProgress("installing", 80, "准备重启...")
 	fmt.Printf("✅ 升级包下载完成 (%d bytes), 准备重启...\n", downloaded)
 
-	// 执行重启脚本
-	// 使用 systemd-run 在独立的 transient unit 中运行重启脚本，
-	// 避免 systemctl stop 杀死 flux_agent cgroup 内所有进程（包括此脚本自身）导致 mv 未执行。
-	script := buildAgentRestartScript(tmpPath, binaryPath)
-	cmd := exec.Command("systemd-run", "--quiet", "/bin/sh", "-c", script)
-	if err := cmd.Start(); err != nil {
+	// A11-132-01: 按节点的 init 系统分发重启脚本（systemd / OpenRC），
+	// 不支持的 init 明确报错而不是静默失败。脚本在脱离 agent 进程的
+	// 环境中运行（systemd-run transient unit / setsid 新会话），避免
+	// 停服务时把脚本自己一并杀掉；脚本内含启动失败自动回滚（本地闭环，
+	// 不依赖面板连接）。
+	manager, err := detectServiceManager()
+	if err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	script, err := buildAgentRestartScriptFor(manager, tmpPath, binaryPath, backupPath)
+	if err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := launchAgentControlScript(manager, script); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("启动重启脚本失败: %v", err)
 	}
@@ -1666,10 +1967,16 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) error {
 
 	fmt.Println("🔄 开始回退到旧版本...")
 
-	// 执行回退脚本（同升级逻辑，使用 systemd-run 避免 cgroup 问题）
-	script := fmt.Sprintf("sleep 1 && systemctl stop flux_agent && cp %s %s && systemctl start flux_agent", backupPath, binaryPath)
-	cmd := exec.Command("systemd-run", "--quiet", "/bin/sh", "-c", script)
-	if err := cmd.Start(); err != nil {
+	// 执行回退脚本（与升级同一套 init 分发，A11-132-01）
+	manager, err := detectServiceManager()
+	if err != nil {
+		return err
+	}
+	script, err := buildAgentRollbackScriptFor(manager, backupPath, binaryPath)
+	if err != nil {
+		return err
+	}
+	if err := launchAgentControlScript(manager, script); err != nil {
 		return fmt.Errorf("启动回退脚本失败: %v", err)
 	}
 
@@ -1677,12 +1984,15 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) error {
 	return nil
 }
 
+// buildAgentRestartScript is the systemd variant of
+// buildAgentRestartScriptFor, kept for compatibility with existing
+// callers/tests.
 func buildAgentRestartScript(tmpPath, binaryPath string) string {
-	return fmt.Sprintf(
-		"sleep 1 && systemctl stop flux_agent && legacy_service='' && for service_file in /etc/systemd/system/gost.service /lib/systemd/system/gost.service /usr/lib/systemd/system/gost.service; do if [ -f \"$service_file\" ] && grep -Fq \"WorkingDirectory=/etc/gost\" \"$service_file\" && (grep -Fq \"ExecStart=/etc/gost/gost\" \"$service_file\" || (grep -Fq \"ExecStart=/usr/local/bin/gost\" \"$service_file\" && [ -f /etc/gost/config.json ] && [ -f /etc/gost/gost.json ])); then legacy_service=\"$service_file\"; break; fi; done && if [ -n \"$legacy_service\" ]; then (systemctl stop gost 2>/dev/null || true) && (systemctl disable gost 2>/dev/null || true) && rm -f /usr/local/bin/gost /etc/gost/gost \"$legacy_service\" && (systemctl daemon-reload 2>/dev/null || true); fi && mv %s %s && systemctl start flux_agent",
-		tmpPath,
-		binaryPath,
-	)
+	script, err := buildAgentRestartScriptFor(serviceManagerSystemd, tmpPath, binaryPath, binaryPath+".old")
+	if err != nil {
+		return ""
+	}
+	return script
 }
 
 // updateLocalConfigJSON 将 http/tls/socks 写入工作目录下的 config.json
@@ -2106,6 +2416,28 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 	return response, nil
 }
 
+const (
+	defaultServiceMonitorTimeoutSec = 5
+	// Aligned with the panel's service-monitor limit default
+	// (monitoring.MaxTimeoutSec=60): larger panel-supplied values were
+	// previously honored unbounded, letting one check occupy a bounded
+	// read-command slot for arbitrarily long (D1-04, the F-088 clamp
+	// missed this command).
+	maxServiceMonitorTimeoutSec = 60
+)
+
+// clampServiceMonitorTimeoutSec normalizes a panel-supplied monitor
+// timeout: non-positive falls back to the default, oversized is clamped.
+func clampServiceMonitorTimeoutSec(sec int) int {
+	if sec <= 0 {
+		return defaultServiceMonitorTimeoutSec
+	}
+	if sec > maxServiceMonitorTimeoutSec {
+		return maxServiceMonitorTimeoutSec
+	}
+	return sec
+}
+
 // handleServiceMonitorCheck executes a service monitor check on this node.
 // It always returns a result (command execution is considered successful even if the check fails).
 func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (ServiceMonitorCheckResult, error) {
@@ -2134,10 +2466,7 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 		return res, nil
 	}
 
-	timeoutSec := req.TimeoutSec
-	if timeoutSec <= 0 {
-		timeoutSec = 5
-	}
+	timeoutSec := clampServiceMonitorTimeoutSec(req.TimeoutSec)
 	timeout := time.Duration(timeoutSec) * time.Second
 
 	start := time.Now()

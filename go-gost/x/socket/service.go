@@ -76,13 +76,25 @@ func createServices(req createServicesRequest) error {
 		}
 	}
 
-	// 第四阶段：更新配置
-	return config.OnUpdate(func(c *config.Config) error {
+	// 第四阶段：更新配置。若落盘失败必须回滚运行时（D1-06）：否则面板
+	// 收到失败、服务却已在跑且内存配置已包含它，agent 重启后又消失，
+	// 面板/内存/磁盘三方状态不一致（updateServices 已有同口径回滚）。
+	originalConfig := config.Global()
+	if err := config.OnUpdate(func(c *config.Config) error {
 		for _, ps := range parsedServices {
 			c.Services = append(c.Services, &ps.config)
 		}
 		return nil
-	})
+	}); err != nil {
+		config.Set(originalConfig)
+		for _, regName := range registeredServices {
+			if registry.ServiceRegistry().Get(regName) != nil {
+				registry.ServiceRegistry().Unregister(regName)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func updateServices(req updateServicesRequest) error {
