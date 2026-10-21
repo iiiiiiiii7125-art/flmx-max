@@ -198,16 +198,26 @@ func TestEngineSwitchRealmAccountingSettlesAtSwitch(t *testing.T) {
 	stop := startSwitchAcctMockNode(t, srv.URL, "entry-secret", kernel.RealmCounterID(forward.ID), mock)
 	defer stop()
 	waitForCondition(t, 5*time.Second, func() bool { return h.wsServer.IsNodeOnline(nodeID) }, "mock node online")
-	// 节点上线对账可能已拉过一次状态并建基线；记录切换前的基线/流量
-	// 作为期望推导的起点（两种接线形态都成立，断言只针对切换本身）。
-	preIn, preOut, preBaseFound := readBaseline()
+	// FIX2-A deflake（V2 §6 方案 1+3+4）：旧用例把「上线对账轮询是
+	// 否已落点」当二值预检（preBaseFound），迟到轮询在 setCounters
+	// 后落点即翻转期望——竞态与产品代码无关。改为先确定性等到上
+	// 线轮询的必然结果（基线建在 1000/5000）使形态恒定，再记录
+	// statusCalls 作为后续断言基线；每阶段后断言 statusCalls 增
+	// 量 ≥1，证明切换 settle 轮询确实发生（而非靠迟到的上线轮询
+	// 蒙混）；流量断言除精确值外再验终局不变量（已入账增量 + 未
+	// 入账基线差 == 累计计数差），对双计/漏计保持敏感。
+	waitForCondition(t, 10*time.Second, func() bool {
+		inB, outB, found := readBaseline()
+		return found && inB == 1000 && outB == 5000
+	}, "online reconcile baseline pinned at 1000/5000")
 	preFlowIn, preFlowOut := readFlow()
-	if preBaseFound && (preIn != 1000 || preOut != 5000) {
-		t.Fatalf("pre-switch baseline = %d/%d, want 1000/5000", preIn, preOut)
+	if preFlowIn != 0 || preFlowOut != 0 {
+		t.Fatalf("first sample must only establish baseline, flow = %d/%d, want 0/0", preFlowIn, preFlowOut)
 	}
+	callsBeforeSwitch := mock.statusCalls()
 
 	// 切换窗口内计数继续增长；切到 realm 返回时，计数必须已结算到
-	// 最新值：基线推进到 1600/5600，且基线之后产生的增量已入账。
+	// 最新值：基线推进到 1600/5600，切换窗口增量 600/600 已入账。
 	mock.setCounters(1600, 5600)
 	if err := r.DB().Exec(`UPDATE tunnel SET engine = 'realm' WHERE id = ?`, tunnelID).Error; err != nil {
 		t.Fatal(err)
@@ -215,16 +225,14 @@ func TestEngineSwitchRealmAccountingSettlesAtSwitch(t *testing.T) {
 	if err := h.switchTunnelEngine(tunnelID, false, []int64{nodeID}, []int64{nodeID}); err != nil {
 		t.Fatalf("switch to realm: %v", err)
 	}
+	if got := mock.statusCalls(); got <= callsBeforeSwitch {
+		t.Fatalf("R3-01: switch must actively poll kernel status to settle (statusCalls %d -> %d)", callsBeforeSwitch, got)
+	}
 	baseIn, baseOut, found := readBaseline()
 	if !found || baseIn != 1600 || baseOut != 5600 {
 		t.Fatalf("R3-01: baseline after gost->realm switch = %d/%d (found=%v), want 1600/5600 pinned at switch", baseIn, baseOut, found)
 	}
-	wantFlowIn, wantFlowOut := preFlowIn, preFlowOut
-	if preBaseFound {
-		// 基线在切换前已存在：切换窗口增量 600/600 应在切换结算时入账。
-		wantFlowIn += 600
-		wantFlowOut += 600
-	}
+	wantFlowIn, wantFlowOut := preFlowIn+600, preFlowOut+600
 	if inF, outF := readFlow(); inF != wantFlowIn || outF != wantFlowOut {
 		t.Fatalf("R3-01: flow after switch = %d/%d, want %d/%d", inF, outF, wantFlowIn, wantFlowOut)
 	}
@@ -232,17 +240,30 @@ func TestEngineSwitchRealmAccountingSettlesAtSwitch(t *testing.T) {
 	// realm 下继续产生流量；切回 gost 返回前必须先结算最终计数
 	//（拆除后计数器消失，无第二次机会）。
 	mock.setCounters(1900, 8100)
+	callsBeforeSwitchBack := mock.statusCalls()
 	if err := r.DB().Exec(`UPDATE tunnel SET engine = '' WHERE id = ?`, tunnelID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := h.switchTunnelEngine(tunnelID, true, []int64{nodeID}, []int64{nodeID}); err != nil {
 		t.Fatalf("switch back to gost: %v", err)
 	}
-	if inF, outF := readFlow(); inF != wantFlowIn+300 || outF != wantFlowOut+2500 {
+	if got := mock.statusCalls(); got <= callsBeforeSwitchBack {
+		t.Fatalf("R3-01: switch back must actively poll kernel status to settle (statusCalls %d -> %d)", callsBeforeSwitchBack, got)
+	}
+	inF, outF := readFlow()
+	if inF != wantFlowIn+300 || outF != wantFlowOut+2500 {
 		t.Fatalf("R3-01: final realm counters not settled before teardown: flow = %d/%d, want %d/%d",
 			inF, outF, wantFlowIn+300, wantFlowOut+2500)
 	}
-	if baseIn, baseOut, found := readBaseline(); !found || baseIn != 1900 || baseOut != 8100 {
+	baseIn, baseOut, found = readBaseline()
+	if !found || baseIn != 1900 || baseOut != 8100 {
 		t.Fatalf("R3-01: baseline after realm->gost switch = %d/%d (found=%v), want 1900/8100", baseIn, baseOut, found)
+	}
+	// 终局不变量：已入账增量 +（当前累计 − 基线）未入账差 == 累计
+	// 计数总增量（1000/5000 → 1900/8100 共 +900/+3100；基线已钉在
+	// 最新值，未入账差为 0）。对任意轮询落点成立、对双计/漏计敏感。
+	if (inF-preFlowIn)+(1900-baseIn) != 900 || (outF-preFlowOut)+(8100-baseOut) != 3100 {
+		t.Fatalf("R3-01: terminal invariant broken: accounted %d/%d + baseline gap %d/%d, want totals 900/3100",
+			inF-preFlowIn, outF-preFlowOut, 1900-baseIn, 8100-baseOut)
 	}
 }
