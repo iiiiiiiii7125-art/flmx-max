@@ -120,6 +120,27 @@ func mapToHTTPScheme(scheme string) string {
 	}
 }
 
+// sanitizeReportURL masks the node secret embedded in report URLs before
+// the URL reaches any log line or aggregated error (D1-01). The secret is
+// the node's identity credential and the AES key seed; the WebSocket side
+// already sanitized its URLs (sanitizeWebSocketURL), the HTTP report side
+// printed them in clear — same masking policy: secret value becomes ***.
+func sanitizeReportURL(rawURL string) string {
+	// Textual masking: keeps the rest of the URL byte-for-byte intact and
+	// works even for malformed URLs. Report URLs always carry the secret
+	// as a query parameter.
+	idx := strings.Index(rawURL, "secret=")
+	if idx < 0 {
+		return rawURL
+	}
+	start := idx + len("secret=")
+	end := strings.IndexAny(rawURL[start:], "&# ")
+	if end < 0 {
+		return rawURL[:start] + "***"
+	}
+	return rawURL[:start] + "***" + rawURL[start+end:]
+}
+
 func loadPreferredURL(preferred *string) string {
 	if preferred == nil {
 		return ""
@@ -167,11 +188,13 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 
 	var errs []string
 	for i, targetURL := range orderedURLs {
+		// D1-01: 日志与聚合错误只出现脱敏后的 URL（真实 URL 仅用于请求本身）。
+		displayURL := sanitizeReportURL(targetURL)
 		req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(requestBody))
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", targetURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", displayURL, err))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 创建请求失败: %v\n", targetURL, err)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 创建请求失败: %v\n", displayURL, err)
 			}
 			continue
 		}
@@ -181,9 +204,9 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 
 		resp, err := reportDo(ctx, req, timeout)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", targetURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", displayURL, err))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 请求失败: %v\n", targetURL, err)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 请求失败: %v\n", displayURL, err)
 			}
 			continue
 		}
@@ -192,17 +215,17 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 		_, readErr := responseBytes.ReadFrom(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", targetURL, readErr))
+			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, readErr))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 读取响应失败: %v\n", targetURL, readErr)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 读取响应失败: %v\n", displayURL, readErr)
 			}
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			errs = append(errs, fmt.Sprintf("%s => HTTP响应错误: %d %s", targetURL, resp.StatusCode, resp.Status))
+			errs = append(errs, fmt.Sprintf("%s => HTTP响应错误: %d %s", displayURL, resp.StatusCode, resp.Status))
 			if i < len(orderedURLs)-1 {
-				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => HTTP响应错误: %d %s\n", targetURL, resp.StatusCode, resp.Status)
+				fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => HTTP响应错误: %d %s\n", displayURL, resp.StatusCode, resp.Status)
 			}
 			continue
 		}
@@ -210,15 +233,15 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 		responseText := strings.TrimSpace(responseBytes.String())
 		if responseText == "ok" {
 			if i > 0 {
-				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", targetURL)
+				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", displayURL)
 			}
 			storePreferredURL(preferred, targetURL)
 			return true, nil
 		}
 
-		errs = append(errs, fmt.Sprintf("%s => 服务器响应: %s (期望: ok)", targetURL, responseText))
+		errs = append(errs, fmt.Sprintf("%s => 服务器响应: %s (期望: ok)", displayURL, responseText))
 		if i < len(orderedURLs)-1 {
-			fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 服务器响应: %s (期望: ok)\n", targetURL, responseText)
+			fmt.Printf("⚠️ HTTP上报尝试失败，准备回退: %s => 服务器响应: %s (期望: ok)\n", displayURL, responseText)
 		}
 	}
 
@@ -438,9 +461,11 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 
 	var errs []string
 	for i, targetURL := range orderedURLs {
+		// D1-01: 日志与聚合错误只出现脱敏后的 URL（真实 URL 仅用于请求本身）。
+		displayURL := sanitizeReportURL(targetURL)
 		req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(requestBody))
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", targetURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 创建请求失败: %v", displayURL, err))
 			continue
 		}
 
@@ -452,7 +477,7 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 
 		resp, err := reportDo(ctx, req, timeout)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", targetURL, err))
+			errs = append(errs, fmt.Sprintf("%s => 请求失败: %v", displayURL, err))
 			continue
 		}
 
@@ -460,25 +485,25 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 		_, readErr := responseBytes.ReadFrom(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", targetURL, readErr))
+			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, readErr))
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			errs = append(errs, fmt.Sprintf("%s => HTTP响应错误: %d %s", targetURL, resp.StatusCode, resp.Status))
+			errs = append(errs, fmt.Sprintf("%s => HTTP响应错误: %d %s", displayURL, resp.StatusCode, resp.Status))
 			continue
 		}
 
 		responseText := strings.TrimSpace(responseBytes.String())
 		if responseText == "ok" {
 			if i > 0 {
-				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", targetURL)
+				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", displayURL)
 			}
 			storePreferredURL(preferred, targetURL)
 			return true, nil
 		}
 
-		errs = append(errs, fmt.Sprintf("%s => 服务器响应: %s (期望: ok)", targetURL, responseText))
+		errs = append(errs, fmt.Sprintf("%s => 服务器响应: %s (期望: ok)", displayURL, responseText))
 	}
 
 	return false, fmt.Errorf("发送HTTP请求失败: %s", strings.Join(errs, " | "))
