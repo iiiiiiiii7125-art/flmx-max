@@ -1119,9 +1119,15 @@ func (NodeLatencySample) TableName() string { return "node_latency_sample" }
 
 type TunnelMetric struct {
 	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`
-	TunnelID     int64   `gorm:"column:tunnel_id;not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:1" json:"tunnelId"`
-	NodeID       int64   `gorm:"column:node_id;not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:2" json:"nodeId"`
-	Timestamp    int64   `gorm:"not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:3;index:idx_tunnel_metric_time" json:"timestamp"`
+	// FIX132-C（A3-S2）：(tunnel_id, node_id, timestamp) 的唯一性由
+	// v6 去重迁移的 uidx_tunnel_metric_bucket 单独持有，模型层不再
+	// 声明唯一索引——AutoMigrate 在去重迁移之前运行，存量重复桶行
+	// 会让它建唯一索引时直接失败、升级启动被堵死；且同列双唯一
+	// 索引本就冗余。存量库已有的同名索引 AutoMigrate 不会删除，
+	// 无害保留。
+	TunnelID     int64   `gorm:"column:tunnel_id;not null" json:"tunnelId"`
+	NodeID       int64   `gorm:"column:node_id;not null" json:"nodeId"`
+	Timestamp    int64   `gorm:"not null;index:idx_tunnel_metric_time" json:"timestamp"`
 	BytesIn      int64   `gorm:"column:bytes_in" json:"bytesIn"`
 	BytesOut     int64   `gorm:"column:bytes_out" json:"bytesOut"`
 	Connections  int64   `gorm:"column:connections" json:"connections"`
@@ -1188,7 +1194,17 @@ type PeerShareResource struct {
 	RuntimeName         string `gorm:"column:runtime_name;type:text;not null;index"`
 	LegacyNames         string `gorm:"column:legacy_names;type:text;not null;default:''"`
 	LegacyServiceBase   string `gorm:"column:legacy_service_base;type:text;not null;default:''"`
-	ReleaseLegacyFamily bool   `gorm:"column:release_legacy_family;not null;default:false"`
+	// FIX132-C（R4-P1）：此列不得带 GORM 默认值。原 default:false
+	// 在 SQLite 建表渲染为 `numeric NOT NULL DEFAULT false`，
+	// pgloader 翻译到 PG 时以 22P02 拒绝、整条 SQLite→PG 官方迁移
+	// 在建表期 FATAL（R4 于 PG 16 实测，全库仅此 1 列）。备选均已
+	// 实测否决：default:0 会被 bool 默认值解析重新渲染回 false；
+	// 表达式默认 (0) 在 SQLite 可行，但 PG 原生建表会生成
+	// `boolean DEFAULT (0)` 被 PG 拒绝。去掉默认值后两方言建表
+	// 均为「NOT NULL 无默认」，该表全部写入都经 GORM 显式带值
+	//（peer_share_resources.go 的 upsert），语义不变；存量
+	// numeric 列（0/1）读 bool 亦不受影响。
+	ReleaseLegacyFamily bool `gorm:"column:release_legacy_family;not null"`
 	Config              string `gorm:"type:text;not null;default:''"`
 	DesiredState        string `gorm:"column:desired_state;type:text;not null;default:'active'"`
 	Applied             int    `gorm:"not null;default:0"`
