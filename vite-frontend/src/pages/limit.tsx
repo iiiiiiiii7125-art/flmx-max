@@ -2,11 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import toast from "react-hot-toast";
 import { LayoutGrid, List } from "lucide-react";
 
-import {
-  AnimatedPage,
-  StaggerList,
-  StaggerItem,
-} from "@/components/animated-page";
+import { StaggerList, StaggerItem } from "@/components/animated-page";
+import { PageShell } from "@/components/page-kit";
 import { SearchBar } from "@/components/search-bar";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -53,7 +50,11 @@ interface SpeedLimitForm {
   status: number;
 }
 
-export default function LimitPage() {
+export default function LimitPage({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const [loading, setLoading] = useState(true);
   const [rules, setRules] = useState<SpeedLimitRule[]>([]);
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
@@ -232,7 +233,7 @@ export default function LimitPage() {
   }
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
+    <PageShell embedded={embedded}>
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between mb-6 gap-3">
         <div className="flex-1 max-w-sm flex items-center gap-2">
           <SearchBar
@@ -555,6 +556,6 @@ export default function LimitPage() {
           )}
         </ModalContent>
       </Modal>
-    </AnimatedPage>
+    </PageShell>
   );
 }
