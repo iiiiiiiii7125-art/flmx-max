@@ -624,6 +624,15 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	if node, err := h.getNodeRecord(nodeID); err == nil && (node == nil || node.Status != 1) {
 		return // The next connection will resume any pending reconciliation.
 	}
+	// FIX2-A（V2-04）：离线期间被切走 realm 的节点，先同步结算
+	// realm 计数再放行下方异步对账与 redeploy。此刻 agent 仍持
+	// realm 计数（尚未收到任何新下发），轮询可完整回收离线增量；
+	// 顺序反过来（redeploy/对账先行让 agent 弃 realm 计数）则增
+	// 量永久漏计。节点状态未启用而上方已返回时标记不消费，下次
+	// 连接再试。
+	if h.consumePendingRealmSettle(nodeID) {
+		h.refreshNodeKernelStatus(nodeID)
+	}
 	go h.reconcileNodeKernels(nodeID)
 	if !h.startNodeOnlineRedeploy(nodeID, time.Now()) {
 		return
