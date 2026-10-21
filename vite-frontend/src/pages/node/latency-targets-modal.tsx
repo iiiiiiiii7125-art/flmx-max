@@ -37,6 +37,8 @@ export function LatencyTargetsModal({
   onSaved: () => void;
 }) {
   const [pool, setPool] = useState<LatencyTarget[]>([]);
+  // 池加载失败与「未配置测试点」分开呈现：失败时不得误导去网站配置添加（D5-07）
+  const [poolLoadFailed, setPoolLoadFailed] = useState(false);
   const [custom, setCustom] = useState(false);
   const [points, setPoints] = useState<string[]>([]);
   const [pinned, setPinned] = useState<string[]>([]);
@@ -46,11 +48,20 @@ export function LatencyTargetsModal({
 
   useEffect(() => {
     if (!open) return;
+    setPoolLoadFailed(false);
     getConfigByName(LATENCY_TARGETS_KEY)
-      .then((res) =>
-        setPool(res.code === 0 ? parseLatencyTargets(res.data?.value) : []),
-      )
-      .catch(() => setPool([]));
+      .then((res) => {
+        if (res.code === 0) {
+          setPool(parseLatencyTargets(res.data?.value));
+        } else {
+          setPool([]);
+          setPoolLoadFailed(true);
+        }
+      })
+      .catch(() => {
+        setPool([]);
+        setPoolLoadFailed(true);
+      });
     // One node starts from its own setting; a batch from the defaults.
     const own = !batch ? nodes[0].latencyTargets : null;
 
@@ -154,7 +165,9 @@ export function LatencyTargetsModal({
 
           {pool.length === 0 ? (
             <p className="py-4 text-center text-sm text-default-500">
-              还没有测试点，请先到网站配置添加
+              {poolLoadFailed
+                ? "测试点加载失败，请关闭弹窗后重试"
+                : "还没有测试点，请先到网站配置添加"}
             </p>
           ) : !custom ? (
             <div className="space-y-1.5 text-sm">

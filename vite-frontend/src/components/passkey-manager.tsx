@@ -20,13 +20,35 @@ export function PasskeyManager() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // 加载失败必须与「未启用/未绑定」区分呈现，不能装成空集或整卡消失（D5-08）
+  const [statusFailed, setStatusFailed] = useState(false);
+  const [listFailed, setListFailed] = useState(false);
 
   const refresh = () =>
     listPasskeys()
       .then((res) => {
-        if (res.code === 0) setItems(res.data || []);
+        if (res.code === 0) {
+          setItems(res.data || []);
+          setListFailed(false);
+        } else {
+          setListFailed(true);
+        }
       })
-      .catch(() => setItems([]));
+      .catch(() => setListFailed(true));
+
+  const loadStatus = () => {
+    setStatusFailed(false);
+    getPasskeyStatus()
+      .then((res) => {
+        if (res.code === 0 && res.data.enabled) {
+          setEnabled(true);
+          void refresh();
+        } else if (res.code !== 0) {
+          setStatusFailed(true);
+        }
+      })
+      .catch(() => setStatusFailed(true));
+  };
 
   useEffect(() => {
     if (
@@ -34,15 +56,25 @@ export function PasskeyManager() {
       typeof window.PublicKeyCredential === "undefined"
     )
       return;
-    getPasskeyStatus()
-      .then((res) => {
-        if (res.code === 0 && res.data.enabled) {
-          setEnabled(true);
-          void refresh();
-        }
-      })
-      .catch(() => setEnabled(false));
+    loadStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (statusFailed) {
+    return (
+      <Card>
+        <CardBody className="p-4 space-y-3">
+          <h3 className="text-base font-medium">通行证密钥</h3>
+          <p className="text-sm text-danger-500">
+            通行证密钥状态加载失败，暂时无法确认是否可用。
+          </p>
+          <Button size="sm" variant="flat" onPress={loadStatus}>
+            重新加载
+          </Button>
+        </CardBody>
+      </Card>
+    );
+  }
 
   if (!enabled) return null;
 
@@ -136,6 +168,18 @@ export function PasskeyManager() {
           绑定通行证密钥
         </Button>
         <div className="space-y-2">
+          {listFailed ? (
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-danger-500">
+                已绑定密钥列表加载失败，当前显示不可信，请先重试确认，不要重复绑定。
+              </p>
+              <Button size="sm" variant="flat" onPress={() => void refresh()}>
+                重试
+              </Button>
+            </div>
+          ) : items.length === 0 ? (
+            <p className="text-sm text-default-500">尚未绑定通行证密钥</p>
+          ) : null}
           {items.map((item) => (
             <div
               key={item.id}
