@@ -125,6 +125,12 @@ func validateProxyCredentials(p Proxy) error {
 		if p.str("uuid") == "" {
 			return errors.New("缺少 UUID")
 		}
+		// BUG-A4-2: 与自建入站同口径校验 UUID 格式（model.go 的
+		// uuidPattern），此前只查非空，vless://not-a-uuid 会静默入库、
+		// 以非法 uuid 渲染进订阅毒化整份配置。
+		if !uuidPattern.MatchString(strings.ToLower(p.str("uuid"))) {
+			return errors.New("UUID 格式错误")
+		}
 	case "trojan", "hysteria2", "anytls":
 		if p.str("password") == "" {
 			return errors.New("缺少密码")
@@ -132,6 +138,9 @@ func validateProxyCredentials(p Proxy) error {
 	case "tuic":
 		if p.str("uuid") == "" || p.str("password") == "" {
 			return errors.New("缺少 UUID 或密码")
+		}
+		if !uuidPattern.MatchString(strings.ToLower(p.str("uuid"))) {
+			return errors.New("UUID 格式错误")
 		}
 	case "snell":
 		if p.str("psk") == "" {

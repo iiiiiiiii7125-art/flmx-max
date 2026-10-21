@@ -110,13 +110,15 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 | 订阅格式 | 适用客户端 | 不包含 |
 |----------|------------|--------|
 | 自动识别 | 按客户端 UA 返回对应格式 | |
-| Clash / Mihomo | Clash Verge、Stash、FlClash | Snell、NaïveProxy |
-| sing-box | SFA / SFI / SFM | XHTTP、Snell |
-| Shadowrocket | Shadowrocket | Snell、NaïveProxy |
+| Clash / Mihomo | Clash Verge、Stash、FlClash | NaïveProxy |
+| sing-box | SFA / SFI / SFM | XHTTP |
+| Shadowrocket | Shadowrocket | NaïveProxy |
 | Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy |
 | Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy |
 | 通用 base64 | v2rayN、NekoBox | Snell |
 | Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy |
+
+Snell 的下发按版本与客户端区分：Clash / Mihomo 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发（按 UA 判定）。
 
 ## 批量操作
 
