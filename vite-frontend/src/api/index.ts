@@ -963,6 +963,34 @@ export const getMySubscriptions = () =>
     "/user-subscription/mine",
     {},
   );
+
+/** 订阅流量统计的时间粒度。 */
+export type SubTrafficRange = "hour" | "day" | "month";
+/** 一条订阅的流量统计：近 24 小时 / 30 天 / 12 个月，按浏览器时区对齐分桶。 */
+export interface SubTraffic {
+  range: SubTrafficRange;
+  /** 每个时间桶的起点（unix 毫秒）与该桶的上传/下载字节数。 */
+  points: Array<{ time: number; up: number; down: number }>;
+  up: number;
+  down: number;
+}
+const trafficQuery = (id: number, range: SubTrafficRange) => ({
+  id,
+  range,
+  tzOffset: -new Date().getTimezoneOffset(),
+});
+/** 管理端：任一订阅的流量统计。 */
+export const getSubscriptionTraffic = (id: number, range: SubTrafficRange) =>
+  Network.post<SubTraffic>("/subscription/traffic", trafficQuery(id, range));
+/** 用户端：分配给当前用户的一条订阅的流量统计（整条订阅合计）。 */
+export const getMySubscriptionTraffic = (
+  id: number,
+  range: SubTrafficRange,
+) =>
+  Network.post<SubTraffic>(
+    "/user/subscription/traffic",
+    trafficQuery(id, range),
+  );
 /** 立即探测节点到延迟测试点的延迟（移植自 kure29/flyx）。 */
 export const probeNodeLatency = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(
