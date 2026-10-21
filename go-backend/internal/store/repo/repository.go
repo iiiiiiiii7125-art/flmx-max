@@ -370,6 +370,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV2NodeInboundPartialUnique(db); err != nil {
 			return err
 		}
+		if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
+			return err
+		}
+		// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填。
+		backfillPeerShareRelayCredentials(db)
 		return nil
 	}
 
@@ -403,6 +408,18 @@ func autoMigrateAll(db *gorm.DB) error {
 	if err := migrateV2NodeInboundPartialUnique(db); err != nil {
 		return err
 	}
+
+	// FIX-132 v3（D3-05）: peer_share_runtime 唯一索引由单列
+	// resource_key 改为复合 (share_id, resource_key)，存量单列索引
+	// 显式 DROP + CREATE 转换（预检同 share 内重复时跳过、下次重试）。
+	if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
+		return err
+	}
+
+	// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填
+	// （relay_password 为空者）；新 share 在创建时生成、消费侧懒补发
+	// 另有 handler.ensurePeerShareRelayCredentials 兜底。
+	backfillPeerShareRelayCredentials(db)
 
 	return nil
 }
@@ -1620,6 +1637,18 @@ func (r *Repository) UpdatePeerShare(share *model.PeerShare) error {
 		"port_range_end": share.PortRangeEnd, "is_active": share.IsActive,
 		"updated_time": share.UpdatedTime, "allowed_domains": share.AllowedDomains,
 		"allowed_ips": share.AllowedIPs,
+	}).Error
+}
+
+// UpdatePeerShareRelayCredentials 只更新 share 的 D3-04 relay 凭据
+// 两列（UpdatePeerShare 的显式列集合不含凭据列，避免常规更新路径
+// 用旧结构体覆盖凭据）。
+func (r *Repository) UpdatePeerShareRelayCredentials(id int64, username, password string, updatedTime int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.PeerShare{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"relay_username": username, "relay_password": password, "updated_time": updatedTime,
 	}).Error
 }
 
