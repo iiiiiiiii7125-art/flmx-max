@@ -1319,8 +1319,48 @@ export default function NodePage({
       const res = await batchDeleteNodes(Array.from(selectedIds));
 
       if (res.code === 0) {
-        toast.success(`成功删除 ${selectedIds.size} 个节点`);
-        setNodeList((prev) => prev.filter((n) => !selectedIds.has(n.id)));
+        const result = res.data as
+          | {
+              successCount?: number;
+              failCount?: number;
+              failures?: { id?: number }[];
+            }
+          | null
+          | undefined;
+
+        const failedIds = new Set(
+          (result?.failures || [])
+            .map((f) => Number(f.id ?? 0))
+            .filter((id) => id > 0),
+        );
+        const failCount = result?.failCount ?? failedIds.size;
+
+        if (
+          result &&
+          typeof result.successCount === "number" &&
+          (failCount === 0 || failedIds.size > 0)
+        ) {
+          // 后端逐条回执：只移除成功项，失败项保留在列表并如实播报（A9-04）
+          const successCount = result.successCount;
+
+          setNodeList((prev) =>
+            prev.filter(
+              (n) => !selectedIds.has(n.id) || failedIds.has(n.id),
+            ),
+          );
+          if (failCount > 0) {
+            toast.error(
+              `成功删除 ${successCount} 个节点，失败 ${failCount} 个，失败的节点已保留在列表中`,
+            );
+          } else {
+            toast.success(`成功删除 ${successCount} 个节点`);
+          }
+        } else {
+          // 后端未给逐条回执时不按选中数虚报全成功：以服务器列表为准刷新，
+          // 删除失败的节点会重新出现（A9-04 前端半）
+          toast.success("删除请求已完成，正在刷新列表确认结果");
+          await loadNodes({ silent: true });
+        }
         setSelectedIds(new Set());
         setBatchDeleteModalOpen(false);
         setSelectMode(false);

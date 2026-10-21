@@ -1,6 +1,6 @@
 import type { LatencyTrend } from "@/api/types";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   CartesianGrid,
@@ -63,14 +63,27 @@ export function LatencyTrendModal({
   const [hours, setHours] = useState(24);
   const [trend, setTrend] = useState<LatencyTrend | null>(null);
   const [loading, setLoading] = useState(false);
+  // 请求序号守卫（D5-04）：切换节点/范围时先清旧数据，迟到响应一律丢弃，
+  // 避免新请求失败后旧请求成功把上一个节点的数据持久显示到新标题下
+  const trendSeqRef = useRef(0);
 
   useEffect(() => {
     if (nodeId === null) return;
+    const seq = (trendSeqRef.current += 1);
+
+    setTrend(null);
     setLoading(true);
     getNodeLatencyHistory(nodeId, hours)
-      .then((res) => setTrend(res.code === 0 ? (res.data ?? null) : null))
-      .catch(() => setTrend(null))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (trendSeqRef.current !== seq) return;
+        setTrend(res.code === 0 ? (res.data ?? null) : null);
+      })
+      .catch(() => {
+        if (trendSeqRef.current === seq) setTrend(null);
+      })
+      .finally(() => {
+        if (trendSeqRef.current === seq) setLoading(false);
+      });
   }, [nodeId, hours]);
 
   useEffect(() => {
