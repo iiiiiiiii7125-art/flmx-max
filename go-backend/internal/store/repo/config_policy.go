@@ -31,9 +31,29 @@ var sensitiveConfigKeys = map[string]struct{}{
 	"cloudflare_secret_key": {},
 	"node_sub_token":        {},
 	// Notification credentials: hidden from non-admins and kept out of
-	// backups, like the other secrets.
+	// backups, like the other secrets. The whole notify credential group
+	// is listed: chat_id identifies the admin's Telegram chat and
+	// api_base can point at a private bot-API proxy, so neither may leak
+	// to non-admins via config/list (A3 F-4: chat_id was missing).
 	"notify_telegram_bot_token": {},
+	"notify_telegram_chat_id":   {},
+	"notify_telegram_api_base":  {},
 	"notify_webhook_url":        {},
+}
+
+// requiredConfigKeys carry a mandatory value domain: submitting an empty
+// value is rejected (with the key named in the error) instead of clearing
+// the key. These are the domain-validated keys from
+// normalizeAndValidateConfigValue (enum/numeric monitors) plus jwt_secret,
+// whose absence would silently fall back to a different signing key.
+// Monitor key literals mirror internal/monitoring constants
+// (ConfigMonitorRetentionDays / ConfigTunnelQualityProbeIntervalSec) and
+// the handler's monitorTunnelQualityEnabledConfigKey.
+var requiredConfigKeys = map[string]struct{}{
+	"jwt_secret":                          {},
+	"monitor_tunnel_quality_enabled":      {},
+	"monitor_retention_days":              {},
+	"monitor_tunnel_quality_interval_sec": {},
 }
 
 var systemManagedConfigKeys = map[string]struct{}{
@@ -68,6 +88,25 @@ func IsSensitiveConfigKey(name string) bool {
 func IsSystemManagedConfigKey(name string) bool {
 	_, ok := systemManagedConfigKeys[normalizeConfigKey(name)]
 	return ok
+}
+
+func IsRequiredConfigKey(name string) bool {
+	_, ok := requiredConfigKeys[normalizeConfigKey(name)]
+	return ok
+}
+
+// IsClearableConfigKey reports whether submitting an empty value for the
+// key clears it: the stored row is deleted and reads fall back to the
+// built-in default. Every key that is neither system-managed nor required
+// is clearable — credentials, URLs and optional text all treat "absent"
+// as their default state. System-managed keys are rejected by callers
+// before this is consulted; they are reported non-clearable here as well
+// so the predicate is safe to use on its own.
+func IsClearableConfigKey(name string) bool {
+	if IsSystemManagedConfigKey(name) {
+		return false
+	}
+	return !IsRequiredConfigKey(name)
 }
 
 func FilterSensitiveConfigs(in map[string]string) map[string]string {
