@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -64,23 +65,27 @@ func SetHTTPReportURL(addr string, secret string) {
 	}
 }
 
+// sensitiveQueryParamRe 匹配 URL query 中凭据类参数的「名=值」段：
+// 参数名大小写不敏感，值取到下一个参数分隔符/片段/空白为止。
+var sensitiveQueryParamRe = regexp.MustCompile(`(?i)([?&](?:secret|token|password|passwd|auth)=)[^&#\s]*`)
+
+// maskSensitiveQueryParams 把文本中所有凭据类 query 参数值掩码
+// （全部同名出现、任意大小写）。纯文本处理、对畸形 URL 同样有效，
+// 绝不回退原文。
+func maskSensitiveQueryParams(s string) string {
+	return sensitiveQueryParamRe.ReplaceAllString(s, "${1}***")
+}
+
 // sanitizeReportURL 脱敏上报 URL 后再进日志/错误聚合（D1-01）：
 // URL 的 query 含明文节点 secret，WS 侧早有 sanitizeWebSocketURL，
 // HTTP 上报侧此前漏网——失败日志与聚合 error 都会把 secret 打进
-// journal 并被上层以 %v 再次打印。集成口径（FIX-A 与 FIX-H 两路同修
-// 合并）：先按文本掩码 secret 参数值（保留其余字节、对畸形 URL 同样
-// 有效，绝不回退原文），再在可解析时掩码 userinfo；host/path 保留
-// 供排障。
+// journal 并被上层以 %v 再次打印。
+// FIX2-C（V1-N2）：旧文本掩码只处理首个小写 secret=，参数名大小写
+// 变体（Secret=）与同名参数的后续出现都原样漏出；现统一走
+// maskSensitiveQueryParams（大小写不敏感、全部出现），再在可解析时
+// 掩码 userinfo；host/path 保留供排障。
 func sanitizeReportURL(rawURL string) string {
-	masked := rawURL
-	if idx := strings.Index(masked, "secret="); idx >= 0 {
-		start := idx + len("secret=")
-		if end := strings.IndexAny(masked[start:], "&# "); end < 0 {
-			masked = masked[:start] + "***"
-		} else {
-			masked = masked[:start] + "***" + masked[start+end:]
-		}
-	}
+	masked := maskSensitiveQueryParams(rawURL)
 	if u, err := url.Parse(masked); err == nil && u.User != nil {
 		u.User = url.User("***")
 		masked = u.String()
@@ -91,31 +96,40 @@ func sanitizeReportURL(rawURL string) string {
 // redactReportError 清洗 error 文本：http.Client 的 *url.Error 会把
 // 完整请求 URL（含明文 secret）嵌进 Error() 字符串，仅脱敏日志前缀
 // 不够，必须把文本中的原始 URL 替换为脱敏版。
+// FIX2-C（V1-N2）：逐字替换在错误文本里的 URL 被规范化（如多一个
+// 尾随 /）时落空，替换后对残余文本再做一遍凭据参数掩码兜底。
 func redactReportError(err error, rawURL, displayURL string) string {
 	if err == nil {
 		return ""
 	}
-	return strings.ReplaceAll(err.Error(), rawURL, displayURL)
+	return maskSensitiveQueryParams(strings.ReplaceAll(err.Error(), rawURL, displayURL))
 }
 
+// buildReportURLCandidates 组装上报候选 URL。
+// FIX2-C（H §9 残余，与 WS 命令面 D1-02 同口径）：禁止 https→http
+// 自动降级——只产出单一 scheme 的候选：地址显式 scheme 优先
+// （http/ws = 运维显式确认的明文部署；https/wss = 加密），裸地址
+// 默认 https。此前恒产出双 scheme 候选并在首选失败时自动回退
+// 明文，TLS 被阻断/证书被破坏即可把上报面静默降级（上报体虽为
+// AES 密文，secret 本身以 query 明文随行）。存量明文面板的节点须
+// 把 config.json 的 addr 改为显式 http:// 前缀（与 WS 侧同一条
+// 迁移说明）。
 func buildReportURLCandidates(addr string, secret string) (upload []string, config []string) {
 	normalizedAddr, explicitScheme := normalizeReportAddress(addr)
 	if normalizedAddr == "" {
 		normalizedAddr = strings.TrimSpace(addr)
 	}
 
-	schemes := []string{"https", "http"}
-	if mappedScheme := mapToHTTPScheme(explicitScheme); mappedScheme == "http" {
-		schemes = []string{"http", "https"}
+	scheme := mapToHTTPScheme(explicitScheme)
+	if scheme == "" {
+		scheme = "https"
 	}
 
 	upload = []string{
-		schemes[0] + "://" + normalizedAddr + "/flow/upload?secret=" + secret,
-		schemes[1] + "://" + normalizedAddr + "/flow/upload?secret=" + secret,
+		scheme + "://" + normalizedAddr + "/flow/upload?secret=" + secret,
 	}
 	config = []string{
-		schemes[0] + "://" + normalizedAddr + "/flow/config?secret=" + secret,
-		schemes[1] + "://" + normalizedAddr + "/flow/config?secret=" + secret,
+		scheme + "://" + normalizedAddr + "/flow/config?secret=" + secret,
 	}
 	return upload, config
 }
