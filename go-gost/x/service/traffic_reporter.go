@@ -31,10 +31,13 @@ var reportDo = func(ctx context.Context, req *http.Request, timeout time.Duratio
 }
 
 // TrafficReportItem 流量报告项（压缩格式）
+// 线格式方向（N-01 钉死）：U=gost OutputBytes=远端→客户端方向字节，
+// D=gost InputBytes=客户端→远端方向字节。字段名 U/D 是历史命名，
+// 与「客户端上行/下行」字面相反，面板按 U=出、D=入解读，勿改映射。
 type TrafficReportItem struct {
 	N string `json:"n"` // 服务名（name缩写）
-	U int64  `json:"u"` // 上行流量（up缩写）
-	D int64  `json:"d"` // 下行流量（down缩写）
+	U int64  `json:"u"` // 远端→客户端字节（gost OutputBytes）
+	D int64  `json:"d"` // 客户端→远端字节（gost InputBytes）
 }
 
 func SetHTTPReportURL(addr string, secret string) {
