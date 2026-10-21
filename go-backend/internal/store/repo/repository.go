@@ -352,6 +352,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.SubUser{},
 		&model.Subscription{},
 		&model.SubscriptionCounter{},
+		&model.SubscriptionTraffic{},
 		&model.RemoteSource{},
 	}
 
