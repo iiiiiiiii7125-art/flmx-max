@@ -44,6 +44,7 @@ import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
 import { SUB_CLIENTS } from "@/pages/subscription/clients";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
+import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -1333,6 +1334,10 @@ export default function SubscriptionPage() {
                         重置流量
                       </Button>
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold">流量统计</h3>
+                    <SubTrafficStats id={detail.id} />
                   </div>
                   <Button
                     className="w-full"
