@@ -681,7 +681,11 @@ func (r *Repository) UpsertConfig(name, value string, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Clauses(clause.OnConflict{
+	return upsertConfigTx(r.db, name, value, now)
+}
+
+func upsertConfigTx(db *gorm.DB, name, value string, now int64) error {
+	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "name"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
 	}).Create(&model.ViteConfig{Name: name, Value: value, Time: now}).Error
@@ -693,10 +697,38 @@ func (r *Repository) UpsertConfigs(values map[string]string, now int64) error {
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for name, value := range values {
-			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "name"}},
-				DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
-			}).Create(&model.ViteConfig{Name: name, Value: value, Time: now}).Error; err != nil {
+			if err := upsertConfigTx(tx, name, value, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteConfig removes a config row so subsequent reads fall back to the
+// built-in default for the key. Deleting a key that is not stored is a
+// no-op, which makes "clear this setting" idempotent.
+func (r *Repository) DeleteConfig(name string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Where("name = ?", name).Delete(&model.ViteConfig{}).Error
+}
+
+// ApplyConfigBatch applies config upserts and clear-deletions in a single
+// transaction: a settings save either lands completely or not at all.
+func (r *Repository) ApplyConfigBatch(values map[string]string, deleteKeys []string, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for name, value := range values {
+			if err := upsertConfigTx(tx, name, value, now); err != nil {
+				return err
+			}
+		}
+		for _, name := range deleteKeys {
+			if err := tx.Where("name = ?", name).Delete(&model.ViteConfig{}).Error; err != nil {
 				return err
 			}
 		}
