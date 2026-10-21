@@ -5547,6 +5547,11 @@ func (h *Handler) deleteNodeByID(id int64) error {
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
+	// D2-05：删节点同时踢掉其 agent 的 WS 存量会话，否则幽灵会话
+	// 会无限存活、继续上报并被广播（secret 已随行删除也拦不住）。
+	if h.wsServer != nil {
+		h.wsServer.DisconnectNode(id)
+	}
 	return nil
 }
 
