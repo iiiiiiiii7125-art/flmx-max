@@ -58,6 +58,35 @@ type ghMirrorBucket struct {
 	windowEnd time.Time
 }
 
+// ghMirrorEvictLocked 清理限流桶（D6-05）：先删全部过期桶；
+// 仍达上限时按 windowEnd 最早者逐个淘汰（与 login_rate_limit 的
+// evictIfNeededLocked 同型）。旧实现从不清理：累计 10000 个不同源 IP
+// 后所有新 IP 被 fail-closed 永久拒绝至进程重启（该端点无鉴权开放，
+// 公网扫描即可填满）。
+// 调用方须持 ghMirrorRateMu。
+func ghMirrorEvictLocked(now time.Time) {
+	for ip, b := range ghMirrorRate {
+		if now.After(b.windowEnd) {
+			delete(ghMirrorRate, ip)
+		}
+	}
+	for len(ghMirrorRate) >= ghMirrorRateMaxHosts {
+		var oldestIP string
+		var oldestEnd time.Time
+		first := true
+		for ip, b := range ghMirrorRate {
+			if first || b.windowEnd.Before(oldestEnd) {
+				oldestIP, oldestEnd, first = ip, b.windowEnd, false
+			}
+		}
+		if oldestIP == "" {
+			return
+		}
+		log.Printf("warning: gh_mirror rate limiter full (%d hosts), evicting oldest bucket", len(ghMirrorRate))
+		delete(ghMirrorRate, oldestIP)
+	}
+}
+
 func ghMirrorAllow(ip string) bool {
 	now := time.Now()
 	ghMirrorRateMu.Lock()
@@ -65,8 +94,11 @@ func ghMirrorAllow(ip string) bool {
 	b, ok := ghMirrorRate[ip]
 	if !ok || now.After(b.windowEnd) {
 		if !ok && len(ghMirrorRate) >= ghMirrorRateMaxHosts {
-			// 极端情况下不无限增长 map：直接拒绝新 IP（fail-closed）。
-			return false
+			// 满额时先清理过期/最旧桶再收新 IP；清理后仍满才 fail-closed。
+			ghMirrorEvictLocked(now)
+			if len(ghMirrorRate) >= ghMirrorRateMaxHosts {
+				return false
+			}
 		}
 		ghMirrorRate[ip] = &ghMirrorBucket{count: 1, windowEnd: now.Add(ghMirrorRateWindow)}
 		return true

@@ -472,6 +472,9 @@ func dialWebSocketWithFallback(dialer *websocket.Dialer, candidates []string) (*
 			return conn, targetURL, nil
 		}
 		errMsg := formatWebSocketDialError(err, resp)
+		// D1-01 同族：拨号 error 文本可能内嵌完整 URL（含 secret），
+		// 进日志/聚合前把原文 URL 替换为脱敏版。
+		errMsg = strings.ReplaceAll(errMsg, targetURL, sanitizeWebSocketURL(targetURL))
 		errs = append(errs, fmt.Sprintf("%s => %s", sanitizeWebSocketURL(targetURL), errMsg))
 		if i < len(candidates)-1 {
 			fmt.Printf(
@@ -492,6 +495,9 @@ func sanitizeWebSocketURL(rawURL string) string {
 		return rawURL
 	}
 
+	if u.User != nil {
+		u.User = url.User("***")
+	}
 	q := u.Query()
 	if q.Get("secret") != "" {
 		q.Set("secret", "***")
@@ -902,6 +908,13 @@ func isMutationCommand(commandType string) bool {
 	}
 }
 
+// logReceivedCommand 记录收到的面板命令（D1-01）：只记 type 与
+// requestId。命令全文含服务配置，其中的代理密码/SS 密钥等凭据字段
+// 不得落日志（旧实现 fmt.Println 打印命令 JSON 全文）。
+func logReceivedCommand(cmd CommandMessage) {
+	fmt.Printf("🔔 收到命令: type=%s requestId=%s\n", cmd.Type, cmd.RequestId)
+}
+
 // routeCommand 路由命令到对应的处理函数
 func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	if isMutationCommand(cmd.Type) {
@@ -912,13 +925,7 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 			return
 		}
 	}
-	jsonBytes, errs := json.Marshal(cmd)
-	if errs != nil {
-		fmt.Println("Error marshaling JSON:", errs)
-		return
-	}
-
-	fmt.Println("🔔 收到命令: ", string(jsonBytes))
+	logReceivedCommand(cmd)
 	var err error
 	var response CommandResponse
 
@@ -1493,7 +1500,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 
 	w.sendUpgradeProgress("downloading", 0, "开始下载升级包...")
-	fmt.Printf("📦 开始下载升级包: %s\n", downloadURL)
+	fmt.Printf("📦 开始下载升级包: %s\n", sanitizeWebSocketURL(downloadURL))
 
 	// 下载新版本二进制
 	const binaryPath = "/etc/flux_agent/flux_agent"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,12 +47,14 @@ type adminSession struct {
 	userID int64
 	claims auth.Claims
 	conn   *connWrap
+	queue  chan []byte
 }
 
 type monitorSession struct {
 	userID int64
 	claims auth.Claims
 	conn   *connWrap
+	queue  chan []byte
 }
 
 type commandResponse struct {
@@ -74,6 +77,18 @@ const (
 	// Max inbound WebSocket message size (10MB). Prevents a malicious or
 	// compromised peer from exhausting server memory with a single huge frame.
 	wsMaxMessageSize = 10 << 20
+	// D2-03: 同一用户可并存的实时会话上限（admin / monitor 各自计）。
+	// 前端全局共享一条连接，10 条足够多标签/多设备并存；超限拒新连接。
+	wsMaxSessionsPerUser = 10
+	// D2-04/D6-01: 每会话广播发送队列深度。队列满即丢弃该会话的本条
+	// 实时消息（metric/status 均为最新值语义，可丢），绝不阻塞广播方。
+	wsBroadcastQueueSize = 16
+	// D2-03: /system-info 未认证失败尝试按 IP 限流的窗口与上限。
+	// 每次失败鉴权都要打一次 DB（GetNodeBySecret / token 校验），
+	// 无限流时伪造 secret 洪泛可独占单连接 SQLite。
+	wsAuthFailWindow       = time.Minute
+	wsAuthFailMaxPerWindow = 60
+	wsAuthFailMaxHosts     = 4096
 )
 
 type CommandResult struct {
@@ -98,6 +113,68 @@ type Server struct {
 	nodes    map[int64]*nodeSession
 	byConn   map[*websocket.Conn]*nodeSession
 	pending  map[string]pendingRequest
+
+	authFail *wsAuthFailLimiter
+}
+
+// wsAuthFailLimiter 记录 /system-info 的未认证失败尝试（按 IP 固定窗口）。
+// 只对失败计数：正常 agent 重连与浏览器连接不受影响。
+type wsAuthFailBucket struct {
+	count       int
+	windowStart time.Time
+}
+
+type wsAuthFailLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*wsAuthFailBucket
+}
+
+func newWSAuthFailLimiter() *wsAuthFailLimiter {
+	return &wsAuthFailLimiter{buckets: make(map[string]*wsAuthFailBucket)}
+}
+
+// blocked 报告该 IP 在当前窗口内失败次数是否已达上限。
+func (l *wsAuthFailLimiter) blocked(ip string, now time.Time) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[ip]
+	if !ok || now.Sub(b.windowStart) >= wsAuthFailWindow {
+		return false
+	}
+	return b.count >= wsAuthFailMaxPerWindow
+}
+
+func (l *wsAuthFailLimiter) recordFailure(ip string, now time.Time) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[ip]
+	if !ok {
+		if len(l.buckets) >= wsAuthFailMaxHosts {
+			// 满额先清过期桶，避免 map 无界增长（与 D6-05 同型治理）。
+			for k, v := range l.buckets {
+				if now.Sub(v.windowStart) >= wsAuthFailWindow {
+					delete(l.buckets, k)
+				}
+			}
+			if len(l.buckets) >= wsAuthFailMaxHosts {
+				return
+			}
+		}
+		l.buckets[ip] = &wsAuthFailBucket{count: 1, windowStart: now}
+		return
+	}
+	if now.Sub(b.windowStart) >= wsAuthFailWindow {
+		b.count = 1
+		b.windowStart = now
+		return
+	}
+	b.count++
 }
 
 type SystemInfo struct {
@@ -134,6 +211,44 @@ func (s *Server) SetNodeOfflineHook(fn func(nodeID int64)) {
 	s.mu.Unlock()
 }
 
+// DisconnectNode 主动断开指定节点的 agent 会话（D2-05）。
+// 删节点后调用：移除会话、在途命令以失败收尾、关连接并广播离线。
+// 节点行已删除，此处不再写 DB 状态。
+func (s *Server) DisconnectNode(nodeID int64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	ns, ok := s.nodes[nodeID]
+	if ok {
+		delete(s.nodes, nodeID)
+		if ns != nil && ns.conn != nil && ns.conn.conn != nil {
+			delete(s.byConn, ns.conn.conn)
+		}
+	}
+	s.mu.Unlock()
+	if !ok || ns == nil {
+		return
+	}
+	s.failPendingForNode(nodeID, "节点连接已断开")
+	if ns.conn != nil && ns.conn.conn != nil {
+		_ = ns.conn.conn.Close()
+	}
+	s.broadcastStatus(nodeID, 0)
+}
+
+// validateNodeSession 是节点会话的 keepalive 复验（D2-05）：
+// 节点仍存在且 secret 与建连时一致才有效——覆盖删节点（DB 侧
+// 直接删除）与 secret 轮换两种存量会话失效场景。无 repo 的嵌入
+// 场景无法复验，按有效处理（生产装配恒有 repo）。
+func (s *Server) validateNodeSession(nodeID int64, secret string) bool {
+	if s == nil || s.repo == nil {
+		return true
+	}
+	node, err := s.repo.GetNodeBySecret(secret)
+	return err == nil && node != nil && node.ID == nodeID
+}
+
 // IsNodeOnline reports whether the node has a live agent connection.
 func (s *Server) IsNodeOnline(nodeID int64) bool {
 	if s == nil {
@@ -166,6 +281,7 @@ func NewServer(repo *repo.Repository, jwtSecret string) *Server {
 		nodes:    make(map[int64]*nodeSession),
 		byConn:   make(map[*websocket.Conn]*nodeSession),
 		pending:  make(map[string]pendingRequest),
+		authFail: newWSAuthFailLimiter(),
 	}
 }
 
@@ -178,15 +294,35 @@ func (s *Server) SetUserAuthStateLookup(fn func(userID int64) (*auth.UserAuthSta
 	s.mu.Unlock()
 }
 
+func wsClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	typeVal := query.Get("type")
 	secret := query.Get("secret")
+	clientIP := wsClientIP(r)
+	now := time.Now()
+
+	// D2-03：失败鉴权已达上限的 IP 直接 429，不再打 DB。
+	if s.authFail.blocked(clientIP, now) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	forbidden := func() {
+		s.authFail.recordFailure(clientIP, now)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}
 
 	if typeVal == "1" {
 		node, err := s.repo.GetNodeBySecret(secret)
 		if err != nil || node == nil {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			forbidden()
 			return
 		}
 		s.handleNode(w, r, node.ID, secret)
@@ -196,24 +332,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if typeVal == "0" {
 		claims, ok := auth.ValidateToken(secret, s.jwtSecret)
 		if !ok {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			forbidden()
 			return
 		}
 		userID, err := strconv.ParseInt(claims.Sub, 10, 64)
 		if err != nil {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			forbidden()
 			return
 		}
 		if claims.RoleID == 0 {
 			if !s.validateAdminSession(userID, claims) {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				forbidden()
 				return
 			}
 			s.handleAdmin(w, r, userID, claims)
 			return
 		}
 		if !s.validateMonitorSession(userID, claims) {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			forbidden()
 			return
 		}
 		s.handleMonitor(w, r, userID, claims)
@@ -223,7 +359,45 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "bad request", http.StatusBadRequest)
 }
 
+// userSessionCounts 返回该用户当前 admin / monitor 会话数（D2-03 上限判定）。
+func (s *Server) userSessionCounts(userID int64) (admins int, monitors int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for sess := range s.admins {
+		if sess.userID == userID {
+			admins++
+		}
+	}
+	for sess := range s.monitors {
+		if sess.userID == userID {
+			monitors++
+		}
+	}
+	return admins, monitors
+}
+
+// runRealtimeWriter 是每会话独立的广播写 goroutine（D2-04/D6-01）：
+// 广播方只往会话队列非阻塞投递，慢消费者只会拖住自己的 writer——
+// 写失败即关连接逐出（读循环随之退出并清理会话），不阻塞任何人。
+func runRealtimeWriter(cw *connWrap, queue <-chan []byte, done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			return
+		case msg := <-queue:
+			if err := writeWSMessage(cw, websocket.TextMessage, msg); err != nil {
+				_ = cw.conn.Close()
+				return
+			}
+		}
+	}
+}
+
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int64, claims auth.Claims) {
+	if admins, _ := s.userSessionCounts(userID); admins >= wsMaxSessionsPerUser {
+		http.Error(w, "too many sessions", http.StatusTooManyRequests)
+		return
+	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -235,7 +409,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int6
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 	done := make(chan struct{})
-	session := &adminSession{userID: userID, claims: claims, conn: cw}
+	session := &adminSession{userID: userID, claims: claims, conn: cw, queue: make(chan []byte, wsBroadcastQueueSize)}
+	go runRealtimeWriter(cw, session.queue, done)
 	go startKeepalive(cw, done, func() bool {
 		return s.validateAdminSession(session.userID, session.claims)
 	})
@@ -260,6 +435,10 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int6
 }
 
 func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request, userID int64, claims auth.Claims) {
+	if _, monitors := s.userSessionCounts(userID); monitors >= wsMaxSessionsPerUser {
+		http.Error(w, "too many sessions", http.StatusTooManyRequests)
+		return
+	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -271,7 +450,8 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request, userID in
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 	done := make(chan struct{})
-	session := &monitorSession{userID: userID, claims: claims, conn: cw}
+	session := &monitorSession{userID: userID, claims: claims, conn: cw, queue: make(chan []byte, wsBroadcastQueueSize)}
+	go runRealtimeWriter(cw, session.queue, done)
 	go startKeepalive(cw, done, func() bool {
 		return s.validateMonitorSession(session.userID, session.claims)
 	})
@@ -307,7 +487,11 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 	done := make(chan struct{})
-	go startKeepalive(cw, done, nil)
+	// D2-05：节点会话与用户会话对齐——keepalive 周期复验节点仍存在
+	// 且 secret 未轮换；删节点/换 secret 后存量会话最迟一个周期被踢线。
+	go startKeepalive(cw, done, func() bool {
+		return s.validateNodeSession(nodeID, secret)
+	})
 
 	version := r.URL.Query().Get("version")
 	httpVal := parseIntDefault(r.URL.Query().Get("http"), 0)
@@ -374,9 +558,17 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 		s.tryResolvePending(nodeID, msg)
 
 		var parsed struct {
-			Type string `json:"type"`
+			Type      string `json:"type"`
+			RequestID string `json:"requestId"`
 		}
-		if json.Unmarshal([]byte(msg), &parsed) == nil && parsed.Type != "" {
+		_ = json.Unmarshal([]byte(msg), &parsed)
+		// D2-02：带 requestId 的是命令的定向响应，已由 tryResolvePending
+		// 回执给等待方，绝不广播（旧实现经 default 分支把响应原文推给
+		// 全部 admin+monitor 会话，越过其 REST 可见范围）。
+		if parsed.RequestID != "" {
+			continue
+		}
+		if parsed.Type != "" {
 			switch parsed.Type {
 			case "metric":
 				// Agent 新版指标消息：{type:"metric", data:{...}}
@@ -402,9 +594,11 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				s.broadcastTyped(nodeID, "upgrade_progress", msg)
 				continue
 			default:
-				// Unknown typed messages still get broadcast so future
-				// agent message types are not silently lost.
-				s.broadcastInfo(nodeID, msg)
+				// D2-02：广播改白名单制——仅 metric / upgrade_progress
+				// 进实时广播。未知类型一律不广播（旧 default 全量广播是
+				// fail-open：未来新增 agent 上行类型会自动进入 monitor
+				// 可见集）。只记类型名，不记原文（原文可能含敏感数据）。
+				log.Printf("websocket: dropping non-whitelisted agent message type=%q from node %d", parsed.Type, nodeID)
 				continue
 			}
 		}
@@ -424,7 +618,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 			}
 		}
 
-		s.broadcastInfo(nodeID, msg)
+		// D2-02：无 type 且不像系统信息的消息同样不广播（白名单制）。
 	}
 }
 
@@ -649,46 +843,38 @@ func (s *Server) broadcastStatus(nodeID int64, status int) {
 	s.broadcastToRealtime(string(raw))
 }
 
-func (s *Server) broadcastInfo(nodeID int64, data string) {
-	payload := broadcastMessage{ID: nodeID, Type: "info", Data: data}
-	raw, _ := json.Marshal(payload)
-	s.broadcastToRealtime(string(raw))
-}
-
 func (s *Server) broadcastTyped(nodeID int64, msgType string, data string) {
 	payload := broadcastMessage{ID: nodeID, Type: msgType, Data: data}
 	raw, _ := json.Marshal(payload)
 	s.broadcastToRealtime(string(raw))
 }
 
+// broadcastToRealtime 把实时消息投递到各会话的发送队列（D2-04/D6-01）。
+// 旧实现在节点读循环内同步串行直写全部会话：一个慢消费者每次广播
+// 吃满 5s 写截止，队头阻塞该节点的全部后续消息。现改为非阻塞投递：
+// 队列满即丢弃该会话的本条消息（实时值为最新值语义），实际写由
+// runRealtimeWriter 完成，写失败在那里关连接逐出。
 func (s *Server) broadcastToRealtime(message string) {
+	payload := []byte(message)
 	s.mu.RLock()
-	admins := make([]*adminSession, 0, len(s.admins))
+	queues := make([]chan []byte, 0, len(s.admins)+len(s.monitors))
 	for c := range s.admins {
-		admins = append(admins, c)
+		if c != nil && c.queue != nil {
+			queues = append(queues, c.queue)
+		}
 	}
-	monitors := make([]*monitorSession, 0, len(s.monitors))
 	for c := range s.monitors {
-		monitors = append(monitors, c)
+		if c != nil && c.queue != nil {
+			queues = append(queues, c.queue)
+		}
 	}
 	s.mu.RUnlock()
 
-	for _, c := range admins {
-		if c == nil || c.conn == nil || c.conn.conn == nil {
-			continue
-		}
-		err := writeWSMessage(c.conn, websocket.TextMessage, []byte(message))
-		if err != nil {
-			log.Printf("websocket broadcast failed: %v", err)
-		}
-	}
-	for _, c := range monitors {
-		if c == nil || c.conn == nil || c.conn.conn == nil {
-			continue
-		}
-		err := writeWSMessage(c.conn, websocket.TextMessage, []byte(message))
-		if err != nil {
-			log.Printf("websocket broadcast failed: %v", err)
+	for _, q := range queues {
+		select {
+		case q <- payload:
+		default:
+			// 慢消费者：丢本条，不阻塞广播方与其他会话。
 		}
 	}
 }

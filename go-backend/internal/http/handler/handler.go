@@ -388,6 +388,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/error", h.errorPage)
 }
 
+// dummyBcryptHash 是合法 bcrypt 格式（cost 10）的占位哈希：
+// 用户不存在的鉴权路径用它跑一次 VerifyPassword，使耗时与真实
+// 验证相近，消除用户名枚举时序差（K-001；login 与 sub_store 共用）。
+const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 // isStoredDefaultPassword 判断存储的口令哈希是否为种子默认口令（M-05）。
 // 仅用于管理员账号；登录已做过一次 bcrypt，这里是通行密钥等无密码登录路径的补充检查。
 func isStoredDefaultPassword(roleID int, pwdHash string) bool {
@@ -487,8 +492,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if user == nil {
 		// K-001：用户不存在时也跑一次 dummy bcrypt，消除时序差，防止用户名枚举
 		// 旧逻辑：不存在用户立即返回（2-5ms），存在用户走 bcrypt（80-150ms），时序差可被利用
-		// dummy hash 为合法 bcrypt 格式（cost 10），确保耗时与真实验证相近
-		_, _ = security.VerifyPassword("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", req.Password)
+		_, _ = security.VerifyPassword(dummyBcryptHash, req.Password)
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}
@@ -515,8 +519,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// M-05: 管理员用种子默认口令登录时签发受限 token（仅允许改密），
-	// 服务端强制改密。此处用登录时实际提供的密码精确判断，无需额外 bcrypt。
-	pwdChangeRequired := user.RoleID == 0 && (req.Password == "admin@user" || req.Password == "admin_user")
+	// 服务端强制改密。A1-D2：判定口径与 passkey 路径（R-002）统一为
+	// 「存储口令是否仍为种子默认口令」——登录已成功验证提交口令与存储
+	// 哈希一致，故该口径与「提交口令命中默认值」等价，且能覆盖口令被
+	// 其它路径重置为默认的情况。下方响应标志直接复用同一结果：
+	// JWT claim、响应标志、passkey 三方一致，不再按用户名现算
+	// （旧现算使已改密但保留 admin@user 用户名的管理员被永久误报）。
+	pwdChangeRequired := isStoredDefaultPassword(user.RoleID, user.Pwd)
 	var token string
 	if pwdChangeRequired {
 		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
@@ -528,14 +537,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requirePasswordChange := req.Username == "admin_user" || req.Password == "admin_user" || req.Username == "admin@user" || req.Password == "admin@user"
 	// R5-B2 A-001: 登录成功，清除该用户名的限流状态（含退避计数）。
 	h.noteLoginUsernameSuccess(req.Username)
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"token":                 token,
 		"name":                  user.User,
 		"role_id":               user.RoleID,
-		"requirePasswordChange": requirePasswordChange,
+		"requirePasswordChange": pwdChangeRequired,
 	}))
 }
 
@@ -819,6 +827,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user == nil {
+		// A1 P3：与 login 的 K-001 同口径——用户不存在时也跑一次
+		// dummy bcrypt，消除用户名枚举时序侧信道（旧实现立即返回）。
+		_, _ = security.VerifyPassword(dummyBcryptHash, password)
 		response.WriteJSON(w, response.ErrDefault("鉴权失败"))
 		return
 	}
