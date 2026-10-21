@@ -719,6 +719,7 @@ type TunnelBackup struct {
 	IPPreference    string              `json:"ipPreference,omitempty"`
 	ProbeTargetHost string              `json:"probeTargetHost,omitempty"`
 	ProbeTargetPort int                 `json:"probeTargetPort,omitempty"`
+	Engine          string              `json:"engine,omitempty"`
 	ChainTunnels    []ChainTunnelBackup `json:"chainTunnels,omitempty"`
 }
 

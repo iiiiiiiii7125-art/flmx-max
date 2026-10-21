@@ -83,6 +83,108 @@ func TestBackupRoundTripsTunnelProbeTarget(t *testing.T) {
 	}
 }
 
+func TestBackupRoundTripsTunnelEngine(t *testing.T) {
+	source, err := Open(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatalf("open source repo: %v", err)
+	}
+	defer source.Close()
+
+	now := time.Now().UnixMilli()
+	if err := source.DB().Exec(`
+		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx, engine)
+		VALUES(21, 'backup-realm', 1, 1, 'tls', 1, ?, ?, 1, '', 1, 'realm')
+	`, now, now).Error; err != nil {
+		t.Fatalf("insert source tunnel: %v", err)
+	}
+
+	backup, err := source.ExportAll()
+	if err != nil {
+		t.Fatalf("export backup: %v", err)
+	}
+	if len(backup.Tunnels) != 1 {
+		t.Fatalf("expected one exported tunnel, got %d", len(backup.Tunnels))
+	}
+	if backup.Tunnels[0].Engine != "realm" {
+		t.Fatalf("expected exported engine realm, got %+v", backup.Tunnels[0])
+	}
+
+	dest, err := Open(filepath.Join(t.TempDir(), "dest.db"))
+	if err != nil {
+		t.Fatalf("open dest repo: %v", err)
+	}
+	defer dest.Close()
+
+	result, err := dest.Import(backup, []string{"tunnels"})
+	if err != nil {
+		t.Fatalf("import backup: %v", err)
+	}
+	if result.TunnelsImported != 1 {
+		t.Fatalf("expected one imported tunnel, got %d", result.TunnelsImported)
+	}
+
+	items, err := dest.ListTunnels()
+	if err != nil {
+		t.Fatalf("list imported tunnels: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one imported tunnel item, got %d", len(items))
+	}
+	if items[0]["engine"] != "realm" {
+		t.Fatalf("expected imported engine realm, got %+v", items[0])
+	}
+}
+
+func TestImportTunnelEngineNormalization(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "engine-import.db"))
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now().UnixMilli()
+	for _, tc := range []struct {
+		id     int64
+		engine string
+		want   string
+	}{
+		{id: 31, engine: "Realm", want: "realm"},
+		{id: 32, engine: "gost", want: ""},
+		{id: 33, engine: "", want: ""},
+	} {
+		backup := &model.BackupData{
+			Version: "1.0",
+			Tunnels: []model.TunnelBackup{{
+				ID: tc.id, Name: "engine-case", TrafficRatio: 1, Type: 1,
+				Protocol: "tls", Flow: 1, CreatedTime: now, UpdatedTime: now,
+				Status: 1, Engine: tc.engine,
+			}},
+		}
+		if _, err := r.Import(backup, []string{"tunnels"}); err != nil {
+			t.Fatalf("import engine %q: %v", tc.engine, err)
+		}
+		var got string
+		if err := r.DB().Raw(`SELECT engine FROM tunnel WHERE id = ?`, tc.id).Scan(&got).Error; err != nil {
+			t.Fatalf("read imported engine for %q: %v", tc.engine, err)
+		}
+		if got != tc.want {
+			t.Fatalf("engine %q normalized to %q, want %q", tc.engine, got, tc.want)
+		}
+	}
+
+	bad := &model.BackupData{
+		Version: "1.0",
+		Tunnels: []model.TunnelBackup{{
+			ID: 39, Name: "engine-bad", TrafficRatio: 1, Type: 1,
+			Protocol: "tls", Flow: 1, CreatedTime: now, UpdatedTime: now,
+			Status: 1, Engine: "warp",
+		}},
+	}
+	if _, err := r.Import(bad, []string{"tunnels"}); err == nil {
+		t.Fatal("expected unsupported engine to fail the import, got nil error")
+	}
+}
+
 func TestExportAllOmitsSensitiveConfigs(t *testing.T) {
 	r, err := Open(filepath.Join(t.TempDir(), "export.db"))
 	if err != nil {

@@ -2339,6 +2339,7 @@ func (r *Repository) exportTunnels() ([]model.TunnelBackup, error) {
 			CreatedTime: t.CreatedTime, UpdatedTime: t.UpdatedTime,
 			Status: t.Status, Inx: t.Inx, IPPreference: t.IPPreference,
 			ProbeTargetHost: t.ProbeTargetHost, ProbeTargetPort: t.ProbeTargetPort,
+			Engine: t.Engine,
 		}
 		if t.InIP.Valid {
 			b.InIP = t.InIP.String
@@ -2944,9 +2945,28 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 	return count, nil
 }
 
+// normalizeBackupTunnelEngine mirrors handler.normalizeTunnelEngine (the repo
+// layer cannot import the handler): "" or "gost" select the agent's
+// forwarder, "realm" selects realm; anything else is an error, never
+// silently dropped.
+func normalizeBackupTunnelEngine(raw string) (string, error) {
+	switch e := strings.ToLower(strings.TrimSpace(raw)); e {
+	case "", "gost":
+		return "", nil
+	case "realm":
+		return e, nil
+	default:
+		return "", fmt.Errorf("不支持的转发引擎 %s", raw)
+	}
+}
+
 func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, error) {
 	count := 0
 	for _, t := range tunnels {
+		engine, err := normalizeBackupTunnelEngine(t.Engine)
+		if err != nil {
+			return count, err
+		}
 		item := model.Tunnel{
 			ID:              t.ID,
 			Name:            t.Name,
@@ -2962,11 +2982,12 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64) (int, e
 			IPPreference:    t.IPPreference,
 			ProbeTargetHost: t.ProbeTargetHost,
 			ProbeTargetPort: t.ProbeTargetPort,
+			Engine:          engine,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "traffic_ratio", "type", "protocol", "flow", "updated_time", "status", "in_ip", "inx", "ip_preference", "probe_target_host", "probe_target_port",
+				"name", "traffic_ratio", "type", "protocol", "flow", "updated_time", "status", "in_ip", "inx", "ip_preference", "probe_target_host", "probe_target_port", "engine",
 			}),
 		}).Create(&item).Error
 		if err != nil {
