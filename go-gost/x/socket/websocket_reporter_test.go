@@ -125,7 +125,10 @@ func TestSanitizeWebSocketURL(t *testing.T) {
 	if strings.Contains(sanitized, "secret=abc") {
 		t.Fatalf("expected secret to be masked, got %s", sanitized)
 	}
-	if !strings.Contains(sanitized, "secret=%2A%2A%2A") {
+	// FIX2-C #6：掩码形态由 url.Values.Encode() 的 %2A%2A%2A 改为
+	// 字面 ***（与面板 logredact 及 redactCommandForLog 口径统一），
+	// 掩码语义不变。
+	if !strings.Contains(sanitized, "secret=***") {
 		t.Fatalf("expected masked secret in url, got %s", sanitized)
 	}
 }
@@ -268,7 +271,8 @@ func TestStartWebSocketReporterWithConfigLogsSanitizedURL(t *testing.T) {
 	if strings.Contains(output, "secret=abc123") {
 		t.Fatalf("expected logged websocket URL to mask the node secret, got %s", output)
 	}
-	if !strings.Contains(output, "secret=%2A%2A%2A") {
+	// FIX2-C #6：掩码形态同 TestSanitizeWebSocketURL，字面 ***。
+	if !strings.Contains(output, "secret=***") {
 		t.Fatalf("expected logged websocket URL to include masked secret, got %s", output)
 	}
 }
