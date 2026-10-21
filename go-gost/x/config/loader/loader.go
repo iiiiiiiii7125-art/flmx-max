@@ -122,6 +122,10 @@ func register(cfg *config.Config) error {
 			return err
 		}
 	}
+	// FIX2-C #8: built-in bypasses (flmx-no-private) must survive the
+	// unregister-all above on every (re)load; a config-defined bypass
+	// of the same name takes precedence (see RegisterBuiltinBypasses).
+	bypass_parser.RegisterBuiltinBypasses()
 
 	for name := range registry.ResolverRegistry().GetAll() {
 		registry.ResolverRegistry().Unregister(name)

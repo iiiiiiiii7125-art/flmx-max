@@ -77,6 +77,17 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
 		service["handler"].(map[string]interface{})["auth"] = auth
 	}
+	// FIX2-C #8（D3-04 目标面补完）：exit 服务挂 agent 内置 bypass
+	// 拒绝私网目标；节点 agent 版本不够时不下发（旧版对未知 bypass
+	// 名 fail-open，下发只会制造已防护假象）。版本读取失败按不支持
+	// 处理（不下发），与版本未知同口径。
+	if runtime.Role == "exit" {
+		agentVersion, versionErr := h.repo.GetNodeAgentVersion(runtime.NodeID)
+		if versionErr != nil {
+			agentVersion = ""
+		}
+		applyFederationExitPrivateGuard(service, runtime.Role, agentVersion)
+	}
 	runtime.Applied = 0
 	runtime.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.UpdatePeerShareRuntime(runtime); err != nil {
