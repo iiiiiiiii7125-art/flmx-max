@@ -41,7 +41,9 @@ export default function MySubscriptionPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getMySubscriptions(), getMyInbounds(), getSubInfo()])
+    // getSubInfo 查默认订阅：未被分配默认订阅是正常状态，后端会回 403，
+    // 静默处理（不弹全局「权限不足」），页面只隐藏默认订阅区即可。
+    Promise.all([getMySubscriptions(), getMyInbounds(), getSubInfo(false, true)])
       .then(([assignedRes, myRes, subRes]) => {
         if (assignedRes.code === 0 && assignedRes.data) {
           setAssigned(assignedRes.data.subscriptions ?? []);
