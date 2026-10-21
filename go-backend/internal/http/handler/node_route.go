@@ -434,8 +434,18 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 			// 被 trace。同一变化的重复投递另有 notify 指纹去重（30 分钟）。
 			if prev, ok := h.nodeRoutes.get(nodeID); ok {
 				if changes := routeChanges(prev, r); len(changes) > 0 {
-					h.notify(notifyEventRouteChange, "回程线路变化",
-						fmt.Sprintf("节点：%s\n%s", name, strings.Join(changes, "\n")))
+					h.notifyTracked(notifyEventRouteChange, "回程线路变化",
+						fmt.Sprintf("节点：%s\n%s", name, strings.Join(changes, "\n")),
+						func(outcome notifyOutcome) {
+							// A7-02 的同族处理：本事件每变化一条消息（无状态
+							// 机），同节点同方向的再变化常在窗口内重复——
+							// 一条送达后清掉该节点此前的回程指纹，避免
+							// A→B→A 的回摆变化被旧指纹吞掉。
+							if outcome == notifyOutcomeSent {
+								h.notifier.forgetFingerprintPrefix(
+									notifyEventRouteChange + "\x00回程线路变化\x00节点：" + name + "\n")
+							}
+						})
 				}
 			}
 			h.nodeRoutes.set(nodeID, r)

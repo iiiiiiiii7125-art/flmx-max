@@ -1756,6 +1756,13 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			}
 			h.notify(notifyEventKernelError, "内核运行出错", msg)
 		}
+		if newStatus != kernelStatusError && k.Status == kernelStatusError && h.notifier != nil {
+			// A7-02：内核恢复没有恢复通知可挂——直接清掉该内核的问题
+			// 指纹，否则 30 分钟窗口内再次出错会被指纹吞掉（同一问题
+			// 只提醒一次以「恢复后重新武装」为前提）。
+			h.notifier.forgetFingerprintPrefix(notifyEventKernelError + "\x00内核运行出错\x00" +
+				fmt.Sprintf("节点：%s\n内核：%s", h.nodeLabel(nodeID), k.KernelType))
+		}
 		fields := map[string]interface{}{
 			"status":       newStatus,
 			"last_error":   s.Error,
@@ -1803,6 +1810,13 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	}
 }
 
+// kernelStatusParallel 是内核状态轮询的单节点并发上限（D6-04）：旧实现
+// 串行逐节点 refreshNodeKernelStatus，命令通道挂死的节点每个吃满
+// kernelCommandTimeout（20s），一轮可被拖到小时级，后面节点的内核错误
+// 通知与计数入账全部迟到。节点间状态互不依赖，改为有限并发；单个节点
+// 内部的顺序语义不变。
+const kernelStatusParallel = 8
+
 func (h *Handler) runKernelStatusLoop(ctx context.Context) {
 	defer h.jobsWG.Done()
 	ticker := time.NewTicker(kernelStatusInterval)
@@ -1813,17 +1827,41 @@ func (h *Handler) runKernelStatusLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		nodeIDs, err := h.repo.ListKernelNodeIDs()
-		if err != nil {
-			log.Printf("kernel status node lookup failed: %v", err)
-			continue
-		}
-		for _, nodeID := range nodeIDs {
-			node, err := h.repo.GetNodeByID(nodeID)
-			if err != nil || node == nil || node.Status != 1 {
-				continue
-			}
-			h.refreshNodeKernelStatus(nodeID)
-		}
+		h.refreshKernelStatuses()
 	}
+}
+
+// refreshKernelStatuses 执行一轮内核状态刷新（全部内核节点、有限并发）。
+func (h *Handler) refreshKernelStatuses() {
+	nodeIDs, err := h.repo.ListKernelNodeIDs()
+	if err != nil {
+		log.Printf("kernel status node lookup failed: %v", err)
+		return
+	}
+	runParallelNodeTasks(nodeIDs, kernelStatusParallel, func(nodeID int64) {
+		node, err := h.repo.GetNodeByID(nodeID)
+		if err != nil || node == nil || node.Status != 1 {
+			return
+		}
+		h.refreshNodeKernelStatus(nodeID)
+	})
+}
+
+// runParallelNodeTasks 以至多 limit 个并发对每个 id 执行 fn 并等待全部完成。
+func runParallelNodeTasks(ids []int64, limit int, fn func(int64)) {
+	if limit < 1 {
+		limit = 1
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id int64) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			fn(id)
+		}(id)
+	}
+	wg.Wait()
 }

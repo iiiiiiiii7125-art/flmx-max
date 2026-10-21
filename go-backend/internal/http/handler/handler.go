@@ -62,6 +62,18 @@ type Handler struct {
 	jobsStarted bool
 	jobsWG      sync.WaitGroup
 
+	// FIX-D（D6-07）：通知派发有界队列 + worker 池状态（notify.go）。
+	notifyMu      sync.Mutex
+	notifyQueue   chan notifyJob
+	notifyCancel  context.CancelFunc
+	notifyRunning bool
+	notifyWG      sync.WaitGroup
+	// 通知配置读取缓存（短 TTL + 配置写路径显式失效），消除每条通知
+	// 一次 vite_config 全表扫描。
+	notifyCfgMu   sync.Mutex
+	notifyCfgVals map[string]string
+	notifyCfgAt   time.Time
+
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
 	pendingUpgradeRedeploy      map[int64]struct{}
@@ -1216,6 +1228,7 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.invalidateNotifyConfigCache()
 	for _, key := range hooks {
 		h.notifyTunnelQualityConfigChanged(key)
 		h.onLatencyConfigChanged(key, prevPools[key])
@@ -1267,6 +1280,7 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		h.invalidateNotifyConfigCache()
 		h.notifyTunnelQualityConfigChanged(name)
 		h.onLatencyConfigChanged(name, prevPool)
 
@@ -1279,6 +1293,7 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.invalidateNotifyConfigCache()
 	h.notifyTunnelQualityConfigChanged(name)
 	h.onLatencyConfigChanged(name, prevPool)
 
