@@ -118,7 +118,7 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			if route == nil || len(route.Nodes()) == 0 {
 				// Fail closed (D1-H4): a configured chain that yields no
 				// route must not fall back to a direct dial. Mirrors Bind.
-				err = ErrEmptyRoute
+				err = emptyRouteError(r.options.Chain)
 				return
 			}
 		}
@@ -174,7 +174,7 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		if r.options.Chain != nil {
 			route = r.options.Chain.Route(ctx, network, address)
 			if route == nil || len(route.Nodes()) == 0 {
-				err = ErrEmptyRoute
+				err = emptyRouteError(r.options.Chain)
 				return
 			}
 		}
