@@ -1036,6 +1036,188 @@ test_download_verified_fail_closed_edges() (
   [[ "$rc" != "0" ]] || fail "F-138: FLMX_VERIFY_DOWNLOADS=yes must not silently skip verification"
 )
 
+test_preserve_compose_networks_keeps_existing_subnet() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/current.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.3.2
+networks:
+  gost-network:
+    name: gost-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.80.0.0/16
+YAML
+  cat > "$work/candidate.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.3.3
+networks:
+  gost-network:
+    name: gost-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+YAML
+
+  preserve_compose_networks "$work/candidate.yml" "$work/current.yml"
+
+  grep -q "subnet: 172.80.0.0/16" "$work/candidate.yml" \
+    || fail "FIX2-C#1: existing subnet must be carried into the update candidate"
+  if grep -q "172.30.0.0/16" "$work/candidate.yml"; then
+    fail "FIX2-C#1: template subnet must not overwrite an existing deployment"
+  fi
+  grep -q "example/backend:1.3.3" "$work/candidate.yml" \
+    || fail "FIX2-C#1: candidate content must otherwise be preserved"
+)
+
+test_preserve_compose_networks_no_subnet_existing() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/current.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.3.2
+networks:
+  gost-network:
+    name: gost-network
+    driver: bridge
+YAML
+  cat > "$work/candidate.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.3.3
+networks:
+  gost-network:
+    name: gost-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+YAML
+
+  preserve_compose_networks "$work/candidate.yml" "$work/current.yml"
+
+  if grep -q "subnet:" "$work/candidate.yml"; then
+    fail "FIX2-C#1: a deployment without an explicit subnet must not gain the template subnet"
+  fi
+)
+
+test_activate_panel_update_files_preserves_subnet() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'FLUX_VERSION=1.3.2\nJWT_SECRET=x\n' > .env
+  cat > docker-compose.yml <<'YAML'
+networks:
+  gost-network:
+    name: gost-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.80.0.0/16
+YAML
+  cat > candidate.yml <<'YAML'
+networks:
+  gost-network:
+    name: gost-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+YAML
+
+  UPDATE_COMPOSE_CANDIDATE="$work/candidate.yml"
+  LATEST_VERSION="1.3.3"
+  activate_panel_update_files
+
+  grep -q "subnet: 172.80.0.0/16" docker-compose.yml \
+    || fail "FIX2-C#1: activate_panel_update_files must keep the deployed subnet"
+  if grep -q "172.30.0.0/16" docker-compose.yml; then
+    fail "FIX2-C#1: activate_panel_update_files must not switch the deployed subnet"
+  fi
+  grep -q "FLUX_VERSION=1.3.3" .env \
+    || fail "activate_panel_update_files must still bump FLUX_VERSION"
+)
+
+test_get_deployed_panel_version_parses_image_tag() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  docker() {
+    if [[ "$1" == "inspect" ]]; then
+      echo "ghcr.io/example/flmx-panel-backend:1.9.9"
+    fi
+  }
+  assert_equals "1.9.9" "$(get_deployed_panel_version)" \
+    "deployed version should come from the running backend image tag"
+
+  docker() {
+    if [[ "$1" == "inspect" ]]; then
+      echo "ghcr.io/example/flmx-panel-backend@sha256:deadbeef"
+    fi
+  }
+  if get_deployed_panel_version >/dev/null; then
+    fail "FIX2-C#9: an image without a tag must not yield a deployed version"
+  fi
+)
+
+test_update_panel_crosschecks_deployed_image_version() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # load_script_without_main 预设了 VERSION="v-test"（定版分支），
+  # 本例要走 latest 分支，必须先清掉。
+  unset VERSION
+
+  local calls=""
+  local deploy_dir
+  deploy_dir=$(mktemp -d)
+  printf 'FLUX_VERSION=1.0.0\nJWT_SECRET=x\n' > "$deploy_dir/.env"
+  printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
+
+  docker() {
+    if [[ "$1" == "inspect" ]]; then
+      echo "ghcr.io/example/flmx-panel-backend:1.9.9"
+    fi
+  }
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$deploy_dir"
+    cd "$deploy_dir"
+  }
+  ask_proxy_config() { PROXY_ENABLED="false"; }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  resolve_latest_release_tag() { echo "1.5.0"; }
+  download_panel_update_compose() { calls+=" download"; }
+
+  # .env 自称 1.0.0、实际运行 1.9.9、目标 1.5.0：按 .env 判定会
+  # 放行，按实际运行版本判定必须以「降级」拒绝。
+  if update_panel >/dev/null; then
+    fail "FIX2-C#9: update to 1.5.0 must be rejected when the deployed image is 1.9.9"
+  fi
+  assert_equals "" "$calls" \
+    "FIX2-C#9: a downgrade against the deployed version must be rejected before downloading"
+)
+
+test_preserve_compose_networks_keeps_existing_subnet
+test_preserve_compose_networks_no_subnet_existing
+test_activate_panel_update_files_preserves_subnet
+test_get_deployed_panel_version_parses_image_tag
+test_update_panel_crosschecks_deployed_image_version
 test_install_flux_agent_keeps_service_when_download_fails
 test_install_panel_refuses_existing_deployment
 test_install_docker_rejects_unverified_script

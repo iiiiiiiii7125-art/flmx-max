@@ -20,6 +20,8 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/repo"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -647,7 +649,147 @@ func (e *systemUpgradeExecutor) replaceCompose(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
+	// FIX2-C #1（V6-01）：整份覆写前把存量 compose 的网络名与子网
+	// 搬进候选（见 preserveComposeNetworks）。存量文件读不到（首装
+	// 等）时按候选原样写。
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		data = preserveComposeNetworks(existing, data)
+	}
 	return writeFileWithMode(path, data, mode)
+}
+
+// preserveComposeNetworks 把存量 compose 的网络设置（networks.<name>
+// 的 name 与 ipam.config 整体）搬进待写入的新 compose，返回结果。
+//
+// 背景（V6-01）：FIX-G 把模板子网由 172.80 改为 172.30 只应作用于
+// 全新安装；升级整份覆写存量 compose 会连在用子网一起换掉，等于
+// 升级即重建面板网络（容器 IP 全变、后端可信代理判定随子网是否
+// RFC1918 静默翻转）。规则：候选与存量同名的网络，以存量为准——
+// 有 ipam.config 就整段搬（含 gateway 等附带项）；存量网络没有
+// ipam.config（docker 自动分配子网）则删掉候选的 config，不强加
+// 模板子网。存量无 networks 段、任一侧解析失败、或候选无 networks
+// 段时，候选原样返回（不比现状更糟）。
+func preserveComposeNetworks(existing, candidate []byte) []byte {
+	var existingDoc, candidateDoc yaml.Node
+	if err := yaml.Unmarshal(existing, &existingDoc); err != nil {
+		return candidate
+	}
+	if err := yaml.Unmarshal(candidate, &candidateDoc); err != nil {
+		return candidate
+	}
+	existingNetworks := yamlMappingChild(mappingRoot(&existingDoc), "networks")
+	candidateNetworks := yamlMappingChild(mappingRoot(&candidateDoc), "networks")
+	if existingNetworks == nil || candidateNetworks == nil {
+		return candidate
+	}
+
+	changed := false
+	for i := 0; i+1 < len(existingNetworks.Content); i += 2 {
+		name := existingNetworks.Content[i].Value
+		existingNet := existingNetworks.Content[i+1]
+		candidateNet := yamlMappingChild(candidateNetworks, name)
+		if candidateNet == nil || candidateNet.Kind != yaml.MappingNode {
+			continue
+		}
+		if existingNet.Kind != yaml.MappingNode {
+			continue
+		}
+		if nameNode := yamlMappingChild(existingNet, "name"); nameNode != nil && nameNode.Value != "" {
+			setYAMLMappingValue(candidateNet, "name", nameNode)
+			changed = true
+		}
+		existingIPAM := yamlMappingChild(existingNet, "ipam")
+		existingConfig := (*yaml.Node)(nil)
+		if existingIPAM != nil {
+			existingConfig = yamlMappingChild(existingIPAM, "config")
+		}
+		candidateIPAM := yamlMappingChild(candidateNet, "ipam")
+		switch {
+		case existingConfig != nil:
+			if candidateIPAM == nil {
+				candidateIPAM = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				setYAMLMappingValue(candidateNet, "ipam", candidateIPAM)
+			}
+			setYAMLMappingValue(candidateIPAM, "config", cloneYAMLNode(existingConfig))
+			changed = true
+		case candidateIPAM != nil && yamlMappingChild(candidateIPAM, "config") != nil:
+			// 存量无显式子网：删候选 config，维持自动分配语义。
+			removeYAMLMappingKey(candidateIPAM, "config")
+			changed = true
+		}
+	}
+	if !changed {
+		return candidate
+	}
+	out, err := yaml.Marshal(&candidateDoc)
+	if err != nil {
+		return candidate
+	}
+	return out
+}
+
+// mappingRoot 返回 YAML 文档的根 mapping（非 mapping 时 nil）。
+func mappingRoot(doc *yaml.Node) *yaml.Node {
+	if doc == nil || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	return root
+}
+
+// yamlMappingChild 在 mapping 节点中按 key 取值节点（无则 nil）。
+func yamlMappingChild(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// setYAMLMappingValue 设置 mapping 的 key（存在则替换值节点，不存在
+// 则追加）。value 节点会被直接挂上（调用方需传克隆或新节点）。
+func setYAMLMappingValue(mapping *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1] = value
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+}
+
+func removeYAMLMappingKey(mapping *yaml.Node, key string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+func cloneYAMLNode(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	c := *n
+	if n.Content != nil {
+		c.Content = make([]*yaml.Node, len(n.Content))
+		for i, child := range n.Content {
+			c.Content[i] = cloneYAMLNode(child)
+		}
+	}
+	if n.Alias != nil {
+		c.Alias = cloneYAMLNode(n.Alias)
+	}
+	return &c
 }
 
 func (h *Handler) buildSystemUpgradeDownloadURL(version, filename string) string {
