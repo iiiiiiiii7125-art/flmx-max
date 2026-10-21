@@ -497,36 +497,101 @@ func dialWebSocketWithFallback(dialer *websocket.Dialer, candidates []string) (*
 }
 
 var (
-	// JSON string values of credential-bearing keys.
-	sensitiveJSONValueRe = regexp.MustCompile(`(?i)("(?:[^"]*(?:secret|password|passwd|token|auth|private_?key)[^"]*)"\s*:\s*")[^"]*(")`)
+	// JSON keys whose values are credentials (same masking policy as
+	// the panel side, FIX-A): matched as a case-insensitive substring
+	// of the key name.
+	sensitiveJSONKeyRe = regexp.MustCompile(`(?i)secret|password|passwd|token|auth|private_?key`)
 	// URL query parameters carrying credentials (defense in depth for URLs
-	// embedded inside command payloads).
+	// embedded inside command payload string values).
 	sensitiveQueryValueRe = regexp.MustCompile(`(?i)((?:secret|token|password)=)[^&"\s]+`)
 )
 
-// redactSensitiveForLog masks credential values in a log rendering while
-// keeping the structure (types, names, ids) identifiable. Same masking
-// policy as the panel side (FIX-A): values of secret/token/password-class
-// keys become ***.
-func redactSensitiveForLog(s string) string {
-	s = sensitiveJSONValueRe.ReplaceAllString(s, "${1}***${2}")
-	s = sensitiveQueryValueRe.ReplaceAllString(s, "${1}***")
-	return s
+// redactCommandForLog renders a command payload for the log with every
+// credential value masked, keeping the structure (types, names, ids)
+// identifiable.
+//
+// FIX2-C #4（V1-N3）：the previous implementation masked JSON string
+// values with a `"[^"]*"` regex. A value containing an escaped quote
+// (\" — routine for passwords with a `"` in them, and exactly what
+// json.Marshal emits) terminated the match early and left the rest of
+// the secret in the log in clear text. Masking now happens on the
+// parsed document: unmarshal, replace values of credential-bearing
+// keys wholesale, re-marshal. If the payload does not parse, ok is
+// false and the caller must not render a detail line at all (the
+// type+requestId line from logReceivedCommand still identifies the
+// command) — never fall back to rendering the raw payload.
+func redactCommandForLog(payload []byte) (string, bool) {
+	var doc any
+	if err := json.Unmarshal(payload, &doc); err != nil {
+		return "", false
+	}
+	out, err := json.Marshal(maskSensitiveJSONValue(doc))
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
 }
 
+// maskSensitiveJSONValue walks a parsed JSON document: values under
+// credential-bearing keys are replaced wholesale; string values get
+// their embedded credential query parameters masked as defense in
+// depth (URLs inside command payloads).
+func maskSensitiveJSONValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for key, val := range t {
+			if sensitiveJSONKeyRe.MatchString(key) {
+				t[key] = "***"
+				continue
+			}
+			t[key] = maskSensitiveJSONValue(val)
+		}
+		return t
+	case []any:
+		for i, val := range t {
+			t[i] = maskSensitiveJSONValue(val)
+		}
+		return t
+	case string:
+		return sensitiveQueryValueRe.ReplaceAllString(t, "${1}***")
+	default:
+		return v
+	}
+}
+
+// sanitizeWebSocketURL masks credentials in a URL for logging.
+// FIX2-C #6（V1-N2）：the previous implementation only masked the
+// exact lowercase key "secret" and returned the raw URL when parsing
+// failed (fail-open — the opposite of the panel-side logredact
+// policy). Now: parameter names match case-insensitively, every
+// occurrence is masked, and an unparseable URL degrades to a
+// placeholder instead of the original text.
 func sanitizeWebSocketURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
+	if err != nil || u.Scheme == "" {
+		return "<invalid-url>"
 	}
 
 	if u.User != nil {
 		u.User = url.User("***")
 	}
-	q := u.Query()
-	if q.Get("secret") != "" {
-		q.Set("secret", "***")
-		u.RawQuery = q.Encode()
+	if u.RawQuery != "" {
+		pairs := strings.Split(u.RawQuery, "&")
+		for i, pair := range pairs {
+			key, _, found := strings.Cut(pair, "=")
+			if !found {
+				continue
+			}
+			if name, err := url.QueryUnescape(key); err == nil {
+				key = name
+			}
+			switch strings.ToLower(key) {
+			case "secret", "token", "password", "passwd", "auth":
+				// Keep the original key spelling (incl. case), mask the value.
+				pairs[i] = pair[:strings.Index(pair, "=")] + "=***"
+			}
+		}
+		u.RawQuery = strings.Join(pairs, "&")
 	}
 	return u.String()
 }
@@ -1016,8 +1081,13 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	// 两行都不得出现命令原文——服务配置内含代理密码/SS 密钥等凭据，
 	// 旧实现打印命令 JSON 全文会把凭据写进服务 journal。
 	logReceivedCommand(cmd)
+	// FIX2-C #4（V1-N3）：详情行走真 JSON 解析掩码；渲染失败（理论上
+	// 不会发生，输入是刚 Marshal 的命令）时整行不打，只保留上面
+	// type+requestId 一行，绝不回退原文。
 	if jsonBytes, errs := json.Marshal(cmd); errs == nil {
-		fmt.Println("🔔 命令详情(已脱敏): ", redactSensitiveForLog(string(jsonBytes)))
+		if detail, ok := redactCommandForLog(jsonBytes); ok {
+			fmt.Println("🔔 命令详情(已脱敏): ", detail)
+		}
 	}
 	var err error
 	var response CommandResponse
