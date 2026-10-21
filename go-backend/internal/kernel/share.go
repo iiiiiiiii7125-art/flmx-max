@@ -684,6 +684,15 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		// 移植自 kure29/flyx：规则模式时追加规则策略组并替换规则。
 		rules := []string{"GEOIP,LAN,DIRECT", "FINAL,节点选择"}
 		if opts.Rules {
+			// rulePolicyGroups 的成员模板引用「自动选择」，Surge 分支必须
+			// 同步生成同名组（其余渲染器都有），否则组引用悬空。形态对齐
+			// clientGroups：url-test、成员为全部节点；无节点时回退 select DIRECT。
+			if len(names) > 0 {
+				lines = append(lines, "自动选择 = url-test, "+strings.Join(names, ", ")+
+					", url=http://www.gstatic.com/generate_204, interval=300")
+			} else {
+				lines = append(lines, "自动选择 = select, DIRECT")
+			}
 			for _, g := range rulePolicyGroups(opts, regionNames) {
 				lines = append(lines, g.name+" = select, "+strings.Join(g.members, ", "))
 			}
