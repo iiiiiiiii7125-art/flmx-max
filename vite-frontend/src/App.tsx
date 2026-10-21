@@ -26,7 +26,7 @@ const MonitorPage = lazy(() => import("@/pages/monitor"));
 const MySubscriptionPage = lazy(() => import("@/pages/my-subscription"));
 const ForwardPage = lazy(() => import("@/pages/forward"));
 const TunnelPage = lazy(() => import("@/pages/tunnel"));
-const NodePage = lazy(() => import("@/pages/node"));
+const NodeHubPage = lazy(() => import("@/pages/node-hub"));
 const UserHubPage = lazy(() => import("@/pages/user-hub"));
 const ProfilePage = lazy(() => import("@/pages/profile"));
 const InboundPage = lazy(() => import("@/pages/inbound"));
@@ -236,7 +236,7 @@ function App() {
         <Route
           element={
             <ProtectedRoute>
-              <NodePage />
+              <NodeHubPage />
             </ProtectedRoute>
           }
           path="/node"

@@ -9,6 +9,7 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, LayoutGrid, List } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import {
   batchDeleteInbounds,
@@ -41,7 +42,7 @@ import {
   ImportModal,
 } from "@/pages/inbound/external";
 import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
-import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
+import { type NodeHubState } from "@/pages/node-hub";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import { RemoteSourcesSection } from "@/pages/inbound/sources";
 import { ShareModal, SubscriptionCard, copyText } from "@/pages/inbound/share";
@@ -72,7 +73,7 @@ const modalBase =
 
 type ConfirmAction = "delete" | "regenerate" | "reset";
 
-type PageTab = "inbounds" | "kernels" | "sources" | "sub";
+type PageTab = "inbounds" | "sources" | "sub";
 
 const TAB_KEY = "flmx_inbound_tab";
 
@@ -82,7 +83,7 @@ function usePageTab(): [PageTab, (t: PageTab) => void] {
     try {
       const v = localStorage.getItem(TAB_KEY);
 
-      return v === "kernels" || v === "sources" ? v : "inbounds";
+      return v === "sources" ? v : "inbounds";
     } catch {
       return "inbounds";
     }
@@ -221,6 +222,7 @@ export default function InboundPage() {
   const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [nodeFilter, setNodeFilter] = useState("");
   const [tab, setTab] = usePageTab();
+  const navigate = useNavigate();
   const [sheetFor, setSheetFor] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [externalEdit, setExternalEdit] = useState<InboundApiItem | null>(null);
@@ -228,9 +230,6 @@ export default function InboundPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formInitial, setFormInitial] = useState<InboundForm>(() =>
     emptyForm(null),
-  );
-  const [installRequest, setInstallRequest] = useState<InstallRequest | null>(
-    null,
   );
   const [details, setDetails] = useState<InboundApiItem | null>(null);
   const [sharing, setSharing] = useState<InboundApiItem | null>(null);
@@ -279,17 +278,7 @@ export default function InboundPage() {
         if (capsRes.code === 0) setCaps(capsRes.data);
         if (sourceRes.code === 0) setSources(sourceRes.data ?? []);
         if (nodeRes.code === 0) setNodes(nodeRes.data || []);
-        if (kernelRes.code === 0) {
-          setKernels(kernelRes.data || []);
-          if (
-            initial &&
-            (kernelRes.data || []).length === 0 &&
-            inboundRes.code === 0 &&
-            (inboundRes.data || []).length === 0
-          ) {
-            setTab("kernels");
-          }
-        }
+        if (kernelRes.code === 0) setKernels(kernelRes.data || []);
         if (inboundRes.code === 0) {
           const rows = inboundRes.data || [];
 
@@ -368,13 +357,15 @@ export default function InboundPage() {
     setFormOpen(true);
   };
 
+  // Kernels live under 节点 → 内核.
   const handleInstallFromForm = useCallback(
     (nodeId: number, kernelType: string) => {
       setFormOpen(false);
-      setTab("kernels");
-      setInstallRequest({ nodeId, kernelType });
+      navigate("/node", {
+        state: { install: { nodeId, kernelType } } satisfies NodeHubState,
+      });
     },
-    [setTab],
+    [navigate],
   );
 
   const handleToggle = async (item: InboundApiItem) => {
@@ -948,22 +939,9 @@ export default function InboundPage() {
   }
 
   const sheetItem = inbounds.find((i) => i.id === sheetFor) ?? null;
-  const kernelProblems = kernels.filter(
-    (k) => k.status === "error" || !k.nodeOnline,
-  ).length;
   const tabs: Array<{ key: PageTab; label: string; badge?: React.ReactNode }> =
     [
       { key: "inbounds", label: "入站", badge: inbounds.length || undefined },
-      {
-        key: "kernels",
-        label: "内核",
-        badge:
-          kernelProblems > 0 ? (
-            <span className="text-danger">{kernelProblems} 异常</span>
-          ) : (
-            kernels.length || undefined
-          ),
-      },
       { key: "sub", label: "订阅" },
       {
         key: "sources",
@@ -997,17 +975,6 @@ export default function InboundPage() {
           </button>
         ))}
       </div>
-
-      {tab === "kernels" && (
-        <KernelPanel
-          caps={caps}
-          installRequest={installRequest}
-          kernels={kernels}
-          nodes={nodes}
-          onChanged={() => loadData(false)}
-          onInstallRequestHandled={() => setInstallRequest(null)}
-        />
-      )}
 
       {tab === "sources" && (
         <RemoteSourcesSection
@@ -1166,7 +1133,11 @@ export default function InboundPage() {
                     color="primary"
                     size="sm"
                     variant="flat"
-                    onPress={() => setTab("kernels")}
+                    onPress={() =>
+                      navigate("/node", {
+                        state: { tab: "kernels" } satisfies NodeHubState,
+                      })
+                    }
                   >
                     去安装内核
                   </Button>
