@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, Check, QrCode } from "lucide-react";
+import { Copy, Check, QrCode, ChevronDown } from "lucide-react";
 
 import { getMyInbounds, getMySubscriptions, getSubInfo } from "@/api";
 import type { MySubscriptionItem } from "@/api";
@@ -8,6 +8,7 @@ import type { InboundApiItem } from "@/api/types";
 import { copyWithToast } from "@/utils/clipboard";
 import { formatTraffic } from "@/utils/traffic";
 import { QrCodeButton } from "@/pages/inbound/share";
+import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
@@ -39,6 +40,10 @@ export default function MySubscriptionPage() {
   const [subPath, setSubPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // 展开了流量统计的分配订阅 id（同一时间只展开一条）。
+  const [expandedTrafficId, setExpandedTrafficId] = useState<number | null>(
+    null,
+  );
 
   useEffect(() => {
     // getSubInfo 查默认订阅：未被分配默认订阅是正常状态，后端会回 403，
@@ -221,6 +226,24 @@ export default function MySubscriptionPage() {
                     </p>
                     {formatButtons(`assigned-${s.id}`, s.name, (f) => assignedUrl(s, f), true, inactiveReason)}
                   </div>
+                  <button
+                    aria-expanded={expandedTrafficId === s.id}
+                    className="flex w-full items-center justify-between text-sm font-medium text-default-600"
+                    type="button"
+                    onClick={() =>
+                      setExpandedTrafficId(
+                        expandedTrafficId === s.id ? null : s.id,
+                      )
+                    }
+                  >
+                    该订阅流量统计
+                    <ChevronDown
+                      className={`h-4 w-4 transition-transform ${expandedTrafficId === s.id ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {expandedTrafficId === s.id && (
+                    <SubTrafficStats mine id={s.id} />
+                  )}
                 </CardBody>
               </Card>
             );
