@@ -72,7 +72,20 @@ func (r *Repository) CreateNodeKernel(k *model.NodeKernel) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Create(k).Error
+	// 零值家族收口：NodeKernel.Enabled 带 `default:1`，Create 会吞掉
+	// 显式 0。现行两个调用点恒传 1，此处仍按 CreateNodeInbound
+	// （BUG-A4-1）范式留意图写回，避免未来调用方踩中同族坑。
+	wantEnabled := k.Enabled
+	if err := r.db.Create(k).Error; err != nil {
+		return err
+	}
+	if wantEnabled == 0 {
+		if err := r.db.Model(&model.NodeKernel{}).Where("id = ?", k.ID).Update("enabled", 0).Error; err != nil {
+			return err
+		}
+		k.Enabled = 0
+	}
+	return nil
 }
 
 // UpdateNodeKernelFields updates selected columns; zero values are written.
