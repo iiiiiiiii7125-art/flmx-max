@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +82,20 @@ type tunnelQualityProber struct {
 	lastPrune int64
 	probing   int32 // atomic flag: 1 = probeAll running, 0 = idle
 	probeNode bestExitProbeFunc
+
+	// D6-02：探测配置短时缓存（三键合读一次，替代每轮 2 次配置查询）。
+	cfgMu       sync.Mutex
+	cfgLoaded   bool
+	cfgLoadedAt time.Time
+	cfgValues   tunnelQualityProbeConfig
+	// D6-02：单轮缓存——同一节点在一轮内的多次 getNodeRecord 合并为
+	// 一次；隧道 IP 偏好整轮一次批量查询。probeAll 有防重入，轮不重叠。
+	roundMu       sync.Mutex
+	roundActive   bool
+	roundNodes    map[int64]*nodeRecord
+	roundNodeErrs map[int64]error
+	roundIPPref   map[int64]string
+	roundIPPrefOK bool
 }
 
 // newTunnelQualityProber creates a new prober (not yet running).
@@ -108,7 +123,14 @@ func (p *tunnelQualityProber) Stop() {
 }
 
 func (p *tunnelQualityProber) NotifyConfigChanged() {
-	if p == nil || p.wake == nil {
+	if p == nil {
+		return
+	}
+	// D6-02：配置变更立即失效探测配置缓存，下一轮/下一次读即新值。
+	p.cfgMu.Lock()
+	p.cfgLoaded = false
+	p.cfgMu.Unlock()
+	if p.wake == nil {
 		return
 	}
 	select {
@@ -166,16 +188,58 @@ func stopAndDrainTunnelQualityTimer(timer *time.Timer) {
 	}
 }
 
+// tunnelQualityProbeConfig 是一轮探测用到的三项配置的快照。
+type tunnelQualityProbeConfig struct {
+	interval  time.Duration
+	enabled   bool
+	retention int
+}
+
+// tunnelQualityConfigCacheTTL 是探测配置缓存有效期（D6-02）。
+// NotifyConfigChanged 会提前失效，TTL 只兜底未走通知的写路径。
+const tunnelQualityConfigCacheTTL = 5 * time.Second
+
+// probeConfig 三键合读一次并短时缓存：旧实现 probeInterval 与
+// retentionDays 各查一次、isEnabled 再查一次，一轮多次往返
+// vite_config。语义与逐个读完全一致（缺失/出错 → 默认值）。
+func (p *tunnelQualityProber) probeConfig() tunnelQualityProbeConfig {
+	defaults := tunnelQualityProbeConfig{
+		interval:  time.Duration(monitoring.DefaultTunnelQualityProbeIntervalSec) * time.Second,
+		enabled:   true,
+		retention: monitoring.DefaultMonitorRetentionDays,
+	}
+	if p == nil || p.handler == nil || p.handler.repo == nil {
+		return defaults
+	}
+	p.cfgMu.Lock()
+	defer p.cfgMu.Unlock()
+	if p.cfgLoaded && time.Since(p.cfgLoadedAt) < tunnelQualityConfigCacheTTL {
+		return p.cfgValues
+	}
+	cfg, err := p.handler.repo.GetConfigsByNames([]string{
+		monitoring.ConfigTunnelQualityProbeIntervalSec,
+		monitorTunnelQualityEnabledConfigKey,
+		monitoring.ConfigMonitorRetentionDays,
+	})
+	if err != nil {
+		return defaults
+	}
+	values := tunnelQualityProbeConfig{
+		interval: time.Duration(monitoring.TunnelQualityProbeIntervalSecondsFromConfigMap(cfg)) * time.Second,
+		// 与 isTunnelQualityMonitoringEnabled 同口径：缺失/异常视为
+		// 启用，仅显式 "false" 关闭。
+		enabled:   strings.TrimSpace(strings.ToLower(cfg[monitorTunnelQualityEnabledConfigKey])) != "false",
+		retention: monitoring.MonitoringRetentionDaysFromConfigMap(cfg),
+	}
+	p.cfgValues, p.cfgLoaded, p.cfgLoadedAt = values, true, time.Now()
+	return values
+}
+
 func (p *tunnelQualityProber) probeInterval() time.Duration {
 	if p == nil || p.handler == nil || p.handler.repo == nil {
 		return time.Duration(monitoring.DefaultTunnelQualityProbeIntervalSec) * time.Second
 	}
-	cfg, err := p.handler.repo.GetConfigsByNames([]string{monitoring.ConfigTunnelQualityProbeIntervalSec})
-	if err != nil {
-		return time.Duration(monitoring.DefaultTunnelQualityProbeIntervalSec) * time.Second
-	}
-	seconds := monitoring.TunnelQualityProbeIntervalSecondsFromConfigMap(cfg)
-	return time.Duration(seconds) * time.Second
+	return p.probeConfig().interval
 }
 
 func (p *tunnelQualityProber) isEnabled() bool {
@@ -183,18 +247,14 @@ func (p *tunnelQualityProber) isEnabled() bool {
 		return true
 	}
 
-	return p.handler.isTunnelQualityMonitoringEnabled()
+	return p.probeConfig().enabled
 }
 
 func (p *tunnelQualityProber) retentionDays() int {
 	if p == nil || p.handler == nil || p.handler.repo == nil {
 		return monitoring.DefaultMonitorRetentionDays
 	}
-	cfg, err := p.handler.repo.GetConfigsByNames([]string{monitoring.ConfigMonitorRetentionDays})
-	if err != nil {
-		return monitoring.DefaultMonitorRetentionDays
-	}
-	return monitoring.MonitoringRetentionDaysFromConfigMap(cfg)
+	return p.probeConfig().retention
 }
 
 // maybePrune deletes old quality rows periodically (mirrors PruneServiceMonitorResults).
@@ -253,6 +313,10 @@ func (p *tunnelQualityProber) probeAll() {
 		return
 	}
 
+	// D6-02：开启轮内缓存（节点记录去重 + IP 偏好整轮批量预取）。
+	p.beginProbeRound(tunnelIDs)
+	defer p.endProbeRound()
+
 	// Probe tunnels concurrently with a worker limit
 	// (mirrors health.Checker worker pool pattern)
 	const maxWorkers = 20
@@ -275,6 +339,79 @@ func (p *tunnelQualityProber) probeAll() {
 		}(tunnelID)
 	}
 	wg.Wait()
+}
+
+// beginProbeRound 开启一轮的共享缓存：节点记录 map 清空待填，隧道
+// IP 偏好整轮一次批量查询（失败则读取方回退逐隧道查询）。
+func (p *tunnelQualityProber) beginProbeRound(tunnelIDs []int64) {
+	p.roundMu.Lock()
+	p.roundNodes = make(map[int64]*nodeRecord)
+	p.roundNodeErrs = make(map[int64]error)
+	p.roundIPPref = nil
+	p.roundIPPrefOK = false
+	p.roundActive = true
+	p.roundMu.Unlock()
+	if p.handler == nil || p.handler.repo == nil {
+		return
+	}
+	if prefs, err := p.handler.repo.ListTunnelIPPreferences(tunnelIDs); err == nil {
+		p.roundMu.Lock()
+		p.roundIPPref = prefs
+		p.roundIPPrefOK = true
+		p.roundMu.Unlock()
+	} else {
+		log.Printf("tunnel_quality_prober: batch ip preferences err=%v", err)
+	}
+}
+
+func (p *tunnelQualityProber) endProbeRound() {
+	p.roundMu.Lock()
+	defer p.roundMu.Unlock()
+	p.roundActive = false
+	p.roundNodes = nil
+	p.roundNodeErrs = nil
+	p.roundIPPref = nil
+	p.roundIPPrefOK = false
+}
+
+// nodeRecord 是 getNodeRecord 的轮内缓存包装（D6-02）：一轮内同一
+// 节点被选主跳/候选链路/best-exit 等多个阶段反复读取，旧实现每次
+// 都是一次 node 表查询（3 节点场景实测 10 次）。轮外（直调
+// probeTunnel 的路径）行为与 getNodeRecord 完全一致。
+func (p *tunnelQualityProber) nodeRecord(nodeID int64) (*nodeRecord, error) {
+	p.roundMu.Lock()
+	if p.roundActive {
+		if rec, ok := p.roundNodes[nodeID]; ok {
+			err := p.roundNodeErrs[nodeID]
+			p.roundMu.Unlock()
+			return rec, err
+		}
+	}
+	p.roundMu.Unlock()
+	rec, err := p.handler.getNodeRecord(nodeID)
+	p.roundMu.Lock()
+	if p.roundActive && p.roundNodes != nil {
+		p.roundNodes[nodeID] = rec
+		if err != nil {
+			p.roundNodeErrs[nodeID] = err
+		} else {
+			delete(p.roundNodeErrs, nodeID)
+		}
+	}
+	p.roundMu.Unlock()
+	return rec, err
+}
+
+// roundIPPreference 返回轮内批量预取的隧道 IP 偏好；第二返回值
+// false 表示本轮无批量结果（预取失败或不在轮内），调用方回退
+// GetTunnelIPPreference。
+func (p *tunnelQualityProber) roundIPPreference(tunnelID int64) (string, bool) {
+	p.roundMu.Lock()
+	defer p.roundMu.Unlock()
+	if p.roundActive && p.roundIPPrefOK {
+		return p.roundIPPref[tunnelID], true
+	}
+	return "", false
 }
 
 func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
@@ -307,7 +444,10 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 		return
 	}
 
-	ipPreference := h.repo.GetTunnelIPPreference(tunnelID)
+	ipPreference, ipPrefBatched := p.roundIPPreference(tunnelID)
+	if !ipPrefBatched {
+		ipPreference = h.repo.GetTunnelIPPreference(tunnelID)
+	}
 	inNodes, midNodesGrouped, outNodes := splitChainNodeGroups(chainRows)
 
 	options := diagnosisExecOptions{
@@ -390,7 +530,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 					ToNodeName:   target.NodeName,
 				}
 
-				targetNode, nodeErr := h.getNodeRecord(target.NodeID)
+				targetNode, nodeErr := p.nodeRecord(target.NodeID)
 				if nodeErr != nil || !isTunnelProbeNodeOnline(targetNode) {
 					snap.ErrorMessage = "节点 " + target.NodeName + " 不可用"
 					probeOK = false
@@ -400,7 +540,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 					break
 				}
 
-				fromNode, _ := h.getNodeRecord(source.NodeID)
+				fromNode, _ := p.nodeRecord(source.NodeID)
 				targetIP, targetPort, resolveErr := resolveChainProbeTarget(fromNode, targetNode, target.Port, ipPreference, target.ConnectIP)
 				if resolveErr != nil {
 					snap.ErrorMessage = "解析节点 " + target.NodeName + " 失败: " + resolveErr.Error()
@@ -579,13 +719,13 @@ func (p *tunnelQualityProber) probeCandidateGroupLinks(
 					selectedNodeIDs[tunnelQualityGroupKey(toGroup.role, toGroup.roleIndex)] == target.NodeID,
 			}
 
-			sourceNode, sourceErr := p.handler.getNodeRecord(source.NodeID)
+			sourceNode, sourceErr := p.nodeRecord(source.NodeID)
 			if sourceErr != nil || !isTunnelProbeNodeOnline(sourceNode) {
 				item.ErrorMessage = "来源节点不在线"
 				items = append(items, item)
 				continue
 			}
-			targetNode, targetErr := p.handler.getNodeRecord(target.NodeID)
+			targetNode, targetErr := p.nodeRecord(target.NodeID)
 			if targetErr != nil || !isTunnelProbeNodeOnline(targetNode) {
 				item.ErrorMessage = "目标节点不在线"
 				items = append(items, item)
@@ -640,7 +780,7 @@ func (p *tunnelQualityProber) probePublicTargetCandidates(
 			HopIndex: fromIndex,
 			Selected: selectedNodeIDs[tunnelQualityGroupKey(fromRole, fromIndex)] == source.NodeID,
 		}
-		sourceNode, sourceErr := p.handler.getNodeRecord(source.NodeID)
+		sourceNode, sourceErr := p.nodeRecord(source.NodeID)
 		if sourceErr != nil || !isTunnelProbeNodeOnline(sourceNode) {
 			item.ErrorMessage = "来源节点不在线"
 			items = append(items, item)
@@ -668,7 +808,7 @@ func (p *tunnelQualityProber) firstOnlineChainNode(nodes []chainNodeRecord) (cha
 		return chainNodeRecord{}, nil, false
 	}
 	for _, candidate := range nodes {
-		node, err := p.handler.getNodeRecord(candidate.NodeID)
+		node, err := p.nodeRecord(candidate.NodeID)
 		if err == nil && isTunnelProbeNodeOnline(node) {
 			return candidate, node, true
 		}
@@ -689,12 +829,12 @@ func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chai
 	}
 	nodeMap := make(map[int64]*nodeRecord, len(owners)+len(outNodes))
 	for _, owner := range owners {
-		if node, err := p.handler.getNodeRecord(owner.NodeID); err == nil && node != nil {
+		if node, err := p.nodeRecord(owner.NodeID); err == nil && node != nil {
 			nodeMap[owner.NodeID] = node
 		}
 	}
 	for _, exit := range outNodes {
-		if node, err := p.handler.getNodeRecord(exit.NodeID); err == nil && node != nil {
+		if node, err := p.nodeRecord(exit.NodeID); err == nil && node != nil {
 			nodeMap[exit.NodeID] = node
 		}
 	}
@@ -731,7 +871,7 @@ func (p *tunnelQualityProber) tcpPingNode(nodeID int64, ip string, port int, opt
 		return 0, 100, nil
 	}
 
-	node, nodeErr := h.getNodeRecord(nodeID)
+	node, nodeErr := p.nodeRecord(nodeID)
 	if nodeErr != nil {
 		return 0, 100, nodeErr
 	}

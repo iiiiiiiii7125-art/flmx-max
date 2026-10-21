@@ -756,6 +756,25 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 	return port, nil
 }
 
+// ListTunnelIPPreferences 批量读取多条隧道的出口 IP 偏好（D6-02）：
+// 隧道质量探测原先逐隧道一次查询，一轮 N 条隧道即 N 次；现整轮一次
+// IN 查询拿全。缺失的隧道不在结果 map 中（读取方按空偏好处理，与
+// GetTunnelIPPreference 的缺失语义一致）。
+func (r *Repository) ListTunnelIPPreferences(ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	if r == nil || r.db == nil || len(ids) == 0 {
+		return out, nil
+	}
+	var rows []model.Tunnel
+	if err := r.db.Select("id", "ip_preference").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, t := range rows {
+		out[t.ID] = t.IPPreference
+	}
+	return out, nil
+}
+
 func (r *Repository) GetTunnelIPPreference(tunnelID int64) string {
 	if r == nil || r.db == nil {
 		return ""
