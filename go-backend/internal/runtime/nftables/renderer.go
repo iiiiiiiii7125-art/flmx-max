@@ -27,9 +27,16 @@ func RenderTable(plan NodePlan) string {
 		if family != "" {
 			dnatFamily = family + " "
 		}
+		// A4-005（BC-03）：设了 BindIP 的转发只 DNAT 发往该地址的流量，
+		// 不再在节点全部地址上生效（与 gost/realm 的 bind 口径对齐）。
+		bindMatch := ""
+		if fam, ip, ok := bindIPFamilyIP(rule.BindIP); ok {
+			bindMatch = fmt.Sprintf("%s daddr %s ", fam, ip)
+		}
 		for _, protocol := range normalizedProtocols(rule.Protocols) {
-			b.WriteString(fmt.Sprintf("    %s dport %d counter dnat %sto %s comment %q\n",
+			b.WriteString(fmt.Sprintf("    %s %sdport %d counter dnat %sto %s comment %q\n",
 				protocol,
+				bindMatch,
 				rule.InPort,
 				dnatFamily,
 				formatDNATTarget(rule.TargetHost, rule.TargetPort),
@@ -52,19 +59,27 @@ func RenderTable(plan NodePlan) string {
 			continue
 		}
 		targetHost := strings.Trim(strings.TrimSpace(rule.TargetHost), "[]")
+		// A4-005：计数同样按原始目的地址（= BindIP）收紧，避免发往其他
+		// 地址的同端口流量被算进本转发。
+		bindMatch := ""
+		if fam, ip, ok := bindIPFamilyIP(rule.BindIP); ok {
+			bindMatch = fmt.Sprintf("ct original %s daddr %s ", fam, ip)
+		}
 		for _, protocol := range normalizedProtocols(rule.Protocols) {
-			b.WriteString(fmt.Sprintf("    meta l4proto %s ct original proto-dst %d %s daddr %s %s dport %d counter comment %q\n",
+			b.WriteString(fmt.Sprintf("    meta l4proto %s ct original proto-dst %d %s%s daddr %s %s dport %d counter comment %q\n",
 				protocol,
 				rule.InPort,
+				bindMatch,
 				family,
 				targetHost,
 				protocol,
 				rule.TargetPort,
 				counterComment(rule.ForwardID, CounterDirectionToTarget, protocol),
 			))
-			b.WriteString(fmt.Sprintf("    meta l4proto %s ct original proto-dst %d %s saddr %s %s sport %d counter comment %q\n",
+			b.WriteString(fmt.Sprintf("    meta l4proto %s ct original proto-dst %d %s%s saddr %s %s sport %d counter comment %q\n",
 				protocol,
 				rule.InPort,
+				bindMatch,
 				family,
 				targetHost,
 				protocol,
@@ -84,14 +99,41 @@ func counterComment(forwardID int64, direction, protocol string) string {
 
 func RuleHash(rule Rule) string {
 	protocols := normalizedProtocols(rule.Protocols)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%d|%s",
+	// A4-005：BindIP 已参与渲染，必须进 hash——否则改 inIp 不触发规则
+	// 代际更新（旧实现有专测固化忽略行为，随渲染修复一并废止）。
+	_, bindIP, _ := bindIPFamilyIP(rule.BindIP)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%d|%s|%s",
 		rule.ForwardID,
 		rule.InPort,
 		strings.TrimSpace(rule.TargetHost),
 		rule.TargetPort,
 		strings.Join(protocols, ","),
+		bindIP,
 	)))
 	return hex.EncodeToString(sum[:])
+}
+
+// bindIPFamilyIP extracts the matchable address from a forward's BindIP
+// (plain IP, bracketed IPv6, or host:port as tolerated by the gost path).
+// ok=false when BindIP is empty or not an IP literal (no restriction then,
+// preserving the historical wildcard behavior for unparseable values).
+func bindIPFamilyIP(bindIP string) (family, ip string, ok bool) {
+	trimmed := strings.TrimSpace(bindIP)
+	if trimmed == "" {
+		return "", "", false
+	}
+	host := strings.Trim(trimmed, "[]")
+	if h, _, err := net.SplitHostPort(trimmed); err == nil {
+		host = h
+	}
+	parsed := net.ParseIP(host)
+	if parsed == nil {
+		return "", "", false
+	}
+	if parsed.To4() == nil {
+		return "ip6", host, true
+	}
+	return "ip", host, true
 }
 
 func PlanHashes(plan NodePlan) map[int64]string {
