@@ -106,7 +106,13 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 		where string
 	}{
 		{"forward_port", "idx_forward_port_node_port", "(node_id, port)", ""},
-		{"chain_tunnel", "idx_chain_tunnel_node_port", "(node_id, port)", ""},
+		// FIX132-C（A3-S1）：chain 索引改部分索引，与预检口径一致。
+		// 预检只数 port > 0 的重复（port NULL/0 均为「未定端口」语义，
+		// 见 BUG-A2-3）；原全量索引下两行同节点 port=0 能过预检、却在
+		// 建索引时撞唯一约束使启动失败，与 D23「发现重复只跳过」的
+		// 设计相悖。已建有全量同名索引的库走上方「同名跳过」，其索引
+		// 建成时即无重复、后续亦由该索引继续拦截，无需转换。
+		{"chain_tunnel", "idx_chain_tunnel_node_port", "(node_id, port)", "WHERE port > 0"},
 		// B4/F-003: node_inbound 直接建部分唯一索引——唯一性只对内核托管
 		// 入站（kernel_id > 0，真实本地监听）有意义；导入行 kernel_id=0，
 		// 同端口不同主机合法共存。存量库里已建的全量同名索引由 v2 迁移
@@ -132,7 +138,9 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 		}
 
 		start := time.Now()
-		// 注意：chain_tunnel.port 可为空，NULL 不参与唯一约束（SQL 标准）。
+		// 注意：chain_tunnel.port 可为空，NULL 不参与唯一约束（SQL
+		// 标准）；port=0 同为「未定端口」，由部分索引 WHERE port > 0
+		// 一并排除（A3-S1），与预检口径一致。
 		sql := fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s %s %s", idx.name, idx.table, idx.cols, idx.where)
 		if err := db.Exec(sql).Error; err != nil {
 			return fmt.Errorf(

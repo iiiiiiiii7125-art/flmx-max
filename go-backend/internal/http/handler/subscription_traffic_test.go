@@ -69,6 +69,14 @@ func TestUserSubscriptionTrafficGuards(t *testing.T) {
 	if err := r.SetUserSubscriptions(2, []int64{assigned.ID}); err != nil {
 		t.Fatal(err)
 	}
+	// FIX132-C 订正（A3-04）：首样本只建基线不计入，先落零值基线，
+	// 再以第二笔样本产生增量；下方鉴权与出数断言不变。
+	if err := r.ApplySubscriptionCounterSamples(1, "e", []repo.SubscriptionCounterSample{
+		{SubscriptionID: assigned.ID, Direction: "up", Bytes: 0},
+		{SubscriptionID: assigned.ID, Direction: "down", Bytes: 0},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.ApplySubscriptionCounterSamples(1, "e", []repo.SubscriptionCounterSample{
 		{SubscriptionID: assigned.ID, Direction: "up", Bytes: 100},
 		{SubscriptionID: assigned.ID, Direction: "down", Bytes: 200},

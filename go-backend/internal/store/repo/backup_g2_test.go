@@ -23,6 +23,16 @@ import (
 
 func seedChainTunnelFixtures(t *testing.T, r *Repository, now int64) {
 	t.Helper()
+	// FIX132-C 订正：链路引用 node 1，夹具补齐该节点行。原夹具只有
+	// 悬空引用（真实库中 chain_tunnel.node_id 必有对应节点，经 API
+	// 创建时校验）；D4-03 起导入对不存在的引用整行跳过，悬空夹具
+	// 会把「跳过」误读成 A2-3 修复失效。
+	if err := r.DB().Exec(`
+		INSERT INTO node(id, name, secret, server_ip, port, created_time, updated_time, status)
+		VALUES(1, 'g2-node', 'nsecret', '10.0.0.1', '1000-1010', ?, ?, 1)
+	`, now, now).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
 	if err := r.DB().Exec(`
 		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, inx)
 		VALUES(11, 'g2-t1', 1.0, 2, 'tls', 1000, ?, ?, 1, 0),
@@ -98,6 +108,14 @@ func TestBackupRestoreChainTunnelsDeletesStaleRows(t *testing.T) {
 	}
 
 	dest := openBackupRepo(t, "g2-stale-dst.db")
+	// FIX132-C 订正：本用例只导入 tunnels 段，链路引用的 node 1
+	// 须在目标库先行存在（同 seedChainTunnelFixtures 的理由）。
+	if err := dest.DB().Exec(`
+		INSERT INTO node(id, name, secret, server_ip, port, created_time, updated_time, status)
+		VALUES(1, 'g2-node', 'nsecret', '10.0.0.1', '1000-1010', ?, ?, 1)
+	`, now, now).Error; err != nil {
+		t.Fatalf("seed dest node: %v", err)
+	}
 	if err := dest.DB().Exec(`
 		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, inx)
 		VALUES(11, 'g2-t1-drifted', 1.0, 2, 'tls', 1000, ?, ?, 1, 0)
@@ -201,6 +219,14 @@ func TestBackupImportUserSubscriptionsSkipsUnresolvable(t *testing.T) {
 func TestBackupRoundTripsSpeedLimitTunnelBinding(t *testing.T) {
 	now := time.Now().UnixMilli()
 	source := openBackupRepo(t, "g2-sl-src.db")
+	// FIX132-C 订正：补齐被绑定的隧道行（原夹具引用不存在的隧道
+	// 11；D4-03 起导入对悬空绑定整行跳过，保真断言无从成立）。
+	if err := source.DB().Exec(`
+		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, inx)
+		VALUES(11, 'g2-t1', 1.0, 2, 'tls', 1000, ?, ?, 1, 0)
+	`, now, now).Error; err != nil {
+		t.Fatalf("seed tunnel: %v", err)
+	}
 	if err := source.DB().Exec(`
 		INSERT INTO speed_limit(id, name, speed, tunnel_id, tunnel_name, created_time, updated_time, status)
 		VALUES(7, 'g2-limit', 100, 11, 'g2-t1', ?, ?, 1)

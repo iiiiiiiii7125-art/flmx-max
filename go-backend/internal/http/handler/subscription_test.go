@@ -66,6 +66,10 @@ func TestKernelPayloadCarriesActiveShareSubscriptions(t *testing.T) {
 	// Per-user counters: deltas within an epoch, the whole value after one.
 	s.TrafficLimit = 1000
 	_ = r.SaveSubscription(s)
+	// FIX132-C 订正（A3-04）：首样本只建基线不计入，先以零值样本
+	// 建 e1 基线；下方断言（同 epoch 差分、换 epoch 全量、超限
+	// 切断）与原期望不变。
+	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 0}, {ID: s.ID, Dir: "down", Bytes: 0}}, now)
 	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 100}, {ID: s.ID, Dir: "down", Bytes: 300}}, now)
 	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 150}, {ID: s.ID, Dir: "down", Bytes: 300}}, now)
 	h.applyUserCounters(nodeID, "e2", []agentUserCounter{{ID: s.ID, Dir: "down", Bytes: 50}}, now)
