@@ -194,11 +194,15 @@ func TestBackupTableCoverage(t *testing.T) {
 		"subscription":         "inbounds",
 		"remote_source":        "inbounds",
 		"sub_user":             "inbounds",
+		// FIX132-C：A3-04 订阅计数基线随 inbounds 段；A3-05 两表随
+		// nodes 段（nodeSSHConfigs / peerShares 独立键）。
+		"subscription_counter": "inbounds",
+		"node_ssh_config":      "nodeSSHConfigs",
+		"peer_share":           "peerShares",
 	}
 	// excluded: 表 -> 排除理由（安全凭据 / 运行时状态 / 遥测时序 / 簿记）。
 	excluded := map[string]string{
 		"passkey":                    "凭据材料，安全排除（O7 口径：备份不含 passkey）",
-		"node_ssh_config":            "含 SSH 密码/私钥，安全排除（与 passkey 同口径）",
 		"nft_rule_binding":           "nft 运行时状态，由 reconcile 按期望状态重建",
 		"nft_counter_state":          "nft 计数基线，运行时状态",
 		"nft_pending_delete":         "pending-delete 重试台账，运行时状态",
@@ -209,9 +213,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"tunnel_metric":              "监控遥测时序",
 		"tunnel_quality":             "质量探测时序",
 		"service_monitor_result":     "监控结果时序（定义在 service_monitor，已备份）",
-		"subscription_counter":       "订阅流量计数基线，运行时状态",
 		"subscription_traffic":       "订阅流量时序遥测，非配置数据（400 天保留，计数样本持续重建）",
-		"peer_share":                 "联邦共享定义绑定对端实例，跨实例恢复无语义",
 		"peer_share_runtime":         "联邦运行时状态",
 		"peer_share_resource":        "联邦运行时状态",
 		"federation_tunnel_binding":  "联邦运行时绑定，跨实例恢复无语义",

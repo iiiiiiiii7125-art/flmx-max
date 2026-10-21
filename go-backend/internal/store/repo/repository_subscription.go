@@ -287,10 +287,23 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 			if s.Bytes < 0 || (s.Direction != "up" && s.Direction != "down") {
 				continue
 			}
-			delta := s.Bytes
 			old, seen := prev[key{s.SubscriptionID, s.Direction}]
-			if seen && old.Epoch == epoch && s.Bytes >= old.Bytes {
+			var delta int64
+			switch {
+			case !seen:
+				// A3-04/X2：基线缺失只建基线、不计增量（与 nft 转发
+				// 路径 buildNftCounterDeltas 同口径）。旧语义把整段
+				// 累计当增量：干净恢复（基线未随备份）或基线行丢失后
+				// 首个样本会把历史流量重复计入一遍，可把正常订阅顶
+				// 过上限被停用（X2 探针 D：1000/2000 → 2000/4000）。
+				delta = 0
+			case old.Epoch == epoch && s.Bytes >= old.Bytes:
 				delta = s.Bytes - old.Bytes
+			default:
+				// epoch 变化（agent 重建计数表，累计自零起）或同
+				// epoch 计数回退：整段均为未计过的新流量，全量计
+				// （既有语义不变）。
+				delta = s.Bytes
 			}
 			if delta > 0 {
 				if s.Direction == "up" {

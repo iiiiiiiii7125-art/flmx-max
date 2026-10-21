@@ -219,6 +219,20 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
 			return err
 		}
+		// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些
+		// relay 的 user_inbound 授权行——授权可属于其它用户（按用户
+		// 独立分配），仅按 user_id 清理覆盖不到，会留下他人孤儿授权。
+		var userForwardIDs []int64
+		if err := tx.Model(&model.Forward{}).Where("user_id = ?", userID).Pluck("id", &userForwardIDs).Error; err != nil {
+			return err
+		}
+		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", userForwardIDs)
+		if err != nil {
+			return err
+		}
+		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
+			return err
+		}
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
@@ -527,6 +541,14 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.SubscriptionCounter{}).Error; err != nil {
 			return err
 		}
+		// A3-10: 延迟样本与流量序号台账同为按 node_id 的行，一并清理
+		// （样本原靠 7 天保留期自愈、node_seq 原永久残留一行/节点）。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeLatencySample{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&NodeSeq{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", nodeID).Delete(&model.Node{}).Error
 	})
 }
@@ -806,6 +828,15 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 		}
 		// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
 		// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
+		// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些 relay
+		// 的 user_inbound 授权行，避免孤儿授权残留。
+		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", forwardIDs)
+		if err != nil {
+			return err
+		}
+		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
+			return err
+		}
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
@@ -1027,6 +1058,16 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 			return err
 		}
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
+			return err
+		}
+		// A3-03/X2-01：删 relay 行前先物化其 id 集合，同步清理指向
+		// 这些 relay 的 user_inbound 授权行，否则留下孤儿授权
+		// （与单删 DeleteInboundRelay 的口径一致）。
+		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id = ?", forwardID)
+		if err != nil {
+			return err
+		}
+		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 			return err
 		}
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NodeInboundRelay{}).Error; err != nil {

@@ -24,7 +24,8 @@ func TestApplySubscriptionCounterSamplesWritesHourlyTraffic(t *testing.T) {
 	now1 := int64(1700000000000)
 	hour1 := now1 - now1%hourMs
 
-	// 第一批：基线 up 200 / down 500。
+	// 第一批：只建基线 up 200 / down 500（FIX132-C/A3-04：基线缺失
+	// 只建基线、不计增量；旧断言把首批全量计入桶，编码的是缺陷语义）。
 	if err := r.ApplySubscriptionCounterSamples(7, "e1", []SubscriptionCounterSample{
 		{SubscriptionID: sub.ID, Direction: "up", Bytes: 200},
 		{SubscriptionID: sub.ID, Direction: "down", Bytes: 500},
@@ -48,8 +49,8 @@ func TestApplySubscriptionCounterSamplesWritesHourlyTraffic(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("want 1 hourly bucket so far, got %+v", rows)
 	}
-	if rows[0].Hour != hour1 || rows[0].UploadBytes != 260 || rows[0].DownloadBytes != 900 {
-		t.Fatalf("bucket = %+v, want hour=%d up=260 down=900", rows[0], hour1)
+	if rows[0].Hour != hour1 || rows[0].UploadBytes != 60 || rows[0].DownloadBytes != 400 {
+		t.Fatalf("bucket = %+v, want hour=%d up=60 down=400 (deltas over the batch-1 baseline)", rows[0], hour1)
 	}
 	// 计数等价：桶合计与订阅累计值逐值一致。
 	var got model.Subscription
@@ -96,9 +97,16 @@ func TestDeleteSubscriptionClearsTrafficBuckets(t *testing.T) {
 		if err := r.DB().Create(&sub).Error; err != nil {
 			t.Fatalf("create subscription: %v", err)
 		}
+		// 两批种子：首批建基线（A3-04 后首批不计增量），第二批产生
+		// 真实增量与小时桶行。
 		if err := r.ApplySubscriptionCounterSamples(7, "e1", []SubscriptionCounterSample{
 			{SubscriptionID: sub.ID, Direction: "up", Bytes: 10},
 		}, 1700000000000); err != nil {
+			t.Fatalf("seed traffic baseline: %v", err)
+		}
+		if err := r.ApplySubscriptionCounterSamples(7, "e1", []SubscriptionCounterSample{
+			{SubscriptionID: sub.ID, Direction: "up", Bytes: 25},
+		}, 1700000060000); err != nil {
 			t.Fatalf("seed traffic: %v", err)
 		}
 		return sub
