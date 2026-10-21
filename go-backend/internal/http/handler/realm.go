@@ -325,6 +325,47 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 	return errors.Join(hardErrs...)
 }
 
+// markPendingRealmSettle / consumePendingRealmSettle /
+// hasPendingRealmSettle 是 V2-04 的待结算标记（upgradeMu 保护，与
+// pendingUpgradeRedeploy 同族）：realm→gost 切换时节点离线、settle
+// 轮询静默跳过，则给节点打标记；节点重连（onNodeOnline）在放行
+// 异步对账与 redeploy 之前先消费标记做一次同步结算，保证「先结算
+// 后下发」的顺序，增量不随 agent 弃 realm 计数丢失。
+func (h *Handler) markPendingRealmSettle(nodeID int64) {
+	if h == nil || nodeID <= 0 {
+		return
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	if h.pendingRealmSettle == nil {
+		h.pendingRealmSettle = make(map[int64]struct{})
+	}
+	h.pendingRealmSettle[nodeID] = struct{}{}
+}
+
+func (h *Handler) consumePendingRealmSettle(nodeID int64) bool {
+	if h == nil || nodeID <= 0 {
+		return false
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	if _, ok := h.pendingRealmSettle[nodeID]; !ok {
+		return false
+	}
+	delete(h.pendingRealmSettle, nodeID)
+	return true
+}
+
+func (h *Handler) hasPendingRealmSettle(nodeID int64) bool {
+	if h == nil || nodeID <= 0 {
+		return false
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	_, ok := h.pendingRealmSettle[nodeID]
+	return ok
+}
+
 // settleRealmCountersAtSwitch 主动拉一次各节点的内核状态，把 realm
 // 计数结算/建基线到当前时刻。refreshNodeKernelStatus 内部对离线节点
 // 静默跳过，失败不影响切换本身。
