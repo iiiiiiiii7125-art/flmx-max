@@ -460,7 +460,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				host = strings.TrimSpace(node.ServerIP)
 			}
 			if host != "" {
-				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy})
+				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy, SourceID: row.SourceID})
 				kinds = append(kinds, "direct")
 			}
 		}
@@ -477,7 +477,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				if rel.ShareHost != "" {
 					host = rel.ShareHost
 				}
-				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy, RelayID: rel.ID})
+				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy, SourceID: row.SourceID, RelayID: rel.ID})
 				kinds = append(kinds, "relay")
 			}
 		}
