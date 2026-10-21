@@ -43,6 +43,22 @@ type SubOptions struct {
 	ChainRelayNames   []string
 	ChainLanding      string
 	ChainRelay        string
+	// ChainLandingSources / ChainRelaySources take every node of these
+	// remote sources, including ones a later refresh brings, and
+	// ChainLandingOwn every node of the panel's own. ChainNoneNames keeps
+	// nodes they would take out of the chain; picked names win over all.
+	ChainLandingSources []int64
+	ChainRelaySources   []int64
+	ChainLandingOwn     bool
+	ChainNoneNames      []string
+	// ChainSourceFilters narrows a chain source to the nodes whose original
+	// name matches (a filter expression, like Include); ChainDropUnused
+	// leaves a chain source's nodes without a role out of the subscription.
+	ChainSourceFilters map[int64]string
+	ChainDropUnused    bool
+	// ChainHideRelays keeps relay nodes out of the node lists and groups:
+	// they are only in the relay group.
+	ChainHideRelays bool
 	// Script 是其他步骤之后运行的 JavaScript（见 sub_script.go）。
 	Script string
 	// Rules 给 Mihomo、sing-box 和 Surge 配置加上路由规则、DNS 和
@@ -142,6 +158,11 @@ func (o SubOptions) Validate() error {
 	}
 	if _, err := ParseMatcher(o.ChainRelay); err != nil {
 		return fmt.Errorf("中转节点：%v", err)
+	}
+	for _, expr := range o.ChainSourceFilters {
+		if _, err := ParseMatcher(expr); err != nil {
+			return fmt.Errorf("订阅源筛选：%v", err)
+		}
 	}
 	return ValidateSubScript(o.Script)
 }
@@ -277,7 +298,7 @@ func applySubOptions(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) 
 	if scriptErr == nil {
 		out = scripted
 	}
-	markChain(out, opts)
+	out = markChain(out, opts)
 	return out, scriptErr
 }
 
