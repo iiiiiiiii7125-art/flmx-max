@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 
-import { AnimatedPage } from "@/components/animated-page";
+import { PageShell } from "@/components/page-kit";
 import { PageLoadingState } from "@/components/page-state";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -89,7 +89,11 @@ const formatDate = (timestamp?: number): string => {
   return new Date(timestamp).toLocaleString();
 };
 
-export default function GroupPage() {
+export default function GroupPage({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const [loading, setLoading] = useState(true);
   const [isAdmin] = useState(getAdminFlag());
 
@@ -505,7 +509,8 @@ export default function GroupPage() {
   }
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8 space-y-6">
+    <PageShell embedded={embedded}>
+      <div className="space-y-6">
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : (
@@ -1014,6 +1019,7 @@ export default function GroupPage() {
           </Modal>
         </>
       )}
-    </AnimatedPage>
+      </div>
+    </PageShell>
   );
 }
