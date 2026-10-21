@@ -10,6 +10,9 @@ hero:
       text: 快速上手
       link: /guide/getting-started
     - theme: alt
+      text: 在线演示
+      link: https://iiiiiiiii7125-art.github.io/flmx-max/demo/
+    - theme: alt
       text: 安装部署
       link: /guide/install
     - theme: alt

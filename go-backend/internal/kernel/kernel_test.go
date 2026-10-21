@@ -428,7 +428,8 @@ func TestNormalizePhase3Rules(t *testing.T) {
 		kernel string
 		in     Inbound
 	}{
-		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{SnellVersion: 6}}},
+		// Snell v6 合法 PSK 应通过（见下方正例）；这里只拒 PSK 不足 12 位的。
+		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{SnellVersion: 6, Password: "psk-123456"}}},
 		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{Password: "has space"}}},
 		{TypeSingbox, Inbound{Protocol: ProtocolHysteria2, Port: 1, Transport: Transport{Type: TransportQUIC}, Settings: Settings{Masquerade: "ftp://x"}}},
 		{TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 1, AcceptProxyProtocol: true}},
@@ -440,6 +441,11 @@ func TestNormalizePhase3Rules(t *testing.T) {
 		if err := Normalize(tc.kernel, &in); err == nil {
 			t.Fatalf("case %d must fail: %+v", i, tc.in)
 		}
+	}
+	// S4 移植后 Snell v6 是合法版本：TypeSnell + v6 + 合法 PSK 必须通过。
+	v6 := Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{SnellVersion: 6, Password: "psk-1234567890"}}
+	if err := Normalize(TypeSnell, &v6); err != nil {
+		t.Fatalf("snell v6 with a valid psk must normalize: %v", err)
 	}
 }
 

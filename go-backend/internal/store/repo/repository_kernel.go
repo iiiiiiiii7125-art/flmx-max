@@ -3,6 +3,7 @@ package repo
 import (
 	"database/sql"
 	"errors"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -368,8 +369,16 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 
 		upload := make(map[int64]int64)
 		download := make(map[int64]int64)
+		unaccounted := make(map[int64]int64)
 		for _, s := range ordered {
-			if _, ok := known[s.InboundID]; !ok || s.Bytes < 0 {
+			if _, ok := known[s.InboundID]; !ok {
+				// 未归属样本：计数 ID 不属于任何现存入站。此前在这里
+				// 静默丢弃（与 Type 1 转发计费恒 0 同型的故障面），
+				// 现在按 ID 聚合打 warn，绝不静默。
+				unaccounted[s.InboundID]++
+				continue
+			}
+			if s.Bytes < 0 {
 				continue
 			}
 			if s.Direction != "in" && s.Direction != "out" {
@@ -400,6 +409,9 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 			}).Create(&row).Error; err != nil {
 				return err
 			}
+		}
+		for id, n := range unaccounted {
+			log.Printf("kernel traffic sample unaccounted op=unknown_inbound inbound_id=%d samples=%d action=dropped", id, n)
 		}
 		for id := range known {
 			up, down := upload[id], download[id]

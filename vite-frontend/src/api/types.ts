@@ -76,6 +76,7 @@ export interface TunnelApiItem {
   ipPreference?: string;
   probeTargetHost?: string;
   probeTargetPort?: number;
+  engine?: string;
   inNodeId?: TunnelChainNodePayload[];
   outNodeId?: TunnelChainNodePayload[];
   chainNodes?: TunnelChainNodePayload[][];
@@ -406,6 +407,7 @@ export interface TunnelMutationPayload {
   ipPreference?: string;
   probeTargetHost?: string;
   probeTargetPort?: number;
+  engine?: string;
   inNodeId?: TunnelChainNodePayload[];
   outNodeId?: TunnelChainNodePayload[];
   chainNodes?: TunnelChainNodePayload[][];
@@ -724,6 +726,8 @@ export interface KernelInfo {
   type: string;
   name: string;
   implemented: boolean;
+  /** Runs realm-engine tunnel forwards; installed by the panel itself. */
+  relay?: boolean;
   protocols: KernelProtocolCap[] | null;
   versions?: string[];
   /** 后端无 omitempty：未配置时下发 null 而非缺失（F-144）。 */
@@ -795,6 +799,8 @@ export interface InboundSettings {
   password?: string;
   method?: string;
   snellVersion?: number;
+  /** Snell v6 traffic shaping: unset (default) or "unshaped". */
+  snellMode?: string;
   masquerade?: string;
   backendPort?: number;
   portHopping?: string;
@@ -858,6 +864,8 @@ export interface InboundProbePoint {
   error?: string;
   /** 到该测试点的回程路由，如"电信 CN2 GIA"（第四批填充）。 */
   route?: string;
+  /** The IPv6 return route of a dual-stack node, when traced. */
+  routeV6?: string;
 }
 
 export interface InboundApiItem {
@@ -906,6 +914,13 @@ export interface InboundApiItem {
   outboundMissing?: boolean;
   /** 分流 rules, tried in order before the default exit. */
   splitRules: SplitRule[];
+  /** Local egress address family, independent of the inbound listener. */
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
 }
 
 export interface InboundMutationPayload {
@@ -928,6 +943,12 @@ export interface InboundMutationPayload {
   whitelistExtra: string;
   outboundId: number;
   splitRules: SplitRule[];
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
   enabled?: boolean;
 }
 
@@ -956,6 +977,30 @@ export interface InboundRelayApiItem {
   remoteAddr: string;
   entries: { Host: string; Port: number }[];
   createdTime: number;
+  /** Last measurement of the line, when made. */
+  latency?: RelayLatency;
+}
+
+/** One leg of a relay line, measured from its first node. */
+export interface RelayHop {
+  from: string;
+  to: string;
+  ok: boolean;
+  latencyMs?: number;
+  lossPct?: number;
+  error?: string;
+}
+
+/**
+ * A relay line's estimated latency to each reference point: the entry
+ * node's latency plus every leg to the landing. Without reference points
+ * the only point is the path itself.
+ */
+export interface RelayLatency extends InboundProbe {
+  entry?: string;
+  entryNodeId?: number;
+  hops: RelayHop[];
+  pathMs?: number;
 }
 
 export interface SubInfoApiData {
@@ -976,11 +1021,30 @@ export interface NodeRoutePoint {
   name: string;
   route?: string;
   reached: boolean;
+  /** "IPv6" when traced over IPv6. */
+  family?: string;
   hops?: NodeRouteHop[];
   error?: string;
+  /** A dual-stack node's IPv6 trace to the same point. */
+  ipv6?: NodeRoutePoint;
 }
 
 export interface NodeRoute {
   checkedAt: number;
   points: NodeRoutePoint[];
+}
+
+export interface LatencyTrendPoint {
+  name: string;
+  /** Averaged buckets; ms is null when every probe in it failed. */
+  samples: { t: number; ms: number | null; lossPct: number }[];
+  avgMs: number;
+  maxMs: number;
+  lossPct: number;
+}
+
+export interface LatencyTrend {
+  since: number;
+  until: number;
+  points: LatencyTrendPoint[];
 }

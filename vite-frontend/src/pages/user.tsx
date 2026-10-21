@@ -3,11 +3,8 @@ import toast from "react-hot-toast";
 import { parseDate } from "@internationalized/date";
 import { LayoutGrid, List } from "lucide-react";
 
-import {
-  AnimatedPage,
-  StaggerList,
-  StaggerItem,
-} from "@/components/animated-page";
+import { StaggerList, StaggerItem } from "@/components/animated-page";
+import { PageShell } from "@/components/page-kit";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Input } from "@/shadcn-bridge/heroui/input";
@@ -137,6 +134,26 @@ const calculateUserTotalUsedFlow = (user: User): number => {
   return (user.inFlow || 0) + (user.outFlow || 0);
 };
 
+/** Used share of a user's traffic limit; nothing for unlimited users. */
+function UsageBar({ user }: { user: User }) {
+  if (user.flow === 99999 && !user.flowMiB) return null;
+  const limit = flowLimitBytes(user.flow, user.flowMiB);
+
+  if (limit <= 0) return null;
+  const pct = Math.min(100, (calculateUserTotalUsedFlow(user) / limit) * 100);
+  const tone =
+    pct >= 100 ? "bg-danger" : pct >= 90 ? "bg-warning" : "bg-primary";
+
+  return (
+    <div className="h-1.5 max-w-md overflow-hidden rounded-full bg-default-100">
+      <div
+        className={`h-full rounded-full ${tone}`}
+        style={{ width: `${Math.max(2, pct)}%` }}
+      />
+    </div>
+  );
+}
+
 const calculateTunnelUsedFlow = (tunnel: UserTunnel): number => {
   const inFlow = tunnel.inFlow || 0;
   const outFlow = tunnel.outFlow || 0;
@@ -191,7 +208,11 @@ const normalizeUserTunnelItem = (item: Partial<UserTunnel>): UserTunnel => {
   };
 };
 
-export default function UserPage() {
+export default function UserPage({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   // 状态管理
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1091,7 +1112,7 @@ export default function UserPage() {
   };
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
+    <PageShell embedded={embedded}>
       {/* 页面头部 */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between mb-6 gap-3">
         <div className="flex-1 max-w-sm flex items-center gap-2">
@@ -1258,6 +1279,7 @@ export default function UserPage() {
                             {formatFlowLimit(user.flow, user.flowMiB)}
                           </span>
                         </div>
+                        <UsageBar user={user} />
                       </div>
                     </TableCell>
                     <TableCell>
@@ -2657,6 +2679,6 @@ export default function UserPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </AnimatedPage>
+    </PageShell>
   );
 }

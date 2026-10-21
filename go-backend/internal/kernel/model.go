@@ -20,8 +20,11 @@ type Settings struct {
 	Password string `json:"password,omitempty"`
 	Method   string `json:"method,omitempty"`
 
-	// SnellVersion is the protocol version clients use (4 or 5).
+	// SnellVersion is the protocol version clients use (4, 5 or 6).
 	SnellVersion int `json:"snellVersion,omitempty"`
+	// SnellMode is Snell v6's traffic shaping: "" (default) or "unshaped";
+	// clients must use the same.
+	SnellMode string `json:"snellMode,omitempty"`
 	// Masquerade is the site Hysteria2 serves to non-clients (optional URL).
 	Masquerade string `json:"masquerade,omitempty"`
 	// BackendPort is the loopback port a ShadowTLS-fronted Snell listens on.
@@ -111,14 +114,17 @@ type Security struct {
 
 // Inbound is the kernel-independent description of one listening service.
 type Inbound struct {
-	ID        int64           `json:"id"`
-	Protocol  string          `json:"protocol"`
-	Listen    string          `json:"listen"`
-	Port      int             `json:"port"`
-	Settings  Settings        `json:"settings"`
-	Transport Transport       `json:"transport"`
-	Security  Security        `json:"security"`
-	Extra     json.RawMessage `json:"extra,omitempty"`
+	ID       int64  `json:"id"`
+	Protocol string `json:"protocol"`
+	Listen   string `json:"listen"`
+	// OutboundIPStrategy scopes this inbound's outbound connections to an
+	// IP family ("" / "auto" = no restriction; see egress.go).
+	OutboundIPStrategy string          `json:"outboundIpStrategy,omitempty"`
+	Port               int             `json:"port"`
+	Settings           Settings        `json:"settings"`
+	Transport          Transport       `json:"transport"`
+	Security           Security        `json:"security"`
+	Extra              json.RawMessage `json:"extra,omitempty"`
 	// AcceptProxyProtocol makes the inbound require a PROXY protocol header
 	// (sent by relay forwards) so the kernel sees the real client address.
 	AcceptProxyProtocol bool `json:"acceptProxyProtocol,omitempty"`
@@ -139,6 +145,15 @@ func (in Inbound) Tag() string {
 	return fmt.Sprintf("in-%d", in.ID)
 }
 
+// NetworkOn is Network for the kernel serving the inbound: sing-box's Snell
+// has no QUIC proxy mode, so it only listens on TCP.
+func (in Inbound) NetworkOn(kernelType string) string {
+	if in.Protocol == ProtocolSnell && kernelType == TypeSingbox {
+		return "tcp"
+	}
+	return in.Network()
+}
+
 // Network reports which L4 protocols the inbound listens on, used for nft
 // traffic counters.
 func (in Inbound) Network() string {
@@ -155,7 +170,8 @@ func (in Inbound) Network() string {
 		return "tcp,udp"
 	case ProtocolSnell:
 		// v5 adds UDP (QUIC proxy mode); behind ShadowTLS only TCP is exposed.
-		if in.Security.Type == SecurityShadowTLS || in.Settings.SnellVersion == 4 {
+		// v6 carries UDP over TCP.
+		if in.Security.Type == SecurityShadowTLS || in.Settings.SnellVersion == 4 || in.Settings.SnellVersion == 6 {
 			return "tcp"
 		}
 		return "tcp,udp"
@@ -214,6 +230,11 @@ func Normalize(kernelType string, in *Inbound) error {
 	if !ok || !info.Implemented {
 		return fmt.Errorf("暂不支持内核 %s", kernelType)
 	}
+	strategy, err := NormalizeOutboundIPStrategy(kernelType, in.OutboundIPStrategy)
+	if err != nil {
+		return err
+	}
+	in.OutboundIPStrategy = strategy
 
 	in.Protocol = strings.ToLower(strings.TrimSpace(in.Protocol))
 	proto, ok := info.protocol(in.Protocol)
@@ -264,6 +285,10 @@ func Normalize(kernelType string, in *Inbound) error {
 	if err := normalizeSecurity(in); err != nil {
 		return err
 	}
+	if in.Protocol == ProtocolSnell && kernelType == TypeSingbox {
+		// sing-box chains ShadowTLS to Snell internally; no loopback port.
+		in.Settings.BackendPort = 0
+	}
 	if in.Security.CertMode == CertModeACME && kernelType != TypeSingbox {
 		return errors.New("自动申请证书（ACME）目前只支持 sing-box 内核")
 	}
@@ -301,7 +326,8 @@ func normalizeExtra(kernelType string, in *Inbound) error {
 		return err
 	}
 	in.Extra = json.RawMessage(raw)
-	return nil
+	// S4: 指定出站 IP 策略时 Extra 不得覆盖 tag/detour（会绕过策略作用域）。
+	return ValidateOutboundIPExtra(kernelType, in.OutboundIPStrategy, in.Extra)
 }
 
 func normalizeTransport(t *Transport) error {
@@ -459,8 +485,19 @@ func normalizeSettings(in *Inbound) error {
 		if s.SnellVersion == 0 {
 			s.SnellVersion = DefaultSnellVersion
 		}
-		if s.SnellVersion != 4 && s.SnellVersion != 5 {
-			return errors.New("Snell 版本只支持 4 或 5")
+		if s.SnellVersion != 4 && s.SnellVersion != 5 && s.SnellVersion != 6 {
+			return errors.New("Snell 版本只支持 4、5 或 6")
+		}
+		if s.SnellVersion == 6 && len(s.Password) < snellV6MinPSK {
+			return fmt.Errorf("Snell v6 的 PSK 至少 %d 位", snellV6MinPSK)
+		}
+		s.SnellMode = strings.TrimSpace(s.SnellMode)
+		if s.SnellMode == "default" || s.SnellVersion != 6 {
+			s.SnellMode = ""
+		}
+		// unsafe-raw turns encryption off; not offered.
+		if s.SnellMode != "" && s.SnellMode != SnellModeUnshaped {
+			return errors.New("Snell v6 流量整形只支持默认或 unshaped")
 		}
 		s.UUID, s.Method, s.Flow = "", "", ""
 	}
@@ -497,6 +534,13 @@ var naiveUserPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 var semverPattern = regexp.MustCompile(`^\d{1,4}\.\d{1,4}\.\d{1,4}$`)
 
 var snellPSKPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+
+// snellV6MinPSK is the shortest PSK Snell v6 accepts.
+const snellV6MinPSK = 12
+
+// SnellModeUnshaped keeps Snell v6's encryption but turns traffic shaping
+// off; the zero value ("") is Snell's default shaping.
+const SnellModeUnshaped = "unshaped"
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 

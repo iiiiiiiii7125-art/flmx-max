@@ -86,3 +86,24 @@ Attach a relay line to an inbound via a tunnel.
 ## POST /api/v1/inbound/relay/delete
 
 Remove a relay line from an inbound.
+
+## POST /api/v1/inbound/relay/probe
+
+Measure relay lines now: `{"ids": [...]}` with relay line IDs, or all lines
+when `ids` is empty / omitted. Entry nodes are probed first so the totals are
+current. Response `data` is a map keyed by relay line ID (as a string); each
+value carries the estimated per-point latency (`points`, same shape as node
+latency points), the legs it is made of (`hops: [{from, to, ok, latencyMs,
+lossPct, error}]`), the path total (`pathMs`) and the entry (`entry`,
+`entryNodeId`).
+
+## Outbound IP strategy (`outboundIpStrategy`)
+
+Create / update payloads and inbound responses carry `outboundIpStrategy`,
+which scopes the inbound's outbound connections: `auto` (default, dual-stack),
+`ipv4_only`, `ipv6_only`, `prefer_ipv4`, `prefer_ipv6` (prefer falls back to
+the other family after ~250 ms). Only Xray / sing-box kernels accept a
+non-`auto` value (unknown values are rejected, never silently ignored);
+sing-box must be ≥ 1.12 for any non-`auto` value, and Xray `prefer_*` needs
+≥ 25.6.8. On update the field is optional: omit it to leave the strategy
+unchanged.

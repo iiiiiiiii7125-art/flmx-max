@@ -72,22 +72,6 @@ export default function ProfilePage() {
       description: "节点与隧道监控",
     },
     {
-      path: "/limit",
-      label: "限速管理",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"
-            fillRule="evenodd"
-          />
-        </svg>
-      ),
-      color:
-        "bg-orange-100 dark:bg-orange-500/20 text-orange-600 dark:text-orange-400",
-      description: "管理用户限速策略",
-    },
-    {
       path: "/panel-sharing",
       label: "面板共享",
       icon: (
@@ -98,18 +82,6 @@ export default function ProfilePage() {
       color:
         "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400",
       description: "与其他面板进行联邦共享",
-    },
-    {
-      path: "/group",
-      label: "分组管理",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M10 2a3 3 0 100 6 3 3 0 000-6zM4 9a3 3 0 100 6 3 3 0 000-6zm12 0a3 3 0 100 6 3 3 0 000-6M4 16a2 2 0 00-2 2h4a2 2 0 00-2-2zm12 0a2 2 0 00-2 2h4a2 2 0 00-2-2zm-6 0a2 2 0 00-2 2h4a2 2 0 00-2-2z" />
-        </svg>
-      ),
-      color:
-        "bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400",
-      description: "管理用户和隧道分组",
     },
     {
       path: "/user",
