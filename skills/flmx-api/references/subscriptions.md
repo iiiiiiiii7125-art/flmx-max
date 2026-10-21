@@ -29,6 +29,17 @@ Reset a subscription's token. Old links stop working immediately.
 
 Reset a share subscription's traffic counters.
 
+## POST /api/v1/subscription/traffic
+
+Traffic statistics for one subscription (hourly for the last 24 hours, daily
+for the last 30 days, monthly for the last 12 months; totals for the whole
+subscription, shared by all assignees). Hourly samples are retained 400 days.
+
+## POST /api/v1/user/subscription/traffic
+
+Same traffic statistics from the assignee's perspective, for a subscription
+assigned to the current user (see "my subscriptions").
+
 ## POST /api/v1/subscription/preview
 
 Preview the rendered node list for a subscription without saving.

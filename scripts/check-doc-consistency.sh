@@ -61,7 +61,7 @@ fi
 # ── 3. 技能包版本三处一致（SKILL.md / package.json / ai-skill.md 发布示例 tag）
 v_skill=$(grep -oP 'version:\s*"\K[^"]+' skills/flmx-api/SKILL.md | head -1)
 v_pkg=$(grep -oP '"version":\s*"\K[^"]+' skills/flmx-api/package.json | head -1)
-v_example=$(grep -oP 'git tag skill-v\K[0-9][^ ]*' doc/ai-skill.md | head -1)
+v_example=$(grep -oP 'git tag \K[0-9][0-9.]*' doc/ai-skill.md | head -1)
 if [ -n "$v_skill" ] && [ "$v_skill" = "$v_pkg" ] && [ "$v_skill" = "$v_example" ]; then
   note_ok "技能包版本三处一致：$v_skill"
 else
