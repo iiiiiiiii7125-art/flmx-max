@@ -681,12 +681,12 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		if opts.Rules {
 			return loonConfig(endpoints, opts), "text/plain; charset=utf-8", nil
 		}
-		return loonList(endpoints), "text/plain; charset=utf-8", nil
+		return loonList(endpoints, opts), "text/plain; charset=utf-8", nil
 	case FormatQX:
 		if opts.Rules {
 			return qxConfig(endpoints, opts), "text/plain; charset=utf-8", nil
 		}
-		return qxList(endpoints), "text/plain; charset=utf-8", nil
+		return qxList(endpoints, opts), "text/plain; charset=utf-8", nil
 	case FormatSingbox:
 		body, err := singboxProfile(endpoints, groups, opts)
 		return body, "application/json; charset=utf-8", err

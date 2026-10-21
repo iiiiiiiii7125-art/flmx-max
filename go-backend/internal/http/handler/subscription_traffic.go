@@ -20,6 +20,26 @@ type subTrafficRequest struct {
 	Range string `json:"range"`
 	// TZOffset is the viewer's offset from UTC in minutes (UTC+8 = 480).
 	TZOffset int `json:"tzOffset"`
+	// TZ is the viewer's IANA time zone name (A6-002/BC-12). When it
+	// resolves, bucket boundaries use each date's real offset (DST-safe,
+	// correct for non-whole-hour zones); TZOffset remains the fallback
+	// for older clients.
+	TZ string `json:"tz"`
+}
+
+// subTrafficLocation resolves the viewer's location: the IANA name when
+// it loads, else the fixed numeric offset (the pre-BC-12 behavior).
+func subTrafficLocation(req subTrafficRequest) *time.Location {
+	if req.TZ != "" {
+		if loc, err := time.LoadLocation(req.TZ); err == nil {
+			return loc
+		}
+	}
+	offset := req.TZOffset
+	if offset < -14*60 || offset > 14*60 {
+		offset = 0
+	}
+	return time.FixedZone("", offset*60)
 }
 
 type subTrafficPoint struct {
@@ -61,38 +81,73 @@ func subTrafficBuckets(rangeKey string, now time.Time) []time.Time {
 }
 
 // subTraffic sums a subscription's hours into the range's buckets.
+// Hour rows are UTC-aligned; in a non-whole-hour zone a local day (or a
+// DST-shifted one) starts mid-row, so a row straddling a bucket boundary
+// is split between the two buckets by minute share instead of being
+// dumped whole into the earlier one (A6-002/BC-12). Shares are floored
+// per bucket with the remainder going to the last overlapped bucket, so
+// totals conserve exactly. Whole-hour zones never straddle and are
+// byte-for-byte the pre-BC-12 result.
 func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Time) subTrafficView {
 	if rangeKey != "day" && rangeKey != "month" {
 		rangeKey = "hour"
 	}
 	starts := subTrafficBuckets(rangeKey, now)
 	view := subTrafficView{Range: rangeKey, Points: make([]subTrafficPoint, len(starts))}
+	ends := make([]int64, len(starts))
 	for i, s := range starts {
 		view.Points[i].Time = s.UnixMilli()
+		if i+1 < len(starts) {
+			ends[i] = starts[i+1].UnixMilli()
+		}
 	}
+	last := len(starts) - 1
+	switch rangeKey {
+	case "day":
+		ends[last] = starts[last].AddDate(0, 0, 1).UnixMilli()
+	case "month":
+		ends[last] = starts[last].AddDate(0, 1, 0).UnixMilli()
+	default:
+		ends[last] = starts[last].Add(time.Hour).UnixMilli()
+	}
+	const hourMs = int64(time.Hour / time.Millisecond)
 	b := 0
 	for _, h := range hours {
-		if h.Hour < view.Points[0].Time {
+		rowStart, rowEnd := h.Hour, h.Hour+hourMs
+		if rowEnd <= view.Points[0].Time || rowStart >= ends[last] {
 			continue
 		}
-		for b+1 < len(view.Points) && h.Hour >= view.Points[b+1].Time {
+		for b+1 < len(starts) && ends[b] <= rowStart {
 			b++
 		}
-		view.Points[b].Up += h.UploadBytes
-		view.Points[b].Down += h.DownloadBytes
-		view.Up += h.UploadBytes
-		view.Down += h.DownloadBytes
+		upLeft, downLeft := h.UploadBytes, h.DownloadBytes
+		for j := b; j < len(starts) && view.Points[j].Time < rowEnd; j++ {
+			overlap := min(rowEnd, ends[j]) - max(rowStart, view.Points[j].Time)
+			if overlap <= 0 {
+				continue
+			}
+			up, down := upLeft, downLeft // last overlapped bucket: remainder
+			if j+1 < len(starts) && view.Points[j+1].Time < rowEnd {
+				up = h.UploadBytes * overlap / hourMs
+				down = h.DownloadBytes * overlap / hourMs
+				upLeft -= up
+				downLeft -= down
+			}
+			view.Points[j].Up += up
+			view.Points[j].Down += down
+			view.Up += up
+			view.Down += down
+		}
 	}
 	return view
 }
 
 func (h *Handler) respondSubTraffic(w http.ResponseWriter, s *model.Subscription, req subTrafficRequest) {
-	if req.TZOffset < -14*60 || req.TZOffset > 14*60 {
-		req.TZOffset = 0
-	}
-	now := time.Now().In(time.FixedZone("", req.TZOffset*60))
+	now := time.Now().In(subTrafficLocation(req))
 	starts := subTrafficBuckets(req.Range, now)
-	hours, err := h.repo.ListSubscriptionTraffic(s.ID, starts[0].UnixMilli())
+	// One extra hour back: a boundary-straddling row starts before the
+	// first bucket in non-whole-hour zones and part of it belongs here.
+	hours, err := h.repo.ListSubscriptionTraffic(s.ID, starts[0].UnixMilli()-int64(time.Hour/time.Millisecond))
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

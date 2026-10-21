@@ -1004,6 +1004,9 @@ const trafficQuery = (id: number, range: SubTrafficRange) => ({
   id,
   range,
   tzOffset: -new Date().getTimezoneOffset(),
+  // IANA 时区名（A6-002/BC-12）：后端据此按各日期实际偏移分桶，
+  // 非整小时时区与 DST 切换周不再错位；tzOffset 保留作旧后端回落。
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
 });
 /** 管理端：任一订阅的流量统计。 */
 export const getSubscriptionTraffic = (id: number, range: SubTrafficRange) =>
