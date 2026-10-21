@@ -2301,6 +2301,9 @@ type batchOperationResult struct {
 	// R5-B3 D1-001 R4: 批量删除的逐条结果含“已转 pending”（节点不可达时）。
 	PendingCount int                  `json:"pendingCount,omitempty"`
 	Pending      []batchFailureDetail `json:"pending,omitempty"`
+	// A4-002：批量同步路径的非致命告警（如 realm 限速不生效），与单条
+	// create/update 的 data.warnings 同义；仅在非空时出现，向后兼容。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -2713,9 +2716,17 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if err := h.syncForwardServices(createdForward, "UpdateService", true); err != nil {
+	// A4-002：与 forwardUpdate 同形——同步告警（realm 限速/连接数不生效、
+	// gost 绑 IP 回退、节点离线跳过）必须回传前端，原实现丢弃 warnings
+	// 恒 OKEmpty，创建路径的告警分支在前端成死代码。
+	createWarnings, err := h.syncForwardServicesWithWarnings(createdForward, "UpdateService", true)
+	if err != nil {
 		_ = h.deleteForwardByID(forwardID)
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if len(createWarnings) > 0 {
+		response.WriteJSON(w, response.OK(map[string]interface{}{"warnings": createWarnings}))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -3552,6 +3563,7 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 	s := 0
 	f := 0
 	failures := make([]batchFailureDetail, 0)
+	batchWarnings := make([]string, 0)
 	for _, id := range ids {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
@@ -3577,14 +3589,16 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if err := h.syncForwardServices(forward, "UpdateService", true); err != nil {
+		syncWarnings, err := h.syncForwardServicesWithWarnings(forward, "UpdateService", true)
+		batchWarnings = append(batchWarnings, syncWarnings...)
+		if err != nil {
 			f++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 		} else {
 			s++
 		}
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures, Warnings: batchWarnings}))
 }
 
 func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Request) {
@@ -3617,6 +3631,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
+	batchWarnings := make([]string, 0)
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
 			continue
@@ -3720,7 +3735,9 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			}
 			time.Sleep(tunnelServiceBindRetryDelay)
 		}
-		if err := h.syncForwardServices(updatedForward, "UpdateService", true); err != nil {
+		syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
+		batchWarnings = append(batchWarnings, syncWarnings...)
+		if err != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
@@ -3733,7 +3750,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
 
 func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
