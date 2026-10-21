@@ -115,6 +115,12 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		var route chain.Route
 		if r.options.Chain != nil {
 			route = r.options.Chain.Route(ctx, network, ipAddr, chain.WithHostRouteOption(address))
+			if route == nil || len(route.Nodes()) == 0 {
+				// Fail closed (D1-H4): a configured chain that yields no
+				// route must not fall back to a direct dial. Mirrors Bind.
+				err = ErrEmptyRoute
+				return
+			}
 		}
 
 		if buf == nil {

@@ -16,7 +16,9 @@ type lifecycleTestHop struct {
 
 func (h *lifecycleTestHop) Select(context.Context, ...corehop.SelectOption) *corechain.Node {
 	h.selected++
-	return nil
+	// Return a real node: since D1-H4 a nil selection aborts the route,
+	// and this test exercises lifecycle ownership, not route failure.
+	return testNode("lifecycle")
 }
 
 func (h *lifecycleTestHop) Retire() {
