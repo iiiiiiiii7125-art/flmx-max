@@ -47,17 +47,21 @@ export function panelOrigin(): string {
 
 export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   const [src, setSrc] = useState("");
+  // 生成中与生成失败是两个状态：此前共用空 src，加载期就误报「内容过长」（D5-05）
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
 
+    setSrc("");
+    setFailed(false);
     QRCode.toDataURL(text, {
       margin: 1,
       width: size,
       errorCorrectionLevel: "M",
     })
       .then((url) => alive && setSrc(url))
-      .catch(() => alive && setSrc(""));
+      .catch(() => alive && setFailed(true));
 
     return () => {
       alive = false;
@@ -70,7 +74,7 @@ export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
         className="flex items-center justify-center text-xs text-default-500 bg-default-100 rounded-xl"
         style={{ width: size, height: size }}
       >
-        内容过长，无法生成二维码
+        {failed ? "内容过长，无法生成二维码" : "二维码生成中..."}
       </div>
     );
   }
@@ -218,6 +222,8 @@ export function ShareModal({
 }) {
   const [entries, setEntries] = useState<InboundShareEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  // 拉取失败与「真的没有可分享地址」分开呈现：失败时不得断言归因文案（D5-06）
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     if (!item) return;
@@ -225,6 +231,7 @@ export function ShareModal({
     let alive = true;
 
     setEntries([]);
+    setLoadFailed(false);
     setLoading(true);
     getInboundShare(item.id)
       .then((res) => {
@@ -232,6 +239,7 @@ export function ShareModal({
         if (res.code === 0) {
           setEntries(res.data || []);
         } else {
+          setLoadFailed(true);
           toast.error(res.msg || "获取分享链接失败");
         }
       })
@@ -266,7 +274,12 @@ export function ShareModal({
             </ModalHeader>
             <ModalBody>
               {loading && <p className="text-sm text-default-500">加载中...</p>}
-              {!loading && entries.length === 0 && (
+              {!loading && loadFailed && (
+                <p className="text-sm text-danger-500">
+                  获取分享链接失败，请关闭后重试。
+                </p>
+              )}
+              {!loading && !loadFailed && entries.length === 0 && (
                 <p className="text-sm text-default-500">
                   没有可分享的地址：入站仅监听本机或设置了仅中转，但还没有对接中转。
                 </p>
@@ -315,23 +328,31 @@ function InboundRelaySubList({
 }) {
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
   const [loading, setLoading] = useState(false);
+  // 加载失败须与「没有中转」区分：失败整段消失会让用户误判为无中转（D5-06）
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     setLoading(true);
+    setLoadFailed(false);
     getInboundRelays(inbound.id)
       .then((res) => {
         if (res.code === 0) {
           setRelays((res.data || []).filter((r) => r.forwardExists));
+        } else {
+          setLoadFailed(true);
         }
       })
       .catch(() => {
-        // 静默失败，中转列表为空时不显示
+        setLoadFailed(true);
       })
       .finally(() => setLoading(false));
   }, [inbound.id]);
 
   if (loading) {
     return <p className="text-xs text-default-500">加载中转列表...</p>;
+  }
+  if (loadFailed) {
+    return <p className="text-xs text-danger-500">中转列表加载失败，请稍后重试</p>;
   }
   if (relays.length === 0) {
     return null;

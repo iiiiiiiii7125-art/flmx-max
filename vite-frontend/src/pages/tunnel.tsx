@@ -871,8 +871,19 @@ export default function TunnelPage() {
     const added = selectedNodeIds
       .filter((nodeId) => !keptIds.has(nodeId))
       .map((nodeId) => buildDefault(nodeId));
+    const merged = [...kept, ...added];
 
-    return [...kept, ...added];
+    // 多节点时后端禁止自定义连接IP（validateTunnelConnectIPConstraints），
+    // 而 connectIp 的 Select 届时只是被禁用、旧值不清，提交必然被拒且用户
+    // 无处自救（A9-01）。在此统一清值，让 UI 提示的「使用各节点默认IP」
+    // 与实际下发一致。
+    if (merged.length > 1) {
+      return merged.map((node) =>
+        node.connectIp ? { ...node, connectIp: "" } : node,
+      );
+    }
+
+    return merged;
   };
 
   const syncChainGroupNodes = (
@@ -921,6 +932,19 @@ export default function TunnelPage() {
         (node) => node.nodeId !== -1,
       );
 
+      // 提交前兜底（A9-01）：存量编辑数据若在多节点组里残留 connectIp，
+      // 与后端约束同口径清掉，避免表单进入必被拒绝且无清除入口的状态。
+      const stripMultiNodeConnectIp = (list: ChainTunnel[]) =>
+        list.length > 1
+          ? list.map((node) =>
+              node.connectIp ? { ...node, connectIp: "" } : node,
+            )
+          : list;
+      const sanitizedChainNodes = cleanedChainNodes.map(
+        stripMultiNodeConnectIp,
+      );
+      const sanitizedOutNodeId = stripMultiNodeConnectIp(cleanedOutNodeId);
+
       // 将换行符分隔的IP转换为逗号分隔
       const inIpString = form.inIp
         .split("\n")
@@ -936,8 +960,8 @@ export default function TunnelPage() {
         ...form,
         forwardMode: getTunnelForwardMode(form.inNodeId, nodes),
         inIp: inIpString,
-        outNodeId: cleanedOutNodeId,
-        chainNodes: cleanedChainNodes,
+        outNodeId: sanitizedOutNodeId,
+        chainNodes: sanitizedChainNodes,
         probeTargetHost,
         probeTargetPort,
         // nftables entries forward by themselves.
@@ -2374,8 +2398,8 @@ export default function TunnelPage() {
                       <Select
                         description={
                           form.engine === "realm"
-                            ? "入口节点自动安装 realm 运行这条隧道的转发；不支持限速和连接数限制，节点 agent 需为支持 realm 的版本；切换为 realm 后该隧道的转发流量开始计入用户配额，切回面板转发（gost）则不计费"
-                            : "节点 agent 直接转发，支持限速和连接数限制；面板转发（gost）的隧道流量不计入用户配额"
+                            ? "入口节点自动安装 realm 运行这条隧道的转发；不支持限速和连接数限制，节点 agent 需为支持 realm 的版本；计费与面板转发一致，按隧道计费模式扣用户配额"
+                            : "节点 agent 直接转发，支持限速和连接数限制；流量按隧道计费模式计入用户配额（与 realm 同口径）"
                         }
                         label="转发引擎"
                         selectedKeys={[
@@ -3544,6 +3568,9 @@ export default function TunnelPage() {
                     variant="flat"
                   />
                 )}
+                <p className="text-xs text-default-500">
+                  注：若相关节点当前离线，本次仅删除面板记录；节点侧的隧道服务会在节点重新连接时自动清理。
+                </p>
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>
@@ -4320,6 +4347,9 @@ export default function TunnelPage() {
                     variant="flat"
                   />
                 )}
+                <p className="text-xs text-default-500">
+                  注：若相关节点当前离线，本次仅删除面板记录；节点侧的隧道服务会在节点重新连接时自动清理。
+                </p>
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>

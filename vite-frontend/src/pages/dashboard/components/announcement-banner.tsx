@@ -1,10 +1,7 @@
 import type { AnnouncementData } from "@/api";
 
-import ReactMarkdown from "react-markdown";
-import rehypeSanitize from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
-
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
+import { AnnouncementMarkdown } from "./announcement-markdown";
 
 interface AnnouncementBannerProps {
   announcement: AnnouncementData;
@@ -40,7 +37,7 @@ export const AnnouncementBanner = ({
               公告
             </h3>
             <div className="text-sm text-blue-800/90 dark:text-blue-100/90 break-words leading-relaxed">
-              <ReactMarkdown
+              <AnnouncementMarkdown
                 components={{
                   p: ({ children }) => (
                     <p className="mb-2 last:mb-0">{children}</p>
@@ -81,11 +78,8 @@ export const AnnouncementBanner = ({
                     </blockquote>
                   ),
                 }}
-                rehypePlugins={[rehypeSanitize]}
-                remarkPlugins={[remarkGfm]}
-              >
-                {announcement.content}
-              </ReactMarkdown>
+                content={announcement.content}
+              />
             </div>
           </div>
         </div>

@@ -38,6 +38,9 @@ export default function SubscriptionAssignSection() {
   const [saving, setSaving] = useState(false);
   // 当前用户的已分配集合是否还在加载（加载完成前禁止保存，防止串户）
   const [assignLoading, setAssignLoading] = useState(false);
+  // 已分配集加载失败：后端保存是全量替换，失败被装成空集时保存即清零
+  // 该用户的全部分配（X1-01）——失败态必须禁用保存并明确提示。
+  const [assignLoadError, setAssignLoadError] = useState(false);
   const assignSeqRef = useRef(0);
 
   // 加载用户与订阅列表
@@ -47,7 +50,9 @@ export default function SubscriptionAssignSection() {
       .then(([uRes, sRes]) => {
         if (uRes.code === 0)
           setUsers((uRes.data ?? []).filter((u: UserApiItem) => u.id));
+        else toast.error(uRes.msg || "加载用户列表失败");
         if (sRes.code === 0 && sRes.data) setSubs(sRes.data.items ?? []);
+        else toast.error(sRes.msg || "加载订阅列表失败");
       })
       .finally(() => setLoading(false));
   }, []);
@@ -58,6 +63,7 @@ export default function SubscriptionAssignSection() {
       assignSeqRef.current += 1;
       setSelected(new Set());
       setAssignLoading(false);
+      setAssignLoadError(false);
 
       return;
     }
@@ -68,6 +74,7 @@ export default function SubscriptionAssignSection() {
 
     setSelected(new Set());
     setAssignLoading(true);
+    setAssignLoadError(false);
     getUserSubscriptions(userId)
       .then((res) => {
         if (assignSeqRef.current !== seq) {
@@ -75,10 +82,17 @@ export default function SubscriptionAssignSection() {
         }
         if (res.code === 0) {
           setSelected(new Set(res.data?.subscriptionIds ?? []));
+        } else {
+          // 加载失败：置错误态，保存保持禁用（全量替换接口下空集=全清）
+          setAssignLoadError(true);
+          toast.error(res.msg || "加载该用户的已分配订阅失败，已禁止保存");
         }
       })
       .catch(() => {
-        // 拉取失败保持空集 + 保存禁用解除后由管理员重试切换
+        if (assignSeqRef.current === seq) {
+          setAssignLoadError(true);
+          toast.error("加载该用户的已分配订阅失败，已禁止保存");
+        }
       })
       .finally(() => {
         if (assignSeqRef.current === seq) {
@@ -106,6 +120,12 @@ export default function SubscriptionAssignSection() {
     }
     if (assignLoading) {
       // 已选集尚未按当前用户加载完成，禁止保存（防串户的最后一道闸）
+      return;
+    }
+    if (assignLoadError) {
+      // 已分配集加载失败：当前勾选集不可信，保存（全量替换）会清零分配
+      toast.error("该用户的已分配订阅加载失败，请重新选择该用户后再保存");
+
       return;
     }
     setSaving(true);
@@ -162,6 +182,11 @@ export default function SubscriptionAssignSection() {
             </p>
           ) : (
             <>
+              {assignLoadError && (
+                <p className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-600 dark:border-danger-500/30 dark:bg-danger-500/10 dark:text-danger-400">
+                  该用户的已分配订阅加载失败，下方勾选状态不可信，保存已禁用。请重新选择该用户重试。
+                </p>
+              )}
               {subs.length === 0 ? (
                 <p className="text-sm text-default-400">
                   还没有订阅，先在「订阅管理」里新建订阅再来分配
@@ -185,7 +210,7 @@ export default function SubscriptionAssignSection() {
                           aria-label={`分配订阅 ${s.name}`}
                           checked={isSelected}
                           className="h-4 w-4 shrink-0 rounded"
-                          disabled={assignLoading}
+                          disabled={assignLoading || assignLoadError}
                           type="checkbox"
                           onChange={() => toggle(s.id)}
                         />
@@ -224,14 +249,16 @@ export default function SubscriptionAssignSection() {
               <div className="flex items-center gap-3">
                 <Button
                   color="primary"
-                  isDisabled={assignLoading}
+                  isDisabled={assignLoading || assignLoadError}
                   isLoading={saving}
                   size="sm"
                   onPress={handleSave}
                 >
                   {assignLoading
                     ? "正在加载该用户的分配..."
-                    : `保存订阅分配（已选 ${selected.size} 个）`}
+                    : assignLoadError
+                      ? "加载失败，无法保存"
+                      : `保存订阅分配（已选 ${selected.size} 个）`}
                 </Button>
                 {selectedUser && (
                   <span className="text-xs text-default-500">
