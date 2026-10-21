@@ -39,7 +39,8 @@ function bucketLabel(
 ): [string, string, string] {
   const d = new Date(ms);
   const md = `${d.getMonth() + 1}/${d.getDate()}`;
-  const hm = `${pad(d.getHours())}:00`;
+  // 非整小时时区（如 UTC+5:30）桶起点落在 :30/:45，标签用实际分钟。
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
   if (range === "hour") return [hm, `${md} ${hm}`, `${md} ${hm}`];
   if (range === "day") return [md, md, `${d.getFullYear()}/${md}`];
