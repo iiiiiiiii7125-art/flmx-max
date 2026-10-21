@@ -1,11 +1,18 @@
-import type { RemoteSyncResult } from "@/api";
+import type { RemoteSourceRole, RemoteSyncResult } from "@/api";
 import type { InboundApiItem } from "@/api/types";
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 import { importInbounds, saveRemoteSource, updateExternalInbound } from "@/api";
-import { INTERVALS, syncText } from "@/pages/inbound/sources";
+import {
+  FilePick,
+  INTERVALS,
+  ROLE_HINTS,
+  SOURCE_ROLES,
+  readSubscriptionFile,
+  syncText,
+} from "@/pages/inbound/sources";
 import { Segmented } from "@/pages/subscription/controls";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -57,6 +64,9 @@ export function ImportModal({
   const [sync, setSync] = useState(true);
   const [sourceName, setSourceName] = useState("");
   const [intervalHours, setIntervalHours] = useState("12");
+  const [role, setRole] = useState<RemoteSourceRole>("");
+  // The uploaded file the text came from, if any.
+  const [fileName, setFileName] = useState("");
 
   useEffect(() => {
     if (isOpen) {
@@ -66,22 +76,38 @@ export function ImportModal({
       setSync(true);
       setSourceName("");
       setIntervalHours("12");
+      setRole("");
+      setFileName("");
     }
   }, [isOpen]);
 
   const subURL = subscriptionURL(links);
-  const syncing = Boolean(subURL) && sync;
+  const fromFile = Boolean(fileName) && !subURL;
+  const syncing = (Boolean(subURL) || fromFile) && sync;
 
   const addSource = async () => {
-    if (!subURL) return;
+    if (!subURL && !fromFile) return;
     setSaving(true);
     try {
-      const res = await saveRemoteSource({
-        name: sourceName.trim() || subURL.hostname,
-        url: subURL.toString(),
-        intervalHours: Number(intervalHours),
-        relayOnly,
-      });
+      const res = await saveRemoteSource(
+        subURL
+          ? {
+              name: sourceName.trim() || subURL.hostname,
+              url: subURL.toString(),
+              intervalHours: Number(intervalHours),
+              relayOnly,
+              role,
+            }
+          : {
+              name: sourceName.trim() || fileName.replace(/\.[^.]+$/, ""),
+              url: "",
+              kind: "file",
+              content: links,
+              intervalHours: 0,
+              relayOnly,
+              role,
+            },
+      );
       const result = (res.data as { result?: RemoteSyncResult } | null)?.result;
 
       // A source whose first fetch failed is still saved.
@@ -158,16 +184,31 @@ export function ImportModal({
             variant="bordered"
             onChange={(e) => setLinks(e.target.value)}
           />
-          {subURL && (
+          <FilePick
+            fileName={fileName}
+            onFile={async (file) => {
+              const text = await readSubscriptionFile(file);
+
+              if (text !== null) {
+                setLinks(text);
+                setFileName(file.name);
+              }
+            }}
+          />
+          {(subURL || fromFile) && (
             <div className="space-y-3 rounded-xl border border-divider p-3">
               <div className="flex items-start gap-2">
                 <Switch isSelected={sync} size="sm" onValueChange={setSync} />
                 <div>
-                  <p className="text-sm">定时同步</p>
+                  <p className="text-sm">
+                    {subURL ? "定时同步" : "存为订阅源"}
+                  </p>
                   <p className="text-xs text-default-500">
-                    {sync
-                      ? "存为订阅源：按时重新拉取，节点增删改自动跟上"
-                      : "只导入一次，之后不再更新"}
+                    {!sync
+                      ? "只导入一次，之后不再更新"
+                      : subURL
+                        ? "存为订阅源：按时重新拉取，节点增删改自动跟上"
+                        : "以后重新上传文件，节点增删改自动跟上"}
                   </p>
                 </div>
               </div>
@@ -175,23 +216,42 @@ export function ImportModal({
                 <>
                   <Input
                     label="名称"
-                    placeholder={subURL.hostname}
+                    placeholder={
+                      subURL
+                        ? subURL.hostname
+                        : fileName.replace(/\.[^.]+$/, "")
+                    }
                     size="sm"
                     value={sourceName}
                     variant="bordered"
                     onChange={(e) => setSourceName(e.target.value)}
                   />
-                  <Segmented
-                    options={INTERVALS}
-                    value={intervalHours}
-                    onChange={setIntervalHours}
-                  />
+                  {subURL && (
+                    <Segmented
+                      options={INTERVALS}
+                      value={intervalHours}
+                      onChange={setIntervalHours}
+                    />
+                  )}
+                  <div className="space-y-1.5">
+                    <p className="text-sm">用途</p>
+                    <Segmented
+                      options={SOURCE_ROLES}
+                      value={role}
+                      onChange={(v) => setRole(v as RemoteSourceRole)}
+                    />
+                    <p className="text-xs text-default-500">
+                      {ROLE_HINTS[role]}
+                    </p>
+                  </div>
                 </>
               )}
             </div>
           )}
           <Checkbox isSelected={relayOnly} onValueChange={setRelayOnly}>
-            <span className="text-sm">订阅里只保留中转线路，不含直连</span>
+            <span className="text-sm">
+              只通过我的转发访问（订阅里不放直连，只放中转线路）
+            </span>
           </Checkbox>
           {errors.length > 0 && (
             <ul className="space-y-1 rounded-xl bg-danger-50 p-3 text-xs text-danger">
@@ -213,7 +273,7 @@ export function ImportModal({
             isLoading={saving}
             onPress={submit}
           >
-            {syncing ? "添加并同步" : "导入"}
+            {syncing ? (fromFile ? "添加订阅源" : "添加并同步") : "导入"}
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -412,7 +472,9 @@ export function ExternalEditModal({
                 isSelected={form.relayOnly}
                 onValueChange={(v) => set({ relayOnly: v })}
               >
-                <span className="text-sm">订阅里只保留中转线路，不含直连</span>
+                <span className="text-sm">
+                  只通过我的转发访问（订阅里不放直连，只放中转线路）
+                </span>
               </Checkbox>
             </div>
           )}

@@ -79,6 +79,14 @@ const EMPTY_PIPELINE: SubPipeline = {
   ruleGroups: [],
   chainLandingNames: [],
   chainRelayNames: [],
+  // 3.3.29 #87：链式按来源（一期 UI 只写 sources/own，其余三项只透传保留）。
+  chainLandingSources: [],
+  chainRelaySources: [],
+  chainLandingOwn: false,
+  chainNoneNames: [],
+  chainHideRelays: false,
+  chainSourceFilters: {},
+  chainDropUnused: false,
   script: "",
   /** 中转范围：端点 ID（0=直连，>0=中转 ID）；空 = 全部端点。 */
   relayIds: [],
@@ -287,8 +295,15 @@ function gbText(bytes: number): string {
   return String(Number.isInteger(v) ? v : Number(v.toFixed(2)));
 }
 
-function draftFrom(s?: SubscriptionItem): Draft {
+function draftFrom(
+  s?: SubscriptionItem,
+  sources: RemoteSourceItem[] = [],
+): Draft {
   if (!s) {
+    const ids = (role: string) =>
+      sources.filter((x) => x.role === role).map((x) => x.id);
+    const relays = ids("relay");
+
     return {
       name: "",
       // New subscriptions get their own credentials, so any of them can
@@ -297,7 +312,14 @@ function draftFrom(s?: SubscriptionItem): Draft {
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
-      options: { ...EMPTY_PIPELINE },
+      // Sources marked with a 用途 set up the chain by default: relay
+      // sources relay, landing sources and the own nodes are the exits.
+      options: {
+        ...EMPTY_PIPELINE,
+        chainRelaySources: relays,
+        chainLandingSources: ids("landing"),
+        chainLandingOwn: relays.length > 0,
+      },
       expireTime: 0,
       expire: "",
       enabled: true,
@@ -342,6 +364,46 @@ function toPayload(d: Draft): SubscriptionDraft {
     trafficLimit: gb > 0 ? Math.round(gb * GB) : 0,
     resetDay: d.resetDay,
   };
+}
+
+type ChainRole = "" | "landing" | "relay";
+
+/** 不用 / 落地 / 中转：给整个订阅源设链式角色（一期）。移植自 kure29/flyx。 */
+function ChainRoleButtons({
+  value,
+  onChange,
+}: {
+  value: ChainRole;
+  onChange: (role: ChainRole) => void;
+}) {
+  return (
+    <div className="flex shrink-0 gap-1">
+      {(
+        [
+          ["", "不用"],
+          ["landing", "落地"],
+          ["relay", "中转"],
+        ] as Array<[ChainRole, string]>
+      ).map(([r, label]) => (
+        <button
+          key={r || "none"}
+          className={`rounded-lg border px-2 py-1 text-xs transition-colors ${
+            value === r
+              ? r === "landing"
+                ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-500/20"
+                : r === "relay"
+                  ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-500/20"
+                  : "border-default-400 bg-default-100 text-default-700"
+              : "border-default-200 text-default-500 hover:border-default-400 dark:border-default-100"
+          }`}
+          type="button"
+          onClick={() => onChange(r)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function Editor({
@@ -478,6 +540,46 @@ function Editor({
       setPreviewing(false);
     }
   };
+
+  // 链式是否已配置：关键词、按节点多选、按来源、自建落地任一存在。
+  const chainConfigured = Boolean(
+    (o.chainLanding && o.chainRelay) ||
+      o.chainLandingNames.length ||
+      o.chainRelayNames.length ||
+      o.chainLandingSources.length ||
+      o.chainRelaySources.length ||
+      o.chainLandingOwn,
+  );
+
+  // 按来源设角色（一期）：只写 sources 两列。注意后端语义——一旦用按
+  // 来源/节点/自建判定，旧的关键词表达式即被忽略（chainMatchers），
+  // 故与上游一致在此清掉表达式，避免表单里留着已失效的值误导用户。
+  // chainNoneNames / chainSourceFilters / chainDropUnused /
+  // chainHideRelays 是二期字段：一期不提供编辑入口，这里一律不碰，
+  // 随 draft.options 原样透传回保存请求（见 toPayload 的 ...rest）。
+  const setSourceRole = (id: number, role: ChainRole) => {
+    const without = (list: number[]) => list.filter((x) => x !== id);
+
+    setOpts({
+      chainLandingSources:
+        role === "landing"
+          ? [...without(o.chainLandingSources), id]
+          : without(o.chainLandingSources),
+      chainRelaySources:
+        role === "relay"
+          ? [...without(o.chainRelaySources), id]
+          : without(o.chainRelaySources),
+      chainLanding: "",
+      chainRelay: "",
+    });
+  };
+
+  const sourceRole = (id: number): ChainRole =>
+    o.chainLandingSources.includes(id)
+      ? "landing"
+      : o.chainRelaySources.includes(id)
+        ? "relay"
+        : "";
 
   const pickList = (title: string, list: InboundApiItem[]) =>
     list.length > 0 && (
@@ -637,25 +739,35 @@ function Editor({
                   <p className="text-xs text-default-500">
                     订阅源（整个源，更新后的节点自动跟上）
                   </p>
-                  {sources.map((src) => (
-                    <Checkbox
-                      key={src.id}
-                      className="w-full"
-                      isSelected={draft.sourceIds.includes(src.id)}
-                      onValueChange={(on) =>
-                        set({
-                          sourceIds: on
-                            ? [...draft.sourceIds, src.id]
-                            : draft.sourceIds.filter((x) => x !== src.id),
-                        })
-                      }
-                    >
-                      <span className="text-sm">{src.name}</span>
-                      <span className="ml-1 text-xs text-default-400">
-                        {src.nodeCount} 个节点
-                      </span>
-                    </Checkbox>
-                  ))}
+                  {sources.map((src) => {
+                    const inChain =
+                      o.chainRelaySources.includes(src.id) ||
+                      o.chainLandingSources.includes(src.id);
+
+                    return (
+                      <Checkbox
+                        key={src.id}
+                        className="w-full"
+                        isDisabled={inChain}
+                        isSelected={
+                          inChain || draft.sourceIds.includes(src.id)
+                        }
+                        onValueChange={(on) =>
+                          set({
+                            sourceIds: on
+                              ? [...draft.sourceIds, src.id]
+                              : draft.sourceIds.filter((x) => x !== src.id),
+                          })
+                        }
+                      >
+                        <span className="text-sm">{src.name}</span>
+                        <span className="ml-1 text-xs text-default-400">
+                          {src.nodeCount} 个节点
+                          {inChain && " · 链式代理在用，自动包含"}
+                        </span>
+                      </Checkbox>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -841,9 +953,9 @@ function Editor({
 
         <Section
           collapsible
-          defaultOpen={Boolean(o.chainLanding || o.chainRelay)}
-          hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。两项都填且都匹配到节点才生效；通用分享链接（Base64）无法表达链式"
-          summary={o.chainLanding && o.chainRelay ? "已开启" : "未开启"}
+          defaultOpen={chainConfigured}
+          hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。落地和中转都至少有一个才生效；通用分享链接（Base64）无法表达链式"
+          summary={chainConfigured ? "已开启" : "未开启"}
           title="链式代理"
         >
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -863,6 +975,61 @@ function Editor({
               variant="bordered"
               onChange={(e) => setOpts({ chainRelay: e.target.value })}
             />
+          </div>
+          {(o.chainLanding || o.chainRelay) && (
+            <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs text-warning-700 dark:bg-warning-500/10">
+              现在用的是上面的关键词方式。在下面按来源设置角色后会改用按来源设置，关键词会被清空
+            </p>
+          )}
+          <div className="space-y-3">
+            <p className="text-xs font-medium">按来源</p>
+            <ToggleRow
+              hint="自己面板上的节点（含它们的中转线路）都作为出口"
+              id="chain-landing-own"
+              label="自建节点全部作落地"
+              value={o.chainLandingOwn}
+              onChange={(chainLandingOwn) => {
+                setOpts({
+                  chainLandingOwn,
+                  // 同 setSourceRole：用新判定后关键词即失效，一并清掉。
+                  chainLanding: "",
+                  chainRelay: "",
+                });
+              }}
+            />
+            {sources.length > 0 && (
+              <div className="divide-y divide-divider rounded-xl border border-divider">
+                {sources.map((src) => (
+                  <div
+                    key={src.id}
+                    className="flex items-center gap-3 px-3 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm">{src.name}</span>
+                        {src.role && (
+                          <span
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${src.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20" : "bg-warning-100 text-warning-700 dark:bg-warning-500/20"}`}
+                          >
+                            用途：{src.role === "relay" ? "中转" : "落地"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="truncate text-xs text-default-400">
+                        {src.nodeCount} 个节点
+                      </div>
+                    </div>
+                    <ChainRoleButtons
+                      value={sourceRole(src.id)}
+                      onChange={(r) => setSourceRole(src.id, r)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-default-500">
+              给订阅源设了角色，它的节点会自动加入这个订阅；机场改名、增删节点会自动跟上
+            </p>
           </div>
         </Section>
 
@@ -974,6 +1141,14 @@ function Editor({
                           className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-500/20" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20"}`}
                         >
                           {p.chain === "landing" ? "落地" : "中转"}
+                        </span>
+                      )}
+                      {(p.own || p.sourceId) && (
+                        <span className="max-w-28 shrink-0 truncate text-default-400">
+                          {p.own
+                            ? "自建"
+                            : (sources.find((s) => s.id === p.sourceId)
+                                ?.name ?? "订阅源")}
                         </span>
                       )}
                       <span className="shrink-0 text-default-500">
@@ -1236,7 +1411,7 @@ export default function SubscriptionPage() {
           color="primary"
           size="sm"
           variant="flat"
-          onPress={() => setDraft(draftFrom())}
+          onPress={() => setDraft(draftFrom(undefined, sources))}
         >
           新建订阅
         </Button>
