@@ -2488,22 +2488,59 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("隧道权限不存在"))
 		return
 	}
-	flow, flowMiB, flowErr := parseTrafficLimit(req, 0)
-	if flowErr != nil {
-		response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
-		return
+	// G3-131（BUG-A2-5）：真部分更新，与 upsertUserTunnel 同一约定——
+	// 未传的字段保持原值，只有显式传入才覆盖；数值字段用 -1 哨兵区分
+	// 「未传」与「传 0」，speedId 显式传 null 表示清除限速引用。
+	// 旧实现对未传字段套硬编码默认值（num→0、expTime→+365 天、
+	// flowResetTime→1、status→1、flow→parseTrafficLimit 缺省值），
+	// 部分更新会静默重置既有配置。
+	flow := oldTunnel.Flow
+	flowMiB := oldTunnel.FlowMiB
+	_, flowSupplied := req["flow"]
+	_, flowMiBSupplied := req["flowMiB"]
+	if flowSupplied || flowMiBSupplied {
+		var flowErr error
+		flow, flowMiB, flowErr = parseTrafficLimit(req, 0)
+		if flowErr != nil {
+			response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
+			return
+		}
+		if !flowMiBSupplied && oldTunnel.Flow == flow {
+			flowMiB = oldTunnel.FlowMiB
+		}
 	}
-	if _, supplied := req["flowMiB"]; !supplied && oldTunnel.Flow == flow {
-		flowMiB = oldTunnel.FlowMiB
+
+	num := int(oldNum)
+	if v := asInt(req["num"], -1); v >= 0 {
+		num = v
+	}
+	expTime := oldExpTime
+	if v := asInt64(req["expTime"], -1); v >= 0 {
+		expTime = v
+	}
+	flowResetTime := oldFlowReset
+	if v := asInt64(req["flowResetTime"], -1); v >= 0 {
+		flowResetTime = v
+	}
+	status := oldStatus
+	if v := asInt(req["status"], -1); v >= 0 {
+		status = v
+	}
+
+	effectiveSpeedID := interface{}(oldSpeedID)
+	if speedID != nil {
+		effectiveSpeedID = nullableInt(speedID)
+	} else if _, supplied := req["speedId"]; supplied {
+		effectiveSpeedID = nil
 	}
 
 	if err := h.repo.UpdateUserTunnel(id,
 		flow,
-		asInt(req["num"], 0),
-		asInt64(req["expTime"], time.Now().Add(365*24*time.Hour).UnixMilli()),
-		asInt64(req["flowResetTime"], 1),
-		nullableInt(speedID),
-		asInt(req["status"], 1),
+		num,
+		expTime,
+		flowResetTime,
+		effectiveSpeedID,
+		status,
 		flowMiB,
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
