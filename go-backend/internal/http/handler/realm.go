@@ -295,6 +295,11 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 		hardErrs = append(hardErrs, fmt.Errorf("%s: %w", op, err))
 	}
 	if fromRealm {
+		// R3-01：拆除 realm 前先结算最终计数——拆除后 agent nft 表
+		// 重建、realm 端口计数消失，此刻不结算的增量永久漏计
+		// （A4-010 的 realm 侧窗口）。轮询失败（离线）不阻塞切换，
+		// 与离线自愈口径一致。
+		h.settleRealmCountersAtSwitch(nodes)
 		// Free the ports first, then start the agent's services.
 		if _, err := h.syncRealmNodes(nodes, nil); err != nil {
 			collect("realm 收敛", err)
@@ -312,7 +317,23 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 	if _, err := h.syncRealmNodes(nodes, nil); err != nil {
 		collect("realm 下发", err)
 	}
+	// R3-01：realm 起来后立即拉一次状态：新引擎计数基线钉在切换点，
+	// 切换后立即产生的流量从下一轮询起即可差分入账；不再等 60s 轮询
+	// 首采样才建基线（真机 T10 观察到切换后计数 ≥8 分钟不动、仅迟到
+	// 部分入账）。
+	h.settleRealmCountersAtSwitch(nodes)
 	return errors.Join(hardErrs...)
+}
+
+// settleRealmCountersAtSwitch 主动拉一次各节点的内核状态，把 realm
+// 计数结算/建基线到当前时刻。refreshNodeKernelStatus 内部对离线节点
+// 静默跳过，失败不影响切换本身。
+func (h *Handler) settleRealmCountersAtSwitch(nodeIDs []int64) {
+	for _, nodeID := range uniqueInt64s(nodeIDs) {
+		if nodeID > 0 {
+			h.refreshNodeKernelStatus(nodeID)
+		}
+	}
 }
 
 // applyRealmCounters credits realm forwards with the traffic the agent
