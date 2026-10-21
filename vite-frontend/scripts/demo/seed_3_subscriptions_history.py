@@ -4,8 +4,9 @@
 FLMX model (do NOT port upstream's): a subscription is a row in
 `subscription`; who gets it lives in `user_subscription` (UserSubscription)
 and is written through POST /user-subscription/set. There is no user_id on
-the subscription and no template feature. The first subscription created
-becomes the default one (personal ?user=&sig= links hang on it).
+the subscription and no template feature. The default subscription is the
+panel's own auto-created one (first row by inx, id; personal ?user=&sig=
+links hang on it).
 """
 import json, sqlite3, sys, time, urllib.request, random, math, datetime
 B = "http://127.0.0.1:16370/api/v1"; DB = sys.argv[1]; st = json.load(open(DB + ".seed.json"))
@@ -31,7 +32,10 @@ def sub(name, **kw):
     res = api("/subscription/save", body)
     return res["data"]["id"]
 
-# Created first on purpose: the first subscription is the default one.
+# Created first on purpose among the seed's own subscriptions. Note the
+# panel itself auto-creates its default subscription (我的订阅) at boot;
+# DefaultSubscription() = first row by (inx, id), i.e. that one — the
+# assignments below look it up instead of assuming it is s1.
 s1 = sub("全部节点")
 # relayIds: 0 = direct endpoints, >0 = node_inbound_relay ids; [] = all.
 s2 = sub("小明 · 手机", options={"relayIds": [0, relays["上海移动 → 香港"]]},
@@ -46,10 +50,17 @@ x("UPDATE subscription SET upload_bytes=?, download_bytes=? WHERE id=?", (9 * G,
 # Commit before the API calls below: an open python write transaction
 # holds the SQLite write lock and the panel's own writes hit SQLITE_BUSY.
 db.commit()
-# Assignments in our model: xiaoming and aqiang get their subscription;
-# lili deliberately gets none (her 我的订阅 falls back to the personal link).
-api("/user-subscription/set", {"userId": users["xiaoming"], "subscriptionIds": [s2]})
-api("/user-subscription/set", {"userId": users["aqiang"], "subscriptionIds": [s3]})
+# Assignments in our model. The panel's default subscription (looked up
+# by the backend's own rule: first by inx, id) goes to both recorded
+# user personas: without it (and without a legacy inbound assignment)
+# 我的订阅 pops a red "默认订阅未分配" toast from inbound/sub/info —
+# S1 verified behaviour, kept out of the demo on purpose. lili
+# deliberately gets nothing at all (her 我的订阅 falls back to the
+# personal link and would show that toast; she is the unassigned
+# control and is not a recorded persona).
+default_id = x("SELECT id FROM subscription ORDER BY inx ASC, id ASC LIMIT 1").fetchone()[0]
+api("/user-subscription/set", {"userId": users["xiaoming"], "subscriptionIds": [default_id, s1, s2]})
+api("/user-subscription/set", {"userId": users["aqiang"], "subscriptionIds": [default_id, s1, s3]})
 for iid in inb.values():
     x("UPDATE node_inbound SET upload_bytes=?, download_bytes=? WHERE id=?", (random.randint(1, 20) * G, random.randint(20, 300) * G, iid))
 
