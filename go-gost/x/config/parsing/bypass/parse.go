@@ -76,13 +76,34 @@ func ParseBypass(cfg *config.BypassConfig) bypass.Bypass {
 
 func List(name string, names ...string) []bypass.Bypass {
 	var bypasses []bypass.Bypass
-	if bp := registry.BypassRegistry().Get(name); bp != nil {
-		bypasses = append(bypasses, bp)
-	}
-	for _, s := range names {
-		if bp := registry.BypassRegistry().Get(s); bp != nil {
+	for _, n := range append([]string{name}, names...) {
+		if n == "" {
+			continue
+		}
+		// FIX2-C #8: the built-in flmx-no-private bypass is claimed
+		// here, at parse time, instead of going through the registry:
+		// the registry wrapper for an unregistered name answers
+		// Contains=false (fail-open), so a service referencing this
+		// name must never depend on a config-defined bypass existing.
+		if n == xbypass.NoPrivateBypassName {
+			bypasses = append(bypasses, xbypass.NewNoPrivateBypass())
+			continue
+		}
+		if bp := registry.BypassRegistry().Get(n); bp != nil {
 			bypasses = append(bypasses, bp)
 		}
 	}
 	return bypasses
+}
+
+// RegisterBuiltinBypasses registers the built-in bypasses into the
+// registry for lookup paths that bypass parsing (e.g. handler
+// metadata referencing a bypass by name). A config-defined bypass
+// with the same name wins: builtins only fill names the operator's
+// config did not define. Called by the config loader after it has
+// (re)registered the config's own bypasses.
+func RegisterBuiltinBypasses() {
+	if _, ok := registry.BypassRegistry().GetAll()[xbypass.NoPrivateBypassName]; !ok {
+		_ = registry.BypassRegistry().Register(xbypass.NoPrivateBypassName, xbypass.NewNoPrivateBypass())
+	}
 }

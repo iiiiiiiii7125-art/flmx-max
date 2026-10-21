@@ -928,6 +928,24 @@ func (r *Repository) GetNodeByID(id int64) (*model.Node, error) {
 	return &n, nil
 }
 
+// GetNodeAgentVersion 返回节点最近一次 WS 握手上报的 agent 版本
+// （从未上报时为空）。供按 agent 能力分版下发配置用（如 FIX2-C #8
+// 的内置 bypass 版本门）。
+func (r *Repository) GetNodeAgentVersion(id int64) (string, error) {
+	if r == nil || r.db == nil {
+		return "", errors.New("repository not initialized")
+	}
+	var n model.Node
+	err := r.db.Select("version").Where("id = ?", id).First(&n).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return n.Version.String, nil
+}
+
 func (r *Repository) UpdateNodeOnline(nodeID int64, status int, version string, httpVal, tlsVal, socksVal int) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
