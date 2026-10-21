@@ -897,8 +897,8 @@ export const updateExternalInbound = (data: {
 }) => Network.post("/inbound/external/update", data);
 export const getInboundShare = (id: number) =>
   Network.post<InboundShareEntry[]>("/inbound/share", { id });
-export const getSubInfo = (reset = false) =>
-  Network.post<SubInfoApiData>("/inbound/sub/info", { reset });
+export const getSubInfo = (reset = false, silent = false) =>
+  Network.post<SubInfoApiData>("/inbound/sub/info", { reset }, { silent });
 export const getInboundRelays = (inboundId: number) =>
   Network.post<InboundRelayApiItem[]>("/inbound/relay/list", { inboundId });
 /** 立即测量中转线路（空 ids = 全部）及其入口节点的延迟。 */
