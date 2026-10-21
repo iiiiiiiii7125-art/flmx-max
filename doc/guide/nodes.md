@@ -118,7 +118,9 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 | 通用 base64 | v2rayN、NekoBox | Snell |
 | Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy |
 
-Snell 的下发按版本与客户端区分：Clash / Mihomo 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发（按 UA 判定）。
+Snell 的下发按版本与客户端区分：Clash / Mihomo 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发（按 UA 判定）。注意 `?format=singbox` 这类指定格式的链接不带客户端版本信息，与按 UA 拉取的结果不同：它按旧版处理、不含 Snell，要用 Snell 请让 sing-box 1.14+ 客户端直接拉通用链接。
+
+VLESS 加密（ENC）入站不在上表的协议排除之列，但只有 Clash / Mihomo、Stash 与通用 base64 输出会携带它的完整 `encryption` 参数，其余格式（sing-box、Shadowrocket、Loon、Quantumult X、Surge）直接略过这类入站。
 
 ## 批量操作
 

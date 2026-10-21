@@ -8,7 +8,7 @@
 curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
-选 `1. 安装面板`，完成后访问 `http://服务器IP:6366`，默认账号 `admin_user` / `admin_user`，**登录后立即修改密码**。
+选 `1. 安装面板`，完成后访问 `http://服务器IP:6366`，默认账号 `admin@user` / `admin@user`，**登录后立即修改密码**。
 
 详见 [安装部署](./install.md)。
 

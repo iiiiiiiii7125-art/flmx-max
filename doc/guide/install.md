@@ -30,8 +30,8 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 `http://<服务器IP>:<前端端口>` (默认: `http://<服务器IP>:6366`)
 
 **默认管理员账号：**
-- 用户名: `admin_user`
-- 密码: `admin_user`
+- 用户名: `admin@user`
+- 密码: `admin@user`
 
 ::: warning
 首次登录后请立即在“我的 / 个人资料”里修改默认密码。
