@@ -88,6 +88,14 @@ func (s *externalProbeStore) track(rows map[int64]model.NodeInbound, results map
 	return out
 }
 
+// unmarkDown 回滚某入站的 down 标记（A7-03：告警发送失败时），failStreak
+// 不动——下一轮探测仍失败便立即重新触发告警。
+func (s *externalProbeStore) unmarkDown(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.down, id)
+}
+
 func (s *externalProbeStore) get(id int64) (externalProbe, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -197,11 +205,26 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 	for _, t := range h.externalProbes.track(byID, results) {
 		addr := net.JoinHostPort(t.row.Listen, strconv.Itoa(t.row.Port))
 		if t.down {
-			h.notify(notifyEventInboundDown, "导入节点连不上",
-				fmt.Sprintf("节点：%s\n地址：%s\n原因：%s（从面板服务器检测）", t.row.Name, addr, t.err))
+			rowID := t.row.ID
+			h.notifyTracked(notifyEventInboundDown, "导入节点连不上",
+				fmt.Sprintf("节点：%s\n地址：%s\n原因：%s（从面板服务器检测）", t.row.Name, addr, t.err),
+				func(outcome notifyOutcome) {
+					// A7-03：发送失败回滚 down 标记，下一轮重新告警。
+					if outcome == notifyOutcomeFailed {
+						h.externalProbes.unmarkDown(rowID)
+					}
+				})
 		} else {
-			h.notify(notifyEventInboundDown, "导入节点已恢复",
-				fmt.Sprintf("节点：%s\n地址：%s", t.row.Name, addr))
+			name := t.row.Name
+			h.notifyTracked(notifyEventInboundDown, "导入节点已恢复",
+				fmt.Sprintf("节点：%s\n地址：%s", t.row.Name, addr),
+				func(outcome notifyOutcome) {
+					// A7-02：恢复送达后清掉该节点的问题指纹，重新武装。
+					if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
+						h.notifier.forgetFingerprintPrefix(
+							notifyEventInboundDown + "\x00导入节点连不上\x00节点：" + name + "\n")
+					}
+				})
 		}
 	}
 	return results, nil

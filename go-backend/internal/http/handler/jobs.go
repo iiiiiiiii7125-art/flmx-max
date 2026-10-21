@@ -25,6 +25,9 @@ func (h *Handler) StartBackgroundJobs() {
 	h.jobsWG.Add(15)
 	h.jobsMu.Unlock()
 
+	// FIX-D（D6-07）：通知派发 worker 绑定 jobs ctx，随 jobs 一起停。
+	h.ensureNotifyDispatcher()
+
 	go h.runHourlyStatsLoop(ctx)
 	go h.runDailyMaintenanceLoop(ctx)
 	go h.runNodeRenewalCycleLoop(ctx)
@@ -103,6 +106,7 @@ func (h *Handler) StopBackgroundJobs() {
 		cancel()
 	}
 	h.jobsWG.Wait()
+	h.stopNotifyDispatcher()
 }
 
 func (h *Handler) runMetricsIngestion(ctx context.Context) {
