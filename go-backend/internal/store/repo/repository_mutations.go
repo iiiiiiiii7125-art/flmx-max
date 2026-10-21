@@ -1584,7 +1584,22 @@ func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int
 		})
 	}
 
-	return tx.Create(&rows).Error
+	// FIX2-B（V4-N2 同族）：status 带 default:1，Status=0 的 binding
+	// 会在 Create 时被吞成 1（停用绑定被静默激活）。意图先行捕获——
+	// Create 后 GORM 会把默认值回填进 rows，不可再读。
+	intents := make([]int, len(rows))
+	for i := range rows {
+		intents[i] = rows[i].Status
+	}
+	if err := tx.Create(&rows).Error; err != nil {
+		return err
+	}
+	for i := range rows {
+		if err := restoreZeroValuedInt(tx, &model.FederationTunnelBinding{}, rows[i].ID, "status", intents[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) InsertGroupPermission(userGroupID, tunnelGroupID int64, now int64) error {

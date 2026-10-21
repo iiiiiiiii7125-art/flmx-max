@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -435,6 +436,56 @@ func orderPeerShareResources(items []repo.PeerShareResource) {
 		return 2
 	}
 	sort.SliceStable(items, func(i, j int) bool { return rank(items[i]) < rank(items[j]) })
+}
+
+// revalidateStoredPeerShareResources 是 FIX2-B（V5-3 残余风险）的启动
+// 复检：D3-03 类型白名单只在 preparePeerResourceCommand 写入时校验，
+// 升级前已落库的 peer_share_resource 期望状态不经复检——若提供方在
+// 升级前已被恶意对端植入 file/sshd 等危险配置，升级后节点重连对账
+// 会原样物化。本函数在后台对账循环启动前把全部存量 active 的
+// service/chain 期望状态补跑一遍白名单：不过者置 paused（对账按
+// paused 语义下发删除、监听不拉起，配置保留待管理员处置）并逐条
+// 告警，绝不静默沿用；配置 JSON 不可解析同按 fail-closed 置 paused
+// （对账侧解不出同样无法物化）。deleted 墓碑与 limiter 不在复检面。
+func (h *Handler) revalidateStoredPeerShareResources() {
+	if h == nil || h.repo == nil {
+		return
+	}
+	items, err := h.repo.ListAllPeerShareResources()
+	if err != nil {
+		log.Printf("federation startup revalidation: list stored resources failed: %v", err)
+		return
+	}
+	var changed []repo.PeerShareResource
+	for i := range items {
+		item := items[i]
+		if item.DesiredState != "active" || (item.Kind != "service" && item.Kind != "chain") {
+			continue
+		}
+		if strings.TrimSpace(item.Config) == "" {
+			continue
+		}
+		var config interface{}
+		if err := json.Unmarshal([]byte(item.Config), &config); err != nil {
+			log.Printf("federation startup revalidation: pausing share_id=%d %s %q: stored config is not valid JSON: %v", item.ShareID, item.Kind, item.OriginalName, err)
+			item.DesiredState = "paused"
+			changed = append(changed, item)
+			continue
+		}
+		if err := validatePeerResourceTypes(config, item.Kind); err != nil {
+			log.Printf("federation startup revalidation: pausing share_id=%d %s %q: %v", item.ShareID, item.Kind, item.OriginalName, err)
+			item.DesiredState = "paused"
+			changed = append(changed, item)
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	if err := h.repo.SavePeerShareResources(changed); err != nil {
+		log.Printf("federation startup revalidation: persist paused states failed: %v", err)
+		return
+	}
+	log.Printf("federation startup revalidation: paused %d stored peer resource(s) failing the D3-03 type whitelist; review before resuming", len(changed))
 }
 
 func (h *Handler) reconcilePeerShareResourcesOnNode(nodeID int64) error {

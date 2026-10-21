@@ -290,6 +290,9 @@ type remoteUsageNodeItem struct {
 	Bindings         []remoteUsageBindingItem `json:"bindings"`
 	ActiveBindingNum int                      `json:"activeBindingNum"`
 	SyncError        string                   `json:"syncError,omitempty"`
+	// FIX2-B（V5-3）：对端面板版本与版本提示（旧对端为空）。
+	PanelVersion   string `json:"panelVersion,omitempty"`
+	VersionWarning string `json:"versionWarning,omitempty"`
 }
 
 func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName string, targetCount int, interfaceName string) map[string]interface{} {
@@ -729,6 +732,8 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 		portRangeStart int
 		portRangeEnd   int
 		syncError      string
+		panelVersion   string
+		versionWarning string
 	}
 	syncs := make([]remoteUsageSync, len(remoteNodes))
 	var wg sync.WaitGroup
@@ -760,6 +765,11 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 			syncs[idx].expiryTime = info.ExpiryTime
 			syncs[idx].portRangeStart = info.PortRangeStart
 			syncs[idx].portRangeEnd = info.PortRangeEnd
+			// FIX2-B（V5-3）：对端版本与版本提示随同步回执呈现 +
+			// panelVersion 落 RemoteConfig 留痕。
+			syncs[idx].panelVersion = info.PanelVersion
+			syncs[idx].versionWarning = info.VersionWarning
+			logFederationVersionWarning(info)
 
 			configData, _ := json.Marshal(map[string]interface{}{
 				"shareId":        info.ShareID,
@@ -772,6 +782,7 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 				// 凭据自愈路径之一，另一处见 applyFederationRuntime）。
 				"relayUsername": info.RelayUsername,
 				"relayPassword": info.RelayPassword,
+				"panelVersion":  info.PanelVersion,
 			})
 			_ = h.repo.UpdateNodeRemoteConfig(nodeID, string(configData))
 		}(i, node.ID, url, token)
@@ -865,6 +876,8 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 			Bindings:         bindings,
 			ActiveBindingNum: len(bindings),
 			SyncError:        syncError,
+			PanelVersion:     syncs[i].panelVersion,
+			VersionWarning:   syncs[i].versionWarning,
 		})
 	}
 
@@ -989,6 +1002,8 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "Failed to connect: "+err.Error()))
 		return
 	}
+	// FIX2-B（V5-3）：对端版本提示记日志并随导入回执返回（加法字段）。
+	logFederationVersionWarning(info)
 
 	// Prepare config json for local storage (metadata about limits)
 	configData := map[string]interface{}{
@@ -1001,6 +1016,7 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		// D3-04: 该 share 的 relay 凭据，建链时写入 connector auth。
 		"relayUsername": info.RelayUsername,
 		"relayPassword": info.RelayPassword,
+		"panelVersion":  info.PanelVersion,
 	}
 	configBytes, _ := json.Marshal(configData)
 
@@ -1028,6 +1044,13 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(info.VersionWarning) != "" {
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"versionWarning": info.VersionWarning,
+			"panelVersion":   info.PanelVersion,
+		}))
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -1135,6 +1158,50 @@ func isFederationCleanupRequest(r *http.Request) bool {
 	}
 }
 
+// federationRelayAuthPanelVersion 是 D3-04 relay 凭据鉴权上线的面板
+// 版本（FIX-I 随 1.3.3 发布）。低于此版本的消费方不识别 Connect 下发
+// 的 relay 凭据、connector 恒无 auth，会被已升级提供方的 role 服务
+// 拒绝——即 V5-3 的静默断裂格。
+const federationRelayAuthPanelVersion = "1.3.3"
+
+// federationVersionWarning 是给「版本过旧的对端」的统一提示文案
+// （提供方回执与日志、消费方日志共用）。升级顺序按 V5 纠正口径：
+// 先消费方、后提供方（新消费方对旧提供方零断裂，窗口最短）。
+func federationVersionWarning(peerVersion string) string {
+	return fmt.Sprintf("联邦对端面板版本 %s 低于 %s（relay 凭据鉴权上线版本）：role 链数据面将被拒绝而控制面仍显示正常。请先升级消费方、再升级提供方，并尽快两方同版。", peerVersion, federationRelayAuthPanelVersion)
+}
+
+// federationConsumerVersionWarning 判定一次 Connect 的消费方是否过旧：
+// 未上报版本 = 凭据感知版本之前的旧消费方，必警告；上报且可解析时
+// 低于基线才警告；不可解析或 dev 构建不臆断、不警告（compareVersions
+// 把 dev 定义为最低版本是升级防降级的口径，此处不沿用——自构建版本
+// 无从判定新旧，警告只会误报）。
+func federationConsumerVersionWarning(consumerVersion string) string {
+	v := strings.TrimSpace(consumerVersion)
+	if v == "" {
+		return federationVersionWarning("未上报（< " + federationRelayAuthPanelVersion + "）")
+	}
+	if v == "dev" {
+		return ""
+	}
+	cmp, err := compareVersions(v, federationRelayAuthPanelVersion)
+	if err != nil {
+		return ""
+	}
+	if cmp < 0 {
+		return federationVersionWarning(v)
+	}
+	return ""
+}
+
+// logFederationVersionWarning 把提供方回执的版本提示记入消费方日志
+// （消费方各 Connect 消费点共用；提示本体来自对端回执，不含凭据）。
+func logFederationVersionWarning(info *client.RemoteNodeInfo) {
+	if info != nil && strings.TrimSpace(info.VersionWarning) != "" {
+		log.Printf("federation: provider version warning: %s", strings.TrimSpace(info.VersionWarning))
+	}
+}
+
 func (h *Handler) federationConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("Invalid method"))
@@ -1159,7 +1226,16 @@ func (h *Handler) federationConnect(w http.ResponseWriter, r *http.Request) {
 	// 懒补发（repo 启动回填之外的第二道网）。
 	h.ensurePeerShareRelayCredentials(share)
 
-	response.WriteJSON(w, response.OK(map[string]interface{}{
+	// FIX2-B（V5-3）：版本可见性——回执恒带本方 panelVersion；消费方
+	// 版本缺失（旧版）或低于凭据感知版本时，回执带 versionWarning
+	// 且本方记日志。旧消费方忽略未知字段，但提供方侧信号不静默。
+	consumerVersion := strings.TrimSpace(r.Header.Get("X-Panel-Version"))
+	versionWarning := federationConsumerVersionWarning(consumerVersion)
+	if versionWarning != "" {
+		log.Printf("federation connect: share_id=%d consumer_panel_version=%q warning=%s", share.ID, consumerVersion, versionWarning)
+	}
+
+	data := map[string]interface{}{
 		"shareId":        share.ID,
 		"shareName":      share.Name,
 		"nodeId":         share.NodeID,
@@ -1173,7 +1249,12 @@ func (h *Handler) federationConnect(w http.ResponseWriter, r *http.Request) {
 		"expiryTime":     share.ExpiryTime,
 		"portRangeStart": share.PortRangeStart,
 		"portRangeEnd":   share.PortRangeEnd,
-	}))
+		"panelVersion":   currentPanelVersion(),
+	}
+	if versionWarning != "" {
+		data["versionWarning"] = versionWarning
+	}
+	response.WriteJSON(w, response.OK(data))
 }
 
 func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request) {
@@ -2238,6 +2319,9 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 		index     int
 		status    int
 		syncError string
+		// FIX2-B（V5-3）：对端版本与提示随节点列表回执呈现。
+		panelVersion   string
+		versionWarning string
 	}
 
 	results := make([]syncResult, len(remotes))
@@ -2263,7 +2347,8 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 					results[idx] = syncResult{index: e.index, status: 0, syncError: errMsg}
 				}
 			} else {
-				results[idx] = syncResult{index: e.index, status: info.Status, syncError: ""}
+				logFederationVersionWarning(info)
+				results[idx] = syncResult{index: e.index, status: info.Status, syncError: "", panelVersion: info.PanelVersion, versionWarning: info.VersionWarning}
 			}
 		}(i, entry)
 	}
@@ -2273,6 +2358,12 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 		items[r.index]["status"] = r.status
 		if r.syncError != "" {
 			items[r.index]["syncError"] = r.syncError
+		}
+		if r.panelVersion != "" {
+			items[r.index]["panelVersion"] = r.panelVersion
+		}
+		if r.versionWarning != "" {
+			items[r.index]["versionWarning"] = r.versionWarning
 		}
 	}
 }

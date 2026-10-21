@@ -518,6 +518,48 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
 }
 
+// filterInboundRowsByUserAssignments 保留用户被分配的入站行
+// （openSubscription ?user= 拉取侧第一段过滤；FIX2-B/V5-1 起与
+// mine 计数共用同一实现，保证两侧口径永不分叉）。
+func filterInboundRowsByUserAssignments(rows []model.NodeInbound, assignments []repo.UserInboundAssignment) []model.NodeInbound {
+	allowedInbound := make(map[int64]bool, len(assignments))
+	for _, a := range assignments {
+		allowedInbound[a.InboundID] = true
+	}
+	filtered := make([]model.NodeInbound, 0, len(rows))
+	for _, row := range rows {
+		if allowedInbound[row.ID] {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+// filterEndpointsByUserAssignments 按用户分配收紧端点（拉取侧第二段
+// 过滤）：中转端点需该 relay 的分配，直连端点需 relayID=0 的分配。
+func filterEndpointsByUserAssignments(endpoints []kernel.Endpoint, assignments []repo.UserInboundAssignment) []kernel.Endpoint {
+	directAllowed := make(map[int64]bool)
+	relayAllowed := make(map[int64]bool)
+	for _, a := range assignments {
+		if a.RelayID == 0 {
+			directAllowed[a.InboundID] = true
+		} else {
+			relayAllowed[a.RelayID] = true
+		}
+	}
+	filtered := make([]kernel.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		if e.RelayID > 0 {
+			if relayAllowed[e.RelayID] {
+				filtered = append(filtered, e)
+			}
+		} else if e.Direct && directAllowed[e.Inbound.ID] {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 // filterEndpointsByRelayIDs 按 relayIds 白名单过滤端点：
 // relayIDs 为空时原样返回；端点的 RelayID==0 视为直连（含导入端点），
 // 仅当 0 在白名单中才保留；RelayID>0 的中转端点同理按号命中。
@@ -576,6 +618,10 @@ type subscriptionView struct {
 // yields — base64. An unknown value falls back instead of failing the
 // whole view.
 func nodeCountFormat(format string) string {
+	// FIX2-B（V5-2）：与拉取侧（openSubscription 先 ToLower）同口径
+	// 大小写不敏感；此前 "Clash" 在计数侧静默回落 base64、与实得
+	// 格式分叉且无任何提示。
+	format = strings.ToLower(strings.TrimSpace(format))
 	switch format {
 	case kernel.FormatClash, kernel.FormatSingbox, kernel.FormatSurge,
 		kernel.FormatLoon, kernel.FormatQX, kernel.FormatShadowrocket, kernel.FormatBase64:
@@ -585,6 +631,18 @@ func nodeCountFormat(format string) string {
 }
 
 func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string) subscriptionView {
+	return h.subscriptionViewForAssignments(s, rows, now, format, nil)
+}
+
+// subscriptionViewForAssignments 在 subscriptionView 基础上按用户入站
+// 分配收紧 NodeCount（FIX2-B/V5-1）：assignments 为 nil 表示管理员
+// 全量口径；非 nil（含空集）时先按拉取侧同一组过滤函数收紧行与
+// 端点，使「我的订阅」显示数与该用户经 ?user=&sig= 个性化链接实际
+// 拉到的节点数恒等。空集 = 该用户个性化链接拉到 0 个节点。
+func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment) subscriptionView {
+	if assignments != nil {
+		rows = filterInboundRowsByUserAssignments(rows, assignments)
+	}
 	ids := subInboundIDs(s, rows)
 	byID := make(map[int64]model.NodeInbound, len(rows))
 	for _, r := range rows {
@@ -620,11 +678,15 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 	if format == kernel.FormatSingbox {
 		countOpts.SingboxSnell = true
 	}
+	endpoints := h.subEndpoints(s, rows)
+	if len(assignments) > 0 {
+		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
+	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
 		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
-		NodeCount:   kernel.SubscriptionNodeCount(format, h.subEndpoints(s, rows), countOpts),
+		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, OverQuota: subOverQuota(s), RelayIDs: relayIDs,
 	}

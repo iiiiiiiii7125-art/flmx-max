@@ -575,17 +575,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			userAssignments, _ = h.repo.ListUserInboundAssignments(userID)
-			allowedInbound := make(map[int64]bool, len(userAssignments))
-			for _, a := range userAssignments {
-				allowedInbound[a.InboundID] = true
-			}
-			filtered := rows[:0]
-			for _, row := range rows {
-				if allowedInbound[row.ID] {
-					filtered = append(filtered, row)
-				}
-			}
-			rows = filtered
+			rows = filterInboundRowsByUserAssignments(rows, userAssignments)
 		}
 	}
 	endpoints := h.subEndpoints(sub, rows)
@@ -593,26 +583,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	// direct endpoints require a relayID=0 assignment; relay endpoints
 	// require an assignment for that specific relay.
 	if len(userAssignments) > 0 {
-		directAllowed := make(map[int64]bool)
-		relayAllowed := make(map[int64]bool)
-		for _, a := range userAssignments {
-			if a.RelayID == 0 {
-				directAllowed[a.InboundID] = true
-			} else {
-				relayAllowed[a.RelayID] = true
-			}
-		}
-		var filtered []kernel.Endpoint
-		for _, e := range endpoints {
-			if e.RelayID > 0 {
-				if relayAllowed[e.RelayID] {
-					filtered = append(filtered, e)
-				}
-			} else if e.Direct && directAllowed[e.Inbound.ID] {
-				filtered = append(filtered, e)
-			}
-		}
-		endpoints = filtered
+		endpoints = filterEndpointsByUserAssignments(endpoints, userAssignments)
 	}
 	// Filter by specific relay: ?relay=<id> for a relay, ?relay=direct for direct only
 	if relayFilter := r.URL.Query().Get("relay"); relayFilter != "" {

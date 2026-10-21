@@ -21,7 +21,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	for _, k := range kernels {
 		out.Kernels = append(out.Kernels, model.KernelBackup{
 			ID: k.ID, NodeID: k.NodeID, KernelType: k.KernelType, Version: k.Version,
-			Enabled: k.Enabled, CreatedTime: k.CreatedTime,
+			Enabled: k.Enabled, CreatedTime: k.CreatedTime, InstalledVersion: k.InstalledVersion,
 		})
 	}
 
@@ -71,6 +71,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		out.Sources = append(out.Sources, model.RemoteSourceBackup{
 			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
 			RelayOnly: src.RelayOnly, Kind: src.Kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime,
+			Userinfo: src.Userinfo,
 		})
 	}
 	// A3-04：订阅计数基线与入站基线同等待遇随备份导出。
@@ -94,7 +95,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
 			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
-			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime,
+			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime, PendingDelete: sub.PendingDelete,
 		})
 	}
 	return out, nil
@@ -133,6 +134,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		item := model.NodeKernel{
 			ID: k.ID, NodeID: k.NodeID, KernelType: k.KernelType, Version: version,
 			Status: "pending", Enabled: k.Enabled, CreatedTime: k.CreatedTime, UpdatedTime: now,
+			InstalledVersion: k.InstalledVersion,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -158,10 +160,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		item := model.RemoteSource{
 			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
 			RelayOnly: src.RelayOnly, Kind: kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
+			Userinfo: src.Userinfo,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "url", "interval_hours", "relay_only", "kind", "role", "enabled", "updated_time"}),
+			DoUpdates: clause.AssignmentColumns([]string{"name", "url", "interval_hours", "relay_only", "kind", "role", "enabled", "updated_time", "userinfo"}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}
@@ -308,7 +311,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
 			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
-			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime,
+			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, PendingDelete: sb.PendingDelete,
 		}
 		// Every subscription has its own credentials (older backups may
 		// carry owner-credential ones).

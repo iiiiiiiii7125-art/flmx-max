@@ -25,6 +25,10 @@ func (h *Handler) StartBackgroundJobs() {
 	h.jobsWG.Add(15)
 	h.jobsMu.Unlock()
 
+	// FIX2-B（V5-3）：存量联邦期望状态启动复检——同步执行、赶在任何
+	// 对账循环之前，危险存量先置 paused 再谈物化。
+	h.revalidateStoredPeerShareResources()
+
 	// FIX-D（D6-07）：通知派发 worker 绑定 jobs ctx，随 jobs 一起停。
 	h.ensureNotifyDispatcher()
 
