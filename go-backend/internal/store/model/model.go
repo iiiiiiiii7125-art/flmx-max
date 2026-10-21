@@ -730,11 +730,19 @@ type ChainTunnelBackup struct {
 	TunnelID  int64  `json:"tunnelId"`
 	ChainType string `json:"chainType"`
 	NodeID    int64  `json:"nodeId"`
-	Port      int    `json:"port,omitempty"`
-	Strategy  string `json:"strategy,omitempty"`
-	Inx       int    `json:"inx,omitempty"`
-	Protocol  string `json:"protocol,omitempty"`
-	ConnectIP string `json:"connectIp,omitempty"`
+	// BUG-A2-3：port/strategy/inx/protocol/connect_ip 在 chain_tunnel 中
+	// 均可空，必须以指针携带 NULL 语义。旧实现用普通 int/string +
+	// omitempty 导出，NULL 与零值不可区分，导入时一律写成有效值
+	// （port 写 0），两条同节点 NULL 端口链路即撞 (node_id, port)
+	// 唯一索引导致整单恢复回滚。旧备份的普通数值可正常反序列化为
+	// 指针；旧备份缺失的字段按 NULL 恢复（旧导出已把 NULL 与 0/''
+	// 合并落盘，无法再区分——这些列的 0/'' 本就不是合法业务值，
+	// inx=0 除外，该一位精度损失为旧格式既成事实）。
+	Port      *int    `json:"port,omitempty"`
+	Strategy  *string `json:"strategy,omitempty"`
+	Inx       *int    `json:"inx,omitempty"`
+	Protocol  *string `json:"protocol,omitempty"`
+	ConnectIP *string `json:"connectIp,omitempty"`
 }
 
 type ForwardBackup struct {
@@ -844,12 +852,16 @@ type ImportResult struct {
 	InboundsImported     int `json:"inboundsImported"`
 	UserInboundsImported int `json:"userInboundsImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
-	AnnouncementsImported      int         `json:"announcementsImported"`
-	MonitorPermissionsImported int         `json:"monitorPermissionsImported"`
+	AnnouncementsImported      int `json:"announcementsImported"`
+	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
 	// B4/F-004/F-030：订阅分配与监控定义导入计数
 	UserSubscriptionsImported int `json:"userSubscriptionsImported"`
-	ServiceMonitorsImported   int `json:"serviceMonitorsImported"`
-	AutoBackup                 *BackupData `json:"autoBackup,omitempty"`
+	// BUG-A2-4：订阅按 token 重建换 id 时分配经 subRemap 重写落位；
+	// 确实无法落位（目标订阅不存在）的分配被跳过并在此如实计数，
+	// 不再混入 UserSubscriptionsImported 假报成功。
+	UserSubscriptionsSkipped int         `json:"userSubscriptionsSkipped,omitempty"`
+	ServiceMonitorsImported  int         `json:"serviceMonitorsImported"`
+	AutoBackup               *BackupData `json:"autoBackup,omitempty"`
 }
 
 // ─── View Structs (used by Repository, not GORM models) ─────────────
