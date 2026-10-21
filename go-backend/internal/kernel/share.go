@@ -218,9 +218,12 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 		return proxyClash(e)
 	}
 	in := e.Inbound
-	if in.Protocol == ProtocolSnell || in.Protocol == ProtocolNaive {
-		// Mihomo only speaks Snell v1-v3 and has no NaïveProxy client.
+	if in.Protocol == ProtocolNaive {
+		// Mihomo has no NaïveProxy client.
 		return nil, false
+	}
+	if in.Protocol == ProtocolSnell {
+		return clashSnell(e)
 	}
 	switch in.Protocol {
 	case ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS:
@@ -319,6 +322,48 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 	return p, true
 }
 
+// clashSnell renders a built Snell inbound for Mihomo. Version support is
+// pinned to Mihomo v1.19.32 (adapter/outbound/snell.go NewSnell): versions
+// 1-4 are accepted and 5 is normalized to 4 — v5 servers accept v4 clients,
+// the same interop singboxOutbound relies on — while 6 is rejected with
+// "snell version error" and Snell v6's mode shaping has no Mihomo field at
+// all. Built inbounds are v4/v5/v6 only, so v4/v5 render as version 4 and
+// v6 stays out: genuinely unsupported, not silently broken.
+// B1 (W10 复审): 此前 Snell 在此无分支、被整体丢弃，Clash 系用户静默少节点。
+func clashSnell(e Endpoint) (yamlNode, bool) {
+	in := e.Inbound
+	v := in.Settings.SnellVersion
+	if v == 0 {
+		v = DefaultSnellVersion
+	}
+	if v != 4 && v != 5 {
+		return nil, false
+	}
+	p := yamlNode{
+		{"name", e.Name},
+		{"type", "snell"},
+		{"server", strings.Trim(e.Host, "[]")},
+		{"port", e.Port},
+		{"udp", in.Network() == "tcp,udp"},
+		{"psk", in.Settings.Password},
+		{"version", 4},
+	}
+	if in.Security.Type == SecurityShadowTLS {
+		// Mihomo carries ShadowTLS as a snell obfs mode (obfs-opts
+		// mode=shadowtls with host/password/version, plus the uTLS
+		// fingerprint at proxy level).
+		p = append(p,
+			yamlField{"client-fingerprint", in.Security.Fingerprint},
+			yamlField{"obfs-opts", yamlNode{
+				{"host", in.Security.SNI},
+				{"mode", "shadowtls"},
+				{"password", in.Security.ShadowTLSPassword},
+				{"version", 3},
+			}})
+	}
+	return p, true
+}
+
 // SingboxOutbounds renders the sing-box client outbounds (1.11+ schema) for
 // an endpoint. The first one carries the endpoint's tag; ShadowTLS adds a
 // second outbound the first detours through. Snell is left out: only
@@ -331,6 +376,11 @@ func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
 // for sing-box 1.14+.
 func singboxOutbounds(e Endpoint, snell bool) ([]map[string]interface{}, bool) {
 	if e.Proxy != nil {
+		if e.Proxy.Type() == "snell" && !snell {
+			// Same UA gate as built inbounds: sing-box before 1.14 has
+			// no Snell client and would reject the whole profile.
+			return nil, false
+		}
 		return proxySingbox(e)
 	}
 	in := e.Inbound
