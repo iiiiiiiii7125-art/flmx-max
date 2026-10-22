@@ -582,6 +582,7 @@ type SubscriptionBackup struct {
 	TrafficLimit     int64 `json:"trafficLimit,omitempty"`
 	ResetDay         int   `json:"resetDay,omitempty"`
 	TrafficResetTime int64 `json:"trafficResetTime,omitempty"`
+	TrafficSince     int64 `json:"trafficSince,omitempty"`
 }
 
 type SubUserBackup struct {
@@ -622,6 +623,7 @@ type InboundBackup struct {
 	Security            string `json:"security"`
 	Settings            string `json:"settings"`
 	Extra               string `json:"extra"`
+	ShareAddressMode    string `json:"shareAddressMode,omitempty"`
 	ShareHost           string `json:"shareHost"`
 	Remark              string `json:"remark"`
 	RelayOnly           int    `json:"relayOnly"`
@@ -1139,6 +1141,24 @@ type NodeMetric struct {
 }
 
 func (NodeMetric) TableName() string { return "node_metric" }
+
+// NodeTraffic accumulates a node's whole-machine NIC byte counters into
+// hourly buckets (deltas of the agent-reported cumulative counters).
+// This is node NIC traffic — it includes forwarding, kernel and system
+// traffic of the whole machine and is a different metric from tunnel
+// billing / subscription quota counters; never mix the two. Telemetry
+// time series like NodeMetric: retention is a fixed 400 days and the
+// table is intentionally NOT part of backups (same precedent as
+// node_latency_sample).
+type NodeTraffic struct {
+	ID       int64 `gorm:"primaryKey;autoIncrement" json:"id"`
+	NodeID   int64 `gorm:"column:node_id;not null;uniqueIndex:idx_node_traffic_node_hour,priority:1" json:"nodeId"`
+	Hour     int64 `gorm:"not null;uniqueIndex:idx_node_traffic_node_hour,priority:2" json:"hour"`
+	InBytes  int64 `gorm:"column:in_bytes;not null;default:0" json:"inBytes"`
+	OutBytes int64 `gorm:"column:out_bytes;not null;default:0" json:"outBytes"`
+}
+
+func (NodeTraffic) TableName() string { return "node_traffic" }
 
 // NodeLatencySample is one measurement of a node's latency to a reference
 // point, kept for the latency trend chart. Retention is capped at 7 days

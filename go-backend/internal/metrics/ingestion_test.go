@@ -325,3 +325,65 @@ func TestZeroValues(t *testing.T) {
 		t.Fatalf("expected zero values, got CPU=%f Mem=%f Disk=%f", m.CPUUsage, m.MemUsage, m.DiskUsage)
 	}
 }
+
+// Traffic is what the byte counters grew by; the first report is only
+// a baseline. A regression WITHOUT a boot id (an old agent) counts 0
+// since the R3/S4 fix: an unproven regression is indistinguishable
+// from an interface-set change, and counting it in full double-counts
+// the machine's whole counter history (the pre-fix assertion here
+// expected the third report to add its full 100/50 — that legacy
+// "reboot counts in full" reading is exactly the phantom-traffic bug;
+// proven reboots are covered by TestNodeTrafficBootKeyedDeltas).
+func TestNodeTrafficFromCounters(t *testing.T) {
+	s := NewIngestionService(nil)
+	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1000, BytesTransmitted: 500})
+	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1600, BytesTransmitted: 900})
+	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 100, BytesTransmitted: 50})
+	var in, out int64
+	for k, v := range s.traffic {
+		if k.node == 7 {
+			in += v[0]
+			out += v[1]
+		}
+	}
+	if in != 600 || out != 400 {
+		t.Fatalf("traffic in=%d out=%d", in, out)
+	}
+}
+
+// R3/S4 (P2): NIC counter regressions are keyed by the agent's boot
+// id. Same boot + regression = the interface set changed mid-boot
+// (veth/tailscale churn): count 0, never a full recount — twice in a
+// row included. Proven boot change + regression = a real reboot:
+// the new counter counts in full, as before. Growth is plain
+// subtraction under every boot state.
+func TestNodeTrafficBootKeyedDeltas(t *testing.T) {
+	s := NewIngestionService(nil)
+	rec := func(node int64, boot string, in, out uint64) {
+		s.RecordNodeMetric(node, SystemInfo{BootID: boot, BytesReceived: in, BytesTransmitted: out})
+	}
+	// Node 7 stays on boot-a: growth, regression, growth, regression.
+	rec(7, "boot-a", 1000, 500) // baseline
+	rec(7, "boot-a", 1600, 900) // +600/+400
+	rec(7, "boot-a", 100, 50)   // same-boot regression: +0
+	rec(7, "boot-a", 150, 80)   // +50/+30
+	rec(7, "boot-a", 60, 40)    // second same-boot regression: +0
+	// Node 8 reboots between reports: the regression is proven.
+	rec(8, "boot-a", 1000, 500) // baseline
+	rec(8, "boot-a", 1600, 900) // +600/+400
+	rec(8, "boot-b", 100, 50)   // boot changed: counts in full +100/+50
+	rec(8, "boot-b", 200, 90)   // +100/+40
+	totals := map[int64][2]int64{}
+	for k, v := range s.traffic {
+		t := totals[k.node]
+		t[0] += v[0]
+		t[1] += v[1]
+		totals[k.node] = t
+	}
+	if got := totals[7]; got != [2]int64{650, 430} {
+		t.Fatalf("same-boot traffic = %v, want [650 430]", got)
+	}
+	if got := totals[8]; got != [2]int64{800, 490} {
+		t.Fatalf("reboot traffic = %v, want [800 490]", got)
+	}
+}

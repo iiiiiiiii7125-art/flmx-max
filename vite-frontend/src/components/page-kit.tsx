@@ -270,6 +270,7 @@ export function ListRow({
   badges,
   meta,
   right,
+  footer,
   selectMode,
   selected,
   onSelect,
@@ -282,6 +283,8 @@ export function ListRow({
   meta?: React.ReactNode;
   /** Shown at the end of the row; clicks on it do not open the row. */
   right?: React.ReactNode;
+  /** Optional block under the row line, inside the row card. */
+  footer?: React.ReactNode;
   selectMode?: boolean;
   selected?: boolean;
   onSelect?: () => void;
@@ -289,25 +292,8 @@ export function ListRow({
 }) {
   const activate = selectMode ? onSelect : onPress;
 
-  return (
-    <div
-      aria-pressed={selectMode ? selected : undefined}
-      className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
-        selected
-          ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
-          : "border-divider bg-content1 hover:bg-default-100"
-      }`}
-      role="button"
-      tabIndex={0}
-      onClick={activate}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          activate?.();
-        }
-      }}
-    >
+  const line = (
+    <>
       {selectMode && (
         <div
           className="flex shrink-0"
@@ -340,6 +326,38 @@ export function ListRow({
         >
           {right}
         </div>
+      )}
+    </>
+  );
+
+  return (
+    <div
+      aria-pressed={selectMode ? selected : undefined}
+      className={`flex w-full cursor-pointer gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
+        footer && !selectMode ? "flex-col" : "items-center"
+      } ${
+        selected
+          ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+          : "border-divider bg-content1 hover:bg-default-100"
+      }`}
+      role="button"
+      tabIndex={0}
+      onClick={activate}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activate?.();
+        }
+      }}
+    >
+      {footer && !selectMode ? (
+        <>
+          <div className="flex w-full items-center gap-3">{line}</div>
+          <div className="w-full">{footer}</div>
+        </>
+      ) : (
+        line
       )}
     </div>
   );

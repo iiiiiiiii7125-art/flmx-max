@@ -534,7 +534,8 @@ func surgeEscape(s string) string {
 func proxySurge(e Endpoint) (string, bool) {
 	p := e.Proxy.forEndpoint(e)
 	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
-	host := strings.Trim(e.Host, "[]")
+	// host 与 SurgeLine 同口径过 surgeEscape（F-A-01/C-01 纵深防御）。
+	host := surgeEscape(strings.Trim(e.Host, "[]"))
 	port := strconv.Itoa(e.Port)
 	var parts []string
 	tlsTail := func() {

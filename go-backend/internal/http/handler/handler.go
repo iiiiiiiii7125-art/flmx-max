@@ -111,6 +111,17 @@ type Handler struct {
 	relayLatency  *relayLatencyStore
 	notifier      *notifier
 	bestExit      *bestExitManager
+
+	// 移植自 kure29/flyx 3.3.30/3.3.33（DA-6/DB-5）：每节点 TcpPing
+	// 并发槽位（队列与执行共用超时预算，见 node_ping_slots.go）。
+	pingSlots *nodePingSlots
+	// 移植自 kure29/flyx 3.3.33（DB-3）：节点重连后自动重测队列
+	// （见 node_reconnect_probe.go），由 StartBackgroundJobs 创建。
+	reconnectProbes *nodeReconnectProbeQueue
+	// R1-B-04：内核在节点保持在线时单独重启的检测基线（agent 状态
+	// 报告的 Restarts/StartedAt 上次值），见 noteKernelStart。
+	kernelStartsMu sync.Mutex
+	kernelStarts   map[kernelStartKey]kernelStartMark
 }
 
 const monitorTunnelQualityEnabledConfigKey = "monitor_tunnel_quality_enabled"
@@ -182,6 +193,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		latencyAlerts:            newLatencyAlertTracker(),
 		relayLatency:             newRelayLatencyStore(),
 		notifier:                 newNotifier(),
+		pingSlots:                newNodePingSlots(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)
@@ -192,6 +204,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 			Uptime:           info.Uptime,
 			BytesReceived:    info.BytesReceived,
 			BytesTransmitted: info.BytesTransmitted,
+			BootID:           info.BootID,
 			CPUUsage:         info.CPUUsage,
 			MemoryUsage:      info.MemoryUsage,
 			DiskUsage:        info.DiskUsage,
@@ -397,6 +410,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/announcement/get", h.getAnnouncement)
 	mux.HandleFunc("/api/v1/announcement/update", h.updateAnnouncement)
 
+	mux.HandleFunc("/api/v1/node/traffic/month", h.nodeTrafficMonth)
 	mux.HandleFunc("/api/v1/monitor/access", h.monitorAccessHandler)
 	mux.HandleFunc("/api/v1/monitor/nodes/", h.monitorNodeMetricsHandler)
 	mux.HandleFunc("/api/v1/monitor/nodes", h.monitorNodeListHandler)

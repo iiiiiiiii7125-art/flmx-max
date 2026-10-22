@@ -169,8 +169,10 @@ export default function AdminLayout({
     },
     {
       path: "/monitor",
-      section: "系统",
       label: "监控",
+      // DA-1: admins reach monitoring per node (节点 → 监控) and per
+      // tunnel (中转 → 质量); the overview stays for granted users.
+      userOnly: true,
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path
@@ -183,6 +185,7 @@ export default function AdminLayout({
     },
     {
       path: "/panel-sharing",
+      section: "系统",
       label: "共享",
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">

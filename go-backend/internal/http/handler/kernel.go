@@ -67,32 +67,34 @@ type inboundView struct {
 	External     bool   `json:"external"`
 	// ImportedSummary / ImportedParams describe imported nodes, whose
 	// parameters live in the stored proxy rather than the kernel fields.
-	ImportedSummary string             `json:"importedSummary,omitempty"`
-	ImportedParams  [][2]string        `json:"importedParams,omitempty"`
-	NodeID          int64              `json:"nodeId"`
-	NodeName        string             `json:"nodeName"`
-	NodeServerIP    string             `json:"nodeServerIp"`
-	Name            string             `json:"name"`
-	Protocol        string             `json:"protocol"`
-	Listen          string             `json:"listen"`
-	Port            int                `json:"port"`
-	Network         string             `json:"network"`
-	Settings        kernel.Settings    `json:"settings"`
-	Transport       kernel.Transport   `json:"transport"`
-	Security        kernelSecurityView `json:"security"`
-	Extra           string             `json:"extra"`
-	ShareHost       string             `json:"shareHost"`
-	Remark          string             `json:"remark"`
-	RelayOnly       bool               `json:"relayOnly"`
-	RelayCount      int                `json:"relayCount"`
-	AcceptProxy     bool               `json:"acceptProxyProtocol"`
-	Whitelist       bool               `json:"relayWhitelist"`
-	WhitelistExtra  string             `json:"whitelistExtra"`
-	Enabled         bool               `json:"enabled"`
-	UploadBytes     int64              `json:"uploadBytes"`
-	DownloadBytes   int64              `json:"downloadBytes"`
-	CreatedTime     int64              `json:"createdTime"`
-	UpdatedTime     int64              `json:"updatedTime"`
+	ImportedSummary  string             `json:"importedSummary,omitempty"`
+	ImportedParams   [][2]string        `json:"importedParams,omitempty"`
+	NodeID           int64              `json:"nodeId"`
+	NodeName         string             `json:"nodeName"`
+	NodeServerIP     string             `json:"nodeServerIp"`
+	Name             string             `json:"name"`
+	Protocol         string             `json:"protocol"`
+	Listen           string             `json:"listen"`
+	Port             int                `json:"port"`
+	Network          string             `json:"network"`
+	Settings         kernel.Settings    `json:"settings"`
+	Transport        kernel.Transport   `json:"transport"`
+	Security         kernelSecurityView `json:"security"`
+	Extra            string             `json:"extra"`
+	ShareAddressMode string             `json:"shareAddressMode"`
+	ShareAddress     string             `json:"shareAddress"`
+	ShareHost        string             `json:"shareHost"`
+	Remark           string             `json:"remark"`
+	RelayOnly        bool               `json:"relayOnly"`
+	RelayCount       int                `json:"relayCount"`
+	AcceptProxy      bool               `json:"acceptProxyProtocol"`
+	Whitelist        bool               `json:"relayWhitelist"`
+	WhitelistExtra   string             `json:"whitelistExtra"`
+	Enabled          bool               `json:"enabled"`
+	UploadBytes      int64              `json:"uploadBytes"`
+	DownloadBytes    int64              `json:"downloadBytes"`
+	CreatedTime      int64              `json:"createdTime"`
+	UpdatedTime      int64              `json:"updatedTime"`
 	// Probe is the last reachability check of an imported node.
 	Probe *externalProbe `json:"probe,omitempty"`
 	// SourceID / SourceName: the remote subscription it came from.
@@ -133,6 +135,7 @@ type inboundRequest struct {
 	Transport           kernel.Transport   `json:"transport"`
 	Security            kernel.Security    `json:"security"`
 	Extra               string             `json:"extra"`
+	ShareAddressMode    *string            `json:"shareAddressMode"`
 	ShareHost           string             `json:"shareHost"`
 	Remark              string             `json:"remark"`
 	RelayOnly           bool               `json:"relayOnly"`
@@ -599,6 +602,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			Transport:          in.Transport,
 			Security:           kernelSecurityView{Security: in.Security, ACMEDNSSet: in.Security.ACMEDNSKey != ""},
 			Extra:              row.Extra,
+			ShareAddressMode:   inboundShareMode(&row),
 			ShareHost:          row.ShareHost,
 			Remark:             row.Remark,
 			RelayOnly:          row.RelayOnly == 1,
@@ -617,6 +621,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			SplitRules:         rowSplitRules(row),
 			OutboundIPStrategy: row.OutboundIPStrategy,
 		}
+		v.ShareAddress = inboundShareAddress(&row, node)
 		if v.SplitRules == nil {
 			v.SplitRules = []kernel.SplitRule{}
 		}
@@ -705,7 +710,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault("名称不能为空且不超过 100 字"))
 		return
 	}
-	req.ShareHost = strings.TrimSpace(req.ShareHost)
+	req.ShareHost = normalizeShareHost(req.ShareHost)
 	if len(req.ShareHost) > 255 {
 		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
 		return
@@ -909,6 +914,34 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// DB-2: resolve the share address mode. An explicit mode wins; a
+	// request carrying only a ShareHost keeps the pre-mode behaviour
+	// (host set → custom, host cleared → back to auto). Validation needs
+	// the node, whose address families decide ipv4/ipv6 availability.
+	shareMode := inboundShareMode(&row)
+	if req.ShareAddressMode != nil {
+		shareMode = strings.TrimSpace(*req.ShareAddressMode)
+	} else if req.ShareHost != "" {
+		shareMode = "custom"
+	} else if shareMode == "custom" {
+		shareMode = "auto"
+	}
+	shareNode, err := h.repo.GetNodeByID(row.NodeID)
+	if err != nil || shareNode == nil {
+		releasePortAlloc()
+		response.WriteJSON(w, response.ErrDefault("节点不存在"))
+		return
+	}
+	if err := validateShareAddress(shareMode, req.ShareHost, shareNode); err != nil {
+		releasePortAlloc()
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	row.ShareAddressMode = shareMode
+	if shareMode != "custom" {
+		req.ShareHost = ""
+	}
+
 	row.Name = req.Name
 	row.ShareHost = req.ShareHost
 	row.Remark = strings.TrimSpace(req.Remark)
@@ -1951,6 +1984,19 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	known := make(map[string]struct{}, len(kernels))
 	for _, k := range kernels {
 		known[k.KernelType] = struct{}{}
+	}
+	// R1-B-04：内核在节点保持在线时被 agent 单独重启（崩溃自恢复、
+	// KernelControl 手动重启）不经 onNodeOnline，状态轮询是唯一能
+	// 看见的面——按 DB-3 同口径排一次定向重测，不必等下个 3 分钟
+	// 定时轮。与 onNodeOnline 的排队在静默合并队列里自然去重。
+	restarted := false
+	for _, k := range kernels {
+		if s, ok := byType[k.KernelType]; ok && h.noteKernelStart(nodeID, s) {
+			restarted = true
+		}
+	}
+	if restarted {
+		h.scheduleNodeReconnectProbe(nodeID)
 	}
 	for t := range byType {
 		if _, ok := known[t]; ok {

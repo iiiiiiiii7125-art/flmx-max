@@ -93,6 +93,8 @@ func resolveValidatedMonitorIPs(host string) ([]net.IP, error) {
 		// 169.254/16 ∪ 未指定）先于 allowlist，任何放行配置不得
 		// 覆盖；loopback/私网/CGNAT 的 allow_private 放行维持
 		// （按判定口径地址查 allowlist，翻译内嵌同判）。
+		// fe80::/10 不在硬拒层（R3X-010 政策分层），属 NonPublic，
+		// 同样过下方 allowlist 门。
 		r := netguard.Classify(ip)
 		if r.HardDeny {
 			return nil, fmt.Errorf("目标地址不允许（元数据/硬拒绝地址）: %s", host)

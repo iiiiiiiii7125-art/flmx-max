@@ -25,7 +25,7 @@
 | Loon | Loon 节点 | `loon://` | ✗ |
 | Quantumult X | QX 节点 | `quantumult-x://` | ✗ |
 | Surge | Surge 配置 | `surge://` | ✓ |
-| Stash | Clash 配置 | `stash://` | ✓ |
+| Stash | Stash 配置（Clash 档案，规则集为 YAML） | `stash://` | ✓ |
 | 通用 | Base64 分享链接（v2rayN、NekoBox 等） | 仅复制 | ✗ |
 
 - 客户端不支持的协议会自动略过，例如 Loon 没有 TUIC，Quantumult X 没有 Hysteria2 / TUIC，Surge 没有 VLESS
@@ -140,6 +140,7 @@ proxies:
 | 客户端 | 开启规则后的输出 |
 |--------|------------------|
 | Clash / Mihomo | 配置含策略组（`proxy-groups`）和规则（`rules`） |
+| Stash | 配置含策略组和规则（规则集为 YAML 格式，不含 Mihomo 的 DNS / 嗅探设置段） |
 | sing-box | 配置含路由规则和规则集 |
 | Surge | 配置含自动选择策略组与规则，输出完整配置 |
 | Loon / Quantumult X / Shadowrocket | 输出**完整配置**（含策略组、规则、DNS），而不是纯节点列表 |
@@ -181,6 +182,7 @@ proxies:
 
 - 曲线是 **整条订阅的合计**：一条订阅分给多人时，凭据是同一套，流量拆不到个人，每位被分配用户看到的是同一条合计曲线
 - 统计口径和「已用」一致（只统计独立凭据协议，共用凭据不计入）
+- 详情与「我的订阅」会标注统计的**起算时间**（订阅创建或上次重置流量之时），显示为「<日期> 起已用 …」；重置流量后起算时间随之更新，起算之前的时段不在统计内
 - 自 1.3.0 起开始记录，上线之前的时段没有数据
 - 小时级统计数据保留 400 天，更早的数据会被自动清理
 

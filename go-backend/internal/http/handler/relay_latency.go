@@ -43,6 +43,7 @@ type relayLatency struct {
 type relayLatencyStore struct {
 	mu      sync.RWMutex
 	results map[int64]relayLatency
+	rounds  probeRounds
 }
 
 func newRelayLatencyStore() *relayLatencyStore {
@@ -58,13 +59,29 @@ func (s *relayLatencyStore) get(relayID int64) (relayLatency, bool) {
 
 // replace stores fresh results; a full round also drops deleted relays.
 func (s *relayLatencyStore) replace(results map[int64]relayLatency, all bool) {
+	s.replaceRound(results, all, time.Now().UnixNano())
+}
+
+// replaceRound is replace gated per entry by probeRounds（DB-4）。
+func (s *relayLatencyStore) replaceRound(results map[int64]relayLatency, all bool, started int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if all {
-		s.results = make(map[int64]relayLatency, len(results))
+		for id := range s.results {
+			if _, ok := results[id]; ok {
+				continue
+			}
+			if !s.rounds.take(id, started) {
+				continue
+			}
+			delete(s.results, id)
+			delete(s.rounds, id)
+		}
 	}
 	for id, r := range results {
-		s.results[id] = r
+		if s.rounds.take(id, started) {
+			s.results[id] = r
+		}
 	}
 }
 
@@ -213,9 +230,21 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 	return out
 }
 
-// probeRelayLatency measures the given relay lines (all when ids is empty).
-// Entry nodes' reference point latency comes from the last node round.
-func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64]relayLatency, error) {
+// probeRelayLatency measures the given relay lines (all when ids is
+// empty). Entry nodes' reference point latency comes from the last
+// node round.
+//
+// fullReplace states the round's cache semantics explicitly — the
+// caller declares it, it is never inferred from len(ids) inside
+// (R3-B-02: the two streak-carrying probers dropped that inference in
+// R2 for probeRoundKind; this store has no streak, but the same
+// latent trap would arm itself the day relay alerts learn to count).
+// Whole-set rounds (the scheduled loop, the config-save refresh, the
+// probe endpoint's empty-ids "all lines" contract) pass true; the
+// reconnect retest, which measures only the affected lines, passes
+// false so untouched lines keep their cached results.
+func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64, fullReplace bool) (map[int64]relayLatency, error) {
+	started := time.Now().UnixNano()
 	rows, err := h.repo.ListInboundRelays(0)
 	if err != nil {
 		return nil, err
@@ -257,27 +286,44 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64
 		hops[rw.ID] = make([]relayHop, len(plan.legs))
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, latencyParallel)
+	// DA-6：与节点延迟轮同口径，派发前按腿的出发节点交错。
+	type relayJob struct {
+		id  int64
+		i   int
+		leg relayLeg
+		hop relayHop
+	}
+	jobs := make([]relayJob, 0, len(plans))
 	for id, plan := range plans {
 		for i, l := range plan.legs {
 			hop := relayHop{From: l.fromName, To: l.toName, Error: l.err}
-			if l.err != "" || ctx.Err() != nil {
+			if l.err != "" {
 				hops[id][i] = hop
 				continue
 			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(id int64, i int, l relayLeg, hop relayHop) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				data, err := nodeLatencyPing(h, l.fromID, l.host, l.port)
-				p := latencyPointFrom(latencyTarget{}, data, err)
-				hop.OK, hop.LatencyMs, hop.LossPct, hop.Error = p.OK, p.LatencyMs, p.LossPct, p.Error
-				// Each goroutine writes its own slot.
-				hops[id][i] = hop
-			}(id, i, l, hop)
+			jobs = append(jobs, relayJob{id, i, l, hop})
 		}
+	}
+	jobs = interleaveByNode(jobs, func(j relayJob) int64 { return j.leg.fromID })
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, latencyParallel)
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			hops[j.id][j.i] = j.hop
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j relayJob) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := nodeLatencyPing(h, j.leg.fromID, j.leg.host, j.leg.port)
+			p := latencyPointFrom(latencyTarget{}, data, err)
+			j.hop.OK, j.hop.LatencyMs, j.hop.LossPct, j.hop.Error = p.OK, p.LatencyMs, p.LossPct, p.Error
+			// Each goroutine writes its own slot.
+			hops[j.id][j.i] = j.hop
+		}(j)
 	}
 	wg.Wait()
 
@@ -294,7 +340,7 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64
 		results[id] = relayLatencyFrom(plan, hops[id], entry, now)
 	}
 	if ctx.Err() == nil {
-		h.relayLatency.replace(results, len(ids) == 0)
+		h.relayLatency.replaceRound(results, fullReplace, started)
 	}
 	return results, nil
 }
@@ -314,38 +360,43 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(h.latencyPool()) > 0 {
+		// R1-B-02：空 ids 在本入口是「全部中转线」，不是 probeNodeLatency
+		// 的「全部节点全量轮」——展开为这些线各自的入口节点显式列表，
+		// 预刷保持定向（DB-4：手动点击不计延迟告警 streak）且范围只限
+		// 本页展示的中转入口，不再顺带全量探测无关节点。
+		rows, err := h.repo.ListInboundRelays(0)
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		want := make(map[int64]bool, len(req.IDs))
+		for _, id := range req.IDs {
+			want[id] = true
+		}
+		seen := make(map[int64]bool)
 		var entries []int64
-		if len(req.IDs) > 0 {
-			rows, err := h.repo.ListInboundRelays(0)
-			if err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
-				return
+		for _, rw := range rows {
+			if (len(req.IDs) > 0 && !want[rw.ID]) || rw.TunnelID <= 0 {
+				continue
 			}
-			want := make(map[int64]bool, len(req.IDs))
-			for _, id := range req.IDs {
-				want[id] = true
-			}
-			seen := make(map[int64]bool)
-			for _, rw := range rows {
-				if !want[rw.ID] || rw.TunnelID <= 0 {
-					continue
-				}
-				if nodes, err := h.listChainNodesForTunnel(rw.TunnelID); err == nil {
-					if in, _, _ := splitChainNodeGroups(nodes); len(in) > 0 && !seen[in[0].NodeID] {
-						seen[in[0].NodeID] = true
-						entries = append(entries, in[0].NodeID)
-					}
+			if nodes, err := h.listChainNodesForTunnel(rw.TunnelID); err == nil {
+				if in, _, _ := splitChainNodeGroups(nodes); len(in) > 0 && !seen[in[0].NodeID] {
+					seen[in[0].NodeID] = true
+					entries = append(entries, in[0].NodeID)
 				}
 			}
 		}
-		if len(req.IDs) == 0 || len(entries) > 0 {
-			if _, err := h.probeNodeLatency(r.Context(), entries); err != nil {
+		if len(entries) > 0 {
+			if _, err := h.probeNodeLatency(r.Context(), entries, probeRoundTargeted); err != nil {
 				response.WriteJSON(w, response.Err(-2, err.Error()))
 				return
 			}
 		}
 	}
-	results, err := h.probeRelayLatency(r.Context(), req.IDs)
+	// 本入口的 API 契约：空 ids = 全部中转线（整表替换），非空 =
+	// 定向刷新（合并）。轮次语义在入口按契约显式求值后传参，
+	// prober 内部不再以 len 推断（R3-B-02）。
+	results, err := h.probeRelayLatency(r.Context(), req.IDs, len(req.IDs) == 0)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

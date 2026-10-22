@@ -19,8 +19,10 @@ import (
 
 	"go-backend/internal/http/client"
 	"go-backend/internal/http/response"
+	"go-backend/internal/kernel"
 	"go-backend/internal/netguard"
 	"go-backend/internal/store/repo"
+	"go-backend/internal/ws"
 )
 
 type federationTunnelRequest struct {
@@ -549,7 +551,6 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-
 
 	if req.Name == "" || req.NodeID == 0 {
 		response.WriteJSON(w, response.ErrDefault("Name and NodeID are required"))
@@ -1112,6 +1113,16 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 	inx := h.repo.NextIndex("node")
 	now := time.Now().UnixMilli()
 
+	// R3-E-01：对端面板提供的节点地址在本侧唯一落库点——含结构
+	// 字符的值不落库。远端节点的 ServerIP 在本侧仅作展示/分享
+	// 信息（联邦流量走 RemoteURL），清空不影响导入与用量同步；
+	// 合法形态（主机名/IP/回环）原样保留，与保存面同一字符集。
+	serverIP := info.ServerIP
+	if kernel.HostHasStructuralChars(serverIP) {
+		log.Printf("nodeImport: remote node %q reported a structurally invalid server address, storing empty", info.NodeName)
+		serverIP = ""
+	}
+
 	nodeSecret, randErr := randomToken(16)
 	if randErr != nil {
 		response.WriteJSON(w, response.Err(-2, randErr.Error()))
@@ -1120,7 +1131,7 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 	if err = h.repo.CreateRemoteNode(
 		fmt.Sprintf("%s (Remote)", info.NodeName),
 		nodeSecret,
-		info.ServerIP,
+		serverIP,
 		portRange,
 		now,
 		info.Status,
@@ -1803,17 +1814,19 @@ func (h *Handler) federationRuntimeDiagnose(w http.ResponseWriter, r *http.Reque
 		commandTimeout = diagnosisCommandTimeout
 	}
 
-	commandType := "TcpPing"
-	if isUDPBasedProtocol(req.Protocol) {
-		commandType = "UdpPing"
-	}
-
-	res, err := h.sendNodeCommandWithTimeout(share.NodeID, commandType, map[string]interface{}{
+	data := map[string]interface{}{
 		"ip":      req.IP,
 		"port":    req.Port,
 		"count":   req.Count,
 		"timeout": req.Timeout,
-	}, commandTimeout, false, false)
+	}
+	var res ws.CommandResult
+	if isUDPBasedProtocol(req.Protocol) {
+		res, err = h.sendNodeCommandWithTimeout(share.NodeID, "UdpPing", data, commandTimeout, false, false)
+	} else {
+		// DB-5：TCP 诊断走探测槽位，排队与执行共用 commandTimeout 预算。
+		res, err = h.sendTCPPing(share.NodeID, data, commandTimeout)
+	}
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -1901,7 +1914,7 @@ func (h *Handler) federationRuntimeCommand(w http.ResponseWriter, r *http.Reques
 		dataMap["ip"] = pinnedIP
 		dataMap["count"] = clampedCount
 		req.Data = dataMap
-		res, err := h.sendNodeCommand(share.NodeID, "TcpPing", req.Data, false, false)
+		res, err := h.sendTCPPing(share.NodeID, req.Data, defaultNodeCommandTimeout)
 		if err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return

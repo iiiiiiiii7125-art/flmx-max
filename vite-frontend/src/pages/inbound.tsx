@@ -33,6 +33,8 @@ import {
 import { PageLoadingState } from "@/components/page-state";
 import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
 import { ActionSheet } from "@/pages/inbound/action-sheet";
 import { SplitModal } from "@/pages/inbound/split-modal";
@@ -125,7 +127,9 @@ const CONFIRM_TEXT: Record<
 };
 
 function detailRows(item: InboundApiItem): Array<[string, string]> {
-  const host = item.shareHost || item.nodeServerIp;
+  // DB-2: shareAddress is the backend-resolved address for the inbound's
+  // chosen mode (auto / node IPv4 / node IPv6 / custom).
+  const host = item.shareAddress || item.shareHost || item.nodeServerIp;
 
   if (item.importedParams) {
     return [
@@ -282,7 +286,16 @@ export default function InboundPage() {
         if (inboundRes.code === 0) {
           const rows = inboundRes.data || [];
 
-          setInbounds(rows);
+          // DB-4：列表回包可能比刚完成的手动/重连探测旧——按
+          // checkedAt 取新合并，旧快照不覆盖更新的探测结果。
+          setInbounds((prev) => {
+            const previous = new Map(prev.map((i) => [i.id, i]));
+
+            return rows.map((i) => ({
+              ...i,
+              probe: latestProbe(i.probe, previous.get(i.id)?.probe),
+            }));
+          });
           setSelectedIds((prev) => {
             if (prev.size === 0) return prev;
             const alive = new Set(rows.map((i) => i.id));
@@ -308,10 +321,11 @@ export default function InboundPage() {
 
   useEffect(() => {
     loadData(true);
-    const timer = window.setInterval(() => loadData(false), 30000);
-
-    return () => window.clearInterval(timer);
   }, [loadData]);
+
+  // DB-3（移植自 kure29/flyx 3.3.33）：15 秒可见性轮询（原 30 秒
+  // 无条件轮询）——页面隐藏/离线时不刷，回前台立即补一次。
+  useVisiblePolling(useCallback(() => loadData(false), [loadData]));
 
   const nodeOptions = useMemo(() => {
     const map = new Map<string, string>();

@@ -51,14 +51,14 @@ func (h *Handler) chainEndpoint(target *model.NodeInbound, fromNodeID int64) (ke
 	if isLoopbackListen(target.Listen) {
 		return e, fmt.Errorf("出站节点「%s」只监听本机，其他节点连不上", target.Name)
 	}
-	e.Host = strings.TrimSpace(target.ShareHost)
-	if e.Host == "" {
-		if node, err := h.repo.GetNodeByID(target.NodeID); err == nil && node != nil {
-			e.Host = strings.TrimSpace(node.ServerIP)
-		}
-	}
+	node, _ := h.repo.GetNodeByID(target.NodeID)
+	e.Host = inboundShareAddress(target, node)
 	if e.Host == "" {
 		return e, fmt.Errorf("出站节点「%s」没有可用的地址", target.Name)
+	}
+	if inboundShareMode(target) == "custom" && validateShareHostValue(e.Host) != nil {
+		// F-A-01/C-01：存量坏 ShareHost 不进链式下一跳配置。
+		return e, fmt.Errorf("出站节点「%s」的自定义分享地址不正确", target.Name)
 	}
 	return e, nil
 }
