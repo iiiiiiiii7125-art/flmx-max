@@ -299,6 +299,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	}
 	for _, sb := range subs {
 		if sb.Token == "" {
+			// R1 H-O2（随 X-P2-7 同批，V-23）：空 token 订阅跳过
+			// 必须计入回执 SkippedRows，不得静默丢弃。
+			rep.skip("subscriptions")
 			continue
 		}
 		var existing model.Subscription

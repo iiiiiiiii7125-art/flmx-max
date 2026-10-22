@@ -227,7 +227,12 @@ func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, 
 	// 注意：SecureFetch 强制 https；订阅 URL 为 http 时需用户改用 https。
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	body, header, err := SecureFetchWithHeader(ctx, rawURL)
+	// R1 顺手项（C 观察 1）：订阅抓取单独传领域上限 maxSubscriptionBytes
+	// （5MB，仓库既有同类上限，下方 len 检查同值），在抓取层即截断，
+	// 不再先吞 SecureFetch 的 50MB 全局上限。取值依据：订阅内容合法
+	// 体积由 maxSubscriptionBytes 定义（导入/同步共用），抓取层与
+	// 业务判定同值即不改变任何已接受行为，只提前拒绝。
+	body, header, err := secureFetchWithHeaderLimit(ctx, rawURL, maxSubscriptionBytes)
 	if err != nil {
 		// IMP-007：公网 http 拒绝错误改中文。SecureFetch 内部返回英文
 		// "public http not allowed (use https)"，此处在对外透出前翻译，
