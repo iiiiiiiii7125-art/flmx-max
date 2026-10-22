@@ -245,4 +245,3 @@ func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now 
 	}
 	return nil
 }
-
