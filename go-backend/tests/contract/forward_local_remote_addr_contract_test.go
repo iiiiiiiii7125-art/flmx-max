@@ -44,7 +44,7 @@ func TestForwardLocalRemoteAddrToggleContracts(t *testing.T) {
 	if err := repo.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "local-remote-entry", "local-remote-secret", "10.60.0.1", "10.60.0.1", "", "31000-31010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "local-remote-entry", "local-remote-secret", "10.60.0.1", "10.60.0.1", "", "31000-31010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	entryNodeID := mustLastInsertID(t, repo, "local-remote-entry")
@@ -70,6 +70,9 @@ func TestForwardLocalRemoteAddrToggleContracts(t *testing.T) {
 
 	stopNode := startMockNodeSession(t, server.URL, "local-remote-secret")
 	defer stopNode()
+	// R1-B10 deflake：节点种子已改 status=0，此等待是真同步点
+	// （旧种子预置 1 时空转，会话登记未落点时后续 create 的下发
+	// 会撞「节点不在线」而非被测的 remote-addr 校验路径）。
 	waitNodeStatus(t, repo, entryNodeID, 1)
 
 	t.Run("local remote address is rejected on create when toggle is off", func(t *testing.T) {
