@@ -367,7 +367,9 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	if node, err := h.repo.GetNodeByID(req.ID); err == nil && node != nil && node.Version.Valid {
 		if cur := strings.TrimSpace(node.Version.String); cur != "" {
 			// A11-132-06：不可比版本 fail-closed（与面板自升级口径一致）。
-			cmp, cmpErr := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(cur, "v"))
+			// R4-N1：cur 是 fullVersion（带 " (debian/amd64)" 后缀），
+			// 经 compareWithReportedVersion 提取首段语义版本再比。
+			cmp, cmpErr := compareWithReportedVersion(strings.TrimPrefix(version, "v"), cur)
 			if cmpErr != nil {
 				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("版本号 %s 或节点当前版本 %s 无法比较，已拒绝: %v", version, cur, cmpErr)))
 				return
@@ -481,7 +483,8 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 			// A11-132-06：不可比版本同样 fail-closed 拒绝。
 			if node, err := h.repo.GetNodeByID(nodeID); err == nil && node != nil && node.Version.Valid {
 				if cur := strings.TrimSpace(node.Version.String); cur != "" {
-					cmp, cmpErr := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(cur, "v"))
+					// R4-N1：同单节点路径，cur 经上报型比较提取首段版本。
+					cmp, cmpErr := compareWithReportedVersion(strings.TrimPrefix(version, "v"), cur)
 					if cmpErr != nil {
 						results[index] = upgradeResult{ID: nodeID, Success: false, Message: fmt.Sprintf("版本号 %s 或节点当前版本 %s 无法比较，已拒绝: %v", version, cur, cmpErr)}
 						return
