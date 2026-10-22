@@ -38,8 +38,10 @@ func ValidateImportHost(host string) error {
 		// 169.254/16 整段 ∪ 未指定，翻译内嵌同判）+ loopback 层
 		// （含 NAT64/6to4 内嵌回环）。RFC1918/CGNAT 字面量是合法
 		// 导入对象，不得顺手禁（防过修）。
+		// R3X-010：该政策已在 netguard 一处补拒 Reserved/Multicast
+		// 与 fe80::/10，本消费方自动同效，无需在此另加判定。
 		if d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
-			return errors.New("地址不能是云元数据或链路本地地址")
+			return errors.New("地址不能是云元数据、链路本地或保留/组播地址")
 		}
 		return nil
 	}
