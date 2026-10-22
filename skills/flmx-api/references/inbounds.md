@@ -18,6 +18,12 @@ kernel cannot render are rejected at creation time with a Chinese reason message
 
 Update an inbound (name, port, transport, security, settings, extra config).
 
+> Note: 更新入站须回填凭据子字段，留空保留旧值；有意轮换走显式新值或 regenerate
+> (`POST /api/v1/inbound/regenerate`). This covers the credential subfields
+> (encryption secret, Reality private key / short IDs, listen address, UUID and
+> password): leaving any of them empty on update keeps the stored value instead
+> of rotating it. Creation is unchanged (empty values are generated).
+
 ## POST /api/v1/inbound/delete
 
 Delete an inbound. An inbound selected as a default exit or split target must be
