@@ -1872,10 +1872,11 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 	var backup interface{}
 	var err error
 
+	// X-P3-25（L-10-1）：导出绑定请求 ctx，断连即止。
 	if len(req.Types) == 0 {
-		backup, err = h.repo.ExportAll()
+		backup, err = h.repo.ExportAllContext(r.Context())
 	} else {
-		backup, err = h.repo.ExportPartial(req.Types)
+		backup, err = h.repo.ExportPartialContext(r.Context(), req.Types)
 	}
 
 	if err != nil {
@@ -1927,7 +1928,7 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	autoBackup, err := h.repo.ExportAll()
+	autoBackup, err := h.repo.ExportAllContext(r.Context())
 	if err != nil {
 		// O7-010：导入前自动备份失败时只记录警告、继续导入流程。
 		// 旧逻辑直接中断恢复——但数据库损坏时正是备份失败的时候，
@@ -1942,7 +1943,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.repo.Import(&req.BackupData, req.Types)
+	// X-P3-21（L-08-3）：导入整单事务维持（语义有意），事务绑定请求
+	// ctx——导入期间其余请求经 SQLite busy_timeout（DSN 5000ms）/
+	// PG 语句超时走正常超时错误，导入本身断连可取消，不再无限排队。
+	result, err := h.repo.ImportContext(r.Context(), &req.BackupData, req.Types)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return
