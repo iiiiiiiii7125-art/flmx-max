@@ -3712,6 +3712,17 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, s
 		if mapped, ok := subRemap[subID]; ok {
 			subID = mapped
 		}
+		// R1 X-P2-7（H1-01，BC-08）：此前只校验订阅侧，用户不存在
+		// 时悬空分配照样落库且回执假报 imported。落库前补 user
+		// 存在性校验（与订阅侧同口径）：不存在 → skipped++ 不落库。
+		userExists, err := rowExistsTx(tx, &model.User{}, r.UserID)
+		if err != nil {
+			return imported, skipped, err
+		}
+		if !userExists {
+			skipped++
+			continue
+		}
 		var exists int64
 		if err := tx.Model(&model.Subscription{}).Where("id = ?", subID).Count(&exists).Error; err != nil {
 			return imported, skipped, err
@@ -3733,7 +3744,7 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, s
 			SubscriptionID: subID,
 			CreatedTime:    r.CreatedTime,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "subscription_id", "created_time",
