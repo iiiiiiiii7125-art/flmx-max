@@ -201,7 +201,10 @@ const (
 	PolicyAllowPrivate
 	// PolicyHardDenyOnly：仅硬拒层（notify——内网 webhook 合法）。
 	PolicyHardDenyOnly
-	// PolicyHardDenyOrLoopback：硬拒层 + loopback 层（导入主机、probe）。
+	// PolicyHardDenyOrLoopback：硬拒层 + loopback 层 + Reserved/
+	// Multicast/LinkLocal 层（导入主机、probe；R3X-010 补拒后三类——
+	// 0.0.0.0/8 非零等保留段、组播与 fe80::/10 在订阅语境下同样不可
+	// 用）。Private/CGNAT 不在本政策拒绝集内（合法导入/探测对象）。
 	PolicyHardDenyOrLoopback
 )
 
@@ -238,9 +241,21 @@ func JudgeAddr(a netip.Addr, policy Policy, allowPrivate bool) Decision {
 	case PolicyHardDenyOnly:
 		d.Allowed, d.Reason = true, "not_hard_denied"
 	case PolicyHardDenyOrLoopback:
-		if r.Class == ClassLoopback {
+		// R3X-010：补拒 ClassReserved / ClassMulticast 与 fe80::/10
+		// （分类器对 fe80::/10 归 ClassLinkLocal，其中 v4 段
+		// 169.254/16 已在硬拒层先行命中，此处补的是 v6 链路本地）。
+		// 严禁顺手禁 ClassPrivate / ClassCGNAT——家宽/自建节点与
+		// 内网探测目标是合法对象，禁了即过修。
+		switch r.Class {
+		case ClassLoopback:
 			d.Reason = "loopback"
-		} else {
+		case ClassReserved:
+			d.Reason = "reserved"
+		case ClassMulticast:
+			d.Reason = "multicast"
+		case ClassLinkLocal:
+			d.Reason = "link_local"
+		default:
 			d.Allowed, d.Reason = true, "not_hard_denied"
 		}
 	}

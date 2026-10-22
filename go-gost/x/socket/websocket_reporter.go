@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -2459,6 +2460,74 @@ func clampPingParams(count, timeout int) (int, int) {
 	return count, timeout
 }
 
+// tcpPing 字面量复检的段集，与面板 go-backend/internal/netguard 的
+// PolicyHardDenyOrLoopback 判定口径镜像（x 为独立 module 无法 import
+// 面板包，故在此自含实现；修改段集时须与 netguard 分类器同步核对）。
+var (
+	tcpPingNAT64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
+	tcpPingNAT64Local     = netip.MustParsePrefix("64:ff9b:1::/48")
+	tcpPingSixToFour      = netip.MustParsePrefix("2002::/16")
+	tcpPingLinkLocalV4    = netip.MustParsePrefix("169.254.0.0/16")
+	tcpPingMetadataExact  = []netip.Addr{
+		netip.MustParseAddr("169.254.169.254"),
+		netip.MustParseAddr("100.100.100.200"),
+		netip.MustParseAddr("fd00:ec2::254"),
+	}
+	tcpPingReservedPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("192.0.0.0/24"),
+		netip.MustParsePrefix("198.18.0.0/15"),
+		netip.MustParsePrefix("240.0.0.0/4"),
+		netip.MustParsePrefix("100::/64"),
+	}
+)
+
+// tcpPingLiteralTargetDenied 报告 host 字面 IP 是否命中
+// PolicyHardDenyOrLoopback 等价拒绝集：元数据精确集 / 169.254/16
+// 整段 / 未指定（硬拒层）+ 回环 + 保留段 + 组播 + 链路本地
+// （fe80::/10）；NAT64/6to4 按内嵌 IPv4 同判，本地 NAT64 整段拒。
+// 非字面量（主机名）返回 false，不在本复检范围。私网/CGNAT 放行。
+func tcpPingLiteralTargetDenied(host string) bool {
+	a, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return false
+	}
+	a = a.Unmap().WithZone("")
+	if tcpPingNAT64Local.Contains(a) {
+		return true
+	}
+	eff := a
+	if tcpPingNAT64WellKnown.Contains(a) {
+		b := a.As16()
+		eff = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+	} else if tcpPingSixToFour.Contains(a) {
+		b := a.As16()
+		eff = netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]})
+	}
+	for _, m := range tcpPingMetadataExact {
+		if eff == m {
+			return true
+		}
+	}
+	if tcpPingLinkLocalV4.Contains(eff) || eff.IsUnspecified() {
+		return true
+	}
+	if eff.IsLoopback() || eff.IsMulticast() || eff.IsLinkLocalUnicast() || eff.IsLinkLocalMulticast() {
+		return true
+	}
+	for _, p := range tcpPingReservedPrefixes {
+		if p.Contains(eff) {
+			return true
+		}
+	}
+	// 其余 !GlobalUnicast 且非私网者与面板分类器的 ClassReserved
+	// 兜底同口径拒绝（如 Teredo 段）；私网/CGNAT 先行放行。
+	if eff.IsPrivate() {
+		return false
+	}
+	return !eff.IsGlobalUnicast()
+}
+
 // handleTcpPing 处理TCP ping诊断命令
 func (w *WebSocketReporter) handleTcpPing(data interface{}) (TcpPingResponse, error) {
 	jsonData, err := json.Marshal(data)
@@ -2489,6 +2558,20 @@ func (w *WebSocketReporter) handleTcpPing(data interface{}) (TcpPingResponse, er
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "无效的端口号，范围应为1-65535",
+			RequestId:    req.RequestId,
+		}, nil
+	}
+
+	// R3X-011 纵深复检：下发目标若为字面 IP，按面板
+	// PolicyHardDenyOrLoopback 同口径在拨号前拒绝（硬拒 + 回环 +
+	// 保留 + 组播 + 链路本地；私网/CGNAT 字面量不在拒绝集内——
+	// 节点间链路目标常为内网地址）。主机名不在字面量复检范围。
+	if tcpPingLiteralTargetDenied(req.IP) {
+		return TcpPingResponse{
+			IP:           req.IP,
+			Port:         req.Port,
+			Success:      false,
+			ErrorMessage: "目标地址不允许",
 			RequestId:    req.RequestId,
 		}, nil
 	}

@@ -386,6 +386,28 @@ func (n *notifier) forgetFingerprintPrefix(prefix string) {
 	})
 }
 
+// forgetUserQuotaFlow 清掉某用户流量 warn/full 两子型的已发送指纹
+// （R3X-030）：用量回落是 user_quota 流量子型的静默恢复，与
+// kernel_error 静默恢复（A7-02）在恢复点补 forget 同口径——否则
+// alertOnce 已被 clearAlerts 再武装、指纹却仍在 30 分钟窗内把同文案
+// 再越界成对吞掉。消息体含已用字节的格式化值，故按「标题 + 消息前缀
+// （用户：<名>\n）」清，与 kernel 恢复点的前缀清法一致。到期类子型
+// 标题不同（用户即将到期/已到期），不被波及。
+func (n *notifier) forgetUserQuotaFlow(user string) {
+	msgPrefix := "用户：" + user + "\n"
+	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00用户流量已用完\x00" + msgPrefix)
+	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00用户流量即将用完\x00" + msgPrefix)
+}
+
+// forgetSubQuotaFlow 是 forgetUserQuotaFlow 的订阅面对偶：清掉某分享
+// 订阅流量 warn/full 两子型的指纹，到期类子型（分享订阅即将到期/
+// 已到期）不被波及。
+func (n *notifier) forgetSubQuotaFlow(name string) {
+	msgPrefix := "订阅：" + name + "\n"
+	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00分享订阅流量已用完，已断开\x00" + msgPrefix)
+	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00分享订阅流量即将用完\x00" + msgPrefix)
+}
+
 // clearExpiryAlert 回滚节点到期告警的已标记状态（A7-03：发送失败不置位）。
 func (n *notifier) clearExpiryAlert(nodeID int64, expiryMs int64) {
 	n.mu.Lock()

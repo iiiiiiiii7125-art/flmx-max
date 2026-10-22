@@ -290,7 +290,7 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   const check = (rel, iface, field, { mustNull = false, mustNotContain = null, absent = false } = {}) => {
     const block = tsInterfaceBlock(read(rel), iface);
     if (!block) {
-      problems.push(`${rel} 未找到本地 interface ${iface}`);
+      problems.push(`${rel} 未找到本地 interface ${iface}（字段 ${field}）`);
       return;
     }
     const decl = fieldDecl(block, field);
@@ -326,7 +326,7 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   }
   // node.tsx 本地 Node（列表经 any 映射透传，null 会原样进入本地模型）
   for (const f of ["remark", "expiryTime", "renewalCycle", "serverIpV4", "serverIpV6", "extraIPs", "version", "remoteUrl"])
-    check(`${FE}/pages/node.tsx`, "Node", f, { mustNull: true });
+    check(`${FE}/pages/node/types.ts`, "Node", f, { mustNull: true });
   // src/types/index.ts 第二套类型：Tunnel 不得再声明幻影必填 entry/exitNodeId
   check(`${FE}/types/index.ts`, "Tunnel", "entryNodeId", { absent: true });
   check(`${FE}/types/index.ts`, "Tunnel", "exitNodeId", { absent: true });

@@ -71,7 +71,10 @@ import {
 import { PageLoadingState } from "@/components/page-state";
 import { TrafficLimitField } from "@/components/traffic-limit-field";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import { removeItemsById, replaceItemById } from "@/utils/list-state";
 import {
   formatTraffic,
@@ -695,6 +698,8 @@ export default function UserPage({
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(isUserModalOpen, !isEdit, rotateIdemKey);
 
   const handleSubmitUser = async () => {
     // 与全站口径对齐：用户名 trim 判空、密码最低 6 位（登录/改密同口径）

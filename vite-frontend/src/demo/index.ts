@@ -92,6 +92,87 @@ const PROBES: Record<string, [list: string, field: string]> = {
 };
 const ALIASES: Record<string, string> = { "node/route/probe": "node/route" };
 
+/**
+ * Diagnosis (R3X-032 g/h): synthesized, not recorded. A seeded panel has
+ * no agents, so a recorded forward/tunnel diagnose POST could only ever
+ * be a failure payload — and the streaming variant bypasses axios
+ * entirely (diagnosis-stream.ts already reports fallback in demo
+ * builds, landing on this POST). Build one successful result from the
+ * recorded lists instead, shaped like the real payloads
+ * (ForwardDiagnosisApiData / TunnelDiagnosisApiData).
+ */
+function diagnoseAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  const forward = bare === "forward/diagnose";
+  const tunnel = bare === "tunnel/diagnose";
+
+  if (!forward && !tunnel) return null;
+  let req: Record<string, unknown> = {};
+
+  try {
+    req = (typeof body === "string" ? JSON.parse(body) : body) ?? {};
+  } catch {
+    req = {};
+  }
+  const id = Number(forward ? req.forwardId : req.tunnelId);
+  const listOf = (k: string) =>
+    (book[k]?.[0]?.res.data ?? []) as Array<Record<string, unknown>>;
+  const nodes = listOf("node/list");
+  const tunnels = listOf("tunnel/list");
+  const item =
+    listOf(forward ? "forward/list" : "tunnel/list").find(
+      (i) => Number(i.id) === id,
+    ) ?? {};
+  const name = String(item.name ?? (forward ? "演示转发" : "演示隧道"));
+  const tunnelOf = forward
+    ? tunnels.find((t) => Number(t.id) === Number(item.tunnelId))
+    : item;
+  const entryNodeId = Number(
+    (tunnelOf?.inNodeId as Array<{ nodeId?: number }> | undefined)?.[0]
+      ?.nodeId,
+  );
+  const nodeName =
+    nodes.find((n) => Number(n.id) === entryNodeId)?.name ??
+    name.split("→")[0]?.trim() ??
+    name;
+  const target = String(
+    forward
+      ? (item.remoteAddr ?? "")
+      : tunnelOf?.probeTargetHost
+        ? `${tunnelOf.probeTargetHost}:${tunnelOf.probeTargetPort || 443}`
+        : "",
+  );
+  const [targetIp, targetPort] = target.split(":");
+  const result = {
+    success: true,
+    description: forward ? "转发目标连通性" : "隧道连通性",
+    nodeName: String(nodeName),
+    nodeId: String(entryNodeId || item.id || id || ""),
+    targetIp: targetIp || "203.0.113.11",
+    targetPort: Number(targetPort) || 443,
+    message: "连接正常（演示合成数据）",
+    averageTime: 24,
+    packetLoss: 0,
+    // The diagnosis modals group rows by chain position; without
+    // fromChainType a row belongs to no group and never renders.
+    fromChainType: 1,
+    fromInx: 0,
+  };
+  const data = forward
+    ? { forwardName: name, timestamp: Date.now(), results: [result] }
+    : {
+        tunnelName: name,
+        tunnelType: Number(item.type) === 1 ? "端口转发" : "隧道转发",
+        timestamp: Date.now(),
+        results: [result],
+      };
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
 const canon = (body: unknown) => {
   if (body === undefined || body === null || body === "") return "";
   try {
@@ -165,6 +246,9 @@ async function answer(config: InternalAxiosRequestConfig) {
   const write = isWrite(last);
   const delta = Math.max(0, Date.now() - fixtures.recordedAt);
 
+  const diagnosis = diagnoseAnswer(bare, config.data, book);
+
+  if (diagnosis) return diagnosis;
   if (PROBES[bare]) {
     const [list, field] = PROBES[bare];
     const ids: number[] = JSON.parse(String(config.data || "{}")).ids ?? [];

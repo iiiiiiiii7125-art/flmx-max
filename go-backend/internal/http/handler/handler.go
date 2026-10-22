@@ -2008,6 +2008,14 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	// R3X-005 facet (a)：导入在分组段成员替换 / 停用收敛中撤销的
+	// 组建授权经回执 revokedUserTunnels 回传，逐对清理其转发（与
+	// 运行时全部撤销路径的 cleanupForwardsForUserTunnel 同口径），
+	// 不留「授权已撤、转发仍跑」的静默残留。
+	for _, pair := range result.RevokedUserTunnels {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+	}
+
 	result.AutoBackup = autoBackup
 	response.WriteJSON(w, response.OK(result))
 }

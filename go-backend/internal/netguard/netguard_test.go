@@ -20,6 +20,11 @@ type matrixRow struct {
 	hardOrLoop  bool // PolicyHardDenyOrLoopback
 }
 
+// 连带断言调整（R3 批1单独登记）：R3X-010 使 PolicyHardDenyOrLoopback
+// 补拒 Reserved/Multicast/LinkLocal 后，下表 fe80::1、224.0.0.1、
+// ff02::1、240.0.0.1、255.255.255.255、0.1.2.3、192.0.0.1、
+// 198.18.0.1、100::1 共 9 行的 hardOrLoop 期望由 true 改 false；
+// 其余策略列（PublicOnly/AllowPrivate/HardDenyOnly）期望一字未动。
 var matrix = []matrixRow{
 	// 公网
 	{"8.8.8.8", true, true, true, true, true},
@@ -40,21 +45,21 @@ var matrix = []matrixRow{
 	// 链路本地 v4（169.254/16 整段硬拒）与 v6
 	{"169.254.0.23", false, false, false, false, false},
 	{"169.254.1.1", false, false, false, false, false},
-	{"fe80::1", false, false, true, true, true},
+	{"fe80::1", false, false, true, true, false},
 	// 未指定（硬拒）
 	{"0.0.0.0", false, false, false, false, false},
 	{"::", false, false, false, false, false},
 	// 组播
-	{"224.0.0.1", false, false, true, true, true},
-	{"ff02::1", false, false, true, true, true},
+	{"224.0.0.1", false, false, true, true, false},
+	{"ff02::1", false, false, true, true, false},
 	// 240/4 与广播
-	{"240.0.0.1", false, false, true, true, true},
-	{"255.255.255.255", false, false, true, true, true},
+	{"240.0.0.1", false, false, true, true, false},
+	{"255.255.255.255", false, false, true, true, false},
 	// 其余保留段（agent bypass 基底）
-	{"0.1.2.3", false, false, true, true, true},
-	{"192.0.0.1", false, false, true, true, true},
-	{"198.18.0.1", false, false, true, true, true},
-	{"100::1", false, false, true, true, true},
+	{"0.1.2.3", false, false, true, true, false},
+	{"192.0.0.1", false, false, true, true, false},
+	{"198.18.0.1", false, false, true, true, false},
+	{"100::1", false, false, true, true, false},
 	// 三元数据精确集（硬拒）
 	{"169.254.169.254", false, false, false, false, false},
 	{"100.100.100.200", false, false, false, false, false},

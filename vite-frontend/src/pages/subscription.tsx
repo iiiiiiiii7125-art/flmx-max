@@ -6,7 +6,10 @@ import type {
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -1249,6 +1252,12 @@ export default function SubscriptionPage() {
 
   // R2X-004：订阅新建表单幂等键（同表单复用、成功轮换；更新不带键）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(
+    Boolean(draft),
+    Boolean(draft) && !draft?.id,
+    rotateIdemKey,
+  );
 
   const save = async () => {
     if (!draft) return;

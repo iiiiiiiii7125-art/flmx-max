@@ -810,7 +810,13 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		addrChanged = true
 	}
 	if addrChanged {
-		h.refreshInboundWhitelists(h.inboundIDsDialedByNode(id))
+		// R3X-015：拨号入站集查询失败不得静默当空集跳过刷新——记
+		// 错留痕（更新本身已落库，此面为刷新面而非删除守卫）。
+		if dialedIDs, derr := h.inboundIDsDialedByNode(id); derr != nil {
+			log.Printf("node update: dialed-inbound lookup failed node_id=%d err=%v (whitelist refresh skipped)", id, derr)
+		} else {
+			h.refreshInboundWhitelists(dialedIDs)
+		}
 		if nodeInbounds, err := h.repo.ListNodeInboundsByNode(id); err == nil {
 			for _, inbound := range nodeInbounds {
 				for _, warning := range h.resyncManagedRelayRemoteAddrsForInbound(inbound.ID) {
@@ -951,7 +957,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
-	brokenReferrers, err := h.deleteNodeByID(id)
+	brokenEntries, err := h.deleteNodeByID(id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -961,8 +967,11 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if h.nftablesManager != nil {
 		h.nftablesManager.ReleaseNode(id)
 	}
-	if brokenReferrers == nil {
-		brokenReferrers = []string{}
+	// R3X-014：内部清单是 (ID, 显示串) 结构，单删响应契约仍是
+	// []string 显示串，在此投影。
+	brokenReferrers := make([]string, 0, len(brokenEntries))
+	for _, entry := range brokenEntries {
+		brokenReferrers = append(brokenReferrers, entry.Display)
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"brokenReferrers":     brokenReferrers,
@@ -1149,8 +1158,10 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	failures := make([]batchFailureDetail, 0)
 	// R2X-045：批量入口与单删共用 deleteNodeByID funnel，跨节点引用
 	// 清单汇总回传（同一引用方跨多个被删节点只报一次）。
+	// R3X-014：合并以引用方入站 ID 为键——旧实现以显示串为键，同名
+	// 同节点的两个不同引用方显示串相同会被吞掉一条。
 	var brokenReferrers []string
-	seenReferrer := make(map[string]struct{})
+	seenReferrer := make(map[int64]struct{})
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1174,11 +1185,11 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, referrer := range nodeReferrers {
-			if _, dup := seenReferrer[referrer]; dup {
+			if _, dup := seenReferrer[referrer.ID]; dup {
 				continue
 			}
-			seenReferrer[referrer] = struct{}{}
-			brokenReferrers = append(brokenReferrers, referrer)
+			seenReferrer[referrer.ID] = struct{}{}
+			brokenReferrers = append(brokenReferrers, referrer.Display)
 		}
 		success++
 	}
@@ -3417,6 +3428,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// When switching tunnels, entry nodes / service base may change. We must clean up old
 	// listeners on nodes that will be removed, otherwise the old ports keep listening.
 	tunnelChanged := tunnelID != forward.TunnelID
+	// R3X-002（E3-01）：切隧道走共用漏斗——提交前以旧隧道侧状态收集
+	// 该转发的中转入站（与批量换隧道 :4288/:4345 同口径），提交后
+	// 刷新并重算 RemoteAddr（见函数尾）。不切隧道不收集、不重算。
+	var tunnelSwitchInboundIDs []int64
+	if tunnelChanged {
+		tunnelSwitchInboundIDs = h.inboundIDsForForwards([]int64{id})
+	}
 	oldNodeIDs := forwardPortNodeIDs(oldPorts)
 	newNodeIDs := uniqueInt64s(fwdEntryNodes)
 	var removedNodeIDs []int64
@@ -3439,6 +3457,20 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	proxyProtocolReceive := asInt(req["proxyProtocolReceive"], forward.ProxyProtocolReceive)
 	proxyProtocolSend := asInt(req["proxyProtocolSend"], forward.ProxyProtocolSend)
 
+	// GATE-F3（发版门项 5 观察定案）：切隧道是「先落库、后下发、失败
+	// 补偿回滚」的非原子序列——落库到回滚之间 DB 处于已切换状态，
+	// 而 allow 是现行 DB 的纯函数（buildKernelApplyPayload 现算），
+	// 窗口内任何一次落地内核下发（漂移轮询、重连对账、其他操作触发
+	// 的 applyKernel）都会把未提交口径的 allow 推给 agent；内核
+	// config hash 又不涵盖 ports/allow，漂移轮询事后无法自纠。故
+	// 失败回滚后须按回滚后 DB 对收集集补刷一次，与成功路径（函数尾
+	// 漏斗收尾）对称。未切隧道的回滚不触发（allow 口径未变）。
+	rollbackAndRefreshWhitelist := func() {
+		h.rollbackForwardMutation(forward, oldPorts)
+		if tunnelChanged {
+			h.refreshInboundWhitelists(tunnelSwitchInboundIDs)
+		}
+	}
 	if err := h.repo.UpdateForward(id, name, tunnelID, remoteAddr, strategy, now, newSpeedID, maxConn, ipMaxConn, newIPSpeedID, proxyProtocol, proxyProtocolReceive, proxyProtocolSend); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -3451,13 +3483,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		err = h.replaceForwardPortsPreservingInIP(id, tunnelID, port, oldPorts)
 	}
 	if err != nil {
-		h.rollbackForwardMutation(forward, oldPorts)
+		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	updatedForward, err := h.getForwardRecord(id)
 	if err != nil {
-		h.rollbackForwardMutation(forward, oldPorts)
+		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -3477,7 +3509,7 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 
 	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
 	if err != nil {
-		h.rollbackForwardMutation(forward, oldPorts)
+		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -3495,6 +3527,15 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 				warnings = append(warnings, fmt.Sprintf("节点 %s 清理旧隧道残留服务失败: %v", nodeLabel, delErr))
 			}
 		}
+	}
+	// R3X-002（E3-01）：切隧道提交后的漏斗收尾——新旧两侧入站的
+	// allow 均按现行 DB 重算（旧落地拨号地址收回、新落地加入），且
+	// 该转发的 Managed relay 按新隧道口径重算 RemoteAddr（与批量
+	// 换隧道的 recomputedRelayRemoteAddr 同一步骤，失败入 warnings
+	// 不静默）。普通编辑（未切隧道）不触发。
+	if tunnelChanged {
+		h.refreshInboundWhitelists(tunnelSwitchInboundIDs)
+		warnings = append(warnings, h.resyncManagedRelayRemoteAddrForForward(id)...)
 	}
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.OK(map[string]interface{}{"warnings": warnings}))
@@ -3518,8 +3559,10 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单。
-	affectedInboundIDs := h.inboundIDsForForward(id)
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单
+	// （R3 批 4 起经共用漏斗 inboundIDsForForwards 收集，见
+	// kernel_protect.go 的漏斗说明）。
+	affectedInboundIDs := h.inboundIDsForForwards([]int64{id})
 	var nftNodeID int64
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
@@ -4175,6 +4218,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	// R2X-008（E2-01）：逐 forward 在换隧道之前以 inboundIDsForForward
 	// 收集受影响入站（换隧道后拨号节点集变化），成功后统一刷新白名单。
 	var changedInboundIDs []int64
+	// GATE-F3：已落库后下发失败而回滚的条目同样要刷新——回滚前窗口内
+	// 的并发下发可能已把未提交口径的 allow 推给 agent（与 forwardUpdate
+	// 同型），其收集集单列，循环后按最终 DB 一并补刷。
+	var failedInboundIDs []int64
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
 			continue
@@ -4316,6 +4363,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		updatedForward, fetchErr := h.getForwardRecord(id)
 		if fetchErr != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
+			failedInboundIDs = append(failedInboundIDs, fwdInboundIDs...)
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, fetchErr)
 			continue
@@ -4330,6 +4378,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		batchWarnings = append(batchWarnings, syncWarnings...)
 		if err != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
+			failedInboundIDs = append(failedInboundIDs, fwdInboundIDs...)
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
@@ -4343,6 +4392,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		success++
 	}
 	h.refreshInboundWhitelists(changedInboundIDs)
+	h.refreshInboundWhitelists(failedInboundIDs)
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
 
@@ -4684,20 +4734,23 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
 		return
 	}
-	newStatus := asInt(req["status"], 1)
-	// R2X-013（BC-R2-02）：停用开始执法。先读旧 status：1→0 时在同一
-	// 事务内按 grant 台账撤销该组组建授权（手工授权不动，级联候选收集
-	// 复用删组同款逻辑），提交后清理被撤销授权的转发；0→1 时走既有
-	// sync 按成员关系补发。已停用分组的历史组建授权在首次状态变更/
-	// 同步触发时被追溯撤销（展开侧对停用组一律跳过，见
-	// applyGroupPermission）。
+	// R2X-013（BC-R2-02）：停用开始执法。先在事务内读旧行：结果状态为
+	// 停用时在同一事务内按 grant 台账撤销该组组建授权（手工授权不动，
+	// 级联候选收集复用删组同款逻辑），提交后清理被撤销授权的转发；
+	// 0→1 时走既有 sync 按成员关系补发。
+	// R3X-004（R2X-013 重开半）：撤销按「电平」而非「转换沿」触发——
+	// 0→0 保存（停用组改名等）只要仍有台账同样收敛撤销，与 sync 侧的
+	// applyGroupPermission 收敛互为双触点；无台账时撤销为空操作。
+	// R3X-020：presence 语义（对照 userUpdate 正本）——req 缺 name/
+	// status key 时以旧行现值填充，不再把缺省 status 当 1 启用停用组、
+	// 不再把缺省 name 清空。
 	tx := h.repo.BeginTx()
 	if tx == nil || tx.Error != nil {
 		response.WriteJSON(w, response.Err(-2, "database unavailable"))
 		return
 	}
 	defer func() { tx.Rollback() }()
-	oldStatus, exists, err := h.repo.GetGroupStatusTx(tx, table, id)
+	oldName, oldStatus, exists, err := h.repo.GetGroupRowTx(tx, table, id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -4706,12 +4759,20 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组不存在"))
 		return
 	}
-	if err := h.repo.GroupUpdateTx(tx, table, id, asString(req["name"]), newStatus, time.Now().UnixMilli()); err != nil {
+	newName := oldName
+	if _, ok := req["name"]; ok {
+		newName = asString(req["name"])
+	}
+	newStatus := oldStatus
+	if _, ok := req["status"]; ok {
+		newStatus = asInt(req["status"], oldStatus)
+	}
+	if err := h.repo.GroupUpdateTx(tx, table, id, newName, newStatus, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	var revokedPairs []repo.RevokedUserTunnelPair
-	if oldStatus == 1 && newStatus == 0 {
+	if newStatus == 0 {
 		var revokeErr error
 		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
 		if revokeErr != nil {
@@ -4765,6 +4826,9 @@ type groupGrantFailure struct {
 type groupApplyResult struct {
 	Succeeded int
 	Failures  []groupGrantFailure
+	// RevokedPairs carries user_tunnels revoked by the R3X-004 disabled-
+	// side convergence below, so sync callers can clean their forwards.
+	RevokedPairs []repo.RevokedUserTunnelPair
 }
 
 func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
@@ -4772,10 +4836,20 @@ func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupA
 	// R2X-013: expansion skips a pair when either side's group is not
 	// enabled (status != 1) — disabled groups never materialize grants,
 	// including for pre-existing pairs synced after the fact.
-	for _, g := range []struct {
+	// R3X-004 (R2X-013 reopened half): skipping is not enough for stock
+	// formed before the disable — when either side is disabled, converge
+	// that group's ledger instead: revoke every grant recorded under it
+	// (manual user_tunnels are untouched, as RevokeGroupGrantsByGroupTx
+	// only orphans group-created rows) and report the revoked pairs so
+	// the caller can clean up their forwards. This makes sync a real
+	// retroactive-revocation touchpoint (BC-R2-02), not just a gate on
+	// new grants.
+	type groupRef struct {
 		table string
 		id    int64
-	}{
+	}
+	var disabled []groupRef
+	for _, g := range []groupRef{
 		{"user_group", userGroupID},
 		{"tunnel_group", tunnelGroupID},
 	} {
@@ -4783,9 +4857,22 @@ func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupA
 		if gErr != nil {
 			return result, gErr
 		}
-		if !gExists || gStatus != 1 {
+		if !gExists {
 			return result, nil
 		}
+		if gStatus != 1 {
+			disabled = append(disabled, g)
+		}
+	}
+	if len(disabled) > 0 {
+		for _, g := range disabled {
+			pairs, revokeErr := h.repo.RevokeGroupGrantsByGroup(g.table, g.id)
+			if revokeErr != nil {
+				return result, revokeErr
+			}
+			result.RevokedPairs = append(result.RevokedPairs, pairs...)
+		}
+		return result, nil
 	}
 	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
 	if err != nil {
@@ -4836,6 +4923,11 @@ func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
 			log.Printf("sync permissions by user group %d failed: %v", userGroupID, applyErr)
 			continue
 		}
+		// R3X-004: pairs revoked by the disabled-side convergence lose
+		// their forwards, exactly like the groupUpdate revoke path.
+		for _, pair := range result.RevokedPairs {
+			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+		}
 		for _, f := range result.Failures {
 			log.Printf("sync permissions by user group %d: grant failed user=%d tunnel=%d err=%s", userGroupID, f.UserID, f.TunnelID, f.Error)
 		}
@@ -4853,6 +4945,11 @@ func (h *Handler) syncPermissionsByTunnelGroup(tunnelGroupID int64) error {
 		if applyErr != nil {
 			log.Printf("sync permissions by tunnel group %d failed: %v", tunnelGroupID, applyErr)
 			continue
+		}
+		// R3X-004: pairs revoked by the disabled-side convergence lose
+		// their forwards, exactly like the groupUpdate revoke path.
+		for _, pair := range result.RevokedPairs {
+			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 		}
 		for _, f := range result.Failures {
 			log.Printf("sync permissions by tunnel group %d: grant failed user=%d tunnel=%d err=%s", tunnelGroupID, f.UserID, f.TunnelID, f.Error)
@@ -6481,10 +6578,30 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // deleteNodeByID 的返回值是 R2X-045 的跨节点引用清单：删除前按该节点
 // 全部入站汇 chainReferrers、排除同节点引用方，随删除结果回传给调用
 // 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
-func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
-	var brokenReferrers []string
+// R3X-014：清单元素为 (引用方入站 ID, 显示串) 结构，供批量入口按 ID
+// 合并；单删入口在响应层投影回 []string，响应契约不变。
+func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
+	var brokenReferrers []nodeCrossReferrer
+	// R3X-017（E3-03）：删节点此前从不刷新白名单——走共用漏斗，级联
+	// 删前收集受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点
+	// 入站为链式出站目标，见 inboundIDsAffectedByNodeDelete），级联
+	// 删后统一刷新；单删与 nodeBatchDelete 共用本 funnel 同步受益。
+	var affectedInboundIDs []int64
 	if h != nil && h.repo != nil {
-		brokenReferrers = h.nodeCrossReferrers(id)
+		// R3X-015：跨节点引用守卫查询失败 fail-closed——清单不可信
+		// 时中止删除并上抛（单删/批删/创建补偿三入口同受此约束），
+		// 不得记录日志后照删。
+		refs, guardErr := h.nodeCrossReferrers(id)
+		if guardErr != nil {
+			return nil, guardErr
+		}
+		brokenReferrers = refs
+		// 同 R3X-015 口径：受影响入站收集失败同样中止删除。
+		affected, collectErr := h.inboundIDsAffectedByNodeDelete(id)
+		if collectErr != nil {
+			return nil, collectErr
+		}
+		affectedInboundIDs = affected
 	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
@@ -6516,6 +6633,8 @@ func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
 	if h.wsServer != nil {
 		h.wsServer.DisconnectNode(id)
 	}
+	// R3X-017：级联删后统一刷新（漏斗收尾，见函数头收集段）。
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	return brokenReferrers, nil
 }
 
@@ -7082,6 +7201,19 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 	if err != nil || len(forwards) == 0 {
 		return
 	}
+	// R3X-016（E3-02）：本漏斗删转发此前从不刷新白名单——走共用漏斗，
+	// 删前按待删转发集收集受影响入站（已在 pending 的行不在本批终删
+	// 范围，排除收集、其物化处置随 jobs 终删面），删后统一刷新一次。
+	// nft 新标 pending 的行若在本批 reconcile 中终删，其入站刷新后
+	// 按现行 DB 重算掉出 allow；reconcile 失败留 pending 的行仍在库，
+	// 重算口径不变、不提前收回（N-04）。
+	var deletableIDs []int64
+	for i := range forwards {
+		if !isForwardPendingDelete(&forwards[i]) {
+			deletableIDs = append(deletableIDs, forwards[i].ID)
+		}
+	}
+	affectedInboundIDs := h.inboundIDsForForwards(deletableIDs)
 	nftGroups := make(map[int64][]int64)
 	for i := range forwards {
 		f := &forwards[i]
@@ -7112,6 +7244,8 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 	}
 	// best-effort：按节点聚合尝试一次，失败的组留在 pending 由 job 重试。
 	_ = h.reconcileGroupedNftDeletes(nftGroups)
+	// R3X-016：删后统一刷新（漏斗收尾，见上方收集段）。
+	h.refreshInboundWhitelists(affectedInboundIDs)
 }
 
 func (h *Handler) normalizeSpeedLimitReference(speedID *int64) (*int64, error) {

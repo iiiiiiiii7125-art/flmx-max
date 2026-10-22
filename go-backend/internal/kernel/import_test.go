@@ -89,10 +89,14 @@ proxy-groups: []
 		t.Fatalf("nested options must survive: %v", nodes[1].Proxy)
 	}
 
+	// R3X-008 连带调整（单独提交申报）：本夹具原用 SS2022 密码 "k"，
+	// 正是导入校验要拒的坏 key 形态；本用例只测 ss-over-shadowtls 的
+	// detour 解析，换成合法 16B key（"1234567890123456" 的 Std base64）
+	// 不改变其断言意图。
 	singbox := `{"outbounds":[
 	  {"type":"selector","tag":"select","outbounds":["a"]},
 	  {"type":"hysteria2","tag":"a","server":"5.6.7.8","server_port":443,"password":"pw","tls":{"enabled":true,"server_name":"h.example.com"}},
-	  {"type":"shadowsocks","tag":"b","method":"2022-blake3-aes-128-gcm","password":"k","detour":"b-stls"},
+	  {"type":"shadowsocks","tag":"b","method":"2022-blake3-aes-128-gcm","password":"MTIzNDU2Nzg5MDEyMzQ1Ng==","detour":"b-stls"},
 	  {"type":"shadowtls","tag":"b-stls","server":"9.9.9.9","server_port":443,"version":3,"password":"sp","tls":{"enabled":true,"server_name":"www.bing.com"}}
 	]}`
 	nodes, errs = ParseImport(singbox)

@@ -39,6 +39,55 @@ for (const u of users) {
 await call(tok, "GET", "monitor/tunnels"); await call(tok, "GET", "monitor/tunnels/quality");
 await call(tok, "GET", "monitor/permission/list");
 await call(tok, "POST", "inbound/sub/info", { reset: false });
+// R3X-009 (D-1): monitor/access for the admin book. The monitor page now
+// asks for it under every role; the value must be the panel's real admin
+// answer ({allowed:true, admin:true}) — never a copy of the user book's
+// need_admin_grant entry.
+await call(tok, "GET", "monitor/access");
+// R3X-032 latent interactive reads (a–k): endpoints the page walk only
+// reaches after a click/tab switch, recorded here by direct call.
+// (a) tunnel detail metrics + (b) tunnel quality history, per tunnel.
+const demoTunnels = (await call(tok, "GET", "monitor/tunnels")).data ?? [];
+for (const t of demoTunnels) {
+  await call(tok, "GET", `monitor/tunnels/${t.id}/metrics?start=${now - 86400000}&end=${now}`);
+  await call(tok, "GET", `monitor/tunnels/${t.id}/quality?start=${now - 3600000}&end=${now}`);
+}
+// (c) per-monitor result history.
+const demoServices = (await call(tok, "GET", "monitor/services")).data ?? [];
+for (const s of demoServices) await call(tok, "GET", `monitor/services/${s.id}/results?limit=100`);
+// (d) kernel version lists, one per kernel type the panel implements.
+const caps = (await call(tok, "POST", "kernel/capabilities")).data;
+for (const k of caps?.kernels ?? []) await call(tok, "POST", "kernel/versions", { kernelType: k.type });
+// (e) node release lists for both channels the upgrade dialog offers.
+await call(tok, "POST", "node/releases", { channel: "stable" });
+await call(tok, "POST", "node/releases", { channel: "dev" });
+// (f) latency-targets save: the adapter classifies the bare segment
+// "targets" as a read, so the endpoint needs a recorded answer; the body
+// mirrors the dialog's "follow defaults" save for the first node.
+if (nodes?.length) await call(tok, "POST", "node/latency/targets", { ids: [nodes[0].id], custom: false, points: [], pinned: [] });
+// (g)/(h) forward/tunnel diagnose are NOT recorded on purpose: a seeded
+// panel has no agents, so a recorded POST would be a failure payload.
+// The demo adapter synthesizes diagnosis results instead (see
+// src/demo/index.ts, DIAGNOSES).
+// (i) subscription preview, using the first recorded subscription as the
+// draft (same field set the editor's toPayload sends).
+const subList = (await call(tok, "POST", "subscription/list")).data;
+const sub0 = subList?.items?.[0];
+if (sub0) {
+  const { id, name, kind, sourceAll, inboundIds, sourceIds, options, expireTime, enabled, remark, trafficLimit, resetDay } = sub0;
+  await call(tok, "POST", "subscription/preview", { id, name, kind, sourceAll, inboundIds, sourceIds, options, expireTime, enabled, remark, trafficLimit, resetDay });
+  // (j, admin half) subscription traffic for the traffic-bearing demo
+  // subscription, in all three ranges the stats view can switch to.
+  const trafficSub = subList.items.find((s) => s.uploadBytes > 0) ?? sub0;
+  for (const range of ["hour", "day", "month"])
+    await call(tok, "POST", "subscription/traffic", { id: trafficSub.id, range, tzOffset: -480, tz: "Asia/Shanghai" });
+}
+// (k) passkey list: PasskeyManager only calls it after passkey/status
+// reports enabled (recorded disabled in the demo, so the demo UI never
+// fires it — conditional coverage), but the endpoint itself does not
+// gate on enabled and answers a real empty list; record it for both
+// books so the key exists if a future re-record enables passkeys.
+await call(tok, "POST", "user/passkey/list");
 // The user book: 我的订阅 is built from these three calls (our model).
 const utok = await login("xiaoming", "demo123456");
 const ucall = callAs(rec.user);
@@ -53,6 +102,19 @@ await ucall(utok, "POST", "node/list", {});
 await ucall(utok, "POST", "speed-limit/list", {});
 await ucall(utok, "POST", "tunnel/user/tunnel");
 await ucall(utok, "POST", "user/passkey/status");
+// R3X-031 (D-2): re-record monitor/access for the user book so the entry
+// carries the current response shape ({allowed:false, admin:false,
+// reason:"need_admin_grant"}) instead of the pre-R2X-038 {allowed,
+// reason} shape that only rendered correctly by default.
+await ucall(utok, "GET", "monitor/access");
+// R3X-032 (j, user half): my-subscription traffic, for the subscriptions
+// assigned to the demo user, in all three ranges.
+const mySubs = (await ucall(utok, "POST", "user-subscription/mine", {})).data?.subscriptions ?? [];
+for (const s of mySubs)
+  for (const range of ["hour", "day", "month"])
+    await ucall(utok, "POST", "user/subscription/traffic", { id: s.id, range, tzOffset: -480, tz: "Asia/Shanghai" });
+// R3X-032 (k, user half): passkey list — see the admin-book note above.
+await ucall(utok, "POST", "user/passkey/list");
 await ucall(utok, "POST", "config/get", { name: "forward_group_order_map" });
 await ucall(utok, "POST", "config/get", { name: "forward_group_collapsed_map" });
 await ucall(utok, "POST", "federation/share/list", {});

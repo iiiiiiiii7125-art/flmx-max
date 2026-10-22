@@ -123,16 +123,19 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 		item["type"] = "trojan"
 		item["users"] = []interface{}{obj{"password": s.Password}}
 	case ProtocolShadowsocks:
+		// GATE-F1：服务端入站与客户端订阅同 key 字节——合法单段
+		// SS2022 key 统一 Std 形态输出（Normalize 保存面已把关，
+		// 此处兜底直写存量），客户端规范化后两端仍同字节。
 		if in.Security.Type == SecurityShadowTLS {
 			return singboxShadowTLSFront(in, obj{
 				"type":     "shadowsocks",
 				"method":   s.Method,
-				"password": s.Password,
+				"password": NormalizedSS2022Password(s.Method, s.Password),
 			})
 		}
 		item["type"] = "shadowsocks"
 		item["method"] = s.Method
-		item["password"] = s.Password
+		item["password"] = NormalizedSS2022Password(s.Method, s.Password)
 	case ProtocolSnell:
 		// Server version 5 also serves v4 clients (the same wire protocol
 		// without QUIC proxy mode, which sing-box does not offer).

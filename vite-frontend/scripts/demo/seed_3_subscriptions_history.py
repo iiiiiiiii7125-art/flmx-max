@@ -123,6 +123,20 @@ for uid, scale in [(users["xiaoming"], 1.0), (users["aqiang"], 1.6), (users["lil
         x("INSERT INTO statistics_flow(user_id, flow, total_flow, time, created_time) VALUES(?,?,?,?,?)",
           (uid, flow, total, datetime.datetime.fromtimestamp(t / 1000).strftime("%H:00"), t))
 
+# 30 days of hourly subscription traffic (subscription_traffic buckets —
+# the series behind subscription/traffic and user/subscription/traffic;
+# without these rows both endpoints answer an all-zero series). Totals
+# land in the same ballpark as the upload/download_bytes set above.
+for sid, up_g, down_g in [(s2, 6, 62), (s3, 9, 83)]:
+    hours = 30 * 24
+    for h in range(hours, 0, -1):
+        t = now - h * 3600000
+        hour = datetime.datetime.fromtimestamp(t / 1000).hour
+        busy = 0.25 + max(0, math.sin((hour - 8) / 24 * 2 * math.pi))
+        w = busy * random.uniform(0.6, 1.4)
+        x("INSERT INTO subscription_traffic(subscription_id, hour, upload_bytes, download_bytes) VALUES(?,?,?,?)",
+          (sid, t - t % 3600000, int(up_g * G / hours * w * 1.6), int(down_g * G / hours * w * 1.6)))
+
 # everything online
 x("UPDATE node SET status = 1")
 x("UPDATE node_kernel SET status = 'running', installed_version = version")

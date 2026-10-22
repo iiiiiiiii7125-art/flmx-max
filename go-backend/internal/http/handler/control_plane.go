@@ -305,7 +305,23 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if len(entryNodeIDs) == 0 {
 			return nil, errors.New("nftables 转发缺少入口节点")
 		}
-		return nil, h.syncNftablesNode(entryNodeIDs[0])
+		// R3X-019：nftables 渲染无 rate/connlimit 表达，限速/连接数
+		// 不执法——按 realm 同谓词（forwardHasIneffectiveLimits：
+		// status=1 且 speed>0、连接数裸值、含 UT 级）生成警告并入
+		// 本函数的 warnings 回执通道，不再静默丢弃；禁用/零速的
+		// 引用本就不生效，不误报。
+		var warnings []string
+		ineffective, warnErr := h.forwardHasIneffectiveLimits(forward)
+		if warnErr != nil {
+			return nil, warnErr
+		}
+		if ineffective {
+			warnings = append(warnings, "nftables 模式不支持限速和连接数限制，这些设置不生效")
+		}
+		if err := h.syncNftablesNode(entryNodeIDs[0]); err != nil {
+			return warnings, err
+		}
+		return warnings, nil
 	}
 	if tunnelIsRealm(tunnel) {
 		return h.syncRealmForward(forward, nil)
@@ -1167,24 +1183,28 @@ func (h *Handler) prepareTunnelDiagnosis(tunnelID int64) (string, string, []diag
 
 	ipPreference := h.repo.GetTunnelIPPreference(tunnelID)
 	protocol := strings.ToLower(strings.TrimSpace(tunnel.Protocol))
-	probeTarget := effectiveTunnelProbeTargetValues(tunnel.ProbeTargetHost, tunnel.ProbeTargetPort)
+	// R3X-011 下发面：存量坏探测目标跳过外网腿（checked 内部已打
+	// 告警日志），链路腿（节点间）不受影响、照常诊断。
+	probeTarget, probeTargetOK := checkedTunnelProbeTargetValues(tunnel.ProbeTargetHost, tunnel.ProbeTargetPort)
 	inNodes, chainHops, outNodes := splitChainNodeGroups(chainRows)
 	workItems := make([]diagnosisWorkItem, 0, len(chainRows)*2)
 
 	switch tunnel.Type {
 	case 1:
-		for _, inNode := range inNodes {
-			description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  inNode.NodeID,
-				targetIP:    probeTarget.Host,
-				targetPort:  probeTarget.Port,
-				description: description,
-				protocol:    "tcp",
-				metadata: map[string]interface{}{
-					"fromChainType": 1,
-				},
-			})
+		if probeTargetOK {
+			for _, inNode := range inNodes {
+				description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
+				workItems = append(workItems, diagnosisWorkItem{
+					fromNodeID:  inNode.NodeID,
+					targetIP:    probeTarget.Host,
+					targetPort:  probeTarget.Port,
+					description: description,
+					protocol:    "tcp",
+					metadata: map[string]interface{}{
+						"fromChainType": 1,
+					},
+				})
+			}
 		}
 	case 2:
 		for _, inNode := range inNodes {
@@ -1265,32 +1285,36 @@ func (h *Handler) prepareTunnelDiagnosis(tunnelID int64) (string, string, []diag
 			}
 		}
 
-		for _, outNode := range outNodes {
-			description := fmt.Sprintf("出口(%s)->外网", outNode.NodeName)
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  outNode.NodeID,
-				targetIP:    probeTarget.Host,
-				targetPort:  probeTarget.Port,
-				description: description,
-				protocol:    "tcp",
-				metadata: map[string]interface{}{
-					"fromChainType": 3,
-				},
-			})
+		if probeTargetOK {
+			for _, outNode := range outNodes {
+				description := fmt.Sprintf("出口(%s)->外网", outNode.NodeName)
+				workItems = append(workItems, diagnosisWorkItem{
+					fromNodeID:  outNode.NodeID,
+					targetIP:    probeTarget.Host,
+					targetPort:  probeTarget.Port,
+					description: description,
+					protocol:    "tcp",
+					metadata: map[string]interface{}{
+						"fromChainType": 3,
+					},
+				})
+			}
 		}
 	default:
-		for _, inNode := range inNodes {
-			description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  inNode.NodeID,
-				targetIP:    probeTarget.Host,
-				targetPort:  probeTarget.Port,
-				description: description,
-				protocol:    "tcp",
-				metadata: map[string]interface{}{
-					"fromChainType": 1,
-				},
-			})
+		if probeTargetOK {
+			for _, inNode := range inNodes {
+				description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
+				workItems = append(workItems, diagnosisWorkItem{
+					fromNodeID:  inNode.NodeID,
+					targetIP:    probeTarget.Host,
+					targetPort:  probeTarget.Port,
+					description: description,
+					protocol:    "tcp",
+					metadata: map[string]interface{}{
+						"fromChainType": 1,
+					},
+				})
+			}
 		}
 	}
 
