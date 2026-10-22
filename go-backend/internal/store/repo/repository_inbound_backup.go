@@ -75,11 +75,16 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		})
 	}
 
+	// SS 计量伴生行是派生态，不进备份：恢复后由 reconcile 按原入站的
+	// metering_enabled 重新物化（其计数基线同理不带，恢复后首样本只立
+	// 基线，与基线丢失的既有口径一致）。
 	var inbounds []model.NodeInbound
-	if err := r.db.Order("id ASC").Find(&inbounds).Error; err != nil {
+	if err := r.db.Where("companion_of = ?", 0).Order("id ASC").Find(&inbounds).Error; err != nil {
 		return nil, err
 	}
+	exportedInbound := make(map[int64]bool, len(inbounds))
 	for _, i := range inbounds {
+		exportedInbound[i.ID] = true
 		out.Inbounds = append(out.Inbounds, model.InboundBackup{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: i.Listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
@@ -88,7 +93,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, SourceID: i.SourceID, OutboundID: i.OutboundID, SplitRules: i.SplitRules,
-			OutboundIPStrategy: i.OutboundIPStrategy,
+			OutboundIPStrategy: i.OutboundIPStrategy, MeteringEnabled: i.MeteringEnabled,
 		})
 	}
 
@@ -108,6 +113,9 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		return nil, err
 	}
 	for _, c := range counters {
+		if !exportedInbound[c.InboundID] {
+			continue // 伴生入站的计数基线随其行一同排除（见上方）
+		}
 		out.Counters = append(out.Counters, model.InboundCounterBackup{
 			InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
 			Epoch: c.Epoch, Bytes: c.Bytes,
@@ -293,7 +301,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
-			SplitRules: i.SplitRules, OutboundIPStrategy: strategy,
+			SplitRules: i.SplitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -302,6 +310,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				"settings", "extra", "share_host", "share_address_mode", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
 				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
+				"metering_enabled",
 			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err

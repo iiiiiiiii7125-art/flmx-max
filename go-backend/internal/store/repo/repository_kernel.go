@@ -251,6 +251,30 @@ func (r *Repository) GetNodeInbound(id int64) (*model.NodeInbound, error) {
 	return &in, err
 }
 
+// GetCompanionInbound returns the SS metering companion row derived
+// from the given origin inbound, or (nil, nil) when none exists.
+func (r *Repository) GetCompanionInbound(originID int64) (*model.NodeInbound, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var in model.NodeInbound
+	err := r.db.Where("companion_of = ?", originID).Order("id ASC").First(&in).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &in, err
+}
+
+// ListCompanionInbounds returns every SS metering companion row
+// (companion_of > 0), ordered by origin then id.
+func (r *Repository) ListCompanionInbounds() ([]model.NodeInbound, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []model.NodeInbound
+	return rows, r.db.Where("companion_of > 0").Order("companion_of ASC, id ASC").Find(&rows).Error
+}
+
 func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -310,7 +334,11 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		// BUG-A2-1: 此列曾漏在白名单外——inboundSave 与 inboundSplitSave
 		// 都赋值 row.OutboundIPStrategy，落库时被静默丢弃，编辑策略永不生效。
 		"outbound_ip_strategy": in.OutboundIPStrategy,
-		"updated_time":         in.UpdatedTime,
+		// SS 计量伴生标记与开关（伴生行由 reconcile 维护，原入站开关由
+		// inboundSave 写；同 BUG-A2-1 教训，赋值必须与白名单同步）。
+		"companion_of":     in.CompanionOf,
+		"metering_enabled": in.MeteringEnabled,
+		"updated_time":     in.UpdatedTime,
 	}).Error
 }
 
