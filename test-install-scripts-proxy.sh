@@ -332,6 +332,134 @@ sleep 4; exit 1'
     fail "X-P2-11: service should be active after rollback"
 )
 
+# X-P2-12 (J-02): extract_leading_semver 与 Go 侧 extractLeadingSemver
+# 同规则：真实 -V 形态（gost 前缀）、fullVersion 形态、v 前缀、dev
+# 透传；粘连后缀与垃圾串提取失败（调用方按不可比放行）。
+test_extract_leading_semver_matches_go_rules() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  assert_equals "1.3.4" "$(extract_leading_semver 'gost 1.3.4 (go1.25 linux/amd64)')" \
+    "extract_leading_semver should read the version from real -V output"
+  assert_equals "1.3.0" "$(extract_leading_semver '1.3.0 (debian/amd64)')" \
+    "extract_leading_semver should read fullVersion form"
+  assert_equals "1.3.2" "$(extract_leading_semver 'v1.3.2')" \
+    "extract_leading_semver should strip a leading v"
+  assert_equals "dev" "$(extract_leading_semver 'dev')" \
+    "extract_leading_semver should pass dev through"
+  if extract_leading_semver 'old version' >/dev/null; then
+    fail "extract_leading_semver should fail on unparseable output"
+  fi
+  if extract_leading_semver '1.3.2-beta1' >/dev/null; then
+    fail "extract_leading_semver should fail on a glued suffix"
+  fi
+  if extract_leading_semver '' >/dev/null; then
+    fail "extract_leading_semver should fail on empty input"
+  fi
+)
+
+# X-P2-12 (J-02, BC-09): 现装 1.3.4、目标 1.3.2 的脚本更新必须在
+# 下载前被拒，现装二进制不变、curl 零调用。
+test_update_flux_agent_rejects_downgrade() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo "old good"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  STATE_DIR="$state_dir"
+
+  ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
+  ensure_download_url_initialized() {
+    RESOLVED_VERSION="1.3.2"
+    DOWNLOAD_URL="https://example.com/gost"
+  }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  systemctl() { return 0; }
+  curl() { echo called >> "$STATE_DIR/curl-called"; return 0; }
+
+  local rc="0"
+  update_flux_agent >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "X-P2-12: downgrade update should be rejected"
+  [[ ! -f "$STATE_DIR/curl-called" ]] || \
+    fail "X-P2-12: downgrade must be rejected before any download"
+  grep -q "1.3.4" "$INSTALL_DIR/flux_agent" || \
+    fail "X-P2-12: installed binary must be unchanged after a rejected downgrade"
+)
+
+# X-P2-12 防过修：目标更高时正常更新；现装版本不可比时按
+# panel_version_cmp 既有口径放行（V-19）。
+test_update_flux_agent_allows_higher_and_incomparable() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+
+  run_update_case() {
+    local installed_body="$1" target="$2"
+    INSTALL_DIR=$(mktemp -d)
+    FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+    : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+    printf '%s\n' "$installed_body" > "$INSTALL_DIR/flux_agent"
+    chmod +x "$INSTALL_DIR/flux_agent"
+    TARGET_VERSION="$target"
+
+    ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
+    ensure_download_url_initialized() {
+      RESOLVED_VERSION="$TARGET_VERSION"
+      DOWNLOAD_URL="https://example.com/gost"
+    }
+    check_and_install_tcpkill() { :; }
+    cleanup_legacy_gost_installation() { :; }
+    sleep() { :; }
+    systemctl() {
+      if [[ "$*" == *MainPID* ]]; then echo 4242; fi
+      return 0
+    }
+    curl() {
+      local output="" url="" prev=""
+      for a in "$@"; do
+        if [[ "$prev" == "-o" ]]; then output="$a"; fi
+        case "$a" in http*) url="$a";; esac
+        prev="$a"
+      done
+      local body="#!/bin/bash
+if [[ \"\${1:-}\" == \"-V\" ]]; then echo \"gost $TARGET_VERSION (go1.25 linux/amd64)\"; exit 0; fi
+echo new"
+      if [[ "$url" == *.sha256 ]]; then
+        printf '%s\n' "$body" | sha256sum | awk '{print $1"  gost"}' > "$output"
+        return 0
+      fi
+      printf '%s\n' "$body" > "$output"; chmod +x "$output"
+    }
+
+    local rc="0"
+    update_flux_agent >/dev/null 2>&1 || rc="$?"
+    assert_equals "0" "$rc" "X-P2-12: update to $target should succeed"
+    grep -q "$target" "$INSTALL_DIR/flux_agent" || \
+      fail "X-P2-12: binary should be at $target after update"
+    [[ ! -f "$INSTALL_DIR/flux_agent.bak" ]] || \
+      fail "X-P2-12: .bak should be removed after a successful update"
+  }
+
+  # 现装 1.3.4 → 目标 1.3.5（更高）
+  run_update_case '#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo old' "1.3.5"
+  # 现装不可比（旧桩形态）→ 目标 1.3.2 仍放行
+  run_update_case '#!/bin/bash
+echo "old version"' "1.3.2"
+)
+
 test_install_flux_agent_preserves_legacy_gost_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -1388,6 +1516,9 @@ test_update_flux_agent_asks_for_proxy_config
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
 test_flux_agent_health_ok_requires_stable_pid
 test_update_flux_agent_rolls_back_flapping_binary
+test_extract_leading_semver_matches_go_rules
+test_update_flux_agent_rejects_downgrade
+test_update_flux_agent_allows_higher_and_incomparable
 test_install_flux_agent_preserves_legacy_gost_when_download_fails
 test_update_flux_agent_preserves_legacy_gost_when_download_fails
 test_install_flux_agent_writes_json_safe_config

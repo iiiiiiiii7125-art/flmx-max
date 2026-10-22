@@ -785,6 +785,74 @@ EOF
   fi
 }
 
+# X-P2-12 (J-02): 与 panel_install.sh 同实现的点分数字版本比较。
+# 回显 -1/0/1 表示 a 小于/等于/大于 b；任一侧为空或含非数字段时
+# 不可比，回显空并返回 1——调用方不得据此拦截（V-19 既有口径：
+# 不可比放行，开发/测试标签等场景保持可用）。
+panel_version_cmp() {
+  local a="${1#v}" b="${2#v}"
+  local -a pa pb
+  local i n x y
+  if [[ -z "$a" || -z "$b" ]]; then
+    return 1
+  fi
+  IFS='.' read -ra pa <<< "$a"
+  IFS='.' read -ra pb <<< "$b"
+  n=${#pa[@]}
+  if (( ${#pb[@]} > n )); then
+    n=${#pb[@]}
+  fi
+  for (( i = 0; i < n; i++ )); do
+    x="${pa[i]:-0}"
+    y="${pb[i]:-0}"
+    if ! [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+    if (( 10#$x < 10#$y )); then
+      echo -1
+      return 0
+    fi
+    if (( 10#$x > 10#$y )); then
+      echo 1
+      return 0
+    fi
+  done
+  echo 0
+}
+
+# X-P2-12 (J-02): 按 extractLeadingSemver（system_upgrade.go）同规则
+# 从版本串中取语义版本：逐个空白分隔段做严格点分数字校验，首个
+# 合格段即为版本。真实 -V 输出形如 "gost 1.3.4 (go1.25
+# linux/amd64)"（首段是程序名 gost），握手上报的 fullVersion 形如
+# "1.3.4 (debian/amd64)"，两种形态都由此归一；粘连后缀
+# （如 1.3.2-beta1）、无数字段、空串一律提取失败，调用方按
+# 不可比放行处理。"dev" 原样透传（panel_version_cmp 对其不可比）。
+extract_leading_semver() {
+  local raw="$1" token candidate
+  # shellcheck disable=SC2086 # 此处需要按空白分词逐段校验
+  for token in $raw; do
+    if [[ "$token" == "dev" ]]; then
+      printf '%s' "dev"
+      return 0
+    fi
+    candidate="${token#v}"
+    if [[ "$candidate" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 现装 agent 的语义版本（取自二进制 -V）；取不到/不可解析时失败，
+# 调用方按不可比处理。
+flux_agent_installed_version() {
+  local raw
+  [[ -x "$INSTALL_DIR/flux_agent" ]] || return 1
+  raw=$("$INSTALL_DIR/flux_agent" -V 2>/dev/null) || return 1
+  extract_leading_semver "$raw"
+}
+
 # 更新功能
 update_flux_agent() {
   echo "🔄 开始更新 flux_agent..."
@@ -796,13 +864,29 @@ update_flux_agent() {
 
   ask_proxy_config
   ensure_download_url_initialized || return 1
-  
+
+  # X-P2-12 (J-02, BC-09): 下载前防降级。读现装版本（-V 经
+  # extract_leading_semver 归一）与目标版本比较，目标更低时拒绝
+  # 并说明——其余三条更新路径（面板自升级、节点面板升级单/批量、
+  # panel_install 脚本更新）均已有此门，脚本路径此前独缺。任一侧
+  # 不可比时沿用 panel_version_cmp 既有放行口径（V-19），不拦截。
+  local current_version cmp_result
+  current_version=$(flux_agent_installed_version || true)
+  cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+  if [[ "$cmp_result" == "-1" ]]; then
+    echo "❌ 目标版本 ${RESOLVED_VERSION:-} 低于当前版本 $current_version，拒绝降级更新。如确需降级请手动处理。"
+    return 1
+  fi
+  if [[ "$cmp_result" == "0" ]]; then
+    echo "ℹ️ 目标版本与当前版本相同（$current_version），将按同版本重装继续"
+  fi
+
   echo "📥 使用下载地址: $DOWNLOAD_URL"
-  
+
   # 检查并安装 tcpkill
   check_and_install_tcpkill
   ensure_service_manager || return 1
-  
+
   # 先下载新版本
   echo "⬇️ 下载最新版本..."
   rm -f "$INSTALL_DIR/flux_agent.new"
