@@ -297,9 +297,14 @@ export default function NodePage({
     }
   }, []);
 
+  // loadNodes 序号（X-P3-8/K-02，照 monitor-view loadMetrics 既有写法）：
+  // 手动刷新与轮询可在途并发，只有最新一轮可落 state，旧响应不得覆盖。
+  const loadNodesSeqRef = useRef(0);
+
   // 加载节点列表
   const loadNodes = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
+    const seq = (loadNodesSeqRef.current += 1);
 
     if (!silent) {
       setLoading(true);
@@ -307,6 +312,10 @@ export default function NodePage({
 
     try {
       const res = await getNodeList();
+
+      if (loadNodesSeqRef.current !== seq) {
+        return;
+      }
 
       if (res.code === 0) {
         const nodesData: Node[] = (res.data || []).map((node: any) => ({
@@ -355,11 +364,11 @@ export default function NodePage({
         }
       }
     } catch {
-      if (!silent) {
+      if (!silent && loadNodesSeqRef.current === seq) {
         toast.error("网络错误，请重试");
       }
     } finally {
-      if (!silent) {
+      if (!silent && loadNodesSeqRef.current === seq) {
         setLoading(false);
       }
     }

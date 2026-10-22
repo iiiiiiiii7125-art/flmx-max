@@ -722,6 +722,10 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 			p["server"], p["port"] = detour.str("server"), detour.num("server_port")
 			p["shadow-tls"] = map[string]interface{}{"version": detour.num("version"), "password": detour.str("password"),
 				"host": detour.sub("tls").str("server_name")}
+			// X-P3-12（L-02-2）：与同文件 ss detour 分支同口径补
+			// client-fingerprint——sing-box 的 snell 出站无 utls 字段可
+			// 读，缺省 chrome 与自建入站 clashSnell 的输出对齐。
+			p["client-fingerprint"] = "chrome"
 		}
 	case "naive":
 		// A5-01：NaïveProxy 恒为 HTTPS，tls 块字段由下方通用段落读取。

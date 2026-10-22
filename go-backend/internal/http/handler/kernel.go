@@ -707,6 +707,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	if req.OutboundIPStrategy != nil {
 		in.OutboundIPStrategy = *req.OutboundIPStrategy
 	}
+	// X-P3-4（D-R1-01）：更新时省略 port 回退已存行端口——与密钥/策略/
+	// Enabled 的 presence 保留同口径；此前唯 port 例外，只改名的更新
+	// 会被静默改派随机端口。创建路径不变（仍随机分配）。
+	if update && req.Port == 0 {
+		in.Port = row.Port
+	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
