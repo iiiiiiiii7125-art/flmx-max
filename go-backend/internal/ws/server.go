@@ -114,6 +114,10 @@ type Server struct {
 	nodes    map[int64]*nodeSession
 	byConn   map[*websocket.Conn]*nodeSession
 	pending  map[string]pendingRequest
+	// R2X-022：在途 Upgrade 的会话名额预留（按用户+入口计）。
+	// 与 admins/monitors 同受 s.mu 保护：计数与预留必须在同一把锁内
+	// 原子完成，否则计数检查与会话登记之间的 Upgrade 窗口可被并发突破。
+	wsReserved map[wsSessionReservationKey]int
 
 	authFail *wsAuthFailLimiter
 }
@@ -277,12 +281,13 @@ func NewServer(repo *repo.Repository, jwtSecret string) *Server {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		admins:   make(map[*adminSession]struct{}),
-		monitors: make(map[*monitorSession]struct{}),
-		nodes:    make(map[int64]*nodeSession),
-		byConn:   make(map[*websocket.Conn]*nodeSession),
-		pending:  make(map[string]pendingRequest),
-		authFail: newWSAuthFailLimiter(),
+		admins:     make(map[*adminSession]struct{}),
+		monitors:   make(map[*monitorSession]struct{}),
+		nodes:      make(map[int64]*nodeSession),
+		byConn:     make(map[*websocket.Conn]*nodeSession),
+		pending:    make(map[string]pendingRequest),
+		wsReserved: make(map[wsSessionReservationKey]int),
+		authFail:   newWSAuthFailLimiter(),
 	}
 }
 
@@ -377,6 +382,116 @@ func (s *Server) userSessionCounts(userID int64) (admins int, monitors int) {
 	return admins, monitors
 }
 
+// wsSessionKind 区分每用户会话上限的两个入口（各自计 10，互不占用）。
+type wsSessionKind string
+
+const (
+	wsSessionKindAdmin   wsSessionKind = "admin"
+	wsSessionKindMonitor wsSessionKind = "monitor"
+)
+
+type wsSessionReservationKey struct {
+	userID int64
+	kind   wsSessionKind
+}
+
+// registeredWSSessionsLocked 返回该用户该入口已登记的会话数。
+// 调用方须持有 s.mu（读或写）。
+func (s *Server) registeredWSSessionsLocked(userID int64, kind wsSessionKind) int {
+	count := 0
+	switch kind {
+	case wsSessionKindAdmin:
+		for sess := range s.admins {
+			if sess.userID == userID {
+				count++
+			}
+		}
+	case wsSessionKindMonitor:
+		for sess := range s.monitors {
+			if sess.userID == userID {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// reserveWSSession 是 admin/monitor 两入口共用的会话名额预留（R2X-022）。
+// 在同一把 s.mu 内原子完成「计数（已登记会话 + 在途预留）+ 预留」：
+// 预留成功后 Upgrade 失败必须 releaseWSSessionReservation 回滚，
+// Upgrade 成功必须经 activate*WSSession 在同一次加锁内把预留原子
+// 转换为已登记会话——任何路径都不得直接绕过预留登记会话。
+func (s *Server) reserveWSSession(userID int64, kind wsSessionKind) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.wsReserved == nil {
+		s.wsReserved = make(map[wsSessionReservationKey]int)
+	}
+	key := wsSessionReservationKey{userID: userID, kind: kind}
+	if s.registeredWSSessionsLocked(userID, kind)+s.wsReserved[key] >= wsMaxSessionsPerUser {
+		return false
+	}
+	s.wsReserved[key]++
+	return true
+}
+
+// releaseWSSessionReservation 回滚一份未转为登记会话的预留
+// （Upgrade 失败路径）。调用方须确保该预留尚未被 activate 消费。
+func (s *Server) releaseWSSessionReservation(userID int64, kind wsSessionKind) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consumeWSReservationLocked(userID, kind)
+}
+
+// consumeWSReservationLocked 在持有 s.mu 时消费一份预留；无预留时无操作。
+func (s *Server) consumeWSReservationLocked(userID int64, kind wsSessionKind) {
+	key := wsSessionReservationKey{userID: userID, kind: kind}
+	if s.wsReserved[key] > 1 {
+		s.wsReserved[key]--
+		return
+	}
+	delete(s.wsReserved, key)
+}
+
+// activateAdminWSSession 在同一次加锁内「预留−1 + admin 会话入 map」
+// 原子转换：转换瞬间总数（登记+预留）不变，并发计数永不出现空窗。
+func (s *Server) activateAdminWSSession(userID int64, session *adminSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consumeWSReservationLocked(userID, wsSessionKindAdmin)
+	if s.admins == nil {
+		s.admins = make(map[*adminSession]struct{})
+	}
+	s.admins[session] = struct{}{}
+}
+
+// activateMonitorWSSession 同 activateAdminWSSession，monitor 入口。
+func (s *Server) activateMonitorWSSession(userID int64, session *monitorSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consumeWSReservationLocked(userID, wsSessionKindMonitor)
+	if s.monitors == nil {
+		s.monitors = make(map[*monitorSession]struct{})
+	}
+	s.monitors[session] = struct{}{}
+}
+
+// wsReservationCount 返回该用户该入口当前在途预留数（测试与诊断用）。
+func (s *Server) wsReservationCount(userID int64, kind wsSessionKind) int {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.wsReserved[wsSessionReservationKey{userID: userID, kind: kind}]
+}
+
 // runRealtimeWriter 是每会话独立的广播写 goroutine（D2-04/D6-01）：
 // 广播方只往会话队列非阻塞投递，慢消费者只会拖住自己的 writer——
 // 写失败即关连接逐出（读循环随之退出并清理会话），不阻塞任何人。
@@ -395,12 +510,15 @@ func runRealtimeWriter(cw *connWrap, queue <-chan []byte, done <-chan struct{}) 
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int64, claims auth.Claims) {
-	if admins, _ := s.userSessionCounts(userID); admins >= wsMaxSessionsPerUser {
+	// R2X-022：Upgrade 前原子预留名额（与 handleMonitor 共用同一 helper），
+	// 计数与登记不再隔着 Upgrade 形成 check-then-act 窗口。
+	if !s.reserveWSSession(userID, wsSessionKindAdmin) {
 		http.Error(w, "too many sessions", http.StatusTooManyRequests)
 		return
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		s.releaseWSSessionReservation(userID, wsSessionKindAdmin)
 		return
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
@@ -416,9 +534,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int6
 		return s.validateAdminSession(session.userID, session.claims)
 	})
 
-	s.mu.Lock()
-	s.admins[session] = struct{}{}
-	s.mu.Unlock()
+	// 同一次加锁内把预留原子转换为已登记会话。
+	s.activateAdminWSSession(userID, session)
 
 	defer func() {
 		close(done)
@@ -436,12 +553,14 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int6
 }
 
 func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request, userID int64, claims auth.Claims) {
-	if _, monitors := s.userSessionCounts(userID); monitors >= wsMaxSessionsPerUser {
+	// R2X-022：与 handleAdmin 共用同一预留 helper（见 handleAdmin 注）。
+	if !s.reserveWSSession(userID, wsSessionKindMonitor) {
 		http.Error(w, "too many sessions", http.StatusTooManyRequests)
 		return
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		s.releaseWSSessionReservation(userID, wsSessionKindMonitor)
 		return
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
@@ -457,9 +576,8 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request, userID in
 		return s.validateMonitorSession(session.userID, session.claims)
 	})
 
-	s.mu.Lock()
-	s.monitors[session] = struct{}{}
-	s.mu.Unlock()
+	// 同一次加锁内把预留原子转换为已登记会话。
+	s.activateMonitorWSSession(userID, session)
 
 	defer func() {
 		close(done)
