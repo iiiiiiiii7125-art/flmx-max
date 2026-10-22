@@ -261,10 +261,27 @@ func TestBroadcastNotBlockedBySlowConsumer(t *testing.T) {
 
 // FIX-A #7（D2-03）：同一用户的实时会话数有上限。
 func TestPerUserSessionLimit(t *testing.T) {
-	_, ts := fix132AdminServer(t)
+	server, ts := fix132AdminServer(t)
 	var conns []*websocket.Conn
 	for i := 0; i < wsMaxSessionsPerUser; i++ {
 		conns = append(conns, dialAdmin(t, ts, 11))
+	}
+	// R1-B10 deflake：客户端 Dial 返回只证明握手响应已发出，不证明
+	// 服务端 handler 已把会话登记进 s.admins——handleAdmin 在 Upgrade
+	// 之后才登记，登记落点与下一条连接的计数检查无 happens-before
+	// （探针实测：连满瞬间 5/30 轮登记数只有 9，其中 3 轮第 11 条
+	// 随即被接受）。旧用例把「握手完成」当「登记完成」，重载下即
+	// 偶发红。改为条件等待登记数恰达上限（终局不变量）后再发第 11
+	// 条：断言强度不变——仍要求第 11 条被 429 拒绝、且其他用户不
+	// 受影响；若登记永久丢失/会话被误回收，等待超时照样红。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if admins, _ := server.userSessionCounts(11); admins == wsMaxSessionsPerUser {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("sessions for user 11 registered = %d, want %d before over-limit dial", admins, wsMaxSessionsPerUser)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	conn, resp, err := dialWS(t, ts, "type=0&secret="+url.QueryEscape(fix132AdminToken(t, 11)))
 	if err == nil {
