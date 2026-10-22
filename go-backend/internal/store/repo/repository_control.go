@@ -349,7 +349,7 @@ func (r *Repository) ResolveUserTunnelAndLimiter(userID, tunnelID int64) (*model
 	var rec row
 	err := r.db.Model(&model.UserTunnel{}).
 		Select("user_tunnel.id AS user_tunnel_id, speed_limit.id AS limiter_id, speed_limit.speed AS speed").
-		Joins("LEFT JOIN speed_limit ON speed_limit.id = user_tunnel.speed_id").
+		Joins("LEFT JOIN speed_limit ON speed_limit.id = user_tunnel.speed_id AND speed_limit.status = 1").
 		Where("user_tunnel.user_id = ? AND user_tunnel.tunnel_id = ?", userID, tunnelID).
 		Order("user_tunnel.id ASC").
 		Limit(1).
