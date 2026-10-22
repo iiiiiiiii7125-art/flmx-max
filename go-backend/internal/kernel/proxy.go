@@ -284,6 +284,15 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 	out["server"] = strings.Trim(e.Host, "[]")
 	out["port"] = e.Port
 	if out.Type() == "ss" {
+		// R4X-001（渲染自愈）：存量 cipher 大小写变体行在渲染克隆上
+		// 小写化——存量不迁移、拉取自愈（与下方密钥规范化同口径）。
+		// 变体名原样渲染会被 sing-box / mihomo 以 unknown method 拒
+		// 载整表、被 Loon / QX 的小写白名单静默丢弃；小写化后坏 key
+		// 变体也重新落入各面守卫（如 sing-box 的 ValidSS2022SingleKey
+		// 略过）。存储值不动。
+		if c := out.str("cipher"); c != "" {
+			out["cipher"] = strings.ToLower(c)
+		}
 		// GATE-F1（R3X-008 渲染侧）：forEndpoint 是导入节点的唯一渲染
 		// 收敛点——sing-box / Clash / Surge / ss 链接 / Loon / QX /
 		// Shadowrocket 与双链式出站全部经此克隆。在此把单段 SS2022
