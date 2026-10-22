@@ -996,33 +996,40 @@ uninstall_flux_agent() {
 
 # 主逻辑
 main() {
+  # X-P3-6 (J-03, BC-12): 各分支捕获操作函数返回码并以其退出。
+  # 旧实现无条件 exit 0，菜单更新/卸载失败（函数以 return 1 报告）
+  # 也被以退出码判断成败的自动化消费者误判为成功；成功路径仍
+  # exit 0、delete_self 行为不变。install_flux_agent 内部直接
+  # exit 1 的失败路径不受影响（进程已以 1 退出）。
+  local rc=0
+
   # 如果提供了命令行参数，直接执行安装
   if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
-    install_flux_agent
+    install_flux_agent || rc=$?
     delete_self
-    exit 0
+    exit "$rc"
   fi
 
   # 显示交互式菜单
   while true; do
     show_menu
     read -p "请输入选项 (1-4): " choice
-    
+
     case $choice in
       1)
-        install_flux_agent
+        install_flux_agent || rc=$?
         delete_self
-        exit 0
+        exit "$rc"
         ;;
       2)
-        update_flux_agent
+        update_flux_agent || rc=$?
         delete_self
-        exit 0
+        exit "$rc"
         ;;
       3)
-        uninstall_flux_agent
+        uninstall_flux_agent || rc=$?
         delete_self
-        exit 0
+        exit "$rc"
         ;;
       4)
         echo "👋 退出脚本"

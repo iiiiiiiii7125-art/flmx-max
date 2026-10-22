@@ -460,6 +460,61 @@ echo old' "1.3.5"
 echo "old version"' "1.3.2"
 )
 
+# X-P3-6 (J-03, BC-12): main 各分支必须传播操作函数返回码。
+# 夹具：截断 install.sh 的主调用、覆写操作函数与 delete_self 后
+# 以子进程实跑 main——失败分支退出码非 0、成功分支仍为 0，
+# 直装（-a/-s）与菜单两条路径都覆盖。
+test_main_propagates_operation_exit_codes() (
+  set -euo pipefail
+
+  local work
+  work=$(mktemp -d)
+
+  build_case() {
+    local name="$1" stub="$2"
+    local file="$work/$name.sh"
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$file"
+    cat >> "$file" <<STUBEOF
+$stub
+delete_self() { :; }
+main
+STUBEOF
+    printf '%s' "$file"
+  }
+
+  local rc="0" file
+
+  # 菜单 2 更新失败 → 非 0
+  file=$(build_case menu-update-fail 'update_flux_agent() { return 1; }')
+  rc="0"; printf '2\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "X-P3-6: menu update failure should exit non-zero"
+
+  # 菜单 2 更新成功 → 0
+  file=$(build_case menu-update-ok 'update_flux_agent() { return 0; }')
+  rc="0"; printf '2\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "X-P3-6: menu update success should exit 0"
+
+  # 菜单 1 安装失败 → 非 0
+  file=$(build_case menu-install-fail 'install_flux_agent() { return 1; }')
+  rc="0"; printf '1\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "X-P3-6: menu install failure should exit non-zero"
+
+  # 菜单 3 卸载失败 → 非 0
+  file=$(build_case menu-uninstall-fail 'uninstall_flux_agent() { return 1; }')
+  rc="0"; printf '3\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "X-P3-6: menu uninstall failure should exit non-zero"
+
+  # 直装（-a/-s）失败 → 非 0
+  file=$(build_case direct-fail 'install_flux_agent() { return 1; }')
+  rc="0"; bash "$file" -a "panel.example.com:443" -s "test-secret" >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "X-P3-6: direct install failure should exit non-zero"
+
+  # 直装（-a/-s）成功 → 0
+  file=$(build_case direct-ok 'install_flux_agent() { return 0; }')
+  rc="0"; bash "$file" -a "panel.example.com:443" -s "test-secret" >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "X-P3-6: direct install success should exit 0"
+)
+
 test_install_flux_agent_preserves_legacy_gost_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -1519,6 +1574,7 @@ test_update_flux_agent_rolls_back_flapping_binary
 test_extract_leading_semver_matches_go_rules
 test_update_flux_agent_rejects_downgrade
 test_update_flux_agent_allows_higher_and_incomparable
+test_main_propagates_operation_exit_codes
 test_install_flux_agent_preserves_legacy_gost_when_download_fails
 test_update_flux_agent_preserves_legacy_gost_when_download_fails
 test_install_flux_agent_writes_json_safe_config
