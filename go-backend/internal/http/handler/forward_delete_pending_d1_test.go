@@ -203,8 +203,8 @@ func TestPendingDeleteRetryBackoff(t *testing.T) {
 	}
 }
 
-// TestForceDeleteAdminOnly: 非管理员 403；不存在的 ID 明确 404 语义；
-// 管理员成功且 DB 全清理。
+// TestForceDeleteAdminOnly: 非管理员 403；不存在的 ID 幂等成功
+// （断言更新登记见下）；管理员成功且 DB 全清理。
 func TestForceDeleteAdminOnly(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
@@ -218,13 +218,19 @@ func TestForceDeleteAdminOnly(t *testing.T) {
 		t.Fatalf("expected 403 for non-admin, got %d", code)
 	}
 
-	// 不存在的 ID：明确“不存在”，非 500（code -2 也不带 panic）。
+	// 不存在的 ID：幂等成功。
+	// 断言更新登记（X-P3-28 / V-12）：本测试原锁 R5-B3 D1-001 口径
+	// 「force-delete 不存在须明确回『不存在』」；其后 R1 裁定 V-12
+	// 统一四类 delete（含 forward）对不存在返回幂等成功（与
+	// node/tunnel/speedLimit 对齐、relay.md 已有文档承诺），后出裁定
+	// 覆盖旧口径，故此处断言随之更新——非管理员 403 与管理员成功
+	// 清理两段（本测试本体）不变。
 	adminReq := newAuthenticatedJSONRequest(t, map[string]any{"id": 999999})
 	res = httptest.NewRecorder()
 	h.forwardForceDelete(res, adminReq)
 	code, msg := decodePendingEnvelopeCode(t, res)
-	if code == 0 || !strings.Contains(msg, "不存在") {
-		t.Fatalf("expected not-found message, got code=%d msg=%q", code, msg)
+	if code != 0 {
+		t.Fatalf("expected idempotent success for nonexistent id, got code=%d msg=%q", code, msg)
 	}
 
 	// 管理员对 pending 行 force-delete 成功。
