@@ -543,6 +543,12 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.persistNodeSSHConfig(nodeID, req, forwardMode, now, false); err != nil {
+		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
+		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
+		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
+		if delErr := h.deleteNodeByID(nodeID); delErr != nil {
+			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
