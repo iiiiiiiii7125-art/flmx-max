@@ -32,7 +32,10 @@ import {
 } from "@/api";
 import { PageLoadingState } from "@/components/page-state";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 
 interface SpeedLimitRule {
   id: number;
@@ -191,6 +194,8 @@ export default function LimitPage({
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(modalOpen, !isEdit, rotateIdemKey);
 
   // 提交表单
   const handleSubmit = async () => {
