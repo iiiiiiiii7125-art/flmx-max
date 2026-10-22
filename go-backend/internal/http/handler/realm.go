@@ -258,10 +258,27 @@ func (h *Handler) syncRealmForward(forward *forwardRecord, override map[int64]bo
 	if err != nil {
 		return warnings, err
 	}
-	// R2X-034：转发级 SpeedID/IPSpeedID 与 UT 级分支同谓词——经
-	// GetSpeedLimitSpeed（status=1 过滤）成功且 speed>0 才算有效
-	// 限速；引用已禁用/零速规则时限速本就不生效，不得误报警告。
-	// MaxConn/IPMaxConn 是转发自有字段、无 status 维度，保持裸值。
+	hasIneffectiveLimit, err := h.forwardHasIneffectiveLimits(forward)
+	if err != nil {
+		return warnings, err
+	}
+	if hasIneffectiveLimit {
+		warnings = append(warnings, "realm 引擎不支持限速和连接数限制，这些设置不生效")
+	}
+	return warnings, nil
+}
+
+// forwardHasIneffectiveLimits 是「该转发存在有效但当前数据面不执法
+// 的限速/连接数设置」的共用谓词（realm 与 nftables 两面同口径，
+// R3X-019 起 nft 复用本谓词，禁止两面再分叉）：
+//   - 转发级 SpeedID/IPSpeedID（R2X-034）：经 GetSpeedLimitSpeed
+//     （status=1 过滤）成功且 speed>0 才算有效；引用已禁用/零速
+//     规则时限速本就不生效，不得误报。
+//   - MaxConn/IPMaxConn 是转发自有字段、无 status 维度，保持裸值。
+//   - UT 级限速（X-P3-10）：复用 ResolveUserTunnelAndLimiter 的
+//     有效性谓词（status=1 且 speed>0）；已禁用或 speed=0 的 UT
+//     规则解析为空，不产生警告。
+func (h *Handler) forwardHasIneffectiveLimits(forward *forwardRecord) (bool, error) {
 	forwardSpeedIneffective := false
 	for _, id := range []sql.NullInt64{forward.SpeedID, forward.IPSpeedID} {
 		if !id.Valid {
@@ -272,22 +289,14 @@ func (h *Handler) syncRealmForward(forward *forwardRecord, override map[int64]bo
 			break
 		}
 	}
-	hasIneffectiveLimit := forwardSpeedIneffective || forward.MaxConn > 0 || forward.IPMaxConn > 0
-	if !hasIneffectiveLimit {
-		// X-P3-10：UT 级限速同样在 realm 下不生效，必须纳入警告。
-		// 复用 ResolveUserTunnelAndLimiter 的有效性谓词（status=1 且
-		// speed>0，见 X-P2-5/X-P3-9）：已禁用或 speed=0 的 UT 规则
-		// 解析为空，不产生警告。
-		_, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)
-		if err != nil {
-			return warnings, err
-		}
-		hasIneffectiveLimit = utLimiterID != nil && utSpeed != nil
+	if forwardSpeedIneffective || forward.MaxConn > 0 || forward.IPMaxConn > 0 {
+		return true, nil
 	}
-	if hasIneffectiveLimit {
-		warnings = append(warnings, "realm 引擎不支持限速和连接数限制，这些设置不生效")
+	_, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)
+	if err != nil {
+		return false, err
 	}
-	return warnings, nil
+	return utLimiterID != nil && utSpeed != nil, nil
 }
 
 // controlRealmForward pauses, resumes or removes a realm forward.
