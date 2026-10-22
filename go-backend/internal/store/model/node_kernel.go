@@ -32,9 +32,12 @@ type NodeInbound struct {
 	Security  string `gorm:"type:text;not null;default:''"`
 	Settings  string `gorm:"type:text;not null;default:''"`
 	Extra     string `gorm:"type:text;not null;default:''"`
-	ShareHost string `gorm:"column:share_host;type:varchar(255);not null;default:''"`
-	Remark    string `gorm:"type:text;not null;default:''"`
-	RelayOnly int    `gorm:"column:relay_only;not null;default:0"`
+	// ShareAddressMode picks where the share/subscription address comes
+	// from: auto (node default) / ipv4 / ipv6 / custom (ShareHost).
+	ShareAddressMode string `gorm:"column:share_address_mode;type:varchar(16);not null;default:'auto'"`
+	ShareHost        string `gorm:"column:share_host;type:varchar(255);not null;default:''"`
+	Remark           string `gorm:"type:text;not null;default:''"`
+	RelayOnly        int    `gorm:"column:relay_only;not null;default:0"`
 	// AcceptProxyProtocol: relays send PROXY protocol so the kernel sees
 	// the real client IP; direct access is then impossible (forces RelayOnly).
 	AcceptProxyProtocol int `gorm:"column:accept_proxy_protocol;not null;default:0"`
