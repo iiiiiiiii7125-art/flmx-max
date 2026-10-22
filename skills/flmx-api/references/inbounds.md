@@ -21,8 +21,16 @@ Update an inbound (name, port, transport, security, settings, extra config).
 > Note: 更新入站须回填凭据子字段，留空保留旧值；有意轮换走显式新值或 regenerate
 > (`POST /api/v1/inbound/regenerate`). This covers the credential subfields
 > (encryption secret, Reality private key / short IDs, listen address, UUID and
-> password): leaving any of them empty on update keeps the stored value instead
+> password) and, when the stored inbound's protocol / security / transport
+> matches, the Naïve username, the ShadowTLS password, the Snell version
+> (send the stored value; `0` on update means "not provided"), the
+> Shadowsocks method, the WebSocket transport path and the gRPC service
+> name: leaving any of them empty on update keeps the stored value instead
 > of rotating it. Creation is unchanged (empty values are generated).
+>
+> Partial-update caveat: VLESS ENC is a mode switch, not a credential
+> refill — an update payload must resend `encryptionAuth` for an ENC
+> inbound, because leaving it empty turns ENC off.
 
 ## POST /api/v1/inbound/delete
 
