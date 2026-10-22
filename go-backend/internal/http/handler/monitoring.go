@@ -444,7 +444,7 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -561,7 +561,7 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -673,7 +673,7 @@ func (h *Handler) monitorServiceDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -701,7 +701,7 @@ func (h *Handler) monitorServiceRun(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 	if h.healthCheck == nil {

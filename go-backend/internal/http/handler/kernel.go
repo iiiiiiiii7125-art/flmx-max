@@ -1754,7 +1754,20 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			if s.Error != "" {
 				msg += "\n错误：" + truncate(s.Error, 300)
 			}
-			h.notify(notifyEventKernelError, "内核运行出错", msg)
+			kernelID, prevStatus := k.ID, k.Status
+			h.notifyTracked(notifyEventKernelError, "内核运行出错", msg, func(outcome notifyOutcome) {
+				// X-P2-8（A7-03 同族）：发送失败回滚 error 置位。下方 fields
+				// 更新已把状态落为 error，若不回滚，下一轮 KernelStatus 因
+				// 「已是 error」永不再触发、告警永久丢失（旧实现为裸 notify
+				// 无条件落状态）。仅当 DB 仍为 error 时回滚为触发前状态，
+				// 期间已恢复/被改状态则不覆盖。
+				if outcome != notifyOutcomeFailed || h.repo == nil {
+					return
+				}
+				if cur, err := h.repo.GetNodeKernel(kernelID); err == nil && cur != nil && cur.Status == kernelStatusError {
+					_ = h.repo.UpdateNodeKernelFields(kernelID, map[string]interface{}{"status": prevStatus})
+				}
+			})
 		}
 		if newStatus != kernelStatusError && k.Status == kernelStatusError && h.notifier != nil {
 			// A7-02：内核恢复没有恢复通知可挂——直接清掉该内核的问题
