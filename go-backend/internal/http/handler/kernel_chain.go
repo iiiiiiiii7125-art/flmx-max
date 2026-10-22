@@ -229,11 +229,14 @@ func (h *Handler) chainReaches(start *model.NodeInbound, id int64) bool {
 
 // chainReferrers returns the inbounds that send traffic through the given
 // one, as their chained outbound or a 分流 target.
-func (h *Handler) chainReferrers(targetID int64) []model.NodeInbound {
+//
+// R3X-015: 查询失败必须上抛——删除/卸载守卫以本函数为据，旧实现出错
+// 返回 nil 被调用方读作「无引用」放行删除（fail-open），与同文件
+// chainReaches 的 fail-closed 口径冲突。调用方不得把 error 当空集。
+func (h *Handler) chainReferrers(targetID int64) ([]model.NodeInbound, error) {
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		log.Printf("chain referrer lookup failed inbound_id=%d err=%v", targetID, err)
-		return nil
+		return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targetID, err)
 	}
 	var out []model.NodeInbound
 	for _, row := range rows {
@@ -244,7 +247,7 @@ func (h *Handler) chainReferrers(targetID int64) []model.NodeInbound {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // chainReferrerDisplayName renders a referrer inbound as
@@ -258,17 +261,21 @@ func (h *Handler) chainReferrerDisplayName(ref model.NodeInbound) string {
 }
 
 // chainInUseMessage explains why an inbound cannot be removed, or "" when
-// nothing is chained through it.
-func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
-	refs := h.chainReferrers(target.ID)
+// nothing is chained through it. R3X-015: 守卫查询失败上抛 error，
+// 调用方必须中止删除，不得把失败读作 ""（无引用）。
+func (h *Handler) chainInUseMessage(target *model.NodeInbound) (string, error) {
+	refs, err := h.chainReferrers(target.ID)
+	if err != nil {
+		return "", err
+	}
 	if len(refs) == 0 {
-		return ""
+		return "", nil
 	}
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
 		names = append(names, "「"+h.chainReferrerDisplayName(r)+"」")
 	}
-	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、"))
+	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、")), nil
 }
 
 // nodeCrossReferrers lists the inbounds on OTHER nodes that chain through
@@ -277,16 +284,21 @@ func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
 // caller. Same-node referrers are excluded (they are deleted together
 // with the node), and entries are deduplicated by referrer inbound ID
 // and disambiguated as 「名称（节点名）」 (R2X-029 口径）.
-func (h *Handler) nodeCrossReferrers(nodeID int64) []string {
+// R3X-015: 任一底层查询失败上抛 error，删节点路径必须中止——清单
+// 不完整时静默删除等于守卫失效（旧实现出错返回 nil 冒充无引用）。
+func (h *Handler) nodeCrossReferrers(nodeID int64) ([]string, error) {
 	targets, err := h.repo.ListNodeInboundsByNode(nodeID)
 	if err != nil {
-		log.Printf("node cross-referrer lookup failed node_id=%d err=%v", nodeID, err)
-		return nil
+		return nil, fmt.Errorf("查询节点 %d 的入站失败: %w", nodeID, err)
 	}
 	seen := make(map[int64]struct{})
 	out := make([]string, 0)
 	for _, target := range targets {
-		for _, ref := range h.chainReferrers(target.ID) {
+		refs, err := h.chainReferrers(target.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
 			if ref.NodeID == nodeID {
 				continue
 			}
@@ -297,7 +309,7 @@ func (h *Handler) nodeCrossReferrers(nodeID int64) []string {
 			out = append(out, h.chainReferrerDisplayName(ref))
 		}
 	}
-	return out
+	return out, nil
 }
 
 // kernelChainGuard 是 R1 X-P2-2（D-R1-02，按 V-03）的卸载守卫：对内核的
@@ -305,11 +317,10 @@ func (h *Handler) nodeCrossReferrers(nodeID int64) []string {
 // 互相引用不算被断——它们随卸载一并删除，与 inboundBatchDelete 的
 // batchDeletesReferrers 口径一致）。返回去重后的引用方入站名与按
 // chainInUseMessage 口径拼装的说明（无外部引用时说明为空）。
-func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, message string) {
+func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, message string, err error) {
 	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
 	if err != nil {
-		log.Printf("kernel chain guard lookup failed kernel_id=%d err=%v", kernelID, err)
-		return nil, ""
+		return nil, "", fmt.Errorf("查询内核 %d 的入站失败: %w", kernelID, err)
 	}
 	own := make(map[int64]struct{}, len(rows))
 	for _, row := range rows {
@@ -321,7 +332,11 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 	var parts []string
 	for _, row := range rows {
 		var refNames []string
-		for _, ref := range h.chainReferrers(row.ID) {
+		refs, rerr := h.chainReferrers(row.ID)
+		if rerr != nil {
+			return nil, "", rerr
+		}
+		for _, ref := range refs {
 			if _, isOwn := own[ref.ID]; isOwn {
 				continue
 			}
@@ -336,15 +351,21 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 			parts = append(parts, fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", row.Name, strings.Join(refNames, "、")))
 		}
 	}
-	return referrerNames, strings.Join(parts, "；")
+	return referrerNames, strings.Join(parts, "；"), nil
 }
 
 // applyChainReferrers re-applies the kernels of inbounds chained through the
 // target after it changed, returning a warning per failure.
+// R3X-015: 引用方查询失败以告警回传调用方（响应 Msg/Errors 可见），
+// 不得静默当作「无引用方」跳过重下发。
 func (h *Handler) applyChainReferrers(targetID int64) []string {
+	refs, err := h.chainReferrers(targetID)
+	if err != nil {
+		return []string{err.Error()}
+	}
 	var warnings []string
 	seen := map[int64]bool{}
-	for _, ref := range h.chainReferrers(targetID) {
+	for _, ref := range refs {
 		if isExternalInbound(&ref) || seen[ref.KernelID] {
 			continue
 		}
@@ -373,15 +394,20 @@ func (h *Handler) applyWhitelistedTarget(targetID int64) []string {
 }
 
 // chainDialerNodeIDs returns the nodes that dial the inbound as a chained
-// outbound, for its whitelist.
-func (h *Handler) chainDialerNodeIDs(inboundID int64) []int64 {
+// outbound, for its whitelist. R3X-015: 查询失败上抛——白名单少算拨号
+// 节点即下发不完整配置，调用方必须中止而非照常下发。
+func (h *Handler) chainDialerNodeIDs(inboundID int64) ([]int64, error) {
+	refs, err := h.chainReferrers(inboundID)
+	if err != nil {
+		return nil, err
+	}
 	var ids []int64
-	for _, ref := range h.chainReferrers(inboundID) {
+	for _, ref := range refs {
 		if !isExternalInbound(&ref) {
 			ids = append(ids, ref.NodeID)
 		}
 	}
-	return ids
+	return ids, nil
 }
 
 // batchDeletesReferrers reports whether a batch delete also removes every

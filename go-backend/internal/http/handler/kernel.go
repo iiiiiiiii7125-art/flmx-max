@@ -446,7 +446,13 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 	case "remove":
 		// X-P2-2（V-03）：删前链式引用守卫——该内核入站被跨内核/跨节点
 		// 入站用作出站时默认拒绝并列明引用方；Force 放行但回传清单。
-		brokenReferrers, guardMsg := h.kernelChainGuard(k.ID)
+		// R3X-015：守卫查询失败 fail-closed 中止卸载（Force 只放行已知
+		// 清单，不放行查询失败），不得当作无引用继续。
+		brokenReferrers, guardMsg, guardErr := h.kernelChainGuard(k.ID)
+		if guardErr != nil {
+			response.WriteJSON(w, response.Err(-2, guardErr.Error()))
+			return
+		}
 		if guardMsg != "" && !req.Force {
 			response.WriteJSON(w, response.R{
 				Code: -1,
@@ -1012,7 +1018,13 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
-	if msg := h.chainInUseMessage(row); msg != "" {
+	// R3X-015：守卫查询失败 fail-closed 中止删除，不得当作无引用放行。
+	msg, guardErr := h.chainInUseMessage(row)
+	if guardErr != nil {
+		response.WriteJSON(w, response.Err(-2, guardErr.Error()))
+		return
+	}
+	if msg != "" {
 		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
@@ -1055,10 +1067,26 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
 			continue
 		}
-		if msg := h.chainInUseMessage(row); msg != "" && !batchDeletesReferrers(ids, h.chainReferrers(id)) {
+		// R3X-015：守卫查询失败 fail-closed——该条记失败、不删除，
+		// 不得把查询失败读作无引用或「引用方全在批内」。
+		msg, guardErr := h.chainInUseMessage(row)
+		if guardErr != nil {
 			f++
-			failures = appendBatchFailureReason(failures, id, row.Name, msg)
+			failures = appendBatchFailure(failures, id, row.Name, guardErr)
 			continue
+		}
+		if msg != "" {
+			refs, refErr := h.chainReferrers(id)
+			if refErr != nil {
+				f++
+				failures = appendBatchFailure(failures, id, row.Name, refErr)
+				continue
+			}
+			if !batchDeletesReferrers(ids, refs) {
+				f++
+				failures = appendBatchFailureReason(failures, id, row.Name, msg)
+				continue
+			}
 		}
 		h.removeInboundRelays(id)
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
@@ -1365,7 +1393,13 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			port["hopFrom"], port["hopTo"] = lo, hi
 		}
 		if row.RelayWhitelist == 1 {
-			port["allow"] = h.inboundAllowList(row)
+			// R3X-015：白名单的链式拨号节点查询失败则整单中止，不
+			// 下发少算拨号节点的白名单。
+			allow, aerr := h.inboundAllowList(row)
+			if aerr != nil {
+				return nil, "", aerr
+			}
+			port["allow"] = allow
 		}
 		ports = append(ports, port)
 	}
