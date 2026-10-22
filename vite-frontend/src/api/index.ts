@@ -125,8 +125,8 @@ export const deletePasskey = (id: string, password: string) =>
   Network.post("/user/passkey/delete", { id, password });
 
 // 用户CRUD操作 - 全部使用POST请求
-export const createUser = (data: UserMutationPayload) =>
-  Network.post("/user/create", data);
+export const createUser = (data: UserMutationPayload, idemKey?: string) =>
+  Network.post("/user/create", data, { idemKey });
 export const getAllUsers = (pageData: UserListQuery = {}) =>
   Network.post<UserApiItem[]>("/user/list", pageData);
 export const updateUser = (data: UserMutationPayload) =>
@@ -136,14 +136,18 @@ export const getUserPackageInfo = () =>
   Network.post<UserPackageInfoApiData>("/user/package");
 
 // 节点CRUD操作 - 全部使用POST请求
-export const createNode = (data: NodeMutationPayload) =>
-  Network.post("/node/create", data);
+export const createNode = (data: NodeMutationPayload, idemKey?: string) =>
+  Network.post("/node/create", data, { idemKey });
 export const getNodeList = () => Network.post<NodeApiItem[]>("/node/list");
 export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
   Network.post("/node/update", data);
-export const deleteNode = (id: number) => Network.post("/node/delete", { id });
+export const deleteNode = (id: number) =>
+  Network.post<{ brokenReferrers?: string[]; brokenReferrerCount?: number }>(
+    "/node/delete",
+    { id },
+  );
 export const getNodeInstallCommand = (
   id: number,
   channel: ReleaseChannel = "stable",
@@ -191,8 +195,8 @@ export const clearNodeNftables = (nodeId: number) =>
   Network.post("/node/nftables/clear", { nodeId });
 
 // 隧道CRUD操作 - 全部使用POST请求
-export const createTunnel = (data: TunnelMutationPayload) =>
-  Network.post("/tunnel/create", data);
+export const createTunnel = (data: TunnelMutationPayload, idemKey?: string) =>
+  Network.post("/tunnel/create", data, { idemKey });
 export const getTunnelList = () =>
   Network.post<TunnelApiItem[]>("/tunnel/list");
 export const getTunnelById = (id: number) =>
@@ -255,8 +259,10 @@ export const userTunnel = () =>
   Network.post<UserTunnelApiItem[]>("/tunnel/user/tunnel");
 
 // 转发CRUD操作 - 全部使用POST请求
-export const createForward = (data: ForwardMutationPayload) =>
-  Network.post("/forward/create", data);
+export const createForward = (
+  data: ForwardMutationPayload,
+  idemKey?: string,
+) => Network.post("/forward/create", data, { idemKey });
 export const getForwardList = () =>
   Network.post<ForwardApiItem[]>("/forward/list");
 export const updateForward = (data: ForwardMutationPayload) =>
@@ -288,8 +294,10 @@ export const updateForwardOrder = (data: {
 }) => Network.post("/forward/update-order", data);
 
 // 限速规则CRUD操作 - 全部使用POST请求
-export const createSpeedLimit = (data: SpeedLimitMutationPayload) =>
-  Network.post("/speed-limit/create", data);
+export const createSpeedLimit = (
+  data: SpeedLimitMutationPayload,
+  idemKey?: string,
+) => Network.post("/speed-limit/create", data, { idemKey });
 export const getSpeedLimitList = () =>
   Network.post<SpeedLimitApiItem[]>("/speed-limit/list");
 export const updateSpeedLimit = (data: SpeedLimitMutationPayload) =>
@@ -389,8 +397,10 @@ export const batchChangeTunnel = (data: {
 // 分组与权限分配接口
 export const getTunnelGroupList = () =>
   Network.post<TunnelGroupApiItem[]>("/group/tunnel/list");
-export const createTunnelGroup = (data: { name: string; status?: number }) =>
-  Network.post("/group/tunnel/create", data);
+export const createTunnelGroup = (
+  data: { name: string; status?: number },
+  idemKey?: string,
+) => Network.post("/group/tunnel/create", data, { idemKey });
 export const updateTunnelGroup = (data: {
   id: number;
   name: string;
@@ -405,8 +415,10 @@ export const assignTunnelsToGroup = (data: {
 
 export const getUserGroupList = () =>
   Network.post<UserGroupApiItem[]>("/group/user/list");
-export const createUserGroup = (data: { name: string; status?: number }) =>
-  Network.post("/group/user/create", data);
+export const createUserGroup = (
+  data: { name: string; status?: number },
+  idemKey?: string,
+) => Network.post("/group/user/create", data, { idemKey });
 export const updateUserGroup = (data: {
   id: number;
   name: string;
@@ -440,7 +452,8 @@ export const createPeerShare = (data: {
   portRangeEnd?: number;
   allowedDomains?: string;
   allowedIps?: string;
-}) => Network.post("/federation/share/create", data);
+}, idemKey?: string) =>
+  Network.post("/federation/share/create", data, { idemKey });
 export const updatePeerShare = (data: {
   id: number;
   name: string;
@@ -663,8 +676,13 @@ export const getServiceMonitorLimits = () =>
     { silent: true },
   );
 
-export const createServiceMonitor = (data: ServiceMonitorMutationPayload) =>
-  Network.post<ServiceMonitorApiItem>("/monitor/services/create", data);
+export const createServiceMonitor = (
+  data: ServiceMonitorMutationPayload,
+  idemKey?: string,
+) =>
+  Network.post<ServiceMonitorApiItem>("/monitor/services/create", data, {
+    idemKey,
+  });
 
 export const updateServiceMonitor = (data: ServiceMonitorMutationPayload) =>
   Network.post<ServiceMonitorApiItem>("/monitor/services/update", data);
@@ -745,8 +763,10 @@ export const getKernelLogs = (id: number) =>
   Network.post<KernelStateApiData>("/kernel/logs", { id });
 export const getInboundList = () =>
   Network.post<InboundApiItem[]>("/inbound/list");
-export const createInbound = (data: InboundMutationPayload) =>
-  Network.post<{ id: number }>("/inbound/create", data);
+export const createInbound = (
+  data: InboundMutationPayload,
+  idemKey?: string,
+) => Network.post<{ id: number }>("/inbound/create", data, { idemKey });
 export const updateInbound = (data: InboundMutationPayload) =>
   Network.post<{ id: number }>("/inbound/update", data);
 export const deleteInbound = (id: number) =>
@@ -865,8 +885,8 @@ export const getSubscriptions = () =>
     regions: string[];
     ruleGroups: SubRuleGroup[];
   }>("/subscription/list");
-export const saveSubscription = (data: SubscriptionDraft) =>
-  Network.post<SubscriptionItem>("/subscription/save", data);
+export const saveSubscription = (data: SubscriptionDraft, idemKey?: string) =>
+  Network.post<SubscriptionItem>("/subscription/save", data, { idemKey });
 export const deleteSubscription = (id: number) =>
   Network.post("/subscription/delete", { id });
 export const resetSubscription = (id: number) =>
@@ -910,10 +930,10 @@ export const saveRemoteSource = (data: {
   intervalHours: number;
   relayOnly: boolean;
   enabled?: boolean;
-}) =>
+}, idemKey?: string) =>
   Network.post<
     RemoteSourceItem | { source: RemoteSourceItem; result: RemoteSyncResult }
-  >("/subscription/source/save", data, { timeout: 60000 });
+  >("/subscription/source/save", data, { timeout: 60000, idemKey });
 export const refreshRemoteSource = (id: number) =>
   Network.post<{ source: RemoteSourceItem; result: RemoteSyncResult }>(
     "/subscription/source/refresh",
@@ -999,7 +1019,8 @@ export const createInboundRelay = (data: {
   inPort?: number;
   name?: string;
   shareHost?: string;
-}) => Network.post<{ id: number }>("/inbound/relay/create", data);
+}, idemKey?: string) =>
+  Network.post<{ id: number }>("/inbound/relay/create", data, { idemKey });
 export const deleteInboundRelay = (id: number, force = false) =>
   Network.post("/inbound/relay/delete", { id, force });
 export interface UserInboundAssignment {

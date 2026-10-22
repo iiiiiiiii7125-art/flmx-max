@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import { toast } from "react-hot-toast";
 
 import { copyWithToast } from "@/utils/clipboard";
@@ -268,6 +269,9 @@ export default function PanelSharingPage() {
     }
   }, [selectedTab, loadShares, loadNodes, loadRemoteUsage]);
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const handleCreateShare = async () => {
     if (creatingShare) return;
     if (!shareForm.name || !shareForm.nodeId) {
@@ -324,9 +328,10 @@ export default function PanelSharingPage() {
         portRangeEnd: shareForm.portRangeEnd,
         allowedDomains: shareForm.allowedDomains,
         allowedIps: shareForm.allowedIps,
-      });
+      }, idemKey);
 
       if (res.code === 0) {
+        rotateIdemKey();
         toast.success("创建成功");
         setCreateShareOpen(false);
         loadShares();

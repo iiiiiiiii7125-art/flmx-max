@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 import { importInbounds, saveRemoteSource, updateExternalInbound } from "@/api";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import {
   FilePick,
   INTERVALS,
@@ -85,6 +86,9 @@ export function ImportModal({
   const fromFile = Boolean(fileName) && !subURL;
   const syncing = (Boolean(subURL) || fromFile) && sync;
 
+  // R2X-004：订阅源新建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const addSource = async () => {
     if (!subURL && !fromFile) return;
     setSaving(true);
@@ -107,7 +111,9 @@ export function ImportModal({
               relayOnly,
               role,
             },
+        idemKey,
       );
+      if (res.code === 0 || res.data) rotateIdemKey();
       const result = (res.data as { result?: RemoteSyncResult } | null)?.result;
 
       // A source whose first fetch failed is still saved.

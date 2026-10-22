@@ -23,6 +23,21 @@ import (
 	"go-backend/internal/ws"
 )
 
+// applyFlowItemViaFormalEntry 是 F-S02 迁移助手（仅测试代码）：
+// 生产死代码 processFlowItem 已删，单条上报一律经正式入口组合
+// buildNodeFlowUploadBatch + applyFlowUploadBatch。metas 获取与
+// 原单条路径同口径（失败置 nil），断言语义不变。
+func applyFlowItemViaFormalEntry(h *Handler, nodeID int64, item flowItem) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	metas, err := h.repo.GetFlowUploadForwardMetas(collectFlowUploadForwardIDs([]flowItem{item}))
+	if err != nil {
+		metas = nil
+	}
+	h.applyFlowUploadBatch(nodeID, h.buildNodeFlowUploadBatch(nodeID, []flowItem{item}, metas), time.Now())
+}
+
 type cleanupAgentCommand struct {
 	Type      string          `json:"type"`
 	Data      json.RawMessage `json:"data"`
@@ -231,7 +246,7 @@ func runCleanupPath(h *Handler, mode string, names []string) {
 	switch mode {
 	case "single":
 		for _, item := range items {
-			h.processFlowItem(1, item)
+			applyFlowItemViaFormalEntry(h, 1, item)
 		}
 	case "batch":
 		h.applyFlowUploadBatch(1, h.buildNodeFlowUploadBatch(1, items, nil), time.Now())

@@ -232,6 +232,16 @@ type chainTarget struct {
 	RealityShortID string
 }
 
+// HasVLESSEncryption reports whether the endpoint carries VLESS
+// encryption (ENC): a self-built inbound with encryption enabled, or an
+// imported proxy whose encryption is set and not "none".
+func (e Endpoint) HasVLESSEncryption() bool {
+	if e.Proxy != nil {
+		return hasVLESSEncryption(e.Proxy)
+	}
+	return e.Inbound.Settings.EncryptionEnabled()
+}
+
 func chainTargetLabel(e Endpoint) string {
 	if e.Proxy != nil {
 		return DescribeProxy(e.Proxy)

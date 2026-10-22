@@ -3081,6 +3081,22 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.ServiceMonitorsImported = count
 		}
+		// R2X-014：全部段落库后做一次 speed 引用清扫（限速段在段序
+		// 末尾，逐行校验会误杀全量恢复的合法绑定——见
+		// sweepDanglingSpeedRefsTx 注释）。只清扫本轮勾选段的行。
+		var sweepForwards []model.ForwardBackup
+		if typeSet["forwards"] {
+			sweepForwards = backup.Forwards
+		}
+		var sweepUserTunnels []model.UserTunnelBackup
+		if typeSet["userTunnels"] {
+			sweepUserTunnels = backup.UserTunnels
+		}
+		if len(sweepForwards) > 0 || len(sweepUserTunnels) > 0 {
+			if err := sweepDanglingSpeedRefsTx(tx, sweepForwards, sweepUserTunnels, rep); err != nil {
+				return fmt.Errorf("import speed ref sweep failed: %w", err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -3440,6 +3456,9 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 		if err != nil {
 			return count, err
 		}
+		// R2X-016：TrafficRatio 意图值在 Create 前捕获（Create 后
+		// GORM 会把 default:1.0 回填进 item，读 item 判不出意图）。
+		ratioIntent := t.TrafficRatio
 		item := model.Tunnel{
 			ID:           t.ID,
 			Name:         t.Name,
@@ -3467,6 +3486,11 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 			}),
 		}).Create(&item).Error
 		if err != nil {
+			return count, err
+		}
+		// R2X-016：default:1.0 吞掉的显式 0 倍率写回（插入/更新两
+		// 分支同病，见 restoreZeroValuedFloat）。
+		if err := restoreZeroValuedFloat(tx, &model.Tunnel{}, item.ID, "traffic_ratio", ratioIntent); err != nil {
 			return count, err
 		}
 		for _, ct := range t.ChainTunnels {
@@ -3530,6 +3554,91 @@ func restoreZeroValuedInt(tx *gorm.DB, model interface{}, id int64, column strin
 		return nil
 	}
 	return tx.Model(model).Where("id = ?", id).Update(column, 0).Error
+}
+
+// restoreZeroValuedFloat is the float twin of restoreZeroValuedInt
+// (R2X-016): Tunnel.TrafficRatio is the one float column with a
+// non-zero default (`default:1.0`), and 0 is a legal business value
+// (free tunnel, zero billing — see nftables_traffic.go). Without this
+// write-back a restored ratio=0 tunnel silently came back at 1.0 on
+// both the insert and the conflict-update branch.
+func restoreZeroValuedFloat(tx *gorm.DB, model interface{}, id int64, column string, intent float64) error {
+	if intent != 0 {
+		return nil
+	}
+	return tx.Model(model).Where("id = ?", id).Update(column, 0.0).Error
+}
+
+// sweepDanglingSpeedRefsTx 清扫本轮导入 forwards/userTunnels 的悬空
+// 限速引用（R2X-014）。必须在 Import 全部段落库之后执行：限速段在
+// 段序中位于 forwards/userTunnels 之后，逐行校验会在全量恢复时误杀
+// 合法绑定（H2-01 的段序陷阱）；后置清扫天然免疫段序。附属引用不
+// 存在时按 verdicts §2.7 剥离（置 NULL）+ 计 ImportWarnings，不跳
+// 整行——部分恢复（未勾 speedLimits）时整行跳过会连带丢转发。
+// 只处理备份清单内的行 id；被身份引用校验跳过的行在库中不存在，
+// Find 不命中自动略过，存量无关行不受影响。
+func sweepDanglingSpeedRefsTx(tx *gorm.DB, forwards []model.ForwardBackup, userTunnels []model.UserTunnelBackup, rep *importReport) error {
+	fwdSpeed, fwdIPSpeed, utSpeed := 0, 0, 0
+	for _, f := range forwards {
+		var row model.Forward
+		res := tx.Where("id = ?", f.ID).Limit(1).Find(&row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			continue
+		}
+		if row.SpeedID.Valid {
+			exists, err := rowExistsTx(tx, &model.SpeedLimit{}, row.SpeedID.Int64)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				if err := tx.Model(&model.Forward{}).Where("id = ?", f.ID).Update("speed_id", nil).Error; err != nil {
+					return err
+				}
+				fwdSpeed++
+			}
+		}
+		if row.IPSpeedID.Valid {
+			exists, err := rowExistsTx(tx, &model.SpeedLimit{}, row.IPSpeedID.Int64)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				if err := tx.Model(&model.Forward{}).Where("id = ?", f.ID).Update("ip_speed_id", nil).Error; err != nil {
+					return err
+				}
+				fwdIPSpeed++
+			}
+		}
+	}
+	for _, ut := range userTunnels {
+		var row model.UserTunnel
+		res := tx.Where("id = ?", ut.ID).Limit(1).Find(&row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			continue
+		}
+		if row.SpeedID.Valid {
+			exists, err := rowExistsTx(tx, &model.SpeedLimit{}, row.SpeedID.Int64)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				if err := tx.Model(&model.UserTunnel{}).Where("id = ?", ut.ID).Update("speed_id", nil).Error; err != nil {
+					return err
+				}
+				utSpeed++
+			}
+		}
+	}
+	if total := fwdSpeed + fwdIPSpeed + utSpeed; total > 0 {
+		rep.warnf("备份恢复：%d 处限速引用指向不存在的限速规则，已剥离（置空）（转发 speed_id %d 处、转发 ip_speed_id %d 处、用户隧道 speed_id %d 处），转发/用户隧道行本身已照常恢复", total, fwdSpeed, fwdIPSpeed, utSpeed)
+	}
+	return nil
 }
 
 func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
@@ -4082,24 +4191,33 @@ func importPermissions(tx *gorm.DB, permissions []model.PermissionBackup, _ int6
 				rep.skip("permissionGrants")
 				continue
 			}
+			// R2X-037：grant 组键强制取父 permission 组键。导出不变量
+			// 是「grant 组键恒等于父组键」（exportPermissions 按父组键
+			// 查 grant），自带值与父不一致本身即不一致数据——忽略
+			// 自带值、按父组键写回并计 warning，不写悬空/错组行。
+			if g.UserGroupID != p.UserGroupID || g.TunnelGroupID != p.TunnelGroupID {
+				rep.warnf("备份恢复：权限 #%d 的授权 #%d 自带组引用（用户组 %d / 隧道组 %d）与父权限组（%d / %d）不一致，已按父权限组写回", p.ID, g.ID, g.UserGroupID, g.TunnelGroupID, p.UserGroupID, p.TunnelGroupID)
+			}
 			// D4-02：(user_group_id, tunnel_group_id, user_tunnel_id)
-			// 复合唯一占位预处理。
+			// 复合唯一占位预处理（键取强制后的父组键）。
 			if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND user_tunnel_id = ? AND id <> ?",
-				g.UserGroupID, g.TunnelGroupID, g.UserTunnelID, g.ID).
+				p.UserGroupID, p.TunnelGroupID, g.UserTunnelID, g.ID).
 				Delete(&model.GroupPermissionGrant{}).Error; err != nil {
 				return count, err
 			}
 			grantItem := model.GroupPermissionGrant{
 				ID:             g.ID,
-				UserGroupID:    g.UserGroupID,
-				TunnelGroupID:  g.TunnelGroupID,
+				UserGroupID:    p.UserGroupID,
+				TunnelGroupID:  p.TunnelGroupID,
 				UserTunnelID:   g.UserTunnelID,
 				CreatedTime:    g.CreatedTime,
 				CreatedByGroup: g.CreatedByGroup,
 			}
+			// R2X-037：DoUpdates 补组键两列，存量错误行可被重导入纠正
+			//（旧列单只有 user_tunnel_id/created_by_group，错组永不更新）。
 			err = tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"user_tunnel_id", "created_by_group"}),
+				DoUpdates: clause.AssignmentColumns([]string{"user_group_id", "tunnel_group_id", "user_tunnel_id", "created_by_group"}),
 			}).Create(&grantItem).Error
 			if err != nil {
 				return count, err

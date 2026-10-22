@@ -76,9 +76,12 @@ func TestApplyInboundCounterSamplesDuplicateInBatchF075(t *testing.T) {
 	if err := r.DB().First(&got, inbound.ID).Error; err != nil {
 		t.Fatalf("reload inbound: %v", err)
 	}
-	// 总上传 = 500 + (900−500) = 900。
-	if got.UploadBytes != 900 {
-		t.Fatalf("F-075: inbound upload_bytes = %d, want 900 (duplicate sample in one batch double-counted)", got.UploadBytes)
+	// R2X-033 语义订正（断言更新登记 #1）：基线批只建基线、不计
+	// 增量（旧断言把基线批 500 也算进累计，编码的正是无基线全量
+	// 计的缺陷语义，与订阅管线 FIX132-C 的订正同型）。
+	// 总上传 = 第二批增量 (900−500) = 400。
+	if got.UploadBytes != 400 {
+		t.Fatalf("F-075: inbound upload_bytes = %d, want 400 (duplicate sample in one batch double-counted)", got.UploadBytes)
 	}
 }
 

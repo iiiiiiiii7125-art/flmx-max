@@ -242,6 +242,9 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 		// (clashSnell) 同批订正。
 		srcVersion := p.num("version")
 		switch {
+		case srcVersion < 0:
+			// R2X-002：负数版本是脏数据，略过而非原样下发。
+			return nil, false
 		case srcVersion == 5:
 			p["version"] = 4
 		case srcVersion > 5:
@@ -443,13 +446,22 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			return nil, false
 		}
 		o["type"] = "snell"
-		// Same client version mapping as singboxOutbound: the v4 wire
-		// speaks to v4 and v5 servers, so 5 renders as 4; 6 stays 6.
-		switch v := p.num("version"); {
-		case v == 5:
+		// R2X-002（verdicts §2.4）：sing-box 的 Snell 接受域经官方二进
+		// 制实测只有 {4, 6}——改白名单：4/5→4（v4 线格式可与 v5 服务
+		// 端互通）、6→6，其余（含 1/2/3、越界与缺失）整节点略过，绝不
+		// 直出毒化整份配置。分客户端口径（N-08）：Clash/Surge 对
+		// v1–v3 的处理各自独立，不追求三格式一致。
+		switch v := p.num("version"); v {
+		case 4, 5:
 			o["version"] = 4
-		case v >= 1:
-			o["version"] = v
+		case 6:
+			o["version"] = 6
+			// R2X-023：v6 的 mode 往返补出（导入侧仅保留 unshaped）。
+			if p.str("mode") == SnellModeUnshaped {
+				o["mode"] = SnellModeUnshaped
+			}
+		default:
+			return nil, false
 		}
 		o["psk"] = p.str("psk")
 		if st := p.sub("shadow-tls"); st.str("password") != "" {
@@ -581,7 +593,15 @@ func proxySurge(e Endpoint) (string, bool) {
 		}
 		tlsTail()
 	case "snell":
+		// R2X-002：Surge 原生支持 1–6；>6（及负数脏数据）整节点略过。
+		if v := p.num("version"); v < 0 || v > 6 {
+			return "", false
+		}
 		parts = append(parts, "snell", host, port, "psk="+surgeEscape(p.str("psk")), fmt.Sprintf("version=%d", maxInt(p.num("version"), 1)))
+		// R2X-023：v6 的 mode 往返补出（导入侧仅保留 unshaped）。
+		if p.num("version") == 6 && p.str("mode") == SnellModeUnshaped {
+			parts = append(parts, "mode="+SnellModeUnshaped)
+		}
 		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
 			parts = append(parts, "obfs="+oo.str("mode"))
 			if h := oo.str("host"); h != "" {

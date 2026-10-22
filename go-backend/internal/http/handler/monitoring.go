@@ -453,6 +453,18 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go；
+	// 管理员校验在 begin 之前，只读用户带键也不得回放绕过 403）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "monitor-service:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
+
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -873,8 +885,11 @@ func extractPathParam(path, prefix, suffix string) string {
 }
 
 type monitorAccessData struct {
-	Allowed bool   `json:"allowed"`
-	Reason  string `json:"reason,omitempty"`
+	Allowed bool `json:"allowed"`
+	// Admin 标记管理员（roleID==0），供前端只读用户隐藏写入口
+	// （R2X-038：只读时不渲染写入口与 Modal，而非点击后撞 403）。
+	Admin  bool   `json:"admin"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // monitorAccessHandler is a lightweight capability check for frontend navigation.
@@ -891,7 +906,7 @@ func (h *Handler) monitorAccessHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if roleID == 0 {
-		response.WriteJSON(w, response.OK(monitorAccessData{Allowed: true}))
+		response.WriteJSON(w, response.OK(monitorAccessData{Allowed: true, Admin: true}))
 		return
 	}
 
@@ -900,7 +915,7 @@ func (h *Handler) monitorAccessHandler(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	data := monitorAccessData{Allowed: allowed}
+	data := monitorAccessData{Allowed: allowed, Admin: false}
 	if !allowed {
 		data.Reason = "need_admin_grant"
 	}

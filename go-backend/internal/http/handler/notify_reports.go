@@ -217,6 +217,16 @@ func (h *Handler) dailyReportHour() int {
 	return v
 }
 
+// dailyReportPending 是日报首次生成后缓存的待发原文（R2X-018）：
+// 同日重试逐字复用、不重算；snapshot 是文本所依据的入站累计值，
+// 仅整条投递成功时才与 daily_last 一并落盘推进。
+type dailyReportPending struct {
+	date     string
+	text     string
+	snapshot int64
+	hasSnap  bool
+}
+
 // maybeDailyReport sends the summary once a day at the configured hour.
 // The last sent date is stored so restarts don't repeat it.
 func (h *Handler) maybeDailyReport(now time.Time) {
@@ -230,15 +240,38 @@ func (h *Handler) maybeDailyReport(now time.Time) {
 	if cfg, err := h.repo.GetConfigByName(notifyConfigDailyLast); err == nil && cfg != nil && cfg.Value == today {
 		return
 	}
-	// O8-002：先同步发送成功、再落盘"今日已发"标记。旧逻辑先落盘后异步发送，
-	// 发送失败当天便永不补发，日报静默丢失。现在失败时不落盘，下一个 tick
-	// （同小时内）会重试补发。
-	if h.notifySync(notifyEventDailyReport, "每日汇总 "+today, h.dailyReportText(now)) {
-		_ = h.repo.UpsertConfig(notifyConfigDailyLast, today, now.UnixMilli())
+	// R2X-018：首次生成后把原文与快照缓存进内存 pending，同日重试
+	// 逐字复用、不重算（旧实现 dailyReportText 生成即消费快照，补发
+	// 的日报流量数值失真为两次生成间的增量）。
+	h.dailyMu.Lock()
+	pending := h.dailyPending
+	if pending == nil || pending.date != today {
+		text, snapshot, hasSnap := h.dailyReportText(now)
+		pending = &dailyReportPending{date: today, text: text, snapshot: snapshot, hasSnap: hasSnap}
+		h.dailyPending = pending
 	}
+	h.dailyMu.Unlock()
+	// O8-002：先同步发送成功、再落盘"今日已发"标记。发送失败时不落盘，
+	// 下一个 tick（同小时内）会重试补发。
+	if !h.notifySync(notifyEventDailyReport, "每日汇总 "+today, pending.text) {
+		return
+	}
+	// 仅整条投递成功时才依次推进 snapshot 与 daily_last，并清 pending。
+	if pending.hasSnap {
+		_ = h.repo.UpsertConfig(notifyConfigDailySnapshot, strconv.FormatInt(pending.snapshot, 10), now.UnixMilli())
+	}
+	_ = h.repo.UpsertConfig(notifyConfigDailyLast, today, now.UnixMilli())
+	h.dailyMu.Lock()
+	if h.dailyPending == pending {
+		h.dailyPending = nil
+	}
+	h.dailyMu.Unlock()
 }
 
-func (h *Handler) dailyReportText(now time.Time) string {
+// dailyReportText 是纯计算（R2X-018）：返回日报文本与本次依据的入站
+// 累计快照，不写任何配置。快照的推进由 maybeDailyReport 在整条投递
+// 成功后统一完成。
+func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 	var lines []string
 	if online, total, err := h.repo.CountNodesOnline(); err == nil && total > 0 {
 		lines = append(lines, fmt.Sprintf("节点在线：%d / %d", online, total))
@@ -269,7 +302,10 @@ func (h *Handler) dailyReportText(now time.Time) string {
 			lines = append(lines, fmt.Sprintf("导入节点连不上：%d / %d", down, checked))
 		}
 	}
+	var snapshot int64
+	var hasSnap bool
 	if total, err := h.repo.SumInboundTraffic(); err == nil {
+		snapshot, hasSnap = total, true
 		text := "入站流量（累计）：" + formatBytes(total)
 		if cfg, err := h.repo.GetConfigByName(notifyConfigDailySnapshot); err == nil && cfg != nil {
 			if prev, err := strconv.ParseInt(cfg.Value, 10, 64); err == nil && total >= prev {
@@ -277,7 +313,6 @@ func (h *Handler) dailyReportText(now time.Time) string {
 			}
 		}
 		lines = append(lines, text)
-		_ = h.repo.UpsertConfig(notifyConfigDailySnapshot, strconv.FormatInt(total, 10), now.UnixMilli())
 	}
 	if flow, err := h.repo.SumStatisticsFlowSince(now.Add(-24 * time.Hour).UnixMilli()); err == nil && flow > 0 {
 		lines = append(lines, "转发流量（过去 24 小时）："+formatBytes(flow))
@@ -301,9 +336,9 @@ func (h *Handler) dailyReportText(now time.Time) string {
 		}
 	}
 	if len(lines) == 0 {
-		return "暂无数据"
+		return "暂无数据", snapshot, hasSnap
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), snapshot, hasSnap
 }
 
 // runNotifyLoop runs the periodic reminders: node and user expiry,
