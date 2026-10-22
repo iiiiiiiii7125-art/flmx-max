@@ -63,15 +63,55 @@ func ShadowsocksPassword(method string) string {
 // mis-rejecting legitimate airport keys is this check's worst failure
 // mode (R3X-008).
 func decodeSS2022Segment(seg string, n int) bool {
+	_, ok := decodeSS2022SegmentBytes(seg, n)
+	return ok
+}
+
+// decodeSS2022SegmentBytes is decodeSS2022Segment returning the decoded
+// key bytes, so renderers can re-encode them in canonical form.
+func decodeSS2022SegmentBytes(seg string, n int) ([]byte, bool) {
 	for _, enc := range []*base64.Encoding{
 		base64.StdEncoding, base64.RawStdEncoding,
 		base64.URLEncoding, base64.RawURLEncoding,
 	} {
 		if b, err := enc.DecodeString(seg); err == nil && len(b) == n {
-			return true
+			return b, true
 		}
 	}
-	return false
+	return nil, false
+}
+
+// NormalizedSS2022Password returns the canonical rendering form of an
+// SS2022 password: a single-segment key that decodes (in any of the
+// four accepted base64 shapes) to the cipher's key length is re-encoded
+// with padded StdEncoding — the only shape both sing-box and mihomo
+// accept (release-gate item 3: non-canonical shapes rendered verbatim
+// made both clients fail the whole profile). The decoded bytes are
+// unchanged, so this is a wire-format normalization, never a key
+// change, and the canonical shape is a fixed point.
+//
+// Everything else is returned verbatim, by design:
+//   - legacy AEAD and unknown ciphers: no key format to normalize;
+//   - SIP023 colon-separated multi-segment passwords: the B2 verdict
+//     keeps them verbatim on the formats that carry them (and the
+//     sing-box renderer skips them before this matters);
+//   - undecodable stock garbage: each renderer's existing policy
+//     decides (the sing-box proxy renderer skips the node, the other
+//     formats emit it verbatim), never a new behavior invented here.
+func NormalizedSS2022Password(method, password string) string {
+	n := SS2022KeyLen(method)
+	if n == 0 {
+		return password
+	}
+	pw := strings.TrimSpace(password)
+	if strings.Contains(pw, ":") {
+		return password
+	}
+	b, ok := decodeSS2022SegmentBytes(pw, n)
+	if !ok {
+		return password
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // ValidateSS2022Password checks a Shadowsocks password against the
