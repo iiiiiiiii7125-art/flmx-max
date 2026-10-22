@@ -339,6 +339,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.Announcement{},
 		&model.SchemaVersion{},
 		&model.NodeMetric{},
+		&model.NodeTraffic{},
 		&model.NodeLatencySample{},
 		&model.TunnelMetric{},
 		&model.ServiceMonitor{},
@@ -5086,6 +5087,49 @@ func (r *Repository) PruneNodeMetrics(olderThanMs int64) error {
 		return nil
 	}
 	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.NodeMetric{}).Error
+}
+
+// AddNodeTraffic adds hourly node NIC traffic deltas to the rows,
+// creating the (node_id, hour) bucket on first write.
+func (r *Repository) AddNodeTraffic(rows []model.NodeTraffic) error {
+	if r == nil || r.db == nil || len(rows) == 0 {
+		return nil
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "node_id"}, {Name: "hour"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"in_bytes":  gorm.Expr("node_traffic.in_bytes + excluded.in_bytes"),
+			"out_bytes": gorm.Expr("node_traffic.out_bytes + excluded.out_bytes"),
+		}),
+	}).Create(&rows).Error
+}
+
+// NodeTrafficSince sums each node's NIC traffic from fromMs on.
+// Values are [in, out] whole-machine NIC bytes — not tunnel billing.
+func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []struct {
+		NodeID   int64
+		InBytes  int64
+		OutBytes int64
+	}
+	err := r.db.Model(&model.NodeTraffic{}).Select("node_id, SUM(in_bytes) AS in_bytes, SUM(out_bytes) AS out_bytes").
+		Where("hour >= ?", fromMs).Group("node_id").Scan(&rows).Error
+	out := make(map[int64][2]int64, len(rows))
+	for _, row := range rows {
+		out[row.NodeID] = [2]int64{row.InBytes, row.OutBytes}
+	}
+	return out, err
+}
+
+// PruneNodeTraffic drops the hourly buckets before beforeMs.
+func (r *Repository) PruneNodeTraffic(beforeMs int64) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	return r.db.Where("hour < ?", beforeMs).Delete(&model.NodeTraffic{}).Error
 }
 
 func (r *Repository) InsertTunnelMetric(m *model.TunnelMetric) error {

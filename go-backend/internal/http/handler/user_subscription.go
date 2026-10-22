@@ -106,6 +106,7 @@ type userSubscriptionMineView struct {
 	UploadBytes   int64  `json:"uploadBytes"`
 	DownloadBytes int64  `json:"downloadBytes"`
 	TrafficLimit  int64  `json:"trafficLimit"`
+	TrafficSince  int64  `json:"trafficSince"`
 	ExpireTime    int64  `json:"expireTime"`
 	OverQuota     bool   `json:"overQuota"`
 	Enabled       bool   `json:"enabled"`
@@ -159,7 +160,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 		items = append(items, userSubscriptionMineView{
 			ID: v.ID, Name: v.Name, Path: v.Path, NodeCount: v.NodeCount,
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
-			TrafficLimit: v.TrafficLimit, ExpireTime: v.ExpireTime,
+			TrafficLimit: v.TrafficLimit, TrafficSince: v.TrafficSince, ExpireTime: v.ExpireTime,
 			OverQuota: v.OverQuota, Enabled: v.Enabled,
 		})
 	}

@@ -216,8 +216,8 @@ export default function MySubscriptionPage() {
                   </div>
                   <p className="text-xs text-default-500">
                     {s.trafficLimit > 0
-                      ? `已用 ${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`
-                      : `已用 ${formatTraffic(used)} · 不限流量`}
+                      ? `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`
+                      : `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} · 不限流量`}
                     {s.expireTime > 0 ? ` · ${dateText(s.expireTime)} 到期` : ""}
                   </p>
                   <div className="rounded-lg bg-default-50 p-3">
