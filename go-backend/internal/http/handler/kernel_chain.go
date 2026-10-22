@@ -242,6 +242,16 @@ func (h *Handler) chainReferrers(targetID int64) []model.NodeInbound {
 	return out
 }
 
+// chainReferrerDisplayName renders a referrer inbound as
+// 「名称（节点名）」 (R2X-029): inbound names are only unique per node, so
+// a bare name cannot identify a referrer in guard messages or lists.
+func (h *Handler) chainReferrerDisplayName(ref model.NodeInbound) string {
+	if node, err := h.repo.GetNodeByID(ref.NodeID); err == nil && node != nil && strings.TrimSpace(node.Name) != "" {
+		return fmt.Sprintf("%s（%s）", ref.Name, strings.TrimSpace(node.Name))
+	}
+	return ref.Name
+}
+
 // chainInUseMessage explains why an inbound cannot be removed, or "" when
 // nothing is chained through it.
 func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
@@ -251,9 +261,38 @@ func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
 	}
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
-		names = append(names, "「"+r.Name+"」")
+		names = append(names, "「"+h.chainReferrerDisplayName(r)+"」")
 	}
 	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、"))
+}
+
+// nodeCrossReferrers lists the inbounds on OTHER nodes that chain through
+// any inbound of the given node (R2X-045): deleting the node silently
+// breaks exactly these referrers, so they are reported back to the
+// caller. Same-node referrers are excluded (they are deleted together
+// with the node), and entries are deduplicated by referrer inbound ID
+// and disambiguated as 「名称（节点名）」 (R2X-029 口径）.
+func (h *Handler) nodeCrossReferrers(nodeID int64) []string {
+	targets, err := h.repo.ListNodeInboundsByNode(nodeID)
+	if err != nil {
+		log.Printf("node cross-referrer lookup failed node_id=%d err=%v", nodeID, err)
+		return nil
+	}
+	seen := make(map[int64]struct{})
+	out := make([]string, 0)
+	for _, target := range targets {
+		for _, ref := range h.chainReferrers(target.ID) {
+			if ref.NodeID == nodeID {
+				continue
+			}
+			if _, dup := seen[ref.ID]; dup {
+				continue
+			}
+			seen[ref.ID] = struct{}{}
+			out = append(out, h.chainReferrerDisplayName(ref))
+		}
+	}
+	return out
 }
 
 // kernelChainGuard 是 R1 X-P2-2（D-R1-02，按 V-03）的卸载守卫：对内核的
@@ -271,7 +310,9 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 	for _, row := range rows {
 		own[row.ID] = struct{}{}
 	}
-	seen := make(map[string]struct{})
+	// R2X-029: 去重以引用方入站 ID 为键（旧口径以名称为键——同名入站
+	// 分属不同节点时被少计且不可区分），元素以「名称（节点名）」消歧。
+	seen := make(map[int64]struct{})
 	var parts []string
 	for _, row := range rows {
 		var refNames []string
@@ -279,10 +320,11 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 			if _, isOwn := own[ref.ID]; isOwn {
 				continue
 			}
-			refNames = append(refNames, "「"+ref.Name+"」")
-			if _, dup := seen[ref.Name]; !dup {
-				seen[ref.Name] = struct{}{}
-				referrerNames = append(referrerNames, ref.Name)
+			display := h.chainReferrerDisplayName(ref)
+			refNames = append(refNames, "「"+display+"」")
+			if _, dup := seen[ref.ID]; !dup {
+				seen[ref.ID] = struct{}{}
+				referrerNames = append(referrerNames, display)
 			}
 		}
 		if len(refNames) > 0 {
