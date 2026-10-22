@@ -746,6 +746,41 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		// Keep secrets the client did not resend (the list hides PEM).
 		old, _ := inboundFromModel(row)
 		oldIn = &old
+		// R4X-018: 其余入站键 presence 化（与下方 4 键整对象回填同口径）——
+		// 部分更新未携带的键回填存量值，显式在场（含零值/空串/空数组）才
+		// 是清除：(a) shareHost/remark（shareHost 的归一在 decode 后已按
+		// 请求值完成，回填值是存量规范值可直接沿用）；(b) 三 bool——回填
+		// 必须发生在下方行赋值段「acceptProxyProtocol→RelayOnly」联动判
+		// 定之前，使 PP 省略但存量开时联动照常生效（本块在本函数联动
+		// 之前，天然满足）；(c) whitelistExtra 与 relayWhitelist 成对——
+		// 省 whitelistExtra 时回填存量规范串（ParseAllowList 可重解析），
+		// extra 显式而开关省略时以存量开关决定 ParseAllowList 的合并；
+		// (d) 路由对 outboundId+splitRules 同批独立判定（逐键回填，显式
+		// [] 与 0 是合法清空）。inboundSplitSave 是全量替换入口，不在此列。
+		if !present["shareHost"] {
+			req.ShareHost = row.ShareHost
+		}
+		if !present["remark"] {
+			req.Remark = row.Remark
+		}
+		if !present["relayOnly"] {
+			req.RelayOnly = row.RelayOnly == 1
+		}
+		if !present["acceptProxyProtocol"] {
+			req.AcceptProxyProtocol = row.AcceptProxyProtocol == 1
+		}
+		if !present["relayWhitelist"] {
+			req.RelayWhitelist = row.RelayWhitelist == 1
+		}
+		if !present["whitelistExtra"] {
+			req.WhitelistExtra = row.WhitelistExtra
+		}
+		if !present["outboundId"] {
+			req.OutboundID = row.OutboundID
+		}
+		if !present["splitRules"] {
+			req.SplitRules = rowSplitRules(row)
+		}
 		// GATE-F2（R3X-012 整对象限定）：载荷整对象省略 settings /
 		// transport / security / extra 时整对象保留旧值。结构体解码无法
 		// 区分「对象缺席」与「对象在场但子字段清空」，故 presence 取自
