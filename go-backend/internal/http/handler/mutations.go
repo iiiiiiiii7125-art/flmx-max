@@ -3108,6 +3108,10 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// R4X-011：同 upsertUserTunnel 单条路径——回滚成功后按回滚
+		// 后 DB 对本条 UT 的转发集尽力重下发，纠正失败点之前已按
+		// 新口径下发成功的转发；失败不覆写原错误回执。
+		_ = h.syncUserTunnelForwards(userID, tunnelID)
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败，已回滚: %v", syncErr)))
 		return
 	}
@@ -6938,6 +6942,12 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		if rollbackErr := h.rollbackUserTunnelUpsert(outcome); rollbackErr != nil {
 			return fmt.Errorf("下发失败且回滚失败: %v; %w", syncErr, rollbackErr)
 		}
+		// R4X-011（verdicts §3）：逐条下发是首错返回——失败点之前
+		// 的转发已按新 UT 口径下发成功，DB 回滚后必须按回滚后 DB
+		// 对本条 UT 的转发集尽力重下发（与批量路径整批重跑正本
+		// 逐字同形），否则这批转发在 agent 侧保持新口径、与回滚后
+		// DB 分叉。重下发失败不覆写原错误回执（同批量 `_ =` 口径）。
+		_ = h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID)
 		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
 	}
 	return nil
