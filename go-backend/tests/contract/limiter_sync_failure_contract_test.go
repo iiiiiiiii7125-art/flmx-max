@@ -44,7 +44,7 @@ func TestForwardCreateRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "limiter-fail-node", "limiter-fail-secret", "10.20.0.1", "10.20.0.1", "", "32000-32010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "limiter-fail-node", "limiter-fail-secret", "10.20.0.1", "10.20.0.1", "", "32000-32010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "limiter-fail-node")
@@ -68,6 +68,12 @@ func TestForwardCreateRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 		"addlimiters": "mock add limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake：节点种子 status=0，waitNodeStatus(…, 1) 才是真
+	// 同步点——WS handler 先登记会话（s.nodes）再 UpdateNodeOnline
+	// 置 1（F-002 种子注同理）。种子预置 1 会让等待空转，请求抢在
+	// 会话登记前到达时 SendCommand 报「节点不在线」抢先于被测的
+	// 限速下发失败分支。本文件各 mock 节点用例同此治理。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "limiter-fail-forward",
