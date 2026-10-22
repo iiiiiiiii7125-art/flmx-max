@@ -1843,6 +1843,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// X-P2-3（E-02）：隧道编辑改了入口/出口后，名下中转转发的拨号节点
+	// 随之变化——按「隧道名下转发 → relay → inboundID」收集受影响入站
+	// 逐个刷新白名单，否则新出口 IP 不在 allow 内（中转静默断）、旧
+	// 出口 IP 残留放行。提交已落库，此处刷新与后续成功分支无关。
+	h.refreshInboundWhitelists(h.inboundIDsForTunnel(id))
+
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
 		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
@@ -2316,22 +2322,7 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	// O3-001：删除前收集受影响的入站 ID（隧道删除会级联删除 NodeInboundRelay）。
 	// 参考中转删除时的 h.refreshInboundWhitelist(rel.InboundID) 调用。
 	// F-002：收集必须在转发数据面清理之前（清理会删转发行）。
-	var affectedInboundIDs []int64
-	if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
-		seen := make(map[int64]struct{})
-		for _, fwd := range forwards {
-			if rels, err := h.repo.ListNodeInboundRelays(); err == nil {
-				for _, rel := range rels {
-					if rel.ForwardID == fwd.ID {
-						if _, ok := seen[rel.InboundID]; !ok {
-							seen[rel.InboundID] = struct{}{}
-							affectedInboundIDs = append(affectedInboundIDs, rel.InboundID)
-						}
-					}
-				}
-			}
-		}
-	}
+	affectedInboundIDs := h.inboundIDsForTunnel(id)
 	// F-002：先逐条清理名下转发的数据面（gost DeleteService / nft
 	// pending 台账），清理未完成则中止删隧道，避免孤儿监听脱离计数。
 	if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
@@ -2407,16 +2398,8 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// 删除完成后统一刷新白名单，避免残留已删中转机 IP。
 	seenInbound := make(map[int64]struct{})
 	for _, id := range ids {
-		if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
-			if rels, err := h.repo.ListNodeInboundRelays(); err == nil {
-				for _, fwd := range forwards {
-					for _, rel := range rels {
-						if rel.ForwardID == fwd.ID {
-							seenInbound[rel.InboundID] = struct{}{}
-						}
-					}
-				}
-			}
+		for _, inboundID := range h.inboundIDsForTunnel(id) {
+			seenInbound[inboundID] = struct{}{}
 		}
 	}
 	success := 0
@@ -3305,6 +3288,8 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单。
+	affectedInboundIDs := h.inboundIDsForForward(id)
 	var nftNodeID int64
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
@@ -3339,6 +3324,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
@@ -3347,6 +3333,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -3386,6 +3373,8 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单。
+	affectedInboundIDs := h.inboundIDsForForward(id)
 	// 审计所需：节点与端口（删库前采集，供残留规则人工清理）。
 	residueHint := h.buildForwardResidueHint(forward)
 	oldPorts, _ := h.listForwardPorts(id)
@@ -3398,6 +3387,7 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	if tunnel, terr := h.getTunnelRecord(forward.TunnelID); terr == nil && tunnelIsRealm(tunnel) {
 		// realm renders from the database: the forward drops out on the
 		// next apply, now or when the node reconnects.
@@ -3670,6 +3660,13 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 	f := 0
 	failures := make([]batchFailureDetail, 0)
 	pending := make([]batchFailureDetail, 0)
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID（并集），删后刷新
+	// 白名单。刷新按当前 DB 重算：仅已删转发掉出 allow，pending/失败项
+	// 的行仍在库、口径不变。
+	var affectedInboundIDs []int64
+	for _, id := range ids {
+		affectedInboundIDs = append(affectedInboundIDs, h.inboundIDsForForward(id)...)
+	}
 	// R5-B3 D1-001: nft 删除按节点聚合，一节点只 reconcile 一次。
 	nftGroups := make(map[int64][]int64)
 	nftNames := make(map[int64]string)
@@ -3729,6 +3726,7 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	response.WriteJSON(w, response.OK(batchOperationResult{
 		SuccessCount: s,
 		FailCount:    f,
