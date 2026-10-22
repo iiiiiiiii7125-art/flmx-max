@@ -936,8 +936,13 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := h.repo.GetNodeInbound(id)
-	if err != nil || row == nil {
-		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if row == nil {
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 	if msg := h.chainInUseMessage(row); msg != "" {
