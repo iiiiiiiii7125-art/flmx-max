@@ -589,7 +589,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "tunnel-bind-entry", "tunnel-bind-entry-secret", "10.41.0.1", "10.41.0.1", "", "43000-43010", "", "v1", 1, 1, 1, now, now, 1, "10.41.0.1", "[::]", 0).Error; err != nil {
+	`, "tunnel-bind-entry", "tunnel-bind-entry-secret", "10.41.0.1", "10.41.0.1", "", "43000-43010", "", "v1", 1, 1, 1, now, now, 0, "10.41.0.1", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert entry node: %v", err)
 	}
 	entryNodeID := mustLastInsertID(t, r, "tunnel-bind-entry")
@@ -597,7 +597,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "tunnel-bind-exit", "tunnel-bind-exit-secret", "10.41.0.2", "10.41.0.2", "", "43100-43110", "eth0", "v1", 1, 1, 1, now, now, 1, "10.41.0.9", "[::]", 0).Error; err != nil {
+	`, "tunnel-bind-exit", "tunnel-bind-exit-secret", "10.41.0.2", "10.41.0.2", "", "43100-43110", "eth0", "v1", 1, 1, 1, now, now, 0, "10.41.0.9", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert exit node: %v", err)
 	}
 	exitNodeID := mustLastInsertID(t, r, "tunnel-bind-exit")
@@ -655,6 +655,8 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 		return false, ""
 	})
 	defer stopExit()
+	// R1-B10 deflake：两节点种子已改 status=0，以下 waitNodeStatus
+	// 不再空转（旧种子预置 1 时等待立即返回、与会话登记无同步关系）。
 	waitNodeStatus(t, r, entryNodeID, 1)
 	waitNodeStatus(t, r, exitNodeID, 1)
 
