@@ -13,12 +13,13 @@ import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
+import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import TunnelPage from "@/pages/tunnel";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 
-type RelayTab = "lines" | "tunnels" | "rules";
+type RelayTab = "lines" | "tunnels" | "rules" | "quality";
 
 const TAB_KEY = "flmx_relay_tab";
 
@@ -26,7 +27,8 @@ function readTab(): RelayTab {
   try {
     const v = localStorage.getItem(TAB_KEY);
 
-    if (v === "lines" || v === "tunnels" || v === "rules") return v;
+    if (v === "lines" || v === "tunnels" || v === "rules" || v === "quality")
+      return v;
   } catch {
     // Remembering the tab is only a convenience.
   }
@@ -38,6 +40,7 @@ const TABS: Array<{ key: RelayTab; label: string }> = [
   { key: "lines", label: "线路" },
   { key: "tunnels", label: "隧道" },
   { key: "rules", label: "规则" },
+  { key: "quality", label: "质量" },
 ];
 
 /** Relay lines grouped by the landing they lead to. */
@@ -356,6 +359,12 @@ function LinesView() {
   );
 }
 
+/** Tunnel quality: latency / loss / throughput timelines (DA-3). The
+ * same view also stays under 监控 → 隧道 for granted users. */
+function QualityView() {
+  return <TunnelMonitorView viewMode="grid" />;
+}
+
 /** 中转: relay lines per landing, plus the tunnel and rule pages. */
 export default function RelayPage() {
   const [tab, setTabState] = useState<RelayTab>(readTab);
@@ -369,7 +378,7 @@ export default function RelayPage() {
   };
 
   const tabBar = (
-    <div className="grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+    <div className="grid grid-cols-4 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
       {TABS.map((t) => (
         <button
           key={t.key}
@@ -392,6 +401,15 @@ export default function RelayPage() {
       <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
         {tabBar}
         <LinesView />
+      </AnimatedPage>
+    );
+  }
+
+  if (tab === "quality") {
+    return (
+      <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
+        {tabBar}
+        <QualityView />
       </AnimatedPage>
     );
   }

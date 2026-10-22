@@ -127,7 +127,9 @@ const CONFIRM_TEXT: Record<
 };
 
 function detailRows(item: InboundApiItem): Array<[string, string]> {
-  const host = item.shareHost || item.nodeServerIp;
+  // DB-2: shareAddress is the backend-resolved address for the inbound's
+  // chosen mode (auto / node IPv4 / node IPv6 / custom).
+  const host = item.shareAddress || item.shareHost || item.nodeServerIp;
 
   if (item.importedParams) {
     return [

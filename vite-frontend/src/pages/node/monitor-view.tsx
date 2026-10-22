@@ -96,6 +96,10 @@ interface MonitorViewProps {
   // R2X-038：后端 /monitor/access 的 admin 标记透传。只读用户
   // （canWrite=false）不渲染写入口与编辑 Modal，而非置灰后点击撞 403。
   canWrite?: boolean;
+  /** Opens straight into this node's detail, without the overview. */
+  focusNodeId?: number | null;
+  /** With focusNodeId: the back button leaves the view. */
+  onBack?: () => void;
 }
 
 type RealtimeNodeMetric = {
@@ -548,9 +552,13 @@ export function MonitorView({
   nodeMap,
   viewMode = "grid",
   canWrite = false,
+  focusNodeId = null,
+  onBack,
 }: MonitorViewProps) {
-  const [detailNodeId, setDetailNodeId] = useState<number | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  const [detailNodeId, setDetailNodeId] = useState<number | null>(focusNodeId);
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(
+    focusNodeId,
+  );
   const [metrics, setMetrics] = useState<NodeMetricApiItem[]>([]);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsTruncated, setMetricsTruncated] = useState(false);
@@ -1633,10 +1641,10 @@ export function MonitorView({
             <Button
               size="sm"
               variant="flat"
-              onPress={() => setDetailNodeId(null)}
+              onPress={() => (onBack ? onBack() : setDetailNodeId(null))}
             >
               <ArrowLeft className="w-4 h-4 mr-1" />
-              返回总览
+              {onBack ? "返回节点" : "返回总览"}
             </Button>
             <div className="flex items-center gap-2">
               <Server

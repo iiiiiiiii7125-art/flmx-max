@@ -105,6 +105,7 @@ export interface InboundForm {
   acmeDnsKey: string;
   acmeDnsSecret: string;
   acmeDnsSet: boolean;
+  shareAddressMode: string;
   shareHost: string;
   remark: string;
   extra: string;
@@ -312,6 +313,7 @@ export function emptyForm(
     acmeDnsKey: "",
     acmeDnsSecret: "",
     acmeDnsSet: false,
+    shareAddressMode: "auto",
     shareHost: "",
     remark: "",
     extra: "",
@@ -414,6 +416,8 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     acmeDnsKey: "",
     acmeDnsSecret: "",
     acmeDnsSet: Boolean(item.security.acmeDnsSet),
+    shareAddressMode:
+      item.shareAddressMode ?? (item.shareHost ? "custom" : "auto"),
     shareHost: item.shareHost,
     remark: item.remark,
     extra: item.extra,
@@ -569,7 +573,9 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
         : {}),
     },
     extra: form.extra.trim(),
-    shareHost: form.shareHost.trim(),
+    shareAddressMode: form.shareAddressMode,
+    shareHost:
+      form.shareAddressMode === "custom" ? form.shareHost.trim() : "",
     remark: form.remark.trim(),
     relayOnly: form.relayOnly || form.acceptProxyProtocol,
     acceptProxyProtocol: form.acceptProxyProtocol,
