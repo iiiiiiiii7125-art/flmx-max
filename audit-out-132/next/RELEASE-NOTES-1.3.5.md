@@ -107,5 +107,18 @@ R1 全量审计修复版：以 1.3.4 为基线完成新一轮「基线 → 12 �
 
 ## 升级注意事项
 
-- **BC-02 追溯撤销**：升级后首次发生分组
-...[truncated 2076 chars]
+- **BC-02 追溯撤销**：升级后首次发生分组变更（改成员、换隧道组成员、删组）时，会一并追溯撤销历史残留的组建授权并清理其转发——请管理员在升级后首次调整分组时留意，受影响的只有组发放的授权，手工授权不动。
+- **BC-03 监控写权收回**：此前拿到监控查看权的普通用户将只能查看；若其工作依赖新建/修改/执行监控，请改由管理员操作或重新分工。
+- **订阅重置语境（X-P2-14）**：重置订阅只轮换该订阅自身凭据；SS / Snell / 导入节点等共用凭据的入站不会因某个订阅重置而立即失效——把这类订阅链接当作泄露处理时，请同时轮换对应入站凭据或删除该订阅。重置弹窗已按是否包含共用凭据入站给出条件提示。
+- **Idempotency-Key 用法（BC-13）**：API/脚本调用方在创建请求加 `Idempotency-Key: <自备唯一值>` 头即可获得重复提交保护；不带键与旧版行为完全一致，面板 UI 无需任何操作。
+- **BC-04 存量条目**：此前以 `localhost` 或非规范 IP 写法导入的条目可继续运行，但再次编辑保存时会被新校验拒绝，请先改成规范 IP 或域名。
+- **联邦端口（X-P2-13）**：联邦预留端口现与本地端口同域校验，历史上同节点同口的联邦/本地双分配存量在下一次相关编辑时可能被提示冲突，按提示调整端口即可。
+- **发版同步清单（发版动作时执行一条）**：`skills/flmx-api/package.json` 与 `SKILL.md` 的版本字面量、`doc/ai-skill.md` 的发布示例 tag 已随本版同步到 `1.3.5`（提交 `a0a76a4`，check-doc-consistency 三处一致 PASS）；发布副本的 `PINNED_VERSION` 由流水线按惯例改写，不手工编辑。
+
+## 凭据
+
+- main：`23a5fd8`（merge integrate-r1: FLMX 1.3.5 R1 审计修复版，零冲突）+ `a0a76a4`（技能包版本字面量同步 1.3.5）+ `4c819e9`（发版说明定稿，tag 指向点）
+- tag：`1.3.5`（纯数字）
+- CI：Build and Push Images `39745016488` success（Check Version / 后端 / GOST / 前端 / Create Release 五 job 全绿，2026-10-22T08:12:40Z Release Published）；main CI Build Check `39745003138` success——六 job 全绿，含 **Go Backend PostgreSQL Contract**（PG 契约流水线实跑通过）与 **Test Installer Scripts (systemd and Alpine OpenRC)**（X-P2-12 Alpine 真实环境核对通过），Go Full Tests 首跑全绿、无 flake 定案事项；Deploy Docs `39745003315` success；Publish Skill to npm `39745016982` 为 ENEEDAUTH 惯例红（仅 Publish to npm 步失败、NODE_AUTH_TOKEN 为空，不阻塞），其版本同步步已按 1.3.5 成功执行，且全程无 Create GitHub Release 步——**X-P3-33「Release 唯一来源」经流水线实跑核实**。
+- Release 资产：12 个（6 产物 + 6 .sha256），已逐个下载核验 sha256 全部与发布 .sha256 一致；发布副本 panel_install.sh 与 install.sh 均 `PINNED_VERSION="1.3.5"`、`REPO="iiiiiiiii7125-art/flmx-max"`，compose 镜像标签为 `flmx-flux-panel-backend:1.3.5` / `flmx-vite-frontend:1.3.5`；发布 agent 实跑 `-V` 得 `gost 1.3.5 (go1.25.14 linux/amd64)`，发版门观察项（本地构建显示 dev）确认流水线构建为正式版本注入。GHCR 镜像标签因当前 token 无 read:packages 权限未做 API 核对（403），以主发版流 Build & Push 两 job success 为据。
+- 注记：本节与升级注意事项后半在本文件定稿提交（`4c819e9`）时因写入截断缺失，已于发版后补齐并单独提交（见 RELEASE-135.md 的异常定案）；GitHub Release 正文由流水线模板生成、不引用本文件，不受影响。
