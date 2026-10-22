@@ -107,7 +107,7 @@ func TestLoonLineEscapesShadowTLSPasswordF081(t *testing.T) {
 	eps := []Endpoint{{Name: "stls ss", Host: "5.6.7.8", Port: 8388, Direct: true,
 		Proxy: Proxy{"type": "ss", "server": "5.6.7.8", "port": 8388,
 			"cipher": "aes-128-gcm", "password": "pw",
-			"plugin": "shadow-tls",
+			"plugin":      "shadow-tls",
 			"plugin-opts": map[string]interface{}{"password": "s,k=1", "host": "h.example.com", "version": 3}}}}
 	body, _, err := Subscription(FormatLoon, eps, SubOptions{})
 	if err != nil {
@@ -115,5 +115,31 @@ func TestLoonLineEscapesShadowTLSPasswordF081(t *testing.T) {
 	}
 	if strings.Contains(body, "s,k=1") || !strings.Contains(body, "shadow-tls-password=s k=1") {
 		t.Fatalf("loon shadow-tls password must be escaped: %s", body)
+	}
+}
+
+// F-A-01/C-01（R1 修复批）：SurgeLine 里 host 是最后一个未过
+// surgeEscape 的用户可控值（分享地址）。含逗号的 host 会劈字段、
+// 含换行的 host 会向订阅者的 Surge 配置注入任意新行；转义对合法
+// 主机名/IP 是恒等变换。修复前本测试失败。
+func TestSurgeLineEscapesHost(t *testing.T) {
+	ss := Inbound{Protocol: ProtocolShadowsocks, Port: 8388,
+		Settings: Settings{Method: "aes-128-gcm", Password: "pw"}}
+	if err := Normalize(TypeXray, &ss); err != nil {
+		t.Fatal(err)
+	}
+	line, ok := SurgeLine(Endpoint{Name: "ss 节点", Host: "evil.com, injected=1\nfake = ss, 1.2.3.4, 80", Port: 8388, Inbound: ss, Direct: true})
+	if !ok {
+		t.Fatal("ss endpoint must render a Surge line")
+	}
+	if strings.Contains(line, "\n") {
+		t.Fatalf("host newline survived into the line: %q", line)
+	}
+	if strings.Contains(line, "evil.com,") {
+		t.Fatalf("host comma survived into the line: %q", line)
+	}
+	good, ok := SurgeLine(Endpoint{Name: "ss 节点", Host: "node.example.com", Port: 8388, Inbound: ss, Direct: true})
+	if !ok || !strings.Contains(good, "node.example.com") {
+		t.Fatalf("a valid hostname must pass through unchanged: %q", good)
 	}
 }

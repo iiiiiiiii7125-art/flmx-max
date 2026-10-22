@@ -349,31 +349,33 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(h.latencyPool()) > 0 {
+		// R1-B-02：空 ids 在本入口是「全部中转线」，不是 probeNodeLatency
+		// 的「全部节点全量轮」——展开为这些线各自的入口节点显式列表，
+		// 预刷保持定向（DB-4：手动点击不计延迟告警 streak）且范围只限
+		// 本页展示的中转入口，不再顺带全量探测无关节点。
+		rows, err := h.repo.ListInboundRelays(0)
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		want := make(map[int64]bool, len(req.IDs))
+		for _, id := range req.IDs {
+			want[id] = true
+		}
+		seen := make(map[int64]bool)
 		var entries []int64
-		if len(req.IDs) > 0 {
-			rows, err := h.repo.ListInboundRelays(0)
-			if err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
-				return
+		for _, rw := range rows {
+			if (len(req.IDs) > 0 && !want[rw.ID]) || rw.TunnelID <= 0 {
+				continue
 			}
-			want := make(map[int64]bool, len(req.IDs))
-			for _, id := range req.IDs {
-				want[id] = true
-			}
-			seen := make(map[int64]bool)
-			for _, rw := range rows {
-				if !want[rw.ID] || rw.TunnelID <= 0 {
-					continue
-				}
-				if nodes, err := h.listChainNodesForTunnel(rw.TunnelID); err == nil {
-					if in, _, _ := splitChainNodeGroups(nodes); len(in) > 0 && !seen[in[0].NodeID] {
-						seen[in[0].NodeID] = true
-						entries = append(entries, in[0].NodeID)
-					}
+			if nodes, err := h.listChainNodesForTunnel(rw.TunnelID); err == nil {
+				if in, _, _ := splitChainNodeGroups(nodes); len(in) > 0 && !seen[in[0].NodeID] {
+					seen[in[0].NodeID] = true
+					entries = append(entries, in[0].NodeID)
 				}
 			}
 		}
-		if len(req.IDs) == 0 || len(entries) > 0 {
+		if len(entries) > 0 {
 			if _, err := h.probeNodeLatency(r.Context(), entries); err != nil {
 				response.WriteJSON(w, response.Err(-2, err.Error()))
 				return

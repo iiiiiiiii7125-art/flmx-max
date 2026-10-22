@@ -10,9 +10,9 @@ import (
 )
 
 // X-P3-24 (L-09-6): subscriptionSave 两步同事务。修复前先单独落
-// MarkSubscriptionResetTime 再 SaveSubscription，后者失败时重置
+// 重置时间（单列更新）再 SaveSubscription，后者失败时重置
 // 时间已改而 ResetDay 未改。用 UPDATE OF reset_day 触发器只让
-// Save 失败、Mark 成功，断言重置时间不得被单独改动。
+// Save 失败、单列更新成功，断言重置时间不得被单独改动。
 func TestR1B8_XP324_SubscriptionSaveResetTimeAtomic(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/xp324.db")
 	if err != nil {
@@ -34,7 +34,7 @@ func TestR1B8_XP324_SubscriptionSaveResetTimeAtomic(t *testing.T) {
 	if s.ID == 0 {
 		t.Fatal("seed subscription id")
 	}
-	// 只拦截 Save 的整行更新（含 reset_day 列），放行 Mark 的单列更新。
+	// 只拦截 Save 的整行更新（含 reset_day 列），放行重置时间的单列更新。
 	if err := r.DB().Exec(`CREATE TRIGGER fail_save_reset_day BEFORE UPDATE OF reset_day ON subscription BEGIN SELECT RAISE(ABORT, 'injected save failure'); END`).Error; err != nil {
 		t.Fatal(err)
 	}

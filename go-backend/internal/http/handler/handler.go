@@ -118,6 +118,10 @@ type Handler struct {
 	// 移植自 kure29/flyx 3.3.33（DB-3）：节点重连后自动重测队列
 	// （见 node_reconnect_probe.go），由 StartBackgroundJobs 创建。
 	reconnectProbes *nodeReconnectProbeQueue
+	// R1-B-04：内核在节点保持在线时单独重启的检测基线（agent 状态
+	// 报告的 Restarts/StartedAt 上次值），见 noteKernelStart。
+	kernelStartsMu sync.Mutex
+	kernelStarts   map[kernelStartKey]kernelStartMark
 }
 
 const monitorTunnelQualityEnabledConfigKey = "monitor_tunnel_quality_enabled"

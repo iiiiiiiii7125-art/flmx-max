@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
 )
 
@@ -57,13 +58,29 @@ func inboundShareAddress(row *model.NodeInbound, node *model.Node) string {
 	}
 }
 
+// validateShareHostValue applies the import surface's host standard
+// (kernel.ValidateImportHost) to a share host value: an IP literal or a
+// hostname, and nothing carrying URI or line structure characters
+// (@ / ? #, whitespace, control characters). The share renderers embed
+// the host verbatim — ShareURI splices it into the authority segment
+// and SurgeLine into a comma-separated line — so a malformed value
+// would rewrite every subscriber's target host (F-A-01/C-01). Every
+// ShareHost write surface and the pull-time guard share this check.
+func validateShareHostValue(host string) error {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return errText("请填写自定义分享地址")
+	}
+	return kernel.ValidateImportHost(host)
+}
+
 func validateShareAddress(mode, host string, node *model.Node) error {
 	switch mode {
 	case "auto":
 		return nil
 	case "custom":
-		if strings.TrimSpace(host) == "" {
-			return errText("请填写自定义分享地址")
+		if err := validateShareHostValue(host); err != nil {
+			return err
 		}
 	case "ipv4", "ipv6":
 		if nodeShareIP(node, mode == "ipv6") == "" {

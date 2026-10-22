@@ -551,7 +551,10 @@ func SurgeLine(e Endpoint) (string, bool) {
 	// proxySurge 同口径过 surgeEscape，否则凭据含逗号时字段错位。
 	// 名称仍用含 = 的旧替换器（名称出现在 " = " 分隔符之前，口径不同）。
 	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
-	host := strings.Trim(e.Host, "[]")
+	// host 同为用户可控值（分享地址），与凭据同口径过 surgeEscape 作
+	// 纵深防御（F-A-01/C-01）：合法主机名/IP 不含逗号与换行，转义对
+	// 它们是恒等变换；坏值则退化为空格分隔，不再劈字段或注入新行。
+	host := surgeEscape(strings.Trim(e.Host, "[]"))
 	parts := []string{}
 	shadowTLS := func() []string {
 		if in.Security.Type != SecurityShadowTLS {
