@@ -883,10 +883,12 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	s.ExpireTime = req.ExpireTime
 	s.Remark = strings.TrimSpace(req.Remark)
 	s.TrafficLimit = req.TrafficLimit
-	if req.ResetDay != s.ResetDay && req.ResetDay > 0 {
+	// X-P3-24（L-09-6）：重置时间与订阅本体同事务落库（见
+	// SaveSubscriptionWithResetTime），不再先 Mark 后 Save 分两步。
+	resetDayChanged := req.ResetDay != s.ResetDay && req.ResetDay > 0
+	if resetDayChanged {
 		// Count from now: a newly set reset day must not wipe this month.
 		s.TrafficResetTime = now.UnixMilli()
-		_ = h.repo.MarkSubscriptionResetTime(s.ID, s.TrafficResetTime)
 	}
 	s.ResetDay = req.ResetDay
 	if req.Enabled != nil {
@@ -896,8 +898,14 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// AUDIT-R8 (F7X-001): 不再乐观标记 AppliedActive。先保存（保持旧值），
 	// 下发成功后直接更新 AppliedActive；失败则不更新，留待 syncSubscriptions 循环重试。
 	newAppliedActive := boolToInt(isShare(s) && subActive(s, now))
-	if err := h.repo.SaveSubscription(s); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+	var saveErr error
+	if resetDayChanged && s.ID > 0 {
+		saveErr = h.repo.SaveSubscriptionWithResetTime(s, s.TrafficResetTime)
+	} else {
+		saveErr = h.repo.SaveSubscription(s)
+	}
+	if saveErr != nil {
+		response.WriteJSON(w, response.Err(-2, saveErr.Error()))
 		return
 	}
 	push := before

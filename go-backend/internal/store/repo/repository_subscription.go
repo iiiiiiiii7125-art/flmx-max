@@ -234,12 +234,34 @@ func (r *Repository) SaveSubscription(s *model.Subscription) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	return saveSubscriptionTx(r.db, s)
+}
+
+func saveSubscriptionTx(db *gorm.DB, s *model.Subscription) error {
 	// Traffic columns are only changed by the counter updates, so a save
 	// based on a stale read cannot drop traffic counted meanwhile.
 	if s.ID == 0 {
-		return r.db.Create(s).Error
+		return db.Create(s).Error
 	}
-	return r.db.Omit("upload_bytes", "download_bytes", "traffic_reset_time").Save(s).Error
+	return db.Omit("upload_bytes", "download_bytes", "traffic_reset_time").Save(s).Error
+}
+
+// SaveSubscriptionWithResetTime 在同一事务内落重置时间与订阅本体。
+// X-P3-24（L-09-6）：subscriptionSave 旧实现先单独 Mark 重置时间再
+// Save，后者失败时重置时间已改而 ResetDay 未改（下次保存才自愈）。
+func (r *Repository) SaveSubscriptionWithResetTime(s *model.Subscription, resetTime int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if s.ID > 0 {
+			if err := tx.Model(&model.Subscription{}).Where("id = ?", s.ID).
+				Update("traffic_reset_time", resetTime).Error; err != nil {
+				return err
+			}
+		}
+		return saveSubscriptionTx(tx, s)
+	})
 }
 
 func (r *Repository) DeleteSubscription(id int64) error {
