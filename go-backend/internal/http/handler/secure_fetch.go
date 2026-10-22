@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"go-backend/internal/config"
 	"go-backend/internal/logredact"
@@ -151,7 +152,9 @@ func validateFetchIP(ip net.IP, rawURL, scheme string) error {
 	// ⑤ 公网必须 https（allowlist 不提升公网协议）。
 	if scheme != "https" {
 		auditFetchLog("reject", rawURL, ipStr, "public_http_not_allowed")
-		return fmt.Errorf("public http not allowed (use https): %s", rawURL)
+		// R2X-028：错误文案不得拼入完整 rawURL（常带 ?token=）；
+		// 只带 logredact 口径的脱敏 URL（host+路径模板、query 丢弃）。
+		return fmt.Errorf("public http not allowed (use https): %s", logredact.URL(rawURL))
 	}
 	return nil
 }
@@ -224,6 +227,70 @@ func secureFetchDialContext(ctx context.Context, network, addr string) (net.Conn
 	return nil, fmt.Errorf("all dial attempts failed: %w", lastErr)
 }
 
+// redactedFetchError 是 redactFetchError 的产物：文案已脱敏，
+// Unwrap 保留（同样已脱敏的）内层错误链，Timeout 透传原 *url.Error
+// 的超时判定，避免改变调用方的错误分类口径。
+type redactedFetchError struct {
+	msg     string
+	cause   error
+	timeout bool
+}
+
+func (e *redactedFetchError) Error() string   { return e.msg }
+func (e *redactedFetchError) Unwrap() error   { return e.cause }
+func (e *redactedFetchError) Timeout() bool   { return e.timeout }
+func (e *redactedFetchError) Temporary() bool { return e.timeout }
+
+// redactFetchError 在抓取错误离开 secure_fetch 层前统一脱敏
+// （R2X-028）：*url.Error 内嵌完整请求 URL（含 ?token= 等查询串），
+// 而抓取的全部调用方都默认 err 可安全落盘/回显（remote_source 的
+// 定时同步 log.Printf 与 last_error 落库、kernel_external 的导入
+// 失败回显），token 曾随之明文外泄。本函数递归走错误链：
+//   - *url.Error：URL 换成 logredact.URL 口径（query/userinfo 丢弃、
+//     路径疑似 token 段掩码），Op 与内层分类文案（连接拒绝/TLS/
+//     超时等）原样保留；
+//   - 其余 %w 包装层：前缀文案原样保留，只替换内层已脱敏的部分。
+//
+// 本文件的主动日志点（fetch_audit / secure_fetch ok）早已走
+// logredact；这里补的是错误传播通道，与 notify 侧 AUDIT-R26/R27
+// 的 Do 错误脱敏同口径。
+func redactFetchError(err error) error {
+	out, _ := redactFetchErrorChanged(err)
+	return out
+}
+
+func redactFetchErrorChanged(err error) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	if ue, ok := err.(*url.Error); ok {
+		inner, _ := redactFetchErrorChanged(ue.Err)
+		msg := ue.Op
+		if ue.URL != "" {
+			msg += " " + logredact.URL(ue.URL)
+		}
+		if inner != nil {
+			msg += ": " + inner.Error()
+		}
+		return &redactedFetchError{msg: msg, cause: inner, timeout: ue.Timeout()}, true
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		inner, changed := redactFetchErrorChanged(unwrapped)
+		if !changed {
+			return err, false
+		}
+		orig, full := unwrapped.Error(), err.Error()
+		msg := full
+		if strings.HasSuffix(full, orig) {
+			msg = full[:len(full)-len(orig)] + inner.Error()
+		} else if idx := strings.Index(full, orig); idx >= 0 {
+			msg = full[:idx] + inner.Error() + full[idx+len(orig):]
+		}
+		return &redactedFetchError{msg: msg, cause: inner}, true
+	}
+	return err, false
+}
+
 // SecureFetch 安全下载（R5-B5B D17）。
 func SecureFetch(ctx context.Context, rawURL string) ([]byte, error) {
 	body, _, err := SecureFetchWithHeader(ctx, rawURL)
@@ -244,8 +311,11 @@ func secureFetchWithHeaderLimit(ctx context.Context, rawURL string, maxBody int6
 }
 
 func secureFetchWithHeader(ctx context.Context, rawURL string, maxBody int64) ([]byte, http.Header, error) {
+	// R2X-028：本函数的全部错误出口都经 redactFetchError 收口
+	// （校验、建请求、Do、读体四处），保证离开本层的错误不含
+	// 请求 URL 的查询串/token。
 	if _, err := validateFetchURL(rawURL); err != nil {
-		return nil, nil, err
+		return nil, nil, redactFetchError(err)
 	}
 
 	client := &http.Client{
@@ -276,13 +346,13 @@ func secureFetchWithHeader(ctx context.Context, rawURL string, maxBody int64) ([
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, redactFetchError(err)
 	}
 	req.Header.Set("User-Agent", "flmx-panel/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, redactFetchError(err)
 	}
 	defer resp.Body.Close()
 
@@ -293,7 +363,7 @@ func secureFetchWithHeader(ctx context.Context, rawURL string, maxBody int64) ([
 	limited := io.LimitReader(resp.Body, maxBody+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, redactFetchError(err)
 	}
 	if int64(len(body)) > maxBody {
 		return nil, nil, fmt.Errorf("response too large (>%d bytes)", maxBody)
