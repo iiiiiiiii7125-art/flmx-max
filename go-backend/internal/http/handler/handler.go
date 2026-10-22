@@ -1121,6 +1121,24 @@ func (h *Handler) flowConfig(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// parseFlowSeqFromHeaders 解析上报 seq 头：新头 X-Flmx-Seq 优先、
+// 旧头 X-Flvx-Seq 次之。X-P3-19（L-06-1＝F-O01）：新头存在但解析
+// 失败时继续尝试旧头（与头注释口径对齐）——旧实现无条件 break，
+// 垃圾新头会把合法旧头 seq 一并丢弃、回落 legacy 失去重放防护。
+func parseFlowSeqFromHeaders(r *http.Request) *int64 {
+	if r == nil {
+		return nil
+	}
+	for _, hdr := range []string{"X-Flmx-Seq", "X-Flvx-Seq"} {
+		if hv := r.Header.Get(hdr); hv != "" {
+			if v, err := strconv.ParseInt(strings.TrimSpace(hv), 10, 64); err == nil {
+				return &v
+			}
+		}
+	}
+	return nil
+}
+
 func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 	secret := r.URL.Query().Get("secret")
 	node, _ := h.repo.GetNodeBySecret(secret)
@@ -1135,15 +1153,7 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 		// R5-B6 E-001: seq 优先从 HTTP 头 X-Flmx-Seq 读取（改名后新头），
 		// 回退旧头 X-Flvx-Seq，其次从 body 的 {seq, items} 对象读取，
 		// 最后兼容纯数组（legacy）。
-		var seq *int64
-		for _, hdr := range []string{"X-Flmx-Seq", "X-Flvx-Seq"} {
-			if hv := r.Header.Get(hdr); hv != "" {
-				if v, err := strconv.ParseInt(strings.TrimSpace(hv), 10, 64); err == nil {
-					seq = &v
-				}
-				break
-			}
-		}
+		seq := parseFlowSeqFromHeaders(r)
 		var items []flowItem
 		// 先尝试新格式：{seq, items}。
 		var batch struct {
