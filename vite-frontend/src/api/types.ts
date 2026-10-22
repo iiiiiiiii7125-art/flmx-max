@@ -326,12 +326,15 @@ export interface TunnelBatchDeleteWithForwardsApiData {
 export interface UserMutationPayload {
   id?: number;
   user?: string;
-  name?: string;
   // X-P3-7（K-01）：后端 userCreate/userUpdate 只读 pwd（mutations.go），
   // 此前误声明 password 会误导调用方传错字段名、密码静默不生效。
   pwd?: string;
   status?: number;
   flow?: number;
+  // R2X-042（K-05）：补后端实读的 flowMiB/groupIds（此前只能靠 any 透传）；
+  // 删后端从不读的 name/tunnelFlow 死字段（tunnelFlow 是 user-tunnel 字段）。
+  flowMiB?: number;
+  groupIds?: number[];
   num?: number;
   /** 只收毫秒时间戳数字：字符串会被后端 asInt64 解析失败后静默回退默认到期（F-144）。 */
   expTime?: number;
@@ -339,16 +342,15 @@ export interface UserMutationPayload {
   maxConn?: number;
   dailyQuotaGB?: number;
   monthlyQuotaGB?: number;
-  tunnelFlow?: number;
 }
 
 export interface NodeMutationPayload {
   id?: number | null;
   name?: string;
-  status?: number;
+  // R2X-042（K-05）：删 status/inx 死字段——均由服务端计算（status 按在线
+  // 判定、inx 走 NextIndex），nodeCreate/nodeUpdate 从不读，声明只会误导调用方。
   forwardMode?: "agent" | "nftables";
   sshConfig?: NodeSshConfigMutationPayload | null;
-  inx?: number;
   remark?: string;
   expiryTime?: number;
   renewalCycle?: "month" | "quarter" | "year" | "";
@@ -402,7 +404,8 @@ export interface TunnelMutationPayload {
   name?: string;
   type?: number;
   status?: number;
-  forwardMode?: "agent" | "nftables";
+  // R2X-042（K-05）：删 forwardMode 死字段——它是 node 字段，
+  // tunnelCreate/tunnelUpdate 从不读（隧道页本地 form 仍按节点派生该值走 wire，后端忽略）。
   flow?: number;
   trafficRatio?: number;
   inIp?: string;
@@ -451,8 +454,8 @@ export interface UserTunnelRemovePayload {
 export interface ForwardMutationPayload {
   id?: number;
   name?: string;
-  status?: number;
-  forwardMode?: "agent" | "nftables";
+  // R2X-042（K-05）：删 status/forwardMode 死字段——status 走独立启停路径、
+  // forwardMode 是 node 字段，forwardCreate/forwardUpdate 均不读。
   tunnelId?: number | null;
   inIp?: string;
   inPort?: number | null;

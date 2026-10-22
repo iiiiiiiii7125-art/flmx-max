@@ -61,6 +61,7 @@ import {
   assignMonitorPermission,
   removeMonitorPermission,
 } from "@/api";
+import type { UserMutationPayload } from "@/api/types";
 import {
   EditIcon,
   DeleteIcon,
@@ -236,6 +237,9 @@ export default function UserPage({
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // loadUsers 序号守卫 + 最新关键词/分页 ref（避免闭包捕获旧值）
   const loadUsersSeqRef = useRef(0);
+  // loadUserTunnels 序号守卫（R2X-040，照 loadUsersSeqRef 写法）：
+  // 连点两用户开授权弹窗时，先发后到的旧用户响应不得落进新弹窗。
+  const loadUserTunnelsSeqRef = useRef(0);
   const searchKeywordRef = useRef(searchKeyword);
   const paginationRef = useRef(pagination);
 
@@ -514,9 +518,15 @@ export default function UserPage({
   }, []);
 
   const loadUserTunnels = useCallback(async (userId: number) => {
+    const seq = (loadUserTunnelsSeqRef.current += 1);
+
     setTunnelListLoading(true);
     try {
       const response = await getUserTunnelList({ userId });
+
+      if (loadUserTunnelsSeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code === 0) {
         setUserTunnels(
@@ -528,9 +538,13 @@ export default function UserPage({
         toast.error(response.msg || "获取隧道权限列表失败");
       }
     } catch {
-      toast.error("获取隧道权限列表失败");
+      if (loadUserTunnelsSeqRef.current === seq) {
+        toast.error("获取隧道权限列表失败");
+      }
     } finally {
-      setTunnelListLoading(false);
+      if (loadUserTunnelsSeqRef.current === seq) {
+        setTunnelListLoading(false);
+      }
     }
   }, []);
 
@@ -715,7 +729,7 @@ export default function UserPage({
 
     setUserFormLoading(true);
     try {
-      const submitData: any = {
+      const submitData: UserMutationPayload = {
         ...userForm,
         user: userForm.user.trim(),
         flow: Math.ceil(flowMiB / 1024),
@@ -742,6 +756,22 @@ export default function UserPage({
       if (response.code === 0 && !isEdit) rotateIdemKey();
 
       if (response.code === 0) {
+        // R2X-021：userUpdate 在 maxConn 变更时回 data.warnings（逐转发同步
+        // 告警），同 forward 范式逐条警告展示，不得只弹无条件「更新成功」。
+        const warningItems = Array.isArray((response as any).data?.warnings)
+          ? (response as any).data.warnings
+              .map((item: unknown) =>
+                typeof item === "string" ? item.trim() : "",
+              )
+              .filter((item: string) => item)
+          : [];
+
+        warningItems.forEach((warning: string) => {
+          toast(warning, {
+            icon: "⚠️",
+            duration: 5000,
+          });
+        });
         toast.success(isEdit ? "更新成功" : "创建成功");
         onUserModalClose();
         const responseUser = normalizeUserItem((response as any).data || {});
