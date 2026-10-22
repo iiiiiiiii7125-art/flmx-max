@@ -5,6 +5,7 @@ import type {
   ServiceMonitorMutationPayload,
   ServiceMonitorLimitsApiData,
 } from "@/api/types";
+import { useIdemKey } from "@/hooks/useIdemKey";
 
 import React, {
   useCallback,
@@ -1064,6 +1065,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
     setEditModalOpen(true);
   };
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const handleSubmitMonitor = async () => {
     if (!monitorForm.name || !monitorForm.target) {
       toast.error("请填写完整信息");
@@ -1123,9 +1127,10 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
           toast.error(response.msg || "更新失败");
         }
       } else {
-        const response = await createServiceMonitor(payload);
+        const response = await createServiceMonitor(payload, idemKey);
 
         if (response.code === 0) {
+          rotateIdemKey();
           toast.success("创建成功");
         } else {
           toast.error(response.msg || "创建失败");

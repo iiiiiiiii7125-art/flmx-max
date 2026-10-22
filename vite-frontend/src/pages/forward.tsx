@@ -90,6 +90,7 @@ import {
   type ForwardDiagnosisResult,
 } from "@/pages/forward/diagnosis";
 import { diagnoseForwardStream } from "@/api/diagnosis-stream";
+import { newIdemKey, useIdemKey } from "@/hooks/useIdemKey";
 import {
   executeForwardBatchChangeTunnel,
   executeForwardBatchDelete,
@@ -2402,6 +2403,9 @@ export default function ForwardPage() {
   };
 
   // 提交表单
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const handleSubmit = async () => {
     if (!validateForm()) return;
 
@@ -2457,7 +2461,8 @@ export default function ForwardPage() {
           proxyProtocolSend: form.proxyProtocolSend,
         };
 
-        res = await createForward(createData);
+        res = await createForward(createData, idemKey);
+        if (res.code === 0) rotateIdemKey();
       }
       if (res.code === 0) {
         const warningItems = Array.isArray((res as any).data?.warnings)
@@ -2943,7 +2948,8 @@ export default function ForwardPage() {
               inPort: nyForwardInput.inPort,
               remoteAddr: nyForwardInput.remoteAddr,
               strategy: nyForwardInput.strategy,
-            });
+              // 批量导入逐行是独立创建：每行各自一把键（非同表单复用）。
+            }, newIdemKey());
 
             if (response.code === 0) {
               recordImportResult({
@@ -3035,7 +3041,8 @@ export default function ForwardPage() {
               inPort: portNumber,
               remoteAddr: remoteAddr.trim(),
               strategy: "fifo",
-            });
+              // 批量导入逐行是独立创建：每行各自一把键（非同表单复用）。
+            }, newIdemKey());
 
             if (response.code === 0) {
               recordImportResult({
