@@ -61,6 +61,7 @@ import {
   assignMonitorPermission,
   removeMonitorPermission,
 } from "@/api";
+import type { UserMutationPayload } from "@/api/types";
 import {
   EditIcon,
   DeleteIcon,
@@ -724,7 +725,7 @@ export default function UserPage({
 
     setUserFormLoading(true);
     try {
-      const submitData: any = {
+      const submitData: UserMutationPayload = {
         ...userForm,
         user: userForm.user.trim(),
         flow: Math.ceil(flowMiB / 1024),
