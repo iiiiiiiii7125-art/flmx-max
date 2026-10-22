@@ -49,6 +49,16 @@ func (n *notifier) alertOnce(key string) bool {
 	return true
 }
 
+// unalert 回滚 alertOnce 已占位的键（A7-03）：发送失败时调用，使
+// 下一轮检查能重试同一条告警，而不是「状态已标记、消息从未送达」。
+func (n *notifier) unalert(keys ...string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, k := range keys {
+		delete(n.alerted, k)
+	}
+}
+
 // clearAlerts forgets keys with the prefix, so the alert can fire again
 // (e.g. after a user's traffic was reset).
 func (n *notifier) clearAlerts(prefix string) {
@@ -90,14 +100,24 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			case used >= limit:
 				if h.notifier.alertOnce(flowKey + "full") {
 					h.notifier.alertOnce(flowKey + "warn")
-					h.notify(notifyEventUserQuota, "用户流量已用完",
-						fmt.Sprintf("用户：%s\n已用：%s / %s", u.User, formatBytes(used), formatBytes(limit)))
+					h.notifyTracked(notifyEventUserQuota, "用户流量已用完",
+						fmt.Sprintf("用户：%s\n已用：%s / %s", u.User, formatBytes(used), formatBytes(limit)),
+						func(outcome notifyOutcome) {
+							if outcome == notifyOutcomeFailed {
+								h.notifier.unalert(flowKey+"full", flowKey+"warn")
+							}
+						})
 				}
 			case float64(used) >= float64(limit)*notifyFlowWarnRatio:
 				if h.notifier.alertOnce(flowKey + "warn") {
-					h.notify(notifyEventUserQuota, "用户流量即将用完",
+					h.notifyTracked(notifyEventUserQuota, "用户流量即将用完",
 						fmt.Sprintf("用户：%s\n已用：%s / %s（%.0f%%）", u.User, formatBytes(used), formatBytes(limit),
-							float64(used)*100/float64(limit)))
+							float64(used)*100/float64(limit)),
+						func(outcome notifyOutcome) {
+							if outcome == notifyOutcomeFailed {
+								h.notifier.unalert(flowKey + "warn")
+							}
+						})
 				}
 			default:
 				h.notifier.clearAlerts(flowKey)
@@ -105,13 +125,19 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			if u.ExpTime > 0 {
 				// O8-004：已过期很久的用户跳过，避免面板重启后重报历史过期记录。
 				left := time.UnixMilli(u.ExpTime).Sub(now)
-				if left <= window && left >= -notifyLongExpired && h.notifier.alertOnce(fmt.Sprintf("exp:%d:%d", u.ID, u.ExpTime)) {
+				expKey := fmt.Sprintf("exp:%d:%d", u.ID, u.ExpTime)
+				if left <= window && left >= -notifyLongExpired && h.notifier.alertOnce(expKey) {
 					text, expired := expiryText(u.ExpTime, now)
 					title := "用户即将到期"
 					if expired {
 						title = "用户已到期"
 					}
-					h.notify(notifyEventUserQuota, title, fmt.Sprintf("用户：%s\n到期：%s", u.User, text))
+					h.notifyTracked(notifyEventUserQuota, title, fmt.Sprintf("用户：%s\n到期：%s", u.User, text),
+						func(outcome notifyOutcome) {
+							if outcome == notifyOutcomeFailed {
+								h.notifier.unalert(expKey)
+							}
+						})
 				}
 			}
 		}
@@ -126,7 +152,8 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			if !isShare(&s) || s.Enabled != 1 || s.ExpireTime == 0 || subLeft > window || subLeft < -notifyLongExpired {
 				continue
 			}
-			if !h.notifier.alertOnce(fmt.Sprintf("sub:%d:%d", s.ID, s.ExpireTime)) {
+			subExpKey := fmt.Sprintf("sub:%d:%d", s.ID, s.ExpireTime)
+			if !h.notifier.alertOnce(subExpKey) {
 				continue
 			}
 			text, expired := expiryText(s.ExpireTime, now)
@@ -134,7 +161,12 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			if expired {
 				title = "分享订阅已到期，已断开"
 			}
-			h.notify(notifyEventUserQuota, title, fmt.Sprintf("订阅：%s\n到期：%s", s.Name, text))
+			h.notifyTracked(notifyEventUserQuota, title, fmt.Sprintf("订阅：%s\n到期：%s", s.Name, text),
+				func(outcome notifyOutcome) {
+					if outcome == notifyOutcomeFailed {
+						h.notifier.unalert(subExpKey)
+					}
+				})
 		}
 	}
 }
@@ -148,14 +180,24 @@ func (h *Handler) checkSubQuota(s *model.Subscription) {
 	case used >= limit:
 		if h.notifier.alertOnce(key + "full") {
 			h.notifier.alertOnce(key + "warn")
-			h.notify(notifyEventUserQuota, "分享订阅流量已用完，已断开",
-				fmt.Sprintf("订阅：%s\n已用：%s / %s", s.Name, formatBytes(used), formatBytes(limit)))
+			h.notifyTracked(notifyEventUserQuota, "分享订阅流量已用完，已断开",
+				fmt.Sprintf("订阅：%s\n已用：%s / %s", s.Name, formatBytes(used), formatBytes(limit)),
+				func(outcome notifyOutcome) {
+					if outcome == notifyOutcomeFailed {
+						h.notifier.unalert(key+"full", key+"warn")
+					}
+				})
 		}
 	case float64(used) >= float64(limit)*notifyFlowWarnRatio:
 		if h.notifier.alertOnce(key + "warn") {
-			h.notify(notifyEventUserQuota, "分享订阅流量即将用完",
+			h.notifyTracked(notifyEventUserQuota, "分享订阅流量即将用完",
 				fmt.Sprintf("订阅：%s\n已用：%s / %s（%.0f%%）", s.Name, formatBytes(used), formatBytes(limit),
-					float64(used)*100/float64(limit)))
+					float64(used)*100/float64(limit)),
+				func(outcome notifyOutcome) {
+					if outcome == notifyOutcomeFailed {
+						h.notifier.unalert(key + "warn")
+					}
+				})
 		}
 	default:
 		h.notifier.clearAlerts(key)

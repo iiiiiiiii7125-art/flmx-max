@@ -150,6 +150,16 @@ func (t *latencyAlertTracker) track(results map[int64]externalProbe, lossPct flo
 	return out
 }
 
+// unmark 清除指定节点+测试点的 down 标记（A7-03：告警发送失败回滚）。
+// streak 计数保留：问题仍在时下一轮 track 立即重新触发告警。
+func (t *latencyAlertTracker) unmark(nodeID int64, points []latencyPoint) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, p := range points {
+		delete(t.down, strconv.FormatInt(nodeID, 10)+"\x00"+p.Name)
+	}
+}
+
 func (h *Handler) alertLatency(results map[int64]externalProbe, names map[int64]string) {
 	lossPct, latencyMs := h.latencyThresholds()
 	limit := fmt.Sprintf("丢包 ≥ %.0f%%", lossPct)
@@ -163,16 +173,30 @@ func (h *Handler) alertLatency(results map[int64]externalProbe, names map[int64]
 			for i, p := range tr.bad {
 				lines[i] = describeLatencyPoint(p)
 			}
-			h.notify(notifyEventLatencyBad, "延迟 / 丢包异常",
-				fmt.Sprintf("节点：%s\n%s\n（连续 %d 次 %s）", name, strings.Join(lines, "\n"), latencyAlertStreak, limit))
+			bad := tr.bad
+			h.notifyTracked(notifyEventLatencyBad, "延迟 / 丢包异常",
+				fmt.Sprintf("节点：%s\n%s\n（连续 %d 次 %s）", name, strings.Join(lines, "\n"), latencyAlertStreak, limit),
+				func(outcome notifyOutcome) {
+					// A7-03：发送失败回滚 down 标记，下一轮重新告警。
+					if outcome == notifyOutcomeFailed {
+						h.latencyAlerts.unmark(nodeID, bad)
+					}
+				})
 		}
 		if len(tr.recovered) > 0 {
 			lines := make([]string, len(tr.recovered))
 			for i, p := range tr.recovered {
 				lines[i] = describeLatencyPoint(p)
 			}
-			h.notify(notifyEventLatencyBad, "延迟已恢复",
-				fmt.Sprintf("节点：%s\n%s", name, strings.Join(lines, "\n")))
+			h.notifyTracked(notifyEventLatencyBad, "延迟已恢复",
+				fmt.Sprintf("节点：%s\n%s", name, strings.Join(lines, "\n")),
+				func(outcome notifyOutcome) {
+					// A7-02：恢复送达后清掉该节点的问题指纹，重新武装。
+					if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
+						h.notifier.forgetFingerprintPrefix(
+							notifyEventLatencyBad + "\x00延迟 / 丢包异常\x00节点：" + name + "\n")
+					}
+				})
 		}
 	}
 }

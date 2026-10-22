@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -25,6 +26,15 @@ type RemoteNodeInfo struct {
 	ExpiryTime     int64  `json:"expiryTime"`
 	PortRangeStart int    `json:"portRangeStart"`
 	PortRangeEnd   int    `json:"portRangeEnd"`
+	// D3-04: 该 share 的 relay 角色服务凭据（提供方在 Connect 时下发，
+	// 消费方存入 RemoteConfig，建链时写入 relay connector 的 auth）。
+	RelayUsername string `json:"relayUsername"`
+	RelayPassword string `json:"relayPassword"`
+	// FIX2-B（V5-3）：提供方面板版本与版本提示（纯加法字段，旧对端
+	// 忽略）。VersionWarning 在对端判定本方版本低于凭据感知版本时
+	// 给出，把「旧消费方 + 新提供方」的静默断裂变成显式信号。
+	PanelVersion   string `json:"panelVersion"`
+	VersionWarning string `json:"versionWarning"`
 }
 
 type RemoteTunnelResponse struct {
@@ -47,6 +57,11 @@ type RuntimeTarget struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Protocol string `json:"protocol"`
+	// D3-04: 当该 target 是另一个 share 的 middle/exit 角色服务时，
+	// 消费方附上目标 share 的 relay 凭据，提供方据此为本机 middle 的
+	// chain connector 写入 auth。目标为本方本地节点时留空。
+	RelayUsername string `json:"relayUsername,omitempty"`
+	RelayPassword string `json:"relayPassword,omitempty"`
 }
 
 type RuntimeApplyRoleRequest struct {
@@ -92,18 +107,24 @@ type RuntimeNodeCommandResponse struct {
 
 func NewFederationClient() *FederationClient {
 	return &FederationClient{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client: newFederationHTTPClient(10 * time.Second),
 	}
 }
 
 func NewFederationClientWithTimeout(timeout time.Duration) *FederationClient {
 	return &FederationClient{
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client: newFederationHTTPClient(timeout),
 	}
+}
+
+// localPanelVersion 与 handler.currentPanelVersion 同源（FLUX_VERSION
+// 环境变量，未设为 "dev"），供 Connect 上报本方面板版本（V5-3）。
+func localPanelVersion() string {
+	version := strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	if version == "" {
+		return "dev"
+	}
+	return version
 }
 
 func (c *FederationClient) Connect(url, token, localDomain string) (*RemoteNodeInfo, error) {
@@ -113,6 +134,9 @@ func (c *FederationClient) Connect(url, token, localDomain string) (*RemoteNodeI
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	// FIX2-B（V5-3）：上报本方版本，提供方据此对过旧消费方回执
+	// versionWarning 并记日志（旧提供方忽略未知头，无兼容影响）。
+	req.Header.Set("X-Panel-Version", localPanelVersion())
 	if localDomain != "" {
 		req.Header.Set("X-Panel-Domain", localDomain)
 	}

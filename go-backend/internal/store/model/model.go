@@ -407,16 +407,27 @@ type PeerShare struct {
 	UpdatedTime    int64  `gorm:"column:updated_time;not null" json:"updatedTime"`
 	AllowedDomains string `gorm:"column:allowed_domains;type:text;default:''" json:"allowedDomains"`
 	AllowedIPs     string `gorm:"column:allowed_ips;type:text;default:''" json:"allowedIps"`
+	// D3-04: 本 share 的 middle/exit 角色服务凭据（每 share 独立）。
+	// 角色服务 handler 恒带此 auth，消费方经 Connect 取得后在建链时
+	// 写入 relay connector。存量 share 由 repo 启动回填 + handler 懒
+	// 补发，见 migration_fix132_v3.go 的 backfill 与
+	// ensurePeerShareRelayCredentials。
+	RelayUsername string `gorm:"column:relay_username;type:text;default:''" json:"relayUsername"`
+	RelayPassword string `gorm:"column:relay_password;type:text;default:''" json:"relayPassword"`
 }
 
 func (PeerShare) TableName() string { return "peer_share" }
 
 type PeerShareRuntime struct {
-	ID             int64  `gorm:"primaryKey;autoIncrement"`
-	ShareID        int64  `gorm:"column:share_id;not null;index:idx_peer_share_runtime_share_node_status"`
-	NodeID         int64  `gorm:"column:node_id;not null;index:idx_peer_share_runtime_share_node_status"`
-	ReservationID  string `gorm:"column:reservation_id;type:text;not null;uniqueIndex"`
-	ResourceKey    string `gorm:"column:resource_key;type:text;not null;uniqueIndex"`
+	ID            int64  `gorm:"primaryKey;autoIncrement"`
+	ShareID       int64  `gorm:"column:share_id;not null;index:idx_peer_share_runtime_share_node_status"`
+	NodeID        int64  `gorm:"column:node_id;not null;index:idx_peer_share_runtime_share_node_status"`
+	ReservationID string `gorm:"column:reservation_id;type:text;not null;uniqueIndex"`
+	// D3-05: resource_key 的唯一性是 (share_id, resource_key) 复合口径，
+	// 由版本化迁移 fix132_v3 维护（与 R5-B4 同规矩：唯一索引不放 model
+	// tag，避免 AutoMigrate 在存量数据上静默建索引失败）。旧单列全局
+	// 唯一索引会让第二个消费方面板必然撞键。
+	ResourceKey    string `gorm:"column:resource_key;type:text;not null"`
 	BindingID      string `gorm:"column:binding_id;type:text;not null;default:'';index:idx_peer_share_runtime_binding_id"`
 	Role           string `gorm:"type:text;not null;default:''"`
 	ChainName      string `gorm:"column:chain_name;type:text;not null;default:''"`
@@ -480,9 +491,55 @@ type BackupData struct {
 	// B4/F-030：service_monitor 监控定义整表备份（此前只有结果表口径，
 	// 定义未备，恢复后监控项全丢）
 	ServiceMonitors []ServiceMonitorBackup `json:"serviceMonitors,omitempty"`
+	// FIX132-C（A3-05/BC-28）：node_ssh_config 与 peer_share 定义进
+	// 备份（随 nodes 段导出/导入）。此前恢复出的实例节点在、SSH
+	// 凭据与联邦共享定义不在，子系统静默不可用；备份文件因此与
+	// 节点 secret/订阅 token 同敏感级，文档与导出提示须明示。
+	NodeSSHConfigs []NodeSSHConfigBackup `json:"nodeSSHConfigs,omitempty"`
+	PeerShares     []PeerShareBackup     `json:"peerShares,omitempty"`
 	// Inbounds carries node kernels, their inbounds (imported nodes too),
 	// relay links and traffic counter baselines; restored as one unit.
 	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
+}
+
+// NodeSSHConfigBackup 是 A3-05 补齐的节点 SSH 配置备份结构
+// （字段对照 model.NodeSSHConfig；以 node_id 为业务键恢复）。
+type NodeSSHConfigBackup struct {
+	NodeID      int64  `json:"nodeId"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	AuthType    string `json:"authType"`
+	Password    string `json:"password,omitempty"`
+	PrivateKey  string `json:"privateKey,omitempty"`
+	Passphrase  string `json:"passphrase,omitempty"`
+	SudoMode    string `json:"sudoMode"`
+	CreatedTime int64  `json:"createdTime"`
+}
+
+// PeerShareBackup 是 A3-05 补齐的面板共享定义备份结构
+// （字段对照 model.PeerShare；runtime/resource 等运行时表仍按
+// 登记排除，不随备份）。
+type PeerShareBackup struct {
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	NodeID         int64  `json:"nodeId"`
+	Token          string `json:"token"`
+	MaxBandwidth   int64  `json:"maxBandwidth"`
+	ExpiryTime     int64  `json:"expiryTime"`
+	PortRangeStart int    `json:"portRangeStart"`
+	PortRangeEnd   int    `json:"portRangeEnd"`
+	CurrentFlow    int64  `json:"currentFlow"`
+	IsActive       int    `json:"isActive"`
+	CreatedTime    int64  `json:"createdTime"`
+	UpdatedTime    int64  `json:"updatedTime,omitempty"`
+	AllowedDomains string `json:"allowedDomains,omitempty"`
+	AllowedIPs     string `json:"allowedIps,omitempty"`
+	// FIX2-B（V3-01）：FIX-I 的 relay 凭据列随备份往返。缺失时全新
+	// 恢复后提供方补发新凭据、消费方存量凭据失配至其重新 Connect
+	// 才自愈，且回执无提示。
+	RelayUsername string `json:"relayUsername,omitempty"`
+	RelayPassword string `json:"relayPassword,omitempty"`
 }
 
 type InboundsBackup struct {
@@ -491,7 +548,10 @@ type InboundsBackup struct {
 	Relays        []InboundRelayBackup   `json:"relays"`
 	Counters      []InboundCounterBackup `json:"counters,omitempty"`
 	Subscriptions []SubscriptionBackup   `json:"subscriptions,omitempty"`
-	Sources       []RemoteSourceBackup   `json:"sources,omitempty"`
+	// FIX132-C（A3-04）：订阅计数基线随备份（与入站基线 Counters
+	// 同等待遇）；恢复时订阅 id 经 subRemap 按 token 落位。
+	SubscriptionCounters []SubscriptionCounterBackup `json:"subscriptionCounters,omitempty"`
+	Sources              []RemoteSourceBackup        `json:"sources,omitempty"`
 	// Users are shared users from 3.0.10 backups; imported as share
 	// subscriptions.
 	Users []SubUserBackup `json:"users,omitempty"`
@@ -513,6 +573,9 @@ type SubscriptionBackup struct {
 	Remark      string `json:"remark"`
 	Inx         int    `json:"inx"`
 	CreatedTime int64  `json:"createdTime"`
+	// FIX2-B（D4-06）：待删墓碑随备份往返，恢复后不得复活成可拉取
+	// 的正常订阅（openSubscription 对 PendingDelete=1 返回 404）。
+	PendingDelete int `json:"pendingDelete,omitempty"`
 	// Traffic (share subscriptions).
 	UploadBytes      int64 `json:"uploadBytes,omitempty"`
 	DownloadBytes    int64 `json:"downloadBytes,omitempty"`
@@ -541,6 +604,10 @@ type KernelBackup struct {
 	Version     string `json:"version"`
 	Enabled     int    `json:"enabled"`
 	CreatedTime int64  `json:"createdTime"`
+	// FIX2-B（D4-05/V3-02）：已装版本随备份往返。此前 DTO 无此字段，
+	// 导入 item 恒空而 DoUpdates 含 installed_version——全新恢复丢
+	// 值、同实例重复导入更会把已有值主动清空。
+	InstalledVersion string `json:"installedVersion,omitempty"`
 }
 
 type InboundBackup struct {
@@ -582,6 +649,9 @@ type RemoteSourceBackup struct {
 	Role          string `json:"role,omitempty"`
 	Enabled       int    `json:"enabled"`
 	CreatedTime   int64  `json:"createdTime"`
+	// FIX2-B（D4-04）：机场套餐 Subscription-Userinfo 随备份往返；
+	// file 源无刷新自愈，丢失即永久。
+	Userinfo string `json:"userinfo,omitempty"`
 }
 
 type InboundRelayBackup struct {
@@ -602,6 +672,17 @@ type InboundCounterBackup struct {
 	Bytes     int64  `json:"bytes"`
 }
 
+// SubscriptionCounterBackup 是 A3-04 补齐的订阅计数基线备份结构
+// （字段对照 model.SubscriptionCounter；SubscriptionID 为备份侧 id，
+// 恢复时经 subRemap 按 token 重映射落位）。
+type SubscriptionCounterBackup struct {
+	NodeID         int64  `json:"nodeId"`
+	SubscriptionID int64  `json:"subscriptionId"`
+	Direction      string `json:"direction"`
+	Epoch          string `json:"epoch"`
+	Bytes          int64  `json:"bytes"`
+}
+
 type UserBackup struct {
 	ID                int64  `json:"id"`
 	User              string `json:"user"`
@@ -617,6 +698,15 @@ type UserBackup struct {
 	MonthlyQuotaGB    int64  `json:"monthlyQuotaGB,omitempty"`
 	DisabledByQuota   int    `json:"disabledByQuota,omitempty"`
 	QuotaDisabledAt   int64  `json:"quotaDisabledAt,omitempty"`
+	// FIX132-C（D4-01）：配额已用量与暂停清单保真。旧备份无此四字段
+	// 时导入走旧口径（导入日窗口 + 已用量清零）；新备份原样恢复
+	// 窗口键与已用量（跨日恢复由配额视图的滚动归零兜底），暂停清单
+	// 是配额到期解封的唯一依据，丢失即永不自动解封。
+	DailyUsedBytes    int64  `json:"dailyUsedBytes,omitempty"`
+	MonthlyUsedBytes  int64  `json:"monthlyUsedBytes,omitempty"`
+	PausedForwardIDs  string `json:"pausedForwardIds,omitempty"`
+	QuotaDayKey       int64  `json:"quotaDayKey,omitempty"`
+	QuotaMonthKey     int64  `json:"quotaMonthKey,omitempty"`
 	Num               int    `json:"num"`
 	CreatedTime       int64  `json:"createdTime"`
 	UpdatedTime       int64  `json:"updatedTime,omitempty"`
@@ -861,7 +951,18 @@ type ImportResult struct {
 	// 不再混入 UserSubscriptionsImported 假报成功。
 	UserSubscriptionsSkipped int         `json:"userSubscriptionsSkipped,omitempty"`
 	ServiceMonitorsImported  int         `json:"serviceMonitorsImported"`
-	AutoBackup               *BackupData `json:"autoBackup,omitempty"`
+	// FIX132-C（A3-05）：SSH 配置与面板共享定义的恢复计数与受影响
+	// 节点清单——恢复后这些节点的数据面待重新校验下发，回执如实
+	// 披露（降级标记），不再静默降级。
+	NodeSSHConfigsImported int   `json:"nodeSSHConfigsImported"`
+	PeerSharesImported     int   `json:"peerSharesImported"`
+	RestoredSSHNodeIDs     []int64 `json:"restoredSSHNodeIds,omitempty"`
+	// FIX132-C（D4-03）：各段因引用不存在被跳过的行数（键为备份段
+	// 名），与 ImportWarnings 一起构成恢复回执的完整披露；订阅段的
+	// 跳过仍走上方 UserSubscriptionsSkipped 既有字段。
+	SkippedRows    map[string]int `json:"skippedRows,omitempty"`
+	ImportWarnings []string       `json:"importWarnings,omitempty"`
+	AutoBackup     *BackupData    `json:"autoBackup,omitempty"`
 }
 
 // ─── View Structs (used by Repository, not GORM models) ─────────────
@@ -1044,9 +1145,15 @@ func (NodeLatencySample) TableName() string { return "node_latency_sample" }
 
 type TunnelMetric struct {
 	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`
-	TunnelID     int64   `gorm:"column:tunnel_id;not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:1" json:"tunnelId"`
-	NodeID       int64   `gorm:"column:node_id;not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:2" json:"nodeId"`
-	Timestamp    int64   `gorm:"not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:3;index:idx_tunnel_metric_time" json:"timestamp"`
+	// FIX132-C（A3-S2）：(tunnel_id, node_id, timestamp) 的唯一性由
+	// v6 去重迁移的 uidx_tunnel_metric_bucket 单独持有，模型层不再
+	// 声明唯一索引——AutoMigrate 在去重迁移之前运行，存量重复桶行
+	// 会让它建唯一索引时直接失败、升级启动被堵死；且同列双唯一
+	// 索引本就冗余。存量库已有的同名索引 AutoMigrate 不会删除，
+	// 无害保留。
+	TunnelID     int64   `gorm:"column:tunnel_id;not null" json:"tunnelId"`
+	NodeID       int64   `gorm:"column:node_id;not null" json:"nodeId"`
+	Timestamp    int64   `gorm:"not null;index:idx_tunnel_metric_time" json:"timestamp"`
 	BytesIn      int64   `gorm:"column:bytes_in" json:"bytesIn"`
 	BytesOut     int64   `gorm:"column:bytes_out" json:"bytesOut"`
 	Connections  int64   `gorm:"column:connections" json:"connections"`
@@ -1113,7 +1220,17 @@ type PeerShareResource struct {
 	RuntimeName         string `gorm:"column:runtime_name;type:text;not null;index"`
 	LegacyNames         string `gorm:"column:legacy_names;type:text;not null;default:''"`
 	LegacyServiceBase   string `gorm:"column:legacy_service_base;type:text;not null;default:''"`
-	ReleaseLegacyFamily bool   `gorm:"column:release_legacy_family;not null;default:false"`
+	// FIX132-C（R4-P1）：此列不得带 GORM 默认值。原 default:false
+	// 在 SQLite 建表渲染为 `numeric NOT NULL DEFAULT false`，
+	// pgloader 翻译到 PG 时以 22P02 拒绝、整条 SQLite→PG 官方迁移
+	// 在建表期 FATAL（R4 于 PG 16 实测，全库仅此 1 列）。备选均已
+	// 实测否决：default:0 会被 bool 默认值解析重新渲染回 false；
+	// 表达式默认 (0) 在 SQLite 可行，但 PG 原生建表会生成
+	// `boolean DEFAULT (0)` 被 PG 拒绝。去掉默认值后两方言建表
+	// 均为「NOT NULL 无默认」，该表全部写入都经 GORM 显式带值
+	//（peer_share_resources.go 的 upsert），语义不变；存量
+	// numeric 列（0/1）读 bool 亦不受影响。
+	ReleaseLegacyFamily bool `gorm:"column:release_legacy_family;not null"`
 	Config              string `gorm:"type:text;not null;default:''"`
 	DesiredState        string `gorm:"column:desired_state;type:text;not null;default:'active'"`
 	Applied             int    `gorm:"not null;default:0"`

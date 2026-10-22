@@ -6,6 +6,10 @@
 // 会被前端缓存落盘、且登出后残留（F-047 教训：前端曾长期停留在 5 项，
 // 落后后端 9 项，缺 license_expiry / node_sub_token /
 // notify_telegram_bot_token / notify_webhook_url）。
+// 一致性由 scripts/check-sensitive-keys.mjs 机械校验（解析后端
+// sensitiveConfigKeys 与本清单做集合比对，不一致即非零退出）：
+//   pnpm run check:sensitive-keys
+// 改动任一侧清单后必须跑一次，防止第三次漂移（A10-01）。
 // 本文件保持零依赖（叶子模块），避免 config/site 与 utils/session
 // 之间出现循环导入。
 export const SENSITIVE_CONFIG_KEYS = new Set([
@@ -17,6 +21,8 @@ export const SENSITIVE_CONFIG_KEYS = new Set([
   "cloudflare_secret_key",
   "node_sub_token",
   "notify_telegram_bot_token",
+  "notify_telegram_chat_id",
+  "notify_telegram_api_base",
   "notify_webhook_url",
 ]);
 

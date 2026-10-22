@@ -35,6 +35,37 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 			return err
 		}
 	}
+	// D3-04: 角色服务必须带本 share 的 relay 凭据（handler auth）。
+	// share 加载失败时不静默降级为无鉴权服务——直接失败，让 runtime
+	// 保持未 applied 状态等重试，而不是留下一个开放中继。
+	share, err := h.repo.GetPeerShare(runtime.ShareID)
+	if err != nil {
+		return err
+	}
+	if share == nil {
+		return errors.New("share not found for role runtime")
+	}
+	h.ensurePeerShareRelayCredentials(share)
+	if runtime.Role == "middle" {
+		// 同 share 兜底：多跳链的下一跳若就是本 share 在同节点的另
+		// 一个角色服务（端口命中本 share 的其他 active runtime），
+		// 消费方未必知道那是同 share 的服务、不会附凭据——由提供方
+		// 按端口归属补上本 share 凭据。
+		ownPorts := map[int]bool{}
+		if runtimes, listErr := h.repo.ListActivePeerShareRuntimesByShareID(share.ID); listErr == nil {
+			for _, rt := range runtimes {
+				if rt.Port > 0 && rt.ID != runtime.ID {
+					ownPorts[rt.Port] = true
+				}
+			}
+		}
+		for i := range targets {
+			if strings.TrimSpace(targets[i].RelayPassword) == "" && ownPorts[targets[i].Port] {
+				targets[i].RelayUsername = share.RelayUsername
+				targets[i].RelayPassword = share.RelayPassword
+			}
+		}
+	}
 	var chain map[string]interface{}
 	if runtime.Role == "middle" {
 		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName)
@@ -43,6 +74,20 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 		}
 	}
 	service := buildFederationServiceConfig(runtime.ServiceName, fmt.Sprintf("%s:%d", node.TCPListenAddr, runtime.Port), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName)
+	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
+		service["handler"].(map[string]interface{})["auth"] = auth
+	}
+	// FIX2-C #8（D3-04 目标面补完）：exit 服务挂 agent 内置 bypass
+	// 拒绝私网目标；节点 agent 版本不够时不下发（旧版对未知 bypass
+	// 名 fail-open，下发只会制造已防护假象）。版本读取失败按不支持
+	// 处理（不下发），与版本未知同口径。
+	if runtime.Role == "exit" {
+		agentVersion, versionErr := h.repo.GetNodeAgentVersion(runtime.NodeID)
+		if versionErr != nil {
+			agentVersion = ""
+		}
+		applyFederationExitPrivateGuard(service, runtime.Role, agentVersion)
+	}
 	runtime.Applied = 0
 	runtime.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.UpdatePeerShareRuntime(runtime); err != nil {

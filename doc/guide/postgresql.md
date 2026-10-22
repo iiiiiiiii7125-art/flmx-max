@@ -43,6 +43,8 @@ FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构�
 
 > ⚠️ **安全提示**：生产环境中请务必修改 `POSTGRES_PASSWORD` 为强密码，不要使用默认值！
 
+> ⛔ **拒绝启动（1.2.0 起）**：后端启动时会校验口令——`POSTGRES_PASSWORD` 为空、等于默认值 `flux_panel_change_me` 或等于 `postgres` 时，后端**直接拒绝启动**并在日志里报错。上表「默认值」只是 compose 模板里的占位值，不能原样用于实际部署。另外，后端只校验 `DATABASE_URL` 里的口令、不会替你比对两者是否一致，`DATABASE_URL` 与 `POSTGRES_PASSWORD` 不一致时表现为数据库连接认证失败（28P01）。脚本一键迁移时若发现 `.env` 里的口令为空或仍是默认值，会自动生成随机口令并写回 `.env`。
+
 ---
 
 ## 三、全新部署（Docker Compose + PostgreSQL）
@@ -106,10 +108,12 @@ docker logs flux-panel-postgres
 
 脚本会自动完成以下操作：
 - 备份 SQLite 数据到当前目录（`gost.db.bak`）
+- 迁移前把 `.env` 快照到 `.env.pre-postgres-migration`
+- 口令为空或仍是默认值时，生成随机口令并写入 `.env`（后端对空/默认口令拒绝启动）
 - 启动并等待 PostgreSQL 健康检查通过
-- 使用 `pgloader` 导入 SQLite 数据
+- 使用 `pgloader` 导入 SQLite 数据（导入前自动处理下方 `release_legacy_family` 兼容问题）
 - 自动写入 `.env` 的 `DB_TYPE=postgres` 与 `DATABASE_URL`
-- 重启服务并等待后端健康检查
+- 重启服务并等待后端健康检查；**若启动失败，自动回滚 `.env` 并恢复迁移前的 SQLite 服务**，不会把面板留在坏配置上
 
 ### 手动方式：按步骤迁移
 
@@ -153,6 +157,31 @@ docker run --rm \
 ```
 
 > 📌 建议直接从 `.env` 读取 `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`，避免手填密码导致认证失败。
+
+#### 迁移被 `release_legacy_family` 堵住时（1.3.2 及更早版本的库）
+
+1.3.2 及更早版本的 SQLite 库里，`peer_share_resource` 表的 `release_legacy_family` 列是 `numeric` 类型、默认值 `false`。pgloader 按 numeric 翻译该默认值时生成 `default 'false'`，PostgreSQL 拒绝建表并报：
+
+```
+ERROR Database error 22P02: invalid input syntax for type numeric: "false"
+FATAL Failed to create the schema
+```
+
+整条迁移会在建表阶段失败、一行数据都搬不过去（全库仅此一列有此问题）。脚本菜单的一键迁移已自动处理，手动迁移时先把库 dump 出来、只改这一列的默认值再重建一份副本，用副本迁移：
+
+```bash
+docker run --rm -v sqlite_data:/sqlite alpine sh -c '
+  apk add --no-cache sqlite >/dev/null 2>&1
+  sqlite3 /sqlite/gost.db .dump > /tmp/dump.sql
+  sed "/CREATE TABLE.*peer_share_resource/,/);/ s/DEFAULT false/DEFAULT 0/g" /tmp/dump.sql > /tmp/dump-fixed.sql
+  rm -f /sqlite/gost-migrate.db
+  sqlite3 /sqlite/gost-migrate.db < /tmp/dump-fixed.sql
+'
+# 然后把 pgloader 的源换成副本：
+# pgloader /sqlite/gost-migrate.db "postgresql://..."
+```
+
+适用范围：1.3.2 及更早版本创建的 SQLite 库。后续版本模型侧修复后该列默认值不再是 `false`，上述预处理替换不命中、可跳过；对已修复的库执行也无害（生成一份等价副本而已）。（在 pgloader 的 load 文件里给该列写 CAST 规则是等价的另一种变通，二选一即可。）
 
 ### 5. 启动全部服务
 
@@ -257,6 +286,7 @@ echo "0 3 * * * /opt/flmx/backup.sh" | crontab -
 1. 确认 PostgreSQL 容器已完全就绪（状态为 `healthy`）。
 2. 确认 `--network gost-network` 参数正确，使 pgloader 容器与 PostgreSQL 在同一网络中。
 3. 如果数据库已有表结构，pgloader 可能会报冲突。可以先清空目标数据库后重试。
+4. 若报 `invalid input syntax for type numeric: "false"`，是 1.3.2 及更早版本库的已知兼容问题，见上方「迁移被 `release_legacy_family` 堵住时」。
 
 ### Q: 如何查看当前使用的数据库类型？
 

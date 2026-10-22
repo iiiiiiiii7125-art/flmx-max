@@ -5,10 +5,18 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+
+	"go-backend/internal/http/client"
 )
 
 // DisableSafeRemoteAddrCheckForTesting allows bypassing the safety check during integration tests.
 var DisableSafeRemoteAddrCheckForTesting = false
+
+// D3-01: 联邦出站客户端的拨号期 SSRF 复检与本包的入口校验共用同一
+// 测试旁路开关（契约测试以 127.0.0.1 的 httptest 充当对端面板）。
+func init() {
+	client.SetSafetyBypassFunc(func() bool { return DisableSafeRemoteAddrCheckForTesting })
+}
 
 // IsSafeRemoteAddr checks if a given address is safe to connect to (prevents SSRF/Open Proxy).
 // It resolves domains to IPs to prevent DNS rebinding attacks pointing to internal networks.

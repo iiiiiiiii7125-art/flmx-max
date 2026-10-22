@@ -235,6 +235,9 @@ export function AdminOverview() {
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
+  // 任一路加载失败置位：失败前保留旧数据，但页面必须明示数据不完整，
+  // 绝不能渲染成「空数据 + 一切正常」的假绿（A10-02）。
+  const [loadError, setLoadError] = useState(false);
 
   // 在途守卫：五接口聚合慢于轮询间隔时不得叠加（与普通用户侧同范式）
   const loadInFlightRef = useRef(false);
@@ -258,6 +261,9 @@ export function AdminOverview() {
       if (i.code === 0) setInbounds(i.data ?? []);
       if (r.code === 0) setRelays(r.data ?? []);
       if (s.code === 0) setSubs(s.data?.items ?? []);
+      setLoadError(
+        [n, k, i, r, s].some((res) => res.code !== 0),
+      );
     } finally {
       loadInFlightRef.current = false;
       setLoading(false);
@@ -463,6 +469,19 @@ export function AdminOverview() {
         </p>
       </div>
 
+      {loadError && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-400">
+          <span>部分数据加载失败，当前显示可能不完整，请勿据此判断系统状态。</span>
+          <button
+            className="shrink-0 font-medium underline underline-offset-2"
+            type="button"
+            onClick={() => void load()}
+          >
+            点击重试
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Metric
           foot={
@@ -580,9 +599,15 @@ export function AdminOverview() {
             title="需要处理"
           >
             {groups.length === 0 ? (
-              <p className="py-3 text-center text-sm text-success-600">
-                一切正常
-              </p>
+              loadError ? (
+                <p className="py-3 text-center text-sm text-warning-600">
+                  数据加载失败，暂时无法判断
+                </p>
+              ) : (
+                <p className="py-3 text-center text-sm text-success-600">
+                  一切正常
+                </p>
+              )
             ) : (
               <div className="space-y-2.5">
                 {groups.map((g) => {

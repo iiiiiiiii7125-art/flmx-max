@@ -19,6 +19,11 @@ import (
 
 func consumerCleanupFixture(t *testing.T, remoteURL string) (*repo.Repository, *Handler) {
 	t.Helper()
+	// FIX-132 D3-01 后联邦出站客户端在拨号期复检目标地址；本文件的
+	// 假提供方是 httptest 回环服务，与 tests/contract 同口径开启测试
+	// 旁路（这些用例的主题是清理/回滚语义，不是 SSRF 校验本身）。
+	DisableSafeRemoteAddrCheckForTesting = true
+	t.Cleanup(func() { DisableSafeRemoteAddrCheckForTesting = false })
 	r, err := repo.Open(filepath.Join(t.TempDir(), "consumer-cleanup.db"))
 	if err != nil {
 		t.Fatal(err)

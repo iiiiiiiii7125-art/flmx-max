@@ -387,6 +387,30 @@ func (r *Repository) MarkUserQuotaDisabled(userID int64, pausedForwardIDs []int6
 	return nil
 }
 
+// UpdateUserQuotaPausedForwardIDs 只更新恢复依据列表与时间戳，不
+// 触碰 disabled_by_quota/disabled_at（FIX2-A V2-01 增量执法用：
+// 重试暂停失败的转发时保留首次禁用时刻，只扩/收恢复依据）。
+func (r *Repository) UpdateUserQuotaPausedForwardIDs(userID int64, pausedForwardIDs []int64, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if userID <= 0 {
+		return errors.New("user id is required")
+	}
+	res := r.db.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+		"paused_forward_ids": joinPausedForwardIDs(pausedForwardIDs),
+		"updated_time":       now,
+	})
+	if res.Error != nil {
+		return res.Error
+	}
+	// 同 MarkUserQuotaDisabled 的 F-018 口径：0 行命中视为写失败。
+	if res.RowsAffected == 0 {
+		return errors.New("user quota row not found")
+	}
+	return nil
+}
+
 func (r *Repository) ResetUserQuotaUsage(userID int64, scope string, now time.Time) (*UserQuotaRelease, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")

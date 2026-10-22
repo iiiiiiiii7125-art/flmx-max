@@ -108,18 +108,28 @@ func sshConfigFromModel(cfg *model.NodeSSHConfig) (runtimenft.SSHConfig, error) 
 	}, nil
 }
 
-func (h *Handler) validateNftablesTunnelState(entryNodeIDs []int64) error {
-	return h.validateNftablesTunnelStateTx(nil, entryNodeIDs)
+// nftablesNodeSSHConfig 是入口节点的 nftables 模式判定 + SSH 配置
+// 快照（纯 DB 数据，不含任何网络校验结果）。
+type nftablesNodeSSHConfig struct {
+	nodeID int64
+	cfg    runtimenft.SSHConfig
 }
 
-func (h *Handler) validateNftablesTunnelStateTx(tx *gorm.DB, entryNodeIDs []int64) error {
+// collectNftablesSSHConfigsTx 只做 DB 侧校验：入口节点是否为
+// nftables 模式、SSH 配置是否存在且完整。A3-01：SSH 能力校验
+// （manager.Test，单节点最长 15s 的网络调用）禁止在此执行——
+// 调用方可能正持有 DB 事务与端口分配锁，SQLite 单连接下会连带
+// 阻塞全站读写。Test 由 testNftablesNodeCapabilities 在事务/锁外
+// 单独执行，口径与 port_alloc_lock「锁内禁止网络调用」一致。
+func (h *Handler) collectNftablesSSHConfigsTx(tx *gorm.DB, entryNodeIDs []int64) ([]nftablesNodeSSHConfig, error) {
 	if h == nil || h.repo == nil {
-		return errors.New("handler not initialized")
+		return nil, errors.New("handler not initialized")
 	}
+	pairs := make([]nftablesNodeSSHConfig, 0, len(entryNodeIDs))
 	for _, nodeID := range entryNodeIDs {
 		isNft, err := h.nodeUsesNftablesTx(tx, nodeID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !isNft {
 			continue
@@ -132,22 +142,53 @@ func (h *Handler) validateNftablesTunnelStateTx(tx *gorm.DB, entryNodeIDs []int6
 		}
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return errors.New("nftables 节点缺少 SSH 配置")
+				return nil, errors.New("nftables 节点缺少 SSH 配置")
 			}
-			return err
+			return nil, err
 		}
 		sshCfg, err := sshConfigFromModel(cfg)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if h.nftablesManager == nil {
-			return errors.New("nftables manager not initialized")
-		}
-		if err := h.nftablesManager.Test(context.Background(), nodeID, sshCfg); err != nil {
+		pairs = append(pairs, nftablesNodeSSHConfig{nodeID: nodeID, cfg: sshCfg})
+	}
+	return pairs, nil
+}
+
+// testNftablesNodeCapabilities 对已收集的 SSH 配置逐个执行节点能力
+// 校验（SSH 网络调用）。只能在不持有 DB 事务与端口锁的阶段调用。
+func (h *Handler) testNftablesNodeCapabilities(pairs []nftablesNodeSSHConfig) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	if h == nil || h.nftablesManager == nil {
+		return errors.New("nftables manager not initialized")
+	}
+	for _, pair := range pairs {
+		if err := h.nftablesManager.Test(context.Background(), pair.nodeID, pair.cfg); err != nil {
 			return fmt.Errorf("nftables 节点能力校验失败: %w", err)
 		}
 	}
 	return nil
+}
+
+// validateNftablesTunnelState 是完整校验（DB 校验 + SSH 能力校验），
+// 只能在事务/锁外调用（测试与无事务入口）。
+func (h *Handler) validateNftablesTunnelState(entryNodeIDs []int64) error {
+	pairs, err := h.collectNftablesSSHConfigsTx(nil, entryNodeIDs)
+	if err != nil {
+		return err
+	}
+	return h.testNftablesNodeCapabilities(pairs)
+}
+
+// validateNftablesTunnelStateTx 是事务内可调用的 DB 侧校验（模式 +
+// SSH 配置存在性/完整性），不做任何网络调用；SSH 能力校验由调用方
+// 在事务外用 collectNftablesSSHConfigsTx 的快照 +
+// testNftablesNodeCapabilities 补做（A3-01）。
+func (h *Handler) validateNftablesTunnelStateTx(tx *gorm.DB, entryNodeIDs []int64) error {
+	_, err := h.collectNftablesSSHConfigsTx(tx, entryNodeIDs)
+	return err
 }
 
 func (h *Handler) buildNftablesNodePlan(nodeID int64) (runtimenft.NodePlan, *model.NodeSSHConfig, error) {

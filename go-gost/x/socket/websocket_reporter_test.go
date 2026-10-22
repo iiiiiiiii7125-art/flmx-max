@@ -41,78 +41,68 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 func TestBuildWebSocketCandidatesSecureFirst(t *testing.T) {
+	// D1-02: no silent downgrade — a bare address yields exactly one
+	// candidate, using the secure scheme.
 	candidates := buildWebSocketCandidates("panel.example.com:443", "abc", "2.0.2", 1, 0, 1, "")
 
-	if len(candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	if len(candidates) != 1 {
+		t.Fatalf("expected exactly 1 candidate (no ws fallback), got %d: %v", len(candidates), candidates)
 	}
 	if !strings.HasPrefix(candidates[0], "wss://") {
-		t.Fatalf("expected first candidate to start with wss://, got %s", candidates[0])
-	}
-	if !strings.HasPrefix(candidates[1], "ws://") {
-		t.Fatalf("expected second candidate to start with ws://, got %s", candidates[1])
+		t.Fatalf("expected candidate to start with wss://, got %s", candidates[0])
 	}
 }
 
 func TestBuildWebSocketCandidatesUsesPreferredScheme(t *testing.T) {
+	// D1-02: the learned preference selects the single attempted scheme;
+	// there is no second-chance candidate in either direction.
 	candidates := buildWebSocketCandidates("panel.example.com:443", "abc", "2.0.2", 1, 0, 1, "ws")
 
-	if len(candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	if len(candidates) != 1 {
+		t.Fatalf("expected exactly 1 candidate, got %d: %v", len(candidates), candidates)
 	}
 	if !strings.HasPrefix(candidates[0], "ws://") {
-		t.Fatalf("expected preferred ws:// candidate first, got %s", candidates[0])
-	}
-	if !strings.HasPrefix(candidates[1], "wss://") {
-		t.Fatalf("expected fallback wss:// candidate second, got %s", candidates[1])
+		t.Fatalf("expected preferred ws:// candidate, got %s", candidates[0])
 	}
 }
 
 func TestBuildWebSocketCandidatesNormalizesSchemePrefixedAddr(t *testing.T) {
 	candidates := buildWebSocketCandidates("https://panel.example.com:443/path?q=1", "abc", "2.0.2", 0, 0, 0, "")
 
-	if len(candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	if len(candidates) != 1 {
+		t.Fatalf("expected exactly 1 candidate, got %d: %v", len(candidates), candidates)
 	}
 	if !strings.HasPrefix(candidates[0], "wss://panel.example.com:443/") {
 		t.Fatalf("expected normalized wss candidate, got %s", candidates[0])
 	}
-	if !strings.HasPrefix(candidates[1], "ws://panel.example.com:443/") {
-		t.Fatalf("expected normalized ws fallback candidate, got %s", candidates[1])
-	}
 }
 
-func TestDialWebSocketWithFallbackTriesWSAfterWSSFailure(t *testing.T) {
+// D1-02 (behavior change): a failed wss dial must NOT be retried over
+// plaintext ws. buildWebSocketCandidates now yields a single candidate,
+// and the dial error says why no downgrade happened.
+func TestDialWebSocketDoesNotDowngradeToWS(t *testing.T) {
 	orig := wsDial
 	defer func() { wsDial = orig }()
 
 	var attempts []string
 	wsDial = func(_ *websocket.Dialer, rawURL string) (*websocket.Conn, *http.Response, error) {
 		attempts = append(attempts, rawURL)
-		if strings.HasPrefix(rawURL, "wss://") {
-			return nil, nil, errors.New("tls failed")
-		}
-		return &websocket.Conn{}, nil, nil
+		return nil, nil, errors.New("tls failed")
 	}
 
-	_, usedURL, err := dialWebSocketWithFallback(
-		&websocket.Dialer{},
-		[]string{
-			"wss://panel.example.com/system-info?type=1&secret=abc",
-			"ws://panel.example.com/system-info?type=1&secret=abc",
-		},
-	)
-	if err != nil {
-		t.Fatalf("expected fallback success, got err=%v", err)
+	candidates := buildWebSocketCandidates("wss://panel.example.com", "abc", "2.0.2", 0, 0, 0, "")
+	_, _, err := dialWebSocketWithFallback(&websocket.Dialer{}, candidates)
+	if err == nil {
+		t.Fatal("expected dial to fail when wss fails (no downgrade)")
 	}
-	if !strings.HasPrefix(usedURL, "ws://") {
-		t.Fatalf("expected fallback ws:// url, got %s", usedURL)
+	if len(attempts) != 1 {
+		t.Fatalf("expected exactly 1 attempt, got %d: %v", len(attempts), attempts)
 	}
-	if len(attempts) != 2 {
-		t.Fatalf("expected 2 attempts, got %d", len(attempts))
+	if !strings.HasPrefix(attempts[0], "wss://") {
+		t.Fatalf("the single attempt must be wss, got %s", attempts[0])
 	}
-	if !strings.HasPrefix(attempts[0], "wss://") || !strings.HasPrefix(attempts[1], "ws://") {
-		t.Fatalf("unexpected attempt order: %#v", attempts)
+	if !strings.Contains(err.Error(), "禁止") || !strings.Contains(err.Error(), "降级") {
+		t.Fatalf("error should explicitly state the no-downgrade policy, got: %v", err)
 	}
 }
 
@@ -135,7 +125,10 @@ func TestSanitizeWebSocketURL(t *testing.T) {
 	if strings.Contains(sanitized, "secret=abc") {
 		t.Fatalf("expected secret to be masked, got %s", sanitized)
 	}
-	if !strings.Contains(sanitized, "secret=%2A%2A%2A") {
+	// FIX2-C #6：掩码形态由 url.Values.Encode() 的 %2A%2A%2A 改为
+	// 字面 ***（与面板 logredact 及 redactCommandForLog 口径统一），
+	// 掩码语义不变。
+	if !strings.Contains(sanitized, "secret=***") {
 		t.Fatalf("expected masked secret in url, got %s", sanitized)
 	}
 }
@@ -278,7 +271,8 @@ func TestStartWebSocketReporterWithConfigLogsSanitizedURL(t *testing.T) {
 	if strings.Contains(output, "secret=abc123") {
 		t.Fatalf("expected logged websocket URL to mask the node secret, got %s", output)
 	}
-	if !strings.Contains(output, "secret=%2A%2A%2A") {
+	// FIX2-C #6：掩码形态同 TestSanitizeWebSocketURL，字面 ***。
+	if !strings.Contains(output, "secret=***") {
 		t.Fatalf("expected logged websocket URL to include masked secret, got %s", output)
 	}
 }

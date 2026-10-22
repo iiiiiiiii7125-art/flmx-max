@@ -77,8 +77,11 @@ services:
         condition: service_healthy
     # F-124: 前端此前无 healthcheck，docker ps / 外部探活看不出 nginx
     # 是否在服务（后端与 PG 都有）。探针与 backend 同型（busybox wget）。
+    # R1-01: 探针必须用 127.0.0.1 而非 localhost——容器内 localhost 先解析
+    # 到 [::1]，BusyBox wget 失败后不回退 IPv4，而 nginx 只 listen 80
+    # (IPv4)，用 localhost 时 healthcheck 恒失败、容器永久 unhealthy。
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost/ || exit 1"]
+      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://127.0.0.1/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -103,5 +106,9 @@ networks:
     enable_ipv6: true
     ipam:
       config:
-        - subnet: 172.80.0.0/16 
+        # R2-T02-01: 旧值 172.80.0.0/16 不在 RFC1918 私网段内（172.16.0.0/12
+        # 之外，实为公网地址空间），后端 isTrustedProxyIP 不信任该网段来源，
+        # 登录限流键坍缩为共享桶。新装改用私网段 172.30.0.0/16；存量部署
+        # 不要改在用子网（会重建网络），其影响与处理见 doc/guide/install.md。
+        - subnet: 172.30.0.0/16
         - subnet: fd00:dead:beef::/48

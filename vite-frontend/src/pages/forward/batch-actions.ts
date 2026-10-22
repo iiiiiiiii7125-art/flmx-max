@@ -34,6 +34,10 @@ const normalizeBatchResult = (value: unknown): BatchOperationResult => {
     successCount: Number(raw.successCount ?? 0),
     failCount: Number(raw.failCount ?? 0),
     failures: extractBatchFailures(raw),
+    // 待清理（节点不可达转 pending-delete）既非成功也非失败，必须单列
+    // 保留，否则前端会把 pending 报成「成功删除 0 项」（A9-03）
+    pendingCount: Number(raw.pendingCount ?? 0),
+    pending: Array.isArray(raw.pending) ? raw.pending : [],
   };
 };
 
@@ -86,6 +90,31 @@ export const executeForwardBatchDelete = async (
     }
 
     const summary = normalizeBatchResult(response.data);
+    const pendingCount = summary.pendingCount ?? 0;
+
+    if (pendingCount > 0) {
+      // 有待清理项：结论里单列 pending 数，明细并入结果弹窗逐条呈现
+      // （原因文案为后端下发的「已加入待清理队列，后台将自动重试」）。
+      const summaryText =
+        summary.failCount > 0
+          ? `成功删除 ${summary.successCount} 项，失败 ${summary.failCount} 项，另有 ${pendingCount} 项待节点恢复后清理`
+          : `成功删除 ${summary.successCount} 项，另有 ${pendingCount} 项待节点恢复后清理`;
+
+      return {
+        toastVariant: summary.failCount > 0 ? "error" : "success",
+        toastMessage: summaryText,
+        resultTitle: "批量删除结果",
+        resultSummary: summaryText,
+        failureDetails: [
+          ...(summary.failures || []),
+          ...(summary.pending || []),
+        ],
+        shouldRefresh: true,
+        progressPercent: 100,
+        progressLabel: `删除完成：成功 ${summary.successCount} 项，待清理 ${pendingCount} 项`,
+        closeDeleteModal: true,
+      };
+    }
 
     return {
       ...buildBatchToast(

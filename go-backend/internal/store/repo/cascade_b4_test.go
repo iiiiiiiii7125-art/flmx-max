@@ -51,14 +51,21 @@ func TestDeleteNodeCascadeClearsUserInbounds(t *testing.T) {
 	createRow(t, r, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "10000-10100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
 	createRow(t, r, &model.NodeKernel{ID: 11, NodeID: 1, KernelType: "xray", CreatedTime: now, UpdatedTime: now})
 	createRow(t, r, &model.NodeInbound{ID: 21, NodeID: 1, KernelID: 11, Name: "ib", Protocol: "vless", Port: 443, CreatedTime: now, UpdatedTime: now})
-	// user_inbound 既按 inbound_id 也按 relay_id 引用该入站
+	// FIX132-C 改写说明：旧数据造了 (InboundID=99, RelayID=21) 的授权行
+	// 却全程不存在 id=21 的 relay 行，且注释把 relay_id 当作入站引用——
+	// 这违反写入侧强制的不变式 I（relay_id 指向 NodeInboundRelay 行，
+	// 且其 InboundID 必等于授权行的 InboundID），恰好把 A3-02 的错误
+	// 键空间行为锁成了「期望」。现按合法数据重造：relay 41 属于入站
+	// 21，两条授权（直连 + 经 relay 41）都应随节点删除清干净；跨节点
+	// 误删的回归见 cascade_relay_materialized_test.go。
+	createRow(t, r, &model.NodeInboundRelay{ID: 41, InboundID: 21, ForwardID: 500})
 	createRow(t, r, &model.UserInbound{ID: 31, UserID: 7, InboundID: 21})
-	createRow(t, r, &model.UserInbound{ID: 32, UserID: 8, InboundID: 99, RelayID: 21})
+	createRow(t, r, &model.UserInbound{ID: 32, UserID: 8, InboundID: 21, RelayID: 41})
 
 	if err := r.DeleteNodeCascade(1); err != nil {
 		t.Fatalf("DeleteNodeCascade: %v", err)
 	}
-	if n := countWhere(t, r, "user_inbound", "inbound_id = ? OR relay_id = ?", 21, 21); n != 0 {
+	if n := countWhere(t, r, "user_inbound", "inbound_id = ? OR relay_id = ?", 21, 41); n != 0 {
 		t.Fatalf("F-010: node cascade left %d orphan user_inbound rows", n)
 	}
 }
