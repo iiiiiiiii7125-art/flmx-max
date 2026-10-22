@@ -3,6 +3,7 @@ import type {
   RemoteSourceRole,
   RemoteSyncResult,
 } from "@/api";
+import { useIdemKey } from "@/hooks/useIdemKey";
 
 import { useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -187,6 +188,9 @@ export function RemoteSourcesSection({
     }
   };
 
+  // R2X-004：订阅源新建表单幂等键（同表单复用、成功轮换；更新不带键）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const save = async () => {
     if (!draft) return;
     if (draft.kind === "file" && !draft.id && !draft.content) {
@@ -205,9 +209,10 @@ export function RemoteSourcesSection({
         intervalHours: draft.intervalHours,
         relayOnly: draft.relayOnly,
         content: draft.kind === "file" ? draft.content : undefined,
-      });
+      }, draft.id ? undefined : idemKey);
 
       report(res);
+      if (res.code === 0 && !draft.id) rotateIdemKey();
       // A source whose first fetch failed is still saved; keep the editor
       // open only when nothing was stored.
       if (res.code === 0 || res.data) {

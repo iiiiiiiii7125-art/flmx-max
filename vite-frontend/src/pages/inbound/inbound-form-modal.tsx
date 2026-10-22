@@ -29,6 +29,7 @@ import { OutboundIPSelect } from "./outbound-ip-select";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
 
 import { createInbound, updateInbound } from "@/api";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
 import {
@@ -295,6 +296,9 @@ export function InboundFormModal({
     return null;
   };
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const submit = async () => {
     const err = validate();
 
@@ -312,7 +316,7 @@ export function InboundFormModal({
       });
       const res = isEdit
         ? await updateInbound(payload)
-        : await createInbound(payload);
+        : await createInbound(payload, idemKey);
 
       if (res.code !== 0) {
         const prev = inbounds.find((i) => i.id === form.id);
@@ -332,6 +336,7 @@ export function InboundFormModal({
 
         return;
       }
+      if (!isEdit) rotateIdemKey();
       if (res.msg && res.msg !== "操作成功") {
         toast(res.msg, { icon: "⚠️", duration: 6000 });
       } else {

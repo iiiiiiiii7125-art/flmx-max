@@ -82,6 +82,7 @@ import {
   validateTunnelForm,
 } from "@/pages/tunnel/form";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
   buildBatchFailureMessage,
@@ -917,6 +918,9 @@ export default function TunnelPage() {
   };
 
   // 提交表单
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const handleSubmit = async () => {
     if (!validateForm()) return;
 
@@ -974,9 +978,10 @@ export default function TunnelPage() {
 
       const response = isEdit
         ? await updateTunnel(data)
-        : await createTunnel(data);
+        : await createTunnel(data, idemKey);
 
       if (response.code === 0) {
+        if (!isEdit) rotateIdemKey();
         toast.success(isEdit ? "更新成功" : "创建成功");
         setModalOpen(false);
         await refreshTunnelList(false);

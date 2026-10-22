@@ -266,6 +266,16 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, userID, "inbound-relay:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	row, err := h.repo.GetNodeInbound(req.InboundID)
 	if err != nil || row == nil {
 		response.WriteJSON(w, response.ErrDefault("入站不存在"))

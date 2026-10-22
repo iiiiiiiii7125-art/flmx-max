@@ -3,6 +3,7 @@ import type {
   InboundRelayApiItem,
   TunnelApiItem,
 } from "@/api/types";
+import { useIdemKey } from "@/hooks/useIdemKey";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -138,6 +139,9 @@ export function RelayModal({
     (o) => String(o.tunnel.id) === form.tunnelId,
   )?.route;
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const create = async () => {
     if (!item || !form.tunnelId) {
       toast.error("请选择隧道");
@@ -161,13 +165,14 @@ export function RelayModal({
         inPort: form.inPort.trim() ? Number(form.inPort) : undefined,
         name: form.name.trim() || undefined,
         shareHost: form.shareHost.trim() || undefined,
-      });
+      }, idemKey);
 
       if (res.code !== 0) {
         toast.error(res.msg || "对接失败", { duration: 6000 });
 
         return;
       }
+      rotateIdemKey();
       toast.success("已创建中转转发");
       setForm({ tunnelId: "", inPort: "", name: "", shareHost: "" });
       await load();
