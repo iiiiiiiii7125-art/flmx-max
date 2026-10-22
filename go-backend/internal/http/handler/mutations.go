@@ -951,7 +951,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
-	brokenReferrers, err := h.deleteNodeByID(id)
+	brokenEntries, err := h.deleteNodeByID(id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -961,8 +961,11 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if h.nftablesManager != nil {
 		h.nftablesManager.ReleaseNode(id)
 	}
-	if brokenReferrers == nil {
-		brokenReferrers = []string{}
+	// R3X-014：内部清单是 (ID, 显示串) 结构，单删响应契约仍是
+	// []string 显示串，在此投影。
+	brokenReferrers := make([]string, 0, len(brokenEntries))
+	for _, entry := range brokenEntries {
+		brokenReferrers = append(brokenReferrers, entry.Display)
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"brokenReferrers":     brokenReferrers,
@@ -1149,8 +1152,10 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	failures := make([]batchFailureDetail, 0)
 	// R2X-045：批量入口与单删共用 deleteNodeByID funnel，跨节点引用
 	// 清单汇总回传（同一引用方跨多个被删节点只报一次）。
+	// R3X-014：合并以引用方入站 ID 为键——旧实现以显示串为键，同名
+	// 同节点的两个不同引用方显示串相同会被吞掉一条。
 	var brokenReferrers []string
-	seenReferrer := make(map[string]struct{})
+	seenReferrer := make(map[int64]struct{})
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1174,11 +1179,11 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, referrer := range nodeReferrers {
-			if _, dup := seenReferrer[referrer]; dup {
+			if _, dup := seenReferrer[referrer.ID]; dup {
 				continue
 			}
-			seenReferrer[referrer] = struct{}{}
-			brokenReferrers = append(brokenReferrers, referrer)
+			seenReferrer[referrer.ID] = struct{}{}
+			brokenReferrers = append(brokenReferrers, referrer.Display)
 		}
 		success++
 	}
@@ -6481,8 +6486,10 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // deleteNodeByID 的返回值是 R2X-045 的跨节点引用清单：删除前按该节点
 // 全部入站汇 chainReferrers、排除同节点引用方，随删除结果回传给调用
 // 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
-func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
-	var brokenReferrers []string
+// R3X-014：清单元素为 (引用方入站 ID, 显示串) 结构，供批量入口按 ID
+// 合并；单删入口在响应层投影回 []string，响应契约不变。
+func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
+	var brokenReferrers []nodeCrossReferrer
 	if h != nil && h.repo != nil {
 		brokenReferrers = h.nodeCrossReferrers(id)
 	}
