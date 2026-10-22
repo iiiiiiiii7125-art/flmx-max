@@ -32,6 +32,26 @@ func TestSanitizeBackupShareHost(t *testing.T) {
 	}
 }
 
+// TestSanitizeBackupShareHostTrailingDot pins B2-01: a backup value
+// whose only flaw is a single trailing dot (the FQDN root dot) is
+// restored in normalized form instead of being cleared; values broken
+// in any other way still clear.
+func TestSanitizeBackupShareHostTrailingDot(t *testing.T) {
+	for host, want := range map[string]string{
+		"example.com.":   "example.com",
+		"[example.com.]": "example.com",
+	} {
+		if got, ok := sanitizeBackupShareHost(host); !ok || got != want {
+			t.Fatalf("%q: got %q ok=%v, want normalized %q restored", host, got, ok, want)
+		}
+	}
+	for _, host := range []string{"example.com..", "my_node.example.com", "中文域名.cn", "127.0.0.1"} {
+		if got, ok := sanitizeBackupShareHost(host); ok || got != "" {
+			t.Fatalf("%q: got %q ok=%v, want cleared", host, got, ok)
+		}
+	}
+}
+
 // F-A-01/C-01（R1 修复批）：备份恢复与 ShareHost 写入面同标准——
 // 旧备份里的坏分享地址（校验上线前落库的值）恢复时清空并计入
 // ImportWarnings，不原样带回库里；合法值逐字恢复。

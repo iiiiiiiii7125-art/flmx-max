@@ -258,11 +258,11 @@ func (h *Handler) probeReconnectedNodes(ctx context.Context, nodes []int64) erro
 	if err != nil {
 		return err
 	}
-	if _, err := h.probeNodeLatency(ctx, targets.latencyNodes); err != nil {
+	if _, err := h.probeNodeLatency(ctx, targets.latencyNodes, probeRoundTargeted); err != nil {
 		return err
 	}
 	if len(targets.externalIDs) > 0 {
-		if _, err := h.probeExternalInbounds(ctx, targets.externalIDs); err != nil {
+		if _, err := h.probeExternalInbounds(ctx, targets.externalIDs, probeRoundTargeted); err != nil {
 			return err
 		}
 	}

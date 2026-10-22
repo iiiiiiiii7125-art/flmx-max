@@ -376,7 +376,7 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(entries) > 0 {
-			if _, err := h.probeNodeLatency(r.Context(), entries); err != nil {
+			if _, err := h.probeNodeLatency(r.Context(), entries, probeRoundTargeted); err != nil {
 				response.WriteJSON(w, response.Err(-2, err.Error()))
 				return
 			}

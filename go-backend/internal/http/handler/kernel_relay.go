@@ -428,7 +428,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("名称不超过 100 字"))
 		return
 	}
-	shareHost := strings.TrimSpace(req.ShareHost)
+	shareHost := normalizeShareHost(req.ShareHost)
 	if len(shareHost) > 255 {
 		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
 		return
@@ -702,7 +702,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				host := entry.Host
 				if rel.ShareHost != "" {
 					if validateShareHostValue(rel.ShareHost) == nil {
-						host = rel.ShareHost
+						host = shareHostValue(rel.ShareHost)
 					} else {
 						// F-A-01/C-01：存量坏中转 ShareHost 回退入口
 						// 自身地址下发，不裸拼也不整条丢掉中转端点。

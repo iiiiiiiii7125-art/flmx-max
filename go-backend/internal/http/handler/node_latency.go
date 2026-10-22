@@ -313,9 +313,43 @@ func latencyPointFrom(t latencyTarget, data map[string]interface{}, err error) l
 	return p
 }
 
+// probeRoundKind states what a probe round is for. The recording
+// semantics — whether the round replaces the whole cache and whether
+// it drives the alert streaks — are declared by the caller through
+// this kind, never inferred from the ids slice: the len(ids)==0
+// inference let manual actions pose as scheduled rounds (a latency
+// config save's refresh round counted alert streaks, R2-α-01; an
+// empty expansion racing a create could still reach full-round
+// counting, R2-α-02). Both probers (probeNodeLatency and
+// probeExternalInbounds) share the kind.
+type probeRoundKind int
+
+const (
+	// probeRoundTargeted refreshes the cache for the given ids only:
+	// no whole-cache replacement, no alert streaks. Manual probes
+	// (clicks, target saves, relay pre-measures, reconnect retests)
+	// use this kind.
+	probeRoundTargeted probeRoundKind = iota
+	// probeRoundFull re-measures everything and replaces the whole
+	// cache, but is still an operator action: no alert streaks. The
+	// latency config save's refresh round uses this kind.
+	probeRoundFull
+	// probeRoundScheduled is the periodic loop's round: whole-cache
+	// replacement plus alert streaks. Only runExternalProbeLoop may
+	// pass this kind.
+	probeRoundScheduled
+)
+
+// countsStreak reports whether the round drives the alert streaks.
+func (k probeRoundKind) countsStreak() bool { return k == probeRoundScheduled }
+
+// fullReplace reports whether the round replaces the whole cache
+// (entries it did not produce are pruned) instead of merging.
+func (k probeRoundKind) fullReplace() bool { return k != probeRoundTargeted }
+
 // probeNodeLatency measures the given local nodes' latency (all online ones
 // when ids is empty) to every enabled reference point and records it.
-func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]externalProbe, error) {
+func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64, round probeRoundKind) (map[int64]externalProbe, error) {
 	started := time.Now().UnixNano()
 	nodes, err := h.repo.ListMonitorNodes()
 	if err != nil {
@@ -384,10 +418,11 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 		results[nodeID] = latencyProbe(list, now)
 	}
 	if ctx.Err() == nil {
-		h.nodeLatency.replaceRound(results, len(ids) == 0, started)
+		h.nodeLatency.replaceRound(results, round.fullReplace(), started)
 		h.recordLatencySamples(results)
-		// Streaks count scheduled rounds; a click's extra probe is not one.
-		if len(ids) == 0 {
+		// Streaks count scheduled rounds only; the round kind — never
+		// the ids slice — decides (R2-α-01/02).
+		if round.countsStreak() {
 			names := make(map[int64]string, len(nodes))
 			for _, n := range nodes {
 				names[n.ID] = n.Name
@@ -469,7 +504,10 @@ func (h *Handler) onLatencyConfigChanged(key string, prev []latencyTarget) {
 		return
 	}
 	go func() {
-		if _, err := h.probeNodeLatency(ctx, nil); err != nil && ctx.Err() == nil {
+		// A full refresh (removed points must disappear from cards),
+		// but a config save is an operator action: it must not count
+		// toward latency alert streaks (R2-α-01).
+		if _, err := h.probeNodeLatency(ctx, nil, probeRoundFull); err != nil && ctx.Err() == nil {
 			log.Printf("node latency probe failed: %v", err)
 		}
 		if _, err := h.probeRelayLatency(ctx, nil); err != nil && ctx.Err() == nil {
@@ -638,7 +676,7 @@ func (h *Handler) nodeLatencyTargetsSet(w http.ResponseWriter, r *http.Request) 
 	}
 	// Latency takes seconds, so the list the page reloads already shows the
 	// new points; traces take longer and follow in the background.
-	if _, err := h.probeNodeLatency(r.Context(), req.IDs); err != nil {
+	if _, err := h.probeNodeLatency(r.Context(), req.IDs, probeRoundTargeted); err != nil {
 		log.Printf("node latency probe failed: %v", err)
 	}
 	h.jobsMu.Lock()
@@ -676,7 +714,7 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 	truncated := false
 	if len(ids) == 0 {
 		// O1-004/J-003：空 IDs 收敛为前 50 个在线节点，避免全量出站风暴；
-		// 显式传 IDs 也使缓存按合并而非整体替换更新（probeNodeLatency: len(ids)==0 时 replace）
+		// 定向轮（probeRoundTargeted）也使缓存按合并而非整体替换更新
 		nodes, err := h.repo.ListMonitorNodes()
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -692,7 +730,7 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	results, err := h.probeNodeLatency(r.Context(), ids)
+	results, err := h.probeNodeLatency(r.Context(), ids, probeRoundTargeted)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

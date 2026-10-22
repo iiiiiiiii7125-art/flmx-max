@@ -42,10 +42,29 @@ func nodeShareIP(node *model.Node, ipv6 bool) string {
 	return ""
 }
 
+// normalizeShareHost returns the stored form of a share host value:
+// whitespace-trimmed, with a single trailing dot removed (B2-01 — the
+// FQDN root dot is a legitimate way to write a hostname, and stored
+// values carrying it must normalize instead of failing the import
+// surface's shape check). Brackets are kept as written; the value is
+// canonicalized for validation and rendering by shareHostValue.
+func normalizeShareHost(host string) string {
+	return strings.TrimSuffix(strings.TrimSpace(host), ".")
+}
+
+// shareHostValue is the canonical form a share host is validated and
+// rendered with: brackets stripped and a single trailing dot removed
+// (B2-01). Two trailing dots still fail validation, as do underscore
+// labels, Unicode IDN and loopback/link-local literals — only the
+// single root dot is normalized.
+func shareHostValue(host string) string {
+	return strings.TrimSuffix(strings.Trim(strings.TrimSpace(host), "[]"), ".")
+}
+
 func inboundShareAddress(row *model.NodeInbound, node *model.Node) string {
 	switch inboundShareMode(row) {
 	case "custom":
-		return strings.Trim(strings.TrimSpace(row.ShareHost), "[]")
+		return shareHostValue(row.ShareHost)
 	case "ipv4":
 		return nodeShareIP(node, false)
 	case "ipv6":
@@ -66,8 +85,11 @@ func inboundShareAddress(row *model.NodeInbound, node *model.Node) string {
 // and SurgeLine into a comma-separated line — so a malformed value
 // would rewrite every subscriber's target host (F-A-01/C-01). Every
 // ShareHost write surface and the pull-time guard share this check.
+// The value is canonicalized first (shareHostValue): a single
+// trailing dot is normalized away (B2-01); everything else the import
+// standard rejects keeps being rejected.
 func validateShareHostValue(host string) error {
-	host = strings.Trim(strings.TrimSpace(host), "[]")
+	host = shareHostValue(host)
 	if host == "" {
 		return errText("请填写自定义分享地址")
 	}

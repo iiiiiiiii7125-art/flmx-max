@@ -112,7 +112,7 @@ func TestRelayLatencyAddsEveryLegToTheEntryLatency(t *testing.T) {
 		return okPing(ms), nil
 	}
 
-	if _, err := h.probeNodeLatency(context.Background(), []int64{front}); err != nil {
+	if _, err := h.probeNodeLatency(context.Background(), []int64{front}, probeRoundTargeted); err != nil {
 		t.Fatal(err)
 	}
 	calls = nil
@@ -180,7 +180,7 @@ func TestRelayLatencyBrokenLegFailsEveryPoint(t *testing.T) {
 		}
 		return okPing(10), nil
 	})
-	if _, err := h.probeNodeLatency(context.Background(), nil); err != nil {
+	if _, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	res, err := h.probeRelayLatency(context.Background(), []int64{id})

@@ -39,7 +39,7 @@ func TestInboundProbeEmptyIDsDoesNotCountStreak(t *testing.T) {
 		t.Fatalf("create inbound: %v", err)
 	}
 	for i := 0; i < notifyInboundDownStreak; i++ {
-		if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+		if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,7 +60,7 @@ func TestInboundProbeEmptyIDsDoesNotCountStreak(t *testing.T) {
 	if p, _ := h.externalProbes.get(row.ID); p.OK {
 		t.Fatal("manual probe must still refresh the cache (target keeps failing)")
 	}
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	streak, _ = externalStreakState(h, row.ID)
@@ -85,7 +85,7 @@ func TestInboundProbeEmptyIDsDoesNotClearDown(t *testing.T) {
 	if err := r.DB().Create(row).Error; err != nil {
 		t.Fatalf("create inbound: %v", err)
 	}
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ := h.externalProbes.get(row.ID); !p.OK {
@@ -93,7 +93,7 @@ func TestInboundProbeEmptyIDsDoesNotClearDown(t *testing.T) {
 	}
 	_ = ln.Close()
 	for i := 0; i < notifyInboundDownStreak; i++ {
-		if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+		if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -117,7 +117,7 @@ func TestInboundProbeEmptyIDsDoesNotClearDown(t *testing.T) {
 	if streak != notifyInboundDownStreak || !down {
 		t.Fatalf("manual full probe cleared alert state: streak=%d down=%v", streak, down)
 	}
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	streak, down = externalStreakState(h, row.ID)
@@ -128,7 +128,7 @@ func TestInboundProbeEmptyIDsDoesNotClearDown(t *testing.T) {
 
 // R1-B-02：中转页「全部探测」（空 ids）的延迟预刷只许测中转入口
 // 节点，且不计延迟告警 streak；无关节点不得被测、不得有缓存条目。
-// 定时全量延迟轮（probeNodeLatency(nil)）的计数行为不变。
+// 定时全量延迟轮（probeNodeLatency 的 probeRoundScheduled 轮）的计数行为不变。
 func TestRelayProbeEmptyIDsStaysTargeted(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
 	entry := mustCreateRelayNode(t, r, "entry", "198.51.100.1")
@@ -168,7 +168,7 @@ func TestRelayProbeEmptyIDsStaysTargeted(t *testing.T) {
 	if streakKeys != 0 || downKeys != 0 {
 		t.Fatalf("manual relay probe-all counted latency alert state: streak=%d down=%d", streakKeys, downKeys)
 	}
-	if _, err := h.probeNodeLatency(context.Background(), nil); err != nil {
+	if _, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	h.latencyAlerts.mu.Lock()
