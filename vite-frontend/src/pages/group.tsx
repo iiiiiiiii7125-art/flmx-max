@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import toast from "react-hot-toast";
 
 import { PageShell } from "@/components/page-kit";
@@ -313,6 +316,17 @@ export default function GroupPage({
   // R2X-004：两类分组创建表单各一把幂等键（同表单复用、成功轮换）。
   const tunnelGroupIdem = useIdemKey();
   const userGroupIdem = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(
+    tunnelGroupModalOpen,
+    !editingTunnelGroup,
+    tunnelGroupIdem.rotateIdemKey,
+  );
+  useRotateIdemKeyOnCreateOpen(
+    userGroupModalOpen,
+    !editingUserGroup,
+    userGroupIdem.rotateIdemKey,
+  );
 
   const saveTunnelGroup = async () => {
     if (!groupName.trim()) {

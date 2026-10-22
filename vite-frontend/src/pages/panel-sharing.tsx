@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import { toast } from "react-hot-toast";
 
 import { copyWithToast } from "@/utils/clipboard";
@@ -271,6 +274,8 @@ export default function PanelSharingPage() {
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(createShareOpen, true, rotateIdemKey);
 
   const handleCreateShare = async () => {
     if (creatingShare) return;

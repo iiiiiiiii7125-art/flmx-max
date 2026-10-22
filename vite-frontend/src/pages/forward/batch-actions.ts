@@ -20,6 +20,8 @@ export interface ForwardBatchActionOutcome {
   resultTitle?: string;
   resultSummary?: string;
   failureDetails?: BatchOperationFailure[];
+  /** 后端批量回执的非致命告警（R3X-024）：随 outcome 带出，呈现并入 toastMessage/resultSummary。 */
+  warnings?: string[];
   progressPercent?: number;
   progressLabel?: string;
   closeDeleteModal?: boolean;
@@ -38,6 +40,13 @@ const normalizeBatchResult = (value: unknown): BatchOperationResult => {
     // 保留，否则前端会把 pending 报成「成功删除 0 项」（A9-03）
     pendingCount: Number(raw.pendingCount ?? 0),
     pending: Array.isArray(raw.pending) ? raw.pending : [],
+    // R3X-024：批量重下发/批量换隧道的非致命告警（data.warnings）必须透传，
+    // 不得在归一化层丢弃（单条路径已按范式消费，批量独漏）。
+    warnings: Array.isArray(raw.warnings)
+      ? raw.warnings
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter((item) => item)
+      : [],
   };
 };
 
@@ -52,26 +61,43 @@ const buildBatchToast = (
   | "resultTitle"
   | "resultSummary"
   | "failureDetails"
+  | "warnings"
 > => {
+  // R3X-024：warnings 按 ⚠️ 范式补报条数 + 首条，并入 toast 与结果摘要，
+  // 计数口径（success/fail）不变；无 warnings 时文案与改前逐字一致。
+  const warnings = result.warnings ?? [];
+  const warningText =
+    warnings.length > 0
+      ? `另有 ${warnings.length} 条告警：${warnings[0]}`
+      : "";
+  const withWarnings = (text: string) =>
+    warningText ? `${text}；⚠️ ${warningText}` : text;
+
   if (result.failCount === 0) {
     return {
       toastVariant: "success",
-      toastMessage: successText,
+      toastMessage: withWarnings(successText),
       resultTitle,
-      resultSummary: successText,
+      resultSummary: withWarnings(successText),
       failureDetails: [],
+      warnings,
     };
   }
 
   return {
     toastVariant: "error",
-    toastMessage: buildBatchFailureMessage(
-      result,
-      `成功 ${result.successCount} 项，失败 ${result.failCount} 项`,
+    toastMessage: withWarnings(
+      buildBatchFailureMessage(
+        result,
+        `成功 ${result.successCount} 项，失败 ${result.failCount} 项`,
+      ),
     ),
     resultTitle,
-    resultSummary: `成功 ${result.successCount} 项，失败 ${result.failCount} 项`,
+    resultSummary: withWarnings(
+      `成功 ${result.successCount} 项，失败 ${result.failCount} 项`,
+    ),
     failureDetails: result.failures || [],
+    warnings,
   };
 };
 
@@ -109,6 +135,7 @@ export const executeForwardBatchDelete = async (
           ...(summary.failures || []),
           ...(summary.pending || []),
         ],
+        warnings: summary.warnings ?? [],
         shouldRefresh: true,
         progressPercent: 100,
         progressLabel: `删除完成：成功 ${summary.successCount} 项，待清理 ${pendingCount} 项`,
