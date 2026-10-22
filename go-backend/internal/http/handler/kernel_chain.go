@@ -256,6 +256,42 @@ func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
 	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、"))
 }
 
+// kernelChainGuard 是 R1 X-P2-2（D-R1-02，按 V-03）的卸载守卫：对内核的
+// 全部入站逐个跑 chainReferrers，收集「内核之外」的引用方（同内核入站
+// 互相引用不算被断——它们随卸载一并删除，与 inboundBatchDelete 的
+// batchDeletesReferrers 口径一致）。返回去重后的引用方入站名与按
+// chainInUseMessage 口径拼装的说明（无外部引用时说明为空）。
+func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, message string) {
+	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
+	if err != nil {
+		log.Printf("kernel chain guard lookup failed kernel_id=%d err=%v", kernelID, err)
+		return nil, ""
+	}
+	own := make(map[int64]struct{}, len(rows))
+	for _, row := range rows {
+		own[row.ID] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	var parts []string
+	for _, row := range rows {
+		var refNames []string
+		for _, ref := range h.chainReferrers(row.ID) {
+			if _, isOwn := own[ref.ID]; isOwn {
+				continue
+			}
+			refNames = append(refNames, "「"+ref.Name+"」")
+			if _, dup := seen[ref.Name]; !dup {
+				seen[ref.Name] = struct{}{}
+				referrerNames = append(referrerNames, ref.Name)
+			}
+		}
+		if len(refNames) > 0 {
+			parts = append(parts, fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", row.Name, strings.Join(refNames, "、")))
+		}
+	}
+	return referrerNames, strings.Join(parts, "；")
+}
+
 // applyChainReferrers re-applies the kernels of inbounds chained through the
 // target after it changed, returning a warning per failure.
 func (h *Handler) applyChainReferrers(targetID int64) []string {

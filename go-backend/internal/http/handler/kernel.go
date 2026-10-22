@@ -444,6 +444,21 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 		}
 		h.refreshNodeKernelStatus(k.NodeID)
 	case "remove":
+		// X-P2-2（V-03）：删前链式引用守卫——该内核入站被跨内核/跨节点
+		// 入站用作出站时默认拒绝并列明引用方；Force 放行但回传清单。
+		brokenReferrers, guardMsg := h.kernelChainGuard(k.ID)
+		if guardMsg != "" && !req.Force {
+			response.WriteJSON(w, response.R{
+				Code: -1,
+				Msg:  guardMsg,
+				TS:   time.Now().UnixMilli(),
+				Data: map[string]interface{}{
+					"brokenReferrers":     brokenReferrers,
+					"brokenReferrerCount": len(brokenReferrers),
+				},
+			})
+			return
+		}
 		unlock := lockKernelApply(k.ID)
 		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
 			"type": k.KernelType, "action": "remove",
@@ -462,6 +477,13 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 		unlock()
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if len(brokenReferrers) > 0 {
+			response.WriteJSON(w, response.OK(map[string]interface{}{
+				"brokenReferrers":     brokenReferrers,
+				"brokenReferrerCount": len(brokenReferrers),
+			}))
 			return
 		}
 	default:
