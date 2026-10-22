@@ -363,6 +363,10 @@ func (h *Handler) runExternalProbeLoop(ctx context.Context) {
 }
 
 // inboundProbe checks imported nodes now: the given ids, or all of them.
+// A manual "check all" expands to the explicit id list server-side (the
+// nodeLatencyProbe pattern): probeExternalInbounds treats an empty ids
+// as a scheduled round and counts inbound_down streaks, which a click
+// must never drive — neither raising nor clearing them (DB-4, R1-B-01).
 func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -375,7 +379,20 @@ func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
-	results, err := h.probeExternalInbounds(r.Context(), req.IDs)
+	ids := req.IDs
+	if len(ids) == 0 {
+		rows, err := h.repo.ListNodeInbounds()
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		for i := range rows {
+			if isExternalInbound(&rows[i]) {
+				ids = append(ids, rows[i].ID)
+			}
+		}
+	}
+	results, err := h.probeExternalInbounds(r.Context(), ids)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

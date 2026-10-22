@@ -433,6 +433,13 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
 		return
 	}
+	if shareHost != "" {
+		// F-A-01/C-01：中转 ShareHost 与入站 custom 分享地址同标准。
+		if err := validateShareHostValue(shareHost); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 
 	ppSend := 0
 	if row.AcceptProxyProtocol == 1 {
@@ -664,7 +671,21 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		proxy := importedProxy(&row)
 		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
 			host := inboundShareAddress(&row, node)
-			if host != "" {
+			mode := inboundShareMode(&row)
+			switch {
+			case host == "":
+				// F-A-02：显式选了 ipv4/ipv6/custom 却解析不出地址
+				// （如节点后来改了地址族）时不能静默消失——与上面
+				// M-002/M-003 同级留日志，管理员才有从察觉。
+				if mode != "auto" {
+					log.Printf("inboundEndpoints: share address unresolved for inbound ID %d (node %d), mode %s, skipping endpoint", row.ID, row.NodeID, mode)
+				}
+			case mode == "custom" && validateShareHostValue(host) != nil:
+				// F-A-01/C-01：存量坏 ShareHost（写入面校验之前落库
+				// 的）在拉取期隔离，不让结构字符裸拼进订阅；写入面
+				// 已同标准校验，这里只兜历史数据。
+				log.Printf("inboundEndpoints: invalid custom share host for inbound ID %d (node %d), skipping endpoint", row.ID, row.NodeID)
+			default:
 				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy, SourceID: row.SourceID})
 				kinds = append(kinds, "direct")
 			}
@@ -680,7 +701,13 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				}
 				host := entry.Host
 				if rel.ShareHost != "" {
-					host = rel.ShareHost
+					if validateShareHostValue(rel.ShareHost) == nil {
+						host = rel.ShareHost
+					} else {
+						// F-A-01/C-01：存量坏中转 ShareHost 回退入口
+						// 自身地址下发，不裸拼也不整条丢掉中转端点。
+						log.Printf("inboundEndpoints: invalid relay share host for relay ID %d (inbound %d), falling back to entry host", rel.ID, row.ID)
+					}
 				}
 				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy, SourceID: row.SourceID, RelayID: rel.ID})
 				kinds = append(kinds, "relay")

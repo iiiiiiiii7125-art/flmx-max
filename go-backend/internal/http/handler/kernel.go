@@ -1881,6 +1881,19 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	for _, k := range kernels {
 		known[k.KernelType] = struct{}{}
 	}
+	// R1-B-04：内核在节点保持在线时被 agent 单独重启（崩溃自恢复、
+	// KernelControl 手动重启）不经 onNodeOnline，状态轮询是唯一能
+	// 看见的面——按 DB-3 同口径排一次定向重测，不必等下个 3 分钟
+	// 定时轮。与 onNodeOnline 的排队在静默合并队列里自然去重。
+	restarted := false
+	for _, k := range kernels {
+		if s, ok := byType[k.KernelType]; ok && h.noteKernelStart(nodeID, s) {
+			restarted = true
+		}
+	}
+	if restarted {
+		h.scheduleNodeReconnectProbe(nodeID)
+	}
 	for t := range byType {
 		if _, ok := known[t]; ok {
 			continue

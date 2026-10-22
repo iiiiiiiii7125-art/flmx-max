@@ -4,11 +4,27 @@ import (
 	"encoding/json"
 	"strings"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// sanitizeBackupShareHost applies the ShareHost write-surface standard
+// (kernel.ValidateImportHost) to a share host coming back from a backup:
+// a malformed value is cleared — the row then resolves by its mode/node
+// address — instead of being restored verbatim (F-A-01/C-01). Callers
+// count the clears and disclose them in the import warnings.
+func sanitizeBackupShareHost(host string) (string, bool) {
+	if host == "" {
+		return host, true
+	}
+	if kernel.ValidateImportHost(strings.Trim(strings.TrimSpace(host), "[]")) != nil {
+		return "", false
+	}
+	return host, true
+}
 
 func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	out := &model.InboundsBackup{
@@ -116,6 +132,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // rewritten onto the restored rows instead of dangling.
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
 	kernelRepointed := int64(0)
+	invalidShareHosts := 0
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -228,10 +245,14 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if strategy == "" {
 			strategy = "auto"
 		}
+		shareHost, ok := sanitizeBackupShareHost(i.ShareHost)
+		if !ok {
+			invalidShareHosts++
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
-			Settings: i.Settings, Extra: i.Extra, ShareHost: i.ShareHost, ShareAddressMode: i.ShareAddressMode, Remark: i.Remark,
+			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: i.ShareAddressMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
@@ -282,9 +303,13 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return 0, err
 		}
+		relayShareHost, ok := sanitizeBackupShareHost(rel.ShareHost)
+		if !ok {
+			invalidShareHosts++
+		}
 		item := model.NodeInboundRelay{
 			ID: rel.ID, InboundID: rel.InboundID, ForwardID: rel.ForwardID, Name: rel.Name,
-			ShareHost: rel.ShareHost, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
+			ShareHost: relayShareHost, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
@@ -295,6 +320,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if err := restoreZeroValuedInt(tx, &model.NodeInboundRelay{}, rel.ID, "managed", rel.Managed); err != nil {
 			return 0, err
 		}
+	}
+
+	if invalidShareHosts > 0 {
+		rep.warnf("备份恢复：%d 条分享地址（入站/中转）不符合格式要求，已清空，恢复后按节点地址下发，可在入站设置中重新填写", invalidShareHosts)
 	}
 
 	// Counter baselines keep the next traffic sample from being counted

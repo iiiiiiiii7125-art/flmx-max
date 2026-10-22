@@ -5106,9 +5106,22 @@ func (r *Repository) AddNodeTraffic(rows []model.NodeTraffic) error {
 
 // NodeTrafficSince sums each node's NIC traffic from fromMs on.
 // Values are [in, out] whole-machine NIC bytes — not tunnel billing.
+//
+// Buckets are UTC-hour aligned, so a fromMs in a non-whole-hour viewer
+// zone falls inside the first bucket: that bucket contributes only its
+// post-fromMs share, prorated by minutes the way the subscription side
+// splits straddling buckets (BC-12) — the counted segment is the row's
+// last segment and takes the remainder after the excluded share is
+// floored. Whole-hour zones align exactly and are summed as before.
 func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
+	}
+	const hourMs = int64(time.Hour / time.Millisecond)
+	bucketStart := fromMs - ((fromMs%hourMs)+hourMs)%hourMs
+	fullFrom := bucketStart
+	if fromMs > bucketStart {
+		fullFrom = bucketStart + hourMs
 	}
 	var rows []struct {
 		NodeID   int64
@@ -5116,12 +5129,28 @@ func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) 
 		OutBytes int64
 	}
 	err := r.db.Model(&model.NodeTraffic{}).Select("node_id, SUM(in_bytes) AS in_bytes, SUM(out_bytes) AS out_bytes").
-		Where("hour >= ?", fromMs).Group("node_id").Scan(&rows).Error
+		Where("hour >= ?", fullFrom).Group("node_id").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[int64][2]int64, len(rows))
 	for _, row := range rows {
 		out[row.NodeID] = [2]int64{row.InBytes, row.OutBytes}
 	}
-	return out, err
+	if fromMs > bucketStart {
+		var boundary []model.NodeTraffic
+		if err := r.db.Where("hour = ?", bucketStart).Find(&boundary).Error; err != nil {
+			return nil, err
+		}
+		pre := fromMs - bucketStart
+		for _, b := range boundary {
+			cur := out[b.NodeID]
+			cur[0] += b.InBytes - b.InBytes*pre/hourMs
+			cur[1] += b.OutBytes - b.OutBytes*pre/hourMs
+			out[b.NodeID] = cur
+		}
+	}
+	return out, nil
 }
 
 // PruneNodeTraffic drops the hourly buckets before beforeMs.

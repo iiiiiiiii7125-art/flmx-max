@@ -61,6 +61,54 @@ func (q *nodeReconnectProbeQueue) take() []int64 {
 	}
 }
 
+// ---- kernel restart detection (R1-B-04) ----
+//
+// DB-3's original trigger is the node coming back online (WS reconnect).
+// A kernel that crashes and is restarted by the agent while the node
+// stays connected never passes through onNodeOnline — but the agent's
+// KernelStatus reports carry each kernel's Restarts count and StartedAt
+// stamp (go-gost/x/kernel manager), so the panel's status poll sees the
+// restart within a minute. noteKernelStart compares each report with
+// the previous one for that kernel; pollNodeKernels queues the same
+// reconnect retest when a running kernel's start identity moved.
+
+type kernelStartKey struct {
+	nodeID     int64
+	kernelType string
+}
+
+type kernelStartMark struct {
+	restarts  int
+	startedAt int64
+}
+
+// noteKernelStart records one kernel's start identity from a status
+// report and reports whether the kernel (re)started since the previous
+// report: the restart counter grew, or the start time moved (the
+// counter resets when the agent process itself restarts; the start
+// time still moves). The first report for a kernel only establishes
+// the baseline — panel starts and agent upgrades must not fire
+// spurious retests. A kernel that is not running never fires; its mark
+// still advances, so the eventual start is judged against the stopped
+// state rather than an older running one.
+func (h *Handler) noteKernelStart(nodeID int64, s agentKernelState) bool {
+	h.kernelStartsMu.Lock()
+	defer h.kernelStartsMu.Unlock()
+	if h.kernelStarts == nil {
+		h.kernelStarts = make(map[kernelStartKey]kernelStartMark)
+	}
+	key := kernelStartKey{nodeID: nodeID, kernelType: s.Type}
+	prev, seen := h.kernelStarts[key]
+	h.kernelStarts[key] = kernelStartMark{restarts: s.Restarts, startedAt: s.StartedAt}
+	if !seen || !s.Running {
+		return false
+	}
+	if s.Restarts > prev.restarts {
+		return true
+	}
+	return prev.startedAt != 0 && s.StartedAt != 0 && s.StartedAt != prev.startedAt
+}
+
 // scheduleNodeReconnectProbe queues a re-measurement of everything a node
 // feeds. Reconnect bursts inside the quiet window coalesce into one round.
 func (h *Handler) scheduleNodeReconnectProbe(nodeID int64) {

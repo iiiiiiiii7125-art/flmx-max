@@ -459,11 +459,3 @@ func (r *Repository) ResetSubscriptionTraffic(id int64, now int64) error {
 		"upload_bytes": 0, "download_bytes": 0, "traffic_reset_time": now, "traffic_since": now,
 	}).Error
 }
-
-// MarkSubscriptionResetTime records when the traffic was last reset.
-func (r *Repository) MarkSubscriptionResetTime(id int64, at int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Model(&model.Subscription{}).Where("id = ?", id).Update("traffic_reset_time", at).Error
-}
