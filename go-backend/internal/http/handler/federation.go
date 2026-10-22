@@ -314,7 +314,10 @@ const flmxNoPrivateMinAgentVersion = "1.3.3"
 // 下发该字段只会造成「以为已防护」的假象，故宁可不发，待节点
 // 升级到 1.3.3 后由期望状态重下发自动补上。
 func agentSupportsNoPrivateBypass(agentVersion string) bool {
-	cmp, err := compareVersions(flmxNoPrivateMinAgentVersion, strings.TrimSpace(agentVersion))
+	// R4-N1：agentVersion 是握手上报的 fullVersion（带发行版/架构
+	// 后缀），经上报型比较提取首段语义版本；提取失败（含 dev）仍
+	// 按不支持处理，fail-closed 口径不变。
+	cmp, err := compareWithReportedVersion(flmxNoPrivateMinAgentVersion, agentVersion)
 	return err == nil && cmp <= 0
 }
 
@@ -1215,7 +1218,13 @@ func federationConsumerVersionWarning(consumerVersion string) string {
 	if v == "dev" {
 		return ""
 	}
-	cmp, err := compareVersions(v, federationRelayAuthPanelVersion)
+	// R4-N1：对端自述版本可能带后缀（如 fullVersion 形态），按首段
+	// 语义版本判定；提取失败维持「不可解析不臆断」口径、不警告。
+	rep, ok := extractLeadingSemver(v)
+	if !ok {
+		return ""
+	}
+	cmp, err := compareVersions(rep, federationRelayAuthPanelVersion)
 	if err != nil {
 		return ""
 	}
