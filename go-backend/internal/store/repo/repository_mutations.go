@@ -326,8 +326,19 @@ func (r *Repository) GetUserDefaultsForTunnel(userID int64) (flow int64, num int
 	if r == nil || r.db == nil {
 		return 0, 0, 0, 0, errors.New("repository not initialized")
 	}
+	return getUserDefaultsForTunnel(r.db, userID)
+}
+
+func (r *Repository) GetUserDefaultsForTunnelTx(tx *gorm.DB, userID int64) (flow int64, num int, expTime int64, flowReset int64, err error) {
+	if tx == nil {
+		return 0, 0, 0, 0, errors.New("database unavailable")
+	}
+	return getUserDefaultsForTunnel(tx, userID)
+}
+
+func getUserDefaultsForTunnel(db *gorm.DB, userID int64) (flow int64, num int, expTime int64, flowReset int64, err error) {
 	var user model.User
-	err = r.db.Select("flow", "num", "exp_time", "flow_reset_time").Where("id = ?", userID).First(&user).Error
+	err = db.Select("flow", "num", "exp_time", "flow_reset_time").Where("id = ?", userID).First(&user).Error
 	if err != nil {
 		return 0, 0, 0, 0, normalizeNotFoundErr(err)
 	}
@@ -908,6 +919,13 @@ func (r *Repository) DeleteUserTunnel(id int64) error {
 	return r.db.Where("id = ?", id).Delete(&model.UserTunnel{}).Error
 }
 
+func (r *Repository) DeleteUserTunnelTx(tx *gorm.DB, id int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
+	return tx.Where("id = ?", id).Delete(&model.UserTunnel{}).Error
+}
+
 func (r *Repository) UpdateUserTunnel(id int64, flow int64, num int, expTime, flowResetTime int64, speedID interface{}, status int, flowMiB ...int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -941,8 +959,19 @@ func (r *Repository) GetExistingUserTunnel(userID, tunnelID int64) (id int64, fl
 	if r == nil || r.db == nil {
 		return 0, 0, 0, 0, 0, sql.NullInt64{}, 0, errors.New("repository not initialized")
 	}
+	return getExistingUserTunnel(r.db, userID, tunnelID)
+}
+
+func (r *Repository) GetExistingUserTunnelTx(tx *gorm.DB, userID, tunnelID int64) (id int64, flow, num, expTime, flowReset int64, speedID sql.NullInt64, status int, err error) {
+	if tx == nil {
+		return 0, 0, 0, 0, 0, sql.NullInt64{}, 0, errors.New("database unavailable")
+	}
+	return getExistingUserTunnel(tx, userID, tunnelID)
+}
+
+func getExistingUserTunnel(db *gorm.DB, userID, tunnelID int64) (id int64, flow, num, expTime, flowReset int64, speedID sql.NullInt64, status int, err error) {
 	var ut model.UserTunnel
-	err = r.db.Select("id", "flow", "num", "exp_time", "flow_reset_time", "speed_id", "status").
+	err = db.Select("id", "flow", "num", "exp_time", "flow_reset_time", "speed_id", "status").
 		Where("user_id = ? AND tunnel_id = ?", userID, tunnelID).
 		First(&ut).Error
 	if err != nil {
@@ -955,6 +984,17 @@ func (r *Repository) InsertUserTunnel(userID, tunnelID int64, speedID interface{
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	return insertUserTunnel(r.db, userID, tunnelID, speedID, num, flow, flowResetTime, expTime, status, flowMiB...)
+}
+
+func (r *Repository) InsertUserTunnelTx(tx *gorm.DB, userID, tunnelID int64, speedID interface{}, num int, flow, flowResetTime, expTime int64, status int, flowMiB ...int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
+	return insertUserTunnel(tx, userID, tunnelID, speedID, num, flow, flowResetTime, expTime, status, flowMiB...)
+}
+
+func insertUserTunnel(db *gorm.DB, userID, tunnelID int64, speedID interface{}, num int, flow, flowResetTime, expTime int64, status int, flowMiB ...int64) error {
 	ut := model.UserTunnel{
 		UserID:        userID,
 		TunnelID:      tunnelID,
@@ -968,14 +1008,25 @@ func (r *Repository) InsertUserTunnel(userID, tunnelID int64, speedID interface{
 		ExpTime:       expTime,
 		Status:        status,
 	}
-	return r.db.Create(&ut).Error
+	return db.Create(&ut).Error
 }
 
 func (r *Repository) UpdateUserTunnelFields(id int64, speedID interface{}, flow int64, num int, expTime, flowResetTime int64, status int, flowMiB ...int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.UserTunnel{}).
+	return updateUserTunnelFields(r.db, id, speedID, flow, num, expTime, flowResetTime, status, flowMiB...)
+}
+
+func (r *Repository) UpdateUserTunnelFieldsTx(tx *gorm.DB, id int64, speedID interface{}, flow int64, num int, expTime, flowResetTime int64, status int, flowMiB ...int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
+	return updateUserTunnelFields(tx, id, speedID, flow, num, expTime, flowResetTime, status, flowMiB...)
+}
+
+func updateUserTunnelFields(db *gorm.DB, id int64, speedID interface{}, flow int64, num int, expTime, flowResetTime int64, status int, flowMiB ...int64) error {
+	return db.Model(&model.UserTunnel{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"speed_id":        nullInt64FromInterface(speedID),

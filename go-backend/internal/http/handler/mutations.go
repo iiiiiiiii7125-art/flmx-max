@@ -2748,13 +2748,49 @@ func (h *Handler) userTunnelBatchAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-22：整批单事务（对齐 SetUserSubscriptions 模式）——任一条目
+	// DB 失败整批回滚，不再逐条顺序提交留下半批生效。数据面同步在提交后
+	// 逐条执行；同步失败时整批按 upsertUserTunnel 的补偿语义回滚 DB 变更
+	//（contract: limiter dispatch 失败须回滚），再尽力把恢复后的配置重下发。
+	tx := h.repo.BeginTx()
+	if tx == nil || tx.Error != nil {
+		response.WriteJSON(w, response.Err(-2, "database unavailable"))
+		return
+	}
+	defer func() { tx.Rollback() }()
+	outcomes := make([]*userTunnelUpsertOutcome, 0, len(req.Tunnels))
 	for _, t := range req.Tunnels {
 		m := map[string]interface{}{"userId": req.UserID, "tunnelId": t.TunnelID}
 		if t.SpeedID != nil {
 			m["speedId"] = *t.SpeedID
 		}
-		if err := h.upsertUserTunnel(m); err != nil {
+		outcome, err := h.upsertUserTunnelDB(tx, m)
+		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	if err := tx.Commit().Error; err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	for _, outcome := range outcomes {
+		if err := h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID); err != nil {
+			var rollbackErrs []string
+			for i := len(outcomes) - 1; i >= 0; i-- {
+				if rbErr := h.rollbackUserTunnelUpsert(outcomes[i]); rbErr != nil {
+					rollbackErrs = append(rollbackErrs, rbErr.Error())
+				}
+			}
+			for _, o := range outcomes {
+				_ = h.syncUserTunnelForwards(o.userID, o.tunnelID)
+			}
+			if len(rollbackErrs) > 0 {
+				response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败且回滚失败: %v; %s", err, strings.Join(rollbackErrs, "; "))))
+				return
+			}
+			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败，已回滚: %v", err)))
 			return
 		}
 	}
@@ -6296,21 +6332,96 @@ func (h *Handler) rollbackForwardMutation(oldForward *forwardRecord, oldPorts []
 	_ = h.syncForwardServices(oldForward, "UpdateService", true)
 }
 
+// userTunnelUpsertOutcome describes the DB-side effect of one
+// upsertUserTunnelDB call so callers can run the data-plane sync (and its
+// compensation) outside any transaction.
+type userTunnelUpsertOutcome struct {
+	userID   int64
+	tunnelID int64
+	inserted bool
+	// Previous field values (update path only), for sync-failure rollback.
+	existingID    int64
+	prevSpeedID   sql.NullInt64
+	prevFlow      int64
+	prevFlowMiB   int64
+	prevNum       int64
+	prevExpTime   int64
+	prevFlowReset int64
+	prevStatus    int
+}
+
+// rollbackUserTunnelUpsert undoes the DB change of one upsert outcome
+// (inserted rows are deleted, updated rows restored to their previous
+// values) — the compensation applied when the data-plane sync fails.
+func (h *Handler) rollbackUserTunnelUpsert(outcome *userTunnelUpsertOutcome) error {
+	if outcome.inserted {
+		insertedID, _, _, _, _, _, _, lookupErr := h.repo.GetExistingUserTunnel(outcome.userID, outcome.tunnelID)
+		if lookupErr != nil {
+			return fmt.Errorf("回滚查询错误: %w", lookupErr)
+		}
+		if err := h.repo.DeleteUserTunnel(insertedID); err != nil {
+			return fmt.Errorf("回滚删除错误: %w", err)
+		}
+		return nil
+	}
+	if err := h.repo.UpdateUserTunnelFields(
+		outcome.existingID,
+		outcome.prevSpeedID,
+		outcome.prevFlow,
+		int(outcome.prevNum),
+		outcome.prevExpTime,
+		outcome.prevFlowReset,
+		outcome.prevStatus,
+		outcome.prevFlowMiB,
+	); err != nil {
+		return fmt.Errorf("回滚错误: %w", err)
+	}
+	return nil
+}
+
 func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
+	outcome, err := h.upsertUserTunnelDB(nil, req)
+	if err != nil {
+		return err
+	}
+	if syncErr := h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID); syncErr != nil {
+		if rollbackErr := h.rollbackUserTunnelUpsert(outcome); rollbackErr != nil {
+			return fmt.Errorf("下发失败且回滚失败: %v; %w", syncErr, rollbackErr)
+		}
+		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
+	}
+	return nil
+}
+
+// upsertUserTunnelDB performs only the DB portion of a user-tunnel
+// assignment. With tx == nil it writes directly (single assignment); with a
+// tx it participates in the caller's transaction (X-P3-22 batch assignment).
+// Data-plane sync is deliberately left to the caller so it never runs
+// inside a transaction.
+func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*userTunnelUpsertOutcome, error) {
 	userID := asInt64(req["userId"], 0)
 	tunnelID := asInt64(req["tunnelId"], 0)
 	if userID <= 0 || tunnelID <= 0 {
-		return fmt.Errorf("userId or tunnelId missing")
+		return nil, fmt.Errorf("userId or tunnelId missing")
 	}
 
-	existingID, currentFlow, currentNum, currentExpTime, currentFlowReset, currentSpeedID, currentStatus, lookupErr :=
-		h.repo.GetExistingUserTunnel(userID, tunnelID)
+	getExisting := func() (int64, int64, int64, int64, int64, sql.NullInt64, int, error) {
+		if tx != nil {
+			return h.repo.GetExistingUserTunnelTx(tx, userID, tunnelID)
+		}
+		return h.repo.GetExistingUserTunnel(userID, tunnelID)
+	}
+	existingID, currentFlow, currentNum, currentExpTime, currentFlowReset, currentSpeedID, currentStatus, lookupErr := getExisting()
 
 	speedID := asAnyToInt64Ptr(req["speedId"])
 	var err error
-	speedID, err = h.normalizeSpeedLimitReference(speedID)
+	if tx != nil {
+		speedID, err = h.normalizeSpeedLimitReferenceTx(tx, speedID)
+	} else {
+		speedID, err = h.normalizeSpeedLimitReference(speedID)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	reqFlow := asInt64(req["flow"], -1)
@@ -6319,7 +6430,7 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		var flowErr error
 		reqFlow, reqFlowMiB, flowErr = parseTrafficLimit(req, 0)
 		if flowErr != nil {
-			return flowErr
+			return nil, flowErr
 		}
 	}
 	reqNum := asInt(req["num"], -1)
@@ -6329,11 +6440,25 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 
 	if lookupErr == sql.ErrNoRows {
 		if reqFlow < 0 || reqNum < 0 || reqExpTime < 0 || reqFlowReset < 0 {
-			uFlow, uNum, uExp, uReset, uErr := h.repo.GetUserDefaultsForTunnel(userID)
+			var uFlow, uExp, uReset int64
+			var uNum int
+			var uErr error
+			if tx != nil {
+				uFlow, uNum, uExp, uReset, uErr = h.repo.GetUserDefaultsForTunnelTx(tx, userID)
+			} else {
+				uFlow, uNum, uExp, uReset, uErr = h.repo.GetUserDefaultsForTunnel(userID)
+			}
 			if uErr == nil {
 				if reqFlow < 0 {
 					reqFlow = uFlow
-					if user, err := h.repo.GetUserByID(userID); err == nil && user != nil {
+					var user *model.User
+					var userErr error
+					if tx != nil {
+						user, userErr = h.repo.GetUserByIDTx(tx, userID)
+					} else {
+						user, userErr = h.repo.GetUserByID(userID)
+					}
+					if userErr == nil && user != nil {
 						reqFlowMiB = user.FlowMiB
 					}
 				}
@@ -6364,36 +6489,32 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 			reqStatus = 1
 		}
 
-		if err := h.repo.InsertUserTunnel(userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
-			return err
+		if tx != nil {
+			if err := h.repo.InsertUserTunnelTx(tx, userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
+				return nil, err
+			}
+		} else if err := h.repo.InsertUserTunnel(userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
+			return nil, err
 		}
 
-		if syncErr := h.syncUserTunnelForwards(userID, tunnelID); syncErr != nil {
-			insertedID, _, _, _, _, _, _, lookupErr := h.repo.GetExistingUserTunnel(userID, tunnelID)
-			if lookupErr != nil {
-				return fmt.Errorf("下发失败且回滚失败: %v; 回滚查询错误: %w", syncErr, lookupErr)
-			}
-
-			if rollbackErr := h.repo.DeleteUserTunnel(insertedID); rollbackErr != nil {
-				return fmt.Errorf("下发失败且回滚失败: %v; 回滚删除错误: %w", syncErr, rollbackErr)
-			}
-
-			return fmt.Errorf("下发失败，已回滚: %w", syncErr)
-		}
-
-		return nil
+		return &userTunnelUpsertOutcome{userID: userID, tunnelID: tunnelID, inserted: true}, nil
 	}
 	if lookupErr != nil {
-		return lookupErr
+		return nil, lookupErr
 	}
 
 	newFlow := currentFlow
-	oldTunnel, err := h.repo.GetUserTunnelByID(existingID)
+	var oldTunnel *model.UserTunnel
+	if tx != nil {
+		oldTunnel, err = h.repo.GetUserTunnelByIDTx(tx, existingID)
+	} else {
+		oldTunnel, err = h.repo.GetUserTunnelByID(existingID)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if oldTunnel == nil {
-		return fmt.Errorf("隧道权限不存在")
+		return nil, fmt.Errorf("隧道权限不存在")
 	}
 	newFlowMiB := oldTunnel.FlowMiB
 	if reqFlow >= 0 {
@@ -6431,29 +6552,26 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		newSpeedID = sql.NullInt64{Valid: false}
 	}
 
-	if err := h.repo.UpdateUserTunnelFields(existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
-		return err
-	}
-
-	if syncErr := h.syncUserTunnelForwards(userID, tunnelID); syncErr != nil {
-		rollbackErr := h.repo.UpdateUserTunnelFields(
-			existingID,
-			currentSpeedID,
-			currentFlow,
-			int(currentNum),
-			currentExpTime,
-			currentFlowReset,
-			currentStatus,
-			oldTunnel.FlowMiB,
-		)
-		if rollbackErr != nil {
-			return fmt.Errorf("下发失败且回滚失败: %v; 回滚错误: %w", syncErr, rollbackErr)
+	if tx != nil {
+		if err := h.repo.UpdateUserTunnelFieldsTx(tx, existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
+			return nil, err
 		}
-
-		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
+	} else if err := h.repo.UpdateUserTunnelFields(existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return &userTunnelUpsertOutcome{
+		userID:        userID,
+		tunnelID:      tunnelID,
+		existingID:    existingID,
+		prevSpeedID:   currentSpeedID,
+		prevFlow:      currentFlow,
+		prevFlowMiB:   oldTunnel.FlowMiB,
+		prevNum:       currentNum,
+		prevExpTime:   currentExpTime,
+		prevFlowReset: currentFlowReset,
+		prevStatus:    currentStatus,
+	}, nil
 }
 
 func (h *Handler) syncUserTunnelForwards(userID, tunnelID int64) error {
@@ -6554,6 +6672,20 @@ func (h *Handler) normalizeSpeedLimitReference(speedID *int64) (*int64, error) {
 		return nil, nil
 	}
 
+	return speedID, nil
+}
+
+func (h *Handler) normalizeSpeedLimitReferenceTx(tx *gorm.DB, speedID *int64) (*int64, error) {
+	if speedID == nil {
+		return nil, nil
+	}
+	exists, err := h.repo.SpeedLimitExistsTx(tx, *speedID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
 	return speedID, nil
 }
 
