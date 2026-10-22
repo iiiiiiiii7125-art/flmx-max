@@ -482,6 +482,16 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-27（L-11-2）：与 X-P2-17 同一 Idempotency-Key 机制（创建面）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	name := asString(req["name"])
 	serverIP := asString(req["serverIp"])
 	if name == "" || serverIP == "" {
@@ -4091,6 +4101,16 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	// X-P3-27（L-11-2）：与 X-P2-17 同一 Idempotency-Key 机制（创建面）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 
 	name := asString(req["name"])

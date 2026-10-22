@@ -824,6 +824,17 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// X-P3-27（L-11-2）：新建分支接入 Idempotency-Key 机制（更新分支
+	// req.ID>0 不参与，更新本身按 ID 定位、无防重语义变化）。
+	if req.ID == 0 {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 
 	now := time.Now()
 	var s *model.Subscription
