@@ -104,7 +104,7 @@ func TestTCPPingQueueCompletesMoreThanEightTargets(t *testing.T) {
 			for i := 0; i < total; i++ {
 				raw, err := json.Marshal(CommandMessage{
 					Type: "TcpPing", RequestId: fmt.Sprintf("target-%d", i), TimeoutMS: 5000,
-					Data: TcpPingRequest{IP: "127.0.0.1", Port: port, Count: 4, Timeout: 2000},
+					Data: TcpPingRequest{IP: "localhost", Port: port, Count: 4, Timeout: 2000},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -177,11 +177,16 @@ func TestTCPPingExecutionHonorsCancellation(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := reporter.handleTcpPing(ctx, TcpPingRequest{IP: "127.0.0.1", Port: port, Count: 1000, Timeout: 5000})
+		res, err := reporter.handleTcpPing(ctx, TcpPingRequest{IP: "localhost", Port: port, Count: 1000, Timeout: 5000})
 		done <- result{res, err}
 	}()
+	// Wait for the second accept: the first connection sits in the
+	// listener backlog before DialContext returns on the probe
+	// goroutine, so cancelling on the first accept can abort the
+	// in-flight first dial (zero recorded attempts) instead of a
+	// running probe. A second accept proves attempt one completed.
 	deadline := time.After(time.Second)
-	for accepted.Load() == 0 {
+	for accepted.Load() < 2 {
 		select {
 		case <-deadline:
 			t.Fatal("probe did not start")
@@ -206,7 +211,7 @@ func TestTCPPingQueueStopsWithPendingAndRunningProbes(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		reporter.dispatchCommand(CommandMessage{
 			Type: "TcpPing", RequestId: fmt.Sprint(i),
-			Data: TcpPingRequest{IP: "127.0.0.1", Port: port, Count: 1000, Timeout: 5000},
+			Data: TcpPingRequest{IP: "localhost", Port: port, Count: 1000, Timeout: 5000},
 		})
 	}
 	reporter.startTCPPingWorkers()
@@ -254,7 +259,7 @@ func TestTCPPingCanceledBeforeAnyAttempt(t *testing.T) {
 	reporter, _ := newTCPPingTestReporter(t)
 	ctx, cancel := context.WithCancel(reporter.ctx)
 	cancel()
-	if _, err := reporter.handleTcpPing(ctx, TcpPingRequest{IP: "127.0.0.1", Port: 1, Count: 4, Timeout: 5000}); err == nil || err.Error() != "TCP探测已取消" {
+	if _, err := reporter.handleTcpPing(ctx, TcpPingRequest{IP: "localhost", Port: 1, Count: 4, Timeout: 5000}); err == nil || err.Error() != "TCP探测已取消" {
 		t.Fatalf("unexpected result: %v", err)
 	}
 }
