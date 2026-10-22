@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestRouteCommandLogRedactsSecrets(t *testing.T) {
 	reporter := NewWebSocketReporter("ws://127.0.0.1:1", "node-secret")
 
 	out := captureStdout(t, func() {
-		reporter.routeCommand(CommandMessage{
+		reporter.routeCommand(context.Background(), CommandMessage{
 			Type:      "BogusCommandForTest",
 			RequestId: "req-1",
 			Data: map[string]interface{}{

@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -31,7 +32,7 @@ func TestClampPingParams(t *testing.T) {
 func TestHandleTcpPingClampsHugeCount(t *testing.T) {
 	w := &WebSocketReporter{}
 	start := time.Now()
-	resp, err := w.handleTcpPing(map[string]interface{}{
+	resp, err := w.handleTcpPing(context.Background(), map[string]interface{}{
 		"ip": "127.0.0.1", "port": 1, "count": 100000, "timeout": 60000,
 	})
 	elapsed := time.Since(start)

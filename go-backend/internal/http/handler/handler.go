@@ -111,6 +111,13 @@ type Handler struct {
 	relayLatency  *relayLatencyStore
 	notifier      *notifier
 	bestExit      *bestExitManager
+
+	// 移植自 kure29/flyx 3.3.30/3.3.33（DA-6/DB-5）：每节点 TcpPing
+	// 并发槽位（队列与执行共用超时预算，见 node_ping_slots.go）。
+	pingSlots *nodePingSlots
+	// 移植自 kure29/flyx 3.3.33（DB-3）：节点重连后自动重测队列
+	// （见 node_reconnect_probe.go），由 StartBackgroundJobs 创建。
+	reconnectProbes *nodeReconnectProbeQueue
 }
 
 const monitorTunnelQualityEnabledConfigKey = "monitor_tunnel_quality_enabled"
@@ -182,6 +189,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		latencyAlerts:            newLatencyAlertTracker(),
 		relayLatency:             newRelayLatencyStore(),
 		notifier:                 newNotifier(),
+		pingSlots:                newNodePingSlots(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)

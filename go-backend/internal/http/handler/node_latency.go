@@ -29,6 +29,11 @@ const (
 	latencyParallel         = 16
 	// O1-004/J-003：空 IDs 全量探测时收敛上限，防止大规模节点下无确认的出站风暴
 	maxProbeAllNodes = 50
+	// DB-5（移植自 kure29/flyx 3.3.33）：单节点一轮探测按 agent 槽位
+	// 分波——命令超时须容纳全部波次串行排队的最坏耗时。
+	latencyAgentParallel  = agentTCPPingLimit
+	latencyPingWaves      = (latencyParallel + latencyAgentParallel - 1) / latencyAgentParallel
+	latencyCommandTimeout = time.Duration(latencyPingWaves*latencyPingCount*(latencyPingTimeoutMS+200))*time.Millisecond + 5*time.Second
 )
 
 // latencyTarget is one reference point, e.g. a province's carrier CDN node.
@@ -191,6 +196,7 @@ func targetsForNode(pool []latencyTarget, rawChoice string) []latencyTarget {
 type nodeLatencyStore struct {
 	mu      sync.RWMutex
 	results map[int64]externalProbe
+	rounds  probeRounds
 }
 
 func newNodeLatencyStore() *nodeLatencyStore {
@@ -207,13 +213,30 @@ func (s *nodeLatencyStore) get(nodeID int64) (externalProbe, bool) {
 // replace stores fresh results; a full round also drops nodes it skipped
 // (offline, remote, or no reference points configured).
 func (s *nodeLatencyStore) replace(results map[int64]externalProbe, all bool) {
+	s.replaceRound(results, all, time.Now().UnixNano())
+}
+
+// replaceRound is replace gated per entry by probeRounds: stale rounds
+// cannot overwrite fresher values（DB-4，移植自 kure29/flyx 3.3.33）。
+func (s *nodeLatencyStore) replaceRound(results map[int64]externalProbe, all bool, started int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if all {
-		s.results = make(map[int64]externalProbe, len(results))
+		for id := range s.results {
+			if _, ok := results[id]; ok {
+				continue
+			}
+			if !s.rounds.take(id, started) {
+				continue
+			}
+			delete(s.results, id)
+			delete(s.rounds, id)
+		}
 	}
 	for id, p := range results {
-		s.results[id] = p
+		if s.rounds.take(id, started) {
+			s.results[id] = p
+		}
 	}
 }
 
@@ -223,31 +246,61 @@ func (s *nodeLatencyStore) drop(ids []int64) {
 	defer s.mu.Unlock()
 	for _, id := range ids {
 		delete(s.results, id)
+		delete(s.rounds, id)
 	}
 }
 
 // nodeLatencyPing runs one TcpPing from a node; tests replace it.
 var nodeLatencyPing = func(h *Handler, nodeID int64, host string, port int) (map[string]interface{}, error) {
 	return h.tcpPingViaNode(nodeID, host, port, diagnosisExecOptions{
-		commandTimeout: time.Duration(latencyPingCount*(latencyPingTimeoutMS+200))*time.Millisecond + 5*time.Second,
+		commandTimeout: latencyCommandTimeout,
 		pingTimeoutMS:  latencyPingTimeoutMS,
 		pingCount:      latencyPingCount,
 	})
 }
 
+// latencyCommandError turns a failed TcpPing command into the reason the
+// operator should see: queueing, a busy or offline node, or a timeout
+// （DB-5 失败原因分类，移植自 kure29/flyx 3.3.33）。
+func latencyCommandError(err error) string {
+	if errors.Is(err, errTCPPingQueueTimeout) {
+		return errTCPPingQueueTimeout.Error()
+	}
+	msg := strings.TrimSpace(err.Error())
+	switch {
+	case strings.Contains(msg, agentBusyMessage), strings.Contains(msg, "并发过多"):
+		return "节点繁忙，请稍后重试"
+	case strings.Contains(msg, "队列已满"), strings.Contains(msg, "TCP探测"):
+		return msg
+	case strings.Contains(msg, "节点不在线"):
+		return "节点离线"
+	case errors.Is(err, context.DeadlineExceeded),
+		strings.Contains(msg, "timeout"), strings.Contains(msg, "等待节点响应超时"):
+		return "节点响应超时"
+	case errors.Is(err, context.Canceled), strings.Contains(msg, "Agent is shutting down"):
+		return "探测已取消"
+	case msg == "":
+		return "探测失败"
+	default:
+		return "探测失败：" + msg
+	}
+}
+
 func latencyPointFrom(t latencyTarget, data map[string]interface{}, err error) latencyPoint {
 	p := latencyPoint{Name: t.Name, Pinned: t.Pinned}
 	if err != nil {
-		p.Error = "节点无响应"
+		p.Error = latencyCommandError(err)
 		return p
 	}
 	if !asBool(data["success"], false) {
 		msg := asString(data["errorMessage"])
 		switch {
+		case msg == "" || msg == "所有TCP连接尝试都失败":
+			p.Error = "测试点连接失败"
 		case strings.Contains(msg, "DNS"):
 			p.Error = "域名解析失败"
 		default:
-			p.Error = "超时"
+			p.Error = msg
 		}
 		return p
 	}
@@ -263,6 +316,7 @@ func latencyPointFrom(t latencyTarget, data map[string]interface{}, err error) l
 // probeNodeLatency measures the given local nodes' latency (all online ones
 // when ids is empty) to every enabled reference point and records it.
 func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]externalProbe, error) {
+	started := time.Now().UnixNano()
 	nodes, err := h.repo.ListMonitorNodes()
 	if err != nil {
 		return nil, err
@@ -284,23 +338,36 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 		}
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, latencyParallel)
+	// DA-6：派发前先收集再按节点交错，避免单节点先占满全局并发与
+	// 自身探测槽位、其他节点饿死（interleaveByNode）。
+	type latencyJob struct {
+		nodeID int64
+		i      int
+		t      latencyTarget
+	}
+	jobs := make([]latencyJob, 0, len(targets))
 	for nodeID, list := range targets {
 		for i, t := range list {
-			if ctx.Err() != nil {
-				break
-			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(nodeID int64, i int, t latencyTarget) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				data, err := nodeLatencyPing(h, nodeID, t.Host, t.Port)
-				// Each goroutine writes its own slot.
-				points[nodeID][i] = latencyPointFrom(t, data, err)
-			}(nodeID, i, t)
+			jobs = append(jobs, latencyJob{nodeID, i, t})
 		}
+	}
+	jobs = interleaveByNode(jobs, func(j latencyJob) int64 { return j.nodeID })
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, latencyParallel)
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j latencyJob) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := nodeLatencyPing(h, j.nodeID, j.t.Host, j.t.Port)
+			// Each goroutine writes its own slot.
+			points[j.nodeID][j.i] = latencyPointFrom(j.t, data, err)
+		}(j)
 	}
 	// L-002：ctx 取消后不等在途探测（单个 TcpPing 最长约 14s），直接返回 ctx 错误；
 	// 在途 goroutine 各自写独立 slot，调用方不再读取 points，无数据竞争
@@ -316,8 +383,8 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 	for nodeID, list := range points {
 		results[nodeID] = latencyProbe(list, now)
 	}
-	h.nodeLatency.replace(results, len(ids) == 0)
 	if ctx.Err() == nil {
+		h.nodeLatency.replaceRound(results, len(ids) == 0, started)
 		h.recordLatencySamples(results)
 		// Streaks count scheduled rounds; a click's extra probe is not one.
 		if len(ids) == 0 {
@@ -358,7 +425,13 @@ func (h *Handler) inboundProbeView(row *model.NodeInbound) *externalProbe {
 	reach, hasReach := h.externalProbes.get(row.ID)
 	if !isExternalInbound(row) {
 		if node, ok := h.nodeLatency.get(row.NodeID); ok && len(node.Points) > 0 {
+			// DB-4：两路探测各自刷新，视图时间取较新者，手动重测的
+			// 新结果不被另一路的旧时间戳盖住。
+			if hasReach && reach.CheckedAt > node.CheckedAt {
+				node.CheckedAt = reach.CheckedAt
+			}
 			if hasReach && !reach.Skipped && !reach.OK {
+				reach.CheckedAt = node.CheckedAt
 				return &reach
 			}
 			view := h.withRoutes(row.NodeID, node)

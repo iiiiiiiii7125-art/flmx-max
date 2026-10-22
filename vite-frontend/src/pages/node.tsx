@@ -74,6 +74,8 @@ import {
 import { buildNodeSystemInfo } from "@/pages/node/system-info";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useIdemKey } from "@/hooks/useIdemKey";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
@@ -85,7 +87,6 @@ import {
   NodeFilterMode,
 } from "@/pages/node/types";
 import {
-  NODE_FALLBACK_REFRESH_INTERVAL_MS,
   getNodeReminderEnabled,
   getNodeExpiryMeta,
   mergeNodeRealtimeState,
@@ -536,21 +537,13 @@ export default function NodePage({
     setSelectedIds(new Set());
   }, [activeTab]);
 
-  useEffect(() => {
-    if (!usingPollingFallback) {
-      return;
-    }
-
-    void loadNodes({ silent: true });
-
-    const interval = window.setInterval(() => {
-      void loadNodes({ silent: true });
-    }, NODE_FALLBACK_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [loadNodes, usingPollingFallback]);
+  // DB-3（移植自 kure29/flyx 3.3.33）：指标走 WebSocket 实时推送，
+  // 但节点延迟缓存只在 node/list 里——无论 WS 是否连通都按 15 秒
+  // 可见性轮询静默刷新（含 WS 断线时的兜底），节点重连重测的结果
+  // 最迟 15 秒内出现在卡片上。
+  useVisiblePolling(
+    useCallback(() => loadNodes({ silent: true }), [loadNodes]),
+  );
 
   // 格式化速度
   const formatSpeed = (bytesPerSecond: number): string => {
@@ -1308,7 +1301,9 @@ export default function NodePage({
         return;
       }
       setNodeList((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, latency } : n)),
+        prev.map((n) =>
+          n.id === id ? { ...n, latency: latestProbe(latency, n.latency) } : n,
+        ),
       );
     } catch {
       toast.error("检测失败");

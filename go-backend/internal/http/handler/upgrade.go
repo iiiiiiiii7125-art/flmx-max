@@ -662,7 +662,12 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	if h.consumePendingRealmSettle(nodeID) {
 		h.refreshNodeKernelStatus(nodeID)
 	}
-	go h.reconcileNodeKernels(nodeID)
+	// DB-3：内核对账完成后排一次受影响面重测（走定向探测路径，
+	// 不计告警 streak）；排队本身只入队，静默合并窗在 worker 侧。
+	go func() {
+		h.reconcileNodeKernels(nodeID)
+		h.scheduleNodeReconnectProbe(nodeID)
+	}()
 	if !h.startNodeOnlineRedeploy(nodeID, time.Now()) {
 		return
 	}

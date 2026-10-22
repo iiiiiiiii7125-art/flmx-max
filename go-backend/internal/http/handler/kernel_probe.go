@@ -36,9 +36,28 @@ type externalProbe struct {
 	Points []latencyPoint `json:"points,omitempty"`
 }
 
+// probeRounds remembers when each stored result's round started so a
+// slower older round cannot overwrite a newer round's values（移植自
+// kure29/flyx 3.3.33，DB-4 三个探测存储共用）。
+type probeRounds map[int64]int64
+
+// take records started for id and reports whether a write from that round
+// may still land: false when a newer round already stored a value.
+func (r *probeRounds) take(id, started int64) bool {
+	if *r == nil {
+		*r = make(probeRounds)
+	}
+	if (*r)[id] > started {
+		return false
+	}
+	(*r)[id] = started
+	return true
+}
+
 type externalProbeStore struct {
 	mu      sync.RWMutex
 	results map[int64]externalProbe
+	rounds  probeRounds
 	// failStreak counts consecutive failed probes; down marks nodes already
 	// reported as unreachable, so alerts fire once per outage.
 	failStreak map[int64]int
@@ -118,10 +137,26 @@ func (s *externalProbeStore) get(id int64) (externalProbe, bool) {
 // replace stores fresh results and drops entries of inbounds that no longer
 // exist when the whole set was probed.
 func (s *externalProbeStore) replace(results map[int64]externalProbe, all bool) {
+	s.replaceRound(results, all, time.Now().UnixNano())
+}
+
+// replaceRound is replace gated per entry by the round that produced the
+// results: entries from a round that started before the stored one are
+// dropped, so a slow full round cannot clobber fresher targeted results.
+func (s *externalProbeStore) replaceRound(results map[int64]externalProbe, all bool, started int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if all {
-		s.results = make(map[int64]externalProbe, len(results))
+		for id := range s.results {
+			if _, ok := results[id]; ok {
+				continue
+			}
+			if !s.rounds.take(id, started) {
+				continue
+			}
+			delete(s.results, id)
+			delete(s.rounds, id)
+		}
 		for id := range s.failStreak {
 			if _, ok := results[id]; !ok {
 				delete(s.failStreak, id)
@@ -134,7 +169,9 @@ func (s *externalProbeStore) replace(results map[int64]externalProbe, all bool) 
 		}
 	}
 	for id, p := range results {
-		s.results[id] = p
+		if s.rounds.take(id, started) {
+			s.results[id] = p
+		}
 	}
 }
 
@@ -207,6 +244,7 @@ func probeErrorText(err error) string {
 // probeExternalInbounds checks the given imported nodes (all of them when
 // ids is empty) in parallel and records the results.
 func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[int64]externalProbe, error) {
+	started := time.Now().UnixNano()
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
 		return nil, err
@@ -228,6 +266,9 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, externalProbeParallel)
 	for _, row := range targets {
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(row model.NodeInbound) {
@@ -240,7 +281,17 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 		}(row)
 	}
 	wg.Wait()
-	h.externalProbes.replace(results, len(ids) == 0)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	h.externalProbes.replaceRound(results, len(ids) == 0, started)
+
+	// DB-4（移植自 kure29/flyx 3.3.33）：定向探测（手动检测/节点重连
+	// 重测，ids 非空）只刷新缓存，不计入 inbound_down 告警 streak；
+	// streak 与跃迁通知只由定时全量轮驱动（track 段）。
+	if len(ids) > 0 {
+		return results, nil
+	}
 
 	byID := make(map[int64]model.NodeInbound, len(targets))
 	for _, row := range targets {
