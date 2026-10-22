@@ -625,6 +625,19 @@ type subscriptionView struct {
 	IsDefault bool `json:"isDefault"`
 }
 
+// subFormatAlias resolves format aliases shared by the pull side
+// (openSubscription) and the count side (nodeCountFormat) — X-P3-2
+// (B-F2): the two used to resolve aliases independently and the count
+// side missed stash, silently falling back to base64 counts for a
+// format clients actually receive as Clash. Add new aliases here only.
+func subFormatAlias(format string) string {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "stash" {
+		return kernel.FormatClash // Stash reads Clash profiles
+	}
+	return format
+}
+
 // nodeCountFormat resolves the format a subscription view's NodeCount is
 // computed for (A5-02/BC-11): the request's explicit format when it names
 // a supported one, else the format a bare UA-less subscription request
@@ -634,7 +647,7 @@ func nodeCountFormat(format string) string {
 	// FIX2-B（V5-2）：与拉取侧（openSubscription 先 ToLower）同口径
 	// 大小写不敏感；此前 "Clash" 在计数侧静默回落 base64、与实得
 	// 格式分叉且无任何提示。
-	format = strings.ToLower(strings.TrimSpace(format))
+	format = subFormatAlias(format)
 	switch format {
 	case kernel.FormatClash, kernel.FormatSingbox, kernel.FormatSurge,
 		kernel.FormatLoon, kernel.FormatQX, kernel.FormatShadowrocket, kernel.FormatBase64:

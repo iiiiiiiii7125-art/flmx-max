@@ -536,10 +536,8 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	if format == "stash" {
-		format = kernel.FormatClash // Stash reads Clash profiles
-	}
+	// X-P3-2：别名解析与计数侧共用 subFormatAlias，防两处再分叉。
+	format := subFormatAlias(r.URL.Query().Get("format"))
 	if format == "" {
 		format = kernel.FormatForUserAgent(r.UserAgent())
 	}
