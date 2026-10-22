@@ -16,8 +16,9 @@ import (
 //   - 解码容四种 base64 形态（Std 带填充 / RawStd / URL 带填充 /
 //     RawURL），任一成功且字节数恰为 N 即合法——防误拒合法机场密钥
 //     是本项最大风险，下方四形态全入库为硬断言。
-//   - SIP023 冒号多段按段独立校验接受导入；sing-box 渲染对多段与
-//     不合规存量保守略过，Clash / Surge 等格式原样输出。
+//   - SIP023 冒号多段按段独立校验接受导入；sing-box 渲染对不合规
+//     存量保守略过，多段合法节点 R4-SIP023-R 起逐段归一后下发
+//     （见 r4_b2_sip023_test.go），Clash / Surge 等格式原样输出。
 
 // r3b2RawKey 生成含 62/63 六比特组的原始密钥，使 Std 字母表（+/）
 // 与 URL 字母表（-_）的编码串必然不同，四形态互不冒充。
@@ -280,7 +281,7 @@ func TestR3B2ValidateSS2022PasswordHelper(t *testing.T) {
 		t.Fatalf("多段合法密码导入须接受：%v", err)
 	}
 	if ValidSS2022SingleKey(r3b2C256, multi) {
-		t.Fatal("多段密码单段判定须为否（sing-box 保守略过据此）")
+		t.Fatal("多段密码单段判定须为否（一刀切谓词不得放宽，R4-SIP023-R 硬条件；sing-box 面改用逐段谓词）")
 	}
 	if !ValidSS2022SingleKey("aes-256-gcm", "plainpassword") {
 		t.Fatal("非 SS2022 方法单段判定恒真")
@@ -289,7 +290,8 @@ func TestR3B2ValidateSS2022PasswordHelper(t *testing.T) {
 
 // TestR3B2ProxySingboxSS2022Guard：渲染层纵深——存量不合规 SS2022
 // 节点在 sing-box 订阅中略过（兜底存量，不迁移不清理）；多段形态
-// 保守略过 sing-box，但 Clash / Surge 原样输出。
+// R4-SIP023-R 起在 sing-box 逐段归一后下发（本用例断言随裁定更新，
+// 全量见 r4_b2_sip023_test.go），Clash / Surge 原样输出。
 func TestR3B2ProxySingboxSS2022Guard(t *testing.T) {
 	mk := func(cipher, pw string) Endpoint {
 		return Endpoint{Name: "x", Host: "203.0.113.10", Port: 8388, Direct: true,
@@ -311,7 +313,7 @@ func TestR3B2ProxySingboxSS2022Guard(t *testing.T) {
 		{"stock-short-key", r3b2C128, base64.StdEncoding.EncodeToString(r3b2RawKey(8)), false},
 		{"valid-std", r3b2C256, goodStd, true},
 		{"valid-rawurl", r3b2C256, goodRawURL, true},
-		{"multi-segment-skipped", r3b2C256, multi, false},
+		{"multi-segment-released", r3b2C256, multi, true},
 		{"legacy-plaintext-kept", "aes-256-gcm", "plainpassword", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,15 +324,17 @@ func TestR3B2ProxySingboxSS2022Guard(t *testing.T) {
 			// GATE-F1 订正（发版门项 3 裁定渲染侧规范化，supersede 本
 			// 用例初版的「原样」断言）：合法单段 key 渲染为带填充 Std
 			// 规范形态，非规范形态原样输出正是发版门 FAIL 点；legacy
-			// 口令经 helper 原样返回，断言对其不变。
-			if ok && outs[0]["password"] != NormalizedSS2022Password(tc.cipher, tc.pw) {
+			// 口令经 helper 原样返回，断言对其不变。R4-SIP023-R：
+			// sing-box 面改与 Clash 面同 helper（逐段归一）——单段时
+			// Segments 与单段 helper 等值、legacy 恒等，唯多段不同。
+			if ok && outs[0]["password"] != NormalizedSS2022PasswordSegments(tc.cipher, tc.pw) {
 				t.Fatalf("渲染密码须为规范化形态：%v", outs[0])
 			}
 		})
 	}
 
-	// 多段形态：不得被 sing-box 的保守口径连坐（Clash / Surge 均须
-	// 输出）。GATE-F1 订正：Clash 面由「原样」改为逐段归一——双客户
+	// 多段形态：Clash / Surge 均须输出（sing-box 面见上表已解除）。
+	// GATE-F1 订正：Clash 面由「原样」改为逐段归一——双客户
 	// 端二进制实测 mihomo 按段以带填充 Std 解码，本用例 multi 的第
 	// 二段是 RawURL 形态、原样输出整表 -t 失败；逐段归一解码字节
 	// 不变。Surge 维持原样（其段解码未经二进制证实）。
