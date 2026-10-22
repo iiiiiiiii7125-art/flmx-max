@@ -96,6 +96,17 @@ func (s *externalProbeStore) unmarkDown(id int64) {
 	delete(s.down, id)
 }
 
+// remarkDown 是恢复向的对偶回滚（R2X-017）：恢复通知发送失败时把 down
+// 标记置回，使下一轮探测（节点仍可达）重新产出恢复跃迁并补发。
+func (s *externalProbeStore) remarkDown(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.down == nil {
+		s.down = make(map[int64]bool)
+	}
+	s.down[id] = true
+}
+
 func (s *externalProbeStore) get(id int64) (externalProbe, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -216,6 +227,7 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 				})
 		} else {
 			name := t.row.Name
+			rowID := t.row.ID
 			h.notifyTracked(notifyEventInboundDown, "导入节点已恢复",
 				fmt.Sprintf("节点：%s\n地址：%s", t.row.Name, addr),
 				func(outcome notifyOutcome) {
@@ -223,6 +235,12 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 					if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
 						h.notifier.forgetFingerprintPrefix(
 							notifyEventInboundDown + "\x00导入节点连不上\x00节点：" + name + "\n")
+					}
+					// R2X-017：恢复发送失败置回 down 标记（remarkDown
+					// 对偶），下一轮探测重新产出恢复跃迁补发；Disabled
+					// 维持 V-16 语义不动。
+					if outcome == notifyOutcomeFailed {
+						h.externalProbes.remarkDown(rowID)
 					}
 				})
 		}

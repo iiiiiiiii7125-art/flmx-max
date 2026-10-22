@@ -75,9 +75,14 @@ type Handler struct {
 	notifyCfgVals map[string]string
 	notifyCfgAt   time.Time
 
-	upgradeMu                   sync.Mutex
-	systemUpgradeMu             sync.Mutex
-	pendingUpgradeRedeploy      map[int64]struct{}
+	// R2X-018：日报待发原文缓存（notify_reports.go）。首次生成后
+	// 同日重试逐字复用，snapshot 与 daily_last 仅整条投递成功时推进。
+	dailyMu      sync.Mutex
+	dailyPending *dailyReportPending
+
+	upgradeMu              sync.Mutex
+	systemUpgradeMu        sync.Mutex
+	pendingUpgradeRedeploy map[int64]struct{}
 	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
 	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
 	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
@@ -87,8 +92,8 @@ type Handler struct {
 	quotaEnforceLocks map[int64]*sync.Mutex
 	// FIX2-A（V2-08）：转发计数入账 per-node 串行化锁（基线读→差分
 	// →落库整段），防 settle/周期/重连多路轮询以同一旧基线重复差分。
-	nodeAccountingMu    sync.Mutex
-	nodeAccountingLocks map[int64]*sync.Mutex
+	nodeAccountingMu            sync.Mutex
+	nodeAccountingLocks         map[int64]*sync.Mutex
 	nodeOnlineRedeployAt        map[int64]time.Time
 	nodeOnlineRedeployQueued    map[int64]struct{}
 	nodeOnlineRedeploying       map[int64]struct{}
