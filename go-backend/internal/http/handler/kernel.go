@@ -643,6 +643,34 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(views))
 }
 
+// decodeInboundRequest decodes an inbound save payload like decodeJSON
+// (same 10MB limit and DisallowUnknownFields strictness) and additionally
+// reports which top-level JSON keys were present. Presence cannot be
+// recovered from the decoded struct alone: an omitted object and an object
+// sent with every field cleared both decode to the zero value, but the
+// update path must treat them differently (GATE-F2).
+func decodeInboundRequest(body io.ReadCloser, req *inboundRequest) (map[string]bool, error) {
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, body, 10<<20))
+	_ = body.Close()
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(req); err != nil {
+		return nil, err
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	present := make(map[string]bool, len(top))
+	for k := range top {
+		present[k] = true
+	}
+	return present, nil
+}
+
 func (h *Handler) inboundCreate(w http.ResponseWriter, r *http.Request) {
 	h.inboundSave(w, r, false)
 }
@@ -657,7 +685,8 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		return
 	}
 	var req inboundRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	present, err := decodeInboundRequest(r.Body, &req)
+	if err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
@@ -712,6 +741,27 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		// Keep secrets the client did not resend (the list hides PEM).
 		old, _ := inboundFromModel(row)
 		oldIn = &old
+		// GATE-F2（R3X-012 整对象限定）：载荷整对象省略 settings /
+		// transport / security / extra 时整对象保留旧值。结构体解码无法
+		// 区分「对象缺席」与「对象在场但子字段清空」，故 presence 取自
+		// 原始 JSON 顶层键（decodeInboundRequest）。批 7 的字段级回填只
+		// 覆盖对象在场情形；整对象缺席时旧实现把零值交给 Normalize 取
+		// 默认（security.Type=""→目录首选安全层），ShadowTLS 被静默剥
+		// 离为 none、口令丢失（发版门项 8）。对象在场时本块不触发，显式
+		// 语义不变：security 在场且 type 显式传 "none" 仍是合法关闭路
+		// 径、extra 在场传空串仍是合法清空。创建路径不进入本块。
+		if !present["settings"] {
+			req.Settings = old.Settings
+		}
+		if !present["transport"] {
+			req.Transport = old.Transport
+		}
+		if !present["security"] {
+			req.Security = old.Security
+		}
+		if !present["extra"] {
+			req.Extra = string(old.Extra)
+		}
 		if req.Security.Type == old.Security.Type && req.Security.CertMode == old.Security.CertMode &&
 			req.Security.CertPEM == "" && req.Security.KeyPEM == "" {
 			req.Security.CertPEM, req.Security.KeyPEM = old.Security.CertPEM, old.Security.KeyPEM
