@@ -73,6 +73,55 @@ func ValidateMonitorTCPTarget(target string) error {
 	return err
 }
 
+// ValidateNodeMonitorTarget 校验节点执行的服务监控目标（R4X-008）。
+// 与面板本机面 ValidateMonitorTCPTarget 的分工：本机面按 NonPublic
+// 全集 + allowlist 把关（面板进程直接拨号）；节点面只补硬拒子集
+// 底线——目标字面 IP 或解析结果任一命中 netguard 硬拒层（元数据
+// 精确集 ∪ 169.254/16 ∪ 未指定 ∪ 本地 NAT64）即拒绝。私网/回环/
+// CGNAT/保留/组播/链路本地一律放行：节点监控其所在 LAN 服务是该
+// 功能的正当用途，严禁顺手禁（防过修口径，verdicts §5 写死）。
+// 主机名解析失败不拒存——面板与节点 DNS 分视图，节点侧可能可解析；
+// 执行端（agent）另有字面量 + 解析落点双重复检兜底。typ 为 "tcp"
+// 时 target 须为 host:port；"icmp" 时为裸主机（可带 [] 的 IPv6）。
+func ValidateNodeMonitorTarget(typ, target string) error {
+	host := strings.TrimSpace(target)
+	if strings.EqualFold(strings.TrimSpace(typ), "tcp") {
+		h, port, err := net.SplitHostPort(host)
+		if err != nil {
+			return fmt.Errorf("目标地址格式错误（应为 host:port）")
+		}
+		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			return fmt.Errorf("目标端口无效: %s", port)
+		}
+		host = h
+	} else {
+		// ICMP 裸主机形态：容忍 [v6] 包裹，与 agent icmpPing 同口径。
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		}
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("目标主机为空")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if netguard.Classify(ip).HardDeny {
+			return fmt.Errorf("目标地址不允许（元数据/硬拒绝地址）: %s", target)
+		}
+		return nil
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		// 解析失败不拒存（见函数头注）。
+		return nil
+	}
+	for _, ip := range ips {
+		if netguard.Classify(ip).HardDeny {
+			return fmt.Errorf("目标地址不允许（元数据/硬拒绝地址）: %s", target)
+		}
+	}
+	return nil
+}
+
 // resolveValidatedMonitorIPs 解析主机名并逐 IP 做 SSRF 判定，
 // 返回全部通过校验的 IP（fail-closed：任一命中即整体拒绝）。
 // R5R2-001: 调用方应直接拨号返回的 IP 字面量，不再二次解析

@@ -71,9 +71,61 @@ func newTCPPingTestReporter(t *testing.T) (*WebSocketReporter, *websocket.Conn) 
 	return reporter, panelConn
 }
 
-func newTCPPingTestTarget(t *testing.T) (int, *atomic.Int64) {
+// localPingTargetIP picks a local interface address the probe policy
+// allows (R4X-020 后回环字面量与 localhost 解析落点均被拒，队列测试
+// 的健康目标改用本机私网/ULA 接口地址；判定直接复用产品谓词防漂移）。
+// 候选须实测可自拨（监听+连接一次）——某些沙箱的接口地址被平台
+// 拦截（如 ULA 出口地址），不可拨的地址不作健康目标；全无可用
+// 地址时 Skip（队列机制由其余不需要成功探测的用例覆盖）。
+func localPingTargetIP(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("cannot enumerate interfaces: %v", err)
+	}
+	var candidates []string
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() || tcpPingLiteralTargetDenied(ip.String()) {
+			continue
+		}
+		candidates = append(candidates, ip.String())
+	}
+	for _, cand := range candidates {
+		ln, err := net.Listen("tcp", net.JoinHostPort(cand, "0"))
+		if err != nil {
+			continue
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if c, err := ln.Accept(); err == nil {
+				_ = c.Close()
+			}
+		}()
+		conn, err := net.DialTimeout("tcp", ln.Addr().String(), 2*time.Second)
+		_ = ln.Close()
+		if err != nil {
+			continue
+		}
+		_ = conn.Close()
+		<-done
+		return cand
+	}
+	t.Skip("no policy-allowed, self-dialable local interface address for probe target")
+	return ""
+}
+
+func newTCPPingTestTarget(t *testing.T) (string, int, *atomic.Int64) {
+	t.Helper()
+	host := localPingTargetIP(t)
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,14 +141,14 @@ func newTCPPingTestTarget(t *testing.T) (int, *atomic.Int64) {
 			conn.Close()
 		}
 	}()
-	return listener.Addr().(*net.TCPAddr).Port, accepted
+	return host, listener.Addr().(*net.TCPAddr).Port, accepted
 }
 
 func TestTCPPingQueueCompletesMoreThanEightTargets(t *testing.T) {
 	for _, total := range []int{9, 30} {
 		t.Run(fmt.Sprintf("targets_%d", total), func(t *testing.T) {
 			reporter, panel := newTCPPingTestReporter(t)
-			port, _ := newTCPPingTestTarget(t)
+			host, port, _ := newTCPPingTestTarget(t)
 			// Even when other read-only commands are busy, TCP probes must queue.
 			for i := 0; i < maxConcurrentReadCommands; i++ {
 				reporter.readCommandSem <- struct{}{}
@@ -104,7 +156,7 @@ func TestTCPPingQueueCompletesMoreThanEightTargets(t *testing.T) {
 			for i := 0; i < total; i++ {
 				raw, err := json.Marshal(CommandMessage{
 					Type: "TcpPing", RequestId: fmt.Sprintf("target-%d", i), TimeoutMS: 5000,
-					Data: TcpPingRequest{IP: "localhost", Port: port, Count: 4, Timeout: 2000},
+					Data: TcpPingRequest{IP: host, Port: port, Count: 4, Timeout: 2000},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -133,7 +185,7 @@ func TestTCPPingQueueCompletesMoreThanEightTargets(t *testing.T) {
 
 func TestTCPPingQueueSkipsExpiredTargets(t *testing.T) {
 	reporter, panel := newTCPPingTestReporter(t)
-	port, accepted := newTCPPingTestTarget(t)
+	_, port, accepted := newTCPPingTestTarget(t)
 	reporter.dispatchCommand(CommandMessage{
 		Type: "TcpPing", RequestId: "expired", TimeoutMS: 1,
 		Data: TcpPingRequest{IP: "127.0.0.1", Port: port, Count: 4, Timeout: 2000},
@@ -168,7 +220,7 @@ func TestTCPPingQueueReportsFullWithoutBlockingReceiver(t *testing.T) {
 
 func TestTCPPingExecutionHonorsCancellation(t *testing.T) {
 	reporter, _ := newTCPPingTestReporter(t)
-	port, accepted := newTCPPingTestTarget(t)
+	host, port, accepted := newTCPPingTestTarget(t)
 	ctx, cancel := context.WithCancel(reporter.ctx)
 	defer cancel()
 	type result struct {
@@ -177,7 +229,7 @@ func TestTCPPingExecutionHonorsCancellation(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := reporter.handleTcpPing(ctx, TcpPingRequest{IP: "localhost", Port: port, Count: 1000, Timeout: 5000})
+		res, err := reporter.handleTcpPing(ctx, TcpPingRequest{IP: host, Port: port, Count: 1000, Timeout: 5000})
 		done <- result{res, err}
 	}()
 	// Wait for the second accept: the first connection sits in the
@@ -207,11 +259,11 @@ func TestTCPPingExecutionHonorsCancellation(t *testing.T) {
 
 func TestTCPPingQueueStopsWithPendingAndRunningProbes(t *testing.T) {
 	reporter, _ := newTCPPingTestReporter(t)
-	port, accepted := newTCPPingTestTarget(t)
+	host, port, accepted := newTCPPingTestTarget(t)
 	for i := 0; i < 30; i++ {
 		reporter.dispatchCommand(CommandMessage{
 			Type: "TcpPing", RequestId: fmt.Sprint(i),
-			Data: TcpPingRequest{IP: "localhost", Port: port, Count: 1000, Timeout: 5000},
+			Data: TcpPingRequest{IP: host, Port: port, Count: 1000, Timeout: 5000},
 		})
 	}
 	reporter.startTCPPingWorkers()
