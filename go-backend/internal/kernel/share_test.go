@@ -115,7 +115,7 @@ func TestFormatForUserAgent(t *testing.T) {
 	cases := map[string]string{
 		"clash-verge/v2.0":            FormatClash,
 		"mihomo/1.19":                 FormatClash,
-		"Stash/2.4":                   FormatClash,
+		"Stash/2.4":                   FormatStash, // DA-7（1.4.0）：Stash 一等格式，不再别名 Clash
 		"sing-box 1.12.0":             FormatSingbox,
 		"SFA/1.11":                    FormatSingbox,
 		"Surge iOS/2920":              FormatSurge,

@@ -48,6 +48,9 @@ const (
 	FormatClash   = "clash"
 	FormatSingbox = "singbox"
 	FormatSurge   = "surge"
+	// FormatStash is a Clash profile for Stash: its rule sets are YAML,
+	// since only Mihomo reads .mrs, and it leaves out Mihomo-only settings.
+	FormatStash = "stash"
 )
 
 func (e Endpoint) selfSigned() bool {
@@ -647,7 +650,9 @@ func FormatForUserAgent(ua string) string {
 		return FormatQX
 	case strings.Contains(ua, "sing-box") || strings.Contains(ua, "singbox") || strings.Contains(ua, "sfa") || strings.Contains(ua, "sfi") || strings.Contains(ua, "sfm"):
 		return FormatSingbox
-	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "stash") || strings.Contains(ua, "meta"):
+	case strings.Contains(ua, "stash"):
+		return FormatStash
+	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "meta"):
 		return FormatClash
 	case strings.Contains(ua, "surge") || strings.Contains(ua, "surfboard") || strings.Contains(ua, "egern"):
 		// Surfboard 与 Egern 消费 Surge 格式配置。
@@ -671,7 +676,9 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		}
 		return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n"))), "text/plain; charset=utf-8", nil
 	case FormatClash:
-		return clashProfile(endpoints, groups, opts), "text/yaml; charset=utf-8", nil
+		return clashProfile(endpoints, groups, opts, false), "text/yaml; charset=utf-8", nil
+	case FormatStash:
+		return clashProfile(endpoints, groups, opts, true), "text/yaml; charset=utf-8", nil
 	case FormatShadowrocket:
 		if opts.Rules {
 			return shadowrocketConfig(endpoints, opts), "text/yaml; charset=utf-8", nil
@@ -760,7 +767,9 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 	return "", "", fmt.Errorf("不支持的订阅格式 %s", format)
 }
 
-func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) string {
+// stash writes rule sets as YAML and leaves out the Mihomo-only DNS and
+// sniffer settings.
+func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions, stash bool) string {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
@@ -830,7 +839,7 @@ func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) strin
 			}
 			ruleGroups = append(ruleGroups, yamlNode{{"name", g.name}, {"type", "select"}, {"proxies", members}})
 		}
-		providers, rules = clashRules(opts)
+		providers, rules = clashRules(opts, stash)
 	}
 	profile := yamlNode{
 		{"mixed-port", 7890},
@@ -838,7 +847,7 @@ func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) strin
 		{"mode", "rule"},
 		{"log-level", "warning"},
 	}
-	if opts.Rules {
+	if opts.Rules && !stash {
 		profile = append(profile, clashRuleSettings()...)
 	}
 	profile = append(profile,
