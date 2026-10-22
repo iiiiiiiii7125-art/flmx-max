@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -600,8 +601,19 @@ func (r *Repository) GetUserByID(id int64) (*model.User, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
+	return getUserByID(r.db, id)
+}
+
+func (r *Repository) GetUserByIDTx(tx *gorm.DB, id int64) (*model.User, error) {
+	if tx == nil {
+		return nil, errors.New("database unavailable")
+	}
+	return getUserByID(tx, id)
+}
+
+func getUserByID(db *gorm.DB, id int64) (*model.User, error) {
 	var user model.User
-	err := r.db.Where("id = ?", id).First(&user).Error
+	err := db.Where("id = ?", id).First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -2013,13 +2025,20 @@ func (r *Repository) MarkPeerShareRuntimeReleasedByPort(shareID int64, port int,
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	return markPeerShareRuntimeReleasedByPortTx(r.db, shareID, port, updatedTime)
+}
+
+func markPeerShareRuntimeReleasedByPortTx(tx *gorm.DB, shareID int64, port int, updatedTime int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
 	if shareID <= 0 || port <= 0 {
 		return nil
 	}
 	if updatedTime <= 0 {
 		updatedTime = unixMilliNow()
 	}
-	return r.db.Model(&model.PeerShareRuntime{}).Where("share_id = ? AND port = ? AND status = 1", shareID, port).Updates(map[string]interface{}{
+	return tx.Model(&model.PeerShareRuntime{}).Where("share_id = ? AND port = ? AND status = 1", shareID, port).Updates(map[string]interface{}{
 		"status":       0,
 		"applied":      0,
 		"service_name": "",
@@ -2092,6 +2111,35 @@ func (r *Repository) DeleteFederationTunnelBindingsByTunnel(tunnelID int64) erro
 }
 
 // ─── Export Methods ──────────────────────────────────────────────────
+
+// withContext 返回共享同一连接池、但 DB 会话绑定 ctx 的仓库克隆。
+// X-P3-21+X-P3-25（L-08-3＋L-10-1）：Export/Import 经克隆把请求
+// ctx 下传到每条查询（GORM WithContext），客户端断连后导出不再
+// 照跑到底；导入整单事务语义维持（有意），ctx 取消可中止等待。
+func (r *Repository) withContext(ctx context.Context) *Repository {
+	if r == nil || r.db == nil || ctx == nil {
+		return r
+	}
+	clone := *r
+	clone.db = r.db.WithContext(ctx)
+	return &clone
+}
+
+// ExportAllContext 同 ExportAll，但全部查询绑定 ctx。
+func (r *Repository) ExportAllContext(ctx context.Context) (*model.BackupData, error) {
+	return r.withContext(ctx).ExportAll()
+}
+
+// ExportPartialContext 同 ExportPartial，但全部查询绑定 ctx。
+func (r *Repository) ExportPartialContext(ctx context.Context, types []string) (*model.BackupData, error) {
+	return r.withContext(ctx).ExportPartial(types)
+}
+
+// ImportContext 同 Import（整单事务语义不变），但事务绑定 ctx：
+// 请求取消/断连可中止导入的连接等待，不再无限排队。
+func (r *Repository) ImportContext(ctx context.Context, backup *model.BackupData, types []string) (*model.ImportResult, error) {
+	return r.withContext(ctx).Import(backup, types)
+}
 
 func (r *Repository) ExportAll() (*model.BackupData, error) {
 	backup := &model.BackupData{Version: "1.0", ExportedAt: unixMilliNow()}
@@ -3712,6 +3760,17 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, s
 		if mapped, ok := subRemap[subID]; ok {
 			subID = mapped
 		}
+		// R1 X-P2-7（H1-01，BC-08）：此前只校验订阅侧，用户不存在
+		// 时悬空分配照样落库且回执假报 imported。落库前补 user
+		// 存在性校验（与订阅侧同口径）：不存在 → skipped++ 不落库。
+		userExists, err := rowExistsTx(tx, &model.User{}, r.UserID)
+		if err != nil {
+			return imported, skipped, err
+		}
+		if !userExists {
+			skipped++
+			continue
+		}
 		var exists int64
 		if err := tx.Model(&model.Subscription{}).Where("id = ?", subID).Count(&exists).Error; err != nil {
 			return imported, skipped, err
@@ -3733,7 +3792,7 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, s
 			SubscriptionID: subID,
 			CreatedTime:    r.CreatedTime,
 		}
-		err := tx.Clauses(clause.OnConflict{
+		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "subscription_id", "created_time",
@@ -4195,8 +4254,19 @@ func (r *Repository) GetUserTunnelByID(id int64) (*model.UserTunnel, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
+	return getUserTunnelByID(r.db, id)
+}
+
+func (r *Repository) GetUserTunnelByIDTx(tx *gorm.DB, id int64) (*model.UserTunnel, error) {
+	if tx == nil {
+		return nil, errors.New("database unavailable")
+	}
+	return getUserTunnelByID(tx, id)
+}
+
+func getUserTunnelByID(db *gorm.DB, id int64) (*model.UserTunnel, error) {
 	var ut model.UserTunnel
-	err := r.db.Where("id = ?", id).First(&ut).Error
+	err := db.Where("id = ?", id).First(&ut).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

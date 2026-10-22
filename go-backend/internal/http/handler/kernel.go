@@ -444,6 +444,21 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 		}
 		h.refreshNodeKernelStatus(k.NodeID)
 	case "remove":
+		// X-P2-2（V-03）：删前链式引用守卫——该内核入站被跨内核/跨节点
+		// 入站用作出站时默认拒绝并列明引用方；Force 放行但回传清单。
+		brokenReferrers, guardMsg := h.kernelChainGuard(k.ID)
+		if guardMsg != "" && !req.Force {
+			response.WriteJSON(w, response.R{
+				Code: -1,
+				Msg:  guardMsg,
+				TS:   time.Now().UnixMilli(),
+				Data: map[string]interface{}{
+					"brokenReferrers":     brokenReferrers,
+					"brokenReferrerCount": len(brokenReferrers),
+				},
+			})
+			return
+		}
 		unlock := lockKernelApply(k.ID)
 		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
 			"type": k.KernelType, "action": "remove",
@@ -462,6 +477,13 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 		unlock()
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if len(brokenReferrers) > 0 {
+			response.WriteJSON(w, response.OK(map[string]interface{}{
+				"brokenReferrers":     brokenReferrers,
+				"brokenReferrerCount": len(brokenReferrers),
+			}))
 			return
 		}
 	default:
@@ -633,6 +655,16 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-27（L-11-2）：新建分支接入 Idempotency-Key 机制。
+	if !update {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空且不超过 100 字"))
@@ -706,6 +738,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	}
 	if req.OutboundIPStrategy != nil {
 		in.OutboundIPStrategy = *req.OutboundIPStrategy
+	}
+	// X-P3-4（D-R1-01）：更新时省略 port 回退已存行端口——与密钥/策略/
+	// Enabled 的 presence 保留同口径；此前唯 port 例外，只改名的更新
+	// 会被静默改派随机端口。创建路径不变（仍随机分配）。
+	if update && req.Port == 0 {
+		in.Port = row.Port
 	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
@@ -926,8 +964,13 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := h.repo.GetNodeInbound(id)
-	if err != nil || row == nil {
-		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if row == nil {
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 	if msg := h.chainInUseMessage(row); msg != "" {
@@ -1754,7 +1797,20 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			if s.Error != "" {
 				msg += "\n错误：" + truncate(s.Error, 300)
 			}
-			h.notify(notifyEventKernelError, "内核运行出错", msg)
+			kernelID, prevStatus := k.ID, k.Status
+			h.notifyTracked(notifyEventKernelError, "内核运行出错", msg, func(outcome notifyOutcome) {
+				// X-P2-8（A7-03 同族）：发送失败回滚 error 置位。下方 fields
+				// 更新已把状态落为 error，若不回滚，下一轮 KernelStatus 因
+				// 「已是 error」永不再触发、告警永久丢失（旧实现为裸 notify
+				// 无条件落状态）。仅当 DB 仍为 error 时回滚为触发前状态，
+				// 期间已恢复/被改状态则不覆盖。
+				if outcome != notifyOutcomeFailed || h.repo == nil {
+					return
+				}
+				if cur, err := h.repo.GetNodeKernel(kernelID); err == nil && cur != nil && cur.Status == kernelStatusError {
+					_ = h.repo.UpdateNodeKernelFields(kernelID, map[string]interface{}{"status": prevStatus})
+				}
+			})
 		}
 		if newStatus != kernelStatusError && k.Status == kernelStatusError && h.notifier != nil {
 			// A7-02：内核恢复没有恢复通知可挂——直接清掉该内核的问题

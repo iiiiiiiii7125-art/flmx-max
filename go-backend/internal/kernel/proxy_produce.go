@@ -240,10 +240,11 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 		// rejects 6 outright — keep 6 out, render the rest. 此前按
 		// v1-v3 的旧口径把 v4/v5 一并丢弃，与自建入站的 Clash 渲染
 		// (clashSnell) 同批订正。
-		switch v := p.num("version"); {
-		case v == 5:
+		srcVersion := p.num("version")
+		switch {
+		case srcVersion == 5:
 			p["version"] = 4
-		case v > 5:
+		case srcVersion > 5:
 			return nil, false
 		}
 		// Snell over ShadowTLS is stored panel-side under "shadow-tls";
@@ -257,6 +258,18 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 			p["obfs-opts"] = map[string]interface{}{"mode": "shadowtls", "host": st.str("host"),
 				"password": st.str("password"), "version": version}
 		}
+		// X-P3-11（L-02-1）：udp 不透传源值（sing-box 来源恒 true、
+		// Clash 来源可缺键），按版本/ShadowTLS 语义合成，与自建入站
+		// clashSnell 的 Network() 口径一致：ShadowTLS 前置只暴露 TCP、
+		// v4 无 UDP（缺省版本按导入口径为 4），其余（v5 等）带 UDP；
+		// 恒显式输出布尔。合成须用归一前的源版本（v5 渲染成 4 但有 UDP）。
+		effVersion := srcVersion
+		if effVersion == 0 {
+			effVersion = 4
+		}
+		shadowTLS := p.sub("shadow-tls").str("password") != "" ||
+			p.sub("obfs-opts").str("mode") == "shadowtls"
+		p["udp"] = !shadowTLS && effVersion != 4
 	}
 	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS (converted above)
 	node := yamlNode{{"name", e.Name}, {"type", p.Type()}, {"server", p.str("server")}, {"port", e.Port}}

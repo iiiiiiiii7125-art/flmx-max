@@ -2,11 +2,11 @@ package handler
 
 import (
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
 
-	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -24,6 +24,9 @@ type flowUploadBatch struct {
 	peerShareForwardItems map[string]flowItem
 	peerShareRuntimeItems map[int64]flowItem
 	peerShareUsage        map[int64]int64
+	// seqAdvance X-P3-31：agent 上报路径设置——入账单事务提交时同
+	// tx 推进 seq；非上报路径（策略单条/内部调用）为 nil。
+	seqAdvance *repo.FlowSeqAdvance
 }
 
 func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
@@ -35,7 +38,24 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		peerShareRuntimeItems: make(map[int64]flowItem),
 	}
 	policySeen := map[flowPolicyTarget]struct{}{}
-	flowSeen := map[int64]int{}
+
+	// X-P3-18（L-05-1）：gost 合并/缩放溢出检查（对齐 nft 路径：溢出
+	// 整条丢弃并记日志）。旧实现逐项直接累加，两条各 ≈9.2e18 的上报
+	// 合并回绕为负、负增量落账。现本地转发先聚合到 pending（任一加法
+	// 溢出即整条转发丢弃），最后统一落 batch；peer 合并同口径丢弃。
+	type pendingLocal struct {
+		userID, userTunnelID int64
+		rawIn, rawOut        int64
+		scaledIn, scaledOut  int64
+	}
+	pending := make(map[int64]*pendingLocal)
+	pendingOrder := make([]int64, 0)
+	droppedLocal := make(map[int64]struct{})
+	droppedPeerRuntime := make(map[int64]struct{})
+	droppedPeerForward := make(map[string]struct{})
+	addOverflows := func(a, b int64) bool {
+		return (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b)
+	}
 
 	for _, item := range items {
 		// H-17: 丢弃负流量值。/flow/upload 仅凭节点 secret 鉴权，攻击者可伪造
@@ -48,7 +68,16 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 			continue
 		}
 		if runtimeID, ok := parsePeerShareRuntimeServiceID(serviceName); ok {
+			if _, dropped := droppedPeerRuntime[runtimeID]; dropped {
+				continue
+			}
 			merged := batch.peerShareRuntimeItems[runtimeID]
+			if addOverflows(merged.U, item.U) || addOverflows(merged.D, item.D) {
+				log.Printf("gost overflow discard peer runtime_id=%d service=%s u=%d d=%d", runtimeID, serviceName, item.U, item.D)
+				delete(batch.peerShareRuntimeItems, runtimeID)
+				droppedPeerRuntime[runtimeID] = struct{}{}
+				continue
+			}
 			merged.N = serviceName
 			merged.U += item.U
 			merged.D += item.D
@@ -60,11 +89,19 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 			continue
 		}
 		normalized := normalizeForwardRuntimeServiceName(serviceName)
-		merged := batch.peerShareForwardItems[normalized]
-		merged.N = normalized
-		merged.U += item.U
-		merged.D += item.D
-		batch.peerShareForwardItems[normalized] = merged
+		if _, dropped := droppedPeerForward[normalized]; !dropped {
+			merged := batch.peerShareForwardItems[normalized]
+			if addOverflows(merged.U, item.U) || addOverflows(merged.D, item.D) {
+				log.Printf("gost overflow discard peer service=%s u=%d d=%d", normalized, item.U, item.D)
+				delete(batch.peerShareForwardItems, normalized)
+				droppedPeerForward[normalized] = struct{}{}
+			} else {
+				merged.N = normalized
+				merged.U += item.U
+				merged.D += item.D
+				batch.peerShareForwardItems[normalized] = merged
+			}
+		}
 
 		meta, exists := metas[forwardID]
 		if !exists {
@@ -75,11 +112,9 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		// a service name (including stale user-tunnel IDs after reassignment).
 		userID, userTunnelID = meta.UserID, meta.UserTunnelID
 
-		raw := batch.forwardTraffic[forwardID]
-		raw.bytesIn += item.D
-		raw.bytesOut += item.U
-		batch.forwardTraffic[forwardID] = raw
-
+		if _, dropped := droppedLocal[forwardID]; dropped {
+			continue
+		}
 		// N-01（方向钉死，勿再按字面交换）：agent 上报线格式的 U/D 与
 		// 「上行/下行」字面相反。agent 在 go-gost/x/service/service.go 以
 		// AddTraffic(name, outputBytes, inputBytes) 填充：U=gost
@@ -87,7 +122,7 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		// （入）。真机实证（w10-run/N-01）：下载 12,582,912 字节时
 		// U=12,583,527、D=267。故 InFlow（入）=item.D、OutFlow（出）
 		// =item.U，与 nftables/realm 路径 BytesIn=to-target（renderer
-		// 按目标地址计数）完全一致；上方 raw.bytesIn/bytesOut 同此映射，
+		// 按目标地址计数）完全一致；raw.bytesIn/bytesOut 同此映射，
 		// 隧道指标桶三条路径同口径。
 		// 此前 O6-002 按「U=入」的字面假设交换过 scaledIn/scaledOut：
 		// 双向计费时总额不变，但 TunnelFlow=1（单向，仅计入方向）时
@@ -96,32 +131,63 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		// Flow=1 单向：仅入方向（InFlow）；Flow!=1 双向：入+出。
 		// 历史 bug：曾把 Flow 当乘数用，导致 Flow=2 双倍扣费（1.0.7
 		// M-001 已修复）；quotaUsage 始终为 scaledIn+scaledOut。
-		scaledIn := int64(float64(item.D) * meta.TrafficRatio)
-		var scaledOut int64
+		scaledInF := float64(item.D) * meta.TrafficRatio
+		var scaledOutF float64
 		if meta.TunnelFlow != 1 {
-			scaledOut = int64(float64(item.U) * meta.TrafficRatio)
+			scaledOutF = float64(item.U) * meta.TrafficRatio
 		}
-		if idx, ok := flowSeen[forwardID]; ok {
-			batch.flowDeltas[idx].InFlow += scaledIn
-			batch.flowDeltas[idx].OutFlow += scaledOut
-		} else {
-			flowSeen[forwardID] = len(batch.flowDeltas)
-			batch.flowDeltas = append(batch.flowDeltas, repo.FlowUploadCounterDelta{
-				ForwardID:    forwardID,
-				UserID:       userID,
-				UserTunnelID: userTunnelID,
-				InFlow:       scaledIn,
-				OutFlow:      scaledOut,
-			})
+		if scaledInF > math.MaxInt64 || scaledOutF > math.MaxInt64 || scaledInF < 0 || scaledOutF < 0 {
+			log.Printf("gost scale overflow discard forward_id=%d u=%d d=%d ratio=%v", forwardID, item.U, item.D, meta.TrafficRatio)
+			delete(pending, forwardID)
+			droppedLocal[forwardID] = struct{}{}
+			continue
 		}
-		batch.quotaUsage[userID] += scaledIn + scaledOut
+		scaledIn := int64(scaledInF)
+		scaledOut := int64(scaledOutF)
 
-		target := flowPolicyTarget{UserID: userID, UserTunnelID: userTunnelID}
+		pl, seen := pending[forwardID]
+		if !seen {
+			pl = &pendingLocal{userID: userID, userTunnelID: userTunnelID}
+			pending[forwardID] = pl
+			pendingOrder = append(pendingOrder, forwardID)
+		}
+		if addOverflows(pl.rawIn, item.D) || addOverflows(pl.rawOut, item.U) ||
+			addOverflows(pl.scaledIn, scaledIn) || addOverflows(pl.scaledOut, scaledOut) {
+			log.Printf("gost merge overflow discard forward_id=%d u=%d d=%d", forwardID, item.U, item.D)
+			delete(pending, forwardID)
+			droppedLocal[forwardID] = struct{}{}
+			continue
+		}
+		pl.rawIn += item.D
+		pl.rawOut += item.U
+		pl.scaledIn += scaledIn
+		pl.scaledOut += scaledOut
+	}
+
+	// 落账：按首见顺序把 pending 写进 batch（quota 合计溢出同样整条丢弃）。
+	for _, forwardID := range pendingOrder {
+		pl, ok := pending[forwardID]
+		if !ok {
+			continue // 已因溢出丢弃
+		}
+		if addOverflows(pl.scaledIn, pl.scaledOut) || addOverflows(batch.quotaUsage[pl.userID], pl.scaledIn+pl.scaledOut) {
+			log.Printf("gost quota overflow discard forward_id=%d scaled_in=%d scaled_out=%d", forwardID, pl.scaledIn, pl.scaledOut)
+			continue
+		}
+		batch.forwardTraffic[forwardID] = tunnelTrafficDelta{bytesIn: pl.rawIn, bytesOut: pl.rawOut}
+		batch.flowDeltas = append(batch.flowDeltas, repo.FlowUploadCounterDelta{
+			ForwardID:    forwardID,
+			UserID:       pl.userID,
+			UserTunnelID: pl.userTunnelID,
+			InFlow:       pl.scaledIn,
+			OutFlow:      pl.scaledOut,
+		})
+		batch.quotaUsage[pl.userID] += pl.scaledIn + pl.scaledOut
+		target := flowPolicyTarget{UserID: pl.userID, UserTunnelID: pl.userTunnelID}
 		if _, seen := policySeen[target]; !seen {
 			policySeen[target] = struct{}{}
 			batch.policyTargets = append(batch.policyTargets, target)
 		}
-
 	}
 
 	sort.Slice(batch.policyTargets, func(i, j int) bool {
@@ -134,12 +200,22 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 	return batch
 }
 
-func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now time.Time) {
+// applyFlowUploadBatch 返回入账错误（X-P3-31/V-08）：总量+quota 由
+// repo 单事务原子入账（seqAdvance 非 nil 时 seq 同 tx 推进）；失败时
+// 整批未入账，策略执行/孤儿清理/peer-share 结算一律不进行，调用方
+// （flowUpload）据此整批拒收返非 ok，agent 同 seq 重报重新入账。
+// 旧「两段分开写、一段失败另一段继续 + 逐条 fallback」取舍已按
+// V-08 裁定废弃（断言更新登记见 flow_upload_batch_test.go 三测试）。
+func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now time.Time) error {
 	if h == nil || h.repo == nil {
-		return
+		return nil
 	}
-	h.applyFlowDeltasWithFallback(nodeID, batch.flowDeltas)
-	for userID, quota := range h.applyQuotaUsageWithFallback(nodeID, batch.quotaUsage, now) {
+	quotaViews, err := h.repo.ApplyFlowUploadAccounting(batch.flowDeltas, batch.quotaUsage, now, batch.seqAdvance)
+	if err != nil {
+		log.Printf("flow upload accounting failed node_id=%d err=%v", nodeID, err)
+		return err
+	}
+	for userID, quota := range quotaViews {
 		h.enforceUserQuotaIfNeeded(userID, quota)
 	}
 	for _, target := range batch.policyTargets {
@@ -167,52 +243,5 @@ func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now 
 	for shareID, delta := range batch.peerShareUsage {
 		h.addPeerShareFlow(nodeID, shareID, delta)
 	}
-}
-
-func (h *Handler) applyFlowDeltasWithFallback(nodeID int64, deltas []repo.FlowUploadCounterDelta) {
-	if h == nil || h.repo == nil || len(deltas) == 0 {
-		return
-	}
-	if err := h.repo.ApplyFlowUploadDeltasBatch(deltas); err == nil {
-		return
-	} else {
-		log.Printf("flow upload write failed op=flow.batch_apply node_id=%d err=%v", nodeID, err)
-	}
-	for _, delta := range deltas {
-		if err := h.repo.AddFlow(delta.ForwardID, delta.UserID, delta.UserTunnelID, delta.InFlow, delta.OutFlow); err != nil {
-			log.Printf("flow upload write failed op=flow.single_apply node_id=%d forward_id=%d user_id=%d user_tunnel_id=%d err=%v", nodeID, delta.ForwardID, delta.UserID, delta.UserTunnelID, err)
-		}
-	}
-}
-
-func (h *Handler) applyQuotaUsageWithFallback(nodeID int64, usages map[int64]int64, now time.Time) map[int64]*model.UserQuotaView {
-	if h == nil || h.repo == nil || len(usages) == 0 {
-		return map[int64]*model.UserQuotaView{}
-	}
-	quotaViews, err := h.repo.AddUserQuotaUsageBatch(usages, now)
-	if err == nil {
-		return quotaViews
-	}
-	log.Printf("flow upload write failed op=quota.batch_apply node_id=%d err=%v", nodeID, err)
-
-	userIDs := make([]int64, 0, len(usages))
-	for userID := range usages {
-		if userID > 0 {
-			userIDs = append(userIDs, userID)
-		}
-	}
-	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
-
-	quotaViews = make(map[int64]*model.UserQuotaView, len(userIDs))
-	for _, userID := range userIDs {
-		quota, singleErr := h.repo.AddUserQuotaUsage(userID, usages[userID], now)
-		if singleErr != nil {
-			log.Printf("flow upload write failed op=quota.single_apply node_id=%d user_id=%d err=%v", nodeID, userID, singleErr)
-			continue
-		}
-		if quota != nil {
-			quotaViews[userID] = quota
-		}
-	}
-	return quotaViews
+	return nil
 }

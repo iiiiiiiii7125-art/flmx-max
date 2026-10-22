@@ -17,13 +17,28 @@ import (
 //   - 节点删除时清理锁表条目。
 //   - 依赖单实例部署（passkey.md 已声明当前应保持单实例）。
 //     多实例部署下跨表竞态仍有窗口，需外部协调（本批不实现，登记为限制）。
+//
+// X-P3-20（L-08-2）：锁表改引用计数。旧 CleanupPortAllocLock 无条件
+// 删表项：与并发 Acquire 交错时，持锁者仍在临界区内，第二个 Acquire
+// 会拿到全新 mutex 与之双持有同 nodeID 临界区。现 Acquire 计引用、
+// Release 归还引用；Cleanup 在引用未归零时只打 zombie 标记（条目
+// 保留、后续 Acquire 复用同一 mutex），引用归零后才真正删除。
+type portAllocLockEntry struct {
+	nodeID int64
+	mu     *sync.Mutex
+	refs   int
+	zombie bool
+}
+
 type portAllocLocks struct {
-	mu    sync.Mutex
-	locks map[int64]*sync.Mutex
+	mu      sync.Mutex
+	locks   map[int64]*portAllocLockEntry
+	byMutex map[*sync.Mutex]*portAllocLockEntry
 }
 
 var globalPortAllocLocks = &portAllocLocks{
-	locks: make(map[int64]*sync.Mutex),
+	locks:   make(map[int64]*portAllocLockEntry),
+	byMutex: make(map[*sync.Mutex]*portAllocLockEntry),
 }
 
 // AcquirePortAllocLock 获取 node_id 的端口分配锁。
@@ -31,24 +46,52 @@ var globalPortAllocLocks = &portAllocLocks{
 // 锁内不得进行网络调用。
 func AcquirePortAllocLock(nodeID int64) *sync.Mutex {
 	globalPortAllocLocks.mu.Lock()
-	mu, ok := globalPortAllocLocks.locks[nodeID]
+	e, ok := globalPortAllocLocks.locks[nodeID]
 	if !ok {
-		mu = &sync.Mutex{}
-		globalPortAllocLocks.locks[nodeID] = mu
+		e = &portAllocLockEntry{nodeID: nodeID, mu: &sync.Mutex{}}
+		globalPortAllocLocks.locks[nodeID] = e
+		globalPortAllocLocks.byMutex[e.mu] = e
 	}
+	e.refs++
+	mu := e.mu
 	globalPortAllocLocks.mu.Unlock()
 	mu.Lock()
 	return mu
 }
 
-// ReleasePortAllocLock 释放端口分配锁。
+// ReleasePortAllocLock 释放端口分配锁并归还引用；若该条目已被
+// Cleanup 标记且引用归零，在此真正删除表项。
 func ReleasePortAllocLock(mu *sync.Mutex) {
+	if mu == nil {
+		return
+	}
 	mu.Unlock()
+	globalPortAllocLocks.mu.Lock()
+	defer globalPortAllocLocks.mu.Unlock()
+	e, ok := globalPortAllocLocks.byMutex[mu]
+	if !ok {
+		return
+	}
+	e.refs--
+	if e.refs <= 0 && e.zombie {
+		delete(globalPortAllocLocks.locks, e.nodeID)
+		delete(globalPortAllocLocks.byMutex, mu)
+	}
 }
 
 // CleanupPortAllocLock 清理 node_id 的锁表条目（节点删除时调用）。
+// 仍有未释放引用时只打 zombie 标记，不删条目（防双持有竞态）。
 func CleanupPortAllocLock(nodeID int64) {
 	globalPortAllocLocks.mu.Lock()
 	defer globalPortAllocLocks.mu.Unlock()
-	delete(globalPortAllocLocks.locks, nodeID)
+	e, ok := globalPortAllocLocks.locks[nodeID]
+	if !ok {
+		return
+	}
+	if e.refs <= 0 {
+		delete(globalPortAllocLocks.locks, nodeID)
+		delete(globalPortAllocLocks.byMutex, e.mu)
+		return
+	}
+	e.zombie = true
 }

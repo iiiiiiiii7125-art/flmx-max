@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -418,9 +419,20 @@ func (r *Repository) SpeedLimitExists(id int64) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("repository not initialized")
 	}
+	return speedLimitExists(r.db, id)
+}
+
+func (r *Repository) SpeedLimitExistsTx(tx *gorm.DB, id int64) (bool, error) {
+	if tx == nil {
+		return false, errors.New("database unavailable")
+	}
+	return speedLimitExists(tx, id)
+}
+
+func speedLimitExists(db *gorm.DB, id int64) (bool, error) {
 	var count int64
 	// O2-005：只查询已启用的限速规则，已禁用的不得被引用生效。
-	err := r.db.Model(&model.SpeedLimit{}).Where("id = ? AND status = 1", id).Count(&count).Error
+	err := db.Model(&model.SpeedLimit{}).Where("id = ? AND status = 1", id).Count(&count).Error
 	if err != nil {
 		return false, err
 	}
@@ -456,4 +468,42 @@ func (r *Repository) GetSpeedLimitSpeed(id int64) (int, error) {
 		return 0, err
 	}
 	return sl.Speed, nil
+}
+
+// FlowSeqAdvance 描述一次入账成功须同事务推进的上报 seq。
+type FlowSeqAdvance struct {
+	NodeID int64
+	Seq    *int64
+}
+
+// ApplyFlowUploadAccounting X-P3-31（V-08）：gost 入账单事务——
+// 总量增量与 quota 用量同 tx 写入，任一段失败整批回滚（旧实现两段
+// 分开写 + 逐条 fallback，一段失败另一段继续，总量与 quota 可分叉）。
+// seqAdv 非 nil 时 seq 推进同 tx 落地：入账失败 seq 不动，agent 以
+// 同 seq 重报可正常入账（推进后 CheckSeq 判重放防重复入账）。
+func (r *Repository) ApplyFlowUploadAccounting(deltas []FlowUploadCounterDelta, quotaUsage map[int64]int64, now time.Time, seqAdv *FlowSeqAdvance) (map[int64]*model.UserQuotaView, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	quotaViews := map[int64]*model.UserQuotaView{}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := applyFlowUploadDeltasTx(tx, deltas); err != nil {
+			return err
+		}
+		var err error
+		quotaViews, err = r.addUserQuotaUsageBatchTx(tx, quotaUsage, now)
+		if err != nil {
+			return err
+		}
+		if seqAdv != nil && seqAdv.NodeID > 0 {
+			if err := advanceSeqTx(tx, seqAdv.NodeID, seqAdv.Seq, now.UnixMilli()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return quotaViews, nil
 }

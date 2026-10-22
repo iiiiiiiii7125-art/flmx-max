@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -256,7 +257,19 @@ func (h *Handler) syncRealmForward(forward *forwardRecord, override map[int64]bo
 	if err != nil {
 		return warnings, err
 	}
-	if forward.SpeedID.Valid || forward.IPSpeedID.Valid || forward.MaxConn > 0 || forward.IPMaxConn > 0 {
+	hasIneffectiveLimit := forward.SpeedID.Valid || forward.IPSpeedID.Valid || forward.MaxConn > 0 || forward.IPMaxConn > 0
+	if !hasIneffectiveLimit {
+		// X-P3-10：UT 级限速同样在 realm 下不生效，必须纳入警告。
+		// 复用 ResolveUserTunnelAndLimiter 的有效性谓词（status=1 且
+		// speed>0，见 X-P2-5/X-P3-9）：已禁用或 speed=0 的 UT 规则
+		// 解析为空，不产生警告。
+		_, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)
+		if err != nil {
+			return warnings, err
+		}
+		hasIneffectiveLimit = utLimiterID != nil && utSpeed != nil
+	}
+	if hasIneffectiveLimit {
 		warnings = append(warnings, "realm 引擎不支持限速和连接数限制，这些设置不生效")
 	}
 	return warnings, nil
@@ -343,16 +356,67 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 // 轮询静默跳过，则给节点打标记；节点重连（onNodeOnline）在放行
 // 异步对账与 redeploy 之前先消费标记做一次同步结算，保证「先结算
 // 后下发」的顺序，增量不随 agent 弃 realm 计数丢失。
+// X-P3-34（V-09）：pendingRealmSettle 标记落库（config KV）——面板重启
+// 后未消费的标记不得丢失。键 pending_realm_settle:<nodeID>，值 JSON
+// {nodeId, markedAt(毫秒), direction}；方向恒为 realm->gost（标记只由
+// realm→gost 离线切换路径产生）。内存 map 保留为一级缓存，has 未命中
+// 时回查 DB 并回填（等价于启动恢复：New() 无启动钩子，惰性恢复保证
+// 重连对账路径 onNodeOnline 先结算后 redeploy 的顺序不变）。
+func pendingRealmSettleKey(nodeID int64) string {
+	return fmt.Sprintf("pending_realm_settle:%d", nodeID)
+}
+
+type pendingRealmSettleRecord struct {
+	NodeID    int64  `json:"nodeId"`
+	MarkedAt  int64  `json:"markedAt"`
+	Direction string `json:"direction"`
+}
+
+func (h *Handler) persistPendingRealmSettle(nodeID int64) {
+	if h == nil || h.repo == nil {
+		return
+	}
+	rec := pendingRealmSettleRecord{NodeID: nodeID, MarkedAt: time.Now().UnixMilli(), Direction: "realm->gost"}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	if err := h.repo.UpsertConfig(pendingRealmSettleKey(nodeID), string(raw), rec.MarkedAt); err != nil {
+		log.Printf("pending realm settle persist failed node=%d: %v", nodeID, err)
+	}
+}
+
+func (h *Handler) loadPendingRealmSettle(nodeID int64) bool {
+	if h == nil || h.repo == nil {
+		return false
+	}
+	cfg, err := h.repo.GetConfigByName(pendingRealmSettleKey(nodeID))
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Value) == "" {
+		return false
+	}
+	return true
+}
+
+func (h *Handler) clearPendingRealmSettle(nodeID int64) {
+	if h == nil || h.repo == nil {
+		return
+	}
+	if err := h.repo.DeleteConfig(pendingRealmSettleKey(nodeID)); err != nil {
+		log.Printf("pending realm settle clear failed node=%d: %v", nodeID, err)
+	}
+}
+
 func (h *Handler) markPendingRealmSettle(nodeID int64) {
 	if h == nil || nodeID <= 0 {
 		return
 	}
 	h.upgradeMu.Lock()
-	defer h.upgradeMu.Unlock()
 	if h.pendingRealmSettle == nil {
 		h.pendingRealmSettle = make(map[int64]struct{})
 	}
 	h.pendingRealmSettle[nodeID] = struct{}{}
+	h.upgradeMu.Unlock()
+	h.persistPendingRealmSettle(nodeID)
 }
 
 func (h *Handler) consumePendingRealmSettle(nodeID int64) bool {
@@ -360,12 +424,16 @@ func (h *Handler) consumePendingRealmSettle(nodeID int64) bool {
 		return false
 	}
 	h.upgradeMu.Lock()
-	defer h.upgradeMu.Unlock()
-	if _, ok := h.pendingRealmSettle[nodeID]; !ok {
-		return false
+	_, inMem := h.pendingRealmSettle[nodeID]
+	if inMem {
+		delete(h.pendingRealmSettle, nodeID)
 	}
-	delete(h.pendingRealmSettle, nodeID)
-	return true
+	h.upgradeMu.Unlock()
+	inDB := h.loadPendingRealmSettle(nodeID)
+	if inDB {
+		h.clearPendingRealmSettle(nodeID)
+	}
+	return inMem || inDB
 }
 
 func (h *Handler) hasPendingRealmSettle(nodeID int64) bool {
@@ -373,9 +441,22 @@ func (h *Handler) hasPendingRealmSettle(nodeID int64) bool {
 		return false
 	}
 	h.upgradeMu.Lock()
-	defer h.upgradeMu.Unlock()
 	_, ok := h.pendingRealmSettle[nodeID]
-	return ok
+	h.upgradeMu.Unlock()
+	if ok {
+		return true
+	}
+	// 内存未命中回查落库标记（重启恢复），命中则回填内存。
+	if h.loadPendingRealmSettle(nodeID) {
+		h.upgradeMu.Lock()
+		if h.pendingRealmSettle == nil {
+			h.pendingRealmSettle = make(map[int64]struct{})
+		}
+		h.pendingRealmSettle[nodeID] = struct{}{}
+		h.upgradeMu.Unlock()
+		return true
+	}
+	return false
 }
 
 // settleRealmCountersAtSwitch 主动拉一次各节点的内核状态，把 realm

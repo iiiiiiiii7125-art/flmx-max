@@ -24,6 +24,11 @@ type serializedNftManager struct {
 	inner nftablesRuntimeManager
 	mu    sync.Mutex
 	locks map[int64]*sync.Mutex
+	// X-P3-20（L-08-2）：锁表引用计数（与 repo 端口锁同型）。ReleaseNode
+	// 在引用未归零时只打 zombie 标记，条目待最后一次 unlockFor 后删除，
+	// 避免持锁 Reconcile/Clear 期间新 lockFor 生成第二把锁并发进入。
+	lockRefs   map[int64]int
+	lockZombie map[int64]bool
 	// R5-B5B D18: applying 标记（nodeID -> 置位时间戳）与 generation 计数器
 	// （nodeID -> 单调递增）。gen 独立于 applying，用于检测采集期间的脏读。
 	applying map[int64]time.Time
@@ -36,29 +41,63 @@ const applyingTimeout = 60 * time.Second
 
 func newSerializedNftManager(inner nftablesRuntimeManager) *serializedNftManager {
 	return &serializedNftManager{
-		inner:    inner,
-		locks:    make(map[int64]*sync.Mutex),
-		applying: make(map[int64]time.Time),
-		gen:      make(map[int64]uint64),
+		inner:      inner,
+		locks:      make(map[int64]*sync.Mutex),
+		lockRefs:   make(map[int64]int),
+		lockZombie: make(map[int64]bool),
+		applying:   make(map[int64]time.Time),
+		gen:        make(map[int64]uint64),
 	}
 }
 
 func (m *serializedNftManager) lockFor(nodeID int64) *sync.Mutex {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.lockRefs == nil {
+		m.lockRefs = make(map[int64]int)
+	}
+	if m.lockZombie == nil {
+		m.lockZombie = make(map[int64]bool)
+	}
 	mu, ok := m.locks[nodeID]
 	if !ok {
 		mu = &sync.Mutex{}
 		m.locks[nodeID] = mu
 	}
+	m.lockRefs[nodeID]++
 	return mu
 }
 
+// unlockFor 释放 lockFor 返回的锁并归还引用；条目已被 ReleaseNode
+// 标记且引用归零时在此真正删除（含 applying/gen 状态）。
+func (m *serializedNftManager) unlockFor(nodeID int64, mu *sync.Mutex) {
+	if mu != nil {
+		mu.Unlock()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lockRefs[nodeID]--
+	if m.lockRefs[nodeID] <= 0 {
+		delete(m.lockRefs, nodeID)
+		if m.lockZombie[nodeID] {
+			delete(m.lockZombie, nodeID)
+			delete(m.locks, nodeID)
+			delete(m.applying, nodeID)
+			delete(m.gen, nodeID)
+		}
+	}
+}
+
 // ReleaseNode 释放 node_id 的锁表条目（节点删除时调用，防泄漏）。
-// 同时清理 applying/gen 条目（D18）。
+// 同时清理 applying/gen 条目（D18）。X-P3-20：仍有未释放引用时只打
+// zombie 标记，锁条目与 D18 状态待引用归零后由 unlockFor 一并删除。
 func (m *serializedNftManager) ReleaseNode(nodeID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.lockRefs[nodeID] > 0 {
+		m.lockZombie[nodeID] = true
+		return
+	}
 	delete(m.locks, nodeID)
 	delete(m.applying, nodeID)
 	delete(m.gen, nodeID)
@@ -95,7 +134,7 @@ func (m *serializedNftManager) Unwrap() nftablesRuntimeManager {
 func (m *serializedNftManager) Reconcile(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig, plan runtimenft.NodePlan) (runtimenft.ApplyResult, error) {
 	mu := m.lockFor(nodeID)
 	mu.Lock()
-	defer mu.Unlock()
+	defer m.unlockFor(nodeID, mu)
 	// R5-B5B D18: 写路径。drain 已在 handler 层、Reconcile 调用之前完成。
 	// 置位 applying + 递增 gen（finally 清除，保证异常路径）。
 	m.mu.Lock()
@@ -113,7 +152,7 @@ func (m *serializedNftManager) Reconcile(ctx context.Context, nodeID int64, cfg 
 func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) error {
 	mu := m.lockFor(nodeID)
 	mu.Lock()
-	defer mu.Unlock()
+	defer m.unlockFor(nodeID, mu)
 	// F-020（A4-003/X1-202）：Clear 与 Reconcile 同为删表重建型写
 	// 操作，必须同样置 applying + 递增 gen。旧实现只有锁：采集侧的
 	// D18 脏读防护（查 IsApplying/GetGeneration）对 Clear 全程失明，
@@ -140,6 +179,6 @@ func (m *serializedNftManager) CollectCounters(ctx context.Context, nodeID int64
 func (m *serializedNftManager) Test(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) error {
 	mu := m.lockFor(nodeID)
 	mu.Lock()
-	defer mu.Unlock()
+	defer m.unlockFor(nodeID, mu)
 	return m.inner.Test(ctx, cfg)
 }

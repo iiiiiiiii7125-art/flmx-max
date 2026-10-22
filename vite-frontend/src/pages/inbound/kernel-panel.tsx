@@ -86,6 +86,8 @@ export function KernelPanel({
   const [logsLoading, setLogsLoading] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<KernelApiItem | null>(null);
   const [removeFailed, setRemoveFailed] = useState(false);
+  // X-P2-2：被跨内核引用守卫拦下时，后端回传的引用方入站名清单。
+  const [removeReferrers, setRemoveReferrers] = useState<string[]>([]);
 
   useEffect(() => {
     if (!installRequest) return;
@@ -192,11 +194,26 @@ export function KernelPanel({
       const res = await controlKernel(removeTarget.id, "remove", force);
 
       if (res.code === 0) {
-        toast.success("已卸载");
+        const broken = (res.data as { brokenReferrers?: string[] } | null)
+          ?.brokenReferrers;
+
+        toast.success(
+          broken && broken.length > 0
+            ? `已卸载；${broken.length} 个引用方入站的出站引用已失效`
+            : "已卸载",
+        );
         setRemoveTarget(null);
+        setRemoveReferrers([]);
         onChanged();
       } else {
-        setRemoveFailed(true);
+        const broken = (res.data as { brokenReferrers?: string[] } | null)
+          ?.brokenReferrers;
+
+        if (broken && broken.length > 0) {
+          setRemoveReferrers(broken);
+        } else {
+          setRemoveFailed(true);
+        }
         toast.error(res.msg || "卸载失败");
       }
     } finally {
@@ -407,6 +424,7 @@ export function KernelPanel({
                   color: "danger" as const,
                   onPress: () => {
                     setRemoveFailed(false);
+                    setRemoveReferrers([]);
                     setRemoveTarget(sheetKernel);
                   },
                 },
@@ -692,6 +710,14 @@ export function KernelPanel({
                   该内核下的 {removeTarget?.inboundCount ?? 0}{" "}
                   个入站会一起删除，且无法恢复。
                 </p>
+                {removeReferrers.length > 0 && (
+                  <p className="text-small text-warning">
+                    该内核下的入站正被 {removeReferrers.length}{" "}
+                    个入站用作出站代理或分流出口：
+                    {removeReferrers.map((n) => `「${n}」`).join("、")}
+                    。卸载将使这些引用失效，请先解除，或仍要卸载强制执行。
+                  </p>
+                )}
                 {removeFailed && (
                   <p className="text-small text-warning">
                     节点卸载失败（可能离线）。可以强制删除面板记录，节点上线后会自动清理。
@@ -702,13 +728,15 @@ export function KernelPanel({
                 <Button variant="light" onPress={onClose}>
                   取消
                 </Button>
-                {removeFailed && (
+                {(removeFailed || removeReferrers.length > 0) && (
                   <Button
                     color="warning"
                     isLoading={busy === `${removeTarget?.id}-remove`}
                     onPress={() => doRemove(true)}
                   >
-                    强制删除
+                    {removeReferrers.length > 0 && !removeFailed
+                      ? "仍要卸载"
+                      : "强制删除"}
                   </Button>
                 )}
                 <Button
