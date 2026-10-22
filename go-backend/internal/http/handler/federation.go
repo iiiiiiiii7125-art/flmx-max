@@ -21,6 +21,7 @@ import (
 	"go-backend/internal/http/response"
 	"go-backend/internal/netguard"
 	"go-backend/internal/store/repo"
+	"go-backend/internal/ws"
 )
 
 type federationTunnelRequest struct {
@@ -1803,17 +1804,19 @@ func (h *Handler) federationRuntimeDiagnose(w http.ResponseWriter, r *http.Reque
 		commandTimeout = diagnosisCommandTimeout
 	}
 
-	commandType := "TcpPing"
-	if isUDPBasedProtocol(req.Protocol) {
-		commandType = "UdpPing"
-	}
-
-	res, err := h.sendNodeCommandWithTimeout(share.NodeID, commandType, map[string]interface{}{
+	data := map[string]interface{}{
 		"ip":      req.IP,
 		"port":    req.Port,
 		"count":   req.Count,
 		"timeout": req.Timeout,
-	}, commandTimeout, false, false)
+	}
+	var res ws.CommandResult
+	if isUDPBasedProtocol(req.Protocol) {
+		res, err = h.sendNodeCommandWithTimeout(share.NodeID, "UdpPing", data, commandTimeout, false, false)
+	} else {
+		// DB-5：TCP 诊断走探测槽位，排队与执行共用 commandTimeout 预算。
+		res, err = h.sendTCPPing(share.NodeID, data, commandTimeout)
+	}
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -1901,7 +1904,7 @@ func (h *Handler) federationRuntimeCommand(w http.ResponseWriter, r *http.Reques
 		dataMap["ip"] = pinnedIP
 		dataMap["count"] = clampedCount
 		req.Data = dataMap
-		res, err := h.sendNodeCommand(share.NodeID, "TcpPing", req.Data, false, false)
+		res, err := h.sendTCPPing(share.NodeID, req.Data, defaultNodeCommandTimeout)
 		if err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
