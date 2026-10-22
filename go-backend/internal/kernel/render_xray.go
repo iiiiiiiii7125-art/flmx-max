@@ -94,7 +94,8 @@ func xraySettings(in Inbound) (obj, error) {
 	case ProtocolTrojan:
 		return obj{"clients": append([]interface{}{obj{"password": s.Password}}, xrayUserClients(in)...)}, nil
 	case ProtocolShadowsocks:
-		return obj{"method": s.Method, "password": s.Password, "network": "tcp,udp"}, nil
+		// GATE-F1：同 sing-box 服务端口径，合法单段 SS2022 key 归一 Std。
+		return obj{"method": s.Method, "password": NormalizedSS2022Password(s.Method, s.Password), "network": "tcp,udp"}, nil
 	}
 	return nil, fmt.Errorf("Xray 不支持协议 %s", in.Protocol)
 }

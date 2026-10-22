@@ -229,6 +229,12 @@ func ssPluginString(p Proxy) string {
 
 func proxyClash(e Endpoint) (yamlNode, bool) {
 	p := e.Proxy.forEndpoint(e)
+	if p.Type() == "ss" {
+		// GATE-F1：单段已在 forEndpoint 归一；SIP023 多段在 Clash 面
+		// 按段归一（mihomo 按段以带填充 Std 解码、二进制实测非规范
+		// 段整表失败；逐段归一不改变解码字节）。其余格式多段原样。
+		p["password"] = NormalizedSS2022PasswordSegments(p.str("cipher"), p.str("password"))
+	}
 	if p.Type() == "naive" {
 		// Mihomo has no NaïveProxy client; emitting type: naive would
 		// poison the whole profile (same rule as built inbounds).
@@ -355,6 +361,8 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		// sing-box 订阅；SIP023 冒号多段在 sing-box 的支持未证实，
 		// 同样保守略过（Clash / Surge 等格式原样输出）。存量不迁移、
 		// 不自动清理，靠用户编辑/重导入时被导入期校验拦下收敛。
+		// GATE-F1：合法单段 key 的线格式已在 forEndpoint 规范化为
+		// 带填充 Std（p 即该克隆），此处输出即规范形态。
 		if !ValidSS2022SingleKey(p.str("cipher"), p.str("password")) {
 			return nil, false
 		}

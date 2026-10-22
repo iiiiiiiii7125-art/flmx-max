@@ -19,8 +19,10 @@ import (
 //     （解码字节不变，仅线格式归一）；规范形态自身恒等。
 //   - 存量坏 key 维持各面既有口径：sing-box 面（导入节点）略过，
 //     其余格式原样输出（B2 裁定），不新造语义。
-//   - SIP023 冒号多段维持裁定口径：sing-box 保守略过，其余格式
-//     原样输出（多段不做逐段规范化）。
+//   - SIP023 冒号多段：sing-box 保守略过（裁定不改）；Clash 面逐段
+//     规范化（双客户端二进制实测按段以带填充 Std 解码、逐段归一不
+//     改变解码字节，证据见批报告）；Surge / Loon / QX / ss 链接等
+//     段解码未经二进制证实的面维持原样输出。
 //   - 自建入站的 SS2022 密码经 Normalize 只可能是 Std 形态；此处
 //     同 helper 兜底存量直写行（规范化或原样，绝不略过）。
 
@@ -59,7 +61,19 @@ func TestR3GateF1NormalizedHelper(t *testing.T) {
 	}
 	multi := want + ":" + base64.RawURLEncoding.EncodeToString(raw32)
 	if got := NormalizedSS2022Password(r3b2C256, multi); got != multi {
-		t.Fatalf("多段维持原样（裁定口径）：got %q want %q", got, multi)
+		t.Fatalf("通用 helper 对多段维持原样：got %q want %q", got, multi)
+	}
+	// Clash 面专用逐段 helper：双客户端二进制实测按段 Std 解码，
+	// 逐段归一不改变解码字节；一段坏则整体原样（该面既有口径）。
+	if got := NormalizedSS2022PasswordSegments(r3b2C256, multi); got != want+":"+want {
+		t.Fatalf("多段逐段归一：got %q want %q", got, want+":"+want)
+	}
+	badMulti := want + ":plainpassword"
+	if got := NormalizedSS2022PasswordSegments(r3b2C256, badMulti); got != badMulti {
+		t.Fatalf("多段含坏段须整体原样：got %q", got)
+	}
+	if got := NormalizedSS2022PasswordSegments(r3b2C256, base64.RawURLEncoding.EncodeToString(raw32)); got != want {
+		t.Fatalf("逐段 helper 对单段与通用 helper 一致：got %q", got)
 	}
 	if got := NormalizedSS2022Password(r3b2C256, "plainpassword"); got != "plainpassword" {
 		t.Fatalf("坏 key 在 helper 层原样返回（略过/原样由各渲染面既有口径决定）：got %q", got)
@@ -185,8 +199,11 @@ func TestR3GateF1SubscriptionPipeline(t *testing.T) {
 	}
 }
 
-// TestR3GateF1BadAndMultiKeepExistingShape：存量坏 key 与多段 key 的
-// 既有口径不变——sing-box 面略过坏/多段；其余格式原样输出坏/多段。
+// TestR3GateF1BadAndMultiKeepExistingShape：存量坏 key 既有口径不变
+// ——sing-box 面略过、其余格式原样。多段：sing-box 保守略过（裁定
+// 不改）；Clash 面逐段归一（二进制实测 mihomo 按段 Std 解码、非规范
+// 段整表失败、逐段归一字节不变）；Surge / ss 链接等客户端段解码
+// 未经二进制证实的面维持原样。
 func TestR3GateF1BadAndMultiKeepExistingShape(t *testing.T) {
 	raw32 := r3b2RawKey(32)
 	want := base64.StdEncoding.EncodeToString(raw32)
@@ -204,8 +221,8 @@ func TestR3GateF1BadAndMultiKeepExistingShape(t *testing.T) {
 	if _, ok := proxySingbox(me); ok {
 		t.Fatal("多段在 sing-box 面保守略过（裁定口径）")
 	}
-	if node, ok := proxyClash(me); !ok || Proxy(yamlToMap(node)).str("password") != multi {
-		t.Fatalf("多段在 clash 面原样输出（裁定口径）：ok=%v", ok)
+	if node, ok := proxyClash(me); !ok || Proxy(yamlToMap(node)).str("password") != want+":"+want {
+		t.Fatalf("多段在 clash 面须逐段归一：ok=%v node=%v", ok, node)
 	}
 	if line, ok := proxySurge(me); !ok || !strings.Contains(line, "password="+multi) {
 		t.Fatalf("多段在 surge 面原样输出（裁定口径）：%q ok=%v", line, ok)

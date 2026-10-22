@@ -319,21 +319,29 @@ func TestR3B2ProxySingboxSS2022Guard(t *testing.T) {
 			if ok != tc.wantOK {
 				t.Fatalf("proxySingbox ok=%v want %v (outs=%v)", ok, tc.wantOK, outs)
 			}
-			if ok && outs[0]["password"] != tc.pw {
-				t.Fatalf("渲染密码须原样：%v", outs[0])
+			// GATE-F1 订正（发版门项 3 裁定渲染侧规范化，supersede 本
+			// 用例初版的「原样」断言）：合法单段 key 渲染为带填充 Std
+			// 规范形态，非规范形态原样输出正是发版门 FAIL 点；legacy
+			// 口令经 helper 原样返回，断言对其不变。
+			if ok && outs[0]["password"] != NormalizedSS2022Password(tc.cipher, tc.pw) {
+				t.Fatalf("渲染密码须为规范化形态：%v", outs[0])
 			}
 		})
 	}
 
-	// 多段形态：Clash 与 Surge 原样输出（导入已接受，不得在其他
-	// 格式被 sing-box 的保守口径连坐）。
+	// 多段形态：不得被 sing-box 的保守口径连坐（Clash / Surge 均须
+	// 输出）。GATE-F1 订正：Clash 面由「原样」改为逐段归一——双客户
+	// 端二进制实测 mihomo 按段以带填充 Std 解码，本用例 multi 的第
+	// 二段是 RawURL 形态、原样输出整表 -t 失败；逐段归一解码字节
+	// 不变。Surge 维持原样（其段解码未经二进制证实）。
 	e := mk(r3b2C256, multi)
 	node, ok := proxyClash(e)
 	if !ok {
-		t.Fatal("多段 SS2022 必须在 Clash 原样输出")
+		t.Fatal("多段 SS2022 必须在 Clash 输出")
 	}
-	if got := Proxy(yamlToMap(node)).str("password"); got != multi {
-		t.Fatalf("clash password: got %q want %q", got, multi)
+	wantMulti := base64.StdEncoding.EncodeToString(raw32) + ":" + base64.StdEncoding.EncodeToString(raw32)
+	if got := Proxy(yamlToMap(node)).str("password"); got != wantMulti {
+		t.Fatalf("clash password: got %q want %q (逐段归一)", got, wantMulti)
 	}
 	line, ok := proxySurge(e)
 	if !ok || !strings.Contains(line, "password="+multi) {

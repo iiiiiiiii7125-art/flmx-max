@@ -112,10 +112,13 @@ func ShareURI(e Endpoint) (string, bool) {
 		b, _ := json.Marshal(v)
 		return "vmess://" + base64.StdEncoding.EncodeToString(b), true
 	case ProtocolShadowsocks:
-		userinfo := base64.RawURLEncoding.EncodeToString([]byte(in.Settings.Method + ":" + in.Settings.Password))
+		// GATE-F1：自建入站密码经 Normalize 恒为 Std 形态，此处同
+		// helper 兜底直写存量（合法单段归一、其余原样，绝不略过）。
+		ssPW := NormalizedSS2022Password(in.Settings.Method, in.Settings.Password)
+		userinfo := base64.RawURLEncoding.EncodeToString([]byte(in.Settings.Method + ":" + ssPW))
 		if SS2022KeyLen(in.Settings.Method) > 0 {
 			// SIP022: 2022 ciphers use percent-encoded plain userinfo.
-			userinfo = url.QueryEscape(in.Settings.Method) + ":" + url.QueryEscape(in.Settings.Password)
+			userinfo = url.QueryEscape(in.Settings.Method) + ":" + url.QueryEscape(ssPW)
 		}
 		query := ""
 		if in.Security.Type == SecurityShadowTLS {
@@ -257,7 +260,10 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 	case ProtocolTrojan:
 		p = append(p, yamlField{"password", in.Settings.Password})
 	case ProtocolShadowsocks:
-		p = append(p, yamlField{"cipher", in.Settings.Method}, yamlField{"password", in.Settings.Password})
+		// GATE-F1：同 ShareURI 口径，合法 SS2022 key 规范化输出；
+		// Clash 面多段按段归一（见 proxyClash 同注）。
+		p = append(p, yamlField{"cipher", in.Settings.Method},
+			yamlField{"password", NormalizedSS2022PasswordSegments(in.Settings.Method, in.Settings.Password)})
 		if in.Security.Type == SecurityShadowTLS {
 			p[4].Value = false // UDP is not carried through ShadowTLS
 			p = append(p,
@@ -460,7 +466,9 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 	case ProtocolShadowsocks:
 		o["type"] = "shadowsocks"
 		o["method"] = in.Settings.Method
-		o["password"] = in.Settings.Password
+		// GATE-F1：合法单段归一、其余原样——自建面既有行为恒渲染，
+		// 不引入导入节点面的略过语义（计数口径亦不变）。
+		o["password"] = NormalizedSS2022Password(in.Settings.Method, in.Settings.Password)
 		if in.Security.Type == SecurityShadowTLS {
 			// The shadowtls outbound dials the server; this one has no address.
 			delete(o, "server")
@@ -567,7 +575,8 @@ func SurgeLine(e Endpoint) (string, bool) {
 	switch in.Protocol {
 	case ProtocolShadowsocks:
 		parts = append(parts, "ss", host, strconv.Itoa(e.Port),
-			"encrypt-method="+in.Settings.Method, "password="+surgeEscape(in.Settings.Password))
+			"encrypt-method="+in.Settings.Method,
+			"password="+surgeEscape(NormalizedSS2022Password(in.Settings.Method, in.Settings.Password)))
 		if in.Security.Type == SecurityShadowTLS {
 			parts = append(parts, shadowTLS()...)
 		} else {
