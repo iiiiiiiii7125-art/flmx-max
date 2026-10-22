@@ -10,7 +10,11 @@ export default defineConfig({
     VitePWA({
       // No service worker for the online demo.
       disable: process.env.VITE_DEMO === "true",
-      registerType: "prompt",
+      // autoUpdate: new versions must take over on their own. With
+      // "prompt" the new SW waits for a toast click that users can
+      // dismiss or never see, and the waiting SW keeps serving the
+      // precached old UI — refreshes then show the old panel forever.
+      registerType: "autoUpdate",
       injectRegister: "auto",
       includeAssets: ["favicon.ico", "apple-touch-icon.png"],
       manifest: {
@@ -44,6 +48,11 @@ export default defineConfig({
       workbox: {
         navigateFallback: "/index.html",
         cleanupOutdatedCaches: true,
+        // Belt and braces for autoUpdate: activate immediately and
+        // take control of open tabs instead of waiting for all tabs
+        // to close (vite-plugin-pwa also sets these for autoUpdate).
+        skipWaiting: true,
+        clientsClaim: true,
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
     }),

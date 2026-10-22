@@ -876,6 +876,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) errorPage(w http.ResponseWriter, _ *http.Request) {
+	// 后端直出的唯一 HTML 面：与前端入口文档统一 no-cache 口径，
+	// 别让浏览器启发式缓存把旧错误页留住（面板 UI 本身不经后端出站）。
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write([]byte("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>错误 404</title></head><body><div style='min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;'><div style='font-size:6rem;color:#333;font-weight:300;'>404</div><div style='font-size:1.2rem;color:#666;'>你推开了后端的大门，却发现里面只有寂寞。</div></div></body></html>"))
