@@ -600,10 +600,11 @@ func (n *notifier) sendWebhook(ctx context.Context, url string, msg notifyMessag
 func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, notifySendTimeout)
 	defer cancel()
-	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。复用 secure_fetch 的
-	// 元数据地址黑名单（isMetadataAddress），至少拒绝云元数据地址。
+	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。硬拒集与
+	// SecureFetch 共用 netguard 硬拒层（isMetadataAddress，R2X-026）。
 	// 注意：合法 webhook 常为内网地址（企业微信/钉钉内网代理），故此处仅硬拒绝
-	// 元数据地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	// 硬拒层地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	// 发送走钉死拨号（notifyDialContext，R2X-044），校验与拨号同一次解析。
 	if err := validateNotifyURL(url); err != nil {
 		return 0, nil, err
 	}
