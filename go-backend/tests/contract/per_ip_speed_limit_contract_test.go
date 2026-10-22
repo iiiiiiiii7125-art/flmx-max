@@ -41,7 +41,7 @@ func TestPerIPSpeedLimitRuntimePayload(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "per-ip-speed-node", "per-ip-speed-secret", "10.22.0.1", "10.22.0.1", "", "32200-32210", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "per-ip-speed-node", "per-ip-speed-secret", "10.22.0.1", "10.22.0.1", "", "32200-32210", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	var nodeID int64
@@ -76,6 +76,10 @@ func TestPerIPSpeedLimitRuntimePayload(t *testing.T) {
 	addLimitersData := make([]json.RawMessage, 0)
 	var updateServiceData json.RawMessage
 
+	// R1-B10 deflake：节点种子已改 status=0，下方既有 waitNodeStatus
+	// 是真同步点（旧种子预置 1 时空转，会话登记未落点即 create 会
+	// 撞「节点不在线」限速 fail-closed——本用例 FIX-A 登记的 flake
+	// 形态之一）。
 	stopNode := startMockSessionForMaxConn(t, server.URL, "per-ip-speed-secret", func(cmdType string, data json.RawMessage) (bool, string) {
 		commandMu.Lock()
 		defer commandMu.Unlock()
@@ -127,17 +131,28 @@ func TestPerIPSpeedLimitRuntimePayload(t *testing.T) {
 	expectedRuleLimits := []string{"0.0.0.0/0 4.768MB 4.768MB", "::/0 4.768MB 4.768MB"}
 	expectedTotalLimits := []string{"$ 9.537MB 9.537MB"}
 
+	// R1-B10 deflake（集合断言，同 max_conn B5 先例）：节点上线
+	// redeploy 与 create 派发是 at-least-once——上线钩子 goroutine
+	// 若迟到到 create 之后才跑，会把同一组 AddLimiters 整组重发
+	// （载荷一致），旧断言「恰好 2 条」把派发次数误当契约。改为
+	// 逐条验每份载荷：出现的每份 AddLimiters 必须命中期望的
+	// (name, limits) 集合、且两个 name 都必须出现——重复容忍，
+	// 错误/多余/缺失载荷照抓，内容敏感性与原断言等价。
 	commandMu.Lock()
-	defer commandMu.Unlock()
-	if len(addLimitersData) != 2 {
-		t.Fatalf("expected AddLimiters to be sent. Received: %v", receivedCommands)
-	}
-	if updateServiceData == nil {
-		t.Fatalf("expected UpdateService to be sent. Received: %v", receivedCommands)
+	addsSnapshot := append([]json.RawMessage(nil), addLimitersData...)
+	receivedSnapshot := append([]string(nil), receivedCommands...)
+	updateSnapshot := updateServiceData
+	commandMu.Unlock()
+	if updateSnapshot == nil {
+		t.Fatalf("expected UpdateService to be sent. Received: %v", receivedSnapshot)
 	}
 
-	gotLimiterLimits := make(map[string][]string)
-	for _, raw := range addLimitersData {
+	expectedByName := map[string][]string{
+		expectedTotalName: expectedTotalLimits,
+		expectedName:      expectedRuleLimits,
+	}
+	gotByName := make(map[string][]string)
+	for _, raw := range addsSnapshot {
 		var addData map[string]interface{}
 		if err := json.Unmarshal(raw, &addData); err != nil {
 			t.Fatalf("unmarshal AddLimiters data: %v", err)
@@ -151,17 +166,21 @@ func TestPerIPSpeedLimitRuntimePayload(t *testing.T) {
 		for _, limit := range limits {
 			gotLimits = append(gotLimits, fmt.Sprint(limit))
 		}
-		gotLimiterLimits[name] = gotLimits
+		want, ok := expectedByName[name]
+		if !ok {
+			t.Fatalf("unexpected AddLimiters payload for limiter %q: %v. Received: %v", name, gotLimits, receivedSnapshot)
+		}
+		if !reflect.DeepEqual(gotLimits, want) {
+			t.Fatalf("expected limits %v for limiter %s, got %v", want, name, gotLimits)
+		}
+		gotByName[name] = gotLimits
 	}
-	if !reflect.DeepEqual(gotLimiterLimits[expectedTotalName], expectedTotalLimits) {
-		t.Fatalf("expected total limits %v, got %v", expectedTotalLimits, gotLimiterLimits[expectedTotalName])
-	}
-	if !reflect.DeepEqual(gotLimiterLimits[expectedName], expectedRuleLimits) {
-		t.Fatalf("expected rule limits %v, got %v", expectedRuleLimits, gotLimiterLimits[expectedName])
+	if len(gotByName) != len(expectedByName) {
+		t.Fatalf("expected AddLimiters for limiters %v, got names %v. Received: %v", expectedByName, gotByName, receivedSnapshot)
 	}
 
 	var services []map[string]interface{}
-	if err := json.Unmarshal(updateServiceData, &services); err != nil {
+	if err := json.Unmarshal(updateSnapshot, &services); err != nil {
 		t.Fatalf("unmarshal UpdateService data: %v", err)
 	}
 	if len(services) == 0 {
