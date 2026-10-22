@@ -474,7 +474,24 @@ export default function GroupPage({
       });
 
       if (res.code === 0) {
-        toast.success(res.msg || "权限分配成功");
+        // R2X-021：后端部分失败时 code=0 且 data={message,failures:[{userId,tunnelId,error}]}
+        // （信封 msg 恒为「操作成功」），须消费 failures，否则部分失败被报成全成功。
+        const data = (res.data ?? null) as {
+          failures?: Array<{ error?: string }>;
+        } | null;
+        const failures =
+          typeof data === "object" && data !== null && Array.isArray(data.failures)
+            ? data.failures
+            : [];
+
+        if (failures.length > 0) {
+          toast(
+            `权限分配部分失败：${failures.length} 条失败，首条：${failures[0]?.error || "未知错误"}`,
+            { icon: "⚠️", duration: 5000 },
+          );
+        } else {
+          toast.success(res.msg || "权限分配成功");
+        }
         loadData();
       } else {
         toast.error(res.msg || "权限分配失败");

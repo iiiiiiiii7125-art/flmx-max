@@ -712,6 +712,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
 
   // loadMetrics 序号：切节点/切范围后旧响应不得覆盖新图表
   const metricsSeqRef = useRef(0);
+  // loadMonitorResults per-monitor 序号（R2X-040）：同一监控改 limit/范围
+  // 连发时旧响应不得覆盖新结果；不同监控各自独立序号域、互不干扰。
+  const monitorResultsSeqRef = useRef<Record<number, number>>({});
   // loadServiceMonitors 在途守卫：5s 轮询下慢请求不得叠加
   const serviceMonitorsInFlightRef = useRef(false);
 
@@ -836,12 +839,19 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
       monitorId: number,
       options?: { rangeMs?: number; limit?: number },
     ) => {
+      const seq = (monitorResultsSeqRef.current[monitorId] =
+        (monitorResultsSeqRef.current[monitorId] ?? 0) + 1);
+
       try {
         const apiOptions =
           options?.rangeMs != null
             ? { start: Date.now() - options.rangeMs, end: Date.now() }
             : { limit: options?.limit ?? 100 };
         const response = await getServiceMonitorResults(monitorId, apiOptions);
+
+        if (monitorResultsSeqRef.current[monitorId] !== seq) {
+          return;
+        }
 
         if (response.code === 0 && response.data) {
           setMonitorResults((prev) => ({
@@ -855,7 +865,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
           setAccessDenied(response.msg || "暂无监控权限，请联系管理员授权");
         }
       } catch {
-        toast.error("加载监控记录失败");
+        if (monitorResultsSeqRef.current[monitorId] === seq) {
+          toast.error("加载监控记录失败");
+        }
       }
     },
     [],

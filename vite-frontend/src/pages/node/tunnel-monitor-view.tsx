@@ -754,6 +754,10 @@ export function TunnelMonitorView({
     Record<number, TunnelQualityApiItem[]>
   >({});
   const initialHistoryFetched = useRef(false);
+  // R2X-040：loadTunnels/loadQuality 序号守卫（照本文件 loadQualityHistory 既有写法），
+  // 轮询与手动刷新并发时旧响应不得覆盖新数据（loadQuality 默认 1s 间隔重叠为常态）。
+  const loadTunnelsSeqRef = useRef(0);
+  const loadQualitySeqRef = useRef(0);
   const [qualityLoading, setQualityLoading] = useState(false);
   const qualityTimerRef = useRef<number | null>(null);
   const [monitorTunnelQualityEnabled, setMonitorTunnelQualityEnabled] =
@@ -786,10 +790,15 @@ export function TunnelMonitorView({
   // --- Load tunnel list ---
   const loadTunnels = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
+    const seq = (loadTunnelsSeqRef.current += 1);
 
     if (!silent) setTunnelsLoading(true);
     try {
       const response = await getMonitorTunnels();
+
+      if (loadTunnelsSeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code === 0 && response.data) {
         setAccessDenied(null);
@@ -808,12 +817,14 @@ export function TunnelMonitorView({
       setTunnelsError(response.msg || "加载隧道列表失败");
       if (!silent) toast.error(response.msg || "加载隧道列表失败");
     } catch {
-      if (!silent) {
+      if (!silent && loadTunnelsSeqRef.current === seq) {
         setTunnelsError("加载隧道列表失败");
         toast.error("加载隧道列表失败");
       }
     } finally {
-      if (!silent) setTunnelsLoading(false);
+      if (!silent && loadTunnelsSeqRef.current === seq) {
+        setTunnelsLoading(false);
+      }
     }
   }, []);
 
@@ -938,10 +949,15 @@ export function TunnelMonitorView({
   // --- Load quality snapshots using the configured probe interval ---
   const loadQuality = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
+    const seq = (loadQualitySeqRef.current += 1);
 
     if (!silent) setQualityLoading(true);
     try {
       const response = await getMonitorTunnelQuality();
+
+      if (loadQualitySeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code === 0 && Array.isArray(response.data)) {
         const map: Record<number, TunnelQualityApiItem> = {};
@@ -973,7 +989,9 @@ export function TunnelMonitorView({
     } catch {
       // Silently ignore quality load failures
     } finally {
-      if (!silent) setQualityLoading(false);
+      if (!silent && loadQualitySeqRef.current === seq) {
+        setQualityLoading(false);
+      }
     }
   }, []);
 
