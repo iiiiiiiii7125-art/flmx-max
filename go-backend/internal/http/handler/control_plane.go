@@ -1167,24 +1167,28 @@ func (h *Handler) prepareTunnelDiagnosis(tunnelID int64) (string, string, []diag
 
 	ipPreference := h.repo.GetTunnelIPPreference(tunnelID)
 	protocol := strings.ToLower(strings.TrimSpace(tunnel.Protocol))
-	probeTarget := effectiveTunnelProbeTargetValues(tunnel.ProbeTargetHost, tunnel.ProbeTargetPort)
+	// R3X-011 下发面：存量坏探测目标跳过外网腿（checked 内部已打
+	// 告警日志），链路腿（节点间）不受影响、照常诊断。
+	probeTarget, probeTargetOK := checkedTunnelProbeTargetValues(tunnel.ProbeTargetHost, tunnel.ProbeTargetPort)
 	inNodes, chainHops, outNodes := splitChainNodeGroups(chainRows)
 	workItems := make([]diagnosisWorkItem, 0, len(chainRows)*2)
 
 	switch tunnel.Type {
 	case 1:
-		for _, inNode := range inNodes {
-			description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  inNode.NodeID,
-				targetIP:    probeTarget.Host,
-				targetPort:  probeTarget.Port,
-				description: description,
-				protocol:    "tcp",
-				metadata: map[string]interface{}{
-					"fromChainType": 1,
-				},
-			})
+		if probeTargetOK {
+			for _, inNode := range inNodes {
+				description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
+				workItems = append(workItems, diagnosisWorkItem{
+					fromNodeID:  inNode.NodeID,
+					targetIP:    probeTarget.Host,
+					targetPort:  probeTarget.Port,
+					description: description,
+					protocol:    "tcp",
+					metadata: map[string]interface{}{
+						"fromChainType": 1,
+					},
+				})
+			}
 		}
 	case 2:
 		for _, inNode := range inNodes {
@@ -1265,32 +1269,36 @@ func (h *Handler) prepareTunnelDiagnosis(tunnelID int64) (string, string, []diag
 			}
 		}
 
-		for _, outNode := range outNodes {
-			description := fmt.Sprintf("出口(%s)->外网", outNode.NodeName)
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  outNode.NodeID,
-				targetIP:    probeTarget.Host,
-				targetPort:  probeTarget.Port,
-				description: description,
-				protocol:    "tcp",
-				metadata: map[string]interface{}{
-					"fromChainType": 3,
-				},
-			})
+		if probeTargetOK {
+			for _, outNode := range outNodes {
+				description := fmt.Sprintf("出口(%s)->外网", outNode.NodeName)
+				workItems = append(workItems, diagnosisWorkItem{
+					fromNodeID:  outNode.NodeID,
+					targetIP:    probeTarget.Host,
+					targetPort:  probeTarget.Port,
+					description: description,
+					protocol:    "tcp",
+					metadata: map[string]interface{}{
+						"fromChainType": 3,
+					},
+				})
+			}
 		}
 	default:
-		for _, inNode := range inNodes {
-			description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  inNode.NodeID,
-				targetIP:    probeTarget.Host,
-				targetPort:  probeTarget.Port,
-				description: description,
-				protocol:    "tcp",
-				metadata: map[string]interface{}{
-					"fromChainType": 1,
-				},
-			})
+		if probeTargetOK {
+			for _, inNode := range inNodes {
+				description := fmt.Sprintf("入口(%s)->外网", inNode.NodeName)
+				workItems = append(workItems, diagnosisWorkItem{
+					fromNodeID:  inNode.NodeID,
+					targetIP:    probeTarget.Host,
+					targetPort:  probeTarget.Port,
+					description: description,
+					protocol:    "tcp",
+					metadata: map[string]interface{}{
+						"fromChainType": 1,
+					},
+				})
+			}
 		}
 	}
 
