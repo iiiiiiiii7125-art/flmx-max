@@ -230,9 +230,20 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 	return out
 }
 
-// probeRelayLatency measures the given relay lines (all when ids is empty).
-// Entry nodes' reference point latency comes from the last node round.
-func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64]relayLatency, error) {
+// probeRelayLatency measures the given relay lines (all when ids is
+// empty). Entry nodes' reference point latency comes from the last
+// node round.
+//
+// fullReplace states the round's cache semantics explicitly — the
+// caller declares it, it is never inferred from len(ids) inside
+// (R3-B-02: the two streak-carrying probers dropped that inference in
+// R2 for probeRoundKind; this store has no streak, but the same
+// latent trap would arm itself the day relay alerts learn to count).
+// Whole-set rounds (the scheduled loop, the config-save refresh, the
+// probe endpoint's empty-ids "all lines" contract) pass true; the
+// reconnect retest, which measures only the affected lines, passes
+// false so untouched lines keep their cached results.
+func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64, fullReplace bool) (map[int64]relayLatency, error) {
 	started := time.Now().UnixNano()
 	rows, err := h.repo.ListInboundRelays(0)
 	if err != nil {
@@ -329,7 +340,7 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64
 		results[id] = relayLatencyFrom(plan, hops[id], entry, now)
 	}
 	if ctx.Err() == nil {
-		h.relayLatency.replaceRound(results, len(ids) == 0, started)
+		h.relayLatency.replaceRound(results, fullReplace, started)
 	}
 	return results, nil
 }
@@ -382,7 +393,10 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	results, err := h.probeRelayLatency(r.Context(), req.IDs)
+	// 本入口的 API 契约：空 ids = 全部中转线（整表替换），非空 =
+	// 定向刷新（合并）。轮次语义在入口按契约显式求值后传参，
+	// prober 内部不再以 len 推断（R3-B-02）。
+	results, err := h.probeRelayLatency(r.Context(), req.IDs, len(req.IDs) == 0)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

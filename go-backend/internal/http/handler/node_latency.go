@@ -272,7 +272,11 @@ func latencyCommandError(err error) string {
 		return "节点繁忙，请稍后重试"
 	case strings.Contains(msg, "队列已满"), strings.Contains(msg, "TCP探测"):
 		return msg
-	case strings.Contains(msg, "节点不在线"):
+	case strings.Contains(msg, "节点不在线"), strings.Contains(msg, "节点连接已断开"):
+		// 同一事实（节点掉线）只应有一种显示原因：发起时离线是
+		// 「节点不在线」，在途命令被断线终局是 failPendingForNode 的
+		// 「节点连接已断开」（ws/server.go）——两者同归「节点离线」
+		// （R3-B-01，此前在途断线落默认分支显示原始错误串）。
 		return "节点离线"
 	case errors.Is(err, context.DeadlineExceeded),
 		strings.Contains(msg, "timeout"), strings.Contains(msg, "等待节点响应超时"):
@@ -510,7 +514,7 @@ func (h *Handler) onLatencyConfigChanged(key string, prev []latencyTarget) {
 		if _, err := h.probeNodeLatency(ctx, nil, probeRoundFull); err != nil && ctx.Err() == nil {
 			log.Printf("node latency probe failed: %v", err)
 		}
-		if _, err := h.probeRelayLatency(ctx, nil); err != nil && ctx.Err() == nil {
+		if _, err := h.probeRelayLatency(ctx, nil, true); err != nil && ctx.Err() == nil {
 			log.Printf("relay latency probe failed: %v", err)
 		}
 		if _, err := h.traceNodeRoutes(ctx, nil, false); err != nil && ctx.Err() == nil {

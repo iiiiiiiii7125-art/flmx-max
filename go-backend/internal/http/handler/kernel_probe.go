@@ -353,7 +353,7 @@ func (h *Handler) runExternalProbeLoop(ctx context.Context) {
 		if _, err := h.probeNodeLatency(ctx, nil, probeRoundScheduled); err != nil && ctx.Err() == nil {
 			log.Printf("node latency probe failed: %v", err)
 		}
-		if _, err := h.probeRelayLatency(ctx, nil); err != nil && ctx.Err() == nil {
+		if _, err := h.probeRelayLatency(ctx, nil, true); err != nil && ctx.Err() == nil {
 			log.Printf("relay latency probe failed: %v", err)
 		}
 		if _, err := h.traceNodeRoutes(ctx, nil, false); err != nil && ctx.Err() == nil {

@@ -1,6 +1,6 @@
 import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { LayoutGrid, List } from "lucide-react";
 
@@ -56,13 +56,22 @@ function LinesView() {
     "list",
   );
 
+  // load 序号守卫（R3-D-01，与 node.tsx loadNodes 同型）：初载、
+  // 手动刷新与 15 秒轮询可并发在途，只有最新一轮可落 state，
+  // 乱序返回的旧列表快照直接丢弃（延迟字段另有 latestProbe
+  // 单调保护，此处守的是列表本体）。
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async (options?: { silent?: boolean }) => {
+    const seq = (loadSeqRef.current += 1);
+
     try {
       const [inRes, relRes] = await Promise.all([
         getInboundList(),
         getInboundRelays(0),
       ]);
 
+      if (loadSeqRef.current !== seq) return;
       if (inRes.code === 0) setInbounds(inRes.data ?? []);
       if (relRes.code === 0)
         setRelays((prev) => {
@@ -76,7 +85,9 @@ function LinesView() {
       if (inRes.code !== 0 && !options?.silent)
         toast.error(inRes.msg || "加载失败");
     } finally {
-      setLoading(false);
+      if (loadSeqRef.current === seq) {
+        setLoading(false);
+      }
     }
   }, []);
 

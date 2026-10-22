@@ -230,6 +230,26 @@ func TestTCPPingQueueStopsWithPendingAndRunningProbes(t *testing.T) {
 	}
 }
 
+// TestTCPPingBudgetBounds pins the budget derivation: no budget from
+// an old panel falls back to reporterReadWait, a small budget keeps the
+// 500ms floor (after the reply margin), a normal budget passes through
+// minus the margin, and an absurd one — including int64 multiplication
+// overflow territory — is capped at maxTCPPingBudget (R3-E 观察）.
+func TestTCPPingBudgetBounds(t *testing.T) {
+	for ms, want := range map[int64]time.Duration{
+		0:       reporterReadWait,
+		-5:      reporterReadWait,
+		1:       minTCPPingBudget,
+		6000:    6000*time.Millisecond - tcpPingReplyMargin,
+		30000:   30000*time.Millisecond - tcpPingReplyMargin,
+		3600000: maxTCPPingBudget,
+	} {
+		if got := tcpPingBudget(ms); got != want {
+			t.Fatalf("tcpPingBudget(%d) = %v, want %v", ms, got, want)
+		}
+	}
+}
+
 func TestTCPPingCanceledBeforeAnyAttempt(t *testing.T) {
 	reporter, _ := newTCPPingTestReporter(t)
 	ctx, cancel := context.WithCancel(reporter.ctx)

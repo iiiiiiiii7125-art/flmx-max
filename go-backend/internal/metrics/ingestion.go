@@ -12,19 +12,23 @@ import (
 )
 
 type SystemInfo struct {
-	Uptime           uint64  `json:"uptime"`
-	BytesReceived    uint64  `json:"bytes_received"`
-	BytesTransmitted uint64  `json:"bytes_transmitted"`
-	CPUUsage         float64 `json:"cpu_usage"`
-	MemoryUsage      float64 `json:"memory_usage"`
-	DiskUsage        float64 `json:"disk_usage"`
-	Load1            float64 `json:"load1"`
-	Load5            float64 `json:"load5"`
-	Load15           float64 `json:"load15"`
-	TCPConns         int64   `json:"tcp_conns"`
-	UDPConns         int64   `json:"udp_conns"`
-	NetInSpeed       int64   `json:"net_in_speed"`
-	NetOutSpeed      int64   `json:"net_out_speed"`
+	Uptime           uint64 `json:"uptime"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	BytesTransmitted uint64 `json:"bytes_transmitted"`
+	// BootID identifies the node's current OS boot (the agent's
+	// machineBootID); it keys the NIC counter regression semantics
+	// in RecordNodeMetric. Empty from old agents.
+	BootID      string  `json:"boot_id"`
+	CPUUsage    float64 `json:"cpu_usage"`
+	MemoryUsage float64 `json:"memory_usage"`
+	DiskUsage   float64 `json:"disk_usage"`
+	Load1       float64 `json:"load1"`
+	Load5       float64 `json:"load5"`
+	Load15      float64 `json:"load15"`
+	TCPConns    int64   `json:"tcp_conns"`
+	UDPConns    int64   `json:"udp_conns"`
+	NetInSpeed  int64   `json:"net_in_speed"`
+	NetOutSpeed int64   `json:"net_out_speed"`
 }
 
 // NodeTrafficRetention keeps a little over a year of hourly node NIC
@@ -45,8 +49,10 @@ type IngestionService struct {
 	// lastBytes is each node's last NIC byte counters (in, out);
 	// node_traffic accumulates what they grew by, per hour, until the
 	// next flush. These are whole-machine NIC counters — not tunnel
-	// billing counters.
+	// billing counters. lastBoot is the boot id that accompanied
+	// lastBytes; it decides what a counter regression means.
 	lastBytes map[int64][2]int64
+	lastBoot  map[int64]string
 	traffic   map[trafficKey][2]int64
 }
 
@@ -56,17 +62,36 @@ func NewIngestionService(repo *repo.Repository) *IngestionService {
 		nodeBuffer:    make([]*model.NodeMetric, 0, 500),
 		flushInterval: 30 * time.Second,
 		lastBytes:     map[int64][2]int64{},
+		lastBoot:      map[int64]string{},
 		traffic:       map[trafficKey][2]int64{},
 	}
 }
 
-// counterDelta is what a byte counter grew by; a smaller value means
-// the counter restarted (a reboot), so all of it is new.
-func counterDelta(prev, cur int64) int64 {
+// counterDeltaForBoot is what a byte counter grew by between two
+// reports, keyed by the boot id each report carried. Growth is plain
+// subtraction under every boot state.
+//
+// A regression has two very different causes. A reboot restarts the
+// counters: everything in the new counter is new traffic. But the
+// agent reports the SUM over all non-loopback interfaces, so the sum
+// also falls mid-boot whenever an interface vanishes (a veth or
+// tailscale interface going away) — and those bytes were already
+// counted, so treating the new total as fresh double-counts the
+// machine's whole counter history (real-machine S4: +4.4GB of phantom
+// traffic in 13 minutes on a Docker node, the month total passing the
+// physical NIC's since-boot cumulative; R3 item 9, P2). Only a PROVEN
+// boot change — both reports carry a boot id and they differ — keeps
+// the legacy count-in-full semantics. An unproven regression (same
+// boot, or either side missing the id, i.e. an old agent) counts 0:
+// at most one sampling window is understated, never a full recount.
+func counterDeltaForBoot(prev, cur int64, prevBoot, curBoot string) int64 {
 	if cur >= prev {
 		return cur - prev
 	}
-	return cur
+	if prevBoot != "" && curBoot != "" && prevBoot != curBoot {
+		return cur
+	}
+	return 0
 }
 
 func (s *IngestionService) Start(ctx context.Context) {
@@ -115,11 +140,12 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	if prev, ok := s.lastBytes[nodeID]; ok {
 		k := trafficKey{nodeID, m.Timestamp - m.Timestamp%int64(time.Hour/time.Millisecond)}
 		t := s.traffic[k]
-		t[0] += counterDelta(prev[0], m.NetInBytes)
-		t[1] += counterDelta(prev[1], m.NetOutBytes)
+		t[0] += counterDeltaForBoot(prev[0], m.NetInBytes, s.lastBoot[nodeID], info.BootID)
+		t[1] += counterDeltaForBoot(prev[1], m.NetOutBytes, s.lastBoot[nodeID], info.BootID)
 		s.traffic[k] = t
 	}
 	s.lastBytes[nodeID] = [2]int64{m.NetInBytes, m.NetOutBytes}
+	s.lastBoot[nodeID] = info.BootID
 	s.nodeBufferMu.Unlock()
 
 	if shouldFlush {

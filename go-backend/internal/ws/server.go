@@ -186,6 +186,7 @@ type SystemInfo struct {
 	Uptime           uint64  `json:"uptime"`
 	BytesReceived    uint64  `json:"bytes_received"`
 	BytesTransmitted uint64  `json:"bytes_transmitted"`
+	BootID           string  `json:"boot_id"`
 	CPUUsage         float64 `json:"cpu_usage"`
 	MemoryUsage      float64 `json:"memory_usage"`
 	DiskUsage        float64 `json:"disk_usage"`
