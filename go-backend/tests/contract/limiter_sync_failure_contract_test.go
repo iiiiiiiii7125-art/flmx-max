@@ -211,7 +211,7 @@ func TestForwardCreateRollbackWhenLimiterAlreadyExistsAndUpdateFailsContract(t *
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "limiter-exists-update-fail-node", "limiter-exists-update-fail-secret", "10.20.2.1", "10.20.2.1", "", "32300-32310", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "limiter-exists-update-fail-node", "limiter-exists-update-fail-secret", "10.20.2.1", "10.20.2.1", "", "32300-32310", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "limiter-exists-update-fail-node")
@@ -236,6 +236,14 @@ func TestForwardCreateRollbackWhenLimiterAlreadyExistsAndUpdateFailsContract(t *
 		"updatelimiters": "mock update limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake（本条即 1.3.4 发版轮 CI flake 本尊，RELEASE-134
+	// §6 定案）：旧构造种子 status=1 且无任何同步点，mock 拨号返回
+	// 后立刻发 create；WS 会话登记未落点时 ensureLimiterOnNode 的
+	// SendCommand 报「节点不在线」，被包装成「节点 … 不在线，限速
+	// 无法下发」抢先于期望的 update 失败文案。种子改 status=0 后
+	// waitNodeStatus(…, 1) 是真同步点（登记先于置 1）。断言原样：
+	// 仍必须命中 mock update limiters failed 文案且转发回滚删除。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "limiter-exists-update-fail-forward",
