@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"go-backend/internal/http/client"
+	"go-backend/internal/netguard"
 )
 
 // DisableSafeRemoteAddrCheckForTesting allows bypassing the safety check during integration tests.
@@ -66,7 +67,12 @@ func checkSingleRemoteAddr(addr string) error {
 	}
 
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() {
+		// R2X-001：改走 netguard 普通转发策略——非公网全拒、硬拒
+		// 先行（旧实现仅拦 loopback+RFC1918，链路本地/元数据/CGNAT/
+		// 240-4/组播/NAT64·6to4 内嵌形态全部漏过，入口节点 IMDS
+		// 可被普通用户直读）。管理员与 allow_local_remote_addr
+		// 例外在调用方，本函数口径不变。
+		if d := netguard.Judge(ip, netguard.PolicyPublicOnly, false); !d.Allowed {
 			return fmt.Errorf("address %q resolves to internal IP: %s", addr, ip.String())
 		}
 	}
