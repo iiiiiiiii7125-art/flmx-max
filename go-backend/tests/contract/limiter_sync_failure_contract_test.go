@@ -129,7 +129,7 @@ func TestForwardCreateSucceedsWhenLimiterAlreadyExistsAndUpdateSucceedsContract(
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "limiter-exists-update-ok-node", "limiter-exists-update-ok-secret", "10.20.1.1", "10.20.1.1", "", "32200-32210", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "limiter-exists-update-ok-node", "limiter-exists-update-ok-secret", "10.20.1.1", "10.20.1.1", "", "32200-32210", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "limiter-exists-update-ok-node")
@@ -153,6 +153,9 @@ func TestForwardCreateSucceedsWhenLimiterAlreadyExistsAndUpdateSucceedsContract(
 		"addlimiters": "limiter 8 already exists",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点，防「节点不在线」抢先。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "limiter-exists-update-ok-forward",
