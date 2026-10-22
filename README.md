@@ -8,7 +8,7 @@
 
 在一个面板里管理中转与落地：一键部署 Xray / sing-box / Snell 节点，对接中转，生成订阅。
 
-[使用文档](https://iiiiiiiii7125-art.github.io/flmx-max/) · [快速上手](https://iiiiiiiii7125-art.github.io/flmx-max/guide/getting-started) · [下载](https://github.com/iiiiiiiii7125-art/flmx-max/releases)
+[使用文档](https://iiiiiiiii7125-art.github.io/flmx-max/) · [演示站](https://iiiiiiiii7125-art.github.io/flmx-max/demo/) · [快速上手](https://iiiiiiiii7125-art.github.io/flmx-max/guide/getting-started) · [下载](https://github.com/iiiiiiiii7125-art/flmx-max/releases)
 
 </div>
 
