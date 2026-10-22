@@ -2891,6 +2891,16 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 		return
 	}
+	// X-P2-17（BC-13）：Idempotency-Key 回放/捕获（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, userID)
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	tunnelID := asInt64(req["tunnelId"], 0)
 	if tunnelID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("隧道ID不能为空"))
