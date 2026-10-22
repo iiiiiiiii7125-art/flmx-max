@@ -207,13 +207,19 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		saveErr := func() error {
 			portMu := repo.AcquirePortAllocLock(0)
 			defer repo.ReleasePortAllocLock(portMu)
-			if rowsNow, err := h.repo.ListNodeInbounds(); err == nil {
-				key := externalKey(row.Listen, row.Port)
-				for i := range rowsNow {
-					other := &rowsNow[i]
-					if other.ID != row.ID && isExternalInbound(other) && externalKey(other.Listen, other.Port) == key {
-						return fmt.Errorf("已存在相同地址和端口的导入节点（%s）", key)
-					}
+			// R4X-007 普查顺改（B 表二去重门）：复检查询失败 fail-closed
+			// 中止本次保存并记错——旧实现 err 被 `err == nil` 门吞掉后
+			// 无条件保存，并发下可撞出重复 (host,port) 行。去重是本
+			// 临界区唯一防线，查不了就不写。
+			rowsNow, err := h.repo.ListNodeInbounds()
+			if err != nil {
+				return err
+			}
+			key := externalKey(row.Listen, row.Port)
+			for i := range rowsNow {
+				other := &rowsNow[i]
+				if other.ID != row.ID && isExternalInbound(other) && externalKey(other.Listen, other.Port) == key {
+					return fmt.Errorf("已存在相同地址和端口的导入节点（%s）", key)
 				}
 			}
 			return h.repo.SaveNodeInbound(row)
@@ -237,7 +243,17 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		if used[row.ID] {
 			continue
 		}
-		if relays, err := h.repo.ListInboundRelays(row.ID); err == nil && len(relays) > 0 {
+		// R4X-007：守卫查询失败 fail-closed（与下方 chainReferrers
+		// 分支同形）——旧实现 `err == nil &&` 把查询错误折叠为「无
+		// 中转」，瞬时 DB 失败即级联删中转与用户分配（R3X-015 同一
+		// 删除决策漏改的紧邻一行）。
+		relays, relErr := h.repo.ListInboundRelays(row.ID)
+		if relErr != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", row.Name, relErr))
+			res.Kept++
+			continue
+		}
+		if len(relays) > 0 {
 			res.Kept++
 			continue
 		}
@@ -260,12 +276,19 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		res.Removed++
 	}
 
+	// B4-S3（随 R4X-007 批顺手）：末尾计数查询失败时跳过状态写回——
+	// 旧实现失败时 count 保持 0 仍连同 last_error 清空一并写回，把
+	// 卡片节点数误显 0；跳过写回后保留上轮状态，下轮同步自愈。
+	rowsTail, tailErr := h.repo.ListNodeInbounds()
+	if tailErr != nil {
+		log.Printf("remote source %d sync: tail count failed, status write skipped: %v", src.ID, tailErr)
+		res.Errors = append(res.Errors, fmt.Sprintf("同步完成但节点计数失败：%v", tailErr))
+		return res, nil
+	}
 	count := 0
-	if rows, err := h.repo.ListNodeInbounds(); err == nil {
-		for _, row := range rows {
-			if row.SourceID == src.ID {
-				count++
-			}
+	for _, row := range rowsTail {
+		if row.SourceID == src.ID {
+			count++
 		}
 	}
 	_ = h.repo.UpdateRemoteSourceStatus(src.ID, map[string]interface{}{
