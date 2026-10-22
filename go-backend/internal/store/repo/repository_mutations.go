@@ -1763,9 +1763,9 @@ func (r *Repository) InsertGroupPermission(userGroupID, tunnelGroupID int64, now
 	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&gp).Error
 }
 
-func (r *Repository) InsertGroupPermissionGrant(userGroupID, tunnelGroupID, userTunnelID int64, createdByGroup int, now int64) {
+func (r *Repository) InsertGroupPermissionGrant(userGroupID, tunnelGroupID, userTunnelID int64, createdByGroup int, now int64) error {
 	if r == nil || r.db == nil {
-		return
+		return errors.New("repository not initialized")
 	}
 	g := model.GroupPermissionGrant{
 		UserGroupID:    userGroupID,
@@ -1774,7 +1774,7 @@ func (r *Repository) InsertGroupPermissionGrant(userGroupID, tunnelGroupID, user
 		CreatedByGroup: createdByGroup,
 		CreatedTime:    now,
 	}
-	_ = r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&g).Error
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&g).Error
 }
 
 func (r *Repository) EnsureUserTunnelGrant(userID, tunnelID int64) (int64, bool, error) {
