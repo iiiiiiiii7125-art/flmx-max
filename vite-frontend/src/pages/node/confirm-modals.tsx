@@ -67,6 +67,8 @@ export function RollbackNodeModal({
 }
 
 export interface DeleteNodeModalProps {
+  /** R2X-045: 跨节点引用清单（删除将打断这些引用），确认前点名。 */
+  brokenReferrers?: string[];
   confirmDelete: () => Promise<void>;
   deleteLoading: boolean;
   deleteModalOpen: boolean;
@@ -76,6 +78,7 @@ export interface DeleteNodeModalProps {
 
 /** Confirm deleting one node. */
 export function DeleteNodeModal({
+  brokenReferrers,
   confirmDelete,
   deleteLoading,
   deleteModalOpen,
@@ -105,6 +108,13 @@ export function DeleteNodeModal({
                 确定要删除节点 <strong>&quot;{nodeToDelete?.name}&quot;</strong>{" "}
                 吗？
               </p>
+              {brokenReferrers && brokenReferrers.length > 0 ? (
+                <p className="text-small text-danger">
+                  删除将打断 {brokenReferrers.length} 个跨节点引用：
+                  {brokenReferrers.join("、")}
+                  。这些入站经本节点出去的流量将被丢弃，请先解除引用或确认继续。
+                </p>
+              ) : null}
               <p className="text-small text-default-500">
                 此操作不可恢复，请谨慎操作。
               </p>
@@ -131,6 +141,8 @@ export function DeleteNodeModal({
 export interface BatchDeleteNodesModalProps {
   batchDeleteModalOpen: boolean;
   batchLoading: boolean;
+  /** R2X-045: 跨节点引用清单（删除将打断这些引用），确认前点名。 */
+  brokenReferrers?: string[];
   handleBatchDelete: () => Promise<void>;
   selectedIds: Set<number>;
   setBatchDeleteModalOpen: Dispatch<SetStateAction<boolean>>;
@@ -140,6 +152,7 @@ export interface BatchDeleteNodesModalProps {
 export function BatchDeleteNodesModal({
   batchDeleteModalOpen,
   batchLoading,
+  brokenReferrers,
   handleBatchDelete,
   selectedIds,
   setBatchDeleteModalOpen,
@@ -166,6 +179,13 @@ export function BatchDeleteNodesModal({
               <p>
                 确定要删除选中的 <strong>{selectedIds.size}</strong> 个节点吗？
               </p>
+              {brokenReferrers && brokenReferrers.length > 0 ? (
+                <p className="text-small text-danger">
+                  删除将打断 {brokenReferrers.length} 个跨节点引用：
+                  {brokenReferrers.join("、")}
+                  。这些入站经被删节点出去的流量将被丢弃，请先解除引用或确认继续。
+                </p>
+              ) : null}
               <p className="text-small text-default-500">
                 此操作不可恢复，请谨慎操作。
               </p>

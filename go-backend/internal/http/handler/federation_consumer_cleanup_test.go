@@ -106,6 +106,12 @@ func TestFederationCleanupRetainsFailedBindingAndRetriesOnlyPending(t *testing.T
 	if releases.Load() != 2 {
 		t.Fatalf("cleanup was not retried: %d", releases.Load())
 	}
+	// 断言更新登记 #2 附带（verdicts §2.5③）：重试环释放前复核隧道
+	// 存续，隧道仍在时不得释放。本用例模拟的是删除流程的清理收敛，
+	// 故在重试前补上删除流程的删库动作（级联保留 pending 绑定行）。
+	if err := r.DeleteTunnelCascade(42); err != nil {
+		t.Fatal(err)
+	}
 	unavailable.Store(false)
 	if err := h.retryPendingFederationRuntimeCleanup(); err != nil {
 		t.Fatal(err)
@@ -120,7 +126,12 @@ func TestFederationCleanupRetainsFailedBindingAndRetriesOnlyPending(t *testing.T
 	}
 }
 
-func TestTunnelDeleteReportsRemoteFailureAndKeepsTunnel(t *testing.T) {
+// 断言更新登记 #2（R2 裁定驱动，verdicts §2.5① / BC-R2-01）：本用例
+// 原名 TestTunnelDeleteReportsRemoteFailureAndKeepsTunnel，锁的是旧
+// 中止口径「联邦清理失败 → 报错且不删隧道」。裁定①改为删除离线容忍
+// （删库照常、绑定留 pending 由重试环收敛，与 delete-with-forwards
+// 统一），断言按新口径改写：删除成功 + 隧道已删 + 绑定 pending 留存。
+func TestTunnelDeleteToleratesRemoteFailureAndDeletesTunnel(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "peer unavailable", http.StatusServiceUnavailable)
 	}))
@@ -132,15 +143,15 @@ func TestTunnelDeleteReportsRemoteFailureAndKeepsTunnel(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Code == 0 {
-		t.Fatal("delete reported success before peer cleanup")
+	if payload.Code != 0 {
+		t.Fatalf("delete must succeed despite peer cleanup failure, got code=%d msg=%q", payload.Code, payload.Msg)
 	}
-	if name, err := r.GetTunnelName(42); err != nil || name != "live tunnel" {
-		t.Fatalf("lost tunnel: %s %v", name, err)
+	if exists, err := r.TunnelExists(42); err != nil || exists {
+		t.Fatalf("tunnel must be deleted: exists=%v err=%v", exists, err)
 	}
 	pending, err := r.ListPendingFederationTunnelBindings()
 	if err != nil || len(pending) != 1 {
-		t.Fatalf("lost binding: %v %v", pending, err)
+		t.Fatalf("binding must stay pending for the retry loop: %v %v", pending, err)
 	}
 }
 
@@ -245,8 +256,14 @@ func TestTunnelUpdateRemoteReleaseFailurePreservesMetadata(t *testing.T) {
 	}
 	name, err := r.GetTunnelName(42)
 	pending, pendingErr := r.ListPendingFederationTunnelBindings()
-	if err != nil || pendingErr != nil || payload.Code == 0 || name != "live tunnel" || requests.Load() != 1 || len(pending) != 1 {
-		t.Fatalf("failed cleanup continued update: payload=%+v name=%s calls=%d pending=%v err=%v/%v", payload, name, requests.Load(), pending, err, pendingErr)
+	active, activeErr := r.ListActiveFederationTunnelBindingsByTunnel(42)
+	// 断言更新登记 #2 附带（verdicts §2.5②）：旧断言要求失败编辑后绑定
+	// 留 pending(==1)；裁定②要求中止时把本轮新置 pending 回滚为
+	// status=1，故改断言为 pending==0 且 active==1（元数据保留与中止
+	// 口径不变）。组合证据见 r2_b9_federation_test.go 的
+	// TestR2B9TunnelUpdateFederationOfflineRollbackCombination。
+	if err != nil || pendingErr != nil || activeErr != nil || payload.Code == 0 || name != "live tunnel" || requests.Load() != 1 || len(pending) != 0 || len(active) != 1 {
+		t.Fatalf("failed cleanup continued update: payload=%+v name=%s calls=%d pending=%v active=%v err=%v/%v/%v", payload, name, requests.Load(), pending, active, err, pendingErr, activeErr)
 	}
 }
 

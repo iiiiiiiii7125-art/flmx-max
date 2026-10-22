@@ -143,7 +143,11 @@ export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
   Network.post("/node/update", data);
-export const deleteNode = (id: number) => Network.post("/node/delete", { id });
+export const deleteNode = (id: number) =>
+  Network.post<{ brokenReferrers?: string[]; brokenReferrerCount?: number }>(
+    "/node/delete",
+    { id },
+  );
 export const getNodeInstallCommand = (
   id: number,
   channel: ReleaseChannel = "stable",
