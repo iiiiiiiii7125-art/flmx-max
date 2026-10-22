@@ -128,5 +128,5 @@
 
 - main：`e432ffe`（merge integrate132: FLMX 1.3.4 全量审计修复版）
 - tag：`1.3.4`（纯数字）
-- CI：`（待填）`
-- Release 资产：12 个（6 产物 + 6.sha256），`（待逐个核验后填）`
+- CI：Build and Push Images `39718165749` success（Check Version / 前端 / 后端 / GOST / Create Release 全绿，2026-10-22T03:50Z Release Published）；main CI Build Check 合并提交轮 `39718141092` success；Publish Skill to npm `39718165646` 为 ENEEDAUTH 惯例红（不阻塞）。注：发版说明提交轮的 CI Build Check 首跑有一例时序敏感契约测试 flake（节点在线判定抢先于期望报错文案），同代码在合并提交轮全绿、本地 5/5、CI 重跑 attempt 2 success，已定案为 flake。
+- Release 资产：12 个（6 产物 + 6 .sha256），已逐个下载核验 sha256 全部与发布 .sha256 一致；发布副本 panel_install.sh `PINNED_VERSION="1.3.4"`、`REPO="iiiiiiiii7125-art/flmx-max"`，install.sh `PINNED_VERSION="1.3.4"`。
