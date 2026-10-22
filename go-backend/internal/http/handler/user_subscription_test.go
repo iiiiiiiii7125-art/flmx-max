@@ -97,6 +97,11 @@ func TestUserSubscriptionSetGuards(t *testing.T) {
 	if err := r.SaveSubscription(sub); err != nil {
 		t.Fatal(err)
 	}
+	// R2X-012 后果：分配目标用户必须真实存在（此前夹具以不存在的
+	// userId=2 走通成功路径，与新口径冲突，故补建真实用户；断言不变）。
+	if err := r.DB().Exec(`INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, status) VALUES(2, 'member', 'pwd', 1, 0, 100, 0, 0, 0, 10, 1000, 1)`).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	callSet := func(roleID int, body string) (int, string) {
 		req := httptest.NewRequest("POST", "/api/v1/user-subscription/set", strings.NewReader(body))
