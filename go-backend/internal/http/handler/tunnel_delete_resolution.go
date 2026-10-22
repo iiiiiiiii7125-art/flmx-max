@@ -442,12 +442,24 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 	}
 	if execErr != nil {
 		failures = append(failures, execFailure)
+		// R4X-003(a)（verdicts §3 统一收尾）：迁移执行失败已在
+		// execute 层回滚全部已完成计划（单计划内部四回滚点亦经此
+		// 返回收口），但回滚只恢复 DB + gost 服务，allow 不随之纠正
+		// ——窗口内任何一次按暂态 DB 现算的下发都会把错误 allow 驻留
+		// 在落地节点。此处按执行前收集集统一补刷一次（与成功路径
+		// 对称，幂等），不逐回滚点打补丁。
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		return tunnelDeleteWithForwardsResult{}, failures, nil
 	}
 
 	if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
 		h.rollbackTunnelForwardMigrationPlans(plans)
 		_ = h.redeployTunnelAndForwards(tunnelID)
+		// R4X-003(b)：删源隧道失败回滚同理——迁移已把转发搬到目标
+		// 隧道并按目标口径下发过服务，回滚后须按回滚后 DB 补刷一次
+		// 白名单（redeploy 只重下发隧道运行时与转发服务、不含
+		// applyKernel），否则 allow 停留在迁移后口径。
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		return tunnelDeleteWithForwardsResult{}, nil, err
 	}
 	h.refreshInboundWhitelists(affectedInboundIDs)
