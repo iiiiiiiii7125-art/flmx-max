@@ -235,6 +235,9 @@ export default function UserPage({
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // loadUsers 序号守卫 + 最新关键词/分页 ref（避免闭包捕获旧值）
   const loadUsersSeqRef = useRef(0);
+  // loadUserTunnels 序号守卫（R2X-040，照 loadUsersSeqRef 写法）：
+  // 连点两用户开授权弹窗时，先发后到的旧用户响应不得落进新弹窗。
+  const loadUserTunnelsSeqRef = useRef(0);
   const searchKeywordRef = useRef(searchKeyword);
   const paginationRef = useRef(pagination);
 
@@ -513,9 +516,15 @@ export default function UserPage({
   }, []);
 
   const loadUserTunnels = useCallback(async (userId: number) => {
+    const seq = (loadUserTunnelsSeqRef.current += 1);
+
     setTunnelListLoading(true);
     try {
       const response = await getUserTunnelList({ userId });
+
+      if (loadUserTunnelsSeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code === 0) {
         setUserTunnels(
@@ -527,9 +536,13 @@ export default function UserPage({
         toast.error(response.msg || "获取隧道权限列表失败");
       }
     } catch {
-      toast.error("获取隧道权限列表失败");
+      if (loadUserTunnelsSeqRef.current === seq) {
+        toast.error("获取隧道权限列表失败");
+      }
     } finally {
-      setTunnelListLoading(false);
+      if (loadUserTunnelsSeqRef.current === seq) {
+        setTunnelListLoading(false);
+      }
     }
   }, []);
 
