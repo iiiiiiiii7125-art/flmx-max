@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -27,42 +25,8 @@ import (
 //   面 4 vite PWA 配置与注册代码：autoUpdate + skipWaiting +
 //        clientsClaim，禁止 onNeedRefresh 提示式更新回潮。
 // 文件缺失（裁剪检出）时跳过，与本包既有静态断言同风格。
-
-func repoRootFile(t *testing.T, rel string) (string, bool) {
-	t.Helper()
-	p := filepath.Join("..", "..", "..", "..", filepath.FromSlash(rel))
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return "", false
-	}
-	return string(b), true
-}
-
-// nginxLocationBlocks 按 location 标记粗切配置块（块到下一个 location 为止）。
-func nginxLocationBlocks(conf string) map[string]string {
-	blocks := map[string]string{}
-	idx := 0
-	for {
-		i := strings.Index(conf[idx:], "location")
-		if i < 0 {
-			break
-		}
-		start := idx + i
-		next := strings.Index(conf[start+len("location"):], "location")
-		end := len(conf)
-		if next >= 0 {
-			end = start + len("location") + next
-		}
-		headerEnd := strings.Index(conf[start:], "{")
-		if headerEnd < 0 {
-			break
-		}
-		header := strings.TrimSpace(conf[start : start+headerEnd])
-		blocks[header] = conf[start:end]
-		idx = end
-	}
-	return blocks
-}
+// repoRootFile / nginxLocationBlocks 复用 log_redaction_fix132_test.go 的
+// 同名实现（并入 main 时去重，两份实现逐字等价、断言互补全保留）。
 
 func TestNginxHashedAssetsImmutable(t *testing.T) {
 	conf, ok := repoRootFile(t, "vite-frontend/nginx.conf")
