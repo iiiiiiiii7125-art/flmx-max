@@ -431,6 +431,10 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
   const load = (reset = false) =>
     getSubInfo(reset).then((res) => {
       if (res.code === 0) {
+        // R4X-017（回执面 #26）：reset 成功但下发节点失败时后端回
+        // code=0 + 非标准 Msg，必须透出——与 subscription.tsx
+        // showResult 同型通道；标准 Msg 不弹，doReset 成功文案不变。
+        if (res.msg && res.msg !== "操作成功") toast(res.msg, { icon: "⚠️" });
         setPath(res.data.path);
 
         return true;
