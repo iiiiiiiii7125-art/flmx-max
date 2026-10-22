@@ -11,9 +11,10 @@ import "testing"
 
 func TestFix2CAgentSupportsNoPrivateBypass(t *testing.T) {
 	cases := map[string]bool{
-		"1.3.3":  true,
-		"1.3.2":  false, // 本版 agent 尚无内置 bypass
-		"v1.3.3": true,
+		"1.3.4":  true,
+		"1.3.3":  false, // 1.3.3 为前端缓存紧急版，agent 未带内置 bypass
+		"1.3.2":  false,
+		"v1.3.4": true,
 		"1.4.0":  true,
 		"1.2.0":  false,
 		"":       false,
@@ -29,19 +30,19 @@ func TestFix2CAgentSupportsNoPrivateBypass(t *testing.T) {
 
 func TestFix2CExitServiceGetsPrivateGuardOnlyWhenSupported(t *testing.T) {
 	service := buildFederationServiceConfig("svc-exit", ":40000", "tls", "exit", "", 1, "")
-	applyFederationExitPrivateGuard(service, "exit", "1.3.3")
+	applyFederationExitPrivateGuard(service, "exit", "1.3.4")
 	if service["bypass"] != flmxNoPrivateBypassName {
 		t.Fatalf("exit service on a supporting agent must carry the bypass, got %v", service["bypass"])
 	}
 
 	serviceOld := buildFederationServiceConfig("svc-exit", ":40000", "tls", "exit", "", 1, "")
-	applyFederationExitPrivateGuard(serviceOld, "exit", "1.3.2")
+	applyFederationExitPrivateGuard(serviceOld, "exit", "1.3.3")
 	if _, ok := serviceOld["bypass"]; ok {
-		t.Fatal("exit service must NOT carry the bypass for pre-1.3.3 agents (fail-open on unknown names)")
+		t.Fatal("exit service must NOT carry the bypass for pre-1.3.4 agents (fail-open on unknown names)")
 	}
 
 	serviceMiddle := buildFederationServiceConfig("svc-middle", ":40000", "tls", "middle", "chain-x", 1, "")
-	applyFederationExitPrivateGuard(serviceMiddle, "middle", "1.3.3")
+	applyFederationExitPrivateGuard(serviceMiddle, "middle", "1.3.4")
 	if _, ok := serviceMiddle["bypass"]; ok {
 		t.Fatal("middle role services must not get the exit private guard")
 	}
