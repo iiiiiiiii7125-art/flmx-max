@@ -748,23 +748,33 @@ func (r *Repository) ListUserInboundAssignments(userID int64) ([]UserInboundAssi
 // Assignments pointing at deleted inbounds/relays (orphans from before the
 // delete-cascade was added) are silently skipped instead of failing the save.
 func (r *Repository) SetUserInboundAssignments(userID int64, assignments []UserInboundAssignment) error {
+	_, err := r.SetUserInboundAssignmentsCounted(userID, assignments)
+	return err
+}
+
+// SetUserInboundAssignmentsCounted is SetUserInboundAssignments plus the
+// number of assignments skipped because their relay does not exist or does
+// not belong to the inbound (R3X-022: the skip stays silent at the data
+// layer by design, but the handler receipt now reports skippedRelays
+// instead of claiming an unqualified success).
+func (r *Repository) SetUserInboundAssignmentsCounted(userID int64, assignments []UserInboundAssignment) (skippedRelays int, err error) {
 	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
+		return 0, errors.New("repository not initialized")
 	}
 	// Validate before touching the DB; drop orphans.
 	seen := make(map[UserInboundAssignment]bool, len(assignments))
 	valid := make([]UserInboundAssignment, 0, len(assignments))
 	for _, a := range assignments {
 		if a.InboundID <= 0 || a.RelayID < 0 {
-			return errors.New("invalid assignment")
+			return 0, errors.New("invalid assignment")
 		}
 		if seen[a] {
-			return errors.New("duplicate assignment")
+			return 0, errors.New("duplicate assignment")
 		}
 		seen[a] = true
 		var cnt int64
 		if err := r.db.Model(&model.NodeInbound{}).Where("id = ?", a.InboundID).Count(&cnt).Error; err != nil {
-			return err
+			return 0, err
 		}
 		if cnt == 0 {
 			continue // orphan: inbound was deleted, skip
@@ -773,15 +783,16 @@ func (r *Repository) SetUserInboundAssignments(userID int64, assignments []UserI
 			var rcnt int64
 			// Relays are tunnel forwards bound to the inbound via NodeInboundRelay.
 			if err := r.db.Model(&model.NodeInboundRelay{}).Where("id = ? AND inbound_id = ?", a.RelayID, a.InboundID).Count(&rcnt).Error; err != nil {
-				return err
+				return 0, err
 			}
 			if rcnt == 0 {
+				skippedRelays++
 				continue // orphan: relay was deleted, skip
 			}
 		}
 		valid = append(valid, a)
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	err = r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("user_id = ?", userID).Delete(&model.UserInbound{}).Error; err != nil {
 			return err
 		}
@@ -793,4 +804,8 @@ func (r *Repository) SetUserInboundAssignments(userID int64, assignments []UserI
 		}
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return skippedRelays, nil
 }
