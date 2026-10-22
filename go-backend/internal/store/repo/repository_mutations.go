@@ -1209,6 +1209,17 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 	for _, p := range inboundPorts {
 		used[p] = true
 	}
+	// X-P2-13（L-08-1）：联邦 peer_share_runtime 有效预留口纳入已用集，
+	// 自动选口不得挑中预留口（与本地占用谓词双向对齐）。
+	var peerPorts []int
+	if err := r.db.Model(&model.PeerShareRuntime{}).Where("node_id = ? AND port > 0 AND status = 1", nodeID).Pluck("port", &peerPorts).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range peerPorts {
+		if p > 0 {
+			used[p] = true
+		}
+	}
 	return used, nil
 }
 

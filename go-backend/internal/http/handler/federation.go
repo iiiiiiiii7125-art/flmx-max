@@ -1332,6 +1332,12 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 	peerRoleRuntimeMu.Lock()
 	defer peerRoleRuntimeMu.Unlock()
 
+	// X-P2-13（L-08-1）：联邦端口分配接入 per-node 端口锁，与本地
+	// forwardCreate 的锁内复检同域串行（锁序恒为 peerRoleRuntimeMu →
+	// portAllocLock；本地路径从不取 peerRoleRuntimeMu，无反序）。
+	portMu := repo.AcquirePortAllocLock(share.NodeID)
+	defer repo.ReleasePortAllocLock(portMu)
+
 	usedPorts, err := h.repo.ListUsedPortsOnNode(share.NodeID)
 	if err != nil {
 		writePeerInternalError(w, "tunnel/create list used ports", err)
@@ -1432,6 +1438,9 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 
 	peerRoleRuntimeMu.Lock()
 	defer peerRoleRuntimeMu.Unlock()
+	// X-P2-13（L-08-1）：同 federationTunnelCreate，接入 per-node 端口锁。
+	portMu := repo.AcquirePortAllocLock(share.NodeID)
+	defer repo.ReleasePortAllocLock(portMu)
 	share, err = h.repo.GetPeerShare(share.ID)
 	if err != nil || share == nil || share.IsActive != 1 || (share.ExpiryTime > 0 && share.ExpiryTime <= time.Now().UnixMilli()) {
 		response.WriteJSON(w, response.Err(403, "Share is unavailable"))
