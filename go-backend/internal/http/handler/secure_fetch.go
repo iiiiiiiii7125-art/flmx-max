@@ -268,6 +268,18 @@ func SecureFetch(ctx context.Context, rawURL string) ([]byte, error) {
 
 // SecureFetchWithHeader 同 SecureFetch，额外返回响应头。
 func SecureFetchWithHeader(ctx context.Context, rawURL string) ([]byte, http.Header, error) {
+	return secureFetchWithHeader(ctx, rawURL, secureFetchMaxBody)
+}
+
+// secureFetchWithHeaderLimit 同 SecureFetchWithHeader，但响应体上限由
+// 调用点指定。R1 顺手项（C 观察 1，V-23）：订阅抓取的领域上限
+// （maxSubscriptionBytes = 5MB）远小于全局 50MB，此前无从在抓取层
+// 生效、只能整包下载后再判定，恶意/异常源可逼面板先吞 50MB。
+func secureFetchWithHeaderLimit(ctx context.Context, rawURL string, maxBody int64) ([]byte, http.Header, error) {
+	return secureFetchWithHeader(ctx, rawURL, maxBody)
+}
+
+func secureFetchWithHeader(ctx context.Context, rawURL string, maxBody int64) ([]byte, http.Header, error) {
 	if _, err := validateFetchURL(rawURL); err != nil {
 		return nil, nil, err
 	}
@@ -314,13 +326,13 @@ func SecureFetchWithHeader(ctx context.Context, rawURL string) ([]byte, http.Hea
 		return nil, nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
-	limited := io.LimitReader(resp.Body, secureFetchMaxBody+1)
+	limited := io.LimitReader(resp.Body, maxBody+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, nil, err
 	}
-	if int64(len(body)) > secureFetchMaxBody {
-		return nil, nil, fmt.Errorf("response too large (>%d bytes)", secureFetchMaxBody)
+	if int64(len(body)) > maxBody {
+		return nil, nil, fmt.Errorf("response too large (>%d bytes)", maxBody)
 	}
 
 	log.Printf("secure_fetch ok url=%s bytes=%d", logredact.URL(rawURL), len(body))
