@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
@@ -123,6 +124,19 @@ func (p *subPipeline) normalize() error {
 		return err
 	}
 	p.ChainNoneNames = noneNames
+	// X-P3-1（B-F1）：ChainLandingNames/ChainRelayNames 此前唯独未过
+	// normalizeNames，带空格的名字落库后与 Original 精确匹配永不命中。
+	// 与 None 名单同口径（修剪/去重/条数与长度上限、同一文案）。
+	landingNames, err := normalizeNames(p.ChainLandingNames)
+	if err != nil {
+		return err
+	}
+	p.ChainLandingNames = landingNames
+	relayNames, err := normalizeNames(p.ChainRelayNames)
+	if err != nil {
+		return err
+	}
+	p.ChainRelayNames = relayNames
 	landingSources, err := normalizeIDs(p.ChainLandingSources)
 	if err != nil {
 		return err
@@ -149,7 +163,8 @@ func (p *subPipeline) normalize() error {
 	}
 	p.ChainSourceFilters = filters
 	// 脚本长度限制（与执行时的 20000 一致，保存时提前拦截）
-	if len(p.Script) > 20000 {
+	// X-P3-3（B-F3/BC-10）：按字符计数，与执行侧 ValidateSubScript 同口径。
+	if utf8.RuneCountInString(p.Script) > 20000 {
 		return errText("脚本过长（最多 20000 字符）")
 	}
 	// 中转范围白名单归一化：去重、剔除负数（0=直连合法）。
@@ -612,6 +627,19 @@ type subscriptionView struct {
 	IsDefault bool `json:"isDefault"`
 }
 
+// subFormatAlias resolves format aliases shared by the pull side
+// (openSubscription) and the count side (nodeCountFormat) — X-P3-2
+// (B-F2): the two used to resolve aliases independently and the count
+// side missed stash, silently falling back to base64 counts for a
+// format clients actually receive as Clash. Add new aliases here only.
+func subFormatAlias(format string) string {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "stash" {
+		return kernel.FormatClash // Stash reads Clash profiles
+	}
+	return format
+}
+
 // nodeCountFormat resolves the format a subscription view's NodeCount is
 // computed for (A5-02/BC-11): the request's explicit format when it names
 // a supported one, else the format a bare UA-less subscription request
@@ -621,7 +649,7 @@ func nodeCountFormat(format string) string {
 	// FIX2-B（V5-2）：与拉取侧（openSubscription 先 ToLower）同口径
 	// 大小写不敏感；此前 "Clash" 在计数侧静默回落 base64、与实得
 	// 格式分叉且无任何提示。
-	format = strings.ToLower(strings.TrimSpace(format))
+	format = subFormatAlias(format)
 	switch format {
 	case kernel.FormatClash, kernel.FormatSingbox, kernel.FormatSurge,
 		kernel.FormatLoon, kernel.FormatQX, kernel.FormatShadowrocket, kernel.FormatBase64:
@@ -943,6 +971,39 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 	return h.repo.DeleteSubscriptionWithAssignments(s.ID)
 }
 
+// rotateSubscriptionCredentials is the one full reset rotation: new
+// token, new UUID/password for share subscriptions, persisted, then
+// pushed to the kernels. X-P3-13（L-03-2）：主路径 subscriptionReset
+// 与 legacy inboundSubInfo reset 共用此实现——legacy 此前只换 token、
+// 不下发，经它重置的旧配置其实仍有效；不另写第二套轮换。
+// Returns the inbound rows (for view rendering), a push error (the
+// rotation itself is already persisted; AppliedActive is parked at -1
+// so the sync loop retries the push), or a persistence error.
+func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []model.NodeInbound, applyErr error, err error) {
+	s.Token = randomHex(16)
+	if isShare(s) {
+		s.UUID, s.Password = newUUID(), randomHex(16)
+	}
+	s.UpdatedTime = time.Now().UnixMilli()
+	if err := h.repo.SaveSubscription(s); err != nil {
+		return nil, nil, err
+	}
+	rows, _ = h.repo.ListNodeInbounds()
+	var push []int64
+	if isShare(s) {
+		push = subInboundIDs(s, rows)
+	}
+	// AUDIT-R8 (R5R8-001): 凭据轮换后下发失败时，强制标记 AppliedActive=-1（需同步），
+	// 使 syncSubscriptions 循环的 active != AppliedActive 恒成立从而重试。
+	// 成功后恢复正常值。否则旧凭据永不失效（F7.14 承诺被违背）。
+	if err := h.applyKernelsForInbounds(push); err != nil {
+		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
+		return rows, err, nil
+	}
+	_ = h.repo.UpdateSubscriptionApplied(s.ID, boolToInt(isShare(s) && subActive(s, time.Now())))
+	return rows, nil, nil
+}
+
 // subscriptionReset issues a new link; a share subscription also gets new
 // credentials, so a leaked link or imported config stops working.
 func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
@@ -955,29 +1016,15 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
 		return
 	}
-	s.Token = randomHex(16)
-	if isShare(s) {
-		s.UUID, s.Password = newUUID(), randomHex(16)
-	}
-	s.UpdatedTime = time.Now().UnixMilli()
-	if err := h.repo.SaveSubscription(s); err != nil {
+	rows, applyErr, err := h.rotateSubscriptionCredentials(s)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	rows, _ := h.repo.ListNodeInbounds()
-	var push []int64
-	if isShare(s) {
-		push = subInboundIDs(s, rows)
-	}
-	// AUDIT-R8 (R5R8-001): 凭据轮换后下发失败时，强制标记 AppliedActive=-1（需同步），
-	// 使 syncSubscriptions 循环的 active != AppliedActive 恒成立从而重试。
-	// 成功后恢复正常值。否则旧凭据永不失效（F7.14 承诺被违背）。
-	if err := h.applyKernelsForInbounds(push); err != nil {
-		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
+	if applyErr != nil {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 		return
 	}
-	_ = h.repo.UpdateSubscriptionApplied(s.ID, boolToInt(isShare(s) && subActive(s, time.Now())))
 	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 }
 
@@ -1099,10 +1146,18 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(403, "无权限，仅管理员可操作"))
 			return
 		}
-		s.Token = randomHex(16)
-		s.UpdatedTime = time.Now().UnixMilli()
-		if err := h.repo.SaveSubscription(s); err != nil {
+		// X-P3-13（L-03-2）：与主路径共用全轮换（token+UUID/密码+下发
+		// 内核），不再只换 token——否则经此路重置的旧配置仍能连接。
+		_, applyErr, err := h.rotateSubscriptionCredentials(s)
+		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if applyErr != nil {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: map[string]interface{}{
+				"token": s.Token,
+				"path":  "/api/v1/open_api/sub/" + s.Token,
+			}, TS: time.Now().UnixMilli()})
 			return
 		}
 	} else {
