@@ -264,6 +264,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		return 0, err
 	}
 
+	relayRepointed := int64(0)
 	for _, rel := range b.Relays {
 		// D4-03：引用的入站/转发不存在时跳过该中转并计数。
 		relayInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, rel.InboundID)
@@ -277,6 +278,23 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if !relayInboundExists || !relayForwardExists {
 			rep.skip("relays")
 			continue
+		}
+		// R3X-023：同 forward 的异 id 旧中转行被继任行替换前，先把
+		// 引用旧行的存量 user_inbound（备份外分配）重指向继任行
+		// （与 R2X-046 内核重指向同型）；裸删会让分配行 relay_id
+		// 悬空、订阅端点静默消失。计数入 ImportWarnings（循环后
+		// 统一发）。
+		var replacedRelays []model.NodeInboundRelay
+		if err := tx.Where("forward_id = ? AND id <> ?", rel.ForwardID, rel.ID).
+			Find(&replacedRelays).Error; err != nil {
+			return 0, err
+		}
+		for _, oldRelay := range replacedRelays {
+			res := tx.Model(&model.UserInbound{}).Where("relay_id = ?", oldRelay.ID).Update("relay_id", rel.ID)
+			if res.Error != nil {
+				return 0, res.Error
+			}
+			relayRepointed += res.RowsAffected
 		}
 		if err := tx.Where("forward_id = ? AND id <> ?", rel.ForwardID, rel.ID).
 			Delete(&model.NodeInboundRelay{}).Error; err != nil {
@@ -295,6 +313,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if err := restoreZeroValuedInt(tx, &model.NodeInboundRelay{}, rel.ID, "managed", rel.Managed); err != nil {
 			return 0, err
 		}
+	}
+	if relayRepointed > 0 {
+		rep.warnf("备份恢复：中转行替换时已将 %d 条存量用户入站分配的中转引用重指向恢复后的中转行（旧中转行已被同转发的新行替换）", relayRepointed)
 	}
 
 	// Counter baselines keep the next traffic sample from being counted
