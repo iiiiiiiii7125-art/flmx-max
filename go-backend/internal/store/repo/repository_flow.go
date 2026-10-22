@@ -94,8 +94,18 @@ func (r *Repository) GetFlowUploadForwardMetas(forwardIDs []int64) (map[int64]Fl
 			if row.TunnelFlow <= 0 {
 				row.TunnelFlow = 1
 			}
-			if row.TrafficRatio <= 0 {
-				row.TrafficRatio = 1
+			// R3X-003：TrafficRatio 的兜底归一化只许发生在隧道行
+			// 缺失时（TunnelMissing，此时 ratio/flow 本就无值）。
+			// 行存在时 0 是有意配置（BC-R2-03 零计费），必须保留 0
+			// 使消费层 quotaUsage=0、O6-005 警告分支可达；负值无合
+			// 法计费语义，钳为 0 并 warn，不产生负计费。
+			if row.TunnelMissing == 1 {
+				if row.TrafficRatio <= 0 {
+					row.TrafficRatio = 1
+				}
+			} else if row.TrafficRatio < 0 {
+				log.Printf("flow upload meta warn op=traffic_ratio_negative_clamped forward_id=%d tunnel_id=%d ratio=%v action=clamp_zero", row.ForwardID, row.TunnelID, row.TrafficRatio)
+				row.TrafficRatio = 0
 			}
 			out[row.ForwardID] = FlowUploadForwardMeta{
 				ForwardID:    row.ForwardID,
