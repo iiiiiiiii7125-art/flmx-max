@@ -44,7 +44,7 @@ func TestForwardCreateRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "limiter-fail-node", "limiter-fail-secret", "10.20.0.1", "10.20.0.1", "", "32000-32010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "limiter-fail-node", "limiter-fail-secret", "10.20.0.1", "10.20.0.1", "", "32000-32010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "limiter-fail-node")
@@ -68,6 +68,12 @@ func TestForwardCreateRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 		"addlimiters": "mock add limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake：节点种子 status=0，waitNodeStatus(…, 1) 才是真
+	// 同步点——WS handler 先登记会话（s.nodes）再 UpdateNodeOnline
+	// 置 1（F-002 种子注同理）。种子预置 1 会让等待空转，请求抢在
+	// 会话登记前到达时 SendCommand 报「节点不在线」抢先于被测的
+	// 限速下发失败分支。本文件各 mock 节点用例同此治理。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "limiter-fail-forward",
@@ -123,7 +129,7 @@ func TestForwardCreateSucceedsWhenLimiterAlreadyExistsAndUpdateSucceedsContract(
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "limiter-exists-update-ok-node", "limiter-exists-update-ok-secret", "10.20.1.1", "10.20.1.1", "", "32200-32210", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "limiter-exists-update-ok-node", "limiter-exists-update-ok-secret", "10.20.1.1", "10.20.1.1", "", "32200-32210", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "limiter-exists-update-ok-node")
@@ -147,6 +153,9 @@ func TestForwardCreateSucceedsWhenLimiterAlreadyExistsAndUpdateSucceedsContract(
 		"addlimiters": "limiter 8 already exists",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点，防「节点不在线」抢先。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "limiter-exists-update-ok-forward",
@@ -202,7 +211,7 @@ func TestForwardCreateRollbackWhenLimiterAlreadyExistsAndUpdateFailsContract(t *
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "limiter-exists-update-fail-node", "limiter-exists-update-fail-secret", "10.20.2.1", "10.20.2.1", "", "32300-32310", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "limiter-exists-update-fail-node", "limiter-exists-update-fail-secret", "10.20.2.1", "10.20.2.1", "", "32300-32310", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "limiter-exists-update-fail-node")
@@ -227,6 +236,14 @@ func TestForwardCreateRollbackWhenLimiterAlreadyExistsAndUpdateFailsContract(t *
 		"updatelimiters": "mock update limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake（本条即 1.3.4 发版轮 CI flake 本尊，RELEASE-134
+	// §6 定案）：旧构造种子 status=1 且无任何同步点，mock 拨号返回
+	// 后立刻发 create；WS 会话登记未落点时 ensureLimiterOnNode 的
+	// SendCommand 报「节点不在线」，被包装成「节点 … 不在线，限速
+	// 无法下发」抢先于期望的 update 失败文案。种子改 status=0 后
+	// waitNodeStatus(…, 1) 是真同步点（登记先于置 1）。断言原样：
+	// 仍必须命中 mock update limiters failed 文案且转发回滚删除。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "limiter-exists-update-fail-forward",
@@ -285,7 +302,7 @@ func TestForwardCreateRollbackWhenServiceDispatchReturnsAddressInUseContract(t *
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "addr-in-use-node", "addr-in-use-secret", "10.20.0.11", "10.20.0.11", "", "32100-32110", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "addr-in-use-node", "addr-in-use-secret", "10.20.0.11", "10.20.0.11", "", "32100-32110", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "addr-in-use-node")
@@ -302,6 +319,10 @@ func TestForwardCreateRollbackWhenServiceDispatchReturnsAddressInUseContract(t *
 		"addservice":    "listen tcp [::]:32101: bind: address already in use",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点；否则「节点不在线」会以相同
+	// 的失败+回滚表象冒充 address-in-use 分支（假绿）。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "addr-in-use-forward",
@@ -363,7 +384,7 @@ func TestBatchAssignRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "assign-limiter-fail-node", "assign-limiter-fail-secret", "10.21.0.1", "10.21.0.1", "", "33000-33010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "assign-limiter-fail-node", "assign-limiter-fail-secret", "10.21.0.1", "10.21.0.1", "", "33000-33010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "assign-limiter-fail-node")
@@ -406,6 +427,9 @@ func TestBatchAssignRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 		"addlimiters": "mock add limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点，防离线分支冒充限速失败。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	assignPayload := map[string]interface{}{
 		"userId": 2,
@@ -471,7 +495,7 @@ func TestBatchAssignInsertRollbackWhenLimiterDispatchFailsContract(t *testing.T)
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "assign-insert-limiter-fail-node", "assign-insert-limiter-fail-secret", "10.22.0.1", "10.22.0.1", "", "34000-34010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "assign-insert-limiter-fail-node", "assign-insert-limiter-fail-secret", "10.22.0.1", "10.22.0.1", "", "34000-34010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "assign-insert-limiter-fail-node")
@@ -507,6 +531,9 @@ func TestBatchAssignInsertRollbackWhenLimiterDispatchFailsContract(t *testing.T)
 		"addlimiters": "mock add limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点，防离线分支冒充限速失败。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	assignPayload := map[string]interface{}{
 		"userId": 3,
@@ -562,7 +589,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "tunnel-bind-entry", "tunnel-bind-entry-secret", "10.41.0.1", "10.41.0.1", "", "43000-43010", "", "v1", 1, 1, 1, now, now, 1, "10.41.0.1", "[::]", 0).Error; err != nil {
+	`, "tunnel-bind-entry", "tunnel-bind-entry-secret", "10.41.0.1", "10.41.0.1", "", "43000-43010", "", "v1", 1, 1, 1, now, now, 0, "10.41.0.1", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert entry node: %v", err)
 	}
 	entryNodeID := mustLastInsertID(t, r, "tunnel-bind-entry")
@@ -570,7 +597,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "tunnel-bind-exit", "tunnel-bind-exit-secret", "10.41.0.2", "10.41.0.2", "", "43100-43110", "eth0", "v1", 1, 1, 1, now, now, 1, "10.41.0.9", "[::]", 0).Error; err != nil {
+	`, "tunnel-bind-exit", "tunnel-bind-exit-secret", "10.41.0.2", "10.41.0.2", "", "43100-43110", "eth0", "v1", 1, 1, 1, now, now, 0, "10.41.0.9", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert exit node: %v", err)
 	}
 	exitNodeID := mustLastInsertID(t, r, "tunnel-bind-exit")
@@ -628,6 +655,8 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 		return false, ""
 	})
 	defer stopExit()
+	// R1-B10 deflake：两节点种子已改 status=0，以下 waitNodeStatus
+	// 不再空转（旧种子预置 1 时等待立即返回、与会话登记无同步关系）。
 	waitNodeStatus(t, r, entryNodeID, 1)
 	waitNodeStatus(t, r, exitNodeID, 1)
 
@@ -746,7 +775,7 @@ func TestTunnelUpdateChangesEntryNodeButLeavesOldForwardRuntimeContract(t *testi
 		if err := r.DB().Exec(`
 			INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, name, secretValue, ip, ip, "", portRange, "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", inx).Error; err != nil {
+		`, name, secretValue, ip, ip, "", portRange, "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", inx).Error; err != nil {
 			t.Fatalf("insert node %s: %v", name, err)
 		}
 		return mustLastInsertID(t, r, name)
@@ -846,6 +875,9 @@ func TestTunnelUpdateChangesEntryNodeButLeavesOldForwardRuntimeContract(t *testi
 	})
 	defer stopExit()
 
+	// R1-B10 deflake：insertNode 种子已改 status=0，以下等待是真
+	// 同步点（旧种子预置 1 时空转，会话登记未落点即发 update 时
+	// recorder 断言与离线分支竞态）。
 	waitNodeStatus(t, r, oldEntryNodeID, 1)
 	waitNodeStatus(t, r, newEntryNodeID, 1)
 	waitNodeStatus(t, r, exitNodeID, 1)
@@ -922,7 +954,7 @@ func TestTunnelUpdateEntryTransitionsCleanupForwardRuntimeContract(t *testing.T)
 		if err := r.DB().Exec(`
 			INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, name, secretValue, ip, ip, "", portRange, "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", inx).Error; err != nil {
+		`, name, secretValue, ip, ip, "", portRange, "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", inx).Error; err != nil {
 			t.Fatalf("insert node %s: %v", name, err)
 		}
 		return mustLastInsertID(t, r, name)
@@ -977,6 +1009,8 @@ func TestTunnelUpdateEntryTransitionsCleanupForwardRuntimeContract(t *testing.T)
 	stopExit := startMockNodeSessionWithCommandRecorder(t, server.URL, "issue281-transition-exit-secret", recorder.handler("exit"))
 	defer stopExit()
 
+	// R1-B10 deflake：insertNode 种子已改 status=0，以下等待是真
+	// 同步点（旧种子预置 1 时空转）。
 	waitNodeStatus(t, r, entryA, 1)
 	waitNodeStatus(t, r, entryB, 1)
 	waitNodeStatus(t, r, entryC, 1)
