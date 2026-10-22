@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,7 @@ func TestR3B1HandleTcpPingRejectsDeniedLiterals(t *testing.T) {
 		"fe80::1",         // 链路本地
 	}
 	for _, ip := range deny {
-		resp, err := w.handleTcpPing(map[string]interface{}{
+		resp, err := w.handleTcpPing(context.Background(), map[string]interface{}{
 			"ip": ip, "port": 80, "count": 1, "timeout": 200,
 		})
 		if err != nil {
