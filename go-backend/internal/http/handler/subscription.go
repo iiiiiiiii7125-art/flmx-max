@@ -522,6 +522,10 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 				s.UploadBytes, s.DownloadBytes = 0, 0
 				if h.notifier != nil {
 					h.notifier.clearAlerts(fmt.Sprintf("subflow:%d:", s.ID))
+					// R4X-014：重置即恢复——与回落两处成对口径对齐，
+					// 连带清该订阅流量子型的指纹，否则重置后同文案
+					// 再越界被 30 分钟指纹窗抑制（R3X-030 同根变体）。
+					h.notifier.forgetSubQuotaFlow(s.Name)
 				}
 			}
 		}
@@ -1162,6 +1166,9 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 	}
 	if h.notifier != nil {
 		h.notifier.clearAlerts(fmt.Sprintf("subflow:%d:", id))
+		// R4X-014：同周期重置面——连带清指纹（s 为重置前已取的订阅行，
+		// 名称即指纹消息前缀所需）。
+		h.notifier.forgetSubQuotaFlow(s.Name)
 	}
 	h.syncSubscriptions(now)
 	s, _ = h.repo.GetSubscription(id)
