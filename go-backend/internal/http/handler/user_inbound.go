@@ -147,6 +147,25 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-012: validate the user before branching on format, so both the
+	// assignments format and the legacy format reject phantom users; the
+	// referenced inbounds are validated the same way (the legacy repo
+	// path previously persisted phantom inbound rows verbatim).
+	if err := h.repo.ValidateIDsExist("user", []int64{raw.UserID}); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	inboundIDsToCheck := raw.InboundIDs
+	if len(raw.Assignments) > 0 {
+		inboundIDsToCheck = make([]int64, 0, len(raw.Assignments))
+		for _, a := range raw.Assignments {
+			inboundIDsToCheck = append(inboundIDsToCheck, a.InboundID)
+		}
+	}
+	if err := h.repo.ValidateIDsExist("inbound", inboundIDsToCheck); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	var assignments []repo.UserInboundAssignment
 	if len(raw.Assignments) > 0 {
 		for _, a := range raw.Assignments {
