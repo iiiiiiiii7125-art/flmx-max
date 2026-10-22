@@ -3376,7 +3376,7 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 绕过 ensureForwardAccessByActor 的 pending 过滤：force-delete 必须能
-	// 找到 pending-delete 行。幂等：不存在的 ID 返回明确的“不存在”，非 500。
+	// 找到 pending-delete 行。幂等口径见下方 X-P3-28（V-12）。
 	forward, err := h.getForwardRecord(id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
