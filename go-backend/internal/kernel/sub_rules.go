@@ -5,7 +5,7 @@ import "strings"
 // 订阅中的路由规则（SubOptions.Rules）：配置按服务生成策略组、远程规则集；
 // Mihomo 和 sing-box 还会生成 DNS 配置，让国内域名走国内解析。
 // Mihomo 和 sing-box 通过节点选择组拉取规则集，国内客户端也能下载。
-// Mihomo 读 MetaCubeX .mrs，sing-box（1.12+）读 .srs；
+// Mihomo 读 MetaCubeX .mrs，Stash 读同一规则集的 YAML 格式，sing-box（1.12+）读 .srs；
 // Surge / Loon / Quantumult X / Shadowrocket 读 blackmatrix7 列表。
 // 开启规则后，Loon / QX / Shadowrocket 输出完整配置而非节点列表（见 share_clients.go）。
 // 移植自 kure29/flyx。
@@ -220,8 +220,13 @@ var (
 	foreignDoH  = []string{"https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}
 )
 
-// clashRules 返回 Mihomo 配置的规则 providers 和 rules。
-func clashRules(opts SubOptions) (yamlNode, []interface{}) {
+// clashRules 返回 Mihomo 配置的规则 providers 和 rules；
+// yamlSets 为 Stash 写 YAML 格式的规则集（Stash 读不了 .mrs）。
+func clashRules(opts SubOptions, yamlSets bool) (yamlNode, []interface{}) {
+	format, ext := "mrs", ".mrs"
+	if yamlSets {
+		format, ext = "yaml", ".yaml"
+	}
 	providers := yamlNode{}
 	seen := map[string]bool{}
 	provider := func(kind, name string) string {
@@ -233,9 +238,9 @@ func clashRules(opts SubOptions) (yamlNode, []interface{}) {
 				behavior, dir = "ipcidr", "geoip"
 			}
 			providers = append(providers, yamlField{tag, yamlNode{
-				{"type", "http"}, {"behavior", behavior}, {"format", "mrs"},
-				{"url", metaRuleURL("meta", dir, name, ".mrs")},
-				{"path", "./ruleset/" + tag + ".mrs"}, {"interval", 86400}, {"proxy", "节点选择"},
+				{"type", "http"}, {"behavior", behavior}, {"format", format},
+				{"url", metaRuleURL("meta", dir, name, ext)},
+				{"path", "./ruleset/" + tag + ext}, {"interval", 86400}, {"proxy", "节点选择"},
 			}})
 		}
 		return tag

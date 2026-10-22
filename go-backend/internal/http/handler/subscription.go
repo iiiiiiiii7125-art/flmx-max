@@ -670,10 +670,15 @@ type subscriptionView struct {
 // (B-F2): the two used to resolve aliases independently and the count
 // side missed stash, silently falling back to base64 counts for a
 // format clients actually receive as Clash. Add new aliases here only.
+//
+// 1.4.0 (DA-7): stash is no longer aliased to Clash — it resolves to
+// the first-class kernel.FormatStash on BOTH sides (pull renders the
+// Stash variant; SubscriptionNodeCount counts it through the same
+// ClashProxy gate), keeping the count/actual equality X-P3-2 restored.
 func subFormatAlias(format string) string {
 	format = strings.ToLower(strings.TrimSpace(format))
 	if format == "stash" {
-		return kernel.FormatClash // Stash reads Clash profiles
+		return kernel.FormatStash
 	}
 	return format
 }
@@ -689,7 +694,7 @@ func nodeCountFormat(format string) string {
 	// 格式分叉且无任何提示。
 	format = subFormatAlias(format)
 	switch format {
-	case kernel.FormatClash, kernel.FormatSingbox, kernel.FormatSurge,
+	case kernel.FormatClash, kernel.FormatStash, kernel.FormatSingbox, kernel.FormatSurge,
 		kernel.FormatLoon, kernel.FormatQX, kernel.FormatShadowrocket, kernel.FormatBase64:
 		return format
 	}
