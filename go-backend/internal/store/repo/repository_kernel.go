@@ -385,8 +385,11 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 }
 
 // ApplyInboundCounterSamples converts cumulative counters into traffic deltas.
-// A sample whose epoch differs from the stored one, or whose value went
-// backwards, belongs to a fresh counter and counts from zero.
+// R2X-033：基线语义与订阅管线同形——无基线（首采）或 epoch 变化
+// 时只推进基线、delta=0，不把累计值计入（旧语义全量计，干净恢复
+// 或内核重启换代后会把历史累计重复计入一遍）；同 epoch 前进取
+// 差分；同 epoch 回退（计数器同代重置）当前值全量计，保持既有
+// 语义。
 func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -493,9 +496,20 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 			if s.Direction != "in" && s.Direction != "out" {
 				continue
 			}
-			delta := s.Bytes
-			if old, ok := prev[inboundCounterKey{s.InboundID, s.Protocol, s.Direction}]; ok && old.Epoch == s.Epoch && s.Bytes >= old.Bytes {
+			// R2X-033：与订阅管线同形——无基线 / epoch 变化只
+			// 推进基线（delta=0）；同 epoch 前进取差分；同 epoch
+			// 回退全量计（既有语义不变）。
+			var delta int64
+			old, seen := prev[inboundCounterKey{s.InboundID, s.Protocol, s.Direction}]
+			switch {
+			case !seen:
+				delta = 0
+			case old.Epoch != s.Epoch:
+				delta = 0
+			case s.Bytes >= old.Bytes:
 				delta = s.Bytes - old.Bytes
+			default:
+				delta = s.Bytes
 			}
 			if delta > 0 {
 				if s.Direction == "in" {

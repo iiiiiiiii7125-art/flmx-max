@@ -41,7 +41,7 @@ func TestProcessFlowItemTracksPeerShareFlowAndEnforcesLimit(t *testing.T) {
 	}
 
 	h := a.h
-	h.processFlowItem(1, flowItem{N: "fed_svc_17", U: 1200, D: 900})
+	applyFlowItemViaFormalEntry(h, 1, flowItem{N: "fed_svc_17", U: 1200, D: 900})
 
 	updatedShare, err := r.GetPeerShare(share.ID)
 	if err != nil || updatedShare == nil {
@@ -120,7 +120,7 @@ func TestProcessFlowItemTracksPeerShareFlowForFederationPortForward(t *testing.T
 	if err := r.DB().Exec("INSERT INTO forward_port(forward_id, node_id, port) VALUES(20, 1, 30001)").Error; err != nil {
 		t.Fatal(err)
 	}
-	h.processFlowItem(1, flowItem{N: "20_2_10", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(h, 1, flowItem{N: "20_2_10", U: 120, D: 80})
 
 	updatedShare, err := r.GetPeerShare(share.ID)
 	if err != nil || updatedShare == nil {
@@ -166,7 +166,7 @@ func TestProcessFlowItemTracksPeerShareFlowByForwardServiceName(t *testing.T) {
 	}
 
 	h := &Handler{repo: r}
-	h.processFlowItem(1, flowItem{N: "20_2_10_tcp", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(h, 1, flowItem{N: "20_2_10_tcp", U: 120, D: 80})
 
 	updatedShare, err := r.GetPeerShare(share.ID)
 	if err != nil || updatedShare == nil {
@@ -226,7 +226,7 @@ func TestProcessFlowItemFallsBackToServiceNameWhenForwardIDCollidesAcrossPanels(
 	}
 
 	h := &Handler{repo: r}
-	h.processFlowItem(1, flowItem{N: "20_2_10_tcp", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(h, 1, flowItem{N: "20_2_10_tcp", U: 120, D: 80})
 
 	updatedShare, err := r.GetPeerShare(share.ID)
 	if err != nil || updatedShare == nil {
@@ -288,7 +288,7 @@ func TestProcessFlowItemSkipsPeerShareFlowWhenServiceNameIsAmbiguous(t *testing.
 	}
 
 	h := &Handler{repo: r}
-	h.processFlowItem(1, flowItem{N: "99_2_10_tcp", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(h, 1, flowItem{N: "99_2_10_tcp", U: 120, D: 80})
 
 	updatedA, _ := r.GetPeerShare(shareA.ID)
 	updatedB, _ := r.GetPeerShare(shareB.ID)

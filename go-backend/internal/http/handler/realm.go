@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -257,7 +258,21 @@ func (h *Handler) syncRealmForward(forward *forwardRecord, override map[int64]bo
 	if err != nil {
 		return warnings, err
 	}
-	hasIneffectiveLimit := forward.SpeedID.Valid || forward.IPSpeedID.Valid || forward.MaxConn > 0 || forward.IPMaxConn > 0
+	// R2X-034：转发级 SpeedID/IPSpeedID 与 UT 级分支同谓词——经
+	// GetSpeedLimitSpeed（status=1 过滤）成功且 speed>0 才算有效
+	// 限速；引用已禁用/零速规则时限速本就不生效，不得误报警告。
+	// MaxConn/IPMaxConn 是转发自有字段、无 status 维度，保持裸值。
+	forwardSpeedIneffective := false
+	for _, id := range []sql.NullInt64{forward.SpeedID, forward.IPSpeedID} {
+		if !id.Valid {
+			continue
+		}
+		if speed, err := h.repo.GetSpeedLimitSpeed(id.Int64); err == nil && speed > 0 {
+			forwardSpeedIneffective = true
+			break
+		}
+	}
+	hasIneffectiveLimit := forwardSpeedIneffective || forward.MaxConn > 0 || forward.IPMaxConn > 0
 	if !hasIneffectiveLimit {
 		// X-P3-10：UT 级限速同样在 realm 下不生效，必须纳入警告。
 		// 复用 ResolveUserTunnelAndLimiter 的有效性谓词（status=1 且

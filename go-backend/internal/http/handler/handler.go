@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1204,12 +1205,20 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
 				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
 				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
-					// 入账单事务失败：整批未入账、seq 未推进，返非 ok。
-					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-					_, _ = w.Write([]byte("error"))
-					return
+					if errors.Is(applyErr, repo.ErrSeqReplay) {
+						// R2X-011：并发同 seq 已由另一入账消费——
+						// 本批整 tx 回滚未入账，按既有重放分支回
+						// ok 终止 agent 重试，不重复入账。
+						log.Printf("flow upload replay (seq race) node_id=%d seq=%d", node.ID, *seq)
+					} else {
+						// 入账单事务失败：整批未入账、seq 未推进，返非 ok。
+						w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+						_, _ = w.Write([]byte("error"))
+						return
+					}
+				} else {
+					h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
 				}
-				h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
 			}
 		}
 	}
