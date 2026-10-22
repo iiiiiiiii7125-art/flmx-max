@@ -139,6 +139,15 @@ export const getUserPackageInfo = () =>
 export const createNode = (data: NodeMutationPayload, idemKey?: string) =>
   Network.post("/node/create", data, { idemKey });
 export const getNodeList = () => Network.post<NodeApiItem[]>("/node/list");
+/**
+ * 各节点本月（浏览器时区 1 号起）的网卡流量：{ 节点ID: [入, 出] }（字节）。
+ * 这是整机网卡计数（含转发与系统自身流量），与隧道计费/订阅配额是两套口径，
+ * 不可混称、不可互相核对。
+ */
+export const getNodeMonthTraffic = () =>
+  Network.post<Record<string, [number, number]>>("/node/traffic/month", {
+    tzOffset: -new Date().getTimezoneOffset(),
+  });
 export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
@@ -847,6 +856,8 @@ export interface SubscriptionItem {
   trafficLimit: number;
   /** Day of month (1-28) the traffic resets; 0 = never. */
   resetDay: number;
+  /** 已用流量起算时刻（毫秒）：创建或上次重置流量之时。 */
+  trafficSince: number;
   overQuota: boolean;
   /** 默认订阅：普通用户的个人链接（?user=&sig=）挂在它上面。 */
   isDefault: boolean;
@@ -1059,6 +1070,8 @@ export interface MySubscriptionItem {
   downloadBytes: number;
   /** Bytes; 0 = unlimited. */
   trafficLimit: number;
+  /** 已用流量起算时刻（毫秒）：创建或上次重置流量之时。 */
+  trafficSince: number;
   /** 过期时间（毫秒）；0 = 永不过期。 */
   expireTime: number;
   overQuota: boolean;
@@ -1079,6 +1092,8 @@ export interface SubTraffic {
   points: Array<{ time: number; up: number; down: number }>;
   up: number;
   down: number;
+  /** 已用流量起算时刻（毫秒）：订阅创建或上次重置流量之时。 */
+  since: number;
 }
 const trafficQuery = (id: number, range: SubTrafficRange) => ({
   id,
