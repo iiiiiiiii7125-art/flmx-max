@@ -395,7 +395,7 @@ func TestUserMaxConnWithPerIPRuleSplitsRuntimeLimiters(t *testing.T) {
 	}
 	if err := r.DB().Exec(`
 		INSERT INTO node(id, name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
-		VALUES(21, 'user-per-ip-conn-node', 'user-per-ip-conn-secret', '10.23.0.1', '10.23.0.1', '', '32300-32310', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
+		VALUES(21, 'user-per-ip-conn-node', 'user-per-ip-conn-secret', '10.23.0.1', '10.23.0.1', '', '32300-32310', '', 'v1', 1, 1, 1, ?, ?, 0, '[::]', '[::]', 0)
 	`, now, now).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
