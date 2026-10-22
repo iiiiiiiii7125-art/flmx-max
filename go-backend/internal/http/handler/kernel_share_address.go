@@ -67,8 +67,10 @@ func normalizeShareHost(host string) string {
 // both sides of the bracket strip so [IPv6]. canonicalizes too
 // (R3-A-01 — validation and rendering must see the same form). Two
 // trailing dots still fail validation, as do underscore labels,
-// Unicode IDN and loopback/link-local literals — only the single root
-// dot is normalized.
+// Unicode IDN and loopback/link-local literals (169.254/16 and
+// fe80::/10 — the v6 segment joined the netguard hard-deny set with
+// N-01, so this claim now holds for both families) — only the single
+// root dot is normalized.
 func shareHostValue(host string) string {
 	return kernel.CanonicalShareHostValue(host)
 }

@@ -90,8 +90,8 @@ func resolveValidatedMonitorIPs(host string) ([]net.IP, error) {
 	}
 	for _, ip := range ips {
 		// R2X-027：判定改两层——netguard 硬拒（元数据精确集 ∪
-		// 169.254/16 ∪ 未指定）先于 allowlist，任何放行配置不得
-		// 覆盖；loopback/私网/CGNAT 的 allow_private 放行维持
+		// 链路本地整段 169.254/16 与 fe80::/10（N-01）∪ 未指定）
+		// 先于 allowlist，任何放行配置不得覆盖；loopback/私网/CGNAT 的 allow_private 放行维持
 		// （按判定口径地址查 allowlist，翻译内嵌同判）。
 		r := netguard.Classify(ip)
 		if r.HardDeny {
