@@ -277,7 +277,9 @@ func chainTargetFromInbound(e Endpoint) (chainTarget, error) {
 		if in.Security.Type == SecurityShadowTLS {
 			return t, errors.New("Xray 无法连接 ShadowTLS 节点，请改用 sing-box 内核")
 		}
-		t.Protocol, t.Cipher, t.Password = "shadowsocks", in.Settings.Method, in.Settings.Password
+		// GATE-F1：自建目标同订阅口径归一（导入目标经 forEndpoint 已归一）。
+		t.Protocol, t.Cipher, t.Password = "shadowsocks", in.Settings.Method,
+			NormalizedSS2022Password(in.Settings.Method, in.Settings.Password)
 		return t, nil
 	default:
 		return t, fmt.Errorf("Xray 无法连接 %s 节点，请改用 sing-box 内核", in.Protocol)

@@ -23,7 +23,10 @@ var loopbackAllow = []string{"127.0.0.0/8", "::1/128"}
 // that dial the landing node (entry nodes of port forwards, exit nodes of
 // tunnel forwards), the nodes of kernels chained through it, and the user's
 // extra entries.
-func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
+// R3X-015: 链式拨号节点查询（chainDialerNodeIDs）失败时上抛 error，
+// 下发面中止整单而非下发少算拨号节点的白名单（其余既有查询的
+// log-and-continue 口径不在本条范围）。
+func (h *Handler) inboundAllowList(row model.NodeInbound) ([]string, error) {
 	set := make(map[string]bool)
 	for _, c := range loopbackAllow {
 		set[c] = true
@@ -65,7 +68,11 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 	}
 
 	// Kernels chained through the inbound dial it from their own node.
-	for _, nodeID := range h.chainDialerNodeIDs(row.ID) {
+	chainDialers, err := h.chainDialerNodeIDs(row.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, nodeID := range chainDialers {
 		if seenNodes[nodeID] {
 			continue
 		}
@@ -86,7 +93,7 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 		out = append(out, c)
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // relayDialerNodeIDs returns the nodes whose connections reach the landing
@@ -198,6 +205,86 @@ func (h *Handler) inboundIDsForForward(forwardID int64) []int64 {
 	return out
 }
 
+// inboundIDsForForwards is the collection half of the shared whitelist
+// funnel (R3 批 4 / verdicts §8 #1): the union of inboundIDsForForward
+// over a forward set, deduplicated. Every write path that removes or
+// re-homes forwards must collect through this helper BEFORE the
+// mutation lands (the relay rows that map forwards to inbounds are
+// cascade-deleted with the forwards) and flush through
+// refreshInboundWhitelists AFTER it commits — the exact orchestration
+// forwardDelete has always used, now shared by forwardUpdate tunnel
+// switches, cleanupForwardsForUserTunnel, node deletion and the
+// pending-delete job instead of being re-implemented (or forgotten)
+// per call site.
+func (h *Handler) inboundIDsForForwards(forwardIDs []int64) []int64 {
+	var out []int64
+	seen := make(map[int64]struct{})
+	for _, forwardID := range forwardIDs {
+		for _, inboundID := range h.inboundIDsForForward(forwardID) {
+			if _, ok := seen[inboundID]; ok {
+				continue
+			}
+			seen[inboundID] = struct{}{}
+			out = append(out, inboundID)
+		}
+	}
+	return out
+}
+
+// inboundIDsAffectedByNodeDelete collects, before a node is deleted,
+// the surviving inbounds whose allow list embeds the node's addresses
+// (R3X-017): inbounds dialed via a ChainTunnel row referencing the
+// node or chained through by one of the node's inbounds
+// (inboundIDsDialedByNode), plus the inbounds on other nodes that use
+// one of the node's inbounds as their chained outbound target
+// (chainReferrers of the node's inbounds). The node's own inbounds
+// are excluded — they are deleted with the node.
+// 集成合并注记（R3 批4×批9）：本收集器位于删节点路径上，其数据源
+// inboundIDsDialedByNode / chainReferrers 已按 R3X-015 改为错误上抛，
+// 故本函数同步上抛——收集失败时调用方中止删除（fail-closed），不得
+// 以不完整清单照删后漏刷新白名单。
+func (h *Handler) inboundIDsAffectedByNodeDelete(nodeID int64) ([]int64, error) {
+	own := make(map[int64]struct{})
+	if targets, err := h.repo.ListNodeInboundsByNode(nodeID); err == nil {
+		for _, target := range targets {
+			own[target.ID] = struct{}{}
+		}
+	}
+	var out []int64
+	seen := make(map[int64]struct{})
+	add := func(inboundID int64) {
+		if _, isOwn := own[inboundID]; isOwn {
+			return
+		}
+		if _, dup := seen[inboundID]; dup {
+			return
+		}
+		seen[inboundID] = struct{}{}
+		out = append(out, inboundID)
+	}
+	dialedIDs, err := h.inboundIDsDialedByNode(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	for _, inboundID := range dialedIDs {
+		add(inboundID)
+	}
+	if targets, err := h.repo.ListNodeInboundsByNode(nodeID); err == nil {
+		for _, target := range targets {
+			refs, rerr := h.chainReferrers(target.ID)
+			if rerr != nil {
+				return nil, rerr
+			}
+			for _, ref := range refs {
+				if ref.NodeID != nodeID {
+					add(ref.ID)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 // inboundIDsForTunnel returns the inbounds relayed through any forward of
 // a tunnel（隧道名下转发 → NodeInboundRelay → inboundID，与 tunnelDelete
 // 的 O3-001 收集逻辑同一口径）。
@@ -224,10 +311,12 @@ func (h *Handler) inboundIDsForTunnel(tunnelID int64) []int64 {
 // the given node (relay dialers of their forwards' tunnels, plus kernels
 // chained through them) — the set whose allow list embeds the node's
 // addresses (R2X-008 / E S-1: 节点改址后须刷新这些入站）。
-func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
+// R3X-015: 顶层列表查询与 chainDialerNodeIDs 的失败上抛（旧实现
+// 返回 nil 被调用方读作「无入站经本节点拨号」跳过刷新）。
+func (h *Handler) inboundIDsDialedByNode(nodeID int64) ([]int64, error) {
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []int64
 	for _, row := range rows {
@@ -253,7 +342,11 @@ func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
 			}
 		}
 		if !hit {
-			for _, d := range h.chainDialerNodeIDs(row.ID) {
+			chainDialers, cerr := h.chainDialerNodeIDs(row.ID)
+			if cerr != nil {
+				return nil, cerr
+			}
+			for _, d := range chainDialers {
 				if d == nodeID {
 					hit = true
 					break
@@ -264,7 +357,7 @@ func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
 			out = append(out, row.ID)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // refreshInboundWhitelists refreshes each affected inbound once.

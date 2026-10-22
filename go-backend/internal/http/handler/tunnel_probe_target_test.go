@@ -75,7 +75,9 @@ func TestNormalizeTunnelProbeTargetRejectsSchemePrefixButAllowsIPv6(t *testing.T
 func TestNormalizeTunnelProbeTargetValidatesHostShape(t *testing.T) {
 	validHosts := []string{
 		"example.com",
-		"localhost",
+		// 连带断言调整（R3 批1单独登记）： "localhost" 原在合法集，
+		// R3X-011 明确要求 localhost:80 保存时报错，故移至下方非法集；
+		// 这是裁定驱动的目标收紧，非断言放宽。
 		"api-1.example.co.uk",
 		"192.0.2.10",
 		"2001:db8::1",
@@ -88,6 +90,7 @@ func TestNormalizeTunnelProbeTargetValidatesHostShape(t *testing.T) {
 	}
 
 	invalidHosts := []string{
+		"localhost", // R3X-011 连带（见 validHosts 上方登记注释）
 		"1:2:3",
 		"[2001:db8::1",
 		"2001:db8::1]",

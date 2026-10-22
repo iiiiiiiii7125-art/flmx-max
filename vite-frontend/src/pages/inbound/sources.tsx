@@ -3,7 +3,10 @@ import type {
   RemoteSourceRole,
   RemoteSyncResult,
 } from "@/api";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 
 import { useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -131,6 +134,10 @@ export function syncText(r: RemoteSyncResult): string {
   const parts = [`新增 ${r.added}`, `更新 ${r.updated}`, `移除 ${r.removed}`];
 
   if (r.kept) parts.push(`${r.kept} 个已不在订阅里但有中转，已保留`);
+  // R3X-025：逐节点同步失败明细（result.errors）必须带出条数 + 首条，
+  // 不得只报计数、把部分失败报成全成功。
+  if (r.errors?.length)
+    parts.push(`另有 ${r.errors.length} 条失败：${r.errors[0]}`);
 
   return parts.join("，");
 }
@@ -158,9 +165,29 @@ export function RemoteSourcesSection({
   }) => {
     const result = (res.data as { result?: RemoteSyncResult } | null)?.result;
 
-    if (res.code !== 0) toast.error(res.msg || "更新失败");
-    else if (result) toast.success(`已更新：${syncText(result)}`);
-    else toast.success("已保存");
+    if (res.code !== 0) {
+      toast.error(res.msg || "更新失败");
+
+      return;
+    }
+    // R3X-026：code=0 + 非标准 Msg 是后端告警通道（如公网 http 明文告警），
+    // 须先 ⚠️ 透出原文，再报已保存/已更新，不得丢弃。
+    if (res.msg && res.msg !== "操作成功") {
+      toast(res.msg, { icon: "⚠️", duration: 5000 });
+    }
+    if (result) {
+      // R3X-025：带逐节点失败明细时按 ⚠️ 呈现（明细已在 syncText 内带出）。
+      if (result.errors?.length) {
+        toast(`已更新：${syncText(result)}`, {
+          icon: "⚠️",
+          duration: 5000,
+        });
+      } else {
+        toast.success(`已更新：${syncText(result)}`);
+      }
+    } else {
+      toast.success("已保存");
+    }
   };
 
   const refresh = async (s: RemoteSourceItem) => {
@@ -190,6 +217,12 @@ export function RemoteSourcesSection({
 
   // R2X-004：订阅源新建表单幂等键（同表单复用、成功轮换；更新不带键）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(
+    Boolean(draft),
+    Boolean(draft) && !draft?.id,
+    rotateIdemKey,
+  );
 
   const save = async () => {
     if (!draft) return;

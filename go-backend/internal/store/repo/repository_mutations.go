@@ -1541,6 +1541,55 @@ func getGroupStatusTx(db *gorm.DB, table string, id int64) (int, bool, error) {
 	}
 }
 
+// GetGroupRowTx reads a group's name and status inside the caller's
+// transaction (R3X-020: groupUpdate fills absent name/status keys from
+// the current row instead of overwriting them with zero values).
+func (r *Repository) GetGroupRowTx(tx *gorm.DB, table string, id int64) (name string, status int, exists bool, err error) {
+	if tx == nil {
+		return "", 0, false, errors.New("database unavailable")
+	}
+	switch table {
+	case "tunnel_group":
+		var g model.TunnelGroup
+		err := tx.Select("name", "status").Where("id = ?", id).First(&g).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", 0, false, nil
+		}
+		if err != nil {
+			return "", 0, false, err
+		}
+		return g.Name, g.Status, true, nil
+	case "user_group":
+		var g model.UserGroup
+		err := tx.Select("name", "status").Where("id = ?", id).First(&g).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", 0, false, nil
+		}
+		if err != nil {
+			return "", 0, false, err
+		}
+		return g.Name, g.Status, true, nil
+	default:
+		return "", 0, false, errors.New("invalid group table")
+	}
+}
+
+// RevokeGroupGrantsByGroup is the non-transactional variant of
+// RevokeGroupGrantsByGroupTx (R3X-004: the sync/apply convergence path
+// runs outside a caller transaction and revokes in its own).
+func (r *Repository) RevokeGroupGrantsByGroup(table string, id int64) ([]RevokedUserTunnelPair, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var revoked []RevokedUserTunnelPair
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var revokeErr error
+		revoked, revokeErr = r.RevokeGroupGrantsByGroupTx(tx, table, id)
+		return revokeErr
+	})
+	return revoked, err
+}
+
 // RevokeGroupGrantsByGroupTx revokes every grant recorded under one group
 // (R2X-013 group disable): the group's ledger rows are deleted and any
 // group-created user_tunnel left without grants is removed and returned
@@ -1575,42 +1624,8 @@ func (r *Repository) RevokeGroupGrantsByGroupTx(tx *gorm.DB, table string, id in
 	return deleteOrphanedGroupCreatedUserTunnelsTx(tx, candidates)
 }
 
-func (r *Repository) GroupDeleteCascade(table string, id int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		switch table {
-		case "tunnel_group":
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return err
-			}
-			return tx.Where("id = ?", id).Delete(&model.TunnelGroup{}).Error
-		case "user_group":
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.UserGroupUser{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return err
-			}
-			return tx.Where("id = ?", id).Delete(&model.UserGroup{}).Error
-		default:
-			return errors.New("invalid group table")
-		}
-	})
-}
-
-// GroupDeleteCascadeWithRevoke deletes a group like GroupDeleteCascade but
-// first collects the group's GroupPermissionGrant ledger so group-created
+// GroupDeleteCascadeWithRevoke deletes a group, first collecting the
+// group's GroupPermissionGrant ledger so group-created
 // user_tunnel rows are revoked (and returned) instead of being orphaned
 // with no ledger left to trace them (X-P1-2 path: groupDelete). Manual
 // user_tunnel rows (created_by_group=0, or still granted by another group)
@@ -2393,26 +2408,6 @@ func parsePortRangeSpec(input string) []int {
 	}
 	sort.Ints(out)
 	return out
-}
-
-func (r *Repository) AddUserToGroups(userID int64, groupIDs []int64, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	if len(groupIDs) == 0 {
-		return nil
-	}
-	rows := make([]model.UserGroupUser, 0, len(groupIDs))
-	for _, gid := range groupIDs {
-		if gid <= 0 {
-			continue
-		}
-		rows = append(rows, model.UserGroupUser{UserGroupID: gid, UserID: userID, CreatedTime: now})
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
 }
 
 // validateIDsExistTx is the generic batched existence check (R2X-012):

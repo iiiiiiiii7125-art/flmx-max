@@ -90,7 +90,11 @@ import {
   type ForwardDiagnosisResult,
 } from "@/pages/forward/diagnosis";
 import { diagnoseForwardStream } from "@/api/diagnosis-stream";
-import { newIdemKey, useIdemKey } from "@/hooks/useIdemKey";
+import {
+  newIdemKey,
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import {
   executeForwardBatchChangeTunnel,
   executeForwardBatchDelete,
@@ -2405,6 +2409,8 @@ export default function ForwardPage() {
   // 提交表单
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(modalOpen, !isEdit, rotateIdemKey);
 
   const handleSubmit = async () => {
     if (!validateForm()) return;

@@ -144,6 +144,9 @@ var extraProtectedTopKeys = map[string]bool{
 	"protocol": true, "type": true,
 	"settings": true, "users": true, "tls": true, "transport": true,
 	"method": true, "password": true,
+	// R3X-013：sing-box Snell 入站的凭据键名是 psk（非 password）、
+	// v6 整形键名 mode，两键亦在并集内（Xray 对象无同名顶层键）。
+	"psk": true, "mode": true,
 	"detour": true, "handshake": true, "version": true,
 }
 

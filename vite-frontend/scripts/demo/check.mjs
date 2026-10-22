@@ -105,14 +105,44 @@ async function visit(role, route) {
   else if (state.text < 40) problems.push(`${current}: blank page`);
 }
 
+// Interaction steps for the walk's structural blind spots (R3X-032):
+// pages only fetch these endpoints after a click, so a plain page visit
+// never proves their recordings exist. A step that cannot find its
+// control is itself a failure — the blind spot stays in CI's view.
+const INTERACTIONS = {
+  // Switching to the tunnel tab mounts the tunnel monitor, which pulls
+  // per-tunnel quality history (and metrics on detail open).
+  "admin monitor": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.trim() === "隧道"); if (!b) return false; b.click(); return true; })()`,
+  // Expanding a subscription's traffic section mounts SubTrafficStats,
+  // which pulls user/subscription/traffic.
+  "user my-subscription": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.includes("该订阅流量统计")); if (!b) return false; b.click(); return true; })()`,
+};
+
+async function interact(role, route) {
+  const step = INTERACTIONS[`${role} ${route}`];
+
+  if (!step) return;
+  current = `${role} #/${route} (interaction)`;
+  const clicked = await evaluate(step);
+
+  if (!clicked) problems.push(`${current}: interaction control not found`);
+  await sleep(SETTLE_MS);
+}
+
 current = "admin (first load)";
 await page("Page.navigate", { url: `${origin}${BASE}` });
 await sleep(SETTLE_MS);
-for (const r of ADMIN_PAGES) await visit("admin", r);
+for (const r of ADMIN_PAGES) {
+  await visit("admin", r);
+  await interact("admin", r);
+}
 // The demo note's switch signs in as the demo user and reloads.
 await evaluate(`[...document.querySelectorAll("button")].find((b) => b.textContent.includes("普通用户视角"))?.click()`);
 await sleep(SETTLE_MS);
-for (const r of USER_PAGES) await visit("user", r);
+for (const r of USER_PAGES) {
+  await visit("user", r);
+  await interact("user", r);
+}
 
 for (const n of notes) console.log(`note  ${n}`);
 for (const p of problems) console.log(`FAIL  ${p}`);

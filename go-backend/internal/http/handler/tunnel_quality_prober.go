@@ -433,7 +433,17 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 		p.storeResult(snap)
 		return
 	}
-	probeTarget := effectiveTunnelProbeTargetValues(tunnel.ProbeTargetHost, tunnel.ProbeTargetPort)
+	// R3X-011 下发面：存量坏探测目标整轮跳过质量探测（checked 内部
+	// 已打告警日志，快照保留原始目标并记跳过原因），不向任何节点
+	// 下发该目标的 TcpPing，也不用默认目标冒充探测。
+	probeTarget, probeTargetOK := checkedTunnelProbeTargetValues(tunnel.ProbeTargetHost, tunnel.ProbeTargetPort)
+	if !probeTargetOK {
+		snap.ProbeTargetHost = tunnel.ProbeTargetHost
+		snap.ProbeTargetPort = tunnel.ProbeTargetPort
+		snap.ErrorMessage = "探测目标地址不允许，已跳过质量探测"
+		p.storeResult(snap)
+		return
+	}
 	snap.ProbeTargetHost = probeTarget.Host
 	snap.ProbeTargetPort = probeTarget.Port
 

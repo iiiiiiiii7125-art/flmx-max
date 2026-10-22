@@ -283,6 +283,18 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 	out["name"] = e.Name
 	out["server"] = strings.Trim(e.Host, "[]")
 	out["port"] = e.Port
+	if out.Type() == "ss" {
+		// GATE-F1（R3X-008 渲染侧）：forEndpoint 是导入节点的唯一渲染
+		// 收敛点——sing-box / Clash / Surge / ss 链接 / Loon / QX /
+		// Shadowrocket 与双链式出站全部经此克隆。在此把单段 SS2022
+		// 密钥规范化为带填充 Std 形态，一处收口全集；存量坏 key 与
+		// SIP023 多段按各面既有口径（helper 原样返回，见
+		// NormalizedSS2022Password）。存储值不动（导入期原样存口径
+		// 不变），仅渲染克隆归一。
+		if pw, ok := out["password"].(string); ok {
+			out["password"] = NormalizedSS2022Password(out.str("cipher"), pw)
+		}
+	}
 	if e.Direct {
 		return out
 	}
