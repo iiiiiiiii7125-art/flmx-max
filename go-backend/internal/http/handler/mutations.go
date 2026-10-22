@@ -342,10 +342,37 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if groupIDsRaw, ok := req["groupIds"]; ok {
 		newGroupIDs := asInt64Slice(groupIDsRaw)
-		if affected, replaceErr := h.repo.ReplaceUserGroupsByUserID(id, newGroupIDs, now); replaceErr == nil {
-			for _, gid := range affected {
-				_ = h.syncPermissionsByUserGroup(gid)
+		// X-P2-6 + X-P1-2①：分组替换与「被移出分组的组建授权撤销」在同一
+		// 事务内完成；replaceErr 必须上抛，不再吞错回成功。
+		tx := h.repo.BeginTx()
+		if tx == nil || tx.Error != nil {
+			response.WriteJSON(w, response.Err(-2, "database unavailable"))
+			return
+		}
+		defer func() { tx.Rollback() }()
+		affected, removed, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now)
+		if replaceErr != nil {
+			response.WriteJSON(w, response.Err(-2, replaceErr.Error()))
+			return
+		}
+		var revokedPairs []repo.RevokedUserTunnelPair
+		for _, gid := range removed {
+			pairs, revokeErr := h.repo.RevokeGroupGrantsForUserTx(tx, gid, id)
+			if revokeErr != nil {
+				response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
+				return
 			}
+			revokedPairs = append(revokedPairs, pairs...)
+		}
+		if err := tx.Commit().Error; err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		for _, pair := range revokedPairs {
+			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+		}
+		for _, gid := range affected {
+			_ = h.syncPermissionsByUserGroup(gid)
 		}
 	}
 	if oldUser.MaxConn != maxConn {
@@ -4177,13 +4204,27 @@ func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { tx.Rollback() }()
+	// X-P1-2②：替换前取旧成员差集，被移出隧道的组建授权在同一事务内撤销。
+	previousTunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroupTx(tx, req.GroupID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	if err := h.repo.ReplaceTunnelGroupMembersTx(tx, req.GroupID, req.TunnelIDs, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	revokedPairs, revokeErr := h.repo.RevokeGroupGrantsForRemovedTunnelsTx(tx, req.GroupID, previousTunnelIDs, req.TunnelIDs)
+	if revokeErr != nil {
+		response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	for _, pair := range revokedPairs {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 	_ = h.syncPermissionsByTunnelGroup(req.GroupID)
 	response.WriteJSON(w, response.OKEmpty())
