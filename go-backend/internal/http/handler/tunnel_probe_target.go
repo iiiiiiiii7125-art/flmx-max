@@ -3,12 +3,18 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"log"
+	"net"
 	"net/netip"
 	"strconv"
 	"strings"
 
+	"go-backend/internal/netguard"
 	"go-backend/internal/store/model"
 )
+
+// tunnelProbeTargetLookupIP 是保存面主机名解析入口（var 以便测试注入）。
+var tunnelProbeTargetLookupIP = net.LookupIP
 
 const (
 	defaultTunnelProbeTargetHost = "www.bing.com"
@@ -43,8 +49,58 @@ func normalizeTunnelProbeTarget(host string, port int) (tunnelProbeTarget, bool,
 	} else {
 		return tunnelProbeTarget{}, false, errors.New("测试目标 Host 格式无效")
 	}
+	if err := validateTunnelProbeTargetHostPolicy(host); err != nil {
+		return tunnelProbeTarget{}, false, err
+	}
 
 	return tunnelProbeTarget{Host: host, Port: port}, true, nil
+}
+
+// fakeIPBenchmarkPrefix 是 fake-IP DNS 的合成地址段（198.18.0.0/15，
+// RFC 2544 基准测试段，Clash 等 fake-IP 实现的默认地址池）。
+var fakeIPBenchmarkPrefix = netip.MustParsePrefix("198.18.0.0/15")
+
+// validateTunnelProbeTargetHostPolicy 是 R3X-011 的保存面政策校验
+// （格式校验之后）：字面 IP 走 netguard PolicyHardDenyOrLoopback；
+// 主机名先过回环别名名单（与导入面同名单，确定性拒绝），再保存时
+// 解析一次同判——任一解析结果命中同政策即拒存，解析失败/无结果
+// 不拒存（执行面另有下发跳过与节点侧复检兜底）。不采 PublicOnly：
+// 私网/CGNAT 解析结果与字面量同口径放行（管理员测内网网关合法）。
+func validateTunnelProbeTargetHostPolicy(host string) error {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if d := netguard.JudgeAddr(addr, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
+			return errors.New("测试目标地址不允许")
+		}
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return errors.New("测试目标地址不允许")
+	}
+	switch lower {
+	case "ip6-localhost", "ip6-loopback", "localhost.localdomain":
+		return errors.New("测试目标地址不允许")
+	}
+	ips, err := tunnelProbeTargetLookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return nil
+	}
+	for _, ip := range ips {
+		d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false)
+		if d.Allowed {
+			continue
+		}
+		// fake-IP 例外：面板自身处于 fake-IP 解析环境时，任意公网
+		// 域名都会解析到 198.18/15 合成段（本机实测 www.bing.com
+		// -> 198.18.x.x）。若据此拒存，全部公网域名目标将不可保
+		// 存，属误伤；故该段仅在「解析结果」上豁免——用户直接填
+		// 的字面量 198.18.x.x 仍按 ClassReserved 在上方拒存。
+		if d.Result.Class == netguard.ClassReserved && fakeIPBenchmarkPrefix.Contains(d.Result.Effective) {
+			continue
+		}
+		return errors.New("测试目标地址不允许")
+	}
+	return nil
 }
 
 func normalizeTunnelProbeTargetHost(host string) (string, bool) {
@@ -212,6 +268,23 @@ func effectiveTunnelProbeTargetValues(host string, port int) tunnelProbeTarget {
 		return defaultTunnelProbeTarget()
 	}
 	return target
+}
+
+// checkedTunnelProbeTargetValues 是下发面的存量目标复检（R3X-011）：
+// 已保存的目标在下发给节点执行前再过一遍 normalize 政策。未配置
+// （空）沿用默认目标；已配置但被政策拒绝的存量坏目标返回 ok=false，
+// 调用方必须跳过该目标的下发并已在此打告警日志——不得回退默认
+// 目标冒充探测成功，也不得把坏目标原样下发。
+func checkedTunnelProbeTargetValues(host string, port int) (tunnelProbeTarget, bool) {
+	target, configured, err := normalizeTunnelProbeTarget(host, port)
+	if err != nil {
+		log.Printf("tunnel probe target skipped: stored target %q port %d rejected: %v", host, port, err)
+		return tunnelProbeTarget{}, false
+	}
+	if !configured {
+		return defaultTunnelProbeTarget(), true
+	}
+	return target, true
 }
 
 func formatTunnelProbeTarget(target tunnelProbeTarget) string {
