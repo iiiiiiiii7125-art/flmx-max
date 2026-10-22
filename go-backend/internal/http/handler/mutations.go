@@ -1750,7 +1750,10 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	oldTunnel, err := h.getTunnelRecord(id)
+	// R4X-004：旧值是下方 presence 回填的写回源，必须走不归一化的
+	// 原始读取——归一化版会把存量 traffic_ratio=0（及 flow<=0）在
+	// 读取层改成 1，回填后无条件写库，零计费被静默撤销。
+	oldTunnel, err := h.getTunnelRecordRaw(id)
 	if err != nil || oldTunnel == nil {
 		response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 		return
