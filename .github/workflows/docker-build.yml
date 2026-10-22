@@ -336,7 +336,11 @@ jobs:
           COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
           COMMIT_DATE=$(git log -1 --pretty=format:"%ai")
 
-          # 创建 release
+          # 创建 release（J S-3 防范：重跑时 Release 已存在则跳过 create，
+          # 后续 --clobber 上传步照常执行、覆盖同名资产，保持重跑幂等）
+          if gh release view "${VERSION}" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "ℹ️ Release ${VERSION} 已存在，跳过 create，直接上传资产"
+          else
           gh release create "${VERSION}" \
             --target "${{ github.sha }}" \
             --title "Release ${VERSION}" \
@@ -378,6 +382,7 @@ jobs:
           curl -L https://github.com/${{ github.repository }}/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && ./install.sh
           \`\`\`" \
             --repo ${{ github.repository }}
+          fi
 
           # 上传所有文件到 release
           echo "📤 上传 GOST 二进制文件..."
