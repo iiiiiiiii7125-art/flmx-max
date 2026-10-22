@@ -37,8 +37,21 @@ func RandomPassword() string {
 
 // SS2022KeyLen returns the PSK length a Shadowsocks 2022 method requires, or 0
 // for legacy AEAD methods that accept any password.
+//
+// R4X-001: the lookup is case-insensitive. This function is the single
+// source of truth for every SS2022 guard (import validation, the
+// sing-box renderer's skip guard, password normalization); when it
+// matched only the lowercase literals, a case variant of a known
+// cipher (2022-BLAKE3-AES-128-GCM) made the whole chain blind —
+// validation passed any key and the renderer emitted the variant
+// verbatim, which both sing-box and mihomo reject with
+// "unknown method", poisoning the whole profile. Import still stores
+// the canonical lowercase name (validateProxyCredentials lowercases
+// the cipher) and rendering lowercases stock rows (Proxy.forEndpoint);
+// this insensitivity is the predicate-level backstop so no present or
+// future call site can re-open the bypass by forgetting to normalize.
 func SS2022KeyLen(method string) int {
-	switch method {
+	switch strings.ToLower(strings.TrimSpace(method)) {
 	case "2022-blake3-aes-128-gcm":
 		return 16
 	case "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
