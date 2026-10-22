@@ -23,7 +23,10 @@ var loopbackAllow = []string{"127.0.0.0/8", "::1/128"}
 // that dial the landing node (entry nodes of port forwards, exit nodes of
 // tunnel forwards), the nodes of kernels chained through it, and the user's
 // extra entries.
-func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
+// R3X-015: 链式拨号节点查询（chainDialerNodeIDs）失败时上抛 error，
+// 下发面中止整单而非下发少算拨号节点的白名单（其余既有查询的
+// log-and-continue 口径不在本条范围）。
+func (h *Handler) inboundAllowList(row model.NodeInbound) ([]string, error) {
 	set := make(map[string]bool)
 	for _, c := range loopbackAllow {
 		set[c] = true
@@ -65,7 +68,11 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 	}
 
 	// Kernels chained through the inbound dial it from their own node.
-	for _, nodeID := range h.chainDialerNodeIDs(row.ID) {
+	chainDialers, err := h.chainDialerNodeIDs(row.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, nodeID := range chainDialers {
 		if seenNodes[nodeID] {
 			continue
 		}
@@ -86,7 +93,7 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 		out = append(out, c)
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // relayDialerNodeIDs returns the nodes whose connections reach the landing
@@ -224,10 +231,12 @@ func (h *Handler) inboundIDsForTunnel(tunnelID int64) []int64 {
 // the given node (relay dialers of their forwards' tunnels, plus kernels
 // chained through them) — the set whose allow list embeds the node's
 // addresses (R2X-008 / E S-1: 节点改址后须刷新这些入站）。
-func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
+// R3X-015: 顶层列表查询与 chainDialerNodeIDs 的失败上抛（旧实现
+// 返回 nil 被调用方读作「无入站经本节点拨号」跳过刷新）。
+func (h *Handler) inboundIDsDialedByNode(nodeID int64) ([]int64, error) {
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []int64
 	for _, row := range rows {
@@ -253,7 +262,11 @@ func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
 			}
 		}
 		if !hit {
-			for _, d := range h.chainDialerNodeIDs(row.ID) {
+			chainDialers, cerr := h.chainDialerNodeIDs(row.ID)
+			if cerr != nil {
+				return nil, cerr
+			}
+			for _, d := range chainDialers {
 				if d == nodeID {
 					hit = true
 					break
@@ -264,7 +277,7 @@ func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
 			out = append(out, row.ID)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // refreshInboundWhitelists refreshes each affected inbound once.
