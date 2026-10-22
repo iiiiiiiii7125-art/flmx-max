@@ -236,6 +236,20 @@ func (h *Handler) getTunnelRecord(tunnelID int64) (*tunnelRecord, error) {
 	return tr, nil
 }
 
+// getTunnelRecordRaw is the unnormalized variant of getTunnelRecord
+// (R4X-004): write-back paths that read the old row to backfill absent
+// fields must use it, so stored zero values survive the round trip.
+func (h *Handler) getTunnelRecordRaw(tunnelID int64) (*tunnelRecord, error) {
+	tr, err := h.repo.GetTunnelRecordRaw(tunnelID)
+	if err != nil {
+		return nil, err
+	}
+	if tr == nil {
+		return nil, errors.New("隧道不存在")
+	}
+	return tr, nil
+}
+
 func (h *Handler) listForwardsByTunnel(tunnelID int64) ([]forwardRecord, error) {
 	return h.repo.ListForwardsByTunnel(tunnelID)
 }
