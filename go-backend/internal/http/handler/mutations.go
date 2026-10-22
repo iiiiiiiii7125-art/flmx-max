@@ -3005,23 +3005,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
 	}
-	for _, nodeID := range entryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			continue
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
+	if err := h.validateForwardEntryNodes(entryNodes, port, 0); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	// A4-004（BC-26）：realm 不支持的负载策略明确拒绝，不再静默改写。
 	if err := validateRealmForwardStrategy(tunnel, remoteAddr, defaultString(asString(req["strategy"]), "fifo")); err != nil {
@@ -3230,23 +3216,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		removedNodeIDs = diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs = diffInt64s(oldNodeIDs, removedNodeIDs)
 	}
-	for _, nodeID := range fwdEntryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			continue
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := h.validateForwardPortAvailability(node, port, id); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
+	if err := h.validateForwardEntryNodes(fwdEntryNodes, port, id); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	now := time.Now().UnixMilli()
 	maxConn := asInt(req["maxConn"], forward.MaxConn)
@@ -4018,6 +3990,14 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 				continue
 			}
 			p = picked
+		}
+		// X-P3-15（L-04-1）：显式 1–65535 校验（与 create/update 的
+		// O2-001 同口径）。存量非法端口在目标节点 PortRange 空规格
+		// 放行时，旧实现原样写回、下发才失败；现校验环直接拒。
+		if p < 1 || p > 65535 {
+			fail++
+			failures = appendBatchFailureReason(failures, id, forward.Name, "端口必须在 1-65535 范围内")
+			continue
 		}
 		bctEntryNodes, _ := h.tunnelEntryNodeIDs(req.TargetTunnelID)
 		newNodeIDs := uniqueInt64s(bctEntryNodes)
@@ -6784,6 +6764,29 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 		}
 	}
 	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内（该范围仅约束转发/中转/隧道入口端口）", port, node.Name, portRange)
+}
+
+// validateForwardEntryNodes 逐入口节点做转发端口校验（远程范围/
+// 本地规格/占用）。X-P3-16（L-04-2，BC-14，裁定 V-11）：节点记录
+// 读取失败 fail-closed 直接报错——create/update 旧实现 continue
+// 跳过校验仍落库，与 batch 的整条失败口径分叉，现统一。
+func (h *Handler) validateForwardEntryNodes(entryNodes []int64, port int, currentForwardID int64) error {
+	for _, nodeID := range entryNodes {
+		node, nodeErr := h.getNodeRecord(nodeID)
+		if nodeErr != nil {
+			return nodeErr
+		}
+		if err := validateRemoteNodePort(node, port); err != nil {
+			return err
+		}
+		if err := validateLocalNodePort(node, port); err != nil {
+			return err
+		}
+		if err := h.validateForwardPortAvailability(node, port, currentForwardID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, currentForwardID int64) error {
