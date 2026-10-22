@@ -654,6 +654,8 @@ export interface MonitorPermissionApiItem {
 
 export interface MonitorAccessApiData {
   allowed: boolean;
+  // R2X-038：是否管理员，前端据此对只读用户隐藏写入口。
+  admin: boolean;
   reason?: string;
 }
 
