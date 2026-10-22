@@ -45,12 +45,14 @@ func TestApplyInboundCounterSamplesChunkedPartialProgressAndRetry(t *testing.T) 
 		t.Fatalf("expected apply to fail on sentinel sample")
 	}
 	// 第一片（200 条）应已提交：基线与总量同步前进。
+	// 断言更新登记 #1-补（R2X-033/BC-R2-05 语义订正）：首片样本无基线，
+	// 按新语义只建基线、delta=0，故 upload 期望由旧全量语义的 1000 改为 0。
 	var first model.NodeInbound
 	if err := r.DB().First(&first, ids[0]).Error; err != nil {
 		t.Fatal(err)
 	}
-	if first.UploadBytes != 1000 {
-		t.Fatalf("D6-03: first chunk not committed independently, upload=%d want 1000", first.UploadBytes)
+	if first.UploadBytes != 0 {
+		t.Fatalf("D6-03: first chunk not committed independently, upload=%d want 0", first.UploadBytes)
 	}
 	var sentinel model.NodeInbound
 	if err := r.DB().First(&sentinel, ids[230]).Error; err != nil {
@@ -61,7 +63,9 @@ func TestApplyInboundCounterSamplesChunkedPartialProgressAndRetry(t *testing.T) 
 	}
 
 	// 去掉故障后以同批样本重试：已提交片 delta=0（基线已推进），
-	// 剩余片补齐，最终每条恰好计入一次。
+	// 剩余片补齐。断言更新登记 #1-补（R2X-033/BC-R2-05 语义订正）：
+	// 剩余片样本同样无基线、只建基线 delta=0，故重试后每条 upload 均为 0
+	// （旧全量语义期望为 1000+i、哨兵条 666666）；基线行数断言不受影响（见下）。
 	if err := r.DB().Exec(`DROP TRIGGER d603_fail`).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -73,12 +77,8 @@ func TestApplyInboundCounterSamplesChunkedPartialProgressAndRetry(t *testing.T) 
 		if err := r.DB().First(&in, id).Error; err != nil {
 			t.Fatal(err)
 		}
-		want := int64(1000 + i)
-		if i == 230 {
-			want = 666666
-		}
-		if in.UploadBytes != want {
-			t.Fatalf("inbound %d upload=%d want %d (double count or loss after chunked retry)", i, in.UploadBytes, want)
+		if in.UploadBytes != 0 {
+			t.Fatalf("inbound %d upload=%d want 0 (double count or loss after chunked retry)", i, in.UploadBytes)
 		}
 	}
 	var stateCount int64

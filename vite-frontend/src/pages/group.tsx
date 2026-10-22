@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import toast from "react-hot-toast";
 
 import { PageShell } from "@/components/page-kit";
@@ -309,6 +310,10 @@ export default function GroupPage({
     onUserGroupModalOpen();
   };
 
+  // R2X-004：两类分组创建表单各一把幂等键（同表单复用、成功轮换）。
+  const tunnelGroupIdem = useIdemKey();
+  const userGroupIdem = useIdemKey();
+
   const saveTunnelGroup = async () => {
     if (!groupName.trim()) {
       toast.error("请输入分组名称");
@@ -320,9 +325,10 @@ export default function GroupPage({
       const payload = { name: groupName.trim(), status: Number(groupStatus) };
       const res = editingTunnelGroup
         ? await updateTunnelGroup({ id: editingTunnelGroup.id, ...payload })
-        : await createTunnelGroup(payload);
+        : await createTunnelGroup(payload, tunnelGroupIdem.idemKey);
 
       if (res.code === 0) {
+        if (!editingTunnelGroup) tunnelGroupIdem.rotateIdemKey();
         toast.success(editingTunnelGroup ? "更新成功" : "创建成功");
         onTunnelGroupModalClose();
         loadData();
@@ -347,9 +353,10 @@ export default function GroupPage({
       const payload = { name: groupName.trim(), status: Number(groupStatus) };
       const res = editingUserGroup
         ? await updateUserGroup({ id: editingUserGroup.id, ...payload })
-        : await createUserGroup(payload);
+        : await createUserGroup(payload, userGroupIdem.idemKey);
 
       if (res.code === 0) {
+        if (!editingUserGroup) userGroupIdem.rotateIdemKey();
         toast.success(editingUserGroup ? "更新成功" : "创建成功");
         onUserGroupModalClose();
         loadData();
@@ -467,7 +474,24 @@ export default function GroupPage({
       });
 
       if (res.code === 0) {
-        toast.success(res.msg || "权限分配成功");
+        // R2X-021：后端部分失败时 code=0 且 data={message,failures:[{userId,tunnelId,error}]}
+        // （信封 msg 恒为「操作成功」），须消费 failures，否则部分失败被报成全成功。
+        const data = (res.data ?? null) as {
+          failures?: Array<{ error?: string }>;
+        } | null;
+        const failures =
+          typeof data === "object" && data !== null && Array.isArray(data.failures)
+            ? data.failures
+            : [];
+
+        if (failures.length > 0) {
+          toast(
+            `权限分配部分失败：${failures.length} 条失败，首条：${failures[0]?.error || "未知错误"}`,
+            { icon: "⚠️", duration: 5000 },
+          );
+        } else {
+          toast.success(res.msg || "权限分配成功");
+        }
         loadData();
       } else {
         toast.error(res.msg || "权限分配失败");

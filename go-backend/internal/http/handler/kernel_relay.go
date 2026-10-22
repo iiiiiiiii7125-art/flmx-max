@@ -135,12 +135,23 @@ func validateRelayLandingExitSet(row *model.NodeInbound, exits []int64) error {
 }
 
 func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (string, error) {
-	port := strconv.Itoa(row.Port)
 	if tunnel.Type == 2 {
 		exits, err := h.repo.TunnelExitNodeIDs(tunnel.ID)
 		if err != nil {
 			return "", err
 		}
+		return h.relayTargetWithExits(row, tunnel, exits)
+	}
+	return h.relayTargetWithExits(row, tunnel, nil)
+}
+
+// relayTargetWithExits is relayTarget against an explicit exit set, for
+// callers whose tunnel state is not (yet) the stored one — R2X-009:
+// tunnelUpdate 预演待提交的出口集时不能走 DB 读法（与
+// validateRelayLandingExitSet 的显式出口集变体同理由）。
+func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRecord, exits []int64) (string, error) {
+	port := strconv.Itoa(row.Port)
+	if tunnel.Type == 2 {
 		if err := validateRelayLandingExitSet(row, exits); err != nil {
 			return "", err
 		}
@@ -224,6 +235,19 @@ func (h *Handler) validateTunnelRelayExits(tunnelID int64, exits []int64) error 
 // 端口不重算会让落地型转发继续拨旧地址）。changed=false 表示非托管
 // 中转转发或现址已与目标隧道口径一致。
 func (h *Handler) recomputedRelayRemoteAddr(forward *forwardRecord, tunnel *tunnelRecord) (string, bool, error) {
+	if tunnel.Type == 2 {
+		exits, err := h.repo.TunnelExitNodeIDs(tunnel.ID)
+		if err != nil {
+			return "", false, err
+		}
+		return h.recomputedRelayRemoteAddrWithExits(forward, tunnel, exits)
+	}
+	return h.recomputedRelayRemoteAddrWithExits(forward, tunnel, nil)
+}
+
+// recomputedRelayRemoteAddrWithExits is recomputedRelayRemoteAddr against
+// an explicit exit set (R2X-009 预演变体，见 relayTargetWithExits)。
+func (h *Handler) recomputedRelayRemoteAddrWithExits(forward *forwardRecord, tunnel *tunnelRecord, exits []int64) (string, bool, error) {
 	rels, err := h.repo.ListNodeInboundRelays()
 	if err != nil {
 		return "", false, err
@@ -236,13 +260,112 @@ func (h *Handler) recomputedRelayRemoteAddr(forward *forwardRecord, tunnel *tunn
 		if err != nil || row == nil {
 			continue
 		}
-		target, err := h.relayTarget(row, tunnel)
+		target, err := h.relayTargetWithExits(row, tunnel, exits)
 		if err != nil {
 			return "", false, err
 		}
 		return target, target != forward.RemoteAddr, nil
 	}
 	return "", false, nil
+}
+
+// validateTunnelRelayRemoteAddrComputable pre-flights every managed relay
+// of a tunnel against a prospective tunnel state (R2X-009): a migration
+// whose RemoteAddr cannot be recomputed (e.g. type 2→1 for a
+// loopback-only inbound) must fail here, before anything is stored, so
+// no silent stale-address state is left behind.
+func (h *Handler) validateTunnelRelayRemoteAddrComputable(tunnelID int64, prospective *tunnelRecord, exits []int64) error {
+	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
+	if err != nil {
+		return err
+	}
+	for i := range forwards {
+		if _, _, err := h.recomputedRelayRemoteAddrWithExits(&forwards[i], prospective, exits); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyRelayRemoteAddr stores a recomputed RemoteAddr and re-syncs the
+// forward's services so the data plane follows immediately.
+func (h *Handler) applyRelayRemoteAddr(forward *forwardRecord, newAddr string) error {
+	if err := h.repo.UpdateForward(forward.ID, forward.Name, forward.TunnelID, newAddr, forward.Strategy, time.Now().UnixMilli(),
+		forward.SpeedID, forward.MaxConn, forward.IPMaxConn, forward.IPSpeedID, 0, forward.ProxyProtocolReceive, forward.ProxyProtocolSend); err != nil {
+		return err
+	}
+	updated, err := h.getForwardRecord(forward.ID)
+	if err != nil || updated == nil {
+		return err
+	}
+	return h.syncForwardServices(updated, "UpdateService", true)
+}
+
+// resyncManagedRelayRemoteAddrsForTunnel recomputes the RemoteAddr of
+// every managed relay forward of a tunnel from the tunnel's stored state
+// (R2X-009: 隧道提交落库后调用，与白名单刷新同位置）。变更则落库并
+// 重下发；失败逐条汇入返回的 warnings，不静默。
+func (h *Handler) resyncManagedRelayRemoteAddrsForTunnel(tunnelID int64) []string {
+	tunnel, err := h.getTunnelRecord(tunnelID)
+	if err != nil || tunnel == nil {
+		return []string{fmt.Sprintf("中转目标地址重算失败: 隧道不存在 (%v)", err)}
+	}
+	forwards, err := h.listForwardsByTunnel(tunnelID)
+	if err != nil {
+		return []string{fmt.Sprintf("中转目标地址重算失败: %v", err)}
+	}
+	var warnings []string
+	for i := range forwards {
+		fwd := &forwards[i]
+		newAddr, changed, rerr := h.recomputedRelayRemoteAddr(fwd, tunnel)
+		if rerr != nil {
+			warnings = append(warnings, fmt.Sprintf("中转「%s」目标地址重算失败: %v", fwd.Name, rerr))
+			continue
+		}
+		if !changed {
+			continue
+		}
+		if err := h.applyRelayRemoteAddr(fwd, newAddr); err != nil {
+			warnings = append(warnings, fmt.Sprintf("中转「%s」目标地址同步失败: %v", fwd.Name, err))
+		}
+	}
+	return warnings
+}
+
+// resyncManagedRelayRemoteAddrsForInbound is the inbound-side twin: every
+// managed relay of the inbound is recomputed from its own tunnel's stored
+// state (R2X-009: 入站 Port/Listen 变更、落地节点改址后调用）。
+func (h *Handler) resyncManagedRelayRemoteAddrsForInbound(inboundID int64) []string {
+	relays, err := h.repo.ListInboundRelays(inboundID)
+	if err != nil {
+		return []string{fmt.Sprintf("中转目标地址重算失败: %v", err)}
+	}
+	var warnings []string
+	for _, rel := range relays {
+		if !rel.ForwardExists || rel.Managed != 1 {
+			continue
+		}
+		fwd, err := h.getForwardRecord(rel.ForwardID)
+		if err != nil || fwd == nil {
+			continue
+		}
+		tunnel, err := h.getTunnelRecord(fwd.TunnelID)
+		if err != nil || tunnel == nil {
+			continue
+		}
+		newAddr, changed, rerr := h.recomputedRelayRemoteAddr(fwd, tunnel)
+		if rerr != nil {
+			warnings = append(warnings, fmt.Sprintf("中转「%s」目标地址重算失败: %v", fwd.Name, rerr))
+			continue
+		}
+		if !changed {
+			continue
+		}
+		if err := h.applyRelayRemoteAddr(fwd, newAddr); err != nil {
+			warnings = append(warnings, fmt.Sprintf("中转「%s」目标地址同步失败: %v", fwd.Name, err))
+		}
+	}
+	return warnings
 }
 
 func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +388,16 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 		return
+	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, userID, "inbound-relay:create")
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 	row, err := h.repo.GetNodeInbound(req.InboundID)
 	if err != nil || row == nil {

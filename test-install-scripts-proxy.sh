@@ -1555,6 +1555,170 @@ test_update_panel_crosschecks_deployed_image_version() (
     "FIX2-C#9: a downgrade against the deployed version must be rejected before downloading"
 )
 
+# R2X-019 (R2-J-01): 真实函数级回归——install_flux_agent 本体实跑
+# （下载/校验/写服务/启服务全走真实代码，curl/systemctl 为命令级桩），
+# 仅桩 flux_agent_service_is_active 决定判活结果：为假时函数必须
+# return 1 且屏显失败；为真时必须 return 0。禁止再以整函数桩代替
+# 被测对象（J 报告 §3：X-P3-6 的整函数桩正是本缺陷的漏网原因）。
+test_install_flux_agent_returns_nonzero_when_service_not_active() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  SERVER_ADDR="panel.example.com:443"
+  SECRET="secret"
+  DOWNLOAD_URL="https://example.com/gost"
+
+  ask_proxy_config() { :; }
+  ensure_download_url_initialized() { :; }
+  get_config_params() { :; }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  systemctl() { return 0; }
+  curl() {
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+
+    cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+    chmod +x "$output"
+  }
+
+  # 判活失败：下载与启动命令均成功、服务就是没活起来
+  flux_agent_service_is_active() { return 1; }
+
+  local rc="0"
+  ( install_flux_agent >"$INSTALL_DIR/fail.log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R2X-019: install must return 1 when the service fails to start"
+  grep -q "服务启动失败" "$INSTALL_DIR/fail.log" || \
+    fail "R2X-019: install should still print the startup failure hint"
+
+  # 判活成功（防过修）：同路径必须 return 0
+  flux_agent_service_is_active() { return 0; }
+
+  rc="0"
+  ( install_flux_agent >"$INSTALL_DIR/ok.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R2X-019: install must return 0 when the service is active"
+)
+
+# R2X-020 (R2-J-02): systemd 分支的 start 前必须先 reset-failed 清
+# 失败态（与 agent 侧 scriptStartCommand / gate_resetfailed_test 同
+# 口径）；OpenRC 无启动限速、分支不得出现 reset-failed/systemctl。
+test_systemd_starts_reset_failed_before_start() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local work
+  work=$(mktemp -d)
+  CALLS_LOG="$work/calls.log"
+  RC_CALLS_LOG="$work/rc-calls.log"
+  : > "$CALLS_LOG"
+  : > "$RC_CALLS_LOG"
+
+  SERVICE_MANAGER="systemd"
+  systemctl() { echo "$*" >> "$CALLS_LOG"; return 0; }
+
+  start_flux_agent_service
+  assert_equals "reset-failed flux_agent" "$(sed -n '1p' "$CALLS_LOG")" \
+    "R2X-020: start_flux_agent_service should reset-failed before start"
+  assert_equals "start flux_agent" "$(sed -n '2p' "$CALLS_LOG")" \
+    "R2X-020: start_flux_agent_service should start after reset-failed"
+
+  : > "$CALLS_LOG"
+  enable_and_start_flux_agent_service
+  local reset_line start_line
+  reset_line=$(awk '$0=="reset-failed flux_agent"{print NR; exit}' "$CALLS_LOG")
+  start_line=$(awk '$0=="start flux_agent"{print NR; exit}' "$CALLS_LOG")
+  [[ -n "$reset_line" && -n "$start_line" && "$reset_line" -lt "$start_line" ]] || \
+    fail "R2X-020: enable_and_start should reset-failed before start (calls: $(cat "$CALLS_LOG"))"
+
+  # OpenRC 分支不动：不得调用 systemctl，rc-service 照常 start
+  SERVICE_MANAGER="openrc"
+  : > "$CALLS_LOG"
+  rc-service() { echo "$*" >> "$RC_CALLS_LOG"; return 0; }
+  rc-update() { echo "$*" >> "$RC_CALLS_LOG"; return 0; }
+  start_flux_agent_service
+  enable_and_start_flux_agent_service
+  [[ ! -s "$CALLS_LOG" ]] || \
+    fail "R2X-020: OpenRC starts must not call systemctl/reset-failed"
+  grep -q "flux_agent start" "$RC_CALLS_LOG" || \
+    fail "R2X-020: OpenRC starts should still go through rc-service"
+)
+
+# R2X-020 (R2-J-02) + 观察 O-1: systemctl 桩模拟 failed 态——裸 start
+# 报启动限速错、reset-failed 后 start 成功。回滚恢复旧二进制后必须
+# 终态 active（双采样判活），而不是停在限速拒绝上待人工处理。
+test_rollback_restarts_service_from_failed_state() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  printf '#!/bin/bash\necho "bad flap"\n' > "$INSTALL_DIR/flux_agent"
+  printf '#!/bin/bash\necho "old good"\n' > "$INSTALL_DIR/flux_agent.bak"
+  chmod +x "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flux_agent.bak"
+
+  local work
+  work=$(mktemp -d)
+  RB_STATE="$work"
+  # flap 坏二进制已把 unit 烧进 failed 态且服务未活
+  : > "$RB_STATE/failed"
+
+  sleep() { :; }
+  systemctl() {
+    case "$1" in
+      reset-failed)
+        rm -f "$RB_STATE/failed"
+        return 0 ;;
+      start)
+        if [[ -f "$RB_STATE/failed" ]]; then
+          echo "Start request repeated too quickly" >&2
+          return 1
+        fi
+        : > "$RB_STATE/active"
+        return 0 ;;
+      is-active)
+        [[ -f "$RB_STATE/active" ]] ;;
+      show)
+        if [[ -f "$RB_STATE/active" ]]; then echo 4242; else echo 0; fi
+        return 0 ;;
+      *) return 0 ;;
+    esac
+  }
+
+  # || true：install.sh 本体无 set -e，start 失败应由后续判活断言
+  # 定性，不得让套件子 shell 的 set -e 在回滚函数内静默中止。
+  rollback_flux_agent >"$work/rollback.log" 2>&1 || true
+
+  flux_agent_service_is_active || \
+    fail "R2X-020: rollback should bring the service back active from the failed state"
+  grep -q "已回滚到旧版本并重启成功" "$work/rollback.log" || \
+    fail "R2X-020: rollback should report a successful restart (log: $(cat "$work/rollback.log"))"
+  grep -q "old good" "$INSTALL_DIR/flux_agent" || \
+    fail "R2X-020: rollback should restore the old binary"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet
 test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
@@ -1594,5 +1758,8 @@ test_backup_sqlite_for_update_pauses_copies_and_unpauses
 test_panel_install_script_uses_default_proxy
 test_panel_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_defaults_proxy_on_eof
+test_install_flux_agent_returns_nonzero_when_service_not_active
+test_systemd_starts_reset_failed_before_start
+test_rollback_restarts_service_from_failed_state
 
 echo "install script tests passed"

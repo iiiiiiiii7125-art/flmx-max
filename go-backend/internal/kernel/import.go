@@ -7,6 +7,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"go-backend/internal/netguard"
 )
 
 // ParseImportHostPort validates the address of an imported node: a public
@@ -32,6 +34,13 @@ func ValidateImportHost(host string) error {
 		if ip.IsUnspecified() || ip.IsLoopback() {
 			return errors.New("地址不能是本机或 0.0.0.0")
 		}
+		// R2X-043：字面 IP 分支只加 netguard 硬拒层（元数据精确集 ∪
+		// 169.254/16 整段 ∪ 未指定，翻译内嵌同判）+ loopback 层
+		// （含 NAT64/6to4 内嵌回环）。RFC1918/CGNAT 字面量是合法
+		// 导入对象，不得顺手禁（防过修）。
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
+			return errors.New("地址不能是云元数据或链路本地地址")
+		}
 		return nil
 	}
 	// R1 X-P2-1（C-01，BC-04）：主机名分支前的规范化拦截。此前只拦
@@ -54,6 +63,12 @@ func ValidateImportHost(host string) error {
 func rejectNonCanonicalImportHost(host string) error {
 	lower := strings.ToLower(host)
 	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return errors.New("地址不能是 localhost")
+	}
+	// R2X-005：补回环别名名单（仅名单早期拒绝，不做导入时解析校验——
+	// 解析防线在 probe 拨号前，见 handler/kernel_probe.go）。
+	switch lower {
+	case "ip6-localhost", "ip6-loopback", "localhost.localdomain":
 		return errors.New("地址不能是 localhost")
 	}
 	// 任一段以 0x 开头即十六进制编码（如 0x7f.1、0x7f000001）。

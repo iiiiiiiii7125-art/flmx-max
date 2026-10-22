@@ -1,6 +1,9 @@
 package repo
 
 import (
+	"encoding/json"
+	"strings"
+
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
@@ -112,6 +115,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // Import() feeds this map to importUserSubscriptions so assignments are
 // rewritten onto the restored rows instead of dangling.
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
+	kernelRepointed := int64(0)
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -121,6 +125,23 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if !kernelNodeExists {
 			rep.skip("kernels")
 			continue
+		}
+		// R2X-046：同节点同类型的旧内核行被新行替换前，先把引用旧
+		// 行的存量入站（多为备份之后新建、不在本备份内的行）重指向
+		// 新行 id。旧实现裸删旧行，这批入站 kernel_id 悬空、列表
+		// kernelType 解析为空；不采级联删（静默删掉备份外入站比
+		// 悬空更糟）。重指向计数入 ImportWarnings（循环后统一发）。
+		var replacedKernels []model.NodeKernel
+		if err := tx.Where("node_id = ? AND kernel_type = ? AND id <> ?", k.NodeID, k.KernelType, k.ID).
+			Find(&replacedKernels).Error; err != nil {
+			return 0, err
+		}
+		for _, oldKernel := range replacedKernels {
+			res := tx.Model(&model.NodeInbound{}).Where("kernel_id = ?", oldKernel.ID).Update("kernel_id", k.ID)
+			if res.Error != nil {
+				return 0, res.Error
+			}
+			kernelRepointed += res.RowsAffected
 		}
 		// One kernel per node and type: drop a different row in the way.
 		if err := tx.Where("node_id = ? AND kernel_type = ? AND id <> ?", k.NodeID, k.KernelType, k.ID).
@@ -148,6 +169,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if err := restoreZeroValuedInt(tx, &model.NodeKernel{}, k.ID, "enabled", k.Enabled); err != nil {
 			return 0, err
 		}
+	}
+	if kernelRepointed > 0 {
+		rep.warnf("备份恢复：内核行替换时已将 %d 条存量入站的内核引用重指向恢复后的内核行（旧内核行已被同节点同类型的新行替换）", kernelRepointed)
 	}
 
 	// Sources first: imported nodes point at them. A refresh fills in the
@@ -228,6 +252,16 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
 			return 0, err
 		}
+	}
+
+	// R2X-015：入站附属引用后置校验。出站目标可能是同批入站列表的
+	// 后序行，逐行校验会误杀合法链式入站——循环全部落库后统一校验：
+	// 有效集 = 本轮落库的备份行 ∪ 目标库现存行（即校验时点的 DB
+	// 全集）。source_id 无效置 0（手工导入语义）、outbound_id 无效
+	// 置 0（直连）、splitRules 剔除指向无效 outbound 的规则后回写，
+	// 均计 ImportWarnings，不跳整行（verdicts §2.7）。
+	if err := validateImportedInboundRefsTx(tx, b.Inbounds, rep); err != nil {
+		return 0, err
 	}
 
 	for _, rel := range b.Relays {
@@ -372,4 +406,102 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 	}
 	return len(b.Inbounds), nil
+}
+
+// validateImportedInboundRefsTx 是 R2X-015 的入站后置校验：只处理
+// 本轮备份清单内的入站行（被 kernel/node 身份校验跳过的行在库中不
+// 存在，自动略过；备份外存量行不动）。剥离计数合并为一条 warning。
+func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep *importReport) error {
+	srcStripped, outStripped, rulesStripped := 0, 0, 0
+	for _, ib := range rows {
+		var row model.NodeInbound
+		res := tx.Where("id = ?", ib.ID).Limit(1).Find(&row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			continue
+		}
+		updates := map[string]interface{}{}
+		if row.SourceID > 0 {
+			exists, err := rowExistsTx(tx, &model.RemoteSource{}, row.SourceID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				updates["source_id"] = 0
+				srcStripped++
+			}
+		}
+		if row.OutboundID > 0 {
+			exists, err := rowExistsTx(tx, &model.NodeInbound{}, row.OutboundID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				updates["outbound_id"] = 0
+				outStripped++
+			}
+		}
+		if strings.TrimSpace(row.SplitRules) != "" {
+			pruned, removed, parsed, err := pruneDanglingSplitRulesTx(tx, row.SplitRules)
+			if err != nil {
+				return err
+			}
+			// 解析失败的 splitRules 原样保留，不因本校验引入新失败面。
+			if parsed && removed > 0 {
+				updates["split_rules"] = pruned
+				rulesStripped += removed
+			}
+		}
+		if len(updates) > 0 {
+			if err := tx.Model(&model.NodeInbound{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+	}
+	if total := srcStripped + outStripped + rulesStripped; total > 0 {
+		rep.warnf("备份恢复：入站附属引用后置校验共剥离悬空引用 %d 处（来源 source_id %d 处已置 0、出站 outbound_id %d 处已置 0 改直连、分流规则 %d 条已剔除），入站本身已照常恢复", total, srcStripped, outStripped, rulesStripped)
+	}
+	return nil
+}
+
+// pruneDanglingSplitRulesTx 剔除 splitRules 中 outboundId 指向不存在
+// 入站的规则。按 json.RawMessage 逐条保留原始字节，未被剔除的规则
+// 逐字不变（不做结构体重序列化，避免字段漂移）。整体解析失败时
+// parsed=false，调用方原样保留原文。
+func pruneDanglingSplitRulesTx(tx *gorm.DB, raw string) (pruned string, removed int, parsed bool, err error) {
+	var rawRules []json.RawMessage
+	if uerr := json.Unmarshal([]byte(raw), &rawRules); uerr != nil {
+		return "", 0, false, nil
+	}
+	kept := make([]json.RawMessage, 0, len(rawRules))
+	for _, rr := range rawRules {
+		var probe struct {
+			OutboundID int64 `json:"outboundId"`
+		}
+		if uerr := json.Unmarshal(rr, &probe); uerr != nil {
+			kept = append(kept, rr)
+			continue
+		}
+		if probe.OutboundID > 0 {
+			exists, cerr := rowExistsTx(tx, &model.NodeInbound{}, probe.OutboundID)
+			if cerr != nil {
+				return "", 0, false, cerr
+			}
+			if !exists {
+				removed++
+				continue
+			}
+		}
+		kept = append(kept, rr)
+	}
+	if removed == 0 {
+		return raw, 0, true, nil
+	}
+	out, merr := json.Marshal(kept)
+	if merr != nil {
+		return "", 0, false, merr
+	}
+	return string(out), removed, true, nil
 }

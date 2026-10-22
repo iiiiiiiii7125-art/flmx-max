@@ -19,6 +19,7 @@ import (
 
 	"go-backend/internal/http/client"
 	"go-backend/internal/http/response"
+	"go-backend/internal/netguard"
 	"go-backend/internal/store/repo"
 )
 
@@ -193,11 +194,10 @@ const maxFederationDiagnoseCount = 10
 var federationDiagnoseLookupIP = net.LookupIP
 
 // resolveFederationDiagnoseTarget 校验诊断目标并把它钉死为一个已
-// 校验的 IP 字面量（F-086 + D3-07）。判定不新写一套：直接复用
-// isPrivateIP（kernel_external.go，即 SecureFetch 的 validateFetchIP
-// 所依赖的同一份判定，含 F-023 的 0.0.0.0/8 修正与 IPv4-mapped
-// 展开）。命中内网/保留段（RFC1918、回环、链路本地含云元数据
-// 169.254.169.254、ULA、CGNAT、未指定、组播、0.0.0.0/8）一律拒绝
+// 校验的 IP 字面量（F-086 + D3-07）。判定不新写一套：R2 批1起走
+// netguard 普通策略（诊断无放行通道），与 SecureFetch 同源。命中
+// 内网/保留段（RFC1918、回环、链路本地含云元数据整段、ULA、
+// CGNAT、未指定、组播、0.0.0.0/8、240/4 与翻译内嵌形态）一律拒绝
 // ——否则提供方节点会被对端当作探测内网的跳板。目标是主机名时先
 // 解析，对每个返回地址逐一判定，任一不合法整体拒绝；解析失败无法
 // 验证，按 fail-closed 拒绝。
@@ -209,8 +209,11 @@ var federationDiagnoseLookupIP = net.LookupIP
 // 字面量，节点侧无需改动）。
 func resolveFederationDiagnoseTarget(target string) (string, error) {
 	target = strings.TrimSpace(target)
+	// R2X-006：判定改走 netguard 普通策略（诊断无放行通道）——
+	// NAT64/6to4 按内嵌同判、本地 NAT64 整段拒、段集含 240/4 等
+	// bypass 基底；旧 isPrivateIP 口径对翻译形态全漏。
 	if parsed := net.ParseIP(target); parsed != nil {
-		if isPrivateIP(parsed) {
+		if d := netguard.Judge(parsed, netguard.PolicyPublicOnly, false); !d.Allowed {
 			return "", errors.New("不允许对内网/保留地址发起诊断")
 		}
 		return parsed.String(), nil
@@ -220,7 +223,7 @@ func resolveFederationDiagnoseTarget(target string) (string, error) {
 		return "", fmt.Errorf("诊断目标无法解析: %s", target)
 	}
 	for _, ip := range ips {
-		if isPrivateIP(ip) {
+		if d := netguard.Judge(ip, netguard.PolicyPublicOnly, false); !d.Allowed {
 			return "", errors.New("不允许对内网/保留地址发起诊断")
 		}
 	}
@@ -420,21 +423,33 @@ func (h *Handler) ensurePeerShareRelayCredentials(share *repo.PeerShare) {
 
 // validateFederationRoleTargets 校验 middle 角色的 relay 目标
 // （D3-04）：目标主机逐个判定——字面 IP 直接判定，主机名解析后逐
-// 地址判定，任一命中私网/保留段（isPrivateIP，与 SecureFetch 同
-// 判定）整体拒绝；仅 SecureFetch 的私网放行策略（isPrivateAllowed，
-// 同 env）命中时放行。此前 middle 的 chain 由提供方节点按消费方
+// 地址判定，任一命中私网/保留段（netguard，与 SecureFetch 同源）
+// 整体拒绝；仅 SecureFetch 的私网放行策略（isPrivateAllowed，
+// 同 env）命中时放行，硬拒层前置于该放行（R2X-006）。此前 middle 的 chain 由提供方节点按消费方
 // 给定的任意 host:port 出站，等于让持 token 对端借提供方节点探测/
 // 连接其内网（agent 侧 bypass 私网过滤需 FIX-H 的 agent 配合，本
 // 层校验是面板侧的主要防线）。
 func validateFederationRoleTargets(targets []federationRuntimeTarget) error {
+	// R2X-006：改走 netguard——硬拒层前置于 isPrivateAllowed（旧口径
+	// 元数据在 allow_private 下可被放行），翻译形态按内嵌同判。
+	judge := func(host string, ip net.IP) error {
+		eff := netguard.EffectiveIP(ip)
+		if d := netguard.Judge(ip, netguard.PolicyAllowPrivate, eff != nil && isPrivateAllowed(eff)); !d.Allowed {
+			if d.Result.HardDeny {
+				return fmt.Errorf("relay target %s is a blocked metadata or hard-denied address", host)
+			}
+			return fmt.Errorf("relay target %s is a private or reserved address", host)
+		}
+		return nil
+	}
 	for _, target := range targets {
 		host := strings.TrimSpace(target.Host)
 		if host == "" {
 			continue
 		}
 		if ip := net.ParseIP(host); ip != nil {
-			if isPrivateIP(ip) && !isPrivateAllowed(ip) {
-				return fmt.Errorf("relay target %s is a private or reserved address", host)
+			if err := judge(host, ip); err != nil {
+				return err
 			}
 			continue
 		}
@@ -443,7 +458,7 @@ func validateFederationRoleTargets(targets []federationRuntimeTarget) error {
 			return fmt.Errorf("relay target %s cannot be resolved", host)
 		}
 		for _, ip := range ips {
-			if isPrivateIP(ip) && !isPrivateAllowed(ip) {
+			if err := judge(host, ip); err != nil {
 				return fmt.Errorf("relay target %s resolves to a private or reserved address", host)
 			}
 		}
@@ -524,6 +539,17 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("Invalid JSON"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "federation-share:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
+
 
 	if req.Name == "" || req.NodeID == 0 {
 		response.WriteJSON(w, response.ErrDefault("Name and NodeID are required"))

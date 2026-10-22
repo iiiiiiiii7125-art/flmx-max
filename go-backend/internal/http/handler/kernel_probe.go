@@ -13,6 +13,7 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
+	"go-backend/internal/netguard"
 	"go-backend/internal/store/model"
 )
 
@@ -96,6 +97,17 @@ func (s *externalProbeStore) unmarkDown(id int64) {
 	delete(s.down, id)
 }
 
+// remarkDown 是恢复向的对偶回滚（R2X-017）：恢复通知发送失败时把 down
+// 标记置回，使下一轮探测（节点仍可达）重新产出恢复跃迁并补发。
+func (s *externalProbeStore) remarkDown(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.down == nil {
+		s.down = make(map[int64]bool)
+	}
+	s.down[id] = true
+}
+
 func (s *externalProbeStore) get(id int64) (externalProbe, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -130,13 +142,45 @@ func externalProbeSkipped(row *model.NodeInbound) bool {
 	return row.Protocol == kernel.ProtocolHysteria2 || row.Protocol == kernel.ProtocolTUIC
 }
 
+// externalProbeLookupIP 是 probe 的解析入口（var 以便测试注入）。
+var externalProbeLookupIP = net.LookupIP
+
 func probeExternalInbound(ctx context.Context, row model.NodeInbound) externalProbe {
 	now := time.Now()
 	if externalProbeSkipped(&row) {
 		return externalProbe{Skipped: true, CheckedAt: now.UnixMilli()}
 	}
+	// R2X-005/R2X-043：拨号前对解析结果过 netguard——任一命中
+	// loopback/硬拒不拨（存量坏行同样受检，命中即跳过并标记）。
+	// 判定与拨号共用同一次解析结果（拨已校验 IP，无二次解析窗口）。
+	var ips []net.IP
+	if ip := net.ParseIP(row.Listen); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		resolved, err := externalProbeLookupIP(row.Listen)
+		if err != nil || len(resolved) == 0 {
+			return externalProbe{Error: "域名解析失败", CheckedAt: time.Now().UnixMilli()}
+		}
+		ips = resolved
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
+			return externalProbe{Error: "目标地址不允许", CheckedAt: time.Now().UnixMilli()}
+		}
+	}
 	dialer := net.Dialer{Timeout: externalProbeTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(row.Listen, strconv.Itoa(row.Port)))
+	var conn net.Conn
+	var err error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(dialIP.String(), strconv.Itoa(row.Port)))
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return externalProbe{Error: probeErrorText(err), CheckedAt: time.Now().UnixMilli()}
 	}
@@ -216,6 +260,7 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 				})
 		} else {
 			name := t.row.Name
+			rowID := t.row.ID
 			h.notifyTracked(notifyEventInboundDown, "导入节点已恢复",
 				fmt.Sprintf("节点：%s\n地址：%s", t.row.Name, addr),
 				func(outcome notifyOutcome) {
@@ -223,6 +268,12 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 					if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
 						h.notifier.forgetFingerprintPrefix(
 							notifyEventInboundDown + "\x00导入节点连不上\x00节点：" + name + "\n")
+					}
+					// R2X-017：恢复发送失败置回 down 标记（remarkDown
+					// 对偶），下一轮探测重新产出恢复跃迁补发；Disabled
+					// 维持 V-16 语义不动。
+					if outcome == notifyOutcomeFailed {
+						h.externalProbes.remarkDown(rowID)
 					}
 				})
 		}

@@ -116,16 +116,20 @@ func TestNotifyTestEndpointContract(t *testing.T) {
 }
 
 func TestNotifyImportedNodeDownContract(t *testing.T) {
+	// R2 登记 #3：probe 目标迁至本机非 loopback RFC1918 地址（无可用地址时 Skip）。
+	probeAddr := probeFixtureLocalAddr(t)
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
+	// webhook/telegram 桩是 notify 出站面（口径为仅硬拒层、loopback 合法），
+	// 不在迁移范围，保持 loopback；只迁下方被 probe 探测的节点目标。
 	sink := &notifySink{}
 	srv := sink.server(t)
 	setConfig(t, r, "notify_enabled", "true")
 	setConfig(t, r, "notify_webhook_url", srv.URL+"/hook")
 	setConfig(t, r, "notify_events", "inbound_down")
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", net.JoinHostPort(probeAddr, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +140,7 @@ func TestNotifyImportedNodeDownContract(t *testing.T) {
 	if out := kernelContractPost(t, router, admin, "/api/v1/inbound/import", `{"links":"`+link+`"}`); out.Code != 0 {
 		t.Fatalf("import: %+v", out)
 	}
-	if err := r.DB().Exec(`UPDATE node_inbound SET listen = '127.0.0.1', port = ?`, port).Error; err != nil {
+	if err := r.DB().Exec(`UPDATE node_inbound SET listen = ?, port = ?`, probeAddr, port).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,7 +160,7 @@ func TestNotifyImportedNodeDownContract(t *testing.T) {
 		t.Fatal("an ongoing outage must alert only once")
 	}
 
-	ln, err = net.Listen("tcp", "127.0.0.1:"+jsonInt64(int64(port)))
+	ln, err = net.Listen("tcp", net.JoinHostPort(probeAddr, jsonInt64(int64(port))))
 	if err != nil {
 		t.Skipf("port reused: %v", err)
 	}

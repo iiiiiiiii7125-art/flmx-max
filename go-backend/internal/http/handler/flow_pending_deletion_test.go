@@ -27,7 +27,7 @@ func TestFlowOwnershipPendingDeletionRemainsBillableUntilAcknowledged(t *testing
 			report := func() {
 				item := flowItem{N: name, U: 120, D: 80}
 				if mode == "single" {
-					a.h.processFlowItem(1, item)
+					applyFlowItemViaFormalEntry(a.h, 1, item)
 				} else {
 					a.h.applyFlowUploadBatch(1, a.h.buildNodeFlowUploadBatch(1, []flowItem{item}, nil), time.Now())
 				}

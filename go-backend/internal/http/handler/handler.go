@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -75,9 +76,14 @@ type Handler struct {
 	notifyCfgVals map[string]string
 	notifyCfgAt   time.Time
 
-	upgradeMu                   sync.Mutex
-	systemUpgradeMu             sync.Mutex
-	pendingUpgradeRedeploy      map[int64]struct{}
+	// R2X-018：日报待发原文缓存（notify_reports.go）。首次生成后
+	// 同日重试逐字复用，snapshot 与 daily_last 仅整条投递成功时推进。
+	dailyMu      sync.Mutex
+	dailyPending *dailyReportPending
+
+	upgradeMu              sync.Mutex
+	systemUpgradeMu        sync.Mutex
+	pendingUpgradeRedeploy map[int64]struct{}
 	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
 	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
 	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
@@ -87,8 +93,8 @@ type Handler struct {
 	quotaEnforceLocks map[int64]*sync.Mutex
 	// FIX2-A（V2-08）：转发计数入账 per-node 串行化锁（基线读→差分
 	// →落库整段），防 settle/周期/重连多路轮询以同一旧基线重复差分。
-	nodeAccountingMu    sync.Mutex
-	nodeAccountingLocks map[int64]*sync.Mutex
+	nodeAccountingMu            sync.Mutex
+	nodeAccountingLocks         map[int64]*sync.Mutex
 	nodeOnlineRedeployAt        map[int64]time.Time
 	nodeOnlineRedeployQueued    map[int64]struct{}
 	nodeOnlineRedeploying       map[int64]struct{}
@@ -1204,12 +1210,20 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
 				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
 				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
-					// 入账单事务失败：整批未入账、seq 未推进，返非 ok。
-					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-					_, _ = w.Write([]byte("error"))
-					return
+					if errors.Is(applyErr, repo.ErrSeqReplay) {
+						// R2X-011：并发同 seq 已由另一入账消费——
+						// 本批整 tx 回滚未入账，按既有重放分支回
+						// ok 终止 agent 重试，不重复入账。
+						log.Printf("flow upload replay (seq race) node_id=%d seq=%d", node.ID, *seq)
+					} else {
+						// 入账单事务失败：整批未入账、seq 未推进，返非 ok。
+						w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+						_, _ = w.Write([]byte("error"))
+						return
+					}
+				} else {
+					h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
 				}
-				h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
 			}
 		}
 	}

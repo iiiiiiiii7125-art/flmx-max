@@ -15,7 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"crypto/tls"
+
 	"go-backend/internal/http/response"
+	"go-backend/internal/netguard"
 )
 
 // Notification events. An empty notify_events config enables all of them.
@@ -84,22 +87,41 @@ type notifier struct {
 	// markSent，同一通知被并发触发时全部穿透去重、各发一份；改为在
 	// 派发前先占位，后到者直接按已抑制处理。
 	inflight map[string]bool
-	client   *http.Client
+	// delivered 是通道级投递台账（R2X-018）：指纹 → 通道 → 送达时刻。
+	// 派发前以台账过滤待发通道、每通道成功即记账；全部已配置通道
+	// 在账才 markSent 并清台账条目。与 recentSent/inflight 同为内存态
+	// （调用方状态机本身即内存态，落库不能消除重启维度重复，见
+	// R2-X-verdicts §2.3）。TTL 与 30 分钟去重窗口对齐。
+	delivered map[string]map[string]time.Time
+	// recoveryTimers / recoveryPending 是节点恢复通知发送失败后的
+	// 重排派发（R2X-017）：节点持续在线时无任何周期路径会再调
+	// notifyNodeOnline，置回 offlineAlerted 之外还须 AfterFunc 重排
+	// 一次；recoveryPending 标记「恢复待发」，掉线路径会清掉它，
+	// 重排回调据此复验节点未再掉线。
+	recoveryTimers  map[int64]*time.Timer
+	recoveryPending map[int64]bool
+	client          *http.Client
 }
 
 func newNotifier() *notifier {
 	return &notifier{
-		offlineTimers:  make(map[int64]*time.Timer),
-		offlineAlerted: make(map[int64]bool),
-		expiryAlerted:  make(map[int64]int64),
-		alerted:        make(map[string]bool),
-		recentSent:     make(map[string]time.Time),
-		inflight:       make(map[string]bool),
+		offlineTimers:   make(map[int64]*time.Timer),
+		offlineAlerted:  make(map[int64]bool),
+		expiryAlerted:   make(map[int64]int64),
+		alerted:         make(map[string]bool),
+		recentSent:      make(map[string]time.Time),
+		inflight:        make(map[string]bool),
+		delivered:       make(map[string]map[string]time.Time),
+		recoveryTimers:  make(map[int64]*time.Timer),
+		recoveryPending: make(map[int64]bool),
 		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
 		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
 		// 同时限制最多 5 跳，防重定向环。
+		// R2X-044：出站改 pinned-dial（见 notifyDialContext），重定向
+		// 每一跳都经同一钉死拨号逐跳复检+逐跳钉死。
 		client: &http.Client{
-			Timeout: notifySendTimeout,
+			Timeout:   notifySendTimeout,
+			Transport: notifyTransport(),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return errors.New("通知地址重定向次数过多")
@@ -273,6 +295,78 @@ func (n *notifier) forgetFingerprints(match func(fp string) bool) {
 			delete(n.recentSent, fp)
 		}
 	}
+	// R2X-018：通道台账必须连带清——否则恢复后同指纹的合法重发会被
+	// 台账误判为「全部已送达」而吞掉（再武装失效）。
+	for fp := range n.delivered {
+		if match(fp) {
+			delete(n.delivered, fp)
+		}
+	}
+}
+
+// configuredNotifyChannels 返回 settings 中实际配置完整的通道名集合，
+// 与 sendChannels 的投递条件一致。
+func configuredNotifyChannels(s notifySettings) []string {
+	var out []string
+	if s.TelegramToken != "" && s.TelegramChatID != "" {
+		out = append(out, notifyChannelTelegram)
+	}
+	if s.WebhookURL != "" {
+		out = append(out, notifyChannelWebhook)
+	}
+	return out
+}
+
+// ledgerPending 返回 fp 尚未在台账中送达（或台账条目已过期）的通道集，
+// 形态与 sendChannels 的 only 参数一致（nil 之外的空集 = 无需投递）。
+func (n *notifier) ledgerPending(fp string, configured []string, now time.Time) map[string]error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	pending := make(map[string]error)
+	entry := n.delivered[fp]
+	for _, ch := range configured {
+		if t, ok := entry[ch]; ok && now.Sub(t) < notifyDupWindow {
+			continue
+		}
+		pending[ch] = nil
+	}
+	return pending
+}
+
+// ledgerRecord 记一笔通道送达。
+func (n *notifier) ledgerRecord(fp, channel string, now time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.delivered == nil {
+		n.delivered = make(map[string]map[string]time.Time)
+	}
+	entry, ok := n.delivered[fp]
+	if !ok {
+		entry = make(map[string]time.Time)
+		n.delivered[fp] = entry
+	}
+	entry[channel] = now
+	if len(n.delivered) > 512 {
+		for k, e := range n.delivered {
+			fresh := false
+			for _, t := range e {
+				if now.Sub(t) < notifyDupWindow {
+					fresh = true
+					break
+				}
+			}
+			if !fresh {
+				delete(n.delivered, k)
+			}
+		}
+	}
+}
+
+// ledgerClear 清掉一个指纹的台账条目（整条投递完成时）。
+func (n *notifier) ledgerClear(fp string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.delivered, fp)
 }
 
 // forgetEventMessage 清掉某事件下消息体完全相同的所有指纹（不限标题：
@@ -312,7 +406,13 @@ const (
 // 成功的通道再发一份（一次告警变两份；日报补发时每 tick 再叠加）。
 // 现改为只重发仍失败的通道，成功通道每次调用至多投递一次。
 func (n *notifier) sendWithRetry(ctx context.Context, s notifySettings, msg notifyMessage) error {
-	failed := n.sendChannels(ctx, s, msg, nil)
+	return n.sendWithRetryRecord(ctx, s, msg, nil, nil)
+}
+
+// sendWithRetryRecord 与 sendWithRetry 相同，但首轮只投 only 指定的
+// 通道集（nil = 全部），且每通道投递成功即回调 record（通道台账记账）。
+func (n *notifier) sendWithRetryRecord(ctx context.Context, s notifySettings, msg notifyMessage, only map[string]error, record func(channel string)) error {
+	failed := n.sendChannelsRecord(ctx, s, msg, only, record)
 	if len(failed) == 0 {
 		return nil
 	}
@@ -321,7 +421,7 @@ func (n *notifier) sendWithRetry(ctx context.Context, s notifySettings, msg noti
 		return notifyChannelsError(failed)
 	case <-time.After(notifyRetryDelay):
 	}
-	failed = n.sendChannels(ctx, s, msg, failed)
+	failed = n.sendChannelsRecord(ctx, s, msg, failed, record)
 	if len(failed) > 0 {
 		return notifyChannelsError(failed)
 	}
@@ -332,6 +432,11 @@ func (n *notifier) sendWithRetry(ctx context.Context, s notifySettings, msg noti
 // only 只看键集合，其值即上轮的错误映射，可直接回喂），返回仍失败
 // 的通道→错误映射。
 func (n *notifier) sendChannels(ctx context.Context, s notifySettings, msg notifyMessage, only map[string]error) map[string]error {
+	return n.sendChannelsRecord(ctx, s, msg, only, nil)
+}
+
+// sendChannelsRecord 与 sendChannels 相同，且每通道成功即回调 record。
+func (n *notifier) sendChannelsRecord(ctx context.Context, s notifySettings, msg notifyMessage, only map[string]error, record func(channel string)) map[string]error {
 	failed := make(map[string]error)
 	want := func(ch string) bool {
 		if only == nil {
@@ -343,11 +448,15 @@ func (n *notifier) sendChannels(ctx context.Context, s notifySettings, msg notif
 	if want(notifyChannelTelegram) && s.TelegramToken != "" && s.TelegramChatID != "" {
 		if err := n.sendTelegram(ctx, s, msg); err != nil {
 			failed[notifyChannelTelegram] = err
+		} else if record != nil {
+			record(notifyChannelTelegram)
 		}
 	}
 	if want(notifyChannelWebhook) && s.WebhookURL != "" {
 		if err := n.sendWebhook(ctx, s.WebhookURL, msg); err != nil {
 			failed[notifyChannelWebhook] = err
+		} else if record != nil {
+			record(notifyChannelWebhook)
 		}
 	}
 	return failed
@@ -411,13 +520,30 @@ func (h *Handler) dispatchNotify(ctx context.Context, event, title, message stri
 		defer h.notifier.releaseInflight(fp)
 	}
 	msg := notifyMessage{Event: event, Title: title, Message: message, Time: time.Now().UnixMilli(), App: app}
-	if err := h.notifier.sendWithRetry(ctx, settings, msg); err != nil {
-		log.Printf("notify %s failed: %v", event, err)
-		return notifyOutcomeFailed
+	if event == notifyEventTest {
+		if err := h.notifier.sendWithRetry(ctx, settings, msg); err != nil {
+			log.Printf("notify %s failed: %v", event, err)
+			return notifyOutcomeFailed
+		}
+		return notifyOutcomeSent
 	}
-	if event != notifyEventTest {
-		h.notifier.markSent(fp, time.Now())
+	// R2X-018 通道级台账：只投台账中尚未送达的通道，每通道成功即记账；
+	// 全部已配置通道都在账才算整条送达——markSent 并清台账条目。
+	// 任一通道仍失败时整条 Failed（状态机回滚后补发），但已送达通道
+	// 下一轮被台账过滤、不再重复收。
+	configured := configuredNotifyChannels(settings)
+	pending := h.notifier.ledgerPending(fp, configured, time.Now())
+	if len(pending) > 0 {
+		err := h.notifier.sendWithRetryRecord(ctx, settings, msg, pending, func(channel string) {
+			h.notifier.ledgerRecord(fp, channel, time.Now())
+		})
+		if err != nil {
+			log.Printf("notify %s failed: %v", event, err)
+			return notifyOutcomeFailed
+		}
 	}
+	h.notifier.markSent(fp, time.Now())
+	h.notifier.ledgerClear(fp)
 	return notifyOutcomeSent
 }
 
@@ -594,10 +720,11 @@ func (n *notifier) sendWebhook(ctx context.Context, url string, msg notifyMessag
 func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, notifySendTimeout)
 	defer cancel()
-	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。复用 secure_fetch 的
-	// 元数据地址黑名单（isMetadataAddress），至少拒绝云元数据地址。
+	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。硬拒集与
+	// SecureFetch 共用 netguard 硬拒层（isMetadataAddress，R2X-026）。
 	// 注意：合法 webhook 常为内网地址（企业微信/钉钉内网代理），故此处仅硬拒绝
-	// 元数据地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	// 硬拒层地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	// 发送走钉死拨号（notifyDialContext，R2X-044），校验与拨号同一次解析。
 	if err := validateNotifyURL(url); err != nil {
 		return 0, nil, err
 	}
@@ -652,8 +779,64 @@ func isNotifyValidationErrorInChain(err error) bool {
 	return false
 }
 
+// notifyLookupIP 是通知出站的解析入口（var 以便测试注入，含
+// rebinding 场景）。校验与钉死拨号共用同一入口。
+var notifyLookupIP = net.LookupIP
+
+// notifyTransport 构造钉死拨号传输（R2X-044）：Proxy 关闭（经代理
+// 出站时目标由代理解析，钉死失效，与联邦传输同口径）；TLS 最低
+// 1.2，SNI/Host 由 http.Transport 按原主机名保留（DialContext 只
+// 负责把已校验 IP 连上）。
+func notifyTransport() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.DialContext = notifyDialContext
+	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	return tr
+}
+
+// notifyDialContext 是通知出站的钉死拨号：解析→逐 IP 过 netguard
+// 硬拒层→拨已校验 IP。此前 notify 是全仓唯一「校验与发送两次
+// 解析」的出站面，DNS rebinding 可在校验后把目标翻到元数据地址
+// （R2X-044）。任一解析结果命中硬拒整体不拨。
+func notifyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		ips, err = notifyLookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("通知地址无法解析: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOnly, false); !d.Allowed {
+			return nil, errors.New("通知地址指向云元数据服务，已拒绝")
+		}
+	}
+	dialer := &net.Dialer{Timeout: notifySendTimeout}
+	var lastErr error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // validateNotifyURL 校验通知 webhook URL，防 SSRF。
-// 拒绝：非 http/https scheme、云元数据地址（isMetadataAddress）。
+// 拒绝：非 http/https scheme、硬拒层地址（isMetadataAddress，现为
+// netguard 硬拒集：元数据精确集 ∪ 169.254/16 ∪ 未指定）。
 // 允许：公网与内网地址（企业微信/钉钉内网代理为合法场景）。
 func validateNotifyURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
@@ -672,7 +855,7 @@ func validateNotifyURL(rawURL string) error {
 	if ip := net.ParseIP(host); ip != nil {
 		ips = []net.IP{ip}
 	} else {
-		ips, err = net.LookupIP(host)
+		ips, err = notifyLookupIP(host)
 		if err != nil || len(ips) == 0 {
 			return fmt.Errorf("通知地址无法解析: %s", host)
 		}
@@ -707,6 +890,11 @@ func (h *Handler) forgetNode(nodeID int64) {
 		t.Stop()
 		delete(n.offlineTimers, nodeID)
 	}
+	if t := n.recoveryTimers[nodeID]; t != nil {
+		t.Stop()
+		delete(n.recoveryTimers, nodeID)
+	}
+	delete(n.recoveryPending, nodeID)
 	delete(n.offlineAlerted, nodeID)
 	delete(n.expiryAlerted, nodeID)
 }
@@ -775,6 +963,10 @@ func (h *Handler) checkStartupOfflineNodes() {
 // notifyOfflineRetryDelay 是掉线告警发送失败后的重排间隔（A7-03）。
 var notifyOfflineRetryDelay = time.Minute
 
+// notifyOnlineRetryDelay 是恢复通知发送失败后的重排间隔（R2X-017），
+// 与掉线向重排同款 1 分钟。
+var notifyOnlineRetryDelay = time.Minute
+
 func (h *Handler) notifyNodeOffline(nodeID int64) {
 	n := h.notifier
 	if n == nil {
@@ -785,6 +977,13 @@ func (h *Handler) notifyNodeOffline(nodeID int64) {
 	if t := n.offlineTimers[nodeID]; t != nil {
 		t.Stop()
 	}
+	// 节点再掉线：取消待发的恢复补发（R2X-017）——节点已不在线，
+	// 恢复消息不得再被重排定时器送出。
+	if t := n.recoveryTimers[nodeID]; t != nil {
+		t.Stop()
+		delete(n.recoveryTimers, nodeID)
+	}
+	delete(n.recoveryPending, nodeID)
 	n.offlineTimers[nodeID] = time.AfterFunc(nodeOfflineGrace, func() {
 		h.dispatchNodeOfflineAlert(nodeID, "节点掉线")
 	})
@@ -848,6 +1047,13 @@ func (h *Handler) notifyNodeOnline(nodeID int64) {
 		t.Stop()
 		delete(n.offlineTimers, nodeID)
 	}
+	// 本次上线即一次新的恢复派发：清掉上一轮失败遗留的重排定时器，
+	// 防其稍后重复派发（重排回调走的也是本函数，先清再验）。
+	if t := n.recoveryTimers[nodeID]; t != nil {
+		t.Stop()
+		delete(n.recoveryTimers, nodeID)
+	}
+	delete(n.recoveryPending, nodeID)
 	alerted := n.offlineAlerted[nodeID]
 	delete(n.offlineAlerted, nodeID)
 	n.mu.Unlock()
@@ -861,9 +1067,63 @@ func (h *Handler) notifyNodeOnline(nodeID int64) {
 				// 掉线与第二次恢复会被成对吞掉（T26 真机定案）。
 				// 未恢复的问题其指纹一直有效，防抖语义不变。
 				h.notifier.forgetEventMessage(notifyEventNodeOffline, "节点："+label)
+				return
 			}
+			// R2X-017：恢复通知发送失败不得消费跃迁。只置回
+			// offlineAlerted 不够——节点持续在线时无任何周期路径会
+			// 再调 notifyNodeOnline——须同时按掉线向同款 AfterFunc
+			// 重排一次恢复派发。Disabled 不在此列（V-16 维持消费语义）。
+			if outcome != notifyOutcomeFailed {
+				return
+			}
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			// 期间节点再掉线（offlineAlerted 已由掉线向重新置位且
+			// 有待发掉线定时器）或节点已被删除时不重排。
+			if _, offlinePending := n.offlineTimers[nodeID]; offlinePending {
+				return
+			}
+			n.offlineAlerted[nodeID] = true
+			n.recoveryPending[nodeID] = true
+			if t := n.recoveryTimers[nodeID]; t != nil {
+				t.Stop()
+			}
+			n.recoveryTimers[nodeID] = time.AfterFunc(notifyOnlineRetryDelay, func() {
+				h.dispatchNodeRecoveryRetry(nodeID)
+			})
 		})
 	}
+}
+
+// dispatchNodeRecoveryRetry 是恢复通知失败后的重排派发：复验节点仍
+// 在线（恢复待发标记仍在——掉线路径会清掉它并停定时器；且无待发
+// 的掉线定时器）且 offlineAlerted 仍置位，防竞态双发；通过后走
+// notifyNodeOnline 正常派发（其 Failed 回调会再次重排）。
+func (h *Handler) dispatchNodeRecoveryRetry(nodeID int64) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	delete(n.recoveryTimers, nodeID)
+	alerted := n.offlineAlerted[nodeID]
+	pending := n.recoveryPending[nodeID]
+	_, offlinePending := n.offlineTimers[nodeID]
+	n.mu.Unlock()
+	if !alerted || !pending || offlinePending {
+		return
+	}
+	// 节点已被删除时不再补发（与掉线向派发的存在性兜底同口径）。
+	if h.repo != nil {
+		if node, err := h.repo.GetNodeByID(nodeID); err != nil || node == nil {
+			n.mu.Lock()
+			delete(n.offlineAlerted, nodeID)
+			delete(n.recoveryPending, nodeID)
+			n.mu.Unlock()
+			return
+		}
+	}
+	h.notifyNodeOnline(nodeID)
 }
 
 // ---- node expiry ----

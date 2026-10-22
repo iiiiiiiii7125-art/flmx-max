@@ -78,7 +78,9 @@ func TestR1B3KernelRemoveBlockedByChainReferrer(t *testing.T) {
 	}
 	found := false
 	for _, name := range env.Data.BrokenReferrers {
-		if name == "front-vless" {
+		// 断言更新登记 #2 附带（R2X-029）：清单元素口径改为
+		// 「名称（节点名）」消歧，元素不再是裸入站名。
+		if name == "front-vless（front）" {
 			found = true
 		}
 	}

@@ -39,6 +39,16 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "user:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 
 	username := asString(req["user"])
 	pwd := asString(req["pwd"])
@@ -122,6 +132,11 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 	defer func() { tx.Rollback() }()
 	userID, err := h.repo.CreateUserTx(tx, username, hashedPassword, roleID, expTime, flow, flowResetTime, num, status, maxConn, now, flowMiB)
 	if err != nil {
+		// R2X-049：提交段复检命中同名时，与锁外预检同口径回友好文案。
+		if errors.Is(err, repo.ErrUsernameExists) {
+			response.WriteJSON(w, response.ErrDefault("用户名已存在"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -281,6 +296,49 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R2X-036（校验前置档）：分组存在性与配额解析全部前移到首写之前。
+	// 旧实现主行先落库、分组段/配额段后失败，报错与落库事实不符
+	// （改名已生效却回「保存失败」）。配额单侧补齐的只读查询同理前移，
+	// 其读取失败也不再发生在主行写入之后。
+	var updateGroupIDs []int64
+	hasUpdateGroupIDs := false
+	if groupIDsRaw, ok := req["groupIds"]; ok {
+		hasUpdateGroupIDs = true
+		updateGroupIDs = asInt64Slice(groupIDsRaw)
+		if err := h.repo.ValidateIDsExist("user_group", updateGroupIDs); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	}
+	var updateDailyQuotaGB, updateMonthlyQuotaGB int64
+	hasUpdateQuota := hasDailyQuota || hasMonthlyQuota
+	if hasUpdateQuota {
+		updateDailyQuotaGB = asInt64(req["dailyQuotaGB"], 0)
+		updateMonthlyQuotaGB = asInt64(req["monthlyQuotaGB"], 0)
+		if updateDailyQuotaGB < 0 || updateMonthlyQuotaGB < 0 {
+			response.WriteJSON(w, response.ErrDefault("配额不能小于0"))
+			return
+		}
+		if !(hasDailyQuota && hasMonthlyQuota) {
+			// FIX2-A（V2-07 同族）：单传一侧时另一侧从当前视图补齐；
+			// 读取失败报错中止（现于首写之前），视图为空（尚无配额
+			// 行）才是合法的 0。
+			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
+			if qErr != nil {
+				response.WriteJSON(w, response.Err(-2, qErr.Error()))
+				return
+			}
+			if currentQuota != nil {
+				if !hasDailyQuota {
+					updateDailyQuotaGB = currentQuota.DailyLimitGB
+				}
+				if !hasMonthlyQuota {
+					updateMonthlyQuotaGB = currentQuota.MonthlyLimitGB
+				}
+			}
+		}
+	}
+
 	pwd := asString(req["pwd"])
 	if strings.TrimSpace(pwd) == "" {
 		if err := h.repo.UpdateUserWithoutPassword(id, username, flow, num, expTime, flowResetTime, status, maxConn, now, flowMiB); err != nil {
@@ -302,35 +360,14 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
 		log.Printf("propagate user flow to tunnels failed user_id=%d err=%v", id, err)
 	}
-	if hasDailyQuota || hasMonthlyQuota {
-		dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
-		monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
-		if !(hasDailyQuota && hasMonthlyQuota) {
-			// FIX2-A（V2-07 同族）：单传一侧时另一侧从当前视图补齐；
-			// 旧实现视图读取失败/为空时静默以 0 落库（把另一侧限额
-			// 清零）。读取失败改为报错中止；视图为空（尚无配额行）
-			// 才是合法的 0。
-			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
-			if qErr != nil {
-				response.WriteJSON(w, response.Err(-2, qErr.Error()))
-				return
-			}
-			if currentQuota != nil {
-				if !hasDailyQuota {
-					dailyQuotaGB = currentQuota.DailyLimitGB
-				}
-				if !hasMonthlyQuota {
-					monthlyQuotaGB = currentQuota.MonthlyLimitGB
-				}
-			}
-		}
+	if hasUpdateQuota {
 		tx := h.repo.BeginTx()
 		if tx == nil || tx.Error != nil {
 			response.WriteJSON(w, response.Err(-2, "database unavailable"))
 			return
 		}
 		defer func() { tx.Rollback() }()
-		if err := h.repo.SaveUserQuotaConfigTx(tx, id, dailyQuotaGB, monthlyQuotaGB, now); err != nil {
+		if err := h.repo.SaveUserQuotaConfigTx(tx, id, updateDailyQuotaGB, updateMonthlyQuotaGB, now); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -340,8 +377,8 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if groupIDsRaw, ok := req["groupIds"]; ok {
-		newGroupIDs := asInt64Slice(groupIDsRaw)
+	if hasUpdateGroupIDs {
+		newGroupIDs := updateGroupIDs
 		// X-P2-6 + X-P1-2①：分组替换与「被移出分组的组建授权撤销」在同一
 		// 事务内完成；replaceErr 必须上抛，不再吞错回成功。
 		tx := h.repo.BeginTx()
@@ -453,6 +490,13 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// R2X-008（E2-01）：级联删转发会删 relay 行，拨号节点集随之变化——
+	// 必须在清理之前按 forward 收集受影响入站，删后刷新白名单（与
+	// tunnelDelete 的先收集口径一致）。
+	var affectedInboundIDs []int64
+	for _, fwd := range userForwards {
+		affectedInboundIDs = append(affectedInboundIDs, h.inboundIDsForForward(fwd.ID)...)
+	}
 	byTunnel := make(map[int64][]model.ForwardRecord)
 	tunnelOrder := make([]int64, 0)
 	for _, fwd := range userForwards {
@@ -473,6 +517,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -515,7 +560,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	{
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "node:create")
 		defer finish()
 		if replayed {
 			return
@@ -590,7 +635,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
 		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
 		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
-		if delErr := h.deleteNodeByID(nodeID); delErr != nil {
+		if _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -750,6 +795,30 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// R2X-008/R2X-009 子项③（E S-1）：节点地址（ServerIP/V4/V6/ExtraIPs）
+	// 是物化状态的两处输入——入站白名单的拨号节点地址集与落地在本节点
+	// 的中转 RemoteAddr。改址落库后：刷新经本节点拨号的全部入站白
+	// 名单，并对落在本节点的 Managed 中转逐条重算 RemoteAddr。
+	addrChanged := serverIP != currentNode.ServerIP
+	if _, ok := req["serverIpV4"]; ok && asString(req["serverIpV4"]) != currentNode.ServerIPV4.String {
+		addrChanged = true
+	}
+	if _, ok := req["serverIpV6"]; ok && asString(req["serverIpV6"]) != currentNode.ServerIPV6.String {
+		addrChanged = true
+	}
+	if _, ok := req["extraIPs"]; ok && asString(req["extraIPs"]) != currentNode.ExtraIPs.String {
+		addrChanged = true
+	}
+	if addrChanged {
+		h.refreshInboundWhitelists(h.inboundIDsDialedByNode(id))
+		if nodeInbounds, err := h.repo.ListNodeInboundsByNode(id); err == nil {
+			for _, inbound := range nodeInbounds {
+				for _, warning := range h.resyncManagedRelayRemoteAddrsForInbound(inbound.ID) {
+					log.Printf("node update: relay remote addr resync node_id=%d inbound_id=%d: %s", id, inbound.ID, warning)
+				}
+			}
+		}
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -880,7 +949,10 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if id <= 0 {
 		return
 	}
-	if err := h.deleteNodeByID(id); err != nil {
+	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
+	// 清单随响应回传，不再静默。
+	brokenReferrers, err := h.deleteNodeByID(id)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -889,7 +961,13 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if h.nftablesManager != nil {
 		h.nftablesManager.ReleaseNode(id)
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	if brokenReferrers == nil {
+		brokenReferrers = []string{}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"brokenReferrers":     brokenReferrers,
+		"brokenReferrerCount": len(brokenReferrers),
+	}))
 }
 
 // panelRequestScheme 推断本次管理请求所见的面板实际服务方式
@@ -1069,6 +1147,10 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
+	// R2X-045：批量入口与单删共用 deleteNodeByID funnel，跨节点引用
+	// 清单汇总回传（同一引用方跨多个被删节点只报一次）。
+	var brokenReferrers []string
+	seenReferrer := make(map[string]struct{})
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1080,7 +1162,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
 			continue
 		}
-		delErr := h.deleteNodeByID(id)
+		nodeReferrers, delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
@@ -1091,9 +1173,16 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, nodeName, delErr)
 			continue
 		}
+		for _, referrer := range nodeReferrers {
+			if _, dup := seenReferrer[referrer]; dup {
+				continue
+			}
+			seenReferrer[referrer] = struct{}{}
+			brokenReferrers = append(brokenReferrers, referrer)
+		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -1118,6 +1207,16 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "tunnel:create")
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 	if err := validateTunnelConnectIPConstraints(req); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -1345,9 +1444,15 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		ProbeTargetPort: probeTargetPort,
 		Engine:          engine,
 	}
-	if err := tx.Create(&tunnel).Error; err != nil {
+	// R2X-049：提交段落库走 InsertTunnelTx——事务内复检同名后才建行
+	// （锁外预检与此处之间隔着联邦 HTTP，并发同名曾可双建）。
+	if err := h.repo.InsertTunnelTx(tx, &tunnel); err != nil {
 		tx.Rollback()
 		releasePortLocks()
+		if errors.Is(err, repo.ErrTunnelNameDuplicate) {
+			response.WriteJSON(w, response.ErrDefault("隧道名称重复"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1784,14 +1889,27 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// relayTarget 一致），否则转发继续拨回环地址静默错向。置于验证段
 	// 之后、提交段之前：验证事务已回滚，此处走主句柄读 relays/inbounds
 	// 不与事务锁冲突；runtimeState.OutNodes 即待提交的新出口集。
+	var newExits []int64
 	if typeVal == 2 && runtimeState != nil {
-		newExits := make([]int64, 0, len(runtimeState.OutNodes))
+		newExits = make([]int64, 0, len(runtimeState.OutNodes))
 		for _, outNode := range runtimeState.OutNodes {
 			if outNode.NodeID > 0 {
 				newExits = append(newExits, outNode.NodeID)
 			}
 		}
 		if err := h.validateTunnelRelayExits(id, newExits); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
+	// R2X-009：以待提交的隧道态（新类型 + 新出口集）对名下 Managed
+	// relay 逐条预演 RemoteAddr 可计算性——出口集迁移（{L}↔{X}）与
+	// 类型迁移（2→1）都会改变 relayTarget 口径，预演失败拒绝保存，
+	// 不留「地址不变静默断流」的物化旧址。提交落库后在白名单刷新
+	// 同位置以已落库态重算落库（见下方 resync）。
+	if runtimeState != nil {
+		prospective := &tunnelRecord{ID: id, Type: typeVal}
+		if err := h.validateTunnelRelayRemoteAddrComputable(id, prospective, newExits); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -1803,7 +1921,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if err := h.cleanupFederationRuntime(id); err != nil {
+	// R2X-010 ②：编辑是非删除操作——联邦清理失败中止时把本轮新置的
+	// pending 绑定回滚为 active，避免重试环日后拆掉仍在用的隧道。
+	if err := h.cleanupFederationRuntimePreserving(id); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -1916,6 +2036,18 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 出口 IP 残留放行。提交已落库，此处刷新与后续成功分支无关。
 	h.refreshInboundWhitelists(h.inboundIDsForTunnel(id))
 
+	// R2X-009：与白名单刷新同位置——以已落库的隧道态对名下 Managed
+	// relay 逐条重算 RemoteAddr，变更则落库 + 重下发，失败汇入
+	// warnings 随成功回执带出（不静默）。
+	relayResyncWarnings := h.resyncManagedRelayRemoteAddrsForTunnel(id)
+	respondTunnelUpdateOK := func() {
+		if len(relayResyncWarnings) > 0 {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(relayResyncWarnings, "；"), TS: now, Data: map[string]interface{}{"warnings": relayResyncWarnings}})
+			return
+		}
+		response.WriteJSON(w, response.OKEmpty())
+	}
+
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
 		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
@@ -1936,9 +2068,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			if oldTunnel == nil || oldTunnel.Type != 2 {
 				h.rollbackTunnelRuntime(createdChains, createdServices, id, updateProtocol)
 			}
-			applyErr = errors.Join(applyErr, h.cleanupFederationRuntime(id))
+			applyErr = errors.Join(applyErr, h.cleanupFederationRuntimePreserving(id))
 			if len(federationReleaseRefs) == 0 && shouldDeferTunnelRuntimeApplyError(applyErr) {
-				response.WriteJSON(w, response.OKEmpty())
+				respondTunnelUpdateOK()
 				return
 			}
 			response.WriteJSON(w, response.ErrDefault(applyErr.Error()))
@@ -1955,7 +2087,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("引擎已切换，但数据面同步失败: %v", err)))
 			return
 		}
-		response.WriteJSON(w, response.OKEmpty())
+		respondTunnelUpdateOK()
 		return
 	}
 	if engine == tunnelEngineRealm {
@@ -1965,7 +2097,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
-		response.WriteJSON(w, response.OKEmpty())
+		respondTunnelUpdateOK()
 		return
 	}
 
@@ -1976,7 +2108,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if tunnelForwardRuntimeNeedsSync(oldType, typeVal, oldEntryNodeIDs, newEntryNodeIDs) {
 		forwards, fwdErr := h.listForwardsByTunnel(id)
 		if fwdErr != nil {
-			response.WriteJSON(w, response.OKEmpty())
+			respondTunnelUpdateOK()
 			return
 		}
 		for i := range forwards {
@@ -1984,7 +2116,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response.WriteJSON(w, response.OKEmpty())
+	respondTunnelUpdateOK()
 }
 
 func tunnelForwardRuntimeNeedsSync(oldType, newType int, oldEntryNodeIDs, newEntryNodeIDs []int64) bool {
@@ -2396,9 +2528,11 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// R2X-010 ①（BC-R2-01）：删除类与 X-P1-1 离线待清理对齐——联邦
+	// 清理失败不中止删库，绑定留 pending 由重试环在对端恢复后收敛
+	//（与 delete-with-forwards 的既有口径统一）。
 	if err := h.cleanupFederationRuntime(id); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
+		log.Printf("tunnel delete: federation cleanup deferred to retry loop tunnel_id=%d err=%v", id, err)
 	}
 	h.cleanupTunnelRuntime(id)
 	if err := h.deleteTunnelByID(id); err != nil {
@@ -2485,10 +2619,10 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, tunnelName, err)
 			continue
 		}
+		// R2X-010 ①：同单删口径，联邦清理失败不中止删库（绑定留
+		// pending 由重试环收敛）。
 		if err := h.cleanupFederationRuntime(id); err != nil {
-			fail++
-			failures = appendBatchFailure(failures, id, tunnelName, err)
-			continue
+			log.Printf("tunnel batch delete: federation cleanup deferred to retry loop tunnel_id=%d err=%v", id, err)
 		}
 		h.cleanupTunnelRuntime(id)
 		if err := h.deleteTunnelByID(id); err != nil {
@@ -2600,7 +2734,8 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		if err := validateTunnelRuntimeBeforeApply(state); err != nil {
 			return err
 		}
-		if err := h.cleanupFederationRuntime(tunnelID); err != nil {
+		// R2X-010 ②：重部署是非删除操作，清理失败中止时回滚 pending。
+		if err := h.cleanupFederationRuntimePreserving(tunnelID); err != nil {
 			return err
 		}
 		h.cleanupTunnelRuntime(tunnelID)
@@ -2621,7 +2756,7 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		}
 		_, _, applyErr := h.applyTunnelRuntime(state)
 		if applyErr != nil {
-			applyErr = errors.Join(applyErr, h.cleanupFederationRuntime(tunnelID))
+			applyErr = errors.Join(applyErr, h.cleanupFederationRuntimePreserving(tunnelID))
 			return applyErr
 		}
 	}
@@ -2655,6 +2790,9 @@ type batchOperationResult struct {
 	// A4-002：批量同步路径的非致命告警（如 realm 限速不生效），与单条
 	// create/update 的 data.warnings 同义；仅在非空时出现，向后兼容。
 	Warnings []string `json:"warnings,omitempty"`
+	// R2X-045：批量删节点打断的跨节点引用清单（与单删的
+	// brokenReferrers 同名字段/同口径）；仅删节点批量入口填充。
+	BrokenReferrers []string `json:"brokenReferrers,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -2827,6 +2965,12 @@ func (h *Handler) userTunnelRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, tunnelID, lookupErr := h.repo.GetUserTunnelUserAndTunnel(id)
 	if lookupErr != nil {
+		// R2X-048（V-12 口径）：删除不存在的授权行幂等成功——repo 已把
+		// 未找到归一为 sql.ErrNoRows；其余 lookup 错误仍报错。
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			response.WriteJSON(w, response.OKEmpty())
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, lookupErr.Error()))
 		return
 	}
@@ -2975,7 +3119,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	{
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, userID)
+		w, finish, replayed = h.idemBegin(w, r, userID, "forward:create")
 		defer finish()
 		if replayed {
 			return
@@ -4028,6 +4172,9 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
 	batchWarnings := make([]string, 0)
+	// R2X-008（E2-01）：逐 forward 在换隧道之前以 inboundIDsForForward
+	// 收集受影响入站（换隧道后拨号节点集变化），成功后统一刷新白名单。
+	var changedInboundIDs []int64
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
 			continue
@@ -4038,6 +4185,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, "", accessErr)
 			continue
 		}
+		fwdInboundIDs := h.inboundIDsForForward(id)
 		if forward.TunnelID == req.TargetTunnelID {
 			fail++
 			failures = appendBatchFailureReason(failures, id, forward.Name, "规则已在目标隧道中")
@@ -4191,8 +4339,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 				_ = h.deleteForwardServicesOnNodeBatch(forward, nodeID)
 			}
 		}
+		changedInboundIDs = append(changedInboundIDs, fwdInboundIDs...)
 		success++
 	}
+	h.refreshInboundWhitelists(changedInboundIDs)
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
 
@@ -4206,7 +4356,7 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 	{
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "speed-limit:create")
 		defer finish()
 		if replayed {
 			return
@@ -4388,12 +4538,48 @@ func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-013: assigning to a disabled group is an explicit error, and
+	// R2X-012: both groups must exist — both checked before any write.
+	for _, g := range []struct {
+		table string
+		id    int64
+		label string
+	}{
+		{"user_group", req.UserGroupID, "用户分组"},
+		{"tunnel_group", req.TunnelGroupID, "隧道分组"},
+	} {
+		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
+		if gErr != nil {
+			response.WriteJSON(w, response.Err(-2, gErr.Error()))
+			return
+		}
+		if !gExists {
+			response.WriteJSON(w, response.ErrDefault(g.label+"不存在"))
+			return
+		}
+		if gStatus != 1 {
+			response.WriteJSON(w, response.ErrDefault(g.label+"已停用，无法分配权限"))
+			return
+		}
+	}
+	// R2X-036（G-S02 子项，校验/读取前置档）：展开所需的两份成员名单在
+	// Insert 之前预读，读失败零落库；Insert 后用预读名单展开，不再重读。
+	userIDs, err := h.repo.ListUserIDsByUserGroup(req.UserGroupID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(req.TunnelGroupID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	if err := h.repo.InsertGroupPermission(req.UserGroupID, req.TunnelGroupID, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	// X-P2-16：展开失败不再静默——部分失败在回执逐条列明，全失败报错。
-	result, applyErr := h.applyGroupPermission(req.UserGroupID, req.TunnelGroupID)
+	result, applyErr := h.applyGroupPermissionWithLists(req.UserGroupID, req.TunnelGroupID, userIDs, tunnelIDs)
 	if applyErr != nil {
 		response.WriteJSON(w, response.Err(-2, applyErr.Error()))
 		return
@@ -4460,6 +4646,20 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		groupScope := "user-group:create"
+		if table == "tunnel_group" {
+			groupScope = "tunnel-group:create"
+		}
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), groupScope)
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	name := asString(req["name"])
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
@@ -4484,9 +4684,54 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
 		return
 	}
-	if err := h.repo.GroupUpdate(table, id, asString(req["name"]), asInt(req["status"], 1), time.Now().UnixMilli()); err != nil {
+	newStatus := asInt(req["status"], 1)
+	// R2X-013（BC-R2-02）：停用开始执法。先读旧 status：1→0 时在同一
+	// 事务内按 grant 台账撤销该组组建授权（手工授权不动，级联候选收集
+	// 复用删组同款逻辑），提交后清理被撤销授权的转发；0→1 时走既有
+	// sync 按成员关系补发。已停用分组的历史组建授权在首次状态变更/
+	// 同步触发时被追溯撤销（展开侧对停用组一律跳过，见
+	// applyGroupPermission）。
+	tx := h.repo.BeginTx()
+	if tx == nil || tx.Error != nil {
+		response.WriteJSON(w, response.Err(-2, "database unavailable"))
+		return
+	}
+	defer func() { tx.Rollback() }()
+	oldStatus, exists, err := h.repo.GetGroupStatusTx(tx, table, id)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if !exists {
+		response.WriteJSON(w, response.ErrDefault("分组不存在"))
+		return
+	}
+	if err := h.repo.GroupUpdateTx(tx, table, id, asString(req["name"]), newStatus, time.Now().UnixMilli()); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	var revokedPairs []repo.RevokedUserTunnelPair
+	if oldStatus == 1 && newStatus == 0 {
+		var revokeErr error
+		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
+		if revokeErr != nil {
+			response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
+			return
+		}
+	}
+	if err := tx.Commit().Error; err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	for _, pair := range revokedPairs {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+	}
+	if oldStatus == 0 && newStatus == 1 {
+		if table == "user_group" {
+			_ = h.syncPermissionsByUserGroup(id)
+		} else {
+			_ = h.syncPermissionsByTunnelGroup(id)
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -4524,6 +4769,24 @@ type groupApplyResult struct {
 
 func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
 	var result groupApplyResult
+	// R2X-013: expansion skips a pair when either side's group is not
+	// enabled (status != 1) — disabled groups never materialize grants,
+	// including for pre-existing pairs synced after the fact.
+	for _, g := range []struct {
+		table string
+		id    int64
+	}{
+		{"user_group", userGroupID},
+		{"tunnel_group", tunnelGroupID},
+	} {
+		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
+		if gErr != nil {
+			return result, gErr
+		}
+		if !gExists || gStatus != 1 {
+			return result, nil
+		}
+	}
 	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
 	if err != nil {
 		return result, err
@@ -4532,6 +4795,15 @@ func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupA
 	if err != nil {
 		return result, err
 	}
+	return h.applyGroupPermissionWithLists(userGroupID, tunnelGroupID, userIDs, tunnelIDs)
+}
+
+// applyGroupPermissionWithLists expands one group-permission pair from
+// caller-supplied member lists (R2X-036: groupPermissionAssign pre-reads
+// both lists before inserting the permission row, so a read failure can
+// no longer strand a persisted pair with no expansion).
+func (h *Handler) applyGroupPermissionWithLists(userGroupID, tunnelGroupID int64, userIDs, tunnelIDs []int64) (groupApplyResult, error) {
+	var result groupApplyResult
 	for _, uid := range userIDs {
 		for _, tid := range tunnelIDs {
 			utID, created, err := h.repo.EnsureUserTunnelGrant(uid, tid)
@@ -5292,6 +5564,41 @@ func (h *Handler) cleanupFederationRuntime(tunnelID int64) error {
 	return errors.Join(failures...)
 }
 
+// cleanupFederationRuntimePreserving is cleanupFederationRuntime for
+// non-delete operations (tunnelUpdate / redeploy) — R2X-010 ②: it
+// snapshots each binding's status on entry, and when the cleanup fails
+// (so the caller aborts and the tunnel stays alive) it rolls the
+// bindings this round flipped from active (1) to pending (2) back to
+// status=1, so the background retry loop cannot later release the
+// runtime of a tunnel that was never actually deleted or replaced.
+// Bindings already pending on entry keep their status: their pending
+// state belongs to an earlier, committed delete intent.
+func (h *Handler) cleanupFederationRuntimePreserving(tunnelID int64) error {
+	if h == nil || tunnelID <= 0 {
+		return nil
+	}
+	bindings, err := h.repo.ListFederationTunnelBindingsForCleanup(tunnelID)
+	if err != nil {
+		return err
+	}
+	original := make(map[int64]int, len(bindings))
+	for _, b := range bindings {
+		original[b.ID] = b.Status
+	}
+	if err := h.cleanupFederationRuntime(tunnelID); err != nil {
+		for id, status := range original {
+			if status != 1 {
+				continue
+			}
+			if rerr := h.repo.SetFederationTunnelBindingStatus(id, 1); rerr != nil {
+				log.Printf("federation cleanup rollback failed tunnel_id=%d binding_id=%d err=%v", tunnelID, id, rerr)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
 func (h *Handler) releaseFederationTunnelBinding(b repo.FederationTunnelBinding) error {
 	node, err := h.repo.GetNodeByID(b.NodeID)
 	if err != nil {
@@ -5325,6 +5632,17 @@ func (h *Handler) retryPendingFederationRuntimeCleanup() error {
 	}
 	var failures []error
 	for _, binding := range bindings {
+		// R2X-010 ③（纵深防线）：释放前复核绑定所属隧道是否仍存在——
+		// 仍存在说明该 pending 不是已提交的删除意图（例如旧口径下失败
+		// 的删除/编辑尝试遗留），释放它会拆掉仍在用隧道的数据面，跳过
+		// 并记日志。隧道 ID 自增不复用，此判据不会误伤真删除。
+		if exists, err := h.repo.TunnelExists(binding.TunnelID); err != nil {
+			failures = append(failures, err)
+			continue
+		} else if exists {
+			log.Printf("federation cleanup retry: skip binding_id=%d tunnel_id=%d: tunnel still exists", binding.ID, binding.TunnelID)
+			continue
+		}
 		if err := h.releaseFederationTunnelBinding(binding); err != nil {
 			failures = append(failures, err)
 		}
@@ -6160,7 +6478,14 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // 本身就是删节点的主要场景，不能因节点不可达而永远删不掉；节点自身
 // 的数据面随节点下线消亡，未清成功的残留以日志形式留痕（节点 ID +
 // 转发 ID），不静默丢失。
-func (h *Handler) deleteNodeByID(id int64) error {
+// deleteNodeByID 的返回值是 R2X-045 的跨节点引用清单：删除前按该节点
+// 全部入站汇 chainReferrers、排除同节点引用方，随删除结果回传给调用
+// 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
+func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
+	var brokenReferrers []string
+	if h != nil && h.repo != nil {
+		brokenReferrers = h.nodeCrossReferrers(id)
+	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
 			for _, forwardID := range forwardIDs {
@@ -6182,7 +6507,7 @@ func (h *Handler) deleteNodeByID(id int64) error {
 		}
 	}
 	if err := h.repo.DeleteNodeCascade(id); err != nil {
-		return err
+		return nil, err
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
@@ -6191,7 +6516,7 @@ func (h *Handler) deleteNodeByID(id int64) error {
 	if h.wsServer != nil {
 		h.wsServer.DisconnectNode(id)
 	}
-	return nil
+	return brokenReferrers, nil
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {
@@ -6511,6 +6836,25 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 		return nil, fmt.Errorf("userId or tunnelId missing")
 	}
 
+	// R2X-012: user and tunnel must both exist — a phantom user_tunnel row
+	// silently becomes a live grant the moment the referenced ID is later
+	// created (sequential IDs make that a near-future event, not theory).
+	if tx != nil {
+		if err := h.repo.ValidateIDsExistTx(tx, "user", []int64{userID}); err != nil {
+			return nil, err
+		}
+		if err := h.repo.ValidateIDsExistTx(tx, "tunnel", []int64{tunnelID}); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := h.repo.ValidateIDsExist("user", []int64{userID}); err != nil {
+			return nil, err
+		}
+		if err := h.repo.ValidateIDsExist("tunnel", []int64{tunnelID}); err != nil {
+			return nil, err
+		}
+	}
+
 	getExisting := func() (int64, int64, int64, int64, int64, sql.NullInt64, int, error) {
 		if tx != nil {
 			return h.repo.GetExistingUserTunnelTx(tx, userID, tunnelID)
@@ -6554,29 +6898,34 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 			} else {
 				uFlow, uNum, uExp, uReset, uErr = h.repo.GetUserDefaultsForTunnel(userID)
 			}
-			if uErr == nil {
-				if reqFlow < 0 {
-					reqFlow = uFlow
-					var user *model.User
-					var userErr error
-					if tx != nil {
-						user, userErr = h.repo.GetUserByIDTx(tx, userID)
-					} else {
-						user, userErr = h.repo.GetUserByID(userID)
-					}
-					if userErr == nil && user != nil {
-						reqFlowMiB = user.FlowMiB
-					}
+			// R2X-012: a defaults lookup failure is now an explicit
+			// error — user existence was validated above, so a failure
+			// here is a real read error, never a phantom user to paper
+			// over with hard-coded defaults.
+			if uErr != nil {
+				return nil, uErr
+			}
+			if reqFlow < 0 {
+				reqFlow = uFlow
+				var user *model.User
+				var userErr error
+				if tx != nil {
+					user, userErr = h.repo.GetUserByIDTx(tx, userID)
+				} else {
+					user, userErr = h.repo.GetUserByID(userID)
 				}
-				if reqNum < 0 {
-					reqNum = uNum
+				if userErr == nil && user != nil {
+					reqFlowMiB = user.FlowMiB
 				}
-				if reqExpTime < 0 {
-					reqExpTime = uExp
-				}
-				if reqFlowReset < 0 {
-					reqFlowReset = uReset
-				}
+			}
+			if reqNum < 0 {
+				reqNum = uNum
+			}
+			if reqExpTime < 0 {
+				reqExpTime = uExp
+			}
+			if reqFlowReset < 0 {
+				reqFlowReset = uReset
 			}
 		}
 		if reqFlow < 0 {

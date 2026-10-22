@@ -5,6 +5,7 @@ import type {
   ServiceMonitorMutationPayload,
   ServiceMonitorLimitsApiData,
 } from "@/api/types";
+import { useIdemKey } from "@/hooks/useIdemKey";
 
 import React, {
   useCallback,
@@ -92,6 +93,9 @@ interface MonitorViewProps {
     { id: number; name: string; connectionStatus: string; version?: string }
   >;
   viewMode?: "list" | "grid";
+  // R2X-038：后端 /monitor/access 的 admin 标记透传。只读用户
+  // （canWrite=false）不渲染写入口与编辑 Modal，而非置灰后点击撞 403。
+  canWrite?: boolean;
 }
 
 type RealtimeNodeMetric = {
@@ -540,7 +544,11 @@ const DEFAULT_SERVICE_MONITOR_LIMITS: ServiceMonitorLimitsApiData = {
   maxTimeoutSec: 60,
 };
 
-export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
+export function MonitorView({
+  nodeMap,
+  viewMode = "grid",
+  canWrite = false,
+}: MonitorViewProps) {
   const [detailNodeId, setDetailNodeId] = useState<number | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [metrics, setMetrics] = useState<NodeMetricApiItem[]>([]);
@@ -711,6 +719,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
 
   // loadMetrics 序号：切节点/切范围后旧响应不得覆盖新图表
   const metricsSeqRef = useRef(0);
+  // loadMonitorResults per-monitor 序号（R2X-040）：同一监控改 limit/范围
+  // 连发时旧响应不得覆盖新结果；不同监控各自独立序号域、互不干扰。
+  const monitorResultsSeqRef = useRef<Record<number, number>>({});
   // loadServiceMonitors 在途守卫：5s 轮询下慢请求不得叠加
   const serviceMonitorsInFlightRef = useRef(false);
 
@@ -835,12 +846,19 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
       monitorId: number,
       options?: { rangeMs?: number; limit?: number },
     ) => {
+      const seq = (monitorResultsSeqRef.current[monitorId] =
+        (monitorResultsSeqRef.current[monitorId] ?? 0) + 1);
+
       try {
         const apiOptions =
           options?.rangeMs != null
             ? { start: Date.now() - options.rangeMs, end: Date.now() }
             : { limit: options?.limit ?? 100 };
         const response = await getServiceMonitorResults(monitorId, apiOptions);
+
+        if (monitorResultsSeqRef.current[monitorId] !== seq) {
+          return;
+        }
 
         if (response.code === 0 && response.data) {
           setMonitorResults((prev) => ({
@@ -854,7 +872,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
           setAccessDenied(response.msg || "暂无监控权限，请联系管理员授权");
         }
       } catch {
-        toast.error("加载监控记录失败");
+        if (monitorResultsSeqRef.current[monitorId] === seq) {
+          toast.error("加载监控记录失败");
+        }
       }
     },
     [],
@@ -1064,6 +1084,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
     setEditModalOpen(true);
   };
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const handleSubmitMonitor = async () => {
     if (!monitorForm.name || !monitorForm.target) {
       toast.error("请填写完整信息");
@@ -1123,9 +1146,10 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
           toast.error(response.msg || "更新失败");
         }
       } else {
-        const response = await createServiceMonitor(payload);
+        const response = await createServiceMonitor(payload, idemKey);
 
         if (response.code === 0) {
+          rotateIdemKey();
           toast.success("创建成功");
         } else {
           toast.error(response.msg || "创建失败");
@@ -1781,15 +1805,17 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
                         刷新
                       </Button>
                     )}
-                    <Button
-                      color="primary"
-                      size="sm"
-                      variant="flat"
-                      onPress={() => handleOpenEditModal()}
-                    >
-                      <Plus className="w-4 h-4 mr-1" />
-                      添加监控
-                    </Button>
+                    {canWrite && (
+                      <Button
+                        color="primary"
+                        size="sm"
+                        variant="flat"
+                        onPress={() => handleOpenEditModal()}
+                      >
+                        <Plus className="w-4 h-4 mr-1" />
+                        添加监控
+                      </Button>
+                    )}
                   </div>
                 </CardHeader>
                 <CardBody className="space-y-4">
@@ -1867,7 +1893,7 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
                               {resolvedActiveMonitor.target}
                             </span>
                             <span className="text-xs text-default-500">
-                              每秒测试，30秒上报
+                              {`每 ${resolvedActiveMonitor.intervalSec || resolvedServiceMonitorLimits.defaultIntervalSec} 秒测试，30 秒上报`}
                             </span>
                             {activeLatestResult &&
                             Number.isFinite(activeLatestResult.latencyMs) ? (
@@ -1893,15 +1919,17 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
                               </Button>
                             </DropdownTrigger>
                             <DropdownMenu>
-                              <DropdownItem
-                                startContent={<Play className="w-4 h-4" />}
-                                onPress={() =>
-                                  resolvedActiveMonitorId != null &&
-                                  handleRunMonitor(resolvedActiveMonitorId)
-                                }
-                              >
-                                立即检查
-                              </DropdownItem>
+                              {canWrite && (
+                                <DropdownItem
+                                  startContent={<Play className="w-4 h-4" />}
+                                  onPress={() =>
+                                    resolvedActiveMonitorId != null &&
+                                    handleRunMonitor(resolvedActiveMonitorId)
+                                  }
+                                >
+                                  立即检查
+                                </DropdownItem>
+                              )}
                               <DropdownItem
                                 startContent={<Activity className="w-4 h-4" />}
                                 onPress={() =>
@@ -1911,26 +1939,30 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
                               >
                                 查看记录
                               </DropdownItem>
-                              <DropdownItem
-                                startContent={<Edit className="w-4 h-4" />}
-                                onPress={() =>
-                                  resolvedActiveMonitor &&
-                                  handleOpenEditModal(resolvedActiveMonitor)
-                                }
-                              >
-                                编辑
-                              </DropdownItem>
-                              <DropdownItem
-                                className="text-danger"
-                                color="danger"
-                                startContent={<Trash2 className="w-4 h-4" />}
-                                onPress={() =>
-                                  resolvedActiveMonitorId != null &&
-                                  handleDeleteMonitor(resolvedActiveMonitorId)
-                                }
-                              >
-                                删除
-                              </DropdownItem>
+                              {canWrite && (
+                                <DropdownItem
+                                  startContent={<Edit className="w-4 h-4" />}
+                                  onPress={() =>
+                                    resolvedActiveMonitor &&
+                                    handleOpenEditModal(resolvedActiveMonitor)
+                                  }
+                                >
+                                  编辑
+                                </DropdownItem>
+                              )}
+                              {canWrite && (
+                                <DropdownItem
+                                  className="text-danger"
+                                  color="danger"
+                                  startContent={<Trash2 className="w-4 h-4" />}
+                                  onPress={() =>
+                                    resolvedActiveMonitorId != null &&
+                                    handleDeleteMonitor(resolvedActiveMonitorId)
+                                  }
+                                >
+                                  删除
+                                </DropdownItem>
+                              )}
                             </DropdownMenu>
                           </Dropdown>
                         </div>
@@ -1981,7 +2013,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
                     </>
                   ) : (
                     <div className="text-center py-8 text-default-500">
-                      暂无服务监控，点击&quot;添加监控&quot;创建
+                      {canWrite
+                        ? "暂无服务监控，点击“添加监控”创建"
+                        : "暂无服务监控"}
                     </div>
                   )}
                 </CardBody>
@@ -2044,17 +2078,19 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
                   <SelectItem key="100">100条</SelectItem>
                   <SelectItem key="200">200条</SelectItem>
                 </Select>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  onPress={() =>
-                    resultsMonitorId != null &&
-                    handleRunMonitor(resultsMonitorId)
-                  }
-                >
-                  <Play className="w-4 h-4 mr-1" />
-                  检查
-                </Button>
+                {canWrite && (
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    onPress={() =>
+                      resultsMonitorId != null &&
+                      handleRunMonitor(resultsMonitorId)
+                    }
+                  >
+                    <Play className="w-4 h-4 mr-1" />
+                    检查
+                  </Button>
+                )}
                 <Button
                   isLoading={resultsLoading}
                   size="sm"
@@ -2151,9 +2187,12 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
         </ModalContent>
       </Modal>
 
-      <Modal isOpen={editModalOpen} onClose={() => setEditModalOpen(false)}>
-        <ModalContent>
-          <ModalHeader>{editingMonitor ? "编辑监控" : "添加监控"}</ModalHeader>
+      {canWrite && (
+        <Modal isOpen={editModalOpen} onClose={() => setEditModalOpen(false)}>
+          <ModalContent>
+            <ModalHeader>
+              {editingMonitor ? "编辑监控" : "添加监控"}
+            </ModalHeader>
           <ModalBody className="space-y-4">
             <Input
               label="名称"
@@ -2300,8 +2339,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
               {editingMonitor ? "更新" : "创建"}
             </Button>
           </ModalFooter>
-        </ModalContent>
-      </Modal>
+          </ModalContent>
+        </Modal>
+      )}
     </div>
   );
 }

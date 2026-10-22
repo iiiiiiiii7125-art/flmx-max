@@ -14,6 +14,7 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
+	"go-backend/internal/netguard"
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
@@ -29,47 +30,14 @@ const maxImportNodes = 500
 // maxSubscriptionBytes bounds a fetched subscription body.
 const maxSubscriptionBytes = 5 << 20
 
-// H-15/R-005: SSRF 防护 - 检查 IP 是否为内网/保留地址
+// H-15/R-005: SSRF 防护 - 检查 IP 是否为内网/保留地址。
+// R2 批1起本函数只是 netguard 的薄封装（判定正本在
+// internal/netguard）：段集基底取 agent bypass 集合（含 240/4、
+// 192.0.0/24、198.18/15、100::/64，旧手写集合缺 240/4），且
+// NAT64/6to4 按内嵌 IPv4 同判、本地 NAT64 整段非公网。新调用方
+// 应直接用 netguard.Judge 按自身策略判定，不要再扩散本封装。
 func isPrivateIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	// R5-B5 D16: IPv4-mapped IPv6 转为 IPv4 再判断。
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-	// R5-B5 D16: 0.0.0.0/8（TD-IMP-001 绕过）。
-	if ip.IsUnspecified() {
-		return true
-	}
-	// R5-B5 D16: 组播。
-	if ip.IsMulticast() {
-		return true
-	}
-	// 私有地址段
-	privateCIDRs := []string{
-		// F-023: IsUnspecified 只命中 0.0.0.0 单地址，0/8 其余地址
-		// （Linux 下拨号直达本机）必须靠本段整段拦截，原注释声称
-		// 已覆盖属误记（TD-IMP-001）。
-		"0.0.0.0/8",
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"169.254.0.0/16", // 链路本地 + 云元数据
-		"100.64.0.0/10",  // R5-B5 D16: CGNAT
-		"fc00::/7",       // IPv6 私有
-		"fe80::/10",      // IPv6 链路本地
-	}
-	for _, cidr := range privateCIDRs {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return netguard.IsNonPublicIP(ip)
 }
 
 // IMP-005：原 validateSubscriptionURL 已删除。该函数是 H-15 时期的订阅 URL

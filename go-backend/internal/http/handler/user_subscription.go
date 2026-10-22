@@ -63,6 +63,13 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-012: the assigned user must exist too — the subscription side
+	// was already validated below, but a phantom user silently accepted
+	// (and persisted) the assignment.
+	if err := h.repo.ValidateIDsExist("user", []int64{req.UserID}); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	seen := make(map[int64]bool, len(req.SubscriptionIDs))
 	for _, id := range req.SubscriptionIDs {
 		if id <= 0 {
