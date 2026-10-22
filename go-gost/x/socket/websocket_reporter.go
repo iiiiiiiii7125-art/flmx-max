@@ -2512,17 +2512,84 @@ func tcpPingLiteralTargetDenied(host string) bool {
 	if err != nil {
 		return false
 	}
+	return tcpPingResolvedDenied(a)
+}
+
+// effectivePingIP 返回判定口径地址：Unmap 规范化后，NAT64 /96 与
+// 6to4 提取内嵌 IPv4；本地 NAT64（64:ff9b:1::/48）整段以第二返回值
+// 标记（布局含 u 字节穿插、不做内嵌提取）。与 tcpPingLiteralTargetDenied
+// 的既有翻译口径一致，抽出供本文件全部判定入口共用（R4 批7 收口：
+// 此前只有 TcpPing 字面量一面消费，监控/Traceroute/解析落点各面漏接）。
+func effectivePingIP(a netip.Addr) (netip.Addr, bool) {
 	a = a.Unmap().WithZone("")
 	if tcpPingNAT64Local.Contains(a) {
-		return true
+		return a, true
 	}
-	eff := a
 	if tcpPingNAT64WellKnown.Contains(a) {
 		b := a.As16()
-		eff = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
-	} else if tcpPingSixToFour.Contains(a) {
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}), false
+	}
+	if tcpPingSixToFour.Contains(a) {
 		b := a.As16()
-		eff = netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]})
+		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]}), false
+	}
+	return a, false
+}
+
+// hardDeniedIP 报告地址是否命中硬拒层（面板 netguard HardDeny 的镜像
+// 子集：元数据精确集 ∪ 169.254/16 整段 ∪ 未指定 ∪ 本地 NAT64 整段，
+// 翻译内嵌同判）。这是全仓一切出站面的最低底线：私网/回环/CGNAT/
+// 保留/组播/链路本地均不在此集——需要更严口径的面用
+// tcpPingLiteralTargetDenied（HardDenyOrLoopback 等价整集）。
+func hardDeniedIP(a netip.Addr) bool {
+	if !a.IsValid() {
+		return true
+	}
+	eff, localNAT64 := effectivePingIP(a)
+	if localNAT64 {
+		return true
+	}
+	for _, m := range tcpPingMetadataExact {
+		if eff == m {
+			return true
+		}
+	}
+	return tcpPingLinkLocalV4.Contains(eff) || eff.IsUnspecified()
+}
+
+// serviceMonitorTargetHardDenied 是服务监控执行端的字面量硬拒复检
+//（R4X-008）：host 为字面 IP 且命中硬拒层时返回 true；主机名返回
+// false（解析落点的硬拒复检在拨号/发包路径对解析结果另行执行，
+// 见 handleServiceMonitorCheck 与 icmpPing 的调用点）。
+func serviceMonitorTargetHardDenied(host string) bool {
+	a, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return false
+	}
+	return hardDeniedIP(a)
+}
+
+// resolvedAddrDenied 是主机名解析落点的复检谓词（R4X-020）：解析
+// 结果（net.IP 形态）按给定全集谓词判定——TcpPing/Traceroute 面传
+// tcpPingLiteralTargetDenied 的等价整集判定，监控面传硬拒子集。
+// 解析结果为 nil/非法按命中处理（fail-closed）。
+func resolvedAddrDenied(ip net.IP, deny func(netip.Addr) bool) bool {
+	if ip == nil {
+		return true
+	}
+	a, err := netip.ParseAddr(ip.String())
+	if err != nil {
+		return true
+	}
+	return deny(a)
+}
+
+// tcpPingResolvedDenied 是 TcpPing/Traceroute 解析落点的整集判定
+//（与 tcpPingLiteralTargetDenied 同集，入参为已解析的 netip.Addr）。
+func tcpPingResolvedDenied(a netip.Addr) bool {
+	eff, localNAT64 := effectivePingIP(a)
+	if localNAT64 {
+		return true
 	}
 	for _, m := range tcpPingMetadataExact {
 		if eff == m {
@@ -2540,8 +2607,6 @@ func tcpPingLiteralTargetDenied(host string) bool {
 			return true
 		}
 	}
-	// 其余 !GlobalUnicast 且非私网者与面板分类器的 ClassReserved
-	// 兜底同口径拒绝（如 Teredo 段）；私网/CGNAT 先行放行。
 	if eff.IsPrivate() {
 		return false
 	}
@@ -2740,14 +2805,49 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 	switch checkType {
 	case "tcp":
 		// Validate and normalize host:port.
-		_, _, splitErr := net.SplitHostPort(target)
+		host, port, splitErr := net.SplitHostPort(target)
 		if splitErr != nil {
 			res.Success = false
 			res.ErrorMessage = "无效的TCP目标"
 			res.LatencyMs = float64(time.Since(start).Milliseconds())
 			return res, nil
 		}
-		conn, dialErr := net.DialTimeout("tcp", target, timeout)
+		// R4X-008：拨号前硬拒子集复检（只取硬拒层；私网/回环/CGNAT
+		// 是节点监控 LAN 服务的正当目标，严禁顺手禁）。字面量直接
+		// 判；主机名在节点侧解析后逐 IP 复检落点并拨已检 IP 字面量
+		//（防面板/节点 DNS 分视图与校验后翻址），解析失败按检查
+		// 失败回原错误面。
+		dialTarget := target
+		if ip := net.ParseIP(host); ip != nil {
+			if resolvedAddrDenied(ip, hardDeniedIP) {
+				res.Success = false
+				res.ErrorMessage = "目标地址不允许"
+				res.LatencyMs = float64(time.Since(start).Milliseconds())
+				return res, nil
+			}
+		} else {
+			ips, lookupErr := net.LookupIP(host)
+			if lookupErr != nil || len(ips) == 0 {
+				res.Success = false
+				if lookupErr != nil {
+					res.ErrorMessage = lookupErr.Error()
+				} else {
+					res.ErrorMessage = "目标主机无法解析"
+				}
+				res.LatencyMs = float64(time.Since(start).Milliseconds())
+				return res, nil
+			}
+			for _, ip := range ips {
+				if resolvedAddrDenied(ip, hardDeniedIP) {
+					res.Success = false
+					res.ErrorMessage = "目标地址不允许"
+					res.LatencyMs = float64(time.Since(start).Milliseconds())
+					return res, nil
+				}
+			}
+			dialTarget = net.JoinHostPort(ips[0].String(), port)
+		}
+		conn, dialErr := net.DialTimeout("tcp", dialTarget, timeout)
 		res.LatencyMs = float64(time.Since(start).Milliseconds())
 		if dialErr != nil {
 			res.Success = false
@@ -2797,6 +2897,13 @@ func icmpPing(target string, timeout time.Duration) (time.Duration, error) {
 			err = fmt.Errorf("unknown address")
 		}
 		return time.Since(start), fmt.Errorf("解析目标失败: %v", err)
+	}
+
+	// R4X-008：ICMP 发包前对解析落点做硬拒子集复检（icmpPing 的调用方
+	// 为服务监控执行面；字面量与主机名两路在此合流——字面量经
+	// ResolveIPAddr 原样返回、同样过检）。仅硬拒层，私网/回环放行。
+	if resolvedAddrDenied(ipAddr.IP, hardDeniedIP) {
+		return time.Since(start), fmt.Errorf("目标地址不允许")
 	}
 
 	isV4 := ipAddr.IP.To4() != nil
@@ -2936,6 +3043,17 @@ func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs 
 
 		fmt.Printf("✅ DNS解析完成 (%.2fms)，解析到 %d 个IP: %v\n",
 			dnsDuration.Seconds()*1000, len(addrs), addrs)
+
+		// R4X-020：主机名在节点侧解析后以同口径复检解析落点——面板
+		// 保存面校验用的是面板 DNS，与节点分视图时落点可入硬拒/回环
+		// 集（S2 残余）。任一解析结果命中整集即整体拒绝（fail-closed，
+		// 与面板解析面逐 IP 判定同口径），不得只查首个地址。
+		for _, s := range addrs {
+			picked := net.ParseIP(s)
+			if picked == nil || resolvedAddrDenied(picked, tcpPingResolvedDenied) {
+				return 0, 100.0, fmt.Errorf("目标地址不允许")
+			}
+		}
 
 		// 使用第一个解析到的IP进行测试
 		target = net.JoinHostPort(addrs[0], fmt.Sprintf("%d", port))
