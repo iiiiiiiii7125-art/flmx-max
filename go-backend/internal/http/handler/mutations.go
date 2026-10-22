@@ -3417,6 +3417,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// When switching tunnels, entry nodes / service base may change. We must clean up old
 	// listeners on nodes that will be removed, otherwise the old ports keep listening.
 	tunnelChanged := tunnelID != forward.TunnelID
+	// R3X-002（E3-01）：切隧道走共用漏斗——提交前以旧隧道侧状态收集
+	// 该转发的中转入站（与批量换隧道 :4288/:4345 同口径），提交后
+	// 刷新并重算 RemoteAddr（见函数尾）。不切隧道不收集、不重算。
+	var tunnelSwitchInboundIDs []int64
+	if tunnelChanged {
+		tunnelSwitchInboundIDs = h.inboundIDsForForwards([]int64{id})
+	}
 	oldNodeIDs := forwardPortNodeIDs(oldPorts)
 	newNodeIDs := uniqueInt64s(fwdEntryNodes)
 	var removedNodeIDs []int64
@@ -3496,6 +3503,15 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// R3X-002（E3-01）：切隧道提交后的漏斗收尾——新旧两侧入站的
+	// allow 均按现行 DB 重算（旧落地拨号地址收回、新落地加入），且
+	// 该转发的 Managed relay 按新隧道口径重算 RemoteAddr（与批量
+	// 换隧道的 recomputedRelayRemoteAddr 同一步骤，失败入 warnings
+	// 不静默）。普通编辑（未切隧道）不触发。
+	if tunnelChanged {
+		h.refreshInboundWhitelists(tunnelSwitchInboundIDs)
+		warnings = append(warnings, h.resyncManagedRelayRemoteAddrForForward(id)...)
+	}
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.OK(map[string]interface{}{"warnings": warnings}))
 		return
@@ -3518,8 +3534,10 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单。
-	affectedInboundIDs := h.inboundIDsForForward(id)
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单
+	// （R3 批 4 起经共用漏斗 inboundIDsForForwards 收集，见
+	// kernel_protect.go 的漏斗说明）。
+	affectedInboundIDs := h.inboundIDsForForwards([]int64{id})
 	var nftNodeID int64
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
@@ -6483,8 +6501,14 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
 func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
 	var brokenReferrers []string
+	// R3X-017（E3-03）：删节点此前从不刷新白名单——走共用漏斗，级联
+	// 删前收集受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点
+	// 入站为链式出站目标，见 inboundIDsAffectedByNodeDelete），级联
+	// 删后统一刷新；单删与 nodeBatchDelete 共用本 funnel 同步受益。
+	var affectedInboundIDs []int64
 	if h != nil && h.repo != nil {
 		brokenReferrers = h.nodeCrossReferrers(id)
+		affectedInboundIDs = h.inboundIDsAffectedByNodeDelete(id)
 	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
@@ -6516,6 +6540,8 @@ func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
 	if h.wsServer != nil {
 		h.wsServer.DisconnectNode(id)
 	}
+	// R3X-017：级联删后统一刷新（漏斗收尾，见函数头收集段）。
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	return brokenReferrers, nil
 }
 
@@ -7082,6 +7108,19 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 	if err != nil || len(forwards) == 0 {
 		return
 	}
+	// R3X-016（E3-02）：本漏斗删转发此前从不刷新白名单——走共用漏斗，
+	// 删前按待删转发集收集受影响入站（已在 pending 的行不在本批终删
+	// 范围，排除收集、其物化处置随 jobs 终删面），删后统一刷新一次。
+	// nft 新标 pending 的行若在本批 reconcile 中终删，其入站刷新后
+	// 按现行 DB 重算掉出 allow；reconcile 失败留 pending 的行仍在库，
+	// 重算口径不变、不提前收回（N-04）。
+	var deletableIDs []int64
+	for i := range forwards {
+		if !isForwardPendingDelete(&forwards[i]) {
+			deletableIDs = append(deletableIDs, forwards[i].ID)
+		}
+	}
+	affectedInboundIDs := h.inboundIDsForForwards(deletableIDs)
 	nftGroups := make(map[int64][]int64)
 	for i := range forwards {
 		f := &forwards[i]
@@ -7112,6 +7151,8 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 	}
 	// best-effort：按节点聚合尝试一次，失败的组留在 pending 由 job 重试。
 	_ = h.reconcileGroupedNftDeletes(nftGroups)
+	// R3X-016：删后统一刷新（漏斗收尾，见上方收集段）。
+	h.refreshInboundWhitelists(affectedInboundIDs)
 }
 
 func (h *Handler) normalizeSpeedLimitReference(speedID *int64) (*int64, error) {

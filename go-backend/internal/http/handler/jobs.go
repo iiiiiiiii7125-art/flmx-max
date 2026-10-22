@@ -224,6 +224,11 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 		byNode[row.NodeID] = append(byNode[row.NodeID], row.ForwardID)
 	}
 	for nodeID, forwardIDs := range byNode {
+		// R3X-018（E3-04）：pending 终删此前从不刷新白名单——走共用
+		// 漏斗：终删前按该节点本批转发集收集受影响入站，本批终删完成
+		// 后按节点聚合刷新一次（与本 job 既有按节点聚合节奏同构）。
+		// pending 窗口内（reconcile 失败、未终删）不刷新（N-04）。
+		affectedInboundIDs := h.inboundIDsForForwards(forwardIDs)
 		if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
 			for _, fid := range forwardIDs {
 				exhausted, recErr := h.repo.RecordNftPendingDeleteAttempt(fid, err, now)
@@ -247,12 +252,18 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 			}
 			continue
 		}
+		finalized := false
 		for _, fid := range forwardIDs {
 			if err := h.deleteForwardByID(fid); err != nil {
 				log.Printf("nftables pending-delete retry failed op=db_delete forward_id=%d err=%v", fid, err)
 				continue
 			}
+			finalized = true
 			log.Printf("nftables pending-delete completed node_id=%d forward_id=%d", nodeID, fid)
+		}
+		// R3X-018：本批终删完成后统一刷新一次（漏斗收尾）。
+		if finalized {
+			h.refreshInboundWhitelists(affectedInboundIDs)
 		}
 	}
 }

@@ -198,6 +198,74 @@ func (h *Handler) inboundIDsForForward(forwardID int64) []int64 {
 	return out
 }
 
+// inboundIDsForForwards is the collection half of the shared whitelist
+// funnel (R3 批 4 / verdicts §8 #1): the union of inboundIDsForForward
+// over a forward set, deduplicated. Every write path that removes or
+// re-homes forwards must collect through this helper BEFORE the
+// mutation lands (the relay rows that map forwards to inbounds are
+// cascade-deleted with the forwards) and flush through
+// refreshInboundWhitelists AFTER it commits — the exact orchestration
+// forwardDelete has always used, now shared by forwardUpdate tunnel
+// switches, cleanupForwardsForUserTunnel, node deletion and the
+// pending-delete job instead of being re-implemented (or forgotten)
+// per call site.
+func (h *Handler) inboundIDsForForwards(forwardIDs []int64) []int64 {
+	var out []int64
+	seen := make(map[int64]struct{})
+	for _, forwardID := range forwardIDs {
+		for _, inboundID := range h.inboundIDsForForward(forwardID) {
+			if _, ok := seen[inboundID]; ok {
+				continue
+			}
+			seen[inboundID] = struct{}{}
+			out = append(out, inboundID)
+		}
+	}
+	return out
+}
+
+// inboundIDsAffectedByNodeDelete collects, before a node is deleted,
+// the surviving inbounds whose allow list embeds the node's addresses
+// (R3X-017): inbounds dialed via a ChainTunnel row referencing the
+// node or chained through by one of the node's inbounds
+// (inboundIDsDialedByNode), plus the inbounds on other nodes that use
+// one of the node's inbounds as their chained outbound target
+// (chainReferrers of the node's inbounds). The node's own inbounds
+// are excluded — they are deleted with the node.
+func (h *Handler) inboundIDsAffectedByNodeDelete(nodeID int64) []int64 {
+	own := make(map[int64]struct{})
+	if targets, err := h.repo.ListNodeInboundsByNode(nodeID); err == nil {
+		for _, target := range targets {
+			own[target.ID] = struct{}{}
+		}
+	}
+	var out []int64
+	seen := make(map[int64]struct{})
+	add := func(inboundID int64) {
+		if _, isOwn := own[inboundID]; isOwn {
+			return
+		}
+		if _, dup := seen[inboundID]; dup {
+			return
+		}
+		seen[inboundID] = struct{}{}
+		out = append(out, inboundID)
+	}
+	for _, inboundID := range h.inboundIDsDialedByNode(nodeID) {
+		add(inboundID)
+	}
+	if targets, err := h.repo.ListNodeInboundsByNode(nodeID); err == nil {
+		for _, target := range targets {
+			for _, ref := range h.chainReferrers(target.ID) {
+				if ref.NodeID != nodeID {
+					add(ref.ID)
+				}
+			}
+		}
+	}
+	return out
+}
+
 // inboundIDsForTunnel returns the inbounds relayed through any forward of
 // a tunnel（隧道名下转发 → NodeInboundRelay → inboundID，与 tunnelDelete
 // 的 O3-001 收集逻辑同一口径）。
