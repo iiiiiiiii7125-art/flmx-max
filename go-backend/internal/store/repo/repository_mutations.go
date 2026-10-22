@@ -824,97 +824,117 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// AUDIT-R1 (TST-001): 物化 ID 列表。原子查询在 Forward/UserTunnel 行删除后
-		// 即失效（子查询变空），而级联清理必须引用已删行的 ID，故先物化。
-		var forwardIDs []int64
-		if err := tx.Model(&model.Forward{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &forwardIDs).Error; err != nil {
-			return err
-		}
-		var userTunnelIDs []int64
-		if err := tx.Model(&model.UserTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &userTunnelIDs).Error; err != nil {
-			return err
-		}
-		// R1 X-P1-1：pending-delete 墓碑转发（status=2）不随隧道级联删除——
-		// 其转发行的端口/计数/绑定与 NftPendingDelete 台账是后台重试清理
-		// 的唯一依据，级联清掉会让节点侧规则成无台账孤儿。这类转发只删
-		// relay 关联（下方按全部 forwardIDs），其余行保留待重试收敛后由
-		// DeleteForwardCascade 终删。
-		var pendingForwardIDs []int64
-		if err := tx.Model(&model.Forward{}).Where("tunnel_id = ? AND status = ?", tunnelID, model.ForwardStatusPendingDelete).Pluck("id", &pendingForwardIDs).Error; err != nil {
-			return err
-		}
-		pendingSet := make(map[int64]struct{}, len(pendingForwardIDs))
-		for _, id := range pendingForwardIDs {
-			pendingSet[id] = struct{}{}
-		}
-		cascadeForwardIDs := make([]int64, 0, len(forwardIDs))
-		for _, id := range forwardIDs {
-			if _, pending := pendingSet[id]; !pending {
-				cascadeForwardIDs = append(cascadeForwardIDs, id)
-			}
-		}
-		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
-		// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
-		// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些 relay
-		// 的 user_inbound 授权行，避免孤儿授权残留。
-		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", forwardIDs)
-		if err != nil {
-			return err
-		}
-		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
-		// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致；
-		// R1 X-P1-1：pending 墓碑转发的台账行除外（见上方分流注释）。
-		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, model.ForwardStatusPendingDelete).Delete(&model.Forward{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
-		// user_tunnel_id 关联本隧道的用户隧道；在 UserTunnel 删除前清理。
-		if err := tx.Where("user_tunnel_id IN (?)", userTunnelIDs).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
-			return err
-		}
-		// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R18 (DAT18-002): 隧道质量探测历史（tunnel_id 索引）。
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
+		return deleteTunnelCascadeTx(tx, tunnelID)
 	})
+}
+
+// DeleteTunnelCascadeWithPeerRelease 在同一事务内完成隧道级联删除与
+// 联邦 runtime 释放标记。X-P3-23（L-09-5）：旧实现尾步
+// MarkPeerShareRuntimeReleasedByPort 在级联事务之外，失败时隧道已
+// 删、runtime 未释放且无回滚，只能靠后台收敛；现纳入主事务。
+func (r *Repository) DeleteTunnelCascadeWithPeerRelease(tunnelID, shareID int64, port int, updatedTime int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := deleteTunnelCascadeTx(tx, tunnelID); err != nil {
+			return err
+		}
+		return markPeerShareRuntimeReleasedByPortTx(tx, shareID, port, updatedTime)
+	})
+}
+
+func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
+	// AUDIT-R1 (TST-001): 物化 ID 列表。原子查询在 Forward/UserTunnel 行删除后
+	// 即失效（子查询变空），而级联清理必须引用已删行的 ID，故先物化。
+	var forwardIDs []int64
+	if err := tx.Model(&model.Forward{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &forwardIDs).Error; err != nil {
+		return err
+	}
+	var userTunnelIDs []int64
+	if err := tx.Model(&model.UserTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &userTunnelIDs).Error; err != nil {
+		return err
+	}
+	// R1 X-P1-1：pending-delete 墓碑转发（status=2）不随隧道级联删除——
+	// 其转发行的端口/计数/绑定与 NftPendingDelete 台账是后台重试清理
+	// 的唯一依据，级联清掉会让节点侧规则成无台账孤儿。这类转发只删
+	// relay 关联（下方按全部 forwardIDs），其余行保留待重试收敛后由
+	// DeleteForwardCascade 终删。
+	var pendingForwardIDs []int64
+	if err := tx.Model(&model.Forward{}).Where("tunnel_id = ? AND status = ?", tunnelID, model.ForwardStatusPendingDelete).Pluck("id", &pendingForwardIDs).Error; err != nil {
+		return err
+	}
+	pendingSet := make(map[int64]struct{}, len(pendingForwardIDs))
+	for _, id := range pendingForwardIDs {
+		pendingSet[id] = struct{}{}
+	}
+	cascadeForwardIDs := make([]int64, 0, len(forwardIDs))
+	for _, id := range forwardIDs {
+		if _, pending := pendingSet[id]; !pending {
+			cascadeForwardIDs = append(cascadeForwardIDs, id)
+		}
+	}
+	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
+	// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
+	// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些 relay
+	// 的 user_inbound 授权行，避免孤儿授权残留。
+	relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", forwardIDs)
+	if err != nil {
+		return err
+	}
+	if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
+	// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致；
+	// R1 X-P1-1：pending 墓碑转发的台账行除外（见上方分流注释）。
+	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, model.ForwardStatusPendingDelete).Delete(&model.Forward{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
+	// user_tunnel_id 关联本隧道的用户隧道；在 UserTunnel 删除前清理。
+	if err := tx.Where("user_tunnel_id IN (?)", userTunnelIDs).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
+		return err
+	}
+	// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R18 (DAT18-002): 隧道质量探测历史（tunnel_id 索引）。
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
 }
 
 func (r *Repository) TunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
@@ -1107,7 +1127,11 @@ func (r *Repository) UpdateForwardTunnel(forwardID, tunnelID int64, now int64) e
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.Forward{}).
+	return updateForwardTunnelTx(r.db, forwardID, tunnelID, now)
+}
+
+func updateForwardTunnelTx(db *gorm.DB, forwardID, tunnelID int64, now int64) error {
+	return db.Model(&model.Forward{}).
 		Where("id = ?", forwardID).
 		Updates(map[string]interface{}{"tunnel_id": tunnelID, "updated_time": now}).Error
 }
@@ -1148,16 +1172,13 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 	})
 }
 
-func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
+// lockPortAllocForEntries 按 nodeID 升序获取 entries 涉及节点的
+// per-node 端口分配锁（去重、逆序释放），供端口替换类写路径共用。
+func lockPortAllocForEntries(entries []struct {
 	NodeID int64
 	Port   int
 	InIP   string
-}) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	// O2-004：加 per-node 端口分配锁（与 CreateForwardTx 的 R5-B4 模式一致）。
-	// 旧逻辑未加锁，并发更新端口时靠唯一索引兜底，错误不友好。
+}) func() {
 	nodeIDs := make([]int64, 0, len(entries))
 	seen := make(map[int64]struct{})
 	for _, e := range entries {
@@ -1171,40 +1192,97 @@ func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
 	for _, nodeID := range nodeIDs {
 		locks = append(locks, AcquirePortAllocLock(nodeID))
 	}
-	defer func() {
+	return func() {
 		for i := len(locks) - 1; i >= 0; i-- {
 			ReleasePortAllocLock(locks[i])
 		}
-	}()
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
+	}
+}
+
+// replaceForwardPortsTx 是 ReplaceForwardPorts 的事务内核心：删旧口、
+// 锁内三表占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
+// 窗口，旧端口已在本事务内删除、自占用天然排除）、插入新口。
+func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries []struct {
+	NodeID int64
+	Port   int
+	InIP   string
+}) error {
+	if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, e := range entries {
+		occupied, err := r.HasOtherForwardOnNodePortTx(tx, e.NodeID, e.Port, forwardID)
+		if err != nil {
 			return err
 		}
-		if len(entries) == 0 {
-			return nil
+		if occupied {
+			return errPortInUse
 		}
-		// B4/F-013: 锁内三表复检（forward_port/node_inbound/chain_tunnel）。
-		// handler 的预检在锁外，与并发的入站/隧道创建存在「先查后写」
-		// 窗口；旧端口已在本事务内删除，自占用天然排除。
-		for _, e := range entries {
-			occupied, err := r.HasOtherForwardOnNodePortTx(tx, e.NodeID, e.Port, forwardID)
-			if err != nil {
-				return err
-			}
-			if occupied {
-				return errPortInUse
-			}
+	}
+	rows := make([]model.ForwardPort, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, model.ForwardPort{
+			ForwardID: forwardID,
+			NodeID:    e.NodeID,
+			Port:      e.Port,
+			InIP:      sql.NullString{String: e.InIP, Valid: e.InIP != ""},
+		})
+	}
+	return tx.Create(&rows).Error
+}
+
+// ChangeForwardTunnelAndPorts X-P3-17（L-04-3）：批量换隧道的逐条
+// DB 写收敛为单事务——换隧道与换端口同 tx 提交，占用集在锁内以本
+// tx 复检（预取口径与 handler 校验环一致）。旧实现两次独立提交
+// （UpdateForwardTunnel 后 ReplaceForwardPorts），中间态靠 handler
+// 补偿回滚兜底且补偿失败被静默吞；收敛后 DB 段任一步失败整条回滚、
+// 无中间态，handler 补偿仅保留给提交后的运行时下发失败。
+func (r *Repository) ChangeForwardTunnelAndPorts(forwardID, tunnelID int64, remoteAddr string, entries []struct {
+	NodeID int64
+	Port   int
+	InIP   string
+}, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	release := lockPortAllocForEntries(entries)
+	defer release()
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := updateForwardTunnelTx(tx, forwardID, tunnelID, now); err != nil {
+			return err
 		}
-		rows := make([]model.ForwardPort, 0, len(entries))
-		for _, e := range entries {
-			rows = append(rows, model.ForwardPort{
-				ForwardID: forwardID,
-				NodeID:    e.NodeID,
-				Port:      e.Port,
-				InIP:      sql.NullString{String: e.InIP, Valid: e.InIP != ""},
-			})
+		// 集成收口（批次 3 X-P2-4 ② 与批次 8 X-P3-17 同段合并）：托管
+		// 中转的 RemoteAddr 重算与换隧道/换端口同 tx 落库，未重算时
+		// 调用方传 effectiveRemoteAddr（= 现值），写回同值无副作用。
+		if err := tx.Model(&model.Forward{}).Where("id = ?", forwardID).Update("remote_addr", remoteAddr).Error; err != nil {
+			return err
 		}
-		return tx.Create(&rows).Error
+		return r.replaceForwardPortsTx(tx, forwardID, entries)
+	})
+	if err != nil {
+		// 唯一冲突翻译为中文友好错误（与 ReplaceForwardPorts 一致）。
+		return mapUniqueViolation(err, "port")
+	}
+	return nil
+}
+
+func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
+	NodeID int64
+	Port   int
+	InIP   string
+}) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	// O2-004：加 per-node 端口分配锁（与 CreateForwardTx 的 R5-B4 模式一致）。
+	// 旧逻辑未加锁，并发更新端口时靠唯一索引兜底，错误不友好。
+	release := lockPortAllocForEntries(entries)
+	defer release()
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return r.replaceForwardPortsTx(tx, forwardID, entries)
 	})
 	if err != nil {
 		// O2-004：唯一冲突翻译为中文友好错误（与 CreateForwardTx 的 R5-B4 C-002 一致）。
@@ -1279,6 +1357,17 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 	}
 	for _, p := range inboundPorts {
 		used[p] = true
+	}
+	// X-P2-13（L-08-1）：联邦 peer_share_runtime 有效预留口纳入已用集，
+	// 自动选口不得挑中预留口（与本地占用谓词双向对齐）。
+	var peerPorts []int
+	if err := r.db.Model(&model.PeerShareRuntime{}).Where("node_id = ? AND port > 0 AND status = 1", nodeID).Pluck("port", &peerPorts).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range peerPorts {
+		if p > 0 {
+			used[p] = true
+		}
 	}
 	return used, nil
 }

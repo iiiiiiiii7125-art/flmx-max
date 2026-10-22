@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -279,19 +278,25 @@ func formatIDList(ids []int64) string {
 	return strings.Join(parts, ",")
 }
 
-func randomHex(n int) string {
+// randomHex / newUUID：X-P3-14（L-03-3）随机源失败 fail-closed。
+// 旧实现忽略 rand 错误、落全零 token/UUID（可预测凭据）。
+func randomHex(n int) (string, error) {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return "", fmt.Errorf("生成随机凭据失败: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
-func newUUID() string {
+func newUUID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return "", fmt.Errorf("生成随机凭据失败: %w", err)
+	}
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
 }
 
 // subActive reports whether the link works (and, for share subscriptions,
@@ -852,6 +857,17 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// X-P3-27（L-11-2）：新建分支接入 Idempotency-Key 机制（更新分支
+	// req.ID>0 不参与，更新本身按 ID 定位、无防重语义变化）。
+	if req.ID == 0 {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 
 	now := time.Now()
 	var s *model.Subscription
@@ -865,12 +881,27 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 			before = subInboundIDs(s, rows)
 		}
 	} else {
-		s = &model.Subscription{Token: randomHex(16), Enabled: 1, CreatedTime: now.UnixMilli()}
+		token, tokenErr := randomHex(16)
+		if tokenErr != nil {
+			response.WriteJSON(w, response.Err(-2, tokenErr.Error()))
+			return
+		}
+		s = &model.Subscription{Token: token, Enabled: 1, CreatedTime: now.UnixMilli()}
 	}
 	s.Name = req.Name
 	s.Kind = req.Kind
 	if isShare(s) && (s.UUID == "" || s.Password == "") {
-		s.UUID, s.Password = newUUID(), randomHex(16)
+		uuid, uuidErr := newUUID()
+		if uuidErr != nil {
+			response.WriteJSON(w, response.Err(-2, uuidErr.Error()))
+			return
+		}
+		pw, pwErr := randomHex(16)
+		if pwErr != nil {
+			response.WriteJSON(w, response.Err(-2, pwErr.Error()))
+			return
+		}
+		s.UUID, s.Password = uuid, pw
 	}
 	s.SourceAll = boolToInt(req.SourceAll)
 	s.InboundIDs = formatIDList(ids)
@@ -880,10 +911,12 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	s.ExpireTime = req.ExpireTime
 	s.Remark = strings.TrimSpace(req.Remark)
 	s.TrafficLimit = req.TrafficLimit
-	if req.ResetDay != s.ResetDay && req.ResetDay > 0 {
+	// X-P3-24（L-09-6）：重置时间与订阅本体同事务落库（见
+	// SaveSubscriptionWithResetTime），不再先 Mark 后 Save 分两步。
+	resetDayChanged := req.ResetDay != s.ResetDay && req.ResetDay > 0
+	if resetDayChanged {
 		// Count from now: a newly set reset day must not wipe this month.
 		s.TrafficResetTime = now.UnixMilli()
-		_ = h.repo.MarkSubscriptionResetTime(s.ID, s.TrafficResetTime)
 	}
 	s.ResetDay = req.ResetDay
 	if req.Enabled != nil {
@@ -893,8 +926,14 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// AUDIT-R8 (F7X-001): 不再乐观标记 AppliedActive。先保存（保持旧值），
 	// 下发成功后直接更新 AppliedActive；失败则不更新，留待 syncSubscriptions 循环重试。
 	newAppliedActive := boolToInt(isShare(s) && subActive(s, now))
-	if err := h.repo.SaveSubscription(s); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+	var saveErr error
+	if resetDayChanged && s.ID > 0 {
+		saveErr = h.repo.SaveSubscriptionWithResetTime(s, s.TrafficResetTime)
+	} else {
+		saveErr = h.repo.SaveSubscription(s)
+	}
+	if saveErr != nil {
+		response.WriteJSON(w, response.Err(-2, saveErr.Error()))
 		return
 	}
 	push := before
@@ -926,8 +965,13 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := h.repo.GetSubscription(id)
-	if err != nil || s == nil {
-		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if s == nil {
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 	// B4/F-058: 删除改为两阶段。此前行先删、下发失败仅改响应文案，行已
@@ -980,9 +1024,24 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 // rotation itself is already persisted; AppliedActive is parked at -1
 // so the sync loop retries the push), or a persistence error.
 func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []model.NodeInbound, applyErr error, err error) {
-	s.Token = randomHex(16)
+	// 集成收口：随机源失败 fail-closed（批次 8 X-P3-14 的新签名）与
+	// 共享全轮换（批次 7 X-P3-13）在此合并——生成失败直接报错返回，
+	// 不落库、不下发。
+	token, tokenErr := randomHex(16)
+	if tokenErr != nil {
+		return nil, nil, tokenErr
+	}
+	s.Token = token
 	if isShare(s) {
-		s.UUID, s.Password = newUUID(), randomHex(16)
+		uuid, uuidErr := newUUID()
+		if uuidErr != nil {
+			return nil, nil, uuidErr
+		}
+		pw, pwErr := randomHex(16)
+		if pwErr != nil {
+			return nil, nil, pwErr
+		}
+		s.UUID, s.Password = uuid, pw
 	}
 	s.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveSubscription(s); err != nil {

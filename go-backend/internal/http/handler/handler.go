@@ -1121,6 +1121,24 @@ func (h *Handler) flowConfig(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// parseFlowSeqFromHeaders 解析上报 seq 头：新头 X-Flmx-Seq 优先、
+// 旧头 X-Flvx-Seq 次之。X-P3-19（L-06-1＝F-O01）：新头存在但解析
+// 失败时继续尝试旧头（与头注释口径对齐）——旧实现无条件 break，
+// 垃圾新头会把合法旧头 seq 一并丢弃、回落 legacy 失去重放防护。
+func parseFlowSeqFromHeaders(r *http.Request) *int64 {
+	if r == nil {
+		return nil
+	}
+	for _, hdr := range []string{"X-Flmx-Seq", "X-Flvx-Seq"} {
+		if hv := r.Header.Get(hdr); hv != "" {
+			if v, err := strconv.ParseInt(strings.TrimSpace(hv), 10, 64); err == nil {
+				return &v
+			}
+		}
+	}
+	return nil
+}
+
 func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 	secret := r.URL.Query().Get("secret")
 	node, _ := h.repo.GetNodeBySecret(secret)
@@ -1135,15 +1153,7 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 		// R5-B6 E-001: seq 优先从 HTTP 头 X-Flmx-Seq 读取（改名后新头），
 		// 回退旧头 X-Flvx-Seq，其次从 body 的 {seq, items} 对象读取，
 		// 最后兼容纯数组（legacy）。
-		var seq *int64
-		for _, hdr := range []string{"X-Flmx-Seq", "X-Flvx-Seq"} {
-			if hv := r.Header.Get(hdr); hv != "" {
-				if v, err := strconv.ParseInt(strings.TrimSpace(hv), 10, 64); err == nil {
-					seq = &v
-				}
-				break
-			}
-		}
+		seq := parseFlowSeqFromHeaders(r)
 		var items []flowItem
 		// 先尝试新格式：{seq, items}。
 		var batch struct {
@@ -1162,11 +1172,20 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if items != nil {
 			now := time.Now()
-			// E-001: seq 幂等检查。
-			accepted, isReplay, isLegacy, seqErr := h.repo.CheckAndUpdateSeq(node.ID, seq, now.UnixMilli())
+			// X-P3-31（V-08）：seq 改为「先只读校验、入账同 tx 推进」。
+			// 旧实现 CheckAndUpdateSeq 在入账前先行消费 seq：metas 失
+			// 败置空仍回 ok、入账两段分开写一段失败另一段继续——seq
+			// 已推进使同 seq 重报被判重放，分叉/漏计不可恢复。
+			isReplay, isLegacy, seqErr := h.repo.CheckSeq(node.ID, seq)
 			if seqErr != nil {
+				// 校验失败整批拒收（非 ok）：agent 不清零、可重报。
 				log.Printf("flow upload seq check failed node_id=%d err=%v", node.ID, seqErr)
-			} else if isReplay {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				_, _ = w.Write([]byte("error"))
+				return
+			}
+			if isReplay {
+				// 已入账批次的重放：回 ok 终止 agent 重试，不重复入账。
 				log.Printf("flow upload replay rejected node_id=%d seq=%d", node.ID, *seq)
 			} else {
 				if isLegacy {
@@ -1175,14 +1194,23 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 				forwardIDs := collectFlowUploadForwardIDs(items)
 				metas, metaErr := h.repo.GetFlowUploadForwardMetas(forwardIDs)
 				if metaErr != nil {
+					// V-08 ①：metas 失败整批拒收返非 ok——不入账、
+					// seq 未推进，同 seq 重报可入账。
 					log.Printf("flow upload metadata lookup failed node_id=%d err=%v", node.ID, metaErr)
-					metas = map[int64]repo.FlowUploadForwardMeta{}
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					_, _ = w.Write([]byte("error"))
+					return
 				}
 				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
+				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
+					// 入账单事务失败：整批未入账、seq 未推进，返非 ok。
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					_, _ = w.Write([]byte("error"))
+					return
+				}
 				h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
-				h.applyFlowUploadBatch(node.ID, batch, now)
 			}
-			_ = accepted
 		}
 	}
 
@@ -1862,10 +1890,11 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 	var backup interface{}
 	var err error
 
+	// X-P3-25（L-10-1）：导出绑定请求 ctx，断连即止。
 	if len(req.Types) == 0 {
-		backup, err = h.repo.ExportAll()
+		backup, err = h.repo.ExportAllContext(r.Context())
 	} else {
-		backup, err = h.repo.ExportPartial(req.Types)
+		backup, err = h.repo.ExportPartialContext(r.Context(), req.Types)
 	}
 
 	if err != nil {
@@ -1917,7 +1946,7 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	autoBackup, err := h.repo.ExportAll()
+	autoBackup, err := h.repo.ExportAllContext(r.Context())
 	if err != nil {
 		// O7-010：导入前自动备份失败时只记录警告、继续导入流程。
 		// 旧逻辑直接中断恢复——但数据库损坏时正是备份失败的时候，
@@ -1932,7 +1961,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.repo.Import(&req.BackupData, req.Types)
+	// X-P3-21（L-08-3）：导入整单事务维持（语义有意），事务绑定请求
+	// ctx——导入期间其余请求经 SQLite busy_timeout（DSN 5000ms）/
+	// PG 语句超时走正常超时错误，导入本身断连可取消，不再无限排队。
+	result, err := h.repo.ImportContext(r.Context(), &req.BackupData, req.Types)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return

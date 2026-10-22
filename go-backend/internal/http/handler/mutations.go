@@ -431,7 +431,9 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	roleID, err := h.repo.GetUserRoleID(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			response.WriteJSON(w, response.ErrDefault("用户不存在"))
+			// X-P3-28（L-11-3，V-12）：delete 对不存在统一幂等成功
+			// （与 node/tunnel/speedLimit 对齐；删除不存在对象无副作用）。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -509,6 +511,16 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-27（L-11-2）：与 X-P2-17 同一 Idempotency-Key 机制（创建面）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	name := asString(req["name"])
 	serverIP := asString(req["serverIp"])
 	if name == "" || serverIP == "" {
@@ -537,10 +549,15 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if forwardMode == "nftables" {
 		status = 1
 	}
+	nodeSecret, err := randomToken(16)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
 	nodeID, err := h.repo.CreateNode(
 		name,
-		randomToken(16),
+		nodeSecret,
 		serverIP,
 		nullableText(asString(req["serverIpV4"])),
 		nullableText(asString(req["serverIpV6"])),
@@ -570,6 +587,12 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.persistNodeSSHConfig(nodeID, req, forwardMode, now, false); err != nil {
+		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
+		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
+		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
+		if delErr := h.deleteNodeByID(nodeID); delErr != nil {
+			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -2948,6 +2971,16 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 		return
 	}
+	// X-P2-17（BC-13）：Idempotency-Key 回放/捕获（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, userID)
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	tunnelID := asInt64(req["tunnelId"], 0)
 	if tunnelID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("隧道ID不能为空"))
@@ -3037,23 +3070,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
 	}
-	for _, nodeID := range entryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			continue
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
+	if err := h.validateForwardEntryNodes(entryNodes, port, 0); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	// A4-004（BC-26）：realm 不支持的负载策略明确拒绝，不再静默改写。
 	if err := validateRealmForwardStrategy(tunnel, remoteAddr, defaultString(asString(req["strategy"]), "fifo")); err != nil {
@@ -3262,23 +3281,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		removedNodeIDs = diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs = diffInt64s(oldNodeIDs, removedNodeIDs)
 	}
-	for _, nodeID := range fwdEntryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			continue
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := h.validateForwardPortAvailability(node, port, id); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
+	if err := h.validateForwardEntryNodes(fwdEntryNodes, port, id); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	now := time.Now().UnixMilli()
 	maxConn := asInt(req["maxConn"], forward.MaxConn)
@@ -3362,7 +3367,8 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 	forward, _, _, err := h.resolveForwardAccess(r, id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
-			response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -3437,19 +3443,20 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 绕过 ensureForwardAccessByActor 的 pending 过滤：force-delete 必须能
-	// 找到 pending-delete 行。幂等：不存在的 ID 返回明确的“不存在”，非 500。
+	// 找到 pending-delete 行。幂等口径见下方 X-P3-28（V-12）。
 	forward, err := h.getForwardRecord(id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
-			response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if forward == nil {
-		// R5 幂等：不存在的 ID 返回明确的“不存在”（中文，与其他接口一致），非 500。
-		response.WriteJSON(w, response.ErrDefault("转发不存在"))
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 
@@ -4066,7 +4073,34 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			}
 			p = picked
 		}
-		bctEntryNodes, _ := h.tunnelEntryNodeIDs(req.TargetTunnelID)
+		// X-P3-15（L-04-1）：显式 1–65535 校验（与 create/update 的
+		// O2-001 同口径）。存量非法端口在目标节点 PortRange 空规格
+		// 放行时，旧实现原样写回、下发才失败；现校验环直接拒。
+		if p < 1 || p > 65535 {
+			fail++
+			failures = appendBatchFailureReason(failures, id, forward.Name, "端口必须在 1-65535 范围内")
+			continue
+		}
+		// X-P3-17（L-04-3）评估登记：本批不收敛为「整批单 tx」——
+		// 批回执契约是逐条成败（部分成功合法且须逐条列明），且每条的
+		// 运行时下发（网络调用）无法入 DB 事务，整批单 tx 只会把全部
+		// 条目的端口锁与写事务拖过网络往返。收敛点落在逐条粒度：每条
+		// 的 DB 写（换隧道+换端口）已是单 tx（见下方
+		// ChangeForwardTunnelAndPorts），校验环即占用预取。
+		// 「按用户批量建转发」同评估：仓内无此端点（forwardCreate 为
+		// 单条且已经 CreateForwardTx 单 tx+锁内复检；批量分配见
+		// userTunnelBatchAssign，X-P3-22 已整批单 tx），无可收敛对象。
+		bctEntryNodes, bctErr := h.tunnelEntryNodeIDs(req.TargetTunnelID)
+		if bctErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, bctErr)
+			continue
+		}
+		if len(bctEntryNodes) == 0 {
+			fail++
+			failures = appendBatchFailureReason(failures, id, forward.Name, "目标隧道没有入口节点")
+			continue
+		}
 		newNodeIDs := uniqueInt64s(bctEntryNodes)
 		removedNodeIDs := diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs := diffInt64s(oldNodeIDs, removedNodeIDs)
@@ -4119,21 +4153,14 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
-		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
-			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-			continue
+		// X-P3-17（L-04-3）：换隧道+换端口收敛为 repo 单 tx（锁内占用
+		// 复检）；失败整条回滚、无中间态，此段不再需要补偿恢复。
+		// 补偿（rollbackForwardMutation）仅保留给提交后的取行/下发失败。
+		bctEntries := make([]forwardPortReplaceEntry, len(bctEntryNodes))
+		for i, nid := range bctEntryNodes {
+			bctEntries[i] = forwardPortReplaceEntry{NodeID: nid, Port: p, InIP: ""}
 		}
-		if remoteAddrChanged {
-			if err := h.repo.UpdateForward(id, forward.Name, req.TargetTunnelID, newRemoteAddr, forward.Strategy, time.Now().UnixMilli(), forward.SpeedID, forward.MaxConn, forward.IPMaxConn, forward.IPSpeedID, 0, forward.ProxyProtocolReceive, forward.ProxyProtocolSend); err != nil {
-				h.rollbackForwardMutation(forward, oldPorts)
-				fail++
-				failures = appendBatchFailure(failures, id, forward.Name, err)
-				continue
-			}
-		}
-		if err := h.replaceForwardPorts(id, req.TargetTunnelID, p, ""); err != nil {
-			h.rollbackForwardMutation(forward, oldPorts)
+		if err := h.repo.ChangeForwardTunnelAndPorts(id, req.TargetTunnelID, effectiveRemoteAddr, bctEntries, time.Now().UnixMilli()); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
@@ -4174,6 +4201,16 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	// X-P3-27（L-11-2）：与 X-P2-17 同一 Idempotency-Key 机制（创建面）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 
 	name := asString(req["name"])
@@ -6165,20 +6202,23 @@ func (h *Handler) deleteTunnelByID(id int64) error {
 	tunnelName, _ := h.repo.GetTunnelName(id)
 	tunnel, _ := h.repo.GetTunnelRecord(id)
 	entryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
-	if err := h.repo.DeleteTunnelCascade(id); err != nil {
+	// X-P3-23（L-09-5）：尾步 peer runtime 释放标记纳入级联主事务——
+	// 释放失败则整个删除回滚，不再出现「隧道已删、runtime 未释放、
+	// 靠后台收敛」的不一致中间态。share 信息须在删前解析（隧道名
+	// 随行删除即不可读）。
+	shareID, port, isPeerShare := parsePeerShareInfoFromFederationTunnelName(tunnelName)
+	if isPeerShare {
+		if err := h.repo.DeleteTunnelCascadeWithPeerRelease(id, shareID, port, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+	} else if err := h.repo.DeleteTunnelCascade(id); err != nil {
 		return err
 	}
 	if tunnelIsRealm(tunnel) {
 		// 级联删除后 realm 渲染源已无此隧道：让入口节点收敛到无端点。
 		_, _ = h.syncRealmNodes(entryNodeIDs, nil)
 	}
-
-	shareID, port, ok := parsePeerShareInfoFromFederationTunnelName(tunnelName)
-	if !ok {
-		return nil
-	}
-
-	return h.repo.MarkPeerShareRuntimeReleasedByPort(shareID, port, time.Now().UnixMilli())
+	return nil
 }
 
 func (h *Handler) deleteForwardByID(id int64) error {
@@ -6989,12 +7029,18 @@ func defaultString(v, def string) string {
 	return v
 }
 
-func randomToken(n int) string {
+// cryptoRandRead 是凭据随机源的测试 seam（生产恒为 crypto/rand.Read）。
+var cryptoRandRead = rand.Read
+
+// randomToken 生成 n 字节随机凭据的 hex 编码。X-P3-14（L-03-3）：
+// 随机源失败 fail-closed 返回错误——旧实现降级为时间戳 hex（可
+// 预测）落库为节点 secret/联邦凭据，属安全缺陷；调用方必须报错。
+func randomToken(n int) (string, error) {
 	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	if _, err := cryptoRandRead(buf); err != nil {
+		return "", fmt.Errorf("生成随机凭据失败: %w", err)
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }
 
 func asInt64Slice(v interface{}) []int64 {
@@ -7037,6 +7083,29 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 		}
 	}
 	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内（该范围仅约束转发/中转/隧道入口端口）", port, node.Name, portRange)
+}
+
+// validateForwardEntryNodes 逐入口节点做转发端口校验（远程范围/
+// 本地规格/占用）。X-P3-16（L-04-2，BC-14，裁定 V-11）：节点记录
+// 读取失败 fail-closed 直接报错——create/update 旧实现 continue
+// 跳过校验仍落库，与 batch 的整条失败口径分叉，现统一。
+func (h *Handler) validateForwardEntryNodes(entryNodes []int64, port int, currentForwardID int64) error {
+	for _, nodeID := range entryNodes {
+		node, nodeErr := h.getNodeRecord(nodeID)
+		if nodeErr != nil {
+			return nodeErr
+		}
+		if err := validateRemoteNodePort(node, port); err != nil {
+			return err
+		}
+		if err := validateLocalNodePort(node, port); err != nil {
+			return err
+		}
+		if err := h.validateForwardPortAvailability(node, port, currentForwardID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, currentForwardID int64) error {

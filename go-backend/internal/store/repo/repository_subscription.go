@@ -22,31 +22,48 @@ const (
 	legacySubRegions  = "sub_region_groups"
 )
 
-func randomToken() string {
+// cryptoRandRead 是凭据随机源的测试 seam（生产恒为 crypto/rand.Read）。
+var cryptoRandRead = rand.Read
+
+// randomToken / subscriptionCredentials：X-P3-14（L-03-3）随机源
+// 失败 fail-closed 返回错误。旧实现忽略 rand 错误、落全零 token/
+// 凭据（可预测），调用方必须把错误上抛、不得落库。
+func randomToken() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // subscriptionCredentials returns a fresh UUID and password for a
 // subscription's own credentials.
-func subscriptionCredentials() (string, string) {
+func subscriptionCredentials() (string, string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return "", "", err
+	}
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], randomToken()
+	token, err := randomToken()
+	if err != nil {
+		return "", "", err
+	}
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], token, nil
 }
 
 // newDefaultSubscription is "我的订阅", with its own credentials like every
 // subscription.
-func newDefaultSubscription(token, options string, now int64) model.Subscription {
-	id, pw := subscriptionCredentials()
+func newDefaultSubscription(token, options string, now int64) (model.Subscription, error) {
+	id, pw, err := subscriptionCredentials()
+	if err != nil {
+		return model.Subscription{}, err
+	}
 	return model.Subscription{
 		Name: "我的订阅", Kind: model.SubscriptionShare, Token: token, UUID: id, Password: pw, SourceAll: 1,
 		Options: options, Enabled: 1, CreatedTime: now, UpdatedTime: now,
-	}
+	}, nil
 }
 
 // shareOwnSubscriptions gives subscriptions that used the owner's
@@ -61,7 +78,11 @@ func shareOwnSubscriptions(db *gorm.DB) error {
 	for _, s := range own {
 		fields := map[string]interface{}{"kind": model.SubscriptionShare, "applied_active": 0}
 		if s.UUID == "" || s.Password == "" {
-			fields["uuid"], fields["password"] = subscriptionCredentials()
+			uuid, pw, credErr := subscriptionCredentials()
+			if credErr != nil {
+				return credErr
+			}
+			fields["uuid"], fields["password"] = uuid, pw
 		}
 		if err := db.Model(&model.Subscription{}).Where("id = ?", s.ID).Updates(fields).Error; err != nil {
 			return err
@@ -104,9 +125,16 @@ func migrateSubscriptions(db *gorm.DB, now int64) error {
 		})
 		token := cfg[legacySubTokenKey]
 		if len(token) < 32 {
-			token = randomToken()
+			var tokenErr error
+			token, tokenErr = randomToken()
+			if tokenErr != nil {
+				return tokenErr
+			}
 		}
-		def := newDefaultSubscription(token, string(opts), now)
+		def, defErr := newDefaultSubscription(token, string(opts), now)
+		if defErr != nil {
+			return defErr
+		}
 		if err := tx.Create(&def).Error; err != nil {
 			return err
 		}
@@ -185,7 +213,15 @@ func (r *Repository) DefaultSubscription(now int64) (*model.Subscription, error)
 		if res.RowsAffected > 0 {
 			return nil
 		}
-		s = newDefaultSubscription(randomToken(), "", now)
+		token, tokenErr := randomToken()
+		if tokenErr != nil {
+			return tokenErr
+		}
+		def, defErr := newDefaultSubscription(token, "", now)
+		if defErr != nil {
+			return defErr
+		}
+		s = def
 		return tx.Create(&s).Error
 	})
 	if err != nil {
@@ -198,12 +234,34 @@ func (r *Repository) SaveSubscription(s *model.Subscription) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	return saveSubscriptionTx(r.db, s)
+}
+
+func saveSubscriptionTx(db *gorm.DB, s *model.Subscription) error {
 	// Traffic columns are only changed by the counter updates, so a save
 	// based on a stale read cannot drop traffic counted meanwhile.
 	if s.ID == 0 {
-		return r.db.Create(s).Error
+		return db.Create(s).Error
 	}
-	return r.db.Omit("upload_bytes", "download_bytes", "traffic_reset_time").Save(s).Error
+	return db.Omit("upload_bytes", "download_bytes", "traffic_reset_time").Save(s).Error
+}
+
+// SaveSubscriptionWithResetTime 在同一事务内落重置时间与订阅本体。
+// X-P3-24（L-09-6）：subscriptionSave 旧实现先单独 Mark 重置时间再
+// Save，后者失败时重置时间已改而 ResetDay 未改（下次保存才自愈）。
+func (r *Repository) SaveSubscriptionWithResetTime(s *model.Subscription, resetTime int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if s.ID > 0 {
+			if err := tx.Model(&model.Subscription{}).Where("id = ?", s.ID).
+				Update("traffic_reset_time", resetTime).Error; err != nil {
+				return err
+			}
+		}
+		return saveSubscriptionTx(tx, s)
+	})
 }
 
 func (r *Repository) DeleteSubscription(id int64) error {

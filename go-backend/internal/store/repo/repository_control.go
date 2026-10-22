@@ -193,6 +193,21 @@ func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port
 	if err != nil {
 		return false, err
 	}
+	if count > 0 {
+		return true, nil
+	}
+
+	// X-P2-13（L-08-1）：联邦 peer_share_runtime 的有效预留口同样占用
+	// 节点端口空间。此前本地谓词不查该表、联邦分配又只走
+	// peerRoleRuntimeMu 全局锁（与本地 per-node 端口锁不同域），同节点
+	// 同口可被联邦与本地双分配、后下发方绑口失败。双向对齐：本地谓词
+	// 纳入预留口，联邦分配入口接入 per-node 端口锁（federation.go）。
+	err = tx.Model(&model.PeerShareRuntime{}).
+		Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
 	return count > 0, nil
 }
 
