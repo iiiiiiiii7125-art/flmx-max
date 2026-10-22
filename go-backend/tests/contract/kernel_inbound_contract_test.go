@@ -216,13 +216,15 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		apply("e1", 100, 1000)
+		// 断言更新登记 #1-补（R2X-033/BC-R2-05 语义订正）：首采与 epoch
+		// 变化只建基线、delta=0（旧全量语义期望 up=190/down=1650 作废）。
+		apply("e1", 100, 1000) // first sample: baseline only, +0 / +0
 		apply("e1", 150, 1600) // +50 / +600
-		apply("e2", 30, 40)    // new epoch counts from zero
-		apply("e2", 10, 50)    // counter went backwards: treat as reset
+		apply("e2", 30, 40)    // epoch change: baseline only, +0 / +0
+		apply("e2", 10, 50)    // counter went backwards: in counts full +10, out diff +10
 		up := mustQueryInt64(t, r, `SELECT upload_bytes FROM node_inbound WHERE id = ?`, inboundID)
 		down := mustQueryInt64(t, r, `SELECT download_bytes FROM node_inbound WHERE id = ?`, inboundID)
-		if up != 100+50+30+10 || down != 1000+600+40+10 {
+		if up != 0+50+0+10 || down != 0+600+0+10 {
 			t.Fatalf("traffic up=%d down=%d", up, down)
 		}
 		if out := kernelContractPost(t, router, admin, "/api/v1/inbound/reset-traffic", `{"id":`+jsonInt64(inboundID)+`}`); out.Code != 0 {
