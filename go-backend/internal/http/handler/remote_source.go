@@ -241,7 +241,15 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			res.Kept++
 			continue
 		}
-		if len(h.chainReferrers(row.ID)) > 0 {
+		// R3X-015：守卫查询失败 fail-closed——无法确认无引用时保留
+		// 该节点并记错，不得当作无引用删除。
+		refs, refErr := h.chainReferrers(row.ID)
+		if refErr != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", row.Name, refErr))
+			res.Kept++
+			continue
+		}
+		if len(refs) > 0 {
 			res.Kept++
 			continue
 		}
@@ -544,12 +552,25 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
-	} else if rows, err := h.repo.ListNodeInbounds(); err == nil {
+	} else {
+		// R3X-015：守卫数据源（入站列表）查询失败 fail-closed 中止
+		// 删除——旧实现 err != nil 时整段跳过、仍删来源行；守卫本身
+		// 查询失败同理中止，不得当作无引用放行。
+		rows, err := h.repo.ListNodeInbounds()
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 		for i := range rows {
 			if rows[i].SourceID != req.ID {
 				continue
 			}
-			if msg := h.chainInUseMessage(&rows[i]); msg != "" {
+			msg, guardErr := h.chainInUseMessage(&rows[i])
+			if guardErr != nil {
+				response.WriteJSON(w, response.Err(-2, guardErr.Error()))
+				return
+			}
+			if msg != "" {
 				response.WriteJSON(w, response.ErrDefault(msg+"，或删除时保留节点"))
 				return
 			}
