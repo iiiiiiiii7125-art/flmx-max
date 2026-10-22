@@ -110,6 +110,11 @@ type inboundView struct {
 	// OutboundIPStrategy scopes the inbound's outbound connections to an
 	// IP family ("auto" = unrestricted).
 	OutboundIPStrategy string `json:"outboundIpStrategy"`
+	// MeteringEnabled is the SS subscription-metering switch;
+	// MeteringActive reports that a companion inbound currently exists
+	// for this origin (share subscriptions are being metered).
+	MeteringEnabled bool `json:"meteringEnabled"`
+	MeteringActive  bool `json:"meteringActive"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -148,13 +153,17 @@ type inboundRequest struct {
 	// keeps the stored strategy instead of resetting it to auto.
 	OutboundIPStrategy *string `json:"outboundIpStrategy"`
 	Enabled            *bool   `json:"enabled"`
+	// MeteringEnabled is a pointer for the same reason: an edit that
+	// omits it keeps the SS subscription-metering switch as stored.
+	MeteringEnabled *bool `json:"meteringEnabled"`
 }
 
 // ---- conversion ----
 
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
-		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy}
+		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy,
+		Companion: row.CompanionOf > 0}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -246,6 +255,9 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 	}
 	counts := make(map[int64]int)
 	for _, in := range inbounds {
+		if in.CompanionOf > 0 {
+			continue // 计量伴生入站是派生态，不计入内核入站数
+		}
 		counts[in.KernelID]++
 	}
 	nodes := make(map[int64]*model.Node)
@@ -585,8 +597,19 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		names[row.ID] = row.Name
 	}
+	// Companion inbounds are system-managed derived rows: they never
+	// appear in the list; their origins report meteringActive instead.
+	meteringActive := make(map[int64]bool)
+	for _, row := range rows {
+		if row.CompanionOf > 0 {
+			meteringActive[row.CompanionOf] = true
+		}
+	}
 	views := make([]inboundView, 0, len(rows))
 	for _, row := range rows {
+		if row.CompanionOf > 0 {
+			continue
+		}
 		in, err := inboundFromModel(row)
 		if err != nil {
 			log.Printf("kernel: %v", err)
@@ -631,6 +654,8 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			OutboundID:         row.OutboundID,
 			SplitRules:         rowSplitRules(row),
 			OutboundIPStrategy: row.OutboundIPStrategy,
+			MeteringEnabled:    row.MeteringEnabled == 1,
+			MeteringActive:     meteringActive[row.ID],
 		}
 		v.ShareAddress = inboundShareAddress(&row, node)
 		if v.SplitRules == nil {
@@ -745,6 +770,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 		row = *existing
 		prevPort, prevListen = existing.Port, existing.Listen
+		if row.CompanionOf > 0 {
+			response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能编辑"))
+			return
+		}
 		if isExternalInbound(&row) {
 			response.WriteJSON(w, response.ErrDefault("导入的节点请在“编辑”里修改地址和密码"))
 			return
@@ -1003,6 +1032,21 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	if req.Enabled != nil {
 		row.Enabled = boolToInt(*req.Enabled)
 	}
+	// SS 订阅计量开关：显式开启而入站不合资格（非 SS 2022 / ShadowTLS
+	// 前置）直接拒绝并说明；未显式开启时若入站变得不合资格（如改了
+	// 方法），静默关掉开关，伴生行由对账回收。合资格判定用已定稿的
+	// 内核形态 in（与落库内容一致）。
+	if req.MeteringEnabled != nil {
+		row.MeteringEnabled = boolToInt(*req.MeteringEnabled)
+	}
+	if row.MeteringEnabled == 1 && !ssMeteringEligible(in) {
+		if req.MeteringEnabled != nil && *req.MeteringEnabled {
+			releasePortAlloc()
+			response.WriteJSON(w, response.ErrDefault("仅 Shadowsocks 2022（非 ShadowTLS 前置）的自建入站支持订阅计量"))
+			return
+		}
+		row.MeteringEnabled = 0
+	}
 	row.UpdatedTime = now
 
 	if update {
@@ -1017,6 +1061,9 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// SS 计量：开关/方法/启停变化后立即对账伴生行（对账内部会下发受
+	// 影响内核；下方 applyKernel 对本内核再推一次，同 hash 无害）。
+	h.reconcileSSMetering()
 
 	var warnings []string
 	if update && prevAcceptProxy != row.AcceptProxyProtocol {
@@ -1167,6 +1214,10 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
+	if row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能单独删除"))
+		return
+	}
 	// R3X-015：守卫查询失败 fail-closed 中止删除，不得当作无引用放行。
 	msg, guardErr := h.chainInUseMessage(row)
 	if guardErr != nil {
@@ -1177,6 +1228,8 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
+	// 连带删除计量伴生行（同一内核，下方 applyKernel 一并覆盖）。
+	h.deleteCompanionOf(id)
 	h.removeInboundRelays(id)
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1216,6 +1269,11 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
 			continue
 		}
+		if row.CompanionOf > 0 {
+			f++
+			failures = appendBatchFailureReason(failures, id, row.Name, "计量伴生入站由系统管理，不能单独删除")
+			continue
+		}
 		// R3X-015：守卫查询失败 fail-closed——该条记失败、不删除，
 		// 不得把查询失败读作无引用或「引用方全在批内」。
 		msg, guardErr := h.chainInUseMessage(row)
@@ -1237,6 +1295,7 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		h.deleteCompanionOf(id)
 		h.removeInboundRelays(id)
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
 			f++
@@ -1299,6 +1358,11 @@ func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
 			continue
 		}
+		if row.CompanionOf > 0 {
+			f++
+			failures = appendBatchFailureReason(failures, id, row.Name, "计量伴生入站由系统管理，不能单独启停")
+			continue
+		}
 		if (row.Enabled == 1) == req.Enabled {
 			s++
 			continue
@@ -1316,6 +1380,8 @@ func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
 			kernelIDs = append(kernelIDs, row.KernelID)
 		}
 	}
+	// 启停原入站后同步伴生行启停（对账内部下发受影响内核）。
+	h.reconcileSSMetering()
 	msg := "操作成功"
 	for _, kernelID := range kernelIDs {
 		if err := h.applyKernel(kernelID, false); err != nil {
@@ -1348,6 +1414,10 @@ func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
 		return
 	}
+	if row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能单独启停"))
+		return
+	}
 	row.Enabled = boolToInt(req.Enabled)
 	row.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveNodeInbound(row); err != nil {
@@ -1358,6 +1428,8 @@ func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
+	// 启停原入站后同步伴生行启停（对账内部下发受影响内核）。
+	h.reconcileSSMetering()
 	if err := h.applyKernel(row.KernelID, false); err != nil {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
 		return
@@ -1385,6 +1457,10 @@ func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
 	row, err := h.repo.GetNodeInbound(id)
 	if err != nil || row == nil {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	if row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能更换密钥"))
 		return
 	}
 	if isExternalInbound(row) {
@@ -1495,8 +1571,21 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	users := h.activeUsersByInbound(time.Now())
 	backendPorts := make(map[int]string)
 	publicPorts := make(map[int]string)
+	// A companion inbound renders only while its origin renders: if the
+	// origin is disabled (or gone), the companion must not keep serving
+	// previously distributed metering links. This render-time gate is
+	// the hard invariant; reconcile's Enabled mirroring is bookkeeping.
+	originEnabled := make(map[int64]bool, len(rows))
+	for _, row := range rows {
+		if row.CompanionOf == 0 {
+			originEnabled[row.ID] = row.Enabled == 1
+		}
+	}
 	for _, row := range rows {
 		if row.Enabled != 1 {
+			continue
+		}
+		if row.CompanionOf > 0 && !originEnabled[row.CompanionOf] {
 			continue
 		}
 		in, err := inboundFromModel(row)
@@ -1517,7 +1606,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			}
 			backendPorts[in.Settings.BackendPort] = row.Name
 		}
-		if in.SupportsUsers() {
+		if in.UserCapable() {
 			in.Users = users[in.ID]
 		}
 		if in.Via, err = h.inboundVia(row); err != nil {

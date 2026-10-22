@@ -682,6 +682,11 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		if row.Enabled != 1 {
 			continue
 		}
+		if row.CompanionOf > 0 {
+			// 计量伴生入站不直接产出端点：它只经 subEndpoints 的改指
+			// 服务分享订阅，节点自身链接/普通订阅永不指向它。
+			continue
+		}
 		in, err := inboundFromModel(row)
 		if err != nil {
 			// M-002/M-003：入站解析失败会导致该入站从所有订阅中消失，必须记录
@@ -772,6 +777,11 @@ func (h *Handler) inboundShare(w http.ResponseWriter, r *http.Request) {
 	row, err := h.repo.GetNodeInbound(id)
 	if err != nil || row == nil {
 		response.WriteJSON(w, response.ErrDefault("入站不存在"))
+		return
+	}
+	if row.CompanionOf > 0 {
+		// 伴生入站的密码是身份 PSK，绝不能单独渲染成链接。
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站不提供分享链接"))
 		return
 	}
 	enabled := *row

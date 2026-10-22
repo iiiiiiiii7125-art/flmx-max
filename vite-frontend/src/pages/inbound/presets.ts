@@ -123,6 +123,10 @@ export interface InboundForm {
     | "prefer_ipv6";
   splitRules: SplitRuleForm[];
   enabled: boolean;
+  /** SS subscription metering switch (SS2022, non-ShadowTLS only). */
+  meteringEnabled: boolean;
+  /** Read-only: a metering companion currently exists for this inbound. */
+  meteringActive: boolean;
 }
 
 export interface Preset {
@@ -325,6 +329,8 @@ export function emptyForm(
     outboundIpStrategy: "auto",
     splitRules: [],
     enabled: true,
+    meteringEnabled: false,
+    meteringActive: false,
   };
 }
 
@@ -429,6 +435,8 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     outboundIpStrategy: item.outboundIpStrategy || "auto",
     splitRules: splitFormFromItem(item),
     enabled: item.enabled,
+    meteringEnabled: item.meteringEnabled,
+    meteringActive: item.meteringActive,
   };
 }
 
@@ -585,6 +593,7 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     outboundIpStrategy: form.outboundIpStrategy,
     splitRules: splitPayload(form.splitRules),
     enabled: form.enabled,
+    meteringEnabled: form.meteringEnabled,
   };
 }
 

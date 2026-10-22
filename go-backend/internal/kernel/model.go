@@ -130,6 +130,12 @@ type Inbound struct {
 	// Users are extra clients (subscription users) rendered next to the
 	// inbound's own credentials. Filled in when building a kernel config.
 	Users []User `json:"-"`
+	// Companion marks an SS metering companion inbound: a derived
+	// listener that carries its origin inbound's share subscriptions as
+	// Shadowsocks 2022 multi-user clients so their traffic can be counted
+	// per subscription. Render-time only, filled from the row marker
+	// (NodeInbound.CompanionOf) when building a kernel config.
+	Companion bool `json:"-"`
 	// Via is the proxy the inbound's traffic leaves through (a chained
 	// outbound); nil leaves from the node itself. A Via without a host (its
 	// target was deleted) drops the traffic. Filled in when building a

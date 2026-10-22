@@ -406,6 +406,17 @@ func kernelUser(s *model.Subscription) kernel.User {
 
 // subInboundIDs resolves the subscription's sources against the inbounds.
 func subInboundIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
+	// Companion inbounds are never subscription sources: every caller
+	// of this choke point (user mounts, endpoint building, push sets,
+	// list views) speaks about origins only. Metering retargeting
+	// happens later, at endpoint construction.
+	filtered := make([]model.NodeInbound, 0, len(rows))
+	for _, r := range rows {
+		if r.CompanionOf == 0 {
+			filtered = append(filtered, r)
+		}
+	}
+	rows = filtered
 	if s.SourceAll == 1 {
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
@@ -448,8 +459,40 @@ func subExplicitIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 }
 
 // activeUsersByInbound maps inbound ids to the share subscriptions whose
-// credentials the kernels must currently accept.
+// credentials the kernels must currently accept. SS origins with a
+// metering companion are remapped to the companion's id: the origin
+// stays shared (it would ignore the users anyway) and the companion
+// carries them as SS2022 multi-user clients.
 func (h *Handler) activeUsersByInbound(now time.Time) map[int64][]kernel.User {
+	out := h.rawActiveUsersByInbound(now)
+	if len(out) == 0 {
+		return out
+	}
+	comps, err := h.repo.ListCompanionInbounds()
+	if err != nil || len(comps) == 0 {
+		return out
+	}
+	compByOrigin := make(map[int64]int64, len(comps))
+	for _, c := range comps {
+		if _, ok := compByOrigin[c.CompanionOf]; !ok {
+			compByOrigin[c.CompanionOf] = c.ID
+		}
+	}
+	for originID, users := range out {
+		compID, ok := compByOrigin[originID]
+		if !ok || compID == originID {
+			continue
+		}
+		out[compID] = append(out[compID], users...)
+		delete(out, originID)
+	}
+	return out
+}
+
+// rawActiveUsersByInbound is activeUsersByInbound before the SS
+// companion remap: users are keyed by the inbound the subscription
+// sources (the origin). Metering reconcile reads demand from this form.
+func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User {
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
 		log.Printf("subscription lookup failed: %v", err)
@@ -497,6 +540,9 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 func (h *Handler) syncSubscriptions(now time.Time) {
 	subSyncMu.Lock()
 	defer subSyncMu.Unlock()
+	// SS 计量伴生对账（节流）：物化/回收/同步伴生入站，使其与原入站
+	// 开关和活跃分享订阅需求一致。失败只记日志，下轮重试。
+	h.maybeReconcileSSMetering()
 	// B4/F-058: 先重试未完成的订阅删除（墓碑）。下发成功才硬删行+分配；
 	// 失败留待下一轮。与下方凭据轮换/状态同步的 AppliedActive 机制相互
 	// 独立，本块不读写 AppliedActive。
@@ -572,16 +618,34 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 	}
 	selected := make([]model.NodeInbound, 0, len(want))
 	for _, row := range rows {
-		if want[row.ID] {
+		// Companion inbounds are never subscription sources: they only
+		// serve origins through the retargeting below.
+		if want[row.ID] && row.CompanionOf == 0 {
 			selected = append(selected, row)
 		}
 	}
 	endpoints, _ := h.inboundEndpoints(selected)
 	if isShare(s) {
 		ku := kernelUser(s)
+		companions := h.companionInboundsByOrigin()
 		for i := range endpoints {
-			if endpoints[i].Proxy == nil {
-				endpoints[i].Inbound = endpoints[i].Inbound.ForUser(ku)
+			e := &endpoints[i]
+			// SS metering: retarget direct SS endpoints whose origin
+			// has a live companion to the companion (its port and
+			// identity PSK); ForUser below then stamps the combined
+			// iPSK:uPSK password. Relay endpoints keep pointing at
+			// the origin — the relay forwards land on the origin's
+			// port, with the shared password, as before.
+			if len(companions) > 0 && e.Direct && e.Proxy == nil && e.RelayID == 0 &&
+				e.Inbound.Protocol == kernel.ProtocolShadowsocks {
+				if comp, ok := companions[e.Inbound.ID]; ok {
+					e.CompanionOf = e.Inbound.ID
+					e.Inbound = comp
+					e.Port = comp.Port
+				}
+			}
+			if e.Proxy == nil {
+				e.Inbound = e.Inbound.ForUser(ku)
 			}
 		}
 	}
@@ -624,8 +688,17 @@ func filterEndpointsByUserAssignments(endpoints []kernel.Endpoint, assignments [
 			if relayAllowed[e.RelayID] {
 				filtered = append(filtered, e)
 			}
-		} else if e.Direct && directAllowed[e.Inbound.ID] {
-			filtered = append(filtered, e)
+		} else if e.Direct {
+			// Assignments are written against the origin inbound; an
+			// SS endpoint retargeted to its metering companion still
+			// answers to the origin's id.
+			id := e.Inbound.ID
+			if e.CompanionOf > 0 {
+				id = e.CompanionOf
+			}
+			if directAllowed[id] {
+				filtered = append(filtered, e)
+			}
 		}
 	}
 	return filtered
@@ -742,10 +815,17 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	}
 	shared := []int64{}
 	if isShare(s) {
+		companions := h.companionInboundsByOrigin()
 		for _, id := range ids {
 			row := byID[id]
 			if isExternalInbound(&row) {
 				shared = append(shared, id)
+			} else if _, metered := companions[id]; metered {
+				// SS origin with a live metering companion: new pulls
+				// carry per-subscription credentials and are counted,
+				// so the inbound no longer counts as shared for this
+				// subscription.
+				continue
 			} else if in, err := inboundFromModel(row); err == nil && !in.SupportsUsers() {
 				shared = append(shared, id)
 			}

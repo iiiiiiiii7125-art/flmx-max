@@ -173,7 +173,12 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 		return nil, fmt.Errorf("sing-box 不支持协议 %s", in.Protocol)
 	}
 	if extra := singboxUsers(in); len(extra) > 0 {
-		item["users"] = append(item["users"].([]interface{}), extra...)
+		// The append must be nil-safe: branches that never create a
+		// "users" key (Shadowsocks) previously relied on singboxUsers
+		// returning nil for them; an SS companion's users land here and
+		// the old hard assertion would panic on the missing key.
+		existing, _ := item["users"].([]interface{})
+		item["users"] = append(existing, extra...)
 	}
 
 	if tls, err := singboxTLS(in.Security, acme); err != nil {

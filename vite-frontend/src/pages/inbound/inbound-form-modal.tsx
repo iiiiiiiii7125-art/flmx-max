@@ -1110,6 +1110,28 @@ export function InboundFormModal({
                       value={form.outboundIpStrategy}
                       onChange={(value) => set("outboundIpStrategy", value)}
                     />
+                    {form.protocol === "shadowsocks" &&
+                      form.method.startsWith("2022-") &&
+                      form.securityType !== "shadowtls" && (
+                        <div className="space-y-3 rounded-xl border border-divider p-3">
+                          <div className="flex items-start gap-2">
+                            <Switch
+                              isSelected={form.meteringEnabled}
+                              size="sm"
+                              onValueChange={(v) => set("meteringEnabled", v)}
+                            />
+                            <div>
+                              <p className="text-sm">按订阅计量流量</p>
+                              <p className="text-xs text-default-500">
+                                开启后为分享订阅生成独立凭据并计量；已有链接继续可用但不计量。
+                                {form.meteringActive
+                                  ? "当前计量中：订阅新拉取的节点走独立凭据。"
+                                  : ""}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     <div className="space-y-3 rounded-xl border border-divider p-3">
                       <p className="text-sm font-medium">中转相关</p>
                       <div className="flex items-start gap-2">

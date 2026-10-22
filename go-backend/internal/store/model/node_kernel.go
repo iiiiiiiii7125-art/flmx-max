@@ -63,6 +63,21 @@ type NodeInbound struct {
 	// OutboundIPStrategy scopes the inbound's outbound connections to an
 	// IP family ("auto" = unrestricted; see kernel egress).
 	OutboundIPStrategy string `gorm:"column:outbound_ip_strategy;type:varchar(20);not null;default:'auto'"`
+	// CompanionOf marks an SS metering companion inbound: a
+	// system-managed row derived from the origin inbound it points to
+	// (0 = normal inbound). The companion serves the origin's share
+	// subscriptions with per-user SS2022 credentials so their traffic
+	// can be counted per subscription; it is hidden from inbound lists,
+	// subscription sources and backups, and is materialized/recycled by
+	// reconcile (handler/subscription_metering.go). The partial unique
+	// index keeps at most one companion per origin (normal rows all
+	// carry 0 and are not covered by it).
+	CompanionOf int64 `gorm:"column:companion_of;not null;default:0;index;uniqueIndex:idx_node_inbound_companion,where:companion_of > 0"`
+	// MeteringEnabled is an origin inbound's subscription-metering
+	// switch (self-built Shadowsocks 2022 inbounds only). While on, a
+	// companion inbound is materialized whenever an active share
+	// subscription sources this inbound.
+	MeteringEnabled int `gorm:"column:metering_enabled;not null;default:0"`
 }
 
 func (NodeInbound) TableName() string { return "node_inbound" }
