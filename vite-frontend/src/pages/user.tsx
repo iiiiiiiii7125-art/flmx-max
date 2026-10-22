@@ -70,6 +70,7 @@ import {
 import { PageLoadingState } from "@/components/page-state";
 import { TrafficLimitField } from "@/components/traffic-limit-field";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import { removeItemsById, replaceItemById } from "@/utils/list-state";
 import {
   formatTraffic,
@@ -678,6 +679,9 @@ export default function UserPage({
     }
   };
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const handleSubmitUser = async () => {
     // 与全站口径对齐：用户名 trim 判空、密码最低 6 位（登录/改密同口径）
     if (!userForm.user.trim()) {
@@ -733,7 +737,9 @@ export default function UserPage({
 
       const response = isEdit
         ? await updateUser(submitData)
-        : await createUser(submitData);
+        : await createUser(submitData, idemKey);
+
+      if (response.code === 0 && !isEdit) rotateIdemKey();
 
       if (response.code === 0) {
         toast.success(isEdit ? "更新成功" : "创建成功");

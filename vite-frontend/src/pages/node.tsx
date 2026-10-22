@@ -73,6 +73,7 @@ import { buildNodeSystemInfo } from "@/pages/node/system-info";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
   Node,
@@ -1045,6 +1046,9 @@ export default function NodePage({
     }
   };
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   // 提交表单
   const handleSubmit = async () => {
     if (!validateForm()) return;
@@ -1052,7 +1056,7 @@ export default function NodePage({
     setSubmitLoading(true);
 
     try {
-      const apiCall = isEdit ? updateNode : createNode;
+
       const { serverHost, ...rest } = form;
       const sshConfig =
         form.forwardMode === "nftables"
@@ -1088,7 +1092,11 @@ export default function NodePage({
           "",
       };
 
-      const res = await apiCall(data);
+      const res = isEdit
+        ? await updateNode(data)
+        : await createNode(data, idemKey);
+
+      if (res.code === 0 && !isEdit) rotateIdemKey();
 
       if (res.code === 0) {
         toast.success(isEdit ? "更新成功" : "创建成功");
