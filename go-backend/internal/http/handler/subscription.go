@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
@@ -162,7 +163,8 @@ func (p *subPipeline) normalize() error {
 	}
 	p.ChainSourceFilters = filters
 	// 脚本长度限制（与执行时的 20000 一致，保存时提前拦截）
-	if len(p.Script) > 20000 {
+	// X-P3-3（B-F3/BC-10）：按字符计数，与执行侧 ValidateSubScript 同口径。
+	if utf8.RuneCountInString(p.Script) > 20000 {
 		return errText("脚本过长（最多 20000 字符）")
 	}
 	// 中转范围白名单归一化：去重、剔除负数（0=直连合法）。
