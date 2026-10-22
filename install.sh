@@ -513,6 +513,10 @@ enable_and_start_flux_agent_service() {
     systemd)
       systemctl daemon-reload
       systemctl enable flux_agent
+      # R2X-020 (R2-J-02): 与 agent 侧 scriptStartCommand 同口径——
+      # start 前先清 failed 态，否则 flap 烧穿启动限速后 start 会被
+      # 「Start request repeated too quickly」拒绝。OpenRC 无此限速。
+      systemctl reset-failed flux_agent 2>/dev/null || true
       systemctl start flux_agent
       ;;
     openrc)
@@ -527,6 +531,9 @@ start_flux_agent_service() {
 
   case "$SERVICE_MANAGER" in
     systemd)
+      # R2X-020 (R2-J-02): 同 enable_and_start——start 前清 failed 态
+      # （更新/回滚三调用点共用本函数，一处收口全覆盖）。
+      systemctl reset-failed flux_agent 2>/dev/null || true
       systemctl start flux_agent
       ;;
     openrc)
@@ -774,14 +781,19 @@ EOF
   enable_and_start_flux_agent_service
 
   # 检查状态
+  # R2X-019 (R2-J-01): 判活结果必须进返回码——main（X-P3-6）只传播
+  # 本函数给出的信号；旧实现失败分支末条是 echo 提示、恒返回 0，
+  # 以退出码判断成败的自动化部署（-a/-s）会误判安装成功。
   echo "🔄 检查服务状态..."
   if flux_agent_service_is_active; then
     echo "✅ 安装完成，flux_agent服务已启动并设置为开机启动。"
     echo "📁 配置目录: $INSTALL_DIR"
     echo "🔧 服务状态: $(flux_agent_service_status)"
+    return 0
   else
     echo "❌ flux_agent服务启动失败，请执行以下命令查看状态："
     flux_agent_service_status_hint
+    return 1
   fi
 }
 
@@ -951,7 +963,10 @@ rollback_flux_agent() {
     mv -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flux_agent"
     chmod +x "$INSTALL_DIR/flux_agent"
     start_flux_agent_service
-    if flux_agent_service_is_active; then
+    # 观察 O-1（随 R2X-020 顺手对齐，不计数）：回滚后判活改与更新
+    # 路径/agent 侧同口径的双采样（flux_agent_health_ok），单次采样
+    # 会把回滚二进制的短暂存活窗口误报为成功。
+    if flux_agent_health_ok; then
       echo "✅ 已回滚到旧版本并重启成功。"
     else
       echo "❌ 回滚后服务仍未启动，请手动检查：$INSTALL_DIR"
