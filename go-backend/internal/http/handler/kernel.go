@@ -679,6 +679,9 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	now := time.Now().UnixMilli()
 	var row model.NodeInbound
 	var k *model.NodeKernel
+	// oldIn is the stored inbound an update is based on, captured for the
+	// presence backfill after assembly (R2X-030, below).
+	var oldIn *kernel.Inbound
 	if update {
 		existing, err := h.repo.GetNodeInbound(req.ID)
 		if err != nil || existing == nil {
@@ -697,6 +700,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 		// Keep secrets the client did not resend (the list hides PEM).
 		old, _ := inboundFromModel(row)
+		oldIn = &old
 		if req.Security.Type == old.Security.Type && req.Security.CertMode == old.Security.CertMode &&
 			req.Security.CertPEM == "" && req.Security.KeyPEM == "" {
 			req.Security.CertPEM, req.Security.KeyPEM = old.Security.CertPEM, old.Security.KeyPEM
@@ -744,6 +748,30 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// 会被静默改派随机端口。创建路径不变（仍随机分配）。
 	if update && req.Port == 0 {
 		in.Port = row.Port
+	}
+	// R2X-030：更新时凭据类子字段留空一律回填旧值（verdicts §2.9 全集），
+	// 与上方 PEM/ACME 保留同口径——Normalize 的「留空自动生成」只应作用
+	// 于创建；更新留空无合法的「意图清空」语义，有意轮换走显式新值或
+	// /inbound/regenerate。创建路径不进入本块，行为不变。
+	if update && oldIn != nil {
+		if in.Settings.EncryptionEnabled() && in.Settings.EncryptionSecret == "" {
+			in.Settings.EncryptionSecret = oldIn.Settings.EncryptionSecret
+		}
+		if in.Security.RealityPrivateKey == "" {
+			in.Security.RealityPrivateKey = oldIn.Security.RealityPrivateKey
+		}
+		if len(in.Security.RealityShortIDs) == 0 {
+			in.Security.RealityShortIDs = append([]string(nil), oldIn.Security.RealityShortIDs...)
+		}
+		if strings.TrimSpace(in.Listen) == "" {
+			in.Listen = oldIn.Listen
+		}
+		if in.Settings.UUID == "" {
+			in.Settings.UUID = oldIn.Settings.UUID
+		}
+		if in.Settings.Password == "" {
+			in.Settings.Password = oldIn.Settings.Password
+		}
 	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
