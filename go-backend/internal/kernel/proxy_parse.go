@@ -148,6 +148,14 @@ func validateProxyCredentials(p Proxy) error {
 		if p.str("cipher") == "" || p.str("password") == "" {
 			return errors.New("缺少加密方式或密码")
 		}
+		// R3X-008：SS2022 密钥格式在导入期一处收口（ss 链接 / Clash /
+		// sing-box JSON / Surge 四格式与订阅同步、换链接编辑全部经
+		// finishProxy 到此）。坏 key 会毒化整份 sing-box 订阅，必须
+		// 逐条报错（调用方按条收集、不连坐其余节点）；legacy AEAD
+		// 与未知 cipher 不查，口径见 ValidateSS2022Password。
+		if err := ValidateSS2022Password(p.str("cipher"), p.str("password")); err != nil {
+			return err
+		}
 	case "vmess", "vless":
 		if p.str("uuid") == "" {
 			return errors.New("缺少 UUID")

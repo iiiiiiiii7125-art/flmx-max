@@ -350,6 +350,14 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 	}
 	switch p.Type() {
 	case "ss":
+		// R3X-008 渲染纵深：导入期已逐条报错，此处只兜底存量——SS2022
+		// 密钥不合规的存量节点整节点略过，不让一条脏行毒化整份
+		// sing-box 订阅；SIP023 冒号多段在 sing-box 的支持未证实，
+		// 同样保守略过（Clash / Surge 等格式原样输出）。存量不迁移、
+		// 不自动清理，靠用户编辑/重导入时被导入期校验拦下收敛。
+		if !ValidSS2022SingleKey(p.str("cipher"), p.str("password")) {
+			return nil, false
+		}
 		o["type"] = "shadowsocks"
 		o["method"] = p.str("cipher")
 		o["password"] = p.str("password")

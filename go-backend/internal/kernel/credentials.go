@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,62 @@ func ShadowsocksPassword(method string) string {
 		return base64.StdEncoding.EncodeToString(randomBytes(n))
 	}
 	return RandomPassword()
+}
+
+// decodeSS2022Segment reports whether seg decodes to exactly n bytes
+// under any of the four base64 shapes an SS2022 key appears in in the
+// wild: Std with padding, RawStd, URL with padding, RawURL. The loose
+// decoder (decodeBase64Loose) only tries the two Raw variants and
+// would reject padded standard keys, so it must not be reused here —
+// mis-rejecting legitimate airport keys is this check's worst failure
+// mode (R3X-008).
+func decodeSS2022Segment(seg string, n int) bool {
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(seg); err == nil && len(b) == n {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateSS2022Password checks a Shadowsocks password against the
+// SS2022 key format when method is an SS2022 cipher (required length
+// from SS2022KeyLen, the same source of truth Normalize uses). Legacy
+// AEAD methods and unknown cipher names accept any password and are
+// never checked. SIP023 (EIH) passwords are colon-separated key
+// segments; every segment must independently decode to the key
+// length. This is the single validation helper shared by the import
+// parser and the legacy external-inbound edit path.
+func ValidateSS2022Password(method, password string) error {
+	n := SS2022KeyLen(method)
+	if n == 0 {
+		return nil
+	}
+	for _, seg := range strings.Split(strings.TrimSpace(password), ":") {
+		if !decodeSS2022Segment(seg, n) {
+			return fmt.Errorf("SS2022 密钥必须是 %d 字节的 base64", n)
+		}
+	}
+	return nil
+}
+
+// ValidSS2022SingleKey reports whether password is a single valid
+// SS2022 key for method. SIP023 multi-segment passwords report false
+// (callers that cannot carry them, e.g. the sing-box renderer, skip
+// conservatively). Non-SS2022 methods report true: nothing to check.
+func ValidSS2022SingleKey(method, password string) bool {
+	n := SS2022KeyLen(method)
+	if n == 0 {
+		return true
+	}
+	pw := strings.TrimSpace(password)
+	if strings.Contains(pw, ":") {
+		return false
+	}
+	return decodeSS2022Segment(pw, n)
 }
 
 // RealityKeyPair returns an X25519 key pair in the raw-URL base64 form used by
