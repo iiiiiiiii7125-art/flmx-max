@@ -304,15 +304,15 @@ type remoteUsageNodeItem struct {
 const flmxNoPrivateBypassName = "flmx-no-private"
 
 // flmxNoPrivateMinAgentVersion 是首个内置 flmx-no-private 的 agent
-// 版本（与面板同仓同版发布，即本版 1.3.3）。
-const flmxNoPrivateMinAgentVersion = "1.3.3"
+// 版本（与面板同仓同版发布，即本版 1.3.4）。
+const flmxNoPrivateMinAgentVersion = "1.3.4"
 
 // agentSupportsNoPrivateBypass 判断节点 agent 是否内置了
 // flmx-no-private。版本未知/不可解析一律按不支持处理：旧 agent
 // 对未知 bypass 名是 fail-open（注册表 wrapper 对未注册名的
 // Contains 恒 false——已在 go-gost/x/registry 源码核实），向其
 // 下发该字段只会造成「以为已防护」的假象，故宁可不发，待节点
-// 升级到 1.3.3 后由期望状态重下发自动补上。
+// 升级到 1.3.4 后由期望状态重下发自动补上。
 func agentSupportsNoPrivateBypass(agentVersion string) bool {
 	// R4-N1：agentVersion 是握手上报的 fullVersion（带发行版/架构
 	// 后缀），经上报型比较提取首段语义版本；提取失败（含 dev）仍
@@ -1193,10 +1193,10 @@ func isFederationCleanupRequest(r *http.Request) bool {
 }
 
 // federationRelayAuthPanelVersion 是 D3-04 relay 凭据鉴权上线的面板
-// 版本（FIX-I 随 1.3.3 发布）。低于此版本的消费方不识别 Connect 下发
+// 版本（FIX-I 随 1.3.4 发布）。低于此版本的消费方不识别 Connect 下发
 // 的 relay 凭据、connector 恒无 auth，会被已升级提供方的 role 服务
 // 拒绝——即 V5-3 的静默断裂格。
-const federationRelayAuthPanelVersion = "1.3.3"
+const federationRelayAuthPanelVersion = "1.3.4"
 
 // federationVersionWarning 是给「版本过旧的对端」的统一提示文案
 // （提供方回执与日志、消费方日志共用）。升级顺序按 V5 纠正口径：

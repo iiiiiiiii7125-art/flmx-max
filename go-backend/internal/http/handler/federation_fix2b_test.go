@@ -12,7 +12,7 @@ import (
 
 // FIX2-B（V5-3）：联邦版本可见性与存量期望状态启动复检。
 //   - Connect 回执携带提供方 panelVersion；消费方版本缺失（旧版）或
-//     低于凭据感知版本（1.3.3，D3-04 relay 鉴权上线版本）时，回执带
+//     低于凭据感知版本（1.3.4，D3-04 relay 鉴权上线版本）时，回执带
 //     versionWarning 且提供方记日志，不再静默断裂。
 //   - 启动时对存量 peer_share_resource 期望状态补跑类型白名单复检，
 //     危险存量置 paused 并告警。
@@ -49,13 +49,16 @@ func TestFix2BFederationConnectVersionWarning(t *testing.T) {
 		t.Fatal("V5-3: connect response must carry provider panelVersion")
 	}
 	if warn == "" {
-		t.Fatal("V5-3: version-less (pre-1.3.3) consumer must get a versionWarning, got none")
+		t.Fatal("V5-3: version-less (pre-1.3.4) consumer must get a versionWarning, got none")
 	}
 	if _, warn := call("1.2.0", true); warn == "" {
-		t.Fatal("V5-3: consumer 1.2.0 (< 1.3.3 relay-auth version) must get a versionWarning")
+		t.Fatal("V5-3: consumer 1.2.0 (< 1.3.4 relay-auth version) must get a versionWarning")
 	}
-	if _, warn := call("1.3.3", true); warn != "" {
-		t.Fatalf("V5-3: consumer 1.3.3 must not be warned, got %q", warn)
+	if _, warn := call("1.3.3", true); warn == "" {
+		t.Fatal("V5-3: consumer 1.3.3 (cache hotfix, < 1.3.4 relay-auth version) must get a versionWarning")
+	}
+	if _, warn := call("1.3.4", true); warn != "" {
+		t.Fatalf("V5-3: consumer 1.3.4 must not be warned, got %q", warn)
 	}
 	if _, warn := call("1.4.0", true); warn != "" {
 		t.Fatalf("V5-3: consumer 1.4.0 must not be warned, got %q", warn)

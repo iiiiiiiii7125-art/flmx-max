@@ -84,9 +84,10 @@ func TestAgentSupportsNoPrivateBypassFullVersion(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"1.3.3 (debian/amd64)", true},
+		{"1.3.4 (debian/amd64)", true},
 		{"1.3.4 (linux/arm64)", true},
-		{"1.3.3", true},
+		{"1.3.4", true},
+		{"1.3.3 (debian/amd64)", false},
 		{"1.3.2 (debian/amd64)", false},
 		{"1.3.0 (debian/amd64)", false},
 		{"dev", false},
@@ -106,7 +107,10 @@ func TestFederationConsumerVersionWarningFullVersion(t *testing.T) {
 	if w := federationConsumerVersionWarning("1.3.2 (debian/amd64)"); w == "" {
 		t.Fatal("old peer reporting fullVersion should produce a version warning")
 	}
-	if w := federationConsumerVersionWarning("1.3.3 (debian/amd64)"); w != "" {
+	if w := federationConsumerVersionWarning("1.3.3 (debian/amd64)"); w == "" {
+		t.Fatal("1.3.3 peer (pre relay-auth) reporting fullVersion should produce a version warning")
+	}
+	if w := federationConsumerVersionWarning("1.3.4 (debian/amd64)"); w != "" {
 		t.Fatalf("current peer reporting fullVersion should not warn, got %q", w)
 	}
 	if w := federationConsumerVersionWarning("dev"); w != "" {
