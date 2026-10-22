@@ -165,11 +165,13 @@ func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 }
 
 func TestExternalProbeContract(t *testing.T) {
+	// R2 登记 #3：probe 目标迁至本机非 loopback RFC1918 地址（无可用地址时 Skip）。
+	probeAddr := probeFixtureLocalAddr(t)
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", net.JoinHostPort(probeAddr, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +185,7 @@ func TestExternalProbeContract(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	closed, _ := net.Listen("tcp", net.JoinHostPort(probeAddr, "0"))
 	deadPort := closed.Addr().(*net.TCPAddr).Port
 	_ = closed.Close()
 
@@ -192,10 +194,11 @@ func TestExternalProbeContract(t *testing.T) {
 	if out := kernelContractPost(t, router, admin, "/api/v1/inbound/import", `{"links":"`+links+`"}`); out.Code != 0 {
 		t.Fatalf("import: %+v", out)
 	}
-	// Import refuses loopback addresses, so point the rows at local ports.
+	// Import refuses loopback addresses and probe will not dial them
+	// (R2X-005), so point the rows at local ports on the RFC1918 address.
 	upPort := ln.Addr().(*net.TCPAddr).Port
 	for name, port := range map[string]int{"up": upPort, "down": deadPort} {
-		if err := r.DB().Exec(`UPDATE node_inbound SET listen = '127.0.0.1', port = ? WHERE name = ?`, port, name).Error; err != nil {
+		if err := r.DB().Exec(`UPDATE node_inbound SET listen = ?, port = ? WHERE name = ?`, probeAddr, port, name).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
