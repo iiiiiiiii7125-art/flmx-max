@@ -64,6 +64,29 @@ export function eligibleNodes(nodes: NodeApiItem[]): NodeApiItem[] {
   );
 }
 
+/** The node's address of one family (DB-2): the family field wins; the
+ * primary serverIp counts when it belongs to that family. Mirrors the
+ * backend resolver — the server re-validates on save regardless. */
+export function nodeFamilyIP(
+  node: NodeApiItem | undefined,
+  ipv6: boolean,
+): string {
+  if (!node) return "";
+  const candidates = [ipv6 ? node.serverIpV6 : node.serverIpV4, node.serverIp];
+
+  for (const raw of candidates) {
+    const value = (raw ?? "").trim().replace(/^\[|\]$/g, "");
+
+    if (!value) continue;
+    const isV6 = value.includes(":") && !value.includes(".");
+    const isV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
+
+    if (ipv6 ? isV6 : isV4) return value;
+  }
+
+  return "";
+}
+
 export function InboundFormModal({
   isOpen,
   onOpenChange,
@@ -79,7 +102,7 @@ export function InboundFormModal({
   const [initialKey, setInitialKey] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
-    initial.outboundIpStrategy !== "auto",
+    initial.outboundIpStrategy !== "auto" || initial.shareAddressMode !== "auto",
   );
   const isEdit = Boolean(initial.id);
 
@@ -87,7 +110,10 @@ export function InboundFormModal({
   if (initialKey !== initial) {
     setInitialKey(initial);
     setForm(initial);
-    setShowAdvanced(initial.outboundIpStrategy !== "auto");
+    setShowAdvanced(
+      initial.outboundIpStrategy !== "auto" ||
+        initial.shareAddressMode !== "auto",
+    );
   }
 
   const set = <K extends keyof InboundForm>(key: K, value: InboundForm[K]) =>
@@ -222,6 +248,12 @@ export function InboundFormModal({
     if (form.name.trim().length > 100) return "名称不能超过 100 个字符";
     if (form.shareHost.trim().length > 255)
       return "分享地址不能超过 255 个字符";
+    if (form.shareAddressMode === "custom" && !form.shareHost.trim())
+      return "请填写自定义分享地址";
+    if (form.shareAddressMode === "ipv4" && !shareV4)
+      return "节点未设置可用的 IPv4 地址";
+    if (form.shareAddressMode === "ipv6" && !shareV6)
+      return "节点未设置可用的 IPv6 地址";
     if (form.port.trim()) {
       const port = Number(form.port);
 
@@ -350,6 +382,9 @@ export function InboundFormModal({
   };
 
   const nodeOptions = eligibleNodes(nodes);
+  const selectedNode = nodeOptions.find((n) => String(n.id) === form.nodeId);
+  const shareV4 = nodeFamilyIP(selectedNode, false);
+  const shareV6 = nodeFamilyIP(selectedNode, true);
 
   return (
     <Modal
@@ -1024,14 +1059,47 @@ export function InboundFormModal({
                         variant="bordered"
                         onChange={(e) => set("listen", e.target.value)}
                       />
-                      <Input
-                        description="客户端连接的地址，留空使用节点 IP"
+                      <Select
+                        description="分享链接、订阅与链式下一跳统一使用该地址"
                         label="分享地址"
+                        selectedKeys={[form.shareAddressMode]}
+                        onSelectionChange={(keys) =>
+                          set(
+                            "shareAddressMode",
+                            String(Array.from(keys)[0] ?? "auto"),
+                          )
+                        }
+                      >
+                        <SelectItem key="auto" textValue="自动（节点默认地址）">
+                          自动（节点默认地址）
+                        </SelectItem>
+                        <SelectItem
+                          key="ipv4"
+                          textValue={`节点 IPv4${shareV4 ? ` · ${shareV4}` : ""}`}
+                        >
+                          {`节点 IPv4${shareV4 ? ` · ${shareV4}` : ""}`}
+                        </SelectItem>
+                        <SelectItem
+                          key="ipv6"
+                          textValue={`节点 IPv6${shareV6 ? ` · ${shareV6}` : ""}`}
+                        >
+                          {`节点 IPv6${shareV6 ? ` · ${shareV6}` : ""}`}
+                        </SelectItem>
+                        <SelectItem key="custom" textValue="自定义域名 / IP">
+                          自定义域名 / IP
+                        </SelectItem>
+                      </Select>
+                    </div>
+                    {form.shareAddressMode === "custom" && (
+                      <Input
+                        description="分享和订阅时显示的连接地址；节点地址变化后，IPv4/IPv6 选项会自动跟随"
+                        label="自定义分享地址"
+                        placeholder="例如 cdn.example.com"
                         value={form.shareHost}
                         variant="bordered"
                         onChange={(e) => set("shareHost", e.target.value)}
                       />
-                    </div>
+                    )}
                     <OutboundIPSelect
                       kernelType={form.kernelType}
                       value={form.outboundIpStrategy}

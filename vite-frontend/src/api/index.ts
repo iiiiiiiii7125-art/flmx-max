@@ -139,6 +139,13 @@ export const getUserPackageInfo = () =>
 export const createNode = (data: NodeMutationPayload, idemKey?: string) =>
   Network.post("/node/create", data, { idemKey });
 export const getNodeList = () => Network.post<NodeApiItem[]>("/node/list");
+/** DA-2: per-node NIC traffic since the 1st of this month (viewer TZ),
+ * as {"<nodeId>": [inBytes, outBytes]}. Whole-NIC counters — not the
+ * tunnel billing figures. */
+export const getNodeMonthTraffic = () =>
+  Network.post<Record<string, [number, number]>>("/node/traffic/month", {
+    tzOffset: -new Date().getTimezoneOffset(),
+  });
 export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
