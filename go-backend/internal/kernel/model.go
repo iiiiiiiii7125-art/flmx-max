@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -428,8 +427,14 @@ func normalizeSettings(in *Inbound) error {
 			s.Password = ShadowsocksPassword(s.Method)
 		}
 		if n := SS2022KeyLen(s.Method); n > 0 {
-			key, err := base64.StdEncoding.DecodeString(s.Password)
-			if err != nil || len(key) != n {
+			// R4X-013: 与导入面同一四形态解码核（Std / RawStd /
+			// URL / RawURL 任一解出恰 N 字节即合法）——此前这里只
+			// 认 Std 单形态，误拒其余三种合法密钥。复用
+			// ValidSS2022SingleKey 同时带来单段限定：自建入站密码
+			// 是服务端单密钥，SIP023 冒号多段在此仍拒，不得把
+			// 导入面的多段接受性带入自建面。落库保留原样，线格式
+			// 由渲染侧 NormalizedSS2022Password 归一。
+			if !ValidSS2022SingleKey(s.Method, s.Password) {
 				return fmt.Errorf("%s 的密钥必须是 %d 字节的 base64", s.Method, n)
 			}
 		}
