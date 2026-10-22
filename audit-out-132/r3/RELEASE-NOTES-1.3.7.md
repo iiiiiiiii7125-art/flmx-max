@@ -127,9 +127,9 @@ R3 全量审计修复版：以 1.3.6 为基线完成新一轮「基线 → 12 �
 ## 凭据
 
 - 集成来源：`integrate-r3 @ bf4423d`（R3 修复 32/32 + 发版门定点修复 3 项；发版门首轮不放行 → 定点修复 → 复验全 PASS 放行）。
-- main：（发布后回填）
-- tag：（发布后回填）
-- CI：（发布后回填）
-- Release：（发布后回填）
+- main：`2356a3e`（merge integrate-r3: FLMX 1.3.7 R3 审计修复版，零丢提交）+ `801da26`（技能包版本字面量同步 1.3.7）+ 本发版说明定稿提交 `4662af8`（tag 指向点）。
+- tag：`1.3.7`（纯数字，指向本说明定稿提交 `4662af8`，远端已核对）。
+- CI：主发版流 Build and Push Images run `39852615134` **success**（五 job 全绿，含 Create Release）；Deploy Docs run `39852611246` **success**；Publish Skill to npm run `39852615163` failure（Publish to npm 步 `ENEEDAUTH`，惯例红、不阻塞）；main CI Build Check run `39852611344` **failure（单点）**——6 job 中 5 个 success，其中 **Build Frontend 的 Check online demo 与 Check contract fields 双双 success（1.3.6 的两处红本版转绿）**、Go Backend PostgreSQL Contract（真 PG 实跑）success；唯一红为 Go Full Tests 的一条契约用例时序竞态（`TestFederationRuntimeCommandPortRangeEnforcement`，attempt 1 与失败 job 复跑 attempt 2 同点同签名），已定案为测试侧既存竞态、非本版引入、非产品缺陷（本地同 HEAD 单测 13/13、CPU 饱和 6/6、全量套件 contract 包 ok 三组隔离证据；受测代码路径本版零 diff），不阻塞发布，定案全文与 deflake 立项见发布报告 `RELEASE-137.md` §3。
+- Release：Published（2026-10-22T21:03:51Z，target `4662af8`），https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/1.3.7 ；12 个资产逐个下载核对 **12/12 sha 与发布 `.sha256` 一致**；发布副本 `PINNED_VERSION="1.3.7"`、`REPO="iiiiiiiii7125-art/flmx-max"`、compose 镜像标签 `:1.3.7`、发布 `gost-amd64 -V` = `gost 1.3.7 (go1.25.14 linux/amd64)` 均已核。GHCR 标签 API 因当前 token 无 `read:packages` 返回 Not Found 未核，镜像推送以主发版流 Build & Push 两 job success 为据。明细见发布报告 `RELEASE-137.md`。
 
 —— 本发版说明以本行结尾（落盘字节数与尾行探针复核见发布报告）。
