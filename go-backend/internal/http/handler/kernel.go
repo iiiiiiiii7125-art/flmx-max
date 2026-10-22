@@ -679,6 +679,9 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	now := time.Now().UnixMilli()
 	var row model.NodeInbound
 	var k *model.NodeKernel
+	// oldIn is the stored inbound an update is based on, captured for the
+	// presence backfill after assembly (R2X-030, below).
+	var oldIn *kernel.Inbound
 	if update {
 		existing, err := h.repo.GetNodeInbound(req.ID)
 		if err != nil || existing == nil {
@@ -697,6 +700,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 		// Keep secrets the client did not resend (the list hides PEM).
 		old, _ := inboundFromModel(row)
+		oldIn = &old
 		if req.Security.Type == old.Security.Type && req.Security.CertMode == old.Security.CertMode &&
 			req.Security.CertPEM == "" && req.Security.KeyPEM == "" {
 			req.Security.CertPEM, req.Security.KeyPEM = old.Security.CertPEM, old.Security.KeyPEM
@@ -744,6 +748,30 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// 会被静默改派随机端口。创建路径不变（仍随机分配）。
 	if update && req.Port == 0 {
 		in.Port = row.Port
+	}
+	// R2X-030：更新时凭据类子字段留空一律回填旧值（verdicts §2.9 全集），
+	// 与上方 PEM/ACME 保留同口径——Normalize 的「留空自动生成」只应作用
+	// 于创建；更新留空无合法的「意图清空」语义，有意轮换走显式新值或
+	// /inbound/regenerate。创建路径不进入本块，行为不变。
+	if update && oldIn != nil {
+		if in.Settings.EncryptionEnabled() && in.Settings.EncryptionSecret == "" {
+			in.Settings.EncryptionSecret = oldIn.Settings.EncryptionSecret
+		}
+		if in.Security.RealityPrivateKey == "" {
+			in.Security.RealityPrivateKey = oldIn.Security.RealityPrivateKey
+		}
+		if len(in.Security.RealityShortIDs) == 0 {
+			in.Security.RealityShortIDs = append([]string(nil), oldIn.Security.RealityShortIDs...)
+		}
+		if strings.TrimSpace(in.Listen) == "" {
+			in.Listen = oldIn.Listen
+		}
+		if in.Settings.UUID == "" {
+			in.Settings.UUID = oldIn.Settings.UUID
+		}
+		if in.Settings.Password == "" {
+			in.Settings.Password = oldIn.Settings.Password
+		}
 	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
@@ -1310,6 +1338,16 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		if in.Split, err = h.inboundSplit(row); err != nil {
 			return nil, "", err
 		}
+		// R2X-007 下发面：存量脏组合（保存期未拦）在下发期同判——任一
+		// Via/分流目标带 ENC 且拨号内核 Xray <25.6.8，整单拒绝。
+		if msg := encDialGate(k.KernelType, k.Version, in.Via); msg != "" {
+			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
+		}
+		for _, rule := range in.Split {
+			if msg := encDialGate(k.KernelType, k.Version, rule.Via); msg != "" {
+				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
+			}
+		}
 		inbounds = append(inbounds, in)
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.NetworkOn(k.KernelType)}
 		if lo, hi := in.HopRange(); lo > 0 {
@@ -1567,6 +1605,32 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	return ""
 }
 
+// encDialGate 是 R2X-007 的 ENC 拨号侧版本门：链式/分流目标带 VLESS
+// 加密时，拨号方内核同样需要 Xray 25.6.8+——ENC 不只是服务端属性。
+// 版本比较与入站自有门（kernelVersionGate）同用 versionBelow3，保持
+// 单一口径；保存（validateChainVersion）、下发（buildKernelApplyPayload）
+// 与换版扫描（checkKernelVersionGates）三面共用。返回空串表示通过。
+func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
+	if e == nil || kernelType != kernel.TypeXray || !versionBelow3(version, 25, 6, 8) || !e.HasVLESSEncryption() {
+		return ""
+	}
+	return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
+}
+
+// inboundRowHasENC reports whether a stored inbound row carries VLESS
+// encryption, whether it is a self-built inbound (Settings) or an
+// imported node (proxy in Extra).
+func (h *Handler) inboundRowHasENC(target *model.NodeInbound) bool {
+	if target == nil {
+		return false
+	}
+	in, err := inboundFromModel(*target)
+	if err != nil {
+		return false
+	}
+	return kernel.Endpoint{Inbound: in, Proxy: importedProxy(target)}.HasVLESSEncryption()
+}
+
 // checkKernelVersionGates refuses a kernel (re)install whose target version
 // would break an existing inbound's version gate（F-021，仿 checkSnellVersions）。
 func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version string) error {
@@ -1588,6 +1652,16 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && t.Protocol == kernel.ProtocolSnell {
 					return fmt.Errorf("入站 %s 经 Snell 节点 %s 出站，需要 sing-box 1.14 及以上，不能安装 %s", row.Name, t.Name, version)
+				}
+			}
+		}
+		// R2X-007：经 ENC 节点出站（链式/分流目标）的入站同样要求拨号
+		// 内核 Xray 25.6.8+；目标入站不在本内核上，gate 看不到，须单独
+		// 扫描（仿上方 Snell 扫描块）。
+		if kernelType == kernel.TypeXray && versionBelow3(version, 25, 6, 8) {
+			for _, id := range outboundTargets(row) {
+				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowHasENC(t) {
+					return fmt.Errorf("入站 %s 经 VLESS 加密节点 %s 出站，需要 Xray 25.6.8 及以上，不能安装 %s", row.Name, t.Name, version)
 				}
 			}
 		}
