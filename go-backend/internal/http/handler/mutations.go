@@ -4447,15 +4447,33 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := asString(req["name"])
+	// R4X-019: presence 语义（对照 groupUpdate 正本）——先读存量行，
+	// 缺席的 name/speed/status 回填旧值，不再被硬默认（speed→100、
+	// status→1）静默改写；name 在场但为空仍是显式错误。创建面的
+	// 100/1 是创建语义，不在此列。
+	old, err := h.repo.GetSpeedLimit(id)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if old == nil {
+		response.WriteJSON(w, response.ErrDefault("限速规则不存在"))
+		return
+	}
+
+	name := old.Name
+	if _, ok := req["name"]; ok {
+		name = asString(req["name"])
+	}
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空"))
 		return
 	}
 
-	speed := asInt(req["speed"], 100)
+	speed := asInt(req["speed"], old.Speed)
+	status := asInt(req["status"], old.Status)
 
-	if err := h.repo.UpdateSpeedLimit(id, name, speed, asInt(req["status"], 1), time.Now().UnixMilli()); err != nil {
+	if err := h.repo.UpdateSpeedLimit(id, name, speed, status, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}

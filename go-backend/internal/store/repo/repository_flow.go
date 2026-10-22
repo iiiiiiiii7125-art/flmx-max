@@ -494,6 +494,25 @@ func (r *Repository) CountActiveForwardsByUserTunnel(userID, tunnelID int64) (in
 	return count, err
 }
 
+// GetSpeedLimit returns the full stored speed-limit row (any status), or
+// nil when it does not exist. R4X-019: speedLimitUpdate needs the stored
+// row as its presence backfill source; GetSpeedLimitSpeed cannot serve
+// (it filters status=1 and selects only the speed column).
+func (r *Repository) GetSpeedLimit(id int64) (*model.SpeedLimit, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var sl model.SpeedLimit
+	err := r.db.Where("id = ?", id).First(&sl).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &sl, nil
+}
+
 func (r *Repository) GetSpeedLimitSpeed(id int64) (int, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
