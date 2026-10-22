@@ -9,6 +9,8 @@ import { AnimatedPage } from "@/components/animated-page";
 import { RelayLatencyCell } from "@/components/relay-latency";
 import { PageLoadingState } from "@/components/page-state";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import TunnelPage from "@/pages/tunnel";
@@ -51,7 +53,7 @@ function LinesView() {
     "list",
   );
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { silent?: boolean }) => {
     try {
       const [inRes, relRes] = await Promise.all([
         getInboundList(),
@@ -59,8 +61,17 @@ function LinesView() {
       ]);
 
       if (inRes.code === 0) setInbounds(inRes.data ?? []);
-      if (relRes.code === 0) setRelays(relRes.data ?? []);
-      if (inRes.code !== 0) toast.error(inRes.msg || "加载失败");
+      if (relRes.code === 0)
+        setRelays((prev) => {
+          const previous = new Map(prev.map((r) => [r.id, r]));
+
+          return (relRes.data ?? []).map((r) => ({
+            ...r,
+            latency: latestProbe(r.latency, previous.get(r.id)?.latency),
+          }));
+        });
+      if (inRes.code !== 0 && !options?.silent)
+        toast.error(inRes.msg || "加载失败");
     } finally {
       setLoading(false);
     }
@@ -69,6 +80,10 @@ function LinesView() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // DB-3（移植自 kure29/flyx 3.3.33）：中转线路延迟只随列表回包
+  // 更新——15 秒可见性轮询让重连重测/定时轮次的结果及时显现。
+  useVisiblePolling(useCallback(() => load({ silent: true }), [load]));
 
   /** 移植自 kure29/flyx：测中转线路的分段延迟（Lane D），结果按线路 id 合并回列表。 */
   const probe = useCallback(
@@ -88,7 +103,9 @@ function LinesView() {
 
         setRelays((prev) =>
           prev.map((r) =>
-            data[String(r.id)] ? { ...r, latency: data[String(r.id)] } : r,
+            data[String(r.id)]
+              ? { ...r, latency: latestProbe(data[String(r.id)], r.latency) }
+              : r,
           ),
         );
       } catch {
