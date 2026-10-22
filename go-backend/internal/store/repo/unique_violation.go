@@ -11,6 +11,15 @@ var (
 	errPortInUse      = errors.New("端口已被占用")
 )
 
+// ErrUsernameExists 是 errUsernameExists 的导出别名：handler 层用
+// errors.Is 识别提交段复检/唯一约束命中的同名用户，映射回与锁外
+// 预检一致的友好响应（R2X-049）。
+var ErrUsernameExists = errUsernameExists
+
+// ErrTunnelNameDuplicate 是 tunnel 提交段同名复检命中的哨兵错误
+// （R2X-049）：tunnel 表无唯一索引，复检拒绝靠它回传 handler。
+var ErrTunnelNameDuplicate = errors.New("隧道名称重复")
+
 // R5-B4: 唯一约束冲突检测。
 //
 // 将 DB 层的唯一约束冲突映射为友好错误，避免暴露 SQL 原文。

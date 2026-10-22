@@ -79,6 +79,18 @@ func (r *Repository) CreateUserTx(tx *gorm.DB, username, pwdHash string, roleID 
 	if tx == nil {
 		return 0, errors.New("database unavailable")
 	}
+	// R2X-049（补批13）：提交段内复检同名。userCreate 的第一道检查
+	// 在事务之外，并发同名可同时通过预检；落库前在事务内再查一次，
+	// 存在即拒绝。此处不依赖 DB 唯一索引：model.User 无 uniqueIndex
+	// tag，R5-B4 v1 迁移在存量有重复时按 D23 跳过建索引，「无用户名
+	// 唯一索引」是受支持状态，复检是该状态下的唯一防线。
+	var dupCnt int64
+	if err := tx.Model(&model.User{}).Where(`"user" = ?`, username).Count(&dupCnt).Error; err != nil {
+		return 0, err
+	}
+	if dupCnt > 0 {
+		return 0, errUsernameExists
+	}
 	user := model.User{
 		User:              username,
 		Pwd:               pwdHash,
@@ -2195,6 +2207,26 @@ func (r *Repository) BatchUpdateForwardStatus(ids []int64, status int) (int, int
 		}
 	}
 	return s, f
+}
+
+// InsertTunnelTx 是 tunnelCreate 提交段的落库函数（R2X-049 补批13）：
+// 在提交事务内先复检同名、再建行并回填 ID。tunnelCreate 的第一道
+// 检查在任何锁/事务之外，其后隔着验证段与可达秒级的联邦 HTTP 才到
+// 提交段，无复检时并发同名可双建；tunnel 表无任何唯一索引，复检是
+// 唯一防线（裁定明确不加 uniqueIndex：N-29 迁移口径 + 存量重名
+// 未预检）。
+func (r *Repository) InsertTunnelTx(tx *gorm.DB, tunnel *model.Tunnel) error {
+	if tx == nil || tunnel == nil {
+		return errors.New("database unavailable")
+	}
+	var dupCnt int64
+	if err := tx.Model(&model.Tunnel{}).Where("name = ?", tunnel.Name).Count(&dupCnt).Error; err != nil {
+		return err
+	}
+	if dupCnt > 0 {
+		return ErrTunnelNameDuplicate
+	}
+	return tx.Create(tunnel).Error
 }
 
 func (r *Repository) CreateTunnelTx(tx *gorm.DB, name string, trafficRatio float64, typeVal int, flow int64, now int64, status int, inIP interface{}, inx int, ipPreference string, probeTargetHost string, probeTargetPort int) (int64, error) {

@@ -132,6 +132,11 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 	defer func() { tx.Rollback() }()
 	userID, err := h.repo.CreateUserTx(tx, username, hashedPassword, roleID, expTime, flow, flowResetTime, num, status, maxConn, now, flowMiB)
 	if err != nil {
+		// R2X-049：提交段复检命中同名时，与锁外预检同口径回友好文案。
+		if errors.Is(err, repo.ErrUsernameExists) {
+			response.WriteJSON(w, response.ErrDefault("用户名已存在"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1439,9 +1444,15 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		ProbeTargetPort: probeTargetPort,
 		Engine:          engine,
 	}
-	if err := tx.Create(&tunnel).Error; err != nil {
+	// R2X-049：提交段落库走 InsertTunnelTx——事务内复检同名后才建行
+	// （锁外预检与此处之间隔着联邦 HTTP，并发同名曾可双建）。
+	if err := h.repo.InsertTunnelTx(tx, &tunnel); err != nil {
 		tx.Rollback()
 		releasePortLocks()
+		if errors.Is(err, repo.ErrTunnelNameDuplicate) {
+			response.WriteJSON(w, response.ErrDefault("隧道名称重复"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
