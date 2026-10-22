@@ -332,6 +332,36 @@ func (h *Handler) resyncManagedRelayRemoteAddrsForTunnel(tunnelID int64) []strin
 	return warnings
 }
 
+// resyncManagedRelayRemoteAddrForForward is the single-forward member
+// of the resync funnel (R3X-002): one forward's managed relay is
+// recomputed from its (newly stored) tunnel with the same
+// recomputedRelayRemoteAddr + applyRelayRemoteAddr steps the batch
+// tunnel change uses (:4288 口径), for callers — forwardUpdate after a
+// tunnel switch — whose commit has already landed. A non-managed
+// forward is a no-op (recomputedRelayRemoteAddr reports no change);
+// failures are returned as warnings, never silent.
+func (h *Handler) resyncManagedRelayRemoteAddrForForward(forwardID int64) []string {
+	fwd, err := h.getForwardRecord(forwardID)
+	if err != nil || fwd == nil {
+		return []string{fmt.Sprintf("中转目标地址重算失败: 转发不存在 (%v)", err)}
+	}
+	tunnel, err := h.getTunnelRecord(fwd.TunnelID)
+	if err != nil || tunnel == nil {
+		return []string{fmt.Sprintf("中转目标地址重算失败: 隧道不存在 (%v)", err)}
+	}
+	newAddr, changed, rerr := h.recomputedRelayRemoteAddr(fwd, tunnel)
+	if rerr != nil {
+		return []string{fmt.Sprintf("中转「%s」目标地址重算失败: %v", fwd.Name, rerr)}
+	}
+	if !changed {
+		return nil
+	}
+	if err := h.applyRelayRemoteAddr(fwd, newAddr); err != nil {
+		return []string{fmt.Sprintf("中转「%s」目标地址同步失败: %v", fwd.Name, err)}
+	}
+	return nil
+}
+
 // resyncManagedRelayRemoteAddrsForInbound is the inbound-side twin: every
 // managed relay of the inbound is recomputed from its own tunnel's stored
 // state (R2X-009: 入站 Port/Listen 变更、落地节点改址后调用）。
