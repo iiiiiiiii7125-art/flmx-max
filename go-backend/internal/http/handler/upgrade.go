@@ -482,9 +482,19 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 
 	for i, id := range req.IDs {
+		// X-P3-26：派发前检查请求上下文——客户端断开/取消后不再派发剩余节点。
+		if ctxErr := r.Context().Err(); ctxErr != nil {
+			results[i] = upgradeResult{ID: id, Success: false, Message: fmt.Sprintf("请求已取消: %v", ctxErr)}
+			continue
+		}
 		// L-001：先获取信号量再启动 goroutine，避免大量 IDs 时 goroutine 数 = IDs 数导致内存 spike
 		// 旧逻辑：先启动所有 goroutine，信号量在内部限制并发，1000 个 IDs 就创建 1000 个 goroutine
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-r.Context().Done():
+			results[i] = upgradeResult{ID: id, Success: false, Message: fmt.Sprintf("请求已取消: %v", r.Context().Err())}
+			continue
+		}
 		wg.Add(1)
 		go func(index int, nodeID int64) {
 			defer wg.Done()
@@ -512,7 +522,7 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			result, err := h.wsServer.SendCommand(nodeID, "UpgradeAgent", batchUpgradeData, upgradeTimeout)
+			result, err := h.wsServer.SendCommandContext(r.Context(), nodeID, "UpgradeAgent", batchUpgradeData, upgradeTimeout)
 			if err != nil {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: err.Error()}
 				return
