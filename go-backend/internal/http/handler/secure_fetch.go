@@ -40,9 +40,43 @@ const (
 var secureFetchMaxBody = int64(50 * 1024 * 1024) // 50MB
 
 // metadataBlacklist: 云元数据地址，任何配置都不能放行。
+// R1 X-P3-32（X-CS1，V-04）：补阿里云元数据 100.100.100.200——此前
+// 在 ALLOW_PRIVATE=true / allowlist 含 100.64/10 时可达，与本表
+// 「任何配置都不能放行」的自述口径不符。
 var metadataBlacklist = []net.IP{
 	net.ParseIP("169.254.169.254"),
 	net.ParseIP("fd00:ec2::254"),
+	net.ParseIP("100.100.100.200"),
+}
+
+// nat64WellKnownPrefix 是 RFC 6052 公共 NAT64 前缀 64:ff9b::/96，
+// 低 32 位内嵌一个 IPv4 地址（R1 X-P3-32）。
+var nat64WellKnownPrefix = func() *net.IPNet {
+	_, n, _ := net.ParseCIDR("64:ff9b::/96")
+	return n
+}()
+
+// extractNAT64IPv4 提取 64:ff9b::/96 地址内嵌的 IPv4。
+func extractNAT64IPv4(ip net.IP) (net.IP, bool) {
+	ip16 := ip.To16()
+	if ip16 == nil || ip.To4() != nil {
+		return nil, false
+	}
+	if !nat64WellKnownPrefix.Contains(ip16) {
+		return nil, false
+	}
+	return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]), true
+}
+
+// effectiveFetchIP 返回判定口径上的有效地址：IPv4-mapped 展开后，
+// NAT64 地址取其内嵌 IPv4，使内嵌的元数据/私网地址走同一判定，
+// 不再被当作公网 IPv6 放行（R1 X-P3-32）。
+func effectiveFetchIP(ip net.IP) net.IP {
+	ip = expandIPv4Mapped(ip)
+	if embedded, ok := extractNAT64IPv4(ip); ok {
+		return embedded
+	}
+	return ip
 }
 
 // expandIPv4Mapped 展开 IPv4-mapped IPv6（::ffff:169.254.169.254 → 169.254.169.254）。
@@ -54,11 +88,19 @@ func expandIPv4Mapped(ip net.IP) net.IP {
 }
 
 // isMetadataAddress 检查是否为元数据地址（展开后）。
+// R1 X-P3-32：NAT64 地址按内嵌 IPv4 一并判定。
 func isMetadataAddress(ip net.IP) bool {
 	ip = expandIPv4Mapped(ip)
 	for _, blocked := range metadataBlacklist {
 		if ip.Equal(blocked) {
 			return true
+		}
+	}
+	if embedded, ok := extractNAT64IPv4(ip); ok {
+		for _, blocked := range metadataBlacklist {
+			if embedded.Equal(blocked) {
+				return true
+			}
 		}
 	}
 	return false
@@ -130,9 +172,11 @@ func validateFetchIP(ip net.IP, rawURL, scheme string) error {
 		return fmt.Errorf("metadata address blocked: %s", ipStr)
 	}
 
-	// ③ 私网/特殊地址判定。
-	if isPrivateIP(ip) {
-		if !isPrivateAllowed(ip) {
+	// ③ 私网/特殊地址判定。R1 X-P3-32：NAT64 地址按内嵌 IPv4
+	// 判定（judgeIP），内嵌私网不得绕过 allowlist。
+	judgeIP := effectiveFetchIP(ip)
+	if isPrivateIP(judgeIP) {
+		if !isPrivateAllowed(judgeIP) {
 			auditFetchLog("reject", rawURL, ipStr, "private_not_allowlisted")
 			return fmt.Errorf("private network not allowlisted: %s", ipStr)
 		}
@@ -196,7 +240,8 @@ func secureFetchDialContext(ctx context.Context, network, addr string) (net.Conn
 		if isMetadataAddress(ip) {
 			return nil, fmt.Errorf("metadata address blocked at dial: %s", ip)
 		}
-		if isPrivateIP(ip) && !isPrivateAllowed(ip) {
+		// R1 X-P3-32：拨号侧同口径，NAT64 按内嵌 IPv4 判定。
+		if judgeIP := effectiveFetchIP(ip); isPrivateIP(judgeIP) && !isPrivateAllowed(judgeIP) {
 			return nil, fmt.Errorf("private IP blocked at dial: %s", ip)
 		}
 	}
