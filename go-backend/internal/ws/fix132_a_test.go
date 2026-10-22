@@ -249,6 +249,12 @@ func TestBroadcastNotBlockedBySlowConsumer(t *testing.T) {
 
 	_ = dialAdmin(t, ts, 8)     // 慢消费者：连上后永不读
 	fast := dialAdmin(t, ts, 9) // 正常消费者
+	// R1-B10 deflake：先等两个 admin 会话登记落点再灌 metric——
+	// 广播只投已登记会话，正常消费者登记滞后于灌注时收不到任何
+	// 一条，会被误判成队头阻塞（与 TestCommandResponseNotBroadcast
+	// 同机理）。
+	waitAdminRegistered(t, server, 8)
+	waitAdminRegistered(t, server, 9)
 	node := dialNode(t, ts, "node-secret-43")
 	waitNodeOnline(t, server, 43)
 
