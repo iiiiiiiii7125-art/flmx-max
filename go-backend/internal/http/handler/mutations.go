@@ -4702,20 +4702,23 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
 		return
 	}
-	newStatus := asInt(req["status"], 1)
-	// R2X-013（BC-R2-02）：停用开始执法。先读旧 status：1→0 时在同一
-	// 事务内按 grant 台账撤销该组组建授权（手工授权不动，级联候选收集
-	// 复用删组同款逻辑），提交后清理被撤销授权的转发；0→1 时走既有
-	// sync 按成员关系补发。已停用分组的历史组建授权在首次状态变更/
-	// 同步触发时被追溯撤销（展开侧对停用组一律跳过，见
-	// applyGroupPermission）。
+	// R2X-013（BC-R2-02）：停用开始执法。先在事务内读旧行：结果状态为
+	// 停用时在同一事务内按 grant 台账撤销该组组建授权（手工授权不动，
+	// 级联候选收集复用删组同款逻辑），提交后清理被撤销授权的转发；
+	// 0→1 时走既有 sync 按成员关系补发。
+	// R3X-004（R2X-013 重开半）：撤销按「电平」而非「转换沿」触发——
+	// 0→0 保存（停用组改名等）只要仍有台账同样收敛撤销，与 sync 侧的
+	// applyGroupPermission 收敛互为双触点；无台账时撤销为空操作。
+	// R3X-020：presence 语义（对照 userUpdate 正本）——req 缺 name/
+	// status key 时以旧行现值填充，不再把缺省 status 当 1 启用停用组、
+	// 不再把缺省 name 清空。
 	tx := h.repo.BeginTx()
 	if tx == nil || tx.Error != nil {
 		response.WriteJSON(w, response.Err(-2, "database unavailable"))
 		return
 	}
 	defer func() { tx.Rollback() }()
-	oldStatus, exists, err := h.repo.GetGroupStatusTx(tx, table, id)
+	oldName, oldStatus, exists, err := h.repo.GetGroupRowTx(tx, table, id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -4724,12 +4727,20 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组不存在"))
 		return
 	}
-	if err := h.repo.GroupUpdateTx(tx, table, id, asString(req["name"]), newStatus, time.Now().UnixMilli()); err != nil {
+	newName := oldName
+	if _, ok := req["name"]; ok {
+		newName = asString(req["name"])
+	}
+	newStatus := oldStatus
+	if _, ok := req["status"]; ok {
+		newStatus = asInt(req["status"], oldStatus)
+	}
+	if err := h.repo.GroupUpdateTx(tx, table, id, newName, newStatus, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	var revokedPairs []repo.RevokedUserTunnelPair
-	if oldStatus == 1 && newStatus == 0 {
+	if newStatus == 0 {
 		var revokeErr error
 		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
 		if revokeErr != nil {
@@ -4783,6 +4794,9 @@ type groupGrantFailure struct {
 type groupApplyResult struct {
 	Succeeded int
 	Failures  []groupGrantFailure
+	// RevokedPairs carries user_tunnels revoked by the R3X-004 disabled-
+	// side convergence below, so sync callers can clean their forwards.
+	RevokedPairs []repo.RevokedUserTunnelPair
 }
 
 func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
@@ -4790,10 +4804,20 @@ func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupA
 	// R2X-013: expansion skips a pair when either side's group is not
 	// enabled (status != 1) — disabled groups never materialize grants,
 	// including for pre-existing pairs synced after the fact.
-	for _, g := range []struct {
+	// R3X-004 (R2X-013 reopened half): skipping is not enough for stock
+	// formed before the disable — when either side is disabled, converge
+	// that group's ledger instead: revoke every grant recorded under it
+	// (manual user_tunnels are untouched, as RevokeGroupGrantsByGroupTx
+	// only orphans group-created rows) and report the revoked pairs so
+	// the caller can clean up their forwards. This makes sync a real
+	// retroactive-revocation touchpoint (BC-R2-02), not just a gate on
+	// new grants.
+	type groupRef struct {
 		table string
 		id    int64
-	}{
+	}
+	var disabled []groupRef
+	for _, g := range []groupRef{
 		{"user_group", userGroupID},
 		{"tunnel_group", tunnelGroupID},
 	} {
@@ -4801,9 +4825,22 @@ func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupA
 		if gErr != nil {
 			return result, gErr
 		}
-		if !gExists || gStatus != 1 {
+		if !gExists {
 			return result, nil
 		}
+		if gStatus != 1 {
+			disabled = append(disabled, g)
+		}
+	}
+	if len(disabled) > 0 {
+		for _, g := range disabled {
+			pairs, revokeErr := h.repo.RevokeGroupGrantsByGroup(g.table, g.id)
+			if revokeErr != nil {
+				return result, revokeErr
+			}
+			result.RevokedPairs = append(result.RevokedPairs, pairs...)
+		}
+		return result, nil
 	}
 	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
 	if err != nil {
@@ -4854,6 +4891,11 @@ func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
 			log.Printf("sync permissions by user group %d failed: %v", userGroupID, applyErr)
 			continue
 		}
+		// R3X-004: pairs revoked by the disabled-side convergence lose
+		// their forwards, exactly like the groupUpdate revoke path.
+		for _, pair := range result.RevokedPairs {
+			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+		}
 		for _, f := range result.Failures {
 			log.Printf("sync permissions by user group %d: grant failed user=%d tunnel=%d err=%s", userGroupID, f.UserID, f.TunnelID, f.Error)
 		}
@@ -4871,6 +4913,11 @@ func (h *Handler) syncPermissionsByTunnelGroup(tunnelGroupID int64) error {
 		if applyErr != nil {
 			log.Printf("sync permissions by tunnel group %d failed: %v", tunnelGroupID, applyErr)
 			continue
+		}
+		// R3X-004: pairs revoked by the disabled-side convergence lose
+		// their forwards, exactly like the groupUpdate revoke path.
+		for _, pair := range result.RevokedPairs {
+			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 		}
 		for _, f := range result.Failures {
 			log.Printf("sync permissions by tunnel group %d: grant failed user=%d tunnel=%d err=%s", tunnelGroupID, f.UserID, f.TunnelID, f.Error)
