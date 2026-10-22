@@ -384,7 +384,7 @@ func TestBatchAssignRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "assign-limiter-fail-node", "assign-limiter-fail-secret", "10.21.0.1", "10.21.0.1", "", "33000-33010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "assign-limiter-fail-node", "assign-limiter-fail-secret", "10.21.0.1", "10.21.0.1", "", "33000-33010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "assign-limiter-fail-node")
@@ -427,6 +427,9 @@ func TestBatchAssignRollbackWhenLimiterDispatchFailsContract(t *testing.T) {
 		"addlimiters": "mock add limiters failed",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点，防离线分支冒充限速失败。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	assignPayload := map[string]interface{}{
 		"userId": 2,
