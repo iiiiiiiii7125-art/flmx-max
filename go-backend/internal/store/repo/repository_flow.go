@@ -418,9 +418,20 @@ func (r *Repository) SpeedLimitExists(id int64) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("repository not initialized")
 	}
+	return speedLimitExists(r.db, id)
+}
+
+func (r *Repository) SpeedLimitExistsTx(tx *gorm.DB, id int64) (bool, error) {
+	if tx == nil {
+		return false, errors.New("database unavailable")
+	}
+	return speedLimitExists(tx, id)
+}
+
+func speedLimitExists(db *gorm.DB, id int64) (bool, error) {
 	var count int64
 	// O2-005：只查询已启用的限速规则，已禁用的不得被引用生效。
-	err := r.db.Model(&model.SpeedLimit{}).Where("id = ? AND status = 1", id).Count(&count).Error
+	err := db.Model(&model.SpeedLimit{}).Where("id = ? AND status = 1", id).Count(&count).Error
 	if err != nil {
 		return false, err
 	}
