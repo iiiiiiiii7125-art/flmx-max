@@ -271,20 +271,30 @@ func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
 	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、"))
 }
 
+// nodeCrossReferrer is one entry of the cross-node referrer list: the
+// referrer inbound ID — the only sound dedup key for callers aggregating
+// across several deleted nodes (R3X-014) — plus its display string
+// 「名称（节点名）」. Display strings are NOT unique: two distinct
+// referrers on one node can share a name and render identically.
+type nodeCrossReferrer struct {
+	ID      int64
+	Display string
+}
+
 // nodeCrossReferrers lists the inbounds on OTHER nodes that chain through
 // any inbound of the given node (R2X-045): deleting the node silently
 // breaks exactly these referrers, so they are reported back to the
 // caller. Same-node referrers are excluded (they are deleted together
 // with the node), and entries are deduplicated by referrer inbound ID
 // and disambiguated as 「名称（节点名）」 (R2X-029 口径）.
-func (h *Handler) nodeCrossReferrers(nodeID int64) []string {
+func (h *Handler) nodeCrossReferrers(nodeID int64) []nodeCrossReferrer {
 	targets, err := h.repo.ListNodeInboundsByNode(nodeID)
 	if err != nil {
 		log.Printf("node cross-referrer lookup failed node_id=%d err=%v", nodeID, err)
 		return nil
 	}
 	seen := make(map[int64]struct{})
-	out := make([]string, 0)
+	out := make([]nodeCrossReferrer, 0)
 	for _, target := range targets {
 		for _, ref := range h.chainReferrers(target.ID) {
 			if ref.NodeID == nodeID {
@@ -294,7 +304,7 @@ func (h *Handler) nodeCrossReferrers(nodeID int64) []string {
 				continue
 			}
 			seen[ref.ID] = struct{}{}
-			out = append(out, h.chainReferrerDisplayName(ref))
+			out = append(out, nodeCrossReferrer{ID: ref.ID, Display: h.chainReferrerDisplayName(ref)})
 		}
 	}
 	return out
