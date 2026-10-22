@@ -5986,20 +5986,23 @@ func (h *Handler) deleteTunnelByID(id int64) error {
 	tunnelName, _ := h.repo.GetTunnelName(id)
 	tunnel, _ := h.repo.GetTunnelRecord(id)
 	entryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
-	if err := h.repo.DeleteTunnelCascade(id); err != nil {
+	// X-P3-23（L-09-5）：尾步 peer runtime 释放标记纳入级联主事务——
+	// 释放失败则整个删除回滚，不再出现「隧道已删、runtime 未释放、
+	// 靠后台收敛」的不一致中间态。share 信息须在删前解析（隧道名
+	// 随行删除即不可读）。
+	shareID, port, isPeerShare := parsePeerShareInfoFromFederationTunnelName(tunnelName)
+	if isPeerShare {
+		if err := h.repo.DeleteTunnelCascadeWithPeerRelease(id, shareID, port, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+	} else if err := h.repo.DeleteTunnelCascade(id); err != nil {
 		return err
 	}
 	if tunnelIsRealm(tunnel) {
 		// 级联删除后 realm 渲染源已无此隧道：让入口节点收敛到无端点。
 		_, _ = h.syncRealmNodes(entryNodeIDs, nil)
 	}
-
-	shareID, port, ok := parsePeerShareInfoFromFederationTunnelName(tunnelName)
-	if !ok {
-		return nil
-	}
-
-	return h.repo.MarkPeerShareRuntimeReleasedByPort(shareID, port, time.Now().UnixMilli())
+	return nil
 }
 
 func (h *Handler) deleteForwardByID(id int64) error {
