@@ -327,7 +327,9 @@ export interface UserMutationPayload {
   id?: number;
   user?: string;
   name?: string;
-  password?: string;
+  // X-P3-7（K-01）：后端 userCreate/userUpdate 只读 pwd（mutations.go），
+  // 此前误声明 password 会误导调用方传错字段名、密码静默不生效。
+  pwd?: string;
   status?: number;
   flow?: number;
   num?: number;
