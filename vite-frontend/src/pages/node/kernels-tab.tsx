@@ -4,7 +4,7 @@ import type {
   NodeApiItem,
 } from "@/api/types";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getKernelCapabilities, getKernelList, getNodeList } from "@/api";
 import { PageLoadingState } from "@/components/page-state";
@@ -23,7 +23,15 @@ export function KernelsTab({
   const [nodes, setNodes] = useState<NodeApiItem[]>([]);
   const [kernels, setKernels] = useState<KernelApiItem[]>([]);
 
+  // 在途跳过（X-P3-8/K-02，照 monitor-view loadServiceMonitors 既有
+  // 写法）：30s 轮询下慢请求未返回时跳过本轮，避免请求叠加与旧响应覆盖。
+  const loadInFlightRef = useRef(false);
+
   const load = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      return;
+    }
+    loadInFlightRef.current = true;
     try {
       const [capsRes, nodeRes, kernelRes] = await Promise.all([
         getKernelCapabilities(),
@@ -35,6 +43,7 @@ export function KernelsTab({
       if (nodeRes.code === 0) setNodes(nodeRes.data || []);
       if (kernelRes.code === 0) setKernels(kernelRes.data || []);
     } finally {
+      loadInFlightRef.current = false;
       setLoading(false);
     }
   }, []);
