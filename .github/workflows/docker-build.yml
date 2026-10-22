@@ -44,9 +44,9 @@ jobs:
 
           # F-123: 本 workflow 的 on: 只有 tag push 与 workflow_dispatch，
           # 原 else 分支（分支触发 + env.VERSION + should_build=false 的
-          # GOST-only 更新路径）不可达，已删除；update-release-gost job
-          # 的触发条件（is_tag == 'false'）因此恒假、该 job 现为静态
-          # 不可达，保留待产品侧决定是否整体移除。
+          # GOST-only 更新路径）不可达，已删除；其 GOST-only 更新 job
+          # 的触发条件（is_tag == 'false'）因此恒假，已随 X-P3-33
+          # （J-S1 backlog）整体移除。
           # Tag 或手动触发：使用 tag 名 / 填写的版本号，全量构建并发版
           VERSION="${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}"
           if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
@@ -408,58 +408,3 @@ jobs:
 
           echo "✅ Release ${VERSION} 创建完成"
 
-  update-release-gost:
-    name: Update GOST Binaries in Release
-    needs: [check-version, build-gost]
-    if: needs.check-version.outputs.is_tag == 'false' && needs.check-version.outputs.should_build == 'false' && needs.check-version.outputs.should_build_gost == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Download GOST AMD64 binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: gost-binary-amd64
-          path: ./artifacts/amd64
-
-      - name: Download GOST ARM64 binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: gost-binary-arm64
-          path: ./artifacts/arm64
-
-      - name: Download GOST AMD64 checksum
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: gost-checksum-amd64
-          path: ./artifacts/
-
-      - name: Download GOST ARM64 checksum
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: gost-checksum-arm64
-          path: ./artifacts/
-
-      - name: Rename binaries
-        run: |
-          mv ./artifacts/amd64/gost-amd64 ./artifacts/gost-amd64
-          mv ./artifacts/arm64/gost-arm64 ./artifacts/gost-arm64
-
-      - name: Update GOST binaries in Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-
-          echo "🔄 更新 Release ${VERSION} 中的 GOST 二进制文件..."
-
-          gh release upload "${VERSION}" ./artifacts/gost-amd64 --clobber
-          gh release upload "${VERSION}" ./artifacts/gost-arm64 --clobber
-
-          echo "📤 上传 GOST 校验文件..."
-          gh release upload "${VERSION}" ./artifacts/gost-amd64.sha256 --clobber
-          gh release upload "${VERSION}" ./artifacts/gost-arm64.sha256 --clobber
-
-          echo "✅ GOST 二进制文件更新完成"
