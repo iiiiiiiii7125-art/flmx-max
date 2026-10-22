@@ -356,19 +356,24 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 	}
 	switch p.Type() {
 	case "ss":
-		// R3X-008 渲染纵深：导入期已逐条报错，此处只兜底存量——SS2022
-		// 密钥不合规的存量节点整节点略过，不让一条脏行毒化整份
-		// sing-box 订阅；SIP023 冒号多段在 sing-box 的支持未证实，
-		// 同样保守略过（Clash / Surge 等格式原样输出）。存量不迁移、
-		// 不自动清理，靠用户编辑/重导入时被导入期校验拦下收敛。
-		// GATE-F1：合法单段 key 的线格式已在 forEndpoint 规范化为
-		// 带填充 Std（p 即该克隆），此处输出即规范形态。
-		if !ValidSS2022SingleKey(p.str("cipher"), p.str("password")) {
+		// R3X-008 渲染纵深 + R4-SIP023-R 解除（R4-X-verdicts §4）：
+		// 逐段以导入期同一谓词 ValidateSS2022Password 校验，任一段
+		// 不合规整节点略过——存量坏 key 纵深兜底不变，不让一条脏行
+		// 毒化整份 sing-box 订阅；存量不迁移、不自动清理，靠用户
+		// 编辑/重导入时被导入期校验拦下收敛。通过后逐段归一为带
+		// 填充 Std 渲染（NormalizedSS2022PasswordSegments，与 Clash
+		// 面同 helper 语义）：sing-box 出站侧按段以带填充 Std 解码
+		// （1.14.3 / 1.12.x / 1.11.x 官方二进制 check 实测，D §1.2 与
+		// 批 2 补测），原样直出含 Raw 段会整份 check 失败，故严禁
+		// 原样直出、严禁放宽 ValidSS2022SingleKey 一刀切实现。
+		// 链式 sing-box 出站经 singboxOutbounds 同函数同步解除、
+		// SubscriptionNodeCount 计数同口径；自建入站服务端面不动。
+		if err := ValidateSS2022Password(p.str("cipher"), p.str("password")); err != nil {
 			return nil, false
 		}
 		o["type"] = "shadowsocks"
 		o["method"] = p.str("cipher")
-		o["password"] = p.str("password")
+		o["password"] = NormalizedSS2022PasswordSegments(p.str("cipher"), p.str("password"))
 		po := p.sub("plugin-opts")
 		switch p.str("plugin") {
 		case "":
