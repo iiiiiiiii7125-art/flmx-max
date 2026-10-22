@@ -63,6 +63,12 @@ func (w *WebSocketReporter) handleTraceroute(data interface{}) (TracerouteRespon
 	if net.ParseIP(host) == nil && !isValidHostname(host) {
 		return TracerouteResponse{}, fmt.Errorf("无效的IP地址或主机名")
 	}
+	// R4X-020：发送前字面量复检，与 TcpPing 同口径整集（硬拒 + 回环 +
+	// 保留 + 组播 + 链路本地；私网/CGNAT 放行）。主机名的解析落点
+	// 复检在 traceroute() 选址后执行（见该函数）。
+	if tcpPingLiteralTargetDenied(host) {
+		return TracerouteResponse{}, fmt.Errorf("目标地址不允许")
+	}
 	select {
 	case traceSem <- struct{}{}:
 		defer func() { <-traceSem }()
@@ -175,6 +181,12 @@ func traceroute(host string, maxHops, family int) (TracerouteResponse, error) {
 	dst, err := traceAddr(host, addrs, family)
 	if err != nil {
 		return resp, err
+	}
+	// R4X-020：解析落点复检——最终选定的目标地址（含字面量直达与
+	// 主机名解析两路）发包前再过同口径整集，防面板/节点 DNS 分视图
+	// 下落点入硬拒/回环集。
+	if resolvedAddrDenied(dst, tcpPingResolvedDenied) {
+		return resp, fmt.Errorf("目标地址不允许")
 	}
 	resp.IP = dst.String()
 	tp := traceV4
