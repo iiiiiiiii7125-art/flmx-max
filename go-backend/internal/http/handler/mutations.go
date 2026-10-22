@@ -4283,7 +4283,23 @@ func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	_ = h.applyGroupPermission(req.UserGroupID, req.TunnelGroupID)
+	// X-P2-16：展开失败不再静默——部分失败在回执逐条列明，全失败报错。
+	result, applyErr := h.applyGroupPermission(req.UserGroupID, req.TunnelGroupID)
+	if applyErr != nil {
+		response.WriteJSON(w, response.Err(-2, applyErr.Error()))
+		return
+	}
+	if len(result.Failures) > 0 {
+		if result.Succeeded == 0 {
+			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("权限分配失败: %v", result.Failures[0].Error)))
+			return
+		}
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"message":  "权限分配部分失败",
+			"failures": result.Failures,
+		}))
+		return
+	}
 	response.WriteJSON(w, response.OK("权限分配成功"))
 }
 
@@ -4371,30 +4387,61 @@ func (h *Handler) groupDelete(w http.ResponseWriter, r *http.Request, table stri
 	if id <= 0 {
 		return
 	}
-	if err := h.repo.GroupDeleteCascade(table, id); err != nil {
+	// X-P1-2③：删组在删台账前先收集该组全部组建授权并撤销、清理转发，
+	// 否则台账删除后残留授权无从追溯。
+	revokedPairs, err := h.repo.GroupDeleteCascadeWithRevoke(table, id)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	for _, pair := range revokedPairs {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
-func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) error {
-	userIDs, _ := h.repo.ListUserIDsByUserGroup(userGroupID)
-	tunnelIDs, _ := h.repo.ListTunnelIDsByTunnelGroup(tunnelGroupID)
+// groupGrantFailure is one failed entry of a group-permission expansion
+// (X-P2-16): the expansion no longer swallows per-entry failures.
+type groupGrantFailure struct {
+	UserID   int64  `json:"userId"`
+	TunnelID int64  `json:"tunnelId"`
+	Error    string `json:"error"`
+}
+
+type groupApplyResult struct {
+	Succeeded int
+	Failures  []groupGrantFailure
+}
+
+func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
+	var result groupApplyResult
+	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
+	if err != nil {
+		return result, err
+	}
+	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(tunnelGroupID)
+	if err != nil {
+		return result, err
+	}
 	for _, uid := range userIDs {
 		for _, tid := range tunnelIDs {
 			utID, created, err := h.repo.EnsureUserTunnelGrant(uid, tid)
 			if err != nil {
+				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
 				continue
 			}
 			createdByGroup := 0
 			if created {
 				createdByGroup = 1
 			}
-			h.repo.InsertGroupPermissionGrant(userGroupID, tunnelGroupID, utID, createdByGroup, time.Now().UnixMilli())
+			if err := h.repo.InsertGroupPermissionGrant(userGroupID, tunnelGroupID, utID, createdByGroup, time.Now().UnixMilli()); err != nil {
+				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
+				continue
+			}
+			result.Succeeded++
 		}
 	}
-	return nil
+	return result, nil
 }
 
 func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
@@ -4403,7 +4450,14 @@ func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
 		return err
 	}
 	for _, p := range pairs {
-		_ = h.applyGroupPermission(p[0], p[1])
+		result, applyErr := h.applyGroupPermission(p[0], p[1])
+		if applyErr != nil {
+			log.Printf("sync permissions by user group %d failed: %v", userGroupID, applyErr)
+			continue
+		}
+		for _, f := range result.Failures {
+			log.Printf("sync permissions by user group %d: grant failed user=%d tunnel=%d err=%s", userGroupID, f.UserID, f.TunnelID, f.Error)
+		}
 	}
 	return nil
 }
@@ -4414,7 +4468,14 @@ func (h *Handler) syncPermissionsByTunnelGroup(tunnelGroupID int64) error {
 		return err
 	}
 	for _, p := range pairs {
-		_ = h.applyGroupPermission(p[0], p[1])
+		result, applyErr := h.applyGroupPermission(p[0], p[1])
+		if applyErr != nil {
+			log.Printf("sync permissions by tunnel group %d failed: %v", tunnelGroupID, applyErr)
+			continue
+		}
+		for _, f := range result.Failures {
+			log.Printf("sync permissions by tunnel group %d: grant failed user=%d tunnel=%d err=%s", tunnelGroupID, f.UserID, f.TunnelID, f.Error)
+		}
 	}
 	return nil
 }
