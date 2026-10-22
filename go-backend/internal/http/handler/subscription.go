@@ -862,7 +862,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	if req.ID == 0 {
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "subscription:create")
 		defer finish()
 		if replayed {
 			return
