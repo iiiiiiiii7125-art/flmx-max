@@ -121,6 +121,10 @@ func (h *Handler) checkUserReminders(now time.Time) {
 				}
 			default:
 				h.notifier.clearAlerts(flowKey)
+				// R3X-030：回落即静默恢复——连带清该用户流量子型的
+				// 指纹（forget 连带清通道台账），否则同文案再越界被
+				// 30 分钟指纹窗抑制。到期类子型不在此列。
+				h.notifier.forgetUserQuotaFlow(u.User)
 			}
 			if u.ExpTime > 0 {
 				// O8-004：已过期很久的用户跳过，避免面板重启后重报历史过期记录。
@@ -201,6 +205,9 @@ func (h *Handler) checkSubQuota(s *model.Subscription) {
 		}
 	default:
 		h.notifier.clearAlerts(key)
+		// R3X-030：同 checkUserReminders 用户面——回落连带清该订阅
+		// 流量子型的指纹，到期类子型不在此列。
+		h.notifier.forgetSubQuotaFlow(s.Name)
 	}
 }
 
