@@ -917,7 +917,10 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
 		return err
 	}
-	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
+	// R2X-010 ①：待释放（status=2）绑定承载已提交的删除意图，级联不得
+	// 一并删掉——对端 role 的释放由后台重试环按此行收敛（删隧道时
+	// 联邦清理失败正是靠它留痕）；此处只删非 pending 绑定。
+	if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, FederationBindingPendingRelease).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
 		return err
 	}
 	// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。

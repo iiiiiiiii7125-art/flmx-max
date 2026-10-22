@@ -682,6 +682,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// oldIn is the stored inbound an update is based on, captured for the
 	// presence backfill after assembly (R2X-030, below).
 	var oldIn *kernel.Inbound
+	// R2X-009：更新前快照 Port/Listen，保存后据此判断是否需要对名下
+	// Managed relay 重算物化 RemoteAddr。
+	var prevPort int
+	var prevListen string
 	if update {
 		existing, err := h.repo.GetNodeInbound(req.ID)
 		if err != nil || existing == nil {
@@ -689,6 +693,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 			return
 		}
 		row = *existing
+		prevPort, prevListen = existing.Port, existing.Listen
 		if isExternalInbound(&row) {
 			response.WriteJSON(w, response.ErrDefault("导入的节点请在“编辑”里修改地址和密码"))
 			return
@@ -861,6 +866,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	var warnings []string
 	if update && prevAcceptProxy != row.AcceptProxyProtocol {
 		warnings = h.syncRelayProxyProtocol(row)
+	}
+	// R2X-009：入站 Port/Listen 变更后，名下 Managed relay 的物化
+	// RemoteAddr 必须同批重算 + 重下发（与上方 PP 同步同位置、同口径），
+	// 否则全部中转继续拨旧端口/旧语义地址静默断流。
+	if update && (row.Port != prevPort || row.Listen != prevListen) {
+		warnings = append(warnings, h.resyncManagedRelayRemoteAddrsForInbound(row.ID)...)
 	}
 	if err := h.applyKernel(k.ID, false); err != nil {
 		warnings = append([]string{"下发到节点失败: " + err.Error()}, warnings...)

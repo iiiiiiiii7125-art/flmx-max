@@ -27,6 +27,7 @@ import { Progress } from "@/shadcn-bridge/heroui/progress";
 import {
   createNode,
   getNodeList,
+  getInboundList,
   updateNode,
   deleteNode,
   getNodeInstallCommand,
@@ -41,6 +42,7 @@ import {
   probeNodeLatency,
   type ReleaseChannel,
 } from "@/api";
+import type { InboundApiItem } from "@/api/types";
 import { LatencyCell } from "@/components/latency-cell";
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
@@ -101,6 +103,38 @@ import {
 } from "@/pages/node/agent-modals";
 import { NodeFilterModal } from "@/pages/node/filter-modal";
 
+/**
+ * R2X-045：计算删除给定节点将打断的跨节点引用——出站/分流指向被删
+ * 节点入站、且引用方本身不在被删节点上的入站，按引用方 ID 去重、
+ * 以「名称（节点名）」消歧，与后端 nodeCrossReferrers 同口径。
+ * 删除确认弹窗在确认前点名这份清单；后端删除响应另回传权威清单。
+ */
+function computeBrokenReferrers(
+  inbounds: InboundApiItem[],
+  deletedNodeIds: Set<number>,
+): string[] {
+  const targetIds = new Set(
+    inbounds.filter((ib) => deletedNodeIds.has(ib.nodeId)).map((ib) => ib.id),
+  );
+  const seen = new Set<number>();
+  const out: string[] = [];
+
+  for (const ib of inbounds) {
+    if (deletedNodeIds.has(ib.nodeId) || seen.has(ib.id)) continue;
+    const targets = [
+      ib.outboundId,
+      ...(ib.splitRules || []).map((rule) => rule.outboundId ?? 0),
+    ];
+
+    if (targets.some((target) => target > 0 && targetIds.has(target))) {
+      seen.add(ib.id);
+      out.push(`${ib.name}（${ib.nodeName}）`);
+    }
+  }
+
+  return out;
+}
+
 export default function NodePage({
   embedded = false,
   addRequest = 0,
@@ -147,6 +181,12 @@ export default function NodePage({
   const [tuneNode, setTuneNode] = useState<Node | null>(null);
   const [nodeToRollback, setNodeToRollback] = useState<Node | null>(null);
   const [nodeToDelete, setNodeToDelete] = useState<Node | null>(null);
+  // R2X-045：删节点确认前展示的跨节点引用清单（单删/批删各一份）。
+  const [deleteBrokenReferrers, setDeleteBrokenReferrers] = useState<
+    string[]
+  >([]);
+  const [batchDeleteBrokenReferrers, setBatchDeleteBrokenReferrers] =
+    useState<string[]>([]);
   const [protocolDisabled, setProtocolDisabled] = useState(false);
   const [protocolDisabledReason, setProtocolDisabledReason] = useState("");
   const [form, setForm] = useState<NodeForm>({
@@ -798,10 +838,40 @@ export default function NodePage({
     setDialogVisible(true);
   };
 
-  // 删除节点
-  const handleDelete = (node: Node) => {
+  // 删除节点（R2X-045：打开确认弹窗时先拉入站清单，确认前点名将被
+  // 打断的跨节点引用；清单拉取失败不阻塞删除确认本身）。
+  const handleDelete = async (node: Node) => {
     setNodeToDelete(node);
+    setDeleteBrokenReferrers([]);
     setDeleteModalOpen(true);
+    try {
+      const res = await getInboundList();
+
+      if (res.code === 0 && Array.isArray(res.data)) {
+        setDeleteBrokenReferrers(
+          computeBrokenReferrers(res.data, new Set([node.id])),
+        );
+      }
+    } catch {
+      // 清单不可用时保持通用确认文案。
+    }
+  };
+
+  // 批量删除入口（R2X-045：同单删口径，确认前点名跨节点引用）。
+  const openBatchDeleteModal = async () => {
+    setBatchDeleteBrokenReferrers([]);
+    setBatchDeleteModalOpen(true);
+    try {
+      const res = await getInboundList();
+
+      if (res.code === 0 && Array.isArray(res.data)) {
+        setBatchDeleteBrokenReferrers(
+          computeBrokenReferrers(res.data, new Set(selectedIds)),
+        );
+      }
+    } catch {
+      // 清单不可用时保持通用确认文案。
+    }
   };
 
   const confirmDelete = async () => {
@@ -813,6 +883,14 @@ export default function NodePage({
 
       if (res.code === 0) {
         toast.success("删除成功");
+        const returned = res.data?.brokenReferrers ?? [];
+
+        if (returned.length > 0) {
+          toast(
+            `删除打断了 ${returned.length} 个跨节点引用：${returned.join("、")}`,
+            { icon: "⚠️", duration: 5000 },
+          );
+        }
         setNodeList((prev) => prev.filter((n) => n.id !== nodeToDelete.id));
         setDeleteModalOpen(false);
         setNodeToDelete(null);
@@ -1380,6 +1458,7 @@ export default function NodePage({
               successCount?: number;
               failCount?: number;
               failures?: { id?: number }[];
+              brokenReferrers?: string[];
             }
           | null
           | undefined;
@@ -1410,6 +1489,15 @@ export default function NodePage({
             );
           } else {
             toast.success(`成功删除 ${successCount} 个节点`);
+          }
+          // R2X-045：后端回传的权威跨节点引用清单，删除后如实播报。
+          const returnedBroken = result?.brokenReferrers ?? [];
+
+          if (returnedBroken.length > 0) {
+            toast(
+              `删除打断了 ${returnedBroken.length} 个跨节点引用：${returnedBroken.join("、")}`,
+              { icon: "⚠️", duration: 5000 },
+            );
           }
         } else {
           // 后端未给逐条回执时不按选中数虚报全成功：以服务器列表为准刷新，
@@ -1638,7 +1726,7 @@ export default function NodePage({
               key: "delete",
               label: "删除",
               danger: true,
-              onPress: () => setBatchDeleteModalOpen(true),
+              onPress: () => void openBatchDeleteModal(),
             },
           ]}
           allSelected={
@@ -2546,6 +2634,7 @@ export default function NodePage({
 
       {/* 删除确认模态框 */}
       <DeleteNodeModal
+        brokenReferrers={deleteBrokenReferrers}
         confirmDelete={confirmDelete}
         deleteLoading={deleteLoading}
         deleteModalOpen={deleteModalOpen}
@@ -2579,6 +2668,7 @@ export default function NodePage({
       <BatchDeleteNodesModal
         batchDeleteModalOpen={batchDeleteModalOpen}
         batchLoading={batchLoading}
+        brokenReferrers={batchDeleteBrokenReferrers}
         handleBatchDelete={handleBatchDelete}
         selectedIds={selectedIds}
         setBatchDeleteModalOpen={setBatchDeleteModalOpen}

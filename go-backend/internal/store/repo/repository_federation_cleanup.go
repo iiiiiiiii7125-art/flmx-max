@@ -34,6 +34,14 @@ func (r *Repository) MarkFederationTunnelBindingPendingRelease(id int64) error {
 		Updates(map[string]interface{}{"status": FederationBindingPendingRelease, "updated_time": unixMilliNow()}).Error
 }
 
+// SetFederationTunnelBindingStatus sets a binding's status directly
+// (R2X-010 ②: a non-delete operation that marked bindings pending and
+// then aborted restores the ones it flipped back to active).
+func (r *Repository) SetFederationTunnelBindingStatus(id int64, status int) error {
+	return r.db.Model(&model.FederationTunnelBinding{}).Where("id = ?", id).
+		Updates(map[string]interface{}{"status": status, "updated_time": unixMilliNow()}).Error
+}
+
 func (r *Repository) DeleteFederationTunnelBinding(id int64) error {
 	return r.db.Where("id = ?", id).Delete(&model.FederationTunnelBinding{}).Error
 }

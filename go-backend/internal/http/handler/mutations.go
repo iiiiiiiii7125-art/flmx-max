@@ -485,6 +485,13 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// R2X-008（E2-01）：级联删转发会删 relay 行，拨号节点集随之变化——
+	// 必须在清理之前按 forward 收集受影响入站，删后刷新白名单（与
+	// tunnelDelete 的先收集口径一致）。
+	var affectedInboundIDs []int64
+	for _, fwd := range userForwards {
+		affectedInboundIDs = append(affectedInboundIDs, h.inboundIDsForForward(fwd.ID)...)
+	}
 	byTunnel := make(map[int64][]model.ForwardRecord)
 	tunnelOrder := make([]int64, 0)
 	for _, fwd := range userForwards {
@@ -505,6 +512,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -622,7 +630,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
 		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
 		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
-		if delErr := h.deleteNodeByID(nodeID); delErr != nil {
+		if _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -782,6 +790,30 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// R2X-008/R2X-009 子项③（E S-1）：节点地址（ServerIP/V4/V6/ExtraIPs）
+	// 是物化状态的两处输入——入站白名单的拨号节点地址集与落地在本节点
+	// 的中转 RemoteAddr。改址落库后：刷新经本节点拨号的全部入站白
+	// 名单，并对落在本节点的 Managed 中转逐条重算 RemoteAddr。
+	addrChanged := serverIP != currentNode.ServerIP
+	if _, ok := req["serverIpV4"]; ok && asString(req["serverIpV4"]) != currentNode.ServerIPV4.String {
+		addrChanged = true
+	}
+	if _, ok := req["serverIpV6"]; ok && asString(req["serverIpV6"]) != currentNode.ServerIPV6.String {
+		addrChanged = true
+	}
+	if _, ok := req["extraIPs"]; ok && asString(req["extraIPs"]) != currentNode.ExtraIPs.String {
+		addrChanged = true
+	}
+	if addrChanged {
+		h.refreshInboundWhitelists(h.inboundIDsDialedByNode(id))
+		if nodeInbounds, err := h.repo.ListNodeInboundsByNode(id); err == nil {
+			for _, inbound := range nodeInbounds {
+				for _, warning := range h.resyncManagedRelayRemoteAddrsForInbound(inbound.ID) {
+					log.Printf("node update: relay remote addr resync node_id=%d inbound_id=%d: %s", id, inbound.ID, warning)
+				}
+			}
+		}
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -912,7 +944,10 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if id <= 0 {
 		return
 	}
-	if err := h.deleteNodeByID(id); err != nil {
+	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
+	// 清单随响应回传，不再静默。
+	brokenReferrers, err := h.deleteNodeByID(id)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -921,7 +956,13 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if h.nftablesManager != nil {
 		h.nftablesManager.ReleaseNode(id)
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	if brokenReferrers == nil {
+		brokenReferrers = []string{}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"brokenReferrers":     brokenReferrers,
+		"brokenReferrerCount": len(brokenReferrers),
+	}))
 }
 
 // panelRequestScheme 推断本次管理请求所见的面板实际服务方式
@@ -1101,6 +1142,10 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
+	// R2X-045：批量入口与单删共用 deleteNodeByID funnel，跨节点引用
+	// 清单汇总回传（同一引用方跨多个被删节点只报一次）。
+	var brokenReferrers []string
+	seenReferrer := make(map[string]struct{})
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1112,7 +1157,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
 			continue
 		}
-		delErr := h.deleteNodeByID(id)
+		nodeReferrers, delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
@@ -1123,9 +1168,16 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, nodeName, delErr)
 			continue
 		}
+		for _, referrer := range nodeReferrers {
+			if _, dup := seenReferrer[referrer]; dup {
+				continue
+			}
+			seenReferrer[referrer] = struct{}{}
+			brokenReferrers = append(brokenReferrers, referrer)
+		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -1826,14 +1878,27 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// relayTarget 一致），否则转发继续拨回环地址静默错向。置于验证段
 	// 之后、提交段之前：验证事务已回滚，此处走主句柄读 relays/inbounds
 	// 不与事务锁冲突；runtimeState.OutNodes 即待提交的新出口集。
+	var newExits []int64
 	if typeVal == 2 && runtimeState != nil {
-		newExits := make([]int64, 0, len(runtimeState.OutNodes))
+		newExits = make([]int64, 0, len(runtimeState.OutNodes))
 		for _, outNode := range runtimeState.OutNodes {
 			if outNode.NodeID > 0 {
 				newExits = append(newExits, outNode.NodeID)
 			}
 		}
 		if err := h.validateTunnelRelayExits(id, newExits); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
+	// R2X-009：以待提交的隧道态（新类型 + 新出口集）对名下 Managed
+	// relay 逐条预演 RemoteAddr 可计算性——出口集迁移（{L}↔{X}）与
+	// 类型迁移（2→1）都会改变 relayTarget 口径，预演失败拒绝保存，
+	// 不留「地址不变静默断流」的物化旧址。提交落库后在白名单刷新
+	// 同位置以已落库态重算落库（见下方 resync）。
+	if runtimeState != nil {
+		prospective := &tunnelRecord{ID: id, Type: typeVal}
+		if err := h.validateTunnelRelayRemoteAddrComputable(id, prospective, newExits); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -1845,7 +1910,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if err := h.cleanupFederationRuntime(id); err != nil {
+	// R2X-010 ②：编辑是非删除操作——联邦清理失败中止时把本轮新置的
+	// pending 绑定回滚为 active，避免重试环日后拆掉仍在用的隧道。
+	if err := h.cleanupFederationRuntimePreserving(id); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -1958,6 +2025,18 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 出口 IP 残留放行。提交已落库，此处刷新与后续成功分支无关。
 	h.refreshInboundWhitelists(h.inboundIDsForTunnel(id))
 
+	// R2X-009：与白名单刷新同位置——以已落库的隧道态对名下 Managed
+	// relay 逐条重算 RemoteAddr，变更则落库 + 重下发，失败汇入
+	// warnings 随成功回执带出（不静默）。
+	relayResyncWarnings := h.resyncManagedRelayRemoteAddrsForTunnel(id)
+	respondTunnelUpdateOK := func() {
+		if len(relayResyncWarnings) > 0 {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(relayResyncWarnings, "；"), TS: now, Data: map[string]interface{}{"warnings": relayResyncWarnings}})
+			return
+		}
+		response.WriteJSON(w, response.OKEmpty())
+	}
+
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
 		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
@@ -1978,9 +2057,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			if oldTunnel == nil || oldTunnel.Type != 2 {
 				h.rollbackTunnelRuntime(createdChains, createdServices, id, updateProtocol)
 			}
-			applyErr = errors.Join(applyErr, h.cleanupFederationRuntime(id))
+			applyErr = errors.Join(applyErr, h.cleanupFederationRuntimePreserving(id))
 			if len(federationReleaseRefs) == 0 && shouldDeferTunnelRuntimeApplyError(applyErr) {
-				response.WriteJSON(w, response.OKEmpty())
+				respondTunnelUpdateOK()
 				return
 			}
 			response.WriteJSON(w, response.ErrDefault(applyErr.Error()))
@@ -1997,7 +2076,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("引擎已切换，但数据面同步失败: %v", err)))
 			return
 		}
-		response.WriteJSON(w, response.OKEmpty())
+		respondTunnelUpdateOK()
 		return
 	}
 	if engine == tunnelEngineRealm {
@@ -2007,7 +2086,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
-		response.WriteJSON(w, response.OKEmpty())
+		respondTunnelUpdateOK()
 		return
 	}
 
@@ -2018,7 +2097,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if tunnelForwardRuntimeNeedsSync(oldType, typeVal, oldEntryNodeIDs, newEntryNodeIDs) {
 		forwards, fwdErr := h.listForwardsByTunnel(id)
 		if fwdErr != nil {
-			response.WriteJSON(w, response.OKEmpty())
+			respondTunnelUpdateOK()
 			return
 		}
 		for i := range forwards {
@@ -2026,7 +2105,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response.WriteJSON(w, response.OKEmpty())
+	respondTunnelUpdateOK()
 }
 
 func tunnelForwardRuntimeNeedsSync(oldType, newType int, oldEntryNodeIDs, newEntryNodeIDs []int64) bool {
@@ -2438,9 +2517,11 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// R2X-010 ①（BC-R2-01）：删除类与 X-P1-1 离线待清理对齐——联邦
+	// 清理失败不中止删库，绑定留 pending 由重试环在对端恢复后收敛
+	//（与 delete-with-forwards 的既有口径统一）。
 	if err := h.cleanupFederationRuntime(id); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
+		log.Printf("tunnel delete: federation cleanup deferred to retry loop tunnel_id=%d err=%v", id, err)
 	}
 	h.cleanupTunnelRuntime(id)
 	if err := h.deleteTunnelByID(id); err != nil {
@@ -2527,10 +2608,10 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, tunnelName, err)
 			continue
 		}
+		// R2X-010 ①：同单删口径，联邦清理失败不中止删库（绑定留
+		// pending 由重试环收敛）。
 		if err := h.cleanupFederationRuntime(id); err != nil {
-			fail++
-			failures = appendBatchFailure(failures, id, tunnelName, err)
-			continue
+			log.Printf("tunnel batch delete: federation cleanup deferred to retry loop tunnel_id=%d err=%v", id, err)
 		}
 		h.cleanupTunnelRuntime(id)
 		if err := h.deleteTunnelByID(id); err != nil {
@@ -2642,7 +2723,8 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		if err := validateTunnelRuntimeBeforeApply(state); err != nil {
 			return err
 		}
-		if err := h.cleanupFederationRuntime(tunnelID); err != nil {
+		// R2X-010 ②：重部署是非删除操作，清理失败中止时回滚 pending。
+		if err := h.cleanupFederationRuntimePreserving(tunnelID); err != nil {
 			return err
 		}
 		h.cleanupTunnelRuntime(tunnelID)
@@ -2663,7 +2745,7 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		}
 		_, _, applyErr := h.applyTunnelRuntime(state)
 		if applyErr != nil {
-			applyErr = errors.Join(applyErr, h.cleanupFederationRuntime(tunnelID))
+			applyErr = errors.Join(applyErr, h.cleanupFederationRuntimePreserving(tunnelID))
 			return applyErr
 		}
 	}
@@ -2697,6 +2779,9 @@ type batchOperationResult struct {
 	// A4-002：批量同步路径的非致命告警（如 realm 限速不生效），与单条
 	// create/update 的 data.warnings 同义；仅在非空时出现，向后兼容。
 	Warnings []string `json:"warnings,omitempty"`
+	// R2X-045：批量删节点打断的跨节点引用清单（与单删的
+	// brokenReferrers 同名字段/同口径）；仅删节点批量入口填充。
+	BrokenReferrers []string `json:"brokenReferrers,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -4076,6 +4161,9 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
 	batchWarnings := make([]string, 0)
+	// R2X-008（E2-01）：逐 forward 在换隧道之前以 inboundIDsForForward
+	// 收集受影响入站（换隧道后拨号节点集变化），成功后统一刷新白名单。
+	var changedInboundIDs []int64
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
 			continue
@@ -4086,6 +4174,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, "", accessErr)
 			continue
 		}
+		fwdInboundIDs := h.inboundIDsForForward(id)
 		if forward.TunnelID == req.TargetTunnelID {
 			fail++
 			failures = appendBatchFailureReason(failures, id, forward.Name, "规则已在目标隧道中")
@@ -4239,8 +4328,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 				_ = h.deleteForwardServicesOnNodeBatch(forward, nodeID)
 			}
 		}
+		changedInboundIDs = append(changedInboundIDs, fwdInboundIDs...)
 		success++
 	}
+	h.refreshInboundWhitelists(changedInboundIDs)
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
 
@@ -5462,6 +5553,41 @@ func (h *Handler) cleanupFederationRuntime(tunnelID int64) error {
 	return errors.Join(failures...)
 }
 
+// cleanupFederationRuntimePreserving is cleanupFederationRuntime for
+// non-delete operations (tunnelUpdate / redeploy) — R2X-010 ②: it
+// snapshots each binding's status on entry, and when the cleanup fails
+// (so the caller aborts and the tunnel stays alive) it rolls the
+// bindings this round flipped from active (1) to pending (2) back to
+// status=1, so the background retry loop cannot later release the
+// runtime of a tunnel that was never actually deleted or replaced.
+// Bindings already pending on entry keep their status: their pending
+// state belongs to an earlier, committed delete intent.
+func (h *Handler) cleanupFederationRuntimePreserving(tunnelID int64) error {
+	if h == nil || tunnelID <= 0 {
+		return nil
+	}
+	bindings, err := h.repo.ListFederationTunnelBindingsForCleanup(tunnelID)
+	if err != nil {
+		return err
+	}
+	original := make(map[int64]int, len(bindings))
+	for _, b := range bindings {
+		original[b.ID] = b.Status
+	}
+	if err := h.cleanupFederationRuntime(tunnelID); err != nil {
+		for id, status := range original {
+			if status != 1 {
+				continue
+			}
+			if rerr := h.repo.SetFederationTunnelBindingStatus(id, 1); rerr != nil {
+				log.Printf("federation cleanup rollback failed tunnel_id=%d binding_id=%d err=%v", tunnelID, id, rerr)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
 func (h *Handler) releaseFederationTunnelBinding(b repo.FederationTunnelBinding) error {
 	node, err := h.repo.GetNodeByID(b.NodeID)
 	if err != nil {
@@ -5495,6 +5621,17 @@ func (h *Handler) retryPendingFederationRuntimeCleanup() error {
 	}
 	var failures []error
 	for _, binding := range bindings {
+		// R2X-010 ③（纵深防线）：释放前复核绑定所属隧道是否仍存在——
+		// 仍存在说明该 pending 不是已提交的删除意图（例如旧口径下失败
+		// 的删除/编辑尝试遗留），释放它会拆掉仍在用隧道的数据面，跳过
+		// 并记日志。隧道 ID 自增不复用，此判据不会误伤真删除。
+		if exists, err := h.repo.TunnelExists(binding.TunnelID); err != nil {
+			failures = append(failures, err)
+			continue
+		} else if exists {
+			log.Printf("federation cleanup retry: skip binding_id=%d tunnel_id=%d: tunnel still exists", binding.ID, binding.TunnelID)
+			continue
+		}
 		if err := h.releaseFederationTunnelBinding(binding); err != nil {
 			failures = append(failures, err)
 		}
@@ -6330,7 +6467,14 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // 本身就是删节点的主要场景，不能因节点不可达而永远删不掉；节点自身
 // 的数据面随节点下线消亡，未清成功的残留以日志形式留痕（节点 ID +
 // 转发 ID），不静默丢失。
-func (h *Handler) deleteNodeByID(id int64) error {
+// deleteNodeByID 的返回值是 R2X-045 的跨节点引用清单：删除前按该节点
+// 全部入站汇 chainReferrers、排除同节点引用方，随删除结果回传给调用
+// 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
+func (h *Handler) deleteNodeByID(id int64) ([]string, error) {
+	var brokenReferrers []string
+	if h != nil && h.repo != nil {
+		brokenReferrers = h.nodeCrossReferrers(id)
+	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
 			for _, forwardID := range forwardIDs {
@@ -6352,7 +6496,7 @@ func (h *Handler) deleteNodeByID(id int64) error {
 		}
 	}
 	if err := h.repo.DeleteNodeCascade(id); err != nil {
-		return err
+		return nil, err
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
@@ -6361,7 +6505,7 @@ func (h *Handler) deleteNodeByID(id int64) error {
 	if h.wsServer != nil {
 		h.wsServer.DisconnectNode(id)
 	}
-	return nil
+	return brokenReferrers, nil
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {

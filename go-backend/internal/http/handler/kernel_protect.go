@@ -220,6 +220,53 @@ func (h *Handler) inboundIDsForTunnel(tunnelID int64) []int64 {
 	return out
 }
 
+// inboundIDsDialedByNode returns the inbounds whose dialer set includes
+// the given node (relay dialers of their forwards' tunnels, plus kernels
+// chained through them) — the set whose allow list embeds the node's
+// addresses (R2X-008 / E S-1: 节点改址后须刷新这些入站）。
+func (h *Handler) inboundIDsDialedByNode(nodeID int64) []int64 {
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	for _, row := range rows {
+		hit := false
+		if relays, err := h.repo.ListInboundRelays(row.ID); err == nil {
+			for _, rel := range relays {
+				if !rel.ForwardExists {
+					continue
+				}
+				dialers, derr := h.relayDialerNodeIDs(rel.TunnelID, rel.TunnelType)
+				if derr != nil {
+					continue
+				}
+				for _, d := range dialers {
+					if d == nodeID {
+						hit = true
+						break
+					}
+				}
+				if hit {
+					break
+				}
+			}
+		}
+		if !hit {
+			for _, d := range h.chainDialerNodeIDs(row.ID) {
+				if d == nodeID {
+					hit = true
+					break
+				}
+			}
+		}
+		if hit {
+			out = append(out, row.ID)
+		}
+	}
+	return out
+}
+
 // refreshInboundWhitelists refreshes each affected inbound once.
 func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) {
 	seen := make(map[int64]struct{}, len(inboundIDs))

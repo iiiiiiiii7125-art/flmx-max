@@ -377,6 +377,10 @@ func summarizeTunnelDeleteRuleFailures(failures []batchFailureDetail) string {
 }
 
 func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string, targetTunnelID int64) (tunnelDeleteWithForwardsResult, []batchFailureDetail, error) {
+	// R2X-008（E2-01）：收集时机是关键——必须在删 relay 行之前按
+	// tunnel→forward→relay 收集 inbound 集（照 tunnelDelete 先收集
+	// 模式）；删除/迁移后 relay 与转发已消失，收集源不复存在。
+	affectedInboundIDs := h.inboundIDsForTunnel(tunnelID)
 	preview, err := h.buildTunnelDeletePreview(tunnelID)
 	if err != nil {
 		return tunnelDeleteWithForwardsResult{}, nil, err
@@ -387,6 +391,7 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		return result, nil, nil
 	}
 
@@ -395,6 +400,7 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		return result, nil, nil
 	}
 
@@ -408,6 +414,9 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 }
 
 func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int64, result tunnelDeleteWithForwardsResult) (tunnelDeleteWithForwardsResult, []batchFailureDetail, error) {
+	// R2X-008：迁移执行前（转发仍在源隧道上时）收集受影响入站，
+	// 迁移 + 删隧道完成后刷新——allow 应含目标隧道拨号节点、不含源隧道。
+	affectedInboundIDs := h.inboundIDsForTunnel(tunnelID)
 	targetTunnel, err := h.getTunnelRecord(targetTunnelID)
 	if err != nil {
 		return tunnelDeleteWithForwardsResult{}, nil, errors.New("目标隧道不存在")
@@ -441,6 +450,7 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		_ = h.redeployTunnelAndForwards(tunnelID)
 		return tunnelDeleteWithForwardsResult{}, nil, err
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 
 	result.MigratedCount = len(plans)
 	result.PortAdjustedCount = portAdjustedCount
