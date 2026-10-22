@@ -487,6 +487,14 @@ func (r *Repository) ApplyFlowUploadAccounting(deltas []FlowUploadCounterDelta, 
 	}
 	quotaViews := map[int64]*model.UserQuotaView{}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// R2X-011：seq 推进提到 deltas 之前——推进失败（ErrSeqReplay）
+		// 时整 tx 在写入任何账目前即回滚，重放判定不依赖写入顺序的
+		// 副作用残留；且推进本身是本 tx 的第一道门。
+		if seqAdv != nil && seqAdv.NodeID > 0 {
+			if err := advanceSeqTx(tx, seqAdv.NodeID, seqAdv.Seq, now.UnixMilli()); err != nil {
+				return err
+			}
+		}
 		if err := applyFlowUploadDeltasTx(tx, deltas); err != nil {
 			return err
 		}
@@ -494,11 +502,6 @@ func (r *Repository) ApplyFlowUploadAccounting(deltas []FlowUploadCounterDelta, 
 		quotaViews, err = r.addUserQuotaUsageBatchTx(tx, quotaUsage, now)
 		if err != nil {
 			return err
-		}
-		if seqAdv != nil && seqAdv.NodeID > 0 {
-			if err := advanceSeqTx(tx, seqAdv.NodeID, seqAdv.Seq, now.UnixMilli()); err != nil {
-				return err
-			}
 		}
 		return nil
 	})
