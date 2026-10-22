@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,9 +63,32 @@ type Handler struct {
 	jobsStarted bool
 	jobsWG      sync.WaitGroup
 
+	// FIX-D（D6-07）：通知派发有界队列 + worker 池状态（notify.go）。
+	notifyMu      sync.Mutex
+	notifyQueue   chan notifyJob
+	notifyCancel  context.CancelFunc
+	notifyRunning bool
+	notifyWG      sync.WaitGroup
+	// 通知配置读取缓存（短 TTL + 配置写路径显式失效），消除每条通知
+	// 一次 vite_config 全表扫描。
+	notifyCfgMu   sync.Mutex
+	notifyCfgVals map[string]string
+	notifyCfgAt   time.Time
+
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
 	pendingUpgradeRedeploy      map[int64]struct{}
+	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
+	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
+	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
+	pendingRealmSettle map[int64]struct{}
+	// FIX2-A（V2-01/V2-02）：配额执法 per-user 串行化锁。
+	quotaEnforceMu    sync.Mutex
+	quotaEnforceLocks map[int64]*sync.Mutex
+	// FIX2-A（V2-08）：转发计数入账 per-node 串行化锁（基线读→差分
+	// →落库整段），防 settle/周期/重连多路轮询以同一旧基线重复差分。
+	nodeAccountingMu    sync.Mutex
+	nodeAccountingLocks map[int64]*sync.Mutex
 	nodeOnlineRedeployAt        map[int64]time.Time
 	nodeOnlineRedeployQueued    map[int64]struct{}
 	nodeOnlineRedeploying       map[int64]struct{}
@@ -139,6 +163,9 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		captchaTokens:            make(map[string]int64),
 		passkeyPending:           make(map[string]passkeyCeremony),
 		pendingUpgradeRedeploy:   make(map[int64]struct{}),
+		pendingRealmSettle:       make(map[int64]struct{}),
+		quotaEnforceLocks:        make(map[int64]*sync.Mutex),
+		nodeAccountingLocks:      make(map[int64]*sync.Mutex),
 		nodeOnlineRedeployAt:     make(map[int64]time.Time),
 		nodeOnlineRedeployQueued: make(map[int64]struct{}),
 		nodeOnlineRedeploying:    make(map[int64]struct{}),
@@ -388,6 +415,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/error", h.errorPage)
 }
 
+// dummyBcryptHash 是合法 bcrypt 格式（cost 10）的占位哈希：
+// 用户不存在的鉴权路径用它跑一次 VerifyPassword，使耗时与真实
+// 验证相近，消除用户名枚举时序差（K-001；login 与 sub_store 共用）。
+const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 // isStoredDefaultPassword 判断存储的口令哈希是否为种子默认口令（M-05）。
 // 仅用于管理员账号；登录已做过一次 bcrypt，这里是通行密钥等无密码登录路径的补充检查。
 func isStoredDefaultPassword(roleID int, pwdHash string) bool {
@@ -487,8 +519,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if user == nil {
 		// K-001：用户不存在时也跑一次 dummy bcrypt，消除时序差，防止用户名枚举
 		// 旧逻辑：不存在用户立即返回（2-5ms），存在用户走 bcrypt（80-150ms），时序差可被利用
-		// dummy hash 为合法 bcrypt 格式（cost 10），确保耗时与真实验证相近
-		_, _ = security.VerifyPassword("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", req.Password)
+		_, _ = security.VerifyPassword(dummyBcryptHash, req.Password)
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}
@@ -515,8 +546,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// M-05: 管理员用种子默认口令登录时签发受限 token（仅允许改密），
-	// 服务端强制改密。此处用登录时实际提供的密码精确判断，无需额外 bcrypt。
-	pwdChangeRequired := user.RoleID == 0 && (req.Password == "admin@user" || req.Password == "admin_user")
+	// 服务端强制改密。A1-D2：判定口径与 passkey 路径（R-002）统一为
+	// 「存储口令是否仍为种子默认口令」——登录已成功验证提交口令与存储
+	// 哈希一致，故该口径与「提交口令命中默认值」等价，且能覆盖口令被
+	// 其它路径重置为默认的情况。下方响应标志直接复用同一结果：
+	// JWT claim、响应标志、passkey 三方一致，不再按用户名现算
+	// （旧现算使已改密但保留 admin@user 用户名的管理员被永久误报）。
+	pwdChangeRequired := isStoredDefaultPassword(user.RoleID, user.Pwd)
 	var token string
 	if pwdChangeRequired {
 		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
@@ -528,14 +564,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requirePasswordChange := req.Username == "admin_user" || req.Password == "admin_user" || req.Username == "admin@user" || req.Password == "admin@user"
 	// R5-B2 A-001: 登录成功，清除该用户名的限流状态（含退避计数）。
 	h.noteLoginUsernameSuccess(req.Username)
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"token":                 token,
 		"name":                  user.User,
 		"role_id":               user.RoleID,
-		"requirePasswordChange": requirePasswordChange,
+		"requirePasswordChange": pwdChangeRequired,
 	}))
 }
 
@@ -819,6 +854,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user == nil {
+		// A1 P3：与 login 的 K-001 同口径——用户不存在时也跑一次
+		// dummy bcrypt，消除用户名枚举时序侧信道（旧实现立即返回）。
+		_, _ = security.VerifyPassword(dummyBcryptHash, password)
 		response.WriteJSON(w, response.ErrDefault("鉴权失败"))
 		return
 	}
@@ -1219,6 +1257,7 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.invalidateNotifyConfigCache()
 	for _, key := range hooks {
 		h.notifyTunnelQualityConfigChanged(key)
 		h.onLatencyConfigChanged(key, prevPools[key])
@@ -1270,6 +1309,7 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		h.invalidateNotifyConfigCache()
 		h.notifyTunnelQualityConfigChanged(name)
 		h.onLatencyConfigChanged(name, prevPool)
 
@@ -1282,6 +1322,7 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.invalidateNotifyConfigCache()
 	h.notifyTunnelQualityConfigChanged(name)
 	h.onLatencyConfigChanged(name, prevPool)
 
@@ -1322,6 +1363,13 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		}
 
 		return pngDataURLPrefix + payload, nil
+	case latencyTargetsConfigKey:
+		// A2-01=A7-01：此键此前走 default 原样放行，非法值保存成功后
+		// latencyPool 解析失败恒空——全部延迟/回程测量静默停摆，且
+		// onLatencyConfigChanged 以空池同步会清掉每个节点的自选测试点。
+		// normalizeLatencyTargetsConfig 本为此写就，现正式接线（空串
+		// 返回 ""，与既有可清空语义兼容）。
+		return normalizeLatencyTargetsConfig(value)
 	case monitorTunnelQualityEnabledConfigKey:
 		normalized := strings.TrimSpace(strings.ToLower(value))
 		switch normalized {
@@ -1344,7 +1392,9 @@ func (h *Handler) notifyTunnelQualityConfigChanged(key string) {
 		return
 	}
 	switch strings.TrimSpace(key) {
-	case monitorTunnelQualityEnabledConfigKey, monitoring.ConfigTunnelQualityProbeIntervalSec:
+	// FIX2-B（V4-O1）：retention 键补入——probeConfig 三键合读，漏此
+	// 键时保留期新值只能等 5s TTL 兜底，与另两键的即时口径不一致。
+	case monitorTunnelQualityEnabledConfigKey, monitoring.ConfigTunnelQualityProbeIntervalSec, monitoring.ConfigMonitorRetentionDays:
 		h.qualityProber.NotifyConfigChanged()
 	}
 }
@@ -1886,6 +1936,16 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return
+	}
+
+	// FIX2-B（V4-N1）：configs 段写库后与 UI 两写入口同口径失效配置
+	// 缓存。此前导入绕过全部失效钩子：notify_enabled 与 prober 三键
+	// 只能等 5s TTL 兜底（notify_events 因派发时现读已对冲，不在此列）。
+	if slices.Contains(req.Types, "configs") && len(req.BackupData.Configs) > 0 {
+		h.invalidateNotifyConfigCache()
+		for key := range req.BackupData.Configs {
+			h.notifyTunnelQualityConfigChanged(key)
+		}
 	}
 
 	if result.InboundsImported > 0 || req.BackupData.Inbounds != nil && len(req.BackupData.Inbounds.Kernels) > 0 {

@@ -72,7 +72,20 @@ func (r *Repository) CreateNodeKernel(k *model.NodeKernel) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Create(k).Error
+	// 零值家族收口：NodeKernel.Enabled 带 `default:1`，Create 会吞掉
+	// 显式 0。现行两个调用点恒传 1，此处仍按 CreateNodeInbound
+	// （BUG-A4-1）范式留意图写回，避免未来调用方踩中同族坑。
+	wantEnabled := k.Enabled
+	if err := r.db.Create(k).Error; err != nil {
+		return err
+	}
+	if wantEnabled == 0 {
+		if err := r.db.Model(&model.NodeKernel{}).Where("id = ?", k.ID).Update("enabled", 0).Error; err != nil {
+			return err
+		}
+		k.Enabled = 0
+	}
+	return nil
 }
 
 // UpdateNodeKernelFields updates selected columns; zero values are written.
@@ -93,6 +106,10 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 			return err
 		}
 		if len(ids) > 0 {
+			relayIDs, err := pluckInboundRelayIDsTx(tx, "inbound_id IN ?", ids)
+			if err != nil {
+				return err
+			}
 			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundCounter{}).Error; err != nil {
 				return err
 			}
@@ -102,6 +119,10 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 			// B4/F-010（变体）: 单删入站（DeleteNodeInbound）会清 user_inbound，
 			// 删内核/删节点级联此前独漏，孤儿分配行可阻断后续订阅分配保存。
 			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
+				return err
+			}
+			// A3-02/X2-01 统一手法：指向被删 relay 行的授权按物化集合清。
+			if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 				return err
 			}
 		}
@@ -115,12 +136,38 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 	})
 }
 
+// pluckInboundRelayIDsTx 在 relay 行被删除之前物化其 id 集合。
+// user_inbound.relay_id 的键空间是 NodeInboundRelay.id，与 inbound id /
+// forward id 是相互独立的自增序列：清理授权行必须用物化的 relay id
+// 集合，严禁用其它实体的 id 集合代替（A3-02：旧 deleteNodeKernelsTx
+// 用入站 id 集合套 relay_id，数值碰撞时静默误删其它节点中转的授权）。
+func pluckInboundRelayIDsTx(tx *gorm.DB, where string, args ...interface{}) ([]int64, error) {
+	var relayIDs []int64
+	if err := tx.Model(&model.NodeInboundRelay{}).Where(where, args...).Pluck("id", &relayIDs).Error; err != nil {
+		return nil, err
+	}
+	return relayIDs, nil
+}
+
+// deleteUserInboundGrantsByRelayIDsTx 按物化的 relay id 集合清理
+// user_inbound 授权行（各删除级联统一手法，A3-02/X2-01）。
+func deleteUserInboundGrantsByRelayIDsTx(tx *gorm.DB, relayIDs []int64) error {
+	if len(relayIDs) == 0 {
+		return nil
+	}
+	return tx.Where("relay_id IN ?", relayIDs).Delete(&model.UserInbound{}).Error
+}
+
 func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
 	var ids []int64
 	if err := tx.Model(&model.NodeInbound{}).Where("node_id = ?", nodeID).Pluck("id", &ids).Error; err != nil {
 		return err
 	}
 	if len(ids) > 0 {
+		relayIDs, err := pluckInboundRelayIDsTx(tx, "inbound_id IN ?", ids)
+		if err != nil {
+			return err
+		}
 		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundCounter{}).Error; err != nil {
 			return err
 		}
@@ -128,12 +175,13 @@ func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
 			return err
 		}
 		// B4/F-010: 节点级联删入站时同步清 user_inbound（按 inbound_id），
-		// 与 DeleteNodeInbound 的口径一致；以本节点入站为中转目标的分配行
-		// （relay_id）同样成为孤儿，一并清理。
+		// 与 DeleteNodeInbound 的口径一致；指向被删 relay 行的分配行
+		// （relay_id）按物化的 relay id 集合一并清理（A3-02 修正：
+		// 旧实现误用入站 id 集合，会误删其它节点同号 relay 的授权）。
 		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("relay_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
+		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 			return err
 		}
 	}
@@ -194,16 +242,21 @@ func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	// 必是显式禁用。改模型标签去掉 default 会触发存量库 AutoMigrate 的
 	// 列变更（SQLite 需重建表），故在仓库层收口。
 	wantEnabled := in.Enabled
-	if err := r.db.Create(in).Error; err != nil {
-		return err
-	}
-	if wantEnabled == 0 {
-		if err := r.db.Model(&model.NodeInbound{}).Where("id = ?", in.ID).Update("enabled", 0).Error; err != nil {
+	// FIX132-C（A3-06）：建行与 enabled 写回包进同一事务。旧实现
+	// 两步非原子，写回失败时行已落库且 enabled=1（与调用方显式
+	// 禁用意图相反）并已上线。
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(in).Error; err != nil {
 			return err
 		}
-		in.Enabled = 0
-	}
-	return nil
+		if wantEnabled == 0 {
+			if err := tx.Model(&model.NodeInbound{}).Where("id = ?", in.ID).Update("enabled", 0).Error; err != nil {
+				return err
+			}
+			in.Enabled = 0
+		}
+		return nil
+	})
 }
 
 // SaveNodeInbound writes the editable columns; traffic is left untouched so a
@@ -242,6 +295,10 @@ func (r *Repository) DeleteNodeInbound(id int64) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		relayIDs, err := pluckInboundRelayIDsTx(tx, "inbound_id = ?", id)
+		if err != nil {
+			return err
+		}
 		if err := tx.Where("inbound_id = ?", id).Delete(&model.NodeInboundCounter{}).Error; err != nil {
 			return err
 		}
@@ -251,6 +308,10 @@ func (r *Repository) DeleteNodeInbound(id int64) error {
 		// Clean up user subscription assignments pointing at this inbound,
 		// otherwise they become orphans that block future saves ("inbound not found").
 		if err := tx.Where("inbound_id = ?", id).Delete(&model.UserInbound{}).Error; err != nil {
+			return err
+		}
+		// A3-02/X2-01 统一手法：指向被删 relay 行的授权按物化集合清。
+		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 			return err
 		}
 		return tx.Where("id = ?", id).Delete(&model.NodeInbound{}).Error
@@ -333,9 +394,68 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 	if len(samples) == 0 {
 		return nil
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		ids := make([]int64, 0, len(samples))
-		for _, s := range samples {
+
+	// F-075（A4-004）：同一批内同 (inbound, protocol, direction)
+	// 的重复样本先合并再算增量（同 epoch 取最大 Bytes；epoch
+	// 变化说明计数器已重置，取后到样本为最新化身）。旧实现
+	// prev 只读 DB 基线、批次内不推进，重复样本会重复计入。
+	// 合并是纯函数，先于分片完成：合并后每个键在整批中只出现一次，
+	// 这是 D6-03 分片后片间互不依赖的前提。
+	merged := make(map[inboundCounterKey]InboundCounterSample, len(samples))
+	mergedOrder := make([]inboundCounterKey, 0, len(samples))
+	for _, s := range samples {
+		k := inboundCounterKey{s.InboundID, s.Protocol, s.Direction}
+		if cur, ok := merged[k]; ok {
+			switch {
+			case s.Epoch != cur.Epoch:
+				merged[k] = s
+			case s.Bytes > cur.Bytes:
+				merged[k] = s
+			}
+			continue
+		}
+		merged[k] = s
+		mergedOrder = append(mergedOrder, k)
+	}
+	ordered := make([]InboundCounterSample, 0, len(mergedOrder))
+	for _, k := range mergedOrder {
+		ordered = append(ordered, merged[k])
+	}
+
+	// D6-03：原实现把整批（实测 1200–2300 条 upsert + 数百条 UPDATE）
+	// 塞进单个事务，串行占库 0.25–0.9s。改为按 200 条分片提交：
+	// 每片内「基线推进 + 总量入账」仍是同一事务（原子性不变），
+	// 片间键互不重叠、总量是可加表达式，故结果与单事务等价；
+	// 某片失败时已提交片的基线与总量同步前进，以同批样本重试时
+	// 已结算部分 delta=0，不会重复计入。
+	const chunkSize = 200
+	for start := 0; start < len(ordered); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		chunk := ordered[start:end]
+		if err := r.db.Transaction(func(tx *gorm.DB) error {
+			return applyInboundCounterChunk(tx, chunk, now)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type inboundCounterKey struct {
+	id        int64
+	proto     string
+	direction string
+}
+
+// applyInboundCounterChunk settles one chunk of merged samples in a
+// single transaction: baseline upserts and inbound totals move together.
+func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now int64) error {
+	{
+		ids := make([]int64, 0, len(ordered))
+		for _, s := range ordered {
 			ids = append(ids, s.InboundID)
 		}
 		var existing []int64
@@ -351,39 +471,9 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 		if err := tx.Where("inbound_id IN ?", ids).Find(&states).Error; err != nil {
 			return err
 		}
-		type key struct {
-			id        int64
-			proto     string
-			direction string
-		}
-		prev := make(map[key]model.NodeInboundCounter, len(states))
+		prev := make(map[inboundCounterKey]model.NodeInboundCounter, len(states))
 		for _, st := range states {
-			prev[key{st.InboundID, st.Protocol, st.Direction}] = st
-		}
-
-		// F-075（A4-004）：同一批内同 (inbound, protocol, direction)
-		// 的重复样本先合并再算增量（同 epoch 取最大 Bytes；epoch
-		// 变化说明计数器已重置，取后到样本为最新化身）。旧实现
-		// prev 只读 DB 基线、批次内不推进，重复样本会重复计入。
-		merged := make(map[key]InboundCounterSample, len(samples))
-		mergedOrder := make([]key, 0, len(samples))
-		for _, s := range samples {
-			k := key{s.InboundID, s.Protocol, s.Direction}
-			if cur, ok := merged[k]; ok {
-				switch {
-				case s.Epoch != cur.Epoch:
-					merged[k] = s
-				case s.Bytes > cur.Bytes:
-					merged[k] = s
-				}
-				continue
-			}
-			merged[k] = s
-			mergedOrder = append(mergedOrder, k)
-		}
-		ordered := make([]InboundCounterSample, 0, len(mergedOrder))
-		for _, k := range mergedOrder {
-			ordered = append(ordered, merged[k])
+			prev[inboundCounterKey{st.InboundID, st.Protocol, st.Direction}] = st
 		}
 
 		upload := make(map[int64]int64)
@@ -404,7 +494,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 				continue
 			}
 			delta := s.Bytes
-			if old, ok := prev[key{s.InboundID, s.Protocol, s.Direction}]; ok && old.Epoch == s.Epoch && s.Bytes >= old.Bytes {
+			if old, ok := prev[inboundCounterKey{s.InboundID, s.Protocol, s.Direction}]; ok && old.Epoch == s.Epoch && s.Bytes >= old.Bytes {
 				delta = s.Bytes - old.Bytes
 			}
 			if delta > 0 {
@@ -445,7 +535,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 			}
 		}
 		return nil
-	})
+	}
 }
 
 // InboundRelayView is a relay joined with the forward and tunnel behind it.

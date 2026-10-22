@@ -209,30 +209,60 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed 报错、
+	// 不落库（同族全扫：含配额两键），不再静默套硬默认/旧值。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+
+	// A2-04（BC-06）：真部分更新——未传字段保持现值（oldUser），不再
+	// 「缺省即重置」（旧口径：未传 status 把停用用户重新启用、未传
+	// expTime 自动续期一年、未传 flow 改回 100GB）。与 userTunnelUpdate
+	// 的 presence 语义一致；显式传值（含 0）照常生效。
 	flow, flowMiB, flowErr := parseTrafficLimit(req, 100)
 	if flowErr != nil {
 		response.WriteJSON(w, response.ErrDefault(flowErr.Error()))
 		return
+	}
+	if _, hasFlow := req["flow"]; !hasFlow {
+		if _, hasFlowMiB := req["flowMiB"]; !hasFlowMiB {
+			flow, flowMiB = oldUser.Flow, oldUser.FlowMiB
+		}
 	}
 	if _, supplied := req["flowMiB"]; !supplied {
 		if current, err := h.repo.GetUserByID(id); err == nil && current != nil && current.Flow == flow {
 			flowMiB = current.FlowMiB
 		}
 	}
-	num := asInt(req["num"], 10)
+	num := oldUser.Num
+	if _, ok := req["num"]; ok {
+		num = asInt(req["num"], 10)
+	}
 	// O5-005：num 拒绝负值
 	if num < 0 {
 		response.WriteJSON(w, response.ErrDefault("设备数限制不能小于0"))
 		return
 	}
-	expTime := asInt64(req["expTime"], time.Now().Add(365*24*time.Hour).UnixMilli())
-	flowResetTime := asInt64(req["flowResetTime"], 1)
+	expTime := oldUser.ExpTime
+	if _, ok := req["expTime"]; ok {
+		expTime = asInt64(req["expTime"], oldUser.ExpTime)
+	}
+	flowResetTime := oldUser.FlowResetTime
+	if _, ok := req["flowResetTime"]; ok {
+		flowResetTime = asInt64(req["flowResetTime"], oldUser.FlowResetTime)
+	}
 	// O5-008：flowResetTime 有效值校验：0=不自动重置，1-31=每月几号重置
 	if flowResetTime < 0 || flowResetTime > 31 {
 		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
 		return
 	}
-	status := asInt(req["status"], 1)
+	status := oldUser.Status
+	if _, ok := req["status"]; ok {
+		status = asInt(req["status"], oldUser.Status)
+	}
 	// O5-007：status 枚举校验（仅 0/1）
 	if status != 0 && status != 1 {
 		response.WriteJSON(w, response.ErrDefault("状态值无效，仅允许 0 或 1"))
@@ -241,7 +271,10 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	_, hasDailyQuota := req["dailyQuotaGB"]
 	_, hasMonthlyQuota := req["monthlyQuotaGB"]
 	now := time.Now().UnixMilli()
-	maxConn := asInt(req["maxConn"], 0)
+	maxConn := oldUser.MaxConn
+	if _, ok := req["maxConn"]; ok {
+		maxConn = asInt(req["maxConn"], oldUser.MaxConn)
+	}
 	// O5-006：maxConn 拒绝负值
 	if maxConn < 0 {
 		response.WriteJSON(w, response.ErrDefault("连接数限制不能小于0"))
@@ -273,7 +306,16 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
 		monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
 		if !(hasDailyQuota && hasMonthlyQuota) {
-			if currentQuota, err := h.repo.GetUserQuotaView(id, time.Now()); err == nil && currentQuota != nil {
+			// FIX2-A（V2-07 同族）：单传一侧时另一侧从当前视图补齐；
+			// 旧实现视图读取失败/为空时静默以 0 落库（把另一侧限额
+			// 清零）。读取失败改为报错中止；视图为空（尚无配额行）
+			// 才是合法的 0。
+			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
+			if qErr != nil {
+				response.WriteJSON(w, response.Err(-2, qErr.Error()))
+				return
+			}
+			if currentQuota != nil {
 				if !hasDailyQuota {
 					dailyQuotaGB = currentQuota.DailyLimitGB
 				}
@@ -450,6 +492,16 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// D3-02: 直填 remoteUrl 与 nodeImport 共用同一校验（validateRemoteNodeURL），
+	// 此前该路径零校验，可把内网/元数据地址写成远端节点 URL。
+	if asInt(req["isRemote"], 0) == 1 {
+		if remoteURL := strings.TrimSpace(asString(req["remoteUrl"])); remoteURL != "" {
+			if err := validateRemoteNodeURL(remoteURL); err != nil {
+				writeRemoteURLValidationError(w, err)
+				return
+			}
+		}
+	}
 
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("node")
@@ -512,6 +564,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("节点ID不能为空"))
 		return
 	}
+	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed，不落
+	// 库（expiryTime 旧口径静默套 0 = 清空到期，http/tls/socks 同族）。
+	for _, key := range []string{"http", "tls", "socks", "expiryTime"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
 
 	currentStatus, currentHTTP, currentTLS, currentSocks, err := h.repo.GetNodeStatusFields(id)
 	if err != nil {
@@ -526,13 +586,28 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	newHTTP := asInt(req["http"], currentHTTP)
 	newTLS := asInt(req["tls"], currentTLS)
 	newSocks := asInt(req["socks"], currentSocks)
-	forwardMode := defaultNodeForwardMode(strings.TrimSpace(asString(req["forwardMode"])))
 	currentForwardMode, err := h.repo.GetNodeForwardMode(id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	serverIP := asString(req["serverIp"])
+	// A2-04（BC-06）：真部分更新——未传字段保持现值。旧口径未传
+	// forwardMode 时 defaultNodeForwardMode("") 恒回 "agent"，会把
+	// nftables 节点静默翻回 agent 模式；name/serverIp/port/监听地址/
+	// 附加字段同理被清空或复位。currentNode 为保值来源。
+	currentNode, err := h.repo.GetNodeByID(id)
+	if err != nil || currentNode == nil {
+		response.WriteJSON(w, response.Err(-2, errString(err)))
+		return
+	}
+	forwardMode := defaultNodeForwardMode(currentForwardMode)
+	if _, ok := req["forwardMode"]; ok {
+		forwardMode = defaultNodeForwardMode(strings.TrimSpace(asString(req["forwardMode"])))
+	}
+	serverIP := currentNode.ServerIP
+	if _, ok := req["serverIp"]; ok {
+		serverIP = asString(req["serverIp"])
+	}
 	if serverIP != "" {
 		if err := IsValidNodeAddress(serverIP); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -547,24 +622,69 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A2-04：其余字段同理按 presence 解析（未传用现值，含 sql.Null* 直传）。
+	resolveText := func(key string, current interface{}) interface{} {
+		if _, ok := req[key]; ok {
+			return nullableText(asString(req[key]))
+		}
+		return current
+	}
+	nodeName := currentNode.Name
+	if _, ok := req["name"]; ok {
+		nodeName = asString(req["name"])
+	}
+	nodePort := currentNode.Port
+	if _, ok := req["port"]; ok {
+		nodePort = defaultString(asString(req["port"]), "1000-65535")
+	}
+	if strings.TrimSpace(nodePort) == "" {
+		nodePort = "1000-65535"
+	}
+	remarkVal := interface{}(currentNode.Remark)
+	if _, ok := req["remark"]; ok {
+		remarkVal = nullableText(strings.TrimSpace(asString(req["remark"])))
+	}
+	expiryVal := interface{}(currentNode.ExpiryTime)
+	if _, ok := req["expiryTime"]; ok {
+		expiryVal = nullableUnixMilli(asInt64(req["expiryTime"], 0))
+	}
+	renewalVal := interface{}(currentNode.RenewalCycle)
+	if _, ok := req["renewalCycle"]; ok {
+		renewalVal = nullableText(normalizeNodeRenewalCycle(asString(req["renewalCycle"])))
+	}
+	tcpAddr := currentNode.TCPListenAddr
+	if _, ok := req["tcpListenAddr"]; ok {
+		tcpAddr = defaultString(asString(req["tcpListenAddr"]), "[::]")
+	}
+	if strings.TrimSpace(tcpAddr) == "" {
+		tcpAddr = "[::]"
+	}
+	udpAddr := currentNode.UDPListenAddr
+	if _, ok := req["udpListenAddr"]; ok {
+		udpAddr = defaultString(asString(req["udpListenAddr"]), "[::]")
+	}
+	if strings.TrimSpace(udpAddr) == "" {
+		udpAddr = "[::]"
+	}
+
 	now := time.Now().UnixMilli()
 	if err := h.repo.UpdateNode(id,
-		asString(req["name"]),
+		nodeName,
 		serverIP,
-		nullableText(asString(req["serverIpV4"])),
-		nullableText(asString(req["serverIpV6"])),
-		defaultString(asString(req["port"]), "1000-65535"),
-		nullableText(asString(req["interfaceName"])),
-		nullableText(asString(req["extraIPs"])),
-		nullableText(strings.TrimSpace(asString(req["remark"]))),
-		nullableUnixMilli(asInt64(req["expiryTime"], 0)),
-		nullableText(normalizeNodeRenewalCycle(asString(req["renewalCycle"]))),
+		resolveText("serverIpV4", currentNode.ServerIPV4),
+		resolveText("serverIpV6", currentNode.ServerIPV6),
+		nodePort,
+		resolveText("interfaceName", currentNode.InterfaceName),
+		resolveText("extraIPs", currentNode.ExtraIPs),
+		remarkVal,
+		expiryVal,
+		renewalVal,
 		forwardMode,
 		newHTTP,
 		newTLS,
 		newSocks,
-		defaultString(asString(req["tcpListenAddr"]), "[::]"),
-		defaultString(asString(req["udpListenAddr"]), "[::]"),
+		tcpAddr,
+		udpAddr,
 		now,
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -593,12 +713,30 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if forwardMode != "nftables" {
 		return h.repo.DeleteNodeSSHConfig(nodeID)
 	}
+	// V2-06：部分更新（preserveSecrets=true）未带 sshConfig 整段时
+	// 整段不动——旧实现仍会用请求值重建并 upsert，其中 port 被
+	// asInt(...,22) 填成 22 后保值分支（port<=0 才保值）永不触发，
+	// 任何不带完整 sshConfig 的 nodeUpdate 都把非 22 端口的 nft
+	// 节点 SSH 配置静默改回 22，数据面随之失联。
+	if preserveSecrets {
+		if _, ok := req["sshConfig"]; !ok {
+			return nil
+		}
+	}
 	cfgMap := asMap(req["sshConfig"])
 	host := strings.TrimSpace(asString(cfgMap["host"]))
 	if host == "" {
 		host = strings.TrimSpace(asString(req["serverIp"]))
 	}
-	port := asInt(cfgMap["port"], 22)
+	// V2-06/V2-07：port 改 presence/零值语义——缺席即 0，更新路径
+	// 由下方保值分支回填既有值，create 路径由既有校验（port<=0
+	// 报错）明确拒绝，不再静默默认 22；在场但不可解析直接报错。
+	if rawPort, ok := cfgMap["port"]; ok && asString(rawPort) != "" {
+		if _, err := strconv.ParseInt(asString(rawPort), 10, 64); err != nil {
+			return errors.New("nftables 节点 SSH 端口无效")
+		}
+	}
+	port := asInt(cfgMap["port"], 0)
 	username := strings.TrimSpace(asString(cfgMap["username"]))
 	authType := strings.TrimSpace(asString(cfgMap["authType"]))
 	password := asString(cfgMap["password"])
@@ -704,6 +842,61 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// panelRequestScheme 推断本次管理请求所见的面板实际服务方式
+// （"http"/"https"）：可信代理（回环/私网/链路本地，与登录限流
+// XFF 同一信任口径）的 X-Forwarded-Proto 优先，其次连接自身 TLS。
+// 配套：vite-frontend/nginx.conf 已改为透传上游 X-Forwarded-Proto
+// （此前被覆写为 nginx 自身 $scheme，Caddy 终止 TLS 的部署里后端
+// 永远只能看到 http）。
+func panelRequestScheme(r *http.Request) string {
+	if r != nil {
+		if ip := parseIPLiteral(r.RemoteAddr); ip != nil && isTrustedProxyIP(ip) {
+			proto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
+			if proto == "http" || proto == "https" {
+				return proto
+			}
+		}
+		if r.TLS != nil {
+			return "https"
+		}
+	}
+	return "http"
+}
+
+// normalizeNodeInstallAddr 把站点配置的面板地址归一为带显式
+// scheme 的 agent 连接地址（FIX2-C #2 / V6 §4）：
+//   - 地址自带 scheme：http/ws → ws://、https/wss → wss:// 显式化；
+//   - 裸地址：按面板实际服务方式（panelScheme）补 ws:// 或 wss://。
+//
+// 此前生成命令把地址原样写入节点 config.json，而 processServerAddress
+// 还会把自带 scheme 剥掉——FIX-H 禁止 agent 自动降级后，裸地址默认
+// wss，无 TLS 面板的新装节点重启即离线、只能人工改 config。归一只
+// 作用于新生成的安装命令，存量节点 config 不动。
+func normalizeNodeInstallAddr(panelAddr, panelScheme string) string {
+	raw := strings.TrimSpace(panelAddr)
+	scheme := ""
+	if idx := strings.Index(raw, "://"); idx > 0 {
+		switch strings.ToLower(raw[:idx]) {
+		case "http", "https", "ws", "wss":
+			scheme = strings.ToLower(raw[:idx])
+		}
+	}
+	host := processServerAddress(raw)
+	if host == "" {
+		return raw
+	}
+	switch scheme {
+	case "https", "wss":
+		return "wss://" + host
+	case "http", "ws":
+		return "ws://" + host
+	}
+	if panelScheme == "https" {
+		return "wss://" + host
+	}
+	return "ws://" + host
+}
+
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -753,13 +946,15 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	// 执行；任一步失败整条 && 链中止。校验锚与被校验文件同源同版本，
 	// 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
+	// FIX2-C #2：节点 addr 归一为显式 scheme（见 normalizeNodeInstallAddr）。
+	agentAddr := normalizeNodeInstallAddr(panelAddr, panelRequestScheme(r))
 	var cmd string
 	if enabled {
 		cmd = fmt.Sprintf("curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=true PROXY_URL=%s VERSION=%s ./install.sh -a %s -s %s",
-			proxyURL, githubRepo, version, proxyURL, githubRepo, version, proxyURL, version, processServerAddress(panelAddr), secret)
+			proxyURL, githubRepo, version, proxyURL, githubRepo, version, proxyURL, version, agentAddr, secret)
 	} else {
 		cmd = fmt.Sprintf("curl -fsSL https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
-			githubRepo, version, githubRepo, version, version, processServerAddress(panelAddr), secret)
+			githubRepo, version, githubRepo, version, version, agentAddr, secret)
 	}
 	response.WriteJSON(w, response.OK(cmd))
 }
@@ -817,15 +1012,38 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if ids == nil {
 		return
 	}
+	// A2-05（=A9-04 后端半）：逐条收集成败并以 batchOperationResult
+	// 回执（与 forward/tunnel/inbound 批量接口同口径）。旧实现吞掉全部
+	// 错误恒 OKEmpty，前端只能按选中数虚报全成功、失败节点刷新后
+	// 「复活」。响应体新增字段，向后兼容。
+	success := 0
+	fail := 0
+	failures := make([]batchFailureDetail, 0)
 	for _, id := range ids {
-		_ = h.deleteNodeByID(id)
+		nodeName := ""
+		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
+			nodeName = n.Name
+		} else {
+			// 节点不存在：DeleteNodeCascade 删 0 行不报错，必须在这一层
+			// 如实记失败，否则回执仍会把未删项报成功。
+			fail++
+			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
+			continue
+		}
+		delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
 			h.nftablesManager.ReleaseNode(id)
 		}
+		if delErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, nodeName, delErr)
+			continue
+		}
+		success++
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -928,7 +1146,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 			entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
 		}
 	}
-	if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
+	// A3-01：验证段内只收集 nftables 入口的 SSH 配置快照（纯 DB），
+	// SSH 能力校验（网络调用）在验证事务回滚后、提交段持锁前执行，
+	// 与下方联邦 HTTP 的出锁口径一致。
+	nftPairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
+	if err != nil {
 		validationTx.Rollback()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -985,6 +1207,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	validationTx.Rollback()
+
+	// A3-01：SSH 能力校验在此执行（无事务、无端口锁）。提交段内只
+	// 保留 validateNftablesTunnelStateTx 的 DB 侧复检（模式与配置
+	// 存在性），不再重复网络校验。
+	if err := h.testNftablesNodeCapabilities(nftPairs); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	if fcCall != nil {
 		fc := client.NewFederationClient()
@@ -1317,8 +1547,22 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("隧道ID不能为空"))
 		return
 	}
+	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed，不落
+	// 库（flow 旧口径静默套硬默认 1，type/status/trafficRatio 同族）。
+	for _, key := range []string{"type", "flow", "status"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	if presentFloatFieldInvalid(req, "trafficRatio") {
+		response.WriteJSON(w, response.ErrDefault("trafficRatio 参数无效"))
+		return
+	}
 	typeVal := asInt(req["type"], 1)
+	_, hasType := req["type"]
 	ipPreference := asString(req["ipPreference"])
+	_, hasIPPreference := req["ipPreference"]
 	_, hasProbeTargetHost := req["probeTargetHost"]
 	_, hasProbeTargetPort := req["probeTargetPort"]
 	probeTargetFieldsPresent := hasProbeTargetHost || hasProbeTargetPort
@@ -1364,6 +1608,33 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A2-04（BC-06）：真部分更新——标量字段未传保持现值，不再被硬默认
+	// 覆写（旧口径：未传 name 清空、flow→1、trafficRatio→1.0、
+	// status→1、type→1、ipPreference 清空）。链结构仍按请求重建
+	// （inNodeId 等结构字段是本接口的全量语义，不在本条范围）。
+	resolvedName := asString(req["name"])
+	if _, ok := req["name"]; !ok {
+		resolvedName, _ = h.repo.GetTunnelName(id)
+	}
+	resolvedFlow := asInt64(req["flow"], 1)
+	if _, ok := req["flow"]; !ok {
+		resolvedFlow = oldTunnel.Flow
+	}
+	resolvedRatio := asFloat(req["trafficRatio"], 1.0)
+	if _, ok := req["trafficRatio"]; !ok {
+		resolvedRatio = oldTunnel.TrafficRatio
+	}
+	resolvedStatus := asInt(req["status"], 1)
+	if _, ok := req["status"]; !ok {
+		resolvedStatus = oldTunnel.Status
+	}
+	if !hasType {
+		typeVal = oldTunnel.Type
+	}
+	if !hasIPPreference {
+		ipPreference = h.repo.GetTunnelIPPreference(id)
+	}
+
 	now := time.Now().UnixMilli()
 	localDomain := h.federationLocalDomain()
 
@@ -1382,6 +1653,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	var runtimeState *tunnelCreateState
 	var inIp string
 	var updateProtocol string
+	var nftPairs []nftablesNodeSSHConfig
 	vErr, vCode := func() (error, int) {
 		release := acquireSortedPortLocks(lockNodeIDs)
 		defer release()
@@ -1405,9 +1677,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 				entryNodeIDs = append(entryNodeIDs, inNode.NodeID)
 			}
 		}
-		if err := h.validateNftablesTunnelStateTx(validationTx, entryNodeIDs); err != nil {
+		// A3-01：验证段持锁+持事务，只收集 SSH 配置快照（纯 DB）；
+		// 能力校验（网络调用）在本段结束、锁与事务释放后执行。
+		pairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
+		if err != nil {
 			return err, 0
 		}
+		nftPairs = pairs
 		if engine == tunnelEngineRealm {
 			if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
 				return err, 0
@@ -1420,14 +1696,20 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			return err, 0
 		}
 		inIp = buildTunnelInIP(runtimeState.InNodes, runtimeState.Nodes, ipPreference)
+		// A9-05（BC-21）：与 create 对齐——请求显式给出 inIp 时保留自定义
+		// 入口 IP，不再无条件被系统采集值覆盖（旧实现编辑即丢失自定义值，
+		// 前端回填的旧值也因此恒被重算）。
+		if v := strings.TrimSpace(asString(req["inIp"])); v != "" {
+			inIp = v
+		}
 		updateProtocol = "tls"
 		if len(runtimeState.OutNodes) > 0 && strings.TrimSpace(runtimeState.OutNodes[0].Protocol) != "" {
 			updateProtocol = strings.TrimSpace(runtimeState.OutNodes[0].Protocol)
 		} else if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
 			updateProtocol = strings.TrimSpace(runtimeState.InNodes[0].Protocol)
 		}
-		if err := h.repo.UpdateTunnelTx(validationTx, id, asString(req["name"]), typeVal,
-			asInt64(req["flow"], 1), asFloat(req["trafficRatio"], 1.0), asInt(req["status"], 1),
+		if err := h.repo.UpdateTunnelTx(validationTx, id, resolvedName, typeVal,
+			resolvedFlow, resolvedRatio, resolvedStatus,
 			inIp, ipPreference, updateProtocol, probeTargetHost, probeTargetPort, now); err != nil {
 			return err, -2
 		}
@@ -1445,6 +1727,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		} else {
 			response.WriteJSON(w, response.ErrDefault(vErr.Error()))
 		}
+		return
+	}
+	// A3-01：SSH 能力校验在验证段的锁与事务都释放后执行（网络调用
+	// 不进临界区）；失败时尚未触碰任何运行时/DB 状态，语义与原
+	// 验证段内校验一致。
+	if err := h.testNftablesNodeCapabilities(nftPairs); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if err := h.cleanupFederationRuntime(id); err != nil {
@@ -1501,11 +1790,11 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		if err := h.repo.UpdateTunnelTx(
 			tx,
 			id,
-			asString(req["name"]),
+			resolvedName,
 			typeVal,
-			asInt64(req["flow"], 1),
-			asFloat(req["trafficRatio"], 1.0),
-			asInt(req["status"], 1),
+			resolvedFlow,
+			resolvedRatio,
+			resolvedStatus,
 			inIp,
 			ipPreference,
 			updateProtocol,
@@ -1587,7 +1876,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if engine != oldTunnel.Engine {
-		h.switchTunnelEngine(id, tunnelIsRealm(oldTunnel), oldEntryNodeIDs, newEntryNodeIDs)
+		// A4-003：切换的数据面硬失败必须让用户可见（与下方引擎未变分支
+		// 返回 syncRealmNodes 错误的口径一致），不再恒报成功。
+		if err := h.switchTunnelEngine(id, tunnelIsRealm(oldTunnel), oldEntryNodeIDs, newEntryNodeIDs); err != nil {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("引擎已切换，但数据面同步失败: %v", err)))
+			return
+		}
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
@@ -1679,6 +1973,13 @@ func forwardPortNodeIDs(ports []forwardPortRecord) []int64 {
 func (h *Handler) deleteForwardServicesOnNodeBatch(forward *forwardRecord, nodeID int64) error {
 	if h == nil || forward == nil || nodeID <= 0 {
 		return errors.New("invalid forward service cleanup context")
+	}
+	// A4-006：forward 所属（换隧道/迁移前的快照）隧道为 nft 模式时，该
+	// 节点上没有 gost 服务可删——旧实现径直 DeleteService 落空，旧 DNAT
+	// 与 nft_rule_binding 残留并继续计费。与 S-06 同款：对该节点做一次
+	// 声明式 reconcile（plan 按当前 DB 构建，已不含本转发，规则收敛移除）。
+	if nftMode, _, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && nftMode {
+		return h.reconcileNftablesNodeByRequest(nodeID)
 	}
 	if tunnel, err := h.getTunnelRecord(forward.TunnelID); err == nil && tunnelIsRealm(tunnel) {
 		// The forward left a realm tunnel: re-rendering drops it there.
@@ -2301,6 +2602,9 @@ type batchOperationResult struct {
 	// R5-B3 D1-001 R4: 批量删除的逐条结果含“已转 pending”（节点不可达时）。
 	PendingCount int                  `json:"pendingCount,omitempty"`
 	Pending      []batchFailureDetail `json:"pending,omitempty"`
+	// A4-002：批量同步路径的非致命告警（如 realm 限速不生效），与单条
+	// create/update 的 data.warnings 同义；仅在非空时出现，向后兼容。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -2688,6 +2992,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A4-004（BC-26）：realm 不支持的负载策略明确拒绝，不再静默改写。
+	if err := validateRealmForwardStrategy(tunnel, remoteAddr, defaultString(asString(req["strategy"]), "fifo")); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("forward")
 	userName := h.repo.GetUsernameByID(userID)
@@ -2713,9 +3022,17 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if err := h.syncForwardServices(createdForward, "UpdateService", true); err != nil {
+	// A4-002：与 forwardUpdate 同形——同步告警（realm 限速/连接数不生效、
+	// gost 绑 IP 回退、节点离线跳过）必须回传前端，原实现丢弃 warnings
+	// 恒 OKEmpty，创建路径的告警分支在前端成死代码。
+	createWarnings, err := h.syncForwardServicesWithWarnings(createdForward, "UpdateService", true)
+	if err != nil {
 		_ = h.deleteForwardByID(forwardID)
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if len(createWarnings) > 0 {
+		response.WriteJSON(w, response.OK(map[string]interface{}{"warnings": createWarnings}))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -2794,6 +3111,11 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	strategy := strings.TrimSpace(asString(req["strategy"]))
 	if strategy == "" {
 		strategy = forward.Strategy
+	}
+	// A4-004（BC-26）：编辑路径同建——合并后的策略/目标对 realm 隧道校验。
+	if err := validateRealmForwardStrategy(tunnel, remoteAddr, strategy); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	rawSpeedID, hasSpeedID := req["speedId"]
 	requestedSpeedID := asAnyToInt64Ptr(rawSpeedID)
@@ -3552,6 +3874,7 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 	s := 0
 	f := 0
 	failures := make([]batchFailureDetail, 0)
+	batchWarnings := make([]string, 0)
 	for _, id := range ids {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
@@ -3577,14 +3900,16 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if err := h.syncForwardServices(forward, "UpdateService", true); err != nil {
+		syncWarnings, err := h.syncForwardServicesWithWarnings(forward, "UpdateService", true)
+		batchWarnings = append(batchWarnings, syncWarnings...)
+		if err != nil {
 			f++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 		} else {
 			s++
 		}
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures, Warnings: batchWarnings}))
 }
 
 func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Request) {
@@ -3617,6 +3942,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
+	batchWarnings := make([]string, 0)
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
 			continue
@@ -3696,6 +4022,12 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, forward.Name, portRangeErr)
 			continue
 		}
+		// A4-004（BC-26）：换入 realm 隧道同受策略校验（编辑路径之一）。
+		if err := validateRealmForwardStrategy(targetTunnel, forward.RemoteAddr, forward.Strategy); err != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, err)
+			continue
+		}
 		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
@@ -3720,7 +4052,9 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			}
 			time.Sleep(tunnelServiceBindRetryDelay)
 		}
-		if err := h.syncForwardServices(updatedForward, "UpdateService", true); err != nil {
+		syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
+		batchWarnings = append(batchWarnings, syncWarnings...)
+		if err != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
@@ -3733,7 +4067,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
 
 func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
@@ -4464,6 +4798,46 @@ func (h *Handler) federationLocalDomain() string {
 	return strings.TrimSpace(cfg.Value)
 }
 
+// ensureRemoteNodeRelayAuth 是消费方凭据自愈（D3-04）：升级前导入
+// 的远端节点 RemoteConfig 没有 relay 凭据，缺失时向提供方做一次
+// Connect 刷新并合并写回 DB 与内存副本。best-effort：失败保留存量
+// 值继续下发——目标服务若已强制鉴权，缺凭据的连接会在提供方被拒
+// 并显形为隧道错误，不会静默放行。
+func (h *Handler) ensureRemoteNodeRelayAuth(fc *client.FederationClient, node *nodeRecord, localDomain string) {
+	if node == nil || node.IsRemote != 1 {
+		return
+	}
+	if _, password := parseRemoteShareRelayAuth(node.RemoteConfig); password != "" {
+		return
+	}
+	remoteURL := strings.TrimSpace(node.RemoteURL)
+	remoteToken := strings.TrimSpace(node.RemoteToken)
+	if remoteURL == "" || remoteToken == "" {
+		return
+	}
+	info, err := fc.Connect(remoteURL, remoteToken, localDomain)
+	if err != nil || info == nil || strings.TrimSpace(info.RelayPassword) == "" {
+		return
+	}
+	// FIX2-B（V5-3）：版本提示记日志、对端版本随凭据自愈一并留痕。
+	logFederationVersionWarning(info)
+	cfg := map[string]interface{}{}
+	if raw := strings.TrimSpace(node.RemoteConfig); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &cfg)
+	}
+	cfg["relayUsername"] = info.RelayUsername
+	cfg["relayPassword"] = info.RelayPassword
+	if strings.TrimSpace(info.PanelVersion) != "" {
+		cfg["panelVersion"] = info.PanelVersion
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return
+	}
+	node.RemoteConfig = string(data)
+	_ = h.repo.UpdateNodeRemoteConfig(node.ID, string(data))
+}
+
 func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain string) ([]repo.FederationTunnelBinding, []federationRuntimeReleaseRef, error) {
 	bindings := make([]repo.FederationTunnelBinding, 0)
 	releaseRefs := make([]federationRuntimeReleaseRef, 0)
@@ -4472,6 +4846,12 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 	}
 	fc := client.NewFederationClient()
 	now := time.Now().UnixMilli()
+
+	// D3-04: 下发前为所有远端节点自愈 relay 凭据（每个节点至多一次
+	// Connect），供下方 middle 目标与本地链构建取用。
+	for _, node := range state.Nodes {
+		h.ensureRemoteNodeRelayAuth(fc, node, localDomain)
+	}
 
 	for outIdx := range state.OutNodes {
 		outNode := state.OutNodes[outIdx]
@@ -4595,11 +4975,17 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 				if target.Port <= 0 {
 					return bindings, releaseRefs, errors.New("节点端口不能为空")
 				}
-				applyTargets = append(applyTargets, client.RuntimeTarget{
+				rt := client.RuntimeTarget{
 					Host:     host,
 					Port:     target.Port,
 					Protocol: defaultString(target.Protocol, "tls"),
-				})
+				}
+				// D3-04: 目标是远端节点时附上其 share 凭据，供提供方
+				// 为 middle 的 chain connector 写 auth。
+				if targetNode.IsRemote == 1 {
+					rt.RelayUsername, rt.RelayPassword = parseRemoteShareRelayAuth(targetNode.RemoteConfig)
+				}
+				applyTargets = append(applyTargets, rt)
 			}
 
 			applyReq := client.RuntimeApplyRoleRequest{
@@ -4940,11 +5326,16 @@ func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, own
 		if target.Port <= 0 {
 			return errors.New("节点端口不能为空")
 		}
-		applyTargets = append(applyTargets, client.RuntimeTarget{
+		rt := client.RuntimeTarget{
 			Host:     host,
 			Port:     target.Port,
 			Protocol: defaultString(target.Protocol, "tls"),
-		})
+		}
+		// D3-04: 与 applyFederationRuntime 同口径附目标 share 凭据。
+		if targetNode.IsRemote == 1 {
+			rt.RelayUsername, rt.RelayPassword = parseRemoteShareRelayAuth(targetNode.RemoteConfig)
+		}
+		applyTargets = append(applyTargets, rt)
 	}
 
 	ownerRuntimeNode := tunnelRuntimeNode{NodeID: ownerNodeID, Protocol: "tls", Strategy: "round", ChainType: 2}
@@ -5118,6 +5509,13 @@ func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRu
 		protocol := defaultString(target.Protocol, "tls")
 		connector := map[string]interface{}{
 			"type": "relay",
+		}
+		// D3-04: 目标是远端节点（其角色服务带鉴权）时写入该 share
+		// 的 relay 凭据；本地节点目标不带。
+		if targetNode.IsRemote == 1 {
+			if auth := relayAuthConfig(parseRemoteShareRelayAuth(targetNode.RemoteConfig)); auth != nil {
+				connector["auth"] = auth
+			}
 		}
 		connectorMetadata := map[string]interface{}{}
 		if isTCPTunnelProtocol(protocol) {
@@ -5547,6 +5945,11 @@ func (h *Handler) deleteNodeByID(id int64) error {
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
+	// D2-05：删节点同时踢掉其 agent 的 WS 存量会话，否则幽灵会话
+	// 会无限存活、继续上报并被广播（secret 已随行删除也拦不住）。
+	if h.wsServer != nil {
+		h.wsServer.DisconnectNode(id)
+	}
 	return nil
 }
 
@@ -6108,6 +6511,40 @@ func asString(v interface{}) string {
 		b, _ := json.Marshal(t)
 		return strings.Trim(string(b), "\"")
 	}
+}
+
+// presentNumericFieldInvalid 是 FIX2-A（V2-07）的 fail-closed 守
+// 卫：部分更新中字段「在场、非空、但不可解析为整数」时返回 true，
+// 调用方必须报错且不落库。旧实现对这类输入静默套用硬默认
+// （userUpdate.num→10、tunnelUpdate.flow→1、nodeUpdate.expiryTime
+// →0 清空到期），与「未传保旧」的部分更新口径不一致且无任何提
+// 示。空值（缺失/null/空串）不算在场有值，沿用各字段既有缺省语
+// 义；合法数值（含 JSON 数字、数字字符串）不受影响。
+func presentNumericFieldInvalid(req map[string]interface{}, key string) bool {
+	raw, ok := req[key]
+	if !ok {
+		return false
+	}
+	s := asString(raw)
+	if s == "" {
+		return false
+	}
+	_, err := strconv.ParseInt(s, 10, 64)
+	return err != nil
+}
+
+// presentFloatFieldInvalid 同上，针对浮点字段（如 trafficRatio）。
+func presentFloatFieldInvalid(req map[string]interface{}, key string) bool {
+	raw, ok := req[key]
+	if !ok {
+		return false
+	}
+	s := asString(raw)
+	if s == "" {
+		return false
+	}
+	_, err := strconv.ParseFloat(s, 64)
+	return err != nil
 }
 
 func asInt(v interface{}, def int) int {

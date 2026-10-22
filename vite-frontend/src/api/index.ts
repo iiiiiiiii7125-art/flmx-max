@@ -65,6 +65,7 @@ import type {
 import axios from "axios";
 
 import Network from "./network";
+import { clearSession } from "@/utils/session";
 
 export type ReleaseChannel = "stable" | "dev";
 
@@ -498,6 +499,43 @@ export const exportBackup = async (types: string[] = []) => {
     },
   );
 
+  // 后端错误走统一信封且以 HTTP 200 返回（WriteJSON 不设状态码），裸 blob
+  // 下载会把 {"code":-2,...} 当备份文件存下来还报「导出成功」（D5-01）。
+  // 成功响应带 Content-Disposition: attachment，错误信封没有——以此为准
+  // 校验：无 attachment 时按信封解析，code!==0 直接抛错，绝不触发下载。
+  const disposition = String(response.headers?.["content-disposition"] || "");
+
+  if (!disposition.includes("attachment")) {
+    const text = await (response.data as Blob).text();
+    let envelope: { code?: unknown; msg?: unknown } | null = null;
+
+    try {
+      envelope = JSON.parse(text);
+    } catch {
+      envelope = null;
+    }
+
+    if (envelope && typeof envelope.code === "number") {
+      if (envelope.code === 401) {
+        // 会话失效：与 Network 层一致，清会话回登录页
+        clearSession();
+        if (window.location.pathname !== "/") {
+          window.location.href = "/";
+        }
+        throw new Error("登录已过期，请重新登录");
+      }
+      if (envelope.code !== 0) {
+        throw new Error(
+          typeof envelope.msg === "string" && envelope.msg
+            ? envelope.msg
+            : "导出失败",
+        );
+      }
+    }
+
+    throw new Error("导出失败：服务器未返回备份文件");
+  }
+
   const url = window.URL.createObjectURL(new Blob([response.data]));
   const link = document.createElement("a");
 
@@ -528,6 +566,10 @@ export const updateAnnouncement = ({
 }: Pick<AnnouncementData, "content" | "enabled">) =>
   Network.post("/announcement/update", { content, enabled });
 
+// 监控读接口统一 silent（A9-02）：无监控权限的 403 是权限模型的正常分支，
+// 各监控页都有本地 accessDenied/错误态呈现；若不静默，Network 全局提示会
+// 与本地空态叠加，且随轮询逐周期重复弹。写操作（创建/删除/立即执行等）
+// 不静默，仍走全局提示。
 export const getNodeMetrics = (
   nodeId: number,
   start?: number,
@@ -541,12 +583,12 @@ export const getNodeMetrics = (
   return Network.get<NodeMetricApiItem[]>(
     `/monitor/nodes/${nodeId}/metrics`,
     params,
-    { timeout: 60_000 },
+    { timeout: 60_000, silent: true },
   );
 };
 
 export const getNodeMetricsLatest = (nodeId: number) =>
-  Network.get<NodeMetricApiItem>(`/monitor/nodes/${nodeId}/metrics/latest`);
+  Network.get<NodeMetricApiItem>(`/monitor/nodes/${nodeId}/metrics/latest`, {}, { silent: true });
 
 export const getTunnelMetrics = (
   tunnelId: number,
@@ -561,14 +603,19 @@ export const getTunnelMetrics = (
   return Network.get<TunnelMetricApiItem[]>(
     `/monitor/tunnels/${tunnelId}/metrics`,
     params,
+    { silent: true },
   );
 };
 
 export const getMonitorTunnels = () =>
-  Network.get<MonitorTunnelApiItem[]>("/monitor/tunnels");
+  Network.get<MonitorTunnelApiItem[]>("/monitor/tunnels", {}, { silent: true });
 
 export const getMonitorTunnelQuality = () =>
-  Network.get<TunnelQualityApiItem[]>("/monitor/tunnels/quality");
+  Network.get<TunnelQualityApiItem[]>(
+    "/monitor/tunnels/quality",
+    {},
+    { silent: true },
+  );
 
 export const getMonitorTunnelQualityHistory = async (
   tunnelId: number,
@@ -585,6 +632,7 @@ export const getMonitorTunnelQualityHistory = async (
   const response = await Network.get<TunnelQualityHistoryApiItem[]>(
     `/monitor/tunnels/${tunnelId}/quality`,
     params,
+    { silent: true },
   );
 
   return {
@@ -606,10 +654,14 @@ export const getMonitorTunnelQualityHistory = async (
 };
 
 export const getServiceMonitorList = () =>
-  Network.get<ServiceMonitorApiItem[]>("/monitor/services");
+  Network.get<ServiceMonitorApiItem[]>("/monitor/services", {}, { silent: true });
 
 export const getServiceMonitorLimits = () =>
-  Network.get<ServiceMonitorLimitsApiData>("/monitor/services/limits");
+  Network.get<ServiceMonitorLimitsApiData>(
+    "/monitor/services/limits",
+    {},
+    { silent: true },
+  );
 
 export const createServiceMonitor = (data: ServiceMonitorMutationPayload) =>
   Network.post<ServiceMonitorApiItem>("/monitor/services/create", data);
@@ -636,25 +688,32 @@ export const getServiceMonitorResults = (
   return Network.get<ServiceMonitorResultApiItem[]>(
     `/monitor/services/${monitorId}/results`,
     params,
+    { silent: true },
   );
 };
 
 export const getServiceMonitorLatestResults = () =>
   Network.get<ServiceMonitorResultApiItem[]>(
     "/monitor/services/latest-results",
+    {},
+    { silent: true },
   );
 
 export const runServiceMonitor = (id: number) =>
   Network.post<ServiceMonitorResultApiItem>("/monitor/services/run", { id });
 
 export const getMonitorNodes = () =>
-  Network.get<MonitorNodeApiItem[]>("/monitor/nodes");
+  Network.get<MonitorNodeApiItem[]>("/monitor/nodes", {}, { silent: true });
 
 export const getMonitorAccess = () =>
   Network.get<MonitorAccessApiData>("/monitor/access");
 
 export const getMonitorPermissionList = () =>
-  Network.get<MonitorPermissionApiItem[]>("/monitor/permission/list");
+  Network.get<MonitorPermissionApiItem[]>(
+    "/monitor/permission/list",
+    {},
+    { silent: true },
+  );
 
 export const assignMonitorPermission = (userId: number) =>
   Network.post("/monitor/permission/assign", { userId });
@@ -1004,6 +1063,9 @@ const trafficQuery = (id: number, range: SubTrafficRange) => ({
   id,
   range,
   tzOffset: -new Date().getTimezoneOffset(),
+  // IANA 时区名（A6-002/BC-12）：后端据此按各日期实际偏移分桶，
+  // 非整小时时区与 DST 切换周不再错位；tzOffset 保留作旧后端回落。
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
 });
 /** 管理端：任一订阅的流量统计。 */
 export const getSubscriptionTraffic = (id: number, range: SubTrafficRange) =>

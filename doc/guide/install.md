@@ -15,7 +15,7 @@
 使用以下命令即可快速安装面板：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 **安装过程中会提示输入以下信息：**
@@ -63,7 +63,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 在节点服务器上运行：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
 ```
 
 Alpine Linux 最小化安装若未包含 `curl`，可使用系统自带的 `wget` 下载：
@@ -90,6 +90,18 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - systemd 查看状态: `systemctl status flux_agent`
 - Alpine/OpenRC 查看状态: `rc-service flux_agent status`
 - 回到面板 **节点管理** 页面，该节点状态应显示为 **在线**。
+
+### 节点连不上：地址写法与时钟（1.3.4 起）
+
+agent 与面板之间有两条通道，都**不再自动降级到明文**：
+
+- **命令面（WebSocket）**：只按单一 scheme 连接，不再在 wss 失败后自动回退 ws；
+- **上报面（HTTP 流量/配置上报）**：候选地址同样收敛为单一 scheme，与命令面同口径。
+
+地址的判定规则两条通道一致：`config.json` 的 `addr` **写了 scheme 就按写的来**（`ws://` / `http://` 即表示你确认使用明文），**裸地址（无前缀）默认按加密连接**（wss / https）。由此产生的典型存量问题：
+
+- **面板只有 http（无 TLS）、节点 `addr` 是裸地址**：这类节点在 agent 升级/重启后会连不上，日志里会明确打印禁止降级的说明。解决办法二选一：把节点 `config.json` 的 `addr` 改为显式 `ws://<面板地址>`（与安装时填的面板地址一致即可，改完重启 agent）——这是「确认明文部署」的显式动作；或者给面板配置 TLS。**新安装的节点不受影响**：1.3.4 起面板生成节点安装命令时，会按面板实际的服务方式自动把 scheme 补成显式写法。
+- **时钟偏差**：加密命令信封带时间戳，与面板时钟相差超过 **±5 分钟**（或缺失）会被拒绝执行。节点或面板时钟偏差过大的老部署，请先校时（开启 NTP 同步）再排查连不上问题。
 
 
 ## 反向代理（可选）
@@ -158,5 +170,21 @@ sudo systemctl restart caddy
 跳数配少了，限流键会取到伪造的 XFF 条目（限流被绕过）；配多了，
 会取到代理自己的 IP（多用户共享一个桶）。启动日志会打印生效值，
 请核对它与你的实际拓扑一致。面板直连公网（无代理）时忽略 XFF。
+
+限流的具体阈值（固定值，不在设置里开放调整）：
+
+| 维度 | 阈值 | 说明 |
+|---|---|---|
+| 来源 IP | 10 次 / 分钟 | 每个 IP 独立计数，超限返回 429 |
+| 来源 IP（被收紧后） | 3 次 / 30 分钟 | 某用户名触发下方信号且未启用登录验证码时，该来源 IP 被收紧 |
+| 用户名 | 30 次 / 10 分钟 | 只作信号与渐进延迟依据，**永不直接锁账号**（防用错密码把正常用户锁死） |
+
+登录成功签发的会话（JWT）有效期为 **7 天**。
+
+> 子网提示：旧版本部署的容器网络子网是 `172.80.0.0/16`，它不在 RFC1918 私网段内，后端不把该网段当作可信代理来源，经前端进来的登录请求限流键会坍缩成少数共享桶（有效预算翻倍、且可被单点洪泛耗尽）。新安装的模板已改用 `172.30.0.0/16`，**该模板子网只对全新安装生效**：1.3.4 起两条升级路径（脚本更新与面板内升级）都会把存量 `docker-compose.yml` 里在用的子网与网络名原样保留进新文件，不会因为升级模板而重建容器网络。**存量部署也不要手工改在用子网**（会重建容器网络、容器 IP 全变）；在意限流桶问题的存量部署，可改用宿主机 Caddy / nginx 直接反代后端、或等待后续版本的迁移指引。
+
+### 登录验证码（Cloudflare Turnstile）
+
+在 **网站配置 → 安全** 里可以开启登录验证码：填入 Cloudflare Turnstile 的 Site Key 与 Secret Key 后，登录页会出现人机验证，登录请求必须携带有效验证结果才会被处理。未配置密钥时该功能不启用、登录流程与原来一致。Turnstile 密钥只存面板配置、仅管理员可见；它同时影响上文的限流收紧逻辑（启用验证码后，用户名信号不再触发 IP 收紧）。
 
 升级见 [升级](./upgrade.md)。

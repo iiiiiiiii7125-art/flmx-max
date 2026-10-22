@@ -518,6 +518,48 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
 }
 
+// filterInboundRowsByUserAssignments 保留用户被分配的入站行
+// （openSubscription ?user= 拉取侧第一段过滤；FIX2-B/V5-1 起与
+// mine 计数共用同一实现，保证两侧口径永不分叉）。
+func filterInboundRowsByUserAssignments(rows []model.NodeInbound, assignments []repo.UserInboundAssignment) []model.NodeInbound {
+	allowedInbound := make(map[int64]bool, len(assignments))
+	for _, a := range assignments {
+		allowedInbound[a.InboundID] = true
+	}
+	filtered := make([]model.NodeInbound, 0, len(rows))
+	for _, row := range rows {
+		if allowedInbound[row.ID] {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+// filterEndpointsByUserAssignments 按用户分配收紧端点（拉取侧第二段
+// 过滤）：中转端点需该 relay 的分配，直连端点需 relayID=0 的分配。
+func filterEndpointsByUserAssignments(endpoints []kernel.Endpoint, assignments []repo.UserInboundAssignment) []kernel.Endpoint {
+	directAllowed := make(map[int64]bool)
+	relayAllowed := make(map[int64]bool)
+	for _, a := range assignments {
+		if a.RelayID == 0 {
+			directAllowed[a.InboundID] = true
+		} else {
+			relayAllowed[a.RelayID] = true
+		}
+	}
+	filtered := make([]kernel.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		if e.RelayID > 0 {
+			if relayAllowed[e.RelayID] {
+				filtered = append(filtered, e)
+			}
+		} else if e.Direct && directAllowed[e.Inbound.ID] {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 // filterEndpointsByRelayIDs 按 relayIds 白名单过滤端点：
 // relayIDs 为空时原样返回；端点的 RelayID==0 视为直连（含导入端点），
 // 仅当 0 在白名单中才保留；RelayID>0 的中转端点同理按号命中。
@@ -570,7 +612,37 @@ type subscriptionView struct {
 	IsDefault bool `json:"isDefault"`
 }
 
-func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time) subscriptionView {
+// nodeCountFormat resolves the format a subscription view's NodeCount is
+// computed for (A5-02/BC-11): the request's explicit format when it names
+// a supported one, else the format a bare UA-less subscription request
+// yields — base64. An unknown value falls back instead of failing the
+// whole view.
+func nodeCountFormat(format string) string {
+	// FIX2-B（V5-2）：与拉取侧（openSubscription 先 ToLower）同口径
+	// 大小写不敏感；此前 "Clash" 在计数侧静默回落 base64、与实得
+	// 格式分叉且无任何提示。
+	format = strings.ToLower(strings.TrimSpace(format))
+	switch format {
+	case kernel.FormatClash, kernel.FormatSingbox, kernel.FormatSurge,
+		kernel.FormatLoon, kernel.FormatQX, kernel.FormatShadowrocket, kernel.FormatBase64:
+		return format
+	}
+	return kernel.FormatBase64
+}
+
+func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string) subscriptionView {
+	return h.subscriptionViewForAssignments(s, rows, now, format, nil)
+}
+
+// subscriptionViewForAssignments 在 subscriptionView 基础上按用户入站
+// 分配收紧 NodeCount（FIX2-B/V5-1）：assignments 为 nil 表示管理员
+// 全量口径；非 nil（含空集）时先按拉取侧同一组过滤函数收紧行与
+// 端点，使「我的订阅」显示数与该用户经 ?user=&sig= 个性化链接实际
+// 拉到的节点数恒等。空集 = 该用户个性化链接拉到 0 个节点。
+func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment) subscriptionView {
+	if assignments != nil {
+		rows = filterInboundRowsByUserAssignments(rows, assignments)
+	}
 	ids := subInboundIDs(s, rows)
 	byID := make(map[int64]model.NodeInbound, len(rows))
 	for _, r := range rows {
@@ -598,11 +670,23 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 	if relayIDs == nil {
 		relayIDs = []int64{}
 	}
+	// A5-02/BC-11：NodeCount 按目标格式的实际渲染数计（与该格式的客户
+	// 端实得一致），不再是格式过滤前的终结点数。sing-box 口径按现行
+	// 客户端（1.14+，含 Snell）计，与真机实测对齐。
+	format = nodeCountFormat(format)
+	countOpts := pipe.options()
+	if format == kernel.FormatSingbox {
+		countOpts.SingboxSnell = true
+	}
+	endpoints := h.subEndpoints(s, rows)
+	if len(assignments) > 0 {
+		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
+	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
 		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
-		NodeCount:   len(kernel.ApplySubOptions(h.subEndpoints(s, rows), pipe.options())),
+		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, OverQuota: subOverQuota(s), RelayIDs: relayIDs,
 	}
@@ -632,10 +716,15 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// 请求体可选：format 指定 NodeCount 的目标格式口径（A5-02/BC-11）。
+	var listReq struct {
+		Format string `json:"format"`
+	}
+	_ = decodeJSON(r.Body, &listReq)
 	now := time.Now()
 	items := make([]subscriptionView, 0, len(subs))
 	for i := range subs {
-		items = append(items, h.subscriptionView(&subs[i], rows, now))
+		items = append(items, h.subscriptionView(&subs[i], rows, now, listReq.Format))
 	}
 	// 回填默认订阅标记（个人订阅链接的载体 = 排序第一条）。DefaultSubscription
 	// 在无订阅时会新建一条，与上方空列表分支的既有行为一致；此处失败不阻断
@@ -666,6 +755,9 @@ type subscriptionRequest struct {
 	// TrafficLimit is in bytes (0 = unlimited); ResetDay 1-28 (0 = never).
 	TrafficLimit int64 `json:"trafficLimit"`
 	ResetDay     int   `json:"resetDay"`
+	// Format optionally names the target format for the returned view's
+	// NodeCount (A5-02/BC-11); it is not persisted.
+	Format string `json:"format"`
 }
 
 // validate checks the request and returns the inbound ids it selects.
@@ -783,13 +875,13 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		// 下发失败：不更新 AppliedActive，循环会重试；仅提示用户。
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, now), TS: time.Now().UnixMilli()})
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, now, req.Format), TS: time.Now().UnixMilli()})
 		return
 	}
 	// 下发成功：更新 AppliedActive。
 	_ = h.repo.UpdateSubscriptionApplied(s.ID, newAppliedActive)
 	s.AppliedActive = newAppliedActive
-	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, now), TS: time.Now().UnixMilli()})
+	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, now, req.Format), TS: time.Now().UnixMilli()})
 }
 
 func (h *Handler) respondAfterSubPush(w http.ResponseWriter, inboundIDs []int64, data interface{}) {
@@ -882,11 +974,11 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 	// 成功后恢复正常值。否则旧凭据永不失效（F7.14 承诺被违背）。
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, time.Now()), TS: time.Now().UnixMilli()})
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 		return
 	}
 	_ = h.repo.UpdateSubscriptionApplied(s.ID, boolToInt(isShare(s) && subActive(s, time.Now())))
-	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, time.Now()), TS: time.Now().UnixMilli()})
+	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 }
 
 // subscriptionResetTraffic zeroes a share subscription's traffic and puts
@@ -912,7 +1004,7 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 	h.syncSubscriptions(now)
 	s, _ = h.repo.GetSubscription(id)
 	rows, _ := h.repo.ListNodeInbounds()
-	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now)))
+	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now, "")))
 }
 
 type subPreviewItem struct {

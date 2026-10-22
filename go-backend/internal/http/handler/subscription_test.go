@@ -63,23 +63,31 @@ func TestKernelPayloadCarriesActiveShareSubscriptions(t *testing.T) {
 		t.Fatalf("share users must be counted: %v", payload["userMarks"])
 	}
 
-	// Per-user counters: deltas within an epoch, the whole value after one.
+	// Per-user counters: deltas within an epoch; an epoch change only
+	// rebuilds the baseline (FIX2-A V2-05, was: the whole value).
 	s.TrafficLimit = 1000
 	_ = r.SaveSubscription(s)
+	// FIX132-C 订正（A3-04）：首样本只建基线不计入，先以零值样本
+	// 建 e1 基线；同 epoch 差分与超限切断断言不变。换 epoch 的期
+	// 望经 FIX2-A（V2-05 主控裁定）改写：旧语义全量计（e2 首样本
+	// 50 全量入账、down=350），新语义视同基线重建不计（down=300），
+	// 与转发侧 hash 变化同口径。
+	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 0}, {ID: s.ID, Dir: "down", Bytes: 0}}, now)
 	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 100}, {ID: s.ID, Dir: "down", Bytes: 300}}, now)
 	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 150}, {ID: s.ID, Dir: "down", Bytes: 300}}, now)
 	h.applyUserCounters(nodeID, "e2", []agentUserCounter{{ID: s.ID, Dir: "down", Bytes: 50}}, now)
 	got, _ := r.GetSubscription(s.ID)
-	if got.UploadBytes != 150 || got.DownloadBytes != 350 || subOverQuota(got) {
+	if got.UploadBytes != 150 || got.DownloadBytes != 300 || subOverQuota(got) {
 		t.Fatalf("traffic: up=%d down=%d", got.UploadBytes, got.DownloadBytes)
 	}
 	// A save from a stale read keeps the counted traffic.
 	stale := *s
 	stale.Name = "renamed"
 	_ = r.SaveSubscription(&stale)
-	h.applyUserCounters(nodeID, "e2", []agentUserCounter{{ID: s.ID, Dir: "down", Bytes: 600}}, now)
+	// e2 基线已建在 50：700 的差分 650 入账，总用量 150+950=1100。
+	h.applyUserCounters(nodeID, "e2", []agentUserCounter{{ID: s.ID, Dir: "down", Bytes: 700}}, now)
 	got, _ = r.GetSubscription(s.ID)
-	if got.Name != "renamed" || subUsed(got) != 1050 || !subOverQuota(got) || subActive(got, time.Now()) {
+	if got.Name != "renamed" || subUsed(got) != 1100 || !subOverQuota(got) || subActive(got, time.Now()) {
 		t.Fatalf("over the limit must cut off: %+v", got)
 	}
 	if c := config(); strings.Contains(c, "user-pw") {

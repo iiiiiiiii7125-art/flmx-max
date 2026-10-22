@@ -11,7 +11,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint --fix",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:sensitive-keys": "node scripts/check-sensitive-keys.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

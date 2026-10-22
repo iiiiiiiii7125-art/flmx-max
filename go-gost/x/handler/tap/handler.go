@@ -54,12 +54,20 @@ func (h *tapHandler) Init(md md.Metadata) (err error) {
 		return
 	}
 
-	if h.options.Auth != nil {
+	// Fail closed (D1-H1): the TAP transport cipher comes from auth; without
+	// it the tunnel would run unencrypted. Refuse to initialize.
+	if h.options.Auth == nil {
+		return errors.New("tap: auth (method/password) is required, refusing to run unencrypted")
+	}
+	{
 		method := h.options.Auth.Username()
 		password, _ := h.options.Auth.Password()
 		h.cipher, err = ss.ShadowCipher(method, password, h.md.key)
 		if err != nil {
 			return
+		}
+		if h.cipher == nil {
+			return errors.New("tap: failed to create cipher for method " + method)
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -208,6 +209,9 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 			}
 			config := configs[i]
 			if err := validatePeerResourceReferences(config, kind); err != nil {
+				return nil, err
+			}
+			if err := validatePeerResourceTypes(config, kind); err != nil {
 				return nil, err
 			}
 			scopePeerResourceReferences(config, share.ID)
@@ -434,6 +438,56 @@ func orderPeerShareResources(items []repo.PeerShareResource) {
 	sort.SliceStable(items, func(i, j int) bool { return rank(items[i]) < rank(items[j]) })
 }
 
+// revalidateStoredPeerShareResources 是 FIX2-B（V5-3 残余风险）的启动
+// 复检：D3-03 类型白名单只在 preparePeerResourceCommand 写入时校验，
+// 升级前已落库的 peer_share_resource 期望状态不经复检——若提供方在
+// 升级前已被恶意对端植入 file/sshd 等危险配置，升级后节点重连对账
+// 会原样物化。本函数在后台对账循环启动前把全部存量 active 的
+// service/chain 期望状态补跑一遍白名单：不过者置 paused（对账按
+// paused 语义下发删除、监听不拉起，配置保留待管理员处置）并逐条
+// 告警，绝不静默沿用；配置 JSON 不可解析同按 fail-closed 置 paused
+// （对账侧解不出同样无法物化）。deleted 墓碑与 limiter 不在复检面。
+func (h *Handler) revalidateStoredPeerShareResources() {
+	if h == nil || h.repo == nil {
+		return
+	}
+	items, err := h.repo.ListAllPeerShareResources()
+	if err != nil {
+		log.Printf("federation startup revalidation: list stored resources failed: %v", err)
+		return
+	}
+	var changed []repo.PeerShareResource
+	for i := range items {
+		item := items[i]
+		if item.DesiredState != "active" || (item.Kind != "service" && item.Kind != "chain") {
+			continue
+		}
+		if strings.TrimSpace(item.Config) == "" {
+			continue
+		}
+		var config interface{}
+		if err := json.Unmarshal([]byte(item.Config), &config); err != nil {
+			log.Printf("federation startup revalidation: pausing share_id=%d %s %q: stored config is not valid JSON: %v", item.ShareID, item.Kind, item.OriginalName, err)
+			item.DesiredState = "paused"
+			changed = append(changed, item)
+			continue
+		}
+		if err := validatePeerResourceTypes(config, item.Kind); err != nil {
+			log.Printf("federation startup revalidation: pausing share_id=%d %s %q: %v", item.ShareID, item.Kind, item.OriginalName, err)
+			item.DesiredState = "paused"
+			changed = append(changed, item)
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	if err := h.repo.SavePeerShareResources(changed); err != nil {
+		log.Printf("federation startup revalidation: persist paused states failed: %v", err)
+		return
+	}
+	log.Printf("federation startup revalidation: paused %d stored peer resource(s) failing the D3-03 type whitelist; review before resuming", len(changed))
+}
+
 func (h *Handler) reconcilePeerShareResourcesOnNode(nodeID int64) error {
 	return h.reconcilePeerShareResources(nodeID, false)
 }
@@ -631,6 +685,94 @@ func (h *Handler) releasePeerShareForwardRuntimeResources(runtime *repo.PeerShar
 	for _, item := range items {
 		if _, err = h.applyPeerShareResource(item); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// D3-03: peer 服务/链配置的类型白名单。validatePeerResourceReferences
+// 只堵了注册表引用与 shell hook（黑名单），handler/listener 类型本身
+// 此前无任何限制——fork 注册表里的 file（任意目录 FileServer）、sshd、
+// tun、dns、redirect 等高危类型可由持 token 对端原样下发到提供方节点
+// （R5 真机坐实：file/sshd 被校验层接受并落库为期望状态）。
+//
+// 白名单按「面板自身构建路径实际会下发的类型全集」反查得出：
+//   - 转发服务（buildForwardServiceConfigs）：handler tcp/udp
+//     （forward 是同一处理器的注册别名）、listener tcp/udp；
+//   - 隧道链服务（buildTunnelChainServiceConfig）：handler relay、
+//     listener 为隧道协议；
+//   - 转发链（buildTunnelChainConfig / buildFederationMiddleChainConfig）：
+//     hop 节点 connector 恒 relay、dialer 为隧道协议。
+//
+// 隧道协议全集与前端 tunnel 协议枚举及 fork 注册表一致：
+// tcp/tls/mtls/mtcp/kcp/ws/wss/mws/mwss。
+var peerServiceHandlerTypes = map[string]bool{
+	"tcp": true, "udp": true, "forward": true, "relay": true,
+}
+
+// listener/dialer 放行集合：转发服务的 listener 是 tcp/udp（按转发
+// 协议），隧道链服务 listener 与链 dialer 是隧道协议全集。
+var peerTunnelTransportTypes = map[string]bool{
+	"tcp": true, "udp": true, "tls": true, "mtls": true, "mtcp": true, "kcp": true,
+	"ws": true, "wss": true, "mws": true, "mwss": true,
+}
+
+var peerChainConnectorTypes = map[string]bool{
+	"relay": true,
+}
+
+// validatePeerResourceTypes 递归走遍服务/链配置，凡出现 handler /
+// listener / connector / dialer 段，其 type 必须落在对应白名单内；
+// 段存在但 type 缺失同样拒绝（面板构建路径恒带 type，缺失即手工构造）。
+// 只对 service/chain 两类资源生效（limiter 配置无此类段）。
+func validatePeerResourceTypes(value interface{}, kind string) error {
+	if kind != "service" && kind != "chain" {
+		return nil
+	}
+	return walkPeerResourceTypes(value)
+}
+
+func walkPeerResourceTypes(value interface{}) error {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, child := range v {
+			var allowed map[string]bool
+			var label string
+			switch strings.ToLower(key) {
+			case "handler":
+				allowed, label = peerServiceHandlerTypes, "handler"
+			case "listener":
+				allowed, label = peerTunnelTransportTypes, "listener"
+			case "connector":
+				allowed, label = peerChainConnectorTypes, "connector"
+			case "dialer":
+				allowed, label = peerTunnelTransportTypes, "dialer"
+			default:
+				if err := walkPeerResourceTypes(child); err != nil {
+					return err
+				}
+				continue
+			}
+			section, ok := child.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("shared %s configuration is invalid", label)
+			}
+			typ := strings.ToLower(strings.TrimSpace(asString(section["type"])))
+			if typ == "" {
+				return fmt.Errorf("shared %s type is required", label)
+			}
+			if !allowed[typ] {
+				return fmt.Errorf("shared %s type %q is not allowed", label, typ)
+			}
+			if err := walkPeerResourceTypes(child); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, child := range v {
+			if err := walkPeerResourceTypes(child); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

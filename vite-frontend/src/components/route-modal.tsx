@@ -1,6 +1,6 @@
 import type { NodeRoute, NodeRouteHop } from "@/api/types";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Loader2, RefreshCw } from "lucide-react";
 
@@ -115,15 +115,27 @@ export function RouteModal({
   const [probing, setProbing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
 
+  // 序号守卫（D5-04 同模式）：切换节点后迟到的旧响应不得覆盖新节点数据
+  const routeSeqRef = useRef(0);
+
   useEffect(() => {
     if (nodeId === null) return;
+    const seq = (routeSeqRef.current += 1);
+
     setRoute(null);
     setOpen(null);
     setLoading(true);
     getNodeRoute(nodeId)
-      .then((res) => setRoute(res.code === 0 ? (res.data ?? null) : null))
-      .catch(() => setRoute(null))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (routeSeqRef.current !== seq) return;
+        setRoute(res.code === 0 ? (res.data ?? null) : null);
+      })
+      .catch(() => {
+        if (routeSeqRef.current === seq) setRoute(null);
+      })
+      .finally(() => {
+        if (routeSeqRef.current === seq) setLoading(false);
+      });
   }, [nodeId]);
 
   const probe = async () => {

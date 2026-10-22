@@ -3,7 +3,7 @@
 ## 面板与安装
 
 ### 安装脚本提示 "Docker command not found"？
-请确保您的系统已安装 Docker 和 Docker Compose。
+使用一键安装脚本时，Docker 缺失会由脚本自动安装，正常不会看到这条提示；它多见于手动用 docker compose 部署的场景。这种情况请确保您的系统已安装 Docker 和 Docker Compose。
 - Ubuntu/Debian 安装 Docker: `curl -fsSL https://get.docker.com | bash`
 
 ### 面板无法访问 (Connection Refused)？
@@ -16,6 +16,7 @@
 2. 确认在节点端安装时输入的 **面板地址** 和 **密钥** 是否正确。
 3. 检查节点端服务状态: `systemctl status flux_agent`。
 4. 查看节点端日志: `journalctl -u flux_agent -f`。
+5. 如果是升级到 1.3.4 后才离线、且面板没有 TLS：多半是节点 `config.json` 的 `addr` 为裸地址（无 `ws://` 前缀）——新版本不再自动降级到明文连接，把 `addr` 改为显式 `ws://<面板地址>` 后重启 agent 即可，详见 [节点连不上：地址写法与时钟](./install.md#节点连不上-地址写法与时钟-1-3-4-起)。同时检查节点与面板的时钟偏差是否超过 5 分钟（先校时）。
 
 ### 只有 TCP 能通，UDP 不通？
 请检查服务器防火墙和安全组（AWS/阿里云/腾讯云等）是否同时放行了对应端口的 **TCP 和 UDP** 协议。
@@ -33,7 +34,7 @@
 4. 详细迁移步骤参考 [PostgreSQL](./postgresql.md)。
 
 ### PostgreSQL 容器启动失败？
-1. 检查 `POSTGRES_PASSWORD` 是否已设置（不能为空）。
+1. 检查 `POSTGRES_PASSWORD` 是否已设置：不能为空，**也不能仍是默认值 `flux_panel_change_me` 或 `postgres`**——1.2.0 起后端遇到空/默认口令会直接拒绝启动。
 2. 查看容器日志：`docker logs flux-panel-postgres`。
 3. 如果是首次启动后修改了密码，需要删除旧的数据卷重新初始化：`docker volume rm postgres_data`。
 
@@ -53,7 +54,7 @@
 
 ### Snell 用哪个版本
 
-入站的 Snell 版本不能高于节点安装的 Snell 主版本，v5 入站需要节点安装 Snell 5.x。
+入站的 Snell 版本不能高于节点安装的 Snell 主版本，v5 入站需要节点安装 Snell 5.x，v6 入站需要节点安装 Snell 6.0.0（beta，仅 v6 客户端可用）。
 
 ### Reality 用 Clash / Mihomo 连不上
 

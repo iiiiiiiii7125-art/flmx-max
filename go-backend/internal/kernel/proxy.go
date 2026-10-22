@@ -26,6 +26,7 @@ var importTypes = map[string]string{
 	"tuic":      ProtocolTUIC,
 	"anytls":    ProtocolAnyTLS,
 	"snell":     ProtocolSnell,
+	"naive":     ProtocolNaive,
 	"socks5":    "socks5",
 	"http":      "http",
 }
@@ -33,7 +34,7 @@ var importTypes = map[string]string{
 var proxyLabels = map[string]string{
 	"ss": "Shadowsocks", "vmess": "VMess", "vless": "VLESS", "trojan": "Trojan",
 	"hysteria2": "Hysteria2", "tuic": "TUIC", "anytls": "AnyTLS", "snell": "Snell",
-	"socks5": "SOCKS5", "http": "HTTP",
+	"naive": "NaïveProxy", "socks5": "SOCKS5", "http": "HTTP",
 }
 
 // ImportedNode is a node the panel does not deploy; it only relays and
@@ -71,6 +72,36 @@ func (p Proxy) num(k string) int {
 		return n
 	}
 	return 0
+}
+
+// exactInt returns the integer stored under k when it is an exact integer:
+// a float with a fractional part (8388.9) or beyond float64's exact range
+// (1e20) is reported inexact instead of being silently truncated or
+// wrapped by num(). present=false means the key is absent.
+func (p Proxy) exactInt(k string) (n int, present, exact bool) {
+	v, present := p[k]
+	if !present {
+		return 0, false, false
+	}
+	switch t := v.(type) {
+	case int:
+		return t, true, true
+	case int64:
+		if t > 1<<53 || t < -(1<<53) {
+			return 0, true, false
+		}
+		return int(t), true, true
+	case float64:
+		if t == float64(int64(t)) && t <= 1<<53 && t >= -(1<<53) {
+			return int(t), true, true
+		}
+		return 0, true, false
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil {
+			return n, true, true
+		}
+	}
+	return 0, true, false
 }
 
 func (p Proxy) flag(k string) bool {

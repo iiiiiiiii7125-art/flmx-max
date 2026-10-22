@@ -41,10 +41,19 @@ func (c *ssuConnector) Init(md md.Metadata) (err error) {
 		return
 	}
 
-	if c.options.Auth != nil {
-		method := c.options.Auth.Username()
-		password, _ := c.options.Auth.Password()
-		c.cipher, err = ss.ShadowCipher(method, password, c.md.key)
+	// Fail closed (D1-H1): without auth there is no cipher, and running
+	// without a cipher means plaintext on the wire. Refuse to initialize.
+	if c.options.Auth == nil {
+		return fmt.Errorf("shadowsocks: auth (method/password) is required, refusing to run unencrypted")
+	}
+	method := c.options.Auth.Username()
+	password, _ := c.options.Auth.Password()
+	c.cipher, err = ss.ShadowCipher(method, password, c.md.key)
+	if err != nil {
+		return err
+	}
+	if c.cipher == nil {
+		return fmt.Errorf("shadowsocks: failed to create cipher for method %q", method)
 	}
 
 	return

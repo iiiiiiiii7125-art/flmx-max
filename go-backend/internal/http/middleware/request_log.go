@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"go-backend/internal/logredact"
 )
 
 type statusWriter struct {
@@ -52,6 +54,7 @@ func RequestLog(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
 		next.ServeHTTP(sw, r)
-		log.Printf("%s %s -> %d (%s)", r.Method, r.URL.Path, sw.status, time.Since(start).String())
+		// A8-01：路径可能含凭据（订阅 token），记录前必须脱敏。
+		log.Printf("%s %s -> %d (%s)", r.Method, logredact.Path(r.URL.Path), sw.status, time.Since(start).String())
 	})
 }

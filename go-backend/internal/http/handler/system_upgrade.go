@@ -20,6 +20,8 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/repo"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -241,22 +243,96 @@ func currentPanelVersion() string {
 	return version
 }
 
+// parseVersionParts 把版本号解析成数字段序列（严格语义，供 compareVersions）。
+// 剥可选的 "v" 前缀后，每段必须是非负整数；含字母/连字符后缀、空段、
+// 超长溢出段等不可解析形态一律返回错误。
+func parseVersionParts(v string) ([]int, error) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	if v == "" {
+		return nil, fmt.Errorf("version is empty")
+	}
+	raw := strings.Split(v, ".")
+	parts := make([]int, len(raw))
+	for i, s := range raw {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("version segment %q is not a non-negative integer", s)
+		}
+		parts[i] = n
+	}
+	return parts, nil
+}
+
+// extractLeadingSemver 从「上报型版本串」中提取首段语义版本（R4-N1）。
+// node.version 存的是 agent 握手上报的 fullVersion，形如
+// "1.3.0 (debian/amd64)"（go-gost/main.go 口径：版本 + 空格 + 括号内
+// 的发行版/架构）；联邦对端自述的面板版本同属这一类。这类被比较的
+// 存量/上报值不能直接套 compareVersions 的严格语义——后缀不是版本
+// 的一部分：先取首个空白前的段，再对该段做严格解析。无空白分隔的
+// 粘连后缀（如 "1.3.2-beta1"）、无数字段、空串一律提取失败，调用
+// 方维持 fail-closed。用户输入的目标版本不走本函数（各入口已有
+// 格式校验 + compareVersions 严格把关）。"dev" 原样透传，保留
+// compareVersions 的 dev 口径；各调用方对 dev 的既有豁免（联邦警
+// 告）/门控（bypass fail-closed）语义不经本函数改变。
+func extractLeadingSemver(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	if v == "dev" {
+		return "dev", true
+	}
+	head := v
+	if i := strings.IndexByte(v, ' '); i >= 0 {
+		head = v[:i]
+	}
+	head = strings.TrimPrefix(head, "v")
+	if _, err := parseVersionParts(head); err != nil {
+		return "", false
+	}
+	return head, true
+}
+
+// compareWithReportedVersion 比较目标版本与上报型版本串
+// （node.version / agent 版本 / 对端面板版本）：上报侧先经
+// extractLeadingSemver 归一，提取失败返回错误、调用方 fail-closed；
+// 目标侧保持 compareVersions 的严格语义。
+func compareWithReportedVersion(target, reported string) (int, error) {
+	rep, ok := extractLeadingSemver(reported)
+	if !ok {
+		return 0, fmt.Errorf("reported version %q has no leading semantic version", reported)
+	}
+	return compareVersions(target, rep)
+}
+
 // compareVersions 比较两个版本号（如 "1.0.7"）。
 // 返回 -1 表示 v1 < v2，0 表示相等，1 表示 v1 > v2。
 // O9-001：用于升级前防止静默降级。
-func compareVersions(v1, v2 string) int {
+// A11-132-06：旧实现用 Atoi 且吞掉错误，解析失败的段按 0 计——
+// "1.3.2-beta1" 会被当成 1.3.0、溢出段被当成 0、"v" 前缀段被当成 0，
+// 防降级与 HasUpdate 都可被构造版本号误判。现改为严格语义：任一侧
+// 不可解析即返回错误，调用方必须 fail-closed（拒绝升级 / 不报有更新），
+// 不再返回一个貌似可信的大小关系。
+func compareVersions(v1, v2 string) (int, error) {
 	// "dev" 视为最低版本，允许升级到任何正式版本
 	if v1 == "dev" && v2 == "dev" {
-		return 0
+		return 0, nil
 	}
 	if v1 == "dev" {
-		return -1
+		return -1, nil
 	}
 	if v2 == "dev" {
-		return 1
+		return 1, nil
 	}
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
+	parts1, err := parseVersionParts(v1)
+	if err != nil {
+		return 0, fmt.Errorf("invalid version %q: %w", v1, err)
+	}
+	parts2, err := parseVersionParts(v2)
+	if err != nil {
+		return 0, fmt.Errorf("invalid version %q: %w", v2, err)
+	}
 	maxLen := len(parts1)
 	if len(parts2) > maxLen {
 		maxLen = len(parts2)
@@ -264,19 +340,19 @@ func compareVersions(v1, v2 string) int {
 	for i := 0; i < maxLen; i++ {
 		var n1, n2 int
 		if i < len(parts1) {
-			n1, _ = strconv.Atoi(strings.TrimSpace(parts1[i]))
+			n1 = parts1[i]
 		}
 		if i < len(parts2) {
-			n2, _ = strconv.Atoi(strings.TrimSpace(parts2[i]))
+			n2 = parts2[i]
 		}
 		if n1 < n2 {
-			return -1
+			return -1, nil
 		}
 		if n1 > n2 {
-			return 1
+			return 1, nil
 		}
 	}
-	return 0
+	return 0, nil
 }
 
 func validateBackendContainerName(value string) error {
@@ -615,7 +691,147 @@ func (e *systemUpgradeExecutor) replaceCompose(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
+	// FIX2-C #1（V6-01）：整份覆写前把存量 compose 的网络名与子网
+	// 搬进候选（见 preserveComposeNetworks）。存量文件读不到（首装
+	// 等）时按候选原样写。
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		data = preserveComposeNetworks(existing, data)
+	}
 	return writeFileWithMode(path, data, mode)
+}
+
+// preserveComposeNetworks 把存量 compose 的网络设置（networks.<name>
+// 的 name 与 ipam.config 整体）搬进待写入的新 compose，返回结果。
+//
+// 背景（V6-01）：FIX-G 把模板子网由 172.80 改为 172.30 只应作用于
+// 全新安装；升级整份覆写存量 compose 会连在用子网一起换掉，等于
+// 升级即重建面板网络（容器 IP 全变、后端可信代理判定随子网是否
+// RFC1918 静默翻转）。规则：候选与存量同名的网络，以存量为准——
+// 有 ipam.config 就整段搬（含 gateway 等附带项）；存量网络没有
+// ipam.config（docker 自动分配子网）则删掉候选的 config，不强加
+// 模板子网。存量无 networks 段、任一侧解析失败、或候选无 networks
+// 段时，候选原样返回（不比现状更糟）。
+func preserveComposeNetworks(existing, candidate []byte) []byte {
+	var existingDoc, candidateDoc yaml.Node
+	if err := yaml.Unmarshal(existing, &existingDoc); err != nil {
+		return candidate
+	}
+	if err := yaml.Unmarshal(candidate, &candidateDoc); err != nil {
+		return candidate
+	}
+	existingNetworks := yamlMappingChild(mappingRoot(&existingDoc), "networks")
+	candidateNetworks := yamlMappingChild(mappingRoot(&candidateDoc), "networks")
+	if existingNetworks == nil || candidateNetworks == nil {
+		return candidate
+	}
+
+	changed := false
+	for i := 0; i+1 < len(existingNetworks.Content); i += 2 {
+		name := existingNetworks.Content[i].Value
+		existingNet := existingNetworks.Content[i+1]
+		candidateNet := yamlMappingChild(candidateNetworks, name)
+		if candidateNet == nil || candidateNet.Kind != yaml.MappingNode {
+			continue
+		}
+		if existingNet.Kind != yaml.MappingNode {
+			continue
+		}
+		if nameNode := yamlMappingChild(existingNet, "name"); nameNode != nil && nameNode.Value != "" {
+			setYAMLMappingValue(candidateNet, "name", nameNode)
+			changed = true
+		}
+		existingIPAM := yamlMappingChild(existingNet, "ipam")
+		existingConfig := (*yaml.Node)(nil)
+		if existingIPAM != nil {
+			existingConfig = yamlMappingChild(existingIPAM, "config")
+		}
+		candidateIPAM := yamlMappingChild(candidateNet, "ipam")
+		switch {
+		case existingConfig != nil:
+			if candidateIPAM == nil {
+				candidateIPAM = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				setYAMLMappingValue(candidateNet, "ipam", candidateIPAM)
+			}
+			setYAMLMappingValue(candidateIPAM, "config", cloneYAMLNode(existingConfig))
+			changed = true
+		case candidateIPAM != nil && yamlMappingChild(candidateIPAM, "config") != nil:
+			// 存量无显式子网：删候选 config，维持自动分配语义。
+			removeYAMLMappingKey(candidateIPAM, "config")
+			changed = true
+		}
+	}
+	if !changed {
+		return candidate
+	}
+	out, err := yaml.Marshal(&candidateDoc)
+	if err != nil {
+		return candidate
+	}
+	return out
+}
+
+// mappingRoot 返回 YAML 文档的根 mapping（非 mapping 时 nil）。
+func mappingRoot(doc *yaml.Node) *yaml.Node {
+	if doc == nil || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	return root
+}
+
+// yamlMappingChild 在 mapping 节点中按 key 取值节点（无则 nil）。
+func yamlMappingChild(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// setYAMLMappingValue 设置 mapping 的 key（存在则替换值节点，不存在
+// 则追加）。value 节点会被直接挂上（调用方需传克隆或新节点）。
+func setYAMLMappingValue(mapping *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1] = value
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+}
+
+func removeYAMLMappingKey(mapping *yaml.Node, key string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+func cloneYAMLNode(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	c := *n
+	if n.Content != nil {
+		c.Content = make([]*yaml.Node, len(n.Content))
+		for i, child := range n.Content {
+			c.Content[i] = cloneYAMLNode(child)
+		}
+	}
+	if n.Alias != nil {
+		c.Alias = cloneYAMLNode(n.Alias)
+	}
+	return &c
 }
 
 func (h *Handler) buildSystemUpgradeDownloadURL(version, filename string) string {
@@ -861,13 +1077,20 @@ func decodeSystemUpgradeRequest(r *http.Request, req *systemUpgradeRequest) erro
 }
 
 func systemUpgradeVersionResponse(current, channel, latest string, lookupErr error, capability systemUpgradeCapabilityData) systemUpgradeVersionData {
+	// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
+	// A11-132-06：版本不可比（解析失败）时 fail-closed，不报有更新。
+	hasUpdate := false
+	if latest != "" {
+		if cmp, err := compareVersions(latest, current); err == nil && cmp > 0 {
+			hasUpdate = true
+		}
+	}
 	data := systemUpgradeVersionData{
 		CurrentVersion: current,
 		LatestVersion:  latest,
-		// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
-		HasUpdate:  latest != "" && compareVersions(latest, current) > 0,
-		Channel:    channel,
-		Capability: capability,
+		HasUpdate:      hasUpdate,
+		Channel:        channel,
+		Capability:     capability,
 	}
 	if lookupErr != nil {
 		data.LatestVersion = ""
@@ -924,14 +1147,21 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	if len(releases) > 0 {
 		latest = releases[0].Version
 	}
+	// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
+	// A11-132-06：版本不可比（解析失败）时 fail-closed，不报有更新。
+	hasUpdate := false
+	if latest != "" {
+		if cmp, err := compareVersions(latest, current); err == nil && cmp > 0 {
+			hasUpdate = true
+		}
+	}
 	response.WriteJSON(w, response.OK(systemUpgradeCheckData{
 		CurrentVersion: current,
 		LatestVersion:  latest,
-		// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
-		HasUpdate:  latest != "" && compareVersions(latest, current) > 0,
-		Channel:    channel,
-		Capability: capability,
-		Releases:   releases,
+		HasUpdate:      hasUpdate,
+		Channel:        channel,
+		Capability:     capability,
+		Releases:       releases,
 	}))
 }
 
@@ -986,7 +1216,15 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 旧逻辑：接受任意版本号直接下载升级，允许降级到旧版本
 	// U1-005：比较前剥离 "v" 前缀（与节点侧 upgrade.go 一致），避免手填 v1.0.10 被误判降级
 	currentVer := currentPanelVersion()
-	if cmp := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(currentVer, "v")); cmp < 0 {
+	// A11-132-06：不可比版本 fail-closed 拒绝（旧实现把解析失败的段按 0
+	// 计，构造版本号可绕过这道防降级比较）。
+	cmp, cmpErr := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(currentVer, "v"))
+	if cmpErr != nil {
+		log.Printf("systemUpgrade: 版本不可比较，拒绝升级：%v", cmpErr)
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("版本号 %s 或当前版本 %s 无法比较，已拒绝升级: %v", version, currentVer, cmpErr)))
+		return
+	}
+	if cmp < 0 {
 		log.Printf("systemUpgrade: 拒绝降级请求，目标版本 %s 低于当前版本 %s", version, currentVer)
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("目标版本 %s 低于当前版本 %s，不允许降级。如确需降级请手动操作。", version, currentVer)))
 		return

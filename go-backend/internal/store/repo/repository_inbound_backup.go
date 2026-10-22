@@ -21,7 +21,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	for _, k := range kernels {
 		out.Kernels = append(out.Kernels, model.KernelBackup{
 			ID: k.ID, NodeID: k.NodeID, KernelType: k.KernelType, Version: k.Version,
-			Enabled: k.Enabled, CreatedTime: k.CreatedTime,
+			Enabled: k.Enabled, CreatedTime: k.CreatedTime, InstalledVersion: k.InstalledVersion,
 		})
 	}
 
@@ -71,6 +71,18 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		out.Sources = append(out.Sources, model.RemoteSourceBackup{
 			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
 			RelayOnly: src.RelayOnly, Kind: src.Kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime,
+			Userinfo: src.Userinfo,
+		})
+	}
+	// A3-04：订阅计数基线与入站基线同等待遇随备份导出。
+	var subCounters []model.SubscriptionCounter
+	if err := r.db.Order("id ASC").Find(&subCounters).Error; err != nil {
+		return nil, err
+	}
+	for _, c := range subCounters {
+		out.SubscriptionCounters = append(out.SubscriptionCounters, model.SubscriptionCounterBackup{
+			NodeID: c.NodeID, SubscriptionID: c.SubscriptionID, Direction: c.Direction,
+			Epoch: c.Epoch, Bytes: c.Bytes,
 		})
 	}
 	var subs []model.Subscription
@@ -83,7 +95,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
 			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
-			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime,
+			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime, PendingDelete: sub.PendingDelete,
 		})
 	}
 	return out, nil
@@ -99,8 +111,17 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // user_subscription rows in the same backup still carry the old id.
 // Import() feeds this map to importUserSubscriptions so assignments are
 // rewritten onto the restored rows instead of dangling.
-func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64) (int, error) {
+func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
 	for _, k := range b.Kernels {
+		// D4-03：引用的节点不存在时跳过该内核并计数。
+		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
+		if err != nil {
+			return 0, err
+		}
+		if !kernelNodeExists {
+			rep.skip("kernels")
+			continue
+		}
 		// One kernel per node and type: drop a different row in the way.
 		if err := tx.Where("node_id = ? AND kernel_type = ? AND id <> ?", k.NodeID, k.KernelType, k.ID).
 			Delete(&model.NodeKernel{}).Error; err != nil {
@@ -113,6 +134,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		item := model.NodeKernel{
 			ID: k.ID, NodeID: k.NodeID, KernelType: k.KernelType, Version: version,
 			Status: "pending", Enabled: k.Enabled, CreatedTime: k.CreatedTime, UpdatedTime: now,
+			InstalledVersion: k.InstalledVersion,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -138,16 +160,41 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		item := model.RemoteSource{
 			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
 			RelayOnly: src.RelayOnly, Kind: kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
+			Userinfo: src.Userinfo,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "url", "interval_hours", "relay_only", "kind", "role", "enabled", "updated_time"}),
+			DoUpdates: clause.AssignmentColumns([]string{"name", "url", "interval_hours", "relay_only", "kind", "role", "enabled", "updated_time", "userinfo"}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}
 	}
 
 	for _, i := range b.Inbounds {
+		// D4-03：引用的内核/节点不存在时跳过该入站并计数。注意
+		// kernel_id=0 / node_id=0 是合法的「未绑定」语义（导入型
+		// 入站，见 v1 迁移对 kernel_id>0 部分索引的口径），只校验
+		// 非零引用。
+		kernelExists := true
+		if i.KernelID > 0 {
+			var err error
+			kernelExists, err = rowExistsTx(tx, &model.NodeKernel{}, i.KernelID)
+			if err != nil {
+				return 0, err
+			}
+		}
+		inboundNodeExists := true
+		if i.NodeID > 0 {
+			var err error
+			inboundNodeExists, err = rowExistsTx(tx, &model.Node{}, i.NodeID)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if !kernelExists || !inboundNodeExists {
+			rep.skip("inbounds")
+			continue
+		}
 		listen := i.Listen
 		if listen == "" {
 			listen = "::"
@@ -184,6 +231,19 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	}
 
 	for _, rel := range b.Relays {
+		// D4-03：引用的入站/转发不存在时跳过该中转并计数。
+		relayInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, rel.InboundID)
+		if err != nil {
+			return 0, err
+		}
+		relayForwardExists, err := rowExistsTx(tx, &model.Forward{}, rel.ForwardID)
+		if err != nil {
+			return 0, err
+		}
+		if !relayInboundExists || !relayForwardExists {
+			rep.skip("relays")
+			continue
+		}
 		if err := tx.Where("forward_id = ? AND id <> ?", rel.ForwardID, rel.ID).
 			Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return 0, err
@@ -206,6 +266,15 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// Counter baselines keep the next traffic sample from being counted
 	// twice when the restored panel talks to the same nodes.
 	for _, c := range b.Counters {
+		// D4-03：引用的入站不存在时跳过该基线并计数。
+		counterInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, c.InboundID)
+		if err != nil {
+			return 0, err
+		}
+		if !counterInboundExists {
+			rep.skip("inboundCounters")
+			continue
+		}
 		item := model.NodeInboundCounter{
 			InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
 			Epoch: c.Epoch, Bytes: c.Bytes, UpdatedTime: now,
@@ -242,7 +311,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
 			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
-			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime,
+			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, PendingDelete: sb.PendingDelete,
 		}
 		// Every subscription has its own credentials (older backups may
 		// carry owner-credential ones).
@@ -260,6 +329,39 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// 两者可不同；用户派生订阅 sb.ID=0 不参与分配引用，跳过）。
 		if sb.ID > 0 && subRemap != nil {
 			subRemap[sb.ID] = item.ID
+		}
+	}
+
+	// A3-04：订阅计数基线随恢复落位。订阅 id 先经 subRemap 按 token
+	// 重映射（与分配同口径）；节点/订阅任一不存在则跳过并计数
+	//（D4-03）。基线与累计同恢复后，首个样本按差分计，不再整段
+	// 重计；旧备份无此段时消费者侧「缺失只建基线」兜底。
+	for _, c := range b.SubscriptionCounters {
+		subID := c.SubscriptionID
+		if mapped, ok := subRemap[subID]; ok {
+			subID = mapped
+		}
+		counterNodeExists, err := rowExistsTx(tx, &model.Node{}, c.NodeID)
+		if err != nil {
+			return 0, err
+		}
+		counterSubExists, err := rowExistsTx(tx, &model.Subscription{}, subID)
+		if err != nil {
+			return 0, err
+		}
+		if !counterNodeExists || !counterSubExists {
+			rep.skip("subscriptionCounters")
+			continue
+		}
+		item := model.SubscriptionCounter{
+			NodeID: c.NodeID, SubscriptionID: subID, Direction: c.Direction,
+			Epoch: c.Epoch, Bytes: c.Bytes, UpdatedTime: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "node_id"}, {Name: "subscription_id"}, {Name: "direction"}},
+			DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
+		}).Create(&item).Error; err != nil {
+			return 0, err
 		}
 	}
 	return len(b.Inbounds), nil

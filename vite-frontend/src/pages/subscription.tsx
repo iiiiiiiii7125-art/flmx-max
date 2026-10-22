@@ -1216,6 +1216,19 @@ export default function SubscriptionPage() {
         toast.error(subRes.msg || "加载订阅失败");
       }
       if (inRes.code === 0) setInbounds(inRes.data ?? []);
+      // 落地/订阅源是编辑器 picker 的数据源：失败静默装空会让管理员误判
+      // 「什么都没选」甚至误改后保存（D5-11）。订阅本体 draft 内嵌列表项
+      // 不受影响，此处只补失败提示，不改数据。
+      if (inRes.code !== 0 || srcRes.code !== 0) {
+        const failedParts = [
+          inRes.code !== 0 ? "落地列表" : null,
+          srcRes.code !== 0 ? "订阅源" : null,
+        ].filter(Boolean);
+
+        toast.error(
+          `${failedParts.join("与")}加载失败，编辑器中的可选列表可能不完整，请刷新重试`,
+        );
+      }
     } finally {
       setLoading(false);
     }

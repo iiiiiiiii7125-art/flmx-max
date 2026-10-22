@@ -41,9 +41,11 @@ func TestApplySubscriptionCounterSamplesDuplicateInBatchF075(t *testing.T) {
 	if err := r.DB().First(&got, sub.ID).Error; err != nil {
 		t.Fatalf("reload subscription: %v", err)
 	}
-	// 总上传 = 基线批全量 100 + 第二批增量 160 = 260。
-	if got.UploadBytes != 260 {
-		t.Fatalf("F-075: upload_bytes = %d, want 260 (duplicate sample in one batch double-counted)", got.UploadBytes)
+	// FIX132-C（A3-04）语义订正：基线批只建基线、不计增量（旧断言
+	// 把基线批 100 也算进累计，编码的正是基线缺失全量计的缺陷语义）。
+	// 总上传 = 第二批增量 160。
+	if got.UploadBytes != 160 {
+		t.Fatalf("F-075: upload_bytes = %d, want 160 (duplicate sample in one batch double-counted)", got.UploadBytes)
 	}
 }
 

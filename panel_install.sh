@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261021.01"
+SCRIPT_VERSION="20261022.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -207,6 +207,40 @@ resolve_version() {
 
   echo "❌ 无法获取最新版本号。你可以手动指定版本，例如：VERSION=<版本号> ./panel_install.sh" >&2
   return 1
+}
+
+# A11-132-03: 点分数字版本比较（与 self_update_check 的防降级口径对齐）。
+# 回显 -1/0/1 表示 a 小于/等于/大于 b；任一侧为空或含非数字段时不可比，
+# 回显空并返回 1——调用方不得据此拦截（开发/测试标签等场景保持放行）。
+panel_version_cmp() {
+  local a="${1#v}" b="${2#v}"
+  local -a pa pb
+  local i n x y
+  if [[ -z "$a" || -z "$b" ]]; then
+    return 1
+  fi
+  IFS='.' read -ra pa <<< "$a"
+  IFS='.' read -ra pb <<< "$b"
+  n=${#pa[@]}
+  if (( ${#pb[@]} > n )); then
+    n=${#pb[@]}
+  fi
+  for (( i = 0; i < n; i++ )); do
+    x="${pa[i]:-0}"
+    y="${pb[i]:-0}"
+    if ! [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+    if (( 10#$x < 10#$y )); then
+      echo -1
+      return 0
+    fi
+    if (( 10#$x > 10#$y )); then
+      echo 1
+      return 0
+    fi
+  done
+  echo 0
 }
 
 # 根据版本号设置 compose 下载地址
@@ -950,7 +984,71 @@ pull_panel_update_images() {
   fi
 }
 
+# FIX2-C #1（V6-01）：升级替换 compose 前，把存量 compose 的网络名
+# 与子网搬进候选文件。FIX-G 已把模板子网改为 172.30.0.0/16，但那
+# 只应作用于全新安装；整份覆写会连在用子网一起换掉，等于升级即
+# 重建面板网络（容器 IP 全变、可信代理判定随子网是否 RFC1918 静默
+# 翻转）。规则与面板内升级（preserveComposeNetworks）一致：存量有
+# 子网就整体搬入；存量无显式子网则删掉候选的子网行、不强加模板
+# 子网；存量无 networks 段则不动候选。best-effort：任何一步失败都
+# 不阻断升级本身（行为不劣于此前的整份覆写）。
+# 用法：preserve_compose_networks <candidate> <current>
+preserve_compose_networks() {
+  local candidate="$1" current="$2"
+  [[ -f "$candidate" && -f "$current" ]] || return 0
+  grep -q "^networks:" "$current" || return 0
+
+  # networks 是模板的最后一个顶层段；段内抽网络名与全部子网。
+  local old_name old_subnets
+  old_name=$(awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ { sub(/^    name:[[:space:]]*/, ""); print; exit }
+  ' "$current")
+  old_subnets=$(awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /- subnet:/ { sub(/.*- subnet:[[:space:]]*/, ""); print }
+  ' "$current")
+
+  local tmp
+  tmp=$(mktemp) || return 0
+  if ! OLD_NAME="$old_name" OLD_SUBNETS="$old_subnets" awk '
+    BEGIN {
+      old_name = ENVIRON["OLD_NAME"]
+      n = split(ENVIRON["OLD_SUBNETS"], subs, "\n")
+      if (n == 1 && subs[1] == "") n = 0
+      emitted = 0
+    }
+    /^networks:/ { in_net=1; print; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ && old_name != "" {
+      print "    name: " old_name
+      next
+    }
+    in_net && /- subnet:/ {
+      if (!emitted) {
+        indent = $0
+        sub(/- subnet:.*/, "", indent)
+        for (i = 1; i <= n; i++) print indent "- subnet: " subs[i]
+        emitted = 1
+      }
+      next
+    }
+    { print }
+  ' "$candidate" > "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  cat "$tmp" > "$candidate"
+  rm -f "$tmp"
+  if [[ -n "$old_subnets" ]]; then
+    echo "🌐 已保留现有部署的网络子网（${old_subnets//$'\n'/, }），模板子网仅对全新安装生效"
+  fi
+}
+
 activate_panel_update_files() {
+  preserve_compose_networks "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml
   if ! chmod 0644 "$UPDATE_COMPOSE_CANDIDATE" || ! mv "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml; then
     echo "❌ 替换 Compose 配置失败"
     return 1
@@ -1229,6 +1327,25 @@ EOF
 }
 
 # 更新功能
+# FIX2-C #9（V6 P3）：读取实际运行中的后端容器镜像 tag 作为部署
+# 版本。.env 的 FLUX_VERSION 是「打算跑的版本」，可能与正在跑的
+# 镜像不一致（手改 .env、升级中途失败）；防降级判定若只信 .env
+# 会被这种不一致绕过。取不到（容器不在、无 tag 等）时返回非 0，
+# 调用方回退 .env 口径。
+get_deployed_panel_version() {
+  local container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local image tag
+  image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null) || return 1
+  [[ -n "$image" ]] || return 1
+  image="${image%%@*}"   # 去 digest
+  tag="${image##*:}"     # 去 registry/repo 前缀，只留 tag
+  # 无 tag（tag 与整串相同）、或误把注册表端口当 tag（含 /）都算取不到。
+  if [[ -z "$tag" || "$tag" == "$image" || "$tag" == */* ]]; then
+    return 1
+  fi
+  printf '%s' "$tag"
+}
+
 update_panel() {
   echo "🔄 开始更新面板..."
   check_docker noinstall || {
@@ -1242,12 +1359,41 @@ update_panel() {
   CURRENT_DB_TYPE=$(get_current_db_type)
   echo "🗄️ 当前数据库类型：$CURRENT_DB_TYPE"
 
-  echo "🔍 获取最新版本号..."
-  LATEST_VERSION=$(resolve_latest_release_tag) || {
-    echo "❌ 无法获取最新版本号，更新终止"
+  # A11-132-03: 目标版本感知 + 防降级。旧实现恒取 latest 且不看当前版本：
+  # ① VERSION 定版意图被静默忽略、直升 latest；② 本机版本高于 latest 时
+  # 构成静默降级覆写。现与面板内升级（system_upgrade）口径对齐：
+  # VERSION 非空时以其为目标；写入前与 .env 的 FLUX_VERSION 比较，
+  # 两侧都可解析且目标更低时拒绝；同版本按重装继续（与面板口径一致）。
+  local current_version cmp_result
+  current_version=$(get_env_var "FLUX_VERSION" || true)
+  # FIX2-C #9：与实际运行版本交叉核对——两者不一致时告警并以实际
+  # 运行版本为准做防降级判定（.env 可能被手改或停留在失败的升级
+  # 目标上，只信它会放过真实降级）。取不到实际版本时保持 .env 口径。
+  local deployed_version
+  deployed_version=$(get_deployed_panel_version || true)
+  if [[ -n "$deployed_version" && "$deployed_version" != "$current_version" ]]; then
+    echo "⚠️ .env 记录版本（${current_version:-未知}）与实际运行版本（$deployed_version）不一致，防降级判定以实际运行版本为准"
+    current_version="$deployed_version"
+  fi
+  if [[ -n "${VERSION:-}" ]]; then
+    LATEST_VERSION="$VERSION"
+    echo "📌 指定更新版本：$LATEST_VERSION（当前版本：${current_version:-未知}）"
+  else
+    echo "🔍 获取最新版本号..."
+    LATEST_VERSION=$(resolve_latest_release_tag) || {
+      echo "❌ 无法获取最新版本号，更新终止"
+      return 1
+    }
+    echo "🆕 最新版本：$LATEST_VERSION（当前版本：${current_version:-未知}）"
+  fi
+  cmp_result=$(panel_version_cmp "$LATEST_VERSION" "$current_version" || true)
+  if [[ "$cmp_result" == "-1" ]]; then
+    echo "❌ 目标版本 $LATEST_VERSION 低于当前版本 $current_version，拒绝降级更新。如确需降级请手动处理。"
     return 1
-  }
-  echo "🆕 最新版本：$LATEST_VERSION"
+  fi
+  if [[ "$cmp_result" == "0" ]]; then
+    echo "ℹ️ 目标版本与当前版本相同，将按同版本重装继续"
+  fi
   set_compose_urls_by_version "$LATEST_VERSION"
 
   echo "🔽 下载最新配置文件..."
@@ -1307,6 +1453,7 @@ update_panel() {
 
 migrate_to_postgres() {
   local current_db_type postgres_db postgres_user postgres_password database_url
+  local env_snapshot pgloader_source
 
   echo "🔄 开始迁移 SQLite -> PostgreSQL..."
   check_docker noinstall || {
@@ -1343,6 +1490,20 @@ migrate_to_postgres() {
   postgres_user=${postgres_user:-flux_panel}
   postgres_password=${postgres_password:-$(generate_random)}
 
+  # A11-132-04: 口令前置校验。后端对空/默认口令拒绝启动（1.2.0 起），
+  # 旧实现把默认口令原样保留并一路写进 .env，pgloader 成功后面板却
+  # 起不来且配置已切到 PG（见下方的失败回滚）。这里在停服务之前处理：
+  # 口令为空或仍是已知默认值/弱口令时，当场生成随机口令并写回 .env。
+  if [[ -z "$postgres_password" || "$postgres_password" == "flux_panel_change_me" || "$postgres_password" == "postgres" ]]; then
+    postgres_password=$(generate_random)
+    echo "⚠️ POSTGRES_PASSWORD 为空或仍是默认值，1.2.0 起后端会拒绝启动；已生成随机口令并写入 .env，迁移后请勿改回默认值"
+  fi
+
+  # A11-132-04: 迁移前快照 .env，后续任一步失败时用它回滚配置，
+  # 避免面板被留在「.env 已切 postgres 但服务未起来」的坏配置上。
+  env_snapshot="$(pwd)/.env.pre-postgres-migration"
+  cp ".env" "$env_snapshot"
+
   upsert_env_var ".env" "POSTGRES_DB" "$postgres_db"
   upsert_env_var ".env" "POSTGRES_USER" "$postgres_user"
   upsert_env_var ".env" "POSTGRES_PASSWORD" "$postgres_password"
@@ -1356,20 +1517,48 @@ migrate_to_postgres() {
 
   echo "💾 备份 SQLite 数据到当前目录..."
   if ! docker run --rm -v sqlite_data:/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
-    echo "❌ SQLite 备份失败，迁移终止"
+    echo "❌ SQLite 备份失败，迁移终止，正在恢复原服务..."
+    $DOCKER_CMD up -d backend frontend || true
     return 1
   fi
 
   echo "🚀 启动 PostgreSQL..."
   $DOCKER_CMD up -d postgres
   if ! wait_for_postgres_healthy; then
-    echo "🛑 PostgreSQL 未就绪，迁移终止"
+    echo "🛑 PostgreSQL 未就绪，迁移终止，正在恢复原服务..."
+    $DOCKER_CMD up -d backend frontend || true
     return 1
   fi
 
+  # R4-P1 变通：1.3.2 及更早版本的 SQLite 库里，peer_share_resource 的
+  # release_legacy_family 列是 numeric + DEFAULT false；pgloader 把
+  # 默认值翻成 'false' 文本，PG 拒绝建表，迁移在建表阶段整体 FATAL。
+  # 先复制一份库、把该列的模式默认值改成 0 再迁移（与模型侧修复互为
+  # 双保险；模型已修复的版本里该文本不存在，替换不命中、照常迁移）。
+  pgloader_source="/sqlite/gost.db"
+  echo "🧹 预处理 SQLite 副本（release_legacy_family 默认值兼容）..."
+  if docker run --rm -v sqlite_data:/sqlite alpine sh -c '
+    set -e
+    apk add --no-cache sqlite >/dev/null 2>&1
+    sqlite3 /sqlite/gost.db .dump > /tmp/dump.sql
+    sed "/CREATE TABLE.*peer_share_resource/,/);/ s/DEFAULT false/DEFAULT 0/g" /tmp/dump.sql | sed "/CREATE TABLE.*peer_share_resource/,/);/ s/default false/default 0/g" > /tmp/dump-fixed.sql
+    rm -f /sqlite/gost-migrate.db
+    sqlite3 /sqlite/gost-migrate.db < /tmp/dump-fixed.sql
+    case "$(sqlite3 /sqlite/gost-migrate.db ".schema peer_share_resource")" in
+      *"DEFAULT false"*|*"default false"*) exit 4 ;;
+    esac
+  '; then
+    pgloader_source="/sqlite/gost-migrate.db"
+    echo "✅ 迁移副本已生成：$pgloader_source"
+  else
+    echo "⚠️ 副本预处理未完成（例如容器内无法安装 sqlite），改用原始库迁移；若 pgloader 报 numeric \"false\" 错误，请按 doc/guide/postgresql.md「迁移被 release_legacy_family 堵住」一节手动处理"
+  fi
+
   echo "🔄 执行 pgloader 迁移..."
-  if ! docker run --rm --network gost-network -v sqlite_data:/sqlite dimitri/pgloader:latest pgloader /sqlite/gost.db "postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}"; then
-    echo "❌ pgloader 迁移失败，迁移终止（如报 28P01，可执行 docker volume rm postgres_data 后重试）"
+  if ! docker run --rm --network gost-network -v sqlite_data:/sqlite dimitri/pgloader:latest pgloader "$pgloader_source" "postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}"; then
+    echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm postgres_data 后重试）"
+    echo "↩️ .env 尚未切换，正在恢复迁移前的 SQLite 服务..."
+    $DOCKER_CMD up -d backend frontend || true
     return 1
   fi
 
@@ -1382,10 +1571,21 @@ migrate_to_postgres() {
 
   echo "⏳ 等待服务启动..."
   if ! wait_for_backend_healthy; then
-    echo "🛑 迁移后服务启动失败"
+    # A11-132-04: 启动失败自动回滚 .env 到迁移前快照并恢复 SQLite 服务，
+    # 不把面板留在「配置已切 PG、服务起不来」的坏状态。
+    echo "🛑 迁移后服务启动失败，正在回滚 .env 并恢复迁移前的服务..."
+    cp "$env_snapshot" ".env"
+    $DOCKER_CMD up -d backend frontend || true
+    if wait_for_backend_healthy; then
+      echo "✅ 已回滚：面板恢复为迁移前的 SQLite 部署（数据未动）。请排查 PostgreSQL 侧问题后重试迁移"
+    else
+      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为 $env_snapshot 的内容，SQLite 数据在 sqlite_data 卷中未动"
+    fi
     return 1
   fi
 
+  rm -f "$env_snapshot"
+  docker run --rm -v sqlite_data:/sqlite alpine rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   echo "✅ SQLite -> PostgreSQL 迁移完成"
 }
 

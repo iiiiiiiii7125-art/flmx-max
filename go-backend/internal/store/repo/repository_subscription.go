@@ -236,8 +236,11 @@ type SubscriptionCounterSample struct {
 }
 
 // ApplySubscriptionCounterSamples adds what each counter grew by since the
-// last sample of the same epoch (the whole value after a counter reset) to
-// the subscriptions' traffic.
+// last sample of the same epoch to the subscriptions' traffic. A missing
+// baseline and an epoch change only (re)establish the baseline and count
+// nothing (FIX2-A V2-05 adjudication, aligned with the forward-counter
+// path); a same-epoch rollback counts the whole current value, which is
+// traffic accrued since the in-epoch counter reset.
 func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string, samples []SubscriptionCounterSample, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -287,10 +290,33 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 			if s.Bytes < 0 || (s.Direction != "up" && s.Direction != "down") {
 				continue
 			}
-			delta := s.Bytes
 			old, seen := prev[key{s.SubscriptionID, s.Direction}]
-			if seen && old.Epoch == epoch && s.Bytes >= old.Bytes {
+			var delta int64
+			switch {
+			case !seen:
+				// A3-04/X2：基线缺失只建基线、不计增量（与 nft 转发
+				// 路径 buildNftCounterDeltas 同口径）。旧语义把整段
+				// 累计当增量：干净恢复（基线未随备份）或基线行丢失后
+				// 首个样本会把历史流量重复计入一遍，可把正常订阅顶
+				// 过上限被停用（X2 探针 D：1000/2000 → 2000/4000）。
+				delta = 0
+			case old.Epoch != epoch:
+				// FIX2-A（V2-05，主控裁定）：epoch 变化视同基线重
+				// 建——只推进基线、不把新 epoch 的累计值计入用量，
+				// 与转发侧（nft/realm hash 变化同语义）及上方首采基
+				// 线同口径，消除「同节点 agent 重启后订阅计、realm
+				// 转发漏计」的口径分叉。旧语义对 epoch 变化全量计
+				// （累计自零起整段计入），本裁定 supersede 之：代价
+				// 是重启到首采样之间的订阅流量不计，与转发侧一致。
+				delta = 0
+			case s.Bytes >= old.Bytes:
 				delta = s.Bytes - old.Bytes
+			default:
+				// 同 epoch 计数回退（计数器在同代内重置）：当前值
+				// 整段为重置后未计过的新流量，全量计（既有语义
+				// 不变；与 epoch 变化的区别是代际未换、不存在跨
+				// 代累计归属歧义）。
+				delta = s.Bytes
 			}
 			if delta > 0 {
 				if s.Direction == "up" {

@@ -4,6 +4,10 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"go-backend/internal/http/response"
@@ -38,12 +42,69 @@ func (h *Handler) userQuotaBlockReason(userID int64, now int64) (string, error) 
 	return "", nil
 }
 
+// lockUserQuotaEnforcement 取某用户的配额执法串行锁（FIX2-A
+// V2-02）。锁表懒初始化，Handler 未经 New 构造时亦可用。
+func (h *Handler) lockUserQuotaEnforcement(userID int64) func() {
+	h.quotaEnforceMu.Lock()
+	if h.quotaEnforceLocks == nil {
+		h.quotaEnforceLocks = make(map[int64]*sync.Mutex)
+	}
+	mu, ok := h.quotaEnforceLocks[userID]
+	if !ok {
+		mu = &sync.Mutex{}
+		h.quotaEnforceLocks[userID] = mu
+	}
+	h.quotaEnforceMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+func parseQuotaPausedForwardIDs(raw string) []int64 {
+	parts := strings.Split(strings.TrimSpace(raw), ",")
+	out := make([]int64, 0, len(parts))
+	seen := make(map[int64]struct{}, len(parts))
+	for _, part := range parts {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaView) {
 	if h == nil || h.repo == nil || userID <= 0 || quota == nil {
 		return
 	}
-	if quota.DisabledByQuota == 1 || !isUserQuotaExceeded(quota) {
+	// FIX2-A（V2-02）：per-user 串行化。三路入账（WS 上报 / nft 采集 /
+	// realm 采集）可对同一用户并发执法，旧实现无锁：两轮基于各自视
+	// 角算出的 paused 集合互相 trim 覆写，已暂停转发被挤出恢复依据
+	// （并发探针坐实）。串行区内一律以 DB 最新视图为准——调用方传
+	// 入的视图在等待锁期间可能已过期。
+	unlock := h.lockUserQuotaEnforcement(userID)
+	defer unlock()
+	if fresh, err := h.repo.GetUserQuotaView(userID, time.Now()); err == nil && fresh != nil {
+		quota = fresh
+	}
+	if !isUserQuotaExceeded(quota) {
 		return
+	}
+
+	// FIX2-A（V2-01）：DisabledByQuota==1 不再恒早退。首轮暂停失败
+	// （nft reconcile 失败 / 节点离线 / gost 暂停失败）的转发保持
+	// active 且不在恢复依据里，旧入口见 disabled=1 即返回，这批转
+	// 发永不重试、持续转发持续扣费且无告警。改为增量执法：只处理
+	// 「仍 active 且不在 PausedForwardIDs」的转发，已暂停集合原样
+	// 保留，最终恢复依据写并集。
+	alreadyPausedIDs := parseQuotaPausedForwardIDs(quota.PausedForwardIDs)
+	alreadyPaused := make(map[int64]bool, len(alreadyPausedIDs))
+	for _, id := range alreadyPausedIDs {
+		alreadyPaused[id] = true
 	}
 
 	forwards, err := h.listActiveForwardsByUser(userID)
@@ -53,29 +114,54 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 		return
 	}
 	candidateIDs := make([]int64, 0, len(forwards))
+	candidates := make([]*forwardRecord, 0, len(forwards))
 	for i := range forwards {
-		if forwards[i].Status == 1 {
+		if forwards[i].Status == 1 && !alreadyPaused[forwards[i].ID] {
 			candidateIDs = append(candidateIDs, forwards[i].ID)
+			candidates = append(candidates, &forwards[i])
 		}
 	}
 	now := time.Now().UnixMilli()
-	// F-018（A4-001，O6-001 变体）：执法顺序改为先落库再暂停。
-	// 旧顺序先逐个暂停、最后以 `_ =` 吞错调用 MarkUserQuotaDisabled：
-	// Mark 一旦写失败，转发已停而 disabled/paused 列表未落库；此后
-	// 第二次执法时 listActiveForwardsByUser 只查 status=1，已停转发
-	// 不在列，pausedIDs=[] 会再次 Mark 成功并把空列表落库，恢复依据
-	// 被彻底覆写——这批转发永久无法自动恢复且无任何日志。
-	// 现顺序：先以候选全集 Mark 落库（失败即整轮中止并记 ALERT，
-	// 不动任何转发；disabled 未置位，下一次流量上报会重新触发执法，
-	// 自愈），再逐个暂停，最后把落库列表回写为实际暂停集合。
-	if err := h.repo.MarkUserQuotaDisabled(userID, candidateIDs, now); err != nil {
-		log.Printf("applyUserQuotaBlock: ALERT mark quota disabled failed user_id=%d err=%v action=abort_enforce_retry_on_next_report", userID, err)
-		return
+	if quota.DisabledByQuota == 1 && len(candidateIDs) == 0 {
+		return // 已全部暂停且恢复依据完整，无增量可执法。
 	}
-	pausedIDs := make([]int64, 0, len(forwards))
-	for i := range forwards {
-		forward := &forwards[i]
+	// F-018（A4-001，O6-001 变体）：执法顺序先落库再暂停。旧顺序先
+	// 逐个暂停、最后以 `_ =` 吞错调用 MarkUserQuotaDisabled：Mark
+	// 一旦写失败，转发已停而 disabled/paused 列表未落库；此后第二
+	// 次执法时 listActiveForwardsByUser 只查 status=1，已停转发不
+	// 在列，pausedIDs=[] 会再次 Mark 成功并把空列表落库，恢复依据
+	// 被彻底覆写——这批转发永久无法自动恢复且无任何日志。
+	// 现顺序：先写「已暂停 ∪ 候选」超集落库（失败即整轮中止并记
+	// ALERT，不动任何转发，下一次流量上报重新触发执法自愈），再逐
+	// 个暂停，最后把落库列表回写为实际暂停集合（超集只多不少，
+	// 回写失败保持超集仍安全）。首轮（disabled 未置位）用 Mark 同
+	// 时置 disabled；增量轮只更新恢复依据列表，不动 disabled_at
+	// （保留首次禁用时刻）。
+	supersetIDs := append(append([]int64{}, alreadyPausedIDs...), candidateIDs...)
+	if quota.DisabledByQuota == 1 {
+		if err := h.repo.UpdateUserQuotaPausedForwardIDs(userID, supersetIDs, now); err != nil {
+			log.Printf("applyUserQuotaBlock: ALERT extend paused list failed user_id=%d err=%v action=abort_enforce_retry_on_next_report", userID, err)
+			return
+		}
+	} else {
+		if err := h.repo.MarkUserQuotaDisabled(userID, supersetIDs, now); err != nil {
+			log.Printf("applyUserQuotaBlock: ALERT mark quota disabled failed user_id=%d err=%v action=abort_enforce_retry_on_next_report", userID, err)
+			return
+		}
+	}
+	pausedSet := make(map[int64]bool, len(candidates))
+	// A4-001：nft 转发没有 gost 服务可 PauseService——旧实现对 nft 转发
+	// 必然 not-found 后仅记日志 continue，规则不撤、流量与扣费继续，
+	// 且不进 pausedIDs。按 pauseForwardRecords（flow 策略路径，D1-002）
+	// 同款：按入口节点分组 reconcile-exclude 先撤规则，成功后写 paused。
+	nftGroups := make(map[int64][]*forwardRecord)
+	for _, forward := range candidates {
 		if forward.Status != 1 {
+			continue
+		}
+		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
+		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
 			continue
 		}
 		if err := h.controlForwardServices(forward, "PauseService", false); err != nil {
@@ -87,17 +173,49 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 			// O6-001：DB 更新失败时服务已暂停，必须加入 pausedIDs 以便配额恢复时能恢复
 			// 旧逻辑：continue 跳过，服务暂停但 DB 显示活跃且不在 pausedIDs 中，永远无法恢复
 			log.Printf("applyUserQuotaBlock: UpdateForwardStatus failed for forward %d (service already paused), adding to pausedIDs for later recovery: %v", forward.ID, err)
-			pausedIDs = append(pausedIDs, forward.ID)
+		}
+		pausedSet[forward.ID] = true
+	}
+	for nodeID, group := range nftGroups {
+		exclude := make(map[int64]bool, len(group))
+		ids := make([]int64, 0, len(group))
+		for _, forward := range group {
+			exclude[forward.ID] = true
+			ids = append(ids, forward.ID)
+		}
+		// D6 数据面优先：先 reconcile 撤规则，成功后再写 DB；失败则
+		// DB 保持 active、不进 pausedSet，下次流量上报重新触发执法自愈。
+		if !h.reconcileNodeWithTimeout(nodeID, exclude, nil, 30*time.Second) {
+			log.Printf("applyUserQuotaBlock: nft pause gap node_id=%d forward_ids=%v reason=reconcile_timeout_or_error ALERT=db_state_may_diverge", nodeID, ids)
 			continue
 		}
-		pausedIDs = append(pausedIDs, forward.ID)
+		for _, forward := range group {
+			if err := h.repo.UpdateForwardStatus(forward.ID, 0, now); err != nil {
+				// 同 O6-001：规则已撤，必须进 pausedSet 以便恢复时加回。
+				log.Printf("applyUserQuotaBlock: UpdateForwardStatus failed for nft forward %d (rules already removed), adding to pausedIDs for later recovery: %v", forward.ID, err)
+			}
+			pausedSet[forward.ID] = true
+		}
 	}
-	// pausedIDs 是 candidateIDs 的保序子序列（同源同序追加，暂停失败
-	// 仅跳过），长度不等即集合不等：回写实际集合使恢复列表精确。
-	// 回写失败仅记日志——此时库中仍是候选超集，恢复时对未暂停转发
-	// 置 status=1 为无害空操作，恢复依据只多不少，不会重蹈覆写丢失。
-	if len(pausedIDs) != len(candidateIDs) {
-		if err := h.repo.MarkUserQuotaDisabled(userID, pausedIDs, now); err != nil {
+	// 实际暂停集合 = 既有已暂停 ∪ 本轮暂停成功，按 superset 原序
+	// 重建（保持「保序子序列」不变式）。与落库超集不等才回写实际
+	// 集合使恢复列表精确；回写失败仅记日志——库中仍是超集，恢复
+	// 时对未暂停转发置 status=1 为无害空操作，恢复依据只多不少，
+	// 不会重蹈覆写丢失。
+	pausedIDs := make([]int64, 0, len(supersetIDs))
+	for _, id := range supersetIDs {
+		if alreadyPaused[id] || pausedSet[id] {
+			pausedIDs = append(pausedIDs, id)
+		}
+	}
+	if !slices.Equal(pausedIDs, supersetIDs) {
+		var err error
+		if quota.DisabledByQuota == 1 {
+			err = h.repo.UpdateUserQuotaPausedForwardIDs(userID, pausedIDs, now)
+		} else {
+			err = h.repo.MarkUserQuotaDisabled(userID, pausedIDs, now)
+		}
+		if err != nil {
 			log.Printf("applyUserQuotaBlock: trim paused list failed user_id=%d err=%v action=keep_candidate_superset", userID, err)
 		}
 	}

@@ -331,6 +331,13 @@ export default function ConfigPage() {
   const [exportSelectorOpen, setExportSelectorOpen] = useState(false);
   const [importSelectorOpen, setImportSelectorOpen] = useState(false);
   const [importFileName, setImportFileName] = useState("");
+  // 待确认的导入内容：选文件只解析暂存，必须经确认框才真正执行导入
+  // （D7-01：此前选文件即导入，零确认零语义说明）。
+  const [pendingImport, setPendingImport] = useState<{
+    fileName: string;
+    data: Record<string, unknown>;
+  } | null>(null);
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -348,6 +355,9 @@ export default function ConfigPage() {
   });
   const [announcementLoading, setAnnouncementLoading] = useState(true);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
+  // 公告加载失败标志：保存是全量提交，失败被装成空初值时保存即清空
+  // 线上公告（D5-02）——失败态只显示错误与重试，不渲染可保存的表单。
+  const [announcementLoadError, setAnnouncementLoadError] = useState(false);
   const updateChannel: UpdateReleaseChannel = getUpdateReleaseChannel();
   const [systemUpgradeInfo, setSystemUpgradeInfo] =
     useState<SystemUpgradeVersionApiData | null>(null);
@@ -594,19 +604,29 @@ export default function ConfigPage() {
 
   const loadAnnouncement = async () => {
     setAnnouncementLoading(true);
+    setAnnouncementLoadError(false);
     try {
       const res = await getAnnouncement();
 
       if (res.code === 0 && res.data) {
         setAnnouncement(res.data);
+      } else {
+        setAnnouncementLoadError(true);
       }
     } catch {
+      setAnnouncementLoadError(true);
     } finally {
       setAnnouncementLoading(false);
     }
   };
 
   const saveAnnouncement = async () => {
+    if (announcementLoadError) {
+      // 加载失败时表单是空初值，全量保存会清空线上公告（D5-02）
+      toast.error("公告加载失败，请先重试加载成功后再保存");
+
+      return;
+    }
     setAnnouncementSaving(true);
     try {
       const res = await updateAnnouncement(announcement);
@@ -1418,8 +1438,13 @@ export default function ConfigPage() {
       await exportBackup(exportTypes);
       toast.success("导出成功");
       setExportSelectorOpen(false);
-    } catch {
-      toast.error("导出失败，请重试");
+    } catch (error) {
+      // exportBackup 已把后端错误信封的 msg 抛成 Error（D5-01），原样透出
+      toast.error(
+        error instanceof Error && error.message
+          ? `导出失败: ${error.message}`
+          : "导出失败，请重试",
+      );
     } finally {
       setExporting(false);
     }
@@ -1436,8 +1461,14 @@ export default function ConfigPage() {
     requestAnimationFrame(() => backupFileInputRef.current?.click());
   };
 
+  // 选文件只做解析与暂存，不直接导入：导入是覆盖型操作，必须经确认框
+  // 说明语义后再执行（D7-01）。
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+
+    if (backupFileInputRef.current) {
+      backupFileInputRef.current.value = "";
+    }
 
     if (!file) return;
 
@@ -1447,22 +1478,33 @@ export default function ConfigPage() {
       return;
     }
 
-    setImportFileName(file.name);
-    setImporting(true);
-
     try {
       const text = await file.text();
       const data = JSON.parse(text);
 
+      setPendingImport({ fileName: file.name, data });
+      setImportConfirmOpen(true);
+    } catch {
+      toast.error("导入失败，请检查文件格式");
+    }
+  };
+
+  const executePendingImport = async () => {
+    if (!pendingImport) return;
+
+    setImporting(true);
+    try {
       const response = await importBackup({
         types: importTypes,
-        ...data,
+        ...pendingImport.data,
       });
 
       if (response.code === 0) {
         toast.success(`导入成功: ${JSON.stringify(response.data)}`);
         setImportTypes([]);
         setImportFileName("");
+        setPendingImport(null);
+        setImportConfirmOpen(false);
       } else {
         toast.error("导入失败: " + response.msg);
       }
@@ -1470,10 +1512,12 @@ export default function ConfigPage() {
       toast.error("导入失败，请检查文件格式");
     } finally {
       setImporting(false);
-      if (backupFileInputRef.current) {
-        backupFileInputRef.current.value = "";
-      }
     }
+  };
+
+  const cancelPendingImport = () => {
+    setImportConfirmOpen(false);
+    setPendingImport(null);
   };
 
   const toggleTypeSelection = (
@@ -1962,6 +2006,15 @@ export default function ConfigPage() {
             <div className="flex justify-center py-8">
               <Spinner size="lg" />
             </div>
+          ) : announcementLoadError ? (
+            <div className="space-y-3 py-4 text-center">
+              <p className="text-sm text-danger-500">
+                公告加载失败。为防止把空内容覆盖到线上公告，已禁止保存。
+              </p>
+              <Button size="sm" variant="flat" onPress={loadAnnouncement}>
+                重新加载
+              </Button>
+            </div>
           ) : (
             <>
               <div className="space-y-2">
@@ -2149,6 +2202,58 @@ export default function ConfigPage() {
               </ModalFooter>
             </>
           )}
+        </ModalContent>
+      </Modal>
+
+      <Modal
+        backdrop="blur"
+        classNames={{
+          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
+        }}
+        isOpen={importConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open && !importing) {
+            cancelPendingImport();
+          }
+        }}
+      >
+        <ModalContent>
+          <ModalHeader>确认导入备份</ModalHeader>
+          <ModalBody>
+            <div className="space-y-3 text-sm text-default-700 dark:text-default-300">
+              <p>
+                即将导入文件
+                <span className="font-medium text-default-900 dark:text-default-100">
+                  {" "}
+                  {pendingImport?.fileName || ""}{" "}
+                </span>
+                中所选类型的 {importTypes.length} 类数据。
+              </p>
+              <p>
+                导入按类型写入：与现有记录相同 ID
+                的数据会被备份文件中的内容覆盖，未包含在所选类型内的数据不受影响。
+              </p>
+              <p>
+                导入执行前，系统会自动生成一份当前全部数据的备份；如导入结果不符合预期，可用该自动备份恢复。
+              </p>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              isDisabled={importing}
+              variant="light"
+              onPress={cancelPendingImport}
+            >
+              取消
+            </Button>
+            <Button
+              color="primary"
+              isLoading={importing}
+              onPress={executePendingImport}
+            >
+              {importing ? "导入中..." : "确认导入"}
+            </Button>
+          </ModalFooter>
         </ModalContent>
       </Modal>
 

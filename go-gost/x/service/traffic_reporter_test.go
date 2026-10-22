@@ -14,27 +14,24 @@ import (
 	"time"
 )
 
+// FIX2-C #3：候选收敛为单一 scheme（禁 https→http 自动降级），
+// 裸地址默认 https。旧断言（双候选、安全优先+明文回退）随行为
+// 变更一并更新，单 scheme 的完整矩阵见 fix2c_report_test.go。
 func TestBuildReportURLCandidatesSecureFirst(t *testing.T) {
 	upload, config := buildReportURLCandidates("panel.example.com:443", "abc")
 
-	if len(upload) != 2 {
-		t.Fatalf("expected 2 upload candidates, got %d", len(upload))
+	if len(upload) != 1 {
+		t.Fatalf("expected 1 upload candidate, got %d", len(upload))
 	}
-	if len(config) != 2 {
-		t.Fatalf("expected 2 config candidates, got %d", len(config))
+	if len(config) != 1 {
+		t.Fatalf("expected 1 config candidate, got %d", len(config))
 	}
 
 	if upload[0] != "https://panel.example.com:443/flow/upload?secret=abc" {
 		t.Fatalf("unexpected upload[0]: %s", upload[0])
 	}
-	if upload[1] != "http://panel.example.com:443/flow/upload?secret=abc" {
-		t.Fatalf("unexpected upload[1]: %s", upload[1])
-	}
 	if config[0] != "https://panel.example.com:443/flow/config?secret=abc" {
 		t.Fatalf("unexpected config[0]: %s", config[0])
-	}
-	if config[1] != "http://panel.example.com:443/flow/config?secret=abc" {
-		t.Fatalf("unexpected config[1]: %s", config[1])
 	}
 }
 
@@ -44,14 +41,8 @@ func TestBuildReportURLCandidatesNormalizeSchemeAddr(t *testing.T) {
 	if upload[0] != "https://panel.example.com:8443/flow/upload?secret=abc" {
 		t.Fatalf("unexpected upload[0]: %s", upload[0])
 	}
-	if upload[1] != "http://panel.example.com:8443/flow/upload?secret=abc" {
-		t.Fatalf("unexpected upload[1]: %s", upload[1])
-	}
 	if config[0] != "https://panel.example.com:8443/flow/config?secret=abc" {
 		t.Fatalf("unexpected config[0]: %s", config[0])
-	}
-	if config[1] != "http://panel.example.com:8443/flow/config?secret=abc" {
-		t.Fatalf("unexpected config[1]: %s", config[1])
 	}
 }
 

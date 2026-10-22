@@ -17,14 +17,17 @@ var (
 // 支持 SQLite (UNIQUE constraint failed) 和 PostgreSQL (duplicate key value)。
 
 // isUniqueConstraintViolation 检查 err 是否为唯一约束冲突。
+//
+// FIX132-C（A3-09）：只认两方言的精确短语。旧实现另含宽子串
+// "already exists"，PG 的 DDL 类错误（relation/index already
+// exists）会被误判成业务唯一冲突、被映射成友好错误而掩盖真因。
 func isUniqueConstraintViolation(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "UNIQUE constraint failed") ||
-		strings.Contains(msg, "duplicate key value") ||
-		strings.Contains(msg, "already exists")
+		strings.Contains(msg, "duplicate key value")
 }
 
 // mapUniqueViolation 将唯一约束冲突映射为友好错误。
