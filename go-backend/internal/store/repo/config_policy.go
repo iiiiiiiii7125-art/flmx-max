@@ -123,13 +123,32 @@ func FilterSensitiveConfigs(in map[string]string) map[string]string {
 	return out
 }
 
+// backupRuntimeExcludedConfigKeys 是备份 configs 段的运行时台账
+// 排除集（R2X-047）：这两键是通知日报的运行时状态（上次发送日期、
+// 入站流量快照），不是管理员配置——随备份往返会在恢复旧备份时回滚
+// 目标实例的日报台账（当日重复发送、差值失真）。排除只按**全名精确
+// 命中**本集合，禁止前缀匹配：
+//   - pending_realm_settle:* 前缀族是 X-P3-34 有意落库的待结算标记，
+//     必须随备份恢复，显式豁免，不得以 pending_/notify_ 等前缀误杀；
+//   - notify_daily_hour 是日报发送时刻的真配置键（与两日报台账键
+//     同前缀），显式豁免，照常往返。
+var backupRuntimeExcludedConfigKeys = map[string]struct{}{
+	"notify_daily_last":          {},
+	"notify_daily_inbound_total": {},
+}
+
+func isBackupRuntimeExcludedConfigKey(name string) bool {
+	_, ok := backupRuntimeExcludedConfigKeys[normalizeConfigKey(name)]
+	return ok
+}
+
 func FilterBackupConfigs(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return map[string]string{}
 	}
 	out := make(map[string]string, len(in))
 	for name, value := range in {
-		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) {
+		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
 			continue
 		}
 		out[name] = value
