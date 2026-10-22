@@ -1056,7 +1056,11 @@ func (r *Repository) UpdateForwardTunnel(forwardID, tunnelID int64, now int64) e
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.Forward{}).
+	return updateForwardTunnelTx(r.db, forwardID, tunnelID, now)
+}
+
+func updateForwardTunnelTx(db *gorm.DB, forwardID, tunnelID int64, now int64) error {
+	return db.Model(&model.Forward{}).
 		Where("id = ?", forwardID).
 		Updates(map[string]interface{}{"tunnel_id": tunnelID, "updated_time": now}).Error
 }
@@ -1097,16 +1101,13 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 	})
 }
 
-func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
+// lockPortAllocForEntries 按 nodeID 升序获取 entries 涉及节点的
+// per-node 端口分配锁（去重、逆序释放），供端口替换类写路径共用。
+func lockPortAllocForEntries(entries []struct {
 	NodeID int64
 	Port   int
 	InIP   string
-}) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	// O2-004：加 per-node 端口分配锁（与 CreateForwardTx 的 R5-B4 模式一致）。
-	// 旧逻辑未加锁，并发更新端口时靠唯一索引兜底，错误不友好。
+}) func() {
 	nodeIDs := make([]int64, 0, len(entries))
 	seen := make(map[int64]struct{})
 	for _, e := range entries {
@@ -1120,40 +1121,91 @@ func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
 	for _, nodeID := range nodeIDs {
 		locks = append(locks, AcquirePortAllocLock(nodeID))
 	}
-	defer func() {
+	return func() {
 		for i := len(locks) - 1; i >= 0; i-- {
 			ReleasePortAllocLock(locks[i])
 		}
-	}()
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
+	}
+}
+
+// replaceForwardPortsTx 是 ReplaceForwardPorts 的事务内核心：删旧口、
+// 锁内三表占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
+// 窗口，旧端口已在本事务内删除、自占用天然排除）、插入新口。
+func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries []struct {
+	NodeID int64
+	Port   int
+	InIP   string
+}) error {
+	if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, e := range entries {
+		occupied, err := r.HasOtherForwardOnNodePortTx(tx, e.NodeID, e.Port, forwardID)
+		if err != nil {
 			return err
 		}
-		if len(entries) == 0 {
-			return nil
+		if occupied {
+			return errPortInUse
 		}
-		// B4/F-013: 锁内三表复检（forward_port/node_inbound/chain_tunnel）。
-		// handler 的预检在锁外，与并发的入站/隧道创建存在「先查后写」
-		// 窗口；旧端口已在本事务内删除，自占用天然排除。
-		for _, e := range entries {
-			occupied, err := r.HasOtherForwardOnNodePortTx(tx, e.NodeID, e.Port, forwardID)
-			if err != nil {
-				return err
-			}
-			if occupied {
-				return errPortInUse
-			}
+	}
+	rows := make([]model.ForwardPort, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, model.ForwardPort{
+			ForwardID: forwardID,
+			NodeID:    e.NodeID,
+			Port:      e.Port,
+			InIP:      sql.NullString{String: e.InIP, Valid: e.InIP != ""},
+		})
+	}
+	return tx.Create(&rows).Error
+}
+
+// ChangeForwardTunnelAndPorts X-P3-17（L-04-3）：批量换隧道的逐条
+// DB 写收敛为单事务——换隧道与换端口同 tx 提交，占用集在锁内以本
+// tx 复检（预取口径与 handler 校验环一致）。旧实现两次独立提交
+// （UpdateForwardTunnel 后 ReplaceForwardPorts），中间态靠 handler
+// 补偿回滚兜底且补偿失败被静默吞；收敛后 DB 段任一步失败整条回滚、
+// 无中间态，handler 补偿仅保留给提交后的运行时下发失败。
+func (r *Repository) ChangeForwardTunnelAndPorts(forwardID, tunnelID int64, entries []struct {
+	NodeID int64
+	Port   int
+	InIP   string
+}, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	release := lockPortAllocForEntries(entries)
+	defer release()
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := updateForwardTunnelTx(tx, forwardID, tunnelID, now); err != nil {
+			return err
 		}
-		rows := make([]model.ForwardPort, 0, len(entries))
-		for _, e := range entries {
-			rows = append(rows, model.ForwardPort{
-				ForwardID: forwardID,
-				NodeID:    e.NodeID,
-				Port:      e.Port,
-				InIP:      sql.NullString{String: e.InIP, Valid: e.InIP != ""},
-			})
-		}
-		return tx.Create(&rows).Error
+		return r.replaceForwardPortsTx(tx, forwardID, entries)
+	})
+	if err != nil {
+		// 唯一冲突翻译为中文友好错误（与 ReplaceForwardPorts 一致）。
+		return mapUniqueViolation(err, "port")
+	}
+	return nil
+}
+
+func (r *Repository) ReplaceForwardPorts(forwardID int64, entries []struct {
+	NodeID int64
+	Port   int
+	InIP   string
+}) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	// O2-004：加 per-node 端口分配锁（与 CreateForwardTx 的 R5-B4 模式一致）。
+	// 旧逻辑未加锁，并发更新端口时靠唯一索引兜底，错误不友好。
+	release := lockPortAllocForEntries(entries)
+	defer release()
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return r.replaceForwardPortsTx(tx, forwardID, entries)
 	})
 	if err != nil {
 		// O2-004：唯一冲突翻译为中文友好错误（与 CreateForwardTx 的 R5-B4 C-002 一致）。
