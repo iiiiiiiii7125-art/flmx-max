@@ -1678,6 +1678,16 @@ export default function SubscriptionPage() {
                     这是默认订阅，删除后所有用户的个人链接将切换到下一条订阅，旧链接立即失效。
                   </p>
                 )}
+                {/* X-P2-14（L-03-1/V-06）：sharedIds 即共用凭据落地
+                    （SS/Snell/导入节点），其已导入配置不随重置失效。 */}
+                {confirm === "reset" &&
+                  detail &&
+                  detail.sharedIds.length > 0 && (
+                    <p className="mt-2 text-sm text-warning">
+                      其中 {detail.sharedIds.length}{" "}
+                      个落地用的是共用凭据（Shadowsocks、Snell、导入节点），重置不使它们已导入的配置失效，要断开只能改对应入站的密码。
+                    </p>
+                  )}
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>
