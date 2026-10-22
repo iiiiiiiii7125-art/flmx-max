@@ -2191,20 +2191,23 @@ export default function NodePage({
                                 <div
                                   className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-3"}`}
                                 >
-                                  {!isRemoteNode && (
-                                    <Button
-                                      className="min-h-8"
-                                      color="success"
-                                      isDisabled={
-                                        node.connectionStatus !== "online"
-                                      }
-                                      size="sm"
-                                      variant="flat"
-                                      onPress={() => setTuneNode(node)}
-                                    >
-                                      调优
-                                    </Button>
-                                  )}
+                                  {/* R2X-041：调优仅 agent 模式有入口（nodes.md:161），
+                                      nftables 节点无 agent 通道、点了必失败，故不渲染 */}
+                                  {!isRemoteNode &&
+                                    node.forwardMode !== "nftables" && (
+                                      <Button
+                                        className="min-h-8"
+                                        color="success"
+                                        isDisabled={
+                                          node.connectionStatus !== "online"
+                                        }
+                                        size="sm"
+                                        variant="flat"
+                                        onPress={() => setTuneNode(node)}
+                                      >
+                                        调优
+                                      </Button>
+                                    )}
                                   {!isRemoteNode && (
                                     <Button
                                       className="min-h-8"
@@ -2408,12 +2411,17 @@ export default function NodePage({
                         color: "primary" as const,
                         onPress: () => openInstallSelector(node),
                       },
-                      {
-                        key: "tune",
-                        label: "调优",
-                        disabled: !online,
-                        onPress: () => setTuneNode(node),
-                      },
+                      // R2X-041：同卡片入口，nftables 节点不显示调优（必失败入口）
+                      ...(node.forwardMode !== "nftables"
+                        ? [
+                            {
+                              key: "tune",
+                              label: "调优",
+                              disabled: !online,
+                              onPress: () => setTuneNode(node),
+                            },
+                          ]
+                        : []),
                       {
                         key: "edit",
                         label: "编辑",
