@@ -95,12 +95,40 @@ func (p *subPipeline) normalize() error {
 	if p.Lines != "relay" && p.Lines != "direct" {
 		p.Lines = ""
 	}
-	if p.Regions == nil {
-		p.Regions = []string{}
+	// R2X-025（B2-04）：Regions / Protocols 此前仅 nil→[]，带空格或
+	// 未知值原样落库后过滤恒不命中、拉取静默为空。与 RuleGroups 同
+	// 口径：按已知集修剪、去重、过滤未知值（正常前端数据不受影响）。
+	knownRegions := make(map[string]bool)
+	for _, name := range append(kernel.RegionNames(), kernel.RegionOther) {
+		knownRegions[name] = true
 	}
-	if p.Protocols == nil {
-		p.Protocols = []string{}
+	regions := []string{}
+	seenRegions := map[string]bool{}
+	for _, name := range p.Regions {
+		name = strings.TrimSpace(name)
+		if name == "" || seenRegions[name] || !knownRegions[name] {
+			continue
+		}
+		seenRegions[name] = true
+		regions = append(regions, name)
 	}
+	p.Regions = regions
+	// 已知协议集 = 自建协议常量 + importTypes 值域（kernel 侧统一导出）。
+	knownProtocols := make(map[string]bool)
+	for _, proto := range kernel.SubscriptionProtocols() {
+		knownProtocols[proto] = true
+	}
+	protocols := []string{}
+	seenProtocols := map[string]bool{}
+	for _, proto := range p.Protocols {
+		proto = strings.ToLower(strings.TrimSpace(proto))
+		if proto == "" || seenProtocols[proto] || !knownProtocols[proto] {
+			continue
+		}
+		seenProtocols[proto] = true
+		protocols = append(protocols, proto)
+	}
+	p.Protocols = protocols
 	if p.RuleGroups == nil {
 		p.RuleGroups = []string{}
 	}
@@ -167,6 +195,11 @@ func (p *subPipeline) normalize() error {
 		return errText("脚本过长（最多 20000 字符）")
 	}
 	// 中转范围白名单归一化：去重、剔除负数（0=直连合法）。
+	// R2X-025：补条数上限 1000（与名称名单同口径，原始条数计），
+	// 超限报错而非静默截断。
+	if len(p.RelayIDs) > 1000 {
+		return errText("选的中转太多（最多 1000 个）")
+	}
 	if len(p.RelayIDs) > 0 {
 		seen := make(map[int64]bool, len(p.RelayIDs))
 		clean := make([]int64, 0, len(p.RelayIDs))

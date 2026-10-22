@@ -70,6 +70,35 @@ type SubOptions struct {
 	SingboxSnell bool
 }
 
+// SubscriptionProtocols is the known protocol set for subscription
+// filtering (R2X-025): the panel's own protocols plus the values of
+// importTypes (the imported-only socks5 / http included). EndpointProtocol
+// only ever returns one of these, so anything else in a saved filter is
+// unknown data that can never match a node.
+func SubscriptionProtocols() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range []string{ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolShadowsocks,
+		ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS, ProtocolSnell, ProtocolNaive} {
+		add(p)
+	}
+	keys := make([]string, 0, len(importTypes))
+	for k := range importTypes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		add(importTypes[k])
+	}
+	return out
+}
+
 // RegionOther is the filter value for names without a recognized region.
 const RegionOther = "其他"
 
