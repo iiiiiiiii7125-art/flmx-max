@@ -583,7 +583,10 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 						onMetric := s.onNodeMetric
 						s.mu.RUnlock()
 						if onMetric != nil {
-							go onMetric(nodeID, sysInfo)
+							// X-P3-30（L-12-1）：直调。hook 本体仅内存
+							// 追加、短命；旧实现每帧起 goroutine 无背压，
+							// 高频帧可瞬时堆积 goroutine。
+							onMetric(nodeID, sysInfo)
 						}
 					}
 					// 广播内层 data 给前端（保持平坦结构兼容性）
@@ -611,7 +614,8 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				onMetric := s.onNodeMetric
 				s.mu.RUnlock()
 				if onMetric != nil {
-					go onMetric(nodeID, sysInfo)
+					// X-P3-30（L-12-1）：同 metric 分支，直调不另起 goroutine。
+					onMetric(nodeID, sysInfo)
 				}
 				s.broadcastTyped(nodeID, "metric", msg)
 				continue
