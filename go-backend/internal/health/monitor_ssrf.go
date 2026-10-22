@@ -3,6 +3,7 @@ package health
 import (
 	"fmt"
 	"go-backend/internal/config"
+	"go-backend/internal/netguard"
 	"net"
 	"strconv"
 	"strings"
@@ -14,43 +15,11 @@ import (
 // 若目标可由低权限监控用户任意指定，面板即成为内网探测跳板。
 // 本文件提供创建/修改时与拨号时的双层校验（防 DNS rebinding）。
 
-// monitorBlockedCIDRs 面板本机拨号拒绝的地址段。
-var monitorBlockedCIDRs = []string{
-	// F-023 变体：与 SecureFetch isPrivateIP 同口径补 0.0.0.0/8 整段
-	// （IsUnspecified 只命中 0.0.0.0 单地址，Linux 下 0/8 拨号直达本机）。
-	"0.0.0.0/8",
-	"10.0.0.0/8",
-	"172.16.0.0/12",
-	"192.168.0.0/16",
-	"169.254.0.0/16", // 链路本地 + 云元数据服务
-	"100.64.0.0/10",  // CGNAT
-	"fc00::/7",       // IPv6 私有
-	"fe80::/10",      // IPv6 链路本地
-}
-
+// isMonitorBlockedIP 报告 ip 是否非公网。R2 批1起判定正本收口
+// netguard（段集含 0.0.0.0/8 整段与 bypass 基底、NAT64/6to4 按内嵌
+// 同判、本地 NAT64 整段非公网）；本函数保留为薄封装。
 func isMonitorBlockedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-	if ip.IsUnspecified() || ip.IsMulticast() {
-		return true
-	}
-	for _, cidr := range monitorBlockedCIDRs {
-		_, n, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return netguard.IsNonPublicIP(ip)
 }
 
 // isMonitorIPAllowlisted 与 H-15 SecureFetch 同源的运维放行通道：
@@ -120,7 +89,15 @@ func resolveValidatedMonitorIPs(host string) ([]net.IP, error) {
 		}
 	}
 	for _, ip := range ips {
-		if isMonitorBlockedIP(ip) && !isMonitorIPAllowlisted(ip) {
+		// R2X-027：判定改两层——netguard 硬拒（元数据精确集 ∪
+		// 169.254/16 ∪ 未指定）先于 allowlist，任何放行配置不得
+		// 覆盖；loopback/私网/CGNAT 的 allow_private 放行维持
+		// （按判定口径地址查 allowlist，翻译内嵌同判）。
+		r := netguard.Classify(ip)
+		if r.HardDeny {
+			return nil, fmt.Errorf("目标地址不允许（元数据/硬拒绝地址）: %s", host)
+		}
+		if r.NonPublic() && !isMonitorIPAllowlisted(netguard.EffectiveIP(ip)) {
 			return nil, fmt.Errorf("目标地址不允许（内网/保留地址）: %s", host)
 		}
 	}
