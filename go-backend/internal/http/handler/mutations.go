@@ -3457,6 +3457,20 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	proxyProtocolReceive := asInt(req["proxyProtocolReceive"], forward.ProxyProtocolReceive)
 	proxyProtocolSend := asInt(req["proxyProtocolSend"], forward.ProxyProtocolSend)
 
+	// GATE-F3（发版门项 5 观察定案）：切隧道是「先落库、后下发、失败
+	// 补偿回滚」的非原子序列——落库到回滚之间 DB 处于已切换状态，
+	// 而 allow 是现行 DB 的纯函数（buildKernelApplyPayload 现算），
+	// 窗口内任何一次落地内核下发（漂移轮询、重连对账、其他操作触发
+	// 的 applyKernel）都会把未提交口径的 allow 推给 agent；内核
+	// config hash 又不涵盖 ports/allow，漂移轮询事后无法自纠。故
+	// 失败回滚后须按回滚后 DB 对收集集补刷一次，与成功路径（函数尾
+	// 漏斗收尾）对称。未切隧道的回滚不触发（allow 口径未变）。
+	rollbackAndRefreshWhitelist := func() {
+		h.rollbackForwardMutation(forward, oldPorts)
+		if tunnelChanged {
+			h.refreshInboundWhitelists(tunnelSwitchInboundIDs)
+		}
+	}
 	if err := h.repo.UpdateForward(id, name, tunnelID, remoteAddr, strategy, now, newSpeedID, maxConn, ipMaxConn, newIPSpeedID, proxyProtocol, proxyProtocolReceive, proxyProtocolSend); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -3469,13 +3483,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		err = h.replaceForwardPortsPreservingInIP(id, tunnelID, port, oldPorts)
 	}
 	if err != nil {
-		h.rollbackForwardMutation(forward, oldPorts)
+		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	updatedForward, err := h.getForwardRecord(id)
 	if err != nil {
-		h.rollbackForwardMutation(forward, oldPorts)
+		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -3495,7 +3509,7 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 
 	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
 	if err != nil {
-		h.rollbackForwardMutation(forward, oldPorts)
+		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4204,6 +4218,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	// R2X-008（E2-01）：逐 forward 在换隧道之前以 inboundIDsForForward
 	// 收集受影响入站（换隧道后拨号节点集变化），成功后统一刷新白名单。
 	var changedInboundIDs []int64
+	// GATE-F3：已落库后下发失败而回滚的条目同样要刷新——回滚前窗口内
+	// 的并发下发可能已把未提交口径的 allow 推给 agent（与 forwardUpdate
+	// 同型），其收集集单列，循环后按最终 DB 一并补刷。
+	var failedInboundIDs []int64
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
 			continue
@@ -4345,6 +4363,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		updatedForward, fetchErr := h.getForwardRecord(id)
 		if fetchErr != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
+			failedInboundIDs = append(failedInboundIDs, fwdInboundIDs...)
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, fetchErr)
 			continue
@@ -4359,6 +4378,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		batchWarnings = append(batchWarnings, syncWarnings...)
 		if err != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
+			failedInboundIDs = append(failedInboundIDs, fwdInboundIDs...)
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
@@ -4372,6 +4392,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		success++
 	}
 	h.refreshInboundWhitelists(changedInboundIDs)
+	h.refreshInboundWhitelists(failedInboundIDs)
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
 
