@@ -1525,7 +1525,7 @@ export default function SubscriptionPage() {
                       <span className="text-xs text-default-500">
                         {detail.overQuota
                           ? "流量已用完，已从节点上断开"
-                          : "上传 + 下载合计"}
+                          : `${toDateInput(detail.trafficSince)} 起的上传 + 下载合计`}
                       </span>
                       <Button
                         isDisabled={

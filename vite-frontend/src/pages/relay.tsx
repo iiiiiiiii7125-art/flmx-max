@@ -1,6 +1,6 @@
 import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { LayoutGrid, List } from "lucide-react";
 
@@ -9,14 +9,17 @@ import { AnimatedPage } from "@/components/animated-page";
 import { RelayLatencyCell } from "@/components/relay-latency";
 import { PageLoadingState } from "@/components/page-state";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
+import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import TunnelPage from "@/pages/tunnel";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 
-type RelayTab = "lines" | "tunnels" | "rules";
+type RelayTab = "lines" | "tunnels" | "rules" | "quality";
 
 const TAB_KEY = "flmx_relay_tab";
 
@@ -24,7 +27,8 @@ function readTab(): RelayTab {
   try {
     const v = localStorage.getItem(TAB_KEY);
 
-    if (v === "lines" || v === "tunnels" || v === "rules") return v;
+    if (v === "lines" || v === "tunnels" || v === "rules" || v === "quality")
+      return v;
   } catch {
     // Remembering the tab is only a convenience.
   }
@@ -36,6 +40,7 @@ const TABS: Array<{ key: RelayTab; label: string }> = [
   { key: "lines", label: "线路" },
   { key: "tunnels", label: "隧道" },
   { key: "rules", label: "规则" },
+  { key: "quality", label: "质量" },
 ];
 
 /** Relay lines grouped by the landing they lead to. */
@@ -51,24 +56,48 @@ function LinesView() {
     "list",
   );
 
-  const load = useCallback(async () => {
+  // load 序号守卫（R3-D-01，与 node.tsx loadNodes 同型）：初载、
+  // 手动刷新与 15 秒轮询可并发在途，只有最新一轮可落 state，
+  // 乱序返回的旧列表快照直接丢弃（延迟字段另有 latestProbe
+  // 单调保护，此处守的是列表本体）。
+  const loadSeqRef = useRef(0);
+
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    const seq = (loadSeqRef.current += 1);
+
     try {
       const [inRes, relRes] = await Promise.all([
         getInboundList(),
         getInboundRelays(0),
       ]);
 
+      if (loadSeqRef.current !== seq) return;
       if (inRes.code === 0) setInbounds(inRes.data ?? []);
-      if (relRes.code === 0) setRelays(relRes.data ?? []);
-      if (inRes.code !== 0) toast.error(inRes.msg || "加载失败");
+      if (relRes.code === 0)
+        setRelays((prev) => {
+          const previous = new Map(prev.map((r) => [r.id, r]));
+
+          return (relRes.data ?? []).map((r) => ({
+            ...r,
+            latency: latestProbe(r.latency, previous.get(r.id)?.latency),
+          }));
+        });
+      if (inRes.code !== 0 && !options?.silent)
+        toast.error(inRes.msg || "加载失败");
     } finally {
-      setLoading(false);
+      if (loadSeqRef.current === seq) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // DB-3（移植自 kure29/flyx 3.3.33）：中转线路延迟只随列表回包
+  // 更新——15 秒可见性轮询让重连重测/定时轮次的结果及时显现。
+  useVisiblePolling(useCallback(() => load({ silent: true }), [load]));
 
   /** 移植自 kure29/flyx：测中转线路的分段延迟（Lane D），结果按线路 id 合并回列表。 */
   const probe = useCallback(
@@ -88,7 +117,9 @@ function LinesView() {
 
         setRelays((prev) =>
           prev.map((r) =>
-            data[String(r.id)] ? { ...r, latency: data[String(r.id)] } : r,
+            data[String(r.id)]
+              ? { ...r, latency: latestProbe(data[String(r.id)], r.latency) }
+              : r,
           ),
         );
       } catch {
@@ -339,6 +370,12 @@ function LinesView() {
   );
 }
 
+/** Tunnel quality: latency / loss / throughput timelines (DA-3). The
+ * same view also stays under 监控 → 隧道 for granted users. */
+function QualityView() {
+  return <TunnelMonitorView viewMode="grid" />;
+}
+
 /** 中转: relay lines per landing, plus the tunnel and rule pages. */
 export default function RelayPage() {
   const [tab, setTabState] = useState<RelayTab>(readTab);
@@ -352,7 +389,7 @@ export default function RelayPage() {
   };
 
   const tabBar = (
-    <div className="grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+    <div className="grid grid-cols-4 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
       {TABS.map((t) => (
         <button
           key={t.key}
@@ -375,6 +412,15 @@ export default function RelayPage() {
       <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
         {tabBar}
         <LinesView />
+      </AnimatedPage>
+    );
+  }
+
+  if (tab === "quality") {
+    return (
+      <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
+        {tabBar}
+        <QualityView />
       </AnimatedPage>
     );
   }

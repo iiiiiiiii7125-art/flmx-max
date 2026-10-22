@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"go-backend/internal/http/client"
+	"go-backend/internal/kernel"
 	"go-backend/internal/netguard"
 )
 
@@ -89,6 +90,16 @@ func IsValidNodeAddress(addr string) error {
 	}
 	if strings.ContainsAny(addr, "/?") {
 		return fmt.Errorf("address must not contain path or query parameters")
+	}
+	// R3-E-01：结构字符集补齐（@、#、逗号、空白与控制字符）。此前
+	// good.com@evil.com、内嵌换行等值全部放行落库，而节点地址是
+	// 订阅 auto 模式与中转入口的地址源——拉取期裸拼进订阅权威段
+	// 即改写全部订阅者的目标主机。仅加结构字符集：主机名 /
+	// IPv4 / IPv6 字面量（含 host:port 与括号 IPv6）及 RFC1918 /
+	// 回环的既有可存性一概不变（回环在订阅面的拒绝是拉取期的
+	// 口径，不在此处收紧——本地测试节点仍可存）。
+	if kernel.HostHasStructuralChars(addr) {
+		return fmt.Errorf("address must not contain @, #, commas, whitespace or control characters")
 	}
 	// A bare IPv6 literal contains multiple colons, so net.SplitHostPort treats
 	// it as a malformed host:port pair. Accept IP literals before attempting

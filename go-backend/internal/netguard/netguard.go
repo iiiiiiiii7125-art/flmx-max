@@ -77,8 +77,11 @@ var (
 )
 
 // metadataExact 是云元数据精确集（硬拒）。169.254.0.0/16 整段另行
-// 硬拒（verdicts §3.5）；CGNAT 段不整段硬拒（Tailscale 等合法
-// 用途），100.100.100.200 只作精确条目。
+// 硬拒（verdicts §3.5）；fe80::/10 不入硬拒层——归 ClassLinkLocal，
+// 仅严格政策 PolicyHardDenyOrLoopback 拒（R3X-010 政策分层，
+// 1.3.7 已发布裁定；N-01 的全政策硬拒方案在 1.4.0 合并时调和）；
+// CGNAT 段不整段硬拒（Tailscale 等合法用途），100.100.100.200
+// 只作精确条目。
 var metadataExact = []netip.Addr{
 	netip.MustParseAddr("169.254.169.254"),
 	netip.MustParseAddr("100.100.100.200"),

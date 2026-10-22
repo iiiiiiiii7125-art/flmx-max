@@ -59,6 +59,8 @@ func federationSafetyBypassed() bool {
 // federationIsMetadataIP 现语义为 netguard 硬拒层（R2 批1收口）：
 // 元数据精确集（含阿里云 100.100.100.200，旧镜像名单缺此条）∪
 // 169.254/16 整段 ∪ 未指定 ∪ 本地 NAT64，翻译内嵌同判。
+// fe80::/10 不在此列——归 ClassLinkLocal，走 NonPublic + allowlist
+// 门（R3X-010 政策分层）。
 func federationIsMetadataIP(ip net.IP) bool {
 	return netguard.HardDenyIP(ip)
 }

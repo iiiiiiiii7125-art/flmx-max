@@ -42,7 +42,9 @@ var matrix = []matrixRow{
 	// CGNAT（非元数据部分不整段硬拒）
 	{"100.64.1.2", false, false, true, true, true},
 	{"100.127.255.255", false, false, true, true, true},
-	// 链路本地 v4（169.254/16 整段硬拒）与 v6
+	// 链路本地：v4 169.254/16 整段硬拒；v6 fe80::/10 归 ClassLinkLocal，
+	// 不在硬拒层，仅严格政策 HardDenyOrLoopback 拒（R3X-010 政策分层；
+	// N-01 原拟全政策硬拒，1.4.0 合并时按 1.3.7 已发布裁定调和）
 	{"169.254.0.23", false, false, false, false, false},
 	{"169.254.1.1", false, false, false, false, false},
 	{"fe80::1", false, false, true, true, false},

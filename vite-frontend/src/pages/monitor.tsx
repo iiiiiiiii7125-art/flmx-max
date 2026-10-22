@@ -2,6 +2,7 @@ import type { MonitorNodeApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { Navigate } from "react-router-dom";
 import {
   RefreshCw,
   LayoutGrid,
@@ -17,6 +18,7 @@ import { getMonitorAccess, getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import { getAdminFlag } from "@/utils/session";
 
 type MonitorNode = {
   id: number;
@@ -37,7 +39,15 @@ const formatBytesPerSecond = (bytesPerSecond: number): string => {
   return `${parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 };
 
+/**
+ * 监控： admins have it under 节点 (each node's 监控) and 中转 (质量);
+ * users allowed to see monitoring get this overview (DA-1).
+ */
 export default function MonitorPage() {
+  return getAdminFlag() ? <Navigate replace to="/node" /> : <MonitorOverview />;
+}
+
+function MonitorOverview() {
   const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
@@ -383,5 +393,80 @@ export default function MonitorPage() {
         <TunnelMonitorView viewMode={viewMode} />
       )}
     </AnimatedPage>
+  );
+}
+
+/**
+ * One node's monitoring, opened from the node list (DA-1): live
+ * figures, history charts and its service monitors, without the
+ * overview. Rendered by the node hub in place of the list.
+ */
+export function NodeMonitorDetail({
+  nodeId,
+  onBack,
+}: {
+  nodeId: number;
+  onBack: () => void;
+}) {
+  const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
+  // Same R2X-038 access passthrough as the overview.
+  const [canWrite, setCanWrite] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await getMonitorNodes();
+
+        if (!active) return;
+        if (res.code === 0 && Array.isArray(res.data)) setNodes(res.data);
+        else toast.error(res.msg || "加载节点失败");
+      } catch {
+        if (active) toast.error("加载节点失败");
+      }
+      try {
+        const res = await getMonitorAccess();
+
+        if (active && res.code === 0 && res.data) {
+          setCanWrite(Boolean(res.data.admin));
+        }
+      } catch {
+        // 查询失败保持只读呈现（后端仍以 403 兜底写入口）。
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const nodeMap = useMemo(
+    () =>
+      new Map<number, MonitorNode>(
+        nodes
+          .filter((n) => Number(n.id) > 0)
+          .map((n) => [
+            Number(n.id),
+            {
+              id: Number(n.id),
+              name: String(n.name ?? ""),
+              connectionStatus: (n.status === 1
+                ? "online"
+                : "offline") as MonitorNode["connectionStatus"],
+              version: n.version,
+            },
+          ]),
+      ),
+    [nodes],
+  );
+
+  return (
+    <MonitorView
+      canWrite={canWrite}
+      focusNodeId={nodeId}
+      nodeMap={nodeMap}
+      onBack={onBack}
+    />
   );
 }

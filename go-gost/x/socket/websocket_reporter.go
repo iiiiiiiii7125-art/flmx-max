@@ -16,10 +16,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"runtime/debug"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,19 +43,23 @@ import (
 
 // SystemInfo 系统信息结构体
 type SystemInfo struct {
-	Uptime           uint64  `json:"uptime"`
-	BytesReceived    uint64  `json:"bytes_received"`
-	BytesTransmitted uint64  `json:"bytes_transmitted"`
-	CPUUsage         float64 `json:"cpu_usage"`
-	MemoryUsage      float64 `json:"memory_usage"`
-	DiskUsage        float64 `json:"disk_usage"`
-	Load1            float64 `json:"load1"`
-	Load5            float64 `json:"load5"`
-	Load15           float64 `json:"load15"`
-	TCPConns         int64   `json:"tcp_conns"`
-	UDPConns         int64   `json:"udp_conns"`
-	NetInSpeed       int64   `json:"net_in_speed"`
-	NetOutSpeed      int64   `json:"net_out_speed"`
+	Uptime           uint64 `json:"uptime"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	BytesTransmitted uint64 `json:"bytes_transmitted"`
+	// BootID 是本机本次开机的标识（machineBootID）：面板据此区分
+	// 网卡累计计数的回退是真重启还是接口增删（加法字段，旧面板
+	// 忽略未知字段、旧 agent 不发则为空）。
+	BootID      string  `json:"boot_id"`
+	CPUUsage    float64 `json:"cpu_usage"`
+	MemoryUsage float64 `json:"memory_usage"`
+	DiskUsage   float64 `json:"disk_usage"`
+	Load1       float64 `json:"load1"`
+	Load5       float64 `json:"load5"`
+	Load15      float64 `json:"load15"`
+	TCPConns    int64   `json:"tcp_conns"`
+	UDPConns    int64   `json:"udp_conns"`
+	NetInSpeed  int64   `json:"net_in_speed"`
+	NetOutSpeed int64   `json:"net_out_speed"`
 }
 
 // NetworkStats 网络统计信息
@@ -99,6 +103,10 @@ type CommandMessage struct {
 	Type      string      `json:"type"`
 	Data      interface{} `json:"data"`
 	RequestId string      `json:"requestId,omitempty"`
+	// TimeoutMS 是面板下发 TcpPing 时附带的整体超时预算（毫秒，
+	// DB-5 移植自 kure29/flyx 3.3.33）；老面板不发此字段（0），
+	// 此时节点侧排队预算回退 reporterReadWait。
+	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 }
 
 // CommandResponse 命令响应结构体
@@ -157,8 +165,11 @@ const (
 	maxBackoff                  = 2 * time.Minute  // 重连最大退避
 	defaultMetricReportInterval = 5 * time.Second
 	maxConcurrentTCPPings       = 8
-	maxConcurrentReadCommands   = 16
-	maxQueuedMutationCommands   = 256
+	// DB-5（移植自 kure29/flyx 3.3.33）：TcpPing 不再抢槽即弃，改入队
+	// 等待 worker 执行，队列深度给突发轮次留缓冲。
+	maxQueuedTCPPings         = 256
+	maxConcurrentReadCommands = 16
+	maxQueuedMutationCommands = 256
 )
 
 type WebSocketReporter struct {
@@ -177,11 +188,11 @@ type WebSocketReporter struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	connected         bool
-	connecting        bool              // 正在连接状态
-	connMutex         sync.Mutex        // 连接状态锁
-	aesCrypto         *crypto.AESCrypto // AES加密器
-	tcpPingSem        chan struct{}     // 限制诊断探测并发，避免离线目标耗尽连接
-	readCommandSem    chan struct{}     // 限制只读命令并发，避免诊断请求耗尽资源
+	connecting        bool               // 正在连接状态
+	connMutex         sync.Mutex         // 连接状态锁
+	aesCrypto         *crypto.AESCrypto  // AES加密器
+	tcpPingQueue      chan queuedTCPPing // TcpPing 专用队列 + worker 池（tcp_ping_queue.go）
+	readCommandSem    chan struct{}      // 限制只读命令并发，避免诊断请求耗尽资源
 	mutationQueue     chan CommandMessage
 	workers           sync.WaitGroup
 	// plaintextCommandWarned ensures the D1-02 plaintext-command security
@@ -216,36 +227,15 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 		connected:      false,
 		connecting:     false,
 		aesCrypto:      aesCrypto,
-		tcpPingSem:     make(chan struct{}, maxConcurrentTCPPings),
+		tcpPingQueue:   make(chan queuedTCPPing, maxQueuedTCPPings),
 		readCommandSem: make(chan struct{}, maxConcurrentReadCommands),
 		mutationQueue:  make(chan CommandMessage, maxQueuedMutationCommands),
 	}
 }
 
-func (w *WebSocketReporter) tryAcquireTCPPingSlot() bool {
-	if w == nil || w.tcpPingSem == nil {
-		return false
-	}
-	select {
-	case w.tcpPingSem <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (w *WebSocketReporter) releaseTCPPingSlot() {
-	if w == nil || w.tcpPingSem == nil {
-		return
-	}
-	select {
-	case <-w.tcpPingSem:
-	default:
-	}
-}
-
 // Start 启动WebSocket报告器
 func (w *WebSocketReporter) Start() {
+	w.startTCPPingWorkers()
 	w.workers.Add(2)
 	go func() {
 		defer w.workers.Done()
@@ -722,6 +712,7 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		Uptime:           getUptime(),
 		BytesReceived:    networkStats.BytesReceived,
 		BytesTransmitted: networkStats.BytesTransmitted,
+		BootID:           machineBootID(),
 		CPUUsage:         cpuInfo.Usage,
 		MemoryUsage:      memoryInfo.Usage,
 		DiskUsage:        diskInfo.Usage,
@@ -932,6 +923,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			Compressed bool            `json:"compressed"`
 			Data       json.RawMessage `json:"data"`
 			RequestId  string          `json:"requestId,omitempty"`
+			TimeoutMS  int64           `json:"timeoutMs,omitempty"`
 		}
 
 		if err := json.Unmarshal(message, &compressedMsg); err == nil && compressedMsg.Compressed {
@@ -953,6 +945,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			var cmdMsg CommandMessage
 			cmdMsg.Type = compressedMsg.Type
 			cmdMsg.RequestId = compressedMsg.RequestId
+			cmdMsg.TimeoutMS = compressedMsg.TimeoutMS
 			if err := json.Unmarshal(message, &cmdMsg.Data); err != nil {
 				fmt.Printf("❌ 解析解压后的命令数据失败: %v\n", err)
 				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err))
@@ -985,6 +978,12 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 // registries and configuration, so running them concurrently can corrupt the
 // persisted config or interleave service lifecycle operations.
 func (w *WebSocketReporter) dispatchCommand(cmd CommandMessage) {
+	// DB-5：TcpPing 走专用队列（预算 ctx + worker 池），不占只读命令
+	// 信号量——一轮探测扇出几十个 TcpPing 时其余只读命令仍可执行。
+	if cmd.Type == "TcpPing" {
+		w.enqueueTCPPing(cmd)
+		return
+	}
 	if isMutationCommand(cmd.Type) {
 		select {
 		case w.mutationQueue <- cmd:
@@ -1000,7 +999,7 @@ func (w *WebSocketReporter) dispatchCommand(cmd CommandMessage) {
 	case w.readCommandSem <- struct{}{}:
 		go func() {
 			defer func() { <-w.readCommandSem }()
-			w.routeCommandSafely(cmd)
+			w.routeCommandSafely(w.ctx, cmd)
 		}()
 	case <-w.ctx.Done():
 		w.sendCommandFailure(cmd, "Agent is shutting down")
@@ -1015,19 +1014,19 @@ func (w *WebSocketReporter) runMutationCommands() {
 		case <-w.ctx.Done():
 			return
 		case cmd := <-w.mutationQueue:
-			w.routeCommandSafely(cmd)
+			w.routeCommandSafely(w.ctx, cmd)
 		}
 	}
 }
 
-func (w *WebSocketReporter) routeCommandSafely(cmd CommandMessage) {
+func (w *WebSocketReporter) routeCommandSafely(ctx context.Context, cmd CommandMessage) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			fmt.Printf("❌ 命令处理 panic: type=%s panic=%v\n%s", cmd.Type, recovered, debug.Stack())
 			w.sendCommandFailure(cmd, fmt.Sprintf("命令处理异常: %v", recovered))
 		}
 	}()
-	w.routeCommand(cmd)
+	w.routeCommand(ctx, cmd)
 }
 
 func (w *WebSocketReporter) sendCommandFailure(cmd CommandMessage, message string) {
@@ -1067,8 +1066,9 @@ func logReceivedCommand(cmd CommandMessage) {
 	fmt.Printf("🔔 收到命令: type=%s requestId=%s\n", cmd.Type, cmd.RequestId)
 }
 
-// routeCommand 路由命令到对应的处理函数
-func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
+// routeCommand 路由命令到对应的处理函数。ctx 是本次命令的预算上下文：
+// 读命令/变更命令传 reporter 的 w.ctx，TcpPing 传队列任务的预算 ctx。
+func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage) {
 	if isMutationCommand(cmd.Type) {
 		unlock := config.LockMutation()
 		defer unlock()
@@ -1145,16 +1145,12 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 		err = w.handleDeleteCLimiter(cmd.Data)
 		response.Type = "DeleteCLimitersResponse"
 
-	// TCP Ping 诊断命令（只读，不需要保存配置）
+	// TCP Ping 诊断命令（只读，不需要保存配置）。并发由队列 worker
+	// 池约束（见 tcp_ping_queue.go），此处不再抢槽。
 	case "TcpPing":
 		response.Type = "TcpPingResponse"
-		if !w.tryAcquireTCPPingSlot() {
-			err = fmt.Errorf("TCP探测任务过多，请稍后重试")
-			break
-		}
-		defer w.releaseTCPPingSlot()
 		var tcpPingResult TcpPingResponse
-		tcpPingResult, err = w.handleTcpPing(cmd.Data)
+		tcpPingResult, err = w.handleTcpPing(ctx, cmd.Data)
 		response.Data = tcpPingResult
 		// needSaveConfig = false (默认值)
 
@@ -2276,6 +2272,30 @@ func getUptime() uint64 {
 	return uptime
 }
 
+var (
+	bootIDOnce  sync.Once
+	bootIDValue string
+)
+
+// machineBootID 返回本机本次开机的标识：Linux 的
+// /proc/sys/kernel/random/boot_id，读不到时回退开机时间戳
+// （gopsutil host.BootTime，同为每次开机一值、开机内不变）。
+// 进程内只解析一次——同一次开机内 agent 重启标识不变；解析不
+// 出时为空串，面板对空标识按「无法证明重启」保守处理。
+func machineBootID() string {
+	bootIDOnce.Do(func() {
+		if data, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err == nil {
+			bootIDValue = strings.TrimSpace(string(data))
+		}
+		if bootIDValue == "" {
+			if bt, err := host.BootTime(); err == nil && bt > 0 {
+				bootIDValue = strconv.FormatUint(bt, 10)
+			}
+		}
+	})
+	return bootIDValue
+}
+
 // getNetworkStats 获取网络统计信息
 func getNetworkStats() NetworkStats {
 	var stats NetworkStats
@@ -2529,7 +2549,7 @@ func tcpPingLiteralTargetDenied(host string) bool {
 }
 
 // handleTcpPing 处理TCP ping诊断命令
-func (w *WebSocketReporter) handleTcpPing(data interface{}) (TcpPingResponse, error) {
+func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{}) (TcpPingResponse, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return TcpPingResponse{}, fmt.Errorf("序列化TCP ping数据失败: %v", err)
@@ -2580,7 +2600,16 @@ func (w *WebSocketReporter) handleTcpPing(data interface{}) (TcpPingResponse, er
 	req.Count, req.Timeout = clampPingParams(req.Count, req.Timeout)
 
 	// 执行TCP ping操作
-	avgTime, packetLoss, err := tcpPingHost(req.IP, req.Port, req.Count, req.Timeout)
+	avgTime, packetLoss, err := tcpPingHost(ctx, req.IP, req.Port, req.Count, req.Timeout)
+	// DB-5（移植自 kure29/flyx 3.3.33）：预算耗尽/取消导致的失败以
+	// 命令级错误回明确原因；已有部分成功结果时 err 为 nil，照常回
+	// 部分结果（取消不抹掉已测得的 attempts）。
+	if err != nil && ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return TcpPingResponse{}, fmt.Errorf("TCP探测执行超时（含排队等待）")
+		}
+		return TcpPingResponse{}, fmt.Errorf("TCP探测已取消")
+	}
 
 	response := TcpPingResponse{
 		IP:        req.IP,
@@ -2877,7 +2906,7 @@ func icmpPing(target string, timeout time.Duration) (time.Duration, error) {
 }
 
 // tcpPingHost 执行TCP连接测试，返回平均连接时间和失败率
-func tcpPingHost(ip string, port int, count int, timeoutMs int) (float64, float64, error) {
+func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs int) (float64, float64, error) {
 	var totalTime float64
 	var successCount int
 
@@ -2895,7 +2924,7 @@ func tcpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 		fmt.Printf("🔍 检测到域名，正在解析DNS...\n")
 		dnsStart := time.Now()
 
-		addrs, err := net.LookupHost(ip)
+		addrs, err := net.DefaultResolver.LookupHost(ctx, ip)
 		dnsDuration := time.Since(dnsStart)
 
 		if err != nil {
@@ -2915,13 +2944,24 @@ func tcpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 		fmt.Printf("🎯 使用IP地址进行测试: %s\n", target)
 	}
 
+	// attempts counts the dials that finished; one cut short by ctx is not
+	// a loss. When the budget runs out the attempts so far are the result.
+	attempts := 0
 	for i := 0; i < count; i++ {
+		if ctx.Err() != nil {
+			break
+		}
 		start := time.Now()
 
 		// 创建带超时的TCP连接
-		conn, err := net.DialTimeout("tcp", target, timeout)
+		dialer := net.Dialer{Timeout: timeout}
+		conn, err := dialer.DialContext(ctx, "tcp", target)
 
 		elapsed := time.Since(start)
+		if err != nil && ctx.Err() != nil {
+			break
+		}
+		attempts++
 
 		if err != nil {
 			fmt.Printf("  第%d次连接失败: %v (%.2fms)\n", i+1, err, elapsed.Seconds()*1000)
@@ -2934,16 +2974,24 @@ func tcpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 
 		// 如果不是最后一次，等待一下再进行下次测试
 		if i < count-1 {
-			time.Sleep(100 * time.Millisecond)
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+			}
 		}
 	}
 
 	if successCount == 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
 		return 0, 100.0, fmt.Errorf("所有TCP连接尝试都失败")
 	}
 
 	avgTime := totalTime / float64(successCount)
-	packetLoss := float64(count-successCount) / float64(count) * 100
+	packetLoss := float64(attempts-successCount) / float64(attempts) * 100
 
 	fmt.Printf("✅ TCP ping完成: 平均连接时间 %.2fms，失败率 %.1f%%\n", avgTime, packetLoss)
 

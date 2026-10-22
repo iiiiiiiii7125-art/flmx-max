@@ -209,6 +209,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"node_seq":                   "agent 流量序号，运行时状态",
 		"statistics_flow":            "流量统计时序，非配置数据",
 		"node_metric":                "监控遥测时序",
+		"node_traffic":               "节点网卡流量遥测时序，非配置数据（400 天保留，上报持续重建）",
 		"node_latency_sample":        "延迟探测遥测时序，非配置数据（7 天保留，探测自动重建）",
 		"tunnel_metric":              "监控遥测时序",
 		"tunnel_quality":             "质量探测时序",

@@ -22,7 +22,10 @@ func (h *Handler) StartBackgroundJobs() {
 	h.jobsCtx = ctx
 	h.jobsCancel = cancel
 	h.jobsStarted = true
-	h.jobsWG.Add(15)
+	// DB-3：重连重测队列须在 jobsStarted 置位前就绪，onNodeOnline 的
+	// scheduleNodeReconnectProbe 在锁内读它。
+	h.reconnectProbes = newNodeReconnectProbeQueue()
+	h.jobsWG.Add(16)
 	h.jobsMu.Unlock()
 
 	// FIX2-B（V5-3）：存量联邦期望状态启动复检——同步执行、赶在任何
@@ -44,6 +47,7 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runFederationCleanupRetryLoop(ctx)
 	go h.runKernelStatusLoop(ctx)
 	go h.runExternalProbeLoop(ctx)
+	go h.runNodeReconnectProbes(ctx, h.reconnectProbes, 5*time.Second)
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)

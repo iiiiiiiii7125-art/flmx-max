@@ -458,10 +458,17 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("名称不超过 100 字"))
 		return
 	}
-	shareHost := strings.TrimSpace(req.ShareHost)
+	shareHost := normalizeShareHost(req.ShareHost)
 	if len(shareHost) > 255 {
 		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
 		return
+	}
+	if shareHost != "" {
+		// F-A-01/C-01：中转 ShareHost 与入站 custom 分享地址同标准。
+		if err := validateShareHostValue(shareHost); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 	}
 
 	ppSend := 0
@@ -693,11 +700,31 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		}
 		proxy := importedProxy(&row)
 		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
-			host := strings.TrimSpace(row.ShareHost)
-			if host == "" && node != nil {
-				host = strings.TrimSpace(node.ServerIP)
-			}
-			if host != "" {
+			host := inboundShareAddress(&row, node)
+			mode := inboundShareMode(&row)
+			switch {
+			case host == "":
+				// F-A-02：显式选了 ipv4/ipv6/custom 却解析不出地址
+				// （如节点后来改了地址族）时不能静默消失——与上面
+				// M-002/M-003 同级留日志，管理员才有从察觉。
+				if mode != "auto" {
+					log.Printf("inboundEndpoints: share address unresolved for inbound ID %d (node %d), mode %s, skipping endpoint", row.ID, row.NodeID, mode)
+				}
+			case mode == "custom" && validateShareHostValue(host) != nil:
+				// F-A-01/C-01：存量坏 ShareHost（写入面校验之前落库
+				// 的）在拉取期隔离，不让结构字符裸拼进订阅；写入面
+				// 已同标准校验，这里只兜历史数据。
+				log.Printf("inboundEndpoints: invalid custom share host for inbound ID %d (node %d), skipping endpoint", row.ID, row.NodeID)
+			case validateShareHostValue(host) != nil:
+				// R3-E-01：auto/ipv4/ipv6 的地址源是节点 ServerIP /
+				// ServerIPV4 / ServerIPV6——导入、联邦同步、备份恢复
+				// 落库的值此前在拉取期无任何兜底，结构字符可改写
+				// 订阅权威段、回环字面量对远端客户端亦无意义，与
+				// custom 同标准同处置（跳过 + 日志）。此判定只作用
+				// 于订阅端点生成路径：节点连接、转发拨号与诊断面对
+				// ServerIP 的使用不在此列。
+				log.Printf("inboundEndpoints: invalid share host for inbound ID %d (node %d), mode %s, skipping endpoint", row.ID, row.NodeID, mode)
+			default:
 				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy, SourceID: row.SourceID})
 				kinds = append(kinds, "direct")
 			}
@@ -713,7 +740,21 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				}
 				host := entry.Host
 				if rel.ShareHost != "" {
-					host = rel.ShareHost
+					if validateShareHostValue(rel.ShareHost) == nil {
+						host = shareHostValue(rel.ShareHost)
+					} else {
+						// F-A-01/C-01：存量坏中转 ShareHost 回退入口
+						// 自身地址下发，不裸拼也不整条丢掉中转端点。
+						log.Printf("inboundEndpoints: invalid relay share host for relay ID %d (inbound %d), falling back to entry host", rel.ID, row.ID)
+					}
+				}
+				if validateShareHostValue(host) != nil {
+					// R3-E-01：入口自身地址（forward_port.in_ip 或
+					// 入口节点 server_ip）同过订阅面标准。entry 已是
+					// 最底层地址源、无更下层可回退，坏值跳过该
+					// entry + 日志，不裸拼下发。
+					log.Printf("inboundEndpoints: invalid relay entry host for relay ID %d (inbound %d), skipping entry", rel.ID, row.ID)
+					continue
 				}
 				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy, SourceID: row.SourceID, RelayID: rel.ID})
 				kinds = append(kinds, "relay")
@@ -875,16 +916,12 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	appName := "FLMX"
-	if cfg, err := h.repo.GetConfigByName("app_name"); err == nil && cfg != nil && strings.TrimSpace(cfg.Value) != "" {
-		appName = strings.TrimSpace(cfg.Value)
-	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", up, down, total, expire))
 	w.Header().Set("Profile-Update-Interval", "12")
 	// Clients use the file name as the profile name.
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(appName+" - "+sub.Name))
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(sub.Name))
 	if r.Method == http.MethodHead {
 		return
 	}

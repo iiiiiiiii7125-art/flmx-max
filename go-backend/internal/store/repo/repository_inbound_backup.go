@@ -4,11 +4,58 @@ import (
 	"encoding/json"
 	"strings"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// sanitizeBackupShareHost applies the ShareHost write-surface standard
+// (kernel.ValidateImportHost) to a share host coming back from a backup:
+// a malformed value is cleared — the row then resolves by its mode/node
+// address — instead of being restored verbatim (F-A-01/C-01). Callers
+// count the clears and disclose them in the import warnings. A value
+// whose only flaw is a single trailing dot (the FQDN root dot) is
+// restored in normalized form instead of being cleared (B2-01), and
+// any other normalizable form (a root dot around the brackets —
+// [2001:db8::9]. — or stray surrounding whitespace) restores in the
+// same canonical form the save and pull faces produce
+// (kernel.CanonicalShareHostValue), so all three faces agree on one
+// value (R3-A-01). Values already canonical restore verbatim.
+func sanitizeBackupShareHost(host string) (string, bool) {
+	if host == "" {
+		return host, true
+	}
+	canonical := kernel.CanonicalShareHostValue(host)
+	if kernel.ValidateImportHost(canonical) != nil {
+		return "", false
+	}
+	if strings.TrimSpace(host) == host && canonical == strings.Trim(host, "[]") {
+		return host, true
+	}
+	return canonical, true
+}
+
+// sanitizeBackupShareAddressMode whitelists the share address mode on
+// the way in from a backup (R3-E-02): the save surface only ever
+// writes the enum below, so anything else in a backup is foreign data
+// — it restores as auto and reports false so the caller counts it into
+// the import warnings. An unfiltered mode string would otherwise be
+// stored verbatim and flow into views and pull-time log lines. The
+// empty value (backups from before the mode existed) restores as-is:
+// every read face already treats it as auto.
+func sanitizeBackupShareAddressMode(mode string) (string, bool) {
+	trimmed := strings.TrimSpace(mode)
+	switch trimmed {
+	case "":
+		return "", true
+	case "auto", "ipv4", "ipv6", "custom":
+		return trimmed, true
+	default:
+		return "auto", false
+	}
+}
 
 func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	out := &model.InboundsBackup{
@@ -36,7 +83,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		out.Inbounds = append(out.Inbounds, model.InboundBackup{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: i.Listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
-			Settings: i.Settings, Extra: i.Extra, ShareHost: i.ShareHost, Remark: i.Remark,
+			Settings: i.Settings, Extra: i.Extra, ShareHost: i.ShareHost, ShareAddressMode: i.ShareAddressMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
@@ -98,7 +145,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
 			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
-			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime, PendingDelete: sub.PendingDelete,
+			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime, TrafficSince: sub.TrafficSince, PendingDelete: sub.PendingDelete,
 		})
 	}
 	return out, nil
@@ -116,6 +163,8 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // rewritten onto the restored rows instead of dangling.
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
 	kernelRepointed := int64(0)
+	invalidShareHosts := 0
+	invalidShareModes := 0
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -228,10 +277,18 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if strategy == "" {
 			strategy = "auto"
 		}
+		shareHost, ok := sanitizeBackupShareHost(i.ShareHost)
+		if !ok {
+			invalidShareHosts++
+		}
+		shareMode, modeOK := sanitizeBackupShareAddressMode(i.ShareAddressMode)
+		if !modeOK {
+			invalidShareModes++
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
-			Settings: i.Settings, Extra: i.Extra, ShareHost: i.ShareHost, Remark: i.Remark,
+			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
@@ -242,7 +299,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"kernel_id", "node_id", "name", "protocol", "listen", "port", "transport", "security",
-				"settings", "extra", "share_host", "remark", "relay_only", "accept_proxy_protocol",
+				"settings", "extra", "share_host", "share_address_mode", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
 				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
 			}),
@@ -300,9 +357,13 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return 0, err
 		}
+		relayShareHost, ok := sanitizeBackupShareHost(rel.ShareHost)
+		if !ok {
+			invalidShareHosts++
+		}
 		item := model.NodeInboundRelay{
 			ID: rel.ID, InboundID: rel.InboundID, ForwardID: rel.ForwardID, Name: rel.Name,
-			ShareHost: rel.ShareHost, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
+			ShareHost: relayShareHost, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
@@ -316,6 +377,13 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	}
 	if relayRepointed > 0 {
 		rep.warnf("备份恢复：中转行替换时已将 %d 条存量用户入站分配的中转引用重指向恢复后的中转行（旧中转行已被同转发的新行替换）", relayRepointed)
+	}
+
+	if invalidShareHosts > 0 {
+		rep.warnf("备份恢复：%d 条分享地址（入站/中转）不符合格式要求，已清空，恢复后按节点地址下发，可在入站设置中重新填写", invalidShareHosts)
+	}
+	if invalidShareModes > 0 {
+		rep.warnf("备份恢复：%d 条入站的分享地址模式不合法，已按自动（auto）恢复", invalidShareModes)
 	}
 
 	// Counter baselines keep the next traffic sample from being counted
@@ -369,7 +437,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
 			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
-			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, PendingDelete: sb.PendingDelete,
+			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, TrafficSince: sb.TrafficSince, PendingDelete: sb.PendingDelete,
 		}
 		// Every subscription has its own credentials (older backups may
 		// carry owner-credential ones).

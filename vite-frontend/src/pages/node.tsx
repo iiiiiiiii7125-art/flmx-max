@@ -27,6 +27,7 @@ import { Progress } from "@/shadcn-bridge/heroui/progress";
 import {
   createNode,
   getNodeList,
+  getNodeMonthTraffic,
   getInboundList,
   updateNode,
   deleteNode,
@@ -43,7 +44,7 @@ import {
   type ReleaseChannel,
 } from "@/api";
 import type { InboundApiItem } from "@/api/types";
-import { LatencyCell } from "@/components/latency-cell";
+import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
@@ -72,8 +73,11 @@ import {
   getNodeRenewalCycleLabel,
 } from "@/pages/node/renewal";
 import { buildNodeSystemInfo } from "@/pages/node/system-info";
+import { NodeLiveStats } from "@/pages/node/node-live-stats";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import {
   useIdemKey,
@@ -88,7 +92,6 @@ import {
   NodeFilterMode,
 } from "@/pages/node/types";
 import {
-  NODE_FALLBACK_REFRESH_INTERVAL_MS,
   getNodeReminderEnabled,
   getNodeExpiryMeta,
   mergeNodeRealtimeState,
@@ -141,12 +144,24 @@ function computeBrokenReferrers(
 export default function NodePage({
   embedded = false,
   addRequest = 0,
+  onOpenMonitor,
 }: {
   embedded?: boolean;
   /** Bumped by the 节点 page header's 新建节点 when embedded. */
   addRequest?: number;
+  /** Opens a node's history charts and service monitors (DA-1). */
+  onOpenMonitor?: (nodeId: number) => void;
 }) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
+  // 各节点本月（浏览器时区）的网卡流量 {id: [入, 出]}：整机网卡计数，
+  // 与隧道计费/订阅配额是两套口径，仅作节点维度参考，文案须带「网卡」分名。
+  // 加载路径唯一化（P2）：loadNodes 同批拉取，P1 的 15 秒可见性轮询经
+  // loadNodes 连带刷新（密于 P4 原独立 60 秒轮询，故不保留其重复 loader）；
+  // 消费方：P2 的 monthTrafficText（列表/卡片/详情）与 P4 的 NodeLiveStats
+  // month prop 共用这一份 state。
+  const [monthTraffic, setMonthTraffic] = useState<
+    Record<string, [number, number]>
+  >({});
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [localSearchKeyword, setLocalSearchKeyword] = useLocalStorageState(
@@ -354,6 +369,20 @@ export default function NodePage({
       setLoading(true);
     }
 
+    // 本月网卡流量与列表同批刷新；失败静默（展示位留空，不影响列表）。
+    // 与主请求共用同一 seq 守卫（R3-D-01）：旁路请求乱序返回时旧
+    // 快照不得覆盖新值。
+    getNodeMonthTraffic()
+      .then((r) => {
+        if (loadNodesSeqRef.current !== seq) {
+          return;
+        }
+        if (r.code === 0 && r.data) {
+          setMonthTraffic(r.data);
+        }
+      })
+      .catch(() => {});
+
     try {
       const res = await getNodeList();
 
@@ -539,21 +568,13 @@ export default function NodePage({
     setSelectedIds(new Set());
   }, [activeTab]);
 
-  useEffect(() => {
-    if (!usingPollingFallback) {
-      return;
-    }
-
-    void loadNodes({ silent: true });
-
-    const interval = window.setInterval(() => {
-      void loadNodes({ silent: true });
-    }, NODE_FALLBACK_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [loadNodes, usingPollingFallback]);
+  // DB-3（移植自 kure29/flyx 3.3.33）：指标走 WebSocket 实时推送，
+  // 但节点延迟缓存只在 node/list 里——无论 WS 是否连通都按 15 秒
+  // 可见性轮询静默刷新（含 WS 断线时的兜底），节点重连重测的结果
+  // 最迟 15 秒内出现在卡片上。
+  useVisiblePolling(
+    useCallback(() => loadNodes({ silent: true }), [loadNodes]),
+  );
 
   // 格式化速度
   const formatSpeed = (bytesPerSecond: number): string => {
@@ -589,6 +610,18 @@ export default function NodePage({
 
   const formatFlow = (bytes: number): string => {
     return formatTraffic(bytes);
+  };
+
+  // 本月网卡流量文案（↓入 ↑出）：无数据（远程/联邦节点不上报本机，
+  // 或本月尚无累计）返回 null，展示位留空。
+  const monthTrafficText = (nodeId: number): string | null => {
+    const t = monthTraffic[String(nodeId)];
+
+    if (!t) {
+      return null;
+    }
+
+    return `↓${formatFlow(t[0])} ↑${formatFlow(t[1])}`;
   };
 
   const formatChainType = (chainType: number, hopInx: number) => {
@@ -1313,7 +1346,9 @@ export default function NodePage({
         return;
       }
       setNodeList((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, latency } : n)),
+        prev.map((n) =>
+          n.id === id ? { ...n, latency: latestProbe(latency, n.latency) } : n,
+        ),
       );
     } catch {
       toast.error("检测失败");
@@ -1346,7 +1381,11 @@ export default function NodePage({
         >
           不测延迟
         </button>
-      ) : (
+      ) : probePoints(node.latency).length === 0 ? null : (
+        // DA-4: no result yet (the panel probes every few minutes) —
+        // render nothing instead of a 检测 button; re-probing lives in
+        // the result's menu. The A1-015 pill above is a different axis
+        // (no targets chosen) and stays untouched.
         <LatencyCell
           note={node.latencyTargets ? "自定义" : undefined}
           probe={node.latency}
@@ -2085,6 +2124,16 @@ export default function NodePage({
                                         : "-"}
                                     </span>
                                   </div>
+                                  {monthTrafficText(node.id) && (
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-default-600">
+                                        本月流量（网卡）
+                                      </span>
+                                      <span className="text-xs">
+                                        {monthTrafficText(node.id)}
+                                      </span>
+                                    </div>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -2244,6 +2293,26 @@ export default function NodePage({
                               </div>
                             )}
 
+                            {!isRemoteNode && (
+                              <div className="mb-4 space-y-2">
+                                <NodeLiveStats
+                                  info={node.systemInfo ?? null}
+                                  month={monthTraffic[String(node.id)]}
+                                  variant="card"
+                                />
+                                {onOpenMonitor && (
+                                  <Button
+                                    className="min-h-8 w-full"
+                                    size="sm"
+                                    variant="flat"
+                                    onPress={() => onOpenMonitor(node.id)}
+                                  >
+                                    监控
+                                  </Button>
+                                )}
+                              </div>
+                            )}
+
                             <div className="mt-auto space-y-3">
                               {/* 操作按钮 */}
                               <div className="space-y-1.5">
@@ -2368,6 +2437,9 @@ export default function NodePage({
                       online && node.systemInfo
                         ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
                         : "",
+                      monthTrafficText(node.id)
+                        ? `本月网卡 ${monthTrafficText(node.id)}`
+                        : "",
                     ];
 
                 return (
@@ -2398,6 +2470,15 @@ export default function NodePage({
                           </>
                         }
                         meta={meta.filter(Boolean).join(" · ")}
+                        footer={
+                          isRemoteNode ? undefined : (
+                            <NodeLiveStats
+                              info={node.systemInfo ?? null}
+                              month={monthTraffic[String(node.id)]}
+                              variant="footer"
+                            />
+                          )
+                        }
                         right={
                           <>
                             {renderLatency(node, "list")}
@@ -2478,6 +2559,11 @@ export default function NodePage({
                       ["已运行", formatUptime(node.systemInfo.uptime)],
                     ] as Array<[string, React.ReactNode]>)
                   : []),
+                ...(monthTrafficText(node.id)
+                  ? ([
+                      ["本月流量（网卡）", monthTrafficText(node.id)],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
                 ...(node.expiryTime && node.renewalCycle && expiryMeta
                   ? ([
                       [
@@ -2528,6 +2614,15 @@ export default function NodePage({
                         label: "编辑",
                         onPress: () => handleEdit(node),
                       },
+                      ...(onOpenMonitor
+                        ? [
+                            {
+                              key: "monitor",
+                              label: "监控",
+                              onPress: () => onOpenMonitor(node.id),
+                            },
+                          ]
+                        : []),
                       {
                         key: "targets",
                         label: "测试点",

@@ -62,7 +62,7 @@ func newDefaultSubscription(token, options string, now int64) (model.Subscriptio
 	}
 	return model.Subscription{
 		Name: "我的订阅", Kind: model.SubscriptionShare, Token: token, UUID: id, Password: pw, SourceAll: 1,
-		Options: options, Enabled: 1, CreatedTime: now, UpdatedTime: now,
+		Options: options, Enabled: 1, CreatedTime: now, UpdatedTime: now, TrafficSince: now,
 	}, nil
 }
 
@@ -243,7 +243,7 @@ func saveSubscriptionTx(db *gorm.DB, s *model.Subscription) error {
 	if s.ID == 0 {
 		return db.Create(s).Error
 	}
-	return db.Omit("upload_bytes", "download_bytes", "traffic_reset_time").Save(s).Error
+	return db.Omit("upload_bytes", "download_bytes", "traffic_reset_time", "traffic_since").Save(s).Error
 }
 
 // SaveSubscriptionWithResetTime 在同一事务内落重置时间与订阅本体。
@@ -255,8 +255,13 @@ func (r *Repository) SaveSubscriptionWithResetTime(s *model.Subscription, resetT
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if s.ID > 0 {
+			// Setting/changing the reset day restarts counting from now,
+			// so the since-marker moves with the reset time.
 			if err := tx.Model(&model.Subscription{}).Where("id = ?", s.ID).
-				Update("traffic_reset_time", resetTime).Error; err != nil {
+				Updates(map[string]interface{}{
+					"traffic_reset_time": resetTime,
+					"traffic_since":      resetTime,
+				}).Error; err != nil {
 				return err
 			}
 		}
@@ -451,14 +456,6 @@ func (r *Repository) ResetSubscriptionTraffic(id int64, now int64) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Model(&model.Subscription{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"upload_bytes": 0, "download_bytes": 0, "traffic_reset_time": now,
+		"upload_bytes": 0, "download_bytes": 0, "traffic_reset_time": now, "traffic_since": now,
 	}).Error
-}
-
-// MarkSubscriptionResetTime records when the traffic was last reset.
-func (r *Repository) MarkSubscriptionResetTime(id int64, at int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Model(&model.Subscription{}).Where("id = ?", id).Update("traffic_reset_time", at).Error
 }

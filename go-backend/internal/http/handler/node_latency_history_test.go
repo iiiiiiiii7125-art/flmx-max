@@ -98,12 +98,12 @@ func TestLatencyRoundsRecordAndAlert(t *testing.T) {
 		return map[string]interface{}{"success": true, "averageTime": 30.0, "packetLoss": loss}, nil
 	})
 	for i := 0; i < latencyAlertStreak; i++ {
-		if _, err := h.probeNodeLatency(context.Background(), nil); err != nil {
+		if _, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// A clicked re-probe records a sample but does not count for alerts.
-	if _, err := h.probeNodeLatency(context.Background(), []int64{node}); err != nil {
+	if _, err := h.probeNodeLatency(context.Background(), []int64{node}, probeRoundTargeted); err != nil {
 		t.Fatal(err)
 	}
 	msgs := sent()

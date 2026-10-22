@@ -186,6 +186,7 @@ type SystemInfo struct {
 	Uptime           uint64  `json:"uptime"`
 	BytesReceived    uint64  `json:"bytes_received"`
 	BytesTransmitted uint64  `json:"bytes_transmitted"`
+	BootID           string  `json:"boot_id"`
 	CPUUsage         float64 `json:"cpu_usage"`
 	MemoryUsage      float64 `json:"memory_usage"`
 	DiskUsage        float64 `json:"disk_usage"`
@@ -834,6 +835,11 @@ func (s *Server) SendCommandContext(ctx context.Context, nodeID int64, cmdType s
 		"type":      cmdType,
 		"data":      data,
 		"requestId": requestID,
+	}
+	// DB-5（移植自 kure29/flyx 3.3.33）：TcpPing 附带面板侧超时预算，
+	// 新 agent 据此在节点侧排队/放弃；老 agent 忽略未知字段照常工作。
+	if cmdType == "TcpPing" {
+		cmdPayload["timeoutMs"] = timeout.Milliseconds()
 	}
 	rawCmd, err := json.Marshal(cmdPayload)
 	if err != nil {

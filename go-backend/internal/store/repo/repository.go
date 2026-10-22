@@ -22,6 +22,7 @@ import (
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/security"
 	"go-backend/internal/store/model"
 )
@@ -339,6 +340,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.Announcement{},
 		&model.SchemaVersion{},
 		&model.NodeMetric{},
+		&model.NodeTraffic{},
 		&model.NodeLatencySample{},
 		&model.TunnelMetric{},
 		&model.ServiceMonitor{},
@@ -3278,6 +3280,16 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 		if existingRes.RowsAffected > 0 && (existing.Name != n.Name || existing.Secret != n.Secret) {
 			rep.warnf("节点 #%d 已被备份覆盖：目标库原记录（名称 %q）与备份（名称 %q）的名称/密钥不同，已按备份为准恢复", n.ID, existing.Name, n.Name)
 		}
+		// R3-E-01：节点地址含结构字符（@、#、逗号、空白/控制字符等，
+		// 与保存面 IsValidNodeAddress 同一字符集）时清空并披露——
+		// 该值是订阅 auto 模式与中转入口的地址源，坏值恢复落库即
+		// 改写订阅权威段。合法形态（主机名/IP 字面量/回环/
+		// RFC1918）逐字恢复，备份面不比保存面更严。
+		serverIP := n.ServerIP
+		if kernel.HostHasStructuralChars(serverIP) {
+			rep.warnf("备份恢复：节点地址（节点 #%d）含非法结构字符，已清空，恢复后请在节点设置中重新填写", n.ID)
+			serverIP = ""
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3285,7 +3297,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			ExpiryTime:   sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
 			RenewalCycle: sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
 			Secret:       n.Secret,
-			ServerIP:     n.ServerIP,
+			ServerIP:     serverIP,
 			ServerIPV4:   sql.NullString{String: n.ServerIPv4, Valid: n.ServerIPv4 != ""},
 			ServerIPV6:   sql.NullString{String: n.ServerIPv6, Valid: n.ServerIPv6 != ""},
 			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。
@@ -5280,6 +5292,78 @@ func (r *Repository) PruneNodeMetrics(olderThanMs int64) error {
 		return nil
 	}
 	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.NodeMetric{}).Error
+}
+
+// AddNodeTraffic adds hourly node NIC traffic deltas to the rows,
+// creating the (node_id, hour) bucket on first write.
+func (r *Repository) AddNodeTraffic(rows []model.NodeTraffic) error {
+	if r == nil || r.db == nil || len(rows) == 0 {
+		return nil
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "node_id"}, {Name: "hour"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"in_bytes":  gorm.Expr("node_traffic.in_bytes + excluded.in_bytes"),
+			"out_bytes": gorm.Expr("node_traffic.out_bytes + excluded.out_bytes"),
+		}),
+	}).Create(&rows).Error
+}
+
+// NodeTrafficSince sums each node's NIC traffic from fromMs on.
+// Values are [in, out] whole-machine NIC bytes — not tunnel billing.
+//
+// Buckets are UTC-hour aligned, so a fromMs in a non-whole-hour viewer
+// zone falls inside the first bucket: that bucket contributes only its
+// post-fromMs share, prorated by minutes the way the subscription side
+// splits straddling buckets (BC-12) — the counted segment is the row's
+// last segment and takes the remainder after the excluded share is
+// floored. Whole-hour zones align exactly and are summed as before.
+func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	const hourMs = int64(time.Hour / time.Millisecond)
+	bucketStart := fromMs - ((fromMs%hourMs)+hourMs)%hourMs
+	fullFrom := bucketStart
+	if fromMs > bucketStart {
+		fullFrom = bucketStart + hourMs
+	}
+	var rows []struct {
+		NodeID   int64
+		InBytes  int64
+		OutBytes int64
+	}
+	err := r.db.Model(&model.NodeTraffic{}).Select("node_id, SUM(in_bytes) AS in_bytes, SUM(out_bytes) AS out_bytes").
+		Where("hour >= ?", fullFrom).Group("node_id").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64][2]int64, len(rows))
+	for _, row := range rows {
+		out[row.NodeID] = [2]int64{row.InBytes, row.OutBytes}
+	}
+	if fromMs > bucketStart {
+		var boundary []model.NodeTraffic
+		if err := r.db.Where("hour = ?", bucketStart).Find(&boundary).Error; err != nil {
+			return nil, err
+		}
+		pre := fromMs - bucketStart
+		for _, b := range boundary {
+			cur := out[b.NodeID]
+			cur[0] += b.InBytes - b.InBytes*pre/hourMs
+			cur[1] += b.OutBytes - b.OutBytes*pre/hourMs
+			out[b.NodeID] = cur
+		}
+	}
+	return out, nil
+}
+
+// PruneNodeTraffic drops the hourly buckets before beforeMs.
+func (r *Repository) PruneNodeTraffic(beforeMs int64) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	return r.db.Where("hour < ?", beforeMs).Delete(&model.NodeTraffic{}).Error
 }
 
 func (r *Repository) InsertTunnelMetric(m *model.TunnelMetric) error {
