@@ -162,6 +162,11 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		if err != nil {
 			return fmt.Errorf("%s：%v", what, err)
 		}
+		// R2X-007：ENC 拨号侧版本门——目标带 VLESS 加密时，拨号方
+		// Xray 同样需要 25.6.8+（与入站自有门 kernelVersionGate 同口径）。
+		if msg := encDialGate(kernelType, kernelVersion, &e); msg != "" {
+			return fmt.Errorf("%s：%s", what, msg)
+		}
 		// 出站 IP 策略是入站级的：链式/分流目标若是与策略族冲突的字面
 		// IP，保存期即拒绝（域名放行，由内核按同策略解析，S4）。
 		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, e.Host); err != nil {
