@@ -1423,7 +1423,6 @@ func TestMonitoringPermissionRequired(t *testing.T) {
 		body   []byte
 	}{
 		{"service list", http.MethodGet, "/api/v1/monitor/services", nil},
-		{"service create", http.MethodPost, "/api/v1/monitor/services/create", createBody},
 	}
 
 	for _, tc := range allowed {
@@ -1448,4 +1447,24 @@ func TestMonitoringPermissionRequired(t *testing.T) {
 			}
 		})
 	}
+
+	// R1 X-P1-3（BC-03，裁定 V-01）：监控「查看权限」回归只读——授权只
+	// 放开读入口，写入口（create/update/delete/run）仅管理员。授权后
+	// service create 仍须 403，与 handler 级
+	// TestR1MonitorWriteRequiresAdmin 同口径。
+	t.Run("service create forbidden with grant (read-only)", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/monitor/services/create", bytes.NewReader(createBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", userToken)
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+
+		var out response.R
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if out.Code != 403 {
+			t.Fatalf("expected 403 for write with read-only grant, got %d msg=%q", out.Code, out.Msg)
+		}
+	})
 }
