@@ -51,10 +51,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        with:
-          name: Skill ${{ steps.version.outputs.version }}
-          generate_release_notes: true
-          files: skills/flmx-api/package.json
+      # X-P3-33 (J-S3): 本 workflow 不创建 GitHub Release——Release
+      # 由 docker-build.yml 唯一创建。此前 npm 步之后还有一步对同一
+      # tag 的 Create GitHub Release，仅因 npm 步恒失败被
+      # if: success() 跳过而未暴露；npm 步一旦转绿便会与正式
+      # Release 冲突/覆盖，故已删除该步。
