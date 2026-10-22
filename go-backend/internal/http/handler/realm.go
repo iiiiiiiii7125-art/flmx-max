@@ -256,7 +256,19 @@ func (h *Handler) syncRealmForward(forward *forwardRecord, override map[int64]bo
 	if err != nil {
 		return warnings, err
 	}
-	if forward.SpeedID.Valid || forward.IPSpeedID.Valid || forward.MaxConn > 0 || forward.IPMaxConn > 0 {
+	hasIneffectiveLimit := forward.SpeedID.Valid || forward.IPSpeedID.Valid || forward.MaxConn > 0 || forward.IPMaxConn > 0
+	if !hasIneffectiveLimit {
+		// X-P3-10：UT 级限速同样在 realm 下不生效，必须纳入警告。
+		// 复用 ResolveUserTunnelAndLimiter 的有效性谓词（status=1 且
+		// speed>0，见 X-P2-5/X-P3-9）：已禁用或 speed=0 的 UT 规则
+		// 解析为空，不产生警告。
+		_, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)
+		if err != nil {
+			return warnings, err
+		}
+		hasIneffectiveLimit = utLimiterID != nil && utSpeed != nil
+	}
+	if hasIneffectiveLimit {
 		warnings = append(warnings, "realm 引擎不支持限速和连接数限制，这些设置不生效")
 	}
 	return warnings, nil
