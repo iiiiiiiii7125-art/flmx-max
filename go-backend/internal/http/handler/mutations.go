@@ -520,10 +520,15 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if forwardMode == "nftables" {
 		status = 1
 	}
+	nodeSecret, err := randomToken(16)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
 	nodeID, err := h.repo.CreateNode(
 		name,
-		randomToken(16),
+		nodeSecret,
 		serverIP,
 		nullableText(asString(req["serverIpV4"])),
 		nullableText(asString(req["serverIpV6"])),
@@ -6725,12 +6730,18 @@ func defaultString(v, def string) string {
 	return v
 }
 
-func randomToken(n int) string {
+// cryptoRandRead 是凭据随机源的测试 seam（生产恒为 crypto/rand.Read）。
+var cryptoRandRead = rand.Read
+
+// randomToken 生成 n 字节随机凭据的 hex 编码。X-P3-14（L-03-3）：
+// 随机源失败 fail-closed 返回错误——旧实现降级为时间戳 hex（可
+// 预测）落库为节点 secret/联邦凭据，属安全缺陷；调用方必须报错。
+func randomToken(n int) (string, error) {
 	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	if _, err := cryptoRandRead(buf); err != nil {
+		return "", fmt.Errorf("生成随机凭据失败: %w", err)
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }
 
 func asInt64Slice(v interface{}) []int64 {
