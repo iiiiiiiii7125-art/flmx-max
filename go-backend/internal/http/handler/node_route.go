@@ -442,7 +442,13 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 							// 无变化可比、告警永久丢失。恢复捕获的 prev，
 							// 下一轮重新识别同一变化并补发。
 							if outcome == notifyOutcomeFailed {
-								h.nodeRoutes.set(nodeID, prev)
+								// R2X-017 子面：恢复的基准副本 CheckedAt
+								// 置 0——prev 的原始追踪时刻可能仍新鲜
+								// （手动 force 探测），不置 0 则下一周期轮
+								// 被 routeFresh 挡住、补发最长延迟 24h。
+								restored := prev
+								restored.CheckedAt = 0
+								h.nodeRoutes.set(nodeID, restored)
 								return
 							}
 							// A7-02 的同族处理：本事件每变化一条消息（无状态

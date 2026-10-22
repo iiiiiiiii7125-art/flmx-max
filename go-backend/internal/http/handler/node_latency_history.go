@@ -160,6 +160,20 @@ func (t *latencyAlertTracker) unmark(nodeID int64, points []latencyPoint) {
 	}
 }
 
+// remark 是恢复向的对偶回滚（R2X-017）：恢复通知发送失败时把 down
+// 标记置回，streak 不动——下一轮 track 喂入正常样本即重新产出恢复
+// 跃迁并补发。
+func (t *latencyAlertTracker) remark(nodeID int64, points []latencyPoint) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.down == nil {
+		t.down = make(map[string]bool)
+	}
+	for _, p := range points {
+		t.down[strconv.FormatInt(nodeID, 10)+"\x00"+p.Name] = true
+	}
+}
+
 func (h *Handler) alertLatency(results map[int64]externalProbe, names map[int64]string) {
 	lossPct, latencyMs := h.latencyThresholds()
 	limit := fmt.Sprintf("丢包 ≥ %.0f%%", lossPct)
@@ -188,6 +202,7 @@ func (h *Handler) alertLatency(results map[int64]externalProbe, names map[int64]
 			for i, p := range tr.recovered {
 				lines[i] = describeLatencyPoint(p)
 			}
+			recovered := tr.recovered
 			h.notifyTracked(notifyEventLatencyBad, "延迟已恢复",
 				fmt.Sprintf("节点：%s\n%s", name, strings.Join(lines, "\n")),
 				func(outcome notifyOutcome) {
@@ -195,6 +210,12 @@ func (h *Handler) alertLatency(results map[int64]externalProbe, names map[int64]
 					if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
 						h.notifier.forgetFingerprintPrefix(
 							notifyEventLatencyBad + "\x00延迟 / 丢包异常\x00节点：" + name + "\n")
+					}
+					// R2X-017：恢复发送失败以 remark 对偶回滚 down
+					// 标记，下一轮重新产出恢复跃迁补发；Disabled
+					// 维持 V-16 语义不动。
+					if outcome == notifyOutcomeFailed {
+						h.latencyAlerts.remark(nodeID, recovered)
 					}
 				})
 		}

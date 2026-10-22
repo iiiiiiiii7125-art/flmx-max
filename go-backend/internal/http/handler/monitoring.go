@@ -885,8 +885,11 @@ func extractPathParam(path, prefix, suffix string) string {
 }
 
 type monitorAccessData struct {
-	Allowed bool   `json:"allowed"`
-	Reason  string `json:"reason,omitempty"`
+	Allowed bool `json:"allowed"`
+	// Admin 标记管理员（roleID==0），供前端只读用户隐藏写入口
+	// （R2X-038：只读时不渲染写入口与 Modal，而非点击后撞 403）。
+	Admin  bool   `json:"admin"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // monitorAccessHandler is a lightweight capability check for frontend navigation.
@@ -903,7 +906,7 @@ func (h *Handler) monitorAccessHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if roleID == 0 {
-		response.WriteJSON(w, response.OK(monitorAccessData{Allowed: true}))
+		response.WriteJSON(w, response.OK(monitorAccessData{Allowed: true, Admin: true}))
 		return
 	}
 
@@ -912,7 +915,7 @@ func (h *Handler) monitorAccessHandler(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	data := monitorAccessData{Allowed: allowed}
+	data := monitorAccessData{Allowed: allowed, Admin: false}
 	if !allowed {
 		data.Reason = "need_admin_grant"
 	}
