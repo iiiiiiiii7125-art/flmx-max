@@ -404,7 +404,9 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	roleID, err := h.repo.GetUserRoleID(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			response.WriteJSON(w, response.ErrDefault("用户不存在"))
+			// X-P3-28（L-11-3，V-12）：delete 对不存在统一幂等成功
+			// （与 node/tunnel/speedLimit 对齐；删除不存在对象无副作用）。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -3302,7 +3304,8 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 	forward, _, _, err := h.resolveForwardAccess(r, id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
-			response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -3377,15 +3380,16 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	forward, err := h.getForwardRecord(id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
-			response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if forward == nil {
-		// R5 幂等：不存在的 ID 返回明确的“不存在”（中文，与其他接口一致），非 500。
-		response.WriteJSON(w, response.ErrDefault("转发不存在"))
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 

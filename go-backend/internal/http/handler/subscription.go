@@ -929,8 +929,13 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := h.repo.GetSubscription(id)
-	if err != nil || s == nil {
-		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if s == nil {
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 	// B4/F-058: 删除改为两阶段。此前行先删、下发失败仅改响应文案，行已
