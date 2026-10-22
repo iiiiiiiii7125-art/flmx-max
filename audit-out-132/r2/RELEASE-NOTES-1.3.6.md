@@ -129,5 +129,6 @@ R2 全量审计修复版：以 1.3.5 为基线完成新一轮「基线 → 12 �
 
 - 集成来源：`integrate-r2 @ 3c53ced`（R2 修复 49/49；发版门 11/11 + 补充 3/3 PASS）。
 - main：`8c1a510`（merge integrate-r2: FLMX 1.3.6 R2 审计修复版，零丢提交）+ `7f99cf0`（技能包版本字面量同步 1.3.6）+ 本发版说明定稿提交（tag 指向点，哈希见发布报告）。
-- tag：`1.3.6`（纯数字，发布执行时生成）。
-- CI 与 Release 资产：发布后回填本节并同步写入发布报告 `RELEASE-136.md`；回填前以发布报告为最终凭据。
+- tag：`1.3.6`（纯数字，指向本说明定稿提交 `60e940e`）。
+- CI：主发版流 Build and Push Images run `39780809259` **success**（五 job 全绿，含 Create Release）；Deploy Docs run `39780800028` **success**；Publish Skill to npm run `39780809198` failure（Publish to npm 步 `ENEEDAUTH`，惯例红、不阻塞）；main CI Build Check run `39780800141` **failure（单点）**——6 job 中 5 个 success（含 Go Full Tests、Go Backend PostgreSQL Contract、安装脚本双 init 契约），Build Frontend 仅 Check online demo 步失败：`admin #/monitor: [demo] not recorded: monitor/access`（R2 批 11 新增监控访问日志端点未补 demo 录制，演示站录制完整性缺口，不影响发布镜像与面板功能；Build 步本身 success；已登记发布报告遗留、转 R3 修复）。
+- Release：Published（2026-10-22T12:52:55Z，target `60e940e`），https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/1.3.6 ；12 个资产逐个下载核对 **12/12 sha 与发布 `.sha256` 一致**；发布副本 `PINNED_VERSION="1.3.6"`、`REPO="iiiiiiiii7125-art/flmx-max"`、compose 镜像标签 `:1.3.6`、发布 `gost-amd64 -V` = `gost 1.3.6 (go1.25.14 linux/amd64)` 均已核。GHCR 标签 API 因当前 token 无 `read:packages` 返回 403 未核，镜像推送以主发版流 Build & Push 两 job success 为据。明细见发布报告 `RELEASE-136.md`。
