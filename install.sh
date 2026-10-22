@@ -56,6 +56,8 @@ get_architecture() {
 INSTALL_DIR="/etc/flux_agent"
 FLUX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flux_agent.service"
 FLUX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flux_agent"
+# OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flux_agent。
+FLUX_AGENT_OPENRC_PIDFILE="${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}"
 LEGACY_GOST_BINARY="/usr/local/bin/gost"
 LEGACY_GOST_CONFIG_DIR="/etc/gost"
 LEGACY_GOST_SERVICE_FILE_ETC="/etc/systemd/system/gost.service"
@@ -559,6 +561,42 @@ flux_agent_service_status() {
   esac
 }
 
+flux_agent_main_pid() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl show -p MainPID --value flux_agent 2>/dev/null
+      ;;
+    openrc)
+      cat "${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}" 2>/dev/null
+      ;;
+  esac
+}
+
+# X-P2-11 (J-01): 与 agent 侧 flmx_agent_health_ok
+# （go-gost/x/socket/websocket_reporter.go）同规则的双采样判活：
+# 间隔 2 秒两次采样，每次都必须 is-active，且主 PID（systemd
+# MainPID / OpenRC pidfile PID）非空、非 0、两次一致。单次采样会
+# 把存活数秒后倒下的 flap 二进制在存活窗口内误判为活（见 R4-N2）。
+flux_agent_health_ok() {
+  ensure_service_manager || return 1
+
+  local p1 p2
+  p1=$(flux_agent_main_pid) || p1=""
+  p1=$(printf '%s' "$p1" | tr -d '[:space:]')
+  if ! flux_agent_service_is_active; then
+    return 1
+  fi
+  sleep 2
+  p2=$(flux_agent_main_pid) || p2=""
+  p2=$(printf '%s' "$p2" | tr -d '[:space:]')
+  if ! flux_agent_service_is_active; then
+    return 1
+  fi
+  [[ -n "$p1" && "$p1" != "0" && "$p1" == "$p2" ]]
+}
+
 remove_flux_agent_service() {
   ensure_service_manager || return 1
 
@@ -747,6 +785,74 @@ EOF
   fi
 }
 
+# X-P2-12 (J-02): 与 panel_install.sh 同实现的点分数字版本比较。
+# 回显 -1/0/1 表示 a 小于/等于/大于 b；任一侧为空或含非数字段时
+# 不可比，回显空并返回 1——调用方不得据此拦截（V-19 既有口径：
+# 不可比放行，开发/测试标签等场景保持可用）。
+panel_version_cmp() {
+  local a="${1#v}" b="${2#v}"
+  local -a pa pb
+  local i n x y
+  if [[ -z "$a" || -z "$b" ]]; then
+    return 1
+  fi
+  IFS='.' read -ra pa <<< "$a"
+  IFS='.' read -ra pb <<< "$b"
+  n=${#pa[@]}
+  if (( ${#pb[@]} > n )); then
+    n=${#pb[@]}
+  fi
+  for (( i = 0; i < n; i++ )); do
+    x="${pa[i]:-0}"
+    y="${pb[i]:-0}"
+    if ! [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+    if (( 10#$x < 10#$y )); then
+      echo -1
+      return 0
+    fi
+    if (( 10#$x > 10#$y )); then
+      echo 1
+      return 0
+    fi
+  done
+  echo 0
+}
+
+# X-P2-12 (J-02): 按 extractLeadingSemver（system_upgrade.go）同规则
+# 从版本串中取语义版本：逐个空白分隔段做严格点分数字校验，首个
+# 合格段即为版本。真实 -V 输出形如 "gost 1.3.4 (go1.25
+# linux/amd64)"（首段是程序名 gost），握手上报的 fullVersion 形如
+# "1.3.4 (debian/amd64)"，两种形态都由此归一；粘连后缀
+# （如 1.3.2-beta1）、无数字段、空串一律提取失败，调用方按
+# 不可比放行处理。"dev" 原样透传（panel_version_cmp 对其不可比）。
+extract_leading_semver() {
+  local raw="$1" token candidate
+  # shellcheck disable=SC2086 # 此处需要按空白分词逐段校验
+  for token in $raw; do
+    if [[ "$token" == "dev" ]]; then
+      printf '%s' "dev"
+      return 0
+    fi
+    candidate="${token#v}"
+    if [[ "$candidate" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 现装 agent 的语义版本（取自二进制 -V）；取不到/不可解析时失败，
+# 调用方按不可比处理。
+flux_agent_installed_version() {
+  local raw
+  [[ -x "$INSTALL_DIR/flux_agent" ]] || return 1
+  raw=$("$INSTALL_DIR/flux_agent" -V 2>/dev/null) || return 1
+  extract_leading_semver "$raw"
+}
+
 # 更新功能
 update_flux_agent() {
   echo "🔄 开始更新 flux_agent..."
@@ -758,13 +864,29 @@ update_flux_agent() {
 
   ask_proxy_config
   ensure_download_url_initialized || return 1
-  
+
+  # X-P2-12 (J-02, BC-09): 下载前防降级。读现装版本（-V 经
+  # extract_leading_semver 归一）与目标版本比较，目标更低时拒绝
+  # 并说明——其余三条更新路径（面板自升级、节点面板升级单/批量、
+  # panel_install 脚本更新）均已有此门，脚本路径此前独缺。任一侧
+  # 不可比时沿用 panel_version_cmp 既有放行口径（V-19），不拦截。
+  local current_version cmp_result
+  current_version=$(flux_agent_installed_version || true)
+  cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+  if [[ "$cmp_result" == "-1" ]]; then
+    echo "❌ 目标版本 ${RESOLVED_VERSION:-} 低于当前版本 $current_version，拒绝降级更新。如确需降级请手动处理。"
+    return 1
+  fi
+  if [[ "$cmp_result" == "0" ]]; then
+    echo "ℹ️ 目标版本与当前版本相同（$current_version），将按同版本重装继续"
+  fi
+
   echo "📥 使用下载地址: $DOWNLOAD_URL"
-  
+
   # 检查并安装 tcpkill
   check_and_install_tcpkill
   ensure_service_manager || return 1
-  
+
   # 先下载新版本
   echo "⬇️ 下载最新版本..."
   rm -f "$INSTALL_DIR/flux_agent.new"
@@ -806,9 +928,14 @@ update_flux_agent() {
   echo "🔄 重启服务..."
   start_flux_agent_service
 
-  # 回滚检查：新版本服务起不来则恢复备份
-  sleep 2
-  if ! flux_agent_service_is_active; then
+  # 回滚检查：新版本服务起不来则恢复备份。
+  # X-P2-11 (J-01): 与 agent 侧升级脚本同口径——先等待 3 秒让
+  # flap 形态（二进制启动后数秒才倒下）越过最初的存活窗口，再走
+  # flux_agent_health_ok 双采样（间隔 2 秒、PID 稳定，采样点约在
+  # 启动后 3 秒与 5 秒）。旧实现 sleep 2 后单次 is-active 恰会命中
+  # flap 窗口、误判成功并删掉 .bak 回滚源。
+  sleep 3
+  if ! flux_agent_health_ok; then
     echo "❌ 新版本服务启动失败，正在回滚到备份版本..."
     rollback_flux_agent
     return 1
@@ -869,33 +996,40 @@ uninstall_flux_agent() {
 
 # 主逻辑
 main() {
+  # X-P3-6 (J-03, BC-12): 各分支捕获操作函数返回码并以其退出。
+  # 旧实现无条件 exit 0，菜单更新/卸载失败（函数以 return 1 报告）
+  # 也被以退出码判断成败的自动化消费者误判为成功；成功路径仍
+  # exit 0、delete_self 行为不变。install_flux_agent 内部直接
+  # exit 1 的失败路径不受影响（进程已以 1 退出）。
+  local rc=0
+
   # 如果提供了命令行参数，直接执行安装
   if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
-    install_flux_agent
+    install_flux_agent || rc=$?
     delete_self
-    exit 0
+    exit "$rc"
   fi
 
   # 显示交互式菜单
   while true; do
     show_menu
     read -p "请输入选项 (1-4): " choice
-    
+
     case $choice in
       1)
-        install_flux_agent
+        install_flux_agent || rc=$?
         delete_self
-        exit 0
+        exit "$rc"
         ;;
       2)
-        update_flux_agent
+        update_flux_agent || rc=$?
         delete_self
-        exit 0
+        exit "$rc"
         ;;
       3)
-        uninstall_flux_agent
+        uninstall_flux_agent || rc=$?
         delete_self
-        exit 0
+        exit "$rc"
         ;;
       4)
         echo "👋 退出脚本"
