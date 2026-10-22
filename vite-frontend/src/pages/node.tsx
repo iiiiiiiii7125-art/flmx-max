@@ -958,7 +958,19 @@ export default function NodePage({
         );
 
         if (res.code === 0) {
-          toast.success(`节点升级命令已发送，节点将自动重启`);
+          // R2X-021：同版本短路时后端不下发不重启，回
+          // data={alreadyLatest:true,message:"节点已是最新版本…，无需升级"}，
+          // 须直接显示后端 message，不得再陈述未发生的命令与重启。
+          const data = (res.data ?? null) as {
+            alreadyLatest?: boolean;
+            message?: string;
+          } | null;
+
+          if (data?.alreadyLatest) {
+            toast.success(data.message || "节点已是最新版本，无需升级");
+          } else {
+            toast.success(`节点升级命令已发送，节点将自动重启`);
+          }
         } else {
           toast.error(res.msg || "升级失败");
         }
@@ -995,9 +1007,36 @@ export default function NodePage({
         );
 
         if (res.code === 0) {
-          toast.success(
-            `批量升级命令已发送到 ${selectedLocalIds.length} 个节点`,
-          );
+          // R2X-021：后端逐节点回执 data.results[]（{id,success,message}），
+          // 须汇总成功/失败计数，失败时列首条原因，不得无条件报全量成功。
+          const results = Array.isArray((res.data as any)?.results)
+            ? ((res.data as any).results as Array<{
+                success?: boolean;
+                message?: string;
+              }>)
+            : [];
+
+          if (results.length === 0) {
+            toast.success(
+              `批量升级命令已发送到 ${selectedLocalIds.length} 个节点`,
+            );
+          } else {
+            const failed = results.filter((item) => !item.success);
+            const succeeded = results.length - failed.length;
+
+            if (failed.length === 0) {
+              toast.success(`批量升级命令已发送到 ${succeeded} 个节点`);
+            } else if (succeeded === 0) {
+              toast.error(
+                `批量升级全部失败（${failed.length} 个节点）：${failed[0]?.message || "未知错误"}`,
+              );
+            } else {
+              toast(
+                `批量升级部分失败：成功 ${succeeded} 个，失败 ${failed.length} 个，首条失败：${failed[0]?.message || "未知错误"}`,
+                { icon: "⚠️", duration: 5000 },
+              );
+            }
+          }
         } else {
           toast.error(res.msg || "批量升级失败");
         }

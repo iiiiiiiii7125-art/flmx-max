@@ -736,6 +736,22 @@ export default function UserPage({
         : await createUser(submitData);
 
       if (response.code === 0) {
+        // R2X-021：userUpdate 在 maxConn 变更时回 data.warnings（逐转发同步
+        // 告警），同 forward 范式逐条警告展示，不得只弹无条件「更新成功」。
+        const warningItems = Array.isArray((response as any).data?.warnings)
+          ? (response as any).data.warnings
+              .map((item: unknown) =>
+                typeof item === "string" ? item.trim() : "",
+              )
+              .filter((item: string) => item)
+          : [];
+
+        warningItems.forEach((warning: string) => {
+          toast(warning, {
+            icon: "⚠️",
+            duration: 5000,
+          });
+        });
         toast.success(isEdit ? "更新成功" : "创建成功");
         onUserModalClose();
         const responseUser = normalizeUserItem((response as any).data || {});
