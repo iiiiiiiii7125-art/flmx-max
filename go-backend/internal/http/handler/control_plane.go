@@ -305,7 +305,23 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if len(entryNodeIDs) == 0 {
 			return nil, errors.New("nftables 转发缺少入口节点")
 		}
-		return nil, h.syncNftablesNode(entryNodeIDs[0])
+		// R3X-019：nftables 渲染无 rate/connlimit 表达，限速/连接数
+		// 不执法——按 realm 同谓词（forwardHasIneffectiveLimits：
+		// status=1 且 speed>0、连接数裸值、含 UT 级）生成警告并入
+		// 本函数的 warnings 回执通道，不再静默丢弃；禁用/零速的
+		// 引用本就不生效，不误报。
+		var warnings []string
+		ineffective, warnErr := h.forwardHasIneffectiveLimits(forward)
+		if warnErr != nil {
+			return nil, warnErr
+		}
+		if ineffective {
+			warnings = append(warnings, "nftables 模式不支持限速和连接数限制，这些设置不生效")
+		}
+		if err := h.syncNftablesNode(entryNodeIDs[0]); err != nil {
+			return warnings, err
+		}
+		return warnings, nil
 	}
 	if tunnelIsRealm(tunnel) {
 		return h.syncRealmForward(forward, nil)
