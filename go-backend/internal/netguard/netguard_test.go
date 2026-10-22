@@ -37,10 +37,11 @@ var matrix = []matrixRow{
 	// CGNAT（非元数据部分不整段硬拒）
 	{"100.64.1.2", false, false, true, true, true},
 	{"100.127.255.255", false, false, true, true, true},
-	// 链路本地 v4（169.254/16 整段硬拒）与 v6
+	// 链路本地整段硬拒：v4 169.254/16 与 v6 fe80::/10（N-01）
 	{"169.254.0.23", false, false, false, false, false},
 	{"169.254.1.1", false, false, false, false, false},
-	{"fe80::1", false, false, true, true, true},
+	{"fe80::1", false, false, false, false, false},
+	{"febf:ffff::1", false, false, false, false, false},
 	// 未指定（硬拒）
 	{"0.0.0.0", false, false, false, false, false},
 	{"::", false, false, false, false, false},

@@ -88,9 +88,9 @@ func ValidateImportHost(host string) error {
 			return errors.New("地址不能是本机或 0.0.0.0")
 		}
 		// R2X-043：字面 IP 分支只加 netguard 硬拒层（元数据精确集 ∪
-		// 169.254/16 整段 ∪ 未指定，翻译内嵌同判）+ loopback 层
-		// （含 NAT64/6to4 内嵌回环）。RFC1918/CGNAT 字面量是合法
-		// 导入对象，不得顺手禁（防过修）。
+		// 链路本地整段 169.254/16 与 fe80::/10（N-01）∪ 未指定，
+		// 翻译内嵌同判）+ loopback 层（含 NAT64/6to4 内嵌回环）。
+		// RFC1918/CGNAT/ULA 字面量是合法导入对象，不得顺手禁（防过修）。
 		if d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
 			return errors.New("地址不能是云元数据或链路本地地址")
 		}

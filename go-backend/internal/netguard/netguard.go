@@ -74,11 +74,13 @@ var (
 	nat64Local     = netip.MustParsePrefix("64:ff9b:1::/48")
 	sixToFour      = netip.MustParsePrefix("2002::/16")
 	linkLocalV4    = netip.MustParsePrefix("169.254.0.0/16")
+	linkLocalV6    = netip.MustParsePrefix("fe80::/10")
 )
 
-// metadataExact 是云元数据精确集（硬拒）。169.254.0.0/16 整段另行
-// 硬拒（verdicts §3.5）；CGNAT 段不整段硬拒（Tailscale 等合法
-// 用途），100.100.100.200 只作精确条目。
+// metadataExact 是云元数据精确集（硬拒）。链路本地整段另行硬拒
+// （169.254.0.0/16 与 fe80::/10，verdicts §3.5；N-01 起 v6 段
+// 同入——无 zone 的 fe80 地址在任何消费方都不可路由）；CGNAT 段
+// 不整段硬拒（Tailscale 等合法用途），100.100.100.200 只作精确条目。
 var metadataExact = []netip.Addr{
 	netip.MustParseAddr("169.254.169.254"),
 	netip.MustParseAddr("100.100.100.200"),
@@ -182,7 +184,7 @@ func ClassifyAddr(a netip.Addr) Result {
 	switch {
 	case isMetadataExact(r.Effective):
 		r.HardDeny, r.HardReason = true, "metadata"
-	case linkLocalV4.Contains(r.Effective):
+	case linkLocalV4.Contains(r.Effective), linkLocalV6.Contains(r.Effective):
 		r.HardDeny, r.HardReason = true, "link_local_segment"
 	case r.Effective.IsUnspecified():
 		r.HardDeny, r.HardReason = true, "unspecified"

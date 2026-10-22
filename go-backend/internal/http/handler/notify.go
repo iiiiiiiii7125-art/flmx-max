@@ -836,8 +836,10 @@ func notifyDialContext(ctx context.Context, network, addr string) (net.Conn, err
 
 // validateNotifyURL 校验通知 webhook URL，防 SSRF。
 // 拒绝：非 http/https scheme、硬拒层地址（isMetadataAddress，现为
-// netguard 硬拒集：元数据精确集 ∪ 169.254/16 ∪ 未指定）。
-// 允许：公网与内网地址（企业微信/钉钉内网代理为合法场景）。
+// netguard 硬拒集：元数据精确集 ∪ 链路本地整段 169.254/16 与
+// fe80::/10（N-01）∪ 未指定）。
+// 允许：公网与内网地址（企业微信/钉钉内网代理为合法场景；内网指
+// RFC1918/ULA——无 zone 的 fe80 地址不可拨号，不在此列）。
 func validateNotifyURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {

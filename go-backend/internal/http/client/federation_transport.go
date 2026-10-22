@@ -23,9 +23,9 @@ import (
 //   - 每次拨号先全量解析主机名，逐地址判定，任一不安全整体拒绝；
 //   - 校验与拨号共用同一次解析结果并拨已钉死的 IP（TLS SNI 与 Host
 //     头仍按原主机名），rebinding 在校验与使用之间没有窗口；
-//   - 元数据地址（169.254.169.254 / fd00:ec2::254）永远拒绝，allowlist
-//     不能放行；
-//   - 其余私网/回环/链路本地/组播/未指定地址默认拒绝，但与 SecureFetch
+//   - 元数据地址（169.254.169.254 / fd00:ec2::254）与链路本地整段
+//     （169.254/16、fe80::/10，N-01）永远拒绝，allowlist 不能放行；
+//   - 其余私网/回环/组播/未指定地址默认拒绝，但与 SecureFetch
 //     共用同一放行策略（FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或
 //     FLMX_FETCH_PRIVATE_ALLOWLIST 含对应 CIDR）——内网/Tailscale 联邦
 //     是真实部署形态，运维可显式放行，与订阅抓取一处口径；
@@ -58,7 +58,8 @@ func federationSafetyBypassed() bool {
 
 // federationIsMetadataIP 现语义为 netguard 硬拒层（R2 批1收口）：
 // 元数据精确集（含阿里云 100.100.100.200，旧镜像名单缺此条）∪
-// 169.254/16 整段 ∪ 未指定 ∪ 本地 NAT64，翻译内嵌同判。
+// 链路本地整段 169.254/16 与 fe80::/10（N-01）∪ 未指定 ∪ 本地
+// NAT64，翻译内嵌同判。
 func federationIsMetadataIP(ip net.IP) bool {
 	return netguard.HardDenyIP(ip)
 }

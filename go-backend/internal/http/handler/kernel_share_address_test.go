@@ -407,3 +407,46 @@ func TestShareAddressModePersistenceAndEndpoints(t *testing.T) {
 	}
 	_ = node
 }
+
+// N-01: link-local v6 literals take the same rejection as
+// 169.254/16 — the share surface shares ValidateImportHost with the
+// import surface, and fe80::/10 joined the netguard hard-deny set.
+// ULA (fc00::/7) is not link-local and stays allowed.
+func TestValidateShareAddressCustomLinkLocalV6(t *testing.T) {
+	node := shareTestNode()
+	for _, host := range []string{"fe80::1", "[fe80::1]", "febf::1", "fe80::1%eth0"} {
+		if err := validateShareAddress("custom", host, node); err == nil {
+			t.Fatalf("custom %q must be rejected (link-local v6)", host)
+		}
+	}
+	if err := validateShareAddress("custom", "fd00::5", node); err != nil {
+		t.Fatalf("custom ULA must stay allowed: %v", err)
+	}
+}
+
+// N-01 pull-time guard: a stored fe80:: ShareHost (written before
+// fe80::/10 entered the hard-deny set) is skipped and logged at pull
+// time, exactly like the other invalid custom hosts.
+func TestInboundEndpointsSkipsLinkLocalV6ShareHost(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/share-fe80.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+	nodeID := seedRelayTargetNode(t, r, "fe80host", "192.0.2.1")
+	row := seedShareInbound(t, r, nodeID, "fe80-in")
+	row.ShareAddressMode = "custom"
+	row.ShareHost = "fe80::1"
+	if err := r.SaveNodeInbound(row); err != nil {
+		t.Fatal(err)
+	}
+	logs := captureHandlerLogs(t)
+	endpoints, _ := h.inboundEndpoints([]model.NodeInbound{*row})
+	if len(endpoints) != 0 {
+		t.Fatalf("link-local v6 share host must be skipped, got %+v", endpoints)
+	}
+	if !strings.Contains(logs.String(), "invalid custom share host") {
+		t.Fatalf("the skip must be logged, logs: %q", logs.String())
+	}
+}
