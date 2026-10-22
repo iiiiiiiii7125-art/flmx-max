@@ -45,7 +45,7 @@ func TestMaxConnLimit(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "max-conn-node", "max-conn-secret", "10.20.0.1", "10.20.0.1", "", "32000-32010", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "max-conn-node", "max-conn-secret", "10.20.0.1", "10.20.0.1", "", "32000-32010", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	var nodeID int64
@@ -89,6 +89,9 @@ func TestMaxConnLimit(t *testing.T) {
 	})
 	defer stopNode()
 
+	// R1-B10 deflake：节点种子已改 status=0，此等待是真同步点
+	// （旧种子预置 1 时空转，会话登记未落点即 create 会撞离线
+	// 分支）。本文件另两条用例同此治理。
 	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
