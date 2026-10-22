@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 import { importInbounds, saveRemoteSource, updateExternalInbound } from "@/api";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import {
   FilePick,
   INTERVALS,
@@ -88,6 +91,8 @@ export function ImportModal({
 
   // R2X-004：订阅源新建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(isOpen, true, rotateIdemKey);
 
   const addSource = async () => {
     if (!subURL && !fromFile) return;
@@ -124,6 +129,10 @@ export function ImportModal({
       }
       if (res.code !== 0)
         toast(res.msg || "已保存，但更新失败", { icon: "⚠️" });
+      // R3X-025：首同步带逐节点失败明细（result.errors）时按 ⚠️ 呈现，
+      // 明细条数 + 首条已在 syncText 内带出，不得报全成功。
+      else if (result?.errors?.length)
+        toast(`已添加：${syncText(result)}`, { icon: "⚠️", duration: 5000 });
       else toast.success(result ? `已添加：${syncText(result)}` : "已添加");
       onSourceAdded();
       onClose();

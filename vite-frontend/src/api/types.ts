@@ -269,6 +269,8 @@ export interface BatchOperationResult {
   /** 批量删除中转为 pending-delete 的条数与明细（节点不可达时，后端 mutations.go）（F-144）。 */
   pendingCount?: number;
   pending?: BatchOperationFailure[];
+  /** 批量同步的非致命告警（与单条 create/update 的 data.warnings 同义，后端 mutations.go batchOperationResult.Warnings；目前仅批量重下发/批量换隧道两处填充）（R3X-024）。 */
+  warnings?: string[];
   [key: string]: unknown;
 }
 

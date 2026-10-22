@@ -82,7 +82,10 @@ import {
   validateTunnelForm,
 } from "@/pages/tunnel/form";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
-import { useIdemKey } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+} from "@/hooks/useIdemKey";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
   buildBatchFailureMessage,
@@ -920,6 +923,8 @@ export default function TunnelPage() {
   // 提交表单
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(modalOpen, !isEdit, rotateIdemKey);
 
   const handleSubmit = async () => {
     if (!validateForm()) return;
@@ -982,6 +987,22 @@ export default function TunnelPage() {
 
       if (response.code === 0) {
         if (!isEdit) rotateIdemKey();
+        // R3X-007：tunnelUpdate 的 data.warnings（R2X-009 中转 RemoteAddr
+        // 重算/同步告警）须按 forward 范式逐条 ⚠️ 后再报成功，不得丢弃。
+        const warningItems = Array.isArray((response as any).data?.warnings)
+          ? (response as any).data.warnings
+              .map((item: unknown) =>
+                typeof item === "string" ? item.trim() : "",
+              )
+              .filter((item: string) => item)
+          : [];
+
+        warningItems.forEach((warning: string) => {
+          toast(warning, {
+            icon: "⚠️",
+            duration: 5000,
+          });
+        });
         toast.success(isEdit ? "更新成功" : "创建成功");
         setModalOpen(false);
         await refreshTunnelList(false);
