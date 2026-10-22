@@ -13,7 +13,7 @@ import {
 import { AnimatedPage } from "@/components/animated-page";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
-import { getMonitorNodes } from "@/api";
+import { getMonitorAccess, getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
@@ -43,6 +43,28 @@ export default function MonitorPage() {
   const [nodesError, setNodesError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [activeTab, setActiveTab] = useState<MonitorTab>("nodes");
+  // R2X-038：后端 access.admin 透传给 MonitorView，只读用户不渲染写入口。
+  const [canWrite, setCanWrite] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const res = await getMonitorAccess();
+
+        if (!cancelled && res.code === 0 && res.data) {
+          setCanWrite(Boolean(res.data.admin));
+        }
+      } catch {
+        // 查询失败保持只读呈现（后端仍以 403 兜底写入口）。
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [realtimeNodeStatus, setRealtimeNodeStatus] = useState<
     Record<number, "online" | "offline">
@@ -356,7 +378,7 @@ export default function MonitorPage() {
       </div>
 
       {activeTab === "nodes" ? (
-        <MonitorView nodeMap={nodeMap} viewMode={viewMode} />
+        <MonitorView canWrite={canWrite} nodeMap={nodeMap} viewMode={viewMode} />
       ) : (
         <TunnelMonitorView viewMode={viewMode} />
       )}
