@@ -39,6 +39,16 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "user:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 
 	username := asString(req["user"])
 	pwd := asString(req["pwd"])
@@ -515,7 +525,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	{
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "node:create")
 		defer finish()
 		if replayed {
 			return
@@ -1118,6 +1128,16 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "tunnel:create")
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 	if err := validateTunnelConnectIPConstraints(req); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -2975,7 +2995,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	{
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, userID)
+		w, finish, replayed = h.idemBegin(w, r, userID, "forward:create")
 		defer finish()
 		if replayed {
 			return
@@ -4206,7 +4226,7 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 	{
 		var finish func()
 		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "speed-limit:create")
 		defer finish()
 		if replayed {
 			return
@@ -4459,6 +4479,20 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		groupScope := "user-group:create"
+		if table == "tunnel_group" {
+			groupScope = "tunnel-group:create"
+		}
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), groupScope)
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 	name := asString(req["name"])
 	if name == "" {

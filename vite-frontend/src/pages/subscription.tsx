@@ -6,6 +6,7 @@ import type {
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -1246,17 +1247,24 @@ export default function SubscriptionPage() {
     else toast.success(ok);
   };
 
+  // R2X-004：订阅新建表单幂等键（同表单复用、成功轮换；更新不带键）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   const save = async () => {
     if (!draft) return;
     setSaving(true);
     try {
-      const res = await saveSubscription(toPayload(draft));
+      const res = await saveSubscription(
+        toPayload(draft),
+        draft.id ? undefined : idemKey,
+      );
 
       if (res.code !== 0) {
         toast.error(res.msg || "保存失败");
 
         return;
       }
+      if (!draft.id) rotateIdemKey();
       showResult(
         res.msg,
         draft.id ? "已保存" : "已创建，复制链接导入客户端即可",

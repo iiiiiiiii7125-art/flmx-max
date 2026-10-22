@@ -58,6 +58,12 @@ interface RequestOptions {
    * 在途请求，配合页面级 in-flight/序号守卫防止旧响应覆盖新状态。
    */
   signal?: AbortSignal;
+  /**
+   * R2X-004：创建表单的 Idempotency-Key（由 useIdemKey() 在表单层生成
+   * 并复用）。Network 只透传请求头，禁止在此逐请求生成——每次新键
+   * 会让后端幂等机制失效。
+   */
+  idemKey?: string;
 }
 
 // 处理token失效的逻辑
@@ -195,6 +201,9 @@ const Network = {
           headers: {
             Authorization: getToken(),
             "Content-Type": "application/json",
+            ...(options.idemKey
+              ? { "Idempotency-Key": options.idemKey }
+              : {}),
           },
         })
         .then(function (response: AxiosResponse<ApiResponse<T>>) {

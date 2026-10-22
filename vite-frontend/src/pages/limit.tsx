@@ -32,6 +32,7 @@ import {
 } from "@/api";
 import { PageLoadingState } from "@/components/page-state";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useIdemKey } from "@/hooks/useIdemKey";
 
 interface SpeedLimitRule {
   id: number;
@@ -188,6 +189,9 @@ export default function LimitPage({
     }
   };
 
+  // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
   // 提交表单
   const handleSubmit = async () => {
     if (!validateForm()) return;
@@ -211,10 +215,11 @@ export default function LimitPage({
           status: payload.status,
         };
 
-        res = await createSpeedLimit(createData);
+        res = await createSpeedLimit(createData, idemKey);
       }
 
       if (res.code === 0) {
+        if (!isEdit) rotateIdemKey();
         toast.success(isEdit ? "修改成功" : "创建成功");
         setModalOpen(false);
         loadData();

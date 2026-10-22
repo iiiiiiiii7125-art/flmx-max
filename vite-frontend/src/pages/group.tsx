@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useIdemKey } from "@/hooks/useIdemKey";
 import toast from "react-hot-toast";
 
 import { PageShell } from "@/components/page-kit";
@@ -309,6 +310,10 @@ export default function GroupPage({
     onUserGroupModalOpen();
   };
 
+  // R2X-004：两类分组创建表单各一把幂等键（同表单复用、成功轮换）。
+  const tunnelGroupIdem = useIdemKey();
+  const userGroupIdem = useIdemKey();
+
   const saveTunnelGroup = async () => {
     if (!groupName.trim()) {
       toast.error("请输入分组名称");
@@ -320,9 +325,10 @@ export default function GroupPage({
       const payload = { name: groupName.trim(), status: Number(groupStatus) };
       const res = editingTunnelGroup
         ? await updateTunnelGroup({ id: editingTunnelGroup.id, ...payload })
-        : await createTunnelGroup(payload);
+        : await createTunnelGroup(payload, tunnelGroupIdem.idemKey);
 
       if (res.code === 0) {
+        if (!editingTunnelGroup) tunnelGroupIdem.rotateIdemKey();
         toast.success(editingTunnelGroup ? "更新成功" : "创建成功");
         onTunnelGroupModalClose();
         loadData();
@@ -347,9 +353,10 @@ export default function GroupPage({
       const payload = { name: groupName.trim(), status: Number(groupStatus) };
       const res = editingUserGroup
         ? await updateUserGroup({ id: editingUserGroup.id, ...payload })
-        : await createUserGroup(payload);
+        : await createUserGroup(payload, userGroupIdem.idemKey);
 
       if (res.code === 0) {
+        if (!editingUserGroup) userGroupIdem.rotateIdemKey();
         toast.success(editingUserGroup ? "更新成功" : "创建成功");
         onUserGroupModalClose();
         loadData();

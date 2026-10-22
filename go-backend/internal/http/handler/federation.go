@@ -524,6 +524,17 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("Invalid JSON"))
 		return
 	}
+	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "federation-share:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
+
 
 	if req.Name == "" || req.NodeID == 0 {
 		response.WriteJSON(w, response.ErrDefault("Name and NodeID are required"))

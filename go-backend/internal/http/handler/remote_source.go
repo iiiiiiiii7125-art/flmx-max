@@ -345,6 +345,17 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误或文件超过 5MB"))
 		return
 	}
+	// R2X-004：仅 ID==0 新建分支接入 Idempotency-Key（机制见
+	// idempotency.go；ID>0 为按 ID 定位的更新，不参与回放）。
+	if req.ID == 0 {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "remote-source:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.URL = strings.TrimSpace(req.URL)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
