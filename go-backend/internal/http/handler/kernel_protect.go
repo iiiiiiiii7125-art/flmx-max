@@ -176,6 +176,62 @@ func (h *Handler) syncRelayProxyProtocol(row model.NodeInbound) []string {
 	return problems
 }
 
+// inboundIDsForForward returns the inbounds relayed through a forward
+// (X-P2-3 收集逻辑：forwardID → NodeInboundRelay.InboundID)。
+func (h *Handler) inboundIDsForForward(forwardID int64) []int64 {
+	rels, err := h.repo.ListNodeInboundRelays()
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	seen := make(map[int64]struct{})
+	for _, rel := range rels {
+		if rel.ForwardID != forwardID {
+			continue
+		}
+		if _, ok := seen[rel.InboundID]; ok {
+			continue
+		}
+		seen[rel.InboundID] = struct{}{}
+		out = append(out, rel.InboundID)
+	}
+	return out
+}
+
+// inboundIDsForTunnel returns the inbounds relayed through any forward of
+// a tunnel（隧道名下转发 → NodeInboundRelay → inboundID，与 tunnelDelete
+// 的 O3-001 收集逻辑同一口径）。
+func (h *Handler) inboundIDsForTunnel(tunnelID int64) []int64 {
+	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	seen := make(map[int64]struct{})
+	for _, fwd := range forwards {
+		for _, inboundID := range h.inboundIDsForForward(fwd.ID) {
+			if _, ok := seen[inboundID]; ok {
+				continue
+			}
+			seen[inboundID] = struct{}{}
+			out = append(out, inboundID)
+		}
+	}
+	return out
+}
+
+// refreshInboundWhitelists refreshes each affected inbound once.
+func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) {
+	seen := make(map[int64]struct{}, len(inboundIDs))
+	for _, inboundID := range inboundIDs {
+		if _, ok := seen[inboundID]; ok {
+			continue
+		}
+		seen[inboundID] = struct{}{}
+		h.refreshInboundWhitelist(inboundID)
+	}
+}
+
 // refreshInboundWhitelist re-applies the kernel when the relay set of a
 // whitelisted inbound changed, so the allowed sources follow the relays.
 func (h *Handler) refreshInboundWhitelist(inboundID int64) {
