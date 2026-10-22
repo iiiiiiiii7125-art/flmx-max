@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log"
+	"math"
 	"strings"
 
 	"go-backend/internal/store/repo"
@@ -64,7 +65,13 @@ func (h *Handler) buildNodeFlowUploadBatch(nodeID int64, items []flowItem, metas
 		if strings.HasPrefix(name, "peer-share-") {
 			shareID, _, ok := parsePeerShareServiceName(name)
 			if ok && resourceOwners[name] == shareID && item.U >= 0 && item.D >= 0 {
-				sharedUsage[shareID] += item.U + item.D
+				// X-P3-18（L-05-1）：U+D 与累计溢出整条丢弃（对齐
+				// buildFlowUploadBatch 口径），不得回绕为负后落账。
+				if item.U > math.MaxInt64-item.D || sharedUsage[shareID] > math.MaxInt64-(item.U+item.D) {
+					log.Printf("gost overflow discard peer-share service=%s u=%d d=%d", name, item.U, item.D)
+				} else {
+					sharedUsage[shareID] += item.U + item.D
+				}
 			}
 			// Unknown or confirmed-deleted scoped names must never become local IDs.
 			continue
