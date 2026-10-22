@@ -25,7 +25,7 @@
 | Loon | Loon 节点 | `loon://` | ✗ |
 | Quantumult X | QX 节点 | `quantumult-x://` | ✗ |
 | Surge | Surge 配置 | `surge://` | ✓ |
-| Stash | Clash 配置 | `stash://` | ✓ |
+| Stash | Stash 配置（Clash 档案，规则集为 YAML） | `stash://` | ✓ |
 | 通用 | Base64 分享链接（v2rayN、NekoBox 等） | 仅复制 | ✗ |
 
 - 客户端不支持的协议会自动略过，例如 Loon 没有 TUIC，Quantumult X 没有 Hysteria2 / TUIC，Surge 没有 VLESS
@@ -140,6 +140,7 @@ proxies:
 | 客户端 | 开启规则后的输出 |
 |--------|------------------|
 | Clash / Mihomo | 配置含策略组（`proxy-groups`）和规则（`rules`） |
+| Stash | 配置含策略组和规则（规则集为 YAML 格式，不含 Mihomo 的 DNS / 嗅探设置段） |
 | sing-box | 配置含路由规则和规则集 |
 | Surge | 配置含自动选择策略组与规则，输出完整配置 |
 | Loon / Quantumult X / Shadowrocket | 输出**完整配置**（含策略组、规则、DNS），而不是纯节点列表 |

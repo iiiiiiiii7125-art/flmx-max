@@ -12,9 +12,11 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-// X-P3-2（B-F2）：拉取侧 format=stash 映射 FormatClash（Stash 读 Clash
-// 档案），计数侧 nodeCountFormat 此前不识别 stash、回落 base64——同一
-// 订阅在 list 里的 NodeCount 与 Stash 实际拉到的节点数不一致。
+// X-P3-2（B-F2）：计数侧 nodeCountFormat 此前不识别 stash、回落
+// base64——同一订阅在 list 里的 NodeCount 与 Stash 实际拉到的节点数
+// 不一致。1.4.0（DA-7）起 stash 是一等格式 FormatStash（渲染面与
+// Clash 同门控、仅规则集序列化不同），本断言的口径随之更新为：
+// stash 计数必须与 stash 实得（= Clash 家族携带面）恒等。
 // 夹具含 NaïveProxy 入站：Clash 无 Naïve 客户端（计数 0）、base64 有
 // 分享链接（计数 1），两口径必然分叉，可钉住别名是否生效。
 func TestR1B7SubscriptionListNodeCountStashMatchesClash(t *testing.T) {
