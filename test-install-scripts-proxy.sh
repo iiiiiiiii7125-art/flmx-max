@@ -113,7 +113,13 @@ EOF
 
   check_and_install_tcpkill() { :; }
 
+  # X-P2-11: 判活改双采样后 systemctl 桩须能答 MainPID（恒定非 0），
+  # 且 sleep 桩为空转（采样次数而非墙钟决定结果，套件不被 3+2 秒拖慢）。
+  sleep() { :; }
   systemctl() {
+    if [[ "$*" == *MainPID* ]]; then
+      echo 4242
+    fi
     return 0
   }
 
@@ -171,6 +177,159 @@ test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
 
   assert_equals "1" "$rc" "update_flux_agent should fail when the agent is not installed"
   assert_equals "0" "$ask_called" "update_flux_agent should not prompt for proxy config when the agent is missing"
+)
+
+# X-P2-11 (J-01): 双采样判活的四个关键场景（与 agent 侧
+# fix3_health_test 同口径）：PID 稳定才活、第二次采样已死不活、
+# 两次 PID 不一致不活、PID 为 0/空不活。采样间隔 sleep 桩为空转，
+# 结果由桩的调用计数决定。
+test_flux_agent_health_ok_requires_stable_pid() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  local state_dir
+  state_dir=$(mktemp -d)
+  printf '4242\n4242\n' > "$state_dir/pids"
+  echo 0 > "$state_dir/pid_idx"
+  echo 0 > "$state_dir/active_cnt"
+  local maxok=99
+  STATE_DIR="$state_dir"
+  MAXOK_FILE="$state_dir/maxok"
+  echo 99 > "$MAXOK_FILE"
+
+  sleep() { :; }
+  flux_agent_main_pid() {
+    local n
+    n=$(cat "$STATE_DIR/pid_idx"); n=$((n+1)); echo "$n" > "$STATE_DIR/pid_idx"
+    sed -n "${n}p" "$STATE_DIR/pids"
+  }
+  flux_agent_service_is_active() {
+    local n maxok
+    n=$(cat "$STATE_DIR/active_cnt"); n=$((n+1)); echo "$n" > "$STATE_DIR/active_cnt"
+    maxok=$(cat "$MAXOK_FILE")
+    [[ "$n" -le "$maxok" ]]
+  }
+  reset_health_state() {
+    echo 0 > "$STATE_DIR/pid_idx"
+    echo 0 > "$STATE_DIR/active_cnt"
+  }
+
+  reset_health_state; echo 99 > "$MAXOK_FILE"
+  flux_agent_health_ok || fail "X-P2-11: stable PID + always active should be healthy"
+
+  # 第二次采样时已死（flap 形态）
+  reset_health_state; echo 1 > "$MAXOK_FILE"
+  if flux_agent_health_ok; then
+    fail "X-P2-11: service dead at second sample must not be healthy"
+  fi
+
+  # 两次 PID 不一致（期间已重启）
+  reset_health_state; echo 99 > "$MAXOK_FILE"
+  printf '1111\n2222\n' > "$STATE_DIR/pids"
+  if flux_agent_health_ok; then
+    fail "X-P2-11: PID changing between samples must not be healthy"
+  fi
+
+  # PID 为 0 / 空
+  printf '0\n0\n' > "$STATE_DIR/pids"
+  reset_health_state
+  if flux_agent_health_ok; then
+    fail "X-P2-11: PID 0 must not be healthy"
+  fi
+  : > "$STATE_DIR/pids"
+  reset_health_state
+  if flux_agent_health_ok; then
+    fail "X-P2-11: empty PID must not be healthy"
+  fi
+)
+
+# X-P2-11 (J-01): flap 二进制（-V 通过、启动后短时存活即倒下，
+# 此处以第二次 is-active 采样转失败模拟）走更新路径：必须判死、
+# 回滚到旧二进制且回滚后服务 active；.bak 已被回滚消费。
+# 正常二进制更新成功为防过修对照（见
+# test_update_flux_agent_asks_for_proxy_config 的成功路径）。
+test_update_flux_agent_rolls_back_flapping_binary() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo "old good"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  echo good > "$state_dir/mode"
+  echo 0 > "$state_dir/active_cnt"
+  STATE_DIR="$state_dir"
+
+  ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
+  ensure_download_url_initialized() {
+    RESOLVED_VERSION="1.3.5"
+    DOWNLOAD_URL="https://example.com/gost"
+  }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  sleep() { :; }
+  systemctl() {
+    case "$1" in
+      start)
+        echo 0 > "$STATE_DIR/active_cnt"
+        if grep -q FLAP_MARKER "$INSTALL_DIR/flux_agent"; then
+          echo flap > "$STATE_DIR/mode"
+        else
+          echo good > "$STATE_DIR/mode"
+        fi
+        return 0 ;;
+      show)
+        echo 4242; return 0 ;;
+      is-active)
+        if [[ "$(cat "$STATE_DIR/mode")" == "flap" ]]; then
+          local n
+          n=$(cat "$STATE_DIR/active_cnt"); n=$((n+1)); echo "$n" > "$STATE_DIR/active_cnt"
+          [[ "$n" -le 1 ]]
+          return $?
+        fi
+        return 0 ;;
+      list-units)
+        echo "flux_agent.service loaded active running"; return 0 ;;
+      *) return 0 ;;
+    esac
+  }
+  curl() {
+    local output="" url="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then output="$a"; fi
+      case "$a" in http*) url="$a";; esac
+      prev="$a"
+    done
+    local body='#!/bin/bash
+# FLAP_MARKER
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.5 (go1.25 linux/amd64)"; exit 0; fi
+sleep 4; exit 1'
+    if [[ "$url" == *.sha256 ]]; then
+      printf '%s\n' "$body" | sha256sum | awk '{print $1"  gost"}' > "$output"
+      return 0
+    fi
+    printf '%s\n' "$body" > "$output"; chmod +x "$output"
+  }
+
+  local rc="0"
+  update_flux_agent >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "X-P2-11: flapping binary update should fail and roll back"
+  grep -q "old good" "$INSTALL_DIR/flux_agent" || \
+    fail "X-P2-11: rollback should restore the old binary"
+  [[ ! -f "$INSTALL_DIR/flux_agent.bak" ]] || \
+    fail "X-P2-11: rollback should consume the .bak backup"
+  flux_agent_service_is_active || \
+    fail "X-P2-11: service should be active after rollback"
 )
 
 test_install_flux_agent_preserves_legacy_gost_when_download_fails() (
@@ -1227,6 +1386,8 @@ test_install_script_asks_for_proxy_config
 test_install_script_recomputes_download_url_after_prompt
 test_update_flux_agent_asks_for_proxy_config
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
+test_flux_agent_health_ok_requires_stable_pid
+test_update_flux_agent_rolls_back_flapping_binary
 test_install_flux_agent_preserves_legacy_gost_when_download_fails
 test_update_flux_agent_preserves_legacy_gost_when_download_fails
 test_install_flux_agent_writes_json_safe_config

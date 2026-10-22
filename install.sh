@@ -56,6 +56,8 @@ get_architecture() {
 INSTALL_DIR="/etc/flux_agent"
 FLUX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flux_agent.service"
 FLUX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flux_agent"
+# OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flux_agent。
+FLUX_AGENT_OPENRC_PIDFILE="${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}"
 LEGACY_GOST_BINARY="/usr/local/bin/gost"
 LEGACY_GOST_CONFIG_DIR="/etc/gost"
 LEGACY_GOST_SERVICE_FILE_ETC="/etc/systemd/system/gost.service"
@@ -559,6 +561,42 @@ flux_agent_service_status() {
   esac
 }
 
+flux_agent_main_pid() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl show -p MainPID --value flux_agent 2>/dev/null
+      ;;
+    openrc)
+      cat "${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}" 2>/dev/null
+      ;;
+  esac
+}
+
+# X-P2-11 (J-01): 与 agent 侧 flmx_agent_health_ok
+# （go-gost/x/socket/websocket_reporter.go）同规则的双采样判活：
+# 间隔 2 秒两次采样，每次都必须 is-active，且主 PID（systemd
+# MainPID / OpenRC pidfile PID）非空、非 0、两次一致。单次采样会
+# 把存活数秒后倒下的 flap 二进制在存活窗口内误判为活（见 R4-N2）。
+flux_agent_health_ok() {
+  ensure_service_manager || return 1
+
+  local p1 p2
+  p1=$(flux_agent_main_pid) || p1=""
+  p1=$(printf '%s' "$p1" | tr -d '[:space:]')
+  if ! flux_agent_service_is_active; then
+    return 1
+  fi
+  sleep 2
+  p2=$(flux_agent_main_pid) || p2=""
+  p2=$(printf '%s' "$p2" | tr -d '[:space:]')
+  if ! flux_agent_service_is_active; then
+    return 1
+  fi
+  [[ -n "$p1" && "$p1" != "0" && "$p1" == "$p2" ]]
+}
+
 remove_flux_agent_service() {
   ensure_service_manager || return 1
 
@@ -806,9 +844,14 @@ update_flux_agent() {
   echo "🔄 重启服务..."
   start_flux_agent_service
 
-  # 回滚检查：新版本服务起不来则恢复备份
-  sleep 2
-  if ! flux_agent_service_is_active; then
+  # 回滚检查：新版本服务起不来则恢复备份。
+  # X-P2-11 (J-01): 与 agent 侧升级脚本同口径——先等待 3 秒让
+  # flap 形态（二进制启动后数秒才倒下）越过最初的存活窗口，再走
+  # flux_agent_health_ok 双采样（间隔 2 秒、PID 稳定，采样点约在
+  # 启动后 3 秒与 5 秒）。旧实现 sleep 2 后单次 is-active 恰会命中
+  # flap 窗口、误判成功并删掉 .bak 回滚源。
+  sleep 3
+  if ! flux_agent_health_ok; then
     echo "❌ 新版本服务启动失败，正在回滚到备份版本..."
     rollback_flux_agent
     return 1
