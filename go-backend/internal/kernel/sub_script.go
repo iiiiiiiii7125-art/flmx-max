@@ -1,9 +1,12 @@
 package kernel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -47,6 +50,29 @@ func scriptNode(i int, e Endpoint) map[string]interface{} {
 	}
 }
 
+// subScriptPrograms caches compiled scripts by content hash (R2X-024):
+// a goja.Program is safe to run on any VM, so one compilation serves
+// every request; the VM itself is still created per request (a goja
+// Runtime is not thread-safe and must not be shared). Compile failures
+// are not cached.
+var subScriptPrograms sync.Map // map[string]*goja.Program, key = sha256 hex of the script
+
+// compileSubScript returns the cached program for script, compiling and
+// caching it on first use. ValidateSubScript and ApplySubScript share it.
+func compileSubScript(script string) (*goja.Program, error) {
+	sum := sha256.Sum256([]byte(script))
+	key := hex.EncodeToString(sum[:])
+	if v, ok := subScriptPrograms.Load(key); ok {
+		return v.(*goja.Program), nil
+	}
+	prog, err := goja.Compile("script.js", script, false)
+	if err != nil {
+		return nil, err
+	}
+	subScriptPrograms.Store(key, prog)
+	return prog, nil
+}
+
 // ValidateSubScript 检查脚本能否编译。
 func ValidateSubScript(script string) error {
 	if strings.TrimSpace(script) == "" {
@@ -57,7 +83,7 @@ func ValidateSubScript(script string) error {
 	if utf8.RuneCountInString(script) > MaxScriptLength {
 		return fmt.Errorf("脚本最多 %d 个字符", MaxScriptLength)
 	}
-	if _, err := goja.Compile("script.js", script, false); err != nil {
+	if _, err := compileSubScript(script); err != nil {
 		return fmt.Errorf("脚本语法错误：%v", err)
 	}
 	return nil
@@ -72,6 +98,12 @@ func ApplySubScript(endpoints []Endpoint, script string) ([]Endpoint, error) {
 	if err := ValidateSubScript(script); err != nil {
 		return nil, err
 	}
+	// R2X-024：执行走缓存的编译产物（RunProgram），不再 RunString
+	// 二次编译；Validate 已把该脚本的 Program 放进缓存，此处必命中。
+	prog, err := compileSubScript(script)
+	if err != nil {
+		return nil, fmt.Errorf("脚本语法错误：%v", err)
+	}
 	vm := goja.New()
 	timer := time.AfterFunc(scriptTimeout, func() { vm.Interrupt("timeout") })
 	defer timer.Stop()
@@ -80,7 +112,7 @@ func ApplySubScript(endpoints []Endpoint, script string) ([]Endpoint, error) {
 	_ = console.Set("log", func(goja.FunctionCall) goja.Value { return goja.Undefined() })
 	_ = vm.Set("console", console)
 
-	if _, err := vm.RunString(script); err != nil {
+	if _, err := vm.RunProgram(prog); err != nil {
 		return nil, scriptError(err)
 	}
 	operator, ok := goja.AssertFunction(vm.Get("operator"))
