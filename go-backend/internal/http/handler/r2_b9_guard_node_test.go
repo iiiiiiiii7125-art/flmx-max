@@ -36,7 +36,12 @@ func TestR2B9KernelChainGuardCountsSameNameReferrersByID(t *testing.T) {
 	_ = seedChainInbound(t, r, kernelB, "same-name", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 8444,
 		Security: kernel.Security{Type: kernel.SecurityNone}}, target.ID)
 
-	names, msg := h.kernelChainGuard(landingBox.ID)
+	// R3X-015 连带签名适配（断言不变）：kernelChainGuard /
+	// chainInUseMessage 现回传守卫查询错误，健康库上必须为 nil。
+	names, msg, gerr := h.kernelChainGuard(landingBox.ID)
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
 	if len(names) != 2 {
 		t.Fatalf("R2X-029: same-name referrers on two nodes must count 2, got %v (msg=%q)", names, msg)
 	}
@@ -78,12 +83,15 @@ func TestR2B9KernelChainGuardCountsDualPathReferrerOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	names, _ := h.kernelChainGuard(landingBox.ID)
+	names, _, gerr := h.kernelChainGuard(landingBox.ID)
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
 	if len(names) != 1 || names[0] != "dual-ref（front）" {
 		t.Fatalf("R2X-029: a dual-path referrer must count once, got %v", names)
 	}
-	if msg := h.chainInUseMessage(target1); !strings.Contains(msg, "dual-ref（front）") {
-		t.Fatalf("R2X-029: chainInUseMessage must disambiguate with node name, got %q", msg)
+	if msg, gerr := h.chainInUseMessage(target1); gerr != nil || !strings.Contains(msg, "dual-ref（front）") {
+		t.Fatalf("R2X-029: chainInUseMessage must disambiguate with node name, got %q %v", msg, gerr)
 	}
 }
 

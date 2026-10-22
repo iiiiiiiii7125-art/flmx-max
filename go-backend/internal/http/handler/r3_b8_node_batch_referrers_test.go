@@ -61,8 +61,13 @@ func TestR3B8NodeBatchDeleteCountsSameNameReferrersByID(t *testing.T) {
 		Security: kernel.Security{Type: kernel.SecurityNone}}, target.ID)
 
 	// 单删口径基线：nodeCrossReferrers 本身按 ID 回传 2 条。
-	if got := h.nodeCrossReferrers(landing); len(got) != 2 {
-		t.Fatalf("single-delete source list must carry 2 referrers, got %v", got)
+	// 集成合并连带适配（批8×批9）：R3X-015 后签名加 error 返回，断言不变。
+	gotRefs, gotErr := h.nodeCrossReferrers(landing)
+	if gotErr != nil {
+		t.Fatalf("nodeCrossReferrers error: %v", gotErr)
+	}
+	if len(gotRefs) != 2 {
+		t.Fatalf("single-delete source list must carry 2 referrers, got %v", gotRefs)
 	}
 
 	env := r3b8BatchDelete(t, h, []int64{landing})

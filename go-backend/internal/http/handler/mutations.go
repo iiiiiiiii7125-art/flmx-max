@@ -810,7 +810,13 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		addrChanged = true
 	}
 	if addrChanged {
-		h.refreshInboundWhitelists(h.inboundIDsDialedByNode(id))
+		// R3X-015：拨号入站集查询失败不得静默当空集跳过刷新——记
+		// 错留痕（更新本身已落库，此面为刷新面而非删除守卫）。
+		if dialedIDs, derr := h.inboundIDsDialedByNode(id); derr != nil {
+			log.Printf("node update: dialed-inbound lookup failed node_id=%d err=%v (whitelist refresh skipped)", id, derr)
+		} else {
+			h.refreshInboundWhitelists(dialedIDs)
+		}
 		if nodeInbounds, err := h.repo.ListNodeInboundsByNode(id); err == nil {
 			for _, inbound := range nodeInbounds {
 				for _, warning := range h.resyncManagedRelayRemoteAddrsForInbound(inbound.ID) {
@@ -6561,8 +6567,20 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 	// 删后统一刷新；单删与 nodeBatchDelete 共用本 funnel 同步受益。
 	var affectedInboundIDs []int64
 	if h != nil && h.repo != nil {
-		brokenReferrers = h.nodeCrossReferrers(id)
-		affectedInboundIDs = h.inboundIDsAffectedByNodeDelete(id)
+		// R3X-015：跨节点引用守卫查询失败 fail-closed——清单不可信
+		// 时中止删除并上抛（单删/批删/创建补偿三入口同受此约束），
+		// 不得记录日志后照删。
+		refs, guardErr := h.nodeCrossReferrers(id)
+		if guardErr != nil {
+			return nil, guardErr
+		}
+		brokenReferrers = refs
+		// 同 R3X-015 口径：受影响入站收集失败同样中止删除。
+		affected, collectErr := h.inboundIDsAffectedByNodeDelete(id)
+		if collectErr != nil {
+			return nil, collectErr
+		}
+		affectedInboundIDs = affected
 	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
