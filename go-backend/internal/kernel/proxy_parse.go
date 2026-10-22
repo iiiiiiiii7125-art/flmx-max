@@ -119,6 +119,12 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 		// A5-07：与行格式同口径，缺省/为 0 时补默认版本 4，否则再导出
 		// 时整键缺失、客户端缺省语义不明（clashSnell 对自建入站亦有
 		// version==0 兜底）。
+		// R2X-002：域外版本（<0 或 >6）拒绝导入作防御纵深——保留
+		// 0→4 缺省与 1–6 落库（v1–v3 在 Clash/Surge 合法可用，不得在
+		// 导入期拒；sing-box 渲染侧另按白名单略过，见 proxySingbox）。
+		if v := p.num("version"); v < 0 || v > 6 {
+			return ImportedNode{}, errors.New("Snell 版本不正确（只支持 1–6）")
+		}
 		if p.num("version") == 0 {
 			p["version"] = 4
 		}
@@ -715,6 +721,11 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		if v := o.num("version"); v != 0 {
 			p["version"] = v
 		}
+		// R2X-023：mode 是 v6 的流量整形字段，仅 v6 且值为 unshaped
+		// 时保留（与 model 校验同域），否则往返中静默丢失。
+		if o.num("version") == 6 && o.str("mode") == SnellModeUnshaped {
+			p["mode"] = SnellModeUnshaped
+		}
 		if detour := byTag[o.str("detour")]; detour.str("type") == "shadowtls" {
 			if _, present, exact := detour.exactInt("server_port"); present && !exact {
 				return nil, errors.New("server_port 不是整数")
@@ -842,6 +853,10 @@ func parseSurgeLine(line string) (Proxy, error) {
 		p["psk"] = kv.str("psk")
 		p["version"] = firstNonEmptyString(kv.str("version"), "4")
 		p["version"] = Proxy{"v": p["version"]}.num("v")
+		// R2X-023：同 singboxToProxy 口径，v6 + unshaped 才保留 mode。
+		if p.num("version") == 6 && kv.str("mode") == SnellModeUnshaped {
+			p["mode"] = SnellModeUnshaped
+		}
 		if obfs := kv.str("obfs"); obfs != "" {
 			oo := Proxy{"mode": obfs}
 			oo.set("host", kv.str("obfs-host"))
