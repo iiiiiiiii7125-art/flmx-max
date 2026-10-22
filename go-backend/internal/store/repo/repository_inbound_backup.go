@@ -15,15 +15,21 @@ import (
 // (kernel.ValidateImportHost) to a share host coming back from a backup:
 // a malformed value is cleared — the row then resolves by its mode/node
 // address — instead of being restored verbatim (F-A-01/C-01). Callers
-// count the clears and disclose them in the import warnings.
+// count the clears and disclose them in the import warnings. A value
+// whose only flaw is a single trailing dot (the FQDN root dot) is
+// restored in normalized form instead of being cleared (B2-01).
 func sanitizeBackupShareHost(host string) (string, bool) {
 	if host == "" {
 		return host, true
 	}
-	if kernel.ValidateImportHost(strings.Trim(strings.TrimSpace(host), "[]")) != nil {
-		return "", false
+	core := strings.Trim(strings.TrimSpace(host), "[]")
+	if kernel.ValidateImportHost(core) == nil {
+		return host, true
 	}
-	return host, true
+	if stripped := strings.TrimSuffix(core, "."); stripped != core && kernel.ValidateImportHost(stripped) == nil {
+		return stripped, true
+	}
+	return "", false
 }
 
 func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {

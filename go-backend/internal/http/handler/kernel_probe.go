@@ -242,8 +242,11 @@ func probeErrorText(err error) string {
 }
 
 // probeExternalInbounds checks the given imported nodes (all of them when
-// ids is empty) in parallel and records the results.
-func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[int64]externalProbe, error) {
+// ids is empty) in parallel and records the results. The round kind
+// (see probeNodeLatency) declares the recording semantics: only a
+// scheduled round replaces the whole cache and drives the
+// inbound_down alert streak.
+func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64, round probeRoundKind) (map[int64]externalProbe, error) {
 	started := time.Now().UnixNano()
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
@@ -284,12 +287,14 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	h.externalProbes.replaceRound(results, len(ids) == 0, started)
+	h.externalProbes.replaceRound(results, round.fullReplace(), started)
 
-	// DB-4（移植自 kure29/flyx 3.3.33）：定向探测（手动检测/节点重连
-	// 重测，ids 非空）只刷新缓存，不计入 inbound_down 告警 streak；
-	// streak 与跃迁通知只由定时全量轮驱动（track 段）。
-	if len(ids) > 0 {
+	// DB-4（移植自 kure29/flyx 3.3.33）：非定时轮（手动检测/节点重连
+	// 重测/人工全量）只刷新缓存，不计入 inbound_down 告警 streak；
+	// streak 与跃迁通知只由定时轮（probeRoundScheduled）驱动
+	// （track 段）。轮次语义由 round 显式声明，不再由 len(ids)
+	// 推断（R2-α-01/02）。
+	if !round.countsStreak() {
 		return results, nil
 	}
 
@@ -342,10 +347,10 @@ func (h *Handler) runExternalProbeLoop(ctx context.Context) {
 	ticker := time.NewTicker(externalProbeInterval)
 	defer ticker.Stop()
 	for {
-		if _, err := h.probeExternalInbounds(ctx, nil); err != nil && ctx.Err() == nil {
+		if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil && ctx.Err() == nil {
 			log.Printf("imported node probe failed: %v", err)
 		}
-		if _, err := h.probeNodeLatency(ctx, nil); err != nil && ctx.Err() == nil {
+		if _, err := h.probeNodeLatency(ctx, nil, probeRoundScheduled); err != nil && ctx.Err() == nil {
 			log.Printf("node latency probe failed: %v", err)
 		}
 		if _, err := h.probeRelayLatency(ctx, nil); err != nil && ctx.Err() == nil {
@@ -364,9 +369,9 @@ func (h *Handler) runExternalProbeLoop(ctx context.Context) {
 
 // inboundProbe checks imported nodes now: the given ids, or all of them.
 // A manual "check all" expands to the explicit id list server-side (the
-// nodeLatencyProbe pattern): probeExternalInbounds treats an empty ids
-// as a scheduled round and counts inbound_down streaks, which a click
-// must never drive — neither raising nor clearing them (DB-4, R1-B-01).
+// nodeLatencyProbe pattern) and runs as a targeted round: a click must
+// never drive inbound_down streaks — neither raising nor clearing
+// them (DB-4, R1-B-01).
 func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -392,7 +397,7 @@ func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	results, err := h.probeExternalInbounds(r.Context(), ids)
+	results, err := h.probeExternalInbounds(r.Context(), ids, probeRoundTargeted)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

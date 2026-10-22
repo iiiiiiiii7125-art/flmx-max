@@ -93,7 +93,7 @@ func TestProbeNodeLatencyMeasuresOnlineLocalNodes(t *testing.T) {
 		}
 	})
 
-	results, err := h.probeNodeLatency(context.Background(), nil)
+	results, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled)
 	if err != nil {
 		t.Fatal(err)
 	}

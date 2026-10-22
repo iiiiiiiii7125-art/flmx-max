@@ -80,7 +80,7 @@ func TestTargetedExternalProbeDoesNotCountStreak(t *testing.T) {
 		t.Fatalf("create inbound: %v", err)
 	}
 	for i := 0; i < notifyInboundDownStreak+1; i++ {
-		if _, err := h.probeExternalInbounds(ctx, []int64{row.ID}); err != nil {
+		if _, err := h.probeExternalInbounds(ctx, []int64{row.ID}, probeRoundTargeted); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -95,7 +95,7 @@ func TestTargetedExternalProbeDoesNotCountStreak(t *testing.T) {
 		t.Fatalf("targeted probes touched alert streak: streak=%d down=%v", streak, down)
 	}
 	for i := 0; i < notifyInboundDownStreak; i++ {
-		if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+		if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 			t.Fatal(err)
 		}
 	}

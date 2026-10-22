@@ -412,12 +412,12 @@ func TestR2B10InboundRecoveryFailureResendsOnce(t *testing.T) {
 		t.Fatalf("create inbound: %v", err)
 	}
 
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	_ = ln.Close()
 	for i := 0; i < notifyInboundDownStreak; i++ {
-		if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+		if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -429,7 +429,7 @@ func TestR2B10InboundRecoveryFailureResendsOnce(t *testing.T) {
 	}
 	defer ln2.Close()
 	wh.fail.Store(true)
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	if !waitB10(12*time.Second, func() bool {
@@ -444,14 +444,14 @@ func TestR2B10InboundRecoveryFailureResendsOnce(t *testing.T) {
 	}
 
 	wh.fail.Store(false)
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	wh.waitCount(t, 2, 3*time.Second)
 	if titles := wh.titles(); titles[1] != "导入节点已恢复" {
 		t.Fatalf("titles = %v", titles)
 	}
-	if _, err := h.probeExternalInbounds(ctx, nil); err != nil {
+	if _, err := h.probeExternalInbounds(ctx, nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)

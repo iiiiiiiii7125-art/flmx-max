@@ -675,7 +675,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault("名称不能为空且不超过 100 字"))
 		return
 	}
-	req.ShareHost = strings.TrimSpace(req.ShareHost)
+	req.ShareHost = normalizeShareHost(req.ShareHost)
 	if len(req.ShareHost) > 255 {
 		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
 		return

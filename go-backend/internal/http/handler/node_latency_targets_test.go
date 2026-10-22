@@ -173,7 +173,7 @@ func TestProbeNodeLatencyUsesEachNodesPoints(t *testing.T) {
 	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) {
 		return map[string]interface{}{"success": true, "averageTime": 10.0}, nil
 	})
-	results, err := h.probeNodeLatency(context.Background(), nil)
+	results, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled)
 	if err != nil {
 		t.Fatal(err)
 	}
