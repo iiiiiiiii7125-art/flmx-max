@@ -167,11 +167,14 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var assignments []repo.UserInboundAssignment
+	skippedRelays := 0
 	if len(raw.Assignments) > 0 {
 		for _, a := range raw.Assignments {
 			assignments = append(assignments, repo.UserInboundAssignment{InboundID: a.InboundID, RelayID: a.RelayID})
 		}
-		if err := h.repo.SetUserInboundAssignments(raw.UserID, assignments); err != nil {
+		var err error
+		skippedRelays, err = h.repo.SetUserInboundAssignmentsCounted(raw.UserID, assignments)
+		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -182,7 +185,16 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	response.WriteJSON(w, response.OK(true))
+	// R3X-022: assignments whose relay no longer exists (or does not
+	// belong to the inbound) are skipped by design and never persisted,
+	// but the receipt must say so — the skipped count always rides along
+	// and a warnings entry is added when it is non-zero, instead of an
+	// unqualified success.
+	receipt := map[string]interface{}{"skippedRelays": skippedRelays}
+	if skippedRelays > 0 {
+		receipt["warnings"] = []string{fmt.Sprintf("%d 条中转分配因中转不存在或不属于该入站已被跳过，未生效", skippedRelays)}
+	}
+	response.WriteJSON(w, response.OK(receipt))
 }
 
 type jsonAssignment struct {
