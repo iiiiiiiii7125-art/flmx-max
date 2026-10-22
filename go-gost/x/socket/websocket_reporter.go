@@ -1690,6 +1690,49 @@ func serviceManagerCommands(manager serviceManager) (stop, start, active string,
 	}
 }
 
+// serviceManagerPIDCommand returns the shell command printing the
+// service's main PID (empty output or 0 when not running). The OpenRC
+// path follows install.sh's init script, which pins
+// pidfile="/run/${RC_SVCNAME}.pid".
+func serviceManagerPIDCommand(manager serviceManager) (string, error) {
+	switch manager {
+	case serviceManagerSystemd:
+		return "systemctl show -p MainPID --value flux_agent", nil
+	case serviceManagerOpenRC:
+		return "cat /run/flux_agent.pid 2>/dev/null", nil
+	default:
+		return "", fmt.Errorf("不支持的服务管理器: %q", string(manager))
+	}
+}
+
+// agentHealthCheckFunctionFor renders a POSIX sh function
+// flmx_agent_health_ok implementing the R4-N2 liveness rule: sample
+// (is-active + main PID) twice, sampleGapSec apart; the service counts
+// as alive only if BOTH samples are active and the PID is non-empty,
+// non-zero and identical across samples. A single sample is not proof
+// of life: a binary that exits ~1s after start still shows active in
+// systemd's flap window, which previously made the upgrade script log
+// "restart ok" and skip the rollback while the service died for good
+// moments later.
+func agentHealthCheckFunctionFor(activeCmd, pidCmd string, sampleGapSec int) string {
+	return fmt.Sprintf("flmx_agent_health_ok() { p1=$(%s); if ! %s; then return 1; fi; sleep %d; p2=$(%s); if ! %s; then return 1; fi; [ -n \"$p1\" ] && [ \"$p1\" != \"0\" ] && [ \"$p1\" = \"$p2\" ]; }",
+		pidCmd, activeCmd, sampleGapSec, pidCmd, activeCmd)
+}
+
+// agentHealthCheckFunction resolves the manager's commands and renders
+// flmx_agent_health_ok with the production sampling gap.
+func agentHealthCheckFunction(manager serviceManager) (string, error) {
+	_, _, active, err := serviceManagerCommands(manager)
+	if err != nil {
+		return "", err
+	}
+	pidCmd, err := serviceManagerPIDCommand(manager)
+	if err != nil {
+		return "", err
+	}
+	return agentHealthCheckFunctionFor(active, pidCmd, 2), nil
+}
+
 // agentControlScriptCommand returns the detached launcher for a control
 // script. systemd runs it in a transient unit (systemd-run) so that
 // stopping flux_agent cannot kill the script via its own cgroup; OpenRC
@@ -1720,33 +1763,45 @@ func launchAgentControlScript(manager serviceManager, script string) error {
 // (A11-132-02). Progress is appended to agent-upgrade.log next to the
 // binary for post-mortem diagnosis.
 func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, backupPath string) (string, error) {
-	stop, start, active, err := serviceManagerCommands(manager)
+	stop, start, _, err := serviceManagerCommands(manager)
+	if err != nil {
+		return "", err
+	}
+	healthFn, err := agentHealthCheckFunction(manager)
 	if err != nil {
 		return "", err
 	}
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "exec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; sleep 1; %s; ", logPath, stop)
+	fmt.Fprintf(&b, "exec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s; sleep 1; %s; ", logPath, healthFn, stop)
 	if manager == serviceManagerSystemd {
 		// Legacy pre-FLMX gost cleanup (systemd units only).
 		b.WriteString("legacy_service='' && for service_file in /etc/systemd/system/gost.service /lib/systemd/system/gost.service /usr/lib/systemd/system/gost.service; do if [ -f \"$service_file\" ] && grep -Fq \"WorkingDirectory=/etc/gost\" \"$service_file\" && (grep -Fq \"ExecStart=/etc/gost/gost\" \"$service_file\" || (grep -Fq \"ExecStart=/usr/local/bin/gost\" \"$service_file\" && [ -f /etc/gost/config.json ] && [ -f /etc/gost/gost.json ])); then legacy_service=\"$service_file\"; break; fi; done; if [ -n \"$legacy_service\" ]; then (systemctl stop gost 2>/dev/null || true) && (systemctl disable gost 2>/dev/null || true) && rm -f /usr/local/bin/gost /etc/gost/gost \"$legacy_service\" && (systemctl daemon-reload 2>/dev/null || true); fi; ")
 	}
-	fmt.Fprintf(&b, "mv %s %s; %s; sleep 3; if ! %s; then echo 'new agent failed to start, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if %s; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; else echo 'agent upgrade restart ok'; fi",
-		tmpPath, binaryPath, start, active, backupPath, backupPath, binaryPath, start, active)
+	// R4-N2：判活走 flmx_agent_health_ok 的两次采样（PID 稳定），
+	// 不再单次 is-active 采样——flap 窗口内的假活会跳过自动回滚。
+	fmt.Fprintf(&b, "mv %s %s; %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi",
+		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start)
 	return b.String(), nil
 }
 
 // buildAgentRollbackScriptFor builds the manual rollback script with the
 // same init abstraction as the upgrade path.
 func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath string) (string, error) {
-	stop, start, active, err := serviceManagerCommands(manager)
+	stop, start, _, err := serviceManagerCommands(manager)
+	if err != nil {
+		return "", err
+	}
+	healthFn, err := agentHealthCheckFunction(manager)
 	if err != nil {
 		return "", err
 	}
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
-	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; sleep 1; %s; cp %s %s; %s; sleep 2; if %s; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi",
-		logPath, stop, backupPath, binaryPath, start, active), nil
+	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
+	// 在 flap 窗口内误报。
+	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi",
+		logPath, healthFn, stop, backupPath, binaryPath, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
