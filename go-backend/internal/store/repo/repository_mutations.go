@@ -813,77 +813,97 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// AUDIT-R1 (TST-001): 物化 ID 列表。原子查询在 Forward/UserTunnel 行删除后
-		// 即失效（子查询变空），而级联清理必须引用已删行的 ID，故先物化。
-		var forwardIDs []int64
-		if err := tx.Model(&model.Forward{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &forwardIDs).Error; err != nil {
-			return err
-		}
-		var userTunnelIDs []int64
-		if err := tx.Model(&model.UserTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &userTunnelIDs).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
-		// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
-		// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些 relay
-		// 的 user_inbound 授权行，避免孤儿授权残留。
-		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", forwardIDs)
-		if err != nil {
-			return err
-		}
-		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
-		// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致。
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.Forward{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
-		// user_tunnel_id 关联本隧道的用户隧道；在 UserTunnel 删除前清理。
-		if err := tx.Where("user_tunnel_id IN (?)", userTunnelIDs).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
-			return err
-		}
-		// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R18 (DAT18-002): 隧道质量探测历史（tunnel_id 索引）。
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
+		return deleteTunnelCascadeTx(tx, tunnelID)
 	})
+}
+
+// DeleteTunnelCascadeWithPeerRelease 在同一事务内完成隧道级联删除与
+// 联邦 runtime 释放标记。X-P3-23（L-09-5）：旧实现尾步
+// MarkPeerShareRuntimeReleasedByPort 在级联事务之外，失败时隧道已
+// 删、runtime 未释放且无回滚，只能靠后台收敛；现纳入主事务。
+func (r *Repository) DeleteTunnelCascadeWithPeerRelease(tunnelID, shareID int64, port int, updatedTime int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := deleteTunnelCascadeTx(tx, tunnelID); err != nil {
+			return err
+		}
+		return markPeerShareRuntimeReleasedByPortTx(tx, shareID, port, updatedTime)
+	})
+}
+
+func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
+	// AUDIT-R1 (TST-001): 物化 ID 列表。原子查询在 Forward/UserTunnel 行删除后
+	// 即失效（子查询变空），而级联清理必须引用已删行的 ID，故先物化。
+	var forwardIDs []int64
+	if err := tx.Model(&model.Forward{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &forwardIDs).Error; err != nil {
+		return err
+	}
+	var userTunnelIDs []int64
+	if err := tx.Model(&model.UserTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &userTunnelIDs).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
+	// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
+	// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些 relay
+	// 的 user_inbound 授权行，避免孤儿授权残留。
+	relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", forwardIDs)
+	if err != nil {
+		return err
+	}
+	if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
+	// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致。
+	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.Forward{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
+	// user_tunnel_id 关联本隧道的用户隧道；在 UserTunnel 删除前清理。
+	if err := tx.Where("user_tunnel_id IN (?)", userTunnelIDs).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
+		return err
+	}
+	// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
+		return err
+	}
+	// AUDIT-R18 (DAT18-002): 隧道质量探测历史（tunnel_id 索引）。
+	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
 }
 
 func (r *Repository) TunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {

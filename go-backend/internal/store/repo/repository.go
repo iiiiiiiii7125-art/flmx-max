@@ -2014,13 +2014,20 @@ func (r *Repository) MarkPeerShareRuntimeReleasedByPort(shareID int64, port int,
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	return markPeerShareRuntimeReleasedByPortTx(r.db, shareID, port, updatedTime)
+}
+
+func markPeerShareRuntimeReleasedByPortTx(tx *gorm.DB, shareID int64, port int, updatedTime int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
 	if shareID <= 0 || port <= 0 {
 		return nil
 	}
 	if updatedTime <= 0 {
 		updatedTime = unixMilliNow()
 	}
-	return r.db.Model(&model.PeerShareRuntime{}).Where("share_id = ? AND port = ? AND status = 1", shareID, port).Updates(map[string]interface{}{
+	return tx.Model(&model.PeerShareRuntime{}).Where("share_id = ? AND port = ? AND status = 1", shareID, port).Updates(map[string]interface{}{
 		"status":       0,
 		"applied":      0,
 		"service_name": "",
