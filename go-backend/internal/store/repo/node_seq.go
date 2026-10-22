@@ -107,7 +107,17 @@ func (r *Repository) CheckSeq(nodeID int64, seq *int64) (isReplay bool, isLegacy
 	return *seq <= row.LastSeq, false, nil
 }
 
+// ErrSeqReplay 是 R2X-011 的重放哨兵：入账事务内的 seq 推进
+// 未能推进（同 seq 已被另一并发入账消费）时返回，整 tx 随之
+// 回滚；handler 对该哨兵按重放分支回 ok 不入账，其余错误仍回
+// error。CheckSeq 是事务外只读校验，并发双发可同时通过——
+// 事务内的 RowsAffected 判定才是最终防线。
+var ErrSeqReplay = errors.New("flow upload seq replay")
+
 // advanceSeqTx 在给定事务内推进 seq（seq=nil 时计 legacy 次数）。
+// 非 legacy 分支必须恰有 1 行被插入/条件更新才算推进：插入未
+// 命中且条件更新 0 行说明 seq <= last_seq（已被并发入账推进），
+// 返回 ErrSeqReplay 使整 tx 回滚，杜绝 TOCTOU 双入账。
 func advanceSeqTx(tx *gorm.DB, nodeID int64, seq *int64, now int64) error {
 	if seq == nil {
 		return tx.Exec(`INSERT INTO node_seq (node_id, last_seq, legacy_count, updated_time)
@@ -123,9 +133,16 @@ func advanceSeqTx(tx *gorm.DB, nodeID int64, seq *int64, now int64) error {
 	if res.RowsAffected == 1 {
 		return nil
 	}
-	return tx.Model(&NodeSeq{}).
+	upd := tx.Model(&NodeSeq{}).
 		Where("node_id = ? AND last_seq < ?", nodeID, *seq).
-		Updates(map[string]interface{}{"last_seq": *seq, "updated_time": now}).Error
+		Updates(map[string]interface{}{"last_seq": *seq, "updated_time": now})
+	if upd.Error != nil {
+		return upd.Error
+	}
+	if upd.RowsAffected != 1 {
+		return ErrSeqReplay
+	}
+	return nil
 }
 
 // AdvanceSeq 在入账成功后推进 seq（独立事务版）。gost 入账主路径
