@@ -302,7 +302,7 @@ func TestForwardCreateRollbackWhenServiceDispatchReturnsAddressInUseContract(t *
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "addr-in-use-node", "addr-in-use-secret", "10.20.0.11", "10.20.0.11", "", "32100-32110", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
+	`, "addr-in-use-node", "addr-in-use-secret", "10.20.0.11", "10.20.0.11", "", "32100-32110", "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "addr-in-use-node")
@@ -319,6 +319,10 @@ func TestForwardCreateRollbackWhenServiceDispatchReturnsAddressInUseContract(t *
 		"addservice":    "listen tcp [::]:32101: bind: address already in use",
 	})
 	defer stopNode()
+	// R1-B10 deflake：同 DispatchFails 用例注——种子 status=0 +
+	// waitNodeStatus 作会话登记同步点；否则「节点不在线」会以相同
+	// 的失败+回滚表象冒充 address-in-use 分支（假绿）。
+	waitNodeStatus(t, r, nodeID, 1)
 
 	payload := map[string]interface{}{
 		"name":       "addr-in-use-forward",
