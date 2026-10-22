@@ -92,9 +92,10 @@ func decodeSS2022SegmentBytes(seg string, n int) ([]byte, bool) {
 //
 // Everything else is returned verbatim, by design:
 //   - legacy AEAD and unknown ciphers: no key format to normalize;
-//   - SIP023 colon-separated multi-segment passwords: the B2 verdict
-//     keeps them verbatim on the formats that carry them (and the
-//     sing-box renderer skips them before this matters);
+//   - SIP023 colon-separated multi-segment passwords: kept verbatim
+//     here; only the Clash / mihomo face normalizes them, segment by
+//     segment, via NormalizedSS2022PasswordSegments (binary-verified
+//     decoder behavior), and the sing-box renderer skips them;
 //   - undecodable stock garbage: each renderer's existing policy
 //     decides (the sing-box proxy renderer skips the node, the other
 //     formats emit it verbatim), never a new behavior invented here.
@@ -112,6 +113,41 @@ func NormalizedSS2022Password(method, password string) string {
 		return password
 	}
 	return base64.StdEncoding.EncodeToString(b)
+}
+
+// NormalizedSS2022PasswordSegments is NormalizedSS2022Password for the
+// Clash / mihomo rendering face only, extended to SIP023 multi-segment
+// passwords segment by segment. GATE-F1 binary evidence (official
+// mihomo v1.19.33 -t, sing-box 1.14.3 check): both clients split a
+// multi-segment password on ':' and decode every segment with the
+// padded Std decoder — Std segments pass, RawURL segments fail the
+// whole profile. Re-encoding each segment as padded Std therefore
+// preserves the decoded key bytes (the SIP023 semantics) exactly,
+// while the verbatim non-canonical segments poison the profile.
+// A password with any undecodable segment is returned verbatim (the
+// face's existing garbage policy), as is a single-segment password's
+// handling via NormalizedSS2022Password. Other faces keep multi-
+// segment passwords verbatim: their clients' segment decoders are
+// not binary-verified, and the sing-box face keeps skipping them.
+func NormalizedSS2022PasswordSegments(method, password string) string {
+	n := SS2022KeyLen(method)
+	if n == 0 {
+		return password
+	}
+	pw := strings.TrimSpace(password)
+	if !strings.Contains(pw, ":") {
+		return NormalizedSS2022Password(method, password)
+	}
+	segs := strings.Split(pw, ":")
+	out := make([]string, len(segs))
+	for i, seg := range segs {
+		b, ok := decodeSS2022SegmentBytes(seg, n)
+		if !ok {
+			return password
+		}
+		out[i] = base64.StdEncoding.EncodeToString(b)
+	}
+	return strings.Join(out, ":")
 }
 
 // ValidateSS2022Password checks a Shadowsocks password against the
