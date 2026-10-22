@@ -971,6 +971,39 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 	return h.repo.DeleteSubscriptionWithAssignments(s.ID)
 }
 
+// rotateSubscriptionCredentials is the one full reset rotation: new
+// token, new UUID/password for share subscriptions, persisted, then
+// pushed to the kernels. X-P3-13（L-03-2）：主路径 subscriptionReset
+// 与 legacy inboundSubInfo reset 共用此实现——legacy 此前只换 token、
+// 不下发，经它重置的旧配置其实仍有效；不另写第二套轮换。
+// Returns the inbound rows (for view rendering), a push error (the
+// rotation itself is already persisted; AppliedActive is parked at -1
+// so the sync loop retries the push), or a persistence error.
+func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []model.NodeInbound, applyErr error, err error) {
+	s.Token = randomHex(16)
+	if isShare(s) {
+		s.UUID, s.Password = newUUID(), randomHex(16)
+	}
+	s.UpdatedTime = time.Now().UnixMilli()
+	if err := h.repo.SaveSubscription(s); err != nil {
+		return nil, nil, err
+	}
+	rows, _ = h.repo.ListNodeInbounds()
+	var push []int64
+	if isShare(s) {
+		push = subInboundIDs(s, rows)
+	}
+	// AUDIT-R8 (R5R8-001): 凭据轮换后下发失败时，强制标记 AppliedActive=-1（需同步），
+	// 使 syncSubscriptions 循环的 active != AppliedActive 恒成立从而重试。
+	// 成功后恢复正常值。否则旧凭据永不失效（F7.14 承诺被违背）。
+	if err := h.applyKernelsForInbounds(push); err != nil {
+		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
+		return rows, err, nil
+	}
+	_ = h.repo.UpdateSubscriptionApplied(s.ID, boolToInt(isShare(s) && subActive(s, time.Now())))
+	return rows, nil, nil
+}
+
 // subscriptionReset issues a new link; a share subscription also gets new
 // credentials, so a leaked link or imported config stops working.
 func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
@@ -983,29 +1016,15 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
 		return
 	}
-	s.Token = randomHex(16)
-	if isShare(s) {
-		s.UUID, s.Password = newUUID(), randomHex(16)
-	}
-	s.UpdatedTime = time.Now().UnixMilli()
-	if err := h.repo.SaveSubscription(s); err != nil {
+	rows, applyErr, err := h.rotateSubscriptionCredentials(s)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	rows, _ := h.repo.ListNodeInbounds()
-	var push []int64
-	if isShare(s) {
-		push = subInboundIDs(s, rows)
-	}
-	// AUDIT-R8 (R5R8-001): 凭据轮换后下发失败时，强制标记 AppliedActive=-1（需同步），
-	// 使 syncSubscriptions 循环的 active != AppliedActive 恒成立从而重试。
-	// 成功后恢复正常值。否则旧凭据永不失效（F7.14 承诺被违背）。
-	if err := h.applyKernelsForInbounds(push); err != nil {
-		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
+	if applyErr != nil {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 		return
 	}
-	_ = h.repo.UpdateSubscriptionApplied(s.ID, boolToInt(isShare(s) && subActive(s, time.Now())))
 	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 }
 
@@ -1127,10 +1146,18 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(403, "无权限，仅管理员可操作"))
 			return
 		}
-		s.Token = randomHex(16)
-		s.UpdatedTime = time.Now().UnixMilli()
-		if err := h.repo.SaveSubscription(s); err != nil {
+		// X-P3-13（L-03-2）：与主路径共用全轮换（token+UUID/密码+下发
+		// 内核），不再只换 token——否则经此路重置的旧配置仍能连接。
+		_, applyErr, err := h.rotateSubscriptionCredentials(s)
+		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if applyErr != nil {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: map[string]interface{}{
+				"token": s.Token,
+				"path":  "/api/v1/open_api/sub/" + s.Token,
+			}, TS: time.Now().UnixMilli()})
 			return
 		}
 	} else {
