@@ -281,6 +281,49 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R2X-036（校验前置档）：分组存在性与配额解析全部前移到首写之前。
+	// 旧实现主行先落库、分组段/配额段后失败，报错与落库事实不符
+	// （改名已生效却回「保存失败」）。配额单侧补齐的只读查询同理前移，
+	// 其读取失败也不再发生在主行写入之后。
+	var updateGroupIDs []int64
+	hasUpdateGroupIDs := false
+	if groupIDsRaw, ok := req["groupIds"]; ok {
+		hasUpdateGroupIDs = true
+		updateGroupIDs = asInt64Slice(groupIDsRaw)
+		if err := h.repo.ValidateIDsExist("user_group", updateGroupIDs); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	}
+	var updateDailyQuotaGB, updateMonthlyQuotaGB int64
+	hasUpdateQuota := hasDailyQuota || hasMonthlyQuota
+	if hasUpdateQuota {
+		updateDailyQuotaGB = asInt64(req["dailyQuotaGB"], 0)
+		updateMonthlyQuotaGB = asInt64(req["monthlyQuotaGB"], 0)
+		if updateDailyQuotaGB < 0 || updateMonthlyQuotaGB < 0 {
+			response.WriteJSON(w, response.ErrDefault("配额不能小于0"))
+			return
+		}
+		if !(hasDailyQuota && hasMonthlyQuota) {
+			// FIX2-A（V2-07 同族）：单传一侧时另一侧从当前视图补齐；
+			// 读取失败报错中止（现于首写之前），视图为空（尚无配额
+			// 行）才是合法的 0。
+			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
+			if qErr != nil {
+				response.WriteJSON(w, response.Err(-2, qErr.Error()))
+				return
+			}
+			if currentQuota != nil {
+				if !hasDailyQuota {
+					updateDailyQuotaGB = currentQuota.DailyLimitGB
+				}
+				if !hasMonthlyQuota {
+					updateMonthlyQuotaGB = currentQuota.MonthlyLimitGB
+				}
+			}
+		}
+	}
+
 	pwd := asString(req["pwd"])
 	if strings.TrimSpace(pwd) == "" {
 		if err := h.repo.UpdateUserWithoutPassword(id, username, flow, num, expTime, flowResetTime, status, maxConn, now, flowMiB); err != nil {
@@ -302,35 +345,14 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
 		log.Printf("propagate user flow to tunnels failed user_id=%d err=%v", id, err)
 	}
-	if hasDailyQuota || hasMonthlyQuota {
-		dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
-		monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
-		if !(hasDailyQuota && hasMonthlyQuota) {
-			// FIX2-A（V2-07 同族）：单传一侧时另一侧从当前视图补齐；
-			// 旧实现视图读取失败/为空时静默以 0 落库（把另一侧限额
-			// 清零）。读取失败改为报错中止；视图为空（尚无配额行）
-			// 才是合法的 0。
-			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
-			if qErr != nil {
-				response.WriteJSON(w, response.Err(-2, qErr.Error()))
-				return
-			}
-			if currentQuota != nil {
-				if !hasDailyQuota {
-					dailyQuotaGB = currentQuota.DailyLimitGB
-				}
-				if !hasMonthlyQuota {
-					monthlyQuotaGB = currentQuota.MonthlyLimitGB
-				}
-			}
-		}
+	if hasUpdateQuota {
 		tx := h.repo.BeginTx()
 		if tx == nil || tx.Error != nil {
 			response.WriteJSON(w, response.Err(-2, "database unavailable"))
 			return
 		}
 		defer func() { tx.Rollback() }()
-		if err := h.repo.SaveUserQuotaConfigTx(tx, id, dailyQuotaGB, monthlyQuotaGB, now); err != nil {
+		if err := h.repo.SaveUserQuotaConfigTx(tx, id, updateDailyQuotaGB, updateMonthlyQuotaGB, now); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -340,8 +362,8 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if groupIDsRaw, ok := req["groupIds"]; ok {
-		newGroupIDs := asInt64Slice(groupIDsRaw)
+	if hasUpdateGroupIDs {
+		newGroupIDs := updateGroupIDs
 		// X-P2-6 + X-P1-2①：分组替换与「被移出分组的组建授权撤销」在同一
 		// 事务内完成；replaceErr 必须上抛，不再吞错回成功。
 		tx := h.repo.BeginTx()
@@ -2827,6 +2849,12 @@ func (h *Handler) userTunnelRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, tunnelID, lookupErr := h.repo.GetUserTunnelUserAndTunnel(id)
 	if lookupErr != nil {
+		// R2X-048（V-12 口径）：删除不存在的授权行幂等成功——repo 已把
+		// 未找到归一为 sql.ErrNoRows；其余 lookup 错误仍报错。
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			response.WriteJSON(w, response.OKEmpty())
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, lookupErr.Error()))
 		return
 	}
@@ -4388,12 +4416,48 @@ func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R2X-013: assigning to a disabled group is an explicit error, and
+	// R2X-012: both groups must exist — both checked before any write.
+	for _, g := range []struct {
+		table string
+		id    int64
+		label string
+	}{
+		{"user_group", req.UserGroupID, "用户分组"},
+		{"tunnel_group", req.TunnelGroupID, "隧道分组"},
+	} {
+		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
+		if gErr != nil {
+			response.WriteJSON(w, response.Err(-2, gErr.Error()))
+			return
+		}
+		if !gExists {
+			response.WriteJSON(w, response.ErrDefault(g.label+"不存在"))
+			return
+		}
+		if gStatus != 1 {
+			response.WriteJSON(w, response.ErrDefault(g.label+"已停用，无法分配权限"))
+			return
+		}
+	}
+	// R2X-036（G-S02 子项，校验/读取前置档）：展开所需的两份成员名单在
+	// Insert 之前预读，读失败零落库；Insert 后用预读名单展开，不再重读。
+	userIDs, err := h.repo.ListUserIDsByUserGroup(req.UserGroupID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(req.TunnelGroupID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	if err := h.repo.InsertGroupPermission(req.UserGroupID, req.TunnelGroupID, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	// X-P2-16：展开失败不再静默——部分失败在回执逐条列明，全失败报错。
-	result, applyErr := h.applyGroupPermission(req.UserGroupID, req.TunnelGroupID)
+	result, applyErr := h.applyGroupPermissionWithLists(req.UserGroupID, req.TunnelGroupID, userIDs, tunnelIDs)
 	if applyErr != nil {
 		response.WriteJSON(w, response.Err(-2, applyErr.Error()))
 		return
@@ -4484,9 +4548,54 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
 		return
 	}
-	if err := h.repo.GroupUpdate(table, id, asString(req["name"]), asInt(req["status"], 1), time.Now().UnixMilli()); err != nil {
+	newStatus := asInt(req["status"], 1)
+	// R2X-013（BC-R2-02）：停用开始执法。先读旧 status：1→0 时在同一
+	// 事务内按 grant 台账撤销该组组建授权（手工授权不动，级联候选收集
+	// 复用删组同款逻辑），提交后清理被撤销授权的转发；0→1 时走既有
+	// sync 按成员关系补发。已停用分组的历史组建授权在首次状态变更/
+	// 同步触发时被追溯撤销（展开侧对停用组一律跳过，见
+	// applyGroupPermission）。
+	tx := h.repo.BeginTx()
+	if tx == nil || tx.Error != nil {
+		response.WriteJSON(w, response.Err(-2, "database unavailable"))
+		return
+	}
+	defer func() { tx.Rollback() }()
+	oldStatus, exists, err := h.repo.GetGroupStatusTx(tx, table, id)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if !exists {
+		response.WriteJSON(w, response.ErrDefault("分组不存在"))
+		return
+	}
+	if err := h.repo.GroupUpdateTx(tx, table, id, asString(req["name"]), newStatus, time.Now().UnixMilli()); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	var revokedPairs []repo.RevokedUserTunnelPair
+	if oldStatus == 1 && newStatus == 0 {
+		var revokeErr error
+		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
+		if revokeErr != nil {
+			response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
+			return
+		}
+	}
+	if err := tx.Commit().Error; err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	for _, pair := range revokedPairs {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+	}
+	if oldStatus == 0 && newStatus == 1 {
+		if table == "user_group" {
+			_ = h.syncPermissionsByUserGroup(id)
+		} else {
+			_ = h.syncPermissionsByTunnelGroup(id)
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -4524,6 +4633,24 @@ type groupApplyResult struct {
 
 func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
 	var result groupApplyResult
+	// R2X-013: expansion skips a pair when either side's group is not
+	// enabled (status != 1) — disabled groups never materialize grants,
+	// including for pre-existing pairs synced after the fact.
+	for _, g := range []struct {
+		table string
+		id    int64
+	}{
+		{"user_group", userGroupID},
+		{"tunnel_group", tunnelGroupID},
+	} {
+		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
+		if gErr != nil {
+			return result, gErr
+		}
+		if !gExists || gStatus != 1 {
+			return result, nil
+		}
+	}
 	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
 	if err != nil {
 		return result, err
@@ -4532,6 +4659,15 @@ func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupA
 	if err != nil {
 		return result, err
 	}
+	return h.applyGroupPermissionWithLists(userGroupID, tunnelGroupID, userIDs, tunnelIDs)
+}
+
+// applyGroupPermissionWithLists expands one group-permission pair from
+// caller-supplied member lists (R2X-036: groupPermissionAssign pre-reads
+// both lists before inserting the permission row, so a read failure can
+// no longer strand a persisted pair with no expansion).
+func (h *Handler) applyGroupPermissionWithLists(userGroupID, tunnelGroupID int64, userIDs, tunnelIDs []int64) (groupApplyResult, error) {
+	var result groupApplyResult
 	for _, uid := range userIDs {
 		for _, tid := range tunnelIDs {
 			utID, created, err := h.repo.EnsureUserTunnelGrant(uid, tid)
@@ -6511,6 +6647,25 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 		return nil, fmt.Errorf("userId or tunnelId missing")
 	}
 
+	// R2X-012: user and tunnel must both exist — a phantom user_tunnel row
+	// silently becomes a live grant the moment the referenced ID is later
+	// created (sequential IDs make that a near-future event, not theory).
+	if tx != nil {
+		if err := h.repo.ValidateIDsExistTx(tx, "user", []int64{userID}); err != nil {
+			return nil, err
+		}
+		if err := h.repo.ValidateIDsExistTx(tx, "tunnel", []int64{tunnelID}); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := h.repo.ValidateIDsExist("user", []int64{userID}); err != nil {
+			return nil, err
+		}
+		if err := h.repo.ValidateIDsExist("tunnel", []int64{tunnelID}); err != nil {
+			return nil, err
+		}
+	}
+
 	getExisting := func() (int64, int64, int64, int64, int64, sql.NullInt64, int, error) {
 		if tx != nil {
 			return h.repo.GetExistingUserTunnelTx(tx, userID, tunnelID)
@@ -6554,29 +6709,34 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 			} else {
 				uFlow, uNum, uExp, uReset, uErr = h.repo.GetUserDefaultsForTunnel(userID)
 			}
-			if uErr == nil {
-				if reqFlow < 0 {
-					reqFlow = uFlow
-					var user *model.User
-					var userErr error
-					if tx != nil {
-						user, userErr = h.repo.GetUserByIDTx(tx, userID)
-					} else {
-						user, userErr = h.repo.GetUserByID(userID)
-					}
-					if userErr == nil && user != nil {
-						reqFlowMiB = user.FlowMiB
-					}
+			// R2X-012: a defaults lookup failure is now an explicit
+			// error — user existence was validated above, so a failure
+			// here is a real read error, never a phantom user to paper
+			// over with hard-coded defaults.
+			if uErr != nil {
+				return nil, uErr
+			}
+			if reqFlow < 0 {
+				reqFlow = uFlow
+				var user *model.User
+				var userErr error
+				if tx != nil {
+					user, userErr = h.repo.GetUserByIDTx(tx, userID)
+				} else {
+					user, userErr = h.repo.GetUserByID(userID)
 				}
-				if reqNum < 0 {
-					reqNum = uNum
+				if userErr == nil && user != nil {
+					reqFlowMiB = user.FlowMiB
 				}
-				if reqExpTime < 0 {
-					reqExpTime = uExp
-				}
-				if reqFlowReset < 0 {
-					reqFlowReset = uReset
-				}
+			}
+			if reqNum < 0 {
+				reqNum = uNum
+			}
+			if reqExpTime < 0 {
+				reqExpTime = uExp
+			}
+			if reqFlowReset < 0 {
+				reqFlowReset = uReset
 			}
 		}
 		if reqFlow < 0 {
