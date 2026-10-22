@@ -56,17 +56,6 @@ type namedConfigItem struct {
 	} `json:"handler,omitempty"`
 }
 
-func (h *Handler) processFlowItem(nodeID int64, item flowItem) {
-	if h == nil || h.repo == nil || nodeID <= 0 {
-		return
-	}
-	metas, err := h.repo.GetFlowUploadForwardMetas(collectFlowUploadForwardIDs([]flowItem{item}))
-	if err != nil {
-		metas = nil
-	}
-	h.applyFlowUploadBatch(nodeID, h.buildNodeFlowUploadBatch(nodeID, []flowItem{item}, metas), time.Now())
-}
-
 func parseFlowServiceIDs(serviceName string) (int64, int64, int64, bool) {
 	parts := strings.Split(serviceName, "_")
 	if len(parts) < 3 {
