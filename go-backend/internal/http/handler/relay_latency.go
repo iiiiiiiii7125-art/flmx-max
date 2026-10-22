@@ -43,6 +43,7 @@ type relayLatency struct {
 type relayLatencyStore struct {
 	mu      sync.RWMutex
 	results map[int64]relayLatency
+	rounds  probeRounds
 }
 
 func newRelayLatencyStore() *relayLatencyStore {
@@ -58,13 +59,29 @@ func (s *relayLatencyStore) get(relayID int64) (relayLatency, bool) {
 
 // replace stores fresh results; a full round also drops deleted relays.
 func (s *relayLatencyStore) replace(results map[int64]relayLatency, all bool) {
+	s.replaceRound(results, all, time.Now().UnixNano())
+}
+
+// replaceRound is replace gated per entry by probeRounds（DB-4）。
+func (s *relayLatencyStore) replaceRound(results map[int64]relayLatency, all bool, started int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if all {
-		s.results = make(map[int64]relayLatency, len(results))
+		for id := range s.results {
+			if _, ok := results[id]; ok {
+				continue
+			}
+			if !s.rounds.take(id, started) {
+				continue
+			}
+			delete(s.results, id)
+			delete(s.rounds, id)
+		}
 	}
 	for id, r := range results {
-		s.results[id] = r
+		if s.rounds.take(id, started) {
+			s.results[id] = r
+		}
 	}
 }
 
@@ -216,6 +233,7 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 // probeRelayLatency measures the given relay lines (all when ids is empty).
 // Entry nodes' reference point latency comes from the last node round.
 func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64]relayLatency, error) {
+	started := time.Now().UnixNano()
 	rows, err := h.repo.ListInboundRelays(0)
 	if err != nil {
 		return nil, err
@@ -257,27 +275,44 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64
 		hops[rw.ID] = make([]relayHop, len(plan.legs))
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, latencyParallel)
+	// DA-6：与节点延迟轮同口径，派发前按腿的出发节点交错。
+	type relayJob struct {
+		id  int64
+		i   int
+		leg relayLeg
+		hop relayHop
+	}
+	jobs := make([]relayJob, 0, len(plans))
 	for id, plan := range plans {
 		for i, l := range plan.legs {
 			hop := relayHop{From: l.fromName, To: l.toName, Error: l.err}
-			if l.err != "" || ctx.Err() != nil {
+			if l.err != "" {
 				hops[id][i] = hop
 				continue
 			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(id int64, i int, l relayLeg, hop relayHop) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				data, err := nodeLatencyPing(h, l.fromID, l.host, l.port)
-				p := latencyPointFrom(latencyTarget{}, data, err)
-				hop.OK, hop.LatencyMs, hop.LossPct, hop.Error = p.OK, p.LatencyMs, p.LossPct, p.Error
-				// Each goroutine writes its own slot.
-				hops[id][i] = hop
-			}(id, i, l, hop)
+			jobs = append(jobs, relayJob{id, i, l, hop})
 		}
+	}
+	jobs = interleaveByNode(jobs, func(j relayJob) int64 { return j.leg.fromID })
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, latencyParallel)
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			hops[j.id][j.i] = j.hop
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j relayJob) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := nodeLatencyPing(h, j.leg.fromID, j.leg.host, j.leg.port)
+			p := latencyPointFrom(latencyTarget{}, data, err)
+			j.hop.OK, j.hop.LatencyMs, j.hop.LossPct, j.hop.Error = p.OK, p.LatencyMs, p.LossPct, p.Error
+			// Each goroutine writes its own slot.
+			hops[j.id][j.i] = j.hop
+		}(j)
 	}
 	wg.Wait()
 
@@ -294,7 +329,7 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64) (map[int64
 		results[id] = relayLatencyFrom(plan, hops[id], entry, now)
 	}
 	if ctx.Err() == nil {
-		h.relayLatency.replace(results, len(ids) == 0)
+		h.relayLatency.replaceRound(results, len(ids) == 0, started)
 	}
 	return results, nil
 }
