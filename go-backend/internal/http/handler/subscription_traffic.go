@@ -54,6 +54,10 @@ type subTrafficView struct {
 	Points []subTrafficPoint `json:"points"`
 	Up     int64             `json:"up"`
 	Down   int64             `json:"down"`
+	// Since is when the subscription's used-traffic counters started
+	// counting (creation or last reset); the chart marks it so the
+	// "used" figure and the chart range are not compared directly.
+	Since int64 `json:"since"`
 }
 
 // subTrafficBuckets returns the bucket starts of a range ending at now:
@@ -152,7 +156,9 @@ func (h *Handler) respondSubTraffic(w http.ResponseWriter, s *model.Subscription
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	response.WriteJSON(w, response.OK(subTraffic(hours, req.Range, now)))
+	view := subTraffic(hours, req.Range, now)
+	view.Since = subTrafficSince(s)
+	response.WriteJSON(w, response.OK(view))
 }
 
 // subscriptionTraffic is the admin history view (route is under the

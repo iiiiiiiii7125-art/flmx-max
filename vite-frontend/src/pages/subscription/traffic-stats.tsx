@@ -5,11 +5,13 @@ import {
   Area,
   ComposedChart,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import { ArrowDown, ArrowUp } from "lucide-react";
 
 import { getMySubscriptionTraffic, getSubscriptionTraffic } from "@/api";
 import { Segmented } from "@/pages/subscription/controls";
@@ -17,6 +19,10 @@ import { Segmented } from "@/pages/subscription/controls";
 // 与我方既有图表（延迟趋势等）同一调色：下载蓝、上传橙。
 const DOWN = "#3b82f6";
 const UP = "#f97316";
+// Fixed text colors for the up/down numbers: a series color must not be
+// the theme's primary (which recolors with the user's theme pick).
+const DOWN_TEXT = "text-blue-600 dark:text-blue-400";
+const UP_TEXT = "text-orange-600 dark:text-orange-400";
 
 const RANGES: Array<[SubTrafficRange, string]> = [
   ["hour", "小时"],
@@ -116,6 +122,12 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
   const empty = shown !== null && shown.up + shown.down === 0;
   const rows = [...points].reverse();
   const maxTotal = Math.max(1, ...points.map((p) => p.up + p.down));
+  // The bucket the used traffic above started counting in, if in range.
+  const sinceAt =
+    shown && points.length && shown.since >= points[0].time
+      ? points.filter((p) => p.time <= shown.since).pop()
+      : undefined;
+  const sinceDate = shown ? new Date(shown.since).toLocaleDateString() : "";
 
   return (
     <div className="space-y-3">
@@ -127,14 +139,15 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
           setAll(false);
         }}
       />
+      <p className="text-xs text-default-500">{RANGE_HINT[range]}的流量</p>
       <div className="grid grid-cols-3 gap-2">
         {(
           [
-            ["下载", shown?.down, DOWN],
-            ["上传", shown?.up, UP],
-            ["合计", shown ? shown.up + shown.down : undefined, ""],
-          ] as Array<[string, number | undefined, string]>
-        ).map(([label, value, color]) => (
+            ["下载", shown?.down, DOWN, DOWN_TEXT],
+            ["上传", shown?.up, UP, UP_TEXT],
+            ["合计", shown ? shown.up + shown.down : undefined, "", ""],
+          ] as Array<[string, number | undefined, string, string]>
+        ).map(([label, value, color, textColor]) => (
           <div key={label} className="rounded-xl bg-default-100 px-3 py-2">
             <div className="flex items-center gap-1.5 text-xs text-default-500">
               {color && (
@@ -145,7 +158,9 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               )}
               {label}
             </div>
-            <div className="mt-0.5 truncate font-mono text-sm font-semibold">
+            <div
+              className={`mt-0.5 truncate font-mono text-sm font-semibold ${textColor}`}
+            >
               {value === undefined ? "…" : bytes(value)}
             </div>
           </div>
@@ -194,15 +209,23 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
                     return (
                       <div className="rounded-xl border border-divider bg-content1 px-3 py-2 text-xs shadow-lg">
                         <p className="font-medium">{p.long}</p>
-                        <p className="mt-1" style={{ color: DOWN }}>
+                        <p className={`mt-1 ${DOWN_TEXT}`}>
                           下载 {bytes(p.down)}
                         </p>
-                        <p style={{ color: UP }}>上传 {bytes(p.up)}</p>
+                        <p className={UP_TEXT}>上传 {bytes(p.up)}</p>
                       </div>
                     );
                   }}
                   cursor={{ stroke: "currentColor", strokeOpacity: 0.2 }}
                 />
+                {sinceAt && (
+                  <ReferenceLine
+                    stroke="currentColor"
+                    strokeDasharray="2 3"
+                    strokeOpacity={0.35}
+                    x={sinceAt.label}
+                  />
+                )}
                 <Area
                   dataKey="down"
                   fill={DOWN}
@@ -243,6 +266,12 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               />
               上传
             </span>
+            {sinceAt && (
+              <span className="flex items-center gap-1.5">
+                <span className="h-3 border-l border-dashed border-default-400" />
+                本周期起（{sinceDate}）
+              </span>
+            )}
             <span className="ml-auto">{RANGE_HINT[range]}</span>
           </div>
 
@@ -259,17 +288,38 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               >
                 <span className="truncate text-xs">{p.row}</span>
                 <div className="min-w-0 space-y-1">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
+                  <div
+                    aria-hidden="true"
+                    className="flex h-1.5 overflow-hidden rounded-full bg-default-100"
+                  >
                     <div
-                      className="h-full rounded-full"
+                      className="h-full shrink-0"
                       style={{
                         background: DOWN,
-                        width: `${((p.up + p.down) / maxTotal) * 100}%`,
+                        width: `${(p.down / maxTotal) * 100}%`,
+                      }}
+                    />
+                    <div
+                      className="h-full shrink-0"
+                      style={{
+                        background: UP,
+                        width: `${(p.up / maxTotal) * 100}%`,
                       }}
                     />
                   </div>
-                  <div className="truncate font-mono text-[11px] text-default-500">
-                    {bytes(p.down)} / {bytes(p.up)}
+                  <div className="flex flex-wrap gap-x-2 font-mono text-[11px]">
+                    <span
+                      className={`inline-flex items-center gap-0.5 ${DOWN_TEXT}`}
+                    >
+                      <ArrowDown aria-hidden="true" size={11} />
+                      {bytes(p.down)}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-0.5 ${UP_TEXT}`}
+                    >
+                      <ArrowUp aria-hidden="true" size={11} />
+                      {bytes(p.up)}
+                    </span>
                   </div>
                 </div>
                 <span className="text-right font-mono text-xs font-semibold">
@@ -290,6 +340,10 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
           <p className="text-xs text-default-400">
             统计口径与订阅「已用」一致：仅统计独立凭据协议（VLESS、VMess、Trojan、Hysteria2、TUIC
             等）的流量；Shadowsocks、Snell、导入节点等共用凭据不计入。曲线为该订阅的合计流量，自本功能上线起记录
+          </p>
+          <p className="text-xs text-default-400">
+            订阅「已用」从本周期开始（{sinceDate}
+            ，订阅创建或上次重置流量时）累计，和这里所选的时间范围不同，两边的数不一定相等。
           </p>
         </>
       )}

@@ -27,11 +27,27 @@ type SystemInfo struct {
 	NetOutSpeed      int64   `json:"net_out_speed"`
 }
 
+// NodeTrafficRetention keeps a little over a year of hourly node NIC
+// traffic buckets. Fixed on purpose: it is independent of the
+// configurable monitoring retention, which can be far shorter.
+const NodeTrafficRetention = 400 * 24 * time.Hour
+
+type trafficKey struct {
+	node, hour int64
+}
+
 type IngestionService struct {
 	repo          *repo.Repository
 	nodeBuffer    []*model.NodeMetric
 	nodeBufferMu  sync.Mutex
 	flushInterval time.Duration
+
+	// lastBytes is each node's last NIC byte counters (in, out);
+	// node_traffic accumulates what they grew by, per hour, until the
+	// next flush. These are whole-machine NIC counters — not tunnel
+	// billing counters.
+	lastBytes map[int64][2]int64
+	traffic   map[trafficKey][2]int64
 }
 
 func NewIngestionService(repo *repo.Repository) *IngestionService {
@@ -39,7 +55,18 @@ func NewIngestionService(repo *repo.Repository) *IngestionService {
 		repo:          repo,
 		nodeBuffer:    make([]*model.NodeMetric, 0, 500),
 		flushInterval: 30 * time.Second,
+		lastBytes:     map[int64][2]int64{},
+		traffic:       map[trafficKey][2]int64{},
 	}
+}
+
+// counterDelta is what a byte counter grew by; a smaller value means
+// the counter restarted (a reboot), so all of it is new.
+func counterDelta(prev, cur int64) int64 {
+	if cur >= prev {
+		return cur - prev
+	}
+	return cur
 }
 
 func (s *IngestionService) Start(ctx context.Context) {
@@ -84,6 +111,15 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	s.nodeBufferMu.Lock()
 	s.nodeBuffer = append(s.nodeBuffer, m)
 	shouldFlush := len(s.nodeBuffer) >= 200
+	// The first report after a panel restart only sets the baseline.
+	if prev, ok := s.lastBytes[nodeID]; ok {
+		k := trafficKey{nodeID, m.Timestamp - m.Timestamp%int64(time.Hour/time.Millisecond)}
+		t := s.traffic[k]
+		t[0] += counterDelta(prev[0], m.NetInBytes)
+		t[1] += counterDelta(prev[1], m.NetOutBytes)
+		s.traffic[k] = t
+	}
+	s.lastBytes[nodeID] = [2]int64{m.NetInBytes, m.NetOutBytes}
 	s.nodeBufferMu.Unlock()
 
 	if shouldFlush {
@@ -99,6 +135,8 @@ func (s *IngestionService) flushNodeMetrics() {
 	}
 	buffer := s.nodeBuffer
 	s.nodeBuffer = make([]*model.NodeMetric, 0, 500)
+	traffic := s.traffic
+	s.traffic = map[trafficKey][2]int64{}
 	s.nodeBufferMu.Unlock()
 
 	if s.repo == nil {
@@ -106,6 +144,15 @@ func (s *IngestionService) flushNodeMetrics() {
 	}
 	if err := s.repo.InsertNodeMetricBatch(buffer); err != nil {
 		log.Printf("monitoring write failed op=node_metric.flush count=%d err=%v", len(buffer), err)
+	}
+	rows := make([]model.NodeTraffic, 0, len(traffic))
+	for k, v := range traffic {
+		if v[0] > 0 || v[1] > 0 {
+			rows = append(rows, model.NodeTraffic{NodeID: k.node, Hour: k.hour, InBytes: v[0], OutBytes: v[1]})
+		}
+	}
+	if err := s.repo.AddNodeTraffic(rows); err != nil {
+		log.Printf("monitoring write failed op=node_traffic.flush count=%d err=%v", len(rows), err)
 	}
 }
 
@@ -147,6 +194,9 @@ func (s *IngestionService) pruneMetricsAt(now time.Time) {
 	}
 	if err := s.repo.PruneNodeLatencySamples(latencyCutoff); err != nil {
 		log.Printf("monitoring prune failed op=node_latency_sample cutoff=%d err=%v", latencyCutoff, err)
+	}
+	if err := s.repo.PruneNodeTraffic(now.Add(-NodeTrafficRetention).UnixMilli()); err != nil {
+		log.Printf("monitoring prune failed op=node_traffic err=%v", err)
 	}
 }
 

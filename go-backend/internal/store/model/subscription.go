@@ -44,15 +44,21 @@ type Subscription struct {
 	// Traffic of a share subscription, counted on the nodes per user.
 	// TrafficLimit (bytes, 0 = unlimited) cuts it off once reached;
 	// ResetDay (1-28, 0 = never) zeroes the traffic monthly.
-	UploadBytes      int64  `gorm:"column:upload_bytes;not null;default:0"`
-	DownloadBytes    int64  `gorm:"column:download_bytes;not null;default:0"`
-	TrafficLimit     int64  `gorm:"column:traffic_limit;not null;default:0"`
-	ResetDay         int    `gorm:"column:reset_day;not null;default:0"`
-	TrafficResetTime int64  `gorm:"column:traffic_reset_time;not null;default:0"`
-	Remark           string `gorm:"type:text;not null;default:''"`
-	Inx              int    `gorm:"not null;default:0"`
-	CreatedTime      int64  `gorm:"column:created_time;not null"`
-	UpdatedTime      int64  `gorm:"column:updated_time;not null"`
+	UploadBytes      int64 `gorm:"column:upload_bytes;not null;default:0"`
+	DownloadBytes    int64 `gorm:"column:download_bytes;not null;default:0"`
+	TrafficLimit     int64 `gorm:"column:traffic_limit;not null;default:0"`
+	ResetDay         int   `gorm:"column:reset_day;not null;default:0"`
+	TrafficResetTime int64 `gorm:"column:traffic_reset_time;not null;default:0"`
+	// TrafficSince is when the current upload/download counters started
+	// accumulating: subscription creation, or the last manual/monthly
+	// traffic reset. Additive column (default 0); readers fall back
+	// TrafficSince -> TrafficResetTime -> CreatedTime when it is 0
+	// (pre-existing rows), so no data backfill is needed.
+	TrafficSince int64  `gorm:"column:traffic_since;not null;default:0"`
+	Remark       string `gorm:"type:text;not null;default:''"`
+	Inx          int    `gorm:"not null;default:0"`
+	CreatedTime  int64  `gorm:"column:created_time;not null"`
+	UpdatedTime  int64  `gorm:"column:updated_time;not null"`
 }
 
 func (Subscription) TableName() string { return "subscription" }
