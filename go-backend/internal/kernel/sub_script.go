@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dop251/goja"
 )
@@ -51,7 +52,9 @@ func ValidateSubScript(script string) error {
 	if strings.TrimSpace(script) == "" {
 		return nil
 	}
-	if len(script) > MaxScriptLength {
+	// X-P3-3（B-F3/BC-10）：上限按字符（rune）计，与文档「20000 字符」
+	// 承诺一致；保存侧 normalize 同口径，两处必须同改防再分叉。
+	if utf8.RuneCountInString(script) > MaxScriptLength {
 		return fmt.Errorf("脚本最多 %d 个字符", MaxScriptLength)
 	}
 	if _, err := goja.Compile("script.js", script, false); err != nil {

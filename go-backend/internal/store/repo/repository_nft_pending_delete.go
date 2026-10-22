@@ -296,10 +296,29 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 	if err != nil {
 		return nil, err
 	}
-	if ct.ID == 0 {
-		return nil, nil
+	if ct.ID != 0 {
+		var tunnelName string
+		_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
+		return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: "chain_tunnel"}, nil
 	}
-	var tunnelName string
-	_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
-	return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: "chain_tunnel"}, nil
+
+	// X-P2-13（L-08-1）：联邦 peer_share_runtime 预留口同为占用（与
+	// HasOtherForwardOnNodePortTx 同口径），本地预检须能报告该冲突。
+	var pr struct {
+		ID int64
+	}
+	err = tx.Model(&model.PeerShareRuntime{}).
+		Select("id").
+		Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
+		Order("id ASC").
+		Limit(1).
+		Scan(&pr).Error
+	if err != nil {
+		return nil, err
+	}
+	if pr.ID != 0 {
+		return &ForwardPortConflict{ForwardID: pr.ID, Name: "联邦共享预留端口", Status: 1, Source: "peer_share_runtime"}, nil
+	}
+	return nil, nil
 }
+

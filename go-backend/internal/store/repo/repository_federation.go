@@ -210,6 +210,21 @@ func (r *Repository) ListUsedPortsOnNode(nodeID int64) ([]int, error) {
 		used[p] = struct{}{}
 	}
 
+	// X-P2-13（L-08-1）：有效 peer_share_runtime 预留口一并计入已用集，
+	// 联邦侧选口/占用检查与本地谓词同口径。
+	var peerPorts []int
+	err = r.db.Model(&model.PeerShareRuntime{}).
+		Where("node_id = ? AND port > 0 AND status = 1", nodeID).
+		Pluck("port", &peerPorts).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range peerPorts {
+		if p > 0 {
+			used[p] = struct{}{}
+		}
+	}
+
 	result := make([]int, 0, len(used))
 	for p := range used {
 		result = append(result, p)

@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -583,7 +584,10 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 						onMetric := s.onNodeMetric
 						s.mu.RUnlock()
 						if onMetric != nil {
-							go onMetric(nodeID, sysInfo)
+							// X-P3-30（L-12-1）：直调。hook 本体仅内存
+							// 追加、短命；旧实现每帧起 goroutine 无背压，
+							// 高频帧可瞬时堆积 goroutine。
+							onMetric(nodeID, sysInfo)
 						}
 					}
 					// 广播内层 data 给前端（保持平坦结构兼容性）
@@ -611,7 +615,8 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				onMetric := s.onNodeMetric
 				s.mu.RUnlock()
 				if onMetric != nil {
-					go onMetric(nodeID, sysInfo)
+					// X-P3-30（L-12-1）：同 metric 分支，直调不另起 goroutine。
+					onMetric(nodeID, sysInfo)
 				}
 				s.broadcastTyped(nodeID, "metric", msg)
 				continue
@@ -661,6 +666,19 @@ func looksLikeSystemInfoMessage(msg string) bool {
 }
 
 func (s *Server) SendCommand(nodeID int64, cmdType string, data interface{}, timeout time.Duration) (CommandResult, error) {
+	return s.SendCommandContext(context.Background(), nodeID, cmdType, data, timeout)
+}
+
+// SendCommandContext X-P3-26：带上下文的 SendCommand 变体——ctx 取消时
+// 立即清理 pending 并返回 ctx.Err()，不再等满 timeout（批量升级/下发在
+// 请求取消后须停止派发与等待）。
+func (s *Server) SendCommandContext(ctx context.Context, nodeID int64, cmdType string, data interface{}, timeout time.Duration) (CommandResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, err
+	}
 	if s == nil {
 		return CommandResult{}, errors.New("server not initialized")
 	}
@@ -731,6 +749,9 @@ func (s *Server) SendCommand(nodeID int64, cmdType string, data interface{}, tim
 	}
 
 	select {
+	case <-ctx.Done():
+		cleanup()
+		return CommandResult{}, ctx.Err()
 	case result, ok := <-ch:
 		if !ok {
 			return CommandResult{}, errors.New("命令通道已关闭")

@@ -121,11 +121,27 @@ func (h *Handler) inboundRelayList(w http.ResponseWriter, r *http.Request) {
 // address when a tunnel exits on the landing node itself, otherwise the
 // landing node's public address (port forwards, and tunnels exiting on
 // another node such as an IX hop in front of the landing node).
+// validateRelayLandingExitSet enforces relayTarget's landing rule
+// against an explicit exit set: an inbound whose node is among the exits
+// requires that node to be the tunnel's only exit. tunnelUpdate 复跑此
+// 判定（新出口集尚未落库，不能走 relayTarget 的 DB 读法）——X-P2-4。
+func validateRelayLandingExitSet(row *model.NodeInbound, exits []int64) error {
+	for _, id := range exits {
+		if id == row.NodeID && len(exits) > 1 {
+			return errors.New("出口为落地节点的隧道只能有这一个出口节点")
+		}
+	}
+	return nil
+}
+
 func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (string, error) {
 	port := strconv.Itoa(row.Port)
 	if tunnel.Type == 2 {
 		exits, err := h.repo.TunnelExitNodeIDs(tunnel.ID)
 		if err != nil {
+			return "", err
+		}
+		if err := validateRelayLandingExitSet(row, exits); err != nil {
 			return "", err
 		}
 		onLanding := false
@@ -135,9 +151,6 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 			}
 		}
 		if onLanding {
-			if len(exits) > 1 {
-				return "", errors.New("出口为落地节点的隧道只能有这一个出口节点")
-			}
 			host := row.Listen
 			if isWildcardListen(host) {
 				host = "127.0.0.1"
@@ -168,6 +181,68 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 		return "", errors.New("落地节点没有可用地址")
 	}
 	return net.JoinHostPort(strings.Trim(host, "[]"), port), nil
+}
+
+// validateTunnelRelayExits re-runs the landing-exit rule for every
+// inbound relayed through a tunnel against a prospective exit set
+// (X-P2-4 ①: tunnelUpdate 校验段——新出口集违反「出口为落地必须单出口」
+// 时拒绝保存，否则转发继续拨回环地址静默错向)。
+func (h *Handler) validateTunnelRelayExits(tunnelID int64, exits []int64) error {
+	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
+	if err != nil {
+		return err
+	}
+	if len(forwards) == 0 {
+		return nil
+	}
+	forwardIDs := make(map[int64]struct{}, len(forwards))
+	for _, fwd := range forwards {
+		forwardIDs[fwd.ID] = struct{}{}
+	}
+	rels, err := h.repo.ListNodeInboundRelays()
+	if err != nil {
+		return err
+	}
+	for _, rel := range rels {
+		if _, ok := forwardIDs[rel.ForwardID]; !ok {
+			continue
+		}
+		row, err := h.repo.GetNodeInbound(rel.InboundID)
+		if err != nil || row == nil {
+			continue
+		}
+		if err := validateRelayLandingExitSet(row, exits); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recomputedRelayRemoteAddr returns the RemoteAddr a managed relay
+// forward must dial when attached to the given tunnel, recomputed from
+// that tunnel's exit set via relayTarget (X-P2-4 ②: 换隧道/迁移时只改
+// 端口不重算会让落地型转发继续拨旧地址）。changed=false 表示非托管
+// 中转转发或现址已与目标隧道口径一致。
+func (h *Handler) recomputedRelayRemoteAddr(forward *forwardRecord, tunnel *tunnelRecord) (string, bool, error) {
+	rels, err := h.repo.ListNodeInboundRelays()
+	if err != nil {
+		return "", false, err
+	}
+	for _, rel := range rels {
+		if rel.ForwardID != forward.ID || rel.Managed != 1 {
+			continue
+		}
+		row, err := h.repo.GetNodeInbound(rel.InboundID)
+		if err != nil || row == nil {
+			continue
+		}
+		target, err := h.relayTarget(row, tunnel)
+		if err != nil {
+			return "", false, err
+		}
+		return target, target != forward.RemoteAddr, nil
+	}
+	return "", false, nil
 }
 
 func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
@@ -536,10 +611,8 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	if format == "stash" {
-		format = kernel.FormatClash // Stash reads Clash profiles
-	}
+	// X-P3-2：别名解析与计数侧共用 subFormatAlias，防两处再分叉。
+	format := subFormatAlias(r.URL.Query().Get("format"))
 	if format == "" {
 		format = kernel.FormatForUserAgent(r.UserAgent())
 	}

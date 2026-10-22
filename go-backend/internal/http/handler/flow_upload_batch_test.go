@@ -72,7 +72,12 @@ func TestBuildFlowUploadBatchAggregatesForwardQuotaPeerShareAndCleanupTargets(t 
 	}
 }
 
-func TestApplyFlowUploadBatchContinuesPolicyAndPeerShareSideEffectsWhenQuotaBatchFails(t *testing.T) {
+// X-P3-31 / V-08 断言更新登记：原测试名
+// TestApplyFlowUploadBatchContinuesPolicyAndPeerShareSideEffectsWhenQuotaBatchFails，
+// 锁旧取舍「quota 段失败时总量照落、策略与 peer-share 副作用继续」。
+// V-08 裁定改取舍为单事务原子入账：quota 失败整批回滚、无任何副作用，
+// 故更名并反转断言（非放宽：失败面从「部分落账」收紧为「整批不落」）。
+func TestApplyFlowUploadBatchRollsBackAllWhenQuotaFails(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "flow-upload-batch-quota-fail.db"))
 	if err != nil {
 		t.Fatalf("open repo: %v", err)
@@ -117,26 +122,37 @@ func TestApplyFlowUploadBatchContinuesPolicyAndPeerShareSideEffectsWhenQuotaBatc
 	}
 
 	h := &Handler{repo: r}
-	h.applyFlowUploadBatch(1, flowUploadBatch{
+	applyErr := h.applyFlowUploadBatch(1, flowUploadBatch{
 		flowDeltas:            []repo.FlowUploadCounterDelta{{ForwardID: 20, UserID: 2, UserTunnelID: 10, InFlow: 80, OutFlow: 120}},
 		quotaUsage:            map[int64]int64{2: 200},
 		policyTargets:         []flowPolicyTarget{{UserID: 2, UserTunnelID: 10}},
 		peerShareForwardItems: map[string]flowItem{"20_2_10": {N: "20_2_10", U: 120, D: 80}},
 	}, now)
+	if applyErr == nil {
+		t.Fatalf("expected accounting error to be returned when quota write fails")
+	}
 
-	if got := mustQueryInt(t, r, `SELECT status FROM forward WHERE id = 20`); got != 0 {
-		t.Fatalf("expected flow-policy enforcement to pause forward after quota failure, got status=%d", got)
+	if got := mustQueryInt(t, r, `SELECT status FROM forward WHERE id = 20`); got != 1 {
+		t.Fatalf("expected no policy enforcement on unaccounted batch, forward status=%d", got)
+	}
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM forward WHERE id = 20`); got != 0 {
+		t.Fatalf("expected flow deltas to roll back with quota failure, got in_flow=%d", got)
 	}
 	updatedShare, err := r.GetPeerShare(share.ID)
 	if err != nil || updatedShare == nil {
 		t.Fatalf("reload peer share: %v", err)
 	}
-	if updatedShare.CurrentFlow != 200 {
-		t.Fatalf("expected peer-share flow accounting to continue after quota failure, got %d", updatedShare.CurrentFlow)
+	if updatedShare.CurrentFlow != 0 {
+		t.Fatalf("expected no peer-share accounting on unaccounted batch, got %d", updatedShare.CurrentFlow)
 	}
 }
 
-func TestApplyFlowUploadBatchContinuesPeerShareSideEffectsWhenFlowBatchFails(t *testing.T) {
+// X-P3-31 / V-08 断言更新登记：原测试名
+// TestApplyFlowUploadBatchContinuesPeerShareSideEffectsWhenFlowBatchFails，
+// 锁旧取舍「总量批失败时逐条 fallback 落成功条、quota 照加、副作用继续」。
+// V-08 裁定改取舍为单事务原子入账：任一 delta 失败整批回滚，故更名
+// 并反转断言（非放宽：失败面从「部分落账」收紧为「整批不落」）。
+func TestApplyFlowUploadBatchRollsBackAllWhenFlowDeltaFails(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "flow-upload-batch-flow-fail.db"))
 	if err != nil {
 		t.Fatalf("open repo: %v", err)
@@ -185,7 +201,7 @@ func TestApplyFlowUploadBatchContinuesPeerShareSideEffectsWhenFlowBatchFails(t *
 	}
 
 	h := &Handler{repo: r}
-	h.applyFlowUploadBatch(1, flowUploadBatch{
+	applyErr := h.applyFlowUploadBatch(1, flowUploadBatch{
 		flowDeltas: []repo.FlowUploadCounterDelta{
 			{ForwardID: 20, UserID: 2, UserTunnelID: 10, InFlow: 80, OutFlow: 120},
 			{ForwardID: 21, UserID: 2, UserTunnelID: 10, InFlow: 30, OutFlow: 40},
@@ -194,32 +210,40 @@ func TestApplyFlowUploadBatchContinuesPeerShareSideEffectsWhenFlowBatchFails(t *
 		policyTargets:         []flowPolicyTarget{{UserID: 2, UserTunnelID: 10}},
 		peerShareForwardItems: map[string]flowItem{"20_2_10": {N: "20_2_10", U: 120, D: 80}},
 	}, now)
+	if applyErr == nil {
+		t.Fatalf("expected accounting error to be returned when a flow delta fails")
+	}
 
-	if got := mustQueryInt(t, r, `SELECT status FROM forward WHERE id = 20`); got != 0 {
-		t.Fatalf("expected flow-policy enforcement to pause forward after flow batch failure, got status=%d", got)
+	if got := mustQueryInt(t, r, `SELECT status FROM forward WHERE id = 20`); got != 1 {
+		t.Fatalf("expected no policy enforcement on unaccounted batch, forward status=%d", got)
 	}
 	updatedShare, err := r.GetPeerShare(share.ID)
 	if err != nil || updatedShare == nil {
 		t.Fatalf("reload peer share: %v", err)
 	}
-	if updatedShare.CurrentFlow != 200 {
-		t.Fatalf("expected peer-share flow accounting to continue after flow batch failure, got %d", updatedShare.CurrentFlow)
+	if updatedShare.CurrentFlow != 0 {
+		t.Fatalf("expected no peer-share accounting on unaccounted batch, got %d", updatedShare.CurrentFlow)
 	}
-	if got := mustQueryInt(t, r, `SELECT in_flow FROM forward WHERE id = 20`); got != 80 {
-		t.Fatalf("expected flow fallback to persist forward 20 in_flow=80, got %d", got)
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM forward WHERE id = 20`); got != 0 {
+		t.Fatalf("expected forward 20 delta to roll back with the batch, got %d", got)
 	}
 	if got := mustQueryInt(t, r, `SELECT in_flow FROM forward WHERE id = 21`); got != 0 {
 		t.Fatalf("expected failed forward 21 delta to remain unapplied, got %d", got)
 	}
-	if got := mustQueryInt(t, r, `SELECT in_flow FROM user WHERE id = 2`); got != 80 {
-		t.Fatalf("expected flow fallback to preserve successful user totals, got %d", got)
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM user WHERE id = 2`); got != 0 {
+		t.Fatalf("expected user totals to roll back with the batch, got %d", got)
 	}
-	if got := mustQueryInt(t, r, `SELECT in_flow FROM user_tunnel WHERE id = 10`); got != 80 {
-		t.Fatalf("expected flow fallback to preserve successful user_tunnel totals, got %d", got)
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM user_tunnel WHERE id = 10`); got != 0 {
+		t.Fatalf("expected user_tunnel totals to roll back with the batch, got %d", got)
 	}
 }
 
-func TestApplyFlowUploadBatchFallsBackToPerUserQuotaUpdates(t *testing.T) {
+// X-P3-31 / V-08 断言更新登记：原测试名
+// TestApplyFlowUploadBatchFallsBackToPerUserQuotaUpdates，锁旧取舍
+// 「quota 批失败时逐用户 fallback、成功用户照落」。V-08 裁定改取舍
+// 为单事务原子入账：一人失败整批回滚，故更名并反转断言（非放宽：
+// 失败面从「部分落账」收紧为「整批不落」）。
+func TestApplyFlowUploadBatchQuotaAtomicAcrossUsers(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "flow-upload-batch-quota-fallback.db"))
 	if err != nil {
 		t.Fatalf("open repo: %v", err)
@@ -251,10 +275,13 @@ func TestApplyFlowUploadBatchFallsBackToPerUserQuotaUpdates(t *testing.T) {
 	}
 
 	h := &Handler{repo: r}
-	h.applyFlowUploadBatch(1, flowUploadBatch{quotaUsage: map[int64]int64{2: 200, 3: 300}}, now)
+	applyErr := h.applyFlowUploadBatch(1, flowUploadBatch{quotaUsage: map[int64]int64{2: 200, 3: 300}}, now)
+	if applyErr == nil {
+		t.Fatalf("expected accounting error to be returned when one user's quota write fails")
+	}
 
-	if got := mustQueryInt(t, r, `SELECT daily_used_bytes FROM user_quota WHERE user_id = 2`); got != 200 {
-		t.Fatalf("expected quota fallback to persist user 2 usage, got %d", got)
+	if got := mustQueryInt(t, r, `SELECT daily_used_bytes FROM user_quota WHERE user_id = 2`); got != 0 {
+		t.Fatalf("expected user 2 quota to roll back with the batch, got %d", got)
 	}
 	if got := mustQueryInt(t, r, `SELECT daily_used_bytes FROM user_quota WHERE user_id = 3`); got != 0 {
 		t.Fatalf("expected failed user 3 quota delta to remain unapplied, got %d", got)

@@ -342,10 +342,37 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if groupIDsRaw, ok := req["groupIds"]; ok {
 		newGroupIDs := asInt64Slice(groupIDsRaw)
-		if affected, replaceErr := h.repo.ReplaceUserGroupsByUserID(id, newGroupIDs, now); replaceErr == nil {
-			for _, gid := range affected {
-				_ = h.syncPermissionsByUserGroup(gid)
+		// X-P2-6 + X-P1-2①：分组替换与「被移出分组的组建授权撤销」在同一
+		// 事务内完成；replaceErr 必须上抛，不再吞错回成功。
+		tx := h.repo.BeginTx()
+		if tx == nil || tx.Error != nil {
+			response.WriteJSON(w, response.Err(-2, "database unavailable"))
+			return
+		}
+		defer func() { tx.Rollback() }()
+		affected, removed, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now)
+		if replaceErr != nil {
+			response.WriteJSON(w, response.Err(-2, replaceErr.Error()))
+			return
+		}
+		var revokedPairs []repo.RevokedUserTunnelPair
+		for _, gid := range removed {
+			pairs, revokeErr := h.repo.RevokeGroupGrantsForUserTx(tx, gid, id)
+			if revokeErr != nil {
+				response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
+				return
 			}
+			revokedPairs = append(revokedPairs, pairs...)
+		}
+		if err := tx.Commit().Error; err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		for _, pair := range revokedPairs {
+			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+		}
+		for _, gid := range affected {
+			_ = h.syncPermissionsByUserGroup(gid)
 		}
 	}
 	if oldUser.MaxConn != maxConn {
@@ -404,7 +431,9 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	roleID, err := h.repo.GetUserRoleID(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			response.WriteJSON(w, response.ErrDefault("用户不存在"))
+			// X-P3-28（L-11-3，V-12）：delete 对不存在统一幂等成功
+			// （与 node/tunnel/speedLimit 对齐；删除不存在对象无副作用）。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -434,7 +463,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(tunnelOrder, func(i, j int) bool { return tunnelOrder[i] < tunnelOrder[j] })
 	for _, tunnelID := range tunnelOrder {
-		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户"); err != nil {
+		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户", false); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -482,6 +511,16 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-27（L-11-2）：与 X-P2-17 同一 Idempotency-Key 机制（创建面）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	name := asString(req["name"])
 	serverIP := asString(req["serverIp"])
 	if name == "" || serverIP == "" {
@@ -510,10 +549,15 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if forwardMode == "nftables" {
 		status = 1
 	}
+	nodeSecret, err := randomToken(16)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
 	nodeID, err := h.repo.CreateNode(
 		name,
-		randomToken(16),
+		nodeSecret,
 		serverIP,
 		nullableText(asString(req["serverIpV4"])),
 		nullableText(asString(req["serverIpV6"])),
@@ -543,6 +587,12 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.persistNodeSSHConfig(nodeID, req, forwardMode, now, false); err != nil {
+		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
+		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
+		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
+		if delErr := h.deleteNodeByID(nodeID); delErr != nil {
+			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1729,6 +1779,23 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// X-P2-4 ①（E-S1）：名下中转转发逐条复跑 onLanding 判定——新出口集
+	// 让某个落地入站「出口为落地但非单出口」时拒绝保存（文案与
+	// relayTarget 一致），否则转发继续拨回环地址静默错向。置于验证段
+	// 之后、提交段之前：验证事务已回滚，此处走主句柄读 relays/inbounds
+	// 不与事务锁冲突；runtimeState.OutNodes 即待提交的新出口集。
+	if typeVal == 2 && runtimeState != nil {
+		newExits := make([]int64, 0, len(runtimeState.OutNodes))
+		for _, outNode := range runtimeState.OutNodes {
+			if outNode.NodeID > 0 {
+				newExits = append(newExits, outNode.NodeID)
+			}
+		}
+		if err := h.validateTunnelRelayExits(id, newExits); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 	// A3-01：SSH 能力校验在验证段的锁与事务都释放后执行（网络调用
 	// 不进临界区）；失败时尚未触碰任何运行时/DB 状态，语义与原
 	// 验证段内校验一致。
@@ -1842,6 +1909,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	// X-P2-3（E-02）：隧道编辑改了入口/出口后，名下中转转发的拨号节点
+	// 随之变化——按「隧道名下转发 → relay → inboundID」收集受影响入站
+	// 逐个刷新白名单，否则新出口 IP 不在 allow 内（中转静默断）、旧
+	// 出口 IP 残留放行。提交已落库，此处刷新与后续成功分支无关。
+	h.refreshInboundWhitelists(h.inboundIDsForTunnel(id))
 
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
@@ -2316,22 +2389,7 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	// O3-001：删除前收集受影响的入站 ID（隧道删除会级联删除 NodeInboundRelay）。
 	// 参考中转删除时的 h.refreshInboundWhitelist(rel.InboundID) 调用。
 	// F-002：收集必须在转发数据面清理之前（清理会删转发行）。
-	var affectedInboundIDs []int64
-	if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
-		seen := make(map[int64]struct{})
-		for _, fwd := range forwards {
-			if rels, err := h.repo.ListNodeInboundRelays(); err == nil {
-				for _, rel := range rels {
-					if rel.ForwardID == fwd.ID {
-						if _, ok := seen[rel.InboundID]; !ok {
-							seen[rel.InboundID] = struct{}{}
-							affectedInboundIDs = append(affectedInboundIDs, rel.InboundID)
-						}
-					}
-				}
-			}
-		}
-	}
+	affectedInboundIDs := h.inboundIDsForTunnel(id)
 	// F-002：先逐条清理名下转发的数据面（gost DeleteService / nft
 	// pending 台账），清理未完成则中止删隧道，避免孤儿监听脱离计数。
 	if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
@@ -2407,16 +2465,8 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// 删除完成后统一刷新白名单，避免残留已删中转机 IP。
 	seenInbound := make(map[int64]struct{})
 	for _, id := range ids {
-		if forwards, err := h.repo.ListForwardsByTunnel(id); err == nil {
-			if rels, err := h.repo.ListNodeInboundRelays(); err == nil {
-				for _, fwd := range forwards {
-					for _, rel := range rels {
-						if rel.ForwardID == fwd.ID {
-							seenInbound[rel.InboundID] = struct{}{}
-						}
-					}
-				}
-			}
+		for _, inboundID := range h.inboundIDsForTunnel(id) {
+			seenInbound[inboundID] = struct{}{}
 		}
 	}
 	success := 0
@@ -2721,13 +2771,49 @@ func (h *Handler) userTunnelBatchAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-22：整批单事务（对齐 SetUserSubscriptions 模式）——任一条目
+	// DB 失败整批回滚，不再逐条顺序提交留下半批生效。数据面同步在提交后
+	// 逐条执行；同步失败时整批按 upsertUserTunnel 的补偿语义回滚 DB 变更
+	//（contract: limiter dispatch 失败须回滚），再尽力把恢复后的配置重下发。
+	tx := h.repo.BeginTx()
+	if tx == nil || tx.Error != nil {
+		response.WriteJSON(w, response.Err(-2, "database unavailable"))
+		return
+	}
+	defer func() { tx.Rollback() }()
+	outcomes := make([]*userTunnelUpsertOutcome, 0, len(req.Tunnels))
 	for _, t := range req.Tunnels {
 		m := map[string]interface{}{"userId": req.UserID, "tunnelId": t.TunnelID}
 		if t.SpeedID != nil {
 			m["speedId"] = *t.SpeedID
 		}
-		if err := h.upsertUserTunnel(m); err != nil {
+		outcome, err := h.upsertUserTunnelDB(tx, m)
+		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	if err := tx.Commit().Error; err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	for _, outcome := range outcomes {
+		if err := h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID); err != nil {
+			var rollbackErrs []string
+			for i := len(outcomes) - 1; i >= 0; i-- {
+				if rbErr := h.rollbackUserTunnelUpsert(outcomes[i]); rbErr != nil {
+					rollbackErrs = append(rollbackErrs, rbErr.Error())
+				}
+			}
+			for _, o := range outcomes {
+				_ = h.syncUserTunnelForwards(o.userID, o.tunnelID)
+			}
+			if len(rollbackErrs) > 0 {
+				response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败且回滚失败: %v; %s", err, strings.Join(rollbackErrs, "; "))))
+				return
+			}
+			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败，已回滚: %v", err)))
 			return
 		}
 	}
@@ -2885,6 +2971,16 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
 		return
 	}
+	// X-P2-17（BC-13）：Idempotency-Key 回放/捕获（机制见 idempotency.go）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, userID)
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	tunnelID := asInt64(req["tunnelId"], 0)
 	if tunnelID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("隧道ID不能为空"))
@@ -2974,23 +3070,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
 	}
-	for _, nodeID := range entryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			continue
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
+	if err := h.validateForwardEntryNodes(entryNodes, port, 0); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	// A4-004（BC-26）：realm 不支持的负载策略明确拒绝，不再静默改写。
 	if err := validateRealmForwardStrategy(tunnel, remoteAddr, defaultString(asString(req["strategy"]), "fifo")); err != nil {
@@ -3199,23 +3281,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		removedNodeIDs = diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs = diffInt64s(oldNodeIDs, removedNodeIDs)
 	}
-	for _, nodeID := range fwdEntryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			continue
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if err := h.validateForwardPortAvailability(node, port, id); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
+	if err := h.validateForwardEntryNodes(fwdEntryNodes, port, id); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	now := time.Now().UnixMilli()
 	maxConn := asInt(req["maxConn"], forward.MaxConn)
@@ -3299,12 +3367,15 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 	forward, _, _, err := h.resolveForwardAccess(r, id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
-			response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单。
+	affectedInboundIDs := h.inboundIDsForForward(id)
 	var nftNodeID int64
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
@@ -3339,6 +3410,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
@@ -3347,6 +3419,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -3370,22 +3443,25 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 绕过 ensureForwardAccessByActor 的 pending 过滤：force-delete 必须能
-	// 找到 pending-delete 行。幂等：不存在的 ID 返回明确的“不存在”，非 500。
+	// 找到 pending-delete 行。幂等口径见下方 X-P3-28（V-12）。
 	forward, err := h.getForwardRecord(id)
 	if err != nil {
 		if errors.Is(err, errForwardNotFound) {
-			response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if forward == nil {
-		// R5 幂等：不存在的 ID 返回明确的“不存在”（中文，与其他接口一致），非 500。
-		response.WriteJSON(w, response.ErrDefault("转发不存在"))
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID，删后刷新白名单。
+	affectedInboundIDs := h.inboundIDsForForward(id)
 	// 审计所需：节点与端口（删库前采集，供残留规则人工清理）。
 	residueHint := h.buildForwardResidueHint(forward)
 	oldPorts, _ := h.listForwardPorts(id)
@@ -3398,6 +3474,7 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	if tunnel, terr := h.getTunnelRecord(forward.TunnelID); terr == nil && tunnelIsRealm(tunnel) {
 		// realm renders from the database: the forward drops out on the
 		// next apply, now or when the node reconnects.
@@ -3670,6 +3747,13 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 	f := 0
 	failures := make([]batchFailureDetail, 0)
 	pending := make([]batchFailureDetail, 0)
+	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID（并集），删后刷新
+	// 白名单。刷新按当前 DB 重算：仅已删转发掉出 allow，pending/失败项
+	// 的行仍在库、口径不变。
+	var affectedInboundIDs []int64
+	for _, id := range ids {
+		affectedInboundIDs = append(affectedInboundIDs, h.inboundIDsForForward(id)...)
+	}
 	// R5-B3 D1-001: nft 删除按节点聚合，一节点只 reconcile 一次。
 	nftGroups := make(map[int64][]int64)
 	nftNames := make(map[int64]string)
@@ -3729,6 +3813,7 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	h.refreshInboundWhitelists(affectedInboundIDs)
 	response.WriteJSON(w, response.OK(batchOperationResult{
 		SuccessCount: s,
 		FailCount:    f,
@@ -3988,7 +4073,34 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			}
 			p = picked
 		}
-		bctEntryNodes, _ := h.tunnelEntryNodeIDs(req.TargetTunnelID)
+		// X-P3-15（L-04-1）：显式 1–65535 校验（与 create/update 的
+		// O2-001 同口径）。存量非法端口在目标节点 PortRange 空规格
+		// 放行时，旧实现原样写回、下发才失败；现校验环直接拒。
+		if p < 1 || p > 65535 {
+			fail++
+			failures = appendBatchFailureReason(failures, id, forward.Name, "端口必须在 1-65535 范围内")
+			continue
+		}
+		// X-P3-17（L-04-3）评估登记：本批不收敛为「整批单 tx」——
+		// 批回执契约是逐条成败（部分成功合法且须逐条列明），且每条的
+		// 运行时下发（网络调用）无法入 DB 事务，整批单 tx 只会把全部
+		// 条目的端口锁与写事务拖过网络往返。收敛点落在逐条粒度：每条
+		// 的 DB 写（换隧道+换端口）已是单 tx（见下方
+		// ChangeForwardTunnelAndPorts），校验环即占用预取。
+		// 「按用户批量建转发」同评估：仓内无此端点（forwardCreate 为
+		// 单条且已经 CreateForwardTx 单 tx+锁内复检；批量分配见
+		// userTunnelBatchAssign，X-P3-22 已整批单 tx），无可收敛对象。
+		bctEntryNodes, bctErr := h.tunnelEntryNodeIDs(req.TargetTunnelID)
+		if bctErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, bctErr)
+			continue
+		}
+		if len(bctEntryNodes) == 0 {
+			fail++
+			failures = appendBatchFailureReason(failures, id, forward.Name, "目标隧道没有入口节点")
+			continue
+		}
 		newNodeIDs := uniqueInt64s(bctEntryNodes)
 		removedNodeIDs := diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs := diffInt64s(oldNodeIDs, removedNodeIDs)
@@ -4022,19 +4134,33 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, forward.Name, portRangeErr)
 			continue
 		}
+		// X-P2-4 ②：托管中转转发按目标隧道出口集重算 RemoteAddr，不再
+		// 只改端口沿用旧址；重算失败（如目标隧道出口集违反落地单出口
+		// 规则）该条直接失败、不落库。
+		newRemoteAddr, remoteAddrChanged, retargetErr := h.recomputedRelayRemoteAddr(forward, targetTunnel)
+		if retargetErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, retargetErr)
+			continue
+		}
+		effectiveRemoteAddr := forward.RemoteAddr
+		if remoteAddrChanged {
+			effectiveRemoteAddr = newRemoteAddr
+		}
 		// A4-004（BC-26）：换入 realm 隧道同受策略校验（编辑路径之一）。
-		if err := validateRealmForwardStrategy(targetTunnel, forward.RemoteAddr, forward.Strategy); err != nil {
+		if err := validateRealmForwardStrategy(targetTunnel, effectiveRemoteAddr, forward.Strategy); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
-		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
-			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-			continue
+		// X-P3-17（L-04-3）：换隧道+换端口收敛为 repo 单 tx（锁内占用
+		// 复检）；失败整条回滚、无中间态，此段不再需要补偿恢复。
+		// 补偿（rollbackForwardMutation）仅保留给提交后的取行/下发失败。
+		bctEntries := make([]forwardPortReplaceEntry, len(bctEntryNodes))
+		for i, nid := range bctEntryNodes {
+			bctEntries[i] = forwardPortReplaceEntry{NodeID: nid, Port: p, InIP: ""}
 		}
-		if err := h.replaceForwardPorts(id, req.TargetTunnelID, p, ""); err != nil {
-			h.rollbackForwardMutation(forward, oldPorts)
+		if err := h.repo.ChangeForwardTunnelAndPorts(id, req.TargetTunnelID, effectiveRemoteAddr, bctEntries, time.Now().UnixMilli()); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
@@ -4075,6 +4201,16 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	// X-P3-27（L-11-2）：与 X-P2-17 同一 Idempotency-Key 机制（创建面）。
+	{
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
 	}
 
 	name := asString(req["name"])
@@ -4177,13 +4313,27 @@ func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { tx.Rollback() }()
+	// X-P1-2②：替换前取旧成员差集，被移出隧道的组建授权在同一事务内撤销。
+	previousTunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroupTx(tx, req.GroupID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	if err := h.repo.ReplaceTunnelGroupMembersTx(tx, req.GroupID, req.TunnelIDs, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	revokedPairs, revokeErr := h.repo.RevokeGroupGrantsForRemovedTunnelsTx(tx, req.GroupID, previousTunnelIDs, req.TunnelIDs)
+	if revokeErr != nil {
+		response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	for _, pair := range revokedPairs {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 	_ = h.syncPermissionsByTunnelGroup(req.GroupID)
 	response.WriteJSON(w, response.OKEmpty())
@@ -4242,7 +4392,23 @@ func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	_ = h.applyGroupPermission(req.UserGroupID, req.TunnelGroupID)
+	// X-P2-16：展开失败不再静默——部分失败在回执逐条列明，全失败报错。
+	result, applyErr := h.applyGroupPermission(req.UserGroupID, req.TunnelGroupID)
+	if applyErr != nil {
+		response.WriteJSON(w, response.Err(-2, applyErr.Error()))
+		return
+	}
+	if len(result.Failures) > 0 {
+		if result.Succeeded == 0 {
+			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("权限分配失败: %v", result.Failures[0].Error)))
+			return
+		}
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"message":  "权限分配部分失败",
+			"failures": result.Failures,
+		}))
+		return
+	}
 	response.WriteJSON(w, response.OK("权限分配成功"))
 }
 
@@ -4330,30 +4496,61 @@ func (h *Handler) groupDelete(w http.ResponseWriter, r *http.Request, table stri
 	if id <= 0 {
 		return
 	}
-	if err := h.repo.GroupDeleteCascade(table, id); err != nil {
+	// X-P1-2③：删组在删台账前先收集该组全部组建授权并撤销、清理转发，
+	// 否则台账删除后残留授权无从追溯。
+	revokedPairs, err := h.repo.GroupDeleteCascadeWithRevoke(table, id)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	for _, pair := range revokedPairs {
+		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
-func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) error {
-	userIDs, _ := h.repo.ListUserIDsByUserGroup(userGroupID)
-	tunnelIDs, _ := h.repo.ListTunnelIDsByTunnelGroup(tunnelGroupID)
+// groupGrantFailure is one failed entry of a group-permission expansion
+// (X-P2-16): the expansion no longer swallows per-entry failures.
+type groupGrantFailure struct {
+	UserID   int64  `json:"userId"`
+	TunnelID int64  `json:"tunnelId"`
+	Error    string `json:"error"`
+}
+
+type groupApplyResult struct {
+	Succeeded int
+	Failures  []groupGrantFailure
+}
+
+func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
+	var result groupApplyResult
+	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
+	if err != nil {
+		return result, err
+	}
+	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(tunnelGroupID)
+	if err != nil {
+		return result, err
+	}
 	for _, uid := range userIDs {
 		for _, tid := range tunnelIDs {
 			utID, created, err := h.repo.EnsureUserTunnelGrant(uid, tid)
 			if err != nil {
+				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
 				continue
 			}
 			createdByGroup := 0
 			if created {
 				createdByGroup = 1
 			}
-			h.repo.InsertGroupPermissionGrant(userGroupID, tunnelGroupID, utID, createdByGroup, time.Now().UnixMilli())
+			if err := h.repo.InsertGroupPermissionGrant(userGroupID, tunnelGroupID, utID, createdByGroup, time.Now().UnixMilli()); err != nil {
+				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
+				continue
+			}
+			result.Succeeded++
 		}
 	}
-	return nil
+	return result, nil
 }
 
 func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
@@ -4362,7 +4559,14 @@ func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
 		return err
 	}
 	for _, p := range pairs {
-		_ = h.applyGroupPermission(p[0], p[1])
+		result, applyErr := h.applyGroupPermission(p[0], p[1])
+		if applyErr != nil {
+			log.Printf("sync permissions by user group %d failed: %v", userGroupID, applyErr)
+			continue
+		}
+		for _, f := range result.Failures {
+			log.Printf("sync permissions by user group %d: grant failed user=%d tunnel=%d err=%s", userGroupID, f.UserID, f.TunnelID, f.Error)
+		}
 	}
 	return nil
 }
@@ -4373,7 +4577,14 @@ func (h *Handler) syncPermissionsByTunnelGroup(tunnelGroupID int64) error {
 		return err
 	}
 	for _, p := range pairs {
-		_ = h.applyGroupPermission(p[0], p[1])
+		result, applyErr := h.applyGroupPermission(p[0], p[1])
+		if applyErr != nil {
+			log.Printf("sync permissions by tunnel group %d failed: %v", tunnelGroupID, applyErr)
+			continue
+		}
+		for _, f := range result.Failures {
+			log.Printf("sync permissions by tunnel group %d: grant failed user=%d tunnel=%d err=%s", tunnelGroupID, f.UserID, f.TunnelID, f.Error)
+		}
 	}
 	return nil
 }
@@ -5484,6 +5695,36 @@ func isNodeOfflineOrTimeoutError(err error) bool {
 	return shouldDeferTunnelRuntimeApplyError(err)
 }
 
+// isNodeUnreachableError 判断错误是否属于「节点离线/不可达」类（R1 X-P1-1）：
+// 结构化的 nodeOfflineError、既有离线/超时口径，以及传输层不可达特征
+// （SSH 拨号失败、连接拒绝、无路由等）。节点在线但命令真实失败（ agent
+// 明确回失败、远端返回业务错误等）不匹配，调用方据此区分待清理与硬失败。
+func isNodeUnreachableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsNodeOfflineError(err) {
+		return true
+	}
+	if isNodeOfflineOrTimeoutError(err) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	for _, pattern := range []string{
+		"节点不可达",
+		"unable to connect",
+		"connection refused",
+		"no route to host",
+		"network is unreachable",
+		"connection reset",
+	} {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string) (map[string]interface{}, error) {
 	fromNode := nodes[fromNodeID]
 	if fromNode == nil {
@@ -5961,20 +6202,23 @@ func (h *Handler) deleteTunnelByID(id int64) error {
 	tunnelName, _ := h.repo.GetTunnelName(id)
 	tunnel, _ := h.repo.GetTunnelRecord(id)
 	entryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
-	if err := h.repo.DeleteTunnelCascade(id); err != nil {
+	// X-P3-23（L-09-5）：尾步 peer runtime 释放标记纳入级联主事务——
+	// 释放失败则整个删除回滚，不再出现「隧道已删、runtime 未释放、
+	// 靠后台收敛」的不一致中间态。share 信息须在删前解析（隧道名
+	// 随行删除即不可读）。
+	shareID, port, isPeerShare := parsePeerShareInfoFromFederationTunnelName(tunnelName)
+	if isPeerShare {
+		if err := h.repo.DeleteTunnelCascadeWithPeerRelease(id, shareID, port, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+	} else if err := h.repo.DeleteTunnelCascade(id); err != nil {
 		return err
 	}
 	if tunnelIsRealm(tunnel) {
 		// 级联删除后 realm 渲染源已无此隧道：让入口节点收敛到无端点。
 		_, _ = h.syncRealmNodes(entryNodeIDs, nil)
 	}
-
-	shareID, port, ok := parsePeerShareInfoFromFederationTunnelName(tunnelName)
-	if !ok {
-		return nil
-	}
-
-	return h.repo.MarkPeerShareRuntimeReleasedByPort(shareID, port, time.Now().UnixMilli())
+	return nil
 }
 
 func (h *Handler) deleteForwardByID(id int64) error {
@@ -6194,21 +6438,96 @@ func (h *Handler) rollbackForwardMutation(oldForward *forwardRecord, oldPorts []
 	_ = h.syncForwardServices(oldForward, "UpdateService", true)
 }
 
+// userTunnelUpsertOutcome describes the DB-side effect of one
+// upsertUserTunnelDB call so callers can run the data-plane sync (and its
+// compensation) outside any transaction.
+type userTunnelUpsertOutcome struct {
+	userID   int64
+	tunnelID int64
+	inserted bool
+	// Previous field values (update path only), for sync-failure rollback.
+	existingID    int64
+	prevSpeedID   sql.NullInt64
+	prevFlow      int64
+	prevFlowMiB   int64
+	prevNum       int64
+	prevExpTime   int64
+	prevFlowReset int64
+	prevStatus    int
+}
+
+// rollbackUserTunnelUpsert undoes the DB change of one upsert outcome
+// (inserted rows are deleted, updated rows restored to their previous
+// values) — the compensation applied when the data-plane sync fails.
+func (h *Handler) rollbackUserTunnelUpsert(outcome *userTunnelUpsertOutcome) error {
+	if outcome.inserted {
+		insertedID, _, _, _, _, _, _, lookupErr := h.repo.GetExistingUserTunnel(outcome.userID, outcome.tunnelID)
+		if lookupErr != nil {
+			return fmt.Errorf("回滚查询错误: %w", lookupErr)
+		}
+		if err := h.repo.DeleteUserTunnel(insertedID); err != nil {
+			return fmt.Errorf("回滚删除错误: %w", err)
+		}
+		return nil
+	}
+	if err := h.repo.UpdateUserTunnelFields(
+		outcome.existingID,
+		outcome.prevSpeedID,
+		outcome.prevFlow,
+		int(outcome.prevNum),
+		outcome.prevExpTime,
+		outcome.prevFlowReset,
+		outcome.prevStatus,
+		outcome.prevFlowMiB,
+	); err != nil {
+		return fmt.Errorf("回滚错误: %w", err)
+	}
+	return nil
+}
+
 func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
+	outcome, err := h.upsertUserTunnelDB(nil, req)
+	if err != nil {
+		return err
+	}
+	if syncErr := h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID); syncErr != nil {
+		if rollbackErr := h.rollbackUserTunnelUpsert(outcome); rollbackErr != nil {
+			return fmt.Errorf("下发失败且回滚失败: %v; %w", syncErr, rollbackErr)
+		}
+		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
+	}
+	return nil
+}
+
+// upsertUserTunnelDB performs only the DB portion of a user-tunnel
+// assignment. With tx == nil it writes directly (single assignment); with a
+// tx it participates in the caller's transaction (X-P3-22 batch assignment).
+// Data-plane sync is deliberately left to the caller so it never runs
+// inside a transaction.
+func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*userTunnelUpsertOutcome, error) {
 	userID := asInt64(req["userId"], 0)
 	tunnelID := asInt64(req["tunnelId"], 0)
 	if userID <= 0 || tunnelID <= 0 {
-		return fmt.Errorf("userId or tunnelId missing")
+		return nil, fmt.Errorf("userId or tunnelId missing")
 	}
 
-	existingID, currentFlow, currentNum, currentExpTime, currentFlowReset, currentSpeedID, currentStatus, lookupErr :=
-		h.repo.GetExistingUserTunnel(userID, tunnelID)
+	getExisting := func() (int64, int64, int64, int64, int64, sql.NullInt64, int, error) {
+		if tx != nil {
+			return h.repo.GetExistingUserTunnelTx(tx, userID, tunnelID)
+		}
+		return h.repo.GetExistingUserTunnel(userID, tunnelID)
+	}
+	existingID, currentFlow, currentNum, currentExpTime, currentFlowReset, currentSpeedID, currentStatus, lookupErr := getExisting()
 
 	speedID := asAnyToInt64Ptr(req["speedId"])
 	var err error
-	speedID, err = h.normalizeSpeedLimitReference(speedID)
+	if tx != nil {
+		speedID, err = h.normalizeSpeedLimitReferenceTx(tx, speedID)
+	} else {
+		speedID, err = h.normalizeSpeedLimitReference(speedID)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	reqFlow := asInt64(req["flow"], -1)
@@ -6217,7 +6536,7 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		var flowErr error
 		reqFlow, reqFlowMiB, flowErr = parseTrafficLimit(req, 0)
 		if flowErr != nil {
-			return flowErr
+			return nil, flowErr
 		}
 	}
 	reqNum := asInt(req["num"], -1)
@@ -6227,11 +6546,25 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 
 	if lookupErr == sql.ErrNoRows {
 		if reqFlow < 0 || reqNum < 0 || reqExpTime < 0 || reqFlowReset < 0 {
-			uFlow, uNum, uExp, uReset, uErr := h.repo.GetUserDefaultsForTunnel(userID)
+			var uFlow, uExp, uReset int64
+			var uNum int
+			var uErr error
+			if tx != nil {
+				uFlow, uNum, uExp, uReset, uErr = h.repo.GetUserDefaultsForTunnelTx(tx, userID)
+			} else {
+				uFlow, uNum, uExp, uReset, uErr = h.repo.GetUserDefaultsForTunnel(userID)
+			}
 			if uErr == nil {
 				if reqFlow < 0 {
 					reqFlow = uFlow
-					if user, err := h.repo.GetUserByID(userID); err == nil && user != nil {
+					var user *model.User
+					var userErr error
+					if tx != nil {
+						user, userErr = h.repo.GetUserByIDTx(tx, userID)
+					} else {
+						user, userErr = h.repo.GetUserByID(userID)
+					}
+					if userErr == nil && user != nil {
 						reqFlowMiB = user.FlowMiB
 					}
 				}
@@ -6262,36 +6595,32 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 			reqStatus = 1
 		}
 
-		if err := h.repo.InsertUserTunnel(userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
-			return err
+		if tx != nil {
+			if err := h.repo.InsertUserTunnelTx(tx, userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
+				return nil, err
+			}
+		} else if err := h.repo.InsertUserTunnel(userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
+			return nil, err
 		}
 
-		if syncErr := h.syncUserTunnelForwards(userID, tunnelID); syncErr != nil {
-			insertedID, _, _, _, _, _, _, lookupErr := h.repo.GetExistingUserTunnel(userID, tunnelID)
-			if lookupErr != nil {
-				return fmt.Errorf("下发失败且回滚失败: %v; 回滚查询错误: %w", syncErr, lookupErr)
-			}
-
-			if rollbackErr := h.repo.DeleteUserTunnel(insertedID); rollbackErr != nil {
-				return fmt.Errorf("下发失败且回滚失败: %v; 回滚删除错误: %w", syncErr, rollbackErr)
-			}
-
-			return fmt.Errorf("下发失败，已回滚: %w", syncErr)
-		}
-
-		return nil
+		return &userTunnelUpsertOutcome{userID: userID, tunnelID: tunnelID, inserted: true}, nil
 	}
 	if lookupErr != nil {
-		return lookupErr
+		return nil, lookupErr
 	}
 
 	newFlow := currentFlow
-	oldTunnel, err := h.repo.GetUserTunnelByID(existingID)
+	var oldTunnel *model.UserTunnel
+	if tx != nil {
+		oldTunnel, err = h.repo.GetUserTunnelByIDTx(tx, existingID)
+	} else {
+		oldTunnel, err = h.repo.GetUserTunnelByID(existingID)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if oldTunnel == nil {
-		return fmt.Errorf("隧道权限不存在")
+		return nil, fmt.Errorf("隧道权限不存在")
 	}
 	newFlowMiB := oldTunnel.FlowMiB
 	if reqFlow >= 0 {
@@ -6329,29 +6658,26 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		newSpeedID = sql.NullInt64{Valid: false}
 	}
 
-	if err := h.repo.UpdateUserTunnelFields(existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
-		return err
-	}
-
-	if syncErr := h.syncUserTunnelForwards(userID, tunnelID); syncErr != nil {
-		rollbackErr := h.repo.UpdateUserTunnelFields(
-			existingID,
-			currentSpeedID,
-			currentFlow,
-			int(currentNum),
-			currentExpTime,
-			currentFlowReset,
-			currentStatus,
-			oldTunnel.FlowMiB,
-		)
-		if rollbackErr != nil {
-			return fmt.Errorf("下发失败且回滚失败: %v; 回滚错误: %w", syncErr, rollbackErr)
+	if tx != nil {
+		if err := h.repo.UpdateUserTunnelFieldsTx(tx, existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
+			return nil, err
 		}
-
-		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
+	} else if err := h.repo.UpdateUserTunnelFields(existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return &userTunnelUpsertOutcome{
+		userID:        userID,
+		tunnelID:      tunnelID,
+		existingID:    existingID,
+		prevSpeedID:   currentSpeedID,
+		prevFlow:      currentFlow,
+		prevFlowMiB:   oldTunnel.FlowMiB,
+		prevNum:       currentNum,
+		prevExpTime:   currentExpTime,
+		prevFlowReset: currentFlowReset,
+		prevStatus:    currentStatus,
+	}, nil
 }
 
 func (h *Handler) syncUserTunnelForwards(userID, tunnelID int64) error {
@@ -6452,6 +6778,20 @@ func (h *Handler) normalizeSpeedLimitReference(speedID *int64) (*int64, error) {
 		return nil, nil
 	}
 
+	return speedID, nil
+}
+
+func (h *Handler) normalizeSpeedLimitReferenceTx(tx *gorm.DB, speedID *int64) (*int64, error) {
+	if speedID == nil {
+		return nil, nil
+	}
+	exists, err := h.repo.SpeedLimitExistsTx(tx, *speedID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
 	return speedID, nil
 }
 
@@ -6689,12 +7029,18 @@ func defaultString(v, def string) string {
 	return v
 }
 
-func randomToken(n int) string {
+// cryptoRandRead 是凭据随机源的测试 seam（生产恒为 crypto/rand.Read）。
+var cryptoRandRead = rand.Read
+
+// randomToken 生成 n 字节随机凭据的 hex 编码。X-P3-14（L-03-3）：
+// 随机源失败 fail-closed 返回错误——旧实现降级为时间戳 hex（可
+// 预测）落库为节点 secret/联邦凭据，属安全缺陷；调用方必须报错。
+func randomToken(n int) (string, error) {
 	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	if _, err := cryptoRandRead(buf); err != nil {
+		return "", fmt.Errorf("生成随机凭据失败: %w", err)
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }
 
 func asInt64Slice(v interface{}) []int64 {
@@ -6737,6 +7083,29 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 		}
 	}
 	return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内（该范围仅约束转发/中转/隧道入口端口）", port, node.Name, portRange)
+}
+
+// validateForwardEntryNodes 逐入口节点做转发端口校验（远程范围/
+// 本地规格/占用）。X-P3-16（L-04-2，BC-14，裁定 V-11）：节点记录
+// 读取失败 fail-closed 直接报错——create/update 旧实现 continue
+// 跳过校验仍落库，与 batch 的整条失败口径分叉，现统一。
+func (h *Handler) validateForwardEntryNodes(entryNodes []int64, port int, currentForwardID int64) error {
+	for _, nodeID := range entryNodes {
+		node, nodeErr := h.getNodeRecord(nodeID)
+		if nodeErr != nil {
+			return nodeErr
+		}
+		if err := validateRemoteNodePort(node, port); err != nil {
+			return err
+		}
+		if err := validateLocalNodePort(node, port); err != nil {
+			return err
+		}
+		if err := h.validateForwardPortAvailability(node, port, currentForwardID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, currentForwardID int64) error {

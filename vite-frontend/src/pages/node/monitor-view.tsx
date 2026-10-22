@@ -860,9 +860,19 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
     [],
   );
 
+  // loadLatestMonitorResults 序号（X-P3-8/K-02，照 loadMetrics 既有
+  // 写法）：5s 轮询与手动刷新可在途并发，只有最新一轮可落 state。
+  const latestResultsSeqRef = useRef(0);
+
   const loadLatestMonitorResults = useCallback(async () => {
+    const seq = (latestResultsSeqRef.current += 1);
+
     try {
       const response = await getServiceMonitorLatestResults();
+
+      if (latestResultsSeqRef.current !== seq) {
+        return;
+      }
 
       if (response.code === 0 && Array.isArray(response.data)) {
         setAccessDenied(null);
@@ -904,7 +914,9 @@ export function MonitorView({ nodeMap, viewMode = "grid" }: MonitorViewProps) {
 
       setLatestResultsError(response.msg || "加载最新监控结果失败");
     } catch {
-      setLatestResultsError("加载最新监控结果失败");
+      if (latestResultsSeqRef.current === seq) {
+        setLatestResultsError("加载最新监控结果失败");
+      }
     }
   }, []);
 
