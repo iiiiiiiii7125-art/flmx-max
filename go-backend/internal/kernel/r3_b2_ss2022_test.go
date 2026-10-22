@@ -253,6 +253,40 @@ func TestR3B2SSLinkBase64Userinfo(t *testing.T) {
 	}
 }
 
+// TestR3B2ValidateSS2022PasswordHelper：共享 helper 直测——四形态
+// 解码不得只试 Raw 变体（带填充标准串是面板自产与 openssl 口径，
+// 误拒即本项最大风险）；legacy / 未知 cipher 恒放行。
+func TestR3B2ValidateSS2022PasswordHelper(t *testing.T) {
+	raw32 := r3b2RawKey(32)
+	for _, e := range r3b2Encodings {
+		if err := ValidateSS2022Password(r3b2C256, e.enc.EncodeToString(raw32)); err != nil {
+			t.Fatalf("%s 形态合法 key 被误拒：%v", e.name, err)
+		}
+	}
+	if err := ValidateSS2022Password("aes-256-gcm", "plainpassword"); err != nil {
+		t.Fatalf("legacy 不可查：%v", err)
+	}
+	if err := ValidateSS2022Password("future-cipher-2099", "whatever"); err != nil {
+		t.Fatalf("未知 cipher 不可查：%v", err)
+	}
+	if err := ValidateSS2022Password(r3b2C256, "plainpassword"); err == nil ||
+		!strings.Contains(err.Error(), "SS2022") || !strings.Contains(err.Error(), "32") {
+		t.Fatalf("坏 key 错误须点名 SS2022 与字节数：%v", err)
+	}
+	// 单段判定（渲染层用）：多段合法密码在导入 helper 下合法、在
+	// 单段判定下为否，两口径不得混用。
+	multi := base64.StdEncoding.EncodeToString(raw32) + ":" + base64.StdEncoding.EncodeToString(raw32)
+	if err := ValidateSS2022Password(r3b2C256, multi); err != nil {
+		t.Fatalf("多段合法密码导入须接受：%v", err)
+	}
+	if ValidSS2022SingleKey(r3b2C256, multi) {
+		t.Fatal("多段密码单段判定须为否（sing-box 保守略过据此）")
+	}
+	if !ValidSS2022SingleKey("aes-256-gcm", "plainpassword") {
+		t.Fatal("非 SS2022 方法单段判定恒真")
+	}
+}
+
 // TestR3B2ProxySingboxSS2022Guard：渲染层纵深——存量不合规 SS2022
 // 节点在 sing-box 订阅中略过（兜底存量，不迁移不清理）；多段形态
 // 保守略过 sing-box，但 Clash / Surge 原样输出。
