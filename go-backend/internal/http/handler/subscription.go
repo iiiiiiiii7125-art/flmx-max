@@ -123,6 +123,19 @@ func (p *subPipeline) normalize() error {
 		return err
 	}
 	p.ChainNoneNames = noneNames
+	// X-P3-1（B-F1）：ChainLandingNames/ChainRelayNames 此前唯独未过
+	// normalizeNames，带空格的名字落库后与 Original 精确匹配永不命中。
+	// 与 None 名单同口径（修剪/去重/条数与长度上限、同一文案）。
+	landingNames, err := normalizeNames(p.ChainLandingNames)
+	if err != nil {
+		return err
+	}
+	p.ChainLandingNames = landingNames
+	relayNames, err := normalizeNames(p.ChainRelayNames)
+	if err != nil {
+		return err
+	}
+	p.ChainRelayNames = relayNames
 	landingSources, err := normalizeIDs(p.ChainLandingSources)
 	if err != nil {
 		return err
