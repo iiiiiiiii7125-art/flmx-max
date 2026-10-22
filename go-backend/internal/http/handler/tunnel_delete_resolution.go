@@ -82,6 +82,10 @@ type tunnelForwardMigrationPlan struct {
 	keptNodeIDs    []int64
 	removedNodeIDs []int64
 	portAdjusted   bool
+	// X-P2-4 ②：托管中转转发按目标隧道出口集重算的 RemoteAddr
+	// （remoteAddrChanged=false 时沿用现址）。
+	newRemoteAddr     string
+	remoteAddrChanged bool
 }
 
 func (h *Handler) tunnelDeletePreview(w http.ResponseWriter, r *http.Request) {
@@ -551,14 +555,28 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 		previousPort = oldPorts[0].Port
 	}
 
+	// X-P2-4 ②：托管中转转发按目标隧道出口集重算 RemoteAddr，随迁移
+	// 落库并经 sync 重下发，不再只改端口沿用旧址；重算失败（如目标
+	// 隧道出口集违反落地单出口规则）该转发迁移失败。
+	targetTunnel, terr := h.getTunnelRecord(targetTunnelID)
+	if terr != nil {
+		return tunnelForwardMigrationPlan{}, terr
+	}
+	newRemoteAddr, remoteAddrChanged, retargetErr := h.recomputedRelayRemoteAddr(forward, targetTunnel)
+	if retargetErr != nil {
+		return tunnelForwardMigrationPlan{}, retargetErr
+	}
+
 	return tunnelForwardMigrationPlan{
-		forward:        forward,
-		oldPorts:       oldPorts,
-		targetTunnelID: targetTunnelID,
-		targetPort:     targetPort,
-		keptNodeIDs:    keptNodeIDs,
-		removedNodeIDs: removedNodeIDs,
-		portAdjusted:   previousPort > 0 && previousPort != targetPort,
+		forward:           forward,
+		oldPorts:          oldPorts,
+		targetTunnelID:    targetTunnelID,
+		targetPort:        targetPort,
+		keptNodeIDs:       keptNodeIDs,
+		removedNodeIDs:    removedNodeIDs,
+		portAdjusted:      previousPort > 0 && previousPort != targetPort,
+		newRemoteAddr:     newRemoteAddr,
+		remoteAddrChanged: remoteAddrChanged,
 	}, nil
 }
 
@@ -586,6 +604,12 @@ func (h *Handler) applyTunnelDeleteForwardMigration(plan tunnelForwardMigrationP
 
 	if err := h.repo.UpdateForwardTunnel(plan.forward.ID, plan.targetTunnelID, time.Now().UnixMilli()); err != nil {
 		return nil, err
+	}
+	if plan.remoteAddrChanged {
+		if err := h.repo.UpdateForward(plan.forward.ID, plan.forward.Name, plan.targetTunnelID, plan.newRemoteAddr, plan.forward.Strategy, time.Now().UnixMilli(), plan.forward.SpeedID, plan.forward.MaxConn, plan.forward.IPMaxConn, plan.forward.IPSpeedID, 0, plan.forward.ProxyProtocolReceive, plan.forward.ProxyProtocolSend); err != nil {
+			h.rollbackForwardMutation(plan.forward, plan.oldPorts)
+			return nil, err
+		}
 	}
 	if err := h.replaceForwardPorts(plan.forward.ID, plan.targetTunnelID, plan.targetPort, ""); err != nil {
 		h.rollbackForwardMutation(plan.forward, plan.oldPorts)
