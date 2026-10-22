@@ -88,15 +88,21 @@ func TestInboundChain(t *testing.T) {
 		t.Fatal("chaining to itself must fail")
 	}
 
-	if msg := h.chainInUseMessage(target); !strings.Contains(msg, "front-vless") {
-		t.Fatalf("delete guard: %q", msg)
+	// R3X-015 连带签名适配（断言不变）：chainInUseMessage /
+	// inboundAllowList 现回传守卫查询错误，健康库上必须为 nil。
+	if msg, gerr := h.chainInUseMessage(target); gerr != nil || !strings.Contains(msg, "front-vless") {
+		t.Fatalf("delete guard: %q %v", msg, gerr)
 	}
-	if msg := h.chainInUseMessage(entry); msg != "" {
-		t.Fatalf("nothing chains through the entry: %q", msg)
+	if msg, gerr := h.chainInUseMessage(entry); gerr != nil || msg != "" {
+		t.Fatalf("nothing chains through the entry: %q %v", msg, gerr)
 	}
 
 	target.RelayWhitelist = 1
-	allow := strings.Join(h.inboundAllowList(*target), ",")
+	allowList, aerr := h.inboundAllowList(*target)
+	if aerr != nil {
+		t.Fatal(aerr)
+	}
+	allow := strings.Join(allowList, ",")
 	if !strings.Contains(allow, "198.51.100.1/32") {
 		t.Fatalf("whitelist must admit the chained node: %s", allow)
 	}
@@ -158,11 +164,15 @@ func TestInboundSplitTargets(t *testing.T) {
 		t.Fatalf("front kernel must route netflix to the unlock node:\n%s", cfg)
 	}
 
-	if msg := h.chainInUseMessage(target); !strings.Contains(msg, "front-trojan") {
-		t.Fatalf("a 分流 target is in use: %q", msg)
+	if msg, gerr := h.chainInUseMessage(target); gerr != nil || !strings.Contains(msg, "front-trojan") {
+		t.Fatalf("a 分流 target is in use: %q %v", msg, gerr)
 	}
 	target.RelayWhitelist = 1
-	if allow := strings.Join(h.inboundAllowList(*target), ","); !strings.Contains(allow, "198.51.100.1/32") {
+	allowList2, aerr2 := h.inboundAllowList(*target)
+	if aerr2 != nil {
+		t.Fatal(aerr2)
+	}
+	if allow := strings.Join(allowList2, ","); !strings.Contains(allow, "198.51.100.1/32") {
 		t.Fatalf("whitelist must admit the node routing through it: %s", allow)
 	}
 
