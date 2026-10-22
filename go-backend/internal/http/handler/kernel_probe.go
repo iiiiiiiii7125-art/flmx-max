@@ -13,6 +13,7 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
+	"go-backend/internal/netguard"
 	"go-backend/internal/store/model"
 )
 
@@ -130,13 +131,45 @@ func externalProbeSkipped(row *model.NodeInbound) bool {
 	return row.Protocol == kernel.ProtocolHysteria2 || row.Protocol == kernel.ProtocolTUIC
 }
 
+// externalProbeLookupIP 是 probe 的解析入口（var 以便测试注入）。
+var externalProbeLookupIP = net.LookupIP
+
 func probeExternalInbound(ctx context.Context, row model.NodeInbound) externalProbe {
 	now := time.Now()
 	if externalProbeSkipped(&row) {
 		return externalProbe{Skipped: true, CheckedAt: now.UnixMilli()}
 	}
+	// R2X-005/R2X-043：拨号前对解析结果过 netguard——任一命中
+	// loopback/硬拒不拨（存量坏行同样受检，命中即跳过并标记）。
+	// 判定与拨号共用同一次解析结果（拨已校验 IP，无二次解析窗口）。
+	var ips []net.IP
+	if ip := net.ParseIP(row.Listen); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		resolved, err := externalProbeLookupIP(row.Listen)
+		if err != nil || len(resolved) == 0 {
+			return externalProbe{Error: "域名解析失败", CheckedAt: time.Now().UnixMilli()}
+		}
+		ips = resolved
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
+			return externalProbe{Error: "目标地址不允许", CheckedAt: time.Now().UnixMilli()}
+		}
+	}
 	dialer := net.Dialer{Timeout: externalProbeTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(row.Listen, strconv.Itoa(row.Port)))
+	var conn net.Conn
+	var err error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(dialIP.String(), strconv.Itoa(row.Port)))
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return externalProbe{Error: probeErrorText(err), CheckedAt: time.Now().UnixMilli()}
 	}

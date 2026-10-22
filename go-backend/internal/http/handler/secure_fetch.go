@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go-backend/internal/config"
 	"go-backend/internal/logredact"
+	"go-backend/internal/netguard"
 	"io"
 	"log"
 	"net"
@@ -21,7 +22,7 @@ import (
 //   - 公网：强制 https，http 一律拒绝
 //   - 私网/回环/链路本地：需 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true
 //     或 FLMX_FETCH_PRIVATE_ALLOWLIST 含对应 CIDR
-//   - 元数据地址（169.254.169.254、fd00:ec2::254）：永远拒绝
+//   - 硬拒层（netguard：元数据精确集 ∪ 169.254/16 整段 ∪ 未指定）：永远拒绝
 //
 // 检查顺序（写死）：
 //  1. scheme 白名单（仅 http/https）
@@ -39,44 +40,16 @@ const (
 // 生产代码不得改动它。
 var secureFetchMaxBody = int64(50 * 1024 * 1024) // 50MB
 
-// metadataBlacklist: 云元数据地址，任何配置都不能放行。
-// R1 X-P3-32（X-CS1，V-04）：补阿里云元数据 100.100.100.200——此前
-// 在 ALLOW_PRIVATE=true / allowlist 含 100.64/10 时可达，与本表
-// 「任何配置都不能放行」的自述口径不符。
-var metadataBlacklist = []net.IP{
-	net.ParseIP("169.254.169.254"),
-	net.ParseIP("fd00:ec2::254"),
-	net.ParseIP("100.100.100.200"),
-}
+// 硬拒层正本在 internal/netguard（R2 批1收口）：元数据精确集
+// {169.254.169.254, 100.100.100.200, fd00:ec2::254} ∪ 169.254.0.0/16
+// 整段（R2X-026，verdicts §3.5——不再按厂商逐个枚举补）∪ 未指定 ∪
+// 本地 NAT64 整段，翻译内嵌同判。任何配置都不能放行。
+// 下列三个名字保留为薄封装，供存量调用点与回归测试使用。
 
-// nat64WellKnownPrefix 是 RFC 6052 公共 NAT64 前缀 64:ff9b::/96，
-// 低 32 位内嵌一个 IPv4 地址（R1 X-P3-32）。
-var nat64WellKnownPrefix = func() *net.IPNet {
-	_, n, _ := net.ParseCIDR("64:ff9b::/96")
-	return n
-}()
-
-// extractNAT64IPv4 提取 64:ff9b::/96 地址内嵌的 IPv4。
-func extractNAT64IPv4(ip net.IP) (net.IP, bool) {
-	ip16 := ip.To16()
-	if ip16 == nil || ip.To4() != nil {
-		return nil, false
-	}
-	if !nat64WellKnownPrefix.Contains(ip16) {
-		return nil, false
-	}
-	return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]), true
-}
-
-// effectiveFetchIP 返回判定口径上的有效地址：IPv4-mapped 展开后，
-// NAT64 地址取其内嵌 IPv4，使内嵌的元数据/私网地址走同一判定，
-// 不再被当作公网 IPv6 放行（R1 X-P3-32）。
+// effectiveFetchIP 返回判定口径上的有效地址（netguard.EffectiveIP：
+// mapped 展开、NAT64/6to4 取内嵌 IPv4）。
 func effectiveFetchIP(ip net.IP) net.IP {
-	ip = expandIPv4Mapped(ip)
-	if embedded, ok := extractNAT64IPv4(ip); ok {
-		return embedded
-	}
-	return ip
+	return netguard.EffectiveIP(ip)
 }
 
 // expandIPv4Mapped 展开 IPv4-mapped IPv6（::ffff:169.254.169.254 → 169.254.169.254）。
@@ -87,23 +60,10 @@ func expandIPv4Mapped(ip net.IP) net.IP {
 	return ip
 }
 
-// isMetadataAddress 检查是否为元数据地址（展开后）。
-// R1 X-P3-32：NAT64 地址按内嵌 IPv4 一并判定。
+// isMetadataAddress 检查 ip 是否命中硬拒层（名字沿用 H-15 时期，
+// 语义已按 R2X-026 扩为整个硬拒集，不再只是元数据精确名单）。
 func isMetadataAddress(ip net.IP) bool {
-	ip = expandIPv4Mapped(ip)
-	for _, blocked := range metadataBlacklist {
-		if ip.Equal(blocked) {
-			return true
-		}
-	}
-	if embedded, ok := extractNAT64IPv4(ip); ok {
-		for _, blocked := range metadataBlacklist {
-			if embedded.Equal(blocked) {
-				return true
-			}
-		}
-	}
-	return false
+	return netguard.HardDenyIP(ip)
 }
 
 // getPrivateAllowlist 解析 FLMX_FETCH_PRIVATE_ALLOWLIST（逗号分隔的 CIDR）。
@@ -162,20 +122,23 @@ func auditFetchLog(action, rawURL, ip, reason string) {
 
 // validateFetchIP 逐地址判定（D17 2.1）：每个 IP 单独走完整链。
 // 返回 nil 表示通过，error 表示拒绝（已记审计）。
+// R2 批1：判定走 netguard——硬拒层（R2X-026 整段口径）先于
+// allowlist，非公网判定与翻译提取以 netguard 分类为准。
 func validateFetchIP(ip net.IP, rawURL, scheme string) error {
 	ip = expandIPv4Mapped(ip)
 	ipStr := ip.String()
+	r := netguard.Classify(ip)
 
-	// ② 元数据黑名单（先于 allowlist）。
-	if isMetadataAddress(ip) {
+	// ② 硬拒层（先于 allowlist）。
+	if r.HardDeny {
 		auditFetchLog("reject", rawURL, ipStr, "metadata_address")
 		return fmt.Errorf("metadata address blocked: %s", ipStr)
 	}
 
-	// ③ 私网/特殊地址判定。R1 X-P3-32：NAT64 地址按内嵌 IPv4
-	// 判定（judgeIP），内嵌私网不得绕过 allowlist。
-	judgeIP := effectiveFetchIP(ip)
-	if isPrivateIP(judgeIP) {
+	// ③ 非公网判定：翻译地址按内嵌 IPv4（judgeIP）查放行策略，
+	// 内嵌私网不得绕过 allowlist。
+	if r.NonPublic() {
+		judgeIP := effectiveFetchIP(ip)
 		if !isPrivateAllowed(judgeIP) {
 			auditFetchLog("reject", rawURL, ipStr, "private_not_allowlisted")
 			return fmt.Errorf("private network not allowlisted: %s", ipStr)
@@ -237,11 +200,12 @@ func secureFetchDialContext(ctx context.Context, network, addr string) (net.Conn
 	// （实际 scheme 已在 validateFetchURL 校验，此处只做 IP 安全校验。）
 	for _, ip := range ips {
 		ip = expandIPv4Mapped(ip)
-		if isMetadataAddress(ip) {
+		// R2 批1：拨号侧与校验侧同走 netguard（硬拒先行，翻译同判）。
+		r := netguard.Classify(ip)
+		if r.HardDeny {
 			return nil, fmt.Errorf("metadata address blocked at dial: %s", ip)
 		}
-		// R1 X-P3-32：拨号侧同口径，NAT64 按内嵌 IPv4 判定。
-		if judgeIP := effectiveFetchIP(ip); isPrivateIP(judgeIP) && !isPrivateAllowed(judgeIP) {
+		if r.NonPublic() && !isPrivateAllowed(effectiveFetchIP(ip)) {
 			return nil, fmt.Errorf("private IP blocked at dial: %s", ip)
 		}
 	}

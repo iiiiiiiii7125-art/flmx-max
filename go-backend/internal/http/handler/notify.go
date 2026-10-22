@@ -15,7 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"crypto/tls"
+
 	"go-backend/internal/http/response"
+	"go-backend/internal/netguard"
 )
 
 // Notification events. An empty notify_events config enables all of them.
@@ -98,8 +101,11 @@ func newNotifier() *notifier {
 		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
 		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
 		// 同时限制最多 5 跳，防重定向环。
+		// R2X-044：出站改 pinned-dial（见 notifyDialContext），重定向
+		// 每一跳都经同一钉死拨号逐跳复检+逐跳钉死。
 		client: &http.Client{
-			Timeout: notifySendTimeout,
+			Timeout:   notifySendTimeout,
+			Transport: notifyTransport(),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return errors.New("通知地址重定向次数过多")
@@ -594,10 +600,11 @@ func (n *notifier) sendWebhook(ctx context.Context, url string, msg notifyMessag
 func (n *notifier) post(ctx context.Context, url string, body []byte) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, notifySendTimeout)
 	defer cancel()
-	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。复用 secure_fetch 的
-	// 元数据地址黑名单（isMetadataAddress），至少拒绝云元数据地址。
+	// AUDIT-R26 (LAD26-001): Webhook 出站做 SSRF 校验。硬拒集与
+	// SecureFetch 共用 netguard 硬拒层（isMetadataAddress，R2X-026）。
 	// 注意：合法 webhook 常为内网地址（企业微信/钉钉内网代理），故此处仅硬拒绝
-	// 元数据地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	// 硬拒层地址，不做全内网拒绝（产品决策：allowlist 通道后轮评估）。
+	// 发送走钉死拨号（notifyDialContext，R2X-044），校验与拨号同一次解析。
 	if err := validateNotifyURL(url); err != nil {
 		return 0, nil, err
 	}
@@ -652,8 +659,64 @@ func isNotifyValidationErrorInChain(err error) bool {
 	return false
 }
 
+// notifyLookupIP 是通知出站的解析入口（var 以便测试注入，含
+// rebinding 场景）。校验与钉死拨号共用同一入口。
+var notifyLookupIP = net.LookupIP
+
+// notifyTransport 构造钉死拨号传输（R2X-044）：Proxy 关闭（经代理
+// 出站时目标由代理解析，钉死失效，与联邦传输同口径）；TLS 最低
+// 1.2，SNI/Host 由 http.Transport 按原主机名保留（DialContext 只
+// 负责把已校验 IP 连上）。
+func notifyTransport() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.DialContext = notifyDialContext
+	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	return tr
+}
+
+// notifyDialContext 是通知出站的钉死拨号：解析→逐 IP 过 netguard
+// 硬拒层→拨已校验 IP。此前 notify 是全仓唯一「校验与发送两次
+// 解析」的出站面，DNS rebinding 可在校验后把目标翻到元数据地址
+// （R2X-044）。任一解析结果命中硬拒整体不拨。
+func notifyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		ips, err = notifyLookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("通知地址无法解析: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOnly, false); !d.Allowed {
+			return nil, errors.New("通知地址指向云元数据服务，已拒绝")
+		}
+	}
+	dialer := &net.Dialer{Timeout: notifySendTimeout}
+	var lastErr error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // validateNotifyURL 校验通知 webhook URL，防 SSRF。
-// 拒绝：非 http/https scheme、云元数据地址（isMetadataAddress）。
+// 拒绝：非 http/https scheme、硬拒层地址（isMetadataAddress，现为
+// netguard 硬拒集：元数据精确集 ∪ 169.254/16 ∪ 未指定）。
 // 允许：公网与内网地址（企业微信/钉钉内网代理为合法场景）。
 func validateNotifyURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
@@ -672,7 +735,7 @@ func validateNotifyURL(rawURL string) error {
 	if ip := net.ParseIP(host); ip != nil {
 		ips = []net.IP{ip}
 	} else {
-		ips, err = net.LookupIP(host)
+		ips, err = notifyLookupIP(host)
 		if err != nil || len(ips) == 0 {
 			return fmt.Errorf("通知地址无法解析: %s", host)
 		}
