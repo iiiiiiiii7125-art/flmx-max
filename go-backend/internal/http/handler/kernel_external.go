@@ -296,6 +296,13 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 			response.WriteJSON(w, response.ErrDefault("密码不能为空"))
 			return
 		}
+		// R3X-008 保存层补点：本分支绕 Normalize 直写 method/password，
+		// 须复用导入期同一 SS2022 密钥校验 helper，否则导入收口只
+		// 完成一半（坏 key 可经旧格式编辑面重新写回）。
+		if err := kernel.ValidateSS2022Password(method, req.Password); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 		in, err := inboundFromModel(*row)
 		if err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
