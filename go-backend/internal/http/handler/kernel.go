@@ -655,6 +655,16 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-27（L-11-2）：新建分支接入 Idempotency-Key 机制。
+	if !update {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空且不超过 100 字"))
@@ -954,8 +964,13 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := h.repo.GetNodeInbound(id)
-	if err != nil || row == nil {
-		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if row == nil {
+		// X-P3-28（L-11-3，V-12）：不存在幂等成功。
+		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
 	if msg := h.chainInUseMessage(row); msg != "" {
