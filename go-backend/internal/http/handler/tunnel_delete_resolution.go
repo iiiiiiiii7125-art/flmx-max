@@ -648,26 +648,31 @@ func (h *Handler) rollbackTunnelForwardMigrationPlans(plans []tunnelForwardMigra
 // gost 转发服务收不到 DeleteService，孤儿监听继续转发且脱离计数/配额；
 // nft 转发连 pending 台账被级联一并删除，孤儿规则永不重试。
 //
-// 语义与 forwardDelete 对齐（S-04 / R5-B3 D1-001）：
-//   - gost：逐条 controlForwardServices(DeleteService) 后删转发行；任一
-//     转发清理失败（节点离线等）返回错误，调用方不得继续删隧道——宁可
-//     删不掉，也不能静默留下孤儿（单条转发有 force-delete 兜底）。
+// R1 X-P1-1（E-01，BC-01，按 V-02）起区分失败类别（relay.md 承诺口径）：
+//   - 节点离线/不可达（isNodeUnreachableError）：删库继续、接口成功。
+//     gost 转发删行即登记待清理——节点重连后 agent 上报的配置经
+//     cleanNodeConfigs 孤儿对账（DB 中已无此转发）撤掉残留监听；
+//     nft 转发留在 pending-delete 台账（转发行为墓碑，DeleteTunnelCascade
+//     保留之），由后台退避重试（runNftPendingDeleteRetryLoop）收敛。
+//   - 在线真实失败（节点明确回失败等非离线错误）：仍中止删隧道，
+//     F-002 防孤儿目标不丢。
 //   - nft：先把全部转发标 pending 并登记台账，再对入口节点 reconcile
-//     一次；reconcile 失败返回错误，转发留在台账里由后台退避重试
-//     （runNftPendingDeleteRetryLoop），隧道行保留；成功后逐条删转发行
-//     （DeleteForwardCascade 会一并清台账/计数/绑定）。
+//     一次；成功后逐条删转发行（DeleteForwardCascade 会一并清台账/
+//     计数/绑定）。
 func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
 	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
 	if err != nil {
 		return err
 	}
-	return h.cleanupForwardsDataPlane(tunnelID, forwards, "隧道")
+	return h.cleanupForwardsDataPlane(tunnelID, forwards, "隧道", true)
 }
 
 // cleanupForwardsDataPlane cleans the data plane for an explicit list of
 // forwards that all belong to one tunnel, then deletes their DB rows.
 // scope names the owning object in abort messages ("隧道" / "用户").
-func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string) error {
+// offlineTolerant 为 true（仅删隧道路径）时，离线/不可达类失败按
+// X-P1-1 待清理语义放行删库；为 false（删用户路径）时维持 F-002 硬门。
+func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string, offlineTolerant bool) error {
 	if len(forwards) == 0 {
 		return nil
 	}
@@ -687,6 +692,12 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 			}
 		}
 		if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+			if offlineTolerant && isNodeUnreachableError(err) {
+				// X-P1-1：转发已入 pending-delete 台账，删库继续；
+				// 转发墓碑行由台账重试收敛，隧道级联不得清台账。
+				log.Printf("tunnel delete: node unreachable, %d nft forwards left in pending-delete ledger tunnel_id=%d node_id=%d err=%v", len(forwards), tunnelID, nodeID, err)
+				return nil
+			}
 			return fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，%s未删除", len(forwards), scope)
 		}
 		for i := range forwards {
@@ -702,6 +713,15 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 	for i := range forwards {
 		fwd := forwards[i]
 		if err := h.controlForwardServices(&fwd, "DeleteService", true); err != nil {
+			if offlineTolerant && isNodeUnreachableError(err) {
+				// X-P1-1：节点离线时删行即完成面板侧删除；残留监听由
+				// 节点重连后的配置上报孤儿对账（cleanNodeConfigs）撤销。
+				log.Printf("tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=%d forward_id=%d err=%v", tunnelID, fwd.ID, err)
+				if delErr := h.deleteForwardByID(fwd.ID); delErr != nil {
+					return delErr
+				}
+				continue
+			}
 			return fmt.Errorf("转发 %s 数据面清理失败，%s未删除: %w", fwd.Name, scope, err)
 		}
 		if err := h.deleteForwardByID(fwd.ID); err != nil {

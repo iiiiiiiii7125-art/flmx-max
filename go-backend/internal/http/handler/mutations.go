@@ -434,7 +434,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(tunnelOrder, func(i, j int) bool { return tunnelOrder[i] < tunnelOrder[j] })
 	for _, tunnelID := range tunnelOrder {
-		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户"); err != nil {
+		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户", false); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -5482,6 +5482,36 @@ func shouldDeferTunnelRuntimeApplyError(err error) bool {
 // shouldDeferTunnelRuntimeApplyError.
 func isNodeOfflineOrTimeoutError(err error) bool {
 	return shouldDeferTunnelRuntimeApplyError(err)
+}
+
+// isNodeUnreachableError 判断错误是否属于「节点离线/不可达」类（R1 X-P1-1）：
+// 结构化的 nodeOfflineError、既有离线/超时口径，以及传输层不可达特征
+// （SSH 拨号失败、连接拒绝、无路由等）。节点在线但命令真实失败（ agent
+// 明确回失败、远端返回业务错误等）不匹配，调用方据此区分待清理与硬失败。
+func isNodeUnreachableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsNodeOfflineError(err) {
+		return true
+	}
+	if isNodeOfflineOrTimeoutError(err) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	for _, pattern := range []string{
+		"节点不可达",
+		"unable to connect",
+		"connection refused",
+		"no route to host",
+		"network is unreachable",
+		"connection reset",
+	} {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string) (map[string]interface{}, error) {
