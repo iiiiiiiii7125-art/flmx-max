@@ -362,6 +362,20 @@ func lastResetAt(d int, now time.Time) time.Time {
 	return t
 }
 
+// subTrafficSince is when the subscription's current used-traffic
+// counters started accumulating (creation or the last traffic reset).
+// Rows predating the traffic_since column fall back to the reset time,
+// then to creation time, so no data backfill is needed.
+func subTrafficSince(s *model.Subscription) int64 {
+	if s.TrafficSince > 0 {
+		return s.TrafficSince
+	}
+	if s.TrafficResetTime > 0 {
+		return s.TrafficResetTime
+	}
+	return s.CreatedTime
+}
+
 // subDueReset reports whether the monthly reset is due.
 func subDueReset(s *model.Subscription, now time.Time) bool {
 	if s.ResetDay <= 0 || !isShare(s) {
@@ -658,7 +672,10 @@ type subscriptionView struct {
 	DownloadBytes int64 `json:"downloadBytes"`
 	TrafficLimit  int64 `json:"trafficLimit"`
 	ResetDay      int   `json:"resetDay"`
-	OverQuota     bool  `json:"overQuota"`
+	// TrafficSince is when the used-traffic counters started counting
+	// (creation or last reset), resolved via subTrafficSince.
+	TrafficSince int64 `json:"trafficSince"`
+	OverQuota    bool  `json:"overQuota"`
 	// RelayIDs 是该订阅的中转范围白名单（与 options.relayIds 同源，顶层暴露便于前端回显）。
 	RelayIDs []int64 `json:"relayIds"`
 	// IsDefault 标记"默认订阅"（个人订阅链接的载体）：排序第一条，由 subscriptionList 回填。
@@ -754,7 +771,7 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
-		ResetDay: s.ResetDay, OverQuota: subOverQuota(s), RelayIDs: relayIDs,
+		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s), RelayIDs: relayIDs,
 	}
 }
 
@@ -919,7 +936,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, tokenErr.Error()))
 			return
 		}
-		s = &model.Subscription{Token: token, Enabled: 1, CreatedTime: now.UnixMilli()}
+		s = &model.Subscription{Token: token, Enabled: 1, CreatedTime: now.UnixMilli(), TrafficSince: now.UnixMilli()}
 	}
 	s.Name = req.Name
 	s.Kind = req.Kind
@@ -950,6 +967,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	if resetDayChanged {
 		// Count from now: a newly set reset day must not wipe this month.
 		s.TrafficResetTime = now.UnixMilli()
+		s.TrafficSince = now.UnixMilli()
 	}
 	s.ResetDay = req.ResetDay
 	if req.Enabled != nil {

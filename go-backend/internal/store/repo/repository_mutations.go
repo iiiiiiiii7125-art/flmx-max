@@ -547,6 +547,9 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.TunnelMetric{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeTraffic{}).Error; err != nil {
+			return err
+		}
 		// C-007: peer share。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareRuntime{}).Error; err != nil {
 			return err

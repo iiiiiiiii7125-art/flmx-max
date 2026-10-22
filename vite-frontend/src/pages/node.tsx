@@ -27,6 +27,7 @@ import { Progress } from "@/shadcn-bridge/heroui/progress";
 import {
   createNode,
   getNodeList,
+  getNodeMonthTraffic,
   getInboundList,
   updateNode,
   deleteNode,
@@ -145,6 +146,11 @@ export default function NodePage({
   addRequest?: number;
 }) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
+  // 各节点本月（浏览器时区）的网卡流量 {id: [入, 出]}：整机网卡计数，
+  // 与隧道计费/订阅配额是两套口径，仅作节点维度参考，文案须带「网卡」分名。
+  const [monthTraffic, setMonthTraffic] = useState<
+    Record<string, [number, number]>
+  >({});
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [localSearchKeyword, setLocalSearchKeyword] = useLocalStorageState(
@@ -351,6 +357,15 @@ export default function NodePage({
     if (!silent) {
       setLoading(true);
     }
+
+    // 本月网卡流量与列表同批刷新；失败静默（展示位留空，不影响列表）。
+    getNodeMonthTraffic()
+      .then((r) => {
+        if (r.code === 0 && r.data) {
+          setMonthTraffic(r.data);
+        }
+      })
+      .catch(() => {});
 
     try {
       const res = await getNodeList();
@@ -579,6 +594,18 @@ export default function NodePage({
 
   const formatFlow = (bytes: number): string => {
     return formatTraffic(bytes);
+  };
+
+  // 本月网卡流量文案（↓入 ↑出）：无数据（远程/联邦节点不上报本机，
+  // 或本月尚无累计）返回 null，展示位留空。
+  const monthTrafficText = (nodeId: number): string | null => {
+    const t = monthTraffic[String(nodeId)];
+
+    if (!t) {
+      return null;
+    }
+
+    return `↓${formatFlow(t[0])} ↑${formatFlow(t[1])}`;
   };
 
   const formatChainType = (chainType: number, hopInx: number) => {
@@ -2075,6 +2102,16 @@ export default function NodePage({
                                         : "-"}
                                     </span>
                                   </div>
+                                  {monthTrafficText(node.id) && (
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-default-600">
+                                        本月流量（网卡）
+                                      </span>
+                                      <span className="text-xs">
+                                        {monthTrafficText(node.id)}
+                                      </span>
+                                    </div>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -2358,6 +2395,9 @@ export default function NodePage({
                       online && node.systemInfo
                         ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
                         : "",
+                      monthTrafficText(node.id)
+                        ? `本月网卡 ${monthTrafficText(node.id)}`
+                        : "",
                     ];
 
                 return (
@@ -2466,6 +2506,11 @@ export default function NodePage({
                 ...(online && node.systemInfo
                   ? ([
                       ["已运行", formatUptime(node.systemInfo.uptime)],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+                ...(monthTrafficText(node.id)
+                  ? ([
+                      ["本月流量（网卡）", monthTrafficText(node.id)],
                     ] as Array<[string, React.ReactNode]>)
                   : []),
                 ...(node.expiryTime && node.renewalCycle && expiryMeta
