@@ -1756,6 +1756,22 @@ func launchAgentControlScript(manager serviceManager, script string) error {
 	return exec.Command(name, args...).Start()
 }
 
+// scriptStartCommand wraps the manager start command for the detached
+// upgrade/rollback scripts. Under systemd a binary that exits ~1s after
+// start (the R4-N2 flap shape) burns through the unit's start-rate
+// limit within seconds and leaves the unit in the failed state; a bare
+// "systemctl start" is then refused with "Start request repeated too
+// quickly", so the rollback restored the good binary yet never brought
+// the service back (release-gate re-verification of R4-N2). Clear the
+// failed state before every scripted start. OpenRC has no equivalent
+// limiter, so its start command is used as-is.
+func scriptStartCommand(manager serviceManager, start string) string {
+	if manager == serviceManagerSystemd {
+		return "systemctl reset-failed flux_agent 2>/dev/null; " + start
+	}
+	return start
+}
+
 // buildAgentRestartScriptFor builds the self-contained upgrade restart
 // script: stop, swap the binary in, start, then verify the service
 // actually came up — if it did not, restore the backup copy and start
@@ -1767,6 +1783,7 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	if err != nil {
 		return "", err
 	}
+	start = scriptStartCommand(manager, start)
 	healthFn, err := agentHealthCheckFunction(manager)
 	if err != nil {
 		return "", err
@@ -1793,6 +1810,7 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 	if err != nil {
 		return "", err
 	}
+	start = scriptStartCommand(manager, start)
 	healthFn, err := agentHealthCheckFunction(manager)
 	if err != nil {
 		return "", err
