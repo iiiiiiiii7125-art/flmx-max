@@ -367,8 +367,13 @@ export default function NodePage({
     }
 
     // 本月网卡流量与列表同批刷新；失败静默（展示位留空，不影响列表）。
+    // 与主请求共用同一 seq 守卫（R3-D-01）：旁路请求乱序返回时旧
+    // 快照不得覆盖新值。
     getNodeMonthTraffic()
       .then((r) => {
+        if (loadNodesSeqRef.current !== seq) {
+          return;
+        }
         if (r.code === 0 && r.data) {
           setMonthTraffic(r.data);
         }

@@ -182,7 +182,7 @@ func TestReconnectProbeReplacesStaleRelayAndLatency(t *testing.T) {
 		}
 		return okPing(30), nil
 	})
-	initial, err := h.probeRelayLatency(context.Background(), []int64{id})
+	initial, err := h.probeRelayLatency(context.Background(), []int64{id}, false)
 	if err != nil || initial[id].OK {
 		t.Fatalf("expected offline line: %+v err=%v", initial[id], err)
 	}
@@ -309,10 +309,10 @@ func TestRelayProbeOlderRoundCannotOverwriteNewer(t *testing.T) {
 	older := make(chan struct{})
 	go func() {
 		defer close(older)
-		_, _ = h.probeRelayLatency(context.Background(), []int64{id})
+		_, _ = h.probeRelayLatency(context.Background(), []int64{id}, false)
 	}()
 	<-started
-	if _, err := h.probeRelayLatency(context.Background(), []int64{id}); err != nil {
+	if _, err := h.probeRelayLatency(context.Background(), []int64{id}, false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := h.relayLatency.get(id); !got.OK {

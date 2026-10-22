@@ -22,6 +22,7 @@ import (
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/security"
 	"go-backend/internal/store/model"
 )
@@ -3250,6 +3251,16 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 		if existingRes.RowsAffected > 0 && (existing.Name != n.Name || existing.Secret != n.Secret) {
 			rep.warnf("节点 #%d 已被备份覆盖：目标库原记录（名称 %q）与备份（名称 %q）的名称/密钥不同，已按备份为准恢复", n.ID, existing.Name, n.Name)
 		}
+		// R3-E-01：节点地址含结构字符（@、#、逗号、空白/控制字符等，
+		// 与保存面 IsValidNodeAddress 同一字符集）时清空并披露——
+		// 该值是订阅 auto 模式与中转入口的地址源，坏值恢复落库即
+		// 改写订阅权威段。合法形态（主机名/IP 字面量/回环/
+		// RFC1918）逐字恢复，备份面不比保存面更严。
+		serverIP := n.ServerIP
+		if kernel.HostHasStructuralChars(serverIP) {
+			rep.warnf("备份恢复：节点地址（节点 #%d）含非法结构字符，已清空，恢复后请在节点设置中重新填写", n.ID)
+			serverIP = ""
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3257,7 +3268,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			ExpiryTime:   sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
 			RenewalCycle: sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
 			Secret:       n.Secret,
-			ServerIP:     n.ServerIP,
+			ServerIP:     serverIP,
 			ServerIPV4:   sql.NullString{String: n.ServerIPv4, Valid: n.ServerIPv4 != ""},
 			ServerIPV6:   sql.NullString{String: n.ServerIPv6, Valid: n.ServerIPv6 != ""},
 			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。

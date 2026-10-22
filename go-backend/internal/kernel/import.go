@@ -7,9 +7,62 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"go-backend/internal/netguard"
 )
+
+// CanonicalShareHostValue is the canonical form a share host is
+// validated and rendered with (B2-01): whitespace-trimmed, brackets
+// stripped, and a single trailing dot (the FQDN root dot) removed.
+// The dot strip runs on both sides of the bracket strip so a root dot
+// in either placement canonicalizes — after the brackets
+// ([2001:db8::9].) or inside them ([2001:db8::9.]); the pre-R3 order
+// (trim brackets, then strip the dot) left a residual bracket on the
+// first form, so the value validated differed from the value shipped
+// (R3-A-01). A second consecutive dot is never consumed:
+// "example.com.." keeps a trailing dot in canonical form and stays
+// rejected by ValidateImportHost, exactly as before.
+func CanonicalShareHostValue(host string) string {
+	v := strings.TrimSpace(host)
+	bracketed := strings.HasPrefix(v, "[")
+	v = stripOneRootDot(v)
+	v = strings.Trim(v, "[]")
+	if bracketed {
+		v = stripOneRootDot(v)
+	}
+	return v
+}
+
+// stripOneRootDot removes a single trailing dot, but never the second
+// dot of a ".." pair (that form is malformed, not an FQDN root dot).
+func stripOneRootDot(v string) string {
+	if strings.HasSuffix(v, ".") && !strings.HasSuffix(v, "..") {
+		return v[:len(v)-1]
+	}
+	return v
+}
+
+// HostHasStructuralChars reports whether s carries characters that can
+// break out of a host slot: URI authority or line-structure characters
+// (@ # , / ?), whitespace, or control characters. A value carrying
+// them in a node address rewrites the authority segment of every
+// subscription rendered from it (R3-E-01); the save surface
+// (IsValidNodeAddress) and the import/backup sanitize surfaces share
+// this one predicate. It deliberately says nothing about which hosts
+// are legitimate — hostnames, IP literals, RFC1918 and loopback all
+// pass; class judgements live in ValidateImportHost / netguard.
+func HostHasStructuralChars(s string) bool {
+	for _, r := range s {
+		switch {
+		case r == '@' || r == '#' || r == ',' || r == '/' || r == '?':
+			return true
+		case unicode.IsSpace(r) || unicode.IsControl(r):
+			return true
+		}
+	}
+	return false
+}
 
 // ParseImportHostPort validates the address of an imported node: a public
 // IP or a hostname, plus a port.

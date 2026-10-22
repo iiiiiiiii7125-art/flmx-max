@@ -204,6 +204,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 			Uptime:           info.Uptime,
 			BytesReceived:    info.BytesReceived,
 			BytesTransmitted: info.BytesTransmitted,
+			BootID:           info.BootID,
 			CPUUsage:         info.CPUUsage,
 			MemoryUsage:      info.MemoryUsage,
 			DiskUsage:        info.DiskUsage,

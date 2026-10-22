@@ -15,7 +15,34 @@ const (
 	// command's trip here and the reply's trip back.
 	tcpPingReplyMargin = 500 * time.Millisecond
 	minTCPPingBudget   = 500 * time.Millisecond
+	// maxTCPPingBudget caps a panel-supplied TimeoutMS (R3-E 观察，
+	// 纵深防御）：发送方是经鉴权的面板本身、无外部利用面，但异常
+	// 值（乃至 int64 乘 Millisecond 溢出回绕为正）不应让队列
+	// worker 被一份预算停泊数年。取 120s：面板侧最大预算为诊断面
+	// 钳制的 30s、无预算回退为 60s，120s 是两者的 4 倍/2 倍，
+	// 任何合法预算都不会被截断。
+	maxTCPPingBudget = 120 * time.Second
 )
+
+// tcpPingBudget derives one task's shared queue+execution budget
+// from the panel-supplied TimeoutMS.
+func tcpPingBudget(timeoutMS int64) time.Duration {
+	// Older panels do not send a budget. Keep their tasks bounded as well.
+	if timeoutMS <= 0 {
+		return reporterReadWait
+	}
+	// The panel's clock started before the command got here: stop a
+	// little earlier so the reason (or a partial result) reaches it
+	// before it gives up waiting.
+	timeout := time.Duration(timeoutMS)*time.Millisecond - tcpPingReplyMargin
+	if timeout < minTCPPingBudget {
+		return minTCPPingBudget
+	}
+	if timeout > maxTCPPingBudget {
+		return maxTCPPingBudget
+	}
+	return timeout
+}
 
 type queuedTCPPing struct {
 	command CommandMessage
@@ -38,18 +65,7 @@ func (w *WebSocketReporter) enqueueTCPPing(cmd CommandMessage) {
 		w.sendCommandFailure(cmd, "TCP探测已取消")
 		return
 	}
-	// Older panels do not send a budget. Keep their tasks bounded as well.
-	timeout := reporterReadWait
-	if cmd.TimeoutMS > 0 {
-		// The panel's clock started before the command got here: stop a
-		// little earlier so the reason (or a partial result) reaches it
-		// before it gives up waiting.
-		timeout = time.Duration(cmd.TimeoutMS)*time.Millisecond - tcpPingReplyMargin
-		if timeout < minTCPPingBudget {
-			timeout = minTCPPingBudget
-		}
-	}
-	ctx, cancel := context.WithTimeout(w.ctx, timeout)
+	ctx, cancel := context.WithTimeout(w.ctx, tcpPingBudget(cmd.TimeoutMS))
 	task := queuedTCPPing{command: cmd, ctx: ctx, cancel: cancel}
 	select {
 	case w.tcpPingQueue <- task:

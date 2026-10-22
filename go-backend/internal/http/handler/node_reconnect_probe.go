@@ -267,7 +267,7 @@ func (h *Handler) probeReconnectedNodes(ctx context.Context, nodes []int64) erro
 		}
 	}
 	if len(targets.relayIDs) > 0 {
-		if _, err := h.probeRelayLatency(ctx, targets.relayIDs); err != nil {
+		if _, err := h.probeRelayLatency(ctx, targets.relayIDs, false); err != nil {
 			return err
 		}
 	}

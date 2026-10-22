@@ -17,19 +17,44 @@ import (
 // address — instead of being restored verbatim (F-A-01/C-01). Callers
 // count the clears and disclose them in the import warnings. A value
 // whose only flaw is a single trailing dot (the FQDN root dot) is
-// restored in normalized form instead of being cleared (B2-01).
+// restored in normalized form instead of being cleared (B2-01), and
+// any other normalizable form (a root dot around the brackets —
+// [2001:db8::9]. — or stray surrounding whitespace) restores in the
+// same canonical form the save and pull faces produce
+// (kernel.CanonicalShareHostValue), so all three faces agree on one
+// value (R3-A-01). Values already canonical restore verbatim.
 func sanitizeBackupShareHost(host string) (string, bool) {
 	if host == "" {
 		return host, true
 	}
-	core := strings.Trim(strings.TrimSpace(host), "[]")
-	if kernel.ValidateImportHost(core) == nil {
+	canonical := kernel.CanonicalShareHostValue(host)
+	if kernel.ValidateImportHost(canonical) != nil {
+		return "", false
+	}
+	if strings.TrimSpace(host) == host && canonical == strings.Trim(host, "[]") {
 		return host, true
 	}
-	if stripped := strings.TrimSuffix(core, "."); stripped != core && kernel.ValidateImportHost(stripped) == nil {
-		return stripped, true
+	return canonical, true
+}
+
+// sanitizeBackupShareAddressMode whitelists the share address mode on
+// the way in from a backup (R3-E-02): the save surface only ever
+// writes the enum below, so anything else in a backup is foreign data
+// — it restores as auto and reports false so the caller counts it into
+// the import warnings. An unfiltered mode string would otherwise be
+// stored verbatim and flow into views and pull-time log lines. The
+// empty value (backups from before the mode existed) restores as-is:
+// every read face already treats it as auto.
+func sanitizeBackupShareAddressMode(mode string) (string, bool) {
+	trimmed := strings.TrimSpace(mode)
+	switch trimmed {
+	case "":
+		return "", true
+	case "auto", "ipv4", "ipv6", "custom":
+		return trimmed, true
+	default:
+		return "auto", false
 	}
-	return "", false
 }
 
 func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
@@ -139,6 +164,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
+	invalidShareModes := 0
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -255,10 +281,14 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if !ok {
 			invalidShareHosts++
 		}
+		shareMode, modeOK := sanitizeBackupShareAddressMode(i.ShareAddressMode)
+		if !modeOK {
+			invalidShareModes++
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
-			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: i.ShareAddressMode, Remark: i.Remark,
+			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
@@ -330,6 +360,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 
 	if invalidShareHosts > 0 {
 		rep.warnf("备份恢复：%d 条分享地址（入站/中转）不符合格式要求，已清空，恢复后按节点地址下发，可在入站设置中重新填写", invalidShareHosts)
+	}
+	if invalidShareModes > 0 {
+		rep.warnf("备份恢复：%d 条入站的分享地址模式不合法，已按自动（auto）恢复", invalidShareModes)
 	}
 
 	// Counter baselines keep the next traffic sample from being counted

@@ -42,19 +42,23 @@ import (
 
 // SystemInfo 系统信息结构体
 type SystemInfo struct {
-	Uptime           uint64  `json:"uptime"`
-	BytesReceived    uint64  `json:"bytes_received"`
-	BytesTransmitted uint64  `json:"bytes_transmitted"`
-	CPUUsage         float64 `json:"cpu_usage"`
-	MemoryUsage      float64 `json:"memory_usage"`
-	DiskUsage        float64 `json:"disk_usage"`
-	Load1            float64 `json:"load1"`
-	Load5            float64 `json:"load5"`
-	Load15           float64 `json:"load15"`
-	TCPConns         int64   `json:"tcp_conns"`
-	UDPConns         int64   `json:"udp_conns"`
-	NetInSpeed       int64   `json:"net_in_speed"`
-	NetOutSpeed      int64   `json:"net_out_speed"`
+	Uptime           uint64 `json:"uptime"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	BytesTransmitted uint64 `json:"bytes_transmitted"`
+	// BootID 是本机本次开机的标识（machineBootID）：面板据此区分
+	// 网卡累计计数的回退是真重启还是接口增删（加法字段，旧面板
+	// 忽略未知字段、旧 agent 不发则为空）。
+	BootID      string  `json:"boot_id"`
+	CPUUsage    float64 `json:"cpu_usage"`
+	MemoryUsage float64 `json:"memory_usage"`
+	DiskUsage   float64 `json:"disk_usage"`
+	Load1       float64 `json:"load1"`
+	Load5       float64 `json:"load5"`
+	Load15      float64 `json:"load15"`
+	TCPConns    int64   `json:"tcp_conns"`
+	UDPConns    int64   `json:"udp_conns"`
+	NetInSpeed  int64   `json:"net_in_speed"`
+	NetOutSpeed int64   `json:"net_out_speed"`
 }
 
 // NetworkStats 网络统计信息
@@ -707,6 +711,7 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		Uptime:           getUptime(),
 		BytesReceived:    networkStats.BytesReceived,
 		BytesTransmitted: networkStats.BytesTransmitted,
+		BootID:           machineBootID(),
 		CPUUsage:         cpuInfo.Usage,
 		MemoryUsage:      memoryInfo.Usage,
 		DiskUsage:        diskInfo.Usage,
@@ -2264,6 +2269,30 @@ func getUptime() uint64 {
 		return 0
 	}
 	return uptime
+}
+
+var (
+	bootIDOnce  sync.Once
+	bootIDValue string
+)
+
+// machineBootID 返回本机本次开机的标识：Linux 的
+// /proc/sys/kernel/random/boot_id，读不到时回退开机时间戳
+// （gopsutil host.BootTime，同为每次开机一值、开机内不变）。
+// 进程内只解析一次——同一次开机内 agent 重启标识不变；解析不
+// 出时为空串，面板对空标识按「无法证明重启」保守处理。
+func machineBootID() string {
+	bootIDOnce.Do(func() {
+		if data, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err == nil {
+			bootIDValue = strings.TrimSpace(string(data))
+		}
+		if bootIDValue == "" {
+			if bt, err := host.BootTime(); err == nil && bt > 0 {
+				bootIDValue = strconv.FormatUint(bt, 10)
+			}
+		}
+	})
+	return bootIDValue
 }
 
 // getNetworkStats 获取网络统计信息

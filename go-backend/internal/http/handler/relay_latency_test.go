@@ -116,7 +116,7 @@ func TestRelayLatencyAddsEveryLegToTheEntryLatency(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls = nil
-	res, err := h.probeRelayLatency(context.Background(), nil)
+	res, err := h.probeRelayLatency(context.Background(), nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestRelayLatencyWithoutReferencePointsShowsThePath(t *testing.T) {
 	id := mustCreateRelayLine(t, r, "port", 1, "203.0.113.10:443", front, nil, 0)
 	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) { return okPing(33), nil })
 
-	res, err := h.probeRelayLatency(context.Background(), nil)
+	res, err := h.probeRelayLatency(context.Background(), nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestRelayLatencyBrokenLegFailsEveryPoint(t *testing.T) {
 	if _, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled); err != nil {
 		t.Fatal(err)
 	}
-	res, err := h.probeRelayLatency(context.Background(), []int64{id})
+	res, err := h.probeRelayLatency(context.Background(), []int64{id}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestRelayLatencySkipsOfflineEntry(t *testing.T) {
 	}
 	id := mustCreateRelayLine(t, r, "port", 1, "203.0.113.10:443", front, nil, 0)
 	calls := stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) { return okPing(1), nil })
-	res, _ := h.probeRelayLatency(context.Background(), nil)
+	res, _ := h.probeRelayLatency(context.Background(), nil, true)
 	if len(*calls) != 0 || res[id].OK || res[id].Hops[0].Error != "节点离线" {
 		t.Fatalf("offline entry: calls=%v res=%+v", *calls, res[id])
 	}

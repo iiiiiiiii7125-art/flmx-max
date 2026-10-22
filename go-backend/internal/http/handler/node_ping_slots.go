@@ -16,7 +16,13 @@ import (
 // 并与实际执行共用同一份超时预算——预算先被排队耗尽就不再下发。
 
 const (
-	agentTCPPingLimit   = 8
+	agentTCPPingLimit = 8
+	// agentBusyMessage 是老 agent（≤1.3.6）的繁忙错误文案：老 agent
+	// 对超额 TcpPing 直接以此回绝、面板在剩余预算内重试一次
+	// （sendTCPPing 的重试分支）。新 agent 改为节点侧排队、队列满
+	// 回「TCP探测队列已满」，不触发面板重试——故此常量与重试分支
+	// 在新 agent 机群上是纯兼容路径（R3-B-03）：勿删勿改文案，
+	// 除非同步放弃老 agent 支持。
 	agentBusyMessage    = "TCP探测任务过多"
 	agentBusyRetryDelay = 800 * time.Millisecond
 )

@@ -19,10 +19,19 @@ func inboundShareMode(row *model.NodeInbound) string {
 	if (mode == "" || mode == "auto") && strings.TrimSpace(row.ShareHost) != "" {
 		return "custom" // Addresses saved before this setting keep their override.
 	}
-	if mode == "" {
+	switch mode {
+	case "ipv4", "ipv6", "custom":
+		return mode
+	default:
+		// "" and anything outside the save surface's enum: stored
+		// values that bypassed the save validation (backups restored
+		// before the import-side whitelist, direct writes) normalize
+		// to auto at every read face (R3-E-02) — the raw string must
+		// never reach views or the F-A-02 log line, where a crafted
+		// mode could forge log entries. Resolution already treated
+		// unknown modes as auto, so no endpoint outcome changes.
 		return "auto"
 	}
-	return mode
 }
 
 func nodeShareIP(node *model.Node, ipv6 bool) string {
@@ -53,12 +62,15 @@ func normalizeShareHost(host string) string {
 }
 
 // shareHostValue is the canonical form a share host is validated and
-// rendered with: brackets stripped and a single trailing dot removed
-// (B2-01). Two trailing dots still fail validation, as do underscore
-// labels, Unicode IDN and loopback/link-local literals — only the
-// single root dot is normalized.
+// rendered with (kernel.CanonicalShareHostValue): brackets stripped
+// and a single trailing dot removed (B2-01), the dot strip applied on
+// both sides of the bracket strip so [IPv6]. canonicalizes too
+// (R3-A-01 — validation and rendering must see the same form). Two
+// trailing dots still fail validation, as do underscore labels,
+// Unicode IDN and loopback/link-local literals — only the single root
+// dot is normalized.
 func shareHostValue(host string) string {
-	return strings.TrimSuffix(strings.Trim(strings.TrimSpace(host), "[]"), ".")
+	return kernel.CanonicalShareHostValue(host)
 }
 
 func inboundShareAddress(row *model.NodeInbound, node *model.Node) string {

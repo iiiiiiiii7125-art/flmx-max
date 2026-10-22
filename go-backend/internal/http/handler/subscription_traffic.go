@@ -92,6 +92,14 @@ func subTrafficBuckets(rangeKey string, now time.Time) []time.Time {
 // per bucket with the remainder going to the last overlapped bucket, so
 // totals conserve exactly. Whole-hour zones never straddle and are
 // byte-for-byte the pre-BC-12 result.
+//
+// A row straddling the WINDOW START gets the same treatment at its
+// out-of-window edge (R3-C-01): the pre-window share is deducted up
+// front by the remainder method — counted = value − floor(value ×
+// pre-window minutes / 60), the exact formula NodeTrafficSince
+// applies to its boundary bucket (BC-12) — instead of the whole row
+// landing in the first bucket. Only the display is affected; stored
+// buckets and the cumulative counters are untouched.
 func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Time) subTrafficView {
 	if rangeKey != "day" && rangeKey != "month" {
 		rangeKey = "hour"
@@ -125,6 +133,14 @@ func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Tim
 			b++
 		}
 		upLeft, downLeft := h.UploadBytes, h.DownloadBytes
+		if pre := view.Points[0].Time - rowStart; pre > 0 {
+			// 窗外份额先行扣除（R3-C-01，余量法）：一小时行至多
+			// 横跨窗口起点一次，扣除后余量即窗内份额，后续分桶
+			// 逻辑（首桶取余量）自动精确。窗口内跨桶行的分摊
+			// 不受影响，总量在窗内守恒。
+			upLeft -= h.UploadBytes * pre / hourMs
+			downLeft -= h.DownloadBytes * pre / hourMs
+		}
 		for j := b; j < len(starts) && view.Points[j].Time < rowEnd; j++ {
 			overlap := min(rowEnd, ends[j]) - max(rowStart, view.Points[j].Time)
 			if overlap <= 0 {
