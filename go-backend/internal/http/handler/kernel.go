@@ -777,6 +777,26 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		if in.Settings.Password == "" {
 			in.Settings.Password = oldIn.Settings.Password
 		}
+		// R3X-012：R2X-030 全集复查漏项——回填条件按入站形态判定（部分
+		// 更新时 req 形态即旧形态），避免给无关协议/传输塞值。
+		if in.Protocol == kernel.ProtocolSnell && in.Settings.SnellVersion == 0 {
+			in.Settings.SnellVersion = oldIn.Settings.SnellVersion
+		}
+		if in.Protocol == kernel.ProtocolShadowsocks && in.Settings.Method == "" {
+			in.Settings.Method = oldIn.Settings.Method
+		}
+		if in.Protocol == kernel.ProtocolNaive && in.Settings.Username == "" {
+			in.Settings.Username = oldIn.Settings.Username
+		}
+		if in.Security.Type == kernel.SecurityShadowTLS && in.Security.ShadowTLSPassword == "" {
+			in.Security.ShadowTLSPassword = oldIn.Security.ShadowTLSPassword
+		}
+		if (in.Transport.Type == kernel.TransportWS || in.Transport.Type == kernel.TransportXHTTP) && in.Transport.Path == "" {
+			in.Transport.Path = oldIn.Transport.Path
+		}
+		if in.Transport.Type == kernel.TransportGRPC && in.Transport.ServiceName == "" {
+			in.Transport.ServiceName = oldIn.Transport.ServiceName
+		}
 	}
 	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
 	if err != nil {
