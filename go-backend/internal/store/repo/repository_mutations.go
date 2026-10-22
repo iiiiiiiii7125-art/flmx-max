@@ -2244,7 +2244,14 @@ func (r *Repository) InsertTunnelTx(tx *gorm.DB, tunnel *model.Tunnel) error {
 	if dupCnt > 0 {
 		return ErrTunnelNameDuplicate
 	}
-	return tx.Create(tunnel).Error
+	// R4X-010(a)：TrafficRatio 带 GORM `default:1.0`，显式 0 会在 Create
+	// 时被吞成 1——意图值须在 Create 前捕获、落库后写回（与备份导入的
+	// restoreZeroValuedFloat 同型），显式 0 倍率（零计费）才落得下去。
+	ratioIntent := tunnel.TrafficRatio
+	if err := tx.Create(tunnel).Error; err != nil {
+		return err
+	}
+	return restoreZeroValuedFloat(tx, &model.Tunnel{}, tunnel.ID, "traffic_ratio", ratioIntent)
 }
 
 func (r *Repository) CreateTunnelTx(tx *gorm.DB, name string, trafficRatio float64, typeVal int, flow int64, now int64, status int, inIP interface{}, inx int, ipPreference string, probeTargetHost string, probeTargetPort int) (int64, error) {
@@ -2264,7 +2271,11 @@ func (r *Repository) CreateTunnelTx(tx *gorm.DB, name string, trafficRatio float
 		ProbeTargetHost: probeTargetHost,
 		ProbeTargetPort: probeTargetPort,
 	}
+	// R4X-010(a)：同 InsertTunnelTx——显式 0 倍率不得被 default:1.0 吞掉。
 	if err := tx.Create(&tunnel).Error; err != nil {
+		return 0, err
+	}
+	if err := restoreZeroValuedFloat(tx, &model.Tunnel{}, tunnel.ID, "traffic_ratio", trafficRatio); err != nil {
 		return 0, err
 	}
 	return tunnel.ID, nil

@@ -158,8 +158,8 @@ export const validateTunnelForm = (
     }
   }
 
-  if (form.trafficRatio <= 0 || form.trafficRatio > 100.0) {
-    errors.trafficRatio = "流量倍率须大于 0 且不超过 100，支持小数（如 0.5）";
+  if (form.trafficRatio < 0 || form.trafficRatio > 100.0) {
+    errors.trafficRatio = "流量倍率须不小于 0 且不超过 100，支持小数（如 0.5），0 表示不计费";
   }
 
   const rawProbeHost = form.probeTargetHost || "";
