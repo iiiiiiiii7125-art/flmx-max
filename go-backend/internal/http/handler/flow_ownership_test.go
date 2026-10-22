@@ -78,7 +78,7 @@ func TestFlowOwnershipRoleRuntimeRequiresReportingNode(t *testing.T) {
 	if err := a.h.repo.DB().Exec("UPDATE peer_share_runtime SET id = 17, role = 'exit'").Error; err != nil {
 		t.Fatal(err)
 	}
-	a.h.processFlowItem(2, flowItem{N: "fed_svc_17", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(a.h, 2, flowItem{N: "fed_svc_17", U: 120, D: 80})
 	share, err := a.h.repo.GetPeerShare(shareID)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestFlowOwnershipRoleRuntimeRequiresReportingNode(t *testing.T) {
 	if share.CurrentFlow != 0 {
 		t.Fatalf("wrong node charged role runtime: %d", share.CurrentFlow)
 	}
-	a.h.processFlowItem(1, flowItem{N: "fed_svc_17", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(a.h, 1, flowItem{N: "fed_svc_17", U: 120, D: 80})
 	share, err = a.h.repo.GetPeerShare(shareID)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestFlowOwnershipPreservesUnmigratedLegacyTransport(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	a.h.processFlowItem(1, flowItem{N: "70_1_0_udp", U: 120, D: 80})
+	applyFlowItemViaFormalEntry(a.h, 1, flowItem{N: "70_1_0_udp", U: 120, D: 80})
 	a.h.cleanNodeConfigs(1, `{"services":[{"name":"70_1_0_udp"}]}`)
 	a.probe(t)
 	if commands := a.commandsOfType("DeleteService"); len(commands) != 0 {

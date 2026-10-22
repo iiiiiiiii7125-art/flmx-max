@@ -2,6 +2,7 @@ package repo
 
 import (
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -61,19 +62,20 @@ func (r *Repository) GetFlowUploadForwardMetas(forwardIDs []int64) (map[int64]Fl
 	}
 
 	type row struct {
-		ForwardID    int64   `gorm:"column:forward_id"`
-		UserID       int64   `gorm:"column:user_id"`
-		UserTunnelID int64   `gorm:"column:user_tunnel_id"`
-		TunnelID     int64   `gorm:"column:tunnel_id"`
-		TrafficRatio float64 `gorm:"column:traffic_ratio"`
-		TunnelFlow   int64   `gorm:"column:tunnel_flow"`
+		ForwardID     int64   `gorm:"column:forward_id"`
+		UserID        int64   `gorm:"column:user_id"`
+		UserTunnelID  int64   `gorm:"column:user_tunnel_id"`
+		TunnelID      int64   `gorm:"column:tunnel_id"`
+		TrafficRatio  float64 `gorm:"column:traffic_ratio"`
+		TunnelFlow    int64   `gorm:"column:tunnel_flow"`
+		TunnelMissing int64   `gorm:"column:tunnel_missing"`
 	}
 
 	out := make(map[int64]FlowUploadForwardMeta, len(ids))
 	for _, chunk := range chunkFlowUploadForwardIDs(ids) {
 		var rows []row
 		err := r.db.Table("forward AS f").
-			Select("f.id AS forward_id, f.user_id AS user_id, COALESCE(ut.id, 0) AS user_tunnel_id, f.tunnel_id AS tunnel_id, t.traffic_ratio AS traffic_ratio, t.flow AS tunnel_flow").
+			Select("f.id AS forward_id, f.user_id AS user_id, COALESCE(ut.id, 0) AS user_tunnel_id, f.tunnel_id AS tunnel_id, t.traffic_ratio AS traffic_ratio, t.flow AS tunnel_flow, CASE WHEN t.id IS NULL THEN 1 ELSE 0 END AS tunnel_missing").
 			Joins("LEFT JOIN tunnel t ON t.id = f.tunnel_id").
 			Joins("LEFT JOIN user_tunnel ut ON ut.user_id = f.user_id AND ut.tunnel_id = f.tunnel_id").
 			Where("f.id IN ?", chunk).
@@ -82,6 +84,13 @@ func (r *Repository) GetFlowUploadForwardMetas(forwardIDs []int64) (map[int64]Fl
 			return nil, err
 		}
 		for _, row := range rows {
+			if row.TunnelMissing == 1 {
+				// F-S01 硬化（不改入账语义）：forward 指向的 tunnel
+				// 行真缺失属数据不一致——此前静默按默认 ratio/flow
+				// 归一化入账、无任何痕迹，现打 warn 日志留痕；归一
+				// 化与入账口径保持不变。
+				log.Printf("flow upload meta warn op=tunnel_row_missing forward_id=%d tunnel_id=%d action=default_ratio_flow", row.ForwardID, row.TunnelID)
+			}
 			if row.TunnelFlow <= 0 {
 				row.TunnelFlow = 1
 			}
