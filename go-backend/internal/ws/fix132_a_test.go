@@ -88,6 +88,22 @@ func waitNodeOnline(t *testing.T, server *Server, nodeID int64) {
 	t.Fatalf("node %d session not registered in time", nodeID)
 }
 
+// waitAdminRegistered 条件等待某用户的 admin 会话登记落点
+// （R1-B10 deflake）：与 waitNodeOnline 同理——客户端 Dial 返回
+// 只证明握手完成，服务端 s.admins 登记在其后；广播是即发即弃、
+// 只投已登记会话，未落点前产生的广播对该会话直接丢失。
+func waitAdminRegistered(t *testing.T, server *Server, userID int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if admins, _ := server.userSessionCounts(userID); admins == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("admin session for user %d not registered in time", userID)
+}
+
 func readWithTimeout(conn *websocket.Conn, d time.Duration) (string, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(d))
 	_, msg, err := conn.ReadMessage()
@@ -113,6 +129,10 @@ func TestCommandResponseNotBroadcast(t *testing.T) {
 	// 后台收集 admin 收到的全部消息（gorilla 连接读超时后不可复用，
 	// 负断言必须走 channel 而非 SetReadDeadline）。
 	adminMsgs := collectMessages(admin)
+	// R1-B10 deflake：先等 admin 会话登记落点再连节点——节点上线
+	// status 广播只投已登记会话，登记滞后时广播丢失、下面排空
+	// nextMessage 必然超时（隔离连跑实测约 2/10 红）。
+	waitAdminRegistered(t, server, 7)
 	node := dialNode(t, ts, "node-secret-42")
 	waitNodeOnline(t, server, 42)
 	// 排空节点上线时合法的 status 广播，避免与后续断言串扰。
