@@ -398,12 +398,15 @@ func TestR2B10InboundRecoveryFailureResendsOnce(t *testing.T) {
 	h, r := setupFixdNotifyHandler(t, wh)
 	ctx := context.Background()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// R2 登记 #3 同型迁移：probe 拨号前过 netguard 拒 loopback
+	// （R2X-005/R2X-043），被探测目标须为非 loopback RFC1918 地址。
+	probeAddr := probeFixtureLocalAddr(t)
+	ln, err := net.Listen("tcp", probeAddr+":0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	row := &model.NodeInbound{Name: "b10-imported", Protocol: "ss", Listen: "127.0.0.1", Port: port,
+	row := &model.NodeInbound{Name: "b10-imported", Protocol: "ss", Listen: probeAddr, Port: port,
 		Enabled: 1, CreatedTime: time.Now().UnixMilli(), UpdatedTime: time.Now().UnixMilli()}
 	if err := r.DB().Create(row).Error; err != nil {
 		t.Fatalf("create inbound: %v", err)
@@ -420,7 +423,7 @@ func TestR2B10InboundRecoveryFailureResendsOnce(t *testing.T) {
 	}
 	wh.waitCount(t, 1, 3*time.Second)
 
-	ln2, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	ln2, err := net.Listen("tcp", probeAddr+":"+strconv.Itoa(port))
 	if err != nil {
 		t.Fatalf("relisten: %v", err)
 	}
