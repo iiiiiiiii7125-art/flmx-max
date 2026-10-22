@@ -264,6 +264,48 @@ func parseVersionParts(v string) ([]int, error) {
 	return parts, nil
 }
 
+// extractLeadingSemver 从「上报型版本串」中提取首段语义版本（R4-N1）。
+// node.version 存的是 agent 握手上报的 fullVersion，形如
+// "1.3.0 (debian/amd64)"（go-gost/main.go 口径：版本 + 空格 + 括号内
+// 的发行版/架构）；联邦对端自述的面板版本同属这一类。这类被比较的
+// 存量/上报值不能直接套 compareVersions 的严格语义——后缀不是版本
+// 的一部分：先取首个空白前的段，再对该段做严格解析。无空白分隔的
+// 粘连后缀（如 "1.3.2-beta1"）、无数字段、空串一律提取失败，调用
+// 方维持 fail-closed。用户输入的目标版本不走本函数（各入口已有
+// 格式校验 + compareVersions 严格把关）。"dev" 原样透传，保留
+// compareVersions 的 dev 口径；各调用方对 dev 的既有豁免（联邦警
+// 告）/门控（bypass fail-closed）语义不经本函数改变。
+func extractLeadingSemver(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	if v == "dev" {
+		return "dev", true
+	}
+	head := v
+	if i := strings.IndexByte(v, ' '); i >= 0 {
+		head = v[:i]
+	}
+	head = strings.TrimPrefix(head, "v")
+	if _, err := parseVersionParts(head); err != nil {
+		return "", false
+	}
+	return head, true
+}
+
+// compareWithReportedVersion 比较目标版本与上报型版本串
+// （node.version / agent 版本 / 对端面板版本）：上报侧先经
+// extractLeadingSemver 归一，提取失败返回错误、调用方 fail-closed；
+// 目标侧保持 compareVersions 的严格语义。
+func compareWithReportedVersion(target, reported string) (int, error) {
+	rep, ok := extractLeadingSemver(reported)
+	if !ok {
+		return 0, fmt.Errorf("reported version %q has no leading semantic version", reported)
+	}
+	return compareVersions(target, rep)
+}
+
 // compareVersions 比较两个版本号（如 "1.0.7"）。
 // 返回 -1 表示 v1 < v2，0 表示相等，1 表示 v1 > v2。
 // O9-001：用于升级前防止静默降级。
