@@ -834,7 +834,26 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 		if err := tx.Model(&model.UserTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &userTunnelIDs).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
+		// R1 X-P1-1：pending-delete 墓碑转发（status=2）不随隧道级联删除——
+		// 其转发行的端口/计数/绑定与 NftPendingDelete 台账是后台重试清理
+		// 的唯一依据，级联清掉会让节点侧规则成无台账孤儿。这类转发只删
+		// relay 关联（下方按全部 forwardIDs），其余行保留待重试收敛后由
+		// DeleteForwardCascade 终删。
+		var pendingForwardIDs []int64
+		if err := tx.Model(&model.Forward{}).Where("tunnel_id = ? AND status = ?", tunnelID, model.ForwardStatusPendingDelete).Pluck("id", &pendingForwardIDs).Error; err != nil {
+			return err
+		}
+		pendingSet := make(map[int64]struct{}, len(pendingForwardIDs))
+		for _, id := range pendingForwardIDs {
+			pendingSet[id] = struct{}{}
+		}
+		cascadeForwardIDs := make([]int64, 0, len(forwardIDs))
+		for _, id := range forwardIDs {
+			if _, pending := pendingSet[id]; !pending {
+				cascadeForwardIDs = append(cascadeForwardIDs, id)
+			}
+		}
+		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
 		// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
@@ -851,18 +870,19 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
+		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
+		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
 			return err
 		}
 		// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
-		// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致。
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
+		// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致；
+		// R1 X-P1-1：pending 墓碑转发的台账行除外（见上方分流注释）。
+		if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.Forward{}).Error; err != nil {
+		if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, model.ForwardStatusPendingDelete).Delete(&model.Forward{}).Error; err != nil {
 			return err
 		}
 		// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
