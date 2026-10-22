@@ -317,7 +317,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// carry owner-credential ones).
 		item.Kind = model.SubscriptionShare
 		if item.UUID == "" || item.Password == "" {
-			item.UUID, item.Password = subscriptionCredentials()
+			uuid, pw, credErr := subscriptionCredentials()
+			if credErr != nil {
+				return 0, credErr
+			}
+			item.UUID, item.Password = uuid, pw
 		}
 		if res.RowsAffected > 0 {
 			item.ID = existing.ID

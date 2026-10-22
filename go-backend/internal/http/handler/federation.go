@@ -400,8 +400,18 @@ func (h *Handler) ensurePeerShareRelayCredentials(share *repo.PeerShare) {
 	if share == nil || strings.TrimSpace(share.RelayPassword) != "" {
 		return
 	}
-	share.RelayUsername = "share_" + randomToken(6)
-	share.RelayPassword = randomToken(24)
+	userSuffix, err := randomToken(6)
+	if err != nil {
+		log.Printf("federation: generate relay username for share %d failed: %v", share.ID, err)
+		return
+	}
+	relayPassword, err := randomToken(24)
+	if err != nil {
+		log.Printf("federation: generate relay password for share %d failed: %v", share.ID, err)
+		return
+	}
+	share.RelayUsername = "share_" + userSuffix
+	share.RelayPassword = relayPassword
 	share.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.UpdatePeerShareRelayCredentials(share.ID, share.RelayUsername, share.RelayPassword, share.UpdatedTime); err != nil {
 		log.Printf("federation: backfill relay credentials for share %d failed: %v", share.ID, err)
@@ -561,7 +571,21 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	now := time.Now().UnixMilli()
-	token := randomToken(32)
+	token, err := randomToken(32)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	relayUserSuffix, err := randomToken(6)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	relayPassword, err := randomToken(24)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 
 	share := &repo.PeerShare{
 		Name:           req.Name,
@@ -577,8 +601,8 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 		AllowedDomains: req.AllowedDomains,
 		AllowedIPs:     allowedIPs,
 		// D3-04: 每个 share 创建时即生成独立 relay 凭据。
-		RelayUsername: "share_" + randomToken(6),
-		RelayPassword: randomToken(24),
+		RelayUsername: "share_" + relayUserSuffix,
+		RelayPassword: relayPassword,
 	}
 
 	if err := h.repo.CreatePeerShare(share); err != nil {
@@ -1062,9 +1086,14 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 	inx := h.repo.NextIndex("node")
 	now := time.Now().UnixMilli()
 
+	nodeSecret, randErr := randomToken(16)
+	if randErr != nil {
+		response.WriteJSON(w, response.Err(-2, randErr.Error()))
+		return
+	}
 	if err = h.repo.CreateRemoteNode(
 		fmt.Sprintf("%s (Remote)", info.NodeName),
-		randomToken(16),
+		nodeSecret,
 		info.ServerIP,
 		portRange,
 		now,
@@ -1383,10 +1412,16 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	reservationID, randErr := randomToken(24)
+	if randErr != nil {
+		_ = h.deleteTunnelByID(tunnelID)
+		writePeerInternalError(w, "tunnel/create reservation id", randErr)
+		return
+	}
 	runtime := &repo.PeerShareRuntime{
 		ShareID:       share.ID,
 		NodeID:        share.NodeID,
-		ReservationID: randomToken(24),
+		ReservationID: reservationID,
 		ResourceKey:   fmt.Sprintf("federation-forward-%d-%d-%d", share.ID, tunnelID, req.RemotePort),
 		BindingID:     "",
 		Role:          "forward",
@@ -1485,7 +1520,12 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 
 	now := time.Now().UnixMilli()
 	if existing != nil {
-		existing.ReservationID = randomToken(24)
+		reservationID, randErr := randomToken(24)
+		if randErr != nil {
+			writePeerInternalError(w, "reserve-port reservation id", randErr)
+			return
+		}
+		existing.ReservationID = reservationID
 		existing.Protocol = defaultString(req.Protocol, "tls")
 		existing.Port = allocatedPort
 		existing.BindingID = ""
@@ -1509,10 +1549,15 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	reservationID, randErr := randomToken(24)
+	if randErr != nil {
+		writePeerInternalError(w, "reserve-port reservation id", randErr)
+		return
+	}
 	runtime := &repo.PeerShareRuntime{
 		ShareID:       share.ID,
 		NodeID:        share.NodeID,
-		ReservationID: randomToken(24),
+		ReservationID: reservationID,
 		ResourceKey:   req.ResourceKey,
 		BindingID:     "",
 		Role:          "",
@@ -1610,7 +1655,12 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if strings.TrimSpace(runtime.BindingID) == "" {
-		runtime.BindingID = randomToken(24)
+		bindingID, randErr := randomToken(24)
+		if randErr != nil {
+			response.WriteJSON(w, response.Err(-2, randErr.Error()))
+			return
+		}
+		runtime.BindingID = bindingID
 	}
 	runtime.Role = req.Role
 	runtime.ServiceName = fmt.Sprintf("fed_svc_%d", runtime.ID)
@@ -1970,11 +2020,19 @@ func (h *Handler) bindPeerShareForwardRuntimeServices(share *repo.PeerShare, dat
 			}
 		}
 		if runtime == nil {
+			reservationID, randErr := randomToken(24)
+			if randErr != nil {
+				return randErr
+			}
+			resourceSuffix, randErr := randomToken(8)
+			if randErr != nil {
+				return randErr
+			}
 			if err := h.repo.CreatePeerShareRuntime(&repo.PeerShareRuntime{
 				ShareID:       share.ID,
 				NodeID:        share.NodeID,
-				ReservationID: randomToken(24),
-				ResourceKey:   fmt.Sprintf("forward-runtime:%d:%s:%d:%s", share.ID, binding.Name, binding.Port, randomToken(8)),
+				ReservationID: reservationID,
+				ResourceKey:   fmt.Sprintf("forward-runtime:%d:%s:%d:%s", share.ID, binding.Name, binding.Port, resourceSuffix),
 				BindingID:     "",
 				Role:          "forward",
 				ChainName:     "",
