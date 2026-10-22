@@ -260,12 +260,21 @@ func TestR2B2_InboundRelayCreateIdempotent(t *testing.T) {
 
 func TestR2B2_SameKeyDifferentEndpointsEachCreate(t *testing.T) {
 	r, h := r2b2Open(t)
+	// 夹具隔离（R2 集成登记 #4）：idemStore 为进程级全局、completed 条目
+	// TTL 10 分钟，而本用例每次实例自建新 DB——固定键会让同进程后续实例
+	// （-count>1 或全包重复跑）把首建误判为回放（rows=0）。键加实例唯一
+	// 后缀，三次请求仍共用同一键，断言与语义不变。
+	crossKey := "b2-cross-key-" + time.Now().Format("150405.000000000")
 	sl := map[string]interface{}{"name": "idem-x-sl", "speed": 100}
-	b1 := r2b2Post(t, h.speedLimitCreate, "/api/v1/speed-limit/create", sl, "b2-cross-key")
+	b1 := r2b2Post(t, h.speedLimitCreate, "/api/v1/speed-limit/create", sl, crossKey)
 	r2b2AssertCode0(t, "speedLimit first", b1)
 
+	// 夹具时序（登记 #4 续）：两创建的成功回执均为无 data 的 {code,msg,ts}，
+	// b2!=b1 的串话判定靠 ts 区分——同毫秒完成会误报。错开 3ms 使两次
+	// 回执 ts 必不同，判定语义（回放必带原 ts）不变。
+	time.Sleep(3 * time.Millisecond)
 	nd := map[string]interface{}{"name": "idem-x-node", "serverIp": "10.0.1.9"}
-	b2 := r2b2Post(t, h.nodeCreate, "/api/v1/node/create", nd, "b2-cross-key")
+	b2 := r2b2Post(t, h.nodeCreate, "/api/v1/node/create", nd, crossKey)
 	r2b2AssertCode0(t, "node with same key on other endpoint", b2)
 	if b2 == b1 {
 		t.Fatalf("同键异端点不得串话回放: %s", b2)
@@ -278,7 +287,7 @@ func TestR2B2_SameKeyDifferentEndpointsEachCreate(t *testing.T) {
 	}
 
 	// 同端点同键仍回放（防过修）。
-	b3 := r2b2Post(t, h.speedLimitCreate, "/api/v1/speed-limit/create", sl, "b2-cross-key")
+	b3 := r2b2Post(t, h.speedLimitCreate, "/api/v1/speed-limit/create", sl, crossKey)
 	if b3 != b1 {
 		t.Fatalf("同端点同键应回放:\n%s\n%s", b1, b3)
 	}
