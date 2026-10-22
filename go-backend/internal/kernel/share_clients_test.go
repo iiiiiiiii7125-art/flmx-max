@@ -104,7 +104,9 @@ func TestFormatForUserAgentIOSClients(t *testing.T) {
 		"Shadowrocket/2070 CFNetwork/1568 Darwin/24.1.0": FormatShadowrocket,
 		"Loon/876 CFNetwork/1568":                        FormatLoon,
 		"Quantumult%20X/1.5.2 (iPhone15,2; iOS 18.1)":    FormatQX,
-		"Stash/2.4.7 Clash/1.9.0":                        FormatClash,
+		// Stash 的真实 UA 自带 Clash 字样，仍须分发 Stash 一等格式
+		// （DA-7：stash 分支在 clash 之前判定，与上游同序）。
+		"Stash/2.4.7 Clash/1.9.0": FormatStash,
 	}
 	for ua, want := range cases {
 		if got := FormatForUserAgent(ua); got != want {
