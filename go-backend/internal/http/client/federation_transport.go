@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go-backend/internal/config"
+	"go-backend/internal/netguard"
 )
 
 // 联邦出站客户端的 SSRF 防护（D3-01）。此前 NewFederationClient 是裸
@@ -31,9 +32,9 @@ import (
 //   - 重定向逐跳复检（上限 5 跳），跨主机剥离 Authorization 与
 //     X-Panel-Domain（Go 默认只剥 Authorization 的子集情形）。
 //
-// IP 判定与 handler 的 isPrivateIP 同集合（含 0.0.0.0/8 与 CGNAT），
-// 因包依赖方向（handler → client）无法共用函数，此处保持集合一致，
-// 修改一侧时必须同步另一侧。
+// IP 判定与 handler 共用 internal/netguard 正本（R2 批1收口，此前
+// 本文件是 handler.isPrivateIP 的物理镜像副本，NAT64 与阿里云
+// 元数据两处曾漏同步——R2X-006 本体）。
 
 const federationMaxRedirects = 5
 
@@ -55,53 +56,17 @@ func federationSafetyBypassed() bool {
 	return safetyBypassFunc != nil && safetyBypassFunc()
 }
 
-var federationMetadataIPs = []net.IP{
-	net.ParseIP("169.254.169.254"),
-	net.ParseIP("fd00:ec2::254"),
-}
-
+// federationIsMetadataIP 现语义为 netguard 硬拒层（R2 批1收口）：
+// 元数据精确集（含阿里云 100.100.100.200，旧镜像名单缺此条）∪
+// 169.254/16 整段 ∪ 未指定 ∪ 本地 NAT64，翻译内嵌同判。
 func federationIsMetadataIP(ip net.IP) bool {
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	}
-	for _, blocked := range federationMetadataIPs {
-		if ip.Equal(blocked) {
-			return true
-		}
-	}
-	return false
+	return netguard.HardDenyIP(ip)
 }
 
-// federationIsPrivateIP 与 handler.isPrivateIP 同集合。
+// federationIsPrivateIP 现语义为 netguard 非公网判定（段集含
+// bypass 基底，NAT64/6to4 按内嵌同判）。
 func federationIsPrivateIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-	if ip.IsUnspecified() || ip.IsMulticast() {
-		return true
-	}
-	for _, cidr := range []string{
-		"0.0.0.0/8",
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"169.254.0.0/16",
-		"100.64.0.0/10",
-		"fc00::/7",
-		"fe80::/10",
-	} {
-		_, network, err := net.ParseCIDR(cidr)
-		if err == nil && network.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return netguard.IsNonPublicIP(ip)
 }
 
 // federationPrivateAllowlist 解析与 SecureFetch 相同的放行配置
@@ -150,9 +115,11 @@ func federationPrivateAllowed(ip net.IP) bool {
 	return false
 }
 
-// validateFederationIPs 逐地址判定：元数据恒拒；私网/保留地址未被
-// 放行策略命中即拒。任一地址不合法整体拒绝（与 validateFetchURL
-// 的口径一致，防止多 A 记录里混入内网地址的选择性命中）。
+// validateFederationIPs 逐地址判定：硬拒恒拒（先于放行策略，
+// R2X-006）；非公网地址未被放行策略命中即拒（放行按判定口径的
+// 内嵌地址查 allowlist）。任一地址不合法整体拒绝（与
+// validateFetchURL 的口径一致，防止多 A 记录里混入内网地址的
+// 选择性命中）。
 func validateFederationIPs(host string, ips []net.IP) error {
 	if len(ips) == 0 {
 		return fmt.Errorf("federation target %q did not resolve", host)
@@ -161,7 +128,7 @@ func validateFederationIPs(host string, ips []net.IP) error {
 		if federationIsMetadataIP(ip) {
 			return fmt.Errorf("federation target %q resolves to a metadata address, blocked", host)
 		}
-		if federationIsPrivateIP(ip) && !federationPrivateAllowed(ip) {
+		if federationIsPrivateIP(ip) && !federationPrivateAllowed(netguard.EffectiveIP(ip)) {
 			return fmt.Errorf("federation target %q resolves to private/reserved address %s, blocked", host, ip.String())
 		}
 	}
