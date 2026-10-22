@@ -44,7 +44,7 @@ import {
   type ReleaseChannel,
 } from "@/api";
 import type { InboundApiItem } from "@/api/types";
-import { LatencyCell } from "@/components/latency-cell";
+import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
@@ -73,6 +73,7 @@ import {
   getNodeRenewalCycleLabel,
 } from "@/pages/node/renewal";
 import { buildNodeSystemInfo } from "@/pages/node/system-info";
+import { NodeLiveStats } from "@/pages/node/node-live-stats";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
@@ -140,14 +141,21 @@ function computeBrokenReferrers(
 export default function NodePage({
   embedded = false,
   addRequest = 0,
+  onOpenMonitor,
 }: {
   embedded?: boolean;
   /** Bumped by the 节点 page header's 新建节点 when embedded. */
   addRequest?: number;
+  /** Opens a node's history charts and service monitors (DA-1). */
+  onOpenMonitor?: (nodeId: number) => void;
 }) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   // 各节点本月（浏览器时区）的网卡流量 {id: [入, 出]}：整机网卡计数，
   // 与隧道计费/订阅配额是两套口径，仅作节点维度参考，文案须带「网卡」分名。
+  // 加载路径唯一化（P2）：loadNodes 同批拉取，P1 的 15 秒可见性轮询经
+  // loadNodes 连带刷新（密于 P4 原独立 60 秒轮询，故不保留其重复 loader）；
+  // 消费方：P2 的 monthTrafficText（列表/卡片/详情）与 P4 的 NodeLiveStats
+  // month prop 共用这一份 state。
   const [monthTraffic, setMonthTraffic] = useState<
     Record<string, [number, number]>
   >({});
@@ -1363,7 +1371,11 @@ export default function NodePage({
         >
           不测延迟
         </button>
-      ) : (
+      ) : probePoints(node.latency).length === 0 ? null : (
+        // DA-4: no result yet (the panel probes every few minutes) —
+        // render nothing instead of a 检测 button; re-probing lives in
+        // the result's menu. The A1-015 pill above is a different axis
+        // (no targets chosen) and stays untouched.
         <LatencyCell
           note={node.latencyTargets ? "自定义" : undefined}
           probe={node.latency}
@@ -2271,6 +2283,26 @@ export default function NodePage({
                               </div>
                             )}
 
+                            {!isRemoteNode && (
+                              <div className="mb-4 space-y-2">
+                                <NodeLiveStats
+                                  info={node.systemInfo ?? null}
+                                  month={monthTraffic[String(node.id)]}
+                                  variant="card"
+                                />
+                                {onOpenMonitor && (
+                                  <Button
+                                    className="min-h-8 w-full"
+                                    size="sm"
+                                    variant="flat"
+                                    onPress={() => onOpenMonitor(node.id)}
+                                  >
+                                    监控
+                                  </Button>
+                                )}
+                              </div>
+                            )}
+
                             <div className="mt-auto space-y-3">
                               {/* 操作按钮 */}
                               <div className="space-y-1.5">
@@ -2428,6 +2460,15 @@ export default function NodePage({
                           </>
                         }
                         meta={meta.filter(Boolean).join(" · ")}
+                        footer={
+                          isRemoteNode ? undefined : (
+                            <NodeLiveStats
+                              info={node.systemInfo ?? null}
+                              month={monthTraffic[String(node.id)]}
+                              variant="footer"
+                            />
+                          )
+                        }
                         right={
                           <>
                             {renderLatency(node, "list")}
@@ -2563,6 +2604,15 @@ export default function NodePage({
                         label: "编辑",
                         onPress: () => handleEdit(node),
                       },
+                      ...(onOpenMonitor
+                        ? [
+                            {
+                              key: "monitor",
+                              label: "监控",
+                              onPress: () => onOpenMonitor(node.id),
+                            },
+                          ]
+                        : []),
                       {
                         key: "targets",
                         label: "测试点",

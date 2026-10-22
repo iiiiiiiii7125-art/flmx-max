@@ -900,6 +900,8 @@ export interface InboundApiItem {
   transport: InboundTransport;
   security: InboundSecurity;
   extra: string;
+  shareAddressMode?: string;
+  shareAddress?: string;
   shareHost: string;
   remark: string;
   relayOnly: boolean;
@@ -943,6 +945,7 @@ export interface InboundMutationPayload {
   security: InboundSecurity;
   extra: string;
   shareHost: string;
+  shareAddressMode?: string;
   remark: string;
   relayOnly: boolean;
   acceptProxyProtocol: boolean;
