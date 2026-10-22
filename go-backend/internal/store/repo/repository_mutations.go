@@ -952,16 +952,29 @@ func (r *Repository) TunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
 	return ids, nil
 }
 
+// DeleteUserTunnel removes a user_tunnel row together with its
+// GroupPermissionGrant ledger rows (R2X-035): every other UT deletion path
+// (tunnel/user cascades, group revoke) clears the ledger first; leaving it
+// behind orphans the row forever because revoke paths scope by live UTs.
 func (r *Repository) DeleteUserTunnel(id int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Where("id = ?", id).Delete(&model.UserTunnel{}).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return deleteUserTunnelTx(tx, id)
+	})
 }
 
 func (r *Repository) DeleteUserTunnelTx(tx *gorm.DB, id int64) error {
 	if tx == nil {
 		return errors.New("database unavailable")
+	}
+	return deleteUserTunnelTx(tx, id)
+}
+
+func deleteUserTunnelTx(tx *gorm.DB, id int64) error {
+	if err := tx.Where("user_tunnel_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+		return err
 	}
 	return tx.Where("id = ?", id).Delete(&model.UserTunnel{}).Error
 }
@@ -1446,15 +1459,105 @@ func (r *Repository) GroupUpdate(table string, id int64, name string, status int
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	return groupUpdateTx(r.db, table, id, name, status, now)
+}
+
+// GroupUpdateTx is the transactional variant of GroupUpdate.
+func (r *Repository) GroupUpdateTx(tx *gorm.DB, table string, id int64, name string, status int, now int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
+	return groupUpdateTx(tx, table, id, name, status, now)
+}
+
+func groupUpdateTx(db *gorm.DB, table string, id int64, name string, status int, now int64) error {
 	updates := map[string]interface{}{"name": name, "status": status, "updated_time": now}
 	switch table {
 	case "tunnel_group":
-		return r.db.Model(&model.TunnelGroup{}).Where("id = ?", id).Updates(updates).Error
+		return db.Model(&model.TunnelGroup{}).Where("id = ?", id).Updates(updates).Error
 	case "user_group":
-		return r.db.Model(&model.UserGroup{}).Where("id = ?", id).Updates(updates).Error
+		return db.Model(&model.UserGroup{}).Where("id = ?", id).Updates(updates).Error
 	default:
 		return errors.New("invalid group table")
 	}
+}
+
+// GetGroupStatus returns a group's status; exists=false when there is no
+// such group (R2X-013: status had writers but no readers before this).
+func (r *Repository) GetGroupStatus(table string, id int64) (status int, exists bool, err error) {
+	if r == nil || r.db == nil {
+		return 0, false, errors.New("repository not initialized")
+	}
+	return getGroupStatusTx(r.db, table, id)
+}
+
+// GetGroupStatusTx is the transactional variant of GetGroupStatus.
+func (r *Repository) GetGroupStatusTx(tx *gorm.DB, table string, id int64) (status int, exists bool, err error) {
+	if tx == nil {
+		return 0, false, errors.New("database unavailable")
+	}
+	return getGroupStatusTx(tx, table, id)
+}
+
+func getGroupStatusTx(db *gorm.DB, table string, id int64) (int, bool, error) {
+	switch table {
+	case "tunnel_group":
+		var g model.TunnelGroup
+		err := db.Select("status").Where("id = ?", id).First(&g).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, false, nil
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		return g.Status, true, nil
+	case "user_group":
+		var g model.UserGroup
+		err := db.Select("status").Where("id = ?", id).First(&g).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, false, nil
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		return g.Status, true, nil
+	default:
+		return 0, false, errors.New("invalid group table")
+	}
+}
+
+// RevokeGroupGrantsByGroupTx revokes every grant recorded under one group
+// (R2X-013 group disable): the group's ledger rows are deleted and any
+// group-created user_tunnel left without grants is removed and returned
+// so the handler can clean up its forwards. Manual user_tunnels
+// (created_by_group=0, or still granted by another group) survive; the
+// group_permission pairs and memberships are kept, so re-enabling the
+// group re-expands them.
+func (r *Repository) RevokeGroupGrantsByGroupTx(tx *gorm.DB, table string, id int64) ([]RevokedUserTunnelPair, error) {
+	if tx == nil {
+		return nil, errors.New("database unavailable")
+	}
+	var grantWhere string
+	switch table {
+	case "tunnel_group":
+		grantWhere = "tunnel_group_id = ?"
+	case "user_group":
+		grantWhere = "user_group_id = ?"
+	default:
+		return nil, errors.New("invalid group table")
+	}
+	var rows []groupGrantRow
+	if err := tx.Model(&model.GroupPermissionGrant{}).
+		Select("user_tunnel_id, created_by_group").
+		Where(grantWhere, id).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	candidates := groupCreatedUTIDs(rows)
+	if err := tx.Where(grantWhere, id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+		return nil, err
+	}
+	return deleteOrphanedGroupCreatedUserTunnelsTx(tx, candidates)
 }
 
 func (r *Repository) GroupDeleteCascade(table string, id int64) error {
@@ -1583,6 +1686,14 @@ func (r *Repository) ReplaceTunnelGroupMembersTx(tx *gorm.DB, groupID int64, tun
 	if tx == nil {
 		return errors.New("database unavailable")
 	}
+	// R2X-012: the group itself and every referenced tunnel must exist;
+	// phantom member rows would silently become live grants later.
+	if err := validateIDsExistTx(tx, &model.TunnelGroup{}, "隧道分组不存在", []int64{groupID}); err != nil {
+		return err
+	}
+	if err := validateIDsExistTx(tx, &model.Tunnel{}, "隧道不存在", tunnelIDs); err != nil {
+		return err
+	}
 	if err := tx.Where("tunnel_group_id = ?", groupID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
 		return err
 	}
@@ -1605,6 +1716,13 @@ func (r *Repository) ReplaceTunnelGroupMembersTx(tx *gorm.DB, groupID int64, tun
 func (r *Repository) ReplaceUserGroupMembersTx(tx *gorm.DB, groupID int64, userIDs []int64, now int64) error {
 	if tx == nil {
 		return errors.New("database unavailable")
+	}
+	// R2X-012: the group itself and every referenced user must exist.
+	if err := validateIDsExistTx(tx, &model.UserGroup{}, "用户分组不存在", []int64{groupID}); err != nil {
+		return err
+	}
+	if err := validateIDsExistTx(tx, &model.User{}, "用户不存在", userIDs); err != nil {
+		return err
 	}
 	if err := tx.Where("user_group_id = ?", groupID).Delete(&model.UserGroupUser{}).Error; err != nil {
 		return err
@@ -1918,6 +2036,14 @@ func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int
 func (r *Repository) InsertGroupPermission(userGroupID, tunnelGroupID int64, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
+	}
+	// R2X-012: both groups must exist; a permission pair pointing at
+	// nonexistent groups expands to nothing yet reported success.
+	if err := validateIDsExistTx(r.db, &model.UserGroup{}, "用户分组不存在", []int64{userGroupID}); err != nil {
+		return err
+	}
+	if err := validateIDsExistTx(r.db, &model.TunnelGroup{}, "隧道分组不存在", []int64{tunnelGroupID}); err != nil {
+		return err
 	}
 	gp := model.GroupPermission{UserGroupID: userGroupID, TunnelGroupID: tunnelGroupID, CreatedTime: now}
 	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&gp).Error
@@ -2254,27 +2380,28 @@ func (r *Repository) AddUserToGroups(userID int64, groupIDs []int64, now int64) 
 	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
 }
 
-// validateUserGroupIDsExistTx checks (X-P3-5) that every referenced user
-// group exists, using one batched IN query; any missing ID fails the whole
-// write, matching the subscription-assignment validation standard.
-func validateUserGroupIDsExistTx(tx *gorm.DB, groupIDs []int64) error {
+// validateIDsExistTx is the generic batched existence check (R2X-012):
+// every positive referenced ID must exist in target's table (one IN query);
+// any missing ID fails the whole write before anything is persisted,
+// matching the X-P3-5 / subscription-assignment validation standard.
+func validateIDsExistTx(tx *gorm.DB, target interface{}, label string, ids []int64) error {
 	seen := make(map[int64]struct{})
-	ids := make([]int64, 0, len(groupIDs))
-	for _, gid := range groupIDs {
-		if gid <= 0 {
+	uniq := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
 			continue
 		}
-		if _, ok := seen[gid]; ok {
+		if _, ok := seen[id]; ok {
 			continue
 		}
-		seen[gid] = struct{}{}
-		ids = append(ids, gid)
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
 	}
-	if len(ids) == 0 {
+	if len(uniq) == 0 {
 		return nil
 	}
 	var existing []int64
-	if err := tx.Model(&model.UserGroup{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
+	if err := tx.Model(target).Where("id IN ?", uniq).Pluck("id", &existing).Error; err != nil {
 		return err
 	}
 	existingSet := make(map[int64]struct{}, len(existing))
@@ -2282,15 +2409,69 @@ func validateUserGroupIDsExistTx(tx *gorm.DB, groupIDs []int64) error {
 		existingSet[id] = struct{}{}
 	}
 	missing := make([]int64, 0)
-	for _, id := range ids {
+	for _, id := range uniq {
 		if _, ok := existingSet[id]; !ok {
 			missing = append(missing, id)
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("用户分组不存在: %v", missing)
+		return fmt.Errorf("%s: %v", label, missing)
 	}
 	return nil
+}
+
+// validateKindTarget maps a ValidateIDsExist kind to its model and the
+// label used in the missing-ID error.
+func validateKindTarget(kind string) (interface{}, string, error) {
+	switch kind {
+	case "user":
+		return &model.User{}, "用户不存在", nil
+	case "tunnel":
+		return &model.Tunnel{}, "隧道不存在", nil
+	case "user_group":
+		return &model.UserGroup{}, "用户分组不存在", nil
+	case "tunnel_group":
+		return &model.TunnelGroup{}, "隧道分组不存在", nil
+	case "inbound":
+		return &model.NodeInbound{}, "入站不存在", nil
+	case "subscription":
+		return &model.Subscription{}, "订阅不存在", nil
+	default:
+		return nil, "", fmt.Errorf("unknown existence-check kind %q", kind)
+	}
+}
+
+// ValidateIDsExistTx validates referenced IDs of the given kind inside the
+// caller's transaction (R2X-012). Kinds: user, tunnel, user_group,
+// tunnel_group, inbound, subscription.
+func (r *Repository) ValidateIDsExistTx(tx *gorm.DB, kind string, ids []int64) error {
+	if tx == nil {
+		return errors.New("database unavailable")
+	}
+	target, label, err := validateKindTarget(kind)
+	if err != nil {
+		return err
+	}
+	return validateIDsExistTx(tx, target, label, ids)
+}
+
+// ValidateIDsExist is the non-transactional variant of ValidateIDsExistTx,
+// for handlers that validate before opening their write transaction.
+func (r *Repository) ValidateIDsExist(kind string, ids []int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	target, label, err := validateKindTarget(kind)
+	if err != nil {
+		return err
+	}
+	return validateIDsExistTx(r.db, target, label, ids)
+}
+
+// validateUserGroupIDsExistTx checks (X-P3-5) that every referenced user
+// group exists; now a thin wrapper over validateIDsExistTx.
+func validateUserGroupIDsExistTx(tx *gorm.DB, groupIDs []int64) error {
+	return validateIDsExistTx(tx, &model.UserGroup{}, "用户分组不存在", groupIDs)
 }
 
 // AddUserToGroupsTx 是 O5-004 的事务版：跑在调用方事务内（与 CreateUserTx 同 tx）。
