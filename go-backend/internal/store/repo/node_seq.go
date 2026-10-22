@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"errors"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -81,4 +83,59 @@ func (r *Repository) CheckAndUpdateSeq(nodeID int64, seq *int64, now int64) (acc
 		return false, true, false, nil
 	}
 	return true, false, false, nil
+}
+
+// CheckSeq X-P3-31（V-08）：只读重放校验——不推进 last_seq、不计
+// legacy。入账失败时 seq 必须保持未推进（agent 同 seq 重报入账），
+// 故校验与推进分离：推进由 AdvanceSeq 在入账成功后执行，或由
+// ApplyFlowUploadAccounting 与入账同 tx 落地。
+func (r *Repository) CheckSeq(nodeID int64, seq *int64) (isReplay bool, isLegacy bool, err error) {
+	if r == nil || r.db == nil {
+		return false, false, gorm.ErrInvalidDB
+	}
+	if seq == nil {
+		return false, true, nil
+	}
+	var row NodeSeq
+	err = r.db.Where("node_id = ?", nodeID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return *seq <= row.LastSeq, false, nil
+}
+
+// advanceSeqTx 在给定事务内推进 seq（seq=nil 时计 legacy 次数）。
+func advanceSeqTx(tx *gorm.DB, nodeID int64, seq *int64, now int64) error {
+	if seq == nil {
+		return tx.Exec(`INSERT INTO node_seq (node_id, last_seq, legacy_count, updated_time)
+			VALUES (?, 0, 1, ?)
+			ON CONFLICT (node_id) DO UPDATE SET legacy_count = node_seq.legacy_count + 1, updated_time = ?`,
+			nodeID, now, now).Error
+	}
+	res := tx.Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&NodeSeq{NodeID: nodeID, LastSeq: *seq, UpdatedTime: now})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 1 {
+		return nil
+	}
+	return tx.Model(&NodeSeq{}).
+		Where("node_id = ? AND last_seq < ?", nodeID, *seq).
+		Updates(map[string]interface{}{"last_seq": *seq, "updated_time": now}).Error
+}
+
+// AdvanceSeq 在入账成功后推进 seq（独立事务版）。gost 入账主路径
+// 使用 ApplyFlowUploadAccounting 的同 tx 推进；本方法供其它调用方
+// 在确认入账已提交后推进。
+func (r *Repository) AdvanceSeq(nodeID int64, seq *int64, now int64) error {
+	if r == nil || r.db == nil {
+		return gorm.ErrInvalidDB
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return advanceSeqTx(tx, nodeID, seq, now)
+	})
 }

@@ -1172,11 +1172,20 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if items != nil {
 			now := time.Now()
-			// E-001: seq 幂等检查。
-			accepted, isReplay, isLegacy, seqErr := h.repo.CheckAndUpdateSeq(node.ID, seq, now.UnixMilli())
+			// X-P3-31（V-08）：seq 改为「先只读校验、入账同 tx 推进」。
+			// 旧实现 CheckAndUpdateSeq 在入账前先行消费 seq：metas 失
+			// 败置空仍回 ok、入账两段分开写一段失败另一段继续——seq
+			// 已推进使同 seq 重报被判重放，分叉/漏计不可恢复。
+			isReplay, isLegacy, seqErr := h.repo.CheckSeq(node.ID, seq)
 			if seqErr != nil {
+				// 校验失败整批拒收（非 ok）：agent 不清零、可重报。
 				log.Printf("flow upload seq check failed node_id=%d err=%v", node.ID, seqErr)
-			} else if isReplay {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				_, _ = w.Write([]byte("error"))
+				return
+			}
+			if isReplay {
+				// 已入账批次的重放：回 ok 终止 agent 重试，不重复入账。
 				log.Printf("flow upload replay rejected node_id=%d seq=%d", node.ID, *seq)
 			} else {
 				if isLegacy {
@@ -1185,14 +1194,23 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 				forwardIDs := collectFlowUploadForwardIDs(items)
 				metas, metaErr := h.repo.GetFlowUploadForwardMetas(forwardIDs)
 				if metaErr != nil {
+					// V-08 ①：metas 失败整批拒收返非 ok——不入账、
+					// seq 未推进，同 seq 重报可入账。
 					log.Printf("flow upload metadata lookup failed node_id=%d err=%v", node.ID, metaErr)
-					metas = map[int64]repo.FlowUploadForwardMeta{}
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					_, _ = w.Write([]byte("error"))
+					return
 				}
 				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
+				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
+					// 入账单事务失败：整批未入账、seq 未推进，返非 ok。
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					_, _ = w.Write([]byte("error"))
+					return
+				}
 				h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
-				h.applyFlowUploadBatch(node.ID, batch, now)
 			}
-			_ = accepted
 		}
 	}
 

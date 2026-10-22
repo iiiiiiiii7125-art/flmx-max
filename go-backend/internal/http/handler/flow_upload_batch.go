@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -25,6 +24,9 @@ type flowUploadBatch struct {
 	peerShareForwardItems map[string]flowItem
 	peerShareRuntimeItems map[int64]flowItem
 	peerShareUsage        map[int64]int64
+	// seqAdvance X-P3-31：agent 上报路径设置——入账单事务提交时同
+	// tx 推进 seq；非上报路径（策略单条/内部调用）为 nil。
+	seqAdvance *repo.FlowSeqAdvance
 }
 
 func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
@@ -198,12 +200,22 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 	return batch
 }
 
-func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now time.Time) {
+// applyFlowUploadBatch 返回入账错误（X-P3-31/V-08）：总量+quota 由
+// repo 单事务原子入账（seqAdvance 非 nil 时 seq 同 tx 推进）；失败时
+// 整批未入账，策略执行/孤儿清理/peer-share 结算一律不进行，调用方
+// （flowUpload）据此整批拒收返非 ok，agent 同 seq 重报重新入账。
+// 旧「两段分开写、一段失败另一段继续 + 逐条 fallback」取舍已按
+// V-08 裁定废弃（断言更新登记见 flow_upload_batch_test.go 三测试）。
+func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now time.Time) error {
 	if h == nil || h.repo == nil {
-		return
+		return nil
 	}
-	h.applyFlowDeltasWithFallback(nodeID, batch.flowDeltas)
-	for userID, quota := range h.applyQuotaUsageWithFallback(nodeID, batch.quotaUsage, now) {
+	quotaViews, err := h.repo.ApplyFlowUploadAccounting(batch.flowDeltas, batch.quotaUsage, now, batch.seqAdvance)
+	if err != nil {
+		log.Printf("flow upload accounting failed node_id=%d err=%v", nodeID, err)
+		return err
+	}
+	for userID, quota := range quotaViews {
 		h.enforceUserQuotaIfNeeded(userID, quota)
 	}
 	for _, target := range batch.policyTargets {
@@ -231,52 +243,6 @@ func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now 
 	for shareID, delta := range batch.peerShareUsage {
 		h.addPeerShareFlow(nodeID, shareID, delta)
 	}
+	return nil
 }
 
-func (h *Handler) applyFlowDeltasWithFallback(nodeID int64, deltas []repo.FlowUploadCounterDelta) {
-	if h == nil || h.repo == nil || len(deltas) == 0 {
-		return
-	}
-	if err := h.repo.ApplyFlowUploadDeltasBatch(deltas); err == nil {
-		return
-	} else {
-		log.Printf("flow upload write failed op=flow.batch_apply node_id=%d err=%v", nodeID, err)
-	}
-	for _, delta := range deltas {
-		if err := h.repo.AddFlow(delta.ForwardID, delta.UserID, delta.UserTunnelID, delta.InFlow, delta.OutFlow); err != nil {
-			log.Printf("flow upload write failed op=flow.single_apply node_id=%d forward_id=%d user_id=%d user_tunnel_id=%d err=%v", nodeID, delta.ForwardID, delta.UserID, delta.UserTunnelID, err)
-		}
-	}
-}
-
-func (h *Handler) applyQuotaUsageWithFallback(nodeID int64, usages map[int64]int64, now time.Time) map[int64]*model.UserQuotaView {
-	if h == nil || h.repo == nil || len(usages) == 0 {
-		return map[int64]*model.UserQuotaView{}
-	}
-	quotaViews, err := h.repo.AddUserQuotaUsageBatch(usages, now)
-	if err == nil {
-		return quotaViews
-	}
-	log.Printf("flow upload write failed op=quota.batch_apply node_id=%d err=%v", nodeID, err)
-
-	userIDs := make([]int64, 0, len(usages))
-	for userID := range usages {
-		if userID > 0 {
-			userIDs = append(userIDs, userID)
-		}
-	}
-	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
-
-	quotaViews = make(map[int64]*model.UserQuotaView, len(userIDs))
-	for _, userID := range userIDs {
-		quota, singleErr := h.repo.AddUserQuotaUsage(userID, usages[userID], now)
-		if singleErr != nil {
-			log.Printf("flow upload write failed op=quota.single_apply node_id=%d user_id=%d err=%v", nodeID, userID, singleErr)
-			continue
-		}
-		if quota != nil {
-			quotaViews[userID] = quota
-		}
-	}
-	return quotaViews
-}
