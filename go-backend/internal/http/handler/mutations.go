@@ -1729,6 +1729,23 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// X-P2-4 ①（E-S1）：名下中转转发逐条复跑 onLanding 判定——新出口集
+	// 让某个落地入站「出口为落地但非单出口」时拒绝保存（文案与
+	// relayTarget 一致），否则转发继续拨回环地址静默错向。置于验证段
+	// 之后、提交段之前：验证事务已回滚，此处走主句柄读 relays/inbounds
+	// 不与事务锁冲突；runtimeState.OutNodes 即待提交的新出口集。
+	if typeVal == 2 && runtimeState != nil {
+		newExits := make([]int64, 0, len(runtimeState.OutNodes))
+		for _, outNode := range runtimeState.OutNodes {
+			if outNode.NodeID > 0 {
+				newExits = append(newExits, outNode.NodeID)
+			}
+		}
+		if err := h.validateTunnelRelayExits(id, newExits); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 	// A3-01：SSH 能力校验在验证段的锁与事务都释放后执行（网络调用
 	// 不进临界区）；失败时尚未触碰任何运行时/DB 状态，语义与原
 	// 验证段内校验一致。
@@ -4020,8 +4037,21 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, forward.Name, portRangeErr)
 			continue
 		}
+		// X-P2-4 ②：托管中转转发按目标隧道出口集重算 RemoteAddr，不再
+		// 只改端口沿用旧址；重算失败（如目标隧道出口集违反落地单出口
+		// 规则）该条直接失败、不落库。
+		newRemoteAddr, remoteAddrChanged, retargetErr := h.recomputedRelayRemoteAddr(forward, targetTunnel)
+		if retargetErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, retargetErr)
+			continue
+		}
+		effectiveRemoteAddr := forward.RemoteAddr
+		if remoteAddrChanged {
+			effectiveRemoteAddr = newRemoteAddr
+		}
 		// A4-004（BC-26）：换入 realm 隧道同受策略校验（编辑路径之一）。
-		if err := validateRealmForwardStrategy(targetTunnel, forward.RemoteAddr, forward.Strategy); err != nil {
+		if err := validateRealmForwardStrategy(targetTunnel, effectiveRemoteAddr, forward.Strategy); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
@@ -4030,6 +4060,14 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
+		}
+		if remoteAddrChanged {
+			if err := h.repo.UpdateForward(id, forward.Name, req.TargetTunnelID, newRemoteAddr, forward.Strategy, time.Now().UnixMilli(), forward.SpeedID, forward.MaxConn, forward.IPMaxConn, forward.IPSpeedID, 0, forward.ProxyProtocolReceive, forward.ProxyProtocolSend); err != nil {
+				h.rollbackForwardMutation(forward, oldPorts)
+				fail++
+				failures = appendBatchFailure(failures, id, forward.Name, err)
+				continue
+			}
 		}
 		if err := h.replaceForwardPorts(id, req.TargetTunnelID, p, ""); err != nil {
 			h.rollbackForwardMutation(forward, oldPorts)
