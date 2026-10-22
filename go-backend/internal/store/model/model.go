@@ -927,6 +927,14 @@ type PermissionGrantBackup struct {
 	CreatedByGroup int   `json:"createdByGroup"`
 }
 
+// RevokedImportPair identifies one user_tunnel revoked during backup
+// import (R3X-005 facet (a)): the handler cleans up the forwards of
+// each returned pair, mirroring the runtime revoke paths.
+type RevokedImportPair struct {
+	UserID   int64 `json:"userId"`
+	TunnelID int64 `json:"tunnelId"`
+}
+
 // ImportResult contains the result of an import operation.
 type ImportResult struct {
 	UsersImported        int `json:"usersImported"`
@@ -962,7 +970,12 @@ type ImportResult struct {
 	// 跳过仍走上方 UserSubscriptionsSkipped 既有字段。
 	SkippedRows    map[string]int `json:"skippedRows,omitempty"`
 	ImportWarnings []string       `json:"importWarnings,omitempty"`
-	AutoBackup     *BackupData    `json:"autoBackup,omitempty"`
+	// R3X-005 facet (a)：导入在分组段成员替换 / 停用收敛中撤销的
+	// 组建授权（user_tunnel 已删行）清单，handler 据此逐对清理
+	// 转发（与运行时全部撤销路径同口径）；无撤销时省略。本批路线
+	// 定死为回传清理，不采「回执明示待清理」的弱路线。
+	RevokedUserTunnels []RevokedImportPair `json:"revokedUserTunnels,omitempty"`
+	AutoBackup         *BackupData         `json:"autoBackup,omitempty"`
 }
 
 // ─── View Structs (used by Repository, not GORM models) ─────────────
