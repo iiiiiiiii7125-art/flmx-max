@@ -954,7 +954,7 @@ func TestTunnelUpdateEntryTransitionsCleanupForwardRuntimeContract(t *testing.T)
 		if err := r.DB().Exec(`
 			INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, name, secretValue, ip, ip, "", portRange, "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", inx).Error; err != nil {
+		`, name, secretValue, ip, ip, "", portRange, "", "v1", 1, 1, 1, now, now, 0, "[::]", "[::]", inx).Error; err != nil {
 			t.Fatalf("insert node %s: %v", name, err)
 		}
 		return mustLastInsertID(t, r, name)
@@ -1009,6 +1009,8 @@ func TestTunnelUpdateEntryTransitionsCleanupForwardRuntimeContract(t *testing.T)
 	stopExit := startMockNodeSessionWithCommandRecorder(t, server.URL, "issue281-transition-exit-secret", recorder.handler("exit"))
 	defer stopExit()
 
+	// R1-B10 deflake：insertNode 种子已改 status=0，以下等待是真
+	// 同步点（旧种子预置 1 时空转）。
 	waitNodeStatus(t, r, entryA, 1)
 	waitNodeStatus(t, r, entryB, 1)
 	waitNodeStatus(t, r, entryC, 1)
