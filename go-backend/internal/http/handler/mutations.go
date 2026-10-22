@@ -4003,7 +4003,26 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailureReason(failures, id, forward.Name, "端口必须在 1-65535 范围内")
 			continue
 		}
-		bctEntryNodes, _ := h.tunnelEntryNodeIDs(req.TargetTunnelID)
+		// X-P3-17（L-04-3）评估登记：本批不收敛为「整批单 tx」——
+		// 批回执契约是逐条成败（部分成功合法且须逐条列明），且每条的
+		// 运行时下发（网络调用）无法入 DB 事务，整批单 tx 只会把全部
+		// 条目的端口锁与写事务拖过网络往返。收敛点落在逐条粒度：每条
+		// 的 DB 写（换隧道+换端口）已是单 tx（见下方
+		// ChangeForwardTunnelAndPorts），校验环即占用预取。
+		// 「按用户批量建转发」同评估：仓内无此端点（forwardCreate 为
+		// 单条且已经 CreateForwardTx 单 tx+锁内复检；批量分配见
+		// userTunnelBatchAssign，X-P3-22 已整批单 tx），无可收敛对象。
+		bctEntryNodes, bctErr := h.tunnelEntryNodeIDs(req.TargetTunnelID)
+		if bctErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, forward.Name, bctErr)
+			continue
+		}
+		if len(bctEntryNodes) == 0 {
+			fail++
+			failures = appendBatchFailureReason(failures, id, forward.Name, "目标隧道没有入口节点")
+			continue
+		}
 		newNodeIDs := uniqueInt64s(bctEntryNodes)
 		removedNodeIDs := diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs := diffInt64s(oldNodeIDs, removedNodeIDs)
@@ -4043,13 +4062,14 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
-		if err := h.repo.UpdateForwardTunnel(id, req.TargetTunnelID, time.Now().UnixMilli()); err != nil {
-			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
-			continue
+		// X-P3-17（L-04-3）：换隧道+换端口收敛为 repo 单 tx（锁内占用
+		// 复检）；失败整条回滚、无中间态，此段不再需要补偿恢复。
+		// 补偿（rollbackForwardMutation）仅保留给提交后的取行/下发失败。
+		bctEntries := make([]forwardPortReplaceEntry, len(bctEntryNodes))
+		for i, nid := range bctEntryNodes {
+			bctEntries[i] = forwardPortReplaceEntry{NodeID: nid, Port: p, InIP: ""}
 		}
-		if err := h.replaceForwardPorts(id, req.TargetTunnelID, p, ""); err != nil {
-			h.rollbackForwardMutation(forward, oldPorts)
+		if err := h.repo.ChangeForwardTunnelAndPorts(id, req.TargetTunnelID, bctEntries, time.Now().UnixMilli()); err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
