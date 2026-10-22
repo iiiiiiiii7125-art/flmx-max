@@ -437,6 +437,14 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 					h.notifyTracked(notifyEventRouteChange, "回程线路变化",
 						fmt.Sprintf("节点：%s\n%s", name, strings.Join(changes, "\n")),
 						func(outcome notifyOutcome) {
+							// X-P2-8：发送失败保留旧比对基准。下方 set 已把
+							// 基准覆盖为本轮结果，若不恢复，下一轮 routeChanges
+							// 无变化可比、告警永久丢失。恢复捕获的 prev，
+							// 下一轮重新识别同一变化并补发。
+							if outcome == notifyOutcomeFailed {
+								h.nodeRoutes.set(nodeID, prev)
+								return
+							}
 							// A7-02 的同族处理：本事件每变化一条消息（无状态
 							// 机），同节点同方向的再变化常在窗口内重复——
 							// 一条送达后清掉该节点此前的回程指纹，避免
