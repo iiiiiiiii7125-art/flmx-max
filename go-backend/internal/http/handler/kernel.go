@@ -633,6 +633,16 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// X-P3-27（L-11-2）：新建分支接入 Idempotency-Key 机制。
+	if !update {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r))
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空且不超过 100 字"))
