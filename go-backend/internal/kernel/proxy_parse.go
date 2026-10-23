@@ -162,6 +162,14 @@ func validateProxyCredentials(p Proxy) error {
 		if p.str("cipher") == "" || p.str("password") == "" {
 			return errors.New("缺少加密方式或密码")
 		}
+		// R6X-001：cipher 名本身是有限枚举域——双拒格（双客户端均
+		// unknown method）导入期逐条拒绝，合法集 = ValidSSCipher
+		// （共同集 18 + 单面 chacha20，逐值口径见 credentials.go 谓
+		// 词注与 R6-FIX-B1 逐值探针存档）。单面 chacha20 进口不拒，
+		// 渲染面分面处置（sing-box 面略过、Clash 面保留）。
+		if !ValidSSCipher(p.str("cipher")) {
+			return errors.New("Shadowsocks 加密方式 cipher 不受支持")
+		}
 		// R3X-008：SS2022 密钥格式在导入期一处收口（ss 链接 / Clash /
 		// sing-box JSON / Surge 四格式与订阅同步、换链接编辑全部经
 		// finishProxy 到此）。坏 key 会毒化整份 sing-box 订阅，必须

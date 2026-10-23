@@ -201,11 +201,12 @@ func TestR3GateF1SubscriptionPipeline(t *testing.T) {
 	}
 }
 
-// TestR3GateF1BadAndMultiKeepExistingShape：存量坏 key 既有口径不变
-// ——sing-box 面略过、其余格式原样。多段：R4-SIP023-R 起 sing-box
-// 面与 Clash 面同口径逐段归一后下发（本断言随该裁定更新，原「保守
-// 略过」断言 supersede）；Surge / ss 链接等客户端段解码未经二进制
-// 证实的面维持原样。
+// TestR3GateF1BadAndMultiKeepExistingShape：存量坏 key 口径——
+// sing-box 面略过；Clash 面 R6 批 1 起同口径略过（R6X-002，原「原样
+// 输出」断言 supersede，见函数内注）；Surge / ss 链接对坏 key 亦同
+// 批设门略过（未验证面）。多段：R4-SIP023-R 起 sing-box 面与 Clash
+// 面同口径逐段归一后下发（本断言随该裁定更新，原「保守略过」断言
+// supersede）；合法多段在 Surge / ss 链接维持原样。
 func TestR3GateF1BadAndMultiKeepExistingShape(t *testing.T) {
 	raw32 := r3b2RawKey(32)
 	want := base64.StdEncoding.EncodeToString(raw32)
@@ -215,8 +216,12 @@ func TestR3GateF1BadAndMultiKeepExistingShape(t *testing.T) {
 	if _, ok := proxySingbox(bad); ok {
 		t.Fatal("存量坏 key 在 sing-box 面必须略过（B2 既有口径）")
 	}
-	if node, ok := proxyClash(bad); !ok || Proxy(yamlToMap(node)).str("password") != "plainpassword" {
-		t.Fatalf("存量坏 key 在 clash 面维持原样输出（B2 既有口径）：ok=%v node=%v", ok, node)
+	// R6 批 1 口径更新（R6X-002 / BC-R6-02）：Clash 面坏 key 改为与
+	// sing-box 面同口径整节点略过（原 B2「clash 面原样输出」口径
+	// supersede——该口径下坏存量毒化 mihomo 整份订阅，R6-B/D/L 三
+	// 域实证立案）。本断言随裁定更新。
+	if _, ok := proxyClash(bad); ok {
+		t.Fatal("存量坏 key 在 clash 面必须略过（R6X-002：与 sing-box 面同口径）")
 	}
 
 	me := gateF1Endpoint(r3b2C256, multi)

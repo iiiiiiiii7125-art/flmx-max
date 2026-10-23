@@ -31,9 +31,13 @@ func TestProxyClashRendersImportedXHTTP(t *testing.T) {
 
 // SS 密码 2022-blake3-chacha20-poly1305 是面板可选的标准 SS2022 方法，
 // Loon/QX 白名单不得遗漏（曾导致整节点在两家订阅中静默消失）。
+// R6 批 1 注：loonLine/qxLine 同批补 SS2022 key 逐段谓词门后，夹具
+// 密码须为该 cipher 的合法 32B key（原夹具 16B key 对 32B cipher 本
+// 不合法、旧面无 key 门才得以渲染）；本测试的断言对象（cipher 白
+// 名单覆盖）不变。
 func TestLoonQXRenderSS2022ChachaCipher(t *testing.T) {
 	p := Proxy{"type": "ss", "server": "203.0.113.10", "port": 8388,
-		"cipher": "2022-blake3-chacha20-poly1305", "password": "AAAAAAAAAAAAAAAAAAAAAA=="}
+		"cipher": "2022-blake3-chacha20-poly1305", "password": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}
 	if line, ok := loonLine(p); !ok || !strings.Contains(line, "2022-blake3-chacha20-poly1305") {
 		t.Fatalf("loon line = %q ok=%v", line, ok)
 	}

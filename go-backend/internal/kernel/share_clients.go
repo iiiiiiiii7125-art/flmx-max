@@ -224,6 +224,12 @@ func loonLine(p Proxy) (string, bool) {
 		if !loonSSCiphers[p.str("cipher")] {
 			return "", false
 		}
+		// R6 批 1（未验证面同批设门，恒标未验证）：cipher 白名单自守
+		// 维持不改接；补 SS2022 key 逐段谓词门（与 sing-box/Clash 同
+		// 谓词），坏 key 整节点略过。
+		if ValidateSS2022Password(p.str("cipher"), p.str("password")) != nil {
+			return "", false
+		}
 		add("shadowsocks", server, fmt.Sprint(port), p.str("cipher"), fmt.Sprintf("%q", p.str("password")))
 		po := p.sub("plugin-opts")
 		switch p.str("plugin") {
@@ -407,6 +413,11 @@ func qxLine(p Proxy) (string, bool) {
 	switch p.Type() {
 	case "ss":
 		if !qxSSCiphers[p.str("cipher")] {
+			return "", false
+		}
+		// R6 批 1（未验证面同批设门，恒标未验证）：同 loonLine——cipher
+		// 白名单自守维持，补 SS2022 key 逐段谓词门，坏 key 整节点略过。
+		if ValidateSS2022Password(p.str("cipher"), p.str("password")) != nil {
 			return "", false
 		}
 		kind = "shadowsocks"
