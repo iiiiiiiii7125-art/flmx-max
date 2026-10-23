@@ -2725,6 +2725,19 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 		}, nil
 	}
 
+	// R6X-015：与 handleTcpPing 同口径的字面量复检（R3X-011 整集），
+	// UdpPing 不再是同命令族唯一未接面。主机名不在字面量复检范围，
+	// 其解析落点在 udpPingHost 内逐 IP 复检。
+	if tcpPingLiteralTargetDenied(req.IP) {
+		return TcpPingResponse{
+			IP:           req.IP,
+			Port:         req.Port,
+			Success:      false,
+			ErrorMessage: "目标地址不允许",
+			RequestId:    req.RequestId,
+		}, nil
+	}
+
 	req.Count, req.Timeout = clampPingParams(req.Count, req.Timeout)
 
 	avgTime, packetLoss, err := udpPingHost(req.IP, req.Port, req.Count, req.Timeout)
@@ -3141,6 +3154,16 @@ func udpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 
 		fmt.Printf("✅ DNS解析完成 (%.2fms)，解析到 %d 个IP: %v\n",
 			dnsDuration.Seconds()*1000, len(addrs), addrs)
+
+		// R6X-015：镜像 tcpPingHost 的解析落点复检（R4X-020）——任一
+		// 解析结果命中整集即整体拒绝（fail-closed）。注：本函数只
+		// Dial 后即 Close、从不 Write，本批只补谓词与复检，不加发包行为。
+		for _, s := range addrs {
+			picked := net.ParseIP(s)
+			if picked == nil || resolvedAddrDenied(picked, tcpPingResolvedDenied) {
+				return 0, 100.0, fmt.Errorf("目标地址不允许")
+			}
+		}
 
 		target = net.JoinHostPort(addrs[0], fmt.Sprintf("%d", port))
 		fmt.Printf("🎯 使用IP地址进行测试: %s\n", target)

@@ -548,7 +548,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}
-	if user.Status == 0 {
+	// R6X-014：停用判据与全族 fail-closed 口径对齐（Status != 1 即拒绝），
+	// 存量 status∉{0,1} 的僵尸行不得再取得 token。
+	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
@@ -885,7 +887,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("鉴权失败"))
 		return
 	}
-	if user.Status == 0 {
+	// R6X-014：同 login——停用判据改 Status != 1 fail-closed，
+	// 存量 status∉{0,1} 的僵尸行不得再取得本人用量。
+	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
