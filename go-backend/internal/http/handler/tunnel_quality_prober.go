@@ -490,7 +490,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				snap.ExitToBingLoss = loss
 				snap.Success = true
 			} else {
-				snap.ErrorMessage = err.Error()
+				snap.ErrorMessage = latencyCommandError(err)
 			}
 		} else {
 			snap.ErrorMessage = "入口节点均不在线"
@@ -577,7 +577,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 					hop.Loss = 100
 					primaryHops = append(primaryHops, hop)
 					if snap.ErrorMessage == "" {
-						snap.ErrorMessage = err.Error()
+						snap.ErrorMessage = latencyCommandError(err)
 					}
 					break
 				}
@@ -600,7 +600,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				snap.ExitToBingLoss = loss
 			} else {
 				if snap.ErrorMessage == "" {
-					snap.ErrorMessage = err.Error()
+					snap.ErrorMessage = latencyCommandError(err)
 				}
 				probeOK = false
 			}
@@ -616,7 +616,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				snap.ExitToBingLoss = loss
 				snap.Success = true
 			} else {
-				snap.ErrorMessage = err.Error()
+				snap.ErrorMessage = latencyCommandError(err)
 			}
 		} else {
 			snap.ErrorMessage = "入口节点均不在线"
