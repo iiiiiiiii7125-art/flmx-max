@@ -339,6 +339,62 @@ func TestSSMeteringCompanionEndpointFailClosed(t *testing.T) {
 	}
 }
 
+// F8 (+ B-02 self-healing): syncCompanion must mirror the origin's
+// share/relay presentation fields onto the companion, and must clear
+// any routing state a companion row picked up (its expected state is
+// always direct: no chained exit, no split rules). A second
+// reconcile over the converged state must be a no-op.
+func TestSSMeteringSyncMirrorsShareFieldsAndClearsRouting(t *testing.T) {
+	r, h, _, origin, _ := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+
+	// Drift the origin's mirrored fields and poison the companion
+	// with routing state (the residue the B-02 write could leave).
+	origin.ShareHost = "203.0.113.99"
+	origin.ShareAddressMode = "custom"
+	origin.Inx = 7
+	origin.RelayWhitelist = 1
+	origin.WhitelistExtra = `["10.0.0.0/8"]`
+	if err := r.SaveNodeInbound(origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`UPDATE node_inbound SET inx = 7 WHERE id = ?`, origin.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	comp.OutboundID = 999
+	comp.SplitRules = `[{"domains":["example.com"],"action":"proxy","outboundId":999}]`
+	if err := r.SaveNodeInbound(comp); err != nil {
+		t.Fatal(err)
+	}
+
+	h.reconcileSSMetering()
+	got, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || got == nil {
+		t.Fatal("companion must still exist")
+	}
+	if got.ShareHost != "203.0.113.99" || got.ShareAddressMode != "custom" || got.Inx != 7 ||
+		got.RelayWhitelist != 1 || got.WhitelistExtra != `["10.0.0.0/8"]` {
+		t.Fatalf("companion must mirror the origin's share/relay fields: %+v", got)
+	}
+	if got.OutboundID != 0 || got.SplitRules != "" {
+		t.Fatalf("companion routing state must be cleared, got outbound=%d split=%q", got.OutboundID, got.SplitRules)
+	}
+
+	// Converged state: a further reconcile changes nothing.
+	if err := r.DB().Exec(`UPDATE node_inbound SET updated_time = 111 WHERE id = ?`, got.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	again, _ := r.GetCompanionInbound(origin.ID)
+	if again == nil || again.UpdatedTime != 111 {
+		t.Fatalf("converged companion must not be re-saved, updatedTime=%v", again)
+	}
+}
+
 // F1 (A-01+B-01+C-01): enabling metering on a statically excluded
 // origin (chained exit / split rules) must be rejected with a reason,
 // and an already-metered origin must not be saved into an excluded

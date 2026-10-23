@@ -282,10 +282,28 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	}
 	updated.Name = companionName(origin.Name)
 	updated.Enabled = origin.Enabled
+	// F8: mirror the origin's share/relay presentation fields too
+	// (latent surface today — nothing renders companions — but the
+	// row must not silently diverge from its origin).
+	updated.ShareHost = origin.ShareHost
+	updated.ShareAddressMode = origin.ShareAddressMode
+	updated.Inx = origin.Inx
+	updated.RelayWhitelist = origin.RelayWhitelist
+	updated.WhitelistExtra = origin.WhitelistExtra
+	// The companion's expected routing state is always direct: any
+	// chained exit or split rules found on the row (e.g. written
+	// before the B-02 guard existed) are cleared here, so reconcile
+	// self-heals instead of leaving the companion silently rerouted.
+	updated.OutboundID = 0
+	updated.SplitRules = ""
 	if updated.Settings == comp.Settings && updated.Transport == comp.Transport &&
 		updated.Security == comp.Security && updated.Listen == comp.Listen &&
 		updated.Extra == comp.Extra && updated.OutboundIPStrategy == comp.OutboundIPStrategy &&
-		updated.Name == comp.Name && updated.Enabled == comp.Enabled {
+		updated.Name == comp.Name && updated.Enabled == comp.Enabled &&
+		updated.ShareHost == comp.ShareHost && updated.ShareAddressMode == comp.ShareAddressMode &&
+		updated.Inx == comp.Inx && updated.RelayWhitelist == comp.RelayWhitelist &&
+		updated.WhitelistExtra == comp.WhitelistExtra &&
+		updated.OutboundID == comp.OutboundID && updated.SplitRules == comp.SplitRules {
 		return false
 	}
 	updated.UpdatedTime = now

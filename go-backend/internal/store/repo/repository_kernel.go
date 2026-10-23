@@ -328,9 +328,14 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"accept_proxy_protocol": in.AcceptProxyProtocol,
 		"relay_whitelist":       in.RelayWhitelist,
 		"whitelist_extra":       in.WhitelistExtra,
-		"enabled":               in.Enabled,
-		"outbound_id":           in.OutboundID,
-		"split_rules":           in.SplitRules,
+		// F8: syncCompanion mirrors the origin's inx onto companions;
+		// without the column here that assignment would be silently
+		// dropped (same BUG-A2-1 lesson). Every other caller loads the
+		// row first, so this writes back the stored value unchanged.
+		"inx":         in.Inx,
+		"enabled":     in.Enabled,
+		"outbound_id": in.OutboundID,
+		"split_rules": in.SplitRules,
 		// BUG-A2-1: 此列曾漏在白名单外——inboundSave 与 inboundSplitSave
 		// 都赋值 row.OutboundIPStrategy，落库时被静默丢弃，编辑策略永不生效。
 		"outbound_ip_strategy": in.OutboundIPStrategy,
