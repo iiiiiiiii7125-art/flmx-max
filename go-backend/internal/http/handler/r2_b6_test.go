@@ -80,7 +80,7 @@ func b6ReloadInbound(t *testing.T, r *repo.Repository, id int64) kernel.Inbound 
 }
 
 // ① 保存面：Xray 25.5.0 指向 ENC 目标（自建/导入/分流）被拒且 msg 含
-// 25.6.8；25.6.8 成功；非 ENC 目标在 25.5.0 成功。
+// 25.9.5；25.9.5 成功；非 ENC 目标在 25.5.0 成功。
 func TestR2B6SaveRejectsENCDialOnOldXray(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/b6-save.db")
 	if err != nil {
@@ -92,7 +92,7 @@ func TestR2B6SaveRejectsENCDialOnOldXray(t *testing.T) {
 	front := seedRelayTargetNode(t, r, "b6-front", "198.51.100.31")
 	landing := seedRelayTargetNode(t, r, "b6-landing", "203.0.113.31")
 	frontXray := seedB8Kernel(t, r, front, kernel.TypeXray, "25.5.0")
-	landingXray := seedB8Kernel(t, r, landing, kernel.TypeXray, "25.6.8")
+	landingXray := seedB8Kernel(t, r, landing, kernel.TypeXray, "25.9.5")
 
 	encTarget := seedB6ENCInbound(t, r, landingXray, "b6-enc-target", 443)
 	plainTarget := seedChainInbound(t, r, landingXray, "b6-plain-target", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 8443,
@@ -101,17 +101,17 @@ func TestR2B6SaveRejectsENCDialOnOldXray(t *testing.T) {
 	entry := seedChainInbound(t, r, frontXray, "b6-entry", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 24443,
 		Security: kernel.Security{Type: kernel.SecurityNone}}, 0)
 
-	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) { req.OutboundID = encTarget.ID }); out.Code == 0 || !strings.Contains(out.Msg, "25.6.8") {
-		t.Fatalf("Xray 25.5.0 -> ENC self-built target must be refused with 25.6.8 in msg, got %+v", out)
+	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) { req.OutboundID = encTarget.ID }); out.Code == 0 || !strings.Contains(out.Msg, "25.9.5") {
+		t.Fatalf("Xray 25.5.0 -> ENC self-built target must be refused with 25.9.5 in msg, got %+v", out)
 	}
-	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) { req.OutboundID = importedENC.ID }); out.Code == 0 || !strings.Contains(out.Msg, "25.6.8") {
-		t.Fatalf("Xray 25.5.0 -> ENC imported target must be refused with 25.6.8 in msg, got %+v", out)
+	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) { req.OutboundID = importedENC.ID }); out.Code == 0 || !strings.Contains(out.Msg, "25.9.5") {
+		t.Fatalf("Xray 25.5.0 -> ENC imported target must be refused with 25.9.5 in msg, got %+v", out)
 	}
 	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) {
 		req.OutboundID = 0
 		req.SplitRules = []kernel.SplitRule{{Categories: []string{"netflix"}, Action: kernel.SplitProxy, OutboundID: encTarget.ID}}
-	}); out.Code == 0 || !strings.Contains(out.Msg, "25.6.8") {
-		t.Fatalf("Xray 25.5.0 split -> ENC target must be refused with 25.6.8 in msg, got %+v", out)
+	}); out.Code == 0 || !strings.Contains(out.Msg, "25.9.5") {
+		t.Fatalf("Xray 25.5.0 split -> ENC target must be refused with 25.9.5 in msg, got %+v", out)
 	}
 	// 非 ENC 目标在 25.5.0 成功（防过修）。
 	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) {
@@ -120,12 +120,12 @@ func TestR2B6SaveRejectsENCDialOnOldXray(t *testing.T) {
 	}); out.Code != 0 {
 		t.Fatalf("Xray 25.5.0 -> non-ENC target must succeed, got %+v", out)
 	}
-	// 升到 25.6.8 后 ENC 目标成功。
-	if err := r.UpdateNodeKernelFields(frontXray.ID, map[string]interface{}{"version": "25.6.8"}); err != nil {
+	// 升到 25.9.5 后 ENC 目标成功。
+	if err := r.UpdateNodeKernelFields(frontXray.ID, map[string]interface{}{"version": "25.9.5"}); err != nil {
 		t.Fatal(err)
 	}
 	if out := b6SaveUpdate(t, h, entry, func(req *inboundRequest) { req.OutboundID = encTarget.ID }); out.Code != 0 {
-		t.Fatalf("Xray 25.6.8 -> ENC target must succeed, got %+v", out)
+		t.Fatalf("Xray 25.9.5 -> ENC target must succeed, got %+v", out)
 	}
 }
 
@@ -141,14 +141,14 @@ func TestR2B6ApplyPayloadRejectsENCDialOnOldXray(t *testing.T) {
 	front := seedRelayTargetNode(t, r, "b6-front", "198.51.100.32")
 	landing := seedRelayTargetNode(t, r, "b6-landing", "203.0.113.32")
 	frontXray := seedB8Kernel(t, r, front, kernel.TypeXray, "25.5.0")
-	landingXray := seedB8Kernel(t, r, landing, kernel.TypeXray, "25.6.8")
+	landingXray := seedB8Kernel(t, r, landing, kernel.TypeXray, "25.9.5")
 	encTarget := seedB6ENCInbound(t, r, landingXray, "b6-enc-target", 443)
 	importedENC := seedB6ImportedENC(t, r, "b6-imported-enc", "198.51.100.98")
 
 	// Via 面：直接落库绕过保存期校验。
 	seedChainInbound(t, r, frontXray, "b6-entry-via", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 24443,
 		Security: kernel.Security{Type: kernel.SecurityNone}}, encTarget.ID)
-	if _, _, err := h.buildKernelApplyPayload(frontXray); err == nil || !strings.Contains(err.Error(), "25.6.8") {
+	if _, _, err := h.buildKernelApplyPayload(frontXray); err == nil || !strings.Contains(err.Error(), "25.9.5") {
 		t.Fatalf("apply payload must refuse ENC via on Xray 25.5.0, got %v", err)
 	}
 
@@ -161,14 +161,14 @@ func TestR2B6ApplyPayloadRejectsENCDialOnOldXray(t *testing.T) {
 	if err := r.SaveNodeInbound(splitEntry); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.buildKernelApplyPayload(front2Xray); err == nil || !strings.Contains(err.Error(), "25.6.8") {
+	if _, _, err := h.buildKernelApplyPayload(front2Xray); err == nil || !strings.Contains(err.Error(), "25.9.5") {
 		t.Fatalf("apply payload must refuse ENC split target on Xray 25.5.0, got %v", err)
 	}
 
 	// 达标版本下发成功（防过修）。
-	frontXray.Version = "25.6.8"
+	frontXray.Version = "25.9.5"
 	if _, _, err := h.buildKernelApplyPayload(frontXray); err != nil {
-		t.Fatalf("apply payload on Xray 25.6.8 must accept ENC via: %v", err)
+		t.Fatalf("apply payload on Xray 25.9.5 must accept ENC via: %v", err)
 	}
 }
 
@@ -183,31 +183,31 @@ func TestR2B6KernelInstallRejectsENCDialDowngrade(t *testing.T) {
 
 	front := seedRelayTargetNode(t, r, "b6-front", "198.51.100.34")
 	landing := seedRelayTargetNode(t, r, "b6-landing", "203.0.113.34")
-	frontXray := seedB8Kernel(t, r, front, kernel.TypeXray, "25.6.8")
-	landingXray := seedB8Kernel(t, r, landing, kernel.TypeXray, "25.6.8")
+	frontXray := seedB8Kernel(t, r, front, kernel.TypeXray, "25.9.5")
+	landingXray := seedB8Kernel(t, r, landing, kernel.TypeXray, "25.9.5")
 	encTarget := seedB6ENCInbound(t, r, landingXray, "b6-enc-target", 443)
 	seedChainInbound(t, r, frontXray, "b6-entry", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 24443,
 		Security: kernel.Security{Type: kernel.SecurityNone}}, encTarget.ID)
 
 	code, msg := postKernelInstall(t, h, front, kernel.TypeXray, "25.5.0")
-	if code == 0 || !strings.Contains(msg, "25.6.8") {
-		t.Fatalf("downgrading a kernel with an ENC outbound to 25.5.0 must be refused with 25.6.8 in msg, got code=%d msg=%q", code, msg)
+	if code == 0 || !strings.Contains(msg, "25.9.5") {
+		t.Fatalf("downgrading a kernel with an ENC outbound to 25.5.0 must be refused with 25.9.5 in msg, got code=%d msg=%q", code, msg)
 	}
 	after, err := r.GetNodeKernel(frontXray.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Version != "25.6.8" {
+	if after.Version != "25.9.5" {
 		t.Fatalf("refused install must not rewrite the stored version, got %q", after.Version)
 	}
 	// 直接调扫描函数同口径（导入 ENC 目标）。
 	importedENC := seedB6ImportedENC(t, r, "b6-imported-enc", "198.51.100.97")
 	seedChainInbound(t, r, frontXray, "b6-entry-imported", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 24444,
 		Security: kernel.Security{Type: kernel.SecurityNone}}, importedENC.ID)
-	if err := h.checkKernelVersionGates(frontXray.ID, kernel.TypeXray, "25.5.0"); err == nil || !strings.Contains(err.Error(), "25.6.8") {
+	if err := h.checkKernelVersionGates(frontXray.ID, kernel.TypeXray, "25.5.0"); err == nil || !strings.Contains(err.Error(), "25.9.5") {
 		t.Fatalf("gate scan must refuse imported ENC target on 25.5.0, got %v", err)
 	}
-	if err := h.checkKernelVersionGates(frontXray.ID, kernel.TypeXray, "25.6.8"); err != nil {
-		t.Fatalf("gate scan must accept ENC targets on 25.6.8: %v", err)
+	if err := h.checkKernelVersionGates(frontXray.ID, kernel.TypeXray, "25.9.5"); err != nil {
+		t.Fatalf("gate scan must accept ENC targets on 25.9.5: %v", err)
 	}
 }
