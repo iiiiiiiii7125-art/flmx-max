@@ -332,6 +332,30 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 			out["congestion-controller"] = strings.ToLower(cc)
 		}
 	}
+	// R10X-009（D-04，渲染愈合上收）：Snell 两格此前只在 proxyClash
+	// 一面本地愈合、Surge 面原样下发，v6 顶层 mode 变体则在
+	// sing-box / Surge 两面被精确匹配静默丢弃。在此克隆上一处收口
+	// （与四字段同口径，存储不动）：
+	//   - obfs-opts.mode 经 CanonicalSnellObfsMode 规范化一次
+	//     （大小写小写化 + shadowtls 别名拼写），全面受益；
+	//     proxyClash 的本地愈合保留作冗余。
+	//   - 顶层 mode 凡 EqualFold(unshaped) 即愈合为规范值
+	//     SnellModeUnshaped，使 sing-box / Surge 的 v6 精确匹配
+	//     输出点命中而非丢弃；其余值原样（下游仍不输出，不扩大
+	//     接受集）。
+	if out.Type() == "snell" {
+		if oo := out.sub("obfs-opts"); oo.str("mode") != "" {
+			cp := make(Proxy, len(oo))
+			for k, v := range oo {
+				cp[k] = v
+			}
+			cp["mode"] = CanonicalSnellObfsMode(oo.str("mode"))
+			out["obfs-opts"] = map[string]interface{}(cp)
+		}
+		if strings.EqualFold(out.str("mode"), SnellModeUnshaped) {
+			out["mode"] = SnellModeUnshaped
+		}
+	}
 	if e.Direct {
 		return out
 	}

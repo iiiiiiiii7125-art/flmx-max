@@ -134,8 +134,14 @@ func TestR4B2SingboxChainAndCount(t *testing.T) {
 }
 
 // TestR4B2BuiltinInboundUntouched：自建入站服务端面不动——自建 SS
-// 入站（singboxOutbound）的多段存量密码维持既有口径：经单段 helper
-// 原样渲染、绝不略过、也不逐段归一。
+// 入站（singboxOutbound）的多段存量密码绝不略过。
+// 断言更新登记（R10X-015 / R10-X-verdicts §3.4 点名驱动）：本函数
+// 原断言「经单段 helper 原样渲染、也不逐段归一」已被 R10 裁定覆盖
+// ——singboxOutbound 的 SS 支改经 Segments 逐段归一（与进口同面及
+// 自建 Clash 面齐一），故多段期望值改为逐段归一形；「绝不略过」
+// 与服务端渲染面（render_singbox 的 NormalizedSS2022Password）
+// 不动两点维持不变。逐段归一的独立关闭断言见
+// TestR10B3BuiltinSSMultiSegmentNormalized（不得以本格顶替）。
 func TestR4B2BuiltinInboundUntouched(t *testing.T) {
 	raw32 := r3b2RawKey(32)
 	std32 := base64.StdEncoding.EncodeToString(raw32)
@@ -147,7 +153,7 @@ func TestR4B2BuiltinInboundUntouched(t *testing.T) {
 	if !ok {
 		t.Fatal("自建入站不得被略过")
 	}
-	if o["password"] != multi {
-		t.Fatalf("自建入站面须维持原样口径：got %q want %q", o["password"], multi)
+	if want := std32 + ":" + std32; o["password"] != want {
+		t.Fatalf("自建入站面须逐段归一（R10X-015）：got %q want %q", o["password"], want)
 	}
 }
