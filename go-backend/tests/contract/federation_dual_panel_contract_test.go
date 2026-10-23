@@ -35,9 +35,9 @@ func TestFederationDualPanelMiddleExitAutoPortContract(t *testing.T) {
 	}
 
 	now := time.Now().UnixMilli()
-	providerEntryNodeID := insertContractNode(t, providerRepo, "provider-entry", "198.51.100.11", "43000-43010", "provider-entry-secret", 1)
-	providerMiddleNodeID := insertContractNode(t, providerRepo, "provider-middle", "198.51.100.12", "44000-44010", "provider-middle-secret", 1)
-	providerExitNodeID := insertContractNode(t, providerRepo, "provider-exit", "198.51.100.13", "45000-45010", "provider-exit-secret", 1)
+	providerEntryNodeID := insertContractNode(t, providerRepo, "provider-entry", "198.51.100.11", "43000-43010", "provider-entry-secret", 0)
+	providerMiddleNodeID := insertContractNode(t, providerRepo, "provider-middle", "198.51.100.12", "44000-44010", "provider-middle-secret", 0)
+	providerExitNodeID := insertContractNode(t, providerRepo, "provider-exit", "198.51.100.13", "45000-45010", "provider-exit-secret", 0)
 
 	entryShareID := insertPeerShare(t, providerRepo, &repo.PeerShare{
 		Name:           "entry-share",
@@ -84,6 +84,11 @@ func TestFederationDualPanelMiddleExitAutoPortContract(t *testing.T) {
 	defer stopMiddle()
 	stopExit := startMockNodeSession(t, providerServer.URL, "provider-exit-secret")
 	defer stopExit()
+
+	// R4X-022 deflake (方案 A): 同 PortRange——种子 0 + 会话登记真同步。
+	waitNodeStatus(t, providerRepo, providerEntryNodeID, 1)
+	waitNodeStatus(t, providerRepo, providerMiddleNodeID, 1)
+	waitNodeStatus(t, providerRepo, providerExitNodeID, 1)
 
 	createTunnel := func(name string) int64 {
 		payload := map[string]interface{}{
@@ -184,9 +189,9 @@ func TestFederationDualPanelRemoteDiagnosisContract(t *testing.T) {
 	}
 
 	now := time.Now().UnixMilli()
-	providerEntryNodeID := insertContractNode(t, providerRepo, "provider-entry-dx", "203.0.113.11", "53000-53010", "provider-entry-dx-secret", 1)
-	providerMiddleNodeID := insertContractNode(t, providerRepo, "provider-middle-dx", "203.0.113.12", "54000-54010", "provider-middle-dx-secret", 1)
-	providerExitNodeID := insertContractNode(t, providerRepo, "provider-exit-dx", "203.0.113.13", "55000-55010", "provider-exit-dx-secret", 1)
+	providerEntryNodeID := insertContractNode(t, providerRepo, "provider-entry-dx", "203.0.113.11", "53000-53010", "provider-entry-dx-secret", 0)
+	providerMiddleNodeID := insertContractNode(t, providerRepo, "provider-middle-dx", "203.0.113.12", "54000-54010", "provider-middle-dx-secret", 0)
+	providerExitNodeID := insertContractNode(t, providerRepo, "provider-exit-dx", "203.0.113.13", "55000-55010", "provider-exit-dx-secret", 0)
 
 	entryShareID := insertPeerShare(t, providerRepo, &repo.PeerShare{
 		Name:           "entry-share-dx",
@@ -231,6 +236,12 @@ func TestFederationDualPanelRemoteDiagnosisContract(t *testing.T) {
 	defer stopMiddle()
 	stopExit := startMockNodeSession(t, providerServer.URL, "provider-exit-dx-secret")
 	defer stopExit()
+
+	// R4X-022 deflake (方案 A): 本例只为 middle/exit 起会话（entry 无
+	// 会话、其种子改 0 后如实离线，本例无任何派发指向 entry 会话，
+	// entryShare runtime 断言恒 0 与种子无关）；两会话按 0→1 真同步。
+	waitNodeStatus(t, providerRepo, providerMiddleNodeID, 1)
+	waitNodeStatus(t, providerRepo, providerExitNodeID, 1)
 
 	createPayload := map[string]interface{}{
 		"name":   "dual-panel-diagnose-remote",
@@ -325,9 +336,9 @@ func TestFederationDualPanelRemoteEntryRuntimeContract(t *testing.T) {
 	}
 
 	now := time.Now().UnixMilli()
-	providerEntryNodeID := insertContractNode(t, providerRepo, "provider-entry-rt", "198.51.100.21", "43020-43030", "provider-entry-rt-secret", 1)
-	providerMiddleNodeID := insertContractNode(t, providerRepo, "provider-middle-rt", "198.51.100.22", "44020-44030", "provider-middle-rt-secret", 1)
-	providerExitNodeID := insertContractNode(t, providerRepo, "provider-exit-rt", "198.51.100.23", "45020-45030", "provider-exit-rt-secret", 1)
+	providerEntryNodeID := insertContractNode(t, providerRepo, "provider-entry-rt", "198.51.100.21", "43020-43030", "provider-entry-rt-secret", 0)
+	providerMiddleNodeID := insertContractNode(t, providerRepo, "provider-middle-rt", "198.51.100.22", "44020-44030", "provider-middle-rt-secret", 0)
+	providerExitNodeID := insertContractNode(t, providerRepo, "provider-exit-rt", "198.51.100.23", "45020-45030", "provider-exit-rt-secret", 0)
 
 	insertPeerShare(t, providerRepo, &repo.PeerShare{
 		Name:           "entry-share-rt",
@@ -380,6 +391,13 @@ func TestFederationDualPanelRemoteEntryRuntimeContract(t *testing.T) {
 	defer stopMiddle()
 	stopExit := startMockNodeSession(t, providerServer.URL, "provider-exit-rt-secret")
 	defer stopExit()
+
+	// R4X-022 deflake (方案 A): 种子 0 + 三会话 0→1 真同步；文末既有
+	// 离线断言（stopEntry 后 waitNodeStatus(...,0)）由此成为真 1→0
+	// 跃迁观测，语义只强不弱。
+	waitNodeStatus(t, providerRepo, providerEntryNodeID, 1)
+	waitNodeStatus(t, providerRepo, providerMiddleNodeID, 1)
+	waitNodeStatus(t, providerRepo, providerExitNodeID, 1)
 
 	createTunnel := func(name string) int64 {
 		payload := map[string]interface{}{
@@ -631,7 +649,7 @@ func TestFederationRuntimeCommandPortRangeEnforcement(t *testing.T) {
 	defer providerServer.Close()
 
 	now := time.Now().UnixMilli()
-	providerNodeID := insertContractNode(t, providerRepo, "provider-portrange-node", "198.51.100.50", "44000-44010", "provider-portrange-secret", 1)
+	providerNodeID := insertContractNode(t, providerRepo, "provider-portrange-node", "198.51.100.50", "44000-44010", "provider-portrange-secret", 0)
 
 	insertPeerShare(t, providerRepo, &repo.PeerShare{
 		Name:           "portrange-share",
@@ -646,6 +664,10 @@ func TestFederationRuntimeCommandPortRangeEnforcement(t *testing.T) {
 
 	stopNode := startMockNodeSession(t, providerServer.URL, "provider-portrange-secret")
 	defer stopNode()
+	// R4X-022 deflake (方案 A): Dial 返回只证明 Upgrade 应答，不证明
+	// 服务端已登记会话；种子 status=0 时 waitNodeStatus 观测到 0→1
+	// 才蕴含 s.nodes 登记完成（server.go 先登记后置 DB 1）。
+	waitNodeStatus(t, providerRepo, providerNodeID, 1)
 
 	sendCommand := func(token string, cmdType string, data interface{}) *httptest.ResponseRecorder {
 		payload := map[string]interface{}{

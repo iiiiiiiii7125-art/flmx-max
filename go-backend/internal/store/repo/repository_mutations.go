@@ -1805,11 +1805,86 @@ type RevokedUserTunnelPair struct {
 	TunnelID int64
 }
 
+// grantPairMembershipHoldsTx reports whether a grant's (user, tunnel)
+// matches its permission pair's memberships: the user belongs to the
+// grant's user_group and the tunnel belongs to its tunnel_group. This
+// is the correspondence invariant legitimate grants always satisfy
+// (they are materialized from exactly those memberships); it is the
+// G-S02 yardstick for imported grants and the R4X-005 promotion guard.
+func grantPairMembershipHoldsTx(tx *gorm.DB, userGroupID, tunnelGroupID, userID, tunnelID int64) (bool, error) {
+	var n int64
+	if err := tx.Model(&model.UserGroupUser{}).
+		Where("user_group_id = ? AND user_id = ?", userGroupID, userID).
+		Count(&n).Error; err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+	if err := tx.Model(&model.TunnelGroupTunnel{}).
+		Where("tunnel_group_id = ? AND tunnel_id = ?", tunnelGroupID, tunnelID).
+		Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// promoteCreatorFlagTx transfers the group-created origin flag to a
+// surviving grant of userTunnelID (R4X-005): created_by_group is a
+// per-grant-row record of "this expansion created the user_tunnel",
+// not a property of the user_tunnel itself, so when the creator row
+// is revoked while other grants keep the user_tunnel alive, the
+// origin record must move to a remaining grant — otherwise the last
+// revoke no longer sees the row as a candidate and a group-created
+// authorization leaks depending on revocation order.
+//
+// Anti-mispromotion guard: only a remaining grant whose permission
+// pair membership correspondence holds (see
+// grantPairMembershipHoldsTx) may be promoted. A grant written back
+// by backup import for a (user, tunnel) that is not a member of its
+// pair (the G-S02 surface) must not be elevated to "group-created":
+// promoting it would let that pair's later revocation delete a
+// user_tunnel whose group origin is not established. If no remaining
+// grant qualifies, nothing is promoted and the user_tunnel survives
+// the last revoke, exactly as a manual row does.
+func promoteCreatorFlagTx(tx *gorm.DB, userTunnelID int64) error {
+	var grants []model.GroupPermissionGrant
+	if err := tx.Where("user_tunnel_id = ?", userTunnelID).Order("id ASC").Find(&grants).Error; err != nil {
+		return err
+	}
+	for _, g := range grants {
+		if g.CreatedByGroup == 1 {
+			return nil // origin already recorded on a surviving grant
+		}
+	}
+	var ut model.UserTunnel
+	if err := tx.Select("user_id", "tunnel_id").Where("id = ?", userTunnelID).First(&ut).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // dangling grants only; nothing to promote against
+		}
+		return err
+	}
+	for _, g := range grants {
+		holds, err := grantPairMembershipHoldsTx(tx, g.UserGroupID, g.TunnelGroupID, ut.UserID, ut.TunnelID)
+		if err != nil {
+			return err
+		}
+		if !holds {
+			continue
+		}
+		return tx.Model(&model.GroupPermissionGrant{}).Where("id = ?", g.ID).Update("created_by_group", 1).Error
+	}
+	return nil
+}
+
 // deleteOrphanedGroupCreatedUserTunnelsTx deletes the given group-created
 // user_tunnel rows that no longer have any GroupPermissionGrant referencing
 // them, returning the (userID, tunnelID) pairs actually deleted so the
 // handler can clean up their forwards. Manual grants (created_by_group=0)
 // are never in the candidate set, so hand-assigned tunnels survive.
+// Candidates that survive on other grants get their origin flag
+// promoted to a remaining grant first (R4X-005, see
+// promoteCreatorFlagTx), so a later last-revoke still deletes them.
 func deleteOrphanedGroupCreatedUserTunnelsTx(tx *gorm.DB, candidates map[int64]struct{}) ([]RevokedUserTunnelPair, error) {
 	var revoked []RevokedUserTunnelPair
 	for userTunnelID := range candidates {
@@ -1825,6 +1900,10 @@ func deleteOrphanedGroupCreatedUserTunnelsTx(tx *gorm.DB, candidates map[int64]s
 			if err := tx.Where("id = ?", userTunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
 				return revoked, err
 			}
+			continue
+		}
+		if err := promoteCreatorFlagTx(tx, userTunnelID); err != nil {
+			return revoked, err
 		}
 	}
 	return revoked, nil
@@ -1966,12 +2045,7 @@ func (r *Repository) RevokeGroupPermissionPairTx(tx *gorm.DB, userGroupID, tunne
 		return nil, errors.New("database unavailable")
 	}
 
-	type grantRow struct {
-		UserTunnelID   int64
-		CreatedByGroup int
-	}
-
-	var rows []grantRow
+	var rows []groupGrantRow
 	if err := tx.Model(&model.GroupPermissionGrant{}).
 		Select("user_tunnel_id, created_by_group").
 		Where("user_group_id = ? AND tunnel_group_id = ?", userGroupID, tunnelGroupID).
@@ -1979,36 +2053,19 @@ func (r *Repository) RevokeGroupPermissionPairTx(tx *gorm.DB, userGroupID, tunne
 		return nil, err
 	}
 
-	groupCreatedTunnelIDs := make(map[int64]struct{})
-	for _, row := range rows {
-		if row.CreatedByGroup == 1 && row.UserTunnelID > 0 {
-			groupCreatedTunnelIDs[row.UserTunnelID] = struct{}{}
-		}
-	}
+	candidates := groupCreatedUTIDs(rows)
 
 	if err := tx.Where("user_group_id = ? AND tunnel_group_id = ?", userGroupID, tunnelGroupID).
 		Delete(&model.GroupPermissionGrant{}).Error; err != nil {
 		return nil, err
 	}
 
-	var revoked []RevokedUserTunnelPair
-	for userTunnelID := range groupCreatedTunnelIDs {
-		var remaining int64
-		if err := tx.Model(&model.GroupPermissionGrant{}).Where("user_tunnel_id = ?", userTunnelID).Count(&remaining).Error; err != nil {
-			return revoked, err
-		}
-		if remaining == 0 {
-			var ut model.UserTunnel
-			if lookupErr := tx.Select("user_id", "tunnel_id").Where("id = ?", userTunnelID).First(&ut).Error; lookupErr == nil {
-				revoked = append(revoked, RevokedUserTunnelPair{UserID: ut.UserID, TunnelID: ut.TunnelID})
-			}
-			if err := tx.Where("id = ?", userTunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
-				return revoked, err
-			}
-		}
-	}
-
-	return revoked, nil
+	// R4X-005: the candidate/orphan logic (including creator-flag
+	// promotion to surviving grants) is shared with every other
+	// revocation path via deleteOrphanedGroupCreatedUserTunnelsTx —
+	// this pair path previously carried its own inline copy, which is
+	// exactly where the order-dependent leak survived.
+	return deleteOrphanedGroupCreatedUserTunnelsTx(tx, candidates)
 }
 
 func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int64, bindings []FederationTunnelBinding) error {
@@ -2244,7 +2301,14 @@ func (r *Repository) InsertTunnelTx(tx *gorm.DB, tunnel *model.Tunnel) error {
 	if dupCnt > 0 {
 		return ErrTunnelNameDuplicate
 	}
-	return tx.Create(tunnel).Error
+	// R4X-010(a)：TrafficRatio 带 GORM `default:1.0`，显式 0 会在 Create
+	// 时被吞成 1——意图值须在 Create 前捕获、落库后写回（与备份导入的
+	// restoreZeroValuedFloat 同型），显式 0 倍率（零计费）才落得下去。
+	ratioIntent := tunnel.TrafficRatio
+	if err := tx.Create(tunnel).Error; err != nil {
+		return err
+	}
+	return restoreZeroValuedFloat(tx, &model.Tunnel{}, tunnel.ID, "traffic_ratio", ratioIntent)
 }
 
 func (r *Repository) CreateTunnelTx(tx *gorm.DB, name string, trafficRatio float64, typeVal int, flow int64, now int64, status int, inIP interface{}, inx int, ipPreference string, probeTargetHost string, probeTargetPort int) (int64, error) {
@@ -2264,7 +2328,11 @@ func (r *Repository) CreateTunnelTx(tx *gorm.DB, name string, trafficRatio float
 		ProbeTargetHost: probeTargetHost,
 		ProbeTargetPort: probeTargetPort,
 	}
+	// R4X-010(a)：同 InsertTunnelTx——显式 0 倍率不得被 default:1.0 吞掉。
 	if err := tx.Create(&tunnel).Error; err != nil {
+		return 0, err
+	}
+	if err := restoreZeroValuedFloat(tx, &model.Tunnel{}, tunnel.ID, "traffic_ratio", trafficRatio); err != nil {
 		return 0, err
 	}
 	return tunnel.ID, nil

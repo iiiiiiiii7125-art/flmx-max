@@ -76,8 +76,31 @@ func (r *Repository) CreateNodeKernel(k *model.NodeKernel) error {
 	// 显式 0。现行两个调用点恒传 1，此处仍按 CreateNodeInbound
 	// （BUG-A4-1）范式留意图写回，避免未来调用方踩中同族坑。
 	wantEnabled := k.Enabled
-	if err := r.db.Create(k).Error; err != nil {
-		return err
+	// R4X-023：调用方均为 check-then-insert（GetNodeKernelByType 得 nil
+	// 才 Create），两条产品路径并发到达时（WS 重连对账 syncRealmNodes
+	// 与同步 switchTunnelEngine / 管理员双击安装）双插同键，败者此前
+	// 吃 (node_id, kernel_type) UNIQUE 约束错误并把裸 DB 错误回给调用
+	// 方。改冲突安全写法：ON CONFLICT DO NOTHING 单语句插入，未插入
+	// 说明胜者行已落库——回读既有行写入 k 并幂等成功（胜者行内容与
+	// 本次拟插入行同口径，见批 9 spike 定性）。与 node_seq 的冲突安全
+	// 范式同源；非重试语义，不掩盖其他错误。
+	res := r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "node_id"}, {Name: "kernel_type"}},
+		DoNothing: true,
+	}).Create(k)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		existing, err := r.GetNodeKernelByType(k.NodeID, k.KernelType)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return errors.New("node kernel create conflicted but row not found")
+		}
+		*k = *existing
+		return nil
 	}
 	if wantEnabled == 0 {
 		if err := r.db.Model(&model.NodeKernel{}).Where("id = ?", k.ID).Update("enabled", 0).Error; err != nil {
@@ -471,8 +494,17 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 			known[id] = struct{}{}
 		}
 
+		// F-S01（R4 发版门项 11 升 P3）：基线行以 FOR UPDATE 读，
+		// 与订阅管线同修法——PG Read Committed 下两路并发同一样本
+		// 各按同一旧基线算 delta 会双计（门上实证入站后两轮双
+		// 计）；行锁串行化后后到事务重读已提交基线、delta 归 0。
+		// 按唯一键序取锁防锁序交叉；SQLite 方言自动忽略 FOR 子
+		// 句，行为不变（MaxOpenConns(1) 本就串行）。
 		var states []model.NodeInboundCounter
-		if err := tx.Where("inbound_id IN ?", ids).Find(&states).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("inbound_id IN ?", ids).
+			Order("inbound_id ASC, protocol ASC, direction ASC").
+			Find(&states).Error; err != nil {
 			return err
 		}
 		prev := make(map[inboundCounterKey]model.NodeInboundCounter, len(states))

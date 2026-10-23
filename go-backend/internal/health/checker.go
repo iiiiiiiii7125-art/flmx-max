@@ -290,6 +290,16 @@ func (c *Checker) executeCheck(m *model.ServiceMonitor, timestamp int64, limits 
 
 	// When nodeId is set, run checks on the specified node.
 	if m.NodeID > 0 {
+		// R4X-008：存量硬拒目标在分发面跳过（创建/更新面校验拦不住
+		// 本批之前已存的坏目标）——不下发、结果记政策拒绝，与
+		// checkedTunnelProbeTargetValues 的存量处置同型。仅硬拒
+		// 子集，LAN 目标照常下发。
+		if err := ValidateNodeMonitorTarget(m.Type, m.Target); err != nil {
+			log.Printf("service monitor %d: node target skipped: %v", m.ID, err)
+			result.Success = 0
+			result.ErrorMessage = err.Error()
+			return result
+		}
 		c.checkOnNode(m, timeoutSec, timeout, result)
 		return result
 	}

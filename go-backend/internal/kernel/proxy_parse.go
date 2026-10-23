@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,8 +144,21 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 }
 
 func validateProxyCredentials(p Proxy) error {
+	// R4X-002: Reality 凭据横切校验——任何协议只要带 reality-opts
+	// 就查（trojan 同样可携带，不得只绑 vless 分支）。
+	if err := validateRealityOpts(p); err != nil {
+		return err
+	}
 	switch p.Type() {
 	case "ss":
+		// R4X-001: cipher 名一处 ToLower 收口（四格式三入口全经
+		// finishProxy 到此，与 ss 链接 parseSSURI 既有口径对齐），
+		// 落库即规范小写名。此前仅 ss 链接一处小写化，Clash /
+		// sing-box JSON / Surge 三格式直传变体可整体绕过下方
+		// SS2022 校验并原样渲染毒化整表。
+		if c := p.str("cipher"); c != "" {
+			p["cipher"] = strings.ToLower(c)
+		}
 		if p.str("cipher") == "" || p.str("password") == "" {
 			return errors.New("缺少加密方式或密码")
 		}
@@ -184,6 +198,36 @@ func validateProxyCredentials(p Proxy) error {
 	case "naive":
 		if p.str("username") == "" || p.str("password") == "" {
 			return errors.New("缺少用户名或密码")
+		}
+	}
+	return nil
+}
+
+// validateRealityOpts checks the Reality fields of any proxy carrying
+// reality-opts (R4X-002). Reality without a usable public key is not a
+// working node: the key is rendered verbatim into sing-box / mihomo
+// profiles, where a malformed or empty value fails the whole profile
+// and takes every healthy node with it (the same poisoning mechanism
+// as R3X-008's bad SS2022 keys), so bad values are rejected per node
+// at import instead. The public-key predicate mirrors the decode in
+// RealityPublicKey: RawURL base64 decoding to exactly 32 bytes — the
+// form check deliberately accepts nothing wider (no Std/padded
+// variants). short-id is checked alongside but is not a closing
+// condition on its own: empty is allowed; a non-empty value must be
+// lowercase hex, even length, at most 16 chars (the self-built face's
+// shortIDPattern plus its even-length rule in normalizeSecurity).
+func validateRealityOpts(p Proxy) error {
+	ro := p.sub("reality-opts")
+	if len(ro) == 0 {
+		return nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(ro.str("public-key"))
+	if err != nil || len(raw) != 32 {
+		return errors.New("Reality 公钥 pbk 格式错误（须为 32 字节的 RawURL base64）")
+	}
+	if sid := ro.str("short-id"); sid != "" {
+		if !shortIDPattern.MatchString(sid) || len(sid)%2 != 0 {
+			return errors.New("Reality short-id 格式错误（须为偶数位小写十六进制，最多 16 位）")
 		}
 	}
 	return nil

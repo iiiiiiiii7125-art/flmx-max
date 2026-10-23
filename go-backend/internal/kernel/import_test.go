@@ -34,7 +34,11 @@ func TestImportShareLinksRoundTrip(t *testing.T) {
 		"ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng%3D%3D@[2001:db8::1]:9000#v6",
 		"ss://" + base64.RawURLEncoding.EncodeToString([]byte("chacha20-ietf-poly1305:pw")) + "@1.2.3.4:80/?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dbing.com#obfs",
 		"vmess://" + base64.StdEncoding.EncodeToString(vb),
-		"vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=PUBKEY&sid=ab12&type=tcp#Reality",
+		// R4X-002 连带调整（单独申报）：本夹具原用占位 pbk=PUBKEY，
+		// 正是 Reality 公钥校验要拒的垃圾形态；本用例只测 reality
+		// 链接的往返保真，换成合法 32B RawURL 公钥（字节 0..31 的
+		// 编码）不改变其断言意图。
+		"vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=ab12&type=tcp#Reality",
 		"vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?encryption=none&security=tls&sni=a.example.com&type=grpc&serviceName=svc#gRPC",
 		"trojan://pass%40word@t.example.com:443?security=tls&sni=t.example.com&type=ws&path=%2Ftr&host=t.example.com&allowInsecure=1#Trojan",
 		"hysteria2://secret@5.6.7.8:443/?sni=h.example.com&obfs=salamander&obfs-password=ob&mport=20000-30000&insecure=1#HY2",

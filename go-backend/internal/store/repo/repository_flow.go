@@ -320,7 +320,32 @@ func (r *Repository) GetForwardRecord(forwardID int64) (*model.ForwardRecord, er
 	return &fr, nil
 }
 
+// GetTunnelRecord returns the tunnel record with read-side
+// normalization applied (Flow/TrafficRatio <= 0 are presented as 1).
+//
+// R4X-004 口径拆分：本函数仅限只读消费（运行时渲染/判定/诊断），
+// 禁止作写回源——归一化后的假值经 presence 回填写回会把存量合法
+// 零值（如 traffic_ratio=0 的零计费隧道）静默改成 1 并持久化。
+// 任何「读旧值 → 回填 → 写库」的链路必须改走 GetTunnelRecordRaw。
 func (r *Repository) GetTunnelRecord(tunnelID int64) (*model.TunnelRecord, error) {
+	tr, err := r.GetTunnelRecordRaw(tunnelID)
+	if err != nil || tr == nil {
+		return tr, err
+	}
+	if tr.Flow <= 0 {
+		tr.Flow = 1
+	}
+	if tr.TrafficRatio <= 0 {
+		tr.TrafficRatio = 1
+	}
+	return tr, nil
+}
+
+// GetTunnelRecordRaw returns the tunnel record exactly as stored,
+// without the Flow/TrafficRatio normalization of GetTunnelRecord.
+// It is the only approved old-value source for write-back paths
+// (presence backfill in tunnelUpdate, R4X-004).
+func (r *Repository) GetTunnelRecordRaw(tunnelID int64) (*model.TunnelRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
@@ -332,7 +357,7 @@ func (r *Repository) GetTunnelRecord(tunnelID int64) (*model.TunnelRecord, error
 		}
 		return nil, err
 	}
-	tr := model.TunnelRecord{
+	return &model.TunnelRecord{
 		ID:              t.ID,
 		Type:            t.Type,
 		Status:          t.Status,
@@ -342,14 +367,7 @@ func (r *Repository) GetTunnelRecord(tunnelID int64) (*model.TunnelRecord, error
 		ProbeTargetHost: t.ProbeTargetHost,
 		ProbeTargetPort: t.ProbeTargetPort,
 		Engine:          t.Engine,
-	}
-	if tr.Flow <= 0 {
-		tr.Flow = 1
-	}
-	if tr.TrafficRatio <= 0 {
-		tr.TrafficRatio = 1
-	}
-	return &tr, nil
+	}, nil
 }
 
 func (r *Repository) TunnelExists(tunnelID int64) (bool, error) {
@@ -474,6 +492,25 @@ func (r *Repository) CountActiveForwardsByUserTunnel(userID, tunnelID int64) (in
 	var count int64
 	err := r.db.Model(&model.Forward{}).Where("user_id = ? AND tunnel_id = ? AND status = 1", userID, tunnelID).Count(&count).Error
 	return count, err
+}
+
+// GetSpeedLimit returns the full stored speed-limit row (any status), or
+// nil when it does not exist. R4X-019: speedLimitUpdate needs the stored
+// row as its presence backfill source; GetSpeedLimitSpeed cannot serve
+// (it filters status=1 and selects only the speed column).
+func (r *Repository) GetSpeedLimit(id int64) (*model.SpeedLimit, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var sl model.SpeedLimit
+	err := r.db.Where("id = ?", id).First(&sl).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &sl, nil
 }
 
 func (r *Repository) GetSpeedLimitSpeed(id int64) (int, error) {

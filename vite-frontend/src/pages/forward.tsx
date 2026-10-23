@@ -292,14 +292,16 @@ const compareForwardTunnelGroupKeyAsc = (a: string, b: string): number => {
 };
 
 const normalizeTunnelTrafficRatio = (value: unknown): number => {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+  // R4X-010(c)：0 是合法倍率（零计费），原样展示 0x；仅非有限/缺失/
+  // 负值才兜底为 1。徽标条件（归一值 !== 1）随之对 0 呈现。
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value;
   }
 
   if (typeof value === "string") {
     const parsed = Number(value);
 
-    if (Number.isFinite(parsed) && parsed > 0) {
+    if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed;
     }
   }
