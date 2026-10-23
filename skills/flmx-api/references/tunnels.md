@@ -260,7 +260,7 @@ Assign a tunnel to a user.
 |-------|------|----------|-------------|
 | userId | number | Yes | User ID |
 | tunnelId | number | Yes | Tunnel ID |
-| flow | number | No | Traffic quota for this tunnel in GB |
+| flow | number | No | Traffic quota for this tunnel in GB (0 = unlimited) |
 | expTime | number | No | Expiry for this assignment (ms, 0=never) |
 | speedId | number | No | Speed limit rule ID |
 

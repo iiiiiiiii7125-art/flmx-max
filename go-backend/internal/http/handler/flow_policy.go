@@ -265,7 +265,8 @@ func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, n
 	current := user.InFlow + user.OutFlow
 	// O2-006：配额边界统一为 fail-closed：等于上限也拦截，与隧道级 utCurrent >= utFlowLimit 一致
 	// 旧逻辑 flowLimit < current 允许"刚好用满"时开启新转发
-	if flowLimit <= current {
+	// R9X-001：flowLimit == 0 表示不限额（与 Num/ExpTime 的 >0 守卫同形），不得判超额
+	if flowLimit > 0 && flowLimit <= current {
 		return errors.New("流量已超额，禁止开启转发")
 	}
 	if err := h.ensureUserForwardAllowedByQuota(userID, now); err != nil {
@@ -307,7 +308,8 @@ func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, n
 
 	utFlowLimit := flowLimitBytes(policy.Flow, policy.FlowMiB)
 	utCurrent := policy.InFlow + policy.OutFlow
-	if utCurrent >= utFlowLimit {
+	// R9X-001：utFlowLimit == 0 表示不限额，不得判超额
+	if utFlowLimit > 0 && utCurrent >= utFlowLimit {
 		return errors.New("该隧道流量已超额，禁止开启转发")
 	}
 
@@ -333,7 +335,8 @@ func (h *Handler) shouldPauseUser(userID int64, now int64) bool {
 	flowLimit := flowLimitBytes(user.Flow, user.FlowMiB)
 	current := user.InFlow + user.OutFlow
 	// O2-006：与创建检查一致，等于上限也暂停（fail-closed）
-	if flowLimit <= current {
+	// R9X-001：flowLimit == 0 表示不限额，不得暂停
+	if flowLimit > 0 && flowLimit <= current {
 		return true
 	}
 	if user.ExpTime > 0 && user.ExpTime <= now {
@@ -349,7 +352,8 @@ func shouldPauseUserTunnel(policy *userTunnelPolicy, now int64) bool {
 
 	flowLimit := flowLimitBytes(policy.Flow, policy.FlowMiB)
 	current := policy.InFlow + policy.OutFlow
-	if current >= flowLimit {
+	// R9X-001：flowLimit == 0 表示不限额，不得暂停
+	if flowLimit > 0 && current >= flowLimit {
 		return true
 	}
 	if policy.ExpTime > 0 && policy.ExpTime <= now {

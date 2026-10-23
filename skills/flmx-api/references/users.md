@@ -68,7 +68,7 @@ Create a new user.
 | pwd | string | Yes | Password |
 | name | string | No | Display name |
 | status | number | No | 1=active, 0=disabled (default: 1) |
-| flow | number | No | Traffic quota in GB (default: 0) |
+| flow | number | No | Traffic quota in GB (default: 0; 0 = unlimited) |
 | num | number | No | Max forwards allowed (default: 0 = unlimited) |
 | expTime | number | No | Expiry timestamp in ms (0 = never) |
 | flowResetTime | number | No | Monthly reset day 1-28 (0 = no reset) |
