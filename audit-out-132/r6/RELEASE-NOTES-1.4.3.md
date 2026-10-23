@@ -77,6 +77,18 @@ subscription.md 计量小节补披露「中转端点不计量」例外一行（�
 
 ## 凭据
 
-（待发布后回填：Release URL / tag 指向 / CI 结论 / 12 资产 sha 表。）
+- **Release**：[Release 1.4.3](https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/1.4.3)（Published，2026-10-23T08:19:28Z，非 Draft / 非 Prerelease）。
+- **tag `1.4.3`**（纯数字）指向 `37a15d764cd96e3baae118a364de94f54f383f0a`（integrate-r6 合入 main `e35d92f` + 字面量同步 `66a46c0` + 本说明定稿）。
+- **CI 结论**：主发版流 Build and Push Images（run 39922530625）五 job 全 success。CI Build Check（run 39922522015 @ 发布提交）**六 job 全 success**——Build Frontend（含 demo check 与 check-doc-consistency）、Go Full Tests、Build Go Backend、Build Agent、Test Installer、PostgreSQL Contract，无任何红项，未用「在案定案」放行。**PG 契约在 CI 实跑全 6 条**（run 日志逐条 PASS：计数管线并发两条 `TestPostgresApplyInboundCounterSamplesConcurrentDoubleApplyContract` / `TestPostgresApplySubscriptionCounterSamplesConcurrentDoubleApplyContract`、Seq 两条、NodeCreateRepairs、`TestPostgresCompanionPartialUniqueIndex`）。Publish Skill to npm（run 39922530441）为日志实证的 ENEEDAUTH 惯例红，不阻塞；Deploy Docs（run 39922522082）success。
+- **资产核对（12/12）**：6 产物逐个下载与各自 `.sha256` 比对全部一致；发布副本 `install.sh` / `panel_install.sh` 均 `PINNED_VERSION="1.4.3"`、`REPO="iiiiiiiii7125-art/flmx-max"`；compose v4/v6 后端与前端镜像标签均 `:1.4.3`；发布 `gost-amd64 -V` = `gost 1.4.3 (go1.25.14 linux/amd64)`（正式注入）。GHCR 标签 API 因 token 无 read:packages 返回 403 未核（与历版同），以主发版流 Build & Push 两 job success 为据。
+
+| 产物 | sha256 |
+|---|---|
+| docker-compose-v4.yml | `1a1295b0c98c49ef9e91ea355699a9300b9ddca16223385a9d9aa9496bbb4ae1` |
+| docker-compose-v6.yml | `5e772088280d0505463dcaaeb66202f8e920e1d39209621ade3375bd6b91dc69` |
+| gost-amd64 | `c0f47bd11a83872bdc0976f3680c01d2b73d49ac901dc9a3e05ab6c39f095ec1` |
+| gost-arm64 | `ca79d135d24eda98fecd497d507cb9b2abef1bbc7151dbae109cc2cbc5141a0f` |
+| install.sh | `d94a2e7da48d2adc59e48c4bf8a0937a6ee8d827bdbbb736c394be90c297c6e0` |
+| panel_install.sh | `1c0194610fd4cf5825fe6dc8f19180c36bd7386a77c872db58b00baaf5f32503` |
 
 — RELEASE-NOTES-1.4.3 END —
