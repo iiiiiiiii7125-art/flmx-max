@@ -3019,7 +3019,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		subRemap := make(map[int64]int64)
 
 		if typeSet["users"] && len(backup.Users) > 0 {
-			count, err := importUsers(tx, backup.Users, now)
+			count, err := importUsers(tx, backup.Users, now, rep)
 			if err != nil {
 				return fmt.Errorf("import users failed: %w", err)
 			}
@@ -3210,9 +3210,17 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 	return result, nil
 }
 
-func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) {
+func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, u := range users {
+		// R5X-009：status 合法域 {0,1} 枚举门（与运行时写入口同
+		// 口径）——非法值逐行跳过 + skipped/warning，不静默原样
+		// 落库（非法值会形成「登录发 token、其余全拒」的僵尸账号）。
+		if u.Status != 0 && u.Status != 1 {
+			rep.skip("users")
+			rep.warnf("备份恢复：用户 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", u.ID, u.User, u.Status)
+			continue
+		}
 		pwdHash, status, err := normalizeImportedUserPassword(u.Pwd, u.Status)
 		if err != nil {
 			return count, err
@@ -3566,10 +3574,21 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 	// 整体删除后再按备份重建——既避免恢复到已漂移状态时残留行与新行
 	// 在 (node_id, port) 唯一索引上互撞，也保证恢复结果与备份严格
 	// 一致（被删掉的链路行不会在恢复后残留）。
+	// R5X-017：预删行数先行计数——预删与存在性跳过组合时（部分导入
+	// 引用目标库外节点）存量链路会「两头落空」，重建后须补 warning
+	// 披露（删除时序不动）。
+	var preDeletedChains int64
+	chainSkippedBefore := 0
+	if rep != nil {
+		chainSkippedBefore = rep.skipped["chainTunnels"]
+	}
 	if len(tunnels) > 0 {
 		tunnelIDs := make([]int64, 0, len(tunnels))
 		for _, t := range tunnels {
 			tunnelIDs = append(tunnelIDs, t.ID)
+		}
+		if err := tx.Model(&model.ChainTunnel{}).Where("tunnel_id IN ?", tunnelIDs).Count(&preDeletedChains).Error; err != nil {
+			return 0, err
 		}
 		if err := tx.Where("tunnel_id IN ?", tunnelIDs).Delete(&model.ChainTunnel{}).Error; err != nil {
 			return 0, err
@@ -3652,6 +3671,13 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 			}
 		}
 		count++
+	}
+	// R5X-017：预删>0 且本批 chain 跳过>0 时补 warning——存量链路
+	// 已被移除而备份链路未恢复，不得只剩一个无上下文的跳过数字。
+	if rep != nil && preDeletedChains > 0 {
+		if skipped := rep.skipped["chainTunnels"] - chainSkippedBefore; skipped > 0 {
+			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行因引用节点不存在被跳过未恢复（原链路已移除且未恢复），请核对链路配置", preDeletedChains, skipped)
+		}
 	}
 	return count, nil
 }
@@ -3938,6 +3964,13 @@ func sweepDanglingSpeedRefsTx(tx *gorm.DB, forwards []model.ForwardBackup, userT
 
 func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
 	count := 0
+	// R5X-017：ForwardPorts 先删后建——预删行数与本批跳过数先行
+	// 记账，重建后若「预删>0 且跳过>0」补 warning（见循环后）。
+	var preDeletedPorts int64
+	portsSkippedBefore := 0
+	if rep != nil {
+		portsSkippedBefore = rep.skipped["forwardPorts"]
+	}
 	for _, f := range forwards {
 		// D4-03：引用（用户/隧道）不存在时整行跳过并计数，不写悬空行。
 		userExists, err := rowExistsTx(tx, &model.User{}, f.UserID)
@@ -3985,6 +4018,11 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			return count, err
 		}
 		if f.ForwardPorts != nil {
+			var existingPorts int64
+			if err := tx.Model(&model.ForwardPort{}).Where("forward_id = ?", f.ID).Count(&existingPorts).Error; err != nil {
+				return count, err
+			}
+			preDeletedPorts += existingPorts
 			if err := tx.Where("forward_id = ?", f.ID).Delete(&model.ForwardPort{}).Error; err != nil {
 				return count, err
 			}
@@ -4008,6 +4046,13 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			}
 		}
 		count++
+	}
+	// R5X-017：预删>0 且本批端口跳过>0 时补 warning（口径同
+	// importTunnels 的 chain 段）。
+	if rep != nil && preDeletedPorts > 0 {
+		if skipped := rep.skipped["forwardPorts"] - portsSkippedBefore; skipped > 0 {
+			rep.warnf("备份恢复：转发端口（forwardPorts）重建时目标库原有 %d 条端口行已被移除，其中 %d 条备份端口行因引用节点不存在被跳过未恢复（原端口已移除且未恢复），请核对转发端口配置", preDeletedPorts, skipped)
+		}
 	}
 	return count, nil
 }
@@ -4328,7 +4373,21 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup,
 
 func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelGroupBackup, now int64, rep *importReport) (int, error) {
 	count := 0
+	// R5X-017：成员先删后建——预删行数（各组旧成员数之和）与本批
+	// 跳过数先行记账，重建后若「预删>0 且跳过>0」补 warning。
+	var preDeletedMembers int64
+	membersSkippedBefore := 0
+	if rep != nil {
+		membersSkippedBefore = rep.skipped["tunnelGroupMembers"]
+	}
 	for _, tg := range tunnelGroups {
+		// R5X-009：status {0,1} 枚举门（同 importUsers）——非法行
+		// 整行跳过，不触发占位删除/成员替换/停用收敛等任何处置。
+		if tg.Status != 0 && tg.Status != 1 {
+			rep.skip("tunnelGroups")
+			rep.warnf("备份恢复：隧道分组 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", tg.ID, tg.Name, tg.Status)
+			continue
+		}
 		// D4-02：组名唯一——同名异 id 的既有组先删占位（含其成员），
 		// 以备份为准（与 kernels/relays/user_subscriptions 既有处理一致）。
 		if err := deleteSameNameGroupTx(tx, &model.TunnelGroup{}, "tunnel_group_id", tg.Name, tg.ID, rep); err != nil {
@@ -4342,6 +4401,7 @@ func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelG
 		if err := tx.Model(&model.TunnelGroupTunnel{}).Where("tunnel_group_id = ?", tg.ID).Pluck("tunnel_id", &prevTunnelIDs).Error; err != nil {
 			return count, err
 		}
+		preDeletedMembers += int64(len(prevTunnelIDs))
 		revoked, err := r.RevokeGroupGrantsForRemovedTunnelsTx(tx, tg.ID, prevTunnelIDs, tg.Tunnels)
 		if err != nil {
 			return count, err
@@ -4395,6 +4455,13 @@ func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelG
 			}
 		}
 		count++
+	}
+	// R5X-017：预删>0 且本批成员跳过>0 时补 warning（口径同
+	// importTunnels 的 chain 段）。
+	if rep != nil && preDeletedMembers > 0 {
+		if skipped := rep.skipped["tunnelGroupMembers"] - membersSkippedBefore; skipped > 0 {
+			rep.warnf("备份恢复：隧道分组成员（tunnelGroupMembers）重建时目标库原有 %d 条成员行已被移除，其中 %d 条备份成员行因引用隧道不存在被跳过未恢复（原成员已移除且未恢复），请核对分组成员配置", preDeletedMembers, skipped)
+		}
 	}
 	return count, nil
 }
@@ -4514,7 +4581,20 @@ func deleteSameNameGroupTx(tx *gorm.DB, groupModel interface{}, memberGroupColum
 
 func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBackup, now int64, rep *importReport) (int, error) {
 	count := 0
+	// R5X-017：成员先删后建——预删/跳过记账（同 importTunnelGroups）。
+	var preDeletedMembers int64
+	membersSkippedBefore := 0
+	if rep != nil {
+		membersSkippedBefore = rep.skipped["userGroupMembers"]
+	}
 	for _, ug := range userGroups {
+		// R5X-009：status {0,1} 枚举门（同 importUsers）——非法行
+		// 整行跳过，不触发占位删除/成员替换/停用收敛等任何处置。
+		if ug.Status != 0 && ug.Status != 1 {
+			rep.skip("userGroups")
+			rep.warnf("备份恢复：用户分组 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", ug.ID, ug.Name, ug.Status)
+			continue
+		}
 		// D4-02：组名唯一占位预处理（同 importTunnelGroups）。
 		if err := deleteSameNameGroupTx(tx, &model.UserGroup{}, "user_group_id", ug.Name, ug.ID, rep); err != nil {
 			return count, err
@@ -4527,6 +4607,7 @@ func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBa
 		if err := tx.Model(&model.UserGroupUser{}).Where("user_group_id = ?", ug.ID).Pluck("user_id", &prevUserIDs).Error; err != nil {
 			return count, err
 		}
+		preDeletedMembers += int64(len(prevUserIDs))
 		revoked, err := r.RevokeGroupGrantsForRemovedUsersTx(tx, ug.ID, prevUserIDs, ug.Users)
 		if err != nil {
 			return count, err
@@ -4579,6 +4660,13 @@ func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBa
 			}
 		}
 		count++
+	}
+	// R5X-017：预删>0 且本批成员跳过>0 时补 warning（口径同
+	// importTunnelGroups）。
+	if rep != nil && preDeletedMembers > 0 {
+		if skipped := rep.skipped["userGroupMembers"] - membersSkippedBefore; skipped > 0 {
+			rep.warnf("备份恢复：用户分组成员（userGroupMembers）重建时目标库原有 %d 条成员行已被移除，其中 %d 条备份成员行因引用用户不存在被跳过未恢复（原成员已移除且未恢复），请核对分组成员配置", preDeletedMembers, skipped)
+		}
 	}
 	return count, nil
 }
