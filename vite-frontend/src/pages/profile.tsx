@@ -57,21 +57,6 @@ export default function ProfilePage() {
   // 管理员菜单项
   const adminMenuItems: MenuItem[] = [
     {
-      path: "/monitor",
-      label: "监控",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M3 3a1 1 0 000 2v11a1 1 0 001 1h13a1 1 0 100-2H5V5a1 1 0 00-1-1H3zm13.707 4.293a1 1 0 00-1.414 0L12 10.586 10.707 9.293a1 1 0 00-1.414 0L7 11.586l-1.293-1.293a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0L10 11.414l1.293 1.293a1 1 0 001.414 0l3-3a1 1 0 000-1.414z"
-            fillRule="evenodd"
-          />
-        </svg>
-      ),
-      color: "bg-teal-100 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400",
-      description: "节点与隧道监控",
-    },
-    {
       path: "/panel-sharing",
       label: "面板共享",
       icon: (
