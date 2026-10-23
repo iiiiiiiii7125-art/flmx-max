@@ -4503,9 +4503,9 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
+	warnings := h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
 
-	response.WriteJSON(w, response.OKEmpty())
+	writeSpeedLimitResyncReceipt(w, warnings)
 }
 
 func (h *Handler) speedLimitDelete(w http.ResponseWriter, r *http.Request) {
@@ -4523,8 +4523,19 @@ func (h *Handler) speedLimitDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
+	warnings := h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
 
+	writeSpeedLimitResyncReceipt(w, warnings)
+}
+
+// writeSpeedLimitResyncReceipt 以与 forwardUpdate 同构的回执应答
+// 限速规则改/删：重下发 warnings 非空时 data={warnings:[...]}、
+// 成功语义（code=0）不变；为空时维持原 OKEmpty 形态（无 BC）。
+func writeSpeedLimitResyncReceipt(w http.ResponseWriter, warnings []string) {
+	if len(warnings) > 0 {
+		response.WriteJSON(w, response.OK(map[string]interface{}{"warnings": warnings}))
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -4542,20 +4553,38 @@ func (h *Handler) speedLimitAffectedForwardIDs(id int64) []int64 {
 }
 
 // resyncForwardsForSpeedLimit 按引用集逐条走既有 sync 通道
-// （syncForwardServices，含 gost/realm/nft 分发与暂停态复位）重下发，
-// 使节点按当前 DB 口径（新值 / 禁用删除后回退 UT/隧道级）现查现算
-// limiter。单条失败记日志续跑，不回滚已落库的规则变更。
-func (h *Handler) resyncForwardsForSpeedLimit(speedLimitID int64, forwardIDs []int64) {
+// （syncForwardServicesWithWarnings，含 gost/realm/nft 分发与暂停态
+// 复位）重下发，使节点按当前 DB 口径（新值 / 禁用删除后回退 UT/隧道
+// 级）现查现算 limiter。单条失败记日志续跑，不回滚已落库的规则变更。
+//
+// R7X-004：汇总各条转发的 warnings 回传调用方回执——nftables 隧道面
+// 的「限速不生效」披露（R3X-019）此前经丢 warnings 的薄封装
+// syncForwardServices 被整体丢弃、两 handler 恒 OKEmpty。相同文案
+// 只保留一份（同一事实对一批转发只披露一次，防回执刷屏）；单条
+// sync 失败仍只记日志（尽力而为纪律不变），其 warnings 若已产出
+// （如 nft 面 reconcile 失败时随 err 返回）仍汇入回执。
+func (h *Handler) resyncForwardsForSpeedLimit(speedLimitID int64, forwardIDs []int64) []string {
+	var warnings []string
+	seen := make(map[string]struct{})
 	for _, forwardID := range forwardIDs {
 		forward, err := h.getForwardRecord(forwardID)
 		if err != nil || forward == nil {
 			log.Printf("speed limit resync: load forward failed speed_limit_id=%d forward_id=%d err=%v", speedLimitID, forwardID, err)
 			continue
 		}
-		if err := h.syncForwardServices(forward, "UpdateService", true); err != nil {
+		syncWarnings, err := h.syncForwardServicesWithWarnings(forward, "UpdateService", true)
+		for _, warning := range syncWarnings {
+			if _, ok := seen[warning]; ok {
+				continue
+			}
+			seen[warning] = struct{}{}
+			warnings = append(warnings, warning)
+		}
+		if err != nil {
 			log.Printf("speed limit resync: sync forward failed speed_limit_id=%d forward_id=%d err=%v", speedLimitID, forwardID, err)
 		}
 	}
+	return warnings
 }
 
 func (h *Handler) groupTunnelCreate(w http.ResponseWriter, r *http.Request) {
