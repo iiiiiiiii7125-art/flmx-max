@@ -1750,7 +1750,10 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	oldTunnel, err := h.getTunnelRecord(id)
+	// R4X-004：旧值是下方 presence 回填的写回源，必须走不归一化的
+	// 原始读取——归一化版会把存量 traffic_ratio=0（及 flow<=0）在
+	// 读取层改成 1，回填后无条件写库，零计费被静默撤销。
+	oldTunnel, err := h.getTunnelRecordRaw(id)
 	if err != nil || oldTunnel == nil {
 		response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 		return
@@ -3108,6 +3111,10 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// R4X-011：同 upsertUserTunnel 单条路径——回滚成功后按回滚
+		// 后 DB 对本条 UT 的转发集尽力重下发，纠正失败点之前已按
+		// 新口径下发成功的转发；失败不覆写原错误回执。
+		_ = h.syncUserTunnelForwards(userID, tunnelID)
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败，已回滚: %v", syncErr)))
 		return
 	}
@@ -4444,15 +4451,33 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := asString(req["name"])
+	// R4X-019: presence 语义（对照 groupUpdate 正本）——先读存量行，
+	// 缺席的 name/speed/status 回填旧值，不再被硬默认（speed→100、
+	// status→1）静默改写；name 在场但为空仍是显式错误。创建面的
+	// 100/1 是创建语义，不在此列。
+	old, err := h.repo.GetSpeedLimit(id)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if old == nil {
+		response.WriteJSON(w, response.ErrDefault("限速规则不存在"))
+		return
+	}
+
+	name := old.Name
+	if _, ok := req["name"]; ok {
+		name = asString(req["name"])
+	}
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空"))
 		return
 	}
 
-	speed := asInt(req["speed"], 100)
+	speed := asInt(req["speed"], old.Speed)
+	status := asInt(req["status"], old.Status)
 
-	if err := h.repo.UpdateSpeedLimit(id, name, speed, asInt(req["status"], 1), time.Now().UnixMilli()); err != nil {
+	if err := h.repo.UpdateSpeedLimit(id, name, speed, status, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -4715,6 +4740,13 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
 		return
 	}
+	// R4X-012: status 枚举 {0,1}（与 user 族同口径）——非法值直存会造出
+	// 既非启用又非停用的「僵尸组」：sync/分配面按 !=1 不展开、撤销谓词
+	// 按 ==0 不触发，两头不靠。
+	if status := asInt(req["status"], 1); status != 0 && status != 1 {
+		response.WriteJSON(w, response.ErrDefault("分组状态只能为 0 或 1"))
+		return
+	}
 	now := time.Now().UnixMilli()
 	if err := h.repo.GroupCreate(table, name, asInt(req["status"], 1), now); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -4767,12 +4799,25 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 	if _, ok := req["status"]; ok {
 		newStatus = asInt(req["status"], oldStatus)
 	}
+	// R4X-012: presence 回填后仍须过 create 同口径校验——显式空名拒绝
+	// （缺席已由旧行回填）、status 枚举 {0,1}；校验在落库与撤销之前，
+	// 拒绝即整单不生效（存量授权不得被非法更新连带收敛）。
+	if newName == "" {
+		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
+		return
+	}
+	if newStatus != 0 && newStatus != 1 {
+		response.WriteJSON(w, response.ErrDefault("分组状态只能为 0 或 1"))
+		return
+	}
 	if err := h.repo.GroupUpdateTx(tx, table, id, newName, newStatus, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	var revokedPairs []repo.RevokedUserTunnelPair
-	if newStatus == 0 {
+	// R4X-012: 撤销谓词与全族对齐为 !=1（原 ==0）——存量非法 status
+	// （校验上线前已落库）在此收敛撤销，sync 侧 !=1 收敛兜底同口径。
+	if newStatus != 1 {
 		var revokeErr error
 		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
 		if revokeErr != nil {
@@ -6938,6 +6983,12 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		if rollbackErr := h.rollbackUserTunnelUpsert(outcome); rollbackErr != nil {
 			return fmt.Errorf("下发失败且回滚失败: %v; %w", syncErr, rollbackErr)
 		}
+		// R4X-011（verdicts §3）：逐条下发是首错返回——失败点之前
+		// 的转发已按新 UT 口径下发成功，DB 回滚后必须按回滚后 DB
+		// 对本条 UT 的转发集尽力重下发（与批量路径整批重跑正本
+		// 逐字同形），否则这批转发在 agent 侧保持新口径、与回滚后
+		// DB 分叉。重下发失败不覆写原错误回执（同批量 `_ =` 口径）。
+		_ = h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID)
 		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
 	}
 	return nil

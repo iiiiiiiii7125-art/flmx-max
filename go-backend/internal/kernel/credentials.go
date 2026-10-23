@@ -37,8 +37,21 @@ func RandomPassword() string {
 
 // SS2022KeyLen returns the PSK length a Shadowsocks 2022 method requires, or 0
 // for legacy AEAD methods that accept any password.
+//
+// R4X-001: the lookup is case-insensitive. This function is the single
+// source of truth for every SS2022 guard (import validation, the
+// sing-box renderer's skip guard, password normalization); when it
+// matched only the lowercase literals, a case variant of a known
+// cipher (2022-BLAKE3-AES-128-GCM) made the whole chain blind —
+// validation passed any key and the renderer emitted the variant
+// verbatim, which both sing-box and mihomo reject with
+// "unknown method", poisoning the whole profile. Import still stores
+// the canonical lowercase name (validateProxyCredentials lowercases
+// the cipher) and rendering lowercases stock rows (Proxy.forEndpoint);
+// this insensitivity is the predicate-level backstop so no present or
+// future call site can re-open the bypass by forgetting to normalize.
 func SS2022KeyLen(method string) int {
-	switch method {
+	switch strings.ToLower(strings.TrimSpace(method)) {
 	case "2022-blake3-aes-128-gcm":
 		return 16
 	case "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
@@ -93,9 +106,9 @@ func decodeSS2022SegmentBytes(seg string, n int) ([]byte, bool) {
 // Everything else is returned verbatim, by design:
 //   - legacy AEAD and unknown ciphers: no key format to normalize;
 //   - SIP023 colon-separated multi-segment passwords: kept verbatim
-//     here; only the Clash / mihomo face normalizes them, segment by
-//     segment, via NormalizedSS2022PasswordSegments (binary-verified
-//     decoder behavior), and the sing-box renderer skips them;
+//     here; the Clash / mihomo and sing-box faces normalize them,
+//     segment by segment, via NormalizedSS2022PasswordSegments
+//     (binary-verified decoder behavior on both faces);
 //   - undecodable stock garbage: each renderer's existing policy
 //     decides (the sing-box proxy renderer skips the node, the other
 //     formats emit it verbatim), never a new behavior invented here.
@@ -116,19 +129,23 @@ func NormalizedSS2022Password(method, password string) string {
 }
 
 // NormalizedSS2022PasswordSegments is NormalizedSS2022Password for the
-// Clash / mihomo rendering face only, extended to SIP023 multi-segment
-// passwords segment by segment. GATE-F1 binary evidence (official
-// mihomo v1.19.33 -t, sing-box 1.14.3 check): both clients split a
-// multi-segment password on ':' and decode every segment with the
-// padded Std decoder — Std segments pass, RawURL segments fail the
+// Clash / mihomo and sing-box rendering faces, extended to SIP023
+// multi-segment passwords segment by segment. GATE-F1 binary evidence
+// (official mihomo v1.19.33 -t, sing-box 1.14.3 check): both clients
+// split a multi-segment password on ':' and decode every segment with
+// the padded Std decoder — Std segments pass, RawURL segments fail the
 // whole profile. Re-encoding each segment as padded Std therefore
 // preserves the decoded key bytes (the SIP023 semantics) exactly,
 // while the verbatim non-canonical segments poison the profile.
+// (R4-SIP023-R: the sing-box face previously skipped multi-segment
+// nodes on the strength of this segment decoder being unverified;
+// D §1.2 probes plus the R4 batch-2 retest on sing-box 1.11.x/1.12.x
+// verified it, so proxySingbox now renders through this helper too.)
 // A password with any undecodable segment is returned verbatim (the
 // face's existing garbage policy), as is a single-segment password's
 // handling via NormalizedSS2022Password. Other faces keep multi-
 // segment passwords verbatim: their clients' segment decoders are
-// not binary-verified, and the sing-box face keeps skipping them.
+// not binary-verified.
 func NormalizedSS2022PasswordSegments(method, password string) string {
 	n := SS2022KeyLen(method)
 	if n == 0 {
@@ -172,9 +189,11 @@ func ValidateSS2022Password(method, password string) error {
 }
 
 // ValidSS2022SingleKey reports whether password is a single valid
-// SS2022 key for method. SIP023 multi-segment passwords report false
-// (callers that cannot carry them, e.g. the sing-box renderer, skip
-// conservatively). Non-SS2022 methods report true: nothing to check.
+// SS2022 key for method. SIP023 multi-segment passwords report false;
+// this single-key predicate is deliberately NOT relaxed for them —
+// faces that carry multi-segment passwords (Clash / sing-box) gate on
+// the per-segment predicate ValidateSS2022Password instead
+// (R4-SIP023-R). Non-SS2022 methods report true: nothing to check.
 func ValidSS2022SingleKey(method, password string) bool {
 	n := SS2022KeyLen(method)
 	if n == 0 {

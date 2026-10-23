@@ -19,7 +19,9 @@ import (
 //     （解码字节不变，仅线格式归一）；规范形态自身恒等。
 //   - 存量坏 key 维持各面既有口径：sing-box 面（导入节点）略过，
 //     其余格式原样输出（B2 裁定），不新造语义。
-//   - SIP023 冒号多段：sing-box 保守略过（裁定不改）；Clash 面逐段
+//   - SIP023 冒号多段：本批时点 sing-box 保守略过；R4-SIP023-R 已
+//     解除该略过（逐段归一后下发，见 r4_b2_sip023_test.go 与本文件
+//     BadAndMulti 用例的随裁定更新）；Clash 面逐段
 //     规范化（双客户端二进制实测按段以带填充 Std 解码、逐段归一不
 //     改变解码字节，证据见批报告）；Surge / Loon / QX / ss 链接等
 //     段解码未经二进制证实的面维持原样输出。
@@ -200,10 +202,10 @@ func TestR3GateF1SubscriptionPipeline(t *testing.T) {
 }
 
 // TestR3GateF1BadAndMultiKeepExistingShape：存量坏 key 既有口径不变
-// ——sing-box 面略过、其余格式原样。多段：sing-box 保守略过（裁定
-// 不改）；Clash 面逐段归一（二进制实测 mihomo 按段 Std 解码、非规范
-// 段整表失败、逐段归一字节不变）；Surge / ss 链接等客户端段解码
-// 未经二进制证实的面维持原样。
+// ——sing-box 面略过、其余格式原样。多段：R4-SIP023-R 起 sing-box
+// 面与 Clash 面同口径逐段归一后下发（本断言随该裁定更新，原「保守
+// 略过」断言 supersede）；Surge / ss 链接等客户端段解码未经二进制
+// 证实的面维持原样。
 func TestR3GateF1BadAndMultiKeepExistingShape(t *testing.T) {
 	raw32 := r3b2RawKey(32)
 	want := base64.StdEncoding.EncodeToString(raw32)
@@ -218,8 +220,8 @@ func TestR3GateF1BadAndMultiKeepExistingShape(t *testing.T) {
 	}
 
 	me := gateF1Endpoint(r3b2C256, multi)
-	if _, ok := proxySingbox(me); ok {
-		t.Fatal("多段在 sing-box 面保守略过（裁定口径）")
+	if outs, ok := proxySingbox(me); !ok || len(outs) != 1 || outs[0]["password"] != want+":"+want {
+		t.Fatalf("多段在 sing-box 面须逐段归一后下发（R4-SIP023-R）：ok=%v outs=%v", ok, outs)
 	}
 	if node, ok := proxyClash(me); !ok || Proxy(yamlToMap(node)).str("password") != want+":"+want {
 		t.Fatalf("多段在 clash 面须逐段归一：ok=%v node=%v", ok, node)

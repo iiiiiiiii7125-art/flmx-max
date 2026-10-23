@@ -484,9 +484,20 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// AUDIT-R2 (F1X-001): 面板本机执行的 TCP 探测由面板进程直接拨号，
-	// 目标须过 SSRF 校验（nodeId>0 走节点侧执行，信任边界不同，不限制）。
+	// 目标须过 SSRF 校验。
 	if monitorType == "tcp" && req.NodeID <= 0 {
 		if err := health.ValidateMonitorTCPTarget(target); err != nil {
+			response.WriteJSON(w, response.Err(-3, err.Error()))
+			return
+		}
+	}
+	// R4X-008：nodeId>0 走节点侧执行时补硬拒子集底线（原注释「信任
+	// 边界不同，不限制」整体豁免连硬拒层一并豁免，与全仓「一切出站
+	// 至少过硬拒层」不变量冲突）。只判硬拒层：私网/回环/CGNAT 仍
+	// 不限——节点监控其所在 LAN 服务是正当用途。ICMP 恒为节点执行
+	//（下方强制 NodeID>0），同过本校验。
+	if req.NodeID > 0 {
+		if err := health.ValidateNodeMonitorTarget(monitorType, target); err != nil {
 			response.WriteJSON(w, response.Err(-3, err.Error()))
 			return
 		}
@@ -646,6 +657,15 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	if (target != "" || req.NodeID != nil || monitorType == "tcp" || monitorType == "icmp") &&
 		existing.Type == "tcp" && existing.NodeID <= 0 {
 		if err := health.ValidateMonitorTCPTarget(existing.Target); err != nil {
+			response.WriteJSON(w, response.Err(-3, err.Error()))
+			return
+		}
+	}
+	// R4X-008：终态为节点执行（tcp/icmp 均含）且目标/类型/执行位置
+	// 被改动时，补硬拒子集校验（口径同创建面）。
+	if (target != "" || req.NodeID != nil || monitorType == "tcp" || monitorType == "icmp") &&
+		existing.NodeID > 0 {
+		if err := health.ValidateNodeMonitorTarget(existing.Type, existing.Target); err != nil {
 			response.WriteJSON(w, response.Err(-3, err.Error()))
 			return
 		}

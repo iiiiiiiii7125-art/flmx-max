@@ -312,8 +312,19 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 		return nil
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		// F-S01（R4 发版门项 11 升 P3）：基线行以 FOR UPDATE 读。
+		// PG Read Committed 下无锁读会让两路并发同一样本各按同一旧
+		// 基线算一份 delta 双计（门上实证订阅三轮全双计）；行锁把
+		// 「读基线 → 算 delta → 累加」整段串行化，后到事务在锁等待
+		// 后重读已提交基线、delta 归 0。按 (subscription_id,
+		// direction) 排序取锁避免不同批次间的锁序交叉。SQLite 的
+		// GORM 方言自动忽略 FOR 子句（MaxOpenConns(1) 本就串行，
+		// 行为不变；先例 loadOrCreateUserQuotaTx）。
 		var states []model.SubscriptionCounter
-		if err := tx.Where("node_id = ?", nodeID).Find(&states).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("node_id = ?", nodeID).
+			Order("subscription_id ASC, direction ASC").
+			Find(&states).Error; err != nil {
 			return err
 		}
 		type key struct {

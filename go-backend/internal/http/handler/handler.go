@@ -2008,7 +2008,22 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if result.InboundsImported > 0 || req.BackupData.Inbounds != nil && len(req.BackupData.Inbounds.Kernels) > 0 {
+	// R4X-009（E4-02）：reconcile 触发条件由只认 inbounds 段放宽至
+	// 任一物化输入集段。nodes（节点地址）/ tunnels（Type 与入口·
+	// 出口集）/ forwards（隧道归属与存废，经 ForwardExists 决定
+	// relay 行是否计入 allow）同样改写白名单/RemoteAddr 输入集，
+	// 未选 inbounds 的部分导入旧口径不触发任何重推、物化与导入
+	// 后 DB 脱节驻留。其余段逐段核过均不改写输入集（授权/分配/
+	// 分组/权限段的撤销子面经下方 RevokedUserTunnels 漏斗自带
+	// 刷新、configs 段经上方缓存钩子），全集表见 R4-FIX-B5 §2。
+	// 计数以实际落库行计（被存在性校验跳过的行 DB 未变、不触发）；
+	// relays 子段旧条件在 relays-only 备份下同漏、本批一并补齐。
+	// 单个 if、单个 goroutine：全量导入多段同时命中也只触发一轮。
+	materializedImport := result.NodesImported > 0 || result.TunnelsImported > 0 ||
+		result.ForwardsImported > 0 || result.InboundsImported > 0 ||
+		req.BackupData.Inbounds != nil &&
+			(len(req.BackupData.Inbounds.Kernels) > 0 || len(req.BackupData.Inbounds.Relays) > 0)
+	if materializedImport {
 		// Restored kernels have no applied config yet: push them to the
 		// nodes that are online; the rest get it when they reconnect.
 		go func() {

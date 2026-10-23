@@ -44,16 +44,13 @@ func TestMatchTraceReply(t *testing.T) {
 	}
 }
 
+// R4X-020 口径变更（断言更新，批 7 登记）：回环目标在 traceroute()
+// 解析落点复检处被拒——本用例原为回环功能测试，现改为拒绝断言；
+// 追踪机械本身由 TestMatchTraceReply/TraceAddr 系列覆盖。
 func TestTracerouteLoopback(t *testing.T) {
-	resp, err := traceroute("127.0.0.1", 5, 0)
-	if err != nil {
-		if strings.Contains(err.Error(), "NET_RAW") {
-			t.Skip("no raw socket permission")
-		}
-		t.Fatal(err)
-	}
-	if !resp.Reached || len(resp.Hops) != 1 || resp.Hops[0].IP != "127.0.0.1" {
-		t.Fatalf("loopback trace = %+v", resp)
+	_, err := traceroute("127.0.0.1", 5, 0)
+	if err == nil || !strings.Contains(err.Error(), "不允许") {
+		t.Fatalf("loopback trace must be rejected by resolved-address check, got %v", err)
 	}
 }
 
@@ -116,16 +113,11 @@ func TestTraceAddr(t *testing.T) {
 	}
 }
 
+// R4X-020 口径变更（断言更新，批 7 登记）：同 TestTracerouteLoopback。
 func TestTracerouteLoopbackV6(t *testing.T) {
-	resp, err := traceroute("::1", 5, 0)
-	if err != nil {
-		if strings.Contains(err.Error(), "NET_RAW") || strings.Contains(err.Error(), "路由") {
-			t.Skipf("no IPv6 raw socket here: %v", err)
-		}
-		t.Fatal(err)
-	}
-	if !resp.Reached || len(resp.Hops) != 1 || resp.Hops[0].IP != "::1" {
-		t.Fatalf("loopback trace = %+v", resp)
+	_, err := traceroute("::1", 5, 0)
+	if err == nil || !strings.Contains(err.Error(), "不允许") {
+		t.Fatalf("IPv6 loopback trace must be rejected by resolved-address check, got %v", err)
 	}
 }
 

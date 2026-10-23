@@ -82,7 +82,12 @@ const WRITE_WORDS = new Set(
   ),
 );
 const isWrite = (segment: string) =>
-  WRITE_WORDS.has(segment.split("-")[0]) || segment === "check-status";
+  WRITE_WORDS.has(segment.split("-")[0]) ||
+  segment === "check-status" ||
+  // R4X-016: the only camelCase last segment in the API surface; the
+  // first-word rule cannot see "update" inside it, so register the
+  // full segment like check-status above.
+  segment === "updatePassword";
 
 /** Measurements: answered from the recorded lists, by id. */
 const PROBES: Record<string, [list: string, field: string]> = {
