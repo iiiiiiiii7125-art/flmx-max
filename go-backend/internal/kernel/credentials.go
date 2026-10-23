@@ -506,6 +506,31 @@ var ssCiphersCommon = map[string]bool{
 // 方法）；渲染面分发见 validImportedProxyFields 的面参数。
 var ssCiphersMihomoOnly = map[string]bool{"chacha20": true}
 
+// ssCiphersXrayChain 是 Xray 链式面的子集（R7X-001）：共同集 18 值中
+// 只有这 8 值被 Xray 本体接受，其余 10 值（aes-192-gcm、aes-128/192/
+// 256-cfb、aes-128/192/256-ctr、chacha20-ietf、rc4-md5、xchacha20）
+// 以 unknown cipher method exit 23 整单拒绝。子集写死依据 = 本批施工
+// 前置硬门重测（Xray 25.6.8 fbae89d 逐值 `run -test`，原始日志
+// audit-out-132/r7/R7-FIX-B1-xray-ss-reprobe.log，与 R7 审计轮 D/B/L
+// 三域探针的 8/10 分界逐值一致、无漂移）。本子集只约束 Xray 链式面
+// （validImportedProxyFields 的 ssFaceXrayChain 档）：订阅面不存在
+// Xray 客户端格式、口径仍由双客户端共同集决定，sing-box 链式面接受
+// 全 18，均不得以本子集设门（防过修）。
+var ssCiphersXrayChain = map[string]bool{
+	"2022-blake3-aes-128-gcm": true, "2022-blake3-aes-256-gcm": true,
+	"2022-blake3-chacha20-poly1305": true,
+	"aes-128-gcm":                   true, "aes-256-gcm": true,
+	"chacha20-ietf-poly1305": true, "xchacha20-ietf-poly1305": true,
+	"none": true,
+}
+
+// ValidSSCipherForXrayChain reports whether cipher is in the Xray
+// chain-face subset above, case-insensitively (same normalization
+// backstop as ValidSSCipher).
+func ValidSSCipherForXrayChain(cipher string) bool {
+	return ssCiphersXrayChain[strings.ToLower(strings.TrimSpace(cipher))]
+}
+
 // ValidSSCipher reports whether cipher is in the SS legal set（共同集
 // 18 ∪ 单面集 {chacha20}），大小写不敏感（与 SS2022KeyLen 同口径：
 // 进口落库已小写愈合、存量渲染经 forEndpoint 小写愈合，本谓词的不
@@ -530,6 +555,9 @@ const (
 	ssFaceSingbox = "singbox"
 	ssFaceClash   = "clash"
 	ssFaceOther   = "other"
+	// ssFaceXrayChain 是 Xray 链式面档（R7X-001）：在 ssFaceOther 的
+	// 全部口径之上再加 Xray 本体 SS 子集门（ssCiphersXrayChain）。
+	ssFaceXrayChain = "xray-chain"
 )
 
 // validImportedProxyFields is the shared stock/import predicate over
@@ -552,6 +580,9 @@ func validImportedProxyFields(p Proxy, face string) bool {
 			return false
 		}
 		if face != ssFaceClash && ssCipherMihomoOnly(p.str("cipher")) {
+			return false
+		}
+		if face == ssFaceXrayChain && !ValidSSCipherForXrayChain(p.str("cipher")) {
 			return false
 		}
 		return ValidateSS2022Password(p.str("cipher"), p.str("password")) == nil
