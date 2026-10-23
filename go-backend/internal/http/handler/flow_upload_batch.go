@@ -175,12 +175,18 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 			continue
 		}
 		batch.forwardTraffic[forwardID] = tunnelTrafficDelta{bytesIn: pl.rawIn, bytesOut: pl.rawOut}
+		// R5X-013：delta 拆 raw/scaled 两组——forward 行落 raw
+		// （pl.rawIn/rawOut，与 forwardTraffic 指标桶同源），
+		// user/user_tunnel 行与 quota 落 scaled。
 		batch.flowDeltas = append(batch.flowDeltas, repo.FlowUploadCounterDelta{
 			ForwardID:    forwardID,
 			UserID:       pl.userID,
 			UserTunnelID: pl.userTunnelID,
 			InFlow:       pl.scaledIn,
 			OutFlow:      pl.scaledOut,
+			RawInFlow:    pl.rawIn,
+			RawOutFlow:   pl.rawOut,
+			HasRaw:       true,
 		})
 		batch.quotaUsage[pl.userID] += pl.scaledIn + pl.scaledOut
 		target := flowPolicyTarget{UserID: pl.userID, UserTunnelID: pl.userTunnelID}

@@ -15,7 +15,18 @@ import (
 // 构建路径的 quotaUsage 都必须为 0，且原始流量计数（forwardTraffic）
 // 不得连带清零；O6-005 的 nft 零计费警告日志须复活可达。
 // ratio=2 对照不变。
-func TestR3B3ZeroRatioWholeChainQuotaZeroRawPreserved(t *testing.T) {
+//
+// R5X-013 断言更新登记（裁定驱动，verdicts §5.1 / N-35 名实对齐）：
+// 原名 TestR3B3ZeroRatioWholeChainQuotaZeroRawPreserved 中的
+// RawPreserved 实测对象仅为 forwardTraffic 指标桶与 quotaUsage，
+// 从未覆盖 forward 行本身。R5X-013 裁定 delta 拆 raw/scaled 两组
+// （forward 行落 raw、user/user_tunnel 行与 quota 落 scaled）后，
+// 本用例更名为实测对象口径名并补 forward 行落账断言：经
+// ApplyFlowUploadDeltasBatch 落账后断言 forward 行 = raw、
+// user/user_tunnel 行 = scaled，并补 ratio=1 三面同值对照。
+// 既有断言（quotaUsage / scaled delta / forwardTraffic / 警告日志）
+// 逐字保留、未放宽。
+func TestR3B3ZeroRatioWholeChainQuotaZeroForwardRowRawPreserved(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	r := h.repo
@@ -43,6 +54,66 @@ func TestR3B3ZeroRatioWholeChainQuotaZeroRawPreserved(t *testing.T) {
 	if meta.TrafficRatio != 0 {
 		t.Fatalf("R3X-003: meta ratio must be 0, got %v", meta.TrafficRatio)
 	}
+	// R5X-013 落账断言需要真实 user_tunnel 行：种子夹具未建 UT 行时
+	// meta.UserTunnelID=0（落账函数按 ID>0 跳过 UT 面），补建后重取 metas。
+	if meta.UserTunnelID == 0 {
+		if err := r.DB().Exec(`
+			INSERT INTO user_tunnel(user_id, tunnel_id, speed_id, num, flow, in_flow, out_flow, flow_reset_time, exp_time, status)
+			VALUES(?, ?, NULL, 99999, 99999, 0, 0, 1, 2727251700000, 1)
+		`, meta.UserID, tunnelID).Error; err != nil {
+			t.Fatalf("seed user_tunnel for landing assertions: %v", err)
+		}
+		metas, err = r.GetFlowUploadForwardMetas([]int64{forward.ID})
+		if err != nil {
+			t.Fatalf("re-get metas: %v", err)
+		}
+		meta = metas[forward.ID]
+		if meta.UserTunnelID == 0 {
+			t.Fatalf("user_tunnel seed did not surface in metas: %#v", meta)
+		}
+	}
+
+	// R5X-013 落账断言助手：delta 落账后 forward 行须为 raw 口径，
+	// user / user_tunnel 行须为 scaled 口径（配额增量另由 quotaUsage 断言）。
+	assertLanded := func(label string, wantFwdIn, wantFwdOut, wantScaledIn, wantScaledOut int) {
+		t.Helper()
+		if got := mustQueryInt(t, r, `SELECT in_flow FROM forward WHERE id = ?`, forward.ID); got != wantFwdIn {
+			t.Fatalf("%s: forward in_flow must be raw %d, got %d", label, wantFwdIn, got)
+		}
+		if got := mustQueryInt(t, r, `SELECT out_flow FROM forward WHERE id = ?`, forward.ID); got != wantFwdOut {
+			t.Fatalf("%s: forward out_flow must be raw %d, got %d", label, wantFwdOut, got)
+		}
+		if got := mustQueryInt(t, r, `SELECT in_flow FROM user WHERE id = ?`, meta.UserID); got != wantScaledIn {
+			t.Fatalf("%s: user in_flow must be scaled %d, got %d", label, wantScaledIn, got)
+		}
+		if got := mustQueryInt(t, r, `SELECT out_flow FROM user WHERE id = ?`, meta.UserID); got != wantScaledOut {
+			t.Fatalf("%s: user out_flow must be scaled %d, got %d", label, wantScaledOut, got)
+		}
+		if got := mustQueryInt(t, r, `SELECT in_flow FROM user_tunnel WHERE id = ?`, meta.UserTunnelID); got != wantScaledIn {
+			t.Fatalf("%s: user_tunnel in_flow must be scaled %d, got %d", label, wantScaledIn, got)
+		}
+		if got := mustQueryInt(t, r, `SELECT out_flow FROM user_tunnel WHERE id = ?`, meta.UserTunnelID); got != wantScaledOut {
+			t.Fatalf("%s: user_tunnel out_flow must be scaled %d, got %d", label, wantScaledOut, got)
+		}
+	}
+	resetLanded := func() {
+		t.Helper()
+		if err := r.DB().Exec(`UPDATE forward SET in_flow = 0, out_flow = 0 WHERE id = ?`, forward.ID).Error; err != nil {
+			t.Fatalf("reset forward flows: %v", err)
+		}
+		if err := r.DB().Exec(`UPDATE user SET in_flow = 0, out_flow = 0 WHERE id = ?`, meta.UserID).Error; err != nil {
+			t.Fatalf("reset user flows: %v", err)
+		}
+		if err := r.DB().Exec(`UPDATE user_tunnel SET in_flow = 0, out_flow = 0 WHERE id = ?`, meta.UserTunnelID).Error; err != nil {
+			t.Fatalf("reset user_tunnel flows: %v", err)
+		}
+	}
+	applyBatch := func(label string, batch flowUploadBatch) {
+		t.Helper()
+		if err := r.ApplyFlowUploadDeltasBatch(batch.flowDeltas); err != nil {
+			t.Fatalf("%s: apply flow deltas: %v", label, err)
+		}
+	}
 
 	// gost 路径：线格式 U=出 110、D=入 80。
 	svcName := fmt.Sprintf("%d_%d_%d", forward.ID, meta.UserID, meta.UserTunnelID)
@@ -56,6 +127,10 @@ func TestR3B3ZeroRatioWholeChainQuotaZeroRawPreserved(t *testing.T) {
 	if tr := gostBatch.forwardTraffic[forward.ID]; tr.bytesIn != 80 || tr.bytesOut != 110 {
 		t.Fatalf("gost raw traffic must be preserved, got %#v", tr)
 	}
+	// R5X-013 ratio=0 落账：forward 行增长 raw 80/110、配额面（user/UT 行）0。
+	applyBatch("gost ratio=0", gostBatch)
+	assertLanded("gost ratio=0", 80, 110, 0, 0)
+	resetLanded()
 
 	// nft/realm 路径（同一 metas 来源）+ O6-005 警告复活。
 	var logBuf bytes.Buffer
@@ -76,6 +151,10 @@ func TestR3B3ZeroRatioWholeChainQuotaZeroRawPreserved(t *testing.T) {
 	if !strings.Contains(logBuf.String(), "nftables zero billing") {
 		t.Fatalf("O6-005: zero-ratio nft batch must emit zero billing warn, log=%q", logBuf.String())
 	}
+	// R5X-013 ratio=0 落账（nft/realm 路径同口径）。
+	applyBatch("nft ratio=0", nftBatch)
+	assertLanded("nft ratio=0", 80, 110, 0, 0)
+	resetLanded()
 
 	// ratio=2 对照：两路径按 2 倍入账不变。
 	setRatio(2)
@@ -91,6 +170,41 @@ func TestR3B3ZeroRatioWholeChainQuotaZeroRawPreserved(t *testing.T) {
 	if got := nft2.quotaUsage[meta.UserID]; got != 380 {
 		t.Fatalf("nft quotaUsage with ratio=2 must be 380, got %d", got)
 	}
+	if len(gost2.flowDeltas) != 1 || !gost2.flowDeltas[0].HasRaw || gost2.flowDeltas[0].RawInFlow != 80 || gost2.flowDeltas[0].RawOutFlow != 110 {
+		t.Fatalf("gost ratio=2 delta raw group must be 80/110 with HasRaw, got %#v", gost2.flowDeltas)
+	}
+	if len(nft2.flowDeltas) != 1 || !nft2.flowDeltas[0].HasRaw || nft2.flowDeltas[0].RawInFlow != 80 || nft2.flowDeltas[0].RawOutFlow != 110 {
+		t.Fatalf("nft ratio=2 delta raw group must be 80/110 with HasRaw, got %#v", nft2.flowDeltas)
+	}
+	// R5X-013 ratio=2/flow=2 落账：forward 行 80/110（raw）、
+	// user/UT 行 160/220（scaled）、配额增量 380（上文 quotaUsage 已断言）。
+	applyBatch("gost ratio=2", gost2)
+	assertLanded("gost ratio=2", 80, 110, 160, 220)
+	resetLanded()
+	applyBatch("nft ratio=2", nft2)
+	assertLanded("nft ratio=2", 80, 110, 160, 220)
+	resetLanded()
+
+	// R5X-013 ratio=1 对照：raw 与 scaled 同值，三面（forward/user/UT 行）不变口径、均为 80/110。
+	setRatio(1)
+	metas1, err := r.GetFlowUploadForwardMetas([]int64{forward.ID})
+	if err != nil {
+		t.Fatalf("get metas ratio=1: %v", err)
+	}
+	gost1 := h.buildFlowUploadBatch([]flowItem{{N: svcName, U: 110, D: 80}}, metas1)
+	if got := gost1.quotaUsage[meta.UserID]; got != 190 {
+		t.Fatalf("gost quotaUsage with ratio=1 must be 190, got %d", got)
+	}
+	applyBatch("gost ratio=1", gost1)
+	assertLanded("gost ratio=1", 80, 110, 80, 110)
+	resetLanded()
+	nft1 := buildNftFlowUploadBatch([]nftTrafficDelta{{ForwardID: forward.ID, BytesIn: 80, BytesOut: 110}}, metas1)
+	if got := nft1.quotaUsage[meta.UserID]; got != 190 {
+		t.Fatalf("nft quotaUsage with ratio=1 must be 190, got %d", got)
+	}
+	applyBatch("nft ratio=1", nft1)
+	assertLanded("nft ratio=1", 80, 110, 80, 110)
+	resetLanded()
 }
 
 // R3X-019 (R3-F-02): nftables 同步路径须按 realm 同谓词（转发级
