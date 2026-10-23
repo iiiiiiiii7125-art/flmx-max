@@ -490,6 +490,8 @@ func ValidVLESSEncryption(enc string) bool {
 // audit-out-132/r6/R6-FIX-B1-ss-method-probe.log，R6X-024 关闭前置）：
 // 双客户端共同接受 18、仅 mihomo 接受 1（chacha20）、双双拒绝 11。
 // R5-FIX-B1 格 2 的旧摘要（25/4）已经 verdicts §1.4 作废，不得引用。
+// R8X-003 扩围：候选池外 5 值经三二进制复核同为 mihomo-only，并入
+// 单面集（单面集共 6 值），见 ssCiphersMihomoOnly 注。
 
 var ssCiphersCommon = map[string]bool{
 	"2022-blake3-aes-128-gcm": true, "2022-blake3-aes-256-gcm": true,
@@ -504,7 +506,18 @@ var ssCiphersCommon = map[string]bool{
 // ssCiphersMihomoOnly 是单面集：仅 mihomo 系（Clash/Stash/Shadowrocket）
 // 接受，sing-box 以 unknown method FATAL。进口不拒（mihomo 系合法存量
 // 方法）；渲染面分发见 validImportedProxyFields 的面参数。
-var ssCiphersMihomoOnly = map[string]bool{"chacha20": true}
+// R8X-003 补收 5 值（aes-128-gcm-siv、aes-256-gcm-siv、
+// chacha8-ietf-poly1305、aes-128-ccm、aes-256-ccm）：三二进制签名逐值
+// 与 chacha20 逐字同型（sing-box exit 1 / mihomo exit 0 / Xray
+// exit 23，R8-D-sscand-probe.log + 批 2 复跑
+// R8-FIX-B2-binary-probe-before.log），R6 候选池 30 名未含此 5 值、
+// 属合法集枚举漏收，与 chacha20 同款分面待遇。
+var ssCiphersMihomoOnly = map[string]bool{
+	"chacha20":        true,
+	"aes-128-gcm-siv": true, "aes-256-gcm-siv": true,
+	"chacha8-ietf-poly1305": true,
+	"aes-128-ccm":           true, "aes-256-ccm": true,
+}
 
 // ssCiphersXrayChain 是 Xray 链式面的子集（R7X-001）：共同集 18 值中
 // 只有这 8 值被 Xray 本体接受，其余 10 值（aes-192-gcm、aes-128/192/
@@ -532,7 +545,7 @@ func ValidSSCipherForXrayChain(cipher string) bool {
 }
 
 // ValidSSCipher reports whether cipher is in the SS legal set（共同集
-// 18 ∪ 单面集 {chacha20}），大小写不敏感（与 SS2022KeyLen 同口径：
+// 18 ∪ 单面集 6 值），大小写不敏感（与 SS2022KeyLen 同口径：
 // 进口落库已小写愈合、存量渲染经 forEndpoint 小写愈合，本谓词的不
 // 敏感是防调用点漏规范化的兜底）。集外一律 false（含空串与
 // chacha20-poly1305 等近名——双二进制逐值实测双拒）。
@@ -547,10 +560,10 @@ func ssCipherMihomoOnly(cipher string) bool {
 	return ssCiphersMihomoOnly[strings.ToLower(strings.TrimSpace(cipher))]
 }
 
-// 渲染面标识（validImportedProxyFields 的面参数）：单面集 chacha20
+// 渲染面标识（validImportedProxyFields 的面参数）：单面集方法
 // 只在 mihomo 面（Clash 系，经 proxyClash 同门含 Stash/Shadowrocket）
 // 放行，其余面（sing-box、Xray 链式）整节点略过/拒绝——Xray 25.6.8
-// 实测 unknown cipher method: chacha20 exit 23，非 mihomo 面不得放行。
+// 实测 unknown cipher method exit 23，非 mihomo 面不得放行。
 const (
 	ssFaceSingbox = "singbox"
 	ssFaceClash   = "clash"
