@@ -89,6 +89,18 @@ Shadowsocks 原本是共用凭据（一入站一密码），分不清每条订�
 
 ## 凭据
 
-（发布后回填：Release 链接、tag 指向、CI run 结论与 12 资产 sha256 表。）
+- **Release**：[Release 1.4.2](https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/1.4.2)（Published，2026-10-23T05:20:33Z，非 Draft / 非 Prerelease）。
+- **tag `1.4.2`**（纯数字）指向 `9505467bfa3cee810943ce33314b15c095cda5b2`（双线合并 `822a394` + U-1 直测合入 `d0ba567` + 字面量同步 `2fb1443` + 本说明定稿）。
+- **CI 结论**：主发版流 Build and Push Images（run 39904392621）五 job 全 success。CI Build Check（run 39904390177 @ 发布提交）**六 job 全 success**——Build Frontend（含 demo check 与 check-doc-consistency，1.4.1 的两处既存红已由 R5X-007/008/019 修复转绿）、Go Full Tests（`TestNotifyImportedNodeDownContract` 所在 contract 包 ok——R5X-006 根治后 CI 实跑通过，不再以在案定案放行）、Build Go Backend、Build Agent、Test Installer、PostgreSQL Contract。**PG 契约在 CI 实跑全 6 条**（run 日志逐条 PASS：计数管线并发两条、Seq 两条、NodeCreateRepairs、`TestPostgresCompanionPartialUniqueIndex`——U-1 在 CI 正式关闭；本地另以测试机真 PG 17 同口径复跑全过）。Publish Skill to npm（run 39904392569）为日志实证的 ENEEDAUTH 惯例红，不阻塞；Deploy Docs（run 39904390189）success。
+- **资产核对（12/12）**：6 产物逐个下载与各自 `.sha256` 比对全部一致；发布副本 `install.sh` / `panel_install.sh` 均 `PINNED_VERSION="1.4.2"`、`REPO="iiiiiiiii7125-art/flmx-max"`；compose v4/v6 后端与前端镜像标签均 `:1.4.2`；发布 `gost-amd64 -V` = `gost 1.4.2 (go1.25.14 linux/amd64)`（正式注入）。GHCR 标签 API 因 token 无 read:packages 返回 403 未核（与历版同），以主发版流 Build & Push 两 job success 为据。
+
+| 产物 | sha256 |
+|---|---|
+| docker-compose-v4.yml | `4dd8555dc72bbf329b99b0c82191b6c8005aae22d95805a272d266409ddc16cd` |
+| docker-compose-v6.yml | `bab79f11c5134a7658f8437c8e092d0192e26211243235f937ebac6927fc2a84` |
+| gost-amd64 | `8c6fbc616ebfba4d7e010baed700e3e50f89541cc06d7fbb5cb19c014bc420de` |
+| gost-arm64 | `d76d09ad5e6a204853bafdda28da595c927aa595da3d0108ea034a15ed45b07a` |
+| install.sh | `42a983802ef9951201a9121ec0b8c5b788509530426fc3514f362ad3e87199fe` |
+| panel_install.sh | `117565f081cd42da6c188300b445f423fe101a01339159cc7ff14ee3cacc2de5` |
 
 — RELEASE-NOTES-1.4.2 END —
