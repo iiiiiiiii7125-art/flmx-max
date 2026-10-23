@@ -2,6 +2,7 @@ package repo
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"go-backend/internal/kernel"
@@ -173,8 +174,10 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // （settings/transport/security/extra）跑保存面等价校验（R5X-024）：
 // 把备份原值解入 kernel.Inbound 副本后调用保存面共用的
 // kernel.Normalize——只读副本做校验，落库仍用备份原值逐字恢复，
-// 不以归一化结果覆写。kernel_id=0 的导入型入站没有内核上下文，
-// 保存面同样不经 Normalize，只做四对象的 JSON 结构校验。
+// 不以归一化结果覆写。kernel_id=0 的导入型入站没有内核上下文、
+// 不经 Normalize，但其凭据全在 Extra 承载的代理对象里，须经与
+// ParseImport 共用的同一谓词 kernel.ValidateImportedProxy 校验
+// （R6X-008；只读校验副本，落库仍逐字恢复）。
 //
 // 适用面：四对象任一有实际内容才进校验门。四对象全空的行是旧式
 // 简写/存量行（真实导出行在保存时已经 Normalize 填充，security
@@ -218,6 +221,21 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		vin.Extra = json.RawMessage(i.Extra)
 	}
 	if i.KernelID <= 0 {
+		// R6X-008：导入型入站的凭据不在四整对象里，而在 Extra 的
+		// 代理对象中——落库前把 Extra 解为 kernel.Proxy 跑与
+		// ParseImport 同一谓词（ValidateImportedProxy 是其薄封装，
+		// 禁止在此另写等价校验）。校验只作用于解出的副本：谓词的
+		// 大小写愈合（如 vmess cipher）不得回写，合法行逐字恢复；
+		// 渲染谓词对 cipher 大小写不敏感，逐字恢复不构成新毒化面。
+		if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" {
+			var p kernel.Proxy
+			if err := json.Unmarshal([]byte(extra), &p); err != nil {
+				return err
+			}
+			if err := kernel.ValidateImportedProxy(p); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	var krow model.NodeKernel
@@ -239,6 +257,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
 	inboundsImported := 0
 	invalidInboundObjects := 0
+	// R6X-009：内容校验跳过的行在恢复结果中完全消失，计数-only 的
+	// 汇总 warning 无从定位——收集被跳过行身份（#{id} {name}）与
+	// 逐行错误摘要，随汇总 warning 一并披露（清单截断见循环后）。
+	var invalidInboundIdentities []string
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -357,6 +379,8 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if err := validateImportedInboundObjects(tx, i, listen, strategy); err != nil {
 			rep.skip("inbounds")
 			invalidInboundObjects++
+			invalidInboundIdentities = append(invalidInboundIdentities,
+				fmt.Sprintf("#%d %s（%v）", i.ID, i.Name, err))
 			continue
 		}
 		shareHost, ok := sanitizeBackupShareHost(i.ShareHost)
@@ -406,7 +430,16 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		inboundsImported++
 	}
 	if invalidInboundObjects > 0 {
-		rep.warnf("备份恢复：%d 条入站的 settings/transport/security/extra 未通过保存面同口径校验（Normalize），已整行跳过未恢复，请修正备份内容后重试", invalidInboundObjects)
+		// R6X-009：汇总 warning 附被跳过行身份清单（前 10 条，超出
+		// 以总数收尾），管理员可按名修正备份后重试。
+		identities := invalidInboundIdentities
+		suffix := ""
+		if len(identities) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(identities))
+			identities = identities[:10]
+		}
+		rep.warnf("备份恢复：%d 条入站的 settings/transport/security/extra 未通过保存面同口径校验（Normalize），已整行跳过未恢复：%s%s，请修正备份内容后重试",
+			invalidInboundObjects, strings.Join(identities, "、"), suffix)
 	}
 
 	// R2X-015：入站附属引用后置校验。出站目标可能是同批入站列表的

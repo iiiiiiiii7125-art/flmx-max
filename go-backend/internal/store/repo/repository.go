@@ -3972,6 +3972,24 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		portsSkippedBefore = rep.skipped["forwardPorts"]
 	}
 	for _, f := range forwards {
+		// R6X-007：status 分格门。合法值域 {0,1,2} 之外逐行跳过 +
+		// warning（R5X-009 同型口径）；status=2（删除待处理）的重试
+		// 记账在 nft_pending_delete 侧表、不随备份迁移（BackupData
+		// 无该段），其失败节点/重试计数/24h 起点均无从恢复——按
+		// 批 3 裁定 (b) 归一为暂停（status=0）：行恢复后列表可见、
+		// 可经正常删除路径终删，不再产生「列表不可见 + 无重试面
+		// 可达」的僵尸行。归一逐行 warning 披露。
+		status := f.Status
+		switch f.Status {
+		case model.ForwardStatusPaused, model.ForwardStatusActive:
+		case model.ForwardStatusPendingDelete:
+			status = model.ForwardStatusPaused
+			rep.warnf("备份恢复：转发 #%d（%q）在备份时处于删除待处理（status=2）状态，其删除重试记账不随备份迁移，已恢复为暂停（status=0），可在转发列表中查看或删除", f.ID, f.Name)
+		default:
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）的 status=%d 不在合法枚举 {0,1,2} 内，已跳过该行未恢复", f.ID, f.Name, f.Status)
+			continue
+		}
 		// D4-03：引用（用户/隧道）不存在时整行跳过并计数，不写悬空行。
 		userExists, err := rowExistsTx(tx, &model.User{}, f.UserID)
 		if err != nil {
@@ -3997,7 +4015,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			OutFlow:              f.OutFlow,
 			CreatedTime:          f.CreatedTime,
 			UpdatedTime:          now,
-			Status:               f.Status,
+			Status:               status,
 			Inx:                  f.Inx,
 			SpeedID:              sql.NullInt64{Int64: nullableBackupInt64(f.SpeedID), Valid: f.SpeedID != nil && *f.SpeedID > 0},
 			MaxConn:              f.MaxConn,
@@ -4158,6 +4176,23 @@ func importUserInbounds(tx *gorm.DB, rows []model.UserInboundBackup, rep *import
 		inboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, r.InboundID)
 		if err != nil {
 			return count, err
+		}
+		// R6X-011：与保存面（setUserInbounds）同口径——计量伴生入站
+		// （CompanionOf>0）是系统管理的派生行、不可分配给用户。
+		// 导入段此前只验存在性，伴生分配可绕过该守卫落库（伴生行
+		// 会在用户的分配列表露出、且满足默认订阅的 legacy 放行
+		// 谓词）。整行跳过 + 计数 + warning，合法 origin 分配不变。
+		if inboundExists {
+			var inboundRow model.NodeInbound
+			res := tx.Where("id = ?", r.InboundID).Limit(1).Find(&inboundRow)
+			if res.Error != nil {
+				return count, res.Error
+			}
+			if res.RowsAffected > 0 && inboundRow.CompanionOf > 0 {
+				rep.skip("userInbounds")
+				rep.warnf("备份恢复：用户入站分配 #%d（用户 #%d → 入站 #%d）指向计量伴生入站，伴生入站不能分配给用户，已跳过该行未恢复", r.ID, r.UserID, r.InboundID)
+				continue
+			}
 		}
 		relayOK := true
 		if r.RelayID > 0 {
