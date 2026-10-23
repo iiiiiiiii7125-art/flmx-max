@@ -311,6 +311,17 @@ func chainTargetFromInbound(e Endpoint) (chainTarget, error) {
 
 func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 	p := e.Proxy.forEndpoint(e)
+	// R6X-003（+R6X-001 链式面格）：链式 Xray 面此前无存量守卫，
+	// Reality pbk/sid、VLESS flow/encryption、SS2022 key、SS cipher
+	// 双拒格坏存量原样透传、Xray 整单 exit 23。入口先过统一谓词
+	// validImportedProxyFields（面参数 other：单面 chacha20 非
+	// mihomo 面不放行——Xray 实测 unknown cipher method exit 23），
+	// 不过即面板侧报错、不产出可下发配置；保存期 CheckChainWith
+	// 经 xrayChainOutbound 同点生效。自建目标 chainTargetFromInbound
+	// 字段经 Normalize 把关，不经此谓词。
+	if !validImportedProxyFields(p, ssFaceOther) {
+		return chainTarget{}, fmt.Errorf("Xray 无法连接 %s 节点（凭据不合规），请修正节点或改用 sing-box 内核", DescribeProxy(e.Proxy))
+	}
 	t := chainTarget{Host: p.str("server"), Port: e.Port}
 	unsupported := fmt.Errorf("Xray 无法连接 %s 节点，请改用 sing-box 内核", DescribeProxy(e.Proxy))
 	switch p.Type() {

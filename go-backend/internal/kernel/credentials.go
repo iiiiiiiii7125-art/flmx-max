@@ -483,20 +483,78 @@ func ValidVLESSEncryption(enc string) bool {
 	return len(raw) == 32 || len(raw) == 1184
 }
 
+// ---- R6 批 1（R6X-001/002/003）SS cipher 合法集 ----
+//
+// 合法集唯一口径 = 本批施工前重跑的 30 方法名逐值探针（面板渲染产物 ×
+// sing-box 1.14.3 `check` / mihomo v1.19.33 `-t`，全表 + 原始日志存档
+// audit-out-132/r6/R6-FIX-B1-ss-method-probe.log，R6X-024 关闭前置）：
+// 双客户端共同接受 18、仅 mihomo 接受 1（chacha20）、双双拒绝 11。
+// R5-FIX-B1 格 2 的旧摘要（25/4）已经 verdicts §1.4 作废，不得引用。
+
+var ssCiphersCommon = map[string]bool{
+	"2022-blake3-aes-128-gcm": true, "2022-blake3-aes-256-gcm": true,
+	"2022-blake3-chacha20-poly1305": true,
+	"aes-128-gcm":                   true, "aes-192-gcm": true, "aes-256-gcm": true,
+	"chacha20-ietf-poly1305": true, "xchacha20-ietf-poly1305": true,
+	"aes-128-cfb": true, "aes-192-cfb": true, "aes-256-cfb": true,
+	"aes-128-ctr": true, "aes-192-ctr": true, "aes-256-ctr": true,
+	"chacha20-ietf": true, "rc4-md5": true, "none": true, "xchacha20": true,
+}
+
+// ssCiphersMihomoOnly 是单面集：仅 mihomo 系（Clash/Stash/Shadowrocket）
+// 接受，sing-box 以 unknown method FATAL。进口不拒（mihomo 系合法存量
+// 方法）；渲染面分发见 validImportedProxyFields 的面参数。
+var ssCiphersMihomoOnly = map[string]bool{"chacha20": true}
+
+// ValidSSCipher reports whether cipher is in the SS legal set（共同集
+// 18 ∪ 单面集 {chacha20}），大小写不敏感（与 SS2022KeyLen 同口径：
+// 进口落库已小写愈合、存量渲染经 forEndpoint 小写愈合，本谓词的不
+// 敏感是防调用点漏规范化的兜底）。集外一律 false（含空串与
+// chacha20-poly1305 等近名——双二进制逐值实测双拒）。
+func ValidSSCipher(cipher string) bool {
+	c := strings.ToLower(strings.TrimSpace(cipher))
+	return ssCiphersCommon[c] || ssCiphersMihomoOnly[c]
+}
+
+// ssCipherMihomoOnly reports whether cipher is in the single-face
+// (mihomo-only) set, case-insensitively.
+func ssCipherMihomoOnly(cipher string) bool {
+	return ssCiphersMihomoOnly[strings.ToLower(strings.TrimSpace(cipher))]
+}
+
+// 渲染面标识（validImportedProxyFields 的面参数）：单面集 chacha20
+// 只在 mihomo 面（Clash 系，经 proxyClash 同门含 Stash/Shadowrocket）
+// 放行，其余面（sing-box、Xray 链式）整节点略过/拒绝——Xray 25.6.8
+// 实测 unknown cipher method: chacha20 exit 23，非 mihomo 面不得放行。
+const (
+	ssFaceSingbox = "singbox"
+	ssFaceClash   = "clash"
+	ssFaceOther   = "other"
+)
+
 // validImportedProxyFields is the shared stock/import predicate over
-// every field that entered the R5 batch-1 validation set. It reports
-// whether a Proxy's enum/format fields are all render-safe for the
-// strict faces (sing-box / mihomo): import rejects per node with it,
-// and proxySingbox / proxyClash skip whole stock nodes failing it.
-// Reality is checked through validateRealityOpts (the R4X-002 import
-// predicate itself, per verdicts §3.4) and SS2022 keys keep their
-// existing per-face policies, so neither is duplicated here. TUIC
-// udp-relay-mode is deliberately absent: unverified (see above).
-func validImportedProxyFields(p Proxy) bool {
+// every field that entered the R5 batch-1 validation set, extended by
+// R6 batch 1 with the SS格 (cipher 合法集 + SS2022 key 逐段谓词——
+// R6X-001/002 收口：SS2022 key 自此入统一谓词，Clash 面不再分裂）。
+// It reports whether a Proxy's enum/format fields are all render-safe
+// for the given face: import rejects per node with it, and the render
+// faces skip whole stock nodes failing it. Reality is checked through
+// validateRealityOpts (the R4X-002 import predicate itself, per
+// verdicts §3.4). TUIC udp-relay-mode is deliberately absent:
+// unverified (see above).
+func validImportedProxyFields(p Proxy, face string) bool {
 	if err := validateRealityOpts(p); err != nil {
 		return false
 	}
 	switch p.Type() {
+	case "ss":
+		if !ValidSSCipher(p.str("cipher")) {
+			return false
+		}
+		if face != ssFaceClash && ssCipherMihomoOnly(p.str("cipher")) {
+			return false
+		}
+		return ValidateSS2022Password(p.str("cipher"), p.str("password")) == nil
 	case "vmess":
 		return ValidVMessCipher(p.str("cipher"))
 	case "vless":
