@@ -624,6 +624,13 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.removeRelay(rel, req.Force); err != nil {
+		// R5X-004(d)：非 force 路径 removeForwardWithServices 先删
+		// 转发行、后做 nft reconcile——reconcile 失败时转发已删
+		// （ForwardExists 转假、该 relay 应即刻掉出 allow 计算）而
+		// relay 行尚存；DeleteInboundRelay 失败面同理。失败返回前
+		// 无条件补刷该入站白名单（按现行 DB 现算，未删部分的刷新
+		// 为同值空转），回执文案不变。
+		h.refreshInboundWhitelist(rel.InboundID)
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}

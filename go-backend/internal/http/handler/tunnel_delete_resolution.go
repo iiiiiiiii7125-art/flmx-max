@@ -389,6 +389,10 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 	result := tunnelDeleteWithForwardsResult{ForwardCount: preview.ForwardCount}
 	if preview.ForwardCount == 0 {
 		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
+			// R5X-004(c)：无转发分支收集集恒空、补刷为空转，仍保留
+			// 调用使「本函数内 deleteTunnelAndCleanup 的失败返回必
+			// 补刷」成为可机械核查的不变量（与 delete 分支同形）。
+			h.refreshInboundWhitelists(affectedInboundIDs)
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 		h.refreshInboundWhitelists(affectedInboundIDs)
@@ -398,6 +402,12 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 	if action == tunnelDeleteActionDeleteForwards {
 		result.DeletedForwardCount = preview.ForwardCount
 		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
+			// R5X-004(c)：deleteTunnelAndCleanup 内部清理逐条落库，
+			// 中止时已有转发/relay 实际删除——失败返回前以删前收集
+			// 集按现行 DB 补刷（与成功路径同集、幂等）。同文件
+			// replace 分支的两条回滚返回已由 R4X-003 补刷，此处对
+			// 齐 delete 分支；批量版经本函数逐隧道调用、同受覆盖。
+			h.refreshInboundWhitelists(affectedInboundIDs)
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 		h.refreshInboundWhitelists(affectedInboundIDs)
