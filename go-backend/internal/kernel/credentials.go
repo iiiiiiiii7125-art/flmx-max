@@ -469,12 +469,33 @@ func ValidVLESSEncryption(enc string) bool {
 	if parts[2] != "0rtt" && parts[2] != "1rtt" {
 		return false
 	}
-	for _, group := range parts[3 : len(parts)-1] {
+	// R9X-003：填充组内部文法与 Xray 25.9.5 / mihomo v1.19.33 双
+	// 二进制实测对账（R9-D-01）——收紧格仅限实测四类，证伪格
+	// （+ 前缀、前导零、200 组、11 位数、4294967295）保持放行，
+	// 不得以推测公式扩大拒绝面：
+	//   - 每组元素数只许 3 或 5（实测放行仅 3/5，1/2/6/7/9/12
+	//     实测被拒，4 亦不在 {3,5} 放行集内）；
+	//   - 单数值位数 ≤11（12 位实测被拒；位数按十进制字符计，
+	//     前导 + 不计位）；
+	//   - 首组实测格：组内任一数值为 0、或首数值 <100 被拒
+	//     （后续组不受此限——面板自产链的后续组恒含 0 与 <100 值）。
+	for gi, group := range parts[3 : len(parts)-1] {
 		if group == "" {
 			return false
 		}
-		for _, num := range strings.Split(group, "-") {
-			if _, err := strconv.Atoi(num); err != nil {
+		nums := strings.Split(group, "-")
+		if len(nums) != 3 && len(nums) != 5 {
+			return false
+		}
+		for ni, num := range nums {
+			v, err := strconv.Atoi(num)
+			if err != nil {
+				return false
+			}
+			if len(strings.TrimPrefix(num, "+")) > 11 {
+				return false
+			}
+			if gi == 0 && (v == 0 || (ni == 0 && v < 100)) {
 				return false
 			}
 		}

@@ -887,6 +887,11 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 	case "vless":
 		p["uuid"] = o.str("uuid")
 		p.set("flow", o.str("flow"))
+		// R9X-002：encryption 是凭据列在格式转换器维度的漏搬字段——
+		// 不搬则 finishProxy 的 ENC 收口校验够不到、节点静默降级为
+		// 普通 vless。此处只补搬运（set 空值不写），校验/回执/分面
+		// 全复用 finishProxy 既有实现，禁在转换层另设校验。
+		p.set("encryption", o.str("encryption"))
 	case "trojan", "hysteria2", "anytls":
 		p["password"] = o.str("password")
 	case "tuic":
