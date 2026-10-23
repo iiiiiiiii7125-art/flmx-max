@@ -111,7 +111,7 @@ jobs:
       - name: Run PostgreSQL contract test
         env:
           FLMX_POSTGRES_TEST_DSN: 'postgres://flux_test:flux_test_pass@127.0.0.1:5432/flux_test?sslmode=disable'
-        run: go test ./tests/contract -run TestPostgresNodeCreateRepairsMissingIDDefaultContract -count=1
+        run: go test ./tests/contract -run 'TestPostgres' -count=1 -v
 
   agent:
     name: Build Agent
