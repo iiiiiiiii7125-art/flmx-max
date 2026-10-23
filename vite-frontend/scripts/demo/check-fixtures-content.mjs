@@ -22,6 +22,15 @@
 //   admin  subscription/traffic      every recording's data carries a
 //   user   user/subscription/traffic non-empty points series
 //
+// R9 BINFRA (J O-1 通则, R9-X-verdicts §4) adds a universal recorded-
+// code gate below: EVERY recorded response in EVERY book must carry
+// res.code === 0, except the per-cell whitelist (13 cells, sourced
+// from the R9-J §2.1 full-set scan). Adding or removing a cell
+// requires a per-cell reason recorded next to the entry in
+// build_fixtures.py's CODE_WHITELIST — whole-class exemptions (by
+// path, by code, or by msg alone) are forbidden. Keep this list
+// cell-for-cell equal to build_fixtures.py's.
+//
 // R8X-006 adds:
 //   admin  kernel/versions           the xray / singbox recordings must
 //                                    be a successful version list
@@ -66,7 +75,49 @@ const CHECKS = [
 // release list (R8X-006). snell / realm use pinned static lists.
 const VERSION_LIST_TYPES = ["xray", "singbox"];
 
+// Universal recorded-code gate (R9 BINFRA, J O-1 通则): per-cell
+// whitelist of intentional non-zero recordings — [book, key(path),
+// canonical request key, code, msg]. The per-cell reasons live in
+// build_fixtures.py's CODE_WHITELIST comments; the two lists must
+// stay cell-for-cell equal. Cells: admin config/get 配置不存在 ×3,
+// user config/get 配置不存在 ×4, user-book 403 permission probes ×6.
+const CODE_WHITELIST = [
+  ["admin", "config/get", '{"name":"forward_group_collapsed_map"}', -1, "配置不存在"],
+  ["admin", "config/get", '{"name":"forward_group_order_map"}', -1, "配置不存在"],
+  ["admin", "config/get", '{"name":"forward_compact_mode"}', -1, "配置不存在"],
+  ["user", "config/get", '{"name":"forward_compact_mode"}', -1, "配置不存在"],
+  ["user", "config/get", '{"name":"monitor_tunnel_quality_enabled"}', -1, "配置不存在"],
+  ["user", "config/get", '{"name":"monitor_tunnel_quality_interval_sec"}', -1, "配置不存在"],
+  ["user", "config/get", '{"name":"forward_group_collapsed_map"}', -1, "配置不存在"],
+  ["user", "system/check-updates", '{"channel":"stable"}', 403, "权限不足，仅管理员可操作"],
+  ["user", "speed-limit/list", "{}", 403, "权限不足，仅管理员可操作"],
+  ["user", "tunnel/list", "{}", 403, "权限不足，仅管理员可操作"],
+  ["user", "node/list", "{}", 403, "权限不足，仅管理员可操作"],
+  ["user", "federation/share/list", "{}", 403, "权限不足，仅管理员可操作"],
+  ["user", "federation/share/remote-usage/list", "{}", 403, "权限不足，仅管理员可操作"],
+];
+const CODE_WHITELIST_SET = new Set(CODE_WHITELIST.map((c) => JSON.stringify(c)));
+
 let problems = 0;
+let codeProblems = 0;
+let codeCells = 0;
+for (const book of ["admin", "user"]) {
+  for (const [key, recordings] of Object.entries(fixtures?.[book] ?? {})) {
+    if (!Array.isArray(recordings)) continue;
+    recordings.forEach((rec, i) => {
+      const res = rec && rec.res ? rec.res : {};
+      if (res.code === 0) return;
+      codeCells += 1;
+      const cell = JSON.stringify([book, key, rec?.key ?? "", res.code, res.msg ?? ""]);
+      if (!CODE_WHITELIST_SET.has(cell)) {
+        problems += 1;
+        codeProblems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i} key=${rec?.key ?? ""}: res.code=${res.code} msg=${JSON.stringify(res.msg ?? "")} is not code 0 and not a whitelisted cell (per-cell whitelist only — see CODE_WHITELIST)`);
+      }
+    });
+  }
+}
+console.log(`code gate: ${codeCells} non-zero recording(s) against the ${CODE_WHITELIST.length}-cell whitelist: ${codeProblems === 0 ? "ok" : `${codeProblems} cell(s) outside the whitelist — see FAIL lines above`}`);
 for (const { book, key, kind } of CHECKS) {
   const recordings = fixtures?.[book]?.[key];
   if (!Array.isArray(recordings) || recordings.length === 0) {

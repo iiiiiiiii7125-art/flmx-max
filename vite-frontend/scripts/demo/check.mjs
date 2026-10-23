@@ -22,7 +22,19 @@ const BASE = "/flmx-max/demo/";
 // is the only role that still renders MonitorOverview at /monitor.
 const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "limit", "user", "group", "panel-sharing", "config", "profile"];
 const USER_PAGES = ["dashboard", "my-subscription", "forward", "monitor", "profile"];
-const SETTLE_MS = 2500;
+// Settle, condition-based (R9 BINFRA; K settle 条件化评估采纳,
+// R9-X-verdicts §7 / R9-K-report 观察项, same root as R8-J O-1): a
+// fixed 2500ms settle flakes under high host load — the R9本体 run
+// failed only "user #/monitor (interaction): control not found"
+// while a 10s-settle diagnostic copy of the same dist passed all
+// 13 admin + 5 user pages. Page and interaction settles now poll a
+// readiness condition until SETTLE_MAX_MS; the historical 2500ms
+// remains the minimum settle, so a page is never judged earlier
+// than under the old fixed wait. Overrides: DEMO_CHECK_SETTLE_MS
+// (minimum settle) and DEMO_CHECK_SETTLE_MAX_MS (poll ceiling).
+const SETTLE_MS = Number(process.env.DEMO_CHECK_SETTLE_MS || 2500);
+const SETTLE_MAX_MS = Math.max(SETTLE_MS, Number(process.env.DEMO_CHECK_SETTLE_MAX_MS || 10000));
+const SETTLE_POLL_MS = 100;
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".webmanifest": "application/manifest+json", ".woff2": "font/woff2" };
 const server = http.createServer((req, res) => {
@@ -101,10 +113,24 @@ listeners.push((msg) => {
 });
 const evaluate = async (expression) => (await page("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })).result.value;
 
+// Poll `ready` (an evaluate() thunk) after the minimum settle,
+// until it holds or the SETTLE_MAX_MS ceiling is reached. A thunk
+// that throws counts as not-ready.
+async function settleUntil(ready) {
+  await sleep(SETTLE_MS);
+  const deadline = Date.now() + (SETTLE_MAX_MS - SETTLE_MS);
+  while (Date.now() <= deadline) {
+    let ok = false;
+    try { ok = await ready(); } catch { ok = false; }
+    if (ok) return;
+    await sleep(SETTLE_POLL_MS);
+  }
+}
+
 async function visit(role, route) {
   current = `${role} #/${route}`;
   await page("Page.navigate", { url: `${origin}${BASE}#/${route}` });
-  await sleep(SETTLE_MS);
+  await settleUntil(() => evaluate(`location.hash.startsWith("#/${route}") && !!document.body && document.body.innerText.length >= 40`));
   const state = await evaluate(`({ hash: location.hash, text: document.body.innerText.length })`);
   if (!state.hash.startsWith(`#/${route}`)) problems.push(`${current}: ended up at ${state.hash} (signed out?)`);
   else if (state.text < 40) problems.push(`${current}: blank page`);
@@ -130,7 +156,16 @@ async function interact(role, route) {
 
   if (!step) return;
   current = `${role} #/${route} (interaction)`;
-  const clicked = await evaluate(step);
+  // The step returns false (and clicks nothing) while its control is
+  // not mounted yet, so re-evaluating it until it clicks is safe:
+  // poll it under the same ceiling as the page settle instead of
+  // judging "control not found" after one fixed wait.
+  let clicked = await evaluate(step);
+  const deadline = Date.now() + (SETTLE_MAX_MS - SETTLE_MS);
+  while (!clicked && Date.now() <= deadline) {
+    await sleep(SETTLE_POLL_MS);
+    clicked = await evaluate(step);
+  }
 
   if (!clicked) problems.push(`${current}: interaction control not found`);
   await sleep(SETTLE_MS);
