@@ -166,10 +166,16 @@ func r3b2Cases() []r3b2Case {
 		// 多段中一段坏 → 整条拒。
 		r3b2Case{"multi-bad-segment", r3b2C256, std(raw32) + ":plainpassword", false},
 		r3b2Case{"multi-empty-segment", r3b2C256, std(raw32) + ":", false},
-		// legacy AEAD 与未知 cipher 名绝不可查（演进兼容）。
+		// legacy AEAD 的 key 绝不可查（无格式域）。
 		r3b2Case{"legacy-aes-plaintext", "aes-256-gcm", "plainpassword", true},
 		r3b2Case{"legacy-chacha-plaintext", "chacha20-ietf-poly1305", "any-password!", true},
-		r3b2Case{"unknown-cipher", "future-cipher-2099", "whatever", true},
+		// R6 批 1 口径更新（BC-R6-01 / R6X-001）：未知 cipher 名的 key
+		// 谓词本身仍不查（TestR3B2ValidateSS2022PasswordHelper 直测维
+		// 持），但进口面自此以 ValidSSCipher 合法集收口——未知/双拒
+		// method 整条拒绝，本例期望随裁定由「入库」改为「逐条报错」，
+		// 报错点名 cipher（非 SS2022 密钥问题）。原「演进兼容放行」
+		// 期望 supersede。
+		r3b2Case{"unknown-cipher", "future-cipher-2099", "whatever", false},
 	)
 	return cases
 }
@@ -197,8 +203,14 @@ func TestR3B2SS2022ImportMatrix(t *testing.T) {
 				if len(nodes) != 0 || len(errs) != 1 {
 					t.Fatalf("坏形态必须逐条报错且不入库：nodes=%d errs=%v", len(nodes), errs)
 				}
-				if !strings.Contains(errs[0], "SS2022") {
-					t.Fatalf("报错须点名 SS2022 密钥问题：%v", errs)
+				// unknown-cipher 的拒绝点是 cipher 合法集（R6X-001），
+				// 报错点名 cipher；其余坏形态为 SS2022 密钥问题。
+				wantMsg := "SS2022"
+				if c.name == "unknown-cipher" {
+					wantMsg = "cipher"
+				}
+				if !strings.Contains(errs[0], wantMsg) {
+					t.Fatalf("报错须点名 %s 问题：%v", wantMsg, errs)
 				}
 			})
 		}

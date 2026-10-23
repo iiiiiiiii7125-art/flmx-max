@@ -58,6 +58,14 @@ for (const t of demoTunnels) {
 // (c) per-monitor result history.
 const demoServices = (await call(tok, "GET", "monitor/services")).data ?? [];
 for (const s of demoServices) await call(tok, "GET", `monitor/services/${s.id}/results?limit=100`);
+// R6X-022: MonitorView's remaining reads (node list, latest results,
+// limits) previously reached the admin book only when the page walk's
+// timing happened to open a node's monitor detail — an intermittent
+// recording source. Record them directly like every other item-level
+// endpoint here; the user book gets the same set in its section below.
+await call(tok, "GET", "monitor/nodes");
+await call(tok, "GET", "monitor/services/latest-results");
+await call(tok, "GET", "monitor/services/limits");
 // (d) kernel version lists, one per kernel type the panel implements.
 const caps = (await call(tok, "POST", "kernel/capabilities")).data;
 for (const k of caps?.kernels ?? []) await call(tok, "POST", "kernel/versions", { kernelType: k.type });
@@ -106,10 +114,33 @@ await ucall(utok, "POST", "speed-limit/list", {});
 await ucall(utok, "POST", "tunnel/user/tunnel");
 await ucall(utok, "POST", "user/passkey/status");
 // R3X-031 (D-2): re-record monitor/access for the user book so the entry
-// carries the current response shape ({allowed:false, admin:false,
-// reason:"need_admin_grant"}) instead of the pre-R2X-038 {allowed,
-// reason} shape that only rendered correctly by default.
+// carries the current response shape instead of the pre-R2X-038
+// {allowed, reason} shape that only rendered correctly by default.
+// R6X-022 updates the expected shape: the seed now grants the demo user
+// monitoring permission (seed_2), so this records the real authorized
+// answer ({allowed:true, admin:false}) — the value R5X-008 could only
+// hand-edit into fixtures.
 await ucall(utok, "GET", "monitor/access");
+// R6X-022: the user book's full monitor set, mirroring the admin book's
+// direct calls above. R5X-008's user monitor coverage existed only as
+// hand-copied fixtures entries; without these calls a full re-record
+// dropped every key below and check.mjs's user monitor walk went red.
+// Same windows as the admin calls (now-based) so each path carries the
+// canonical 24h / 1h entry the demo adapter falls back to.
+await ucall(utok, "GET", "monitor/nodes");
+for (const n of nodes) {
+  await ucall(utok, "GET", `monitor/nodes/${n.id}/metrics?start=${now - 86400000}&end=${now}`);
+}
+const userTunnels = (await ucall(utok, "GET", "monitor/tunnels")).data ?? [];
+await ucall(utok, "GET", "monitor/tunnels/quality");
+for (const t of userTunnels) {
+  await ucall(utok, "GET", `monitor/tunnels/${t.id}/metrics?start=${now - 86400000}&end=${now}`);
+  await ucall(utok, "GET", `monitor/tunnels/${t.id}/quality?start=${now - 3600000}&end=${now}`);
+}
+const userServices = (await ucall(utok, "GET", "monitor/services")).data ?? [];
+await ucall(utok, "GET", "monitor/services/latest-results");
+await ucall(utok, "GET", "monitor/services/limits");
+for (const s of userServices) await ucall(utok, "GET", `monitor/services/${s.id}/results?limit=100`);
 // R3X-032 (j, user half): my-subscription traffic, for the subscriptions
 // assigned to the demo user, in all three ranges.
 const mySubs = (await ucall(utok, "POST", "user-subscription/mine", {})).data?.subscriptions ?? [];

@@ -402,6 +402,27 @@ export function InboundFormModal({
         : form.splitRules.length > 0
           ? "已配置分流的入站"
           : "";
+  // R6X-019：协议资格闸（与后端 ssMeteringEligible 同口径）。资格随
+  // 方法/安全层/协议在同单内变化；计量已开启时开关块不得随资格丧失
+  // 整块消失——否则 toPayload 恒发 meteringEnabled=true 会命中后端
+  // 「显式开启不合格」拒绝分支，而用户在同单内无从关掉看不见的开关。
+  const meteringEligibilityReason =
+    form.protocol !== "shadowsocks"
+      ? "当前协议不是 Shadowsocks"
+      : !form.method.startsWith("2022-")
+        ? "当前加密方式不是 Shadowsocks 2022 方法"
+        : form.securityType === "shadowtls"
+          ? "当前安全层为 ShadowTLS 前置"
+          : "";
+  const meteringEligible = meteringEligibilityReason === "";
+  // 块可见性：合格的 SS 入站恒可见；不合格时只要计量仍开启（或本次
+  // 编辑打开时曾开启）就保留可见，使「关计量 + 改方法/安全层」能在
+  // 同一次保存内完成。关闭后块保留至本次保存，用户可确认关态。
+  const showMeteringBlock =
+    (form.protocol === "shadowsocks" && meteringEligible) ||
+    form.meteringEnabled ||
+    initial.meteringEnabled;
+  const meteringBlocked = !meteringEligible || meteringShapeReason !== "";
 
   return (
     <Modal
@@ -1122,36 +1143,35 @@ export function InboundFormModal({
                       value={form.outboundIpStrategy}
                       onChange={(value) => set("outboundIpStrategy", value)}
                     />
-                    {form.protocol === "shadowsocks" &&
-                      form.method.startsWith("2022-") &&
-                      form.securityType !== "shadowtls" && (
-                        <div className="space-y-3 rounded-xl border border-divider p-3">
-                          <div className="flex items-start gap-2">
-                            <Switch
-                              isDisabled={
-                                meteringShapeReason !== "" &&
-                                !form.meteringEnabled
-                              }
-                              isSelected={form.meteringEnabled}
-                              size="sm"
-                              onValueChange={(v) => set("meteringEnabled", v)}
-                            />
-                            <div>
-                              <p className="text-sm">按订阅计量流量</p>
-                              <p className="text-xs text-default-500">
-                                {meteringShapeReason
+                    {showMeteringBlock && (
+                      <div className="space-y-3 rounded-xl border border-divider p-3">
+                        <div className="flex items-start gap-2">
+                          <Switch
+                            isDisabled={meteringBlocked && !form.meteringEnabled}
+                            isSelected={form.meteringEnabled}
+                            size="sm"
+                            onValueChange={(v) => set("meteringEnabled", v)}
+                          />
+                          <div>
+                            <p className="text-sm">按订阅计量流量</p>
+                            <p className="text-xs text-default-500">
+                              {meteringEligibilityReason
+                                ? form.meteringEnabled
+                                  ? `${meteringEligibilityReason}，不支持订阅计量；当前已开启，请先关闭计量后再保存，或改回 Shadowsocks 2022 方法并取消 ShadowTLS 前置。关闭计量后可与本次修改同单保存。`
+                                  : `${meteringEligibilityReason}，不支持订阅计量；计量已关闭，可直接保存。`
+                                : meteringShapeReason
                                   ? form.meteringEnabled
                                     ? `${meteringShapeReason}不支持订阅计量；当前已开启，保存前请先关闭计量或调整入站形态。`
                                     : `${meteringShapeReason}不支持订阅计量。`
                                   : "开启后为分享订阅生成独立凭据并计量；已有链接继续可用但不计量。"}
-                                {form.meteringActive
-                                  ? "当前计量中：订阅新拉取的节点走独立凭据。"
-                                  : ""}
-                              </p>
-                            </div>
+                              {form.meteringActive
+                                ? "当前计量中：订阅新拉取的节点走独立凭据。"
+                                : ""}
+                            </p>
                           </div>
                         </div>
-                      )}
+                      </div>
+                    )}
                     <div className="space-y-3 rounded-xl border border-divider p-3">
                       <p className="text-sm font-medium">中转相关</p>
                       <div className="flex items-start gap-2">
