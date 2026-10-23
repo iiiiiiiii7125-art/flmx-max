@@ -2020,6 +2020,14 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R6X-010：恢复也是 origin 状态的写路径——导入成功后同步触发
+	// 一次计量对账，使恢复出的 metering origin 的伴生行立即物化，
+	// 与入站保存/删除路径同口径。此前 backupImport 不在触发点全集
+	// 内，伴生最早要等订阅同步循环的节流顺带（≤~90s）才出现，窗
+	// 口内恢复的 SS 流量静默不计量。对账幂等自愈，任何成功导入都
+	// 触发（部分导入同样可能改写 origin/订阅需求）。
+	h.reconcileSSMetering()
+
 	// FIX2-B（V4-N1）：configs 段写库后与 UI 两写入口同口径失效配置
 	// 缓存。此前导入绕过全部失效钩子：notify_enabled 与 prober 三键
 	// 只能等 5s TTL 兜底（notify_events 因派发时现读已对冲，不在此列）。
