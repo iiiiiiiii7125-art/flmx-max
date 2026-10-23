@@ -44,7 +44,11 @@ func TestR3ImportNormalizesShareAddressMode(t *testing.T) {
 	if err := r.DB().Create(&node).Error; err != nil {
 		t.Fatal(err)
 	}
-	in := model.NodeInbound{NodeID: node.ID, Name: "in", Protocol: "vless", Listen: "::", Port: 443,
+	// R8X-004 facet A 夹具适配：本行 kernel_id=0（导入型），行内
+	// Listen 是导入地址的行内载体，须为合法导入地址方可恢复；
+	// 此前 "::" 在行内地址门上线前可逐字恢复、门上线后整行跳过，
+	// 本用例的断言对象（ShareAddressMode 归一）与 Listen 取值无关。
+	in := model.NodeInbound{NodeID: node.ID, Name: "in", Protocol: "vless", Listen: "203.0.113.10", Port: 443,
 		ShareAddressMode: "ipv6", Enabled: 1, CreatedTime: now, UpdatedTime: now}
 	if err := r.DB().Create(&in).Error; err != nil {
 		t.Fatal(err)
