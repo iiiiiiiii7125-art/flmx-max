@@ -2,7 +2,9 @@ package repo
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"go-backend/internal/kernel"
@@ -185,7 +187,31 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // 其拒绝源于「保存时本应生成的数据缺席」（如 trojan 空 security
 // 缺 SNI），不是对象坏值——该形态维持原恢复口径。此口径在
 // R5-FIX-B5 批报告中显式登记。
+//
+// 例外（R8X-004）：行字段 Listen/Port 不属于任何被校验对象，恒检
+// 与内容豁免解耦、置于 hasContent 判定之前——豁免只豁免内容、
+// 不豁免地址/端口门。导入型入站（kernel_id≤0）的行内 Listen/Port
+// 是导入地址的行内第二载体（externalRow 恒以经 finishProxy 校验的
+// Host/Port 双写行字段与 Extra），经 kernel.ValidateImportedProxyRowAddress
+// 走与 finishProxy 共用的同一地址实现 validateImportedProxyAddress
+// （禁另写第二份谓词，沿 R7X-003 口径；R7X-003 的关闭对象是 Extra
+// 载体，本恒检不顶替其断言）；自建入站（kernel_id>0）以 Normalize
+// 的行字段两检口径恒校验（Port 1–65535 + Listen 为 IP 字面量，
+// listen 已由调用方完成空→"::" 归一）。不要求行内 Listen/Port 与
+// Extra 的 server/port 相等（只设合法性门，防过修）。
 func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, strategy string) error {
+	if i.KernelID <= 0 {
+		if err := kernel.ValidateImportedProxyRowAddress(listen, i.Port); err != nil {
+			return err
+		}
+	} else {
+		if i.Port < 1 || i.Port > 65535 {
+			return errors.New("端口必须在 1-65535 之间")
+		}
+		if net.ParseIP(listen) == nil {
+			return errors.New("监听地址必须是 IP")
+		}
+	}
 	hasContent := strings.TrimSpace(i.Settings) != "" || strings.TrimSpace(i.Transport) != "" ||
 		strings.TrimSpace(i.Security) != ""
 	if !hasContent {
