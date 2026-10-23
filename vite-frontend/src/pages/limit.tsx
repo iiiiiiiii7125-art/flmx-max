@@ -54,6 +54,21 @@ interface SpeedLimitForm {
   status: number;
 }
 
+// R7X-004：限速改/删回执的 data.warnings 消费（回执第三段）——与
+// forward.tsx 同范式逐条 ⚠️ 透出（如 nftables 隧道面「限速不生效」），
+// 此前 limit 页只报成功、warnings 在前端被丢弃。
+function toastResyncWarnings(res: unknown) {
+  const warnings = (res as { data?: { warnings?: unknown } })?.data
+    ?.warnings;
+  if (!Array.isArray(warnings)) return;
+  warnings
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item)
+    .forEach((warning) => {
+      toast(warning, { icon: "⚠️", duration: 5000 });
+    });
+}
+
 export default function LimitPage({
   embedded = false,
 }: {
@@ -179,6 +194,7 @@ export default function LimitPage({
       const res = await deleteSpeedLimit(ruleToDelete.id);
 
       if (res.code === 0) {
+        toastResyncWarnings(res);
         toast.success("删除成功");
         setDeleteModalOpen(false);
         loadData();
@@ -225,6 +241,7 @@ export default function LimitPage({
 
       if (res.code === 0) {
         if (!isEdit) rotateIdemKey();
+        if (isEdit) toastResyncWarnings(res);
         toast.success(isEdit ? "修改成功" : "创建成功");
         setModalOpen(false);
         loadData();
