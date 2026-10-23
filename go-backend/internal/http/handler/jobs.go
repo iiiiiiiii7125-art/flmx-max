@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"go-backend/internal/store/model"
 )
 
 var nftablesTrafficCollectInterval = 30 * time.Second
@@ -256,8 +258,27 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 			}
 			continue
 		}
+		// R7X-002 防御纵深（非关闭条件，主修复在 importForwards 的
+		// 侧表收口）：终删前复查行 status——侧表记账与行状态不一致
+		// 时（例如该转发已被备份恢复、status 已归一/直通为非 2，
+		// 或记账系存量残留），只清记账、不删行；行已不存在时维持
+		// 既有级联清理口径。复查失败则本节点本批不终删（记账保留、
+		// 下一 tick 重试），不冒删行风险。
+		statusMap, statusErr := h.repo.GetForwardStatusMap(forwardIDs)
+		if statusErr != nil {
+			log.Printf("nftables pending-delete retry failed op=status_recheck node_id=%d err=%v", nodeID, statusErr)
+			continue
+		}
 		finalized := false
 		for _, fid := range forwardIDs {
+			if st, ok := statusMap[fid]; ok && st != model.ForwardStatusPendingDelete {
+				if err := h.repo.DeleteNftPendingDelete(fid); err != nil {
+					log.Printf("nftables pending-delete retry failed op=clear_stale_bookkeeping forward_id=%d err=%v", fid, err)
+					continue
+				}
+				log.Printf("nftables pending-delete bookkeeping cleared without deleting forward node_id=%d forward_id=%d status=%d", nodeID, fid, st)
+				continue
+			}
 			if err := h.deleteForwardByID(fid); err != nil {
 				log.Printf("nftables pending-delete retry failed op=db_delete forward_id=%d err=%v", fid, err)
 				continue
