@@ -175,9 +175,9 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // 把备份原值解入 kernel.Inbound 副本后调用保存面共用的
 // kernel.Normalize——只读副本做校验，落库仍用备份原值逐字恢复，
 // 不以归一化结果覆写。kernel_id=0 的导入型入站没有内核上下文、
-// 不经 Normalize，但其凭据全在 Extra 承载的代理对象里，须经与
-// ParseImport 共用的同一谓词 kernel.ValidateImportedProxy 校验
-// （R6X-008；只读校验副本，落库仍逐字恢复）。
+// 不经 Normalize，但其凭据与地址全在 Extra 承载的代理对象里，须经
+// 与 ParseImport 共用的同一谓词 kernel.ValidateImportedProxy 校验
+// （凭据列 R6X-008、地址列 R7X-003；只读校验副本，落库仍逐字恢复）。
 //
 // 适用面：四对象任一有实际内容才进校验门。四对象全空的行是旧式
 // 简写/存量行（真实导出行在保存时已经 Normalize 填充，security
@@ -221,10 +221,10 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		vin.Extra = json.RawMessage(i.Extra)
 	}
 	if i.KernelID <= 0 {
-		// R6X-008：导入型入站的凭据不在四整对象里，而在 Extra 的
-		// 代理对象中——落库前把 Extra 解为 kernel.Proxy 跑与
-		// ParseImport 同一谓词（ValidateImportedProxy 是其薄封装，
-		// 禁止在此另写等价校验）。校验只作用于解出的副本：谓词的
+		// R6X-008 / R7X-003：导入型入站的凭据与地址不在四整对象
+		// 里，而在 Extra 的代理对象中——落库前把 Extra 解为
+		// kernel.Proxy 跑与 ParseImport 同一谓词（ValidateImportedProxy
+		// 是其薄封装，凭据+地址双列，禁止在此另写等价校验）。校验只作用于解出的副本：谓词的
 		// 大小写愈合（如 vmess cipher）不得回写，合法行逐字恢复；
 		// 渲染谓词对 cipher 大小写不敏感，逐字恢复不构成新毒化面。
 		if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" {

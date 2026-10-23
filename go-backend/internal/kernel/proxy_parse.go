@@ -95,21 +95,9 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 		}
 		return ImportedNode{}, fmt.Errorf("暂不支持 %s 类型的节点", t)
 	}
-	host := strings.Trim(p.str("server"), "[]")
-	if err := ValidateImportHost(host); err != nil {
+	host, port, err := validateImportedProxyAddress(p)
+	if err != nil {
 		return ImportedNode{}, err
-	}
-	// D4-08：数值不确定即拒绝——小数端口被 num() 截断、溢出值被包成
-	// 垃圾 int 都是「误解析成功」，必须在落库前拦下。
-	port := p.num("port")
-	if n, present, exact := p.exactInt("port"); present {
-		if !exact {
-			return ImportedNode{}, errors.New("端口不正确")
-		}
-		port = n
-	}
-	if port < 1 || port > 65535 {
-		return ImportedNode{}, errors.New("端口不正确")
 	}
 	if t == "vmess" {
 		if n, present, exact := p.exactInt("alterId"); present && (!exact || n < 0 || n > 65535) {
@@ -283,17 +271,50 @@ func validateProxyCredentials(p Proxy) error {
 	return nil
 }
 
-// ValidateImportedProxy is the exported form of the import credential
-// predicate: ParseImport (finishProxy) and the backup-restore face for
+// validateImportedProxyAddress is the address column (server host +
+// port) of the import predicate, extracted from finishProxy so the
+// ParseImport face and the backup-restore face validate addresses
+// through this one implementation (R7X-003 — R6X-008 shared only the
+// credential column, leaving the restore face's Extra server/port
+// unchecked: loopback / cloud-metadata hosts and out-of-range ports
+// restored verbatim while ParseImport rejected the same rows).
+func validateImportedProxyAddress(p Proxy) (string, int, error) {
+	host := strings.Trim(p.str("server"), "[]")
+	if err := ValidateImportHost(host); err != nil {
+		return "", 0, err
+	}
+	// D4-08：数值不确定即拒绝——小数端口被 num() 截断、溢出值被包成
+	// 垃圾 int 都是「误解析成功」，必须在落库前拦下。
+	port := p.num("port")
+	if n, present, exact := p.exactInt("port"); present {
+		if !exact {
+			return "", 0, errors.New("端口不正确")
+		}
+		port = n
+	}
+	if port < 1 || port > 65535 {
+		return "", 0, errors.New("端口不正确")
+	}
+	return host, port, nil
+}
+
+// ValidateImportedProxy is the exported form of the import predicate:
+// ParseImport (finishProxy) and the backup-restore face for
 // imported-type inbounds (kernel_id=0, whose credentials live in the
 // Extra proxy object) validate through this one implementation, so
 // the two faces can never drift apart (R6X-008 — the R5X-024 restore
 // gate covered only self-built inbounds because the restore face had
-// no shared predicate to call). The predicate may normalize fields on
-// the passed Proxy (case healing, mirroring import); callers checking
-// stored content must pass a throwaway copy and must not write the
-// copy back — restore keeps the backup bytes verbatim.
+// no shared predicate to call). The predicate covers both columns of
+// the import gate: the address column (validateImportedProxyAddress,
+// R7X-003) and the credential column (validateProxyCredentials). The
+// predicate may normalize fields on the passed Proxy (case healing,
+// mirroring import); callers checking stored content must pass a
+// throwaway copy and must not write the copy back — restore keeps the
+// backup bytes verbatim.
 func ValidateImportedProxy(p Proxy) error {
+	if _, _, err := validateImportedProxyAddress(p); err != nil {
+		return err
+	}
 	return validateProxyCredentials(p)
 }
 
