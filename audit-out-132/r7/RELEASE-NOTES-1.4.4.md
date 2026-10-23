@@ -62,4 +62,10 @@ R6 台账范围勘误注记两处只追加（R6-X-ledger、R6-FIX-REPORT 的 R6X
 - **差集撤销墓碑表**：三触发条件逐轮对账仍未满足，维持缓做（触发条件激活处置已预登记）。
 - **K-S01 回执消费面**：回执缺消费段一条维持疑似结转，其定性取决于相关 API 存废的产品口径，由主控在 R8 基线时裁定，不占号、不阻断收敛计数。
 
+## 发布凭据（发布后回填）
+
+- **Release**：[Release 1.4.4](https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/1.4.4)（Published，2026-10-23T12:41:00Z，非 Draft / 非 Prerelease）；纯数字 tag `1.4.4` → `d03c2ab96d1cdb7e5bf34d9fa14575292e8a43a3`。
+- **CI**：主发版流 Build and Push Images（run 39954337135）五 job 全 success；CI Build Check 第一轮（run 39954334634）六 job 全 success，PG 契约 CI 实跑全集 6 条逐条 PASS（计数两条 + Seq 两条 + NodeCreateRepairs + CompanionPartialUniqueIndex）；Publish Skill 为日志实证的 ENEEDAUTH 惯例红、不阻塞；Deploy Docs success。
+- **资产**：12/12 核对通过（6 产物逐个下载与 `.sha256` 全一致）；发布副本 `install.sh`/`panel_install.sh` 均 `PINNED_VERSION="1.4.4"`、REPO 正确；compose v4/v6 后端+前端镜像标签均 `:1.4.4`；`gost-amd64 -V` = `gost 1.4.4 (go1.25.14 linux/amd64)`，agent 正式版本注入在位。GHCR 标签 API 仍 403（token 无 read:packages），以 Build & Push 两 job success 为据。
+
 — RELEASE-NOTES-1.4.4 END —
