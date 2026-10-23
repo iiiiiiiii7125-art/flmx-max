@@ -45,6 +45,13 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: node scripts/check-contract-fields.mjs
 
+      # R5X-007: the doc/skill consistency gate must run in CI, not only
+      # by hand at release time — an unwired gate let the
+      # /api/v1/node/traffic/month skill gap survive two releases.
+      - name: Check doc consistency
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/check-doc-consistency.sh
+
       - name: Build
         run: pnpm run build
 

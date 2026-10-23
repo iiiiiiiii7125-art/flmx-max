@@ -20,6 +20,9 @@ await call(tok, "POST", "group/user/list");
 await call(tok, "POST", "group/tunnel/list");
 await call(tok, "POST", "group/permission/list");
 const nodes = (await call(tok, "POST", "node/list")).data;
+// R5X-007: the node page calls this unconditionally on mount; without a
+// recording the demo adapter warns "[demo] not recorded" and CI fails.
+await call(tok, "POST", "node/traffic/month", { tzOffset: -480 });
 const inbounds = (await call(tok, "POST", "inbound/list")).data;
 const kernels = (await call(tok, "POST", "kernel/list")).data;
 const users = (await call(tok, "POST", "user/list", {})).data;
