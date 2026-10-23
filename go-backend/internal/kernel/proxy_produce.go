@@ -202,9 +202,16 @@ func transportFields(p Proxy) (host, path, service, mode string) {
 
 func ssPluginString(p Proxy) string {
 	po := p.sub("plugin-opts")
-	switch p.str("plugin") {
+	// R10X-003 附带格：plugin 名大小写不敏感匹配——存量变体名
+	// （Shadow-TLS / OBFS / V2ray-Plugin）此前在 URI 面静默丢
+	// plugin（节点降级、直连前置层消失）；mihomo 对变体名容忍、
+	// 无整表毒化，故只在此消费点收口，产物恒用规范小写名。
+	// R10X-003 本体格：obfs 支 mode 消费前同进口口径小写愈合
+	// （合法集校验在进口与 validImportedProxyFields 谓词，本函
+	// 数只产出字符串、无从拒绝，垃圾值由调用面谓词先行略过）。
+	switch strings.ToLower(strings.TrimSpace(p.str("plugin"))) {
 	case "obfs":
-		s := "obfs-local;obfs=" + po.str("mode")
+		s := "obfs-local;obfs=" + strings.ToLower(po.str("mode"))
 		if h := po.str("host"); h != "" {
 			s += ";obfs-host=" + h
 		}

@@ -413,6 +413,71 @@ func ValidSnellObfsMode(mode string) bool {
 	return snellObfsModes[CanonicalSnellObfsMode(mode)]
 }
 
+// ---- R10 批 1（R10X-001/002/003）进口枚举收口 ----
+//
+// 三个有限枚举字段此前未入校验集：进口零校验、谓词零覆盖、渲染零
+// 愈合，大小写变体与垃圾值原样落库毒化法定客户端整表/整单（R10-D
+// 域双二进制实测，X-verdicts §0 升 P1）。毒化格证据见 R10-D 报告
+// 与 R10-D-binary-probe.log / R10-D-binary-extra-probe.log
+// （sing-box 1.14.3 / mihomo v1.19.33 / Xray 25.9.5）；fingerprint
+// 合法集全集另经批 1 施工前置探针逐值以 sing-box 1.14.3 `check`
+// 补全（11 值 exit 0、候选池外 11 值 exit 1，见批 1 报告）：
+//   - client-fingerprint（uTLS）：sing-box 本体大小写敏感——Chrome /
+//     FIREFOX / bogus123 / chrome-100 均 FATAL（unknown uTLS
+//     fingerprint），垃圾值另毒 Xray 链式面 exit 23；mihomo 全容忍、
+//     Xray 对大小写变体容忍，不改变 sing-box 法定面的整表结论。
+//     合法集以 sing-box uTLS 接受集为准（逐值 check exit 0）。
+//   - xhttp-opts.mode：{auto, packet-up, stream-up, stream-one}——
+//     AUTO / Packet-Up 经 mihomo exit 1、Xray exit 23，bogus 双面
+//     同拒，规范值双面 exit 0；sing-box 面无 xhttp 恒略过。
+//   - SS plugin-opts.mode（plugin=obfs）：{http, tls}——obfs-local
+//     模式合法集；HTTP 经 sing-box exit 1（unknown obfs mode）、
+//     mihomo exit 1，http 双面 exit 0。本格只约束 obfs 插件：
+//     v2ray-plugin 的 mode（websocket 等）与 shadow-tls 无 mode
+//     枚举，均不在此集内。
+
+var utlsFingerprints = map[string]bool{
+	"chrome": true, "firefox": true, "edge": true, "safari": true,
+	"360": true, "qq": true, "ios": true, "android": true,
+	"random": true, "randomized": true, "chrome_psk": true,
+}
+
+// ValidClientFingerprint reports whether fp is in the sing-box uTLS
+// fingerprint set ("" = no fingerprint). Case-insensitive like the
+// other enum predicates: import stores the lowercase healing and
+// rendering lowercases stock rows, this insensitivity is the
+// predicate-level backstop.
+func ValidClientFingerprint(fp string) bool {
+	if fp == "" {
+		return true
+	}
+	return utlsFingerprints[strings.ToLower(strings.TrimSpace(fp))]
+}
+
+var xhttpModes = map[string]bool{
+	"auto": true, "packet-up": true, "stream-up": true, "stream-one": true,
+}
+
+// ValidXHTTPMode reports whether mode is in the XHTTP mode set both
+// mihomo and Xray accept ("" = transport default).
+func ValidXHTTPMode(mode string) bool {
+	if mode == "" {
+		return true
+	}
+	return xhttpModes[strings.ToLower(strings.TrimSpace(mode))]
+}
+
+var ssObfsModes = map[string]bool{"http": true, "tls": true}
+
+// ValidSSObfsMode reports whether mode is in the obfs-local mode set
+// {http, tls} ("" = unset). Only applies when the SS plugin is obfs.
+func ValidSSObfsMode(mode string) bool {
+	if mode == "" {
+		return true
+	}
+	return ssObfsModes[strings.ToLower(strings.TrimSpace(mode))]
+}
+
 // ValidHy2Ports reports whether ports is a well-formed Hysteria2
 // port-hopping list: comma-separated ports or port ranges, every
 // port within 1–65535. "" means no hopping.
@@ -611,8 +676,23 @@ func validImportedProxyFields(p Proxy, face string) bool {
 	if err := validateRealityOpts(p); err != nil {
 		return false
 	}
+	// R10X-001/002（横切格）：client-fingerprint 与 xhttp-opts.mode
+	// 不绑单一协议（任一带 TLS / xhttp 传输的节点都可携带），在类型
+	// 分支前统一设门——合法集外整节点略过，与进口期同一谓词。
+	if !ValidClientFingerprint(p.str("client-fingerprint")) {
+		return false
+	}
+	if !ValidXHTTPMode(p.sub("xhttp-opts").str("mode")) {
+		return false
+	}
 	switch p.Type() {
 	case "ss":
+		// R10X-003：plugin=obfs 时 plugin-opts.mode 入谓词（合法集
+		// {http, tls}）；plugin 名大小写不敏感判定，与进口期同口径。
+		if strings.EqualFold(p.str("plugin"), "obfs") &&
+			!ValidSSObfsMode(p.sub("plugin-opts").str("mode")) {
+			return false
+		}
 		if !ValidSSCipher(p.str("cipher")) {
 			return false
 		}

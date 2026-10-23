@@ -137,6 +137,33 @@ func validateProxyCredentials(p Proxy) error {
 	if err := validateRealityOpts(p); err != nil {
 		return err
 	}
+	// R10X-001（横切格）：client-fingerprint 是 sing-box uTLS 有限
+	// 枚举——任一带 TLS 的协议都可携带，在 finishProxy 一处按合法
+	// 集校验 + 小写愈合落库（与 cipher 同形）。大小写变体（Chrome /
+	// FIREFOX 是异源导出与手写配置的常见形态）原样落库会毒化
+	// sing-box 订阅整表、垃圾值兼毒 Xray 链式整单。此前进口/谓词/
+	// 渲染三层全缺（R10-D-01）。
+	if fp := p.str("client-fingerprint"); fp != "" {
+		p["client-fingerprint"] = strings.ToLower(fp)
+	}
+	if !ValidClientFingerprint(p.str("client-fingerprint")) {
+		return errors.New("client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）")
+	}
+	// R10X-002（横切格）：xhttp-opts.mode 有限枚举 {auto, packet-up,
+	// stream-up, stream-one}——进口一处校验 + 小写愈合，集外逐条
+	// 拒。AUTO / Packet-Up 原样落库毒化 Clash 整表与 Xray 链式整
+	// 单（R10-D-02）。
+	if xo := p.sub("xhttp-opts"); xo.str("mode") != "" {
+		cp := make(Proxy, len(xo))
+		for k, v := range xo {
+			cp[k] = v
+		}
+		cp["mode"] = strings.ToLower(xo.str("mode"))
+		p["xhttp-opts"] = map[string]interface{}(cp)
+	}
+	if !ValidXHTTPMode(p.sub("xhttp-opts").str("mode")) {
+		return errors.New("xhttp mode 不受支持（仅 auto / packet-up / stream-up / stream-one）")
+	}
 	switch p.Type() {
 	case "ss":
 		// R4X-001: cipher 名一处 ToLower 收口（四格式三入口全经
@@ -166,6 +193,24 @@ func validateProxyCredentials(p Proxy) error {
 		// 与未知 cipher 不查，口径见 ValidateSS2022Password。
 		if err := ValidateSS2022Password(p.str("cipher"), p.str("password")); err != nil {
 			return err
+		}
+		// R10X-003：plugin=obfs 时 plugin-opts.mode 是有限枚举
+		// {http, tls}——小写愈合落库 + 合法集校验（与 ssPluginString
+		// 消费前同口径，见 proxy_produce.go）。HTTP 大写原样落库同
+		// 时毒化 sing-box 与 Clash 两订阅整表（R10-D-03）。plugin 名
+		// 大小写不敏感判定；v2ray-plugin 的 mode 不在此集内、不查。
+		if strings.EqualFold(p.str("plugin"), "obfs") {
+			if oo := p.sub("plugin-opts"); oo.str("mode") != "" {
+				cp := make(Proxy, len(oo))
+				for k, v := range oo {
+					cp[k] = v
+				}
+				cp["mode"] = strings.ToLower(oo.str("mode"))
+				p["plugin-opts"] = map[string]interface{}(cp)
+			}
+			if !ValidSSObfsMode(p.sub("plugin-opts").str("mode")) {
+				return errors.New("Shadowsocks obfs mode 不受支持（仅 http / tls）")
+			}
 		}
 	case "vmess":
 		if p.str("uuid") == "" {

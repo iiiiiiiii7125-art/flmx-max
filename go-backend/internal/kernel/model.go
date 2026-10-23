@@ -559,6 +559,16 @@ func normalizeSecurity(in *Inbound) error {
 	sec := &in.Security
 	sec.SNI = strings.TrimSpace(sec.SNI)
 	sec.Fingerprint = strings.TrimSpace(sec.Fingerprint)
+	// R10X-001 自建面同根格：fingerprint 此前仅 TrimSpace——API 直
+	// 写大写值时自建端点的 sing-box 面同毒（utls 原样下发）。与进
+	// 口面同一合法集（ValidClientFingerprint）：小写愈合落库、集
+	// 外拒绝。SecurityNone 分支整体丢弃 Security、本格不涉。
+	if sec.Type != SecurityNone && sec.Fingerprint != "" {
+		sec.Fingerprint = strings.ToLower(sec.Fingerprint)
+		if !ValidClientFingerprint(sec.Fingerprint) {
+			return errors.New("client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）")
+		}
+	}
 	if sec.SNI != "" && !hostPattern.MatchString(sec.SNI) {
 		return errors.New("SNI 格式错误")
 	}
