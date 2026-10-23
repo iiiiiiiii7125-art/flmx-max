@@ -2544,7 +2544,18 @@ func (h *Handler) cleanupFederationTunnels(shareID int64) {
 		return
 	}
 
+	// R4X-024（E4-S1）：裸级联删隧道会连 NodeInboundRelay 一并删掉，
+	// 此前删后无从反查受影响入站、更无人刷新——landing 的 allow 残留
+	// 已删隧道入口且零 KernelApply。与 tunnelDelete 的 O3-001 同口径：
+	// 删前收集受影响入站集，删后逐一刷新白名单。
+	var affectedInboundIDs []int64
+	for _, tid := range tunnelIDs {
+		affectedInboundIDs = append(affectedInboundIDs, h.inboundIDsForTunnel(tid)...)
+	}
+
 	for _, tid := range tunnelIDs {
 		_ = h.deleteTunnelByID(tid)
 	}
+
+	h.refreshInboundWhitelists(affectedInboundIDs)
 }
