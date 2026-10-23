@@ -71,7 +71,7 @@ func TestG4ClashProxyRendersSnell(t *testing.T) {
 		t.Fatalf("snell+shadowtls clash node: %v", m)
 	}
 	oo, _ := m["obfs-opts"].(map[string]interface{})
-	if oo["mode"] != "shadowtls" || oo["host"] != "www.microsoft.com" || oo["password"] != "stls-pass-g4" || oo["version"] != 3 {
+	if oo["mode"] != "shadow-tls" || oo["host"] != "www.microsoft.com" || oo["password"] != "stls-pass-g4" || oo["version"] != 3 {
 		t.Fatalf("snell+shadowtls obfs-opts: %v", m)
 	}
 }
@@ -126,7 +126,7 @@ func TestG4ProxyClashSnell(t *testing.T) {
 	}
 	m := yamlToMap(node)
 	oo, _ := m["obfs-opts"].(map[string]interface{})
-	if oo["mode"] != "shadowtls" || oo["host"] != "sni.example.com" || oo["password"] != "stls-pw" || oo["version"] != 3 {
+	if oo["mode"] != "shadow-tls" || oo["host"] != "sni.example.com" || oo["password"] != "stls-pw" || oo["version"] != 3 {
 		t.Fatalf("shadow-tls key must convert to obfs-opts: %v", m)
 	}
 	if _, leaked := m["shadow-tls"]; leaked {
