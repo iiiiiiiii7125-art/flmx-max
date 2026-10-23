@@ -44,12 +44,13 @@ const NOTIFY_EVENTS = [
   {
     key: "user_quota",
     label: "用户流量 / 到期",
-    description: "转发用户流量用到 90%、用完或 3 天内到期，共享用户 3 天内到期",
+    description:
+      "转发用户流量用到 90%、用完或 3 天内到期；分享订阅流量用到 90%、用完或 3 天内到期",
   },
   {
     key: "daily_report",
     label: "每日汇总",
-    description: "每天定时发一条：节点在线、出错、流量、共享用户",
+    description: "每天定时发一条：节点在线、出错、流量、分享订阅",
   },
 ] as const;
 
