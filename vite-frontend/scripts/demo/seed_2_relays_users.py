@@ -60,6 +60,13 @@ for r in x("SELECT id, user FROM user WHERE id > 1"):
     users[r[1]] = r[0]
 for name, uid in users.items():
     api("/tunnel/user/batch-assign", {"userId": uid, "tunnels": [{"tunnelId": t_sh}, {"tunnelId": t_iplc}]})
+# R6X-022: the recorded user persona (xiaoming) is the monitoring-authorized
+# one — check.mjs walks /monitor as this user and fixtures' user book must
+# carry monitor/access {allowed:true, admin:false} plus the monitor data
+# keys. Before this grant existed only as a hand edit of fixtures.json
+# (R5X-008), so a full re-record silently lost it (the seed recorded
+# allowed:false / need_admin_grant and every monitor endpoint 403'd).
+api("/monitor/permission/assign", {"userId": users["xiaoming"]})
 # user forwards on the forwarding page
 forward(t_sh, sh, 31101, "203.0.113.50:8080", "小明 · 家里 NAS", (users["xiaoming"], "xiaoming"), 12 * G, 3 * G)
 forward(t_iplc, gz, 32101, "198.51.100.60:443", "阿强 · 游戏加速", (users["aqiang"], "aqiang"), 40 * G, 5 * G)
