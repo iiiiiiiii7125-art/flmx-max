@@ -1310,8 +1310,6 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
-	// 连带删除计量伴生行（同一内核，下方 applyKernel 一并覆盖）。
-	h.deleteCompanionOf(id)
 	h.removeInboundRelays(id)
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
 		// R5X-004(e)：removeInboundRelays 已逐条删掉本入站的 relay
@@ -1324,6 +1322,11 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// E6-S1 同型补齐：连带删除计量伴生行移至原入站删除成功之后
+	// （同一内核，下方 applyKernel 一并覆盖）。旧序先删伴生：原入
+	// 站删除失败时伴生已被删，须由后续对账以新端口 + 新身份凭据
+	// 重建，已分发的计量链接在窗口内指向失效的旧伴生。
+	h.deleteCompanionOf(id)
 	for _, target := range outboundTargets(*row) {
 		h.applyWhitelistedTarget(target)
 	}
@@ -1384,7 +1387,6 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		h.deleteCompanionOf(id)
 		h.removeInboundRelays(id)
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
 			f++
@@ -1399,6 +1401,9 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		// E6-S1 同型补齐：伴生连带删除同样移至本行删除成功之后
+		// （失败项的伴生保持原样，理由同 inboundDelete）。
+		h.deleteCompanionOf(id)
 		s++
 		if !isExternalInbound(row) && !seenKernel[row.KernelID] {
 			seenKernel[row.KernelID] = true

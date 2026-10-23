@@ -283,6 +283,20 @@ func validateProxyCredentials(p Proxy) error {
 	return nil
 }
 
+// ValidateImportedProxy is the exported form of the import credential
+// predicate: ParseImport (finishProxy) and the backup-restore face for
+// imported-type inbounds (kernel_id=0, whose credentials live in the
+// Extra proxy object) validate through this one implementation, so
+// the two faces can never drift apart (R6X-008 — the R5X-024 restore
+// gate covered only self-built inbounds because the restore face had
+// no shared predicate to call). The predicate may normalize fields on
+// the passed Proxy (case healing, mirroring import); callers checking
+// stored content must pass a throwaway copy and must not write the
+// copy back — restore keeps the backup bytes verbatim.
+func ValidateImportedProxy(p Proxy) error {
+	return validateProxyCredentials(p)
+}
+
 // validateRealityOpts checks the Reality fields of any proxy carrying
 // reality-opts (R4X-002). Reality without a usable public key is not a
 // working node: the key is rendered verbatim into sing-box / mihomo
