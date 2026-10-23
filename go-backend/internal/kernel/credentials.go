@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -289,4 +290,202 @@ func randomPort(lo, hi int) int {
 		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
 	return lo + int(n.Int64())
+}
+
+// ---- R5 批 1（R5X-001/002/003）枚举凭据谓词 ----
+//
+// 有限枚举 / 格式域字段的唯一真源：导入期 validateProxyCredentials 与
+// 存量渲染守卫（proxySingbox / proxyClash）共用同一谓词，不得逐面另
+// 写判定。合法集逐值经 sing-box 1.14.3 `check` 与 mihomo v1.19.33 `-t`
+// 双二进制核对（批报告逐格矩阵）：
+//   - vmess cipher：双客户端共同接受集 {auto, aes-128-gcm,
+//     chacha20-poly1305, none, zero}（aes-128-ctr / chacha20 等双双
+//     FATAL）；大小写变体按 ss cipher 先例（R4X-001）小写愈合。
+//   - hy2 obfs：{"", salamander, gecko}——gecko 为 sing-box 1.14 与
+//     mihomo 现行共同接受集成员（双二进制实测 exit 0），候选集原列
+//     {"", salamander}，逐值核对后扩入，防误拒现行机场形态。
+//   - vless flow：{"", xtls-rprx-vision}（sing-box 严口径；
+//     xtls-rprx-vision-udp443 等 mihomo 容忍形态在 sing-box FATAL）。
+//   - tuic congestion-controller：{"", bbr, cubic, new_reno}——下划线
+//     形态经 sing-box 实测确认（new-reno 连字符形态 sing-box FATAL、
+//     mihomo 容忍，以严口径为准）。udp-relay-mode 双二进制 check 均
+//     不校验、拨号期未验证（R5 §3 第 6 点），不在校验集内。
+//   - snell obfs mode：{"", http, tls, shadow-tls, restls, jls}——
+//     mihomo 官方文档与 v1.19.33 实测口径；历史拼写 "shadowtls" 被
+//     mihomo 本体拒绝（obfs mode error），作别名在导入期愈合为
+//     "shadow-tls" 落库。
+//   - hy2 ports：逗号分隔的端口 / 端口段清单，每项端口须在
+//     1–65535 内。面板渲染产物实测：abc 双客户端 FATAL、80000-90000
+//     在 sing-box FATAL、单端口 "443" 在 sing-box server_ports 形态
+//     下 FATAL（渲染侧改按项拆分并 p→p:p 归一，见 proxySingbox）。
+
+var vmessCiphers = map[string]bool{
+	"auto": true, "aes-128-gcm": true, "chacha20-poly1305": true,
+	"none": true, "zero": true,
+}
+
+// ValidVMessCipher reports whether cipher is in the dual-client VMess
+// security set. Empty is allowed: every parser defaults it to "auto"
+// and the sing-box renderer falls back to "auto" as well.
+func ValidVMessCipher(cipher string) bool {
+	if cipher == "" {
+		return true
+	}
+	return vmessCiphers[strings.ToLower(cipher)]
+}
+
+var hy2ObfsTypes = map[string]bool{"salamander": true, "gecko": true}
+
+// ValidHy2Obfs reports whether obfs is a Hysteria2 obfs type both
+// clients accept ("" = no obfs).
+func ValidHy2Obfs(obfs string) bool {
+	if obfs == "" {
+		return true
+	}
+	return hy2ObfsTypes[strings.ToLower(obfs)]
+}
+
+// ValidVLESSFlow reports whether flow is in the sing-box-accepted
+// VLESS flow set ("" = no flow).
+func ValidVLESSFlow(flow string) bool {
+	switch strings.ToLower(flow) {
+	case "", "xtls-rprx-vision":
+		return true
+	}
+	return false
+}
+
+var tuicCongestionControllers = map[string]bool{
+	"bbr": true, "cubic": true, "new_reno": true,
+}
+
+// ValidTUICCongestionController reports whether cc is in the
+// sing-box-accepted TUIC congestion-controller set ("" = client
+// default).
+func ValidTUICCongestionController(cc string) bool {
+	if cc == "" {
+		return true
+	}
+	return tuicCongestionControllers[strings.ToLower(cc)]
+}
+
+// CanonicalSnellObfsMode maps the historical "shadowtls" spelling to
+// mihomo's canonical "shadow-tls" (the only spelling mihomo accepts).
+func CanonicalSnellObfsMode(mode string) string {
+	if strings.EqualFold(mode, "shadowtls") {
+		return "shadow-tls"
+	}
+	return strings.ToLower(mode)
+}
+
+var snellObfsModes = map[string]bool{
+	"http": true, "tls": true, "shadow-tls": true, "restls": true, "jls": true,
+}
+
+// ValidSnellObfsMode reports whether mode is a mihomo-accepted Snell
+// obfs mode ("" = no obfs). The "shadowtls" alias is accepted here
+// because import/render canonicalize it before it reaches a client.
+func ValidSnellObfsMode(mode string) bool {
+	if mode == "" {
+		return true
+	}
+	return snellObfsModes[CanonicalSnellObfsMode(mode)]
+}
+
+// ValidHy2Ports reports whether ports is a well-formed Hysteria2
+// port-hopping list: comma-separated ports or port ranges, every
+// port within 1–65535. "" means no hopping.
+func ValidHy2Ports(ports string) bool {
+	if strings.TrimSpace(ports) == "" {
+		return true
+	}
+	for _, item := range strings.Split(ports, ",") {
+		item = strings.TrimSpace(item)
+		lo, hi, found := strings.Cut(item, "-")
+		if !found {
+			hi = lo
+		}
+		for _, s := range []string{lo, hi} {
+			n, err := strconv.Atoi(strings.TrimSpace(s))
+			if err != nil || n < 1 || n > 65535 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ValidVLESSEncryption checks a client-side VLESS encryption string
+// against the Xray ENC grammar (vless_encryption.go):
+//
+//	mlkem768x25519plus.<native|xorpub|random>.<0rtt|1rtt>.<填充链>.<认证段>
+//
+// The padding chain is one or more dot-separated groups of
+// dash-separated decimal numbers (the built face emits
+// "100-111-1111.75-0-111.50-0-3333"); the authentication segment must
+// be RawURL base64 decoding to 32 bytes (x25519 public key) or 1184
+// bytes (ML-KEM-768 encapsulation key) — exactly what
+// Settings.EncryptionString produces. "" and "none" are valid (no
+// encryption). The server-side decryption form (ticket segment such
+// as "600s", secret tail) is NOT a client string and is rejected:
+// mihomo rejects it the same way.
+func ValidVLESSEncryption(enc string) bool {
+	if enc == "" || enc == "none" {
+		return true
+	}
+	parts := strings.Split(enc, ".")
+	if len(parts) < 5 || parts[0] != "mlkem768x25519plus" {
+		return false
+	}
+	switch parts[1] {
+	case EncryptionModeNative, EncryptionModeXorpub, EncryptionModeRandom:
+	default:
+		return false
+	}
+	if parts[2] != "0rtt" && parts[2] != "1rtt" {
+		return false
+	}
+	for _, group := range parts[3 : len(parts)-1] {
+		if group == "" {
+			return false
+		}
+		for _, num := range strings.Split(group, "-") {
+			if _, err := strconv.Atoi(num); err != nil {
+				return false
+			}
+		}
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[len(parts)-1])
+	if err != nil {
+		return false
+	}
+	return len(raw) == 32 || len(raw) == 1184
+}
+
+// validImportedProxyFields is the shared stock/import predicate over
+// every field that entered the R5 batch-1 validation set. It reports
+// whether a Proxy's enum/format fields are all render-safe for the
+// strict faces (sing-box / mihomo): import rejects per node with it,
+// and proxySingbox / proxyClash skip whole stock nodes failing it.
+// Reality is checked through validateRealityOpts (the R4X-002 import
+// predicate itself, per verdicts §3.4) and SS2022 keys keep their
+// existing per-face policies, so neither is duplicated here. TUIC
+// udp-relay-mode is deliberately absent: unverified (see above).
+func validImportedProxyFields(p Proxy) bool {
+	if err := validateRealityOpts(p); err != nil {
+		return false
+	}
+	switch p.Type() {
+	case "vmess":
+		return ValidVMessCipher(p.str("cipher"))
+	case "vless":
+		return ValidVLESSFlow(p.str("flow")) && ValidVLESSEncryption(p.str("encryption"))
+	case "hysteria2":
+		return ValidHy2Obfs(p.str("obfs")) && ValidHy2Ports(p.str("ports"))
+	case "tuic":
+		return ValidTUICCongestionController(p.str("congestion-controller"))
+	case "snell":
+		return ValidSnellObfsMode(p.sub("obfs-opts").str("mode"))
+	}
+	return true
 }

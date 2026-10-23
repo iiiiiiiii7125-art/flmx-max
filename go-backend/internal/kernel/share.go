@@ -359,13 +359,17 @@ func clashSnell(e Endpoint) (yamlNode, bool) {
 	}
 	if in.Security.Type == SecurityShadowTLS {
 		// Mihomo carries ShadowTLS as a snell obfs mode (obfs-opts
-		// mode=shadowtls with host/password/version, plus the uTLS
-		// fingerprint at proxy level).
+		// mode=shadow-tls with host/password/version, plus the uTLS
+		// fingerprint at proxy level). R5 批 1: the canonical mihomo
+		// spelling is "shadow-tls" — the historical "shadowtls" this
+		// code emitted is rejected by mihomo itself (v1.19.33 -t:
+		// "snell obfs mode error: shadowtls"; official docs list
+		// http/tls/shadow-tls/restls/jls).
 		p = append(p,
 			yamlField{"client-fingerprint", in.Security.Fingerprint},
 			yamlField{"obfs-opts", yamlNode{
 				{"host", in.Security.SNI},
-				{"mode", "shadowtls"},
+				{"mode", "shadow-tls"},
 				{"password", in.Security.ShadowTLSPassword},
 				{"version", 3},
 			}})

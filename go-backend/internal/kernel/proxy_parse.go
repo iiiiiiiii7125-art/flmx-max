@@ -170,7 +170,7 @@ func validateProxyCredentials(p Proxy) error {
 		if err := ValidateSS2022Password(p.str("cipher"), p.str("password")); err != nil {
 			return err
 		}
-	case "vmess", "vless":
+	case "vmess":
 		if p.str("uuid") == "" {
 			return errors.New("缺少 UUID")
 		}
@@ -180,9 +180,56 @@ func validateProxyCredentials(p Proxy) error {
 		if !uuidPattern.MatchString(strings.ToLower(p.str("uuid"))) {
 			return errors.New("UUID 格式错误")
 		}
-	case "trojan", "hysteria2", "anytls":
+		// R5X-001(a)：cipher 是有限枚举域——垃圾值双客户端整表毒化
+		// （sing-box / mihomo 均 FATAL），导入期逐条拒绝。合法集与
+		// 大小写愈合口径见 credentials.go 谓词注。
+		if c := p.str("cipher"); c != "" {
+			p["cipher"] = strings.ToLower(c)
+		}
+		if !ValidVMessCipher(p.str("cipher")) {
+			return errors.New("VMess 加密方式 cipher 不受支持（仅 auto / aes-128-gcm / chacha20-poly1305 / none / zero）")
+		}
+	case "vless":
+		if p.str("uuid") == "" {
+			return errors.New("缺少 UUID")
+		}
+		if !uuidPattern.MatchString(strings.ToLower(p.str("uuid"))) {
+			return errors.New("UUID 格式错误")
+		}
+		// R5X-003(a)(c)：flow 与 encryption 均为有限域——flow 垃圾值
+		// 毒化 sing-box 整表、encryption 垃圾值毒化 mihomo 整表（其
+		// 法定下发面），合法集见 credentials.go 谓词注；encryption
+		// 按 Xray ENC 文法校验，真实 EncryptionString 产物恒通过。
+		if f := p.str("flow"); f != "" {
+			p["flow"] = strings.ToLower(f)
+		}
+		if !ValidVLESSFlow(p.str("flow")) {
+			return errors.New("VLESS flow 不受支持（仅 xtls-rprx-vision 或空）")
+		}
+		if !ValidVLESSEncryption(p.str("encryption")) {
+			return errors.New("VLESS encryption 格式错误（须为 none 或 mlkem768x25519plus 客户端加密串）")
+		}
+	case "trojan", "anytls":
 		if p.str("password") == "" {
 			return errors.New("缺少密码")
+		}
+	case "hysteria2":
+		if p.str("password") == "" {
+			return errors.New("缺少密码")
+		}
+		// R5X-001(b)：obfs 类型是有限枚举域，垃圾值双客户端整表
+		// 毒化，导入期逐条拒绝。
+		if o := p.str("obfs"); o != "" {
+			p["obfs"] = strings.ToLower(o)
+		}
+		if !ValidHy2Obfs(p.str("obfs")) {
+			return errors.New("Hysteria2 obfs 类型不受支持（仅 salamander / gecko 或空）")
+		}
+		// R5 前置探针定生死：ports 垃圾形态经面板渲染产物 + 双二进
+		// 制坐实整表毒化（abc 双客户端 FATAL、越界段 sing-box
+		// FATAL），入校验集逐条拒绝。
+		if !ValidHy2Ports(p.str("ports")) {
+			return errors.New("Hysteria2 ports 格式错误（须为逗号分隔的端口或端口段，端口在 1–65535 内）")
 		}
 	case "tuic":
 		if p.str("uuid") == "" || p.str("password") == "" {
@@ -191,9 +238,34 @@ func validateProxyCredentials(p Proxy) error {
 		if !uuidPattern.MatchString(strings.ToLower(p.str("uuid"))) {
 			return errors.New("UUID 格式错误")
 		}
+		// R5X-003(b)：congestion-controller 垃圾值毒化 sing-box 整
+		// 表，合法集 {bbr, cubic, new_reno} 见谓词注。udp-relay-mode
+		// 未验证（双二进制 check 均不校验、拨号期未验），不在此拒。
+		if cc := p.str("congestion-controller"); cc != "" {
+			p["congestion-controller"] = strings.ToLower(cc)
+		}
+		if !ValidTUICCongestionController(p.str("congestion-controller")) {
+			return errors.New("TUIC congestion-controller 不受支持（仅 bbr / cubic / new_reno）")
+		}
 	case "snell":
 		if p.str("psk") == "" {
 			return errors.New("缺少 PSK")
+		}
+		// R5X-003(d)：obfs-opts.mode 垃圾值毒化 mihomo 整表（法定主
+		// 面无守卫、sing-box 面既有略过）。历史拼写 shadowtls 在此
+		// 愈合为 mihomo 规范拼写 shadow-tls 落库（mihomo 本体拒绝
+		// 无连字符形态）。
+		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
+			cp := make(Proxy, len(oo))
+			for k, v := range oo {
+				cp[k] = v
+			}
+			cp["mode"] = CanonicalSnellObfsMode(oo.str("mode"))
+			oo = cp
+			p["obfs-opts"] = map[string]interface{}(oo)
+		}
+		if !ValidSnellObfsMode(p.sub("obfs-opts").str("mode")) {
+			return errors.New("Snell obfs mode 不受支持（仅 http / tls / shadow-tls / restls / jls 或空）")
 		}
 	case "naive":
 		if p.str("username") == "" || p.str("password") == "" {
@@ -804,7 +876,14 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		p.set("obfs", obfs.str("type"))
 		p.set("obfs-password", obfs.str("password"))
 		if ports := o.strs("server_ports"); len(ports) > 0 {
-			p["ports"] = strings.ReplaceAll(ports[0], ":", "-")
+			// R5 批 1：全部端口段以逗号拼回面板 ports 形态（此前只取
+			// 第一段、多段往返静默丢失），与 proxySingbox 的按项拆分
+			// 渲染互为逆操作。
+			items := make([]string, len(ports))
+			for i, sp := range ports {
+				items[i] = strings.ReplaceAll(sp, ":", "-")
+			}
+			p["ports"] = strings.Join(items, ",")
 		}
 	}
 	if tls := o.sub("tls"); tls.flag("enabled") {
