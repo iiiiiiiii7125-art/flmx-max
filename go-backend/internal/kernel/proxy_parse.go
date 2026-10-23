@@ -152,9 +152,10 @@ func validateProxyCredentials(p Proxy) error {
 		}
 		// R6X-001：cipher 名本身是有限枚举域——双拒格（双客户端均
 		// unknown method）导入期逐条拒绝，合法集 = ValidSSCipher
-		// （共同集 18 + 单面 chacha20，逐值口径见 credentials.go 谓
-		// 词注与 R6-FIX-B1 逐值探针存档）。单面 chacha20 进口不拒，
-		// 渲染面分面处置（sing-box 面略过、Clash 面保留）。
+		// （共同集 18 ∪ 单面集 6 值，逐名见 credentials.go
+		// ssCiphersMihomoOnly，逐值口径见 credentials.go 谓词注与
+		// R6-FIX-B1 逐值探针存档）。单面集方法进口不拒，渲染面分面
+		// 处置（sing-box 面略过、Clash 面保留）。
 		if !ValidSSCipher(p.str("cipher")) {
 			return errors.New("Shadowsocks 加密方式 cipher 不受支持")
 		}
