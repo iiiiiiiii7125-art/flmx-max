@@ -22,6 +22,21 @@
 //   admin  subscription/traffic      every recording's data carries a
 //   user   user/subscription/traffic non-empty points series
 //
+// R8X-006 adds:
+//   admin  kernel/versions           the xray / singbox recordings must
+//                                    be a successful version list
+//                                    (res.code === 0, data a non-empty
+//                                    array of {version, …} entries) —
+//                                    never a recorded failure response.
+//                                    The 1.4.4 re-record froze a
+//                                    transient GitHub 403 into both
+//                                    cells (code -1, data null) and no
+//                                    gate covered the key, so the demo
+//                                    kernel dialog showed the error
+//                                    verbatim. snell / realm recordings
+//                                    under the same key are static lists
+//                                    and stay out of this check's scope.
+//
 // Usage:
 //   node scripts/demo/check-fixtures-content.mjs [frontendRoot]
 //   frontendRoot defaults to the vite-frontend directory containing
@@ -44,7 +59,12 @@ const CHECKS = [
   { book: "admin", key: "node/traffic/month", kind: "month-map" },
   { book: "admin", key: "subscription/traffic", kind: "series" },
   { book: "user", key: "user/subscription/traffic", kind: "series" },
+  { book: "admin", key: "kernel/versions", kind: "version-list" },
 ];
+
+// kernel/versions recordings whose payload comes from the live GitHub
+// release list (R8X-006). snell / realm use pinned static lists.
+const VERSION_LIST_TYPES = ["xray", "singbox"];
 
 let problems = 0;
 for (const { book, key, kind } of CHECKS) {
@@ -52,6 +72,48 @@ for (const { book, key, kind } of CHECKS) {
   if (!Array.isArray(recordings) || recordings.length === 0) {
     problems += 1;
     console.log(`FAIL  ${book} "${key}": key missing or has no recordings`);
+    continue;
+  }
+  if (kind === "version-list") {
+    const seen = new Set();
+    recordings.forEach((rec, i) => {
+      let kernelType = "";
+      try {
+        kernelType = JSON.parse(rec?.key || "{}").kernelType || "";
+      } catch {
+        kernelType = "";
+      }
+      if (!VERSION_LIST_TYPES.includes(kernelType)) {
+        console.log(`skip  ${book} "${key}" recording #${i}: kernelType=${kernelType || "?"} (static list, out of scope)`);
+        return;
+      }
+      seen.add(kernelType);
+      const res = rec && rec.res ? rec.res : {};
+      const data = res.data;
+      if (res.code !== 0) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i} (kernelType=${kernelType}): res.code=${res.code} is a recorded failure response (msg=${JSON.stringify(res.msg ?? "")}), not a version list`);
+        return;
+      }
+      if (!Array.isArray(data) || data.length < 1) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i} (kernelType=${kernelType}): data is not a non-empty version list`);
+        return;
+      }
+      const bad = data.findIndex((v) => !v || typeof v.version !== "string" || v.version === "");
+      if (bad >= 0) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i} (kernelType=${kernelType}): data[${bad}] has no non-empty version string`);
+        return;
+      }
+      console.log(`ok    ${book} "${key}" recording #${i} (kernelType=${kernelType}): code 0, ${data.length} version(s), first=${data[0].version}`);
+    });
+    for (const t of VERSION_LIST_TYPES) {
+      if (!seen.has(t)) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}": no recording for kernelType=${t}`);
+      }
+    }
     continue;
   }
   recordings.forEach((rec, i) => {
@@ -78,7 +140,7 @@ for (const { book, key, kind } of CHECKS) {
 
 console.log(
   problems
-    ? `\nfixtures content: ${problems} empty key payload(s). Re-record with a seed that produces the fact — see scripts/demo/README.md.`
+    ? `\nfixtures content: ${problems} failing key payload(s). Re-record with a seed that produces the fact — see scripts/demo/README.md.`
     : `\nfixtures content ok: every key on the content list carries non-empty data.`,
 );
 process.exit(problems ? 1 : 0);
