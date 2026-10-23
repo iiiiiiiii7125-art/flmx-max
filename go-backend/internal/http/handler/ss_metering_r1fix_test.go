@@ -290,6 +290,55 @@ func TestSSMeteringRetargetRequiresAppliedConfig(t *testing.T) {
 	}
 }
 
+// F5 (C-03): when the per-subscription credential cannot be derived
+// for a retargeted companion endpoint (here: the subscription has no
+// password), the endpoint must be dropped — never served with the
+// companion's bare identity PSK, which is a working single-user
+// credential.
+func TestSSMeteringCompanionEndpointFailClosed(t *testing.T) {
+	r, h, k, origin, sub := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	if comp, _ := r.GetCompanionInbound(origin.ID); comp == nil {
+		t.Fatal("companion must exist")
+	}
+	markKernelApplied(t, r, h, k)
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Control: with the subscription password present, the companion
+	// endpoint is served with the combined credential.
+	eps := h.subEndpoints(sub, rows)
+	if len(eps) != 1 || eps[0].CompanionOf != origin.ID ||
+		!strings.Contains(eps[0].Inbound.Settings.Password, ":") {
+		t.Fatalf("control pull must serve the combined companion credential, got %+v", eps)
+	}
+
+	// Password-less share subscription: derivation fails, so the
+	// companion endpoint disappears instead of leaking the bare iPSK.
+	bare := *sub
+	bare.Password = ""
+	eps = h.subEndpoints(&bare, rows)
+	for _, e := range eps {
+		if e.CompanionOf > 0 {
+			t.Fatalf("companion endpoint must be dropped when derivation fails, got %+v", e)
+		}
+		if e.Inbound.Settings.Password != "" && !strings.Contains(e.Inbound.Settings.Password, ":") &&
+			e.Inbound.Protocol == kernel.ProtocolShadowsocks {
+			// Any surviving SS endpoint must be the origin (shared
+			// password), never a bare companion row.
+			comp2, _ := r.GetCompanionInbound(origin.ID)
+			if comp2 != nil && e.Inbound.ID == comp2.ID {
+				t.Fatal("bare companion inbound leaked as an endpoint")
+			}
+		}
+	}
+	if len(eps) != 0 {
+		t.Fatalf("the only source is the metered origin: no endpoint may survive, got %d", len(eps))
+	}
+}
+
 // F1 (A-01+B-01+C-01): enabling metering on a statically excluded
 // origin (chained exit / split rules) must be rejected with a reason,
 // and an already-metered origin must not be saved into an excluded
