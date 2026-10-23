@@ -115,6 +115,15 @@ func TestNotifyTestEndpointContract(t *testing.T) {
 	}
 }
 
+// TestNotifyImportedNodeDownContract — R5X-006 迁移案 (b) 拆层后的
+// contract 层口径（DB-4 正向断言）：手动端点 /api/v1/inbound/probe
+// （probeRoundTargeted）只返回探测结果、刷新缓存，**不驱动**
+// inbound_down 告警——手动轮不计 streak 是 1.4.0 已发布设计，严禁
+// 改回。告警状态机断言（定时轮打满 streak → 掉线/只报一次/恢复/
+// 未选事件静默）已下沉 handler 包，见
+// handler.TestR5B9ImportedNodeDownScheduledRoundAlerts（复用 B10
+// 定时轮直调模式）。本用例在有 RFC1918 地址的环境实跑以下断言；
+// 无地址环境由夹具 Skip 明示，引用结论时须标注 Skip/Pass 区分。
 func TestNotifyImportedNodeDownContract(t *testing.T) {
 	// R2 登记 #3：probe 目标迁至本机非 loopback RFC1918 地址（无可用地址时 Skip）。
 	probeAddr := probeFixtureLocalAddr(t)
@@ -143,50 +152,70 @@ func TestNotifyImportedNodeDownContract(t *testing.T) {
 	if err := r.DB().Exec(`UPDATE node_inbound SET listen = ?, port = ?`, probeAddr, port).Error; err != nil {
 		t.Fatal(err)
 	}
+	inboundID := mustQueryInt64(t, r, `SELECT id FROM node_inbound LIMIT 1`)
 
-	kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
+	// 手动探测打满并超过 streak 次数：端点每次都返回该入站的失败
+	// 探测结果（DB-4 正向断言的对象是「结果」），但 webhook 恒为 0
+	// ——手动轮既不累加 streak 也不产生掉线跃迁。
+	for i := 0; i < 3; i++ {
+		out := kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
+		if out.Code != 0 {
+			t.Fatalf("manual probe %d: %+v", i, out)
+		}
+		data, ok := out.Data.(map[string]interface{})
+		if !ok {
+			t.Fatalf("manual probe %d: data is %T, want per-inbound results", i, out.Data)
+		}
+		res, ok := data[jsonInt64(inboundID)].(map[string]interface{})
+		if !ok {
+			t.Fatalf("manual probe %d: no result for inbound %d in %v", i, inboundID, data)
+		}
+		if res["ok"] != false {
+			t.Fatalf("manual probe %d: dead target must report ok=false, got %v", i, res)
+		}
+	}
 	time.Sleep(200 * time.Millisecond)
 	if len(sink.webhook) != 0 {
-		t.Fatal("one failed probe must not alert yet")
-	}
-	kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
-	calls := sink.waitWebhook(t, 1)
-	if calls[0]["event"] != "inbound_down" || !strings.Contains(calls[0]["message"].(string), "落地") {
-		t.Fatalf("down alert: %v", calls[0])
-	}
-	kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
-	time.Sleep(200 * time.Millisecond)
-	if len(sink.webhook) != 1 {
-		t.Fatal("an ongoing outage must alert only once")
+		t.Fatalf("DB-4: manual probes must not drive inbound_down alerts, got %d webhooks", len(sink.webhook))
 	}
 
-	ln, err = net.Listen("tcp", net.JoinHostPort(probeAddr, jsonInt64(int64(port))))
-	if err != nil {
-		t.Skipf("port reused: %v", err)
-	}
-	defer ln.Close()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			_ = c.Close()
+	// 目标恢复后手动探测返回 ok=true，同样不得产生「恢复」告警
+	// （恢复跃迁只归定时轮）。单列子用例：这一腿要求能拨通本机已
+	// 监听的 RFC1918 地址，个别沙箱对 RFC1918 自连施加 connect()
+	// EPERM（R5-I 报告 E3 在案）——子用例先自检，自检不过 Skip
+	// 明示，不拖累父用例已实跑的断言，引用结论时区分 Skip/Pass。
+	t.Run("manualProbeAfterRecovery", func(t *testing.T) {
+		ln, err := net.Listen("tcp", net.JoinHostPort(probeAddr, jsonInt64(int64(port))))
+		if err != nil {
+			t.Skipf("port reused: %v", err)
 		}
-	}()
-	kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
-	calls = sink.waitWebhook(t, 2)
-	if calls[1]["title"] != "导入节点已恢复" {
-		t.Fatalf("recovery alert: %v", calls[1])
-	}
-
-	// Events left out of notify_events stay quiet.
-	setConfig(t, r, "notify_events", "node_offline")
-	_ = ln.Close()
-	kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
-	kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
-	time.Sleep(200 * time.Millisecond)
-	if len(sink.webhook) != 2 {
-		t.Fatal("unselected events must not be sent")
-	}
+		defer ln.Close()
+		conn, dialErr := net.DialTimeout("tcp", net.JoinHostPort(probeAddr, jsonInt64(int64(port))), 2*time.Second)
+		if dialErr != nil {
+			t.Skipf("本环境无法拨通已监听的 RFC1918 地址（沙箱 connect() 策略），恢复腿待 CI/无过滤环境验收: %v", dialErr)
+		}
+		_ = conn.Close()
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = c.Close()
+			}
+		}()
+		out := kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
+		if out.Code != 0 {
+			t.Fatalf("manual probe after recovery: %+v", out)
+		}
+		data, _ := out.Data.(map[string]interface{})
+		res, _ := data[jsonInt64(inboundID)].(map[string]interface{})
+		if res == nil || res["ok"] != true {
+			t.Fatalf("manual probe after recovery must report ok=true, got %v", res)
+		}
+		time.Sleep(200 * time.Millisecond)
+		if len(sink.webhook) != 0 {
+			t.Fatalf("DB-4: manual probes must not drive recovery alerts, got %d webhooks", len(sink.webhook))
+		}
+	})
 }

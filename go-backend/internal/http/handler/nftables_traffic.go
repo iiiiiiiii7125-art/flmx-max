@@ -550,7 +550,8 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 		}
 
 		flowIdx, flowExists := flowSeen[delta.ForwardID]
-		if flowExists && (batch.flowDeltas[flowIdx].InFlow > math.MaxInt64-scaledIn || batch.flowDeltas[flowIdx].OutFlow > math.MaxInt64-scaledOut) {
+		if flowExists && (batch.flowDeltas[flowIdx].InFlow > math.MaxInt64-scaledIn || batch.flowDeltas[flowIdx].OutFlow > math.MaxInt64-scaledOut ||
+			batch.flowDeltas[flowIdx].RawInFlow > math.MaxInt64-delta.BytesIn || batch.flowDeltas[flowIdx].RawOutFlow > math.MaxInt64-delta.BytesOut) {
 			continue
 		}
 
@@ -558,9 +559,15 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 		raw.bytesOut += delta.BytesOut
 		batch.forwardTraffic[delta.ForwardID] = raw
 
+		// R5X-013：delta 拆 raw/scaled 两组——forward 行落 raw
+		// （delta.BytesIn/BytesOut 全量原始字节，不受单向计费门控，
+		// 与 forwardTraffic 指标桶同源），user/user_tunnel 行与
+		// quota 落 scaled（scaledOut 在 TunnelFlow=1 时为 0）。
 		if flowExists {
 			batch.flowDeltas[flowIdx].InFlow += scaledIn
 			batch.flowDeltas[flowIdx].OutFlow += scaledOut
+			batch.flowDeltas[flowIdx].RawInFlow += delta.BytesIn
+			batch.flowDeltas[flowIdx].RawOutFlow += delta.BytesOut
 		} else {
 			flowSeen[delta.ForwardID] = len(batch.flowDeltas)
 			batch.flowDeltas = append(batch.flowDeltas, repo.FlowUploadCounterDelta{
@@ -569,6 +576,9 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 				UserTunnelID: meta.UserTunnelID,
 				InFlow:       scaledIn,
 				OutFlow:      scaledOut,
+				RawInFlow:    delta.BytesIn,
+				RawOutFlow:   delta.BytesOut,
+				HasRaw:       true,
 			})
 		}
 		batch.quotaUsage[meta.UserID] += quotaDelta

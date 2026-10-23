@@ -31,7 +31,7 @@ func TestR1B7ImportedSnellUDPSynthesized(t *testing.T) {
 	if got, present := m["udp"]; !present || got != false {
 		t.Fatalf("v4+shadowtls snell udp = %v (present=%v), want explicit false: %v", got, present, m)
 	}
-	if oo, _ := m["obfs-opts"].(map[string]interface{}); oo["mode"] != "shadowtls" {
+	if oo, _ := m["obfs-opts"].(map[string]interface{}); oo["mode"] != "shadow-tls" {
 		t.Fatalf("shadowtls must still convert to obfs-opts: %v", m)
 	}
 

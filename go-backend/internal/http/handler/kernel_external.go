@@ -326,18 +326,26 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 	// B4/F-132: 去重检查与保存须与导入路径共用 0 号锁串行，此前无锁：
 	// 并发导入可在检查后、保存前建出同 (host,port) 行。
 	externalMu := repo.AcquirePortAllocLock(0)
-	if rows, err := h.repo.ListNodeInbounds(); err == nil {
-		key := externalKey(row.Listen, row.Port)
-		for i := range rows {
-			other := &rows[i]
-			if other.ID == row.ID || !isExternalInbound(other) {
-				continue
-			}
-			if externalKey(other.Listen, other.Port) == key {
-				repo.ReleasePortAllocLock(externalMu)
-				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在相同地址和端口的导入节点（%s），不能重复", key)))
-				return
-			}
+	// R5X-010（R5-C-01）：去重查询失败 fail-closed 中止保存，与
+	// R4X-007 remote_source 去重门同口径——旧实现 err 被 `err == nil`
+	// 门吞掉后无条件保存，DB 瞬时失败窗口内可改出重复导入行。去重
+	// 是本临界区唯一防线，查不了就不写。
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		repo.ReleasePortAllocLock(externalMu)
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	key := externalKey(row.Listen, row.Port)
+	for i := range rows {
+		other := &rows[i]
+		if other.ID == row.ID || !isExternalInbound(other) {
+			continue
+		}
+		if externalKey(other.Listen, other.Port) == key {
+			repo.ReleasePortAllocLock(externalMu)
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在相同地址和端口的导入节点（%s），不能重复", key)))
+			return
 		}
 	}
 	if err := h.repo.SaveNodeInbound(row); err != nil {

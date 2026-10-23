@@ -343,7 +343,17 @@ func ghMirrorLatestTag(repo, file string) (string, error) {
 	}
 	if err != nil {
 		if ok {
-			return cached.tag, nil
+			// R5X-011（R5-C-02）：latest 标签 stale 回退与文件面
+			// （ghMirrorFetch，F-137）共用 ghMirrorMaxStaleAge 上限
+			// + 双分支日志——旧实现对任意年龄的缓存静默回退，
+			// GitHub 长期不可达时旧版被无限期当作 latest 且无日志
+			// 可见。超限返回查询错误，不得无上限静默回退。
+			if age := time.Since(cached.at); age <= ghMirrorMaxStaleAge {
+				log.Printf("gh_mirror: 查询 %s 最新版本失败（%v），回退缓存标签 %s（年龄 %s，上限 %s）", repo, err, cached.tag, age.Round(time.Second), ghMirrorMaxStaleAge)
+				return cached.tag, nil
+			} else {
+				log.Printf("gh_mirror: 查询 %s 最新版本失败（%v），缓存标签 %s 年龄 %s 超过上限 %s，不回退", repo, err, cached.tag, age.Round(time.Second), ghMirrorMaxStaleAge)
+			}
 		}
 		return "", fmt.Errorf("查询 %s 最新版本失败: %v", repo, err)
 	}

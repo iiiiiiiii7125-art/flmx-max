@@ -161,10 +161,76 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // user_subscription rows in the same backup still carry the old id.
 // Import() feeds this map to importUserSubscriptions so assignments are
 // rewritten onto the restored rows instead of dangling.
+// validateImportedInboundObjects 对备份入站的四整对象
+// （settings/transport/security/extra）跑保存面等价校验（R5X-024）：
+// 把备份原值解入 kernel.Inbound 副本后调用保存面共用的
+// kernel.Normalize——只读副本做校验，落库仍用备份原值逐字恢复，
+// 不以归一化结果覆写。kernel_id=0 的导入型入站没有内核上下文，
+// 保存面同样不经 Normalize，只做四对象的 JSON 结构校验。
+//
+// 适用面：四对象任一有实际内容才进校验门。四对象全空的行是旧式
+// 简写/存量行（真实导出行在保存时已经 Normalize 填充，security
+// 等对象恒有内容），无可校验的对象内容；若对全空行跑 Normalize，
+// 其拒绝源于「保存时本应生成的数据缺席」（如 trojan 空 security
+// 缺 SNI），不是对象坏值——该形态维持原恢复口径。此口径在
+// R5-FIX-B5 批报告中显式登记。
+func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, strategy string) error {
+	hasContent := strings.TrimSpace(i.Settings) != "" || strings.TrimSpace(i.Transport) != "" ||
+		strings.TrimSpace(i.Security) != ""
+	if !hasContent {
+		if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" && extra != "{}" {
+			hasContent = true
+		}
+	}
+	if !hasContent {
+		return nil
+	}
+	vin := kernel.Inbound{ID: i.ID, Protocol: i.Protocol, Listen: listen, Port: i.Port,
+		AcceptProxyProtocol: i.AcceptProxyProtocol == 1, OutboundIPStrategy: strategy}
+	for _, f := range []struct {
+		raw string
+		out interface{}
+	}{
+		{i.Settings, &vin.Settings},
+		{i.Transport, &vin.Transport},
+		{i.Security, &vin.Security},
+	} {
+		if strings.TrimSpace(f.raw) == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(f.raw), f.out); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(i.Extra) != "" {
+		var probe interface{}
+		if err := json.Unmarshal([]byte(i.Extra), &probe); err != nil {
+			return err
+		}
+		vin.Extra = json.RawMessage(i.Extra)
+	}
+	if i.KernelID <= 0 {
+		return nil
+	}
+	var krow model.NodeKernel
+	res := tx.Where("id = ?", i.KernelID).Limit(1).Find(&krow)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil // 存在性校验已在调用方跳过该行，此处 unreachable 兜底
+	}
+	return kernel.Normalize(krow.KernelType, &vin)
+}
+
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
 	invalidShareModes := 0
+	// R5X-016：入站段返回实落计数（被跳过行不计入，与 SkippedRows
+	// 不重复计数）；R5X-024 的校验跳过同样不计。
+	inboundsImported := 0
+	invalidInboundObjects := 0
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -277,6 +343,14 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if strategy == "" {
 			strategy = "auto"
 		}
+		// R5X-024：四整对象落库前跑 Normalize 等价校验（校验副本，
+		// 见 validateImportedInboundObjects）——坏行整行跳过 + 计数，
+		// 汇总 warning 在入站循环后统一发（同 ShareHost 披露口径）。
+		if err := validateImportedInboundObjects(tx, i, listen, strategy); err != nil {
+			rep.skip("inbounds")
+			invalidInboundObjects++
+			continue
+		}
 		shareHost, ok := sanitizeBackupShareHost(i.ShareHost)
 		if !ok {
 			invalidShareHosts++
@@ -309,6 +383,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
 			return 0, err
 		}
+		inboundsImported++
+	}
+	if invalidInboundObjects > 0 {
+		rep.warnf("备份恢复：%d 条入站的 settings/transport/security/extra 未通过保存面同口径校验（Normalize），已整行跳过未恢复，请修正备份内容后重试", invalidInboundObjects)
 	}
 
 	// R2X-015：入站附属引用后置校验。出站目标可能是同批入站列表的
@@ -494,7 +572,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			return 0, err
 		}
 	}
-	return len(b.Inbounds), nil
+	return inboundsImported, nil
 }
 
 // validateImportedInboundRefsTx 是 R2X-015 的入站后置校验：只处理

@@ -15,8 +15,13 @@ import path from "node:path";
 
 const dir = path.resolve(process.argv[2] || "dist-demo");
 const BASE = "/flmx-max/demo/";
-const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "monitor", "limit", "user", "group", "panel-sharing", "config", "profile"];
-const USER_PAGES = ["dashboard", "my-subscription", "forward", "profile"];
+// R5X-008: admins have no standalone monitor page since the DA-1 IA
+// merge — /monitor redirects them to /node — so "monitor" is not an
+// admin walk page. The user walk covers it instead: the demo user book
+// is a monitoring-authorized one (monitor/access allowed:true), which
+// is the only role that still renders MonitorOverview at /monitor.
+const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "limit", "user", "group", "panel-sharing", "config", "profile"];
+const USER_PAGES = ["dashboard", "my-subscription", "forward", "monitor", "profile"];
 const SETTLE_MS = 2500;
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".webmanifest": "application/manifest+json", ".woff2": "font/woff2" };
@@ -111,8 +116,10 @@ async function visit(role, route) {
 // control is itself a failure — the blind spot stays in CI's view.
 const INTERACTIONS = {
   // Switching to the tunnel tab mounts the tunnel monitor, which pulls
-  // per-tunnel quality history (and metrics on detail open).
-  "admin monitor": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.trim() === "隧道"); if (!b) return false; b.click(); return true; })()`,
+  // per-tunnel quality history (and metrics on detail open). Since the
+  // DA-1 IA merge this lives on the user walk (R5X-008): admins are
+  // redirected away from /monitor, the authorized demo user is not.
+  "user monitor": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.trim() === "隧道"); if (!b) return false; b.click(); return true; })()`,
   // Expanding a subscription's traffic section mounts SubTrafficStats,
   // which pulls user/subscription/traffic.
   "user my-subscription": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.includes("该订阅流量统计")); if (!b) return false; b.click(); return true; })()`,
