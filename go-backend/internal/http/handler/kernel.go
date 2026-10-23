@@ -762,6 +762,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// Managed relay 重算物化 RemoteAddr。
 	var prevPort int
 	var prevListen string
+	// prevMetering/prevMeteringBlock snapshot the stored metering
+	// switch and its shape eligibility before this save mutates the
+	// row (F1 gate below).
+	var prevMetering int
+	var prevMeteringBlock string
 	if update {
 		existing, err := h.repo.GetNodeInbound(req.ID)
 		if err != nil || existing == nil {
@@ -820,6 +825,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 		if !present["splitRules"] {
 			req.SplitRules = rowSplitRules(row)
+		}
+		prevMetering = row.MeteringEnabled
+		if prevMetering == 1 {
+			prevMeteringBlock = ssMeteringShapeBlock(&row)
 		}
 		// GATE-F2（R3X-012 整对象限定）：载荷整对象省略 settings /
 		// transport / security / extra 时整对象保留旧值。结构体解码无法
@@ -1032,20 +1041,42 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	if req.Enabled != nil {
 		row.Enabled = boolToInt(*req.Enabled)
 	}
-	// SS 订阅计量开关：显式开启而入站不合资格（非 SS 2022 / ShadowTLS
-	// 前置）直接拒绝并说明；未显式开启时若入站变得不合资格（如改了
-	// 方法），静默关掉开关，伴生行由对账回收。合资格判定用已定稿的
-	// 内核形态 in（与落库内容一致）。
+	// SS 订阅计量开关（F1：资格口径与对账统一收口）：协议资格
+	// （ssMeteringEligible）维持旧口径——显式开启不合格直接拒绝，
+	// 未显式开启时入站变得不合格（如改方法）静默关开关、伴生由对账
+	// 回收。形态资格（ssMeteringShapeBlock：仅中转/PROXY/链式出口/
+	// 分流）是本轮新增的硬闸：显式开启落在被排除形态上同样拒绝；
+	// 已开启的入站被本次保存改成被排除形态也拒绝（提示先关计量），
+	// 否则开关存着、伴生永不物化，计量静默失效（B-01/C-01/A-01）；
+	// 存量已是被排除形态的（本闸上线前落库）静默关开关自愈。判定
+	// 用已定稿的内核形态 in 与落库行 row（与对账读到的形态一致）。
 	if req.MeteringEnabled != nil {
 		row.MeteringEnabled = boolToInt(*req.MeteringEnabled)
 	}
+	explicitMetering := req.MeteringEnabled != nil && *req.MeteringEnabled
 	if row.MeteringEnabled == 1 && !ssMeteringEligible(in) {
-		if req.MeteringEnabled != nil && *req.MeteringEnabled {
+		if explicitMetering {
 			releasePortAlloc()
 			response.WriteJSON(w, response.ErrDefault("仅 Shadowsocks 2022（非 ShadowTLS 前置）的自建入站支持订阅计量"))
 			return
 		}
 		row.MeteringEnabled = 0
+	}
+	if row.MeteringEnabled == 1 {
+		if block := ssMeteringShapeBlock(&row); block != "" {
+			switch {
+			case explicitMetering:
+				releasePortAlloc()
+				response.WriteJSON(w, response.ErrDefault(block))
+				return
+			case update && prevMetering == 1 && prevMeteringBlock == "":
+				releasePortAlloc()
+				response.WriteJSON(w, response.ErrDefault("该入站已开启订阅计量：" + block + "，请先关闭订阅计量"))
+				return
+			default:
+				row.MeteringEnabled = 0
+			}
+		}
 	}
 	row.UpdatedTime = now
 

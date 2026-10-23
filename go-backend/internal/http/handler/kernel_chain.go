@@ -533,11 +533,21 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// F1：已开启订阅计量的入站不能经分流面获得链式出口/分流（伴生不
+	// 继承这两者，落库即静默改道计量流量）；清空它们则放行，下方对
+	// 账会立即回收/物化伴生（B-08）。
+	if row.MeteringEnabled == 1 && (row.OutboundID != 0 || strings.TrimSpace(row.SplitRules) != "") {
+		response.WriteJSON(w, response.ErrDefault("该入站已开启订阅计量，不能设置链式出口或分流，请先关闭订阅计量"))
+		return
+	}
 	row.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveNodeInbound(row); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// 路由形态变化直接决定计量资格（ssMeteringWanted），与 inboundSave
+	// 同口径保存后立即对账，不等订阅同步周期（B-08）。
+	h.reconcileSSMetering()
 	var warnings []string
 	if err := h.applyKernel(k.ID, false); err != nil {
 		warnings = append(warnings, "下发到节点失败: "+err.Error())
