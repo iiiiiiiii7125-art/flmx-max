@@ -152,11 +152,14 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 		assignments = []repo.UserInboundAssignment{}
 	}
 	now := time.Now()
+	// One F4 gate memo for the whole request (Y-01), as in the admin
+	// subscription list.
+	gateMemo := &companionGateMemo{}
 	items := make([]userSubscriptionMineView, 0, len(subs))
 	for i := range subs {
 		var s *model.Subscription = &subs[i]
 		// 复用 subscriptionView 保证 path 与 nodeCount（中转过滤后）口径一致。
-		v := h.subscriptionViewForAssignments(s, rows, now, mineReq.Format, assignments)
+		v := h.subscriptionViewForAssignmentsMemo(s, rows, now, mineReq.Format, assignments, gateMemo)
 		items = append(items, userSubscriptionMineView{
 			ID: v.ID, Name: v.Name, Path: v.Path, NodeCount: v.NodeCount,
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,

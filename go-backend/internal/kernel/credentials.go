@@ -4,7 +4,9 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -205,6 +207,25 @@ func ValidSS2022SingleKey(method, password string) bool {
 		return false
 	}
 	return decodeSS2022Segment(pw, n)
+}
+
+// SSUserPSK derives a share subscription's Shadowsocks 2022 user PSK
+// (uPSK) from its subscription password. The derivation is deterministic
+// and storage-free: kernel configs, subscription rendering and client
+// links all compute the same value from the same inputs, and rotating
+// the subscription password rotates the uPSK with it. It is
+// domain-separated per subscription and method and truncated to the
+// method's key length, so the result is a well-formed 2022 PSK. A uPSK
+// alone is not a usable credential — clients present it combined with
+// the companion inbound's identity PSK (see ForUser).
+func SSUserPSK(subPassword string, subID int64, method string) string {
+	n := SS2022KeyLen(method)
+	if n == 0 || subPassword == "" || subID <= 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(subPassword))
+	fmt.Fprintf(mac, "flmx-ss-upsk|%d|%s", subID, method)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil)[:n])
 }
 
 // RealityKeyPair returns an X25519 key pair in the raw-URL base64 form used by

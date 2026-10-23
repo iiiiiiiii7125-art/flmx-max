@@ -31,11 +31,37 @@ func (in Inbound) SupportsUsers() bool {
 	return false
 }
 
+// UserCapable reports whether this inbound actually carries per-user
+// credentials in a kernel config: natively user-capable protocols, plus
+// SS companion inbounds (Shadowsocks 2022 multi-user). The capability is
+// gated per inbound, never per protocol — flipping it for Shadowsocks
+// itself would switch every existing SS inbound to multi-user mode in
+// place and break its already-distributed links; the origin inbound
+// therefore stays shared and only its derived companion is capable.
+func (in Inbound) UserCapable() bool {
+	if in.SupportsUsers() {
+		return true
+	}
+	return in.Companion && in.Protocol == ProtocolShadowsocks
+}
+
 // ForUser returns the inbound as the given user connects to it: the same
 // server with the user's credentials. Inbounds without user support are
 // returned unchanged (shared credentials).
 func (in Inbound) ForUser(u User) Inbound {
 	if !in.SupportsUsers() {
+		// SS companion inbound: the client password is the combined
+		// iPSK:uPSK (the inbound's own password is the identity PSK,
+		// the user's derived PSK identifies the subscription). No other
+		// SS inbound reaches this branch — origins stay shared.
+		if in.UserCapable() {
+			if psk := SSUserPSK(u.Password, u.ID, in.Settings.Method); psk != "" {
+				out := in
+				out.Users = nil
+				out.Settings.Password = in.Settings.Password + ":" + psk
+				return out
+			}
+		}
 		return in
 	}
 	out := in
@@ -57,7 +83,7 @@ func (in Inbound) ForUser(u User) Inbound {
 
 // xrayUserClients returns the extra Xray clients for the inbound's users.
 func xrayUserClients(in Inbound) []interface{} {
-	if !in.SupportsUsers() {
+	if !in.UserCapable() {
 		return nil
 	}
 	out := make([]interface{}, 0, len(in.Users))
@@ -73,6 +99,15 @@ func xrayUserClients(in Inbound) []interface{} {
 			c = obj{"id": u.UUID}
 		case ProtocolTrojan:
 			c = obj{"password": u.Password}
+		case ProtocolShadowsocks:
+			// SS2022 multi-user (companion inbounds only): the client
+			// password is the user's derived PSK; email carries the
+			// identity the per-user routing rules match on.
+			psk := SSUserPSK(u.Password, u.ID, in.Settings.Method)
+			if psk == "" {
+				continue
+			}
+			c = obj{"password": psk}
 		default:
 			continue
 		}
@@ -84,7 +119,7 @@ func xrayUserClients(in Inbound) []interface{} {
 
 // singboxUsers returns the extra sing-box users for the inbound's users.
 func singboxUsers(in Inbound) []interface{} {
-	if !in.SupportsUsers() {
+	if !in.UserCapable() {
 		return nil
 	}
 	out := make([]interface{}, 0, len(in.Users))
@@ -100,6 +135,15 @@ func singboxUsers(in Inbound) []interface{} {
 			item = obj{"uuid": u.UUID, "alterId": 0}
 		case ProtocolTrojan, ProtocolHysteria2, ProtocolAnyTLS:
 			item = obj{"password": u.Password}
+		case ProtocolShadowsocks:
+			// SS2022 multi-user (companion inbounds only): the user
+			// password is the subscription's derived PSK; the name
+			// below carries the identity auth_user rules match on.
+			psk := SSUserPSK(u.Password, u.ID, in.Settings.Method)
+			if psk == "" {
+				continue
+			}
+			item = obj{"password": psk}
 		case ProtocolTUIC:
 			item = obj{"uuid": u.UUID, "password": u.Password}
 		case ProtocolNaive:
@@ -146,7 +190,7 @@ func markedUsers(inbounds []Inbound) []int64 {
 	seen := map[int64]bool{}
 	var ids []int64
 	for _, in := range inbounds {
-		if !in.SupportsUsers() {
+		if !in.UserCapable() {
 			continue
 		}
 		for _, u := range in.Users {

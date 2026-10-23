@@ -406,6 +406,17 @@ func kernelUser(s *model.Subscription) kernel.User {
 
 // subInboundIDs resolves the subscription's sources against the inbounds.
 func subInboundIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
+	// Companion inbounds are never subscription sources: every caller
+	// of this choke point (user mounts, endpoint building, push sets,
+	// list views) speaks about origins only. Metering retargeting
+	// happens later, at endpoint construction.
+	filtered := make([]model.NodeInbound, 0, len(rows))
+	for _, r := range rows {
+		if r.CompanionOf == 0 {
+			filtered = append(filtered, r)
+		}
+	}
+	rows = filtered
 	if s.SourceAll == 1 {
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
@@ -448,8 +459,40 @@ func subExplicitIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 }
 
 // activeUsersByInbound maps inbound ids to the share subscriptions whose
-// credentials the kernels must currently accept.
+// credentials the kernels must currently accept. SS origins with a
+// metering companion are remapped to the companion's id: the origin
+// stays shared (it would ignore the users anyway) and the companion
+// carries them as SS2022 multi-user clients.
 func (h *Handler) activeUsersByInbound(now time.Time) map[int64][]kernel.User {
+	out := h.rawActiveUsersByInbound(now)
+	if len(out) == 0 {
+		return out
+	}
+	comps, err := h.repo.ListCompanionInbounds()
+	if err != nil || len(comps) == 0 {
+		return out
+	}
+	compByOrigin := make(map[int64]int64, len(comps))
+	for _, c := range comps {
+		if _, ok := compByOrigin[c.CompanionOf]; !ok {
+			compByOrigin[c.CompanionOf] = c.ID
+		}
+	}
+	for originID, users := range out {
+		compID, ok := compByOrigin[originID]
+		if !ok || compID == originID {
+			continue
+		}
+		out[compID] = append(out[compID], users...)
+		delete(out, originID)
+	}
+	return out
+}
+
+// rawActiveUsersByInbound is activeUsersByInbound before the SS
+// companion remap: users are keyed by the inbound the subscription
+// sources (the origin). Metering reconcile reads demand from this form.
+func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User {
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
 		log.Printf("subscription lookup failed: %v", err)
@@ -497,6 +540,9 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 func (h *Handler) syncSubscriptions(now time.Time) {
 	subSyncMu.Lock()
 	defer subSyncMu.Unlock()
+	// SS 计量伴生对账（节流）：物化/回收/同步伴生入站，使其与原入站
+	// 开关和活跃分享订阅需求一致。失败只记日志，下轮重试。
+	h.maybeReconcileSSMetering()
 	// B4/F-058: 先重试未完成的订阅删除（墓碑）。下发成功才硬删行+分配；
 	// 失败留待下一轮。与下方凭据轮换/状态同步的 AppliedActive 机制相互
 	// 独立，本块不读写 AppliedActive。
@@ -566,24 +612,64 @@ func (h *Handler) runSubscriptionLoop(ctx context.Context) {
 // selected inbounds and their relays, with the share credentials where
 // the protocol allows.
 func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) []kernel.Endpoint {
+	return h.subEndpointsMemo(s, rows, nil)
+}
+
+// subEndpointsMemo is subEndpoints with an F4 gate memo (Y-01): the
+// caller passes the memo of the enclosing view build / request so the
+// companion map — and with it the per-kernel payload rebuilds behind
+// the applied gate — is evaluated once, not once per consultation.
+func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) []kernel.Endpoint {
 	want := map[int64]bool{}
 	for _, id := range subInboundIDs(s, rows) {
 		want[id] = true
 	}
 	selected := make([]model.NodeInbound, 0, len(want))
 	for _, row := range rows {
-		if want[row.ID] {
+		// Companion inbounds are never subscription sources: they only
+		// serve origins through the retargeting below.
+		if want[row.ID] && row.CompanionOf == 0 {
 			selected = append(selected, row)
 		}
 	}
 	endpoints, _ := h.inboundEndpoints(selected)
 	if isShare(s) {
 		ku := kernelUser(s)
+		companions := h.companionsByOrigin(memo)
+		kept := endpoints[:0]
 		for i := range endpoints {
-			if endpoints[i].Proxy == nil {
-				endpoints[i].Inbound = endpoints[i].Inbound.ForUser(ku)
+			e := endpoints[i]
+			// SS metering: retarget direct SS endpoints whose origin
+			// has a live companion to the companion (its port and
+			// identity PSK); ForUser below then stamps the combined
+			// iPSK:uPSK password. Relay endpoints keep pointing at
+			// the origin — the relay forwards land on the origin's
+			// port, with the shared password, as before.
+			if len(companions) > 0 && e.Direct && e.Proxy == nil && e.RelayID == 0 &&
+				e.Inbound.Protocol == kernel.ProtocolShadowsocks {
+				if comp, ok := companions[e.Inbound.ID]; ok {
+					e.CompanionOf = e.Inbound.ID
+					e.Inbound = comp
+					e.Port = comp.Port
+				}
 			}
+			if e.Proxy == nil {
+				e.Inbound = e.Inbound.ForUser(ku)
+			}
+			// F5 (C-03): fail closed when the per-subscription
+			// credential cannot be derived for a companion endpoint
+			// (ForUser leaves the bare identity PSK in place — no ':'
+			// separator; SS2022 PSKs are base64 and never contain
+			// one). The bare iPSK is a working single-user credential
+			// and must never be served; the render side likewise
+			// skips underivable users.
+			if e.CompanionOf > 0 && !strings.Contains(e.Inbound.Settings.Password, ":") {
+				log.Printf("subscription %d: drop companion endpoint of inbound %d: per-subscription credential underivable", s.ID, e.Inbound.ID)
+				continue
+			}
+			kept = append(kept, e)
 		}
+		endpoints = kept
 	}
 	// 1.0.12: 中转范围过滤（Options.relayIds）。空 = 不过滤，保持旧行为。
 	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
@@ -624,8 +710,17 @@ func filterEndpointsByUserAssignments(endpoints []kernel.Endpoint, assignments [
 			if relayAllowed[e.RelayID] {
 				filtered = append(filtered, e)
 			}
-		} else if e.Direct && directAllowed[e.Inbound.ID] {
-			filtered = append(filtered, e)
+		} else if e.Direct {
+			// Assignments are written against the origin inbound; an
+			// SS endpoint retargeted to its metering companion still
+			// answers to the origin's id.
+			id := e.Inbound.ID
+			if e.CompanionOf > 0 {
+				id = e.CompanionOf
+			}
+			if directAllowed[id] {
+				filtered = append(filtered, e)
+			}
 		}
 	}
 	return filtered
@@ -723,7 +818,15 @@ func nodeCountFormat(format string) string {
 }
 
 func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string) subscriptionView {
-	return h.subscriptionViewForAssignments(s, rows, now, format, nil)
+	return h.subscriptionViewMemo(s, rows, now, format, nil)
+}
+
+// subscriptionViewMemo is subscriptionView with an F4 gate memo
+// (Y-01): list handlers pass one memo for the whole request so the
+// applied gate is evaluated once per kernel across all views in the
+// response, instead of twice per view.
+func (h *Handler) subscriptionViewMemo(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, memo *companionGateMemo) subscriptionView {
+	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, nil, memo)
 }
 
 // subscriptionViewForAssignments 在 subscriptionView 基础上按用户入站
@@ -732,6 +835,13 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 // 端点，使「我的订阅」显示数与该用户经 ?user=&sig= 个性化链接实际
 // 拉到的节点数恒等。空集 = 该用户个性化链接拉到 0 个节点。
 func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment) subscriptionView {
+	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, assignments, nil)
+}
+
+func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment, memo *companionGateMemo) subscriptionView {
+	if memo == nil {
+		memo = &companionGateMemo{}
+	}
 	if assignments != nil {
 		rows = filterInboundRowsByUserAssignments(rows, assignments)
 	}
@@ -742,10 +852,17 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	}
 	shared := []int64{}
 	if isShare(s) {
+		companions := h.companionsByOrigin(memo)
 		for _, id := range ids {
 			row := byID[id]
 			if isExternalInbound(&row) {
 				shared = append(shared, id)
+			} else if _, metered := companions[id]; metered {
+				// SS origin with a live metering companion: new pulls
+				// carry per-subscription credentials and are counted,
+				// so the inbound no longer counts as shared for this
+				// subscription.
+				continue
 			} else if in, err := inboundFromModel(row); err == nil && !in.SupportsUsers() {
 				shared = append(shared, id)
 			}
@@ -770,7 +887,7 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	if format == kernel.FormatSingbox {
 		countOpts.SingboxSnell = true
 	}
-	endpoints := h.subEndpoints(s, rows)
+	endpoints := h.subEndpointsMemo(s, rows, memo)
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
@@ -814,9 +931,12 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r.Body, &listReq)
 	now := time.Now()
+	// One F4 gate memo for the whole list request (Y-01): the applied
+	// gate is evaluated once per kernel across all views rendered here.
+	gateMemo := &companionGateMemo{}
 	items := make([]subscriptionView, 0, len(subs))
 	for i := range subs {
-		items = append(items, h.subscriptionView(&subs[i], rows, now, listReq.Format))
+		items = append(items, h.subscriptionViewMemo(&subs[i], rows, now, listReq.Format, gateMemo))
 	}
 	// 回填默认订阅标记（个人订阅链接的载体 = 排序第一条）。DefaultSubscription
 	// 在无订阅时会新建一条，与上方空列表分支的既有行为一致；此处失败不阻断
@@ -872,9 +992,16 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 	if err := req.Options.normalize(); err != nil {
 		return nil, err
 	}
+	// Companion inbounds are never subscription sources (the same
+	// choke point subInboundIDs enforces at read time): exclude them
+	// here so a crafted save cannot store an id every reader would
+	// then silently drop (B-06; the assignment surface refuses them
+	// outright).
 	known := make(map[int64]bool, len(rows))
 	for _, r := range rows {
-		known[r.ID] = true
+		if r.CompanionOf == 0 {
+			known[r.ID] = true
+		}
 	}
 	var ids []int64
 	for _, id := range req.InboundIDs {

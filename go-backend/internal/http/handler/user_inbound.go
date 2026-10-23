@@ -166,6 +166,13 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// 计量伴生入站不可分配：分配只认原入站，端点改指在拉取时完成。
+	for _, id := range inboundIDsToCheck {
+		if row, err := h.repo.GetNodeInbound(id); err == nil && row != nil && row.CompanionOf > 0 {
+			response.WriteJSON(w, response.ErrDefault("计量伴生入站不能分配给用户"))
+			return
+		}
+	}
 	var assignments []repo.UserInboundAssignment
 	skippedRelays := 0
 	if len(raw.Assignments) > 0 {

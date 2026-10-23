@@ -155,6 +155,9 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		if target == nil {
 			return fmt.Errorf("%s所选的节点不存在", what)
 		}
+		if target.CompanionOf > 0 {
+			return fmt.Errorf("%s不能选择计量伴生入站", what)
+		}
 		if row.ID != 0 && h.chainReaches(target, row.ID) {
 			return fmt.Errorf("%s形成了循环，请检查链路", what)
 		}
@@ -505,6 +508,10 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
 		return
 	}
+	if row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能编辑分流"))
+		return
+	}
 	k, err := h.repo.GetNodeKernel(row.KernelID)
 	if err != nil || k == nil {
 		response.WriteJSON(w, response.ErrDefault("内核不存在"))
@@ -533,11 +540,21 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// F1：已开启订阅计量的入站不能经分流面获得链式出口/分流（伴生不
+	// 继承这两者，落库即静默改道计量流量）；清空它们则放行，下方对
+	// 账会立即回收/物化伴生（B-08）。
+	if row.MeteringEnabled == 1 && (row.OutboundID != 0 || strings.TrimSpace(row.SplitRules) != "") {
+		response.WriteJSON(w, response.ErrDefault("该入站已开启订阅计量，不能设置链式出口或分流，请先关闭订阅计量"))
+		return
+	}
 	row.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveNodeInbound(row); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// 路由形态变化直接决定计量资格（ssMeteringWanted），与 inboundSave
+	// 同口径保存后立即对账，不等订阅同步周期（B-08）。
+	h.reconcileSSMetering()
 	var warnings []string
 	if err := h.applyKernel(k.ID, false); err != nil {
 		warnings = append(warnings, "下发到节点失败: "+err.Error())
