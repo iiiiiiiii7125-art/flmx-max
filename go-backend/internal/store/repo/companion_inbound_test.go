@@ -50,6 +50,40 @@ func TestCompanionPartialUniqueIndex(t *testing.T) {
 	}
 }
 
+// F7 (B-05): a port conflict caused by a metering companion must be
+// reported as such — the generic "other node service" label sends
+// users hunting for a service that does not appear in their lists
+// and that they cannot move or delete directly.
+func TestNodePortRangeOccupantNamesCompanion(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "occ.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	now := time.Now().UnixMilli()
+	createRow(t, r, &model.NodeInbound{ID: 76, KernelID: 1, NodeID: 7, Name: "plain", Protocol: "vless",
+		Port: 9100, CreatedTime: now, UpdatedTime: now})
+	createRow(t, r, &model.NodeInbound{ID: 77, KernelID: 1, NodeID: 7, Name: "comp", Protocol: "shadowsocks",
+		Port: 9200, CompanionOf: 5, CreatedTime: now, UpdatedTime: now})
+
+	occ, err := r.NodePortRangeOccupant(7, 9200, 9200, 0)
+	if err != nil || occ != "SS 计量伴生入站" {
+		t.Fatalf("companion occupant must be named, got %q (%v)", occ, err)
+	}
+	occ, err = r.NodePortRangeOccupant(7, 9100, 9100, 0)
+	if err != nil || occ != "其他节点服务" {
+		t.Fatalf("plain inbound occupant keeps the generic label, got %q (%v)", occ, err)
+	}
+	occ, err = r.NodePortRangeOccupant(7, 9300, 9300, 0)
+	if err != nil || occ != "" {
+		t.Fatalf("free range must report no occupant, got %q (%v)", occ, err)
+	}
+	occ, err = r.NodePortRangeOccupant(7, 9200, 9200, 77)
+	if err != nil || occ != "" {
+		t.Fatalf("excluding the companion itself must clear the report, got %q (%v)", occ, err)
+	}
+}
+
 // F6 (B-07): restoring a backup whose inbound id collides with an
 // existing companion row (cross-panel restore) must clear the row's
 // companion marker — restored rows are origins; a leftover marker
