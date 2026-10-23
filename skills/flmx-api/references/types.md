@@ -36,7 +36,7 @@ interface User {
   name?: string;          // Display name
   role_id: number;        // 0 = admin, 1 = regular
   status: number;         // 1 = active, 0 = disabled
-  flow: number;           // Traffic quota in GB
+  flow: number;           // Traffic quota in GB, 0 = unlimited
   in_flow: number;        // Used upload in bytes
   out_flow: number;       // Used download in bytes
   exp_time: number;       // Expiry timestamp (ms), 0 = never
@@ -224,7 +224,7 @@ interface UserTunnel {
   user_id: number;
   tunnel_id: number;
   tunnel_name?: string;
-  flow: number;           // Quota for this tunnel in GB
+  flow: number;           // Quota for this tunnel in GB, 0 = unlimited
   in_flow: number;
   out_flow: number;
   exp_time: number;
