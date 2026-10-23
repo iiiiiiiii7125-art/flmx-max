@@ -206,12 +206,38 @@ CONTENT_KEYS = [
     ("admin", "node/traffic/month", "month-map"),
     ("admin", "subscription/traffic", "series"),
     ("user", "user/subscription/traffic", "series"),
+    # R8X-006: kernel/versions xray/singbox cells must be a successful
+    # version list, never a recorded failure response (the 1.4.4
+    # re-record froze a transient GitHub 403 into both cells).
+    ("admin", "kernel/versions", "version-list"),
 ]
+VERSION_LIST_TYPES = {"xray", "singbox"}
 content_violations = []
 for book, path_, kind in CONTENT_KEYS:
     entries = (fixtures.get(book) or {}).get(path_)
     if not entries:
         content_violations.append(f"{book} {path_}: key missing or no recordings")
+        continue
+    if kind == "version-list":
+        seen = set()
+        for i, e in enumerate(entries):
+            try:
+                kernel_type = json.loads(e.get("key") or "{}").get("kernelType", "")
+            except Exception:
+                kernel_type = ""
+            if kernel_type not in VERSION_LIST_TYPES:
+                continue
+            seen.add(kernel_type)
+            res = e.get("res") or {}
+            data = res.get("data")
+            if res.get("code") != 0:
+                content_violations.append(f"{book} {path_} recording #{i} (kernelType={kernel_type}): res.code={res.get('code')} is a recorded failure response (msg={res.get('msg', '')!r}), not a version list")
+            elif not isinstance(data, list) or len(data) < 1:
+                content_violations.append(f"{book} {path_} recording #{i} (kernelType={kernel_type}): data is not a non-empty version list")
+            elif any(not isinstance(v, dict) or not str(v.get("version") or "") for v in data):
+                content_violations.append(f"{book} {path_} recording #{i} (kernelType={kernel_type}): a version entry has no non-empty version string")
+        for t in sorted(VERSION_LIST_TYPES - seen):
+            content_violations.append(f"{book} {path_}: no recording for kernelType={t}")
         continue
     for i, e in enumerate(entries):
         data = (e.get("res") or {}).get("data")
