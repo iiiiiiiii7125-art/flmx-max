@@ -639,6 +639,11 @@ type InboundBackup struct {
 	OutboundID          int64  `json:"outboundId,omitempty"`
 	SplitRules          string `json:"splitRules,omitempty"`
 	OutboundIPStrategy  string `json:"outboundIpStrategy,omitempty"`
+	// MeteringEnabled is the origin inbound's SS subscription-metering
+	// switch. Companion rows themselves are derived state and are never
+	// exported (restore re-materializes them via reconcile), so there is
+	// deliberately no companion marker here.
+	MeteringEnabled int `json:"meteringEnabled,omitempty"`
 }
 
 type RemoteSourceBackup struct {

@@ -390,6 +390,18 @@ export function InboundFormModal({
   const selectedNode = nodeOptions.find((n) => String(n.id) === form.nodeId);
   const shareV4 = nodeFamilyIP(selectedNode, false);
   const shareV6 = nodeFamilyIP(selectedNode, true);
+  // SS 订阅计量形态闸（与后端 ssMeteringShapeBlock 同口径）：伴生入站
+  // 不继承链式出口/分流，仅中转与 PROXY 协议入站也没有可改指的直连
+  // 端点——这类形态下开关不可开启，已开启的保存时后端会拒绝并提示。
+  const meteringShapeReason = form.acceptProxyProtocol
+    ? "开启 PROXY 协议的入站"
+    : form.relayOnly
+      ? "仅中转入站"
+      : form.outboundId
+        ? "带链式出口的入站"
+        : form.splitRules.length > 0
+          ? "已配置分流的入站"
+          : "";
 
   return (
     <Modal
@@ -1110,6 +1122,36 @@ export function InboundFormModal({
                       value={form.outboundIpStrategy}
                       onChange={(value) => set("outboundIpStrategy", value)}
                     />
+                    {form.protocol === "shadowsocks" &&
+                      form.method.startsWith("2022-") &&
+                      form.securityType !== "shadowtls" && (
+                        <div className="space-y-3 rounded-xl border border-divider p-3">
+                          <div className="flex items-start gap-2">
+                            <Switch
+                              isDisabled={
+                                meteringShapeReason !== "" &&
+                                !form.meteringEnabled
+                              }
+                              isSelected={form.meteringEnabled}
+                              size="sm"
+                              onValueChange={(v) => set("meteringEnabled", v)}
+                            />
+                            <div>
+                              <p className="text-sm">按订阅计量流量</p>
+                              <p className="text-xs text-default-500">
+                                {meteringShapeReason
+                                  ? form.meteringEnabled
+                                    ? `${meteringShapeReason}不支持订阅计量；当前已开启，保存前请先关闭计量或调整入站形态。`
+                                    : `${meteringShapeReason}不支持订阅计量。`
+                                  : "开启后为分享订阅生成独立凭据并计量；已有链接继续可用但不计量。"}
+                                {form.meteringActive
+                                  ? "当前计量中：订阅新拉取的节点走独立凭据。"
+                                  : ""}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     <div className="space-y-3 rounded-xl border border-divider p-3">
                       <p className="text-sm font-medium">中转相关</p>
                       <div className="flex items-start gap-2">

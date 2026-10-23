@@ -33,6 +33,11 @@ type Endpoint struct {
 	SourceID int64
 	// RelayID identifies which relay this endpoint belongs to (0 = direct).
 	RelayID int64
+	// CompanionOf is set when a share subscription's direct SS endpoint
+	// was retargeted to a metering companion inbound: Inbound then holds
+	// the companion, and CompanionOf keeps the origin inbound's id (the
+	// id assignments and filters are written against).
+	CompanionOf int64
 }
 
 // hopRange is the port-hopping range clients may use for this endpoint.

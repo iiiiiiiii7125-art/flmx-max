@@ -251,6 +251,30 @@ func (r *Repository) GetNodeInbound(id int64) (*model.NodeInbound, error) {
 	return &in, err
 }
 
+// GetCompanionInbound returns the SS metering companion row derived
+// from the given origin inbound, or (nil, nil) when none exists.
+func (r *Repository) GetCompanionInbound(originID int64) (*model.NodeInbound, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var in model.NodeInbound
+	err := r.db.Where("companion_of = ?", originID).Order("id ASC").First(&in).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &in, err
+}
+
+// ListCompanionInbounds returns every SS metering companion row
+// (companion_of > 0), ordered by origin then id.
+func (r *Repository) ListCompanionInbounds() ([]model.NodeInbound, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []model.NodeInbound
+	return rows, r.db.Where("companion_of > 0").Order("companion_of ASC, id ASC").Find(&rows).Error
+}
+
 func (r *Repository) CreateNodeInbound(in *model.NodeInbound) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -304,13 +328,22 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"accept_proxy_protocol": in.AcceptProxyProtocol,
 		"relay_whitelist":       in.RelayWhitelist,
 		"whitelist_extra":       in.WhitelistExtra,
-		"enabled":               in.Enabled,
-		"outbound_id":           in.OutboundID,
-		"split_rules":           in.SplitRules,
+		// F8: syncCompanion mirrors the origin's inx onto companions;
+		// without the column here that assignment would be silently
+		// dropped (same BUG-A2-1 lesson). Every other caller loads the
+		// row first, so this writes back the stored value unchanged.
+		"inx":         in.Inx,
+		"enabled":     in.Enabled,
+		"outbound_id": in.OutboundID,
+		"split_rules": in.SplitRules,
 		// BUG-A2-1: 此列曾漏在白名单外——inboundSave 与 inboundSplitSave
 		// 都赋值 row.OutboundIPStrategy，落库时被静默丢弃，编辑策略永不生效。
 		"outbound_ip_strategy": in.OutboundIPStrategy,
-		"updated_time":         in.UpdatedTime,
+		// SS 计量伴生标记与开关（伴生行由 reconcile 维护，原入站开关由
+		// inboundSave 写；同 BUG-A2-1 教训，赋值必须与白名单同步）。
+		"companion_of":     in.CompanionOf,
+		"metering_enabled": in.MeteringEnabled,
+		"updated_time":     in.UpdatedTime,
 	}).Error
 }
 
@@ -391,6 +424,20 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 		return "", err
 	}
 	if count > 0 {
+		// F7 (B-05): name a metering companion when one occupies the
+		// range — it appears in no user-facing list and cannot be
+		// moved or deleted directly, so the generic label would send
+		// the user hunting for a service that does not exist for
+		// them. The port frees up by disabling subscription metering
+		// on the origin inbound.
+		cq := r.db.Model(&model.NodeInbound{}).Where("node_id = ? AND port BETWEEN ? AND ? AND companion_of > 0", nodeID, lo, hi)
+		if excludeInboundID > 0 {
+			cq = cq.Where("id <> ?", excludeInboundID)
+		}
+		var compCount int64
+		if err := cq.Count(&compCount).Error; err == nil && compCount > 0 {
+			return "SS 计量伴生入站", nil
+		}
 		return "其他节点服务", nil
 	}
 	if err := r.db.Model(&model.ForwardPort{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi).Count(&count).Error; err != nil {

@@ -932,6 +932,10 @@ export interface InboundApiItem {
     | "ipv6_only"
     | "prefer_ipv4"
     | "prefer_ipv6";
+  /** SS subscription metering switch (SS2022 self-built inbounds). */
+  meteringEnabled: boolean;
+  /** A metering companion inbound currently exists for this origin. */
+  meteringActive: boolean;
 }
 
 export interface InboundMutationPayload {
@@ -962,6 +966,8 @@ export interface InboundMutationPayload {
     | "prefer_ipv4"
     | "prefer_ipv6";
   enabled?: boolean;
+  /** SS subscription metering switch; omitted keeps the stored value. */
+  meteringEnabled?: boolean;
 }
 
 export interface InboundShareEntry {

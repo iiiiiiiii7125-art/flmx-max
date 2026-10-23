@@ -75,11 +75,16 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		})
 	}
 
+	// SS 计量伴生行是派生态，不进备份：恢复后由 reconcile 按原入站的
+	// metering_enabled 重新物化（其计数基线同理不带，恢复后首样本只立
+	// 基线，与基线丢失的既有口径一致）。
 	var inbounds []model.NodeInbound
-	if err := r.db.Order("id ASC").Find(&inbounds).Error; err != nil {
+	if err := r.db.Where("companion_of = ?", 0).Order("id ASC").Find(&inbounds).Error; err != nil {
 		return nil, err
 	}
+	exportedInbound := make(map[int64]bool, len(inbounds))
 	for _, i := range inbounds {
+		exportedInbound[i.ID] = true
 		out.Inbounds = append(out.Inbounds, model.InboundBackup{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: i.Listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
@@ -88,7 +93,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, SourceID: i.SourceID, OutboundID: i.OutboundID, SplitRules: i.SplitRules,
-			OutboundIPStrategy: i.OutboundIPStrategy,
+			OutboundIPStrategy: i.OutboundIPStrategy, MeteringEnabled: i.MeteringEnabled,
 		})
 	}
 
@@ -108,6 +113,9 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 		return nil, err
 	}
 	for _, c := range counters {
+		if !exportedInbound[c.InboundID] {
+			continue // 伴生入站的计数基线随其行一同排除（见上方）
+		}
 		out.Counters = append(out.Counters, model.InboundCounterBackup{
 			InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
 			Epoch: c.Epoch, Bytes: c.Bytes,
@@ -367,7 +375,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
-			SplitRules: i.SplitRules, OutboundIPStrategy: strategy,
+			SplitRules: i.SplitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -376,11 +384,23 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				"settings", "extra", "share_host", "share_address_mode", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
 				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
+				"metering_enabled", "companion_of",
 			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}
 		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
+			return 0, err
+		}
+		// F6 (B-07): restored rows are always origins — backups never
+		// carry companions (they are derived state). Without the
+		// explicit write-back, a restored row whose id collides with
+		// an existing companion row (cross-panel restore) would keep
+		// the squatter's companion_of marker: hidden from lists and
+		// exposed to another origin's reconcile lifecycle. The
+		// item's CompanionOf is intentionally always 0; the zero-value
+		// write-back mirrors the enabled handling above.
+		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "companion_of", 0); err != nil {
 			return 0, err
 		}
 		inboundsImported++
@@ -575,11 +595,46 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	return inboundsImported, nil
 }
 
+// inboundChainTargetUsableTx reports whether id names a row that may
+// serve as a chained-exit / split target for a restored inbound: the
+// row must exist and must not be a metering companion. The save
+// surface refuses companions as targets outright (validateChain —
+// chain assembly dials the target row itself, and a companion's bare
+// identity PSK is rejected in multi-user mode; a later companion
+// recycle would also leave the reference dangling and fail the whole
+// kernel payload build), so for restored references a companion
+// counts as missing (X-02).
+func inboundChainTargetUsableTx(tx *gorm.DB, id int64) (bool, error) {
+	if id <= 0 {
+		return false, nil
+	}
+	var n int64
+	if err := tx.Model(&model.NodeInbound{}).Where("id = ? AND companion_of = ?", id, 0).Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// meteringShapeBlockedBackup mirrors the save surface's metering
+// shape gate (handler ssMeteringShapeBlock) over the four restored
+// fields: an origin serving through the PROXY protocol, relay-only,
+// a chained exit or split rules can never be metered — a companion
+// does not inherit that routing, so materializing one would silently
+// reroute (or never happen). The repo layer cannot import the
+// handler's predicate, so the condition is restated here over the
+// model row; the two must be kept in agreement, with the save
+// surface remaining the authority for the human-readable reasons.
+func meteringShapeBlockedBackup(acceptProxyProtocol, relayOnly int, outboundID int64, splitRules string) bool {
+	return acceptProxyProtocol == 1 || relayOnly == 1 || outboundID != 0 ||
+		strings.TrimSpace(splitRules) != ""
+}
+
 // validateImportedInboundRefsTx 是 R2X-015 的入站后置校验：只处理
 // 本轮备份清单内的入站行（被 kernel/node 身份校验跳过的行在库中不
 // 存在，自动略过；备份外存量行不动）。剥离计数合并为一条 warning。
 func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep *importReport) error {
 	srcStripped, outStripped, rulesStripped := 0, 0, 0
+	meteringStripped := 0
 	for _, ib := range rows {
 		var row model.NodeInbound
 		res := tx.Where("id = ?", ib.ID).Limit(1).Find(&row)
@@ -600,16 +655,22 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 				srcStripped++
 			}
 		}
+		// Effective routing shape after this pass: references stripped
+		// above no longer shape the row (a dangling chained exit
+		// pruned to direct must not condemn the metering switch).
+		effOutboundID := row.OutboundID
 		if row.OutboundID > 0 {
-			exists, err := rowExistsTx(tx, &model.NodeInbound{}, row.OutboundID)
+			usable, err := inboundChainTargetUsableTx(tx, row.OutboundID)
 			if err != nil {
 				return err
 			}
-			if !exists {
+			if !usable {
 				updates["outbound_id"] = 0
 				outStripped++
+				effOutboundID = 0
 			}
 		}
+		effSplitRules := row.SplitRules
 		if strings.TrimSpace(row.SplitRules) != "" {
 			pruned, removed, parsed, err := pruneDanglingSplitRulesTx(tx, row.SplitRules)
 			if err != nil {
@@ -619,7 +680,17 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 			if parsed && removed > 0 {
 				updates["split_rules"] = pruned
 				rulesStripped += removed
+				effSplitRules = pruned
 			}
+		}
+		// X-01 (G1)：恢复出的「计量开 + 形态被排除」行在保存面是被
+		// 拒绝/自愈关开关的组合（B-01 的静默不计量形态：开关显示
+		// 开、伴生永不物化、无任何提示）。导入面按最终落库形态判
+		// 定，同口径关开关并披露，而不是把静默失效原样恢复回来。
+		if row.MeteringEnabled == 1 &&
+			meteringShapeBlockedBackup(row.AcceptProxyProtocol, row.RelayOnly, effOutboundID, effSplitRules) {
+			updates["metering_enabled"] = 0
+			meteringStripped++
 		}
 		if len(updates) > 0 {
 			if err := tx.Model(&model.NodeInbound{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
@@ -630,11 +701,14 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 	if total := srcStripped + outStripped + rulesStripped; total > 0 {
 		rep.warnf("备份恢复：入站附属引用后置校验共剥离悬空引用 %d 处（来源 source_id %d 处已置 0、出站 outbound_id %d 处已置 0 改直连、分流规则 %d 条已剔除），入站本身已照常恢复", total, srcStripped, outStripped, rulesStripped)
 	}
+	if meteringStripped > 0 {
+		rep.warnf("备份恢复：%d 条入站开启了订阅计量但形态不兼容（PROXY 协议/仅中转/链式出口/分流，计量伴生无法服务），已关闭其计量开关，入站本身已照常恢复，改为直连形态后可重新开启计量", meteringStripped)
+	}
 	return nil
 }
 
-// pruneDanglingSplitRulesTx 剔除 splitRules 中 outboundId 指向不存在
-// 入站的规则。按 json.RawMessage 逐条保留原始字节，未被剔除的规则
+// pruneDanglingSplitRulesTx 剔除 splitRules 中 outboundId 指向不可用
+// 目标（不存在、或计量伴生行——同链式出口的 X-02 口径）的规则。按 json.RawMessage 逐条保留原始字节，未被剔除的规则
 // 逐字不变（不做结构体重序列化，避免字段漂移）。整体解析失败时
 // parsed=false，调用方原样保留原文。
 func pruneDanglingSplitRulesTx(tx *gorm.DB, raw string) (pruned string, removed int, parsed bool, err error) {
@@ -652,11 +726,11 @@ func pruneDanglingSplitRulesTx(tx *gorm.DB, raw string) (pruned string, removed 
 			continue
 		}
 		if probe.OutboundID > 0 {
-			exists, cerr := rowExistsTx(tx, &model.NodeInbound{}, probe.OutboundID)
+			usable, cerr := inboundChainTargetUsableTx(tx, probe.OutboundID)
 			if cerr != nil {
 				return "", 0, false, cerr
 			}
-			if !exists {
+			if !usable {
 				removed++
 				continue
 			}

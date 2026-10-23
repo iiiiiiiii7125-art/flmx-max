@@ -30,6 +30,10 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/1.0.1/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/1.0.1/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
+## 降级到旧版本（手动）
+
+脚本与面板内升级都拒绝降级；确需手动回退到旧版本时注意：如果用过 Shadowsocks「按订阅计量」（1.4.1 起），**回退前必须先关闭全部入站的「按订阅计量」开关，并确认计量专用入口已消失（入站列表不再显示「计量中」徽标、对应端口已释放）再回退**。旧版本不认识计量专用入口，会把它当作普通 Shadowsocks 入站对外分发，其凭据可被直接使用且不计量。
+
 ## 节点 agent 升级
 
 **节点** 页选择节点 → **升级**，留空版本即使用最新版。也可以在节点上重新运行节点安装脚本。通过脚本更新同样防降级：目标版本低于节点现装版本时脚本会拒绝更新并说明（如确需降级请手动处理），同版本按重装继续，版本不可比时放行。

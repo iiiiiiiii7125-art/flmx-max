@@ -95,7 +95,16 @@ func xraySettings(in Inbound) (obj, error) {
 		return obj{"clients": append([]interface{}{obj{"password": s.Password}}, xrayUserClients(in)...)}, nil
 	case ProtocolShadowsocks:
 		// GATE-F1：同 sing-box 服务端口径，合法单段 SS2022 key 归一 Std。
-		return obj{"method": s.Method, "password": NormalizedSS2022Password(s.Method, s.Password), "network": "tcp,udp"}, nil
+		out := obj{"method": s.Method, "password": NormalizedSS2022Password(s.Method, s.Password), "network": "tcp,udp"}
+		// SS2022 multi-user (companion inbounds only): clients carry the
+		// subscriptions; the top-level password stays the identity PSK
+		// and no owner client is added — a companion has no owner user.
+		if in.UserCapable() {
+			if clients := xrayUserClients(in); len(clients) > 0 {
+				out["clients"] = clients
+			}
+		}
+		return out, nil
 	}
 	return nil, fmt.Errorf("Xray 不支持协议 %s", in.Protocol)
 }

@@ -715,6 +715,11 @@ export default function InboundPage() {
                 仅中转
               </span>
             )}
+            {item.meteringActive && (
+              <Chip color="success" size="sm" variant="flat">
+                计量中
+              </Chip>
+            )}
           </div>
           {!item.external && (
             <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs">
