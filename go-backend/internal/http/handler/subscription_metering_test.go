@@ -284,6 +284,9 @@ func TestSSMeteringWantedMatrix(t *testing.T) {
 		{"relay only", rowFor(func(row *model.NodeInbound, in *kernel.Inbound) { row.RelayOnly = 1 }), demand, false},
 		{"proxy protocol", rowFor(func(row *model.NodeInbound, in *kernel.Inbound) { row.AcceptProxyProtocol = 1 }), demand, false},
 		{"chained exit", rowFor(func(row *model.NodeInbound, in *kernel.Inbound) { row.OutboundID = 42 }), demand, false},
+		{"split rules", rowFor(func(row *model.NodeInbound, in *kernel.Inbound) {
+			row.SplitRules = `[{"domains":["example.com"],"action":"direct"}]`
+		}), demand, false},
 	}
 	for _, c := range cases {
 		if got := h.ssMeteringWanted(c.row, c.dem); got != c.want {

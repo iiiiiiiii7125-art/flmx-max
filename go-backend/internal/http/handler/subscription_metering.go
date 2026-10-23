@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,26 +57,53 @@ func ssMeteringEligible(in kernel.Inbound) bool {
 		in.Security.Type != kernel.SecurityShadowTLS
 }
 
+// ssMeteringShapeBlock reports why an origin's direct-serving shape
+// excludes it from metering ("" when the shape is fine): a companion
+// does not inherit the origin's chained exit or split rules, so
+// materializing one for a relay-only, PROXY-protocol, chained-exit or
+// split-routed origin would silently reroute metered traffic.
+func ssMeteringShapeBlock(row *model.NodeInbound) string {
+	switch {
+	case row.AcceptProxyProtocol == 1:
+		return "开启 PROXY 协议的入站不支持订阅计量"
+	case row.RelayOnly == 1:
+		return "仅中转入站不支持订阅计量"
+	case row.OutboundID != 0:
+		return "带链式出口的入站不支持订阅计量"
+	case strings.TrimSpace(row.SplitRules) != "":
+		return "已配置分流的入站不支持订阅计量"
+	}
+	return ""
+}
+
+// ssMeteringStaticBlock reports why an origin can never carry a
+// metering companion ("" when it can): protocol eligibility
+// (ssMeteringEligible) plus the direct-serving shape
+// (ssMeteringShapeBlock). It is the static half of ssMeteringWanted,
+// and the save paths consult it too, so a shape reconcile would never
+// serve cannot be saved with the switch on (B-01/C-01/A-01).
+func ssMeteringStaticBlock(row *model.NodeInbound, in kernel.Inbound) string {
+	if !ssMeteringEligible(in) {
+		return "仅 Shadowsocks 2022（非 ShadowTLS 前置）的自建入站支持订阅计量"
+	}
+	return ssMeteringShapeBlock(row)
+}
+
 // ssMeteringWanted reports whether the origin should currently have a
-// companion: switch on, eligible, direct-serving (a relay-only,
-// PROXY-protocol or chained-exit origin has no direct subscription
-// endpoints to retarget, and a companion would silently reroute them),
+// companion: switch on, statically eligible (ssMeteringStaticBlock),
 // and demanded by at least one active share subscription.
 func (h *Handler) ssMeteringWanted(origin *model.NodeInbound, demand map[int64][]kernel.User) bool {
 	if origin == nil || origin.CompanionOf > 0 || origin.MeteringEnabled != 1 {
 		return false
 	}
-	if isExternalInbound(origin) || origin.RelayOnly == 1 || origin.AcceptProxyProtocol == 1 || origin.OutboundID != 0 {
-		return false
-	}
-	if len(demand[origin.ID]) == 0 {
+	if isExternalInbound(origin) || len(demand[origin.ID]) == 0 {
 		return false
 	}
 	in, err := inboundFromModel(*origin)
 	if err != nil {
 		return false
 	}
-	return ssMeteringEligible(in)
+	return ssMeteringStaticBlock(origin, in) == ""
 }
 
 // companionName is the companion row's display name. It never reaches
