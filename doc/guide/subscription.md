@@ -33,6 +33,7 @@
 - 指定格式的链接：在订阅链接后加 `?format=clash`（或 `singbox`、`shadowrocket`、`loon`、`qx`、`surge`、`stash`、`base64`）
 - VLESS 加密（ENC）入站只出现在 Clash / Stash / 通用 base64 输出里（携带完整 `encryption` 参数），其他格式会略过这类入站
 - Snell 入站的下发按客户端区分：Clash / Stash / Shadowrocket 按 v4 口径下发（v4 / v5 入站可下发，v6 入站不下发，客户端不支持 v6）；sing-box 需要 1.14 以上版本、按拉取请求的 UA 判定下发——与是否用 `?format=singbox` 指定格式无关，用浏览器等普通工具拉取（UA 不带 sing-box 版本）时不含 Snell 属正常现象；Surge 原生支持；Loon、Quantumult X、通用 base64 不下发 Snell
+- NaïveProxy 节点在 sing-box 订阅侧需要客户端 1.13 以上版本：按拉取请求的 UA 判定，低于 1.13 时不下发 NaïveProxy 节点、其余节点照常下发（sing-box 出站对 NaïveProxy 的支持自 1.13 起，节点侧链式门同见节点文档）
 
 ## 来源
 
