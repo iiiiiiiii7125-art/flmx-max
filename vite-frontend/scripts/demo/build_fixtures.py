@@ -193,5 +193,40 @@ if violations:
     for v in violations[:20]:
         print(" -", v)
     sys.exit(1)
+
+# Content gate (R7X-006): key-set existence is not a reconciliation.
+# A re-record whose seed never produced the underlying fact passes a
+# key-set diff while washing a key's payload back to empty — that is
+# how node/traffic/month lost its 6-node demo data in the R6 re-record
+# (the seed wrote no node_traffic rows, so the panel's honest answer
+# was {}). The keys below must carry non-empty content in EVERY
+# recording, or the fixtures are not written. The same list is checked
+# against the committed fixtures by check-fixtures-content.mjs.
+CONTENT_KEYS = [
+    ("admin", "node/traffic/month", "month-map"),
+    ("admin", "subscription/traffic", "series"),
+    ("user", "user/subscription/traffic", "series"),
+]
+content_violations = []
+for book, path_, kind in CONTENT_KEYS:
+    entries = (fixtures.get(book) or {}).get(path_)
+    if not entries:
+        content_violations.append(f"{book} {path_}: key missing or no recordings")
+        continue
+    for i, e in enumerate(entries):
+        data = (e.get("res") or {}).get("data")
+        if kind == "month-map":
+            if not isinstance(data, dict) or len(data) < 1:
+                content_violations.append(f"{book} {path_} recording #{i}: data is an empty node map (0 nodes)")
+        else:
+            pts = data.get("points") if isinstance(data, dict) else None
+            if not isinstance(pts, list) or len(pts) < 1:
+                content_violations.append(f"{book} {path_} recording #{i}: data.points is empty")
+if content_violations:
+    print("FIXTURE CONTENT GATE FAILED — fixtures NOT written:")
+    for v in content_violations[:20]:
+        print(" -", v)
+    sys.exit(1)
+print("content gate ok:", ", ".join(f"{b} {p}" for b, p, _ in CONTENT_KEYS))
 json.dump(fixtures, open(out_path, "w"), ensure_ascii=False, separators=(",", ":"))
 print("written", out_path)

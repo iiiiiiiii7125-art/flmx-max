@@ -100,6 +100,31 @@ for name, nid in ids.items():
             loss = 0 if random.random() > 0.08 else round(random.uniform(1, 8))
             x("INSERT INTO node_latency_sample(node_id, created_time, point, ok, latency_ms, loss_pct) VALUES(?,?,?,1,?,?)", (nid, t, p, lat, loss))
 
+# node_traffic hourly buckets for the current month (the series behind
+# node/traffic/month — whole-machine NIC bytes, summed per node as
+# [in, out] since the 1st in the viewer's zone). Without these rows the
+# endpoint honestly answers an empty map, and a full re-record washes
+# that fixtures key back to {} (R7X-006: the 1.4.2 demo values were
+# hand-built data with no seed behind them). Monthly totals match the
+# ballpark the demo has always shown (GiB, in/out per node); buckets
+# start at the 1st of the month in UTC+8 — the earliest month start
+# among the zones the recorder asks with — so a recording on any day
+# of the month yields all 6 nodes with non-empty data.
+MONTH_TOTALS = {"香港 HKT": (12, 24), "日本 东京": (8, 16), "美国 圣何塞": (20, 40),
+                "新加坡": (6, 12), "上海 移动中转": (3, 6), "广州 电信中转": (4, 8)}
+_cn_now = datetime.datetime.fromtimestamp(now / 1000, datetime.timezone(datetime.timedelta(hours=8)))
+_month_start = _cn_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+_first_bucket = int(_month_start.timestamp() * 1000) // 3600000 * 3600000
+_last_bucket = now // 3600000 * 3600000
+_n_buckets = max(1, (_last_bucket - _first_bucket) // 3600000 + 1)
+for name, nid in ids.items():
+    in_g, out_g = MONTH_TOTALS[name]
+    weights = [random.uniform(0.7, 1.3) for _ in range(_n_buckets)]
+    wsum = sum(weights)
+    for i, w in enumerate(weights):
+        x("INSERT INTO node_traffic(node_id, hour, in_bytes, out_bytes) VALUES(?,?,?,?)",
+          (nid, _first_bucket + i * 3600000, int(in_g * G * w / wsum), int(out_g * G * w / wsum)))
+
 # 24h of tunnel metrics (hourly, on each tunnel's entry node)
 entry_node = {st["tunnels"][0]: ids["上海 移动中转"], st["tunnels"][1]: ids["广州 电信中转"],
               st["tunnels"][2]: ids["广州 电信中转"], st["tunnels"][3]: ids["广州 电信中转"]}
