@@ -332,6 +332,28 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 			out["congestion-controller"] = strings.ToLower(cc)
 		}
 	}
+	// R10X-001/002/003（渲染自愈，同 R9X-004 口径）：三个枚举字段的
+	// 谓词均大小写不敏感，但渲染产物在大小写敏感的本体面仍被拒。
+	// 存量克隆在此一处同口径小写愈合（存储不动）：client-fingerprint
+	// 与 xhttp-opts.mode 为横切字段（不绑协议）；SS plugin-opts.mode
+	// 仅 plugin=obfs 时——愈合后 Clash 透传面与 Surge 面同受益，
+	// ssPluginString 消费点另有同口径兜底。垃圾值小写化后仍被各面
+	// 谓词略过/拒绝，接受集不扩大。
+	if fp := out.str("client-fingerprint"); fp != "" {
+		out["client-fingerprint"] = strings.ToLower(fp)
+	}
+	if xo := out.sub("xhttp-opts"); xo.str("mode") != "" {
+		cp := xo.clone()
+		cp["mode"] = strings.ToLower(xo.str("mode"))
+		out["xhttp-opts"] = map[string]interface{}(cp)
+	}
+	if out.Type() == "ss" && strings.EqualFold(out.str("plugin"), "obfs") {
+		if po := out.sub("plugin-opts"); po.str("mode") != "" {
+			cp := po.clone()
+			cp["mode"] = strings.ToLower(po.str("mode"))
+			out["plugin-opts"] = map[string]interface{}(cp)
+		}
+	}
 	if e.Direct {
 		return out
 	}
