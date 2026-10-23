@@ -27,7 +27,7 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	}
 	// Chained inbounds leave through their target; their rules come first
 	// so their users do not match the direct per-user rules below.
-	chained, rules, sets, err := singboxChainRoutes(inbounds, opts.SingboxSnell)
+	chained, rules, sets, err := singboxChainRoutesWith(inbounds, opts.SingboxSnell, opts.SingboxNaive)
 	if err != nil {
 		return "", err
 	}

@@ -300,6 +300,12 @@ func (m splitMatch) singbox() []obj {
 // singboxSplitRoutes is xraySplitRoutes for sing-box; it also returns the
 // rule-set tags the rules use.
 func singboxSplitRoutes(in Inbound, snell bool) ([]interface{}, []interface{}, []string, error) {
+	return singboxSplitRoutesWith(in, snell, true)
+}
+
+// singboxSplitRoutesWith is singboxSplitRoutes with the Naive version
+// gate (R9X-005) threaded to the 分流 targets.
+func singboxSplitRoutesWith(in Inbound, snell, naive bool) ([]interface{}, []interface{}, []string, error) {
 	var outbounds, rules []interface{}
 	var sets []string
 	tags := singboxInboundTags(in)
@@ -313,7 +319,7 @@ func singboxSplitRoutes(in Inbound, snell bool) ([]interface{}, []interface{}, [
 			ownerRoute = obj{"action": "reject"}
 			userRoute = func(int64) obj { return obj{"action": "reject"} }
 		case SplitProxy:
-			obs, err := singboxChainOutbounds(*r.Via, splitTag(in, i), 0, snell)
+			obs, err := singboxChainOutboundsWith(*r.Via, splitTag(in, i), 0, snell, naive)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
 			}
@@ -321,7 +327,7 @@ func singboxSplitRoutes(in Inbound, snell bool) ([]interface{}, []interface{}, [
 			for _, id := range users {
 				// A5-04：同 xray 侧——失败整单报错，不再静默少一个
 				// outbound 却仍生成引用它的规则（sing-box 整份拒绝）。
-				obs, err := singboxChainOutbounds(*r.Via, splitUserTag(in, i, id), UserMark(id), snell)
+				obs, err := singboxChainOutboundsWith(*r.Via, splitUserTag(in, i, id), UserMark(id), snell, naive)
 				if err != nil {
 					return nil, nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
 				}

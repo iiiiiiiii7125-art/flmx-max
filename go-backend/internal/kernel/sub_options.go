@@ -68,6 +68,11 @@ type SubOptions struct {
 	// SingboxSnell puts Snell nodes in sing-box profiles: the client is
 	// sing-box 1.14+ (see SingboxClientHasSnell).
 	SingboxSnell bool
+	// SingboxNaive puts Naive nodes in sing-box profiles: the client is
+	// sing-box 1.13+ (see SingboxClientHasNaive). R9X-005 连带格：低于
+	// 1.13 的客户端略过 Naive 节点（整表 FATAL 的替代处置，与 Snell
+	// 的 UA 略过同型），其余节点照常下发。
+	SingboxNaive bool
 }
 
 // SubscriptionProtocols is the known protocol set for subscription
