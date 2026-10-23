@@ -60,6 +60,70 @@ func sanitizeBackupShareAddressMode(mode string) (string, bool) {
 	}
 }
 
+// sanitizeBackupWhitelistExtra applies the save surface's allow-list
+// standard (kernel.ParseAllowList, handler inboundSave) to an inbound's
+// WhitelistExtra coming back from a backup (R9X-008): the field was the
+// one address carrier in the inbound backup section restored verbatim
+// with no validation and no disclosure — a single bad entry makes the
+// consumption face (inboundAllowList) silently ignore the whole extra
+// list, fail-closed, with no receipt for the admin.
+//
+// Disposition is field-level sanitize, not a whole-row skip: the field
+// is an auxiliary allow-list on top of the computed one, the inbound
+// row itself stays fully usable without it — the same level as
+// ShareHost clearing above, and the same shape as the dangling
+// split-rules pruning in validateImportedInboundRefsTx (list fields
+// prune bad entries, scalar fields clear). Within the list the
+// disposition is per-entry pruning: entries the shared predicate
+// accepts are kept with their original token text, bad entries are
+// dropped and returned so the caller counts and discloses them. A
+// fully legal list restores verbatim — validation is read-only and
+// never rewrites the stored value with the normalized form (the
+// validateImportedInboundObjects口径). A list ParseAllowList rejects
+// for a reason no single entry carries (e.g. more than
+// maxAllowEntries entries), or whose surviving entries still do not
+// parse as a list, clears as a whole and returns the list error for
+// disclosure.
+//
+// The verdict and the per-entry predicate are the save surface's own
+// implementations — kernel.ParseAllowList for the list verdict and
+// kernel.NormalizeAllowEntry (the exact per-entry check ParseAllowList
+// itself delegates to) for pruning. No second allow-list predicate is
+// written here; only the token split mirrors ParseAllowList's
+// separator set, which has no exported splitter.
+func sanitizeBackupWhitelistExtra(raw string) (restored string, bad []string, listErr error) {
+	if _, err := kernel.ParseAllowList(raw); err == nil {
+		return raw, nil, nil
+	} else {
+		listErr = err
+	}
+	tokens := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || r == ';' || r == ' ' || r == '\n' || r == '\t' || r == '\r'
+	})
+	kept := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if _, err := kernel.NormalizeAllowEntry(tok); err != nil {
+			bad = append(bad, tok)
+			continue
+		}
+		kept = append(kept, tok)
+	}
+	if len(bad) == 0 {
+		// No single entry is at fault (entry-count overflow): the list
+		// as a whole is invalid, clear it and let the caller disclose
+		// the list-level error.
+		return "", nil, listErr
+	}
+	cleaned := strings.Join(kept, ", ")
+	if _, err := kernel.ParseAllowList(cleaned); err != nil {
+		// Survivors still do not form a legal list (e.g. still over
+		// the entry cap): clear as a whole rather than restore a list
+		// the consumption face would ignore anyway.
+		return "", bad, listErr
+	}
+	return cleaned, bad, nil
+}
+
 func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	out := &model.InboundsBackup{
 		Kernels:  []model.KernelBackup{},
@@ -279,6 +343,13 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
 	invalidShareModes := 0
+	// R9X-008：WhitelistExtra sanitize 的回执计数（受影响行数 + 被
+	// 剔除的非法条目数）与逐行身份/坏条目披露清单（汇总 warning 在
+	// 入站循环后统一发，形态同 invalidInboundObjects 的点名披露；
+	// 行照常落库，故不计 SkippedRows，同 R5X-014 sanitize 回执口径）。
+	invalidWhitelistRows := 0
+	invalidWhitelistEntries := 0
+	var invalidWhitelistIdentities []string
 	// R5X-016：入站段返回实落计数（被跳过行不计入，与 SkippedRows
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
 	inboundsImported := 0
@@ -417,12 +488,37 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if !modeOK {
 			invalidShareModes++
 		}
+		// R9X-008：WhitelistExtra 经保存面同口径校验（ParseAllowList）
+		// 做字段级 sanitize——合法清单逐字恢复，非法条目逐项剔除、
+		// 整表不合法时整表清空，计数与坏条目随汇总 warning 披露，
+		// 入站行本身照常恢复（不整行跳过）。
+		whitelistExtra, whitelistBad, whitelistErr := sanitizeBackupWhitelistExtra(i.WhitelistExtra)
+		if whitelistErr != nil || len(whitelistBad) > 0 {
+			invalidWhitelistRows++
+			invalidWhitelistEntries += len(whitelistBad)
+			detail := ""
+			if len(whitelistBad) > 0 {
+				quoted := make([]string, 0, len(whitelistBad))
+				for _, b := range whitelistBad {
+					quoted = append(quoted, fmt.Sprintf("%q", b))
+				}
+				detail = "非法条目：" + strings.Join(quoted, "、")
+			}
+			if whitelistErr != nil {
+				if detail != "" {
+					detail += "；"
+				}
+				detail += fmt.Sprintf("整表清空（%v）", whitelistErr)
+			}
+			invalidWhitelistIdentities = append(invalidWhitelistIdentities,
+				fmt.Sprintf("#%d %s（%s）", i.ID, i.Name, detail))
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
 			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
 			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
-			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
+			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: whitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
 			SplitRules: i.SplitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
@@ -466,6 +562,20 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		rep.warnf("备份恢复：%d 条入站的 settings/transport/security/extra 未通过保存面同口径校验（Normalize），已整行跳过未恢复：%s%s，请修正备份内容后重试",
 			invalidInboundObjects, strings.Join(identities, "、"), suffix)
+	}
+	if invalidWhitelistRows > 0 {
+		// R9X-008：汇总披露受影响行数 + 被剔除非法条目数 + 逐行身份
+		// 与坏条目原文（前 10 条，超出以总数收尾，同 invalidInboundObjects
+		// 的截断口径）。行已照常恢复，此处计数只入 ImportWarnings、
+		// 不计 SkippedRows。
+		identities := invalidWhitelistIdentities
+		suffix := ""
+		if len(identities) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(identities))
+			identities = identities[:10]
+		}
+		rep.warnf("备份恢复：%d 条入站的白名单附加清单（WhitelistExtra）未通过保存面同口径校验（ParseAllowList），已逐项剔除 %d 个非法条目后恢复（合法条目逐字保留，整表不合法时整表清空）：%s%s，请核对被剔除条目后在入站设置中重新填写",
+			invalidWhitelistRows, invalidWhitelistEntries, strings.Join(identities, "、"), suffix)
 	}
 
 	// R2X-015：入站附属引用后置校验。出站目标可能是同批入站列表的
