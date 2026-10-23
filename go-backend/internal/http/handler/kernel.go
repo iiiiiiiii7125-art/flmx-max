@@ -111,8 +111,10 @@ type inboundView struct {
 	// IP family ("auto" = unrestricted).
 	OutboundIPStrategy string `json:"outboundIpStrategy"`
 	// MeteringEnabled is the SS subscription-metering switch;
-	// MeteringActive reports that a companion inbound currently exists
-	// for this origin (share subscriptions are being metered).
+	// MeteringActive reports that this origin's companion exists AND
+	// its config is applied on the node (the same gate subscription
+	// pulls use — F4/B-03), i.e. share subscriptions are really being
+	// metered right now.
 	MeteringEnabled bool `json:"meteringEnabled"`
 	MeteringActive  bool `json:"meteringActive"`
 }
@@ -599,9 +601,23 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 	}
 	// Companion inbounds are system-managed derived rows: they never
 	// appear in the list; their origins report meteringActive instead.
+	// Same gate as subscription pulls (F4/B-03): the companion must
+	// exist, be enabled, and its kernel's current config must be
+	// acknowledged by the agent — a materialized-but-unapplied
+	// companion is not metering anything yet.
 	meteringActive := make(map[int64]bool)
+	appliedByKernel := make(map[int64]bool)
+	checkedKernel := make(map[int64]bool)
 	for _, row := range rows {
-		if row.CompanionOf > 0 {
+		if row.CompanionOf <= 0 || row.Enabled != 1 {
+			continue
+		}
+		if !checkedKernel[row.KernelID] {
+			checkedKernel[row.KernelID] = true
+			k := kernelByID[row.KernelID]
+			appliedByKernel[row.KernelID] = h.kernelConfigApplied(&k)
+		}
+		if appliedByKernel[row.KernelID] {
 			meteringActive[row.CompanionOf] = true
 		}
 	}

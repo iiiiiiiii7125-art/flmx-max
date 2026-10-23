@@ -137,12 +137,16 @@ func TestSSMeteringReconcileLifecycle(t *testing.T) {
 }
 
 func TestSSMeteringUsersRemapAndEndpointRetarget(t *testing.T) {
-	r, h, _, origin, sub := seedMeteringFixture(t)
+	r, h, k, origin, sub := seedMeteringFixture(t)
 	h.reconcileSSMetering()
 	comp, err := r.GetCompanionInbound(origin.ID)
 	if err != nil || comp == nil {
 		t.Fatal("companion must exist")
 	}
+	// R1-F4 (B-03): pull-side retargeting now requires the companion's
+	// config to be acknowledged by the agent; simulate the ack. The
+	// user-mount remap below is config-space and unaffected.
+	markKernelApplied(t, r, h, k)
 	compIn, _ := inboundFromModel(*comp)
 
 	// The kernel user mount moves from the origin to the companion.
@@ -198,12 +202,15 @@ func TestSSMeteringUsersRemapAndEndpointRetarget(t *testing.T) {
 // origin's port with the shared password, so the relay endpoint keeps
 // pointing at the origin while the direct one moves to the companion.
 func TestSSMeteringRelayEndpointNotRetargeted(t *testing.T) {
-	r, h, _, origin, sub := seedMeteringFixture(t)
+	r, h, k, origin, sub := seedMeteringFixture(t)
 	h.reconcileSSMetering()
 	comp, _ := r.GetCompanionInbound(origin.ID)
 	if comp == nil {
 		t.Fatal("companion must exist")
 	}
+	// R1-F4 (B-03): same applied-ack precondition as the retarget test
+	// above; this test's subject is the relay endpoint staying put.
+	markKernelApplied(t, r, h, k)
 	now := time.Now().UnixMilli()
 	frontID := seedRelayTargetNode(t, r, "front", "198.51.100.1")
 	if err := r.DB().Exec(`UPDATE node SET status = 1`).Error; err != nil {

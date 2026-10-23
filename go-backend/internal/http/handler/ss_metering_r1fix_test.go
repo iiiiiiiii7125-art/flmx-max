@@ -11,6 +11,7 @@ import (
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 // ---- SS metering round-1 audit fixes (F1–F8) ----
@@ -194,6 +195,98 @@ func TestSSMeteringRecycleTearsDownCompanionRelays(t *testing.T) {
 	}
 	if fwd, err := h.getForwardRecord(forwardID); err == nil && fwd != nil {
 		t.Fatal("the recycled companion's materialized forward must be deleted, not left dangling")
+	}
+}
+
+// markKernelApplied simulates the node agent acknowledging the
+// kernel's current rendered config: what a successful KernelApply
+// plus status poll persist as config_hash/applied_hash.
+func markKernelApplied(t *testing.T, r *repo.Repository, h *Handler, k *model.NodeKernel) {
+	t.Helper()
+	_, hash, err := h.buildKernelApplyPayload(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash == "" {
+		t.Fatal("payload hash must not be empty")
+	}
+	if err := r.UpdateNodeKernelFields(k.ID, map[string]interface{}{"config_hash": hash, "applied_hash": hash}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func meteringActiveOf(t *testing.T, h *Handler, originID int64) bool {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.inboundList(rec, httptest.NewRequest(http.MethodPost, "/api/v1/inbound/list", strings.NewReader("{}")))
+	var env struct {
+		Code int `json:"code"`
+		Data []struct {
+			ID             int64 `json:"id"`
+			MeteringActive bool  `json:"meteringActive"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil || env.Code != 0 {
+		t.Fatalf("inbound list: code=%d err=%v body=%s", env.Code, err, rec.Body.String())
+	}
+	for _, v := range env.Data {
+		if v.ID == originID {
+			return v.MeteringActive
+		}
+	}
+	t.Fatal("origin missing from inbound list")
+	return false
+}
+
+// F4 (B-03): retargeting (and the「计量中」badge) requires the
+// companion's config to be acknowledged by the node agent. A
+// companion that merely exists in the DB — node offline when it was
+// materialized, apply failed — must not attract pulls: its port is
+// not listening anywhere.
+func TestSSMeteringRetargetRequiresAppliedConfig(t *testing.T) {
+	r, h, k, origin, sub := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must be materialized")
+	}
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No agent in the harness: never applied -> pulls keep serving
+	// the origin endpoint with the shared password.
+	eps := h.subEndpoints(sub, rows)
+	if len(eps) != 1 {
+		t.Fatalf("exactly one endpoint expected, got %d", len(eps))
+	}
+	ep := eps[0]
+	if ep.Inbound.ID != origin.ID || ep.CompanionOf != 0 || ep.Port != origin.Port {
+		t.Fatalf("unapplied companion must not be retargeted: id=%d port=%d companionOf=%d",
+			ep.Inbound.ID, ep.Port, ep.CompanionOf)
+	}
+	if ep.Inbound.Settings.Password != meteringSharedPW {
+		t.Fatal("fallback endpoint must carry the origin's shared password")
+	}
+	if meteringActiveOf(t, h, origin.ID) {
+		t.Fatal("badge must not claim metering before the companion config is applied")
+	}
+
+	// The agent acknowledges exactly the current config -> the gate
+	// opens for both pulls and the badge.
+	markKernelApplied(t, r, h, k)
+	eps = h.subEndpoints(sub, rows)
+	if len(eps) != 1 {
+		t.Fatalf("exactly one endpoint expected, got %d", len(eps))
+	}
+	ep = eps[0]
+	if ep.Inbound.ID != comp.ID || ep.CompanionOf != origin.ID || ep.Port != comp.Port {
+		t.Fatalf("applied companion must be retargeted: id=%d port=%d companionOf=%d",
+			ep.Inbound.ID, ep.Port, ep.CompanionOf)
+	}
+	if !meteringActiveOf(t, h, origin.ID) {
+		t.Fatal("badge must report metering once the companion config is applied")
 	}
 }
 

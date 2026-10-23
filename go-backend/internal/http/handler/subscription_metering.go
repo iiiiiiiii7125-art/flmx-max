@@ -321,19 +321,56 @@ func (h *Handler) deleteCompanionOf(originID int64) {
 	h.deleteCompanionRow(comp)
 }
 
+// kernelConfigApplied reports whether the node agent has
+// acknowledged exactly the config the panel would send this kernel
+// right now: the freshly built payload must hash to the kernel's
+// stored applied hash. Comparing against a fresh build — not the
+// stored desired hash (config_hash) — is what closes the B-03
+// windows: a desired config the agent never confirmed (node offline
+// at materialization, push failed, panel crashed between creating
+// the companion row and applying) never passes, because in those
+// states applied_hash is empty, stale, or equal to a config that
+// does not contain the companion. Config builds are deterministic
+// (the version-drift detection relies on the same property), so the
+// equality is stable.
+func (h *Handler) kernelConfigApplied(k *model.NodeKernel) bool {
+	if k == nil || k.AppliedHash == "" {
+		return false
+	}
+	_, hash, err := h.buildKernelApplyPayload(k)
+	if err != nil {
+		log.Printf("ss metering: build kernel %d payload for applied check: %v", k.ID, err)
+		return false
+	}
+	return hash != "" && hash == k.AppliedHash
+}
+
 // companionInboundsByOrigin maps origin inbound ids to their live
-// companions' kernel form (enabled companions only), for subscription
-// endpoint retargeting. Errors degrade to no retargeting — the origin
-// endpoints are then served shared, exactly as before this feature.
+// companions' kernel form, for subscription endpoint retargeting:
+// enabled companions whose kernel config the node agent has actually
+// applied (F4/B-03 — a companion that merely exists in the DB is not
+// listening anywhere yet). Errors degrade to no retargeting — the
+// origin endpoints are then served shared, exactly as before this
+// feature.
 func (h *Handler) companionInboundsByOrigin() map[int64]kernel.Inbound {
 	comps, err := h.repo.ListCompanionInbounds()
 	if err != nil {
 		log.Printf("ss metering: list companions: %v", err)
 		return nil
 	}
+	appliedByKernel := make(map[int64]bool)
+	checkedKernel := make(map[int64]bool)
 	out := make(map[int64]kernel.Inbound, len(comps))
 	for _, c := range comps {
 		if c.Enabled != 1 {
+			continue
+		}
+		if !checkedKernel[c.KernelID] {
+			checkedKernel[c.KernelID] = true
+			k, kerr := h.repo.GetNodeKernel(c.KernelID)
+			appliedByKernel[c.KernelID] = kerr == nil && h.kernelConfigApplied(k)
+		}
+		if !appliedByKernel[c.KernelID] {
 			continue
 		}
 		if _, dup := out[c.CompanionOf]; dup {
