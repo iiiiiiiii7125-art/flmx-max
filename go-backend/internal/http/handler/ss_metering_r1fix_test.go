@@ -60,6 +60,98 @@ func callSplitSave(t *testing.T, h *Handler, body string) response.R {
 
 func boolPtr(b bool) *bool { return &b }
 
+// F2 (B-02/B-04/B-06/C-02a + 普查新发现): every write surface that
+// takes an inbound id must refuse companion rows with the family
+// message; companions must also be unusable as chain/split targets
+// and as subscription sources at save-validation time.
+func TestSSMeteringCompanionWriteGuards(t *testing.T) {
+	r, h, _, origin, _ := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	targetNode := seedRelayTargetNode(t, r, "m-target-node", "203.0.113.30")
+	targetKernel := seedChainKernel(t, r, targetNode, kernel.TypeXray)
+	target := seedChainInbound(t, r, targetKernel, "m-target", kernel.Inbound{
+		Protocol: kernel.ProtocolVLESS, Port: 443,
+		Security: kernel.Security{Type: kernel.SecurityReality},
+	}, 0)
+
+	// (B-02) split-save on the companion itself.
+	out := callSplitSave(t, h, `{"id":`+itoa(comp.ID)+`,"outboundId":`+itoa(target.ID)+`}`)
+	if out.Code == 0 || !strings.Contains(out.Msg, "计量伴生入站") {
+		t.Fatalf("split-save on a companion must be refused, got %+v", out)
+	}
+	if got, _ := r.GetNodeInbound(comp.ID); got.OutboundID != 0 {
+		t.Fatal("refused split-save must not persist an exit on the companion")
+	}
+
+	// (chain target) a companion id as another inbound's chained exit
+	// or split target must fail save-time chain validation.
+	viaRow := *origin
+	viaRow.OutboundID = comp.ID
+	if err := h.validateChain(viaRow, kernel.TypeXray); err == nil || !strings.Contains(err.Error(), "计量伴生入站") {
+		t.Fatalf("companion as chained exit must be rejected, got %v", err)
+	}
+	splitRow := *origin
+	splitRow.SplitRules = `[{"domains":["example.com"],"action":"proxy","outboundId":` + itoa(comp.ID) + `}]`
+	if err := h.validateChain(splitRow, kernel.TypeXray); err == nil || !strings.Contains(err.Error(), "计量伴生入站") {
+		t.Fatalf("companion as split target must be rejected, got %v", err)
+	}
+
+	// (C-02a) relay create on the companion.
+	frontID := seedRelayTargetNode(t, r, "m-front", "198.51.100.1")
+	tunnelID := seedRelayTargetTunnel(t, r, "m-tun", frontID, 30000, origin.NodeID)
+	rec := httptest.NewRecorder()
+	h.inboundRelayCreate(rec, claimsCtxReq(http.MethodPost, "/api/v1/inbound/relay/create", "",
+		`{"inboundId":`+itoa(comp.ID)+`,"tunnelId":`+itoa(tunnelID)+`,"inPort":30011,"name":"bad-relay"}`, 1, 0))
+	var env struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil || env.Code == 0 || !strings.Contains(env.Msg, "计量伴生入站") {
+		t.Fatalf("relay create on a companion must be refused: code=%d msg=%q body=%s", env.Code, env.Msg, rec.Body.String())
+	}
+	if relays, err := r.ListNodeInboundRelays(); err != nil || len(relays) != 0 {
+		t.Fatalf("no relay may be created on a companion, got %v (%v)", relays, err)
+	}
+
+	// (B-04) traffic reset on the companion; the origin stays resettable.
+	if err := r.DB().Exec(`UPDATE node_inbound SET upload_bytes = 12345 WHERE id = ?`, comp.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	h.inboundResetTraffic(rec, claimsCtxReq(http.MethodPost, "/api/v1/inbound/reset-traffic", "",
+		`{"id":`+itoa(comp.ID)+`}`, 1, 0))
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil || env.Code == 0 || !strings.Contains(env.Msg, "计量伴生入站") {
+		t.Fatalf("traffic reset on a companion must be refused: code=%d msg=%q", env.Code, env.Msg)
+	}
+	if got, _ := r.GetNodeInbound(comp.ID); got.UploadBytes != 12345 {
+		t.Fatal("refused reset must not clear the companion's counters")
+	}
+
+	// (B-06) subscription save validation must not accept a companion
+	// as a source (it would be stored, then silently dropped by every
+	// reader — the assignment surface already refuses companions).
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := subscriptionRequest{Name: "v", InboundIDs: []int64{origin.ID, comp.ID}}
+	ids, err := req.validate(rows)
+	if err != nil {
+		t.Fatalf("validate must not fail on a mixed list: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != origin.ID {
+		t.Fatalf("companion id must be dropped at validation, got ids=%v", ids)
+	}
+	req = subscriptionRequest{Name: "v", InboundIDs: []int64{comp.ID}}
+	if _, err := req.validate(rows); err == nil {
+		t.Fatal("a companion-only source list must fail validation like an empty one")
+	}
+}
+
 // F1 (A-01+B-01+C-01): enabling metering on a statically excluded
 // origin (chained exit / split rules) must be rejected with a reason,
 // and an already-metered origin must not be saved into an excluded

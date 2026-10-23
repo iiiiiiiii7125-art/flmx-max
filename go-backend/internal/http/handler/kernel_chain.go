@@ -155,6 +155,9 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		if target == nil {
 			return fmt.Errorf("%s所选的节点不存在", what)
 		}
+		if target.CompanionOf > 0 {
+			return fmt.Errorf("%s不能选择计量伴生入站", what)
+		}
 		if row.ID != 0 && h.chainReaches(target, row.ID) {
 			return fmt.Errorf("%s形成了循环，请检查链路", what)
 		}
@@ -503,6 +506,10 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 	row, err := h.repo.GetNodeInbound(req.ID)
 	if err != nil || row == nil || isExternalInbound(row) {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	if row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能编辑分流"))
 		return
 	}
 	k, err := h.repo.GetNodeKernel(row.KernelID)

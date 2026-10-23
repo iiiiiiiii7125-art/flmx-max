@@ -952,9 +952,16 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 	if err := req.Options.normalize(); err != nil {
 		return nil, err
 	}
+	// Companion inbounds are never subscription sources (the same
+	// choke point subInboundIDs enforces at read time): exclude them
+	// here so a crafted save cannot store an id every reader would
+	// then silently drop (B-06; the assignment surface refuses them
+	// outright).
 	known := make(map[int64]bool, len(rows))
 	for _, r := range rows {
-		known[r.ID] = true
+		if r.CompanionOf == 0 {
+			known[r.ID] = true
+		}
 	}
 	var ids []int64
 	for _, id := range req.InboundIDs {
