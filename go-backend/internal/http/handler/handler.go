@@ -1878,11 +1878,29 @@ func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 	return string(plain), nil
 }
 
+// R6X-013（R6-C-02）：Turnstile 校验出站的专用 client 与端点。
+// 旧实现走 http.PostForm（DefaultClient：Timeout=0 永不超时、默认
+// 跟随 ≤10 跳重定向），且位于登录/验证码路径——上游挂死时调用
+// goroutine 无限期阻塞于 Decode、可累积。此处显式 10s 超时（与
+// 联邦面同量级）+ 不跟随重定向（校验端点无需重定向，3xx 响应体
+// 无 success 字段、按校验失败处理）。client 与 URL 均为包级 var
+// 作为注入缝，测试可替换为 httptest 端点/短超时 client；正常路径
+// 行为不变。
+var (
+	turnstileSiteVerifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+	turnstileClient        = &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+)
+
 func (h *Handler) verifyCloudflareTurnstile(token, secretKey string) bool {
 	if token == "" || secretKey == "" {
 		return false
 	}
-	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{
+	resp, err := turnstileClient.PostForm(turnstileSiteVerifyURL, url.Values{
 		"secret":   {secretKey},
 		"response": {token},
 	})
