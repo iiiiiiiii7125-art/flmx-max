@@ -903,11 +903,16 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 	}
 	authOK = true
 
-	const giga = int64(1024 * 1024 * 1024)
+	// R10X-005（T1）：total 必须经 flowLimitBytes(Flow, FlowMiB) 按字节
+	// 精确下发，与执法面同值——旧读法 Flow×1GiB 忽略 FlowMiB，非整 GiB
+	// 限额被向上取整、(0,MiB>0) 备份可达对 total 误报 0。
+	// (Flow,FlowMiB)=(0,0) 时 total=0 保留：与分享订阅面 TrafficLimit
+	// 0=不限量同读法（kernel_relay.go 订阅头注记），执法面亦以 0=不限额
+	// 读之（R9X-001），三面一致。
 	headerValue := ""
 
 	if tunnel == "-1" {
-		headerValue = buildSubscriptionHeader(user.OutFlow, user.InFlow, user.Flow*giga, user.ExpTime/1000)
+		headerValue = buildSubscriptionHeader(user.OutFlow, user.InFlow, flowLimitBytes(user.Flow, user.FlowMiB), user.ExpTime/1000)
 	} else {
 		tunnelID, parseErr := strconv.ParseInt(tunnel, 10, 64)
 		if parseErr != nil || tunnelID <= 0 {
@@ -929,7 +934,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		headerValue = buildSubscriptionHeader(ut.OutFlow, ut.InFlow, ut.Flow*giga, ut.ExpTime/1000)
+		headerValue = buildSubscriptionHeader(ut.OutFlow, ut.InFlow, flowLimitBytes(ut.Flow, ut.FlowMiB), ut.ExpTime/1000)
 	}
 
 	w.Header().Set("subscription-userinfo", headerValue)
