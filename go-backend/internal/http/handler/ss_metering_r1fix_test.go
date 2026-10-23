@@ -152,6 +152,51 @@ func TestSSMeteringCompanionWriteGuards(t *testing.T) {
 	}
 }
 
+// F3 (C-02b): when reconcile recycles a companion, it must tear down
+// the companion's relays (including their materialized forwards)
+// exactly like the origin-delete path does — repo row deletion alone
+// leaves the forward behind.
+func TestSSMeteringRecycleTearsDownCompanionRelays(t *testing.T) {
+	r, h, _, origin, sub := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	// Attach a managed relay directly at the repo level (the state a
+	// relay created before the create-side guard, or via any future
+	// leak, would leave behind).
+	now := time.Now().UnixMilli()
+	frontID := seedRelayTargetNode(t, r, "m-front", "198.51.100.1")
+	tunnelID := seedRelayTargetTunnel(t, r, "m-tun", frontID, 30000, origin.NodeID)
+	forwardID, err := r.CreateForwardTx(1, "admin", "comp-relay-fwd", tunnelID, "203.0.113.20:8388", "fifo", now, 1,
+		[]int64{frontID}, 30005, "", nil, 0, 0, nil, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateInboundRelay(&model.NodeInboundRelay{InboundID: comp.ID, ForwardID: forwardID, Name: "comp-relay", Managed: 1, CreatedTime: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Demand gone -> reconcile recycles the companion.
+	sub.Enabled = 0
+	sub.UpdatedTime = time.Now().UnixMilli()
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+
+	if comp, _ := r.GetCompanionInbound(origin.ID); comp != nil {
+		t.Fatal("companion must be recycled")
+	}
+	if rels, err := r.ListInboundRelays(comp.ID); err != nil || len(rels) != 0 {
+		t.Fatalf("companion relays must be gone, got %v (%v)", rels, err)
+	}
+	if fwd, err := h.getForwardRecord(forwardID); err == nil && fwd != nil {
+		t.Fatal("the recycled companion's materialized forward must be deleted, not left dangling")
+	}
+}
+
 // F1 (A-01+B-01+C-01): enabling metering on a statically excluded
 // origin (chained exit / split rules) must be rejected with a reason,
 // and an already-metered origin must not be saved into an excluded
