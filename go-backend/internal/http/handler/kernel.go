@@ -1473,6 +1473,10 @@ func (h *Handler) inboundResetTraffic(w http.ResponseWriter, r *http.Request) {
 	if id <= 0 {
 		return
 	}
+	if row, err := h.repo.GetNodeInbound(id); err == nil && row != nil && row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能重置流量"))
+		return
+	}
 	if err := h.repo.ResetNodeInboundTraffic(id, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

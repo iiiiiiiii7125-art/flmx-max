@@ -434,6 +434,10 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("入站不存在"))
 		return
 	}
+	if row.CompanionOf > 0 {
+		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能建中转"))
+		return
+	}
 	tunnel, err := h.getTunnelRecord(req.TunnelID)
 	if err != nil || tunnel == nil {
 		response.WriteJSON(w, response.ErrDefault("隧道不存在"))
