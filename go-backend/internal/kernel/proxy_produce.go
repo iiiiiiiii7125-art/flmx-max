@@ -229,6 +229,13 @@ func ssPluginString(p Proxy) string {
 
 func proxyClash(e Endpoint) (yamlNode, bool) {
 	p := e.Proxy.forEndpoint(e)
+	// R5X-001/002/003 存量纵深：导入期校验集字段（枚举格 + Reality）
+	// 的存量坏值整节点略过，与导入期同一谓词（validImportedProxyFields，
+	// Reality 即 validateRealityOpts 本体）——BC-R4-01 宣称的 Reality
+	// 渲染略过口径自此实际落地。SubscriptionNodeCount 经本函数同口径。
+	if !validImportedProxyFields(p) {
+		return nil, false
+	}
 	if p.Type() == "ss" {
 		// GATE-F1：单段已在 forEndpoint 归一；SIP023 多段在 Clash 面
 		// 按段归一（mihomo 按段以带填充 Std 解码、二进制实测非规范
@@ -264,8 +271,21 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 			if version == 0 {
 				version = 3
 			}
-			p["obfs-opts"] = map[string]interface{}{"mode": "shadowtls", "host": st.str("host"),
+			// R5 批 1：mode 用 mihomo 规范拼写 shadow-tls——历史拼写
+			// shadowtls 经 mihomo v1.19.33 实测被本体拒绝（obfs mode
+			// error），自产形态此前即毒化 mihomo 整表。
+			p["obfs-opts"] = map[string]interface{}{"mode": "shadow-tls", "host": st.str("host"),
 				"password": st.str("password"), "version": version}
+		}
+		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
+			// 存量别名拼写愈合（与导入期同一规范化）。
+			cp := make(Proxy, len(oo))
+			for k, v := range oo {
+				cp[k] = v
+			}
+			cp["mode"] = CanonicalSnellObfsMode(oo.str("mode"))
+			oo = cp
+			p["obfs-opts"] = map[string]interface{}(oo)
 		}
 		// X-P3-11（L-02-1）：udp 不透传源值（sing-box 来源恒 true、
 		// Clash 来源可缺键），按版本/ShadowTLS 语义合成，与自建入站
@@ -277,7 +297,7 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 			effVersion = 4
 		}
 		shadowTLS := p.sub("shadow-tls").str("password") != "" ||
-			p.sub("obfs-opts").str("mode") == "shadowtls"
+			p.sub("obfs-opts").str("mode") == "shadow-tls"
 		p["udp"] = !shadowTLS && effVersion != 4
 	}
 	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS (converted above)
@@ -299,6 +319,12 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 
 func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 	p := e.Proxy.forEndpoint(e)
+	// R5X-001/002/003 存量纵深：与 proxyClash 同一谓词整节点略过
+	// （见 proxyClash 注）。sing-box 面既有的字段级守卫（SS2022 key、
+	// VLESS ENC、Snell obfs）保留在各分支内，与本谓词叠加不冲突。
+	if !validImportedProxyFields(p) {
+		return nil, false
+	}
 	o := map[string]interface{}{"tag": e.Name, "server": strings.Trim(e.Host, "[]"), "server_port": e.Port}
 	tls := func(enabled bool) {
 		if !enabled {
@@ -437,7 +463,19 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		}
 		if ports := p.str("ports"); ports != "" {
 			delete(o, "server_port")
-			o["server_ports"] = []string{strings.ReplaceAll(ports, "-", ":")}
+			// R5 批 1：按逗号项拆分逐项归一——sing-box 的 server_ports
+			// 条目必须是 "lo:hi" 段式，整串直塞（旧形态）在单端口
+			// （"443"）与多项清单下均 FATAL（bad port range）。
+			items := strings.Split(ports, ",")
+			ranges := make([]string, 0, len(items))
+			for _, item := range items {
+				item = strings.TrimSpace(item)
+				if !strings.Contains(item, "-") {
+					item += "-" + item
+				}
+				ranges = append(ranges, strings.ReplaceAll(item, "-", ":"))
+			}
+			o["server_ports"] = ranges
 		}
 		tls(true)
 	case "tuic":
