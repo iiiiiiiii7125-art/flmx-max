@@ -517,6 +517,26 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	return len(b.Inbounds), nil
 }
 
+// inboundChainTargetUsableTx reports whether id names a row that may
+// serve as a chained-exit / split target for a restored inbound: the
+// row must exist and must not be a metering companion. The save
+// surface refuses companions as targets outright (validateChain —
+// chain assembly dials the target row itself, and a companion's bare
+// identity PSK is rejected in multi-user mode; a later companion
+// recycle would also leave the reference dangling and fail the whole
+// kernel payload build), so for restored references a companion
+// counts as missing (X-02).
+func inboundChainTargetUsableTx(tx *gorm.DB, id int64) (bool, error) {
+	if id <= 0 {
+		return false, nil
+	}
+	var n int64
+	if err := tx.Model(&model.NodeInbound{}).Where("id = ? AND companion_of = ?", id, 0).Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // meteringShapeBlockedBackup mirrors the save surface's metering
 // shape gate (handler ssMeteringShapeBlock) over the four restored
 // fields: an origin serving through the PROXY protocol, relay-only,
@@ -562,11 +582,11 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 		// pruned to direct must not condemn the metering switch).
 		effOutboundID := row.OutboundID
 		if row.OutboundID > 0 {
-			exists, err := rowExistsTx(tx, &model.NodeInbound{}, row.OutboundID)
+			usable, err := inboundChainTargetUsableTx(tx, row.OutboundID)
 			if err != nil {
 				return err
 			}
-			if !exists {
+			if !usable {
 				updates["outbound_id"] = 0
 				outStripped++
 				effOutboundID = 0
@@ -609,8 +629,8 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 	return nil
 }
 
-// pruneDanglingSplitRulesTx 剔除 splitRules 中 outboundId 指向不存在
-// 入站的规则。按 json.RawMessage 逐条保留原始字节，未被剔除的规则
+// pruneDanglingSplitRulesTx 剔除 splitRules 中 outboundId 指向不可用
+// 目标（不存在、或计量伴生行——同链式出口的 X-02 口径）的规则。按 json.RawMessage 逐条保留原始字节，未被剔除的规则
 // 逐字不变（不做结构体重序列化，避免字段漂移）。整体解析失败时
 // parsed=false，调用方原样保留原文。
 func pruneDanglingSplitRulesTx(tx *gorm.DB, raw string) (pruned string, removed int, parsed bool, err error) {
@@ -628,11 +648,11 @@ func pruneDanglingSplitRulesTx(tx *gorm.DB, raw string) (pruned string, removed 
 			continue
 		}
 		if probe.OutboundID > 0 {
-			exists, cerr := rowExistsTx(tx, &model.NodeInbound{}, probe.OutboundID)
+			usable, cerr := inboundChainTargetUsableTx(tx, probe.OutboundID)
 			if cerr != nil {
 				return "", 0, false, cerr
 			}
-			if !exists {
+			if !usable {
 				removed++
 				continue
 			}
