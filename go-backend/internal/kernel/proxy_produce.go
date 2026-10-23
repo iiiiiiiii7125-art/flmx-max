@@ -63,6 +63,13 @@ func proxyURI(e Endpoint) (string, bool) {
 		b, _ := json.Marshal(v)
 		return "vmess://" + base64.StdEncoding.EncodeToString(b), true
 	case "vless", "trojan":
+		// R10X-010（D-05）：vless 支入口加与 ss 支同形的谓词门——
+		// 存量坏 ENC / 坏 Reality 节点在其余六面均整节点略过/报错，
+		// URI 面不得独家发链；合法节点逐字不变（谓词只读不改）。
+		// trojan 支字段已由 forEndpoint 愈合、无枚举域，不设门。
+		if p.Type() == "vless" && !validImportedProxyFields(p, ssFaceOther) {
+			return "", false
+		}
 		if p.network() == "http" {
 			return "", false
 		}
