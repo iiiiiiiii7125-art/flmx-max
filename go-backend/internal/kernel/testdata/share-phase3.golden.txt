@@ -63,7 +63,7 @@ proxies:
     client-fingerprint: "chrome"
     obfs-opts:
       host: "www.microsoft.com"
-      mode: "shadowtls"
+      mode: "shadow-tls"
       password: "stls-pass-2"
       version: 3
 proxy-groups:
