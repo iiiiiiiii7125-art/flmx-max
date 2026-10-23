@@ -150,6 +150,16 @@ var (
 	ghMirrorFlightMu sync.Mutex
 	ghMirrorFlights  = map[string]*ghMirrorFlight{}
 
+	// R6X-012（R6-C-01）：stale 回退的上次下载尝试时间（节流时钟），
+	// 与内容年龄基准解耦。旧实现靠回退时 os.Chtimes 把缓存文件 mtime
+	// 续到当前时刻来节流，而新鲜期与 stale 年龄判定也只读 mtime——
+	// 续期把内容真实年龄一并抹除，连续失败 + 周期请求下年龄永不
+	// 超过 24h 上限。改后：mtime 只由成功下载写入（即内容真实年龄），
+	// 节流只记在此表、以 fresh 为窗口，进程重启至多多打一次上游，
+	// 年龄上限不受影响。
+	ghMirrorAttemptMu sync.Mutex
+	ghMirrorAttempts  = map[string]time.Time{}
+
 	ghMirrorTagMu sync.Mutex
 	ghMirrorTags  = map[string]ghMirrorTag{}
 )
@@ -162,6 +172,25 @@ type ghMirrorFlight struct {
 type ghMirrorTag struct {
 	tag string
 	at  time.Time
+}
+
+func ghMirrorLastAttempt(path string) (time.Time, bool) {
+	ghMirrorAttemptMu.Lock()
+	defer ghMirrorAttemptMu.Unlock()
+	at, ok := ghMirrorAttempts[path]
+	return at, ok
+}
+
+func ghMirrorRecordAttempt(path string) {
+	ghMirrorAttemptMu.Lock()
+	ghMirrorAttempts[path] = time.Now()
+	ghMirrorAttemptMu.Unlock()
+}
+
+func ghMirrorClearAttempt(path string) {
+	ghMirrorAttemptMu.Lock()
+	delete(ghMirrorAttempts, path)
+	ghMirrorAttemptMu.Unlock()
 }
 
 func ghMirrorCheckRedirect(req *http.Request, via []*http.Request) error {
@@ -378,8 +407,20 @@ func ghMirrorCacheDir() string {
 func ghMirrorFetch(up *ghMirrorUpstream) (string, error) {
 	sum := sha256.Sum256([]byte(up.url))
 	path := filepath.Join(ghMirrorCacheDir(), hex.EncodeToString(sum[:]))
-	if st, err := os.Stat(path); err == nil && (up.fresh == 0 || time.Since(st.ModTime()) < up.fresh) {
-		return path, nil
+	if st, err := os.Stat(path); err == nil {
+		age := time.Since(st.ModTime())
+		if up.fresh == 0 || age < up.fresh {
+			return path, nil
+		}
+		// R6X-012：节流窗口内（上次下载失败尝试距今 < fresh）
+		// 直接回退旧副本，不必每个请求都去等 GitHub——但仅限年龄
+		// 未超上限；已超限的副本不得借节流续命，落到下载尝试，
+		// 失败后由回退段按真实年龄报错（上游恢复则正常更新）。
+		if age <= ghMirrorMaxStaleAge {
+			if last, ok := ghMirrorLastAttempt(path); ok && time.Since(last) < up.fresh {
+				return path, nil
+			}
+		}
 	}
 
 	ghMirrorFlightMu.Lock()
@@ -396,18 +437,23 @@ func ghMirrorFetch(up *ghMirrorUpstream) (string, error) {
 	ghMirrorFlightMu.Unlock()
 
 	f.err = ghMirrorDownload(up.url, path)
+	if f.err == nil {
+		ghMirrorClearAttempt(path)
+	}
 	if f.err != nil {
+		// 本次尝试计入节流时钟（无论最终是否回退），见 ghMirrorAttempts。
+		ghMirrorRecordAttempt(path)
 		if st, err := os.Stat(path); err == nil {
 			// F-137：stale 回退必须可见且有年龄上限。此前静默返回任意
 			// 年龄的旧副本（并 Chtimes 续期），故障可被长期掩盖。
 			// 超过上限不再回退、保留下载错误；上限内回退时打警告日志。
 			//（本层只做可用性缓存：内容完整性由下游各自的 sha256 校验
 			// 负责——节点安装命令已在 F-060 补齐校验，不再裸奔。）
+			// R6X-012：年龄取内容真实年龄——mtime 自成功下载后从未被
+			// 回退/节流改写（续期已删，节流走 ghMirrorAttempts），故
+			// 连续失败 + 周期请求下年龄照常累积、越限即止。
 			if age := time.Since(st.ModTime()); age <= ghMirrorMaxStaleAge {
 				log.Printf("gh_mirror: 下载失败（%v），回退 %s 的缓存副本（年龄 %s，上限 %s）", f.err, up.url, age.Round(time.Second), ghMirrorMaxStaleAge)
-				// 把它算作刚刷新过，免得每个请求都去等 GitHub。
-				now := time.Now()
-				_ = os.Chtimes(path, now, now)
 				f.err = nil
 			} else {
 				log.Printf("gh_mirror: 下载失败（%v），%s 的缓存副本年龄 %s 超过上限 %s，不回退", f.err, up.url, age.Round(time.Second), ghMirrorMaxStaleAge)
