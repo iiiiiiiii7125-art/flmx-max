@@ -976,8 +976,26 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// request carrying only a ShareHost keeps the pre-mode behaviour
 	// (host set → custom, host cleared → back to auto). Validation needs
 	// the node, whose address families decide ipv4/ipv6 availability.
+	// R5X-012: the resolution only honours fields the request explicitly
+	// carries. On update, req.ShareHost above was backfilled from the
+	// stored row when shareHost was absent (R4X-018 presence), so the
+	// backfilled value must not be mistaken for an explicitly carried
+	// host: a stored row pairing an explicit ipv4/ipv6 mode with a
+	// dormant ShareHost would otherwise flip to custom on any partial
+	// update omitting both share keys, silently activating the dormant
+	// host. When neither key is present the stored mode — and, below,
+	// the stored host — are preserved verbatim.
+	// Mode explicitness follows the pointer convention used by the
+	// other pointer fields (an explicit JSON null decodes to nil and
+	// counts as absent, exactly like an omitted key); host explicitness
+	// comes from the raw-key presence map (a plain string field cannot
+	// distinguish omitted from explicitly empty on its own).
+	shareKeysPresent := req.ShareAddressMode != nil || present["shareHost"]
 	shareMode := inboundShareMode(&row)
-	if req.ShareAddressMode != nil {
+	if update && !shareKeysPresent {
+		// Both share keys omitted: keep the stored mode as resolved
+		// from the stored row; no host inference from the backfill.
+	} else if req.ShareAddressMode != nil {
 		shareMode = strings.TrimSpace(*req.ShareAddressMode)
 	} else if req.ShareHost != "" {
 		shareMode = "custom"
@@ -996,7 +1014,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		return
 	}
 	row.ShareAddressMode = shareMode
-	if shareMode != "custom" {
+	if shareMode != "custom" && !(update && !shareKeysPresent) {
+		// Non-custom modes drop the host — but only for a value the
+		// request actually carried (or a create). A backfilled dormant
+		// host on a both-keys-omitted partial update is stored state,
+		// not a request value: preserve it with its stored mode
+		// (R5X-012).
 		req.ShareHost = ""
 	}
 
