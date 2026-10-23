@@ -419,6 +419,20 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 		return "", err
 	}
 	if count > 0 {
+		// F7 (B-05): name a metering companion when one occupies the
+		// range — it appears in no user-facing list and cannot be
+		// moved or deleted directly, so the generic label would send
+		// the user hunting for a service that does not exist for
+		// them. The port frees up by disabling subscription metering
+		// on the origin inbound.
+		cq := r.db.Model(&model.NodeInbound{}).Where("node_id = ? AND port BETWEEN ? AND ? AND companion_of > 0", nodeID, lo, hi)
+		if excludeInboundID > 0 {
+			cq = cq.Where("id <> ?", excludeInboundID)
+		}
+		var compCount int64
+		if err := cq.Count(&compCount).Error; err == nil && compCount > 0 {
+			return "SS 计量伴生入站", nil
+		}
 		return "其他节点服务", nil
 	}
 	if err := r.db.Model(&model.ForwardPort{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi).Count(&count).Error; err != nil {
