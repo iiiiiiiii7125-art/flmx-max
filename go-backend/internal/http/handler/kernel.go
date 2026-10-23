@@ -368,6 +368,17 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		// R4X-023：并发双到达时 CreateNodeKernel 幂等回读的是胜者行，
+		// 其版本可能与本次请求不同——按存量分支同一口径收敛到请求版本。
+		if k.Version != version {
+			if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+				"version": version, "enabled": 1, "updated_time": now,
+			}); err != nil {
+				response.WriteJSON(w, response.Err(-2, err.Error()))
+				return
+			}
+			k.Version = version
+		}
 	} else if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
 		"version": version, "enabled": 1, "updated_time": now,
 	}); err != nil {
