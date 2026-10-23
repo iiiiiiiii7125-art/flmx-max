@@ -792,7 +792,9 @@ func (h *Handler) deleteTunnelAndCleanup(tunnelID int64) error {
 		return err
 	}
 	h.cleanupTunnelRuntime(tunnelID)
-	h.cleanupFederationRuntime(tunnelID)
+	if err := h.cleanupFederationRuntime(tunnelID); err != nil {
+		log.Printf("delete tunnel %d: federation runtime cleanup failed: %v", tunnelID, err)
+	}
 	if err := h.deleteTunnelByID(tunnelID); err != nil {
 		return err
 	}
