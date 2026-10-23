@@ -276,9 +276,20 @@ func TestR3B4PendingDeleteJobRefreshesWhitelistOnlyAtFinalDelete(t *testing.T) {
 	waitForCondition(t, 5*time.Second, func() bool {
 		return len(landingRC.kernelApplyAllows()) > 0
 	}, "initial kernel apply on reconnect")
+	// R5X-023 deflake (2/3)：基线快照前先等重连波次静默。onNodeOnline
+	// 的异步段（reconcileNodeKernels goroutine）可在同一波次尾随推送
+	// 多份内容相同的 KernelApply；不等静默就拍 baseline，尾随 apply
+	// 会迟到落入 pending 窗口并误杀下方断言。静默判定为事件驱动
+	// （轮询计数直至一个轮询间隔内不再增长），不是固定等待掩盖。
+	waitForCondition(t, 10*time.Second, func() bool {
+		n := len(landingRC.kernelApplyAllows())
+		time.Sleep(300 * time.Millisecond)
+		return len(landingRC.kernelApplyAllows()) == n
+	}, "reconnect wave quiesced before baseline snapshot")
 	baseline := len(landingRC.kernelApplyAllows())
 	initial := landingRC.kernelApplyAllows()
-	if !strings.Contains(initial[len(initial)-1], "198.51.100.10/32") {
+	initialAllow := initial[len(initial)-1]
+	if !strings.Contains(initialAllow, "198.51.100.10/32") {
 		t.Fatalf("setup: initial allow must contain the nft entry IP, got %v", initial)
 	}
 
@@ -291,8 +302,14 @@ func TestR3B4PendingDeleteJobRefreshesWhitelistOnlyAtFinalDelete(t *testing.T) {
 	if fr, err := h.repo.GetForwardRecord(forwardID); err != nil || fr == nil {
 		t.Fatalf("pending window: forward row must survive, got %+v err=%v", fr, err)
 	}
-	if fresh := probe.newAllowsSince(baseline); len(fresh) != 0 {
-		t.Fatalf("N-04 anti-overfix: whitelist must not refresh during the pending window, got %v", fresh)
+	// R5X-023 deflake (1/3)：计数型断言改内容型（与同文件 ①防过修
+	// 用例同口径，N-04 语义强度不放宽）——pending 窗口内即使有
+	// 重连波次尾随 apply 迟到，其 allow 内容必须与初始逐字一致
+	// （仍含待删转发的入口 IP）；任何一份内容变化的刷新都是真刷新。
+	for _, allow := range probe.newAllowsSince(baseline) {
+		if allow != initialAllow {
+			t.Fatalf("N-04 anti-overfix: whitelist content must not refresh during the pending window, got %q want %q", allow, initialAllow)
+		}
 	}
 
 	// 节点恢复：job 退避到期后终删。
@@ -301,12 +318,15 @@ func TestR3B4PendingDeleteJobRefreshesWhitelistOnlyAtFinalDelete(t *testing.T) {
 	if fr, err := h.repo.GetForwardRecord(forwardID); err != nil || fr != nil {
 		t.Fatalf("job must finally delete the forward, got %+v err=%v", fr, err)
 	}
-	fresh := probe.newAllowsSince(baseline)
-	if len(fresh) == 0 {
-		t.Fatalf("R3X-018: no KernelApply pushed after the pending-delete job finalized the delete (whitelist not refreshed)")
-	}
-	last := fresh[len(fresh)-1]
-	if strings.Contains(last, "198.51.100.10/32") {
-		t.Fatalf("refreshed allow must drop the finally-deleted forward's entry IP, got %s", last)
-	}
+	// R5X-023 deflake (3/3)：终删段改事件驱动等待——等「不含入口 IP
+	// 的 allow 出现」，替代单次即时快照（消除刷新下发与快照之间的
+	// 反向竞态）。
+	waitForCondition(t, 5*time.Second, func() bool {
+		for _, allow := range probe.newAllowsSince(baseline) {
+			if !strings.Contains(allow, "198.51.100.10/32") {
+				return true
+			}
+		}
+		return false
+	}, "R3X-018: KernelApply without the deleted forward's entry IP after the pending-delete job finalized the delete")
 }
