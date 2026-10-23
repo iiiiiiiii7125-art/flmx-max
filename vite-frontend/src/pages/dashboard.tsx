@@ -617,13 +617,16 @@ function UserDashboard() {
     await copyToClipboard(allAddresses);
   };
 
-  const calculateForwardBillingFlow = (forward: Forward): number => {
+  const calculateForwardTotalFlow = (forward: Forward): number => {
     if (!forward) return 0;
 
     const inFlow = forward.inFlow || 0;
     const outFlow = forward.outFlow || 0;
 
-    // 后端已按计费类型处理流量，前端直接使用入站+出站总和
+    // forward 行为 raw 统计面（原始字节口径，R5X-013/R6X-006 案 a）：
+    // 此处合计仅为总流量展示，不是计费量——计费量（scaled、经单向
+    // 门控与倍率）只落 user/user_tunnel 行，per-forward 无 scaled 落点，
+    // 不得以「计费」名义展示 raw 合计。
     return inFlow + outFlow;
   };
 
@@ -1153,11 +1156,11 @@ function UserDashboard() {
                               </div>
                               <div className="text-center">
                                 <div className="text-default-500 mb-1">
-                                  计费
+                                  总流量
                                 </div>
                                 <div className="font-medium text-primary truncate">
                                   {formatFlow(
-                                    calculateForwardBillingFlow(forward),
+                                    calculateForwardTotalFlow(forward),
                                   )}
                                 </div>
                               </div>

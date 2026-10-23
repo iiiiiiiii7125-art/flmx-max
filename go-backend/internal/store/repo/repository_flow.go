@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -511,6 +512,57 @@ func (r *Repository) GetSpeedLimit(id int64) (*model.SpeedLimit, error) {
 		return nil, err
 	}
 	return &sl, nil
+}
+
+// SpeedLimitAffectedForwardIDs 返回引用某限速规则的全部转发 ID
+// （R6X-017 引用集正本，去重升序）：转发直引两列（forward.speed_id /
+// forward.ip_speed_id）+ user_tunnel.speed_id 间接引（该 UT 的
+// user_id+tunnel_id 名下全部转发，其 limiter 在同步时经
+// ResolveUserTunnelAndLimiter 解析到该规则）。规则编辑/删除/禁用后
+// 的重下发面以此集为准；删除前枚举与删除后按悬空 id 反查同集。
+func (r *Repository) SpeedLimitAffectedForwardIDs(id int64) ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	seen := make(map[int64]bool)
+	var ids []int64
+	add := func(list []int64) {
+		for _, fid := range list {
+			if fid > 0 && !seen[fid] {
+				seen[fid] = true
+				ids = append(ids, fid)
+			}
+		}
+	}
+	var direct []int64
+	if err := r.db.Model(&model.Forward{}).
+		Where("speed_id = ? OR ip_speed_id = ?", id, id).
+		Order("id ASC").Pluck("id", &direct).Error; err != nil {
+		return nil, err
+	}
+	add(direct)
+	type utPair struct {
+		UserID   int64 `gorm:"column:user_id"`
+		TunnelID int64 `gorm:"column:tunnel_id"`
+	}
+	var pairs []utPair
+	if err := r.db.Model(&model.UserTunnel{}).
+		Select("user_id, tunnel_id").
+		Where("speed_id = ?", id).
+		Find(&pairs).Error; err != nil {
+		return nil, err
+	}
+	for _, pair := range pairs {
+		var viaUT []int64
+		if err := r.db.Model(&model.Forward{}).
+			Where("user_id = ? AND tunnel_id = ?", pair.UserID, pair.TunnelID).
+			Order("id ASC").Pluck("id", &viaUT).Error; err != nil {
+			return nil, err
+		}
+		add(viaUT)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids, nil
 }
 
 func (r *Repository) GetSpeedLimitSpeed(id int64) (int, error) {

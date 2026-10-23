@@ -52,6 +52,10 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 节点端运行在实际进行流量转发的服务器上，需要连接到面板端进行管理。
 
+::: warning 部署注意：同一宿主只部署一个 agent
+同一台宿主机上并行运行多个 agent 会共享宿主 nftables 命名空间、互相干扰白名单物化；多节点场景请一台宿主部署一个 agent（不同宿主各一不受此限）。
+:::
+
 ### 用面板生成的命令安装（推荐）
 
 1. **网站配置** 里填好“面板后端地址”，节点通过它连接面板（通常是 `http://面板IP:6365`，或反向代理后的地址）

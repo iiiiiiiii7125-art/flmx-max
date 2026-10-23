@@ -548,7 +548,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}
-	if user.Status == 0 {
+	// R6X-014：停用判据与全族 fail-closed 口径对齐（Status != 1 即拒绝），
+	// 存量 status∉{0,1} 的僵尸行不得再取得 token。
+	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
@@ -885,7 +887,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("鉴权失败"))
 		return
 	}
-	if user.Status == 0 {
+	// R6X-014：同 login——停用判据改 Status != 1 fail-closed，
+	// 存量 status∉{0,1} 的僵尸行不得再取得本人用量。
+	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
@@ -1878,11 +1882,29 @@ func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 	return string(plain), nil
 }
 
+// R6X-013（R6-C-02）：Turnstile 校验出站的专用 client 与端点。
+// 旧实现走 http.PostForm（DefaultClient：Timeout=0 永不超时、默认
+// 跟随 ≤10 跳重定向），且位于登录/验证码路径——上游挂死时调用
+// goroutine 无限期阻塞于 Decode、可累积。此处显式 10s 超时（与
+// 联邦面同量级）+ 不跟随重定向（校验端点无需重定向，3xx 响应体
+// 无 success 字段、按校验失败处理）。client 与 URL 均为包级 var
+// 作为注入缝，测试可替换为 httptest 端点/短超时 client；正常路径
+// 行为不变。
+var (
+	turnstileSiteVerifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+	turnstileClient        = &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+)
+
 func (h *Handler) verifyCloudflareTurnstile(token, secretKey string) bool {
 	if token == "" || secretKey == "" {
 		return false
 	}
-	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{
+	resp, err := turnstileClient.PostForm(turnstileSiteVerifyURL, url.Values{
 		"secret":   {secretKey},
 		"response": {token},
 	})
@@ -1997,6 +2019,14 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return
 	}
+
+	// R6X-010：恢复也是 origin 状态的写路径——导入成功后同步触发
+	// 一次计量对账，使恢复出的 metering origin 的伴生行立即物化，
+	// 与入站保存/删除路径同口径。此前 backupImport 不在触发点全集
+	// 内，伴生最早要等订阅同步循环的节流顺带（≤~90s）才出现，窗
+	// 口内恢复的 SS 流量静默不计量。对账幂等自愈，任何成功导入都
+	// 触发（部分导入同样可能改写 origin/订阅需求）。
+	h.reconcileSSMetering()
 
 	// FIX2-B（V4-N1）：configs 段写库后与 UI 两写入口同口径失效配置
 	// 缓存。此前导入绕过全部失效钩子：notify_enabled 与 prober 三键

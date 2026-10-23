@@ -78,7 +78,10 @@ await session("admin", "admin@user", "demo-admin-123", [
   ["/node", [click("香港 HKT"), chain(tab("内核"))]],
   ["/inbound", [click("香港 Reality"), chain(mainClick("订阅", { exact: true })), chain(mainClick("订阅源"))]],
   ["/relay", [click("上海移动 → 香港")]],
-  ["/forward"], ["/tunnel"], ["/limit"], ["/user", [click("xiaoming")]], ["/group"], ["/panel-sharing"], ["/monitor"],
+  ["/forward"], ["/tunnel"], ["/limit"], ["/user", [click("xiaoming")]], ["/group"], ["/panel-sharing"],
+  // R6X-022: no ["/monitor"] step for admins — since the DA-1 IA merge
+  // admins are redirected to /node, so the step only ever re-recorded
+  // the node page (dead step). The user session below owns /monitor.
   ["/subscription", [
     click("小明 · 手机"),
     // The assign view's user picker is a native <select>: choosing the
@@ -88,7 +91,22 @@ await session("admin", "admin@user", "demo-admin-123", [
   ["/config"],
   ["/profile"],
 ]);
-await session("user", "xiaoming", "demo123456", [["/dashboard"], ["/my-subscription"], ["/forward"], ["/profile"]]);
+// R6X-022: the user walk covers /monitor (the demo user is the
+// monitoring-authorized persona, see seed_2) — this is the page-level
+// recording source for the user book's monitor keys; record_items.mjs
+// adds the item-level monitor endpoints for the same book. The tunnel
+// tab step mirrors check.mjs's "user monitor" interaction so the
+// tunnel monitor's endpoints are page-recorded too, not only direct.
+const clickMonitorTunnelTab = async (p) => {
+  const clicked = await p.evaluate(() => {
+    const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.trim() === "隧道");
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  if (!clicked) throw new Error("monitor tunnel tab not found");
+};
+await session("user", "xiaoming", "demo123456", [["/dashboard"], ["/my-subscription"], ["/forward"], ["/monitor", [clickMonitorTunnelTab]], ["/profile"]]);
 fs.writeFileSync(out, JSON.stringify(rec));
 const n = (r) => Object.keys(rec[r]).length;
 console.log("admin paths", n("admin"), "user paths", n("user"));

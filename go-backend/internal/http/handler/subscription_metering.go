@@ -334,9 +334,11 @@ func (h *Handler) deleteCompanionRow(comp *model.NodeInbound) bool {
 	return true
 }
 
-// deleteCompanionOf removes an origin's companion row ahead of the
-// origin's own deletion (the delete path's kernel push covers the
-// change).
+// deleteCompanionOf removes an origin's companion row as part of
+// the origin's own deletion; callers invoke it only after the origin
+// row itself has been deleted successfully (E6-S1 ordering — a failed
+// origin delete must leave the companion untouched). The delete
+// path's kernel push covers the change.
 func (h *Handler) deleteCompanionOf(originID int64) {
 	comp, err := h.repo.GetCompanionInbound(originID)
 	if err != nil || comp == nil {
