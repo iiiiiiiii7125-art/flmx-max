@@ -7,16 +7,22 @@
 //
 //   for every endpoint recorded in src/demo/fixtures.json, resolve the
 //   response interface named by the api layer (src/api/index.ts), take
-//   its REQUIRED (non-optional) top-level fields from src/api/types.ts,
+//   its REQUIRED (non-optional) top-level fields from its declaration,
 //   and diff them against the key set of every recorded object for that
 //   endpoint (array items, `{ items: [...] }` collections, or the data
 //   object itself). Any required field missing from a recorded object
 //   is reported by field name, fixtures key and book, and the script
 //   exits non-zero.
 //
-// Scope (deliberate, per R6-X-verdicts §6.2): interfaces declared in
-// src/api/types.ts only, top-level fields only. Types declared inside
-// src/api/index.ts itself and nested inline objects are out of scope.
+// Scope: top-level fields only. Declarations are looked up in BOTH
+// src/api/types.ts and src/api/index.ts (R7X-007): response types such
+// as SubTraffic / SubscriptionItem are declared in index.ts itself, and
+// the R6 §6.2 types.ts-only scope silently skipped every endpoint they
+// serve — the SubTraffic.since drift recurred through that blind spot.
+// Nested inline objects remain out of scope, as do `Record<string, …>`
+// map payloads (their content is covered by the fixtures content check,
+// check-fixtures-content.mjs — key presence there is a runtime map key,
+// not a declared field).
 //
 // Usage:
 //   node scripts/demo/check-shape-drift.mjs [frontendRoot]
@@ -78,7 +84,10 @@ function topLevelFields(body) {
 const requiredCache = new Map();
 function requiredFields(name) {
   if (!requiredCache.has(name)) {
-    const body = typeBody(typesSrc, name);
+    // Dual source (R7X-007): types.ts first (the bulk of the wire
+    // types), then index.ts, where the api layer declares its own
+    // response types (SubTraffic, SubscriptionItem, LoginResponse, …).
+    const body = typeBody(typesSrc, name) ?? typeBody(indexSrc, name);
     if (body === null) {
       requiredCache.set(name, null);
     } else {
@@ -116,7 +125,7 @@ const endpoints = endpointTypes(indexSrc);
  * Which (interface, objects) pairs a recorded `data` payload must satisfy:
  *  - `Item[]` / `Item`            -> the items / the object itself
  *  - `{ items: Item[]; ... }`     -> data[prop] for each prop typed by a
- *                                    types.ts interface
+ *                                    declared interface (either source)
  *  - `A | null`                   -> A
  * Anything else (inline anonymous types, primitives) is out of scope.
  */
@@ -180,6 +189,6 @@ console.log(
   problems
     ? `\nshape drift: ${problems} missing required field(s) across ${checked} recorded object(s). ` +
         `Sync the fixtures (re-record or backfill) — see scripts/demo/README.md.`
-    : `shape ok: ${checked} recorded object(s) cover every required types.ts field (${skipped} fixture key(s) out of scope).`,
+    : `shape ok: ${checked} recorded object(s) cover every required field declared in types.ts / api/index.ts (${skipped} fixture key(s) out of scope).`,
 );
 process.exit(problems ? 1 : 0);

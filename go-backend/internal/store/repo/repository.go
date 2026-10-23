@@ -3990,6 +3990,9 @@ func sweepDanglingSpeedRefsTx(tx *gorm.DB, forwards []model.ForwardBackup, userT
 
 func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
 	count := 0
+	// R7X-002：本批恢复行在目标库取消掉的待删记账身份，循环后汇总
+	// 披露（见循环内侧表收口与循环后 warning）。
+	var cancelledPending []string
 	// R5X-017：ForwardPorts 先删后建——预删行数与本批跳过数先行
 	// 记账，重建后若「预删>0 且跳过>0」补 warning（见循环后）。
 	var preDeletedPorts int64
@@ -4061,6 +4064,21 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		if err != nil {
 			return count, err
 		}
+		// R7X-002：status=2 的第二表示收口——目标库同 id 的既有
+		// nft_pending_delete 侧表行是待删重试 job 的唯一驱动源，行
+		// status 已按上方分格落库（2 归一为 0、1/0 直通）而侧表不
+		// 收口时，恢复出的转发会在 ≤1 个重试周期内被 job 按侧表
+		// 无条件终删（与回执的恢复承诺正相反）。恢复即撤销该行在
+		// 目标库未完成的删除意图（备份是更新的真源）：落库成功后
+		// 删除同 id 侧表记账，取消身份收集后统一 warnf 披露；目标
+		// 库无侧表行时 RowsAffected=0、行为逐字不变（不新建记账）。
+		pendingRes := tx.Where("forward_id = ?", f.ID).Delete(&model.NftPendingDelete{})
+		if pendingRes.Error != nil {
+			return count, pendingRes.Error
+		}
+		if pendingRes.RowsAffected > 0 {
+			cancelledPending = append(cancelledPending, fmt.Sprintf("#%d（%q）", f.ID, f.Name))
+		}
 		if f.ForwardPorts != nil {
 			var existingPorts int64
 			if err := tx.Model(&model.ForwardPort{}).Where("forward_id = ?", f.ID).Count(&existingPorts).Error; err != nil {
@@ -4090,6 +4108,10 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			}
 		}
 		count++
+	}
+	// R7X-002：取消待删记账的汇总披露（删除数 >0 才发）。
+	if len(cancelledPending) > 0 {
+		rep.warnf("备份恢复：恢复的转发在目标库存在删除待处理记账（nft_pending_delete），已随恢复取消 %d 条：转发 %s；这些转发不会再被待删重试流程删除", len(cancelledPending), strings.Join(cancelledPending, "、"))
 	}
 	// R5X-017：预删>0 且本批端口跳过>0 时补 warning（口径同
 	// importTunnels 的 chain 段）。

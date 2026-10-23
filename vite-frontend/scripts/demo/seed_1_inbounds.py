@@ -49,6 +49,13 @@ db.commit()
 INB = [
     ("香港 HKT", "xray", {"name": "香港 Reality", "protocol": "vless", "port": 443, "settings": {"flow": "xtls-rprx-vision"},
                           "security": {"type": "reality", "sni": "www.microsoft.com"}}),
+    # R7X-005 附带种子：VLESS ENC 入站（表单开启 ENC 时的同型配置——TCP +
+    # 安全无 + Vision + ML-KEM-768 + native，后端 Normalize 自动生成密钥），
+    # 使 demo fixtures / 走查能覆盖 ENC「IX 中转专用协议」标识三面；
+    # 此前种子无 ENC 入站，该标识在 demo 中结构性不可见。
+    ("香港 HKT", "xray", {"name": "香港 ENC", "protocol": "vless", "port": 8443,
+                          "settings": {"flow": "xtls-rprx-vision", "encryptionAuth": "mlkem768", "encryptionMode": "native"},
+                          "security": {"type": "none"}}),
     ("日本 东京", "xray", {"name": "东京 Reality", "protocol": "vless", "port": 443, "settings": {"flow": "xtls-rprx-vision"},
                           "security": {"type": "reality", "sni": "www.apple.com"}}),
     ("日本 东京", "snell", {"name": "东京 Snell", "protocol": "snell", "port": 6160, "settings": {"snellVersion": 5}}),

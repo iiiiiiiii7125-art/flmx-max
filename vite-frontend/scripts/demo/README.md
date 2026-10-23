@@ -6,7 +6,7 @@
 2. 依次运行 `seed_1_inbounds.py`、`seed_2_relays_users.py`、`seed_3_subscriptions_history.py`，参数是数据库文件路径
 3. 前端开发服务器指向这个后端：`VITE_API_BASE=http://127.0.0.1:16370 pnpm exec vite --port 3114`
 4. 录制：`CHROMIUM=/path/to/chrome node record_pages.mjs raw.json`，再 `node record_items.mjs raw.json`（需要 `playwright-core`，本地工具、不进 package.json）
-5. 生成：`python3 build_fixtures.py raw.json ../../src/demo/fixtures.json`。没有节点 agent 时录不到的延迟、回程、内核状态由它补上
+5. 生成：`python3 build_fixtures.py raw.json ../../src/demo/fixtures.json`。没有节点 agent 时录不到的延迟、回程、内核状态由它补上。生成前有一道**内容闸**（R7X-006）：关键键（admin `node/traffic/month`、两册 traffic 面）每条录制的 data 必须非空，不过闸不写文件——只对键集存在性对账放过了一次「种子从未产出该事实、重录把演示数据冲空」的回退，种子缺事实就补种子（如 `node_traffic` 当月行在 seed_3），不要在 fixtures 里手工补值销账。
 
 演示里的时间会按“录制到现在”的间隔整体后移，所以不用经常重录。
 
@@ -26,3 +26,10 @@ node scripts/demo/check.mjs dist-demo   # CHROME=/path/to/chrome 指定浏览器
 ```
 
 新功能加了接口，失败信息会列出缺的路径：按上面的步骤重录，或者把新接口加进 `record_items.mjs`。新页面要加进 `check.mjs` 的页面列表。
+
+另两道对已入库 fixtures 的常设检查（发版门判读）：
+
+```bash
+node scripts/demo/check-shape-drift.mjs      # 声明形状：types.ts + api/index.ts 双源必填字段 × fixtures（R7X-007）
+node scripts/demo/check-fixtures-content.mjs # 内容非空：关键键清单逐条 data 非空（R7X-006，与 build_fixtures 内容闸同口径）
+```
