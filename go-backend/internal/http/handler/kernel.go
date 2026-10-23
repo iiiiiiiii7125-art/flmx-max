@@ -1722,7 +1722,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			return nil, "", err
 		}
 		// R2X-007 下发面：存量脏组合（保存期未拦）在下发期同判——任一
-		// Via/分流目标带 ENC 且拨号内核 Xray <25.6.8，整单拒绝。
+		// Via/分流目标带 ENC 且拨号内核 Xray <25.9.5，整单拒绝。
 		if msg := encDialGate(k.KernelType, k.Version, in.Via); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
@@ -1937,7 +1937,7 @@ func versionBelow(version string, major, minor int) bool {
 	return ma < major || (ma == major && mi < minor)
 }
 
-// versionBelow3 是 versionBelow 的三段版（Xray 的 25.6.8 这类下限需要精确到
+// versionBelow3 是 versionBelow 的三段版（Xray 的 25.9.5 这类下限需要精确到
 // 修订号）；"latest" 与不可解析的版本同样不视为过低。
 func versionBelow3(version string, major, minor, patch int) bool {
 	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
@@ -1975,8 +1975,8 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelow(version, 1, 14) {
 		return fmt.Sprintf("sing-box 内置 Snell 需要 1.14 及以上，节点安装的是 %s", version)
 	}
-	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 6, 8) {
-		return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
+	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 9, 5) {
+		return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
 	}
 	// 出站 IP 策略版本门（S4）：策略字段随入站一同进入 gate，保存/复检/
 	// 换版三处同拦；未知策略字符串也在此拒绝。
@@ -1995,15 +1995,15 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 }
 
 // encDialGate 是 R2X-007 的 ENC 拨号侧版本门：链式/分流目标带 VLESS
-// 加密时，拨号方内核同样需要 Xray 25.6.8+——ENC 不只是服务端属性。
+// 加密时，拨号方内核同样需要 Xray 25.9.5+——ENC 不只是服务端属性。
 // 版本比较与入站自有门（kernelVersionGate）同用 versionBelow3，保持
 // 单一口径；保存（validateChainVersion）、下发（buildKernelApplyPayload）
 // 与换版扫描（checkKernelVersionGates）三面共用。返回空串表示通过。
 func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
-	if e == nil || kernelType != kernel.TypeXray || !versionBelow3(version, 25, 6, 8) || !e.HasVLESSEncryption() {
+	if e == nil || kernelType != kernel.TypeXray || !versionBelow3(version, 25, 9, 5) || !e.HasVLESSEncryption() {
 		return ""
 	}
-	return fmt.Sprintf("VLESS 加密需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
+	return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
 }
 
 // inboundRowHasENC reports whether a stored inbound row carries VLESS
@@ -2045,12 +2045,12 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 			}
 		}
 		// R2X-007：经 ENC 节点出站（链式/分流目标）的入站同样要求拨号
-		// 内核 Xray 25.6.8+；目标入站不在本内核上，gate 看不到，须单独
+		// 内核 Xray 25.9.5+；目标入站不在本内核上，gate 看不到，须单独
 		// 扫描（仿上方 Snell 扫描块）。
-		if kernelType == kernel.TypeXray && versionBelow3(version, 25, 6, 8) {
+		if kernelType == kernel.TypeXray && versionBelow3(version, 25, 9, 5) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowHasENC(t) {
-					return fmt.Errorf("入站 %s 经 VLESS 加密节点 %s 出站，需要 Xray 25.6.8 及以上，不能安装 %s", row.Name, t.Name, version)
+					return fmt.Errorf("入站 %s 经 VLESS 加密节点 %s 出站，需要 Xray 25.9.5 及以上，不能安装 %s", row.Name, t.Name, version)
 				}
 			}
 		}
