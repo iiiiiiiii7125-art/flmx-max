@@ -75,12 +75,23 @@ type Repository struct {
 	dbPath string
 }
 
+// FlowUploadCounterDelta R5X-013（verdicts §5.1 裁定）：delta 拆
+// raw/scaled 两组——InFlow/OutFlow 为 scaled 口径（乘流量倍率、单向
+// 过滤后），只落 user / user_tunnel 行（配额面，quotaUsage 亦由此
+// 派生）；RawInFlow/RawOutFlow 为原始字节口径，只落 forward 行
+// （「已用流量」如实统计面）。构建器（gost / nftables·realm）必须
+// 置 HasRaw=true 并填 raw 组；未置 HasRaw 的存量直接构造（旧测试与
+// 外部调用）按旧口径回退：forward 行落 scaled 值，行为不变。
+// 历史已落 scaled 值不回溯。
 type FlowUploadCounterDelta struct {
 	ForwardID    int64
 	UserID       int64
 	UserTunnelID int64
 	InFlow       int64
 	OutFlow      int64
+	RawInFlow    int64
+	RawOutFlow   int64
+	HasRaw       bool
 }
 
 func (r *Repository) DB() *gorm.DB {
@@ -125,9 +136,14 @@ func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error
 	userTunnelTotals := make(map[int64][2]int64, len(deltas))
 	for _, delta := range deltas {
 		if delta.ForwardID > 0 {
+			// R5X-013：forward 行落 raw 组；无 raw 组的存量构造回退 scaled。
+			fwdIn, fwdOut := delta.InFlow, delta.OutFlow
+			if delta.HasRaw {
+				fwdIn, fwdOut = delta.RawInFlow, delta.RawOutFlow
+			}
 			current := forwardTotals[delta.ForwardID]
-			current[0] += delta.InFlow
-			current[1] += delta.OutFlow
+			current[0] += fwdIn
+			current[1] += fwdOut
 			forwardTotals[delta.ForwardID] = current
 		}
 		if delta.UserID > 0 {
