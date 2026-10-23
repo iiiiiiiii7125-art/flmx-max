@@ -41,6 +41,12 @@ import (
 var meteringMu sync.Mutex
 var lastMeteringReconcile atomic.Int64
 
+// meteringGatePayloadBuilds counts the payload rebuilds the F4 gate
+// performs (one per kernelConfigApplied evaluation). Diagnostic/test
+// hook only — no production logic reads it; the request-scoped gate
+// reuse (Y-01) is pinned against it.
+var meteringGatePayloadBuilds atomic.Int64
+
 // meteringReconcileInterval throttles the reconcile on the (frequent)
 // subscription sync beat; explicit triggers (inbound save/delete) run
 // it immediately.
@@ -355,12 +361,43 @@ func (h *Handler) kernelConfigApplied(k *model.NodeKernel) bool {
 	if k == nil || k.AppliedHash == "" {
 		return false
 	}
+	meteringGatePayloadBuilds.Add(1)
 	_, hash, err := h.buildKernelApplyPayload(k)
 	if err != nil {
 		log.Printf("ss metering: build kernel %d payload for applied check: %v", k.ID, err)
 		return false
 	}
 	return hash != "" && hash == k.AppliedHash
+}
+
+// companionGateMemo memoizes the F4 gate's verdict for the span of
+// one request-scoped call chain — a single subscription view build,
+// or one list request rendering many views. Each gate evaluation is
+// a full payload rebuild + hash per kernel (kernelConfigApplied),
+// and one view build consults the companion map twice (the
+// shared-credential determination and subEndpoints' retargeting);
+// without the memo the same kernel is rebuilt for every consultation
+// (Y-01). The memo is a per-request local and never outlives the
+// request: the agent's ack state can change at any time, so gate
+// verdicts must never be cached across requests. Not safe for
+// concurrent use; one memo serves one request goroutine.
+type companionGateMemo struct {
+	byOrigin map[int64]kernel.Inbound
+	loaded   bool
+}
+
+// companionsByOrigin returns the live-companion map, evaluating the
+// F4 gate at most once per memo. A nil memo evaluates fresh, exactly
+// like companionInboundsByOrigin.
+func (h *Handler) companionsByOrigin(memo *companionGateMemo) map[int64]kernel.Inbound {
+	if memo != nil && memo.loaded {
+		return memo.byOrigin
+	}
+	out := h.companionInboundsByOrigin()
+	if memo != nil {
+		memo.byOrigin, memo.loaded = out, true
+	}
+	return out
 }
 
 // companionInboundsByOrigin maps origin inbound ids to their live

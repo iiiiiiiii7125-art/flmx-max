@@ -612,6 +612,14 @@ func (h *Handler) runSubscriptionLoop(ctx context.Context) {
 // selected inbounds and their relays, with the share credentials where
 // the protocol allows.
 func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) []kernel.Endpoint {
+	return h.subEndpointsMemo(s, rows, nil)
+}
+
+// subEndpointsMemo is subEndpoints with an F4 gate memo (Y-01): the
+// caller passes the memo of the enclosing view build / request so the
+// companion map — and with it the per-kernel payload rebuilds behind
+// the applied gate — is evaluated once, not once per consultation.
+func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) []kernel.Endpoint {
 	want := map[int64]bool{}
 	for _, id := range subInboundIDs(s, rows) {
 		want[id] = true
@@ -627,7 +635,7 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 	endpoints, _ := h.inboundEndpoints(selected)
 	if isShare(s) {
 		ku := kernelUser(s)
-		companions := h.companionInboundsByOrigin()
+		companions := h.companionsByOrigin(memo)
 		kept := endpoints[:0]
 		for i := range endpoints {
 			e := endpoints[i]
@@ -810,7 +818,15 @@ func nodeCountFormat(format string) string {
 }
 
 func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string) subscriptionView {
-	return h.subscriptionViewForAssignments(s, rows, now, format, nil)
+	return h.subscriptionViewMemo(s, rows, now, format, nil)
+}
+
+// subscriptionViewMemo is subscriptionView with an F4 gate memo
+// (Y-01): list handlers pass one memo for the whole request so the
+// applied gate is evaluated once per kernel across all views in the
+// response, instead of twice per view.
+func (h *Handler) subscriptionViewMemo(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, memo *companionGateMemo) subscriptionView {
+	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, nil, memo)
 }
 
 // subscriptionViewForAssignments 在 subscriptionView 基础上按用户入站
@@ -819,6 +835,13 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 // 端点，使「我的订阅」显示数与该用户经 ?user=&sig= 个性化链接实际
 // 拉到的节点数恒等。空集 = 该用户个性化链接拉到 0 个节点。
 func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment) subscriptionView {
+	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, assignments, nil)
+}
+
+func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment, memo *companionGateMemo) subscriptionView {
+	if memo == nil {
+		memo = &companionGateMemo{}
+	}
 	if assignments != nil {
 		rows = filterInboundRowsByUserAssignments(rows, assignments)
 	}
@@ -829,7 +852,7 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	}
 	shared := []int64{}
 	if isShare(s) {
-		companions := h.companionInboundsByOrigin()
+		companions := h.companionsByOrigin(memo)
 		for _, id := range ids {
 			row := byID[id]
 			if isExternalInbound(&row) {
@@ -864,7 +887,7 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	if format == kernel.FormatSingbox {
 		countOpts.SingboxSnell = true
 	}
-	endpoints := h.subEndpoints(s, rows)
+	endpoints := h.subEndpointsMemo(s, rows, memo)
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
@@ -908,9 +931,12 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r.Body, &listReq)
 	now := time.Now()
+	// One F4 gate memo for the whole list request (Y-01): the applied
+	// gate is evaluated once per kernel across all views rendered here.
+	gateMemo := &companionGateMemo{}
 	items := make([]subscriptionView, 0, len(subs))
 	for i := range subs {
-		items = append(items, h.subscriptionView(&subs[i], rows, now, listReq.Format))
+		items = append(items, h.subscriptionViewMemo(&subs[i], rows, now, listReq.Format, gateMemo))
 	}
 	// 回填默认订阅标记（个人订阅链接的载体 = 排序第一条）。DefaultSubscription
 	// 在无订阅时会新建一条，与上方空列表分支的既有行为一致；此处失败不阻断
