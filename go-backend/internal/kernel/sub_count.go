@@ -25,7 +25,10 @@ func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions)
 		// the rule-set serialization differs), so the counts agree.
 		return count(func(e Endpoint) bool { _, ok := ClashProxy(e); return ok })
 	case FormatSingbox:
-		return count(func(e Endpoint) bool { _, ok := singboxOutbounds(e, opts.SingboxSnell); return ok })
+		return count(func(e Endpoint) bool {
+			_, ok := singboxOutboundsWith(e, opts.SingboxSnell, opts.SingboxNaive)
+			return ok
+		})
 	case FormatSurge:
 		return count(func(e Endpoint) bool { _, ok := SurgeLine(e); return ok })
 	case FormatLoon:

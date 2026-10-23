@@ -52,7 +52,9 @@ func TestImportSingboxSnellNaive(t *testing.T) {
 	for _, n := range nodes {
 		eps = append(eps, Endpoint{Name: n.Name, Host: n.Host, Port: n.Port, Proxy: n.Proxy, Direct: true})
 	}
-	sb, _, err := Subscription(FormatSingbox, eps, SubOptions{SingboxSnell: true})
+	// R9X-005 连带格：本用例的客户端口径为 sing-box 1.14+（含 Snell），
+	// 同时满足 Naive 的 1.13+ UA 门，故两标志同置。
+	sb, _, err := Subscription(FormatSingbox, eps, SubOptions{SingboxSnell: true, SingboxNaive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +92,7 @@ func TestImportSingboxOwnProfileRoundTrip(t *testing.T) {
 		}
 		eps = append(eps, Endpoint{Name: "n" + in.Protocol, Host: "203.0.113.9", Port: in.Port, Inbound: in})
 	}
-	body, _, err := Subscription(FormatSingbox, eps, SubOptions{SingboxSnell: true})
+	body, _, err := Subscription(FormatSingbox, eps, SubOptions{SingboxSnell: true, SingboxNaive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
