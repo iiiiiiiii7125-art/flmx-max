@@ -50,6 +50,62 @@ func TestCompanionPartialUniqueIndex(t *testing.T) {
 	}
 }
 
+// F6 (B-07): restoring a backup whose inbound id collides with an
+// existing companion row (cross-panel restore) must clear the row's
+// companion marker — restored rows are origins; a leftover marker
+// would hide the row from every list and expose it to reconcile
+// recycling under another origin's lifecycle.
+func TestBackupRestoreClearsCollidingCompanionMarker(t *testing.T) {
+	now := time.Now().UnixMilli()
+	src, err := Open(filepath.Join(t.TempDir(), "src.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	createRow(t, src, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "26000-26100",
+		CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, src, &model.NodeKernel{ID: 1, NodeID: 1, KernelType: "xray", Version: "latest", Enabled: 1, CreatedTime: now})
+	origin := &model.NodeInbound{KernelID: 1, NodeID: 1, Name: "ss-origin", Protocol: "shadowsocks",
+		Port: 8388, Settings: `{"method":"2022-blake3-aes-128-gcm","password":"shared"}`,
+		MeteringEnabled: 1, CreatedTime: now, UpdatedTime: now}
+	if err := src.CreateNodeInbound(origin); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := src.ExportPartial([]string{"inbounds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+	createRow(t, dst, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "26000-26100",
+		CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, dst, &model.NodeKernel{ID: 1, NodeID: 1, KernelType: "xray", Version: "latest", Enabled: 1, CreatedTime: now})
+	// A companion row squatting on the id the backup's origin carries.
+	squatter := &model.NodeInbound{ID: origin.ID, KernelID: 1, NodeID: 1, Name: "foreign-companion",
+		Protocol: "shadowsocks", Port: 31009,
+		Settings:    `{"method":"2022-blake3-aes-128-gcm","password":"ipsk"}`,
+		CompanionOf: 4242, CreatedTime: now, UpdatedTime: now}
+	createRow(t, dst, squatter)
+
+	if _, err := dst.Import(backup, []string{"inbounds"}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := dst.GetNodeInbound(origin.ID)
+	if err != nil || row == nil {
+		t.Fatalf("restored row: %v", err)
+	}
+	if row.CompanionOf != 0 {
+		t.Fatalf("restored origin must not keep the squatter's companion marker, companionOf=%d", row.CompanionOf)
+	}
+	if row.Name != "ss-origin" || row.MeteringEnabled != 1 {
+		t.Fatalf("restored row must carry the backup's content: %+v", row)
+	}
+}
+
 // Backups carry configuration, not derived state: companion rows are
 // excluded, while the origin's metering switch round-trips.
 func TestBackupExcludesCompanionInbounds(t *testing.T) {
