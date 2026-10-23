@@ -494,8 +494,17 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 			known[id] = struct{}{}
 		}
 
+		// F-S01（R4 发版门项 11 升 P3）：基线行以 FOR UPDATE 读，
+		// 与订阅管线同修法——PG Read Committed 下两路并发同一样本
+		// 各按同一旧基线算 delta 会双计（门上实证入站后两轮双
+		// 计）；行锁串行化后后到事务重读已提交基线、delta 归 0。
+		// 按唯一键序取锁防锁序交叉；SQLite 方言自动忽略 FOR 子
+		// 句，行为不变（MaxOpenConns(1) 本就串行）。
 		var states []model.NodeInboundCounter
-		if err := tx.Where("inbound_id IN ?", ids).Find(&states).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("inbound_id IN ?", ids).
+			Order("inbound_id ASC, protocol ASC, direction ASC").
+			Find(&states).Error; err != nil {
 			return err
 		}
 		prev := make(map[inboundCounterKey]model.NodeInboundCounter, len(states))
