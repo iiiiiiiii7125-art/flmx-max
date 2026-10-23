@@ -310,12 +310,23 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				"settings", "extra", "share_host", "share_address_mode", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
 				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
-				"metering_enabled",
+				"metering_enabled", "companion_of",
 			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}
 		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
+			return 0, err
+		}
+		// F6 (B-07): restored rows are always origins — backups never
+		// carry companions (they are derived state). Without the
+		// explicit write-back, a restored row whose id collides with
+		// an existing companion row (cross-panel restore) would keep
+		// the squatter's companion_of marker: hidden from lists and
+		// exposed to another origin's reconcile lifecycle. The
+		// item's CompanionOf is intentionally always 0; the zero-value
+		// write-back mirrors the enabled handling above.
+		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "companion_of", 0); err != nil {
 			return 0, err
 		}
 	}
