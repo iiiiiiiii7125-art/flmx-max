@@ -911,6 +911,9 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	// sing-box 客户端 ≥1.14 才下发 Snell 节点；UA 解析不出版本一律不给
 	// （fail-closed，老客户端拿到也渲染不了）。
 	subOpts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())
+	// R9X-005 连带格：sing-box 客户端 ≥1.13 才下发 Naive 节点；低于
+	// 1.13 略过该节点（其余节点照常下发），不整份拒绝。
+	subOpts.SingboxNaive = kernel.SingboxClientHasNaive(r.UserAgent())
 	body, contentType, err := kernel.Subscription(format, endpoints, subOpts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

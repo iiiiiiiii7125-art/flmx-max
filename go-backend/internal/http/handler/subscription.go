@@ -886,6 +886,8 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	countOpts := pipe.options()
 	if format == kernel.FormatSingbox {
 		countOpts.SingboxSnell = true
+		// 1.14+ 口径含 Naive（≥1.13），与 SingboxSnell 同置 true。
+		countOpts.SingboxNaive = true
 	}
 	endpoints := h.subEndpointsMemo(s, rows, memo)
 	if len(assignments) > 0 {

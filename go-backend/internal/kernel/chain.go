@@ -53,7 +53,13 @@ func CheckChainWith(kernelType string, via Endpoint, opts RenderOptions) error {
 		if via.Proxy == nil && via.Inbound.Protocol == ProtocolSnell && !opts.SingboxSnell {
 			return errors.New("sing-box 1.14 及以上才能连接 Snell 节点，请先更新内核")
 		}
-		_, err := singboxChainOutbounds(via, "check", 0, opts.SingboxSnell)
+		// R9X-005：Naive 出站是 sing-box 1.13 才有的类型（1.12.17 对
+		// naive 出站 exit 1、二分实测），自建与导入目标同门点名拒绝；
+		// 此前无门保存成功、下发后节点整单 FATAL。
+		if IsNaiveEndpoint(via) && !opts.SingboxNaive {
+			return errors.New("sing-box 1.13 及以上才能连接 Naive 节点，请先更新内核")
+		}
+		_, err := singboxChainOutboundsWith(via, "check", 0, opts.SingboxSnell, opts.SingboxNaive)
 		return err
 	case TypeXray:
 		_, err := xrayChainOutbound(via, "check")
@@ -72,8 +78,15 @@ func CheckChainWith(kernelType string, via Endpoint, opts RenderOptions) error {
 // singboxChainOutbounds renders the outbounds that dial the chain target;
 // a non-zero mark goes on the one that opens the socket.
 func singboxChainOutbounds(via Endpoint, tag string, mark int64, snell bool) ([]interface{}, error) {
+	return singboxChainOutboundsWith(via, tag, mark, snell, true)
+}
+
+// singboxChainOutboundsWith is singboxChainOutbounds with the Naive
+// version gate (R9X-005): a Naive target renders only when the dialing
+// sing-box is 1.13+.
+func singboxChainOutboundsWith(via Endpoint, tag string, mark int64, snell, naive bool) ([]interface{}, error) {
 	via.Name = tag
-	obs, ok := singboxOutbounds(via, snell)
+	obs, ok := singboxOutboundsWith(via, snell, naive)
 	if !ok {
 		return nil, fmt.Errorf("sing-box 无法连接 %s 类型的出站节点", chainTargetLabel(via))
 	}
@@ -115,6 +128,12 @@ func singboxShadowTLSBackendTag(in Inbound) string {
 // the chained and split-routed inbounds. The rules must precede the per-user
 // direct rules.
 func singboxChainRoutes(inbounds []Inbound, snell bool) ([]interface{}, []interface{}, []string, error) {
+	return singboxChainRoutesWith(inbounds, snell, true)
+}
+
+// singboxChainRoutesWith is singboxChainRoutes with the Naive version
+// gate (R9X-005) threaded through chain and 分流 targets.
+func singboxChainRoutesWith(inbounds []Inbound, snell, naive bool) ([]interface{}, []interface{}, []string, error) {
 	var outbounds, rules []interface{}
 	var sets []string
 	for _, in := range inbounds {
@@ -125,7 +144,7 @@ func singboxChainRoutes(inbounds []Inbound, snell bool) ([]interface{}, []interf
 		if in.splitRequiresSniff() {
 			rules = append(rules, obj{"inbound": tags, "action": "sniff"})
 		}
-		obs, rs, ss, err := singboxSplitRoutes(in, snell)
+		obs, rs, ss, err := singboxSplitRoutesWith(in, snell, naive)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -139,7 +158,7 @@ func singboxChainRoutes(inbounds []Inbound, snell bool) ([]interface{}, []interf
 		}
 		for _, id := range in.countedUsers() {
 			tag := chainUserTag(in, id)
-			obs, err := singboxChainOutbounds(*in.Via, tag, UserMark(id), snell)
+			obs, err := singboxChainOutboundsWith(*in.Via, tag, UserMark(id), snell, naive)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 			}
@@ -147,7 +166,7 @@ func singboxChainRoutes(inbounds []Inbound, snell bool) ([]interface{}, []interf
 			rules = append(rules, obj{"inbound": tags, "auth_user": []string{User{ID: id}.Name()}, "outbound": tag})
 		}
 		tag := chainTag(in)
-		obs, err = singboxChainOutbounds(*in.Via, tag, 0, snell)
+		obs, err = singboxChainOutboundsWith(*in.Via, tag, 0, snell, naive)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 		}
