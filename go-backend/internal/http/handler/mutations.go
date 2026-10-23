@@ -508,12 +508,19 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(tunnelOrder, func(i, j int) bool { return tunnelOrder[i] < tunnelOrder[j] })
 	for _, tunnelID := range tunnelOrder {
 		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户", false); err != nil {
+			// R5X-004(b)：清理是逐组逐条落库的前进式操作，中止时靠前
+			// 分组的转发/relay 已实际删除——失败返回前以删前收集集按
+			// 现行 DB 补刷一次白名单（与成功路径同集、幂等），否则已
+			// 删转发的拨号地址无限驻留 allow（回执文案不变）。
+			h.refreshInboundWhitelists(affectedInboundIDs)
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
 	}
 
 	if err := h.repo.DeleteUserCascade(id); err != nil {
+		// R5X-004(b)：同上——全部转发已删、级联删用户失败时同样补刷。
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -2539,6 +2546,10 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	// F-002：先逐条清理名下转发的数据面（gost DeleteService / nft
 	// pending 台账），清理未完成则中止删隧道，避免孤儿监听脱离计数。
 	if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
+		// R5X-004(a)：清理逐条落库、中止时已有转发/relay 实际删除——
+		// 失败返回前以删前收集集按现行 DB 补刷一次白名单（幂等），
+		// 否则回执称「未删除」而已删转发的拨号地址无限驻留 allow。
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -2550,6 +2561,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cleanupTunnelRuntime(id)
 	if err := h.deleteTunnelByID(id); err != nil {
+		// R5X-004(a)：转发已全删、删隧道行失败时同理补刷。
+		h.refreshInboundWhitelists(affectedInboundIDs)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -3263,6 +3276,10 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	createdForward, err := h.getForwardRecord(forwardID)
 	if err != nil {
+		// E5-S1（同型补齐，不计关闭数）：与下方 sync 失败分支及孪生
+		// createRelayForward 的取行失败分支同形——补一行补偿删除，
+		// 避免「创建失败」回执下新建行残留。
+		_ = h.deleteForwardByID(forwardID)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}

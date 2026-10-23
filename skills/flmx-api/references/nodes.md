@@ -323,3 +323,27 @@ List forwards stuck in pending-delete (status=2) awaiting data-plane cleanup,
 with retry count, next retry time and last error. Admin only. Deleting a forward
 while its node is offline marks it pending-delete; a background job retries with
 1m/5m/30m/2h backoff, capped at 24h.
+
+## POST /api/v1/node/traffic/month
+
+Each node's whole-machine NIC traffic since the 1st of this month, in the
+viewer's time zone (the node list's “本月网卡” figure).
+
+**Request:**
+```json
+{"tzOffset": 480}
+```
+`tzOffset` is the viewer's UTC offset in minutes (the frontend sends
+`-new Date().getTimezoneOffset()`); values outside ±14h are treated as 0.
+
+**Response:** `data` is a map of node ID to `[inBytes, outBytes]`:
+```json
+{
+  "code": 0,
+  "data": {"1": [1073741824, 2147483648], "2": [536870912, 1073741824]}
+}
+```
+
+These are whole-machine NIC counters, a different metric from tunnel
+billing / subscription quota counters — the two never reconcile and must
+not be mixed.

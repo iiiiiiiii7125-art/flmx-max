@@ -172,10 +172,14 @@ func TestFlowOwnershipLocalForwardRequiresReportingNode(t *testing.T) {
 		if nodeID == 2 {
 			// N-01 方向口径：该测试不创建隧道，GetFlowUploadForwardMetas
 			// 将缺失隧道行默认 TunnelFlow=1（单向=仅计入方向）。线格式
-			// D=入（客户端→远端）、U=出，故节点 2 上报 U=120、D=80 只计
-			// 入方向 80。旧期望 120 是方向颠倒时按 U 计的值，本修复下
-			// 不成立（本测试本体——属主节点才入账——不变）。
-			want = 80
+			// D=入（客户端→远端）、U=出。R5X-013 口径切换后 forward 行
+			// 落 raw 全量原始字节（展示口径，不受单向计费门控），故节点 2
+			// 上报 U=120、D=80 在 forward 行合计 200；单向门控只作用于
+			// user/user_tunnel 行与配额的 scaled 面。旧期望 80 是切换前
+			// forward 行同落 scaled 时的值（主控裁定驱动的连带更新，
+			// 见 R5-FIX-REPORT 断言登记）。本测试本体——属主节点才入账
+			// ——不变：非属主节点 1 仍为 0。
+			want = 200
 		}
 		if forward.InFlow+forward.OutFlow != want {
 			t.Fatalf("node %d local traffic=%d want=%d", nodeID, forward.InFlow+forward.OutFlow, want)

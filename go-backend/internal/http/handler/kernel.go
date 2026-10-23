@@ -488,14 +488,26 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+err.Error()+"（可强制删除面板记录）"))
 			return
 		}
-		if rows, lerr := h.repo.ListNodeInboundsByKernel(k.ID); lerr == nil {
-			for _, row := range rows {
+		kernelInboundRows, listErr := h.repo.ListNodeInboundsByKernel(k.ID)
+		if listErr == nil {
+			for _, row := range kernelInboundRows {
 				h.removeInboundRelays(row.ID)
 			}
 		}
 		err = h.repo.DeleteNodeKernel(k.ID)
 		unlock()
 		if err != nil {
+			// R5X-004(f)：removeInboundRelays 已逐入站删掉 relay 与
+			// 转发，内核/入站本体尚存（DeleteNodeKernel 为单事务、
+			// 失败只回滚其自身级联）——解锁后对本内核补一次
+			// applyKernel，按现行 DB 重算各入站 allow（applyKernel
+			// 自带同内核锁，必须在 unlock 之后调用）。列表查询失败
+			// 时未删任何 relay，跳过补刷。
+			if listErr == nil && len(kernelInboundRows) > 0 {
+				if aerr := h.applyKernel(k.ID, false); aerr != nil {
+					log.Printf("kernel remove: whitelist repush after failed kernel delete kernel_id=%d err=%v", k.ID, aerr)
+				}
+			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -964,8 +976,26 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// request carrying only a ShareHost keeps the pre-mode behaviour
 	// (host set → custom, host cleared → back to auto). Validation needs
 	// the node, whose address families decide ipv4/ipv6 availability.
+	// R5X-012: the resolution only honours fields the request explicitly
+	// carries. On update, req.ShareHost above was backfilled from the
+	// stored row when shareHost was absent (R4X-018 presence), so the
+	// backfilled value must not be mistaken for an explicitly carried
+	// host: a stored row pairing an explicit ipv4/ipv6 mode with a
+	// dormant ShareHost would otherwise flip to custom on any partial
+	// update omitting both share keys, silently activating the dormant
+	// host. When neither key is present the stored mode — and, below,
+	// the stored host — are preserved verbatim.
+	// Mode explicitness follows the pointer convention used by the
+	// other pointer fields (an explicit JSON null decodes to nil and
+	// counts as absent, exactly like an omitted key); host explicitness
+	// comes from the raw-key presence map (a plain string field cannot
+	// distinguish omitted from explicitly empty on its own).
+	shareKeysPresent := req.ShareAddressMode != nil || present["shareHost"]
 	shareMode := inboundShareMode(&row)
-	if req.ShareAddressMode != nil {
+	if update && !shareKeysPresent {
+		// Both share keys omitted: keep the stored mode as resolved
+		// from the stored row; no host inference from the backfill.
+	} else if req.ShareAddressMode != nil {
 		shareMode = strings.TrimSpace(*req.ShareAddressMode)
 	} else if req.ShareHost != "" {
 		shareMode = "custom"
@@ -984,7 +1014,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		return
 	}
 	row.ShareAddressMode = shareMode
-	if shareMode != "custom" {
+	if shareMode != "custom" && !(update && !shareKeysPresent) {
+		// Non-custom modes drop the host — but only for a value the
+		// request actually carried (or a create). A backfilled dormant
+		// host on a both-keys-omitted partial update is stored state,
+		// not a request value: preserve it with its stored mode
+		// (R5X-012).
 		req.ShareHost = ""
 	}
 
@@ -1179,6 +1214,13 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.removeInboundRelays(id)
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
+		// R5X-004(e)：removeInboundRelays 已逐条删掉本入站的 relay
+		// 与其转发，入站本体尚存——失败返回前按现行 DB 补刷本入站
+		// 白名单（refreshInboundWhitelist 内部按 RelayWhitelist 门
+		// 控、非白名单入站为空转），否则已删中转的拨号地址残留在
+		// 本入站 allow 中。outboundTargets 面不受影响：本入站（拨
+		// 号方）尚存、其链式关系未变。
+		h.refreshInboundWhitelist(id)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1241,6 +1283,14 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
 			f++
 			failures = appendBatchFailure(failures, id, row.Name, err)
+			// R5X-004(e)：失败项的 relay 已删而入站尚存——把该入站
+			// 所在内核汇入末尾统一 apply 集，使其 allow 按现行 DB
+			// 重算（与成功项同一下发面）。targetIDs 不汇入：本入站
+			// （拨号方）尚存、其出站目标的 allow 不受 relay 删除影响。
+			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+				seenKernel[row.KernelID] = true
+				kernelIDs = append(kernelIDs, row.KernelID)
+			}
 			continue
 		}
 		s++
