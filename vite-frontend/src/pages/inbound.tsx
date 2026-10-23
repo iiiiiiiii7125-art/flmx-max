@@ -885,6 +885,16 @@ export default function InboundPage() {
                 仅中转
               </Chip>
             )}
+            {item.meteringActive && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="success"
+                size="sm"
+                variant="flat"
+              >
+                计量中
+              </Chip>
+            )}
             {kernelBad && (
               <Chip color="warning" size="sm" variant="flat">
                 内核{KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}
@@ -1332,6 +1342,11 @@ export default function InboundPage() {
               {sheetItem.relayWhitelist && (
                 <Chip color="warning" size="sm" variant="flat">
                   白名单
+                </Chip>
+              )}
+              {sheetItem.meteringActive && (
+                <Chip color="success" size="sm" variant="flat">
+                  计量中
                 </Chip>
               )}
             </div>
