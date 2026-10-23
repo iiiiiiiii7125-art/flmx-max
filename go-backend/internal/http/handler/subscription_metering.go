@@ -296,7 +296,13 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	return true
 }
 
+// deleteCompanionRow removes a companion row, tearing down any
+// relays it carries first. Both companion deletions — reconcile's
+// recycle and the origin-delete cascade — go through here (F3/
+// C-02b): the repo delete alone removes the relay rows but leaves
+// their materialized forwards behind on the entry nodes.
 func (h *Handler) deleteCompanionRow(comp *model.NodeInbound) bool {
+	h.removeInboundRelays(comp.ID)
 	if err := h.repo.DeleteNodeInbound(comp.ID); err != nil {
 		log.Printf("ss metering: delete companion %d of inbound %d: %v", comp.ID, comp.CompanionOf, err)
 		return false
@@ -306,17 +312,13 @@ func (h *Handler) deleteCompanionRow(comp *model.NodeInbound) bool {
 
 // deleteCompanionOf removes an origin's companion row ahead of the
 // origin's own deletion (the delete path's kernel push covers the
-// change). Companion rows have no relays of their own, but the relay
-// cleanup runs anyway for symmetry with origin deletes.
+// change).
 func (h *Handler) deleteCompanionOf(originID int64) {
 	comp, err := h.repo.GetCompanionInbound(originID)
 	if err != nil || comp == nil {
 		return
 	}
-	h.removeInboundRelays(comp.ID)
-	if err := h.repo.DeleteNodeInbound(comp.ID); err != nil {
-		log.Printf("ss metering: delete companion %d of inbound %d: %v", comp.ID, originID, err)
-	}
+	h.deleteCompanionRow(comp)
 }
 
 // companionInboundsByOrigin maps origin inbound ids to their live
