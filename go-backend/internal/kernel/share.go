@@ -382,6 +382,15 @@ func clashSnell(e Endpoint) (yamlNode, bool) {
 	return p, true
 }
 
+// IsNaiveEndpoint reports whether an endpoint is a Naive node, whether
+// it is a panel inbound or an imported proxy.
+func IsNaiveEndpoint(e Endpoint) bool {
+	if e.Proxy != nil {
+		return e.Proxy.Type() == "naive"
+	}
+	return e.Inbound.Protocol == ProtocolNaive
+}
+
 // SingboxOutbounds renders the sing-box client outbounds (1.11+ schema) for
 // an endpoint. The first one carries the endpoint's tag; ShadowTLS adds a
 // second outbound the first detours through. Snell is left out: only
@@ -391,8 +400,21 @@ func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
 }
 
 // singboxOutbounds is SingboxOutbounds; snell includes built Snell inbounds
-// for sing-box 1.14+.
+// for sing-box 1.14+. Naive is not gated here (legacy callers without a
+// version context keep the pre-R9X-005 behavior); version-aware callers
+// use singboxOutboundsWith.
 func singboxOutbounds(e Endpoint, snell bool) ([]map[string]interface{}, bool) {
+	return singboxOutboundsWith(e, snell, true)
+}
+
+// singboxOutboundsWith is singboxOutbounds with the Naive gate: naive
+// includes Naive endpoints (built inbounds and imported nodes) only for
+// sing-box 1.13+ — before that the naive outbound type does not exist
+// and one such node would reject the whole profile/config (R9X-005).
+func singboxOutboundsWith(e Endpoint, snell, naive bool) ([]map[string]interface{}, bool) {
+	if !naive && IsNaiveEndpoint(e) {
+		return nil, false
+	}
 	if e.Proxy != nil {
 		if e.Proxy.Type() == "snell" && !snell {
 			// Same UA gate as built inbounds: sing-box before 1.14 has
@@ -650,13 +672,25 @@ var singboxUAVersion = regexp.MustCompile(`sing-box[ /]v?(\d+)\.(\d+)`)
 // later, e.g. "SFA (sing-box 1.14.3; language zh_CN)". An unparseable UA
 // returns false (fail-closed: old clients never receive Snell nodes).
 func SingboxClientHasSnell(ua string) bool {
+	return singboxClientAtLeast(ua, 14)
+}
+
+// SingboxClientHasNaive reports whether a client UA names sing-box 1.13
+// or later — the first release with the naive outbound. An unparseable
+// UA returns false (fail-closed: old clients never receive Naive nodes,
+// R9X-005 连带格).
+func SingboxClientHasNaive(ua string) bool {
+	return singboxClientAtLeast(ua, 13)
+}
+
+func singboxClientAtLeast(ua string, minor int) bool {
 	m := singboxUAVersion.FindStringSubmatch(strings.ToLower(ua))
 	if m == nil {
 		return false
 	}
 	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	return major > 1 || (major == 1 && minor >= 14)
+	mi, _ := strconv.Atoi(m[2])
+	return major > 1 || (major == 1 && mi >= minor)
 }
 
 // FormatForUserAgent picks a subscription format from the client's UA.
@@ -890,7 +924,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 	var rendered []Endpoint
 	var obsList [][]map[string]interface{}
 	for _, e := range endpoints {
-		if obs, ok := singboxOutbounds(e, opts.SingboxSnell); ok {
+		if obs, ok := singboxOutboundsWith(e, opts.SingboxSnell, opts.SingboxNaive); ok {
 			rendered = append(rendered, e)
 			obsList = append(obsList, obs)
 		}

@@ -175,7 +175,7 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, e.Host); err != nil {
 			return fmt.Errorf("%s：%w", what, err)
 		}
-		if err := kernel.CheckChainWith(kernelType, e, kernel.RenderOptions{SingboxSnell: !versionBelow(kernelVersion, 1, 14)}); err != nil {
+		if err := kernel.CheckChainWith(kernelType, e, kernel.RenderOptions{SingboxSnell: !versionBelow(kernelVersion, 1, 14), SingboxNaive: !versionBelow(kernelVersion, 1, 13)}); err != nil {
 			return fmt.Errorf("%s：%v", what, err)
 		}
 		return nil

@@ -52,6 +52,10 @@ type RenderOptions struct {
 	// SingboxSnell lets sing-box dial Snell targets (chained outbounds and
 	// 分流 targets); sing-box 1.14+.
 	SingboxSnell bool
+	// SingboxNaive lets sing-box dial Naive targets (chained outbounds and
+	// 分流 targets); the cronet-based naive outbound exists only in
+	// sing-box 1.13+ (R9X-005).
+	SingboxNaive bool
 }
 
 // Render produces the kernel configuration for the given enabled inbounds.

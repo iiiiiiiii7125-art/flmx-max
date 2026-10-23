@@ -1731,6 +1731,17 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 			}
 		}
+		// R9X-005 下发面：存量脏组合（保存期未拦）在下发期同判——任一
+		// Via/分流目标为 Naive 且拨号内核 sing-box <1.13，整单点名拒绝
+		//（与保存期 CheckChainWith 同点口径，仿 encDialGate 形态）。
+		if msg := naiveDialGate(k.KernelType, k.Version, in.Via); msg != "" {
+			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
+		}
+		for _, rule := range in.Split {
+			if msg := naiveDialGate(k.KernelType, k.Version, rule.Via); msg != "" {
+				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
+			}
+		}
 		inbounds = append(inbounds, in)
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.NetworkOn(k.KernelType)}
 		if lo, hi := in.HopRange(); lo > 0 {
@@ -1760,6 +1771,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelow(k.Version, 1, 14),
 		SingboxSnell:      !versionBelow(k.Version, 1, 14),
+		SingboxNaive:      !versionBelow(k.Version, 1, 13),
 	})
 	if err != nil {
 		return nil, "", err
@@ -2006,6 +2018,35 @@ func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
 	return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
 }
 
+// naiveDialGate 是 R9X-005 的 Naive 拨号侧版本门：链式/分流目标为
+// Naive（自建入站或导入节点）时，拨号方 sing-box 需要 1.13+——naive
+// 出站随 1.13 的 cronet 构建引入，1.12 及以下整单 FATAL。保存
+//（validateChainVersion 经 CheckChainWith）、下发
+//（buildKernelApplyPayload）与换版扫描（checkKernelVersionGates）
+// 三面共用同一口径；返回空串表示通过。
+func naiveDialGate(kernelType, version string, e *kernel.Endpoint) string {
+	if e == nil || kernelType != kernel.TypeSingbox || !versionBelow(version, 1, 13) || !kernel.IsNaiveEndpoint(*e) {
+		return ""
+	}
+	return fmt.Sprintf("sing-box 1.13 及以上才能连接 Naive 节点，节点安装的是 %s", version)
+}
+
+// inboundRowIsNaive reports whether a stored inbound row is a Naive
+// target, whether it is a self-built inbound or an imported node.
+func (h *Handler) inboundRowIsNaive(target *model.NodeInbound) bool {
+	if target == nil {
+		return false
+	}
+	if target.Protocol == kernel.ProtocolNaive {
+		return true
+	}
+	in, err := inboundFromModel(*target)
+	if err != nil {
+		return false
+	}
+	return kernel.IsNaiveEndpoint(kernel.Endpoint{Inbound: in, Proxy: importedProxy(target)})
+}
+
 // inboundRowHasENC reports whether a stored inbound row carries VLESS
 // encryption, whether it is a self-built inbound (Settings) or an
 // imported node (proxy in Extra).
@@ -2041,6 +2082,16 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && t.Protocol == kernel.ProtocolSnell {
 					return fmt.Errorf("入站 %s 经 Snell 节点 %s 出站，需要 sing-box 1.14 及以上，不能安装 %s", row.Name, t.Name, version)
+				}
+			}
+		}
+		// R9X-005：经 Naive 节点出站（链式/分流目标）的入站同样要求
+		// sing-box 1.13+；目标入站不在本内核上，gate 看不到，须单独
+		// 扫描（仿上方 Snell 扫描块）。
+		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 13) {
+			for _, id := range outboundTargets(row) {
+				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowIsNaive(t) {
+					return fmt.Errorf("入站 %s 经 Naive 节点 %s 出站，需要 sing-box 1.13 及以上，不能安装 %s", row.Name, t.Name, version)
 				}
 			}
 		}
