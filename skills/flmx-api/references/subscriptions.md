@@ -83,6 +83,16 @@ List legacy per-inbound user assignments (pre-1.0.12 model, kept for existing da
 
 Set legacy per-inbound assignments for a user (direct inbound or a specific relay).
 
+Receipt note (K-S01, adjudicated in R8): the response `data` always carries
+`skippedRelays` (the number of assignments skipped because the relay does not
+exist or does not belong to the inbound) and, when that count is non-zero, a
+`warnings` entry naming the skip. This receipt currently has no frontend
+consumer — the panel UI does not read `skippedRelays` / `warnings` from this
+endpoint — and is retained as-is by explicit adjudication (R8-X-ledger §4 /
+R8-X-verdicts §4.3, K-S01 closed). API callers should read `warnings`
+themselves to detect partial skips instead of assuming every assignment took
+effect.
+
 ## POST /api/v1/user-inbound/mine
 
 Current user's legacy personal subscription data: builds the signed `?user=` link

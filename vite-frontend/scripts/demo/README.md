@@ -6,7 +6,7 @@
 2. 依次运行 `seed_1_inbounds.py`、`seed_2_relays_users.py`、`seed_3_subscriptions_history.py`，参数是数据库文件路径
 3. 前端开发服务器指向这个后端：`VITE_API_BASE=http://127.0.0.1:16370 pnpm exec vite --port 3114`
 4. 录制：`CHROMIUM=/path/to/chrome node record_pages.mjs raw.json`，再 `node record_items.mjs raw.json`（需要 `playwright-core`，本地工具、不进 package.json）
-5. 生成：`python3 build_fixtures.py raw.json ../../src/demo/fixtures.json`。没有节点 agent 时录不到的延迟、回程、内核状态由它补上。生成前有一道**内容闸**（R7X-006）：关键键（admin `node/traffic/month`、两册 traffic 面）每条录制的 data 必须非空，不过闸不写文件——只对键集存在性对账放过了一次「种子从未产出该事实、重录把演示数据冲空」的回退，种子缺事实就补种子（如 `node_traffic` 当月行在 seed_3），不要在 fixtures 里手工补值销账。
+5. 生成：`python3 build_fixtures.py raw.json ../../src/demo/fixtures.json`。没有节点 agent 时录不到的延迟、回程、内核状态由它补上。生成前有一道**内容闸**（R7X-006，R8X-006 扩格）：关键键（admin `node/traffic/month`、两册 traffic 面）每条录制的 data 必须非空，admin `kernel/versions` 的 xray/singbox 两格必须是成功响应（code 0 + 非空版本清单），录到失败响应（如 GitHub 403）同样不过闸，不过闸不写文件——只对键集存在性对账放过了一次「种子从未产出该事实、重录把演示数据冲空」的回退，种子缺事实就补种子（如 `node_traffic` 当月行在 seed_3），不要在 fixtures 里手工补值销账；`kernel/versions` 录制时点须为版本发现链健康窗口，链不健康时等健康窗口重录，不得把失败响应固化入册。
 
 演示里的时间会按“录制到现在”的间隔整体后移，所以不用经常重录。
 

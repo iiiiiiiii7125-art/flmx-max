@@ -349,7 +349,17 @@ func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 		if p.str("plugin") != "" {
 			return t, unsupported
 		}
-		t.Protocol, t.Cipher, t.Password = "shadowsocks", p.str("cipher"), p.str("password")
+		// R8X-003-S1（B8-S1 立案）：SIP023 多段密码逐段归一——
+		// forEndpoint 只归一单段（NormalizedSS2022Password 对多段
+		// 原样返回），多段非规范形（RawURL 无填充段）此前原样透传
+		// 至 Xray、整单 exit 23（decode key: illegal base64 data）。
+		// sing-box / Clash 订阅面与 sing-box 链式面均经
+		// NormalizedSS2022PasswordSegments 逐段归一，本面同 helper
+		// 补齐：解码字节不变、规范形为不动点；坏段已由上方统一
+		// 谓词先行拒绝，不可达段在此原样返回亦无敞口。进口存储与
+		// 订阅面既有归一/原样口径不动（修复只限本链式面）。
+		t.Protocol, t.Cipher, t.Password = "shadowsocks", p.str("cipher"),
+			NormalizedSS2022PasswordSegments(p.str("cipher"), p.str("password"))
 		return t, nil
 	case "socks5":
 		t.Protocol, t.Username, t.Password = "socks", p.str("username"), p.str("password")

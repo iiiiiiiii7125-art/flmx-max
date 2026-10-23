@@ -7,7 +7,7 @@ admin privileges.
 ## POST /api/v1/kernel/capabilities
 
 The capability matrix: which protocol × kernel × transport combinations can be
-rendered, plus version gates (e.g. Xray ≥ 25.6.8 for VLESS ENC, sing-box ≥ 1.12
+rendered, plus version gates (e.g. Xray ≥ 25.9.5 for VLESS ENC, sing-box ≥ 1.12
 for AnyTLS, ≥ 1.14 for ACME, Snell major versions). Unsupported combinations are
 rejected when creating an inbound.
 

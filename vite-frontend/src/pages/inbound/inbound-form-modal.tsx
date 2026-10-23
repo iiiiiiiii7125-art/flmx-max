@@ -702,7 +702,7 @@ export function InboundFormModal({
                         </Select>
                         <p className="text-xs text-default-400">
                           开启时自动套用 IX 中转标准配置（TCP、安全无、Vision 流控、ML-KEM-768
-                          认证、native 外观），需要节点 Xray 25.6.8 及以上。启用后 sing-box、Surge、Loon、Quantumult
+                          认证、native 外观），需要节点 Xray 25.9.5 及以上。启用后 sing-box、Surge、Loon、Quantumult
                           X、小火箭格式的订阅不会包含此入站，请用 Clash（请使用近一年内的 Mihomo 核心）或通用链接分发。
                         </p>
                       </>

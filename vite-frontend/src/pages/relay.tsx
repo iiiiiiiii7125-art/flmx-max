@@ -222,7 +222,14 @@ function LinesView() {
                 className="flex flex-col gap-3 rounded-2xl border border-divider bg-content1 p-4 shadow-sm"
               >
                 <div>
-                  <div className="truncate font-semibold">{i.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="truncate font-semibold">{i.name}</div>
+                    {i.settings.encryptionAuth && (
+                      <Chip color="secondary" size="sm" variant="flat">
+                        IX 中转专用协议
+                      </Chip>
+                    )}
+                  </div>
                   <div className="mt-0.5 truncate text-xs text-default-500">
                     {i.external ? "导入的节点" : i.nodeName}
                     {" · "}
@@ -315,6 +322,11 @@ function LinesView() {
                   <span className="min-w-0 flex-1 truncate font-medium">
                     {i.name}
                   </span>
+                  {i.settings.encryptionAuth && (
+                    <Chip color="secondary" size="sm" variant="flat">
+                      IX 中转专用协议
+                    </Chip>
+                  )}
                   {i.relayOnly && (
                     <Chip size="sm" variant="flat">
                       仅中转
