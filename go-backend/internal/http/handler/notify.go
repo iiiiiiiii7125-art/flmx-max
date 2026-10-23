@@ -305,7 +305,7 @@ func (n *notifier) forgetFingerprints(match func(fp string) bool) {
 }
 
 // configuredNotifyChannels 返回 settings 中实际配置完整的通道名集合，
-// 与 sendChannels 的投递条件一致。
+// 与 sendChannelsRecord 的投递条件一致。
 func configuredNotifyChannels(s notifySettings) []string {
 	var out []string
 	if s.TelegramToken != "" && s.TelegramChatID != "" {
@@ -318,7 +318,7 @@ func configuredNotifyChannels(s notifySettings) []string {
 }
 
 // ledgerPending 返回 fp 尚未在台账中送达（或台账条目已过期）的通道集，
-// 形态与 sendChannels 的 only 参数一致（nil 之外的空集 = 无需投递）。
+// 形态与 sendChannelsRecord 的 only 参数一致（nil 之外的空集 = 无需投递）。
 func (n *notifier) ledgerPending(fp string, configured []string, now time.Time) map[string]error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -417,7 +417,7 @@ func (n *notifier) clearExpiryAlert(nodeID int64, expiryMs int64) {
 	}
 }
 
-// 通知通道名（sendChannels 的 only/failed 集合键）。
+// 通知通道名（sendChannelsRecord 的 only/failed 集合键）。
 const (
 	notifyChannelTelegram = "telegram"
 	notifyChannelWebhook  = "webhook"
@@ -450,14 +450,9 @@ func (n *notifier) sendWithRetryRecord(ctx context.Context, s notifySettings, ms
 	return nil
 }
 
-// sendChannels 向 only 指定的通道集合投递（nil = 全部已配置通道；
-// only 只看键集合，其值即上轮的错误映射，可直接回喂），返回仍失败
-// 的通道→错误映射。
-func (n *notifier) sendChannels(ctx context.Context, s notifySettings, msg notifyMessage, only map[string]error) map[string]error {
-	return n.sendChannelsRecord(ctx, s, msg, only, nil)
-}
-
-// sendChannelsRecord 与 sendChannels 相同，且每通道成功即回调 record。
+// sendChannelsRecord 向 only 指定的通道集合投递（nil = 全部已配置
+// 通道；only 只看键集合，其值即上轮的错误映射，可直接回喂），返回
+// 仍失败的通道→错误映射；每通道成功即回调 record（可为 nil）。
 func (n *notifier) sendChannelsRecord(ctx context.Context, s notifySettings, msg notifyMessage, only map[string]error, record func(channel string)) map[string]error {
 	failed := make(map[string]error)
 	want := func(ch string) bool {
@@ -542,13 +537,9 @@ func (h *Handler) dispatchNotify(ctx context.Context, event, title, message stri
 		defer h.notifier.releaseInflight(fp)
 	}
 	msg := notifyMessage{Event: event, Title: title, Message: message, Time: time.Now().UnixMilli(), App: app}
-	if event == notifyEventTest {
-		if err := h.notifier.sendWithRetry(ctx, settings, msg); err != nil {
-			log.Printf("notify %s failed: %v", event, err)
-			return notifyOutcomeFailed
-		}
-		return notifyOutcomeSent
-	}
+	// R9X-006：test 事件不经 dispatch（全仓无调用方以 test 事件走
+	// dispatchNotify，原 test 重试分支不可达、已删）——测试端点
+	// notifyTest 用请求内未保存设置直调 sendWithRetry，同一重试语义。
 	// R2X-018 通道级台账：只投台账中尚未送达的通道，每通道成功即记账；
 	// 全部已配置通道都在账才算整条送达——markSent 并清台账条目。
 	// 任一通道仍失败时整条 Failed（状态机回滚后补发），但已送达通道
@@ -684,11 +675,6 @@ func (h *Handler) notify(event, title, message string) {
 // 供告警状态机实现「发送成功才置位、失败回滚重试」（A7-03/BC-16）。
 func (h *Handler) notifyTracked(event, title, message string, onDone func(notifyOutcome)) {
 	h.enqueueNotify(notifyJob{event: event, title: title, message: message, onDone: onDone})
-}
-
-// send delivers to every configured channel and reports the failures.
-func (n *notifier) send(ctx context.Context, s notifySettings, msg notifyMessage) error {
-	return notifyChannelsError(n.sendChannels(ctx, s, msg, nil))
 }
 
 func notifyText(msg notifyMessage) string {
@@ -1239,7 +1225,7 @@ func (h *Handler) notifyTest(w http.ResponseWriter, r *http.Request) {
 		Event: notifyEventTest, Title: "测试通知",
 		Message: "收到这条消息说明通知配置正确。", Time: time.Now().UnixMilli(), App: app,
 	}
-	if err := h.notifier.send(r.Context(), req, msg); err != nil {
+	if err := h.notifier.sendWithRetry(r.Context(), req, msg); err != nil {
 		response.WriteJSON(w, response.ErrDefault("发送失败："+err.Error()))
 		return
 	}
