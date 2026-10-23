@@ -92,4 +92,16 @@ R4X-021（白名单持续性）已由发版门双 agent rig 三步验证定案�
 
 ## 凭据
 
-（发布后回填：Release URL、tag 指向、CI 结论、12 资产核对表。）
+- **Release**：[Release 1.4.1](https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/1.4.1)（Published，2026-10-23T02:27:56Z，非 Draft / 非 Prerelease）。
+- **tag `1.4.1`**（纯数字）指向 `0b18d491cb3057ea5aaf3b876f575cdd119fc57c`（merge integrate-r4 `bac1025` + 字面量同步 `45e525e` + 本说明定稿）。
+- **CI 结论**：主发版流 Build and Push Images（run 39888713081）五 job 全 success；CI Build Check 两轮（run 39888709123 @ 发布提交、run 39889784482 @ CI 配置提交）job 级结论一致——Build Backend / Build Agent / Test Installer / PostgreSQL Contract 全 success，Go Full Tests 与 Build Frontend 两 job 红，均已定案（见发布报告 RELEASE-141.md）：前者为 `TestNotifyImportedNodeDownContract` 的 CI 环境确定性红（1.4.0 父提交既存、本地 PASS，不改判产品）；后者为 demo check 的 `node/traffic/month` fixtures 未录（1.4.0 线既存登记项）。**PG 契约自本版起在 CI 实跑全 5 条**（含新增计数并发两条，run 39889784482 日志逐条 PASS；此前 CI 该 job 自 v1.0.0 起只跑单条，本版已放宽 -run 并留痕于发布报告）。Publish Skill to npm（run 39888713004）为 ENEEDAUTH 惯例红，不阻塞。
+- **资产核对（12/12）**：6 产物逐个下载与各自 `.sha256` 比对全部一致；发布副本 `install.sh` / `panel_install.sh` 均 `PINNED_VERSION="1.4.1"`；compose v4/v6 后端与前端镜像标签均 `:1.4.1`；发布 `gost-amd64 -V` = `gost 1.4.1 (go1.25.14 linux/amd64)`（正式注入）。GHCR 标签 API 因 token 无 read:packages 返回 403 未核（与历版同），以主发版流 Build & Push 两 job success 为据。
+
+| 产物 | sha256 |
+|---|---|
+| docker-compose-v4.yml | `a13f72ed260fa4c6a94322fe21847609c97fbb054fbc2890028ebafed576c4f0` |
+| docker-compose-v6.yml | `17435f0abe2bfe8427924bd6030fbfe56e24eb054ec205a45fe9266b67ce800d` |
+| gost-amd64 | `8fea298ac8e90cd22ec76cc965e009c1f020ff2bcee0630dc1843d9366f6cc39` |
+| gost-arm64 | `c96a1afaccc13c1d11ec1814ee74419ff039d49819ea636acf6e17255b29aa7d` |
+| install.sh | `e6572baab6664559885597408caa0e9a292b9931911eb108f02e1b6dce0a52e0` |
+| panel_install.sh | `9daacf1ae7f5a7c8b195999183941d42001a28a25be834b730fd39ef0f57bb89` |
