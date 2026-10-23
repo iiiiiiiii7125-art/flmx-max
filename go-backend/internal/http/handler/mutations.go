@@ -4494,10 +4494,16 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 	speed := asInt(req["speed"], old.Speed)
 	status := asInt(req["status"], old.Status)
 
+	// R6X-017：引用集在写 DB 前枚举（与删除面同口径；引用关系不因
+	// 本次改值/禁用而变，写后按此集重下发即按新 DB 口径现查现算）。
+	affectedForwardIDs := h.speedLimitAffectedForwardIDs(id)
+
 	if err := h.repo.UpdateSpeedLimit(id, name, speed, status, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+
+	h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
 
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -4508,12 +4514,48 @@ func (h *Handler) speedLimitDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R6X-017：删除前先枚举引用集（删后 forward/user_tunnel 行仍以
+	// 悬空 id 指向该规则，此集即回退重下发的对象）。
+	affectedForwardIDs := h.speedLimitAffectedForwardIDs(id)
+
 	if err := h.repo.DeleteSpeedLimit(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 
+	h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
+
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// speedLimitAffectedForwardIDs 枚举引用某限速规则的转发集（仓库层
+// 引用集正本 SpeedLimitAffectedForwardIDs）；枚举失败只记日志、
+// 返回空集——规则本体的写操作不因枚举失败而回滚（R6X-017 纪律：
+// 重下发是尽力而为，失败记日志不回滚）。
+func (h *Handler) speedLimitAffectedForwardIDs(id int64) []int64 {
+	ids, err := h.repo.SpeedLimitAffectedForwardIDs(id)
+	if err != nil {
+		log.Printf("speed limit resync: enumerate referencing forwards failed speed_limit_id=%d err=%v", id, err)
+		return nil
+	}
+	return ids
+}
+
+// resyncForwardsForSpeedLimit 按引用集逐条走既有 sync 通道
+// （syncForwardServices，含 gost/realm/nft 分发与暂停态复位）重下发，
+// 使节点按当前 DB 口径（新值 / 禁用删除后回退 UT/隧道级）现查现算
+// limiter。单条失败记日志续跑，不回滚已落库的规则变更。
+func (h *Handler) resyncForwardsForSpeedLimit(speedLimitID int64, forwardIDs []int64) {
+	for _, forwardID := range forwardIDs {
+		forward, err := h.getForwardRecord(forwardID)
+		if err != nil || forward == nil {
+			log.Printf("speed limit resync: load forward failed speed_limit_id=%d forward_id=%d err=%v", speedLimitID, forwardID, err)
+			continue
+		}
+		if err := h.syncForwardServices(forward, "UpdateService", true); err != nil {
+			log.Printf("speed limit resync: sync forward failed speed_limit_id=%d forward_id=%d err=%v", speedLimitID, forwardID, err)
+		}
+	}
 }
 
 func (h *Handler) groupTunnelCreate(w http.ResponseWriter, r *http.Request) {
