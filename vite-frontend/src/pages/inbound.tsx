@@ -715,6 +715,16 @@ export default function InboundPage() {
                 仅中转
               </span>
             )}
+            {item.acceptProxyProtocol && (
+              <Chip size="sm" variant="flat">
+                真实 IP
+              </Chip>
+            )}
+            {item.relayWhitelist && (
+              <Chip color="warning" size="sm" variant="flat">
+                白名单
+              </Chip>
+            )}
             {item.meteringActive && (
               <Chip color="success" size="sm" variant="flat">
                 计量中
@@ -824,6 +834,16 @@ export default function InboundPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate font-medium">{item.name}</span>
+            {item.settings.encryptionAuth && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="secondary"
+                size="sm"
+                variant="flat"
+              >
+                IX 中转专用协议
+              </Chip>
+            )}
             {item.outboundIpStrategy && item.outboundIpStrategy !== "auto" && (
               <Chip
                 className="shrink-0 whitespace-nowrap"
@@ -883,6 +903,25 @@ export default function InboundPage() {
                 variant="flat"
               >
                 仅中转
+              </Chip>
+            )}
+            {item.acceptProxyProtocol && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                size="sm"
+                variant="flat"
+              >
+                真实 IP
+              </Chip>
+            )}
+            {item.relayWhitelist && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="warning"
+                size="sm"
+                variant="flat"
+              >
+                白名单
               </Chip>
             )}
             {item.meteringActive && (
@@ -968,6 +1007,32 @@ export default function InboundPage() {
   }
 
   const sheetItem = inbounds.find((i) => i.id === sheetFor) ?? null;
+  // Sheet state chip mirrors the grid header's stateText logic exactly
+  // (same probe / running / kernelBad derivation as renderInbound), so the
+  // sheet face carries the running-state badge the other two faces have.
+  const sheetProbe =
+    sheetItem?.external && !sheetItem.probe?.skipped
+      ? sheetItem.probe
+      : undefined;
+  const sheetUnreachable =
+    !!sheetItem?.enabled && sheetProbe !== undefined && !sheetProbe.ok;
+  const sheetRunning =
+    !!sheetItem?.enabled &&
+    !sheetUnreachable &&
+    !!(sheetItem?.external || sheetItem?.kernelStatus === "running");
+  const sheetKernelBad =
+    !!sheetItem?.enabled &&
+    !sheetItem?.external &&
+    sheetItem?.kernelStatus !== "running";
+  const sheetStateText = sheetUnreachable
+    ? sheetProbe?.error || "连不上"
+    : sheetRunning
+      ? sheetProbe
+        ? `可连接 · ${sheetProbe.latencyMs} ms`
+        : "运行中"
+      : sheetItem?.enabled
+        ? `内核${KERNEL_STATUS[sheetItem.kernelStatus]?.label ?? "异常"}`
+        : "已停用";
   const tabs: Array<{ key: PageTab; label: string; badge?: React.ReactNode }> =
     [
       { key: "inbounds", label: "入站", badge: inbounds.length || undefined },
@@ -1329,6 +1394,11 @@ export default function InboundPage() {
                   : (KERNEL_LABELS[sheetItem.kernelType] ??
                     sheetItem.kernelType)}
               </Chip>
+              {sheetItem.settings.encryptionAuth && (
+                <Chip color="secondary" size="sm" variant="flat">
+                  IX 中转专用协议
+                </Chip>
+              )}
               {sheetItem.relayOnly && (
                 <Chip size="sm" variant="flat">
                   仅中转
@@ -1349,6 +1419,56 @@ export default function InboundPage() {
                   计量中
                 </Chip>
               )}
+              {sheetItem.outboundIpStrategy &&
+                sheetItem.outboundIpStrategy !== "auto" && (
+                  <Chip color="primary" size="sm" variant="flat">
+                    {
+                      {
+                        ipv4_only: "IPv4 出站",
+                        ipv6_only: "IPv6 出站",
+                        prefer_ipv4: "优先 IPv4",
+                        prefer_ipv6: "优先 IPv6",
+                      }[sheetItem.outboundIpStrategy]
+                    }
+                  </Chip>
+                )}
+              {sheetItem.relayCount > 0 && (
+                <Chip color="secondary" size="sm" variant="flat">
+                  {sheetItem.relayCount} 条中转
+                </Chip>
+              )}
+              {sheetItem.outboundId > 0 && (
+                <Chip
+                  className="max-w-full"
+                  color={sheetItem.outboundMissing ? "danger" : "warning"}
+                  size="sm"
+                  variant="flat"
+                >
+                  {sheetItem.outboundMissing
+                    ? "出站节点已删除"
+                    : `经 ${sheetItem.outboundName} 出站`}
+                </Chip>
+              )}
+              {sheetItem.splitRules?.length > 0 && (
+                <Chip color="primary" size="sm" variant="flat">
+                  分流 {sheetItem.splitRules.length} 条
+                </Chip>
+              )}
+              <Chip
+                color={
+                  sheetUnreachable
+                    ? "danger"
+                    : sheetKernelBad
+                      ? "warning"
+                      : sheetRunning
+                        ? "success"
+                        : "default"
+                }
+                size="sm"
+                variant="flat"
+              >
+                {sheetStateText}
+              </Chip>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-default-500">流量</span>
