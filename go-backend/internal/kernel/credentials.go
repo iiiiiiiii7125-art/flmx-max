@@ -491,7 +491,7 @@ func ValidVLESSEncryption(enc string) bool {
 // 合法集唯一口径 = 本批施工前重跑的 30 方法名逐值探针（面板渲染产物 ×
 // sing-box 1.14.3 `check` / mihomo v1.19.33 `-t`，全表 + 原始日志存档
 // audit-out-132/r6/R6-FIX-B1-ss-method-probe.log，R6X-024 关闭前置）：
-// 双客户端共同接受 18、仅 mihomo 接受 1（chacha20）、双双拒绝 11。
+// 双客户端共同接受 18、仅 mihomo 接受 1（chacha20）（R6 时点）、双双拒绝 11。
 // R5-FIX-B1 格 2 的旧摘要（25/4）已经 verdicts §1.4 作废，不得引用。
 // R8X-003 扩围：候选池外 5 值经三二进制复核同为 mihomo-only，并入
 // 单面集（单面集共 6 值），见 ssCiphersMihomoOnly 注。

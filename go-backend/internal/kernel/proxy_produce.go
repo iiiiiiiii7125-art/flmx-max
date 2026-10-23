@@ -21,7 +21,7 @@ func proxyURI(e Endpoint) (string, bool) {
 		cipher, pw := p.str("cipher"), p.str("password")
 		// R6 批 1（未验证面同批设门，恒标未验证）：URI/base64 面以同一
 		// 谓词设门——双拒 cipher 与 SS2022 坏 key 整节点略过，不再原样
-		// 下发；单面 chacha20 在本面保留（通用链接面、无整表毒化）。
+		// 下发；单面集方法（chacha20 等 6 值）在本面保留（通用链接面、无整表毒化）。
 		if !ValidSSCipher(cipher) || ValidateSS2022Password(cipher, pw) != nil {
 			return "", false
 		}
@@ -241,7 +241,7 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 	// 渲染略过口径自此实际落地。SubscriptionNodeCount 经本函数同口径。
 	// R6 批 1：谓词补 SS 格（cipher 合法集 + SS2022 key 逐段谓词，
 	// R6X-001/002）——坏 key 存量自此在 Clash 面整节点略过，与
-	// sing-box 面同口径；单面 chacha20 在本面（mihomo 面）保留。
+	// sing-box 面同口径；单面集方法（chacha20 等 6 值）在本面（mihomo 面）保留。
 	if !validImportedProxyFields(p, ssFaceClash) {
 		return nil, false
 	}
@@ -331,7 +331,7 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 	// R5X-001/002/003 存量纵深：与 proxyClash 同一谓词整节点略过
 	// （见 proxyClash 注）。sing-box 面既有的字段级守卫（SS2022 key、
 	// VLESS ENC、Snell obfs）保留在各分支内，与本谓词叠加不冲突。
-	// R6 批 1：面参数为 sing-box 面——单面 chacha20 在本面略过。
+	// R6 批 1：面参数为 sing-box 面——单面集方法（chacha20 等 6 值）在本面略过。
 	if !validImportedProxyFields(p, ssFaceSingbox) {
 		return nil, false
 	}

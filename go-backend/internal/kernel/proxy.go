@@ -304,6 +304,34 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 			out["password"] = NormalizedSS2022Password(out.str("cipher"), pw)
 		}
 	}
+	// R9X-004（渲染自愈，同 SS cipher 口径）：其余四枚举字段的谓词
+	// 均大小写不敏感（credentials.go 各 Valid* 以 ToLower 判定），
+	// 但渲染产物在大小写敏感的本体面仍被拒——sing-box 对 vmess
+	// cipher / vless flow / hy2 obfs / tuic congestion-controller
+	// 大写变体整表/整单 FATAL、Xray 对 vless flow 大写 exit 23。
+	// 存量（进口愈合上线前落库）与旧备份逐字恢复来源在此克隆上
+	// 小写愈合，一处收口链式双面（chainTargetFromProxy /
+	// singboxOutbounds）与订阅面（proxySingbox / proxyClash /
+	// proxyURI 等共用本构造点）；垃圾值小写化后仍为垃圾值、仍被
+	// 各面谓词略过/拒绝，接受集不扩大。存储值不动。
+	switch out.Type() {
+	case "vmess":
+		if c := out.str("cipher"); c != "" {
+			out["cipher"] = strings.ToLower(c)
+		}
+	case "vless":
+		if f := out.str("flow"); f != "" {
+			out["flow"] = strings.ToLower(f)
+		}
+	case "hysteria2":
+		if o := out.str("obfs"); o != "" {
+			out["obfs"] = strings.ToLower(o)
+		}
+	case "tuic":
+		if cc := out.str("congestion-controller"); cc != "" {
+			out["congestion-controller"] = strings.ToLower(cc)
+		}
+	}
 	if e.Direct {
 		return out
 	}
