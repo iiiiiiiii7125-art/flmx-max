@@ -203,6 +203,14 @@ func (h *Handler) buildNftablesNodePlan(nodeID int64) (runtimenft.NodePlan, *mod
 func (h *Handler) buildNftablesNodePlanWithOverrides(nodeID int64, exclude map[int64]bool, include []*forwardRecord) (runtimenft.NodePlan, *model.NodeSSHConfig, error) {
 	cfg, err := h.repo.GetNodeSSHConfig(nodeID)
 	if err != nil {
+		// R10X-007（F-001）：与同文件 collectNftablesSSHConfigsTx /
+		// loadNftablesSSHConfig / clearNftablesNode 的正本措辞对齐——
+		// 缺行时点名「nftables 节点缺少 SSH 配置」，禁把仓储层
+		// sql.ErrNoRows 字面量透传到同步回执（forwardCreate 的同步
+		// 失败回执即经此路径）。
+		if errors.Is(err, sql.ErrNoRows) {
+			return runtimenft.NodePlan{}, nil, errors.New("nftables 节点缺少 SSH 配置")
+		}
 		return runtimenft.NodePlan{}, nil, err
 	}
 	forwards, err := h.repo.ListActiveForwardsByNode(nodeID)

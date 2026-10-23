@@ -7,6 +7,15 @@ type ConfigAccessPolicy string
 const (
 	ConfigAccessPublic    ConfigAccessPolicy = "public"
 	ConfigAccessSensitive ConfigAccessPolicy = "sensitive"
+	// ConfigAccessAuthenticated 是 R10X-014（A-02）接线时补的三级
+	// 分类：任意已登录用户可读、匿名不可读。此前 PolicyForConfig
+	// 只有 public/sensitive 两级且零生产调用，执行读路径走名单制
+	// （未列名即可读），与「未知键 → 敏感」的默认口径矛盾。接线后
+	// 读路径统一过 PolicyForConfig：现行在用键逐键补进
+	// public / authenticated / sensitive 三表（见下），未分类的新键
+	// 落默认 sensitive，fail-closed——新增凭据键只加存储不加名单
+	// 时普通用户读不到，而不是静默可读。
+	ConfigAccessAuthenticated ConfigAccessPolicy = "authenticated"
 )
 
 var publicConfigKeys = map[string]struct{}{
@@ -65,6 +74,50 @@ var systemManagedConfigKeys = map[string]struct{}{
 	"node_sub_token":      {},
 }
 
+// authenticatedConfigKeys 是现行在用、但既非公开品牌键也非凭据的
+// 配置键全集（R10X-014 接线前置复核：前端 config 页 + forward 页 +
+// 节点/监控面 getConfigByName 调用点 + 后端引用逐键枚举）。这些键
+// 此前经名单制读路径对任意已登录用户可读，接线后分类不变其可读
+// 性，只是不再依赖「未列名即可读」的默认放行。新增在用键必须先
+// 补进本表（或 public/sensitive 表）再上线，否则普通用户读不到
+// （fail-closed，管理员不受影响）。
+var authenticatedConfigKeys = map[string]struct{}{
+	// 前端 forward 页普通用户直读（UI 偏好，全局键）。
+	"forward_compact_mode":        {},
+	"forward_group_order_map":     {},
+	"forward_group_collapsed_map": {},
+	// 节点延迟目标（延迟测试点清单，非凭据）。
+	"latency_targets": {},
+	// 监控/隧道质量设置（config 页 + 隧道监控面直读）。
+	"monitor_tunnel_quality_enabled":      {},
+	"monitor_tunnel_quality_interval_sec": {},
+	"monitor_retention_days":              {},
+	// 服务监控内部限值（monitoring/limits.go 常量，后端引用全集）。
+	"service_monitor_checker_scan_interval_sec": {},
+	"service_monitor_worker_limit":              {},
+	"service_monitor_min_interval_sec":          {},
+	"service_monitor_default_interval_sec":      {},
+	"service_monitor_min_timeout_sec":           {},
+	"service_monitor_default_timeout_sec":       {},
+	"service_monitor_max_timeout_sec":           {},
+	// 面板设置（config 页）：开关与地址类，无凭据。
+	"captcha_enabled":         {},
+	"panel_domain":            {},
+	"ip":                      {},
+	"github_proxy_enabled":    {},
+	"github_proxy_url":        {},
+	"allow_local_remote_addr": {},
+	// 通知设置中的非凭据键（凭据键 notify_telegram_*/notify_webhook_url
+	// 在 sensitiveConfigKeys；日报台账键 notify_daily_last /
+	// notify_daily_inbound_total 是运行时状态而非配置，不入本表，
+	// 对非管理员按默认 sensitive 收口，管理员与后端直读不受影响）。
+	"notify_enabled":          {},
+	"notify_events":           {},
+	"notify_daily_hour":       {},
+	"notify_latency_loss_pct": {},
+	"notify_latency_ms":       {},
+}
+
 func PolicyForConfig(name string) ConfigAccessPolicy {
 	if IsPublicConfigKey(name) {
 		return ConfigAccessPublic
@@ -72,7 +125,15 @@ func PolicyForConfig(name string) ConfigAccessPolicy {
 	if IsSensitiveConfigKey(name) {
 		return ConfigAccessSensitive
 	}
+	if IsAuthenticatedConfigKey(name) {
+		return ConfigAccessAuthenticated
+	}
 	return ConfigAccessSensitive
+}
+
+func IsAuthenticatedConfigKey(name string) bool {
+	_, ok := authenticatedConfigKeys[normalizeConfigKey(name)]
+	return ok
 }
 
 func IsPublicConfigKey(name string) bool {
@@ -109,13 +170,18 @@ func IsClearableConfigKey(name string) bool {
 	return !IsRequiredConfigKey(name)
 }
 
+// FilterSensitiveConfigs 是 config/list 非管理员读路径的过滤器
+// （R10X-014 接线）：统一过 PolicyForConfig，只保留 public 与
+// authenticated 两级；sensitive 与未分类键一律不下发。此前按
+// sensitiveConfigKeys 名单制过滤，未列名的新键会原样下发给任意
+// 已登录用户，与 PolicyForConfig 的默认敏感口径矛盾。
 func FilterSensitiveConfigs(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return map[string]string{}
 	}
 	out := make(map[string]string, len(in))
 	for name, value := range in {
-		if IsSensitiveConfigKey(name) {
+		if PolicyForConfig(name) == ConfigAccessSensitive {
 			continue
 		}
 		out[name] = value

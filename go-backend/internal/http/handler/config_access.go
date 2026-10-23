@@ -25,7 +25,9 @@ func (h *Handler) getPublicConfigByName(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("配置名称不能为空"))
 		return
 	}
-	if !repo.IsPublicConfigKey(configName) {
+	// R10X-014（A-02）：公开读路径同走 PolicyForConfig 单一裁决
+	// 点（仅 public 级可达），与 config/get 口径一致。
+	if repo.PolicyForConfig(configName) != repo.ConfigAccessPublic {
 		response.WriteJSON(w, response.Err(403, "禁止访问敏感配置"))
 		return
 	}

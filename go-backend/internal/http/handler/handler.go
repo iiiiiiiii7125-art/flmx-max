@@ -55,8 +55,12 @@ type Handler struct {
 	peerResourceMu sync.Mutex
 	captchaMu      sync.Mutex
 	captchaTokens  map[string]int64
-	passkeyMu      sync.Mutex
-	passkeyPending map[string]passkeyCeremony
+	// R10X-008（A-01）：captcha verify 端点独立 IP 限流桶（与登录
+	// 桶分开计量，形态对齐 loginRateLimiter：窗口计数 + 上限淘汰）。
+	captchaVerifyMu      sync.Mutex
+	captchaVerifyBuckets map[string]*loginAttemptBucket
+	passkeyMu            sync.Mutex
+	passkeyPending       map[string]passkeyCeremony
 
 	jobsMu      sync.Mutex
 	jobsCtx     context.Context
@@ -178,6 +182,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		nftAutoFail:              make(map[int64]*nftAutoFailState),
 		nftApplyFailed:           make(map[int64]bool),
 		captchaTokens:            make(map[string]int64),
+		captchaVerifyBuckets:     make(map[string]*loginAttemptBucket),
 		passkeyPending:           make(map[string]passkeyCeremony),
 		pendingUpgradeRedeploy:   make(map[int64]struct{}),
 		pendingRealmSettle:       make(map[int64]struct{}),
@@ -616,12 +621,19 @@ func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(403, "禁止访问系统授权凭据"))
 		return
 	}
-	if repo.IsSensitiveConfigKey(configName) && !isAdminRequest(r) {
+	// R10X-014（A-02）：读路径统一过 repo.PolicyForConfig 单一裁决
+	// 点。此前执行路径走名单制（仅 IsSensitiveConfigKey 列名键被
+	// 挡），未列名的新键任意已登录用户可读，与 PolicyForConfig
+	// 「未知键 → 敏感」的口径矛盾且该函数零生产调用。接线后：
+	// sensitive（含未分类）非管理员 403；public 匿名可读；
+	// authenticated 须已登录。现行在用键已逐键补分类（见
+	// config_policy.go authenticatedConfigKeys），读取行为不变。
+	if repo.PolicyForConfig(configName) == repo.ConfigAccessSensitive && !isAdminRequest(r) {
 		response.WriteJSON(w, response.Err(403, "禁止访问敏感配置"))
 		return
 	}
 
-	if _, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims); !ok && !repo.IsPublicConfigKey(configName) {
+	if _, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims); !ok && repo.PolicyForConfig(configName) != repo.ConfigAccessPublic {
 		response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
 		return
 	}
@@ -653,6 +665,9 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 	ctxClaims := r.Context().Value(middleware.ClaimsContextKey)
 	// O11-P3-3：变量更名为 isAuthenticated（旧名 isAdmin 实为"断言成功"，
 	// 命名误导易被后人改错；逻辑不变，非 admin 仍走敏感配置过滤）。
+	// R10X-014（A-02）：FilterSensitiveConfigs 已统一过
+	// PolicyForConfig（仅 public/authenticated 下发），本处调用
+	// 形态不变，过滤口径随策略单点收口。
 	claims, isAuthenticated := ctxClaims.(auth.Claims)
 	if !isAuthenticated || claims.RoleID != 0 {
 		cfgMap = repo.FilterSensitiveConfigs(cfgMap)
@@ -1095,6 +1110,12 @@ func (h *Handler) captchaVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R10X-008（A-01）②：端点未认证可达，此前无任何限流——接入
+	// 独立 IP 限流桶，超限直接 429，不再进入校验与铸令牌路径。
+	if !h.checkCaptchaVerifyRateLimit(w, r) {
+		return
+	}
+
 	var req captchaVerifyRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
 		h.writeCaptchaVerifyResult(w, false, "")
@@ -1107,20 +1128,107 @@ func (h *Handler) captchaVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	verified := false
 	secretCfg, err := h.repo.GetConfigByName("cloudflare_secret_key")
-	if err == nil && secretCfg != nil && strings.TrimSpace(secretCfg.Value) != "" {
-		verified = h.verifyCloudflareTurnstile(data, strings.TrimSpace(secretCfg.Value))
-	} else {
-		verified = data == "ok"
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
 	}
-	if !verified {
+	if secretCfg == nil || strings.TrimSpace(secretCfg.Value) == "" {
+		// R10X-008（A-01）③ / BC-R10-07：secret 未配置时关闭本地
+		// data=="ok" 回退分支。此前默认部署形态下任意请求体
+		// data=="ok" 即判定通过并铸令牌入池，而 login 侧在该形态
+		// 下根本不消费验证码（captchaEnabled 要求 site+secret
+		// 双全），该端点的唯一实际效果是写入无界状态。现返回
+		// 未启用语义且不铸令牌；前端在该形态下本就无调用方
+		// （verifyCaptcha 无现行调用点，登录页只在 check 返回
+		// 启用后走 Turnstile 组件直连 login 消费路径）。
+		response.WriteJSON(w, response.Err(-1, "验证码未启用"))
+		return
+	}
+	if !h.verifyCloudflareTurnstile(data, strings.TrimSpace(secretCfg.Value)) {
 		h.writeCaptchaVerifyResult(w, false, "")
 		return
 	}
 
 	h.markCaptchaToken(id)
 	h.writeCaptchaVerifyResult(w, true, id)
+}
+
+// captcha verify 端点 IP 限流参数：独立小桶（不与登录桶共用，
+// 避免验证码流量挤占登录预算、或登录爆破连带锁死验证码）。
+const (
+	captchaVerifyRateLimitWindow      = time.Minute
+	captchaVerifyRateLimitMaxAttempts = 30
+	captchaVerifyRateLimitMaxBuckets  = 10000
+)
+
+// checkCaptchaVerifyRateLimit 形态对齐 checkLoginRateLimit：
+// 命中时直接写 429 并返回 false。桶表有界（上限 + 过期清理 +
+// LRU 淘汰最旧），与登录限流器同一淘汰口径（A-08）。
+func (h *Handler) checkCaptchaVerifyRateLimit(w http.ResponseWriter, r *http.Request) bool {
+	if h.allowCaptchaVerify(r) {
+		return true
+	}
+	w.Header().Set("Retry-After", "60")
+	response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
+	return false
+}
+
+func (h *Handler) allowCaptchaVerify(r *http.Request) bool {
+	ip := loginClientIP(r)
+	key := ""
+	if ip != nil {
+		key = ip.String()
+	} else if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
+		key = parsed.String()
+	} else {
+		key = r.RemoteAddr
+	}
+	now := time.Now()
+	h.captchaVerifyMu.Lock()
+	defer h.captchaVerifyMu.Unlock()
+	if h.captchaVerifyBuckets == nil {
+		h.captchaVerifyBuckets = make(map[string]*loginAttemptBucket)
+	}
+	b, ok := h.captchaVerifyBuckets[key]
+	if !ok {
+		h.evictCaptchaVerifyBucketsLocked(now)
+		h.captchaVerifyBuckets[key] = &loginAttemptBucket{count: 1, windowStart: now, lastSeen: now}
+		return true
+	}
+	b.lastSeen = now
+	if now.Sub(b.windowStart) >= captchaVerifyRateLimitWindow {
+		b.count = 1
+		b.windowStart = now
+		return true
+	}
+	b.count++
+	return b.count <= captchaVerifyRateLimitMaxAttempts
+}
+
+func (h *Handler) evictCaptchaVerifyBucketsLocked(now time.Time) {
+	if len(h.captchaVerifyBuckets) < captchaVerifyRateLimitMaxBuckets {
+		return
+	}
+	for k, v := range h.captchaVerifyBuckets {
+		if now.Sub(v.windowStart) >= captchaVerifyRateLimitWindow {
+			delete(h.captchaVerifyBuckets, k)
+		}
+	}
+	if len(h.captchaVerifyBuckets) < captchaVerifyRateLimitMaxBuckets {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for k, v := range h.captchaVerifyBuckets {
+		if first || v.lastSeen.Before(oldest) {
+			oldestKey, oldest, first = k, v.lastSeen, false
+		}
+	}
+	if oldestKey != "" {
+		delete(h.captchaVerifyBuckets, oldestKey)
+	}
 }
 
 func (h *Handler) flowTest(w http.ResponseWriter, _ *http.Request) {
@@ -1725,6 +1833,15 @@ func (h *Handler) captchaEnabled() (bool, error) {
 	return true, nil
 }
 
+// captchaTokenPoolMax 是 captcha 令牌池容量上限（R10X-008，
+// A-01）：与同仓未认证可写内存表的上限口径对齐——passkey pending
+// 池 1000（passkey.go putPasskeyCeremony）、登录双桶 10000、
+// gh 镜像 host 表 10000，三表均「上限 + 淘汰」；本池此前无上限，
+// 是全集枚举中唯一漏网（A 域口径）。令牌 TTL 统一 5 分钟、仅
+// 登录路径单次消费，1000 与 passkey 池同量级即足够，满时淘汰
+// 最旧（过期时刻最小者；TTL 统一故等价于最早铸造者）。
+const captchaTokenPoolMax = 1000
+
 func (h *Handler) markCaptchaToken(token string) {
 	if h == nil {
 		return
@@ -1744,6 +1861,22 @@ func (h *Handler) markCaptchaToken(token string) {
 	for k, v := range h.captchaTokens {
 		if v <= now {
 			delete(h.captchaTokens, k)
+		}
+	}
+	if _, exists := h.captchaTokens[token]; !exists {
+		for len(h.captchaTokens) >= captchaTokenPoolMax {
+			var oldestKey string
+			var oldestExp int64
+			first := true
+			for k, v := range h.captchaTokens {
+				if first || v < oldestExp {
+					oldestKey, oldestExp, first = k, v, false
+				}
+			}
+			if oldestKey == "" {
+				break
+			}
+			delete(h.captchaTokens, oldestKey)
 		}
 	}
 	h.captchaTokens[token] = exp
