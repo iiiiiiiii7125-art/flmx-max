@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// VLESS 加密（VLESS Encryption，mlkem768x25519plus）：Xray 25.6.8+ 的协议层
+// VLESS 加密（VLESS Encryption，mlkem768x25519plus）：Xray 25.9.5+ 的协议层
 // 加密。字符串文法（点分段）：
 //
 //	服务端 decryption: mlkem768x25519plus.<外观>.<ticket有效期>.<填充链>.<服务端认证段>

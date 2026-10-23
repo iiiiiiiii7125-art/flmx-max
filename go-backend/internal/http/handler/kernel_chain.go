@@ -166,7 +166,7 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 			return fmt.Errorf("%s：%v", what, err)
 		}
 		// R2X-007：ENC 拨号侧版本门——目标带 VLESS 加密时，拨号方
-		// Xray 同样需要 25.6.8+（与入站自有门 kernelVersionGate 同口径）。
+		// Xray 同样需要 25.9.5+（与入站自有门 kernelVersionGate 同口径）。
 		if msg := encDialGate(kernelType, kernelVersion, &e); msg != "" {
 			return fmt.Errorf("%s：%s", what, msg)
 		}

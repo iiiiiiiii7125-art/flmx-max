@@ -439,11 +439,14 @@ func ValidHy2Ports(ports string) bool {
 // ValidVLESSEncryption checks a client-side VLESS encryption string
 // against the Xray ENC grammar (vless_encryption.go):
 //
-//	mlkem768x25519plus.<native|xorpub|random>.<0rtt|1rtt>.<填充链>.<认证段>
+//	mlkem768x25519plus.<native|xorpub|random>.<0rtt|1rtt>[.<填充链>].<认证段>
 //
-// The padding chain is one or more dot-separated groups of
-// dash-separated decimal numbers (the built face emits
-// "100-111-1111.75-0-111.50-0-3333"); the authentication segment must
+// The padding chain is zero or more dot-separated groups of
+// dash-separated decimal numbers: the built face emits
+// "100-111-1111.75-0-111.50-0-3333", while the Xray `vlessenc`
+// default emits no padding chain at all (a 4-segment string whose
+// last segment is the authentication segment — R8X-002); the
+// authentication segment must
 // be RawURL base64 decoding to 32 bytes (x25519 public key) or 1184
 // bytes (ML-KEM-768 encapsulation key) — exactly what
 // Settings.EncryptionString produces. "" and "none" are valid (no
@@ -455,7 +458,7 @@ func ValidVLESSEncryption(enc string) bool {
 		return true
 	}
 	parts := strings.Split(enc, ".")
-	if len(parts) < 5 || parts[0] != "mlkem768x25519plus" {
+	if len(parts) < 4 || parts[0] != "mlkem768x25519plus" {
 		return false
 	}
 	switch parts[1] {

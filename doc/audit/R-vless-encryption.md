@@ -19,9 +19,9 @@
 - Normalize：非 Xray 内核或非 VLESS 协议启用加密 → 直接拒绝并提示；
   认证方式/外观非法值拒绝；秘密缺失自动生成、已有则校验长度；
   vision flow 在加密启用时于 security=none+TCP 也保留（与 Xray 行为一致）。
-- 创建/更新（handler inboundSave）：节点 Xray < 25.6.8 拒绝，文案含当前版本
+- 创建/更新（handler inboundSave）：节点 Xray < 25.9.5 拒绝，文案含当前版本
   （versionBelow3 精确到修订号；latest/不可解析不拦，与既有版本门语义一致）。
-- 下发前复检（buildKernelApplyPayload）：启用加密的入站遇节点 Xray < 25.6.8
+- 下发前复检（buildKernelApplyPayload）：启用加密的入站遇节点 Xray < 25.9.5
   整单拒绝并报入站名，防止节点降级后静默下发坏配置。
 - 凭据轮换（Regenerate）同步轮换加密秘密。
 - sing-box 内核渲染：Normalize 已在创建层拒绝，渲染层无 decryption 概念，不涉及。
@@ -42,7 +42,7 @@
 
 - 订阅预览/节点计数对"被某格式跳过"无计数提示（与 Q 审计残余观察同项）：
   表单已在开关下注明哪些格式不含此入站。
-- v2rayN 等 URI 客户端对 ENC 的承接取决于其内置 Xray 版本（≥25.6.8），面板
+- v2rayN 等 URI 客户端对 ENC 的承接取决于其内置 Xray 版本（≥25.9.5），面板
   无法代验，属客户端侧下限。
 - 外观 xorpub/random 与 padding 链未做真机互通实测（本侧无 Xray 25.6.8+ 节点
   环境）；native+x25519 形态与官方文档示例逐段一致。建议用户首个 ENC 入站
