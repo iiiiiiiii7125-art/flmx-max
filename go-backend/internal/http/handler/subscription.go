@@ -628,8 +628,9 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 	if isShare(s) {
 		ku := kernelUser(s)
 		companions := h.companionInboundsByOrigin()
+		kept := endpoints[:0]
 		for i := range endpoints {
-			e := &endpoints[i]
+			e := endpoints[i]
 			// SS metering: retarget direct SS endpoints whose origin
 			// has a live companion to the companion (its port and
 			// identity PSK); ForUser below then stamps the combined
@@ -647,7 +648,20 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 			if e.Proxy == nil {
 				e.Inbound = e.Inbound.ForUser(ku)
 			}
+			// F5 (C-03): fail closed when the per-subscription
+			// credential cannot be derived for a companion endpoint
+			// (ForUser leaves the bare identity PSK in place — no ':'
+			// separator; SS2022 PSKs are base64 and never contain
+			// one). The bare iPSK is a working single-user credential
+			// and must never be served; the render side likewise
+			// skips underivable users.
+			if e.CompanionOf > 0 && !strings.Contains(e.Inbound.Settings.Password, ":") {
+				log.Printf("subscription %d: drop companion endpoint of inbound %d: per-subscription credential underivable", s.ID, e.Inbound.ID)
+				continue
+			}
+			kept = append(kept, e)
 		}
+		endpoints = kept
 	}
 	// 1.0.12: 中转范围过滤（Options.relayIds）。空 = 不过滤，保持旧行为。
 	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
