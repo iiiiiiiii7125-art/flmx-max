@@ -298,6 +298,20 @@ func validateImportedProxyAddress(p Proxy) (string, int, error) {
 	return host, port, nil
 }
 
+// ValidateImportedProxyRowAddress is the row-carrier form of the
+// address column: a backup-restored imported-type inbound carries the
+// same address a second time in its row's Listen/Port columns (the
+// externalRow invariant writes Listen=Host, Port=Port from the
+// finishProxy-validated pair), so the restore face validates the row
+// carrier through this wrapper — which calls the one
+// validateImportedProxyAddress implementation above, never a second
+// predicate (R8X-004 facet A, along the R7X-003 shared-implementation
+// rule; R7X-003 itself closed only the Extra carrier of this column).
+func ValidateImportedProxyRowAddress(host string, port int) error {
+	_, _, err := validateImportedProxyAddress(Proxy{"server": host, "port": port})
+	return err
+}
+
 // ValidateImportedProxy is the exported form of the import predicate:
 // ParseImport (finishProxy) and the backup-restore face for
 // imported-type inbounds (kernel_id=0, whose credentials live in the
