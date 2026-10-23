@@ -194,6 +194,80 @@ if violations:
         print(" -", v)
     sys.exit(1)
 
+# Universal recorded-code gate (R9 BINFRA, J O-1 通则; R9-X-verdicts §4):
+# EVERY recorded response in EVERY book must carry res.code == 0. A
+# transient failure frozen into any cell — not just the content-gate
+# keys below — otherwise ships verbatim in the demo (R8X-006 froze a
+# GitHub 403 into kernel/versions; R9-J §2.3 proved by mutation that
+# off-list live keys such as system/check-updates, system/version and
+# node/releases passed both old gates with a frozen failure). The
+# only exceptions are the per-cell whitelist below: intentional
+# recordings of an honest failure answer, enumerated one cell at a
+# time as (book, path, canonical request key, code, msg), sourced
+# from the R9-J §2.1 full-set scan (13 cells, R9-J-fixtures-full-
+# probe.log). Adding or removing a cell requires a per-cell reason
+# recorded in the comment above that entry; whole-class exemptions
+# (by path alone, by code alone, by msg alone) are FORBIDDEN. The
+# same gate runs against the committed fixtures in
+# check-fixtures-content.mjs — keep both lists cell-for-cell equal.
+CODE_WHITELIST = [
+    # — config/get 配置不存在 (code -1, msg 配置不存在): the seed panel
+    # never set these preferences; the backend's honest answer, and
+    # the pages render their defaults. One reason per cell:
+    # admin: forward-page group collapse preference, never set.
+    ("admin", "config/get", '{"name":"forward_group_collapsed_map"}', -1, "配置不存在"),
+    # admin: forward-page group order preference, never set (the R8
+    # O-2 cell; observation status unchanged, see R9-J §6 O-2).
+    ("admin", "config/get", '{"name":"forward_group_order_map"}', -1, "配置不存在"),
+    # admin: forward-page compact-mode preference, never set.
+    ("admin", "config/get", '{"name":"forward_compact_mode"}', -1, "配置不存在"),
+    # user: forward-page compact-mode preference, never set.
+    ("user", "config/get", '{"name":"forward_compact_mode"}', -1, "配置不存在"),
+    # user: tunnel-quality monitor enable preference, never set.
+    ("user", "config/get", '{"name":"monitor_tunnel_quality_enabled"}', -1, "配置不存在"),
+    # user: tunnel-quality monitor interval preference, never set.
+    ("user", "config/get", '{"name":"monitor_tunnel_quality_interval_sec"}', -1, "配置不存在"),
+    # user: forward-page group collapse preference, never set.
+    ("user", "config/get", '{"name":"forward_group_collapsed_map"}', -1, "配置不存在"),
+    # — user-book 403 permission probes (code 403, msg 权限不足，
+    # 仅管理员可操作): the demo user book deliberately records the
+    # requiresAdmin denial for admin-only surfaces, proving the
+    # permission boundary; one reason per cell:
+    # user probe of the admin-only update check (stable channel).
+    ("user", "system/check-updates", '{"channel":"stable"}', 403, "权限不足，仅管理员可操作"),
+    # user probe of the admin-only speed-limit list.
+    ("user", "speed-limit/list", "{}", 403, "权限不足，仅管理员可操作"),
+    # user probe of the admin-only tunnel list.
+    ("user", "tunnel/list", "{}", 403, "权限不足，仅管理员可操作"),
+    # user probe of the admin-only node list.
+    ("user", "node/list", "{}", 403, "权限不足，仅管理员可操作"),
+    # user probe of the admin-only federation share list.
+    ("user", "federation/share/list", "{}", 403, "权限不足，仅管理员可操作"),
+    # user probe of the admin-only federation remote-usage list.
+    ("user", "federation/share/remote-usage/list", "{}", 403, "权限不足，仅管理员可操作"),
+]
+CODE_WHITELIST_SET = set(CODE_WHITELIST)
+code_violations = []
+for book in ("admin", "user"):
+    for path_, entries in (fixtures.get(book) or {}).items():
+        for i, e in enumerate(entries or []):
+            res = e.get("res") or {}
+            code = res.get("code")
+            if code == 0:
+                continue
+            cell = (book, path_, e.get("key") or "", code, res.get("msg") or "")
+            if cell not in CODE_WHITELIST_SET:
+                code_violations.append(
+                    f"{book} {path_} recording #{i} key={cell[2]}: res.code={code} "
+                    f"msg={cell[4]!r} is not code 0 and not a whitelisted cell "
+                    "(per-cell whitelist only — see CODE_WHITELIST above)")
+if code_violations:
+    print("FIXTURE CODE GATE FAILED — fixtures NOT written:")
+    for v in code_violations[:20]:
+        print(" -", v)
+    sys.exit(1)
+print(f"code gate ok: every recorded response is code 0 except the {len(CODE_WHITELIST)} whitelisted cells")
+
 # Content gate (R7X-006): key-set existence is not a reconciliation.
 # A re-record whose seed never produced the underlying fact passes a
 # key-set diff while washing a key's payload back to empty — that is
