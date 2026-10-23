@@ -752,7 +752,9 @@ func (p *tunnelQualityProber) probeCandidateGroupLinks(
 			item.TargetPort = targetPort
 			latency, loss, probeErr := ping(source.NodeID, targetIP, targetPort, options)
 			if probeErr != nil {
-				item.ErrorMessage = probeErr.Error()
+				// R6X-016：候选跳逐跳错误串与快照头同口径过归类函数；
+				// 上方 resolveErr 解析失败串维持不归类（防过修对照在案）。
+				item.ErrorMessage = latencyCommandError(probeErr)
 				items = append(items, item)
 				continue
 			}
@@ -798,7 +800,9 @@ func (p *tunnelQualityProber) probePublicTargetCandidates(
 		}
 		latency, loss, probeErr := ping(source.NodeID, probeTarget.Host, probeTarget.Port, options)
 		if probeErr != nil {
-			item.ErrorMessage = probeErr.Error()
+			// R6X-016：同 probeCandidateGroupLinks 口径，公网候选跳
+			// 错误串过 latencyCommandError 归类，与快照头同文案。
+			item.ErrorMessage = latencyCommandError(probeErr)
 			items = append(items, item)
 			continue
 		}
