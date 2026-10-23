@@ -311,15 +311,26 @@ func chainTargetFromInbound(e Endpoint) (chainTarget, error) {
 
 func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 	p := e.Proxy.forEndpoint(e)
+	// R7X-001：Xray 本体 SS 方法集是双客户端共同集的真子集（8/18）；
+	// 共同集内、子集外的合法 cipher 先行点名拒绝（错误须明确点名
+	// cipher，沿协议×内核规则与既有同型门文案口径），不得下发必被
+	// Xray exit 23 的配置。chacha20 不经此分支：其既有处置（单面集
+	// 格经下方统一谓词拒绝）逐字不变。
+	if p.Type() == "ss" {
+		if cipher := p.str("cipher"); ValidSSCipher(cipher) && !ssCipherMihomoOnly(cipher) && !ValidSSCipherForXrayChain(cipher) {
+			return chainTarget{}, fmt.Errorf("Xray 无法连接 %s 节点：Xray 不支持 Shadowsocks 加密方法 %s，请改用 sing-box 内核或更换加密方法", DescribeProxy(e.Proxy), cipher)
+		}
+	}
 	// R6X-003（+R6X-001 链式面格）：链式 Xray 面此前无存量守卫，
 	// Reality pbk/sid、VLESS flow/encryption、SS2022 key、SS cipher
 	// 双拒格坏存量原样透传、Xray 整单 exit 23。入口先过统一谓词
-	// validImportedProxyFields（面参数 other：单面 chacha20 非
-	// mihomo 面不放行——Xray 实测 unknown cipher method exit 23），
+	// validImportedProxyFields（面参数 xray-chain：单面 chacha20 非
+	// mihomo 面不放行——Xray 实测 unknown cipher method exit 23；
+	// R7X-001 起同档含 Xray SS 子集门，与上方点名分支同一点生效），
 	// 不过即面板侧报错、不产出可下发配置；保存期 CheckChainWith
 	// 经 xrayChainOutbound 同点生效。自建目标 chainTargetFromInbound
 	// 字段经 Normalize 把关，不经此谓词。
-	if !validImportedProxyFields(p, ssFaceOther) {
+	if !validImportedProxyFields(p, ssFaceXrayChain) {
 		return chainTarget{}, fmt.Errorf("Xray 无法连接 %s 节点（凭据不合规），请修正节点或改用 sing-box 内核", DescribeProxy(e.Proxy))
 	}
 	t := chainTarget{Host: p.str("server"), Port: e.Port}
