@@ -488,14 +488,26 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+err.Error()+"（可强制删除面板记录）"))
 			return
 		}
-		if rows, lerr := h.repo.ListNodeInboundsByKernel(k.ID); lerr == nil {
-			for _, row := range rows {
+		kernelInboundRows, listErr := h.repo.ListNodeInboundsByKernel(k.ID)
+		if listErr == nil {
+			for _, row := range kernelInboundRows {
 				h.removeInboundRelays(row.ID)
 			}
 		}
 		err = h.repo.DeleteNodeKernel(k.ID)
 		unlock()
 		if err != nil {
+			// R5X-004(f)：removeInboundRelays 已逐入站删掉 relay 与
+			// 转发，内核/入站本体尚存（DeleteNodeKernel 为单事务、
+			// 失败只回滚其自身级联）——解锁后对本内核补一次
+			// applyKernel，按现行 DB 重算各入站 allow（applyKernel
+			// 自带同内核锁，必须在 unlock 之后调用）。列表查询失败
+			// 时未删任何 relay，跳过补刷。
+			if listErr == nil && len(kernelInboundRows) > 0 {
+				if aerr := h.applyKernel(k.ID, false); aerr != nil {
+					log.Printf("kernel remove: whitelist repush after failed kernel delete kernel_id=%d err=%v", k.ID, aerr)
+				}
+			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -1179,6 +1191,13 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.removeInboundRelays(id)
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
+		// R5X-004(e)：removeInboundRelays 已逐条删掉本入站的 relay
+		// 与其转发，入站本体尚存——失败返回前按现行 DB 补刷本入站
+		// 白名单（refreshInboundWhitelist 内部按 RelayWhitelist 门
+		// 控、非白名单入站为空转），否则已删中转的拨号地址残留在
+		// 本入站 allow 中。outboundTargets 面不受影响：本入站（拨
+		// 号方）尚存、其链式关系未变。
+		h.refreshInboundWhitelist(id)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1241,6 +1260,14 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
 			f++
 			failures = appendBatchFailure(failures, id, row.Name, err)
+			// R5X-004(e)：失败项的 relay 已删而入站尚存——把该入站
+			// 所在内核汇入末尾统一 apply 集，使其 allow 按现行 DB
+			// 重算（与成功项同一下发面）。targetIDs 不汇入：本入站
+			// （拨号方）尚存、其出站目标的 allow 不受 relay 删除影响。
+			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+				seenKernel[row.KernelID] = true
+				kernelIDs = append(kernelIDs, row.KernelID)
+			}
 			continue
 		}
 		s++
