@@ -20,7 +20,7 @@ const BASE = "/flmx-max/demo/";
 // admin walk page. The user walk covers it instead: the demo user book
 // is a monitoring-authorized one (monitor/access allowed:true), which
 // is the only role that still renders MonitorOverview at /monitor.
-const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "limit", "user", "group", "panel-sharing", "config", "profile"];
+const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "limit", "user", "group", "panel-sharing", "config", "profile", "change-password"];
 const USER_PAGES = ["dashboard", "my-subscription", "forward", "monitor", "profile"];
 // Settle, condition-based (R9 BINFRA; K settle 条件化评估采纳,
 // R9-X-verdicts §7 / R9-K-report 观察项, same root as R8-J O-1): a
