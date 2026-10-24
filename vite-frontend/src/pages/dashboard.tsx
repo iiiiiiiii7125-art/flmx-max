@@ -951,11 +951,13 @@ function UserDashboard() {
                           </h3>
                           <div className="flex flex-wrap items-center gap-2 mt-1">
                             <span
-                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" : "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300"}`}
+                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" : tunnel.tunnelFlow === 2 ? "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300" : "bg-gray-100 dark:bg-gray-500/20 text-gray-700 dark:text-gray-300"}`}
                             >
                               {tunnel.tunnelFlow === 1
                                 ? "单向计费"
-                                : "双向计费"}
+                                : tunnel.tunnelFlow === 2
+                                  ? "双向计费"
+                                  : "未知"}
                             </span>
                             <span
                               className={`px-2 py-1 rounded-md text-xs font-medium border ${tunnelExpStatus.bg} ${tunnelExpStatus.color}`}
