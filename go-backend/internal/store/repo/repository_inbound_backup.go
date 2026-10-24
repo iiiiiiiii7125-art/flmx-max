@@ -854,6 +854,8 @@ func meteringShapeBlockedBackup(acceptProxyProtocol, relayOnly int, outboundID i
 func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep *importReport) error {
 	srcStripped, outStripped, rulesStripped := 0, 0, 0
 	meteringStripped := 0
+	// R14-A5-08：恢复出的 Snell 毒化行（带链式出站/分流）剥离计数。
+	snellStripped := 0
 	for _, ib := range rows {
 		var row model.NodeInbound
 		res := tx.Where("id = ?", ib.ID).Limit(1).Find(&row)
@@ -902,6 +904,26 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 				effSplitRules = pruned
 			}
 		}
+		// R14-A5-08：Snell 内核的行带链式出站/分流是毒化组合（渲染期整
+		// 内核拒绝；保存期已拒，见 handler.validateChainVersion）——
+		// 备份里带出来的旧毒化行在恢复时即剥离为直连（与上方悬空引用
+		// 剥离同口径：行照常恢复、只清路由列、计数披露），不得原样落
+		// 库后阻塞整内核后续下发。以前置悬空剥离后的有效值判定（目标
+		// 已悬空的行已在上方清为直连，不重复计数）。
+		if row.KernelID > 0 && (effOutboundID != 0 || strings.TrimSpace(effSplitRules) != "") {
+			var krow model.NodeKernel
+			if kerr := tx.Where("id = ?", row.KernelID).Limit(1).Find(&krow).Error; kerr == nil && krow.KernelType == kernel.TypeSnell {
+				if effOutboundID != 0 {
+					updates["outbound_id"] = 0
+					effOutboundID = 0
+				}
+				if strings.TrimSpace(effSplitRules) != "" {
+					updates["split_rules"] = ""
+					effSplitRules = ""
+				}
+				snellStripped++
+			}
+		}
 		// X-01 (G1)：恢复出的「计量开 + 形态被排除」行在保存面是被
 		// 拒绝/自愈关开关的组合（B-01 的静默不计量形态：开关显示
 		// 开、伴生永不物化、无任何提示）。导入面按最终落库形态判
@@ -922,6 +944,9 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 	}
 	if meteringStripped > 0 {
 		rep.warnf("备份恢复：%d 条入站开启了订阅计量但形态不兼容（PROXY 协议/仅中转/链式出口/分流，计量伴生无法服务），已关闭其计量开关，入站本身已照常恢复，改为直连形态后可重新开启计量", meteringStripped)
+	}
+	if snellStripped > 0 {
+		rep.warnf("备份恢复：%d 条 Snell 内核入站带有链式出站/分流（Snell 内核不支持，已清除其出站与分流配置改直连），入站本身已照常恢复", snellStripped)
 	}
 	return nil
 }
