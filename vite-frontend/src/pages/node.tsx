@@ -16,6 +16,7 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { GripVertical } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import { formatTraffic } from "@/utils/traffic";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -26,6 +27,7 @@ import { Alert } from "@/shadcn-bridge/heroui/alert";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
 import {
   createNode,
+  getConfigs,
   getNodeList,
   getNodeMonthTraffic,
   getInboundList,
@@ -78,6 +80,11 @@ import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
+import { isAdmin } from "@/utils/auth";
+import {
+  LATENCY_TARGETS_KEY,
+  parseLatencyTargets,
+} from "@/utils/latency-targets";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import {
   useIdemKey,
@@ -281,6 +288,13 @@ export default function NodePage({
 
   const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
+  const navigate = useNavigate();
+  // 零测试点提示：延迟测试点池是否为空。null = 未知（未加载、非管理
+  // 员、读取失败），此时不提示、不误报；true = 池为空，延迟槽位显示
+  // 去设置添加的提示；false = 池非空，等待态仍画空等定时探测。
+  const [latencyPoolEmpty, setLatencyPoolEmpty] = useState<boolean | null>(
+    null,
+  );
   const [routeNode, setRouteNode] = useState<Node | null>(null);
   const [trendNode, setTrendNode] = useState<Node | null>(null);
   const [targetNodes, setTargetNodes] = useState<Node[]>([]);
@@ -563,6 +577,27 @@ export default function NodePage({
     loadNodes();
     loadRemoteUsage();
   }, [loadNodes, loadRemoteUsage]);
+
+  // 零测试点提示：只读一次池状态，复用设置页延迟卡同一 getConfigs
+  // 接口（/config/list），不新增接口。仅管理员读取（提示的落点设置
+  // 页延迟卡仅管理员可见）；读取失败时保持未知，不提示。
+  useEffect(() => {
+    if (!isAdmin()) return;
+    let alive = true;
+
+    getConfigs()
+      .then((r) => {
+        if (!alive || r.code !== 0 || !r.data) return;
+        setLatencyPoolEmpty(
+          parseLatencyTargets(r.data[LATENCY_TARGETS_KEY]).length === 0,
+        );
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -1367,6 +1402,9 @@ export default function NodePage({
   // 显式空选测试点（latencyTargets.points 为空数组）= 不测延迟：渲染
   // 「不测延迟」药丸（点击打开测试点设置），与测试点弹窗的文案承诺一致；
   // 不能落进 LatencyCell 显示一个点了没反应的「检测」按钮（A1-015）。
+  // 零测试点提示：池为空（全局未配置任何测试点）时，在线非远端节点
+  // 的延迟槽位显示去设置添加的提示；池非空但暂无结果时仍画空等定时
+  // 探测，不误报。离线/远端节点不显示（延迟本来就不适用）。
   const renderLatency = (node: Node, variant: "card" | "list") =>
     node.isRemote !== 1 && node.connectionStatus === "online" ? (
       node.latencyTargets?.points.length === 0 ? (
@@ -1380,6 +1418,18 @@ export default function NodePage({
           }}
         >
           不测延迟
+        </button>
+      ) : latencyPoolEmpty === true ? (
+        <button
+          className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
+          title="还没有配置延迟测试点，点此去设置添加"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate("/config", { state: { scrollTo: "latency-targets" } });
+          }}
+        >
+          未配置测试点，去设置添加
         </button>
       ) : probePoints(node.latency).length === 0 ? null : (
         // DA-4: no result yet (the panel probes every few minutes) —
@@ -2287,11 +2337,11 @@ export default function NodePage({
                               </div>
                             )}
 
-                            {node.latency && (
+                            {node.latency || latencyPoolEmpty ? (
                               <div className="mb-4 empty:hidden">
                                 {renderLatency(node, "card")}
                               </div>
-                            )}
+                            ) : null}
 
                             {!isRemoteNode && (
                               <div className="mb-4 space-y-2">
