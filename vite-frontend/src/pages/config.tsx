@@ -6,7 +6,7 @@ import type {
 } from "@/api/types";
 
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import toast from "react-hot-toast";
 
@@ -314,6 +314,26 @@ const getInitialConfigs = (): Record<string, string> => {
 
 export default function ConfigPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // 节点页零测试点提示的落点：带 state.scrollTo 跳转过来时，滚到
+  // 「延迟测试点」卡（state 导航，HashRouter 的演示版也不受影响）。
+  useEffect(() => {
+    if (
+      (location.state as { scrollTo?: string } | null)?.scrollTo !==
+      "latency-targets"
+    ) {
+      return;
+    }
+    const t = window.setTimeout(() => {
+      document
+        .getElementById("latency-targets")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+
+    return () => window.clearTimeout(t);
+  }, [location.state]);
+
   const initialConfigs = getInitialConfigs();
   const [configs, setConfigs] =
     useState<Record<string, string>>(initialConfigs);
@@ -1959,7 +1979,7 @@ export default function ConfigPage() {
 
       {/* 移植自 kure29/flyx：延迟测试点配置（仅管理员可见） */}
       {isAdmin() && (
-        <Card className="mt-6 shadow-md">
+        <Card className="mt-6 shadow-md" id="latency-targets">
           <CardHeader className="pb-2">
             <h3 className="text-base font-semibold">延迟测试点</h3>
             <p className="text-xs text-default-500 mt-1">
