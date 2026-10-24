@@ -502,8 +502,8 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 		o["method"] = in.Settings.Method
 		// GATE-F1：合法单段归一、其余原样——自建面既有行为恒渲染，
 		// 不引入导入节点面的略过语义（计数口径亦不变）。
-		// R10X-015（X-E-01）：改经 Segments 逐段归一，与进口同面及
-		// 自建 Clash 面齐一（渲染函数全集口径）；对一切可达输入
+		// R10X-015（X-E-01）：改经 Segments 逐段归一；自建 SS 服务端
+		// 两落点维持单段 helper；对一切可达输入
 		// （Normalize 单段限定）Segments ≡ 单段形、行为逐字不变，
 		// 多段仅在直调渲染函数时逐段归一（坏段仍由 helper 原样
 		// 返回、恒渲染口径不变）。
