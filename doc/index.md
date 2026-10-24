@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: 多内核节点
-    details: Xray、sing-box、Snell v4 / v5 按节点安装，VLESS Reality、Hysteria2、TUIC、AnyTLS、NaïveProxy、ShadowTLS 等模板一键创建。
+    details: Xray、sing-box、Snell v4 / v5 / v6（beta）按节点安装，VLESS Reality、Hysteria2、TUIC、AnyTLS、NaïveProxy、ShadowTLS 等模板一键创建。
   - title: 一键对接中转
     details: 端口转发、隧道转发，或经 IX 的多跳线路；中转线路自动进入订阅，可开启入站白名单和真实客户端 IP。
   - title: 导入节点
