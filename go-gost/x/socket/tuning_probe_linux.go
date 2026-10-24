@@ -26,6 +26,16 @@ import (
 // rtt: reading it yields 0 on stable connections, which the rtt > 0
 // filter then drops — the probe saw zero samples and fell back.
 //
+// The dump is issued once per family (AF_INET, then AF_INET6), never
+// with AF_UNSPEC: some kernels reject an UNSPEC dump outright
+// (Debian 6.1.0-54-cloud-amd64 answers NLMSG_ERROR -2/ENOENT for it,
+// while per-family dumps succeed), which would again yield zero
+// samples before parsing even starts. A family whose dump fails is
+// skipped; only if both fail does the probe report RTT unavailable —
+// it is never papered over with a guessed value. Unprivileged agents
+// still see their own process's sockets, which is exactly the
+// forwarded connections this tuning sizes buffers for.
+//
 // Only TCP_ESTABLISHED (state 1) sockets with rtt > 0 are returned:
 // other states have no meaningful RTT, and rtt == 0 means the kernel
 // has not measured this connection yet. Netlink payloads are host
@@ -46,6 +56,44 @@ const (
 )
 
 func sockDiagTCPRTTs() ([]uint32, error) {
+	// Per-family dumps (see the file comment): AF_UNSPEC is rejected
+	// by some kernels. A failed family is skipped; only a failure of
+	// both families surfaces as an error.
+	var rtts []uint32
+	var errs [2]error
+	families := []byte{unix.AF_INET, unix.AF_INET6}
+	for i, family := range families {
+		samples, err := sockDiagDump(family)
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		rtts = append(rtts, samples...)
+	}
+	if len(rtts) == 0 && (errs[0] != nil || errs[1] != nil) {
+		return nil, fmt.Errorf("sock_diag 取数失败 (v4: %v; v6: %v)", errs[0], errs[1])
+	}
+	return rtts, nil
+}
+
+// buildDiagRequest renders one dump request: nlmsghdr (16) +
+// inet_diag_req_v2 (56), asking for all TCP states with the
+// INET_DIAG_INFO extension.
+func buildDiagRequest(family byte) []byte {
+	req := make([]byte, 72)
+	binary.LittleEndian.PutUint32(req[0:4], 72)
+	binary.LittleEndian.PutUint16(req[4:6], sockDiagByFamily)
+	binary.LittleEndian.PutUint16(req[6:8], unix.NLM_F_REQUEST|unix.NLM_F_DUMP)
+	binary.LittleEndian.PutUint32(req[8:12], 1)
+	// pid 0 = kernel.
+	req[16] = family
+	req[17] = unix.IPPROTO_TCP
+	req[18] = 1 << (2 - 1)                           // INET_DIAG_INFO extension bit
+	binary.LittleEndian.PutUint32(req[20:24], 0xfff) // all TCP states
+	return req
+}
+
+func sockDiagDump(family byte) ([]uint32, error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_INET_DIAG)
 	if err != nil {
 		return nil, err
@@ -56,18 +104,7 @@ func sockDiagTCPRTTs() ([]uint32, error) {
 	// timeout) forever.
 	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 5})
 
-	// nlmsghdr (16) + inet_diag_req_v2 (56).
-	req := make([]byte, 72)
-	binary.LittleEndian.PutUint32(req[0:4], 72)
-	binary.LittleEndian.PutUint16(req[4:6], sockDiagByFamily)
-	binary.LittleEndian.PutUint16(req[6:8], unix.NLM_F_REQUEST|unix.NLM_F_DUMP)
-	binary.LittleEndian.PutUint32(req[8:12], 1)
-	// pid 0 = kernel.
-	req[16] = 0 // AF_UNSPEC: both families
-	req[17] = unix.IPPROTO_TCP
-	req[18] = 1 << (2 - 1)                           // INET_DIAG_INFO extension bit
-	binary.LittleEndian.PutUint32(req[20:24], 0xfff) // all TCP states
-	if err := unix.Sendto(fd, req, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+	if err := unix.Sendto(fd, buildDiagRequest(family), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return nil, err
 	}
 
