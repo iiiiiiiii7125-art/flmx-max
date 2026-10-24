@@ -105,7 +105,9 @@ export function InboundFormModal({
   const [initialKey, setInitialKey] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
-    initial.outboundIpStrategy !== "auto" || initial.shareAddressMode !== "auto",
+    initial.outboundIpStrategy !== "auto" ||
+      initial.shareAddressMode !== "auto" ||
+      initial.connIdleSeconds !== "",
   );
   const isEdit = Boolean(initial.id);
 
@@ -115,7 +117,8 @@ export function InboundFormModal({
     setForm(initial);
     setShowAdvanced(
       initial.outboundIpStrategy !== "auto" ||
-        initial.shareAddressMode !== "auto",
+        initial.shareAddressMode !== "auto" ||
+        initial.connIdleSeconds !== "",
     );
   }
 
@@ -174,6 +177,9 @@ export function InboundFormModal({
           kernelType === "xray" || kernelType === "singbox"
             ? prev.outboundIpStrategy
             : "auto",
+        // 空闲超时只有 Xray 支持，切走时清空，避免保存时被后端拒绝。
+        connIdleSeconds:
+          kernelType === "xray" ? prev.connIdleSeconds : "",
       };
 
       if (info?.protocols?.some((p) => p.protocol === prev.protocol)) {
@@ -262,6 +268,18 @@ export function InboundFormModal({
 
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         return "端口必须在 1-65535 之间";
+      }
+    }
+    // 空闲超时：仅 Xray 内核；1–86400 秒的整数，留空为默认 300 秒。
+    // 0 不是合法值（留空即默认），后端同样拒绝，双侧校验。
+    if (form.connIdleSeconds.trim()) {
+      const v = Number(form.connIdleSeconds);
+
+      if (!Number.isInteger(v) || v < 1 || v > 86400) {
+        return "空闲超时须为 1–86400 秒的整数，留空为默认 300 秒";
+      }
+      if (form.kernelType !== "xray") {
+        return "空闲超时只支持 Xray 内核：sing-box 没有 Xray 式的空闲超时";
       }
     }
     if (
@@ -1142,6 +1160,28 @@ export function InboundFormModal({
                       kernelType={form.kernelType}
                       value={form.outboundIpStrategy}
                       onChange={(value) => set("outboundIpStrategy", value)}
+                    />
+                    <Input
+                      description={
+                        form.kernelType === "xray"
+                          ? "Xray policy connIdle：连接无数据超过该秒数即断开；留空不下发该段、走默认 300 秒"
+                          : "仅 Xray 内核支持空闲超时：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout）"
+                      }
+                      endContent={
+                        <span className="text-xs text-default-400">秒</span>
+                      }
+                      inputMode="numeric"
+                      isDisabled={form.kernelType !== "xray"}
+                      label="空闲超时"
+                      placeholder="留空为默认 300 秒"
+                      value={form.connIdleSeconds}
+                      variant="bordered"
+                      onChange={(e) =>
+                        set(
+                          "connIdleSeconds",
+                          e.target.value.replace(/\D/g, ""),
+                        )
+                      }
                     />
                     {showMeteringBlock && (
                       <div className="space-y-3 rounded-xl border border-divider p-3">

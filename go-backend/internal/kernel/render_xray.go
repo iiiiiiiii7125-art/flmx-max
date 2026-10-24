@@ -2,15 +2,29 @@ package kernel
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 type obj = map[string]interface{}
 
 func renderXray(inbounds []Inbound) (string, error) {
+	// Per-inbound idle timeout: every inbound with ConnIdleSeconds set
+	// gets its own policy level (1..N, in inbound-ID order — inbounds
+	// arrive ID-sorted from RenderWith, so the assignment is stable
+	// across renders). Level 0 is never written: it is Xray's shared
+	// default and touching it would retime every other inbound on the
+	// node. Clients carry their inbound's level (see xraySettings /
+	// xrayUserClients); the level numbers are render-internal — no
+	// subscription link or share URI carries them, so a reshuffle after
+	// a delete is harmless.
+	levels, err := connIdleLevels(inbounds)
+	if err != nil {
+		return "", err
+	}
 	list := make([]interface{}, 0, len(inbounds))
 	for _, in := range inbounds {
-		item, err := xrayInbound(in)
+		item, err := xrayInbound(in, levels[in.ID])
 		if err != nil {
 			return "", fmt.Errorf("入站 %d: %v", in.ID, err)
 		}
@@ -23,6 +37,15 @@ func renderXray(inbounds []Inbound) (string, error) {
 			obj{"protocol": "freedom", "tag": "direct"},
 			obj{"protocol": "blackhole", "tag": "block"},
 		},
+	}
+	if len(levels) > 0 {
+		lv := obj{}
+		for _, in := range inbounds {
+			if l, ok := levels[in.ID]; ok {
+				lv[strconv.Itoa(l)] = obj{"connIdle": in.ConnIdleSeconds}
+			}
+		}
+		cfg["policy"] = obj{"levels": lv}
 	}
 	// Chained inbounds leave through their target; their rules come first
 	// so their users do not match the direct per-user rules below.
@@ -49,8 +72,27 @@ func renderXray(inbounds []Inbound) (string, error) {
 	return marshalConfig(cfg)
 }
 
-func xrayInbound(in Inbound) (obj, error) {
-	settings, err := xraySettings(in)
+// connIdleLevels assigns one policy level per inbound that sets an idle
+// timeout, in inbound-ID order starting at 1. Inbounds without a value
+// get no entry and stay on Xray's level-0 default.
+func connIdleLevels(inbounds []Inbound) (map[int64]int, error) {
+	levels := make(map[int64]int)
+	next := 0
+	for _, in := range inbounds {
+		if in.ConnIdleSeconds == 0 {
+			continue
+		}
+		next++
+		if next > maxConnIdleLevel {
+			return nil, fmt.Errorf("入站 ID %d 的空闲超时无法分配 level：同一内核下带空闲超时的入站不能超过 %d 个（SS 的 level 字段为单字节）", in.ID, maxConnIdleLevel)
+		}
+		levels[in.ID] = next
+	}
+	return levels, nil
+}
+
+func xrayInbound(in Inbound, level int) (obj, error) {
+	settings, err := xraySettings(in, level)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +122,7 @@ func xrayInbound(in Inbound) (obj, error) {
 	return item, nil
 }
 
-func xraySettings(in Inbound) (obj, error) {
+func xraySettings(in Inbound, level int) (obj, error) {
 	s := in.Settings
 	switch in.Protocol {
 	case ProtocolVLESS:
@@ -88,19 +130,37 @@ func xraySettings(in Inbound) (obj, error) {
 		if s.Flow != "" {
 			client["flow"] = s.Flow
 		}
-		return obj{"clients": append([]interface{}{client}, xrayUserClients(in)...), "decryption": s.DecryptionString()}, nil
+		if level > 0 {
+			client["level"] = level
+		}
+		return obj{"clients": append([]interface{}{client}, xrayUserClients(in, level)...), "decryption": s.DecryptionString()}, nil
 	case ProtocolVMess:
-		return obj{"clients": append([]interface{}{obj{"id": s.UUID}}, xrayUserClients(in)...)}, nil
+		client := obj{"id": s.UUID}
+		if level > 0 {
+			client["level"] = level
+		}
+		return obj{"clients": append([]interface{}{client}, xrayUserClients(in, level)...)}, nil
 	case ProtocolTrojan:
-		return obj{"clients": append([]interface{}{obj{"password": s.Password}}, xrayUserClients(in)...)}, nil
+		client := obj{"password": s.Password}
+		if level > 0 {
+			client["level"] = level
+		}
+		return obj{"clients": append([]interface{}{client}, xrayUserClients(in, level)...)}, nil
 	case ProtocolShadowsocks:
 		// GATE-F1：同 sing-box 服务端口径，合法单段 SS2022 key 归一 Std。
 		out := obj{"method": s.Method, "password": NormalizedSS2022Password(s.Method, s.Password), "network": "tcp,udp"}
+		// The top-level settings level is the single-password user's
+		// level (upstream Xray ShadowsocksServerConfig.level); without
+		// it the primary credential would stay on level 0 and the
+		// per-inbound timeout would silently miss it.
+		if level > 0 {
+			out["level"] = level
+		}
 		// SS2022 multi-user (companion inbounds only): clients carry the
 		// subscriptions; the top-level password stays the identity PSK
 		// and no owner client is added — a companion has no owner user.
 		if in.UserCapable() {
-			if clients := xrayUserClients(in); len(clients) > 0 {
+			if clients := xrayUserClients(in, level); len(clients) > 0 {
 				out["clients"] = clients
 			}
 		}
