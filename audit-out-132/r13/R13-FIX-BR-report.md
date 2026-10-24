@@ -110,7 +110,7 @@
 ## 7. 提交与文件清单（只 add 明确文件）
 
 - 分支：`fix-r13/bR`（从 `integrate-r13` 切出；**未合入 `integrate-r13`**）
-- 产品提交：`1efe62a`（8 文件，+704/-37）；本报告为随后的报告提交，同分支追加
+- 产品提交：`1efe62a`（8 文件，+704/-37）；报告提交：`4bc17f0`（同分支随后追加）
 - 注意：共享检出在施工中途被兄弟批切到 `fix-r13/bT2` 且混入其在途改动；为防误提交他人 hunk，本批改动经独立 worktree（基线 = 本分支 HEAD `60a4392`）核对后提交，`repository.go` 仅含本批 3 个 hunks、经 grep 确认无 T2 门 hunk；主检出内的 T2 改动一概未碰、未提交
 - 新增：
   - `go-backend/internal/http/handler/backup_import_repush.go`
