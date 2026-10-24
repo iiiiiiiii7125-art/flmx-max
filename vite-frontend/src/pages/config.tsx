@@ -359,6 +359,11 @@ export default function ConfigPage() {
     data: Record<string, unknown>;
   } | null>(null);
   const [importConfirmOpen, setImportConfirmOpen] = useState(false);
+  // 上次导入前由后端自动生成的全量备份（ImportResult.autoBackup）：
+  // 只存于内存，成功导入后可在此下载、再导入恢复，兑现确认框
+  // “可用该自动备份恢复”的承诺（A10-10）。autoBackup 生成失败时
+  // 后端只记警告继续导入，此时本值为 null、按钮不出现。
+  const [importAutoBackup, setImportAutoBackup] = useState<unknown>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -1521,7 +1526,42 @@ export default function ConfigPage() {
       });
 
       if (response.code === 0) {
-        toast.success(`导入成功: ${JSON.stringify(response.data)}`);
+        // 只报计数摘要，不把整份回执（含 autoBackup 全量库）倾倒进
+        // toast（A10-10）；自动备份另存 state，供下方下载按钮取用。
+        const data = (response.data ?? {}) as Record<string, unknown>;
+        const importedTotal = Object.entries(data).reduce(
+          (sum, [k, v]) =>
+            k.endsWith("Imported") && typeof v === "number" ? sum + v : sum,
+          0,
+        );
+        const skippedRows = data.skippedRows as
+          | Record<string, number>
+          | undefined;
+        const skippedTotal =
+          (typeof data.userSubscriptionsSkipped === "number"
+            ? data.userSubscriptionsSkipped
+            : 0) +
+          (skippedRows
+            ? Object.values(skippedRows).reduce(
+                (sum, v) => sum + (typeof v === "number" ? v : 0),
+                0,
+              )
+            : 0);
+        const warningCount = Array.isArray(data.importWarnings)
+          ? data.importWarnings.length
+          : 0;
+        const summary = [
+          `导入成功：共导入 ${importedTotal} 条记录`,
+          skippedTotal > 0 ? `跳过 ${skippedTotal} 条` : null,
+          warningCount > 0 ? `${warningCount} 条警告` : null,
+        ]
+          .filter(Boolean)
+          .join("，");
+
+        toast.success(summary);
+        setImportAutoBackup(
+          (data as { autoBackup?: unknown }).autoBackup ?? null,
+        );
         setImportTypes([]);
         setImportFileName("");
         setPendingImport(null);
@@ -1534,6 +1574,29 @@ export default function ConfigPage() {
     } finally {
       setImporting(false);
     }
+  };
+
+  // 下载上次导入前自动生成的全量备份（可再导入恢复）。
+  const downloadImportAutoBackup = () => {
+    if (importAutoBackup == null) return;
+    const url = window.URL.createObjectURL(
+      new Blob([JSON.stringify(importAutoBackup, null, 2)], {
+        type: "application/json",
+      }),
+    );
+    const link = document.createElement("a");
+
+    link.href = url;
+    const timestamp = new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[:-]/g, "");
+
+    link.setAttribute("download", `auto_backup_${timestamp}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
   };
 
   const cancelPendingImport = () => {
@@ -2158,6 +2221,20 @@ export default function ConfigPage() {
                 </span>
               )}
             </div>
+            {importAutoBackup != null && (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="text-xs text-default-500">
+                  上次导入前已自动备份当前全部数据
+                </span>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={downloadImportAutoBackup}
+                >
+                  下载导入前自动备份
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* PORT-3342/B1：Gist 上传（仅管理员；组件内 status 未加载时亦不渲染）。 */}
@@ -2263,7 +2340,7 @@ export default function ConfigPage() {
                 的数据会被备份文件中的内容覆盖，未包含在所选类型内的数据不受影响。
               </p>
               <p>
-                导入执行前，系统会自动生成一份当前全部数据的备份；如导入结果不符合预期，可用该自动备份恢复。
+                导入执行前，系统会自动生成一份当前全部数据的备份；导入成功后可在此页下载该自动备份，如结果不符合预期可再导入恢复。
               </p>
             </div>
           </ModalBody>

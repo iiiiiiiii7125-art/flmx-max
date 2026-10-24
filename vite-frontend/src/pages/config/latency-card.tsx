@@ -43,20 +43,6 @@ const PRESETS: LatencyTarget[] = CITIES.flatMap(([city, c]) =>
 // One point per carrier, spread over regions.
 const RECOMMENDED = ["广东电信", "上海联通", "北京移动"];
 
-/** One line for the collapsed section. */
-export function latencySummary(configs: Record<string, string>): string {
-  const targets = parseLatencyTargets(configs[LATENCY_TARGETS_KEY]);
-  const enabled = targets.filter((t) => t.enabled);
-
-  if (targets.length === 0) return "未设置 · 延迟从面板服务器测";
-  const pinned = enabled.filter((t) => t.pinned).map((t) => t.name);
-
-  return [
-    `${targets.length} 个测试点，默认测 ${enabled.length} 个`,
-    pinned.length ? `卡片显示 ${pinned.join("、")}` : "卡片显示最差和最好的",
-  ].join(" · ");
-}
-
 /** Reference points nodes measure latency to, saved with the page. */
 export function LatencySettings({
   configs,
@@ -96,7 +82,7 @@ export function LatencySettings({
         连接测到这些地址的延迟和丢包，代表该地区运营商用户到节点的延迟。
         打开“默认”的测试点所有节点都测；某台节点要测别的，到节点页的“测试点”单独选或批量设置。
         卡片显示勾选“卡片显示”的测试点（最多 {MAX_PINNED}{" "}
-        个，没选够时补最差和最好的）。不设置时，入站延迟仍从面板服务器测。
+        个，没选够时补最差和最好的）。不设置时节点不测延迟（节点页延迟区为空）；入站连通性仍由面板服务器探测。
       </p>
 
       {targets.length === 0 && (
