@@ -1066,6 +1066,27 @@ func logReceivedCommand(cmd CommandMessage) {
 	fmt.Printf("🔔 收到命令: type=%s requestId=%s\n", cmd.Type, cmd.RequestId)
 }
 
+// panelRemoteHost returns the remote address of the agent's live
+// WebSocket connection to the panel (host:port), or "" when not
+// connected. It is the probe's panel-RTT target: a fresh TCP connect
+// to this endpoint, not the panel's configured URL (which may be a
+// domain or a fallback list) and not the probe call's own duration.
+// Caveat: if a proxy sits between agent and panel, this measures to
+// the proxy endpoint as seen by the agent; the value stays labelled
+// a reference, never a suggested input.
+func (w *WebSocketReporter) panelRemoteHost() string {
+	w.connMutex.Lock()
+	conn := w.conn
+	w.connMutex.Unlock()
+	if conn == nil {
+		return ""
+	}
+	if addr := conn.RemoteAddr(); addr != nil {
+		return addr.String()
+	}
+	return ""
+}
+
 // routeCommand 路由命令到对应的处理函数。ctx 是本次命令的预算上下文：
 // 读命令/变更命令传 reporter 的 w.ctx，TcpPing 传队列任务的预算 ctx。
 func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage) {
@@ -1155,8 +1176,21 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		// needSaveConfig = false (默认值)
 
 	// 节点调优：读取 / 应用 sysctl 网络参数（移植自 kure29/flyx）
-	case "TuneStatus", "TuneApply":
+	case "TuneStatus", "TuneApply", "TuneProbe":
 		response.Type = cmd.Type + "Response"
+		if cmd.Type == "TuneProbe" {
+			// panelRttMs 的取数口径（契约对齐）：前端契约不带面板
+			// 地址字段，agent 在此从当前 WebSocket 连接的远端地址
+			// 自动补 referenceHost；调用方显式给的优先，不覆盖。
+			// 未连接时补不到，探测的 panelRttMs 腿按契约保持可选缺失。
+			if m, ok := cmd.Data.(map[string]interface{}); ok {
+				if v, has := m["referenceHost"]; !has || strings.TrimSpace(fmt.Sprint(v)) == "" {
+					if host := w.panelRemoteHost(); host != "" {
+						m["referenceHost"] = host
+					}
+				}
+			}
+		}
 		response.Data, err = handleTuneCommand(cmd.Type, cmd.Data)
 
 	// UDP Ping 诊断命令（只读，不需要保存配置）

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,16 @@ import (
 )
 
 const nodeTuneTimeout = 30 * time.Second
+
+// nodeTuneProbeTimeout is the panel->agent timeout for probe only.
+// Frontend allows 120s for the probe call; the agent's own caps bound
+// a real probe to ~25s worst case (10s speed test + 3x2s reference
+// dials + 5s sock_diag read timeout + overhead), so 90s is headroom
+// for loaded nodes / WS queueing, not the binding constraint, and it
+// stays below the frontend 120s so the frontend never cuts first:
+// agent caps (~25s) < panel probe (90s) < frontend (120s).
+// Status/apply/restore keep the 30s B2 timeout.
+const nodeTuneProbeTimeout = 90 * time.Second
 
 // nodeTune reads (action "status") or changes (action "apply" with the
 // chosen groups, or "restore") a node's sysctl network tuning. The agent
@@ -24,20 +35,23 @@ var nodeTuneGroupAllowlist = map[string]bool{
 	"files":   true, // 文件句柄上限
 }
 
-// bdpTuneMinAgentVersion 是首个支持按带宽/延迟算缓冲区的 agent 版本。
-// 上游 3.3.42 的「agent ≥3.3.42」门按上游版本线算，与我方版本线不对齐，
-// 不得照抄：此处按我方版本线重做——面板与 agent 同仓同版发布（与
-// flmxNoPrivateMinAgentVersion 的 1.3.4 门同一口径），本功能随 1.4.5
-// 首发，故门限为 1.4.5。若最终发版号变动，打 tag 前必须同步改此常量。
-// 比较复用 compareWithReportedVersion（上报型 fullVersion 口径）：版本
-// 未知、不可解析或为 dev 一律按不支持处理（fail-closed，见
-// agentSupportsNoPrivateBypass 的同款注释）。
-const bdpTuneMinAgentVersion = "1.4.5"
-
-// agentSupportsBdpTuning 判断节点 agent 是否支持按带宽/延迟算缓冲区。
-func agentSupportsBdpTuning(agentVersion string) bool {
-	cmp, err := compareWithReportedVersion(bdpTuneMinAgentVersion, agentVersion)
-	return err == nil && cmp <= 0
+// 能力探测（主门，照搬上游 3.3.42 机制，不比较 agent 版本号）：
+// 面板以 agent 的 TuneStatus 回包有无 params 判定是否支持按带宽/延迟算
+// 缓冲区，与上游前端 lineSupported = Boolean(status?.params) 同款语义。
+// 旧 agent 回包天然没有 params 字段 → 不支持，走自身固定值组；新 agent
+// 回包带 params → 支持。面板收到回包后把判定结果以 lineSupported 打在
+// data 上（仅派生标注，不改 agent 原值），供前端直接用；前端也可自行
+// 按 Boolean(status?.params) 再算一次，两者语义一致。
+// 1.4.5 只是文档门号（首个提供该能力的我方版本，仅用于提示文案），
+// 不参与是否下发的判断：面板不以版本号硬拦截任何调优请求。
+// 第二层兜底：旧 agent 对未知 JSON 字段天然忽略（Go encoding/json
+// 默认丢弃未知字段），即使带宽/延迟被透传给旧 agent 也不会出错。
+func tuneLineSupported(data map[string]interface{}) bool {
+	if data == nil {
+		return false
+	}
+	v, ok := data["params"]
+	return ok && v != nil
 }
 
 func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +67,19 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		// measurement); 0/0 lets the agent use the last applied values.
 		BandwidthMbps int `json:"bandwidthMbps"`
 		RTTMs         int `json:"rttMs"`
+		// Probe options (action "probe" only): withSpeed is the
+		// contract field (frontend: {action:"probe", withSpeed}) that
+		// triggers the agent's short speed test, off by default;
+		// measureBandwidth is the same switch under its earlier name
+		// and is accepted as an alias. speedtestURL is the download
+		// source it measures against, referenceHost is an optional
+		// host:port for a TCP-connect RTT reference value (the agent
+		// auto-fills the panel address from its WS connection when
+		// absent, so the frontend needs no host field).
+		WithSpeed        bool   `json:"withSpeed"`
+		MeasureBandwidth bool   `json:"measureBandwidth"`
+		SpeedtestURL     string `json:"speedtestURL"`
+		ReferenceHost    string `json:"referenceHost"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil || req.ID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -65,20 +92,14 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("带宽需在 1–100000 Mbps，延迟需在 1–2000 ms"))
 		return
 	}
-	// 版本门：仅当 agent ≥1.4.5 才下发带宽/延迟。旧 agent 沿用自身
-	// 固定值组（基线 64 MiB 缓冲区组），面板不下发 BDP 值——即使门
-	// 失效（版本未知），旧 agent 侧 encoding/json 也会忽略未知字段，
-	// 双层保障，见报告。版本读取失败按不支持处理。
+	// 透传，不做版本门：带宽/延迟只要请求就原样下发。旧 agent 忽略
+	// 未知字段走固定值，新 agent 按线路算缓冲区；是否支持由调用方
+	// 以 status 回包的 params 有无判定（见 tuneLineSupported），
+	// 不以 agent 版本号比较决定——硬版本门会把旧 agent 的全部调优
+	// 能力一并关掉，比上游降级更差，故不采纳。
 	line := map[string]interface{}{}
 	if lineRequested {
-		var agentVersion string
-		var versionErr error
-		if h != nil && h.repo != nil {
-			agentVersion, versionErr = h.repo.GetNodeAgentVersion(req.ID)
-		}
-		if versionErr == nil && agentSupportsBdpTuning(agentVersion) {
-			line = map[string]interface{}{"bandwidthMbps": req.BandwidthMbps, "rttMs": req.RTTMs}
-		}
+		line = map[string]interface{}{"bandwidthMbps": req.BandwidthMbps, "rttMs": req.RTTMs}
 	}
 
 	command, data := "TuneStatus", map[string]interface{}{}
@@ -87,6 +108,27 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req.Action {
 	case "", "status":
+	case "probe":
+		// 一键测算探测：只读建议值，不写盘（agent 侧 TuneProbe 与
+		// Apply 写盘路径完全分开）。测速地址只认 http(s)，其余
+		// scheme 在面板侧先拦，agent 侧再拦一层。
+		if req.SpeedtestURL != "" && !strings.HasPrefix(req.SpeedtestURL, "http://") && !strings.HasPrefix(req.SpeedtestURL, "https://") {
+			response.WriteJSON(w, response.ErrDefault("测速地址须为 http(s) 链接"))
+			return
+		}
+		if req.ReferenceHost != "" {
+			if _, _, err := net.SplitHostPort(req.ReferenceHost); err != nil {
+				response.WriteJSON(w, response.ErrDefault("参考地址须为 host:port 格式"))
+				return
+			}
+		}
+		command, data = "TuneProbe", map[string]interface{}{"withSpeed": req.WithSpeed || req.MeasureBandwidth}
+		if req.SpeedtestURL != "" {
+			data["speedtestURL"] = req.SpeedtestURL
+		}
+		if req.ReferenceHost != "" {
+			data["referenceHost"] = req.ReferenceHost
+		}
 	case "apply":
 		if len(req.Groups) == 0 {
 			response.WriteJSON(w, response.ErrDefault("请至少选择一项"))
@@ -110,14 +152,31 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.sendNodeCommandWithTimeout(req.ID, command, data, nodeTuneTimeout, false, false)
+	timeout := nodeTuneTimeout
+	if req.Action == "probe" {
+		timeout = nodeTuneProbeTimeout
+	}
+	res, err := h.sendNodeCommandWithTimeout(req.ID, command, data, timeout, false, false)
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "未知命令类型") {
-			msg = "节点 agent 版本过旧，不支持调优，请先升级节点"
+			if req.Action == "probe" {
+				// 探测是可选能力：旧 agent 不认 TuneProbe 时只提示，
+				// 不拦调优本身；用户仍可手动填带宽/延迟后 Apply。
+				// 1.4.5 为文档门号（首个提供探测的版本），仅作提示。
+				msg = "节点 agent 较旧，不支持一键测算（按带宽/延迟计算自 1.4.5 起提供），请手动填写带宽/延迟"
+			} else {
+				msg = "节点 agent 版本过旧，不支持调优，请先升级节点"
+			}
 		}
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("调优失败: %s", msg)))
 		return
+	}
+	// 能力探测标注：TuneStatus/Apply/Restore 回包是调优状态形，面板
+	// 据 params 有无打 lineSupported；TuneProbe 回包是探测形（无
+	// params 键），不打标，避免把“探测结果”误读成“不支持”。
+	if req.Action != "probe" && res.Data != nil {
+		res.Data["lineSupported"] = tuneLineSupported(res.Data)
 	}
 	response.WriteJSON(w, response.OK(res.Data))
 }
