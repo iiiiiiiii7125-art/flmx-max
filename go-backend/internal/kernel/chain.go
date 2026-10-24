@@ -182,13 +182,16 @@ func singboxChainRoutesWith(inbounds []Inbound, snell, naive bool) ([]interface{
 // per-inbound connIdle policy levels: chain outbounds stamp the level
 // on their account user (see xrayChainOutbound), and split-direct
 // matches leave through the idle outbounds (see xraySplitRoutes).
-func xrayChainRoutes(inbounds []Inbound, levels map[int64]int) ([]interface{}, []interface{}, error) {
+// idleEmitted is the set of inbounds this render emits idle outbounds
+// for (see idleOutboundSet), threaded through so a split-direct rule
+// never references an idle outbound that was not emitted.
+func xrayChainRoutes(inbounds []Inbound, levels map[int64]int, idleEmitted map[int64]bool) ([]interface{}, []interface{}, error) {
 	var outbounds, rules []interface{}
 	for _, in := range inbounds {
 		if !in.routed() {
 			continue
 		}
-		obs, rs, err := xraySplitRoutes(in, levels)
+		obs, rs, err := xraySplitRoutes(in, levels, idleEmitted)
 		if err != nil {
 			return nil, nil, err
 		}
