@@ -437,6 +437,111 @@ func TestGistSaveAndStatusHandlers(t *testing.T) {
 	}
 }
 
+// R14-F02（REA-P3-1 / A3-02）：gist/save 保存端守卫——保存后终态若
+// interval>0 且无密码在位（未设密码或本次清密码）且令牌在位，则拒绝
+// 保存。令牌未设时 gistDue 恒 false、自动循环不可达，仍按既有口径放行。
+func TestGistSaveRejectsIntervalWithoutPassword(t *testing.T) {
+	newMockGistServer(t, func(w http.ResponseWriter, req *http.Request, rec *mockGistServer) {
+		if req.Method == http.MethodGet && req.URL.Path == "/gists" {
+			writeJSON(w, 200, []interface{}{})
+			return
+		}
+		writeJSON(w, 404, map[string]interface{}{"message": "not found"})
+	})
+
+	save := func(h *Handler, body string) (int, string) {
+		rec := httptest.NewRecorder()
+		h.gistBackupSave(rec, adminRequest(t, http.MethodPost, "/api/v1/backup/gist/save", []byte(body)))
+		code, msg, _ := decodeGistEnvelope(t, rec)
+		return code, msg
+	}
+	readCfg := func(r *repo.Repository, keys ...string) map[string]string {
+		cfg, err := r.GetConfigsByNames(keys)
+		if err != nil {
+			t.Fatalf("read configs: %v", err)
+		}
+		return cfg
+	}
+
+	// (a) clearPassword + interval 24：拒绝，且库内密码与间隔均未改动。
+	h := setupGistTest(t)
+	r := gistTestRepo(t, h)
+	now := time.Now().UnixMilli()
+	if err := r.UpsertConfigs(map[string]string{
+		gistConfigToken: "test-token-1234567890", gistConfigPassword: "enc-pw", gistConfigInterval: "0",
+	}, now); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	if code, _ := save(h, `{"clearPassword":true,"intervalHours":24}`); code == 0 {
+		t.Fatal("(a) clearPassword + interval 24 must be rejected")
+	}
+	if cfg := readCfg(r, gistConfigPassword, gistConfigInterval); cfg[gistConfigPassword] != "enc-pw" || cfg[gistConfigInterval] != "0" {
+		t.Fatalf("(a) rejected save must not mutate state: %v", cfg)
+	}
+
+	// (b) 全新无密码 + token + interval>0：拒绝，且令牌不得落库。
+	h = setupGistTest(t)
+	r = gistTestRepo(t, h)
+	if code, _ := save(h, `{"token":"test-token-1234567890","intervalHours":24}`); code == 0 {
+		t.Fatal("(b) fresh save without password + interval>0 must be rejected")
+	}
+	if cfg := readCfg(r, gistConfigToken, gistConfigInterval); cfg[gistConfigToken] != "" {
+		t.Fatalf("(b) rejected save must not store token: %v", cfg)
+	}
+
+	// (c) 清密码同时 interval 归 0：通过。
+	h = setupGistTest(t)
+	r = gistTestRepo(t, h)
+	if err := r.UpsertConfigs(map[string]string{
+		gistConfigToken: "test-token-1234567890", gistConfigPassword: "enc-pw", gistConfigInterval: "24",
+	}, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	if code, msg := save(h, `{"clearPassword":true,"intervalHours":0}`); code != 0 {
+		t.Fatalf("(c) clearPassword + interval 0 must pass, got code=%d msg=%q", code, msg)
+	}
+	if cfg := readCfg(r, gistConfigPassword, gistConfigInterval); cfg[gistConfigPassword] != "" || cfg[gistConfigInterval] != "0" {
+		t.Fatalf("(c) state after save = %v", cfg)
+	}
+
+	// (d) 有密码态保存 interval>0：不受影响（沿用已存密码；新密码亦可）。
+	h = setupGistTest(t)
+	r = gistTestRepo(t, h)
+	if err := r.UpsertConfigs(map[string]string{
+		gistConfigToken: "test-token-1234567890", gistConfigPassword: "enc-pw", gistConfigInterval: "0",
+	}, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	if code, msg := save(h, `{"intervalHours":24}`); code != 0 {
+		t.Fatalf("(d) save with stored password must pass, got code=%d msg=%q", code, msg)
+	}
+	if cfg := readCfg(r, gistConfigInterval); cfg[gistConfigInterval] != "24" {
+		t.Fatalf("(d) interval after save = %v", cfg)
+	}
+	if code, msg := save(h, `{"password":"new-pw","intervalHours":12}`); code != 0 {
+		t.Fatalf("(d) save with new password must pass, got code=%d msg=%q", code, msg)
+	}
+
+	// (e) 令牌未设 + interval>0 + 无密码：gistDue 恒 false，仍按既有口径放行。
+	h = setupGistTest(t)
+	r = gistTestRepo(t, h)
+	if code, msg := save(h, `{"intervalHours":24}`); code != 0 {
+		t.Fatalf("(e) no-token save must pass per existing behavior, got code=%d msg=%q", code, msg)
+	}
+
+	// (f) 已处无密码态的存量再次保存 interval>0：拒绝。
+	h = setupGistTest(t)
+	r = gistTestRepo(t, h)
+	if err := r.UpsertConfigs(map[string]string{
+		gistConfigToken: "test-token-1234567890", gistConfigInterval: "24",
+	}, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	if code, _ := save(h, `{"intervalHours":24}`); code == 0 {
+		t.Fatal("(f) re-saving interval>0 while passwordless must be rejected")
+	}
+}
+
 // PORT-3342/G-backend（T-4，先红）：未设加密密码时上传必须拒绝，
 // 不得产生任何 GitHub 请求（明文不得离境）。
 func TestGistUploadPlaintextRefused(t *testing.T) {

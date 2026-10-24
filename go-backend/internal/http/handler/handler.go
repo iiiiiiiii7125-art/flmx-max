@@ -644,6 +644,17 @@ func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R14-F01（R14-X-01 / A3-01 / A8-01）：Gist 令牌与密码即使对管理
+	// 员也不经 config/get 下发，与 getConfigs（config/list）侧 delete
+	// + gist/status 仅 tokenHint 的设计对齐。置于敏感/登录守卫之后，
+	// 故只收紧此前唯一漏防的管理员读路径；非管理员与匿名仍走既有
+	// 403「禁止访问敏感配置」/ 401 口径。边界：只动这两键，其余
+	// sensitive 键（如 jwt_secret）管理员可读是既有行为，不动。
+	if configName == gistConfigToken || configName == gistConfigPassword {
+		response.WriteJSON(w, response.Err(403, "禁止访问 Gist 凭据，请经 gist/status 查看"))
+		return
+	}
+
 	cfg, err := h.repo.GetConfigByName(configName)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
