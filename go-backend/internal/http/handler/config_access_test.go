@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go-backend/internal/auth"
@@ -130,6 +131,48 @@ func TestConfigGetNeverReturnsLicenseCredentials(t *testing.T) {
 		resp := httptest.NewRecorder()
 		router.ServeHTTP(resp, req)
 		assertHandlerCodeMsg(t, resp, 403, "禁止访问系统授权凭据")
+	}
+}
+
+// R14-F01（R14-X-01 / A3-01 / A8-01）：管理员经单键 config/get 亦不得
+// 读回 gist_token / gist_password 明文，与 config/list 侧 delete +
+// gist/status tokenHint-only 设计对齐。边界：其余 sensitive 键
+// （如 jwt_secret）管理员可读是既有行为，见
+// TestConfigGetAllowsSensitiveKeysForAdmin，本项不动。
+func TestConfigGetNeverReturnsGistCredentials(t *testing.T) {
+	router, r := setupConfigAccessTestRouter(t)
+	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
+	seedConfigValue(t, r, "gist_token", "gist-token-secret")
+	seedConfigValue(t, r, "gist_password", "gist-password-secret")
+
+	for _, name := range []string{"gist_token", "gist_password"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", adminToken)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		assertHandlerCodeMsg(t, resp, 403, "禁止访问 Gist 凭据，请经 gist/status 查看")
+		if strings.Contains(resp.Body.String(), "gist-token-secret") || strings.Contains(resp.Body.String(), "gist-password-secret") {
+			t.Fatalf("config/get %s response must not contain gist credential: %s", name, resp.Body.String())
+		}
+	}
+
+	// 对照：config/list 仍缺席两键；gist/status 仍只回 tokenHint。
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/list", nil)
+	req.Header.Set("Authorization", adminToken)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if strings.Contains(resp.Body.String(), "gist-token-secret") || strings.Contains(resp.Body.String(), "gist-password-secret") {
+		t.Fatalf("config/list must not contain gist credentials: %s", resp.Body.String())
+	}
+
+	// 对照：匿名读 gist 键仍 403（既有 PolicyForConfig 敏感守卫，与修前一致）。
+	for _, name := range []string{"gist_token", "gist_password"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		assertHandlerCodeMsg(t, resp, 403, "禁止访问敏感配置")
 	}
 }
 
