@@ -140,7 +140,7 @@ func TestIssue313_EntryPortCrossTunnelConflictContract(t *testing.T) {
 		"id":           tunnelBID,
 		"name":         "issue313-tunnel-b",
 		"type":         2,
-		"flow":         99999,
+		"flow":         1,
 		"trafficRatio": 1.0,
 		"status":       1,
 		"inNodeId": []map[string]interface{}{

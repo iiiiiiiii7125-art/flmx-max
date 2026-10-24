@@ -102,7 +102,7 @@ func TestTunnelUpdateIPPreferenceContract(t *testing.T) {
 	}
 	tunnelID := mustLastInsertID(t, repo, "update-ip-pref-tunnel")
 
-	payload := `{"id":` + jsonInt(tunnelID) + `,"name":"update-ip-pref-tunnel","type":2,"flow":99999,"trafficRatio":1.0,"status":1,"ipPreference":"v6","inNodeId":[{"nodeId":` + jsonInt(entryID) + `,"protocol":"tls"}],"chainNodes":[],"outNodeId":[{"nodeId":` + jsonInt(exitID) + `,"protocol":"tls"}]}`
+	payload := `{"id":` + jsonInt(tunnelID) + `,"name":"update-ip-pref-tunnel","type":2,"flow":1,"trafficRatio":1.0,"status":1,"ipPreference":"v6","inNodeId":[{"nodeId":` + jsonInt(entryID) + `,"protocol":"tls"}],"chainNodes":[],"outNodeId":[{"nodeId":` + jsonInt(exitID) + `,"protocol":"tls"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tunnel/update", bytes.NewBufferString(payload))
 	req.Header.Set("Authorization", adminToken)
 	req.Header.Set("Content-Type", "application/json")
