@@ -3239,6 +3239,17 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
+		// R10X-007（F-001）：落库前先做 DB 侧 SSH 配置存在性校验并
+		// 以正本措辞点名缺失。此前缺 node_ssh_config 行时要到落库后
+		// 的同步阶段才失败，且回执透传仓储层 sql.ErrNoRows 字面量
+		// （「sql: no rows in result set」），调用方无从自救。此处
+		// 只查 DB（collectNftablesSSHConfigsTx 无网络调用），SSH
+		// 能力校验仍由落库后的同步阶段承担，口径与 tunnelCreate 的
+		// validateNftablesTunnelState 前置校验一致。
+		if _, err := h.collectNftablesSSHConfigsTx(nil, entryNodes); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 	}
 	inIp := strings.TrimSpace(asString(req["inIp"]))
 	if inIp != "" && len(entryNodes) > 1 {
