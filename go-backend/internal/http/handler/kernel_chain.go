@@ -180,6 +180,20 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		}
 		return nil
 	}
+	// R14-A5-08：Snell 内核没有出站概念——链式出站与分流在渲染期
+	//（render_snell.go:25-30）均拒绝，保存期须同口径拒绝（与渲染文案逐字
+	//一致），不得先落库再由下发失败告警。守卫置于目标校验之前：
+	//Snell 行的任何 OutboundID / SplitRules 都是毒化组合，与目标是否
+	//存在无关。注：此前 Via 经下方 check() → CheckChainWith 默认分支亦
+	//被拒绝（文案带「出站代理：」前缀），本守卫使其与渲染口径逐字对齐。
+	if kernelType == kernel.TypeSnell {
+		if row.OutboundID != 0 {
+			return errors.New("Snell 内核不支持链式出站")
+		}
+		if strings.TrimSpace(row.SplitRules) != "" {
+			return errors.New("Snell 内核不支持分流")
+		}
+	}
 	if row.OutboundID != 0 {
 		if err := check(row.OutboundID, "出站代理"); err != nil {
 			return err
@@ -192,9 +206,6 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		if err := check(r.OutboundID, fmt.Sprintf("第 %d 条分流", i+1)); err != nil {
 			return err
 		}
-	}
-	if kernelType == kernel.TypeSnell && strings.TrimSpace(row.SplitRules) != "" {
-		return errors.New("Snell 内核不支持分流")
 	}
 	return nil
 }
