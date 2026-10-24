@@ -73,6 +73,9 @@ func (p *program) Start() (err error) {
 		return err
 	}
 
+	// R17-A: 存量毒化 gost.json 自愈（见 healPersistedConfig）。
+	healPersistedConfig(cfg)
+
 	if outputFormat != "" {
 		if err := cfg.Write(os.Stdout, outputFormat); err != nil {
 			return err
@@ -296,6 +299,8 @@ func (p *program) reloadConfig() error {
 	if err != nil {
 		return err
 	}
+	// R17-A: SIGHUP 重载走同一加载路径，毒化文件同样先自愈。
+	healPersistedConfig(cfg)
 	if err := loader.Reload(cfg, p.run); err != nil {
 		return err
 	}
@@ -308,6 +313,25 @@ func (p *program) reloadConfig() error {
 	xservice.GetGlobalTrafficManager().RetainServices(activeServices)
 
 	return nil
+}
+
+// healPersistedConfig 去重启动/重载时加载的落盘配置（R17-A），返回被去掉
+// 的重复服务名。存量 gost.json 若含重复服务名，loader.Load 会在第二个
+// 同名服务处失败（监听器 eager 绑定报 address already in use，或
+// Register 报 registry: duplicate object），program.Start 直接返回错误、
+// agent 退出——故先去重（保留首次出现）再加载；去重后把清理过的配置重新
+// 落盘，否则下次启动仍会读到毒化文件。去重了哪些服务名以 Warn 日志写明。
+// 落盘失败只告警、不阻塞启动（下次启动会再次自愈）。
+func healPersistedConfig(cfg *config.Config) []string {
+	removed, err := config.HealPersistedServices(cfg)
+	if len(removed) == 0 {
+		return nil
+	}
+	logger.Default().Warnf("startup config self-heal: removed duplicate service(s) %v from persisted config", removed)
+	if err != nil {
+		logger.Default().Warnf("startup config self-heal: failed to persist deduplicated config: %v", err)
+	}
+	return removed
 }
 
 func buildApiService(cfg *config.APIConfig) (service.Service, error) {

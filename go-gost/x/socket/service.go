@@ -79,10 +79,31 @@ func createServices(req createServicesRequest) error {
 	// 第四阶段：更新配置。若落盘失败必须回滚运行时（D1-06）：否则面板
 	// 收到失败、服务却已在跑且内存配置已包含它，agent 重启后又消失，
 	// 面板/内存/磁盘三方状态不一致（updateServices 已有同口径回滚）。
+	// R17-A：同名则替换（与 updateServices 第三阶段同口径），不用无去重
+	// append——服务已在配置中、但不在注册表里时（例如暂停后 loader 跳过
+	// 注册），重复 AddService 下发会把第二份同名服务写进配置并落盘、
+	// 毒化 gost.json。配置里已有的多余同名副本也一并清除。
 	originalConfig := config.Global()
 	if err := config.OnUpdate(func(c *config.Config) error {
 		for _, ps := range parsedServices {
-			c.Services = append(c.Services, &ps.config)
+			cfgCopy := ps.config
+			replaced := false
+			kept := make([]*config.ServiceConfig, 0, len(c.Services)+1)
+			for _, existing := range c.Services {
+				if existing != nil && existing.Name == cfgCopy.Name {
+					if replaced {
+						continue
+					}
+					kept = append(kept, &cfgCopy)
+					replaced = true
+					continue
+				}
+				kept = append(kept, existing)
+			}
+			if !replaced {
+				kept = append(kept, &cfgCopy)
+			}
+			c.Services = kept
 		}
 		return nil
 	}); err != nil {

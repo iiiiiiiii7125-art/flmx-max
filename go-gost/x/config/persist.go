@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,6 +40,25 @@ func EnablePersist() {
 	persistEnable = true
 }
 
+// PersistNow writes cfg to the configured persist path atomically, without
+// requiring persistence to be enabled. Used by startup self-heal: after
+// deduplicating a poisoned persisted config, the healed config must reach
+// disk before the next start reads it again, otherwise the next start
+// would read the poisoned file once more.
+func PersistNow(cfg *Config) error {
+	persistMu.Lock()
+	path := persistPath
+	persistMu.Unlock()
+
+	if path == "" {
+		return errors.New("config persist: persist path not set")
+	}
+	if cfg == nil {
+		return errors.New("config persist: nil config")
+	}
+	return writeConfigFile(path, cfg)
+}
+
 // persist writes the current global config to the configured file atomically.
 func persist() error {
 	persistMu.Lock()
@@ -55,6 +75,12 @@ func persist() error {
 		return nil
 	}
 
+	return writeConfigFile(path, cfg)
+}
+
+// writeConfigFile marshals cfg as indented JSON and replaces path atomically
+// (temp file + rename). It prints the same diagnostics persist() used to.
+func writeConfigFile(path string, cfg *Config) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
