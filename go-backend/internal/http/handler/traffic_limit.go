@@ -6,6 +6,27 @@ import (
 	"strconv"
 )
 
+// R11X-008：Tunnel.TrafficRatio 的合法集为 [0,100]（0=零计费），此前
+// 只存在于前端表单、后端 create/update 无范围校验，负值落库后计费
+// （钳 0）/forward 徽标（归一 1）/tunnel 列表（原样）三面读法分歧。
+// 拒绝文案与 parseTrafficLimit 同格（中文点名字段 + 范围）。
+func validateTunnelTrafficRatio(ratio float64) error {
+	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 100 {
+		return fmt.Errorf("流量倍率超出范围 [0,100]: %v", ratio)
+	}
+	return nil
+}
+
+// R11X-009：Tunnel.Flow（计费方向）的合法集为 {1=单向, 2=双向}，此前
+// 后端 create/update 无枚举校验，域外值落库后展示显「未知」而计费按
+// 归一口径（0→单向、≥3→双向）执行。拒绝文案与 parseTrafficLimit 同格。
+func validateTunnelFlow(flow int64) error {
+	if flow != 1 && flow != 2 {
+		return fmt.Errorf("计费方向超出范围 {1,2}: %d", flow)
+	}
+	return nil
+}
+
 // flowMiB is optional so older clients can keep sending the GB-based flow field.
 // A positive value takes precedence and preserves sub-GB limits exactly.
 func parseTrafficLimit(req map[string]interface{}, defaultGB int64) (flowGB, flowMiB int64, err error) {
