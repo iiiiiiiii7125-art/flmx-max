@@ -1448,8 +1448,12 @@ export default function UserPage({
               ? getExpireStatus(user.expTime)
               : null;
             const usedFlow = calculateUserTotalUsedFlow(user);
+            // R11X-010：百分比条件与同页 UsageBar 同读法——按
+            // flowLimitBytes（MiB 优先）>0 判定，(0,512) 这类亚 GB
+            // 限额须显实际占比；99999 哨兵（无 MiB 时）仍为无限制。
             const flowPercent =
-              user.flow > 0 && !(user.flow === 99999 && !user.flowMiB)
+              flowLimitBytes(user.flow, user.flowMiB) > 0 &&
+              !(user.flow === 99999 && !user.flowMiB)
                 ? Math.min(
                     (usedFlow / flowLimitBytes(user.flow, user.flowMiB)) * 100,
                     100,
@@ -2227,7 +2231,18 @@ export default function UserPage({
                             ? "不重置"
                             : `每月${userTunnel.flowResetTime}号`}
                         </TableCell>
-                        <TableCell>{formatDate(userTunnel.expTime)}</TableCell>
+                        {/* R11X-012：ExpTime=0 为永不过期（执法面同读法），
+                            补 0 守卫显「永久」，不再裸显 1970 纪元日；
+                            形态与同页 user 面 expTime 守卫同形。 */}
+                        <TableCell>
+                          {userTunnel.expTime ? (
+                            formatDate(userTunnel.expTime)
+                          ) : (
+                            <span className="text-default-400 text-sm">
+                              永久
+                            </span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Button

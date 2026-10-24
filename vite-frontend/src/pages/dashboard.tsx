@@ -85,8 +85,9 @@ function UserDashboard() {
   const formatFlow = formatTraffic;
 
   const formatNumber = (value: number): string => {
-    // 99999 表示无限制
-    if (value === 99999) {
+    // 99999 表示无限制；R11X-011：后端执法 Num>0 才执法、0=不限，
+    // value<=0 并入无限制（与 R10X-006 的 Flow 面并入式同形）。
+    if (value === 99999 || value <= 0) {
       return "无限制";
     }
 
@@ -284,8 +285,8 @@ function UserDashboard() {
       const totalUsed = forwardList.length;
       const totalLimit = userInfo.num || 0;
 
-      // 无限制时返回0%
-      if (userInfo.num === 99999) return 0;
+      // 无限制时返回0%（R11X-011：num<=0 亦无限制）
+      if (userInfo.num === 99999 || userInfo.num <= 0) return 0;
 
       return totalLimit > 0 ? Math.min((totalUsed / totalLimit) * 100, 100) : 0;
     }
@@ -363,8 +364,8 @@ function UserDashboard() {
     const totalUsed = getTunnelUsedForwards(tunnel.tunnelId);
     const totalLimit = tunnel.num || 0;
 
-    // 无限制时返回0%
-    if (tunnel.num === 99999) return 0;
+    // 无限制时返回0%（R11X-011：num<=0 亦无限制）
+    if (tunnel.num === 99999 || tunnel.num <= 0) return 0;
 
     return totalLimit > 0 ? Math.min((totalUsed / totalLimit) * 100, 100) : 0;
   };
@@ -821,10 +822,11 @@ function UserDashboard() {
               {renderProgressBar(
                 calculateUsagePercentage("forwards"),
                 "sm",
-                userInfo.num === 99999,
+                // R11X-011：num<=0 与 99999 同为无限制形态。
+                userInfo.num === 99999 || userInfo.num <= 0,
               )}
               <p className="text-xs text-default-500 mt-1 truncate">
-                {userInfo.num === 99999
+                {userInfo.num === 99999 || userInfo.num <= 0
                   ? "无限制"
                   : `${calculateUsagePercentage("forwards").toFixed(1)}%`}
               </p>
@@ -1018,7 +1020,8 @@ function UserDashboard() {
                             {renderProgressBar(
                               calculateTunnelForwardPercentage(tunnel),
                               "sm",
-                              tunnel.num === 99999,
+                              // R11X-011：num<=0 与 99999 同为无限制形态。
+                              tunnel.num === 99999 || tunnel.num <= 0,
                             )}
                           </div>
                         </div>

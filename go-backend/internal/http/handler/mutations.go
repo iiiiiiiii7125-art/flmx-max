@@ -1259,6 +1259,16 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	flow := asInt64(req["flow"], 1)
 	status := asInt(req["status"], 1)
 	trafficRatio := asFloat(req["trafficRatio"], 1.0)
+	// R11X-008/009：写入面补校验——TrafficRatio ∈ [0,100]、Flow ∈
+	// {1,2}，域外值点名拒绝，不落库（合法值落库逐字不变）。
+	if err := validateTunnelTrafficRatio(trafficRatio); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := validateTunnelFlow(flow); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	inIP := asString(req["inIp"])
 	ipPreference := asString(req["ipPreference"])
 	probeTarget, probeTargetConfigured, err := parseTunnelProbeTargetFromRequest(req)
@@ -1731,6 +1741,22 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if presentFloatFieldInvalid(req, "trafficRatio") {
 		response.WriteJSON(w, response.ErrDefault("trafficRatio 参数无效"))
 		return
+	}
+	// R11X-008/009：写入面补校验（与 tunnelCreate 同口径）——仅校验
+	// 请求中在场且非空的字段：部分更新缺席字段回填的是存量值
+	// （A2-04 / R4X-004 的 presence 口径），存量域外行做无关编辑不得
+	// 被连坐拒绝；在场域外值点名拒绝、不落库。
+	if raw, ok := req["flow"]; ok && asString(raw) != "" {
+		if err := validateTunnelFlow(asInt64(raw, 1)); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
+	if raw, ok := req["trafficRatio"]; ok && asString(raw) != "" {
+		if err := validateTunnelTrafficRatio(asFloat(raw, 1.0)); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 	}
 	typeVal := asInt(req["type"], 1)
 	_, hasType := req["type"]
