@@ -265,6 +265,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/backup/gist/status", h.gistBackupStatus)
 	mux.HandleFunc("/api/v1/backup/gist/save", h.gistBackupSave)
 	mux.HandleFunc("/api/v1/backup/gist/upload", h.gistBackupUpload)
+	mux.HandleFunc("/api/v1/backup/gist/versions", h.gistBackupVersions)
 	mux.HandleFunc("/api/v1/backup/import", h.backupImport)
 	mux.HandleFunc("/api/v1/backup/restore", h.backupImport)
 	mux.HandleFunc("/api/v1/api/v1/backup/export", h.backupExport)

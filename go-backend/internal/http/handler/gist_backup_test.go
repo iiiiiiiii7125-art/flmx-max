@@ -181,7 +181,7 @@ func TestGistUploadCreatesThenPatchesAndSkipsUnchanged(t *testing.T) {
 	h := setupGistTest(t)
 	r := gistTestRepo(t, h)
 	now := time.Now().UnixMilli()
-	if err := r.UpsertConfigs(map[string]string{gistConfigToken: "test-token-1234567890", gistConfigInterval: "24"}, now); err != nil {
+	if err := r.UpsertConfigs(map[string]string{gistConfigToken: "test-token-1234567890", gistConfigPassword: "enc-pw", gistConfigInterval: "24"}, now); err != nil {
 		t.Fatalf("seed configs: %v", err)
 	}
 	m := newMockGistServer(t, func(w http.ResponseWriter, req *http.Request, rec *mockGistServer) {
@@ -222,8 +222,13 @@ func TestGistUploadCreatesThenPatchesAndSkipsUnchanged(t *testing.T) {
 		t.Fatalf("create body missing file %q: %v", gistFileName, files)
 	}
 	content, _ := file["content"].(string)
+	// T-4 起上传必须加密：先解密再断言备份内容。
+	plain, encrypted, err := gistOpen([]byte(content), "enc-pw")
+	if err != nil || !encrypted {
+		t.Fatalf("uploaded content must be encrypted: encrypted=%v err=%v", encrypted, err)
+	}
 	var backup map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &backup); err != nil || backup["version"] != "1.0" {
+	if err := json.Unmarshal(plain, &backup); err != nil || backup["version"] != "1.0" {
 		t.Fatalf("uploaded content is not backup JSON: err=%v backup=%v", err, backup)
 	}
 	cfg, err := r.GetConfigsByNames([]string{gistConfigID, gistConfigLastHash, gistConfigLastUpload})
@@ -300,7 +305,7 @@ func TestGistUploadDeletedGistRecreates(t *testing.T) {
 	r := gistTestRepo(t, h)
 	now := time.Now().UnixMilli()
 	if err := r.UpsertConfigs(map[string]string{
-		gistConfigToken: "test-token-1234567890", gistConfigID: "gist-deleted", gistConfigInterval: "0",
+		gistConfigToken: "test-token-1234567890", gistConfigPassword: "enc-pw", gistConfigID: "gist-deleted", gistConfigInterval: "0",
 	}, now); err != nil {
 		t.Fatalf("seed configs: %v", err)
 	}
@@ -331,7 +336,7 @@ func TestGistUploadFailureRecordsLastError(t *testing.T) {
 	h := setupGistTest(t)
 	r := gistTestRepo(t, h)
 	now := time.Now().UnixMilli()
-	if err := r.UpsertConfigs(map[string]string{gistConfigToken: "test-token-bad", gistConfigInterval: "0"}, now); err != nil {
+	if err := r.UpsertConfigs(map[string]string{gistConfigToken: "test-token-bad", gistConfigPassword: "enc-pw", gistConfigInterval: "0"}, now); err != nil {
 		t.Fatalf("seed configs: %v", err)
 	}
 	newMockGistServer(t, func(w http.ResponseWriter, req *http.Request, rec *mockGistServer) {
@@ -429,5 +434,162 @@ func TestGistSaveAndStatusHandlers(t *testing.T) {
 		if strings.HasPrefix(k, "gist_") {
 			t.Fatalf("backup configs must not contain %q", k)
 		}
+	}
+}
+
+// PORT-3342/G-backend（T-4，先红）：未设加密密码时上传必须拒绝，
+// 不得产生任何 GitHub 请求（明文不得离境）。
+func TestGistUploadPlaintextRefused(t *testing.T) {
+	h := setupGistTest(t)
+	r := gistTestRepo(t, h)
+	now := time.Now().UnixMilli()
+	if err := r.UpsertConfigs(map[string]string{gistConfigToken: "test-token-1234567890", gistConfigInterval: "0"}, now); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	m := newMockGistServer(t, func(w http.ResponseWriter, req *http.Request, rec *mockGistServer) {
+		writeJSON(w, 201, map[string]interface{}{"id": "gist-must-not-happen"})
+	})
+	if _, err := h.gistUpload(context.Background(), false); err == nil || !strings.Contains(err.Error(), "加密密码") {
+		t.Fatalf("plaintext upload err = %v, want encryption-password refusal", err)
+	}
+	if len(m.reqs) != 0 {
+		t.Fatalf("plaintext upload must not call GitHub, requests = %+v", m.reqs)
+	}
+}
+
+// PORT-3342/G-backend：versions 端点（最近 10 版本）+ 恢复侧 helper。
+func TestGistVersionsListsRecent10(t *testing.T) {
+	h := setupGistTest(t)
+	r := gistTestRepo(t, h)
+	now := time.Now().UnixMilli()
+	if err := r.UpsertConfigs(map[string]string{gistConfigToken: "test-token-1234567890", gistConfigID: "gist-v-id"}, now); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	history := make([]interface{}, 0, 12)
+	for i := 0; i < 12; i++ {
+		history = append(history, map[string]interface{}{"version": "ver-" + strconv.Itoa(i), "committed_at": "2026-10-24T12:00:00Z"})
+	}
+	newMockGistServer(t, func(w http.ResponseWriter, req *http.Request, rec *mockGistServer) {
+		if req.Method == http.MethodGet && req.URL.Path == "/gists/gist-v-id" {
+			writeJSON(w, 200, map[string]interface{}{"id": "gist-v-id", "history": history})
+			return
+		}
+		writeJSON(w, 404, map[string]interface{}{"message": "not found"})
+	})
+	rec := httptest.NewRecorder()
+	h.gistBackupVersions(rec, adminRequest(t, http.MethodPost, "/api/v1/backup/gist/versions", nil))
+	code, _, data := decodeGistEnvelope(t, rec)
+	if code != 0 {
+		t.Fatalf("versions code = %d body=%s", code, rec.Body.String())
+	}
+	var out struct {
+		Versions []gistVersionView `json:"versions"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("decode versions: %v", err)
+	}
+	if len(out.Versions) != 10 || out.Versions[0].Version != "ver-0" || out.Versions[9].Version != "ver-9" {
+		t.Fatalf("versions = %+v, want ver-0..ver-9 (10 entries)", out.Versions)
+	}
+	wantMs := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC).UnixMilli()
+	if out.Versions[0].CommittedAt != wantMs {
+		t.Fatalf("committedAt = %d, want %d", out.Versions[0].CommittedAt, wantMs)
+	}
+	if strings.Contains(rec.Body.String(), "test-token-1234567890") {
+		t.Fatal("versions response must not contain token")
+	}
+
+	// 非管理员 403。
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backup/gist/versions", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ClaimsContextKey,
+		auth.Claims{Sub: "2", User: "user", RoleID: 1}))
+	h.gistBackupVersions(rec, req)
+	if code, _, _ := decodeGistEnvelope(t, rec); code != 403 {
+		t.Fatalf("non-admin versions code = %d, want 403", code)
+	}
+
+	// 无 gist_id 时明确报错，不调 GitHub。
+	h2 := setupGistTest(t)
+	r2 := gistTestRepo(t, h2)
+	if err := r2.UpsertConfigs(map[string]string{gistConfigToken: "test-token-1234567890"}, now); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	h2.gistBackupVersions(rec, adminRequest(t, http.MethodPost, "/api/v1/backup/gist/versions", nil))
+	if code, msg, _ := decodeGistEnvelope(t, rec); code == 0 || !strings.Contains(msg, "尚未上传") {
+		t.Fatalf("no-id versions code=%d msg=%q, want not-uploaded error", code, msg)
+	}
+}
+
+func TestGistVersionContentForRestoreReuse(t *testing.T) {
+	plain := []byte(`{"version":"1.0","users":[]}`)
+	enc, err := gistEncrypt(plain, "restore-pw")
+	if err != nil {
+		t.Fatalf("gistEncrypt: %v", err)
+	}
+	var rawHits int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/gists/gist-v-id/ver-plain":
+			writeJSON(w, 200, map[string]interface{}{"files": map[string]interface{}{gistFileName: map[string]interface{}{"content": string(plain)}}})
+		case r.URL.Path == "/gists/gist-v-id/ver-enc":
+			writeJSON(w, 200, map[string]interface{}{"files": map[string]interface{}{gistFileName: map[string]interface{}{"content": string(enc)}}})
+		case r.URL.Path == "/gists/gist-v-id/ver-trunc":
+			writeJSON(w, 200, map[string]interface{}{"files": map[string]interface{}{gistFileName: map[string]interface{}{"content": "stale", "truncated": true, "raw_url": srv.URL + "/raw/ver-trunc"}}})
+		case r.URL.Path == "/raw/ver-trunc":
+			rawHits++
+			_, _ = w.Write(plain)
+		case r.URL.Path == "/gists/gist-v-id/ver-nofile":
+			writeJSON(w, 200, map[string]interface{}{"files": map[string]interface{}{}})
+		default:
+			writeJSON(w, 404, map[string]interface{}{"message": "not found"})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("FLMX_GIST_API_BASE", srv.URL)
+	t.Setenv("FLVX_GIST_API_BASE", "")
+	ctx := context.Background()
+
+	got, encrypted, err := gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "ver-plain", "")
+	if err != nil || encrypted || !bytes.Equal(got, plain) {
+		t.Fatalf("plaintext version: got=%q encrypted=%v err=%v", got, encrypted, err)
+	}
+	got, encrypted, err = gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "ver-enc", "restore-pw")
+	if err != nil || !encrypted || !bytes.Equal(got, plain) {
+		t.Fatalf("encrypted version: got=%q encrypted=%v err=%v", got, encrypted, err)
+	}
+	if _, _, err := gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "ver-enc", ""); err == nil {
+		t.Fatal("encrypted version without password must fail")
+	}
+	got, encrypted, err = gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "ver-trunc", "")
+	if err != nil || encrypted || !bytes.Equal(got, plain) || rawHits != 1 {
+		t.Fatalf("truncated version: got=%q encrypted=%v err=%v rawHits=%d", got, encrypted, err, rawHits)
+	}
+	if _, _, err := gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "ver-nofile", ""); err == nil || !strings.Contains(err.Error(), "没有备份文件") {
+		t.Fatalf("missing file err = %v", err)
+	}
+	if _, _, err := gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "a/b", ""); err == nil || !strings.Contains(err.Error(), "版本不正确") {
+		t.Fatalf("bad version err = %v", err)
+	}
+}
+
+func TestGistOpenDualEnvelopeMarker(t *testing.T) {
+	plain := []byte(`{"version":"1.0","users":[]}`)
+	enc, err := gistEncrypt(plain, "pw-123")
+	if err != nil {
+		t.Fatalf("gistEncrypt: %v", err)
+	}
+	flmx := strings.Replace(string(enc), `"flyx": "encrypted-backup"`, `"flmx": "encrypted-backup"`, 1)
+	if flmx == string(enc) {
+		t.Fatal("test setup: envelope marker replacement did not apply")
+	}
+	got, encrypted, err := gistOpen([]byte(flmx), "pw-123")
+	if err != nil || !encrypted || !bytes.Equal(got, plain) {
+		t.Fatalf("flmx envelope: got=%q encrypted=%v err=%v", got, encrypted, err)
+	}
+	if _, _, err := gistOpen([]byte(flmx), "wrong"); err == nil {
+		t.Fatal("flmx envelope wrong password must fail")
 	}
 }
