@@ -284,13 +284,40 @@ CONTENT_KEYS = [
     # version list, never a recorded failure response (the 1.4.4
     # re-record froze a transient GitHub 403 into both cells).
     ("admin", "kernel/versions", "version-list"),
+    # R15-X-02: backup/gist/status must carry the declared
+    # GistBackupStatus shape (configured/tokenHint/encrypted/
+    # intervalHours/gistUrl/lastAt/lastUpload/lastError) with code 0.
+    # A fresh seed honestly answers configured=false with empty
+    # tokenHint/gistUrl — emptiness is the fact here, so the gate
+    # checks shape, not non-emptiness.
+    ("admin", "backup/gist/status", "gist-status"),
 ]
 VERSION_LIST_TYPES = {"xray", "singbox"}
+GIST_STATUS_FIELDS = {
+    "configured": bool, "tokenHint": str, "encrypted": bool,
+    "intervalHours": int, "gistUrl": str, "lastAt": int,
+    "lastUpload": int, "lastError": str,
+}
 content_violations = []
 for book, path_, kind in CONTENT_KEYS:
     entries = (fixtures.get(book) or {}).get(path_)
     if not entries:
         content_violations.append(f"{book} {path_}: key missing or no recordings")
+        continue
+    if kind == "gist-status":
+        for i, e in enumerate(entries):
+            res = e.get("res") or {}
+            data = res.get("data")
+            if res.get("code") != 0:
+                content_violations.append(f"{book} {path_} recording #{i}: res.code={res.get('code')} is a recorded failure response, not a GistBackupStatus")
+                continue
+            if not isinstance(data, dict):
+                content_violations.append(f"{book} {path_} recording #{i}: data is not a GistBackupStatus object")
+                continue
+            bad = [k for k, t in GIST_STATUS_FIELDS.items()
+                   if k not in data or not isinstance(data[k], t) or isinstance(data[k], bool) != (t is bool)]
+            if bad:
+                content_violations.append(f"{book} {path_} recording #{i}: data misses or mistypes GistBackupStatus field(s): {', '.join(bad)}")
         continue
     if kind == "version-list":
         seen = set()

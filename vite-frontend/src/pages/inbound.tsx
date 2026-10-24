@@ -559,8 +559,14 @@ export default function InboundPage() {
       : "grid grid-cols-1 2xl:grid-cols-2 gap-2";
 
   const renderInbound = (item: InboundApiItem) => {
+    // R15-X-02 修复中发现：外部入站首轮探测未完成时 probe 为 null；
+    // 旧式 `!item.probe?.skipped` 在 probe=null 时为真，会把 null 原样
+    // 赋给 probe，随后 `probe !== undefined && !probe.ok` 读 null.ok
+    // 抛错、整页空白。null 与 undefined 在此同义为“暂无探测结果”。
     const probe =
-      item.external && !item.probe?.skipped ? item.probe : undefined;
+      item.external && item.probe && !item.probe.skipped
+        ? item.probe
+        : undefined;
     const unreachable = item.enabled && probe !== undefined && !probe.ok;
     const running =
       item.enabled &&

@@ -16,6 +16,12 @@ const callAs = (book) => async (token, method, path, body) => {
 };
 const call = callAs(rec.admin);
 await call(tok, "POST", "kernel/capabilities");
+// R15-X-02: the config page mounts <GistBackup/> unconditionally for
+// admins and calls backup/gist/status on mount; without a direct
+// recording the demo adapter warns "[demo] not recorded" and the
+// config walk fails. Record the seed panel's honest answer (no token
+// configured) like every other item-level endpoint here.
+await call(tok, "POST", "backup/gist/status", {});
 await call(tok, "POST", "group/user/list");
 await call(tok, "POST", "group/tunnel/list");
 await call(tok, "POST", "group/permission/list");
