@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 )
@@ -147,6 +148,19 @@ func NormalizeSplitRules(rules []SplitRule) ([]SplitRule, error) {
 // routed reports whether the inbound needs routing rules of its own.
 func (in Inbound) routed() bool { return in.Via != nil || len(in.Split) > 0 }
 
+// hasSplitDirect reports whether any split rule sends traffic direct;
+// only then does a chained idle inbound need its idle outbounds (see
+// idleOutboundSet). target() is used, not Action, so a SplitProxy rule
+// whose target is gone (which renders as block) does not count.
+func (in Inbound) hasSplitDirect() bool {
+	for _, r := range in.Split {
+		if r.target() == SplitDirect {
+			return true
+		}
+	}
+	return false
+}
+
 // splitMatch is one rule's destinations, resolved for a kernel.
 type splitMatch struct {
 	geosite, geoip, domains, ips, protocols []string
@@ -209,8 +223,12 @@ func (m splitMatch) xray() []obj {
 }
 
 // xraySplitRoutes returns the outbounds and rules for an inbound's split
-// rules; they go before its default (chained) exit.
-func xraySplitRoutes(in Inbound, levels map[int64]int) ([]interface{}, []interface{}, error) {
+// rules; they go before its default (chained) exit. idleEmitted is the
+// set of inbounds this render emits idle outbounds for (see
+// idleOutboundSet): a split-direct match leaves through the idle
+// outbound only when it exists, and falls back to the shared direct /
+// mark outbounds with a log line otherwise — never a dangling tag.
+func xraySplitRoutes(in Inbound, levels map[int64]int, idleEmitted map[int64]bool) ([]interface{}, []interface{}, error) {
 	var outbounds, rules []interface{}
 	tags := []string{in.Tag()}
 	users := in.countedUsers()
@@ -220,6 +238,19 @@ func xraySplitRoutes(in Inbound, levels map[int64]int) ([]interface{}, []interfa
 	// traffic runs the level-0 timeout. Split-proxy matches exit
 	// through chain outbounds, which carry the level on their user.
 	idleLevel := levels[in.ID]
+	// R14-F03: the idle exit exists only when this render emitted it.
+	// If it does not — the emission rule changed without the reference,
+	// or a future path references it without emitting — fall back to
+	// the shared direct / mark outbounds and log the degradation
+	// instead of emitting a dangling outboundTag: the mark survives,
+	// only the timeout degrades to the level-0 default. This is a
+	// safety net, not the normal path: chained idle inbounds with
+	// split-direct rules get their idle outbounds emitted (see
+	// xrayConnIdleRoutes).
+	idleReady := idleLevel > 0 && idleEmitted[in.ID]
+	if idleLevel > 0 && !idleReady && in.hasSplitDirect() {
+		log.Printf("xray: 入站 %d 带空闲超时但未下发 idle 出站 %s，分流直连回落到共享直连出站（该路流量超时不生效）", in.ID, connIdleOutboundTag(in.ID))
+	}
 	for i, r := range in.Split {
 		ownerTag := "direct"
 		userTag := userOutboundTag
@@ -246,7 +277,7 @@ func xraySplitRoutes(in Inbound, levels map[int64]int) ([]interface{}, []interfa
 			i := i
 			userTag = func(id int64) string { return splitUserTag(in, i, id) }
 		}
-		if r.target() == SplitDirect && idleLevel > 0 {
+		if r.target() == SplitDirect && idleReady {
 			ownerTag = connIdleOutboundTag(in.ID)
 			userTag = func(id int64) string { return connIdleUserOutboundTag(in.ID, id) }
 		}

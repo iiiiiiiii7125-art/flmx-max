@@ -49,7 +49,11 @@ func renderXray(inbounds []Inbound) (string, error) {
 	}
 	// Chained inbounds leave through their target; their rules come first
 	// so their users do not match the direct per-user rules below.
-	chained, rules, err := xrayChainRoutes(inbounds, levels)
+	// The idle-outbound set is computed once and shared by the chain
+	// rules (which may reference the idle outbounds) and the idle
+	// routes (which emit them), so a reference can never dangle.
+	idleEmitted := idleOutboundSet(inbounds, levels)
+	chained, rules, err := xrayChainRoutes(inbounds, levels, idleEmitted)
 	if err != nil {
 		return "", err
 	}
@@ -58,15 +62,17 @@ func renderXray(inbounds []Inbound) (string, error) {
 	// installs a user-level idle timer (unlike VMess/Trojan/SS), and the
 	// freedom outbound times a session by its own configured userLevel
 	// (default 0) — so the level on the client alone cannot retime the
-	// session. Each idle inbound whose traffic leaves direct therefore
+	// session. Each idle inbound whose traffic can leave direct therefore
 	// gets a dedicated freedom outbound carrying its level, reached by
 	// an inboundTag rule; counted users additionally get a combined
 	// outbound (level + socket mark) reached first, so their traffic
-	// keeps both attributes. These rules sit after the chain rules
-	// (a chained inbound's traffic never reaches them) and before the
-	// per-user mark rules (otherwise a marked user would match the
-	// mark rule first and lose the timeout).
-	idleOutbounds, idleRules := xrayConnIdleRoutes(inbounds, levels)
+	// keeps both attributes. Chained idle inbounds with split-direct
+	// rules get the outbounds too (their split-direct matches leave
+	// direct) but no catch-all rule — their chain default rule matches
+	// first, so it would be dead. These rules sit after the chain rules
+	// and before the per-user mark rules (otherwise a marked user would
+	// match the mark rule first and lose the timeout).
+	idleOutbounds, idleRules := xrayConnIdleRoutes(inbounds, levels, idleEmitted)
 	outbounds = append(outbounds, idleOutbounds...)
 	rules = append(rules, idleRules...)
 	// Each user leaves through a direct outbound whose sockets carry the
@@ -114,20 +120,44 @@ func connIdleUserOutboundTag(inboundID, userID int64) string {
 	return fmt.Sprintf("flmx-idle-%d-u%d", inboundID, userID)
 }
 
+// idleOutboundSet lists the inbounds that get dedicated idle outbounds
+// in this render: every idle inbound whose traffic leaves direct, plus
+// chained idle inbounds that have a split-direct rule — only their
+// split-direct matches need the idle exit (their default exit is the
+// chain outbound, which carries the level on its user). Computed once
+// in renderXray and shared by the emission side (xrayConnIdleRoutes)
+// and the reference side (xraySplitRoutes), so a rule can never point
+// at an outbound this render did not emit (R14-F03).
+func idleOutboundSet(inbounds []Inbound, levels map[int64]int) map[int64]bool {
+	set := make(map[int64]bool)
+	for _, in := range inbounds {
+		if _, ok := levels[in.ID]; !ok {
+			continue
+		}
+		if in.Via == nil || in.hasSplitDirect() {
+			set[in.ID] = true
+		}
+	}
+	return set
+}
+
 // xrayConnIdleRoutes emits, for each inbound with an idle timeout whose
-// traffic leaves direct (no Via), a dedicated freedom outbound carrying
-// the inbound's policy level plus an inboundTag routing rule. Marked
-// users get a combined outbound (level + mark) with a more specific
+// traffic can leave direct, a dedicated freedom outbound carrying the
+// inbound's policy level plus an inboundTag routing rule. Marked users
+// get a combined outbound (level + mark) with a more specific
 // inboundTag+user rule first, so they keep both attributes; the plain
 // rule then catches the owner credential and any unmarked user.
-// Chained inbounds are skipped: their chain rules match first and their
-// exit carries the level on the chain outbound's user instead (see
-// xrayChainOutbound).
-func xrayConnIdleRoutes(inbounds []Inbound, levels map[int64]int) ([]interface{}, []interface{}) {
+// Chained inbounds get the outbounds too when they have a split-direct
+// rule (their split-direct matches leave direct — see xraySplitRoutes),
+// but no catch-all rule: their chain default rule matches first, so an
+// idle catch-all would be dead. A chained inbound without split-direct
+// rules gets nothing: its exit is the chain outbound, which carries the
+// level on its user instead (see xrayChainOutbound).
+func xrayConnIdleRoutes(inbounds []Inbound, levels map[int64]int, idleEmitted map[int64]bool) ([]interface{}, []interface{}) {
 	var outbounds, rules []interface{}
 	for _, in := range inbounds {
 		level, ok := levels[in.ID]
-		if !ok || in.Via != nil {
+		if !ok || !idleEmitted[in.ID] {
 			continue
 		}
 		tag := connIdleOutboundTag(in.ID)
@@ -142,9 +172,18 @@ func xrayConnIdleRoutes(inbounds []Inbound, levels map[int64]int) ([]interface{}
 				outbounds = append(outbounds, obj{"protocol": "freedom", "tag": utag,
 					"settings":       obj{"userLevel": level},
 					"streamSettings": obj{"sockopt": obj{"mark": UserMark(u.ID)}}})
-				rules = append(rules, obj{"type": "field", "inboundTag": []string{in.Tag()},
-					"user": []string{User{ID: u.ID}.Email()}, "outboundTag": utag})
+				if in.Via == nil {
+					rules = append(rules, obj{"type": "field", "inboundTag": []string{in.Tag()},
+						"user": []string{User{ID: u.ID}.Email()}, "outboundTag": utag})
+				}
 			}
+		}
+		if in.Via != nil {
+			// Chained: no idle rules — the chain default rules match
+			// first (same inboundTag+user fields), so an idle rule
+			// would be dead. The outbounds above are still needed:
+			// the split-direct matches reference them.
+			continue
 		}
 		rules = append(rules, obj{"type": "field", "inboundTag": []string{in.Tag()}, "outboundTag": tag})
 	}
