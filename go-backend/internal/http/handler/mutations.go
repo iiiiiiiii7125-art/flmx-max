@@ -4177,7 +4177,7 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 		if statusErr != nil {
 			log.Printf("forward batch %s failed op=db_write_after_dplane forward_id=%d err=%v", action, id, statusErr)
 			f++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
+			failures = appendBatchFailure(failures, id, forward.Name, statusErr)
 		} else {
 			s++
 		}
@@ -4201,7 +4201,7 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			if statusErr != nil {
 				log.Printf("nftables forward batch %s failed op=db_write_after_reconcile forward_id=%d err=%v", action, id, statusErr)
 				f++
-				failures = appendBatchFailure(failures, id, name, err)
+				failures = appendBatchFailure(failures, id, name, statusErr)
 				continue
 			}
 			s++
