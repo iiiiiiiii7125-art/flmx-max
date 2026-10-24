@@ -293,6 +293,22 @@ func validateProxyCredentials(p Proxy) error {
 		if p.str("psk") == "" {
 			return errors.New("缺少 PSK")
 		}
+		// R11X-006：顶层 mode（v6 流量整形）一处收口——与渲染面
+		// forEndpoint 同口径，version==6 且 EqualFold(unshaped) 时愈合
+		// 落库规范值 SnellModeUnshaped；其余值（bogus、非 v6 的 mode）
+		// 不落 mode（沿两转换器既有丢弃口径、节点本身不拒）。执法只
+		// 此一处：两转换器（sing-box / Surge）只搬运原始 mode、Clash
+		// 透传亦经 finishProxy 到此。落点选 validateProxyCredentials
+		// 而非 finishProxy 本体——其余枚举字段的进口愈合（cipher /
+		// flow / congestion-controller 等）全在此函数同形收口，且
+		// finishProxy 已先行完成 version 域校验与缺省补 4，此处读到
+		// 的 version 即最终落库版本。备份恢复面经 ValidateImportedProxy
+		// 传副本调用本函数、不回写，存储逐字恢复口径不受影响。
+		if p.num("version") == 6 && strings.EqualFold(p.str("mode"), SnellModeUnshaped) {
+			p["mode"] = SnellModeUnshaped
+		} else {
+			delete(p, "mode")
+		}
 		// R5X-003(d)：obfs-opts.mode 垃圾值毒化 mihomo 整表（法定主
 		// 面无守卫、sing-box 面既有略过）。历史拼写 shadowtls 在此
 		// 愈合为 mihomo 规范拼写 shadow-tls 落库（mihomo 本体拒绝
@@ -953,11 +969,12 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		if v := o.num("version"); v != 0 {
 			p["version"] = v
 		}
-		// R2X-023：mode 是 v6 的流量整形字段，仅 v6 且值为 unshaped
-		// 时保留（与 model 校验同域），否则往返中静默丢失。
-		if o.num("version") == 6 && o.str("mode") == SnellModeUnshaped {
-			p["mode"] = SnellModeUnshaped
-		}
+		// R2X-023 / R11X-006：mode 是 v6 的流量整形字段。此处只搬运
+		// 原始值（set 空值不写），保留/愈合执法一处收口于
+		// validateProxyCredentials 的 snell 支——此前以精确匹配
+		// == SnellModeUnshaped 决定保留，大小写变体在落库前即被静默
+		// 丢弃、中央愈合够不到（禁在此与 Surge 面各写一份 EqualFold）。
+		p.set("mode", o.str("mode"))
 		if detour := byTag[o.str("detour")]; detour.str("type") == "shadowtls" {
 			if _, present, exact := detour.exactInt("server_port"); present && !exact {
 				return nil, errors.New("server_port 不是整数")
@@ -1092,10 +1109,10 @@ func parseSurgeLine(line string) (Proxy, error) {
 		p["psk"] = kv.str("psk")
 		p["version"] = firstNonEmptyString(kv.str("version"), "4")
 		p["version"] = Proxy{"v": p["version"]}.num("v")
-		// R2X-023：同 singboxToProxy 口径，v6 + unshaped 才保留 mode。
-		if p.num("version") == 6 && kv.str("mode") == SnellModeUnshaped {
-			p["mode"] = SnellModeUnshaped
-		}
+		// R2X-023 / R11X-006：同 singboxToProxy 口径——此处只搬运原始
+		// mode，保留/愈合执法一处收口于 validateProxyCredentials 的
+		// snell 支（禁在此与 sing-box 面各写一份 EqualFold）。
+		p.set("mode", kv.str("mode"))
 		if obfs := kv.str("obfs"); obfs != "" {
 			oo := Proxy{"mode": obfs}
 			oo.set("host", kv.str("obfs-host"))
