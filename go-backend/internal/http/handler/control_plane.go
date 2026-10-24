@@ -445,13 +445,24 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		}
 		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters)
 		_, err = h.sendNodeCommand(node.ID, method, services, true, false)
+		if err == nil && (method == "UpdateService" || method == "AddService") {
+			// R17-B：UpdateService 成功即 agent 对这些服务名的注册确认
+			//（upsert 语义：不存在则创建），记入确认集供补发守卫使用。
+			h.noteAddServiceConfirmed(node.ID, extractAddServiceNames(services))
+		}
 		if err != nil && allowFallbackAdd && method == "UpdateService" {
 			if isNotFoundError(err) {
 				if delErr := h.deleteForwardServicesOnNode(forward, node.ID); delErr != nil && !isNotFoundError(delErr) {
 					return warnings, fmt.Errorf("节点 %s 清理旧服务失败: %w", node.Name, delErr)
 				}
 			}
-			_, err = h.sendNodeCommand(node.ID, "AddService", services, true, false)
+			// R17-B：回退 AddService 走幂等守卫。freshAbsence 一律为真：
+			// 刚失败的 UpdateService 本身就是新鲜否定证据——无论错误
+			// 文本是 not-found、超时还是 bind 失败，失败都意味着期望
+			// 注册态未达成，旧确认不得复用（R3-GATE-F3 / R4B6 回归：
+			// 仅 not-found 才作废时，setup 期成功的确认会让 bind 失败
+			// 后的补发被跳过，forwardUpdate 被误判成功）。
+			_, err = h.guardedAddService(node.ID, services, "update-fallback", true)
 		}
 		if err != nil && strings.EqualFold(strings.TrimSpace(method), "UpdateService") && isAddressAlreadyInUseError(err) {
 			err = h.rebindForwardServiceOnSelfOccupiedPort(forward, node, fp.Port, services)
@@ -502,7 +513,9 @@ func (h *Handler) fallbackForwardPortToDefaultBind(forward *forwardRecord, tunne
 
 	time.Sleep(150 * time.Millisecond)
 	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters)
-	if _, err := h.sendNodeCommand(node.ID, "AddService", defaultServices, true, false); err != nil {
+	// R17-B：默认监听回退的 AddService 走幂等守卫；刚删过旧服务，
+	// freshAbsence=true（新鲜缺失证据），不得用旧确认跳过。
+	if _, err := h.guardedAddService(node.ID, defaultServices, "default-bind-fallback", true); err != nil {
 		return "", err
 	}
 	if err := h.repo.UpdateForwardPortBindIP(forward.ID, node.ID, fp.Port, ""); err != nil {
@@ -540,7 +553,9 @@ func (h *Handler) rebindForwardServiceOnSelfOccupiedPort(forward *forwardRecord,
 
 	time.Sleep(150 * time.Millisecond)
 
-	_, err = h.sendNodeCommand(node.ID, "AddService", services, true, false)
+	// R17-B：自占端口重绑的 AddService 走幂等守卫；刚删过旧服务，
+	// freshAbsence=true（新鲜缺失证据），不得用旧确认跳过。
+	_, err = h.guardedAddService(node.ID, services, "self-occupied-rebind", true)
 	if err != nil {
 		return err
 	}
@@ -590,6 +605,11 @@ func (h *Handler) deleteForwardServiceBasesOnNode(nodeID int64, bases []string) 
 	}
 	payload := map[string]interface{}{"services": names}
 	_, err := h.sendNodeCommand(nodeID, "DeleteService", payload, false, true)
+	if err == nil {
+		// R17-B：DeleteService 成功（已不存在也被容忍为成功）即新鲜
+		// 否定证据，作废这些服务名的确认条目。
+		h.invalidateAddServiceNames(nodeID, names)
+	}
 	return err
 }
 
