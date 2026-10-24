@@ -30,13 +30,19 @@ import (
 // subscription-only / source-only inbounds imports do not touch
 // forwards and are excluded; relay rows are counted separately because
 // a relays-only inbounds import lands zero inbound rows.
+// FINAL-P2-1: speed-limit rows and user-tunnel rows also change the
+// limiter the node enforces (forward speed_id/ip_speed_id direct refs
+// and user_tunnel.speed_id indirect refs are resolved at sync time, so
+// a limiter-only import with no repush leaves the node enforcing the
+// stale value indefinitely); both segments trigger the same repush.
 func backupImportNeedsForwardRepush(result *model.ImportResult) bool {
 	if result == nil {
 		return false
 	}
 	return result.ForwardsImported > 0 || result.TunnelsImported > 0 ||
 		result.NodesImported > 0 || result.InboundsImported > 0 ||
-		result.InboundRelaysImported > 0
+		result.InboundRelaysImported > 0 ||
+		result.SpeedLimitsImported > 0 || result.UserTunnelsImported > 0
 }
 
 type forwardRepushOutcome struct {
