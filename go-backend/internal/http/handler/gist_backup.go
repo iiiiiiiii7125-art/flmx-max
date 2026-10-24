@@ -513,6 +513,30 @@ func (h *Handler) gistBackupSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// R14-F02（REA-P3-1 / A3-02）：保存后终态若 interval>0 且无密码在
+	// 位（含本次 clearPassword）且令牌在位，拒绝保存——否则自动循环
+	// 在无密码态下可达（每配置间隔一次失败尝试 + 去重后的失败通知，
+	// lastAt/lastError 持续改写）。令牌未设时 gistDue 恒 false、循环
+	// 不可达，仍按既有口径放行；清密码同时 interval 归 0 亦放行。
+	cfg := h.gistConfig()
+	effectiveToken := cfg[gistConfigToken]
+	switch {
+	case req.ClearToken:
+		effectiveToken = ""
+	case req.Token != "":
+		effectiveToken = req.Token
+	}
+	effectivePassword := cfg[gistConfigPassword]
+	switch {
+	case req.ClearPassword:
+		effectivePassword = ""
+	case req.Password != "":
+		effectivePassword = req.Password
+	}
+	if req.IntervalHours > 0 && effectivePassword == "" && strings.TrimSpace(effectiveToken) != "" {
+		response.WriteJSON(w, response.ErrDefault("请先填写加密密码，或将自动备份间隔设为不启用"))
+		return
+	}
 	fields := map[string]string{gistConfigInterval: strconv.Itoa(req.IntervalHours)}
 	switch {
 	case req.ClearToken:
