@@ -574,6 +574,61 @@ export const exportBackup = async (types: string[] = []) => {
 export const importBackup = (data: BackupImportPayload) =>
   Network.post("/backup/import", data);
 
+// PORT-3342/B1：备份上传 GitHub Gist（后端 /api/v1/backup/gist/*）。
+// status 不含令牌与密码，只给 tokenHint；令牌/密码只经 save 上行。
+export interface GistBackupStatus {
+  configured: boolean;
+  tokenHint: string;
+  encrypted: boolean;
+  intervalHours: number;
+  gistUrl: string;
+  lastAt: number;
+  lastUpload: number;
+  lastError: string;
+}
+
+export interface GistBackupSavePayload {
+  token: string;
+  password: string;
+  intervalHours: number;
+  clearToken?: boolean;
+  clearPassword?: boolean;
+}
+
+export interface GistBackupUploadResult {
+  uploaded: boolean;
+  message: string;
+}
+
+export const getGistBackupStatus = () =>
+  Network.post<GistBackupStatus>("/backup/gist/status", {});
+
+export const saveGistBackup = (data: GistBackupSavePayload) =>
+  Network.post<GistBackupStatus>("/backup/gist/save", data);
+
+export const uploadGistBackup = () =>
+  Network.post<{ result: GistBackupUploadResult; status: GistBackupStatus }>(
+    "/backup/gist/upload",
+    {},
+    { timeout: 120000 },
+  );
+
+// PORT-3342/G-frontend：Gist 版本列表 + 恢复接线点（在 B1 三 API 基础上补齐）。
+// versions 端点由 G-后端批落定；restore 端点与恢复执行链归 G-恢复链批，
+// 本批只导出函数供集成时接线，恢复弹窗确认按钮暂不调用 restoreGistBackup。
+export interface GistBackupVersion {
+  version: string;
+  committedAt: number;
+}
+
+export const getGistBackupVersions = () =>
+  Network.post<GistBackupVersion[]>("/backup/gist/versions", {});
+
+export const restoreGistBackup = (data: {
+  version: string;
+  password: string;
+}) => Network.post("/backup/gist/restore", data, { timeout: 120000 });
+
 export interface AnnouncementData {
   content: string;
   enabled: number;
