@@ -41,6 +41,8 @@ interface ProbeSuggestion {
   /** True when the probe failed and the values are the T-5 defaults. */
   fromFallback: boolean;
   speedRequested: boolean;
+  /** Agent-side leg warnings (e.g. why the median was not measured). */
+  warnings?: string[];
 }
 
 /** Clamp a measured value into the input's legal range (integers only). */
@@ -204,7 +206,10 @@ export function NodeTuneModal({
    * the user has typed in keeps its value; a field they have not typed
    * in takes the measured value. On probe failure the suggestion falls
    * back to the T-5 defaults, but a failure never overwrites a non-empty
-   * field — the user adopts the fallback explicitly if wanted.
+   * field — the user adopts the fallback explicitly if wanted. The
+   * fallback is still shown as an explicit result row (marked 回落值,
+   * with the agent's leg warnings as the reason), even when it equals
+   * the current inputs: a silent fallback is no result at all.
    */
   const runProbe = async () => {
     if (!node || probing) return;
@@ -222,6 +227,7 @@ export function NodeTuneModal({
       // nodes (or after a newer probe) must not land on the wrong node.
       if (runId !== probeRunRef.current) return;
       const medianMs = res.data?.rttMedianMs;
+      const warnings = res.data?.warnings ?? [];
 
       if (res.code !== 0 || !res.data || medianMs == null) {
         setProbeError(res.msg || "测算失败或探测不可用");
@@ -229,6 +235,7 @@ export function NodeTuneModal({
           ...FALLBACK_LINE,
           fromFallback: true,
           speedRequested,
+          warnings,
         });
         if (bw === "") setBw(String(FALLBACK_LINE.bandwidthMbps));
         if (rtt === "") setRtt(String(FALLBACK_LINE.rttMs));
@@ -246,6 +253,7 @@ export function NodeTuneModal({
             : clampLine(d.bandwidthMbps, 1, 100000),
         fromFallback: false,
         speedRequested,
+        warnings,
       };
 
       setProbeSuggestion(suggestion);
@@ -415,17 +423,30 @@ export function NodeTuneModal({
                           ms（仅为建议，未自动应用；点「应用」才下发）。
                         </p>
                       )}
-                      {probeSuggestion && !probeSuggestion.fromFallback && (
+                      {probeSuggestion && (
                         <p className="text-xs text-default-500">
-                          测算结果：延迟中位数 {probeSuggestion.rttMs} ms
-                          {probeSuggestion.panelRttMs != null &&
-                            `（到面板参考 ${probeSuggestion.panelRttMs} ms）`}
-                          {probeSuggestion.bandwidthMbps != null
-                            ? ` · 带宽 ${probeSuggestion.bandwidthMbps} Mbps`
-                            : probeSuggestion.speedRequested
-                              ? " · 测速未返回带宽，带宽保持原值"
-                              : " · 未测速，带宽保持原值"}
-                          。已按“未手动改过才回填”填入输入框，点「应用」才下发。
+                          {probeSuggestion.fromFallback ? (
+                            <>
+                              测算结果（回落值，未采到实测中位数）：延迟{" "}
+                              {probeSuggestion.rttMs} ms · 带宽{" "}
+                              {probeSuggestion.bandwidthMbps} Mbps（默认值）
+                              {probeSuggestion.warnings?.[0] &&
+                                `；${probeSuggestion.warnings[0]}`}
+                              。已按“未手动改过才回填”填入输入框，点「应用」才下发。
+                            </>
+                          ) : (
+                            <>
+                              测算结果：延迟中位数 {probeSuggestion.rttMs} ms
+                              {probeSuggestion.panelRttMs != null &&
+                                `（到面板参考 ${probeSuggestion.panelRttMs} ms）`}
+                              {probeSuggestion.bandwidthMbps != null
+                                ? ` · 带宽 ${probeSuggestion.bandwidthMbps} Mbps`
+                                : probeSuggestion.speedRequested
+                                  ? " · 测速未返回带宽，带宽保持原值"
+                                  : " · 未测速，带宽保持原值"}
+                              。已按“未手动改过才回填”填入输入框，点「应用」才下发。
+                            </>
+                          )}
                         </p>
                       )}
                       {probeAdoptable && (
