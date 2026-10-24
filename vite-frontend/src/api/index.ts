@@ -1220,7 +1220,7 @@ export interface NodeTuneSizes {
 export interface NodeTuneStatus {
   /** 旧 agent 不返回此字段：即按固定值调优的信号（能力探测主门）。
    *  是否支持按带宽/延迟计算，只以 params 有无判定，不比较 agent
-   *  版本号；按带宽/延迟计算自 1.4.5 起提供（文档门号，仅提示用）。 */
+   *  版本号；按带宽/延迟计算自 1.4.7 起提供（文档门号，仅提示用）。 */
   params?: NodeTuneLine;
   sizes?: NodeTuneSizes;
   /** 面板据 status 回包 params 有无打的派生标注，与 Boolean(status?.params) 同义。 */
@@ -1248,12 +1248,11 @@ export const nodeTune = (
     { timeout: 40 * 1000 },
   );
 /** 一键测算探测结果：只作调优输入框的建议值，绝不自动应用。
- * 契约字段（T-面板批已按此实现）：rttMedianMs 为节点现有 TCP 连接
- * 内核 RTT 中位数，bandwidthMbps 仅在 withSpeed 且有测速源时才有值，
- * panelRttMs 为到面板的 TCP 建连 RTT 参考值（可选，agent 未连接时缺失）。
- * 其余字段为本批的超集信息（回填建议值、各腿来源与回落说明），
- * 契约消费方忽略多余键即可；suggested 与按契约字段+默认值推导一致。
- * 写盘只发生在用户后续显式 Apply 时。 */
+ * （INT 合并：T-agent 的超集接口为准，T-panel 的三字段为其子集，
+ * 弹窗只读 rttMedianMs/panelRttMs/bandwidthMbps；其余字段调用方可忽略。
+ * rttMedianMs 为节点现有 TCP 连接内核 RTT 中位数，bandwidthMbps 仅在
+ * withSpeed 且有测速源时才有值，panelRttMs 为到面板的 TCP 建连 RTT
+ * 参考值（可选）。写盘只发生在用户后续显式 Apply 时。 */
 export interface NodeTuneProbeResult {
   suggested: NodeTuneLine;
   rttMedianMs?: number;
@@ -1267,13 +1266,11 @@ export interface NodeTuneProbeResult {
   panelRttAvailable: boolean;
   warnings?: string[];
 }
-/** 一键测算探测（触发入口，供调优弹窗的「测算」按钮调用）：
- * 契约：POST /node/tune {id, action:"probe", withSpeed}。
+/** 一键测算探测（opts 对象版；契约：POST /node/tune {id, action:"probe", withSpeed}。
  * 默认只测 RTT（现有连接中位数）；withSpeed 为 true 时 agent 再做一次
  * 短时测速（10s/64MiB 封顶，同步跑完即返回，不常驻后台），但测速需
- * 测速源——前端契约不带地址，调用方如需实测带宽须另传 speedtestURL，
- * 否则带宽腿回落默认值并明示。面板 probe 超时 90s，前端放宽到 120s。
- * 结果只回填输入框，不自动应用。 */
+ * 测速源——调用方如需实测带宽须另传 speedtestURL，否则带宽腿回落默认
+ * 值并明示。结果只回填输入框，不自动应用。 */
 export const nodeTuneProbe = (
   id: number,
   opts: { withSpeed?: boolean; speedtestURL?: string; referenceHost?: string } = {},
@@ -1281,6 +1278,15 @@ export const nodeTuneProbe = (
   Network.post<NodeTuneProbeResult>(
     "/node/tune",
     { id, action: "probe", ...opts },
+    { timeout: 120 * 1000 },
+  );
+/** 一键测算探测（弹窗调用版，T-panel 原签名；与 nodeTuneProbe 同端点，
+ * 返回的建议值由调用方按“未手动改过才回填”口径填入输入框；
+ * 真正下发只走 nodeTune apply。 */
+export const probeNodeTune = (id: number, withSpeed: boolean) =>
+  Network.post<NodeTuneProbeResult>(
+    "/node/tune",
+    { id, action: "probe", withSpeed },
     { timeout: 120 * 1000 },
   );
 /** 节点到延迟测试点的回程路由追踪结果。 */

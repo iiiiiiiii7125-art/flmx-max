@@ -42,7 +42,7 @@ var nodeTuneGroupAllowlist = map[string]bool{
 // 回包带 params → 支持。面板收到回包后把判定结果以 lineSupported 打在
 // data 上（仅派生标注，不改 agent 原值），供前端直接用；前端也可自行
 // 按 Boolean(status?.params) 再算一次，两者语义一致。
-// 1.4.5 只是文档门号（首个提供该能力的我方版本，仅用于提示文案），
+// 1.4.7 只是文档门号（首个提供该能力的我方版本，仅用于提示文案），
 // 不参与是否下发的判断：面板不以版本号硬拦截任何调优请求。
 // 第二层兜底：旧 agent 对未知 JSON 字段天然忽略（Go encoding/json
 // 默认丢弃未知字段），即使带宽/延迟被透传给旧 agent 也不会出错。
@@ -163,8 +163,8 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 			if req.Action == "probe" {
 				// 探测是可选能力：旧 agent 不认 TuneProbe 时只提示，
 				// 不拦调优本身；用户仍可手动填带宽/延迟后 Apply。
-				// 1.4.5 为文档门号（首个提供探测的版本），仅作提示。
-				msg = "节点 agent 较旧，不支持一键测算（按带宽/延迟计算自 1.4.5 起提供），请手动填写带宽/延迟"
+				// 1.4.7 为文档门号（首个提供探测的版本），仅作提示。
+				msg = "节点 agent 较旧，不支持一键测算（按带宽/延迟计算自 1.4.7 起提供），请手动填写带宽/延迟"
 			} else {
 				msg = "节点 agent 版本过旧，不支持调优，请先升级节点"
 			}
