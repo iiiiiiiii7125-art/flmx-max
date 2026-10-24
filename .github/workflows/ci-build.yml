@@ -55,12 +55,23 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      # R10X-016 (J-REG-01): the demo-check browser is pinned, never the
+      # runner image's floating system Chrome — newer Chrome (152) LNA
+      # checks fail every page (environment, not a regression; see
+      # scripts/demo/README.md 「CI 检查」判读注记). playwright-core
+      # 1.55.0 is a vite-frontend devDependency (pnpm-lock locked) and
+      # pins Chromium revision 1187 (Chromium 140.0.7339.16).
+      - name: Install pinned Chromium for demo check
+        run: pnpm exec playwright-core install --with-deps chromium
+
       # The online demo answers the API from a recording: fail when a page
       # breaks or asks for something that was never recorded.
+      # CHROME is injected with the pinned Chromium path resolved from
+      # playwright-core 1.55.0 (chromium-1187); check.mjs is unchanged.
       - name: Check online demo
         run: |
           VITE_DEMO=true VITE_BASE=/flmx-max/demo/ pnpm exec vite build --outDir dist-demo
-          node scripts/demo/check.mjs dist-demo
+          CHROME="$(node -e "const { chromium } = require('playwright-core'); process.stdout.write(chromium.executablePath())")" node scripts/demo/check.mjs dist-demo
 
   backend:
     name: Build Go Backend
