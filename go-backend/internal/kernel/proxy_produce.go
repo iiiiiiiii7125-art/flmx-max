@@ -22,7 +22,13 @@ func proxyURI(e Endpoint) (string, bool) {
 		// R6 批 1（未验证面同批设门，恒标未验证）：URI/base64 面以同一
 		// 谓词设门——双拒 cipher 与 SS2022 坏 key 整节点略过，不再原样
 		// 下发；单面集方法（chacha20 等 6 值）在本面保留（通用链接面、无整表毒化）。
-		if !ValidSSCipher(cipher) || ValidateSS2022Password(cipher, pw) != nil {
+		// R11 批 2（R11X-002）：ss 支改经统一谓词——plugin-opts.mode 格
+		// 随谓词并入（此前 ssPluginString 只小写愈合、垃圾 mode 原样
+		// 发链）。面参数取 ssFaceClash：本面按 R6 口径保留单面集
+		// （chacha20 等 6 值），与 ssFaceOther 的单面集略过口径不符，
+		// 以 other 设门会误杀单面集合法格；谓词其余格（cipher 合法集、
+		// SS2022 key、横切 fp/xhttp、Reality）与原门同口径。
+		if !validImportedProxyFields(p, ssFaceClash) {
 			return "", false
 		}
 		userinfo := base64.RawURLEncoding.EncodeToString([]byte(cipher + ":" + pw))
@@ -35,6 +41,11 @@ func proxyURI(e Endpoint) (string, bool) {
 		}
 		return "ss://" + userinfo + "@" + hp + query + frag, true
 	case "vmess":
+		// R11 批 2（R11X-002）：vmess 支补统一谓词门（ssFaceOther）——
+		// cipher 与横切 fp 此前无门、存量垃圾值原样发链。
+		if !validImportedProxyFields(p, ssFaceOther) {
+			return "", false
+		}
 		v := map[string]interface{}{"v": "2", "ps": e.Name, "add": strings.Trim(e.Host, "[]"), "port": strconv.Itoa(e.Port),
 			"id": p.str("uuid"), "aid": strconv.Itoa(p.num("alterId")), "scy": firstNonEmptyString(p.str("cipher"), "auto"),
 			"net": "tcp", "type": "none", "host": "", "path": "", "tls": ""}
@@ -66,8 +77,11 @@ func proxyURI(e Endpoint) (string, bool) {
 		// R10X-010（D-05）：vless 支入口加与 ss 支同形的谓词门——
 		// 存量坏 ENC / 坏 Reality 节点在其余六面均整节点略过/报错，
 		// URI 面不得独家发链；合法节点逐字不变（谓词只读不改）。
-		// trojan 支字段已由 forEndpoint 愈合、无枚举域，不设门。
-		if p.Type() == "vless" && !validImportedProxyFields(p, ssFaceOther) {
+		// R11 批 2（R11X-002）订正：旧注「trojan 支无枚举域」的前提
+		// 不实——trojan 支同样下发横切枚举/形态字段（fp、xhttp
+		// mode、Reality pbk/sid），forEndpoint 只愈合大小写、不拒
+		// 垃圾值；故本门扩至 trojan 支，两支同过 ssFaceOther。
+		if !validImportedProxyFields(p, ssFaceOther) {
 			return "", false
 		}
 		if p.network() == "http" {
@@ -124,6 +138,11 @@ func proxyURI(e Endpoint) (string, bool) {
 		}
 		return p.Type() + "://" + user + "@" + hp + "?" + q.Encode() + frag, true
 	case "hysteria2":
+		// R11 批 2（R11X-002）：hysteria2 支补统一谓词门
+		// （ssFaceOther）——obfs/ports 与横切 fp 存量垃圾此前原样发链。
+		if !validImportedProxyFields(p, ssFaceOther) {
+			return "", false
+		}
 		q := url.Values{}
 		setIf(q, "sni", p.serverName())
 		if p.flag("skip-cert-verify") {
@@ -138,6 +157,11 @@ func proxyURI(e Endpoint) (string, bool) {
 		}
 		return "hysteria2://" + url.PathEscape(p.str("password")) + "@" + hp + "/?" + q.Encode() + frag, true
 	case "tuic":
+		// R11 批 2（R11X-002）：tuic 支补统一谓词门（ssFaceOther）——
+		// congestion-controller 与横切 fp 存量垃圾此前原样发链。
+		if !validImportedProxyFields(p, ssFaceOther) {
+			return "", false
+		}
 		q := url.Values{}
 		setIf(q, "sni", p.serverName())
 		setIf(q, "congestion_control", p.str("congestion-controller"))
@@ -153,6 +177,11 @@ func proxyURI(e Endpoint) (string, bool) {
 		}
 		return "tuic://" + p.str("uuid") + ":" + url.PathEscape(p.str("password")) + "@" + hp + "?" + q.Encode() + frag, true
 	case "anytls":
+		// R11 批 2（R11X-002）：anytls 支补统一谓词门
+		// （ssFaceOther）——横切 fp 存量垃圾此前原样发链。
+		if !validImportedProxyFields(p, ssFaceOther) {
+			return "", false
+		}
 		q := url.Values{}
 		setIf(q, "sni", p.serverName())
 		setIf(q, "fp", p.str("client-fingerprint"))
@@ -600,6 +629,18 @@ func surgeEscape(s string) string {
 
 func proxySurge(e Endpoint) (string, bool) {
 	p := e.Proxy.forEndpoint(e)
+	// R11 批 2（R11X-003）：Surge 面入口补统一谓词门——此前仅 ss 支
+	// 有 cipher/key 门，SS plugin-opts.mode、Snell obfs-opts.mode、
+	// VMess cipher、Reality 等存量垃圾原样下发。面参数取
+	// ssFaceClash：Surge 的 SS 分发与 mihomo 面同口径保留单面集
+	// （chacha20 等 6 值经 ValidSSCipher 在本面 EMIT，见 R8 批 2
+	// 对账），以 ssFaceOther/ssFaceSingbox 设门会误杀单面集合法格；
+	// 谓词面参数只判别 SS 单面集一格，其余协议格与面参数无关。
+	// 既有手工门（Hy2 obfs 非 salamander 略过、snell 版本域等）
+	// 保留在各支内、与本门叠加。
+	if !validImportedProxyFields(p, ssFaceClash) {
+		return "", false
+	}
 	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
 	// host 与 SurgeLine 同口径过 surgeEscape（F-A-01/C-01 纵深防御）。
 	host := surgeEscape(strings.Trim(e.Host, "[]"))

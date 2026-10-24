@@ -167,6 +167,18 @@ var loonSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", 
 	"chacha20", "chacha20-ietf", "rc4-md5"})
 
 func loonLine(p Proxy) (string, bool) {
+	// R11 批 2（R11X-003）：Loon 面入口补统一谓词门——此前仅 SS
+	// cipher 白名单/key 与 VLESS flow/ENC 有手工门，SS plugin-opts.
+	// mode、VMess cipher、Reality 等存量垃圾原样下发。面参数取
+	// ssFaceClash：Loon 白名单含 SS 单面集 chacha20（本面合法），
+	// 以 ssFaceOther/ssFaceSingbox 设门会误杀单面集；其余单面集值
+	// （aes-*-gcm-siv 等 5 值）不在 Loon 白名单内、仍由下方白名单
+	// 略过，处置不变。谓词面参数只判别 SS 单面集一格。既有手工门
+	// （SS 白名单、VLESS flow 仅 vision、ENC 略过、Hy2 obfs 仅
+	// salamander）保留、与本门叠加。
+	if !validImportedProxyFields(p, ssFaceClash) {
+		return "", false
+	}
 	if enc := p.str("encryption"); enc != "" && enc != "none" {
 		return "", false // Loon 无 VLESS 加密的已证实支持，跳过而非渲染坏节点
 	}
@@ -348,6 +360,15 @@ var qxSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "c
 	"chacha20", "chacha20-ietf", "rc4-md5", "none"})
 
 func qxLine(p Proxy) (string, bool) {
+	// R11 批 2（R11X-003）：QX 面入口补统一谓词门——理由与面参数
+	// 同 loonLine 注：QX 白名单含 SS 单面集 chacha20（本面合法），
+	// 面参数取 ssFaceClash，不得以 ssFaceOther/ssFaceSingbox 误杀
+	// 单面集；其余单面集值不在 QX 白名单内、仍由下方白名单略过。
+	// 既有手工门（SS 白名单、VLESS flow 仅 vision、ENC 略过）
+	// 保留、与本门叠加。
+	if !validImportedProxyFields(p, ssFaceClash) {
+		return "", false
+	}
 	if enc := p.str("encryption"); enc != "" && enc != "none" {
 		return "", false // QX 无 VLESS 加密的已证实支持，跳过而非渲染坏节点
 	}
