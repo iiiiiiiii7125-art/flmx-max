@@ -1148,7 +1148,24 @@ export interface NodeTuneGroup {
   applied: boolean;
   settings: NodeTuneSetting[];
 }
+/** 调优所针对的线路（手动输入，非实测）。 */
+export interface NodeTuneLine {
+  bandwidthMbps: number;
+  rttMs: number;
+}
+export interface NodeTuneSizes {
+  ramMb: number;
+  bdp: number;
+  bufMax: number;
+  bufDefault: number;
+  /** 缓冲区上限取该值的原因（2×BDP、内存封顶或 4MB 下限）。 */
+  bufReason: string;
+  tcpMem: string;
+}
 export interface NodeTuneStatus {
+  /** 旧 agent（1.4.5 之前）不返回此字段：即按固定值调优的信号。 */
+  params?: NodeTuneLine;
+  sizes?: NodeTuneSizes;
   kernel: string;
   congestion: string;
   available: string;
@@ -1156,15 +1173,17 @@ export interface NodeTuneStatus {
   groups: NodeTuneGroup[];
   warnings?: string[];
 }
-/** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认（移植自 kure29/flyx）。 */
+/** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认（移植自 kure29/flyx）。
+ * line 仅在新 agent（≥1.4.5）上生效；旧调优弹窗不传 line，行为与之前一致。 */
 export const nodeTune = (
   id: number,
   action: "status" | "apply" | "restore",
   groups: string[] = [],
+  line?: NodeTuneLine,
 ) =>
   Network.post<NodeTuneStatus>(
     "/node/tune",
-    { id, action, groups },
+    { id, action, groups, ...line },
     { timeout: 40 * 1000 },
   );
 /** 节点到延迟测试点的回程路由追踪结果。 */
