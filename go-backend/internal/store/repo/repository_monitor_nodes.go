@@ -2,6 +2,7 @@ package repo
 
 import (
 	"errors"
+	"strings"
 
 	"go-backend/internal/store/model"
 )
@@ -29,6 +30,28 @@ func (r *Repository) SetNodesLatencyTargets(ids []int64, value string) error {
 	}
 	return r.db.Model(&model.Node{}).Where("id IN ? AND is_remote = ?", ids, 0).
 		Update("latency_targets", value).Error
+}
+
+// ListNodeLatencyTargets returns every node's stored explicit latency
+// test-point choice (raw JSON), keyed by node id. An empty value means
+// "follow the global defaults" and is omitted, so callers can tell an
+// explicit choice (including an explicit empty one) from no choice.
+func (r *Repository) ListNodeLatencyTargets() (map[int64]string, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var nodes []model.Node
+	if err := r.db.Select("id", "latency_targets").Find(&nodes).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[int64]string, len(nodes))
+	for _, n := range nodes {
+		if strings.TrimSpace(n.LatencyTargets) == "" {
+			continue
+		}
+		out[n.ID] = n.LatencyTargets
+	}
+	return out, nil
 }
 
 // ListNodesWithExpiry returns local nodes that have an expiry time set.

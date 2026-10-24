@@ -753,6 +753,7 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.syncRemoteNodeStatuses(items)
+	h.attachNodeLatency(items)
 
 	response.WriteJSON(w, response.OK(items))
 }

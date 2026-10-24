@@ -594,6 +594,58 @@ func (h *Handler) syncNodeTargetChoices(prev, next []latencyTarget) {
 	}
 }
 
+// attachNodeLatency enriches /node/list items with the latest latency
+// probe result and the node's explicit test-point choice.
+//
+// The scheduled probe rounds (runExternalProbeLoop) store results in
+// h.nodeLatency, but ListNodes never carried them, so the node page
+// could only show latency after a manual re-probe — whose button only
+// exists once a result is already rendered (deadlock). Attaching here
+// closes the loop: every list load carries the latest result.
+//
+//   - latency: attached only when the store holds a result with at
+//     least one point. The shape is externalProbe, identical to the
+//     manual /node/latency/probe response (withRoutes-enriched), which
+//     is what the frontend InboundProbe consumes.
+//   - latencyTargets: attached only when the node has an explicit
+//     stored choice (including an explicit empty choice, which the
+//     frontend renders as the "不测延迟" pill). No choice means the
+//     node follows the global defaults and the key is omitted — the
+//     frontend treats a present field as "自定义", so attaching
+//     defaults here would mislabel every node.
+//   - No online/remote filtering here: renderLatency on the frontend
+//     owns that gate, and this handler must not fork its semantics.
+//     A targets/read failure degrades to "attach nothing" rather than
+//     failing the whole list.
+func (h *Handler) attachNodeLatency(items []map[string]interface{}) {
+	if h == nil || len(items) == 0 {
+		return
+	}
+	targets, _ := h.repo.ListNodeLatencyTargets()
+	for _, item := range items {
+		id := asInt64(item["id"], 0)
+		if id == 0 {
+			continue
+		}
+		if h.nodeLatency != nil {
+			if p, ok := h.nodeLatency.get(id); ok && len(p.Points) > 0 {
+				if h.nodeRoutes != nil {
+					p = h.withRoutes(id, p)
+				}
+				item["latency"] = p
+			}
+		}
+		if raw, ok := targets[id]; ok {
+			if c := parseNodeTargetChoice(raw); c != nil {
+				item["latencyTargets"] = map[string]interface{}{
+					"points": c.Points,
+					"pinned": c.Pinned,
+				}
+			}
+		}
+	}
+}
+
 // nodeLatencyTargetsSet stores the nodes' own reference points, or clears
 // them to follow the defaults, then measures those nodes again.
 func (h *Handler) nodeLatencyTargetsSet(w http.ResponseWriter, r *http.Request) {
