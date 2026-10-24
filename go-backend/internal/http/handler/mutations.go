@@ -1258,9 +1258,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	// FIX2-A（V2-07，与 tunnelUpdate 同形）：在场但不可解析的数值字段
 	// fail-closed，不落库；须在 asInt64/asFloat 默认化之前校验，否则
 	// 坏输入静默套硬默认、校验恒过（R12X-003 create 侧缺口）。
-	if presentNumericFieldInvalid(req, "flow") {
-		response.WriteJSON(w, response.ErrDefault("flow 参数无效"))
-		return
+	// R13X-002：键表由 flow/trafficRatio 补齐为与 tunnelUpdate 同形的
+	// 四键（type/flow/status + trafficRatio）；status 的数值域外
+	// 枚举门（L4 O-3）不在本断言内，此处只拦不可解析输入。
+	for _, key := range []string{"type", "flow", "status"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
 	}
 	if presentFloatFieldInvalid(req, "trafficRatio") {
 		response.WriteJSON(w, response.ErrDefault("trafficRatio 参数无效"))

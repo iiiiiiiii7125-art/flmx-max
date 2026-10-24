@@ -500,7 +500,7 @@ func TestR3B6FullRestoreRoundTripClean(t *testing.T) {
 	pwd := "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012"
 	createRow(t, source, &model.User{ID: 2, User: "u2", Pwd: pwd, RoleID: 1, Status: 1, CreatedTime: now})
 	createRow(t, source, &model.User{ID: 4, User: "u4", Pwd: pwd, RoleID: 1, Status: 1, CreatedTime: now})
-	createRow(t, source, &model.Tunnel{ID: 1, Name: "t1", TrafficRatio: 2, Status: 1, CreatedTime: now, UpdatedTime: now})
+	createRow(t, source, &model.Tunnel{ID: 1, Name: "t1", TrafficRatio: 2, Flow: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
 	// 种子直写 0：GORM Create 会被 default:1.0 吞掉意图值 0（H 域
 	// P-A 同款造数注记），故 Create 后以 SQL 把倍率钉为 0 再导出。
 	if err := source.DB().Exec(`UPDATE tunnel SET traffic_ratio = 0 WHERE id = 1`).Error; err != nil {
