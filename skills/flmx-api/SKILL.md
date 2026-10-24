@@ -3,7 +3,7 @@ name: flmx-api
 description: Operate FLMX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management, federation clustering, and traffic monitoring. Use when user wants to manage FLMX panel programmatically or via natural language.
 metadata:
   author: FLMX Team
-  version: "1.4.4"
+  version: "1.4.6"
   requires_env:
     - FLMX_BASE_URL
     - FLMX_USERNAME
@@ -130,6 +130,7 @@ User request → Check env vars → Auto-login if needed → Call API → Return
 | "联邦共享" / "节点共享" | `/api/v1/federation/share/create` | [federation](references/federation.md) |
 | "导出备份" | `/api/v1/backup/export` | [backup](references/backup.md) |
 | "导入备份" | `/api/v1/backup/import` | [backup](references/backup.md) |
+| "Gist 备份" / "备份上传 Gist" | `/api/v1/backup/gist/status` / `/api/v1/backup/gist/save` / `/api/v1/backup/gist/upload` / `/api/v1/backup/gist/versions` / `/api/v1/backup/gist/restore` | [backup](references/backup.md) |
 | "安装内核" / "装 Xray / sing-box / Snell" | `/api/v1/kernel/install` | [kernels](references/kernels.md) |
 | "内核版本" / "内核能力" | `/api/v1/kernel/versions` / `/api/v1/kernel/capabilities` | [kernels](references/kernels.md) |
 | "创建入站" / "新建入站" / "加节点配置" | `/api/v1/inbound/create` | [inbounds](references/inbounds.md) |
