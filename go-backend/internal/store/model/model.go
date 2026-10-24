@@ -26,6 +26,12 @@ type User struct {
 	Status            int           `gorm:"not null"`
 	PasswordChangedAt int64         `gorm:"column:password_changed_at;not null;default:0"`
 	MaxConn           int           `gorm:"column:max_conn;not null;default:0"`
+	// FlowLastResetTime is the unix-ms moment of the last monthly flow
+	// reset actually performed by the daily job (R11X-005 due-type
+	// catch-up marker). 0 = never recorded (stock/pre-column rows and
+	// raw inserts); the reset job resolves 0 via its documented
+	// stock-row baseline (see repo.monthlyFlowDue).
+	FlowLastResetTime int64 `gorm:"column:flow_last_reset_time;not null;default:0"`
 }
 
 func (User) TableName() string { return "user" }
@@ -271,6 +277,8 @@ type UserTunnel struct {
 	FlowResetTime int64         `gorm:"column:flow_reset_time;not null"`
 	ExpTime       int64         `gorm:"column:exp_time;not null"`
 	Status        int           `gorm:"not null"`
+	// FlowLastResetTime: see User.FlowLastResetTime (R11X-005 marker).
+	FlowLastResetTime int64 `gorm:"column:flow_last_reset_time;not null;default:0"`
 }
 
 func (UserTunnel) TableName() string { return "user_tunnel" }
