@@ -491,12 +491,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 	var req loginRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
-		response.WriteJSON(w, response.Err(500, "请求参数错误"))
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
 
 	if strings.TrimSpace(req.Username) == "" {
-		response.WriteJSON(w, response.Err(500, "用户名不能为空"))
+		response.WriteJSON(w, response.ErrDefault("用户名不能为空"))
 		return
 	}
 	// R5-B5 D11-D13: 用户名桶只作为"升级验证"信号，永不硬拒。
@@ -511,7 +511,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	h.checkLoginUsernameRateLimit(req.Username, clientIPStr, captchaEnabledForSignal)
 	if strings.TrimSpace(req.Password) == "" {
-		response.WriteJSON(w, response.Err(500, "密码不能为空"))
+		response.WriteJSON(w, response.ErrDefault("密码不能为空"))
 		return
 	}
 
@@ -2082,7 +2082,7 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 
 	var req backupExportRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
-		response.WriteJSON(w, response.Err(500, "请求参数错误"))
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
 
@@ -2295,7 +2295,7 @@ func (h *Handler) updateAnnouncement(w http.ResponseWriter, r *http.Request) {
 		Enabled int    `json:"enabled"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
-		response.WriteJSON(w, response.Err(500, "请求参数错误"))
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
 

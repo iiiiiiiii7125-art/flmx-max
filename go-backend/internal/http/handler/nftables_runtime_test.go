@@ -21,10 +21,15 @@ import (
 )
 
 type fakeNftablesManager struct {
-	mu             sync.Mutex
-	testErr        error
-	reconcileErr   error
-	reconcileHit   int
+	mu           sync.Mutex
+	testErr      error
+	reconcileErr error
+	reconcileHit int
+	// reconcileHook runs inside Reconcile (after the hit is counted) so
+	// tests can simulate a race that lands mid-reconcile (R14-F08 A4-001:
+	// a concurrent delete marking the forward pending between the
+	// data-plane success and the DB write).
+	reconcileHook  func()
 	clearErr       error
 	clearHit       int
 	collectErr     error
@@ -47,6 +52,9 @@ func (f *fakeNftablesManager) Reconcile(_ context.Context, cfg runtimenft.SSHCon
 	f.reconcileHit++
 	f.lastConfig = cfg
 	f.lastPlan = plan
+	if f.reconcileHook != nil {
+		f.reconcileHook()
+	}
 	if f.reconcileErr != nil {
 		return runtimenft.ApplyResult{}, f.reconcileErr
 	}

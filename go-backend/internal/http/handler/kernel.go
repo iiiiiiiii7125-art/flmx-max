@@ -2176,6 +2176,45 @@ func (h *Handler) applyKernel(kernelID int64, install bool) error {
 	return h.applyKernelWith(kernelID, install, nil)
 }
 
+// healSnellPoisonedRows is the cleanup/migration path for R14-A5-08
+// poisoned rows: a Snell-kernel inbound carrying OutboundID / SplitRules
+// can never render (renderSnell rejects the whole kernel), so without
+// healing the poisoned row blocks every later deploy of that kernel —
+// including deploys of unrelated inbounds — until someone clears it by
+// hand. Save-time validation (validateChainVersion) refuses the
+// combination for new saves, but rows that landed before the guard
+// (backup import / direct DB writes) are healed here, at deploy time,
+// to the only servable shape (direct): the routing columns are cleared
+// in the DB and the healing is logged by inbound name. The inbound
+// itself keeps serving; only its (never-effective) chained exit is
+// dropped. Returns the healed inbound names (nil when nothing to heal).
+// Deliberately scoped to the deploy entry (applyKernelWith), not the
+// payload builder: buildKernelApplyPayload is also called by the
+// read-only metering hash check (kernelConfigApplied), which must not
+// mutate rows.
+func (h *Handler) healSnellPoisonedRows(k *model.NodeKernel) []string {
+	if h == nil || h.repo == nil || k == nil || k.KernelType != kernel.TypeSnell {
+		return nil
+	}
+	rows, err := h.repo.ListNodeInboundsByKernel(k.ID)
+	if err != nil {
+		return nil
+	}
+	var healed []string
+	for _, row := range rows {
+		if row.OutboundID == 0 && strings.TrimSpace(row.SplitRules) == "" {
+			continue
+		}
+		if err := h.repo.ClearNodeInboundRouting(row.ID, time.Now().UnixMilli()); err != nil {
+			log.Printf("snell poisoned row heal failed kernel_id=%d inbound_id=%d err=%v", k.ID, row.ID, err)
+			continue
+		}
+		healed = append(healed, row.Name)
+		log.Printf("snell poisoned row healed kernel_id=%d inbound_id=%d name=%q: Snell 内核不支持链式出站/分流，已清除其出站与分流配置改直连", k.ID, row.ID, row.Name)
+	}
+	return healed
+}
+
 func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride map[int64]bool) error {
 	unlock := lockKernelApply(kernelID)
 	defer unlock()
@@ -2186,6 +2225,13 @@ func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride ma
 	}
 	if k == nil {
 		return errors.New("内核不存在")
+	}
+	// R14-A5-08：毒化行清理——下发前先把 Snell 内核上历史毒化行的
+	// 出站/分流清为直连，否则 renderSnell 拒绝整单、后续一切下发
+	// 都被一行毒化行阻塞。清理失败的行留待下次下发重试（heal 内
+	// 已记日志），本次仍按原行渲染、由渲染错误如实返回。
+	if healed := h.healSnellPoisonedRows(k); len(healed) > 0 {
+		log.Printf("kernel apply healed snell poisoned rows kernel_id=%d inbounds=%v", k.ID, healed)
 	}
 	payload, hash, err := h.buildKernelApplyPayloadWith(k, realmOverride)
 	now := time.Now().UnixMilli()

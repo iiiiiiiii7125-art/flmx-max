@@ -347,6 +347,21 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 	}).Error
 }
 
+// ClearNodeInboundRouting clears a row's chained exit and 分流 rules
+// (R14-A5-08 migration for Snell poisoned rows: a Snell-kernel row
+// carrying OutboundID / SplitRules can never render, so the deploy-time
+// heal drops exactly those two columns back to direct).
+func (r *Repository) ClearNodeInboundRouting(id int64, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.NodeInbound{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"outbound_id":  0,
+		"split_rules":  "",
+		"updated_time": now,
+	}).Error
+}
+
 func (r *Repository) DeleteNodeInbound(id int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
