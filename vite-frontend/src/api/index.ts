@@ -1163,9 +1163,13 @@ export interface NodeTuneSizes {
   tcpMem: string;
 }
 export interface NodeTuneStatus {
-  /** 旧 agent（1.4.5 之前）不返回此字段：即按固定值调优的信号。 */
+  /** 旧 agent 不返回此字段：即按固定值调优的信号（能力探测主门）。
+   *  是否支持按带宽/延迟计算，只以 params 有无判定，不比较 agent
+   *  版本号；按带宽/延迟计算自 1.4.5 起提供（文档门号，仅提示用）。 */
   params?: NodeTuneLine;
   sizes?: NodeTuneSizes;
+  /** 面板据 status 回包 params 有无打的派生标注，与 Boolean(status?.params) 同义。 */
+  lineSupported?: boolean;
   kernel: string;
   congestion: string;
   available: string;
@@ -1174,7 +1178,9 @@ export interface NodeTuneStatus {
   warnings?: string[];
 }
 /** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认（移植自 kure29/flyx）。
- * line 仅在新 agent（≥1.4.5）上生效；旧调优弹窗不传 line，行为与之前一致。 */
+ * line 原样透传给 agent；旧 agent 忽略未知字段走固定值，是否支持以
+ * status 回包有无 params 判定（lineSupported = Boolean(status?.params)，
+ * 与上游同款），不比较 agent 版本号。旧调优弹窗不传 line，行为与之前一致。 */
 export const nodeTune = (
   id: number,
   action: "status" | "apply" | "restore",
@@ -1185,6 +1191,42 @@ export const nodeTune = (
     "/node/tune",
     { id, action, groups, ...line },
     { timeout: 40 * 1000 },
+  );
+/** 一键测算探测结果：只作调优输入框的建议值，绝不自动应用。
+ * 契约字段（T-面板批已按此实现）：rttMedianMs 为节点现有 TCP 连接
+ * 内核 RTT 中位数，bandwidthMbps 仅在 withSpeed 且有测速源时才有值，
+ * panelRttMs 为到面板的 TCP 建连 RTT 参考值（可选，agent 未连接时缺失）。
+ * 其余字段为本批的超集信息（回填建议值、各腿来源与回落说明），
+ * 契约消费方忽略多余键即可；suggested 与按契约字段+默认值推导一致。
+ * 写盘只发生在用户后续显式 Apply 时。 */
+export interface NodeTuneProbeResult {
+  suggested: NodeTuneLine;
+  rttMedianMs?: number;
+  rttSamples: number;
+  rttAvailable: boolean;
+  rttSource: string;
+  bandwidthMbps?: number;
+  bandwidthAvailable: boolean;
+  bandwidthSource: string;
+  panelRttMs?: number;
+  panelRttAvailable: boolean;
+  warnings?: string[];
+}
+/** 一键测算探测（触发入口，供调优弹窗的「测算」按钮调用）：
+ * 契约：POST /node/tune {id, action:"probe", withSpeed}。
+ * 默认只测 RTT（现有连接中位数）；withSpeed 为 true 时 agent 再做一次
+ * 短时测速（10s/64MiB 封顶，同步跑完即返回，不常驻后台），但测速需
+ * 测速源——前端契约不带地址，调用方如需实测带宽须另传 speedtestURL，
+ * 否则带宽腿回落默认值并明示。面板 probe 超时 90s，前端放宽到 120s。
+ * 结果只回填输入框，不自动应用。 */
+export const nodeTuneProbe = (
+  id: number,
+  opts: { withSpeed?: boolean; speedtestURL?: string; referenceHost?: string } = {},
+) =>
+  Network.post<NodeTuneProbeResult>(
+    "/node/tune",
+    { id, action: "probe", ...opts },
+    { timeout: 120 * 1000 },
   );
 /** 节点到延迟测试点的回程路由追踪结果。 */
 export const getNodeRoute = (id: number) =>

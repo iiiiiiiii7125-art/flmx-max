@@ -249,13 +249,32 @@ type tuneStatus struct {
 	Warnings   []string          `json:"warnings,omitempty"`
 }
 
-// handleTuneCommand runs TuneStatus / TuneApply. Both take the line's
-// bandwidth and RTT (the targets depend on them); without them the last
-// applied ones, or the defaults, are used. Unknown fields in data are
+// handleTuneCommand runs TuneStatus / TuneApply / TuneProbe. Status and
+// Apply take the line's bandwidth and RTT (the targets depend on them);
+// without them the last applied ones, or the defaults, are used. Probe
+// takes no line input: it measures a suggested line and never writes
+// anything (see probeTune). Unknown fields in data are
 // ignored by encoding/json: that is what lets an older agent safely
 // ignore bandwidthMbps/rttMs sent by a newer panel (and, in reverse, an
 // older panel's groups-only request still works on this agent).
 func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
+	// Probe is a separate read-only command: it measures a suggested
+	// line and must never share Apply's write path, so it is parsed
+	// and dispatched before the Status/Apply line handling below
+	// (probe data carries no bandwidth/rtt input to validate).
+	if cmdType == "TuneProbe" {
+		var preq tuneProbeRequest
+		if data != nil {
+			raw, err := json.Marshal(data)
+			if err != nil {
+				return nil, fmt.Errorf("序列化数据失败: %v", err)
+			}
+			if err := json.Unmarshal(raw, &preq); err != nil {
+				return nil, fmt.Errorf("解析探测参数失败: %v", err)
+			}
+		}
+		return probeTune(preq)
+	}
 	var req struct {
 		Groups  []string `json:"groups"`
 		Restore bool     `json:"restore"`

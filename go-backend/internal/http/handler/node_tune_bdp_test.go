@@ -9,18 +9,21 @@ import (
 
 // Bad requests return before any node lookup or command send, so a bare
 // Handler{} is enough here (same shape as upstream 3.3.42's node_tune
-// test, plus this fork's allowlist case).
+// test, plus this fork's allowlist case and probe validation cases).
 func TestNodeTuneBdpRejectsBadRequests(t *testing.T) {
 	for body, want := range map[string]string{
-		`{"id":0}`:                                     "参数错误",
-		`{"id":1,"action":"apply"}`:                    "至少选择",
-		`{"id":1,"action":"reboot"}`:                   "未知操作",
-		`{"id":1,"extra":true}`:                        "参数错误",
-		`{"id":1,"bandwidthMbps":1000,"rttMs":0}`:      "延迟需在",
-		`{"id":1,"bandwidthMbps":0,"rttMs":150}`:       "带宽需在",
-		`{"id":1,"bandwidthMbps":100001,"rttMs":150}`:  "带宽需在",
-		`{"id":1,"bandwidthMbps":1000,"rttMs":2001}`:   "延迟需在",
-		`{"id":1,"action":"apply","groups":["rm-rf"]}`: "未知调优项",
+		`{"id":0}`:                                                      "参数错误",
+		`{"id":1,"action":"apply"}`:                                     "至少选择",
+		`{"id":1,"action":"reboot"}`:                                    "未知操作",
+		`{"id":1,"extra":true}`:                                         "参数错误",
+		`{"id":1,"bandwidthMbps":1000,"rttMs":0}`:                       "延迟需在",
+		`{"id":1,"bandwidthMbps":0,"rttMs":150}`:                        "带宽需在",
+		`{"id":1,"bandwidthMbps":100001,"rttMs":150}`:                   "带宽需在",
+		`{"id":1,"bandwidthMbps":1000,"rttMs":2001}`:                    "延迟需在",
+		`{"id":1,"action":"apply","groups":["rm-rf"]}`:                  "未知调优项",
+		`{"id":1,"action":"probe","speedtestURL":"ftp://x/f"}`:          "测速地址须为",
+		`{"id":1,"action":"probe","speedtestURL":"file:///etc/passwd"}`: "测速地址须为",
+		`{"id":1,"action":"probe","referenceHost":"example.com"}`:       "host:port",
 	} {
 		rec := httptest.NewRecorder()
 		(&Handler{}).nodeTune(rec, httptest.NewRequest(http.MethodPost, "/api/v1/node/tune", strings.NewReader(body)))
@@ -30,33 +33,29 @@ func TestNodeTuneBdpRejectsBadRequests(t *testing.T) {
 	}
 }
 
-// The version gate is deliberately NOT upstream's 3.3.42: our agent line
-// ships with 1.4.5, so that is the floor. Unknown / unparseable / dev
-// versions fail closed (no BDP values sent), mirroring
-// agentSupportsNoPrivateBypass.
-func TestAgentSupportsBdpTuning(t *testing.T) {
+// Capability probe (the gate, replacing B2's hard 1.4.5 version
+// comparison, which was deleted): support is judged only by whether
+// the agent's TuneStatus response carries a params field, with exactly
+// upstream's lineSupported = Boolean(status?.params) semantics. No
+// agent version string is consulted anywhere in this path, so there is
+// no version table to maintain: an old agent (no params key) and a new
+// agent (params object, even an empty one, which is truthy in JS) are
+// told apart by the response shape alone.
+func TestTuneLineSupported(t *testing.T) {
 	for _, c := range []struct {
-		version string
-		want    bool
+		name string
+		data map[string]interface{}
+		want bool
 	}{
-		{"1.4.5", true},
-		{"1.4.5 (debian/amd64)", true},
-		{"v1.4.5", true},
-		{"1.4.6", true},
-		{"1.5.0", true},
-		{"2.0.0", true},
-		{"1.4.4", false},
-		{"1.4.4 (debian/amd64)", false},
-		{"1.3.4", false},
-		{"3.3.42", true}, // numerically above the floor; the gate is ours, not upstream's
-		{"", false},
-		{"dev", false},
-		{"dev (linux/amd64)", false},
-		{"1.4.5-beta1", false},
-		{"garbage", false},
+		{"new agent with line", map[string]interface{}{"params": map[string]interface{}{"bandwidthMbps": 1000, "rttMs": 150}}, true},
+		{"new agent empty params object is truthy", map[string]interface{}{"params": map[string]interface{}{}}, true},
+		{"old agent without params key", map[string]interface{}{"kernel": "6.1.0", "groups": []interface{}{}}, false},
+		{"params explicitly null", map[string]interface{}{"params": nil}, false},
+		{"nil response", nil, false},
+		{"empty response", map[string]interface{}{}, false},
 	} {
-		if got := agentSupportsBdpTuning(c.version); got != c.want {
-			t.Errorf("%q: got %v want %v", c.version, got, c.want)
+		if got := tuneLineSupported(c.data); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
 		}
 	}
 }
