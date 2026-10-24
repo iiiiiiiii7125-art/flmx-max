@@ -2279,7 +2279,41 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	return backup, nil
 }
 
+// validBackupTypes is the full set of top-level backup segment names
+// accepted by ExportPartial / Import (R13X-005). It must stay identical
+// to the frontend BACKUP_TYPE_VALUES list (vite-frontend config.tsx,
+// 16 values): any drift reopens the silent-ignore gap for API callers,
+// since the handler's non-empty check cannot catch an all-unknown list.
+var validBackupTypes = map[string]bool{
+	"users": true, "nodes": true, "tunnels": true, "forwards": true,
+	"userTunnels": true, "speedLimits": true, "tunnelGroups": true,
+	"userGroups": true, "permissions": true, "configs": true,
+	"inbounds": true, "userInbounds": true, "announcements": true,
+	"monitorPermissions": true, "userSubscriptions": true,
+	"serviceMonitors": true,
+}
+
+// validateBackupTypes rejects unknown segment names, naming each one
+// (R13X-005): silently ignoring a misspelled type used to produce a
+// "successful but segment-missing" export, or a "successful but zero
+// rows restored" import. Duplicates and order are untouched.
+func validateBackupTypes(types []string) error {
+	var unknown []string
+	for _, t := range types {
+		if !validBackupTypes[t] {
+			unknown = append(unknown, fmt.Sprintf("%q", t))
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("未知备份类型：%s", strings.Join(unknown, "、"))
+	}
+	return nil
+}
+
 func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
+	if err := validateBackupTypes(types); err != nil {
+		return nil, err
+	}
 	backup := &model.BackupData{Version: "1.0", ExportedAt: unixMilliNow()}
 	typeSet := make(map[string]bool)
 	for _, t := range types {
@@ -2964,6 +2998,9 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		}
 		return nil, fmt.Errorf("不支持的备份版本 %q（仅支持 1.0）", version)
 	}
+	if err := validateBackupTypes(types); err != nil {
+		return nil, err
+	}
 	result := &model.ImportResult{}
 	typeSet := make(map[string]bool)
 	for _, t := range types {
@@ -3104,11 +3141,18 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.ConfigsImported = count
 		}
 		if typeSet["inbounds"] && backup.Inbounds != nil {
-			count, err := importInbounds(tx, backup.Inbounds, now, subRemap, rep)
+			counts, err := importInbounds(tx, backup.Inbounds, now, subRemap, rep)
 			if err != nil {
 				return fmt.Errorf("import inbounds failed: %w", err)
 			}
-			result.InboundsImported = count
+			result.InboundsImported = counts.inbounds
+			result.InboundKernelsImported = counts.kernels
+			result.InboundRelaysImported = counts.relays
+			result.InboundCountersImported = counts.counters
+			result.InboundSubscriptionsImported = counts.subscriptions
+			result.InboundSubscriptionCountersImported = counts.subscriptionCounter
+			result.InboundSourcesImported = counts.sources
+			result.InboundLegacyUsersImported = counts.legacyUsers
 		}
 		// O7-001：导入 user_inbound 表（用户订阅分配关系）
 		if typeSet["userInbounds"] && len(backup.UserInbounds) > 0 {

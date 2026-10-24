@@ -339,7 +339,24 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 	return kernel.Normalize(krow.KernelType, &vin)
 }
 
-func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (int, error) {
+// inboundImportCounts carries the per-subsection landed-row counts of
+// one inbounds-segment import (R13X-004): the ImportResult fields of
+// the same names are filled from it, so the receipt can be checked
+// subsection by subsection against the DB instead of only reporting
+// the inbound-row total. Skipped rows are never counted here (they
+// are reported through SkippedRows, as with inboundsImported).
+type inboundImportCounts struct {
+	kernels             int
+	inbounds            int
+	relays              int
+	counters            int
+	subscriptions       int
+	subscriptionCounter int
+	sources             int
+	legacyUsers         int
+}
+
+func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
 	invalidShareModes := 0
@@ -352,7 +369,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	var invalidWhitelistIdentities []string
 	// R5X-016：入站段返回实落计数（被跳过行不计入，与 SkippedRows
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
-	inboundsImported := 0
+	var counts inboundImportCounts
 	invalidInboundObjects := 0
 	// R6X-009：内容校验跳过的行在恢复结果中完全消失，计数-only 的
 	// 汇总 warning 无从定位——收集被跳过行身份（#{id} {name}）与
@@ -362,7 +379,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
 		if err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if !kernelNodeExists {
 			rep.skip("kernels")
@@ -376,19 +393,19 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		var replacedKernels []model.NodeKernel
 		if err := tx.Where("node_id = ? AND kernel_type = ? AND id <> ?", k.NodeID, k.KernelType, k.ID).
 			Find(&replacedKernels).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		for _, oldKernel := range replacedKernels {
 			res := tx.Model(&model.NodeInbound{}).Where("kernel_id = ?", oldKernel.ID).Update("kernel_id", k.ID)
 			if res.Error != nil {
-				return 0, res.Error
+				return inboundImportCounts{}, res.Error
 			}
 			kernelRepointed += res.RowsAffected
 		}
 		// One kernel per node and type: drop a different row in the way.
 		if err := tx.Where("node_id = ? AND kernel_type = ? AND id <> ?", k.NodeID, k.KernelType, k.ID).
 			Delete(&model.NodeKernel{}).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		version := k.Version
 		if version == "" {
@@ -406,11 +423,12 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				"config_hash", "applied_hash", "enabled", "updated_time",
 			}),
 		}).Create(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if err := restoreZeroValuedInt(tx, &model.NodeKernel{}, k.ID, "enabled", k.Enabled); err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
+		counts.kernels++
 	}
 	if kernelRepointed > 0 {
 		rep.warnf("备份恢复：内核行替换时已将 %d 条存量入站的内核引用重指向恢复后的内核行（旧内核行已被同节点同类型的新行替换）", kernelRepointed)
@@ -432,8 +450,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"name", "url", "interval_hours", "relay_only", "kind", "role", "enabled", "updated_time", "userinfo"}),
 		}).Create(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
+		counts.sources++
 	}
 
 	for _, i := range b.Inbounds {
@@ -446,7 +465,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			var err error
 			kernelExists, err = rowExistsTx(tx, &model.NodeKernel{}, i.KernelID)
 			if err != nil {
-				return 0, err
+				return inboundImportCounts{}, err
 			}
 		}
 		inboundNodeExists := true
@@ -454,7 +473,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			var err error
 			inboundNodeExists, err = rowExistsTx(tx, &model.Node{}, i.NodeID)
 			if err != nil {
-				return 0, err
+				return inboundImportCounts{}, err
 			}
 		}
 		if !kernelExists || !inboundNodeExists {
@@ -513,8 +532,28 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			invalidWhitelistIdentities = append(invalidWhitelistIdentities,
 				fmt.Sprintf("#%d %s（%s）", i.ID, i.Name, detail))
 		}
+		// R13X-006：导入型入站（kernel_id<=0）的 Protocol 是派生字段，
+		// 须以 Extra 承载的代理对象重推导（与创建路径 externalRow /
+		// 编辑路径 row.Protocol = kernel.ProxyProtocol(proxy) 同口径），
+		// 不再逐字信任备份的 Protocol 字段（如 trojan 标签配 ss
+		// Extra）。Extra 本体已在上方 validateImportedInboundObjects
+		// 经 ValidateImportedProxy 校验，此处只在解析成功且推导结果
+		// 非空时覆写；Extra 为空或推导不出时保留原值。Extra 逐字
+		// 落库不变，故订阅端点与链式目标等数据面（均经 importedProxy
+		// 构造）行为不变；整行跳过备选不采。
+		protocol := i.Protocol
+		if i.KernelID <= 0 {
+			if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" {
+				var p kernel.Proxy
+				if err := json.Unmarshal([]byte(extra), &p); err == nil {
+					if derived := kernel.ProxyProtocol(p); derived != "" {
+						protocol = derived
+					}
+				}
+			}
+		}
 		item := model.NodeInbound{
-			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: i.Protocol,
+			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: protocol,
 			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
 			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
@@ -533,10 +572,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				"metering_enabled", "companion_of",
 			}),
 		}).Create(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		// F6 (B-07): restored rows are always origins — backups never
 		// carry companions (they are derived state). Without the
@@ -547,9 +586,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// item's CompanionOf is intentionally always 0; the zero-value
 		// write-back mirrors the enabled handling above.
 		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "companion_of", 0); err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
-		inboundsImported++
+		counts.inbounds++
 	}
 	if invalidInboundObjects > 0 {
 		// R6X-009：汇总 warning 附被跳过行身份清单（前 10 条，超出
@@ -585,7 +624,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// 置 0（直连）、splitRules 剔除指向无效 outbound 的规则后回写，
 	// 均计 ImportWarnings，不跳整行（verdicts §2.7）。
 	if err := validateImportedInboundRefsTx(tx, b.Inbounds, rep); err != nil {
-		return 0, err
+		return inboundImportCounts{}, err
 	}
 
 	relayRepointed := int64(0)
@@ -593,11 +632,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// D4-03：引用的入站/转发不存在时跳过该中转并计数。
 		relayInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, rel.InboundID)
 		if err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		relayForwardExists, err := rowExistsTx(tx, &model.Forward{}, rel.ForwardID)
 		if err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if !relayInboundExists || !relayForwardExists {
 			rep.skip("relays")
@@ -611,18 +650,18 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		var replacedRelays []model.NodeInboundRelay
 		if err := tx.Where("forward_id = ? AND id <> ?", rel.ForwardID, rel.ID).
 			Find(&replacedRelays).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		for _, oldRelay := range replacedRelays {
 			res := tx.Model(&model.UserInbound{}).Where("relay_id = ?", oldRelay.ID).Update("relay_id", rel.ID)
 			if res.Error != nil {
-				return 0, res.Error
+				return inboundImportCounts{}, res.Error
 			}
 			relayRepointed += res.RowsAffected
 		}
 		if err := tx.Where("forward_id = ? AND id <> ?", rel.ForwardID, rel.ID).
 			Delete(&model.NodeInboundRelay{}).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		relayShareHost, ok := sanitizeBackupShareHost(rel.ShareHost)
 		if !ok {
@@ -636,11 +675,12 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"inbound_id", "forward_id", "name", "share_host", "managed"}),
 		}).Create(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if err := restoreZeroValuedInt(tx, &model.NodeInboundRelay{}, rel.ID, "managed", rel.Managed); err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
+		counts.relays++
 	}
 	if relayRepointed > 0 {
 		rep.warnf("备份恢复：中转行替换时已将 %d 条存量用户入站分配的中转引用重指向恢复后的中转行（旧中转行已被同转发的新行替换）", relayRepointed)
@@ -659,7 +699,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// D4-03：引用的入站不存在时跳过该基线并计数。
 		counterInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, c.InboundID)
 		if err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if !counterInboundExists {
 			rep.skip("inboundCounters")
@@ -673,8 +713,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Columns:   []clause.Column{{Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
 			DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
 		}).Create(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
+		counts.counters++
 	}
 	// Subscriptions keep their links and credentials, matched by token.
 	// AppliedActive starts at 0 so the expiry loop pushes the active share
@@ -687,7 +728,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			CreatedTime: u.CreatedTime,
 		})
 	}
-	for _, sb := range subs {
+	for subIdx, sb := range subs {
 		if sb.Token == "" {
 			// R1 H-O2（随 X-P2-7 同批，V-23）：空 token 订阅跳过
 			// 必须计入回执 SkippedRows，不得静默丢弃。
@@ -697,7 +738,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		var existing model.Subscription
 		res := tx.Where("token = ?", sb.Token).Limit(1).Find(&existing)
 		if res.Error != nil {
-			return 0, res.Error
+			return inboundImportCounts{}, res.Error
 		}
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
@@ -712,7 +753,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if item.UUID == "" || item.Password == "" {
 			uuid, pw, credErr := subscriptionCredentials()
 			if credErr != nil {
-				return 0, credErr
+				return inboundImportCounts{}, credErr
 			}
 			item.UUID, item.Password = uuid, pw
 		}
@@ -720,7 +761,12 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			item.ID = existing.ID
 		}
 		if err := tx.Save(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
+		}
+		if subIdx < len(b.Subscriptions) {
+			counts.subscriptions++
+		} else {
+			counts.legacyUsers++
 		}
 		// BUG-A2-4：登记备份 id -> 实际落库 id（按 token 命中旧行时
 		// 两者可不同；用户派生订阅 sb.ID=0 不参与分配引用，跳过）。
@@ -740,11 +786,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		counterNodeExists, err := rowExistsTx(tx, &model.Node{}, c.NodeID)
 		if err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		counterSubExists, err := rowExistsTx(tx, &model.Subscription{}, subID)
 		if err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
 		if !counterNodeExists || !counterSubExists {
 			rep.skip("subscriptionCounters")
@@ -758,10 +804,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Columns:   []clause.Column{{Name: "node_id"}, {Name: "subscription_id"}, {Name: "direction"}},
 			DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
 		}).Create(&item).Error; err != nil {
-			return 0, err
+			return inboundImportCounts{}, err
 		}
+		counts.subscriptionCounter++
 	}
-	return inboundsImported, nil
+	return counts, nil
 }
 
 // inboundChainTargetUsableTx reports whether id names a row that may
