@@ -161,6 +161,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, SourceID: i.SourceID, OutboundID: i.OutboundID, SplitRules: i.SplitRules,
 			OutboundIPStrategy: i.OutboundIPStrategy, MeteringEnabled: i.MeteringEnabled,
+			ConnIdleSeconds: i.ConnIdleSeconds,
 		})
 	}
 
@@ -287,7 +288,8 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		return nil
 	}
 	vin := kernel.Inbound{ID: i.ID, Protocol: i.Protocol, Listen: listen, Port: i.Port,
-		AcceptProxyProtocol: i.AcceptProxyProtocol == 1, OutboundIPStrategy: strategy}
+		AcceptProxyProtocol: i.AcceptProxyProtocol == 1, OutboundIPStrategy: strategy,
+		ConnIdleSeconds: i.ConnIdleSeconds}
 	for _, f := range []struct {
 		raw string
 		out interface{}
@@ -561,6 +563,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
 			SplitRules: i.SplitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
+			ConnIdleSeconds: i.ConnIdleSeconds,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -569,7 +572,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				"settings", "extra", "share_host", "share_address_mode", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
 				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
-				"metering_enabled", "companion_of",
+				"metering_enabled", "companion_of", "conn_idle_seconds",
 			}),
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err
