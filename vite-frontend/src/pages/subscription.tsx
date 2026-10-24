@@ -276,8 +276,8 @@ function pipelineSummary(o: SubPipeline): string {
     steps.push("过滤");
   if (o.rename.trim()) steps.push("改名");
   if (o.addFlag) steps.push("国旗");
-  if (o.prefix) steps.push("前缀");
   if (o.dedupe) steps.push("去重");
+  if (o.prefix) steps.push("前缀");
   if (o.sort) steps.push("排序");
   if (o.regionGroups) steps.push("地区分组");
 
@@ -846,7 +846,7 @@ function Editor({
         <Section
           collapsible
           defaultOpen={Boolean(pipelineSummary(o))}
-          hint="按顺序执行：过滤 → 改名 → 国旗 → 前缀 → 去重 → 排序"
+          hint="按顺序执行：过滤 → 改名 → 国旗 → 去重 → 前缀 → 排序"
           summary={pipelineSummary(o) || "未设置"}
           title="处理"
         >

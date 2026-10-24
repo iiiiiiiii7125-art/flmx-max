@@ -206,13 +206,15 @@ export function NodeTuneModal({
    * One-click probe: fetches a suggestion only. It never calls apply and
    * never submits the line. Suggestion refill rule (per field): a field
    * the user has typed in keeps its value; a field they have not typed
-   * in takes the measured value. On probe failure the RTT value falls
-   * back to the T-5 default, while a measured bandwidth is kept
-   * (148-P3-3); a failure never overwrites a non-empty
-   * field — the user adopts the fallback explicitly if wanted. The
-   * fallback is still shown as an explicit result row (marked 回落值,
-   * with the agent's leg warnings as the reason), even when it equals
-   * the current inputs: a silent fallback is no result at all.
+   * in takes the measured value — the same rule on the success and
+   * the failure legs, so the result row's "已按‘未手动改过才回填’填入输入框"
+   * holds on both. On probe failure the RTT value falls back to the
+   * T-5 default, while a measured bandwidth is kept (148-P3-3); a
+   * failure never overwrites a field the user has typed in — the user
+   * adopts the fallback explicitly if wanted. The fallback is still
+   * shown as an explicit result row (marked 回落值, with the agent's
+   * leg warnings as the reason), even when it equals the current
+   * inputs: a silent fallback is no result at all.
    */
   const runProbe = async () => {
     if (!node || probing) return;
@@ -250,8 +252,10 @@ export function NodeTuneModal({
           speedRequested,
           warnings,
         });
-        if (bw === "") setBw(String(fallbackBw));
-        if (rtt === "") setRtt(String(FALLBACK_LINE.rttMs));
+        // 与成功分支同口径：只回填未手动改过的字段（A7-04），
+        // 带宽取保留的实测值而非默认值（148-P3-3）。
+        if (!bwEditedRef.current) setBw(String(fallbackBw));
+        if (!rttEditedRef.current) setRtt(String(FALLBACK_LINE.rttMs));
 
         return;
       }
@@ -282,8 +286,9 @@ export function NodeTuneModal({
         fromFallback: true,
         speedRequested,
       });
-      if (bw === "") setBw(String(FALLBACK_LINE.bandwidthMbps));
-      if (rtt === "") setRtt(String(FALLBACK_LINE.rttMs));
+      // 与成功分支同口径：只回填未手动改过的字段（A7-04）。
+      if (!bwEditedRef.current) setBw(String(FALLBACK_LINE.bandwidthMbps));
+      if (!rttEditedRef.current) setRtt(String(FALLBACK_LINE.rttMs));
     } finally {
       if (runId === probeRunRef.current) setProbing(false);
     }
@@ -426,7 +431,7 @@ export function NodeTuneModal({
                         <p className="text-xs text-default-500">
                           测算中…
                           {withSpeed
-                            ? "含短时测速，稍候。"
+                            ? "含短时测速，稍候。未配置测速地址时带宽回落默认值。"
                             : "默认只测延迟，未测速。"}
                         </p>
                       )}
@@ -449,9 +454,12 @@ export function NodeTuneModal({
                               {probeSuggestion.bandwidthMeasured
                                 ? "（实测值）"
                                 : "（默认值）"}
-                              {probeSuggestion.warnings?.[0] &&
-                                `；${probeSuggestion.warnings[0]}`}
                               。已按“未手动改过才回填”填入输入框，点「应用」才下发。
+                              {probeSuggestion.warnings?.map((w, i) => (
+                                <span key={i} className="block">
+                                  ⚠️ {w}
+                                </span>
+                              ))}
                             </>
                           ) : (
                             <>
@@ -464,6 +472,11 @@ export function NodeTuneModal({
                                   ? " · 测速未返回带宽，带宽保持原值"
                                   : " · 未测速，带宽保持原值"}
                               。已按“未手动改过才回填”填入输入框，点「应用」才下发。
+                              {probeSuggestion.warnings?.map((w, i) => (
+                                <span key={i} className="block">
+                                  ⚠️ {w}
+                                </span>
+                              ))}
                             </>
                           )}
                         </p>

@@ -376,16 +376,24 @@ function UserDashboard() {
 
     const now = new Date();
     const currentDay = now.getDate();
+    // 与后端 monthlyResetMoment 同口径：重置日钳制到当月最后一天
+    //（resetDay=31 的 2 月 → 2 月 28/29 日重置，而非 3 月 3 日）。
+    const daysInMonth = (y: number, m: number) =>
+      new Date(y, m + 1, 0).getDate();
+    const clampedDay = (y: number, m: number) =>
+      Math.min(resetDay, daysInMonth(y, m));
 
     let daysUntilReset: number;
 
-    if (resetDay > currentDay) {
-      daysUntilReset = resetDay - currentDay;
-    } else if (resetDay < currentDay) {
+    const thisMonthDay = clampedDay(now.getFullYear(), now.getMonth());
+
+    if (thisMonthDay > currentDay) {
+      daysUntilReset = thisMonthDay - currentDay;
+    } else if (thisMonthDay < currentDay) {
       const nextMonth = new Date(
         now.getFullYear(),
         now.getMonth() + 1,
-        resetDay,
+        clampedDay(now.getFullYear(), now.getMonth() + 1),
       );
       const diffTime = nextMonth.getTime() - now.getTime();
 
