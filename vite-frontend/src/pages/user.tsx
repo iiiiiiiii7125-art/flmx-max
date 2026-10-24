@@ -718,11 +718,8 @@ export default function UserPage({
 
       return;
     }
-    if (!userForm.expTime) {
-      toast.error("请选择到期时间");
-
-      return;
-    }
+    // 到期时间可选：留空 = 永久（ExpTime=0；后端 ExpTime>0 才判过期）。
+    // 此前此处拦截空值，永久用户建不出、改不了（R14 A10-01）。
 
     const flowMiB = parseTrafficInput(userFlowInput, userFlowUnit);
 
@@ -740,7 +737,7 @@ export default function UserPage({
         flow: Math.ceil(flowMiB / 1024),
         flowMiB:
           userFlowInput === "99999" && userFlowUnit === "GB" ? 0 : flowMiB,
-        expTime: userForm.expTime.getTime(),
+        expTime: userForm.expTime ? userForm.expTime.getTime() : 0,
         groupIds: userForm.groupIds ?? [],
       };
 
@@ -1794,9 +1791,8 @@ export default function UserPage({
                 </>
               </Select>
               <DatePicker
-                isRequired
                 showMonthAndYearPickers
-                label="过期时间"
+                label="过期时间（留空为无限期）"
                 value={
                   userForm.expTime
                     ? (parseDate(
@@ -2412,9 +2408,8 @@ export default function UserPage({
                   </Select>
 
                   <DatePicker
-                    isRequired
                     showMonthAndYearPickers
-                    label="到期时间"
+                    label="到期时间（留空为永久）"
                     value={
                       editTunnelForm.expTime
                         ? (parseDate(
@@ -2439,8 +2434,10 @@ export default function UserPage({
                           prev ? { ...prev, expTime: jsDate.getTime() } : null,
                         );
                       } else {
+                        // 清空 = 无到期（0=永久）。此前误写 Date.now()，
+                        // 保存即立刻过期（R14 A10-02）。
                         setEditTunnelForm((prev) =>
-                          prev ? { ...prev, expTime: Date.now() } : null,
+                          prev ? { ...prev, expTime: 0 } : null,
                         );
                       }
                     }}

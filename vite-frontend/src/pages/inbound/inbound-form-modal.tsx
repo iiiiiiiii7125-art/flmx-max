@@ -270,16 +270,14 @@ export function InboundFormModal({
         return "端口必须在 1-65535 之间";
       }
     }
-    // 空闲超时：仅 Xray 内核；1–86400 秒的整数，留空为默认 300 秒。
-    // 0 不是合法值（留空即默认），后端同样拒绝，双侧校验。
+    // 空闲超时：仅 Xray 内核；0–86400 秒的整数，留空或填 0 为默认 300 秒。
+    // 0 是合法的清除值（后端 Normalize 接受 0=清除），前后端同一口径（148-P3-1）。
+    // 非 Xray 入站的存量值不在此拒绝：保存时自动清 0（见 toPayload，148-P3-2）。
     if (form.connIdleSeconds.trim()) {
       const v = Number(form.connIdleSeconds);
 
-      if (!Number.isInteger(v) || v < 1 || v > 86400) {
-        return "空闲超时须为 1–86400 秒的整数，留空为默认 300 秒";
-      }
-      if (form.kernelType !== "xray") {
-        return "空闲超时只支持 Xray 内核：sing-box 没有 Xray 式的空闲超时";
+      if (!Number.isInteger(v) || v < 0 || v > 86400) {
+        return "空闲超时须为 0–86400 秒的整数，留空或填 0 为默认 300 秒";
       }
     }
     if (
@@ -1164,8 +1162,8 @@ export function InboundFormModal({
                     <Input
                       description={
                         form.kernelType === "xray"
-                          ? "Xray policy connIdle：连接无数据超过该秒数即断开；留空不下发该段、走默认 300 秒"
-                          : "仅 Xray 内核支持空闲超时：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout）"
+                          ? "Xray policy connIdle：连接无数据超过该秒数即断开；留空或填 0 不下发该段、走默认 300 秒"
+                          : "仅 Xray 内核支持空闲超时：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout）；存量值会在保存时自动清除"
                       }
                       endContent={
                         <span className="text-xs text-default-400">秒</span>
@@ -1173,7 +1171,7 @@ export function InboundFormModal({
                       inputMode="numeric"
                       isDisabled={form.kernelType !== "xray"}
                       label="空闲超时"
-                      placeholder="留空为默认 300 秒"
+                      placeholder="留空或填 0 为默认 300 秒"
                       value={form.connIdleSeconds}
                       variant="bordered"
                       onChange={(e) =>
@@ -1183,6 +1181,23 @@ export function InboundFormModal({
                         )
                       }
                     />
+                    {form.kernelType !== "xray" &&
+                      form.connIdleSeconds.trim() !== "" && (
+                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider bg-default-50 px-3 py-2">
+                          <p className="text-xs text-warning-600">
+                            该入站为非 Xray 内核，存量空闲超时{" "}
+                            {form.connIdleSeconds}{" "}
+                            秒不受支持；保存时将自动清除该值，也可现在清除。
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="bordered"
+                            onPress={() => set("connIdleSeconds", "")}
+                          >
+                            清除空闲超时
+                          </Button>
+                        </div>
+                      )}
                     {showMeteringBlock && (
                       <div className="space-y-3 rounded-xl border border-divider p-3">
                         <div className="flex items-start gap-2">

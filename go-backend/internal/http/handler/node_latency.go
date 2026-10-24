@@ -616,12 +616,20 @@ func (h *Handler) syncNodeTargetChoices(prev, next []latencyTarget) {
 //   - No online/remote filtering here: renderLatency on the frontend
 //     owns that gate, and this handler must not fork its semantics.
 //     A targets/read failure degrades to "attach nothing" rather than
-//     failing the whole list.
+//     failing the whole list, and is logged (148-P3-4) so the outage is
+//     observable instead of looking like "no node ever chose targets".
 func (h *Handler) attachNodeLatency(items []map[string]interface{}) {
 	if h == nil || len(items) == 0 {
 		return
 	}
-	targets, _ := h.repo.ListNodeLatencyTargets()
+	targets, err := h.repo.ListNodeLatencyTargets()
+	if err != nil {
+		// 148-P3-4: a targets/read failure degrades to "attach nothing"
+		// rather than failing the whole list — but it must be logged,
+		// or every node's latencyTargets silently vanishes with no
+		// clue that the DB (not the configuration) is at fault.
+		log.Printf("attach node latency: ListNodeLatencyTargets query failed, latencyTargets omitted: %v", err)
+	}
 	for _, item := range items {
 		id := asInt64(item["id"], 0)
 		if id == 0 {
