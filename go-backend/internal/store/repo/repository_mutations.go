@@ -59,6 +59,7 @@ func (r *Repository) CreateUser(username, pwdHash string, roleID int, expTime, f
 		InFlow:            0,
 		OutFlow:           0,
 		FlowResetTime:     flowResetTime,
+		FlowLastResetTime: now,
 		Num:               num,
 		MaxConn:           maxConn,
 		CreatedTime:       now,
@@ -101,6 +102,7 @@ func (r *Repository) CreateUserTx(tx *gorm.DB, username, pwdHash string, roleID 
 		InFlow:            0,
 		OutFlow:           0,
 		FlowResetTime:     flowResetTime,
+		FlowLastResetTime: now,
 		Num:               num,
 		MaxConn:           maxConn,
 		CreatedTime:       now,
@@ -1076,8 +1078,11 @@ func insertUserTunnel(db *gorm.DB, userID, tunnelID int64, speedID interface{}, 
 		InFlow:        0,
 		OutFlow:       0,
 		FlowResetTime: flowResetTime,
-		ExpTime:       expTime,
-		Status:        status,
+		// R11X-005: counting starts now; stamp the monthly-reset
+		// marker so the row's first reset is its first reset day.
+		FlowLastResetTime: unixMilliNow(),
+		ExpTime:           expTime,
+		Status:            status,
 	}
 	return db.Create(&ut).Error
 }
@@ -2182,8 +2187,10 @@ func (r *Repository) EnsureUserTunnelGrant(userID, tunnelID int64) (int64, bool,
 		InFlow:        0,
 		OutFlow:       0,
 		FlowResetTime: flowReset,
-		ExpTime:       expTime,
-		Status:        1,
+		// R11X-005: see insertUserTunnel (marker = creation time).
+		FlowLastResetTime: unixMilliNow(),
+		ExpTime:           expTime,
+		Status:            1,
 	}
 	if err := r.db.Create(&ut).Error; err != nil {
 		return 0, false, err
