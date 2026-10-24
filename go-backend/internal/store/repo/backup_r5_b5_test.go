@@ -178,7 +178,7 @@ func TestR5B5NestedPreDeleteSkipWarnings(t *testing.T) {
 	backup := &model.BackupData{
 		Version: "1.0",
 		Tunnels: []model.TunnelBackup{
-			{ID: 1, Name: "t1", TrafficRatio: 1, Status: 1, CreatedTime: now, ChainTunnels: []model.ChainTunnelBackup{
+			{ID: 1, Name: "t1", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now, ChainTunnels: []model.ChainTunnelBackup{
 				{ID: 2, TunnelID: 1, NodeID: 999, Port: &port5001},
 			}},
 		},
@@ -274,7 +274,7 @@ func TestR5B5NestedPreDeleteSkipWarnings(t *testing.T) {
 	backupE := &model.BackupData{
 		Version: "1.0",
 		Tunnels: []model.TunnelBackup{
-			{ID: 1, Name: "t1", TrafficRatio: 1, Status: 1, CreatedTime: now, ChainTunnels: []model.ChainTunnelBackup{
+			{ID: 1, Name: "t1", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now, ChainTunnels: []model.ChainTunnelBackup{
 				{ID: 1, TunnelID: 1, NodeID: 1, Port: &port5001},
 			}},
 		},
