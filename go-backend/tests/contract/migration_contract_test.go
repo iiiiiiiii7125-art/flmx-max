@@ -47,16 +47,23 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 		assertCode(t, resp, 0)
 	})
 
-	t.Run("captcha verify remains compatible without cloudflare secret", func(t *testing.T) {
+	// R10X-008 / BC-R10-07（裁定点名更新，R10 集成适配登记）：secret
+	// 未配置时本地 data=="ok" 回退铸令牌已关闭，verify 返回未启用
+	// 语义且不铸令牌。此前的兼容断言（无 secret 铸令牌成功）与裁定
+	// 直接冲突，按新语义改断；铸令牌+一次性消费的正向对象由
+	// handler 层 TestR10B6CaptchaVerifyWithSecretStillWorks /
+	// TestR10B6CaptchaTokenPoolCappedAt1000 覆盖。
+	t.Run("captcha verify disabled without cloudflare secret", func(t *testing.T) {
 		verifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/captcha/verify", bytes.NewBufferString(`{"id":"captcha-token-1","data":"ok"}`))
 		verifyReq.Header.Set("Content-Type", "application/json")
 		verifyResp := httptest.NewRecorder()
 
 		router.ServeHTTP(verifyResp, verifyReq)
 
-		// R5-B2 D4: 统一信封 {code,msg,data,ts}，code 0 = 成功
+		// R5-B2 D4: 统一信封 {code,msg,data,ts}
 		var verifyOut struct {
-			Code int `json:"code"`
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
 			Data struct {
 				ValidToken string `json:"validToken"`
 			} `json:"data"`
@@ -64,11 +71,11 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 		if err := json.NewDecoder(verifyResp.Body).Decode(&verifyOut); err != nil {
 			t.Fatalf("decode captcha verify response: %v", err)
 		}
-		if verifyOut.Code != 0 || verifyOut.Data.ValidToken != "captcha-token-1" {
-			t.Fatalf("unexpected captcha verify payload: code=%d", verifyOut.Code)
+		if verifyOut.Code != -1 || !strings.Contains(verifyOut.Msg, "未启用") || verifyOut.Data.ValidToken != "" {
+			t.Fatalf("unexpected captcha verify payload: code=%d msg=%q", verifyOut.Code, verifyOut.Msg)
 		}
 
-		verifiedToken = verifyOut.Data.ValidToken
+		verifiedToken = ""
 	})
 
 	if err := r.DB().Exec(`
@@ -111,24 +118,20 @@ func TestCaptchaVerifyLoginContract(t *testing.T) {
 		assertCodeMsg(t, resp, -1, "验证码校验失败")
 	})
 
-	t.Run("captcha token is one-time and consumed by login", func(t *testing.T) {
-		if strings.TrimSpace(verifiedToken) == "" {
-			t.Fatalf("expected verified token from compatibility captcha verify")
+	// R10X-008 / BC-R10-07（同上裁定点名更新）：兼容回退关闭后，
+	// 未铸出的令牌不得被 login 接受；一次性消费的正向链（铸 →
+	// 消费 → 重放拒）由 handler 层 B6 两条用例覆盖（见上注）。
+	t.Run("unminted captcha token is rejected by login", func(t *testing.T) {
+		if strings.TrimSpace(verifiedToken) != "" {
+			t.Fatalf("compatibility verify must not mint tokens anymore")
 		}
 
-		loginBody := bytes.NewBufferString(`{"username":"admin@user","password":"admin@user","captchaId":"` + verifiedToken + `"}`)
+		loginBody := bytes.NewBufferString(`{"username":"admin@user","password":"admin@user","captchaId":"captcha-token-1"}`)
 		loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/user/login", loginBody)
 		loginReq.Header.Set("Content-Type", "application/json")
 		loginResp := httptest.NewRecorder()
 		router.ServeHTTP(loginResp, loginReq)
-		assertCode(t, loginResp, 0)
-
-		replayBody := bytes.NewBufferString(`{"username":"admin@user","password":"admin@user","captchaId":"` + verifiedToken + `"}`)
-		replayReq := httptest.NewRequest(http.MethodPost, "/api/v1/user/login", replayBody)
-		replayReq.Header.Set("Content-Type", "application/json")
-		replayResp := httptest.NewRecorder()
-		router.ServeHTTP(replayResp, replayReq)
-		assertCodeMsg(t, replayResp, -1, "验证码校验失败")
+		assertCodeMsg(t, loginResp, -1, "验证码校验失败")
 	})
 }
 
