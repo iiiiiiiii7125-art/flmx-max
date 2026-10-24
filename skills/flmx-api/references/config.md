@@ -78,9 +78,9 @@ Update a single configuration (admin only).
 }
 ```
 
-## POST /api/v1/announcement/get
+## GET /api/v1/announcement/get
 
-Get the site announcement (public endpoint).
+Get the site announcement (login required).
 
 **Method:** GET
 

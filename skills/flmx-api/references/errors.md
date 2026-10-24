@@ -7,8 +7,12 @@
 | `0` | Success | Use `data` field |
 | `-1` | Business error | Show `msg` to user |
 | `-2` | Server/DB error | Retry or report bug |
+| `-3` | Target address validation failed (monitoring SSRF check) | Check the target URL/host |
 | `401` | Unauthorized | Token expired/invalid, re-login |
 | `403` | Forbidden | Need admin privileges |
+| `409` | Same request already in progress | Retry shortly |
+| `429` | Rate limited | Wait and retry; read `Retry-After: 60` |
+| `500` | Parameter error (legacy; same class as `-1` elsewhere) | Check request body format |
 
 ## Common Error Messages (Chinese)
 

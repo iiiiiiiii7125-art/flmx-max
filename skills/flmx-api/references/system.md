@@ -17,11 +17,11 @@ Check GitHub for a newer panel release.
 Start an in-panel self-upgrade (admin only). Progress and outcome are polled via
 the status endpoint.
 
-## POST /api/v1/system/upgrade/status
+## GET /api/v1/system/upgrade/status
 
 Self-upgrade status.
 
-## POST /api/v1/announcement/get
+## GET /api/v1/announcement/get
 
 Current announcement (login required).
 
