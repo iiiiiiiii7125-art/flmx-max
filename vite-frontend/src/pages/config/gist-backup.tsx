@@ -6,6 +6,7 @@ import toast from "react-hot-toast";
 import {
   getGistBackupStatus,
   getGistBackupVersions,
+  restoreGistBackup,
   saveGistBackup,
   uploadGistBackup,
 } from "@/api";
@@ -22,18 +23,18 @@ import {
 // PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42，
 // 仅上传侧；从 Gist 恢复不在本轮范围，恢复仍走手动导入流程）。
 // PORT-3342/G-frontend（在 B1 前端基础上补齐）：Gist 版本列表展示
-// （最近 10 个）+ 恢复弹窗 UI；恢复执行链归 G-恢复链批，弹窗确认
-// 按钮本批暂不接线（见 RESTORE_WIRING_PENDING），待后端恢复端点落定
-// 后由集成时启用。另按用户钉死口径改 B1 文案：T-4 明文上传不放行
+// （最近 10 个）+ 恢复弹窗 UI；恢复执行已由 G-recovery 接线
+// （见 RESTORE_WIRING_PENDING = false 与弹窗确认按钮的 onRestore）。
+// 另按用户钉死口径改 B1 文案：T-4 明文上传不放行
 // （上传按钮禁用 + 保存/上传提交时明确拒绝，清除密码入口已撤下）、
 // T-2 自动上传默认关、T-1 令牌为个人账号持有。
 // 状态未加载时（含非管理员 403）渲染空，避免向非管理员暴露入口；
 // 后端同样以 403 兜底。令牌与密码只上行、不回显，绝不在界面写真实令牌。
 
-// PORT-3342/G-frontend：恢复执行接线点。true = 本批占位态：确认按钮
-// 保持禁用、不调用 restoreGistBackup、不执行任何恢复；集成时在
-// G-恢复链批后端端点落定后将此处置 false 并接通 restore 调用。
-const RESTORE_WIRING_PENDING = true;
+// PORT-3342/G-recovery：恢复执行已接线。false = 弹窗确认按钮调
+// restoreGistBackup（POST /backup/gist/restore），后端走我方导入尾钩子
+// 全集与 16 段全集；此前 G-frontend 占位态的 true 已由本批打开。
+const RESTORE_WIRING_PENDING = false;
 
 const INTERVALS: Array<[number, string]> = [
   [0, "关闭"],
@@ -169,7 +170,14 @@ export function GistBackup() {
 
         return;
       }
-      const list = (res.data ?? []).slice(0, 10);
+      // G-recovery 接线修正：后端 versions 端点返回 {versions: [...]}，
+      // 而非裸数组；两种形态都接受（裸数组为兼容兜底）。
+      const raw = res.data as unknown;
+      const list = (
+        Array.isArray(raw)
+          ? raw
+          : ((raw as { versions?: GistBackupVersion[] }).versions ?? [])
+      ).slice(0, 10);
 
       setVersions(list);
       if (list.length > 0 && restoreVersion === "") {
@@ -186,6 +194,29 @@ export function GistBackup() {
     void loadVersions();
   };
 
+  // PORT-3342/G-recovery：恢复执行（弹窗确认按钮的实际回调）。
+  // 恢复前未保存的设置先保存（与上传口径一致：save 失败即阻断恢复，
+  // 以免恢复用旧令牌/Gist id）；成功后 toast 并延迟刷新页面
+  // （恢复可能使用户掉线，与上游恢复后刷新口径一致）。
+  const restore = async (
+    version: string,
+    password: string,
+  ): Promise<boolean> => {
+    if (dirty && !(await save({}))) return false;
+
+    const res = await restoreGistBackup({ version, password });
+
+    if (res.code !== 0) {
+      toast.error(res.msg || "恢复失败");
+
+      return false;
+    }
+    toast.success("已从 Gist 恢复，页面即将刷新");
+    window.setTimeout(() => window.location.reload(), 1500);
+
+    return true;
+  };
+
   const failed = status.lastError !== "";
 
   return (
@@ -194,7 +225,7 @@ export function GistBackup() {
       <p className="text-sm text-gray-600 dark:text-gray-400">
         全量备份加密后上传到私有 Gist，同一 Gist 每次上传产生
         一个新版本；自动上传默认关闭。明文上传不放行：必须设置加密密码
-        才能上传。版本列表见下方，恢复入口为占位（恢复执行待接线）。
+        才能上传。版本列表见下方，恢复入口见下方。
       </p>
       {status.configured && status.lastAt > 0 && (
         <p className="flex flex-wrap items-center gap-x-1 text-xs text-default-500">
@@ -380,8 +411,7 @@ export function GistBackup() {
           </ul>
         )}
         <p className="text-xs text-default-500">
-          恢复弹窗为占位：恢复执行链归 G-恢复链批，确认按钮待后端恢复端点
-          落定后由集成时接线，本批不执行恢复。
+          恢复会按所选版本覆盖面板里的全部数据（Gist 设置除外）。
         </p>
       </div>
 
@@ -393,13 +423,14 @@ export function GistBackup() {
           versionsError={versionsError}
           onClose={() => setRestoreOpen(false)}
           onReload={() => void loadVersions()}
+          onRestore={restore}
         />
       )}
     </div>
   );
 }
 
-/** 从 Gist 恢复弹窗（PORT-3342/G-frontend 占位态：只选版本、不执行恢复）。 */
+/** 从 Gist 恢复弹窗（PORT-3342/G-recovery 已接线：确认调 restore 端点）。 */
 function GistRestoreModal({
   encrypted,
   initialVersion,
@@ -407,6 +438,7 @@ function GistRestoreModal({
   versionsError,
   onClose,
   onReload,
+  onRestore,
 }: {
   encrypted: boolean;
   initialVersion: string;
@@ -414,9 +446,11 @@ function GistRestoreModal({
   versionsError: string;
   onClose: () => void;
   onReload: () => void;
+  onRestore: (version: string, password: string) => Promise<boolean>;
 }) {
   const [version, setVersion] = useState(initialVersion);
   const [password, setPassword] = useState("");
+  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
     if (version === "" && versions !== null && versions.length > 0) {
@@ -490,17 +524,12 @@ function GistRestoreModal({
             />
             <p className="text-xs text-default-500">
               {encrypted
-                ? "恢复时需填写上传时用的加密密码（接线后使用）。"
-                : "当前 Gist 设置尚未标记加密；按明文不放行口径，上传均为加密，恢复时仍需填写上传时用的加密密码（接线后使用）。"}
+                ? "恢复时需填写上传时用的加密密码。"
+                : "当前 Gist 设置尚未标记加密；按明文不放行口径，上传均为加密，恢复时仍需填写上传时用的加密密码。"}
             </p>
           </div>
           <p className="text-xs text-default-500">
             恢复会覆盖面板里的全部数据（Gist 设置除外），之后可能需要重新登录。
-          </p>
-          <p className="text-xs text-warning-600">
-            恢复执行暂未接线：确认按钮已禁用，点击不会执行任何恢复；待
-            G-恢复链批后端恢复端点落定后由集成时启用（接线点： api/index.ts 的
-            restoreGistBackup）。
           </p>
         </ModalBody>
         <ModalFooter>
@@ -509,9 +538,14 @@ function GistRestoreModal({
           </Button>
           <Button
             color="primary"
-            isDisabled={RESTORE_WIRING_PENDING || !version}
-            onPress={() => {
-              // 占位：本批不执行恢复（见 RESTORE_WIRING_PENDING）。
+            isDisabled={RESTORE_WIRING_PENDING || !version || restoring}
+            onPress={async () => {
+              setRestoring(true);
+              try {
+                if (await onRestore(version, password)) onClose();
+              } finally {
+                setRestoring(false);
+              }
             }}
           >
             恢复

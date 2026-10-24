@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/scrypt"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/store/model"
 )
 
 // PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42
@@ -643,4 +644,79 @@ func gistVersionContent(ctx context.Context, token, id, version, password string
 		content = string(raw)
 	}
 	return gistOpen([]byte(content), password)
+}
+
+// --- restore（PORT-3342/G-recovery）---
+
+// gistRestoreTypes 是 Gist 恢复的段全集（T-3 钉死）：我方 16 段，
+// 与 repository.go validBackupTypes / 前端 BACKUP_TYPE_VALUES 同集。
+// 不得照抄上游 11 项类型表（丢 userInbounds、announcements、
+// monitorPermissions、userSubscriptions、serviceMonitors）。
+var gistRestoreTypes = []string{
+	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
+	"tunnelGroups", "userGroups", "permissions", "configs", "inbounds",
+	"userInbounds", "announcements", "monitorPermissions",
+	"userSubscriptions", "serviceMonitors",
+}
+
+// gistBackupRestore 按指定版本从 Gist 恢复：取版本内容（复用
+// gistVersionContent：版本校验→取版本文件→truncated 经 raw_url 再取
+// →gistOpen 解密，双认 flyx/flmx 信封）→JSON 解码为 BackupData 且
+// Version 非空才继续→恢复前先 ExportAll 做自动备份（O7-010：失败
+// 只记日志、继续导入，不得照抄上游的中止语义）→Import（16 段全集，
+// 其 1.0 版本门与 configs 段 FilterBackupConfigs 过滤仍在：Gist
+// 设置与凭据既不出备份、即使夹带也被滤掉，恢复不覆盖当前 Gist
+// 设置）→与现有 backupImport 完全相同的导入尾钩子全集
+// runBackupImportTailHooks（计量对账、configs 缓存失效、内核
+// reconcile、撤销清理、转发重推含 FINAL-P2-1 七段谓词、AutoBackup
+// 回执）。严禁只调内核 reconcile、严禁直调 Import 后收尾了事。
+// 仅管理员；请求体 {version, password}，password 为上传时用的加密
+// 密码（明文 Gist 内容可空密码直通，由 gistOpen 判定）。
+func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	if !isAdminRequest(r) {
+		response.WriteJSON(w, response.Err(403, "禁止访问敏感配置"))
+		return
+	}
+	var req struct {
+		Version  string `json:"version"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	cfg := h.gistConfig()
+	plain, _, err := gistVersionContent(r.Context(), cfg[gistConfigToken], cfg[gistConfigID], req.Version, req.Password)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("从 Gist 恢复失败："+err.Error()))
+		return
+	}
+	var backup model.BackupData
+	if err := json.Unmarshal(plain, &backup); err != nil {
+		response.WriteJSON(w, response.Err(-2, "备份内容不是合法的备份 JSON"))
+		return
+	}
+	if backup.Version == "" {
+		response.WriteJSON(w, response.Err(-2, "备份版本为空，拒绝恢复"))
+		return
+	}
+	autoBackup, err := h.repo.ExportAllContext(r.Context())
+	if err != nil {
+		// O7-010（与 backupImport 同口径）：导入前自动备份失败时只
+		// 记录警告、继续导入流程；数据库损坏时正是备份失败的时候，
+		// 此时最需要从完好的外部备份恢复。
+		log.Printf("gistBackupRestore: pre-import auto backup failed, continuing: %v", err)
+		autoBackup = nil
+	}
+	result, err := h.repo.ImportContext(r.Context(), &backup, gistRestoreTypes)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
+		return
+	}
+	h.runBackupImportTailHooks(result, &backup, gistRestoreTypes, autoBackup)
+	response.WriteJSON(w, response.OK(result))
 }
