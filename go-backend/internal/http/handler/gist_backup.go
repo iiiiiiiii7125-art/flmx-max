@@ -28,6 +28,15 @@ import (
 
 // PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42
 // go-backend/internal/http/handler/gist_backup.go，仅上传链）。
+// PORT-3342/G-backend（本批，在 B1 基础上）：
+//   - 新增 versions 端点（列 Gist history 最近 10 版本）；restore 端点
+//     本批不接（归 G-恢复链批），但恢复侧复用的取版本内容 helper
+//     gistVersionContent 与解密 gistOpen 已落到位，不触导入链。
+//   - T-4（用户钉死，比上游收紧）：未设加密密码时上传一律拒绝，
+//     不得明文离境；见 gistUploadLocked 开头的门禁。前端警示文案
+//     的改动归 G-前端批，本批只改后端语义 + 单测。
+//   - 加密信封解密侧双认 flyx/flmx 标记（写侧仍写 flyx，与上游
+//     线格式互通；见 gistOpen）。
 //
 // 与上游的偏差（均有意，见报告）：
 //   - 不含 versions/restore：从 Gist 恢复会走备份导入链（含导入重推
@@ -148,10 +157,23 @@ func gistEncrypt(plain []byte, password string) ([]byte, error) {
 }
 
 // gistOpen 还原 Gist 文件内容：加密信封需密码解密，明文原样返回。
-// 本轮上传侧不调用它（仅单测验证加密往返与未来恢复侧复用）。
+// 信封标记双认：上游写法 "flyx" 与我方品牌写法 "flmx" 均认作加密
+// 信封（写侧仍写 "flyx"，与上游线格式互通；其余信封字段两写法
+// 相同，故可共用同一解析）。本轮上传侧不调用它（仅单测验证加密
+// 往返与未来恢复侧复用）。
 func gistOpen(content []byte, password string) ([]byte, bool, error) {
 	var env gistEnvelope
-	if json.Unmarshal(content, &env) != nil || env.Format != gistEnvelopeFormat {
+	if json.Unmarshal(content, &env) != nil {
+		return content, false, nil
+	}
+	// 双认：任一标记等于信封格式即为加密信封；否则按明文原样返回。
+	// 直接用 map 判定，避免 struct 只有一个标记字段导致另一写法漏认。
+	var raw map[string]interface{}
+	if json.Unmarshal(content, &raw) != nil {
+		return content, false, nil
+	}
+	isEnvelope := raw["flyx"] == gistEnvelopeFormat || raw["flmx"] == gistEnvelopeFormat
+	if !isEnvelope {
 		return content, false, nil
 	}
 	if password == "" {
@@ -198,6 +220,12 @@ type gistDoc struct {
 	ID      string              `json:"id"`
 	HTMLURL string              `json:"html_url"`
 	Files   map[string]gistFile `json:"files"`
+	History []gistHistoryEntry  `json:"history"`
+}
+
+type gistHistoryEntry struct {
+	Version     string `json:"version"`
+	CommittedAt string `json:"committed_at"`
 }
 
 var errGistNotFound = errors.New("gist not found")
@@ -321,6 +349,13 @@ func (h *Handler) gistUpload(ctx context.Context, force bool) (gistUploadResult,
 
 func (h *Handler) gistUploadLocked(ctx context.Context, cfg map[string]string, token string, force bool, now int64) (gistUploadResult, error) {
 	password := cfg[gistConfigPassword]
+	// T-4（用户钉死，比上游放行+警告收紧）：未设加密密码时上传
+	// 必须拒绝。门禁放在内容导出与跳过判断之前：即使内容未变也
+	// 不得放行，且不得产生任何 GitHub 请求。自动循环同样经此门
+	// 禁，失败会经 gistUpload 写 lastAt/lastError，status 可见。
+	if password == "" {
+		return gistUploadResult{}, errText("未设置加密密码，禁止明文上传到 Gist：请先在 Gist 设置中填写加密密码后再上传")
+	}
 	content, hash, err := h.gistBackupContent(ctx, password)
 	if err != nil {
 		return gistUploadResult{}, err
@@ -513,4 +548,99 @@ func (h *Handler) gistBackupUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{"result": result, "status": gistStatus(h.gistConfig())}))
+}
+
+// --- versions（G-backend 新增；restore 本批不接）---
+
+type gistVersionView struct {
+	Version     string `json:"version"`
+	CommittedAt int64  `json:"committedAt"`
+}
+
+// gistBackupVersions 列出 Gist history 最近 10 个版本（version +
+// committedAt ms）。只列版本、不下载内容，故不需要加密密码；
+// 令牌与 gist_id 缺失时明确报错。restore 端点归 G-恢复链批，
+// 本端点不触发任何导入。
+func (h *Handler) gistBackupVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	if !isAdminRequest(r) {
+		response.WriteJSON(w, response.Err(403, "禁止访问敏感配置"))
+		return
+	}
+	cfg := h.gistConfig()
+	token := strings.TrimSpace(cfg[gistConfigToken])
+	if token == "" {
+		response.WriteJSON(w, response.ErrDefault("请先填写 GitHub 令牌"))
+		return
+	}
+	id := strings.TrimSpace(cfg[gistConfigID])
+	if id == "" {
+		response.WriteJSON(w, response.ErrDefault("尚未上传到 Gist，没有可列出的版本"))
+		return
+	}
+	var doc gistDoc
+	if err := gistRequest(r.Context(), http.MethodGet, gistAPIBase()+"/gists/"+id, token, nil, &doc); err != nil {
+		if errors.Is(err, errGistNotFound) {
+			response.WriteJSON(w, response.ErrDefault("Gist 不存在，可能已在 GitHub 上被删除"))
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault("获取版本列表失败："+err.Error()))
+		return
+	}
+	versions := make([]gistVersionView, 0, 10)
+	for _, entry := range doc.History {
+		if len(versions) >= 10 {
+			break
+		}
+		var committedAt int64
+		if t, err := time.Parse(time.RFC3339, entry.CommittedAt); err == nil {
+			committedAt = t.UnixMilli()
+		}
+		versions = append(versions, gistVersionView{Version: entry.Version, CommittedAt: committedAt})
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{"versions": versions}))
+}
+
+// gistVersionContent 取指定版本的 Gist 备份文件内容并解密，供未来
+// G-恢复链批复用；本批不接恢复导入链（不调用 Import、不触
+// backup_import_repush.go、不触发任何尾钩子）。
+// version 校验与上游 restore 一致：限 64 字、禁 /?#；文件缺失、
+// 大文件 raw_url 再取、加密信封解密均在此处理，返回
+// (plain, encrypted, err)。
+func gistVersionContent(ctx context.Context, token, id, version, password string) ([]byte, bool, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, false, errText("请先填写 GitHub 令牌")
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, false, errText("尚未上传到 Gist，没有可恢复的版本")
+	}
+	if version == "" || len(version) > 64 || strings.ContainsAny(version, "/?#") {
+		return nil, false, errText("版本不正确")
+	}
+	var doc gistDoc
+	if err := gistRequest(ctx, http.MethodGet, gistAPIBase()+"/gists/"+id+"/"+version, token, nil, &doc); err != nil {
+		if errors.Is(err, errGistNotFound) {
+			return nil, false, errText("Gist 版本不存在，可能已在 GitHub 上被删除")
+		}
+		return nil, false, err
+	}
+	file, ok := doc.Files[gistFileName]
+	if !ok {
+		return nil, false, errText("Gist 里没有备份文件 " + gistFileName)
+	}
+	content := file.Content
+	if file.Truncated {
+		if file.RawURL == "" {
+			return nil, false, errText("备份文件过大，无法读取完整内容")
+		}
+		var raw []byte
+		if err := gistRequest(ctx, http.MethodGet, file.RawURL, token, nil, &raw); err != nil {
+			return nil, false, err
+		}
+		content = string(raw)
+	}
+	return gistOpen([]byte(content), password)
 }
