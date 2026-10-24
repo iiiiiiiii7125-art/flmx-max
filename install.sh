@@ -476,8 +476,14 @@ WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/flux_agent
 Environment=GODEBUG=disablethp=1
 Restart=on-failure
-StandardOutput=null
-StandardError=null
+# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
+# discarded the agent's startup logs, so a poisoned gost.json left no
+# diagnosable failure reason. Journal keeps them queryable via
+# journalctl -u flux_agent. The binary additionally appends startup
+# failures to agent-startup.log next to agent-upgrade.log (go-gost/main.go).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=flux_agent
 
 [Install]
 WantedBy=multi-user.target
@@ -494,8 +500,10 @@ command="$INSTALL_DIR/flux_agent"
 directory="$INSTALL_DIR"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
-output_log="/dev/null"
-error_log="/dev/null"
+# R17-C (R17-X-01): same rationale as the systemd unit — /dev/null
+# discarded startup logs; keep them in files for post-mortem diagnosis.
+output_log="/var/log/flux_agent.log"
+error_log="/var/log/flux_agent.err.log"
 
 depend() {
   need net
