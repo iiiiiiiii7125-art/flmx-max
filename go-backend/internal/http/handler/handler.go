@@ -262,6 +262,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system/upgrade", h.systemUpgrade)
 	mux.HandleFunc("/api/v1/system/upgrade/status", h.systemUpgradeStatus)
 	mux.HandleFunc("/api/v1/backup/export", h.backupExport)
+	mux.HandleFunc("/api/v1/backup/gist/status", h.gistBackupStatus)
+	mux.HandleFunc("/api/v1/backup/gist/save", h.gistBackupSave)
+	mux.HandleFunc("/api/v1/backup/gist/upload", h.gistBackupUpload)
 	mux.HandleFunc("/api/v1/backup/import", h.backupImport)
 	mux.HandleFunc("/api/v1/backup/restore", h.backupImport)
 	mux.HandleFunc("/api/v1/api/v1/backup/export", h.backupExport)
@@ -675,6 +678,10 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 	delete(cfgMap, "license_key")
 	delete(cfgMap, "license_machine_id")
 	delete(cfgMap, "machine_fingerprint")
+	// PORT-3342/B1：Gist 令牌与密码即使对管理员也不经 config/list
+	// 下发（与上游一致）；读取走专用的 gist/status 端点（仅 tokenHint）。
+	delete(cfgMap, gistConfigToken)
+	delete(cfgMap, gistConfigPassword)
 	response.WriteJSON(w, response.OK(cfgMap))
 }
 

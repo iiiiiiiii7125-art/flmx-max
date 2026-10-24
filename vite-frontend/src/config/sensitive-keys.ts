@@ -24,6 +24,9 @@ export const SENSITIVE_CONFIG_KEYS = new Set([
   "notify_telegram_chat_id",
   "notify_telegram_api_base",
   "notify_webhook_url",
+  // PORT-3342/B1：Gist 备份凭据（后端 sensitiveConfigKeys 同步新增）。
+  "gist_token",
+  "gist_password",
 ]);
 
 // 与 config/site.ts 的 CACHE_PREFIX 保持一致（配置缓存键前缀）。
