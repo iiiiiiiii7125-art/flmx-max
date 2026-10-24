@@ -212,11 +212,11 @@ cat ~/.agents/skills/flmx-api/SKILL.md >> ~/.claude/CLAUDE.md
 
 ## 发布
 
-技能包随 FLMX 产品版本一起发布，不单独打 tag：推送**纯数字 tag**（与产品版本相同，如 `1.4.4`）会同时触发产品构建与技能包发布流水线，技能包版本号由流水线按 tag 同步（SKILL.md 的 `version` 与 npm 包版本在发布时对齐到该 tag）。
+技能包随 FLMX 产品版本一起发布，不单独打 tag：推送**纯数字 tag**（与产品版本相同，如 `1.4.6`）会同时触发产品构建与技能包发布流水线，技能包版本号由流水线按 tag 同步（SKILL.md 的 `version` 与 npm 包版本在发布时对齐到该 tag）。
 
 ```bash
 # 随产品版本发布（示例）
-git tag 1.4.4
+git tag 1.4.6
 git push --tags
 ```
 
