@@ -189,7 +189,7 @@ func addTransportQuery(q url.Values, t Transport) {
 		}
 	case TransportXHTTP:
 		q.Set("path", t.Path)
-		q.Set("mode", t.Mode)
+		q.Set("mode", canonicalXHTTPMode(t.Mode))
 		if t.Host != "" {
 			q.Set("host", t.Host)
 		}
@@ -304,7 +304,7 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 			xo = append(xo, yamlField{"host", in.Transport.Host})
 		}
 		if in.Transport.Mode != "" {
-			xo = append(xo, yamlField{"mode", in.Transport.Mode})
+			xo = append(xo, yamlField{"mode", canonicalXHTTPMode(in.Transport.Mode)})
 		}
 		p = append(p, yamlField{"xhttp-opts", xo})
 	}

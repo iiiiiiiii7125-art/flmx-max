@@ -109,6 +109,21 @@ func xraySettings(in Inbound) (obj, error) {
 	return nil, fmt.Errorf("Xray 不支持协议 %s", in.Protocol)
 }
 
+// canonicalXHTTPMode 是 R12X-002 自建渲染侧归一：备份逐字恢复变体
+// （R5X-024 受保护行为，落库逐字不动）绕过 Normalize 直达原文消费点，
+// 故渲染时再做一次小写愈合——与 normalizeTransport 的合法集
+// {auto, packet-up, stream-up, stream-one} 同集（EqualFold 意义下）；
+// 愈合后仍域外（含空值）回退默认 auto，安全方向，与 chain.go 空值
+// 回退同向。只愈合渲染产物，绝不回写原对象、不改落库值、
+// 不改 normalizeTransport 本体。
+func canonicalXHTTPMode(mode string) string {
+	healed := strings.ToLower(strings.TrimSpace(mode))
+	if !xhttpModes[healed] {
+		return defaultXHTTPMode
+	}
+	return healed
+}
+
 func xrayStream(in Inbound) obj {
 	t := in.Transport
 	stream := obj{"network": t.Type, "security": in.Security.Type}
@@ -122,7 +137,7 @@ func xrayStream(in Inbound) obj {
 	case TransportGRPC:
 		stream["grpcSettings"] = obj{"serviceName": t.ServiceName}
 	case TransportXHTTP:
-		x := obj{"path": t.Path, "mode": t.Mode}
+		x := obj{"path": t.Path, "mode": canonicalXHTTPMode(t.Mode)}
 		if t.Host != "" {
 			x["host"] = t.Host
 		}

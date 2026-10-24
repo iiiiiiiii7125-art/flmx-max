@@ -484,7 +484,7 @@ func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 	case TransportGRPC:
 		stream["grpcSettings"] = obj{"serviceName": t.ServiceName}
 	case TransportXHTTP:
-		s := obj{"path": firstNonEmptyString(t.Path, "/"), "mode": firstNonEmptyString(t.Mode, defaultXHTTPMode)}
+		s := obj{"path": firstNonEmptyString(t.Path, "/"), "mode": canonicalXHTTPMode(t.Mode)}
 		if t.HostHeader != "" {
 			s["host"] = t.HostHeader
 		}
