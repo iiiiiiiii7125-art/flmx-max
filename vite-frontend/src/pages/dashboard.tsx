@@ -741,11 +741,15 @@ function UserDashboard() {
               {renderProgressBar(
                 calculateUsagePercentage("flow"),
                 "sm",
-                userInfo.flow === 99999 && !userInfo.flowMiB,
+                // R10X-006（K-001）：99999 哨兵之外，精确限额 <=0（0=不限额，
+                // 与后端执法同读法）同样按无限制形态呈现。
+                (userInfo.flow === 99999 && !userInfo.flowMiB) ||
+                  flowLimitBytes(userInfo.flow || 0, userInfo.flowMiB) <= 0,
               )}
               <div className="flex items-center justify-between mt-1">
                 <p className="text-xs text-default-500 truncate">
-                  {userInfo.flow === 99999 && !userInfo.flowMiB
+                  {(userInfo.flow === 99999 && !userInfo.flowMiB) ||
+                  flowLimitBytes(userInfo.flow || 0, userInfo.flowMiB) <= 0
                     ? "无限制"
                     : `${calculateUsagePercentage("flow").toFixed(1)}%`}
                 </p>
@@ -986,7 +990,12 @@ function UserDashboard() {
                             {renderProgressBar(
                               calculateTunnelFlowPercentage(tunnel),
                               "sm",
-                              tunnel.flow === 99999 && !tunnel.flowMiB,
+                              // R10X-006（K-001）：同总流量卡——limit<=0 亦无限制。
+                              (tunnel.flow === 99999 && !tunnel.flowMiB) ||
+                                flowLimitBytes(
+                                  tunnel.flow || 0,
+                                  tunnel.flowMiB,
+                                ) <= 0,
                             )}
                           </div>
                         </div>

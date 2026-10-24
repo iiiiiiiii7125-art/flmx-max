@@ -36,6 +36,9 @@ export function flowLimitBytes(flowGB: number, flowMiB?: number): number {
 
 export function formatFlowLimit(flowGB: number, flowMiB?: number): string {
   if (flowGB === 99999 && !flowMiB) return "无限制";
+  // R10X-006（K-001）：后端 R9X-001 后 0 读作不限额；精确限额（经
+  // FlowMiB）<=0 才是不限，(0,512) 这类亚 GB 限额仍须显示数值。
+  if (flowLimitMiB(flowGB, flowMiB) <= 0) return "无限制";
 
   return formatTraffic(flowLimitBytes(flowGB, flowMiB));
 }
@@ -59,7 +62,9 @@ export function parseTrafficInput(
   if (
     !value.trim() ||
     !Number.isFinite(amount) ||
-    amount <= 0 ||
+    // R10X-006（K-001）：0 是后端显式接纳的合法值（不限额），编辑面须
+    // 放行 0 值原样回存；仅负值无效。
+    amount < 0 ||
     !Number.isSafeInteger(mib)
   ) {
     return null;
