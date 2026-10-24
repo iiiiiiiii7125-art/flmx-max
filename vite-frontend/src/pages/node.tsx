@@ -2337,7 +2337,9 @@ export default function NodePage({
                               </div>
                             )}
 
-                            {node.latency || latencyPoolEmpty ? (
+                            {node.latency ||
+                            latencyPoolEmpty ||
+                            node.latencyTargets?.points.length === 0 ? (
                               <div className="mb-4 empty:hidden">
                                 {renderLatency(node, "card")}
                               </div>

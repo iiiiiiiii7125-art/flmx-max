@@ -267,12 +267,20 @@ export default function GroupPage({
         setUsers(Array.isArray(userRes.data) ? userRes.data : []);
       }
 
-      if (
-        tunnelGroupRes.code !== 0 ||
-        userGroupRes.code !== 0 ||
-        permissionRes.code !== 0
-      ) {
-        toast.error("部分分组数据加载失败");
+      // 五路均为分配弹窗选择器的数据源：任一路失败都要指明，
+      // 否则空选择器会被误读为“确实没有”（与 subscription.tsx D5-11 同口径）。
+      const failedParts = [
+        tunnelGroupRes.code !== 0 ? "隧道分组" : null,
+        userGroupRes.code !== 0 ? "用户分组" : null,
+        permissionRes.code !== 0 ? "分组权限" : null,
+        tunnelRes.code !== 0 ? "隧道列表" : null,
+        userRes.code !== 0 ? "用户列表" : null,
+      ].filter(Boolean);
+
+      if (failedParts.length > 0) {
+        toast.error(
+          `${failedParts.join("与")}加载失败，分组数据可能不完整，请刷新重试`,
+        );
       }
     } catch {
       toast.error("分组数据加载失败");

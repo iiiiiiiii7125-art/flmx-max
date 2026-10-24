@@ -16,6 +16,7 @@ import {
   ModalFooter,
 } from "@/shadcn-bridge/heroui/modal";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
+import { Switch } from "@/shadcn-bridge/heroui/switch";
 import {
   Table,
   TableHeader,
@@ -319,7 +320,7 @@ export default function LimitPage({
                       <div className="flex items-center gap-2">
                         <div
                           className={`shrink-0 w-2 h-2 rounded-full ${
-                            rule.status === 1 ? "bg-success" : "bg-danger"
+                            rule.status === 1 ? "bg-success" : "bg-default-300"
                           }`}
                         />
                         <span className="font-medium text-foreground text-sm">
@@ -374,7 +375,7 @@ export default function LimitPage({
                         size="sm"
                         variant="flat"
                       >
-                        {rule.status === 1 ? "运行" : "异常"}
+                        {rule.status === 1 ? "启用" : "停用"}
                       </Chip>
                     </div>
                   </CardHeader>
@@ -518,6 +519,25 @@ export default function LimitPage({
                       }))
                     }
                   />
+
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      isSelected={form.status === 1}
+                      size="sm"
+                      onValueChange={(on) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          status: on ? 1 : 0,
+                        }))
+                      }
+                    />
+                    <span className="text-sm text-default-700">
+                      启用此规则
+                    </span>
+                    <span className="text-xs text-default-500">
+                      停用后规则不再生效，可随时重新启用
+                    </span>
+                  </div>
                 </div>
               </ModalBody>
               <ModalFooter>

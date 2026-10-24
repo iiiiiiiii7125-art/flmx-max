@@ -43,8 +43,6 @@ export default function ChangePasswordPage() {
       newErrors.newUsername = "请输入新用户名";
     } else if (form.newUsername.length < 3) {
       newErrors.newUsername = "用户名长度至少3位";
-    } else if (form.newUsername.length > 20) {
-      newErrors.newUsername = "用户名长度不能超过20位";
     }
 
     if (!form.currentPassword.trim()) {
@@ -55,8 +53,6 @@ export default function ChangePasswordPage() {
       newErrors.newPassword = "请输入新密码";
     } else if (form.newPassword.length < 6) {
       newErrors.newPassword = "新密码长度不能少于6位";
-    } else if (form.newPassword.length > 20) {
-      newErrors.newPassword = "新密码长度不能超过20位";
     }
 
     if (!form.confirmPassword.trim()) {
