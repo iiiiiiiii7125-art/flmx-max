@@ -82,7 +82,7 @@ func r8b2CheckMihomoOnlySingleFace(t *testing.T, cipher string) {
 	if _, err := chainTargetFromProxy(ce); err == nil {
 		t.Fatalf("cipher=%s Xray 链式面须在面板侧被拒（Xray 本体 exit 23）", cipher)
 	}
-	if _, err := xrayChainOutbound(ce, "via-1"); err == nil {
+	if _, err := xrayChainOutbound(ce, "via-1", 0); err == nil {
 		t.Fatalf("cipher=%s xrayChainOutbound 须报错、不产出可下发配置", cipher)
 	}
 	if err := CheckChainWith(TypeXray, ce, RenderOptions{}); err == nil {

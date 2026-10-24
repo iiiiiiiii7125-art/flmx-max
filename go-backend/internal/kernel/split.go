@@ -210,10 +210,16 @@ func (m splitMatch) xray() []obj {
 
 // xraySplitRoutes returns the outbounds and rules for an inbound's split
 // rules; they go before its default (chained) exit.
-func xraySplitRoutes(in Inbound) ([]interface{}, []interface{}, error) {
+func xraySplitRoutes(in Inbound, levels map[int64]int) ([]interface{}, []interface{}, error) {
 	var outbounds, rules []interface{}
 	tags := []string{in.Tag()}
 	users := in.countedUsers()
+	// An idle inbound's split-direct matches must leave through its
+	// idle outbounds (plain for the owner, combined for counted users),
+	// not the shared direct / mark outbounds — otherwise matched
+	// traffic runs the level-0 timeout. Split-proxy matches exit
+	// through chain outbounds, which carry the level on their user.
+	idleLevel := levels[in.ID]
 	for i, r := range in.Split {
 		ownerTag := "direct"
 		userTag := userOutboundTag
@@ -222,7 +228,7 @@ func xraySplitRoutes(in Inbound) ([]interface{}, []interface{}, error) {
 			ownerTag, userTag = "block", func(int64) string { return "block" }
 		case SplitProxy:
 			ownerTag = splitTag(in, i)
-			ob, err := xrayChainOutbound(*r.Via, ownerTag)
+			ob, err := xrayChainOutbound(*r.Via, ownerTag, idleLevel)
 			if err != nil {
 				return nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
 			}
@@ -230,7 +236,7 @@ func xraySplitRoutes(in Inbound) ([]interface{}, []interface{}, error) {
 			for _, id := range users {
 				// A5-04：按用户出站渲染失败必须与属主路径同口径整单
 				// 报错——此前吞掉 err 后对 nil ob 做类型断言可 panic。
-				ob, err := xrayChainOutbound(*r.Via, splitUserTag(in, i, id))
+				ob, err := xrayChainOutbound(*r.Via, splitUserTag(in, i, id), idleLevel)
 				if err != nil {
 					return nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
 				}
@@ -239,6 +245,10 @@ func xraySplitRoutes(in Inbound) ([]interface{}, []interface{}, error) {
 			}
 			i := i
 			userTag = func(id int64) string { return splitUserTag(in, i, id) }
+		}
+		if r.target() == SplitDirect && idleLevel > 0 {
+			ownerTag = connIdleOutboundTag(in.ID)
+			userTag = func(id int64) string { return connIdleUserOutboundTag(in.ID, id) }
 		}
 		for _, m := range r.match().xray() {
 			for _, id := range users {
