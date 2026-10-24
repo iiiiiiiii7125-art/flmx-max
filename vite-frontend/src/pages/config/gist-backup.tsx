@@ -1,16 +1,39 @@
-import type { GistBackupStatus } from "@/api";
+import type { GistBackupStatus, GistBackupVersion } from "@/api";
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
-import { getGistBackupStatus, saveGistBackup, uploadGistBackup } from "@/api";
+import {
+  getGistBackupStatus,
+  getGistBackupVersions,
+  saveGistBackup,
+  uploadGistBackup,
+} from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input } from "@/shadcn-bridge/heroui/input";
+import {
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+} from "@/shadcn-bridge/heroui/modal";
 
 // PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42，
 // 仅上传侧；从 Gist 恢复不在本轮范围，恢复仍走手动导入流程）。
+// PORT-3342/G-frontend（在 B1 前端基础上补齐）：Gist 版本列表展示
+// （最近 10 个）+ 恢复弹窗 UI；恢复执行链归 G-恢复链批，弹窗确认
+// 按钮本批暂不接线（见 RESTORE_WIRING_PENDING），待后端恢复端点落定
+// 后由集成时启用。另按用户钉死口径改 B1 文案：T-4 明文上传不放行
+// （上传按钮禁用 + 保存/上传提交时明确拒绝，清除密码入口已撤下）、
+// T-2 自动上传默认关、T-1 令牌为个人账号持有。
 // 状态未加载时（含非管理员 403）渲染空，避免向非管理员暴露入口；
-// 后端同样以 403 兜底。令牌与密码只上行、不回显。
+// 后端同样以 403 兜底。令牌与密码只上行、不回显，绝不在界面写真实令牌。
+
+// PORT-3342/G-frontend：恢复执行接线点。true = 本批占位态：确认按钮
+// 保持禁用、不调用 restoreGistBackup、不执行任何恢复；集成时在
+// G-恢复链批后端端点落定后将此处置 false 并接通 restore 调用。
+const RESTORE_WIRING_PENDING = true;
 
 const INTERVALS: Array<[number, string]> = [
   [0, "关闭"],
@@ -37,9 +60,16 @@ export function GistBackup() {
   const [status, setStatus] = useState<GistBackupStatus | null>(null);
   const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
+  // T-2：自动上传默认关——初始值 0（INTERVALS 首项「关闭」），
+  // status 载入后以服务端 intervalHours 为准（未设置时服务端亦为 0）。
   const [intervalHours, setIntervalHours] = useState(0);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [versions, setVersions] = useState<GistBackupVersion[] | null>(null);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState("");
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreVersion, setRestoreVersion] = useState("");
 
   const apply = (s: GistBackupStatus) => {
     setStatus(s);
@@ -61,10 +91,24 @@ export function GistBackup() {
     password !== "" ||
     intervalHours !== status.intervalHours;
 
+  // T-4 阻断态：已存密码或本次新填密码任一成立才可上传。
+  const hasPassword = status.encrypted || password !== "";
+
   const save = async (patch: {
     clearToken?: boolean;
     clearPassword?: boolean;
   }): Promise<boolean> => {
+    // T-4：明文上传不放行——提交时明确拒绝。已存密码或本次新填密码
+    // 任一成立才放行；清除令牌（关闭 Gist 配置）本身不产生上传，故豁免。
+    // 注意：UI 已撤下「不再加密」入口，不再发送 clearPassword: true；
+    // 字段保留仅为与 B1 后端 save 契约兼容。
+    const willHavePassword = Boolean(status?.encrypted) || password !== "";
+
+    if (!patch.clearToken && !willHavePassword) {
+      toast.error("必须设置加密密码才能上传：请先填写加密密码");
+
+      return false;
+    }
     setSaving(true);
     try {
       const res = await saveGistBackup({
@@ -110,14 +154,47 @@ export function GistBackup() {
     }
   };
 
+  // PORT-3342/G-frontend：版本列表按需拉取（最近 10 个，后端已 cap 10，
+  // 前端再 slice 一次兜底）。versions 端点由 G-后端批落定；端点未落定前
+  // 拉取失败只显示错误文案，不关闭卡片、不阻断上传侧。
+  const loadVersions = async () => {
+    setVersionsLoading(true);
+    setVersionsError("");
+    try {
+      const res = await getGistBackupVersions();
+
+      if (res.code !== 0) {
+        setVersionsError(res.msg || "获取版本列表失败");
+        setVersions(null);
+
+        return;
+      }
+      const list = (res.data ?? []).slice(0, 10);
+
+      setVersions(list);
+      if (list.length > 0 && restoreVersion === "") {
+        setRestoreVersion(list[0].version);
+      }
+    } finally {
+      setVersionsLoading(false);
+    }
+  };
+
+  const openRestore = (version?: string) => {
+    if (version) setRestoreVersion(version);
+    setRestoreOpen(true);
+    void loadVersions();
+  };
+
   const failed = status.lastError !== "";
 
   return (
     <div className="space-y-4">
       <h3 className="text-lg font-medium">上传到 GitHub Gist</h3>
       <p className="text-sm text-gray-600 dark:text-gray-400">
-        全量备份加密（可选）后上传到私有 Gist，同一 Gist 每次上传产生
-        一个新版本；自动上传默认关闭。恢复仍用上方导入流程。
+        全量备份加密后上传到私有 Gist，同一 Gist 每次上传产生
+        一个新版本；自动上传默认关闭。明文上传不放行：必须设置加密密码
+        才能上传。版本列表见下方，恢复入口为占位（恢复执行待接线）。
       </p>
       {status.configured && status.lastAt > 0 && (
         <p className="flex flex-wrap items-center gap-x-1 text-xs text-default-500">
@@ -169,20 +246,22 @@ export function GistBackup() {
               </button>
             </>
           ) : (
-            "只需 gist 权限的令牌，保存后不再显示"
+            "个人账号 classic token 需 gist 权限，保存后不再显示"
           )}
         </p>
       </div>
 
       <div className="space-y-1">
         <label className="text-sm font-medium" htmlFor="gist-password">
-          加密密码（可选）
+          加密密码
         </label>
         <Input
           aria-label="加密密码"
           autoComplete="new-password"
           id="gist-password"
-          placeholder={status.encrypted ? "已设置" : "留空则不加密"}
+          placeholder={
+            status.encrypted ? "已设置" : "必填：上传前必须设置加密密码"
+          }
           type="password"
           value={password}
           variant="bordered"
@@ -190,23 +269,11 @@ export function GistBackup() {
         />
         <p className="text-xs text-default-500">
           {status.encrypted ? (
-            <>
-              已设置，留空不修改 ·{" "}
-              <button
-                className="text-danger"
-                type="button"
-                onClick={() => void save({ clearPassword: true })}
-              >
-                不再加密
-              </button>
-            </>
+            "已设置，留空不修改 · 如需更换，直接输入新密码后保存（加密密码不可清除为空）"
           ) : (
-            <>
-              填了就先加密再上传。
-              <span className="text-warning-600">
-                不加密时，拿到 Gist 链接的人能看到节点密码等信息
-              </span>
-            </>
+            <span className="text-danger">
+              必须设置加密密码才能上传（明文上传不放行）
+            </span>
           )}
         </p>
       </div>
@@ -228,12 +295,17 @@ export function GistBackup() {
             </option>
           ))}
         </select>
+        <p className="text-xs text-default-500">
+          默认关闭：未开启前不向外上传。
+        </p>
       </div>
 
       <div className="flex flex-wrap gap-2">
         <Button
           color="primary"
-          isDisabled={!status.configured && token.trim() === ""}
+          isDisabled={
+            (!status.configured && token.trim() === "") || !hasPassword
+          }
           isLoading={uploading}
           size="sm"
           onPress={upload}
@@ -251,6 +323,201 @@ export function GistBackup() {
           </Button>
         )}
       </div>
+      {!hasPassword && (
+        <p className="text-xs text-danger">
+          必须设置加密密码才能上传（明文上传不放行）：上传按钮已禁用，
+          保存时亦会明确拒绝。
+        </p>
+      )}
+
+      <div className="space-y-2 border-t border-divider pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-sm font-medium">Gist 版本（最近 10 个）</h4>
+          <Button
+            isDisabled={!status.configured}
+            isLoading={versionsLoading}
+            size="sm"
+            variant="flat"
+            onPress={() => void loadVersions()}
+          >
+            刷新版本列表
+          </Button>
+        </div>
+        {!status.configured && (
+          <p className="text-xs text-default-500">
+            先保存令牌并完成一次上传后，可在此查看版本并打开恢复入口。
+          </p>
+        )}
+        {versionsError !== "" && (
+          <p className="text-xs text-danger">{versionsError}</p>
+        )}
+        {versions !== null && versions.length === 0 && (
+          <p className="text-xs text-default-500">暂无版本。</p>
+        )}
+        {versions !== null && versions.length > 0 && (
+          <ul className="space-y-1">
+            {versions.map((v, i) => (
+              <li
+                key={v.version}
+                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+              >
+                <span>
+                  {formatTime(v.committedAt)}
+                  {i === 0 ? "（最新）" : ""}
+                  <span className="ml-2 text-xs text-default-500">
+                    {v.version}
+                  </span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="light"
+                  onPress={() => openRestore(v.version)}
+                >
+                  恢复此版本
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-xs text-default-500">
+          恢复弹窗为占位：恢复执行链归 G-恢复链批，确认按钮待后端恢复端点
+          落定后由集成时接线，本批不执行恢复。
+        </p>
+      </div>
+
+      {restoreOpen && (
+        <GistRestoreModal
+          encrypted={status.encrypted}
+          initialVersion={restoreVersion}
+          versions={versions}
+          versionsError={versionsError}
+          onClose={() => setRestoreOpen(false)}
+          onReload={() => void loadVersions()}
+        />
+      )}
     </div>
+  );
+}
+
+/** 从 Gist 恢复弹窗（PORT-3342/G-frontend 占位态：只选版本、不执行恢复）。 */
+function GistRestoreModal({
+  encrypted,
+  initialVersion,
+  versions,
+  versionsError,
+  onClose,
+  onReload,
+}: {
+  encrypted: boolean;
+  initialVersion: string;
+  versions: GistBackupVersion[] | null;
+  versionsError: string;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  const [version, setVersion] = useState(initialVersion);
+  const [password, setPassword] = useState("");
+
+  useEffect(() => {
+    if (version === "" && versions !== null && versions.length > 0) {
+      setVersion(versions[0].version);
+    }
+  }, [version, versions]);
+
+  return (
+    <Modal
+      isOpen
+      backdrop="blur"
+      classNames={{
+        base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
+      }}
+      onOpenChange={(open) => !open && onClose()}
+    >
+      <ModalContent>
+        <ModalHeader>从 Gist 恢复</ModalHeader>
+        <ModalBody className="space-y-4">
+          <div className="space-y-1">
+            <label
+              className="text-sm font-medium"
+              htmlFor="gist-restore-version"
+            >
+              版本
+            </label>
+            <select
+              aria-label="版本"
+              className={SELECT_CLASS}
+              disabled={versions === null}
+              id="gist-restore-version"
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+            >
+              {versions === null && <option>正在加载...</option>}
+              {versions?.map((v, i) => (
+                <option key={v.version} value={v.version}>
+                  {formatTime(v.committedAt)}
+                  {i === 0 ? "（最新）" : ""}
+                </option>
+              ))}
+            </select>
+            {versionsError !== "" && (
+              <p className="text-xs text-danger">{versionsError}</p>
+            )}
+            {versions !== null && versions.length === 0 && (
+              <p className="text-xs text-default-500">暂无版本。</p>
+            )}
+            {versionsError !== "" && (
+              <Button size="sm" variant="flat" onPress={onReload}>
+                重新加载版本
+              </Button>
+            )}
+          </div>
+          <div className="space-y-1">
+            <label
+              className="text-sm font-medium"
+              htmlFor="gist-restore-password"
+            >
+              加密密码
+            </label>
+            <Input
+              aria-label="加密密码"
+              autoComplete="off"
+              id="gist-restore-password"
+              placeholder="上传时用的加密密码"
+              type="password"
+              value={password}
+              variant="bordered"
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <p className="text-xs text-default-500">
+              {encrypted
+                ? "恢复时需填写上传时用的加密密码（接线后使用）。"
+                : "当前 Gist 设置尚未标记加密；按明文不放行口径，上传均为加密，恢复时仍需填写上传时用的加密密码（接线后使用）。"}
+            </p>
+          </div>
+          <p className="text-xs text-default-500">
+            恢复会覆盖面板里的全部数据（Gist 设置除外），之后可能需要重新登录。
+          </p>
+          <p className="text-xs text-warning-600">
+            恢复执行暂未接线：确认按钮已禁用，点击不会执行任何恢复；待
+            G-恢复链批后端恢复端点落定后由集成时启用（接线点： api/index.ts 的
+            restoreGistBackup）。
+          </p>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="light" onPress={onClose}>
+            取消
+          </Button>
+          <Button
+            color="primary"
+            isDisabled={RESTORE_WIRING_PENDING || !version}
+            onPress={() => {
+              // 占位：本批不执行恢复（见 RESTORE_WIRING_PENDING）。
+            }}
+          >
+            恢复
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
