@@ -2213,6 +2213,16 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 
+	// R13X-001（P2）：导入成功后对受影响节点集补一次转发重布（见
+	// backup_import_repush.go）。放在撤销清理之后，使重推下发的是
+	// 导入终态；离线节点不在此列（重连路径行为不变）。重推失败只
+	// 披露进回执，不改写导入成功结论。
+	if outcome := h.repushForwardRuntimeAfterImport(result, &req.BackupData); len(outcome.attempted) > 0 || len(outcome.warnings) > 0 {
+		result.RepushNodeIDs = outcome.attempted
+		result.RepushFailedNodeIDs = outcome.failed
+		result.ImportWarnings = append(result.ImportWarnings, outcome.warnings...)
+	}
+
 	result.AutoBackup = autoBackup
 	response.WriteJSON(w, response.OK(result))
 }
