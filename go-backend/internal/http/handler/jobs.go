@@ -389,11 +389,16 @@ func (h *Handler) runResetAndExpiryJob(now time.Time) {
 }
 
 func (h *Handler) resetMonthlyFlow(now time.Time) {
-	currentDay := now.Day()
-	lastDay := time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, now.Location()).Day()
-
-	_ = h.repo.ResetUserMonthlyFlow(currentDay, lastDay)
-	_ = h.repo.ResetUserTunnelMonthlyFlow(currentDay, lastDay)
+	// R11X-005: due-type catch-up (repo.monthlyFlowDue, aligned with
+	// subDueReset). Errors must not be swallowed silently — the old
+	// `_ =` here is what made a transient failure on the reset day
+	// lose the whole month with no trace.
+	if err := h.repo.ResetUserMonthlyFlow(now); err != nil {
+		log.Printf("monthly flow reset failed op=ResetUserMonthlyFlow now=%s err=%v", now.Format(time.RFC3339), err)
+	}
+	if err := h.repo.ResetUserTunnelMonthlyFlow(now); err != nil {
+		log.Printf("monthly flow reset failed op=ResetUserTunnelMonthlyFlow now=%s err=%v", now.Format(time.RFC3339), err)
+	}
 }
 
 func (h *Handler) disableExpiredUsers(nowMs int64) {

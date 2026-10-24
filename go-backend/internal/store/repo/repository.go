@@ -571,7 +571,7 @@ func seedData(db *gorm.DB) {
 				adminUser := model.User{
 					ID: 1, User: "admin@user", Pwd: adminPwd,
 					RoleID: 0, ExpTime: 2727251700000, Flow: 99999, InFlow: 0, OutFlow: 0,
-					FlowResetTime: 1, Num: 99999, CreatedTime: 1748914865000,
+					FlowResetTime: 1, FlowLastResetTime: 1748914865000, Num: 99999, CreatedTime: 1748914865000,
 					UpdatedTime:       sql.NullInt64{Int64: 1754011744252, Valid: true},
 					Status:            1,
 					PasswordChangedAt: 1748914865000,
@@ -3233,16 +3233,19 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			passwordChangedAt = now
 		}
 		item := model.User{
-			ID:                u.ID,
-			User:              u.User,
-			Pwd:               pwdHash,
-			RoleID:            u.RoleID,
-			ExpTime:           u.ExpTime,
-			Flow:              u.Flow,
-			FlowMiB:           u.FlowMiB,
-			InFlow:            u.InFlow,
-			OutFlow:           u.OutFlow,
-			FlowResetTime:     u.FlowResetTime,
+			ID:            u.ID,
+			User:          u.User,
+			Pwd:           pwdHash,
+			RoleID:        u.RoleID,
+			ExpTime:       u.ExpTime,
+			Flow:          u.Flow,
+			FlowMiB:       u.FlowMiB,
+			InFlow:        u.InFlow,
+			OutFlow:       u.OutFlow,
+			FlowResetTime: u.FlowResetTime,
+			// R11X-005: restored counters count from the import
+			// moment (backup format carries no reset marker).
+			FlowLastResetTime: now,
 			Num:               u.Num,
 			CreatedTime:       u.CreatedTime,
 			UpdatedTime:       sql.NullInt64{Int64: now, Valid: true},
@@ -3258,7 +3261,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user", "pwd", "role_id", "exp_time", "flow", "flow_mib", "in_flow", "out_flow",
-				"flow_reset_time", "num", "updated_time", "status", "password_changed_at", "max_conn",
+				"flow_reset_time", "flow_last_reset_time", "num", "updated_time", "status", "password_changed_at", "max_conn",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -4123,7 +4126,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 	return count, nil
 }
 
-func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int64, rep *importReport) (int, error) {
+func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, ut := range userTunnels {
 		// D4-03：引用（用户/隧道）不存在时整行跳过并计数。
@@ -4150,14 +4153,16 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int6
 			InFlow:        ut.InFlow,
 			OutFlow:       ut.OutFlow,
 			FlowResetTime: ut.FlowResetTime,
-			ExpTime:       ut.ExpTime,
-			Status:        ut.Status,
+			// R11X-005: see importUsers (marker = import moment).
+			FlowLastResetTime: now,
+			ExpTime:           ut.ExpTime,
+			Status:            ut.Status,
 		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "tunnel_id", "speed_id", "num", "flow", "flow_mib", "in_flow", "out_flow",
-				"flow_reset_time", "exp_time", "status",
+				"flow_reset_time", "flow_last_reset_time", "exp_time", "status",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -4980,34 +4985,118 @@ func (r *Repository) CreateStatisticsFlow(userID, flow, totalFlow int64, timeTex
 	}).Error
 }
 
-func (r *Repository) ResetUserMonthlyFlow(day int, lastDay int) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
+// monthlyResetMoment is the most recent monthly reset moment at or
+// before now for reset day d (local time), clamped to the month's
+// length. This is the same algorithm (and clamping rule) as the
+// subscription side's lastResetAt used by handler.subDueReset —
+// R11X-005: the user/UT reset must align with that due判定形态 and
+// must not grow a second reset semantics.
+func monthlyResetMoment(d int, now time.Time) time.Time {
+	at := func(y int, m time.Month) time.Time {
+		last := time.Date(y, m+1, 0, 0, 0, 0, 0, now.Location()).Day()
+		day := d
+		if day > last {
+			day = last
+		}
+		return time.Date(y, m, day, 0, 0, 0, 0, now.Location())
 	}
-	updates := map[string]interface{}{"in_flow": 0, "out_flow": 0}
-	if day == lastDay {
-		return r.db.Model(&model.User{}).
-			Where("flow_reset_time != 0 AND (flow_reset_time = ? OR flow_reset_time > ?)", day, lastDay).
-			Updates(updates).Error
+	t := at(now.Year(), now.Month())
+	if t.After(now) {
+		t = at(now.Year(), now.Month()-1)
 	}
-	return r.db.Model(&model.User{}).
-		Where("flow_reset_time != 0 AND flow_reset_time = ?", day).
-		Updates(updates).Error
+	return t
 }
 
-func (r *Repository) ResetUserTunnelMonthlyFlow(day int, lastDay int) error {
+// monthlyFlowDue reports whether a monthly flow reset is due, in the
+// same判定形态 as handler.subDueReset: due iff the last recorded
+// reset is before the most recent reset moment at or before now.
+// Consequences: a missed reset day is caught up by the next run
+// (补跑), and after a (catch-up) reset the recorded marker is at or
+// after that moment, so re-runs within the same period are not due
+// again (恰一次) until the next period's moment passes.
+//
+// Stock-row baseline (marker == 0): rows that predate the
+// flow_last_reset_time column (and rows inserted without it) carry 0,
+// meaning "no reset recorded". Their effective baseline is the last
+// instant before the current month began (startOfMonth(now) - 1ms):
+// such a row is due exactly when the current month's reset moment has
+// already passed — it gets at most one catch-up reset in the upgrade
+// month, is never reset early for a reset day still ahead this month,
+// and from then on carries a real marker like any other row. Product
+// creation paths stamp the marker with the creation time instead, so
+// new rows never take this fallback.
+func monthlyFlowDue(resetDay int64, lastResetMs int64, now time.Time) bool {
+	if resetDay <= 0 {
+		return false
+	}
+	effective := lastResetMs
+	if effective == 0 {
+		effective = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).UnixMilli() - 1
+	}
+	return effective < monthlyResetMoment(int(resetDay), now).UnixMilli()
+}
+
+// ResetUserMonthlyFlow zeroes the flow counters of every user whose
+// monthly reset is due at now (see monthlyFlowDue) and stamps
+// flow_last_reset_time with now, so each period is reset exactly once
+// even if the reset day itself was missed (R11X-005 due-type catch-up,
+// replacing the old same-day equality predicate flow_reset_time = day
+// whose month-end clamp case is subsumed by monthlyResetMoment).
+func (r *Repository) ResetUserMonthlyFlow(now time.Time) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	updates := map[string]interface{}{"in_flow": 0, "out_flow": 0}
-	if day == lastDay {
-		return r.db.Model(&model.UserTunnel{}).
-			Where("flow_reset_time != 0 AND (flow_reset_time = ? OR flow_reset_time > ?)", day, lastDay).
-			Updates(updates).Error
+	var rows []model.User
+	if err := r.db.Select("id", "flow_reset_time", "flow_last_reset_time").
+		Where("flow_reset_time != 0").Find(&rows).Error; err != nil {
+		return err
 	}
-	return r.db.Model(&model.UserTunnel{}).
-		Where("flow_reset_time != 0 AND flow_reset_time = ?", day).
-		Updates(updates).Error
+	var firstErr error
+	for _, row := range rows {
+		if !monthlyFlowDue(row.FlowResetTime, row.FlowLastResetTime, now) {
+			continue
+		}
+		// Conditional on the marker just read: a concurrent run that
+		// already reset this period has moved the marker, so this
+		// update then touches no row (exactly-once under overlap).
+		err := r.db.Model(&model.User{}).
+			Where("id = ? AND flow_last_reset_time = ?", row.ID, row.FlowLastResetTime).
+			Updates(map[string]interface{}{
+				"in_flow": 0, "out_flow": 0, "flow_last_reset_time": now.UnixMilli(),
+			}).Error
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// ResetUserTunnelMonthlyFlow is ResetUserMonthlyFlow for user_tunnel
+// rows (same due semantics, same exactly-once marker).
+func (r *Repository) ResetUserTunnelMonthlyFlow(now time.Time) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	var rows []model.UserTunnel
+	if err := r.db.Select("id", "flow_reset_time", "flow_last_reset_time").
+		Where("flow_reset_time != 0").Find(&rows).Error; err != nil {
+		return err
+	}
+	var firstErr error
+	for _, row := range rows {
+		if !monthlyFlowDue(row.FlowResetTime, row.FlowLastResetTime, now) {
+			continue
+		}
+		err := r.db.Model(&model.UserTunnel{}).
+			Where("id = ? AND flow_last_reset_time = ?", row.ID, row.FlowLastResetTime).
+			Updates(map[string]interface{}{
+				"in_flow": 0, "out_flow": 0, "flow_last_reset_time": now.UnixMilli(),
+			}).Error
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (r *Repository) ListExpiredActiveUserIDs(nowMs int64) ([]int64, error) {
