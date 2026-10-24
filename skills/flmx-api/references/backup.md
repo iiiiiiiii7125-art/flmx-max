@@ -158,10 +158,10 @@ New integrations should use the canonical backup paths listed above.
 把面板全量备份加密后上传到个人 GitHub 账号的私密 Gist，并可定时自动上传。
 默认关闭；加密必填（明文上传不放行）；恢复走与本地文件导入同一尾链，恢复段为 16 段全集。
 
-- `GET /api/v1/backup/gist/status` — Gist 配置与上次上传状态（令牌仅回 hint，不回原文）。
+- `POST /api/v1/backup/gist/status` — Gist 配置与上次上传状态（令牌仅回 hint，不回原文）。
 - `POST /api/v1/backup/gist/save` — 保存 Gist 配置（个人 classic token，需 gist 权限；间隔白名单 {0,6,12,24,168}，0 为关闭）。
 - `POST /api/v1/backup/gist/upload` — 手动上传一次（未设加密密码时拒绝，零 GitHub 请求）。
-- `GET /api/v1/backup/gist/versions` — 最近 10 个 Gist 版本。
+- `POST /api/v1/backup/gist/versions` — 最近 10 个 Gist 版本。
 - `POST /api/v1/backup/gist/restore` — 从指定 Gist 版本恢复（16 段全集；恢复前自动备份失败按 O7-010 继续导入）。
 
 凭据（token、密码）只存面板配置，不进备份文件。真实 GitHub 端到端未在 1.4.6 门内实测（无真实令牌），见发版说明。
