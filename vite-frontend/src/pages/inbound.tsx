@@ -1016,8 +1016,12 @@ export default function InboundPage() {
   // Sheet state chip mirrors the grid header's stateText logic exactly
   // (same probe / running / kernelBad derivation as renderInbound), so the
   // sheet face carries the running-state badge the other two faces have.
+  // R16-X-01：与 renderInbound 同形——probe=null 与 undefined 同义为
+  // “暂无探测结果”；旧式 `!sheetItem.probe?.skipped` 在 probe=null 时为真，
+  // 会把 null 原样赋给 sheetProbe，随后 `sheetProbe !== undefined &&
+  // !sheetProbe.ok` 读 null.ok，详情页崩溃。
   const sheetProbe =
-    sheetItem?.external && !sheetItem.probe?.skipped
+    sheetItem?.external && sheetItem.probe && !sheetItem.probe.skipped
       ? sheetItem.probe
       : undefined;
   const sheetUnreachable =

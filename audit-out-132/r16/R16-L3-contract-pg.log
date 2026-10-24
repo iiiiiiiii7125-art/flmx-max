@@ -1,0 +1,12 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestPostgresCompanionPartialUniqueIndex
+    postgres_companion_partial_unique_contract_test.go:26: set FLMX_POSTGRES_TEST_DSN to run postgres contract tests
+--- SKIP: TestPostgresCompanionPartialUniqueIndex (0.00s)
+=== RUN   TestPostgresApplySubscriptionCounterSamplesConcurrentDoubleApplyContract
+    postgres_counter_concurrent_contract_test.go:87: set FLMX_POSTGRES_TEST_DSN to run postgres contract tests
+--- SKIP: TestPostgresApplySubscriptionCounterSamplesConcurrentDoubleApplyContract (0.00s)
+=== RUN   TestPostgresApplyInboundCounterSamplesConcurrentDoubleApplyContract
+    postgres_counter_concurrent_contract_test.go:126: set FLMX_POSTGRES_TEST_DSN to run postgres contract tests
+--- SKIP: TestPostgresApplyInboundCounterSamplesConcurrentDoubleApplyContract (0.00s)
+PASS
+ok  	go-backend/tests/contract	0.015s

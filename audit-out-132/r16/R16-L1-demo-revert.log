@@ -1,0 +1,45 @@
+=== R16-L1 Run B tag=b54b44f+inbound-revert rev=583cec0^:vite-frontend/src/pages/inbound.tsx ===
+date: 2026-10-24T22:08:19Z
+b54b44f772d8b4efdd6d08b1fbbbc40c8091a143
+--- revert inbound.tsx to 583cec0^ ---
+ vite-frontend/src/pages/inbound.tsx | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+563:      item.external && !item.probe?.skipped ? item.probe : undefined;
+--- demo build (dist-demo-revert) ---
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 8.86s
+vite build exit=0
+--- check.mjs (chromium-1187) ---
+note  admin #/inbound: console.error: TypeError: Cannot read properties of null (reading 'ok')
+    at Vt (http://127.0.0.1:38991/flmx-max/demo/assets/inbound-D_bvpjEf.js:3:10926)
+    at Array.map (<anonymous>)
+    at http://127.0.0.1:3899
+FAIL  admin #/inbound: page error: TypeError: Cannot read properties of null (reading 'ok')
+FAIL  admin #/inbound: blank page
+FAIL  admin #/relay: blank page
+FAIL  admin #/forward: blank page
+FAIL  admin #/tunnel: blank page
+FAIL  admin #/subscription: blank page
+FAIL  admin #/limit: blank page
+FAIL  admin #/user: blank page
+FAIL  admin #/group: blank page
+FAIL  admin #/panel-sharing: blank page
+FAIL  admin #/config: blank page
+FAIL  admin #/profile: blank page
+FAIL  admin #/change-password: blank page
+FAIL  user #/dashboard: blank page
+FAIL  user #/my-subscription: blank page
+FAIL  user #/my-subscription (interaction): interaction control not found
+FAIL  user #/forward: blank page
+FAIL  user #/monitor: blank page
+FAIL  user #/monitor (interaction): interaction control not found
+FAIL  user #/profile: blank page
+
+20 problem(s). Recording missing for new pages? See scripts/demo/README.md.
+check.mjs exit=1
+--- restore inbound.tsx ---
+?? vite-frontend/dist-demo-revert/
+dirty-after-restore: 1
+=== END Run B ===

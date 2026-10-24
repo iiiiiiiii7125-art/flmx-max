@@ -1,0 +1,24 @@
+code gate: 13 non-zero recording(s) against the 13-cell whitelist: ok
+ok    admin "node/traffic/month" recording #0: data covers 6 node(s)
+ok    admin "node/traffic/month" recording #1: data covers 6 node(s)
+ok    admin "subscription/traffic" recording #0: data.points has 24 point(s)
+ok    admin "subscription/traffic" recording #1: data.points has 24 point(s)
+ok    admin "subscription/traffic" recording #2: data.points has 30 point(s)
+ok    admin "subscription/traffic" recording #3: data.points has 12 point(s)
+ok    user "user/subscription/traffic" recording #0: data.points has 24 point(s)
+ok    user "user/subscription/traffic" recording #1: data.points has 30 point(s)
+ok    user "user/subscription/traffic" recording #2: data.points has 12 point(s)
+ok    user "user/subscription/traffic" recording #3: data.points has 24 point(s)
+ok    user "user/subscription/traffic" recording #4: data.points has 30 point(s)
+ok    user "user/subscription/traffic" recording #5: data.points has 12 point(s)
+ok    user "user/subscription/traffic" recording #6: data.points has 24 point(s)
+ok    user "user/subscription/traffic" recording #7: data.points has 30 point(s)
+ok    user "user/subscription/traffic" recording #8: data.points has 12 point(s)
+ok    admin "kernel/versions" recording #0 (kernelType=xray): code 0, 15 version(s), first=26.10.21
+ok    admin "kernel/versions" recording #1 (kernelType=singbox): code 0, 15 version(s), first=1.15.0-alpha.13
+skip  admin "kernel/versions" recording #2: kernelType=snell (static list, out of scope)
+skip  admin "kernel/versions" recording #3: kernelType=realm (static list, out of scope)
+ok    admin "backup/gist/status" recording #0: code 0, GistBackupStatus shape ok (configured=false)
+
+fixtures content ok: every key on the content list carries non-empty data.
+EXIT:0

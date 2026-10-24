@@ -1,0 +1,25 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR9B5ImportWhitelistExtraGate
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (907.482µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (982.774µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (987.551µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (849.765µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique applied
+2026/10/24 22:07:17 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/24 22:07:17 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (1.017176ms)
+2026/10/24 22:07:17 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR9B5ImportWhitelistExtraGate (0.30s)
+=== RUN   TestR9B5SanitizeBackupWhitelistExtra
+--- PASS: TestR9B5SanitizeBackupWhitelistExtra (0.00s)
+=== RUN   TestR14F08ImportStripsSnellPoisonedRouting
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (127.491µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.027041ms)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (948.913µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (584.056µs)
+2026/10/24 22:07:17 migration r5b4_v1_port_user_unique applied
+2026/10/24 22:07:17 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/24 22:07:17 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (153.791µs)
+2026/10/24 22:07:17 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR14F08ImportStripsSnellPoisonedRouting (0.31s)
+PASS
+ok  	go-backend/internal/store/repo	0.648s

@@ -1,0 +1,6 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR14F06F04SingleFamilyFailureWarns
+2026/10/24 22:04:26 tune probe: IPv4 sock_diag dump failed, RTT median covers IPv6 only: v4 dump failed
+--- PASS: TestR14F06F04SingleFamilyFailureWarns (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.032s

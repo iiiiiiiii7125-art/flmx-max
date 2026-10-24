@@ -1,0 +1,44 @@
+=== R16-L1 Run A tag=b54b44f rev=b54b44f772d8b4efdd6d08b1fbbbc40c8091a143 worktree=/home/hatch/workspace/.r16-l1 ===
+date: 2026-10-24T22:03:21Z / 2026-10-24T22:03:21+0000
+b54b44f772d8b4efdd6d08b1fbbbc40c8091a143
+status: 0 dirty-files
+CHROME: /home/hatch/.cache/ms-playwright/chromium-1187/chrome-linux/chrome
+Chromium 140.0.7339.16 
+fixtures sha256: 31279cc60906529d723b5839cff332ffefa5c7c9631483f57dfc24e726f1e8d2
+--- node_modules hardlink copy (from .r15-l5; pkg/lock zero-diff 5bd5a90..b54b44f) ---
+node_modules copy done
+--- tsc --noEmit (typecheck; note: InboundApiItem.probe omits | null) ---
+tsc exit=0
+--- demo build (README cmd) ---
+dist-demo/assets/traffic-stats-C8eQgpAH.js               23.12 kB │ gzip:   8.05 kB
+dist-demo/assets/inbound-form-modal-CO4ncMAu.js          29.62 kB │ gzip:   9.91 kB
+dist-demo/assets/tunnel-monitor-view-DKwABr2w.js         33.10 kB │ gzip:   9.83 kB
+dist-demo/assets/change-password-CdZ0cLCd.js             34.89 kB │ gzip:  12.41 kB
+dist-demo/assets/share-CZnXKJvg.js                       38.43 kB │ gzip:  13.66 kB
+dist-demo/assets/subscription-ZC_GKPU6.js                38.63 kB │ gzip:  12.11 kB
+dist-demo/assets/dropdown-D6uQgJ-d.js                    45.27 kB │ gzip:  15.44 kB
+dist-demo/assets/order-storage-A2N1iwJs.js               53.73 kB │ gzip:  17.53 kB
+dist-demo/assets/inbound-CBITvxU_.js                     56.68 kB │ gzip:  16.25 kB
+dist-demo/assets/monitor-m9Prw1F2.js                     61.78 kB │ gzip:  19.30 kB
+dist-demo/assets/config-C98qnkP0.js                      65.64 kB │ gzip:  19.78 kB
+dist-demo/assets/tunnel-B2uL9PxB.js                      70.06 kB │ gzip:  17.83 kB
+dist-demo/assets/user-hub-ieDV56dv.js                    82.69 kB │ gzip:  19.53 kB
+dist-demo/assets/forward-BT6BYNt3.js                    101.97 kB │ gzip:  24.80 kB
+dist-demo/assets/node-hub-BgeXpI9B.js                   102.01 kB │ gzip:  29.93 kB
+dist-demo/assets/dashboard-D5qOjPeY.js                  206.13 kB │ gzip:  60.58 kB
+dist-demo/assets/CartesianChart-D6atowTb.js             337.03 kB │ gzip:  99.40 kB
+dist-demo/assets/index-CMbmBxSC.js                      486.18 kB │ gzip: 160.14 kB
+dist-demo/assets/fixtures-CRObjqk3.js                 1,725.47 kB │ gzip: 259.78 kB
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 7.46s
+vite build exit=0
+--- fixtures gist keys in build ---
+backup/gist/status
+--- check.mjs (chromium-1187) ---
+demo ok: 14 admin + 5 user pages
+check.mjs exit=0
+=== END Run A ===

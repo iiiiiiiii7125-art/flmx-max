@@ -1,0 +1,1009 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestNormalizeRejectsProtectedExtraKeysF022
+--- PASS: TestNormalizeRejectsProtectedExtraKeysF022 (0.00s)
+=== RUN   TestNormalizeAllowsBenignExtraF022
+--- PASS: TestNormalizeAllowsBenignExtraF022 (0.00s)
+=== RUN   TestRenderRejectsProtectedExtraBypassingNormalizeF022
+--- PASS: TestRenderRejectsProtectedExtraBypassingNormalizeF022 (0.00s)
+=== RUN   TestNormalizeSnellExtraRejectedF022
+--- PASS: TestNormalizeSnellExtraRejectedF022 (0.00s)
+=== RUN   TestSurgeLineEscapesCredentialsF081
+--- PASS: TestSurgeLineEscapesCredentialsF081 (0.00s)
+=== RUN   TestLineFormatsPreserveSS2022KeyPaddingF081
+--- PASS: TestLineFormatsPreserveSS2022KeyPaddingF081 (0.00s)
+=== RUN   TestQXLineEscapesPasswordF081
+--- PASS: TestQXLineEscapesPasswordF081 (0.00s)
+=== RUN   TestProxySurgeEscapesSnellPSKF081
+--- PASS: TestProxySurgeEscapesSnellPSKF081 (0.00s)
+=== RUN   TestLoonLineEscapesShadowTLSPasswordF081
+--- PASS: TestLoonLineEscapesShadowTLSPasswordF081 (0.00s)
+=== RUN   TestSurgeLineEscapesHost
+--- PASS: TestSurgeLineEscapesHost (0.00s)
+=== RUN   TestSelfCertPairingF078
+--- PASS: TestSelfCertPairingF078 (0.01s)
+=== RUN   TestChainSingboxImportedProxy
+--- PASS: TestChainSingboxImportedProxy (0.00s)
+=== RUN   TestChainXraySelfBuiltTargets
+--- PASS: TestChainXraySelfBuiltTargets (0.00s)
+=== RUN   TestChainBlockedWhenTargetGone
+--- PASS: TestChainBlockedWhenTargetGone (0.00s)
+=== RUN   TestCheckChainRejections
+--- PASS: TestCheckChainRejections (0.00s)
+=== RUN   TestConnIdleUnsetRendersNoPolicy
+--- PASS: TestConnIdleUnsetRendersNoPolicy (0.00s)
+=== RUN   TestConnIdleSingleInbound
+--- PASS: TestConnIdleSingleInbound (0.00s)
+=== RUN   TestConnIdleMultipleInboundsDistinctLevels
+--- PASS: TestConnIdleMultipleInboundsDistinctLevels (0.00s)
+=== RUN   TestConnIdleShadowsocks
+--- PASS: TestConnIdleShadowsocks (0.00s)
+=== RUN   TestConnIdleNormalize
+--- PASS: TestConnIdleNormalize (0.00s)
+=== RUN   TestConnIdleSingboxRenderIgnores
+--- PASS: TestConnIdleSingboxRenderIgnores (0.00s)
+=== RUN   TestConnIdleLevelCap
+--- PASS: TestConnIdleLevelCap (0.00s)
+=== RUN   TestConnIdleDirectOutbound
+--- PASS: TestConnIdleDirectOutbound (0.00s)
+=== RUN   TestConnIdleMarkedUserKeepsMark
+--- PASS: TestConnIdleMarkedUserKeepsMark (0.00s)
+=== RUN   TestConnIdleMultipleInboundsIsolation
+--- PASS: TestConnIdleMultipleInboundsIsolation (0.00s)
+=== RUN   TestConnIdleChainOutboundLevel
+--- PASS: TestConnIdleChainOutboundLevel (0.00s)
+=== RUN   TestConnIdleSplitDirectUsesIdleOutbound
+--- PASS: TestConnIdleSplitDirectUsesIdleOutbound (0.00s)
+=== RUN   TestIPv4OnlyMixedInbounds
+=== RUN   TestIPv4OnlyMixedInbounds/xray
+=== RUN   TestIPv4OnlyMixedInbounds/singbox
+--- PASS: TestIPv4OnlyMixedInbounds (0.00s)
+    --- PASS: TestIPv4OnlyMixedInbounds/xray (0.00s)
+    --- PASS: TestIPv4OnlyMixedInbounds/singbox (0.00s)
+=== RUN   TestIPv6OnlyAlongsideIPv4AndAutomatic
+=== RUN   TestIPv6OnlyAlongsideIPv4AndAutomatic/xray
+=== RUN   TestIPv6OnlyAlongsideIPv4AndAutomatic/singbox
+--- PASS: TestIPv6OnlyAlongsideIPv4AndAutomatic (0.00s)
+    --- PASS: TestIPv6OnlyAlongsideIPv4AndAutomatic/xray (0.00s)
+    --- PASS: TestIPv6OnlyAlongsideIPv4AndAutomatic/singbox (0.00s)
+=== RUN   TestIPv6OnlySplitChainAndAdvancedConfiguration
+=== RUN   TestIPv6OnlySplitChainAndAdvancedConfiguration/xray
+=== RUN   TestIPv6OnlySplitChainAndAdvancedConfiguration/singbox
+--- PASS: TestIPv6OnlySplitChainAndAdvancedConfiguration (0.00s)
+    --- PASS: TestIPv6OnlySplitChainAndAdvancedConfiguration/xray (0.00s)
+    --- PASS: TestIPv6OnlySplitChainAndAdvancedConfiguration/singbox (0.00s)
+=== RUN   TestOutboundIPServerFamily
+--- PASS: TestOutboundIPServerFamily (0.00s)
+=== RUN   TestIPv4OnlySplitAndChain
+=== RUN   TestIPv4OnlySplitAndChain/xray
+=== RUN   TestIPv4OnlySplitAndChain/singbox
+--- PASS: TestIPv4OnlySplitAndChain (0.01s)
+    --- PASS: TestIPv4OnlySplitAndChain/xray (0.01s)
+    --- PASS: TestIPv4OnlySplitAndChain/singbox (0.01s)
+=== RUN   TestIPv4OnlyShadowTLSAndValidation
+--- PASS: TestIPv4OnlyShadowTLSAndValidation (0.00s)
+=== RUN   TestIPv4OnlyExtraCannotBypassPolicy
+--- PASS: TestIPv4OnlyExtraCannotBypassPolicy (0.00s)
+=== RUN   TestRestrictedLocalDNSVersionCompatibility
+--- PASS: TestRestrictedLocalDNSVersionCompatibility (0.01s)
+=== RUN   TestPreferredEgressRoutingAndFallback
+=== RUN   TestPreferredEgressRoutingAndFallback/xray/prefer_ipv4
+=== RUN   TestPreferredEgressRoutingAndFallback/xray/prefer_ipv6
+=== RUN   TestPreferredEgressRoutingAndFallback/singbox/prefer_ipv4
+=== RUN   TestPreferredEgressRoutingAndFallback/singbox/prefer_ipv6
+--- PASS: TestPreferredEgressRoutingAndFallback (0.00s)
+    --- PASS: TestPreferredEgressRoutingAndFallback/xray/prefer_ipv4 (0.00s)
+    --- PASS: TestPreferredEgressRoutingAndFallback/xray/prefer_ipv6 (0.00s)
+    --- PASS: TestPreferredEgressRoutingAndFallback/singbox/prefer_ipv4 (0.00s)
+    --- PASS: TestPreferredEgressRoutingAndFallback/singbox/prefer_ipv6 (0.00s)
+=== RUN   TestPreferredEgressSplitAndChain
+--- PASS: TestPreferredEgressSplitAndChain (0.01s)
+=== RUN   TestOutboundIPPolicyKeepsLocalResolver
+--- PASS: TestOutboundIPPolicyKeepsLocalResolver (0.00s)
+=== RUN   TestG4ClashProxyRendersSnell
+--- PASS: TestG4ClashProxyRendersSnell (0.00s)
+=== RUN   TestG4SubscriptionClashCarriesSnell
+--- PASS: TestG4SubscriptionClashCarriesSnell (0.00s)
+=== RUN   TestG4ProxyClashSnell
+--- PASS: TestG4ProxyClashSnell (0.00s)
+=== RUN   TestG4ProxySingboxSnell
+--- PASS: TestG4ProxySingboxSnell (0.00s)
+=== RUN   TestG4ParseImportRejectsBadUUID
+--- PASS: TestG4ParseImportRejectsBadUUID (0.00s)
+=== RUN   TestImportSingboxSnellNaive
+--- PASS: TestImportSingboxSnellNaive (0.00s)
+=== RUN   TestImportSingboxOwnProfileRoundTrip
+--- PASS: TestImportSingboxOwnProfileRoundTrip (0.00s)
+=== RUN   TestImportClashEntryLevelTolerance
+--- PASS: TestImportClashEntryLevelTolerance (0.00s)
+=== RUN   TestImportRejectsInexactNumbersAndBadBlocks
+--- PASS: TestImportRejectsInexactNumbersAndBadBlocks (0.00s)
+=== RUN   TestImportClashSnellDefaultVersion
+--- PASS: TestImportClashSnellDefaultVersion (0.00s)
+=== RUN   TestR1B5ValidateImportHostRejectsNonCanonical
+--- PASS: TestR1B5ValidateImportHostRejectsNonCanonical (0.00s)
+=== RUN   TestR1B5ParseImportRejectsNonCanonicalHosts
+--- PASS: TestR1B5ParseImportRejectsNonCanonicalHosts (0.00s)
+=== RUN   TestR3B1ValidateImportHostRejectsReservedMulticastLinkLocal
+--- PASS: TestR3B1ValidateImportHostRejectsReservedMulticastLinkLocal (0.00s)
+=== RUN   TestR3B1ValidateImportHostStillAllowsPrivateCGNAT
+--- PASS: TestR3B1ValidateImportHostStillAllowsPrivateCGNAT (0.00s)
+=== RUN   TestImportShareLinksRoundTrip
+--- PASS: TestImportShareLinksRoundTrip (0.00s)
+=== RUN   TestImportProfiles
+--- PASS: TestImportProfiles (0.00s)
+=== RUN   TestImportedRelayEndpoint
+--- PASS: TestImportedRelayEndpoint (0.00s)
+=== RUN   TestImportRejections
+--- PASS: TestImportRejections (0.00s)
+=== RUN   TestNormalizeFillsCredentials
+--- PASS: TestNormalizeFillsCredentials (0.00s)
+=== RUN   TestNormalizeRejectsUnsupportedCombos
+=== RUN   TestNormalizeRejectsUnsupportedCombos/unknown_protocol
+=== RUN   TestNormalizeRejectsUnsupportedCombos/ws_reality
+=== RUN   TestNormalizeRejectsUnsupportedCombos/trojan_without_tls
+=== RUN   TestNormalizeRejectsUnsupportedCombos/bad_port
+=== RUN   TestNormalizeRejectsUnsupportedCombos/tls_without_sni
+=== RUN   TestNormalizeRejectsUnsupportedCombos/bad_ss2022_key
+=== RUN   TestNormalizeRejectsUnsupportedCombos/bad_uuid
+=== RUN   TestNormalizeRejectsUnsupportedCombos/extra_not_object
+=== RUN   TestNormalizeRejectsUnsupportedCombos/bad_short_id
+--- PASS: TestNormalizeRejectsUnsupportedCombos (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/unknown_protocol (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/ws_reality (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/trojan_without_tls (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/bad_port (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/tls_without_sni (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/bad_ss2022_key (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/bad_uuid (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/extra_not_object (0.00s)
+    --- PASS: TestNormalizeRejectsUnsupportedCombos/bad_short_id (0.00s)
+=== RUN   TestNormalizeDropsVisionWhereUnsupported
+--- PASS: TestNormalizeDropsVisionWhereUnsupported (0.00s)
+=== RUN   TestNormalizeSS2022Key
+--- PASS: TestNormalizeSS2022Key (0.00s)
+=== RUN   TestNormalizeSelfSignedCertKeptWhenSNIUnchanged
+--- PASS: TestNormalizeSelfSignedCertKeptWhenSNIUnchanged (0.00s)
+=== RUN   TestRegenerateRotatesSecrets
+--- PASS: TestRegenerateRotatesSecrets (0.00s)
+=== RUN   TestRenderXrayGolden
+--- PASS: TestRenderXrayGolden (0.01s)
+=== RUN   TestRenderEmptyXray
+--- PASS: TestRenderEmptyXray (0.00s)
+=== RUN   TestResolveDownload
+--- PASS: TestResolveDownload (0.00s)
+=== RUN   TestRenderAcceptProxyProtocol
+--- PASS: TestRenderAcceptProxyProtocol (0.00s)
+=== RUN   TestParseAllowList
+--- PASS: TestParseAllowList (0.00s)
+=== RUN   TestRenderSingboxGolden
+--- PASS: TestRenderSingboxGolden (0.00s)
+=== RUN   TestRenderSnell
+--- PASS: TestRenderSnell (0.00s)
+=== RUN   TestNormalizePhase3Rules
+--- PASS: TestNormalizePhase3Rules (0.00s)
+=== RUN   TestSingboxACMEAndNaive
+--- PASS: TestSingboxACMEAndNaive (0.01s)
+=== RUN   TestRealityMinClientVer
+--- PASS: TestRealityMinClientVer (0.00s)
+=== RUN   TestR2B1ValidateImportHostLoopbackAliases
+--- PASS: TestR2B1ValidateImportHostLoopbackAliases (0.00s)
+=== RUN   TestR2B1ParseImportLoopbackAliasesRejected
+--- PASS: TestR2B1ParseImportLoopbackAliasesRejected (0.00s)
+=== RUN   TestR2B1ValidateImportHostHardDenyLiterals
+--- PASS: TestR2B1ValidateImportHostHardDenyLiterals (0.00s)
+=== RUN   TestN01ValidateImportHostLinkLocalV6Rejected
+--- PASS: TestN01ValidateImportHostLinkLocalV6Rejected (0.00s)
+=== RUN   TestN01ValidateImportHostULAStillAllowed
+--- PASS: TestN01ValidateImportHostULAStillAllowed (0.00s)
+=== RUN   TestR2B1ValidateImportHostPrivateLiteralsStillAllowed
+--- PASS: TestR2B1ValidateImportHostPrivateLiteralsStillAllowed (0.00s)
+=== RUN   TestR2B1ParseImportPrivateAndPublicStillWork
+--- PASS: TestR2B1ParseImportPrivateAndPublicStillWork (0.00s)
+=== RUN   TestR10B1FingerprintImportHealAndReject
+--- PASS: TestR10B1FingerprintImportHealAndReject (0.00s)
+=== RUN   TestR10B1FingerprintStockHealAndSkip
+--- PASS: TestR10B1FingerprintStockHealAndSkip (0.00s)
+=== RUN   TestR10B1FingerprintSelfBuiltNormalize
+--- PASS: TestR10B1FingerprintSelfBuiltNormalize (0.00s)
+=== RUN   TestR10B1XHTTPModeImportHealAndReject
+--- PASS: TestR10B1XHTTPModeImportHealAndReject (0.00s)
+=== RUN   TestR10B1XHTTPModeStockHealAndSkip
+--- PASS: TestR10B1XHTTPModeStockHealAndSkip (0.00s)
+=== RUN   TestR10B1SSPluginObfsModeImportHealAndReject
+--- PASS: TestR10B1SSPluginObfsModeImportHealAndReject (0.00s)
+=== RUN   TestR10B1SSPluginObfsModeStockHealAndSkip
+--- PASS: TestR10B1SSPluginObfsModeStockHealAndSkip (0.00s)
+=== RUN   TestR10B1SSPluginNameCaseInsensitive
+--- PASS: TestR10B1SSPluginNameCaseInsensitive (0.00s)
+=== RUN   TestR10B2W1Count4Accepted
+--- PASS: TestR10B2W1Count4Accepted (0.00s)
+=== RUN   TestR10B2W2FirstGroupTailZeroAccepted
+--- PASS: TestR10B2W2FirstGroupTailZeroAccepted (0.01s)
+=== RUN   TestR10B2W3SignedTokenLength
+--- PASS: TestR10B2W3SignedTokenLength (0.00s)
+=== RUN   TestR10B2AlignmentFullTable
+--- PASS: TestR10B2AlignmentFullTable (0.02s)
+=== RUN   TestR10B2D05ProxyURIVlessGate
+--- PASS: TestR10B2D05ProxyURIVlessGate (0.00s)
+=== RUN   TestR10B3SnellObfsModeSurgeHeal
+--- PASS: TestR10B3SnellObfsModeSurgeHeal (0.00s)
+=== RUN   TestR10B3SnellV6ModeUnshapedHeal
+--- PASS: TestR10B3SnellV6ModeUnshapedHeal (0.00s)
+=== RUN   TestR10B3BuiltinSSMultiSegmentNormalized
+--- PASS: TestR10B3BuiltinSSMultiSegmentNormalized (0.00s)
+=== RUN   TestR10B3BuiltinSSSingleSegmentVerbatim
+--- PASS: TestR10B3BuiltinSSSingleSegmentVerbatim (0.00s)
+=== RUN   TestR10B4SurgeVMessEncryptMethodCarried
+--- PASS: TestR10B4SurgeVMessEncryptMethodCarried (0.00s)
+=== RUN   TestR10B4SurgeVMessEncryptMethodDefaultAuto
+--- PASS: TestR10B4SurgeVMessEncryptMethodDefaultAuto (0.00s)
+=== RUN   TestR10B4SurgeVMessEncryptMethodGarbageRejected
+--- PASS: TestR10B4SurgeVMessEncryptMethodGarbageRejected (0.00s)
+=== RUN   TestR11B1XHTTPModeSelfBuiltHealAndReject
+--- PASS: TestR11B1XHTTPModeSelfBuiltHealAndReject (0.00s)
+=== RUN   TestR11B1XHTTPModeLegalValuesProductsVerbatim
+--- PASS: TestR11B1XHTTPModeLegalValuesProductsVerbatim (0.00s)
+=== RUN   TestR11B1XHTTPModeProductsHaveNoBadMode
+--- PASS: TestR11B1XHTTPModeProductsHaveNoBadMode (0.00s)
+=== RUN   TestR11B2URIFaceGate
+--- PASS: TestR11B2URIFaceGate (0.00s)
+=== RUN   TestR11B2SurgeLoonQXFaceGate
+--- PASS: TestR11B2SurgeLoonQXFaceGate (0.00s)
+=== RUN   TestR11B3X004ClashEmitsTrimmedEncryption
+--- PASS: TestR11B3X004ClashEmitsTrimmedEncryption (0.00s)
+=== RUN   TestR11B3X004CleanEncryptionAndOtherFacesUnchanged
+--- PASS: TestR11B3X004CleanEncryptionAndOtherFacesUnchanged (0.00s)
+=== RUN   TestR11B3X007EmptyTokenGroupsAccepted
+--- PASS: TestR11B3X007EmptyTokenGroupsAccepted (0.00s)
+=== RUN   TestR11B3X007BoundariesStillRejected
+--- PASS: TestR11B3X007BoundariesStillRejected (0.00s)
+=== RUN   TestR11B3X007Full99Table
+--- PASS: TestR11B3X007Full99Table (0.03s)
+=== RUN   TestR11B5SnellTopModeVariantHealing
+--- PASS: TestR11B5SnellTopModeVariantHealing (0.00s)
+=== RUN   TestR11B5SnellTopModeBogusAndNonV6Dropped
+--- PASS: TestR11B5SnellTopModeBogusAndNonV6Dropped (0.00s)
+=== RUN   TestR11B5SnellTopModeClashControl
+--- PASS: TestR11B5SnellTopModeClashControl (0.00s)
+=== RUN   TestR12BXSelfBuiltRenderHealsBackupVariants
+--- PASS: TestR12BXSelfBuiltRenderHealsBackupVariants (0.00s)
+=== RUN   TestR14F03RoutingTagsResolve
+=== RUN   TestR14F03RoutingTagsResolve/direct-idle
+=== RUN   TestR14F03RoutingTagsResolve/chained-idle
+=== RUN   TestR14F03RoutingTagsResolve/split-direct-idle
+=== RUN   TestR14F03RoutingTagsResolve/split-block
+=== RUN   TestR14F03RoutingTagsResolve/split-proxy
+=== RUN   TestR14F03RoutingTagsResolve/chained-idle-split-direct
+=== RUN   TestR14F03RoutingTagsResolve/all-together
+--- PASS: TestR14F03RoutingTagsResolve (0.01s)
+    --- PASS: TestR14F03RoutingTagsResolve/direct-idle (0.00s)
+    --- PASS: TestR14F03RoutingTagsResolve/chained-idle (0.00s)
+    --- PASS: TestR14F03RoutingTagsResolve/split-direct-idle (0.00s)
+    --- PASS: TestR14F03RoutingTagsResolve/split-block (0.00s)
+    --- PASS: TestR14F03RoutingTagsResolve/split-proxy (0.01s)
+    --- PASS: TestR14F03RoutingTagsResolve/chained-idle-split-direct (0.00s)
+    --- PASS: TestR14F03RoutingTagsResolve/all-together (0.00s)
+=== RUN   TestR14F03ChainedIdleSplitDirect
+--- PASS: TestR14F03ChainedIdleSplitDirect (0.00s)
+=== RUN   TestR14F03ChainedIdleNoSplitDirectGetsNoIdleOutbound
+--- PASS: TestR14F03ChainedIdleNoSplitDirectGetsNoIdleOutbound (0.00s)
+=== RUN   TestR14F03SplitFallbackWhenIdleOutboundMissing
+--- PASS: TestR14F03SplitFallbackWhenIdleOutboundMissing (0.00s)
+=== RUN   TestR14F06F04ConnIdleZeroWording
+--- PASS: TestR14F06F04ConnIdleZeroWording (0.00s)
+=== RUN   TestR16L4MatrixR1Singbox
+    r16_l4_probe_test.go:53: CELL R1: nodes=14 errs=[] (2 shadowtls detours are not nodes)
+    r16_l4_probe_test.go:58: CELL R1 C1/C4 ss: OK password+cipher aes-256-gcm
+    r16_l4_probe_test.go:62: CELL R1 C8 ss obfs: OK mode=http host=r16ob.example.net
+    r16_l4_probe_test.go:66: CELL R1 C8 ss shadowtls: OK plugin=shadow-tls pw/host carried
+    r16_l4_probe_test.go:70: CELL R1 C2/C4/C12 vmess: OK uuid/cipher=aes-128-gcm/alterId=1
+    r16_l4_probe_test.go:76: CELL R1 C2/C5/C6/C9 vless: OK uuid/flow/encryption/reality pbk+sid
+    r16_l4_probe_test.go:84: CELL R1 C1/C10 trojan/hy2: OK passwords + obfs=salamander + ports=30000-30010
+    r16_l4_probe_test.go:89: CELL R1 C1/C2 tuic: OK uuid/password/cc=bbr/udp-relay-mode=native
+    r16_l4_probe_test.go:93: CELL R1 C1 anytls: OK pw
+    r16_l4_probe_test.go:102: CELL R1 C3/C8/C11 snell: OK psk/version=6/mode=unshaped/shadow-tls pw+host
+    r16_l4_probe_test.go:108: CELL R1 C1/C7 naive/socks/http: OK username+password
+--- PASS: TestR16L4MatrixR1Singbox (0.00s)
+=== RUN   TestR16L4MatrixR2Clash
+    r16_l4_probe_test.go:197: CELL R2: nodes=11 errs=[]
+    r16_l4_probe_test.go:216: CELL R2 r16-ss: OK password="r16-css-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-ss: OK cipher="aes-256-gcm" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vmess: OK uuid="33333333-3333-4333-8333-333333333333" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vmess: OK cipher="aes-128-gcm" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vless: OK uuid="33333333-3333-4333-8333-333333333333" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vless: OK flow="xtls-rprx-vision" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vless: OK encryption="mlkem768x25519plus.native.0rtt.100-200-300.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-trojan: OK password="r16-ctj-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-hy2: OK password="r16-chy2-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-hy2: OK obfs="salamander" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-hy2: OK obfs-password="r16-chy2-obfs1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-tuic: OK uuid="33333333-3333-4333-8333-333333333333" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-tuic: OK password="r16-ctuic-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-anytls: OK password="r16-cat-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-snell: OK psk="r16-csn-psk1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-naive: OK username="r16-cna-user" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-naive: OK password="r16-cna-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-socks: OK username="r16-cso-user" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-socks: OK password="r16-cso-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-http: OK username="r16-cht-user" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-http: OK password="r16-cht-pw1" (passthrough)
+    r16_l4_probe_test.go:221: CELL R2 C8 ss plugin-opts: OK mode=tls host=r16cob.example.net (passthrough)
+    r16_l4_probe_test.go:225: CELL R2 C9 reality-opts: OK pbk+sid (passthrough)
+    r16_l4_probe_test.go:229: CELL R2 C12 vmess alterId: OK 1 (passthrough,逐值断言)
+    r16_l4_probe_test.go:233: CELL R2 C11 snell: OK version=6 mode=unshaped (passthrough,逐值断言)
+--- PASS: TestR16L4MatrixR2Clash (0.01s)
+=== RUN   TestR16L4MatrixR3URI
+    r16_l4_probe_test.go:264: CELL R3: nodes=8 errs=[]
+    r16_l4_probe_test.go:282: CELL R3 r16-ss-uri: OK password="r16-uri-ss-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-ss-uri: OK cipher="aes-256-gcm"
+    r16_l4_probe_test.go:282: CELL R3 r16-vmess-uri: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:282: CELL R3 r16-vmess-uri: OK cipher="aes-128-gcm"
+    r16_l4_probe_test.go:282: CELL R3 r16-vless-uri: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:282: CELL R3 r16-vless-uri: OK encryption="mlkem768x25519plus.native.0rtt.100-200-300.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r16_l4_probe_test.go:282: CELL R3 r16-vless-uri: OK flow="xtls-rprx-vision"
+    r16_l4_probe_test.go:282: CELL R3 r16-trojan-uri: OK password="r16-uri-tj-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-hy2-uri: OK password="r16-uri-hy2-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-hy2-uri: OK obfs="salamander"
+    r16_l4_probe_test.go:282: CELL R3 r16-hy2-uri: OK obfs-password="r16-uri-hy2-obfs"
+    r16_l4_probe_test.go:282: CELL R3 r16-tuic-uri: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:282: CELL R3 r16-tuic-uri: OK password="r16-uri-tuic-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-anytls-uri: OK password="r16-uri-at-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-socks-uri: OK username="r16-uri-so-user"
+    r16_l4_probe_test.go:282: CELL R3 r16-socks-uri: OK password="r16-uri-so-pw"
+    r16_l4_probe_test.go:287: CELL R3 C8 ss plugin: OK mode=http host=r16uob.example.net
+    r16_l4_probe_test.go:291: CELL R3 C9 reality-opts: OK pbk+sid
+    r16_l4_probe_test.go:295: CELL R3 C12 vmess alterId: OK 1 (逐值断言)
+    r16_l4_probe_test.go:301: CELL R3 C3/C11 snell: OK explicit reject 暂不支持 snell:// 链接, 0 nodes
+    r16_l4_probe_test.go:306: CELL R3 C7 http: OK explicit reject http(s):// 是订阅地址, 0 nodes
+--- PASS: TestR16L4MatrixR3URI (0.00s)
+=== RUN   TestR16L4MatrixR4Surge
+    r16_l4_probe_test.go:332: CELL R4: nodes=13 errs=[]
+    r16_l4_probe_test.go:351: CELL R4 r16-ss: OK password="r16-sg-ss-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-ss: OK cipher="aes-256-gcm"
+    r16_l4_probe_test.go:351: CELL R4 r16-ss-loon: OK cipher="aes-128-gcm"
+    r16_l4_probe_test.go:351: CELL R4 r16-ss-loon: OK password="r16-sg-loon-pw2"
+    r16_l4_probe_test.go:351: CELL R4 r16-vmess: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:351: CELL R4 r16-vmess: OK cipher="aes-128-gcm"
+    r16_l4_probe_test.go:351: CELL R4 r16-trojan: OK password="r16-sg-tj-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK password="r16-sg-hy2-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK obfs="salamander"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK obfs-password="r16-sg-hy2-obfs"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK ports="30000-30010"
+    r16_l4_probe_test.go:351: CELL R4 r16-tuic: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:351: CELL R4 r16-tuic: OK password="r16-sg-tuic-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-anytls: OK password="r16-sg-at-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-snell: OK psk="r16-sg-sn-psk1"
+    r16_l4_probe_test.go:351: CELL R4 r16-snell: OK mode="unshaped"
+    r16_l4_probe_test.go:351: CELL R4 r16-socks: OK username="r16-sg-so-user"
+    r16_l4_probe_test.go:351: CELL R4 r16-socks: OK password="r16-sg-so-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-http: OK username="r16-sg-ht-user"
+    r16_l4_probe_test.go:351: CELL R4 r16-http: OK password="r16-sg-ht-pw1"
+    r16_l4_probe_test.go:356: CELL R4 C8 ss obfs: OK mode=http host=r16sgob.example.net
+    r16_l4_probe_test.go:360: CELL R4 C12 vmess vmess-aead=false: OK alterId=1
+    r16_l4_probe_test.go:364: CELL R4 C10/C11 snell: OK version=6 mode=unshaped + obfs=http
+    r16_l4_probe_test.go:368: CELL R4 C8 ss shadow-tls companion: OK password carried via applySurgeShadowTLS
+    r16_l4_probe_test.go:373: CELL R4 C5/C6 vless: OK explicit reject 暂不支持 vless 类型的节点, 0 nodes
+--- PASS: TestR16L4MatrixR4Surge (0.00s)
+=== RUN   TestR16L4A2Predicates
+    r16_l4_probe_test.go:423: CELL A2-01 client-fingerprint: OK bad value explicitly rejected (client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）)
+    r16_l4_probe_test.go:428: CELL A2-01 client-fingerprint: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-02 xhttp-opts.mode: OK bad value explicitly rejected (xhttp mode 不受支持（仅 auto / packet-up / stream-up / stream-one）)
+    r16_l4_probe_test.go:428: CELL A2-02 xhttp-opts.mode: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-03 SS plugin-opts.mode: OK bad value explicitly rejected (Shadowsocks obfs mode 不受支持（仅 http / tls）)
+    r16_l4_probe_test.go:428: CELL A2-03 SS plugin-opts.mode: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-04 Snell obfs-opts.mode: OK bad value explicitly rejected (Snell obfs mode 不受支持（仅 http / tls / shadow-tls / restls / jls 或空）)
+    r16_l4_probe_test.go:428: CELL A2-04 Snell obfs-opts.mode: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-05 VMess cipher: OK bad value explicitly rejected (VMess 加密方式 cipher 不受支持（仅 auto / aes-128-gcm / chacha20-poly1305 / none / zero）)
+    r16_l4_probe_test.go:428: CELL A2-05 VMess cipher: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-06 VLESS flow: OK bad value explicitly rejected (VLESS flow 不受支持（仅 xtls-rprx-vision 或空）)
+    r16_l4_probe_test.go:428: CELL A2-06 VLESS flow: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-07 Hysteria2 obfs-type: OK bad value explicitly rejected (Hysteria2 obfs 类型不受支持（仅 salamander / gecko 或空）)
+    r16_l4_probe_test.go:428: CELL A2-07 Hysteria2 obfs-type: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-08 TUIC congestion-controller: OK bad value explicitly rejected (TUIC congestion-controller 不受支持（仅 bbr / cubic / new_reno）)
+    r16_l4_probe_test.go:428: CELL A2-08 TUIC congestion-controller: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-09 SS cipher: OK bad value explicitly rejected (Shadowsocks 加密方式 cipher 不受支持)
+    r16_l4_probe_test.go:428: CELL A2-09 SS cipher: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-10 VLESS encryption: OK bad value explicitly rejected (VLESS encryption 格式错误（须为 none 或 mlkem768x25519plus 客户端加密串）)
+    r16_l4_probe_test.go:428: CELL A2-10 VLESS encryption: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-11 Reality 形态: OK bad value explicitly rejected (Reality 公钥 pbk 格式错误（须为 32 字节的 RawURL base64）)
+    r16_l4_probe_test.go:428: CELL A2-11 Reality 形态: OK good value carried/accepted
+    r16_l4_probe_test.go:436: CELL A2-01 heal: OK Chrome -> chrome via import predicate
+    r16_l4_probe_test.go:441: CELL A2-02 heal: OK PACKET-UP -> packet-up via import predicate
+--- PASS: TestR16L4A2Predicates (0.00s)
+=== RUN   TestR16L4FacesConsumption
+    r16_l4_probe_test.go:469: CELL FACE bad fingerprint: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad flow: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad tuic-cc: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad hy2-obfs: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad vmess-cipher: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad ss-cipher: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad enc: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad ss-plugin-mode: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad snell-obfs: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad reality-pbk: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad reality-sid: OK all 4 faces reject
+    r16_l4_probe_test.go:479: CELL FACE heal fingerprint: OK stored Chrome -> rendered chrome, stored untouched
+    r16_l4_probe_test.go:484: CELL FACE heal xhttp-mode: OK stored PACKET-UP -> rendered packet-up
+    r16_l4_probe_test.go:489: CELL FACE heal snell mode: OK stored UNSHAPED -> rendered unshaped
+    r16_l4_probe_test.go:506: CELL FACE good flow: OK all 4 faces pass
+    r16_l4_probe_test.go:506: CELL FACE good tuic-cc: OK all 4 faces pass
+    r16_l4_probe_test.go:506: CELL FACE good vmess-cipher: OK all 4 faces pass
+    r16_l4_probe_test.go:506: CELL FACE good enc: OK all 4 faces pass
+    r16_l4_probe_test.go:514: CELL FACE ss chacha20: OK only Clash face passes, sing-box/other/xray-chain reject
+    r16_l4_probe_test.go:521: CELL FACE uri enc good: OK proxyURI emits legal ENC verbatim
+    r16_l4_probe_test.go:526: CELL FACE uri enc bad: OK proxyURI refuses bad ENC
+    r16_l4_probe_test.go:535: CELL FACE render bad fingerprint: OK sing-box + Clash both skip whole node
+--- PASS: TestR16L4FacesConsumption (0.00s)
+=== RUN   TestR2B5SubScriptProgramCacheShared
+--- PASS: TestR2B5SubScriptProgramCacheShared (0.00s)
+=== RUN   TestR2B5SubScriptCachedOutputIdentical
+--- PASS: TestR2B5SubScriptCachedOutputIdentical (0.01s)
+=== RUN   TestR2B5SnellFinishProxyVersionDomain
+--- PASS: TestR2B5SnellFinishProxyVersionDomain (0.00s)
+=== RUN   TestR2B5SnellRenderersVersionDomain
+--- PASS: TestR2B5SnellRenderersVersionDomain (0.00s)
+=== RUN   TestR2B5SnellChainTargetRenderWith
+--- PASS: TestR2B5SnellChainTargetRenderWith (0.00s)
+=== RUN   TestR2B5SnellV6ModeRoundTrip
+--- PASS: TestR2B5SnellV6ModeRoundTrip (0.01s)
+=== RUN   TestR3B2SS2022ImportMatrix
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-Std
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-URL
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/short8-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/key16-on-256
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/key32-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/garbage
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/multi2-mixed-enc
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/multi3
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/multi-bad-segment
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/multi-empty-segment
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/legacy-aes-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/legacy-chacha-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/ss-link/unknown-cipher
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-Std
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-URL
+=== RUN   TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/clash/plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/clash/short8-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/clash/key16-on-256
+=== RUN   TestR3B2SS2022ImportMatrix/clash/key32-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/clash/garbage
+=== RUN   TestR3B2SS2022ImportMatrix/clash/multi2-mixed-enc
+=== RUN   TestR3B2SS2022ImportMatrix/clash/multi3
+=== RUN   TestR3B2SS2022ImportMatrix/clash/multi-bad-segment
+=== RUN   TestR3B2SS2022ImportMatrix/clash/multi-empty-segment
+=== RUN   TestR3B2SS2022ImportMatrix/clash/legacy-aes-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/clash/legacy-chacha-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/clash/unknown-cipher
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-Std
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-URL
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/short8-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/key16-on-256
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/key32-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/garbage
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/multi2-mixed-enc
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/multi3
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/multi-bad-segment
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/multi-empty-segment
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/legacy-aes-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/legacy-chacha-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/singbox/unknown-cipher
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-Std
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-URL
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-Std
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-RawStd
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-URL
+=== RUN   TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-RawURL
+=== RUN   TestR3B2SS2022ImportMatrix/surge/plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/surge/short8-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/surge/key16-on-256
+=== RUN   TestR3B2SS2022ImportMatrix/surge/key32-on-128
+=== RUN   TestR3B2SS2022ImportMatrix/surge/garbage
+=== RUN   TestR3B2SS2022ImportMatrix/surge/multi2-mixed-enc
+=== RUN   TestR3B2SS2022ImportMatrix/surge/multi3
+=== RUN   TestR3B2SS2022ImportMatrix/surge/multi-bad-segment
+=== RUN   TestR3B2SS2022ImportMatrix/surge/multi-empty-segment
+=== RUN   TestR3B2SS2022ImportMatrix/surge/legacy-aes-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/surge/legacy-chacha-plaintext
+=== RUN   TestR3B2SS2022ImportMatrix/surge/unknown-cipher
+--- PASS: TestR3B2SS2022ImportMatrix (0.02s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-128-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-aes-256-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/ok-2022-blake3-chacha20-poly1305-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/short8-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/key16-on-256 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/key32-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/garbage (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/multi2-mixed-enc (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/multi3 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/multi-bad-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/multi-empty-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/legacy-aes-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/legacy-chacha-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/ss-link/unknown-cipher (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-128-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-aes-256-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/ok-2022-blake3-chacha20-poly1305-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/short8-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/key16-on-256 (0.01s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/key32-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/garbage (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/multi2-mixed-enc (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/multi3 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/multi-bad-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/multi-empty-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/legacy-aes-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/legacy-chacha-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/clash/unknown-cipher (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-128-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-aes-256-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/ok-2022-blake3-chacha20-poly1305-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/short8-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/key16-on-256 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/key32-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/garbage (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/multi2-mixed-enc (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/multi3 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/multi-bad-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/multi-empty-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/legacy-aes-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/legacy-chacha-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/singbox/unknown-cipher (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-128-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-aes-256-gcm-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-Std (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-RawStd (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-URL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/ok-2022-blake3-chacha20-poly1305-RawURL (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/short8-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/key16-on-256 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/key32-on-128 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/garbage (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/multi2-mixed-enc (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/multi3 (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/multi-bad-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/multi-empty-segment (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/legacy-aes-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/legacy-chacha-plaintext (0.00s)
+    --- PASS: TestR3B2SS2022ImportMatrix/surge/unknown-cipher (0.00s)
+=== RUN   TestR3B2OneBadDoesNotBlockOthers
+=== RUN   TestR3B2OneBadDoesNotBlockOthers/ss-link
+=== RUN   TestR3B2OneBadDoesNotBlockOthers/clash
+=== RUN   TestR3B2OneBadDoesNotBlockOthers/singbox
+=== RUN   TestR3B2OneBadDoesNotBlockOthers/surge
+--- PASS: TestR3B2OneBadDoesNotBlockOthers (0.00s)
+    --- PASS: TestR3B2OneBadDoesNotBlockOthers/ss-link (0.00s)
+    --- PASS: TestR3B2OneBadDoesNotBlockOthers/clash (0.00s)
+    --- PASS: TestR3B2OneBadDoesNotBlockOthers/singbox (0.00s)
+    --- PASS: TestR3B2OneBadDoesNotBlockOthers/surge (0.00s)
+=== RUN   TestR3B2SSLinkBase64Userinfo
+--- PASS: TestR3B2SSLinkBase64Userinfo (0.00s)
+=== RUN   TestR3B2ValidateSS2022PasswordHelper
+--- PASS: TestR3B2ValidateSS2022PasswordHelper (0.00s)
+=== RUN   TestR3B2ProxySingboxSS2022Guard
+=== RUN   TestR3B2ProxySingboxSS2022Guard/stock-plaintext
+=== RUN   TestR3B2ProxySingboxSS2022Guard/stock-short-key
+=== RUN   TestR3B2ProxySingboxSS2022Guard/valid-std
+=== RUN   TestR3B2ProxySingboxSS2022Guard/valid-rawurl
+=== RUN   TestR3B2ProxySingboxSS2022Guard/multi-segment-released
+=== RUN   TestR3B2ProxySingboxSS2022Guard/legacy-plaintext-kept
+--- PASS: TestR3B2ProxySingboxSS2022Guard (0.00s)
+    --- PASS: TestR3B2ProxySingboxSS2022Guard/stock-plaintext (0.00s)
+    --- PASS: TestR3B2ProxySingboxSS2022Guard/stock-short-key (0.00s)
+    --- PASS: TestR3B2ProxySingboxSS2022Guard/valid-std (0.00s)
+    --- PASS: TestR3B2ProxySingboxSS2022Guard/valid-rawurl (0.00s)
+    --- PASS: TestR3B2ProxySingboxSS2022Guard/multi-segment-released (0.00s)
+    --- PASS: TestR3B2ProxySingboxSS2022Guard/legacy-plaintext-kept (0.00s)
+=== RUN   TestR3B8ProtectedKeyUniverseDiff
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/vless
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/vmess
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/trojan
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/shadowsocks
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/shadowsocks+shadowtls
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/snell-v5
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/snell-v6-mode
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/snell+shadowtls
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/hysteria2
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/tuic
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/anytls
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/singbox/naive
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/xray/vless
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/xray/vmess-ws
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/xray/trojan-grpc-tls
+=== RUN   TestR3B8ProtectedKeyUniverseDiff/xray/shadowsocks
+--- PASS: TestR3B8ProtectedKeyUniverseDiff (0.03s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/vless (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/vmess (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/trojan (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/shadowsocks (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/shadowsocks+shadowtls (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/snell-v5 (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/snell-v6-mode (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/snell+shadowtls (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/hysteria2 (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/tuic (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/anytls (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/singbox/naive (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/xray/vless (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/xray/vmess-ws (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/xray/trojan-grpc-tls (0.00s)
+    --- PASS: TestR3B8ProtectedKeyUniverseDiff/xray/shadowsocks (0.00s)
+=== RUN   TestR3B8ExtraPskModeRejectedAtSaveAndRender
+=== RUN   TestR3B8ExtraPskModeRejectedAtSaveAndRender/snell_v6_psk_override
+=== RUN   TestR3B8ExtraPskModeRejectedAtSaveAndRender/snell_v5_mode_injection
+=== RUN   TestR3B8ExtraPskModeRejectedAtSaveAndRender/snell_v6_mode_override
+--- PASS: TestR3B8ExtraPskModeRejectedAtSaveAndRender (0.00s)
+    --- PASS: TestR3B8ExtraPskModeRejectedAtSaveAndRender/snell_v6_psk_override (0.00s)
+    --- PASS: TestR3B8ExtraPskModeRejectedAtSaveAndRender/snell_v5_mode_injection (0.00s)
+    --- PASS: TestR3B8ExtraPskModeRejectedAtSaveAndRender/snell_v6_mode_override (0.00s)
+=== RUN   TestR3B8BenignExtraStillAllowed
+    r3_b8_extra_protected_test.go:212: protected table after fix: [detour handshake listen listen_port method mode password port protocol psk settings tag tls transport type users version]
+--- PASS: TestR3B8BenignExtraStillAllowed (0.00s)
+=== RUN   TestR3GateF1NormalizedHelper
+--- PASS: TestR3GateF1NormalizedHelper (0.00s)
+=== RUN   TestR3GateF1ProxyRenderAllFaces
+=== RUN   TestR3GateF1ProxyRenderAllFaces/Std
+=== RUN   TestR3GateF1ProxyRenderAllFaces/RawStd
+=== RUN   TestR3GateF1ProxyRenderAllFaces/URL
+=== RUN   TestR3GateF1ProxyRenderAllFaces/RawURL
+--- PASS: TestR3GateF1ProxyRenderAllFaces (0.00s)
+    --- PASS: TestR3GateF1ProxyRenderAllFaces/Std (0.00s)
+    --- PASS: TestR3GateF1ProxyRenderAllFaces/RawStd (0.00s)
+    --- PASS: TestR3GateF1ProxyRenderAllFaces/URL (0.00s)
+    --- PASS: TestR3GateF1ProxyRenderAllFaces/RawURL (0.00s)
+=== RUN   TestR3GateF1SubscriptionPipeline
+--- PASS: TestR3GateF1SubscriptionPipeline (0.00s)
+=== RUN   TestR3GateF1BadAndMultiKeepExistingShape
+--- PASS: TestR3GateF1BadAndMultiKeepExistingShape (0.00s)
+=== RUN   TestR3GateF1BuiltinInboundFaces
+--- PASS: TestR3GateF1BuiltinInboundFaces (0.00s)
+=== RUN   TestR4B1CipherCaseVariantImport
+--- PASS: TestR4B1CipherCaseVariantImport (0.00s)
+=== RUN   TestR4B1StockCipherVariantRenderHeal
+--- PASS: TestR4B1StockCipherVariantRenderHeal (0.00s)
+=== RUN   TestR4B1RealityBadPBKRejectedAllPaths
+--- PASS: TestR4B1RealityBadPBKRejectedAllPaths (0.00s)
+=== RUN   TestR4B1RealityGoodPBKAcceptedAllPaths
+--- PASS: TestR4B1RealityGoodPBKAcceptedAllPaths (0.00s)
+=== RUN   TestR4B1RealityShortIDPredicate
+--- PASS: TestR4B1RealityShortIDPredicate (0.00s)
+=== RUN   TestR4B1BuiltinSS2022FourFormsSingleSegmentOnly
+--- PASS: TestR4B1BuiltinSS2022FourFormsSingleSegmentOnly (0.00s)
+=== RUN   TestR4B2SingboxMultiSegmentReleased
+=== RUN   TestR4B2SingboxMultiSegmentReleased/multi2-mixed-enc-256
+=== RUN   TestR4B2SingboxMultiSegmentReleased/multi2-std-url-256
+=== RUN   TestR4B2SingboxMultiSegmentReleased/multi3-128
+=== RUN   TestR4B2SingboxMultiSegmentReleased/multi2-already-std
+--- PASS: TestR4B2SingboxMultiSegmentReleased (0.00s)
+    --- PASS: TestR4B2SingboxMultiSegmentReleased/multi2-mixed-enc-256 (0.00s)
+    --- PASS: TestR4B2SingboxMultiSegmentReleased/multi2-std-url-256 (0.00s)
+    --- PASS: TestR4B2SingboxMultiSegmentReleased/multi3-128 (0.00s)
+    --- PASS: TestR4B2SingboxMultiSegmentReleased/multi2-already-std (0.00s)
+=== RUN   TestR4B2SingboxMultiBadStillSkipped
+=== RUN   TestR4B2SingboxMultiBadStillSkipped/multi-bad-second
+=== RUN   TestR4B2SingboxMultiBadStillSkipped/multi-bad-first
+=== RUN   TestR4B2SingboxMultiBadStillSkipped/multi-empty-segment
+=== RUN   TestR4B2SingboxMultiBadStillSkipped/multi-wrong-len-segment
+=== RUN   TestR4B2SingboxMultiBadStillSkipped/single-plaintext
+=== RUN   TestR4B2SingboxMultiBadStillSkipped/single-short
+--- PASS: TestR4B2SingboxMultiBadStillSkipped (0.00s)
+    --- PASS: TestR4B2SingboxMultiBadStillSkipped/multi-bad-second (0.00s)
+    --- PASS: TestR4B2SingboxMultiBadStillSkipped/multi-bad-first (0.00s)
+    --- PASS: TestR4B2SingboxMultiBadStillSkipped/multi-empty-segment (0.00s)
+    --- PASS: TestR4B2SingboxMultiBadStillSkipped/multi-wrong-len-segment (0.00s)
+    --- PASS: TestR4B2SingboxMultiBadStillSkipped/single-plaintext (0.00s)
+    --- PASS: TestR4B2SingboxMultiBadStillSkipped/single-short (0.00s)
+=== RUN   TestR4B2SingboxUnchangedFaces
+--- PASS: TestR4B2SingboxUnchangedFaces (0.00s)
+=== RUN   TestR4B2SingboxChainAndCount
+--- PASS: TestR4B2SingboxChainAndCount (0.00s)
+=== RUN   TestR4B2BuiltinInboundUntouched
+--- PASS: TestR4B2BuiltinInboundUntouched (0.00s)
+=== RUN   TestR5B1EnumGarbageRejectedAllPaths
+--- PASS: TestR5B1EnumGarbageRejectedAllPaths (0.00s)
+=== RUN   TestR5B1EnumLegalValuesAccepted
+--- PASS: TestR5B1EnumLegalValuesAccepted (0.00s)
+=== RUN   TestR5B1EncryptionGrammarAntiOverfit
+--- PASS: TestR5B1EncryptionGrammarAntiOverfit (0.00s)
+=== RUN   TestR5B1StockRenderSkip
+--- PASS: TestR5B1StockRenderSkip (0.00s)
+=== RUN   TestR5B1Hy2PortsSingboxRenderShape
+--- PASS: TestR5B1Hy2PortsSingboxRenderShape (0.00s)
+=== RUN   TestR5B1SnellShadowTLSModeSpelling
+--- PASS: TestR5B1SnellShadowTLSModeSpelling (0.00s)
+=== RUN   TestR6B1ValidSSCipherPerValue
+--- PASS: TestR6B1ValidSSCipherPerValue (0.00s)
+=== RUN   TestR6B1SSCipherGarbageRejectedAllPaths
+--- PASS: TestR6B1SSCipherGarbageRejectedAllPaths (0.00s)
+=== RUN   TestR6B1SSUnknownCipherRejected
+--- PASS: TestR6B1SSUnknownCipherRejected (0.00s)
+=== RUN   TestR6B1SSCipherLegalAccepted
+--- PASS: TestR6B1SSCipherLegalAccepted (0.00s)
+=== RUN   TestR6B1SSStockRenderSkip
+--- PASS: TestR6B1SSStockRenderSkip (0.01s)
+=== RUN   TestR6B1SSChacha20SingleFace
+--- PASS: TestR6B1SSChacha20SingleFace (0.00s)
+=== RUN   TestR6B1SS2022BadKeyClashSkip
+--- PASS: TestR6B1SS2022BadKeyClashSkip (0.00s)
+=== RUN   TestR6B1SS2022SIP023LegalClashVerbatim
+--- PASS: TestR6B1SS2022SIP023LegalClashVerbatim (0.00s)
+=== RUN   TestR6B1ChainTargetGuards
+--- PASS: TestR6B1ChainTargetGuards (0.00s)
+=== RUN   TestR6B1ChainSSCipherGarbageRejected
+--- PASS: TestR6B1ChainSSCipherGarbageRejected (0.00s)
+=== RUN   TestR6B1SSOtherFacesGate
+--- PASS: TestR6B1SSOtherFacesGate (0.00s)
+=== RUN   TestR7B1XrayChainSSSubsetGate
+--- PASS: TestR7B1XrayChainSSSubsetGate (0.00s)
+=== RUN   TestR7B1SubscriptionFacesUnchanged
+--- PASS: TestR7B1SubscriptionFacesUnchanged (0.00s)
+=== RUN   TestR7B1SingboxChainSSUnchanged
+--- PASS: TestR7B1SingboxChainSSUnchanged (0.00s)
+=== RUN   TestR8B1ENC4PartOfficialDefaultsAccepted
+--- PASS: TestR8B1ENC4PartOfficialDefaultsAccepted (0.00s)
+=== RUN   TestR8B1ENCGrammarGarbageStillRejected
+--- PASS: TestR8B1ENCGrammarGarbageStillRejected (0.00s)
+=== RUN   TestR8B2SIP023NoncanonXrayChainNormalized
+--- PASS: TestR8B2SIP023NoncanonXrayChainNormalized (0.00s)
+=== RUN   TestR8B2SIP023NoncanonOtherFacesUnchanged
+--- PASS: TestR8B2SIP023NoncanonOtherFacesUnchanged (0.00s)
+=== RUN   TestR8B2SSAES128GCMSivSingleFace
+--- PASS: TestR8B2SSAES128GCMSivSingleFace (0.00s)
+=== RUN   TestR8B2SSAES256GCMSivSingleFace
+--- PASS: TestR8B2SSAES256GCMSivSingleFace (0.00s)
+=== RUN   TestR8B2SSChacha8IETFPoly1305SingleFace
+--- PASS: TestR8B2SSChacha8IETFPoly1305SingleFace (0.00s)
+=== RUN   TestR8B2SSAES128CCMSingleFace
+--- PASS: TestR8B2SSAES128CCMSingleFace (0.00s)
+=== RUN   TestR8B2SSAES256CCMSingleFace
+--- PASS: TestR8B2SSAES256CCMSingleFace (0.00s)
+=== RUN   TestR9B2SingboxVLESSEncryptionCarried
+--- PASS: TestR9B2SingboxVLESSEncryptionCarried (0.00s)
+=== RUN   TestR9B2SingboxVLESSEncryptionGarbageRejected
+--- PASS: TestR9B2SingboxVLESSEncryptionGarbageRejected (0.00s)
+=== RUN   TestR9B2SingboxVLESSEncryptionNoneMissingUnchanged
+--- PASS: TestR9B2SingboxVLESSEncryptionNoneMissingUnchanged (0.00s)
+=== RUN   TestR9B2VLESSEncryptionPaddingGrammarRejected
+--- PASS: TestR9B2VLESSEncryptionPaddingGrammarRejected (0.00s)
+=== RUN   TestR9B2VLESSEncryptionFalsifiedGridsStillAccepted
+--- PASS: TestR9B2VLESSEncryptionFalsifiedGridsStillAccepted (0.00s)
+=== RUN   TestR9B3ChainFourFieldVariantRenderHeal
+--- PASS: TestR9B3ChainFourFieldVariantRenderHeal (0.00s)
+=== RUN   TestR9B3SubscriptionFourFieldVariantRenderHeal
+--- PASS: TestR9B3SubscriptionFourFieldVariantRenderHeal (0.00s)
+=== RUN   TestR9B3LegalLowercaseVerbatim
+--- PASS: TestR9B3LegalLowercaseVerbatim (0.00s)
+=== RUN   TestR9B4CheckChainNaiveGate
+--- PASS: TestR9B4CheckChainNaiveGate (0.00s)
+=== RUN   TestR9B4RenderSingboxNaiveChainGate
+--- PASS: TestR9B4RenderSingboxNaiveChainGate (0.00s)
+=== RUN   TestR9B4NaiveInboundUnaffected
+--- PASS: TestR9B4NaiveInboundUnaffected (0.00s)
+=== RUN   TestR9B4SingboxClientHasNaive
+--- PASS: TestR9B4SingboxClientHasNaive (0.00s)
+=== RUN   TestR9B4SubscriptionSingboxNaiveUAGate
+--- PASS: TestR9B4SubscriptionSingboxNaiveUAGate (0.00s)
+=== RUN   TestRenderRealm
+--- PASS: TestRenderRealm (0.00s)
+=== RUN   TestRealmCounterID
+--- PASS: TestRealmCounterID (0.00s)
+=== RUN   TestProxyClashRendersImportedXHTTP
+--- PASS: TestProxyClashRendersImportedXHTTP (0.00s)
+=== RUN   TestLoonQXRenderSS2022ChachaCipher
+--- PASS: TestLoonQXRenderSS2022ChachaCipher (0.00s)
+=== RUN   TestFormatForUserAgentSurgeFamily
+--- PASS: TestFormatForUserAgentSurgeFamily (0.00s)
+=== RUN   TestProxySingboxRendersHTTPAndQUICTransports
+--- PASS: TestProxySingboxRendersHTTPAndQUICTransports (0.00s)
+=== RUN   TestComboSupportedMatrix
+--- PASS: TestComboSupportedMatrix (0.00s)
+=== RUN   TestChainHideRelaysCoversClientFormats
+--- PASS: TestChainHideRelaysCoversClientFormats (0.00s)
+=== RUN   TestLoonList
+--- PASS: TestLoonList (0.00s)
+=== RUN   TestQXList
+--- PASS: TestQXList (0.00s)
+=== RUN   TestShadowrocketChain
+--- PASS: TestShadowrocketChain (0.00s)
+=== RUN   TestFormatForUserAgentIOSClients
+--- PASS: TestFormatForUserAgentIOSClients (0.00s)
+=== RUN   TestSubscriptionRulesOffRegression
+--- PASS: TestSubscriptionRulesOffRegression (0.00s)
+=== RUN   TestSubscriptionRulesOnConfig
+--- PASS: TestSubscriptionRulesOnConfig (0.00s)
+=== RUN   TestSubscriptionSurgeRulesGroupClosure
+--- PASS: TestSubscriptionSurgeRulesGroupClosure (0.00s)
+=== RUN   TestFormatForUserAgentStash
+--- PASS: TestFormatForUserAgentStash (0.00s)
+=== RUN   TestStashRulesYAMLAndBodyParity
+--- PASS: TestStashRulesYAMLAndBodyParity (0.00s)
+=== RUN   TestStashRulesOffByteIdenticalToClash
+--- PASS: TestStashRulesOffByteIdenticalToClash (0.00s)
+=== RUN   TestStashNodeSetAndCountParity
+--- PASS: TestStashNodeSetAndCountParity (0.00s)
+=== RUN   TestStashChainGroups
+--- PASS: TestStashChainGroups (0.00s)
+=== RUN   TestShareURIs
+--- PASS: TestShareURIs (0.00s)
+=== RUN   TestSubscriptionFormats
+--- PASS: TestSubscriptionFormats (0.00s)
+=== RUN   TestSubscriptionEmpty
+--- PASS: TestSubscriptionEmpty (0.00s)
+=== RUN   TestFormatForUserAgent
+--- PASS: TestFormatForUserAgent (0.00s)
+=== RUN   TestYAMLQuotesHostileNames
+--- PASS: TestYAMLQuotesHostileNames (0.00s)
+=== RUN   TestSharePhase3
+--- PASS: TestSharePhase3 (0.00s)
+=== RUN   TestHysteria2PortHopping
+--- PASS: TestHysteria2PortHopping (0.00s)
+=== RUN   TestClashProxyRendersXHTTP
+--- PASS: TestClashProxyRendersXHTTP (0.00s)
+=== RUN   TestR1B7ImportedSnellShadowTLSFingerprint
+--- PASS: TestR1B7ImportedSnellShadowTLSFingerprint (0.00s)
+=== RUN   TestRenderSingboxSnell
+--- PASS: TestRenderSingboxSnell (0.00s)
+=== RUN   TestSingboxSnellRules
+--- PASS: TestSingboxSnellRules (0.00s)
+=== RUN   TestSingboxSnellChainCoversBackend
+--- PASS: TestSingboxSnellChainCoversBackend (0.00s)
+=== RUN   TestSurgeSnellV6
+--- PASS: TestSurgeSnellV6 (0.00s)
+=== RUN   TestSingboxClientHasSnell
+--- PASS: TestSingboxClientHasSnell (0.00s)
+=== RUN   TestSingboxProfileSnellOnlyForNewClients
+--- PASS: TestSingboxProfileSnellOnlyForNewClients (0.00s)
+=== RUN   TestSingboxChainThroughSnell
+--- PASS: TestSingboxChainThroughSnell (0.00s)
+=== RUN   TestSnellModeRules
+--- PASS: TestSnellModeRules (0.00s)
+=== RUN   TestSnellKernelV6
+--- PASS: TestSnellKernelV6 (0.00s)
+=== RUN   TestR1B7ImportedSnellUDPSynthesized
+--- PASS: TestR1B7ImportedSnellUDPSynthesized (0.00s)
+=== RUN   TestSplitXray
+--- PASS: TestSplitXray (0.00s)
+=== RUN   TestSplitSingboxWithChain
+--- PASS: TestSplitSingboxWithChain (0.00s)
+=== RUN   TestNormalizeSplitRules
+--- PASS: TestNormalizeSplitRules (0.00s)
+=== RUN   TestXrayGeoData
+--- PASS: TestXrayGeoData (0.00s)
+=== RUN   TestSSUserPSKDerivation
+--- PASS: TestSSUserPSKDerivation (0.00s)
+=== RUN   TestUserCapableMatrix
+--- PASS: TestUserCapableMatrix (0.00s)
+=== RUN   TestCompanionSSRenderXray
+--- PASS: TestCompanionSSRenderXray (0.00s)
+=== RUN   TestCompanionSSRenderSingbox
+--- PASS: TestCompanionSSRenderSingbox (0.00s)
+=== RUN   TestSingboxRenderCompanionWithoutUsersNoPanic
+--- PASS: TestSingboxRenderCompanionWithoutUsersNoPanic (0.00s)
+=== RUN   TestCompanionSSForUser
+--- PASS: TestCompanionSSForUser (0.00s)
+=== RUN   TestPlainSSWithUsersStaysSingleUser
+--- PASS: TestPlainSSWithUsersStaysSingleUser (0.00s)
+=== RUN   TestSubscriptionChainClash
+--- PASS: TestSubscriptionChainClash (0.00s)
+=== RUN   TestSubscriptionChainSingboxAndSurge
+--- PASS: TestSubscriptionChainSingboxAndSurge (0.00s)
+=== RUN   TestSubscriptionChainNeedsBothSides
+--- PASS: TestSubscriptionChainNeedsBothSides (0.00s)
+=== RUN   TestMarkChainClearsOneSidedMatch
+--- PASS: TestMarkChainClearsOneSidedMatch (0.00s)
+=== RUN   TestSubscriptionChainBySource
+--- PASS: TestSubscriptionChainBySource (0.00s)
+=== RUN   TestSubscriptionChainSourceFilter
+--- PASS: TestSubscriptionChainSourceFilter (0.00s)
+=== RUN   TestSubscriptionNodeCountClash
+--- PASS: TestSubscriptionNodeCountClash (0.00s)
+=== RUN   TestSubscriptionNodeCountSingbox
+--- PASS: TestSubscriptionNodeCountSingbox (0.00s)
+=== RUN   TestSubscriptionNodeCountSurge
+--- PASS: TestSubscriptionNodeCountSurge (0.00s)
+=== RUN   TestSubscriptionNodeCountBase64
+--- PASS: TestSubscriptionNodeCountBase64 (0.00s)
+=== RUN   TestApplySubOptionsRenameAndSort
+--- PASS: TestApplySubOptionsRenameAndSort (0.00s)
+=== RUN   TestRegionOf
+--- PASS: TestRegionOf (0.00s)
+=== RUN   TestSubscriptionRegionGroups
+--- PASS: TestSubscriptionRegionGroups (0.00s)
+=== RUN   TestSubPipelineFilterFlagDedupe
+--- PASS: TestSubPipelineFilterFlagDedupe (0.00s)
+=== RUN   TestR1B7SubScriptLimitCountsRunes
+--- PASS: TestR1B7SubScriptLimitCountsRunes (0.00s)
+=== RUN   TestRenderUsers
+--- PASS: TestRenderUsers (0.00s)
+=== RUN   TestForUser
+--- PASS: TestForUser (0.00s)
+=== RUN   TestRenderUserMarks
+--- PASS: TestRenderUserMarks (0.00s)
+=== RUN   TestEncryptionStringsRoundTrip
+--- PASS: TestEncryptionStringsRoundTrip (0.00s)
+=== RUN   TestNormalizeEncryption
+--- PASS: TestNormalizeEncryption (0.00s)
+=== RUN   TestEncryptionRenderAndShare
+--- PASS: TestEncryptionRenderAndShare (0.00s)
+=== RUN   TestImportedEncryptionPreserved
+--- PASS: TestImportedEncryptionPreserved (0.00s)
+=== RUN   TestParseImportPreservesVLESSEncryption
+--- PASS: TestParseImportPreservesVLESSEncryption (0.00s)
+=== RUN   TestShadowrocketProfileSkipsEncryption
+--- PASS: TestShadowrocketProfileSkipsEncryption (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.413s

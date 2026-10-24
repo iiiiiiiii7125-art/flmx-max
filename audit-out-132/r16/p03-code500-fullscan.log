@@ -1,0 +1,29 @@
+=== A: envelope code-500 patterns, whole repo incl tests, excl node_modules/dist ===
+./doc/audit/J-api.md:66:- 现象：参数错误返回 `Err(500)`，业务失败返回 `Err(-2)`，同一接口混用两种错误码体系。前端若只处理一种会漏提示。
+hits-exit:0
+=== B: Err(http.StatusInternalServerError / Status 500 const as envelope code ===
+hits-exit:1
+=== C: 500 in _test files ===
+go-backend/internal/health/checker_test.go:199:	time.Sleep(500 * time.Millisecond)
+go-backend/internal/http/handler/audit_r2_fix_test.go:342:	if err := db.Create(&model.ForwardPort{ForwardID: fwd.ID, NodeID: entry, Port: 45001}).Error; err != nil {
+go-backend/internal/http/handler/audit_r2_fix_test.go:361:	if relayEP.Host != "relay.example.com" || relayEP.Port != 45001 {
+go-backend/internal/http/handler/audit_r3_fix_test.go:221:	h, row := seedBadEntryRelay(t, r, "good.com@evil.com", 45001)
+go-backend/internal/http/handler/audit_r3_fix_test.go:239:	h2, row2 := seedBadEntryRelay(t, r2, "198.51.100.10", 45002)
+go-backend/internal/http/handler/audit_r3_fix_test.go:243:		if kinds[i] == "relay" && e.Host == "198.51.100.10" && e.Port == 45002 {
+go-backend/internal/http/handler/b8_federation_usage_test.go:58:	if elapsed >= 4500*time.Millisecond {
+go-backend/internal/http/handler/backup_r4_b5_test.go:249:	time.Sleep(1500 * time.Millisecond)
+go-backend/internal/http/handler/federation_fix132_test.go:318:	conn := connectorOf([]tunnelRuntimeNode{{NodeID: 2, Protocol: "tls", Strategy: "round", Port: 45000}})
+go-backend/internal/http/handler/federation_fix132_test.go:324:	conn = connectorOf([]tunnelRuntimeNode{{NodeID: 3, Protocol: "tls", Strategy: "round", Port: 45001}})
+go-backend/internal/http/handler/federation_share_test.go:567:		PortRangeStart: 25000,
+go-backend/internal/http/handler/federation_share_test.go:580:	tunnelName := fmt.Sprintf("Share-%d-Port-%d", share.ID, 25001)
+go-backend/internal/http/handler/federation_share_test.go:591:	`, share.ID, share.NodeID, "del-r1", "del-rk1", "", "forward", "", "20_2_10", "tcp", "fifo", 25001, "", 1, 1, now, now).Error; err != nil {
+go-backend/internal/http/handler/federation_share_test.go:599:	activeCount := mustQueryInt(t, r, `SELECT COUNT(1) FROM peer_share_runtime WHERE share_id = ? AND port = ? AND status = 1`, share.ID, 25001)
+go-backend/internal/http/handler/fix132_a_test.go:118:	req.RemoteAddr = "127.0.0.9:5000"
+go-backend/internal/http/handler/fix2a_v2_regression_test.go:345:		f.seedBaseline(t, "realm:e1", 1000, 5000)
+go-backend/internal/http/handler/fix2a_v2_regression_test.go:376:	f.seedBaseline(t, "realm:e1", 1000, 5000)
+go-backend/internal/http/handler/fix2a_v2_regression_test.go:525:	mock.setCounters(1000, 5000)
+go-backend/internal/http/handler/fix2a_v2_regression_test.go:531:	// 切到 realm（在线）：基线钉在 1000/5000、无增量入账。
+go-backend/internal/http/handler/forward_reset_flow_test.go:87:		`INSERT INTO user_tunnel(id, user_id, tunnel_id, num, flow, in_flow, out_flow, flow_reset_time, exp_time, status) VALUES(10, 2, 1, 10, 100, 500, 600, 0, 0, 1)`,
+=== D: WriteJSON R{Code:500} multiline check ===
+=== E: git status (must stay clean) ===
+b54b44f772d8b4efdd6d08b1fbbbc40c8091a143

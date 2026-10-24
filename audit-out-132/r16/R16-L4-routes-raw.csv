@@ -1,0 +1,203 @@
+idx,path,handler,handler_func,method_guard,auth,source
+1,/api/v1/user/login,h.login,login,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:240
+2,/api/v1/user/passkey/status,h.passkeyStatus,passkeyStatus,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:241
+3,/api/v1/user/passkey/login/begin,h.passkeyLoginBegin,passkeyLoginBegin,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:242
+4,/api/v1/user/passkey/login/finish,h.passkeyLoginFinish,passkeyLoginFinish,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:243
+5,/api/v1/user/passkey/register/begin,h.passkeyRegisterBegin,passkeyRegisterBegin,POST only,JWT (any role),handler.go:244
+6,/api/v1/user/passkey/register/finish,h.passkeyRegisterFinish,passkeyRegisterFinish,POST only,JWT (any role),handler.go:245
+7,/api/v1/user/passkey/list,h.passkeyList,passkeyList,POST only,JWT (any role),handler.go:246
+8,/api/v1/user/passkey/delete,h.passkeyDelete,passkeyDelete,POST only,JWT (any role),handler.go:247
+9,/api/v1/user/list,h.userList,userList,POST only,ADMIN (JWT + role=admin),handler.go:248
+10,/api/v1/user/create,h.userCreate,userCreate,POST only,ADMIN (JWT + role=admin),handler.go:249
+11,/api/v1/user/update,h.userUpdate,userUpdate,POST only,ADMIN (JWT + role=admin),handler.go:250
+12,/api/v1/user/delete,h.userDelete,userDelete,POST only,ADMIN (JWT + role=admin),handler.go:251
+13,/api/v1/user/reset,h.userResetFlow,userResetFlow,POST only,ADMIN (JWT + role=admin),handler.go:252
+14,/api/v1/user/quota/reset,h.userQuotaReset,userQuotaReset,POST only,ADMIN (JWT + role=admin),handler.go:253
+15,/api/v1/user/groups,h.userGroups,userGroups,POST only,JWT (any role),handler.go:254
+16,/api/v1/public/config/get,h.getPublicConfigByName,getPublicConfigByName,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:255
+17,/api/v1/config/get,h.getConfigByName,getConfigByName,POST only,OPTIONAL-AUTH (JWT optional),handler.go:256
+18,/api/v1/config/list,h.getConfigs,getConfigs,POST only,JWT (any role),handler.go:257
+19,/api/v1/config/update,h.updateConfigs,updateConfigs,POST only,ADMIN (JWT + role=admin),handler.go:258
+20,/api/v1/config/update-single,h.updateSingleConfig,updateSingleConfig,POST only,ADMIN (JWT + role=admin),handler.go:259
+21,/api/v1/system/storage,h.storageSummary,storageSummary,"not(Get,Post)",ADMIN (JWT + role=admin),handler.go:260
+22,/api/v1/system/version,h.systemVersion,systemVersion,POST only,ADMIN (JWT + role=admin),handler.go:261
+23,/api/v1/system/check-updates,h.systemCheckUpdates,systemCheckUpdates,POST only,ADMIN (JWT + role=admin),handler.go:262
+24,/api/v1/system/upgrade,h.systemUpgrade,systemUpgrade,POST only,ADMIN (JWT + role=admin),handler.go:263
+25,/api/v1/system/upgrade/status,h.systemUpgradeStatus,systemUpgradeStatus,GET only,ADMIN (JWT + role=admin),handler.go:264
+26,/api/v1/backup/export,h.backupExport,backupExport,POST only,ADMIN (JWT + role=admin),handler.go:265
+27,/api/v1/backup/gist/status,h.gistBackupStatus,gistBackupStatus,POST only,ADMIN (JWT + role=admin),handler.go:266
+28,/api/v1/backup/gist/save,h.gistBackupSave,gistBackupSave,POST only,ADMIN (JWT + role=admin),handler.go:267
+29,/api/v1/backup/gist/upload,h.gistBackupUpload,gistBackupUpload,POST only,ADMIN (JWT + role=admin),handler.go:268
+30,/api/v1/backup/gist/versions,h.gistBackupVersions,gistBackupVersions,POST only,ADMIN (JWT + role=admin),handler.go:269
+31,/api/v1/backup/gist/restore,h.gistBackupRestore,gistBackupRestore,POST only,ADMIN (JWT + role=admin),handler.go:270
+32,/api/v1/backup/import,h.backupImport,backupImport,POST only,ADMIN (JWT + role=admin),handler.go:271
+33,/api/v1/backup/restore,h.backupImport,backupImport,POST only,ADMIN (JWT + role=admin),handler.go:272
+34,/api/v1/api/v1/backup/export,h.backupExport,backupExport,POST only,ADMIN (JWT + role=admin),handler.go:273
+35,/api/v1/api/v1/backup/import,h.backupImport,backupImport,POST only,ADMIN (JWT + role=admin),handler.go:274
+36,/api/v1/api/v1/backup/restore,h.backupImport,backupImport,POST only,ADMIN (JWT + role=admin),handler.go:275
+37,/api/v1/captcha/check,h.checkCaptcha,checkCaptcha,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:276
+38,/api/v1/captcha/verify,h.captchaVerify,captchaVerify,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:277
+39,/api/v1/user/package,h.userPackage,userPackage,POST only,JWT (any role),handler.go:278
+40,/api/v1/user/subscription/traffic,h.userSubscriptionTraffic,userSubscriptionTraffic,POST only,JWT (any role),handler.go:279
+41,/api/v1/user/updatePassword,h.updatePassword,updatePassword,POST only,JWT (any role),handler.go:280
+42,/api/v1/node/list,h.nodeList,nodeList,POST only,ADMIN (JWT + role=admin),handler.go:281
+43,/api/v1/node/create,h.nodeCreate,nodeCreate,POST only,ADMIN (JWT + role=admin),handler.go:282
+44,/api/v1/node/update,h.nodeUpdate,nodeUpdate,POST only,ADMIN (JWT + role=admin),handler.go:283
+45,/api/v1/node/delete,h.nodeDelete,nodeDelete,POST only,ADMIN (JWT + role=admin),handler.go:284
+46,/api/v1/node/install,h.nodeInstall,nodeInstall,POST only,ADMIN (JWT + role=admin),handler.go:285
+47,/api/v1/node/update-order,h.nodeUpdateOrder,nodeUpdateOrder,POST only,ADMIN (JWT + role=admin),handler.go:286
+48,/api/v1/node/dismiss-expiry-reminder,h.nodeDismissExpiryReminder,nodeDismissExpiryReminder,POST only,ADMIN (JWT + role=admin),handler.go:287
+49,/api/v1/node/batch-delete,h.nodeBatchDelete,nodeBatchDelete,POST only,ADMIN (JWT + role=admin),handler.go:288
+50,/api/v1/node/check-status,h.nodeCheckStatus,nodeCheckStatus,POST only,ADMIN (JWT + role=admin),handler.go:289
+51,/api/v1/node/upgrade,h.nodeUpgrade,nodeUpgrade,POST only,ADMIN (JWT + role=admin),handler.go:290
+52,/api/v1/node/batch-upgrade,h.nodeBatchUpgrade,nodeBatchUpgrade,POST only,ADMIN (JWT + role=admin),handler.go:291
+53,/api/v1/node/rollback,h.nodeRollback,nodeRollback,POST only,ADMIN (JWT + role=admin),handler.go:292
+54,/api/v1/node/latency/probe,h.nodeLatencyProbe,nodeLatencyProbe,POST only,ADMIN (JWT + role=admin),handler.go:294
+55,/api/v1/node/latency/targets,h.nodeLatencyTargetsSet,nodeLatencyTargetsSet,POST only,ADMIN (JWT + role=admin),handler.go:295
+56,/api/v1/node/latency/history,h.nodeLatencyHistory,nodeLatencyHistory,POST only,ADMIN (JWT + role=admin),handler.go:296
+57,/api/v1/node/tune,h.nodeTune,nodeTune,POST only,ADMIN (JWT + role=admin),handler.go:298
+58,/api/v1/node/route,h.nodeRouteGet,nodeRouteGet,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:300
+59,/api/v1/node/route/probe,h.nodeRouteProbe,nodeRouteProbe,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:301
+60,/api/v1/open_api/gh/,"h.githubMirror (via const ghMirrorPath, subtree pattern)",githubMirror,"GET,HEAD",PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:303
+61,/api/v1/node/releases,h.listReleases,listReleases,POST only,ADMIN (JWT + role=admin),handler.go:304
+62,/api/v1/node/nftables/test,h.nodeNftablesTest,nodeNftablesTest,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:305
+63,/api/v1/node/nftables/reconcile,h.nodeNftablesReconcile,nodeNftablesReconcile,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:306
+64,/api/v1/node/nftables/clear,h.nodeNftablesClear,nodeNftablesClear,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:307
+65,/api/v1/node/nftables/pending-deletes,h.nftPendingDeleteList,nftPendingDeleteList,POST only,ADMIN (JWT + role=admin),handler.go:308
+66,/api/v1/kernel/capabilities,h.kernelCapabilities,kernelCapabilities,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:309
+67,/api/v1/kernel/list,h.kernelList,kernelList,POST only,ADMIN (JWT + role=admin),handler.go:310
+68,/api/v1/kernel/install,h.kernelInstall,kernelInstall,POST only,ADMIN (JWT + role=admin),handler.go:311
+69,/api/v1/kernel/versions,h.kernelVersions,kernelVersions,POST only,ADMIN (JWT + role=admin),handler.go:312
+70,/api/v1/kernel/control,h.kernelControl,kernelControl,POST only,ADMIN (JWT + role=admin),handler.go:313
+71,/api/v1/kernel/logs,h.kernelLogs,kernelLogs,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:314
+72,/api/v1/inbound/list,h.inboundList,inboundList,POST only,ADMIN (JWT + role=admin),handler.go:315
+73,/api/v1/inbound/create,h.inboundCreate,inboundCreate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:316
+74,/api/v1/inbound/update,h.inboundUpdate,inboundUpdate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:317
+75,/api/v1/inbound/delete,h.inboundDelete,inboundDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:318
+76,/api/v1/inbound/batch-delete,h.inboundBatchDelete,inboundBatchDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:319
+77,/api/v1/inbound/probe,h.inboundProbe,inboundProbe,POST only,ADMIN (JWT + role=admin),handler.go:320
+78,/api/v1/inbound/batch-toggle,h.inboundBatchToggle,inboundBatchToggle,POST only,ADMIN (JWT + role=admin),handler.go:321
+79,/api/v1/notify/test,h.notifyTest,notifyTest,POST only,ADMIN (JWT + role=admin),handler.go:322
+80,/api/v1/subscription/list,h.subscriptionList,subscriptionList,POST only,ADMIN (JWT + role=admin),handler.go:323
+81,/api/v1/subscription/save,h.subscriptionSave,subscriptionSave,POST only,ADMIN (JWT + role=admin),handler.go:324
+82,/api/v1/subscription/delete,h.subscriptionDelete,subscriptionDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:325
+83,/api/v1/subscription/reset,h.subscriptionReset,subscriptionReset,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:326
+84,/api/v1/subscription/reset-traffic,h.subscriptionResetTraffic,subscriptionResetTraffic,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:327
+85,/api/v1/subscription/traffic,h.subscriptionTraffic,subscriptionTraffic,POST only,ADMIN (JWT + role=admin),handler.go:328
+86,/api/v1/subscription/source/list,h.remoteSourceList,remoteSourceList,POST only,ADMIN (JWT + role=admin),handler.go:329
+87,/api/v1/subscription/source/save,h.remoteSourceSave,remoteSourceSave,POST only,ADMIN (JWT + role=admin),handler.go:330
+88,/api/v1/subscription/source/refresh,h.remoteSourceRefresh,remoteSourceRefresh,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:331
+89,/api/v1/subscription/source/delete,h.remoteSourceDelete,remoteSourceDelete,POST only,ADMIN (JWT + role=admin),handler.go:332
+90,/api/v1/subscription/preview,h.subscriptionPreview,subscriptionPreview,POST only,ADMIN (JWT + role=admin),handler.go:333
+91,/api/v1/inbound/toggle,h.inboundToggle,inboundToggle,POST only,ADMIN (JWT + role=admin),handler.go:334
+92,/api/v1/inbound/split,h.inboundSplitSave,inboundSplitSave,POST only,ADMIN (JWT + role=admin),handler.go:335
+93,/api/v1/inbound/reset-traffic,h.inboundResetTraffic,inboundResetTraffic,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:336
+94,/api/v1/inbound/regenerate,h.inboundRegenerate,inboundRegenerate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:337
+95,/api/v1/inbound/share,h.inboundShare,inboundShare,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:338
+96,/api/v1/inbound/import,h.inboundImport,inboundImport,POST only,ADMIN (JWT + role=admin),handler.go:339
+97,/api/v1/inbound/external/update,h.inboundExternalUpdate,inboundExternalUpdate,POST only,ADMIN (JWT + role=admin),handler.go:340
+98,/api/v1/inbound/sub/info,h.inboundSubInfo,inboundSubInfo,POST only,JWT (any role),handler.go:341
+99,/api/v1/inbound/relay/list,h.inboundRelayList,inboundRelayList,POST only,ADMIN (JWT + role=admin),handler.go:342
+100,/api/v1/inbound/relay/create,h.inboundRelayCreate,inboundRelayCreate,POST only,ADMIN (JWT + role=admin),handler.go:343
+101,/api/v1/inbound/relay/delete,h.inboundRelayDelete,inboundRelayDelete,POST only,ADMIN (JWT + role=admin),handler.go:344
+102,/api/v1/inbound/relay/probe,h.inboundRelayProbe,inboundRelayProbe,POST only,ADMIN (JWT + role=admin),handler.go:345
+103,/api/v1/user-inbound/list,h.getUserInbounds,getUserInbounds,POST only,ADMIN (JWT + role=admin),handler.go:346
+104,/api/v1/user-inbound/set,h.setUserInbounds,setUserInbounds,POST only,ADMIN (JWT + role=admin),handler.go:347
+105,/api/v1/user-inbound/mine,h.getMyInbounds,getMyInbounds,POST only,JWT (any role),handler.go:348
+106,/api/v1/user-subscription/list,h.userSubscriptionList,userSubscriptionList,POST only,ADMIN (JWT + role=admin),handler.go:349
+107,/api/v1/user-subscription/set,h.userSubscriptionSet,userSubscriptionSet,POST only,ADMIN (JWT + role=admin),handler.go:350
+108,/api/v1/user-subscription/mine,h.userSubscriptionMine,userSubscriptionMine,POST only,JWT (any role),handler.go:351
+109,/api/v1/open_api/sub/,h.openSubscription,openSubscription,"GET,HEAD",PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:352
+110,/api/v1/tunnel/list,h.tunnelList,tunnelList,POST only,ADMIN (JWT + role=admin),handler.go:353
+111,/api/v1/tunnel/create,h.tunnelCreate,tunnelCreate,POST only,ADMIN (JWT + role=admin),handler.go:354
+112,/api/v1/tunnel/get,h.tunnelGet,tunnelGet,POST only,ADMIN (JWT + role=admin),handler.go:355
+113,/api/v1/tunnel/update,h.tunnelUpdate,tunnelUpdate,POST only,ADMIN (JWT + role=admin),handler.go:356
+114,/api/v1/tunnel/delete,h.tunnelDelete,tunnelDelete,POST only,ADMIN (JWT + role=admin),handler.go:357
+115,/api/v1/tunnel/delete-preview,h.tunnelDeletePreview,tunnelDeletePreview,POST only,ADMIN (JWT + role=admin),handler.go:358
+116,/api/v1/tunnel/delete-with-forwards,h.tunnelDeleteWithForwards,tunnelDeleteWithForwards,POST only,ADMIN (JWT + role=admin),handler.go:359
+117,/api/v1/tunnel/batch-delete-preview,h.tunnelBatchDeletePreview,tunnelBatchDeletePreview,POST only,ADMIN (JWT + role=admin),handler.go:360
+118,/api/v1/tunnel/batch-delete-with-forwards,h.tunnelBatchDeleteWithForwards,tunnelBatchDeleteWithForwards,POST only,ADMIN (JWT + role=admin),handler.go:361
+119,/api/v1/tunnel/diagnose,h.tunnelDiagnose,tunnelDiagnose,POST only,ADMIN (JWT + role=admin),handler.go:362
+120,/api/v1/tunnel/diagnose/stream,h.tunnelDiagnoseStream,tunnelDiagnoseStream,POST only,ADMIN (JWT + role=admin),handler.go:363
+121,/api/v1/tunnel/update-order,h.tunnelUpdateOrder,tunnelUpdateOrder,POST only,ADMIN (JWT + role=admin),handler.go:364
+122,/api/v1/tunnel/batch-delete,h.tunnelBatchDelete,tunnelBatchDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:365
+123,/api/v1/tunnel/batch-redeploy,h.tunnelBatchRedeploy,tunnelBatchRedeploy,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:366
+124,/api/v1/tunnel/user/assign,h.userTunnelAssign,userTunnelAssign,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:367
+125,/api/v1/tunnel/user/batch-assign,h.userTunnelBatchAssign,userTunnelBatchAssign,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:368
+126,/api/v1/tunnel/user/remove,h.userTunnelRemove,userTunnelRemove,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:369
+127,/api/v1/tunnel/user/update,h.userTunnelUpdate,userTunnelUpdate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:370
+128,/api/v1/forward/list,h.forwardList,forwardList,POST only,JWT (any role),handler.go:371
+129,/api/v1/forward/create,h.forwardCreate,forwardCreate,ANY (no method check in body),JWT (any role),handler.go:372
+130,/api/v1/forward/update,h.forwardUpdate,forwardUpdate,ANY (no method check in body),JWT (any role),handler.go:373
+131,/api/v1/forward/delete,h.forwardDelete,forwardDelete,ANY (no method check in body),JWT (any role),handler.go:374
+132,/api/v1/forward/force-delete,h.forwardForceDelete,forwardForceDelete,POST only,JWT (any role),handler.go:375
+133,/api/v1/forward/pause,h.forwardPause,forwardPause,ANY (no method check in body),JWT (any role),handler.go:376
+134,/api/v1/forward/resume,h.forwardResume,forwardResume,ANY (no method check in body),JWT (any role),handler.go:377
+135,/api/v1/forward/reset-flow,h.forwardResetFlow,forwardResetFlow,ANY (no method check in body),JWT (any role),handler.go:378
+136,/api/v1/forward/diagnose,h.forwardDiagnose,forwardDiagnose,ANY (no method check in body),JWT (any role),handler.go:379
+137,/api/v1/forward/diagnose/stream,h.forwardDiagnoseStream,forwardDiagnoseStream,POST only,JWT (any role),handler.go:380
+138,/api/v1/forward/update-order,h.forwardUpdateOrder,forwardUpdateOrder,POST only,JWT (any role),handler.go:381
+139,/api/v1/forward/batch-delete,h.forwardBatchDelete,forwardBatchDelete,ANY (no method check in body),JWT (any role),handler.go:382
+140,/api/v1/forward/batch-pause,h.forwardBatchPause,forwardBatchPause,ANY (no method check in body),JWT (any role),handler.go:383
+141,/api/v1/forward/batch-resume,h.forwardBatchResume,forwardBatchResume,ANY (no method check in body),JWT (any role),handler.go:384
+142,/api/v1/forward/batch-redeploy,h.forwardBatchRedeploy,forwardBatchRedeploy,ANY (no method check in body),JWT (any role),handler.go:385
+143,/api/v1/forward/batch-change-tunnel,h.forwardBatchChangeTunnel,forwardBatchChangeTunnel,ANY (no method check in body),JWT (any role),handler.go:386
+144,/api/v1/speed-limit/list,h.speedLimitList,speedLimitList,POST only,ADMIN (JWT + role=admin),handler.go:387
+145,/api/v1/speed-limit/create,h.speedLimitCreate,speedLimitCreate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:388
+146,/api/v1/speed-limit/update,h.speedLimitUpdate,speedLimitUpdate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:389
+147,/api/v1/speed-limit/delete,h.speedLimitDelete,speedLimitDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:390
+148,/api/v1/tunnel/user/tunnel,h.userTunnelVisibleList,userTunnelVisibleList,POST only,JWT (any role),handler.go:391
+149,/api/v1/tunnel/user/list,h.userTunnelList,userTunnelList,POST only,ADMIN (JWT + role=admin),handler.go:392
+150,/api/v1/group/tunnel/list,h.tunnelGroupList,tunnelGroupList,POST only,ADMIN (JWT + role=admin),handler.go:393
+151,/api/v1/group/tunnel/create,h.groupTunnelCreate,groupTunnelCreate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:394
+152,/api/v1/group/tunnel/update,h.groupTunnelUpdate,groupTunnelUpdate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:395
+153,/api/v1/group/tunnel/delete,h.groupTunnelDelete,groupTunnelDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:396
+154,/api/v1/group/tunnel/assign,h.groupTunnelAssign,groupTunnelAssign,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:397
+155,/api/v1/group/user/list,h.userGroupList,userGroupList,POST only,ADMIN (JWT + role=admin),handler.go:398
+156,/api/v1/group/user/create,h.groupUserCreate,groupUserCreate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:399
+157,/api/v1/group/user/update,h.groupUserUpdate,groupUserUpdate,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:400
+158,/api/v1/group/user/delete,h.groupUserDelete,groupUserDelete,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:401
+159,/api/v1/group/user/assign,h.groupUserAssign,groupUserAssign,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:402
+160,/api/v1/group/permission/list,h.groupPermissionList,groupPermissionList,POST only,ADMIN (JWT + role=admin),handler.go:403
+161,/api/v1/group/permission/assign,h.groupPermissionAssign,groupPermissionAssign,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:404
+162,/api/v1/group/permission/remove,h.groupPermissionRemove,groupPermissionRemove,ANY (no method check in body),ADMIN (JWT + role=admin),handler.go:405
+163,/api/v1/open_api/sub_store,h.openAPISubStore,openAPISubStore,"GET,POST",PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:406
+164,/api/v1/federation/share/list,h.federationShareList,federationShareList,POST only,ADMIN (JWT + role=admin),handler.go:407
+165,/api/v1/federation/share/create,h.federationShareCreate,federationShareCreate,POST only,ADMIN (JWT + role=admin),handler.go:408
+166,/api/v1/federation/share/update,h.federationShareUpdate,federationShareUpdate,POST only,ADMIN (JWT + role=admin),handler.go:409
+167,/api/v1/federation/share/delete,h.federationShareDelete,federationShareDelete,POST only,ADMIN (JWT + role=admin),handler.go:410
+168,/api/v1/federation/share/reset-flow,h.federationShareResetFlow,federationShareResetFlow,POST only,ADMIN (JWT + role=admin),handler.go:411
+169,/api/v1/federation/share/remote-usage/list,h.federationRemoteUsageList,federationRemoteUsageList,POST only,ADMIN (JWT + role=admin),handler.go:412
+170,/api/v1/federation/connect,h.authPeer(h.federationConnect),federationConnect,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:413
+171,/api/v1/federation/tunnel/create,h.authPeer(h.federationTunnelCreate),federationTunnelCreate,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:414
+172,/api/v1/federation/runtime/reserve-port,h.authPeer(h.federationRuntimeReservePort),federationRuntimeReservePort,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:415
+173,/api/v1/federation/runtime/apply-role,h.authPeer(h.federationRuntimeApplyRole),federationRuntimeApplyRole,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:416
+174,/api/v1/federation/runtime/release-role,h.authPeer(h.federationRuntimeReleaseRole),federationRuntimeReleaseRole,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:417
+175,/api/v1/federation/runtime/diagnose,h.authPeer(h.federationRuntimeDiagnose),federationRuntimeDiagnose,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:418
+176,/api/v1/federation/runtime/command,h.authPeer(h.federationRuntimeCommand),federationRuntimeCommand,POST only,PUBLIC (JWT skip; own credential: captcha/login/peer-token/none),handler.go:419
+177,/api/v1/federation/node/import,h.nodeImport,nodeImport,POST only,ADMIN (JWT + role=admin),handler.go:420
+178,/api/v1/announcement/get,h.getAnnouncement,getAnnouncement,GET only,JWT (any role),handler.go:421
+179,/api/v1/announcement/update,h.updateAnnouncement,updateAnnouncement,POST only,ADMIN (JWT + role=admin),handler.go:422
+180,/api/v1/node/traffic/month,h.nodeTrafficMonth,nodeTrafficMonth,POST only,ADMIN (JWT + role=admin),handler.go:424
+181,/api/v1/monitor/access,h.monitorAccessHandler,monitorAccessHandler,GET only,JWT (any role),handler.go:425
+182,/api/v1/monitor/nodes/,h.monitorNodeMetricsHandler,monitorNodeMetricsHandler,GET only,JWT (any role),handler.go:426
+183,/api/v1/monitor/nodes,h.monitorNodeListHandler,monitorNodeListHandler,GET only,JWT (any role),handler.go:427
+184,/api/v1/monitor/tunnels,h.monitorTunnelListHandler,monitorTunnelListHandler,GET only,JWT (any role),handler.go:428
+185,/api/v1/monitor/tunnels/quality,h.monitorTunnelQualityHandler,monitorTunnelQualityHandler,GET only,JWT (any role),handler.go:429
+186,/api/v1/monitor/tunnels/,h.monitorTunnelMetrics,monitorTunnelMetrics,GET only,JWT (any role),handler.go:430
+187,/api/v1/monitor/services,h.monitorServiceListHandler,monitorServiceListHandler,GET only,JWT (any role),handler.go:431
+188,/api/v1/monitor/services/create,h.monitorServiceCreate,monitorServiceCreate,POST only,JWT (any role),handler.go:432
+189,/api/v1/monitor/services/update,h.monitorServiceUpdate,monitorServiceUpdate,POST only,JWT (any role),handler.go:433
+190,/api/v1/monitor/services/delete,h.monitorServiceDelete,monitorServiceDelete,POST only,JWT (any role),handler.go:434
+191,/api/v1/monitor/services/run,h.monitorServiceRun,monitorServiceRun,POST only,JWT (any role),handler.go:435
+192,/api/v1/monitor/services/latest-results,h.monitorServiceLatestResultsHandler,monitorServiceLatestResultsHandler,GET only,JWT (any role),handler.go:436
+193,/api/v1/monitor/services/limits,h.monitorServiceLimitsHandler,monitorServiceLimitsHandler,GET only,JWT (any role),handler.go:437
+194,/api/v1/monitor/services/,h.monitorServiceResultsHandler,monitorServiceResultsHandler,GET only,JWT (any role),handler.go:438
+195,/api/v1/monitor/permission/list,h.monitorPermissionList,monitorPermissionList,GET only,ADMIN (JWT + role=admin),handler.go:439
+196,/api/v1/monitor/permission/assign,h.monitorPermissionAssign,monitorPermissionAssign,POST only,ADMIN (JWT + role=admin),handler.go:440
+197,/api/v1/monitor/permission/remove,h.monitorPermissionRemove,monitorPermissionRemove,POST only,ADMIN (JWT + role=admin),handler.go:441
+198,/flow/test,h.flowTest,flowTest,ANY (no method check in body),non-API (JWT middleware passes through; handler-level auth),handler.go:443
+199,/flow/config,h.flowConfig,flowConfig,ANY (no method check in body),non-API (JWT middleware passes through; handler-level auth),handler.go:444
+200,/flow/upload,h.flowUpload,flowUpload,ANY (no method check in body),non-API (JWT middleware passes through; handler-level auth),handler.go:445
+201,/error,h.errorPage,errorPage,ANY (no method check in body),non-API (JWT middleware passes through; handler-level auth),handler.go:446
+202,/system-info,h.WebSocketHandler() (mux.Handle),WebSocketHandler,GET (WS upgrade),non-API (JWT middleware passes through; handler-level auth),router.go:13

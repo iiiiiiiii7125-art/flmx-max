@@ -1,0 +1,7 @@
+dist: /home/hatch/workspace/.fixr16/vite-frontend/dist-demo
+before click: {"hash":"#/inbound","len":1163,"hasTW":true}
+click: clicked
+after click: {"len":0,"snippet":""}
+exceptions: 1
+PAGE-ERROR: TypeError: Cannot read properties of null (reading 'ok')
+RESULT: SHEET-CRASH-REPRODUCED

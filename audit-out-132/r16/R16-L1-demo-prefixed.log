@@ -1,0 +1,21 @@
+=== R16-L1 Run C tag=583cec0^ rev=5bd5a90fe48fc5221f36a0bdd6202fbaf6d5f3c0 worktree=/home/hatch/workspace/.r16-l1-pre ===
+date: 2026-10-24T22:12:10Z
+5bd5a90fe48fc5221f36a0bdd6202fbaf6d5f3c0
+status: 0 dirty-files
+CHROME: /home/hatch/.cache/ms-playwright/chromium-1187/chrome-linux/chrome
+Chromium 140.0.7339.16 
+fixtures sha256: 0d708d5e5e6e03daa9532ef16149320f15002ca2b492d5dd2e68c50f93a05ca7
+gist keys in fixtures: []
+node_modules copy done
+--- demo build ---
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 3.34s
+vite build exit=0
+--- check.mjs (chromium-1187) ---
+FAIL  admin #/config: [demo] not recorded: backup/gist/status
+
+1 problem(s). Recording missing for new pages? See scripts/demo/README.md.
+check.mjs exit=1
+=== END Run C ===

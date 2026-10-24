@@ -1,0 +1,35 @@
+=== getUserInbounds probe ===
+go-backend/internal/http/handler/user_inbound.go:95:func (h *Handler) getUserInbounds(w http.ResponseWriter, r *http.Request) {
+go-backend/internal/http/handler/user_inbound.go-96-	if r.Method != http.MethodPost {
+go-backend/internal/http/handler/user_inbound.go-97-		response.WriteJSON(w, response.ErrDefault("请求失败"))
+go-backend/internal/http/handler/user_inbound.go-98-		return
+98:	// Probe is the last reachability check of an imported node.
+99:	Probe *externalProbe `json:"probe,omitempty"`
+716:			if p, ok := h.externalProbes.get(row.ID); ok {
+717:				v.Probe = &p
+2354:		h.scheduleNodeReconnectProbe(nodeID)
+=== InboundApiItem consumers ===
+vite-frontend/src/api/index.ts
+vite-frontend/src/api/types.ts
+vite-frontend/src/pages/dashboard/admin-overview.tsx
+vite-frontend/src/pages/inbound.tsx
+vite-frontend/src/pages/inbound/external.tsx
+vite-frontend/src/pages/inbound/inbound-form-modal.tsx
+vite-frontend/src/pages/inbound/presets.ts
+vite-frontend/src/pages/inbound/relay-modal.tsx
+vite-frontend/src/pages/inbound/share.tsx
+vite-frontend/src/pages/inbound/split-modal.tsx
+=== inboundProbeView callers incl tests ===
+go-backend/internal/http/handler/node_latency.go:460:// inboundProbeView is what the inbound list shows: a built inbound takes
+go-backend/internal/http/handler/node_latency.go:463:func (h *Handler) inboundProbeView(row *model.NodeInbound) *externalProbe {
+go-backend/internal/http/handler/node_latency_test.go:136:	v := h.inboundProbeView(built)
+go-backend/internal/http/handler/node_latency_test.go:143:	if v := h.inboundProbeView(built); v == nil || v.OK || v.Error != "连接超时" || len(v.Points) != 0 {
+go-backend/internal/http/handler/node_latency_test.go:149:	if v := h.inboundProbeView(built); v == nil || !v.OK || len(v.Points) != 1 {
+go-backend/internal/http/handler/node_latency_test.go:156:	if v := h.inboundProbeView(other); v == nil || v.LatencyMs != 80 || len(v.Points) != 0 {
+=== demo adapter: does it null-fill probe? ===
+94:  "inbound/probe": ["inbound/list", "probe"],
+95:  "node/latency/probe": ["node/list", "latency"],
+96:  "inbound/relay/probe": ["inbound/relay/list", "latency"],
+98:const ALIASES: Record<string, string> = { "node/route/probe": "node/route" };
+149:      : tunnelOf?.probeTargetHost
+150:        ? `${tunnelOf.probeTargetHost}:${tunnelOf.probeTargetPort || 443}`

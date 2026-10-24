@@ -1,0 +1,18 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR16L3UserListPaginationOverflow
+2026/10/24 22:07:50 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.111888ms)
+2026/10/24 22:07:50 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.989214ms)
+2026/10/24 22:07:50 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (1.076475ms)
+2026/10/24 22:07:50 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.131116ms)
+2026/10/24 22:07:50 migration r5b4_v1_port_user_unique applied
+2026/10/24 22:07:50 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/24 22:07:50 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (946.349µs)
+2026/10/24 22:07:50 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r16_l3_probe_test.go:35: CALL body={"current":1,"size":10} -> http=200 resp={"code":0,"msg":"操作成功","ts":1792879671031,"data":[{"createdTime":0,"expTime":0,"flow":0,"flowMiB":0,"flowResetTime":0,"id":2,"inFlow":0,"maxConn":0,"name":"probe1","num":0,"outFlow":0,"roleId":1,"status":1,"updatedTime":null,"user":"probe1"}]}
+    r16_l3_probe_test.go:35: CALL body={"current":2147483648,"size":2147483648} -> http=200 resp={"code":0,"msg":"操作成功","ts":1792879671032,"data":[]}
+    r16_l3_probe_test.go:56: CELL overflow-panics: runtime error: slice bounds out of range [:-4611686018427387904]
+    r16_l3_probe_test.go:59: CELL overflow2: panicked=runtime error: slice bounds out of range [:-9223372036854775808] code=0
+    r16_l3_probe_test.go:63: CELL overflow2-panics: runtime error: slice bounds out of range [:-9223372036854775808]
+--- PASS: TestR16L3UserListPaginationOverflow (0.44s)
+PASS
+ok  	go-backend/internal/http/handler	0.473s

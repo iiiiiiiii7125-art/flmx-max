@@ -1,0 +1,6 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR16L4MatrixR4SnellShadowTLSCompanion
+    r16_l4_supplement_test.go:21: CELL R4 C8 snell shadow-tls companion: OK password/host/version=3 via applySurgeShadowTLS (closes R15 open item)
+--- PASS: TestR16L4MatrixR4SnellShadowTLSCompanion (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.014s

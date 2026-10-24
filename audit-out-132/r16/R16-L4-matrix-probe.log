@@ -1,0 +1,146 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR16L4MatrixR1Singbox
+    r16_l4_probe_test.go:53: CELL R1: nodes=14 errs=[] (2 shadowtls detours are not nodes)
+    r16_l4_probe_test.go:58: CELL R1 C1/C4 ss: OK password+cipher aes-256-gcm
+    r16_l4_probe_test.go:62: CELL R1 C8 ss obfs: OK mode=http host=r16ob.example.net
+    r16_l4_probe_test.go:66: CELL R1 C8 ss shadowtls: OK plugin=shadow-tls pw/host carried
+    r16_l4_probe_test.go:70: CELL R1 C2/C4/C12 vmess: OK uuid/cipher=aes-128-gcm/alterId=1
+    r16_l4_probe_test.go:76: CELL R1 C2/C5/C6/C9 vless: OK uuid/flow/encryption/reality pbk+sid
+    r16_l4_probe_test.go:84: CELL R1 C1/C10 trojan/hy2: OK passwords + obfs=salamander + ports=30000-30010
+    r16_l4_probe_test.go:89: CELL R1 C1/C2 tuic: OK uuid/password/cc=bbr/udp-relay-mode=native
+    r16_l4_probe_test.go:93: CELL R1 C1 anytls: OK pw
+    r16_l4_probe_test.go:102: CELL R1 C3/C8/C11 snell: OK psk/version=6/mode=unshaped/shadow-tls pw+host
+    r16_l4_probe_test.go:108: CELL R1 C1/C7 naive/socks/http: OK username+password
+--- PASS: TestR16L4MatrixR1Singbox (0.00s)
+=== RUN   TestR16L4MatrixR2Clash
+    r16_l4_probe_test.go:197: CELL R2: nodes=11 errs=[]
+    r16_l4_probe_test.go:216: CELL R2 r16-ss: OK password="r16-css-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-ss: OK cipher="aes-256-gcm" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vmess: OK uuid="33333333-3333-4333-8333-333333333333" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vmess: OK cipher="aes-128-gcm" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vless: OK uuid="33333333-3333-4333-8333-333333333333" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vless: OK flow="xtls-rprx-vision" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-vless: OK encryption="mlkem768x25519plus.native.0rtt.100-200-300.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-trojan: OK password="r16-ctj-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-hy2: OK password="r16-chy2-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-hy2: OK obfs="salamander" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-hy2: OK obfs-password="r16-chy2-obfs1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-tuic: OK uuid="33333333-3333-4333-8333-333333333333" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-tuic: OK password="r16-ctuic-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-anytls: OK password="r16-cat-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-snell: OK psk="r16-csn-psk1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-naive: OK username="r16-cna-user" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-naive: OK password="r16-cna-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-socks: OK username="r16-cso-user" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-socks: OK password="r16-cso-pw1" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-http: OK username="r16-cht-user" (passthrough)
+    r16_l4_probe_test.go:216: CELL R2 r16-http: OK password="r16-cht-pw1" (passthrough)
+    r16_l4_probe_test.go:221: CELL R2 C8 ss plugin-opts: OK mode=tls host=r16cob.example.net (passthrough)
+    r16_l4_probe_test.go:225: CELL R2 C9 reality-opts: OK pbk+sid (passthrough)
+    r16_l4_probe_test.go:229: CELL R2 C12 vmess alterId: OK 1 (passthrough,逐值断言)
+    r16_l4_probe_test.go:233: CELL R2 C11 snell: OK version=6 mode=unshaped (passthrough,逐值断言)
+--- PASS: TestR16L4MatrixR2Clash (0.00s)
+=== RUN   TestR16L4MatrixR3URI
+    r16_l4_probe_test.go:264: CELL R3: nodes=8 errs=[]
+    r16_l4_probe_test.go:282: CELL R3 r16-ss-uri: OK password="r16-uri-ss-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-ss-uri: OK cipher="aes-256-gcm"
+    r16_l4_probe_test.go:282: CELL R3 r16-vmess-uri: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:282: CELL R3 r16-vmess-uri: OK cipher="aes-128-gcm"
+    r16_l4_probe_test.go:282: CELL R3 r16-vless-uri: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:282: CELL R3 r16-vless-uri: OK encryption="mlkem768x25519plus.native.0rtt.100-200-300.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r16_l4_probe_test.go:282: CELL R3 r16-vless-uri: OK flow="xtls-rprx-vision"
+    r16_l4_probe_test.go:282: CELL R3 r16-trojan-uri: OK password="r16-uri-tj-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-hy2-uri: OK password="r16-uri-hy2-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-hy2-uri: OK obfs="salamander"
+    r16_l4_probe_test.go:282: CELL R3 r16-hy2-uri: OK obfs-password="r16-uri-hy2-obfs"
+    r16_l4_probe_test.go:282: CELL R3 r16-tuic-uri: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:282: CELL R3 r16-tuic-uri: OK password="r16-uri-tuic-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-anytls-uri: OK password="r16-uri-at-pw"
+    r16_l4_probe_test.go:282: CELL R3 r16-socks-uri: OK username="r16-uri-so-user"
+    r16_l4_probe_test.go:282: CELL R3 r16-socks-uri: OK password="r16-uri-so-pw"
+    r16_l4_probe_test.go:287: CELL R3 C8 ss plugin: OK mode=http host=r16uob.example.net
+    r16_l4_probe_test.go:291: CELL R3 C9 reality-opts: OK pbk+sid
+    r16_l4_probe_test.go:295: CELL R3 C12 vmess alterId: OK 1 (逐值断言)
+    r16_l4_probe_test.go:301: CELL R3 C3/C11 snell: OK explicit reject 暂不支持 snell:// 链接, 0 nodes
+    r16_l4_probe_test.go:306: CELL R3 C7 http: OK explicit reject http(s):// 是订阅地址, 0 nodes
+--- PASS: TestR16L4MatrixR3URI (0.00s)
+=== RUN   TestR16L4MatrixR4Surge
+    r16_l4_probe_test.go:332: CELL R4: nodes=13 errs=[]
+    r16_l4_probe_test.go:351: CELL R4 r16-ss: OK password="r16-sg-ss-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-ss: OK cipher="aes-256-gcm"
+    r16_l4_probe_test.go:351: CELL R4 r16-ss-loon: OK cipher="aes-128-gcm"
+    r16_l4_probe_test.go:351: CELL R4 r16-ss-loon: OK password="r16-sg-loon-pw2"
+    r16_l4_probe_test.go:351: CELL R4 r16-vmess: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:351: CELL R4 r16-vmess: OK cipher="aes-128-gcm"
+    r16_l4_probe_test.go:351: CELL R4 r16-trojan: OK password="r16-sg-tj-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK password="r16-sg-hy2-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK obfs="salamander"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK obfs-password="r16-sg-hy2-obfs"
+    r16_l4_probe_test.go:351: CELL R4 r16-hy2: OK ports="30000-30010"
+    r16_l4_probe_test.go:351: CELL R4 r16-tuic: OK uuid="33333333-3333-4333-8333-333333333333"
+    r16_l4_probe_test.go:351: CELL R4 r16-tuic: OK password="r16-sg-tuic-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-anytls: OK password="r16-sg-at-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-snell: OK psk="r16-sg-sn-psk1"
+    r16_l4_probe_test.go:351: CELL R4 r16-snell: OK mode="unshaped"
+    r16_l4_probe_test.go:351: CELL R4 r16-socks: OK username="r16-sg-so-user"
+    r16_l4_probe_test.go:351: CELL R4 r16-socks: OK password="r16-sg-so-pw1"
+    r16_l4_probe_test.go:351: CELL R4 r16-http: OK username="r16-sg-ht-user"
+    r16_l4_probe_test.go:351: CELL R4 r16-http: OK password="r16-sg-ht-pw1"
+    r16_l4_probe_test.go:356: CELL R4 C8 ss obfs: OK mode=http host=r16sgob.example.net
+    r16_l4_probe_test.go:360: CELL R4 C12 vmess vmess-aead=false: OK alterId=1
+    r16_l4_probe_test.go:364: CELL R4 C10/C11 snell: OK version=6 mode=unshaped + obfs=http
+    r16_l4_probe_test.go:368: CELL R4 C8 ss shadow-tls companion: OK password carried via applySurgeShadowTLS
+    r16_l4_probe_test.go:373: CELL R4 C5/C6 vless: OK explicit reject 暂不支持 vless 类型的节点, 0 nodes
+--- PASS: TestR16L4MatrixR4Surge (0.00s)
+=== RUN   TestR16L4A2Predicates
+    r16_l4_probe_test.go:423: CELL A2-01 client-fingerprint: OK bad value explicitly rejected (client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）)
+    r16_l4_probe_test.go:428: CELL A2-01 client-fingerprint: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-02 xhttp-opts.mode: OK bad value explicitly rejected (xhttp mode 不受支持（仅 auto / packet-up / stream-up / stream-one）)
+    r16_l4_probe_test.go:428: CELL A2-02 xhttp-opts.mode: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-03 SS plugin-opts.mode: OK bad value explicitly rejected (Shadowsocks obfs mode 不受支持（仅 http / tls）)
+    r16_l4_probe_test.go:428: CELL A2-03 SS plugin-opts.mode: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-04 Snell obfs-opts.mode: OK bad value explicitly rejected (Snell obfs mode 不受支持（仅 http / tls / shadow-tls / restls / jls 或空）)
+    r16_l4_probe_test.go:428: CELL A2-04 Snell obfs-opts.mode: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-05 VMess cipher: OK bad value explicitly rejected (VMess 加密方式 cipher 不受支持（仅 auto / aes-128-gcm / chacha20-poly1305 / none / zero）)
+    r16_l4_probe_test.go:428: CELL A2-05 VMess cipher: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-06 VLESS flow: OK bad value explicitly rejected (VLESS flow 不受支持（仅 xtls-rprx-vision 或空）)
+    r16_l4_probe_test.go:428: CELL A2-06 VLESS flow: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-07 Hysteria2 obfs-type: OK bad value explicitly rejected (Hysteria2 obfs 类型不受支持（仅 salamander / gecko 或空）)
+    r16_l4_probe_test.go:428: CELL A2-07 Hysteria2 obfs-type: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-08 TUIC congestion-controller: OK bad value explicitly rejected (TUIC congestion-controller 不受支持（仅 bbr / cubic / new_reno）)
+    r16_l4_probe_test.go:428: CELL A2-08 TUIC congestion-controller: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-09 SS cipher: OK bad value explicitly rejected (Shadowsocks 加密方式 cipher 不受支持)
+    r16_l4_probe_test.go:428: CELL A2-09 SS cipher: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-10 VLESS encryption: OK bad value explicitly rejected (VLESS encryption 格式错误（须为 none 或 mlkem768x25519plus 客户端加密串）)
+    r16_l4_probe_test.go:428: CELL A2-10 VLESS encryption: OK good value carried/accepted
+    r16_l4_probe_test.go:423: CELL A2-11 Reality 形态: OK bad value explicitly rejected (Reality 公钥 pbk 格式错误（须为 32 字节的 RawURL base64）)
+    r16_l4_probe_test.go:428: CELL A2-11 Reality 形态: OK good value carried/accepted
+    r16_l4_probe_test.go:436: CELL A2-01 heal: OK Chrome -> chrome via import predicate
+    r16_l4_probe_test.go:441: CELL A2-02 heal: OK PACKET-UP -> packet-up via import predicate
+--- PASS: TestR16L4A2Predicates (0.00s)
+=== RUN   TestR16L4FacesConsumption
+    r16_l4_probe_test.go:469: CELL FACE bad fingerprint: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad flow: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad tuic-cc: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad hy2-obfs: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad vmess-cipher: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad ss-cipher: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad enc: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad ss-plugin-mode: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad snell-obfs: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad reality-pbk: OK all 4 faces reject
+    r16_l4_probe_test.go:469: CELL FACE bad reality-sid: OK all 4 faces reject
+    r16_l4_probe_test.go:479: CELL FACE heal fingerprint: OK stored Chrome -> rendered chrome, stored untouched
+    r16_l4_probe_test.go:484: CELL FACE heal xhttp-mode: OK stored PACKET-UP -> rendered packet-up
+    r16_l4_probe_test.go:489: CELL FACE heal snell mode: OK stored UNSHAPED -> rendered unshaped
+    r16_l4_probe_test.go:506: CELL FACE good flow: OK all 4 faces pass
+    r16_l4_probe_test.go:506: CELL FACE good tuic-cc: OK all 4 faces pass
+    r16_l4_probe_test.go:506: CELL FACE good vmess-cipher: OK all 4 faces pass
+    r16_l4_probe_test.go:506: CELL FACE good enc: OK all 4 faces pass
+    r16_l4_probe_test.go:514: CELL FACE ss chacha20: OK only Clash face passes, sing-box/other/xray-chain reject
+    r16_l4_probe_test.go:521: CELL FACE uri enc good: OK proxyURI emits legal ENC verbatim
+    r16_l4_probe_test.go:526: CELL FACE uri enc bad: OK proxyURI refuses bad ENC
+    r16_l4_probe_test.go:535: CELL FACE render bad fingerprint: OK sing-box + Clash both skip whole node
+--- PASS: TestR16L4FacesConsumption (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.014s

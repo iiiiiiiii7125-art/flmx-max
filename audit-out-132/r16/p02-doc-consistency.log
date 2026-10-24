@@ -1,0 +1,10 @@
+OK:   nodes.md「Clash / Mihomo」行与 share.go 的 XHTTP 渲染一致
+OK:   nodes.md「Shadowrocket」行与 share.go 的 XHTTP 渲染一致
+OK:   技能包覆盖 handler.go 全部 197 条 /api/v1 路由
+OK:   技能包版本三处一致：1.4.8
+OK:   install.md 维护菜单与 panel_install.sh 一致（6 项）
+OK:   install.md Caddy 示例反代目标与脚本一致（127.0.0.1）
+OK:   默认账号字面量一致：admin@user
+----
+RESULT: PASS（known-pending 项不计失败）
+EXIT:0

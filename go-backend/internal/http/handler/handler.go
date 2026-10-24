@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -737,13 +738,19 @@ func (h *Handler) userList(w http.ResponseWriter, r *http.Request) {
 	// O5-003：正确使用 current/size 分页。旧逻辑解析了参数却完全忽略、全量返回。
 	// 未传分页参数（current/size 为 0）时保持旧全量行为兼容。
 	if req.Current > 0 && req.Size > 0 {
-		start := (req.Current - 1) * req.Size
-		if start > len(users) {
-			start = len(users)
+		// R16-X-02：(Current-1)*Size 与 start+Size 均可回绕 int64（溢出形
+		// 见 audit-out-132/r16/R16-L3-sentinel-a2.md:196-198），回绕为负后
+		// users[start:end] panic；乘前判溢出、超界即空页，不改变正常分页语义。
+		start := len(users)
+		if req.Current-1 <= math.MaxInt64/req.Size {
+			start = (req.Current - 1) * req.Size
+			if start > len(users) {
+				start = len(users)
+			}
 		}
-		end := start + req.Size
-		if end > len(users) {
-			end = len(users)
+		end := len(users)
+		if req.Size <= len(users)-start {
+			end = start + req.Size
 		}
 		users = users[start:end]
 	}

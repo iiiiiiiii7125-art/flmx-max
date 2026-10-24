@@ -1,0 +1,41 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR16L4MatrixR5Restore
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (217.957µs)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (2.506269ms)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (939.108µs)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (154.972µs)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique applied
+2026/10/24 22:05:35 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/24 22:05:35 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (485.979µs)
+2026/10/24 22:05:35 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r16_l4_r5_probe_test.go:42: CELL R5: InboundsImported=10
+    r16_l4_r5_probe_test.go:46: CELL R5: SkippedRows[inbounds]=3
+    r16_l4_r5_probe_test.go:53: CELL R5: 3 bad rows named in ImportWarnings
+    r16_l4_r5_probe_test.go:70: CELL R5 row #201 r16-r5-ss: OK Extra verbatim + protocol=shadowsocks
+    r16_l4_r5_probe_test.go:70: CELL R5 row #202 r16-r5-trojan: OK Extra verbatim + protocol=trojan
+    r16_l4_r5_probe_test.go:70: CELL R5 row #203 r16-r5-hy2: OK Extra verbatim + protocol=hysteria2
+    r16_l4_r5_probe_test.go:70: CELL R5 row #204 r16-r5-tuic: OK Extra verbatim + protocol=tuic
+    r16_l4_r5_probe_test.go:70: CELL R5 row #205 r16-r5-vmess: OK Extra verbatim + protocol=vmess
+    r16_l4_r5_probe_test.go:70: CELL R5 row #206 r16-r5-vless: OK Extra verbatim + protocol=vless
+    r16_l4_r5_probe_test.go:70: CELL R5 row #207 r16-r5-snell: OK Extra verbatim + protocol=snell
+    r16_l4_r5_probe_test.go:70: CELL R5 row #208 r16-r5-naive: OK Extra verbatim + protocol=naive
+    r16_l4_r5_probe_test.go:70: CELL R5 row #209 r16-r5-socks5: OK Extra verbatim + protocol=socks5
+    r16_l4_r5_probe_test.go:70: CELL R5 row #210 r16-r5-ss-plugin: OK Extra verbatim + protocol=shadowsocks
+    r16_l4_r5_probe_test.go:81: CELL R5 bad rows: OK 3 rows have 0 DB rows
+--- PASS: TestR16L4MatrixR5Restore (1.02s)
+=== RUN   TestR16L4MatrixR5Whitelist
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (604.256µs)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (3.465659ms)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (4.441662ms)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.307571ms)
+2026/10/24 22:05:35 migration r5b4_v1_port_user_unique applied
+2026/10/24 22:05:35 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/24 22:05:35 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (4.66671ms)
+2026/10/24 22:05:35 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r16_l4_r5_probe_test.go:114: CELL R5 WhitelistExtra legal: OK verbatim 10.0.0.0/8, 1.2.3.4
+    r16_l4_r5_probe_test.go:118: CELL R5 WhitelistExtra mixed: OK bad entry removed, good kept
+    r16_l4_r5_probe_test.go:122: CELL R5 WhitelistExtra all-bad: OK cleared to empty
+    r16_l4_r5_probe_test.go:127: CELL R5 WhitelistExtra warnings: OK #302/#303 named
+--- PASS: TestR16L4MatrixR5Whitelist (0.34s)
+PASS
+ok  	go-backend/internal/store/repo	1.394s

@@ -1,0 +1,19 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestN01LinkLocalV6LayeredPolicy
+--- PASS: TestN01LinkLocalV6LayeredPolicy (0.00s)
+=== RUN   TestN01LinkLocalV6ZoneStripped
+--- PASS: TestN01LinkLocalV6ZoneStripped (0.00s)
+=== RUN   TestN01HardDenyBoundariesUnchanged
+--- PASS: TestN01HardDenyBoundariesUnchanged (0.00s)
+=== RUN   TestR3B1HardDenyOrLoopbackRejectsReservedMulticastLinkLocal
+--- PASS: TestR3B1HardDenyOrLoopbackRejectsReservedMulticastLinkLocal (0.00s)
+=== RUN   TestR3B1HardDenyOrLoopbackStillAllowsPrivateCGNATPublic
+--- PASS: TestR3B1HardDenyOrLoopbackStillAllowsPrivateCGNATPublic (0.00s)
+=== RUN   TestR3B1OtherPoliciesUnchangedForReservedMulticast
+--- PASS: TestR3B1OtherPoliciesUnchangedForReservedMulticast (0.00s)
+=== RUN   TestNetguardMatrix
+--- PASS: TestNetguardMatrix (0.00s)
+=== RUN   TestNetguardClassifyTranslations
+--- PASS: TestNetguardClassifyTranslations (0.00s)
+PASS
+ok  	go-backend/internal/netguard	0.004s

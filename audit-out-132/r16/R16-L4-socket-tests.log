@@ -1,0 +1,1117 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	github.com/go-gost/x/admission	[no test files]
+?   	github.com/go-gost/x/admission/plugin	[no test files]
+?   	github.com/go-gost/x/admission/wrapper	[no test files]
+=== RUN   TestConfigTransactionDoesNotLockWhileReadingBody
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] POST   /config                   --> github.com/go-gost/x/api.TestConfigTransactionDoesNotLockWhileReadingBody.func1 (2 handlers)
+--- PASS: TestConfigTransactionDoesNotLockWhileReadingBody (0.00s)
+=== RUN   TestConfigTransactionReleasesLockBeforeSendingResponse
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] POST   /config                   --> github.com/go-gost/x/api.TestConfigTransactionReleasesLockBeforeSendingResponse.func1 (2 handlers)
+--- PASS: TestConfigTransactionReleasesLockBeforeSendingResponse (0.00s)
+PASS
+ok  	github.com/go-gost/x/api	0.076s
+?   	github.com/go-gost/x/api/service	[no test files]
+?   	github.com/go-gost/x/auth	[no test files]
+?   	github.com/go-gost/x/auth/plugin	[no test files]
+=== RUN   TestNoPrivateBypassBlocksLiteralTargets
+--- PASS: TestNoPrivateBypassBlocksLiteralTargets (0.00s)
+=== RUN   TestNoPrivateBypassResolvesHostnames
+--- PASS: TestNoPrivateBypassResolvesHostnames (0.00s)
+=== RUN   TestR2B1NoPrivateBypassTranslatedForms
+--- PASS: TestR2B1NoPrivateBypassTranslatedForms (0.00s)
+PASS
+ok  	github.com/go-gost/x/bypass	0.006s
+?   	github.com/go-gost/x/bypass/plugin	[no test files]
+=== RUN   TestChainRoutesThroughSharedHopWithoutOwningLifecycle
+--- PASS: TestChainRoutesThroughSharedHopWithoutOwningLifecycle (0.00s)
+=== RUN   TestChainRetiresAndClosesOwnedHop
+--- PASS: TestChainRetiresAndClosesOwnedHop (0.00s)
+=== RUN   TestChainRouteFailsClosedWhenMiddleHopUnavailable
+--- PASS: TestChainRouteFailsClosedWhenMiddleHopUnavailable (0.00s)
+=== RUN   TestChainRouteFailsClosedWhenFirstHopUnavailable
+--- PASS: TestChainRouteFailsClosedWhenFirstHopUnavailable (0.00s)
+=== RUN   TestChainRouteCompleteWhenAllHopsAvailable
+--- PASS: TestChainRouteCompleteWhenAllHopsAvailable (0.00s)
+=== RUN   TestEmptyChainRouteDialFailsClosed
+--- PASS: TestEmptyChainRouteDialFailsClosed (0.00s)
+=== RUN   TestEmptyChainRouteBindFailsClosed
+--- PASS: TestEmptyChainRouteBindFailsClosed (0.00s)
+=== RUN   TestRouterDialFailsClosedWhenChainHopUnavailable
+--- PASS: TestRouterDialFailsClosedWhenChainHopUnavailable (0.00s)
+=== RUN   TestFix2CRouterDialErrorNamesChain
+--- PASS: TestFix2CRouterDialErrorNamesChain (0.00s)
+=== RUN   TestFix2CEmptyRouteErrorNamesChain
+--- PASS: TestFix2CEmptyRouteErrorNamesChain (0.00s)
+=== RUN   TestTransportCopyReturnsIndependentTransport
+--- PASS: TestTransportCopyReturnsIndependentTransport (0.00s)
+PASS
+ok  	github.com/go-gost/x/chain	0.006s
+=== RUN   TestGlobalReturnsDetachedSnapshot
+--- PASS: TestGlobalReturnsDetachedSnapshot (0.00s)
+=== RUN   TestConcurrentGlobalSnapshotAndUpdate
+--- PASS: TestConcurrentGlobalSnapshotAndUpdate (0.06s)
+=== RUN   TestConcurrentPersistProducesValidConfig
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+💾 节点配置已持久化到 /tmp/TestConcurrentPersistProducesValidConfig2275496097/001/gost.json
+--- PASS: TestConcurrentPersistProducesValidConfig (0.07s)
+=== RUN   TestReadFileSetsPersistPath
+--- PASS: TestReadFileSetsPersistPath (0.00s)
+PASS
+ok  	github.com/go-gost/x/config	0.159s
+?   	github.com/go-gost/x/config/cmd	[no test files]
+=== RUN   TestReloadRestoresPreviousRuntime
+=== RUN   TestReloadRestoresPreviousRuntime/listener
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:42553/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.401Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:42553/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.405Z"}
+{"handler":"auto","kind":"handler","level":"error","listener":"tcp","local":"127.0.0.1:42553","msg":"EOF","remote":"127.0.0.1:56790","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0jg","time":"2026-10-24T22:08:01.406Z"}
+{"handler":"auto","kind":"service","level":"error","listener":"tcp","msg":"EOF","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0jg","time":"2026-10-24T22:08:01.406Z"}
+=== RUN   TestReloadRestoresPreviousRuntime/handler
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:33961/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.407Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:33961/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.408Z"}
+{"handler":"auto","kind":"handler","level":"error","listener":"tcp","local":"127.0.0.1:33961","msg":"EOF","remote":"127.0.0.1:46156","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0k0","time":"2026-10-24T22:08:01.409Z"}
+{"handler":"auto","kind":"service","level":"error","listener":"tcp","msg":"EOF","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0k0","time":"2026-10-24T22:08:01.409Z"}
+=== RUN   TestReloadRestoresPreviousRuntime/partial
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:35425/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.411Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:35425/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.412Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:35425/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.413Z"}
+{"handler":"auto","kind":"handler","level":"error","listener":"tcp","local":"127.0.0.1:35425","msg":"EOF","remote":"127.0.0.1:48574","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0kg","time":"2026-10-24T22:08:01.413Z"}
+{"handler":"auto","kind":"service","level":"error","listener":"tcp","msg":"EOF","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0kg","time":"2026-10-24T22:08:01.413Z"}
+=== RUN   TestReloadRestoresPreviousRuntime/run
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:35059/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.414Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:35059/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.415Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:35059/tcp","service":"shared-rule","time":"2026-10-24T22:08:01.416Z"}
+--- PASS: TestReloadRestoresPreviousRuntime (0.02s)
+    --- PASS: TestReloadRestoresPreviousRuntime/listener (0.01s)
+    --- PASS: TestReloadRestoresPreviousRuntime/handler (0.00s)
+    --- PASS: TestReloadRestoresPreviousRuntime/partial (0.00s)
+    --- PASS: TestReloadRestoresPreviousRuntime/run (0.00s)
+{"handler":"auto","kind":"handler","level":"error","listener":"tcp","local":"127.0.0.1:35059","msg":"EOF","remote":"127.0.0.1:60806","service":"shared-rule","sid":"dbeiogcjnldnvrm3g0l0","time":"2026-10-24T22:08:01.416Z"}
+PASS
+ok  	github.com/go-gost/x/config/loader	0.059s
+?   	github.com/go-gost/x/config/parsing	[no test files]
+?   	github.com/go-gost/x/config/parsing/admission	[no test files]
+?   	github.com/go-gost/x/config/parsing/auth	[no test files]
+=== RUN   TestListResolvesBuiltinNoPrivate
+--- PASS: TestListResolvesBuiltinNoPrivate (0.00s)
+=== RUN   TestRegisterBuiltinBypassesRespectsOperatorDefinition
+--- PASS: TestRegisterBuiltinBypassesRespectsOperatorDefinition (0.00s)
+PASS
+ok  	github.com/go-gost/x/config/parsing/bypass	0.020s
+?   	github.com/go-gost/x/config/parsing/chain	[no test files]
+?   	github.com/go-gost/x/config/parsing/hop	[no test files]
+?   	github.com/go-gost/x/config/parsing/hosts	[no test files]
+?   	github.com/go-gost/x/config/parsing/ingress	[no test files]
+?   	github.com/go-gost/x/config/parsing/limiter	[no test files]
+?   	github.com/go-gost/x/config/parsing/logger	[no test files]
+?   	github.com/go-gost/x/config/parsing/node	[no test files]
+?   	github.com/go-gost/x/config/parsing/observer	[no test files]
+?   	github.com/go-gost/x/config/parsing/parser	[no test files]
+?   	github.com/go-gost/x/config/parsing/recorder	[no test files]
+?   	github.com/go-gost/x/config/parsing/resolver	[no test files]
+?   	github.com/go-gost/x/config/parsing/router	[no test files]
+?   	github.com/go-gost/x/config/parsing/sd	[no test files]
+?   	github.com/go-gost/x/config/parsing/selector	[no test files]
+=== RUN   TestResolveTrafficLimiterComposesCommaSeparatedNames
+--- PASS: TestResolveTrafficLimiterComposesCommaSeparatedNames (0.00s)
+=== RUN   TestResolveConnLimiterComposesCommaSeparatedNames
+--- PASS: TestResolveConnLimiterComposesCommaSeparatedNames (0.00s)
+=== RUN   TestParseServiceRejectsShellHooks
+--- PASS: TestParseServiceRejectsShellHooks (0.00s)
+=== RUN   TestParseServiceAllowsNoHooks
+--- PASS: TestParseServiceAllowsNoHooks (0.00s)
+PASS
+ok  	github.com/go-gost/x/config/parsing/service	0.021s
+?   	github.com/go-gost/x/connector/direct	[no test files]
+?   	github.com/go-gost/x/connector/forward	[no test files]
+?   	github.com/go-gost/x/connector/http	[no test files]
+?   	github.com/go-gost/x/connector/http2	[no test files]
+?   	github.com/go-gost/x/connector/relay	[no test files]
+?   	github.com/go-gost/x/connector/router	[no test files]
+?   	github.com/go-gost/x/connector/serial	[no test files]
+?   	github.com/go-gost/x/connector/sni	[no test files]
+?   	github.com/go-gost/x/connector/socks/v4	[no test files]
+?   	github.com/go-gost/x/connector/socks/v5	[no test files]
+=== RUN   TestConnectorInitFailsClosedWithoutAuth
+--- PASS: TestConnectorInitFailsClosedWithoutAuth (0.00s)
+=== RUN   TestConnectorInitFailsClosedWithEmptyPassword
+--- PASS: TestConnectorInitFailsClosedWithEmptyPassword (0.00s)
+=== RUN   TestConnectorInitSucceedsWithAuth
+--- PASS: TestConnectorInitSucceedsWithAuth (0.00s)
+PASS
+ok  	github.com/go-gost/x/connector/ss	0.011s
+=== RUN   TestConnectorInitFailsClosedWithoutAuth
+--- PASS: TestConnectorInitFailsClosedWithoutAuth (0.00s)
+=== RUN   TestConnectorInitFailsClosedWithEmptyPassword
+--- PASS: TestConnectorInitFailsClosedWithEmptyPassword (0.00s)
+=== RUN   TestConnectorInitSucceedsWithAuth
+--- PASS: TestConnectorInitSucceedsWithAuth (0.00s)
+PASS
+ok  	github.com/go-gost/x/connector/ss/udp	0.011s
+?   	github.com/go-gost/x/connector/sshd	[no test files]
+?   	github.com/go-gost/x/connector/tcp	[no test files]
+?   	github.com/go-gost/x/connector/tunnel	[no test files]
+?   	github.com/go-gost/x/connector/unix	[no test files]
+?   	github.com/go-gost/x/ctx	[no test files]
+?   	github.com/go-gost/x/dialer/direct	[no test files]
+?   	github.com/go-gost/x/dialer/dtls	[no test files]
+?   	github.com/go-gost/x/dialer/ftcp	[no test files]
+?   	github.com/go-gost/x/dialer/grpc	[no test files]
+?   	github.com/go-gost/x/dialer/http2	[no test files]
+?   	github.com/go-gost/x/dialer/http2/h2	[no test files]
+?   	github.com/go-gost/x/dialer/http3	[no test files]
+?   	github.com/go-gost/x/dialer/http3/wt	[no test files]
+?   	github.com/go-gost/x/dialer/icmp	[no test files]
+=== RUN   TestRetiredDialerRejectsNewConnections
+--- PASS: TestRetiredDialerRejectsNewConnections (0.00s)
+PASS
+ok  	github.com/go-gost/x/dialer/kcp	0.020s
+=== RUN   TestRetiredDialerRejectsNewConnections
+--- PASS: TestRetiredDialerRejectsNewConnections (0.00s)
+=== RUN   TestSessionCloseReleasesPreHandshakeConnection
+--- PASS: TestSessionCloseReleasesPreHandshakeConnection (0.00s)
+PASS
+ok  	github.com/go-gost/x/dialer/mtcp	0.006s
+=== RUN   TestRetiredDialerRejectsNewConnections
+--- PASS: TestRetiredDialerRejectsNewConnections (0.00s)
+=== RUN   TestSessionCloseReleasesPreHandshakeConnection
+--- PASS: TestSessionCloseReleasesPreHandshakeConnection (0.00s)
+PASS
+ok  	github.com/go-gost/x/dialer/mtls	0.009s
+=== RUN   TestRetiredDialerRejectsNewConnections
+--- PASS: TestRetiredDialerRejectsNewConnections (0.00s)
+=== RUN   TestSessionCloseReleasesPreHandshakeConnection
+--- PASS: TestSessionCloseReleasesPreHandshakeConnection (0.00s)
+PASS
+ok  	github.com/go-gost/x/dialer/mws	0.023s
+?   	github.com/go-gost/x/dialer/obfs/http	[no test files]
+?   	github.com/go-gost/x/dialer/obfs/tls	[no test files]
+?   	github.com/go-gost/x/dialer/pht	[no test files]
+?   	github.com/go-gost/x/dialer/quic	[no test files]
+?   	github.com/go-gost/x/dialer/serial	[no test files]
+?   	github.com/go-gost/x/dialer/ssh	[no test files]
+?   	github.com/go-gost/x/dialer/sshd	[no test files]
+?   	github.com/go-gost/x/dialer/tcp	[no test files]
+?   	github.com/go-gost/x/dialer/tls	[no test files]
+?   	github.com/go-gost/x/dialer/udp	[no test files]
+?   	github.com/go-gost/x/dialer/unix	[no test files]
+?   	github.com/go-gost/x/dialer/wg	[no test files]
+?   	github.com/go-gost/x/dialer/ws	[no test files]
+?   	github.com/go-gost/x/handler/api	[no test files]
+?   	github.com/go-gost/x/handler/auto	[no test files]
+?   	github.com/go-gost/x/handler/dns	[no test files]
+?   	github.com/go-gost/x/handler/file	[no test files]
+=== RUN   TestLocalForwardHandlerSendsProxyProtocolToTarget
+--- PASS: TestLocalForwardHandlerSendsProxyProtocolToTarget (0.00s)
+PASS
+ok  	github.com/go-gost/x/handler/forward/local	0.037s
+?   	github.com/go-gost/x/handler/forward/remote	[no test files]
+?   	github.com/go-gost/x/handler/http	[no test files]
+?   	github.com/go-gost/x/handler/http2	[no test files]
+?   	github.com/go-gost/x/handler/http3	[no test files]
+?   	github.com/go-gost/x/handler/metrics	[no test files]
+?   	github.com/go-gost/x/handler/redirect/tcp	[no test files]
+?   	github.com/go-gost/x/handler/redirect/udp	[no test files]
+?   	github.com/go-gost/x/handler/relay	[no test files]
+?   	github.com/go-gost/x/handler/router	[no test files]
+?   	github.com/go-gost/x/handler/serial	[no test files]
+?   	github.com/go-gost/x/handler/sni	[no test files]
+?   	github.com/go-gost/x/handler/socks/v4	[no test files]
+?   	github.com/go-gost/x/handler/socks/v5	[no test files]
+=== RUN   TestHandlerInitFailsClosedWithoutAuth
+--- PASS: TestHandlerInitFailsClosedWithoutAuth (0.00s)
+=== RUN   TestHandlerInitFailsClosedWithEmptyPassword
+--- PASS: TestHandlerInitFailsClosedWithEmptyPassword (0.00s)
+=== RUN   TestHandlerInitSucceedsWithAuth
+--- PASS: TestHandlerInitSucceedsWithAuth (0.00s)
+PASS
+ok  	github.com/go-gost/x/handler/ss	0.064s
+=== RUN   TestHandlerInitFailsClosedWithoutAuth
+--- PASS: TestHandlerInitFailsClosedWithoutAuth (0.00s)
+=== RUN   TestHandlerInitFailsClosedWithEmptyPassword
+--- PASS: TestHandlerInitFailsClosedWithEmptyPassword (0.00s)
+=== RUN   TestHandlerInitSucceedsWithAuth
+--- PASS: TestHandlerInitSucceedsWithAuth (0.00s)
+PASS
+ok  	github.com/go-gost/x/handler/ss/udp	0.039s
+?   	github.com/go-gost/x/handler/sshd	[no test files]
+=== RUN   TestHandlerInitFailsClosedWithoutAuth
+--- PASS: TestHandlerInitFailsClosedWithoutAuth (0.00s)
+=== RUN   TestHandlerInitFailsClosedWithEmptyPassword
+--- PASS: TestHandlerInitFailsClosedWithEmptyPassword (0.00s)
+=== RUN   TestHandlerInitSucceedsWithAuth
+--- PASS: TestHandlerInitSucceedsWithAuth (0.00s)
+PASS
+ok  	github.com/go-gost/x/handler/tap	0.007s
+?   	github.com/go-gost/x/handler/tun	[no test files]
+?   	github.com/go-gost/x/handler/tunnel	[no test files]
+?   	github.com/go-gost/x/handler/unix	[no test files]
+?   	github.com/go-gost/x/hop	[no test files]
+?   	github.com/go-gost/x/hop/plugin	[no test files]
+?   	github.com/go-gost/x/hosts	[no test files]
+?   	github.com/go-gost/x/hosts/plugin	[no test files]
+?   	github.com/go-gost/x/ingress	[no test files]
+?   	github.com/go-gost/x/ingress/plugin	[no test files]
+?   	github.com/go-gost/x/internal/ctx	[no test files]
+?   	github.com/go-gost/x/internal/io	[no test files]
+?   	github.com/go-gost/x/internal/loader	[no test files]
+?   	github.com/go-gost/x/internal/matcher	[no test files]
+?   	github.com/go-gost/x/internal/net	[no test files]
+?   	github.com/go-gost/x/internal/net/dialer	[no test files]
+?   	github.com/go-gost/x/internal/net/http	[no test files]
+?   	github.com/go-gost/x/internal/net/ip	[no test files]
+?   	github.com/go-gost/x/internal/net/proxyproto	[no test files]
+?   	github.com/go-gost/x/internal/net/udp	[no test files]
+?   	github.com/go-gost/x/internal/plugin	[no test files]
+?   	github.com/go-gost/x/internal/util/cache	[no test files]
+?   	github.com/go-gost/x/internal/util/crypto	[no test files]
+?   	github.com/go-gost/x/internal/util/dtls	[no test files]
+?   	github.com/go-gost/x/internal/util/forwarder	[no test files]
+?   	github.com/go-gost/x/internal/util/grpc/proto	[no test files]
+?   	github.com/go-gost/x/internal/util/icmp	[no test files]
+?   	github.com/go-gost/x/internal/util/kcp	[no test files]
+?   	github.com/go-gost/x/internal/util/mux	[no test files]
+?   	github.com/go-gost/x/internal/util/pht	[no test files]
+?   	github.com/go-gost/x/internal/util/port	[no test files]
+?   	github.com/go-gost/x/internal/util/quic	[no test files]
+?   	github.com/go-gost/x/internal/util/relay	[no test files]
+?   	github.com/go-gost/x/internal/util/resolver	[no test files]
+?   	github.com/go-gost/x/internal/util/serial	[no test files]
+=== RUN   TestWaitUntilIdlePreservesActiveStreams
+--- PASS: TestWaitUntilIdlePreservesActiveStreams (0.06s)
+PASS
+ok  	github.com/go-gost/x/internal/util/sessionretire	0.066s
+?   	github.com/go-gost/x/internal/util/sniffing	[no test files]
+?   	github.com/go-gost/x/internal/util/socks	[no test files]
+=== RUN   TestShadowCipherFailsClosedOnEmptyMethodOrPassword
+=== RUN   TestShadowCipherFailsClosedOnEmptyMethodOrPassword/both_empty
+=== RUN   TestShadowCipherFailsClosedOnEmptyMethodOrPassword/empty_method
+=== RUN   TestShadowCipherFailsClosedOnEmptyMethodOrPassword/empty_password
+--- PASS: TestShadowCipherFailsClosedOnEmptyMethodOrPassword (0.00s)
+    --- PASS: TestShadowCipherFailsClosedOnEmptyMethodOrPassword/both_empty (0.00s)
+    --- PASS: TestShadowCipherFailsClosedOnEmptyMethodOrPassword/empty_method (0.00s)
+    --- PASS: TestShadowCipherFailsClosedOnEmptyMethodOrPassword/empty_password (0.00s)
+=== RUN   TestShadowCipherValidCredentials
+--- PASS: TestShadowCipherValidCredentials (0.00s)
+PASS
+ok  	github.com/go-gost/x/internal/util/ss	0.004s
+?   	github.com/go-gost/x/internal/util/ssh	[no test files]
+?   	github.com/go-gost/x/internal/util/sshd	[no test files]
+?   	github.com/go-gost/x/internal/util/stats	[no test files]
+?   	github.com/go-gost/x/internal/util/tap	[no test files]
+?   	github.com/go-gost/x/internal/util/tls	[no test files]
+?   	github.com/go-gost/x/internal/util/tun	[no test files]
+?   	github.com/go-gost/x/internal/util/ws	[no test files]
+?   	github.com/go-gost/x/internal/util/wt	[no test files]
+=== RUN   TestApplyRollsBackWhenPrevMomentarilyDown
+--- PASS: TestApplyRollsBackWhenPrevMomentarilyDown (4.56s)
+=== RUN   TestApplyDoesNotPersistNeverRanConfig
+--- PASS: TestApplyDoesNotPersistNeverRanConfig (1.07s)
+=== RUN   TestResolveGitHubAPIThroughProxy
+--- PASS: TestResolveGitHubAPIThroughProxy (0.01s)
+=== RUN   TestResolveGitHubAPIFallsBackToDirect
+--- PASS: TestResolveGitHubAPIFallsBackToDirect (0.00s)
+=== RUN   TestStageGeoFileFallsBackToDirectWhenMirrorFails
+--- PASS: TestStageGeoFileFallsBackToDirectWhenMirrorFails (0.00s)
+=== RUN   TestUpdateGeoData
+--- PASS: TestUpdateGeoData (0.00s)
+=== RUN   TestGeoFileValidation
+--- PASS: TestGeoFileValidation (0.00s)
+=== RUN   TestInstallFallsBackToDirectWhenMirrorBlacklists
+--- PASS: TestInstallFallsBackToDirectWhenMirrorBlacklists (0.01s)
+=== RUN   TestInstallReportsFallbackFailure
+--- PASS: TestInstallReportsFallbackFailure (0.00s)
+=== RUN   TestStripMirrorPrefix
+--- PASS: TestStripMirrorPrefix (0.00s)
+=== RUN   TestManagerLifecycle
+--- PASS: TestManagerLifecycle (7.63s)
+=== RUN   TestChecksumMismatchRejected
+--- PASS: TestChecksumMismatchRejected (0.01s)
+=== RUN   TestApplyValidation
+=== RUN   TestApplyValidation/bad_version
+=== RUN   TestApplyValidation/file_escape
+=== RUN   TestApplyValidation/bad_bin_name
+=== RUN   TestApplyValidation/bad_archive
+=== RUN   TestApplyValidation/bad_port
+=== RUN   TestApplyValidation/no_download
+=== RUN   TestApplyValidation/hidden_config
+=== RUN   TestApplyValidation/unknown_type
+--- PASS: TestApplyValidation (0.00s)
+    --- PASS: TestApplyValidation/bad_version (0.00s)
+    --- PASS: TestApplyValidation/file_escape (0.00s)
+    --- PASS: TestApplyValidation/bad_bin_name (0.00s)
+    --- PASS: TestApplyValidation/bad_archive (0.00s)
+    --- PASS: TestApplyValidation/bad_port (0.00s)
+    --- PASS: TestApplyValidation/no_download (0.00s)
+    --- PASS: TestApplyValidation/hidden_config (0.00s)
+    --- PASS: TestApplyValidation/unknown_type (0.00s)
+=== RUN   TestParseChecksum
+--- PASS: TestParseChecksum (0.00s)
+=== RUN   TestNftScriptOnlyCounts
+--- PASS: TestNftScriptOnlyCounts (0.00s)
+=== RUN   TestProcessBackoffRestarts
+--- PASS: TestProcessBackoffRestarts (1.08s)
+=== RUN   TestNftScriptWhitelist
+--- PASS: TestNftScriptWhitelist (0.05s)
+=== RUN   TestApplyRejectsBadAllow
+--- PASS: TestApplyRejectsBadAllow (0.00s)
+=== RUN   TestInstallIntegrityRules
+=== RUN   TestInstallIntegrityRules/pinned_ok
+=== RUN   TestInstallIntegrityRules/pinned_mismatch
+=== RUN   TestInstallIntegrityRules/no_checksum_refused
+=== RUN   TestInstallIntegrityRules/github_digest
+=== RUN   TestInstallIntegrityRules/github_without_digest
+=== RUN   TestInstallIntegrityRules/github_missing_asset
+--- PASS: TestInstallIntegrityRules (0.01s)
+    --- PASS: TestInstallIntegrityRules/pinned_ok (0.00s)
+    --- PASS: TestInstallIntegrityRules/pinned_mismatch (0.00s)
+    --- PASS: TestInstallIntegrityRules/no_checksum_refused (0.00s)
+    --- PASS: TestInstallIntegrityRules/github_digest (0.00s)
+    --- PASS: TestInstallIntegrityRules/github_without_digest (0.00s)
+    --- PASS: TestInstallIntegrityRules/github_missing_asset (0.00s)
+=== RUN   TestManagerMultiProcessWithExtra
+--- PASS: TestManagerMultiProcessWithExtra (3.06s)
+=== RUN   TestLogRingStripsANSI
+--- PASS: TestLogRingStripsANSI (0.00s)
+=== RUN   TestNftScriptPortHopping
+    kernel_test.go:567: 当前环境内核不支持 nft fib 表达式（nft_fib 未加载），跳过 nft -c 实机校验（F-091 环境定性）
+--- SKIP: TestNftScriptPortHopping (0.03s)
+=== RUN   TestNftScriptUserMarks
+--- PASS: TestNftScriptUserMarks (0.00s)
+=== RUN   TestSyncSkipsRejectedHopRule
+--- PASS: TestSyncSkipsRejectedHopRule (0.00s)
+=== RUN   TestSyncAllHopRulesRejected
+--- PASS: TestSyncAllHopRulesRejected (0.00s)
+=== RUN   TestSyncAllHopRulesAccepted
+--- PASS: TestSyncAllHopRulesAccepted (0.00s)
+=== RUN   TestNftHopCheckUsesNftCheckOnSingleRule
+--- PASS: TestNftHopCheckUsesNftCheckOnSingleRule (0.00s)
+PASS
+ok  	github.com/go-gost/x/kernel	17.573s
+=== RUN   TestIPLimitKeyCreatesIndependentLimiters
+--- PASS: TestIPLimitKeyCreatesIndependentLimiters (0.00s)
+PASS
+ok  	github.com/go-gost/x/limiter/conn	0.006s
+?   	github.com/go-gost/x/limiter/conn/wrapper	[no test files]
+?   	github.com/go-gost/x/limiter/rate	[no test files]
+=== RUN   TestCIDRLimitCreatesIndependentClientLimiters
+--- PASS: TestCIDRLimitCreatesIndependentClientLimiters (0.00s)
+PASS
+ok  	github.com/go-gost/x/limiter/traffic	0.005s
+?   	github.com/go-gost/x/limiter/traffic/cache	[no test files]
+?   	github.com/go-gost/x/limiter/traffic/plugin	[no test files]
+?   	github.com/go-gost/x/limiter/traffic/wrapper	[no test files]
+?   	github.com/go-gost/x/listener/dns	[no test files]
+?   	github.com/go-gost/x/listener/dtls	[no test files]
+?   	github.com/go-gost/x/listener/ftcp	[no test files]
+?   	github.com/go-gost/x/listener/grpc	[no test files]
+?   	github.com/go-gost/x/listener/http2	[no test files]
+?   	github.com/go-gost/x/listener/http2/h2	[no test files]
+?   	github.com/go-gost/x/listener/http3	[no test files]
+?   	github.com/go-gost/x/listener/http3/h3	[no test files]
+?   	github.com/go-gost/x/listener/http3/wt	[no test files]
+?   	github.com/go-gost/x/listener/icmp	[no test files]
+?   	github.com/go-gost/x/listener/kcp	[no test files]
+?   	github.com/go-gost/x/listener/mtcp	[no test files]
+?   	github.com/go-gost/x/listener/mtls	[no test files]
+?   	github.com/go-gost/x/listener/mws	[no test files]
+?   	github.com/go-gost/x/listener/obfs/http	[no test files]
+?   	github.com/go-gost/x/listener/obfs/tls	[no test files]
+?   	github.com/go-gost/x/listener/pht	[no test files]
+?   	github.com/go-gost/x/listener/quic	[no test files]
+?   	github.com/go-gost/x/listener/redirect/tcp	[no test files]
+?   	github.com/go-gost/x/listener/redirect/udp	[no test files]
+?   	github.com/go-gost/x/listener/rtcp	[no test files]
+?   	github.com/go-gost/x/listener/rudp	[no test files]
+?   	github.com/go-gost/x/listener/serial	[no test files]
+?   	github.com/go-gost/x/listener/ssh	[no test files]
+?   	github.com/go-gost/x/listener/sshd	[no test files]
+?   	github.com/go-gost/x/listener/tap	[no test files]
+?   	github.com/go-gost/x/listener/tcp	[no test files]
+?   	github.com/go-gost/x/listener/tls	[no test files]
+?   	github.com/go-gost/x/listener/tun	[no test files]
+=== RUN   TestAcceptWithLimitersPreservesPacketConn
+--- PASS: TestAcceptWithLimitersPreservesPacketConn (0.00s)
+=== RUN   TestAcceptAppliesConnLimiterAndReleasesOnClose
+--- PASS: TestAcceptAppliesConnLimiterAndReleasesOnClose (0.00s)
+PASS
+ok  	github.com/go-gost/x/listener/udp	0.006s
+?   	github.com/go-gost/x/listener/unix	[no test files]
+?   	github.com/go-gost/x/listener/ws	[no test files]
+?   	github.com/go-gost/x/logger	[no test files]
+?   	github.com/go-gost/x/metadata	[no test files]
+?   	github.com/go-gost/x/metadata/util	[no test files]
+?   	github.com/go-gost/x/metrics	[no test files]
+?   	github.com/go-gost/x/metrics/service	[no test files]
+?   	github.com/go-gost/x/metrics/wrapper	[no test files]
+?   	github.com/go-gost/x/observer/plugin	[no test files]
+?   	github.com/go-gost/x/observer/stats	[no test files]
+?   	github.com/go-gost/x/observer/stats/wrapper	[no test files]
+?   	github.com/go-gost/x/recorder	[no test files]
+?   	github.com/go-gost/x/recorder/plugin	[no test files]
+=== RUN   TestReplaceChainOverwritesExistingRegistration
+--- PASS: TestReplaceChainOverwritesExistingRegistration (0.00s)
+=== RUN   TestReplaceChainRetiresPreviousRegistration
+--- PASS: TestReplaceChainRetiresPreviousRegistration (0.00s)
+PASS
+ok  	github.com/go-gost/x/registry	0.004s
+?   	github.com/go-gost/x/resolver	[no test files]
+?   	github.com/go-gost/x/resolver/exchanger	[no test files]
+?   	github.com/go-gost/x/resolver/plugin	[no test files]
+?   	github.com/go-gost/x/router	[no test files]
+?   	github.com/go-gost/x/router/plugin	[no test files]
+?   	github.com/go-gost/x/routing	[no test files]
+=== RUN   TestRuleMatch
+=== RUN   TestRuleMatch/No_rule
+=== PAUSE TestRuleMatch/No_rule
+=== RUN   TestRuleMatch/No_matcher_in_rule
+=== PAUSE TestRuleMatch/No_matcher_in_rule
+=== RUN   TestRuleMatch/No_value_in_rule
+=== PAUSE TestRuleMatch/No_value_in_rule
+=== RUN   TestRuleMatch/Empty_value_in_rule
+=== PAUSE TestRuleMatch/Empty_value_in_rule
+=== RUN   TestRuleMatch/One_value_in_rule_with_and
+=== PAUSE TestRuleMatch/One_value_in_rule_with_and
+=== RUN   TestRuleMatch/One_value_in_rule_with_or
+=== PAUSE TestRuleMatch/One_value_in_rule_with_or
+=== RUN   TestRuleMatch/One_value_in_rule_with_missing_back_tick
+=== PAUSE TestRuleMatch/One_value_in_rule_with_missing_back_tick
+=== RUN   TestRuleMatch/One_value_in_rule_with_missing_opening_parenthesis
+=== PAUSE TestRuleMatch/One_value_in_rule_with_missing_opening_parenthesis
+=== RUN   TestRuleMatch/One_value_in_rule_with_missing_closing_parenthesis
+=== PAUSE TestRuleMatch/One_value_in_rule_with_missing_closing_parenthesis
+=== RUN   TestRuleMatch/One_value_in_rule
+=== PAUSE TestRuleMatch/One_value_in_rule
+=== RUN   TestRuleMatch/One_value_in_rule_with_superfluous_parenthesis
+=== PAUSE TestRuleMatch/One_value_in_rule_with_superfluous_parenthesis
+=== RUN   TestRuleMatch/Rule_with_CAPS_matcher
+=== PAUSE TestRuleMatch/Rule_with_CAPS_matcher
+=== RUN   TestRuleMatch/Invalid_matcher_in_rule
+=== PAUSE TestRuleMatch/Invalid_matcher_in_rule
+=== RUN   TestRuleMatch/Invalid_matchers
+=== PAUSE TestRuleMatch/Invalid_matchers
+=== RUN   TestRuleMatch/Two_value_in_rule
+=== PAUSE TestRuleMatch/Two_value_in_rule
+=== RUN   TestRuleMatch/Not_one_value_in_rule
+=== PAUSE TestRuleMatch/Not_one_value_in_rule
+=== RUN   TestRuleMatch/Two_value_in_rule_with_and
+=== PAUSE TestRuleMatch/Two_value_in_rule_with_and
+=== RUN   TestRuleMatch/Two_value_in_rule_with_or
+=== PAUSE TestRuleMatch/Two_value_in_rule_with_or
+=== RUN   TestRuleMatch/Two_value_in_rule_with_and_negated
+=== PAUSE TestRuleMatch/Two_value_in_rule_with_and_negated
+=== RUN   TestRuleMatch/Two_value_in_rule_with_or_negated
+=== PAUSE TestRuleMatch/Two_value_in_rule_with_or_negated
+=== RUN   TestRuleMatch/No_value_in_rule#01
+=== PAUSE TestRuleMatch/No_value_in_rule#01
+=== CONT  TestRuleMatch/No_rule
+=== CONT  TestRuleMatch/Rule_with_CAPS_matcher
+=== CONT  TestRuleMatch/One_value_in_rule_with_superfluous_parenthesis
+=== NAME  TestRuleMatch/Rule_with_CAPS_matcher
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+=== CONT  TestRuleMatch/One_value_in_rule
+=== NAME  TestRuleMatch/One_value_in_rule_with_superfluous_parenthesis
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+=== NAME  TestRuleMatch/One_value_in_rule
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+=== CONT  TestRuleMatch/One_value_in_rule_with_missing_opening_parenthesis
+=== CONT  TestRuleMatch/One_value_in_rule_with_missing_back_tick
+=== CONT  TestRuleMatch/One_value_in_rule_with_missing_closing_parenthesis
+=== CONT  TestRuleMatch/One_value_in_rule_with_or
+=== CONT  TestRuleMatch/One_value_in_rule_with_and
+=== CONT  TestRuleMatch/Empty_value_in_rule
+=== CONT  TestRuleMatch/No_value_in_rule
+    parser_test.go:267: &{Matcher:m Not:false Value:[] RuleLeft:<nil> RuleRight:<nil>} -> no args for matcher m
+=== NAME  TestRuleMatch/Empty_value_in_rule
+    parser_test.go:267: &{Matcher:m Not:false Value:[] RuleLeft:<nil> RuleRight:<nil>} -> empty args for matcher m, []
+=== CONT  TestRuleMatch/Two_value_in_rule_with_and
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:m Not:false Value:[2] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:and Not:false Value:[] RuleLeft:0xc0000b1380 RuleRight:0xc0000b13c0} -> no args for matcher and
+=== CONT  TestRuleMatch/No_value_in_rule#01
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:m Not:false Value:[] RuleLeft:<nil> RuleRight:<nil>} -> no args for matcher m
+    parser_test.go:267: &{Matcher:and Not:false Value:[] RuleLeft:0xc0000b15c0 RuleRight:0xc0000b1600} -> no args for matcher and
+=== CONT  TestRuleMatch/Two_value_in_rule_with_or_negated
+    parser_test.go:267: &{Matcher:m Not:true Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:m Not:true Value:[2] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:and Not:false Value:[] RuleLeft:0xc0000b1800 RuleRight:0xc0000b1840} -> no args for matcher and
+=== CONT  TestRuleMatch/Two_value_in_rule_with_and_negated
+    parser_test.go:267: &{Matcher:m Not:true Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:m Not:true Value:[2] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:or Not:false Value:[] RuleLeft:0xc0000b1a40 RuleRight:0xc0000b1a80} -> no args for matcher or
+=== CONT  TestRuleMatch/Two_value_in_rule_with_or
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:m Not:false Value:[2] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+    parser_test.go:267: &{Matcher:or Not:false Value:[] RuleLeft:0xc0000b1c80 RuleRight:0xc0000b1cc0} -> no args for matcher or
+=== CONT  TestRuleMatch/Two_value_in_rule
+=== CONT  TestRuleMatch/No_matcher_in_rule
+=== NAME  TestRuleMatch/Two_value_in_rule
+    parser_test.go:267: &{Matcher:m Not:false Value:[1 2] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+=== CONT  TestRuleMatch/Not_one_value_in_rule
+    parser_test.go:267: &{Matcher:m Not:true Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+=== CONT  TestRuleMatch/Invalid_matchers
+    parser_test.go:267: &{Matcher:m Not:false Value:[1] RuleLeft:<nil> RuleRight:<nil>} -> <nil>
+=== CONT  TestRuleMatch/Invalid_matcher_in_rule
+--- PASS: TestRuleMatch (0.00s)
+    --- PASS: TestRuleMatch/No_rule (0.00s)
+    --- PASS: TestRuleMatch/Rule_with_CAPS_matcher (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule_with_superfluous_parenthesis (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule_with_missing_back_tick (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule_with_missing_opening_parenthesis (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule_with_or (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule_with_missing_closing_parenthesis (0.00s)
+    --- PASS: TestRuleMatch/One_value_in_rule_with_and (0.00s)
+    --- PASS: TestRuleMatch/No_value_in_rule (0.00s)
+    --- PASS: TestRuleMatch/Empty_value_in_rule (0.00s)
+    --- PASS: TestRuleMatch/Two_value_in_rule_with_and (0.00s)
+    --- PASS: TestRuleMatch/No_value_in_rule#01 (0.00s)
+    --- PASS: TestRuleMatch/Two_value_in_rule_with_or_negated (0.00s)
+    --- PASS: TestRuleMatch/Two_value_in_rule_with_and_negated (0.00s)
+    --- PASS: TestRuleMatch/Two_value_in_rule_with_or (0.00s)
+    --- PASS: TestRuleMatch/Two_value_in_rule (0.00s)
+    --- PASS: TestRuleMatch/Not_one_value_in_rule (0.00s)
+    --- PASS: TestRuleMatch/Invalid_matchers (0.00s)
+    --- PASS: TestRuleMatch/Invalid_matcher_in_rule (0.00s)
+    --- PASS: TestRuleMatch/No_matcher_in_rule (0.00s)
+PASS
+ok  	github.com/go-gost/x/routing/rules	0.010s
+?   	github.com/go-gost/x/sd/plugin	[no test files]
+?   	github.com/go-gost/x/selector	[no test files]
+=== RUN   TestCollectAndReportKeepsStaleEntryWhenReportFails
+⚠️ seq 未配置持久路径，回退临时文件 /tmp/flmx_agent_seq.json；整机重启可能丢失 seq（F-005）
+❌ 全局流量上报失败: 发送HTTP请求失败: http://panel.example.com/flow/upload?secret=*** => 请求失败: panel unreachable (总流量: ↑10 ↓20, 1个服务, seq=1)
+--- PASS: TestCollectAndReportKeepsStaleEntryWhenReportFails (0.00s)
+=== RUN   TestBatchReportRefusesPlaintextWhenCryptoMissing
+--- PASS: TestBatchReportRefusesPlaintextWhenCryptoMissing (0.00s)
+=== RUN   TestPostJSONWithFallbackErrorRedactsSecret
+⚠️ HTTP上报尝试失败，准备回退: http://127.0.0.1:1/flow/upload?secret=*** => 请求失败: Post "http://127.0.0.1:1/flow/upload?secret=*** dial tcp 127.0.0.1:1: connect: connection refused
+--- PASS: TestPostJSONWithFallbackErrorRedactsSecret (0.00s)
+=== RUN   TestSanitizeReportURL
+--- PASS: TestSanitizeReportURL (0.00s)
+=== RUN   TestFix2CReportCandidatesSingleScheme
+=== RUN   TestFix2CReportCandidatesSingleScheme/bare_defaults_https
+=== RUN   TestFix2CReportCandidatesSingleScheme/explicit_http_is_plaintext_opt-in
+=== RUN   TestFix2CReportCandidatesSingleScheme/explicit_https
+=== RUN   TestFix2CReportCandidatesSingleScheme/ws_maps_to_http
+=== RUN   TestFix2CReportCandidatesSingleScheme/wss_maps_to_https
+--- PASS: TestFix2CReportCandidatesSingleScheme (0.00s)
+    --- PASS: TestFix2CReportCandidatesSingleScheme/bare_defaults_https (0.00s)
+    --- PASS: TestFix2CReportCandidatesSingleScheme/explicit_http_is_plaintext_opt-in (0.00s)
+    --- PASS: TestFix2CReportCandidatesSingleScheme/explicit_https (0.00s)
+    --- PASS: TestFix2CReportCandidatesSingleScheme/ws_maps_to_http (0.00s)
+    --- PASS: TestFix2CReportCandidatesSingleScheme/wss_maps_to_https (0.00s)
+=== RUN   TestFix2CSanitizeReportURLVariants
+--- PASS: TestFix2CSanitizeReportURLVariants (0.00s)
+=== RUN   TestFix2CRedactReportErrorNormalizedURL
+--- PASS: TestFix2CRedactReportErrorNormalizedURL (0.00s)
+=== RUN   TestSanitizeReportURLMasksSecret
+--- PASS: TestSanitizeReportURLMasksSecret (0.00s)
+=== RUN   TestPostJSONWithFallbackDoesNotLeakSecretInErrors
+--- PASS: TestPostJSONWithFallbackDoesNotLeakSecretInErrors (0.00s)
+=== RUN   TestPostJSONWithFallbackAndHeadersDoesNotLeakSecretInErrors
+--- PASS: TestPostJSONWithFallbackAndHeadersDoesNotLeakSecretInErrors (0.00s)
+=== RUN   TestGlobalTrafficManagerRemoveServicesDropsCachedEntries
+--- PASS: TestGlobalTrafficManagerRemoveServicesDropsCachedEntries (0.00s)
+=== RUN   TestGlobalTrafficManagerRetainServicesDropsStaleEntries
+--- PASS: TestGlobalTrafficManagerRetainServicesDropsStaleEntries (0.00s)
+=== RUN   TestGlobalTrafficManagerAddTrafficIgnoresUnregisteredService
+--- PASS: TestGlobalTrafficManagerAddTrafficIgnoresUnregisteredService (0.00s)
+=== RUN   TestGlobalTrafficManagerCollectAndReportDropsStaleEntriesAfterReporting
+--- PASS: TestGlobalTrafficManagerCollectAndReportDropsStaleEntriesAfterReporting (0.00s)
+=== RUN   TestBuildReportURLCandidatesSecureFirst
+--- PASS: TestBuildReportURLCandidatesSecureFirst (0.00s)
+=== RUN   TestBuildReportURLCandidatesNormalizeSchemeAddr
+--- PASS: TestBuildReportURLCandidatesNormalizeSchemeAddr (0.00s)
+=== RUN   TestPostJSONWithFallbackUsesHTTPAfterHTTPSFailure
+⚠️ HTTP上报尝试失败，准备回退: https://panel.example.com:443/flow/upload?secret=*** => 请求失败: tls handshake failed
+↪️ HTTP上报已自动回退到: http://panel.example.com:443/flow/upload?secret=***
+--- PASS: TestPostJSONWithFallbackUsesHTTPAfterHTTPSFailure (0.00s)
+=== RUN   TestPostJSONWithFallbackRemembersDetectedURL
+⚠️ HTTP上报尝试失败，准备回退: https://panel.example.com:443/flow/upload?secret=*** => 请求失败: tls handshake failed
+↪️ HTTP上报已自动回退到: http://panel.example.com:443/flow/upload?secret=***
+--- PASS: TestPostJSONWithFallbackRemembersDetectedURL (0.00s)
+=== RUN   TestConfigReportDoesNotPersistStaleRuntime
+--- PASS: TestConfigReportDoesNotPersistStaleRuntime (0.00s)
+=== RUN   TestSeqSurvivesTempDirWipe
+--- PASS: TestSeqSurvivesTempDirWipe (0.00s)
+=== RUN   TestSeqMigratesLegacyTempDirValue
+--- PASS: TestSeqMigratesLegacyTempDirValue (0.00s)
+=== RUN   TestSeqNeverGoesBackwardsAcrossFiles
+--- PASS: TestSeqNeverGoesBackwardsAcrossFiles (0.00s)
+=== RUN   TestNextSeqConcurrentUnique
+--- PASS: TestNextSeqConcurrentUnique (0.00s)
+PASS
+ok  	github.com/go-gost/x/service	0.029s
+=== RUN   TestUpdateChainParseFailureKeepsExistingChainRegistered
+--- PASS: TestUpdateChainParseFailureKeepsExistingChainRegistered (0.00s)
+=== RUN   TestMutationCommandsAreSerialized
+--- PASS: TestMutationCommandsAreSerialized (0.00s)
+=== RUN   TestReadOnlyCommandsRemainBoundedAsync
+--- PASS: TestReadOnlyCommandsRemainBoundedAsync (0.00s)
+=== RUN   TestCommandResponseTypePreservesRequestContract
+--- PASS: TestCommandResponseTypePreservesRequestContract (0.00s)
+=== RUN   TestMutationQueueExecutesCommandsInArrivalOrder
+🔐 AES 加密器创建成功
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["mutation_queue_first_tdd"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["mutation_queue_second_tdd"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+--- PASS: TestMutationQueueExecutesCommandsInArrivalOrder (0.10s)
+=== RUN   TestMutationCommandWaitsForRuntimeTransaction
+🔐 AES 加密器创建成功
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["reload_transaction_service"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+--- PASS: TestMutationCommandWaitsForRuntimeTransaction (0.05s)
+=== RUN   TestClampPingParams
+--- PASS: TestClampPingParams (0.00s)
+=== RUN   TestHandleTcpPingClampsHugeCount
+--- PASS: TestHandleTcpPingClampsHugeCount (0.00s)
+=== RUN   TestEncryptPayloadFailsClosedWithoutCrypto
+--- PASS: TestEncryptPayloadFailsClosedWithoutCrypto (0.00s)
+=== RUN   TestLogReceivedCommandRedactsPayload
+--- PASS: TestLogReceivedCommandRedactsPayload (0.00s)
+=== RUN   TestFix2CRedactCommandForLogEscapedQuote
+--- PASS: TestFix2CRedactCommandForLogEscapedQuote (0.00s)
+=== RUN   TestFix2CRedactCommandForLogUnparseable
+--- PASS: TestFix2CRedactCommandForLogUnparseable (0.00s)
+=== RUN   TestFix2CSanitizeWebSocketURLVariants
+--- PASS: TestFix2CSanitizeWebSocketURLVariants (0.00s)
+=== RUN   TestAgentHealthCheckStableService
+--- PASS: TestAgentHealthCheckStableService (0.02s)
+=== RUN   TestAgentHealthCheckDiesBeforeSecondSample
+--- PASS: TestAgentHealthCheckDiesBeforeSecondSample (0.03s)
+=== RUN   TestAgentHealthCheckPIDChanges
+--- PASS: TestAgentHealthCheckPIDChanges (0.03s)
+=== RUN   TestAgentHealthCheckPIDZeroOrEmpty
+--- PASS: TestAgentHealthCheckPIDZeroOrEmpty (0.03s)
+=== RUN   TestAgentRestartScriptUsesStableHealthCheck
+--- PASS: TestAgentRestartScriptUsesStableHealthCheck (0.00s)
+=== RUN   TestRouteCommandLogRedactsSecrets
+🔐 AES 加密器创建成功
+--- PASS: TestRouteCommandLogRedactsSecrets (0.00s)
+=== RUN   TestPlaintextCommandWarningOnlyOnce
+🔐 AES 加密器创建成功
+--- PASS: TestPlaintextCommandWarningOnlyOnce (0.00s)
+=== RUN   TestCreateServicesPersistFailureRollsBackRuntime
+⚠️ config persist: create temp file failed: open /tmp/TestCreateServicesPersistFailureRollsBackRuntime235201116/001/missing/.gost-266058098.tmp: no such file or directory
+--- PASS: TestCreateServicesPersistFailureRollsBackRuntime (0.00s)
+=== RUN   TestDetectServiceManagerOpenRCOnAlpine
+--- PASS: TestDetectServiceManagerOpenRCOnAlpine (0.00s)
+=== RUN   TestDetectServiceManagerSystemd
+--- PASS: TestDetectServiceManagerSystemd (0.00s)
+=== RUN   TestDetectServiceManagerOpenRCFallback
+--- PASS: TestDetectServiceManagerOpenRCFallback (0.00s)
+=== RUN   TestDetectServiceManagerUnsupported
+--- PASS: TestDetectServiceManagerUnsupported (0.00s)
+=== RUN   TestBuildAgentRestartScriptSystemdHasLocalRollback
+--- PASS: TestBuildAgentRestartScriptSystemdHasLocalRollback (0.00s)
+=== RUN   TestBuildAgentRestartScriptOpenRC
+--- PASS: TestBuildAgentRestartScriptOpenRC (0.00s)
+=== RUN   TestBuildAgentRestartScriptUnsupportedManager
+--- PASS: TestBuildAgentRestartScriptUnsupportedManager (0.00s)
+=== RUN   TestAgentControlScriptCommandPerManager
+--- PASS: TestAgentControlScriptCommandPerManager (0.00s)
+=== RUN   TestBackupCurrentAgentBinaryCopies
+--- PASS: TestBackupCurrentAgentBinaryCopies (0.00s)
+=== RUN   TestBackupCurrentAgentBinaryWriteFailureAborts
+--- PASS: TestBackupCurrentAgentBinaryWriteFailureAborts (0.00s)
+=== RUN   TestBackupCurrentAgentBinaryNoExistingBinary
+--- PASS: TestBackupCurrentAgentBinaryNoExistingBinary (0.00s)
+=== RUN   TestSmokeTestAgentBinary
+--- PASS: TestSmokeTestAgentBinary (0.00s)
+=== RUN   TestReadAgentChecksum
+--- PASS: TestReadAgentChecksum (0.00s)
+=== RUN   TestDecompressCommandPayload
+--- PASS: TestDecompressCommandPayload (0.08s)
+=== RUN   TestValidateEncryptedTimestamp
+--- PASS: TestValidateEncryptedTimestamp (0.00s)
+=== RUN   TestClampServiceMonitorTimeoutSec
+--- PASS: TestClampServiceMonitorTimeoutSec (0.00s)
+=== RUN   TestBuildWebSocketCandidatesNeverDowngrades
+--- PASS: TestBuildWebSocketCandidatesNeverDowngrades (0.00s)
+=== RUN   TestScriptedStartsResetFailedUnderSystemd
+--- PASS: TestScriptedStartsResetFailedUnderSystemd (0.00s)
+=== RUN   TestCreateConnLimiterUpdatesGlobalConfig
+--- PASS: TestCreateConnLimiterUpdatesGlobalConfig (0.00s)
+=== RUN   TestCreateLimiterReportsPersistFailure
+⚠️ config persist: create temp file failed: open /tmp/TestCreateLimiterReportsPersistFailure3157038800/001/missing/.gost-1982863518.tmp: no such file or directory
+--- PASS: TestCreateLimiterReportsPersistFailure (0.00s)
+=== RUN   TestMachineBootIDStable
+--- PASS: TestMachineBootIDStable (0.00s)
+=== RUN   TestR14F06F04SingleFamilyFailureWarns
+2026/10/24 22:09:00 tune probe: IPv4 sock_diag dump failed, RTT median covers IPv6 only: v4 dump failed
+--- PASS: TestR14F06F04SingleFamilyFailureWarns (0.00s)
+=== RUN   TestR3B1HandleTcpPingRejectsDeniedLiterals
+--- PASS: TestR3B1HandleTcpPingRejectsDeniedLiterals (0.00s)
+=== RUN   TestR3B1TcpPingLiteralTargetDeniedSet
+--- PASS: TestR3B1TcpPingLiteralTargetDeniedSet (0.00s)
+=== RUN   TestR4B7ServiceMonitorHardDenySet
+--- PASS: TestR4B7ServiceMonitorHardDenySet (0.00s)
+=== RUN   TestR4B7HandleServiceMonitorCheckHardDeny
+--- PASS: TestR4B7HandleServiceMonitorCheckHardDeny (0.00s)
+=== RUN   TestR4B7HandleServiceMonitorCheckLANAllowed
+--- PASS: TestR4B7HandleServiceMonitorCheckLANAllowed (0.00s)
+=== RUN   TestR4B7HandleTracerouteRejectsDeniedLiterals
+--- PASS: TestR4B7HandleTracerouteRejectsDeniedLiterals (0.00s)
+=== RUN   TestR4B7HandleTcpPingHostnameResolvingToLoopbackDenied
+🔍 开始TCP ping测试: localhost:33023，次数: 1，超时: 500ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.30ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestR4B7HandleTcpPingHostnameResolvingToLoopbackDenied (0.00s)
+=== RUN   TestR6B6HandleUdpPingRejectsDeniedTargets
+🔍 开始UDP ping测试: localhost:53，次数: 1，超时: 200ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.00ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestR6B6HandleUdpPingRejectsDeniedTargets (0.00s)
+=== RUN   TestR6B6UdpPingHostResolvingToLoopbackDenied
+🔍 开始UDP ping测试: localhost:53，次数: 1，超时: 200ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.00ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestR6B6UdpPingHostResolvingToLoopbackDenied (0.00s)
+=== RUN   TestR6B6HandleUdpPingAllowsPublicPrivateTargets
+🔍 开始UDP ping测试: 8.8.8.8:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 8.8.8.8:53
+  第1次UDP连接成功: 0.06ms
+✅ UDP ping完成: 平均连接时间 0.06ms，失败率 0.0%
+🔍 开始UDP ping测试: 192.168.1.1:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 192.168.1.1:53
+  第1次UDP连接失败: dial udp 192.168.1.1:53: connect: operation not permitted (0.02ms)
+🔍 开始UDP ping测试: 10.0.0.5:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 10.0.0.5:53
+  第1次UDP连接失败: dial udp 10.0.0.5:53: connect: operation not permitted (0.01ms)
+🔍 开始UDP ping测试: 172.16.0.9:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 172.16.0.9:53
+  第1次UDP连接失败: dial udp 172.16.0.9:53: connect: operation not permitted (0.01ms)
+--- PASS: TestR6B6HandleUdpPingAllowsPublicPrivateTargets (0.00s)
+=== RUN   TestR6B6HandleUdpPingPrivateListenerSucceeds
+🔍 开始UDP ping测试: [fd8b:4f84:7d32:99::2]:39388，次数: 1，超时: 500ms
+🎯 使用IP地址进行测试: [fd8b:4f84:7d32:99::2]:39388
+  第1次UDP连接失败: dial udp [fd8b:4f84:7d32:99::2]:39388: connect: operation not permitted (0.08ms)
+    r6_b6_udpping_test.go:106: no self-dialable policy-allowed local interface address in this environment
+--- SKIP: TestR6B6HandleUdpPingPrivateListenerSucceeds (0.00s)
+=== RUN   TestUpdateServicesParseFailureRestoresPreviousRuntime
+--- PASS: TestUpdateServicesParseFailureRestoresPreviousRuntime (0.00s)
+=== RUN   TestUpdateServicesSkipsUnchangedServiceWithoutRestart
+--- PASS: TestUpdateServicesSkipsUnchangedServiceWithoutRestart (0.00s)
+=== RUN   TestTCPPingQueueCompletesMoreThanEightTargets
+=== RUN   TestTCPPingQueueCompletesMoreThanEightTargets/targets_9
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:151: no policy-allowed, self-dialable local interface address for probe target
+=== RUN   TestTCPPingQueueCompletesMoreThanEightTargets/targets_30
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:151: no policy-allowed, self-dialable local interface address for probe target
+--- PASS: TestTCPPingQueueCompletesMoreThanEightTargets (0.00s)
+    --- SKIP: TestTCPPingQueueCompletesMoreThanEightTargets/targets_9 (0.00s)
+    --- SKIP: TestTCPPingQueueCompletesMoreThanEightTargets/targets_30 (0.00s)
+=== RUN   TestTCPPingQueueSkipsExpiredTargets
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:188: no policy-allowed, self-dialable local interface address for probe target
+--- SKIP: TestTCPPingQueueSkipsExpiredTargets (0.00s)
+=== RUN   TestTCPPingQueueReportsFullWithoutBlockingReceiver
+🔐 AES 加密器创建成功
+--- PASS: TestTCPPingQueueReportsFullWithoutBlockingReceiver (0.00s)
+=== RUN   TestTCPPingExecutionHonorsCancellation
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:223: no policy-allowed, self-dialable local interface address for probe target
+--- SKIP: TestTCPPingExecutionHonorsCancellation (0.00s)
+=== RUN   TestTCPPingQueueStopsWithPendingAndRunningProbes
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:262: no policy-allowed, self-dialable local interface address for probe target
+--- SKIP: TestTCPPingQueueStopsWithPendingAndRunningProbes (0.03s)
+=== RUN   TestTCPPingBudgetBounds
+--- PASS: TestTCPPingBudgetBounds (0.00s)
+=== RUN   TestTCPPingCanceledBeforeAnyAttempt
+🔐 AES 加密器创建成功
+🔍 开始TCP ping测试: localhost:1，次数: 4，超时: 5000ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.01ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestTCPPingCanceledBeforeAnyAttempt (0.00s)
+=== RUN   TestMatchTraceReply
+--- PASS: TestMatchTraceReply (0.00s)
+=== RUN   TestTracerouteLoopback
+--- PASS: TestTracerouteLoopback (0.00s)
+=== RUN   TestMatchTraceReplyV6
+--- PASS: TestMatchTraceReplyV6 (0.00s)
+=== RUN   TestTraceAddr
+--- PASS: TestTraceAddr (0.00s)
+=== RUN   TestTracerouteLoopbackV6
+--- PASS: TestTracerouteLoopbackV6 (0.00s)
+=== RUN   TestTraceAddrFamily
+--- PASS: TestTraceAddrFamily (0.00s)
+=== RUN   TestTuneBdpApplyAndRestore
+--- PASS: TestTuneBdpApplyAndRestore (0.01s)
+=== RUN   TestTuneBdpSkipsBBRWithoutKernelSupport
+--- PASS: TestTuneBdpSkipsBBRWithoutKernelSupport (0.00s)
+=== RUN   TestTuneBdpCommandValidation
+--- PASS: TestTuneBdpCommandValidation (0.00s)
+=== RUN   TestTuneBdpNeverLowersLimits
+--- PASS: TestTuneBdpNeverLowersLimits (0.01s)
+=== RUN   TestTuneBdpFailedSettingKeepsBackup
+--- PASS: TestTuneBdpFailedSettingKeepsBackup (0.00s)
+=== RUN   TestTuneBdpLegacyConfRemoved
+--- PASS: TestTuneBdpLegacyConfRemoved (0.00s)
+=== RUN   TestTuneBdpSizes
+--- PASS: TestTuneBdpSizes (0.00s)
+=== RUN   TestTuneBdpParamsValid
+--- PASS: TestTuneBdpParamsValid (0.00s)
+=== RUN   TestBuildDiagRequestFamily
+--- PASS: TestBuildDiagRequestFamily (0.00s)
+=== RUN   TestExtractTCPRTT
+--- PASS: TestExtractTCPRTT (0.00s)
+=== RUN   TestTuneProbeMedianRTTMs
+--- PASS: TestTuneProbeMedianRTTMs (0.00s)
+=== RUN   TestTuneProbeDoesNotWrite
+--- PASS: TestTuneProbeDoesNotWrite (0.00s)
+=== RUN   TestTuneProbeFallbackOnFailure
+--- PASS: TestTuneProbeFallbackOnFailure (0.00s)
+=== RUN   TestTuneProbeSpeedtestOptionalAndReference
+--- PASS: TestTuneProbeSpeedtestOptionalAndReference (0.00s)
+=== RUN   TestTuneProbeRejectsBadSpeedtestURL
+--- PASS: TestTuneProbeRejectsBadSpeedtestURL (0.00s)
+=== RUN   TestPanelRemoteHostDisconnected
+--- PASS: TestPanelRemoteHostDisconnected (0.00s)
+=== RUN   TestIsGitHubDownloadHost
+--- PASS: TestIsGitHubDownloadHost (0.00s)
+=== RUN   TestResolveAgentUpgradeProxy
+⚠️ 忽略无效的升级代理配置: "notaurl"
+⚠️ 忽略无效的升级代理配置: "ftp://proxy.example.com"
+⚠️ 忽略无效的升级代理配置: "::bad::"
+--- PASS: TestResolveAgentUpgradeProxy (0.00s)
+=== RUN   TestBuildWebSocketCandidatesSecureFirst
+--- PASS: TestBuildWebSocketCandidatesSecureFirst (0.00s)
+=== RUN   TestBuildWebSocketCandidatesUsesPreferredScheme
+--- PASS: TestBuildWebSocketCandidatesUsesPreferredScheme (0.00s)
+=== RUN   TestBuildWebSocketCandidatesNormalizesSchemePrefixedAddr
+--- PASS: TestBuildWebSocketCandidatesNormalizesSchemePrefixedAddr (0.00s)
+=== RUN   TestDialWebSocketDoesNotDowngradeToWS
+--- PASS: TestDialWebSocketDoesNotDowngradeToWS (0.00s)
+=== RUN   TestDetectWebSocketScheme
+--- PASS: TestDetectWebSocketScheme (0.00s)
+=== RUN   TestSanitizeWebSocketURL
+--- PASS: TestSanitizeWebSocketURL (0.00s)
+=== RUN   TestNewWebSocketReporterUsesReducedMetricInterval
+🔐 AES 加密器创建成功
+--- PASS: TestNewWebSocketReporterUsesReducedMetricInterval (0.00s)
+=== RUN   TestFormatWebSocketDialErrorIncludesHTTPStatus
+--- PASS: TestFormatWebSocketDialErrorIncludesHTTPStatus (0.00s)
+=== RUN   TestAgentUpgradeRestartScriptStopsLegacyGostService
+--- PASS: TestAgentUpgradeRestartScriptStopsLegacyGostService (0.00s)
+=== RUN   TestStartWebSocketReporterWithConfigPreservesProtocolDefaultsWithoutConfigFile
+🔗 WebSocket连接URL: wss://panel.example.com:443/system-info?type=1&secret=***&version=2.0.2&http=1&tls=0&socks=1
+🔐 AES 加密器创建成功
+❌ WebSocket连接失败: 连接WebSocket失败: wss://panel.example.com:443/system-info?type=1&secret=***&version=2.0.2&http=1&tls=0&socks=1 => dial failed（已禁止从 wss 自动降级到 ws 明文连接；请检查面板 TLS/证书，或在 config.json 的 addr 中显式使用 ws:// 前缀以确认明文部署），1.921415631s后重试
+--- PASS: TestStartWebSocketReporterWithConfigPreservesProtocolDefaultsWithoutConfigFile (0.00s)
+=== RUN   TestStartWebSocketReporterWithConfigLogsSanitizedURL
+--- PASS: TestStartWebSocketReporterWithConfigLogsSanitizedURL (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.447s

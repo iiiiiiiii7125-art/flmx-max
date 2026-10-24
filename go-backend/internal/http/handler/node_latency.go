@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
-	"go-backend/internal/store/model"
 )
 
 // latencyTargetsConfigKey holds the reference points nodes measure their
@@ -455,33 +454,6 @@ func latencyProbe(points []latencyPoint, checkedAt int64) externalProbe {
 		p.Error = "测试点都连不上"
 	}
 	return p
-}
-
-// inboundProbeView is what the inbound list shows: a built inbound takes
-// its node's latency to the reference points, unless the panel found its
-// port down; others keep the panel's reachability check.
-func (h *Handler) inboundProbeView(row *model.NodeInbound) *externalProbe {
-	reach, hasReach := h.externalProbes.get(row.ID)
-	if !isExternalInbound(row) {
-		if node, ok := h.nodeLatency.get(row.NodeID); ok && len(node.Points) > 0 {
-			// DB-4：两路探测各自刷新，视图时间取较新者，手动重测的
-			// 新结果不被另一路的旧时间戳盖住。
-			if hasReach && reach.CheckedAt > node.CheckedAt {
-				node.CheckedAt = reach.CheckedAt
-			}
-			if hasReach && !reach.Skipped && !reach.OK {
-				reach.CheckedAt = node.CheckedAt
-				return &reach
-			}
-			view := h.withRoutes(row.NodeID, node)
-			view.OK, view.Error = true, ""
-			return &view
-		}
-	}
-	if !hasReach {
-		return nil
-	}
-	return &reach
 }
 
 // latencyPoolBefore returns the reference points as they are before a

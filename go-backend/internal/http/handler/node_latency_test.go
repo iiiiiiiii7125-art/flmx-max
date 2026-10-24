@@ -125,39 +125,6 @@ func TestProbeNodeLatencyMeasuresOnlineLocalNodes(t *testing.T) {
 	}
 }
 
-func TestInboundProbeViewUsesNodeLatency(t *testing.T) {
-	h, _ := setupLatencyHandler(t, "")
-	h.nodeLatency.replace(map[int64]externalProbe{
-		5: latencyProbe([]latencyPoint{{Name: "电信", Error: "超时"}}, 1),
-	}, true)
-	built := &model.NodeInbound{ID: 1, NodeID: 5, KernelID: 9}
-
-	// No panel check yet: the node's points, reachable.
-	v := h.inboundProbeView(built)
-	if v == nil || !v.OK || len(v.Points) != 1 || v.Error != "" {
-		t.Fatalf("view = %+v", v)
-	}
-
-	// A port the panel found down wins over the node's points.
-	h.externalProbes.replace(map[int64]externalProbe{1: {Error: "连接超时", CheckedAt: 2}}, true)
-	if v := h.inboundProbeView(built); v == nil || v.OK || v.Error != "连接超时" || len(v.Points) != 0 {
-		t.Fatalf("down port view = %+v", v)
-	}
-
-	// Skipped panel checks (UDP, whitelist) still show the node's points.
-	h.externalProbes.replace(map[int64]externalProbe{1: {Skipped: true, CheckedAt: 2}}, true)
-	if v := h.inboundProbeView(built); v == nil || !v.OK || len(v.Points) != 1 {
-		t.Fatalf("skipped view = %+v", v)
-	}
-
-	// A node without measurements falls back to the panel check.
-	other := &model.NodeInbound{ID: 2, NodeID: 6, KernelID: 9}
-	h.externalProbes.replace(map[int64]externalProbe{2: {OK: true, LatencyMs: 80, CheckedAt: 2}}, true)
-	if v := h.inboundProbeView(other); v == nil || v.LatencyMs != 80 || len(v.Points) != 0 {
-		t.Fatalf("fallback view = %+v", v)
-	}
-}
-
 // TestLatencyPointPreservesFailureReason 移植自 kure29/flyx 3.3.33
 // (DB-5):失败原因分类逐例对位——排队/繁忙/离线/超时/取消各有其文案,
 // agent 回的 errorMessage 除 DNS 与全失败外原文透出。

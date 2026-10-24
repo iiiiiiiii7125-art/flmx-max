@@ -1,0 +1,39 @@
+=== record_items.mjs gist ===
+vite-frontend/scripts/demo/record_items.mjs:20:// admins and calls backup/gist/status on mount; without a direct
+vite-frontend/scripts/demo/record_items.mjs:24:await call(tok, "POST", "backup/gist/status", {});
+vite-frontend/scripts/demo/build_fixtures.py:287:    # R15-X-02: backup/gist/status must carry the declared
+vite-frontend/scripts/demo/build_fixtures.py:293:    ("admin", "backup/gist/status", "gist-status"),
+vite-frontend/scripts/demo/check-fixtures-content.mjs:72:  // R15-X-02: backup/gist/status must carry the declared
+vite-frontend/scripts/demo/check-fixtures-content.mjs:76:  { book: "admin", key: "backup/gist/status", kind: "gist-status" },
+vite-frontend/src/demo/fixtures.json:1:{"recordedAt":1792877739132,"admin":{"config/list":[{"res":{"code":0,"msg":"操作成功","ts":1792877628293,"data":{"app_name":"FLMX 演示","hide_footer_brand"
+=== build_fixtures CONTENT_KEYS gist-status ===
+293:    ("admin", "backup/gist/status", "gist-status"),
+296:GIST_STATUS_FIELDS = {
+307:    if kind == "gist-status":
+317:            bad = [k for k, t in GIST_STATUS_FIELDS.items()
+=== check-fixtures-content CHECKS gist-status ===
+76:  { book: "admin", key: "backup/gist/status", kind: "gist-status" },
+175:  if (kind === "gist-status") {
+=== inbound.tsx probe lines ===
+23:  probeInbounds,
+37:import { latestProbe } from "@/utils/latest-probe";
+296:              probe: latestProbe(i.probe, previous.get(i.id)?.probe),
+531:      const res = await probeInbounds();
+562:    // R15-X-02 修复中发现：外部入站首轮探测未完成时 probe 为 null；
+563:    // 旧式 `!item.probe?.skipped` 在 probe=null 时为真，会把 null 原样
+564:    // 赋给 probe，随后 `probe !== undefined && !probe.ok` 读 null.ok
+566:    const probe =
+567:      item.external && item.probe && !item.probe.skipped
+568:        ? item.probe
+570:    const unreachable = item.enabled && probe !== undefined && !probe.ok;
+597:      ? probe?.error || "连不上"
+599:        ? probe
+600:          ? `可连接 · ${probe.latencyMs} ms`
+830:              ? `连不上：${probe?.error ?? ""}`
+832:                ? probe
+833:                  ? `可连接 · ${probe.latencyMs} ms`
+955:                {probe?.error || "连不上"}
+962:            {item.enabled && probe?.ok ? ` · ${probe.latencyMs} ms` : ""}
+1017:  // (same probe / running / kernelBad derivation as renderInbound), so the
+1020:    sheetItem?.external && !sheetItem.probe?.skipped
+1021:      ? sheetItem.probe

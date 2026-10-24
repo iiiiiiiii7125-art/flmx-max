@@ -1,0 +1,21 @@
+=== R15-FIX-REPORT: all-history ===
+(end, empty=absent)
+=== worktree fs ===
+(end)
+=== shared worktree r15 dir ===
+R15-A5-xray-runtime-fixed.log
+R15-FIX-PLAN.md
+R15-L1-xray-fixed.log
+(end)
+=== .fixr15 worktree ===
+R15-FIX-REPORT.md
+b54b44f docs(r15): archive V-06 verdict corrections (were working-tree-only)
+583cec0 fix(r15): errors.md stale 500 row; demo fixture missing backup/gist/status
+5bd5a90 merge(fix-r14/f09f10f11): demo fixture, docs, test infra
+=== fix commit 583cec0 files ===
+skills/flmx-api/references/errors.md
+vite-frontend/scripts/demo/build_fixtures.py
+vite-frontend/scripts/demo/check-fixtures-content.mjs
+vite-frontend/scripts/demo/record_items.mjs
+vite-frontend/src/demo/fixtures.json
+vite-frontend/src/pages/inbound.tsx

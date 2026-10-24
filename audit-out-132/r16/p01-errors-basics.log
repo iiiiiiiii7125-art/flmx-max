@@ -1,0 +1,43 @@
+=== errors.md ===
+     1	# Error Codes & Handling
+     2	
+     3	## Response Code Field
+     4	
+     5	| code | Meaning | Action |
+     6	|------|---------|--------|
+     7	| `0` | Success | Use `data` field |
+     8	| `-1` | Business error | Show `msg` to user |
+     9	| `-2` | Server/DB error | Retry or report bug |
+    10	| `-3` | Target address validation failed (monitoring SSRF check) | Check the target URL/host |
+    11	| `401` | Unauthorized | Token expired/invalid, re-login |
+    12	| `403` | Forbidden | Need admin privileges |
+    13	| `409` | Same request already in progress | Retry shortly |
+    14	| `429` | Rate limited | Wait and retry; read `Retry-After: 60` |
+    15	
+    16	> Historical code: `500` was once the parameter-error code. Since F-08, envelope parameter errors are unified under `-1` and `500` has no emission point.
+    17	
+    18	## Common Error Messages (Chinese)
+    19	
+    20	| msg | Cause | Solution |
+=== 500 in live table? ===
+16:> Historical code: `500` was once the parameter-error code. Since F-08, envelope parameter errors are unified under `-1` and `500` has no emission point.
+=== check-doc-consistency.sh location ===
+./scripts/check-doc-consistency.sh
+=== kernel_relay.go:846 gh_mirror.go:321,327 ===
+go-backend/internal/http/handler/kernel_relay.go:815:		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+go-backend/internal/http/handler/kernel_relay.go:835:		http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
+go-backend/internal/http/handler/kernel_relay.go:846:		http.Error(w, "internal error", http.StatusInternalServerError)
+go-backend/internal/http/handler/kernel_relay.go:872:				http.Error(w, "forbidden", http.StatusForbidden)
+go-backend/internal/http/handler/kernel_relay.go:919:		http.Error(w, err.Error(), http.StatusBadRequest)
+go-backend/internal/http/handler/gh_mirror.go:273:		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+go-backend/internal/http/handler/gh_mirror.go:279:			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+go-backend/internal/http/handler/gh_mirror.go:285:		http.Error(w, err.Error(), http.StatusNotFound)
+go-backend/internal/http/handler/gh_mirror.go:293:				http.Error(w, err.Error(), http.StatusBadGateway)
+go-backend/internal/http/handler/gh_mirror.go:308:			http.Error(w, err.Error(), http.StatusBadGateway)
+gh_mirror.go
+kernel_relay.go
+kernel_relay_target_test.go
+r1_b3_relay_retarget_test.go
+r6_b5_ghmirror_test.go
+relay_latency.go
+relay_latency_test.go

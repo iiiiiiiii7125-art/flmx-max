@@ -1,0 +1,6 @@
+dist: /home/hatch/workspace/.fixr16/vite-frontend/dist-demo
+before click: {"hash":"#/inbound","len":1163,"hasTW":true}
+click: clicked
+after click: {"len":1292,"snippet":"FLMX 演示\n概览\n线路\n节点\n落地\n中转\n分发\n订阅\n用户\n系统\n共享\n设置\n修改密码\n退出登录\n\nvbeta1.4.8\n\nPowered by FLMX\n\n入站12\n订阅\n订阅源\n全部节点\n导入的节点\n美国 圣何塞\n日本 东京\n香港 HKT\n新加坡\n检测\n多选\n导入\n新建入站\n美国 圣何塞\n2 个入站\n圣何塞 Hysteria2\nHysteria2 + TLS + 端口跳跃 · 443 · "}
+exceptions: 0
+RESULT: NO-CRASH

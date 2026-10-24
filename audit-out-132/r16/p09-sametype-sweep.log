@@ -1,0 +1,83 @@
+=== inboundProbe handler return type ===
+// inboundProbe checks imported nodes now: the given ids, or all of them.
+// A manual "check all" expands to the explicit id list server-side (the
+// nodeLatencyProbe pattern) and runs as a targeted round: a click must
+// never drive inbound_down streaks — neither raising nor clearing
+// them (DB-4, R1-B-01).
+func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	ids := req.IDs
+	if len(ids) == 0 {
+		rows, err := h.repo.ListNodeInbounds()
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		for i := range rows {
+			if isExternalInbound(&rows[i]) {
+				ids = append(ids, rows[i].ID)
+			}
+		}
+	}
+	results, err := h.probeExternalInbounds(r.Context(), ids, probeRoundTargeted)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	out := make(map[string]externalProbe, len(results))
+	for id, p := range results {
+		out[strconv.FormatInt(id, 10)] = p
+	}
+	response.WriteJSON(w, response.OK(out))
+}
+=== externalProbe struct ===
+// externalProbe is the last TCP reachability check of an imported node, made
+// from the panel server. UDP-only protocols (Hysteria2, TUIC) are skipped.
+type externalProbe struct {
+	OK        bool   `json:"ok"`
+	Skipped   bool   `json:"skipped,omitempty"`
+	LatencyMs int64  `json:"latencyMs,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CheckedAt int64  `json:"checkedAt"`
+	// Points 是节点到各延迟测试点的延迟（node_latency.go 移植自 kure29/flyx）。
+	Points []latencyPoint `json:"points,omitempty"`
+}
+
+// probeRounds remembers when each stored result's round started so a
+// slower older round cannot overwrite a newer round's values（移植自
+// kure29/flyx 3.3.33，DB-4 三个探测存储共用）。
+type probeRounds map[int64]int64
+
+// take records started for id and reports whether a write from that round
+// may still land: false when a newer round already stored a value.
+=== all .probe.ok / probe?.ok reads frontend ===
+vite-frontend/src/components/latency-cell.tsx:55:      ok: probe.ok,
+vite-frontend/src/pages/dashboard/admin-overview.tsx:311:    Boolean(i.probe && !i.probe.skipped && !i.probe.ok);
+vite-frontend/src/pages/inbound.tsx:564:    // 赋给 probe，随后 `probe !== undefined && !probe.ok` 读 null.ok
+vite-frontend/src/pages/inbound.tsx:570:    const unreachable = item.enabled && probe !== undefined && !probe.ok;
+vite-frontend/src/pages/inbound.tsx:962:            {item.enabled && probe?.ok ? ` · ${probe.latencyMs} ms` : ""}
+=== all '?.skipped' frontend ===
+vite-frontend/src/pages/inbound.tsx:563:    // 旧式 `!item.probe?.skipped` 在 probe=null 时为真，会把 null 原样
+vite-frontend/src/pages/inbound.tsx:1020:    sheetItem?.external && !sheetItem.probe?.skipped
+=== admin-overview:311 context ===
+  const kernelDown = (i: InboundApiItem) =>
+    i.enabled && !i.external && i.kernelStatus !== "running";
+  // 导入（external）入站看面板探测结果，内建入站看内核状态（沿用既有口径）
+  const probeDown = (i: InboundApiItem) =>
+    i.enabled &&
+    i.external &&
+    Boolean(i.probe && !i.probe.skipped && !i.probe.ok);
+  const badInbound = (i: InboundApiItem) => kernelDown(i) || probeDown(i);
+  const runningInbounds = enabledInbounds.filter((i) => !badInbound(i));
+  const relaysUp = relays.filter(
+    (r) => r.forwardExists && r.forwardStatus === 1,

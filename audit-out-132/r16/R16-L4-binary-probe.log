@@ -1,0 +1,106 @@
+== versions ==
+sing-box version 1.11.15
+
+Environment: go1.24.4 linux/amd64
+Tags: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_reality_server,with_acme,with_clash_api,with_ech
+Revision: bc35aca01704497c179da1a03e45ad8e32f1a51b
+CGO: disabled
+sing-box version 1.12.17
+
+Environment: go1.25.6 linux/amd64
+Tags: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale
+Revision: 51ce402dbb14469bed8ae041afa7e14751595881
+CGO: disabled
+sing-box version 1.13.14
+
+Environment: go1.25.11 linux/amd64
+Tags: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_purego
+Revision: 25a600db24f7680ad9806ce5427bd0ab8afe1114
+CGO: disabled
+sing-box version 1.14.3
+
+Environment: go1.26.8 linux/amd64
+Tags: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0,with_purego
+Revision: 7054cac5124465ffdb145870d7c01885566711b1
+CGO: disabled
+Xray 25.3.6 (Xray, Penetrates Everything.) 2cba2c4 (go1.24.1 linux/amd64)
+Xray 25.5.16 (Xray, Penetrates Everything.) 800b8b5 (go1.24.3 linux/amd64)
+Xray 25.6.8 (Xray, Penetrates Everything.) fbae89d (go1.24.4 linux/amd64)
+Xray 25.8.29 (Xray, Penetrates Everything.) 81b7cd7 (go1.25.0 linux/amd64)
+Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64)
+== VG-01 ACME floor 1.14 ==
+VG01-low bin=sing-box version 1.13.14 cfg=/home/hatch/workspace/.r9bin/cfg/sb-acme.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.r9bin/cfg/sb-acme.json: certificate_providers: json: unknown field "certificate_providers" 
+VG01-ok bin=sing-box version 1.14.3 cfg=/home/hatch/workspace/.r9bin/cfg/sb-acme.json exit=0 msg= 
+== VG-02 AnyTLS floor 1.12 ==
+VG02-low bin=sing-box version 1.11.15 cfg=/home/hatch/workspace/.r9bin/cfg/sb-anytls.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.r9bin/cfg/sb-anytls.json: inbounds[0]: unknown inbound type: anytls 
+VG02-ok bin=sing-box version 1.12.17 cfg=/home/hatch/workspace/.r9bin/cfg/sb-anytls.json exit=0 msg= 
+== VG-03 Snell inbound floor 1.14 ==
+VG03-low bin=sing-box version 1.13.14 cfg=/home/hatch/workspace/.r9bin/cfg/sb-snell.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.r9bin/cfg/sb-snell.json: inbounds[0]: unknown inbound type: snell 
+VG03-ok bin=sing-box version 1.14.3 cfg=/home/hatch/workspace/.r9bin/cfg/sb-snell.json exit=0 msg= 
+== VG-04 ENC client+server floor 25.9.5 ==
+VG04-low bin=Xray 25.8.29 (Xray, Penetrates Everything.) 81b7cd7 (go1.25.0 linux/amd64) cfg=/home/hatch/workspace/.r9bin/cfg/enc-canonical.json exit=23 msg=Xray 25.8.29 (Xray, Penetrates Everything.) 81b7cd7 (go1.25.0 linux/amd64) A unified platform for anti-censorship. 2026/10/24 22:11:31.989204 [Info] infra/conf/serial: Reading config: &{Name:/home/hatch/workspace/.r9bin/cfg/enc-canonical.json Format:json} Failed to start: main: failed to load config
+VG04-ok bin=Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64) cfg=/home/hatch/workspace/.r9bin/cfg/enc-canonical.json exit=0 msg=Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64) A unified platform for anti-censorship. Configuration OK. 
+VG04srv-low bin=Xray 25.8.29 (Xray, Penetrates Everything.) 81b7cd7 (go1.25.0 linux/amd64) cfg=/home/hatch/workspace/.tmp-big/r11m3/enc-inbound.json exit=23 msg=Xray 25.8.29 (Xray, Penetrates Everything.) 81b7cd7 (go1.25.0 linux/amd64) A unified platform for anti-censorship. 2026/10/24 22:11:32.072615 [Info] infra/conf/serial: Reading config: &{Name:/home/hatch/workspace/.tmp-big/r11m3/enc-inbound.json Format:json} Failed to start: main: failed to load conf
+VG04srv-ok bin=Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64) cfg=/home/hatch/workspace/.tmp-big/r11m3/enc-inbound.json exit=0 msg=Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64) A unified platform for anti-censorship. 2026/10/24 22:11:32.100137 [Info] infra/conf/serial: Reading config: &{Name:/home/hatch/workspace/.tmp-big/r11m3/enc-inbound.json Format:json} Configuration OK. 
+== VG-05 Snell outbound v4 floor 1.14 ==
+VG05-low bin=sing-box version 1.13.14 cfg=/home/hatch/workspace/.tmp-big/r11m3/sb-snell-out-v4.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.tmp-big/r11m3/sb-snell-out-v4.json: outbounds[0]: unknown outbound type: snell 
+VG05-ok bin=sing-box version 1.14.3 cfg=/home/hatch/workspace/.tmp-big/r11m3/sb-snell-out-v4.json exit=0 msg= 
+VG05-v5shape bin=sing-box version 1.14.3 cfg=/home/hatch/workspace/.tmp-big/r11m3/sb-snell-out.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.tmp-big/r11m3/sb-snell-out.json: outbounds[0]: snell: unsupported version: 5 
+== VG-06 egress non-auto floor 1.12 ==
+VG06-low bin=sing-box version 1.11.15 cfg=/home/hatch/workspace/.r9bin/cfg/sb-egress-prefer-old.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.r9bin/cfg/sb-egress-prefer-old.json: outbounds[0].domain_resolver: json: unknown field "domain_resolver" 
+VG06-ok bin=sing-box version 1.12.17 cfg=/home/hatch/workspace/.r9bin/cfg/sb-egress-prefer.json exit=0 msg= 
+== VG-07 happyEyeballs symbol count (floor 25.6.8) ==
+/home/hatch/workspace/.r9bin/xr-25.3.6/xray happyEyeballs=0
+/home/hatch/workspace/.r9bin/xr-25.5.16/xray happyEyeballs=0
+/home/hatch/workspace/.r9bin/xray-25.6.8-bin happyEyeballs=3
+/home/hatch/workspace/.r9bin/xr-25.9.5/xray happyEyeballs=3
+== VG-08 http_clients floor 1.14 ==
+VG08-low bin=sing-box version 1.13.14 cfg=/home/hatch/workspace/.r9bin/cfg/sb-httpclients.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.r9bin/cfg/sb-httpclients.json: http_clients: json: unknown field "http_clients" 
+VG08-ok bin=sing-box version 1.14.3 cfg=/home/hatch/workspace/.r9bin/cfg/sb-httpclients.json exit=0 msg= 
+== VG-09 snell-server search ==
+0
+0
+== VG-12 naive outbound floor 1.13 ==
+VG12-low bin=sing-box version 1.12.17 cfg=/home/hatch/workspace/.r9bin/cfg/sb-naive-out.json exit=1 msg=[31mFATAL[0m[0000] decode config at /home/hatch/workspace/.r9bin/cfg/sb-naive-out.json: outbounds[0]: unknown outbound type: naive 
+VG12-ok bin=sing-box version 1.13.14 cfg=/home/hatch/workspace/.r9bin/cfg/sb-naive-out.json exit=0 msg= 
+VG12-inbound-111 bin=sing-box version 1.11.15 cfg=/home/hatch/workspace/.r9bin/cfg/sb-naive-in.json exit=1 msg=[31mFATAL[0m[0000] initialize inbound[0]: read certificate: open /tmp/cert.pem: no such file or directory 
+== VG-13 xhttp oldest 25.3.6 ==
+VG13-2536 bin=Xray 25.3.6 (Xray, Penetrates Everything.) 2cba2c4 (go1.24.1 linux/amd64) cfg=/home/hatch/workspace/.tmp-big/r11m3/xr-xhttp.json exit=0 msg=Xray 25.3.6 (Xray, Penetrates Everything.) 2cba2c4 (go1.24.1 linux/amd64) A unified platform for anti-censorship. 2026/10/24 22:11:36.840217 [Info] infra/conf/serial: Reading config: &{Name:/home/hatch/workspace/.tmp-big/r11m3/xr-xhttp.json Format:json} Configuration OK. 
+VG13-2595 bin=Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64) cfg=/home/hatch/workspace/.tmp-big/r11m3/xr-xhttp.json exit=0 msg=Xray 25.9.5 (Xray, Penetrates Everything.) 118131f (go1.25.1 linux/amd64) A unified platform for anti-censorship. 2026/10/24 22:11:36.865916 [Info] infra/conf/serial: Reading config: &{Name:/home/hatch/workspace/.tmp-big/r11m3/xr-xhttp.json Format:json} Configuration OK. 
+== VG-10 Reality default 1.0.0 (code/doc/frontend triple) ==
+211:	DefaultRealityMinClientVer = "1.0.0"
+61:Xray 26.7.11 起，Reality 未设置“最低客户端版本”时默认只接受 26.3.27 及以上的客户端，而 Mihomo（Clash Verge、Stash、FlClash 等）上报的版本是 1.8.2，会被拒绝。面板默认把最低客户端版本设为 `1.0.0`，所有客户端都能连接；如需调整，在 Reality 设置里修改“最低客户端版本”。也可以在安装内核时选择旧版本的 Xray。
+915:                        description="低于此版本的客户端会被拒绝。Xray 新版默认 26.3.27，会导致 Clash / Mihomo 等客户端连不上，保持 1.0.0 即可兼容所有客户端"
+917:                        placeholder="1.0.0"
+== VG-11 dual-stack route agent 1.2.0 (tag archaeology, not binary) ==
+tag 1.1.1 node_route.go family=0 traceroute.go family=0
+tag 1.2.0 node_route.go family=10 traceroute.go family=9
+intro commits first-containing tag: 1.2.0 1.2.0
+58dadac=1.2.0 1.2.1 1.3.0 1.3.1 1.3.2 1.3.3 1.3.4 1.3.5 1.3.6 1.3.7 1.4.0 1.4.1 1.4.2 1.4.3 1.4.4 1.4.5 1.4.6 1.4.7 1.4.8 
+9756636=1.2.0 1.2.1 1.3.0 1.3.1 1.3.2 1.3.3 1.3.4 1.3.5 1.3.6 1.3.7 1.4.0 1.4.1 1.4.2 1.4.3 1.4.4 1.4.5 1.4.6 1.4.7 1.4.8 
+current tree node_route.go family=10 traceroute.go family=9
+213:双栈节点会把每个测试点的 IPv4、IPv6 回程各测一条：路由详情里每个测试点分两行显示，节点卡片上 IPv6 线路与 IPv4 不同时多一个「v6」小标签，IPv6 线路变化也会在回程变化通知里单独一行提醒。双栈回程需要把节点 agent 升级到 1.2.0 或更高版本随附的版本；未升级的节点照常显示 IPv4 回程，不报错、不误报，升级后自动多出 IPv6 行。
+== ENC gate code lines (handler/kernel.go) ==
+2007:	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 9, 5) {
+2032:	if e == nil || kernelType != kernel.TypeXray || !versionBelow3(version, 25, 9, 5) || !e.HasVLESSEncryption() {
+2118:		if kernelType == kernel.TypeXray && versionBelow3(version, 25, 9, 5) {
+1997:func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
+1998:	if in.Security.CertMode == kernel.CertModeACME && versionBelow(version, 1, 14) {
+2001:	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(version, 1, 12) {
+2004:	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelow(version, 1, 14) {
+2031:func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
+2098:		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 14) {
+12:// 视为 25.6.0），无法解析时返回 false（不低于）。Xray prefer 门需要
+37:// 任何非 auto 策略需要 1.12+；Xray 的 prefer 回退需要 25.6.8+（Happy
+== anti-sweep: versionBelow* call sites ==
+19
+2007:	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 9, 5) {
+2032:	if e == nil || kernelType != kernel.TypeXray || !versionBelow3(version, 25, 9, 5) || !e.HasVLESSEncryption() {
+2118:		if kernelType == kernel.TypeXray && versionBelow3(version, 25, 9, 5) {
+1998:	if in.Security.CertMode == kernel.CertModeACME && versionBelow(version, 1, 14) {
+2001:	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(version, 1, 12) {
+2004:	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelow(version, 1, 14) {
+2045:	if e == nil || kernelType != kernel.TypeSingbox || !versionBelow(version, 1, 13) || !kernel.IsNaiveEndpoint(*e) {
+2098:		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 14) {
+2108:		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 13) {
+45:	if policy != kernel.OutboundIPAuto && kernelType == kernel.TypeSingbox && versionBelow(version, 1, 12) {
