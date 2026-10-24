@@ -1186,6 +1186,32 @@ export const nodeTune = (
     { id, action, groups, ...line },
     { timeout: 40 * 1000 },
   );
+/**
+ * 调优一键测算的探测结果（T-agent 批的 agent 侧探测动作，面板经
+ * /node/tune action:"probe" 透传；契约见 T-panel 报告，INT 须与
+ * T-agent 落地版对齐后方可过集成门）。
+ * - rttMedianMs：节点现有连接的内核 RTT 中位数（ms），必返字段。
+ * - panelRttMs：到面板的 RTT 参考值（ms），有则返回。
+ * - bandwidthMbps：仅当 withSpeed 且短时测速成功时返回；未测速或
+ *   测速失败时缺失，调用方不得因此覆盖已填的带宽值。
+ */
+export interface NodeTuneProbeResult {
+  rttMedianMs?: number;
+  panelRttMs?: number;
+  bandwidthMbps?: number;
+}
+/**
+ * 调优一键测算：只取建议值，绝不应用。返回的建议值由调用方按
+ * “未手动改过才回填”口径填入输入框；真正下发只走 nodeTune apply。
+ * 注意：面板侧 probe 动作的超时须与 agent 探测耗时匹配（现行
+ * nodeTune 30s 超时未必够用，INT 核对项），前端此处放宽到 120s。
+ */
+export const probeNodeTune = (id: number, withSpeed: boolean) =>
+  Network.post<NodeTuneProbeResult>(
+    "/node/tune",
+    { id, action: "probe", withSpeed },
+    { timeout: 120 * 1000 },
+  );
 /** 节点到延迟测试点的回程路由追踪结果。 */
 export const getNodeRoute = (id: number) =>
   Network.post<NodeRoute | null>("/node/route", { id });
