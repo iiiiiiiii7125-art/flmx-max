@@ -598,10 +598,16 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     splitRules: splitPayload(form.splitRules),
     enabled: form.enabled,
     meteringEnabled: form.meteringEnabled,
-    // "" sends 0 = unset (Xray default 300s); an explicit number sets it.
-    connIdleSeconds: form.connIdleSeconds.trim()
-      ? Number(form.connIdleSeconds)
-      : 0,
+    // "" sends 0 = unset (Xray default 300s); an explicit number sets it;
+    // 0 is the legal clear value on Xray (148-P3-1). A non-Xray inbound
+    // never carries a value: a stale stored value is cleared to 0 on
+    // save so editing it is no longer blocked (148-P3-2).
+    connIdleSeconds:
+      form.kernelType !== "xray"
+        ? 0
+        : form.connIdleSeconds.trim()
+          ? Number(form.connIdleSeconds)
+          : 0,
   };
 }
 
