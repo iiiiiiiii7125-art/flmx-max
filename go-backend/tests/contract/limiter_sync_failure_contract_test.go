@@ -702,7 +702,7 @@ func TestTunnelUpdateRecoversFromAddressInUseContract(t *testing.T) {
 		"id":           tunnelID,
 		"name":         "tunnel-bind-retry",
 		"type":         2,
-		"flow":         99999,
+		"flow":         1,
 		"trafficRatio": 1.0,
 		"status":       1,
 		"inNodeId": []map[string]interface{}{
@@ -886,7 +886,7 @@ func TestTunnelUpdateChangesEntryNodeButLeavesOldForwardRuntimeContract(t *testi
 		"id":           tunnelID,
 		"name":         "issue281-tunnel",
 		"type":         2,
-		"flow":         99999,
+		"flow":         1,
 		"trafficRatio": 1.0,
 		"status":       1,
 		"inNodeId": []map[string]interface{}{
@@ -1021,7 +1021,7 @@ func TestTunnelUpdateEntryTransitionsCleanupForwardRuntimeContract(t *testing.T)
 			"id":           tunnelID,
 			"name":         "issue281-transition-tunnel",
 			"type":         2,
-			"flow":         99999,
+			"flow":         1,
 			"trafficRatio": 1.0,
 			"status":       1,
 			"inNodeId":     entries,

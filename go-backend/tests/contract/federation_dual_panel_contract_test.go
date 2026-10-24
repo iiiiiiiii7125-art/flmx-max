@@ -94,7 +94,7 @@ func TestFederationDualPanelMiddleExitAutoPortContract(t *testing.T) {
 		payload := map[string]interface{}{
 			"name":   name,
 			"type":   2,
-			"flow":   99999,
+			"flow":   1,
 			"status": 1,
 			"inNodeId": []map[string]interface{}{
 				{"nodeId": entryRemoteNodeID, "protocol": "tls", "strategy": "round"},
@@ -246,7 +246,7 @@ func TestFederationDualPanelRemoteDiagnosisContract(t *testing.T) {
 	createPayload := map[string]interface{}{
 		"name":   "dual-panel-diagnose-remote",
 		"type":   2,
-		"flow":   99999,
+		"flow":   1,
 		"status": 1,
 		"inNodeId": []map[string]interface{}{
 			{"nodeId": entryRemoteNodeID, "protocol": "tls", "strategy": "round"},
@@ -403,7 +403,7 @@ func TestFederationDualPanelRemoteEntryRuntimeContract(t *testing.T) {
 		payload := map[string]interface{}{
 			"name":   name,
 			"type":   2,
-			"flow":   99999,
+			"flow":   1,
 			"status": 1,
 			"inNodeId": []map[string]interface{}{
 				{"nodeId": entryRemoteNodeID, "protocol": "tls", "strategy": "round"},
