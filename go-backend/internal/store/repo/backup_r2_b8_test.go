@@ -88,7 +88,7 @@ func TestR2B8ImportFullRestoreKeepsSpeedRefs(t *testing.T) {
 			{ID: 1, User: "u1", Pwd: "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012", RoleID: 1, Status: 1, CreatedTime: now},
 		},
 		Tunnels: []model.TunnelBackup{
-			{ID: 1, Name: "t1", TrafficRatio: 1, Status: 1, CreatedTime: now},
+			{ID: 1, Name: "t1", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now},
 		},
 		SpeedLimits: []model.SpeedLimitBackup{
 			{ID: 5, Name: "lim", Speed: 100, Status: 1, CreatedTime: now},
@@ -202,7 +202,7 @@ func TestR2B8ImportTunnelTrafficRatioZero(t *testing.T) {
 	zeroBackup := &model.BackupData{
 		Version: "1.0",
 		Tunnels: []model.TunnelBackup{
-			{ID: 1, Name: "free", TrafficRatio: 0, Status: 1, CreatedTime: now},
+			{ID: 1, Name: "free", TrafficRatio: 0, Flow: 1, Status: 1, CreatedTime: now},
 		},
 	}
 
@@ -237,7 +237,7 @@ func TestR2B8ImportTunnelTrafficRatioZero(t *testing.T) {
 	ctlBackup := &model.BackupData{
 		Version: "1.0",
 		Tunnels: []model.TunnelBackup{
-			{ID: 1, Name: "half", TrafficRatio: 2.5, Status: 1, CreatedTime: now},
+			{ID: 1, Name: "half", TrafficRatio: 2.5, Flow: 1, Status: 1, CreatedTime: now},
 		},
 	}
 	if _, err := destCtl.Import(ctlBackup, []string{"tunnels"}); err != nil {

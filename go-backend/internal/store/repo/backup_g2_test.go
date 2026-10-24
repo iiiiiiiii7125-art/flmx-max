@@ -35,8 +35,8 @@ func seedChainTunnelFixtures(t *testing.T, r *Repository, now int64) {
 	}
 	if err := r.DB().Exec(`
 		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, inx)
-		VALUES(11, 'g2-t1', 1.0, 2, 'tls', 1000, ?, ?, 1, 0),
-		      (12, 'g2-t2', 1.0, 2, 'tls', 1000, ?, ?, 1, 1)
+		VALUES(11, 'g2-t1', 1.0, 2, 'tls', 1, ?, ?, 1, 0),
+		      (12, 'g2-t2', 1.0, 2, 'tls', 1, ?, ?, 1, 1)
 	`, now, now, now, now).Error; err != nil {
 		t.Fatalf("seed tunnels: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestBackupRestoreChainTunnelsDeletesStaleRows(t *testing.T) {
 	}
 	if err := dest.DB().Exec(`
 		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, inx)
-		VALUES(11, 'g2-t1-drifted', 1.0, 2, 'tls', 1000, ?, ?, 1, 0)
+		VALUES(11, 'g2-t1-drifted', 1.0, 2, 'tls', 1, ?, ?, 1, 0)
 	`, now, now).Error; err != nil {
 		t.Fatalf("seed dest tunnel: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestBackupRoundTripsSpeedLimitTunnelBinding(t *testing.T) {
 	// 11；D4-03 起导入对悬空绑定整行跳过，保真断言无从成立）。
 	if err := source.DB().Exec(`
 		INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, inx)
-		VALUES(11, 'g2-t1', 1.0, 2, 'tls', 1000, ?, ?, 1, 0)
+		VALUES(11, 'g2-t1', 1.0, 2, 'tls', 1, ?, ?, 1, 0)
 	`, now, now).Error; err != nil {
 		t.Fatalf("seed tunnel: %v", err)
 	}

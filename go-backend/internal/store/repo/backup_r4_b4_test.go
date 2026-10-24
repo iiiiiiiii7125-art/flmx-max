@@ -148,8 +148,8 @@ func TestR4B4_006_FullRestoreFinalStateUnchanged(t *testing.T) {
 	pwd := "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012"
 	source := openBackupRepo(t, "b4-full-src.db")
 	createRow(t, source, &model.User{ID: 2, User: "u2", Pwd: pwd, RoleID: 1, Status: 1, CreatedTime: now})
-	createRow(t, source, &model.Tunnel{ID: 1, Name: "t1", TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, source, &model.Tunnel{ID: 2, Name: "t2", TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
+	createRow(t, source, &model.Tunnel{ID: 1, Name: "t1", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
+	createRow(t, source, &model.Tunnel{ID: 2, Name: "t2", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
 	// 启用对 (1,1)：组建 UT10 + grant；停用对 (2,2)：成员 U2、
 	// 含 T2，UT11 为该成员的手工授权（无 grant，停用组下合法存续）。
 	createRow(t, source, &model.UserGroup{ID: 1, Name: "g-on", Status: 1, CreatedTime: now, UpdatedTime: now})
