@@ -36,6 +36,8 @@ function parseLine(bw: string, rtt: string): NodeTuneLine | null {
 /** A probe outcome kept for display / explicit adoption; never applied. */
 interface ProbeSuggestion {
   bandwidthMbps?: number;
+  /** True when bandwidthMbps is a measured value kept through an RTT-leg failure (148-P3-3), not the T-5 default. */
+  bandwidthMeasured?: boolean;
   rttMs?: number;
   panelRttMs?: number;
   /** True when the probe failed and the values are the T-5 defaults. */
@@ -204,8 +206,9 @@ export function NodeTuneModal({
    * One-click probe: fetches a suggestion only. It never calls apply and
    * never submits the line. Suggestion refill rule (per field): a field
    * the user has typed in keeps its value; a field they have not typed
-   * in takes the measured value. On probe failure the suggestion falls
-   * back to the T-5 defaults, but a failure never overwrites a non-empty
+   * in takes the measured value. On probe failure the RTT value falls
+   * back to the T-5 default, while a measured bandwidth is kept
+   * (148-P3-3); a failure never overwrites a non-empty
    * field — the user adopts the fallback explicitly if wanted. The
    * fallback is still shown as an explicit result row (marked 回落值,
    * with the agent's leg warnings as the reason), even when it equals
@@ -230,14 +233,24 @@ export function NodeTuneModal({
       const warnings = res.data?.warnings ?? [];
 
       if (res.code !== 0 || !res.data || medianMs == null) {
+        // 148-P3-3: only the RTT leg failed — keep a measured bandwidth
+        // instead of dropping it for the default. Only the RTT value
+        // falls back; the failure reason stays visible via warnings.
+        const measuredBw = res.data?.bandwidthMbps;
+        const fallbackBw =
+          measuredBw != null
+            ? clampLine(measuredBw, 1, 100000)
+            : FALLBACK_LINE.bandwidthMbps;
         setProbeError(res.msg || "测算失败或探测不可用");
         setProbeSuggestion({
           ...FALLBACK_LINE,
+          bandwidthMbps: fallbackBw,
+          bandwidthMeasured: measuredBw != null,
           fromFallback: true,
           speedRequested,
           warnings,
         });
-        if (bw === "") setBw(String(FALLBACK_LINE.bandwidthMbps));
+        if (bw === "") setBw(String(fallbackBw));
         if (rtt === "") setRtt(String(FALLBACK_LINE.rttMs));
 
         return;
@@ -419,8 +432,11 @@ export function NodeTuneModal({
                       )}
                       {probeError && (
                         <p className="text-xs text-danger">
-                          {probeError}，已回落默认值 1000 Mbps / 150
-                          ms（仅为建议，未自动应用；点「应用」才下发）。
+                          {probeError}，
+                          {probeSuggestion?.bandwidthMeasured
+                            ? `延迟回落默认值 150 ms，带宽采用实测值 ${probeSuggestion.bandwidthMbps} Mbps`
+                            : "已回落默认值 1000 Mbps / 150 ms"}
+                          （仅为建议，未自动应用；点「应用」才下发）。
                         </p>
                       )}
                       {probeSuggestion && (
@@ -429,7 +445,10 @@ export function NodeTuneModal({
                             <>
                               测算结果（回落值，未采到实测中位数）：延迟{" "}
                               {probeSuggestion.rttMs} ms · 带宽{" "}
-                              {probeSuggestion.bandwidthMbps} Mbps（默认值）
+                              {probeSuggestion.bandwidthMbps} Mbps
+                              {probeSuggestion.bandwidthMeasured
+                                ? "（实测值）"
+                                : "（默认值）"}
                               {probeSuggestion.warnings?.[0] &&
                                 `；${probeSuggestion.warnings[0]}`}
                               。已按“未手动改过才回填”填入输入框，点「应用」才下发。

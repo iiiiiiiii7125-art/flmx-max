@@ -32,7 +32,9 @@ import (
 // while per-family dumps succeed), which would again yield zero
 // samples before parsing even starts. A family whose dump fails is
 // skipped; only if both fail does the probe report RTT unavailable —
-// it is never papered over with a guessed value. Unprivileged agents
+// it is never papered over with a guessed value. The failed family's
+// error is returned in tcpRTTSamples.FamilyErrors so the caller can say
+// the median covers only the surviving family (148-P3-5). Unprivileged agents
 // still see their own process's sockets, which is exactly the
 // forwarded connections this tuning sizes buffers for.
 //
@@ -55,25 +57,26 @@ const (
 	tcpInfoMinLen    = 72
 )
 
-func sockDiagTCPRTTs() ([]uint32, error) {
+func sockDiagTCPRTTs() (tcpRTTSamples, error) {
 	// Per-family dumps (see the file comment): AF_UNSPEC is rejected
 	// by some kernels. A failed family is skipped; only a failure of
-	// both families surfaces as an error.
-	var rtts []uint32
-	var errs [2]error
+	// both families surfaces as an error. A single failed family is
+	// reported in FamilyErrors so the caller can warn that the median
+	// covers only the surviving family (148-P3-5), never silently.
+	var out tcpRTTSamples
 	families := []byte{unix.AF_INET, unix.AF_INET6}
 	for i, family := range families {
 		samples, err := sockDiagDump(family)
 		if err != nil {
-			errs[i] = err
+			out.FamilyErrors[i] = err
 			continue
 		}
-		rtts = append(rtts, samples...)
+		out.RTTs = append(out.RTTs, samples...)
 	}
-	if len(rtts) == 0 && (errs[0] != nil || errs[1] != nil) {
-		return nil, fmt.Errorf("sock_diag 取数失败 (v4: %v; v6: %v)", errs[0], errs[1])
+	if len(out.RTTs) == 0 && (out.FamilyErrors[0] != nil || out.FamilyErrors[1] != nil) {
+		return tcpRTTSamples{}, fmt.Errorf("sock_diag 取数失败 (v4: %v; v6: %v)", out.FamilyErrors[0], out.FamilyErrors[1])
 	}
-	return rtts, nil
+	return out, nil
 }
 
 // buildDiagRequest renders one dump request: nlmsghdr (16) +
