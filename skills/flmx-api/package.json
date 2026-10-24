@@ -1,6 +1,6 @@
 {
   "name": "@flmx/skill-api",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "Skill for AI assistants to operate FLMX panel via REST API. Supports OpenCode, OpenClaw, Claude Code.",
   "keywords": [
     "opencode",
