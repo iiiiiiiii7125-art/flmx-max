@@ -110,6 +110,9 @@ type inboundView struct {
 	// OutboundIPStrategy scopes the inbound's outbound connections to an
 	// IP family ("auto" = unrestricted).
 	OutboundIPStrategy string `json:"outboundIpStrategy"`
+	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for
+	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s).
+	ConnIdleSeconds int `json:"connIdleSeconds"`
 	// MeteringEnabled is the SS subscription-metering switch;
 	// MeteringActive reports that this origin's companion exists AND
 	// its config is applied on the node (the same gate subscription
@@ -154,7 +157,11 @@ type inboundRequest struct {
 	// OutboundIPStrategy is a pointer so an edit that omits the field
 	// keeps the stored strategy instead of resetting it to auto.
 	OutboundIPStrategy *string `json:"outboundIpStrategy"`
-	Enabled            *bool   `json:"enabled"`
+	// ConnIdleSeconds is a pointer for the same reason: an edit that
+	// omits it keeps the stored timeout; an explicit 0 clears it (back
+	// to Xray default 300s) and a value sets it.
+	ConnIdleSeconds *int  `json:"connIdleSeconds"`
+	Enabled         *bool `json:"enabled"`
 	// MeteringEnabled is a pointer for the same reason: an edit that
 	// omits it keeps the SS subscription-metering switch as stored.
 	MeteringEnabled *bool `json:"meteringEnabled"`
@@ -165,7 +172,8 @@ type inboundRequest struct {
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
 		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy,
-		Companion: row.CompanionOf > 0}
+		ConnIdleSeconds: row.ConnIdleSeconds,
+		Companion:       row.CompanionOf > 0}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -205,6 +213,7 @@ func applyInboundToModel(in kernel.Inbound, row *model.NodeInbound) error {
 	row.Listen = in.Listen
 	row.Port = in.Port
 	row.OutboundIPStrategy = in.OutboundIPStrategy
+	row.ConnIdleSeconds = in.ConnIdleSeconds
 	row.Settings = string(settings)
 	row.Transport = string(transport)
 	row.Security = string(security)
@@ -682,6 +691,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			OutboundID:         row.OutboundID,
 			SplitRules:         rowSplitRules(row),
 			OutboundIPStrategy: row.OutboundIPStrategy,
+			ConnIdleSeconds:    row.ConnIdleSeconds,
 			MeteringEnabled:    row.MeteringEnabled == 1,
 			MeteringActive:     meteringActive[row.ID],
 		}
@@ -917,9 +927,16 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 
 		AcceptProxyProtocol: req.AcceptProxyProtocol,
 		OutboundIPStrategy:  row.OutboundIPStrategy,
+		ConnIdleSeconds:     row.ConnIdleSeconds,
 	}
 	if req.OutboundIPStrategy != nil {
 		in.OutboundIPStrategy = *req.OutboundIPStrategy
+	}
+	// ConnIdleSeconds is a pointer field: omitted on update keeps the
+	// stored timeout, an explicit value (including 0 = clear) wins.
+	// Create starts at 0 (unset) and takes the request value when present.
+	if req.ConnIdleSeconds != nil {
+		in.ConnIdleSeconds = *req.ConnIdleSeconds
 	}
 	// X-P3-4（D-R1-01）：更新时省略 port 回退已存行端口——与密钥/策略/
 	// Enabled 的 presence 保留同口径；此前唯 port 例外，只改名的更新

@@ -127,6 +127,8 @@ export interface InboundForm {
   meteringEnabled: boolean;
   /** Read-only: a metering companion currently exists for this inbound. */
   meteringActive: boolean;
+  /** Per-inbound idle timeout (seconds) for Xray, "" = unset (default 300s). */
+  connIdleSeconds: string;
 }
 
 export interface Preset {
@@ -331,6 +333,7 @@ export function emptyForm(
     enabled: true,
     meteringEnabled: false,
     meteringActive: false,
+    connIdleSeconds: "",
   };
 }
 
@@ -437,6 +440,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     enabled: item.enabled,
     meteringEnabled: item.meteringEnabled,
     meteringActive: item.meteringActive,
+    connIdleSeconds: item.connIdleSeconds ? String(item.connIdleSeconds) : "",
   };
 }
 
@@ -594,6 +598,10 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     splitRules: splitPayload(form.splitRules),
     enabled: form.enabled,
     meteringEnabled: form.meteringEnabled,
+    // "" sends 0 = unset (Xray default 300s); an explicit number sets it.
+    connIdleSeconds: form.connIdleSeconds.trim()
+      ? Number(form.connIdleSeconds)
+      : 0,
   };
 }
 

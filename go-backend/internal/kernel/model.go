@@ -127,6 +127,16 @@ type Inbound struct {
 	// AcceptProxyProtocol makes the inbound require a PROXY protocol header
 	// (sent by relay forwards) so the kernel sees the real client address.
 	AcceptProxyProtocol bool `json:"acceptProxyProtocol,omitempty"`
+	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for Xray
+	// (policy.levels[].connIdle). 0 = unset: no policy segment is emitted
+	// and Xray's level-0 default (300s, see DefaultConnIdleSeconds)
+	// applies. 0 is never written as an explicit value: Xray's official
+	// policy doc gives no semantics for an explicit 0, so the panel
+	// refuses it instead of guessing. Range is 1..MaxConnIdleSeconds;
+	// Xray itself documents no upper bound (int seconds), the panel caps
+	// at 86400 (24h) so a typo cannot pin dead connections for days.
+	// Non-Xray kernels have no equivalent and are refused at Normalize.
+	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
 	// Users are extra clients (subscription users) rendered next to the
 	// inbound's own credentials. Filled in when building a kernel config.
 	Users []User `json:"-"`
@@ -198,9 +208,22 @@ const (
 	DefaultQUICSNI             = "www.bing.com"
 	DefaultRealityMinClientVer = "1.0.0"
 	DefaultSnellVersion        = 5
-	defaultGRPCService         = "grpc"
-	defaultXHTTPMode           = "auto"
-	maxExtraConfigBytes        = 64 * 1024
+	// DefaultConnIdleSeconds is Xray's level-0 connIdle default (official
+	// policy doc: "connIdle: Connection idle time limit. Unit is seconds.
+	// Default value is 300"). The panel never writes it explicitly: an
+	// unset field means "Xray default", not "300 written by us".
+	DefaultConnIdleSeconds = 300
+	// MaxConnIdleSeconds is the panel-side cap for the per-inbound idle
+	// timeout. Xray documents no upper bound; 86400 (24h) is the guard
+	// against a mistyped huge value holding dead connections.
+	MaxConnIdleSeconds = 86400
+	// maxConnIdleLevel is the highest policy level the panel allocates.
+	// Levels are 1..N per render; the binding constraint is Xray's SS
+	// server config, whose level field is a byte (0-255).
+	maxConnIdleLevel    = 255
+	defaultGRPCService  = "grpc"
+	defaultXHTTPMode    = "auto"
+	maxExtraConfigBytes = 64 * 1024
 )
 
 var ssMethods = []string{
@@ -276,6 +299,12 @@ func Normalize(kernelType string, in *Inbound) error {
 	}
 	if in.AcceptProxyProtocol && kernelType != TypeXray {
 		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
+	}
+	if in.ConnIdleSeconds < 0 || in.ConnIdleSeconds > MaxConnIdleSeconds {
+		return fmt.Errorf("空闲超时须在 1-%d 秒之间，留空为默认 %d 秒（0 不是合法值：留空即默认）", MaxConnIdleSeconds, DefaultConnIdleSeconds)
+	}
+	if in.ConnIdleSeconds != 0 && kernelType != TypeXray {
+		return errors.New("空闲超时（connIdle）只支持 Xray 内核：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout），请先切到 Xray 内核")
 	}
 
 	if err := normalizeExtra(kernelType, in); err != nil {

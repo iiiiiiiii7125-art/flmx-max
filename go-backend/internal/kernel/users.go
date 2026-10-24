@@ -82,7 +82,9 @@ func (in Inbound) ForUser(u User) Inbound {
 }
 
 // xrayUserClients returns the extra Xray clients for the inbound's users.
-func xrayUserClients(in Inbound) []interface{} {
+// level is the inbound's policy level (0 = default): every client carries
+// it so the per-inbound idle timeout applies to subscription users too.
+func xrayUserClients(in Inbound, level int) []interface{} {
 	if !in.UserCapable() {
 		return nil
 	}
@@ -112,6 +114,9 @@ func xrayUserClients(in Inbound) []interface{} {
 			continue
 		}
 		c["email"] = u.Email()
+		if level > 0 {
+			c["level"] = level
+		}
 		out = append(out, c)
 	}
 	return out
