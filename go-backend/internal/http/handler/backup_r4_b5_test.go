@@ -159,6 +159,10 @@ func TestR4B5BackupImportTunnelsOnlyTriggersReconcile(t *testing.T) {
 		if data.Tunnels[i].ID != s.tunnelID {
 			continue
 		}
+		// R13X-007：种子隧道 flow=99999 为 R11 前的占位旧值，恢复面
+		// 新门会跳过该行；本用例测的是 tunnels 导入触发 reconcile，
+		// 故把导出行的 flow 归一为合法域内值（门本身由 T2-c 测试覆盖）。
+		data.Tunnels[i].Flow = 1
 		for j := range data.Tunnels[i].ChainTunnels {
 			if data.Tunnels[i].ChainTunnels[j].NodeID == s.exitAID {
 				data.Tunnels[i].ChainTunnels[j].NodeID = s.exitBID

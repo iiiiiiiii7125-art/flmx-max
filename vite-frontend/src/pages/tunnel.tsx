@@ -2,6 +2,7 @@ import type {
   BatchOperationFailure,
   TunnelBatchDeletePreviewApiData,
   TunnelDeletePreviewApiData,
+  TunnelMutationPayload,
 } from "@/api/types";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
@@ -400,6 +401,13 @@ export default function TunnelPage() {
   // 删除预览请求序号：关弹窗/改删另一条时递增，迟到响应一律丢弃
   const deletePreviewSeqRef = useRef(0);
   const batchDeletePreviewSeqRef = useRef(0);
+  // R13X-003：编辑打开时的存量 flow/trafficRatio 原值。提交时仅当
+  // 字段值与原值相等（用户未改选）且原值域外时才省略该字段；用户
+  // 显式改选后一律全量提交新值，不得以省略逻辑吞掉显式修改。
+  const editOriginalFlowRatioRef = useRef<{
+    flow: number;
+    trafficRatio: number;
+  } | null>(null);
 
   const getNodeIpOptions = (nodeId: number): string[] => {
     const node = nodes.find((item) => item.id === nodeId);
@@ -594,11 +602,13 @@ export default function TunnelPage() {
     [resetBatchDeleteState],
   );
 
-  // 表单验证
-  const validateForm = (): boolean => {
+  // 表单验证（overrides 仅供提交侧对将被省略的存量域外字段做
+  // 校验豁免：占位值只进校验器、不进提交负载，见 handleSubmit）。
+  const validateForm = (overrides: Partial<TunnelForm> = {}): boolean => {
     const newErrors = validateTunnelForm(
       {
         ...form,
+        ...overrides,
         forwardMode: getTunnelForwardMode(form.inNodeId, nodes),
       },
       nodes,
@@ -613,6 +623,7 @@ export default function TunnelPage() {
   // 新增隧道
   const handleAdd = () => {
     setIsEdit(false);
+    editOriginalFlowRatioRef.current = null;
     setForm(createTypedTunnelFormDefaults());
     setErrors({});
     setModalOpen(true);
@@ -621,6 +632,10 @@ export default function TunnelPage() {
   // 编辑隧道 - 只能修改部分字段
   const handleEdit = (tunnel: Tunnel) => {
     setIsEdit(true);
+    editOriginalFlowRatioRef.current = {
+      flow: tunnel.flow,
+      trafficRatio: tunnel.trafficRatio,
+    };
 
     // 直接使用列表数据，getAllTunnels 已经包含完整的节点信息
     setForm({
@@ -927,7 +942,24 @@ export default function TunnelPage() {
   useRotateIdemKeyOnCreateOpen(modalOpen, !isEdit, rotateIdemKey);
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    // R13X-003（定版方向 ①，表单按 presence 口径省略）：编辑模式下，
+    // 存量域外值（flow ∉ {1,2} 或 ratio ∉ [0,100]）且用户未改选时，
+    // 提交负载中省略该字段，后端 presence 口径回填存量、原样保留；
+    // 用户显式改选后该字段必提交新值。校验侧对将被省略的 ratio 做
+    // 占位豁免（否则客户端 ratio 范围校验先于省略拦住无关编辑）。
+    const editOriginal = editOriginalFlowRatioRef.current;
+    const omitFlow =
+      isEdit &&
+      editOriginal !== null &&
+      form.flow === editOriginal.flow &&
+      editOriginal.flow !== 1 &&
+      editOriginal.flow !== 2;
+    const omitRatio =
+      isEdit &&
+      editOriginal !== null &&
+      form.trafficRatio === editOriginal.trafficRatio &&
+      (editOriginal.trafficRatio < 0 || editOriginal.trafficRatio > 100);
+    if (!validateForm(omitRatio ? { trafficRatio: 1 } : {})) return;
 
     setSubmitLoading(true);
     try {
@@ -981,8 +1013,14 @@ export default function TunnelPage() {
             : "",
       };
 
+      // R13X-003：省略形态——删键而非置空/置默认值，后端缺席字段
+      // 回填存量；合法行与显式改选行不受影响（omit 恒为 false）。
+      const payload: TunnelMutationPayload = { ...data };
+      if (isEdit && omitFlow) delete payload.flow;
+      if (isEdit && omitRatio) delete payload.trafficRatio;
+
       const response = isEdit
-        ? await updateTunnel(data)
+        ? await updateTunnel(payload)
         : await createTunnel(data, idemKey);
 
       if (response.code === 0) {

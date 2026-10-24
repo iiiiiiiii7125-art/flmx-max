@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -3616,7 +3617,44 @@ func normalizeBackupTunnelEngine(raw string) (string, error) {
 	}
 }
 
+// R13X-007：恢复面隧道两门，与保存面同合法集——Flow ∈ {1,2}、
+// TrafficRatio ∈ [0,100]（handler 包 validateTunnelFlow /
+// validateTunnelTrafficRatio 的合法集与文案口径）。字面函数复用
+// 不可行：handler 依赖 repo，repo 引用 handler 将成包循环，故此处
+// 以同集本地门镜像；两门任一漂移即视为本断言失效，须同步改动。
+func validateImportedTunnelFlow(flow int64) error {
+	if flow != 1 && flow != 2 {
+		return fmt.Errorf("计费方向超出范围 {1,2}: %d", flow)
+	}
+	return nil
+}
+
+func validateImportedTunnelTrafficRatio(ratio float64) error {
+	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 100 {
+		return fmt.Errorf("流量倍率超出范围 [0,100]: %v", ratio)
+	}
+	return nil
+}
+
 func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *importReport) (int, error) {
+	// R13X-007：先过门、再预删——被跳过的行不得触发其存量链路
+	// 预删（预删在门后只覆盖通过门的行），跳过 + 逐行点名（与
+	// forwards status 门同形）；钳制 + warning 备选不采。
+	validTunnels := make([]model.TunnelBackup, 0, len(tunnels))
+	for _, t := range tunnels {
+		if err := validateImportedTunnelFlow(t.Flow); err != nil {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d（%q）的 flow=%d 不在合法枚举 {1,2} 内，已跳过该行未恢复", t.ID, t.Name, t.Flow)
+			continue
+		}
+		if err := validateImportedTunnelTrafficRatio(t.TrafficRatio); err != nil {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d（%q）的流量倍率=%v 不在合法范围 [0,100] 内，已跳过该行未恢复", t.ID, t.Name, t.TrafficRatio)
+			continue
+		}
+		validTunnels = append(validTunnels, t)
+	}
+	tunnels = validTunnels
 	// BUG-A2-3：chain 行先删后插。本批隧道在当前 DB 中的既有 chain 行
 	// 整体删除后再按备份重建——既避免恢复到已漂移状态时残留行与新行
 	// 在 (node_id, port) 唯一索引上互撞，也保证恢复结果与备份严格
