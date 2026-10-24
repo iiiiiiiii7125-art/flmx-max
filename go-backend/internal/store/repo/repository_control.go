@@ -105,6 +105,25 @@ func (r *Repository) ListActiveForwardIDsByNode(nodeID int64) ([]int64, error) {
 	return ids, nil
 }
 
+// ListForwardNodeIDs returns every node that serves at least one
+// forward port (R13X-001): the affected-node set for the post-import
+// forward repush. A node with no forward ports has no gost/nft
+// forward state to repush, so it is excluded by construction.
+func (r *Repository) ListForwardNodeIDs() ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.ForwardPort{}).
+		Select("DISTINCT node_id").
+		Order("node_id ASC").
+		Pluck("node_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (r *Repository) ListForwardIDsByNode(nodeID int64) ([]int64, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")

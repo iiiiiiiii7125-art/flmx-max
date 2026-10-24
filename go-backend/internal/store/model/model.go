@@ -964,6 +964,16 @@ type ImportResult struct {
 	ConfigsImported      int `json:"configsImported"`
 	InboundsImported     int `json:"inboundsImported"`
 	UserInboundsImported int `json:"userInboundsImported"`
+	// R13X-004：inbounds 段子段导入计数（与既有 *Imported 字段同形，
+	// 无 omitempty，旧客户端忽略新增字段）。计数口径与
+	// InboundsImported 一致：只计实落行，跳过行走 SkippedRows。
+	InboundKernelsImported              int `json:"inboundKernelsImported"`
+	InboundRelaysImported               int `json:"inboundRelaysImported"`
+	InboundCountersImported             int `json:"inboundCountersImported"`
+	InboundSubscriptionsImported        int `json:"inboundSubscriptionsImported"`
+	InboundSubscriptionCountersImported int `json:"inboundSubscriptionCountersImported"`
+	InboundSourcesImported              int `json:"inboundSourcesImported"`
+	InboundLegacyUsersImported          int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
@@ -990,7 +1000,13 @@ type ImportResult struct {
 	// 转发（与运行时全部撤销路径同口径）；无撤销时省略。本批路线
 	// 定死为回传清理，不采「回执明示待清理」的弱路线。
 	RevokedUserTunnels []RevokedImportPair `json:"revokedUserTunnels,omitempty"`
-	AutoBackup         *BackupData         `json:"autoBackup,omitempty"`
+	// R13X-001：备份导入后的转发重推结果。RepushNodeIDs 为本次实际
+	// 重推的在线节点，RepushFailedNodeIDs 为重推失败的节点（失败不
+	// 静默：导入本身已成功，故失败只披露、不改写导入成功结论；
+	// 失败节点重连时经 onNodeOnline 全量重布再次收敛）。
+	RepushNodeIDs       []int64     `json:"repushNodeIds,omitempty"`
+	RepushFailedNodeIDs []int64     `json:"repushFailedNodeIds,omitempty"`
+	AutoBackup          *BackupData `json:"autoBackup,omitempty"`
 }
 
 // ─── View Structs (used by Repository, not GORM models) ─────────────
