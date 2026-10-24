@@ -44,6 +44,15 @@ interface Node {
   isRemote?: number;
 }
 
+// datetime-local 的 value 按本地墙钟解释，须用本地分量拼串；
+// toISOString() 给的是 UTC 墙钟，在非 UTC 时区会差一个偏移（A10-11）。
+const toLocalDatetimeInputValue = (ms: number): string => {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 interface PeerShare {
   id: number;
   name: string;
@@ -235,9 +244,11 @@ export default function PanelSharingPage() {
 
           return hasSelectedNode ? prev : { ...prev, nodeId: "" };
         });
+      } else {
+        toast.error(res.msg || "加载节点列表失败");
       }
     } catch {
-      // ignore
+      toast.error("加载节点列表失败");
     }
   }, []);
 
@@ -998,7 +1009,7 @@ export default function PanelSharingPage() {
               type="datetime-local"
               value={
                 editForm.expiryTime > 0
-                  ? new Date(editForm.expiryTime).toISOString().slice(0, 16)
+                  ? toLocalDatetimeInputValue(editForm.expiryTime)
                   : ""
               }
               onChange={(e) =>

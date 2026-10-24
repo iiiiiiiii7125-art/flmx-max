@@ -1370,7 +1370,9 @@ export default function UserPage({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm font-medium">{user.num}</span>
+                      <span className="text-sm font-medium">
+                        {user.num <= 0 ? "无限制" : user.num}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-col gap-1 items-start whitespace-nowrap">
@@ -1560,7 +1562,7 @@ export default function UserPage({
                         <div className="flex justify-between text-sm">
                           <span className="text-default-600">规则数量</span>
                           <span className="font-medium text-xs">
-                            {user.num}
+                            {user.num <= 0 ? "无限制" : user.num}
                           </span>
                         </div>
                         <div className="flex justify-between text-sm">
@@ -2203,7 +2205,9 @@ export default function UserPage({
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell>{userTunnel.num}</TableCell>
+                        <TableCell>
+                          {userTunnel.num <= 0 ? "无限制" : userTunnel.num}
+                        </TableCell>
                         <TableCell>
                           <Chip
                             color={
