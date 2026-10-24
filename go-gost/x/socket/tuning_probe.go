@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -67,6 +68,19 @@ type tuneProbeResult struct {
 	PanelRTTAvail bool     `json:"panelRttAvailable"`
 	Warnings      []string `json:"warnings,omitempty"`
 }
+
+// tcpRTTSamples is the sock_diag RTT leg result: the raw per-socket RTT
+// samples plus, per family (index 0 = IPv4, 1 = IPv6), the dump error
+// when that family's dump failed. A single failed family must not be
+// silent: the caller logs it and warns that the median covers only the
+// surviving family (148-P3-5).
+type tcpRTTSamples struct {
+	RTTs         []uint32
+	FamilyErrors [2]error
+}
+
+// sockDiagFamilyNames indexes tcpRTTSamples.FamilyErrors.
+var sockDiagFamilyNames = [2]string{"IPv4", "IPv6"}
 
 // Seams for tests (and for non-Linux builds, where the sock_diag
 // sampler reports unavailable instead of failing the probe).
@@ -194,20 +208,35 @@ func probeTune(req tuneProbeRequest) (tuneProbeResult, error) {
 
 	// Leg 1: RTT = median TCP_INFO rtt over the node's established
 	// TCP connections (sock_diag, see tuning_probe_linux.go).
-	if samples, err := tuneProbeTCPRTTs(); err != nil {
+	if sample, err := tuneProbeTCPRTTs(); err != nil {
 		res.Warnings = append(res.Warnings, "现有 TCP 连接内核 RTT 不可用（sock_diag 取数失败），延迟回落默认值 150ms")
-	} else if ms, used, ok := tuneProbeMedianRTTMs(samples); !ok {
-		res.Warnings = append(res.Warnings, "节点暂无可测 RTT 的已建立 TCP 连接，延迟回落默认值 150ms")
 	} else {
-		res.RTTSamples = used
-		clamped, wasClamped := clampProbeValue(ms, 1, 2000)
-		if wasClamped {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("实测 RTT 中位数 %dms 超出调优范围，已钳制到 %dms", ms, clamped))
+		// 148-P3-5: a single-family dump failure used to vanish —
+		// the median silently covered only the surviving family.
+		// Name the failed family in a warning (shown in the panel's
+		// fallback display) and log it; the median itself still
+		// comes from the surviving family's samples.
+		for i, ferr := range sample.FamilyErrors {
+			if ferr == nil {
+				continue
+			}
+			failed, surviving := sockDiagFamilyNames[i], sockDiagFamilyNames[1-i]
+			log.Printf("tune probe: %s sock_diag dump failed, RTT median covers %s only: %v", failed, surviving, ferr)
+			res.Warnings = append(res.Warnings, fmt.Sprintf("%s sock_diag 取数失败，中位数仅基于 %s 连接", failed, surviving))
 		}
-		res.RTTMedianMs = &clamped
-		res.RTTAvailable = true
-		res.RTTSource = "tcp_info_median"
-		res.Suggested.RTTMs = clamped
+		if ms, used, ok := tuneProbeMedianRTTMs(sample.RTTs); !ok {
+			res.Warnings = append(res.Warnings, "节点暂无可测 RTT 的已建立 TCP 连接，延迟回落默认值 150ms")
+		} else {
+			res.RTTSamples = used
+			clamped, wasClamped := clampProbeValue(ms, 1, 2000)
+			if wasClamped {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("实测 RTT 中位数 %dms 超出调优范围，已钳制到 %dms", ms, clamped))
+			}
+			res.RTTMedianMs = &clamped
+			res.RTTAvailable = true
+			res.RTTSource = "tcp_info_median"
+			res.Suggested.RTTMs = clamped
+		}
 	}
 
 	// Leg 2: bandwidth = optional short speed test. Default is NOT

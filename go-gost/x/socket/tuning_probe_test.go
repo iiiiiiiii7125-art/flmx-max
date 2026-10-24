@@ -15,7 +15,7 @@ import (
 func stubProbeSeams(t *testing.T, rtts []uint32, rttErr error) {
 	t.Helper()
 	oldRTT, oldSpeed, oldRef := tuneProbeTCPRTTs, tuneProbeSpeedtest, tuneProbeReferenceRT
-	tuneProbeTCPRTTs = func() ([]uint32, error) { return rtts, rttErr }
+	tuneProbeTCPRTTs = func() (tcpRTTSamples, error) { return tcpRTTSamples{RTTs: rtts}, rttErr }
 	tuneProbeSpeedtest = func(context.Context, string) (int64, time.Duration, error) {
 		return 0, 0, errors.New("speedtest must be stubbed per test")
 	}

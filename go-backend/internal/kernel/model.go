@@ -128,13 +128,15 @@ type Inbound struct {
 	// (sent by relay forwards) so the kernel sees the real client address.
 	AcceptProxyProtocol bool `json:"acceptProxyProtocol,omitempty"`
 	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for Xray
-	// (policy.levels[].connIdle). 0 = unset: no policy segment is emitted
-	// and Xray's level-0 default (300s, see DefaultConnIdleSeconds)
-	// applies. 0 is never written as an explicit value: Xray's official
-	// policy doc gives no semantics for an explicit 0, so the panel
-	// refuses it instead of guessing. Range is 1..MaxConnIdleSeconds;
-	// Xray itself documents no upper bound (int seconds), the panel caps
-	// at 86400 (24h) so a typo cannot pin dead connections for days.
+	// (policy.levels[].connIdle). 0 = unset/clear: no policy segment is
+	// emitted and Xray's level-0 default (300s, see
+	// DefaultConnIdleSeconds) applies. 0 is accepted at Normalize (and
+	// by the frontend as "clear"); it is only ever *rendered* as
+	// "no segment", never written as an explicit 0 — Xray's official
+	// policy doc gives no semantics for an explicit 0. Range is
+	// 0..MaxConnIdleSeconds; Xray itself documents no upper bound (int
+	// seconds), the panel caps at 86400 (24h) so a typo cannot pin dead
+	// connections for days.
 	// Non-Xray kernels have no equivalent and are refused at Normalize.
 	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
 	// Users are extra clients (subscription users) rendered next to the
@@ -301,7 +303,7 @@ func Normalize(kernelType string, in *Inbound) error {
 		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
 	}
 	if in.ConnIdleSeconds < 0 || in.ConnIdleSeconds > MaxConnIdleSeconds {
-		return fmt.Errorf("空闲超时须在 1-%d 秒之间，留空为默认 %d 秒（0 不是合法值：留空即默认）", MaxConnIdleSeconds, DefaultConnIdleSeconds)
+		return fmt.Errorf("空闲超时须为 0-%d 秒的整数，留空（或填 0）为默认 %d 秒", MaxConnIdleSeconds, DefaultConnIdleSeconds)
 	}
 	if in.ConnIdleSeconds != 0 && kernelType != TypeXray {
 		return errors.New("空闲超时（connIdle）只支持 Xray 内核：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout），请先切到 Xray 内核")
