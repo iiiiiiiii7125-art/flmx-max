@@ -27,7 +27,7 @@ func (h *Handler) StartBackgroundJobs() {
 	// DB-3：重连重测队列须在 jobsStarted 置位前就绪，onNodeOnline 的
 	// scheduleNodeReconnectProbe 在锁内读它。
 	h.reconnectProbes = newNodeReconnectProbeQueue()
-	h.jobsWG.Add(16)
+	h.jobsWG.Add(17)
 	h.jobsMu.Unlock()
 
 	// FIX2-B（V5-3）：存量联邦期望状态启动复检——同步执行、赶在任何
@@ -53,6 +53,9 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)
+	// PORT-3342/B1：Gist 备份定时循环（默认关闭：未填令牌或间隔 0
+	// 时 gistDue 恒 false，不产生任何上传）。
+	go h.runGistBackupLoop(ctx)
 }
 
 func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {
