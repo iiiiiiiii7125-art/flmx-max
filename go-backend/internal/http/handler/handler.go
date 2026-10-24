@@ -27,6 +27,7 @@ import (
 	"go-backend/internal/monitoring"
 	runtimenft "go-backend/internal/runtime/nftables"
 	"go-backend/internal/security"
+	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 	"go-backend/internal/ws"
 )
@@ -262,6 +263,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system/upgrade", h.systemUpgrade)
 	mux.HandleFunc("/api/v1/system/upgrade/status", h.systemUpgradeStatus)
 	mux.HandleFunc("/api/v1/backup/export", h.backupExport)
+	mux.HandleFunc("/api/v1/backup/gist/status", h.gistBackupStatus)
+	mux.HandleFunc("/api/v1/backup/gist/save", h.gistBackupSave)
+	mux.HandleFunc("/api/v1/backup/gist/upload", h.gistBackupUpload)
+	mux.HandleFunc("/api/v1/backup/gist/versions", h.gistBackupVersions)
+	mux.HandleFunc("/api/v1/backup/gist/restore", h.gistBackupRestore)
 	mux.HandleFunc("/api/v1/backup/import", h.backupImport)
 	mux.HandleFunc("/api/v1/backup/restore", h.backupImport)
 	mux.HandleFunc("/api/v1/api/v1/backup/export", h.backupExport)
@@ -675,6 +681,10 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 	delete(cfgMap, "license_key")
 	delete(cfgMap, "license_machine_id")
 	delete(cfgMap, "machine_fingerprint")
+	// PORT-3342/B1：Gist 令牌与密码即使对管理员也不经 config/list
+	// 下发（与上游一致）；读取走专用的 gist/status 端点（仅 tokenHint）。
+	delete(cfgMap, gistConfigToken)
+	delete(cfgMap, gistConfigPassword)
 	response.WriteJSON(w, response.OK(cfgMap))
 }
 
@@ -2158,6 +2168,20 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.runBackupImportTailHooks(result, &req.BackupData, req.Types, autoBackup)
+	response.WriteJSON(w, response.OK(result))
+}
+
+// runBackupImportTailHooks is the post-import tail-hook chain shared
+// verbatim by backupImport (file import) and gistBackupRestore
+// (PORT-3342/G-recovery). It must stay a pure move of the former
+// backupImport tail: metering reconciliation, configs cache
+// invalidation, kernel reconcile, revoked-authorization cleanup,
+// forward repush (backup_import_repush.go, FINAL-P2-1 seven-segment
+// predicate, untouched by this batch), and the AutoBackup receipt.
+// Gist restore must never call Import and stop here, and must never
+// call only reconcileNodeKernels: every hook below runs.
+func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *model.BackupData, types []string, autoBackup *model.BackupData) {
 	// R6X-010：恢复也是 origin 状态的写路径——导入成功后同步触发
 	// 一次计量对账，使恢复出的 metering origin 的伴生行立即物化，
 	// 与入站保存/删除路径同口径。此前 backupImport 不在触发点全集
@@ -2169,9 +2193,9 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// FIX2-B（V4-N1）：configs 段写库后与 UI 两写入口同口径失效配置
 	// 缓存。此前导入绕过全部失效钩子：notify_enabled 与 prober 三键
 	// 只能等 5s TTL 兜底（notify_events 因派发时现读已对冲，不在此列）。
-	if slices.Contains(req.Types, "configs") && len(req.BackupData.Configs) > 0 {
+	if slices.Contains(types, "configs") && len(backup.Configs) > 0 {
 		h.invalidateNotifyConfigCache()
-		for key := range req.BackupData.Configs {
+		for key := range backup.Configs {
 			h.notifyTunnelQualityConfigChanged(key)
 		}
 	}
@@ -2189,8 +2213,8 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// 单个 if、单个 goroutine：全量导入多段同时命中也只触发一轮。
 	materializedImport := result.NodesImported > 0 || result.TunnelsImported > 0 ||
 		result.ForwardsImported > 0 || result.InboundsImported > 0 ||
-		req.BackupData.Inbounds != nil &&
-			(len(req.BackupData.Inbounds.Kernels) > 0 || len(req.BackupData.Inbounds.Relays) > 0)
+		backup.Inbounds != nil &&
+			(len(backup.Inbounds.Kernels) > 0 || len(backup.Inbounds.Relays) > 0)
 	if materializedImport {
 		// Restored kernels have no applied config yet: push them to the
 		// nodes that are online; the rest get it when they reconnect.
@@ -2217,14 +2241,13 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// backup_import_repush.go）。放在撤销清理之后，使重推下发的是
 	// 导入终态；离线节点不在此列（重连路径行为不变）。重推失败只
 	// 披露进回执，不改写导入成功结论。
-	if outcome := h.repushForwardRuntimeAfterImport(result, &req.BackupData); len(outcome.attempted) > 0 || len(outcome.warnings) > 0 {
+	if outcome := h.repushForwardRuntimeAfterImport(result, backup); len(outcome.attempted) > 0 || len(outcome.warnings) > 0 {
 		result.RepushNodeIDs = outcome.attempted
 		result.RepushFailedNodeIDs = outcome.failed
 		result.ImportWarnings = append(result.ImportWarnings, outcome.warnings...)
 	}
 
 	result.AutoBackup = autoBackup
-	response.WriteJSON(w, response.OK(result))
 }
 
 func (h *Handler) getAnnouncement(w http.ResponseWriter, r *http.Request) {

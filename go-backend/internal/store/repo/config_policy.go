@@ -48,6 +48,12 @@ var sensitiveConfigKeys = map[string]struct{}{
 	"notify_telegram_chat_id":   {},
 	"notify_telegram_api_base":  {},
 	"notify_webhook_url":        {},
+	// PORT-3342/B1：Gist 备份凭据（与上游一致）。非管理员经
+	// config/list 与 config/get 均不可见；管理员经 config/list 亦
+	// 不可见（handler.getConfigs 另行删除），只走 gist/status 的
+	// tokenHint。
+	"gist_token":    {},
+	"gist_password": {},
 }
 
 // requiredConfigKeys carry a mandatory value domain: submitting an empty
@@ -72,6 +78,18 @@ var systemManagedConfigKeys = map[string]struct{}{
 	"is_commercial":       {},
 	"machine_fingerprint": {},
 	"node_sub_token":      {},
+	// PORT-3342/B1：Gist 备份设置与运行态（与上游一致）：只能经
+	// 专用的 gist/save、gist/upload 端点写入，通用 config/update
+	// 拒绝；且 FilterBackupConfigs 据此把它们排除在备份 configs
+	// 段之外——恢复旧备份不会覆盖当前 Gist 设置、凭据不进备份文件。
+	"gist_token":          {},
+	"gist_password":       {},
+	"gist_id":             {},
+	"gist_interval_hours": {},
+	"gist_last_at":        {},
+	"gist_last_upload":    {},
+	"gist_last_error":     {},
+	"gist_last_hash":      {},
 }
 
 // authenticatedConfigKeys 是现行在用、但既非公开品牌键也非凭据的
