@@ -139,7 +139,7 @@ func TestR10B3BuiltinSSMultiSegmentNormalized(t *testing.T) {
 		t.Fatalf("chainTargetFromInbound 多段须逐段归一：got %q want %q", ct.Password, r8b2Canon)
 	}
 	// 经 xrayChainOutbound 同点。
-	ob, err := xrayChainOutbound(e, "via-42")
+	ob, err := xrayChainOutbound(e, "via-42", 0)
 	if err != nil {
 		t.Fatalf("xrayChainOutbound 多段须成功：%v", err)
 	}

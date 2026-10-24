@@ -62,7 +62,7 @@ func CheckChainWith(kernelType string, via Endpoint, opts RenderOptions) error {
 		_, err := singboxChainOutboundsWith(via, "check", 0, opts.SingboxSnell, opts.SingboxNaive)
 		return err
 	case TypeXray:
-		_, err := xrayChainOutbound(via, "check")
+		_, err := xrayChainOutbound(via, "check", 0)
 		return err
 	}
 	info, _ := Lookup(kernelType)
@@ -178,14 +178,17 @@ func singboxChainRoutesWith(inbounds []Inbound, snell, naive bool) ([]interface{
 
 // ---- Xray ----
 
-// xrayChainRoutes is singboxChainRoutes for Xray.
-func xrayChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error) {
+// xrayChainRoutes is singboxChainRoutes for Xray. levels carries the
+// per-inbound connIdle policy levels: chain outbounds stamp the level
+// on their account user (see xrayChainOutbound), and split-direct
+// matches leave through the idle outbounds (see xraySplitRoutes).
+func xrayChainRoutes(inbounds []Inbound, levels map[int64]int) ([]interface{}, []interface{}, error) {
 	var outbounds, rules []interface{}
 	for _, in := range inbounds {
 		if !in.routed() {
 			continue
 		}
-		obs, rs, err := xraySplitRoutes(in)
+		obs, rs, err := xraySplitRoutes(in, levels)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -200,7 +203,7 @@ func xrayChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error) {
 		}
 		for _, id := range in.countedUsers() {
 			tag := chainUserTag(in, id)
-			ob, err := xrayChainOutbound(*in.Via, tag)
+			ob, err := xrayChainOutbound(*in.Via, tag, levels[in.ID])
 			if err != nil {
 				return nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 			}
@@ -209,7 +212,7 @@ func xrayChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error) {
 			rules = append(rules, obj{"type": "field", "inboundTag": tags, "user": []string{User{ID: id}.Email()}, "outboundTag": tag})
 		}
 		tag := chainTag(in)
-		ob, err := xrayChainOutbound(*in.Via, tag)
+		ob, err := xrayChainOutbound(*in.Via, tag, levels[in.ID])
 		if err != nil {
 			return nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 		}
@@ -432,7 +435,7 @@ func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 }
 
 // xrayChainOutbound renders the Xray outbound that dials a chain target.
-func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
+func xrayChainOutbound(e Endpoint, tag string, level int) (obj, error) {
 	var t chainTarget
 	var err error
 	if e.Proxy != nil {
@@ -447,6 +450,16 @@ func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 		return nil, errors.New("出站节点缺少地址")
 	}
 
+	// level is the source inbound's connIdle policy level (0 = unset).
+	// VLESS/VMess/Trojan/SS outbound clients install their idle timer
+	// from their account user's level (upstream: vless/outbound,
+	// vmess/outbound, trojan/client and shadowsocks/client all read
+	// request.User.Level / user.Level) — without it a chained idle
+	// inbound's sessions run the level-0 default, exactly like the
+	// direct freedom exit did before the dedicated outbounds.
+	// SOCKS/HTTP chain targets carry no level field on their users, so
+	// their exits stay on level 0 (known limitation, see the connIdle
+	// report).
 	var settings obj
 	switch t.Protocol {
 	case "vless":
@@ -457,14 +470,29 @@ func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 		if t.Flow != "" {
 			user["flow"] = t.Flow
 		}
+		if level > 0 {
+			user["level"] = level
+		}
 		settings = obj{"vnext": []interface{}{obj{"address": t.Host, "port": t.Port, "users": []interface{}{user}}}}
 	case "vmess":
+		user := obj{"id": t.UUID, "security": t.Cipher}
+		if level > 0 {
+			user["level"] = level
+		}
 		settings = obj{"vnext": []interface{}{obj{"address": t.Host, "port": t.Port,
-			"users": []interface{}{obj{"id": t.UUID, "security": t.Cipher}}}}}
+			"users": []interface{}{user}}}}
 	case "trojan":
-		settings = obj{"servers": []interface{}{obj{"address": t.Host, "port": t.Port, "password": t.Password}}}
+		server := obj{"address": t.Host, "port": t.Port, "password": t.Password}
+		if level > 0 {
+			server["level"] = level
+		}
+		settings = obj{"servers": []interface{}{server}}
 	case "shadowsocks":
-		settings = obj{"servers": []interface{}{obj{"address": t.Host, "port": t.Port, "method": t.Cipher, "password": t.Password}}}
+		server := obj{"address": t.Host, "port": t.Port, "method": t.Cipher, "password": t.Password}
+		if level > 0 {
+			server["level"] = level
+		}
+		settings = obj{"servers": []interface{}{server}}
 	case "socks", "http":
 		server := obj{"address": t.Host, "port": t.Port}
 		if t.Username != "" {

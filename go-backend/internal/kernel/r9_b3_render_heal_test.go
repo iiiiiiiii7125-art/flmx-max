@@ -60,7 +60,7 @@ func r9b3LegalEndpoints() []Endpoint {
 // xrayChainField 从 Xray 链式出站的 users[0] 取字段。
 func r9b3XrayUserField(t *testing.T, e Endpoint, key string) string {
 	t.Helper()
-	ob, err := xrayChainOutbound(e, "probe")
+	ob, err := xrayChainOutbound(e, "probe", 0)
 	if err != nil {
 		t.Fatalf("xrayChainOutbound(%s) 须成功：%v", e.Name, err)
 	}
@@ -131,7 +131,7 @@ func TestR9B3ChainFourFieldVariantRenderHeal(t *testing.T) {
 		t.Fatalf("vless Xray 链式 flow 须愈合为 xtls-rprx-vision，got %q", got)
 	}
 	for _, idx := range []int{2, 3} {
-		if _, err := xrayChainOutbound(eps[idx], "probe"); err == nil {
+		if _, err := xrayChainOutbound(eps[idx], "probe", 0); err == nil {
 			t.Fatalf("xrayChainOutbounds(%s) 须维持既有显式拒绝", eps[idx].Name)
 		}
 	}

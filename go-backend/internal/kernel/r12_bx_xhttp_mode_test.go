@@ -29,7 +29,7 @@ func r12bxFaces(t *testing.T, in Inbound) (xrayMode, chainMode, uri, clash strin
 		t.Fatalf("Render(Xray) 须成功：%v", err)
 	}
 	xrayMode = xrayRenderedXHTTPMode(t, rendered.Files[0].Content)
-	ob, err := xrayChainOutbound(e, "chain-out")
+	ob, err := xrayChainOutbound(e, "chain-out", 0)
 	if err != nil {
 		t.Fatalf("链式出站须可达：%v", err)
 	}

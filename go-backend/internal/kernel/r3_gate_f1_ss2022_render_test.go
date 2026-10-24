@@ -131,7 +131,7 @@ func TestR3GateF1ProxyRenderAllFaces(t *testing.T) {
 				t.Fatalf("shadowrocket 渲染须规范化：%q", body)
 			}
 			// Xray 链式出站（导入节点作 Via 时的客户端渲染）
-			ob, err := xrayChainOutbound(e, "via")
+			ob, err := xrayChainOutbound(e, "via", 0)
 			if err != nil {
 				t.Fatalf("xray chain: %v", err)
 			}

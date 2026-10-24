@@ -48,7 +48,7 @@ func TestR8B2SIP023NoncanonXrayChainNormalized(t *testing.T) {
 	if ct.Password != r8b2Canon {
 		t.Fatalf("Xray 链式产物密码须逐段归一为规范形：got %q want %q", ct.Password, r8b2Canon)
 	}
-	if _, err := xrayChainOutbound(e, "via-1"); err != nil {
+	if _, err := xrayChainOutbound(e, "via-1", 0); err != nil {
 		t.Fatalf("非规范多段 xrayChainOutbound 须可构建出站：%v", err)
 	}
 	if err := CheckChainWith(TypeXray, e, RenderOptions{}); err != nil {
