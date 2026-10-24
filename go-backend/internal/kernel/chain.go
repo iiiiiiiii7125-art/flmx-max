@@ -297,8 +297,8 @@ func chainTargetFromInbound(e Endpoint) (chainTarget, error) {
 			return t, errors.New("Xray 无法连接 ShadowTLS 节点，请改用 sing-box 内核")
 		}
 		// GATE-F1：自建目标同订阅口径归一（导入目标经 forEndpoint 已归一）。
-		// R10X-015（X-E-01）：改经 Segments 逐段归一，与进口同面及
-		// 自建 Clash 面齐一（渲染函数全集口径）；对一切可达输入
+		// R10X-015（X-E-01）：改经 Segments 逐段归一；自建 SS 服务端
+		// 两落点维持单段 helper；对一切可达输入
 		// （Normalize 单段限定）Segments ≡ 单段形、行为逐字不变，
 		// 多段仅在直调渲染函数时逐段归一（解码字节不变）。
 		t.Protocol, t.Cipher, t.Password = "shadowsocks", in.Settings.Method,
@@ -484,7 +484,7 @@ func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 	case TransportGRPC:
 		stream["grpcSettings"] = obj{"serviceName": t.ServiceName}
 	case TransportXHTTP:
-		s := obj{"path": firstNonEmptyString(t.Path, "/"), "mode": firstNonEmptyString(t.Mode, defaultXHTTPMode)}
+		s := obj{"path": firstNonEmptyString(t.Path, "/"), "mode": canonicalXHTTPMode(t.Mode)}
 		if t.HostHeader != "" {
 			s["host"] = t.HostHeader
 		}
