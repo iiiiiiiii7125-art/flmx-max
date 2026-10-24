@@ -30,6 +30,33 @@ func tcpInfoBlob(rtt, rttvar uint32) []byte {
 	return blob
 }
 
+// The dump must be issued per family: AF_UNSPEC is rejected with
+// NLMSG_ERROR -2 by some kernels (Debian 6.1 cloud), so the family
+// byte of the request is pinned here.
+func TestBuildDiagRequestFamily(t *testing.T) {
+	for _, family := range []byte{2, 10} { // AF_INET, AF_INET6
+		req := buildDiagRequest(family)
+		if len(req) != 72 {
+			t.Fatalf("family %d: len %d, want 72", family, len(req))
+		}
+		if req[16] != family {
+			t.Fatalf("family %d: req[16]=%d, want %d", family, req[16], family)
+		}
+		if binary.LittleEndian.Uint16(req[4:6]) != 20 {
+			t.Fatalf("family %d: type %d, want 20", family, binary.LittleEndian.Uint16(req[4:6]))
+		}
+		if req[17] != 6 { // IPPROTO_TCP
+			t.Fatalf("family %d: protocol %d, want 6", family, req[17])
+		}
+		if req[18] != 2 { // INET_DIAG_INFO extension bit
+			t.Fatalf("family %d: ext %d, want 2", family, req[18])
+		}
+		if binary.LittleEndian.Uint32(req[20:24]) != 0xfff {
+			t.Fatalf("family %d: states %#x, want 0xfff", family, binary.LittleEndian.Uint32(req[20:24]))
+		}
+	}
+}
+
 // The offset is pinned here, not by a live netlink dump: the old
 // code read offset 72 (tcpi_rttvar), which is 0 on stable connections
 // and made the probe see zero samples on every real machine.
