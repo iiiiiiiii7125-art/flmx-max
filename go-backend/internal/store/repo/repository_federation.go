@@ -139,7 +139,7 @@ func (r *Repository) CreateFederationTunnel(name string, tunnelType int, protoco
 		Name:        name,
 		Type:        tunnelType,
 		Protocol:    protocol,
-		Flow:        0,
+		Flow:        1,
 		CreatedTime: now,
 		UpdatedTime: now,
 		Status:      1,

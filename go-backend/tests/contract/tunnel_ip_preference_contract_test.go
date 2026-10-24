@@ -45,7 +45,7 @@ func TestTunnelCreateWithIPPreferenceContract(t *testing.T) {
 		{"empty-preference", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			payload := `{"name":"tunnel-` + tc.name + `","type":2,"flow":99999,"status":1,"ipPreference":"` + tc.preference + `","inNodeId":[{"nodeId":` + jsonInt(entryID) + `,"protocol":"tls"}],"chainNodes":[],"outNodeId":[{"nodeId":` + jsonInt(exitID) + `,"protocol":"tls"}]}`
+			payload := `{"name":"tunnel-` + tc.name + `","type":2,"flow":1,"status":1,"ipPreference":"` + tc.preference + `","inNodeId":[{"nodeId":` + jsonInt(entryID) + `,"protocol":"tls"}],"chainNodes":[],"outNodeId":[{"nodeId":` + jsonInt(exitID) + `,"protocol":"tls"}]}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/tunnel/create", bytes.NewBufferString(payload))
 			req.Header.Set("Authorization", adminToken)
 			req.Header.Set("Content-Type", "application/json")
