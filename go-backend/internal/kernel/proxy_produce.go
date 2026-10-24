@@ -362,7 +362,17 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		node = append(node, yamlField{k, p[k]})
+		v := p[k]
+		if k == "encryption" {
+			// R11X-004（下发侧归一，FIX-PLAN 批 3 定版）：校验与
+			// URI / 链式两面均经 p.str("encryption") 取修剪形，唯独
+			// 本面此前透传 map 原值——首尾空白包装的 ENC 串因此
+			// 原样下发、mihomo 整表 exit 1。下发时同口径取修剪形；
+			// 落库原值不动（p 为 forEndpoint 克隆、且本处只改下发
+			// 值），合法无空白串逐字不变。
+			v = p.str("encryption")
+		}
+		node = append(node, yamlField{k, v})
 	}
 	return node, true
 }
