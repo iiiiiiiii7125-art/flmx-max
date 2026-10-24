@@ -549,11 +549,29 @@ func ValidVLESSEncryption(enc string) bool {
 	//     链的后续组恒含 0 与 <100 值）。
 	// 证伪格（+ 前缀小数、前导零、200 组、4294967295）保持放行，
 	// 不得以推测公式扩大拒绝面。
+	// R11X-007（M5-02，verdicts §3.2 口径写死）：填充组内的空 token
+	// 按双二进制实测集处理——组内非首位空 token（尾随破折号
+	// "100-200-300-"、组内双破折号 "100-200-300--400" 等）被
+	// Xray / mihomo 容忍，须忽略后计数与校验；组首空 token
+	// （"-100-…"、纯破折号组 "-"）与全空组双二进制同拒、仍拒；
+	// 组内空格 token 不是空 token（Atoi 失败仍拒，如 "300 "）。
+	// 其余口径（元素数 {3,4,5}、首组前三数、token 长度 ≤11）
+	// 逐字不动，计数与首组格校验均以忽略后的 token 序列为准。
 	for gi, group := range parts[3 : len(parts)-1] {
 		if group == "" {
 			return false
 		}
-		nums := strings.Split(group, "-")
+		rawNums := strings.Split(group, "-")
+		if rawNums[0] == "" {
+			return false
+		}
+		nums := make([]string, 0, len(rawNums))
+		for _, tok := range rawNums {
+			if tok == "" {
+				continue // 非首位空 token：忽略（首位已在上方拒）
+			}
+			nums = append(nums, tok)
+		}
 		if len(nums) < 3 || len(nums) > 5 {
 			return false
 		}
