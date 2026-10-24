@@ -41,6 +41,7 @@ import {
 } from "@/api";
 import { BackIcon, SettingsIcon } from "@/components/icons";
 import { NotifyCard } from "@/pages/config/notify-card";
+import { GistBackup } from "@/pages/config/gist-backup";
 import { LatencySettings } from "@/pages/config/latency-card";
 import { ThemeSettings } from "@/components/theme-settings";
 import { isAdmin } from "@/utils/auth";
@@ -2138,6 +2139,14 @@ export default function ConfigPage() {
               )}
             </div>
           </div>
+
+          {/* PORT-3342/B1：Gist 上传（仅管理员；组件内 status 未加载时亦不渲染）。 */}
+          {isAdmin() && (
+            <>
+              <Divider />
+              <GistBackup />
+            </>
+          )}
         </CardBody>
       </Card>
 
