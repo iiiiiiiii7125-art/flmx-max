@@ -652,6 +652,9 @@ type InboundBackup struct {
 	// exported (restore re-materializes them via reconcile), so there is
 	// deliberately no companion marker here.
 	MeteringEnabled int `json:"meteringEnabled,omitempty"`
+	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for
+	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s).
+	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
 }
 
 type RemoteSourceBackup struct {
