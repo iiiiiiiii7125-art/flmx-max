@@ -613,6 +613,22 @@ export const uploadGistBackup = () =>
     { timeout: 120000 },
   );
 
+// PORT-3342/G-frontend：Gist 版本列表 + 恢复接线点（在 B1 三 API 基础上补齐）。
+// versions 端点由 G-后端批落定；restore 端点与恢复执行链归 G-恢复链批，
+// 本批只导出函数供集成时接线，恢复弹窗确认按钮暂不调用 restoreGistBackup。
+export interface GistBackupVersion {
+  version: string;
+  committedAt: number;
+}
+
+export const getGistBackupVersions = () =>
+  Network.post<GistBackupVersion[]>("/backup/gist/versions", {});
+
+export const restoreGistBackup = (data: {
+  version: string;
+  password: string;
+}) => Network.post("/backup/gist/restore", data, { timeout: 120000 });
+
 export interface AnnouncementData {
   content: string;
   enabled: number;
