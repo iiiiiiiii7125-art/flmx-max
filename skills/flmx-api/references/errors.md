@@ -12,7 +12,8 @@
 | `403` | Forbidden | Need admin privileges |
 | `409` | Same request already in progress | Retry shortly |
 | `429` | Rate limited | Wait and retry; read `Retry-After: 60` |
-| `500` | Parameter error (legacy; same class as `-1` elsewhere) | Check request body format |
+
+> Historical code: `500` was once the parameter-error code. Since F-08, envelope parameter errors are unified under `-1` and `500` has no emission point.
 
 ## Common Error Messages (Chinese)
 

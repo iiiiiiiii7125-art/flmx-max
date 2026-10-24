@@ -69,6 +69,11 @@ const CHECKS = [
   { book: "admin", key: "subscription/traffic", kind: "series" },
   { book: "user", key: "user/subscription/traffic", kind: "series" },
   { book: "admin", key: "kernel/versions", kind: "version-list" },
+  // R15-X-02: backup/gist/status must carry the declared
+  // GistBackupStatus shape. A fresh seed honestly answers
+  // configured=false with empty tokenHint/gistUrl — emptiness is the
+  // fact here, so this gate checks shape, not non-emptiness.
+  { book: "admin", key: "backup/gist/status", kind: "gist-status" },
 ];
 
 // kernel/versions recordings whose payload comes from the live GitHub
@@ -165,6 +170,37 @@ for (const { book, key, kind } of CHECKS) {
         console.log(`FAIL  ${book} "${key}": no recording for kernelType=${t}`);
       }
     }
+    continue;
+  }
+  if (kind === "gist-status") {
+    // Declared GistBackupStatus shape: configured/tokenHint/encrypted/
+    // intervalHours/gistUrl/lastAt/lastUpload/lastError, code 0.
+    const FIELDS = {
+      configured: "boolean", tokenHint: "string", encrypted: "boolean",
+      intervalHours: "number", gistUrl: "string", lastAt: "number",
+      lastUpload: "number", lastError: "string",
+    };
+    recordings.forEach((rec, i) => {
+      const res = rec && rec.res ? rec.res : {};
+      const data = res.data;
+      if (res.code !== 0) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i}: res.code=${res.code} is a recorded failure response, not a GistBackupStatus`);
+        return;
+      }
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i}: data is not a GistBackupStatus object`);
+        return;
+      }
+      const bad = Object.entries(FIELDS).filter(([k, t]) => typeof data[k] !== t).map(([k]) => k);
+      if (bad.length) {
+        problems += 1;
+        console.log(`FAIL  ${book} "${key}" recording #${i}: data misses or mistypes GistBackupStatus field(s): ${bad.join(", ")}`);
+      } else {
+        console.log(`ok    ${book} "${key}" recording #${i}: code 0, GistBackupStatus shape ok (configured=${data.configured})`);
+      }
+    });
     continue;
   }
   recordings.forEach((rec, i) => {
