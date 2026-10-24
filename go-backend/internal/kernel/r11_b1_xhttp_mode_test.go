@@ -205,7 +205,7 @@ func TestR11B1XHTTPModeProductsHaveNoBadMode(t *testing.T) {
 		// 同源第四面（M6 登记）：该入站作链式目标时 Xray 链式出站
 		// 的 xhttpSettings.mode 同为规范值。
 		e := Endpoint{Name: "sb", Host: "203.0.113.10", Port: 443, Direct: true, Inbound: in}
-		ob, err := xrayChainOutbound(e, "chain-out")
+		ob, err := xrayChainOutbound(e, "chain-out", 0)
 		if err != nil {
 			t.Fatalf("探针格 mode=%q 链式出站须可达：%v", inVal, err)
 		}

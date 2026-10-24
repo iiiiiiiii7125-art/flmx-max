@@ -49,7 +49,7 @@ func TestR7B1XrayChainSSSubsetGate(t *testing.T) {
 		if !strings.Contains(err.Error(), m) {
 			t.Fatalf("cipher=%s：拒绝错误须点名 cipher，got %q", m, err.Error())
 		}
-		if _, err := xrayChainOutbound(e, "via-1"); err == nil {
+		if _, err := xrayChainOutbound(e, "via-1", 0); err == nil {
 			t.Fatalf("cipher=%s：xrayChainOutbound 须报错、不产出可下发配置", m)
 		}
 		if err := CheckChainWith(TypeXray, e, RenderOptions{}); err == nil {
@@ -69,7 +69,7 @@ func TestR7B1XrayChainSSSubsetGate(t *testing.T) {
 		if ct.Cipher != m {
 			t.Fatalf("cipher=%s：链式目标 cipher 须逐字保留，got %q", m, ct.Cipher)
 		}
-		if _, err := xrayChainOutbound(e, "via-1"); err != nil {
+		if _, err := xrayChainOutbound(e, "via-1", 0); err != nil {
 			t.Fatalf("cipher=%s：xrayChainOutbound 须可构建出站，got %v", m, err)
 		}
 		if err := CheckChainWith(TypeXray, e, RenderOptions{}); err != nil {

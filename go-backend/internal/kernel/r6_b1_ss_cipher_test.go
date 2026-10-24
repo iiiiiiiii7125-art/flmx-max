@@ -302,7 +302,7 @@ func TestR6B1ChainTargetGuards(t *testing.T) {
 		if _, err := chainTargetFromProxy(e); err == nil {
 			t.Fatalf("%s：链式目标坏存量须在面板侧被拒", name)
 		}
-		if _, err := xrayChainOutbound(e, "via-1"); err == nil {
+		if _, err := xrayChainOutbound(e, "via-1", 0); err == nil {
 			t.Fatalf("%s：xrayChainOutbound 须报错、不产出可下发配置", name)
 		}
 		if err := CheckChainWith(TypeXray, e, RenderOptions{}); err == nil {
@@ -319,7 +319,7 @@ func TestR6B1ChainTargetGuards(t *testing.T) {
 		if _, err := chainTargetFromProxy(e); err != nil {
 			t.Fatalf("%s：健康链式目标不得误拒：%v", name, err)
 		}
-		if _, err := xrayChainOutbound(e, "via-1"); err != nil {
+		if _, err := xrayChainOutbound(e, "via-1", 0); err != nil {
 			t.Fatalf("%s：健康链式目标须可构建出站：%v", name, err)
 		}
 	}

@@ -49,11 +49,26 @@ func renderXray(inbounds []Inbound) (string, error) {
 	}
 	// Chained inbounds leave through their target; their rules come first
 	// so their users do not match the direct per-user rules below.
-	chained, rules, err := xrayChainRoutes(inbounds)
+	chained, rules, err := xrayChainRoutes(inbounds, levels)
 	if err != nil {
 		return "", err
 	}
 	outbounds := append(cfg["outbounds"].([]interface{}), chained...)
+	// Per-inbound idle timeout, direct exits: Xray's VLESS inbound never
+	// installs a user-level idle timer (unlike VMess/Trojan/SS), and the
+	// freedom outbound times a session by its own configured userLevel
+	// (default 0) — so the level on the client alone cannot retime the
+	// session. Each idle inbound whose traffic leaves direct therefore
+	// gets a dedicated freedom outbound carrying its level, reached by
+	// an inboundTag rule; counted users additionally get a combined
+	// outbound (level + socket mark) reached first, so their traffic
+	// keeps both attributes. These rules sit after the chain rules
+	// (a chained inbound's traffic never reaches them) and before the
+	// per-user mark rules (otherwise a marked user would match the
+	// mark rule first and lose the timeout).
+	idleOutbounds, idleRules := xrayConnIdleRoutes(inbounds, levels)
+	outbounds = append(outbounds, idleOutbounds...)
+	rules = append(rules, idleRules...)
 	// Each user leaves through a direct outbound whose sockets carry the
 	// user's mark (see UserMark).
 	for _, id := range markedUsers(inbounds) {
@@ -89,6 +104,51 @@ func connIdleLevels(inbounds []Inbound) (map[int64]int, error) {
 		levels[in.ID] = next
 	}
 	return levels, nil
+}
+
+// connIdleOutboundTag is the dedicated direct-exit outbound for an
+// inbound with an idle timeout; connIdleUserOutboundTag is the per-user
+// variant that also carries the user's socket mark.
+func connIdleOutboundTag(inboundID int64) string { return fmt.Sprintf("flmx-idle-%d", inboundID) }
+func connIdleUserOutboundTag(inboundID, userID int64) string {
+	return fmt.Sprintf("flmx-idle-%d-u%d", inboundID, userID)
+}
+
+// xrayConnIdleRoutes emits, for each inbound with an idle timeout whose
+// traffic leaves direct (no Via), a dedicated freedom outbound carrying
+// the inbound's policy level plus an inboundTag routing rule. Marked
+// users get a combined outbound (level + mark) with a more specific
+// inboundTag+user rule first, so they keep both attributes; the plain
+// rule then catches the owner credential and any unmarked user.
+// Chained inbounds are skipped: their chain rules match first and their
+// exit carries the level on the chain outbound's user instead (see
+// xrayChainOutbound).
+func xrayConnIdleRoutes(inbounds []Inbound, levels map[int64]int) ([]interface{}, []interface{}) {
+	var outbounds, rules []interface{}
+	for _, in := range inbounds {
+		level, ok := levels[in.ID]
+		if !ok || in.Via != nil {
+			continue
+		}
+		tag := connIdleOutboundTag(in.ID)
+		outbounds = append(outbounds, obj{"protocol": "freedom", "tag": tag,
+			"settings": obj{"userLevel": level}})
+		if in.UserCapable() {
+			for _, u := range in.Users {
+				if UserMark(u.ID) == 0 {
+					continue
+				}
+				utag := connIdleUserOutboundTag(in.ID, u.ID)
+				outbounds = append(outbounds, obj{"protocol": "freedom", "tag": utag,
+					"settings":       obj{"userLevel": level},
+					"streamSettings": obj{"sockopt": obj{"mark": UserMark(u.ID)}}})
+				rules = append(rules, obj{"type": "field", "inboundTag": []string{in.Tag()},
+					"user": []string{User{ID: u.ID}.Email()}, "outboundTag": utag})
+			}
+		}
+		rules = append(rules, obj{"type": "field", "inboundTag": []string{in.Tag()}, "outboundTag": tag})
+	}
+	return outbounds, rules
 }
 
 func xrayInbound(in Inbound, level int) (obj, error) {
