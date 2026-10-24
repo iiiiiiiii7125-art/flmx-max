@@ -358,6 +358,17 @@ func normalizeTransport(t *Transport) error {
 			t.Mode = ""
 		} else if t.Mode == "" {
 			t.Mode = defaultXHTTPMode
+		} else {
+			// R11X-001（R10X-002 的自建载体邻格）：XHTTP Mode 此前
+			// 仅 TrimSpace——API 直写与备份恢复的大小写变体/集外值
+			// 原样落库，逐字进自建 Clash 面、ShareURI 与 Xray 内
+			// 核/链式配置，毒化整表/整单。与指纹格同形处置、与进
+			// 口面同一合法集（ValidXHTTPMode）：小写愈合落库、集
+			// 外拒绝。空值补 auto 的既有顺序与默认不变（前支）。
+			t.Mode = strings.ToLower(t.Mode)
+			if !ValidXHTTPMode(t.Mode) {
+				return errors.New("xhttp mode 不受支持（仅 auto / packet-up / stream-up / stream-one）")
+			}
 		}
 	case TransportGRPC:
 		if t.ServiceName == "" {
