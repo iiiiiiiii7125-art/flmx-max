@@ -129,16 +129,17 @@ func r9b2EncWithPad(pad string) string {
 }
 
 func TestR9B2VLESSEncryptionPaddingGrammarRejected(t *testing.T) {
-	// 注：count4 格按裁定 {3,5} 集合登记（verdicts §1）；本批双二进制
-	// 对照实测 Xray 25.9.5 / mihomo 均 exit 0，分歧已在批报告中点名
-	// 待裁定，本用例不断言随探针擅自变更。
+	// 注（断言更新登记，R10 批 2）：count4 格原按 R9 裁定 {3,5} 集合
+	// 登记为拒格；R10-X-verdicts §1.3 写死新口径（元素数 ∈ {3,4,5}、
+	// 按双二进制实测集一次对齐，R10X-011/W-1）点名驱动，本格移至
+	// TestR9B2VLESSEncryptionFalsifiedGridsStillAccepted 的放行集，
+	// 全面对齐断言见 r10_b2_enc_align_test.go。
 	badPads := map[string]string{
 		"count1-zero":     "0",
 		"count1":          "100",
 		"count2":          "100-200",
 		"count2-zero":     "0-0",
 		"count2-zero-mix": "0-100",
-		"count4":          "100-200-300-400",
 		"count6":          "100-200-300-400-500-600",
 		"count7":          "100-200-300-400-500-600-700",
 		"count9":          "100-200-300-400-500-600-700-800-900",
@@ -170,6 +171,7 @@ func TestR9B2VLESSEncryptionFalsifiedGridsStillAccepted(t *testing.T) {
 	manyGroups := strings.TrimSuffix(strings.Repeat("100-200-300.", 200), ".")
 	goodPads := map[string]string{
 		"canonical-3":     "100-200-300",
+		"count4":          "100-200-300-400",
 		"count5":          "100-200-300-400-500",
 		"plus-prefix":     "+100-200-300",
 		"leading-zero":    "0100-200-300",
