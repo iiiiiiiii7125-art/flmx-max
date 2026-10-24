@@ -1072,7 +1072,7 @@ func parseSurgeLine(line string) (Proxy, error) {
 	case "vmess":
 		p["type"] = "vmess"
 		p["uuid"] = kv.str("username")
-		p["cipher"] = "auto"
+		p["cipher"] = firstNonEmptyString(kv.str("encrypt-method"), "auto")
 		p["alterId"] = 0
 		if kv.str("vmess-aead") == "false" {
 			p["alterId"] = 1
