@@ -507,7 +507,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(tunnelOrder, func(i, j int) bool { return tunnelOrder[i] < tunnelOrder[j] })
 	for _, tunnelID := range tunnelOrder {
-		if err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户", false); err != nil {
+		if _, err := h.cleanupForwardsDataPlane(tunnelID, byTunnel[tunnelID], "用户", false); err != nil {
 			// R5X-004(b)：清理是逐组逐条落库的前进式操作，中止时靠前
 			// 分组的转发/relay 已实际删除——失败返回前以删前收集集按
 			// 现行 DB 补刷一次白名单（与成功路径同集、幂等），否则已
@@ -2587,7 +2587,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	affectedInboundIDs := h.inboundIDsForTunnel(id)
 	// F-002：先逐条清理名下转发的数据面（gost DeleteService / nft
 	// pending 台账），清理未完成则中止删隧道，避免孤儿监听脱离计数。
-	if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
+	deletedForwards, err := h.cleanupTunnelForwardsDataPlane(id)
+	if err != nil {
 		// R5X-004(a)：清理逐条落库、中止时已有转发/relay 实际删除——
 		// 失败返回前以删前收集集按现行 DB 补刷一次白名单（幂等），
 		// 否则回执称「未删除」而已删转发的拨号地址无限驻留 allow。
@@ -2604,8 +2605,12 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	h.cleanupTunnelRuntime(id)
 	if err := h.deleteTunnelByID(id); err != nil {
 		// R5X-004(a)：转发已全删、删隧道行失败时同理补刷。
+		// R19-X-01：注释自认「转发已全删」却只补刷白名单、不披露——
+		// 此处补披露已删转发数与标识（deleted 清单为准），已删项
+		// 不回滚。
+		deleteErr := fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(id, deletedForwards))
 		h.refreshInboundWhitelists(affectedInboundIDs)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		response.WriteJSON(w, response.Err(-2, deleteErr.Error()))
 		return
 	}
 	// O3-001：删除后刷新受影响入站的白名单。
@@ -2683,7 +2688,8 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// F-002：与单条删隧道同一口径，先清名下转发的数据面。
-		if err := h.cleanupTunnelForwardsDataPlane(id); err != nil {
+		deletedForwards, err := h.cleanupTunnelForwardsDataPlane(id)
+		if err != nil {
 			fail++
 			failures = appendBatchFailure(failures, id, tunnelName, err)
 			continue
@@ -2695,8 +2701,11 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		h.cleanupTunnelRuntime(id)
 		if err := h.deleteTunnelByID(id); err != nil {
+			// R19-X-01：与单删同型——转发已删、删隧道行失败时失败
+			// 明细须披露已删转发数与标识（deleted 清单为准），
+			// 已删项不回滚。
 			fail++
-			failures = appendBatchFailure(failures, id, tunnelName, err)
+			failures = appendBatchFailure(failures, id, tunnelName, fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(id, deletedForwards)))
 		} else {
 			success++
 		}

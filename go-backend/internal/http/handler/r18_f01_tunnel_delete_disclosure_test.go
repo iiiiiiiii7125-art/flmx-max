@@ -386,7 +386,7 @@ func TestR18F01OfflineBranchDbDeleteFailureDisclosesDeleted(t *testing.T) {
 	if len(forwards) != 1 {
 		t.Fatalf("expected 1 forward, got %d", len(forwards))
 	}
-	err = h.cleanupForwardsDataPlane(tunnelID, forwards, "隧道", true)
+	_, err = h.cleanupForwardsDataPlane(tunnelID, forwards, "隧道", true)
 	if err == nil {
 		t.Fatalf("offline-branch db delete failure must return an error")
 	}
