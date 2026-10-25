@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+node 1
+tunnel 4
+forward 6
+node_inbound 578
+subscription 18
+--- panel containers:
+flux-panel-backend Up 12 minutes (healthy)
+flux-panel-postgres Up 16 hours (healthy)
+2026-10-25T06:58:03Z
+active

@@ -1,0 +1,19 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+cp: cannot create regular file '/etc/flux_agent/flux_agent': Text file busy
+2026-10-25T06:54:36Z
+● flux_agent.service - Flux_agent Proxy Service
+     Loaded: loaded (/etc/systemd/system/flux_agent.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2026-10-25 06:54:28 UTC; 8s ago
+   Main PID: 802180 (flux_agent)
+      Tasks: 43 (limit: 510)
+     Memory: 98.4M
+--- journal self-heal:
+--- gost:
+d48f09e132ebe99fe97a619dd72d42d4  gost.json
+328 gost.json
+2
+      "name": "rule_conn_limit_2",
+      "name": "rule_conn_limit_12",
+services: 12
+climiters: [{'name': 'rule_conn_limit_2', 'limits': ['$ 1']}, {'name': 'rule_conn_limit_12', 'limits': ['$ 7']}]
+limiters: ['1']

@@ -1,0 +1,27 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestBuildForwardServiceConfigs_UsesBindIPForListen
+--- PASS: TestBuildForwardServiceConfigs_UsesBindIPForListen (0.00s)
+=== RUN   TestBuildForwardServiceConfigs_DefaultListenAddrWhenBindIPEmpty
+--- PASS: TestBuildForwardServiceConfigs_DefaultListenAddrWhenBindIPEmpty (0.00s)
+=== RUN   TestBuildForwardServiceConfigs_BindIPAlreadyContainsPort
+--- PASS: TestBuildForwardServiceConfigs_BindIPAlreadyContainsPort (0.00s)
+=== RUN   TestBuildForwardServiceConfigs_IPv6BindIP
+=== RUN   TestBuildForwardServiceConfigs_IPv6BindIP/pure_ipv6_without_port
+=== RUN   TestBuildForwardServiceConfigs_IPv6BindIP/bracketed_ipv6_without_port
+=== RUN   TestBuildForwardServiceConfigs_IPv6BindIP/bracketed_ipv6_with_port
+=== RUN   TestBuildForwardServiceConfigs_IPv6BindIP/ipv6_link-local_with_zone
+=== RUN   TestBuildForwardServiceConfigs_IPv6BindIP/ipv6_localhost
+--- PASS: TestBuildForwardServiceConfigs_IPv6BindIP (0.00s)
+    --- PASS: TestBuildForwardServiceConfigs_IPv6BindIP/pure_ipv6_without_port (0.00s)
+    --- PASS: TestBuildForwardServiceConfigs_IPv6BindIP/bracketed_ipv6_without_port (0.00s)
+    --- PASS: TestBuildForwardServiceConfigs_IPv6BindIP/bracketed_ipv6_with_port (0.00s)
+    --- PASS: TestBuildForwardServiceConfigs_IPv6BindIP/ipv6_link-local_with_zone (0.00s)
+    --- PASS: TestBuildForwardServiceConfigs_IPv6BindIP/ipv6_localhost (0.00s)
+=== RUN   TestBuildForwardServiceConfigsUsesRuntimeLimiterNames
+--- PASS: TestBuildForwardServiceConfigsUsesRuntimeLimiterNames (0.00s)
+=== RUN   TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependently
+--- PASS: TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependently (0.00s)
+=== RUN   TestBuildForwardServiceConfigsKeepsLegacyProxyProtocolAsSend
+--- PASS: TestBuildForwardServiceConfigsKeepsLegacyProxyProtocolAsSend (0.00s)
+PASS
+ok  	go-backend/internal/http/handler	0.213s

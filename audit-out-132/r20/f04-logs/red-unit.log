@@ -1,0 +1,11 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+# github.com/go-gost/x/config [github.com/go-gost/x/config.test]
+config/r20_fix_f04_test.go:56:13: undefined: PruneUnreferencedCLimiters
+config/r20_fix_f04_test.go:108:16: undefined: PruneUnreferencedCLimiters
+config/r20_fix_f04_test.go:117:16: undefined: PruneUnreferencedCLimiters
+config/r20_fix_f04_test.go:121:16: undefined: PruneUnreferencedCLimiters
+config/r20_fix_f04_test.go:132:13: undefined: PruneUnreferencedCLimiters
+config/r20_fix_f04_test.go:164:18: undefined: HealPersistedOrphanCLimiters
+config/r20_fix_f04_test.go:206:21: undefined: HealPersistedOrphanCLimiters
+FAIL	github.com/go-gost/x/config [build failed]
+FAIL

@@ -2245,7 +2245,8 @@ func forwardRuleConnLimiterName(forward *forwardRecord) string {
 // deleteForwardConnLimiterOnNode 在转发服务已删后，尽力删除该转发在节点上
 // 的 rule_conn_limit_<id> climiter。R19-X-03 根因：删转发路径只发
 // DeleteService，从不发 DeleteCLimiters，climiter 在 gost.json 里永久残留
-// （agent 启动自愈只按名去重、不剪除无引用 limiter）。失败只记日志、不向
+// （R20-F04 起 agent 启动自愈亦剪无引用 limiter，存量孤儿在 agent 下次
+// 启动/重载时自愈；此处仍尽力删，不等重启）。失败只记日志、不向
 // 调用方返回错误：服务已删、删库不应被一个 cosmetic 残留挡住；节点离线时
 // 调用方本就走 S-04/重连清理分支、会经同一漏斗重试。agent 侧
 // deleteConnLimiter 对不存在的名字亦返回成功，故重复发送无害。

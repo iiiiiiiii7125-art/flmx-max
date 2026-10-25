@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+2026-10-25T06:57:55Z
+active
+d48f09e132ebe99fe97a619dd72d42d4  gost.json
+aff338e3676bc56d0f3986a1a62f8fdd  flux_agent
+328 gost.json
+2
+ESTAB 0      0                                  172.26.9.119:53994         16.146.199.68:6366  users:(("flux_agent",pid=803255,fd=18))

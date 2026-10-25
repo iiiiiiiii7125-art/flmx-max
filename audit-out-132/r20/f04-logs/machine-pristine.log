@@ -1,0 +1,25 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+d48f09e132ebe99fe97a619dd72d42d4  gost.json
+aff338e3676bc56d0f3986a1a62f8fdd  flux_agent
+0e2f990703b160f7c71f687f42a2d313dfe4b4cd94e5cfb7db37393f1a041ccf  flux_agent
+328 gost.json
+--- climiter lines:
+316:      "name": "rule_conn_limit_2",
+322:      "name": "rule_conn_limit_12",
+--- services/climiters:
+services: 12
+  1_2_1_tcp climiter= None limiter= None
+  1_2_1_udp climiter= None limiter= None
+  2_5_2_tcp climiter= None limiter= 1
+  2_5_2_udp climiter= None limiter= 1
+  7_1_0_tcp climiter= None limiter= None
+  7_1_0_udp climiter= None limiter= None
+  3_5_3_tcp climiter= None limiter= None
+  3_5_3_udp climiter= None limiter= None
+  4_5_4_tcp climiter= None limiter= None
+  4_5_4_udp climiter= None limiter= None
+  6_1_0_tcp climiter= None limiter= None
+  6_1_0_udp climiter= None limiter= None
+climiters: [('rule_conn_limit_2', ['$ 1']), ('rule_conn_limit_12', ['$ 7'])]
+limiters: ['1']
+rlimiters: []

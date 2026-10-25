@@ -1,0 +1,6 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Oct 25 06:54:42 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 06:54:42 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 06:54:42 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 06:54:45 ip-172-26-9-119 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+=== grep heal (no time filter, tail 200):
