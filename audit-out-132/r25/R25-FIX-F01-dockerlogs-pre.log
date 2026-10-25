@@ -1,0 +1,115 @@
+2026/10/26 03:36:47 starting go-backend on :6365 (db=/app/data/gost.db)
+2026/10/26 03:36:47 proxy trust: FLMX_TRUSTED_PROXY_HOPS=1 (login XFF parsed right-to-left)
+2026/10/26 03:36:47 migration r5b4_v1_port_user_unique already applied, skipping
+2026/10/26 03:36:47 migration r5b4_v2_node_inbound_partial_unique already applied, skipping
+2026/10/26 03:36:47 migration fix132_v3_peer_share_runtime_share_resource_unique already applied, skipping
+2026/10/26 03:36:52 HEAD /flow/test -> 200 (32.796µs)
+2026/10/26 03:36:56 node reconnect probe: nodes=[1] latency=[1] external=[] relays=[] tunnels=[]
+2026/10/26 03:36:58 POST /api/v1/node/list -> 200 (778.252µs)
+2026/10/26 03:36:58 POST /api/v1/tunnel/list -> 200 (402.914µs)
+2026/10/26 03:36:58 POST /api/v1/forward/list -> 200 (554.583µs)
+2026/10/26 03:36:58 POST /api/v1/inbound/list -> 200 (1.133393ms)
+2026/10/26 03:36:58 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:36:58 POST /api/v1/subscription/list -> 200 (1.398757ms)
+2026/10/26 03:36:58 POST /api/v1/node/list -> 200 (509.022µs)
+2026/10/26 03:36:59 POST /api/v1/federation/share/list -> 200 (500.518µs)
+2026/10/26 03:36:59 POST /api/v1/backup/gist/status -> 200 (404.232µs)
+2026/10/26 03:37:22 HEAD /flow/test -> 200 (33.073µs)
+2026/10/26 03:37:52 HEAD /flow/test -> 200 (31.55µs)
+2026/10/26 03:38:23 HEAD /flow/test -> 200 (32.263µs)
+2026/10/26 03:38:53 HEAD /flow/test -> 200 (26.467µs)
+2026/10/26 03:39:23 HEAD /flow/test -> 200 (30.751µs)
+2026/10/26 03:39:53 HEAD /flow/test -> 200 (50.741µs)
+2026/10/26 03:40:23 HEAD /flow/test -> 200 (28.798µs)
+2026/10/26 03:40:53 HEAD /flow/test -> 200 (30.891µs)
+2026/10/26 03:41:23 HEAD /flow/test -> 200 (27.274µs)
+2026/10/26 03:41:53 HEAD /flow/test -> 200 (32.345µs)
+2026/10/26 03:42:23 HEAD /flow/test -> 200 (30.33µs)
+2026/10/26 03:42:53 HEAD /flow/test -> 200 (31.222µs)
+2026/10/26 03:43:15 POST /flow/config -> 200 (588.433µs)
+2026/10/26 03:43:23 HEAD /flow/test -> 200 (48.562µs)
+2026/10/26 03:43:53 HEAD /flow/test -> 200 (30.705µs)
+2026/10/26 03:44:23 HEAD /flow/test -> 200 (30.098µs)
+2026/10/26 03:44:53 HEAD /flow/test -> 200 (33.517µs)
+2026/10/26 03:45:23 HEAD /flow/test -> 200 (28.62µs)
+2026/10/26 03:45:53 HEAD /flow/test -> 200 (31.581µs)
+2026/10/26 03:46:23 HEAD /flow/test -> 200 (35.258µs)
+2026/10/26 03:46:53 HEAD /flow/test -> 200 (30.522µs)
+2026/10/26 03:47:23 HEAD /flow/test -> 200 (26.796µs)
+2026/10/26 03:47:53 HEAD /flow/test -> 200 (34.27µs)
+2026/10/26 03:48:24 HEAD /flow/test -> 200 (33.326µs)
+2026/10/26 03:48:54 HEAD /flow/test -> 200 (30.242µs)
+2026/10/26 03:49:24 HEAD /flow/test -> 200 (27.979µs)
+2026/10/26 03:49:54 HEAD /flow/test -> 200 (27.069µs)
+2026/10/26 03:50:24 HEAD /flow/test -> 200 (31.155µs)
+2026/10/26 03:50:54 HEAD /flow/test -> 200 (32.951µs)
+2026/10/26 03:51:24 HEAD /flow/test -> 200 (27.428µs)
+2026/10/26 03:51:54 HEAD /flow/test -> 200 (30.845µs)
+2026/10/26 03:52:24 HEAD /flow/test -> 200 (30.403µs)
+2026/10/26 03:52:54 HEAD /flow/test -> 200 (31.042µs)
+2026/10/26 03:53:15 POST /flow/config -> 200 (904.38µs)
+2026/10/26 03:53:24 HEAD /flow/test -> 200 (32.461µs)
+2026/10/26 03:53:54 HEAD /flow/test -> 200 (33.369µs)
+2026/10/26 03:54:24 HEAD /flow/test -> 200 (26.826µs)
+2026/10/26 03:54:54 HEAD /flow/test -> 200 (28.635µs)
+2026/10/26 03:55:24 HEAD /flow/test -> 200 (31.189µs)
+2026/10/26 03:55:54 HEAD /flow/test -> 200 (31.903µs)
+2026/10/26 03:56:25 HEAD /flow/test -> 200 (30.524µs)
+2026/10/26 03:56:55 HEAD /flow/test -> 200 (27.13µs)
+2026/10/26 03:57:25 HEAD /flow/test -> 200 (30.136µs)
+2026/10/26 03:57:55 HEAD /flow/test -> 200 (30.241µs)
+2026/10/26 03:58:17 POST /api/v1/login -> 200 (37.007µs)
+2026/10/26 03:58:25 HEAD /flow/test -> 200 (31.614µs)
+2026/10/26 03:58:39 POST /api/v1/user/login -> 200 (210.908908ms)
+2026/10/26 03:58:40 GET /api/v1/node/list -> 200 (334.066µs)
+2026/10/26 03:58:46 POST /api/v1/user/login -> 200 (213.456674ms)
+2026/10/26 03:58:47 GET /api/v1/node/list -> 200 (326.425µs)
+2026/10/26 03:58:47 GET /api/v1/inbound/list -> 200 (359.061µs)
+2026/10/26 03:58:47 GET /api/v1/subscription/list -> 200 (385.41µs)
+2026/10/26 03:58:55 HEAD /flow/test -> 200 (27.084µs)
+2026/10/26 03:59:03 POST /api/v1/user/login -> 200 (297.043565ms)
+2026/10/26 03:59:03 POST /api/v1/node/list -> 200 (657.534µs)
+2026/10/26 03:59:03 POST /api/v1/inbound/list -> 200 (1.617915ms)
+2026/10/26 03:59:04 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:04 POST /api/v1/subscription/list -> 200 (1.59419ms)
+2026/10/26 03:59:04 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:04 POST /api/v1/subscription/list -> 200 (2.058741ms)
+2026/10/26 03:59:04 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:04 POST /api/v1/subscription/list -> 200 (2.943686ms)
+2026/10/26 03:59:05 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:05 POST /api/v1/subscription/list -> 200 (2.939716ms)
+2026/10/26 03:59:05 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:05 POST /api/v1/subscription/list -> 200 (2.068385ms)
+2026/10/26 03:59:05 GET /api/v1/open_api/sub/*** -> 404 (35.423µs)
+2026/10/26 03:59:05 GET /api/v1/open_api/sub/*** -> 404 (43.445µs)
+2026/10/26 03:59:05 GET /api/v1/open_api/sub/*** -> 404 (37.741µs)
+2026/10/26 03:59:06 GET /api/v1/open_api/sub/*** -> 404 (38.765µs)
+2026/10/26 03:59:11 POST /api/v1/user/login -> 200 (214.213222ms)
+2026/10/26 03:59:12 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:12 POST /api/v1/subscription/list -> 200 (1.556412ms)
+2026/10/26 03:59:12 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:12 POST /api/v1/subscription/list -> 200 (1.628138ms)
+2026/10/26 03:59:12 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:12 POST /api/v1/subscription/list -> 200 (1.614422ms)
+2026/10/26 03:59:23 POST /api/v1/user/login -> 200 (209.013269ms)
+2026/10/26 03:59:23 POST /api/v1/node/list -> 200 (997.488µs)
+2026/10/26 03:59:23 POST /api/v1/inbound/list -> 200 (1.116463ms)
+2026/10/26 03:59:24 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:24 POST /api/v1/subscription/list -> 200 (1.696614ms)
+2026/10/26 03:59:24 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:24 POST /api/v1/subscription/list -> 200 (1.420366ms)
+2026/10/26 03:59:24 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:24 POST /api/v1/subscription/list -> 200 (1.73409ms)
+2026/10/26 03:59:24 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:24 POST /api/v1/subscription/list -> 200 (1.733845ms)
+2026/10/26 03:59:25 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:25 POST /api/v1/subscription/list -> 200 (1.745246ms)
+2026/10/26 03:59:25 HEAD /flow/test -> 200 (28.513µs)
+2026/10/26 03:59:25 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:25 GET /api/v1/open_api/sub/*** -> 200 (1.357301ms)
+2026/10/26 03:59:25 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:25 GET /api/v1/open_api/sub/*** -> 200 (1.366394ms)
+2026/10/26 03:59:25 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:25 GET /api/v1/open_api/sub/*** -> 200 (1.284783ms)
+2026/10/26 03:59:26 inboundEndpoints: invalid share host for inbound ID 1 (node 1), mode auto, skipping endpoint
+2026/10/26 03:59:26 GET /api/v1/open_api/sub/*** -> 200 (1.261077ms)

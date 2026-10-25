@@ -1,0 +1,46 @@
+=== deploy-r25f01 start=2026-10-25T20:00:52Z initiator=R25-F01 ===
+--- lock check (done from sandbox before invoking; lane R25-F01)
+lock owner on sandbox: R25-F01 (acquired 2026-10-25T19:56:53Z)
+--- pre-deploy running state (expect new6 / ef87bc6)
+flux-panel-backend flmx-backend:new6 Up 24 minutes (healthy)
+vite-frontend flmx-frontend:new6 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 10 hours (healthy)
+8867e99fc01ae64930098ae463a013e3  /app/paneld
+57ab941e7fc6025b52700b2bf36f2241  -
+--- stage bits
+35bfe03dbd9b7f9a143c54d5d837d9f4  /root/r25f01-stage/paneld
+--- backup compose + .env
+    image: flmx-backend:new6
+    image: postgres:16-alpine
+    image: flmx-frontend:new6
+--- stop agent
+agent gone
+--- docker build backend new7 (COPY-only, FROM ghcr 1.4.8)
+sha256:c0a73dbbba604e65fd0ae5581a8201409989404cfde901c40e7a45d15f0b7130
+flmx-backend:new7 c0a73dbbba60
+--- verify paneld inside image (expect 35bfe03dbd9b7f9a143c54d5d837d9f4)
+35bfe03dbd9b7f9a143c54d5d837d9f4  /app/paneld
+--- compose backend image to new7 (frontend stays new6)
+    image: flmx-backend:new7
+    image: postgres:16-alpine
+    image: flmx-frontend:new6
+ Container flux-panel-backend Recreate 
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+--- wait healthy (up to 150s)
+try 1 backend health=starting
+try 2 backend health=starting
+try 3 backend health=healthy
+flux-panel-backend flmx-backend:new7 Up 10 seconds (healthy)
+vite-frontend flmx-frontend:new6 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 10 hours (healthy)
+--- prove running binary is the fixed build
+35bfe03dbd9b7f9a143c54d5d837d9f4  /app/paneld
+--- served check (index must stay 57ab941e7fc6025b52700b2bf36f2241, frontend untouched)
+GET / 6366 http=200
+57ab941e7fc6025b52700b2bf36f2241  -
+GET /flow/test 6365 http=200
+--- start agent
+active
+=== deploy-r25f01 done=2026-10-25T20:01:16Z ===

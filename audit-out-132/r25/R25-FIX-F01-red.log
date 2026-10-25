@@ -1,0 +1,24 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR25L3BNodeAddressAcceptsHostPort
+--- PASS: TestR25L3BNodeAddressAcceptsHostPort (0.00s)
+=== RUN   TestR25ShareHostPortStrippedAtDerivation
+    r25_share_host_port_test.go:57: auto host:port: inboundShareAddress = "16.146.199.68:6366", want "16.146.199.68"
+    r25_share_host_port_test.go:57: auto bracketed v6:port: inboundShareAddress = "2001:db8::1]:6366", want "2001:db8::1"
+    r25_share_host_port_test.go:57: auto hostname:port: inboundShareAddress = "node.example.com:6366", want "node.example.com"
+    r25_share_host_port_test.go:57: ipv4 from host:port ServerIP: inboundShareAddress = "", want "16.146.199.68"
+    r25_share_host_port_test.go:57: ipv6 from bracketed v6:port ServerIP: inboundShareAddress = "", want "2001:db8::1"
+--- FAIL: TestR25ShareHostPortStrippedAtDerivation (0.00s)
+=== RUN   TestR25InboundEndpointsHostPortServerIP
+2026/10/25 19:51:51 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (185.077µs)
+2026/10/25 19:51:51 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (267.601µs)
+2026/10/25 19:51:51 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (230.776µs)
+2026/10/25 19:51:51 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (242.504µs)
+2026/10/25 19:51:51 migration r5b4_v1_port_user_unique applied
+2026/10/25 19:51:51 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 19:51:51 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (309.855µs)
+2026/10/25 19:51:51 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r25_share_host_port_test.go:80: host:port ServerIP must yield 1 direct endpoint, got [] kinds=[]
+--- FAIL: TestR25InboundEndpointsHostPortServerIP (0.18s)
+FAIL
+FAIL	go-backend/internal/http/handler	0.252s
+FAIL

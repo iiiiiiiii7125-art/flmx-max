@@ -1,0 +1,16 @@
+=== R25-FIX-F01 subscription leg phase=pre base=http://16.146.199.68:6366 ===
+login http=200 code=0 msg=操作成功
+login token len=248
+node/list: http=200 code=0 count=1 serverIp=16.146.199.68:6366
+inbound/list: http=200 code=0 count=1 first=new1-vless port=59940
+subscription/list format=default: http=200 code=0 nodeCount=[0]
+default sub id=1 tokenLen=32
+subscription/list format=clash: http=200 code=0 nodeCount=[0]
+subscription/list format=singbox: http=200 code=0 nodeCount=[0]
+subscription/list format=surge: http=200 code=0 nodeCount=[0]
+bare-pull format=clash: http=200 bytes=376 has-vless-node=False
+bare-pull clash head: b'mixed-port: 7890\nallow-lan: false\nmode: "rule"\nlog-level: "warning"\nproxies: []\nproxy-groups:\n  - name: "\xe8\x8a\x82\xe7\x82\xb9\xe9\x80\x89\xe6\x8b\xa9"\n '
+bare-pull format=singbox: http=200 bytes=1051 has-vless-node=False
+bare-pull format=surge: http=200 bytes=97 has-vless-node=False
+bare-pull format=default: http=200 bytes=0 has-vless-node=False
+=== leg pre done ===

@@ -1,0 +1,25 @@
+2026/10/26 04:01:01 starting go-backend on :6365 (db=/app/data/gost.db)
+2026/10/26 04:01:01 proxy trust: FLMX_TRUSTED_PROXY_HOPS=1 (login XFF parsed right-to-left)
+2026/10/26 04:01:01 migration r5b4_v1_port_user_unique already applied, skipping
+2026/10/26 04:01:01 migration r5b4_v2_node_inbound_partial_unique already applied, skipping
+2026/10/26 04:01:01 migration fix132_v3_peer_share_runtime_share_resource_unique already applied, skipping
+2026/10/26 04:01:06 HEAD /flow/test -> 200 (11.254µs)
+2026/10/26 04:01:11 GET /flow/test -> 200 (34.43µs)
+2026/10/26 04:01:18 node reconnect probe: nodes=[1] latency=[1] external=[] relays=[] tunnels=[]
+2026/10/26 04:01:21 POST /api/v1/user/login -> 200 (209.844843ms)
+2026/10/26 04:01:21 POST /api/v1/node/list -> 200 (687.474µs)
+2026/10/26 04:01:21 POST /api/v1/inbound/list -> 200 (1.371307ms)
+2026/10/26 04:01:22 POST /api/v1/subscription/list -> 200 (3.152652ms)
+2026/10/26 04:01:22 POST /api/v1/subscription/list -> 200 (1.507717ms)
+2026/10/26 04:01:22 POST /api/v1/subscription/list -> 200 (1.482782ms)
+2026/10/26 04:01:22 POST /api/v1/subscription/list -> 200 (1.631158ms)
+2026/10/26 04:01:23 POST /api/v1/subscription/list -> 200 (1.437362ms)
+2026/10/26 04:01:23 POST /flow/config -> 200 (669.695µs)
+2026/10/26 04:01:23 GET /api/v1/open_api/sub/*** -> 200 (1.230661ms)
+2026/10/26 04:01:23 GET /api/v1/open_api/sub/*** -> 200 (1.263877ms)
+2026/10/26 04:01:24 GET /api/v1/open_api/sub/*** -> 200 (1.288707ms)
+2026/10/26 04:01:24 GET /api/v1/open_api/sub/*** -> 200 (1.293104ms)
+2026/10/26 04:01:36 HEAD /flow/test -> 200 (32.988µs)
+2026/10/26 04:01:36 POST /api/v1/user/login -> 200 (210.340431ms)
+2026/10/26 04:01:36 POST /api/v1/subscription/list -> 200 (1.70549ms)
+2026/10/26 04:01:37 GET /api/v1/open_api/sub/*** -> 200 (1.194376ms)

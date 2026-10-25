@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net"
 	"net/netip"
 	"strings"
 
@@ -43,12 +44,30 @@ func nodeShareIP(node *model.Node, ipv6 bool) string {
 		value = node.ServerIPV6.String
 	}
 	for _, host := range []string{value, node.ServerIP} {
-		addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(host), "[]"))
+		addr, err := netip.ParseAddr(stripShareHostPort(host))
 		if err == nil && addr.Is6() == ipv6 && !addr.Is4In6() {
 			return addr.String()
 		}
 	}
 	return ""
+}
+
+// stripShareHostPort strips a trailing :port from a stored node address
+// (R25-X-01): IsValidNodeAddress explicitly allows host:port — the agent
+// install flow uses the panel address with port as the WS target, and
+// operators copy the same string into the node address. The share
+// renderers need a bare host, so derivation strips the port here instead
+// of letting ValidateImportHost reject the whole endpoint. A value that
+// is not a host:port pair (bare host, bare IP, bracketed IPv6 without a
+// port) passes through unchanged — brackets are still trimmed as before —
+// and anything malformed after stripping is still rejected by the
+// pull-time guard, which this helper never bypasses.
+func stripShareHostPort(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	return strings.Trim(value, "[]")
 }
 
 // normalizeShareHost returns the stored form of a share host value:
@@ -88,7 +107,7 @@ func inboundShareAddress(row *model.NodeInbound, node *model.Node) string {
 		if node == nil {
 			return ""
 		}
-		return firstNonEmpty(strings.Trim(strings.TrimSpace(node.ServerIP), "[]"), nodeShareIP(node, false), nodeShareIP(node, true))
+		return firstNonEmpty(stripShareHostPort(node.ServerIP), nodeShareIP(node, false), nodeShareIP(node, true))
 	}
 }
 
