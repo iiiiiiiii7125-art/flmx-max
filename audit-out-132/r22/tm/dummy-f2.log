@@ -1,0 +1,4 @@
+[14:14:21.848] dummy listening port=59951 mode=silent timeout=120.0
+[14:14:23.056] dummy ACCEPT from=('16.146.199.68', 33532)
+[14:14:28.056] dummy EOF elapsed=5.00 total_recv=0
+[14:14:28.056] dummy DONE elapsed=5.00

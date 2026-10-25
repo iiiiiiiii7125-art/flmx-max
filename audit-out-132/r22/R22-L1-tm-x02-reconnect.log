@@ -1,0 +1,27 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+RECONNECT-SINCE 2026-10-25 13:53:06
+agentstart rc= 0  
+agent state after start: active
+PASS agent active
+=== leg agentstart end failures=0 [] ===
+poll 1 elapsed 10s rule_conn_limit_9-journal-lines=0
+poll 2 elapsed 20s rule_conn_limit_9-journal-lines=0
+poll 3 elapsed 30s rule_conn_limit_9-journal-lines=0
+poll 4 elapsed 40s rule_conn_limit_9-journal-lines=0
+poll 5 elapsed 50s rule_conn_limit_9-journal-lines=0
+poll 6 elapsed 60s rule_conn_limit_9-journal-lines=0
+poll 7 elapsed 70s rule_conn_limit_9-journal-lines=0
+poll 8 elapsed 80s rule_conn_limit_9-journal-lines=0
+poll 9 elapsed 90s rule_conn_limit_9-journal-lines=0
+poll 10 elapsed 100s rule_conn_limit_9-journal-lines=0
+poll 11 elapsed 110s rule_conn_limit_9-journal-lines=0
+poll 12 elapsed 120s rule_conn_limit_9-journal-lines=0
+poll 13 elapsed 130s rule_conn_limit_9-journal-lines=0
+poll 14 elapsed 140s rule_conn_limit_9-journal-lines=0
+poll 15 elapsed 150s rule_conn_limit_9-journal-lines=0
+journal matches since=2026-10-25 13:53:20 pattern='DeleteCLimiters': 0
+=== leg journal end failures=0 [] ===
+gost md5=3c462e897a5c5db36f3fb2d88a87ccd1 services=4 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+=== leg gost end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===

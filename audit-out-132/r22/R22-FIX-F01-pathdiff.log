@@ -1,0 +1,6 @@
+RED_HEAD_total=190 GREEN_working_total=188
+REMOVED (in HEAD, not in working):
+  - /captcha/generate
+  - /captcha/verify
+ADDED (in working, not in HEAD):
+DUPLICATE_PATHS_RED: 5 GREEN: 5

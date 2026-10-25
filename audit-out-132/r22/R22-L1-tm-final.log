@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+vite-frontend Up 26 minutes (healthy) flmx-frontend:new4
+flux-panel-backend Up 28 minutes (healthy) flmx-backend:new4
+1ca4572b454bf6450455f057bcc8bb55  /app/paneld
+57ab941e7fc6025b52700b2bf36f2241  -
+GET / 6366 http=200
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+active
+gost.db.pre
+gost.json.pre
+legs.py

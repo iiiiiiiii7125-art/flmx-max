@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== client-f4:
+burst1-sent elapsed=0.00
+burst2-sent elapsed=5.51
+SUMMARY first_data=-1 last_data=-1 close=15.01 burst2=5.51 idle_since_last_data=-1 idle_since_burst1=15.01 idle_since_burst2=9.5
+RC=0
+DONE f4 14:15:08
+== dummy-f4 tail:
+[14:14:57.037] dummy RECV n=40768 total=2097152 elapsed=5.51
+[14:15:06.533] dummy EOF elapsed=15.01 total_recv=2097152
+[14:15:06.533] dummy DONE elapsed=15.01

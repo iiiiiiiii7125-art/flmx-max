@@ -1,0 +1,44 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938272623}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938274700}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938276781}
+tunnel id: 8 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792938276780, 'engine': '', 'flow': 1, 'id': 8, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l2-realm', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===
+tunnel engine '' -> 'realm' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938276889}
+tunnel engine now: realm
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792938276780, 'engine': 'realm', 'flow': 1, 'id': 8, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l2-realm', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+gost services=0 climiters=[] refs=[]
+journal-since: 2026-10-25 14:24:36
+=== leg tunengine end failures=0 [] ===
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938281531, 'data': {'warnings': ['realm 引擎不支持限速和连接数限制，这些设置不生效']}}
+forward id: 17
+PASS forward id found
+gost services=0 climiters=[] refs=[]
+FAIL gost has new limiter
+FAIL service refs new limiter
+=== leg mkfwd end failures=2 ['gost has new limiter', 'service refs new limiter'] ===
+realm config endpoints=1
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+
+[[endpoints]]
+# forward 17
+listen = "[::]:2005"
+remote = "203.0.113.9:9001"
+
+=== leg realmconf end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===

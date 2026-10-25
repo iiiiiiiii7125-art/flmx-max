@@ -1,0 +1,4 @@
+cmd: grep -rn generateCaptcha vite-frontend/src scripts/
+exit=1
+cmd: grep -rn verifyCaptcha vite-frontend/src scripts/
+exit=1

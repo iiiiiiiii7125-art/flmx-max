@@ -1,0 +1,154 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+---ROUTING---
+{
+ "rules": [
+  {
+   "inboundTag": [
+    "in-6"
+   ],
+   "outboundTag": "flmx-idle-6",
+   "type": "field"
+  },
+  {
+   "inboundTag": [
+    "in-7"
+   ],
+   "outboundTag": "flmx-idle-7-u1",
+   "type": "field",
+   "user": [
+    "u1@flmx"
+   ]
+  },
+  {
+   "inboundTag": [
+    "in-7"
+   ],
+   "outboundTag": "flmx-idle-7",
+   "type": "field"
+  },
+  {
+   "inboundTag": [
+    "in-8"
+   ],
+   "outboundTag": "flmx-idle-8-u1",
+   "type": "field",
+   "user": [
+    "u1@flmx"
+   ]
+  },
+  {
+   "inboundTag": [
+    "in-8"
+   ],
+   "outboundTag": "flmx-idle-8",
+   "type": "field"
+  },
+  {
+   "inboundTag": [
+    "in-9"
+   ],
+   "outboundTag": "flmx-idle-9-u1",
+   "type": "field",
+   "user": [
+    "u1@flmx"
+   ]
+  },
+  {
+   "inboundTag": [
+    "in-9"
+   ],
+   "outboundTag": "flmx-idle-9",
+   "type": "field"
+  },
+  {
+   "outboundTag": "flmx-u1",
+   "type": "field",
+   "user": [
+    "u1@flmx"
+   ]
+  }
+ ]
+}
+[
+ {
+  "protocol": "freedom",
+  "tag": "direct"
+ },
+ {
+  "protocol": "blackhole",
+  "tag": "block"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 1
+  },
+  "tag": "flmx-idle-6"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 2
+  },
+  "tag": "flmx-idle-7"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 2
+  },
+  "streamSettings": {
+   "sockopt": {
+    "mark": 1180041217
+   }
+  },
+  "tag": "flmx-idle-7-u1"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 3
+  },
+  "tag": "flmx-idle-8"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 3
+  },
+  "streamSettings": {
+   "sockopt": {
+    "mark": 1180041217
+   }
+  },
+  "tag": "flmx-idle-8-u1"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 4
+  },
+  "tag": "flmx-idle-9"
+ },
+ {
+  "protocol": "freedom",
+  "settings": {
+   "userLevel": 4
+  },
+  "streamSettings": {
+   "sockopt": {
+    "mark": 1180041217
+   }
+  },
+  "tag": "flmx-idle-9-u1"
+ },
+ {
+  "protocol": "freedom",
+  "streamSettings": {
+   "sockopt": {
+    "mark": 1180041217
+   }
+  },
+  "tag": "flmx-u1"
+ }
+]

@@ -1,0 +1,17 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+-rw------- 1 root root 6547 Oct 25 14:08 /etc/flux_agent/kernels/xray/run/config.json
+xray config path: /etc/flux_agent/kernels/xray/run/config.json exists: True
+policy levels: {"1": {"connIdle": 10}, "2": {"connIdle": 10}, "3": {"connIdle": 5}, "4": {"connIdle": 5}}
+  idle-ob flmx-idle-6 {'userLevel': 1}
+  idle-ob flmx-idle-7 {'userLevel': 2}
+  idle-ob flmx-idle-7-u1 {'userLevel': 2}
+  idle-ob flmx-idle-8 {'userLevel': 3}
+  idle-ob flmx-idle-8-u1 {'userLevel': 3}
+  idle-ob flmx-idle-9 {'userLevel': 4}
+  idle-ob flmx-idle-9-u1 {'userLevel': 4}
+  inbound port=59944 proto=vless client-levels=[3, 3]
+  inbound port=59945 proto=vmess client-levels=[4, 4]
+  inbound port=59946 proto=vless client-levels=[None, None]
+=== leg xraycfg end failures=0 [] ===
+"port": 59944
+1

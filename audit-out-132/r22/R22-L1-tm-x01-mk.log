@@ -1,0 +1,14 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936314192}
+tunnel id: 2 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792936314191, 'engine': '', 'flow': 1, 'id': 2, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l1-t1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===
+create http=200 code=-1 msg=隧道不存在
+FAIL create code 0 :: {'code': -1, 'msg': '隧道不存在', 'ts': 1792936314269}
+forward id: None
+FAIL forward id found
+gost services=0 climiters=[] refs=[]
+FAIL gost has new limiter
+FAIL service refs new limiter
+=== leg mkfwd end failures=4 ['create code 0', 'forward id found', 'gost has new limiter', 'service refs new limiter'] ===

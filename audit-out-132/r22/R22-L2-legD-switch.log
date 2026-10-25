@@ -1,0 +1,32 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937158830}
+forward id: 15
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_15'] refs=['rule_conn_limit_15']
+PASS gost has new limiter :: ['rule_conn_limit_15']
+PASS service refs new limiter :: ['rule_conn_limit_15']
+=== leg mkfwd end failures=0 [] ===
+2026-10-25 14:06:00
+tunnel engine '' -> 'realm' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937162535}
+tunnel engine now: realm
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792937139439, 'engine': 'realm', 'flow': 1, 'id': 6, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': -2, 'ipPreference': '', 'name': 'r22-l2-t3', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+gost services=0 climiters=[] refs=[]
+journal-since: 2026-10-25 14:06:00
+=== leg tunengine end failures=0 [] ===
+realm config endpoints=1
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+
+[[endpoints]]
+# forward 15
+listen = "[::]:23390"
+remote = "203.0.113.9:9001"
+
+=== leg realmconf end failures=0 [] ===
+journal matches since=2026-10-25 14:06:10 pattern='DeleteCLimiters': 0
+=== leg journal end failures=0 [] ===

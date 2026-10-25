@@ -1,0 +1,14 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+LISTEN 0      4096                                        *:59355            *:*          
+LISTEN_59355_BEFORE
+force-delete http=200 code=0 msg=操作成功
+PASS force-delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937150869}
+gost services=0 climiters=[] refs=[]
+=== leg forcefwd end failures=0 [] ===
+NO_LISTENER_59355_AFTER
+journal matches since=2026-10-25 14:05:45 pattern='rule_conn_limit_14': 1
+   Oct 25 14:05:50 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_14"},"requestId":"1_1792937150868946264","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 2, 'forward': 0, 'inbound': 1, 'subscription': 1}
+FAIL counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 2, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=1 ['counts 1/0/0/1/1'] ===

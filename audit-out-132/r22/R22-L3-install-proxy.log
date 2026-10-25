@@ -1,0 +1,10 @@
+=== install-proxy start 2026-10-25T13:59:30Z ===
+ok: self-update rejects tampered script
+ok: self-update accepts verified script
+ok: self-update rejects downgrade script
+ok: self-update rejects unpinned script
+ok: self-update rejects pin-mismatched script
+🌐 已保留现有部署的网络子网（172.80.0.0/16），模板子网仅对全新安装生效
+🌐 已保留现有部署的网络子网（172.80.0.0/16），模板子网仅对全新安装生效
+install script tests passed
+=== install-proxy exit 0 2026-10-25T13:59:35Z ===

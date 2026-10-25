@@ -1,0 +1,5 @@
+burst1-sent elapsed=0.00
+burst2-sent elapsed=9.51
+SUMMARY first_data=-1 last_data=-1 close=15.02 burst2=9.51 idle_since_last_data=-1 idle_since_burst1=15.01 idle_since_burst2=5.5
+RC=0
+DONE f5 14:15:46

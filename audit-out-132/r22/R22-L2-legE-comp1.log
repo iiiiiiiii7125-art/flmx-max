@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+companions of origin 6: [(7, 'r22-l2-ss（计量）', 47813, 10, 1792937215053)]
+=== leg compcheck end failures=0 [] ===
+(7, 'r22-l2-ss（计量）', 47813, 10, 6)
+=== leg dbquery end failures=0 [] ===
+xray config path: /etc/flux_agent/kernels/xray/run/config.json exists: True
+policy levels: {"1": {"connIdle": 10}, "2": {"connIdle": 10}}
+  idle-ob flmx-idle-6 {'userLevel': 1}
+  idle-ob flmx-idle-7 {'userLevel': 2}
+  idle-ob flmx-idle-7-u1 {'userLevel': 2}
+  inbound port=59960 proto=shadowsocks client-levels=[]
+=== leg xraycfg end failures=0 [] ===

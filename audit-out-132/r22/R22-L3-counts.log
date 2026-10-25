@@ -1,0 +1,11 @@
+R22-L3 test-machine counts check (read-only; no deploy/restart)
+Window: lock R22-L3 acquired 2026-10-25T14:00:28Z
+Note: first login attempt failed on shell quoting of the password (no credential in log); retried via stdin-piped JSON body and succeeded.
+=== counts (sanitized, token redacted) 2026-10-25T14:01Z ===
+login: code 0 (admin role_id=0, requirePasswordChange=false)
+node/list: code 0 count 1
+tunnel/list: code 0 count 0
+forward/list: code 0 count 0
+inbound/list: code 0 count 1
+subscription/list: code 0, items=1 (default subscription present, isDefault=true)
+pristine 1/0/0/1/1 CONFIRMED (matches R22-00-baseline)

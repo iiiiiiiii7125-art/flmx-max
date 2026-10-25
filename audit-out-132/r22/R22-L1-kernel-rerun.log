@@ -1,0 +1,7 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR20F03IdleCopyStatesWindowedSemantics
+    r20_f03_test.go:89: read doc/guide/nodes.md: open /home/hatch/workspace/.r22-l1-snap/doc/guide/nodes.md: no such file or directory
+--- FAIL: TestR20F03IdleCopyStatesWindowedSemantics (0.00s)
+FAIL
+FAIL	go-backend/internal/kernel	0.031s
+FAIL

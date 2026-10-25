@@ -1,0 +1,13 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+agentstop rc= 0  
+agent state after stop: inactive
+PASS agent stopped
+=== leg agentstop end failures=0 [] ===
+OFFLINE-UPD-SINCE 2026-10-25 13:52:58
+update http=200 code=0 msg=操作成功 data={'warnings': ['节点 w10-test 不在线，已跳过下发']}
+PASS update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936379004, 'data': {'warnings': ['节点 w10-test 不在线，已跳过下发']}}
+gost services=4 climiters=['rule_conn_limit_8', 'rule_conn_limit_9'] refs=['rule_conn_limit_8', 'rule_conn_limit_9']
+journal-since: 2026-10-25 13:52:58
+=== leg updfwd end failures=0 [] ===
+gost md5=d748ede0d92cf5a280aa42b445adf15f services=4 climiters=['rule_conn_limit_8', 'rule_conn_limit_9'] refs=['rule_conn_limit_8', 'rule_conn_limit_9']
+=== leg gost end failures=0 [] ===

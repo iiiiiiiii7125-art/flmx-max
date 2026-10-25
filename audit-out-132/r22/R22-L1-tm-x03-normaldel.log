@@ -1,0 +1,15 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936595458}
+forward id: 11
+PASS forward id found
+gost services=6 climiters=['rule_conn_limit_11', 'rule_conn_limit_8'] refs=['rule_conn_limit_11', 'rule_conn_limit_8']
+PASS gost has new limiter :: ['rule_conn_limit_11', 'rule_conn_limit_8']
+PASS service refs new limiter :: ['rule_conn_limit_11', 'rule_conn_limit_8']
+=== leg mkfwd end failures=0 [] ===
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936597540}
+gost services=4 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+=== leg delfwd end failures=0 [] ===
+gost md5=3c462e897a5c5db36f3fb2d88a87ccd1 services=4 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+=== leg gost end failures=0 [] ===

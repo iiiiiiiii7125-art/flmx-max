@@ -1,0 +1,38 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+2026-10-25 14:24:49
+update http=200 code=0 msg=操作成功 data=None
+PASS update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938290013}
+gost services=0 climiters=[] refs=[]
+journal-since: 2026-10-25 14:24:49
+=== leg updfwd end failures=0 [] ===
+realm config endpoints=1
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+
+[[endpoints]]
+# forward 17
+listen = "[::]:2005"
+remote = "203.0.113.9:9001"
+
+=== leg realmconf end failures=0 [] ===
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938292179}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+realm config endpoints=0
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+
+=== leg realmconf end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+journal matches since=2026-10-25 14:24:40 pattern='DeleteCLimiters': 0
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 14:24:40 pattern='rule_conn_limit_17': 0
+=== leg journal end failures=0 [] ===

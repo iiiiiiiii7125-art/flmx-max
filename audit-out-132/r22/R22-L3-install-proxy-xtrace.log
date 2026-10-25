@@ -1,0 +1,3651 @@
++ set -euo pipefail
++++ dirname test-install-scripts-proxy.sh
+++ cd .
+++ pwd
++ ROOT_DIR=/home/hatch/workspace/.r22-l3-tmp/snap
++ test_panel_install_self_update_rejects_tampered_script
++ local work
+++ panel_self_update_fixture tamper
+++ local mode=tamper
+++ local work stubbin good_script
++++ mktemp -d
+++ work=/tmp/tmp.ZujKLvgput
++++ mktemp -d
+++ stubbin=/tmp/tmp.DlhzBw20uF
+++ good_script=/tmp/tmp.ZujKLvgput/good_panel.sh
+++ cat
+++ [[ tamper == \l\e\g\i\t ]]
+++ STUB_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+++ export STUB_SHA256
+++ export STUB_GOOD_SCRIPT=/tmp/tmp.ZujKLvgput/good_panel.sh
+++ STUB_GOOD_SCRIPT=/tmp/tmp.ZujKLvgput/good_panel.sh
+++ cat
+++ chmod +x /tmp/tmp.DlhzBw20uF/curl
+++ cp /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh /tmp/tmp.ZujKLvgput/panel_install.sh
+++ export SELF_UPDATE_SENTINEL=/tmp/tmp.ZujKLvgput/sentinel
+++ SELF_UPDATE_SENTINEL=/tmp/tmp.ZujKLvgput/sentinel
+++ rm -f /tmp/tmp.ZujKLvgput/sentinel
+++ cd /tmp/tmp.ZujKLvgput
+++ printf '6\n'
+++ PATH=/tmp/tmp.DlhzBw20uF:/opt/hatch/bin:/opt/hatch-image/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/muse/skills/documents/scripts:/opt/muse/skills/generate_podcast/scripts:/opt/muse/skills/style-tryon/scripts
+++ PROXY_ENABLED=false
+++ bash ./panel_install.sh
+++ echo /tmp/tmp.ZujKLvgput
++ work=/tmp/tmp.ZujKLvgput
++ [[ ! -f /tmp/tmp.ZujKLvgput/sentinel ]]
++ [[ -f /tmp/tmp.ZujKLvgput/panel_install.sh ]]
++ echo 'ok: self-update rejects tampered script'
+ok: self-update rejects tampered script
++ test_panel_install_self_update_accepts_verified_script
++ local work
+++ panel_self_update_fixture legit
+++ local mode=legit
+++ local work stubbin good_script
++++ mktemp -d
+++ work=/tmp/tmp.2DWwKXH03i
++++ mktemp -d
+++ stubbin=/tmp/tmp.ELc3JQJTAV
+++ good_script=/tmp/tmp.2DWwKXH03i/good_panel.sh
+++ cat
+++ [[ legit == \l\e\g\i\t ]]
++++ sha256sum /tmp/tmp.2DWwKXH03i/good_panel.sh
++++ awk '{print $1}'
+++ STUB_SHA256=5854e794ee8570027a62e05b54306c5ae87002311aa8e0b2d2ac5fb2743ab800
+++ export STUB_SHA256
+++ export STUB_GOOD_SCRIPT=/tmp/tmp.2DWwKXH03i/good_panel.sh
+++ STUB_GOOD_SCRIPT=/tmp/tmp.2DWwKXH03i/good_panel.sh
+++ cat
+++ chmod +x /tmp/tmp.ELc3JQJTAV/curl
+++ cp /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh /tmp/tmp.2DWwKXH03i/panel_install.sh
+++ export SELF_UPDATE_SENTINEL=/tmp/tmp.2DWwKXH03i/sentinel
+++ SELF_UPDATE_SENTINEL=/tmp/tmp.2DWwKXH03i/sentinel
+++ rm -f /tmp/tmp.2DWwKXH03i/sentinel
+++ cd /tmp/tmp.2DWwKXH03i
+++ printf '6\n'
+++ PATH=/tmp/tmp.ELc3JQJTAV:/opt/hatch/bin:/opt/hatch-image/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/muse/skills/documents/scripts:/opt/muse/skills/generate_podcast/scripts:/opt/muse/skills/style-tryon/scripts
+++ PROXY_ENABLED=false
+++ bash ./panel_install.sh
+++ echo /tmp/tmp.2DWwKXH03i
++ work=/tmp/tmp.2DWwKXH03i
++ [[ -f /tmp/tmp.2DWwKXH03i/sentinel ]]
++ echo 'ok: self-update accepts verified script'
+ok: self-update accepts verified script
++ test_panel_install_self_update_rejects_downgrade
++ local work
+++ STUB_GOOD_SV=20200101.01
+++ panel_self_update_fixture legit
+++ local mode=legit
+++ local work stubbin good_script
++++ mktemp -d
+++ work=/tmp/tmp.ua7ftIeUoM
++++ mktemp -d
+++ stubbin=/tmp/tmp.Am98YewZXC
+++ good_script=/tmp/tmp.ua7ftIeUoM/good_panel.sh
+++ cat
+++ [[ legit == \l\e\g\i\t ]]
++++ awk '{print $1}'
++++ sha256sum /tmp/tmp.ua7ftIeUoM/good_panel.sh
+++ STUB_SHA256=2c2684481ed1099e505b145a0630fdd088a8a825d0a622cf28ae41e1f6e532e6
+++ export STUB_SHA256
+++ export STUB_GOOD_SCRIPT=/tmp/tmp.ua7ftIeUoM/good_panel.sh
+++ STUB_GOOD_SCRIPT=/tmp/tmp.ua7ftIeUoM/good_panel.sh
+++ cat
+++ chmod +x /tmp/tmp.Am98YewZXC/curl
+++ cp /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh /tmp/tmp.ua7ftIeUoM/panel_install.sh
+++ export SELF_UPDATE_SENTINEL=/tmp/tmp.ua7ftIeUoM/sentinel
+++ SELF_UPDATE_SENTINEL=/tmp/tmp.ua7ftIeUoM/sentinel
+++ rm -f /tmp/tmp.ua7ftIeUoM/sentinel
+++ cd /tmp/tmp.ua7ftIeUoM
+++ printf '6\n'
+++ PATH=/tmp/tmp.Am98YewZXC:/opt/hatch/bin:/opt/hatch-image/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/muse/skills/documents/scripts:/opt/muse/skills/generate_podcast/scripts:/opt/muse/skills/style-tryon/scripts
+++ PROXY_ENABLED=false
+++ bash ./panel_install.sh
+++ echo /tmp/tmp.ua7ftIeUoM
++ work=/tmp/tmp.ua7ftIeUoM
++ [[ ! -f /tmp/tmp.ua7ftIeUoM/sentinel ]]
++ echo 'ok: self-update rejects downgrade script'
+ok: self-update rejects downgrade script
++ test_panel_install_self_update_rejects_unpinned
++ local work
+++ STUB_GOOD_PINNED=
+++ panel_self_update_fixture legit
+++ local mode=legit
+++ local work stubbin good_script
++++ mktemp -d
+++ work=/tmp/tmp.lB1uuOO4Kr
++++ mktemp -d
+++ stubbin=/tmp/tmp.P8ggzD6fuI
+++ good_script=/tmp/tmp.lB1uuOO4Kr/good_panel.sh
+++ cat
+++ [[ legit == \l\e\g\i\t ]]
++++ sha256sum /tmp/tmp.lB1uuOO4Kr/good_panel.sh
++++ awk '{print $1}'
+++ STUB_SHA256=c3cbfa7b2bb274fd4ecad8d576be9f1932d56cf90f0f92583cd6c1a79beb5f23
+++ export STUB_SHA256
+++ export STUB_GOOD_SCRIPT=/tmp/tmp.lB1uuOO4Kr/good_panel.sh
+++ STUB_GOOD_SCRIPT=/tmp/tmp.lB1uuOO4Kr/good_panel.sh
+++ cat
+++ chmod +x /tmp/tmp.P8ggzD6fuI/curl
+++ cp /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh /tmp/tmp.lB1uuOO4Kr/panel_install.sh
+++ export SELF_UPDATE_SENTINEL=/tmp/tmp.lB1uuOO4Kr/sentinel
+++ SELF_UPDATE_SENTINEL=/tmp/tmp.lB1uuOO4Kr/sentinel
+++ rm -f /tmp/tmp.lB1uuOO4Kr/sentinel
+++ cd /tmp/tmp.lB1uuOO4Kr
+++ printf '6\n'
+++ PATH=/tmp/tmp.P8ggzD6fuI:/opt/hatch/bin:/opt/hatch-image/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/muse/skills/documents/scripts:/opt/muse/skills/generate_podcast/scripts:/opt/muse/skills/style-tryon/scripts
+++ PROXY_ENABLED=false
+++ bash ./panel_install.sh
+++ echo /tmp/tmp.lB1uuOO4Kr
++ work=/tmp/tmp.lB1uuOO4Kr
++ [[ ! -f /tmp/tmp.lB1uuOO4Kr/sentinel ]]
++ echo 'ok: self-update rejects unpinned script'
+ok: self-update rejects unpinned script
++ test_panel_install_self_update_rejects_pin_mismatch
++ local work
+++ STUB_GOOD_PINNED=8.8.8
+++ panel_self_update_fixture legit
+++ local mode=legit
+++ local work stubbin good_script
++++ mktemp -d
+++ work=/tmp/tmp.16gGnn7rug
++++ mktemp -d
+++ stubbin=/tmp/tmp.kV5Oyjd5Mw
+++ good_script=/tmp/tmp.16gGnn7rug/good_panel.sh
+++ cat
+++ [[ legit == \l\e\g\i\t ]]
++++ sha256sum /tmp/tmp.16gGnn7rug/good_panel.sh
++++ awk '{print $1}'
+++ STUB_SHA256=43594f82eba754a73d8b4ad4073e8c01e2a6ebe2cb6b2a3d387be754a0c2041e
+++ export STUB_SHA256
+++ export STUB_GOOD_SCRIPT=/tmp/tmp.16gGnn7rug/good_panel.sh
+++ STUB_GOOD_SCRIPT=/tmp/tmp.16gGnn7rug/good_panel.sh
+++ cat
+++ chmod +x /tmp/tmp.kV5Oyjd5Mw/curl
+++ cp /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh /tmp/tmp.16gGnn7rug/panel_install.sh
+++ export SELF_UPDATE_SENTINEL=/tmp/tmp.16gGnn7rug/sentinel
+++ SELF_UPDATE_SENTINEL=/tmp/tmp.16gGnn7rug/sentinel
+++ rm -f /tmp/tmp.16gGnn7rug/sentinel
+++ cd /tmp/tmp.16gGnn7rug
+++ printf '6\n'
+++ PATH=/tmp/tmp.kV5Oyjd5Mw:/opt/hatch/bin:/opt/hatch-image/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/muse/skills/documents/scripts:/opt/muse/skills/generate_podcast/scripts:/opt/muse/skills/style-tryon/scripts
+++ PROXY_ENABLED=false
+++ bash ./panel_install.sh
+++ echo /tmp/tmp.16gGnn7rug
++ work=/tmp/tmp.16gGnn7rug
++ [[ ! -f /tmp/tmp.16gGnn7rug/sentinel ]]
++ echo 'ok: self-update rejects pin-mismatched script'
+ok: self-update rejects pin-mismatched script
++ test_preserve_compose_networks_keeps_existing_subnet
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.s1G89beotc
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.s1G89beotc
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.s1G89beotc
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.s1G89beotc
+++ PANEL_SCRIPT_PATH=/tmp/tmp.s1G89beotc
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.s1G89beotc
++ local work
+++ mktemp -d
++ work=/tmp/tmp.mMLgBgnft8
++ cat
++ cat
++ preserve_compose_networks /tmp/tmp.mMLgBgnft8/candidate.yml /tmp/tmp.mMLgBgnft8/current.yml
++ local candidate=/tmp/tmp.mMLgBgnft8/candidate.yml current=/tmp/tmp.mMLgBgnft8/current.yml
++ [[ -f /tmp/tmp.mMLgBgnft8/candidate.yml ]]
++ [[ -f /tmp/tmp.mMLgBgnft8/current.yml ]]
++ grep -q '^networks:' /tmp/tmp.mMLgBgnft8/current.yml
++ local old_name old_subnets
+++ awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ { sub(/^    name:[[:space:]]*/, ""); print; exit }
+  ' /tmp/tmp.mMLgBgnft8/current.yml
++ old_name=gost-network
+++ awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /- subnet:/ { sub(/.*- subnet:[[:space:]]*/, ""); print }
+  ' /tmp/tmp.mMLgBgnft8/current.yml
++ old_subnets=172.80.0.0/16
++ local tmp
+++ mktemp
++ tmp=/tmp/tmp.7caMD97GS4
++ OLD_NAME=gost-network
++ OLD_SUBNETS=172.80.0.0/16
++ awk '
+    BEGIN {
+      old_name = ENVIRON["OLD_NAME"]
+      n = split(ENVIRON["OLD_SUBNETS"], subs, "\n")
+      if (n == 1 && subs[1] == "") n = 0
+      emitted = 0
+    }
+    /^networks:/ { in_net=1; print; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ && old_name != "" {
+      print "    name: " old_name
+      next
+    }
+    in_net && /- subnet:/ {
+      if (!emitted) {
+        indent = $0
+        sub(/- subnet:.*/, "", indent)
+        for (i = 1; i <= n; i++) print indent "- subnet: " subs[i]
+        emitted = 1
+      }
+      next
+    }
+    { print }
+  ' /tmp/tmp.mMLgBgnft8/candidate.yml
++ cat /tmp/tmp.7caMD97GS4
++ rm -f /tmp/tmp.7caMD97GS4
++ [[ -n 172.80.0.0/16 ]]
++ echo '🌐 已保留现有部署的网络子网（172.80.0.0/16），模板子网仅对全新安装生效'
+🌐 已保留现有部署的网络子网（172.80.0.0/16），模板子网仅对全新安装生效
++ grep -q 'subnet: 172.80.0.0/16' /tmp/tmp.mMLgBgnft8/candidate.yml
++ grep -q 172.30.0.0/16 /tmp/tmp.mMLgBgnft8/candidate.yml
++ grep -q example/backend:1.3.3 /tmp/tmp.mMLgBgnft8/candidate.yml
++ test_preserve_compose_networks_no_subnet_existing
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.Z6YQJI90gO
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.Z6YQJI90gO
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.Z6YQJI90gO
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.Z6YQJI90gO
+++ PANEL_SCRIPT_PATH=/tmp/tmp.Z6YQJI90gO
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.Z6YQJI90gO
++ local work
+++ mktemp -d
++ work=/tmp/tmp.fTQ2niMpQY
++ cat
++ cat
++ preserve_compose_networks /tmp/tmp.fTQ2niMpQY/candidate.yml /tmp/tmp.fTQ2niMpQY/current.yml
++ local candidate=/tmp/tmp.fTQ2niMpQY/candidate.yml current=/tmp/tmp.fTQ2niMpQY/current.yml
++ [[ -f /tmp/tmp.fTQ2niMpQY/candidate.yml ]]
++ [[ -f /tmp/tmp.fTQ2niMpQY/current.yml ]]
++ grep -q '^networks:' /tmp/tmp.fTQ2niMpQY/current.yml
++ local old_name old_subnets
+++ awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ { sub(/^    name:[[:space:]]*/, ""); print; exit }
+  ' /tmp/tmp.fTQ2niMpQY/current.yml
++ old_name=gost-network
+++ awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /- subnet:/ { sub(/.*- subnet:[[:space:]]*/, ""); print }
+  ' /tmp/tmp.fTQ2niMpQY/current.yml
++ old_subnets=
++ local tmp
+++ mktemp
++ tmp=/tmp/tmp.UjikStJcSK
++ OLD_NAME=gost-network
++ OLD_SUBNETS=
++ awk '
+    BEGIN {
+      old_name = ENVIRON["OLD_NAME"]
+      n = split(ENVIRON["OLD_SUBNETS"], subs, "\n")
+      if (n == 1 && subs[1] == "") n = 0
+      emitted = 0
+    }
+    /^networks:/ { in_net=1; print; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ && old_name != "" {
+      print "    name: " old_name
+      next
+    }
+    in_net && /- subnet:/ {
+      if (!emitted) {
+        indent = $0
+        sub(/- subnet:.*/, "", indent)
+        for (i = 1; i <= n; i++) print indent "- subnet: " subs[i]
+        emitted = 1
+      }
+      next
+    }
+    { print }
+  ' /tmp/tmp.fTQ2niMpQY/candidate.yml
++ cat /tmp/tmp.UjikStJcSK
++ rm -f /tmp/tmp.UjikStJcSK
++ [[ -n '' ]]
++ grep -q subnet: /tmp/tmp.fTQ2niMpQY/candidate.yml
++ test_activate_panel_update_files_preserves_subnet
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.YcoLcZf1C8
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.YcoLcZf1C8
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.YcoLcZf1C8
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.YcoLcZf1C8
+++ PANEL_SCRIPT_PATH=/tmp/tmp.YcoLcZf1C8
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.YcoLcZf1C8
++ local work
+++ mktemp -d
++ work=/tmp/tmp.Tq7RnmObak
++ cd /tmp/tmp.Tq7RnmObak
++ printf 'FLUX_VERSION=1.3.2\nJWT_SECRET=x\n'
++ cat
++ cat
++ UPDATE_COMPOSE_CANDIDATE=/tmp/tmp.Tq7RnmObak/candidate.yml
++ LATEST_VERSION=1.3.3
++ activate_panel_update_files
++ preserve_compose_networks /tmp/tmp.Tq7RnmObak/candidate.yml docker-compose.yml
++ local candidate=/tmp/tmp.Tq7RnmObak/candidate.yml current=docker-compose.yml
++ [[ -f /tmp/tmp.Tq7RnmObak/candidate.yml ]]
++ [[ -f docker-compose.yml ]]
++ grep -q '^networks:' docker-compose.yml
++ local old_name old_subnets
+++ awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ { sub(/^    name:[[:space:]]*/, ""); print; exit }
+  ' docker-compose.yml
++ old_name=gost-network
+++ awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /- subnet:/ { sub(/.*- subnet:[[:space:]]*/, ""); print }
+  ' docker-compose.yml
++ old_subnets=172.80.0.0/16
++ local tmp
+++ mktemp
++ tmp=/tmp/tmp.K8GJbRI4VO
++ OLD_NAME=gost-network
++ OLD_SUBNETS=172.80.0.0/16
++ awk '
+    BEGIN {
+      old_name = ENVIRON["OLD_NAME"]
+      n = split(ENVIRON["OLD_SUBNETS"], subs, "\n")
+      if (n == 1 && subs[1] == "") n = 0
+      emitted = 0
+    }
+    /^networks:/ { in_net=1; print; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /^    name:/ && old_name != "" {
+      print "    name: " old_name
+      next
+    }
+    in_net && /- subnet:/ {
+      if (!emitted) {
+        indent = $0
+        sub(/- subnet:.*/, "", indent)
+        for (i = 1; i <= n; i++) print indent "- subnet: " subs[i]
+        emitted = 1
+      }
+      next
+    }
+    { print }
+  ' /tmp/tmp.Tq7RnmObak/candidate.yml
++ cat /tmp/tmp.K8GJbRI4VO
++ rm -f /tmp/tmp.K8GJbRI4VO
++ [[ -n 172.80.0.0/16 ]]
++ echo '🌐 已保留现有部署的网络子网（172.80.0.0/16），模板子网仅对全新安装生效'
+🌐 已保留现有部署的网络子网（172.80.0.0/16），模板子网仅对全新安装生效
++ chmod 0644 /tmp/tmp.Tq7RnmObak/candidate.yml
++ mv /tmp/tmp.Tq7RnmObak/candidate.yml docker-compose.yml
++ UPDATE_COMPOSE_CANDIDATE=
++ upsert_env_var .env FLUX_VERSION 1.3.3
++ local file=.env
++ local key=FLUX_VERSION
++ local value=1.3.3
++ local tmp_file
+++ mktemp
++ tmp_file=/tmp/tmp.z6hv0iT8wU
++ '[' -f .env ']'
++ awk -v k=FLUX_VERSION -v v=1.3.3 '
+      BEGIN { found=0 }
+      $0 ~ ("^" k "=") { print k "=" v; found=1; next }
+      { print }
+      END { if (!found) print k "=" v }
+    ' .env
++ mv /tmp/tmp.z6hv0iT8wU .env
++ grep -q 'subnet: 172.80.0.0/16' docker-compose.yml
++ grep -q 172.30.0.0/16 docker-compose.yml
++ grep -q FLUX_VERSION=1.3.3 .env
++ test_get_deployed_panel_version_parses_image_tag
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.2BTAXGHm9N
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.2BTAXGHm9N
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.2BTAXGHm9N
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.2BTAXGHm9N
+++ PANEL_SCRIPT_PATH=/tmp/tmp.2BTAXGHm9N
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.2BTAXGHm9N
+++ get_deployed_panel_version
+++ local container=flux-panel-backend
+++ local image tag
++++ docker inspect -f '{{.Config.Image}}' flux-panel-backend
+++ image=ghcr.io/example/flmx-panel-backend:1.9.9
+++ [[ -n ghcr.io/example/flmx-panel-backend:1.9.9 ]]
+++ image=ghcr.io/example/flmx-panel-backend:1.9.9
+++ tag=1.9.9
+++ [[ -z 1.9.9 ]]
+++ [[ 1.9.9 == \g\h\c\r\.\i\o\/\e\x\a\m\p\l\e\/\f\l\m\x\-\p\a\n\e\l\-\b\a\c\k\e\n\d\:\1\.\9\.\9 ]]
+++ [[ 1.9.9 == */* ]]
+++ printf %s 1.9.9
++ assert_equals 1.9.9 1.9.9 'deployed version should come from the running backend image tag'
++ local expected=1.9.9
++ local actual=1.9.9
++ local 'message=deployed version should come from the running backend image tag'
++ [[ 1.9.9 != \1\.\9\.\9 ]]
++ get_deployed_panel_version
++ local container=flux-panel-backend
++ local image tag
+++ docker inspect -f '{{.Config.Image}}' flux-panel-backend
++ image=ghcr.io/example/flmx-panel-backend@sha256:deadbeef
++ [[ -n ghcr.io/example/flmx-panel-backend@sha256:deadbeef ]]
++ image=ghcr.io/example/flmx-panel-backend
++ tag=ghcr.io/example/flmx-panel-backend
++ [[ -z ghcr.io/example/flmx-panel-backend ]]
++ [[ ghcr.io/example/flmx-panel-backend == \g\h\c\r\.\i\o\/\e\x\a\m\p\l\e\/\f\l\m\x\-\p\a\n\e\l\-\b\a\c\k\e\n\d ]]
++ return 1
++ test_update_panel_crosschecks_deployed_image_version
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.dUvZhhjcJx
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.dUvZhhjcJx
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.dUvZhhjcJx
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.dUvZhhjcJx
+++ PANEL_SCRIPT_PATH=/tmp/tmp.dUvZhhjcJx
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.dUvZhhjcJx
++ unset VERSION
++ local calls=
++ local deploy_dir
+++ mktemp -d
++ deploy_dir=/tmp/tmp.UJLU9EGlkX
++ printf 'FLUX_VERSION=1.0.0\nJWT_SECRET=x\n'
++ printf 'services: {}\n'
++ update_panel
++ echo '🔄 开始更新面板...'
++ check_docker noinstall
++ DOCKER_CMD=true
++ resolve_panel_deployment
++ PANEL_DEPLOY_DIR=/tmp/tmp.UJLU9EGlkX
++ cd /tmp/tmp.UJLU9EGlkX
++ ask_proxy_config
++ PROXY_ENABLED=false
++ validate_panel_update_environment
++ :
+++ get_current_db_type
+++ echo sqlite
++ CURRENT_DB_TYPE=sqlite
++ echo '🗄️ 当前数据库类型：sqlite'
++ local current_version cmp_result
+++ get_env_var FLUX_VERSION
+++ local key=FLUX_VERSION
+++ local file=.env
+++ [[ ! -f .env ]]
+++ grep -m1 '^FLUX_VERSION=' .env
+++ cut -d= -f2-
++ current_version=1.0.0
++ local deployed_version
+++ get_deployed_panel_version
+++ local container=flux-panel-backend
+++ local image tag
++++ docker inspect -f '{{.Config.Image}}' flux-panel-backend
+++ image=ghcr.io/example/flmx-panel-backend:1.9.9
+++ [[ -n ghcr.io/example/flmx-panel-backend:1.9.9 ]]
+++ image=ghcr.io/example/flmx-panel-backend:1.9.9
+++ tag=1.9.9
+++ [[ -z 1.9.9 ]]
+++ [[ 1.9.9 == \g\h\c\r\.\i\o\/\e\x\a\m\p\l\e\/\f\l\m\x\-\p\a\n\e\l\-\b\a\c\k\e\n\d\:\1\.\9\.\9 ]]
+++ [[ 1.9.9 == */* ]]
+++ printf %s 1.9.9
++ deployed_version=1.9.9
++ [[ -n 1.9.9 ]]
++ [[ 1.9.9 != \1\.\0\.\0 ]]
++ echo '⚠️ .env 记录版本（1.0.0）与实际运行版本（1.9.9）不一致，防降级判定以实际运行版本为准'
++ current_version=1.9.9
++ [[ -n '' ]]
++ echo '🔍 获取最新版本号...'
+++ resolve_latest_release_tag
+++ echo 1.5.0
++ LATEST_VERSION=1.5.0
++ echo '🆕 最新版本：1.5.0（当前版本：1.9.9）'
+++ panel_version_cmp 1.5.0 1.9.9
+++ local a=1.5.0 b=1.9.9
+++ local -a pa pb
+++ local i n x y
+++ [[ -z 1.5.0 ]]
+++ [[ -z 1.9.9 ]]
+++ IFS=.
+++ read -ra pa
+++ IFS=.
+++ read -ra pb
+++ n=3
+++ ((  3 > n  ))
+++ (( i = 0 ))
+++ (( i < n ))
+++ x=1
+++ y=1
+++ [[ 1 =~ ^[0-9]+$ ]]
+++ [[ 1 =~ ^[0-9]+$ ]]
+++ ((  10#1 < 10#1  ))
+++ ((  10#1 > 10#1  ))
+++ (( i++  ))
+++ (( i < n ))
+++ x=5
+++ y=9
+++ [[ 5 =~ ^[0-9]+$ ]]
+++ [[ 9 =~ ^[0-9]+$ ]]
+++ ((  10#5 < 10#9  ))
+++ echo -1
+++ return 0
++ cmp_result=-1
++ [[ -1 == \-\1 ]]
++ echo '❌ 目标版本 1.5.0 低于当前版本 1.9.9，拒绝降级更新。如确需降级请手动处理。'
++ return 1
++ assert_equals '' '' 'FIX2-C#9: a downgrade against the deployed version must be rejected before downloading'
++ local expected=
++ local actual=
++ local 'message=FIX2-C#9: a downgrade against the deployed version must be rejected before downloading'
++ [[ '' != '' ]]
++ test_install_flux_agent_keeps_service_when_download_fails
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.GYmMI60wSr
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.GYmMI60wSr
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.GYmMI60wSr
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.jJ1KIcyeqB
++ printf '#!/bin/bash\necho "old version"\n'
++ chmod +x /tmp/tmp.jJ1KIcyeqB/flux_agent
++ SERVER_ADDR=panel.example.com:443
++ SECRET='<redacted>'
++ DOWNLOAD_URL=https://example.com/gost
++ local calls_log
+++ mktemp
++ calls_log=/tmp/tmp.IgsiF1Vx8T
++ local rc=0
++ install_flux_agent
++ echo '🚀 开始安装 flux_agent...'
++ ask_proxy_config
++ :
++ ensure_download_url_initialized
++ :
++ get_config_params
++ :
++ check_and_install_tcpkill
++ :
++ ensure_service_manager
++ return 0
++ mkdir -p /tmp/tmp.jJ1KIcyeqB
++ local tmp_binary=/tmp/tmp.jJ1KIcyeqB/flux_agent.new
++ echo '⬇️ 下载 flux_agent 中...'
++ rm -f /tmp/tmp.jJ1KIcyeqB/flux_agent.new
++ curl -fL https://example.com/gost -o /tmp/tmp.jJ1KIcyeqB/flux_agent.new
++ return 0
++ [[ ! -f /tmp/tmp.jJ1KIcyeqB/flux_agent.new ]]
++ rm -f /tmp/tmp.jJ1KIcyeqB/flux_agent.new
++ echo '❌ 下载失败，请检查网络或下载链接。'
++ exit 1
++ rc=1
++ assert_equals 1 1 'F-048: install should fail when the download artifact is missing'
++ local expected=1
++ local actual=1
++ local 'message=F-048: install should fail when the download artifact is missing'
++ [[ 1 != \1 ]]
++ grep -q '^stop$' /tmp/tmp.IgsiF1Vx8T
++ grep -q '^disable$' /tmp/tmp.IgsiF1Vx8T
++ test_install_panel_refuses_existing_deployment
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.AgvkBQtiBT
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.AgvkBQtiBT
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.AgvkBQtiBT
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.AgvkBQtiBT
+++ PANEL_SCRIPT_PATH=/tmp/tmp.AgvkBQtiBT
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.AgvkBQtiBT
++ local work
+++ mktemp -d
++ work=/tmp/tmp.8gXEfFbNCb
++ printf 'JWT_SECRET=keepme\nPOSTGRES_PASSWORD=keeppw\n'
++ printf 'services: {}\n'
++ local rc=0
++ cd /tmp/tmp.8gXEfFbNCb
++ install_panel
++ rc=1
++ [[ 1 != \0 ]]
++ grep -q keepme /tmp/tmp.8gXEfFbNCb/.env
++ local rc2=0
++ cd /tmp/tmp.8gXEfFbNCb
++ PANEL_FORCE_REINSTALL=1
++ install_panel
++ assert_equals 0 0 'F-049: PANEL_FORCE_REINSTALL=1 should allow reinstall'
++ local expected=0
++ local actual=0
++ local 'message=F-049: PANEL_FORCE_REINSTALL=1 should allow reinstall'
++ [[ 0 != \0 ]]
++ ls /tmp/tmp.8gXEfFbNCb/.env.bak.20261025140627
++ grep -q keepme /tmp/tmp.8gXEfFbNCb/.env.bak.20261025140627
++ test_install_docker_rejects_unverified_script
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.vHpsDNbZNV
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.vHpsDNbZNV
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.vHpsDNbZNV
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.vHpsDNbZNV
+++ PANEL_SCRIPT_PATH=/tmp/tmp.vHpsDNbZNV
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.vHpsDNbZNV
++ local sentinel
+++ mktemp -u
++ sentinel=/tmp/tmp.XVVYZs5AvM
++ export DOCKER_INSTALL_SENTINEL=/tmp/tmp.XVVYZs5AvM
++ DOCKER_INSTALL_SENTINEL=/tmp/tmp.XVVYZs5AvM
++ local rc=0
++ install_docker
++ rc=1
++ [[ ! -f /tmp/tmp.XVVYZs5AvM ]]
++ assert_equals 1 1 'F-050: install_docker should fail when script is unverified and package fallback fails'
++ local expected=1
++ local actual=1
++ local 'message=F-050: install_docker should fail when script is unverified and package fallback fails'
++ [[ 1 != \1 ]]
++ test_download_verified_fail_closed_edges
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.61DSmXppvk
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.61DSmXppvk
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.61DSmXppvk
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.61DSmXppvk
+++ PANEL_SCRIPT_PATH=/tmp/tmp.61DSmXppvk
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.61DSmXppvk
++ local work dest
+++ mktemp -d
++ work=/tmp/tmp.BsVAgFbgZv
++ dest=/tmp/tmp.BsVAgFbgZv/f.bin
++ local rc=0
++ FLMX_VERIFY_DOWNLOADS=1
++ download_verified https://example.com/f.bin /tmp/tmp.BsVAgFbgZv/f.bin
++ rc=1
++ [[ 1 != \0 ]]
++ [[ ! -f /tmp/tmp.BsVAgFbgZv/f.bin ]]
++ rc=0
++ FLMX_VERIFY_DOWNLOADS=yes
++ download_verified https://example.com/f.bin /tmp/tmp.BsVAgFbgZv/f.bin
++ rc=1
++ [[ 1 != \0 ]]
++ test_install_script_respects_disabled_proxy
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.NRUTtC2iB8
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.NRUTtC2iB8
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.NRUTtC2iB8
++ PROXY_ENABLED=false
++ PROXY_URL=
++ local actual
+++ maybe_proxy_url https://github.com/example/release
+++ local url=https://github.com/example/release
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/example/release
+++ return
++ actual=https://github.com/example/release
++ assert_equals https://github.com/example/release https://github.com/example/release 'install.sh should bypass the proxy when disabled'
++ local expected=https://github.com/example/release
++ local actual=https://github.com/example/release
++ local 'message=install.sh should bypass the proxy when disabled'
++ [[ https://github.com/example/release != \h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\e\x\a\m\p\l\e\/\r\e\l\e\a\s\e ]]
++ test_install_script_asks_for_proxy_config
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.vFJLMf5KEA
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.vFJLMf5KEA
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.vFJLMf5KEA
++ PROXY_ENABLED=
++ PROXY_URL=
++ ask_proxy_config
++ [[ -n '' ]]
++ [[ -n '' ]]
+++ printf '\nmirror.example.com/\n'
++ echo ''
++ echo ===============================================
++ echo '           GitHub 加速配置'
++ echo ===============================================
++ read -r -p '是否开启 GitHub 加速? (Y/n): ' proxy_choice
++ case "$proxy_choice" in
++ PROXY_ENABLED=true
++ read -r -p '加速地址 (默认 gcode.hostcentral.cc): ' input_url
++ PROXY_URL=mirror.example.com/
++ echo '已开启加速: mirror.example.com/'
++ echo ===============================================
++ assert_equals true true 'install.sh should enable proxy by default'
++ local expected=true
++ local actual=true
++ local 'message=install.sh should enable proxy by default'
++ [[ true != \t\r\u\e ]]
++ assert_equals mirror.example.com/ mirror.example.com/ 'install.sh should keep the entered proxy URL'
++ local expected=mirror.example.com/
++ local actual=mirror.example.com/
++ local 'message=install.sh should keep the entered proxy URL'
++ [[ mirror.example.com/ != \m\i\r\r\o\r\.\e\x\a\m\p\l\e\.\c\o\m\/ ]]
++ local actual
+++ maybe_proxy_url https://github.com/example/release
+++ local url=https://github.com/example/release
+++ [[ true == \f\a\l\s\e ]]
+++ local proxy=mirror.example.com/
+++ [[ mirror.example.com/ == https://* ]]
+++ [[ mirror.example.com/ == http://* ]]
+++ proxy=https://mirror.example.com
+++ echo https://mirror.example.com/https://github.com/example/release
++ actual=https://mirror.example.com/https://github.com/example/release
++ assert_equals https://mirror.example.com/https://github.com/example/release https://mirror.example.com/https://github.com/example/release 'install.sh should normalize the entered proxy URL'
++ local expected=https://mirror.example.com/https://github.com/example/release
++ local actual=https://mirror.example.com/https://github.com/example/release
++ local 'message=install.sh should normalize the entered proxy URL'
++ [[ https://mirror.example.com/https://github.com/example/release != \h\t\t\p\s\:\/\/\m\i\r\r\o\r\.\e\x\a\m\p\l\e\.\c\o\m\/\h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\e\x\a\m\p\l\e\/\r\e\l\e\a\s\e ]]
++ test_install_script_recomputes_download_url_after_prompt
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.d9tpIPNo4b
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.d9tpIPNo4b
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.d9tpIPNo4b
++ PROXY_ENABLED=
++ PROXY_URL=
++ DOWNLOAD_URL=
++ ask_proxy_config
++ [[ -n '' ]]
++ [[ -n '' ]]
++ echo ''
+++ printf 'n\n'
++ echo ===============================================
++ echo '           GitHub 加速配置'
++ echo ===============================================
++ read -r -p '是否开启 GitHub 加速? (Y/n): ' proxy_choice
++ case "$proxy_choice" in
++ PROXY_ENABLED=false
++ echo '已关闭加速，将直连 GitHub'
++ echo ===============================================
++ ensure_download_url_initialized
++ ensure_alpine_runtime_dependencies
++ [[ -f /etc/alpine-release ]]
++ return 0
++ [[ -n '' ]]
+++ resolve_version
+++ [[ -n v-test ]]
+++ echo v-test
+++ return 0
++ RESOLVED_VERSION=v-test
++ local _dl_url
+++ build_download_url
+++ local ARCH
++++ get_architecture
+++++ uname -m
++++ ARCH=x86_64
++++ case $ARCH in
++++ echo amd64
+++ ARCH=amd64
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ _dl_url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ maybe_proxy_url https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ local url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ return
++ DOWNLOAD_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local expected
+++ build_download_url
+++ local ARCH
++++ get_architecture
+++++ uname -m
++++ ARCH=x86_64
++++ case $ARCH in
++++ echo amd64
+++ ARCH=amd64
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ expected=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ assert_equals https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 'install.sh should build the final download URL after the interactive proxy choice'
++ local expected=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local actual=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local 'message=install.sh should build the final download URL after the interactive proxy choice'
++ [[ https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 != \h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\i\i\i\i\i\i\i\i\i\7\1\2\5\-\a\r\t\/\f\l\m\x\-\m\a\x\/\r\e\l\e\a\s\e\s\/\d\o\w\n\l\o\a\d\/\v\-\t\e\s\t\/\g\o\s\t\-\a\m\d\6\4 ]]
++ test_update_flux_agent_asks_for_proxy_config
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.4CiZEvE8Jg
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.4CiZEvE8Jg
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.4CiZEvE8Jg
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.kvlcnuHDdj
++ cat
++ chmod +x /tmp/tmp.kvlcnuHDdj/flux_agent
++ local ask_called=0
++ local cleanup_called=0
++ update_flux_agent
++ echo '🔄 开始更新 flux_agent...'
++ [[ ! -d /tmp/tmp.kvlcnuHDdj ]]
++ ask_proxy_config
++ ask_called=1
++ PROXY_ENABLED=false
++ DOWNLOAD_URL=
++ ensure_download_url_initialized
++ ensure_alpine_runtime_dependencies
++ [[ -f /etc/alpine-release ]]
++ return 0
++ [[ -n '' ]]
+++ resolve_version
+++ [[ -n v-test ]]
+++ echo v-test
+++ return 0
++ RESOLVED_VERSION=v-test
++ local _dl_url
+++ build_download_url
+++ local ARCH
++++ get_architecture
+++++ uname -m
++++ ARCH=x86_64
++++ case $ARCH in
++++ echo amd64
+++ ARCH=amd64
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ _dl_url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ maybe_proxy_url https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ local url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
+++ return
++ DOWNLOAD_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local current_version cmp_result
+++ flux_agent_installed_version
+++ local raw
+++ [[ -x /tmp/tmp.kvlcnuHDdj/flux_agent ]]
++++ /tmp/tmp.kvlcnuHDdj/flux_agent -V
+++ raw='old version'
+++ extract_leading_semver 'old version'
+++ local 'raw=old version' token candidate
+++ for token in $raw
+++ [[ old == \d\e\v ]]
+++ candidate=old
+++ [[ old =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ for token in $raw
+++ [[ version == \d\e\v ]]
+++ candidate=ersion
+++ [[ ersion =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ return 1
+++ true
++ current_version=
+++ panel_version_cmp v-test ''
+++ local a=-test b=
+++ local -a pa pb
+++ local i n x y
+++ [[ -z -test ]]
+++ [[ -z '' ]]
+++ return 1
+++ true
++ cmp_result=
++ [[ '' == \-\1 ]]
++ [[ '' == \0 ]]
++ echo '📥 使用下载地址: https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64'
++ check_and_install_tcpkill
++ :
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ echo '⬇️ 下载最新版本...'
++ rm -f /tmp/tmp.kvlcnuHDdj/flux_agent.new
++ curl -fL https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 -o /tmp/tmp.kvlcnuHDdj/flux_agent.new
++ local output=
++ local url=
++ [[ 4 -gt 0 ]]
++ [[ -fL == \-\o ]]
++ case "$1" in
++ shift
++ [[ 3 -gt 0 ]]
++ [[ https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 == \-\o ]]
++ case "$1" in
++ url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ shift
++ [[ 2 -gt 0 ]]
++ [[ -o == \-\o ]]
++ output=/tmp/tmp.kvlcnuHDdj/flux_agent.new
++ shift 2
++ continue
++ [[ 0 -gt 0 ]]
++ [[ https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 == *.sha256 ]]
++ cat
++ chmod +x /tmp/tmp.kvlcnuHDdj/flux_agent.new
++ [[ ! -f /tmp/tmp.kvlcnuHDdj/flux_agent.new ]]
++ [[ ! -s /tmp/tmp.kvlcnuHDdj/flux_agent.new ]]
++ verify_downloaded_binary /tmp/tmp.kvlcnuHDdj/flux_agent.new https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local binary_file=/tmp/tmp.kvlcnuHDdj/flux_agent.new
++ local download_url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ command -v sha256sum
++ [[ -z https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 ]]
++ echo '🔐 下载 SHA256 校验文件...'
++ local checksum_file
+++ mktemp
++ checksum_file=/tmp/tmp.OnSQWsGzlD
++ curl -fL --max-time 60 -o /tmp/tmp.OnSQWsGzlD https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64.sha256
++ local expected
+++ awk '{print $1}' /tmp/tmp.OnSQWsGzlD
++ expected=cc721125cd05ee48ed13f7aaae7fb7ae199da6db5504e0978f9918444abe6b17
++ rm -f /tmp/tmp.OnSQWsGzlD
++ [[ -z cc721125cd05ee48ed13f7aaae7fb7ae199da6db5504e0978f9918444abe6b17 ]]
++ local actual
+++ sha256sum /tmp/tmp.kvlcnuHDdj/flux_agent.new
+++ awk '{print $1}'
++ actual=cc721125cd05ee48ed13f7aaae7fb7ae199da6db5504e0978f9918444abe6b17
++ [[ cc721125cd05ee48ed13f7aaae7fb7ae199da6db5504e0978f9918444abe6b17 != \c\c\7\2\1\1\2\5\c\d\0\5\e\e\4\8\e\d\1\3\f\7\a\a\a\e\7\f\b\7\a\e\1\9\9\d\a\6\d\b\5\5\0\4\e\0\9\7\8\f\9\9\1\8\4\4\4\a\b\e\6\b\1\7 ]]
++ echo '✅ SHA256 校验通过'
++ return 0
++ cleanup_legacy_gost_installation
++ cleanup_called=1
++ flux_agent_service_exists
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ [[ -f /etc/systemd/system/flux_agent.service ]]
++ systemctl list-units --full -all
++ grep -Fq flux_agent.service
++ [[ -f /tmp/tmp.kvlcnuHDdj/flux_agent ]]
++ echo '💾 备份当前版本...'
++ cp -f /tmp/tmp.kvlcnuHDdj/flux_agent /tmp/tmp.kvlcnuHDdj/flux_agent.bak
++ mv /tmp/tmp.kvlcnuHDdj/flux_agent.new /tmp/tmp.kvlcnuHDdj/flux_agent
++ chmod +x /tmp/tmp.kvlcnuHDdj/flux_agent
++ /tmp/tmp.kvlcnuHDdj/flux_agent -V
+++ /tmp/tmp.kvlcnuHDdj/flux_agent -V
++ echo '🔎 新版本：new version'
++ echo '🔄 重启服务...'
++ start_flux_agent_service
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl reset-failed flux_agent
++ systemctl start flux_agent
++ [[ start flux_agent == *MainPID* ]]
++ return 0
++ sleep 3
++ :
++ flux_agent_health_ok
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ local p1 p2
+++ flux_agent_main_pid
+++ ensure_service_manager
+++ [[ -n systemd ]]
+++ case "$SERVICE_MANAGER" in
+++ return 0
+++ case "$SERVICE_MANAGER" in
+++ systemctl show -p MainPID --value flux_agent
++ p1=4242
+++ printf %s 4242
+++ tr -d '[:space:]'
++ p1=4242
++ flux_agent_service_is_active
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl is-active --quiet flux_agent
++ [[ is-active --quiet flux_agent == *MainPID* ]]
++ return 0
++ sleep 2
++ :
+++ flux_agent_main_pid
+++ ensure_service_manager
+++ [[ -n systemd ]]
+++ case "$SERVICE_MANAGER" in
+++ return 0
+++ case "$SERVICE_MANAGER" in
+++ systemctl show -p MainPID --value flux_agent
++ p2=4242
+++ printf %s 4242
+++ tr -d '[:space:]'
++ p2=4242
++ flux_agent_service_is_active
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl is-active --quiet flux_agent
++ [[ is-active --quiet flux_agent == *MainPID* ]]
++ return 0
++ [[ -n 4242 ]]
++ [[ 4242 != \0 ]]
++ [[ 4242 == \4\2\4\2 ]]
++ rm -f /tmp/tmp.kvlcnuHDdj/flux_agent.bak
++ echo '✅ 更新完成，服务已重新启动。'
++ assert_equals 1 1 'update_flux_agent should ask for proxy config before downloading'
++ local expected=1
++ local actual=1
++ local 'message=update_flux_agent should ask for proxy config before downloading'
++ [[ 1 != \1 ]]
++ assert_equals 1 1 'update_flux_agent should clean up legacy gost before restarting the agent'
++ local expected=1
++ local actual=1
++ local 'message=update_flux_agent should clean up legacy gost before restarting the agent'
++ [[ 1 != \1 ]]
+++ build_download_url
+++ local ARCH
++++ get_architecture
+++++ uname -m
++++ ARCH=x86_64
++++ case $ARCH in
++++ echo amd64
+++ ARCH=amd64
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ assert_equals https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 'update_flux_agent should honor the prompted proxy choice'
++ local expected=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local actual=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64
++ local 'message=update_flux_agent should honor the prompted proxy choice'
++ [[ https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/gost-amd64 != \h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\i\i\i\i\i\i\i\i\i\7\1\2\5\-\a\r\t\/\f\l\m\x\-\m\a\x\/\r\e\l\e\a\s\e\s\/\d\o\w\n\l\o\a\d\/\v\-\t\e\s\t\/\g\o\s\t\-\a\m\d\6\4 ]]
++ test_update_flux_agent_skips_proxy_prompt_when_not_installed
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.sIEe0CIq3U
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.sIEe0CIq3U
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.sIEe0CIq3U
+++ mktemp -u
++ INSTALL_DIR=/tmp/tmp.Tyf3R7okBZ
++ local ask_called=0
++ local rc=0
++ update_flux_agent
++ echo '🔄 开始更新 flux_agent...'
++ [[ ! -d /tmp/tmp.Tyf3R7okBZ ]]
++ echo '❌ flux_agent 未安装，请先选择安装。'
++ return 1
++ rc=1
++ assert_equals 1 1 'update_flux_agent should fail when the agent is not installed'
++ local expected=1
++ local actual=1
++ local 'message=update_flux_agent should fail when the agent is not installed'
++ [[ 1 != \1 ]]
++ assert_equals 0 0 'update_flux_agent should not prompt for proxy config when the agent is missing'
++ local expected=0
++ local actual=0
++ local 'message=update_flux_agent should not prompt for proxy config when the agent is missing'
++ [[ 0 != \0 ]]
++ test_flux_agent_health_ok_requires_stable_pid
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.N6rV6hvDKf
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.N6rV6hvDKf
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.N6rV6hvDKf
++ SERVICE_MANAGER=systemd
++ local state_dir
+++ mktemp -d
++ state_dir=/tmp/tmp.e3v5Wcw0S0
++ printf '4242\n4242\n'
++ echo 0
++ echo 0
++ local maxok=99
++ STATE_DIR=/tmp/tmp.e3v5Wcw0S0
++ MAXOK_FILE=/tmp/tmp.e3v5Wcw0S0/maxok
++ echo 99
++ reset_health_state
++ echo 0
++ echo 0
++ echo 99
++ flux_agent_health_ok
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ local p1 p2
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=0
+++ n=1
+++ echo 1
+++ sed -n 1p /tmp/tmp.e3v5Wcw0S0/pids
++ p1=4242
+++ printf %s 4242
+++ tr -d '[:space:]'
++ p1=4242
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=0
++ n=1
++ echo 1
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 1 -le 99 ]]
++ sleep 2
++ :
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=1
+++ n=2
+++ echo 2
+++ sed -n 2p /tmp/tmp.e3v5Wcw0S0/pids
++ p2=4242
+++ printf %s 4242
+++ tr -d '[:space:]'
++ p2=4242
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=1
++ n=2
++ echo 2
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 2 -le 99 ]]
++ [[ -n 4242 ]]
++ [[ 4242 != \0 ]]
++ [[ 4242 == \4\2\4\2 ]]
++ reset_health_state
++ echo 0
++ echo 0
++ echo 1
++ flux_agent_health_ok
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ local p1 p2
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=0
+++ n=1
+++ echo 1
+++ sed -n 1p /tmp/tmp.e3v5Wcw0S0/pids
++ p1=4242
+++ printf %s 4242
+++ tr -d '[:space:]'
++ p1=4242
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=0
++ n=1
++ echo 1
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=1
++ [[ 1 -le 1 ]]
++ sleep 2
++ :
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=1
+++ n=2
+++ echo 2
+++ sed -n 2p /tmp/tmp.e3v5Wcw0S0/pids
++ p2=4242
+++ printf %s 4242
+++ tr -d '[:space:]'
++ p2=4242
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=1
++ n=2
++ echo 2
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=1
++ [[ 2 -le 1 ]]
++ return 1
++ reset_health_state
++ echo 0
++ echo 0
++ echo 99
++ printf '1111\n2222\n'
++ flux_agent_health_ok
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ local p1 p2
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=0
+++ n=1
+++ echo 1
+++ sed -n 1p /tmp/tmp.e3v5Wcw0S0/pids
++ p1=1111
+++ printf %s 1111
+++ tr -d '[:space:]'
++ p1=1111
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=0
++ n=1
++ echo 1
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 1 -le 99 ]]
++ sleep 2
++ :
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=1
+++ n=2
+++ echo 2
+++ sed -n 2p /tmp/tmp.e3v5Wcw0S0/pids
++ p2=2222
+++ printf %s 2222
+++ tr -d '[:space:]'
++ p2=2222
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=1
++ n=2
++ echo 2
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 2 -le 99 ]]
++ [[ -n 1111 ]]
++ [[ 1111 != \0 ]]
++ [[ 1111 == \2\2\2\2 ]]
++ printf '0\n0\n'
++ reset_health_state
++ echo 0
++ echo 0
++ flux_agent_health_ok
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ local p1 p2
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=0
+++ n=1
+++ echo 1
+++ sed -n 1p /tmp/tmp.e3v5Wcw0S0/pids
++ p1=0
+++ printf %s 0
+++ tr -d '[:space:]'
++ p1=0
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=0
++ n=1
++ echo 1
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 1 -le 99 ]]
++ sleep 2
++ :
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=1
+++ n=2
+++ echo 2
+++ sed -n 2p /tmp/tmp.e3v5Wcw0S0/pids
++ p2=0
+++ printf %s 0
+++ tr -d '[:space:]'
++ p2=0
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=1
++ n=2
++ echo 2
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 2 -le 99 ]]
++ [[ -n 0 ]]
++ [[ 0 != \0 ]]
++ :
++ reset_health_state
++ echo 0
++ echo 0
++ flux_agent_health_ok
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ local p1 p2
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=0
+++ n=1
+++ echo 1
+++ sed -n 1p /tmp/tmp.e3v5Wcw0S0/pids
++ p1=
+++ printf %s ''
+++ tr -d '[:space:]'
++ p1=
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=0
++ n=1
++ echo 1
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 1 -le 99 ]]
++ sleep 2
++ :
+++ flux_agent_main_pid
+++ local n
++++ cat /tmp/tmp.e3v5Wcw0S0/pid_idx
+++ n=1
+++ n=2
+++ echo 2
+++ sed -n 2p /tmp/tmp.e3v5Wcw0S0/pids
++ p2=
+++ printf %s ''
+++ tr -d '[:space:]'
++ p2=
++ flux_agent_service_is_active
++ local n maxok
+++ cat /tmp/tmp.e3v5Wcw0S0/active_cnt
++ n=1
++ n=2
++ echo 2
+++ cat /tmp/tmp.e3v5Wcw0S0/maxok
++ maxok=99
++ [[ 2 -le 99 ]]
++ [[ -n '' ]]
++ test_update_flux_agent_rolls_back_flapping_binary
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.xK4UcPCrEh
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.xK4UcPCrEh
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.xK4UcPCrEh
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.5zvUljgAHU
++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/tmp/tmp.5zvUljgAHU/flux_agent.service
++ :
++ cat
++ chmod +x /tmp/tmp.5zvUljgAHU/flux_agent
++ local state_dir
+++ mktemp -d
++ state_dir=/tmp/tmp.EzYM8FpZjd
++ echo good
++ echo 0
++ STATE_DIR=/tmp/tmp.EzYM8FpZjd
++ local rc=0
++ update_flux_agent
++ rc=1
++ assert_equals 1 1 'X-P2-11: flapping binary update should fail and roll back'
++ local expected=1
++ local actual=1
++ local 'message=X-P2-11: flapping binary update should fail and roll back'
++ [[ 1 != \1 ]]
++ grep -q 'old good' /tmp/tmp.5zvUljgAHU/flux_agent
++ [[ ! -f /tmp/tmp.5zvUljgAHU/flux_agent.bak ]]
++ flux_agent_service_is_active
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl is-active --quiet flux_agent
++ case "$1" in
+++ cat /tmp/tmp.EzYM8FpZjd/mode
++ [[ good == \f\l\a\p ]]
++ return 0
++ test_extract_leading_semver_matches_go_rules
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.EIy5LUXvB0
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.EIy5LUXvB0
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.EIy5LUXvB0
+++ extract_leading_semver 'gost 1.3.4 (go1.25 linux/amd64)'
+++ local 'raw=gost 1.3.4 (go1.25 linux/amd64)' token candidate
+++ for token in $raw
+++ [[ gost == \d\e\v ]]
+++ candidate=gost
+++ [[ gost =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ for token in $raw
+++ [[ 1.3.4 == \d\e\v ]]
+++ candidate=1.3.4
+++ [[ 1.3.4 =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ printf %s 1.3.4
+++ return 0
++ assert_equals 1.3.4 1.3.4 'extract_leading_semver should read the version from real -V output'
++ local expected=1.3.4
++ local actual=1.3.4
++ local 'message=extract_leading_semver should read the version from real -V output'
++ [[ 1.3.4 != \1\.\3\.\4 ]]
+++ extract_leading_semver '1.3.0 (debian/amd64)'
+++ local 'raw=1.3.0 (debian/amd64)' token candidate
+++ for token in $raw
+++ [[ 1.3.0 == \d\e\v ]]
+++ candidate=1.3.0
+++ [[ 1.3.0 =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ printf %s 1.3.0
+++ return 0
++ assert_equals 1.3.0 1.3.0 'extract_leading_semver should read fullVersion form'
++ local expected=1.3.0
++ local actual=1.3.0
++ local 'message=extract_leading_semver should read fullVersion form'
++ [[ 1.3.0 != \1\.\3\.\0 ]]
+++ extract_leading_semver v1.3.2
+++ local raw=v1.3.2 token candidate
+++ for token in $raw
+++ [[ v1.3.2 == \d\e\v ]]
+++ candidate=1.3.2
+++ [[ 1.3.2 =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ printf %s 1.3.2
+++ return 0
++ assert_equals 1.3.2 1.3.2 'extract_leading_semver should strip a leading v'
++ local expected=1.3.2
++ local actual=1.3.2
++ local 'message=extract_leading_semver should strip a leading v'
++ [[ 1.3.2 != \1\.\3\.\2 ]]
+++ extract_leading_semver dev
+++ local raw=dev token candidate
+++ for token in $raw
+++ [[ dev == \d\e\v ]]
+++ printf %s dev
+++ return 0
++ assert_equals dev dev 'extract_leading_semver should pass dev through'
++ local expected=dev
++ local actual=dev
++ local 'message=extract_leading_semver should pass dev through'
++ [[ dev != \d\e\v ]]
++ extract_leading_semver 'old version'
++ local 'raw=old version' token candidate
++ for token in $raw
++ [[ old == \d\e\v ]]
++ candidate=old
++ [[ old =~ ^[0-9]+(\.[0-9]+)*$ ]]
++ for token in $raw
++ [[ version == \d\e\v ]]
++ candidate=ersion
++ [[ ersion =~ ^[0-9]+(\.[0-9]+)*$ ]]
++ return 1
++ extract_leading_semver 1.3.2-beta1
++ local raw=1.3.2-beta1 token candidate
++ for token in $raw
++ [[ 1.3.2-beta1 == \d\e\v ]]
++ candidate=1.3.2-beta1
++ [[ 1.3.2-beta1 =~ ^[0-9]+(\.[0-9]+)*$ ]]
++ return 1
++ extract_leading_semver ''
++ local raw= token candidate
++ return 1
++ test_update_flux_agent_rejects_downgrade
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.8WLSItzZEW
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.8WLSItzZEW
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.8WLSItzZEW
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.KXqXETOuzT
++ cat
++ chmod +x /tmp/tmp.KXqXETOuzT/flux_agent
++ local state_dir
+++ mktemp -d
++ state_dir=/tmp/tmp.RE4YQior7u
++ STATE_DIR=/tmp/tmp.RE4YQior7u
++ local rc=0
++ update_flux_agent
++ rc=1
++ assert_equals 1 1 'X-P2-12: downgrade update should be rejected'
++ local expected=1
++ local actual=1
++ local 'message=X-P2-12: downgrade update should be rejected'
++ [[ 1 != \1 ]]
++ [[ ! -f /tmp/tmp.RE4YQior7u/curl-called ]]
++ grep -q 1.3.4 /tmp/tmp.KXqXETOuzT/flux_agent
++ test_update_flux_agent_allows_higher_and_incomparable
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.e3W3MSd5Mq
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.e3W3MSd5Mq
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.e3W3MSd5Mq
++ SERVICE_MANAGER=systemd
++ run_update_case '#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo old' 1.3.5
++ local 'installed_body=#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo old' target=1.3.5
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.92EoDJ5mBm
++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/tmp/tmp.92EoDJ5mBm/flux_agent.service
++ :
++ printf '%s\n' '#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo old'
++ chmod +x /tmp/tmp.92EoDJ5mBm/flux_agent
++ TARGET_VERSION=1.3.5
++ local rc=0
++ update_flux_agent
++ assert_equals 0 0 'X-P2-12: update to 1.3.5 should succeed'
++ local expected=0
++ local actual=0
++ local 'message=X-P2-12: update to 1.3.5 should succeed'
++ [[ 0 != \0 ]]
++ grep -q 1.3.5 /tmp/tmp.92EoDJ5mBm/flux_agent
++ [[ ! -f /tmp/tmp.92EoDJ5mBm/flux_agent.bak ]]
++ run_update_case '#!/bin/bash
+echo "old version"' 1.3.2
++ local 'installed_body=#!/bin/bash
+echo "old version"' target=1.3.2
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.hM7lHAOYGy
++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/tmp/tmp.hM7lHAOYGy/flux_agent.service
++ :
++ printf '%s\n' '#!/bin/bash
+echo "old version"'
++ chmod +x /tmp/tmp.hM7lHAOYGy/flux_agent
++ TARGET_VERSION=1.3.2
++ local rc=0
++ update_flux_agent
++ assert_equals 0 0 'X-P2-12: update to 1.3.2 should succeed'
++ local expected=0
++ local actual=0
++ local 'message=X-P2-12: update to 1.3.2 should succeed'
++ [[ 0 != \0 ]]
++ grep -q 1.3.2 /tmp/tmp.hM7lHAOYGy/flux_agent
++ [[ ! -f /tmp/tmp.hM7lHAOYGy/flux_agent.bak ]]
++ test_main_propagates_operation_exit_codes
++ set -euo pipefail
++ local work
+++ mktemp -d
++ work=/tmp/tmp.xUrGv5UVpO
++ local rc=0 file
+++ build_case menu-update-fail 'update_flux_agent() { return 1; }'
+++ local name=menu-update-fail 'stub=update_flux_agent() { return 1; }'
+++ local file=/tmp/tmp.xUrGv5UVpO/menu-update-fail.sh
+++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
+++ cat
+++ printf %s /tmp/tmp.xUrGv5UVpO/menu-update-fail.sh
++ file=/tmp/tmp.xUrGv5UVpO/menu-update-fail.sh
++ rc=0
++ printf '2\n'
++ bash /tmp/tmp.xUrGv5UVpO/menu-update-fail.sh
++ rc=1
++ assert_equals 1 1 'X-P3-6: menu update failure should exit non-zero'
++ local expected=1
++ local actual=1
++ local 'message=X-P3-6: menu update failure should exit non-zero'
++ [[ 1 != \1 ]]
+++ build_case menu-update-ok 'update_flux_agent() { return 0; }'
+++ local name=menu-update-ok 'stub=update_flux_agent() { return 0; }'
+++ local file=/tmp/tmp.xUrGv5UVpO/menu-update-ok.sh
+++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
+++ cat
+++ printf %s /tmp/tmp.xUrGv5UVpO/menu-update-ok.sh
++ file=/tmp/tmp.xUrGv5UVpO/menu-update-ok.sh
++ rc=0
++ printf '2\n'
++ bash /tmp/tmp.xUrGv5UVpO/menu-update-ok.sh
++ assert_equals 0 0 'X-P3-6: menu update success should exit 0'
++ local expected=0
++ local actual=0
++ local 'message=X-P3-6: menu update success should exit 0'
++ [[ 0 != \0 ]]
+++ build_case menu-install-fail 'install_flux_agent() { return 1; }'
+++ local name=menu-install-fail 'stub=install_flux_agent() { return 1; }'
+++ local file=/tmp/tmp.xUrGv5UVpO/menu-install-fail.sh
+++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
+++ cat
+++ printf %s /tmp/tmp.xUrGv5UVpO/menu-install-fail.sh
++ file=/tmp/tmp.xUrGv5UVpO/menu-install-fail.sh
++ rc=0
++ printf '1\n'
++ bash /tmp/tmp.xUrGv5UVpO/menu-install-fail.sh
++ rc=1
++ assert_equals 1 1 'X-P3-6: menu install failure should exit non-zero'
++ local expected=1
++ local actual=1
++ local 'message=X-P3-6: menu install failure should exit non-zero'
++ [[ 1 != \1 ]]
+++ build_case menu-uninstall-fail 'uninstall_flux_agent() { return 1; }'
+++ local name=menu-uninstall-fail 'stub=uninstall_flux_agent() { return 1; }'
+++ local file=/tmp/tmp.xUrGv5UVpO/menu-uninstall-fail.sh
+++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
+++ cat
+++ printf %s /tmp/tmp.xUrGv5UVpO/menu-uninstall-fail.sh
++ file=/tmp/tmp.xUrGv5UVpO/menu-uninstall-fail.sh
++ rc=0
++ printf '3\n'
++ bash /tmp/tmp.xUrGv5UVpO/menu-uninstall-fail.sh
++ rc=1
++ assert_equals 1 1 'X-P3-6: menu uninstall failure should exit non-zero'
++ local expected=1
++ local actual=1
++ local 'message=X-P3-6: menu uninstall failure should exit non-zero'
++ [[ 1 != \1 ]]
+++ build_case direct-fail 'install_flux_agent() { return 1; }'
+++ local name=direct-fail 'stub=install_flux_agent() { return 1; }'
+++ local file=/tmp/tmp.xUrGv5UVpO/direct-fail.sh
+++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
+++ cat
+++ printf %s /tmp/tmp.xUrGv5UVpO/direct-fail.sh
++ file=/tmp/tmp.xUrGv5UVpO/direct-fail.sh
++ rc=0
++ bash /tmp/tmp.xUrGv5UVpO/direct-fail.sh -a panel.example.com:443 -s test-secret
++ rc=1
++ assert_equals 1 1 'X-P3-6: direct install failure should exit non-zero'
++ local expected=1
++ local actual=1
++ local 'message=X-P3-6: direct install failure should exit non-zero'
++ [[ 1 != \1 ]]
+++ build_case direct-ok 'install_flux_agent() { return 0; }'
+++ local name=direct-ok 'stub=install_flux_agent() { return 0; }'
+++ local file=/tmp/tmp.xUrGv5UVpO/direct-ok.sh
+++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
+++ cat
+++ printf %s /tmp/tmp.xUrGv5UVpO/direct-ok.sh
++ file=/tmp/tmp.xUrGv5UVpO/direct-ok.sh
++ rc=0
++ bash /tmp/tmp.xUrGv5UVpO/direct-ok.sh -a panel.example.com:443 -s test-secret
++ assert_equals 0 0 'X-P3-6: direct install success should exit 0'
++ local expected=0
++ local actual=0
++ local 'message=X-P3-6: direct install success should exit 0'
++ [[ 0 != \0 ]]
++ test_install_flux_agent_preserves_legacy_gost_when_download_fails
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.o93SAgCp5n
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.o93SAgCp5n
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.o93SAgCp5n
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.j5o99ldgnY
++ cat
++ chmod +x /tmp/tmp.j5o99ldgnY/flux_agent
++ SERVER_ADDR=panel.example.com:443
++ SECRET=secret
++ DOWNLOAD_URL=https://example.com/gost
++ local cleanup_called=0
++ local rc=0
++ install_flux_agent
++ echo '🚀 开始安装 flux_agent...'
++ ask_proxy_config
++ :
++ ensure_download_url_initialized
++ :
++ get_config_params
++ :
++ check_and_install_tcpkill
++ :
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ mkdir -p /tmp/tmp.j5o99ldgnY
++ local tmp_binary=/tmp/tmp.j5o99ldgnY/flux_agent.new
++ echo '⬇️ 下载 flux_agent 中...'
++ rm -f /tmp/tmp.j5o99ldgnY/flux_agent.new
++ curl -fL https://example.com/gost -o /tmp/tmp.j5o99ldgnY/flux_agent.new
++ return 0
++ [[ ! -f /tmp/tmp.j5o99ldgnY/flux_agent.new ]]
++ rm -f /tmp/tmp.j5o99ldgnY/flux_agent.new
++ echo '❌ 下载失败，请检查网络或下载链接。'
++ exit 1
++ rc=1
++ assert_equals 1 1 'install_flux_agent should fail when the download artifact is missing'
++ local expected=1
++ local actual=1
++ local 'message=install_flux_agent should fail when the download artifact is missing'
++ [[ 1 != \1 ]]
++ assert_equals 0 0 'install_flux_agent should preserve legacy gost when download fails'
++ local expected=0
++ local actual=0
++ local 'message=install_flux_agent should preserve legacy gost when download fails'
++ [[ 0 != \0 ]]
++ [[ -f /tmp/tmp.j5o99ldgnY/flux_agent ]]
++ test_update_flux_agent_preserves_legacy_gost_when_download_fails
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.EG2qN5prKa
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.EG2qN5prKa
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.EG2qN5prKa
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.2hjJ7FIaCa
++ cat
++ chmod +x /tmp/tmp.2hjJ7FIaCa/flux_agent
++ cat
++ chmod +x /tmp/tmp.2hjJ7FIaCa/flux_agent.new
++ local cleanup_called=0
++ local rc=0
++ update_flux_agent
++ echo '🔄 开始更新 flux_agent...'
++ [[ ! -d /tmp/tmp.2hjJ7FIaCa ]]
++ ask_proxy_config
++ PROXY_ENABLED=false
++ DOWNLOAD_URL=https://example.com/gost
++ ensure_download_url_initialized
++ ensure_alpine_runtime_dependencies
++ [[ -f /etc/alpine-release ]]
++ return 0
++ [[ -n https://example.com/gost ]]
++ return 0
++ local current_version cmp_result
+++ flux_agent_installed_version
+++ local raw
+++ [[ -x /tmp/tmp.2hjJ7FIaCa/flux_agent ]]
++++ /tmp/tmp.2hjJ7FIaCa/flux_agent -V
+++ raw='old version'
+++ extract_leading_semver 'old version'
+++ local 'raw=old version' token candidate
+++ for token in $raw
+++ [[ old == \d\e\v ]]
+++ candidate=old
+++ [[ old =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ for token in $raw
+++ [[ version == \d\e\v ]]
+++ candidate=ersion
+++ [[ ersion =~ ^[0-9]+(\.[0-9]+)*$ ]]
+++ return 1
+++ true
++ current_version=
+++ panel_version_cmp '' ''
+++ local a= b=
+++ local -a pa pb
+++ local i n x y
+++ [[ -z '' ]]
+++ return 1
+++ true
++ cmp_result=
++ [[ '' == \-\1 ]]
++ [[ '' == \0 ]]
++ echo '📥 使用下载地址: https://example.com/gost'
++ check_and_install_tcpkill
++ :
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ echo '⬇️ 下载最新版本...'
++ rm -f /tmp/tmp.2hjJ7FIaCa/flux_agent.new
++ curl -fL https://example.com/gost -o /tmp/tmp.2hjJ7FIaCa/flux_agent.new
++ return 0
++ [[ ! -f /tmp/tmp.2hjJ7FIaCa/flux_agent.new ]]
++ echo '❌ 下载失败。'
++ return 1
++ rc=1
++ assert_equals 1 1 'update_flux_agent should fail when the download artifact is missing'
++ local expected=1
++ local actual=1
++ local 'message=update_flux_agent should fail when the download artifact is missing'
++ [[ 1 != \1 ]]
++ assert_equals 0 0 'update_flux_agent should preserve legacy gost when download fails'
++ local expected=0
++ local actual=0
++ local 'message=update_flux_agent should preserve legacy gost when download fails'
++ [[ 0 != \0 ]]
++ [[ ! -f /tmp/tmp.2hjJ7FIaCa/flux_agent.new ]]
++ test_install_flux_agent_writes_json_safe_config
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.9x9KuaJhXD
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.9x9KuaJhXD
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.9x9KuaJhXD
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.Y8cDcdv0T4
++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/tmp/tmp.Y8cDcdv0T4/flux_agent.service
++ SERVER_ADDR='panel"addr'
++ SECRET='sec\ret"1'
++ DOWNLOAD_URL=https://example.com/gost
++ install_flux_agent
++ local actual
++ actual='{
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+}'
++ local 'expected={
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+}'
++ assert_equals '{
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+}' '{
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+}' 'install_flux_agent should JSON-escape config values'
++ local 'expected={
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+}'
++ local 'actual={
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+}'
++ local 'message=install_flux_agent should JSON-escape config values'
++ [[ {
+  "addr": "panel\"addr",
+  "secret": "sec\\ret\"1"
+} != \{\
+\ \ \"\a\d\d\r\"\:\ \"\p\a\n\e\l\\\"\a\d\d\r\"\,\
+\ \ \"\s\e\c\r\e\t\"\:\ \"\s\e\c\\\\\r\e\t\\\"\1\"\
+\} ]]
++ grep -Fqx Environment=GODEBUG=disablethp=1 /tmp/tmp.Y8cDcdv0T4/flux_agent.service
++ test_install_script_bootstraps_bash_for_alpine
++ set -euo pipefail
++ local shebang
+++ head -n 1 /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ shebang='#!/bin/sh'
++ assert_equals '#!/bin/sh' '#!/bin/sh' 'install.sh should start with Alpine'\''s default shell'
++ local 'expected=#!/bin/sh'
++ local 'actual=#!/bin/sh'
++ local 'message=install.sh should start with Alpine'\''s default shell'
++ [[ #!/bin/sh != \#\!\/\b\i\n\/\s\h ]]
++ grep -Fq 'apk add --no-cache bash' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ test_install_flux_agent_uses_openrc
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.6m4jMe4VGH
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.6m4jMe4VGH
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.6m4jMe4VGH
++ local temp_root
+++ mktemp -d
++ temp_root=/tmp/tmp.OJ7cT4jkh0
++ INSTALL_DIR=/tmp/tmp.OJ7cT4jkh0/flux_agent
++ FLUX_AGENT_OPENRC_SERVICE_FILE=/tmp/tmp.OJ7cT4jkh0/init.d/flux_agent
++ SERVICE_MANAGER=openrc
++ SERVER_ADDR=panel.example.com:443
++ SECRET=secret
++ DOWNLOAD_URL=https://example.com/gost
++ local rc_service_calls=
++ local rc_update_calls=
++ install_flux_agent
++ echo '🚀 开始安装 flux_agent...'
++ ask_proxy_config
++ :
++ ensure_download_url_initialized
++ :
++ get_config_params
++ :
++ check_and_install_tcpkill
++ :
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ mkdir -p /tmp/tmp.OJ7cT4jkh0/flux_agent
++ local tmp_binary=/tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
++ echo '⬇️ 下载 flux_agent 中...'
++ rm -f /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
++ curl -fL https://example.com/gost -o /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
++ local output=
++ local url=
++ [[ 4 -gt 0 ]]
++ [[ -fL == \-\o ]]
++ case "$1" in
++ shift
++ [[ 3 -gt 0 ]]
++ [[ https://example.com/gost == \-\o ]]
++ case "$1" in
++ url=https://example.com/gost
++ shift
++ [[ 2 -gt 0 ]]
++ [[ -o == \-\o ]]
++ output=/tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
++ shift 2
++ continue
++ [[ 0 -gt 0 ]]
++ [[ https://example.com/gost == *.sha256 ]]
++ cat
++ chmod +x /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
++ [[ ! -f /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new ]]
++ [[ ! -s /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new ]]
++ verify_downloaded_binary /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new https://example.com/gost
++ local binary_file=/tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
++ local download_url=https://example.com/gost
++ command -v sha256sum
++ [[ -z https://example.com/gost ]]
++ echo '🔐 下载 SHA256 校验文件...'
++ local checksum_file
+++ mktemp
++ checksum_file=/tmp/tmp.QokQNCPYza
++ curl -fL --max-time 60 -o /tmp/tmp.QokQNCPYza https://example.com/gost.sha256
++ local expected
+++ awk '{print $1}' /tmp/tmp.QokQNCPYza
++ expected=ecc1f6f2fca3c4943dba54fd39d85ec07698ea74506799cd4946ba55339d8dc6
++ rm -f /tmp/tmp.QokQNCPYza
++ [[ -z ecc1f6f2fca3c4943dba54fd39d85ec07698ea74506799cd4946ba55339d8dc6 ]]
++ local actual
+++ sha256sum /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new
+++ awk '{print $1}'
++ actual=ecc1f6f2fca3c4943dba54fd39d85ec07698ea74506799cd4946ba55339d8dc6
++ [[ ecc1f6f2fca3c4943dba54fd39d85ec07698ea74506799cd4946ba55339d8dc6 != \e\c\c\1\f\6\f\2\f\c\a\3\c\4\9\4\3\d\b\a\5\4\f\d\3\9\d\8\5\e\c\0\7\6\9\8\e\a\7\4\5\0\6\7\9\9\c\d\4\9\4\6\b\a\5\5\3\3\9\d\8\d\c\6 ]]
++ echo '✅ SHA256 校验通过'
++ return 0
++ cleanup_legacy_gost_installation
++ :
++ flux_agent_service_exists
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ [[ -f /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent ]]
++ mv /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent.new /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent
++ chmod +x /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent
++ echo '✅ 下载完成'
+++ /tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent -V
++ echo '🔎 flux_agent 版本：new version'
++ CONFIG_FILE=/tmp/tmp.OJ7cT4jkh0/flux_agent/config.json
++ echo '📄 创建新配置: config.json'
++ write_flux_agent_config /tmp/tmp.OJ7cT4jkh0/flux_agent/config.json
++ local path=/tmp/tmp.OJ7cT4jkh0/flux_agent/config.json
++ local proxy_json=
++ [[ '' == \t\r\u\e ]]
+++ json_escape panel.example.com:443
+++ local value=panel.example.com:443
+++ value=panel.example.com:443
+++ value=panel.example.com:443
+++ value=panel.example.com:443
+++ value=panel.example.com:443
+++ value=panel.example.com:443
+++ printf %s panel.example.com:443
+++ json_escape secret
+++ local value=secret
+++ value=secret
+++ value=secret
+++ value=secret
+++ value=secret
+++ value=secret
+++ printf %s secret
++ printf '{\n  "addr": "%s",\n  "secret": "%s"%s\n}\n' panel.example.com:443 secret ''
++ GOST_CONFIG=/tmp/tmp.OJ7cT4jkh0/flux_agent/gost.json
++ [[ -f /tmp/tmp.OJ7cT4jkh0/flux_agent/gost.json ]]
++ echo '📄 创建新配置: gost.json'
++ cat
++ chmod 600 /tmp/tmp.OJ7cT4jkh0/flux_agent/config.json /tmp/tmp.OJ7cT4jkh0/flux_agent/gost.json
++ write_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
+++ dirname /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent
++ mkdir -p /tmp/tmp.OJ7cT4jkh0/init.d
++ cat
++ chmod +x /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent
++ enable_and_start_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rc-update add flux_agent default
++ rc_update_calls+='
+add flux_agent default'
++ return 0
++ rc-service flux_agent start
++ rc_service_calls+='
+flux_agent start'
++ [[ start == \s\t\a\t\u\s ]]
++ return 0
++ echo '🔄 检查服务状态...'
++ flux_agent_service_is_active
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rc-service flux_agent status
++ echo '✅ 安装完成，flux_agent服务已启动并设置为开机启动。'
++ echo '📁 配置目录: /tmp/tmp.OJ7cT4jkh0/flux_agent'
+++ flux_agent_service_status
+++ ensure_service_manager
+++ [[ -n openrc ]]
+++ case "$SERVICE_MANAGER" in
+++ return 0
+++ case "$SERVICE_MANAGER" in
+++ rc-service flux_agent status
++ echo '🔧 服务状态: status: started'
++ return 0
++ [[ -x /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent ]]
++ grep -Fq '#!/sbin/openrc-run' /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent
++ grep -Fq 'command="/tmp/tmp.OJ7cT4jkh0/flux_agent/flux_agent"' /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent
++ grep -Fq 'command_background="yes"' /tmp/tmp.OJ7cT4jkh0/init.d/flux_agent
++ command -v openrc-run
++ [[ 
+add flux_agent default == *\a\d\d\ \f\l\u\x\_\a\g\e\n\t\ \d\e\f\a\u\l\t* ]]
++ [[ 
+flux_agent start
+flux_agent status == *\s\t\a\r\t* ]]
++ [[ 
+flux_agent start
+flux_agent status == *\s\t\a\t\u\s* ]]
++ test_remove_flux_agent_service_uses_openrc
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.W4L11aZnzs
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.W4L11aZnzs
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.W4L11aZnzs
++ local temp_root
+++ mktemp -d
++ temp_root=/tmp/tmp.xXGyLiPFEA
++ SERVICE_MANAGER=openrc
++ FLUX_AGENT_OPENRC_SERVICE_FILE=/tmp/tmp.xXGyLiPFEA/init.d/flux_agent
+++ dirname /tmp/tmp.xXGyLiPFEA/init.d/flux_agent
++ mkdir -p /tmp/tmp.xXGyLiPFEA/init.d
++ :
++ local rc_service_calls=
++ local rc_update_calls=
++ stop_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rc-service flux_agent stop
++ disable_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rc-update del flux_agent default
++ remove_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rm -f /tmp/tmp.xXGyLiPFEA/init.d/flux_agent
++ [[ 
+flux_agent stop == *\s\t\o\p* ]]
++ [[ 
+del flux_agent default == *\d\e\l\ \f\l\u\x\_\a\g\e\n\t\ \d\e\f\a\u\l\t* ]]
++ [[ ! -e /tmp/tmp.xXGyLiPFEA/init.d/flux_agent ]]
++ test_cleanup_legacy_gost_installation_removes_service_and_binary
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.UJnIOIO0fi
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.UJnIOIO0fi
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.UJnIOIO0fi
+++ mktemp
++ LEGACY_GOST_BINARY=/tmp/tmp.0haSfQY6fb
+++ mktemp
++ LEGACY_GOST_SERVICE_FILE_ETC=/tmp/tmp.DoGiS3ilyS
+++ mktemp -u
++ LEGACY_GOST_SERVICE_FILE_LIB=/tmp/tmp.RDZX1NEVcX
+++ mktemp -u
++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/tmp/tmp.6ITaq4yyCM
+++ mktemp -d
++ LEGACY_GOST_CONFIG_DIR=/tmp/tmp.FxOIfH7GRX
++ SERVICE_MANAGER=systemd
++ cat
++ :
++ :
++ local systemctl_calls=
++ cleanup_legacy_gost_installation
++ matched_service_files=()
++ local matched_service_files
++ local service_file=
++ local removed_service_file=0
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.DoGiS3ilyS ]]
++ grep -Fq WorkingDirectory=/tmp/tmp.FxOIfH7GRX /tmp/tmp.DoGiS3ilyS
++ grep -Fq ExecStart=/tmp/tmp.FxOIfH7GRX/gost /tmp/tmp.DoGiS3ilyS
++ matched_service_files+=("$service_file")
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.RDZX1NEVcX ]]
++ continue
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.6ITaq4yyCM ]]
++ continue
++ [[ 1 -eq 0 ]]
++ [[ systemd == \s\y\s\t\e\m\d ]]
++ systemctl list-units --full -all
++ grep -Fq gost.service
++ systemctl stop gost
++ systemctl disable gost
++ for service_file in "${matched_service_files[@]}"
++ [[ -f /tmp/tmp.DoGiS3ilyS ]]
++ rm -f /tmp/tmp.DoGiS3ilyS
++ removed_service_file=1
++ [[ -f /tmp/tmp.0haSfQY6fb ]]
++ rm -f /tmp/tmp.0haSfQY6fb
++ [[ -f /tmp/tmp.FxOIfH7GRX/gost ]]
++ [[ 1 == \1 ]]
++ [[ systemd == \s\y\s\t\e\m\d ]]
++ systemctl daemon-reload
++ [[ -e /tmp/tmp.0haSfQY6fb ]]
++ [[ -e /tmp/tmp.DoGiS3ilyS ]]
++ [[ 
+stop gost
+disable gost
+daemon-reload == *\s\t\o\p\ \g\o\s\t* ]]
++ [[ 
+stop gost
+disable gost
+daemon-reload == *\d\i\s\a\b\l\e\ \g\o\s\t* ]]
++ [[ 
+stop gost
+disable gost
+daemon-reload == *\d\a\e\m\o\n\-\r\e\l\o\a\d* ]]
++ test_cleanup_legacy_gost_installation_preserves_unrelated_gost
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.9BoR62oAGV
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.9BoR62oAGV
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.9BoR62oAGV
+++ mktemp
++ LEGACY_GOST_BINARY=/tmp/tmp.yNW20OhO7C
+++ mktemp
++ LEGACY_GOST_SERVICE_FILE_ETC=/tmp/tmp.MYkOZuNy5J
+++ mktemp -u
++ LEGACY_GOST_SERVICE_FILE_LIB=/tmp/tmp.LkBJdwms5B
+++ mktemp -u
++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/tmp/tmp.3ImCYZ92GR
+++ mktemp -d
++ LEGACY_GOST_CONFIG_DIR=/tmp/tmp.wcyUqxhILo
++ SERVICE_MANAGER=systemd
++ cat
++ local systemctl_calls=
++ cleanup_legacy_gost_installation
++ matched_service_files=()
++ local matched_service_files
++ local service_file=
++ local removed_service_file=0
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.MYkOZuNy5J ]]
++ grep -Fq WorkingDirectory=/tmp/tmp.wcyUqxhILo /tmp/tmp.MYkOZuNy5J
++ continue
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.LkBJdwms5B ]]
++ continue
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.3ImCYZ92GR ]]
++ continue
++ [[ 0 -eq 0 ]]
++ return 0
++ [[ -e /tmp/tmp.yNW20OhO7C ]]
++ [[ -e /tmp/tmp.MYkOZuNy5J ]]
++ [[ '' != *\s\t\o\p\ \g\o\s\t* ]]
++ [[ '' != *\d\i\s\a\b\l\e\ \g\o\s\t* ]]
++ test_cleanup_legacy_gost_installation_skips_systemd_on_openrc
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.6GOHIWZ5Fu
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.6GOHIWZ5Fu
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.6GOHIWZ5Fu
+++ mktemp
++ LEGACY_GOST_SERVICE_FILE_ETC=/tmp/tmp.c5htH4J8I9
+++ mktemp -u
++ LEGACY_GOST_SERVICE_FILE_LIB=/tmp/tmp.Yhu7lu4tHK
+++ mktemp -u
++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/tmp/tmp.Dqokh5nPDe
+++ mktemp -d
++ LEGACY_GOST_CONFIG_DIR=/tmp/tmp.e3r2x88o6b
++ SERVICE_MANAGER=openrc
++ cat
++ :
++ :
++ local systemctl_calls=
++ cleanup_legacy_gost_installation
++ matched_service_files=()
++ local matched_service_files
++ local service_file=
++ local removed_service_file=0
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.c5htH4J8I9 ]]
++ grep -Fq WorkingDirectory=/tmp/tmp.e3r2x88o6b /tmp/tmp.c5htH4J8I9
++ grep -Fq ExecStart=/tmp/tmp.e3r2x88o6b/gost /tmp/tmp.c5htH4J8I9
++ matched_service_files+=("$service_file")
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.Yhu7lu4tHK ]]
++ continue
++ for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"
++ [[ ! -f /tmp/tmp.Dqokh5nPDe ]]
++ continue
++ [[ 1 -eq 0 ]]
++ [[ openrc == \s\y\s\t\e\m\d ]]
++ for service_file in "${matched_service_files[@]}"
++ [[ -f /tmp/tmp.c5htH4J8I9 ]]
++ rm -f /tmp/tmp.c5htH4J8I9
++ removed_service_file=1
++ [[ -f /usr/local/bin/gost ]]
++ [[ -f /tmp/tmp.e3r2x88o6b/gost ]]
++ [[ 1 == \1 ]]
++ [[ openrc == \s\y\s\t\e\m\d ]]
++ [[ -z '' ]]
++ [[ ! -e /tmp/tmp.c5htH4J8I9 ]]
++ test_install_script_accepts_proxy_url_env_without_prompt
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.EQaOTCegmi
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.EQaOTCegmi
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.EQaOTCegmi
++ PROXY_ENABLED=
++ PROXY_URL=mirror.example.com
++ ask_proxy_config
++ [[ -n '' ]]
++ [[ -n mirror.example.com ]]
++ PROXY_ENABLED=true
++ return
+++ printf '\n\n'
++ assert_equals true true 'install.sh should treat PROXY_URL as enabling the proxy'
++ local expected=true
++ local actual=true
++ local 'message=install.sh should treat PROXY_URL as enabling the proxy'
++ [[ true != \t\r\u\e ]]
++ assert_equals mirror.example.com mirror.example.com 'install.sh should preserve PROXY_URL when provided via env'
++ local expected=mirror.example.com
++ local actual=mirror.example.com
++ local 'message=install.sh should preserve PROXY_URL when provided via env'
++ [[ mirror.example.com != \m\i\r\r\o\r\.\e\x\a\m\p\l\e\.\c\o\m ]]
++ test_panel_install_script_can_disable_proxy
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.0qchRRuuPa
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.0qchRRuuPa
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.0qchRRuuPa
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.0qchRRuuPa
+++ PANEL_SCRIPT_PATH=/tmp/tmp.0qchRRuuPa
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.0qchRRuuPa
++ PROXY_ENABLED=
++ PROXY_URL=
++ ask_proxy_config
+++ printf 'n\n'
++ [[ -n '' ]]
++ [[ -n '' ]]
++ echo ''
++ echo ===============================================
++ echo '           GitHub 加速配置'
++ echo ===============================================
++ read -r -p '是否开启 GitHub 加速? (Y/n): ' proxy_choice
++ case "$proxy_choice" in
++ PROXY_ENABLED=false
++ echo '已关闭加速，将直连 GitHub'
++ echo ===============================================
++ assert_equals false false 'panel_install.sh should allow disabling proxy'
++ local expected=false
++ local actual=false
++ local 'message=panel_install.sh should allow disabling proxy'
++ [[ false != \f\a\l\s\e ]]
++ local actual
+++ maybe_proxy_url https://github.com/example/release
+++ local url=https://github.com/example/release
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/example/release
+++ return
++ actual=https://github.com/example/release
++ assert_equals https://github.com/example/release https://github.com/example/release 'panel_install.sh should bypass the proxy after disabling it'
++ local expected=https://github.com/example/release
++ local actual=https://github.com/example/release
++ local 'message=panel_install.sh should bypass the proxy after disabling it'
++ [[ https://github.com/example/release != \h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\e\x\a\m\p\l\e\/\r\e\l\e\a\s\e ]]
++ test_panel_install_script_recomputes_compose_urls_after_prompt
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.JgpxNR2Aqy
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.JgpxNR2Aqy
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.JgpxNR2Aqy
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.JgpxNR2Aqy
+++ PANEL_SCRIPT_PATH=/tmp/tmp.JgpxNR2Aqy
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.JgpxNR2Aqy
++ PROXY_ENABLED=
++ PROXY_URL=
++ DOCKER_COMPOSEV4_URL=
++ DOCKER_COMPOSEV6_URL=
++ ask_proxy_config
++ [[ -n '' ]]
++ [[ -n '' ]]
++ echo ''
++ echo ===============================================
++ echo '           GitHub 加速配置'
++ echo ===============================================
++ read -r -p '是否开启 GitHub 加速? (Y/n): ' proxy_choice
+++ printf 'n\n'
++ case "$proxy_choice" in
++ PROXY_ENABLED=false
++ echo '已关闭加速，将直连 GitHub'
++ echo ===============================================
++ ensure_compose_urls_initialized
++ [[ -n '' ]]
+++ resolve_version
+++ [[ -n v-test ]]
+++ echo v-test
+++ return 0
++ RESOLVED_VERSION=v-test
++ set_compose_urls_by_version v-test
++ local version=v-test
+++ maybe_proxy_url https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ local url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ return
++ DOCKER_COMPOSEV4_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ maybe_proxy_url https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
+++ local url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
+++ return
++ DOCKER_COMPOSEV6_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
++ assert_equals https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml 'panel_install.sh should build the compose URL after the interactive proxy choice'
++ local expected=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ local actual=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ local 'message=panel_install.sh should build the compose URL after the interactive proxy choice'
++ [[ https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml != \h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\i\i\i\i\i\i\i\i\i\7\1\2\5\-\a\r\t\/\f\l\m\x\-\m\a\x\/\r\e\l\e\a\s\e\s\/\d\o\w\n\l\o\a\d\/\v\-\t\e\s\t\/\d\o\c\k\e\r\-\c\o\m\p\o\s\e\-\v\4\.\y\m\l ]]
++ test_update_panel_asks_for_proxy_config
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.WHBJS6habk
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.WHBJS6habk
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.WHBJS6habk
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.WHBJS6habk
+++ PANEL_SCRIPT_PATH=/tmp/tmp.WHBJS6habk
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.WHBJS6habk
++ local ask_called=0
++ local calls=
++ update_panel
++ echo '🔄 开始更新面板...'
++ check_docker noinstall
++ DOCKER_CMD=true
++ resolve_panel_deployment
++ calls+=' resolve'
+++ mktemp -d
++ PANEL_DEPLOY_DIR=/tmp/tmp.VGiZbUqtKk
++ ask_proxy_config
++ ask_called=1
++ PROXY_ENABLED=false
++ DOCKER_COMPOSEV4_URL=
++ DOCKER_COMPOSEV6_URL=
++ validate_panel_update_environment
++ calls+=' validate-current'
+++ get_current_db_type
+++ echo sqlite
++ CURRENT_DB_TYPE=sqlite
++ echo '🗄️ 当前数据库类型：sqlite'
++ local current_version cmp_result
+++ get_env_var FLUX_VERSION
+++ local key=FLUX_VERSION
+++ local file=.env
+++ [[ ! -f .env ]]
+++ return 0
++ current_version=
++ local deployed_version
+++ get_deployed_panel_version
+++ local container=flux-panel-backend
+++ local image tag
++++ docker inspect -f '{{.Config.Image}}' flux-panel-backend
+++ image=
+++ return 1
+++ true
++ deployed_version=
++ [[ -n '' ]]
++ [[ -n v-test ]]
++ LATEST_VERSION=v-test
++ echo '📌 指定更新版本：v-test（当前版本：未知）'
+++ panel_version_cmp v-test ''
+++ local a=-test b=
+++ local -a pa pb
+++ local i n x y
+++ [[ -z -test ]]
+++ [[ -z '' ]]
+++ return 1
+++ true
++ cmp_result=
++ [[ '' == \-\1 ]]
++ [[ '' == \0 ]]
++ set_compose_urls_by_version v-test
++ local version=v-test
+++ maybe_proxy_url https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ local url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ return
++ DOCKER_COMPOSEV4_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ maybe_proxy_url https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
+++ local url=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
+++ [[ false == \f\a\l\s\e ]]
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
+++ return
++ DOCKER_COMPOSEV6_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v6.yml
++ echo '🔽 下载最新配置文件...'
++ [[ -f /tmp/tmp.VGiZbUqtKk/docker-compose.yml ]]
++ [[ -f /tmp/tmp.VGiZbUqtKk/docker-compose.yml ]]
+++ get_docker_compose_url
+++ check_ipv6_support
+++ echo https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ DOCKER_COMPOSE_URL=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
+++ basename https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ echo '📡 选择配置文件：docker-compose-v4.yml'
++ download_panel_update_compose https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ calls+=' download'
++ UPDATE_COMPOSE_CANDIDATE=candidate
++ validate_panel_update_compose
++ calls+=' validate-new'
++ echo '💾 备份当前配置和数据库...'
++ create_panel_update_backup sqlite
++ calls+=' backup'
++ UPDATE_BACKUP_DIR=backup
++ echo '⬇️ 拉取最新镜像...'
++ pull_panel_update_images sqlite
++ calls+=' pull'
++ activate_panel_update_files
++ calls+=' activate'
++ echo '🚀 原地重建更新后的服务...'
++ start_panel_after_update sqlite
++ calls+=' start'
++ echo '✅ 更新完成'
++ assert_equals 1 1 'update_panel should ask for proxy config before downloading'
++ local expected=1
++ local actual=1
++ local 'message=update_panel should ask for proxy config before downloading'
++ [[ 1 != \1 ]]
++ assert_equals https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml 'update_panel should honor the prompted proxy choice'
++ local expected=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ local actual=https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml
++ local 'message=update_panel should honor the prompted proxy choice'
++ [[ https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/v-test/docker-compose-v4.yml != \h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\i\i\i\i\i\i\i\i\i\7\1\2\5\-\a\r\t\/\f\l\m\x\-\m\a\x\/\r\e\l\e\a\s\e\s\/\d\o\w\n\l\o\a\d\/\v\-\t\e\s\t\/\d\o\c\k\e\r\-\c\o\m\p\o\s\e\-\v\4\.\y\m\l ]]
++ assert_equals ' resolve validate-current download validate-new backup pull activate start' ' resolve validate-current download validate-new backup pull activate start' 'update_panel should validate, back up, and pull before activating the update'
++ local 'expected= resolve validate-current download validate-new backup pull activate start'
++ local 'actual= resolve validate-current download validate-new backup pull activate start'
++ local 'message=update_panel should validate, back up, and pull before activating the update'
++ [[  resolve validate-current download validate-new backup pull activate start != \ \r\e\s\o\l\v\e\ \v\a\l\i\d\a\t\e\-\c\u\r\r\e\n\t\ \d\o\w\n\l\o\a\d\ \v\a\l\i\d\a\t\e\-\n\e\w\ \b\a\c\k\u\p\ \p\u\l\l\ \a\c\t\i\v\a\t\e\ \s\t\a\r\t ]]
++ test_resolve_panel_deployment_uses_container_labels
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.asmPLxDdbe
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.asmPLxDdbe
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.asmPLxDdbe
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.asmPLxDdbe
+++ PANEL_SCRIPT_PATH=/tmp/tmp.asmPLxDdbe
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.asmPLxDdbe
++ local expected_dir
+++ mktemp -d
++ expected_dir=/tmp/tmp.tW0gMcbkHQ
+++ cd /tmp/tmp.tW0gMcbkHQ
+++ pwd -P
++ expected_dir=/tmp/tmp.tW0gMcbkHQ
++ printf 'JWT_SECRET=test\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n'
++ printf 'services: {}\n'
++ unset PANEL_DEPLOY_DIR COMPOSE_PROJECT_NAME
++ resolve_panel_deployment
++ local backend_container=flux-panel-backend
++ local requested_dir=
++ local label_dir label_project deploy_dir project_name
+++ get_container_compose_label flux-panel-backend com.docker.compose.project.working_dir
+++ local container=flux-panel-backend
+++ local label=com.docker.compose.project.working_dir
+++ local value
++++ docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' flux-panel-backend
+++ value=/tmp/tmp.tW0gMcbkHQ
+++ [[ /tmp/tmp.tW0gMcbkHQ == \<\n\o\ \v\a\l\u\e\> ]]
+++ printf %s /tmp/tmp.tW0gMcbkHQ
++ label_dir=/tmp/tmp.tW0gMcbkHQ
+++ get_container_compose_label flux-panel-backend com.docker.compose.project
+++ local container=flux-panel-backend
+++ local label=com.docker.compose.project
+++ local value
++++ docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' flux-panel-backend
+++ value=flvx-panel
+++ [[ flvx-panel == \<\n\o\ \v\a\l\u\e\> ]]
+++ printf %s flvx-panel
++ label_project=flvx-panel
++ [[ -n /tmp/tmp.tW0gMcbkHQ ]]
++ [[ ! -f /tmp/tmp.tW0gMcbkHQ/docker-compose.yml ]]
++ [[ -n '' ]]
++ [[ -n /tmp/tmp.tW0gMcbkHQ ]]
++ deploy_dir=/tmp/tmp.tW0gMcbkHQ
++ [[ ! -d /tmp/tmp.tW0gMcbkHQ ]]
+++ cd /tmp/tmp.tW0gMcbkHQ
+++ pwd -P
++ deploy_dir=/tmp/tmp.tW0gMcbkHQ
++ [[ -n /tmp/tmp.tW0gMcbkHQ ]]
++ [[ -d /tmp/tmp.tW0gMcbkHQ ]]
+++ cd /tmp/tmp.tW0gMcbkHQ
+++ pwd -P
++ label_dir=/tmp/tmp.tW0gMcbkHQ
++ [[ -n '' ]]
++ project_name=
++ [[ -z '' ]]
++ [[ -n flvx-panel ]]
++ project_name=flvx-panel
++ [[ -n flvx-panel ]]
++ [[ ! flvx-panel =~ ^[a-z0-9][a-z0-9_-]*$ ]]
++ PANEL_DEPLOY_DIR=/tmp/tmp.tW0gMcbkHQ
++ PANEL_BACKEND_CONTAINER=flux-panel-backend
++ PANEL_POSTGRES_CONTAINER=flux-panel-postgres
++ PANEL_COMPOSE_PROJECT=flvx-panel
++ export PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_COMPOSE_PROJECT
++ [[ -n flvx-panel ]]
++ COMPOSE_PROJECT_NAME=flvx-panel
++ export COMPOSE_PROJECT_NAME
++ cd /tmp/tmp.tW0gMcbkHQ
++ echo '📁 部署目录：/tmp/tmp.tW0gMcbkHQ'
++ [[ -n flvx-panel ]]
++ echo '📦 Compose 项目：flvx-panel'
++ assert_equals /tmp/tmp.tW0gMcbkHQ /tmp/tmp.tW0gMcbkHQ 'update should discover the Compose working directory from container labels'
++ local expected=/tmp/tmp.tW0gMcbkHQ
++ local actual=/tmp/tmp.tW0gMcbkHQ
++ local 'message=update should discover the Compose working directory from container labels'
++ [[ /tmp/tmp.tW0gMcbkHQ != \/\t\m\p\/\t\m\p\.\t\W\0\g\M\c\b\k\H\Q ]]
++ assert_equals flvx-panel flvx-panel 'update should preserve the existing Compose project name'
++ local expected=flvx-panel
++ local actual=flvx-panel
++ local 'message=update should preserve the existing Compose project name'
++ [[ flvx-panel != \f\l\v\x\-\p\a\n\e\l ]]
+++ pwd -P
++ assert_equals /tmp/tmp.tW0gMcbkHQ /tmp/tmp.tW0gMcbkHQ 'update should run from the discovered deployment directory'
++ local expected=/tmp/tmp.tW0gMcbkHQ
++ local actual=/tmp/tmp.tW0gMcbkHQ
++ local 'message=update should run from the discovered deployment directory'
++ [[ /tmp/tmp.tW0gMcbkHQ != \/\t\m\p\/\t\m\p\.\t\W\0\g\M\c\b\k\H\Q ]]
++ test_validate_panel_update_environment_rejects_empty_required_values
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.xRGKfvFKRw
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.xRGKfvFKRw
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.xRGKfvFKRw
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.xRGKfvFKRw
+++ PANEL_SCRIPT_PATH=/tmp/tmp.xRGKfvFKRw
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.xRGKfvFKRw
++ local deploy_dir rc=0
+++ mktemp -d
++ deploy_dir=/tmp/tmp.TGlBswio0G
++ printf 'JWT_SECRET=\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n'
++ printf 'services: {}\n'
++ cd /tmp/tmp.TGlBswio0G
++ DOCKER_CMD=true
++ validate_panel_update_environment
++ local key value backend_port frontend_port configured_db_type db_type database_url postgres_password
++ [[ ! -f .env ]]
++ [[ ! -f docker-compose.yml ]]
++ for key in JWT_SECRET BACKEND_PORT FRONTEND_PORT
+++ get_env_var JWT_SECRET
+++ local key=JWT_SECRET
+++ local file=.env
+++ [[ ! -f .env ]]
+++ grep -m1 '^JWT_SECRET=' .env
+++ cut -d= -f2-
++ value=
++ [[ -z '' ]]
++ echo '❌ .env 中 JWT_SECRET 缺失或为空，更新终止'
++ return 1
++ rc=1
++ assert_equals 1 1 'update should reject an empty JWT secret before touching the running service'
++ local expected=1
++ local actual=1
++ local 'message=update should reject an empty JWT secret before touching the running service'
++ [[ 1 != \1 ]]
++ test_backup_sqlite_for_update_pauses_copies_and_unpauses
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.dLcEL61Xot
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.dLcEL61Xot
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.dLcEL61Xot
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.dLcEL61Xot
+++ PANEL_SCRIPT_PATH=/tmp/tmp.dLcEL61Xot
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.dLcEL61Xot
++ local destination calls log_path
+++ mktemp -d
++ destination=/tmp/tmp.EH9bNUwaz3/sqlite
+++ mktemp
++ log_path=/tmp/tmp.YPkQyAu2gB
++ PANEL_BACKEND_CONTAINER=flux-panel-backend
++ backup_sqlite_for_update /tmp/tmp.EH9bNUwaz3/sqlite
++ local destination=/tmp/tmp.EH9bNUwaz3/sqlite
++ local running paused=false
++ trap cleanup_paused_backend EXIT
+++ docker inspect -f '{{.State.Running}}' flux-panel-backend
++ running=true
++ [[ true == \t\r\u\e ]]
++ docker pause flux-panel-backend
++ [[ pause == \i\n\s\p\e\c\t ]]
++ printf ' %s' pause
++ paused=true
++ mkdir -p /tmp/tmp.EH9bNUwaz3/sqlite
++ docker cp flux-panel-backend:/app/data/. /tmp/tmp.EH9bNUwaz3/sqlite
++ [[ cp == \i\n\s\p\e\c\t ]]
++ printf ' %s' cp
++ [[ true == \t\r\u\e ]]
++ docker unpause flux-panel-backend
++ [[ unpause == \i\n\s\p\e\c\t ]]
++ printf ' %s' unpause
++ paused=false
+++ cleanup_paused_backend
+++ [[ false == \t\r\u\e ]]
+++ cat /tmp/tmp.YPkQyAu2gB
++ calls=' pause cp unpause'
++ assert_equals ' pause cp unpause' ' pause cp unpause' 'SQLite backup should pause writes, copy the database volume, then resume the backend'
++ local 'expected= pause cp unpause'
++ local 'actual= pause cp unpause'
++ local 'message=SQLite backup should pause writes, copy the database volume, then resume the backend'
++ [[  pause cp unpause != \ \p\a\u\s\e\ \c\p\ \u\n\p\a\u\s\e ]]
++ test_panel_install_script_uses_default_proxy
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.7BJF7qysyV
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.7BJF7qysyV
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.7BJF7qysyV
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.7BJF7qysyV
+++ PANEL_SCRIPT_PATH=/tmp/tmp.7BJF7qysyV
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.7BJF7qysyV
++ PROXY_ENABLED=true
++ PROXY_URL=
++ local actual
+++ maybe_proxy_url https://github.com/example/release
+++ local url=https://github.com/example/release
+++ [[ true == \f\a\l\s\e ]]
+++ local proxy=gcode.hostcentral.cc
+++ [[ gcode.hostcentral.cc == https://* ]]
+++ [[ gcode.hostcentral.cc == http://* ]]
+++ proxy=https://gcode.hostcentral.cc
+++ echo https://gcode.hostcentral.cc/https://github.com/example/release
++ actual=https://gcode.hostcentral.cc/https://github.com/example/release
++ assert_equals https://gcode.hostcentral.cc/https://github.com/example/release https://gcode.hostcentral.cc/https://github.com/example/release 'panel_install.sh should keep the default proxy when enabled'
++ local expected=https://gcode.hostcentral.cc/https://github.com/example/release
++ local actual=https://gcode.hostcentral.cc/https://github.com/example/release
++ local 'message=panel_install.sh should keep the default proxy when enabled'
++ [[ https://gcode.hostcentral.cc/https://github.com/example/release != \h\t\t\p\s\:\/\/\g\c\o\d\e\.\h\o\s\t\c\e\n\t\r\a\l\.\c\c\/\h\t\t\p\s\:\/\/\g\i\t\h\u\b\.\c\o\m\/\e\x\a\m\p\l\e\/\r\e\l\e\a\s\e ]]
++ test_panel_install_script_accepts_proxy_url_env_without_prompt
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.SMtcfkHiHT
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ VERSION=v-test
++ source /tmp/tmp.SMtcfkHiHT
+++ set -e
+++ export LANG=en_US.UTF-8
+++ LANG=en_US.UTF-8
+++ export LC_ALL=C
+++ LC_ALL=C
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ SCRIPT_VERSION=20261022.01
+++ PINNED_VERSION=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ DEFAULT_PANEL_BACKEND_CONTAINER=flux-panel-backend
+++ DEFAULT_PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+++++ dirname /tmp/tmp.SMtcfkHiHT
++++ cd /tmp
++++ pwd
++++ basename /tmp/tmp.SMtcfkHiHT
+++ PANEL_SCRIPT_PATH=/tmp/tmp.SMtcfkHiHT
+++ DOCKER_INSTALL_SCRIPT_SHA256=7f966774378d94acf1817eb1aba213c21b576d01d1ee2f0656fe36e75ffa1258
++ rm -f /tmp/tmp.SMtcfkHiHT
++ PROXY_ENABLED=
++ PROXY_URL=mirror.example.com
++ ask_proxy_config
++ [[ -n '' ]]
++ [[ -n mirror.example.com ]]
++ PROXY_ENABLED=true
++ return
+++ printf '\n\n'
++ assert_equals true true 'panel_install.sh should treat PROXY_URL as enabling the proxy'
++ local expected=true
++ local actual=true
++ local 'message=panel_install.sh should treat PROXY_URL as enabling the proxy'
++ [[ true != \t\r\u\e ]]
++ assert_equals mirror.example.com mirror.example.com 'panel_install.sh should preserve PROXY_URL when provided via env'
++ local expected=mirror.example.com
++ local actual=mirror.example.com
++ local 'message=panel_install.sh should preserve PROXY_URL when provided via env'
++ [[ mirror.example.com != \m\i\r\r\o\r\.\e\x\a\m\p\l\e\.\c\o\m ]]
++ test_panel_install_script_defaults_proxy_on_eof
++ local rc=0
++ local output
++ local temp_script
+++ mktemp
++ temp_script=/tmp/tmp.IyrLTex2SZ
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/panel_install.sh
++ cat
+++ bash /tmp/tmp.IyrLTex2SZ
++ output='true
+gcode.hostcentral.cc'
++ rm -f /tmp/tmp.IyrLTex2SZ
++ assert_equals 0 0 'panel_install.sh should not fail when proxy prompt receives EOF'
++ local expected=0
++ local actual=0
++ local 'message=panel_install.sh should not fail when proxy prompt receives EOF'
++ [[ 0 != \0 ]]
++ assert_equals 'true
+gcode.hostcentral.cc' 'true
+gcode.hostcentral.cc' 'panel_install.sh should fall back to the default proxy on EOF'
++ local 'expected=true
+gcode.hostcentral.cc'
++ local 'actual=true
+gcode.hostcentral.cc'
++ local 'message=panel_install.sh should fall back to the default proxy on EOF'
++ [[ true
+gcode.hostcentral.cc != \t\r\u\e\
+\g\c\o\d\e\.\h\o\s\t\c\e\n\t\r\a\l\.\c\c ]]
++ test_install_flux_agent_returns_nonzero_when_service_not_active
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.g4dChAwVEf
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.g4dChAwVEf
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.g4dChAwVEf
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.7n7L3cucK3
++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/tmp/tmp.7n7L3cucK3/flux_agent.service
++ SERVER_ADDR=panel.example.com:443
++ SECRET=secret
++ DOWNLOAD_URL=https://example.com/gost
++ local rc=0
++ install_flux_agent
++ rc=1
++ assert_equals 1 1 'R2X-019: install must return 1 when the service fails to start'
++ local expected=1
++ local actual=1
++ local 'message=R2X-019: install must return 1 when the service fails to start'
++ [[ 1 != \1 ]]
++ grep -q $'\346\234\215\345\212\241\345\220\257\345\212\250\345\244\261\350\264\245' /tmp/tmp.7n7L3cucK3/fail.log
++ rc=0
++ install_flux_agent
++ assert_equals 0 0 'R2X-019: install must return 0 when the service is active'
++ local expected=0
++ local actual=0
++ local 'message=R2X-019: install must return 0 when the service is active'
++ [[ 0 != \0 ]]
++ test_systemd_starts_reset_failed_before_start
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.9JN0ko3uaQ
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.9JN0ko3uaQ
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.9JN0ko3uaQ
++ local work
+++ mktemp -d
++ work=/tmp/tmp.FIofUdImeP
++ CALLS_LOG=/tmp/tmp.FIofUdImeP/calls.log
++ RC_CALLS_LOG=/tmp/tmp.FIofUdImeP/rc-calls.log
++ :
++ :
++ SERVICE_MANAGER=systemd
++ start_flux_agent_service
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl reset-failed flux_agent
++ systemctl start flux_agent
++ echo 'start flux_agent'
++ return 0
+++ sed -n 1p /tmp/tmp.FIofUdImeP/calls.log
++ assert_equals 'reset-failed flux_agent' 'reset-failed flux_agent' 'R2X-020: start_flux_agent_service should reset-failed before start'
++ local 'expected=reset-failed flux_agent'
++ local 'actual=reset-failed flux_agent'
++ local 'message=R2X-020: start_flux_agent_service should reset-failed before start'
++ [[ reset-failed flux_agent != \r\e\s\e\t\-\f\a\i\l\e\d\ \f\l\u\x\_\a\g\e\n\t ]]
+++ sed -n 2p /tmp/tmp.FIofUdImeP/calls.log
++ assert_equals 'start flux_agent' 'start flux_agent' 'R2X-020: start_flux_agent_service should start after reset-failed'
++ local 'expected=start flux_agent'
++ local 'actual=start flux_agent'
++ local 'message=R2X-020: start_flux_agent_service should start after reset-failed'
++ [[ start flux_agent != \s\t\a\r\t\ \f\l\u\x\_\a\g\e\n\t ]]
++ :
++ enable_and_start_flux_agent_service
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl daemon-reload
++ echo daemon-reload
++ return 0
++ systemctl enable flux_agent
++ echo 'enable flux_agent'
++ return 0
++ systemctl reset-failed flux_agent
++ systemctl start flux_agent
++ echo 'start flux_agent'
++ return 0
++ local reset_line start_line
+++ awk '$0=="reset-failed flux_agent"{print NR; exit}' /tmp/tmp.FIofUdImeP/calls.log
++ reset_line=3
+++ awk '$0=="start flux_agent"{print NR; exit}' /tmp/tmp.FIofUdImeP/calls.log
++ start_line=4
++ [[ -n 3 ]]
++ [[ -n 4 ]]
++ [[ 3 -lt 4 ]]
++ SERVICE_MANAGER=openrc
++ :
++ start_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rc-service flux_agent start
++ echo 'flux_agent start'
++ return 0
++ enable_and_start_flux_agent_service
++ ensure_service_manager
++ [[ -n openrc ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ rc-update add flux_agent default
++ echo 'add flux_agent default'
++ return 0
++ rc-service flux_agent start
++ echo 'flux_agent start'
++ return 0
++ [[ ! -s /tmp/tmp.FIofUdImeP/calls.log ]]
++ grep -q 'flux_agent start' /tmp/tmp.FIofUdImeP/rc-calls.log
++ test_rollback_restarts_service_from_failed_state
++ set -euo pipefail
++ load_script_without_main /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local script_path=/home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ local temp_file
+++ mktemp
++ temp_file=/tmp/tmp.8j28GfF64E
++ sed '/^# 执行主函数$/,$d' /home/hatch/workspace/.r22-l3-tmp/snap/install.sh
++ VERSION=v-test
++ source /tmp/tmp.8j28GfF64E
+++ '[' -z '5.2.21(1)-release' ']'
+++ REPO=iiiiiiiii7125-art/flmx-max
+++ PINNED_VERSION=
+++ INSTALL_DIR=/etc/flux_agent
+++ FLUX_AGENT_SYSTEMD_SERVICE_FILE=/etc/systemd/system/flux_agent.service
+++ FLUX_AGENT_OPENRC_SERVICE_FILE=/etc/init.d/flux_agent
+++ FLUX_AGENT_OPENRC_PIDFILE=/run/flux_agent.pid
+++ LEGACY_GOST_BINARY=/usr/local/bin/gost
+++ LEGACY_GOST_CONFIG_DIR=/etc/gost
+++ LEGACY_GOST_SERVICE_FILE_ETC=/etc/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_LIB=/lib/systemd/system/gost.service
+++ LEGACY_GOST_SERVICE_FILE_USR_LIB=/usr/lib/systemd/system/gost.service
+++ SERVICE_MANAGER=
+++ PROXY_ENABLED=
+++ PROXY_URL=
+++ getopts a:s: opt
++ rm -f /tmp/tmp.8j28GfF64E
++ SERVICE_MANAGER=systemd
+++ mktemp -d
++ INSTALL_DIR=/tmp/tmp.4rg3Isp73u
++ printf '#!/bin/bash\necho "bad flap"\n'
++ printf '#!/bin/bash\necho "old good"\n'
++ chmod +x /tmp/tmp.4rg3Isp73u/flux_agent /tmp/tmp.4rg3Isp73u/flux_agent.bak
++ local work
+++ mktemp -d
++ work=/tmp/tmp.8rqpo1xsj6
++ RB_STATE=/tmp/tmp.8rqpo1xsj6
++ :
++ rollback_flux_agent
++ flux_agent_service_is_active
++ ensure_service_manager
++ [[ -n systemd ]]
++ case "$SERVICE_MANAGER" in
++ return 0
++ case "$SERVICE_MANAGER" in
++ systemctl is-active --quiet flux_agent
++ case "$1" in
++ [[ -f /tmp/tmp.8rqpo1xsj6/active ]]
++ grep -q $'\345\267\262\345\233\236\346\273\232\345\210\260\346\227\247\347\211\210\346\234\254\345\271\266\351\207\215\345\220\257\346\210\220\345\212\237' /tmp/tmp.8rqpo1xsj6/rollback.log
++ grep -q 'old good' /tmp/tmp.4rg3Isp73u/flux_agent
++ echo 'install script tests passed'
+install script tests passed

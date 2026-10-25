@@ -1,0 +1,4 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+forward {'id': 14, 'name': 'r22-l2-fd', 'tunnelId': 6, 'remoteAddr': '203.0.113.9:9001', 'maxConn': 5, 'ipMaxConn': 0, 'status': 1, 'inPort': 59355}
+=== leg fwdlist end failures=0 [] ===
+2026-10-25 14:05:45

@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+journal matches since=2026-10-25 13:52:08 pattern='DeleteCLimiters': 2
+   Oct 25 13:52:09 ip-172-26-4-158 flux_agent[139774]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792936329009086664
+   Oct 25 13:52:09 ip-172-26-4-158 flux_agent[139774]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_8"},"requestId":"1_1792936329009086664","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 13:52:08 pattern='rule_conn_limit_8': 1
+   Oct 25 13:52:09 ip-172-26-4-158 flux_agent[139774]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_8"},"requestId":"1_1792936329009086664","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 13:52:08 pattern='user_conn_limit': 0
+=== leg journal end failures=0 [] ===

@@ -1,0 +1,5 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+LISTEN 0      4096                                        *:22001            *:*          
+LISTEN 0      4096                                        *:22001            *:*          
+LISTEN 0      4096                                        *:22001            *:*    users:(("flux_agent",pid=144787,fd=4))      
+UNCONN 0      0                                    *:22001            *:*    users:(("flux_agent",pid=144787,fd=9))      

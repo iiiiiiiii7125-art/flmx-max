@@ -1,0 +1,53 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR13BRInboundSubsectionCounts
+2026/10/25 13:49:06 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (250.055µs)
+2026/10/25 13:49:06 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (262.413µs)
+2026/10/25 13:49:06 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (138.929µs)
+2026/10/25 13:49:06 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (105.198µs)
+2026/10/25 13:49:06 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:06 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:06 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (235.003µs)
+2026/10/25 13:49:06 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13BRInboundSubsectionCounts (0.28s)
+=== RUN   TestR13BRUnknownBackupTypeRejected
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (135.633µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (170.946µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (125.268µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (106.51µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:07 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:07 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (137.396µs)
+2026/10/25 13:49:07 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13BRUnknownBackupTypeRejected (0.32s)
+=== RUN   TestR13BRImportedInboundProtocolRederived
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (163.155µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (184.968µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (133.591µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (207.272µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:07 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:07 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (186.951µs)
+2026/10/25 13:49:07 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13BRImportedInboundProtocolRederived (0.23s)
+=== RUN   TestR13T2cImportTunnelsSkipsOutOfDomainFlowAndRatio
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (140.471µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (165.858µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (565.869µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (175.763µs)
+2026/10/25 13:49:07 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:07 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:07 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (231.788µs)
+2026/10/25 13:49:07 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13T2cImportTunnelsSkipsOutOfDomainFlowAndRatio (0.33s)
+=== RUN   TestR14F08ImportStripsSnellPoisonedRouting
+2026/10/25 13:49:08 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (330.396µs)
+2026/10/25 13:49:08 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (242.554µs)
+2026/10/25 13:49:08 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (159.309µs)
+2026/10/25 13:49:08 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (131.697µs)
+2026/10/25 13:49:08 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:08 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:08 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (145.829µs)
+2026/10/25 13:49:08 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR14F08ImportStripsSnellPoisonedRouting (0.28s)
+PASS
+ok  	go-backend/internal/store/repo	1.478s

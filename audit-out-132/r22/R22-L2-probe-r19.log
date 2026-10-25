@@ -1,0 +1,33 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR19F03DeleteForwardBatchRemovesConnLimiter
+2026/10/25 13:46:11 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (2.554013ms)
+2026/10/25 13:46:11 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (262.224µs)
+2026/10/25 13:46:11 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (4.120744ms)
+2026/10/25 13:46:11 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (285.899µs)
+2026/10/25 13:46:11 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:46:11 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:46:11 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (163.185µs)
+2026/10/25 13:46:11 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F03DeleteForwardBatchRemovesConnLimiter (0.56s)
+=== RUN   TestR19F03DeleteForwardControlRemovesConnLimiter
+2026/10/25 13:46:12 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (258.178µs)
+2026/10/25 13:46:12 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (2.307263ms)
+2026/10/25 13:46:12 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (172.278µs)
+2026/10/25 13:46:12 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (113.35µs)
+2026/10/25 13:46:12 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:46:12 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:46:12 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (252.489µs)
+2026/10/25 13:46:12 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F03DeleteForwardControlRemovesConnLimiter (0.58s)
+=== RUN   TestR19F03DeleteForwardWithoutLimitsStillDeletesRuleLimiterByID
+2026/10/25 13:46:13 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (234.562µs)
+2026/10/25 13:46:13 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (161.122µs)
+2026/10/25 13:46:13 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (7.000876ms)
+2026/10/25 13:46:13 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (312.049µs)
+2026/10/25 13:46:13 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:46:13 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:46:13 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (260.39µs)
+2026/10/25 13:46:13 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F03DeleteForwardWithoutLimitsStillDeletesRuleLimiterByID (0.79s)
+PASS
+ok  	go-backend/internal/http/handler	1.987s

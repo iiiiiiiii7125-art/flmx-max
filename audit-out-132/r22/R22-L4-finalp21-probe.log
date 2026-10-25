@@ -1,0 +1,16 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR22L4FinalP21PredicateTable
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 nil -> false
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 empty -> false
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 forwards-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 tunnels-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 nodes-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 inbounds-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 inboundRelays-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 speedLimits-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 userTunnels-only -> true
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 userSubscriptions-only -> false
+    r22_l4_probe_test.go:32: CELL FINAL-P2-1 inboundKernels-only -> false
+--- PASS: TestR22L4FinalP21PredicateTable (0.00s)
+PASS
+ok  	go-backend/internal/http/handler	0.036s

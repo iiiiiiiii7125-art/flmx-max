@@ -1,0 +1,4 @@
+TOTAL_CALL_POINTS=190
+MAPPED=189
+MISSING=1
+MISSING line=382 path=/captcha/generate

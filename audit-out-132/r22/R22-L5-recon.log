@@ -1,0 +1,52 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== recon start=2026-10-25T13:38:29Z initiator=R22-L5 ===
+Linux ip-172-26-4-158 6.1.0-53-cloud-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.187-1 (2026-09-07) x86_64 GNU/Linux
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
+--- agent:
+active
+135305
+0
+--- gost:
+-rw------- 1 root root 23 Oct 25 13:00 /etc/flux_agent/gost.json
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+Traceback (most recent call last):
+--- root layout:
+flmx-panel
+machine-setup.sh
+new1
+newmachine-setup.log
+panel-cred.txt
+r22-stage
+--- api helper/token:
+cleanup-xc.sh
+create-leg-inbounds.py
+deploy-new2.log
+deploy-new2.sh
+deploy-new3.log
+deploy-new3.sh
+deploy-panel.sh
+deploy-r22.log
+deploy-r22.sh
+docker-compose.yml
+Dockerfile.backend
+Dockerfile.frontend
+dist
+--- served index:
+GET / http=200 size=8776
+57ab941e7fc6025b52700b2bf36f2241  /tmp/r22-l5-served-index.html
+--- panel version:
+404 page not found
+
+--- containers:
+  File "<string>", line 1, in <module>
+TypeError: object of type 'NoneType' has no len()
+vite-frontend Up 6 minutes (healthy) flmx-frontend:new4
+flux-panel-backend Up 8 minutes (healthy) flmx-backend:new4
+flux-panel-postgres Up 4 hours (healthy) postgres:16-alpine
+--- xray:
+/etc/flux_agent/kernels/xray/run/config.json
+xray inbounds [(59940, 'vless')]
+policy null
+=== recon end ===

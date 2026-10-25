@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937108379}
+tunnel id: 4 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792937108378, 'engine': '', 'flow': 1, 'id': 4, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l2-t1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937108461}
+tunnel id: 5 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792937108460, 'engine': '', 'flow': 1, 'id': 5, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': -1, 'ipPreference': '', 'name': 'r22-l2-t2', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===

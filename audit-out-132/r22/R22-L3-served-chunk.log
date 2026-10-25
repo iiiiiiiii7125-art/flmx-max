@@ -1,0 +1,26 @@
+=== served-chunk start 2026-10-25T14:00:39Z ===
+--- container status:
+CONNECT status: HTTP/1.1 200 Connection Established
+vite-frontend flmx-frontend:new4 Up 28 minutes (healthy)
+flux-panel-backend flmx-backend:new4 Up 30 minutes (healthy)
+--- served index:
+CONNECT status: HTTP/1.1 200 Connection Established
+http=200
+57ab941e7fc6025b52700b2bf36f2241  /tmp/r22l3-index.html
+--- served main js/css (names from local dist index):
+CONNECT status: HTTP/1.1 200 Connection Established
+74052f2733bc829bfaba2fc9f53fa669  -
+b5b7e863a51fd34ee70191a6b95a97ea  -
+js http=200
+css http=200
+--- local dist md5s:
+57ab941e7fc6025b52700b2bf36f2241  /home/hatch/workspace/.r22-l3-tmp/snap/vite-frontend/dist/index.html
+74052f2733bc829bfaba2fc9f53fa669  /home/hatch/workspace/.r22-l3-tmp/snap/vite-frontend/dist/assets/index-DoduTIGi.js
+b5b7e863a51fd34ee70191a6b95a97ea  /home/hatch/workspace/.r22-l3-tmp/snap/vite-frontend/dist/assets/index-AKC-1l3F.css
+--- container paneld md5:
+CONNECT status: HTTP/1.1 200 Connection Established
+1ca4572b454bf6450455f057bcc8bb55  /app/paneld
+--- /flow/test:
+CONNECT status: HTTP/1.1 200 Connection Established
+flow http=200
+=== served-chunk end 2026-10-25T14:00:49Z ===

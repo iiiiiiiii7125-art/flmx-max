@@ -1,0 +1,35 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+PY-OK
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+=== R22-L5 trojan start=2026-10-25T13:47:42Z initiator=R22-L5 ===
+db backup /root/r22-l5/gost.db.pre-trojan.bak md5=ce4e156a5f364d2d1990fce6ba8f60ba
+=== leg dbbackup end failures=0 [] ===
+dummy listening 127.0.0.1:59909
+create inbound http=200 code=0 msg=操作成功
+PASS create inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936064399, 'data': {'id': 4}}
+inbound id: 4 idle: 5
+PASS inbound listed with idle :: [{'id': 4, 'kernelId': 1, 'kernelType': 'xray', 'kernelStatus': 'running', 'external': False, 'nodeId': 1, 'nodeName': 'w10-test', 'nodeServerIp': '16.146.199.68:6366', 'name': 'r22-l5-trojan', 'protocol': 'trojan', 'listen': '0.0.0.0', 'port': 59906, 'network': 'tcp', 'settings': {'password': '<password-redacted>'}, 'transport': {'type': 'tcp'}, 'security': {'type': 'tls', 'sni': 'r22min.test', 'fingerprint': 'chrome', 'certMode': 'self'}, 'extra': '', 'shareAddressMode': 'auto', 'shareAddress': '16.146.199.68:6366', 'shareHost': '', 'remark': '', 'relayOnly': False, 'relayCount': 0, 'acceptProxyProtocol': False, 'relayWhitelist': False, 'whitelistExtra': '', 'enabled': True, 'uploadBytes': 0, 'downloadBytes': 0, 'createdTime': 1792936062834, 'updatedTime': 1792936062834, 'outboundId': 0, 'splitRules': [], 'outboundIpStrategy': 'auto', 'connIdleSeconds': 5, 'meteringEnabled': False, 'meteringActive': False}]
+xray config has 59906 after 5s
+policy: {"levels": {"1": {"connIdle": 5}}}
+trojan inbound clients=2 pwlen=[20, 32]
+R22-TR-1: CLOSED 5.06s (header_sent 0.02s)
+dummy accepts after TR-1: 0
+PASS R22-TR-1 CLOSED 3.5-6.5s :: ('CLOSED', 5.057260036468506)
+R22-TR-1r: CLOSED 5.05s (header_sent 0.00s)
+dummy accepts after TR-1r: 0
+PASS R22-TR-1r CLOSED 3.5-6.5s :: ('CLOSED', 5.047760248184204)
+R22-TR-1m: STILL_OPEN after 30.0s (header_sent 0.00s)
+dummy accepts after TR-1m: 0
+PASS R22-TR-1m STILL_OPEN@30s :: ('STILL_OPEN', 30)
+--- delete trojan inbound by EXPLICIT id=4
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936106931}
+PASS inbound gone from list
+xray inbound ports after delete: [59940]
+PASS xray config has no 59906/59914 :: [59940]
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+=== R22-L5 trojan end failures=0 [] ===

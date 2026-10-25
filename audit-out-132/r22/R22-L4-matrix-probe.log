@@ -1,0 +1,169 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR22L4MatrixR1Singbox
+    r22_l4_probe_test.go:63: CELL R1 r22-ss1 password="r22-ss-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-ss2 password="r22-ss-pw2"
+    r22_l4_probe_test.go:63: CELL R1 r22-ss3 password="r22-ss-pw3"
+    r22_l4_probe_test.go:63: CELL R1 r22-tj1 password="r22-tj-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-hy1 password="r22-hy2-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-tu1 password="r22-tuic-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-at1 password="r22-at-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-na1 password="r22-na-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-so1 password="r22-so-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-ht1 password="r22-ht-pw1"
+    r22_l4_probe_test.go:63: CELL R1 r22-vm1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:63: CELL R1 r22-vl1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:63: CELL R1 r22-tu1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:63: CELL R1 r22-sn1 psk="r22-snell-psk1"
+    r22_l4_probe_test.go:63: CELL R1 r22-sn2 psk="r22-snell-psk2"
+    r22_l4_probe_test.go:63: CELL R1 r22-ss1 cipher="aes-256-gcm"
+    r22_l4_probe_test.go:63: CELL R1 r22-ss2 cipher="aes-128-gcm"
+    r22_l4_probe_test.go:63: CELL R1 r22-vm1 cipher="aes-128-gcm"
+    r22_l4_probe_test.go:63: CELL R1 r22-vl1 encryption="mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r22_l4_probe_test.go:63: CELL R1 r22-vl1 flow="xtls-rprx-vision"
+    r22_l4_probe_test.go:63: CELL R1 r22-na1 username="r22-na-user"
+    r22_l4_probe_test.go:63: CELL R1 r22-so1 username="r22-so-user"
+    r22_l4_probe_test.go:63: CELL R1 r22-ht1 username="r22-ht-user"
+    r22_l4_probe_test.go:93: CELL R1 r22-ss1 plugin=obfs plugin-opts{mode=http host=r22ob.example.net}
+    r22_l4_probe_test.go:101: CELL R1 r22-ss2 plugin=shadow-tls plugin-opts{password=r22-stls-pw1 host=stls.r22.example.net version=3} addr=203.0.113.43:28403
+    r22_l4_probe_test.go:110: CELL R1 r22-sn2 shadow-tls{password=r22-stls-pw2 host=sn.r22.example.net version=3} addr=203.0.113.44:28413
+    r22_l4_probe_test.go:117: CELL R1 r22-vl1 reality-opts{public-key=32 zero bytes RawURL short-id=cdef}
+    r22_l4_probe_test.go:123: CELL R1 r22-hy1 obfs=salamander obfs-password=r22-hy2-obfs1 ports=30000-30010
+    r22_l4_probe_test.go:129: CELL R1 r22-sn1 version=6 mode=unshaped
+    r22_l4_probe_test.go:134: CELL R1 r22-vm1 alterId=1
+    r22_l4_probe_test.go:63: CELL R1 r22-tu1 congestion-controller="bbr"
+--- PASS: TestR22L4MatrixR1Singbox (0.00s)
+=== RUN   TestR22L4MatrixR2Clash
+    r22_l4_probe_test.go:164: CELL R2 r22-ss1 password="r22-ss-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-tj1 password="r22-tj-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-hy1 password="r22-hy2-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-tu1 password="r22-tuic-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-na1 password="r22-na-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-so1 password="r22-so-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-ht1 password="r22-ht-pw1"
+    r22_l4_probe_test.go:164: CELL R2 r22-ss-obfs password="r22-ss-pw2"
+    r22_l4_probe_test.go:164: CELL R2 r22-vm1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:164: CELL R2 r22-vl1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:164: CELL R2 r22-tu1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:164: CELL R2 r22-sn1 psk="r22-snell-psk1"
+    r22_l4_probe_test.go:164: CELL R2 r22-ss1 cipher="aes-256-gcm"
+    r22_l4_probe_test.go:164: CELL R2 r22-vm1 cipher="aes-128-gcm"
+    r22_l4_probe_test.go:164: CELL R2 r22-vl1 encryption="mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r22_l4_probe_test.go:164: CELL R2 r22-vl1 flow="xtls-rprx-vision"
+    r22_l4_probe_test.go:164: CELL R2 r22-na1 username="r22-na-user"
+    r22_l4_probe_test.go:164: CELL R2 r22-so1 username="r22-so-user"
+    r22_l4_probe_test.go:164: CELL R2 r22-ht1 username="r22-ht-user"
+    r22_l4_probe_test.go:184: CELL R2 r22-ss-obfs plugin=obfs plugin-opts{mode=tls host=r22cob.example.net}
+    r22_l4_probe_test.go:190: CELL R2 r22-vl1 reality-opts{public-key=32 zero bytes RawURL short-id=ab12}
+    r22_l4_probe_test.go:195: CELL R2 r22-hy1 obfs=salamander obfs-password=r22-hy2-obfs1
+    r22_l4_probe_test.go:200: CELL R2 r22-sn1 version=6 mode=unshaped
+    r22_l4_probe_test.go:204: CELL R2 r22-vm1 alterId=1
+--- PASS: TestR22L4MatrixR2Clash (0.00s)
+=== RUN   TestR22L4MatrixR3URI
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-ss1 password="r22-uri-ss-pw1"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-tj1 password="r22-uri-tj-pw1"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-hy1 password="r22-uri-hy2-pw1"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-tu1 password="r22-uri-tuic-pw1"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-at1 password="r22-uri-at-pw1"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-so1 password="r22-uri-so-pw1"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-vm1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-vl1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-tu1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-ss1 cipher="aes-256-gcm"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-vm1 cipher="aes-128-gcm"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-vl1 encryption="mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-vl1 flow="xtls-rprx-vision"
+    r22_l4_probe_test.go:231: CELL R3 r22-uri-so1 username="r22-uri-so-user"
+    r22_l4_probe_test.go:251: CELL R3 r22-uri-ss1 plugin=obfs plugin-opts{mode=http host=r22uob.example.net}
+    r22_l4_probe_test.go:257: CELL R3 r22-uri-vl1 reality-opts{public-key=32 zero bytes RawURL short-id=ab12}
+    r22_l4_probe_test.go:262: CELL R3 r22-uri-hy1 obfs=salamander obfs-password=r22-uri-hy2-obfs
+    r22_l4_probe_test.go:266: CELL R3 r22-uri-vm1 alterId=1
+    r22_l4_probe_test.go:272: CELL R3 snell:// explicit-reject="第 1 行：暂不支持 snell:// 链接" nodes=0
+    r22_l4_probe_test.go:277: CELL R3 http:// explicit-reject="第 1 行：http(s):// 是订阅地址，请单独粘贴在输入框里" nodes=0
+--- PASS: TestR22L4MatrixR3URI (0.00s)
+=== RUN   TestR22L4MatrixR4Surge
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-ss1 password="r22-sg-ss-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-ss2 password="r22-sg-ss-pw2"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-loon password="r22-sg-loon-pw2"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-tj1 password="r22-sg-tj-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-hy1 password="r22-sg-hy2-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-tu1 password="r22-sg-tuic-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-at1 password="r22-sg-at-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-so1 password="r22-sg-so-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-ht1 password="r22-sg-ht-pw1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-vm1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-tu1 uuid="22222222-2222-4222-8222-222222222222"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-sn1 psk="r22-sg-sn-psk1"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-sn2 psk="r22-sg-sn-psk2"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-sn3 psk="r22-sg-sn-psk3"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-ss1 cipher="aes-256-gcm"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-ss2 cipher="aes-128-gcm"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-loon cipher="aes-128-gcm"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-vm1 cipher="aes-128-gcm"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-so1 username="r22-sg-so-user"
+    r22_l4_probe_test.go:305: CELL R4 r22-sg-ht1 username="r22-sg-ht-user"
+    r22_l4_probe_test.go:331: CELL R4 r22-sg-ss1 plugin=obfs plugin-opts{mode=http host=r22sgob.example.net}
+    r22_l4_probe_test.go:336: CELL R4 r22-sg-ss2 plugin=shadow-tls plugin-opts{password=r22-sg-stls-pw host=stls.r22.example.net version=3}
+    r22_l4_probe_test.go:341: CELL R4 r22-sg-hy1 obfs=salamander obfs-password=r22-sg-hy2-obfs ports=30000-30010
+    r22_l4_probe_test.go:347: CELL R4 r22-sg-sn3 obfs-opts{mode=http host=snob.r22.example.net}
+    r22_l4_probe_test.go:352: CELL R4 r22-sg-sn1 version=6 mode=unshaped
+    r22_l4_probe_test.go:356: CELL R4 r22-sg-vm1 alterId=1
+    r22_l4_probe_test.go:362: CELL R4 vless explicit-reject="第 1 行：暂不支持 vless 类型的节点" nodes=0
+    r22_l4_probe_test.go:364: CELL R4 C9 reality-opts N/A: parseSurgeLine has no reality carrier; vless rows are explicitly rejected
+--- PASS: TestR22L4MatrixR4Surge (0.00s)
+=== RUN   TestR22L4MatrixR4SnellShadowTLSCompanion
+    r22_l4_probe_test.go:373: CELL R4-companion shadow-tls{password=r22-sg-sn-stls-pw host=snst.r22.example.net version=3}
+    r22_l4_probe_test.go:377: CELL R4-companion psk=r22-sg-sn-stls-psk
+    r22_l4_probe_test.go:381: CELL R4-companion version=6 mode=unshaped
+--- PASS: TestR22L4MatrixR4SnellShadowTLSCompanion (0.00s)
+=== RUN   TestR22L4A2Predicates
+    r22_l4_probe_test.go:393: CELL A2-01 fingerprint Chrome->chrome healed
+    r22_l4_probe_test.go:397: CELL A2-01 fingerprint bogus123 explicit-reject
+    r22_l4_probe_test.go:403: CELL A2-02 xhttp-opts.mode PACKET-UP->packet-up healed
+    r22_l4_probe_test.go:407: CELL A2-02 xhttp-opts.mode bogus explicit-reject
+    r22_l4_probe_test.go:413: CELL A2-03 plugin-opts.mode TLS->tls healed
+    r22_l4_probe_test.go:417: CELL A2-03 plugin-opts.mode bogus explicit-reject
+    r22_l4_probe_test.go:423: CELL A2-04 obfs-opts.mode shadowtls->shadow-tls healed
+    r22_l4_probe_test.go:428: CELL A2-04 snell v6 mode UNSHAPED->unshaped healed
+    r22_l4_probe_test.go:432: CELL A2-04 obfs-opts.mode bogus explicit-reject
+    r22_l4_probe_test.go:438: CELL A2-05 vmess cipher aes-128-gcm carried
+    r22_l4_probe_test.go:442: CELL A2-05 vmess cipher bogus explicit-reject
+    r22_l4_probe_test.go:448: CELL A2-06 vless flow xtls-rprx-vision carried
+    r22_l4_probe_test.go:452: CELL A2-06 vless flow bogus explicit-reject
+    r22_l4_probe_test.go:458: CELL A2-07 hy2 obfs salamander carried
+    r22_l4_probe_test.go:462: CELL A2-07 hy2 obfs bogus explicit-reject
+    r22_l4_probe_test.go:468: CELL A2-08 tuic congestion-controller bbr carried
+    r22_l4_probe_test.go:472: CELL A2-08 tuic congestion-controller new-reno explicit-reject
+    r22_l4_probe_test.go:478: CELL A2-09 ss cipher chacha20 (mihomo-only) imported verbatim
+    r22_l4_probe_test.go:482: CELL A2-09 ss cipher bogus explicit-reject
+    r22_l4_probe_test.go:488: CELL A2-10 vless encryption legal string carried verbatim
+    r22_l4_probe_test.go:492: CELL A2-10 vless encryption bogus explicit-reject
+    r22_l4_probe_test.go:499: CELL A2-11 reality-opts legal pbk+sid carried verbatim
+    r22_l4_probe_test.go:503: CELL A2-11 reality-opts bad pbk explicit-reject
+    r22_l4_probe_test.go:507: CELL A2-11 reality-opts bad sid explicit-reject
+--- PASS: TestR22L4A2Predicates (0.00s)
+=== RUN   TestR22L4FacesConsumption
+    r22_l4_probe_test.go:536: CELL faces bad fingerprint: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad flow: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad tuic-cc: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad hy2-obfs: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad vmess-cipher: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad ss-cipher: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad enc: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad ss-plugin-mode: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad snell-obfs: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad reality-pbk: all four faces reject
+    r22_l4_probe_test.go:536: CELL faces bad reality-sid: all four faces reject
+    r22_l4_probe_test.go:557: CELL faces heal fingerprint Chrome->chrome, storage untouched, sing-box utls.fingerprint=chrome
+    r22_l4_probe_test.go:563: CELL faces heal xhttp-opts.mode PACKET-UP->packet-up
+    r22_l4_probe_test.go:569: CELL faces heal snell v6 mode UNSHAPED->unshaped
+    r22_l4_probe_test.go:586: CELL faces good flow: all four faces accept
+    r22_l4_probe_test.go:586: CELL faces good tuic-cc: all four faces accept
+    r22_l4_probe_test.go:586: CELL faces good vmess-cipher: all four faces accept
+    r22_l4_probe_test.go:586: CELL faces good enc: all four faces accept
+    r22_l4_probe_test.go:593: CELL faces ss chacha20: clash-only accept (singbox/other/xray-chain reject)
+    r22_l4_probe_test.go:603: CELL faces skip: bad fingerprint skipped by both sing-box and clash renderers
+    r22_l4_probe_test.go:611: CELL faces uri: legal ENC emitted verbatim in proxyURI
+    r22_l4_probe_test.go:617: CELL faces uri: bad ENC emits no link
+--- PASS: TestR22L4FacesConsumption (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.026s

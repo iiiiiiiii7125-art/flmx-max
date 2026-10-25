@@ -1,0 +1,13 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== client-f1:
+Traceback (most recent call last):
+  File "/root/r22-l2/R22-L2-vless.py", line 36, in <module>
+    hdr = s.recv(2)
+          ^^^^^^^^^
+TimeoutError: timed out
+RC=1
+DONE f1 14:10:48
+== dummy-f1:
+[14:09:45.414] dummy listening port=59951 mode=silent timeout=120.0
+== ps:
+root      146179  0.0  0.4  14416  9356 ?        Ss   14:09   0:00 python3 R22-L2-dummy.py 59951 silent 120

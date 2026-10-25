@@ -1,0 +1,28 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937135266}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937137358}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937139442}
+tunnel id: 6 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792937139439, 'engine': '', 'flow': 1, 'id': 6, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': -2, 'ipPreference': '', 'name': 'r22-l2-t3', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937139538}
+forward id: 14
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_14'] refs=['rule_conn_limit_14']
+PASS gost has new limiter :: ['rule_conn_limit_14']
+PASS service refs new limiter :: ['rule_conn_limit_14']
+=== leg mkfwd end failures=0 [] ===
+[::]:22
+[::]:5355
+[::]:6365
+[::]:6366
+[fd7a:115c:a1e0::a228:5d23]%tailscale0:39969
+2026-10-25 14:05:41

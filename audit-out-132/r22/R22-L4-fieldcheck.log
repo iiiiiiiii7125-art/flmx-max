@@ -1,0 +1,44 @@
+inboundView backend keys: 44 ['id', 'kernelId', 'kernelType', 'kernelStatus', 'external', 'importedSummary', 'importedParams', 'nodeId', 'nodeName', 'nodeServerIp', 'name', 'protocol', 'listen', 'port', 'network', 'settings', 'transport', 'security', 'extra', 'shareAddressMode', 'shareAddress', 'shareHost', 'remark', 'relayOnly', 'relayCount', 'acceptProxyProtocol', 'relayWhitelist', 'whitelistExtra', 'enabled', 'uploadBytes', 'downloadBytes', 'createdTime', 'updatedTime', 'probe', 'sourceId', 'sourceName', 'outboundId', 'outboundName', 'outboundMissing', 'splitRules', 'outboundIpStrategy', 'connIdleSeconds', 'meteringEnabled', 'meteringActive']
+InboundApiItem frontend fields: 44 ['id', 'kernelId', 'kernelType', 'kernelStatus', 'external', 'sourceId', 'sourceName', 'importedSummary', 'importedParams', 'nodeId', 'nodeName', 'nodeServerIp', 'name', 'protocol', 'listen', 'port', 'network', 'settings', 'transport', 'security', 'extra', 'shareAddressMode', 'shareAddress', 'shareHost', 'remark', 'relayOnly', 'relayCount', 'acceptProxyProtocol', 'relayWhitelist', 'whitelistExtra', 'enabled', 'uploadBytes', 'downloadBytes', 'createdTime', 'updatedTime', 'probe', 'outboundId', 'outboundName', 'outboundMissing', 'splitRules', 'outboundIpStrategy', 'meteringEnabled', 'meteringActive', 'connIdleSeconds']
+inbound backend-only: []
+inbound frontend-only: []
+nested Settings backend: 13 ['uuid', 'username', 'flow', 'password', 'method', 'snellVersion', 'snellMode', 'masquerade', 'backendPort', 'portHopping', 'encryptionAuth', 'encryptionMode', 'encryptionSecret']
+nested InboundSettings frontend: 13 ['uuid', 'flow', 'encryptionAuth', 'encryptionMode', 'encryptionSecret', 'password', 'method', 'snellVersion', 'snellMode', 'masquerade', 'backendPort', 'portHopping', 'username']
+nested Settings backend-only: []
+nested Settings frontend-only: []
+nested Transport backend: 5 ['type', 'path', 'host', 'serviceName', 'mode']
+nested InboundTransport frontend: 5 ['type', 'path', 'host', 'serviceName', 'mode']
+nested Transport backend-only: []
+nested Transport frontend-only: []
+nested Security backend: 19 ['type', 'sni', 'alpn', 'fingerprint', 'certMode', 'certPem', 'keyPem', 'certFile', 'keyFile', 'acmeEmail', 'acmeDns', 'acmeDnsKey', 'acmeDnsSecret', 'realityDest', 'realityPrivateKey', 'realityPublicKey', 'realityShortIds', 'realityMinClientVer', 'shadowTlsPassword']
+nested InboundSecurity frontend: 20 ['type', 'sni', 'alpn', 'fingerprint', 'certMode', 'certPem', 'keyPem', 'certFile', 'keyFile', 'realityDest', 'realityPrivateKey', 'realityPublicKey', 'realityShortIds', 'realityMinClientVer', 'shadowTlsPassword', 'acmeEmail', 'acmeDns', 'acmeDnsKey', 'acmeDnsSecret', 'acmeDnsSet']
+nested Security backend-only: []
+nested Security frontend-only: ['acmeDnsSet']
+kernelSecurityView wrapper keys: ['certPem', 'keyPem', 'acmeDnsKey', 'acmeDnsSecret', 'acmeDnsSet']
+kernelSecurityView body: 
+	kernel.Security
+	CertPEM       string `json:"certPem,omitempty"`
+	KeyPEM        string `json:"keyPem,omitempty"`
+	ACMEDNSKey    string `json:"acmeDnsKey,omitempty"`
+	ACMEDNSSecret string `json:"acmeDnsSecret,omitempty"`
+	ACMEDNSSet    bool   `json:"acmeDnsSet,omitempty"`
+ListNodes body found: True
+ListNodes map keys (span scan): 36 ['authType', 'expTime', 'expiryReminderDismissed', 'expiryTime', 'extraIPs', 'flow', 'flowMiB', 'flowResetTime', 'forwardMode', 'host', 'http', 'id', 'interfaceName', 'inx', 'ip', 'isRemote', 'name', 'num', 'port', 'remark', 'remoteConfig', 'remoteToken', 'remoteUrl', 'renewalCycle', 'roleId', 'serverIp', 'socks', 'sshConfig', 'status', 'sudoMode', 'tcpListenAddr', 'tls', 'udpListenAddr', 'user', 'username', 'version']
+syncRemoteNodeStatuses keys: []
+attachNodeLatency keys: []
+NodeApiItem fields: 28 ['id', 'name', 'status', 'forwardMode', 'sshConfig', 'inx', 'remark', 'expiryTime', 'renewalCycle', 'ip', 'serverIp', 'serverIpV4', 'serverIpV6', 'extraIPs', 'port', 'tcpListenAddr', 'udpListenAddr', 'version', 'http', 'tls', 'socks', 'isRemote', 'remoteUrl', 'remoteToken', 'remoteConfig', 'interfaceName', 'expiryReminderDismissed', 'syncError']
+node.tsx reads of node.latency: 3
+frontend-wide 'latency': see grep
+node.tsx reads of node.latencyTargets: 3
+frontend-wide 'latencyTargets': see grep
+node.tsx reads of node.panelVersion: 0
+frontend-wide 'panelVersion': see grep
+node.tsx reads of node.versionWarning: 0
+frontend-wide 'versionWarning': see grep
+node.tsx reads of node.syncError: 7
+frontend-wide 'syncError': see grep
+NodeApiItem declares latency: False
+NodeApiItem declares latencyTargets: False
+NodeApiItem declares panelVersion: False
+NodeApiItem declares versionWarning: False
+NodeApiItem has index signature: True

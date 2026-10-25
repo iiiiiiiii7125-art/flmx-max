@@ -1,0 +1,13 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+/etc/flux_agent/kernels/xray
+/etc/flux_agent/kernels/xray/run
+/etc/flux_agent/kernels/xray/run/config.json
+/etc/flux_agent/kernels/xray/bin
+/etc/flux_agent/kernels/xray/bin/26.10.21
+/etc/flux_agent/kernels/xray/bin/26.10.21/xray
+/etc/flux_agent/kernels/xray/bin/26.10.21/geoip.dat
+/etc/flux_agent/kernels/xray/bin/26.10.21/LICENSE
+/etc/flux_agent/kernels/xray/bin/26.10.21/README.md
+/etc/flux_agent/kernels/xray/bin/26.10.21/geosite.dat
+26.10.21
+config.json

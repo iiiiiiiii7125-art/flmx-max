@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+wrote xc-ss-blake3.json
+LISTEN 0      4096                                127.0.0.1:59948      0.0.0.0:*          
+XC_SS_UP
+2026/10/25 14:21:27.092339 [Info] infra/conf/serial: Reading config: &{Name:xc-ss-blake3.json Format:json}
+2026/10/25 14:21:27.093027 [Warning] common/errors: The feature Shadowsocks (with no Forward Secrecy, etc.) is deprecated, not recommended for using and might be removed. Please migrate to VLESS Encryption as soon as possible.
+2026/10/25 14:21:27.093804 [Warning] core: Xray 26.10.21 started

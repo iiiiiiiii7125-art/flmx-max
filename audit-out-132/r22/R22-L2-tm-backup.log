@@ -1,0 +1,8 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+92c0b4edc4fd506a7a2537ab858a6a3e  /root/r22-l2/gost.db.pristine
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+MainPID=141602
+ActiveState=active
+/etc/flux_agent/flux_agent
+/root/new1/stage/flux_agent
+/root/r22-stage/flux_agent

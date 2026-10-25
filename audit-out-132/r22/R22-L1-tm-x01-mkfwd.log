@@ -1,0 +1,9 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936323327}
+forward id: 8
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+PASS gost has new limiter :: ['rule_conn_limit_8']
+PASS service refs new limiter :: ['rule_conn_limit_8']
+=== leg mkfwd end failures=0 [] ===

@@ -1,0 +1,13 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936572124}
+forward id: 10
+PASS forward id found
+gost services=6 climiters=['rule_conn_limit_10', 'rule_conn_limit_8'] refs=['rule_conn_limit_10', 'rule_conn_limit_8']
+PASS gost has new limiter :: ['rule_conn_limit_10', 'rule_conn_limit_8']
+PASS service refs new limiter :: ['rule_conn_limit_10', 'rule_conn_limit_8']
+=== leg mkfwd end failures=0 [] ===
+forward {'id': 10, 'name': 'r22-l1-fd3', 'tunnelId': 2, 'remoteAddr': '203.0.113.9:9003', 'maxConn': 5, 'ipMaxConn': 0, 'status': 1, 'inPort': 32584}
+forward {'id': 9, 'name': 'r22-l1-off2', 'tunnelId': 2, 'remoteAddr': '203.0.113.9:9002', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 18340}
+forward {'id': 8, 'name': 'r22-l1-sw1', 'tunnelId': 2, 'remoteAddr': '203.0.113.9:9001', 'maxConn': 5, 'ipMaxConn': 0, 'status': 1, 'inPort': 44876}
+=== leg fwdlist end failures=0 [] ===

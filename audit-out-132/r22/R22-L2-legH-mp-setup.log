@@ -1,0 +1,21 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938217466}
+tunnel id: 7 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792938217465, 'engine': '', 'flow': 1, 'id': 7, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l2-mp', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938217562}
+forward id: 16
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_16'] refs=['rule_conn_limit_16']
+PASS gost has new limiter :: ['rule_conn_limit_16']
+PASS service refs new limiter :: ['rule_conn_limit_16']
+=== leg mkfwd end failures=0 [] ===
+inserted forward_port row id=24 forward=16 node=1 port=22001
+forward 16 ports now: [(1, 22001), (1, 63107)]
+PASS forward has 2 ports :: [(1, 22001), (1, 63107)]
+=== leg addport end failures=0 [] ===
+(1, 22001)
+(1, 63107)
+=== leg dbquery end failures=0 [] ===

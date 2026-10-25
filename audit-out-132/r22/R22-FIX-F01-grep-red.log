@@ -1,0 +1,10 @@
+cmd: grep -rn generateCaptcha vite-frontend/src scripts/
+vite-frontend/src/api/index.ts:382:export const generateCaptcha = () => Network.post(`/captcha/generate`);
+exit=0
+cmd: grep -rn verifyCaptcha vite-frontend/src scripts/
+vite-frontend/src/api/index.ts:383:export const verifyCaptcha = (data: { captchaId: string; trackData: string }) =>
+exit=0
+cmd: grep -rn captcha/generate go-backend/
+exit=1
+cmd: grep -rn generateCaptcha vite-frontend/src scripts/ | wc -l (call sites excluding definition)
+0

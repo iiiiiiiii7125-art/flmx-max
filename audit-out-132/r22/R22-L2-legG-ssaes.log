@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== client-g4:
+socks connected elapsed=0.00
+burst1-sent elapsed=0.00
+SUMMARY first_data=-1 last_data=-1 close=10.01 idle_since_last_data=-1
+RC=0
+DONE g4 14:23:06
+== dummy-g4 tail:
+[14:23:04.522] dummy EOF elapsed=10.00 total_recv=1048576
+[14:23:04.522] dummy DONE elapsed=10.00

@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R22-L5 trojan start=2026-10-25T13:46:42Z initiator=R22-L5 ===
+db backup /root/r22-l5/gost.db.pre-trojan.bak md5=ce4e156a5f364d2d1990fce6ba8f60ba
+=== leg dbbackup end failures=0 [] ===
+dummy listening 127.0.0.1:59909
+create inbound http=200 code=-1 msg=TLS 需要填写域名 (SNI)
+FAIL create inbound code 0 :: {'code': -1, 'msg': 'TLS 需要填写域名 (SNI)', 'ts': 1792936002541}

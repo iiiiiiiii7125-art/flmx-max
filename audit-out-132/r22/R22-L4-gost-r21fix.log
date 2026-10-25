@@ -1,0 +1,297 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR19F02ApiUpdateNil
+=== RUN   TestR19F02ApiUpdateNil/admission
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNiladmission2543136508/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNiladmission2543136508/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/auther
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilauther1479836638/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilauther1479836638/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/bypass
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilbypass601354047/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilbypass601354047/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/chain
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilchain2201106689/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilchain2201106689/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/conn_limiter
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilconn_limiter3761390306/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilconn_limiter3761390306/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/hop
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilhop10824091/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilhop10824091/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/hosts
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilhosts2825006781/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilhosts2825006781/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/ingress
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilingress888587193/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilingress888587193/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/limiter
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNillimiter73637221/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNillimiter73637221/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/observer
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilobserver2310816468/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilobserver2310816468/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/rate_limiter
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilrate_limiter2982559770/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilrate_limiter2982559770/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/recorder
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilrecorder2045889900/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilrecorder2045889900/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/resolver
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilresolver4069968003/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilresolver4069968003/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/router
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilrouter1554582921/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilrouter1554582921/001/gost.json
+=== RUN   TestR19F02ApiUpdateNil/sd
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilsd144233550/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateNilsd144233550/001/gost.json
+--- PASS: TestR19F02ApiUpdateNil (0.02s)
+    --- PASS: TestR19F02ApiUpdateNil/admission (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/auther (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/bypass (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/chain (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/conn_limiter (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/hop (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/hosts (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/ingress (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/limiter (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/observer (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/rate_limiter (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/recorder (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/resolver (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/router (0.00s)
+    --- PASS: TestR19F02ApiUpdateNil/sd (0.00s)
+=== RUN   TestR19F02ApiDeleteNil
+=== RUN   TestR19F02ApiDeleteNil/admission
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNiladmission74617203/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNiladmission74617203/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/auther
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilauther3943337281/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilauther3943337281/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/bypass
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilbypass2511575807/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilbypass2511575807/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/chain
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilchain1849362591/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilchain1849362591/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/conn_limiter
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilconn_limiter699335091/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilconn_limiter699335091/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/hop
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilhop968448777/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilhop968448777/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/hosts
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilhosts1354875855/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilhosts1354875855/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/ingress
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilingress3906705404/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilingress3906705404/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/limiter
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNillimiter212031918/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNillimiter212031918/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/observer
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilobserver4016272774/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilobserver4016272774/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/rate_limiter
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilrate_limiter3463935550/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilrate_limiter3463935550/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/recorder
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilrecorder4180823418/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilrecorder4180823418/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/resolver
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilresolver2926197290/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilresolver2926197290/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/router
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilrouter4290154118/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilrouter4290154118/001/gost.json
+=== RUN   TestR19F02ApiDeleteNil/sd
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilsd492792843/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteNilsd492792843/001/gost.json
+--- PASS: TestR19F02ApiDeleteNil (0.02s)
+    --- PASS: TestR19F02ApiDeleteNil/admission (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/auther (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/bypass (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/chain (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/conn_limiter (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/hop (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/hosts (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/ingress (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/limiter (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/observer (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/rate_limiter (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/recorder (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/resolver (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/router (0.00s)
+    --- PASS: TestR19F02ApiDeleteNil/sd (0.01s)
+=== RUN   TestR19F02ApiUpdateServiceNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateServiceNil616355698/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateServiceNil616355698/001/gost.json
+--- PASS: TestR19F02ApiUpdateServiceNil (0.50s)
+=== RUN   TestR19F02ApiUpdateServicesNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateServicesNil1628869616/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiUpdateServicesNil1628869616/001/gost.json
+--- PASS: TestR19F02ApiUpdateServicesNil (0.00s)
+=== RUN   TestR19F02ApiDeleteServiceNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteServiceNil2951775322/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteServiceNil2951775322/001/gost.json
+--- PASS: TestR19F02ApiDeleteServiceNil (0.01s)
+=== RUN   TestR19F02ApiDeleteServicesNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteServicesNil256937686/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiDeleteServicesNil256937686/001/gost.json
+--- PASS: TestR19F02ApiDeleteServicesNil (0.00s)
+=== RUN   TestR19F02ApiPauseServiceNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiPauseServiceNil325600617/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiPauseServiceNil325600617/001/gost.json
+--- PASS: TestR19F02ApiPauseServiceNil (0.00s)
+=== RUN   TestR19F02ApiResumeServiceNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiResumeServiceNil3786307159/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiResumeServiceNil3786307159/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiResumeServiceNil3786307159/001/gost.json
+--- PASS: TestR19F02ApiResumeServiceNil (0.50s)
+=== RUN   TestR19F02ApiGetServiceStatusNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiGetServiceStatusNil2755258349/001/gost.json
+--- PASS: TestR19F02ApiGetServiceStatusNil (0.00s)
+=== RUN   TestR19F02ApiPauseServicesNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiPauseServicesNil2710553096/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiPauseServicesNil2710553096/001/gost.json
+--- PASS: TestR19F02ApiPauseServicesNil (0.00s)
+=== RUN   TestR19F02ApiResumeServicesNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiResumeServicesNil2165096305/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiResumeServicesNil2165096305/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiResumeServicesNil2165096305/001/gost.json
+--- PASS: TestR19F02ApiResumeServicesNil (0.51s)
+=== RUN   TestR19F02ApiRollbackPausedServicesNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiRollbackPausedServicesNil1396534315/001/gost.json
+--- PASS: TestR19F02ApiRollbackPausedServicesNil (0.00s)
+=== RUN   TestR19F02ApiRollbackResumedServicesNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiRollbackResumedServicesNil2050489770/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiRollbackResumedServicesNil2050489770/001/gost.json
+--- PASS: TestR19F02ApiRollbackResumedServicesNil (0.01s)
+=== RUN   TestR19F02ApiReloadStripsNil
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestR19F02ApiReloadStripsNil3696033737/001/gost.json
+--- PASS: TestR19F02ApiReloadStripsNil (0.01s)
+PASS
+ok  	github.com/go-gost/x/api	1.628s
+?   	github.com/go-gost/x/api/service	[no test files]
+=== RUN   TestHealPersistedServices
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestHealPersistedServices3029687987/001/gost.json
+--- PASS: TestHealPersistedServices (0.00s)
+=== RUN   TestHealPersistedServicesCleanIsNoop
+--- PASS: TestHealPersistedServicesCleanIsNoop (0.00s)
+=== RUN   TestHealPersistedChainsLimiters
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestHealPersistedChainsLimiters1794186395/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestHealPersistedChainsLimiters1794186395/001/gost.json
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestHealPersistedChainsLimiters1794186395/001/gost.json
+--- PASS: TestHealPersistedChainsLimiters (0.00s)
+=== RUN   TestHealPersistedChainsLimitersCleanIsNoop
+--- PASS: TestHealPersistedChainsLimitersCleanIsNoop (0.00s)
+=== RUN   TestHealPersistedRLimiters
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestHealPersistedRLimiters1519569692/001/gost.json
+--- PASS: TestHealPersistedRLimiters (0.00s)
+=== RUN   TestR19F02StripNilConfigItems
+--- PASS: TestR19F02StripNilConfigItems (0.00s)
+=== RUN   TestR19F02StripNilConfigItemsNoop
+--- PASS: TestR19F02StripNilConfigItemsNoop (0.00s)
+=== RUN   TestR19F02OnUpdatePanicReleasesLock
+--- PASS: TestR19F02OnUpdatePanicReleasesLock (0.00s)
+=== RUN   TestPruneUnreferencedCLimiters
+--- PASS: TestPruneUnreferencedCLimiters (0.00s)
+=== RUN   TestPruneUnreferencedCLimitersCleanIsNoop
+--- PASS: TestPruneUnreferencedCLimitersCleanIsNoop (0.00s)
+=== RUN   TestPruneUnreferencedCLimitersNilSafe
+--- PASS: TestPruneUnreferencedCLimitersNilSafe (0.00s)
+=== RUN   TestHealPersistedOrphanCLimiters
+💾 节点配置已持久化到 /home/hatch/workspace/.r22-l4-tmp/TestHealPersistedOrphanCLimiters3530105195/001/gost.json
+--- PASS: TestHealPersistedOrphanCLimiters (0.00s)
+=== RUN   TestHealPersistedOrphanCLimitersCleanIsNoop
+--- PASS: TestHealPersistedOrphanCLimitersCleanIsNoop (0.00s)
+PASS
+ok  	github.com/go-gost/x/config	0.011s
+?   	github.com/go-gost/x/config/cmd	[no test files]
+=== RUN   TestR19F02LoaderNilItems
+=== RUN   TestR19F02LoaderNilItems/logger
+    r19_fix_f02_test.go:135: loader.Load(nil logger) clean error: logger config is nil
+=== RUN   TestR19F02LoaderNilItems/auther
+    r19_fix_f02_test.go:135: loader.Load(nil auther) clean error: auther config is nil
+=== RUN   TestR19F02LoaderNilItems/admission
+    r19_fix_f02_test.go:135: loader.Load(nil admission) clean error: admission config is nil
+=== RUN   TestR19F02LoaderNilItems/bypass
+    r19_fix_f02_test.go:135: loader.Load(nil bypass) clean error: bypass config is nil
+=== RUN   TestR19F02LoaderNilItems/resolver
+    r19_fix_f02_test.go:135: loader.Load(nil resolver) clean error: resolver config is nil
+=== RUN   TestR19F02LoaderNilItems/hosts
+    r19_fix_f02_test.go:135: loader.Load(nil hosts) clean error: hosts config is nil
+=== RUN   TestR19F02LoaderNilItems/ingress
+    r19_fix_f02_test.go:135: loader.Load(nil ingress) clean error: ingress config is nil
+=== RUN   TestR19F02LoaderNilItems/router
+    r19_fix_f02_test.go:135: loader.Load(nil router) clean error: router config is nil
+=== RUN   TestR19F02LoaderNilItems/sd
+    r19_fix_f02_test.go:135: loader.Load(nil sd) clean error: sd config is nil
+=== RUN   TestR19F02LoaderNilItems/observer
+    r19_fix_f02_test.go:135: loader.Load(nil observer) clean error: observer config is nil
+=== RUN   TestR19F02LoaderNilItems/recorder
+    r19_fix_f02_test.go:135: loader.Load(nil recorder) clean error: recorder config is nil
+=== RUN   TestR19F02LoaderNilItems/limiter
+    r19_fix_f02_test.go:135: loader.Load(nil limiter) clean error: limiter config is nil
+=== RUN   TestR19F02LoaderNilItems/conn_limiter
+    r19_fix_f02_test.go:135: loader.Load(nil conn limiter) clean error: conn limiter config is nil
+=== RUN   TestR19F02LoaderNilItems/rate_limiter
+    r19_fix_f02_test.go:135: loader.Load(nil rate limiter) clean error: rate limiter config is nil
+=== RUN   TestR19F02LoaderNilItems/hop
+    r19_fix_f02_test.go:135: loader.Load(nil hop) clean error: hop config is nil
+=== RUN   TestR19F02LoaderNilItems/chain
+    r19_fix_f02_test.go:135: loader.Load(nil chain) clean error: chain config is nil
+=== RUN   TestR19F02LoaderNilItems/service
+    r19_fix_f02_test.go:135: loader.Load(nil service) clean error: service config is nil
+--- PASS: TestR19F02LoaderNilItems (0.02s)
+    --- PASS: TestR19F02LoaderNilItems/logger (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/auther (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/admission (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/bypass (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/resolver (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/hosts (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/ingress (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/router (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/sd (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/observer (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/recorder (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/limiter (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/conn_limiter (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/rate_limiter (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/hop (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/chain (0.00s)
+    --- PASS: TestR19F02LoaderNilItems/service (0.00s)
+=== RUN   TestR19F02LoaderNilAfterValid
+    r19_fix_f02_test.go:158: loader.Load(nil after valid) clean error: limiter config is nil
+--- PASS: TestR19F02LoaderNilAfterValid (0.00s)
+PASS
+ok  	github.com/go-gost/x/config/loader	0.032s
+?   	github.com/go-gost/x/config/parsing	[no test files]
+?   	github.com/go-gost/x/config/parsing/admission	[no test files]
+?   	github.com/go-gost/x/config/parsing/auth	[no test files]
+testing: warning: no tests to run
+PASS
+ok  	github.com/go-gost/x/config/parsing/bypass	0.006s [no tests to run]
+?   	github.com/go-gost/x/config/parsing/chain	[no test files]
+?   	github.com/go-gost/x/config/parsing/hop	[no test files]
+?   	github.com/go-gost/x/config/parsing/hosts	[no test files]
+?   	github.com/go-gost/x/config/parsing/ingress	[no test files]
+?   	github.com/go-gost/x/config/parsing/limiter	[no test files]
+?   	github.com/go-gost/x/config/parsing/logger	[no test files]
+?   	github.com/go-gost/x/config/parsing/node	[no test files]
+?   	github.com/go-gost/x/config/parsing/observer	[no test files]
+?   	github.com/go-gost/x/config/parsing/parser	[no test files]
+?   	github.com/go-gost/x/config/parsing/recorder	[no test files]
+?   	github.com/go-gost/x/config/parsing/resolver	[no test files]
+?   	github.com/go-gost/x/config/parsing/router	[no test files]
+?   	github.com/go-gost/x/config/parsing/sd	[no test files]
+?   	github.com/go-gost/x/config/parsing/selector	[no test files]
+testing: warning: no tests to run
+PASS
+ok  	github.com/go-gost/x/config/parsing/service	0.009s [no tests to run]

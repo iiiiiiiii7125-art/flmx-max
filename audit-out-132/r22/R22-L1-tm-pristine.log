@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Sun Oct 25 13:51:20 UTC 2026
+vite-frontend Up 19 minutes (healthy) flmx-frontend:new4
+flux-panel-backend Up 21 minutes (healthy) flmx-backend:new4
+flux-panel-postgres Up 4 hours (healthy) postgres:16-alpine
+1ca4572b454bf6450455f057bcc8bb55  /app/paneld
+GET / 6366 http=200
+57ab941e7fc6025b52700b2bf36f2241  -
+active
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+ls: cannot access '/root/r22-l1': No such file or directory

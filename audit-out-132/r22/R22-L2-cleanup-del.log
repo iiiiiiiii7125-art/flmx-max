@@ -1,0 +1,33 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938395823}
+PASS inbound gone from list
+=== leg delinb end failures=0 [] ===
+companions of origin 6: []
+=== leg compcheck end failures=0 [] ===
+=== leg dbquery end failures=0 [] ===
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938403623}
+PASS inbound gone from list
+=== leg delinb end failures=0 [] ===
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938411259}
+PASS inbound gone from list
+=== leg delinb end failures=0 [] ===
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938418903}
+PASS inbound gone from list
+=== leg delinb end failures=0 [] ===
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938426559}
+PASS inbound gone from list
+=== leg delinb end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938432650}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===

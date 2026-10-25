@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+LISTEN LISTEN 0      4096                                        *:32584            *:*    users:(("flux_agent",pid=141602,fd=12))
+PASS port 32584 listening
+=== leg listen end failures=0 [] ===
+FORCE-SINCE 2026-10-25 13:56:19
+force-delete http=200 code=0 msg=操作成功
+PASS force-delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936579290}
+gost services=4 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+=== leg forcefwd end failures=0 [] ===
+NO_LISTENER_32584
+FAIL port 32584 listening
+=== leg listen end failures=1 ['port 32584 listening'] ===

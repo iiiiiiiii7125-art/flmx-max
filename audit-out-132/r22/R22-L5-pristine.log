@@ -1,0 +1,18 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R22-L5 pristine start=2026-10-25T13:45:53Z initiator=R22-L5 ===
+Linux ip-172-26-4-158 6.1.0-53-cloud-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.187-1 (2026-09-07) x86_64 GNU/Linux
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+GET / 6366 http=200 size=8776
+57ab941e7fc6025b52700b2bf36f2241  /tmp/r22-l5-idx.html
+vite-frontend Up 13 minutes (healthy) flmx-frontend:new4
+flux-panel-backend Up 15 minutes (healthy) flmx-backend:new4
+flux-panel-postgres Up 4 hours (healthy) postgres:16-alpine
+135305
+0
+=== pristine end ===

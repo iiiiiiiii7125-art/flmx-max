@@ -1,0 +1,13 @@
+== realm.go climiter refs:
+== RenderRealm limit/conn fields:
+50:	// Interface binds outgoing connections to a network interface.
+== nftables limit refs:
+== Add/Update/DeleteCLimiters send sites:
+internal/http/handler/control_plane.go:2227:	if _, err := h.sendNodeCommand(nodeID, "AddCLimiters", payload, false, false); err != nil {
+internal/http/handler/control_plane.go:2232:		if _, updateErr := h.sendNodeCommand(nodeID, "UpdateCLimiters", updatePayload, false, false); updateErr != nil {
+internal/http/handler/control_plane.go:2275:// 从未带过限流的转发多发一次 DeleteCLimiters 亦无害。
+internal/http/handler/control_plane.go:2285:// DeleteService，从不发 DeleteCLimiters，climiter 在 gost.json 里永久残留
+internal/http/handler/control_plane.go:2301:	if _, err := h.sendNodeCommand(nodeID, "DeleteCLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+internal/http/handler/federation_resources.go:112:		return "DeleteCLimiters"
+internal/http/handler/mutations.go:3779:		// DeleteService + 按 ID 兜底的 DeleteCLimiters（经
+== cleanNodeConfigs CLimiters field:

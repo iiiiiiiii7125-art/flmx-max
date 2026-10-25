@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+create inbound http=200 code=0 msg=操作成功
+PASS create inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938162383, 'data': {'id': 11}}
+inbound id: 11 idle: 5 metering: False
+PASS inbound listed with idle :: [{'id': 11, 'kernelId': 1, 'kernelType': 'xray', 'kernelStatus': 'running', 'external': False, 'nodeId': 1, 'nodeName': 'w10-test', 'nodeServerIp': '16.146.199.68:6366', 'name': 'r22-l2-ss-aes', 'protocol': 'shadowsocks', 'listen': '0.0.0.0', 'port': 59961, 'network': 'tcp,udp', 'settings': {'password': '[REDACTED-TEST-KEY]', 'method': 'aes-256-gcm'}, 'transport': {'type': 'tcp'}, 'security': {'type': 'none'}, 'extra': '', 'shareAddressMode': 'auto', 'shareAddress': '16.146.199.68:6366', 'shareHost': '', 'remark': '', 'relayOnly': False, 'relayCount': 0, 'acceptProxyProtocol': False, 'relayWhitelist': False, 'whitelistExtra': '', 'enabled': True, 'uploadBytes': 0, 'downloadBytes': 0, 'createdTime': 1792938160822, 'updatedTime': 1792938160822, 'outboundId': 0, 'splitRules': [], 'outboundIpStrategy': 'auto', 'connIdleSeconds': 5, 'meteringEnabled': False, 'meteringActive': False}]
+=== leg mkinb end failures=0 [] ===
+total inbound n= 6
+  id=11 port=59961 proto=shadowsocks idle=5 metering=False
+=== leg inblist end failures=0 [] ===
+

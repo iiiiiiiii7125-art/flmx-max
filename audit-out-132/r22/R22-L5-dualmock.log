@@ -1,0 +1,25 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR22L5MultiNodeStaleCleanup
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (143.816µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (203.004µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (128.573µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (100.982µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:54:55 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:54:55 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (192.929µs)
+2026/10/25 13:54:55 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR22L5MultiNodeStaleCleanup (0.46s)
+=== RUN   TestR22L5OfflineNodeSkipBranch
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (295.403µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (478.908µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (405.319µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (302.884µs)
+2026/10/25 13:54:55 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:54:55 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:54:55 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (305.929µs)
+2026/10/25 13:54:55 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+r17-addservice-guard: node=2 decision=send reason=update-fallback services=[1_1_0_tcp,1_1_0_udp] err=-
+r17-addservice-guard: node=2 decision=sent-failed reason=update-fallback services=[1_1_0_tcp,1_1_0_udp] err=节点不在线
+--- PASS: TestR22L5OfflineNodeSkipBranch (0.48s)
+PASS
+ok  	go-backend/internal/http/handler	0.996s

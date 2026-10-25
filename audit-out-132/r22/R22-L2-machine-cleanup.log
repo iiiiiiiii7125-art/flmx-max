@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+r22-l1
+r22-l5
+r22-stage
+vite-frontend Up 56 minutes (healthy)
+flux-panel-backend Up 58 minutes (healthy)
+flux-panel-postgres Up 4 hours (healthy)

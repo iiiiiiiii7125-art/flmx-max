@@ -1,0 +1,14 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+9608f0c7ea8a9b7a9c1aef57465ccd3b  /root/r22-l1/gost.db.pre
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+agent state: active
+agent binary md5: 
+PASS agent active
+=== leg agentstatus end failures=0 [] ===

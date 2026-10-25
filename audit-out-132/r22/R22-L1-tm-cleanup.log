@@ -1,0 +1,21 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936605333}
+gost services=2 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936607416}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936609496}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+CRED-CLEANED

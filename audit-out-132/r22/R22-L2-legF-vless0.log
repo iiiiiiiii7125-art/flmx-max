@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== client-f6:
+Traceback (most recent call last):
+  File "<stdin>", line 9, in <module>
+TimeoutError: timed out
+RC=1
+DONE f6 14:17:30
+== dummy-f6:
+[14:17:02.885] dummy listening port=59951 mode=silent timeout=120.0
+[14:17:04.089] dummy ACCEPT from=('16.146.199.68', 47858)
+[14:17:29.899] dummy EOF elapsed=25.81 total_recv=0
+[14:17:29.899] dummy DONE elapsed=25.81

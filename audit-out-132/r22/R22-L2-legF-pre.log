@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+port 59944 free
+port 59945 free
+port 59946 free
+port 59947 free
+port 59950 free
+port 59951 free
+port 59952 free
+port 59953 free
+ls: cannot access '/etc/flux_agent/kernels/xray/bin/latest/xray': No such file or directory

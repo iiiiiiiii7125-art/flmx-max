@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+-rw-r--r-- 1 root root 103 Oct 25 14:09 dummy-59951-f1.log
+-rw-r--r-- 1 root root   0 Oct 25 14:08 vless-f1.log
+---DUMMY---
+[14:08:25.247] dummy listening port=59951 mode=silent timeout=60.0
+[14:09:25.309] dummy ACCEPT_TIMEOUT
+LISTEN 0      4096                                        *:59944            *:*          

@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+---
+root      146176  0.0  0.1   4352  2876 ?        Ss   14:09   0:00 bash R22-L2-runleg.sh f1 vless 59944 59951 a71f27fd-0b20-4041-9a51-0c2a1bdd19de -1 60
+root      146179  0.0  0.4  14416  9356 ?        Ss   14:09   0:00 python3 R22-L2-dummy.py 59951 silent 120
+root      146181  0.0  0.5  15788 10496 ?        S    14:09   0:00 python3 R22-L2-vless.py 59944 59951 a71f27fd-0b20-4041-9a51-0c2a1bdd19de -1 60
+-rw-r--r-- 1 root root  0 Oct 25 14:09 client-f1.log
+-rw-r--r-- 1 root root 68 Oct 25 14:09 dummy-f1.log

@@ -1,0 +1,13 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+BACK-SINCE 2026-10-25 13:52:27
+tunnel engine 'realm' -> '' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936347239}
+tunnel engine now: 
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792936314191, 'engine': '', 'flow': 1, 'id': 2, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l1-t1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+gost services=2 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+journal-since: 2026-10-25 13:52:27
+=== leg tunengine end failures=0 [] ===
+realm config bytes=47 endpoints-markers=0
+=== leg realmconf end failures=0 [] ===
+gost md5=36cf51f73643cb33a9e300443b560520 services=2 climiters=['rule_conn_limit_8'] refs=['rule_conn_limit_8']
+=== leg gost end failures=0 [] ===

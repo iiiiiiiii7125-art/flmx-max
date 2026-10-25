@@ -1,0 +1,8 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== client-f6b:
+resp-hdr=NONE within 5s elapsed=5.01
+== dummy-f6b:
+[14:18:02.367] dummy listening port=59951 mode=silent timeout=120.0
+[14:18:03.538] dummy ACCEPT from=('16.146.199.68', 35276)
+== procs:
+python3 R22-L2-dummy.py 59951

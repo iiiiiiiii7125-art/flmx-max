@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== client-f5:
+burst1-sent elapsed=0.00
+burst2-sent elapsed=9.51
+SUMMARY first_data=-1 last_data=-1 close=15.02 burst2=9.51 idle_since_last_data=-1 idle_since_burst1=15.01 idle_since_burst2=5.5
+RC=0
+DONE f5 14:15:46
+== dummy-f5 tail:
+[14:15:39.439] dummy RECV n=34976 total=2097152 elapsed=9.52
+[14:15:44.934] dummy EOF elapsed=15.01 total_recv=2097152
+[14:15:44.934] dummy DONE elapsed=15.01

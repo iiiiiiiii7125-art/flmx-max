@@ -1,0 +1,3 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+companions of origin 6: [(7, 'r22-l2-ss（计量）', 47813, 10, 1792937238082)]
+=== leg compcheck end failures=0 [] ===

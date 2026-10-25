@@ -1,0 +1,119 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestFinalP21RepushTrigger
+--- PASS: TestFinalP21RepushTrigger (0.00s)
+=== RUN   TestFinalP21SpeedLimitsOnlyImportRepushesLimiter
+2026/10/25 13:48:59 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (250.325µs)
+2026/10/25 13:48:59 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (278.698µs)
+2026/10/25 13:48:59 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (231.708µs)
+2026/10/25 13:48:59 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (170.025µs)
+2026/10/25 13:48:59 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:48:59 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:48:59 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (225.027µs)
+2026/10/25 13:48:59 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestFinalP21SpeedLimitsOnlyImportRepushesLimiter (1.13s)
+=== RUN   TestFinalP21UserTunnelsOnlyImportRepushesLimiter
+2026/10/25 13:49:00 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (161.773µs)
+2026/10/25 13:49:00 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.457126ms)
+2026/10/25 13:49:00 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (264.997µs)
+2026/10/25 13:49:00 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (235.783µs)
+2026/10/25 13:49:00 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:00 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:00 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (368.393µs)
+2026/10/25 13:49:00 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestFinalP21UserTunnelsOnlyImportRepushesLimiter (0.84s)
+=== RUN   TestFinalP21SubscriptionOrKernelOnlyImportDoesNotRepush
+2026/10/25 13:49:01 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (467.812µs)
+2026/10/25 13:49:01 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (311.277µs)
+2026/10/25 13:49:01 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (150.646µs)
+2026/10/25 13:49:01 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.080331ms)
+2026/10/25 13:49:01 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:01 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:01 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (176.826µs)
+2026/10/25 13:49:01 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestFinalP21SubscriptionOrKernelOnlyImportDoesNotRepush (1.10s)
+=== RUN   TestR13BRBackupImportForwardsRepushesOnlineNode
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (247.592µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (385.879µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (310.937µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (157.927µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:02 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:02 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (178.838µs)
+2026/10/25 13:49:02 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13BRBackupImportForwardsRepushesOnlineNode (0.23s)
+=== RUN   TestR13BRRepushSkipsWhenNoLiveAgent
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (194.722µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (188.473µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (502.283µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (151.477µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:02 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:02 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (160.401µs)
+2026/10/25 13:49:02 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13BRRepushSkipsWhenNoLiveAgent (0.26s)
+=== RUN   TestR13BRRepushTrigger
+--- PASS: TestR13BRRepushTrigger (0.00s)
+=== RUN   TestR13BRBackupImportNodesResyncsRelayRemoteAddr
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (185.599µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (539.37µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (170.476µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (134.232µs)
+2026/10/25 13:49:02 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:02 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:02 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (169.164µs)
+2026/10/25 13:49:02 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13BRBackupImportNodesResyncsRelayRemoteAddr (0.26s)
+=== RUN   TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus
+=== RUN   TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/type-string
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (161.403µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (271.237µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (144.217µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (107.602µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:03 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:03 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (133.69µs)
+2026/10/25 13:49:03 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+=== RUN   TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/status-string
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (297.516µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (449.555µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (207.331µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (146.891µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:03 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:03 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (2.532821ms)
+2026/10/25 13:49:03 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+=== RUN   TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/type-float
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (155.003µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (319.209µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (171.828µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (135.934µs)
+2026/10/25 13:49:03 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:03 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:03 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (182.523µs)
+2026/10/25 13:49:03 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+=== RUN   TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/flow-string-control
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (129.284µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (191.637µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (181.553µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (129.114µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:04 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:04 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (226.28µs)
+2026/10/25 13:49:04 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus (1.40s)
+    --- PASS: TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/type-string (0.28s)
+    --- PASS: TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/status-string (0.38s)
+    --- PASS: TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/type-float (0.51s)
+    --- PASS: TestR13T2aTunnelCreateRejectsUnparsableTypeAndStatus/flow-string-control (0.23s)
+=== RUN   TestR13T2aTunnelCreateAcceptsLegalTypeAndStatus
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (121.933µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (223.786µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (136.545µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (103.245µs)
+2026/10/25 13:49:04 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:49:04 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:49:04 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (165.289µs)
+2026/10/25 13:49:04 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR13T2aTunnelCreateAcceptsLegalTypeAndStatus (0.23s)
+PASS
+ok  	go-backend/internal/http/handler	5.509s

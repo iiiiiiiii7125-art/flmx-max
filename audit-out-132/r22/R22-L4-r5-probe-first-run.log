@@ -1,0 +1,66 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR22L4FreshDBCensus
+2026/10/25 13:47:11 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (161.282µs)
+2026/10/25 13:47:11 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.722936ms)
+2026/10/25 13:47:11 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (257.576µs)
+2026/10/25 13:47:11 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (130.786µs)
+2026/10/25 13:47:11 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:47:11 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:47:11 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (1.301763ms)
+2026/10/25 13:47:11 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r22_l4_probe_test.go:123: CELL TABLE announcement
+    r22_l4_probe_test.go:123: CELL TABLE chain_tunnel
+    r22_l4_probe_test.go:123: CELL TABLE federation_pending_release
+    r22_l4_probe_test.go:123: CELL TABLE federation_tunnel_binding
+    r22_l4_probe_test.go:123: CELL TABLE forward
+    r22_l4_probe_test.go:123: CELL TABLE forward_port
+    r22_l4_probe_test.go:123: CELL TABLE group_permission
+    r22_l4_probe_test.go:123: CELL TABLE group_permission_grant
+    r22_l4_probe_test.go:123: CELL TABLE monitor_permission
+    r22_l4_probe_test.go:123: CELL TABLE nft_counter_state
+    r22_l4_probe_test.go:123: CELL TABLE nft_pending_delete
+    r22_l4_probe_test.go:123: CELL TABLE nft_rule_binding
+    r22_l4_probe_test.go:123: CELL TABLE node
+    r22_l4_probe_test.go:123: CELL TABLE node_inbound
+    r22_l4_probe_test.go:123: CELL TABLE node_inbound_counter
+    r22_l4_probe_test.go:123: CELL TABLE node_inbound_relay
+    r22_l4_probe_test.go:123: CELL TABLE node_kernel
+    r22_l4_probe_test.go:123: CELL TABLE node_latency_sample
+    r22_l4_probe_test.go:123: CELL TABLE node_metric
+    r22_l4_probe_test.go:123: CELL TABLE node_seq
+    r22_l4_probe_test.go:123: CELL TABLE node_ssh_config
+    r22_l4_probe_test.go:123: CELL TABLE node_traffic
+    r22_l4_probe_test.go:123: CELL TABLE passkey
+    r22_l4_probe_test.go:123: CELL TABLE peer_share
+    r22_l4_probe_test.go:123: CELL TABLE peer_share_resource
+    r22_l4_probe_test.go:123: CELL TABLE peer_share_runtime
+    r22_l4_probe_test.go:123: CELL TABLE remote_source
+    r22_l4_probe_test.go:123: CELL TABLE schema_migration
+    r22_l4_probe_test.go:123: CELL TABLE schema_version
+    r22_l4_probe_test.go:123: CELL TABLE service_monitor
+    r22_l4_probe_test.go:123: CELL TABLE service_monitor_result
+    r22_l4_probe_test.go:123: CELL TABLE speed_limit
+    r22_l4_probe_test.go:123: CELL TABLE sqlite_sequence
+    r22_l4_probe_test.go:123: CELL TABLE statistics_flow
+    r22_l4_probe_test.go:123: CELL TABLE sub_user
+    r22_l4_probe_test.go:123: CELL TABLE subscription
+    r22_l4_probe_test.go:123: CELL TABLE subscription_counter
+    r22_l4_probe_test.go:123: CELL TABLE subscription_traffic
+    r22_l4_probe_test.go:123: CELL TABLE tunnel
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_group
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_group_tunnel
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_metric
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_quality
+    r22_l4_probe_test.go:123: CELL TABLE user
+    r22_l4_probe_test.go:123: CELL TABLE user_group
+    r22_l4_probe_test.go:123: CELL TABLE user_group_user
+    r22_l4_probe_test.go:123: CELL TABLE user_inbound
+    r22_l4_probe_test.go:123: CELL TABLE user_quota
+    r22_l4_probe_test.go:123: CELL TABLE user_subscription
+    r22_l4_probe_test.go:123: CELL TABLE user_tunnel
+    r22_l4_probe_test.go:123: CELL TABLE vite_config
+    r22_l4_probe_test.go:126: fresh DB table count=51 want 50: [announcement chain_tunnel federation_pending_release federation_tunnel_binding forward forward_port group_permission group_permission_grant monitor_permission nft_counter_state nft_pending_delete nft_rule_binding node node_inbound node_inbound_counter node_inbound_relay node_kernel node_latency_sample node_metric node_seq node_ssh_config node_traffic passkey peer_share peer_share_resource peer_share_runtime remote_source schema_migration schema_version service_monitor service_monitor_result speed_limit sqlite_sequence statistics_flow sub_user subscription subscription_counter subscription_traffic tunnel tunnel_group tunnel_group_tunnel tunnel_metric tunnel_quality user user_group user_group_user user_inbound user_quota user_subscription user_tunnel vite_config]
+--- FAIL: TestR22L4FreshDBCensus (0.46s)
+FAIL
+FAIL	go-backend/internal/store/repo	0.468s
+FAIL

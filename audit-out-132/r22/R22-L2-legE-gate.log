@@ -1,0 +1,19 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+drifted companion 7 conn_idle_seconds -> 5 (fixture, mirrors sandbox drift)
+=== leg compdrift end failures=0 [] ===
+companions of origin 6: [(7, 'r22-l2-ss（计量）', 47813, 5, 1792937215053)]
+=== leg compcheck end failures=0 [] ===
+update inbound http=200 code=0 msg=操作成功 data={'id': 6}
+PASS update inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937238100, 'data': {'id': 6}}
+inbound after edit: 10
+PASS list shows new idle :: [{'id': 6, 'kernelId': 1, 'kernelType': 'xray', 'kernelStatus': 'running', 'external': False, 'nodeId': 1, 'nodeName': 'w10-test', 'nodeServerIp': '16.146.199.68:6366', 'name': 'r22-l2-ss', 'protocol': 'shadowsocks', 'listen': '0.0.0.0', 'port': 59960, 'network': 'tcp,udp', 'settings': {'password': '[REDACTED-TEST-KEY]', 'method': '2022-blake3-aes-128-gcm'}, 'transport': {'type': 'tcp'}, 'security': {'type': 'none'}, 'extra': '', 'shareAddressMode': 'auto', 'shareAddress': '16.146.199.68:6366', 'shareHost': '', 'remark': '', 'relayOnly': False, 'relayCount': 0, 'acceptProxyProtocol': False, 'relayWhitelist': False, 'whitelistExtra': '', 'enabled': True, 'uploadBytes': 0, 'downloadBytes': 0, 'createdTime': 1792937215051, 'updatedTime': 1792937238080, 'outboundId': 0, 'splitRules': [], 'outboundIpStrategy': 'auto', 'connIdleSeconds': 10, 'meteringEnabled': True, 'meteringActive': True}]
+=== leg updinb end failures=0 [] ===
+companions of origin 6: [(7, 'r22-l2-ss（计量）', 47813, 10, 1792937238082)]
+=== leg compcheck end failures=0 [] ===
+xray config path: /etc/flux_agent/kernels/xray/run/config.json exists: True
+policy levels: {"1": {"connIdle": 10}, "2": {"connIdle": 10}}
+  idle-ob flmx-idle-6 {'userLevel': 1}
+  idle-ob flmx-idle-7 {'userLevel': 2}
+  idle-ob flmx-idle-7-u1 {'userLevel': 2}
+  inbound port=59960 proto=shadowsocks client-levels=[]
+=== leg xraycfg end failures=0 [] ===

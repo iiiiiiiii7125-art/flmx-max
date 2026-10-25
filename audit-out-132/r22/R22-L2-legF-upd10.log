@@ -1,0 +1,17 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+update inbound http=200 code=0 msg=操作成功 data={'id': 8}
+PASS update inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937769334, 'data': {'id': 8}}
+inbound after edit: 10
+PASS list shows new idle :: [{'id': 8, 'kernelId': 1, 'kernelType': 'xray', 'kernelStatus': 'running', 'external': False, 'nodeId': 1, 'nodeName': 'w10-test', 'nodeServerIp': '16.146.199.68:6366', 'name': 'r22-l2-vless', 'protocol': 'vless', 'listen': '0.0.0.0', 'port': 59944, 'network': 'tcp', 'settings': {'uuid': 'a71f27fd-0b20-4041-9a51-0c2a1bdd19de'}, 'transport': {'type': 'tcp'}, 'security': {'type': 'none'}, 'extra': '', 'shareAddressMode': 'auto', 'shareAddress': '16.146.199.68:6366', 'shareHost': '', 'remark': '', 'relayOnly': False, 'relayCount': 0, 'acceptProxyProtocol': False, 'relayWhitelist': False, 'whitelistExtra': '', 'enabled': True, 'uploadBytes': 5318198, 'downloadBytes': 7610, 'createdTime': 1792937286138, 'updatedTime': 1792937767788, 'outboundId': 0, 'splitRules': [], 'outboundIpStrategy': 'auto', 'connIdleSeconds': 10, 'meteringEnabled': False, 'meteringActive': False}]
+=== leg updinb end failures=0 [] ===
+xray config path: /etc/flux_agent/kernels/xray/run/config.json exists: True
+policy levels: {"1": {"connIdle": 10}, "2": {"connIdle": 10}, "3": {"connIdle": 10}, "4": {"connIdle": 5}}
+  idle-ob flmx-idle-6 {'userLevel': 1}
+  idle-ob flmx-idle-7 {'userLevel': 2}
+  idle-ob flmx-idle-7-u1 {'userLevel': 2}
+  idle-ob flmx-idle-8 {'userLevel': 3}
+  idle-ob flmx-idle-8-u1 {'userLevel': 3}
+  idle-ob flmx-idle-9 {'userLevel': 4}
+  idle-ob flmx-idle-9-u1 {'userLevel': 4}
+  inbound port=59944 proto=vless client-levels=[3, 3]
+=== leg xraycfg end failures=0 [] ===

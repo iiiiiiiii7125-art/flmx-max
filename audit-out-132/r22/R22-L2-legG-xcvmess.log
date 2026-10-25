@@ -1,0 +1,9 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+wrote xc-vmess.json
+LISTEN 0      4096                                127.0.0.1:59947      0.0.0.0:*          
+XC_VMESS_UP
+Xray 26.10.21 (Xray, Penetrates Everything.) 1b1647c (go1.27.3 linux/amd64)
+A unified platform for anti-censorship.
+2026/10/25 14:19:37.241617 [Warning] core: Xray 26.10.21 started
+2026/10/25 14:19:37.241664 [Info] infra/conf/serial: Reading config: &{Name:xc-vmess.json Format:json}
+2026/10/25 14:19:37.241670 [Warning] common/errors: The feature VMess (with no Forward Secrecy, etc.) is deprecated, not recommended for using and might be removed. Please migrate to VLESS Encryption as soon as possible.

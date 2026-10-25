@@ -1,0 +1,36 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R22-L5 settle start=2026-10-25T13:49:54Z initiator=R22-L5 ===
+backup-CONT: pid gone 13:46:31.577
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+active
+139774
+1
+xray inbounds [(59940, 'vless')]
+policy None
+scratch ports all free
+no stray scaffold processes
+R22-L5-killfreeze.sh
+R22-L5-killwatch.py
+R22-L5-legs.py
+R22-L5-sockdiag.py
+R22-L5-sockdiag.sh
+R22-L5-trojan-pub.py
+R22-L5-trojan.py
+__pycache__
+ctl-gost.json
+ctl-snap.json
+ctl-watch.log
+ctl.log
+gost-frozen-k2.json
+gost.db.pre-k2.bak
+gost.db.pre-trojan-pub.bak
+gost.db.pre-trojan.bak
+k2-backupcont.log
+killwatch-K2.log
+=== settle end ===

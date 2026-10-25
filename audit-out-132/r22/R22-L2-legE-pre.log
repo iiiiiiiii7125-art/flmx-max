@@ -1,0 +1,6 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+(1, 'share', 1, 1, '', '{"prefix":"","regionGroups":false,"rename":"","sort":""}')
+=== leg dbquery end failures=0 [] ===
+(1, 'new1-vless', 'vless', 59940, 0, 0, 0)
+=== leg dbquery end failures=0 [] ===
+AAECAwQFBgcICQoLDA0ODw==

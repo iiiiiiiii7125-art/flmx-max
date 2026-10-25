@@ -1,0 +1,45 @@
+=== health-probe start 2026-10-25T14:00:08Z ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestValidateMonitorTCPTarget
+=== RUN   TestValidateMonitorTCPTarget/公网_IP_放行
+=== RUN   TestValidateMonitorTCPTarget/公网域名放行
+    monitor_ssrf_test.go:39: ValidateMonitorTCPTarget("example.com:443") err=目标地址不允许（内网/保留地址）: example.com, wantErr=false
+=== RUN   TestValidateMonitorTCPTarget/环回_IPv4_拒绝
+=== RUN   TestValidateMonitorTCPTarget/环回_IPv6_拒绝
+=== RUN   TestValidateMonitorTCPTarget/私网_10/8_拒绝
+=== RUN   TestValidateMonitorTCPTarget/私网_172.16/12_拒绝
+=== RUN   TestValidateMonitorTCPTarget/私网_192.168/16_拒绝
+=== RUN   TestValidateMonitorTCPTarget/链路本地拒绝
+=== RUN   TestValidateMonitorTCPTarget/元数据地址拒绝
+=== RUN   TestValidateMonitorTCPTarget/CGNAT_拒绝
+=== RUN   TestValidateMonitorTCPTarget/IPv6_私有拒绝
+=== RUN   TestValidateMonitorTCPTarget/未指定地址拒绝
+=== RUN   TestValidateMonitorTCPTarget/组播拒绝
+=== RUN   TestValidateMonitorTCPTarget/缺端口拒绝
+=== RUN   TestValidateMonitorTCPTarget/端口越界拒绝
+=== RUN   TestValidateMonitorTCPTarget/端口为零拒绝
+=== RUN   TestValidateMonitorTCPTarget/空主机拒绝
+--- FAIL: TestValidateMonitorTCPTarget (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/公网_IP_放行 (0.00s)
+    --- FAIL: TestValidateMonitorTCPTarget/公网域名放行 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/环回_IPv4_拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/环回_IPv6_拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/私网_10/8_拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/私网_172.16/12_拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/私网_192.168/16_拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/链路本地拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/元数据地址拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/CGNAT_拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/IPv6_私有拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/未指定地址拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/组播拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/缺端口拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/端口越界拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/端口为零拒绝 (0.00s)
+    --- PASS: TestValidateMonitorTCPTarget/空主机拒绝 (0.00s)
+=== RUN   TestValidateMonitorTCPTargetAllowlist
+--- PASS: TestValidateMonitorTCPTargetAllowlist (0.00s)
+FAIL
+FAIL	go-backend/internal/health	0.009s
+FAIL
+=== health-probe exit 1 2026-10-25T14:00:10Z ===

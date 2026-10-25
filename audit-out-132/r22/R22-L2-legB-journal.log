@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=DeleteService requestId=1_1792937116323579257
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"services":["13_1_0_tcp","13_1_0_udp","13_1_0"]},"requestId":"1_1792937116323579257","type":"DeleteService"}
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792937116324942820
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_13"},"requestId":"1_1792937116324942820","type":"DeleteCLimiters"}
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=UpdateService requestId=1_1792937116477112939
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:2219","forwarder":{"nodes":[{"addr":"203.0.113.9:9001","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"13_1_0_tcp"},{"addr":"[::]:2219","forwarder":{"nodes":[{"addr":"203.0.113.9:9001","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"13_1_0_udp"}],"requestId":"1_1792937116477112939","type":"UpdateService"}
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792937116479414019
+Oct 25 14:05:16 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_13"},"requestId":"1_1792937116479414019","type":"DeleteCLimiters"}
+---
+4

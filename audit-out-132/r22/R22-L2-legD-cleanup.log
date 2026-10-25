@@ -1,0 +1,18 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937192220}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937194296}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792937196376}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+sub {'id': 1, 'name': '我的订阅', 'kind': 'share', 'enabled': True, 'expireTime': 0, 'inboundIds': [], 'token': '[REDACTED-SUB-TOKEN]'}
+=== leg sublist end failures=0 [] ===

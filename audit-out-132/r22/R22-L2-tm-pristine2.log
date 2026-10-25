@@ -1,0 +1,15 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+total 36
+-rw-r----- 1 root root  2112 Oct 25 14:03 R22-L2-dummy.py
+-rw-r----- 1 root root 21276 Oct 25 14:03 R22-L2-legs.py
+-rw-r----- 1 root root  1924 Oct 25 14:03 R22-L2-socks.py
+-rw-r----- 1 root root  3553 Oct 25 14:03 R22-L2-vless.py
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+sysver: {"currentVersion": "1.4.9-new", "latestVersion": "1.4.9", "hasUpdate": false, "channel": "stable", "capability": {"capable": true, "reasons": [], "deployDir": "/opt/flmx-panel", "backendContainer": "flux-panel-backend"}}
+=== leg sysver end failures=0 [] ===

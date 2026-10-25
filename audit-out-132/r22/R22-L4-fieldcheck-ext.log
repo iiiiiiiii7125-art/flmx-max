@@ -1,0 +1,399 @@
+--- /user/passkey/list
+    backend[0]: None
+    frontend PasskeyItem[4]: ['id', 'name', 'createdAt', 'lastUsedAt']
+--- /user/list
+    backend[15]: ['createdTime', 'expTime', 'flow', 'flowMiB', 'flowResetTime', 'id', 'inFlow', 'maxConn', 'name', 'num', 'outFlow', 'roleId', 'status', 'updatedTime', 'user']
+    frontend UserApiItem[21]: ['id', 'user', 'name', 'roleId', 'status', 'createdTime', 'updatedTime', 'flow', 'flowMiB', 'num', 'expTime', 'flowResetTime', 'maxConn', 'inFlow', 'outFlow', 'dailyQuotaGB', 'monthlyQuotaGB', 'dailyUsedBytes', 'monthlyUsedBytes', 'disabledByQuota', 'quotaDisabledAt']
+    backend-only: []
+    frontend-only: ['dailyQuotaGB', 'dailyUsedBytes', 'disabledByQuota', 'monthlyQuotaGB', 'monthlyUsedBytes', 'quotaDisabledAt']
+--- /config/list
+    backend[0]: None
+    frontend None[0]: None
+    note: dynamic Record<string,string>; no fixed key set; handler filters sensitive keys via FilterSensitiveConfigs
+--- /kernel/list handler body:
+func (h *Handler) kernelList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		NodeID int64 `json:"nodeId"`
+	}
+	_ = decodeJSON(r.Body, &req)
+
+	views, err := h.kernelViews(req.NodeID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.OK(views))
+}
+
+--- /kernel/list (model.NodeKernel)
+    backend[0]: None
+    frontend KernelApiItem[13]: ['id', 'nodeId', 'nodeName', 'nodeOnline', 'kernelType', 'version', 'installedVersion', 'status', 'lastError', 'synced', 'enabled', 'inboundCount', 'updatedTime']
+--- /subscription/list (subscriptionView)
+    backend[23]: ['active', 'downloadBytes', 'enabled', 'expireTime', 'id', 'inboundIds', 'isDefault', 'kind', 'name', 'nodeCount', 'options', 'overQuota', 'path', 'relayIds', 'remark', 'resetDay', 'sharedIds', 'sourceAll', 'sourceIds', 'token', 'trafficLimit', 'trafficSince', 'uploadBytes']
+    frontend SubscriptionItem[23]: ['id', 'name', 'kind', 'token', 'path', 'sourceAll', 'inboundIds', 'sourceIds', 'sharedIds', 'options', 'expireTime', 'enabled', 'active', 'remark', 'nodeCount', 'uploadBytes', 'downloadBytes', 'trafficLimit', 'resetDay', 'trafficSince', 'overQuota', 'isDefault', 'relayIds']
+    backend-only: []
+    frontend-only: []
+--- /subscription/source/list
+    backend[0]: None
+    frontend RemoteSourceItem[12]: ['id', 'name', 'url', 'kind', 'role', 'intervalHours', 'relayOnly', 'enabled', 'lastFetch', 'lastError', 'nodeCount', 'userinfo']
+--- /inbound/sub/info handler body:
+func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		Reset bool `json:"reset"`
+	}
+	_ = decodeJSON(r.Body, &req)
+	s, err := h.repo.DefaultSubscription(time.Now().UnixMilli())
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	userID, roleID, authErr := userRoleFromRequest(r)
+	if req.Reset {
+		// 换 token 是管理员操作（F-001 回归点：reset 仍仅管理员）。
+		if authErr != nil || roleID != 0 {
+			response.WriteJSON(w, response.Err(403, "无权限，仅管理员可操作"))
+			return
+		}
+		// X-P3-13（L-03-2）：与主路径共用全轮换（token+UUID/密码+下发
+		// 内核），不再只换 token——否则经此路重置的旧配置仍能连接。
+		_, applyErr, err := h.rotateSubscriptionCredentials(s)
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if applyErr != nil {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: map[string]interface{}{
+				"token": s.Token,
+				"path":  "/api/v1/open_api/sub/" + s.Token,
+			}, TS: time.Now().UnixMilli()})
+			return
+		}
+	} else {
+		// F-001：读分支只给被分配的用户（用户 2026-10-20 裁决：默认订阅
+		// 只给被分配的用户）。未分配用户拿到 token 即可绕过订阅分配、
+		// 不带 ?user= 拉全量节点，故响应中不得包含 token。
+		// 注意 authErr 必须先判：claims 解析失败时 roleID 恒为 0，
+		// 若先看 roleID 会把未认证请求误当管理员放行。
+		if authErr != nil {
+			response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
+			return
+		}
+		if roleID != 0 {
+			allowed, err := h.canReadDefaultSubscription(userID, s.ID)
+			if err != nil {
+				response.WriteJSON(w, response.Err(-2, err.Error()))
+				return
+			}
+			if !allowed {
+				response.WriteJSON(w, response.Err(403, "无权限，默认订阅未分配给当前用户"))
+				return
+			}
+		}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"token": s.Token,
+		"path":  "/api/v1/open_api/sub/" + s.Token,
+	}))
+}
+
+// canReadDefaultSubscription 判断普通用户是否有权读取默认订阅 token：
+// 被分配了该订阅（1.0.12 user_subscription），或持有旧入站分配
+// （user_inbound——「我的订阅」存量 ?user=+sig 回退链靠本端点的 path
+// 拼链接，分配为空集时 openSubscription 本就过滤为空，见 X1 §7）。
+--- /inbound/sub/info
+    backend[0]: None
+    frontend SubInfoApiData[2]: ['token', 'path']
+    note: backend shape read from handler body above
+--- /inbound/relay/list handler body:
+func (h *Handler) inboundRelayList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		InboundID int64 `json:"inboundId"`
+	}
+	_ = decodeJSON(r.Body, &req)
+	views, err := h.relayViews(req.InboundID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.OK(views))
+}
+
+// relayTarget decides where the relay forward dials: the inbound's local
+// address when a tunnel exits on the landing node itself, otherwise the
+// landing node's public address (port forwards, and tunnels exiting on
+// another node such as an IX hop in front of the landing node).
+// validateRelayLandingExitSet enforces relayTarget's landing rule
+// against an explicit exit set: an inbound whose node is among the exits
+// requires that node to be the tunnel's only exit. tunnelUpdate 复跑此
+// 判定（新出口集尚未落库，不能走 relayTarget 的 DB 读法）——X-P2-4。
+--- /inbound/relay/list (model.NodeInboundRelay)
+    backend[0]: None
+    frontend InboundRelayApiItem[16]: ['id', 'inboundId', 'forwardId', 'name', 'shareHost', 'managed', 'mode', 'forwardName', 'forwardStatus', 'forwardExists', 'tunnelId', 'tunnelName', 'remoteAddr', 'entries', 'createdTime', 'latency']
+--- /user-inbound/list
+    backend[0]: None
+    frontend UserInboundAssignment[2]: ['inboundId', 'relayId']
+--- /user-subscription/list handler body:
+func (h *Handler) userSubscriptionList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	if _, roleID, err := userRoleFromRequest(r); err != nil || roleID != 0 {
+		response.WriteJSON(w, response.Err(403, "无权限"))
+		return
+	}
+	var req struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil || req.UserID <= 0 {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	ids, err := h.repo.ListUserSubscriptionIDs(req.UserID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if ids == nil {
+		ids = []int64{}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"userId":          req.UserID,
+		"subscriptionIds": ids,
+	}))
+}
+
+// userSubscriptionSet 全量替换某用户的订阅分配（仅管理员）。
+// 与旧的按入站分配不同：订阅 ID 必须真实存在，不存在的 ID 直接报错，
+// 避免静默丢弃导致管理员误以为已分配。
+--- /user-subscription/list
+    backend[0]: None
+    frontend UserSubscriptionListData[2]: ['userId', 'subscriptionIds']
+    note: backend shape read from handler body above
+--- /tunnel/list + /tunnel/get
+    backend[18]: ['chainNodes', 'chainType', 'createdTime', 'engine', 'flow', 'id', 'inIp', 'inNodeId', 'inx', 'ipPreference', 'name', 'nodeId', 'outNodeId', 'probeTargetHost', 'probeTargetPort', 'status', 'trafficRatio', 'type']
+    frontend TunnelApiItem[15]: ['id', 'name', 'type', 'status', 'flow', 'trafficRatio', 'inIp', 'ipPreference', 'probeTargetHost', 'probeTargetPort', 'engine', 'inNodeId', 'outNodeId', 'chainNodes', 'inx']
+    backend-only: ['chainType', 'createdTime', 'nodeId']
+    frontend-only: []
+--- /forward/list
+    backend[21]: ['createdTime', 'id', 'inFlow', 'inIp', 'inPort', 'inx', 'ipMaxConn', 'maxConn', 'name', 'outFlow', 'proxyProtocol', 'proxyProtocolReceive', 'proxyProtocolSend', 'remoteAddr', 'status', 'strategy', 'tunnelId', 'tunnelName', 'tunnelTrafficRatio', 'userId', 'userName']
+    frontend ForwardApiItem[21]: ['id', 'name', 'status', 'tunnelName', 'tunnelTrafficRatio', 'inIp', 'inPort', 'remoteAddr', 'inFlow', 'outFlow', 'userId', 'tunnelId', 'speedId', 'ipMaxConn', 'ipSpeedId', 'ipSpeedLimitName', 'maxConn', 'proxyProtocol', 'proxyProtocolReceive', 'proxyProtocolSend', 'inx']
+    backend-only: ['createdTime', 'strategy', 'userName']
+    frontend-only: ['ipSpeedId', 'ipSpeedLimitName', 'speedId']
+--- /speed-limit/list
+    backend[6]: ['createdTime', 'id', 'name', 'speed', 'status', 'updatedTime']
+    frontend SpeedLimitApiItem[6]: ['id', 'name', 'speed', 'status', 'createdTime', 'updatedTime']
+    backend-only: []
+    frontend-only: []
+--- /tunnel/user/list handler body (first 2500 chars):
+func (h *Handler) userTunnelList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+
+	var req struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	if req.UserID <= 0 {
+		response.WriteJSON(w, response.OK([]interface{}{}))
+		return
+	}
+
+	tunnels, err := h.repo.GetUserPackageTunnels(req.UserID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
+	out := make([]map[string]interface{}, 0, len(tunnels))
+	for _, t := range tunnels {
+		item := map[string]interface{}{
+			"id":             t.ID,
+			"userId":         t.UserID,
+			"tunnelId":       t.TunnelID,
+			"tunnelName":     t.TunnelName,
+			"status":         t.Status,
+			"flow":           t.Flow,
+			"flowMiB":        t.FlowMiB,
+			"num":            t.Num,
+			"expTime":        t.ExpTime,
+			"flowResetTime":  t.FlowResetTime,
+			"inFlow":         t.InFlow,
+			"outFlow":        t.OutFlow,
+			"tunnelFlow":     t.TunnelFlow,
+			"speedId":        nil,
+			"speedLimitName": nil,
+		}
+		if t.SpeedID.Valid {
+			item["speedId"] = t.SpeedID.Int64
+		}
+		if t.SpeedLimit.Valid {
+			item["speedLimitName"] = t.SpeedLimit.String
+		}
+		out = append(out, item)
+	}
+	response.WriteJSON(w, response.OK(out))
+}
+
+--- /tunnel/user/list (model.UserTunnelDetail)
+    backend[0]: None
+    frontend UserTunnelPermissionApiItem[15]: ['id', 'userId', 'tunnelId', 'tunnelName', 'status', 'flow', 'flowMiB', 'num', 'expTime', 'flowResetTime', 'speedId', 'speedLimitName', 'inFlow', 'outFlow', 'tunnelFlow']
+--- /group/tunnel/list
+    backend[6]: ['createdTime', 'id', 'name', 'status', 'tunnelIds', 'tunnelNames']
+    frontend TunnelGroupApiItem[6]: ['id', 'name', 'status', 'tunnelIds', 'tunnelNames', 'createdTime']
+    backend-only: []
+    frontend-only: []
+--- /group/user/list
+    backend[6]: ['createdTime', 'id', 'name', 'status', 'userIds', 'userNames']
+    frontend UserGroupApiItem[6]: ['id', 'name', 'status', 'userIds', 'userNames', 'createdTime']
+    backend-only: []
+    frontend-only: []
+--- /group/permission/list
+    backend[6]: ['createdTime', 'id', 'tunnelGroupId', 'tunnelGroupName', 'userGroupId', 'userGroupName']
+    frontend GroupPermissionApiItem[6]: ['id', 'userGroupId', 'userGroupName', 'tunnelGroupId', 'tunnelGroupName', 'createdTime']
+    backend-only: []
+    frontend-only: []
+--- /federation/share/list handler body (first 2000 chars):
+func (h *Handler) federationShareList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("Invalid method"))
+		return
+	}
+
+	shares, err := h.repo.ListPeerShares()
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
+	items := make([]peerShareListItem, 0, len(shares))
+	for i := range shares {
+		share := shares[i]
+		runtimes, err := h.repo.ListActivePeerShareRuntimesByShareID(share.ID)
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+
+		usedSet := make(map[int]struct{}, len(runtimes))
+		details := make([]peerShareUsedPort, 0, len(runtimes))
+		for _, runtime := range runtimes {
+			if runtime.Port > 0 {
+				usedSet[runtime.Port] = struct{}{}
+			}
+			details = append(details, peerShareUsedPort{
+				RuntimeID:   runtime.ID,
+				Port:        runtime.Port,
+				Role:        runtime.Role,
+				Protocol:    runtime.Protocol,
+				ResourceKey: runtime.ResourceKey,
+				Applied:     runtime.Applied,
+				UpdatedTime: runtime.UpdatedTime,
+			})
+		}
+
+		usedPorts := make([]int, 0, len(usedSet))
+		for port := range usedSet {
+			usedPorts = append(usedPorts, port)
+		}
+		sort.Ints(usedPorts)
+
+		sort.Slice(details, func(i, j int) bool {
+			if details[i].Port == details[j].Port {
+				return details[i].RuntimeID < details[j].RuntimeID
+			}
+			return details[i].Port < details[j].Port
+		})
+
+		items = append(items, peerShareListItem{
+			PeerShare:        share,
+			UsedPorts:        usedPorts,
+			UsedPortDetails:  details,
+			ActiveRuntimeNum: len(details),
+		})
+	}
+
+	response.WriteJSON(w, response.OK(items))
+}
+
+--- /federation/share/list
+    backend[0]: None
+    frontend None[0]: None
+    note: frontend Array<Record<string,unknown>> (untyped); backend ListPeerShares model + runtime enrichment, see handler body
+--- /federation/share/remote-usage/list handler body (first 1500 chars):
+func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("Invalid method"))
+		return
+	}
+
+	remoteNodes, err := h.repo.ListRemoteNodes()
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
+	fc := client.NewFederationClient()
+	localDomain := h.federationLocalDomain()
+
+	// F-085: 此前逐节点串行 Connect（单个超时 10s），远端多/慢时接口
+	// 线性变慢。改为有界并发预取（上限 10，与 syncRemoteNodeStatuses
+	// 的 O12-003 信号量同口径），结果按下标回填，随后仍按原顺序串行
+	// 组装——结果顺序与错误语义不变。
+	type remoteUsageSync struct {
+		shareID        int64
+		maxBandwidth   int64
+		currentFlow    int64
+		expiryTime     int64
+		portRangeStart int
+		portRangeEnd   int
+		syncError      string
+		panelVersion   string
+		versionWarning string
+	}
+	syncs := make([]remoteUsageSync, len(remoteNodes))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+	for i, node := range remoteNodes {
+		s := &syncs[i]
+		s.shareID, s.maxBandwidth, s.currentFlow, s.expiryTime, s.portRangeStart, s.portRangeEnd = parseRemoteShareUsageConfig(node.RemoteConfig.String)
+		url := strings.TrimSpace(node.RemoteURL.String)
+		token := strings.TrimSpace(node.RemoteToken.String)
+		if url == "" || token == "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, nodeID int64, url, token string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			info, connectErr := fc.Connect(url, token, localDomain)
+			if connectErr != nil {
+				syncs[idx].syncEr
+--- /federation/share/remote-usage/list
+    backend[0]: None
+    frontend None[0]: None
+    note: frontend Array<Record<string,unknown>> (untyped); backend shape read from handler body above
+--- /announcement/get
+    backend[0]: None
+    frontend AnnouncementData[3]: ['content', 'enabled', 'update_time']
+--- /monitor/permission/list
+    backend[0]: None
+    frontend MonitorPermissionApiItem[3]: ['id', 'userId', 'createdTime']

@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+journal matches since=2026-10-25 14:06:17 pattern='AddCLimiters': 2
+   Oct 25 14:06:18 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=AddCLimiters requestId=1_1792937178044490625
+   Oct 25 14:06:18 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limits":["$ 5"],"name":"rule_conn_limit_15"},"requestId":"1_1792937178044490625","type":"AddCLimiters"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 14:06:17 pattern='DeleteCLimiters': 0
+=== leg journal end failures=0 [] ===

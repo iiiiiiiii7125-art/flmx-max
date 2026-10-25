@@ -1,0 +1,18 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+2026-10-25 14:23:50
+update http=200 code=0 msg=操作成功 data=None
+PASS update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792938230711}
+gost services=2 climiters=[] refs=[]
+journal-since: 2026-10-25 14:23:50
+=== leg updfwd end failures=0 [] ===
+(1, 22001)
+=== leg dbquery end failures=0 [] ===
+journal matches since=2026-10-25 14:23:40 pattern='DeleteCLimiters': 2
+   Oct 25 14:23:50 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792938230708867668
+   Oct 25 14:23:50 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_16"},"requestId":"1_1792938230708867668","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 14:23:40 pattern='22001': 3
+   Oct 25 14:23:50 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:22001","forwarder":{"nodes":[{"addr":"203.0.113.9:9001","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"16_1_0_tcp"},{"addr":"[::]:22001","forwarder":{"nodes":[{"addr":"203.0.113.9:9001","name":"node_1"}],"selector":
+   Oct 25 14:23:50 ip-172-26-4-158 flux_agent[144787]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:22001/tcp","service":"16_1_0_tcp","time":"2026-10-25T14:23:50.707Z"}
+   Oct 25 14:23:50 ip-172-26-4-158 flux_agent[144787]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:22001/udp","service":"16_1_0_udp","time":"2026-10-25T14:23:50.707Z"}
+=== leg journal end failures=0 [] ===

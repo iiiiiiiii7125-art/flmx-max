@@ -1,0 +1,54 @@
+{
+  "services": [
+    {
+      "name": "7_1_0_tcp",
+      "addr": "[::]:8699",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "7_1_0_udp",
+      "addr": "[::]:8699",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    }
+  ]
+}

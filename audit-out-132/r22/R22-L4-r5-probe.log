@@ -1,0 +1,89 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR22L4MatrixR5Restore
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (135.914µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (215.404µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (132.209µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (108.713µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:46:53 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:46:53 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (133.881µs)
+2026/10/25 13:46:53 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r22_l4_probe_test.go:82: CELL R5 #301 r22-r5-ss Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #302 r22-r5-tj Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #303 r22-r5-hy2 Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #304 r22-r5-tuic Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #305 r22-r5-vm Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #306 r22-r5-vl Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #307 r22-r5-sn Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #308 r22-r5-na Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #309 r22-r5-so Extra verbatim
+    r22_l4_probe_test.go:82: CELL R5 #310 r22-r5-ssplug Extra verbatim
+    r22_l4_probe_test.go:88: CELL R5 #310 r22-r5-ssplug Protocol trojan->shadowsocks re-derived (R13X-006)
+    r22_l4_probe_test.go:93: CELL R5 #321 wl-legal WhitelistExtra verbatim
+    r22_l4_probe_test.go:97: CELL R5 #322 wl-mixed WhitelistExtra pruned to 10.0.0.0/8, 192.168.0.0/16
+    r22_l4_probe_test.go:101: CELL R5 #323 wl-allbad WhitelistExtra cleared
+    r22_l4_probe_test.go:107: CELL R5 InboundsImported=13 SkippedRows[inbounds]=3 warnings name #311/#312/#313/#322/#323
+--- PASS: TestR22L4MatrixR5Restore (0.29s)
+=== RUN   TestR22L4FreshDBCensus
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (131.507µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (203.946µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (131.528µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (100.741µs)
+2026/10/25 13:46:53 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:46:53 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:46:53 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (151.297µs)
+2026/10/25 13:46:53 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r22_l4_probe_test.go:123: CELL TABLE announcement
+    r22_l4_probe_test.go:123: CELL TABLE chain_tunnel
+    r22_l4_probe_test.go:123: CELL TABLE federation_pending_release
+    r22_l4_probe_test.go:123: CELL TABLE federation_tunnel_binding
+    r22_l4_probe_test.go:123: CELL TABLE forward
+    r22_l4_probe_test.go:123: CELL TABLE forward_port
+    r22_l4_probe_test.go:123: CELL TABLE group_permission
+    r22_l4_probe_test.go:123: CELL TABLE group_permission_grant
+    r22_l4_probe_test.go:123: CELL TABLE monitor_permission
+    r22_l4_probe_test.go:123: CELL TABLE nft_counter_state
+    r22_l4_probe_test.go:123: CELL TABLE nft_pending_delete
+    r22_l4_probe_test.go:123: CELL TABLE nft_rule_binding
+    r22_l4_probe_test.go:123: CELL TABLE node
+    r22_l4_probe_test.go:123: CELL TABLE node_inbound
+    r22_l4_probe_test.go:123: CELL TABLE node_inbound_counter
+    r22_l4_probe_test.go:123: CELL TABLE node_inbound_relay
+    r22_l4_probe_test.go:123: CELL TABLE node_kernel
+    r22_l4_probe_test.go:123: CELL TABLE node_latency_sample
+    r22_l4_probe_test.go:123: CELL TABLE node_metric
+    r22_l4_probe_test.go:123: CELL TABLE node_seq
+    r22_l4_probe_test.go:123: CELL TABLE node_ssh_config
+    r22_l4_probe_test.go:123: CELL TABLE node_traffic
+    r22_l4_probe_test.go:123: CELL TABLE passkey
+    r22_l4_probe_test.go:123: CELL TABLE peer_share
+    r22_l4_probe_test.go:123: CELL TABLE peer_share_resource
+    r22_l4_probe_test.go:123: CELL TABLE peer_share_runtime
+    r22_l4_probe_test.go:123: CELL TABLE remote_source
+    r22_l4_probe_test.go:123: CELL TABLE schema_migration
+    r22_l4_probe_test.go:123: CELL TABLE schema_version
+    r22_l4_probe_test.go:123: CELL TABLE service_monitor
+    r22_l4_probe_test.go:123: CELL TABLE service_monitor_result
+    r22_l4_probe_test.go:123: CELL TABLE speed_limit
+    r22_l4_probe_test.go:123: CELL TABLE statistics_flow
+    r22_l4_probe_test.go:123: CELL TABLE sub_user
+    r22_l4_probe_test.go:123: CELL TABLE subscription
+    r22_l4_probe_test.go:123: CELL TABLE subscription_counter
+    r22_l4_probe_test.go:123: CELL TABLE subscription_traffic
+    r22_l4_probe_test.go:123: CELL TABLE tunnel
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_group
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_group_tunnel
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_metric
+    r22_l4_probe_test.go:123: CELL TABLE tunnel_quality
+    r22_l4_probe_test.go:123: CELL TABLE user
+    r22_l4_probe_test.go:123: CELL TABLE user_group
+    r22_l4_probe_test.go:123: CELL TABLE user_group_user
+    r22_l4_probe_test.go:123: CELL TABLE user_inbound
+    r22_l4_probe_test.go:123: CELL TABLE user_quota
+    r22_l4_probe_test.go:123: CELL TABLE user_subscription
+    r22_l4_probe_test.go:123: CELL TABLE user_tunnel
+    r22_l4_probe_test.go:123: CELL TABLE vite_config
+    r22_l4_probe_test.go:128: CELL TABLE-COUNT 50 OK
+--- PASS: TestR22L4FreshDBCensus (0.26s)
+PASS
+ok  	go-backend/internal/store/repo	0.568s

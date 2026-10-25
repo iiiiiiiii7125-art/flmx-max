@@ -1,0 +1,101 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R22-L5 killfreeze start=2026-10-25T13:46:11Z initiator=R22-L5 ===
+--- backend log: /var/lib/docker/containers/d79e25857087136974987d06ce746632465a0f3995e999c20e12b0f143a034f6/d79e25857087136974987d06ce746632465a0f3995e999c20e12b0f143a034f6-json.log
+--- backend sent-ok baseline: 0
+--- agent pid=135305 active=active
+db backup /root/r22-l5/gost.db.pre-k2.bak md5=ce4e156a5f364d2d1990fce6ba8f60ba
+=== leg dbbackup end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+=== positive control: watcher vs dummy pid + scratch log (must PASS before real run) ===
+dummy pid=139671
+State:	T (stopped)
+dummy state after send-line (expect S/R = SIGCONT leg worked):
+State:	S (sleeping)
+CONTROL OK: dummy killed by watcher
+control watcher exit=0 (expect 0)
+WATCH start 13:46:12.148 log=/root/r22-l5/ctl.log pid=139671 timeout=30.0s
+SEND-SEEN 13:46:13.152
+SIGCONTED 13:46:13.152 pid=139671
+SENT-OK 13:46:15.215
+KILLED 13:46:15.215 pid=139671
+SNAPSHOT 13:46:15.215 /root/r22-l5/ctl-snap.json
+WATCH exit 0 13:46:15.215
+control snapshot md5 (expect == ctl-gost.json):
+342938901ecd911d7c193813381697cf  /root/r22-l5/ctl-gost.json
+342938901ecd911d7c193813381697cf  /root/r22-l5/ctl-snap.json
+/root/r22-l5/R22-L5-killfreeze.sh: line 58: 139671 Killed                  sleep 300
+CONTROL PASS: watcher kill chain proven (SIGCONT leg + SIGKILL leg + instant snapshot)
+=== end positive control ===
+--- create scratch tunnel + forward (no limits: sync path must go straight to UpdateService)
+8699 free
+create tunnel http=200 code=0 msg=操作成功
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792935977250}
+tunnel id: 1 engine: 
+PASS tunnel listed :: [{'chainNodes': [], 'createdTime': 1792935977249, 'engine': '', 'flow': 1, 'id': 1, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r22-l5-k2-tun', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktun end failures=0 [] ===
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe
+scratch tunnel id=1
+create forward http=200 code=0 msg=操作成功
+PASS create forward code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792935977414}
+forward id: 7
+PASS forward listed :: [{'createdTime': 1792935977410, 'id': 7, 'inFlow': 0, 'inIp': '[16.146.199.68:6366]:8699', 'inPort': 8699, 'inx': 0, 'ipMaxConn': 0, 'maxConn': 0, 'name': 'r22-l5-k2-test', 'outFlow': 0, 'proxyProtocol': 0, 'proxyProtocolReceive': 0, 'proxyProtocolSend': 0, 'remoteAddr': '127.0.0.1:18081', 'status': 1, 'strategy': 'fifo', 'tunnelId': 1, 'tunnelName': 'r22-l5-k2-tun', 'tunnelTrafficRatio': 1, 'userId': 1, 'userName': 'admin@user'}]
+=== leg mkfwd end failures=0 [] ===
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe
+scratch forward id=7
+scratch services on disk after 1x5s
+services ['7_1_0_tcp', '7_1_0_udp']
+pre-freeze gost:
+20cdf70acdff5ee8e33f817ba4f92e39  /etc/flux_agent/gost.json
+sent-ok count before trigger: 0
+--- SIGSTOP agent pid=135305 (initiator=R22-L5, killfreeze)
+State:	T (stopped)
+--- start watcher (timeout 120s)
+watcher pid=139765
+--- backup SIGCONT at API-start+9s (covers a missed send line)
+--- trigger: forward update API at 13:46:22.573
+update forward http=200 code=0 msg=操作成功 ts=1792935988688
+PASS update forward code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792935988688}
+=== leg updfwd end failures=0 [] ===
+--- wait watcher (exit 0=sent-ok+killed, 2=sent-failed, 1=timeout)
+killwatch exit=0
+WATCH start 13:46:22.607 log=/var/lib/docker/containers/d79e25857087136974987d06ce746632465a0f3995e999c20e12b0f143a034f6/d79e25857087136974987d06ce746632465a0f3995e999c20e12b0f143a034f6-json.log pid=135305 timeout=120.0s
+SEND-SEEN 13:46:28.680
+SIGCONTED 13:46:28.680 pid=135305
+SENT-OK 13:46:28.730
+KILLED 13:46:28.730 pid=135305
+SNAPSHOT 13:46:28.730 /root/r22-l5/gost-frozen-k2.json
+WATCH exit 0 13:46:28.730
+(no backup-cont log yet)
+--- agent now: active pid=139774 NRestarts=1
+--- frozen snapshot (watcher copy, ground truth):
+-rw-r--r-- 1 root root 996 Oct 25 13:46 /root/r22-l5/gost-frozen-k2.json
+frozen md5 20cdf70acdff5ee8e33f817ba4f92e39 bytes 996
+frozen services=2 dup=none
+--- live gost after (restarted agent may have rewritten it; snapshot above is ground truth):
+20cdf70acdff5ee8e33f817ba4f92e39  /etc/flux_agent/gost.json
+--- backend sent-ok lines in window:
+1
+{"log":"r17-addservice-guard: node=1 decision=send reason=update-fallback services=[7_1_0_tcp,7_1_0_udp] err=-\n","stream":"stdout","time":"2026-10-25T13:46:28.662679173Z"}
+{"log":"r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[7_1_0_tcp,7_1_0_udp] err=-\n","stream":"stdout","time":"2026-10-25T13:46:28.688785189Z"}
+--- cleanup: wait node online, then delete scratch forward id=7 and tunnel id=1 (explicit ids)
+node online after 0s
+PASS node 1 online
+=== leg nodeonline end failures=0 [] ===
+delete forward http=200 code=0 msg=操作成功
+PASS delete forward code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792935990951}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792935993025}
+PASS tunnel gone from list
+=== leg deltun end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+=== killfreeze end=2026-10-25T13:46:33Z ===

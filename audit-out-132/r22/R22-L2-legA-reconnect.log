@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+14:04:55 poll 1 'status': 1
+gost md5=723b055a2f3b38e180c3628ca34ab8a8 services=2 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+journal matches since=2026-10-25 14:04:39 pattern='rule_conn_limit_12': 1
+   Oct 25 14:04:52 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_12"},"requestId":"1_1792937092407661201","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 14:04:39 pattern='DeleteCLimiters': 2
+   Oct 25 14:04:52 ip-172-26-4-158 flux_agent[144787]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792937092407661201
+   Oct 25 14:04:52 ip-172-26-4-158 flux_agent[144787]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_12"},"requestId":"1_1792937092407661201","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===

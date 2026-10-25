@@ -1,0 +1,4 @@
+routes: 202 (handler.go HandleFunc=201 + router.go=1)
+auth dist: {'PUBLIC (JWT skip; own credential: captcha/login/peer-token/none)': 17, 'JWT (any role)': 44, 'ADMIN (JWT + role=admin)': 135, 'OPTIONAL-AUTH (JWT optional)': 1, 'non-API (JWT middleware passes through; handler-level auth)': 5}
+guard dist: {'POST only': 131, 'not(Get,Post)': 1, 'GET only': 13, 'ANY (no method check in body)': 53, 'GET,HEAD': 2, 'GET,POST': 1, 'GET (WS upgrade)': 1}
+tables: 49 AutoMigrate + 1 migration-created = 50

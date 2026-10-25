@@ -1,0 +1,23 @@
+[14:22:53.510] dummy listening port=59951 mode=silent timeout=120.0
+[14:22:54.519] dummy ACCEPT from=('16.146.199.68', 34620)
+[14:22:54.519] dummy RECV n=14480 total=14480 elapsed=0.00
+[14:22:54.520] dummy RECV n=65536 total=80016 elapsed=0.00
+[14:22:54.520] dummy RECV n=65440 total=145456 elapsed=0.00
+[14:22:54.520] dummy RECV n=792 total=146248 elapsed=0.00
+[14:22:54.521] dummy RECV n=52128 total=198376 elapsed=0.00
+[14:22:54.521] dummy RECV n=10136 total=208512 elapsed=0.00
+[14:22:54.521] dummy RECV n=65536 total=274048 elapsed=0.00
+[14:22:54.522] dummy RECV n=65536 total=339584 elapsed=0.00
+[14:22:54.522] dummy RECV n=65536 total=405120 elapsed=0.00
+[14:22:54.522] dummy RECV n=65536 total=470656 elapsed=0.00
+[14:22:54.523] dummy RECV n=65536 total=536192 elapsed=0.00
+[14:22:54.523] dummy RECV n=65536 total=601728 elapsed=0.00
+[14:22:54.523] dummy RECV n=65536 total=667264 elapsed=0.00
+[14:22:54.523] dummy RECV n=65536 total=732800 elapsed=0.00
+[14:22:54.523] dummy RECV n=65536 total=798336 elapsed=0.00
+[14:22:54.523] dummy RECV n=65536 total=863872 elapsed=0.00
+[14:22:54.524] dummy RECV n=65536 total=929408 elapsed=0.00
+[14:22:54.524] dummy RECV n=65536 total=994944 elapsed=0.00
+[14:22:54.524] dummy RECV n=53632 total=1048576 elapsed=0.00
+[14:23:04.522] dummy EOF elapsed=10.00 total_recv=1048576
+[14:23:04.522] dummy DONE elapsed=10.00

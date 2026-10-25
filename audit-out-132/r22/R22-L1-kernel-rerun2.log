@@ -1,0 +1,2 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+ok  	go-backend/internal/kernel	0.229s

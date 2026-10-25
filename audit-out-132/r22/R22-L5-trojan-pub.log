@@ -1,0 +1,23 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R22-L5 trojan-pub start=2026-10-25T13:49:25Z initiator=R22-L5 ===
+db backup /root/r22-l5/gost.db.pre-trojan-pub.bak md5=ce4e156a5f364d2d1990fce6ba8f60ba
+=== leg dbbackup end failures=0 [] ===
+dummy listening 16.146.199.68:59909
+create inbound http=200 code=0 msg=操作成功
+PASS create inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936167479, 'data': {'id': 5}}
+inbound id: 5 idle: 5
+PASS inbound listed with idle
+xray config has 59907
+R22-TR-PUB: CLOSED 5.05s dummy-accepts=1
+PASS R22-TR-PUB CLOSED 3.5-6.5s :: ('CLOSED', 5.054049015045166)
+PASS R22-TR-PUB dummy accepted >= 1 (relay reached target) :: 1
+--- delete trojan inbound by EXPLICIT id=5
+delete inbound http=200 code=0 msg=操作成功
+PASS delete inbound code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792936174091}
+PASS inbound gone from list
+xray inbound ports after delete: [59940]
+PASS xray config has no 59907 :: [59940]
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+=== R22-L5 trojan-pub end failures=0 [] ===
