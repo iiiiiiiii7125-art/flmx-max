@@ -1,0 +1,10 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+ok  	go-backend/internal/logredact	0.007s
+ok  	go-backend/internal/metrics	4.527s
+ok  	go-backend/internal/monitoring	0.008s
+ok  	go-backend/internal/netguard	0.012s
+ok  	go-backend/internal/runtime/nftables	0.115s
+ok  	go-backend/internal/security	0.987s
+ok  	go-backend/internal/store/repo	143.082s
+ok  	go-backend/internal/ws	7.175s
+ok  	go-backend/tests/contract	68.513s

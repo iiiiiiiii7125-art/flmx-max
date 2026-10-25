@@ -72,6 +72,16 @@ func renderXray(inbounds []Inbound) (string, error) {
 	// first, so it would be dead. These rules sit after the chain rules
 	// and before the per-user mark rules (otherwise a marked user would
 	// match the mark rule first and lose the timeout).
+	//
+	// R20-F03: the rendered connIdle value is verbatim by design — do
+	// NOT halve it to "compensate" the observed 2x close time. The 2x
+	// is Xray's ActivityTimer window quantization (common/signal:
+	// SetTimeout(N) re-checks every N seconds and only closes when a
+	// whole window saw no activity, so a session with data in its first
+	// window survives the N check and closes at 2N; a silent session
+	// closes at N). Halving the rendered value would close silent
+	// sessions at N/2. The honest fix is the UI/doc wording (windowed
+	// N–2N semantics), not the rendered value; see r20_f03_test.go.
 	idleOutbounds, idleRules := xrayConnIdleRoutes(inbounds, levels, idleEmitted)
 	outbounds = append(outbounds, idleOutbounds...)
 	rules = append(rules, idleRules...)

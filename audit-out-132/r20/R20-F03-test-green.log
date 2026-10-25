@@ -1,0 +1,7 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR20F03ConnIdleRenderedVerbatim
+--- PASS: TestR20F03ConnIdleRenderedVerbatim (0.00s)
+=== RUN   TestR20F03IdleCopyStatesWindowedSemantics
+--- PASS: TestR20F03IdleCopyStatesWindowedSemantics (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.023s

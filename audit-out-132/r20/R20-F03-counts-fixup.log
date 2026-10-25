@@ -1,0 +1,30 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+http=200 code=0 msg=操作成功
+node/list code 0 n 1
+http=200 code=0 msg=操作成功
+tunnel/list code 0 n 4
+http=200 code=0 msg=操作成功
+forward/list code 0 n 6
+http=200 code=0 msg=操作成功
+inbound/list code 0 n 578
+http=200 code=0 msg=操作成功
+subscription/list code 0 n 18
+http=200 code=0 msg=操作成功
+forward statuses [1, 1, 1, 1, 1, 1]
+CONNECT status: HTTP/1.1 200 Connection Established
+creds.json
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+5f015682710d3b7e82b8761361d46c94  /etc/flux_agent/gost.json
+active
+panel GET / http=200
+2026-10-25T06:47:02Z
+CONNECT status: HTTP/1.1 200 Connection Established
+http=200 code=0 msg=操作成功
+inbound n= 578 code= 0
+(no creds/token/creds.json on machine)
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+active
+panel GET / http=200
+2026-10-25T06:49:16Z

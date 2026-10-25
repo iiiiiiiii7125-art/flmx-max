@@ -1,0 +1,87 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	go-backend/cmd/paneld	[no test files]
+ok  	go-backend/internal/app	0.039s
+ok  	go-backend/internal/auth	0.023s
+ok  	go-backend/internal/config	0.013s
+2026/10/25 06:33:21 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.109755ms)
+2026/10/25 06:33:21 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.417276ms)
+2026/10/25 06:33:21 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (3.051648ms)
+2026/10/25 06:33:21 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (4.337887ms)
+2026/10/25 06:33:21 migration r5b4_v1_port_user_unique applied
+2026/10/25 06:33:21 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 06:33:21 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (177.526µs)
+2026/10/25 06:33:21 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 06:33:22 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (643.045µs)
+2026/10/25 06:33:22 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (173.029µs)
+2026/10/25 06:33:22 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (79.569µs)
+2026/10/25 06:33:22 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.811938ms)
+2026/10/25 06:33:22 migration r5b4_v1_port_user_unique applied
+2026/10/25 06:33:22 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 06:33:22 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (4.39354ms)
+2026/10/25 06:33:22 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 06:33:23 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (233.951µs)
+2026/10/25 06:33:23 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.477706ms)
+2026/10/25 06:33:23 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (616.735µs)
+2026/10/25 06:33:23 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (5.76662ms)
+2026/10/25 06:33:23 migration r5b4_v1_port_user_unique applied
+2026/10/25 06:33:23 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 06:33:23 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (620.51µs)
+2026/10/25 06:33:23 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 06:33:25 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (11.062684ms)
+2026/10/25 06:33:25 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (338.808µs)
+2026/10/25 06:33:25 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (183.355µs)
+2026/10/25 06:33:25 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (117.025µs)
+2026/10/25 06:33:25 migration r5b4_v1_port_user_unique applied
+2026/10/25 06:33:25 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 06:33:25 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (176.846µs)
+2026/10/25 06:33:25 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 06:33:26 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (247.381µs)
+2026/10/25 06:33:26 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (184.988µs)
+2026/10/25 06:33:26 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (85.679µs)
+2026/10/25 06:33:26 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (72.479µs)
+2026/10/25 06:33:26 migration r5b4_v1_port_user_unique applied
+2026/10/25 06:33:26 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 06:33:26 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (112.528µs)
+2026/10/25 06:33:26 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- FAIL: TestValidateMonitorTCPTarget (0.01s)
+    --- FAIL: TestValidateMonitorTCPTarget/公网域名放行 (0.01s)
+        monitor_ssrf_test.go:39: ValidateMonitorTCPTarget("example.com:443") err=目标地址不允许（内网/保留地址）: example.com, wantErr=false
+2026/10/25 06:33:28 service monitor 71: node target skipped: 目标地址不允许（元数据/硬拒绝地址）: 169.254.169.254:80
+FAIL
+FAIL	go-backend/internal/health	7.644s
+?   	go-backend/internal/http	[no test files]
+ok  	go-backend/internal/http/client	0.084s
+# go-backend/internal/logredact.test
+/home/hatch/go/pkg/tool/linux_amd64/link: cannot open file /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: open /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: no such file or directory
+# go-backend/internal/metrics.test
+/home/hatch/go/pkg/tool/linux_amd64/link: cannot open file /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: open /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: no such file or directory
+# go-backend/internal/monitoring.test
+/home/hatch/go/pkg/tool/linux_amd64/link: cannot open file /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: open /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: no such file or directory
+# go-backend/internal/netguard.test
+/home/hatch/go/pkg/tool/linux_amd64/link: cannot open file /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: open /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: no such file or directory
+# go-backend/internal/runtime/nftables.test
+/home/hatch/go/pkg/tool/linux_amd64/link: cannot open file /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: open /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: no such file or directory
+# go-backend/internal/security.test
+/home/hatch/go/pkg/tool/linux_amd64/link: cannot open file /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: open /home/hatch/.cache/go-build/02/022d18b9453ad7406d5d803f76a043b23fc02550e42ab6cf6896afa279cf7369-d: no such file or directory
+# go-backend/internal/store/repo [go-backend/internal/store/repo.test]
+internal/store/repo/repository_federation_cleanup.go:4:2: could not import crypto/sha256 (open ../../../.cache/go-build/04/041301cf3ba059be46801e6b145aa5298e398466d1b5998124315cbb726a39a1-d: no such file or directory)
+# go-backend/internal/ws [go-backend/internal/ws.test]
+internal/ws/server.go:10:2: could not import net/http (open ../../../.cache/go-build/03/0338b3cfc83511cb74861ab30cb240fb110c7fa1eb010af762a16a36bb4b5611-d: no such file or directory)
+# go-backend/tests/contract_test [go-backend/tests/contract.test]
+tests/contract/auth_contract_test.go:6:2: could not import net/http (open ../../../.cache/go-build/03/0338b3cfc83511cb74861ab30cb240fb110c7fa1eb010af762a16a36bb4b5611-d: no such file or directory)
+tests/contract/passkey_contract_test.go:8:2: could not import crypto/sha256 (open ../../../.cache/go-build/04/041301cf3ba059be46801e6b145aa5298e398466d1b5998124315cbb726a39a1-d: no such file or directory)
+ok  	go-backend/internal/http/handler	756.832s
+ok  	go-backend/internal/http/middleware	0.050s
+?   	go-backend/internal/http/response	[no test files]
+ok  	go-backend/internal/kernel	0.651s
+FAIL	go-backend/internal/logredact [build failed]
+FAIL	go-backend/internal/metrics [build failed]
+FAIL	go-backend/internal/monitoring [build failed]
+FAIL	go-backend/internal/netguard [build failed]
+FAIL	go-backend/internal/runtime/nftables [build failed]
+FAIL	go-backend/internal/security [build failed]
+?   	go-backend/internal/store/model	[no test files]
+FAIL	go-backend/internal/store/repo [build failed]
+FAIL	go-backend/internal/ws [build failed]
+FAIL	go-backend/tests/contract [build failed]
+FAIL
