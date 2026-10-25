@@ -1,0 +1,127 @@
+=== R18-L2 empirical legs ===
+binary: /home/hatch/workspace/.r18-l2-gost/gost
+gost dev (go1.25.1 linux/amd64)
+/usr/bin/ss
+/usr/bin/curl
+/usr/bin/python3
+--- Leg A: default launch (no -api), expect NO api listener ---
+agent-A pid=3643 alive=yes
+ss listeners (all):
+State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+curl api port (expect refused):
+000
+curl exit=7 (refused expected)
+agent-A exit=124
+agent-A.log tail:
+❌ WebSocket连接失败: 连接WebSocket失败: wss://127.0.0.1:9/system-info?type=1&secret=***&version=dev+%28ubuntu%2Famd64%29&http=0&tls=0&socks=0 => dial tcp 127.0.0.1:9: connect: connection refused（已禁止从 wss 自动降级到 ws 明文连接；请检查面板 TLS/证书，或在 config.json 的 addr 中显式使用 ws:// 前缀以确认明文部署），3.988395153s后重试
+❌ WebSocket连接失败: 连接WebSocket失败: wss://127.0.0.1:9/system-info?type=1&secret=***&version=dev+%28ubuntu%2Famd64%29&http=0&tls=0&socks=0 => dial tcp 127.0.0.1:9: connect: connection refused（已禁止从 wss 自动降级到 ws 明文连接；请检查面板 TLS/证书，或在 config.json 的 addr 中显式使用 ws:// 前缀以确认明文部署），9.482019833s后重试
+🚀 配置定时上报器已启动，每10分钟上报一次（WebSocket连接稳定后启动）
+❌ 初始配置上报失败: 发送HTTP请求失败: https://127.0.0.1:9/flow/config?secret=*** => 请求失败: Post "https://127.0.0.1:9/flow/config?secret=*** dial tcp 127.0.0.1:9: connect: connection refused
+⏹️ 配置定时上报器已停止
+--- Leg B: -api launch, expect listener + createService works ---
+agent-B pid=3663 alive=yes
+ss listeners:
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess
+LISTEN 0      0          127.0.0.1:18080      0.0.0.0:*          
+POST createService svc-a:
+{"msg":"OK"}
+gost.json after create (count svc-a):
+1
+{
+  "services": [
+    {
+      "name": "svc-a",
+      "addr": "127.0.0.1:19001",
+      "handler": {
+        "type": "auto"
+      },
+      "listener": {
+        "type": "tcp"
+      }
+    }
+  ],
+  "api": {
+    "addr": "127.0.0.1:18080"
+  }
+}
+agent-B exit=0
+--- Leg C: pause -> restart -> re-create same name (blind-append poison demo) ---
+POST pause svc-a:
+{"code":40004,"msg":"service svc-a not found"}
+gost.json after pause:
+      "name": "svc-a",
+      "addr": "127.0.0.1:19001",
+      "handler": {
+agent-C1 exit=0
+restart (loader skips paused svc-a; IsRegistered must now be false):
+POST createService svc-a again (expect 200 = blind append accepted):
+{"msg":"OK"}
+gost.json after re-create (count svc-a, expect 2 = POISONED):
+1
+4:      "name": "svc-a",
+agent-C2 exit=0
+--- Leg D: restart again (baseline R17-A self-heal should dedupe) ---
+gost.json after heal-restart (count svc-a, expect 1):
+1
+heal warn in log:
+no self-heal line
+agent-D exit=0
+=== legs done ===
+=== R18-L2 legs C'/D' (corrected drift path) ===
+starting gost.json:
+{
+  "services": [
+    {
+      "name": "svc-a",
+      "addr": "127.0.0.1:19001",
+      "handler": {
+        "type": "auto"
+      },
+      "listener": {
+        "type": "tcp"
+      }
+    }
+  ],
+  "api": {
+    "addr": "127.0.0.1:18080"
+  }
+}
+--- Leg C': bare launch (api: from gost.json), pause, restart, re-create ---
+bare agent alive=yes; api up? {"Data":{"name":"svc-a","status":"running","paused":false}}
+POST pause svc-a:
+{"msg":"OK"}
+gost.json after pause:
+[
+ {
+  "name": "svc-a",
+  "addr": "127.0.0.1:19001",
+  "handler": {
+   "type": "auto"
+  },
+  "listener": {
+   "type": "tcp"
+  },
+  "metadata": {
+   "paused": true
+  }
+ }
+]
+agent-Cp1 exit=0
+restart bare (loader must skip paused svc-a):
+GET status svc-a (expect not-found 40004):
+{"code":40004,"msg":"service svc-a not found"}
+POST createService svc-a again (expect OK = blind append accepted):
+{"msg":"OK"}
+gost.json svc-a count (expect 2 = POISONED):
+2
+4:      "name": "svc-a",
+17:      "name": "svc-a",
+services: [('svc-a', True), ('svc-a', None)]
+agent-Cp2 exit=0
+--- Leg D': restart bare again (R17-A self-heal must dedupe) ---
+gost.json svc-a count after heal-restart (expect 1):
+1
+heal warn in log:
+{"level":"warning","msg":"startup config self-heal: removed duplicate service(s) [svc-a] from persisted config","time":"2026-10-25T01:52:25.231Z"}
+agent-Dp exit=0
+=== legs C'/D' done ===

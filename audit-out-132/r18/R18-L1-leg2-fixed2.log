@@ -1,0 +1,28 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg2 r18-fixed2 start=2026-10-25T01:43:24Z agent_file=flux_agent-r17d ===
+--- install agent
+23aa260d8bffb857171f26e3426b7d2d  /etc/flux_agent/flux_agent
+--- sanity start on current gost
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+--- poison gost.json (expect md5 e381299b2aa931d2f7c097661ead6702, 378 lines)
+agent stopped
+e381299b2aa931d2f7c097661ead6702  /etc/flux_agent/gost.json
+378 /etc/flux_agent/gost.json
+--- restart agent on poisoned file
+active=active NRestarts=0
+715071 /etc/flux_agent/flux_agent
+--- journal self-heal / failure lines (last 30 min):
+Oct 25 01:43:36 ip-172-26-9-119 flux_agent[714998]: {"level":"warning","msg":"startup config self-heal: removed duplicate service(s) [6_1_0_tcp 6_1_0_udp] from persisted config","time":"2026-10-25T01:43:36.396Z"}
+--- agent-startup.log:
+(no agent-startup.log file)
+--- post gost:
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+services=12 dup=none
+--- restore pristine gost + start
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+active=active
+    PID CMD
+ 715269 /etc/flux_agent/flux_agent
+=== leg2 r18-fixed2 end=2026-10-25T01:44:09Z ===

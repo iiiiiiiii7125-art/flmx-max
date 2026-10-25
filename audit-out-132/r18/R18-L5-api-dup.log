@@ -1,0 +1,13 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR18L5ApiCreateServiceBlindAppend
+💾 节点配置已持久化到 /home/hatch/workspace/r18-l5-scratch/tmp/TestR18L5ApiCreateServiceBlindAppend2251074186/001/gost.json
+    r18_l5_api_dup_test.go:84: createService status=200 body={"msg":"OK"}
+    r18_l5_api_dup_test.go:95: in-memory entries=2 on-disk entries=2
+--- PASS: TestR18L5ApiCreateServiceBlindAppend (0.02s)
+=== RUN   TestR18L5ApiCreateServicesBlindAppend
+💾 节点配置已持久化到 /home/hatch/workspace/r18-l5-scratch/tmp/TestR18L5ApiCreateServicesBlindAppend1410810989/001/gost.json
+    r18_l5_api_dup_test.go:131: createServices status=200 body={"msg":"OK"}
+    r18_l5_api_dup_test.go:142: in-memory entries=2 on-disk entries=2
+--- PASS: TestR18L5ApiCreateServicesBlindAppend (0.01s)
+PASS
+ok  	github.com/go-gost/x/api	0.260s

@@ -1,0 +1,84 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== agent ===
+active
+MainPID=710218
+NRestarts=0
+ActiveState=active
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+total 83632
+drwxr-xr-x  3 root root     4096 Oct 25 01:29 .
+drwxr-xr-x 70 root root     4096 Oct 24 15:18 ..
+-rw-r--r--  1 root root      499 Oct 22 01:35 agent-upgrade.log
+-rw-------  1 root root      129 Oct 21 23:37 config.json
+-rw-r--r--  1 root root       16 Oct 21 12:46 device.id
+-rw-------  1 root root       10 Oct 23 18:19 flmx_agent_seq.json
+-rwxr-xr-x  1 root root 50194574 Oct 25 01:29 flux_agent
+-rwxr-xr-x  1 root root 35393720 Oct 22 01:35 flux_agent.old
+-rw-------  1 root root     6237 Oct 25 01:29 gost.json
+=== gost ===
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+services: 12
+dups: []
+=== r17d/r17c ===
+R17-FIX-D-create-vless.json
+R17-FIX-D-deploy.sh
+R17-FIX-D-dummy.py
+R17-FIX-D-fastpoll.sh
+R17-FIX-D-killfreeze.sh
+R17-FIX-D-killwatch.py
+R17-FIX-D-leg1.sh
+R17-FIX-D-leg2.sh
+R17-FIX-D-leg4-create.sh
+R17-FIX-D-leg4-delete.sh
+R17-FIX-D-leg4-legs.sh
+R17-FIX-D-leg4-scaffold.sh
+R17-FIX-D-restart-probe.sh
+R17-FIX-D-restore.sh
+R17-FIX-D-watcher.py
+docker-compose.yml.pristine
+dummy-fixed-1.log
+dummy-fixed-2.log
+env.pristine
+fastpoll-control-6.log
+flux_agent-main
+flux_agent-r17d
+flux_agent.pristine
+flux_agent.service.pristine
+gost.json.pristine
+harness-r17d.log
+killfreeze-kill-2.log
+killwatch-kill-1.log
+killwatch-kill-2.log
+leg2-control.log
+R17-FIX-C-baseline.log
+R17-FIX-C-deploy.log
+R17-FIX-C-deploy.sh
+R17-FIX-C-harness.sh
+R17-FIX-C-logverify.log
+R17-FIX-C-logverify.sh
+R17-FIX-C-restore.log
+R17-FIX-C-restore.sh
+R17-FIX-C-snapshot.sh
+agent-startup.log
+docker-compose.yml.pristine
+env.pristine
+flux_agent
+flux_agent-prod.service
+flux_agent-r17c
+flux_agent.pristine
+flux_agent.service.orig
+flux_agent.service.pristine
+gost.json-poisoned
+gost.json.pristine
+harness-r17c-base.log
+journal-poison-window.log
+stage
+stage.tgz
+tables.sh
+tables2.sh
+=== docker ===
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 9 minutes (unhealthy)
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 10 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 10 hours (healthy)
+/dev/nvme0n1p1   20G   16G  3.6G  81% /

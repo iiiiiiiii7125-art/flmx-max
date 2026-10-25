@@ -1,0 +1,210 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR18L4MatrixR1Singbox
+    r18_l4_probe_test.go:85: CELL R1 C1 password ss1 OK "r18-ss-pw1"
+    r18_l4_probe_test.go:86: CELL R1 C1 password ss2 OK "r18-ss-pw2"
+    r18_l4_probe_test.go:87: CELL R1 C1 password ss3 OK "r18-ss-pw3"
+    r18_l4_probe_test.go:88: CELL R1 C1 password trojan OK "r18-tj-pw1"
+    r18_l4_probe_test.go:89: CELL R1 C1 password hy2 OK "r18-hy2-pw1"
+    r18_l4_probe_test.go:90: CELL R1 C1 password tuic OK "r18-tuic-pw1"
+    r18_l4_probe_test.go:91: CELL R1 C1 password anytls OK "r18-at-pw1"
+    r18_l4_probe_test.go:92: CELL R1 C1 password naive OK "r18-na-pw1"
+    r18_l4_probe_test.go:93: CELL R1 C1 password socks OK "r18-so-pw1"
+    r18_l4_probe_test.go:94: CELL R1 C1 password http OK "r18-ht-pw1"
+    r18_l4_probe_test.go:95: CELL R1 C2 uuid vmess OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:96: CELL R1 C2 uuid vless OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:97: CELL R1 C2 uuid tuic OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:98: CELL R1 C3 psk snell1 OK "r18-snell-psk1"
+    r18_l4_probe_test.go:99: CELL R1 C3 psk snell2 OK "r18-snell-psk2"
+    r18_l4_probe_test.go:100: CELL R1 C4 cipher ss1 OK "aes-256-gcm"
+    r18_l4_probe_test.go:101: CELL R1 C4 cipher ss2 OK "aes-128-gcm"
+    r18_l4_probe_test.go:102: CELL R1 C4 cipher vmess OK "aes-128-gcm"
+    r18_l4_probe_test.go:103: CELL R1 C5 encryption vless OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r18_l4_probe_test.go:104: CELL R1 C6 flow vless OK "xtls-rprx-vision"
+    r18_l4_probe_test.go:105: CELL R1 C7 username naive OK "r18-na-user"
+    r18_l4_probe_test.go:106: CELL R1 C7 username socks OK "r18-so-user"
+    r18_l4_probe_test.go:107: CELL R1 C7 username http OK "r18-ht-user"
+    r18_l4_probe_test.go:108: CELL R1 C8 plugin ss2 OK "obfs"
+    r18_l4_probe_test.go:109: CELL R1 C8 plugin-opts.mode ss2 OK "http"
+    r18_l4_probe_test.go:110: CELL R1 C8 plugin-opts.host ss2 OK "r18ob.example.net"
+    r18_l4_probe_test.go:111: CELL R1 C8 plugin ss3 shadow-tls OK "shadow-tls"
+    r18_l4_probe_test.go:112: CELL R1 C8 plugin-opts.password ss3 OK "r18-stls-pw1"
+    r18_l4_probe_test.go:113: CELL R1 C8 plugin-opts.host ss3 OK "stls.r18.example.net"
+    r18_l4_probe_test.go:114: CELL R1 C8 shadow-tls.password snell2 OK "r18-stls-pw2"
+    r18_l4_probe_test.go:115: CELL R1 C8 shadow-tls.host snell2 OK "sn.r18.example.net"
+    r18_l4_probe_test.go:116: CELL R1 C9 reality public-key OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r18_l4_probe_test.go:117: CELL R1 C9 reality short-id OK "cdef"
+    r18_l4_probe_test.go:118: CELL R1 C10 obfs hy2 OK "salamander"
+    r18_l4_probe_test.go:119: CELL R1 C10 obfs-password hy2 OK "r18-hy2-obfs1"
+    r18_l4_probe_test.go:120: CELL R1 C10 ports hy2 OK "30000-30010"
+    r18_l4_probe_test.go:124: CELL R1 C11 version snell1 OK 6
+    r18_l4_probe_test.go:125: CELL R1 C11 mode snell1 OK "unshaped"
+    r18_l4_probe_test.go:129: CELL R1 C12 alterId vmess OK 1
+--- PASS: TestR18L4MatrixR1Singbox (0.00s)
+=== RUN   TestR18L4MatrixR2Clash
+    r18_l4_probe_test.go:219: CELL R2 C1 password ss OK "r18-ss-pw1"
+    r18_l4_probe_test.go:220: CELL R2 C1 password trojan OK "r18-tj-pw1"
+    r18_l4_probe_test.go:221: CELL R2 C1 password hy2 OK "r18-hy2-pw1"
+    r18_l4_probe_test.go:222: CELL R2 C2 uuid vmess OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:223: CELL R2 C2 uuid vless OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:224: CELL R2 C2 uuid tuic OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:225: CELL R2 C3 psk snell OK "r18-snell-psk1"
+    r18_l4_probe_test.go:226: CELL R2 C4 cipher ss OK "aes-256-gcm"
+    r18_l4_probe_test.go:227: CELL R2 C4 cipher vmess OK "aes-128-gcm"
+    r18_l4_probe_test.go:228: CELL R2 C5 encryption vless OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r18_l4_probe_test.go:229: CELL R2 C6 flow vless OK "xtls-rprx-vision"
+    r18_l4_probe_test.go:230: CELL R2 C7 username naive OK "r18-na-user"
+    r18_l4_probe_test.go:231: CELL R2 C7 username socks OK "r18-so-user"
+    r18_l4_probe_test.go:232: CELL R2 C8 plugin ss-obfs OK "obfs"
+    r18_l4_probe_test.go:233: CELL R2 C8 plugin-opts.mode OK "tls"
+    r18_l4_probe_test.go:234: CELL R2 C8 plugin-opts.host OK "r18cob.example.net"
+    r18_l4_probe_test.go:235: CELL R2 C9 reality public-key OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r18_l4_probe_test.go:236: CELL R2 C9 reality short-id OK "ab12"
+    r18_l4_probe_test.go:237: CELL R2 C10 obfs hy2 OK "salamander"
+    r18_l4_probe_test.go:238: CELL R2 C10 obfs-password hy2 OK "r18-hy2-obfs1"
+    r18_l4_probe_test.go:242: CELL R2 C11 version snell OK 6
+    r18_l4_probe_test.go:243: CELL R2 C11 mode snell OK "unshaped"
+    r18_l4_probe_test.go:247: CELL R2 C12 alterId vmess OK 1
+--- PASS: TestR18L4MatrixR2Clash (0.00s)
+=== RUN   TestR18L4MatrixR3URI
+    r18_l4_probe_test.go:269: CELL R3 R3VL imported host=203.0.113.63 port=18203
+    r18_l4_probe_test.go:269: CELL R3 R3TJ imported host=203.0.113.64 port=18204
+    r18_l4_probe_test.go:269: CELL R3 R3HY2 imported host=203.0.113.65 port=18205
+    r18_l4_probe_test.go:269: CELL R3 R3TUIC imported host=203.0.113.66 port=18206
+    r18_l4_probe_test.go:269: CELL R3 R3AT imported host=203.0.113.67 port=18207
+    r18_l4_probe_test.go:269: CELL R3 R3SO imported host=203.0.113.68 port=18208
+    r18_l4_probe_test.go:269: CELL R3 R3VM imported host=203.0.113.62 port=18202
+    r18_l4_probe_test.go:269: CELL R3 R3SS imported host=203.0.113.61 port=18201
+    r18_l4_probe_test.go:272: CELL R3 C1 password ss OK "r18-uri-ss-pw"
+    r18_l4_probe_test.go:273: CELL R3 C4 cipher ss OK "aes-256-gcm"
+    r18_l4_probe_test.go:274: CELL R3 C8 plugin-opts.mode ss OK "http"
+    r18_l4_probe_test.go:275: CELL R3 C8 plugin-opts.host ss OK "r18uob.example.net"
+    r18_l4_probe_test.go:277: CELL R3 C2 uuid vmess OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:278: CELL R3 C4 cipher vmess OK "aes-128-gcm"
+    r18_l4_probe_test.go:282: CELL R3 C12 alterId vmess OK 1
+    r18_l4_probe_test.go:284: CELL R3 C2 uuid vless OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:285: CELL R3 C5 encryption vless OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r18_l4_probe_test.go:286: CELL R3 C6 flow vless OK "xtls-rprx-vision"
+    r18_l4_probe_test.go:287: CELL R3 C9 reality public-key OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r18_l4_probe_test.go:288: CELL R3 C9 reality short-id OK "ab12"
+    r18_l4_probe_test.go:289: CELL R3 C1 password trojan OK "r18-uri-tj-pw"
+    r18_l4_probe_test.go:291: CELL R3 C1 password hy2 OK "r18-uri-hy2-pw"
+    r18_l4_probe_test.go:292: CELL R3 C10 obfs hy2 OK "salamander"
+    r18_l4_probe_test.go:293: CELL R3 C10 obfs-password hy2 OK "r18-uri-hy2-obfs"
+    r18_l4_probe_test.go:295: CELL R3 C2 uuid tuic OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:296: CELL R3 C1 password tuic OK "r18-uri-tuic-pw"
+    r18_l4_probe_test.go:297: CELL R3 C1 password anytls OK "r18-uri-at-pw"
+    r18_l4_probe_test.go:299: CELL R3 C7 username socks OK "r18-uri-so-user"
+    r18_l4_probe_test.go:300: CELL R3 C1 password socks OK "r18-uri-so-pw"
+    r18_l4_probe_test.go:301: CELL R3 C3/C11 snell:// REJECT "第 1 行：暂不支持 snell:// 链接"
+    r18_l4_probe_test.go:302: CELL R3 C7 http:// REJECT "第 1 行：http(s):// 是订阅地址，请单独粘贴在输入框里"
+--- PASS: TestR18L4MatrixR3URI (0.00s)
+=== RUN   TestR18L4MatrixR4Surge
+    r18_l4_probe_test.go:325: CELL R4 R4SS imported type=ss host=203.0.113.71 port=18301
+    r18_l4_probe_test.go:325: CELL R4 R4SSSTL imported type=ss host=203.0.113.71 port=18302
+    r18_l4_probe_test.go:325: CELL R4 R4LOON imported type=ss host=203.0.113.72 port=18303
+    r18_l4_probe_test.go:325: CELL R4 R4VM imported type=vmess host=203.0.113.73 port=18304
+    r18_l4_probe_test.go:325: CELL R4 R4TJ imported type=trojan host=203.0.113.74 port=18305
+    r18_l4_probe_test.go:325: CELL R4 R4HY2 imported type=hysteria2 host=203.0.113.75 port=18306
+    r18_l4_probe_test.go:325: CELL R4 R4TUIC imported type=tuic host=203.0.113.76 port=18307
+    r18_l4_probe_test.go:325: CELL R4 R4AT imported type=anytls host=203.0.113.77 port=18308
+    r18_l4_probe_test.go:325: CELL R4 R4SO imported type=socks5 host=203.0.113.78 port=18309
+    r18_l4_probe_test.go:325: CELL R4 R4HT imported type=http host=203.0.113.79 port=18310
+    r18_l4_probe_test.go:325: CELL R4 R4SN imported type=snell host=203.0.113.80 port=18311
+    r18_l4_probe_test.go:325: CELL R4 R4SNOB imported type=snell host=203.0.113.81 port=18312
+    r18_l4_probe_test.go:325: CELL R4 R4SNSTL imported type=snell host=203.0.113.82 port=18313
+    r18_l4_probe_test.go:328: CELL R4 C1 password ss OK "r18-sg-ss-pw1"
+    r18_l4_probe_test.go:329: CELL R4 C4 cipher ss OK "aes-256-gcm"
+    r18_l4_probe_test.go:330: CELL R4 C8 plugin-opts.mode ss OK "http"
+    r18_l4_probe_test.go:331: CELL R4 C8 plugin-opts.host ss OK "r18sgob.example.net"
+    r18_l4_probe_test.go:333: CELL R4 C8 plugin ss-shadowtls OK "shadow-tls"
+    r18_l4_probe_test.go:334: CELL R4 C8 plugin-opts.password ss-shadowtls OK "r18-sg-stls-pw"
+    r18_l4_probe_test.go:335: CELL R4 C8 plugin-opts.host ss-shadowtls OK "stls.r18.example.net"
+    r18_l4_probe_test.go:339: CELL R4 C8 plugin-opts.version ss-shadowtls OK 3
+    r18_l4_probe_test.go:341: CELL R4 C4 cipher loon-positional OK "aes-128-gcm"
+    r18_l4_probe_test.go:342: CELL R4 C1 password loon-positional OK "r18-sg-loon-pw2"
+    r18_l4_probe_test.go:344: CELL R4 C2 uuid vmess OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:345: CELL R4 C4 cipher vmess OK "aes-128-gcm"
+    r18_l4_probe_test.go:349: CELL R4 C12 alterId vmess OK 1
+    r18_l4_probe_test.go:350: CELL R4 C1 password trojan OK "r18-sg-tj-pw1"
+    r18_l4_probe_test.go:352: CELL R4 C1 password hy2 OK "r18-sg-hy2-pw1"
+    r18_l4_probe_test.go:353: CELL R4 C10 obfs hy2 OK "salamander"
+    r18_l4_probe_test.go:354: CELL R4 C10 obfs-password hy2 OK "r18-sg-hy2-obfs"
+    r18_l4_probe_test.go:355: CELL R4 C10 ports hy2 OK "30000-30010"
+    r18_l4_probe_test.go:357: CELL R4 C2 uuid tuic OK "55555555-5555-4555-8555-555555555555"
+    r18_l4_probe_test.go:358: CELL R4 C1 password tuic OK "r18-sg-tuic-pw1"
+    r18_l4_probe_test.go:359: CELL R4 C1 password anytls OK "r18-sg-at-pw1"
+    r18_l4_probe_test.go:361: CELL R4 C7 username socks OK "r18-sg-so-user"
+    r18_l4_probe_test.go:362: CELL R4 C1 password socks OK "r18-sg-so-pw1"
+    r18_l4_probe_test.go:364: CELL R4 C7 username http OK "r18-sg-ht-user"
+    r18_l4_probe_test.go:365: CELL R4 C1 password http OK "r18-sg-ht-pw1"
+    r18_l4_probe_test.go:367: CELL R4 C3 psk snell OK "r18-sg-sn-psk1"
+    r18_l4_probe_test.go:371: CELL R4 C11 version snell OK 6
+    r18_l4_probe_test.go:372: CELL R4 C11 mode snell OK "unshaped"
+    r18_l4_probe_test.go:374: CELL R4 C3 psk snell-obfs OK "r18-sg-sn-psk2"
+    r18_l4_probe_test.go:375: CELL R4 C10 obfs-opts.mode snell OK "http"
+    r18_l4_probe_test.go:377: CELL R4 C3 psk snell-shadowtls OK "r18-sg-sn-psk3"
+    r18_l4_probe_test.go:378: CELL R4 C8 shadow-tls.password snell OK "r18-sg-sn-stls-pw"
+    r18_l4_probe_test.go:379: CELL R4 C8 shadow-tls.host snell OK "snst.r18.example.net"
+    r18_l4_probe_test.go:383: CELL R4 C8 shadow-tls.version snell OK 3
+    r18_l4_probe_test.go:384: CELL R4 C5/C6 vless REJECT "第 1 行：暂不支持 vless 类型的节点"
+--- PASS: TestR18L4MatrixR4Surge (0.00s)
+=== RUN   TestR18L4MatrixR4SnellShadowTLSCompanion
+    r18_l4_probe_test.go:389: CELL R4-supplement C3 psk OK "r18-sg-sn-psk3"
+    r18_l4_probe_test.go:393: CELL R4-supplement C11 version OK 6
+    r18_l4_probe_test.go:394: CELL R4-supplement C8 shadow-tls.password OK "r18-sg-sn-stls-pw"
+    r18_l4_probe_test.go:395: CELL R4-supplement C8 shadow-tls.host OK "snst.r18.example.net"
+--- PASS: TestR18L4MatrixR4SnellShadowTLSCompanion (0.00s)
+=== RUN   TestR18L4A2Predicates
+    r18_l4_probe_test.go:402: CELL A2-01 fp garbage REJECT "A：client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）"
+    r18_l4_probe_test.go:404: CELL A2-01 fp Chrome healed OK "chrome"
+    r18_l4_probe_test.go:406: CELL A2-02 xhttp garbage REJECT "第 1 行：xhttp mode 不受支持（仅 auto / packet-up / stream-up / stream-one）"
+    r18_l4_probe_test.go:408: CELL A2-02 xhttp packet-up OK "packet-up"
+    r18_l4_probe_test.go:410: CELL A2-02 xhttp PACKET-UP healed OK "packet-up"
+    r18_l4_probe_test.go:412: CELL A2-03 ss plugin garbage REJECT "A：Shadowsocks obfs mode 不受支持（仅 http / tls）"
+    r18_l4_probe_test.go:414: CELL A2-03 ss plugin TLS healed OK "tls"
+    r18_l4_probe_test.go:416: CELL A2-04 snell obfs garbage REJECT "A：Snell obfs mode 不受支持（仅 http / tls / shadow-tls / restls / jls 或空）"
+    r18_l4_probe_test.go:418: CELL A2-04 snell obfs shadowtls healed OK "shadow-tls"
+    r18_l4_probe_test.go:420: CELL A2-04 snell v6 UNSHAPED healed OK "unshaped"
+    r18_l4_probe_test.go:422: CELL A2-05 vmess cipher garbage REJECT "A：VMess 加密方式 cipher 不受支持（仅 auto / aes-128-gcm / chacha20-poly1305 / none / zero）"
+    r18_l4_probe_test.go:424: CELL A2-05 vmess cipher legal OK "aes-128-gcm"
+    r18_l4_probe_test.go:426: CELL A2-06 vless flow garbage REJECT "A：VLESS flow 不受支持（仅 xtls-rprx-vision 或空）"
+    r18_l4_probe_test.go:428: CELL A2-06 vless flow legal OK "xtls-rprx-vision"
+    r18_l4_probe_test.go:430: CELL A2-07 hy2 obfs garbage REJECT "A：Hysteria2 obfs 类型不受支持（仅 salamander / gecko 或空）"
+    r18_l4_probe_test.go:432: CELL A2-07 hy2 obfs legal OK "salamander"
+    r18_l4_probe_test.go:434: CELL A2-08 tuic cc new-reno REJECT "第 1 行：TUIC congestion-controller 不受支持（仅 bbr / cubic / new_reno）"
+    r18_l4_probe_test.go:436: CELL A2-08 tuic cc bbr OK "bbr"
+    r18_l4_probe_test.go:438: CELL A2-09 ss cipher garbage REJECT "A：Shadowsocks 加密方式 cipher 不受支持"
+    r18_l4_probe_test.go:440: CELL A2-09 ss cipher chacha20 imported OK "chacha20"
+    r18_l4_probe_test.go:442: CELL A2-10 enc garbage REJECT "A：VLESS encryption 格式错误（须为 none 或 mlkem768x25519plus 客户端加密串）"
+    r18_l4_probe_test.go:444: CELL A2-10 enc legal OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r18_l4_probe_test.go:446: CELL A2-11 reality bad pbk REJECT "A：Reality 公钥 pbk 格式错误（须为 32 字节的 RawURL base64）"
+    r18_l4_probe_test.go:447: CELL A2-11 reality bad sid REJECT "A：Reality short-id 格式错误（须为偶数位小写十六进制，最多 16 位）"
+    r18_l4_probe_test.go:449: CELL A2-11 reality pbk legal OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r18_l4_probe_test.go:450: CELL A2-11 reality sid legal OK "ab12"
+--- PASS: TestR18L4A2Predicates (0.00s)
+=== RUN   TestR18L4FacesConsumption
+    r18_l4_probe_test.go:483: CELL FACE fp-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:484: CELL FACE flow-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:485: CELL FACE tuic-cc-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:486: CELL FACE hy2-obfs-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:487: CELL FACE vmess-cipher-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:488: CELL FACE ss-cipher-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:489: CELL FACE enc-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:490: CELL FACE ss-plugin-mode-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:491: CELL FACE snell-obfs-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:492: CELL FACE reality-pbk-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:493: CELL FACE reality-sid-bad BAD all-4-faces-reject
+    r18_l4_probe_test.go:503: CELL FACE heal fp Chrome->chrome storage-untouched OK
+    r18_l4_probe_test.go:509: CELL FACE heal xhttp PACKET-UP->packet-up OK
+    r18_l4_probe_test.go:515: CELL FACE heal snell UNSHAPED->unshaped OK
+    r18_l4_probe_test.go:517: CELL FACE flow-good GOOD all-4-faces-pass
+    r18_l4_probe_test.go:518: CELL FACE tuic-cc-good GOOD all-4-faces-pass
+    r18_l4_probe_test.go:519: CELL FACE vmess-cipher-good GOOD all-4-faces-pass
+    r18_l4_probe_test.go:520: CELL FACE enc-good GOOD all-4-faces-pass
+    r18_l4_probe_test.go:531: CELL FACE ss-chacha20 clash-only OK
+    r18_l4_probe_test.go:541: CELL FACE render-skip fp-bad singbox+clash skip OK
+    r18_l4_probe_test.go:549: CELL FACE uri-enc-legal verbatim OK
+    r18_l4_probe_test.go:555: CELL FACE uri-enc-bad no-chain OK
+--- PASS: TestR18L4FacesConsumption (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.017s

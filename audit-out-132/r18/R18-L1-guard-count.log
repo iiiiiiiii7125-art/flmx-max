@@ -1,0 +1,6 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+backend log: /var/lib/docker/containers/38076da00b1b235aafa5151a10fdd62cad04e9b2c2af09b3bc37a227cea94ac3/38076da00b1b235aafa5151a10fdd62cad04e9b2c2af09b3bc37a227cea94ac3-json.log
+total guard lines: 14
+by decision: {'send': 7, 'sent-failed': 1, 'sent-ok': 6}
+by reason: {'update-fallback': 12, 'self-occupied-rebind': 2}
+by services: {'6_1_0_tcp,6_1_0_udp': 6, '3_5_3_tcp,3_5_3_udp': 2, '2_5_2_tcp,2_5_2_udp': 2, '7_1_0_tcp,7_1_0_udp': 4}

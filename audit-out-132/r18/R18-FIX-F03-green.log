@@ -1,0 +1,103 @@
+=== socket R18-F03 ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestCreateChainDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateChainDedupesExistingConfigEntry3702654142/001/gost.json
+--- PASS: TestCreateChainDedupesExistingConfigEntry (0.00s)
+=== RUN   TestCreateLimiterDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateLimiterDedupesExistingConfigEntry199240183/001/gost.json
+--- PASS: TestCreateLimiterDedupesExistingConfigEntry (0.00s)
+=== RUN   TestCreateConnLimiterDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateConnLimiterDedupesExistingConfigEntry1414440662/001/gost.json
+--- PASS: TestCreateConnLimiterDedupesExistingConfigEntry (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.065s
+=== config R18-F03 ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestDeduplicateChainsRemovesDuplicates
+--- PASS: TestDeduplicateChainsRemovesDuplicates (0.00s)
+=== RUN   TestDeduplicateChainsNoDuplicatesIsNoop
+--- PASS: TestDeduplicateChainsNoDuplicatesIsNoop (0.00s)
+=== RUN   TestDeduplicateLimitersRemovesDuplicates
+--- PASS: TestDeduplicateLimitersRemovesDuplicates (0.00s)
+=== RUN   TestDeduplicateCLimitersRemovesDuplicates
+--- PASS: TestDeduplicateCLimitersRemovesDuplicates (0.00s)
+=== RUN   TestHealPersistedChainsLimiters
+💾 节点配置已持久化到 /tmp/TestHealPersistedChainsLimiters94462084/001/gost.json
+💾 节点配置已持久化到 /tmp/TestHealPersistedChainsLimiters94462084/001/gost.json
+💾 节点配置已持久化到 /tmp/TestHealPersistedChainsLimiters94462084/001/gost.json
+--- PASS: TestHealPersistedChainsLimiters (0.01s)
+=== RUN   TestHealPersistedChainsLimitersCleanIsNoop
+--- PASS: TestHealPersistedChainsLimitersCleanIsNoop (0.00s)
+PASS
+ok  	github.com/go-gost/x/config	0.043s
+=== loader R18-F03 ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestLoadPoisonedChainsLimitersFailsWithDuplicate
+    r18_fix_f03_test.go:74: loader.Load(poisoned chains/limiters) error (startup failure point): registry: duplicate object
+--- PASS: TestLoadPoisonedChainsLimitersFailsWithDuplicate (0.02s)
+=== RUN   TestLoadHealedChainsLimitersSucceeds
+--- PASS: TestLoadHealedChainsLimitersSucceeds (0.00s)
+PASS
+ok  	github.com/go-gost/x/config/loader	0.102s
+=== R17 regression: config dedupe+heal ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestDeduplicateServicesRemovesPoisonedDuplicates
+--- PASS: TestDeduplicateServicesRemovesPoisonedDuplicates (0.01s)
+=== RUN   TestDeduplicateServicesNoDuplicatesIsNoop
+--- PASS: TestDeduplicateServicesNoDuplicatesIsNoop (0.00s)
+=== RUN   TestPersistNowWritesDedupedConfig
+💾 节点配置已持久化到 /tmp/TestPersistNowWritesDedupedConfig2717701329/001/gost.json
+--- PASS: TestPersistNowWritesDedupedConfig (0.01s)
+=== RUN   TestPersistNowWithoutPathFails
+--- PASS: TestPersistNowWithoutPathFails (0.00s)
+=== RUN   TestHealPersistedServices
+💾 节点配置已持久化到 /tmp/TestHealPersistedServices1956622260/001/gost.json
+--- PASS: TestHealPersistedServices (0.01s)
+=== RUN   TestHealPersistedServicesCleanIsNoop
+--- PASS: TestHealPersistedServicesCleanIsNoop (0.00s)
+PASS
+ok  	github.com/go-gost/x/config	0.065s
+=== R17 regression: socket ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestCreateServicesDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateServicesDedupesExistingConfigEntry4287852372/001/gost.json
+--- PASS: TestCreateServicesDedupesExistingConfigEntry (0.01s)
+=== RUN   TestCreateServicesDedupesAlreadyPoisonedConfig
+💾 节点配置已持久化到 /tmp/TestCreateServicesDedupesAlreadyPoisonedConfig569070761/001/gost.json
+--- PASS: TestCreateServicesDedupesAlreadyPoisonedConfig (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.044s
+=== R17 regression: loader ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestLoadPoisonedConfigFailsWithDuplicate
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T02:31:37.686Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T02:31:37.686Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T02:31:37.687Z"}
+{"handler":"tcp","kind":"listener","level":"error","listener":"tcp","msg":"init: listen tcp 0.0.0.0:14601: bind: address already in use","service":"6_1_0_tcp","time":"2026-10-25T02:31:37.687Z"}
+    r17_fix_a_test.go:67: loader.Load(poisoned) error (startup failure point): parse service "6_1_0_tcp": listen tcp 0.0.0.0:14601: bind: address already in use
+--- PASS: TestLoadPoisonedConfigFailsWithDuplicate (0.01s)
+=== RUN   TestLoadHealedConfigSucceeds
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T02:31:37.688Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T02:31:37.689Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T02:31:37.690Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T02:31:37.690Z"}
+--- PASS: TestLoadHealedConfigSucceeds (0.00s)
+PASS
+ok  	github.com/go-gost/x/config/loader	0.022s

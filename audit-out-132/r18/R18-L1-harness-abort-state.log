@@ -1,0 +1,14 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== agent ===
+active
+720659
+0
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+services: 12 dup: {}
+=== panel ===
+vite-frontend flmx-frontend:r17d Up About a minute (health: starting)
+flux-panel-backend flmx-backend:r17d Up About a minute (healthy)
+GET / http=200
+=== harness proc ===
+721129 bash -c echo "=== agent ==="; systemctl is-active flux_agent; systemctl show flux_agent -p NRestarts,MainPID --value; md5sum /etc/flux_agent/gost.json; wc -l /etc/flux_agent/gost.json; python3 -c " import json from collections import Counter cfg=json.load(open(\"/etc/flux_agent/gost.json\")) names=[s[\"name\"] for s in cfg[\"services\"]] print(\"services:\", len(names), \"dup:\", {k:v for k,v in Counter(names).items() if v>1}) "; echo "=== panel ==="; docker ps --format "{{.Names}} {{.Image}} {{.Status}}" | grep -E "backend|frontend"; curl -s -o /dev/null -w "GET / http=%{http_code}\n" http://127.0.0.1:6366/; echo "=== harness proc ==="; pgrep -af "R17-FIX-C-harness" || echo "no harness running"

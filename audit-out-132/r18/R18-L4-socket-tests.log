@@ -1,0 +1,273 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestUpdateChainParseFailureKeepsExistingChainRegistered
+--- PASS: TestUpdateChainParseFailureKeepsExistingChainRegistered (0.00s)
+=== RUN   TestMutationCommandsAreSerialized
+--- PASS: TestMutationCommandsAreSerialized (0.00s)
+=== RUN   TestReadOnlyCommandsRemainBoundedAsync
+--- PASS: TestReadOnlyCommandsRemainBoundedAsync (0.00s)
+=== RUN   TestCommandResponseTypePreservesRequestContract
+--- PASS: TestCommandResponseTypePreservesRequestContract (0.00s)
+=== RUN   TestMutationQueueExecutesCommandsInArrivalOrder
+🔐 AES 加密器创建成功
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["mutation_queue_first_tdd"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["mutation_queue_second_tdd"]},"type":"DeleteService"}
+--- PASS: TestMutationQueueExecutesCommandsInArrivalOrder (0.10s)
+=== RUN   TestMutationCommandWaitsForRuntimeTransaction
+🔐 AES 加密器创建成功
+❌ 无法发送响应：连接未建立
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["reload_transaction_service"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+--- PASS: TestMutationCommandWaitsForRuntimeTransaction (0.05s)
+=== RUN   TestClampPingParams
+--- PASS: TestClampPingParams (0.00s)
+=== RUN   TestHandleTcpPingClampsHugeCount
+--- PASS: TestHandleTcpPingClampsHugeCount (0.00s)
+=== RUN   TestEncryptPayloadFailsClosedWithoutCrypto
+--- PASS: TestEncryptPayloadFailsClosedWithoutCrypto (0.00s)
+=== RUN   TestLogReceivedCommandRedactsPayload
+--- PASS: TestLogReceivedCommandRedactsPayload (0.00s)
+=== RUN   TestFix2CRedactCommandForLogEscapedQuote
+--- PASS: TestFix2CRedactCommandForLogEscapedQuote (0.00s)
+=== RUN   TestFix2CRedactCommandForLogUnparseable
+--- PASS: TestFix2CRedactCommandForLogUnparseable (0.00s)
+=== RUN   TestFix2CSanitizeWebSocketURLVariants
+--- PASS: TestFix2CSanitizeWebSocketURLVariants (0.00s)
+=== RUN   TestAgentHealthCheckStableService
+--- PASS: TestAgentHealthCheckStableService (0.02s)
+=== RUN   TestAgentHealthCheckDiesBeforeSecondSample
+--- PASS: TestAgentHealthCheckDiesBeforeSecondSample (0.05s)
+=== RUN   TestAgentHealthCheckPIDChanges
+--- PASS: TestAgentHealthCheckPIDChanges (0.03s)
+=== RUN   TestAgentHealthCheckPIDZeroOrEmpty
+--- PASS: TestAgentHealthCheckPIDZeroOrEmpty (0.07s)
+=== RUN   TestAgentRestartScriptUsesStableHealthCheck
+--- PASS: TestAgentRestartScriptUsesStableHealthCheck (0.00s)
+=== RUN   TestRouteCommandLogRedactsSecrets
+🔐 AES 加密器创建成功
+--- PASS: TestRouteCommandLogRedactsSecrets (0.00s)
+=== RUN   TestPlaintextCommandWarningOnlyOnce
+🔐 AES 加密器创建成功
+--- PASS: TestPlaintextCommandWarningOnlyOnce (0.00s)
+=== RUN   TestCreateServicesPersistFailureRollsBackRuntime
+⚠️ config persist: create temp file failed: open /home/hatch/tmp-go/TestCreateServicesPersistFailureRollsBackRuntime2387667915/001/missing/.gost-3592235642.tmp: no such file or directory
+--- PASS: TestCreateServicesPersistFailureRollsBackRuntime (0.04s)
+=== RUN   TestDetectServiceManagerOpenRCOnAlpine
+--- PASS: TestDetectServiceManagerOpenRCOnAlpine (0.00s)
+=== RUN   TestDetectServiceManagerSystemd
+--- PASS: TestDetectServiceManagerSystemd (0.00s)
+=== RUN   TestDetectServiceManagerOpenRCFallback
+--- PASS: TestDetectServiceManagerOpenRCFallback (0.00s)
+=== RUN   TestDetectServiceManagerUnsupported
+--- PASS: TestDetectServiceManagerUnsupported (0.00s)
+=== RUN   TestBuildAgentRestartScriptSystemdHasLocalRollback
+--- PASS: TestBuildAgentRestartScriptSystemdHasLocalRollback (0.00s)
+=== RUN   TestBuildAgentRestartScriptOpenRC
+--- PASS: TestBuildAgentRestartScriptOpenRC (0.00s)
+=== RUN   TestBuildAgentRestartScriptUnsupportedManager
+--- PASS: TestBuildAgentRestartScriptUnsupportedManager (0.00s)
+=== RUN   TestAgentControlScriptCommandPerManager
+--- PASS: TestAgentControlScriptCommandPerManager (0.00s)
+=== RUN   TestBackupCurrentAgentBinaryCopies
+--- PASS: TestBackupCurrentAgentBinaryCopies (0.01s)
+=== RUN   TestBackupCurrentAgentBinaryWriteFailureAborts
+--- PASS: TestBackupCurrentAgentBinaryWriteFailureAborts (0.00s)
+=== RUN   TestBackupCurrentAgentBinaryNoExistingBinary
+--- PASS: TestBackupCurrentAgentBinaryNoExistingBinary (0.00s)
+=== RUN   TestSmokeTestAgentBinary
+--- PASS: TestSmokeTestAgentBinary (0.01s)
+=== RUN   TestReadAgentChecksum
+--- PASS: TestReadAgentChecksum (0.00s)
+=== RUN   TestDecompressCommandPayload
+--- PASS: TestDecompressCommandPayload (0.10s)
+=== RUN   TestValidateEncryptedTimestamp
+--- PASS: TestValidateEncryptedTimestamp (0.00s)
+=== RUN   TestClampServiceMonitorTimeoutSec
+--- PASS: TestClampServiceMonitorTimeoutSec (0.00s)
+=== RUN   TestBuildWebSocketCandidatesNeverDowngrades
+--- PASS: TestBuildWebSocketCandidatesNeverDowngrades (0.00s)
+=== RUN   TestScriptedStartsResetFailedUnderSystemd
+--- PASS: TestScriptedStartsResetFailedUnderSystemd (0.00s)
+=== RUN   TestCreateConnLimiterUpdatesGlobalConfig
+--- PASS: TestCreateConnLimiterUpdatesGlobalConfig (0.00s)
+=== RUN   TestCreateLimiterReportsPersistFailure
+⚠️ config persist: create temp file failed: open /home/hatch/tmp-go/TestCreateLimiterReportsPersistFailure2491505176/001/missing/.gost-2929802897.tmp: no such file or directory
+--- PASS: TestCreateLimiterReportsPersistFailure (0.00s)
+=== RUN   TestMachineBootIDStable
+--- PASS: TestMachineBootIDStable (0.00s)
+=== RUN   TestR14F06F04SingleFamilyFailureWarns
+2026/10/25 01:42:51 tune probe: IPv4 sock_diag dump failed, RTT median covers IPv6 only: v4 dump failed
+--- PASS: TestR14F06F04SingleFamilyFailureWarns (0.00s)
+=== RUN   TestCreateServicesDedupesExistingConfigEntry
+💾 节点配置已持久化到 /home/hatch/tmp-go/TestCreateServicesDedupesExistingConfigEntry2423944389/001/gost.json
+--- PASS: TestCreateServicesDedupesExistingConfigEntry (0.00s)
+=== RUN   TestCreateServicesDedupesAlreadyPoisonedConfig
+💾 节点配置已持久化到 /home/hatch/tmp-go/TestCreateServicesDedupesAlreadyPoisonedConfig128549979/001/gost.json
+--- PASS: TestCreateServicesDedupesAlreadyPoisonedConfig (0.00s)
+=== RUN   TestR3B1HandleTcpPingRejectsDeniedLiterals
+--- PASS: TestR3B1HandleTcpPingRejectsDeniedLiterals (0.00s)
+=== RUN   TestR3B1TcpPingLiteralTargetDeniedSet
+--- PASS: TestR3B1TcpPingLiteralTargetDeniedSet (0.00s)
+=== RUN   TestR4B7ServiceMonitorHardDenySet
+--- PASS: TestR4B7ServiceMonitorHardDenySet (0.00s)
+=== RUN   TestR4B7HandleServiceMonitorCheckHardDeny
+--- PASS: TestR4B7HandleServiceMonitorCheckHardDeny (0.00s)
+=== RUN   TestR4B7HandleServiceMonitorCheckLANAllowed
+--- PASS: TestR4B7HandleServiceMonitorCheckLANAllowed (0.00s)
+=== RUN   TestR4B7HandleTracerouteRejectsDeniedLiterals
+--- PASS: TestR4B7HandleTracerouteRejectsDeniedLiterals (0.00s)
+=== RUN   TestR4B7HandleTcpPingHostnameResolvingToLoopbackDenied
+🔍 开始TCP ping测试: localhost:36591，次数: 1，超时: 500ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.48ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestR4B7HandleTcpPingHostnameResolvingToLoopbackDenied (0.00s)
+=== RUN   TestR6B6HandleUdpPingRejectsDeniedTargets
+🔍 开始UDP ping测试: localhost:53，次数: 1，超时: 200ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.00ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestR6B6HandleUdpPingRejectsDeniedTargets (0.00s)
+=== RUN   TestR6B6UdpPingHostResolvingToLoopbackDenied
+🔍 开始UDP ping测试: localhost:53，次数: 1，超时: 200ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.00ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestR6B6UdpPingHostResolvingToLoopbackDenied (0.00s)
+=== RUN   TestR6B6HandleUdpPingAllowsPublicPrivateTargets
+🔍 开始UDP ping测试: 8.8.8.8:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 8.8.8.8:53
+  第1次UDP连接成功: 0.07ms
+✅ UDP ping完成: 平均连接时间 0.07ms，失败率 0.0%
+🔍 开始UDP ping测试: 192.168.1.1:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 192.168.1.1:53
+  第1次UDP连接失败: dial udp 192.168.1.1:53: connect: operation not permitted (0.01ms)
+🔍 开始UDP ping测试: 10.0.0.5:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 10.0.0.5:53
+  第1次UDP连接失败: dial udp 10.0.0.5:53: connect: operation not permitted (0.01ms)
+🔍 开始UDP ping测试: 172.16.0.9:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 172.16.0.9:53
+  第1次UDP连接失败: dial udp 172.16.0.9:53: connect: operation not permitted (0.01ms)
+--- PASS: TestR6B6HandleUdpPingAllowsPublicPrivateTargets (0.00s)
+=== RUN   TestR6B6HandleUdpPingPrivateListenerSucceeds
+🔍 开始UDP ping测试: [fd8b:4f84:7d32:99::2]:50851，次数: 1，超时: 500ms
+🎯 使用IP地址进行测试: [fd8b:4f84:7d32:99::2]:50851
+  第1次UDP连接失败: dial udp [fd8b:4f84:7d32:99::2]:50851: connect: operation not permitted (0.02ms)
+    r6_b6_udpping_test.go:106: no self-dialable policy-allowed local interface address in this environment
+--- SKIP: TestR6B6HandleUdpPingPrivateListenerSucceeds (0.00s)
+=== RUN   TestUpdateServicesParseFailureRestoresPreviousRuntime
+--- PASS: TestUpdateServicesParseFailureRestoresPreviousRuntime (0.00s)
+=== RUN   TestUpdateServicesSkipsUnchangedServiceWithoutRestart
+--- PASS: TestUpdateServicesSkipsUnchangedServiceWithoutRestart (0.00s)
+=== RUN   TestTCPPingQueueCompletesMoreThanEightTargets
+=== RUN   TestTCPPingQueueCompletesMoreThanEightTargets/targets_9
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:151: no policy-allowed, self-dialable local interface address for probe target
+=== RUN   TestTCPPingQueueCompletesMoreThanEightTargets/targets_30
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:151: no policy-allowed, self-dialable local interface address for probe target
+--- PASS: TestTCPPingQueueCompletesMoreThanEightTargets (0.00s)
+    --- SKIP: TestTCPPingQueueCompletesMoreThanEightTargets/targets_9 (0.00s)
+    --- SKIP: TestTCPPingQueueCompletesMoreThanEightTargets/targets_30 (0.00s)
+=== RUN   TestTCPPingQueueSkipsExpiredTargets
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:188: no policy-allowed, self-dialable local interface address for probe target
+--- SKIP: TestTCPPingQueueSkipsExpiredTargets (0.00s)
+=== RUN   TestTCPPingQueueReportsFullWithoutBlockingReceiver
+🔐 AES 加密器创建成功
+--- PASS: TestTCPPingQueueReportsFullWithoutBlockingReceiver (0.00s)
+=== RUN   TestTCPPingExecutionHonorsCancellation
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:223: no policy-allowed, self-dialable local interface address for probe target
+--- SKIP: TestTCPPingExecutionHonorsCancellation (0.00s)
+=== RUN   TestTCPPingQueueStopsWithPendingAndRunningProbes
+🔐 AES 加密器创建成功
+    tcp_ping_queue_test.go:262: no policy-allowed, self-dialable local interface address for probe target
+--- SKIP: TestTCPPingQueueStopsWithPendingAndRunningProbes (0.00s)
+=== RUN   TestTCPPingBudgetBounds
+--- PASS: TestTCPPingBudgetBounds (0.00s)
+=== RUN   TestTCPPingCanceledBeforeAnyAttempt
+🔐 AES 加密器创建成功
+🔍 开始TCP ping测试: localhost:1，次数: 4，超时: 5000ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.00ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- PASS: TestTCPPingCanceledBeforeAnyAttempt (0.00s)
+=== RUN   TestMatchTraceReply
+--- PASS: TestMatchTraceReply (0.00s)
+=== RUN   TestTracerouteLoopback
+--- PASS: TestTracerouteLoopback (0.00s)
+=== RUN   TestMatchTraceReplyV6
+--- PASS: TestMatchTraceReplyV6 (0.00s)
+=== RUN   TestTraceAddr
+--- PASS: TestTraceAddr (0.00s)
+=== RUN   TestTracerouteLoopbackV6
+--- PASS: TestTracerouteLoopbackV6 (0.00s)
+=== RUN   TestTraceAddrFamily
+--- PASS: TestTraceAddrFamily (0.00s)
+=== RUN   TestTuneBdpApplyAndRestore
+--- PASS: TestTuneBdpApplyAndRestore (0.02s)
+=== RUN   TestTuneBdpSkipsBBRWithoutKernelSupport
+--- PASS: TestTuneBdpSkipsBBRWithoutKernelSupport (0.01s)
+=== RUN   TestTuneBdpCommandValidation
+--- PASS: TestTuneBdpCommandValidation (0.01s)
+=== RUN   TestTuneBdpNeverLowersLimits
+--- PASS: TestTuneBdpNeverLowersLimits (0.01s)
+=== RUN   TestTuneBdpFailedSettingKeepsBackup
+--- PASS: TestTuneBdpFailedSettingKeepsBackup (0.01s)
+=== RUN   TestTuneBdpLegacyConfRemoved
+--- PASS: TestTuneBdpLegacyConfRemoved (0.01s)
+=== RUN   TestTuneBdpSizes
+--- PASS: TestTuneBdpSizes (0.00s)
+=== RUN   TestTuneBdpParamsValid
+--- PASS: TestTuneBdpParamsValid (0.00s)
+=== RUN   TestBuildDiagRequestFamily
+--- PASS: TestBuildDiagRequestFamily (0.00s)
+=== RUN   TestExtractTCPRTT
+--- PASS: TestExtractTCPRTT (0.00s)
+=== RUN   TestTuneProbeMedianRTTMs
+--- PASS: TestTuneProbeMedianRTTMs (0.00s)
+=== RUN   TestTuneProbeDoesNotWrite
+--- PASS: TestTuneProbeDoesNotWrite (0.01s)
+=== RUN   TestTuneProbeFallbackOnFailure
+--- PASS: TestTuneProbeFallbackOnFailure (0.01s)
+=== RUN   TestTuneProbeSpeedtestOptionalAndReference
+--- PASS: TestTuneProbeSpeedtestOptionalAndReference (0.01s)
+=== RUN   TestTuneProbeRejectsBadSpeedtestURL
+--- PASS: TestTuneProbeRejectsBadSpeedtestURL (0.01s)
+=== RUN   TestPanelRemoteHostDisconnected
+--- PASS: TestPanelRemoteHostDisconnected (0.00s)
+=== RUN   TestIsGitHubDownloadHost
+--- PASS: TestIsGitHubDownloadHost (0.00s)
+=== RUN   TestResolveAgentUpgradeProxy
+⚠️ 忽略无效的升级代理配置: "notaurl"
+⚠️ 忽略无效的升级代理配置: "ftp://proxy.example.com"
+⚠️ 忽略无效的升级代理配置: "::bad::"
+--- PASS: TestResolveAgentUpgradeProxy (0.00s)
+=== RUN   TestBuildWebSocketCandidatesSecureFirst
+--- PASS: TestBuildWebSocketCandidatesSecureFirst (0.00s)
+=== RUN   TestBuildWebSocketCandidatesUsesPreferredScheme
+--- PASS: TestBuildWebSocketCandidatesUsesPreferredScheme (0.00s)
+=== RUN   TestBuildWebSocketCandidatesNormalizesSchemePrefixedAddr
+--- PASS: TestBuildWebSocketCandidatesNormalizesSchemePrefixedAddr (0.00s)
+=== RUN   TestDialWebSocketDoesNotDowngradeToWS
+--- PASS: TestDialWebSocketDoesNotDowngradeToWS (0.00s)
+=== RUN   TestDetectWebSocketScheme
+--- PASS: TestDetectWebSocketScheme (0.00s)
+=== RUN   TestSanitizeWebSocketURL
+--- PASS: TestSanitizeWebSocketURL (0.00s)
+=== RUN   TestNewWebSocketReporterUsesReducedMetricInterval
+🔐 AES 加密器创建成功
+--- PASS: TestNewWebSocketReporterUsesReducedMetricInterval (0.00s)
+=== RUN   TestFormatWebSocketDialErrorIncludesHTTPStatus
+--- PASS: TestFormatWebSocketDialErrorIncludesHTTPStatus (0.00s)
+=== RUN   TestAgentUpgradeRestartScriptStopsLegacyGostService
+--- PASS: TestAgentUpgradeRestartScriptStopsLegacyGostService (0.00s)
+=== RUN   TestStartWebSocketReporterWithConfigPreservesProtocolDefaultsWithoutConfigFile
+🔗 WebSocket连接URL: wss://panel.example.com:443/system-info?type=1&secret=***&version=2.0.2&http=1&tls=0&socks=1
+🔐 AES 加密器创建成功
+❌ WebSocket连接失败: 连接WebSocket失败: wss://panel.example.com:443/system-info?type=1&secret=***&version=2.0.2&http=1&tls=0&socks=1 => dial failed（已禁止从 wss 自动降级到 ws 明文连接；请检查面板 TLS/证书，或在 config.json 的 addr 中显式使用 ws:// 前缀以确认明文部署），2.155800519s后重试
+--- PASS: TestStartWebSocketReporterWithConfigPreservesProtocolDefaultsWithoutConfigFile (0.00s)
+=== RUN   TestStartWebSocketReporterWithConfigLogsSanitizedURL
+--- PASS: TestStartWebSocketReporterWithConfigLogsSanitizedURL (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.672s

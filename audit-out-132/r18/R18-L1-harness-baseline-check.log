@@ -1,0 +1,6 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+cycles_done=10 hits=0 hit_cycles:[ ]
+hit_rate=0/10
+10
+--- r18 progress ---
+waiting 75s for startup sync...

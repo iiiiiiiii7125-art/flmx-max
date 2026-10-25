@@ -1,0 +1,9 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+== /root/r17d/flux_agent-r17d
+startup config self-heal: 2
+parse service: 1
+DeduplicateServices: 2
+== /root/r17d/flux_agent-main
+startup config self-heal: 0
+parse service: 0
+DeduplicateServices: 0

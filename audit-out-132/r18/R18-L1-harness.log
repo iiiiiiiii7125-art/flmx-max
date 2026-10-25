@@ -1,0 +1,17 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R17-FIX-C harness run=r18 cycles=10 wait_sync=75s start=2026-10-25T01:55:51Z ===
+--- preconditions:
+gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:55:28.988848364 +0000 DUP:none SERVICES:12 
+active=active restarts=0 pid=720032
+vite-frontend flmx-frontend:r17d Up 13 minutes (unhealthy)
+flux-panel-backend flmx-backend:r17d Up 13 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 11 hours (healthy)
+=== cycle 1/10 start=2026-10-25T01:55:51Z ===
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=720659
+waiting 75s for startup sync...
+client_loop: send disconnect: Broken pipe

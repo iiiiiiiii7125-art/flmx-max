@@ -1,0 +1,23 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR17B_GuardSkipsWhenAgentConfirmed
+--- PASS: TestR17B_GuardSkipsWhenAgentConfirmed (0.00s)
+=== RUN   TestR17B_GuardSendsOnceWhenUnregistered
+--- PASS: TestR17B_GuardSendsOnceWhenUnregistered (0.00s)
+=== RUN   TestR17B_GuardRecheckSkipsAfterSend
+--- PASS: TestR17B_GuardRecheckSkipsAfterSend (0.00s)
+=== RUN   TestR17B_GuardFreshNotFoundInvalidatesConfirmed
+--- PASS: TestR17B_GuardFreshNotFoundInvalidatesConfirmed (0.00s)
+=== RUN   TestR17B_GuardConcurrentDuplicateJoinsInFlight
+--- PASS: TestR17B_GuardConcurrentDuplicateJoinsInFlight (0.20s)
+=== RUN   TestR17B_GuardFailedSendDoesNotConfirm
+--- PASS: TestR17B_GuardFailedSendDoesNotConfirm (0.00s)
+=== RUN   TestR17B_GuardInvalidateOnDeleteAndOffline
+--- PASS: TestR17B_GuardInvalidateOnDeleteAndOffline (0.00s)
+=== RUN   TestR17B_GuardEmptyNamesFailClosed
+--- PASS: TestR17B_GuardEmptyNamesFailClosed (0.00s)
+=== RUN   TestR17B_GuardConfirmedIsPerNode
+--- PASS: TestR17B_GuardConfirmedIsPerNode (0.00s)
+=== RUN   TestR17B_GuardFailedUpdateInvalidatesConfirmedEvenWithoutNotFound
+--- PASS: TestR17B_GuardFailedUpdateInvalidatesConfirmedEvenWithoutNotFound (0.00s)
+PASS
+ok  	go-backend/internal/http/handler	0.211s

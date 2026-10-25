@@ -1,0 +1,67 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestCreateServicesDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateServicesDedupesExistingConfigEntry2496310725/001/gost.json
+--- PASS: TestCreateServicesDedupesExistingConfigEntry (0.00s)
+=== RUN   TestCreateServicesDedupesAlreadyPoisonedConfig
+💾 节点配置已持久化到 /tmp/TestCreateServicesDedupesAlreadyPoisonedConfig1065443912/001/gost.json
+--- PASS: TestCreateServicesDedupesAlreadyPoisonedConfig (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.013s
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestDeduplicateServicesRemovesPoisonedDuplicates
+--- PASS: TestDeduplicateServicesRemovesPoisonedDuplicates (0.00s)
+=== RUN   TestDeduplicateServicesNoDuplicatesIsNoop
+--- PASS: TestDeduplicateServicesNoDuplicatesIsNoop (0.00s)
+=== RUN   TestPersistNowWritesDedupedConfig
+💾 节点配置已持久化到 /tmp/TestPersistNowWritesDedupedConfig3242768399/001/gost.json
+--- PASS: TestPersistNowWritesDedupedConfig (0.00s)
+=== RUN   TestPersistNowWithoutPathFails
+--- PASS: TestPersistNowWithoutPathFails (0.00s)
+=== RUN   TestHealPersistedServices
+💾 节点配置已持久化到 /tmp/TestHealPersistedServices418107842/001/gost.json
+--- PASS: TestHealPersistedServices (0.00s)
+=== RUN   TestHealPersistedServicesCleanIsNoop
+--- PASS: TestHealPersistedServicesCleanIsNoop (0.00s)
+PASS
+ok  	github.com/go-gost/x/config	0.009s
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestLoadDuplicateServiceNamesError
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:43879/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.058Z"}
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:40659/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.060Z"}
+--- PASS: TestLoadDuplicateServiceNamesError (0.01s)
+=== RUN   TestLoadDuplicateServiceBindErrorNamesService
+{"handler":"auto","kind":"service","level":"info","listener":"tcp","msg":"listening on 127.0.0.1:45327/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.061Z"}
+{"handler":"auto","kind":"listener","level":"error","listener":"tcp","msg":"init: listen tcp4 127.0.0.1:45327: bind: address already in use","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.061Z"}
+--- PASS: TestLoadDuplicateServiceBindErrorNamesService (0.00s)
+=== RUN   TestLoadPoisonedConfigFailsWithDuplicate
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:39:22.082Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:39:22.082Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:39:22.083Z"}
+{"handler":"tcp","kind":"listener","level":"error","listener":"tcp","msg":"init: listen tcp 0.0.0.0:14601: bind: address already in use","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.083Z"}
+    r17_fix_a_test.go:67: loader.Load(poisoned) error (startup failure point): parse service "6_1_0_tcp": listen tcp 0.0.0.0:14601: bind: address already in use
+--- PASS: TestLoadPoisonedConfigFailsWithDuplicate (0.02s)
+=== RUN   TestLoadHealedConfigSucceeds
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:39:22.094Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:39:22.099Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:39:22.101Z"}
+{"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:39:22.101Z"}
+{"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:39:22.103Z"}
+--- PASS: TestLoadHealedConfigSucceeds (0.02s)
+PASS
+ok  	github.com/go-gost/x/config/loader	0.101s

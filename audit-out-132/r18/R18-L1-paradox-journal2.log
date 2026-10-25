@@ -1,0 +1,14 @@
+Oct 25 01:51:31.434593 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.437750 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:51:31.437Z"}
+Oct 25 01:51:31.438696 {"handler":"udp","kind":"listener","level":"error","listener":"udp","msg":"init: listen udp [::]:13101: bind: address already in use","service":"2_5_2_udp","time":"2026-10-25T01:51:31.438Z"}
+Oct 25 01:51:31.438696 {"handler":"udp","kind":"listener","level":"error","listener":"udp","msg":"init: listen udp [::]:13101: bind: address already in use","service":"2_5_2_udp","time":"2026-10-25T01:51:31.438Z"}
+Oct 25 01:51:31.438696 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:51:31.438Z"}
+Oct 25 01:51:31.449640 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:51:31.449Z"}
+Oct 25 01:51:31.450767 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:51:31.450Z"}
+Oct 25 01:51:31.452458 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.459091 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.464040 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:51:31.463Z"}
+Oct 25 01:51:31.466334 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:51:31.466Z"}
+Oct 25 01:51:31.469249 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.486069 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.498350 💾 节点配置已持久化到 /etc/flux_agent/gost.json

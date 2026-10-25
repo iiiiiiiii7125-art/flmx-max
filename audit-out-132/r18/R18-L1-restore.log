@@ -1,0 +1,40 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== manual restore (R18, stepwise; restore script file NOT executed) ===
+--- stop agent
+agent processes gone
+--- restore pristine agent from /root/r17c (expect aff338e3676bc56d0f3986a1a62f8fdd)
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+--- restore original unit (expect a12afd9c36fba7b76287210efaa199cb)
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+StandardOutput=null
+StandardError=null
+--- gost (expect d48f09e132ebe99fe97a619dd72d42d4)
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- restore compose/env (expect 3afbac11 / fffcd005)
+3afbac1115e4f69a991448767b89d24e  /root/flmx-panel/docker-compose.yml
+fffcd005d684d1ef207dc50caa845569  /root/flmx-panel/.env
+/root/flmx-panel/docker-compose.yml:    image: flmx-backend:r1gate-1.3.5
+/root/flmx-panel/docker-compose.yml:      FLUX_VERSION: ${FLUX_VERSION:-dev}
+/root/flmx-panel/docker-compose.yml:    image: flmx-frontend:r1gate-1.3.5
+/root/flmx-panel/.env:FLUX_VERSION=1.3.5
+--- compose up 1.3.5
+ Container flux-panel-backend Waiting 
+ Container flux-panel-backend Healthy 
+ Container vite-frontend Starting 
+ Container vite-frontend Started 
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 8 seconds (health: starting)
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 14 seconds (healthy)
+flux-panel-postgres postgres:16-alpine Up 11 hours (healthy)
+--- reset-failed + start agent
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- served check
+GET / http=200
+--- remove candidate images
+Deleted: sha256:59f28420ff53e235b976fe83dc5db72494f422c7e0ccd683d7d81dde5dba0cd7
+Untagged: flmx-frontend:r17d
+Deleted: sha256:7391612c4b17343d336daffd58cd792a09ec6e3d1e1992cfa130d5f803bc02f1
+flmx-frontend:r1gate-1.3.5
+flmx-backend:r1gate-1.3.5

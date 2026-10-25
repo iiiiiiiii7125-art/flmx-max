@@ -1,0 +1,52 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg2 r18-control start=2026-10-25T01:44:20Z agent_file=flux_agent-main ===
+--- install agent
+ab628bcd120e4fe478cf083bf5b59b4b  /etc/flux_agent/flux_agent
+--- sanity start on current gost
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+--- poison gost.json (expect md5 e381299b2aa931d2f7c097661ead6702, 378 lines)
+agent stopped
+e381299b2aa931d2f7c097661ead6702  /etc/flux_agent/gost.json
+378 /etc/flux_agent/gost.json
+--- restart agent on poisoned file
+active=failed NRestarts=5
+no agent process
+--- journal self-heal / failure lines (last 30 min):
+Oct 25 01:43:36 ip-172-26-9-119 flux_agent[714998]: {"level":"warning","msg":"startup config self-heal: removed duplicate service(s) [6_1_0_tcp 6_1_0_udp] from persisted config","time":"2026-10-25T01:43:36.396Z"}
+Oct 25 01:44:32 ip-172-26-9-119 flux_agent[715564]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.122Z"}
+Oct 25 01:44:32 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:32 ip-172-26-9-119 flux_agent[715586]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.382Z"}
+Oct 25 01:44:32 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:32 ip-172-26-9-119 flux_agent[715608]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.617Z"}
+Oct 25 01:44:32 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:32 ip-172-26-9-119 flux_agent[715630]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.873Z"}
+Oct 25 01:44:32 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33 ip-172-26-9-119 flux_agent[715651]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:33.118Z"}
+Oct 25 01:44:33 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33 ip-172-26-9-119 systemd[1]: Failed to start flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33 ip-172-26-9-119 flux_agent[715681]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:33.637Z"}
+Oct 25 01:44:33 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33 ip-172-26-9-119 flux_agent[715720]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:33.862Z"}
+Oct 25 01:44:33 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34 ip-172-26-9-119 flux_agent[715741]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:34.114Z"}
+Oct 25 01:44:34 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34 ip-172-26-9-119 flux_agent[715762]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:34.381Z"}
+Oct 25 01:44:34 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34 ip-172-26-9-119 flux_agent[715784]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:34.600Z"}
+Oct 25 01:44:34 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34 ip-172-26-9-119 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34 ip-172-26-9-119 systemd[1]: Failed to start flux_agent.service - Flux_agent Proxy Service.
+--- agent-startup.log:
+(no agent-startup.log file)
+--- post gost:
+e381299b2aa931d2f7c097661ead6702  /etc/flux_agent/gost.json
+378 /etc/flux_agent/gost.json
+services=14 dup={'6_1_0_tcp': 2, '6_1_0_udp': 2}
+--- restore pristine gost + start
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+active=active
+    PID CMD
+ 716353 /etc/flux_agent/flux_agent
+=== leg2 r18-control end=2026-10-25T01:45:04Z ===

@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+c26d7e0418b05d22c1e957565d876df9  /root/r17d/r18-poisoned-3_5_3.json
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+23aa260d8bffb857171f26e3426b7d2d  /etc/flux_agent/flux_agent
+active
+=== resume forward 6 ===
+resume code 0 操作成功
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+services: 12 dup: {}
+6_1_0 paused: [('6_1_0_tcp', None), ('6_1_0_udp', None)]
+active

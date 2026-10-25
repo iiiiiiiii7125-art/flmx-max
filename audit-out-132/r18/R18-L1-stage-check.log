@@ -1,0 +1,8 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+8f5ee7970727f416b4e254158ffac80c  /root/r17d/stage.tgz
+-rw-r----- 1 root root 24540018 Oct 25 00:25 /root/r17d/stage.tgz
+05449a73f3d21b037eb082be0a5ff438  /root/r17c/flux_agent-prod.service
+# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=flux_agent

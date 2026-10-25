@@ -1,0 +1,6 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+launched pid 721191
+721191 bash /root/r17c/R17-FIX-C-harness.sh 10 75 r18
+=== R17-FIX-C harness run=r18 cycles=10 wait_sync=75s start=2026-10-25T01:57:46Z ===
+--- preconditions:
+gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:56:09.536589448 +0000 DUP:none SERVICES:12 

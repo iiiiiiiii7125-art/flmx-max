@@ -1,0 +1,668 @@
+=== fastpoll-r18 A1 start=2026-10-25T01:40:04Z agent_md5=aff338e3676bc56d0f3986a1a62f8fdd ===
+01:40:04.758 pre: services=12 dup=none
+01:40:07.980 agent restarted, polling 50ms x 45s
+01:40:07.981 services=12 dup=none
+01:40:38.043 services=14 dup={'6_1_0_tcp': 2, '6_1_0_udp': 2}
+01:40:38.047 DUP SAVED fastdup-A1-1.json
+01:40:38.099 DUP SAVED fastdup-A1-2.json
+01:40:38.152 DUP SAVED fastdup-A1-3.json
+01:40:38.202 services=12 dup=none
+01:40:53.006 post: services=12 dup=none dup_sightings=3
+--- agent: active pid=713010
+--- agent journal AddService/UpdateService lines since restart (last 40):
+--- post md5: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+=== fastpoll-r18 A1 end=2026-10-25T01:40:53Z ===
+=== fastpoll-r18 A2 start=2026-10-25T01:40:58Z agent_md5=23aa260d8bffb857171f26e3426b7d2d ===
+01:40:58.479 pre: services=12 dup=none
+01:41:01.641 agent restarted, polling 50ms x 45s
+01:41:01.641 services=12 dup=none
+01:41:46.656 post: services=12 dup=none dup_sightings=0
+--- agent: active pid=713316
+--- agent journal AddService/UpdateService lines since restart (last 40):
+--- post md5: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+=== fastpoll-r18 A2 end=2026-10-25T01:41:46Z ===
+=== fastpoll-r18 A3 start=2026-10-25T01:41:51Z agent_md5=23aa260d8bffb857171f26e3426b7d2d ===
+01:41:52.114 pre: services=12 dup=none
+01:41:55.265 agent restarted, polling 50ms x 45s
+01:41:55.265 services=12 dup=none
+01:42:40.311 post: services=12 dup=none dup_sightings=0
+--- agent: active pid=714391
+--- agent journal AddService/UpdateService lines since restart (last 40):
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559710601570
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792892559710601570","type":"UpdateService"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:42:39.714Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:42:39.716Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559718302510
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792892559718302510","type":"UpdateService"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:42:39.720Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:42:39.722Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559724906474
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792892559724906474","type":"UpdateService"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:42:39.731Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:42:39.808Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559963676248
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892559963676248","type":"UpdateService"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:42:39.974Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:42:39.974Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559976786567
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"1_2_1_tcp"},{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"1_2_1_udp"}],"requestId":"1_1792892559976786567","type":"UpdateService"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:42:39.983Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:42:39.992Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559996600052
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792892559996600052","type":"UpdateService"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:42:39.997Z"}
+Oct 25 01:42:39 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:42:39.997Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892559999554706
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792892559999554706","type":"UpdateService"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:42:40.002Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:42:40.003Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892560010050574
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892560010050574","type":"UpdateService"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:42:40.016Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:42:40.018Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892560022118664
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"6_1_0_tcp"},{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"6_1_0_udp"}],"requestId":"1_1792892560022118664","type":"UpdateService"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:42:40.027Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:42:40.029Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 收到命令: type=UpdateService requestId=1_1792892560042767862
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792892560042767862","type":"UpdateService"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:42:40.052Z"}
+Oct 25 01:42:40 ip-172-26-9-119 flux_agent[714391]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:42:40.057Z"}
+--- post md5: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+=== fastpoll-r18 A3 end=2026-10-25T01:42:40Z ===
+=== fastpoll-r18 A4 start=2026-10-25T01:42:45Z agent_md5=23aa260d8bffb857171f26e3426b7d2d ===
+01:42:46.039 pre: services=12 dup=none
+01:42:49.205 agent restarted, polling 50ms x 45s
+01:42:49.205 services=12 dup=none
+01:43:34.234 post: services=12 dup=none dup_sightings=0
+--- agent: inactive pid=0
+--- agent journal AddService/UpdateService lines since restart (last 40):
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589623871218
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892589623871218","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:43:09.624Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:43:09.625Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589626587462
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"1_2_1_tcp"},{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"1_2_1_udp"}],"requestId":"1_1792892589626587462","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:43:09.627Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:43:09.627Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589631297963
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792892589631297963","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:43:09.634Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:43:09.634Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589636709456
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792892589636709456","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:43:09.638Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:43:09.638Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589640875835
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892589640875835","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:43:09.642Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:43:09.642Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589647925139
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"6_1_0_tcp"},{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"6_1_0_udp"}],"requestId":"1_1792892589647925139","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:43:09.648Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:43:09.649Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 收到命令: type=UpdateService requestId=1_1792892589650696095
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792892589650696095","type":"UpdateService"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:43:09.651Z"}
+Oct 25 01:43:09 ip-172-26-9-119 flux_agent[714612]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:43:09.652Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:43:28.188Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:43:28.189Z"}
+Oct 25 01:43:28 ip-172-26-9-119 flux_agent[714880]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:43:28.189Z"}
+--- post md5: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+=== fastpoll-r18 A4 end=2026-10-25T01:43:34Z ===
+=== fastpoll-r18 A5 start=2026-10-25T01:43:39Z agent_md5=23aa260d8bffb857171f26e3426b7d2d ===
+01:43:39.791 pre: services=12 dup=none
+01:43:42.873 agent restarted, polling 50ms x 45s
+01:43:42.873 services=12 dup=none
+01:44:27.894 post: services=12 dup=none dup_sightings=0
+--- agent: active pid=715443
+--- agent journal AddService/UpdateService lines since restart (last 40):
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653291977034
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892653291977034","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:44:13.293Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:44:13.294Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653296495189
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"1_2_1_tcp"},{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"1_2_1_udp"}],"requestId":"1_1792892653296495189","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:44:13.298Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:44:13.298Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653305607329
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792892653305607329","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:44:13.307Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:44:13.307Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653310461234
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792892653310461234","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:44:13.317Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:44:13.319Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653321803876
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892653321803876","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:44:13.323Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:44:13.323Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653325653115
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"6_1_0_tcp"},{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"6_1_0_udp"}],"requestId":"1_1792892653325653115","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:44:13.326Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:44:13.327Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 收到命令: type=UpdateService requestId=1_1792892653330247274
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792892653330247274","type":"UpdateService"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:44:13.332Z"}
+Oct 25 01:44:13 ip-172-26-9-119 flux_agent[715269]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:44:13.332Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:44:23.896Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:44:23.897Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:44:23.898Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:44:23.898Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:44:23.898Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:44:23.898Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:44:23.898Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:44:23.898Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:44:23.899Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:44:23.899Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:44:23.899Z"}
+Oct 25 01:44:23 ip-172-26-9-119 flux_agent[715443]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:44:23.899Z"}
+--- post md5: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+=== fastpoll-r18 A5 end=2026-10-25T01:44:28Z ===
+=== fastpoll-r18 A6 start=2026-10-25T01:44:33Z agent_md5=ab628bcd120e4fe478cf083bf5b59b4b ===
+01:44:33.430 pre: services=14 dup={'6_1_0_tcp': 2, '6_1_0_udp': 2}
+01:44:36.477 agent restarted, polling 50ms x 45s
+01:44:36.478 services=14 dup={'6_1_0_tcp': 2, '6_1_0_udp': 2}
+01:44:36.482 DUP SAVED fastdup-A6-1.json
+01:44:36.534 DUP SAVED fastdup-A6-2.json
+01:44:36.586 DUP SAVED fastdup-A6-3.json
+01:44:36.638 DUP SAVED fastdup-A6-4.json
+01:44:36.690 DUP SAVED fastdup-A6-5.json
+01:44:36.743 DUP SAVED fastdup-A6-6.json
+01:44:36.795 DUP SAVED fastdup-A6-7.json
+01:44:36.847 DUP SAVED fastdup-A6-8.json
+01:44:36.899 DUP SAVED fastdup-A6-9.json
+01:44:36.951 DUP SAVED fastdup-A6-10.json
+01:44:36.003 DUP SAVED fastdup-A6-11.json
+01:44:37.055 DUP SAVED fastdup-A6-12.json
+01:44:37.107 DUP SAVED fastdup-A6-13.json
+01:44:37.159 DUP SAVED fastdup-A6-14.json
+01:44:37.211 DUP SAVED fastdup-A6-15.json
+01:44:37.263 DUP SAVED fastdup-A6-16.json
+01:44:37.315 DUP SAVED fastdup-A6-17.json
+01:44:37.367 DUP SAVED fastdup-A6-18.json
+01:44:37.419 DUP SAVED fastdup-A6-19.json
+01:44:37.471 DUP SAVED fastdup-A6-20.json
+01:44:37.524 DUP SAVED fastdup-A6-21.json
+01:44:37.576 DUP SAVED fastdup-A6-22.json
+01:44:37.628 DUP SAVED fastdup-A6-23.json
+01:44:37.680 DUP SAVED fastdup-A6-24.json
+01:44:37.732 DUP SAVED fastdup-A6-25.json
+01:44:37.784 DUP SAVED fastdup-A6-26.json
+01:44:37.836 DUP SAVED fastdup-A6-27.json
+01:44:37.888 DUP SAVED fastdup-A6-28.json
+01:44:37.940 DUP SAVED fastdup-A6-29.json
+01:44:37.992 DUP SAVED fastdup-A6-30.json
+01:44:38.044 DUP SAVED fastdup-A6-31.json
+01:44:38.096 DUP SAVED fastdup-A6-32.json
+01:44:38.148 DUP SAVED fastdup-A6-33.json
+01:44:38.200 DUP SAVED fastdup-A6-34.json
+01:44:38.252 DUP SAVED fastdup-A6-35.json
+01:44:38.304 DUP SAVED fastdup-A6-36.json
+01:44:38.356 DUP SAVED fastdup-A6-37.json
+01:44:38.408 DUP SAVED fastdup-A6-38.json
+01:44:38.460 DUP SAVED fastdup-A6-39.json
+01:44:38.512 DUP SAVED fastdup-A6-40.json
+01:44:38.564 DUP SAVED fastdup-A6-41.json
+01:44:38.616 DUP SAVED fastdup-A6-42.json
+01:44:38.668 DUP SAVED fastdup-A6-43.json
+01:44:38.720 DUP SAVED fastdup-A6-44.json
+01:44:38.772 DUP SAVED fastdup-A6-45.json
+01:44:38.825 DUP SAVED fastdup-A6-46.json
+01:44:38.877 DUP SAVED fastdup-A6-47.json
+01:44:38.929 DUP SAVED fastdup-A6-48.json
+01:44:38.981 DUP SAVED fastdup-A6-49.json
+01:44:39.033 DUP SAVED fastdup-A6-50.json
+01:44:39.085 DUP SAVED fastdup-A6-51.json
+01:44:39.137 DUP SAVED fastdup-A6-52.json
+01:44:39.189 DUP SAVED fastdup-A6-53.json
+01:44:39.241 DUP SAVED fastdup-A6-54.json
+01:44:39.293 DUP SAVED fastdup-A6-55.json
+01:44:39.345 DUP SAVED fastdup-A6-56.json
+01:44:39.397 DUP SAVED fastdup-A6-57.json
+01:44:39.449 DUP SAVED fastdup-A6-58.json
+01:44:39.501 DUP SAVED fastdup-A6-59.json
+01:44:39.553 DUP SAVED fastdup-A6-60.json
+01:44:39.605 DUP SAVED fastdup-A6-61.json
+01:44:39.657 DUP SAVED fastdup-A6-62.json
+01:44:39.709 DUP SAVED fastdup-A6-63.json
+01:44:39.761 DUP SAVED fastdup-A6-64.json
+01:44:39.813 DUP SAVED fastdup-A6-65.json
+01:44:39.865 DUP SAVED fastdup-A6-66.json
+01:44:39.917 DUP SAVED fastdup-A6-67.json
+01:44:39.969 DUP SAVED fastdup-A6-68.json
+01:44:40.021 DUP SAVED fastdup-A6-69.json
+01:44:40.073 DUP SAVED fastdup-A6-70.json
+01:44:40.125 DUP SAVED fastdup-A6-71.json
+01:44:40.177 DUP SAVED fastdup-A6-72.json
+01:44:40.229 DUP SAVED fastdup-A6-73.json
+01:44:40.281 DUP SAVED fastdup-A6-74.json
+01:44:40.334 DUP SAVED fastdup-A6-75.json
+01:44:40.386 DUP SAVED fastdup-A6-76.json
+01:44:40.438 DUP SAVED fastdup-A6-77.json
+01:44:40.490 DUP SAVED fastdup-A6-78.json
+01:44:40.542 DUP SAVED fastdup-A6-79.json
+01:44:40.594 DUP SAVED fastdup-A6-80.json
+01:44:40.646 DUP SAVED fastdup-A6-81.json
+01:44:40.698 DUP SAVED fastdup-A6-82.json
+01:44:40.751 DUP SAVED fastdup-A6-83.json
+01:44:40.803 DUP SAVED fastdup-A6-84.json
+01:44:40.855 DUP SAVED fastdup-A6-85.json
+01:44:40.907 DUP SAVED fastdup-A6-86.json
+01:44:40.959 DUP SAVED fastdup-A6-87.json
+01:44:41.011 DUP SAVED fastdup-A6-88.json
+01:44:41.063 DUP SAVED fastdup-A6-89.json
+01:44:41.115 DUP SAVED fastdup-A6-90.json
+01:44:41.167 DUP SAVED fastdup-A6-91.json
+01:44:41.219 DUP SAVED fastdup-A6-92.json
+01:44:41.271 DUP SAVED fastdup-A6-93.json
+01:44:41.323 DUP SAVED fastdup-A6-94.json
+01:44:41.375 DUP SAVED fastdup-A6-95.json
+01:44:41.427 DUP SAVED fastdup-A6-96.json
+01:44:41.479 DUP SAVED fastdup-A6-97.json
+01:44:41.531 DUP SAVED fastdup-A6-98.json
+01:44:41.584 DUP SAVED fastdup-A6-99.json
+01:44:41.636 DUP SAVED fastdup-A6-100.json
+01:44:41.688 DUP SAVED fastdup-A6-101.json
+01:44:41.740 DUP SAVED fastdup-A6-102.json
+01:44:41.792 DUP SAVED fastdup-A6-103.json
+01:44:41.844 DUP SAVED fastdup-A6-104.json
+01:44:41.896 DUP SAVED fastdup-A6-105.json
+01:44:41.948 DUP SAVED fastdup-A6-106.json
+01:44:41.000 DUP SAVED fastdup-A6-107.json
+01:44:42.052 DUP SAVED fastdup-A6-108.json
+01:44:42.104 DUP SAVED fastdup-A6-109.json
+01:44:42.156 DUP SAVED fastdup-A6-110.json
+01:44:42.208 DUP SAVED fastdup-A6-111.json
+01:44:42.260 DUP SAVED fastdup-A6-112.json
+01:44:42.312 DUP SAVED fastdup-A6-113.json
+01:44:42.364 DUP SAVED fastdup-A6-114.json
+01:44:42.416 DUP SAVED fastdup-A6-115.json
+01:44:42.468 DUP SAVED fastdup-A6-116.json
+01:44:42.520 DUP SAVED fastdup-A6-117.json
+01:44:42.572 DUP SAVED fastdup-A6-118.json
+01:44:42.624 DUP SAVED fastdup-A6-119.json
+01:44:42.677 DUP SAVED fastdup-A6-120.json
+01:44:42.729 DUP SAVED fastdup-A6-121.json
+01:44:42.781 DUP SAVED fastdup-A6-122.json
+01:44:42.833 DUP SAVED fastdup-A6-123.json
+01:44:42.885 DUP SAVED fastdup-A6-124.json
+01:44:42.937 DUP SAVED fastdup-A6-125.json
+01:44:42.989 DUP SAVED fastdup-A6-126.json
+01:44:43.041 DUP SAVED fastdup-A6-127.json
+01:44:43.093 DUP SAVED fastdup-A6-128.json
+01:44:43.145 DUP SAVED fastdup-A6-129.json
+01:44:43.197 DUP SAVED fastdup-A6-130.json
+01:44:43.249 DUP SAVED fastdup-A6-131.json
+01:44:43.301 DUP SAVED fastdup-A6-132.json
+01:44:43.353 DUP SAVED fastdup-A6-133.json
+01:44:43.405 DUP SAVED fastdup-A6-134.json
+01:44:43.457 DUP SAVED fastdup-A6-135.json
+01:44:43.509 DUP SAVED fastdup-A6-136.json
+01:44:43.561 DUP SAVED fastdup-A6-137.json
+01:44:43.613 DUP SAVED fastdup-A6-138.json
+01:44:43.666 DUP SAVED fastdup-A6-139.json
+01:44:43.718 DUP SAVED fastdup-A6-140.json
+01:44:43.770 DUP SAVED fastdup-A6-141.json
+01:44:43.822 DUP SAVED fastdup-A6-142.json
+01:44:43.874 DUP SAVED fastdup-A6-143.json
+01:44:43.926 DUP SAVED fastdup-A6-144.json
+01:44:43.979 DUP SAVED fastdup-A6-145.json
+01:44:44.031 DUP SAVED fastdup-A6-146.json
+01:44:44.083 DUP SAVED fastdup-A6-147.json
+01:44:44.135 DUP SAVED fastdup-A6-148.json
+01:44:44.187 DUP SAVED fastdup-A6-149.json
+01:44:44.239 DUP SAVED fastdup-A6-150.json
+01:44:44.291 DUP SAVED fastdup-A6-151.json
+01:44:44.343 DUP SAVED fastdup-A6-152.json
+01:44:44.395 DUP SAVED fastdup-A6-153.json
+01:44:44.447 DUP SAVED fastdup-A6-154.json
+01:44:44.499 DUP SAVED fastdup-A6-155.json
+01:44:44.552 DUP SAVED fastdup-A6-156.json
+01:44:44.604 DUP SAVED fastdup-A6-157.json
+01:44:44.656 DUP SAVED fastdup-A6-158.json
+01:44:44.708 DUP SAVED fastdup-A6-159.json
+01:44:44.760 DUP SAVED fastdup-A6-160.json
+01:44:44.812 DUP SAVED fastdup-A6-161.json
+01:44:44.864 DUP SAVED fastdup-A6-162.json
+01:44:44.916 DUP SAVED fastdup-A6-163.json
+01:44:44.968 DUP SAVED fastdup-A6-164.json
+01:44:45.020 DUP SAVED fastdup-A6-165.json
+01:44:45.072 DUP SAVED fastdup-A6-166.json
+01:44:45.124 DUP SAVED fastdup-A6-167.json
+01:44:45.176 DUP SAVED fastdup-A6-168.json
+01:44:45.228 DUP SAVED fastdup-A6-169.json
+01:44:45.280 DUP SAVED fastdup-A6-170.json
+01:44:45.332 DUP SAVED fastdup-A6-171.json
+01:44:45.384 DUP SAVED fastdup-A6-172.json
+01:44:45.437 DUP SAVED fastdup-A6-173.json
+01:44:45.489 DUP SAVED fastdup-A6-174.json
+01:44:45.541 DUP SAVED fastdup-A6-175.json
+01:44:45.593 DUP SAVED fastdup-A6-176.json
+01:44:45.645 DUP SAVED fastdup-A6-177.json
+01:44:45.697 DUP SAVED fastdup-A6-178.json
+01:44:45.750 DUP SAVED fastdup-A6-179.json
+01:44:45.802 DUP SAVED fastdup-A6-180.json
+01:44:45.854 DUP SAVED fastdup-A6-181.json
+01:44:45.906 DUP SAVED fastdup-A6-182.json
+01:44:45.958 DUP SAVED fastdup-A6-183.json
+01:44:46.010 DUP SAVED fastdup-A6-184.json
+01:44:46.062 DUP SAVED fastdup-A6-185.json
+01:44:46.114 DUP SAVED fastdup-A6-186.json
+01:44:46.166 DUP SAVED fastdup-A6-187.json
+01:44:46.218 DUP SAVED fastdup-A6-188.json
+01:44:46.270 DUP SAVED fastdup-A6-189.json
+01:44:46.322 DUP SAVED fastdup-A6-190.json
+01:44:46.374 DUP SAVED fastdup-A6-191.json
+01:44:46.427 DUP SAVED fastdup-A6-192.json
+01:44:46.479 DUP SAVED fastdup-A6-193.json
+01:44:46.531 DUP SAVED fastdup-A6-194.json
+01:44:46.583 DUP SAVED fastdup-A6-195.json
+01:44:46.635 DUP SAVED fastdup-A6-196.json
+01:44:46.687 DUP SAVED fastdup-A6-197.json
+01:44:46.739 DUP SAVED fastdup-A6-198.json
+01:44:46.791 DUP SAVED fastdup-A6-199.json
+01:44:46.843 DUP SAVED fastdup-A6-200.json
+01:44:46.895 DUP SAVED fastdup-A6-201.json
+01:44:46.948 DUP SAVED fastdup-A6-202.json
+01:44:46.999 DUP SAVED fastdup-A6-203.json
+01:44:47.051 DUP SAVED fastdup-A6-204.json
+01:44:47.104 DUP SAVED fastdup-A6-205.json
+01:44:47.156 DUP SAVED fastdup-A6-206.json
+01:44:47.208 DUP SAVED fastdup-A6-207.json
+01:44:47.260 DUP SAVED fastdup-A6-208.json
+01:44:47.312 DUP SAVED fastdup-A6-209.json
+01:44:47.364 DUP SAVED fastdup-A6-210.json
+01:44:47.416 DUP SAVED fastdup-A6-211.json
+01:44:47.468 DUP SAVED fastdup-A6-212.json
+01:44:47.520 DUP SAVED fastdup-A6-213.json
+01:44:47.572 DUP SAVED fastdup-A6-214.json
+01:44:47.624 DUP SAVED fastdup-A6-215.json
+01:44:47.676 DUP SAVED fastdup-A6-216.json
+01:44:47.728 DUP SAVED fastdup-A6-217.json
+01:44:47.780 DUP SAVED fastdup-A6-218.json
+01:44:47.832 DUP SAVED fastdup-A6-219.json
+01:44:47.884 DUP SAVED fastdup-A6-220.json
+01:44:47.936 DUP SAVED fastdup-A6-221.json
+01:44:47.988 DUP SAVED fastdup-A6-222.json
+01:44:48.040 DUP SAVED fastdup-A6-223.json
+01:44:48.092 DUP SAVED fastdup-A6-224.json
+01:44:48.144 DUP SAVED fastdup-A6-225.json
+01:44:48.196 DUP SAVED fastdup-A6-226.json
+01:44:48.248 DUP SAVED fastdup-A6-227.json
+01:44:48.300 DUP SAVED fastdup-A6-228.json
+01:44:48.352 DUP SAVED fastdup-A6-229.json
+01:44:48.404 DUP SAVED fastdup-A6-230.json
+01:44:48.457 DUP SAVED fastdup-A6-231.json
+01:44:48.509 DUP SAVED fastdup-A6-232.json
+01:44:48.561 DUP SAVED fastdup-A6-233.json
+01:44:48.613 DUP SAVED fastdup-A6-234.json
+01:44:48.665 DUP SAVED fastdup-A6-235.json
+01:44:48.717 DUP SAVED fastdup-A6-236.json
+01:44:48.769 DUP SAVED fastdup-A6-237.json
+01:44:48.821 DUP SAVED fastdup-A6-238.json
+01:44:48.873 DUP SAVED fastdup-A6-239.json
+01:44:48.925 DUP SAVED fastdup-A6-240.json
+01:44:48.977 DUP SAVED fastdup-A6-241.json
+01:44:49.029 DUP SAVED fastdup-A6-242.json
+01:44:49.082 DUP SAVED fastdup-A6-243.json
+01:44:49.134 DUP SAVED fastdup-A6-244.json
+01:44:49.186 DUP SAVED fastdup-A6-245.json
+01:44:49.238 DUP SAVED fastdup-A6-246.json
+01:44:49.290 DUP SAVED fastdup-A6-247.json
+01:44:49.342 DUP SAVED fastdup-A6-248.json
+01:44:49.394 DUP SAVED fastdup-A6-249.json
+01:44:49.446 DUP SAVED fastdup-A6-250.json
+01:44:49.498 DUP SAVED fastdup-A6-251.json
+01:44:49.550 DUP SAVED fastdup-A6-252.json
+01:44:49.602 DUP SAVED fastdup-A6-253.json
+01:44:49.654 DUP SAVED fastdup-A6-254.json
+01:44:49.706 DUP SAVED fastdup-A6-255.json
+01:44:49.758 DUP SAVED fastdup-A6-256.json
+01:44:49.810 DUP SAVED fastdup-A6-257.json
+01:44:49.863 DUP SAVED fastdup-A6-258.json
+01:44:49.915 DUP SAVED fastdup-A6-259.json
+01:44:49.967 DUP SAVED fastdup-A6-260.json
+01:44:50.019 DUP SAVED fastdup-A6-261.json
+01:44:50.071 DUP SAVED fastdup-A6-262.json
+01:44:50.123 DUP SAVED fastdup-A6-263.json
+01:44:50.175 DUP SAVED fastdup-A6-264.json
+01:44:50.227 DUP SAVED fastdup-A6-265.json
+01:44:50.279 DUP SAVED fastdup-A6-266.json
+01:44:50.331 DUP SAVED fastdup-A6-267.json
+01:44:50.383 DUP SAVED fastdup-A6-268.json
+01:44:50.435 DUP SAVED fastdup-A6-269.json
+01:44:50.487 DUP SAVED fastdup-A6-270.json
+01:44:50.540 DUP SAVED fastdup-A6-271.json
+01:44:50.592 DUP SAVED fastdup-A6-272.json
+01:44:50.644 DUP SAVED fastdup-A6-273.json
+01:44:50.696 DUP SAVED fastdup-A6-274.json
+01:44:50.748 DUP SAVED fastdup-A6-275.json
+01:44:50.800 DUP SAVED fastdup-A6-276.json
+01:44:50.852 DUP SAVED fastdup-A6-277.json
+01:44:50.904 DUP SAVED fastdup-A6-278.json
+01:44:50.957 DUP SAVED fastdup-A6-279.json
+01:44:51.009 DUP SAVED fastdup-A6-280.json
+01:44:51.061 DUP SAVED fastdup-A6-281.json
+01:44:51.113 DUP SAVED fastdup-A6-282.json
+01:44:51.165 DUP SAVED fastdup-A6-283.json
+01:44:51.217 DUP SAVED fastdup-A6-284.json
+01:44:51.269 DUP SAVED fastdup-A6-285.json
+01:44:51.321 DUP SAVED fastdup-A6-286.json
+01:44:51.373 DUP SAVED fastdup-A6-287.json
+01:44:51.425 DUP SAVED fastdup-A6-288.json
+01:44:51.477 DUP SAVED fastdup-A6-289.json
+01:44:51.529 DUP SAVED fastdup-A6-290.json
+01:44:51.581 DUP SAVED fastdup-A6-291.json
+01:44:51.633 DUP SAVED fastdup-A6-292.json
+01:44:51.685 DUP SAVED fastdup-A6-293.json
+01:44:51.737 DUP SAVED fastdup-A6-294.json
+01:44:51.789 DUP SAVED fastdup-A6-295.json
+01:44:51.841 DUP SAVED fastdup-A6-296.json
+01:44:51.893 DUP SAVED fastdup-A6-297.json
+01:44:51.945 DUP SAVED fastdup-A6-298.json
+01:44:51.997 DUP SAVED fastdup-A6-299.json
+01:44:52.049 DUP SAVED fastdup-A6-300.json
+01:44:52.101 DUP SAVED fastdup-A6-301.json
+01:44:52.153 DUP SAVED fastdup-A6-302.json
+01:44:52.205 DUP SAVED fastdup-A6-303.json
+01:44:52.258 DUP SAVED fastdup-A6-304.json
+01:44:52.310 DUP SAVED fastdup-A6-305.json
+01:44:52.362 DUP SAVED fastdup-A6-306.json
+01:44:52.414 DUP SAVED fastdup-A6-307.json
+01:44:52.466 DUP SAVED fastdup-A6-308.json
+01:44:52.518 DUP SAVED fastdup-A6-309.json
+01:44:52.570 DUP SAVED fastdup-A6-310.json
+01:44:52.622 DUP SAVED fastdup-A6-311.json
+01:44:52.674 DUP SAVED fastdup-A6-312.json
+01:44:52.726 DUP SAVED fastdup-A6-313.json
+01:44:52.778 DUP SAVED fastdup-A6-314.json
+01:44:52.830 DUP SAVED fastdup-A6-315.json
+01:44:52.882 DUP SAVED fastdup-A6-316.json
+01:44:52.934 DUP SAVED fastdup-A6-317.json
+01:44:52.987 DUP SAVED fastdup-A6-318.json
+01:44:53.039 DUP SAVED fastdup-A6-319.json
+01:44:53.091 DUP SAVED fastdup-A6-320.json
+01:44:53.143 DUP SAVED fastdup-A6-321.json
+01:44:53.196 DUP SAVED fastdup-A6-322.json
+01:44:53.248 DUP SAVED fastdup-A6-323.json
+01:44:53.300 DUP SAVED fastdup-A6-324.json
+01:44:53.352 DUP SAVED fastdup-A6-325.json
+01:44:53.404 DUP SAVED fastdup-A6-326.json
+01:44:53.456 DUP SAVED fastdup-A6-327.json
+01:44:53.508 DUP SAVED fastdup-A6-328.json
+01:44:53.560 DUP SAVED fastdup-A6-329.json
+01:44:53.612 DUP SAVED fastdup-A6-330.json
+01:44:53.664 DUP SAVED fastdup-A6-331.json
+01:44:53.717 DUP SAVED fastdup-A6-332.json
+01:44:53.769 DUP SAVED fastdup-A6-333.json
+01:44:53.821 DUP SAVED fastdup-A6-334.json
+01:44:53.873 DUP SAVED fastdup-A6-335.json
+01:44:53.925 DUP SAVED fastdup-A6-336.json
+01:44:53.977 DUP SAVED fastdup-A6-337.json
+01:44:54.029 DUP SAVED fastdup-A6-338.json
+01:44:54.081 DUP SAVED fastdup-A6-339.json
+01:44:54.133 DUP SAVED fastdup-A6-340.json
+01:44:54.185 DUP SAVED fastdup-A6-341.json
+01:44:54.237 DUP SAVED fastdup-A6-342.json
+01:44:54.289 DUP SAVED fastdup-A6-343.json
+01:44:54.341 DUP SAVED fastdup-A6-344.json
+01:44:54.393 DUP SAVED fastdup-A6-345.json
+01:44:54.445 DUP SAVED fastdup-A6-346.json
+01:44:54.497 DUP SAVED fastdup-A6-347.json
+01:44:54.549 DUP SAVED fastdup-A6-348.json
+01:44:54.601 DUP SAVED fastdup-A6-349.json
+01:44:54.653 DUP SAVED fastdup-A6-350.json
+01:44:54.705 DUP SAVED fastdup-A6-351.json
+01:44:54.757 DUP SAVED fastdup-A6-352.json
+01:44:54.809 DUP SAVED fastdup-A6-353.json
+01:44:54.861 DUP SAVED fastdup-A6-354.json
+01:44:54.913 DUP SAVED fastdup-A6-355.json
+01:44:54.965 DUP SAVED fastdup-A6-356.json
+01:44:55.018 DUP SAVED fastdup-A6-357.json
+01:44:55.070 DUP SAVED fastdup-A6-358.json
+01:44:55.122 DUP SAVED fastdup-A6-359.json
+01:44:55.174 DUP SAVED fastdup-A6-360.json
+01:44:55.226 DUP SAVED fastdup-A6-361.json
+01:44:55.278 DUP SAVED fastdup-A6-362.json
+01:44:55.330 DUP SAVED fastdup-A6-363.json
+01:44:55.382 DUP SAVED fastdup-A6-364.json
+01:44:55.434 DUP SAVED fastdup-A6-365.json
+01:44:55.486 DUP SAVED fastdup-A6-366.json
+01:44:55.538 DUP SAVED fastdup-A6-367.json
+01:44:55.590 DUP SAVED fastdup-A6-368.json
+01:44:55.642 DUP SAVED fastdup-A6-369.json
+01:44:55.694 DUP SAVED fastdup-A6-370.json
+01:44:55.746 DUP SAVED fastdup-A6-371.json
+01:44:55.798 DUP SAVED fastdup-A6-372.json
+01:44:55.850 DUP SAVED fastdup-A6-373.json
+01:44:55.902 DUP SAVED fastdup-A6-374.json
+01:44:55.954 DUP SAVED fastdup-A6-375.json
+01:44:56.006 DUP SAVED fastdup-A6-376.json
+01:44:56.058 DUP SAVED fastdup-A6-377.json
+01:44:56.111 DUP SAVED fastdup-A6-378.json
+01:44:56.163 DUP SAVED fastdup-A6-379.json
+01:44:56.215 DUP SAVED fastdup-A6-380.json
+01:44:56.267 DUP SAVED fastdup-A6-381.json
+01:44:56.319 DUP SAVED fastdup-A6-382.json
+01:44:56.371 DUP SAVED fastdup-A6-383.json
+01:44:56.423 DUP SAVED fastdup-A6-384.json
+01:44:56.475 DUP SAVED fastdup-A6-385.json
+01:44:56.527 DUP SAVED fastdup-A6-386.json
+01:44:56.579 DUP SAVED fastdup-A6-387.json
+01:44:56.631 DUP SAVED fastdup-A6-388.json
+01:44:56.683 DUP SAVED fastdup-A6-389.json
+01:44:56.735 DUP SAVED fastdup-A6-390.json
+01:44:56.788 DUP SAVED fastdup-A6-391.json
+01:44:56.840 DUP SAVED fastdup-A6-392.json
+01:44:56.892 DUP SAVED fastdup-A6-393.json
+01:44:56.944 DUP SAVED fastdup-A6-394.json
+01:44:56.001 DUP SAVED fastdup-A6-395.json
+01:44:57.053 DUP SAVED fastdup-A6-396.json
+01:44:57.106 DUP SAVED fastdup-A6-397.json
+01:44:57.158 DUP SAVED fastdup-A6-398.json
+01:44:57.210 DUP SAVED fastdup-A6-399.json
+01:44:57.263 DUP SAVED fastdup-A6-400.json
+01:44:57.315 DUP SAVED fastdup-A6-401.json
+01:44:57.367 DUP SAVED fastdup-A6-402.json
+01:44:57.420 DUP SAVED fastdup-A6-403.json
+01:44:57.472 DUP SAVED fastdup-A6-404.json
+01:44:57.525 DUP SAVED fastdup-A6-405.json
+01:44:57.577 DUP SAVED fastdup-A6-406.json
+01:44:57.629 DUP SAVED fastdup-A6-407.json
+01:44:57.681 DUP SAVED fastdup-A6-408.json
+01:44:57.733 DUP SAVED fastdup-A6-409.json
+01:44:57.785 DUP SAVED fastdup-A6-410.json
+01:44:57.837 DUP SAVED fastdup-A6-411.json
+01:44:57.889 DUP SAVED fastdup-A6-412.json
+01:44:57.941 DUP SAVED fastdup-A6-413.json
+01:44:57.993 DUP SAVED fastdup-A6-414.json
+01:44:58.045 DUP SAVED fastdup-A6-415.json
+01:44:58.097 DUP SAVED fastdup-A6-416.json
+01:44:58.149 DUP SAVED fastdup-A6-417.json
+01:44:58.201 DUP SAVED fastdup-A6-418.json
+01:44:58.253 DUP SAVED fastdup-A6-419.json
+01:44:58.305 DUP SAVED fastdup-A6-420.json
+01:44:58.357 DUP SAVED fastdup-A6-421.json
+01:44:58.409 DUP SAVED fastdup-A6-422.json
+01:44:58.461 DUP SAVED fastdup-A6-423.json
+01:44:58.513 DUP SAVED fastdup-A6-424.json
+01:44:58.565 DUP SAVED fastdup-A6-425.json
+01:44:58.617 DUP SAVED fastdup-A6-426.json
+01:44:58.669 DUP SAVED fastdup-A6-427.json
+01:44:58.721 DUP SAVED fastdup-A6-428.json
+01:44:58.774 DUP SAVED fastdup-A6-429.json
+01:44:58.826 DUP SAVED fastdup-A6-430.json
+01:44:58.878 DUP SAVED fastdup-A6-431.json
+01:44:58.930 DUP SAVED fastdup-A6-432.json
+01:44:58.982 DUP SAVED fastdup-A6-433.json
+01:44:59.034 DUP SAVED fastdup-A6-434.json
+01:44:59.086 DUP SAVED fastdup-A6-435.json
+01:44:59.138 DUP SAVED fastdup-A6-436.json
+01:44:59.190 DUP SAVED fastdup-A6-437.json
+01:44:59.242 DUP SAVED fastdup-A6-438.json
+01:44:59.294 DUP SAVED fastdup-A6-439.json
+01:44:59.346 DUP SAVED fastdup-A6-440.json
+01:44:59.398 DUP SAVED fastdup-A6-441.json
+01:44:59.451 DUP SAVED fastdup-A6-442.json
+01:44:59.503 DUP SAVED fastdup-A6-443.json
+01:44:59.555 DUP SAVED fastdup-A6-444.json
+01:44:59.607 DUP SAVED fastdup-A6-445.json
+01:44:59.659 services=12 dup=none
+01:45:21.484 post: services=12 dup=none dup_sightings=445
+--- agent: active pid=716353
+--- agent journal AddService/UpdateService lines since restart (last 40):
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792892703742411742","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:45:03.743Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:45:03.744Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703748222230
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792892703748222230","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:45:03.749Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:45:03.749Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703752050438
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792892703752050438","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:45:03.756Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:45:03.757Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":{"args":["run","-c","{RUN_DIR}/config.json"],"download":{"archMap":{"386":"386","amd64":"amd64","arm":"armv7","arm64":"arm64"},"archive":"tar.gz","binName":"sing-box","github":{"asset":"sing-box-{VERSION}-linux-{ARCH}.tar.gz","proxy":"https://gcode.hostcentral.cc","repo":"SagerNet/sing-box","tag":"v1.14.3"},"url":"https://gcode.hostcentral.cc/https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-{ARCH}.tar.gz"},"enabled":true,"files":[{"content":"{\n  \"certificate_providers\": [\n    {\n      \"data_directory\": \"acme\",\n      \"domain\": [\n        \"16-146-199-68.sslip.io\"\n      ],\n      \"email\": \"flmx-test@0v0.dog\",\n      \"tag\": \"acme-1\",\n      \"type\": \"acme\"\n    }\n  ],\n  \"dns\": {\n    \"servers\": [\n      {\n        \"tag\": \"flvx-ipv4-resolver\",\n        \"type\": \"local\"\n      },\n      {\n        \"tag\": \"flvx-ipv6-resolver\",\n        \"type\": \"local\"\n      }\n    ]\n  },\n  \"inbounds\": [\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 23456,\n      \"psk\": \"JAEZPEPzBuEomBsznL5fKR\",\n      \"tag\": \"in-1\",\n      \"type\": \"snell\",\n      \"version\": 5\n    },\n    {\n      \"ignore_client_bandwidth\": true,\n      \"listen\": \"::\",\n      \"listen_port\": 24456,\n      \"tag\": \"in-2\",\n      \"tls\": {\n        \"alpn\": [\n          \"h3\"\n        ],\n        \"certificate\": [\n          \"-----BEGIN CERTIFICATE-----\",\n          \"MIIBdzCCAR2gAwIBAgIQAPQUZEc/k//d+sd+VwuzDDAKBggqhkjOPQQDAjAWMRQw\",\n          \"EgYDVQQDEwt3d3cuYW1kLmNvbTAeFw0yNjEwMjExMjEyMjFaFw0zNjEwMjExMzEy\",\n          \"MjFaMBYxFDASBgNVBAMTC3d3dy5hbWQuY29tMFkwEwYHKoZIzj0CAQYIKoZIzj0D\",\n          \"AQcDQgAE8RsV5HcwVY09WD+mE0sRf/fk2WTaaiT4VSoMHoDCHExv1zuV3zS9PRJo\",\n          \"5z67ekipk6WSbs3LHFX+9QL5gynW3KNNMEswDgYDVR0PAQH/BAQDAgeAMBMGA1Ud\",\n          \"JQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwFgYDVR0RBA8wDYILd3d3LmFt\",\n          \"ZC5jb20wCgYIKoZIzj0EAwIDSAAwRQIhAJicdyFE6DdS9ZdCAkbDrFrjL4CxDtN3\",\n          \"FZNxv9x7e81IAiBJbQe2t07AO+t2/e3+hp2x+BMrnTGJ9ZfVPkVQil4tIA==\",\n          \"-----END CERTIFICATE-----\"\n        ],\n        \"enabled\": true,\n        \"key\": [\n          \"-----BEGIN EC PRIVATE KEY-----\",\n          \"MHcCAQEEIJgyrFTeS1xWt8dt6EdLJNyx5Cx0bpWLKgervJ/vjN9ZoAoGCCqGSM49\",\n          \"AwEHoUQDQgAE8RsV5HcwVY09WD+mE0sRf/fk2WTaaiT4VSoMHoDCHExv1zuV3zS9\",\n          \"PRJo5z67ekipk6WSbs3LHFX+9QL5gynW3A==\",\n          \"-----END EC PRIVATE KEY-----\"\n        ],\n        \"server_name\": \"www.amd.com\"\n      },\n      \"type\": \"hysteria2\",\n      \"users\": [\n        {\n          \"password\": \"W10hy2-pass-123456\"\n        },\n        {\n          \"name\": \"u1\",\n          \"password\": \"5a7c86f73946e52977f38f7c4513d9cf\"\n        },\n        {\n          \"name\": \"u4\",\n          \"password\": \"be43d007d31a0e60e36542fb835db9e3\"\n        },\n        {\n          \"name\": \"u8\",\n          \"password\": \"a69797167e9456bfe088390f3a5dd9eb\"\n        },\n        {\n          \"name\": \"u9\",\n          \"password\": \"cfb5346942db470cb9d8463fb4c67c09\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 40734,\n      \"tag\": \"in-12\",\n      \"tls\": {\n        \"enabled\": true,\n        \"reality\": {\n          \"enabled\": true,\n          \"handshake\": {\n            \"server\": \"www.amd.com\",\n            \"server_port\": 443\n          },\n          \"private_key\": \"sexfStbc7BfRHmTGfQ1oZI4bl4QOJjeWfCmbZLlyspY\",\n          \"short_id\": [\n            \"9e10e22a045df54f\"\n          ]\n        },\n        \"server_name\": \"www.amd.com\"\n      },\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"flow\": \"xtls-rprx-vision\",\n          \"uuid\": \"84793b97-a14a-4fe5-a55e-e66a51e48689\"\n        },\n        {\n          \"flow\": \"xtls-rprx-vision\",\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"flow\": \"xtls-rprx-vision\",\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        },\n        {\n          \"flow\": \"xtls-rprx-vision\",\n          \"name\": \"u12\",\n          \"uuid\": \"a5d20f34-0118-446a-b3c7-7f3019c06206\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 37954,\n      \"method\": \"2022-blake3-aes-128-gcm\",\n      \"password\": \"+IfkiPTwuP77Gk6UpuV3tw==\",\n      \"tag\": \"in-15\",\n      \"type\": \"shadowsocks\"\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 36832,\n      \"tag\": \"in-17\",\n      \"tls\": {\n        \"certificate\": [\n          \"-----BEGIN CERTIFICATE-----\",\n          \"MIIBgDCCASagAwIBAgIQAJPLC9YXW9mBgBxek56e8zAKBggqhkjOPQQDAjAZMRcw\",\n          \"FQYDVQQDEw5hNC5leGFtcGxlLmNvbTAeFw0yNjEwMjExMjI0NDRaFw0zNjEwMjEx\",\n          \"MzI0NDRaMBkxFzAVBgNVBAMTDmE0LmV4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYI\",\n          \"KoZIzj0DAQcDQgAEKbPVlnTMB6Yj86gxHKsYPor404+5Nzv1nvmns+NRTq8ilA4t\",\n          \"NHX8HgvB8e7Ugx+YRxWxfJQ+EOG3jAsjssiFcKNQME4wDgYDVR0PAQH/BAQDAgeA\",\n          \"MBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwGQYDVR0RBBIwEIIO\",\n          \"YTQuZXhhbXBsZS5jb20wCgYIKoZIzj0EAwIDSAAwRQIhALPizG/bMPbd/vSjeZkd\",\n          \"bEkvvenZF4xmKyOonWqsCJSgAiB/LhgsUmJUVRN6Dt9FozD1JceSqQZoF0A5L8Mv\",\n          \"PN67/w==\",\n          \"-----END CERTIFICATE-----\"\n        ],\n        \"enabled\": true,\n        \"key\": [\n          \"-----BEGIN EC PRIVATE KEY-----\",\n          \"MHcCAQEEIBR0jcBbv23sdTcbygVc9oprqiyW9MkDYqLacUGtvsvhoAoGCCqGSM49\",\n          \"AwEHoUQDQgAEKbPVlnTMB6Yj86gxHKsYPor404+5Nzv1nvmns+NRTq8ilA4tNHX8\",\n          \"HgvB8e7Ugx+YRxWxfJQ+EOG3jAsjssiFcA==\",\n          \"-----END EC PRIVATE KEY-----\"\n        ],\n        \"server_name\": \"a4.example.com\"\n      },\n      \"type\": \"trojan\",\n      \"users\": [\n        {\n          \"password\": \"loN5HxMzDUDSGl0GaQQ1s8ywz_sIUIcQ\"\n        },\n        {\n          \"name\": \"u1\",\n          \"password\": \"5a7c86f73946e52977f38f7c4513d9cf\"\n        },\n        {\n          \"name\": \"u4\",\n          \"password\": \"be43d007d31a0e60e36542fb835db9e3\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 20429,\n      \"tag\": \"in-19\",\n      \"tls\": {\n        \"certificate\": [\n          \"-----BEGIN CERTIFICATE-----\",\n          \"MIIBfzCCASagAwIBAgIQANreX3/6NNxrSBVVUKt3kjAKBggqhkjOPQQDAjAZMRcw\",\n          \"FQYDVQQDEw5hNC5leGFtcGxlLmNvbTAeFw0yNjEwMjExMjI0NDhaFw0zNjEwMjEx\",\n          \"MzI0NDhaMBkxFzAVBgNVBAMTDmE0LmV4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYI\",\n          \"KoZIzj0DAQcDQgAEEmK/gy6PRr0nYzquerQR+gJWtGDX6Qd5P+CxE85U25DgEiuu\",\n          \"QIPW0MIMSaWNn3a8ae+LI2YDbpbiAa21lLfqcaNQME4wDgYDVR0PAQH/BAQDAgeA\",\n          \"MBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwGQYDVR0RBBIwEIIO\",\n          \"YTQuZXhhbXBsZS5jb20wCgYIKoZIzj0EAwIDRwAwRAIgS1a0I7e3FEb0VXFb6O5N\",\n          \"31wT+m9NIHZA1mo4eXoRwuECIHTz/6sVTkmirhEEU6FepJl4wN7+nYW3kxxIIwYs\",\n          \"NTRM\",\n          \"-----END CERTIFICATE-----\"\n        ],\n        \"enabled\": true,\n        \"key\": [\n          \"-----BEGIN EC PRIVATE KEY-----\",\n          \"MHcCAQEEIJCkDvBI1QVVnqLpiNnsHtDEN065U8TTdVRtFc572n6QoAoGCCqGSM49\",\n          \"AwEHoUQDQgAEEmK/gy6PRr0nYzquerQR+gJWtGDX6Qd5P+CxE85U25DgEiuuQIPW\",\n          \"0MIMSaWNn3a8ae+LI2YDbpbiAa21lLfqcQ==\",\n          \"-----END EC PRIVATE KEY-----\"\n        ],\n        \"server_name\": \"a4.example.com\"\n      },\n      \"transport\": {\n        \"path\": \"/a4\",\n        \"type\": \"ws\"\n      },\n      \"type\": \"vmess\",\n      \"users\": [\n        {\n          \"alterId\": 0,\n          \"uuid\": \"2be1abaa-c947-43da-8387-8d130bf09047\"\n        },\n        {\n          \"alterId\": 0,\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"alterId\": 0,\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        }\n      ]\n    },\n    {\n      \"ignore_client_bandwidth\": true,\n      \"listen\": \"::\",\n      \"listen_port\": 53742,\n      \"tag\": \"in-20\",\n      \"tls\": {\n        \"alpn\": [\n          \"h3\"\n        ],\n        \"certificate\": [\n          \"-----BEGIN CERTIFICATE-----\",\n          \"MIIBejCCASCgAwIBAgIQAIsEAqQuIuS2nQi6CB+58jAKBggqhkjOPQQDAjAXMRUw\",\n          \"EwYDVQQDEwx3d3cuYmluZy5jb20wHhcNMjYxMDIxMTIyNDQ5WhcNMzYxMDIxMTMy\",\n          \"NDQ5WjAXMRUwEwYDVQQDEwx3d3cuYmluZy5jb20wWTATBgcqhkjOPQIBBggqhkjO\",\n          \"PQMBBwNCAASdEHyq5s6f12TYa5yQeFk7Ca0VAJz7yMg6JvHWv5q9mU2Gy5oS7a7Z\",\n          \"oSdUDgXoLw8H/1jo8f60c0lhMye09uyEo04wTDAOBgNVHQ8BAf8EBAMCB4AwEwYD\",\n          \"VR0lBAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAXBgNVHREEEDAOggx3d3cu\",\n          \"YmluZy5jb20wCgYIKoZIzj0EAwIDSAAwRQIgflWddi76jY7zyIAS5j1rImuPFO7D\",\n          \"RIDmOobD9zPLZy4CIQDrIjKKGSsM6OExN9AsFX8/R16v+v/JtfwIlmAHTwcIYg==\",\n          \"-----END CERTIFICATE-----\"\n        ],\n        \"enabled\": true,\n        \"key\": [\n          \"-----BEGIN EC PRIVATE KEY-----\",\n          \"MHcCAQEEIGnons0PCnITCRYsru578R+ZlNOn1tLr5LqBjqnbZvWOoAoGCCqGSM49\",\n          \"AwEHoUQDQgAEnRB8qubOn9dk2GuckHhZOwmtFQCc+8jIOibx1r+avZlNhsuaEu2u\",\n          \"2aEnVA4F6C8PB/9Y6PH+tHNJYTMntPbshA==\",\n          \"-----END EC PRIVATE KEY-----\"\n        ],\n        \"server_name\": \"www.bing.com\"\n      },\n      \"type\": \"hysteria2\",\n      \"users\": [\n        {\n          \"password\": \"kg2m-36jfvKGpSuPy5fHZadtlnzecvfj\"\n        },\n        {\n          \"name\": \"u1\",\n          \"password\": \"5a7c86f73946e52977f38f7c4513d9cf\"\n        },\n        {\n          \"name\": \"u4\",\n          \"password\": \"be43d007d31a0e60e36542fb835db9e3\"\n        }\n      ]\n    },\n    {\n      \"congestion_control\": \"bbr\",\n      \"listen\": \"::\",\n      \"listen_port\": 50545,\n      \"tag\": \"in-21\",\n      \"tls\": {\n        \"alpn\": [\n          \"h3\"\n        ],\n        \"certificate\": [\n          \"-----BEGIN CERTIFICATE-----\",\n          \"MIIBeDCCAR+gAwIBAgIPfuWqq5bohCEwLbyfyoAgMAoGCCqGSM49BAMCMBcxFTAT\",\n          \"BgNVBAMTDHd3dy5iaW5nLmNvbTAeFw0yNjEwMjExMjI0NTFaFw0zNjEwMjExMzI0\",\n          \"NTFaMBcxFTATBgNVBAMTDHd3dy5iaW5nLmNvbTBZMBMGByqGSM49AgEGCCqGSM49\",\n          \"AwEHA0IABASck+JCotRDUzLLK3AKCgd76R9kd7nB42+iAnE/9vH8+3+2XeGnCrdL\",\n          \"V0oBc7Xs0tDYUTAtgLpcguIRwNNDomCjTjBMMA4GA1UdDwEB/wQEAwIHgDATBgNV\",\n          \"HSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMBcGA1UdEQQQMA6CDHd3dy5i\",\n          \"aW5nLmNvbTAKBggqhkjOPQQDAgNHADBEAiBhHE0+7bzm7rgNohx45hqHZFb6tTxO\",\n          \"J1s1+snAnWai5AIgcCAAz2fX33C59Ht2Y5bnRFJboGexC1IzXsAL1Ev14Uw=\",\n          \"-----END CERTIFICATE-----\"\n        ],\n        \"enabled\": true,\n        \"key\": [\n          \"-----BEGIN EC PRIVATE KEY-----\",\n          \"MHcCAQEEIDyLCBOr0drpM1PuagmQioTtwlJctnLwttBrEY6dviDooAoGCCqGSM49\",\n          \"AwEHoUQDQgAEBJyT4kKi1ENTMssrcAoKB3vpH2R3ucHjb6ICcT/28fz7f7Zd4acK\",\n          \"t0tXSgFztezS0NhRMC2AulyC4hHA00OiYA==\",\n          \"-----END EC PRIVATE KEY-----\"\n        ],\n        \"server_name\": \"www.bing.com\"\n      },\n      \"type\": \"tuic\",\n      \"users\": [\n        {\n          \"password\": \"0RAI3kb0lYzD_3XcXvAX2NG6TtHMjnf4\",\n          \"uuid\": \"a3bca0e8-120d-4951-8de0-c984fd7927bb\"\n        },\n        {\n          \"name\": \"u1\",\n          \"password\": \"5a7c86f73946e52977f38f7c4513d9cf\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"password\": \"be43d007d31a0e60e36542fb835db9e3\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 24824,\n      \"tag\": \"in-22\",\n      \"tls\": {\n        \"certificate\": [\n          \"-----BEGIN CERTIFICATE-----\",\n          \"MIIBeTCCAR+gAwIBAgIPPKQgNfhZ2irPRYibK+GNMAoGCCqGSM49BAMCMBcxFTAT\",\n          \"BgNVBAMTDHd3dy5iaW5nLmNvbTAeFw0yNjEwMjExMjI0NTJaFw0zNjEwMjExMzI0\",\n          \"NTJaMBcxFTATBgNVBAMTDHd3dy5iaW5nLmNvbTBZMBMGByqGSM49AgEGCCqGSM49\",\n          \"AwEHA0IABG8RIuc3w0l82oQnWKQ1Qy/xCsehfLJxF+sB2na/k8yGh7T8Nsq+Deyv\",\n          \"bCjT9MIDuav7y2CAG0K3oLvMqWZX3DajTjBMMA4GA1UdDwEB/wQEAwIHgDATBgNV\",\n          \"HSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMBcGA1UdEQQQMA6CDHd3dy5i\",\n          \"aW5nLmNvbTAKBggqhkjOPQQDAgNIADBFAiEAv4gU0DcuxqM/H7R1Xy80py9vaXTR\",\n          \"0lMZUGvVPJZsnDMCIDh5sr1LVsIApE+zRAwON5uMbo6mq6/jia6r5TTNhh/+\",\n          \"-----END CERTIFICATE-----\"\n        ],\n        \"enabled\": true,\n        \"key\": [\n          \"-----BEGIN EC PRIVATE KEY-----\",\n          \"MHcCAQEEIE5ClnyH/yCH4XuGCb3G1NfyT2nnXJxGdEd8FqDJW3WDoAoGCCqGSM49\",\n          \"AwEHoUQDQgAEbxEi5zfDSXzahCdYpDVDL/EKx6F8snEX6wHadr+TzIaHtPw2yr4N\",\n          \"7K9sKNP0wgO5q/vLYIAbQregu8ypZlfcNg==\",\n          \"-----END EC PRIVATE KEY-----\"\n        ],\n        \"server_name\": \"www.bing.com\"\n      },\n      \"type\": \"anytls\",\n      \"users\": [\n        {\n          \"password\": \"fTlt1zf3HDESKe-cE3c3-7hqPuQRw2bF\"\n        },\n        {\n          \"name\": \"u1\",\n          \"password\": \"5a7c86f73946e52977f38f7c4513d9cf\"\n        },\n        {\n          \"name\": \"u4\",\n          \"password\": \"be43d007d31a0e60e36542fb835db9e3\"\n        }\n      ]\n    },\n    {\n      \"detour\": \"in-23-ss\",\n      \"handshake\": {\n        \"server\": \"www.amd.com\",\n        \"server_port\": 443\n      },\n      \"listen\": \"::\",\n      \"listen_port\": 56930,\n      \"tag\": \"in-23\",\n      \"type\": \"shadowtls\",\n      \"users\": [\n        {\n          \"password\": \"a4shadowpw\"\n        }\n      ],\n      \"version\": 3\n    },\n    {\n      \"listen\": \"127.0.0.1\",\n      \"method\": \"2022-blake3-aes-128-gcm\",\n      \"password\": \"FarrToiXE8vJxsWi8dK9UA==\",\n      \"tag\": \"in-23-ss\",\n      \"type\": \"shadowsocks\"\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 32331,\n      \"psk\": \"Yg_ZUBKhhBEBvD30DgBQt4DEz3d6mQKU\",\n      \"tag\": \"in-24\",\n      \"type\": \"snell\",\n      \"version\": 5\n    },\n    {\n      \"detour\": \"in-27-snell\",\n      \"handshake\": {\n        \"server\": \"www.amd.com\",\n        \"server_port\": 443\n      },\n      \"listen\": \"::\",\n      \"listen_port\": 29854,\n      \"tag\": \"in-27\",\n      \"type\": \"shadowtls\",\n      \"users\": [\n        {\n          \"password\": \"a4shadowpw\"\n        }\n      ],\n      \"version\": 3\n    },\n    {\n      \"listen\": \"127.0.0.1\",\n      \"psk\": \"YAPoY_j4WxevrjALX27YDB96qWHP2Jtc\",\n      \"tag\": \"in-27-snell\",\n      \"type\": \"snell\",\n      \"version\": 5\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 24501,\n      \"tag\": \"in-39\",\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"uuid\": \"2670f310-eae1-4f0c-87ce-a2840597f7ee\"\n        },\n        {\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        },\n        {\n          \"name\": \"u11\",\n          \"uuid\": \"c712f479-b64c-41b5-ba19-3b5528b3d224\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 24502,\n      \"method\": \"2022-blake3-aes-128-gcm\",\n      \"password\": \"IwdvHEPnQt1vGj6ZZ0n1rA==\",\n      \"tag\": \"in-40\",\n      \"type\": \"shadowsocks\"\n    },\n    {\n      \"listen\": \"0.0.0.0\",\n      \"listen_port\": 15510,\n      \"tag\": \"in-571\",\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"uuid\": \"22222222-3333-4444-5555-666666666666\"\n        },\n        {\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        },\n        {\n          \"name\": \"u20\",\n          \"uuid\": \"6839f52e-5b19-45a3-8ec8-0a921f8efa0e\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"0.0.0.0\",\n      \"listen_port\": 15511,\n      \"tag\": \"in-573\",\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"uuid\": \"22222222-3333-4444-5555-666666666666\"\n        },\n        {\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"0.0.0.0\",\n      \"listen_port\": 15512,\n      \"tag\": \"in-574\",\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"uuid\": \"22222222-3333-4444-5555-666666666666\"\n        },\n        {\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"0.0.0.0\",\n      \"listen_port\": 15513,\n      \"tag\": \"in-575\",\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"uuid\": \"22222222-3333-4444-5555-666666666666\"\n        },\n        {\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"0.0.0.0\",\n      \"listen_port\": 15514,\n      \"tag\": \"in-576\",\n      \"type\": \"vless\",\n      \"users\": [\n        {\n          \"uuid\": \"22222222-3333-4444-5555-666666666666\"\n        },\n        {\n          \"name\": \"u1\",\n          \"uuid\": \"b52951bd-f026-44f3-ace9-96e4261cd3ef\"\n        },\n        {\n          \"name\": \"u4\",\n          \"uuid\": \"ebf13a99-d035-4b8c-b67e-8e992913ba0d\"\n        }\n      ]\n    },\n    {\n      \"listen\": \"::\",\n      \"listen_port\": 15531,\n      \"tag\": \"in-905\",\n      \"tls\": {\n        \"certificate_provider\": \"acme-1\",\n        \"enabled\": true,\n        \"server_name\": \"16-146-199-68.sslip.io\"\n      },\n      \"type\": \"trojan\",\n      \"users\": [\n        {\n          \"password\": \"a2trojanpw123\"\n        },\n        {\n          \"name\": \"u1\",\n          \"password\": \"5a7c86f73946e52977f38f7c4513d9cf\"\n        },\n        {\n          \"name\": \"u4\",\n          \"password\": \"be43d007d31a0e60e36542fb835db9e3\"\n        }\n      ]\n    }\n  ],\n  \"log\": {\n    \"level\": \"warn\"\n  },\n  \"outbounds\": [\n    {\n      \"tag\": \"direct\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041217,\n      \"tag\": \"flmx-u1\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041220,\n      \"tag\": \"flmx-u4\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041224,\n      \"tag\": \"flmx-u8\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041225,\n      \"tag\": \"flmx-u9\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041227,\n      \"tag\": \"flmx-u11\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041228,\n      \"tag\": \"flmx-u12\",\n      \"type\": \"direct\"\n    },\n    {\n      \"routing_mark\": 1180041236,\n      \"tag\": \"flmx-u20\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv4-resolver\",\n        \"strategy\": \"ipv4_only\"\n      },\n      \"inet4_bind_address\": \"0.0.0.0\",\n      \"routing_mark\": 1180041217,\n      \"tag\": \"ipv4-in-573-flmx-u1\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv4-resolver\",\n        \"strategy\": \"ipv4_only\"\n      },\n      \"inet4_bind_address\": \"0.0.0.0\",\n      \"routing_mark\": 1180041220,\n      \"tag\": \"ipv4-in-573-flmx-u4\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv4-resolver\",\n        \"strategy\": \"ipv4_only\"\n      },\n      \"inet4_bind_address\": \"0.0.0.0\",\n      \"tag\": \"ipv4-in-573-direct\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv6-resolver\",\n        \"strategy\": \"ipv6_only\"\n      },\n      \"inet6_bind_address\": \"::\",\n      \"routing_mark\": 1180041217,\n      \"tag\": \"ipv6-in-574-flmx-u1\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv6-resolver\",\n        \"strategy\": \"ipv6_only\"\n      },\n      \"inet6_bind_address\": \"::\",\n      \"routing_mark\": 1180041220,\n      \"tag\": \"ipv6-in-574-flmx-u4\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv6-resolver\",\n        \"strategy\": \"ipv6_only\"\n      },\n      \"inet6_bind_address\": \"::\",\n      \"tag\": \"ipv6-in-574-direct\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv6-resolver\",\n        \"strategy\": \"prefer_ipv6\"\n      },\n      \"fallback_delay\": \"250ms\",\n      \"routing_mark\": 1180041217,\n      \"tag\": \"prefer-ipv6-in-575-flmx-u1\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv6-resolver\",\n        \"strategy\": \"prefer_ipv6\"\n      },\n      \"fallback_delay\": \"250ms\",\n      \"routing_mark\": 1180041220,\n      \"tag\": \"prefer-ipv6-in-575-flmx-u4\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv6-resolver\",\n        \"strategy\": \"prefer_ipv6\"\n      },\n      \"fallback_delay\": \"250ms\",\n      \"tag\": \"prefer-ipv6-in-575-direct\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv4-resolver\",\n        \"strategy\": \"prefer_ipv4\"\n      },\n      \"fallback_delay\": \"250ms\",\n      \"routing_mark\": 1180041217,\n      \"tag\": \"prefer-ipv4-in-576-flmx-u1\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv4-resolver\",\n        \"strategy\": \"prefer_ipv4\"\n      },\n      \"fallback_delay\": \"250ms\",\n      \"routing_mark\": 1180041220,\n      \"tag\": \"prefer-ipv4-in-576-flmx-u4\",\n      \"type\": \"direct\"\n    },\n    {\n      \"domain_resolver\": {\n        \"server\": \"flvx-ipv4-resolver\",\n        \"strategy\": \"prefer_ipv4\"\n      },\n      \"fallback_delay\": \"250ms\",\n      \"tag\": \"prefer-ipv4-in-576-direct\",\n      \"type\": \"direct\"\n    }\n  ],\n  \"route\": {\n    \"default_domain_resolver\": \"flvx-ipv4-resolver\",\n    \"final\": \"direct\",\n    \"rules\": [\n      {\n        \"action\": \"reject\",\n        \"inbound\": [\n          \"in-573\"\n        ],\n        \"ip_version\": 6\n      },\n      {\n        \"auth_user\": [\n          \"u1\"\n        ],\n        \"inbound\": [\n          \"in-573\"\n        ],\n        \"outbound\": \"ipv4-in-573-flmx-u1\"\n      },\n      {\n        \"auth_user\": [\n          \"u4\"\n        ],\n        \"inbound\": [\n          \"in-573\"\n        ],\n        \"outbound\": \"ipv4-in-573-flmx-u4\"\n      },\n      {\n        \"inbound\": [\n          \"in-573\"\n        ],\n        \"outbound\": \"ipv4-in-573-direct\"\n      },\n      {\n        \"action\": \"reject\",\n        \"inbound\": [\n          \"in-574\"\n        ],\n        \"ip_version\": 4\n      },\n      {\n        \"auth_user\": [\n          \"u1\"\n        ],\n        \"inbound\": [\n          \"in-574\"\n        ],\n        \"outbound\": \"ipv6-in-574-flmx-u1\"\n      },\n      {\n        \"auth_user\": [\n          \"u4\"\n        ],\n        \"inbound\": [\n          \"in-574\"\n        ],\n        \"outbound\": \"ipv6-in-574-flmx-u4\"\n      },\n      {\n        \"inbound\": [\n          \"in-574\"\n        ],\n        \"outbound\": \"ipv6-in-574-direct\"\n      },\n      {\n        \"auth_user\": [\n          \"u1\"\n        ],\n        \"inbound\": [\n          \"in-575\"\n        ],\n        \"outbound\": \"prefer-ipv6-in-575-flmx-u1\"\n      },\n      {\n        \"auth_user\": [\n          \"u4\"\n        ],\n        \"inbound\": [\n          \"in-575\"\n        ],\n        \"outbound\": \"prefer-ipv6-in-575-flmx-u4\"\n      },\n      {\n        \"inbound\": [\n          \"in-575\"\n        ],\n        \"outbound\": \"prefer-ipv6-in-575-direct\"\n      },\n      {\n        \"auth_user\": [\n          \"u1\"\n        ],\n        \"inbound\": [\n          \"in-576\"\n        ],\n        \"outbound\": \"prefer-ipv4-in-576-flmx-u1\"\n      },\n      {\n        \"auth_user\": [\n          \"u4\"\n        ],\n        \"inbound\": [\n          \"in-576\"\n        ],\n        \"outbound\": \"prefer-ipv4-in-576-flmx-u4\"\n      },\n      {\n        \"inbound\": [\n          \"in-576\"\n        ],\n        \"outbound\": \"prefer-ipv4-in-576-direct\"\n      },\n      {\n        \"auth_user\": [\n          \"u1\"\n        ],\n        \"outbound\": \"flmx-u1\"\n      },\n      {\n        \"auth_user\": [\n          \"u4\"\n        ],\n        \"outbound\": \"flmx-u4\"\n      },\n      {\n        \"auth_user\": [\n          \"u8\"\n        ],\n        \"outbound\": \"flmx-u8\"\n      },\n      {\n        \"auth_user\": [\n          \"u9\"\n        ],\n        \"outbound\": \"flmx-u9\"\n      },\n      {\n        \"auth_user\": [\n          \"u11\"\n        ],\n        \"outbound\": \"flmx-u11\"\n      },\n      {\n        \"auth_user\": [\n          \"u12\"\n        ],\n        \"outbound\": \"flmx-u12\"\n      },\n      {\n        \"auth_user\": [\n          \"u20\"\n        ],\n        \"outbound\": \"flmx-u20\"\n      }\n    ]\n  }\n}\n","name":"config.json"}],"hash":"d5065bba26ee4812dab882724f129e7a29951ba0a4cf5abd39ab1af320cfbb88","ports":[{"inboundId":1,"network":"tcp","port":23456},{"hopFrom":26000,"hopTo":26099,"inboundId":2,"network":"udp","port":24456},{"inboundId":12,"network":"tcp","port":40734},{"inboundId":15,"network":"tcp,udp","port":37954},{"inboundId":17,"network":"tcp","port":36832},{"inboundId":19,"network":"tcp","port":20429},{"inboundId":20,"network":"udp","port":53742},{"inboundId":21,"network":"udp","port":50545},{"inboundId":22,"network":"tcp","port":24824},{"inboundId":23,"network":"tcp","port":56930},{"inboundId":24,"network":"tcp","port":32331},{"inboundId":27,"network":"tcp","port":29854},{"inboundId":39,"network":"tcp","port":24501},{"inboundId":40,"network":"tcp,udp","port":24502},{"inboundId":571,"network":"tcp","port":15510},{"inboundId":573,"network":"tcp","port":15511},{"inboundId":574,"network":"tcp","port":15512},{"inboundId":575,"network":"tcp","port":15513},{"inboundId":576,"network":"tcp","port":15514},{"inboundId":905,"network":"tcp","port":15531}],"type":"singbox","userMarks":[1,4,8,9,11,12,20],"version":"1.14.3"},"requestId":"1_1792892703747873215","type":"KernelApply"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703778595468
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892703778595468","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:45:03.783Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:45:03.783Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703786457201
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"1_2_1_tcp"},{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"1_2_1_udp"}],"requestId":"1_1792892703786457201","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:45:03.788Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:45:03.789Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703800639006
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792892703800639006","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:45:03.802Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:45:03.803Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703805117165
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792892703805117165","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:45:03.806Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:45:03.806Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703809035968
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792892703809035968","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:45:03.811Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:45:03.811Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703813322588
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"6_1_0_tcp"},{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"6_1_0_udp"}],"requestId":"1_1792892703813322588","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:45:03.814Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:45:03.815Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 收到命令: type=UpdateService requestId=1_1792892703817144320
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792892703817144320","type":"UpdateService"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:45:03.818Z"}
+Oct 25 01:45:03 ip-172-26-9-119 flux_agent[716353]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:45:03.818Z"}
+--- post md5: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+=== fastpoll-r18 A6 end=2026-10-25T01:45:21Z ===
+=== PHASE-A DONE 2026-10-25T01:45:26Z ===
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+active

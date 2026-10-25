@@ -1,0 +1,34 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+StandardOutput=null
+StandardError=null
+=== journal in leg2 window ===
+Oct 25 01:40:04 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:40:04 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:40:04 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:04 ip-172-26-9-119 systemd[1]: flux_agent.service: Consumed 5.106s CPU time.
+Oct 25 01:40:04 ip-172-26-9-119 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:26 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:40:26 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:40:26 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:29 ip-172-26-9-119 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:34 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:40:34 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:40:34 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:38 ip-172-26-9-119 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:58 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:40:58 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:40:58 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:40:58 ip-172-26-9-119 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:41:03 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:41:03 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:41:03 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+=== count ===
+21
+=== unit files on machine ===
+-rw-r----- 1 root root 665 Oct 24 23:53 /root/r17c/flux_agent-prod.service
+-rw-r----- 1 root root 275 Oct 25 00:01 /root/r17c/flux_agent.service.orig
+-rw-r--r-- 1 root root 665 Oct 24 23:55 /root/r17c/flux_agent.service.pristine
+-rw-r--r-- 1 root root 275 Oct 25 00:27 /root/r17d/flux_agent.service.pristine
+a12afd9c36fba7b76287210efaa199cb  /root/r17d/flux_agent.service.pristine
+05449a73f3d21b037eb082be0a5ff438  /root/r17c/flux_agent.service.pristine

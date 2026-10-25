@@ -1,0 +1,15 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== swap fixed agent ===
+23aa260d8bffb857171f26e3426b7d2d  /etc/flux_agent/flux_agent
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+=== forward 6 pre ===
+code 0
+fwd 6 1
+=== pause forward 6 ===
+pause code 0 操作成功
+6_1_0_tcp paused= True addr= [::]:14601
+6_1_0_udp paused= True addr= [::]:14601
+services: 12
+14601 free (good)
+3f172a90ddd67d69d9bcea4dfe67a66e  /etc/flux_agent/gost.json

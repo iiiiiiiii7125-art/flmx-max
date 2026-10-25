@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+aff338e3676bc56d0f3986a1a62f8fdd  /root/r17c/flux_agent.pristine
+b92b61993dbfd6134db048e7f256552b  /root/r17c/flux_agent
+23aa260d8bffb857171f26e3426b7d2d  /root/r17d/flux_agent.pristine
+-rwxr-x--- 1 root root 50174096 Oct 24 23:32 /root/r17c/flux_agent
+-rw-r----- 1 root root      665 Oct 24 23:53 /root/r17c/flux_agent-prod.service
+-rwxr-x--- 1 root root 50420431 Oct 24 23:53 /root/r17c/flux_agent-r17c
+-rwxr-xr-x 1 root root 50194574 Oct 24 23:34 /root/r17c/flux_agent.pristine
+-rw-r----- 1 root root      275 Oct 25 00:01 /root/r17c/flux_agent.service.orig
+-rw-r--r-- 1 root root      665 Oct 24 23:55 /root/r17c/flux_agent.service.pristine

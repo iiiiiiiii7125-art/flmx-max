@@ -1,0 +1,74 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Oct 25 01:44:20.361539 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:44:20.429239 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:44:20.429459 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:23.836073 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:28.863568 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 01:44:28.918714 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 01:44:28.919029 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:31.972152 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.130103 flux_agent[715564]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.122Z"}
+Oct 25 01:44:32.124857 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:32.125064 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:32.294154 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 1.
+Oct 25 01:44:32.294453 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.316029 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.383336 flux_agent[715586]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.382Z"}
+Oct 25 01:44:32.384587 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:32.384759 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:32.544176 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 2.
+Oct 25 01:44:32.544452 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.560023 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.625472 flux_agent[715608]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.617Z"}
+Oct 25 01:44:32.620218 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:32.620377 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:32.794229 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 3.
+Oct 25 01:44:32.794507 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.816013 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:32.878043 flux_agent[715630]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:32.873Z"}
+Oct 25 01:44:32.875858 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:32.876079 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33.044214 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 4.
+Oct 25 01:44:33.044497 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.064070 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.118943 flux_agent[715651]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:33.118Z"}
+Oct 25 01:44:33.121247 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:33.121448 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33.294355 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 5.
+Oct 25 01:44:33.294644 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.294720 systemd[1]: flux_agent.service: Start request repeated too quickly.
+Oct 25 01:44:33.294737 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33.294914 systemd[1]: Failed to start flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.472033 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.637243 flux_agent[715681]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:33.637Z"}
+Oct 25 01:44:33.640570 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:33.640779 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:33.794134 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 1.
+Oct 25 01:44:33.794408 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.816011 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:33.863671 flux_agent[715720]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:33.862Z"}
+Oct 25 01:44:33.864907 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:33.865077 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34.044204 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 2.
+Oct 25 01:44:34.044487 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.060002 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.115192 flux_agent[715741]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:34.114Z"}
+Oct 25 01:44:34.117107 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:34.117310 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34.294266 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 3.
+Oct 25 01:44:34.294557 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.324033 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.381994 flux_agent[715762]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:34.381Z"}
+Oct 25 01:44:34.383388 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:34.383602 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34.544223 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 4.
+Oct 25 01:44:34.544500 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.560047 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.601531 flux_agent[715784]: {"level":"fatal","msg":"listen tcp 0.0.0.0:14601: bind: address already in use","time":"2026-10-25T01:44:34.600Z"}
+Oct 25 01:44:34.603174 systemd[1]: flux_agent.service: Main process exited, code=exited, status=1/FAILURE
+Oct 25 01:44:34.603331 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34.794275 systemd[1]: flux_agent.service: Scheduled restart job, restart counter is at 5.
+Oct 25 01:44:34.794548 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 01:44:34.794619 systemd[1]: flux_agent.service: Start request repeated too quickly.
+Oct 25 01:44:34.794629 systemd[1]: flux_agent.service: Failed with result 'exit-code'.
+Oct 25 01:44:34.794803 systemd[1]: Failed to start flux_agent.service - Flux_agent Proxy Service.

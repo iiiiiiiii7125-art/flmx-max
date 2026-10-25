@@ -1,0 +1,61 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Oct 25 01:51:31.231302 🔔 收到命令: type=UpdateService requestId=1_1792893091220951178
+Oct 25 01:51:31.233417 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"1_2_1_tcp"},{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"1_2_1_udp"}],"requestId":"1_1792893091220951178","type":"UpdateService"}
+Oct 25 01:51:31.258375 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:51:31.256Z"}
+Oct 25 01:51:31.258375 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:51:31.257Z"}
+Oct 25 01:51:31.258375 🔔 收到命令: type=KernelApply requestId=1_1792893091241149743
+Oct 25 01:51:31.260680 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.269758 🔔 收到命令: type=UpdateService requestId=1_1792893091269358134
+Oct 25 01:51:31.270829 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"6_1_0_tcp"},{"addr":"[::]:14601","forwarder":{"nodes":[{"addr":"16.146.199.68:24501","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"6_1_0_udp"}],"requestId":"1_1792893091269358134","type":"UpdateService"}
+Oct 25 01:51:31.270829 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:14601/tcp","service":"6_1_0_tcp","time":"2026-10-25T01:51:31.270Z"}
+Oct 25 01:51:31.272263 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:14601/udp","service":"6_1_0_udp","time":"2026-10-25T01:51:31.270Z"}
+Oct 25 01:51:31.272263 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.277543 🔔 收到命令: type=PauseService requestId=1_1792893091277081251
+Oct 25 01:51:31.277742 🔔 命令详情(已脱敏):  {"data":{"services":["6_1_0_tcp"]},"requestId":"1_1792893091277081251","type":"PauseService"}
+Oct 25 01:51:31.283227 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.283604 🔔 收到命令: type=PauseService requestId=1_1792893091283205020
+Oct 25 01:51:31.283814 🔔 命令详情(已脱敏):  {"data":{"services":["6_1_0_udp"]},"requestId":"1_1792893091283205020","type":"PauseService"}
+Oct 25 01:51:31.285193 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.286120 🔔 收到命令: type=PauseService requestId=1_1792893091285823514
+Oct 25 01:51:31.287239 🔔 命令详情(已脱敏):  {"data":{"services":["6_1_0"]},"requestId":"1_1792893091285823514","type":"PauseService"}
+Oct 25 01:51:31.289323 🔔 收到命令: type=AddLimiters requestId=1_1792893091289003888
+Oct 25 01:51:31.292464 🔔 收到命令: type=UpdateLimiters requestId=1_1792893091289918253
+Oct 25 01:51:31.302680 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.304961 🔔 收到命令: type=UpdateService requestId=1_1792893091304573981
+Oct 25 01:51:31.305394 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792893091304573981","type":"UpdateService"}
+Oct 25 01:51:31.308155 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13101/tcp","service":"2_5_2_tcp","time":"2026-10-25T01:51:31.308Z"}
+Oct 25 01:51:31.311022 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13101/udp","service":"2_5_2_udp","time":"2026-10-25T01:51:31.310Z"}
+Oct 25 01:51:31.312469 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.315321 🔔 收到命令: type=UpdateService requestId=1_1792893091314781792
+Oct 25 01:51:31.318713 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"7_1_0_tcp"},{"addr":"[::]:15096","forwarder":{"nodes":[{"addr":"16.146.199.68:15510","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"7_1_0_udp"}],"requestId":"1_1792893091314781792","type":"UpdateService"}
+Oct 25 01:51:31.318713 🔔 收到命令: type=KernelApply requestId=1_1792893091315759300
+Oct 25 01:51:31.318713 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:15096/tcp","service":"7_1_0_tcp","time":"2026-10-25T01:51:31.317Z"}
+Oct 25 01:51:31.319730 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:15096/udp","service":"7_1_0_udp","time":"2026-10-25T01:51:31.319Z"}
+Oct 25 01:51:31.319730 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.322609 🔔 收到命令: type=UpdateService requestId=1_1792893091321516764
+Oct 25 01:51:31.322980 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792893091321516764","type":"UpdateService"}
+Oct 25 01:51:31.325375 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:51:31.325Z"}
+Oct 25 01:51:31.327836 {"handler":"udp","kind":"listener","level":"error","listener":"udp","msg":"init: listen udp [::]:13102: bind: address already in use","service":"3_5_3_udp","time":"2026-10-25T01:51:31.327Z"}
+Oct 25 01:51:31.328010 {"handler":"udp","kind":"listener","level":"error","listener":"udp","msg":"init: listen udp [::]:13102: bind: address already in use","service":"3_5_3_udp","time":"2026-10-25T01:51:31.327Z"}
+Oct 25 01:51:31.328197 {"handler":"tcp","kind":"listener","level":"error","listener":"tcp","msg":"init: listen tcp 0.0.0.0:13102: bind: address already in use","service":"3_5_3_tcp","time":"2026-10-25T01:51:31.328Z"}
+Oct 25 01:51:31.330406 🔔 收到命令: type=AddService requestId=1_1792893091329861478
+Oct 25 01:51:31.331155 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"3_5_3_tcp"},{"addr":"[::]:13102","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"3_5_3_udp"}],"requestId":"1_1792893091329861478","type":"AddService"}
+Oct 25 01:51:31.331685 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13102/tcp","service":"3_5_3_tcp","time":"2026-10-25T01:51:31.331Z"}
+Oct 25 01:51:31.332945 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13102/udp","service":"3_5_3_udp","time":"2026-10-25T01:51:31.331Z"}
+Oct 25 01:51:31.334379 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.336995 🔔 收到命令: type=UpdateService requestId=1_1792893091336541260
+Oct 25 01:51:31.337318 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"4_5_4_tcp"},{"addr":"[::]:13103","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"4_5_4_udp"}],"requestId":"1_1792893091336541260","type":"UpdateService"}
+Oct 25 01:51:31.368106 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:13103/tcp","service":"4_5_4_tcp","time":"2026-10-25T01:51:31.367Z"}
+Oct 25 01:51:31.369548 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:13103/udp","service":"4_5_4_udp","time":"2026-10-25T01:51:31.369Z"}
+Oct 25 01:51:31.370946 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.374418 🔔 收到命令: type=UpdateService requestId=1_1792893091372579137
+Oct 25 01:51:31.375547 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"1_2_1_tcp"},{"addr":"[::]:31080","forwarder":{"nodes":[{"addr":"127.0.0.1:18080","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"1_2_1_udp"}],"requestId":"1_1792893091372579137","type":"UpdateService"}
+Oct 25 01:51:31.377646 {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:31080/tcp","service":"1_2_1_tcp","time":"2026-10-25T01:51:31.377Z"}
+Oct 25 01:51:31.378593 {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:31080/udp","service":"1_2_1_udp","time":"2026-10-25T01:51:31.378Z"}
+Oct 25 01:51:31.379815 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.400918 🔔 收到命令: type=AddLimiters requestId=1_1792893091396528127
+Oct 25 01:51:31.413423 🔔 收到命令: type=UpdateLimiters requestId=1_1792893091402170865
+Oct 25 01:51:31.432333 🔔 收到命令: type=KernelApply requestId=1_1792893091402642346
+Oct 25 01:51:31.434593 💾 节点配置已持久化到 /etc/flux_agent/gost.json
+Oct 25 01:51:31.437385 🔔 收到命令: type=UpdateService requestId=1_1792893091436375071
+Oct 25 01:51:31.437385 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"limiter":"1","listener":{"type":"tcp"},"name":"2_5_2_tcp"},{"addr":"[::]:13101","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"limiter":"1","listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"2_5_2_udp"}],"requestId":"1_1792893091436375071","type":"UpdateService"}

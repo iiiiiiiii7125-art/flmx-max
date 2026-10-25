@@ -1,0 +1,36 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR18L4MatrixR5Restore
+2026/10/25 01:40:50 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (134.221µs)
+2026/10/25 01:40:50 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (197.466µs)
+2026/10/25 01:40:50 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (162.844µs)
+2026/10/25 01:40:50 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (185.909µs)
+2026/10/25 01:40:50 migration r5b4_v1_port_user_unique applied
+2026/10/25 01:40:50 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 01:40:50 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (161.803µs)
+2026/10/25 01:40:50 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_l4_r5_probe_test.go:74: CELL R5 InboundsImported OK 13
+    r18_l4_r5_probe_test.go:78: CELL R5 SkippedRows[inbounds] OK 3
+    r18_l4_r5_probe_test.go:84: CELL R5 bad-row warned OK r18-r5-bad-enc
+    r18_l4_r5_probe_test.go:84: CELL R5 bad-row warned OK r18-r5-bad-pbk
+    r18_l4_r5_probe_test.go:84: CELL R5 bad-row warned OK r18-r5-bad-cipher
+    r18_l4_r5_probe_test.go:94: CELL R5 row 101 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 102 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 103 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 104 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 105 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 106 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 107 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 108 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 109 Extra verbatim OK
+    r18_l4_r5_probe_test.go:94: CELL R5 row 110 Extra verbatim OK
+    r18_l4_r5_probe_test.go:100: CELL R5 row 110 Protocol re-derived shadowsocks OK
+    r18_l4_r5_probe_test.go:109: CELL R5 bad row 111 absent OK
+    r18_l4_r5_probe_test.go:109: CELL R5 bad row 112 absent OK
+    r18_l4_r5_probe_test.go:109: CELL R5 bad row 113 absent OK
+    r18_l4_r5_probe_test.go:116: CELL R5 WhitelistExtra 301 verbatim OK
+    r18_l4_r5_probe_test.go:121: CELL R5 WhitelistExtra 302 de-bad OK
+    r18_l4_r5_probe_test.go:126: CELL R5 WhitelistExtra 303 cleared OK
+    r18_l4_r5_probe_test.go:130: CELL R5 WhitelistExtra warnings name #302/#303 OK
+--- PASS: TestR18L4MatrixR5Restore (0.24s)
+PASS
+ok  	go-backend/internal/store/repo	0.251s

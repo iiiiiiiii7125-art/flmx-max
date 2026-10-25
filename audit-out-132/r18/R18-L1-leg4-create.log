@@ -1,0 +1,66 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg4 create start=2026-10-25T02:14:20Z ===
+--- pre: inbound count 578
+--- create vless (create-vless.json)
+cp: cannot stat '/root/r17d/create-vless.json': No such file or directory
+http=200
+{"code":0,"msg":"操作成功","ts":1792894463001,"data":{"id":936}}
+
+--- create vmess (create-vmess.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792894466705,"data":{"id":937}}
+
+--- create vmess-ctl (create-vmess-ctl.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792894470390,"data":{"id":938}}
+
+--- create ss (create-ss.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792894474130,"data":{"id":939}}
+
+--- create trojan (create-trojan.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792894477809,"data":{"id":940}}
+
+--- post create: inbound list (r17* only)
+  936 r17-idle-vless vless 59904 idle= 5
+  937 r17-idle-vmess vmess 59905 idle= 5
+  938 r17-vmess-ctl vmess 59908 idle= 0
+  939 r17-idle-ss shadowsocks 59907 idle= 5
+  940 r17-idle-trojan trojan 59906 idle= 5
+total inbound count 583
+--- wait for agent xray config push (up to 60s)
+xray config has 59904 after 1x5s
+77c378c77e2dbea4319ac6c532e7078a  /root/r17d/xray-config-created.json
+--- D3 policy: {"levels": {"1": {"connIdle": 5}, "2": {"connIdle": 5}, "3": {"connIdle": 5}, "4": {"connIdle": 5}}}
+--- D3 flmx-idle outbounds:
+   flmx-idle-936 userLevel= 1
+   flmx-idle-936-u1 userLevel= 1
+   flmx-idle-936-u4 userLevel= 1
+   flmx-idle-937 userLevel= 2
+   flmx-idle-937-u1 userLevel= 2
+   flmx-idle-937-u4 userLevel= 2
+   flmx-idle-939 userLevel= 3
+   flmx-idle-940 userLevel= 4
+   flmx-idle-940-u1 userLevel= 4
+   flmx-idle-940-u4 userLevel= 4
+--- D3 rules (first 12):
+   0 ['in-936'] -> flmx-idle-936-u1
+   1 ['in-936'] -> flmx-idle-936-u4
+   2 ['in-936'] -> flmx-idle-936
+   3 ['in-937'] -> flmx-idle-937-u1
+   4 ['in-937'] -> flmx-idle-937-u4
+   5 ['in-937'] -> flmx-idle-937
+   6 ['in-939'] -> flmx-idle-939
+   7 ['in-940'] -> flmx-idle-940-u1
+   8 ['in-940'] -> flmx-idle-940-u4
+   9 ['in-940'] -> flmx-idle-940
+   10 None -> flmx-u1
+   11 None -> flmx-u4
+--- D3 inbounds (5990x):
+   59904 vless clients= 3
+   59905 vmess clients= 3
+   59908 vmess clients= 3
+   59907 shadowsocks clients= 0
+   59906 trojan clients= 3
+=== leg4 create end=2026-10-25T02:14:45Z ===

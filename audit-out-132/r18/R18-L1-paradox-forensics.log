@@ -1,0 +1,35 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== agent now ===
+failed
+5
+failed
+719508 bash -c echo "=== agent now ==="; systemctl is-active flux_agent; systemctl show flux_agent -p NRestarts,ActiveState --value; pgrep -af "/etc/flux_agent/flux_agent" || echo "no agent process" echo "=== gost now ==="; md5sum /etc/flux_agent/gost.json; wc -l /etc/flux_agent/gost.json; python3 -c " import json from collections import Counter cfg=json.load(open(\"/etc/flux_agent/gost.json\")) names=[s[\"name\"] for s in cfg[\"services\"]] print(\"services:\", len(names), \"dup:\", {k:v for k,v in Counter(names).items() if v>1}) for i,s in enumerate(cfg[\"services\"]):     if s[\"name\"].startswith(\"3_5_3\"): print(i+1, s[\"name\"], s.get(\"addr\"), \"paused=\", (s.get(\"metadata\") or {}).get(\"paused\")) " echo "=== journal fatal window 01:51:30-01:52:20 ==="; journalctl -u flux_agent --no-pager --since "2026-10-25 01:51:30" --until "2026-10-25 01:52:20" -o short-precise | grep -E "level.:.fatal|Failed to start|Start request" | sed "s/ ip-172-26-9-119//" | head -20 echo "=== guard lines ALL (backend json log) ==="; BACKEND_LOG=$(ls /var/lib/docker/containers/$(docker inspect -f "{{.Id}}" flux-panel-backend)/*-json.log); grep -c "r17-addservice-guard" "$BACKEND_LOG"; python3 - "$BACKEND_LOG" <<PYEOF import json, sys lines=[l for l in open(sys.argv[1]) if "r17-addservice-guard" in l] for l in lines:     try:         e=json.loads(l); print(e.get("time"), e["log"].strip())     except Exception: print("UNPARSED", l[:150]) PYEOF echo "=== fastdup-1 ==="; md5sum /root/r17d/fastdup-r18-ctl-fast1-1.json; wc -l /root/r17d/fastdup-r18-ctl-fast1-1.json
+=== gost now ===
+c26d7e0418b05d22c1e957565d876df9  /etc/flux_agent/gost.json
+384 /etc/flux_agent/gost.json
+services: 14 dup: {'3_5_3_tcp': 2, '3_5_3_udp': 2}
+7 3_5_3_tcp [::]:13102 paused= None
+8 3_5_3_udp [::]:13102 paused= None
+13 3_5_3_tcp [::]:13102 paused= None
+14 3_5_3_udp [::]:13102 paused= None
+=== journal fatal window 01:51:30-01:52:20 ===
+Oct 25 01:51:36.397662 flux_agent[718332]: {"level":"fatal","msg":"listen tcp 0.0.0.0:13102: bind: address already in use","time":"2026-10-25T01:51:36.396Z"}
+Oct 25 01:51:36.608374 flux_agent[718353]: {"level":"fatal","msg":"listen tcp 0.0.0.0:13102: bind: address already in use","time":"2026-10-25T01:51:36.603Z"}
+Oct 25 01:51:36.870111 flux_agent[718374]: {"level":"fatal","msg":"listen tcp 0.0.0.0:13102: bind: address already in use","time":"2026-10-25T01:51:36.869Z"}
+Oct 25 01:51:37.103637 flux_agent[718396]: {"level":"fatal","msg":"listen tcp 0.0.0.0:13102: bind: address already in use","time":"2026-10-25T01:51:37.103Z"}
+Oct 25 01:51:37.387621 flux_agent[718417]: {"level":"fatal","msg":"listen tcp 0.0.0.0:13102: bind: address already in use","time":"2026-10-25T01:51:37.386Z"}
+Oct 25 01:51:37.544566 systemd[1]: flux_agent.service: Start request repeated too quickly.
+Oct 25 01:51:37.544753 systemd[1]: Failed to start flux_agent.service - Flux_agent Proxy Service.
+=== guard lines ALL (backend json log) ===
+8
+2026-10-25T01:50:44.645756881Z r17-addservice-guard: node=1 decision=send reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=-
+2026-10-25T01:50:44.647560686Z r17-addservice-guard: node=1 decision=sent-failed reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=create service 6_1_0_tcp failed: listen tcp 0.0.0.0:14601: bind: address already in use
+2026-10-25T01:50:44.808174366Z r17-addservice-guard: node=1 decision=send reason=self-occupied-rebind services=[6_1_0_tcp,6_1_0_udp] err=-
+2026-10-25T01:50:44.810283734Z r17-addservice-guard: node=1 decision=sent-ok reason=self-occupied-rebind services=[6_1_0_tcp,6_1_0_udp] err=-
+2026-10-25T01:51:31.330305145Z r17-addservice-guard: node=1 decision=send reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+2026-10-25T01:51:31.334872439Z r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+2026-10-25T01:51:31.439007622Z r17-addservice-guard: node=1 decision=send reason=update-fallback services=[2_5_2_tcp,2_5_2_udp] err=-
+2026-10-25T01:51:31.441178493Z r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[2_5_2_tcp,2_5_2_udp] err=-
+=== fastdup-1 ===
+c26d7e0418b05d22c1e957565d876df9  /root/r17d/fastdup-r18-ctl-fast1-1.json
+384 /root/r17d/fastdup-r18-ctl-fast1-1.json
