@@ -1,0 +1,56 @@
+=== leg4 scaffold start=2026-10-25T03:42:32Z initiator=L5 ===
+--- kill stale scaffold (dummies + non-agent xrays)
+--- minimal trojan cert + config (self-signed, CERT_NONE client)
+-rw-r--r-- 1 root root 1119 Oct 25 03:42 /root/r19/min-trojan-cert.pem
+-rw------- 1 root root 1704 Oct 25 03:42 /root/r19/min-trojan-key.pem
+dummy silent pid 754361
+dummy 1MB pid 754362
+dummy2 feed pid 754363
+dummy 100KB pid 754364
+dummy 10MB pid 754365
+vmess pid 754366
+vmess-ctl pid 754367
+vmess-u1 pid 754368
+trojan pid 754369
+ss-door pid 754370
+ss-door-1mb pid 754371
+vmess-min pid 754372
+ss-min pid 754373
+min-vmess pid 754374
+min-ss pid 754375
+min-trojan pid 754376
+--- listening
+LISTEN 0      16                                  127.0.0.1:59909      0.0.0.0:*    users:(("python3",pid=754361,fd=3))         
+LISTEN 0      16                                  127.0.0.1:59910      0.0.0.0:*    users:(("python3",pid=754362,fd=3))         
+LISTEN 0      16                                  127.0.0.1:59911      0.0.0.0:*    users:(("python3",pid=754363,fd=3))         
+LISTEN 0      16                                  127.0.0.1:59915      0.0.0.0:*    users:(("python3",pid=754364,fd=3))         
+LISTEN 0      16                                  127.0.0.1:59916      0.0.0.0:*    users:(("python3",pid=754365,fd=3))         
+LISTEN 0      4096                                        *:11080            *:*    users:(("xray",pid=754366,fd=4))            
+LISTEN 0      4096                                        *:11081            *:*    users:(("xray",pid=754369,fd=4))            
+LISTEN 0      4096                                        *:11082            *:*    users:(("xray",pid=754368,fd=4))            
+LISTEN 0      4096                                        *:11083            *:*    users:(("xray",pid=754367,fd=4))            
+LISTEN 0      4096                                        *:11084            *:*    users:(("xray",pid=754372,fd=4))            
+LISTEN 0      4096                                        *:11085            *:*    users:(("xray",pid=754373,fd=4))            
+LISTEN 0      4096                                        *:11087            *:*    users:(("xray",pid=754370,fd=4))            
+LISTEN 0      4096                                        *:11088            *:*    users:(("xray",pid=754371,fd=4))            
+LISTEN 0      4096                                        *:59912            *:*    users:(("xray",pid=754374,fd=7))            
+LISTEN 0      4096                                        *:59913            *:*    users:(("xray",pid=754375,fd=4))            
+LISTEN 0      4096                                        *:59914            *:*    users:(("xray",pid=754376,fd=4))            
+--- processes
+ 754361 python3 /root/r17/dummy.py 59909 0
+ 754362 python3 /root/r17/dummy.py 59910 1048576
+ 754363 python3 /root/r17/dummy2.py 59911 0.5 10.0
+ 754364 python3 /root/r17/dummy.py 59915 102400
+ 754365 python3 /root/r17/dummy.py 59916 10485760
+ 754366 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess.json
+ 754367 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess-ctl.json
+ 754368 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess-u1.json
+ 754369 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/trojan.json
+ 754370 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/ss-door.json
+ 754371 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/ss-door-1mb.json
+ 754372 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess-min.json
+ 754373 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/ss-min.json
+ 754374 /etc/flux_agent/kernels/xray/bin/latest/xray run -c minxray/vmess.json
+ 754375 /etc/flux_agent/kernels/xray/bin/latest/xray run -c minxray/ss.json
+ 754376 /etc/flux_agent/kernels/xray/bin/latest/xray run -c minxray/trojan.json
+=== leg4 scaffold end=2026-10-25T03:42:39Z ===

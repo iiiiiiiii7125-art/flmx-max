@@ -1,0 +1,44 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 R19-L1 restore 2026-10-25T03:23:53Z ===
+--- stop agent
+agent processes gone
+--- restore agent binary (expect aff338e3676bc56d0f3986a1a62f8fdd)
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+--- restore pristine unit (expect a12afd9c36fba7b76287210efaa199cb)
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+StandardOutput=null
+StandardError=null
+--- restore pristine gost.json (expect d48f09e132ebe99fe97a619dd72d42d4)
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- restore compose (expect 3afbac1115e4f69a991448767b89d24e)
+3afbac1115e4f69a991448767b89d24e  /root/flmx-panel/docker-compose.yml
+    image: flmx-backend:r1gate-1.3.5
+    image: flmx-frontend:r1gate-1.3.5
+--- compose up backend (pristine image)
+ Container flux-panel-backend Recreate 
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 14 seconds (healthy)
+vite-frontend flmx-frontend:r1gate-1.3.5 Up About an hour (unhealthy)
+flux-panel-postgres postgres:16-alpine Up 12 hours (healthy)
+--- reset-failed + start agent
+MainPID=746627
+NRestarts=0
+ActiveState=active
+SubState=running
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+{'services': 12, 'limiters': 1, 'climiters': 2}
+services: ['1_2_1_tcp', '1_2_1_udp', '2_5_2_tcp', '2_5_2_udp', '3_5_3_tcp', '3_5_3_udp', '4_5_4_tcp', '4_5_4_udp', '6_1_0_tcp', '6_1_0_udp', '7_1_0_tcp', '7_1_0_udp']
+--- served check
+GET / 6366 http=200
+--- remove r19l1 image
+Untagged: flmx-backend:r19l1
+Deleted: sha256:9d802e0680b9a714f9a5ef999b6bdce28b213dd7cffb72b8db705581b22c2e49
+flmx-frontend:r1gate-1.3.5 a58da904428a
+flmx-backend:r1gate-1.3.5 620be8ddd1ba
+postgres:16-alpine 721873c34ceb
+/dev/nvme0n1p1   20G   16G  3.2G  84% /
+=== restore done 2026-10-25T03:24:24Z ===

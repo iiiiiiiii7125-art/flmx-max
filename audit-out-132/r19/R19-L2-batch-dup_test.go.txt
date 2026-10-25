@@ -1,0 +1,33 @@
+// L2 scratch-only probe (NOT part of the audited tree):
+// createServices batch [same, same] must fail at stage 2 (registry
+// duplicate) and never reach stage 4, leaving config/registry unchanged.
+package api
+
+import (
+	"net/http"
+	"testing"
+
+	"github.com/go-gost/x/config"
+	"github.com/go-gost/x/registry"
+)
+
+func TestL2CreateServicesBatchIntraDupFailsAtStage2(t *testing.T) {
+	name := "l2_batch_dup"
+	r := r18TestRouter()
+	persistFile := r18SeedConfig(t, &config.Config{})
+	t.Cleanup(func() { registry.ServiceRegistry().Unregister(name) })
+	registry.ServiceRegistry().Unregister(name)
+
+	body := `[{"name":"` + name + `","addr":"127.0.0.1:0"},{"name":"` + name + `","addr":"127.0.0.1:0"}]`
+	w := r18Post(t, r, "/config/services/batch", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("batch [dup,dup] status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if n := r18CountNamed(config.Global().Services, name, func(s *config.ServiceConfig) string { return s.Name }); n != 0 {
+		t.Fatalf("batch [dup,dup] left %d config entries, want 0 (stage-2 rollback)", n)
+	}
+	if registry.ServiceRegistry().Get(name) != nil {
+		t.Fatalf("batch [dup,dup] left %q registered, want unregistered (stage-2 rollback)", name)
+	}
+	t.Logf("batch [dup,dup] -> 400, config 0 entries, registry empty; persisted file=%s", persistFile)
+}

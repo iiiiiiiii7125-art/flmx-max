@@ -1,0 +1,17 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+-rw-r----- 1 root root 665 Oct 24 23:53 /root/r17c/flux_agent-prod.service
+-rw-r----- 1 root root 275 Oct 25 00:01 /root/r17c/flux_agent.service.orig
+-rw-r--r-- 1 root root 665 Oct 24 23:55 /root/r17c/flux_agent.service.pristine
+-rw-r--r-- 1 root root 275 Oct 25 01:42 /root/r17d/flux_agent.service.pristine
+---
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+a12afd9c36fba7b76287210efaa199cb  /root/r19-l1/flux_agent.service.pristine
+---
+/root/r17d/R17-FIX-D-deploy.sh
+/root/r17d/R17-FIX-D-leg2.sh
+/root/r17d/leg2-control.log
+/root/r17d/leg2-fixed.log
+/root/r17d/flux_agent.service.pristine
+/root/r17c/flux_agent-prod.service
+/root/r17c/flux_agent.service.orig
+/root/r17c/flux_agent.service.pristine

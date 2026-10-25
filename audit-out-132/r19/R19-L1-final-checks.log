@@ -1,0 +1,20 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 final string + disk checks ===
+1
+0
+--- L5 procs ---
+NO-L5-PROCS
+--- disk attribution ---
+72M	/root/r19
+180M	/root/r19-l1
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          3         3         1.005GB   0B (0%)
+Containers      4         3         20.14MB   16.38kB (0%)
+Local Volumes   3         2         168.9MB   65.7MB (38%)
+Build Cache     43        0         1.018GB   420.3MB
+--- agent svc final ---
+MainPID=746627
+NRestarts=0
+ActiveState=active
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json

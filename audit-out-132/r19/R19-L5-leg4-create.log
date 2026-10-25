@@ -1,0 +1,69 @@
+=== leg4 create start=2026-10-25T03:40:43Z initiator=L5 ===
+--- pre: inbound count 578
+--- create vless (create-vless.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792899646167,"data":{"id":941}}
+
+--- create vmess (create-vmess.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792899649897,"data":{"id":942}}
+
+--- create vmess-ctl (create-vmess-ctl.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792899653657,"data":{"id":943}}
+
+--- create ss (create-ss.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792899657309,"data":{"id":944}}
+
+--- create trojan (create-trojan.json)
+http=200
+{"code":0,"msg":"操作成功","ts":1792899660993,"data":{"id":945}}
+
+--- post create: inbound list (r17* only)
+  941 r17-idle-vless vless 59904 idle= 5
+  942 r17-idle-vmess vmess 59905 idle= 5
+  943 r17-vmess-ctl vmess 59908 idle= 0
+  944 r17-idle-ss shadowsocks 59907 idle= 5
+  945 r17-idle-trojan trojan 59906 idle= 5
+total inbound count 583
+--- wait for agent xray config push (up to 60s)
+xray config has 59904 after 1x5s
+05aa40087320b48bab045c18b0212bde  /root/r19/xray-config-created.json
+--- D3 policy: {"levels": {"1": {"connIdle": 5}, "2": {"connIdle": 5}, "3": {"connIdle": 5}, "4": {"connIdle": 5}}}
+--- D3 flmx-idle outbounds:
+   flmx-idle-941 userLevel= 1
+   flmx-idle-941-u1 userLevel= 1
+   flmx-idle-941-u4 userLevel= 1
+   flmx-idle-942 userLevel= 2
+   flmx-idle-942-u1 userLevel= 2
+   flmx-idle-942-u4 userLevel= 2
+   flmx-idle-944 userLevel= 3
+   flmx-idle-945 userLevel= 4
+   flmx-idle-945-u1 userLevel= 4
+   flmx-idle-945-u4 userLevel= 4
+--- D3 rules (first 12):
+   0 ['in-941'] -> flmx-idle-941-u1
+   1 ['in-941'] -> flmx-idle-941-u4
+   2 ['in-941'] -> flmx-idle-941
+   3 ['in-942'] -> flmx-idle-942-u1
+   4 ['in-942'] -> flmx-idle-942-u4
+   5 ['in-942'] -> flmx-idle-942
+   6 ['in-944'] -> flmx-idle-944
+   7 ['in-945'] -> flmx-idle-945-u1
+   8 ['in-945'] -> flmx-idle-945-u4
+   9 ['in-945'] -> flmx-idle-945
+   10 None -> flmx-u1
+   11 None -> flmx-u4
+--- D3 inbounds (5990x):
+   59904 vless clients= 3
+   59905 vmess clients= 3
+   59908 vmess clients= 3
+   59907 shadowsocks clients= 0
+   59906 trojan clients= 3
+--- extract per-user creds programmatically (0600, never into reports)
+port 59904 vless emails: ['main', 'u1@flmx', 'u4@flmx']
+port 59905 vmess emails: ['main', 'u1@flmx', 'u4@flmx']
+port 59907 shadowsocks emails: []
+port 59906 trojan emails: ['main', 'u1@flmx', 'u4@flmx']
+=== leg4 create end=2026-10-25T03:41:08Z ===

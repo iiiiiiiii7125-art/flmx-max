@@ -1,0 +1,63 @@
+=== R19-L5 restore pristine 2026-10-25T03:51:56Z initiator=L5 ===
+--- counts before restore (r19d panel):
+node list code 0
+inbound count 578
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- stop agent (initiator=L5, restore pristine)
+agent processes gone
+--- restore pristine agent (expect aff338e3676bc56d0f3986a1a62f8fdd)
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+--- restore original unit (expect a12afd9c36fba7b76287210efaa199cb)
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+StandardOutput=null
+StandardError=null
+--- restore gost.json if it drifted (expect d48f09e132ebe99fe97a619dd72d42d4)
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- restore compose/env
+3afbac1115e4f69a991448767b89d24e  /root/flmx-panel/docker-compose.yml
+3afbac1115e4f69a991448767b89d24e  /root/r19/docker-compose.yml.pristine
+fffcd005d684d1ef207dc50caa845569  /root/flmx-panel/.env
+fffcd005d684d1ef207dc50caa845569  /root/r19/env.pristine
+/root/flmx-panel/docker-compose.yml:    image: flmx-backend:r1gate-1.3.5
+/root/flmx-panel/docker-compose.yml:      FLUX_VERSION: ${FLUX_VERSION:-dev}
+/root/flmx-panel/docker-compose.yml:    image: flmx-frontend:r1gate-1.3.5
+/root/flmx-panel/.env:FLUX_VERSION=1.3.5
+--- compose up 1.3.5
+ Container flux-panel-backend Started 
+ Container flux-panel-backend Waiting 
+ Container flux-panel-backend Healthy 
+ Container vite-frontend Starting 
+ Container vite-frontend Started 
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 8 seconds (health: starting)
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 14 seconds (healthy)
+flux-panel-postgres postgres:16-alpine Up 13 hours (healthy)
+--- reset-failed + start agent (initiator=L5, restore pristine)
+active
+    PID CMD
+ 757050 /etc/flux_agent/flux_agent
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- served check
+GET / http=200
+--- remove candidate images
+Untagged: flmx-backend:r19d
+Deleted: sha256:1e85171599ad3ed0517f6605599a61348020d027fd607ffe63574819764ba64d
+Untagged: flmx-frontend:r19d
+Deleted: sha256:3b008d0af45c18304be958047f519bfd40bd8dc06d6e0077fc1f10a7e16a1b17
+flmx-frontend:r1gate-1.3.5
+flmx-backend:r1gate-1.3.5
+--- counts after restore (1.3.5 panel):
+node list code 0 nodes 1
+tunnel count 4
+forward count 6 statuses [1, 1, 1, 1, 1, 1]
+inbound count 578
+subscription count 3
+--- subscription 1 counter after restore:
+{"code":0,"msg":"操作成功","ts":1792900346317,"data":{"range":"hour","points":[{"time":1792814400000,"up":0,"down":0},{"time":1792818000000,"up":0,"down":0},{"time":1792821600000,"up":0,"down":0},{"time":1792825200000,"up":0,"down":0},{"time":1792828800000,"up":0,"down":0},{"time":1792832400000,"up":0,"down":0},{"time":1792836000000,"up":0,"down":0},{"time":1792839600000,"up":0,"down":0},{"time":1792843200000,"up":0,"down":0},{"time":1792846800000,"up":0,"down":0},{"time":1792850400000,"up":0,"down":0},{"time":1792854000000,"up":0,"down":0},{"time":1792857600000,"up":0,"down":0},{"time":1792861200000,"up":268,"down":473},{"time":1792864800000,"up":1992,"down":2102696},{"time":1792868400000,"up":0,"down":0},{"time":1792872000000,"up":0,"down":0},{"time":1792875600000,"up":0,"down":0},{"time":1792879200000,"up":1388,"down":2652},{"time":1792882800000,"up":0,"down":0},{"time":1792886400000,"up":0,"down":0},{"time":1792890000000,"up":0,"down":0},{"time":1792893600000,"up":0,"down":0},{"time":1792897200000,"up":1552,"down":2928}],"up":5200,"down":2108749}}
+
+--- tables (sqlite gost.db, read-only copy):
+tables: 50
+/dev/nvme0n1p1   20G   16G  3.1G  84% /
+=== restore done 2026-10-25T03:52:26Z ===

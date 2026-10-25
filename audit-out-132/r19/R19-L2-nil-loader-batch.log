@@ -1,0 +1,19 @@
+== loader nil repro, scratch copy of d66042c tree (/tmp/l2-gost), go1.25.1 ==
+=== RUN   TestL2LoaderNilChainPanics
+    l2_nil_test.go:33: loader.Load(nil chain) PANICKED: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestL2LoaderNilChainPanics (0.01s)
+=== RUN   TestL2LoaderNilLimiterPanics
+    l2_nil_test.go:46: loader.Load(nil limiter) PANICKED: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestL2LoaderNilLimiterPanics (0.00s)
+=== RUN   TestL2LoaderNilServiceErrorsCleanly
+    l2_nil_test.go:64: loader.Load(nil service) clean error: service config is nil
+--- PASS: TestL2LoaderNilServiceErrorsCleanly (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/config/loader	0.051s
+FAIL
+== api batch [dup,dup] probe ==
+=== RUN   TestL2CreateServicesBatchIntraDupFailsAtStage2
+    l2_batch_dup_test.go:32: batch [dup,dup] -> 400, config 0 entries, registry empty; persisted file=/tmp/TestL2CreateServicesBatchIntraDupFailsAtStage21671810203/001/gost.json
+--- PASS: TestL2CreateServicesBatchIntraDupFailsAtStage2 (0.01s)
+PASS
+ok  	github.com/go-gost/x/api	0.199s

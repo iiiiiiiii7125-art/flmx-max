@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+ss pw length: 23
+=== SS-1 rerun (correct password, expect CLOSED 3.5-6.5s) 2026-10-25T03:49:33Z ===
+[R19-SS-1r] ss_header_sent_after=0.00s
+[R19-SS-1r] STILL_OPEN after=20.0s
+=== counter bracket for VL-u1 direct (isolate direct-leg contribution) ===
+before up/down: 5036 2108473
+[R19-VL-u1b] header_after=5.22s resp=0000
+[R19-VL-u1b] CLOSED after=5.22s
+after up/down: 5036 2108473

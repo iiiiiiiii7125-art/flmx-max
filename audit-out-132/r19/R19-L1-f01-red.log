@@ -1,0 +1,94 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR18F01DeletedForwardsSummaryFormat
+--- PASS: TestR18F01DeletedForwardsSummaryFormat (0.00s)
+=== RUN   TestR18F01MidLoopDataPlaneFailureDisclosesDeleted
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (368.975µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (409.395µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (231.047µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (155.764µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:22 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:22 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (159.099µs)
+2026/10/25 03:02:22 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_f01_tunnel_delete_disclosure_test.go:203: receipt must disclose deleted count and identity, got msg="转发 r18f01-b 数据面清理失败，隧道未删除: simulated real failure: permission denied" body={"code":-2,"msg":"转发 r18f01-b 数据面清理失败，隧道未删除: simulated real failure: permission denied","ts":1792897342682}
+--- FAIL: TestR18F01MidLoopDataPlaneFailureDisclosesDeleted (0.31s)
+=== RUN   TestR18F01LastForwardDataPlaneFailureDisclosesDeleted
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (128.664µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (595.855µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (450.336µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (160.942µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:22 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:22 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (153.43µs)
+2026/10/25 03:02:22 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_f01_tunnel_delete_disclosure_test.go:237: receipt must disclose 2 deleted forwards with identities, got msg="转发 r18f01-c 数据面清理失败，隧道未删除: simulated real failure: permission denied" body={"code":-2,"msg":"转发 r18f01-c 数据面清理失败，隧道未删除: simulated real failure: permission denied","ts":1792897342920}
+--- FAIL: TestR18F01LastForwardDataPlaneFailureDisclosesDeleted (0.23s)
+=== RUN   TestR18F01FirstForwardDataPlaneFailureDisclosesZeroDeleted
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (129.835µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (163.536µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (115.213µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (94.572µs)
+2026/10/25 03:02:22 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:22 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:22 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (262.905µs)
+2026/10/25 03:02:22 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_f01_tunnel_delete_disclosure_test.go:266: receipt must disclose zero deleted forwards, got msg="转发 r18f01-a 数据面清理失败，隧道未删除: simulated real failure: permission denied" body={"code":-2,"msg":"转发 r18f01-a 数据面清理失败，隧道未删除: simulated real failure: permission denied","ts":1792897343089}
+--- FAIL: TestR18F01FirstForwardDataPlaneFailureDisclosesZeroDeleted (0.17s)
+=== RUN   TestR18F01MidLoopDbDeleteFailureDisclosesDeleted
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (163.606µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (204.056µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (214.312µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (267.291µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:23 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (137.367µs)
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_f01_tunnel_delete_disclosure_test.go:296: receipt must disclose deleted count and identity, got msg="SQL logic error: no such table: nft_counter_state (1)" body={"code":-2,"msg":"SQL logic error: no such table: nft_counter_state (1)","ts":1792897343268}
+--- FAIL: TestR18F01MidLoopDbDeleteFailureDisclosesDeleted (0.18s)
+=== RUN   TestR18F01BatchDeleteFailureReasonDisclosesDeleted
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (109.194µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (145.008µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (448.865µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (571.969µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:23 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (157.717µs)
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_f01_tunnel_delete_disclosure_test.go:343: batch failure reason must disclose deleted forwards, got "转发 r18f01-b 数据面清理失败，隧道未删除: simulated real failure: permission denied" body={"code":0,"msg":"操作成功","ts":1792897343510,"data":{"successCount":0,"failCount":1,"failures":[{"id":1,"name":"r18f01-tunnel","reason":"转发 r18f01-b 数据面清理失败，隧道未删除: simulated real failure: permission denied"}]}}
+--- FAIL: TestR18F01BatchDeleteFailureReasonDisclosesDeleted (0.24s)
+=== RUN   TestR18F01SuccessPathUnchanged
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.775547ms)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (2.008076ms)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (261.403µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (110.215µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:23 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (193.671µs)
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR18F01SuccessPathUnchanged (0.25s)
+=== RUN   TestR18F01OfflineBranchDbDeleteFailureDisclosesDeleted
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.101234ms)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.003647ms)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (542.154µs)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.221926ms)
+2026/10/25 03:02:23 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:23 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (756.066µs)
+2026/10/25 03:02:23 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:02:24 tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=1 forward_id=1 err=S-04: 节点离线，转发未完全删除，离线节点: [1]
+    r18_f01_tunnel_delete_disclosure_test.go:394: error must disclose zero deleted forwards, got "SQL logic error: no such table: nft_counter_state (1)"
+--- FAIL: TestR18F01OfflineBranchDbDeleteFailureDisclosesDeleted (0.43s)
+=== RUN   TestR18F01UserDeletePathDisclosesDeleted
+2026/10/25 03:02:24 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (153.561µs)
+2026/10/25 03:02:24 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (10.95817ms)
+2026/10/25 03:02:24 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (295.814µs)
+2026/10/25 03:02:24 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (112.008µs)
+2026/10/25 03:02:24 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:02:24 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:02:24 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (4.684746ms)
+2026/10/25 03:02:24 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r18_f01_tunnel_delete_disclosure_test.go:460: receipt must disclose deleted count and identity, got msg="转发 r18f01-u-b 数据面清理失败，用户未删除: simulated real failure: permission denied" body={"code":-2,"msg":"转发 r18f01-u-b 数据面清理失败，用户未删除: simulated real failure: permission denied","ts":1792897344733}
+--- FAIL: TestR18F01UserDeletePathDisclosesDeleted (0.55s)
+FAIL
+FAIL	go-backend/internal/http/handler	2.397s
+FAIL

@@ -1,0 +1,19 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 F-01 offline leg: restart agent for reconnect reconcile 2026-10-25T03:16:05Z ===
+MainPID=743803
+NRestarts=0
+ActiveState=active
+392d38881a73f7faf2ca57530c0d8576  /etc/flux_agent/gost.json
+services: ['1_2_1_tcp', '1_2_1_udp', '27_1_0_tcp', '27_1_0_udp', '28_1_0_tcp', '28_1_0_udp', '2_5_2_tcp', '2_5_2_udp', '3_5_3_tcp', '3_5_3_udp', '4_5_4_tcp', '4_5_4_udp', '6_1_0_tcp', '6_1_0_udp', '7_1_0_tcp', '7_1_0_udp']
+--- journal since restart (DeleteService / orphan / cleanNodeConfigs) ---
+Oct 25 03:15:06 ip-172-26-9-119 flux_agent[742899]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:8824","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"27_1_0_tcp"},{"addr":"[::]:8824","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"27_1_0_udp"}],"requestId":"1_1792898106599020068","type":"UpdateService"}
+Oct 25 03:15:06 ip-172-26-9-119 flux_agent[742899]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:8824/tcp","service":"27_1_0_tcp","time":"2026-10-25T03:15:06.636Z"}
+Oct 25 03:15:06 ip-172-26-9-119 flux_agent[742899]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:8824/udp","service":"27_1_0_udp","time":"2026-10-25T03:15:06.640Z"}
+Oct 25 03:15:09 ip-172-26-9-119 flux_agent[742899]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:9092","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"28_1_0_tcp"},{"addr":"[::]:9092","forwarder":{"nodes":[{"addr":"127.0.0.1:18081","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"udp"},"listener":{"metadata":{"keepAlive":true,"ttl":"30s"},"type":"udp"},"name":"28_1_0_udp"}],"requestId":"1_1792898109667405600","type":"UpdateService"}
+Oct 25 03:15:09 ip-172-26-9-119 flux_agent[742899]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:9092/tcp","service":"28_1_0_tcp","time":"2026-10-25T03:15:09.668Z"}
+Oct 25 03:15:09 ip-172-26-9-119 flux_agent[742899]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:9092/udp","service":"28_1_0_udp","time":"2026-10-25T03:15:09.670Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:8824/tcp","service":"27_1_0_tcp","time":"2026-10-25T03:16:06.087Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:8824/udp","service":"27_1_0_udp","time":"2026-10-25T03:16:06.087Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:9092/tcp","service":"28_1_0_tcp","time":"2026-10-25T03:16:06.087Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:9092/udp","service":"28_1_0_udp","time":"2026-10-25T03:16:06.088Z"}
+(end journal grep)

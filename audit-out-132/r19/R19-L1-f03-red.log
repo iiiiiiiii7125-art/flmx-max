@@ -1,0 +1,34 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+# github.com/go-gost/x/config [github.com/go-gost/x/config.test]
+config/r18_fix_f03_test.go:26:13: undefined: DeduplicateChains
+config/r18_fix_f03_test.go:46:16: undefined: DeduplicateChains
+config/r18_fix_f03_test.go:52:16: undefined: DeduplicateChains
+config/r18_fix_f03_test.go:64:13: undefined: DeduplicateLimiters
+config/r18_fix_f03_test.go:74:16: undefined: DeduplicateLimiters
+config/r18_fix_f03_test.go:85:13: undefined: DeduplicateCLimiters
+config/r18_fix_f03_test.go:92:16: undefined: DeduplicateCLimiters
+config/r18_fix_f03_test.go:127:24: undefined: HealPersistedChains
+config/r18_fix_f03_test.go:134:26: undefined: HealPersistedLimiters
+config/r18_fix_f03_test.go:141:27: undefined: HealPersistedCLimiters
+config/r18_fix_f03_test.go:141:27: too many errors
+=== RUN   TestCreateChainDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateChainDedupesExistingConfigEntry2037520483/001/gost.json
+    r18_fix_f03_test.go:67: expected in-memory chain "r18f03_dup_chain_tdd" to be the fresh content, got &config.ChainConfig{Name:"r18f03_dup_chain_tdd", Hops:[]*config.HopConfig(nil), Metadata:map[string]interface {}(nil)}
+--- FAIL: TestCreateChainDedupesExistingConfigEntry (0.00s)
+=== RUN   TestCreateLimiterDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateLimiterDedupesExistingConfigEntry2648693848/001/gost.json
+    r18_fix_f03_test.go:128: expected in-memory limiter "r18f03_dup_limiter_tdd" to be the fresh content, got &config.LimiterConfig{Name:"r18f03_dup_limiter_tdd", Limits:[]string{"$ 1"}, Reload:0, File:(*config.FileLoader)(nil), Redis:(*config.RedisLoader)(nil), HTTP:(*config.HTTPLoader)(nil), Plugin:(*config.PluginConfig)(nil)}
+--- FAIL: TestCreateLimiterDedupesExistingConfigEntry (0.00s)
+=== RUN   TestCreateConnLimiterDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestCreateConnLimiterDedupesExistingConfigEntry2231393797/001/gost.json
+    r18_fix_f03_test.go:188: expected in-memory conn limiter "r18f03_dup_climiter_tdd" to be the fresh content, got &config.LimiterConfig{Name:"r18f03_dup_climiter_tdd", Limits:[]string{"$ 1"}, Reload:0, File:(*config.FileLoader)(nil), Redis:(*config.RedisLoader)(nil), HTTP:(*config.HTTPLoader)(nil), Plugin:(*config.PluginConfig)(nil)}
+--- FAIL: TestCreateConnLimiterDedupesExistingConfigEntry (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/socket	0.039s
+FAIL	github.com/go-gost/x/config [build failed]
+# github.com/go-gost/x/config/loader_test [github.com/go-gost/x/config/loader.test]
+config/loader/r18_fix_f03_test.go:83:23: undefined: config.DeduplicateChains
+config/loader/r18_fix_f03_test.go:86:23: undefined: config.DeduplicateLimiters
+config/loader/r18_fix_f03_test.go:89:23: undefined: config.DeduplicateCLimiters
+FAIL	github.com/go-gost/x/config/loader [build failed]
+FAIL

@@ -1,0 +1,96 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR19F01NftDbDeleteFailureDisclosesDeleted
+2026/10/25 04:07:54 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (13.449262ms)
+2026/10/25 04:07:54 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.229396ms)
+2026/10/25 04:07:54 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (8.216746ms)
+2026/10/25 04:07:54 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (251.017µs)
+2026/10/25 04:07:54 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:07:54 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:07:54 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (9.735806ms)
+2026/10/25 04:07:54 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 04:07:55 forward delete: db delete after nft reconcile failed tunnel_id=1 forward_id=2 err=constraint failed: simulated nft db delete failure (1811)
+    r19_f01_tunnel_delete_disclosure_residual_test.go:101: receipt must disclose deleted count and identity, got msg="constraint failed: simulated nft db delete failure (1811)" body={"code":-2,"msg":"constraint failed: simulated nft db delete failure (1811)","ts":1792901275576}
+--- FAIL: TestR19F01NftDbDeleteFailureDisclosesDeleted (1.37s)
+=== RUN   TestR19F01NftDbDeleteFailureFirstForwardDisclosesZero
+2026/10/25 04:07:56 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (279.68µs)
+2026/10/25 04:07:56 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.958581ms)
+2026/10/25 04:07:56 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (198.238µs)
+2026/10/25 04:07:56 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (2.683959ms)
+2026/10/25 04:07:56 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:07:56 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:07:56 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (212.629µs)
+2026/10/25 04:07:56 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 04:07:56 forward delete: db delete after nft reconcile failed tunnel_id=1 forward_id=1 err=constraint failed: simulated nft db delete failure (1811)
+    r19_f01_tunnel_delete_disclosure_residual_test.go:134: receipt must disclose zero deleted forwards, got msg="constraint failed: simulated nft db delete failure (1811)" body={"code":-2,"msg":"constraint failed: simulated nft db delete failure (1811)","ts":1792901276940}
+--- FAIL: TestR19F01NftDbDeleteFailureFirstForwardDisclosesZero (1.35s)
+=== RUN   TestR19F01NftMarkPendingFailureDisclosesMarked
+2026/10/25 04:07:57 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.721745ms)
+2026/10/25 04:07:57 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (2.226183ms)
+2026/10/25 04:07:57 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (1.592992ms)
+2026/10/25 04:07:57 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (3.63689ms)
+2026/10/25 04:07:57 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:07:57 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:07:57 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (996.817µs)
+2026/10/25 04:07:57 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r19_f01_tunnel_delete_disclosure_residual_test.go:165: receipt must disclose marked count and identity, got msg="constraint failed: simulated mark pending failure (1811)" body={"code":-2,"msg":"constraint failed: simulated mark pending failure (1811)","ts":1792901278705}
+--- FAIL: TestR19F01NftMarkPendingFailureDisclosesMarked (1.77s)
+=== RUN   TestR19F01DeleteTunnelByIDFailureDisclosesDeleted
+2026/10/25 04:07:59 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (8.002735ms)
+2026/10/25 04:07:59 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (4.804903ms)
+2026/10/25 04:07:59 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (2.991111ms)
+2026/10/25 04:07:59 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (246.339µs)
+2026/10/25 04:07:59 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:07:59 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:07:59 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (3.945613ms)
+2026/10/25 04:07:59 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 04:07:59 tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=1 forward_id=1 err=S-04: 节点离线，转发未完全删除，离线节点: [1]
+    r19_f01_tunnel_delete_disclosure_residual_test.go:201: receipt must disclose deleted count and identity, got msg="constraint failed: simulated tunnel row delete failure (1811)" body={"code":-2,"msg":"constraint failed: simulated tunnel row delete failure (1811)","ts":1792901279906}
+--- FAIL: TestR19F01DeleteTunnelByIDFailureDisclosesDeleted (1.22s)
+=== RUN   TestR19F01DeleteTunnelAndCleanupFailureDisclosesDeleted
+2026/10/25 04:08:00 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (11.20343ms)
+2026/10/25 04:08:00 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (5.91488ms)
+2026/10/25 04:08:00 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (8.087472ms)
+2026/10/25 04:08:00 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (6.267971ms)
+2026/10/25 04:08:00 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:08:00 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:08:00 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (8.817178ms)
+2026/10/25 04:08:00 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 04:08:00 tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=1 forward_id=1 err=S-04: 节点离线，转发未完全删除，离线节点: [1]
+    r19_f01_tunnel_delete_disclosure_residual_test.go:223: error must disclose deleted count and identity, got "constraint failed: simulated tunnel row delete failure (1811)"
+--- FAIL: TestR19F01DeleteTunnelAndCleanupFailureDisclosesDeleted (0.95s)
+=== RUN   TestR19F01BatchDeleteTunnelByIDFailureDisclosesDeleted
+2026/10/25 04:08:01 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (25.288457ms)
+2026/10/25 04:08:01 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (9.243538ms)
+2026/10/25 04:08:01 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (10.286033ms)
+2026/10/25 04:08:01 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (3.833765ms)
+2026/10/25 04:08:01 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:08:01 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:08:01 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (152.85µs)
+2026/10/25 04:08:01 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 04:08:02 tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=1 forward_id=1 err=S-04: 节点离线，转发未完全删除，离线节点: [1]
+    r19_f01_tunnel_delete_disclosure_residual_test.go:260: batch failure reason must disclose deleted forwards, got "constraint failed: simulated tunnel row delete failure (1811)" body={"code":0,"msg":"操作成功","ts":1792901282598,"data":{"successCount":0,"failCount":1,"failures":[{"id":1,"name":"gost-tunnel-del","reason":"constraint failed: simulated tunnel row delete failure (1811)"}]}}
+--- FAIL: TestR19F01BatchDeleteTunnelByIDFailureDisclosesDeleted (1.74s)
+=== RUN   TestR19F01NftSuccessPathUnchanged
+2026/10/25 04:08:02 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (2.156127ms)
+2026/10/25 04:08:02 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (962.585µs)
+2026/10/25 04:08:02 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (892.951µs)
+2026/10/25 04:08:02 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (2.836849ms)
+2026/10/25 04:08:02 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:08:02 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:08:02 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (1.591399ms)
+2026/10/25 04:08:02 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F01NftSuccessPathUnchanged (0.67s)
+=== RUN   TestR19F01GostSuccessPathUnchanged
+2026/10/25 04:08:03 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (4.060686ms)
+2026/10/25 04:08:03 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (696.476µs)
+2026/10/25 04:08:03 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (3.167486ms)
+2026/10/25 04:08:03 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (6.773099ms)
+2026/10/25 04:08:03 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:08:03 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:08:03 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (3.875138ms)
+2026/10/25 04:08:03 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 04:08:04 tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=1 forward_id=1 err=S-04: 节点离线，转发未完全删除，离线节点: [1]
+--- PASS: TestR19F01GostSuccessPathUnchanged (1.15s)
+FAIL
+FAIL	go-backend/internal/http/handler	10.330s
+FAIL

@@ -1,0 +1,31 @@
+{
+ "code": 0,
+ "msg": "操作成功",
+ "ts": 1792897999726,
+ "data": {
+  "chainNodes": [],
+  "createdTime": 1792589126178,
+  "engine": "",
+  "flow": 2,
+  "id": 2,
+  "inIp": "2600:1f13:14d:a300:fd27:87f4:a509:a344",
+  "inNodeId": [
+   {
+    "chainType": 1,
+    "inx": 1,
+    "nodeId": 1,
+    "protocol": "tls",
+    "strategy": "round"
+   }
+  ],
+  "inx": -1,
+  "ipPreference": "",
+  "name": "a2-t-flow2",
+  "outNodeId": [],
+  "probeTargetHost": "",
+  "probeTargetPort": 0,
+  "status": 1,
+  "trafficRatio": 1,
+  "type": 1
+ }
+}

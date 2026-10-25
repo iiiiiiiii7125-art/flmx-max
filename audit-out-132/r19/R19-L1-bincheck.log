@@ -1,0 +1,18 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
+---
+total 42160
+drwxr-xr-x 1 root root     4096 Oct 25 10:19 .
+drwxr-xr-x 1 root root     4096 Oct 25 10:19 ..
+drwxr-xr-x 2 root root     4096 Oct 25 10:19 data
+-rwxr-x--x 1 root root 43158420 Oct 22 15:46 paneld
+0000000 177   E   L   F 002 001 001  \0  \0  \0  \0  \0  \0  \0  \0  \0
+0000020 002  \0   >  \0
+--- agent go version ---
+--- agent strings check ---
+0
+0
+--- paneld strings ---
+1

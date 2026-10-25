@@ -1,0 +1,36 @@
+{
+ "code": 0,
+ "msg": "操作成功",
+ "ts": 1792898681103,
+ "data": [
+  {
+   "expiryReminderDismissed": 0,
+   "expiryTime": null,
+   "extraIPs": null,
+   "forwardMode": "agent",
+   "http": 0,
+   "id": 1,
+   "interfaceName": null,
+   "inx": 0,
+   "ip": "16.146.199.68",
+   "isRemote": 0,
+   "name": "w10-test",
+   "port": "1000-19999",
+   "remark": null,
+   "remoteConfig": null,
+   "remoteToken": null,
+   "remoteUrl": null,
+   "renewalCycle": null,
+   "serverIp": "16.146.199.68",
+   "serverIpV4": null,
+   "serverIpV6": "2600:1f13:14d:a300:fd27:87f4:a509:a344",
+   "socks": 0,
+   "sshConfig": null,
+   "status": 1,
+   "tcpListenAddr": "[::]",
+   "tls": 0,
+   "udpListenAddr": "[::]",
+   "version": "dev (debian/amd64)"
+  }
+ ]
+}

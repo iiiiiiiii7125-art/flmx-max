@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== agent swap to r19d 2026-10-25T03:40:29Z initiator=L5 ===
+753688 bash -c echo "=== agent swap to r19d $(date -u +%FT%TZ) initiator=L5 ==="; systemctl stop flux_agent; sleep 3; pgrep -af "/etc/flux_agent/flux_agent" || echo "agent processes gone"; cp /root/r19/flux_agent-r19d /etc/flux_agent/flux_agent; chmod +x /etc/flux_agent/flux_agent; md5sum /etc/flux_agent/flux_agent; echo "--- reset-failed + start (initiator=L5, install r19d agent)"; systemctl reset-failed flux_agent; systemctl start flux_agent; sleep 5; systemctl is-active flux_agent; systemctl show flux_agent -p MainPID,NRestarts --value; md5sum /etc/flux_agent/gost.json; wc -l /etc/flux_agent/gost.json; docker ps --format "{{.Names}} {{.Image}} {{.Status}}" | grep -E "backend|frontend"
+053b99fa0d706fb68f19198080de2a77  /etc/flux_agent/flux_agent
+--- reset-failed + start (initiator=L5, install r19d agent)
+active
+753719
+0
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+vite-frontend flmx-frontend:r19d Up 6 minutes (unhealthy)
+flux-panel-backend flmx-backend:r19d Up 6 minutes (healthy)

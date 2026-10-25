@@ -1,0 +1,34 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 F-03 SIGHUP leg 2026-10-25T03:20:05Z ===
+PID before: 744358
+services: 14 chains: 2 limiters: 2 climiters: 4 rlimiters: 2
+md5: 196d650e7ef4cc4c0b0bb1306ae5d009
+--- poisoned live file ---
+{'services': 14, 'chains': 2, 'limiters': 2, 'climiters': 4, 'rlimiters': 2}
+196d650e7ef4cc4c0b0bb1306ae5d009  /etc/flux_agent/gost.json
+--- send SIGHUP to 744358 ---
+PID after: 744358
+MainPID=744358
+NRestarts=0
+ActiveState=active
+SubState=running
+--- healed file ---
+82b2cebc85c54ed3ebe7b0c2aa9d39de  /etc/flux_agent/gost.json
+{'services': 14, 'chains': 1, 'limiters': 1, 'climiters': 3, 'rlimiters': 1}
+chains: ['r19l1-chain']
+limiters: ['1']
+climiters: ['rule_conn_limit_2', 'rule_conn_limit_12', 'rule_conn_limit_29']
+rlimiters: ['r19l1-rlimiter']
+--- journal self-heal lines ---
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate chain(s) [r19l1-chain] from persisted config","time":"2026-10-25T03:17:57.721Z"}
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate limiter(s) [1] from persisted config","time":"2026-10-25T03:17:57.722Z"}
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate conn limiter(s) [rule_conn_limit_2] from persisted config","time":"2026-10-25T03:17:57.723Z"}
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate rate limiter(s) [r19l1-rlimiter] from persisted config","time":"2026-10-25T03:17:57.723Z"}
+Oct 25 03:20:05 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate chain(s) [r19l1-chain] from persisted config","time":"2026-10-25T03:20:05.660Z"}
+Oct 25 03:20:05 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate limiter(s) [1] from persisted config","time":"2026-10-25T03:20:05.662Z"}
+Oct 25 03:20:05 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate conn limiter(s) [rule_conn_limit_29] from persisted config","time":"2026-10-25T03:20:05.663Z"}
+Oct 25 03:20:05 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate rate limiter(s) [r19l1-rlimiter] from persisted config","time":"2026-10-25T03:20:05.664Z"}
+--- listeners still up (8618=t3 fwd, 13101=pristine) ---
+LISTEN 0      4096                                        *:8618             *:*          
+LISTEN 0      4096                                        *:13101            *:*          
+(end)

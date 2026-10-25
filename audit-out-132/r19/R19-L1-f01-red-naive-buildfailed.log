@@ -1,0 +1,6 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+# go-backend/internal/http/handler [go-backend/internal/http/handler.test]
+internal/http/handler/r18_f01_tunnel_delete_disclosure_test.go:170:12: undefined: formatDeletedForwardsSummary
+internal/http/handler/r18_f01_tunnel_delete_disclosure_test.go:173:9: undefined: formatDeletedForwardsSummary
+FAIL	go-backend/internal/http/handler [build failed]
+FAIL

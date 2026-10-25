@@ -1,0 +1,2 @@
+03:37:49.564 SENT-OK r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=- -> SIGKILL agent pid=752830
+03:37:49.564 KILLED

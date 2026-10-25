@@ -1,0 +1,15 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR19L3A6NormalizeRuleGroups
+--- PASS: TestR19L3A6NormalizeRuleGroups (0.00s)
+=== RUN   TestR19L3A6PipelineOrderDedupeSort
+--- PASS: TestR19L3A6PipelineOrderDedupeSort (0.00s)
+=== RUN   TestR19L3A6ChainNamesBothMatch
+--- PASS: TestR19L3A6ChainNamesBothMatch (0.00s)
+=== RUN   TestR19L3A6ScriptSandbox
+--- PASS: TestR19L3A6ScriptSandbox (1.00s)
+=== RUN   TestR19L3A6RenderMatrix
+--- PASS: TestR19L3A6RenderMatrix (0.00s)
+=== RUN   TestR19L3A6SIP023FourFaces
+--- PASS: TestR19L3A6SIP023FourFaces (0.00s)
+PASS
+ok  	go-backend/internal/kernel	1.014s

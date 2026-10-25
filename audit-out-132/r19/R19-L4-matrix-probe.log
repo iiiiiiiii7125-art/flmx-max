@@ -1,0 +1,210 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR19L4MatrixR1Singbox
+    r19_l4_probe_test.go:60: CELL R1 C1 password ss1 OK "r19-ss-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password ss2 OK "r19-ss-pw2"
+    r19_l4_probe_test.go:60: CELL R1 C1 password ss3 OK "r19-ss-pw3"
+    r19_l4_probe_test.go:60: CELL R1 C1 password trojan OK "r19-tj-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password hy2 OK "r19-hy2-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password tuic OK "r19-tuic-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password anytls OK "r19-at-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password naive OK "r19-na-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password socks OK "r19-so-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C1 password http OK "r19-ht-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C2 uuid vmess OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:60: CELL R1 C2 uuid vless OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:60: CELL R1 C2 uuid tuic OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:60: CELL R1 C3 psk snell1 OK "r19-snell-psk1"
+    r19_l4_probe_test.go:60: CELL R1 C3 psk snell2 OK "r19-snell-psk2"
+    r19_l4_probe_test.go:60: CELL R1 C4 cipher ss1 OK "aes-256-gcm"
+    r19_l4_probe_test.go:60: CELL R1 C4 cipher ss2 OK "aes-128-gcm"
+    r19_l4_probe_test.go:60: CELL R1 C4 cipher vmess OK "aes-128-gcm"
+    r19_l4_probe_test.go:60: CELL R1 C5 encryption vless OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r19_l4_probe_test.go:60: CELL R1 C6 flow vless OK "xtls-rprx-vision"
+    r19_l4_probe_test.go:60: CELL R1 C7 username naive OK "r19-na-user"
+    r19_l4_probe_test.go:60: CELL R1 C7 username socks OK "r19-so-user"
+    r19_l4_probe_test.go:60: CELL R1 C7 username http OK "r19-ht-user"
+    r19_l4_probe_test.go:60: CELL R1 C8 plugin ss2 OK "obfs"
+    r19_l4_probe_test.go:60: CELL R1 C8 plugin-opts.mode ss2 OK "http"
+    r19_l4_probe_test.go:60: CELL R1 C8 plugin-opts.host ss2 OK "r19ob.example.net"
+    r19_l4_probe_test.go:60: CELL R1 C8 plugin ss3 shadow-tls OK "shadow-tls"
+    r19_l4_probe_test.go:60: CELL R1 C8 plugin-opts.password ss3 OK "r19-stls-pw1"
+    r19_l4_probe_test.go:60: CELL R1 C8 plugin-opts.host ss3 OK "stls.r19.example.net"
+    r19_l4_probe_test.go:60: CELL R1 C8 shadow-tls.password snell2 OK "r19-stls-pw2"
+    r19_l4_probe_test.go:60: CELL R1 C8 shadow-tls.host snell2 OK "sn.r19.example.net"
+    r19_l4_probe_test.go:60: CELL R1 C9 reality public-key OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r19_l4_probe_test.go:60: CELL R1 C9 reality short-id OK "cdef"
+    r19_l4_probe_test.go:60: CELL R1 C10 obfs hy2 OK "salamander"
+    r19_l4_probe_test.go:60: CELL R1 C10 obfs-password hy2 OK "r19-hy2-obfs1"
+    r19_l4_probe_test.go:60: CELL R1 C10 ports hy2 OK "30000-30010"
+    r19_l4_probe_test.go:60: CELL R1 C11 version snell1 OK 6
+    r19_l4_probe_test.go:60: CELL R1 C11 mode snell1 OK "unshaped"
+    r19_l4_probe_test.go:60: CELL R1 C12 alterId vmess OK 1
+--- PASS: TestR19L4MatrixR1Singbox (0.00s)
+=== RUN   TestR19L4MatrixR2Clash
+    r19_l4_probe_test.go:209: CELL R2 C1 password ss OK "r19-ss-pw1"
+    r19_l4_probe_test.go:209: CELL R2 C1 password trojan OK "r19-tj-pw1"
+    r19_l4_probe_test.go:209: CELL R2 C1 password hy2 OK "r19-hy2-pw1"
+    r19_l4_probe_test.go:209: CELL R2 C2 uuid vmess OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:209: CELL R2 C2 uuid vless OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:209: CELL R2 C2 uuid tuic OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:209: CELL R2 C3 psk snell OK "r19-snell-psk1"
+    r19_l4_probe_test.go:209: CELL R2 C4 cipher ss OK "aes-256-gcm"
+    r19_l4_probe_test.go:209: CELL R2 C4 cipher vmess OK "aes-128-gcm"
+    r19_l4_probe_test.go:209: CELL R2 C5 encryption vless OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r19_l4_probe_test.go:209: CELL R2 C6 flow vless OK "xtls-rprx-vision"
+    r19_l4_probe_test.go:209: CELL R2 C7 username naive OK "r19-na-user"
+    r19_l4_probe_test.go:209: CELL R2 C7 username socks OK "r19-so-user"
+    r19_l4_probe_test.go:209: CELL R2 C8 plugin ss-obfs OK "obfs"
+    r19_l4_probe_test.go:209: CELL R2 C8 plugin-opts.mode OK "tls"
+    r19_l4_probe_test.go:209: CELL R2 C8 plugin-opts.host OK "r19cob.example.net"
+    r19_l4_probe_test.go:209: CELL R2 C9 reality public-key OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r19_l4_probe_test.go:209: CELL R2 C9 reality short-id OK "ab12"
+    r19_l4_probe_test.go:209: CELL R2 C10 obfs hy2 OK "salamander"
+    r19_l4_probe_test.go:209: CELL R2 C10 obfs-password hy2 OK "r19-hy2-obfs1"
+    r19_l4_probe_test.go:209: CELL R2 C11 version snell OK 6
+    r19_l4_probe_test.go:209: CELL R2 C11 mode snell OK "unshaped"
+    r19_l4_probe_test.go:209: CELL R2 C12 alterId vmess OK 1
+--- PASS: TestR19L4MatrixR2Clash (0.00s)
+=== RUN   TestR19L4MatrixR3URI
+    r19_l4_probe_test.go:265: CELL R3 R3SS imported host=203.0.113.61 port=29201
+    r19_l4_probe_test.go:265: CELL R3 R3VM imported host=203.0.113.62 port=29202
+    r19_l4_probe_test.go:265: CELL R3 R3VL imported host=203.0.113.63 port=29203
+    r19_l4_probe_test.go:265: CELL R3 R3TJ imported host=203.0.113.64 port=29204
+    r19_l4_probe_test.go:265: CELL R3 R3HY2 imported host=203.0.113.65 port=29205
+    r19_l4_probe_test.go:265: CELL R3 R3TUIC imported host=203.0.113.66 port=29206
+    r19_l4_probe_test.go:265: CELL R3 R3AT imported host=203.0.113.67 port=29207
+    r19_l4_probe_test.go:265: CELL R3 R3SO imported host=203.0.113.68 port=29208
+    r19_l4_probe_test.go:265: CELL R3 C1 password ss OK "r19-uri-ss-pw"
+    r19_l4_probe_test.go:265: CELL R3 C4 cipher ss OK "aes-256-gcm"
+    r19_l4_probe_test.go:265: CELL R3 C8 plugin-opts.mode ss OK "http"
+    r19_l4_probe_test.go:265: CELL R3 C8 plugin-opts.host ss OK "r19uob.example.net"
+    r19_l4_probe_test.go:265: CELL R3 C2 uuid vmess OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:265: CELL R3 C4 cipher vmess OK "aes-128-gcm"
+    r19_l4_probe_test.go:265: CELL R3 C12 alterId vmess OK 1
+    r19_l4_probe_test.go:265: CELL R3 C2 uuid vless OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:265: CELL R3 C5 encryption vless OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r19_l4_probe_test.go:265: CELL R3 C6 flow vless OK "xtls-rprx-vision"
+    r19_l4_probe_test.go:265: CELL R3 C9 reality public-key OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r19_l4_probe_test.go:265: CELL R3 C9 reality short-id OK "ab12"
+    r19_l4_probe_test.go:265: CELL R3 C1 password trojan OK "r19-uri-tj-pw"
+    r19_l4_probe_test.go:265: CELL R3 C1 password hy2 OK "r19-uri-hy2-pw"
+    r19_l4_probe_test.go:265: CELL R3 C10 obfs hy2 OK "salamander"
+    r19_l4_probe_test.go:265: CELL R3 C10 obfs-password hy2 OK "r19-uri-hy2-obfs"
+    r19_l4_probe_test.go:265: CELL R3 C2 uuid tuic OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:265: CELL R3 C1 password tuic OK "r19-uri-tuic-pw"
+    r19_l4_probe_test.go:265: CELL R3 C1 password anytls OK "r19-uri-at-pw"
+    r19_l4_probe_test.go:265: CELL R3 C7 username socks OK "r19-uri-so-user"
+    r19_l4_probe_test.go:265: CELL R3 C1 password socks OK "r19-uri-so-pw"
+    r19_l4_probe_test.go:265: CELL R3 C3/C11 snell:// REJECT "第 1 行：暂不支持 snell:// 链接"
+    r19_l4_probe_test.go:265: CELL R3 C7 http:// REJECT "第 1 行：http(s):// 是订阅地址，请单独粘贴在输入框里"
+--- PASS: TestR19L4MatrixR3URI (0.00s)
+=== RUN   TestR19L4MatrixR4Surge
+    r19_l4_probe_test.go:330: CELL R4 R4SS imported type=ss host=203.0.113.71 port=29301
+    r19_l4_probe_test.go:330: CELL R4 R4SSSTL imported type=ss host=203.0.113.71 port=29302
+    r19_l4_probe_test.go:330: CELL R4 R4LOON imported type=ss host=203.0.113.72 port=29303
+    r19_l4_probe_test.go:330: CELL R4 R4VM imported type=vmess host=203.0.113.73 port=29304
+    r19_l4_probe_test.go:330: CELL R4 R4TJ imported type=trojan host=203.0.113.74 port=29305
+    r19_l4_probe_test.go:330: CELL R4 R4HY2 imported type=hysteria2 host=203.0.113.75 port=29306
+    r19_l4_probe_test.go:330: CELL R4 R4TUIC imported type=tuic host=203.0.113.76 port=29307
+    r19_l4_probe_test.go:330: CELL R4 R4AT imported type=anytls host=203.0.113.77 port=29308
+    r19_l4_probe_test.go:330: CELL R4 R4SO imported type=socks5 host=203.0.113.78 port=29309
+    r19_l4_probe_test.go:330: CELL R4 R4HT imported type=http host=203.0.113.79 port=29310
+    r19_l4_probe_test.go:330: CELL R4 R4SN imported type=snell host=203.0.113.80 port=29311
+    r19_l4_probe_test.go:330: CELL R4 R4SNOB imported type=snell host=203.0.113.81 port=29312
+    r19_l4_probe_test.go:330: CELL R4 R4SNSTL imported type=snell host=203.0.113.82 port=29313
+    r19_l4_probe_test.go:330: CELL R4 C1 password ss OK "r19-sg-ss-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C4 cipher ss OK "aes-256-gcm"
+    r19_l4_probe_test.go:330: CELL R4 C8 plugin-opts.mode ss OK "http"
+    r19_l4_probe_test.go:330: CELL R4 C8 plugin-opts.host ss OK "r19sgob.example.net"
+    r19_l4_probe_test.go:330: CELL R4 C8 plugin ss-shadowtls OK "shadow-tls"
+    r19_l4_probe_test.go:330: CELL R4 C8 plugin-opts.password ss-shadowtls OK "r19-sg-stls-pw"
+    r19_l4_probe_test.go:330: CELL R4 C8 plugin-opts.host ss-shadowtls OK "stls.r19.example.net"
+    r19_l4_probe_test.go:330: CELL R4 C8 plugin-opts.version ss-shadowtls OK 3
+    r19_l4_probe_test.go:330: CELL R4 C4 cipher loon-positional OK "aes-128-gcm"
+    r19_l4_probe_test.go:330: CELL R4 C1 password loon-positional OK "r19-sg-loon-pw2"
+    r19_l4_probe_test.go:330: CELL R4 C2 uuid vmess OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:330: CELL R4 C4 cipher vmess OK "aes-128-gcm"
+    r19_l4_probe_test.go:330: CELL R4 C12 alterId vmess OK 1
+    r19_l4_probe_test.go:330: CELL R4 C1 password trojan OK "r19-sg-tj-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C1 password hy2 OK "r19-sg-hy2-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C10 obfs hy2 OK "salamander"
+    r19_l4_probe_test.go:330: CELL R4 C10 obfs-password hy2 OK "r19-sg-hy2-obfs"
+    r19_l4_probe_test.go:330: CELL R4 C10 ports hy2 OK "30000-30010"
+    r19_l4_probe_test.go:330: CELL R4 C2 uuid tuic OK "59595595-5955-4555-8555-595955955595"
+    r19_l4_probe_test.go:330: CELL R4 C1 password tuic OK "r19-sg-tuic-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C1 password anytls OK "r19-sg-at-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C7 username socks OK "r19-sg-so-user"
+    r19_l4_probe_test.go:330: CELL R4 C1 password socks OK "r19-sg-so-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C7 username http OK "r19-sg-ht-user"
+    r19_l4_probe_test.go:330: CELL R4 C1 password http OK "r19-sg-ht-pw1"
+    r19_l4_probe_test.go:330: CELL R4 C3 psk snell OK "r19-sg-sn-psk1"
+    r19_l4_probe_test.go:330: CELL R4 C11 version snell OK 6
+    r19_l4_probe_test.go:330: CELL R4 C11 mode snell OK "unshaped"
+    r19_l4_probe_test.go:330: CELL R4 C3 psk snell-obfs OK "r19-sg-sn-psk2"
+    r19_l4_probe_test.go:330: CELL R4 C10 obfs-opts.mode snell OK "http"
+    r19_l4_probe_test.go:330: CELL R4 C3 psk snell-shadowtls OK "r19-sg-sn-psk3"
+    r19_l4_probe_test.go:330: CELL R4 C8 shadow-tls.password snell OK "r19-sg-sn-stls-pw"
+    r19_l4_probe_test.go:330: CELL R4 C8 shadow-tls.host snell OK "snst.r19.example.net"
+    r19_l4_probe_test.go:330: CELL R4 C8 shadow-tls.version snell OK 3
+    r19_l4_probe_test.go:330: CELL R4 C5/C6 vless REJECT "第 1 行：暂不支持 vless 类型的节点"
+--- PASS: TestR19L4MatrixR4Surge (0.00s)
+=== RUN   TestR19L4MatrixR4SnellShadowTLSCompanion
+    r19_l4_probe_test.go:396: CELL R4-supplement C3 psk OK "r19-sg-sn-psk3"
+    r19_l4_probe_test.go:396: CELL R4-supplement C11 version OK 6
+    r19_l4_probe_test.go:396: CELL R4-supplement C8 shadow-tls.password OK "r19-sg-sn-stls-pw"
+    r19_l4_probe_test.go:396: CELL R4-supplement C8 shadow-tls.host OK "snst.r19.example.net"
+--- PASS: TestR19L4MatrixR4SnellShadowTLSCompanion (0.00s)
+=== RUN   TestR19L4A2Predicates
+    r19_l4_probe_test.go:416: CELL A2-01 fp garbage REJECT "FPBAD：client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）"
+    r19_l4_probe_test.go:416: CELL A2-01 fp Chrome healed OK "chrome"
+    r19_l4_probe_test.go:416: CELL A2-02 xhttp garbage REJECT "第 1 行：xhttp mode 不受支持（仅 auto / packet-up / stream-up / stream-one）"
+    r19_l4_probe_test.go:416: CELL A2-02 xhttp packet-up OK "packet-up"
+    r19_l4_probe_test.go:416: CELL A2-02 xhttp PACKET-UP healed OK "packet-up"
+    r19_l4_probe_test.go:416: CELL A2-03 ss plugin garbage REJECT "PLGBAD：Shadowsocks obfs mode 不受支持（仅 http / tls）"
+    r19_l4_probe_test.go:416: CELL A2-03 ss plugin TLS healed OK "tls"
+    r19_l4_probe_test.go:416: CELL A2-04 snell obfs garbage REJECT "SNOBBAD：Snell obfs mode 不受支持（仅 http / tls / shadow-tls / restls / jls 或空）"
+    r19_l4_probe_test.go:416: CELL A2-04 snell obfs shadowtls healed OK "shadow-tls"
+    r19_l4_probe_test.go:416: CELL A2-04 snell v6 UNSHAPED healed OK "unshaped"
+    r19_l4_probe_test.go:416: CELL A2-05 vmess cipher garbage REJECT "VMBAD：VMess 加密方式 cipher 不受支持（仅 auto / aes-128-gcm / chacha20-poly1305 / none / zero）"
+    r19_l4_probe_test.go:416: CELL A2-05 vmess cipher legal OK "aes-128-gcm"
+    r19_l4_probe_test.go:416: CELL A2-06 vless flow garbage REJECT "FLBAD：VLESS flow 不受支持（仅 xtls-rprx-vision 或空）"
+    r19_l4_probe_test.go:416: CELL A2-06 vless flow legal OK "xtls-rprx-vision"
+    r19_l4_probe_test.go:416: CELL A2-07 hy2 obfs garbage REJECT "HYBAD：Hysteria2 obfs 类型不受支持（仅 salamander / gecko 或空）"
+    r19_l4_probe_test.go:416: CELL A2-07 hy2 obfs legal OK "salamander"
+    r19_l4_probe_test.go:416: CELL A2-08 tuic cc new-reno REJECT "第 1 行：TUIC congestion-controller 不受支持（仅 bbr / cubic / new_reno）"
+    r19_l4_probe_test.go:416: CELL A2-08 tuic cc bbr OK "bbr"
+    r19_l4_probe_test.go:416: CELL A2-09 ss cipher garbage REJECT "SSBAD：Shadowsocks 加密方式 cipher 不受支持"
+    r19_l4_probe_test.go:416: CELL A2-09 ss cipher chacha20 imported OK "chacha20"
+    r19_l4_probe_test.go:416: CELL A2-10 enc garbage REJECT "ENCBAD：VLESS encryption 格式错误（须为 none 或 mlkem768x25519plus 客户端加密串）"
+    r19_l4_probe_test.go:416: CELL A2-10 enc legal OK "mlkem768x25519plus.native.0rtt.nxXrBunl3L3TglUpHVbQ3QuLltBtwDVfmCWBTurY-Ag"
+    r19_l4_probe_test.go:416: CELL A2-11 reality bad pbk REJECT "RPBKBAD：Reality 公钥 pbk 格式错误（须为 32 字节的 RawURL base64）"
+    r19_l4_probe_test.go:416: CELL A2-11 reality bad sid REJECT "RSIDBAD：Reality short-id 格式错误（须为偶数位小写十六进制，最多 16 位）"
+    r19_l4_probe_test.go:416: CELL A2-11 reality pbk legal OK "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    r19_l4_probe_test.go:416: CELL A2-11 reality sid legal OK "ab12"
+--- PASS: TestR19L4A2Predicates (0.00s)
+=== RUN   TestR19L4FacesConsumption
+    r19_l4_probe_test.go:652: CELL FACE fp-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE flow-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE tuic-cc-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE hy2-obfs-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE vmess-cipher-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE ss-cipher-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE enc-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE ss-plugin-mode-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE snell-obfs-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE reality-pbk-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE reality-sid-bad BAD all-4-faces-reject
+    r19_l4_probe_test.go:652: CELL FACE heal fp Chrome->chrome storage-untouched OK
+    r19_l4_probe_test.go:652: CELL FACE heal xhttp PACKET-UP->packet-up OK
+    r19_l4_probe_test.go:652: CELL FACE heal snell UNSHAPED->unshaped OK
+    r19_l4_probe_test.go:652: CELL FACE flow-good GOOD all-4-faces-pass
+    r19_l4_probe_test.go:652: CELL FACE tuic-cc-good GOOD all-4-faces-pass
+    r19_l4_probe_test.go:652: CELL FACE vmess-cipher-good GOOD all-4-faces-pass
+    r19_l4_probe_test.go:652: CELL FACE enc-good GOOD all-4-faces-pass
+    r19_l4_probe_test.go:652: CELL FACE ss-chacha20 clash-only OK
+    r19_l4_probe_test.go:652: CELL FACE render-skip fp-bad singbox+clash skip OK
+    r19_l4_probe_test.go:652: CELL FACE uri-enc-legal verbatim OK
+    r19_l4_probe_test.go:652: CELL FACE uri-enc-bad no-chain OK
+--- PASS: TestR19L4FacesConsumption (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.017s

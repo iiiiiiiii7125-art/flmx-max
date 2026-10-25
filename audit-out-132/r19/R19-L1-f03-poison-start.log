@@ -1,0 +1,34 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 F-03 poison-start: stop agent 2026-10-25T03:17:54Z ===
+agent processes gone
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+d48f09e132ebe99fe97a619dd72d42d4  /root/r19-l1/gost.json.pre-poison
+services: 12 chains: 2 limiters: 2 climiters: 3 rlimiters: 2
+md5: c04a0095d45014b09034b220e8195ad1
+--- poisoned file counts ---
+{'services': 12, 'limiters': 2, 'climiters': 3, 'chains': 2, 'rlimiters': 2}
+chains: ['r19l1-chain', 'r19l1-chain']
+limiters: ['1', '1']
+climiters: ['rule_conn_limit_2', 'rule_conn_limit_12', 'rule_conn_limit_2']
+rlimiters: ['r19l1-rlimiter', 'r19l1-rlimiter']
+c04a0095d45014b09034b220e8195ad1  /etc/flux_agent/gost.json
+--- reset-failed + start (expect ONE start, active, NRestarts=0) ---
+MainPID=744358
+NRestarts=0
+ActiveState=active
+SubState=running
+--- healed file ---
+30c7668369d9bf34b1dd5f529b68c506  /etc/flux_agent/gost.json
+{'services': 12, 'chains': 1, 'limiters': 1, 'climiters': 2, 'rlimiters': 1}
+chains: ['r19l1-chain']
+limiters: ['1']
+climiters: ['rule_conn_limit_2', 'rule_conn_limit_12']
+rlimiters: ['r19l1-rlimiter']
+services: ['1_2_1_tcp', '1_2_1_udp', '2_5_2_tcp', '2_5_2_udp', '3_5_3_tcp', '3_5_3_udp', '4_5_4_tcp', '4_5_4_udp', '6_1_0_tcp', '6_1_0_udp', '7_1_0_tcp', '7_1_0_udp']
+--- journal self-heal lines ---
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate chain(s) [r19l1-chain] from persisted config","time":"2026-10-25T03:17:57.721Z"}
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate limiter(s) [1] from persisted config","time":"2026-10-25T03:17:57.722Z"}
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate conn limiter(s) [rule_conn_limit_2] from persisted config","time":"2026-10-25T03:17:57.723Z"}
+Oct 25 03:17:57 ip-172-26-9-119 flux_agent[744358]: {"level":"warning","msg":"startup config self-heal: removed duplicate rate limiter(s) [r19l1-rlimiter] from persisted config","time":"2026-10-25T03:17:57.723Z"}
+--- journal startup errors (expect none) ---
+(end)

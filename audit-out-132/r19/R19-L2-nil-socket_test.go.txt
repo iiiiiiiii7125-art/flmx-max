@@ -1,0 +1,116 @@
+// L2 scratch-only reproduction (NOT part of the audited tree):
+// update*/delete* nil-item panic + loader nil-item panic.
+// Each test recovers the panic and FAILs with the panic value when one
+// occurs (proving the defect), or reports PASS when no panic occurs.
+package socket
+
+import (
+	"testing"
+
+	"github.com/go-gost/x/config"
+	"github.com/go-gost/x/registry"
+)
+
+// runAndCatch runs f, recovering any panic; returns (panicked, value).
+func runAndCatch(f func()) (panicked bool, value any) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			value = r
+		}
+	}()
+	f()
+	return false, nil
+}
+
+func TestL2UpdateChainNilPanics(t *testing.T) {
+	orig := config.Global()
+	t.Cleanup(func() { config.Set(orig) })
+	registry.ChainRegistry().Unregister("l2-chain")
+	registry.ChainRegistry().Unregister("l2-target")
+	// nil item BEFORE the target: updateChain's loop derefs c.Chains[i].Name.
+	valid := config.ChainConfig{Name: "l2-target", Hops: []*config.HopConfig{{Name: "h", Nodes: []*config.NodeConfig{{Name: "n", Addr: "127.0.0.1:443", Connector: &config.ConnectorConfig{Type: "relay"}, Dialer: &config.DialerConfig{Type: "tcp"}}}}}}
+	config.Set(&config.Config{Chains: []*config.ChainConfig{
+		nil,
+		{Name: "l2-target", Hops: []*config.HopConfig{{Name: "h", Nodes: []*config.NodeConfig{{Name: "n", Addr: "127.0.0.1:443"}}}}},
+	}})
+	panicked, v := runAndCatch(func() {
+		_ = updateChain(updateChainRequest{Chain: "l2-target", Data: valid})
+	})
+	if !panicked {
+		t.Logf("updateChain did NOT panic on nil chain entry")
+	} else {
+		t.Errorf("updateChain PANICKED on nil chain entry: %v", v)
+	}
+}
+
+func TestL2UpdateLimiterNilPanics(t *testing.T) {
+	orig := config.Global()
+	t.Cleanup(func() { config.Set(orig) })
+	registry.TrafficLimiterRegistry().Unregister("l2-limiter")
+	config.Set(&config.Config{Limiters: []*config.LimiterConfig{
+		nil,
+		{Name: "l2-limiter", Limits: []string{"$ 1"}},
+	}})
+	panicked, v := runAndCatch(func() {
+		_ = updateLimiter(updateLimiterRequest{Limiter: "l2-limiter", Data: config.LimiterConfig{Name: "l2-limiter", Limits: []string{"$ 2"}}})
+	})
+	if !panicked {
+		t.Logf("updateLimiter did NOT panic on nil limiter entry")
+	} else {
+		t.Errorf("updateLimiter PANICKED on nil limiter entry: %v", v)
+	}
+}
+
+func TestL2UpdateConnLimiterNilPanics(t *testing.T) {
+	orig := config.Global()
+	t.Cleanup(func() { config.Set(orig) })
+	registry.ConnLimiterRegistry().Unregister("l2-climiter")
+	config.Set(&config.Config{CLimiters: []*config.LimiterConfig{
+		nil,
+		{Name: "l2-climiter", Limits: []string{"$ 1"}},
+	}})
+	panicked, v := runAndCatch(func() {
+		_ = updateConnLimiter(updateLimiterRequest{Limiter: "l2-climiter", Data: config.LimiterConfig{Name: "l2-climiter", Limits: []string{"$ 2"}}})
+	})
+	if !panicked {
+		t.Logf("updateConnLimiter did NOT panic on nil conn-limiter entry")
+	} else {
+		t.Errorf("updateConnLimiter PANICKED on nil conn-limiter entry: %v", v)
+	}
+}
+
+func TestL2UpdateServicesNilPanics(t *testing.T) {
+	orig := config.Global()
+	t.Cleanup(func() { config.Set(orig) })
+	registry.ServiceRegistry().Unregister("l2-svc")
+	config.Set(&config.Config{Services: []*config.ServiceConfig{
+		nil,
+		{Name: "l2-svc", Addr: "127.0.0.1:0"},
+	}})
+	panicked, v := runAndCatch(func() {
+		_ = updateServices(updateServicesRequest{Data: []config.ServiceConfig{{Name: "l2-svc", Addr: "127.0.0.1:0"}}})
+	})
+	if !panicked {
+		t.Logf("updateServices did NOT panic on nil service entry")
+	} else {
+		t.Errorf("updateServices PANICKED on nil service entry: %v", v)
+	}
+}
+
+func TestL2DeleteChainNilPanics(t *testing.T) {
+	orig := config.Global()
+	t.Cleanup(func() { config.Set(orig) })
+	config.Set(&config.Config{Chains: []*config.ChainConfig{
+		nil,
+		{Name: "l2-keep"},
+	}})
+	panicked, v := runAndCatch(func() {
+		_ = deleteChain(deleteChainRequest{Chain: "l2-keep"})
+	})
+	if !panicked {
+		t.Logf("deleteChain did NOT panic on nil chain entry")
+	} else {
+		t.Errorf("deleteChain PANICKED on nil chain entry: %v", v)
+	}
+}

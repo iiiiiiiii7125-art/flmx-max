@@ -1,0 +1,12 @@
+START integrity: ok tables: 51 excl sqlite_sequence: 50
+  node 1
+  tunnel 4
+  forward 6
+  node_inbound 578
+  subscription 18
+FINAL integrity: ok tables: 51 excl sqlite_sequence: 50
+  node 1
+  tunnel 4
+  forward 6
+  node_inbound 578
+  subscription 18

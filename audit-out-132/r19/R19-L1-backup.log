@@ -1,0 +1,53 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 R19-L1 backup 2026-10-25T03:09:42Z ===
+--- md5 ---
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+aff338e3676bc56d0f3986a1a62f8fdd  /root/r19-l1/flux_agent.pristine
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+d48f09e132ebe99fe97a619dd72d42d4  /root/r19-l1/gost.json.pristine
+3afbac1115e4f69a991448767b89d24e  /root/flmx-panel/docker-compose.yml
+3afbac1115e4f69a991448767b89d24e  /root/r19-l1/docker-compose.yml.pristine
+1eb46e4b40c994c0b1819d154a0b2e04  /root/r17d/stage/paneld
+1eb46e4b40c994c0b1819d154a0b2e04  /root/r19-l1/paneld.r17d
+--- agent unit ---
+# /etc/systemd/system/flux_agent.service
+[Unit]
+Description=Flux_agent Proxy Service
+After=network.target
+
+[Service]
+WorkingDirectory=/etc/flux_agent
+ExecStart=/etc/flux_agent/flux_agent
+Environment=GODEBUG=disablethp=1
+Restart=on-failure
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
+MainPID=731512
+NRestarts=0
+ExecStart={ path=/etc/flux_agent/flux_agent ; argv[]=/etc/flux_agent/flux_agent ; ignore_errors=no ; start_time=[Sun 2026-10-25 02:19:34 UTC] ; stop_time=[n/a] ; pid=731512 ; code=(null) ; status=0/0 }
+ActiveState=active
+SubState=running
+--- docker images ---
+flmx-frontend:r1gate-1.3.5 a58da904428a
+flmx-backend:r1gate-1.3.5 620be8ddd1ba
+postgres:16-alpine 721873c34ceb
+--- stage ---
+/root/r19-l1/:
+total 91904
+drwxr-xr-x  3 root root        4096 Oct 25 03:09 .
+drwx------ 38 root root        4096 Oct 25 03:09 ..
+-rw-r--r--  1 root root        2876 Oct 25 02:19 docker-compose.yml.pristine
+-rwxr-xr-x  1 root root    50194574 Oct 25 02:19 flux_agent.pristine
+-rw-r--r--  1 root root         275 Oct 25 02:19 flux_agent.service.pristine
+-rw-------  1 root root        6237 Oct 25 02:19 gost.json.pristine
+-rwxrwx---  1 root nogroup 43876976 Oct 25 00:24 paneld.r17d
+drwxr-xr-x  2 root root        4096 Oct 25 03:09 stage
+
+/root/r19-l1/stage/:
+total 12
+drwxr-xr-x 2 root root    4096 Oct 25 03:09 .
+drwxr-xr-x 3 root root    4096 Oct 25 03:09 ..
+-rw-rw---- 1 root nogroup   55 Oct 25 00:24 Dockerfile.backend

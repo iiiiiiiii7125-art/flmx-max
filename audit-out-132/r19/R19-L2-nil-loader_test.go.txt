@@ -1,0 +1,67 @@
+// L2 scratch-only reproduction (NOT part of the audited tree):
+// loader.Load with a nil entry in each class.
+package loader_test
+
+import (
+	"testing"
+
+	"github.com/go-gost/x/config"
+	"github.com/go-gost/x/config/loader"
+	"github.com/go-gost/x/registry"
+)
+
+func runAndCatchL2(f func()) (panicked bool, value any) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			value = r
+		}
+	}()
+	f()
+	return false, nil
+}
+
+func TestL2LoaderNilChainPanics(t *testing.T) {
+	unlock := config.LockMutation()
+	defer unlock()
+	defer cleanupR18F03Registries()
+	cfg := &config.Config{Chains: []*config.ChainConfig{nil}}
+	panicked, v := runAndCatchL2(func() { _ = loader.Load(cfg) })
+	if !panicked {
+		t.Logf("loader.Load(nil chain) did NOT panic")
+	} else {
+		t.Errorf("loader.Load(nil chain) PANICKED: %v", v)
+	}
+}
+
+func TestL2LoaderNilLimiterPanics(t *testing.T) {
+	unlock := config.LockMutation()
+	defer unlock()
+	defer cleanupR18F03Registries()
+	cfg := &config.Config{Limiters: []*config.LimiterConfig{nil}}
+	panicked, v := runAndCatchL2(func() { _ = loader.Load(cfg) })
+	if !panicked {
+		t.Logf("loader.Load(nil limiter) did NOT panic")
+	} else {
+		t.Errorf("loader.Load(nil limiter) PANICKED: %v", v)
+	}
+}
+
+func TestL2LoaderNilServiceErrorsCleanly(t *testing.T) {
+	unlock := config.LockMutation()
+	defer unlock()
+	defer cleanupR18F03Registries()
+	cfg := &config.Config{Services: []*config.ServiceConfig{nil}}
+	panicked, v := runAndCatchL2(func() { _ = loader.Load(cfg) })
+	if panicked {
+		t.Errorf("loader.Load(nil service) PANICKED (want clean error): %v", v)
+		return
+	}
+	err := loader.Load(cfg)
+	if err == nil {
+		t.Errorf("loader.Load(nil service) returned nil error, want non-nil")
+	} else {
+		t.Logf("loader.Load(nil service) clean error: %v", err)
+	}
+	_ = registry.ErrDup
+}

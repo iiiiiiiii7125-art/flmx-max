@@ -1,0 +1,17 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 R19-L1 dbcounts 2026-10-25T03:02:10Z ===
+DB env: name=flux_panel user=flux_panel
+psql: warning: extra command-line argument "docker" ignored
+psql: warning: extra command-line argument "exec" ignored
+psql: warning: extra command-line argument "flux-panel-postgres" ignored
+psql: warning: extra command-line argument "psql" ignored
+     0
+
+ERROR:  relation "nodes" does not exist
+LINE 1: SELECT (SELECT count(*) FROM nodes) AS node,(SELECT count(*)...
+                                     ^
+--- fix strings ---
+sh: 1: strings: not found
+0
+0
+(above: paneld 已删除 count; agent removed-duplicate count)

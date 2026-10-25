@@ -1,0 +1,20 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 offline-recon evidence ===
+MainPID=743803
+NRestarts=0
+ActiveState=active
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:8824/tcp","service":"27_1_0_tcp","time":"2026-10-25T03:16:06.087Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:8824/udp","service":"27_1_0_udp","time":"2026-10-25T03:16:06.087Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:9092/tcp","service":"28_1_0_tcp","time":"2026-10-25T03:16:06.087Z"}
+Oct 25 03:16:06 ip-172-26-9-119 flux_agent[743803]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:9092/udp","service":"28_1_0_udp","time":"2026-10-25T03:16:06.088Z"}
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 收到命令: type=DeleteService requestId=1_1792898181661474480
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 命令详情(已脱敏):  {"data":{"services":["27_1_0_tcp","27_1_0_udp","27_1_0"]},"requestId":"1_1792898181661474480","type":"DeleteService"}
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 收到命令: type=DeleteService requestId=1_1792898181664073380
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 命令详情(已脱敏):  {"data":{"services":["27_1_0_tcp","27_1_0_udp","27_1_0"]},"requestId":"1_1792898181664073380","type":"DeleteService"}
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 收到命令: type=DeleteService requestId=1_1792898181665368953
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 命令详情(已脱敏):  {"data":{"services":["28_1_0_tcp","28_1_0_udp","28_1_0"]},"requestId":"1_1792898181665368953","type":"DeleteService"}
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 收到命令: type=DeleteService requestId=1_1792898181666485188
+Oct 25 03:16:21 ip-172-26-9-119 flux_agent[743803]: 🔔 命令详情(已脱敏):  {"data":{"services":["28_1_0_tcp","28_1_0_udp","28_1_0"]},"requestId":"1_1792898181666485188","type":"DeleteService"}
+--- listeners 8824/9092 (expect none) ---
+no listeners on 8824/9092
+6

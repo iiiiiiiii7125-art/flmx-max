@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 sqlite-census 2026-10-25T03:06:23Z ===
+total 23380
+drwxr-xr-x 2 root root     4096 Oct 25 10:19 .
+drwxr-xr-x 1 root root     4096 Oct 25 10:19 ..
+-rw-r--r-- 1 root root 19763200 Oct 25 10:54 gost.db
+-rw-r--r-- 1 root root    32768 Oct 25 11:06 gost.db-shm
+-rw-r--r-- 1 root root  4128272 Oct 25 11:06 gost.db-wal
+copied
+-rw-r--r-- 1 root root 19763200 Oct 25 03:06 /tmp/r19-l1-gost-copy.db

@@ -1,0 +1,26 @@
+=== killfreeze K1 start=2026-10-25T03:37:43Z initiator=L5 agent_md5=aff338e3676bc56d0f3986a1a62f8fdd ===
+--- backend log: /var/lib/docker/containers/d8f7c16806e500c5902e622ff70b94eb3d337a75c126d22d20ebfc087db0aae2/d8f7c16806e500c5902e622ff70b94eb3d337a75c126d22d20ebfc087db0aae2-json.log
+--- pre: d48f09e132ebe99fe97a619dd72d42d4 services=12
+agent pid=752830 active=active (restart initiator=L5, killfreeze)
+killwatch exit=0
+03:37:49.564 SENT-OK r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=- -> SIGKILL agent pid=752830
+03:37:49.564 KILLED
+--- agent now: active pid=752936
+--- gost frozen: b448b12dc2954bca530eacf22b349fa6 lines=328
+services=12 dup=none
+--- backend sent-ok lines in window (grep whole log tail):
+3
+=== killfreeze K1 end=2026-10-25T03:37:51Z ===
+
+=== killfreeze K2 start=2026-10-25T03:37:51Z initiator=L5 agent_md5=aff338e3676bc56d0f3986a1a62f8fdd ===
+--- backend log: /var/lib/docker/containers/d8f7c16806e500c5902e622ff70b94eb3d337a75c126d22d20ebfc087db0aae2/d8f7c16806e500c5902e622ff70b94eb3d337a75c126d22d20ebfc087db0aae2-json.log
+--- pre: b448b12dc2954bca530eacf22b349fa6 services=12
+agent pid=753045 active=active (restart initiator=L5, killfreeze)
+killwatch exit=1
+03:38:57.462 TIMEOUT no sent-ok seen
+--- agent now: active pid=753045
+--- gost frozen: d48f09e132ebe99fe97a619dd72d42d4 lines=328
+services=12 dup=none
+--- backend sent-ok lines in window (grep whole log tail):
+3
+=== killfreeze K2 end=2026-10-25T03:38:59Z ===

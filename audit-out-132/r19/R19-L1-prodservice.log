@@ -1,0 +1,24 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+[Unit]
+Description=Flux_agent Proxy Service
+After=network.target
+
+[Service]
+WorkingDirectory=/etc/flux_agent
+ExecStart=/etc/flux_agent/flux_agent
+Environment=GODEBUG=disablethp=1
+Restart=on-failure
+# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
+# discarded the agent's startup logs, so a poisoned gost.json left no
+# diagnosable failure reason. Journal keeps them queryable via
+# journalctl -u flux_agent. The binary additionally appends startup
+# failures to agent-startup.log next to agent-upgrade.log (go-gost/main.go).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=flux_agent
+
+[Install]
+WantedBy=multi-user.target
+---
+Docker Compose version v5.6.1
+05449a73f3d21b037eb082be0a5ff438  /root/r17c/flux_agent-prod.service

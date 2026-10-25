@@ -1,0 +1,19 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR19L3A6SubPipelineNormalize
+--- PASS: TestR19L3A6SubPipelineNormalize (0.00s)
+=== RUN   TestR19L3A6RemoteSourceFileSync
+2026/10/25 03:19:39 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (299.299µs)
+2026/10/25 03:19:39 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (390.747µs)
+2026/10/25 03:19:39 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (298.659µs)
+2026/10/25 03:19:39 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (261.423µs)
+2026/10/25 03:19:39 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:19:39 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:19:39 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (397.337µs)
+2026/10/25 03:19:39 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19L3A6RemoteSourceFileSync (0.28s)
+=== RUN   TestR19L3A6SubTrafficBuckets
+--- PASS: TestR19L3A6SubTrafficBuckets (0.01s)
+=== RUN   TestR19L3A6LimitZeroSemantics
+--- PASS: TestR19L3A6LimitZeroSemantics (0.00s)
+PASS
+ok  	go-backend/internal/http/handler	0.309s

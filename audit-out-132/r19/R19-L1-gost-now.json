@@ -1,0 +1,364 @@
+{
+  "services": [
+    {
+      "name": "1_2_1_tcp",
+      "addr": "[::]:31080",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18080"
+          }
+        ]
+      }
+    },
+    {
+      "name": "1_2_1_udp",
+      "addr": "[::]:31080",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18080"
+          }
+        ]
+      }
+    },
+    {
+      "name": "2_5_2_tcp",
+      "addr": "[::]:13101",
+      "limiter": "1",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "2_5_2_udp",
+      "addr": "[::]:13101",
+      "limiter": "1",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "3_5_3_tcp",
+      "addr": "[::]:13102",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "3_5_3_udp",
+      "addr": "[::]:13102",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "4_5_4_tcp",
+      "addr": "[::]:13103",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "4_5_4_udp",
+      "addr": "[::]:13103",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "127.0.0.1:18081"
+          }
+        ]
+      }
+    },
+    {
+      "name": "6_1_0_tcp",
+      "addr": "[::]:14601",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "16.146.199.68:24501"
+          }
+        ]
+      }
+    },
+    {
+      "name": "6_1_0_udp",
+      "addr": "[::]:14601",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "16.146.199.68:24501"
+          }
+        ]
+      }
+    },
+    {
+      "name": "7_1_0_tcp",
+      "addr": "[::]:15096",
+      "handler": {
+        "type": "tcp"
+      },
+      "listener": {
+        "type": "tcp"
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "16.146.199.68:15510"
+          }
+        ]
+      }
+    },
+    {
+      "name": "7_1_0_udp",
+      "addr": "[::]:15096",
+      "handler": {
+        "type": "udp"
+      },
+      "listener": {
+        "type": "udp",
+        "metadata": {
+          "keepAlive": true,
+          "ttl": "30s"
+        }
+      },
+      "forwarder": {
+        "selector": {
+          "strategy": "fifo",
+          "maxFails": 1,
+          "failTimeout": 600000000000
+        },
+        "nodes": [
+          {
+            "name": "node_1",
+            "addr": "16.146.199.68:15510"
+          }
+        ]
+      }
+    }
+  ],
+  "chains": [
+    {
+      "name": "r19l1-chain",
+      "hops": [
+        {
+          "name": "hop-r19l1-chain",
+          "nodes": [
+            {
+              "name": "node-r19l1-chain",
+              "addr": "127.0.0.1:443",
+              "connector": {
+                "type": "relay"
+              },
+              "dialer": {
+                "type": "tcp"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "limiters": [
+    {
+      "name": "1",
+      "limits": [
+        "$ 0.954MB 0.954MB"
+      ]
+    }
+  ],
+  "climiters": [
+    {
+      "name": "rule_conn_limit_2",
+      "limits": [
+        "$ 1"
+      ]
+    },
+    {
+      "name": "rule_conn_limit_12",
+      "limits": [
+        "$ 7"
+      ]
+    },
+    {
+      "name": "rule_conn_limit_29",
+      "limits": [
+        "$ 5"
+      ]
+    }
+  ],
+  "rlimiters": [
+    {
+      "name": "r19l1-rlimiter",
+      "limits": [
+        "$ 1"
+      ]
+    }
+  ]
+}

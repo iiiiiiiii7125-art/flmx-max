@@ -1,0 +1,92 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+#!/bin/bash
+# R19-L5 fastpoll: restart the agent and sample /etc/flux_agent/gost.json
+# every 50ms for 45s, hunting the R17D-OPEN-01 transient duplicate window.
+# Adapted from R18-L5-fastpoll-r18.sh (R=/root/r19; initiator=L5 logged).
+# Usage: bash R19-L5-fastpoll.sh <label> ; log to stdout (caller tees).
+# Any dup sighting saves the full file to /root/r19/fastdup-<label>-<n>.json.
+set -u
+LABEL="${1:-fast}"
+R=/root/r19
+mkdir -p "$R"
+echo "=== fastpoll-r19 $LABEL start=$(date -u +%FT%TZ) initiator=L5 agent_md5=$(md5sum /etc/flux_agent/flux_agent 2>/dev/null | cut -d' ' -f1) ==="
+python3 - "$R" "$LABEL" <<'PYEOF'
+import json, subprocess, sys, time
+from collections import Counter
+R, LABEL = sys.argv[1], sys.argv[2]
+def snap():
+    try:
+        cfg = json.load(open("/etc/flux_agent/gost.json"))
+    except Exception as e:
+        return ("UNREADABLE " + str(e), None)
+    names = [s.get("name", "") for s in cfg.get("services", []) if isinstance(s, dict)]
+    dups = {n: c for n, c in Counter(names).items() if c > 1}
+    return ("services=%d dup=%s" % (len(names), dups if dups else "none"), dups)
+def ts():
+    return time.strftime("%H:%M:%S", time.gmtime()) + ".%03d" % (int(time.time() * 1000) % 1000)
+print(ts() + " pre: " + snap()[0], flush=True)
+subprocess.run(["systemctl", "reset-failed", "flux_agent"], check=False)
+subprocess.run(["systemctl", "restart", "flux_agent"], check=False)
+time.sleep(3)
+print(ts() + " agent restarted (initiator=L5, fastpoll), polling 50ms x 45s", flush=True)
+hits = 0
+last = ""
+t0 = time.monotonic()
+while time.monotonic() - t0 < 45:
+    state, dups = snap()
+    if state != last:
+        print(ts() + " " + state, flush=True)
+        last = state
+    if dups:
+        hits += 1
+        subprocess.run(["cp", "/etc/flux_agent/gost.json", "%s/fastdup-%s-%d.json" % (R, LABEL, hits)], check=False)
+        print(ts() + " DUP SAVED fastdup-%s-%d.json" % (LABEL, hits), flush=True)
+    time.sleep(0.05)
+print(ts() + " post: " + snap()[0] + " dup_sightings=%d" % hits, flush=True)
+PYEOF
+echo "--- agent: $(systemctl is-active flux_agent) pid=$(systemctl show flux_agent -p MainPID --value)"
+echo "--- agent journal AddService/UpdateService/sent-ok lines since restart (last 40):"
+journalctl -u flux_agent --no-pager --since "2 minutes ago" 2>/dev/null | grep -iE "AddService|UpdateService|listening on|bind|sent-ok|self-heal" | tail -40
+echo "--- post md5: $(md5sum /etc/flux_agent/gost.json | cut -d' ' -f1) lines=$(wc -l < /etc/flux_agent/gost.json)"
+echo "=== fastpoll-r19 $LABEL end=$(date -u +%FT%TZ) ==="
+=== L5 deploy head ===
+#!/bin/bash
+# R19-L5 deploy: main@d66042c bits (agent + paneld built in sandbox from the
+# read-only tree; frontend dist reused from /root/r17d/stage/dist — see note)
+# onto the Lightsail test machine. Adapted from R17-FIX-D-deploy.sh.
+# NOTE on frontend dist reuse: `git diff 5473377..d66042c -- vite-frontend`
+# is EMPTY and `git diff 5125ff5..d66042c -- vite-frontend` is EMPTY, i.e.
+# the d66042c frontend source is byte-identical to the fix-r17 source the
+# r17d dist was built from (same pnpm-lock.yaml). The dist is therefore a
+# build of identical source; no pnpm toolchain exists in the sandbox to
+# rebuild it. The dist index.html sha + 59-asset count are verified at
+# deploy time against the R17-L5 served-chunk baseline (58 JS + 1 CSS).
+# Run on the test machine as root; log to /root/r19/R19-L5-deploy.log
+# (caller tees ssh output to the local audit log of the same name).
+# Usage: bash R19-L5-deploy.sh [full|panel]
+#   full  = panel + r19d agent (default)
+#   panel = panel only; agent binary untouched (for Phase A/B kill-freeze
+#           on the un-fixed agent, where the sent-ok signal comes from the
+#           r19d backend's guard dispatch record). The journal unit is
+#           installed in both modes (restored to null unit at restore).
+# Order: stop agent -> backup pristine agent -> install r19d agent +
+# journal unit -> unpack stage -> docker build backend/frontend ->
+# switch compose tags -> compose up -> reset-failed + start agent -> served.
+set -u
+MODE="${1:-full}"
+R=/root/r19
+echo "=== R19-L5 deploy mode=$MODE $(date -u +%FT%TZ) initiator=L5 ==="
+echo "--- pre-state"
+df -h / | tail -1
+grep FLUX_VERSION /root/flmx-panel/.env
+systemctl is-active flux_agent
+md5sum /etc/flux_agent/gost.json /etc/flux_agent/flux_agent
+wc -l /etc/flux_agent/gost.json
+echo "--- stop agent (initiator=L5, deploy r19d)"
+systemctl stop flux_agent; sleep 3
+pgrep -af '/etc/flux_agent/flux_agent' || echo "agent processes gone"
+echo "--- backup pristine agent (expect aff338e3676bc56d0f3986a1a62f8fdd)"
+cp /etc/flux_agent/flux_agent $R/flux_agent.pristine
+md5sum /etc/flux_agent/flux_agent $R/flux_agent.pristine
+echo "--- install r19d agent (md5 recorded in local build log)"
+if [ "$MODE" = "full" ]; then

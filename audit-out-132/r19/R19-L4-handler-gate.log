@@ -1,0 +1,155 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR17B_GuardSkipsWhenAgentConfirmed
+--- PASS: TestR17B_GuardSkipsWhenAgentConfirmed (0.00s)
+=== RUN   TestR17B_GuardSendsOnceWhenUnregistered
+--- PASS: TestR17B_GuardSendsOnceWhenUnregistered (0.00s)
+=== RUN   TestR17B_GuardRecheckSkipsAfterSend
+--- PASS: TestR17B_GuardRecheckSkipsAfterSend (0.00s)
+=== RUN   TestR17B_GuardFreshNotFoundInvalidatesConfirmed
+--- PASS: TestR17B_GuardFreshNotFoundInvalidatesConfirmed (0.00s)
+=== RUN   TestR17B_GuardConcurrentDuplicateJoinsInFlight
+--- PASS: TestR17B_GuardConcurrentDuplicateJoinsInFlight (0.20s)
+=== RUN   TestR17B_GuardFailedSendDoesNotConfirm
+--- PASS: TestR17B_GuardFailedSendDoesNotConfirm (0.00s)
+=== RUN   TestR17B_GuardInvalidateOnDeleteAndOffline
+--- PASS: TestR17B_GuardInvalidateOnDeleteAndOffline (0.00s)
+=== RUN   TestR17B_GuardEmptyNamesFailClosed
+--- PASS: TestR17B_GuardEmptyNamesFailClosed (0.00s)
+=== RUN   TestR17B_GuardConfirmedIsPerNode
+--- PASS: TestR17B_GuardConfirmedIsPerNode (0.00s)
+=== RUN   TestR17B_GuardFailedUpdateInvalidatesConfirmedEvenWithoutNotFound
+--- PASS: TestR17B_GuardFailedUpdateInvalidatesConfirmedEvenWithoutNotFound (0.00s)
+=== RUN   TestConfigGetAllowsPublicCloudflareSiteKeyWithoutAuthForCachedLoginPage
+2026/10/25 03:06:38 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (138.168µs)
+2026/10/25 03:06:38 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (429.075µs)
+2026/10/25 03:06:38 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (222.624µs)
+2026/10/25 03:06:38 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (194.212µs)
+2026/10/25 03:06:38 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:38 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:38 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (537.888µs)
+2026/10/25 03:06:38 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:39 POST /api/v1/config/get -> 200 (366.22µs)
+--- PASS: TestConfigGetAllowsPublicCloudflareSiteKeyWithoutAuthForCachedLoginPage (0.51s)
+=== RUN   TestConfigGetRejectsSensitiveKeysWithoutAuth
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (163.325µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (214.332µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (173.3µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (156.374µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:39 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:39 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (131.457µs)
+2026/10/25 03:06:39 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:39 POST /api/v1/config/get -> 200 (43.866µs)
+--- PASS: TestConfigGetRejectsSensitiveKeysWithoutAuth (0.41s)
+=== RUN   TestConfigGetAllowsSensitiveKeysForAdmin
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (144.507µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (576.436µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (559.39µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (527.393µs)
+2026/10/25 03:06:39 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:39 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:39 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (524.188µs)
+2026/10/25 03:06:39 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:40 POST /api/v1/config/get -> 200 (371.207µs)
+--- PASS: TestConfigGetAllowsSensitiveKeysForAdmin (0.51s)
+=== RUN   TestConfigGetNeverReturnsLicenseCredentials
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (156.375µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (196.955µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (164.517µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (107.251µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:40 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:40 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (155.944µs)
+2026/10/25 03:06:40 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:40 POST /api/v1/config/get -> 200 (206.561µs)
+2026/10/25 03:06:40 POST /api/v1/config/get -> 200 (92.87µs)
+2026/10/25 03:06:40 POST /api/v1/config/get -> 200 (71.157µs)
+--- PASS: TestConfigGetNeverReturnsLicenseCredentials (0.40s)
+=== RUN   TestConfigGetNeverReturnsGistCredentials
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (479.08µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (415.203µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (167.772µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (107.622µs)
+2026/10/25 03:06:40 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:40 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:40 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (148.112µs)
+2026/10/25 03:06:40 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:41 POST /api/v1/config/get -> 200 (321.914µs)
+2026/10/25 03:06:41 POST /api/v1/config/get -> 200 (96.966µs)
+2026/10/25 03:06:41 POST /api/v1/config/list -> 200 (143.937µs)
+2026/10/25 03:06:41 POST /api/v1/config/get -> 200 (7.422µs)
+2026/10/25 03:06:41 POST /api/v1/config/get -> 200 (5.488µs)
+--- PASS: TestConfigGetNeverReturnsGistCredentials (0.48s)
+=== RUN   TestGistDue
+--- PASS: TestGistDue (0.00s)
+=== RUN   TestGistStatusTokenHint
+--- PASS: TestGistStatusTokenHint (0.00s)
+=== RUN   TestR14F06F04AttachLogsTargetsQueryError
+--- PASS: TestR14F06F04AttachLogsTargetsQueryError (0.00s)
+=== RUN   TestR14F08BatchResumeDbWriteFailureReportsRealReason
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (153.21µs)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (293.971µs)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (2.898383ms)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (443.296µs)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:41 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:41 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (2.887417ms)
+2026/10/25 03:06:41 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:41 nftables forward batch resume failed op=db_write_after_reconcile forward_id=1 err=forward is pending delete
+--- PASS: TestR14F08BatchResumeDbWriteFailureReportsRealReason (0.44s)
+=== RUN   TestR14F08ParamErrorsUseErrDefault
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.738441ms)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.668776ms)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (1.522807ms)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.832302ms)
+2026/10/25 03:06:41 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:41 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:41 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (2.136439ms)
+2026/10/25 03:06:41 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+=== RUN   TestR14F08ParamErrorsUseErrDefault/login_非法_JSON
+=== RUN   TestR14F08ParamErrorsUseErrDefault/login_空用户名
+=== RUN   TestR14F08ParamErrorsUseErrDefault/login_空密码
+=== RUN   TestR14F08ParamErrorsUseErrDefault/backupExport_非法_JSON
+=== RUN   TestR14F08ParamErrorsUseErrDefault/updateAnnouncement_非法_JSON
+--- PASS: TestR14F08ParamErrorsUseErrDefault (0.42s)
+    --- PASS: TestR14F08ParamErrorsUseErrDefault/login_非法_JSON (0.00s)
+    --- PASS: TestR14F08ParamErrorsUseErrDefault/login_空用户名 (0.00s)
+    --- PASS: TestR14F08ParamErrorsUseErrDefault/login_空密码 (0.00s)
+    --- PASS: TestR14F08ParamErrorsUseErrDefault/backupExport_非法_JSON (0.00s)
+    --- PASS: TestR14F08ParamErrorsUseErrDefault/updateAnnouncement_非法_JSON (0.00s)
+=== RUN   TestR14F08ValidateChainVersionRejectsSnellVia
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.056307ms)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.221134ms)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (1.805181ms)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (932.631µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:42 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:42 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (505.79µs)
+2026/10/25 03:06:42 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR14F08ValidateChainVersionRejectsSnellVia (0.37s)
+=== RUN   TestR14F08SnellViaSplitSaveRejected
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (784.278µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.423899ms)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (916.978µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.632552ms)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:42 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:42 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (2.604332ms)
+2026/10/25 03:06:42 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR14F08SnellViaSplitSaveRejected (0.37s)
+=== RUN   TestR14F08SnellPoisonedRowHealedOnApply
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (132.279µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (155.774µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (156.746µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (101.813µs)
+2026/10/25 03:06:42 migration r5b4_v1_port_user_unique applied
+2026/10/25 03:06:42 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 03:06:42 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (214.803µs)
+2026/10/25 03:06:42 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 03:06:43 snell poisoned row healed kernel_id=1 inbound_id=2 name="snell-poisoned": Snell 内核不支持链式出站/分流，已清除其出站与分流配置改直连
+2026/10/25 03:06:43 kernel apply healed snell poisoned rows kernel_id=1 inbounds=[snell-poisoned]
+--- PASS: TestR14F08SnellPoisonedRowHealedOnApply (0.34s)
+=== RUN   TestR8B1ENCVersionGateBoundary
+--- PASS: TestR8B1ENCVersionGateBoundary (0.00s)
+PASS
+ok  	go-backend/internal/http/handler	4.558s

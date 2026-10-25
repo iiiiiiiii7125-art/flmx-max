@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Oct 25 03:20:20 ip-172-26-9-119 flux_agent[745041]: {"handler":"tcp","kind":"service","level":"info","listener":"tcp","msg":"listening on [::]:8618/tcp","service":"29_1_0_tcp","time":"2026-10-25T03:20:20.529Z"}
+Oct 25 03:20:20 ip-172-26-9-119 flux_agent[745041]: {"handler":"udp","kind":"service","level":"info","listener":"udp","msg":"listening on [::]:8618/udp","service":"29_1_0_udp","time":"2026-10-25T03:20:20.529Z"}
+Oct 25 03:20:26 ip-172-26-9-119 flux_agent[745041]: 🔔 收到命令: type=DeleteService requestId=1_1792898426154278545
+Oct 25 03:20:26 ip-172-26-9-119 flux_agent[745041]: 🔔 命令详情(已脱敏):  {"data":{"services":["7_1_0_tcp","7_1_0_udp","7_1_0"]},"requestId":"1_1792898426154278545","type":"DeleteService"}
+Oct 25 03:20:36 ip-172-26-9-119 flux_agent[745041]: 🔔 收到命令: type=DeleteService requestId=1_1792898436085363988
+Oct 25 03:20:36 ip-172-26-9-119 flux_agent[745041]: 🔔 命令详情(已脱敏):  {"data":{"services":["29_1_0_tcp","29_1_0_udp","29_1_0"]},"requestId":"1_1792898436085363988","type":"DeleteService"}
+Oct 25 03:20:36 ip-172-26-9-119 flux_agent[745041]: 🔔 收到命令: type=DeleteService requestId=1_1792898436112970688
+Oct 25 03:20:36 ip-172-26-9-119 flux_agent[745041]: 🔔 命令详情(已脱敏):  {"data":{"services":["29_1_0_tcp","29_1_0_udp","29_1_0"]},"requestId":"1_1792898436112970688","type":"DeleteService"}
+--- current gost services ---
+['1_2_1_tcp', '1_2_1_udp', '2_5_2_tcp', '2_5_2_udp', '3_5_3_tcp', '3_5_3_udp', '4_5_4_tcp', '4_5_4_udp', '6_1_0_tcp', '6_1_0_udp', '7_1_0_tcp', '7_1_0_udp']
+climiters: ['rule_conn_limit_2', 'rule_conn_limit_12', 'rule_conn_limit_29']

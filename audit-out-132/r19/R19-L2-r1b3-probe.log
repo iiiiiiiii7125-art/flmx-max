@@ -1,0 +1,13 @@
+== R1B3 probe, scratch copy of d66042c tree (/tmp/l2-backend), go1.25.1 ==
+--- run 1: no env (as committed)
+=== RUN   TestR1B3TunnelDeleteOnlineRealFailureAborts
+    r1_b3_tunnel_delete_offline_test.go:176: L2-PROBE remote handler hits=0 (0 means the fake node was never reached)
+--- PASS: TestR1B3TunnelDeleteOnlineRealFailureAborts (1.34s)
+PASS
+ok  	go-backend/internal/http/handler	1.396s
+--- run 2: FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true
+=== RUN   TestR1B3TunnelDeleteOnlineRealFailureAborts
+    r1_b3_tunnel_delete_offline_test.go:176: L2-PROBE remote handler hits=1 (0 means the fake node was never reached)
+--- PASS: TestR1B3TunnelDeleteOnlineRealFailureAborts (1.09s)
+PASS
+ok  	go-backend/internal/http/handler	1.209s

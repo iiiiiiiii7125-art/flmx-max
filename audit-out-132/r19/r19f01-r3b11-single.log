@@ -1,0 +1,13 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR3B11UserQuotaSustainedCrossingStillSuppressed
+2026/10/25 04:33:00 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.190398ms)
+2026/10/25 04:33:00 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (948.855µs)
+2026/10/25 04:33:00 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (3.214145ms)
+2026/10/25 04:33:00 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (4.195509ms)
+2026/10/25 04:33:00 migration r5b4_v1_port_user_unique applied
+2026/10/25 04:33:00 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 04:33:00 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (5.424584ms)
+2026/10/25 04:33:00 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR3B11UserQuotaSustainedCrossingStillSuppressed (1.60s)
+PASS
+ok  	go-backend/internal/http/handler	1.727s

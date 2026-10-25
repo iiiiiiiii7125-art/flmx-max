@@ -1,0 +1,6 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== initiator=L1 F-01 offline leg: stop agent 2026-10-25T03:15:34Z ===
+agent processes gone
+inactive
+b0799adf030f259909092c9590ef292c  /etc/flux_agent/gost.json
+services: ['1_2_1_tcp', '1_2_1_udp', '27_1_0_tcp', '27_1_0_udp', '28_1_0_tcp', '28_1_0_udp', '2_5_2_tcp', '2_5_2_udp', '3_5_3_tcp', '3_5_3_udp', '4_5_4_tcp', '4_5_4_udp', '6_1_0_tcp', '6_1_0_udp', '7_1_0_tcp', '7_1_0_udp']

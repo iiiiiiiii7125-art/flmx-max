@@ -1,0 +1,70 @@
+== socket nil repro, scratch copy of d66042c tree (/tmp/l2-gost), go1.25.1 ==
+--- TestL2UpdateChainNilPanics
+=== RUN   TestL2UpdateChainNilPanics
+    l2_nil_panic_test.go:43: updateChain PANICKED on nil chain entry: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestL2UpdateChainNilPanics (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/socket	0.033s
+FAIL
+--- TestL2UpdateLimiterNilPanics
+=== RUN   TestL2UpdateLimiterNilPanics
+    l2_nil_panic_test.go:61: updateLimiter PANICKED on nil limiter entry: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestL2UpdateLimiterNilPanics (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/socket	0.059s
+FAIL
+--- TestL2UpdateConnLimiterNilPanics
+=== RUN   TestL2UpdateConnLimiterNilPanics
+    l2_nil_panic_test.go:79: updateConnLimiter PANICKED on nil conn-limiter entry: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestL2UpdateConnLimiterNilPanics (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/socket	0.016s
+FAIL
+--- TestL2UpdateServicesNilPanics
+=== RUN   TestL2UpdateServicesNilPanics
+    l2_nil_panic_test.go:97: updateServices PANICKED on nil service entry: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestL2UpdateServicesNilPanics (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/socket	0.052s
+FAIL
+--- TestL2DeleteChainNilPanics (expect panic + post-panic config.Set deadlock dump)
+=== RUN   TestL2DeleteChainNilPanics
+    l2_nil_panic_test.go:114: deleteChain PANICKED on nil chain entry: runtime error: invalid memory address or nil pointer dereference
+panic: test timed out after 30s
+	running tests:
+		TestL2DeleteChainNilPanics (30s)
+
+goroutine 11 [running]:
+testing.(*M).startAlarm.func1()
+	/home/hatch/go/src/testing/testing.go:2682 +0x345
+created by time.goFunc
+	/home/hatch/go/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0xc0001016c0, {0xfee4dd?, 0xc0001bfb30?}, 0x102adb8)
+	/home/hatch/go/src/testing/testing.go:2005 +0x485
+testing.runTests.func1(0xc0001016c0)
+	/home/hatch/go/src/testing/testing.go:2477 +0x37
+testing.tRunner(0xc0001016c0, 0xc0001bfc70)
+	/home/hatch/go/src/testing/testing.go:1934 +0xea
+testing.runTests(0xc000130eb8, {0x183c460, 0x6c, 0x6c}, {0x7?, 0xc0001e71c0?, 0x1844020?})
+	/home/hatch/go/src/testing/testing.go:2475 +0x4b4
+testing.(*M).Run(0xc00021fcc0)
+	/home/hatch/go/src/testing/testing.go:2337 +0x63a
+main.main()
+	_testmain.go:259 +0x9b
+
+goroutine 26 [sync.Mutex.Lock]:
+internal/sync.runtime_SemacquireMutex(0x516?, 0xe?, 0x560d60?)
+	/home/hatch/go/src/runtime/sema.go:95 +0x25
+internal/sync.(*Mutex).lockSlow(0x1870ba0)
+	/home/hatch/go/src/internal/sync/mutex.go:149 +0x15d
+internal/sync.(*Mutex).Lock(...)
+	/home/hatch/go/src/internal/sync/mutex.go:70
+sync.(*Mutex).Lock(...)
+	/home/hatch/go/src/sync/mutex.go:46
+sync.(*RWMutex).Lock(0x17b9820?)
+	/home/hatch/go/src/sync/rwmutex.go:150 +0x32
+github.com/go-gost/x/config.Set(0xc000101a40)
+	/tmp/l2-gost/x/config/config.go:128 +0x2f
+github.com/go-gost/x/socket.TestL2DeleteChainNilPanics.func1()

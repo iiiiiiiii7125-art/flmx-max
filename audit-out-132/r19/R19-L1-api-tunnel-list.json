@@ -1,0 +1,111 @@
+{
+ "code": 0,
+ "msg": "操作成功",
+ "ts": 1792898681324,
+ "data": [
+  {
+   "chainNodes": [],
+   "createdTime": 1792589126207,
+   "engine": "",
+   "flow": 2,
+   "id": 4,
+   "inIp": "2600:1f13:14d:a300:fd27:87f4:a509:a344",
+   "inNodeId": [
+    {
+     "chainType": 1,
+     "inx": 1,
+     "nodeId": 1,
+     "protocol": "tls",
+     "strategy": "round"
+    }
+   ],
+   "inx": -3,
+   "ipPreference": "",
+   "name": "a2-t-ratio2",
+   "outNodeId": [],
+   "probeTargetHost": "",
+   "probeTargetPort": 0,
+   "status": 1,
+   "trafficRatio": 2,
+   "type": 1
+  },
+  {
+   "chainNodes": [],
+   "createdTime": 1792589126196,
+   "engine": "",
+   "flow": 1,
+   "id": 3,
+   "inIp": "2600:1f13:14d:a300:fd27:87f4:a509:a344",
+   "inNodeId": [
+    {
+     "chainType": 1,
+     "inx": 1,
+     "nodeId": 1,
+     "protocol": "tls",
+     "strategy": "round"
+    }
+   ],
+   "inx": -2,
+   "ipPreference": "",
+   "name": "a2-t-flow1",
+   "outNodeId": [],
+   "probeTargetHost": "",
+   "probeTargetPort": 0,
+   "status": 1,
+   "trafficRatio": 1,
+   "type": 1
+  },
+  {
+   "chainNodes": [],
+   "createdTime": 1792589126178,
+   "engine": "",
+   "flow": 2,
+   "id": 2,
+   "inIp": "2600:1f13:14d:a300:fd27:87f4:a509:a344",
+   "inNodeId": [
+    {
+     "chainType": 1,
+     "inx": 1,
+     "nodeId": 1,
+     "protocol": "tls",
+     "strategy": "round"
+    }
+   ],
+   "inx": -1,
+   "ipPreference": "",
+   "name": "a2-t-flow2",
+   "outNodeId": [],
+   "probeTargetHost": "",
+   "probeTargetPort": 0,
+   "status": 1,
+   "trafficRatio": 1,
+   "type": 1
+  },
+  {
+   "chainNodes": [],
+   "createdTime": 1792587544782,
+   "engine": "",
+   "flow": 1,
+   "id": 1,
+   "inIp": "2600:1f13:14d:a300:fd27:87f4:a509:a344",
+   "inNodeId": [
+    {
+     "chainType": 1,
+     "inx": 1,
+     "nodeId": 1,
+     "protocol": "tls",
+     "strategy": "round"
+    }
+   ],
+   "inx": 0,
+   "ipPreference": "",
+   "name": "W10-T1",
+   "outNodeId": [],
+   "probeTargetHost": "",
+   "probeTargetPort": 0,
+   "status": 1,
+   "trafficRatio": 1,
+   "type": 1
+  }
+ ]
+}

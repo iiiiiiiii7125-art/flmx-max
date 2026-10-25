@@ -1,0 +1,18 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== panel backend log 03:19:30-03:21:30 ===
+2026/10/25 11:20:21 tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=7 forward_id=29 err=S-04: 节点离线，转发未完全删除，离线节点: [1]
+2026/10/25 11:20:21 POST /api/v1/tunnel/delete -> 200 (46.676133ms)
+=== watchers/cron/timers ===
+root         444  0.0  0.1  28696   840 ?        Ss   Oct22   0:17 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+root       82797  0.0  0.0  99620   256 ?        S    Oct23   0:20 python3 -m http.server 28080 --bind 0.0.0.0
+root      745323  0.5  1.8  15752  8688 ?        S    03:21   0:00 python3 - /root/r19 A2
+bash: line 1: crontab: command not found
+NEXT                        LEFT          LAST                        PASSED       UNIT                         ACTIVATES
+Sun 2026-10-25 06:28:15 UTC 3h 6min left  Sat 2026-10-24 06:53:53 UTC 20h ago      apt-daily-upgrade.timer      apt-daily-upgrade.service
+Sun 2026-10-25 12:28:39 UTC 9h left       Sat 2026-10-24 20:32:08 UTC 6h ago       apt-daily.timer              apt-daily.service
+Sun 2026-10-25 21:09:28 UTC 17h left      Sat 2026-10-24 21:09:28 UTC 6h ago       systemd-tmpfiles-clean.timer systemd-tmpfiles-clean.service
+Mon 2026-10-26 00:00:00 UTC 20h left      Sun 2026-10-25 00:00:07 UTC 3h 21min ago dpkg-db-backup.timer         dpkg-db-backup.service
+Mon 2026-10-26 00:50:45 UTC 21h left      Wed 2026-10-21 12:32:17 UTC 3 days ago   fstrim.timer                 fstrim.service
+Mon 2026-10-26 05:23:51 UTC 1 day 2h left Sun 2026-10-25 03:12:17 UTC 9min ago     man-db.timer                 man-db.service
+Sun 2026-11-01 03:10:13 UTC 6 days left   Sun 2026-10-25 03:10:18 UTC 11min ago    e2scrub_all.timer            e2scrub_all.service
+=== who restarted: auth log / sudo? ===
