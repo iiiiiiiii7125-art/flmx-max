@@ -59,3 +59,120 @@ func DeduplicateServices(cfg *Config) []string {
 	cfg.Services = kept
 	return removed
 }
+
+// R18-F03: 启动自愈从仅 Services（R17-A）扩展到 chains / limiters /
+// climiters。毒化 gost.json 里同名链/限流器各两份时，未经去重进入
+// loader.Load 会在第二个同名项的 Register 处报 registry: duplicate
+// object、program.Start 返回错误、agent 退出——与 R17-X-01 的服务毒化
+// 同型（链/限流器无监听器 eager 绑定，故只有 duplicate object 这一支）。
+// 三类落盘在同一 gost.json、同一 PersistNow 路径、同一 program.go 接线
+// 点（Parse 之后、loader.Load 之前），故扩展无结构性障碍。
+//
+// 口径与 DeduplicateServices 一致：保留首次出现，去掉后续同名项（名按
+// TrimSpace 后比较），nil 项原样保留。DeduplicateServices 保持原实现不
+// 动（R17 已证稳），三类新函数共用下方的 dedupeNamed helper。
+func HealPersistedChains(cfg *Config) ([]string, error) {
+	removed := DeduplicateChains(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateChains removes later entries in cfg.Chains that repeat an
+// earlier chain name, keeping the first occurrence. See DeduplicateServices
+// for the rule; nil chain entries are kept as-is.
+func DeduplicateChains(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Chains, func(ch *ChainConfig) string { return ch.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Chains = kept
+	return removed
+}
+
+func HealPersistedLimiters(cfg *Config) ([]string, error) {
+	removed := DeduplicateLimiters(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateLimiters removes later entries in cfg.Limiters that repeat an
+// earlier limiter name, keeping the first occurrence. Nil entries are kept
+// as-is.
+func DeduplicateLimiters(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Limiters, func(lim *LimiterConfig) string { return lim.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Limiters = kept
+	return removed
+}
+
+func HealPersistedCLimiters(cfg *Config) ([]string, error) {
+	removed := DeduplicateCLimiters(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateCLimiters removes later entries in cfg.CLimiters that repeat
+// an earlier conn limiter name, keeping the first occurrence. Nil entries
+// are kept as-is.
+func DeduplicateCLimiters(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.CLimiters, func(lim *LimiterConfig) string { return lim.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.CLimiters = kept
+	return removed
+}
+
+// dedupeNamed is the shared first-wins dedupe behind DeduplicateChains /
+// DeduplicateLimiters / DeduplicateCLimiters: names compared after trimming
+// whitespace, nil entries kept as-is. It returns the kept slice and the
+// removed names (untrimmed, in removal order); when nothing was removed it
+// returns (nil, nil) so callers leave the config untouched.
+func dedupeNamed[T any](items []*T, nameOf func(*T) string) ([]*T, []string) {
+	seen := make(map[string]struct{}, len(items))
+	var removed []string
+	kept := items[:0]
+	for _, item := range items {
+		if item == nil {
+			kept = append(kept, item)
+			continue
+		}
+		name := strings.TrimSpace(nameOf(item))
+		if _, ok := seen[name]; ok {
+			removed = append(removed, nameOf(item))
+			continue
+		}
+		seen[name] = struct{}{}
+		kept = append(kept, item)
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	return kept, removed
+}
