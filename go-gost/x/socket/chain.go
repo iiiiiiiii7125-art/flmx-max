@@ -32,7 +32,30 @@ func createChain(req createChainRequest) error {
 	}
 
 	return config.OnUpdate(func(c *config.Config) error {
-		c.Chains = append(c.Chains, &req.Data)
+		// R18-F03: 同名则替换（与 updateChain 同口径），不用无去重 append——
+		// 链已在配置中、但不在注册表里时，重复 AddChain 下发会把第二份同名链
+		// 写进配置并落盘、毒化 gost.json。配置里已有的多余同名副本一并清除。
+		// 与 updateChain 的两处有意差异：名字按 TrimSpace 后比较（与
+		// DeduplicateServices/DeduplicateChains 同口径）；nil 项做 guard
+		// 保留原项不 panic（updateChain 直接取 .Name，nil 项会 panic）。
+		data := req.Data
+		replaced := false
+		kept := make([]*config.ChainConfig, 0, len(c.Chains)+1)
+		for _, existing := range c.Chains {
+			if existing != nil && strings.TrimSpace(existing.Name) == data.Name {
+				if replaced {
+					continue
+				}
+				kept = append(kept, &data)
+				replaced = true
+				continue
+			}
+			kept = append(kept, existing)
+		}
+		if !replaced {
+			kept = append(kept, &data)
+		}
+		c.Chains = kept
 		return nil
 	})
 }

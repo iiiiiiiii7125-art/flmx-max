@@ -73,7 +73,8 @@ func (p *program) Start() (err error) {
 		return err
 	}
 
-	// R17-A: 存量毒化 gost.json 自愈（见 healPersistedConfig）。
+	// R17-A: 存量毒化 gost.json 自愈（见 healPersistedConfig；R18-F03 扩展
+	// 到 chains / limiters / climiters）。
 	healPersistedConfig(cfg)
 
 	if outputFormat != "" {
@@ -299,7 +300,8 @@ func (p *program) reloadConfig() error {
 	if err != nil {
 		return err
 	}
-	// R17-A: SIGHUP 重载走同一加载路径，毒化文件同样先自愈。
+	// R17-A: SIGHUP 重载走同一加载路径，毒化文件同样先自愈（R18-F03：含
+	// chains / limiters / climiters）。
 	healPersistedConfig(cfg)
 	if err := loader.Reload(cfg, p.run); err != nil {
 		return err
@@ -315,21 +317,35 @@ func (p *program) reloadConfig() error {
 	return nil
 }
 
-// healPersistedConfig 去重启动/重载时加载的落盘配置（R17-A），返回被去掉
-// 的重复服务名。存量 gost.json 若含重复服务名，loader.Load 会在第二个
-// 同名服务处失败（监听器 eager 绑定报 address already in use，或
-// Register 报 registry: duplicate object），program.Start 直接返回错误、
-// agent 退出——故先去重（保留首次出现）再加载；去重后把清理过的配置重新
-// 落盘，否则下次启动仍会读到毒化文件。去重了哪些服务名以 Warn 日志写明。
-// 落盘失败只告警、不阻塞启动（下次启动会再次自愈）。
+// healPersistedConfig 去重启动/重载时加载的落盘配置（R17-A 仅服务；
+// R18-F03 扩展到链与限流器），返回被去掉的重复名（四类合并）。存量 gost.json
+// 若含重复服务名，loader.Load 会在第二个同名服务处失败（监听器 eager 绑定报
+// address already in use，或 Register 报 registry: duplicate object）；若含
+// 重复链/限流器名，同样在第二个同名项的 Register 处报 registry: duplicate
+// object——任一分支都使 program.Start 直接返回错误、agent 退出，故先去重
+// （保留首次出现）再加载；去重后把清理过的配置重新落盘，否则下次启动仍会读
+// 到毒化文件。去重了哪些名以 Warn 日志按类写明。落盘失败只告警、不阻塞启动
+// （下次启动会再次自愈）。四类各调一次 Heal*、各落盘一次（毒化多类时最多
+// 4 次原子写；最终落盘文件含全部四类的愈合结果）。
 func healPersistedConfig(cfg *config.Config) []string {
-	removed, err := config.HealPersistedServices(cfg)
+	var removed []string
+	heal := func(kind string, fn func(*config.Config) ([]string, error)) {
+		names, err := fn(cfg)
+		if len(names) == 0 {
+			return
+		}
+		logger.Default().Warnf("startup config self-heal: removed duplicate %s(s) %v from persisted config", kind, names)
+		if err != nil {
+			logger.Default().Warnf("startup config self-heal: failed to persist deduplicated config: %v", err)
+		}
+		removed = append(removed, names...)
+	}
+	heal("service", config.HealPersistedServices)
+	heal("chain", config.HealPersistedChains)
+	heal("limiter", config.HealPersistedLimiters)
+	heal("conn limiter", config.HealPersistedCLimiters)
 	if len(removed) == 0 {
 		return nil
-	}
-	logger.Default().Warnf("startup config self-heal: removed duplicate service(s) %v from persisted config", removed)
-	if err != nil {
-		logger.Default().Warnf("startup config self-heal: failed to persist deduplicated config: %v", err)
 	}
 	return removed
 }
