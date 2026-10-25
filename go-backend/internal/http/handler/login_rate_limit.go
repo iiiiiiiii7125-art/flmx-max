@@ -66,6 +66,29 @@ func TrustedProxyHops() int {
 	return n
 }
 
+// trustedXFFChainLen 推导实际可信代理链长 P。
+//
+// XFF 由可信代理逐跳追加：每跳代理追加一个条目（它看到的上游 IP），
+// 故从右向左连续的可信代理 IP 条目数 + 直接对端（RemoteAddr 本身
+// 就是一跳可信代理）= 实际可信代理数 P。左侧预置条目（攻击者可控）
+// 不在此列——信任边界不可由左侧预置移动。
+//
+// 用途：调用方以 hops <= P 为采信 XFF 的前提；hops > P 即超配，
+// 须 fail-closed 回 RemoteAddr，不得取到预置条目（R24-X-01）。
+// 判定谓词由调用方给：浏览器侧用 isTrustedProxyIP（回环/私网/
+// 链路本地），联邦侧用“落在已配置可信 CIDR 内”。
+func trustedXFFChainLen(entries []string, isTrusted func(net.IP) bool) int {
+	run := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		ip := parseIPLiteral(entries[i])
+		if ip == nil || !isTrusted(ip) {
+			break
+		}
+		run++
+	}
+	return run + 1 // +1：直接对端 RemoteAddr 本身就是一跳可信代理
+}
+
 // loginClientIP 浏览器侧客户端 IP 解析（登录限流用）。
 //
 // 信任模型：只有当直接对端（RemoteAddr）落在可信代理范围
@@ -76,6 +99,9 @@ func TrustedProxyHops() int {
 // 其前一个条目是第一跳可信代理实际看到的客户端 IP。
 // 链长不足（拓扑与跳数配置不符）或选中条目非法时，回退到 RemoteAddr，
 // 绝不因单一条目非法就信任整条链。
+// R24-X-01：链长按可信条目计量，不按总条目数计量——hops 超过实际
+// 可信代理链长（trustedXFFChainLen）时 fail-closed 回 RemoteAddr，
+// 信任边界不可由攻击者预置的左侧条目移动。
 func loginClientIP(r *http.Request) net.IP {
 	remoteIP := parseIPLiteral(r.RemoteAddr)
 	if !isTrustedProxyIP(remoteIP) {
@@ -87,6 +113,12 @@ func loginClientIP(r *http.Request) net.IP {
 	}
 	hops := TrustedProxyHops()
 	if hops <= 0 {
+		return remoteIP
+	}
+	// R24-X-01：hops 超配（大于实际可信代理链长）时，idx = len-hops
+	// 会落在攻击者可控的左侧预置条目上。先夹紧：超配即 fail-closed。
+	if chainLen := trustedXFFChainLen(entries, isTrustedProxyIP); hops > chainLen {
+		log.Printf("warning: XFF has %d entries but trusted proxy chain is %d hops (FLMX_TRUSTED_PROXY_HOPS=%d); ignoring XFF (fail-closed), using RemoteAddr", len(entries), chainLen, hops)
 		return remoteIP
 	}
 	idx := len(entries) - hops

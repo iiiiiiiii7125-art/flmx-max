@@ -72,7 +72,10 @@ func TestA001_TrustedProxyHops(t *testing.T) {
 
 	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "2")
 	// Caddy→nginx→backend：XFF="client, caddy"，取最左
-	got = loginClientIP(loginReqWithXFF("10.0.0.5:1", "198.51.100.9, 192.0.2.1"))
+	// R24-X-01 夹具修正：代理条目须落在可信范围（本例用私网 IP），
+	// 否则链长估计无法将其确认为代理追加（见 trustedXFFChainLen）；
+	// 断言一字不动——正确 2 跳链仍取客户端。
+	got = loginClientIP(loginReqWithXFF("10.0.0.5:1", "198.51.100.9, 192.168.1.1"))
 	if got.String() != "198.51.100.9" {
 		t.Fatalf("hops=2: got %v, want 198.51.100.9", got)
 	}

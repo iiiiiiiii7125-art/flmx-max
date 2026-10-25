@@ -2306,7 +2306,8 @@ func federationClientIP(r *http.Request) net.IP {
 	if remoteIP == nil {
 		return nil
 	}
-	for _, cidr := range federationTrustedProxyCIDRs() {
+	cidrs := federationTrustedProxyCIDRs()
+	for _, cidr := range cidrs {
 		if !cidr.Contains(remoteIP) {
 			continue
 		}
@@ -2315,6 +2316,21 @@ func federationClientIP(r *http.Request) net.IP {
 			return remoteIP
 		}
 		entries := splitXFFEntries(r.Header.Get("X-Forwarded-For"))
+		// R24-X-01：同 loginClientIP，信任边界不可由左侧预置移动。
+		// 联邦链上的代理 IP 应落在已配置的可信 CIDR 内；hops 超过
+		// 实际可信代理链长即超配，fail-closed 回 RemoteAddr。
+		isFedProxy := func(ip net.IP) bool {
+			for _, c := range cidrs {
+				if c.Contains(ip) {
+					return true
+				}
+			}
+			return false
+		}
+		if chainLen := trustedXFFChainLen(entries, isFedProxy); hops > chainLen {
+			log.Printf("warning: federation XFF has %d entries but trusted proxy chain is %d hops (FLMX_TRUSTED_PROXY_HOPS=%d); ignoring XFF (fail-closed), using RemoteAddr", len(entries), chainLen, hops)
+			return remoteIP
+		}
 		if len(entries) >= hops {
 			if ip := parseIPLiteral(entries[len(entries)-hops]); ip != nil {
 				return ip

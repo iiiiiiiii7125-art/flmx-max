@@ -64,8 +64,11 @@ func TestA001b_FederationXFFMultiEntryFromRight(t *testing.T) {
 	}
 
 	// hops=2：取倒数第二（1.1.1.1）
+	// R24-X-01 夹具修正：代理条目须落在已配置可信 CIDR 内（本例用
+	// 192.168.1.1），否则链长估计无法将其确认为代理追加（见
+	// trustedXFFChainLen）；断言一字不动——正确 2 跳链仍取倒数第二。
 	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "2")
-	got = federationClientIP(fedReq("192.168.1.50:1234", "1.1.1.1, 10.0.0.1"))
+	got = federationClientIP(fedReq("192.168.1.50:1234", "1.1.1.1, 192.168.1.1"))
 	if got == nil || got.String() != "1.1.1.1" {
 		t.Fatalf("hops=2 multi-entry: got %v, want 1.1.1.1 (second from right)", got)
 	}
