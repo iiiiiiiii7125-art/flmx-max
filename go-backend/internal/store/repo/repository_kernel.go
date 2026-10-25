@@ -339,6 +339,10 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		// BUG-A2-1: 此列曾漏在白名单外——inboundSave 与 inboundSplitSave
 		// 都赋值 row.OutboundIPStrategy，落库时被静默丢弃，编辑策略永不生效。
 		"outbound_ip_strategy": in.OutboundIPStrategy,
+		// R20-X-02 (F-02): 同类复发——inboundSave 经 applyInboundToModel
+		// 赋值 row.ConnIdleSeconds，落库时被静默丢弃，编辑空闲超时报
+		// code 0 却不生效（list 与渲染 policy 均显旧值）。
+		"conn_idle_seconds": in.ConnIdleSeconds,
 		// SS 计量伴生标记与开关（伴生行由 reconcile 维护，原入站开关由
 		// inboundSave 写；同 BUG-A2-1 教训，赋值必须与白名单同步）。
 		"companion_of":     in.CompanionOf,

@@ -302,9 +302,15 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	// self-heals instead of leaving the companion silently rerouted.
 	updated.OutboundID = 0
 	updated.SplitRules = ""
+	// R20-X-02 (F-02): the timeout is mirrored through
+	// applyInboundToModel above, but the dirty-check must name it too —
+	// without this line an origin-only timeout change no-ops here and
+	// the companion keeps the stale value even though SaveNodeInbound
+	// now persists the column.
 	if updated.Settings == comp.Settings && updated.Transport == comp.Transport &&
 		updated.Security == comp.Security && updated.Listen == comp.Listen &&
 		updated.Extra == comp.Extra && updated.OutboundIPStrategy == comp.OutboundIPStrategy &&
+		updated.ConnIdleSeconds == comp.ConnIdleSeconds &&
 		updated.Name == comp.Name && updated.Enabled == comp.Enabled &&
 		updated.ShareHost == comp.ShareHost && updated.ShareAddressMode == comp.ShareAddressMode &&
 		updated.Inx == comp.Inx && updated.RelayWhitelist == comp.RelayWhitelist &&
