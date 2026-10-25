@@ -1,0 +1,311 @@
+=== env ===
+/dev/mapper/rv  100G   39G   62G  39% /home/hatch
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+go version go1.25.1 linux/amd64
+=== go-backend build/vet ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+backend build/vet exit=0
+=== go-backend test ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	go-backend/cmd/paneld	[no test files]
+ok  	go-backend/internal/app	0.015s
+ok  	go-backend/internal/auth	0.006s
+ok  	go-backend/internal/config	0.011s
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (151.127µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (165.399µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (100.702µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (155.273µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:07:14 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:07:14 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (163.556µs)
+2026/10/25 13:07:14 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (188.783µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (252.149µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (191.538µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (172.179µs)
+2026/10/25 13:07:14 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:07:14 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:07:14 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (149.986µs)
+2026/10/25 13:07:14 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 13:07:15 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (128.343µs)
+2026/10/25 13:07:15 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (169.945µs)
+2026/10/25 13:07:15 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (151.367µs)
+2026/10/25 13:07:15 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (121.423µs)
+2026/10/25 13:07:15 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:07:15 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:07:15 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (140.591µs)
+2026/10/25 13:07:15 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (122.333µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (247.021µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (213.771µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (162.604µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:07:16 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:07:16 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (173.09µs)
+2026/10/25 13:07:16 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (109.865µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (196.766µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (168.272µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (113.661µs)
+2026/10/25 13:07:16 migration r5b4_v1_port_user_unique applied
+2026/10/25 13:07:16 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 13:07:16 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (169.425µs)
+2026/10/25 13:07:16 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- FAIL: TestValidateMonitorTCPTarget (0.01s)
+    --- FAIL: TestValidateMonitorTCPTarget/公网域名放行 (0.01s)
+        monitor_ssrf_test.go:39: ValidateMonitorTCPTarget("example.com:443") err=目标地址不允许（内网/保留地址）: example.com, wantErr=false
+2026/10/25 13:07:17 service monitor 71: node target skipped: 目标地址不允许（元数据/硬拒绝地址）: 169.254.169.254:80
+FAIL
+FAIL	go-backend/internal/health	2.804s
+?   	go-backend/internal/http	[no test files]
+ok  	go-backend/internal/http/client	0.012s
+ok  	go-backend/internal/http/handler	469.301s
+ok  	go-backend/internal/http/middleware	0.095s
+?   	go-backend/internal/http/response	[no test files]
+ok  	go-backend/internal/kernel	0.270s
+ok  	go-backend/internal/logredact	0.009s
+ok  	go-backend/internal/metrics	2.434s
+ok  	go-backend/internal/monitoring	0.006s
+ok  	go-backend/internal/netguard	0.007s
+ok  	go-backend/internal/runtime/nftables	0.103s
+ok  	go-backend/internal/security	0.474s
+?   	go-backend/internal/store/model	[no test files]
+ok  	go-backend/internal/store/repo	159.666s
+ok  	go-backend/internal/ws	9.596s
+ok  	go-backend/tests/contract	61.191s
+FAIL
+backend test exit=1
+=== go-gost build ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+gost build exit=0
+=== go-gost/x test ===
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	github.com/go-gost/x/admission	[no test files]
+?   	github.com/go-gost/x/admission/plugin	[no test files]
+?   	github.com/go-gost/x/admission/wrapper	[no test files]
+ok  	github.com/go-gost/x/api	1.690s
+?   	github.com/go-gost/x/api/service	[no test files]
+?   	github.com/go-gost/x/auth	[no test files]
+?   	github.com/go-gost/x/auth/plugin	[no test files]
+ok  	github.com/go-gost/x/bypass	0.007s
+?   	github.com/go-gost/x/bypass/plugin	[no test files]
+ok  	github.com/go-gost/x/chain	0.009s
+ok  	github.com/go-gost/x/config	0.319s
+?   	github.com/go-gost/x/config/cmd	[no test files]
+ok  	github.com/go-gost/x/config/loader	0.057s
+?   	github.com/go-gost/x/config/parsing	[no test files]
+?   	github.com/go-gost/x/config/parsing/admission	[no test files]
+?   	github.com/go-gost/x/config/parsing/auth	[no test files]
+ok  	github.com/go-gost/x/config/parsing/bypass	0.010s
+?   	github.com/go-gost/x/config/parsing/chain	[no test files]
+?   	github.com/go-gost/x/config/parsing/hop	[no test files]
+?   	github.com/go-gost/x/config/parsing/hosts	[no test files]
+?   	github.com/go-gost/x/config/parsing/ingress	[no test files]
+?   	github.com/go-gost/x/config/parsing/limiter	[no test files]
+?   	github.com/go-gost/x/config/parsing/logger	[no test files]
+?   	github.com/go-gost/x/config/parsing/node	[no test files]
+?   	github.com/go-gost/x/config/parsing/observer	[no test files]
+?   	github.com/go-gost/x/config/parsing/parser	[no test files]
+?   	github.com/go-gost/x/config/parsing/recorder	[no test files]
+?   	github.com/go-gost/x/config/parsing/resolver	[no test files]
+?   	github.com/go-gost/x/config/parsing/router	[no test files]
+?   	github.com/go-gost/x/config/parsing/sd	[no test files]
+?   	github.com/go-gost/x/config/parsing/selector	[no test files]
+ok  	github.com/go-gost/x/config/parsing/service	0.018s
+?   	github.com/go-gost/x/connector/direct	[no test files]
+?   	github.com/go-gost/x/connector/forward	[no test files]
+?   	github.com/go-gost/x/connector/http	[no test files]
+?   	github.com/go-gost/x/connector/http2	[no test files]
+?   	github.com/go-gost/x/connector/relay	[no test files]
+?   	github.com/go-gost/x/connector/router	[no test files]
+?   	github.com/go-gost/x/connector/serial	[no test files]
+?   	github.com/go-gost/x/connector/sni	[no test files]
+?   	github.com/go-gost/x/connector/socks/v4	[no test files]
+?   	github.com/go-gost/x/connector/socks/v5	[no test files]
+ok  	github.com/go-gost/x/connector/ss	0.007s
+ok  	github.com/go-gost/x/connector/ss/udp	0.011s
+?   	github.com/go-gost/x/connector/sshd	[no test files]
+?   	github.com/go-gost/x/connector/tcp	[no test files]
+?   	github.com/go-gost/x/connector/tunnel	[no test files]
+?   	github.com/go-gost/x/connector/unix	[no test files]
+?   	github.com/go-gost/x/ctx	[no test files]
+?   	github.com/go-gost/x/dialer/direct	[no test files]
+?   	github.com/go-gost/x/dialer/dtls	[no test files]
+?   	github.com/go-gost/x/dialer/ftcp	[no test files]
+?   	github.com/go-gost/x/dialer/grpc	[no test files]
+?   	github.com/go-gost/x/dialer/http2	[no test files]
+?   	github.com/go-gost/x/dialer/http2/h2	[no test files]
+?   	github.com/go-gost/x/dialer/http3	[no test files]
+?   	github.com/go-gost/x/dialer/http3/wt	[no test files]
+?   	github.com/go-gost/x/dialer/icmp	[no test files]
+ok  	github.com/go-gost/x/dialer/kcp	0.016s
+ok  	github.com/go-gost/x/dialer/mtcp	0.009s
+ok  	github.com/go-gost/x/dialer/mtls	0.006s
+ok  	github.com/go-gost/x/dialer/mws	0.007s
+?   	github.com/go-gost/x/dialer/obfs/http	[no test files]
+?   	github.com/go-gost/x/dialer/obfs/tls	[no test files]
+?   	github.com/go-gost/x/dialer/pht	[no test files]
+?   	github.com/go-gost/x/dialer/quic	[no test files]
+?   	github.com/go-gost/x/dialer/serial	[no test files]
+?   	github.com/go-gost/x/dialer/ssh	[no test files]
+?   	github.com/go-gost/x/dialer/sshd	[no test files]
+?   	github.com/go-gost/x/dialer/tcp	[no test files]
+?   	github.com/go-gost/x/dialer/tls	[no test files]
+?   	github.com/go-gost/x/dialer/udp	[no test files]
+?   	github.com/go-gost/x/dialer/unix	[no test files]
+?   	github.com/go-gost/x/dialer/wg	[no test files]
+?   	github.com/go-gost/x/dialer/ws	[no test files]
+?   	github.com/go-gost/x/handler/api	[no test files]
+?   	github.com/go-gost/x/handler/auto	[no test files]
+?   	github.com/go-gost/x/handler/dns	[no test files]
+?   	github.com/go-gost/x/handler/file	[no test files]
+ok  	github.com/go-gost/x/handler/forward/local	0.014s
+?   	github.com/go-gost/x/handler/forward/remote	[no test files]
+?   	github.com/go-gost/x/handler/http	[no test files]
+?   	github.com/go-gost/x/handler/http2	[no test files]
+?   	github.com/go-gost/x/handler/http3	[no test files]
+?   	github.com/go-gost/x/handler/metrics	[no test files]
+?   	github.com/go-gost/x/handler/redirect/tcp	[no test files]
+?   	github.com/go-gost/x/handler/redirect/udp	[no test files]
+?   	github.com/go-gost/x/handler/relay	[no test files]
+?   	github.com/go-gost/x/handler/router	[no test files]
+?   	github.com/go-gost/x/handler/serial	[no test files]
+?   	github.com/go-gost/x/handler/sni	[no test files]
+?   	github.com/go-gost/x/handler/socks/v4	[no test files]
+?   	github.com/go-gost/x/handler/socks/v5	[no test files]
+ok  	github.com/go-gost/x/handler/ss	0.008s
+ok  	github.com/go-gost/x/handler/ss/udp	0.009s
+?   	github.com/go-gost/x/handler/sshd	[no test files]
+ok  	github.com/go-gost/x/handler/tap	0.008s
+?   	github.com/go-gost/x/handler/tun	[no test files]
+?   	github.com/go-gost/x/handler/tunnel	[no test files]
+?   	github.com/go-gost/x/handler/unix	[no test files]
+?   	github.com/go-gost/x/hop	[no test files]
+?   	github.com/go-gost/x/hop/plugin	[no test files]
+?   	github.com/go-gost/x/hosts	[no test files]
+?   	github.com/go-gost/x/hosts/plugin	[no test files]
+?   	github.com/go-gost/x/ingress	[no test files]
+?   	github.com/go-gost/x/ingress/plugin	[no test files]
+?   	github.com/go-gost/x/internal/ctx	[no test files]
+?   	github.com/go-gost/x/internal/io	[no test files]
+?   	github.com/go-gost/x/internal/loader	[no test files]
+?   	github.com/go-gost/x/internal/matcher	[no test files]
+?   	github.com/go-gost/x/internal/net	[no test files]
+?   	github.com/go-gost/x/internal/net/dialer	[no test files]
+?   	github.com/go-gost/x/internal/net/http	[no test files]
+?   	github.com/go-gost/x/internal/net/ip	[no test files]
+?   	github.com/go-gost/x/internal/net/proxyproto	[no test files]
+?   	github.com/go-gost/x/internal/net/udp	[no test files]
+?   	github.com/go-gost/x/internal/plugin	[no test files]
+?   	github.com/go-gost/x/internal/util/cache	[no test files]
+?   	github.com/go-gost/x/internal/util/crypto	[no test files]
+?   	github.com/go-gost/x/internal/util/dtls	[no test files]
+?   	github.com/go-gost/x/internal/util/forwarder	[no test files]
+?   	github.com/go-gost/x/internal/util/grpc/proto	[no test files]
+?   	github.com/go-gost/x/internal/util/icmp	[no test files]
+?   	github.com/go-gost/x/internal/util/kcp	[no test files]
+?   	github.com/go-gost/x/internal/util/mux	[no test files]
+?   	github.com/go-gost/x/internal/util/pht	[no test files]
+?   	github.com/go-gost/x/internal/util/port	[no test files]
+?   	github.com/go-gost/x/internal/util/quic	[no test files]
+?   	github.com/go-gost/x/internal/util/relay	[no test files]
+?   	github.com/go-gost/x/internal/util/resolver	[no test files]
+?   	github.com/go-gost/x/internal/util/serial	[no test files]
+ok  	github.com/go-gost/x/internal/util/sessionretire	0.057s
+?   	github.com/go-gost/x/internal/util/sniffing	[no test files]
+?   	github.com/go-gost/x/internal/util/socks	[no test files]
+ok  	github.com/go-gost/x/internal/util/ss	0.006s
+?   	github.com/go-gost/x/internal/util/ssh	[no test files]
+?   	github.com/go-gost/x/internal/util/sshd	[no test files]
+?   	github.com/go-gost/x/internal/util/stats	[no test files]
+?   	github.com/go-gost/x/internal/util/tap	[no test files]
+?   	github.com/go-gost/x/internal/util/tls	[no test files]
+?   	github.com/go-gost/x/internal/util/tun	[no test files]
+?   	github.com/go-gost/x/internal/util/ws	[no test files]
+?   	github.com/go-gost/x/internal/util/wt	[no test files]
+ok  	github.com/go-gost/x/kernel	16.973s
+ok  	github.com/go-gost/x/limiter/conn	0.008s
+?   	github.com/go-gost/x/limiter/conn/wrapper	[no test files]
+?   	github.com/go-gost/x/limiter/rate	[no test files]
+ok  	github.com/go-gost/x/limiter/traffic	0.007s
+?   	github.com/go-gost/x/limiter/traffic/cache	[no test files]
+?   	github.com/go-gost/x/limiter/traffic/plugin	[no test files]
+?   	github.com/go-gost/x/limiter/traffic/wrapper	[no test files]
+?   	github.com/go-gost/x/listener/dns	[no test files]
+?   	github.com/go-gost/x/listener/dtls	[no test files]
+?   	github.com/go-gost/x/listener/ftcp	[no test files]
+?   	github.com/go-gost/x/listener/grpc	[no test files]
+?   	github.com/go-gost/x/listener/http2	[no test files]
+?   	github.com/go-gost/x/listener/http2/h2	[no test files]
+?   	github.com/go-gost/x/listener/http3	[no test files]
+?   	github.com/go-gost/x/listener/http3/h3	[no test files]
+?   	github.com/go-gost/x/listener/http3/wt	[no test files]
+?   	github.com/go-gost/x/listener/icmp	[no test files]
+?   	github.com/go-gost/x/listener/kcp	[no test files]
+?   	github.com/go-gost/x/listener/mtcp	[no test files]
+?   	github.com/go-gost/x/listener/mtls	[no test files]
+?   	github.com/go-gost/x/listener/mws	[no test files]
+?   	github.com/go-gost/x/listener/obfs/http	[no test files]
+?   	github.com/go-gost/x/listener/obfs/tls	[no test files]
+?   	github.com/go-gost/x/listener/pht	[no test files]
+?   	github.com/go-gost/x/listener/quic	[no test files]
+?   	github.com/go-gost/x/listener/redirect/tcp	[no test files]
+?   	github.com/go-gost/x/listener/redirect/udp	[no test files]
+?   	github.com/go-gost/x/listener/rtcp	[no test files]
+?   	github.com/go-gost/x/listener/rudp	[no test files]
+?   	github.com/go-gost/x/listener/serial	[no test files]
+?   	github.com/go-gost/x/listener/ssh	[no test files]
+?   	github.com/go-gost/x/listener/sshd	[no test files]
+?   	github.com/go-gost/x/listener/tap	[no test files]
+?   	github.com/go-gost/x/listener/tcp	[no test files]
+?   	github.com/go-gost/x/listener/tls	[no test files]
+?   	github.com/go-gost/x/listener/tun	[no test files]
+ok  	github.com/go-gost/x/listener/udp	0.009s
+?   	github.com/go-gost/x/listener/unix	[no test files]
+?   	github.com/go-gost/x/listener/ws	[no test files]
+?   	github.com/go-gost/x/logger	[no test files]
+?   	github.com/go-gost/x/metadata	[no test files]
+?   	github.com/go-gost/x/metadata/util	[no test files]
+?   	github.com/go-gost/x/metrics	[no test files]
+?   	github.com/go-gost/x/metrics/service	[no test files]
+?   	github.com/go-gost/x/metrics/wrapper	[no test files]
+?   	github.com/go-gost/x/observer/plugin	[no test files]
+?   	github.com/go-gost/x/observer/stats	[no test files]
+?   	github.com/go-gost/x/observer/stats/wrapper	[no test files]
+?   	github.com/go-gost/x/recorder	[no test files]
+?   	github.com/go-gost/x/recorder/plugin	[no test files]
+ok  	github.com/go-gost/x/registry	0.006s
+?   	github.com/go-gost/x/resolver	[no test files]
+?   	github.com/go-gost/x/resolver/exchanger	[no test files]
+?   	github.com/go-gost/x/resolver/plugin	[no test files]
+?   	github.com/go-gost/x/router	[no test files]
+?   	github.com/go-gost/x/router/plugin	[no test files]
+?   	github.com/go-gost/x/routing	[no test files]
+ok  	github.com/go-gost/x/routing/rules	0.008s
+?   	github.com/go-gost/x/sd/plugin	[no test files]
+?   	github.com/go-gost/x/selector	[no test files]
+ok  	github.com/go-gost/x/service	0.028s
+ok  	github.com/go-gost/x/socket	1.043s
+gost/x test exit=0
+=== frontend ===
+
+> flmx@0.0.0 build /home/hatch/workspace/.fixr21/vite-frontend
+> tsc && vite build
+
+sh: 1: tsc: not found
+ ELIFECYCLE  Command failed.
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+frontend exit=1
+=== consistency ===
+OK:   nodes.md「Clash / Mihomo」行与 share.go 的 XHTTP 渲染一致
+OK:   nodes.md「Shadowrocket」行与 share.go 的 XHTTP 渲染一致
+OK:   技能包覆盖 handler.go 全部 197 条 /api/v1 路由
+OK:   技能包版本三处一致：1.4.8
+OK:   install.md 维护菜单与 panel_install.sh 一致（6 项）
+OK:   install.md Caddy 示例反代目标与脚本一致（127.0.0.1）
+OK:   默认账号字面量一致：admin@user
+----
+RESULT: PASS（known-pending 项不计失败）
+consistency exit=0
+=== DONE ===
