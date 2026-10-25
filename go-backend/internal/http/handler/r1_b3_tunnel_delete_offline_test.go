@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,8 +129,19 @@ func TestR1B3TunnelDeleteNftNodeOfflineGoesPending(t *testing.T) {
 
 // TestR1B3TunnelDeleteOnlineRealFailureAborts: 节点在线但数据面清理真实
 // 失败（远程节点明确返回失败）时删隧道仍应中止，隧道与转发均保留。
+//
+// R19-OBS-01 / T-01：本测试曾撒谎——提交态 PASS 但伪装节点命中 0 次：
+// 伪装节点是 httptest 本地地址，SSRF 内网拦截代行了 success=false 分支，
+// 测试走的是拦截错误路径而非远程明确失败路径。故三点钉死：
+//   - t.Setenv FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true，放行本地伪装节点；
+//   - 命中次数断言（≥1），伪装节点未被命中即 FAIL，杜绝空心 PASS；
+//   - 失败文案断言：回执 msg 须含伪装节点返回的失败文本与「数据面清理失败」
+//     披露，证明走的是在线真实失败分支而非离线/拦截分支。
 func TestR1B3TunnelDeleteOnlineRealFailureAborts(t *testing.T) {
+	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
+	var hits atomic.Int32
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 0,
@@ -160,8 +173,19 @@ func TestR1B3TunnelDeleteOnlineRealFailureAborts(t *testing.T) {
 
 	res := httptest.NewRecorder()
 	h.tunnelDelete(res, newAuthenticatedJSONRequest(t, map[string]any{"id": tunnelID}))
-	if code, _ := decodePendingEnvelopeCode(t, res); code == 0 {
+	if n := hits.Load(); n < 1 {
+		t.Fatalf("fake remote node was never hit (hits=%d): the SSRF guard likely intercepted the request and the test would pass vacuously; check FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", n)
+	}
+	t.Logf("fake remote node hits=%d", hits.Load())
+	code, msg := decodePendingEnvelopeCode(t, res)
+	if code == 0 {
 		t.Fatalf("online real failure must abort tunnel delete, got success body=%s", res.Body.String())
+	}
+	if !strings.Contains(msg, "simulated real failure") || !strings.Contains(msg, "permission denied") {
+		t.Fatalf("abort message must carry the remote node's failure text, got msg=%q body=%s", msg, res.Body.String())
+	}
+	if !strings.Contains(msg, "数据面清理失败") {
+		t.Fatalf("abort message must disclose the data-plane cleanup failure, got msg=%q body=%s", msg, res.Body.String())
 	}
 	if tun, _ := h.repo.GetTunnelRecord(tunnelID); tun == nil {
 		t.Fatalf("tunnel row deleted despite online cleanup failure")
