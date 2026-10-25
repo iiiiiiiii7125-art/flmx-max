@@ -197,7 +197,11 @@ func TestR2B10DailyReportPendingVerbatimAndSnapshot(t *testing.T) {
 	tg := newB10Chan(t, true)
 	wh := newB10Chan(t, false)
 	h, r := setupB10DualHandler(t, tg, wh)
-	now := time.Now()
+	// R24-FIX F-02（O-A-1）：把 now 固定到本小时的 30 分，避免 :59 启动
+	// 时 now.Add(1m)/Add(2m) 跨小时、maybeDailyReport 因小时不符提前
+	// 返回导致补发腿 flake。仅改夹具时间固定，断言一字不动。
+	t0 := time.Now()
+	now := time.Date(t0.Year(), t0.Month(), t0.Day(), t0.Hour(), 30, 0, 0, t0.Location())
 	gb := int64(1024 * 1024 * 1024)
 	row := &model.NodeInbound{Name: "日报入站", Protocol: "ss", Listen: "203.0.113.9", Port: 8388,
 		Enabled: 1, UploadBytes: 10 * gb, CreatedTime: now.UnixMilli(), UpdatedTime: now.UnixMilli()}

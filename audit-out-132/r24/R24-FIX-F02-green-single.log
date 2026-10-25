@@ -1,0 +1,58 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR2B10DailyReportPendingVerbatimAndSnapshot
+2026/10/25 17:42:15 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (310.356µs)
+2026/10/25 17:42:15 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (355.804µs)
+2026/10/25 17:42:15 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (302.234µs)
+2026/10/25 17:42:15 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (315.504µs)
+2026/10/25 17:42:15 migration r5b4_v1_port_user_unique applied
+2026/10/25 17:42:15 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 17:42:15 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (320.591µs)
+2026/10/25 17:42:15 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 17:42:18 notify daily_report failed: Webhook: HTTP 500
+--- PASS: TestR2B10DailyReportPendingVerbatimAndSnapshot (3.36s)
+=== RUN   TestR2B10DailyReportPendingVerbatimAndSnapshot
+2026/10/25 17:42:18 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (311.757µs)
+2026/10/25 17:42:18 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (427.021µs)
+2026/10/25 17:42:18 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (382.063µs)
+2026/10/25 17:42:18 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (319.75µs)
+2026/10/25 17:42:18 migration r5b4_v1_port_user_unique applied
+2026/10/25 17:42:18 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 17:42:18 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (471.688µs)
+2026/10/25 17:42:18 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 17:42:21 notify daily_report failed: Webhook: HTTP 500
+--- PASS: TestR2B10DailyReportPendingVerbatimAndSnapshot (3.33s)
+=== RUN   TestR2B10DailyReportPendingVerbatimAndSnapshot
+2026/10/25 17:42:21 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (452.259µs)
+2026/10/25 17:42:21 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (533.04µs)
+2026/10/25 17:42:21 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (648.594µs)
+2026/10/25 17:42:21 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (522.554µs)
+2026/10/25 17:42:21 migration r5b4_v1_port_user_unique applied
+2026/10/25 17:42:21 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 17:42:21 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (351.978µs)
+2026/10/25 17:42:21 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 17:42:25 notify daily_report failed: Webhook: HTTP 500
+--- PASS: TestR2B10DailyReportPendingVerbatimAndSnapshot (3.30s)
+=== RUN   TestR2B10DailyReportPendingVerbatimAndSnapshot
+2026/10/25 17:42:25 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (317.647µs)
+2026/10/25 17:42:25 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (482.414µs)
+2026/10/25 17:42:25 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (349.024µs)
+2026/10/25 17:42:25 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (304.057µs)
+2026/10/25 17:42:25 migration r5b4_v1_port_user_unique applied
+2026/10/25 17:42:25 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 17:42:25 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (331.597µs)
+2026/10/25 17:42:25 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 17:42:28 notify daily_report failed: Webhook: HTTP 500
+--- PASS: TestR2B10DailyReportPendingVerbatimAndSnapshot (3.31s)
+=== RUN   TestR2B10DailyReportPendingVerbatimAndSnapshot
+2026/10/25 17:42:28 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (289.905µs)
+2026/10/25 17:42:28 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (577.527µs)
+2026/10/25 17:42:28 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (420.041µs)
+2026/10/25 17:42:28 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (467.431µs)
+2026/10/25 17:42:28 migration r5b4_v1_port_user_unique applied
+2026/10/25 17:42:28 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 17:42:28 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (452.479µs)
+2026/10/25 17:42:28 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 17:42:31 notify daily_report failed: Webhook: HTTP 500
+--- PASS: TestR2B10DailyReportPendingVerbatimAndSnapshot (3.31s)
+PASS
+ok  	go-backend/internal/http/handler	16.629s

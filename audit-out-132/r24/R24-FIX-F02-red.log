@@ -1,0 +1,16 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR2B10DailyReportPendingVerbatimAndSnapshot
+2026/10/25 17:41:41 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (769.885µs)
+2026/10/25 17:41:41 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (427.351µs)
+2026/10/25 17:41:41 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (382.214µs)
+2026/10/25 17:41:41 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (324.077µs)
+2026/10/25 17:41:41 migration r5b4_v1_port_user_unique applied
+2026/10/25 17:41:41 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 17:41:41 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (559.44µs)
+2026/10/25 17:41:41 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 17:41:45 notify daily_report failed: Webhook: HTTP 500
+    notify_r2_b10_test.go:245: webhook daily deliveries after resend = 0, want 1
+--- FAIL: TestR2B10DailyReportPendingVerbatimAndSnapshot (3.34s)
+FAIL
+FAIL	go-backend/internal/http/handler	3.361s
+FAIL
