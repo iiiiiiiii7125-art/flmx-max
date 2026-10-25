@@ -2288,7 +2288,13 @@ func (h *Handler) deleteForwardServicesOnNodeBatch(forward *forwardRecord, nodeI
 
 	payload := map[string]interface{}{"services": names}
 	_, err = h.sendNodeCommand(nodeID, "DeleteService", payload, false, true)
-	return err
+	if err != nil {
+		return err
+	}
+	// R19-X-03：服务已删后清该转发的 rule 级 climiter（与 controlForwardServices
+	// 的 DeleteService 分支同口径）。nft/realm 分支在上方已提前返回，不到这里。
+	h.deleteForwardConnLimiterOnNode(forward, nodeID)
+	return nil
 }
 
 func uniqueInt64s(input []int64) []int64 {

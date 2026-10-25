@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -677,18 +678,23 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 				continue
 			}
 			seen[fp.NodeID] = struct{}{}
-			if err := h.deleteForwardServiceBasesOnNode(fp.NodeID, bases); err != nil {
-				if isNodeOfflineOrTimeoutError(err) {
+			deleteErr := h.deleteForwardServiceBasesOnNode(fp.NodeID, bases)
+			if deleteErr != nil {
+				if isNodeOfflineOrTimeoutError(deleteErr) {
 					// S-04: 节点离线时不得静默跳过，记录离线节点，调用方决定如何处理
 					// （调用方 forwardDelete 会检查此错误并避免删库）
 					offlineNodes = append(offlineNodes, fp.NodeID)
 					continue
 				}
-				if tolerateNotFound && isNotFoundError(err) {
-					continue
+				if !(tolerateNotFound && isNotFoundError(deleteErr)) {
+					return deleteErr
 				}
-				return err
+				// 落到此处：服务已不在且调用方容忍缺失，仍清 climiter 收敛。
 			}
+			// R19-X-03：服务已删后清该转发的 rule 级 climiter。离线节点到不了
+			// 这里（上支 continue，已记入 offlineNodes、调用方不删库，重连
+			// 清理经同一漏斗重试）；其余失败由 helper 内记日志、不阻塞删库。
+			h.deleteForwardConnLimiterOnNode(forward, fp.NodeID)
 		}
 		if len(offlineNodes) > 0 {
 			// S-04: 返回离线节点信息，调用方不得静默返回成功
@@ -2213,16 +2219,44 @@ func buildConnLimiterConfigs(forward *forwardRecord, userMaxConn int) []forwardL
 		if forward.IPMaxConn > 0 {
 			limits = append(limits, fmt.Sprintf("$$ %d", forward.IPMaxConn))
 		}
-		return []forwardLimiterConfig{{Name: fmt.Sprintf("rule_conn_limit_%d", forward.ID), Limits: limits}}
+		return []forwardLimiterConfig{{Name: forwardRuleConnLimiterName(forward), Limits: limits}}
 	}
 	configs := make([]forwardLimiterConfig, 0, 2)
 	if userMaxConn > 0 {
 		configs = append(configs, forwardLimiterConfig{Name: fmt.Sprintf("user_conn_limit_%d", forward.UserID), Limits: []string{fmt.Sprintf("$ %d", userMaxConn)}})
 	}
 	if forward.IPMaxConn > 0 {
-		configs = append(configs, forwardLimiterConfig{Name: fmt.Sprintf("rule_conn_limit_%d", forward.ID), Limits: []string{fmt.Sprintf("$$ %d", forward.IPMaxConn)}})
+		configs = append(configs, forwardLimiterConfig{Name: forwardRuleConnLimiterName(forward), Limits: []string{fmt.Sprintf("$$ %d", forward.IPMaxConn)}})
 	}
 	return configs
+}
+
+// R19-X-03：转发级连接限流器名。仅当转发带 rule 级连接限制
+// （MaxConn>0 或 IPMaxConn>0）时存在，与 buildConnLimiterConfigs 发出
+// rule_conn_limit_<id> 的条件一致；无限制时返回 ""，调用方跳过删除。
+// user_conn_limit_<uid> 是同用户全部转发共享的，永不在此删除。
+func forwardRuleConnLimiterName(forward *forwardRecord) string {
+	if forward == nil || (forward.MaxConn <= 0 && forward.IPMaxConn <= 0) {
+		return ""
+	}
+	return fmt.Sprintf("rule_conn_limit_%d", forward.ID)
+}
+
+// deleteForwardConnLimiterOnNode 在转发服务已删后，尽力删除该转发在节点上
+// 的 rule_conn_limit_<id> climiter。R19-X-03 根因：删转发路径只发
+// DeleteService，从不发 DeleteCLimiters，climiter 在 gost.json 里永久残留
+// （agent 启动自愈只按名去重、不剪除无引用 limiter）。失败只记日志、不向
+// 调用方返回错误：服务已删、删库不应被一个 cosmetic 残留挡住；节点离线时
+// 调用方本就走 S-04/重连清理分支、会经同一漏斗重试。agent 侧
+// deleteConnLimiter 对不存在的名字亦返回成功，故重复发送无害。
+func (h *Handler) deleteForwardConnLimiterOnNode(forward *forwardRecord, nodeID int64) {
+	name := forwardRuleConnLimiterName(forward)
+	if name == "" {
+		return
+	}
+	if _, err := h.sendNodeCommand(nodeID, "DeleteCLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+		log.Printf("forward delete: conn limiter cleanup failed node_id=%d forward_id=%d limiter=%s err=%v (continuing)", nodeID, forward.ID, name, err)
+	}
 }
 
 func joinLimiterNames(configs []forwardLimiterConfig) string {
