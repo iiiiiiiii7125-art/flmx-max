@@ -203,3 +203,73 @@ func TestHealPersistedChainsLimitersCleanIsNoop(t *testing.T) {
 		t.Fatal("clean config must not trigger a persist write")
 	}
 }
+
+// R18-INT（集成裁定）：RLimiters 进自愈。loader.Load 会加载 cfg.RLimiters
+//（loader.go:218-221），第二个同名项在 RateLimiterRegistry.Register 处
+// 报 registry: duplicate object、agent 退出——与链/限流器毒化同型。
+func TestDeduplicateRLimitersRemovesDuplicates(t *testing.T) {
+	cfg := &Config{RLimiters: []*LimiterConfig{
+		{Name: "rlim-a"},
+		nil,
+		{Name: "rlim-b"},
+		{Name: " rlim-a "},
+		{Name: "rlim-a"},
+	}}
+	removed := DeduplicateRLimiters(cfg)
+	if len(removed) != 2 || removed[0] != " rlim-a " || removed[1] != "rlim-a" {
+		t.Fatalf("removed = %v, want [\" rlim-a \" \"rlim-a\"]", removed)
+	}
+	if len(cfg.RLimiters) != 3 {
+		t.Fatalf("expected 3 rlimiters after dedupe, got %d", len(cfg.RLimiters))
+	}
+	if cfg.RLimiters[0] == nil || cfg.RLimiters[0].Name != "rlim-a" {
+		t.Fatalf("first occurrence of rlim-a must be kept at index 0, got %#v", cfg.RLimiters[0])
+	}
+	if cfg.RLimiters[1] != nil {
+		t.Fatalf("nil rlimiter entry must be kept as-is, got %#v", cfg.RLimiters[1])
+	}
+	if removed := DeduplicateRLimiters(nil); removed != nil {
+		t.Fatalf("DeduplicateRLimiters(nil) = %v, want nil", removed)
+	}
+}
+
+func TestHealPersistedRLimiters(t *testing.T) {
+	cfg := &Config{RLimiters: []*LimiterConfig{
+		{Name: "rlim-a"},
+		{Name: "rlim-a"},
+		{Name: "rlim-b"},
+	}}
+
+	originalPath := persistPath
+	originalEnabled := persistEnable
+	persistFile := filepath.Join(t.TempDir(), "gost.json")
+
+	t.Cleanup(func() {
+		persistPath = originalPath
+		persistEnable = originalEnabled
+	})
+	persistPath = persistFile
+	persistEnable = false // Heal 不依赖 EnablePersist
+
+	removed, err := HealPersistedRLimiters(cfg)
+	if err != nil {
+		t.Fatalf("HealPersistedRLimiters: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "rlim-a" {
+		t.Fatalf("removed = %v, want [rlim-a]", removed)
+	}
+	if len(cfg.RLimiters) != 2 {
+		t.Fatalf("expected 2 rlimiters after heal, got %d", len(cfg.RLimiters))
+	}
+	raw, err := os.ReadFile(persistFile)
+	if err != nil {
+		t.Fatalf("healed config must be re-persisted: %v", err)
+	}
+	var healed Config
+	if err := json.Unmarshal(raw, &healed); err != nil {
+		t.Fatalf("persisted file must be valid JSON: %v", err)
+	}
+	if len(healed.RLimiters) != 2 {
+		t.Fatalf("persisted file has %d rlimiters, want 2", len(healed.RLimiters))
+	}
+}

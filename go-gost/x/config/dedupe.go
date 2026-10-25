@@ -149,8 +149,41 @@ func DeduplicateCLimiters(cfg *Config) []string {
 	return removed
 }
 
+// R18-INT（集成裁定）：RLimiters 同样进自愈。x/socket 内无 rate limiter
+// create 路径（F-03 全仓 grep 零命中），故 create 侧无第四处盲 append；
+// 但 loader.Load 会加载 cfg.RLimiters（loader.go:218-221，第二个同名项
+// 在 RateLimiterRegistry.Register 处报 registry: duplicate object、
+// program.Start 返回错误、agent 退出），毒化 rlimiters 段与服务/链/
+// 限流器毒化同型。F-04 已在 x/api 侧给 rate_limiter create 按名去重，
+// 此处补自愈一侧，缺一面自愈即不完整。
+func HealPersistedRLimiters(cfg *Config) ([]string, error) {
+	removed := DeduplicateRLimiters(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateRLimiters removes later entries in cfg.RLimiters that repeat
+// an earlier rate limiter name, keeping the first occurrence. Nil entries
+// are kept as-is.
+func DeduplicateRLimiters(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.RLimiters, func(lim *LimiterConfig) string { return lim.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.RLimiters = kept
+	return removed
+}
+
 // dedupeNamed is the shared first-wins dedupe behind DeduplicateChains /
-// DeduplicateLimiters / DeduplicateCLimiters: names compared after trimming
+// DeduplicateLimiters / DeduplicateCLimiters / DeduplicateRLimiters: names compared after trimming
 // whitespace, nil entries kept as-is. It returns the kept slice and the
 // removed names (untrimmed, in removal order); when nothing was removed it
 // returns (nil, nil) so callers leave the config untouched.

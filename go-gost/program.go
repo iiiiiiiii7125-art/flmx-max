@@ -318,15 +318,15 @@ func (p *program) reloadConfig() error {
 }
 
 // healPersistedConfig 去重启动/重载时加载的落盘配置（R17-A 仅服务；
-// R18-F03 扩展到链与限流器），返回被去掉的重复名（四类合并）。存量 gost.json
+// R18-F03 扩展到链与限流器；R18-INT 补 rate limiter），返回被去掉的重复名（五类合并）。存量 gost.json
 // 若含重复服务名，loader.Load 会在第二个同名服务处失败（监听器 eager 绑定报
 // address already in use，或 Register 报 registry: duplicate object）；若含
 // 重复链/限流器名，同样在第二个同名项的 Register 处报 registry: duplicate
 // object——任一分支都使 program.Start 直接返回错误、agent 退出，故先去重
 // （保留首次出现）再加载；去重后把清理过的配置重新落盘，否则下次启动仍会读
 // 到毒化文件。去重了哪些名以 Warn 日志按类写明。落盘失败只告警、不阻塞启动
-// （下次启动会再次自愈）。四类各调一次 Heal*、各落盘一次（毒化多类时最多
-// 4 次原子写；最终落盘文件含全部四类的愈合结果）。
+// （下次启动会再次自愈）。五类各调一次 Heal*、各落盘一次（毒化多类时最多
+// 5 次原子写；最终落盘文件含全部五类的愈合结果）。
 func healPersistedConfig(cfg *config.Config) []string {
 	var removed []string
 	heal := func(kind string, fn func(*config.Config) ([]string, error)) {
@@ -344,6 +344,7 @@ func healPersistedConfig(cfg *config.Config) []string {
 	heal("chain", config.HealPersistedChains)
 	heal("limiter", config.HealPersistedLimiters)
 	heal("conn limiter", config.HealPersistedCLimiters)
+	heal("rate limiter", config.HealPersistedRLimiters)
 	if len(removed) == 0 {
 		return nil
 	}
