@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 7 minutes (unhealthy)
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 7 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 16 hours (healthy)
+---
+== 60f6db8478ca
+== 6811f41c3097
+/app/data/gost.db
+data
+paneld
+== d467e3de89ad

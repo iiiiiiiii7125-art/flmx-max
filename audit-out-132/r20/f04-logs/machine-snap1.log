@@ -1,0 +1,27 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+Sun Oct 25 06:52:12 UTC 2026
+---
+● flux_agent.service - Flux_agent Proxy Service
+     Loaded: loaded (/etc/systemd/system/flux_agent.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2026-10-25 06:47:53 UTC; 4min 19s ago
+   Main PID: 800449 (flux_agent)
+      Tasks: 45 (limit: 510)
+     Memory: 83.1M
+        CPU: 2.399s
+     CGroup: /system.slice/flux_agent.service
+---
+Description=Flux_agent Proxy Service
+WorkingDirectory=/etc/flux_agent
+ExecStart=/etc/flux_agent/flux_agent
+---
+total 83628
+drwxr-xr-x  3 root root     4096 Oct 25 06:47 .
+drwxr-xr-x 70 root root     4096 Oct 24 15:18 ..
+-rw-r--r--  1 root root      499 Oct 22 01:35 agent-upgrade.log
+-rw-------  1 root root      129 Oct 21 23:37 config.json
+-rw-r--r--  1 root root       16 Oct 21 12:46 device.id
+-rw-------  1 root root       10 Oct 23 18:19 flmx_agent_seq.json
+-rwxr-xr-x  1 root root 50194574 Oct 25 06:45 flux_agent
+-rwxr-xr-x  1 root root 35393720 Oct 22 01:35 flux_agent.old
+-rw-------  1 root root     6237 Oct 25 06:47 gost.json
+drwxr-xr-x  6 root root     4096 Oct 25 06:47 kernels

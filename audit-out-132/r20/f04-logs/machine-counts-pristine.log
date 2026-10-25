@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+tables: 51
+node 1
+tunnel 4
+chain_tunnel 4
+forward 6
+forward_port 6
+node_inbound 578
+user_subscription 2
+subscription 18
+forward ids: [1, 2, 3, 4, 6, 7]
+tunnel ids: [5, 9, 11, 15]

@@ -1,0 +1,39 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+# /etc/systemd/system/flux_agent.service
+[Unit]
+Description=Flux_agent Proxy Service
+After=network.target
+
+[Service]
+WorkingDirectory=/etc/flux_agent
+ExecStart=/etc/flux_agent/flux_agent
+Environment=GODEBUG=disablethp=1
+Restart=on-failure
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
+---
+total 118336
+drwxr-xr-x  3 root root     4096 Oct 25 06:55 .
+-rw-------  1 root root     6039 Oct 25 06:55 gost.json
+drwxr-xr-x  6 root root     4096 Oct 25 06:55 kernels
+-rwxr-x---  1 root root 35537080 Oct 25 06:54 flux_agent
+-rwxr-xr-x  1 root root 50194574 Oct 25 06:45 flux_agent.f04bak
+drwxr-xr-x 70 root root     4096 Oct 24 15:18 ..
+-rw-------  1 root root       10 Oct 23 18:19 flmx_agent_seq.json
+-rw-r--r--  1 root root      499 Oct 22 01:35 agent-upgrade.log
+-rwxr-xr-x  1 root root 35393720 Oct 22 01:35 flux_agent.old
+-rw-------  1 root root      129 Oct 21 23:37 config.json
+-rw-r--r--  1 root root       16 Oct 21 12:46 device.id
+/tmp/t147gate-gost.db-wal
+/tmp/r13gate-dbcopy/gost.db-shm
+/tmp/r13gate-dbcopy/gost.db
+/tmp/r13gate-dbcopy/gost.db-wal
+/tmp/pre/flux_agent
+/tmp/cur-gost.json
+/tmp/t147gate-gost.db-shm
+/tmp/r19-l1-gost-copy.db
+/tmp/f04-dbcopy/gost.db-shm
+/tmp/f04-dbcopy/gost.db

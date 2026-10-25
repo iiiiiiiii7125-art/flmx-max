@@ -1,0 +1,9 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestBuildConnLimiterConfigCombinesTotalAndPerIP
+--- PASS: TestBuildConnLimiterConfigCombinesTotalAndPerIP (0.00s)
+=== RUN   TestBuildConnLimiterConfigUsesUserTotalWithRulePerIP
+--- PASS: TestBuildConnLimiterConfigUsesUserTotalWithRulePerIP (0.00s)
+=== RUN   TestBuildTrafficLimiterPayloadUsesOnlyPerIPRulesWhenTotalIsSeparate
+--- PASS: TestBuildTrafficLimiterPayloadUsesOnlyPerIPRulesWhenTotalIsSeparate (0.00s)
+PASS
+ok  	go-backend/internal/http/handler	0.221s

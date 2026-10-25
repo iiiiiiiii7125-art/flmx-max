@@ -318,11 +318,12 @@ func (p *program) reloadConfig() error {
 }
 
 // healPersistedConfig 去重启动/重载时加载的落盘配置（R17-A 仅服务；
-// R18-F03 扩展到链与限流器；R18-INT 补 rate limiter），并剥离 nil 项
+// R18-F03 扩展到链与限流器；R18-INT 补 rate limiter；R20-F04 补无引用
+// conn limiter 剪除），并剥离 nil 项
 // （R19-F02：落盘 JSON null 读入后的内存形态，先剥离再加载、并重新落盘，
 // 否则 loader.Load 在首个 nil 类 panic、agent 退出且文件不被清理，
-// 重启后再次崩溃）。返回被去掉的重复名与 nil 项描述（五类去重 + nil
-// 剥离合并）。存量 gost.json
+// 重启后再次崩溃）。返回被去掉的重复名、无引用 conn limiter 名与 nil 项
+// 描述（五类去重 + nil 剥离 + 无引用剪除合并）。存量 gost.json
 // 若含重复服务名，loader.Load 会在第二个同名服务处失败（监听器 eager 绑定报
 // address already in use，或 Register 报 registry: duplicate object）；若含
 // 重复链/限流器名，同样在第二个同名项的 Register 处报 registry: duplicate
@@ -330,7 +331,10 @@ func (p *program) reloadConfig() error {
 // （保留首次出现）再加载；去重后把清理过的配置重新落盘，否则下次启动仍会读
 // 到毒化文件。去重了哪些名以 Warn 日志按类写明。落盘失败只告警、不阻塞启动
 // （下次启动会再次自愈）。五类各调一次 Heal*、各落盘一次（毒化多类时最多
-// 5 次原子写；最终落盘文件含全部五类的愈合结果）。
+// 5 次原子写；最终落盘文件含全部五类的愈合结果）。去重之后再剪无引用
+// conn limiter（R20-F04，见 config.PruneUnreferencedCLimiters）：存量孤儿
+// （如删转发/更新去限流后残留的 rule_conn_limit_<id>）在下次启动/重载时
+// 自愈，剪掉后同样重新落盘；user_conn_limit_* 永不剪。
 func healPersistedConfig(cfg *config.Config) []string {
 	var removed []string
 	// R19-F02: 先剥离 nil 项（落盘 JSON null 读入后的内存形态）并重新
@@ -361,6 +365,16 @@ func healPersistedConfig(cfg *config.Config) []string {
 	heal("limiter", config.HealPersistedLimiters)
 	heal("conn limiter", config.HealPersistedCLimiters)
 	heal("rate limiter", config.HealPersistedRLimiters)
+	// R20-F04: 剪无引用 conn limiter（存量孤儿清理）。去重之后、加载之前：
+	// 引用集按去重后的存活服务算；user_conn_limit_* 永不剪；剪掉后重新
+	// 落盘，否则下次启动仍会读到孤儿。落盘失败只告警、不阻塞启动。
+	if pruned, err := config.HealPersistedOrphanCLimiters(cfg); len(pruned) > 0 {
+		logger.Default().Warnf("startup config self-heal: removed unreferenced conn limiter(s) %v from persisted config", pruned)
+		if err != nil {
+			logger.Default().Warnf("startup config self-heal: failed to persist pruned config: %v", err)
+		}
+		removed = append(removed, pruned...)
+	}
 	if len(removed) == 0 {
 		return nil
 	}

@@ -185,6 +185,86 @@ func DeduplicateRLimiters(cfg *Config) []string {
 	return removed
 }
 
+// R20-F04: 启动自愈剪无引用 conn limiter（存量孤儿清理）。
+// F-03（R19）只防新增：删转发路径补发 DeleteCLimiters 后不再产生新孤儿，
+// 但存量孤儿（测试机 gost.json 内 rule_conn_limit_12 ["$ 7"] 与
+// rule_conn_limit_2 ["$ 1"]）永久残留——启动自愈此前只按名去重，面板亦无
+// 清扫入口。本函数补自愈的剪除一侧。
+//
+// 引用集 = 全部服务 ServiceConfig.CLimiter 字段的逗号分隔名（与
+// x/config/parsing/service resolveConnLimiter 的解析口径一致：逗号切分、
+// TrimSpace、空段丢弃）。全仓 grep 证实服务是 conn limiter 的唯一消费方：
+// 链/跳点/admission 均无 climiter 字段，CLI 建服务亦经同一 CLimiter 字段
+// 挂接（x/config/cmd/cmd.go）；handler 的 Limiter 字段挂的是 traffic
+// limiter，不在此列。
+//
+// 安全线：`user_conn_limit_*` 永不剪——同用户全部转发共享，面板可能在无
+// 服务引用它的间隙仍视其为有效（见 go-backend buildConnLimiterConfigs）；
+// 即使误删，面板下次同步也会重新 AddCLimiters（已存在则走 UpdateCLimiters），
+// 故剪错亦可自愈，但按任务要求永不剪。只动 CLimiters 一类，traffic /
+// rate limiter 一律不动；nil 项原样保留（与 Deduplicate* 同口径）。
+// 调用方须在去重之后调用本函数，使引用集按去重后的存活服务算。
+const userConnLimiterPrefix = "user_conn_limit_"
+
+// HealPersistedOrphanCLimiters 剪掉 cfg 内全部无引用 conn limiter（见
+// PruneUnreferencedCLimiters），剪掉后立即重新落盘；干净配置不触发写。
+// 与 HealPersisted* 同口径：err 仅在剪掉后落盘失败时非 nil，内存配置
+// 无论如何已被剪除，调用方应告警、不得阻塞启动（下次启动会再次自愈）。
+func HealPersistedOrphanCLimiters(cfg *Config) ([]string, error) {
+	removed := PruneUnreferencedCLimiters(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// PruneUnreferencedCLimiters 就地剪掉 cfg.CLimiters 中无任何服务引用的项
+// （名按 TrimSpace 后比较），返回被剪掉的名字（原名、按原顺序）；无剪除
+// 时返回 nil 且不改动 cfg。nil cfg 返回 nil；nil 服务项跳过；nil
+// climiter 项原样保留。
+func PruneUnreferencedCLimiters(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	referenced := make(map[string]struct{}, len(cfg.CLimiters))
+	for _, svc := range cfg.Services {
+		if svc == nil {
+			continue
+		}
+		for _, name := range strings.Split(svc.CLimiter, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				referenced[name] = struct{}{}
+			}
+		}
+	}
+	var removed []string
+	kept := cfg.CLimiters[:0]
+	for _, lim := range cfg.CLimiters {
+		if lim == nil {
+			kept = append(kept, lim)
+			continue
+		}
+		name := strings.TrimSpace(lim.Name)
+		if _, ok := referenced[name]; ok {
+			kept = append(kept, lim)
+			continue
+		}
+		if strings.HasPrefix(name, userConnLimiterPrefix) {
+			kept = append(kept, lim)
+			continue
+		}
+		removed = append(removed, lim.Name)
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.CLimiters = kept
+	return removed
+}
+
 // R19-F02: 剥离全部 17 类命名切片中的 nil 项（落盘 JSON null 读入后的
 // 内存形态），专用于启动/重载自愈。nil 项在此被清除并重新落盘——nil 项
 // 拒绝落盘、不得进自愈保留；Deduplicate* 保持“nil 项原样保留”的已证稳

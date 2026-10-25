@@ -1,0 +1,7 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestTuneBdpLegacyConfRemoved
+--- PASS: TestTuneBdpLegacyConfRemoved (0.01s)
+=== RUN   TestTuneProbeDoesNotWrite
+--- PASS: TestTuneProbeDoesNotWrite (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.260s

@@ -1,0 +1,295 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	github.com/go-gost/x/admission	[no test files]
+?   	github.com/go-gost/x/admission/plugin	[no test files]
+?   	github.com/go-gost/x/admission/wrapper	[no test files]
+ok  	github.com/go-gost/x/api	2.220s
+?   	github.com/go-gost/x/api/service	[no test files]
+?   	github.com/go-gost/x/auth	[no test files]
+?   	github.com/go-gost/x/auth/plugin	[no test files]
+ok  	github.com/go-gost/x/bypass	0.036s
+?   	github.com/go-gost/x/bypass/plugin	[no test files]
+ok  	github.com/go-gost/x/chain	0.015s
+ok  	github.com/go-gost/x/config	0.129s
+?   	github.com/go-gost/x/config/cmd	[no test files]
+ok  	github.com/go-gost/x/config/loader	0.318s
+?   	github.com/go-gost/x/config/parsing	[no test files]
+?   	github.com/go-gost/x/config/parsing/admission	[no test files]
+?   	github.com/go-gost/x/config/parsing/auth	[no test files]
+ok  	github.com/go-gost/x/config/parsing/bypass	0.053s
+?   	github.com/go-gost/x/config/parsing/chain	[no test files]
+?   	github.com/go-gost/x/config/parsing/hop	[no test files]
+?   	github.com/go-gost/x/config/parsing/hosts	[no test files]
+?   	github.com/go-gost/x/config/parsing/ingress	[no test files]
+?   	github.com/go-gost/x/config/parsing/limiter	[no test files]
+?   	github.com/go-gost/x/config/parsing/logger	[no test files]
+?   	github.com/go-gost/x/config/parsing/node	[no test files]
+?   	github.com/go-gost/x/config/parsing/observer	[no test files]
+?   	github.com/go-gost/x/config/parsing/parser	[no test files]
+?   	github.com/go-gost/x/config/parsing/recorder	[no test files]
+?   	github.com/go-gost/x/config/parsing/resolver	[no test files]
+?   	github.com/go-gost/x/config/parsing/router	[no test files]
+?   	github.com/go-gost/x/config/parsing/sd	[no test files]
+?   	github.com/go-gost/x/config/parsing/selector	[no test files]
+ok  	github.com/go-gost/x/config/parsing/service	0.108s
+?   	github.com/go-gost/x/connector/direct	[no test files]
+?   	github.com/go-gost/x/connector/forward	[no test files]
+?   	github.com/go-gost/x/connector/http	[no test files]
+?   	github.com/go-gost/x/connector/http2	[no test files]
+?   	github.com/go-gost/x/connector/relay	[no test files]
+?   	github.com/go-gost/x/connector/router	[no test files]
+?   	github.com/go-gost/x/connector/serial	[no test files]
+?   	github.com/go-gost/x/connector/sni	[no test files]
+?   	github.com/go-gost/x/connector/socks/v4	[no test files]
+?   	github.com/go-gost/x/connector/socks/v5	[no test files]
+ok  	github.com/go-gost/x/connector/ss	0.040s
+ok  	github.com/go-gost/x/connector/ss/udp	0.061s
+?   	github.com/go-gost/x/connector/sshd	[no test files]
+?   	github.com/go-gost/x/connector/tcp	[no test files]
+?   	github.com/go-gost/x/connector/tunnel	[no test files]
+?   	github.com/go-gost/x/connector/unix	[no test files]
+?   	github.com/go-gost/x/ctx	[no test files]
+?   	github.com/go-gost/x/dialer/direct	[no test files]
+?   	github.com/go-gost/x/dialer/dtls	[no test files]
+?   	github.com/go-gost/x/dialer/ftcp	[no test files]
+?   	github.com/go-gost/x/dialer/grpc	[no test files]
+?   	github.com/go-gost/x/dialer/http2	[no test files]
+?   	github.com/go-gost/x/dialer/http2/h2	[no test files]
+?   	github.com/go-gost/x/dialer/http3	[no test files]
+?   	github.com/go-gost/x/dialer/http3/wt	[no test files]
+?   	github.com/go-gost/x/dialer/icmp	[no test files]
+ok  	github.com/go-gost/x/dialer/kcp	0.120s
+ok  	github.com/go-gost/x/dialer/mtcp	0.049s
+ok  	github.com/go-gost/x/dialer/mtls	0.023s
+ok  	github.com/go-gost/x/dialer/mws	0.052s
+?   	github.com/go-gost/x/dialer/obfs/http	[no test files]
+?   	github.com/go-gost/x/dialer/obfs/tls	[no test files]
+?   	github.com/go-gost/x/dialer/pht	[no test files]
+?   	github.com/go-gost/x/dialer/quic	[no test files]
+?   	github.com/go-gost/x/dialer/serial	[no test files]
+?   	github.com/go-gost/x/dialer/ssh	[no test files]
+?   	github.com/go-gost/x/dialer/sshd	[no test files]
+?   	github.com/go-gost/x/dialer/tcp	[no test files]
+?   	github.com/go-gost/x/dialer/tls	[no test files]
+?   	github.com/go-gost/x/dialer/udp	[no test files]
+?   	github.com/go-gost/x/dialer/unix	[no test files]
+?   	github.com/go-gost/x/dialer/wg	[no test files]
+?   	github.com/go-gost/x/dialer/ws	[no test files]
+?   	github.com/go-gost/x/handler/api	[no test files]
+?   	github.com/go-gost/x/handler/auto	[no test files]
+?   	github.com/go-gost/x/handler/dns	[no test files]
+?   	github.com/go-gost/x/handler/file	[no test files]
+ok  	github.com/go-gost/x/handler/forward/local	0.084s
+?   	github.com/go-gost/x/handler/forward/remote	[no test files]
+?   	github.com/go-gost/x/handler/http	[no test files]
+?   	github.com/go-gost/x/handler/http2	[no test files]
+?   	github.com/go-gost/x/handler/http3	[no test files]
+?   	github.com/go-gost/x/handler/metrics	[no test files]
+?   	github.com/go-gost/x/handler/redirect/tcp	[no test files]
+?   	github.com/go-gost/x/handler/redirect/udp	[no test files]
+?   	github.com/go-gost/x/handler/relay	[no test files]
+?   	github.com/go-gost/x/handler/router	[no test files]
+?   	github.com/go-gost/x/handler/serial	[no test files]
+?   	github.com/go-gost/x/handler/sni	[no test files]
+?   	github.com/go-gost/x/handler/socks/v4	[no test files]
+?   	github.com/go-gost/x/handler/socks/v5	[no test files]
+ok  	github.com/go-gost/x/handler/ss	0.067s
+ok  	github.com/go-gost/x/handler/ss/udp	0.028s
+?   	github.com/go-gost/x/handler/sshd	[no test files]
+ok  	github.com/go-gost/x/handler/tap	0.038s
+?   	github.com/go-gost/x/handler/tun	[no test files]
+?   	github.com/go-gost/x/handler/tunnel	[no test files]
+?   	github.com/go-gost/x/handler/unix	[no test files]
+?   	github.com/go-gost/x/hop	[no test files]
+?   	github.com/go-gost/x/hop/plugin	[no test files]
+?   	github.com/go-gost/x/hosts	[no test files]
+?   	github.com/go-gost/x/hosts/plugin	[no test files]
+?   	github.com/go-gost/x/ingress	[no test files]
+?   	github.com/go-gost/x/ingress/plugin	[no test files]
+?   	github.com/go-gost/x/internal/ctx	[no test files]
+?   	github.com/go-gost/x/internal/io	[no test files]
+?   	github.com/go-gost/x/internal/loader	[no test files]
+?   	github.com/go-gost/x/internal/matcher	[no test files]
+?   	github.com/go-gost/x/internal/net	[no test files]
+?   	github.com/go-gost/x/internal/net/dialer	[no test files]
+?   	github.com/go-gost/x/internal/net/http	[no test files]
+?   	github.com/go-gost/x/internal/net/ip	[no test files]
+?   	github.com/go-gost/x/internal/net/proxyproto	[no test files]
+?   	github.com/go-gost/x/internal/net/udp	[no test files]
+?   	github.com/go-gost/x/internal/plugin	[no test files]
+?   	github.com/go-gost/x/internal/util/cache	[no test files]
+?   	github.com/go-gost/x/internal/util/crypto	[no test files]
+?   	github.com/go-gost/x/internal/util/dtls	[no test files]
+?   	github.com/go-gost/x/internal/util/forwarder	[no test files]
+?   	github.com/go-gost/x/internal/util/grpc/proto	[no test files]
+?   	github.com/go-gost/x/internal/util/icmp	[no test files]
+?   	github.com/go-gost/x/internal/util/kcp	[no test files]
+?   	github.com/go-gost/x/internal/util/mux	[no test files]
+?   	github.com/go-gost/x/internal/util/pht	[no test files]
+?   	github.com/go-gost/x/internal/util/port	[no test files]
+?   	github.com/go-gost/x/internal/util/quic	[no test files]
+?   	github.com/go-gost/x/internal/util/relay	[no test files]
+?   	github.com/go-gost/x/internal/util/resolver	[no test files]
+?   	github.com/go-gost/x/internal/util/serial	[no test files]
+ok  	github.com/go-gost/x/internal/util/sessionretire	0.110s
+?   	github.com/go-gost/x/internal/util/sniffing	[no test files]
+?   	github.com/go-gost/x/internal/util/socks	[no test files]
+ok  	github.com/go-gost/x/internal/util/ss	0.071s
+?   	github.com/go-gost/x/internal/util/ssh	[no test files]
+?   	github.com/go-gost/x/internal/util/sshd	[no test files]
+?   	github.com/go-gost/x/internal/util/stats	[no test files]
+?   	github.com/go-gost/x/internal/util/tap	[no test files]
+?   	github.com/go-gost/x/internal/util/tls	[no test files]
+?   	github.com/go-gost/x/internal/util/tun	[no test files]
+?   	github.com/go-gost/x/internal/util/ws	[no test files]
+?   	github.com/go-gost/x/internal/util/wt	[no test files]
+ok  	github.com/go-gost/x/kernel	16.699s
+ok  	github.com/go-gost/x/limiter/conn	0.059s
+?   	github.com/go-gost/x/limiter/conn/wrapper	[no test files]
+?   	github.com/go-gost/x/limiter/rate	[no test files]
+ok  	github.com/go-gost/x/limiter/traffic	0.109s
+?   	github.com/go-gost/x/limiter/traffic/cache	[no test files]
+?   	github.com/go-gost/x/limiter/traffic/plugin	[no test files]
+?   	github.com/go-gost/x/limiter/traffic/wrapper	[no test files]
+?   	github.com/go-gost/x/listener/dns	[no test files]
+?   	github.com/go-gost/x/listener/dtls	[no test files]
+?   	github.com/go-gost/x/listener/ftcp	[no test files]
+?   	github.com/go-gost/x/listener/grpc	[no test files]
+?   	github.com/go-gost/x/listener/http2	[no test files]
+?   	github.com/go-gost/x/listener/http2/h2	[no test files]
+?   	github.com/go-gost/x/listener/http3	[no test files]
+?   	github.com/go-gost/x/listener/http3/h3	[no test files]
+?   	github.com/go-gost/x/listener/http3/wt	[no test files]
+?   	github.com/go-gost/x/listener/icmp	[no test files]
+?   	github.com/go-gost/x/listener/kcp	[no test files]
+?   	github.com/go-gost/x/listener/mtcp	[no test files]
+?   	github.com/go-gost/x/listener/mtls	[no test files]
+?   	github.com/go-gost/x/listener/mws	[no test files]
+?   	github.com/go-gost/x/listener/obfs/http	[no test files]
+?   	github.com/go-gost/x/listener/obfs/tls	[no test files]
+?   	github.com/go-gost/x/listener/pht	[no test files]
+?   	github.com/go-gost/x/listener/quic	[no test files]
+?   	github.com/go-gost/x/listener/redirect/tcp	[no test files]
+?   	github.com/go-gost/x/listener/redirect/udp	[no test files]
+?   	github.com/go-gost/x/listener/rtcp	[no test files]
+?   	github.com/go-gost/x/listener/rudp	[no test files]
+?   	github.com/go-gost/x/listener/serial	[no test files]
+?   	github.com/go-gost/x/listener/ssh	[no test files]
+?   	github.com/go-gost/x/listener/sshd	[no test files]
+?   	github.com/go-gost/x/listener/tap	[no test files]
+?   	github.com/go-gost/x/listener/tcp	[no test files]
+?   	github.com/go-gost/x/listener/tls	[no test files]
+?   	github.com/go-gost/x/listener/tun	[no test files]
+ok  	github.com/go-gost/x/listener/udp	0.116s
+?   	github.com/go-gost/x/listener/unix	[no test files]
+?   	github.com/go-gost/x/listener/ws	[no test files]
+?   	github.com/go-gost/x/logger	[no test files]
+?   	github.com/go-gost/x/metadata	[no test files]
+?   	github.com/go-gost/x/metadata/util	[no test files]
+?   	github.com/go-gost/x/metrics	[no test files]
+?   	github.com/go-gost/x/metrics/service	[no test files]
+?   	github.com/go-gost/x/metrics/wrapper	[no test files]
+?   	github.com/go-gost/x/observer/plugin	[no test files]
+?   	github.com/go-gost/x/observer/stats	[no test files]
+?   	github.com/go-gost/x/observer/stats/wrapper	[no test files]
+?   	github.com/go-gost/x/recorder	[no test files]
+?   	github.com/go-gost/x/recorder/plugin	[no test files]
+ok  	github.com/go-gost/x/registry	0.080s
+?   	github.com/go-gost/x/resolver	[no test files]
+?   	github.com/go-gost/x/resolver/exchanger	[no test files]
+?   	github.com/go-gost/x/resolver/plugin	[no test files]
+?   	github.com/go-gost/x/router	[no test files]
+?   	github.com/go-gost/x/router/plugin	[no test files]
+?   	github.com/go-gost/x/routing	[no test files]
+ok  	github.com/go-gost/x/routing/rules	0.079s
+?   	github.com/go-gost/x/sd/plugin	[no test files]
+?   	github.com/go-gost/x/selector	[no test files]
+ok  	github.com/go-gost/x/service	0.060s
+🔐 AES 加密器创建成功
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["mutation_queue_first_tdd"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["mutation_queue_second_tdd"]},"type":"DeleteService"}
+🔐 AES 加密器创建成功
+❌ 无法发送响应：连接未建立
+🔔 收到命令: type=DeleteService requestId=
+🔔 命令详情(已脱敏):  {"data":{"services":["reload_transaction_service"]},"type":"DeleteService"}
+❌ 无法发送响应：连接未建立
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+⚠️ config persist: create temp file failed: open /tmp/TestCreateServicesPersistFailureRollsBackRuntime577760398/001/missing/.gost-3262308784.tmp: no such file or directory
+⚠️ config persist: create temp file failed: open /tmp/TestCreateLimiterReportsPersistFailure1276272016/001/missing/.gost-2778882665.tmp: no such file or directory
+2026/10/25 06:21:54 tune probe: IPv4 sock_diag dump failed, RTT median covers IPv6 only: v4 dump failed
+💾 节点配置已持久化到 /tmp/TestCreateServicesDedupesExistingConfigEntry522307798/001/gost.json
+💾 节点配置已持久化到 /tmp/TestCreateServicesDedupesAlreadyPoisonedConfig1190948142/001/gost.json
+💾 节点配置已持久化到 /tmp/TestCreateChainDedupesExistingConfigEntry2113458894/001/gost.json
+💾 节点配置已持久化到 /tmp/TestCreateLimiterDedupesExistingConfigEntry2118448474/001/gost.json
+💾 节点配置已持久化到 /tmp/TestCreateConnLimiterDedupesExistingConfigEntry3560164865/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02UpdateChainNil4272121654/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02UpdateLimiterNil193731655/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02UpdateConnLimiterNil1333345649/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02UpdateServicesNil2520886543/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02DeleteChainNil889369477/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02DeleteLimiterNil1676682695/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02DeleteConnLimiterNil1702196273/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02DeleteServicesNil993147941/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02PauseServicesNil1662984552/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /tmp/TestR19F02PauseServicesNil1662984552/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02ResumeServicesNil3420172701/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /tmp/TestR19F02ResumeServicesNil3420172701/001/gost.json
+⚠️ 启动 tcpkill 失败: exec: "tcpkill": executable file not found in $PATH
+💾 节点配置已持久化到 /tmp/TestR19F02ResumeServicesNil3420172701/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02RollbackPausedServicesNil2071985263/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02RollbackResumedServicesNil2300079559/001/gost.json
+💾 节点配置已持久化到 /tmp/TestR19F02RollbackResumedServicesNil2300079559/001/gost.json
+🔍 开始TCP ping测试: localhost:42673，次数: 1，超时: 500ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (4.95ms)，解析到 2 个IP: [127.0.0.1 ::1]
+🔍 开始UDP ping测试: localhost:53，次数: 1，超时: 200ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.01ms)，解析到 2 个IP: [127.0.0.1 ::1]
+🔍 开始UDP ping测试: localhost:53，次数: 1，超时: 200ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.01ms)，解析到 2 个IP: [127.0.0.1 ::1]
+🔍 开始UDP ping测试: 8.8.8.8:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 8.8.8.8:53
+  第1次UDP连接成功: 0.44ms
+✅ UDP ping完成: 平均连接时间 0.44ms，失败率 0.0%
+🔍 开始UDP ping测试: 192.168.1.1:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 192.168.1.1:53
+  第1次UDP连接失败: dial udp 192.168.1.1:53: connect: operation not permitted (0.09ms)
+🔍 开始UDP ping测试: 10.0.0.5:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 10.0.0.5:53
+  第1次UDP连接失败: dial udp 10.0.0.5:53: connect: operation not permitted (0.01ms)
+🔍 开始UDP ping测试: 172.16.0.9:53，次数: 1，超时: 200ms
+🎯 使用IP地址进行测试: 172.16.0.9:53
+  第1次UDP连接失败: dial udp 172.16.0.9:53: connect: operation not permitted (0.07ms)
+🔍 开始UDP ping测试: [fd8b:4f84:7d32:99::2]:56721，次数: 1，超时: 500ms
+🎯 使用IP地址进行测试: [fd8b:4f84:7d32:99::2]:56721
+  第1次UDP连接失败: dial udp [fd8b:4f84:7d32:99::2]:56721: connect: operation not permitted (0.03ms)
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+🔐 AES 加密器创建成功
+🔍 开始TCP ping测试: localhost:1，次数: 4，超时: 5000ms
+🔍 检测到域名，正在解析DNS...
+✅ DNS解析完成 (0.01ms)，解析到 2 个IP: [127.0.0.1 ::1]
+--- FAIL: TestTuneBdpLegacyConfRemoved (0.02s)
+    tuning_bdp_test.go:279: write /tmp/TestTuneBdpLegacyConfRemoved598209736/001/meminfo: no space left on device
+--- FAIL: TestTuneProbeDoesNotWrite (0.00s)
+    tuning_probe_test.go:65: write /tmp/TestTuneProbeDoesNotWrite3909885105/001/meminfo: no space left on device
+⚠️ 忽略无效的升级代理配置: "notaurl"
+⚠️ 忽略无效的升级代理配置: "ftp://proxy.example.com"
+⚠️ 忽略无效的升级代理配置: "::bad::"
+🔐 AES 加密器创建成功
+🔗 WebSocket连接URL: wss://panel.example.com:443/system-info?type=1&secret=***&version=2.0.2&http=1&tls=0&socks=1
+🔐 AES 加密器创建成功
+❌ WebSocket连接失败: 连接WebSocket失败: wss://panel.example.com:443/system-info?type=1&secret=***&version=2.0.2&http=1&tls=0&socks=1 => dial failed（已禁止从 wss 自动降级到 ws 明文连接；请检查面板 TLS/证书，或在 config.json 的 addr 中显式使用 ws:// 前缀以确认明文部署），1.830478138s后重试
+FAIL
+FAIL	github.com/go-gost/x/socket	2.786s
+FAIL

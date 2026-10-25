@@ -1,0 +1,9 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+total 22188
+drwxr-xr-x 2 root root     4096 Oct 25 14:45 .
+drwxr-xr-x 1 root root     4096 Oct 25 14:45 ..
+-rw-r--r-- 1 root root 20762624 Oct 25 14:45 gost.db
+-rw-r--r-- 1 root root    32768 Oct 25 14:52 gost.db-shm
+-rw-r--r-- 1 root root  1911712 Oct 25 14:52 gost.db-wal
+---
+rc=0
