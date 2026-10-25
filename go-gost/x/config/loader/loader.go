@@ -91,6 +91,11 @@ func register(cfg *config.Config) error {
 		registry.LoggerRegistry().Unregister(name)
 	}
 	for _, loggerCfg := range cfg.Loggers {
+		// R19-F02: nil 项显式报错（与 services 的 "service config is nil"
+		// 同口径），不得 panic；落盘毒化文件由启动自愈先剥离 nil。
+		if loggerCfg == nil {
+			return fmt.Errorf("logger config is nil")
+		}
 		if err := registry.LoggerRegistry().Register(loggerCfg.Name, logger_parser.ParseLogger(loggerCfg)); err != nil {
 			return err
 		}
@@ -100,6 +105,10 @@ func register(cfg *config.Config) error {
 		registry.AutherRegistry().Unregister(name)
 	}
 	for _, autherCfg := range cfg.Authers {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if autherCfg == nil {
+			return fmt.Errorf("auther config is nil")
+		}
 		if err := registry.AutherRegistry().Register(autherCfg.Name, auth_parser.ParseAuther(autherCfg)); err != nil {
 			return err
 		}
@@ -109,6 +118,10 @@ func register(cfg *config.Config) error {
 		registry.AdmissionRegistry().Unregister(name)
 	}
 	for _, admissionCfg := range cfg.Admissions {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if admissionCfg == nil {
+			return fmt.Errorf("admission config is nil")
+		}
 		if err := registry.AdmissionRegistry().Register(admissionCfg.Name, admission_parser.ParseAdmission(admissionCfg)); err != nil {
 			return err
 		}
@@ -118,6 +131,10 @@ func register(cfg *config.Config) error {
 		registry.BypassRegistry().Unregister(name)
 	}
 	for _, bypassCfg := range cfg.Bypasses {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if bypassCfg == nil {
+			return fmt.Errorf("bypass config is nil")
+		}
 		if err := registry.BypassRegistry().Register(bypassCfg.Name, bypass_parser.ParseBypass(bypassCfg)); err != nil {
 			return err
 		}
@@ -131,6 +148,10 @@ func register(cfg *config.Config) error {
 		registry.ResolverRegistry().Unregister(name)
 	}
 	for _, resolverCfg := range cfg.Resolvers {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if resolverCfg == nil {
+			return fmt.Errorf("resolver config is nil")
+		}
 		r, err := resolver_parser.ParseResolver(resolverCfg)
 		if err != nil {
 			return err
@@ -144,6 +165,10 @@ func register(cfg *config.Config) error {
 		registry.HostsRegistry().Unregister(name)
 	}
 	for _, hostsCfg := range cfg.Hosts {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if hostsCfg == nil {
+			return fmt.Errorf("hosts config is nil")
+		}
 		if err := registry.HostsRegistry().Register(hostsCfg.Name, hosts_parser.ParseHostMapper(hostsCfg)); err != nil {
 			return err
 		}
@@ -153,6 +178,10 @@ func register(cfg *config.Config) error {
 		registry.IngressRegistry().Unregister(name)
 	}
 	for _, ingressCfg := range cfg.Ingresses {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if ingressCfg == nil {
+			return fmt.Errorf("ingress config is nil")
+		}
 		if err := registry.IngressRegistry().Register(ingressCfg.Name, ingress_parser.ParseIngress(ingressCfg)); err != nil {
 			return err
 		}
@@ -162,6 +191,10 @@ func register(cfg *config.Config) error {
 		registry.RouterRegistry().Unregister(name)
 	}
 	for _, routerCfg := range cfg.Routers {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if routerCfg == nil {
+			return fmt.Errorf("router config is nil")
+		}
 		if err := registry.RouterRegistry().Register(routerCfg.Name, router_parser.ParseRouter(routerCfg)); err != nil {
 			return err
 		}
@@ -171,6 +204,10 @@ func register(cfg *config.Config) error {
 		registry.SDRegistry().Unregister(name)
 	}
 	for _, sdCfg := range cfg.SDs {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if sdCfg == nil {
+			return fmt.Errorf("sd config is nil")
+		}
 		if err := registry.SDRegistry().Register(sdCfg.Name, sd_parser.ParseSD(sdCfg)); err != nil {
 			return err
 		}
@@ -180,6 +217,10 @@ func register(cfg *config.Config) error {
 		registry.ObserverRegistry().Unregister(name)
 	}
 	for _, observerCfg := range cfg.Observers {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if observerCfg == nil {
+			return fmt.Errorf("observer config is nil")
+		}
 		if err := registry.ObserverRegistry().Register(observerCfg.Name, observer_parser.ParseObserver(observerCfg)); err != nil {
 			return err
 		}
@@ -189,6 +230,10 @@ func register(cfg *config.Config) error {
 		registry.RecorderRegistry().Unregister(name)
 	}
 	for _, recorderCfg := range cfg.Recorders {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if recorderCfg == nil {
+			return fmt.Errorf("recorder config is nil")
+		}
 		if err := registry.RecorderRegistry().Register(recorderCfg.Name, recorder_parser.ParseRecorder(recorderCfg)); err != nil {
 			return err
 		}
@@ -198,6 +243,10 @@ func register(cfg *config.Config) error {
 		registry.TrafficLimiterRegistry().Unregister(name)
 	}
 	for _, limiterCfg := range cfg.Limiters {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if limiterCfg == nil {
+			return fmt.Errorf("limiter config is nil")
+		}
 		if err := registry.TrafficLimiterRegistry().Register(limiterCfg.Name, limiter_parser.ParseTrafficLimiter(limiterCfg)); err != nil {
 			return err
 		}
@@ -207,6 +256,10 @@ func register(cfg *config.Config) error {
 		registry.ConnLimiterRegistry().Unregister(name)
 	}
 	for _, limiterCfg := range cfg.CLimiters {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if limiterCfg == nil {
+			return fmt.Errorf("conn limiter config is nil")
+		}
 		if err := registry.ConnLimiterRegistry().Register(limiterCfg.Name, limiter_parser.ParseConnLimiter(limiterCfg)); err != nil {
 			return err
 		}
@@ -216,6 +269,10 @@ func register(cfg *config.Config) error {
 		registry.RateLimiterRegistry().Unregister(name)
 	}
 	for _, limiterCfg := range cfg.RLimiters {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if limiterCfg == nil {
+			return fmt.Errorf("rate limiter config is nil")
+		}
 		if err := registry.RateLimiterRegistry().Register(limiterCfg.Name, limiter_parser.ParseRateLimiter(limiterCfg)); err != nil {
 			return err
 		}
@@ -225,6 +282,10 @@ func register(cfg *config.Config) error {
 		registry.HopRegistry().Unregister(name)
 	}
 	for _, hopCfg := range cfg.Hops {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if hopCfg == nil {
+			return fmt.Errorf("hop config is nil")
+		}
 		hop, err := hop_parser.ParseHop(hopCfg, logger.Default())
 		if err != nil {
 			return err
@@ -238,6 +299,10 @@ func register(cfg *config.Config) error {
 		registry.ChainRegistry().Unregister(name)
 	}
 	for _, chainCfg := range cfg.Chains {
+		// R19-F02: nil 项显式报错，不得 panic。
+		if chainCfg == nil {
+			return fmt.Errorf("chain config is nil")
+		}
 		c, err := chain_parser.ParseChain(chainCfg, logger.Default())
 		if err != nil {
 			return err

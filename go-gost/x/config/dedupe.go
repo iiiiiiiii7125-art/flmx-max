@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // HealPersistedServices dedupes cfg.Services in place (see
 // DeduplicateServices) and, when duplicates were removed, writes the healed
@@ -180,6 +183,110 @@ func DeduplicateRLimiters(cfg *Config) []string {
 	}
 	cfg.RLimiters = kept
 	return removed
+}
+
+// R19-F02: 剥离全部 17 类命名切片中的 nil 项（落盘 JSON null 读入后的
+// 内存形态），专用于启动/重载自愈。nil 项在此被清除并重新落盘——nil 项
+// 拒绝落盘、不得进自愈保留；Deduplicate* 保持“nil 项原样保留”的已证稳
+// 口径不动（见 r18_fix_f03_test.go 的断言）。运行时 update/delete 入口
+// 亦只跳过 nil、不清除（见 x/api、x/socket 的 R19-F02 守卫）。
+// 返回按类记的清除描述（如 "2 nil service(s)"），无清除时返回 nil。
+// cfg 为 nil 时返回 nil，不改动任何配置。
+func StripNilConfigItems(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var stripped []string
+	note := func(kind string, n int) {
+		if n > 0 {
+			stripped = append(stripped, fmt.Sprintf("%d nil %s(s)", n, kind))
+		}
+	}
+	if kept, n := stripNil(cfg.Services); n > 0 {
+		cfg.Services = kept
+		note("service", n)
+	}
+	if kept, n := stripNil(cfg.Chains); n > 0 {
+		cfg.Chains = kept
+		note("chain", n)
+	}
+	if kept, n := stripNil(cfg.Hops); n > 0 {
+		cfg.Hops = kept
+		note("hop", n)
+	}
+	if kept, n := stripNil(cfg.Authers); n > 0 {
+		cfg.Authers = kept
+		note("auther", n)
+	}
+	if kept, n := stripNil(cfg.Admissions); n > 0 {
+		cfg.Admissions = kept
+		note("admission", n)
+	}
+	if kept, n := stripNil(cfg.Bypasses); n > 0 {
+		cfg.Bypasses = kept
+		note("bypass", n)
+	}
+	if kept, n := stripNil(cfg.Resolvers); n > 0 {
+		cfg.Resolvers = kept
+		note("resolver", n)
+	}
+	if kept, n := stripNil(cfg.Hosts); n > 0 {
+		cfg.Hosts = kept
+		note("hosts", n)
+	}
+	if kept, n := stripNil(cfg.Ingresses); n > 0 {
+		cfg.Ingresses = kept
+		note("ingress", n)
+	}
+	if kept, n := stripNil(cfg.Routers); n > 0 {
+		cfg.Routers = kept
+		note("router", n)
+	}
+	if kept, n := stripNil(cfg.SDs); n > 0 {
+		cfg.SDs = kept
+		note("sd", n)
+	}
+	if kept, n := stripNil(cfg.Observers); n > 0 {
+		cfg.Observers = kept
+		note("observer", n)
+	}
+	if kept, n := stripNil(cfg.Recorders); n > 0 {
+		cfg.Recorders = kept
+		note("recorder", n)
+	}
+	if kept, n := stripNil(cfg.Limiters); n > 0 {
+		cfg.Limiters = kept
+		note("limiter", n)
+	}
+	if kept, n := stripNil(cfg.CLimiters); n > 0 {
+		cfg.CLimiters = kept
+		note("conn limiter", n)
+	}
+	if kept, n := stripNil(cfg.RLimiters); n > 0 {
+		cfg.RLimiters = kept
+		note("rate limiter", n)
+	}
+	if kept, n := stripNil(cfg.Loggers); n > 0 {
+		cfg.Loggers = kept
+		note("logger", n)
+	}
+	return stripped
+}
+
+// stripNil removes nil entries from items, returning the kept slice and the
+// removed count. The kept slice reuses the backing array (same idiom as
+// DeduplicateServices); callers reassign the result only when count > 0.
+func stripNil[T any](items []*T) ([]*T, int) {
+	kept := items[:0]
+	removed := 0
+	for _, item := range items {
+		if item == nil {
+			removed++
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept, removed
 }
 
 // dedupeNamed is the shared first-wins dedupe behind DeduplicateChains /

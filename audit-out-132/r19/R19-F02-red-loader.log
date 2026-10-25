@@ -1,0 +1,41 @@
+=== RUN   TestR19F02LoaderNilItems
+=== RUN   TestR19F02LoaderNilItems/logger
+=== RUN   TestR19F02LoaderNilItems/auther
+=== RUN   TestR19F02LoaderNilItems/admission
+=== RUN   TestR19F02LoaderNilItems/bypass
+=== RUN   TestR19F02LoaderNilItems/resolver
+=== RUN   TestR19F02LoaderNilItems/hosts
+=== RUN   TestR19F02LoaderNilItems/ingress
+=== RUN   TestR19F02LoaderNilItems/router
+=== RUN   TestR19F02LoaderNilItems/sd
+=== RUN   TestR19F02LoaderNilItems/observer
+=== RUN   TestR19F02LoaderNilItems/recorder
+=== RUN   TestR19F02LoaderNilItems/limiter
+=== RUN   TestR19F02LoaderNilItems/conn_limiter
+=== RUN   TestR19F02LoaderNilItems/rate_limiter
+=== RUN   TestR19F02LoaderNilItems/hop
+=== RUN   TestR19F02LoaderNilItems/chain
+=== RUN   TestR19F02LoaderNilItems/service
+--- FAIL: TestR19F02LoaderNilItems (0.04s)
+    --- FAIL: TestR19F02LoaderNilItems/logger (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/auther (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/admission (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/bypass (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/resolver (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/hosts (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/ingress (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/router (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/sd (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/observer (0.01s)
+    --- FAIL: TestR19F02LoaderNilItems/recorder (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/limiter (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/conn_limiter (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/rate_limiter (0.01s)
+    --- FAIL: TestR19F02LoaderNilItems/hop (0.00s)
+    --- FAIL: TestR19F02LoaderNilItems/chain (0.01s)
+    --- PASS: TestR19F02LoaderNilItems/service (0.00s)
+=== RUN   TestR19F02LoaderNilAfterValid
+--- FAIL: TestR19F02LoaderNilAfterValid (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/config/loader	0.106s
+FAIL

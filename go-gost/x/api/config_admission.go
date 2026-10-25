@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/admission"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateAdmission(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Admissions {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Admissions[i] == nil {
+				logger.Default().Warnf("update admission: skipped nil admission entry at index %d", i)
+				continue
+			}
 			if c.Admissions[i].Name == name {
 				c.Admissions[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteAdmission(ctx *gin.Context) {
 		admissiones := c.Admissions
 		c.Admissions = nil
 		for _, s := range admissiones {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete admission: kept nil admission entry as-is")
+				c.Admissions = append(c.Admissions, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

@@ -1,0 +1,26 @@
+=== RUN   TestR19F02UpdateChainNil
+--- PASS: TestR19F02UpdateChainNil (0.02s)
+=== RUN   TestR19F02UpdateLimiterNil
+--- PASS: TestR19F02UpdateLimiterNil (0.00s)
+=== RUN   TestR19F02UpdateConnLimiterNil
+--- PASS: TestR19F02UpdateConnLimiterNil (0.00s)
+=== RUN   TestR19F02UpdateServicesNil
+--- PASS: TestR19F02UpdateServicesNil (0.01s)
+=== RUN   TestR19F02DeleteChainNil
+--- PASS: TestR19F02DeleteChainNil (0.00s)
+=== RUN   TestR19F02DeleteLimiterNil
+--- PASS: TestR19F02DeleteLimiterNil (0.00s)
+=== RUN   TestR19F02DeleteConnLimiterNil
+--- PASS: TestR19F02DeleteConnLimiterNil (0.00s)
+=== RUN   TestR19F02DeleteServicesNil
+--- PASS: TestR19F02DeleteServicesNil (0.00s)
+=== RUN   TestR19F02PauseServicesNil
+--- PASS: TestR19F02PauseServicesNil (0.02s)
+=== RUN   TestR19F02ResumeServicesNil
+--- PASS: TestR19F02ResumeServicesNil (0.52s)
+=== RUN   TestR19F02RollbackPausedServicesNil
+--- PASS: TestR19F02RollbackPausedServicesNil (0.01s)
+=== RUN   TestR19F02RollbackResumedServicesNil
+--- PASS: TestR19F02RollbackResumedServicesNil (0.00s)
+PASS
+ok  	github.com/go-gost/x/socket	0.695s

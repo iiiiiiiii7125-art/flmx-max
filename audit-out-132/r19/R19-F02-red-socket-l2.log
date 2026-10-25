@@ -1,0 +1,35 @@
+=== TestR19F02UpdateChainNil ===
+    r19_fix_f02_test.go:117: updateChain PANICKED on nil chain entry: runtime error: invalid memory address or nil pointer dereference
+    r19_fix_f02_test.go:91: config.Set timed out after 5s (globalMux wedged?)
+--- FAIL: TestR19F02UpdateChainNil (5.01s)
+FAIL
+FAIL	github.com/go-gost/x/socket	5.057s
+FAIL
+=== TestR19F02UpdateLimiterNil ===
+    r19_fix_f02_test.go:144: updateLimiter PANICKED on nil limiter entry: runtime error: invalid memory address or nil pointer dereference
+    r19_fix_f02_test.go:91: config.Set timed out after 5s (globalMux wedged?)
+--- FAIL: TestR19F02UpdateLimiterNil (5.01s)
+FAIL
+FAIL	github.com/go-gost/x/socket	5.029s
+FAIL
+=== TestR19F02UpdateConnLimiterNil ===
+    r19_fix_f02_test.go:171: updateConnLimiter PANICKED on nil conn limiter entry: runtime error: invalid memory address or nil pointer dereference
+    r19_fix_f02_test.go:91: config.Set timed out after 5s (globalMux wedged?)
+--- FAIL: TestR19F02UpdateConnLimiterNil (5.01s)
+FAIL
+FAIL	github.com/go-gost/x/socket	5.166s
+FAIL
+=== TestR19F02UpdateServicesNil ===
+    r19_fix_f02_test.go:203: updateServices PANICKED on nil service entry: runtime error: invalid memory address or nil pointer dereference
+    r19_fix_f02_test.go:91: config.Set timed out after 5s (globalMux wedged?)
+--- FAIL: TestR19F02UpdateServicesNil (5.01s)
+FAIL
+FAIL	github.com/go-gost/x/socket	5.165s
+FAIL
+=== TestR19F02DeleteChainNil ===
+    r19_fix_f02_test.go:229: deleteChain PANICKED on nil chain entry: runtime error: invalid memory address or nil pointer dereference
+    r19_fix_f02_test.go:91: config.Set timed out after 5s (globalMux wedged?)
+--- FAIL: TestR19F02DeleteChainNil (5.00s)
+FAIL
+FAIL	github.com/go-gost/x/socket	5.156s
+FAIL

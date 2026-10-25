@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/auth"
 	"github.com/go-gost/x/registry"
@@ -116,6 +117,11 @@ func updateAuther(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Authers {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Authers[i] == nil {
+				logger.Default().Warnf("update auther: skipped nil auther entry at index %d", i)
+				continue
+			}
 			if c.Authers[i].Name == name {
 				c.Authers[i] = &req.Data
 				break
@@ -168,6 +174,12 @@ func deleteAuther(ctx *gin.Context) {
 		authers := c.Authers
 		c.Authers = nil
 		for _, s := range authers {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete auther: kept nil auther entry as-is")
+				c.Authers = append(c.Authers, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

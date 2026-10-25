@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/limiter"
 	"github.com/go-gost/x/registry"
@@ -117,6 +118,11 @@ func updateConnLimiter(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.CLimiters {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.CLimiters[i] == nil {
+				logger.Default().Warnf("update conn limiter: skipped nil conn limiter entry at index %d", i)
+				continue
+			}
 			if c.CLimiters[i].Name == name {
 				c.CLimiters[i] = &req.Data
 				break
@@ -169,6 +175,12 @@ func deleteConnLimiter(ctx *gin.Context) {
 		limiteres := c.CLimiters
 		c.CLimiters = nil
 		for _, s := range limiteres {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete conn limiter: kept nil conn limiter entry as-is")
+				c.CLimiters = append(c.CLimiters, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

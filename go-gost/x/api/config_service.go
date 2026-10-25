@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/service"
@@ -256,6 +257,11 @@ func updateService(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Services {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Services[i] == nil {
+				logger.Default().Warnf("update service: skipped nil service entry at index %d", i)
+				continue
+			}
 			if c.Services[i].Name == name {
 				c.Services[i] = &req.Data
 				break
@@ -340,6 +346,11 @@ func updateServices(ctx *gin.Context) {
 	config.OnUpdate(func(c *config.Config) error {
 		for _, serviceConfig := range req.Data {
 			for i := range c.Services {
+				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+				if c.Services[i] == nil {
+					logger.Default().Warnf("update services: skipped nil service entry at index %d", i)
+					continue
+				}
 				if c.Services[i].Name == serviceConfig.Name {
 					c.Services[i] = &serviceConfig
 					break
@@ -408,6 +419,12 @@ func deleteService(ctx *gin.Context) {
 		services := c.Services
 		c.Services = nil
 		for _, s := range services {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete service: kept nil service entry as-is")
+				c.Services = append(c.Services, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}
@@ -477,6 +494,12 @@ func deleteServices(ctx *gin.Context) {
 		services := c.Services
 		c.Services = nil
 		for _, s := range services {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete services: kept nil service entry as-is")
+				c.Services = append(c.Services, s)
+				continue
+			}
 			shouldDelete := false
 			for _, std := range servicesToDelete {
 				if s.Name == std.name {
@@ -554,6 +577,11 @@ func pauseService(ctx *gin.Context) {
 	var serviceAddr string
 	cfg := config.Global()
 	for _, s := range cfg.Services {
+		// R19-F02: nil 项跳过并记日志，不得 panic。
+		if s == nil {
+			logger.Default().Warnf("pause service: skipped nil service entry")
+			continue
+		}
 		if s.Name == name {
 			serviceAddr = s.Addr
 			break
@@ -568,6 +596,11 @@ func pauseService(ctx *gin.Context) {
 	// 更新配置中的暂停状态
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Services {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Services[i] == nil {
+				logger.Default().Warnf("pause service: skipped nil service entry at index %d", i)
+				continue
+			}
 			if c.Services[i].Name == name {
 				if c.Services[i].Metadata == nil {
 					c.Services[i].Metadata = make(map[string]any)
@@ -611,6 +644,11 @@ func resumeService(ctx *gin.Context) {
 	var serviceConfig *config.ServiceConfig
 	cfg := config.Global()
 	for _, s := range cfg.Services {
+		// R19-F02: nil 项跳过并记日志，不得 panic。
+		if s == nil {
+			logger.Default().Warnf("resume service: skipped nil service entry")
+			continue
+		}
 		if s.Name == name {
 			serviceConfig = s
 			break
@@ -663,6 +701,11 @@ func resumeService(ctx *gin.Context) {
 	// 更新配置，移除暂停状态
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Services {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Services[i] == nil {
+				logger.Default().Warnf("resume service: skipped nil service entry at index %d", i)
+				continue
+			}
 			if c.Services[i].Name == name {
 				if c.Services[i].Metadata != nil {
 					delete(c.Services[i].Metadata, "paused")
@@ -728,6 +771,11 @@ func getServiceStatus(ctx *gin.Context) {
 	var paused bool
 	cfg := config.Global()
 	for _, s := range cfg.Services {
+		// R19-F02: nil 项跳过并记日志，不得 panic。
+		if s == nil {
+			logger.Default().Warnf("get service status: skipped nil service entry")
+			continue
+		}
 		if s.Name == name && s.Metadata != nil {
 			if pausedVal, exists := s.Metadata["paused"]; exists && pausedVal == true {
 				paused = true
@@ -773,6 +821,11 @@ func rollbackPausedServices(pausedServices []struct {
 		// 移除暂停状态标记
 		config.OnUpdate(func(c *config.Config) error {
 			for i := range c.Services {
+				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+				if c.Services[i] == nil {
+					logger.Default().Warnf("rollback paused services: skipped nil service entry at index %d", i)
+					continue
+				}
 				if c.Services[i].Name == pss.name {
 					if c.Services[i].Metadata != nil {
 						delete(c.Services[i].Metadata, "paused")
@@ -803,6 +856,11 @@ func rollbackResumedServices(resumedServices []struct {
 		// 重新标记为暂停状态
 		config.OnUpdate(func(c *config.Config) error {
 			for i := range c.Services {
+				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+				if c.Services[i] == nil {
+					logger.Default().Warnf("rollback resumed services: skipped nil service entry at index %d", i)
+					continue
+				}
 				if c.Services[i].Name == rss.name {
 					if c.Services[i].Metadata == nil {
 						c.Services[i].Metadata = make(map[string]any)
@@ -883,6 +941,11 @@ func pauseServices(ctx *gin.Context) {
 		// 检查服务是否已经暂停
 		var serviceConfig *config.ServiceConfig
 		for _, s := range cfg.Services {
+			// R19-F02: nil 项跳过并记日志，不得 panic。
+			if s == nil {
+				logger.Default().Warnf("pause services: skipped nil service entry")
+				continue
+			}
 			if s.Name == name {
 				serviceConfig = s
 				break
@@ -913,6 +976,11 @@ func pauseServices(ctx *gin.Context) {
 	// 获取服务配置
 	serviceConfigs := make(map[string]*config.ServiceConfig)
 	for _, s := range cfg.Services {
+		// R19-F02: nil 项跳过并记日志，不得 panic（无名可入 map）。
+		if s == nil {
+			logger.Default().Warnf("pause services: skipped nil service entry")
+			continue
+		}
 		serviceConfigs[s.Name] = s
 	}
 
@@ -943,6 +1011,11 @@ func pauseServices(ctx *gin.Context) {
 	err := config.OnUpdate(func(c *config.Config) error {
 		for _, stp := range servicesToPause {
 			for i := range c.Services {
+				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+				if c.Services[i] == nil {
+					logger.Default().Warnf("pause services: skipped nil service entry at index %d", i)
+					continue
+				}
 				if c.Services[i].Name == stp.name {
 					if c.Services[i].Metadata == nil {
 						c.Services[i].Metadata = make(map[string]any)
@@ -1012,6 +1085,11 @@ func resumeServices(ctx *gin.Context) {
 		// 查找配置中的服务
 		var serviceConfig *config.ServiceConfig
 		for _, s := range cfg.Services {
+			// R19-F02: nil 项跳过并记日志，不得 panic。
+			if s == nil {
+				logger.Default().Warnf("resume services: skipped nil service entry")
+				continue
+			}
 			if s.Name == name {
 				serviceConfig = s
 				break
@@ -1092,6 +1170,11 @@ func resumeServices(ctx *gin.Context) {
 	err := config.OnUpdate(func(c *config.Config) error {
 		for _, str := range servicesToResume {
 			for i := range c.Services {
+				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+				if c.Services[i] == nil {
+					logger.Default().Warnf("resume services: skipped nil service entry at index %d", i)
+					continue
+				}
 				if c.Services[i].Name == str.name {
 					if c.Services[i].Metadata != nil {
 						delete(c.Services[i].Metadata, "paused")

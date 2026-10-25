@@ -1,0 +1,4 @@
+ok  	github.com/go-gost/x/socket	0.538s
+ok  	github.com/go-gost/x/api	1.598s
+ok  	github.com/go-gost/x/config	0.005s
+ok  	github.com/go-gost/x/config/loader	0.015s

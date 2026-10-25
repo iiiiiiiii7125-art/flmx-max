@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/hosts"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateHosts(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Hosts {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Hosts[i] == nil {
+				logger.Default().Warnf("update hosts: skipped nil hosts entry at index %d", i)
+				continue
+			}
 			if c.Hosts[i].Name == name {
 				c.Hosts[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteHosts(ctx *gin.Context) {
 		hosts := c.Hosts
 		c.Hosts = nil
 		for _, s := range hosts {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete hosts: kept nil hosts entry as-is")
+				c.Hosts = append(c.Hosts, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

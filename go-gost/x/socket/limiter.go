@@ -2,10 +2,12 @@ package socket
 
 import (
 	"errors"
+	"strings"
+
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/limiter"
 	"github.com/go-gost/x/registry"
-	"strings"
 )
 
 func createLimiter(req createLimiterRequest) error {
@@ -72,6 +74,11 @@ func updateLimiter(req updateLimiterRequest) error {
 	return config.OnUpdate(func(c *config.Config) error {
 		found := false
 		for i := range c.Limiters {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Limiters[i] == nil {
+				logger.Default().Warnf("update limiter: skipped nil limiter entry at index %d", i)
+				continue
+			}
 			if c.Limiters[i].Name == name {
 				c.Limiters[i] = &req.Data
 				found = true
@@ -97,6 +104,12 @@ func deleteLimiter(req deleteLimiterRequest) error {
 		limiteres := c.Limiters
 		c.Limiters = nil
 		for _, s := range limiteres {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete limiter: kept nil limiter entry as-is")
+				c.Limiters = append(c.Limiters, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}
@@ -179,6 +192,11 @@ func updateConnLimiter(req updateLimiterRequest) error {
 
 	return config.OnUpdate(func(c *config.Config) error {
 		for i := range c.CLimiters {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.CLimiters[i] == nil {
+				logger.Default().Warnf("update conn limiter: skipped nil conn limiter entry at index %d", i)
+				continue
+			}
 			if c.CLimiters[i].Name == name {
 				c.CLimiters[i] = &req.Data
 				return nil
@@ -200,6 +218,12 @@ func deleteConnLimiter(req deleteLimiterRequest) error {
 		limiteres := c.CLimiters
 		c.CLimiters = nil
 		for _, s := range limiteres {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete conn limiter: kept nil conn limiter entry as-is")
+				c.CLimiters = append(c.CLimiters, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

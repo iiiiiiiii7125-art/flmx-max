@@ -1,0 +1,15 @@
+=== api chain update (RED) ===
+    --- FAIL: TestR19F02ApiUpdateNil/chain (5.01s)
+FAIL
+FAIL	github.com/go-gost/x/api	5.067s
+FAIL
+=== api chain delete (RED) ===
+    --- FAIL: TestR19F02ApiDeleteNil/chain (5.03s)
+FAIL
+FAIL	github.com/go-gost/x/api	5.180s
+FAIL
+=== api updateService (RED) ===
+--- FAIL: TestR19F02ApiUpdateServiceNil (5.58s)
+FAIL
+FAIL	github.com/go-gost/x/api	5.744s
+FAIL
