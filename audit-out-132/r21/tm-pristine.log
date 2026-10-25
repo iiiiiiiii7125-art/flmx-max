@@ -1,0 +1,17 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+total 42892
+drwxr-----  2 root root     4096 Oct 25 09:28 .
+drwx------ 47 root root     4096 Oct 25 09:28 ..
+-rwxr-x---  1 root root 43892332 Oct 25 09:29 paneld-r21f01
+-rw-r-----  1 root root    18039 Oct 25 09:28 r21_f01_legs.py
+de45573f95f1cb9254bb74999ef3cc8d  /root/r21-f01/paneld-r21f01
+=== pristine recon start=2026-10-25T09:29:53Z initiator=R21-F01 ===
+counts: {'node': 1, 'tunnel': 4, 'forward': 6, 'inbound': 578, 'subscription': 18}
+PASS counts 1/4/6/578/18 :: {'node': 1, 'tunnel': 4, 'forward': 6, 'inbound': 578, 'subscription': 18}
+=== leg counts end failures=0 [] ===
+gost md5=d48f09e132ebe99fe97a619dd72d42d4 services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+=== leg gost end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+tunnel get: {"chainNodes": [], "createdTime": 1792587544782, "engine": "", "flow": 1, "id": 1, "inIp": "2600:1f13:14d:a300:fd27:87f4:a509:a344", "inNodeId": [{"chainType": 1, "inx": 1, "nodeId": 1, "protocol": "tls", "strategy": "round"}], "inx": 0, "ipPreference": "", "name": "W10-T1", "outNodeId": [], "probeTargetHost": "", "probeTargetPort": 0, "status": 1, "trafficRatio": 1, "type": 1}
+=== leg tunget end failures=0 [] ===

@@ -1,0 +1,22 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg switch-to-realm start=2026-10-25T09:30:59Z initiator=R21-F01 ===
+2026-10-25 09:30:59
+tunnel engine '' -> 'realm' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792920660890}
+tunnel engine now: realm
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792587544782, 'engine': 'realm', 'flow': 1, 'id': 1, 'inIp': '2600:1f13:14d:a300:fd27:87f4:a509:a344', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'W10-T1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+gost services=8 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+journal-since: 2026-10-25 09:30:59
+=== leg tunengine end failures=0 [] ===
+gost md5=8276d4c0b8184292dd06b0f419c53943 services=8 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+=== leg gost end failures=0 [] ===
+--- realm on agent:
+nft.json
+realm
+singbox
+snell
+state.json
+xray
+/etc/flux_agent/kernels/realm
+/etc/flux_agent/kernels/realm/bin/2.9.6/realm
+0

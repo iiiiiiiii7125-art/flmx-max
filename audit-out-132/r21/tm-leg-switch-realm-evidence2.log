@@ -1,0 +1,33 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+● flux_agent.service - Flux_agent Proxy Service
+     Loaded: loaded (/etc/systemd/system/flux_agent.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2026-10-25 09:02:01 UTC; 29min ago
+   Main PID: 838368 (flux_agent)
+      Tasks: 49 (limit: 510)
+     Memory: 60.4M
+        CPU: 11.923s
+     CGroup: /system.slice/flux_agent.service
+Archived and active journals take up 249.8M in the file system.
+1
+-- No entries --
+--- realm config.toml:
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+
+[[endpoints]]
+# forward 1
+listen = "[::]:31080"
+remote = "127.0.0.1:18080"
+
+[[endpoints]]
+# forward 6
+listen = "[::]:14601"
+remote = "16.146.199.68:24501"
+
+[[endpoints]]
+# forward 48
+listen = "[::]:13810"
+remote = "203.0.113.9:9001"

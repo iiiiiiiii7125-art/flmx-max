@@ -1,0 +1,26 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+               Local time: Sun 2026-10-25 09:31:18 UTC
+           Universal time: Sun 2026-10-25 09:31:18 UTC
+                 RTC time: Sun 2026-10-25 09:31:18
+Sun Oct 25 09:31:18 UTC 2026
+--- realm config:
+/etc/flux_agent/kernels/realm/run/config.toml
+/etc/flux_agent/kernels/realm/bin/2.9.6/realm
+
+--- journal DeleteCLimiters (last 200 lines):
+--- journal last 15 lines:
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]:   第1次连接成功: 6.30ms
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]: ✅ TCP ping完成: 平均连接时间 6.30ms，失败率 0.0%
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]:   第1次连接成功: 6.30ms
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]: ✅ TCP ping完成: 平均连接时间 6.30ms，失败率 0.0%
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]:   第1次连接成功: 6.32ms
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]: ✅ TCP ping完成: 平均连接时间 6.32ms，失败率 0.0%
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]:   第1次连接成功: 6.52ms
+Oct 25 09:01:37 ip-172-26-9-119 flux_agent[836835]: ✅ TCP ping完成: 平均连接时间 6.52ms，失败率 0.0%
+Oct 25 09:01:38 ip-172-26-9-119 systemd[1]: Stopping flux_agent.service - Flux_agent Proxy Service...
+Oct 25 09:01:38 ip-172-26-9-119 flux_agent[836835]: ⏹️ 配置定时上报器已停止
+Oct 25 09:01:38 ip-172-26-9-119 flux_agent[836835]: 🔌 WebSocket连接已关闭
+Oct 25 09:01:38 ip-172-26-9-119 systemd[1]: flux_agent.service: Deactivated successfully.
+Oct 25 09:01:38 ip-172-26-9-119 systemd[1]: Stopped flux_agent.service - Flux_agent Proxy Service.
+Oct 25 09:01:38 ip-172-26-9-119 systemd[1]: flux_agent.service: Consumed 2.024s CPU time.
+Oct 25 09:02:01 ip-172-26-9-119 systemd[1]: Started flux_agent.service - Flux_agent Proxy Service.

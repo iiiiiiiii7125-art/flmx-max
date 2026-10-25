@@ -1,0 +1,23 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg switch-back-to-gost start=2026-10-25T09:32:45Z initiator=R21-F01 ===
+tunnel engine 'realm' -> '' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792920766068}
+tunnel engine now: 
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792587544782, 'engine': '', 'flow': 1, 'id': 1, 'inIp': '2600:1f13:14d:a300:fd27:87f4:a509:a344', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'W10-T1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+gost services=14 climiters=['rule_conn_limit_12', 'rule_conn_limit_2', 'rule_conn_limit_48'] refs=['rule_conn_limit_48']
+journal-since: 2026-10-25 09:32:45
+=== leg tunengine end failures=0 [] ===
+gost md5=b625a3ae345e2a2f3a664997978f162e services=14 climiters=['rule_conn_limit_12', 'rule_conn_limit_2', 'rule_conn_limit_48'] refs=['rule_conn_limit_48']
+=== leg gost end failures=0 [] ===
+--- realm config after switch-back:
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+--- listen check 13810:
+LISTEN 0      4096                                        *:13810            *:*    users:(("flux_agent",pid=838368,fd=29))     
+LISTEN 0      4096                                        *:31080            *:*    users:(("flux_agent",pid=838368,fd=7))      
+LISTEN 0      4096                                        *:14601            *:*    users:(("flux_agent",pid=838368,fd=17))     
+--- gost listen check 13810:
+LISTEN 0      4096                                        *:13810            *:*    users:(("flux_agent",pid=838368,fd=29))     

@@ -1,0 +1,12 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+ExecStart=/etc/flux_agent/flux_agent
+StandardOutput=null
+StandardError=null
+--- all-time journal DeleteCLimiters:
+36
+Oct 25 08:10:09 ip-172-26-9-119 flux_agent[821920]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_46"},"requestId":"1_1792915809619890016","type":"DeleteCLimiters"}
+Oct 25 08:52:52 ip-172-26-9-119 flux_agent[834730]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792918372349772387
+Oct 25 08:52:52 ip-172-26-9-119 flux_agent[834730]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_47"},"requestId":"1_1792918372349772387","type":"DeleteCLimiters"}
+--- all-time rule_conn_limit_48:
+0
+--- panel backend log around switch (09:30:59-09:31:05):

@@ -1,0 +1,46 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+4,5c4,6
+<             "name": "1_2_1_tcp",
+<             "addr": "[::]:31080",
+---
+>             "name": "2_5_2_tcp",
+>             "addr": "[::]:13101",
+>             "limiter": "1",
+21c22
+<                         "addr": "127.0.0.1:18080"
+---
+>                         "addr": "127.0.0.1:18081"
+27,28c28,30
+<             "name": "1_2_1_udp",
+<             "addr": "[::]:31080",
+---
+>             "name": "2_5_2_udp",
+>             "addr": "[::]:13101",
+>             "limiter": "1",
+48c50
+<                         "addr": "127.0.0.1:18080"
+---
+>                         "addr": "127.0.0.1:18081"
+54,56c56,57
+<             "name": "2_5_2_tcp",
+<             "addr": "[::]:13101",
+<             "limiter": "1",
+---
+>             "name": "7_1_0_tcp",
+>             "addr": "[::]:15096",
+72c73
+<                         "addr": "127.0.0.1:18081"
+---
+>                         "addr": "16.146.199.68:15510"
+78,80c79,80
+<             "name": "2_5_2_udp",
+<             "addr": "[::]:13101",
+<             "limiter": "1",
+---
+>             "name": "7_1_0_udp",
+>             "addr": "[::]:15096",
+--- byte diff:
+/root/r21-l2/gost.json.pristine /etc/flux_agent/gost.json differ: byte 40, line 4
+ 6237 /root/r21-l2/gost.json.pristine
+ 6237 /etc/flux_agent/gost.json
+12474 total
