@@ -1,0 +1,5 @@
+=== R20-F01 red (compile) for item 1: syncForwardServicesWithWarnings has no old-record parameter at baseline ===
+vet: internal/http/handler/r20_fix_f01_test.go:78:83: too many arguments in call to a.h.syncForwardServicesWithWarnings
+vet: internal/http/handler/r20_fix_f01_test.go:111:83: too many arguments in call to a.h.syncForwardServicesWithWarnings
+vet: internal/http/handler/r20_fix_f01_test.go:154:83: too many arguments in call to a.h.syncForwardServicesWithWarnings
+FAIL	go-backend/internal/http/handler [build failed]

@@ -1,0 +1,8 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+PASS node=1 expect=1
+PASS tunnel=4 expect=4
+PASS forward=6 expect=6
+PASS inbound=578 expect=578
+PASS subscription=18 expect=18
+forward statuses=[1]
+counts-exit=0

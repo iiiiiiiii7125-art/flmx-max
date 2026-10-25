@@ -294,9 +294,16 @@ func (h *Handler) syncForwardServices(forward *forwardRecord, method string, all
 	return err
 }
 
-func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method string, allowFallbackAdd bool) ([]string, error) {
+func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method string, allowFallbackAdd bool, oldForwards ...*forwardRecord) ([]string, error) {
 	if h == nil || forward == nil {
 		return nil, errors.New("invalid forward sync context")
+	}
+	// R20-X-01 ①：可选的更新前快照。仅当调用方持有更新前的转发记录
+	// 时传入（forwardUpdate / 批量换隧道 / 隧道删除决议）；无快照的
+	// 重推路径（创建、限速重同步、relay 修复）传空，不触发清理。
+	var oldForward *forwardRecord
+	if len(oldForwards) > 0 {
+		oldForward = oldForwards[0]
 	}
 	// R5-B3 D1-001 补充 D 兜底：pending-delete 行不得被任何同步路径触碰
 	//（删除流程由 pending 机制接管）。直接调用 getForwardRecord 的后台路径
@@ -395,6 +402,12 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	}
 	connLimiterConfigs := buildConnLimiterConfigs(forward, userMaxConn)
 
+	// R20-X-01 ①：本轮服务推送成功的入口节点（去重）。循环内任一节点
+	// 非离线失败即整函数返回错误、调用方回滚 DB，故失势 limiter 只能
+	// 在循环全部成功后删——循环内删会在后继节点失败回滚后造成“DB 仍
+	// 有限流、节点 limiter 已删”的窗口。离线跳过的节点不进本集。
+	pushedNodeIDs := make([]int64, 0, len(ports))
+	pushedNodeSeen := make(map[int64]struct{}, len(ports))
 	for _, fp := range ports {
 		runtimeLimiters := forwardRuntimeLimiters{ConnLimiter: joinLimiterNames(connLimiterConfigs)}
 		trafficLimiterNames := make([]string, 0, 2)
@@ -484,6 +497,17 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if err != nil {
 			return warnings, fmt.Errorf("节点 %s 下发失败: %w", node.Name, err)
 		}
+		if _, ok := pushedNodeSeen[node.ID]; !ok {
+			pushedNodeSeen[node.ID] = struct{}{}
+			pushedNodeIDs = append(pushedNodeIDs, node.ID)
+		}
+	}
+
+	// R20-X-01 ①：全部入口节点服务推送成功后，删更新失势的 rule climiter
+	//（先推服务后删 limiter；离线节点本轮未推，不删，留待下次成功同步
+	// 或删除兜底 ②）。失败只记日志、不挡更新回执（helper 内处理）。
+	for _, nodeID := range pushedNodeIDs {
+		h.deleteStaleForwardConnLimiterOnNode(oldForward, forward, nodeID)
 	}
 
 	// Keep paused forwards paused after UpdateService/AddService, since agent-side UpdateService
@@ -2239,7 +2263,19 @@ func forwardRuleConnLimiterName(forward *forwardRecord) string {
 	if forward == nil || (forward.MaxConn <= 0 && forward.IPMaxConn <= 0) {
 		return ""
 	}
-	return fmt.Sprintf("rule_conn_limit_%d", forward.ID)
+	return forwardRuleConnLimiterNameByID(forward.ID)
+}
+
+// forwardRuleConnLimiterNameByID 是 rule 级 climiter 的确定性名：只由
+// 转发 ID 决定，与当前记录的限流值无关。R20-X-01 ②：删除兜底不得只按
+// 当前记录值取名——更新清零限流后删除再也算不出旧名，孤儿永久残留；
+// 按 ID 取名则更新-删除序列仍能命中旧名。agent 侧删不存在者为 noop，
+// 从未带过限流的转发多发一次 DeleteCLimiters 亦无害。
+func forwardRuleConnLimiterNameByID(forwardID int64) string {
+	if forwardID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("rule_conn_limit_%d", forwardID)
 }
 
 // deleteForwardConnLimiterOnNode 在转发服务已删后，尽力删除该转发在节点上
@@ -2249,14 +2285,38 @@ func forwardRuleConnLimiterName(forward *forwardRecord) string {
 // 调用方返回错误：服务已删、删库不应被一个 cosmetic 残留挡住；节点离线时
 // 调用方本就走 S-04/重连清理分支、会经同一漏斗重试。agent 侧
 // deleteConnLimiter 对不存在的名字亦返回成功，故重复发送无害。
+// R20-X-01 ②：取名只按转发 ID，不再按当前记录的限流值（无限制返 "" 即
+// 跳过的旧口径会在更新清零后漏删孤儿）；user_conn_limit_* 共享，永不删。
 func (h *Handler) deleteForwardConnLimiterOnNode(forward *forwardRecord, nodeID int64) {
-	name := forwardRuleConnLimiterName(forward)
+	if forward == nil {
+		return
+	}
+	name := forwardRuleConnLimiterNameByID(forward.ID)
 	if name == "" {
 		return
 	}
 	if _, err := h.sendNodeCommand(nodeID, "DeleteCLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
 		log.Printf("forward delete: conn limiter cleanup failed node_id=%d forward_id=%d limiter=%s err=%v (continuing)", nodeID, forward.ID, name, err)
 	}
+}
+
+// deleteStaleForwardConnLimiterOnNode 是 R20-X-01 ① 的更新路径清理：
+// 旧配置带 rule 级限流、新配置已无时，失势的 rule_conn_limit_<id> 已
+// 不再被任何服务引用，须删。调用方保证在服务推送成功后才调本函数
+// （先推服务后删 limiter）；新配置仍带限流时不删——新 limiter 由
+// ensureConnLimiterOnNode 原地 Add/Update，无需清理。user_conn_limit_*
+// 为同用户共享，永不在此删除（新旧名均不含它）。
+func (h *Handler) deleteStaleForwardConnLimiterOnNode(oldForward, newForward *forwardRecord, nodeID int64) {
+	if oldForward == nil || newForward == nil {
+		return
+	}
+	if forwardRuleConnLimiterName(oldForward) == "" {
+		return
+	}
+	if forwardRuleConnLimiterName(newForward) != "" {
+		return
+	}
+	h.deleteForwardConnLimiterOnNode(newForward, nodeID)
 }
 
 func joinLimiterNames(configs []forwardLimiterConfig) string {

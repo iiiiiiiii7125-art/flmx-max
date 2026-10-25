@@ -1,0 +1,36 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R20-FIX-F01 e2e start=2026-10-25T07:04:28Z ===
+PASS login :: http=200 code=0
+pre nodes: [(1, 'w10-test', 1)]
+PASS pre node 1 online (status 1) :: [{'expiryReminderDismissed': 0, 'expiryTime': None, 'extraIPs': None, 'forwardMode': 'agent', 'http': 0, 'id': 1, 'interfaceName': None, 'inx': 0, 'ip': '16.146.199.68', 'isRemote': 0, 'latency': {'ok': True, 'latencyMs': 170, 'checkedAt': 1792911809467, 'points': [{'name': '百度', 'pinned': True, 'ok': True, 'latencyMs': 166}, {'name': '谷歌DNS', 'ok': True, 'latencyMs': 6}, {'name': 'CF-DNS', 'ok': True, 'latencyMs': 6}, {'name': '清华', 'ok': True, 'latencyMs': 170}, {'name': '阿里DNS', 'ok': True, 'latencyMs': 64}]}, 'name': 'w10-test', 'port': '1000-19999', 'remark': None, 'remoteConfig': None, 'remoteToken': None, 'remoteUrl': None, 'renewalCycle': None, 'serverIp': '16.146.199.68', 'serverIpV4': None, 'serverIpV6': '2600:1f13:14d:a300:fd27:87f4:a509:a344', 'socks': 0, 'sshConfig': None, 'status': 1, 'tcpListenAddr': '[::]', 'tls': 0, 'udpListenAddr': '[::]', 'version': 'dev (debian/amd64)'}]
+pre: services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+PASS pre climiters are pristine stock only :: ['rule_conn_limit_12', 'rule_conn_limit_2']
+PASS pre forward count 6 :: 6
+PASS A create code 0 :: http=200 code=0 msg=操作成功
+PASS A forward id found :: 36
+A gost: services=14 climiters=['rule_conn_limit_12', 'rule_conn_limit_2', 'rule_conn_limit_36'] refs=['rule_conn_limit_36']
+PASS A gost has new limiter :: ['rule_conn_limit_12', 'rule_conn_limit_2', 'rule_conn_limit_36']
+PASS A service refs new limiter :: ['rule_conn_limit_36']
+PASS B update code 0 :: http=200 code=0 msg=操作成功
+B gost: services=14 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+PASS B stale limiter gone from gost :: ['rule_conn_limit_12', 'rule_conn_limit_2']
+PASS B service still present :: ['1_2_1_tcp', '1_2_1_udp', '2_5_2_tcp', '2_5_2_udp', '36_1_0_tcp', '36_1_0_udp', '3_5_3_tcp', '3_5_3_udp', '4_5_4_tcp', '4_5_4_udp', '6_1_0_tcp', '6_1_0_udp', '7_1_0_tcp', '7_1_0_udp']
+PASS B no service refs stale limiter
+B journal DeleteCLimiters rule_conn_limit_36: 0
+FAIL B journal has DeleteCLimiters after update
+PASS C delete code 0 :: http=200 code=0 msg=操作成功
+C gost: services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+PASS C gost back to pristine climiters :: ['rule_conn_limit_12', 'rule_conn_limit_2']
+PASS C forward count back to 6 :: 6
+C journal DeleteCLimiters rule_conn_limit_36: 0
+FAIL C journal has DeleteCLimiters after delete
+PASS D create code 0 :: http=200 code=0 msg=操作成功
+PASS D forward id found :: 37
+PASS D delete code 0 :: http=200 code=0 msg=操作成功
+D gost: services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+PASS D gost back to pristine climiters :: ['rule_conn_limit_12', 'rule_conn_limit_2']
+PASS D forward count back to 6 :: 6
+D journal DeleteCLimiters rule_conn_limit_37: 0
+FAIL D journal has DeleteCLimiters after direct delete
+=== e2e end failures=3 ['B journal has DeleteCLimiters after update', 'C journal has DeleteCLimiters after delete', 'D journal has DeleteCLimiters after direct delete'] ===
+remote-python-exit=1

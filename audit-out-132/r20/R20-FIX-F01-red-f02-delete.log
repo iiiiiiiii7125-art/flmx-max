@@ -1,0 +1,15 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR20F01DeleteAfterLimitsClearedSendsDeleteCLimiters
+2026/10/25 06:20:47 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (259.519µs)
+2026/10/25 06:20:47 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (162.463µs)
+2026/10/25 06:20:47 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (1.17283ms)
+2026/10/25 06:20:47 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (178.368µs)
+2026/10/25 06:20:47 migration r5b4_v1_port_user_unique applied
+2026/10/25 06:20:47 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 06:20:47 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (132.068µs)
+2026/10/25 06:20:47 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+    r20_fix_f01_test.go:60: expected exactly 1 DeleteCLimiters command, got 0: []
+--- FAIL: TestR20F01DeleteAfterLimitsClearedSendsDeleteCLimiters (1.22s)
+FAIL
+FAIL	go-backend/internal/http/handler	1.350s
+FAIL

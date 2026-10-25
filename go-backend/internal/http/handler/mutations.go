@@ -3599,7 +3599,10 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(tunnelServiceBindRetryDelay)
 	}
 
-	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
+	// R20-X-01 ①：把更新前快照 forward 传给同步，让失势的 rule climiter
+	// 在服务推送成功后删除。forward 自 resolveForwardAccess 取行后未
+	// 被改动，仍是更新前值。
+	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true, forward)
 	if err != nil {
 		rollbackAndRefreshWhitelist()
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -4466,7 +4469,8 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			}
 			time.Sleep(tunnelServiceBindRetryDelay)
 		}
-		syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
+		// R20-X-01 ①：同 forwardUpdate，传更新前快照 forward。
+		syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true, forward)
 		batchWarnings = append(batchWarnings, syncWarnings...)
 		if err != nil {
 			h.rollbackForwardMutation(forward, oldPorts)

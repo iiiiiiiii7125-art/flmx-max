@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+a12afd9c36fba7b76287210efaa199cb  /root/r20-f01/flux_agent.service.pristine
+05449a73f3d21b037eb082be0a5ff438  /etc/systemd/system/flux_agent.service
+# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
+StandardOutput=journal
+StandardError=journal
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+services=12 climiters=['rule_conn_limit_2', 'rule_conn_limit_12']
