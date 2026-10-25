@@ -1,0 +1,34 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== restore start=2026-10-25T07:06:24Z initiator=fix-r20-f01 ===
+--- restore pristine agent unit (expect a12afd9c36fba7b76287210efaa199cb)
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+StandardOutput=null
+StandardError=null
+--- restart agent (reset-failed first)
+active
+--- restore compose backend tag (expect flmx-backend:r1gate-1.3.5)
+3:    image: flmx-backend:r1gate-1.3.5
+65:    image: flmx-frontend:r1gate-1.3.5
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+--- wait backend healthy (up to 150s)
+try 1 health=starting
+try 2 health=healthy
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 5 seconds (healthy)
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 20 minutes (unhealthy)
+flux-panel-postgres postgres:16-alpine Up 16 hours (healthy)
+--- verify restored panel binary + gost + agent
+6c67f9f7670b69bd1d78061688f2da17  /app/paneld
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+--- remove fix image
+Untagged: flmx-backend:r20-f01
+Deleted: sha256:773724c865f9e03a32bc75cecf3c873d9b40431b9e2a2e2d263a2e24de620bc4
+flmx-backend:r1gate-1.3.5 620be8ddd1ba
+--- served check
+GET / 6366 http=200
+/dev/nvme0n1p1   20G   16G  2.8G  86% /
+=== restore done=2026-10-25T07:06:43Z ===

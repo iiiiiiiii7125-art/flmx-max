@@ -1,0 +1,35 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== deploy start=2026-10-25T07:03:01Z initiator=fix-r20-f01 ===
+--- pre-state
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+3:    image: flmx-backend:r1gate-1.3.5
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 17 minutes (unhealthy)
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 17 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 16 hours (healthy)
+--- verify staged paneld (expect 7902009e6cdc737792212039cce70259)
+7902009e6cdc737792212039cce70259  /root/r20-f01/stage/paneld
+--- docker build backend r20-f01
+sha256:773724c865f9e03a32bc75cecf3c873d9b40431b9e2a2e2d263a2e24de620bc4
+flmx-backend:r20-f01 773724c865f9
+--- verify paneld inside image (expect 7902009e6cdc737792212039cce70259)
+7902009e6cdc737792212039cce70259  /app/paneld
+--- switch compose backend tag only
+3:    image: flmx-backend:r20-f01
+--- compose up backend
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+--- wait healthy (up to 150s)
+try 1 health=starting
+try 2 health=healthy
+flux-panel-backend flmx-backend:r20-f01 Up 5 seconds (healthy)
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 17 minutes (unhealthy)
+flux-panel-postgres postgres:16-alpine Up 16 hours (healthy)
+--- prove running binary is the fix build
+7902009e6cdc737792212039cce70259  /app/paneld
+--- served check
+GET / 6366 http=200
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+active
+=== deploy done=2026-10-25T07:03:13Z ===

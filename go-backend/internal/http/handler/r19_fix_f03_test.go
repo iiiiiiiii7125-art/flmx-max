@@ -124,20 +124,28 @@ func TestR19F03DeleteForwardControlRemovesConnLimiter(t *testing.T) {
 	}
 }
 
-func TestR19F03DeleteForwardWithoutLimitsSendsNoDeleteCLimiters(t *testing.T) {
+// R20-X-01 ②（F-01）：无限制转发删除时仍按 ID 名发 DeleteCLimiters。
+// 旧断言“无限制即不发”已被 F-01 推翻——删除不得只按当前记录值取名，
+// 否则更新清零限流后的删除会漏删孤儿；名只由 ID 决定，agent 侧删不
+// 存在者为 noop，重复发送安全。本测试改名并改断言，两漏斗各恰发 1 次
+// 同名 DeleteCLimiters。
+func TestR19F03DeleteForwardWithoutLimitsStillDeletesRuleLimiterByID(t *testing.T) {
 	a := newCleanupAgent(t)
 	forward := seedR19F03Forward(t, a, 0, 0)
+	want := fmt.Sprintf("rule_conn_limit_%d", forward.ID)
 
 	if err := a.h.deleteForwardServicesOnNodeBatch(forward, 1); err != nil {
 		t.Fatalf("batch delete: %v", err)
 	}
-	if cmds := r19F03DeleteCLimiterCommands(t, a); len(cmds) != 0 {
-		t.Fatalf("expected no DeleteCLimiters for a forward without conn limits, got %+v", cmds)
+	if cmds := r19F03DeleteCLimiterCommands(t, a); len(cmds) != 1 {
+		t.Fatalf("expected exactly 1 DeleteCLimiters for a forward without current limits (R20-X-01 backstop), got %d: %+v", len(cmds), a.commandsOfType("DeleteCLimiters"))
+	} else if names := r19F03DeleteCLimiterNames(t, cmds); len(names) != 1 || names[0] != want {
+		t.Fatalf("expected DeleteCLimiters limiter %q, got %q", want, names)
 	}
 	if err := a.h.controlForwardServices(forward, "DeleteService", true); err != nil {
 		t.Fatalf("control delete: %v", err)
 	}
-	if cmds := r19F03DeleteCLimiterCommands(t, a); len(cmds) != 0 {
-		t.Fatalf("expected no DeleteCLimiters for a forward without conn limits, got %+v", cmds)
+	if cmds := r19F03DeleteCLimiterCommands(t, a); len(cmds) != 2 {
+		t.Fatalf("expected exactly 2 DeleteCLimiters after both delete funnels (R20-X-01 backstop), got %d: %+v", len(cmds), a.commandsOfType("DeleteCLimiters"))
 	}
 }

@@ -668,7 +668,9 @@ func (h *Handler) applyTunnelDeleteForwardMigration(plan tunnelForwardMigrationP
 		time.Sleep(tunnelServiceBindRetryDelay)
 	}
 
-	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true)
+	// R20-X-01 ①：传更新前快照 plan.forward（本路径只改 RemoteAddr、
+	// 限流值原样透传，失势判定恒为否；传快照为将来口径变化留口子）。
+	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true, plan.forward)
 	if err != nil {
 		h.rollbackForwardMutation(plan.forward, plan.oldPorts)
 		return nil, err
