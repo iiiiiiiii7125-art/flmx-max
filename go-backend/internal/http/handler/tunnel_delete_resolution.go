@@ -728,6 +728,31 @@ func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
 // scope names the owning object in abort messages ("隧道" / "用户").
 // offlineTolerant 为 true（仅删隧道路径）时，离线/不可达类失败按
 // X-P1-1 待清理语义放行删库；为 false（删用户路径）时维持 F-002 硬门。
+// R18-X-01（F-01）：逐条清理是前进式操作——中途硬失败时，靠前的转发
+// 已实际删除（数据面 + 库），回执只称「隧道未删除」会误导运维以为
+// 什么都没删。失败返回必须披露已删转发数与标识（名/ID）；已删项不
+// 回滚（与现有不回滚语义一致），只补披露。deleted 只含已完成
+// 「数据面 + 删库」两步的转发；当前条数据面已清但删库失败时另行说明。
+func formatForwardDeleteLabel(fwd model.ForwardRecord) string {
+	name := strings.TrimSpace(fwd.Name)
+	if name == "" {
+		return fmt.Sprintf("#%d", fwd.ID)
+	}
+	return fmt.Sprintf("%s(#%d)", name, fwd.ID)
+}
+
+// formatDeletedForwardsSummary 汇总已删转发：恒含已删数，>0 时附标识。
+func formatDeletedForwardsSummary(deleted []model.ForwardRecord) string {
+	if len(deleted) == 0 {
+		return "已删除 0 条转发"
+	}
+	labels := make([]string, 0, len(deleted))
+	for _, fwd := range deleted {
+		labels = append(labels, formatForwardDeleteLabel(fwd))
+	}
+	return fmt.Sprintf("已删除 %d 条转发：%s", len(deleted), strings.Join(labels, "、"))
+}
+
 func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string, offlineTolerant bool) error {
 	if len(forwards) == 0 {
 		return nil
@@ -766,6 +791,7 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 		}
 		return nil
 	}
+	var deleted []model.ForwardRecord
 	for i := range forwards {
 		fwd := forwards[i]
 		if err := h.controlForwardServices(&fwd, "DeleteService", true); err != nil {
@@ -774,15 +800,22 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 				// 节点重连后的配置上报孤儿对账（cleanNodeConfigs）撤销。
 				log.Printf("tunnel delete: node offline, forward marked for reconnect cleanup tunnel_id=%d forward_id=%d err=%v", tunnelID, fwd.ID, err)
 				if delErr := h.deleteForwardByID(fwd.ID); delErr != nil {
-					return delErr
+					// R18-X-01：离线分支删库失败亦为硬失败，披露已删项；
+					// 本条数据面未动（节点离线、残留监听待重连对账）。
+					return fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面未清理（节点离线，待重连对账）", formatForwardDeleteLabel(fwd), scope, delErr, formatDeletedForwardsSummary(deleted))
 				}
+				deleted = append(deleted, fwd)
 				continue
 			}
-			return fmt.Errorf("转发 %s 数据面清理失败，%s未删除: %w", fwd.Name, scope, err)
+			// R18-X-01：数据面硬失败，中止前披露此前已删转发。
+			return fmt.Errorf("转发 %s 数据面清理失败，%s未删除：%w；%s", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
 		}
 		if err := h.deleteForwardByID(fwd.ID); err != nil {
-			return err
+			// R18-X-01：删库失败亦为硬失败，披露已删项；本条数据面
+			// 服务已清理、数据库记录仍保留（不回滚）。
+			return fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面服务已清理、数据库记录仍保留", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
 		}
+		deleted = append(deleted, fwd)
 	}
 	return nil
 }
