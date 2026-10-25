@@ -1162,7 +1162,7 @@ export function InboundFormModal({
                     <Input
                       description={
                         form.kernelType === "xray"
-                          ? "Xray policy connIdle：连接无数据超过该秒数即断开；留空或填 0 不下发该段、走默认 300 秒"
+                          ? "Xray policy connIdle：Xray 以该秒数为一格检查空闲——全程无数据约该秒数断开，有数据时自末次数据起 1–2 倍该秒数后断开；留空或填 0 不下发该段、走默认 300 秒"
                           : "仅 Xray 内核支持空闲超时：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout）；存量值会在保存时自动清除"
                       }
                       endContent={

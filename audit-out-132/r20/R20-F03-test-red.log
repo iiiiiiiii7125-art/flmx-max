@@ -1,0 +1,9 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR20F03ConnIdleRenderedVerbatim
+--- PASS: TestR20F03ConnIdleRenderedVerbatim (0.00s)
+=== RUN   TestR20F03IdleCopyStatesWindowedSemantics
+    r20_f03_test.go:82: inbound form still promises N-second idle cutoff: "连接无数据超过该秒数即断开"
+--- FAIL: TestR20F03IdleCopyStatesWindowedSemantics (0.00s)
+FAIL
+FAIL	go-backend/internal/kernel	0.041s
+FAIL

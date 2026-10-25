@@ -1,0 +1,66 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== F03 legs start=2026-10-25T06:42:15Z initiator=F03 ===
+--- B'/C' inbounds (idle=10 / idle=0) via CREATE
+r20-f03-vless10 59928 idle= 10 http=200 code=0 msg=操作成功 
+r20-f03-vmess10 59929 idle= 10 http=200 code=0 msg=操作成功 
+r20-f03-vless0 59930 idle= 0 http=200 code=0 msg=操作成功 
+r20-f03-vmess0 59934 idle= 0 http=200 code=0 msg=操作成功 
+total inbound n= 585
+  id=961 port=59928 proto=vless idle=10
+  id=962 port=59929 proto=vmess idle=10
+  id=963 port=59930 proto=vless idle=0
+  id=964 port=59934 proto=vmess idle=0
+rendered policy levels: {"1": {"connIdle": 5}, "2": {"connIdle": 5}, "3": {"connIdle": 5}, "4": {"connIdle": 10}, "5": {"connIdle": 10}}
+--- extra xclients for VMess10/VMess0 ---
+wrote xc-vmess-59929.json (SOCKS 59937 -> VMess 59929)
+wrote xc-vmess-59934.json (SOCKS 59938 -> VMess 59934)
+LISTEN 0      4096                                127.0.0.1:59937      0.0.0.0:*          
+LISTEN 0      4096                                127.0.0.1:59938      0.0.0.0:*          
+LISTEN 0      4096                                        *:59934            *:*          
+LISTEN 0      4096                                        *:59929            *:*          
+LISTEN 0      4096                                        *:59928            *:*          
+LISTEN 0      4096                                        *:59930            *:*          
+--- A VLESS idle=5 1MB x3 (expect ~10.21s) ---
+[A-VLESS-1] header_after=0.22s resp=0000
+[A-VLESS-1] CLOSED after=10.20s
+[A-VLESS-2] header_after=0.20s resp=0000
+[A-VLESS-2] CLOSED after=10.21s
+[A-VLESS-3] header_after=0.20s resp=0000
+[A-VLESS-3] CLOSED after=10.21s
+--- A VMess idle=5 1MB x1 via SOCKS 59931 (expect ~3.10s) ---
+[A-VMESS-1] socks_reply_after=0.01s rep=050000017f000001ea1b
+[A-VMESS-1] CLOSED after=3.14s
+--- A SS idle=5 1MB x1 via SOCKS 59932 (expect ~3.10s) ---
+[A-SS-1] socks_reply_after=0.00s rep=050000017f000001ea1c
+[A-SS-1] CLOSED after=3.11s
+--- B' VLESS idle=10 x2 (expect ~20.20s) ---
+[B-VLESS10-1] header_after=0.20s resp=0000
+[B-VLESS10-1] CLOSED after=20.24s
+[B-VLESS10-2] header_after=0.22s resp=0000
+[B-VLESS10-2] CLOSED after=20.22s
+--- B' VMess idle=10 x1 via SOCKS 59937 (expect ~3.1s) ---
+[B-VMESS10-1] socks_reply_after=0.03s rep=050000017f000001ea21
+[B-VMESS10-1] CLOSED after=3.16s
+--- C' VLESS idle=0 x1 (expect STILL_OPEN @20s) ---
+[C-VLESS0-1] header_after=0.20s resp=0000
+[C-VLESS0-1] STILL_OPEN after=20.0s
+--- C' VMess idle=0 x1 via SOCKS 59938 (expect ~3.13s) ---
+[C-VMESS0-1] socks_reply_after=0.03s rep=050000017f000001ea22
+[C-VMESS0-1] CLOSED after=3.16s
+--- D silent VLESS 59924 -> 59940 (expect ~5.20s) ---
+[D-VLESS-silent-1] header_after=5.20s resp=0000
+[D-VLESS-silent-1] CLOSED after=5.20s
+--- D silent VMess via SOCKS 59931 -> 59940 (expect ~1.12s) ---
+[D-VMESS-silent-1] socks_reply_after=0.00s rep=050000017f000001ea1b
+[D-VMESS-silent-1] CLOSED after=1.11s
+--- P-9.5 phase: VLESS 59924 -> 59942, burst2 at 9.5s (window model: close ~15.2s, idle ~5.5s; 2x-from-start: close ~10.2s) ---
+burst2 (last DATA):
+[P-95-1] DATA 4096B after=9.85s
+[P-95-1] CLOSED after=15.21s
+[dummy-phase:phase95] burst2 sent after=9.50s
+--- P-5.5 phase: VLESS 59924 -> 59943, burst2 at 5.5s (window model: close ~15.2s, idle ~9.5s; 2x-from-start: close ~10.2s) ---
+burst2 (last DATA):
+[P-55-1] DATA 4096B after=5.86s
+[P-55-1] CLOSED after=15.20s
+[dummy-phase:phase55] burst2 sent after=5.50s
+=== legs end=2026-10-25T06:44:52Z ===

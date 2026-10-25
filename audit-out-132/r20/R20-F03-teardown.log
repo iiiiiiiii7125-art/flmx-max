@@ -1,0 +1,142 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R20-F03 teardown+restore start=2026-10-25T06:45:10Z initiator=F03 ===
+--- inbound list before delete
+inbound n= 585 code= 0
+--- delete test inbounds (ids from list, ports 59924-59934)
+deleting ids: [958, 959, 960, 961, 962, 963, 964]
+delete 958 http=200 code=0 msg=操作成功 
+delete 959 http=200 code=0 msg=操作成功 
+delete 960 http=200 code=0 msg=操作成功 
+delete 961 http=200 code=0 msg=操作成功 
+delete 962 http=200 code=0 msg=操作成功 
+delete 963 http=200 code=0 msg=操作成功 
+delete 964 http=200 code=0 msg=操作成功 
+inbound n= 578 code= 0
+--- kill scaffold by recorded PIDs (exact, no pkill)
+798358
+798359
+798360
+798361
+798364
+798365
+798545
+798546
+killing scaffold pid 798358 (python3 /root/r20f03/r20_f03_dummy.py 59940 0 silent)
+killing scaffold pid 798359 (python3 /root/r20f03/r20_f03_dummy.py 59941 1048576 batch1mb)
+killing scaffold pid 798360 (python3 /root/r20f03/r20_f03_dummy_phase.py 59942 1048576 9.5 4096 phase95)
+killing scaffold pid 798361 (python3 /root/r20f03/r20_f03_dummy_phase.py 59943 1048576 5.5 4096 phase55)
+killing scaffold pid 798364 (/etc/flux_agent/kernels/xray/bin/latest/xray run -c /root/r20f03/xc-vmess.json)
+killing scaffold pid 798365 (/etc/flux_agent/kernels/xray/bin/latest/xray run -c /root/r20f03/xc-ss.json)
+killing scaffold pid 798545 (/etc/flux_agent/kernels/xray/bin/latest/xray run -c /root/r20f03/xc-vmess-59929.)
+killing scaffold pid 798546 (/etc/flux_agent/kernels/xray/bin/latest/xray run -c /root/r20f03/xc-vmess-59934.)
+(no 599xx listeners remain)
+pid 798358 gone
+pid 798359 gone
+pid 798360 gone
+pid 798361 gone
+pid 798364 gone
+pid 798365 gone
+pid 798545 gone
+pid 798546 gone
+--- pre-restore: agent + panel
+active
+3b06de9d2b0ebeabe943b202d5b8bd0e  /etc/flux_agent/flux_agent
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+vite-frontend flmx-frontend:r20f03 Up 4 minutes (unhealthy)
+flux-panel-backend flmx-backend:r20f03 Up 5 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 15 hours (healthy)
+--- stop agent (initiator=F03, restore)
+agent processes gone
+--- restore pristine agent/unit/gost (expect aff338e3 / a12afd9c / d48f09e1)
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+StandardOutput=null
+StandardError=null
+--- restore compose/env (expect 3afbac11 / fffcd005)
+3afbac1115e4f69a991448767b89d24e  /root/flmx-panel/docker-compose.yml
+fffcd005d684d1ef207dc50caa845569  /root/flmx-panel/.env
+/root/flmx-panel/docker-compose.yml:    image: flmx-backend:r1gate-1.3.5
+/root/flmx-panel/docker-compose.yml:      FLUX_VERSION: ${FLUX_VERSION:-dev}
+/root/flmx-panel/docker-compose.yml:    image: flmx-frontend:r1gate-1.3.5
+/root/flmx-panel/.env:FLUX_VERSION=1.3.5
+--- compose up (1.3.5)
+ Container flux-panel-backend Healthy 
+ Container vite-frontend Starting 
+ Container vite-frontend Started 
+vite-frontend flmx-frontend:r1gate-1.3.5 Up 8 seconds (health: starting)
+flux-panel-backend flmx-backend:r1gate-1.3.5 Up 14 seconds (healthy)
+flux-panel-postgres postgres:16-alpine Up 15 hours (healthy)
+--- reset-failed + start agent (initiator=F03, restore)
+active
+MainPID=799837
+NRestarts=0
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+328 /etc/flux_agent/gost.json
+--- served check (expect 1.3.5 index 0f189624)
+GET / http=200 size=8776
+0f18962440dde5a19507014e63454d5b  /tmp/r20-idx-final.html
+--- counts
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/r20f03-count.json'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/r20f03-count.json'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/r20f03-count.json'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/r20f03-count.json'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/r20f03-count.json'
+--- forward statuses
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/r20f03-fwd.json'
+--- tables
+50
+--- gost content
+services 12
+climiters [('rule_conn_limit_2', ['$ 1']), ('rule_conn_limit_12', ['$ 7'])]
+--- disk
+/dev/nvme0n1p1   20G   16G  2.9G  85% /
+--- remove r20f03 images
+Deleted: sha256:c75caf498ad82b3cb92d27c090507bd1d035187d291cb3054bf17b248e95e776
+Untagged: flmx-frontend:r20f03
+Deleted: sha256:3d20ebadfc5effc9d05649e6ab098f0819d6d8adc92ec6d76a90a435da108127
+flmx-frontend:r1gate-1.3.5
+flmx-backend:r1gate-1.3.5
+--- remove credentials + temp outputs from machine
+R20-F03-deploy.sh
+R20-F03-legs.sh
+R20-F03-setup.sh
+R20-F03-teardown.sh
+creds.json
+dummy-59940.log
+dummy-59941.log
+dummy-59942.log
+dummy-59943.log
+paneld-f03
+r20_f03_api.py
+r20_f03_dummy.py
+r20_f03_dummy_phase.py
+r20_f03_socks.py
+r20_f03_vless.py
+r20_f03_xc_ss.json
+r20_f03_xc_vmess.json
+r20f03-dist.tgz
+scaffold.pids
+stage
+xc-ss.json
+xc-ss.log
+xc-vmess-59929.json
+xc-vmess-59934.json
+xc-vmess.json
+xc-vmess.log
+xc-vmess0.log
+xc-vmess10.log
+xray-config-created.json
+=== R20-F03 teardown+restore done 2026-10-25T06:46:00Z ===

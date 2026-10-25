@@ -1,0 +1,75 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== f03 setup start=2026-10-25T06:41:51Z initiator=F03 ===
+--- port check (expect all free)
+port 59924 free
+port 59925 free
+port 59927 free
+port 59928 free
+port 59929 free
+port 59930 free
+port 59931 free
+port 59932 free
+port 59934 free
+port 59937 free
+port 59938 free
+port 59940 free
+port 59941 free
+port 59942 free
+port 59943 free
+--- generate creds
+cred vless_uuid len 36
+cred vmess_uuid len 36
+cred ss_method len 11
+cred ss_password len 32
+--- create inbounds (idle=5)
+r20-f03-vless 59924 http=200 code=0 msg=操作成功 
+r20-f03-vmess 59925 http=200 code=0 msg=操作成功 
+r20-f03-ss 59927 http=200 code=0 msg=操作成功 
+--- inbound list (expect 581 = 578 + 3)
+http=200 code=0 msg=操作成功
+total inbound n= 581 code= 0
+  id=958 port=59924 proto=vless idle=5
+  id=959 port=59925 proto=vmess idle=5
+  id=960 port=59927 proto=shadowsocks idle=5
+--- xray process + rendered config
+root      798296  0.7  7.3 1296312 33824 ?       Sl   06:41   0:00 /etc/flux_agent/kernels/xray/bin/latest/xray run -c /etc/flux_agent/kernels/xray/run/config.json
+xray config path: /etc/flux_agent/kernels/xray/run/config.json
+policy levels: {"1": {"connIdle": 5}, "2": {"connIdle": 5}, "3": {"connIdle": 5}}
+flmx-idle outbounds:
+   flmx-idle-958 {'userLevel': 1}
+   flmx-idle-958-u1 {'userLevel': 1}
+   flmx-idle-958-u4 {'userLevel': 1}
+   flmx-idle-959 {'userLevel': 2}
+   flmx-idle-959-u1 {'userLevel': 2}
+   flmx-idle-959-u4 {'userLevel': 2}
+   flmx-idle-960 {'userLevel': 3}
+test inbounds in xray config:
+  port=59924 proto=vless client-levels=[1, 1, 1] top-level=None
+  port=59925 proto=vmess client-levels=[2, 2, 2] top-level=None
+  port=59927 proto=shadowsocks client-levels=[] top-level=3
+--- scaffold: dummies + xclients
+wrote xc-vmess.json
+wrote xc-ss.json
+LISTEN 0      4096                                127.0.0.1:59932      0.0.0.0:*          
+LISTEN 0      4096                                127.0.0.1:59931      0.0.0.0:*          
+LISTEN 0      16                                  127.0.0.1:59941      0.0.0.0:*          
+LISTEN 0      16                                  127.0.0.1:59940      0.0.0.0:*          
+LISTEN 0      16                                  127.0.0.1:59943      0.0.0.0:*          
+LISTEN 0      16                                  127.0.0.1:59942      0.0.0.0:*          
+LISTEN 0      4096                                        *:59925            *:*          
+LISTEN 0      4096                                        *:59924            *:*          
+LISTEN 0      4096                                        *:59927            *:*          
+798296 /etc/flux_agent/kernels/xray/bin/latest/xray run -c /etc/flux_agent/kernels/xray/run/config.json
+798358 python3 /root/r20f03/r20_f03_dummy.py 59940 0
+798359 python3 /root/r20f03/r20_f03_dummy.py 59941 1048576
+798360 python3 /root/r20f03/r20_f03_dummy_phase.py 59942 1048576
+798361 python3 /root/r20f03/r20_f03_dummy_phase.py 59943 1048576
+798364 /etc/flux_agent/kernels/xray/bin/latest/xray run -c /root/r20f03/xc-vmess.json
+798365 /etc/flux_agent/kernels/xray/bin/latest/xray run -c /root/r20f03/xc-ss.json
+798358
+798359
+798360
+798361
+798364
+798365
+=== setup end=2026-10-25T06:42:07Z ===
