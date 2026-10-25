@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/router"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateRouter(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Routers {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Routers[i] == nil {
+				logger.Default().Warnf("update router: skipped nil router entry at index %d", i)
+				continue
+			}
 			if c.Routers[i].Name == name {
 				c.Routers[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteRouter(ctx *gin.Context) {
 		routeres := c.Routers
 		c.Routers = nil
 		for _, s := range routeres {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete router: kept nil router entry as-is")
+				c.Routers = append(c.Routers, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

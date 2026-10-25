@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/sd"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateSD(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.SDs {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.SDs[i] == nil {
+				logger.Default().Warnf("update sd: skipped nil sd entry at index %d", i)
+				continue
+			}
 			if c.SDs[i].Name == name {
 				c.SDs[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteSD(ctx *gin.Context) {
 		sds := c.SDs
 		c.SDs = nil
 		for _, s := range sds {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete sd: kept nil sd entry as-is")
+				c.SDs = append(c.SDs, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

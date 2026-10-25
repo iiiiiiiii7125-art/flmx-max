@@ -128,6 +128,11 @@ func updateChain(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Chains {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Chains[i] == nil {
+				logger.Default().Warnf("update chain: skipped nil chain entry at index %d", i)
+				continue
+			}
 			if c.Chains[i].Name == name {
 				c.Chains[i] = &req.Data
 				break
@@ -180,6 +185,12 @@ func deleteChain(ctx *gin.Context) {
 		chains := c.Chains
 		c.Chains = nil
 		for _, s := range chains {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete chain: kept nil chain entry as-is")
+				c.Chains = append(c.Chains, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/observer"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateObserver(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Observers {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Observers[i] == nil {
+				logger.Default().Warnf("update observer: skipped nil observer entry at index %d", i)
+				continue
+			}
 			if c.Observers[i].Name == name {
 				c.Observers[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteObserver(ctx *gin.Context) {
 		observers := c.Observers
 		c.Observers = nil
 		for _, s := range observers {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete observer: kept nil observer entry as-is")
+				c.Observers = append(c.Observers, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

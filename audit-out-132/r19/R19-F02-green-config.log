@@ -1,0 +1,5 @@
+--- PASS: TestR19F02StripNilConfigItems (0.00s)
+--- PASS: TestR19F02StripNilConfigItemsNoop (0.00s)
+--- PASS: TestR19F02OnUpdatePanicReleasesLock (0.00s)
+PASS
+ok  	github.com/go-gost/x/config	0.027s

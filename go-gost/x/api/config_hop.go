@@ -127,6 +127,11 @@ func updateHop(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Hops {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Hops[i] == nil {
+				logger.Default().Warnf("update hop: skipped nil hop entry at index %d", i)
+				continue
+			}
 			if c.Hops[i].Name == name {
 				c.Hops[i] = &req.Data
 				break
@@ -179,6 +184,12 @@ func deleteHop(ctx *gin.Context) {
 		hops := c.Hops
 		c.Hops = nil
 		for _, s := range hops {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete hop: kept nil hop entry as-is")
+				c.Hops = append(c.Hops, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

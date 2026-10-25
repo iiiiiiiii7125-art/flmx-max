@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/ingress"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateIngress(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Ingresses {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Ingresses[i] == nil {
+				logger.Default().Warnf("update ingress: skipped nil ingress entry at index %d", i)
+				continue
+			}
 			if c.Ingresses[i].Name == name {
 				c.Ingresses[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteIngress(ctx *gin.Context) {
 		ingresses := c.Ingresses
 		c.Ingresses = nil
 		for _, s := range ingresses {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete ingress: kept nil ingress entry as-is")
+				c.Ingresses = append(c.Ingresses, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

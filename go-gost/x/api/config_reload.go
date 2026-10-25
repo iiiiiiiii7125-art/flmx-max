@@ -2,8 +2,10 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/config/loader"
 	"github.com/go-gost/x/config/parsing/parser"
@@ -35,6 +37,17 @@ func reloadConfig(ctx *gin.Context) {
 	if err != nil {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
 		return
+	}
+
+	// R19-F02: API 重载与 SIGHUP 走同一自愈——先剥离落盘 JSON null 读入
+	// 的 nil 项并重新落盘，否则 loader.Load 在首个 nil 类 panic（经 gin
+	// Recovery 变 500，但文件仍毒化、下次重载/启动仍失败）。落盘失败只
+	// 告警、不阻塞重载（loader 守卫仍会干净报错）。
+	if stripped := config.StripNilConfigItems(cfg); len(stripped) > 0 {
+		logger.Default().Warnf("config reload self-heal: removed %s from persisted config", strings.Join(stripped, ", "))
+		if err := config.PersistNow(cfg); err != nil {
+			logger.Default().Warnf("config reload self-heal: failed to persist nil-stripped config: %v", err)
+		}
 	}
 
 	if err := loader.Reload(cfg, func(*config.Config) error {

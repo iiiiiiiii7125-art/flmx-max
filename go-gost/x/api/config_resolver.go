@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/resolver"
 	"github.com/go-gost/x/registry"
@@ -126,6 +127,11 @@ func updateResolver(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Resolvers {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Resolvers[i] == nil {
+				logger.Default().Warnf("update resolver: skipped nil resolver entry at index %d", i)
+				continue
+			}
 			if c.Resolvers[i].Name == name {
 				c.Resolvers[i] = &req.Data
 				break
@@ -178,6 +184,12 @@ func deleteResolver(ctx *gin.Context) {
 		resolvers := c.Resolvers
 		c.Resolvers = nil
 		for _, s := range resolvers {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete resolver: kept nil resolver entry as-is")
+				c.Resolvers = append(c.Resolvers, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

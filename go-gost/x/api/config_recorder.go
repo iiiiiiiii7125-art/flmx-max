@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/recorder"
 	"github.com/go-gost/x/registry"
@@ -117,6 +118,11 @@ func updateRecorder(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Recorders {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.Recorders[i] == nil {
+				logger.Default().Warnf("update recorder: skipped nil recorder entry at index %d", i)
+				continue
+			}
 			if c.Recorders[i].Name == name {
 				c.Recorders[i] = &req.Data
 				break
@@ -169,6 +175,12 @@ func deleteRecorder(ctx *gin.Context) {
 		recorders := c.Recorders
 		c.Recorders = nil
 		for _, s := range recorders {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete recorder: kept nil recorder entry as-is")
+				c.Recorders = append(c.Recorders, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}

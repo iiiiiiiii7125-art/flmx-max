@@ -132,9 +132,15 @@ func Set(c *Config) {
 }
 
 func OnUpdate(f func(c *Config) error) error {
-	globalMux.Lock()
-	err := f(global)
-	globalMux.Unlock()
+	// R19-F02: 闭包在内层函数中执行、defer 解锁——f 内 panic 时写锁必
+	// 释放，否则 panic 被上层 recover 后 globalMux 永久 wedged，后续
+	// Global/Set/OnUpdate 全部死锁。persist() 仍在解锁后执行：它经
+	// Global() 取读锁，与写锁同持会自死锁，故解锁顺序不得变。
+	err := func() (err error) {
+		globalMux.Lock()
+		defer globalMux.Unlock()
+		return f(global)
+	}()
 
 	if err == nil {
 		err = persist()

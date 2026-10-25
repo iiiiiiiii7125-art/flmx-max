@@ -1,0 +1,6 @@
+=== config OnUpdate wedge (RED) ===
+    r19_fix_f02_test.go:36: config.Set deadlocked after OnUpdate panic (globalMux wedged)
+--- FAIL: TestR19F02OnUpdatePanicReleasesLock (5.00s)
+FAIL
+FAIL	github.com/go-gost/x/config	5.080s
+FAIL

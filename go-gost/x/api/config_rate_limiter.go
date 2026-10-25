@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/limiter"
 	"github.com/go-gost/x/registry"
@@ -118,6 +119,11 @@ func updateRateLimiter(ctx *gin.Context) {
 
 	config.OnUpdate(func(c *config.Config) error {
 		for i := range c.RLimiters {
+			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
+			if c.RLimiters[i] == nil {
+				logger.Default().Warnf("update rate limiter: skipped nil rate limiter entry at index %d", i)
+				continue
+			}
 			if c.RLimiters[i].Name == name {
 				c.RLimiters[i] = &req.Data
 				break
@@ -170,6 +176,12 @@ func deleteRateLimiter(ctx *gin.Context) {
 		limiteres := c.RLimiters
 		c.RLimiters = nil
 		for _, s := range limiteres {
+			// R19-F02: nil 项原样保留并记日志，不得 panic（清理只走启动自愈）。
+			if s == nil {
+				logger.Default().Warnf("delete rate limiter: kept nil rate limiter entry as-is")
+				c.RLimiters = append(c.RLimiters, s)
+				continue
+			}
 			if s.Name == name {
 				continue
 			}
