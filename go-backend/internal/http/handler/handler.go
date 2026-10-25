@@ -106,6 +106,15 @@ type Handler struct {
 	nodeOnlineRedeploying       map[int64]struct{}
 	nodeLocalRuntimeRetryQueued map[int64]struct{}
 
+	// R17-B：AddService 幂等守卫状态（add_service_guard.go）。
+	// 确认集只由 agent 成功响应建立、无 TTL；零值可用（惰性初始化）。
+	addSvcMu        sync.Mutex
+	addSvcInFlight  map[addServiceGuardKey]*addServiceGuardCall
+	addSvcConfirmed map[int64]map[string]struct{}
+	// addSvcSend 是 AddService 的发送缝（默认 nil → sendNodeCommand）；
+	// 仅测试注入假发送器，生产代码不得设置。
+	addSvcSend func(nodeID int64, services []map[string]interface{}) error
+
 	qualityProber  *tunnelQualityProber
 	externalProbes *externalProbeStore
 	// 移植自 kure29/flyx：节点延迟测试点测量结果缓存。
@@ -205,7 +214,13 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)
 	h.wsServer.SetNodeOnlineHook(h.onNodeOnline)
-	h.wsServer.SetNodeOfflineHook(h.notifyNodeOffline)
+	// R17-B：节点离线即作废该节点的 AddService 确认集（agent 运行时态
+	// 不再可信），再走原有离线通知；下次同步经 UpdateService/AddService
+	// 成功重建确认。
+	h.wsServer.SetNodeOfflineHook(func(nodeID int64) {
+		h.invalidateAddServiceNode(nodeID)
+		h.notifyNodeOffline(nodeID)
+	})
 	h.wsServer.SetNodeMetricHook(func(nodeID int64, info ws.SystemInfo) {
 		metricInfo := metrics.SystemInfo{
 			Uptime:           info.Uptime,
