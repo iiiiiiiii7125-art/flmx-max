@@ -1,0 +1,5 @@
+00:30:00.086 dummy bound tcp4 :14601
+00:30:00.086 dummy SKIP tcp6 :14601: [Errno 98] Address already in use
+00:30:00.086 dummy bound udp4 :14601
+00:30:00.086 dummy SKIP udp6 :14601: [Errno 98] Address already in use
+00:30:00.086 dummy holding :14601 pid=686775

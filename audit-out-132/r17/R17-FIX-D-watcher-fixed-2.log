@@ -1,0 +1,3 @@
+00:30:08.191 GUARD r17-addservice-guard: node=1 decision=send reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=-
+00:30:08.192 MATCH -> killing dummy pid=686775
+00:30:08.193 WATCHER DONE killed=True

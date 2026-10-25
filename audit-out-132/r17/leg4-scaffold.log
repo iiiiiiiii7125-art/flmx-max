@@ -1,0 +1,35 @@
+=== leg4 scaffold start=2026-10-25T01:22:44Z ===
+--- kill stale scaffold (dummies + non-agent xrays)
+dummy silent pid 707991
+vmess pid 707992
+vmess-ctl pid 707993
+vmess-u1 pid 707994
+trojan pid 707995
+ss-door pid 707996
+vmess-min pid 707997
+ss-min pid 707998
+min-vmess pid 707999
+min-ss pid 708000
+--- listening
+LISTEN 0      16                                  127.0.0.1:59909      0.0.0.0:*    users:(("python3",pid=707991,fd=3))         
+LISTEN 0      4096                                        *:11080            *:*    users:(("xray",pid=707992,fd=4))            
+LISTEN 0      4096                                        *:11081            *:*    users:(("xray",pid=707995,fd=4))            
+LISTEN 0      4096                                        *:11082            *:*    users:(("xray",pid=707994,fd=4))            
+LISTEN 0      4096                                        *:11083            *:*    users:(("xray",pid=707993,fd=4))            
+LISTEN 0      4096                                        *:11084            *:*    users:(("xray",pid=707997,fd=4))            
+LISTEN 0      4096                                        *:11085            *:*    users:(("xray",pid=707998,fd=4))            
+LISTEN 0      4096                                        *:11087            *:*    users:(("xray",pid=707996,fd=4))            
+LISTEN 0      4096                                        *:59912            *:*    users:(("xray",pid=707999,fd=4))            
+LISTEN 0      4096                                        *:59913            *:*    users:(("xray",pid=708000,fd=4))            
+--- processes
+ 707991 python3 /root/r17/dummy.py 59909 0
+ 707992 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess.json
+ 707993 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess-ctl.json
+ 707994 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess-u1.json
+ 707995 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/trojan.json
+ 707996 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/ss-door.json
+ 707997 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/vmess-min.json
+ 707998 /etc/flux_agent/kernels/xray/bin/latest/xray run -c xclient/ss-min.json
+ 707999 /etc/flux_agent/kernels/xray/bin/latest/xray run -c minxray/vmess.json
+ 708000 /etc/flux_agent/kernels/xray/bin/latest/xray run -c minxray/ss.json
+=== leg4 scaffold end=2026-10-25T01:22:51Z ===

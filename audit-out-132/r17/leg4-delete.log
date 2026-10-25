@@ -1,0 +1,43 @@
+=== leg4 delete start=2026-10-25T01:26:46Z ===
+931 r17-idle-vmess
+932 r17-vmess-ctl
+933 r17-idle-ss
+934 r17-idle-trojan
+935 r17-idle-vless
+--- delete 931 r17-idle-vmess
+http=200
+{"code":0,"msg":"操作成功","ts":1792891608387}
+
+--- delete 932 r17-vmess-ctl
+http=200
+{"code":0,"msg":"操作成功","ts":1792891612057}
+
+--- delete 933 r17-idle-ss
+http=200
+{"code":0,"msg":"操作成功","ts":1792891615722}
+
+--- delete 934 r17-idle-trojan
+http=200
+{"code":0,"msg":"操作成功","ts":1792891619365}
+
+--- delete 935 r17-idle-vless
+http=200
+{"code":0,"msg":"操作成功","ts":1792891623017}
+
+--- post delete: inbound count + r17 residue
+total inbound count 578
+r17 residue []
+--- post delete: agent xray config
+policy: null
+flmx-idle outbounds: []
+idle rules: []
+outbounds: ['direct', 'block', 'flmx-u1', 'flmx-u4', 'flmx-u12']
+rules count: 3 inbounds: 11
+--- scaffold cleanup
+scaffold processes left:
+(none)
+test ports left:
+(none)
+agent own xray:
+ 709053 /etc/flux_agent/kernels/xray/bin/latest/xray run -c /etc/flux_agent/kernels/xray/run/config.json
+=== leg4 delete end=2026-10-25T01:27:18Z ===

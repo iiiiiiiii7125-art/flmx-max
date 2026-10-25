@@ -1,0 +1,56 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg1 fixed-2 start=2026-10-25T00:29:59Z ===
+--- pre: 2ff44f865beb5fca92ada5d1cbd39f4c lines=334
+services=12 dup=none
+  6_1_0_tcp addr=[::]:14601 paused=True
+  6_1_0_udp addr=[::]:14601 paused=True
+14601 free pre
+--- start dummy occupier
+00:30:00.086 dummy bound tcp4 :14601
+00:30:00.086 dummy SKIP tcp6 :14601: [Errno 98] Address already in use
+00:30:00.086 dummy bound udp4 :14601
+00:30:00.086 dummy SKIP udp6 :14601: [Errno 98] Address already in use
+00:30:00.086 dummy holding :14601 pid=686775
+LISTEN 0      5                                     0.0.0.0:14601      0.0.0.0:*          
+--- start watcher
+backend log: /var/lib/docker/containers/8b06d0579699ff7bd066a59134d64c4664b70f2f73a3659864188961d978e264/8b06d0579699ff7bd066a59134d64c4664b70f2f73a3659864188961d978e264-json.log
+--- restart agent (triggers onNodeOnline redeploy)
+active
+--- wait for watcher to fire or timeout (max 150s)
+watcher exit=0
+--- watcher log:
+00:30:08.191 GUARD r17-addservice-guard: node=1 decision=send reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=-
+00:30:08.192 MATCH -> killing dummy pid=686775
+00:30:08.193 WATCHER DONE killed=True
+--- dummy log:
+00:30:00.086 dummy bound tcp4 :14601
+00:30:00.086 dummy SKIP tcp6 :14601: [Errno 98] Address already in use
+00:30:00.086 dummy bound udp4 :14601
+00:30:00.086 dummy SKIP udp6 :14601: [Errno 98] Address already in use
+00:30:00.086 dummy holding :14601 pid=686775
+dummy gone
+--- post: 2a319194e92d5b36ef02add670d510c9 lines=334
+services=12 dup=none
+  6_1_0_tcp addr=[::]:14601 paused=True
+  6_1_0_udp addr=[::]:14601 paused=True
+active
+--- guard lines in backend log (last 40 guard lines):
+r17-addservice-guard: node=1 decision=send reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=send reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=create service 3_5_3_tcp failed: listen tcp 0.0.0.0:13102: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=self-occupied-rebind services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=self-occupied-rebind services=[3_5_3_tcp,3_5_3_udp] err=create service 3_5_3_tcp failed: listen tcp 0.0.0.0:13102: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=create service 3_5_3_tcp failed: listen tcp 0.0.0.0:13102: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=self-occupied-rebind services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=self-occupied-rebind services=[3_5_3_tcp,3_5_3_udp] err=create service 3_5_3_tcp failed: listen tcp 0.0.0.0:13102: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=update-fallback services=[3_5_3_tcp,3_5_3_udp] err=create service 3_5_3_tcp failed: listen tcp 0.0.0.0:13102: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=self-occupied-rebind services=[3_5_3_tcp,3_5_3_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=self-occupied-rebind services=[3_5_3_tcp,3_5_3_udp] err=create service 3_5_3_tcp failed: listen tcp 0.0.0.0:13102: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=-
+r17-addservice-guard: node=1 decision=sent-failed reason=update-fallback services=[6_1_0_tcp,6_1_0_udp] err=create service 6_1_0_tcp failed: listen tcp 0.0.0.0:14601: bind: address already in use
+r17-addservice-guard: node=1 decision=send reason=self-occupied-rebind services=[6_1_0_tcp,6_1_0_udp] err=-
+r17-addservice-guard: node=1 decision=sent-ok reason=self-occupied-rebind services=[6_1_0_tcp,6_1_0_udp] err=-
+=== leg1 fixed-2 end=2026-10-25T00:30:28Z ===

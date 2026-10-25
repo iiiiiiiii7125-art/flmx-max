@@ -1,0 +1,1 @@
+{"connIdleSeconds":5,"enabled":true,"kernelType":"xray","listen":"::","name":"r17-idle-vless","nodeId":1,"port":59904,"protocol":"vless","security":{"type":"none"},"settings":{"uuid":"220a6e10-7829-4afa-92c9-766ec3578042"},"transport":{"type":"tcp"}}

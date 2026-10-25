@@ -1,0 +1,5 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== killfreeze kill-1 start=2026-10-25T00:55:11Z ===
+--- pre: a491fb80fe484c6e755c1ae7e78b77a0 services=12
+agent pid=695901 active=active
+client_loop: send disconnect: Broken pipe

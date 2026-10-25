@@ -1,0 +1,69 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	go-backend/cmd/paneld	[no test files]
+ok  	go-backend/internal/app	0.010s
+ok  	go-backend/internal/auth	0.003s
+ok  	go-backend/internal/config	0.005s
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (85.568µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (83.095µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (63.535µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (97.226µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique applied
+2026/10/25 00:06:48 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 00:06:48 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (112.929µs)
+2026/10/25 00:06:48 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (110.335µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (232.519µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (129.745µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (93.34µs)
+2026/10/25 00:06:48 migration r5b4_v1_port_user_unique applied
+2026/10/25 00:06:48 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 00:06:48 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (124.767µs)
+2026/10/25 00:06:48 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (104.387µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (120.861µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (83.605µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (65.188µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique applied
+2026/10/25 00:06:49 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 00:06:49 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (107.481µs)
+2026/10/25 00:06:49 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (81.432µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (178.198µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (95.904µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (87.23µs)
+2026/10/25 00:06:49 migration r5b4_v1_port_user_unique applied
+2026/10/25 00:06:49 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 00:06:49 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (91.898µs)
+2026/10/25 00:06:49 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 00:06:50 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (84.306µs)
+2026/10/25 00:06:50 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (106.46µs)
+2026/10/25 00:06:50 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (81.072µs)
+2026/10/25 00:06:50 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (84.787µs)
+2026/10/25 00:06:50 migration r5b4_v1_port_user_unique applied
+2026/10/25 00:06:50 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 00:06:50 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (94.943µs)
+2026/10/25 00:06:50 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- FAIL: TestValidateMonitorTCPTarget (0.01s)
+    --- FAIL: TestValidateMonitorTCPTarget/公网域名放行 (0.01s)
+        monitor_ssrf_test.go:39: ValidateMonitorTCPTarget("example.com:443") err=目标地址不允许（内网/保留地址）: example.com, wantErr=false
+2026/10/25 00:06:51 service monitor 71: node target skipped: 目标地址不允许（元数据/硬拒绝地址）: 169.254.169.254:80
+FAIL
+FAIL	go-backend/internal/health	2.593s
+?   	go-backend/internal/http	[no test files]
+ok  	go-backend/internal/http/client	0.009s
+ok  	go-backend/internal/http/handler	378.146s
+ok  	go-backend/internal/http/middleware	0.040s
+?   	go-backend/internal/http/response	[no test files]
+ok  	go-backend/internal/kernel	0.174s
+ok  	go-backend/internal/logredact	0.005s
+ok  	go-backend/internal/metrics	2.534s
+ok  	go-backend/internal/monitoring	0.008s
+ok  	go-backend/internal/netguard	0.004s
+ok  	go-backend/internal/runtime/nftables	0.074s
+ok  	go-backend/internal/security	0.415s
+?   	go-backend/internal/store/model	[no test files]
+ok  	go-backend/internal/store/repo	125.324s
+ok  	go-backend/internal/ws	7.897s
+ok  	go-backend/tests/contract	40.774s
+FAIL
+backend exit=1

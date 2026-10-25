@@ -1,0 +1,8 @@
+=== restart-probe control-3 start=2026-10-25T00:39:44Z guard_before=18 ===
+--- pre: 2a319194e92d5b36ef02add670d510c9 services=12 dup=none
+--- restart agent
+active
+--- polling gost.json every 1s for 90s
+--- post: 2a319194e92d5b36ef02add670d510c9 lines=334 services=12 dup=none agent=active
+--- new guard lines (with docker timestamps):
+=== restart-probe control-3 end=2026-10-25T00:41:22Z dup_sightings=0 ===

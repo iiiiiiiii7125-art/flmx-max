@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/root/r17d/R17-FIX-D-watcher.py", line 51, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/root/r17d/R17-FIX-D-watcher.py", line 19, in main
+    f = open(LOG, "rb")
+        ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: ''

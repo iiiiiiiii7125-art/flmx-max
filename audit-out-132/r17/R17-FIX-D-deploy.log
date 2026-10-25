@@ -1,0 +1,79 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R17-FIX-D deploy 2026-10-25T00:27:12Z ===
+--- pre-state
+/dev/nvme0n1p1   20G   15G  3.8G  80% /
+FLUX_VERSION=1.3.5
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+328 /etc/flux_agent/gost.json
+--- stop agent
+agent processes gone
+--- backup pristine agent (expect aff338e3676bc56d0f3986a1a62f8fdd)
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+aff338e3676bc56d0f3986a1a62f8fdd  /root/r17d/flux_agent.pristine
+--- install fixed agent (expect md5 23aa260d8bffb857171f26e3426b7d2d)
+23aa260d8bffb857171f26e3426b7d2d  /etc/flux_agent/flux_agent
+--- backup pristine unit + install journal unit (expect 05449a73f3d21b037eb082be0a5ff438)
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+a12afd9c36fba7b76287210efaa199cb  /root/r17d/flux_agent.service.pristine
+05449a73f3d21b037eb082be0a5ff438  /etc/systemd/system/flux_agent.service
+# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
+StandardOutput=journal
+StandardError=journal
+--- pristine gost backup (expect d48f09e132ebe99fe97a619dd72d42d4)
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+d48f09e132ebe99fe97a619dd72d42d4  /root/r17d/gost.json.pristine
+--- unpack stage (expect paneld md5 1eb46e4b40c994c0b1819d154a0b2e04)
+total 42876
+-rw-rw---- 1 root nogroup       55 Oct 25 00:24 Dockerfile.backend
+-rw-rw---- 1 root nogroup      102 Oct 25 00:24 Dockerfile.frontend
+drwxrwxr-x 4 root nogroup     4096 Oct 25 00:24 dist
+-rw-rw-r-- 1 root nogroup    11499 Oct 25 00:24 nginx.conf
+-rwxrwx--- 1 root nogroup 43876976 Oct 25 00:24 paneld
+1eb46e4b40c994c0b1819d154a0b2e04  /root/r17d/stage/paneld
+8e4c555a283c283a31110b5c9601b479  /root/r17d/stage/nginx.conf
+--- docker build backend
+sha256:84d21ef2a0ab9d90c4e8128de3aba8f731e181e5e87ef0a32c6a46075eda0b68
+--- docker build frontend
+sha256:887b6c4209e29d437ec7bfd0d8b54daee8d70ebcb5ee1a26b2e836c697214bd8
+flmx-frontend:r17d 887b6c4209e2
+flmx-backend:r17d 84d21ef2a0ab
+--- backup compose/env
+3afbac1115e4f69a991448767b89d24e  /root/flmx-panel/docker-compose.yml
+3afbac1115e4f69a991448767b89d24e  /root/r17d/docker-compose.yml.pristine
+fffcd005d684d1ef207dc50caa845569  /root/flmx-panel/.env
+fffcd005d684d1ef207dc50caa845569  /root/r17d/env.pristine
+--- switch tags
+/root/flmx-panel/docker-compose.yml:    image: flmx-backend:r17d
+/root/flmx-panel/docker-compose.yml:      FLUX_VERSION: ${FLUX_VERSION:-dev}
+/root/flmx-panel/docker-compose.yml:    image: flmx-frontend:r17d
+/root/flmx-panel/.env:FLUX_VERSION=1.4.8-r17d
+--- compose up
+ Container flux-panel-backend Started 
+ Container flux-panel-backend Waiting 
+ Container flux-panel-backend Healthy 
+ Container vite-frontend Starting 
+ Container vite-frontend Started 
+vite-frontend flmx-frontend:r17d Up 8 seconds (health: starting)
+flux-panel-backend flmx-backend:r17d Up 14 seconds (healthy)
+flux-panel-postgres postgres:16-alpine Up 9 hours (healthy)
+--- reset-failed + start agent
+active
+    PID CMD
+ 685915 /etc/flux_agent/flux_agent
+--- served check
+GET / http=200
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+--- counts after deploy
+=== counts r17d-post-deploy 2026-10-25T00:27:48Z ===
+node 1
+tunnel 4
+forward 6
+inbound 578
+subscription 18
+agent: active gost=d48f09e132ebe99fe97a619dd72d42d4 lines=328
+vite-frontend flmx-frontend:r17d Up 14 seconds (health: starting)
+flux-panel-backend flmx-backend:r17d Up 20 seconds (healthy)
+flux-panel-postgres postgres:16-alpine Up 9 hours (healthy)
+=== deploy done 2026-10-25T00:27:49Z ===

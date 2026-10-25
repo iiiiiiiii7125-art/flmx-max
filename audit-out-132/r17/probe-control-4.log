@@ -1,0 +1,12 @@
+=== restart-probe control-4 start=2026-10-25T00:42:19Z guard_before=18 ===
+--- pre: 2a319194e92d5b36ef02add670d510c9 services=12 dup=none
+--- restart agent
+active
+--- polling gost.json every 1s for 90s
+--- post: a491fb80fe484c6e755c1ae7e78b77a0 lines=334 services=12 dup=none agent=active
+--- new guard lines (with docker timestamps):
+2026-10-25T00:42:25.789011646Z r17-addservice-guard: node=1 decision=send reason=update-fallback services=[4_5_4_tcp,4_5_4_udp] err=-
+2026-10-25T00:42:25.789696463Z r17-addservice-guard: node=1 decision=sent-failed reason=update-fallback services=[4_5_4_tcp,4_5_4_udp] err=create service 4_5_4_tcp failed: listen tcp 0.0.0.0:13103: bind: address already in use
+2026-10-25T00:42:25.946202728Z r17-addservice-guard: node=1 decision=send reason=self-occupied-rebind services=[4_5_4_tcp,4_5_4_udp] err=-
+2026-10-25T00:42:25.951118905Z r17-addservice-guard: node=1 decision=sent-ok reason=self-occupied-rebind services=[4_5_4_tcp,4_5_4_udp] err=-
+=== restart-probe control-4 end=2026-10-25T00:43:57Z dup_sightings=0 ===

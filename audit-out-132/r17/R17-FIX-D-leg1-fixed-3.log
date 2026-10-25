@@ -1,0 +1,13 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== restart-probe fixed-3 start=2026-10-25T00:32:53Z guard_before=18 ===
+--- pre: 2a319194e92d5b36ef02add670d510c9 services=12 dup=none
+--- restart agent
+active
+--- polling gost.json every 1s for 90s
+client_loop: send disconnect: Broken pipe
+[NOTE 2026-10-25T00:34Z: ssh broke mid-poll (client_loop Broken pipe); probe
+survived on machine (PID 687531) and finished. Reconstructed end-state from
+machine: probe finished, agent active, gost md5 2a319194e92d5b36ef02add670d510c9
+(unchanged from pre), services=12 dup=none, guard lines still 18 (no new
+fallback fired), no dup saves. Verdict fixed-3: MISS (no fallback event),
+post clean.]

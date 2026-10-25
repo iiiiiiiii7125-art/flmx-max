@@ -1,0 +1,8 @@
+=== fastpoll control-6 start=2026-10-25T00:51:08Z guard_before=24 ===
+00:51:08.112 pre: services=12 dup=none
+00:51:11.269 agent restarted, polling 50ms x 40s
+00:51:11.270 services=12 dup=none
+00:51:51.300 post: services=12 dup=none dup_sightings=0
+--- agent: active
+--- new guard lines:
+=== fastpoll control-6 end=2026-10-25T00:51:51Z ===

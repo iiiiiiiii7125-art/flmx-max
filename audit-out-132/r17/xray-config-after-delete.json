@@ -1,0 +1,585 @@
+{
+  "inbounds": [
+    {
+      "listen": "::",
+      "port": 53524,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "flow": "xtls-rprx-vision",
+            "id": "29969a10-a891-4673-94b8-dd73ea86107a"
+          },
+          {
+            "email": "u1@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          },
+          {
+            "email": "u12@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "a5d20f34-0118-446a-b3c7-7f3019c06206"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "realitySettings": {
+          "dest": "www.amd.com:443",
+          "minClientVer": "1.0.0",
+          "privateKey": "bpHhgyP3De6t8cZHDPmcR18wJr91RvoY3WA4xntfwF0",
+          "serverNames": [
+            "www.amd.com"
+          ],
+          "shortIds": [
+            "7605e033f9915b90"
+          ],
+          "show": false,
+          "xver": 0
+        },
+        "security": "reality"
+      },
+      "tag": "in-11"
+    },
+    {
+      "listen": "::",
+      "port": 24564,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "6cd44504-84eb-411d-974b-e2412db41c5d"
+          },
+          {
+            "email": "u1@flmx",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "realitySettings": {
+          "dest": "www.amd.com:443",
+          "minClientVer": "1.0.0",
+          "privateKey": "6-l2AzhFtxy8cyxtncGJDclwA8wIg7GOPg0zCHE7HOM",
+          "serverNames": [
+            "www.amd.com"
+          ],
+          "shortIds": [
+            "910ec0dd235e009c"
+          ],
+          "show": false,
+          "xver": 0
+        },
+        "security": "reality",
+        "xhttpSettings": {
+          "mode": "auto",
+          "path": "/f6efa6b3"
+        }
+      },
+      "tag": "in-13"
+    },
+    {
+      "listen": "::",
+      "port": 51887,
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "2022-blake3-aes-128-gcm",
+        "network": "tcp,udp",
+        "password": "yMkKMjubr4klKrcRfcc8sQ=="
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "tag": "in-14"
+    },
+    {
+      "listen": "::",
+      "port": 52824,
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "G7XCQHuq0yC7so-cyzei-qZxrstsun1l"
+          },
+          {
+            "email": "u1@flmx",
+            "password": "5a7c86f73946e52977f38f7c4513d9cf"
+          },
+          {
+            "email": "u4@flmx",
+            "password": "be43d007d31a0e60e36542fb835db9e3"
+          }
+        ]
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificate": [
+                "-----BEGIN CERTIFICATE-----",
+                "MIIBfzCCASWgAwIBAgIPYGM9izqmIj6INQn/JqonMAoGCCqGSM49BAMCMBkxFzAV",
+                "BgNVBAMTDmE0LmV4YW1wbGUuY29tMB4XDTI2MTAyMTEyMjQ0M1oXDTM2MTAyMTEz",
+                "MjQ0M1owGTEXMBUGA1UEAxMOYTQuZXhhbXBsZS5jb20wWTATBgcqhkjOPQIBBggq",
+                "hkjOPQMBBwNCAATbQZk9F+LVc/USyThnoIS7Wmn9YNHJz/8czDANssgrd99FCuUR",
+                "Kjra4zu4OheHChKpw8aSBcVH9eb3N2khoGP+o1AwTjAOBgNVHQ8BAf8EBAMCB4Aw",
+                "EwYDVR0lBAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAZBgNVHREEEjAQgg5h",
+                "NC5leGFtcGxlLmNvbTAKBggqhkjOPQQDAgNIADBFAiEA57rd+Jrt+Ca/Rt9RRKKr",
+                "MH1EPyrOu2K6i9tA32XS3NECIAmGX1WSO1dilSnPeo0Jgtruj3lshZyu+5t+Pfpt",
+                "jDLX",
+                "-----END CERTIFICATE-----"
+              ],
+              "key": [
+                "-----BEGIN EC PRIVATE KEY-----",
+                "MHcCAQEEIBV7O195NS2QveeN7XxZoLUiXVyBPXgqjQtX4W8VK73DoAoGCCqGSM49",
+                "AwEHoUQDQgAE20GZPRfi1XP1Esk4Z6CEu1pp/WDRyc//HMwwDbLIK3ffRQrlESo6",
+                "2uM7uDoXhwoSqcPGkgXFR/Xm9zdpIaBj/g==",
+                "-----END EC PRIVATE KEY-----"
+              ]
+            }
+          ],
+          "serverName": "a4.example.com"
+        }
+      },
+      "tag": "in-16"
+    },
+    {
+      "listen": "::",
+      "port": 21829,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "50e1310c-3d76-4264-b7fb-8827a3030606"
+          },
+          {
+            "email": "u1@flmx",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ]
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificate": [
+                "-----BEGIN CERTIFICATE-----",
+                "MIIBgDCCASagAwIBAgIQAJy1mZy6UhvOdETWfgoRsjAKBggqhkjOPQQDAjAZMRcw",
+                "FQYDVQQDEw5hNC5leGFtcGxlLmNvbTAeFw0yNjEwMjExMjI0NDZaFw0zNjEwMjEx",
+                "MzI0NDZaMBkxFzAVBgNVBAMTDmE0LmV4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYI",
+                "KoZIzj0DAQcDQgAEFbosbhgVwkh3zj3AuB5jZDEoF8EBefY9ek4ygXd4h+ca7vX2",
+                "psxFpxbVaY50yMFw4CrsAdwjxylk0fvHESNvs6NQME4wDgYDVR0PAQH/BAQDAgeA",
+                "MBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwGQYDVR0RBBIwEIIO",
+                "YTQuZXhhbXBsZS5jb20wCgYIKoZIzj0EAwIDSAAwRQIhAJm/7HhgKuxZCtBvl4d9",
+                "Cb3GqbvVKFeK78N1zhYZMg2tAiA22s9+ji4P53khH0SM5wnSjrl1VnpfXzqtb/SB",
+                "8vllrQ==",
+                "-----END CERTIFICATE-----"
+              ],
+              "key": [
+                "-----BEGIN EC PRIVATE KEY-----",
+                "MHcCAQEEID0ZTW5JmQsE3za3B7CrOCyQ5TWv27kM9v+/kprnV64qoAoGCCqGSM49",
+                "AwEHoUQDQgAEFbosbhgVwkh3zj3AuB5jZDEoF8EBefY9ek4ygXd4h+ca7vX2psxF",
+                "pxbVaY50yMFw4CrsAdwjxylk0fvHESNvsw==",
+                "-----END EC PRIVATE KEY-----"
+              ]
+            }
+          ],
+          "serverName": "a4.example.com"
+        },
+        "wsSettings": {
+          "path": "/a4"
+        }
+      },
+      "tag": "in-18"
+    },
+    {
+      "listen": "::",
+      "port": 43027,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "flow": "xtls-rprx-vision",
+            "id": "1efb5649-96fd-4a3d-9bed-520dc927de2d"
+          },
+          {
+            "email": "u1@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ],
+        "decryption": "mlkem768x25519plus.native.600s.100-111-1111.75-0-111.50-0-3333.K2lOVWffMeBXDtQDvhuW4AbtvlUFppZcwivW7XrlyJLMHlIGSszyKECciLiZJQCXd3-KoEFBaU5tgfnrwdEQKg"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none"
+      },
+      "tag": "in-29"
+    },
+    {
+      "listen": "::",
+      "port": 40291,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "827ad17e-7bad-491d-8723-a322ae12f8da"
+          },
+          {
+            "email": "u1@flmx",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ],
+        "decryption": "mlkem768x25519plus.native.600s.100-111-1111.75-0-111.50-0-3333.76eSM6dLa12vZo5mPimFbDd8rX0gAXxAPnBScUvKuRo"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none"
+      },
+      "tag": "in-30"
+    },
+    {
+      "listen": "::",
+      "port": 51845,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "flow": "xtls-rprx-vision",
+            "id": "bcbc0627-ade8-4bed-b123-63b9336abc50"
+          },
+          {
+            "email": "u1@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "realitySettings": {
+          "dest": "www.amd.com:443",
+          "minClientVer": "1.0.0",
+          "privateKey": "5S9pYaUh5fKNfohIy74mggnb25mSZYdcMSGkqzfXNzM",
+          "serverNames": [
+            "www.amd.com"
+          ],
+          "shortIds": [
+            "c32931dffdc425ed"
+          ],
+          "show": false,
+          "xver": 0
+        },
+        "security": "reality"
+      },
+      "tag": "in-31"
+    },
+    {
+      "listen": "::",
+      "port": 43404,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "flow": "xtls-rprx-vision",
+            "id": "681906d3-b3d9-4c62-9812-ff85969a4c49"
+          },
+          {
+            "email": "u1@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "flow": "xtls-rprx-vision",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "realitySettings": {
+          "dest": "www.amd.com:443",
+          "minClientVer": "1.0.0",
+          "privateKey": "iG1-dBQbYcz0LJmo4IT-fdd0ub5dFcDH7XWtvz8G8HM",
+          "serverNames": [
+            "www.amd.com"
+          ],
+          "shortIds": [
+            "097c95a42d5387fb"
+          ],
+          "show": false,
+          "xver": 0
+        },
+        "security": "reality"
+      },
+      "tag": "in-32"
+    },
+    {
+      "listen": "::",
+      "port": 15530,
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "a2trojanpw123"
+          },
+          {
+            "email": "u1@flmx",
+            "password": "5a7c86f73946e52977f38f7c4513d9cf"
+          },
+          {
+            "email": "u4@flmx",
+            "password": "be43d007d31a0e60e36542fb835db9e3"
+          }
+        ]
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificate": [
+                "-----BEGIN CERTIFICATE-----",
+                "MIIBfzCCASagAwIBAgIQAN7FzfAxqLTBJlvKwy6K1jAKBggqhkjOPQQDAjAZMRcw",
+                "FQYDVQQDEw5hMi5leGFtcGxlLmNvbTAeFw0yNjEwMjExMjQ5MTlaFw0zNjEwMjEx",
+                "MzQ5MTlaMBkxFzAVBgNVBAMTDmEyLmV4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYI",
+                "KoZIzj0DAQcDQgAEunGhV3k6Reakb2krNokeMF8YrCnWvyFnr3YRUNMUugifPzvf",
+                "CUtm9cGbxNqrx+f5am3Jw6jo9fhGDf2FJkqIU6NQME4wDgYDVR0PAQH/BAQDAgeA",
+                "MBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwGQYDVR0RBBIwEIIO",
+                "YTIuZXhhbXBsZS5jb20wCgYIKoZIzj0EAwIDRwAwRAIgSKxFlBc4pf+CKf2StOl9",
+                "dE0ClsTOu3/mWBY2KqICk4MCIG9C1OLdSC3kor01Cj5lX6VUHYyGwHhangaZxdCs",
+                "qilo",
+                "-----END CERTIFICATE-----"
+              ],
+              "key": [
+                "-----BEGIN EC PRIVATE KEY-----",
+                "MHcCAQEEIJwMirQfaHP7gFT8x3rfGJQXFzqdQArEGuJZwk8wE0O4oAoGCCqGSM49",
+                "AwEHoUQDQgAEunGhV3k6Reakb2krNokeMF8YrCnWvyFnr3YRUNMUugifPzvfCUtm",
+                "9cGbxNqrx+f5am3Jw6jo9fhGDf2FJkqIUw==",
+                "-----END EC PRIVATE KEY-----"
+              ]
+            }
+          ],
+          "serverName": "a2.example.com"
+        }
+      },
+      "tag": "in-903"
+    },
+    {
+      "listen": "::",
+      "port": 15540,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "33333333-4444-4555-8666-777777777777"
+          },
+          {
+            "email": "u1@flmx",
+            "id": "b52951bd-f026-44f3-ace9-96e4261cd3ef"
+          },
+          {
+            "email": "u4@flmx",
+            "id": "ebf13a99-d035-4b8c-b67e-8e992913ba0d"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
+      },
+      "tag": "in-906"
+    }
+  ],
+  "log": {
+    "loglevel": "warning"
+  },
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
+    },
+    {
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 1180041217
+        }
+      },
+      "tag": "flmx-u1"
+    },
+    {
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 1180041220
+        }
+      },
+      "tag": "flmx-u4"
+    },
+    {
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 1180041228
+        }
+      },
+      "tag": "flmx-u12"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "outboundTag": "flmx-u1",
+        "type": "field",
+        "user": [
+          "u1@flmx"
+        ]
+      },
+      {
+        "outboundTag": "flmx-u4",
+        "type": "field",
+        "user": [
+          "u4@flmx"
+        ]
+      },
+      {
+        "outboundTag": "flmx-u12",
+        "type": "field",
+        "user": [
+          "u12@flmx"
+        ]
+      }
+    ]
+  }
+}

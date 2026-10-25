@@ -1,0 +1,38 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg1 fixed-1 start=2026-10-25T00:29:06Z ===
+--- pre: 3f172a90ddd67d69d9bcea4dfe67a66e lines=334
+services=12 dup=none
+  6_1_0_tcp addr=[::]:14601 paused=True
+  6_1_0_udp addr=[::]:14601 paused=True
+14601 free pre
+--- start dummy occupier
+00:29:06.424 dummy bound tcp4 :14601
+00:29:06.424 dummy FAILED tcp6 :14601: [Errno 98] Address already in use
+14601 NOT listening after dummy start (PROBLEM)
+--- start watcher
+backend log: 
+--- restart agent (triggers onNodeOnline redeploy)
+ls: cannot access '/var/lib/docker/containers/8b06d0579699/*-json.log': No such file or directory
+active
+--- wait for watcher to fire or timeout (max 150s)
+watcher exit=1
+--- watcher log:
+Traceback (most recent call last):
+  File "/root/r17d/R17-FIX-D-watcher.py", line 51, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/root/r17d/R17-FIX-D-watcher.py", line 19, in main
+    f = open(LOG, "rb")
+        ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: ''
+--- dummy log:
+00:29:06.424 dummy bound tcp4 :14601
+00:29:06.424 dummy FAILED tcp6 :14601: [Errno 98] Address already in use
+dummy gone
+--- post: 2ff44f865beb5fca92ada5d1cbd39f4c lines=334
+services=12 dup=none
+  6_1_0_tcp addr=[::]:14601 paused=True
+  6_1_0_udp addr=[::]:14601 paused=True
+active
+--- guard lines in backend log (last 40 guard lines):
+=== leg1 fixed-1 end=2026-10-25T00:29:33Z ===

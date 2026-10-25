@@ -1,0 +1,36 @@
+=== leg4 legs start=2026-10-25T01:23:12Z ===
+--- R17D-VL-1 VLESS direct main (expect CLOSED ~5s, D1-direct 3.5-6.5s)
+[R17D-VL-1] header_after=5.24s resp=0000
+[R17D-VL-1] CLOSED after=5.25s
+--- R17D-VM-2 VMess supply main (expect CLOSED 13.5-16.5s)
+[R17D-VM-2] socks_reply_after=0.01s
+[R17D-VM-2] stopped sending at 10.01s
+[R17D-VM-2] CLOSED after=16.02s
+--- R17D-SS-2 SS supply main via door (expect CLOSED 13.5-16.5s)
+[R17D-SS-2] connected_after=0.00s
+[R17D-SS-2] stopped sending at 10.00s
+[R17D-SS-2] CLOSED after=15.02s
+--- R17D-TR-1 Trojan direct main (expect CLOSED 3.5-6.5s)
+[R17D-TR-1] header_sent_after=0.09s
+[R17D-TR-1] CLOSED after=5.09s
+--- R17D-CTL-supply VMess supply no-idle control (expect STILL_OPEN@30s)
+[R17D-CTL-supply] socks_reply_after=0.02s
+[R17D-CTL-supply] stopped sending at 10.02s
+[R17D-CTL-supply] STILL_OPEN after=30.0s
+--- R17D-VM-2m VMess supply minimal (expect STILL_OPEN@30s)
+[R17D-VM-2m] socks_reply_after=0.02s
+[R17D-VM-2m] stopped sending at 10.02s
+[R17D-VM-2m] STILL_OPEN after=30.0s
+--- R17D-SS-2m SS supply minimal via door (expect STILL_OPEN@30s)
+[R17D-SS-2m] connected_after=0.00s
+[R17D-SS-2m] stopped sending at 10.00s
+[R17D-SS-2m] STILL_OPEN after=30.0s
+--- R17D-VM-1 VMess silent (expect CLOSED ~0.5-2.0s, O-148B-1 upstream)
+[R17D-VM-1] socks_reply_after=0.01s rep=05000001000000002b48
+[R17D-VM-1] CLOSED after=2.15s
+=== leg4 legs end=2026-10-25T01:25:56Z ===
+
+=== SUPPLEMENT (follow-up, 01:26Z) ===
+[R17D-VM-1r] socks_reply_after=0.01s rep=05000001000000002b48
+[R17D-VM-1r] CLOSED after=1.14s
+(note: first run R17D-VM-1 closed at 2.15s, judged cold-start outlier; cf. R17 2.10s -> 1.10s on retest. Both values kept.)

@@ -1,0 +1,111 @@
+=== R17-FIX-C harness run=r17d cycles=10 wait_sync=75s start=2026-10-25T01:03:39Z ===
+--- preconditions:
+gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:03:14.565088424 +0000 DUP:none SERVICES:12 
+active=active restarts=0 pid=698451
+vite-frontend flmx-frontend:r17d Up 36 minutes (unhealthy)
+flux-panel-backend flmx-backend:r17d Up 36 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 10 hours (healthy)
+=== cycle 1/10 start=2026-10-25T01:03:40Z ===
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=699148
+waiting 75s for startup sync...
+cycle 1 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:03:58.396812841 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=699148
+cycle 1 MISS (gost pristine, agent active)
+=== cycle 2/10 start=2026-10-25T01:05:12Z ===
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Started 
+ Container vite-frontend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=699953
+waiting 75s for startup sync...
+cycle 2 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:05:30.524233592 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=699953
+cycle 2 MISS (gost pristine, agent active)
+=== cycle 3/10 start=2026-10-25T01:06:44Z ===
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=700760
+waiting 75s for startup sync...
+cycle 3 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:07:02.587654732 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=700760
+cycle 3 MISS (gost pristine, agent active)
+=== cycle 4/10 start=2026-10-25T01:08:16Z ===
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=701584
+waiting 75s for startup sync...
+cycle 4 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:08:34.343077799 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=701584
+cycle 4 MISS (gost pristine, agent active)
+=== cycle 5/10 start=2026-10-25T01:09:48Z ===
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Started 
+ Container vite-frontend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=702413
+waiting 75s for startup sync...
+cycle 5 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:10:06.470498518 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=702413
+cycle 5 MISS (gost pristine, agent active)
+=== cycle 6/10 start=2026-10-25T01:11:20Z ===
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=703323
+waiting 75s for startup sync...
+cycle 6 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:11:38.669918776 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=703323
+cycle 6 MISS (gost pristine, agent active)
+=== cycle 7/10 start=2026-10-25T01:12:52Z ===
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=704132
+waiting 75s for startup sync...
+cycle 7 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:13:11.085337670 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=704132
+cycle 7 MISS (gost pristine, agent active)
+=== cycle 8/10 start=2026-10-25T01:14:24Z ===
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Started 
+ Container vite-frontend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=704937
+waiting 75s for startup sync...
+cycle 8 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:14:43.044741259 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=704937
+cycle 8 MISS (gost pristine, agent active)
+=== cycle 9/10 start=2026-10-25T01:15:56Z ===
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Restarting 
+ Container flux-panel-backend Started 
+ Container vite-frontend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=705778
+waiting 75s for startup sync...
+cycle 9 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:16:15.420104251 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=705778
+cycle 9 MISS (gost pristine, agent active)
+=== cycle 10/10 start=2026-10-25T01:17:29Z ===
+ Container vite-frontend Restarting 
+ Container flux-panel-backend Restarting 
+ Container vite-frontend Started 
+ Container flux-panel-backend Started 
+backend healthy after 3x3s
+agent after start: active=active restarts=0 pid=706582
+waiting 75s for startup sync...
+cycle 10 snapshot: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:17:47.515476998 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=706582
+cycle 10 MISS (gost pristine, agent active)
+=== R17-FIX-C harness run=r17d end=2026-10-25T01:19:01Z ===
+cycles_done=10 hits=0 hit_cycles:[ ]
+hit_rate=0/10
+final: gost md5=d48f09e132ebe99fe97a619dd72d42d4 lines=328 mtime=2026-10-25 01:17:47.515476998 +0000 DUP:none SERVICES:12  active=active restarts=0 pid=706582
