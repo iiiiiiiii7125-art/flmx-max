@@ -1,0 +1,11 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+MKDIR_OK
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+3:    image: flmx-backend:new1
+flux-panel-backend flmx-backend:new1 Up 9 minutes (healthy)
+vite-frontend flmx-frontend:new1 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 3 hours (healthy)
+active
+GET / 6366 http=200
+services= 0 climiters= []

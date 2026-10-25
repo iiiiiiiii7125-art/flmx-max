@@ -1,0 +1,88 @@
+LEG_SINCE=2026-10-25 12:59:48
+Traceback (most recent call last):
+  File "/root/r21-f03/R21-F03-legs.py", line 369, in <module>
+    main()
+  File "/root/r21-f03/R21-F03-legs.py", line 137, in main
+    services, climiters, refs, _ = gost()
+                                   ^^^^^^
+  File "/root/r21-f03/R21-F03-legs.py", line 97, in gost
+    services = sorted(s.get("name", "") for s in data.get("services", []))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not iterable
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+create tunnel http=200 code=0 msg=操作成功 data=None
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792933192175}
+tunnel id: 1 engine: 
+PASS tunnel listed (gost engine) :: [{'chainNodes': [], 'createdTime': 1792933192173, 'engine': '', 'flow': 1, 'id': 1, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r21-f03-tun', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktunnel end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+=== leg fwdlist end failures=0 [] ===
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792933222315}
+forward id: 5
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_5'] refs=['rule_conn_limit_5']
+PASS gost has new limiter :: ['rule_conn_limit_5']
+PASS service refs new limiter :: ['rule_conn_limit_5']
+=== leg mkfwd end failures=0 [] ===
+forward {'id': 5, 'name': 'r21-f03-fwd', 'tunnelId': 1, 'remoteAddr': '203.0.113.9:9001', 'maxConn': 5, 'ipMaxConn': 0, 'status': 1, 'inPort': 60774}
+=== leg fwdlist end failures=0 [] ===
+--- listen check before force-delete (expect 60774 LISTEN)
+LISTEN 0      4096                                        *:60774            *:*    users:(("flux_agent",pid=116455,fd=7))     
+--- force-delete forward 5
+force-delete http=200 code=0 msg=操作成功
+PASS force-delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792933234229}
+gost services=0 climiters=[] refs=[]
+=== leg forcefwd end failures=0 [] ===
+--- listen check after force-delete (expect gone)
+NO_LISTENER_60774
+journal matches since=2026-10-25 12:59:48 pattern='DeleteService': 2
+   Oct 25 13:00:34 ip-172-26-4-158 flux_agent[116455]: 🔔 收到命令: type=DeleteService requestId=1_1792933234227619620
+   Oct 25 13:00:34 ip-172-26-4-158 flux_agent[116455]: 🔔 命令详情(已脱敏):  {"data":{"services":["5_1_0_tcp","5_1_0_udp","5_1_0"]},"requestId":"1_1792933234227619620","type":"DeleteService"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 12:59:48 pattern='DeleteCLimiters': 2
+   Oct 25 13:00:34 ip-172-26-4-158 flux_agent[116455]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792933234229011129
+   Oct 25 13:00:34 ip-172-26-4-158 flux_agent[116455]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_5"},"requestId":"1_1792933234229011129","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+journal matches since=2026-10-25 12:59:48 pattern='rule_conn_limit_5': 3
+   Oct 25 13:00:22 ip-172-26-4-158 flux_agent[116455]: 🔔 命令详情(已脱敏):  {"data":{"limits":["$ 5"],"name":"rule_conn_limit_5"},"requestId":"1_1792933222308728123","type":"AddCLimiters"}
+   Oct 25 13:00:22 ip-172-26-4-158 flux_agent[116455]: 🔔 命令详情(已脱敏):  {"data":[{"addr":"[::]:60774","climiter":"rule_conn_limit_5","forwarder":{"nodes":[{"addr":"203.0.113.9:9001","name":"node_1"}],"selector":{"failTimeout":"600s","maxFails":1,"strategy":"fifo"}},"handler":{"type":"tcp"},"listener":{"type":"tcp"},"name":"5_1_0_tcp"},{"addr":"[::]:60774","climiter":"rule_conn_limit_5","forwarder":{"nod
+   Oct 25 13:00:34 ip-172-26-4-158 flux_agent[116455]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_5"},"requestId":"1_1792933234229011129","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+--- panel audit log (backend container, force_delete_forward)
+2026/10/25 21:00:34 audit op=force_delete_forward operator_id=1 forward_id=5 name="r21-f03-fwd" user_id=1 residue_port=60774 residue_note=节点规则可能残留，需人工确认清理
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792933255653}
+forward id: 6
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_6'] refs=['rule_conn_limit_6']
+PASS gost has new limiter :: ['rule_conn_limit_6']
+PASS service refs new limiter :: ['rule_conn_limit_6']
+=== leg mkfwd end failures=0 [] ===
+forward {'id': 6, 'name': 'r21-f03-fwd2', 'tunnelId': 1, 'remoteAddr': '203.0.113.9:9002', 'maxConn': 5, 'ipMaxConn': 0, 'status': 1, 'inPort': 11854}
+=== leg fwdlist end failures=0 [] ===
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792933257825}
+gost services=0 climiters=[] refs=[]
+=== leg delfwd end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+delete tunnel http=200 code=0 msg=操作成功 data=None
+PASS delete tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792933267038}
+PASS tunnel gone from list
+=== leg deltunnel end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+=== leg fwdlist end failures=0 [] ===
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+flux-panel-backend flmx-backend:r21-f03 Up 3 minutes (healthy)
+vite-frontend flmx-frontend:new1 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 3 hours (healthy)
+active

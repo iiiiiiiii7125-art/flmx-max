@@ -1,0 +1,38 @@
+=== deploy start=2026-10-25T12:57:17Z initiator=R21-F03 ===
+--- pre-state
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+3:    image: flmx-backend:new1
+flux-panel-backend flmx-backend:new1 Up 22 minutes (healthy)
+vite-frontend flmx-frontend:new1 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 3 hours (healthy)
+--- backup live DB (sqlite online backup via python3; host has no sqlite3 CLI)
+-rw-r--r-- 1 root root 765952 Oct 25 12:57 /root/r21-f03/gost.db.pre
+--- verify staged paneld (expect 73c1c1a5e29893844cee247bb80e9522; skipped if binary not staged)
+no staged paneld binary (source-only stage; image is built from staged source, marker verified post-build)
+--- docker build backend r21-f03
+sha256:8ef980147d3a4f4202daba484bcc25b90fd8d68795f0f4917689b2ad68c1d15a
+flmx-backend:r21-f03 8ef980147d3a
+--- verify paneld inside image (md5 recorded; marker string must be present)
+6ea6d4f3ad1a24abe044bc15c735e4c2  /app/paneld
+sh: 1: strings: not found
+0
+--- switch compose backend tag only
+3:    image: flmx-backend:r21-f03
+--- compose up backend
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+--- wait healthy (up to 150s)
+try 1 health=starting
+try 2 health=healthy
+flux-panel-backend flmx-backend:r21-f03 Up 5 seconds (healthy)
+vite-frontend flmx-frontend:new1 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 3 hours (healthy)
+--- prove running binary is the fix build
+6ea6d4f3ad1a24abe044bc15c735e4c2  /app/paneld
+--- served check
+GET / 6366 http=200
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+active
+=== deploy done=2026-10-25T12:57:27Z ===

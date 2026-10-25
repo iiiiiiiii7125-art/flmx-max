@@ -1,0 +1,5 @@
+LEGS_SYNTAX_OK
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+sysver: {"currentVersion": "1.4.9-new", "latestVersion": "1.4.9", "hasUpdate": false, "channel": "stable", "capability": {"capable": true, "reasons": [], "deployDir": "/opt/flmx-panel", "backendContainer": "flux-panel-backend"}}
+=== leg sysver end failures=0 [] ===

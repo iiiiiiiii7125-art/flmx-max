@@ -1,0 +1,32 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (162.363µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (246.95µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (185.529µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (141.102µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:11:33 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:11:33 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (177.877µs)
+2026/10/25 09:11:33 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 09:11:33 audit op=force_delete_forward operator_id=1 forward_id=1 name="r21-f03-forward" user_id=1 residue_port=22000 residue_note=节点规则可能残留，需人工确认清理
+--- FAIL: TestR21F03ForceDeleteGostCleansServiceAndLimiter (0.25s)
+    r21_fix_f03_test.go:60: expected DeleteService to be sent by force-delete (gost path), got 0
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (208.683µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (263.916µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (189.615µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (129.385µs)
+2026/10/25 09:11:33 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:11:33 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:11:33 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (197.676µs)
+2026/10/25 09:11:33 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 09:11:33 audit op=force_delete_forward operator_id=1 forward_id=1 name="r21-f03-forward" user_id=1 residue_port=22000 residue_note=节点规则可能残留，需人工确认清理
+2026/10/25 09:11:34 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (411.207µs)
+2026/10/25 09:11:34 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (242.594µs)
+2026/10/25 09:11:34 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (134.082µs)
+2026/10/25 09:11:34 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (107.891µs)
+2026/10/25 09:11:34 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:11:34 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:11:34 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (149.795µs)
+2026/10/25 09:11:34 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+FAIL
+FAIL	go-backend/internal/http/handler	0.875s
+FAIL
