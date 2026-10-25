@@ -505,7 +505,9 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 
 	// R20-X-01 ①：全部入口节点服务推送成功后，删更新失势的 rule climiter
 	//（先推服务后删 limiter；离线节点本轮未推，不删，留待下次成功同步
-	// 或删除兜底 ②）。失败只记日志、不挡更新回执（helper 内处理）。
+	// ——重连重推 redeployLocalNodeRuntime 在重推成功后按 ID 补删
+	// （R21-X-02 deleteRedeployStaleRuleConnLimiter）——或删除兜底 ②）。
+	// 失败只记日志、不挡更新回执（helper 内处理）。
 	for _, nodeID := range pushedNodeIDs {
 		h.deleteStaleForwardConnLimiterOnNode(oldForward, forward, nodeID)
 	}
