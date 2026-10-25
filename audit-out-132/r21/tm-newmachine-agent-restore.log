@@ -1,0 +1,11 @@
+=== agent restore start=2026-10-25T12:28:27Z initiator=R21-F01 ===
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+8a80554c91d9fca8acb82f023de02f11  /etc/flux_agent/gost.json
+active
+8a80554c91d9fca8acb82f023de02f11  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+services 0
+climiters []
+refs []
+=== agent restore done=2026-10-25T12:28:32Z ===

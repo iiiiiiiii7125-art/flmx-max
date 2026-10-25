@@ -1,0 +1,41 @@
+=== deploy start=2026-10-25T12:26:04Z initiator=R21-F01 ===
+--- pre-state
+8a80554c91d9fca8acb82f023de02f11  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+3:    image: flmx-backend:new1
+vite-frontend flmx-frontend:new1 Up 49 minutes (healthy)
+flux-panel-backend flmx-backend:new1 Up 49 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 2 hours (healthy)
+--- verify staged paneld (expect 3b208eba31d132285f5383a4e69fb261)
+3b208eba31d132285f5383a4e69fb261  /root/r21-f01/paneld-r21f01-v2
+--- verify running paneld is the new1 base (expect 69d166cc2d0923ef72f974912767bfa8)
+69d166cc2d0923ef72f974912767bfa8  /app/paneld
+--- verify gost pristine-empty (expect 8a80554c91d9fca8acb82f023de02f11)
+8a80554c91d9fca8acb82f023de02f11  /etc/flux_agent/gost.json
+--- stage Dockerfile
+FROM flmx-backend:new1
+COPY paneld-r21f01-v2 /app/paneld
+--- docker build backend r21-f01-v2
+sha256:37e891d162aeebb6b24275a2b8a5920601bacbf0c4ac87caaf3850623363c300
+flmx-backend:r21-f01-v2 37e891d162ae
+--- verify paneld inside image (expect 3b208eba31d132285f5383a4e69fb261)
+3b208eba31d132285f5383a4e69fb261  /app/paneld
+--- switch compose backend tag only
+3:    image: flmx-backend:r21-f01-v2
+--- compose up backend
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+--- wait healthy (up to 150s)
+try 1 health=starting
+try 2 health=healthy
+flux-panel-backend flmx-backend:r21-f01-v2 Up 5 seconds (healthy)
+vite-frontend flmx-frontend:new1 Up 49 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 2 hours (healthy)
+--- prove running binary is the fix build
+3b208eba31d132285f5383a4e69fb261  /app/paneld
+--- served check
+GET / 6366 http=200
+8a80554c91d9fca8acb82f023de02f11  /etc/flux_agent/gost.json
+active
+=== deploy done=2026-10-25T12:26:16Z ===

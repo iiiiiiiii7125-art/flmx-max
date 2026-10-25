@@ -1,0 +1,9 @@
+=== final recon start=2026-10-25T12:29:55Z initiator=R21-F01 ===
+gost md5=8a80554c91d9fca8acb82f023de02f11 (stable over a sync cycle after agent restore 12:28:32Z)
+agent md5=27787cbf52e9390685e75399ff9da821 active
+containers: flux-panel-backend flmx-backend:new1 healthy; vite-frontend flmx-frontend:new1 healthy; flux-panel-postgres healthy
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+served index.html md5 edd0e1db53e640c7d3da7bf5db646baa bytes 8776 (main @ 7d93792 dist, base restored)
+=== final recon end=2026-10-25T12:30:07Z ===
