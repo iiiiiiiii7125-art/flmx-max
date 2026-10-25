@@ -259,12 +259,18 @@ func register(cfg *config.Config) error {
 		}
 		svc, err := service_parser.ParseService(svcCfg)
 		if err != nil {
-			return err
+			// R17-C: name the service — the raw error is usually a bare
+			// bind failure ("address already in use") with no indication
+			// of which service (or duplicated service) caused it.
+			return fmt.Errorf("parse service %q: %w", svcCfg.Name, err)
 		}
 		if svc != nil {
+			// R17-C: name the service in the duplicate error — a bare
+			// "registry: duplicate object" gives forensics nothing to
+			// match against the poisoned gost.json (R17-X-01).
 			if err := registry.ServiceRegistry().Register(svcCfg.Name, svc); err != nil {
 				svc.Close()
-				return err
+				return fmt.Errorf("register service %q: %w", svcCfg.Name, err)
 			}
 		}
 	}

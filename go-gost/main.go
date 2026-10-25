@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-gost/core/logger"
 	xlogger "github.com/go-gost/x/logger"
@@ -106,10 +107,34 @@ func init() {
 	}
 }
 
+// R17-C (R17-X-01): startup failures must stay diagnosable even when the
+// service manager discards stdout/stderr (the install.sh unit used to set
+// StandardOutput=null/StandardError=null, so a poisoned gost.json killed
+// the agent with no retrievable reason). Append one timestamped line to
+// agent-startup.log in the executable's directory — the same directory as
+// agent-upgrade.log — before exiting. Failures of this write itself must
+// never mask the startup error, so they only go to stderr.
+func logStartupFailure(stage string, err error) {
+	exe, exeErr := os.Executable()
+	dir := "."
+	if exeErr == nil {
+		dir = filepath.Dir(exe)
+	}
+	path := filepath.Join(dir, "agent-startup.log")
+	f, ferr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if ferr != nil {
+		fmt.Fprintf(os.Stderr, "agent: cannot write startup log %s: %v (startup error: %v)\n", path, ferr, err)
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s agent startup failed [%s]: %v\n", time.Now().Format(time.RFC3339), stage, err)
+}
+
 func main() {
 	// 加载配置文件
 	config, err := LoadConfig("config.json")
 	if err != nil {
+		logStartupFailure("load-config", err)
 		fmt.Printf("❌ 配置加载失败: %v\n", err)
 		fmt.Println("请确保当前目录存在 config.json 文件")
 		os.Exit(1)
@@ -140,6 +165,7 @@ func main() {
 		},
 	}
 	if err := svc.Run(p); err != nil {
+		logStartupFailure("start", err)
 		logger.Default().Fatal(err)
 	}
 }
