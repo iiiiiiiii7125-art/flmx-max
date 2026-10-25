@@ -1,0 +1,21 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestBackupConnIdleRoundTrip
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (165.779µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (222.094µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (152.6µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (111.377µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:54:46 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:54:46 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (130.656µs)
+2026/10/25 09:54:46 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (226.169µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (428.944µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (690.517µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (123.465µs)
+2026/10/25 09:54:46 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:54:46 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:54:46 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (2.433205ms)
+2026/10/25 09:54:46 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestBackupConnIdleRoundTrip (0.80s)
+PASS
+ok  	go-backend/internal/store/repo	0.812s

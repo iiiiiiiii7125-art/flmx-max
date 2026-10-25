@@ -599,7 +599,8 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     enabled: form.enabled,
     meteringEnabled: form.meteringEnabled,
     // "" sends 0 = unset (Xray default 300s); an explicit number sets it;
-    // 0 is the legal clear value on Xray (148-P3-1). A non-Xray inbound
+    // 0 is the legal clear value on Xray (148-P3-1); "-1" sends -1 =
+    // unlimited (renders as 31536000). A non-Xray inbound
     // never carries a value: a stale stored value is cleared to 0 on
     // save so editing it is no longer blocked (148-P3-2).
     connIdleSeconds:

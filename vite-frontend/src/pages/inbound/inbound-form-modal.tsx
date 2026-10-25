@@ -103,6 +103,20 @@ export function InboundFormModal({
 }: Props) {
   const [form, setForm] = useState<InboundForm>(initial);
   const [initialKey, setInitialKey] = useState(initial);
+  // “不限”复选框勾上时数字框存 -1（哨兵值）；取消勾选恢复勾选前的值（或留空）。
+  const [connIdleBeforeUnlimited, setConnIdleBeforeUnlimited] =
+    useState("");
+  const connIdleUnlimited = form.connIdleSeconds === "-1";
+  const toggleConnIdleUnlimited = (v: boolean) => {
+    if (v) {
+      setConnIdleBeforeUnlimited(
+        form.connIdleSeconds === "-1" ? "" : form.connIdleSeconds,
+      );
+      set("connIdleSeconds", "-1");
+    } else {
+      set("connIdleSeconds", connIdleBeforeUnlimited);
+    }
+  };
   const [saving, setSaving] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
     initial.outboundIpStrategy !== "auto" ||
@@ -115,6 +129,7 @@ export function InboundFormModal({
   if (initialKey !== initial) {
     setInitialKey(initial);
     setForm(initial);
+    setConnIdleBeforeUnlimited("");
     setShowAdvanced(
       initial.outboundIpStrategy !== "auto" ||
         initial.shareAddressMode !== "auto" ||
@@ -270,14 +285,14 @@ export function InboundFormModal({
         return "端口必须在 1-65535 之间";
       }
     }
-    // 空闲超时：仅 Xray 内核；0–86400 秒的整数，留空或填 0 为默认 300 秒。
-    // 0 是合法的清除值（后端 Normalize 接受 0=清除），前后端同一口径（148-P3-1）。
+    // 空闲超时：仅 Xray 内核；-1（不限）、0–86400 秒的整数，留空或填 0 为默认 300 秒。
+    // -1 是“不限”哨兵值（后端 Normalize 接受，渲染为 365 天）；0 是合法的清除值（后端 Normalize 接受 0=清除），前后端同一口径（148-P3-1）。
     // 非 Xray 入站的存量值不在此拒绝：保存时自动清 0（见 toPayload，148-P3-2）。
     if (form.connIdleSeconds.trim()) {
       const v = Number(form.connIdleSeconds);
 
-      if (!Number.isInteger(v) || v < 0 || v > 86400) {
-        return "空闲超时须为 0–86400 秒的整数，留空或填 0 为默认 300 秒";
+      if (!Number.isInteger(v) || v < -1 || v > 86400) {
+        return "空闲超时须为 -1（不限）、0（默认）或 1–86400 秒的整数，留空或填 0 为默认 300 秒";
       }
     }
     if (
@@ -1162,17 +1177,23 @@ export function InboundFormModal({
                     <Input
                       description={
                         form.kernelType === "xray"
-                          ? "Xray policy connIdle：Xray 以该秒数为一格检查空闲——全程无数据约该秒数断开，有数据时自末次数据起 1–2 倍该秒数后断开；留空或填 0 不下发该段、走默认 300 秒"
+                          ? "Xray policy connIdle：Xray 以该秒数为一格检查空闲——全程无数据约该秒数断开，有数据时自末次数据起 1–2 倍该秒数后断开；留空或填 0 不下发该段、走默认 300 秒；勾选“不限”渲染为 365 天，实际等同于永不因空闲断开"
                           : "仅 Xray 内核支持空闲超时：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout）；存量值会在保存时自动清除"
                       }
                       endContent={
                         <span className="text-xs text-default-400">秒</span>
                       }
                       inputMode="numeric"
-                      isDisabled={form.kernelType !== "xray"}
+                      isDisabled={
+                        form.kernelType !== "xray" || connIdleUnlimited
+                      }
                       label="空闲超时"
-                      placeholder="留空或填 0 为默认 300 秒"
-                      value={form.connIdleSeconds}
+                      placeholder={
+                        connIdleUnlimited
+                          ? "不限（渲染为 365 天）"
+                          : "留空或填 0 为默认 300 秒"
+                      }
+                      value={connIdleUnlimited ? "" : form.connIdleSeconds}
                       variant="bordered"
                       onChange={(e) =>
                         set(
@@ -1181,13 +1202,31 @@ export function InboundFormModal({
                         )
                       }
                     />
+                    <div className="flex items-start gap-2">
+                      <Switch
+                        isDisabled={form.kernelType !== "xray"}
+                        isSelected={connIdleUnlimited}
+                        size="sm"
+                        onValueChange={toggleConnIdleUnlimited}
+                      />
+                      <div>
+                        <p className="text-sm">不限</p>
+                        <p className="text-xs text-default-500">
+                          勾选后空闲超时不限：渲染为 365
+                          天，Xray 按 (N, 2N]
+                          窗口计时、实际 1–2 年才断，等同于永不因空闲断开；常驻连接（如自动客服）用此项。取消勾选恢复原值。
+                        </p>
+                      </div>
+                    </div>
                     {form.kernelType !== "xray" &&
                       form.connIdleSeconds.trim() !== "" && (
                         <div className="flex items-center justify-between gap-2 rounded-lg border border-divider bg-default-50 px-3 py-2">
                           <p className="text-xs text-warning-600">
                             该入站为非 Xray 内核，存量空闲超时{" "}
-                            {form.connIdleSeconds}{" "}
-                            秒不受支持；保存时将自动清除该值，也可现在清除。
+                            {form.connIdleSeconds === "-1"
+                              ? "不限"
+                              : `${form.connIdleSeconds} 秒`}
+                            不受支持；保存时将自动清除该值，也可现在清除。
                           </p>
                           <Button
                             size="sm"

@@ -133,10 +133,15 @@ type Inbound struct {
 	// DefaultConnIdleSeconds) applies. 0 is accepted at Normalize (and
 	// by the frontend as "clear"); it is only ever *rendered* as
 	// "no segment", never written as an explicit 0 — Xray's official
-	// policy doc gives no semantics for an explicit 0. Range is
-	// 0..MaxConnIdleSeconds; Xray itself documents no upper bound (int
-	// seconds), the panel caps at 86400 (24h) so a typo cannot pin dead
-	// connections for days.
+	// policy doc gives no semantics for an explicit 0.
+	// -1 = unlimited (UnlimitedConnIdleSentinel): rendered as
+	// UnlimitedConnIdleSeconds (31536000 = 365d); with Xray's (N, 2N]
+	// window the session then closes only after 1–2 years idle, which
+	// is "never" for any real deployment (panel upgrades and node
+	// restarts end sessions sooner). Range is -1, 0..MaxConnIdleSeconds;
+	// Xray itself documents no upper bound (int seconds), the panel
+	// caps at 86400 (24h) so a typo cannot pin dead connections for
+	// days.
 	// Non-Xray kernels have no equivalent and are refused at Normalize.
 	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
 	// Users are extra clients (subscription users) rendered next to the
@@ -219,6 +224,17 @@ const (
 	// timeout. Xray documents no upper bound; 86400 (24h) is the guard
 	// against a mistyped huge value holding dead connections.
 	MaxConnIdleSeconds = 86400
+	// UnlimitedConnIdleSentinel is the stored value meaning "no idle
+	// timeout" (-1). It renders as UnlimitedConnIdleSeconds below.
+	UnlimitedConnIdleSentinel = -1
+	// UnlimitedConnIdleSeconds is the rendered connIdle for an
+	// unlimited inbound: 31536000 seconds (365 days). Xray's idle
+	// close window is (N, 2N], so a session closes only after 1–2
+	// years idle — equivalent to never disconnecting for idle. A
+	// larger value is pointless (panel upgrades and node restarts end
+	// sessions sooner) and unsafe: 2N must stay far from the int32
+	// ceiling (2^31) the value is stored and compared against.
+	UnlimitedConnIdleSeconds = 31536000
 	// maxConnIdleLevel is the highest policy level the panel allocates.
 	// Levels are 1..N per render; the binding constraint is Xray's SS
 	// server config, whose level field is a byte (0-255).
@@ -302,8 +318,8 @@ func Normalize(kernelType string, in *Inbound) error {
 	if in.AcceptProxyProtocol && kernelType != TypeXray {
 		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
 	}
-	if in.ConnIdleSeconds < 0 || in.ConnIdleSeconds > MaxConnIdleSeconds {
-		return fmt.Errorf("空闲超时须为 0-%d 秒的整数，留空（或填 0）为默认 %d 秒", MaxConnIdleSeconds, DefaultConnIdleSeconds)
+	if in.ConnIdleSeconds < UnlimitedConnIdleSentinel || in.ConnIdleSeconds > MaxConnIdleSeconds {
+		return fmt.Errorf("空闲超时须为 -1（不限）或 0（默认 %d 秒）或 1-%d 秒的整数", DefaultConnIdleSeconds, MaxConnIdleSeconds)
 	}
 	if in.ConnIdleSeconds != 0 && kernelType != TypeXray {
 		return errors.New("空闲超时（connIdle）只支持 Xray 内核：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout），请先切到 Xray 内核")

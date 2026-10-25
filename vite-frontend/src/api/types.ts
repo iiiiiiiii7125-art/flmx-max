@@ -936,7 +936,7 @@ export interface InboundApiItem {
   meteringEnabled: boolean;
   /** A metering companion inbound currently exists for this origin. */
   meteringActive: boolean;
-  /** Per-inbound idle timeout (seconds) for Xray (policy connIdle); 0 = unset (Xray default 300s). */
+  /** Per-inbound idle timeout (seconds) for Xray (policy connIdle); 0 = unset (Xray default 300s), -1 = unlimited (renders as 31536000 = 365d). */
   connIdleSeconds: number;
 }
 
@@ -970,7 +970,7 @@ export interface InboundMutationPayload {
   enabled?: boolean;
   /** SS subscription metering switch; omitted keeps the stored value. */
   meteringEnabled?: boolean;
-  /** Per-inbound idle timeout (seconds) for Xray; 0 clears it (Xray default 300s). */
+  /** Per-inbound idle timeout (seconds) for Xray; 0 clears it (Xray default 300s), -1 = unlimited (renders as 31536000). */
   connIdleSeconds?: number;
 }
 

@@ -65,8 +65,9 @@ type NodeInbound struct {
 	OutboundIPStrategy string `gorm:"column:outbound_ip_strategy;type:varchar(20);not null;default:'auto'"`
 	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for Xray
 	// (policy.levels[].connIdle). 0 = unset: no policy segment is
-	// emitted and Xray's level-0 default (300s) applies; 1..86400 are
-	// the only accepted values (see kernel.Default/MaxConnIdleSeconds).
+	// emitted and Xray's level-0 default (300s) applies; -1 = unlimited
+	// (renders as 31536000 = 365d); 1..86400 are the other accepted
+	// values (see kernel.Default/MaxConnIdleSeconds).
 	// Non-Xray kernels refuse a non-zero value at save time.
 	ConnIdleSeconds int `gorm:"column:conn_idle_seconds;not null;default:0"`
 	// CompanionOf marks an SS metering companion inbound: a

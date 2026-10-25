@@ -1,0 +1,35 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestConnIdleUnsetRendersNoPolicy
+--- PASS: TestConnIdleUnsetRendersNoPolicy (0.00s)
+=== RUN   TestConnIdleSingleInbound
+--- PASS: TestConnIdleSingleInbound (0.00s)
+=== RUN   TestConnIdleMultipleInboundsDistinctLevels
+--- PASS: TestConnIdleMultipleInboundsDistinctLevels (0.00s)
+=== RUN   TestConnIdleShadowsocks
+--- PASS: TestConnIdleShadowsocks (0.00s)
+=== RUN   TestConnIdleNormalize
+--- PASS: TestConnIdleNormalize (0.00s)
+=== RUN   TestConnIdleSingboxRenderIgnores
+--- PASS: TestConnIdleSingboxRenderIgnores (0.00s)
+=== RUN   TestConnIdleLevelCap
+--- PASS: TestConnIdleLevelCap (0.00s)
+=== RUN   TestConnIdleDirectOutbound
+--- PASS: TestConnIdleDirectOutbound (0.00s)
+=== RUN   TestConnIdleMarkedUserKeepsMark
+--- PASS: TestConnIdleMarkedUserKeepsMark (0.00s)
+=== RUN   TestConnIdleMultipleInboundsIsolation
+--- PASS: TestConnIdleMultipleInboundsIsolation (0.00s)
+=== RUN   TestConnIdleChainOutboundLevel
+--- PASS: TestConnIdleChainOutboundLevel (0.00s)
+=== RUN   TestConnIdleSplitDirectUsesIdleOutbound
+--- PASS: TestConnIdleSplitDirectUsesIdleOutbound (0.00s)
+=== RUN   TestConnIdleUnlimitedNormalize
+--- PASS: TestConnIdleUnlimitedNormalize (0.00s)
+=== RUN   TestConnIdleUnlimitedRendersOneYear
+--- PASS: TestConnIdleUnlimitedRendersOneYear (0.00s)
+=== RUN   TestConnIdleUnlimitedSharesLevels
+--- PASS: TestConnIdleUnlimitedSharesLevels (0.00s)
+=== RUN   TestR14F06F04ConnIdleZeroWording
+--- PASS: TestR14F06F04ConnIdleZeroWording (0.00s)
+PASS
+ok  	go-backend/internal/kernel	0.013s

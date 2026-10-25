@@ -42,7 +42,7 @@ func renderXray(inbounds []Inbound) (string, error) {
 		lv := obj{}
 		for _, in := range inbounds {
 			if l, ok := levels[in.ID]; ok {
-				lv[strconv.Itoa(l)] = obj{"connIdle": in.ConnIdleSeconds}
+				lv[strconv.Itoa(l)] = obj{"connIdle": in.renderedConnIdleSeconds()}
 			}
 		}
 		cfg["policy"] = obj{"levels": lv}
@@ -101,6 +101,21 @@ func renderXray(inbounds []Inbound) (string, error) {
 		return "", err
 	}
 	return marshalConfig(cfg)
+}
+
+// renderedConnIdleSeconds is the connIdle value written to the Xray
+// policy for this inbound: the stored value verbatim, except the
+// unlimited sentinel (-1) renders as UnlimitedConnIdleSeconds
+// (31536000 = 365d). Xray's close window is (N, 2N], so 365d closes a
+// session only after 1–2 years idle — equivalent to never timing out.
+// The value is mapped only here, at the single policy emission site,
+// so every consumer of ConnIdleSeconds elsewhere (levels, outbounds,
+// rules) keeps seeing the stored sentinel.
+func (in Inbound) renderedConnIdleSeconds() int {
+	if in.ConnIdleSeconds == UnlimitedConnIdleSentinel {
+		return UnlimitedConnIdleSeconds
+	}
+	return in.ConnIdleSeconds
 }
 
 // connIdleLevels assigns one policy level per inbound that sets an idle

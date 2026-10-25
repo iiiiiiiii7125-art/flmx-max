@@ -111,7 +111,8 @@ type inboundView struct {
 	// IP family ("auto" = unrestricted).
 	OutboundIPStrategy string `json:"outboundIpStrategy"`
 	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for
-	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s).
+	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s),
+	// -1 = unlimited (renders as 31536000 = 365d, i.e. never times out).
 	ConnIdleSeconds int `json:"connIdleSeconds"`
 	// MeteringEnabled is the SS subscription-metering switch;
 	// MeteringActive reports that this origin's companion exists AND
@@ -159,7 +160,7 @@ type inboundRequest struct {
 	OutboundIPStrategy *string `json:"outboundIpStrategy"`
 	// ConnIdleSeconds is a pointer for the same reason: an edit that
 	// omits it keeps the stored timeout; an explicit 0 clears it (back
-	// to Xray default 300s) and a value sets it.
+	// to Xray default 300s), -1 sets unlimited, and a value sets it.
 	ConnIdleSeconds *int  `json:"connIdleSeconds"`
 	Enabled         *bool `json:"enabled"`
 	// MeteringEnabled is a pointer for the same reason: an edit that

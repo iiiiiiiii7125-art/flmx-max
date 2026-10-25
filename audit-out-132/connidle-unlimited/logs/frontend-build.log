@@ -1,0 +1,7 @@
+TSC_EXIT=0
+PWA v1.2.0
+mode      generateSW
+precache  65 entries (2120.03 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-4950432b.js

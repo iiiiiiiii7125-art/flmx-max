@@ -8,7 +8,8 @@ import (
 
 // connIdle: per-inbound Xray policy.levels[].connIdle (seconds).
 // 0 = unset: no policy segment is emitted and Xray's level-0 default
-// (300s) applies. 1..MaxConnIdleSeconds are the only accepted values;
+// (300s) applies. -1 = unlimited: renders as 31536000 (365d).
+// 1..MaxConnIdleSeconds are the other accepted values;
 // 0 is never written to the config as an explicit value.
 
 func renderConnIdle(t *testing.T, kernelType string, inbounds []Inbound) map[string]interface{} {
@@ -141,7 +142,7 @@ func TestConnIdleNormalize(t *testing.T) {
 	base := func() Inbound {
 		return Inbound{ID: 1, Protocol: ProtocolVLESS, Port: 443, Settings: Settings{UUID: testUUID}, Security: Security{Type: SecurityNone}}
 	}
-	valid := []int{0, 1, 300, MaxConnIdleSeconds}
+	valid := []int{UnlimitedConnIdleSentinel, 0, 1, 300, MaxConnIdleSeconds}
 	for _, v := range valid {
 		in := base()
 		in.ConnIdleSeconds = v
@@ -149,7 +150,10 @@ func TestConnIdleNormalize(t *testing.T) {
 			t.Fatalf("connIdle %d must be accepted on xray: %v", v, err)
 		}
 	}
-	invalid := []int{-1, MaxConnIdleSeconds + 1}
+	// -1 is the unlimited sentinel (not an error); one below it and one
+	// above the cap are rejected. Assertion update, decision-driven:
+	// the unlimited design redefines -1 from "invalid" to "unlimited".
+	invalid := []int{UnlimitedConnIdleSentinel - 1, MaxConnIdleSeconds + 1}
 	for _, v := range invalid {
 		in := base()
 		in.ConnIdleSeconds = v

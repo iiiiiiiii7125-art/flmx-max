@@ -1,0 +1,23 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestConnIdleUnlimitedPersistsAndRenders
+2026/10/25 09:54:38 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (122.064µs)
+2026/10/25 09:54:38 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (215.894µs)
+2026/10/25 09:54:38 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (521.564µs)
+2026/10/25 09:54:38 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (136.535µs)
+2026/10/25 09:54:38 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:54:38 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:54:38 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (138.057µs)
+2026/10/25 09:54:38 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestConnIdleUnlimitedPersistsAndRenders (0.22s)
+=== RUN   TestConnIdleUnlimitedCompanionSyncSwitches
+2026/10/25 09:54:39 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (148.343µs)
+2026/10/25 09:54:39 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (168.042µs)
+2026/10/25 09:54:39 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (125.669µs)
+2026/10/25 09:54:39 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (148.914µs)
+2026/10/25 09:54:39 migration r5b4_v1_port_user_unique applied
+2026/10/25 09:54:39 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 09:54:39 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (144.517µs)
+2026/10/25 09:54:39 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestConnIdleUnlimitedCompanionSyncSwitches (0.23s)
+PASS
+ok  	go-backend/internal/http/handler	0.466s
