@@ -57,7 +57,9 @@ func createRouter(ctx *gin.Context) {
 	}
 
 	config.OnUpdate(func(c *config.Config) error {
-		c.Routers = append(c.Routers, &req.Data)
+		// R18-F02/F-04: 按名 upsert（R17-A 同款）。成员已在配置中、但不在注册表里时
+		// （例如暂停后 loader 跳过注册），无去重 append 会把第二份同名项写进配置并落盘。
+		c.Routers = upsertNamed(c.Routers, &req.Data, func(v *config.RouterConfig) string { return v.Name })
 		return nil
 	})
 

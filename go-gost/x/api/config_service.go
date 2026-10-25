@@ -82,7 +82,9 @@ func createService(ctx *gin.Context) {
 	go svc.Serve()
 
 	config.OnUpdate(func(c *config.Config) error {
-		c.Services = append(c.Services, &req.Data)
+		// R18-F02: 按名 upsert（R17-A 同款）。服务已在配置中、但不在注册表里时
+		// （例如暂停后 loader 跳过注册），无去重 append 会把第二份同名服务写进配置并落盘。
+		c.Services = upsertNamed(c.Services, &req.Data, func(s *config.ServiceConfig) string { return s.Name })
 		return nil
 	})
 
@@ -168,7 +170,10 @@ func createServices(ctx *gin.Context) {
 	// 第四阶段：更新配置
 	config.OnUpdate(func(c *config.Config) error {
 		for _, ps := range parsedServices {
-			c.Services = append(c.Services, &ps.config)
+			// R18-F02: 按名 upsert（R17-A 同款，与 x/socket/service.go 第 4 阶段同口径）。
+			// 逐项取副本：&ps.config 会别名复用的循环变量，批量多服务将全指向最后一项。
+			cfgCopy := ps.config
+			c.Services = upsertNamed(c.Services, &cfgCopy, func(s *config.ServiceConfig) string { return s.Name })
 		}
 		return nil
 	})
