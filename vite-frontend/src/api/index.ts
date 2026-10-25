@@ -379,9 +379,6 @@ export const restoreBackupData = (data: BackupImportPayload) =>
 
 // 验证码相关接口
 export const checkCaptcha = () => Network.post("/captcha/check");
-export const generateCaptcha = () => Network.post(`/captcha/generate`);
-export const verifyCaptcha = (data: { captchaId: string; trackData: string }) =>
-  Network.post("/captcha/verify", data);
 
 // 批量操作接口
 export const batchDeleteForwards = (ids: number[]) =>
