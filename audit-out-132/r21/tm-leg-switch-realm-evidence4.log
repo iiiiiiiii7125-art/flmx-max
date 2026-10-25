@@ -1,0 +1,39 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+a12afd9c36fba7b76287210efaa199cb  /etc/systemd/system/flux_agent.service
+-rw-r--r-- 1 root root 275 Oct 25 09:01 /etc/systemd/system/flux_agent.service
+ExecStart={ path=/etc/flux_agent/flux_agent ; argv[]=/etc/flux_agent/flux_agent ; ignore_errors=no ; start_time=[Sun 2026-10-25 09:02:01 UTC] ; stop_time=[n/a] ; pid=838368 ; code=(null) ; status=0/0 }
+StandardOutput=null
+StandardError=null
+--- 09:00-09:03 unit lines:
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 收到命令: type=TcpPing requestId=1_1792918800166796019
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 命令详情(已脱敏):  {"data":{"count":1,"ip":"www.bing.com","port":443,"timeout":5000},"requestId":"1_1792918800166796
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔍 开始TCP ping测试: www.bing.com:443，次数: 1，超时: 5000ms
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔍 检测到域名，正在解析DNS...
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 收到命令: type=TcpPing requestId=1_1792918800167455807
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 命令详情(已脱敏):  {"data":{"count":1,"ip":"www.bing.com","port":443,"timeout":5000},"requestId":"1_1792918800167455
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔍 开始TCP ping测试: www.bing.com:443，次数: 1，超时: 5000ms
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔍 检测到域名，正在解析DNS...
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 收到命令: type=TcpPing requestId=1_1792918800167023924
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 收到命令: type=TcpPing requestId=1_1792918800167673158
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔔 命令详情(已脱敏):  {"data":{"count":1,"ip":"www.bing.com","port":443,"timeout":5000},"requestId":"1_1792918800167673
+Oct 25 09:00:00 ip-172-26-9-119 flux_agent[836835]: 🔍 开始TCP ping测试: www.bing.com:443，次数: 1，超时: 5000ms
+--- panel log tail 30:
+2026/10/25 17:30:31 starting go-backend on :6365 (db=/app/data/gost.db)
+2026/10/25 17:30:31 proxy trust: FLMX_TRUSTED_PROXY_HOPS=1 (login XFF parsed right-to-left)
+2026/10/25 17:30:31 migration r5b4_v1_port_user_unique already applied, skipping
+2026/10/25 17:30:31 migration r5b4_v2_node_inbound_partial_unique already applied, skipping
+2026/10/25 17:30:31 migration fix132_v3_peer_share_runtime_share_resource_unique already applied, skipping
+r17-addservice-guard: node=1 decision=send reason=update-fallback services=[2_5_2_tcp,2_5_2_udp] err=-
+r17-addservice-guard: node=1 decision=sent-ok reason=update-fallback services=[2_5_2_tcp,2_5_2_udp] err=-
+2026/10/25 17:30:36 HEAD /flow/test -> 200 (684.334µs)
+2026/10/25 17:30:39 node reconnect probe: nodes=[1] latency=[1] external=[] relays=[2] tunnels=[1]
+2026/10/25 17:30:50 POST /api/v1/forward/create -> 200 (63.845635ms)
+2026/10/25 17:30:50 POST /api/v1/forward/list -> 200 (3.355707ms)
+2026/10/25 17:30:52 POST /api/v1/forward/list -> 200 (1.617479ms)
+2026/10/25 17:30:59 POST /api/v1/tunnel/get -> 200 (3.732647ms)
+2026/10/25 17:31:00 POST /api/v1/tunnel/update -> 200 (1.726103739s)
+2026/10/25 17:31:03 POST /api/v1/tunnel/get -> 200 (791.899µs)
+2026/10/25 17:31:06 HEAD /flow/test -> 200 (1.382315ms)
+2026/10/25 17:31:37 HEAD /flow/test -> 200 (50.258µs)
+2026/10/25 17:32:07 HEAD /flow/test -> 200 (3.843674ms)
+2026/10/25 17:32:17 POST /flow/config -> 200 (12.926081ms)

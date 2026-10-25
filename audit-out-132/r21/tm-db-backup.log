@@ -1,0 +1,7 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== db backup start=2026-10-25T09:30:01Z initiator=R21-F01 ===
+backup-ok
+fb90bcc092221cf110cbc6c9eddb86fa  /root/r21-f01/gost.db.pristine
+af00998dd45ceb30b5324c1f292456a9  /var/lib/docker/volumes/sqlite_data/_data/gost.db
+50
+1

@@ -1,0 +1,34 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR21F01EngineSwitchGostToRealmDeletesRuleLimiter
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (30.554027ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (7.130364ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (19.611331ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (12.079821ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:15 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:15 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (19.673154ms)
+2026/10/25 12:10:15 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR21F01EngineSwitchGostToRealmDeletesRuleLimiter (1.45s)
+=== RUN   TestR21F01EngineSwitchRealmToGostRecreatesLimiter
+2026/10/25 12:10:16 kernel drift re-apply failed kernel_id=1 err=sql: database is closed
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (6.189106ms)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.983742ms)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (385.048µs)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (8.15128ms)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:17 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:17 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (15.860055ms)
+2026/10/25 12:10:17 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR21F01EngineSwitchRealmToGostRecreatesLimiter (3.05s)
+=== RUN   TestR21F01DeleteForwardServicesOnNodeAloneKeepsLimiter
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (11.706546ms)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (489.056µs)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (15.854687ms)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (377.017µs)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:20 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:20 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (16.895893ms)
+2026/10/25 12:10:20 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR21F01DeleteForwardServicesOnNodeAloneKeepsLimiter (1.87s)
+PASS
+ok  	go-backend/internal/http/handler	6.473s

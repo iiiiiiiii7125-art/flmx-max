@@ -1,0 +1,11 @@
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+--- journal DeleteCLimiters since switch window:
+journal matches since=2026-10-25 12:26:40 pattern='DeleteCLimiters': 2
+   Oct 25 12:26:45 ip-172-26-4-158 flux_agent[96372]: 🔔 收到命令: type=DeleteCLimiters requestId=1_1792931205518646325
+   Oct 25 12:26:45 ip-172-26-4-158 flux_agent[96372]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_1"},"requestId":"1_1792931205518646325","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===
+--- journal rule_conn_limit_1 since switch window:
+journal matches since=2026-10-25 12:26:40 pattern='rule_conn_limit_1': 1
+   Oct 25 12:26:45 ip-172-26-4-158 flux_agent[96372]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_1"},"requestId":"1_1792931205518646325","type":"DeleteCLimiters"}
+=== leg journal end failures=0 [] ===

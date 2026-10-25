@@ -1,0 +1,5 @@
+create tunnel http=200 code=0 msg=操作成功
+PASS create tunnel code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792931190362}
+tunnel id: 1 engine: 
+PASS tunnel listed :: [{'chainNodes': [], 'createdTime': 1792931190361, 'engine': '', 'flow': 1, 'id': 1, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r21-f01-t1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}]
+=== leg mktun end failures=0 [] ===

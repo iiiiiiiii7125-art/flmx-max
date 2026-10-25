@@ -1,0 +1,8 @@
+create http=200 code=0 msg=操作成功
+PASS create code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792931196701}
+forward id: 1
+PASS forward id found
+gost services=2 climiters=['rule_conn_limit_1'] refs=['rule_conn_limit_1']
+PASS gost has new limiter :: ['rule_conn_limit_1']
+PASS service refs new limiter :: ['rule_conn_limit_1']
+=== leg mkfwd end failures=0 [] ===

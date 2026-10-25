@@ -1,0 +1,10 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== agent restore start=2026-10-25T09:34:11Z initiator=R21-F01 ===
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+active
+d48f09e132ebe99fe97a619dd72d42d4  /etc/flux_agent/gost.json
+aff338e3676bc56d0f3986a1a62f8fdd  /etc/flux_agent/flux_agent
+node {'id': 1, 'name': 'w10-test', 'status': 0, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+gost md5=d48f09e132ebe99fe97a619dd72d42d4 services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+=== leg gost end failures=0 [] ===

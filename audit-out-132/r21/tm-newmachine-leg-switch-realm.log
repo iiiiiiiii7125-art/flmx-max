@@ -1,0 +1,27 @@
+tunnel engine '' -> 'realm' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792931207598}
+tunnel engine now: realm
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792931190361, 'engine': 'realm', 'flow': 1, 'id': 1, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r21-f01-t1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+--- realm config:
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+
+[[endpoints]]
+# forward 1
+listen = "[::]:19671"
+remote = "203.0.113.9:9001"
+Traceback (most recent call last):
+  File "/root/r21-f01/R21-FIX-F01-legs-newmachine.py", line 395, in <module>
+    main()
+  File "/root/r21-f01/R21-FIX-F01-legs-newmachine.py", line 289, in main
+    services, climiters, refs, _ = gost()
+                                   ^^^^^^
+  File "/root/r21-f01/R21-FIX-F01-legs-newmachine.py", line 104, in gost
+    services = sorted(s.get("name", "") for s in data.get("services", []))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not iterable
+--- realm dir:
+config.toml

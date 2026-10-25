@@ -1,0 +1,21 @@
+tunnel engine 'realm' -> '' http=200 code=0 msg=操作成功 data=None
+PASS tunnel engine update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792931257411}
+tunnel engine now: 
+PASS engine persisted :: {'chainNodes': [], 'createdTime': 1792931190361, 'engine': '', 'flow': 1, 'id': 1, 'inIp': '16.146.199.68:6366', 'inNodeId': [{'chainType': 1, 'inx': 1, 'nodeId': 1, 'protocol': 'tls', 'strategy': 'round'}], 'inx': 0, 'ipPreference': '', 'name': 'r21-f01-t1', 'outNodeId': [], 'probeTargetHost': '', 'probeTargetPort': 0, 'status': 1, 'trafficRatio': 1, 'type': 1}
+gost services=2 climiters=['rule_conn_limit_1'] refs=['rule_conn_limit_1']
+journal-since: 2026-10-25 12:27:37
+=== leg tunengine end failures=0 [] ===
+--- realm config after switch-back:
+[log]
+level = "warn"
+
+[network]
+use_udp = true
+--- journal AddCLimiters since 12:27:30:
+journal matches since=2026-10-25 12:27:30 pattern='AddCLimiters': 2
+   Oct 25 12:27:37 ip-172-26-4-158 flux_agent[96372]: 🔔 收到命令: type=AddCLimiters requestId=1_1792931257408242206
+   Oct 25 12:27:37 ip-172-26-4-158 flux_agent[96372]: 🔔 命令详情(已脱敏):  {"data":{"limits":["$ 5"],"name":"rule_conn_limit_1"},"requestId":"1_1792931257408242206","type":"AddCLimiters"}
+=== leg journal end failures=0 [] ===
+--- journal DeleteCLimiters since 12:27:30 (expect 0):
+journal matches since=2026-10-25 12:27:30 pattern='DeleteCLimiters': 0
+=== leg journal end failures=0 [] ===

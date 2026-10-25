@@ -1,0 +1,15 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg delete start=2026-10-25T09:33:17Z initiator=R21-F01 ===
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792920797541}
+gost services=14 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+=== leg delfwd end failures=0 [] ===
+delete http=200 code=0 msg=操作成功
+PASS delete code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792920799618}
+gost services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+=== leg delfwd end failures=0 [] ===
+gost md5=52a345e4aa3160a083cc1177c676f59d services=12 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+=== leg gost end failures=0 [] ===
+counts: {'node': 1, 'tunnel': 4, 'forward': 6, 'inbound': 578, 'subscription': 18}
+PASS counts 1/4/6/578/18 :: {'node': 1, 'tunnel': 4, 'forward': 6, 'inbound': 578, 'subscription': 18}
+=== leg counts end failures=0 [] ===

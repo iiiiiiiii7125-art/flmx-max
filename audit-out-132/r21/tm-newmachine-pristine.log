@@ -1,0 +1,13 @@
+=== pristine recon start=2026-10-25T12:25:53Z initiator=R21-F01 ===
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts match baseline :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+node {'id': 1, 'name': 'w10-test', 'status': 1, 'version': 'dev (debian/amd64)', 'forwardMode': 'agent'}
+=== leg nodelist end failures=0 [] ===
+gost md5=8a80554c91d9fca8acb82f023de02f11 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+db backup ok
+tables 51
+81ae1e4bbf1b87e1a8a6528a16b15e09  /root/r21-f01/gost.db.pristine
+8a80554c91d9fca8acb82f023de02f11  /etc/flux_agent/gost.json
+=== pristine recon end=2026-10-25T12:25:54Z ===

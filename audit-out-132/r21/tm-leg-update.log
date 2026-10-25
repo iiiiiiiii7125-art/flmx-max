@@ -1,0 +1,15 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== leg update-drop-limits start=2026-10-25T09:32:58Z initiator=R21-F01 ===
+update http=200 code=0 msg=操作成功 data=None
+PASS update code 0 :: {'code': 0, 'msg': '操作成功', 'ts': 1792920778323}
+gost services=14 climiters=['rule_conn_limit_12', 'rule_conn_limit_2'] refs=[]
+journal-since: 2026-10-25 09:32:58
+=== leg updfwd end failures=0 [] ===
+forward {'id': 48, 'name': 'r21-f01-sw', 'tunnelId': 1, 'remoteAddr': '203.0.113.9:9001', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 13810}
+forward {'id': 7, 'name': 'a2-relay1', 'tunnelId': 2, 'remoteAddr': '16.146.199.68:15510', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 15096}
+forward {'id': 6, 'name': 'a1-relay1', 'tunnelId': 1, 'remoteAddr': '16.146.199.68:24501', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 14601}
+forward {'id': 4, 'name': 'a2-f-ratio2', 'tunnelId': 4, 'remoteAddr': '127.0.0.1:18081', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 13103}
+forward {'id': 3, 'name': 'a2-f-flow1', 'tunnelId': 3, 'remoteAddr': '127.0.0.1:18081', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 13102}
+forward {'id': 2, 'name': 'a2-f-flow2', 'tunnelId': 2, 'remoteAddr': '127.0.0.1:18081', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 13101}
+forward {'id': 1, 'name': 'w10-fwd', 'tunnelId': 1, 'remoteAddr': '127.0.0.1:18080', 'maxConn': 0, 'ipMaxConn': 0, 'status': 1, 'inPort': 31080}
+=== leg fwdlist end failures=0 [] ===

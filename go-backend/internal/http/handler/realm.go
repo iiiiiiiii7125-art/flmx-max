@@ -360,7 +360,25 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 	}
 	for i := range forwards {
 		for _, nodeID := range uniqueInt64s(nodes) {
-			collect("旧引擎服务删除", h.deleteForwardServicesOnNode(&forwards[i], nodeID))
+			// R21-X-01（F-01）：gost→realm 切换时旧引擎服务删后须清掉
+			// 该转发的 rule_conn_limit_<id>。deleteForwardServicesOnNode
+			// 只发 DeleteService；此前切换是唯一一条“服务已删、limiter
+			// 未删”的产品路径，limiter 成无引用孤儿（F-04 重启/SIGHUP
+			// 可兜底剪除，故 P3）。清理复用 deleteForwardConnLimiterOnNode
+			// 的按 ID 兜底（与删转发漏斗同口径：从未带过限流的转发多发
+			// 一次亦无害，agent 侧删不存在者为 noop），且只在
+			// DeleteService 成功后发（先删服务、后清 limiter；离线节
+			// 点的删除失败由 collect 按既有口径记 deferred，不清
+			// limiter，与服务删除的命运一致）。
+			// 清理只落在本切换点，不进 deleteForwardServicesOnNode
+			// 本身：它的另两个调用方是“删旧服务后立即重建同一服务”
+			// 的重建路径（sync 回退、默认监听回退），重建服务仍引用
+			// 原 limiter，helper 内清会让重建服务挂上已删的 limiter。
+			if err := h.deleteForwardServicesOnNode(&forwards[i], nodeID); err != nil {
+				collect("旧引擎服务删除", err)
+				continue
+			}
+			h.deleteForwardConnLimiterOnNode(&forwards[i], nodeID)
 		}
 	}
 	if _, err := h.syncRealmNodes(nodes, nil); err != nil {

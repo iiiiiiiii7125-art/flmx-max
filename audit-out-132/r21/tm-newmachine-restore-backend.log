@@ -1,0 +1,36 @@
+=== restore start=2026-10-25T12:28:01Z initiator=R21-F01 ===
+--- switch compose backend tag back to new1
+3:    image: flmx-backend:new1
+--- compose up backend
+ Container flux-panel-backend Recreated 
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+--- wait healthy (up to 150s)
+try 1 health=starting
+try 2 health=healthy
+flux-panel-backend flmx-backend:new1 Up 5 seconds (healthy)
+vite-frontend flmx-frontend:new1 Up 51 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 2 hours (healthy)
+--- prove running binary is the new1 base (expect 69d166cc2d0923ef72f974912767bfa8)
+69d166cc2d0923ef72f974912767bfa8  /app/paneld
+--- served check
+GET / 6366 http=200
+--- remove fix image
+Untagged: flmx-backend:r21-f01-v2
+Deleted: sha256:37e891d162aeebb6b24275a2b8a5920601bacbf0c4ac87caaf3850623363c300
+flmx-backend:new2
+flmx-backend:new1
+--- remove lane temp files on machine (token; cred file placed for legs)
+ls: cannot access '/root/panel-cred.txt': No such file or directory
+/root/r21-f01:
+R21-FIX-F01-deploy-newmachine.sh
+R21-FIX-F01-legs-newmachine.py
+R21-FIX-F01-newmachine-pristine.sh
+--- gost + agent state
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+TypeError: object of type 'NoneType' has no len()
+active
+=== restore done=2026-10-25T12:28:09Z ===
