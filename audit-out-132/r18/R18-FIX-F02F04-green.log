@@ -1,0 +1,61 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR18F02CreateServiceDedupesPausedRebuild
+💾 节点配置已持久化到 /tmp/TestR18F02CreateServiceDedupesPausedRebuild2433720261/001/gost.json
+--- PASS: TestR18F02CreateServiceDedupesPausedRebuild (0.00s)
+=== RUN   TestR18F02CreateServicesBatchDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestR18F02CreateServicesBatchDedupesExistingConfigEntry814509114/001/gost.json
+--- PASS: TestR18F02CreateServicesBatchDedupesExistingConfigEntry (0.00s)
+=== RUN   TestR18F02CreateServiceDedupesAlreadyPoisonedConfig
+💾 节点配置已持久化到 /tmp/TestR18F02CreateServiceDedupesAlreadyPoisonedConfig3490718785/001/gost.json
+--- PASS: TestR18F02CreateServiceDedupesAlreadyPoisonedConfig (0.00s)
+=== RUN   TestR18F02UpsertNamed
+--- PASS: TestR18F02UpsertNamed (0.00s)
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/admission
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryadmission746849270/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/auther
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryauther335020106/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/bypass
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrybypass2786932738/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/chain
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrychain1015439826/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/conn_limiter
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryconn_limiter4289473263/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/hop
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryhop3792557410/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/hosts
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryhosts1885347787/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/ingress
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryingress4205924215/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/limiter
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrylimiter766391503/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/observer
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryobserver2995467578/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/rate_limiter
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryrate_limiter2281503942/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/recorder
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryrecorder2123815367/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/resolver
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryresolver3705749477/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/router
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryrouter340636349/001/gost.json
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/sd
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrysd2545991301/001/gost.json
+--- PASS: TestR18F04CreateDedupesExistingConfigEntry (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/admission (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/auther (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/bypass (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/chain (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/conn_limiter (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/hop (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/hosts (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/ingress (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/limiter (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/observer (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/rate_limiter (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/recorder (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/resolver (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/router (0.00s)
+    --- PASS: TestR18F04CreateDedupesExistingConfigEntry/sd (0.00s)
+PASS
+ok  	github.com/go-gost/x/api	0.025s

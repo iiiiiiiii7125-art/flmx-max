@@ -1,0 +1,78 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestR18F02CreateServiceDedupesPausedRebuild
+💾 节点配置已持久化到 /tmp/TestR18F02CreateServiceDedupesPausedRebuild2093258577/001/gost.json
+    r18_fix_f02f04_test.go:126: expected exactly 1 in-memory entry for service "r18f02_paused", got 2
+--- FAIL: TestR18F02CreateServiceDedupesPausedRebuild (0.00s)
+=== RUN   TestR18F02CreateServicesBatchDedupesExistingConfigEntry
+💾 节点配置已持久化到 /tmp/TestR18F02CreateServicesBatchDedupesExistingConfigEntry3934247521/001/gost.json
+    r18_fix_f02f04_test.go:156: expected exactly 1 in-memory entry for service "r18f02_batch_dup", got 2
+--- FAIL: TestR18F02CreateServicesBatchDedupesExistingConfigEntry (0.00s)
+=== RUN   TestR18F02CreateServiceDedupesAlreadyPoisonedConfig
+💾 节点配置已持久化到 /tmp/TestR18F02CreateServiceDedupesAlreadyPoisonedConfig30971574/001/gost.json
+    r18_fix_f02f04_test.go:186: expected exactly 1 in-memory entry for service "r18f02_poisoned", got 3
+--- FAIL: TestR18F02CreateServiceDedupesAlreadyPoisonedConfig (0.00s)
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/admission
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryadmission3572813170/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for admission "r18f04_admission", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/auther
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryauther3377766749/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for auther "r18f04_auther", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/bypass
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrybypass696208788/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for bypass "r18f04_bypass", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/chain
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrychain2865863753/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for chain "r18f04_chain", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/conn_limiter
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryconn_limiter2963066641/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for conn_limiter "r18f04_conn_limiter", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/hop
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryhop4277869972/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for hop "r18f04_hop", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/hosts
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryhosts2399045140/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for hosts "r18f04_hosts", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/ingress
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryingress2779015864/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for ingress "r18f04_ingress", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/limiter
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrylimiter4284137903/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for limiter "r18f04_limiter", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/observer
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryobserver785424098/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for observer "r18f04_observer", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/rate_limiter
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryrate_limiter378778458/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for rate_limiter "r18f04_rate_limiter", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/recorder
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryrecorder1114605575/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for recorder "r18f04_recorder", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/resolver
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryresolver3654776199/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for resolver "r18f04_resolver", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/router
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntryrouter2924205981/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for router "r18f04_router", got 2
+=== RUN   TestR18F04CreateDedupesExistingConfigEntry/sd
+💾 节点配置已持久化到 /tmp/TestR18F04CreateDedupesExistingConfigEntrysd430827521/001/gost.json
+    r18_fix_f02f04_test.go:312: expected exactly 1 in-memory entry for sd "r18f04_sd", got 2
+--- FAIL: TestR18F04CreateDedupesExistingConfigEntry (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/admission (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/auther (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/bypass (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/chain (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/conn_limiter (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/hop (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/hosts (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/ingress (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/limiter (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/observer (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/rate_limiter (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/recorder (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/resolver (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/router (0.00s)
+    --- FAIL: TestR18F04CreateDedupesExistingConfigEntry/sd (0.00s)
+FAIL
+FAIL	github.com/go-gost/x/api	0.025s
+FAIL
