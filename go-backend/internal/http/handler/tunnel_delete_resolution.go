@@ -715,16 +715,24 @@ func (h *Handler) rollbackTunnelForwardMigrationPlans(plans []tunnelForwardMigra
 //   - nft：先把全部转发标 pending 并登记台账，再对入口节点 reconcile
 //     一次；成功后逐条删转发行（DeleteForwardCascade 会一并清台账/
 //     计数/绑定）。
-func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
+//
+// R19-X-01：返回已删转发清单（数据面 + 删库两步均完成的转发），供
+// 删隧道行失败时回执披露——deleteTunnelByID 失败点此前返裸 err，
+// 运维看不到清理已删的转发。nft 离线早返形返回 nil（库行仍保留、
+// 未删）；已删项不回滚，只披露。
+func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) ([]model.ForwardRecord, error) {
 	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	return h.cleanupForwardsDataPlane(tunnelID, forwards, "隧道", true)
 }
 
 // cleanupForwardsDataPlane cleans the data plane for an explicit list of
 // forwards that all belong to one tunnel, then deletes their DB rows.
+// It returns the forwards whose data-plane cleanup AND db delete both
+// completed (for R19-X-01 failure disclosure by callers); the nft
+// offline early-return yields nil because those rows are retained.
 // scope names the owning object in abort messages ("隧道" / "用户").
 // offlineTolerant 为 true（仅删隧道路径）时，离线/不可达类失败按
 // X-P1-1 待清理语义放行删库；为 false（删用户路径）时维持 F-002 硬门。
@@ -733,6 +741,8 @@ func (h *Handler) cleanupTunnelForwardsDataPlane(tunnelID int64) error {
 // 什么都没删。失败返回必须披露已删转发数与标识（名/ID）；已删项不
 // 回滚（与现有不回滚语义一致），只补披露。deleted 只含已完成
 // 「数据面 + 删库」两步的转发；当前条数据面已清但删库失败时另行说明。
+// R19-X-01：同款披露补齐 nft 分支——Mark 失败点披露已标记数（规则
+// 尚未下线），删库失败点披露已删数并注明「规则已下线、库行已删」。
 func formatForwardDeleteLabel(fwd model.ForwardRecord) string {
 	name := strings.TrimSpace(fwd.Name)
 	if name == "" {
@@ -741,55 +751,97 @@ func formatForwardDeleteLabel(fwd model.ForwardRecord) string {
 	return fmt.Sprintf("%s(#%d)", name, fwd.ID)
 }
 
+// formatForwardDeleteLabels 将转发清单转为「名(#ID)」标识串（无名只标 #ID），
+// 以「、」连接。
+func formatForwardDeleteLabels(forwards []model.ForwardRecord) string {
+	labels := make([]string, 0, len(forwards))
+	for _, fwd := range forwards {
+		labels = append(labels, formatForwardDeleteLabel(fwd))
+	}
+	return strings.Join(labels, "、")
+}
+
 // formatDeletedForwardsSummary 汇总已删转发：恒含已删数，>0 时附标识。
 func formatDeletedForwardsSummary(deleted []model.ForwardRecord) string {
 	if len(deleted) == 0 {
 		return "已删除 0 条转发"
 	}
-	labels := make([]string, 0, len(deleted))
-	for _, fwd := range deleted {
-		labels = append(labels, formatForwardDeleteLabel(fwd))
-	}
-	return fmt.Sprintf("已删除 %d 条转发：%s", len(deleted), strings.Join(labels, "、"))
+	return fmt.Sprintf("已删除 %d 条转发：%s", len(deleted), formatForwardDeleteLabels(deleted))
 }
 
-func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string, offlineTolerant bool) error {
+// formatMarkedForwardsSummary 汇总已标记待删除的转发：恒含已标记数，
+// >0 时附标识（R19-X-01 nft 分支 Mark 失败点）。
+func formatMarkedForwardsSummary(marked []model.ForwardRecord) string {
+	if len(marked) == 0 {
+		return "已标记 0 条转发待删除"
+	}
+	return fmt.Sprintf("已标记 %d 条转发待删除：%s", len(marked), formatForwardDeleteLabels(marked))
+}
+
+// formatTunnelDeleteFailureSummary 汇总删隧道行失败时的已删转发；
+// 清理后库中仍残留的转发（如 nft 离线待清理形，库行仍保留）另行注明
+// 未删除。deleted 清单为准（来自清理函数本身的追踪），残留核对读库
+// 失败时只报已删汇总、不虚构残留数。
+func (h *Handler) formatTunnelDeleteFailureSummary(tunnelID int64, deleted []model.ForwardRecord) string {
+	summary := formatDeletedForwardsSummary(deleted)
+	remaining, err := h.repo.ListForwardsByTunnel(tunnelID)
+	if err != nil || len(remaining) == 0 {
+		return summary
+	}
+	return fmt.Sprintf("%s；其余 %d 条转发未删除、数据库记录仍保留：%s", summary, len(remaining), formatForwardDeleteLabels(remaining))
+}
+
+func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string, offlineTolerant bool) ([]model.ForwardRecord, error) {
 	if len(forwards) == 0 {
-		return nil
+		return nil, nil
 	}
 	nftMode, entryNodeIDs, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if nftMode {
 		if len(entryNodeIDs) == 0 {
-			return errors.New("nftables 转发缺少入口节点")
+			return nil, errors.New("nftables 转发缺少入口节点")
 		}
 		nodeID := entryNodeIDs[0]
 		now := time.Now()
+		var marked []model.ForwardRecord
 		for i := range forwards {
 			if err := h.repo.MarkForwardPendingDelete(forwards[i].ID, nodeID, now); err != nil {
-				return err
+				// R19-X-01（L2 §1a 邻接点）：reconcile 尚未执行，规则
+				// 未下线；此前转发仅已标记待删除、库行仍保留。披露
+				// 已标记数与标识，不回滚已标记项。
+				return nil, fmt.Errorf("转发 %s 标记待删除失败，%s未删除：%w；%s；该转发未标记、规则未下线", formatForwardDeleteLabel(forwards[i]), scope, err, formatMarkedForwardsSummary(marked))
 			}
+			marked = append(marked, forwards[i])
 		}
 		if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
 			if offlineTolerant && isNodeUnreachableError(err) {
 				// X-P1-1：转发已入 pending-delete 台账，删库继续；
 				// 转发墓碑行由台账重试收敛，隧道级联不得清台账。
 				log.Printf("tunnel delete: node unreachable, %d nft forwards left in pending-delete ledger tunnel_id=%d node_id=%d err=%v", len(forwards), tunnelID, nodeID, err)
-				return nil
+				return nil, nil
 			}
-			return fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，%s未删除", len(forwards), scope)
+			return nil, fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，%s未删除", len(forwards), scope)
 		}
+		var deleted []model.ForwardRecord
 		for i := range forwards {
 			if err := h.deleteForwardByID(forwards[i].ID); err != nil {
 				// 同 forwardDelete 的 D6：数据面已变更（规则已下线），
 				// DB 删除失败记日志，靠后续对账收敛。
 				log.Printf("forward delete: db delete after nft reconcile failed tunnel_id=%d forward_id=%d err=%v", tunnelID, forwards[i].ID, err)
-				return err
+				// R19-X-01：reconcile 已成功、全部规则已下线；此前
+				// 转发库行已删。失败返回必须披露已删转发数与标识；
+				// 本条规则已下线、数据库记录仍保留（不回滚）。
+				summary := formatDeletedForwardsSummary(deleted)
+				if len(deleted) > 0 {
+					summary += "（规则已下线、库行已删）"
+				}
+				return deleted, fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发规则已下线、数据库记录仍保留", formatForwardDeleteLabel(forwards[i]), scope, err, summary)
 			}
+			deleted = append(deleted, forwards[i])
 		}
-		return nil
+		return deleted, nil
 	}
 	var deleted []model.ForwardRecord
 	for i := range forwards {
@@ -802,26 +854,27 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 				if delErr := h.deleteForwardByID(fwd.ID); delErr != nil {
 					// R18-X-01：离线分支删库失败亦为硬失败，披露已删项；
 					// 本条数据面未动（节点离线、残留监听待重连对账）。
-					return fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面未清理（节点离线，待重连对账）", formatForwardDeleteLabel(fwd), scope, delErr, formatDeletedForwardsSummary(deleted))
+					return deleted, fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面未清理（节点离线，待重连对账）", formatForwardDeleteLabel(fwd), scope, delErr, formatDeletedForwardsSummary(deleted))
 				}
 				deleted = append(deleted, fwd)
 				continue
 			}
 			// R18-X-01：数据面硬失败，中止前披露此前已删转发。
-			return fmt.Errorf("转发 %s 数据面清理失败，%s未删除：%w；%s", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
+			return deleted, fmt.Errorf("转发 %s 数据面清理失败，%s未删除：%w；%s", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
 		}
 		if err := h.deleteForwardByID(fwd.ID); err != nil {
 			// R18-X-01：删库失败亦为硬失败，披露已删项；本条数据面
 			// 服务已清理、数据库记录仍保留（不回滚）。
-			return fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面服务已清理、数据库记录仍保留", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
+			return deleted, fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面服务已清理、数据库记录仍保留", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
 		}
 		deleted = append(deleted, fwd)
 	}
-	return nil
+	return deleted, nil
 }
 
 func (h *Handler) deleteTunnelAndCleanup(tunnelID int64) error {
-	if err := h.cleanupTunnelForwardsDataPlane(tunnelID); err != nil {
+	deleted, err := h.cleanupTunnelForwardsDataPlane(tunnelID)
+	if err != nil {
 		return err
 	}
 	h.cleanupTunnelRuntime(tunnelID)
@@ -829,7 +882,11 @@ func (h *Handler) deleteTunnelAndCleanup(tunnelID int64) error {
 		log.Printf("delete tunnel %d: federation runtime cleanup failed: %v", tunnelID, err)
 	}
 	if err := h.deleteTunnelByID(tunnelID); err != nil {
-		return err
+		// R19-X-01：清理已返回 nil，名下转发已删（deleted 清单为准；
+		// nft 离线待清理形的残留转发库行仍保留，由
+		// formatTunnelDeleteFailureSummary 另行注明）。删隧道行失败
+		// 须披露已删转发数与标识，已删项不回滚。
+		return fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(tunnelID, deleted))
 	}
 	return nil
 }
