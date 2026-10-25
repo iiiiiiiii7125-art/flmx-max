@@ -1,0 +1,15 @@
+=== restore start=2026-10-25T12:35:09Z ===
+3:    image: flmx-backend:new1
+ Container flux-panel-backend Starting 
+ Container flux-panel-backend Started 
+try 1 health=starting
+try 2 health=healthy
+flux-panel-backend flmx-backend:new1 Up 5 seconds (healthy)
+vite-frontend flmx-frontend:new1 Up 58 minutes (healthy)
+flux-panel-postgres postgres:16-alpine Up 3 hours (healthy)
+69d166cc2d0923ef72f974912767bfa8  /app/paneld
+GET / 6366 http=200
+active
+gost services= None climiters= None
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+=== restore done=2026-10-25T12:35:16Z ===

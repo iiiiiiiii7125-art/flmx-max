@@ -1,0 +1,46 @@
+CONNECT status: HTTP/1.1 200 Connection Established
+=== R21-F02 e2e start=2026-10-25T12:34:48Z ===
+PASS login :: http=200 code=0
+PASS pre node 1 online (status 1) :: 1
+pre: services=0 climiters=[] refs=[]
+pre forward count=0
+pre tunnel count=0
+PASS pre tunnel create code 0 :: http=200 code=0 msg=操作成功
+PASS pre tunnel id found :: 2
+PASS A create code 0 :: http=200 code=0 msg=操作成功
+PASS A forward id found :: 4
+A gost: services=2 climiters=['rule_conn_limit_4'] refs=['rule_conn_limit_4']
+PASS A gost has new limiter :: ['rule_conn_limit_4']
+PASS A service refs new limiter :: ['rule_conn_limit_4']
+=== leg B: stop agent ===
+stop rc=0 
+PASS B node goes offline (status 0)
+B gost md5 before offline update: 29ffd802c2edf3e5756c357f2afed1ce
+PASS B offline update code 0 :: http=200 code=0 msg=操作成功 warnings=['节点 w10-test 不在线，已跳过下发']
+PASS B offline update warns node offline :: ['节点 w10-test 不在线，已跳过下发']
+B gost md5 after offline update: 29ffd802c2edf3e5756c357f2afed1ce services=2 climiters=['rule_conn_limit_4'] refs=['rule_conn_limit_4']
+PASS B gost md5 unchanged by offline update :: 29ffd802c2edf3e5756c357f2afed1ce vs 29ffd802c2edf3e5756c357f2afed1ce
+PASS B limiter still present offline :: ['rule_conn_limit_4']
+PASS B service still refs limiter offline :: ['rule_conn_limit_4']
+=== leg C: restart agent ===
+reset-failed rc=0
+start rc=0 
+PASS C node back online (status 1) :: 1
+C restart-since=2026-10-25 12:34:52 (journal slice start)
+C journal DeleteCLimiters rule_conn_limit_4: 1
+   Oct 25 12:34:54 ip-172-26-4-158 flux_agent[116455]: 🔔 命令详情(已脱敏):  {"data":{"limiter":"rule_conn_limit_4"},"requestId":"1_1792931694146492291","type":"DeleteCLimiters"}
+PASS C journal has DeleteCLimiters after reconnect redeploy :: 1
+C self-heal lines mentioning rule_conn_limit_4: 0
+C gost: services=2 climiters=[] refs=[]
+PASS C stale limiter gone from gost
+PASS C service still present :: ['4_1_0_tcp', '4_1_0_udp']
+PASS C no service refs stale limiter
+PASS D delete code 0 :: http=200 code=0 msg=操作成功
+D gost: services=0 climiters=[] refs=[]
+PASS D gost back to leg-start climiters
+PASS D forward count back to pre
+PASS D tunnel delete code 0 :: http=200 code=0 msg=操作成功
+PASS D tunnel count back to expected :: got 0 expect 0 (pre 0, created_here True)
+user_conn_limit_ DeleteCLimiters lines in last hour: 0
+PASS no user_conn_limit_ DeleteCLimiters in window
+=== R21-F02 e2e end failures=0 [] ===

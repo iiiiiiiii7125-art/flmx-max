@@ -885,11 +885,70 @@ func (h *Handler) redeployLocalNodeRuntime(nodeID int64) bool {
 		if err := h.syncForwardServices(forward, "UpdateService", true); err != nil {
 			failedForwards = append(failedForwards, failedForward{id: forwardID, forward: forward, err: err})
 			fmt.Printf("post-upgrade redeploy: forward %d failed on node %d: %v\n", forwardID, nodeID, err)
+		} else {
+			// R21-X-02：重推成功后清理离线更新产生的失势 limiter（下
+			// 面 helper 内说明判定口径）。
+			h.deleteRedeployStaleRuleConnLimiter(forward, nodeID)
 		}
 	}
 
 	// Retry failed items with exponential backoff (max 3 attempts)
 	return h.retryFailedRedeploys(nodeID, tunnelFailed, failedForwards)
+}
+
+// deleteRedeployStaleRuleConnLimitersForTunnel 是 R21-X-02 的隧道重试补删：
+// retryFailedRedeploys 里隧道失败后其下转发首轮既不同步（forward 循环
+// 跳过）、亦不进 failedForwards；隧道重试成功时转发在
+// redeployTunnelAndForwards 内重推成功，但该路径不带失势清理，故在此
+// 逐条按“当前记录已无限流”补删（与首轮 forward 循环同口径）。仅清本
+// 节点上有入口端口的转发（多节点转发由各节点自己的重连重推各清各的）；
+// pending-delete 行不同步、不同删（删除漏斗接管）；列举/取端口失败只
+// 记日志、不挡重推回执（与 deleteForwardConnLimiterOnNode 同口径）。
+func (h *Handler) deleteRedeployStaleRuleConnLimitersForTunnel(tunnelID, nodeID int64) {
+	forwards, err := h.listForwardsByTunnel(tunnelID)
+	if err != nil {
+		fmt.Printf("post-upgrade redeploy: list forwards for tunnel %d failed: %v\n", tunnelID, err)
+		return
+	}
+	for i := range forwards {
+		forward := &forwards[i]
+		if isForwardPendingDelete(forward) {
+			continue
+		}
+		ports, err := h.listForwardPorts(forward.ID)
+		if err != nil {
+			fmt.Printf("post-upgrade redeploy: list ports for forward %d failed: %v\n", forward.ID, err)
+			continue
+		}
+		onNode := false
+		for _, fp := range ports {
+			if fp.NodeID == nodeID {
+				onNode = true
+				break
+			}
+		}
+		if !onNode {
+			continue
+		}
+		h.deleteRedeployStaleRuleConnLimiter(forward, nodeID)
+	}
+}
+
+// deleteRedeployStaleRuleConnLimiter 是 R21-X-02 的重连重推清理：离线期间
+// 更新去限流只改了 DB、未推节点；重连重推把已去引用的新服务配置下发后，
+// 节点上 rule_conn_limit_<id> 成无引用孤儿。重推时 DB 已是新态、无更新
+// 前快照可传，sync 内的失势清理（R20-X-01 ①）因 oldForward == nil 直接
+// 返回，故在此按“当前记录已无限流”判定失势：名只由转发 ID 决定，agent
+// 侧删不存在者为 noop（与 R20-X-01 ② 同口径）；服务 climiter 字段只由
+// 当前记录的限流值赋值（control_plane.go buildForwardServiceConfigs 内），
+// 当前无限流时节点上同名 limiter 若仍存在必为孤儿。仅在重推成功后调用
+// （先推服务后删 limiter）。
+// user_conn_limit_* 为同用户共享，永不在此删除（按 ID 取名只取 rule_ 名）。
+func (h *Handler) deleteRedeployStaleRuleConnLimiter(forward *forwardRecord, nodeID int64) {
+	if forward == nil || forwardRuleConnLimiterName(forward) != "" {
+		return
+	}
+	h.deleteForwardConnLimiterOnNode(forward, nodeID)
 }
 
 // isRetryableError returns true if the error looks transient and worth retrying.
@@ -927,6 +986,10 @@ func (h *Handler) retryFailedRedeploys(nodeID int64, tunnelFailed map[int64]stru
 		for tunnelID := range tunnelFailed {
 			if err := h.redeployTunnelAndForwards(tunnelID); err == nil {
 				delete(tunnelFailed, tunnelID)
+				// R21-X-02：隧道重试成功时其下转发已在 redeployTunnelAndForwards
+				// 内重推成功，但该路径不带失势清理；逐条补删（与首轮 forward
+				// 循环同口径；失败-重试成功的隧道下转发不得留孤儿）。
+				h.deleteRedeployStaleRuleConnLimitersForTunnel(tunnelID, nodeID)
 				fmt.Printf("post-upgrade redeploy retry: tunnel %d succeeded on node %d (attempt %d)\n", tunnelID, nodeID, attempt)
 			} else if !isRetryableError(err) {
 				permanentFailure = true
@@ -944,6 +1007,9 @@ func (h *Handler) retryFailedRedeploys(nodeID int64, tunnelFailed map[int64]stru
 				continue
 			}
 			if err := h.syncForwardServices(ff.forward, "UpdateService", true); err == nil {
+				// R21-X-02：重试重推成功后同样清理失势 limiter（与首轮
+				// 重推同口径；失败-重试成功的转发不得留孤儿）。
+				h.deleteRedeployStaleRuleConnLimiter(ff.forward, nodeID)
 				fmt.Printf("post-upgrade redeploy retry: forward %d succeeded on node %d (attempt %d)\n", ff.id, nodeID, attempt)
 			} else if !isRetryableError(err) {
 				permanentFailure = true // Keep reconciliation pending for a later reconnect.

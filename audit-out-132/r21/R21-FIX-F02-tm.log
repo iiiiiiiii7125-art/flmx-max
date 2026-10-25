@@ -1,0 +1,9 @@
+=== R21-F02 window start=2026-10-25T09:55:45Z lock=R21-F02 ===
+proxy closed during CONNECT
+Connection closed by UNKNOWN port 65535
+window start=2026-10-25T12:29:46Z lane=R21-F02
+lock acquired=2026-10-25T12:30:16Z lane=R21-F02 (waited R21-F01, no preemption)
+deploy=2026-10-25T12:31:49Z..12:32:05Z paneld=00af1291b498fb8b2b8d36f41604810e image=flmx-backend:r21-f02
+e2e runs: run1 12:32:12Z ABORT (no tunnel); run2 12:33:38Z A/B/C PASS fwd2 D-crash(script); run3 12:34:08Z A/B/C PASS fwd3 D-tunnel-count script FAIL; run4 12:34:48Z failures=0 fwd4
+restore=2026-10-25T12:35:09Z..12:35:16Z backend=new1 paneld=69d166cc2d0923ef72f974912767bfa8 node1=1 tunnels=0 forwards=0
+lock released by R21-F02, status=free
