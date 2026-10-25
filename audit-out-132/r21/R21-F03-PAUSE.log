@@ -1,0 +1,7 @@
+=== R21-F03 PAUSE ===
+pause instruction received 2026-10-25T09:55:31Z (CST 17:55:31) + follow-up release order 09:55:36Z
+lock: RELEASED by R21-F03 at 2026-10-25T09:55:40Z (was R21-F03 2026-10-25T09:53:17Z); status after release: free (confirmed)
+stop point: test-machine leg NOT started — SSH via tsconnect proxy failed (proxy closed during CONNECT, 3 attempts 09:54-09:55Z); no deploy, no legs, no restart, no change made to test machine
+test machine state: UNVERIFIED pristine (could not connect to check); last known pristine state from R21-L2 recovery 08:06Z + F-01 lane held lock 09:22:29-09:53:17Z and released it (their restore state unknown to this lane)
+no tests running at pause (all sandbox suites finished before pause); no new tests started after pause order
+workspace/branch untouched per pause order: fix-r21-f03 worktree ~/workspace/.fixr21-f03 kept as-is, nothing committed, no merge to main

@@ -1,0 +1,15 @@
+=== deploy start=2026-10-25T12:53:25Z initiator=R21-F03 ===
+--- pre-state
+23ca5d88ba3bca475f24ee48c47e0fc9  /etc/flux_agent/gost.json
+27787cbf52e9390685e75399ff9da821  /etc/flux_agent/flux_agent
+3:    image: flmx-backend:new1
+flux-panel-backend flmx-backend:new1 Up 18 minutes (healthy)
+vite-frontend flmx-frontend:new1 Up About an hour (healthy)
+flux-panel-postgres postgres:16-alpine Up 3 hours (healthy)
+--- backup live DB (sqlite online backup, panel running)
+/root/r21-f03/R21-F03-deploy.sh: line 24: sqlite3: command not found
+ls: cannot access '/root/r21-f03/gost.db.pre': No such file or directory
+--- verify staged paneld (expect 73c1c1a5e29893844cee247bb80e9522; skipped if binary not staged)
+no staged paneld binary (source-only stage; image is built from staged source, marker verified post-build)
+--- docker build backend r21-f03
+client_loop: send disconnect: Broken pipe

@@ -1,0 +1,12 @@
+sha256:61e1531f27709ba2ddb95b13b3febedd86be0698d7432d769a1efec30e9d3a83
+flmx-backend:r21-f02 e9f06e66c4d8
+flmx-backend:new2 651ceb7452c2
+flmx-backend:new1 61e1531f2770
+flmx-backend:new1 61e1531f2770
+counts: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+PASS counts 1/0/0/1/1 :: {'node': 1, 'tunnel': 0, 'forward': 0, 'inbound': 1, 'subscription': 1}
+=== leg counts end failures=0 [] ===
+gost md5=23ca5d88ba3bca475f24ee48c47e0fc9 services=0 climiters=[] refs=[]
+=== leg gost end failures=0 [] ===
+sysver: {"currentVersion": "1.4.9-new", "latestVersion": "1.4.9", "hasUpdate": false, "channel": "stable", "capability": {"capable": true, "reasons": [], "deployDir": "/opt/flmx-panel", "backendContainer": "flux-panel-backend"}}
+=== leg sysver end failures=0 [] ===

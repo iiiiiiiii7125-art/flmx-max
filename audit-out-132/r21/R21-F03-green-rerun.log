@@ -1,0 +1,161 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestForceDeleteAdminOnly
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (21.919424ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (22.019867ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (548.09µs)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (5.300104ms)
+2026/10/25 12:10:15 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:15 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:15 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (1.921777ms)
+2026/10/25 12:10:15 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 12:10:16 nftables auto-reconcile enqueued node_id=1 reason=apply_failed_node_recovered
+2026/10/25 12:10:16 audit op=force_delete_forward_reconcile_skipped forward_id=1 node_id=1 err=ssh: unable to connect (simulated offline)
+2026/10/25 12:10:16 audit op=force_delete_forward operator_id=1 forward_id=1 name="nft-forward" user_id=1 residue_node="nft-node" residue_port=20000 residue_note=节点规则可能残留，需人工确认清理
+--- PASS: TestForceDeleteAdminOnly (1.73s)
+=== RUN   TestForwardForceDeleteRemovesNftablesBindingAndReconciles
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (14.642022ms)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (394.244µs)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (374.032µs)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (318.729µs)
+2026/10/25 12:10:17 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:17 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:17 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (1.909237ms)
+2026/10/25 12:10:17 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 12:10:17 audit op=force_delete_forward operator_id=1 forward_id=1 name="nft-forward" user_id=1 residue_node="nft-node" residue_port=20000 residue_note=节点规则可能残留，需人工确认清理
+--- PASS: TestForwardForceDeleteRemovesNftablesBindingAndReconciles (1.09s)
+=== RUN   TestR19F03DeleteForwardBatchRemovesConnLimiter
+2026/10/25 12:10:18 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (14.102433ms)
+2026/10/25 12:10:18 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (12.357911ms)
+2026/10/25 12:10:18 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (3.458404ms)
+2026/10/25 12:10:18 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (4.66526ms)
+2026/10/25 12:10:18 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:18 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:18 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (7.84142ms)
+2026/10/25 12:10:18 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F03DeleteForwardBatchRemovesConnLimiter (2.46s)
+=== RUN   TestR19F03DeleteForwardControlRemovesConnLimiter
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (431.82µs)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (4.740932ms)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (6.124196ms)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (318.888µs)
+2026/10/25 12:10:20 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:21 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:21 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (10.357386ms)
+2026/10/25 12:10:21 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F03DeleteForwardControlRemovesConnLimiter (1.66s)
+=== RUN   TestR19F03DeleteForwardWithoutLimitsStillDeletesRuleLimiterByID
+2026/10/25 12:10:22 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (8.159934ms)
+2026/10/25 12:10:22 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (6.86563ms)
+2026/10/25 12:10:22 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (383.968µs)
+2026/10/25 12:10:22 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (11.672416ms)
+2026/10/25 12:10:22 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:22 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:22 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (6.285373ms)
+2026/10/25 12:10:22 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR19F03DeleteForwardWithoutLimitsStillDeletesRuleLimiterByID (1.98s)
+=== RUN   TestR1B3ForwardDeleteRefreshesWhitelist
+2026/10/25 12:10:24 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (6.74163ms)
+2026/10/25 12:10:24 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (3.653902ms)
+2026/10/25 12:10:24 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (3.101073ms)
+2026/10/25 12:10:24 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (5.253428ms)
+2026/10/25 12:10:24 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:24 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:24 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (3.197023ms)
+2026/10/25 12:10:24 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR1B3ForwardDeleteRefreshesWhitelist (1.70s)
+=== RUN   TestR1B3ForwardForceDeleteRefreshesWhitelist
+2026/10/25 12:10:27 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (6.72545ms)
+2026/10/25 12:10:27 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (414.927µs)
+2026/10/25 12:10:27 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (5.40028ms)
+2026/10/25 12:10:27 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (2.387228ms)
+2026/10/25 12:10:27 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:27 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:27 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (6.920253ms)
+2026/10/25 12:10:27 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 12:10:28 audit op=force_delete_forward operator_id=1 forward_id=1 name="relay-fwd" user_id=1 residue_port=20000 residue_note=节点规则可能残留，需人工确认清理
+--- PASS: TestR1B3ForwardForceDeleteRefreshesWhitelist (3.11s)
+=== RUN   TestR1B3ForwardBatchDeleteRefreshesWhitelist
+2026/10/25 12:10:29 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.966395ms)
+2026/10/25 12:10:29 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (3.03481ms)
+2026/10/25 12:10:29 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (2.749596ms)
+2026/10/25 12:10:29 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (3.117905ms)
+2026/10/25 12:10:29 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:29 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:29 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (2.435448ms)
+2026/10/25 12:10:29 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR1B3ForwardBatchDeleteRefreshesWhitelist (1.76s)
+=== RUN   TestR20F01DeleteAfterLimitsClearedSendsDeleteCLimiters
+2026/10/25 12:10:31 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (1.417299ms)
+2026/10/25 12:10:31 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (1.464905ms)
+2026/10/25 12:10:31 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (399.874µs)
+2026/10/25 12:10:31 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (363.319µs)
+2026/10/25 12:10:31 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:31 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:31 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (383.931µs)
+2026/10/25 12:10:31 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR20F01DeleteAfterLimitsClearedSendsDeleteCLimiters (1.70s)
+=== RUN   TestR20F01UpdateDropsLimitsDeletesStaleLimiter
+2026/10/25 12:10:32 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (9.448125ms)
+2026/10/25 12:10:32 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (412.018µs)
+2026/10/25 12:10:32 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (340.901µs)
+2026/10/25 12:10:32 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (19.612344ms)
+2026/10/25 12:10:32 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:32 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:32 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (8.16195ms)
+2026/10/25 12:10:32 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR20F01UpdateDropsLimitsDeletesStaleLimiter (1.82s)
+=== RUN   TestR20F01UpdateKeepsLimitsSendsNoDeleteCLimiters
+2026/10/25 12:10:35 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (9.14224ms)
+2026/10/25 12:10:35 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (11.100384ms)
+2026/10/25 12:10:35 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (384.308µs)
+2026/10/25 12:10:35 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (13.095085ms)
+2026/10/25 12:10:35 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:35 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:35 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (3.388001ms)
+2026/10/25 12:10:35 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR20F01UpdateKeepsLimitsSendsNoDeleteCLimiters (2.45s)
+=== RUN   TestR20F01UpdateThenDeleteLeavesNoOrphan
+2026/10/25 12:10:37 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (4.524355ms)
+2026/10/25 12:10:37 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (5.751635ms)
+2026/10/25 12:10:37 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (10.815234ms)
+2026/10/25 12:10:37 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (9.023694ms)
+2026/10/25 12:10:37 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:37 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:37 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (3.154144ms)
+2026/10/25 12:10:37 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR20F01UpdateThenDeleteLeavesNoOrphan (2.74s)
+=== RUN   TestR21F03ForceDeleteGostCleansServiceAndLimiter
+2026/10/25 12:10:39 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (6.171041ms)
+2026/10/25 12:10:39 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (2.691166ms)
+2026/10/25 12:10:39 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (2.397871ms)
+2026/10/25 12:10:39 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.31573ms)
+2026/10/25 12:10:39 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:39 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:39 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (380.801µs)
+2026/10/25 12:10:39 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 12:10:40 audit op=force_delete_forward operator_id=1 forward_id=1 name="r21-f03-forward" user_id=1 residue_port=22000 residue_note=节点规则可能残留，需人工确认清理
+--- PASS: TestR21F03ForceDeleteGostCleansServiceAndLimiter (2.09s)
+=== RUN   TestR21F03ForceDeleteOfflineNodeStillDeletesDB
+2026/10/25 12:10:41 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (418.878µs)
+2026/10/25 12:10:41 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (403.048µs)
+2026/10/25 12:10:41 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (378.012µs)
+2026/10/25 12:10:41 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (343.004µs)
+2026/10/25 12:10:41 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:41 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:41 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (367.504µs)
+2026/10/25 12:10:41 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+2026/10/25 12:10:42 audit op=force_delete_forward_cleanup_skipped forward_id=1 node_id=2 err=节点不在线
+2026/10/25 12:10:42 audit op=force_delete_forward operator_id=1 forward_id=1 name="r21-f03-forward" user_id=1 residue_port=22000 residue_note=节点规则可能残留，需人工确认清理
+--- PASS: TestR21F03ForceDeleteOfflineNodeStillDeletesDB (1.75s)
+=== RUN   TestR21F03NormalDeleteStillCleansServiceAndLimiter
+2026/10/25 12:10:44 migration r5b4_v1_port_user_unique: created index idx_forward_port_node_port on forward_port (node_id, port) (3.645515ms)
+2026/10/25 12:10:44 migration r5b4_v1_port_user_unique: created index idx_chain_tunnel_node_port on chain_tunnel (node_id, port) (445.356µs)
+2026/10/25 12:10:44 migration r5b4_v1_port_user_unique: created index idx_node_inbound_node_port on node_inbound (node_id, port) (371.107µs)
+2026/10/25 12:10:44 migration r5b4_v1_port_user_unique: created index idx_user_username_unique on "user" ("user") (1.472823ms)
+2026/10/25 12:10:44 migration r5b4_v1_port_user_unique applied
+2026/10/25 12:10:44 migration r5b4_v2_node_inbound_partial_unique applied
+2026/10/25 12:10:44 migration fix132_v3_peer_share_runtime_share_resource_unique: composite unique index idx_peer_share_runtime_share_resource on peer_share_runtime (share_id, resource_key) ready (381.659µs)
+2026/10/25 12:10:44 migration fix132_v3_peer_share_runtime_share_resource_unique applied
+--- PASS: TestR21F03NormalDeleteStillCleansServiceAndLimiter (2.22s)
+PASS
+ok  	go-backend/internal/http/handler	31.308s

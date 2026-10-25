@@ -1,0 +1,4 @@
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+?   	github.com/go-gost/gost	[no test files]
+ok  	github.com/go-gost/gost/tests/lifecycle	11.638s
+GOST_EXIT=0

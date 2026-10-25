@@ -3757,15 +3757,33 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.refreshInboundWhitelists(affectedInboundIDs)
+	isRealm := false
 	if tunnel, terr := h.getTunnelRecord(forward.TunnelID); terr == nil && tunnelIsRealm(tunnel) {
 		// realm renders from the database: the forward drops out on the
 		// next apply, now or when the node reconnects.
 		_, _ = h.syncRealmNodes(forwardPortNodeIDs(oldPorts), nil)
+		isRealm = true
 	}
-	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && nftMode {
+	nftMode := false
+	if mode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && mode {
+		nftMode = true
 		for _, nodeID := range entryNodeIDs {
 			if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
 				log.Printf("audit op=force_delete_forward_reconcile_skipped forward_id=%d node_id=%d err=%v", id, nodeID, err)
+			}
+		}
+	}
+	if !isRealm && !nftMode {
+		// R21-X-03 (F-03): gost 路径此前不发任何节点命令，服务仍监听、
+		// limiter 仍被引用。与普通删转发同口径：逐节点 best-effort 下发
+		// DeleteService + 按 ID 兜底的 DeleteCLimiters（经
+		// deleteForwardServicesOnNodeBatch，与 R19-X-03 / R20-X-01 同漏斗）。
+		// 节点离线时只记日志、不硬失败——force-delete 的语义即“强制”，
+		// 残留待节点重连后面板清扫 / agent 自愈收敛。realm / nft 分支
+		// 保持原样（两分支仍可同跑，本段只在两者皆否时执行）。
+		for _, nodeID := range forwardPortNodeIDs(oldPorts) {
+			if err := h.deleteForwardServicesOnNodeBatch(forward, nodeID); err != nil {
+				log.Printf("audit op=force_delete_forward_cleanup_skipped forward_id=%d node_id=%d err=%v", id, nodeID, err)
 			}
 		}
 	}
