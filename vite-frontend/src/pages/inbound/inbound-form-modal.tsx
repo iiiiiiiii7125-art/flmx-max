@@ -26,6 +26,7 @@ import {
   visionAllowed,
 } from "./presets";
 import { OutboundIPSelect } from "./outbound-ip-select";
+import { applyPureEncPreset } from "./pure-enc-preset";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
 
 import { createInbound, updateInbound } from "@/api";
@@ -678,36 +679,62 @@ export function InboundFormModal({
                     <span className="text-sm">启用 XTLS Vision 流控</span>
                   </div>
                 )}
-                {form.kernelType === "xray" && form.protocol === "vless" && (
+                {form.kernelType === "xray" && (
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2">
-                      <Switch
-                        isSelected={form.encryptionEnabled}
+                      {form.protocol === "vless" && (
+                        <>
+                          <Switch
+                            isSelected={form.encryptionEnabled}
+                            size="sm"
+                            onValueChange={(v) => {
+                              if (!v) {
+                                set("encryptionEnabled", false);
+                                return;
+                              }
+                              // 开启 ENC 时一键套用 IX 中转标准配置，避免逐项点错
+                              // 导致组合不可用（TCP + 安全无 + Vision + 后量子认证）。
+                              setForm((prev) => ({
+                                ...prev,
+                                encryptionEnabled: true,
+                                encryptionAuth: "mlkem768",
+                                encryptionMode: "native",
+                                transportType: "tcp",
+                                securityType: "none",
+                                flowVision: true,
+                              }));
+                            }}
+                          />
+                          <span className="text-sm">
+                            启用 VLESS 加密（ENC）
+                          </span>
+                          <Chip color="secondary" size="sm" variant="flat">
+                            IX 中转专用协议
+                          </Chip>
+                        </>
+                      )}
+                      <Chip
+                        className="cursor-pointer"
+                        color="primary"
+                        role="button"
                         size="sm"
-                        onValueChange={(v) => {
-                          if (!v) {
-                            set("encryptionEnabled", false);
-                            return;
+                        tabIndex={0}
+                        title="一键填入纯 ENC 配置：VLESS / TCP / 安全无 / Vision / ML-KEM-768 后量子认证 / xorpub 外观，无 SNI。只填表单，不创建。"
+                        variant="flat"
+                        onClick={() =>
+                          setForm((prev) => applyPureEncPreset(prev))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setForm((prev) => applyPureEncPreset(prev));
                           }
-                          // 开启 ENC 时一键套用 IX 中转标准配置，避免逐项点错
-                          // 导致组合不可用（TCP + 安全无 + Vision + 后量子认证）。
-                          setForm((prev) => ({
-                            ...prev,
-                            encryptionEnabled: true,
-                            encryptionAuth: "mlkem768",
-                            encryptionMode: "native",
-                            transportType: "tcp",
-                            securityType: "none",
-                            flowVision: true,
-                          }));
                         }}
-                      />
-                      <span className="text-sm">启用 VLESS 加密（ENC）</span>
-                      <Chip color="secondary" size="sm" variant="flat">
-                        IX 中转专用协议
+                      >
+                        纯ENC
                       </Chip>
                     </div>
-                    {form.encryptionEnabled && (
+                    {form.protocol === "vless" && form.encryptionEnabled && (
                       <>
                         <Select
                           label="认证方式"
