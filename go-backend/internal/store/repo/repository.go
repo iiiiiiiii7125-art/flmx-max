@@ -239,6 +239,13 @@ func Open(path string) (*Repository, error) {
 	return &Repository{db: db, dbPath: path}, nil
 }
 
+// DBPath 返回仓库打开时用的 SQLite 文件路径；Postgres 仓库返回 ""。
+// 供 handler 层按 <DBPath 同级> 惯例定位服务端状态文件
+// （如导入前自动备份快照），不暴露 DB 句柄。
+func (r *Repository) DBPath() string {
+	return r.dbPath
+}
+
 func OpenPostgres(dsn string) (*Repository, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, fmt.Errorf("empty postgres dsn")
