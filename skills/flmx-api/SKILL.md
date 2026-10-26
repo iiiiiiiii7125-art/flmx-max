@@ -131,6 +131,8 @@ User request → Check env vars → Auto-login if needed → Call API → Return
 | "导出备份" | `/api/v1/backup/export` | [backup](references/backup.md) |
 | "导入备份" | `/api/v1/backup/import` | [backup](references/backup.md) |
 | "Gist 备份" / "备份上传 Gist" | `/api/v1/backup/gist/status` / `/api/v1/backup/gist/save` / `/api/v1/backup/gist/upload` / `/api/v1/backup/gist/versions` / `/api/v1/backup/gist/restore` | [backup](references/backup.md) |
+| "下载导入前自动备份（GET，仅管理员）" | `/api/v1/backup/import-auto-backup` | [backup](references/backup.md) |
+| "导入前自动备份状态（GET，仅管理员；exists / expiresAt=mtime+24h）" | `/api/v1/backup/import-auto-backup/status` | [backup](references/backup.md) |
 | "安装内核" / "装 Xray / sing-box / Snell" | `/api/v1/kernel/install` | [kernels](references/kernels.md) |
 | "内核版本" / "内核能力" | `/api/v1/kernel/versions` / `/api/v1/kernel/capabilities` | [kernels](references/kernels.md) |
 | "创建入站" / "新建入站" / "加节点配置" | `/api/v1/inbound/create` | [inbounds](references/inbounds.md) |
