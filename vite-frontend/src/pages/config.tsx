@@ -30,6 +30,9 @@ import {
   updateConfigs,
   exportBackup,
   importBackup,
+  downloadImportAutoBackup,
+  getImportAutoBackupStatus,
+  type ImportAutoBackupStatus,
   getAnnouncement,
   updateAnnouncement,
   getStorageSummary,
@@ -359,11 +362,11 @@ export default function ConfigPage() {
     data: Record<string, unknown>;
   } | null>(null);
   const [importConfirmOpen, setImportConfirmOpen] = useState(false);
-  // 上次导入前由后端自动生成的全量备份（ImportResult.autoBackup）：
-  // 只存于内存，成功导入后可在此下载、再导入恢复，兑现确认框
-  // “可用该自动备份恢复”的承诺（A10-10）。autoBackup 生成失败时
-  // 后端只记警告继续导入，此时本值为 null、按钮不出现。
-  const [importAutoBackup, setImportAutoBackup] = useState<unknown>(null);
+  // 导入前自动备份快照状态（SEC-01 BC-01(b)）：快照只留存服务端 24 小时，
+  // 不再经导入回执下发到内存（SEC-01）；按钮仅在 status.exists 为真时
+  // 出现，点击走服务端下载端点。快照过期后服务端自动清理。
+  const [importAutoBackupStatus, setImportAutoBackupStatus] =
+    useState<ImportAutoBackupStatus | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -610,6 +613,8 @@ export default function ConfigPage() {
       loadAnnouncement();
       loadStorageSummary();
       void loadSystemUpgradeInfo();
+      // 备份页加载即拉一次导入前自动备份快照状态，决定下载按钮是否出现
+      void loadImportAutoBackupStatus();
       // 页面加载即拉一次升级状态：刷新后也能看到进行中/上次结果
       void (async () => {
         const status = await fetchSystemUpgradeStatus();
@@ -1526,8 +1531,9 @@ export default function ConfigPage() {
       });
 
       if (response.code === 0) {
-        // 只报计数摘要，不把整份回执（含 autoBackup 全量库）倾倒进
-        // toast（A10-10）；自动备份另存 state，供下方下载按钮取用。
+        // 只报计数摘要，不把整份回执倾倒进 toast（A10-10）；回执自 SEC-01
+        // 起不再含 autoBackup 快照内容，快照留存服务端，成功后刷新 status
+        // 决定下载按钮是否出现。
         const data = (response.data ?? {}) as Record<string, unknown>;
         const importedTotal = Object.entries(data).reduce(
           (sum, [k, v]) =>
@@ -1559,9 +1565,7 @@ export default function ConfigPage() {
           .join("，");
 
         toast.success(summary);
-        setImportAutoBackup(
-          (data as { autoBackup?: unknown }).autoBackup ?? null,
-        );
+        void loadImportAutoBackupStatus();
         setImportTypes([]);
         setImportFileName("");
         setPendingImport(null);
@@ -1576,27 +1580,35 @@ export default function ConfigPage() {
     }
   };
 
-  // 下载上次导入前自动生成的全量备份（可再导入恢复）。
-  const downloadImportAutoBackup = () => {
-    if (importAutoBackup == null) return;
-    const url = window.URL.createObjectURL(
-      new Blob([JSON.stringify(importAutoBackup, null, 2)], {
-        type: "application/json",
-      }),
-    );
-    const link = document.createElement("a");
+  // 拉取服务端导入前自动备份快照状态：失败静默（端点未合入/快照不存在
+  // 时按钮不出现，不弹错打扰备份页）。
+  const loadImportAutoBackupStatus = async () => {
+    try {
+      const response = await getImportAutoBackupStatus();
 
-    link.href = url;
-    const timestamp = new Date()
-      .toISOString()
-      .slice(0, 19)
-      .replace(/[:-]/g, "");
+      if (response.code === 0 && response.data) {
+        setImportAutoBackupStatus(response.data);
+      } else {
+        setImportAutoBackupStatus(null);
+      }
+    } catch {
+      setImportAutoBackupStatus(null);
+    }
+  };
 
-    link.setAttribute("download", `auto_backup_${timestamp}.json`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+  // 下载服务端留存的导入前自动备份快照（可再导入恢复）。下载不删除快照；
+  // 无快照（404）时 toast 报错并刷新 status，按钮随之消失。
+  const handleDownloadImportAutoBackup = async () => {
+    try {
+      await downloadImportAutoBackup();
+    } catch (error) {
+      toast.error(
+        error instanceof Error && error.message
+          ? error.message
+          : "下载失败：暂无可下载的导入前自动备份",
+      );
+      void loadImportAutoBackupStatus();
+    }
   };
 
   const cancelPendingImport = () => {
@@ -2221,7 +2233,7 @@ export default function ConfigPage() {
                 </span>
               )}
             </div>
-            {importAutoBackup != null && (
+            {importAutoBackupStatus?.exists && (
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className="text-xs text-default-500">
                   上次导入前已自动备份当前全部数据
@@ -2229,7 +2241,7 @@ export default function ConfigPage() {
                 <Button
                   size="sm"
                   variant="flat"
-                  onPress={downloadImportAutoBackup}
+                  onPress={handleDownloadImportAutoBackup}
                 >
                   下载导入前自动备份
                 </Button>
@@ -2340,7 +2352,9 @@ export default function ConfigPage() {
                 的数据会被备份文件中的内容覆盖，未包含在所选类型内的数据不受影响。
               </p>
               <p>
-                导入执行前，系统会自动生成一份当前全部数据的备份；导入成功后可在此页下载该自动备份，如结果不符合预期可再导入恢复。
+                导入执行前，系统会自动生成一份当前全部数据的备份并保留在服务端
+                24 小时；窗口期内可在此页下载该自动备份，过期后自动清理；如结
+                果不符合预期，可在 24 小时内下载备份再导入恢复。
               </p>
             </div>
           </ModalBody>

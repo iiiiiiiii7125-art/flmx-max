@@ -571,6 +571,121 @@ export const exportBackup = async (types: string[] = []) => {
 export const importBackup = (data: BackupImportPayload) =>
   Network.post("/backup/import", data);
 
+// SEC-01 BC-01(b)：导入前自动备份快照留存服务端 24 小时（A10-10 承诺的
+// 服务端版）。回执自 SEC-01 起不再含快照内容，快照只经以下两端点取用，
+// 绝不打进日志/console。
+export interface ImportAutoBackupStatus {
+  exists: boolean;
+  expiresAt: number;
+}
+
+export const getImportAutoBackupStatus = () =>
+  Network.get<ImportAutoBackupStatus>("/backup/import-auto-backup/status");
+
+// 把可能为 Blob 的错误/信封体解析为后端信封（解析失败返回 null）。
+const readBlobEnvelope = async (
+  data: unknown,
+): Promise<{ code?: unknown; msg?: unknown } | null> => {
+  try {
+    if (data && typeof data === "object" && !(data instanceof Blob)) {
+      return data as { code?: unknown; msg?: unknown };
+    }
+
+    const text =
+      typeof data === "string"
+        ? data
+        : data instanceof Blob
+          ? await data.text()
+          : "";
+
+    if (!text) return null;
+
+    return JSON.parse(text) as { code?: unknown; msg?: unknown };
+  } catch {
+    return null;
+  }
+};
+
+export const downloadImportAutoBackup = async () => {
+  const token = window.localStorage.getItem("token");
+  const baseURL = axios.defaults.baseURL || "/api/v1/";
+
+  let response;
+  try {
+    response = await axios.get(`${baseURL}/backup/import-auto-backup`, {
+      headers: {
+        Authorization: token,
+      },
+      responseType: "blob",
+    });
+  } catch (error) {
+    // 无快照时后端回 HTTP 404 + JSON 信封（非 200 信封），axios 直接抛错：
+    // 从错误体里解析后端 msg 透出，绝不把信封当文件存下来。
+    if (axios.isAxiosError(error) && error.response) {
+      if (error.response.status === 401) {
+        // 会话失效：与 Network 层一致，清会话回登录页
+        clearSession();
+        if (window.location.pathname !== "/") {
+          window.location.href = "/";
+        }
+        throw new Error("登录已过期，请重新登录");
+      }
+
+      const envelope = await readBlobEnvelope(error.response.data);
+
+      throw new Error(
+        typeof envelope?.msg === "string" && envelope.msg
+          ? envelope.msg
+          : "暂无可下载的导入前自动备份",
+      );
+    }
+
+    throw error instanceof Error ? error : new Error("下载失败");
+  }
+
+  // 后端错误走统一信封且以 HTTP 200 返回时，裸 blob 下载会把信封当备份
+  // 文件存下来（D5-01）。成功响应带 Content-Disposition: attachment，
+  // 错误信封没有——以此为准校验：无 attachment 时按信封解析，code!==0
+  // 直接抛错，绝不触发下载。
+  const disposition = String(response.headers?.["content-disposition"] || "");
+
+  if (!disposition.includes("attachment")) {
+    const envelope = await readBlobEnvelope(response.data);
+
+    if (envelope && typeof envelope.code === "number") {
+      if (envelope.code === 401) {
+        // 会话失效：与 Network 层一致，清会话回登录页
+        clearSession();
+        if (window.location.pathname !== "/") {
+          window.location.href = "/";
+        }
+        throw new Error("登录已过期，请重新登录");
+      }
+      if (envelope.code !== 0) {
+        throw new Error(
+          typeof envelope.msg === "string" && envelope.msg
+            ? envelope.msg
+            : "下载失败",
+        );
+      }
+    }
+
+    throw new Error("下载失败：服务器未返回备份文件");
+  }
+
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement("a");
+
+  link.href = url;
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
+
+  link.setAttribute("download", `auto_backup_${timestamp}.json`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
+
 // PORT-3342/B1：备份上传 GitHub Gist（后端 /api/v1/backup/gist/*）。
 // status 不含令牌与密码，只给 tokenHint；令牌/密码只经 save 上行。
 export interface GistBackupStatus {
