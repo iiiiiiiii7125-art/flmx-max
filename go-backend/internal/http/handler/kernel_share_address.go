@@ -70,6 +70,21 @@ func stripShareHostPort(value string) string {
 	return strings.Trim(value, "[]")
 }
 
+// stripShareHostPortList strips a trailing :port from each comma-separated
+// item of a multi-value host list (R31-L1-E01): a tunnel inIp such as
+// "198.51.100.77:8443,2001:db8::1" must be stripped per item —
+// stripShareHostPort on the whole string is a no-op because
+// net.SplitHostPort fails on the comma. Empty items are preserved as-is
+// so the item count/shape of the input is unchanged; a port-only item
+// (":8443") strips to "" like the single-value helper.
+func stripShareHostPortList(value string) string {
+	parts := strings.Split(value, ",")
+	for i, part := range parts {
+		parts[i] = stripShareHostPort(part)
+	}
+	return strings.Join(parts, ",")
+}
+
 // normalizeShareHost returns the stored form of a share host value:
 // whitespace-trimmed, with a single trailing dot removed (B2-01 — the
 // FQDN root dot is a legitimate way to write a hostname, and stored

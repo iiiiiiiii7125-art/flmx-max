@@ -1306,7 +1306,10 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	inIP := asString(req["inIp"])
+	// R31-L1-E01：显式 inIp 与系统派生值同口径——按 , 分项复用
+	// stripShareHostPort 剥离 :port 后落库（整串 strip 对含逗号串
+	// 无效）。空值仍走下方 buildTunnelInIP 派生；存量不改写。
+	inIP := stripShareHostPortList(asString(req["inIp"]))
 	ipPreference := asString(req["ipPreference"])
 	probeTarget, probeTargetConfigured, err := parseTunnelProbeTargetFromRequest(req)
 	if err != nil {
@@ -1940,9 +1943,10 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		inIp = buildTunnelInIP(runtimeState.InNodes, runtimeState.Nodes, ipPreference)
 		// A9-05（BC-21）：与 create 对齐——请求显式给出 inIp 时保留自定义
 		// 入口 IP，不再无条件被系统采集值覆盖（旧实现编辑即丢失自定义值，
-		// 前端回填的旧值也因此恒被重算）。
+		// 前端回填的旧值也因此恒被重算）。R31-L1-E01：显式值按 , 分项
+		// 剥离 :port 后覆盖，与 buildTunnelInIP 的已剥离口径一致。
 		if v := strings.TrimSpace(asString(req["inIp"])); v != "" {
-			inIp = v
+			inIp = stripShareHostPortList(v)
 		}
 		updateProtocol = "tls"
 		if len(runtimeState.OutNodes) > 0 && strings.TrimSpace(runtimeState.OutNodes[0].Protocol) != "" {
