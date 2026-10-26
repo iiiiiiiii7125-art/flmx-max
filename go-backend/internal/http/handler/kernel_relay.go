@@ -191,7 +191,11 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 	if host == "" {
 		return "", errors.New("落地节点没有可用地址")
 	}
-	return net.JoinHostPort(strings.Trim(host, "[]"), port), nil
+	// R28-FIX-F01：ServerIP 可含 :port（写侧 IsValidNodeAddress 显式
+	// 放行）；进 JoinHostPort 前须剥离，否则产出不可拨号的
+	// [IP:port]:port。stripShareHostPort 与订阅直连面（R25-X-01）
+	// 同口径：SplitHostPort 成功取 host，失败原样去括号。
+	return net.JoinHostPort(stripShareHostPort(host), port), nil
 }
 
 // validateTunnelRelayExits re-runs the landing-exit rule for every

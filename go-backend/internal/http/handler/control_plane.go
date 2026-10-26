@@ -1690,7 +1690,8 @@ func (h *Handler) appendChainHopDiagnosis(results *[]map[string]interface{}, nod
 	}
 	targetIP, targetPort, err := resolveChainProbeTarget(fromNode, targetNode, toNode.Port, ipPreference, toNode.ConnectIP)
 	if err != nil {
-		h.appendFailedDiagnosis(results, nodeCache, fromNodeID, strings.Trim(strings.TrimSpace(targetNode.ServerIP), "[]"), toNode.Port, description, metadata, err.Error())
+		// R28-FIX-F01（sweep）：展示面 targetIp 亦须为裸 host。
+		h.appendFailedDiagnosis(results, nodeCache, fromNodeID, stripShareHostPort(targetNode.ServerIP), toNode.Port, description, metadata, err.Error())
 		return
 	}
 	h.appendPathDiagnosis(results, nodeCache, fromNodeID, targetIP, targetPort, description, metadata, protocol, options)
@@ -1702,7 +1703,10 @@ func resolveChainProbeTarget(fromNode, targetNode *nodeRecord, preferredPort int
 	}
 	host, err := selectTunnelDialHost(fromNode, targetNode, ipPreference, connectIp)
 	if err != nil {
-		host = strings.Trim(strings.TrimSpace(targetNode.ServerIP), "[]")
+		// R28-FIX-F01（sweep）：回退拨号 host 可源自含 :port 的
+		// ServerIP；剥离后才可作拨号目标，否则 JoinHostPort 式
+		// 拼接产出不可拨号地址。
+		host = stripShareHostPort(targetNode.ServerIP)
 	}
 	if host == "" {
 		return "", 0, errors.New("目标节点地址为空")
