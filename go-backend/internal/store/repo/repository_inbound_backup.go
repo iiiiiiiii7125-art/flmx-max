@@ -358,6 +358,51 @@ type inboundImportCounts struct {
 	legacyUsers         int
 }
 
+// findReusableSeedDefaultTx 找可被一次备份导入复用的种子默认订阅
+// （R31-L3-H02 / F-04，修法 (a)）：启动期 migrateSubscriptions 在
+// 订阅数为 0 的库上建的「我的订阅」（随机 token）。全新恢复时备份
+// 自带的默认订阅按 token 不匹配、会另起一行，导致默认订阅重复
+// 两条且 DefaultSubscription() 指向从未分享过的种子行。
+//
+// 复用只认「种子形」行：名「我的订阅」+ SourceAll=1 + 零流量 + 无
+// 任何引用（用户分配 user_subscription、计数基线
+// subscription_counter、小时流量 subscription_traffic）。已投入
+// 使用的默认订阅（有流量或有引用）不是种子，不复用——跨面板恢复
+// 进已有面板时仍按既往口径另起一行，不夺取其链接。无候选行时
+// 返回 0。调用方只复用一次（同一备份含多条默认订阅时其余仍另
+// 起一行；备份自带重复是备份侧既有形状，不在本修复内合并）。
+func findReusableSeedDefaultTx(tx *gorm.DB) (int64, error) {
+	var seed model.Subscription
+	res := tx.Where("name = ? AND source_all = ? AND upload_bytes = ? AND download_bytes = ?",
+		"我的订阅", 1, 0, 0).Order("id ASC").Limit(1).Find(&seed)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return 0, nil
+	}
+	var n int64
+	if err := tx.Model(&model.UserSubscription{}).Where("subscription_id = ?", seed.ID).Count(&n).Error; err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		return 0, nil
+	}
+	if err := tx.Model(&model.SubscriptionCounter{}).Where("subscription_id = ?", seed.ID).Count(&n).Error; err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		return 0, nil
+	}
+	if err := tx.Model(&model.SubscriptionTraffic{}).Where("subscription_id = ?", seed.ID).Count(&n).Error; err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		return 0, nil
+	}
+	return seed.ID, nil
+}
+
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
@@ -723,6 +768,15 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// Subscriptions keep their links and credentials, matched by token.
 	// AppliedActive starts at 0 so the expiry loop pushes the active share
 	// subscriptions to the kernels.
+	//
+	// R31-L3-H02 (F-04, 修法 (a))：导入默认订阅时复用种子行，见
+	// findReusableSeedDefaultTx。种子 id 在循环前一次取定；同一备
+	// 份内只复用一次，其余默认订阅仍按 token 口径另起一行。
+	seedDefaultID, err := findReusableSeedDefaultTx(tx)
+	if err != nil {
+		return inboundImportCounts{}, err
+	}
+	seedReused := false
 	subs := append([]model.SubscriptionBackup(nil), b.Subscriptions...)
 	for _, u := range b.Users {
 		subs = append(subs, model.SubscriptionBackup{
@@ -762,6 +816,14 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		if res.RowsAffected > 0 {
 			item.ID = existing.ID
+		} else if sb.SourceAll == 1 && seedDefaultID > 0 && !seedReused {
+			// R31-L3-H02 (F-04)：无 token 命中、且备份行是默认订阅
+			// 时，复用种子默认订阅行：就地以备份字段覆写（token 以
+			// 备份为准），不另起一行。种子行 id 保留，引用它的分配
+			// 行不受影响；subRemap 仍登记备份 id -> 复用后 id，订
+			// 阅 id 不保真仍为 BUG-A2-4 设计。
+			item.ID = seedDefaultID
+			seedReused = true
 		}
 		if err := tx.Save(&item).Error; err != nil {
 			return inboundImportCounts{}, err
