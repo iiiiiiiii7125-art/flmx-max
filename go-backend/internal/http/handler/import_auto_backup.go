@@ -91,8 +91,9 @@ func (h *Handler) importAutoBackupMeta() (exists bool, expiresAt int64) {
 }
 
 // saveImportAutoBackup 生成导入前全量快照并落盘（只保留最新一份）。
-// 失败时返回 error，调用方应使导入失败（fail-closed），避免无快照的
-// 导入破坏「导入前必有快照」的承诺。日志只记字节数，不记快照内容。
+// 失败时返回 error，调用方只记警告并继续导入（O7-010：库已损坏致
+// ExportAll 失败时，用户正是最需要恢复的场景，不得中断导入）。
+// 日志只记字节数，不记快照内容。
 func (h *Handler) saveImportAutoBackup(ctx context.Context) error {
 	backup, err := h.repo.ExportAllContext(ctx)
 	if err != nil {

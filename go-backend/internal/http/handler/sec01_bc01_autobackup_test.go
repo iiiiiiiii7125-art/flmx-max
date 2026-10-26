@@ -307,9 +307,10 @@ func TestSEC01BC01ExpiredSnapshotPurged(t *testing.T) {
 	}
 }
 
-// 快照留存失败时导入失败（fail-closed）：无快照的导入不得破坏
-// 「导入前必有快照」的承诺；DB 不被改写。
-func TestSEC01BC01SnapshotFailureFailsImportClosed(t *testing.T) {
+// O7-010（集成复核）：快照留存失败时只警告、不中断导入——库已损坏
+// 致 ExportAll 失败时，用户正是最需要从完好备份恢复的场景；导入
+// 继续执行、DB 被改写，警告进回执 importWarnings 披露，且无快照留存。
+func TestSEC01BC01SnapshotFailureWarnsAndContinuesImport(t *testing.T) {
 	h, dir := setupBC01Test(t)
 	r := gistTestRepo(t, h)
 	seedSEC01Credentials(t, r)
@@ -321,18 +322,47 @@ func TestSEC01BC01SnapshotFailureFailsImportClosed(t *testing.T) {
 	h.SetImportAutoBackupDir(blocker)
 
 	rec := callBC01Import(t, h, bc01ImportBody(t))
-	code, msg, _ := decodeBC01Envelope(t, rec)
-	if code != -2 {
-		t.Fatalf("import with unwritable snapshot dir: code=%d msg=%q, want -2", code, msg)
+	code, _, data := decodeBC01Envelope(t, rec)
+	if code != 0 {
+		t.Fatalf("import with unwritable snapshot dir: code=%d body=%s, want 0 (O7-010 warn-and-continue)", code, rec.Body.String())
 	}
 	assertSEC01ReceiptClean(t, rec.Body.String())
 
-	// DB 未被改写：新导入的键不存在。
+	var result model.ImportResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode import result: %v body=%s", err, rec.Body.String())
+	}
+	found := false
+	for _, w := range result.ImportWarnings {
+		if strings.Contains(w, "导入前自动备份失败") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("importWarnings must disclose the snapshot failure, got %v", result.ImportWarnings)
+	}
+
+	// DB 已被改写：新导入的键存在（导入未被快照失败中断）。
 	backup, err := r.ExportAllContext(context.Background())
 	if err != nil {
-		t.Fatalf("export after failed import: %v", err)
+		t.Fatalf("export after import: %v", err)
 	}
-	if _, ok := backup.Configs["imported_probe_key"]; ok {
-		t.Fatal("failed import must not modify the DB")
+	if _, ok := backup.Configs["imported_probe_key"]; !ok {
+		t.Fatal("import must proceed and modify the DB when snapshot save fails (O7-010)")
+	}
+
+	// 无快照留存：status 为 false。
+	statusRec := httptest.NewRecorder()
+	h.backupImportAutoBackupStatus(statusRec, adminRequest(t, http.MethodGet, "/api/v1/backup/import-auto-backup/status", nil))
+	_, _, statusData := decodeBC01Envelope(t, statusRec)
+	var status struct {
+		Exists    bool  `json:"exists"`
+		ExpiresAt int64 `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(statusData, &status); err != nil {
+		t.Fatalf("decode status data: %v", err)
+	}
+	if status.Exists {
+		t.Fatal("no snapshot must be retained when snapshot save fails")
 	}
 }

@@ -2202,13 +2202,14 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SEC-01 BC-01 (b)：在 ImportContext 改写 DB 之前生成导入前快照
-	// 并落盘。生成失败则导入失败（fail-closed），避免无快照的导入
-	// 破坏「导入前必有快照」的承诺；快照字节绝不进回执、日志与错误信息。
+	// 并落盘。生成失败时只记警告并继续导入（O7-010）：若当前库已损坏
+	// 致 ExportAll 失败，用户正是最需要从完好备份恢复的场景，失败即
+	// 中断会把恢复路堵死；警告进 result.ImportWarnings 向用户披露，
+	// 详情只记服务端日志。快照字节绝不进回执、日志与错误信息。
 	h.purgeExpiredImportAutoBackup()
-	if err := h.saveImportAutoBackup(r.Context()); err != nil {
-		log.Printf("backupImport: save pre-import auto-backup snapshot failed: %v", err)
-		response.WriteJSON(w, response.Err(-2, "导入前自动备份失败"))
-		return
+	snapshotErr := h.saveImportAutoBackup(r.Context())
+	if snapshotErr != nil {
+		log.Printf("backupImport: save pre-import auto-backup snapshot failed: %v", snapshotErr)
 	}
 
 	// X-P3-21（L-08-3）：导入整单事务维持（语义有意），事务绑定请求
@@ -2221,6 +2222,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.runBackupImportTailHooks(result, &req.BackupData, req.Types)
+	// O7-010：快照生成失败只警告、不中断导入（见上）；警告随回执披露。
+	if snapshotErr != nil {
+		result.ImportWarnings = append(result.ImportWarnings, "导入前自动备份失败：未生成服务端快照，本次导入仍继续；如需回滚请使用此前的手动备份")
+	}
 	// SEC-01 BC-01 (b)：每次成功导入后顺带清理过期快照（本次刚写入
 	// 新鲜快照，正常情况下此处为 no-op；懒清理的第四个入口）。
 	h.purgeExpiredImportAutoBackup()
