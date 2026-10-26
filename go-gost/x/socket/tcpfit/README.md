@@ -16,3 +16,10 @@ closed for external shapers, and never permits an interactive prompt.
 FLMX addition: bridge.sh has one extra action, `short` (5 s single-stream
 probe for ranking handshake candidates by measured bandwidth), which is not
 in the upstream bridge. tcpfit.sh itself is byte-identical to upstream.
+
+FLMX deviation (D1, PORT-3343-BATCH2-D1D2-FIX.md): bridge.sh keeps the
+egress interface in `BRIDGE_IFACE`, not upstream's `iface`, and
+`detect_iface()` prints that. Upstream's `$iface` is shadowed by the
+unassigned `local iface` in tcpfit.sh functions such as `cmd_sweep`
+(:2736) under `set -u`, which killed every deep scan with
+`iface: unbound variable`.

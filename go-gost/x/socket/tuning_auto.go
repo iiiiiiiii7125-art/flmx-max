@@ -206,6 +206,22 @@ func startTuneJob(mode string, maxGB float64) (tuneStatus, error) {
 		if mode == "restore" {
 			j.Message = "已恢复调优前的配置"
 		}
+		// D3 (PORT-3343-BATCH2-D1D2-FIX.md; verify report
+		// ~/workspace/port-3343/PORT-3343-BATCH2-VERIFY-REPORT.md §4 D3):
+		// an auto job in a restricted container finished `succeeded`
+		// / applied:true while 21 sysctl writes failed (read-only
+		// /proc/sys) — the warnings only lived in
+		// tuning-result.json. `applied` keeps its meaning (the job
+		// ran and applied what it could; redefining it would move
+		// the deep-scan gate and the restore path), so only the
+		// finished message carries the failed-setting count. The
+		// host normal path (no warnings) still reads exactly
+		// "调优完成".
+		if err == nil && mode == "auto" {
+			if d := loadTuneDetection(); d != nil && len(d.Warnings) > 0 {
+				j.Message = fmt.Sprintf("调优完成，但有 %d 项参数未生效（见警告）", len(d.Warnings))
+			}
+		}
 		if err != nil {
 			j.State, j.Stage, j.Message = "failed", "failed", err.Error()
 			if ctx.Err() == context.Canceled {

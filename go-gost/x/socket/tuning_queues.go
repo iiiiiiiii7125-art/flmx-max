@@ -60,7 +60,22 @@ func tuneQueueReplay(iface, out string) (string, error) {
 	// Query the resulting major handle so leaves bind to the actual queues.
 	if root == "mq" {
 		script += "mqmajor=$(tc qdisc show dev " + tuneShellQuote(iface) + " | awk '$1==\"qdisc\" && $2==\"mq\" {for(i=1;i<=NF;i++) if($i==\"root\") {sub(/:$/,\"\",$3); print $3; exit}}')\n"
-		script += "if [ -z \"$mqmajor\" ]; then tc qdisc replace dev " + tuneShellQuote(iface) + " root handle 1: mq; mqmajor=1; fi\n"
+		// D2 (PORT-3343-BATCH2-D1D2-FIX.md; verify report
+		// ~/workspace/port-3343/PORT-3343-BATCH2-VERIFY-REPORT.md §4.2):
+		// the kernel recreates a deleted mq root with handle 0, so
+		// the probe above reports mqmajor=0 — non-empty, so the
+		// upstream `-z` test alone skipped the repair and the leaf
+		// lines bound to `parent 0:N`, which real tc rejects
+		// ("Failed to find specified qdisc."). Treat 0 like "no
+		// handle": replace the root with handle 1: mq first, then
+		// bind the leaves to 1:N. Deliberate FLMX deviation from
+		// upstream tuning_queues.go:49-50 (same tcpfit
+		// qdisc_set_mq_leaves handling as vendored tcpfit.sh:1983
+		// and :2008); vendored tcpfit.sh itself is untouched. The
+		// only other mqmajor consumer in this file (the leaf-parent
+		// rewrite below) needs no change: after this branch mqmajor
+		// is 1 or the kernel's actual non-zero handle.
+		script += "if [ -z \"$mqmajor\" ] || [ \"$mqmajor\" = 0 ]; then tc qdisc replace dev " + tuneShellQuote(iface) + " root handle 1: mq; mqmajor=1; fi\n"
 	}
 	for _, f := range lines {
 		if f[1] == "noqueue" || f[1] == "mq" {
