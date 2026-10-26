@@ -576,6 +576,24 @@ func stripAndValidateNodeAddress(value string) (string, error) {
 	return stripped, nil
 }
 
+// stripAndValidateNodeAddressList strips :port per comma-separated item
+// and validates each stripped item (PORT-CLOSURE F-07 扩展：隧道显式
+// in_ip 双端口收口，与 PC-04/PC-05 同款 intake 校验）。单端口逐项剥离、
+// 双端口整串拒绝——单次剥离对双端口是 no-op，此前原值落库后消费侧
+// 畸形。空项原样保留（与 stripShareHostPortList 形态一致）；空串
+// 返回 ""（调用方仍走 buildTunnelInIP 派生）。
+func stripAndValidateNodeAddressList(value string) (string, error) {
+	parts := strings.Split(value, ",")
+	for i, part := range parts {
+		stripped, err := stripAndValidateNodeAddress(part)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = stripped
+	}
+	return strings.Join(parts, ","), nil
+}
+
 // validateListenAddrValue strips a single trailing :port from a node
 // listen address and validates the result. Unlike stripShareHostPort
 // it never trims brackets, so the stored default "[::]" passes through
@@ -1440,7 +1458,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	// R31-L1-E01：显式 inIp 与系统派生值同口径——按 , 分项复用
 	// stripShareHostPort 剥离 :port 后落库（整串 strip 对含逗号串
 	// 无效）。空值仍走下方 buildTunnelInIP 派生；存量不改写。
-	inIP := stripShareHostPortList(asString(req["inIp"]))
+	// PORT-CLOSURE F-07 扩展：显式 inIp 须过逐项格式校验，双端口
+	// 即拒（此前单次剥离对双端口为 no-op，原值落库后消费侧畸形，
+	// 与 PC-04/PC-05 同机制）；单端口剥离口径不变。
+	inIP, err := stripAndValidateNodeAddressList(asString(req["inIp"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("隧道入口 IP 格式无效："+err.Error()))
+		return
+	}
 	ipPreference := asString(req["ipPreference"])
 	probeTarget, probeTargetConfigured, err := parseTunnelProbeTargetFromRequest(req)
 	if err != nil {
@@ -2077,7 +2102,14 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// 前端回填的旧值也因此恒被重算）。R31-L1-E01：显式值按 , 分项
 		// 剥离 :port 后覆盖，与 buildTunnelInIP 的已剥离口径一致。
 		if v := strings.TrimSpace(asString(req["inIp"])); v != "" {
-			inIp = stripShareHostPortList(v)
+			// PORT-CLOSURE F-07 扩展：显式 inIp 逐项校验，双端口即拒
+			// （与 create 侧同口径；此前单次剥离对双端口为 no-op，
+			// 原值覆盖 buildTunnelInIP 的已剥离结果）。
+			stripped, err := stripAndValidateNodeAddressList(v)
+			if err != nil {
+				return fmt.Errorf("隧道入口 IP 格式无效：%s", err), 0
+			}
+			inIp = stripped
 		}
 		updateProtocol = "tls"
 		if len(runtimeState.OutNodes) > 0 && strings.TrimSpace(runtimeState.OutNodes[0].Protocol) != "" {
