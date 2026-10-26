@@ -361,6 +361,13 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 	case "TuneStatus":
 		return readTuneStatus(p), nil
 	case "TuneApply":
+		// Upstream 3.3.43: manual applies share the operation lock with
+		// automatic/deep jobs, so a TuneApply issued while a job runs is
+		// refused instead of racing it (批次二补遗).
+		if !tuningOperation.TryLock() {
+			return nil, fmt.Errorf("已有调优任务正在运行")
+		}
+		defer tuningOperation.Unlock()
 		if req.Restore {
 			req.Groups = nil
 		}
@@ -439,6 +446,12 @@ func readTuneStatus(p tuneParams) tuneStatus {
 	return st
 }
 
+// loadTuneBackup reads the saved original values, tolerating a missing
+// or unreadable file. It deliberately does NOT fail on a corrupt file:
+// it is only a read-only probe (tests, status checks). applyTuning
+// must not use it — it reads the backup itself and fails closed on
+// corruption (upstream 3.3.43, 批次二补遗), so a broken snapshot can
+// never be silently discarded by a mutation.
 func loadTuneBackup() map[string]string {
 	backup := map[string]string{}
 	if b, err := os.ReadFile(tuneBackupPath); err == nil {
@@ -481,7 +494,24 @@ func applyTuning(groupIDs []string, p tuneParams) (tuneStatus, error) {
 		}
 	}
 
-	backup := loadTuneBackup()
+	// Fail closed on a damaged original-values snapshot (upstream
+	// 3.3.43, 批次二补遗): a corrupt or empty backup must block the
+	// mutation, never be silently treated as "no backup", or the
+	// original values would be lost with no way to restore them.
+	// This is the manual/automatic shared path: executeTuneJob and
+	// restoreAutomaticTuning both go through applyTuning, so both
+	// get the same semantics.
+	backup := map[string]string{}
+	if b, err := os.ReadFile(tuneBackupPath); err == nil {
+		if err = json.Unmarshal(b, &backup); err != nil {
+			return tuneStatus{}, fmt.Errorf("原参数备份已损坏，已停止以保留恢复信息：%w", err)
+		}
+		if backup == nil {
+			return tuneStatus{}, fmt.Errorf("原参数备份为空，已停止调优以保留恢复信息")
+		}
+	} else if !os.IsNotExist(err) {
+		return tuneStatus{}, err
+	}
 	want := map[string]string{}
 	var confKeys []string
 	for _, g := range groups {

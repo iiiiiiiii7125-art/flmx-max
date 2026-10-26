@@ -28,15 +28,12 @@ import (
 //     bridge 存在性检查，批次二已随引擎落地移除（见 tuning_auto.go）。
 //     fake 环境不再需要 dummy bridge 文件。
 //   - 上游 TestTuneJobIsAsyncExclusiveAndCancellable 断言任务运行中
-//     老面板 TuneApply 被 tuningOperation 锁挡住；我方 TuneApply
-//     不拿该锁（3.3.42 沿袭的偏离，批次一报告 §9.3 已登记），该断
-//     言未移植，见批次二报告 §6。
-//   - 上游 TestTuneCorruptBackupBlocksMutation 未移植：上游 3.3.43 的
-//     applyTuning 在备份文件损坏时直接失败（保恢复信息），我方
-//     loadTuneBackup 损坏时静默按空备份处理（3.3.42 沿袭）。按任务
-//     书，测试与上游原文冲突时不动实现口径、只写入报告（见批次二
-//     报告 §6），该用例暂不移植，等协调者定夺是否采纳上游的
-//     fail-closed 口径后再补。
+//     老面板 TuneApply 被 tuningOperation 锁挡住；批次二补遗已按
+//     上游口径给 TuneApply 补锁，该断言已移植（见
+//     PORT-3343-BATCH2-FIXUP.md）。
+//   - 上游 TestTuneCorruptBackupBlocksMutation 已移植：批次二补遗
+//     已按上游口径把 applyTuning 改为备份损坏时 fail-closed（见
+//     PORT-3343-BATCH2-FIXUP.md）。
 
 func fakeTuneAutomation(t *testing.T) {
 	t.Helper()
@@ -176,9 +173,11 @@ func TestTuneJobIsAsyncExclusiveAndCancellable(t *testing.T) {
 	if _, err = startTuneJob("auto", 0); err == nil {
 		t.Fatal("allowed concurrent mutation")
 	}
-	// 上游原文此处还断言老面板 TuneApply 在任务运行中被
-	// tuningOperation 锁挡住；我方 TuneApply 不拿该锁（3.3.42 沿袭
-	// 的偏离，见批次二报告 §6），该断言未移植。
+	// 上游原文：任务运行中老面板 TuneApply 被 tuningOperation 锁挡住
+	// （批次二补遗已补锁，见 PORT-3343-BATCH2-FIXUP.md）。
+	if _, err = handleTuneCommand("TuneApply", map[string]interface{}{"groups": []string{"buffer"}}); err == nil {
+		t.Fatal("legacy command bypassed task lock")
+	}
 	cancelTuneJob()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -470,9 +469,54 @@ func TestTuneTCPFitBridgeMeasurementAndCleanScan(t *testing.T) {
 	}
 }
 
-// TestTuneCorruptBackupBlocksMutation is NOT ported: see the file
-// header (upstream fail-closed vs our silent-ignore backup load;
-// implementation change deferred to the coordinator, report §6).
+// TestTuneCorruptBackupBlocksMutation: upstream 3.3.43 verbatim port.
+// A corrupt backup must block the mutation and leave the system (and
+// the corrupt file itself, for manual recovery) untouched.
+func TestTuneCorruptBackupBlocksMutation(t *testing.T) {
+	fakeTuneAutomation(t)
+	if err := os.MkdirAll(filepath.Dir(tuneBackupPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tuneBackupPath, []byte("broken original backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyTuning([]string{"bbr"}, defaultTuneParams); err == nil {
+		t.Fatal("overwrote corrupt original snapshot")
+	}
+	if v, _ := readSysctl("net.ipv4.tcp_congestion_control"); v != "cubic" {
+		t.Fatal("changed the system without a recoverable snapshot")
+	}
+	if b, err := os.ReadFile(tuneBackupPath); err != nil || string(b) != "broken original backup" {
+		t.Fatalf("corrupt backup not preserved: %q %v", b, err)
+	}
+	// A "null" backup unmarshals without error but holds no original
+	// values: upstream rejects it the same way ("原参数备份为空").
+	if err := os.WriteFile(tuneBackupPath, []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyTuning([]string{"bbr"}, defaultTuneParams); err == nil {
+		t.Fatal("applied over an empty original snapshot")
+	}
+	if v, _ := readSysctl("net.ipv4.tcp_congestion_control"); v != "cubic" {
+		t.Fatal("changed the system without a recoverable snapshot")
+	}
+}
+
+// TestTuneApplyWithoutJobApplies: the TuneApply lock is only held
+// against a running job; with no job running, a manual apply goes
+// through and the lock is released afterwards (a second apply works).
+func TestTuneApplyWithoutJobApplies(t *testing.T) {
+	fakeTuneAutomation(t)
+	if _, err := handleTuneCommand("TuneApply", map[string]interface{}{"groups": []string{"buffer"}}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := readSysctl("net.ipv4.tcp_moderate_rcvbuf"); v != "1" {
+		t.Fatalf("buffer group not applied: %q", v)
+	}
+	if _, err := handleTuneCommand("TuneApply", map[string]interface{}{"groups": []string{"buffer"}}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestTuneDeepInconclusiveKeepsSummary(t *testing.T) {
 	fakeTuneAutomation(t)
