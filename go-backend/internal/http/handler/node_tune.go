@@ -86,6 +86,10 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		// enforces EstimatedGB <= maxGB <= 1000 against the last
 		// 24-hour measurement (startTuneJob).
 		MaxTrafficGB float64 `json:"maxTrafficGB"`
+		// F-05: manual shaper rate in Mbps (action "deep" only, 0 =
+		// scan for the knee). The agent skips the sweep and
+		// persists this rate after the same post-shape verification.
+		ManualShapeMbps int `json:"manualShapeMbps"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil || req.ID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -177,7 +181,17 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("流量预算需大于 0 且不超过 1000 GB"))
 			return
 		}
-		command, data = "TuneStart", map[string]interface{}{"mode": "deep", "maxTrafficGB": req.MaxTrafficGB}
+		// F-05: manual rate, 0 = scan. The agent validates it
+		// again in startTuneJob; old agents ignore the field.
+		if req.ManualShapeMbps < 0 || req.ManualShapeMbps > 100000 {
+			response.WriteJSON(w, response.ErrDefault("手动整形速率需在 1–100000 Mbps"))
+			return
+		}
+		command = "TuneStart"
+		data = map[string]interface{}{"mode": "deep", "maxTrafficGB": req.MaxTrafficGB}
+		if req.ManualShapeMbps > 0 {
+			data["manualShapeMbps"] = req.ManualShapeMbps
+		}
 	case "cancel":
 		command, data = "TuneCancel", map[string]interface{}{}
 	case "restoreAuto":

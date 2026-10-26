@@ -1274,7 +1274,9 @@ export interface NodeTuneJob {
 /** 调优动作：status/apply 走老路；auto/deep/cancel/restoreAuto
  * 是上游 3.3.43 的自动任务路（面板分别映射为 TuneStart/TuneCancel）。
  * 旧 restore（只恢复内核参数、保留整形）已随 D4U2 下线，恢复一律走
- * restoreAuto；deep 须带 maxTrafficGB（本次流量预算，0 < maxGB <= 1000）。 */
+ * restoreAuto；deep 须带 maxTrafficGB（本次流量预算，0 < maxGB <= 1000）。
+ * deep 可带 manualShapeMbps（手动整形速率 Mbps，F-05：> 0 时 agent
+ * 跳过拐点扫描、直接应用该值并验证吞吐；0/缺省为扫描拐点）。 */
 export type NodeTuneAction =
   | "status"
   | "apply"
@@ -1292,6 +1294,7 @@ export const nodeTune = (
   groups: string[] = [],
   line?: NodeTuneLine,
   maxTrafficGB?: number,
+  manualShapeMbps?: number,
 ) =>
   Network.post<NodeTuneStatus>(
     "/node/tune",
@@ -1301,6 +1304,7 @@ export const nodeTune = (
       groups,
       ...line,
       ...(maxTrafficGB != null ? { maxTrafficGB } : {}),
+      ...(manualShapeMbps != null ? { manualShapeMbps } : {}),
     },
     { timeout: 40 * 1000 },
   );

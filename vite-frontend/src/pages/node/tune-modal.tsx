@@ -44,7 +44,9 @@ const jobStateLabel: Record<string, string> = {
  * 选择公共 iperf3 对端实测出口带宽、计算并应用参数、再验证吞吐，
  * 全程后台任务；关闭弹窗不中断，2 秒轮询看进度。深度优化在 24
  * 小时内自动测速结果的基础上扫描限速器拐点并应用 HTB/fq 整形，
- * 开始前显示预计流量与本次预算，勾选允许后才执行。
+ * 开始前显示预计流量与本次预算，勾选允许后才执行。单流探测未发现
+ * 拐点时可填手动整形值跳过扫描直接应用（F-05：拐点可能高于单流
+ * 探测上限，手动值走同一条持久化与整形后验证）。
  *
  * 手填带宽/延迟输入框、分组勾选与一键测算已按上游删除（后端
  * apply / probe 分支保留，但本弹窗不再发 apply/probe；一键测算
@@ -62,6 +64,15 @@ export function NodeTuneModal({
   const [busy, setBusy] = useState<"" | NodeTuneAction>("");
   const [detail, setDetail] = useState<string | null>(null);
   const [deepAgreed, setDeepAgreed] = useState(false);
+  // F-05：手动整形速率（Mbps）。单流探测未发现拐点时可用：填入用多流
+  // sweep 实测的拐点附近值，Agent 跳过扫描、直接应用并验证吞吐。
+  const [manualRate, setManualRate] = useState("");
+  const manualMbps = Number.parseInt(manualRate, 10);
+  const manualValid =
+    manualRate.trim() !== "" &&
+    Number.isInteger(manualMbps) &&
+    manualMbps >= 1 &&
+    manualMbps <= 100000;
   const aliveRef = useRef(true);
   const prevRunningRef = useRef(false);
 
@@ -102,6 +113,7 @@ export function NodeTuneModal({
     setDetail(null);
     setBusy("");
     setDeepAgreed(false);
+    setManualRate("");
     refresh(node.id).catch(() => {
       if (aliveRef.current) setError("读取节点状态失败");
     });
@@ -140,11 +152,22 @@ export function NodeTuneModal({
     prevRunningRef.current = jobRunning;
   }, [node, jobRunning]);
 
-  const run = async (action: NodeTuneAction, maxTrafficGB?: number) => {
+  const run = async (
+    action: NodeTuneAction,
+    maxTrafficGB?: number,
+    manualShapeMbps?: number,
+  ) => {
     if (!node) return;
     setBusy(action);
     try {
-      const res = await nodeTune(node.id, action, [], undefined, maxTrafficGB);
+      const res = await nodeTune(
+        node.id,
+        action,
+        [],
+        undefined,
+        maxTrafficGB,
+        manualShapeMbps,
+      );
       if (!aliveRef.current) return;
       if (res.code !== 0 || !res.data) {
         toast.error(res.msg || "调优失败");
@@ -385,21 +408,70 @@ export function NodeTuneModal({
                             预计流量超过 1000 GB 上限，不会启动扫描。
                           </p>
                         ) : (
-                          <label className="flex cursor-pointer items-start gap-2 text-xs text-default-600">
-                            <input
-                              checked={deepAgreed}
-                              className="mt-0.5"
-                              type="checkbox"
-                              onChange={(e) =>
-                                setDeepAgreed(e.target.checked)
-                              }
-                            />
-                            <span>
-                              允许本次测速使用上述流量（预计约{" "}
-                              {detection.estimatedGB} GB，本次预算{" "}
-                              {deepBudget} GB）
-                            </span>
-                          </label>
+                          <>
+                            <label className="flex cursor-pointer items-start gap-2 text-xs text-default-600">
+                              <input
+                                checked={deepAgreed}
+                                className="mt-0.5"
+                                type="checkbox"
+                                onChange={(e) =>
+                                  setDeepAgreed(e.target.checked)
+                                }
+                              />
+                              <span>
+                                允许本次测速使用上述流量（预计约{" "}
+                                {detection.estimatedGB} GB，本次预算{" "}
+                                {deepBudget} GB）
+                              </span>
+                            </label>
+                            <div className="space-y-1 rounded-lg bg-default-100 p-2">
+                              <p className="text-xs text-default-600">
+                                单流探测未发现拐点时可用：填入你用多流
+                                sweep 实测的拐点附近整形值（如 4710
+                                Mbps），Agent
+                                跳过扫描、直接应用 HTB/fq
+                                整形并验证吞吐，只消耗两次验证测速的流量。整形值本身不验证是否为真实拐点；可随时恢复原配置。
+                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                  aria-label="手动整形速率（Mbps）"
+                                  className="w-32 rounded-md border border-divider bg-background px-2 py-1 text-xs"
+                                  inputMode="numeric"
+                                  placeholder="如 4710"
+                                  type="number"
+                                  value={manualRate}
+                                  onChange={(e) =>
+                                    setManualRate(e.target.value)
+                                  }
+                                />
+                                <span className="text-xs text-default-500">
+                                  Mbps
+                                </span>
+                                <Button
+                                  isDisabled={
+                                    jobRunning ||
+                                    busy !== "" ||
+                                    !deepAgreed ||
+                                    !manualValid ||
+                                    !detection ||
+                                    detection.estimatedGB > 1000
+                                  }
+                                  isLoading={busy === "deep"}
+                                  size="sm"
+                                  variant="bordered"
+                                  onPress={() =>
+                                    void run(
+                                      "deep",
+                                      deepBudget,
+                                      manualMbps,
+                                    )
+                                  }
+                                >
+                                  手动应用整形
+                                </Button>
+                              </div>
+                            </div>
+                          </>
                         )}
                       </div>
                     ) : (

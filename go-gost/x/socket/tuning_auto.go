@@ -152,7 +152,7 @@ func readTuneJob() *tuneJob {
 	return &j
 }
 
-func startTuneJob(mode string, maxGB float64) (tuneStatus, error) {
+func startTuneJob(mode string, maxGB float64, manualMbps int) (tuneStatus, error) {
 	if mode != "auto" && mode != "deep" && mode != "restore" {
 		return tuneStatus{}, fmt.Errorf("未知调优模式")
 	}
@@ -178,6 +178,13 @@ func startTuneJob(mode string, maxGB float64) (tuneStatus, error) {
 			tuningOperation.Unlock()
 			return tuneStatus{}, fmt.Errorf("请先确认本次深度优化的预计流量（约 %.1f GB）", d.EstimatedGB)
 		}
+		// F-05 (PORT-REVIEW-L2-E01): manual shaper rate, 0 = scan
+		// for the knee. The deep gate (Applied + 24 h + budget)
+		// above still applies to the manual path unchanged.
+		if manualMbps < 0 || manualMbps > 100000 {
+			tuningOperation.Unlock()
+			return tuneStatus{}, fmt.Errorf("手动整形速率需在 1–100000 Mbps")
+		}
 	}
 	var token [12]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -185,6 +192,9 @@ func startTuneJob(mode string, maxGB float64) (tuneStatus, error) {
 		return tuneStatus{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	if mode == "deep" && manualMbps > 0 {
+		ctx = context.WithValue(ctx, tuneDeepManualKey{}, manualMbps)
+	}
 	j := &tuneJob{ID: hex.EncodeToString(token[:]), Mode: mode, State: "running", Stage: "preparing", Percent: 2, Message: "准备调优环境", StartedAt: time.Now().UnixMilli()}
 	path := tuneStatePath("tuning-job.json")
 	if err := saveTuneJSON(path, j); err != nil {

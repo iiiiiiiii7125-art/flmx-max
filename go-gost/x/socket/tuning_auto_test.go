@@ -253,12 +253,12 @@ func TestStartTuneJobRejectsNonLinuxAndUnknownMode(t *testing.T) {
 	old := tunePlatform
 	tunePlatform = "windows"
 	t.Cleanup(func() { tunePlatform = old })
-	if _, err := startTuneJob("auto", 0); err == nil || !strings.Contains(err.Error(), "Linux") {
+	if _, err := startTuneJob("auto", 0, 0); err == nil || !strings.Contains(err.Error(), "Linux") {
 		t.Fatalf("non-linux: %v", err)
 	}
 	tunePlatform = "linux"
 	for _, mode := range []string{"", "bogus", "AUTO"} {
-		if _, err := startTuneJob(mode, 0); err == nil || !strings.Contains(err.Error(), "未知调优模式") {
+		if _, err := startTuneJob(mode, 0, 0); err == nil || !strings.Contains(err.Error(), "未知调优模式") {
 			t.Fatalf("mode %q: %v", mode, err)
 		}
 	}
@@ -278,7 +278,7 @@ func TestStartTuneJobCancel(t *testing.T) {
 	}
 	t.Cleanup(func() { tunePlatform, tuneAutoExecute = oldPlatform, oldExec })
 
-	st, err := startTuneJob("auto", 0)
+	st, err := startTuneJob("auto", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestStartTuneJobCancel(t *testing.T) {
 		t.Fatal("job goroutine did not start")
 	}
 	// A second job while one runs is refused (single-flight).
-	if _, err := startTuneJob("auto", 0); err == nil || !strings.Contains(err.Error(), "已有调优任务正在运行") {
+	if _, err := startTuneJob("auto", 0, 0); err == nil || !strings.Contains(err.Error(), "已有调优任务正在运行") {
 		t.Fatalf("second start: %v", err)
 	}
 	cancelTuneJob()

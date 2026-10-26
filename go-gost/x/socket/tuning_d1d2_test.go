@@ -266,7 +266,7 @@ func TestTuneAutoJobMessageCountsFailedSettings(t *testing.T) {
 		return oldWrite(key, value)
 	}
 	t.Cleanup(func() { tuneWrite = oldWrite })
-	if _, err := startTuneJob("auto", 0); err != nil {
+	if _, err := startTuneJob("auto", 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)

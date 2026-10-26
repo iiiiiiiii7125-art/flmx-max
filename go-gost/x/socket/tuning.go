@@ -310,6 +310,11 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 		var sreq struct {
 			Mode         string  `json:"mode"`
 			MaxTrafficGB float64 `json:"maxTrafficGB"`
+			// F-05: manual shaper rate in Mbps for a deep job
+			// (0 = scan for the knee). Unknown to old agents;
+			// old agents ignore the field, new agents validate
+			// it in startTuneJob; the panel validates it first.
+			ManualShapeMbps int `json:"manualShapeMbps"`
 		}
 		if data != nil {
 			raw, err := json.Marshal(data)
@@ -320,7 +325,7 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 				return nil, fmt.Errorf("解析调优参数失败: %v", err)
 			}
 		}
-		return startTuneJob(sreq.Mode, sreq.MaxTrafficGB)
+		return startTuneJob(sreq.Mode, sreq.MaxTrafficGB, sreq.ManualShapeMbps)
 	}
 	// Probe is a separate read-only command: it measures a suggested
 	// line and must never share Apply's write path, so it is parsed

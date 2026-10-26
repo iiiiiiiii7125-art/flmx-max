@@ -162,7 +162,7 @@ func TestTuneJobIsAsyncExclusiveAndCancellable(t *testing.T) {
 	fakeTuneAutomation(t)
 	entered := make(chan struct{})
 	tuneAutoExecute = func(ctx context.Context, _ string, _ float64) error { close(entered); <-ctx.Done(); return ctx.Err() }
-	st, err := startTuneJob("auto", 0)
+	st, err := startTuneJob("auto", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestTuneJobIsAsyncExclusiveAndCancellable(t *testing.T) {
 		t.Fatalf("start must return immediately: %+v", st)
 	}
 	<-entered
-	if _, err = startTuneJob("auto", 0); err == nil {
+	if _, err = startTuneJob("auto", 0, 0); err == nil {
 		t.Fatal("allowed concurrent mutation")
 	}
 	// 上游原文：任务运行中老面板 TuneApply 被 tuningOperation 锁挡住
@@ -200,19 +200,19 @@ func TestTuneJobIsAsyncExclusiveAndCancellable(t *testing.T) {
 
 func TestTuneDeepRequiresRecentMeasurementAndTrafficBudget(t *testing.T) {
 	fakeTuneAutomation(t)
-	if _, err := startTuneJob("deep", 20); err == nil {
+	if _, err := startTuneJob("deep", 20, 0); err == nil {
 		t.Fatal("deep accepted without a measurement")
 	}
 	d := &tuneDetection{Applied: true, MeasuredAt: time.Now().UnixMilli(), EstimatedGB: 30}
 	if err := saveTuneJSON(tuneStatePath("tuning-result.json"), d); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := startTuneJob("deep", 29); err == nil {
+	if _, err := startTuneJob("deep", 29, 0); err == nil {
 		t.Fatal("deep accepted an unconfirmed traffic estimate")
 	}
 	d.MeasuredAt = time.Now().Add(-25 * time.Hour).UnixMilli()
 	_ = saveTuneJSON(tuneStatePath("tuning-result.json"), d)
-	if _, err := startTuneJob("deep", 40); err == nil {
+	if _, err := startTuneJob("deep", 40, 0); err == nil {
 		t.Fatal("deep accepted stale measurement")
 	}
 }
@@ -580,7 +580,7 @@ func TestTuneRestoreClearsStuckTransaction(t *testing.T) {
 		}
 		return base(ctx, name, args...)
 	}
-	if _, err = startTuneJob("deep", 10); err == nil || !strings.Contains(err.Error(), "恢复原配置") {
+	if _, err = startTuneJob("deep", 10, 0); err == nil || !strings.Contains(err.Error(), "恢复原配置") {
 		t.Fatalf("deep tuning over a stuck transaction: %v", err)
 	}
 	done := make(chan error, 1)
@@ -589,7 +589,7 @@ func TestTuneRestoreClearsStuckTransaction(t *testing.T) {
 		done <- err
 		return err
 	}
-	if _, err = startTuneJob("restore", 0); err != nil {
+	if _, err = startTuneJob("restore", 0, 0); err != nil {
 		t.Fatalf("restore blocked: %v", err)
 	}
 	if err = <-done; err != nil {

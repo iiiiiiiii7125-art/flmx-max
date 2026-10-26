@@ -191,9 +191,39 @@ func tuneTrafficBytes(iface string) (uint64, error) {
 	return total, nil
 }
 
+// tuneDeepManualKey carries an operator-supplied shaper rate (Mbps)
+// for a deep job through the job context: absent/0 means "scan for
+// the knee with the engine" (the default); > 0 means "skip the sweep
+// and persist this rate, then run the same post-shape verification
+// as a scanned knee". It is request-scoped (set once by
+// startTuneJob for the deep job), never persisted into
+// tuning-result.json, and never read by the auto/restore paths.
+// The value itself is the operator's own measurement (e.g. a
+// multi-stream sweep done outside the panel); the agent verifies it
+// with the same single/parallel post-shape checks as a scanned
+// knee, and restoreAutomaticTuning still undoes it.
+type tuneDeepManualKey struct{}
+
+func tuneDeepManualMbps(ctx context.Context) int {
+	if v, ok := ctx.Value(tuneDeepManualKey{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
 func executeDeepTuning(ctx context.Context, d *tuneDetection, maxGB float64) (err error) {
 	if d == nil {
 		return fmt.Errorf("请先完成自动调优")
+	}
+	// F-05 (PORT-REVIEW-L2-E01): on links whose policer knee sits
+	// above what the engine's single-stream unshaped probe can reach,
+	// the sweep always reports NO_KNEE and persistTuneShape is never
+	// reached. A manual rate skips the sweep and drives the same
+	// persist + post-shape verification below; the sweep path is
+	// unchanged.
+	manualRate := tuneDeepManualMbps(ctx)
+	if manualRate < 0 || manualRate > 100000 {
+		return fmt.Errorf("手动整形速率需在 1–100000 Mbps")
 	}
 	if err = captureTuneQueues(ctx, d); err != nil {
 		return err
@@ -278,42 +308,59 @@ func executeDeepTuning(ctx context.Context, d *tuneDetection, maxGB float64) (er
 			}
 		}
 	}()
-	tuneProgress("scanning", 35, fmt.Sprintf("扫描限速器拐点，流量预算 %.1f GB；可能需要数分钟", maxGB))
-	out, scanErr := callTuneEngine(scanCtx, "sweep", d, strconv.Itoa(d.BandwidthMbps), strconv.FormatFloat(maxGB, 'f', 1, 64))
-	if scanCtx.Err() != nil {
-		return context.Cause(scanCtx)
-	}
-	values := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "FLYX_SWEEP_") {
-			kv := strings.SplitN(strings.TrimPrefix(line, "FLYX_SWEEP_"), "=", 2)
-			if len(kv) == 2 {
-				values[kv[0]] = kv[1]
+	// The traffic meter above still guards the manual path
+	// (persist + two 10 s verification samples).
+	var rate, knee int
+	if manualRate > 0 {
+		rate = manualRate
+		tuneProgress("shaping", 75, fmt.Sprintf("按手动整形值 %d Mbps 应用出向整形并验证（跳过拐点扫描）", rate))
+	} else {
+		tuneProgress("scanning", 35, fmt.Sprintf("扫描限速器拐点，流量预算 %.1f GB；可能需要数分钟", maxGB))
+		out, scanErr := callTuneEngine(scanCtx, "sweep", d, strconv.Itoa(d.BandwidthMbps), strconv.FormatFloat(maxGB, 'f', 1, 64))
+		if scanCtx.Err() != nil {
+			return context.Cause(scanCtx)
+		}
+		values := map[string]string{}
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(line, "FLYX_SWEEP_") {
+				kv := strings.SplitN(strings.TrimPrefix(line, "FLYX_SWEEP_"), "=", 2)
+				if len(kv) == 2 {
+					values[kv[0]] = kv[1]
+				}
 			}
 		}
-	}
-	rate, _ := strconv.Atoi(values["RECOMMEND"])
-	knee, _ := strconv.Atoi(values["KNEE"])
-	if values["INCONCLUSIVE"] == "1" || values["OUT_OF_RANGE"] == "1" || values["CANCELLED"] == "1" || values["ABOVE_CAP"] != "" {
-		d.DeepSummary = "本次未能可靠判断限速器拐点，保留原整形配置"
-		keepSummary = true
-		return fmt.Errorf("%s；可稍后重试，详情见任务日志", d.DeepSummary)
-	}
-	if values["NO_KNEE"] == "1" {
-		d.DeepSummary = "本次未发现明确限速器拐点，保留原队列与整形配置"
-		if err = restoreTuneQueues("current-qdisc.sh"); err != nil {
-			return err
+		rate, _ = strconv.Atoi(values["RECOMMEND"])
+		knee, _ = strconv.Atoi(values["KNEE"])
+		if values["INCONCLUSIVE"] == "1" || values["OUT_OF_RANGE"] == "1" || values["CANCELLED"] == "1" || values["ABOVE_CAP"] != "" {
+			d.DeepSummary = "本次未能可靠判断限速器拐点，保留原整形配置"
+			keepSummary = true
+			return fmt.Errorf("%s；可稍后重试，详情见任务日志", d.DeepSummary)
 		}
-		if err = saveTuneJSON(tuneStatePath("tuning-result.json"), d); err != nil {
-			return err
+		if values["NO_KNEE"] == "1" {
+			// F-05 (c): say what the probe actually proved — the
+			// single stream reached this rate with no loss jump —
+			// and point at the manual path, instead of reporting
+			// "no policer" when the knee may sit above the
+			// single-stream ceiling.
+			if unshaped := values["UNSHAPED"]; unshaped != "" {
+				d.DeepSummary = fmt.Sprintf("单流不限速探测达 %s Mbps 且无丢包跳变，未发现明确限速器拐点；拐点可能高于单流探测上限，可填入实测拐点手动应用整形，保留原队列与整形配置", unshaped)
+			} else {
+				d.DeepSummary = "本次未发现明确限速器拐点，保留原队列与整形配置"
+			}
+			if err = restoreTuneQueues("current-qdisc.sh"); err != nil {
+				return err
+			}
+			if err = saveTuneJSON(tuneStatePath("tuning-result.json"), d); err != nil {
+				return err
+			}
+			committed = true
+			return nil
 		}
-		committed = true
-		return nil
+		if scanErr != nil || rate <= 0 || knee <= 0 || rate > knee || rate > 100000 {
+			return fmt.Errorf("拐点扫描未取得可靠结果，未更改整形配置：%v", scanErr)
+		}
+		tuneProgress("shaping", 75, fmt.Sprintf("已定位拐点 %d Mbps，应用 %d Mbps 出向整形并验证", knee, rate))
 	}
-	if scanErr != nil || rate <= 0 || knee <= 0 || rate > knee || rate > 100000 {
-		return fmt.Errorf("拐点扫描未取得可靠结果，未更改整形配置：%v", scanErr)
-	}
-	tuneProgress("shaping", 75, fmt.Sprintf("已定位拐点 %d Mbps，应用 %d Mbps 出向整形并验证", knee, rate))
 	if err = persistTuneShape(scanCtx, d, rate); err != nil {
 		return err
 	}
@@ -333,7 +380,12 @@ func executeDeepTuning(ctx context.Context, d *tuneDetection, maxGB float64) (er
 		return fmt.Errorf("整形后验证吞吐偏低或重传偏高，已回退原队列；可在对端空闲时重试")
 	}
 	d.ShapeMbps = rate
-	d.DeepSummary = fmt.Sprintf("拐点 %d Mbps，出向整形 %d Mbps", knee, rate)
+	if manualRate > 0 {
+		// No knee was measured on this run; do not report one.
+		d.DeepSummary = fmt.Sprintf("手动整形 %d Mbps（未扫描拐点，整形后验证通过）", rate)
+	} else {
+		d.DeepSummary = fmt.Sprintf("拐点 %d Mbps，出向整形 %d Mbps", knee, rate)
+	}
 	if err = saveTuneJSON(tuneStatePath("tuning-result.json"), d); err != nil {
 		return err
 	}
