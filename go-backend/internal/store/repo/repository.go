@@ -3418,6 +3418,10 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点地址（节点 #%d）含非法结构字符，已清空，恢复后请在节点设置中重新填写", n.ID)
 			serverIP = ""
 		}
+		// R30-FIX-F05（写侧归一化，用户 2026-10-26 拍板）：备份恢复
+		// 亦属节点入库语义，同口径剥离 :port 后再存。extraIPs 不在
+		// 本次三字段口径内。
+		serverIP = stripIngressHostPort(serverIP)
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3426,8 +3430,8 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			RenewalCycle: sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
 			Secret:       n.Secret,
 			ServerIP:     serverIP,
-			ServerIPV4:   sql.NullString{String: n.ServerIPv4, Valid: n.ServerIPv4 != ""},
-			ServerIPV6:   sql.NullString{String: n.ServerIPv6, Valid: n.ServerIPv6 != ""},
+			ServerIPV4:   sql.NullString{String: stripIngressHostPort(n.ServerIPv4), Valid: n.ServerIPv4 != ""},
+			ServerIPV6:   sql.NullString{String: stripIngressHostPort(n.ServerIPv6), Valid: n.ServerIPv6 != ""},
 			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。
 			ExtraIPs:      sql.NullString{String: n.ExtraIPs, Valid: n.ExtraIPs != ""},
 			Port:          n.Port,

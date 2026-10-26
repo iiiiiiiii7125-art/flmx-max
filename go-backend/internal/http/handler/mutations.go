@@ -574,7 +574,11 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	name := asString(req["name"])
-	serverIP := asString(req["serverIp"])
+	// R30-FIX-F04（写侧归一化，用户 2026-10-26 拍板）：入库前剥离
+	// :port 再存。先归一化再校验，":port-only" 等退化值归一化为
+	// 空后由下方的空值检查拒绝；非法值（非 host:port 形态）按
+	// stripShareHostPort 语义原样通过。
+	serverIP := stripShareHostPort(asString(req["serverIp"]))
 	if name == "" || serverIP == "" {
 		response.WriteJSON(w, response.ErrDefault("节点名称和地址不能为空"))
 		return
@@ -611,8 +615,9 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		name,
 		nodeSecret,
 		serverIP,
-		nullableText(asString(req["serverIpV4"])),
-		nullableText(asString(req["serverIpV6"])),
+		// R30-FIX-F04：显式字段同口径归一化（写侧）。
+		nullableText(stripShareHostPort(asString(req["serverIpV4"]))),
+		nullableText(stripShareHostPort(asString(req["serverIpV6"]))),
 		defaultString(asString(req["port"]), "1000-65535"),
 		nullableText(asString(req["interfaceName"])),
 		nullableText(""),
@@ -708,7 +713,9 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	serverIP := currentNode.ServerIP
 	if _, ok := req["serverIp"]; ok {
-		serverIP = asString(req["serverIp"])
+		// R30-FIX-F04（写侧归一化）：仅提交的字段归一化；未提交
+		// 的字段保持存量原值。先归一化再校验（下方 IsValidNodeAddress）。
+		serverIP = stripShareHostPort(asString(req["serverIp"]))
 	}
 	if serverIP != "" {
 		if err := IsValidNodeAddress(serverIP); err != nil {
@@ -728,6 +735,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	resolveText := func(key string, current interface{}) interface{} {
 		if _, ok := req[key]; ok {
 			return nullableText(asString(req[key]))
+		}
+		return current
+	}
+	// R30-FIX-F04：节点地址字段的归一化版 resolve——仅提交的字段
+	// 剥离 :port 后存；未提交的字段保持存量原值（存量不改写）。
+	resolveNodeIP := func(key string, current interface{}) interface{} {
+		if _, ok := req[key]; ok {
+			return nullableText(stripShareHostPort(asString(req[key])))
 		}
 		return current
 	}
@@ -773,8 +788,8 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.UpdateNode(id,
 		nodeName,
 		serverIP,
-		resolveText("serverIpV4", currentNode.ServerIPV4),
-		resolveText("serverIpV6", currentNode.ServerIPV6),
+		resolveNodeIP("serverIpV4", currentNode.ServerIPV4),
+		resolveNodeIP("serverIpV6", currentNode.ServerIPV6),
 		nodePort,
 		resolveText("interfaceName", currentNode.InterfaceName),
 		resolveText("extraIPs", currentNode.ExtraIPs),
@@ -807,10 +822,12 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	// 的中转 RemoteAddr。改址落库后：刷新经本节点拨号的全部入站白
 	// 名单，并对落在本节点的 Managed 中转逐条重算 RemoteAddr。
 	addrChanged := serverIP != currentNode.ServerIP
-	if _, ok := req["serverIpV4"]; ok && asString(req["serverIpV4"]) != currentNode.ServerIPV4.String {
+	// R30-FIX-F04：变更检测按归一化后的提交值比对——提交与存量
+	// 仅差 :port 时不触发无意义的白名单/中转重算。
+	if _, ok := req["serverIpV4"]; ok && stripShareHostPort(asString(req["serverIpV4"])) != currentNode.ServerIPV4.String {
 		addrChanged = true
 	}
-	if _, ok := req["serverIpV6"]; ok && asString(req["serverIpV6"]) != currentNode.ServerIPV6.String {
+	if _, ok := req["serverIpV6"]; ok && stripShareHostPort(asString(req["serverIpV6"])) != currentNode.ServerIPV6.String {
 		addrChanged = true
 	}
 	if _, ok := req["extraIPs"]; ok && asString(req["extraIPs"]) != currentNode.ExtraIPs.String {
@@ -858,7 +875,11 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	cfgMap := asMap(req["sshConfig"])
 	host := strings.TrimSpace(asString(cfgMap["host"]))
 	if host == "" {
-		host = strings.TrimSpace(asString(req["serverIp"]))
+		// R30-FIX-F03（sweep）：serverIp 派生的 SSH host 回退可含
+		// :port；下游 runner 以 JoinHostPort(host, sshPort) 拼出
+		// "IP:port:22" 畸形地址致拨号失败。仅此派生分支剥离，
+		// 显式填的 sshConfig.host 不动。
+		host = stripShareHostPort(asString(req["serverIp"]))
 	}
 	// V2-06/V2-07：port 改 presence/零值语义——缺席即 0，更新路径
 	// 由下方保值分支回填既有值，create 路径由既有校验（port<=0
@@ -3312,6 +3333,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	inIp := strings.TrimSpace(asString(req["inIp"]))
+	// R30-FIX-F01：intake 剥离含 :port 的 inIp（与 buildTunnelInIP
+	// 同口径复用 stripShareHostPort，R25 口径）。节点显式字段含
+	// :port 时前端下拉会原样提交该值；不剥离则原值落库，下发层
+	// “端口胜出”致 inPort 被静默丢弃、服务监听在嵌入端口上。
+	inIp = stripShareHostPort(inIp)
 	if inIp != "" && len(entryNodes) > 1 {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
@@ -3514,6 +3540,10 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	if rawInIP, ok := req["inIp"]; ok {
 		hasInIP = true
 		inIp = asString(rawInIP)
+		// R30-FIX-F01：与 forwardCreate 同口径，intake 剥离含 :port
+		// 的 inIp（含取自 extraIPs 的下拉值）；hasInIP 时原值进
+		// replaceForwardPorts，此处一次收敛。
+		inIp = stripShareHostPort(inIp)
 	}
 	fwdEntryNodes, _ := h.tunnelEntryNodeIDs(tunnelID)
 	if hasInIP && strings.TrimSpace(inIp) != "" && len(fwdEntryNodes) > 1 {
@@ -6521,7 +6551,12 @@ func selectTunnelDialHost(fromNode, toNode *nodeRecord, ipPreference string, con
 		return "", errors.New("节点不存在")
 	}
 	if strings.TrimSpace(connectIp) != "" {
-		return strings.TrimSpace(connectIp), nil
+		// R30-FIX-F02（sweep）：connectIp 与 forward inIp 同源（下拉
+		// 取节点原始字段），可含 :port；须剥离后作拨号 host，否则
+		// 下游再拼 ":port" 即产出 "[IP:port]:port" 畸形地址（链配
+		// 置、联邦 RuntimeTarget、延迟/诊断探针同受）。存储
+		// chain_tunnel.connect_ip 保持原值，收敛在消费点。
+		return stripShareHostPort(connectIp), nil
 	}
 	fromV4 := nodeSupportsV4(fromNode)
 	fromV6 := nodeSupportsV6(fromNode)

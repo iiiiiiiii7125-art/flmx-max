@@ -296,9 +296,11 @@ func (r *Repository) CreateRemoteNode(name, secret, serverIP, portRange string, 
 		return errors.New("repository not initialized")
 	}
 	node := model.Node{
-		Name:          name,
-		Secret:        secret,
-		ServerIP:      serverIP,
+		Name:   name,
+		Secret: secret,
+		// R30-FIX-F06（写侧归一化，用户 2026-10-26 拍板）：联邦同步
+		// 建节点亦属节点入库语义，同口径剥离 :port 后再存。
+		ServerIP:      stripIngressHostPort(serverIP),
 		ServerIPV4:    sql.NullString{},
 		ServerIPV6:    sql.NullString{},
 		Port:          portRange,
