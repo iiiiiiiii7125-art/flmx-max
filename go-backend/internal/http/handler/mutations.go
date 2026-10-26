@@ -5485,19 +5485,21 @@ func buildTunnelInIP(inNodes []tunnelRuntimeNode, nodes map[int64]*nodeRecord, i
 		v4 := strings.TrimSpace(node.ServerIPv4)
 		v6 := strings.TrimSpace(node.ServerIPv6)
 		var addrs []string
+		// R29-FIX-F01：显式 ServerIPv4/ServerIPv6 同回退分支口径剥离
+		// :port（写侧只校验 serverIp，显式字段可原值落库含端口）。
 		if preferV6 {
 			if v6 != "" {
-				addrs = append(addrs, v6)
+				addrs = append(addrs, stripShareHostPort(v6))
 			}
 			if v4 != "" {
-				addrs = append(addrs, v4)
+				addrs = append(addrs, stripShareHostPort(v4))
 			}
 		} else {
 			if v4 != "" {
-				addrs = append(addrs, v4)
+				addrs = append(addrs, stripShareHostPort(v4))
 			}
 			if v6 != "" {
-				addrs = append(addrs, v6)
+				addrs = append(addrs, stripShareHostPort(v6))
 			}
 		}
 		// R28-FIX-F01（sweep）：ServerIP 回退分支可含 :port；剥离
