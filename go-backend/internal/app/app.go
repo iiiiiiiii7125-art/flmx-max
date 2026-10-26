@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -95,6 +96,9 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	h := handler.New(r, cfg.JWTSecret)
+	// SEC-01 BC-01 (b)：导入前自动备份快照落盘目录与 DB 同级
+	//（与 jwt_secret 同惯例；默认 /app/data/import-auto-backup.json）。
+	h.SetImportAutoBackupDir(filepath.Dir(cfg.DBPath))
 	router := httpserver.NewRouter(h, cfg.JWTSecret)
 
 	s := &http.Server{

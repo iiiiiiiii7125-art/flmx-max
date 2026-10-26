@@ -34,11 +34,17 @@ import (
 )
 
 type Handler struct {
-	repo        *repo.Repository
-	jwtSecret   string
-	wsServer    *ws.Server
-	metrics     *metrics.IngestionService
-	healthCheck *health.Checker
+	repo      *repo.Repository
+	jwtSecret string
+	// SEC-01 BC-01 (b)：导入前自动备份快照的服务端留存目录
+	//（app.New 以 filepath.Dir(cfg.DBPath) 显式设置；未设置时回落
+	//到 repo.DBPath() 同级）。importAutoBackupMu 串行化快照的
+	//留存写与过期清理。
+	importAutoBackupDir string
+	importAutoBackupMu  sync.Mutex
+	wsServer            *ws.Server
+	metrics             *metrics.IngestionService
+	healthCheck         *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
 	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
 	nftablesManager *serializedNftManager
@@ -279,6 +285,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system/upgrade", h.systemUpgrade)
 	mux.HandleFunc("/api/v1/system/upgrade/status", h.systemUpgradeStatus)
 	mux.HandleFunc("/api/v1/backup/export", h.backupExport)
+	mux.HandleFunc("/api/v1/backup/import-auto-backup", h.backupImportAutoBackup)
+	mux.HandleFunc("/api/v1/backup/import-auto-backup/status", h.backupImportAutoBackupStatus)
 	mux.HandleFunc("/api/v1/backup/gist/status", h.gistBackupStatus)
 	mux.HandleFunc("/api/v1/backup/gist/save", h.gistBackupSave)
 	mux.HandleFunc("/api/v1/backup/gist/upload", h.gistBackupUpload)
@@ -2178,16 +2186,28 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SEC-01：导入前不再做全量自动备份导出。旧逻辑把 ExportAllContext
-	// 的整库快照（用户密码 hash、节点 secret、配置 token）经
-	// runBackupImportTailHooks 塞进回执 AutoBackup 字段，直接向 API
-	// 调用方泄露凭据；且 ImportContext 失败时直接返回错误，从不用该
-	// 快照回滚，该导出只为回执服务。
+	// SEC-01：导入前不再把全量自动备份导出塞进回执。旧逻辑把
+	// ExportAllContext 的整库快照（用户密码 hash、节点 secret、
+	// 配置 token）经 runBackupImportTailHooks 塞进回执 AutoBackup
+	// 字段，直接向 API 调用方泄露凭据；且 ImportContext 失败时直接
+	// 返回错误，从不用该快照回滚，该导出只为回执服务。
+	// SEC-01 BC-01 (b)：快照改为只留存服务端文件（最新一份、24h
+	// 过期，见 import_auto_backup.go），回执仍不得含 autoBackup。
 
 	// O7-009：版本兼容性检查（repo.Import 同样校验，此处提前给中文提示）。
 	if req.BackupData.Version != "1.0" {
 		// J-008：错误码统一为 -2
 		response.WriteJSON(w, response.Err(-2, "备份版本不支持（仅支持 1.0）"))
+		return
+	}
+
+	// SEC-01 BC-01 (b)：在 ImportContext 改写 DB 之前生成导入前快照
+	// 并落盘。生成失败则导入失败（fail-closed），避免无快照的导入
+	// 破坏「导入前必有快照」的承诺；快照字节绝不进回执、日志与错误信息。
+	h.purgeExpiredImportAutoBackup()
+	if err := h.saveImportAutoBackup(r.Context()); err != nil {
+		log.Printf("backupImport: save pre-import auto-backup snapshot failed: %v", err)
+		response.WriteJSON(w, response.Err(-2, "导入前自动备份失败"))
 		return
 	}
 
@@ -2201,6 +2221,9 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.runBackupImportTailHooks(result, &req.BackupData, req.Types)
+	// SEC-01 BC-01 (b)：每次成功导入后顺带清理过期快照（本次刚写入
+	// 新鲜快照，正常情况下此处为 no-op；懒清理的第四个入口）。
+	h.purgeExpiredImportAutoBackup()
 	response.WriteJSON(w, response.OK(result))
 }
 
