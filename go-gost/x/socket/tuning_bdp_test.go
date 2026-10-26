@@ -307,8 +307,10 @@ func TestTuneBdpSizes(t *testing.T) {
 		{"10G long-haul", tuneParams{10000, 200}, 65536, 256 * mib, "受内存限制", "1048576 2097152 4194304"},
 		// The tcp_mem floors on a tiny machine.
 		{"tiny", tuneParams{100, 100}, 128, 4 * mib, "受内存限制", "4096 8192 16384"},
-		// Unknown memory (ram 0): no cap to zero, floors still apply.
-		{"unknown memory", tuneParams{1000, 150}, 0, 39597152, "带宽 × 延迟 × 2 + 2MB", "4096 8192 16384"},
+		// Unknown memory (ram 0): D43-T5 caps the budget at 4 MiB instead
+		// of leaving it unbounded (upstream
+		// TestTuneMissingMemoryCannotCreateUnboundedBuffer).
+		{"unknown memory", tuneParams{1000, 150}, 0, 4 * mib, "受内存限制", "4096 8192 16384"},
 		// Zero bandwidth degrades to the floor, never to zero.
 		{"zero bandwidth", tuneParams{0, 150}, 2048, 4 * mib, "最低 4MB", "32768 65536 131072"},
 		// Max line, huge RTT: capped by the 256 MiB ceiling, no overflow.

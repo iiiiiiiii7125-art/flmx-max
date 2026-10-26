@@ -45,6 +45,10 @@ type tuneParams struct {
 	RTTMs         int `json:"rttMs"`
 }
 
+// defaultTuneParams is the fallback line when nothing was ever applied.
+// Upstream 3.3.43: for old panels only — the automatic job never falls
+// back to it (a failed measurement fails the job instead of applying a
+// guessed line).
 var defaultTuneParams = tuneParams{BandwidthMbps: 1000, RTTMs: 150}
 
 func (p tuneParams) valid() bool {
@@ -63,6 +67,10 @@ type tuneSizes struct {
 	TCPMem string `json:"tcpMem"`
 }
 
+// tunePageSize is os.Getpagesize behind a variable so tests can use a
+// 16K-page machine (upstream 3.3.43 stopped hard-coding 4096).
+var tunePageSize = os.Getpagesize
+
 // tuneSizesFor sizes the buffers (upstream 3.3.42, tcpfit-style derivation):
 //   - per-socket maximum 2×BDP + 2 MiB, at least 4 MiB, and at most 1/32
 //     of the memory (1/8 of the TCP budget below, so eight full-speed
@@ -75,7 +83,8 @@ type tuneSizes struct {
 // The intermediate values fit int64 for the whole valid() range
 // (max BDP = 100000 Mbps × 2000 ms = 25 GB), so no overflow guard is
 // needed beyond valid() at the command boundary; tuneSizesFor itself
-// stays total (0/unknown RAM degrades to the floors, never to 0).
+// stays total (unknown RAM caps the buffer at 4 MiB since 3.3.43,
+// never to 0 or to unbounded).
 func tuneSizesFor(p tuneParams, ramMB int64) tuneSizes {
 	s := tuneSizes{RAMMB: ramMB, BufDef: mib}
 	s.BDP = int64(p.BandwidthMbps) * 1_000_000 / 8 * int64(p.RTTMs) / 1000
@@ -84,22 +93,31 @@ func tuneSizesFor(p tuneParams, ramMB int64) tuneSizes {
 	if budget > 256*mib {
 		budget = 256 * mib
 	}
-	if ramMB > 0 && s.BufMax > budget {
+	if ramMB <= 0 {
+		// Memory unreadable: cap at 4 MiB, never drop the cap
+		// (upstream 3.3.43, TestTuneMissingMemoryCannotCreateUnboundedBuffer).
+		budget = 4 * mib
+	}
+	if s.BufMax > budget {
 		s.BufMax, s.Reason = budget, "受内存限制"
 	}
 	if s.BufMax < 4*mib {
 		s.BufMax, s.Reason = 4*mib, "最低 4MB"
 	}
-	pages := ramMB * mib / 4096
+	pageSize := int64(tunePageSize())
+	if pageSize <= 0 {
+		pageSize = 4096
+	}
+	pages := ramMB * mib / pageSize
 	low, pres, max := pages/16, pages/8, pages/4
-	if low < 4096 {
-		low = 4096
+	if low < 16*mib/pageSize {
+		low = 16 * mib / pageSize
 	}
-	if pres < 8192 {
-		pres = 8192
+	if pres < 32*mib/pageSize {
+		pres = 32 * mib / pageSize
 	}
-	if max < 16384 {
-		max = 16384
+	if max < 64*mib/pageSize {
+		max = 64 * mib / pageSize
 	}
 	s.TCPMem = fmt.Sprintf("%d %d %d", low, pres, max)
 	return s
@@ -122,9 +140,14 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 		{"buffer", "按带宽和延迟设缓冲区", "单连接跑满线路；按内存限定上限，小内存机器不会被连接占满", []tuneSetting{
 			{"net.core.rmem_max", bufMax, true},
 			{"net.core.wmem_max", bufMax, true},
+			{"net.core.rmem_default", bufDef, false},
+			{"net.core.wmem_default", bufDef, false},
 			{"net.ipv4.tcp_rmem", "4096 " + bufDef + " " + bufMax, true},
 			{"net.ipv4.tcp_wmem", "4096 " + bufDef + " " + bufMax, true},
 			{"net.ipv4.tcp_mem", s.TCPMem, true},
+			{"net.ipv4.tcp_window_scaling", "1", false},
+			{"net.ipv4.tcp_moderate_rcvbuf", "1", false},
+			{"net.ipv4.tcp_adv_win_scale", "1", false},
 			{"net.ipv4.udp_rmem_min", "16384", true},
 			{"net.ipv4.udp_wmem_min", "16384", true},
 		}},
@@ -136,10 +159,16 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 			{"net.ipv4.tcp_tw_reuse", "1", false},
 			{"net.ipv4.tcp_keepalive_time", "600", false},
 			{"net.ipv4.tcp_syncookies", "1", false},
+			{"net.ipv4.tcp_no_metrics_save", "0", false},
+			{"net.ipv4.tcp_sack", "1", false},
+			{"net.ipv4.tcp_dsack", "1", false},
+			{"net.ipv4.tcp_timestamps", "1", false},
 		}},
 		{"backlog", "高并发", "连接多时不丢新连接，中转出站可用的端口更多", []tuneSetting{
 			{"net.core.somaxconn", "32768", true},
 			{"net.core.netdev_max_backlog", "16384", true},
+			{"net.core.netdev_budget", "600", true},
+			{"net.core.optmem_max", "65536", true},
 			{"net.ipv4.tcp_max_syn_backlog", "16384", true},
 			{"net.netfilter.nf_conntrack_max", "262144", true},
 			// From 10000: well clear of the usual service ports.
@@ -247,17 +276,50 @@ type tuneStatus struct {
 	HasBackup  bool              `json:"hasBackup"`
 	Groups     []tuneGroupStatus `json:"groups"`
 	Warnings   []string          `json:"warnings,omitempty"`
+	// Automatic reports whether this agent supports the automatic
+	// tuning job (upstream 3.3.43 capability probe: the frontend
+	// shows an upgrade prompt when it is absent/false, and never
+	// silently falls back to a fixed bandwidth).
+	Automatic bool           `json:"automatic"`
+	Detection *tuneDetection `json:"detection,omitempty"`
+	Job       *tuneJob       `json:"job,omitempty"`
 }
 
-// handleTuneCommand runs TuneStatus / TuneApply / TuneProbe. Status and
-// Apply take the line's bandwidth and RTT (the targets depend on them);
-// without them the last applied ones, or the defaults, are used. Probe
-// takes no line input: it measures a suggested line and never writes
-// anything (see probeTune). Unknown fields in data are
-// ignored by encoding/json: that is what lets an older agent safely
-// ignore bandwidthMbps/rttMs sent by a newer panel (and, in reverse, an
-// older panel's groups-only request still works on this agent).
+// handleTuneCommand runs TuneStatus / TuneApply / TuneProbe /
+// TuneStart / TuneCancel. Status and Apply take the line's bandwidth
+// and RTT (the targets depend on them); without them the last applied
+// ones, or the defaults, are used. Probe takes no line input: it
+// measures a suggested line and never writes anything (see
+// probeTune). TuneStart / TuneCancel drive the automatic job (see
+// tuning_auto.go): they take a mode, not a line. Unknown fields in
+// data are ignored by encoding/json: that is what lets an older agent
+// safely ignore bandwidthMbps/rttMs sent by a newer panel (and, in
+// reverse, an older panel's groups-only request still works on this
+// agent).
 func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
+	// TuneStart / TuneCancel are the automatic-job commands: they
+	// take a mode, not a line, so they are dispatched before the
+	// Status/Apply line handling below.
+	if cmdType == "TuneStart" || cmdType == "TuneCancel" {
+		if cmdType == "TuneCancel" {
+			cancelTuneJob()
+			return readTuneStatus(savedTuneParams()), nil
+		}
+		var sreq struct {
+			Mode         string  `json:"mode"`
+			MaxTrafficGB float64 `json:"maxTrafficGB"`
+		}
+		if data != nil {
+			raw, err := json.Marshal(data)
+			if err != nil {
+				return nil, fmt.Errorf("序列化数据失败: %v", err)
+			}
+			if err := json.Unmarshal(raw, &sreq); err != nil {
+				return nil, fmt.Errorf("解析调优参数失败: %v", err)
+			}
+		}
+		return startTuneJob(sreq.Mode, sreq.MaxTrafficGB)
+	}
 	// Probe is a separate read-only command: it measures a suggested
 	// line and must never share Apply's write path, so it is parsed
 	// and dispatched before the Status/Apply line handling below
@@ -369,6 +431,11 @@ func readTuneStatus(p tuneParams) tuneStatus {
 		gs.Applied = gs.Applied && any
 		st.Groups = append(st.Groups, gs)
 	}
+	// Automatic-job capability (upstream 3.3.43): this agent runs the
+	// job, so the probe is true; old agents have no such field at all.
+	st.Automatic = true
+	st.Detection = loadTuneDetection()
+	st.Job = readTuneJob()
 	return st
 }
 

@@ -1228,20 +1228,80 @@ export interface NodeTuneStatus {
   hasBackup: boolean;
   groups: NodeTuneGroup[];
   warnings?: string[];
+  /** 新 agent 回包带 automatic=true；旧 agent 无此字段：即不支持
+   * 自动调优的信号（上游 3.3.43 能力探测，不比较 agent 版本号）。 */
+  automatic?: boolean;
+  detection?: NodeTuneDetection;
+  job?: NodeTuneJob;
 }
+/** 自动调优的一次 iperf3 测速样本（agent 侧 tuneSample）。 */
+export interface NodeTuneSample {
+  mbps: number;
+  retransmits: number;
+  lossPercent: number;
+}
+/** 自动调优的测速结果（agent 侧 tuneDetection，落 tuning-result.json）。 */
+export interface NodeTuneDetection {
+  warnings?: string[];
+  bandwidthMbps: number;
+  bandwidthSource: string;
+  rttSource: string;
+  interface: string;
+  peer: string;
+  port: number;
+  family: string;
+  measuredAt: number;
+  before?: NodeTuneSample;
+  single?: NodeTuneSample;
+  parallel?: NodeTuneSample;
+  applied: boolean;
+  shapeMbps: number;
+  deepSummary?: string;
+  estimatedGB: number;
+}
+/** 自动调优的后台任务（agent 侧 tuneJob，落 tuning-job.json）。 */
+export interface NodeTuneJob {
+  id: string;
+  mode: string;
+  state: string;
+  stage: string;
+  percent: number;
+  message: string;
+  startedAt: number;
+  finishedAt?: number;
+  logs?: string;
+}
+/** 调优动作：status/apply/restore 走老路；auto/deep/cancel/restoreAuto
+ * 是上游 3.3.43 的自动任务路（面板分别映射为 TuneStart/TuneCancel）。
+ * deep 须带 maxTrafficGB（本次流量预算，0 < maxGB <= 1000）。 */
+export type NodeTuneAction =
+  | "status"
+  | "apply"
+  | "restore"
+  | "auto"
+  | "deep"
+  | "cancel"
+  | "restoreAuto";
 /** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认（移植自 kure29/flyx）。
  * line 原样透传给 agent；旧 agent 忽略未知字段走固定值，是否支持以
  * status 回包有无 params 判定（lineSupported = Boolean(status?.params)，
  * 与上游同款），不比较 agent 版本号。旧调优弹窗不传 line，行为与之前一致。 */
 export const nodeTune = (
   id: number,
-  action: "status" | "apply" | "restore",
+  action: NodeTuneAction,
   groups: string[] = [],
   line?: NodeTuneLine,
+  maxTrafficGB?: number,
 ) =>
   Network.post<NodeTuneStatus>(
     "/node/tune",
-    { id, action, groups, ...line },
+    {
+      id,
+      action,
+      groups,
+      ...line,
+      ...(maxTrafficGB != null ? { maxTrafficGB } : {}),
+    },
     { timeout: 40 * 1000 },
   );
 /** 一键测算探测结果：只作调优输入框的建议值，绝不自动应用。

@@ -24,6 +24,11 @@ func TestNodeTuneBdpRejectsBadRequests(t *testing.T) {
 		`{"id":1,"action":"probe","speedtestURL":"ftp://x/f"}`:          "测速地址须为",
 		`{"id":1,"action":"probe","speedtestURL":"file:///etc/passwd"}`: "测速地址须为",
 		`{"id":1,"action":"probe","referenceHost":"example.com"}`:       "host:port",
+		// Deep-scan budget (upstream 3.3.43 TuneStart mode "deep"):
+		// 0 < maxTrafficGB <= 1000, checked before any node traffic.
+		`{"id":1,"action":"deep","maxTrafficGB":0}`:    "流量预算",
+		`{"id":1,"action":"deep","maxTrafficGB":-5}`:   "流量预算",
+		`{"id":1,"action":"deep","maxTrafficGB":1001}`: "流量预算",
 	} {
 		rec := httptest.NewRecorder()
 		(&Handler{}).nodeTune(rec, httptest.NewRequest(http.MethodPost, "/api/v1/node/tune", strings.NewReader(body)))

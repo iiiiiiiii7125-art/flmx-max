@@ -235,6 +235,9 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 
 // Start 启动WebSocket报告器
 func (w *WebSocketReporter) Start() {
+	// 上游 3.3.43 自动调优：启动时先恢复未完成扫描前的队列与整形
+	// （tuning-transaction.json），再重下发容器内已提交的整形。
+	recoverAutomaticTuningOnStart()
 	w.startTCPPingWorkers()
 	w.workers.Add(2)
 	go func() {
@@ -1176,7 +1179,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		// needSaveConfig = false (默认值)
 
 	// 节点调优：读取 / 应用 sysctl 网络参数（移植自 kure29/flyx）
-	case "TuneStatus", "TuneApply", "TuneProbe":
+	case "TuneStatus", "TuneApply", "TuneProbe", "TuneStart", "TuneCancel":
 		response.Type = cmd.Type + "Response"
 		if cmd.Type == "TuneProbe" {
 			// panelRttMs 的取数口径（契约对齐）：前端契约不带面板

@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
-import { Input } from "@/shadcn-bridge/heroui/input";
 import { Spinner } from "@/shadcn-bridge/heroui/spinner";
 import {
   Modal,
@@ -15,49 +13,42 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import {
   nodeTune,
-  probeNodeTune,
-  type NodeTuneLine,
+  type NodeTuneAction,
+  type NodeTuneSample,
   type NodeTuneStatus,
 } from "@/api";
 
 const mb = (bytes: number) => `${Math.round((bytes / 1048576) * 10) / 10} MB`;
 
-/** The typed line, or null while it is not a valid one (upstream parseLine rule). */
-function parseLine(bw: string, rtt: string): NodeTuneLine | null {
-  const b = Number(bw);
-  const r = Number(rtt);
+const fmtTime = (ms: number) => {
+  if (!ms) return "未知";
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return String(ms);
+  }
+};
 
-  if (!Number.isInteger(b) || !Number.isInteger(r)) return null;
-  if (b < 1 || b > 100000 || r < 1 || r > 2000) return null;
+const fmtSample = (s?: NodeTuneSample) =>
+  s ? `${Math.round(s.mbps * 10) / 10} Mbps（重传 ${s.retransmits}，丢包 ${Math.round(s.lossPercent * 100) / 100}%）` : "—";
 
-  return { bandwidthMbps: b, rttMs: r };
-}
-
-/** A probe outcome kept for display / explicit adoption; never applied. */
-interface ProbeSuggestion {
-  bandwidthMbps?: number;
-  /** True when bandwidthMbps is a measured value kept through an RTT-leg failure (148-P3-3), not the T-5 default. */
-  bandwidthMeasured?: boolean;
-  rttMs?: number;
-  panelRttMs?: number;
-  /** True when the probe failed and the values are the T-5 defaults. */
-  fromFallback: boolean;
-  speedRequested: boolean;
-  /** Agent-side leg warnings (e.g. why the median was not measured). */
-  warnings?: string[];
-}
-
-/** Clamp a measured value into the input's legal range (integers only). */
-const clampLine = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, Math.round(value)));
-
-/** T-5 defaults, used only as the probe-failure fallback suggestion. */
-const FALLBACK_LINE = { bandwidthMbps: 1000, rttMs: 150 };
+const jobStateLabel: Record<string, string> = {
+  running: "执行中",
+  succeeded: "已完成",
+  failed: "失败",
+  cancelled: "已停止",
+};
 
 /**
- * 节点调优: shows the node's current network parameters next to the
- * recommended ones; the checked groups are applied by the agent (sysctl,
- * kept across reboots), unchecked ones go back to their original values.
+ * 节点调优（上游 3.3.43 自动路线）：无需填写带宽和延迟，Agent 自动
+ * 选择公共 iperf3 对端实测出口带宽、计算并应用参数、再验证吞吐，
+ * 全程后台任务；关闭弹窗不中断，2 秒轮询看进度。
+ *
+ * 批次一说明：手填带宽/延迟输入框、分组勾选与一键测算已按上游删除
+ * （后端 apply / probe 分支保留，但本弹窗不再发 apply/probe；一键
+ * 测算随手动入口一并失去入口）。深度优化按钮在本批禁用，随批次二
+ * 提供；测速引擎（tcpfit + bridge）亦随批次二进，批次一的自动任务
+ * 会在测速阶段以明确错误失败，不静默回落、不改系统参数。
  */
 export function NodeTuneModal({
   node,
@@ -68,258 +59,73 @@ export function NodeTuneModal({
 }) {
   const [status, setStatus] = useState<NodeTuneStatus | null>(null);
   const [error, setError] = useState("");
-  const [chosen, setChosen] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState<"" | "apply" | "restore">("");
+  const [busy, setBusy] = useState<"" | NodeTuneAction>("");
   const [detail, setDetail] = useState<string | null>(null);
-  // Bandwidth (Mbps) and RTT (ms) as typed; the agent sizes buffers for them.
-  const [bw, setBw] = useState("");
-  const [rtt, setRtt] = useState("");
-  // Per-field: true once the user has typed in that field. A later status
-  // refill or probe suggestion must not overwrite a field they typed in.
-  const bwEditedRef = useRef(false);
-  const rttEditedRef = useRef(false);
-  // One-click probe state. The probe only produces suggestion values; it
-  // never calls apply and never submits anything by itself.
-  const [probing, setProbing] = useState(false);
-  const [withSpeed, setWithSpeed] = useState(false);
-  const [probeError, setProbeError] = useState("");
-  const [probeSuggestion, setProbeSuggestion] =
-    useState<ProbeSuggestion | null>(null);
-  // Monotonic token: bumped on node switch and on each probe click, so a
-  // late probe response for a previous node (or an older probe) is dropped.
-  const probeRunRef = useRef(0);
-  const line = parseLine(bw, rtt);
-  const lineSupported = Boolean(status?.params);
-  const lineBw = line ? line.bandwidthMbps : undefined;
-  const lineRtt = line ? line.rttMs : undefined;
-  const statusBw = status?.params?.bandwidthMbps;
-  const statusRtt = status?.params?.rttMs;
+  const aliveRef = useRef(true);
+
+  const job = status?.job;
+  const jobRunning = job?.state === "running";
+  // 能力探测（上游 3.3.43 automatic 字段）：旧 agent 无此字段。
+  const automatic = status?.automatic === true;
+  const detection = status?.detection;
+
+  const refresh = async (id: number) => {
+    const res = await nodeTune(id, "status");
+    if (!aliveRef.current) return;
+    if (res.code !== 0 || !res.data) {
+      setError(res.msg || "读取节点状态失败");
+      return;
+    }
+    setStatus(res.data);
+  };
 
   useEffect(() => {
     if (!node) return;
-    // 归属守卫：切节点后旧节点的迟到响应不得落 state，
-    // 否则 run() 会把 A 的调优勾选提交给 B
-    let alive = true;
-
+    aliveRef.current = true;
     setStatus(null);
     setError("");
     setDetail(null);
-    setChosen(new Set());
-    setBw("");
-    setRtt("");
-    bwEditedRef.current = false;
-    rttEditedRef.current = false;
-    // Invalidate any in-flight probe for the previous node.
-    probeRunRef.current += 1;
-    setProbing(false);
-    setProbeError("");
-    setProbeSuggestion(null);
-    nodeTune(node.id, "status")
-      .then((res) => {
-        if (!alive) return;
-        if (res.code !== 0 || !res.data) {
-          setError(res.msg || "读取节点状态失败");
-
-          return;
-        }
-        setStatus(res.data);
-        // Refill only on first load / node switch, per field, and only
-        // if the user has not typed in that field (the inputs are not
-        // rendered before status arrives, so this cannot clobber an
-        // in-progress edit either).
-        if (res.data.params) {
-          if (!bwEditedRef.current)
-            setBw(String(res.data.params.bandwidthMbps));
-          if (!rttEditedRef.current) setRtt(String(res.data.params.rttMs));
-        }
-        // Everything checked by default, as recommended.
-        setChosen(new Set(res.data.groups.map((g) => g.id)));
-      })
-      .catch(() => {
-        if (alive) setError("读取节点状态失败");
-      });
-
+    setBusy("");
+    refresh(node.id).catch(() => {
+      if (aliveRef.current) setError("读取节点状态失败");
+    });
     return () => {
-      alive = false;
+      aliveRef.current = false;
     };
   }, [node]);
 
-  // A changed line changes the targets: ask the agent again, after typing
-  // settles. Same alive guard as above: a late response after switching
-  // nodes must not land on the new node's state.
+  // 任务执行中时 2 秒轮询 TuneStatus 看进度；关闭弹窗不中断任务。
   useEffect(() => {
-    if (!node || !line || !status?.params) return;
-    const p = status.params;
+    if (!node || !jobRunning) return;
+    const timer = window.setInterval(() => {
+      void refresh(node.id).catch(() => {
+        // 轮询失败不断任务，下轮再试。
+      });
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [node, jobRunning]);
 
-    if (p.bandwidthMbps === line.bandwidthMbps && p.rttMs === line.rttMs)
-      return;
-    let alive = true;
-    const timer = window.setTimeout(() => {
-      void nodeTune(node.id, "status", [], line)
-        .then((res) => {
-          if (!alive) return;
-          if (res.code === 0 && res.data) setStatus(res.data);
-        })
-        .catch(() => {
-          // Keep the previous sizes on a failed recalculation.
-        });
-    }, 500);
-
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-    };
-  }, [node, lineBw, lineRtt, statusBw, statusRtt]);
-
-  const run = async (action: "apply" | "restore") => {
+  const run = async (action: NodeTuneAction) => {
     if (!node) return;
     setBusy(action);
     try {
-      // Apply carries the line only when the agent supports it; restore
-      // never carries it (the panel strips it for restore in any case).
-      const res = await nodeTune(
-        node.id,
-        action,
-        [...chosen],
-        action === "apply" && lineSupported && line ? line : undefined,
-      );
-
+      const res = await nodeTune(node.id, action);
+      if (!aliveRef.current) return;
       if (res.code !== 0 || !res.data) {
         toast.error(res.msg || "调优失败");
-
         return;
       }
       setStatus(res.data);
       (res.data.warnings || []).forEach((w) => toast(w, { icon: "⚠️" }));
-      toast.success(action === "apply" ? "已应用，立即生效" : "已恢复默认");
-      if (action === "restore") {
-        setChosen(new Set());
-      }
+      if (action === "auto") toast.success("自动调优已开始，后台执行中");
+      if (action === "cancel") toast.success("已停止任务");
+      if (action === "restoreAuto") toast.success("已恢复调优前的配置");
     } catch {
-      toast.error("调优失败");
+      if (aliveRef.current) toast.error("调优失败");
     } finally {
-      setBusy("");
+      if (aliveRef.current) setBusy("");
     }
   };
-
-  /**
-   * One-click probe: fetches a suggestion only. It never calls apply and
-   * never submits the line. Suggestion refill rule (per field): a field
-   * the user has typed in keeps its value; a field they have not typed
-   * in takes the measured value — the same rule on the success and
-   * the failure legs, so the result row's "已按‘未手动改过才回填’填入输入框"
-   * holds on both. On probe failure the RTT value falls back to the
-   * T-5 default, while a measured bandwidth is kept (148-P3-3); a
-   * failure never overwrites a field the user has typed in — the user
-   * adopts the fallback explicitly if wanted. The fallback is still
-   * shown as an explicit result row (marked 回落值, with the agent's
-   * leg warnings as the reason), even when it equals the current
-   * inputs: a silent fallback is no result at all.
-   */
-  const runProbe = async () => {
-    if (!node || probing) return;
-    const runId = ++probeRunRef.current;
-    const nodeId = node.id;
-    const speedRequested = withSpeed;
-
-    setProbing(true);
-    setProbeError("");
-    setProbeSuggestion(null);
-    try {
-      const res = await probeNodeTune(nodeId, speedRequested);
-
-      // Alive guard for the probe: a late response after switching
-      // nodes (or after a newer probe) must not land on the wrong node.
-      if (runId !== probeRunRef.current) return;
-      const medianMs = res.data?.rttMedianMs;
-      const warnings = res.data?.warnings ?? [];
-
-      if (res.code !== 0 || !res.data || medianMs == null) {
-        // 148-P3-3: only the RTT leg failed — keep a measured bandwidth
-        // instead of dropping it for the default. Only the RTT value
-        // falls back; the failure reason stays visible via warnings.
-        const measuredBw = res.data?.bandwidthMbps;
-        const fallbackBw =
-          measuredBw != null
-            ? clampLine(measuredBw, 1, 100000)
-            : FALLBACK_LINE.bandwidthMbps;
-        setProbeError(res.msg || "测算失败或探测不可用");
-        setProbeSuggestion({
-          ...FALLBACK_LINE,
-          bandwidthMbps: fallbackBw,
-          bandwidthMeasured: measuredBw != null,
-          fromFallback: true,
-          speedRequested,
-          warnings,
-        });
-        // 与成功分支同口径：只回填未手动改过的字段（A7-04），
-        // 带宽取保留的实测值而非默认值（148-P3-3）。
-        if (!bwEditedRef.current) setBw(String(fallbackBw));
-        if (!rttEditedRef.current) setRtt(String(FALLBACK_LINE.rttMs));
-
-        return;
-      }
-      const d = res.data;
-      const suggestion: ProbeSuggestion = {
-        rttMs: clampLine(medianMs, 1, 2000),
-        panelRttMs:
-          d.panelRttMs == null ? undefined : clampLine(d.panelRttMs, 1, 2000),
-        bandwidthMbps:
-          d.bandwidthMbps == null
-            ? undefined
-            : clampLine(d.bandwidthMbps, 1, 100000),
-        fromFallback: false,
-        speedRequested,
-        warnings,
-      };
-
-      setProbeSuggestion(suggestion);
-      if (!rttEditedRef.current && suggestion.rttMs != null)
-        setRtt(String(suggestion.rttMs));
-      if (!bwEditedRef.current && suggestion.bandwidthMbps != null)
-        setBw(String(suggestion.bandwidthMbps));
-    } catch {
-      if (runId !== probeRunRef.current) return;
-      setProbeError("测算失败或探测不可用");
-      setProbeSuggestion({
-        ...FALLBACK_LINE,
-        fromFallback: true,
-        speedRequested,
-      });
-      // 与成功分支同口径：只回填未手动改过的字段（A7-04）。
-      if (!bwEditedRef.current) setBw(String(FALLBACK_LINE.bandwidthMbps));
-      if (!rttEditedRef.current) setRtt(String(FALLBACK_LINE.rttMs));
-    } finally {
-      if (runId === probeRunRef.current) setProbing(false);
-    }
-  };
-
-  /** Explicit adoption of a shown suggestion (e.g. a field kept by hand). */
-  const adoptProbe = () => {
-    if (!probeSuggestion) return;
-    if (probeSuggestion.bandwidthMbps != null)
-      setBw(String(probeSuggestion.bandwidthMbps));
-    if (probeSuggestion.rttMs != null) setRtt(String(probeSuggestion.rttMs));
-  };
-
-  // A suggestion value differs from the current input and therefore can
-  // still be adopted explicitly (auto-refill skipped it because the user
-  // typed in that field, or because the probe failed).
-  const probeAdoptable =
-    probeSuggestion != null &&
-    ((probeSuggestion.bandwidthMbps != null &&
-      String(probeSuggestion.bandwidthMbps) !== bw) ||
-      (probeSuggestion.rttMs != null && String(probeSuggestion.rttMs) !== rtt));
-
-  const toggle = (id: string, on: boolean) =>
-    setChosen((prev) => {
-      const next = new Set(prev);
-
-      if (on) next.add(id);
-      else next.delete(id);
-
-      return next;
-    });
 
   return (
     <Modal
@@ -351,180 +157,159 @@ export function NodeTuneModal({
                 <div className="flex justify-center py-10">
                   <Spinner />
                 </div>
+              ) : !automatic ? (
+                <div className="space-y-2 py-4">
+                  <p className="text-sm text-warning-600">
+                    这台服务器的 Agent
+                    不支持自动调优，请先升级服务器 Agent。
+                  </p>
+                  <p className="text-xs text-default-500">
+                    自动调优与深度优化要求节点 Agent
+                    为调优移植版；旧 Agent 只能看到本提示，不会悄悄沿用固定带宽。
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-2">
                   <p className="text-xs text-default-500">
-                    勾选的项目写入系统配置并立即生效，重启后保持；取消勾选的会恢复成调优前的值。
+                    无需填写带宽和延迟：Agent
+                    自动选择公共 iperf3 对端，实测四并发吞吐，读取服务器内存后计算并应用参数，最后验证单连接和多连接吞吐。任务在
+                    Agent 后台执行，关闭窗口不会中断，再次打开可继续查看。
                   </p>
-                  {lineSupported ? (
-                    <div className="space-y-1.5 rounded-xl border border-divider px-3 py-2.5">
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input
-                          endContent={
-                            <span className="text-xs text-default-400">
-                              Mbps
-                            </span>
+                  <p className="text-xs text-default-500">
+                    测速会向 Leaseweb、Clouvider 或 OVH
+                    提供的公共对端发送流量，千兆线路基础测速约消耗 4
+                    GB；公共对端忙或不可达时会报错，不会用假定的千兆带宽代替实测。
+                  </p>
+
+                  {/* 自动调优 / 任务进度 */}
+                  <div className="space-y-1.5 rounded-xl border border-divider px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">自动调优</span>
+                      {job && (
+                        <Chip
+                          color={
+                            job.state === "succeeded"
+                              ? "success"
+                              : job.state === "failed"
+                                ? "danger"
+                                : "primary"
                           }
-                          inputMode="numeric"
-                          label="带宽"
                           size="sm"
-                          value={bw}
-                          variant="bordered"
-                          onChange={(e) => {
-                            bwEditedRef.current = true;
-                            setBw(e.target.value.replace(/\D/g, ""));
-                          }}
-                        />
-                        <Input
-                          endContent={
-                            <span className="text-xs text-default-400">ms</span>
-                          }
-                          inputMode="numeric"
-                          label="延迟"
-                          size="sm"
-                          value={rtt}
-                          variant="bordered"
-                          onChange={(e) => {
-                            rttEditedRef.current = true;
-                            setRtt(e.target.value.replace(/\D/g, ""));
-                          }}
-                        />
-                      </div>
-                      {!line ? (
-                        <p className="text-xs text-danger">
-                          带宽填 1–100000 Mbps，延迟填 1–2000 ms
-                        </p>
-                      ) : (
-                        status.sizes && (
-                          <p className="text-xs text-default-500">
-                            按节点的套餐带宽和到主要用户的延迟（比如跨境约
-                            150ms）计算缓冲区。内存 {status.sizes.ramMb} MB ·
-                            缓冲区上限 {mb(status.sizes.bufMax)}（
-                            {status.sizes.bufReason}）
-                          </p>
-                        )
-                      )}
-                      {/* 一键测算：与下方「应用」分离，只取建议值，绝不提交。 */}
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <Checkbox
-                          isDisabled={probing}
-                          isSelected={withSpeed}
-                          size="sm"
-                          onValueChange={setWithSpeed}
+                          variant="flat"
                         >
-                          <span className="text-xs">
-                            同时测带宽（短时测速）
-                          </span>
-                        </Checkbox>
+                          {jobStateLabel[job.state] ?? job.state}
+                        </Chip>
+                      )}
+                      <Button
+                        className="ml-auto"
+                        color="primary"
+                        isDisabled={jobRunning || busy !== ""}
+                        isLoading={busy === "auto"}
+                        size="sm"
+                        onPress={() => void run("auto")}
+                      >
+                        {jobRunning ? "调优执行中…" : "自动调优"}
+                      </Button>
+                      {jobRunning && (
                         <Button
-                          className="ml-auto"
-                          isDisabled={probing || busy !== ""}
-                          isLoading={probing}
+                          isDisabled={busy !== ""}
+                          isLoading={busy === "cancel"}
                           size="sm"
                           variant="bordered"
-                          onPress={() => void runProbe()}
+                          onPress={() => void run("cancel")}
                         >
-                          一键测算
+                          停止任务
                         </Button>
-                      </div>
-                      {probing && (
-                        <p className="text-xs text-default-500">
-                          测算中…
-                          {withSpeed
-                            ? "含短时测速，稍候。未配置测速地址时带宽回落默认值。"
-                            : "默认只测延迟，未测速。"}
-                        </p>
-                      )}
-                      {probeError && (
-                        <p className="text-xs text-danger">
-                          {probeError}，
-                          {probeSuggestion?.bandwidthMeasured
-                            ? `延迟回落默认值 150 ms，带宽采用实测值 ${probeSuggestion.bandwidthMbps} Mbps`
-                            : "已回落默认值 1000 Mbps / 150 ms"}
-                          （仅为建议，未自动应用；点「应用」才下发）。
-                        </p>
-                      )}
-                      {probeSuggestion && (
-                        <p className="text-xs text-default-500">
-                          {probeSuggestion.fromFallback ? (
-                            <>
-                              测算结果（回落值，未采到实测中位数）：延迟{" "}
-                              {probeSuggestion.rttMs} ms · 带宽{" "}
-                              {probeSuggestion.bandwidthMbps} Mbps
-                              {probeSuggestion.bandwidthMeasured
-                                ? "（实测值）"
-                                : "（默认值）"}
-                              。已按“未手动改过才回填”填入输入框，点「应用」才下发。
-                              {probeSuggestion.warnings?.map((w, i) => (
-                                <span key={i} className="block">
-                                  ⚠️ {w}
-                                </span>
-                              ))}
-                            </>
-                          ) : (
-                            <>
-                              测算结果：延迟中位数 {probeSuggestion.rttMs} ms
-                              {probeSuggestion.panelRttMs != null &&
-                                `（到面板参考 ${probeSuggestion.panelRttMs} ms）`}
-                              {probeSuggestion.bandwidthMbps != null
-                                ? ` · 带宽 ${probeSuggestion.bandwidthMbps} Mbps`
-                                : probeSuggestion.speedRequested
-                                  ? " · 测速未返回带宽，带宽保持原值"
-                                  : " · 未测速，带宽保持原值"}
-                              。已按“未手动改过才回填”填入输入框，点「应用」才下发。
-                              {probeSuggestion.warnings?.map((w, i) => (
-                                <span key={i} className="block">
-                                  ⚠️ {w}
-                                </span>
-                              ))}
-                            </>
-                          )}
-                        </p>
-                      )}
-                      {probeAdoptable && (
-                        <div className="flex items-center gap-2">
-                          <p className="text-xs text-default-500">
-                            建议值：
-                            {probeSuggestion?.bandwidthMbps != null &&
-                              `带宽 ${probeSuggestion.bandwidthMbps} Mbps`}
-                            {probeSuggestion?.bandwidthMbps != null &&
-                              probeSuggestion?.rttMs != null &&
-                              " / "}
-                            {probeSuggestion?.rttMs != null &&
-                              `延迟 ${probeSuggestion.rttMs} ms`}
-                            （有字段是你手动改过的，未自动覆盖）
-                          </p>
-                          <button
-                            className="ml-auto shrink-0 text-xs text-primary"
-                            type="button"
-                            onClick={adoptProbe}
-                          >
-                            填入建议值
-                          </button>
-                        </div>
                       )}
                     </div>
-                  ) : (
-                    <p className="text-xs text-warning-600">
-                      这台节点的 agent
-                      较旧，缓冲区用固定值；升级后可以按带宽和延迟计算
-                    </p>
+                    {job && (
+                      <div className="space-y-1">
+                        <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{ width: `${job.percent}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-default-500">
+                          {job.percent}% · {job.message}
+                        </p>
+                        {job.logs && (
+                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-default-100 p-2 font-mono text-[11px] text-default-600">
+                            {job.logs}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 测速结果 */}
+                  {detection && (
+                    <div className="space-y-1 rounded-xl border border-divider px-3 py-2.5">
+                      <p className="text-sm font-medium">测速结果</p>
+                      <div className="space-y-0.5 text-xs text-default-600">
+                        <p>
+                          实测带宽 {detection.bandwidthMbps} Mbps
+                          （{detection.bandwidthSource}）· 出口{" "}
+                          {detection.interface} · 对端 {detection.peer}:
+                          {detection.port} · 测量时间{" "}
+                          {fmtTime(detection.measuredAt)}
+                        </p>
+                        <p>
+                          缓冲区按 {detection.bandwidthMbps} Mbps ×{" "}
+                          {detection.rttSource}计算
+                          {status.sizes &&
+                            ` · 内存 ${status.sizes.ramMb} MB · 缓冲区上限 ${mb(status.sizes.bufMax)}（${status.sizes.bufReason}）`}
+                        </p>
+                        {detection.before && (
+                          <p>测速样本：{fmtSample(detection.before)}</p>
+                        )}
+                        {detection.single && (
+                          <p>单连接验证：{fmtSample(detection.single)}</p>
+                        )}
+                        {detection.parallel && (
+                          <p>多连接验证：{fmtSample(detection.parallel)}</p>
+                        )}
+                        {detection.deepSummary && (
+                          <p>深度优化：{detection.deepSummary}</p>
+                        )}
+                        {(detection.warnings || []).map((w, i) => (
+                          <p key={i}>⚠️ {w}</p>
+                        ))}
+                      </div>
+                    </div>
                   )}
+
+                  {/* 深度优化（批次二） */}
+                  <div className="space-y-1.5 rounded-xl border border-divider px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">深度优化</span>
+                      <Button
+                        isDisabled
+                        size="sm"
+                        variant="bordered"
+                        onPress={() => {}}
+                      >
+                        深度优化
+                      </Button>
+                    </div>
+                    <p className="text-xs text-default-500">
+                      深度优化（限速器拐点扫描 + HTB/fq
+                      整形）随批次二提供。开始前会显示预计流量与本次预算，勾选允许后才执行。
+                      {detection && detection.estimatedGB > 0
+                        ? `按当前测速结果，预计流量约 ${detection.estimatedGB} GB。`
+                        : "需要 24 小时内的自动调优测速结果作为前置。"}
+                    </p>
+                  </div>
+
+                  {/* 已应用分组（只读） */}
                   {status.groups.map((g) => {
                     const supported = g.settings.some((s) => s.supported);
-
                     return (
                       <div
                         key={g.id}
                         className="rounded-xl border border-divider px-3 py-2.5"
                       >
                         <div className="flex items-start gap-2">
-                          <Checkbox
-                            isDisabled={!supported}
-                            isSelected={chosen.has(g.id) && supported}
-                            size="sm"
-                            onValueChange={(on) => toggle(g.id, on)}
-                          />
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-1.5">
                               <span className="text-sm font-medium">
@@ -582,32 +367,19 @@ export function NodeTuneModal({
               )}
             </ModalBody>
             <ModalFooter>
-              {status?.hasBackup && (
+              {status?.automatic && (status?.hasBackup || detection?.applied) && (
                 <Button
                   className="mr-auto"
-                  isDisabled={busy !== ""}
-                  isLoading={busy === "restore"}
+                  isDisabled={busy !== "" || jobRunning}
+                  isLoading={busy === "restoreAuto"}
                   variant="light"
-                  onPress={() => run("restore")}
+                  onPress={() => void run("restoreAuto")}
                 >
-                  恢复默认
+                  恢复原配置
                 </Button>
               )}
               <Button variant="light" onPress={onClose}>
                 关闭
-              </Button>
-              <Button
-                color="primary"
-                isDisabled={
-                  !status ||
-                  chosen.size === 0 ||
-                  busy !== "" ||
-                  (lineSupported && !line)
-                }
-                isLoading={busy === "apply"}
-                onPress={() => run("apply")}
-              >
-                应用
               </Button>
             </ModalFooter>
           </>

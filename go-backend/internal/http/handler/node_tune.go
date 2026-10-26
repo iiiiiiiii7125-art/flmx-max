@@ -80,6 +80,11 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		MeasureBandwidth bool   `json:"measureBandwidth"`
 		SpeedtestURL     string `json:"speedtestURL"`
 		ReferenceHost    string `json:"referenceHost"`
+		// Deep-scan traffic budget in GB (action "deep" only, upstream
+		// 3.3.43 TuneStart mode "deep"). Batch 1: the agent refuses
+		// deep outright (batch 2); the panel still validates the
+		// range so a bad budget is rejected before any node traffic.
+		MaxTrafficGB float64 `json:"maxTrafficGB"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil || req.ID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -147,6 +152,29 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		}
 	case "restore":
 		command, data = "TuneApply", map[string]interface{}{"restore": true}
+	case "auto":
+		// Automatic tuning (upstream 3.3.43 TuneStart mode "auto"):
+		// the agent runs the job in the background; this call only
+		// starts it and returns the status with the running job.
+		command, data = "TuneStart", map[string]interface{}{"mode": "auto"}
+	case "deep":
+		// Deep optimization (upstream 3.3.43 TuneStart mode "deep"):
+		// budget is this run's hard cap, 0 < maxGB <= 1000. Batch 1:
+		// the agent refuses deep outright (batch 2); the range is
+		// still checked here so a bad budget never reaches a node.
+		if req.MaxTrafficGB <= 0 || req.MaxTrafficGB > 1000 {
+			response.WriteJSON(w, response.ErrDefault("流量预算需大于 0 且不超过 1000 GB"))
+			return
+		}
+		command, data = "TuneStart", map[string]interface{}{"mode": "deep", "maxTrafficGB": req.MaxTrafficGB}
+	case "cancel":
+		command, data = "TuneCancel", map[string]interface{}{}
+	case "restoreAuto":
+		// Restore the pre-tuning configuration, including any shaper
+		// (upstream 3.3.43 TuneStart mode "restore"); unlike the old
+		// "restore" (TuneApply restore=true) it also replays the
+		// original queues and removes the tuning result.
+		command, data = "TuneStart", map[string]interface{}{"mode": "restore"}
 	default:
 		response.WriteJSON(w, response.ErrDefault("未知操作"))
 		return
@@ -165,6 +193,10 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 				// 不拦调优本身；用户仍可手动填带宽/延迟后 Apply。
 				// 1.4.7 为文档门号（首个提供探测的版本），仅作提示。
 				msg = "节点 agent 较旧，不支持一键测算（按带宽/延迟计算自 1.4.7 起提供），请手动填写带宽/延迟"
+			} else if req.Action == "auto" || req.Action == "deep" || req.Action == "cancel" || req.Action == "restoreAuto" {
+				// 上游 3.3.43 文案：自动调优命令发到旧 agent 时的
+				// 提示，不悄悄沿用固定带宽。
+				msg = "服务器 agent 版本过旧，不支持此调优操作，请先升级服务器 Agent"
 			} else {
 				msg = "节点 agent 版本过旧，不支持调优，请先升级节点"
 			}
