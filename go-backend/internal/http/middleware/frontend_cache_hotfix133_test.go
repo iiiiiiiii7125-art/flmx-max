@@ -162,7 +162,12 @@ func TestPWAUsesAutoUpdate(t *testing.T) {
 	if strings.Contains(main, "onNeedRefresh") {
 		t.Fatal("main.tsx must not gate SW updates behind an onNeedRefresh prompt")
 	}
-	if !strings.Contains(main, "registerSW({ immediate: true })") {
-		t.Fatal("main.tsx must register the service worker immediately")
+	// The registerSW call carries onRegisteredSW since the SW cache
+	// root fix (95df182: explicit registration.update() on load), so
+	// the one-line literal "registerSW({ immediate: true })" no longer
+	// matches. The requirement is immediate registration itself, not
+	// the one-line form: the call must exist and must set immediate.
+	if !strings.Contains(main, "registerSW({") || !strings.Contains(main, "immediate: true") {
+		t.Fatal("main.tsx must register the service worker immediately (registerSW with immediate: true)")
 	}
 }
