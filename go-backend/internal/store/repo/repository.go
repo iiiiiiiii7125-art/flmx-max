@@ -1456,7 +1456,10 @@ func (r *Repository) ListTunnels() ([]map[string]interface{}, error) {
 	var nodeList []model.Node
 	if err := r.db.Select("id, server_ip").Find(&nodeList).Error; err == nil {
 		for _, n := range nodeList {
-			nodeIPMap[n.ID] = n.ServerIP
+			// R28-FIX-F01：inIp 回退展示值须为裸 host；含 :port 的
+			// ServerIP 原值会让前端 formatInAddress 把面板端口当
+			// 成入口端口展示。
+			nodeIPMap[n.ID] = stripIngressHostPort(n.ServerIP)
 		}
 	}
 
@@ -5793,14 +5796,26 @@ func resolveForwardIngress(db *gorm.DB, forwardID int64, tunnelID int64) (string
 }
 
 func formatForwardIngressAddress(host string, port int64) string {
-	host = strings.TrimSpace(host)
+	// R28-FIX-F01：入口 host 可源自含 :port 的 ServerIP（或 InIP）；
+	// 此处剥离是三处调用面（forward 列表/详情 inIp 面与
+	// ForwardEntries）的唯一汇合点，同口径一次修全。口径与 handler
+	// 层 stripShareHostPort 一致：SplitHostPort 成功取 host，失败
+	// 原样去括号；repo 层不能 import handler 包，故本地同等实现。
+	host = stripIngressHostPort(host)
 	if host == "" || port <= 0 {
 		return ""
 	}
-	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-	}
 	return net.JoinHostPort(host, strconv.FormatInt(port, 10))
+}
+
+// stripIngressHostPort strips a trailing :port from a stored node
+// address (R28-FIX-F01). See formatForwardIngressAddress.
+func stripIngressHostPort(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	return strings.Trim(value, "[]")
 }
 
 func nullableString(v sql.NullString) interface{} {

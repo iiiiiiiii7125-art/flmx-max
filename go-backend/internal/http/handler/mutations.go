@@ -1378,7 +1378,10 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 			if len(runtimeState.OutNodes) > 0 {
 				outNode := runtimeState.OutNodes[0]
 				outNodeRec := runtimeState.Nodes[outNode.NodeID]
-				targetAddr = processServerAddress(outNodeRec.ServerIP)
+				// R28-FIX-F01（sweep）：ServerIP 可含 :port；先剥离再
+				// 拼 outNode.Port，否则联邦建链地址成 "IP:6366:port"
+				// 双端口。processServerAddress 本身不剥 :port。
+				targetAddr = processServerAddress(stripShareHostPort(outNodeRec.ServerIP))
 				if outNode.Port > 0 {
 					targetAddr = fmt.Sprintf("%s:%d", targetAddr, outNode.Port)
 				}
@@ -5497,9 +5500,11 @@ func buildTunnelInIP(inNodes []tunnelRuntimeNode, nodes map[int64]*nodeRecord, i
 				addrs = append(addrs, v6)
 			}
 		}
+		// R28-FIX-F01（sweep）：ServerIP 回退分支可含 :port；剥离
+		// 后进 tunnel.in_ip，否则列表/前端把面板端口当入口端口。
 		if len(addrs) == 0 {
 			if v := strings.TrimSpace(node.ServerIP); v != "" {
-				addrs = append(addrs, v)
+				addrs = append(addrs, stripShareHostPort(v))
 			}
 		}
 		for _, a := range addrs {
@@ -6652,7 +6657,10 @@ func nodeSupportsV4(node *nodeRecord) bool {
 	if strings.TrimSpace(node.ServerIPv6) != "" {
 		return false
 	}
-	legacy := strings.Trim(strings.TrimSpace(node.ServerIP), "[]")
+	// R28-FIX-F01（sweep E-04 同根）：legacy ServerIP 可含 :port；
+	// 须先剥离再 ParseIP，否则 "IP:port" 解析失败、双栈误判全真，
+	// "[v6]:port" 去括号后仍带 ":port" 同样误判。
+	legacy := stripShareHostPort(node.ServerIP)
 	if legacy == "" {
 		return false
 	}
@@ -6672,7 +6680,7 @@ func nodeSupportsV6(node *nodeRecord) bool {
 	if strings.TrimSpace(node.ServerIPv4) != "" {
 		return false
 	}
-	legacy := strings.Trim(strings.TrimSpace(node.ServerIP), "[]")
+	legacy := stripShareHostPort(node.ServerIP)
 	if legacy == "" {
 		return false
 	}
@@ -6686,10 +6694,13 @@ func pickNodeAddressV4(node *nodeRecord) string {
 	if node == nil {
 		return ""
 	}
+	// R28-FIX-F01（sweep E-04）：ServerIP 回退分支可含 :port；调用
+	// 方再拼 "host:port" 作拨号地址，原值进即双端口。显式 v4 值
+	// 同口径剥离（裸 IP 时为 no-op）。
 	if v := strings.TrimSpace(node.ServerIPv4); v != "" {
-		return v
+		return stripShareHostPort(v)
 	}
-	return strings.TrimSpace(node.ServerIP)
+	return stripShareHostPort(node.ServerIP)
 }
 
 func pickNodeAddressV6(node *nodeRecord) string {
@@ -6697,9 +6708,9 @@ func pickNodeAddressV6(node *nodeRecord) string {
 		return ""
 	}
 	if v := strings.TrimSpace(node.ServerIPv6); v != "" {
-		return v
+		return stripShareHostPort(v)
 	}
-	return strings.TrimSpace(node.ServerIP)
+	return stripShareHostPort(node.ServerIP)
 }
 
 func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[string]interface{}) error {

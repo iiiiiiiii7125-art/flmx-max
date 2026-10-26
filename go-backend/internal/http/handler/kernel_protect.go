@@ -110,9 +110,17 @@ func nodeAddresses(node *model.Node) []string {
 	raw := []string{node.ServerIP, node.ServerIPV4.String, node.ServerIPV6.String, node.ExtraIPs.String}
 	var out []string
 	for _, r := range raw {
-		out = append(out, strings.FieldsFunc(r, func(c rune) bool {
+		for _, tok := range strings.FieldsFunc(r, func(c rune) bool {
 			return c == ',' || c == ';' || c == ' ' || c == '\n' || c == '\t'
-		})...)
+		}) {
+			// R28-FIX-F01（sweep）：ServerIP 可含 :port；原值进
+			// resolveAllowHost 既过不了 NormalizeAllowEntry、DNS
+			// 解析亦失败，白名单静默丢拨号节点。剥离后裸 host
+			// 才能进 allow 集（裸 IP/括号 v6 时为 no-op）。
+			if tok = stripShareHostPort(tok); tok != "" {
+				out = append(out, tok)
+			}
+		}
 	}
 	return out
 }
