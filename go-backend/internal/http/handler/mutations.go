@@ -629,8 +629,11 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		asInt(req["socks"], 0),
 		now,
 		status,
-		defaultString(asString(req["tcpListenAddr"]), "[::]"),
-		defaultString(asString(req["udpListenAddr"]), "[::]"),
+		// R32-FIX-F01：监听地址同口径剥离 :port 后存（与 ServerIP
+		// intake 前例一致；stripListenAddrPort 不修剪括号，默认
+		// "[::]" 原样通过）。
+		defaultString(stripListenAddrPort(asString(req["tcpListenAddr"])), "[::]"),
+		defaultString(stripListenAddrPort(asString(req["udpListenAddr"])), "[::]"),
 		inx,
 		asInt(req["isRemote"], 0),
 		nullableText(asString(req["remoteUrl"])),
@@ -771,14 +774,16 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	tcpAddr := currentNode.TCPListenAddr
 	if _, ok := req["tcpListenAddr"]; ok {
-		tcpAddr = defaultString(asString(req["tcpListenAddr"]), "[::]")
+		// R32-FIX-F01：仅提交的字段剥离 :port 后存；未提交的字段
+		// 保持存量原值（存量不改写）。
+		tcpAddr = defaultString(stripListenAddrPort(asString(req["tcpListenAddr"])), "[::]")
 	}
 	if strings.TrimSpace(tcpAddr) == "" {
 		tcpAddr = "[::]"
 	}
 	udpAddr := currentNode.UDPListenAddr
 	if _, ok := req["udpListenAddr"]; ok {
-		udpAddr = defaultString(asString(req["udpListenAddr"]), "[::]")
+		udpAddr = defaultString(stripListenAddrPort(asString(req["udpListenAddr"])), "[::]")
 	}
 	if strings.TrimSpace(udpAddr) == "" {
 		udpAddr = "[::]"
@@ -6537,7 +6542,10 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 		// selectTunnelDialHost），不是本节点的本地地址。CNIX/NAT 线路入口
 		// IP 在目标机上不可绑，拿它当监听地址 agent 必报
 		// "cannot assign requested address"。
-		"addr":     processServerAddress(fmt.Sprintf("%s:%d", node.TCPListenAddr, chainNode.Port)),
+		// R32-FIX-F01：监听地址先剥离 :port 再与链端口拼接（须用
+		// JoinHostPort：裸 IPv6 直拼会被 processServerAddress 误读，
+		// 见 realm.go 同注释）。
+		"addr":     processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(node.TCPListenAddr), "[]"), strconv.Itoa(chainNode.Port))),
 		"handler":  handlerCfg,
 		"listener": buildTunnelListenerConfig(protocol),
 	}
