@@ -352,6 +352,23 @@ func executeDeepTuning(ctx context.Context, d *tuneDetection, maxGB float64) (er
 // The class/leaf lines stay `replace`: replace is add-or-replace and
 // works whether or not the objects exist yet. Deliberate FLMX
 // deviation from upstream tuneShapeScript (upstream :405).
+//
+// D4F (PORT-REVIEW-L1-D4F): that unconditional `del` turned a
+// fail-closed behaviour into a destructive one — the old `replace`
+// failed (rc=2) on a foreign HTB root and left it alone, while the
+// D4 script deletes whatever root is in place. shape.sh is also run
+// by two paths with no Go-side guard (the boot systemd unit and the
+// container-start re-issue in recoverAutomaticTuningOnStart), so the
+// guard lives in the script itself and covers all three paths:
+//   - kernel-default roots (handle 0, leaf-only kinds: mq/noqueue/
+//     pfifo_fast/pfifo/fq/fq_codel) carry no shaping topology and
+//     may be deleted;
+//   - an HTB root is only deleted when it is this tuning's own
+//     shaper — handle 1: with class 1:10 and the fq leaf parent
+//     1:10, exactly what apply_test_shaper installs;
+//   - anything else (cake/tbf/foreign HTB/...) is kept and the
+//     script exits 1, so the caller fails closed instead of
+//     destroying the foreign configuration.
 func tuneShapeScript(iface string, rate int) string {
 	q := tuneShellQuote(iface)
 	r := strconv.Itoa(rate) + "mbit"
@@ -359,7 +376,25 @@ func tuneShapeScript(iface string, rate int) string {
 	if burst < 32768 {
 		burst = 32768
 	}
-	return fmt.Sprintf("#!/bin/sh\nset -eu\ntc qdisc del dev %s root || true\ntc qdisc add dev %s root handle 1: htb default 10\ntc class replace dev %s parent 1: classid 1:10 htb rate %s ceil %s burst %d cburst %d quantum 1514\ntc qdisc replace dev %s parent 1:10 handle 10: fq limit 40960 flow_limit 8192 maxrate %s\n", q, q, q, r, r, burst, burst, q, r)
+	guard := "# FLMX 整形护栏（D4F）：只删内核默认根或本调优装上的 HTB 根，外来整形保留并报错。\n" +
+		"show=$(tc qdisc show dev " + q + ")\n" +
+		"rootinfo=$(printf '%s\\n' \"$show\" | awk '$1==\"qdisc\" && $4==\"root\" {sub(/:$/,\"\",$3); print $2, $3; exit}')\n" +
+		"rootkind=${rootinfo%% *}\n" +
+		"roothandle=${rootinfo##* }\n" +
+		"case \"$rootkind\" in\n" +
+		"  \"\") ;;\n" +
+		"  mq|noqueue|pfifo_fast|pfifo|fq|fq_codel)\n" +
+		"    if [ \"$roothandle\" != \"0\" ]; then echo \"出口已有非默认的 $rootkind 整形（handle $roothandle），已保留原配置\" >&2; exit 1; fi\n" +
+		"    ;;\n" +
+		"  htb)\n" +
+		"    if [ \"$roothandle\" != \"1\" ]; then echo \"出口已有非 FLMX 的 HTB 整形（handle $roothandle），已保留原配置\" >&2; exit 1; fi\n" +
+		"    classes=$(tc class show dev " + q + ")\n" +
+		"    case \"$classes\" in *\"class htb 1:10\"*) ;; *) echo \"出口已有非 FLMX 的 HTB 整形（非本调优装上的 1:10 类），已保留原配置\" >&2; exit 1 ;; esac\n" +
+		"    case \"$show\" in *\"parent 1:10\"*) ;; *) echo \"出口已有非 FLMX 的 HTB 整形（缺少本调优的 1:10 叶队列），已保留原配置\" >&2; exit 1 ;; esac\n" +
+		"    ;;\n" +
+		"  *) echo \"出口已有非 FLMX 的 $rootkind 整形，已保留原配置\" >&2; exit 1 ;;\n" +
+		"esac\n"
+	return "#!/bin/sh\nset -eu\n" + guard + fmt.Sprintf("tc qdisc del dev %s root || true\ntc qdisc add dev %s root handle 1: htb default 10\ntc class replace dev %s parent 1: classid 1:10 htb rate %s ceil %s burst %d cburst %d quantum 1514\ntc qdisc replace dev %s parent 1:10 handle 10: fq limit 40960 flow_limit 8192 maxrate %s\n", q, q, q, r, r, burst, burst, q, r)
 }
 
 func persistTuneShape(ctx context.Context, d *tuneDetection, rate int) error {

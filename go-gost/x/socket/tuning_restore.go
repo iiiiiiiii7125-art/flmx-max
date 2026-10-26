@@ -22,10 +22,61 @@ import (
 // decision); shape files live under the engine directory next to it.
 
 func restoreTuneQueues(name string) error {
+	// D2S (PORT-REVIEW-L1-D2S): a replay script written by a pre-D2
+	// agent wedges all three recovery paths (recoverTuneTransaction,
+	// the startTuneJob gate, restoreAutomaticTuning) — the agent
+	// upgrade alone does not un-wedge a node, because
+	// captureTuneQueues only rewrites current-qdisc.sh on the next
+	// deep scan and the next deep scan is itself gated on recovery.
+	// Validate the on-disk format before executing: a stale script
+	// is migrated in place, then executed. restoreTuneQueues is the
+	// only executor of these scripts, so this covers all three paths.
+	if err := migrateStaleTuneQueueReplay(name); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, err := tuneCommand(ctx, "bash", filepath.Join(tuneEngineDir(), name))
 	return err
+}
+
+// migrateStaleTuneQueueReplay upgrades a pre-D2 queue replay script
+// to the D2 format in place. Only the mqmajor condition line is
+// defective — the old `if [ -z "$mqmajor" ]` skipped the handle
+// repair when the kernel recreated the mq root as `mq 0:`, so the
+// leaves bound to `parent 0:N`, which real tc rejects — so the
+// migration rewrites exactly that line. Regenerating from a live
+// `tc qdisc show` would be wrong here: once deep has persisted a
+// shaper, the live queues are the shaped ones, not the captured
+// original queues the script is supposed to restore.
+func migrateStaleTuneQueueReplay(name string) error {
+	path := filepath.Join(tuneEngineDir(), name)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		// Missing or unreadable: leave it to the existing execution
+		// error path instead of inventing a second failure mode.
+		return nil
+	}
+	s := string(b)
+	// Only mq replays carry the probe; shape.sh replays and non-mq
+	// replays have no mqmajor line and need no migration.
+	if !strings.Contains(s, `mqmajor=$(tc qdisc show`) {
+		return nil
+	}
+	if strings.Contains(s, `|| [ "$mqmajor" = 0 ]`) {
+		return nil // already D2 format
+	}
+	if !strings.Contains(s, `if [ -z "$mqmajor" ]`) {
+		return fmt.Errorf("队列恢复脚本 %s 为无法识别的旧格式，已拒绝执行，请先恢复原配置", name)
+	}
+	// Match on the condition head, not the full `; then` spelling:
+	// the old generator wrote `if [ -z "$mqmajor" ]; then`, while a
+	// byte-for-byte downgrade of a D2 script leaves
+	// `if [ -z "$mqmajor" ] ; then`. Both are the same stale
+	// condition; replacing the head covers both (a space before `;`
+	// is valid shell).
+	migrated := strings.Replace(s, `if [ -z "$mqmajor" ]`, `if [ -z "$mqmajor" ] || [ "$mqmajor" = 0 ]`, 1)
+	return writeFileAtomic(path, []byte(migrated), 0o700)
 }
 
 type tuneShapeFile struct {

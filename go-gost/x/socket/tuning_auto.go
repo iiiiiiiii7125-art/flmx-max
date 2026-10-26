@@ -217,7 +217,13 @@ func startTuneJob(mode string, maxGB float64) (tuneStatus, error) {
 		// finished message carries the failed-setting count. The
 		// host normal path (no warnings) still reads exactly
 		// "调优完成".
-		if err == nil && mode == "auto" {
+		// D3D (PORT-REVIEW-L1-D3D): deep inherits auto's detection
+		// verbatim — executeDeepTuning re-saves d.Warnings with the
+		// result — so the same count applies to deep. The original
+		// D3 fix only covered mode == "auto", leaving deep's
+		// success message bare while the same settings were
+		// unapplied; the condition now covers both.
+		if err == nil && (mode == "auto" || mode == "deep") {
 			if d := loadTuneDetection(); d != nil && len(d.Warnings) > 0 {
 				j.Message = fmt.Sprintf("调优完成，但有 %d 项参数未生效（见警告）", len(d.Warnings))
 			}

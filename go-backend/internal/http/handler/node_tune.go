@@ -23,7 +23,7 @@ const nodeTuneTimeout = 30 * time.Second
 const nodeTuneProbeTimeout = 90 * time.Second
 
 // nodeTune reads (action "status") or changes (action "apply" with the
-// chosen groups, or "restore") a node's sysctl network tuning. The agent
+// chosen groups) a node's sysctl network tuning. The agent
 // does the work; see go-gost/x/socket/tuning.go.
 // J-005：handler 侧白名单校验（agent 侧已兜底返回"未知调优项"，此处前置拦截更早反馈）
 var nodeTuneGroupAllowlist = map[string]bool{
@@ -152,7 +152,16 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 			data[k] = v
 		}
 	case "restore":
-		command, data = "TuneApply", map[string]interface{}{"restore": true}
+		// D4U2 (PORT-REVIEW-L1-D4U2): the old "restore" (TuneApply
+		// restore=true) only restored sysctl values and kept the
+		// shaper, unit and tuning result in place, so it was
+		// mistaken for a full restore — including once by the D4
+		// verifier. It is retired: callers must use "restoreAuto"
+		// (TuneStart mode "restore"), which replays the original
+		// queues and removes the shaper. Rejected here, before any
+		// node traffic, with a pointer to the replacement.
+		response.WriteJSON(w, response.ErrDefault("旧恢复动作已下线：它只恢复内核参数、会保留整形配置，请使用“恢复原配置”（restoreAuto）"))
+		return
 	case "auto":
 		// Automatic tuning (upstream 3.3.43 TuneStart mode "auto"):
 		// the agent runs the job in the background; this call only
@@ -173,9 +182,10 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		command, data = "TuneCancel", map[string]interface{}{}
 	case "restoreAuto":
 		// Restore the pre-tuning configuration, including any shaper
-		// (upstream 3.3.43 TuneStart mode "restore"); unlike the old
-		// "restore" (TuneApply restore=true) it also replays the
-		// original queues and removes the tuning result.
+		// (upstream 3.3.43 TuneStart mode "restore"). This is the
+		// only restore action: the old "restore" (TuneApply
+		// restore=true, sysctl-only, kept the shaper) was retired
+		// with D4U2 (PORT-REVIEW-L1-D4U2).
 		command, data = "TuneStart", map[string]interface{}{"mode": "restore"}
 	default:
 		response.WriteJSON(w, response.ErrDefault("未知操作"))

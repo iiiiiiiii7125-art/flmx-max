@@ -17,7 +17,9 @@ import (
 // parameters next to the recommended ones; TuneApply writes the chosen
 // groups to a sysctl.d file (so they survive reboots) and applies them now.
 // The value each key had before the first apply is kept, so unchecking a
-// group, or TuneApply with restore, puts the original value back.
+// group puts the original value back. (The old TuneApply-with-restore
+// path is retired with D4U2, see handleTuneCommand; a full restore is
+// TuneStart mode "restore".)
 
 type tuneSetting struct {
 	Key   string
@@ -351,6 +353,17 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 			return nil, fmt.Errorf("解析调优参数失败: %v", err)
 		}
 	}
+	// D4U2 (PORT-REVIEW-L1-D4U2): the old TuneApply restore=true
+	// only restored sysctl values and kept the shaper, the unit and
+	// the tuning result — it was mistaken for a full restore, so it
+	// is retired. Direct callers (old panels, API clients) must use
+	// TuneStart mode "restore" (panel action "restoreAuto") instead;
+	// rejecting here closes the hole for any caller that bypasses
+	// the panel API. This runs before the operation lock and before
+	// any sysctl access, so a rejected call has no side effects.
+	if req.Restore {
+		return nil, fmt.Errorf("旧恢复动作已下线：它只恢复内核参数、会保留整形配置，请使用恢复原配置（restoreAuto）")
+	}
 	p := req.tuneParams
 	if p.BandwidthMbps == 0 && p.RTTMs == 0 {
 		p = savedTuneParams()
@@ -368,9 +381,6 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 			return nil, fmt.Errorf("已有调优任务正在运行")
 		}
 		defer tuningOperation.Unlock()
-		if req.Restore {
-			req.Groups = nil
-		}
 		return applyTuning(req.Groups, p)
 	}
 	return nil, fmt.Errorf("未知命令类型: %s", cmdType)

@@ -65,6 +65,11 @@ case "$kind $verb" in
   "qdisc del")
     if [ "$root" = "htb" ]; then root=mq; handle=0; class=""; leaf=0; save; exit 0; fi
     if [ "$root" = "mq" ] && [ "$handle" = "1" ]; then root=mq; handle=0; save; exit 0; fi
+    # D4F (PORT-REVIEW-L1-D4F): real tc deletes a foreign root (cake/
+    # tbf/foreign HTB) just like an HTB one — only the kernel-default
+    # mq-0 root refuses deletion. The old shape.sh therefore deleted
+    # foreign shapers; the guard in tuneShapeScript must stop it.
+    if [ "$root" != "mq" ]; then root=mq; handle=0; class=""; leaf=0; save; exit 0; fi
     fail "Cannot delete qdisc." ;;
   "qdisc add")
     if [ -n "$parent" ]; then
