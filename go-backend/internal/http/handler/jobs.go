@@ -366,7 +366,15 @@ func (h *Handler) runStatisticsFlowJob(now time.Time) {
 
 	for _, user := range users {
 		currentTotal := user.InFlow + user.OutFlow
-		increment := currentTotal
+		// R31-L3-H01: no baseline (fresh restore — statistics_flow is
+		// not in any backup segment — first run, or the baseline aged
+		// out of the 48h purge window) means the lifetime total cannot
+		// be read as an hourly delta. Record a baseline-only row
+		// (increment 0) instead of billing the whole lifetime total as
+		// one hour; the next hour then meters the real delta. The
+		// negative-delta branch below is unchanged: a counter reset
+		// (monthly reset) still bills the post-reset total.
+		increment := int64(0)
 
 		lastTotal, err := h.repo.GetLastStatisticsFlowTotal(user.UserID)
 		if err == nil && lastTotal.Valid {
