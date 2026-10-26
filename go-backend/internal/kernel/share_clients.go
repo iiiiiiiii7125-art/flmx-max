@@ -372,7 +372,10 @@ func qxLine(p Proxy) (string, bool) {
 	if enc := p.str("encryption"); enc != "" && enc != "none" {
 		return "", false // QX 无 VLESS 加密的已证实支持，跳过而非渲染坏节点
 	}
-	parts := []string{fmt.Sprintf("%s:%d", p.str("server"), p.num("port"))}
+	// PORT-CLOSURE PC-03(d)：裸 IPv6 须补括号——全仓唯一不用
+	// hostPort() 的渲染器；直拼会把端口折进地址
+	// （"shadowsocks=2001:db8::1:443, …" 无端口分量）。
+	parts := []string{hostPort(p.str("server"), p.num("port"))}
 	add := func(s ...string) { parts = append(parts, s...) }
 	// R5-B5 订阅转义：QX 行式格式用逗号分隔字段、首个等号分隔键值。
 	// F-081: 与 surgeEscape 同口径——只处理逗号/换行，值内的 = 必须保留
