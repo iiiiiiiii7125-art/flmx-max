@@ -118,6 +118,24 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 			p["version"] = 4
 		}
 	}
+	// R31-L4-E01：SS plugin 别名进口归一——其余三转换器均在进口把
+	// obfs-local / simple-obfs 归一为面板内规范名 obfs（applySSPlugin，
+	// 下方 :543；Surge 直写 obfs），唯独 Clash 透传不过归一，而全部
+	// 下游消费点只认 obfs（proxySingbox / proxySurge / ssPluginString /
+	// 三处 A2-03 门），致 sing-box 与 Surge 面整节点丢弃、URI 面静默
+	// 丢插件参数。finishProxy 为四格式的共同收口（与 R4X-001 cipher
+	// 小写化同形），在此一处把两别名拼写归一为 obfs；其余三格式进口
+	// 已归一，本处对它们是空操作。plugin-opts 的 {mode, host} 键
+	// Clash 原生即与面板内形态一致，无需转换（与 applySSPlugin 的
+	// obfs/obfs-host 键映射不同，彼为 SIP003 串形态）。归一后 A2-03
+	// 门（mode 合法集 {http, tls} + 小写愈合）对别名拼写同样生效。
+	// 大小写不敏感判定与 A2-03 门 / ssPluginString 同口径。
+	if t == "ss" {
+		switch strings.ToLower(strings.TrimSpace(p.str("plugin"))) {
+		case "obfs-local", "simple-obfs":
+			p["plugin"] = "obfs"
+		}
+	}
 	if err := validateProxyCredentials(p); err != nil {
 		return ImportedNode{}, err
 	}
