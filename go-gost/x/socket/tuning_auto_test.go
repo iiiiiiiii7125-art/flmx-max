@@ -2,7 +2,6 @@ package socket
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +12,14 @@ import (
 
 // 批次一（上游 3.3.43 自动调优）回归测试。
 //
-// 注意：上游 tuning_auto_test.go（582 行、19 个 Test）未随简报证据
-// 提供（upstream/ 目录只有 tuning_auto.go / tuning_queues.go），
-// 本文件按简报点名的测试主题重写：实测样本解析、探针失败不用默认
-// （失败即报错、不应用）、验证失败保留、任务异步互斥可取消、
-// deep 前置与预算、内存缺失兜底、页大小、组表新增键、队列回放
-// （restore/transaction）、容器检测。主题与上游一一对应，实现
-// 按我方落点（FLMX 品牌、批次二拆分）编写。
+// 注意：上游 tuning_auto_test.go（582 行、20 个 Test）已随批次二取回
+// 原文（~/workspace/port-3343/upstream/tuning_auto_test.go），深扫
+// 与自动任务的对照移植见 tuning_deep_test.go；本文件保留批次一
+// 按简报主题重写的自动任务测试（样本解析、双轮握手、内存/页大小、
+// 组表新增键、任务互斥取消、恢复/transaction、容器检测），其中
+// 样本解析已按上游原文补齐接收端与非法输入用例，deep 拒绝用例
+// 已随批次二实现删除（见 tuning_deep_test.go 的
+// TestTuneDeepRequiresRecentMeasurementAndTrafficBudget）。
 
 // resetTuneTasks clears the in-memory job slot so a previous test's
 // finished job cannot leak into the next test's readTuneJob.
@@ -43,6 +43,12 @@ func TestParseTuneSample(t *testing.T) {
 	if err != nil || s.Mbps != 100.0 || s.LossPercent != 0 {
 		t.Fatalf("two-field sample: %+v %v", s, err)
 	}
+	// Receiver side wins over the sender side (upstream
+	// TestTuneSampleParsingUsesReceiverAndRejectsInvalidData).
+	s, err = parseTuneSample("log\nFLYX_SAMPLE=1000 12 940\n")
+	if err != nil || s.Mbps != 940 || s.Retransmits != 12 || s.LossPercent <= 0 {
+		t.Fatalf("receiver sample: %+v %v", s, err)
+	}
 	for _, out := range []string{
 		"",
 		"no sample here\n",
@@ -54,6 +60,12 @@ func TestParseTuneSample(t *testing.T) {
 		"FLYX_SAMPLE=abc 0\n",     // unparsable
 		"FLYX_SAMPLE=100\n",       // too few fields
 		"FLYX_SAMPLE=100 0 bad\n", // bad receiver value
+		"FLYX_SAMPLE=NaN 0 20\n",
+		"FLYX_SAMPLE=100 0 NaN\n",
+		"FLYX_SAMPLE=100 0 nope\n",
+		"FLYX_SAMPLE=10 0 0\n", // receiver <= 0
+		"FLYX_SAMPLE=+Inf 1\n",
+		"FLYX_SAMPLE=oops\n",
 	} {
 		if _, err := parseTuneSample(out); err == nil {
 			t.Errorf("input %q must fail", out)
@@ -235,17 +247,6 @@ func TestTuneLogWriterCaps(t *testing.T) {
 	}
 }
 
-func TestStartTuneJobRejectsDeep(t *testing.T) {
-	resetTuneTasks(t)
-	fakeProcSys(t, "cubic bbr")
-	if _, err := startTuneJob("deep", 100); err == nil || !strings.Contains(err.Error(), "批次二") {
-		t.Fatalf("deep must be refused with a batch-2 pointer: %v", err)
-	}
-	if _, err := os.Stat(tuneStatePath("tuning-job.json")); !os.IsNotExist(err) {
-		t.Fatal("refused deep must not create a job file")
-	}
-}
-
 func TestStartTuneJobRejectsNonLinuxAndUnknownMode(t *testing.T) {
 	resetTuneTasks(t)
 	fakeProcSys(t, "cubic bbr")
@@ -322,8 +323,8 @@ func TestHandleTuneCommandStartCancel(t *testing.T) {
 	if _, err := handleTuneCommand("TuneStart", map[string]interface{}{"mode": "bogus"}); err == nil {
 		t.Fatal("bogus mode must fail")
 	}
-	if _, err := handleTuneCommand("TuneStart", map[string]interface{}{"mode": "deep", "maxTrafficGB": 100.0}); err == nil || !strings.Contains(err.Error(), "批次二") {
-		t.Fatalf("deep via command: %v", err)
+	if _, err := handleTuneCommand("TuneStart", map[string]interface{}{"mode": "deep", "maxTrafficGB": 100.0}); err == nil || !strings.Contains(err.Error(), "请先完成自动调优") {
+		t.Fatalf("deep via command without a recent measurement: %v", err)
 	}
 	out, err := handleTuneCommand("TuneStart", map[string]interface{}{"mode": "auto"})
 	if err != nil {
@@ -354,20 +355,31 @@ func TestHandleTuneCommandStartCancel(t *testing.T) {
 	}
 }
 
-func TestExecuteTuneJobDeepNotImplemented(t *testing.T) {
-	if err := executeTuneJob(context.Background(), "deep", 100); err == nil || !strings.Contains(err.Error(), "批次二") {
-		t.Fatalf("deep execute: %v", err)
-	}
-}
-
-func TestCallTuneEngineMissing(t *testing.T) {
+func TestCallTuneEngineBridge(t *testing.T) {
 	fakeProcSys(t, "cubic bbr")
-	// No engine files in batch 1 (they land with batch 2): the call
-	// must fail with the explicit sentinel, not a generic shell error.
+	// No bridge file on disk: the call must fail, never silently pass.
 	d := &tuneDetection{Interface: "ens5", Peer: "speedtest.sea11.us.leaseweb.net", Port: 5201, Family: "6"}
-	_, err := callTuneEngine(context.Background(), "sample", d)
-	if !errors.Is(err, errTuneEngineMissing) {
-		t.Fatalf("engine missing: %v", err)
+	if _, err := callTuneEngine(context.Background(), "sample", d); err == nil {
+		t.Fatal("missing bridge must fail")
+	}
+	// With a bridge file present, the command runs through tuneCommand.
+	oldCmd := tuneCommand
+	tuneCommand = func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "bash" && len(args) > 2 && args[2] == "sample" {
+			return "FLYX_SAMPLE=100.0 0\n", nil
+		}
+		return "", nil
+	}
+	t.Cleanup(func() { tuneCommand = oldCmd })
+	if err := os.MkdirAll(tuneEngineDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tuneEngineDir(), "bridge.sh"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out, err := callTuneEngine(context.Background(), "sample", d, "4")
+	if err != nil || !strings.Contains(out, "FLYX_SAMPLE=") {
+		t.Fatalf("bridge call: %q %v", out, err)
 	}
 }
 

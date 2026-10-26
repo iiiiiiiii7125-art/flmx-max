@@ -42,13 +42,13 @@ const jobStateLabel: Record<string, string> = {
 /**
  * 节点调优（上游 3.3.43 自动路线）：无需填写带宽和延迟，Agent 自动
  * 选择公共 iperf3 对端实测出口带宽、计算并应用参数、再验证吞吐，
- * 全程后台任务；关闭弹窗不中断，2 秒轮询看进度。
+ * 全程后台任务；关闭弹窗不中断，2 秒轮询看进度。深度优化在 24
+ * 小时内自动测速结果的基础上扫描限速器拐点并应用 HTB/fq 整形，
+ * 开始前显示预计流量与本次预算，勾选允许后才执行。
  *
- * 批次一说明：手填带宽/延迟输入框、分组勾选与一键测算已按上游删除
- * （后端 apply / probe 分支保留，但本弹窗不再发 apply/probe；一键
- * 测算随手动入口一并失去入口）。深度优化按钮在本批禁用，随批次二
- * 提供；测速引擎（tcpfit + bridge）亦随批次二进，批次一的自动任务
- * 会在测速阶段以明确错误失败，不静默回落、不改系统参数。
+ * 手填带宽/延迟输入框、分组勾选与一键测算已按上游删除（后端
+ * apply / probe 分支保留，但本弹窗不再发 apply/probe；一键测算
+ * 随手动入口一并失去入口，见批次一报告 §5）。
  */
 export function NodeTuneModal({
   node,
@@ -61,13 +61,25 @@ export function NodeTuneModal({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"" | NodeTuneAction>("");
   const [detail, setDetail] = useState<string | null>(null);
+  const [deepAgreed, setDeepAgreed] = useState(false);
   const aliveRef = useRef(true);
+  const prevRunningRef = useRef(false);
 
   const job = status?.job;
   const jobRunning = job?.state === "running";
   // 能力探测（上游 3.3.43 automatic 字段）：旧 agent 无此字段。
   const automatic = status?.automatic === true;
   const detection = status?.detection;
+  // 深度优化前置：已应用且 24 小时内的自动测速结果（agent 侧
+  // startTuneJob 同样校验；此处只决定弹窗展示哪一支流程）。
+  const deepReady =
+    Boolean(detection?.applied) &&
+    Boolean(detection?.measuredAt) &&
+    Date.now() - (detection?.measuredAt ?? 0) <= 24 * 3600 * 1000;
+  // 本次预算 = min(1000, ceil(预计 × 1.25 × 10) / 10) GB，与上游同款。
+  const deepBudget = detection
+    ? Math.min(1000, Math.ceil(detection.estimatedGB * 1.25 * 10) / 10)
+    : 0;
 
   const refresh = async (id: number) => {
     const res = await nodeTune(id, "status");
@@ -86,6 +98,7 @@ export function NodeTuneModal({
     setError("");
     setDetail(null);
     setBusy("");
+    setDeepAgreed(false);
     refresh(node.id).catch(() => {
       if (aliveRef.current) setError("读取节点状态失败");
     });
@@ -105,11 +118,22 @@ export function NodeTuneModal({
     return () => window.clearTimeout(timer);
   }, [node, jobRunning]);
 
-  const run = async (action: NodeTuneAction) => {
+  // 任务刚结束时再拉一次状态：最后一次轮询可能停在 running 态，
+  // 而完成的测速结果（深度优化的前置）要靠这次刷新才出现。
+  useEffect(() => {
+    if (prevRunningRef.current && !jobRunning && node) {
+      void refresh(node.id).catch(() => {
+        // 刷新失败不报错，下次打开弹窗再读。
+      });
+    }
+    prevRunningRef.current = jobRunning;
+  }, [node, jobRunning]);
+
+  const run = async (action: NodeTuneAction, maxTrafficGB?: number) => {
     if (!node) return;
     setBusy(action);
     try {
-      const res = await nodeTune(node.id, action);
+      const res = await nodeTune(node.id, action, [], undefined, maxTrafficGB);
       if (!aliveRef.current) return;
       if (res.code !== 0 || !res.data) {
         toast.error(res.msg || "调优失败");
@@ -118,6 +142,10 @@ export function NodeTuneModal({
       setStatus(res.data);
       (res.data.warnings || []).forEach((w) => toast(w, { icon: "⚠️" }));
       if (action === "auto") toast.success("自动调优已开始，后台执行中");
+      if (action === "deep") {
+        toast.success("深度优化已开始，后台执行中");
+        setDeepAgreed(false);
+      }
       if (action === "cancel") toast.success("已停止任务");
       if (action === "restoreAuto") toast.success("已恢复调优前的配置");
     } catch {
@@ -177,8 +205,8 @@ export function NodeTuneModal({
                   </p>
                   <p className="text-xs text-default-500">
                     测速会向 Leaseweb、Clouvider 或 OVH
-                    提供的公共对端发送流量，千兆线路基础测速约消耗 4
-                    GB；公共对端忙或不可达时会报错，不会用假定的千兆带宽代替实测。
+                    提供的公共对端发送流量，千兆线路基础测速约消耗 4–7
+                    GB（含短测排序）；公共对端忙或不可达时会报错，不会用假定的千兆带宽代替实测。
                   </p>
 
                   {/* 自动调优 / 任务进度 */}
@@ -279,26 +307,83 @@ export function NodeTuneModal({
                     </div>
                   )}
 
-                  {/* 深度优化（批次二） */}
+                  {/* 深度优化 */}
                   <div className="space-y-1.5 rounded-xl border border-divider px-3 py-2.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium">深度优化</span>
-                      <Button
-                        isDisabled
-                        size="sm"
-                        variant="bordered"
-                        onPress={() => {}}
-                      >
-                        深度优化
-                      </Button>
+                      {deepReady ? (
+                        <Button
+                          className="ml-auto"
+                          color="primary"
+                          isDisabled={
+                            jobRunning ||
+                            busy !== "" ||
+                            !deepAgreed ||
+                            !detection ||
+                            detection.estimatedGB > 1000
+                          }
+                          isLoading={busy === "deep"}
+                          size="sm"
+                          variant="bordered"
+                          onPress={() => void run("deep", deepBudget)}
+                        >
+                          {jobRunning ? "调优执行中…" : "深度优化"}
+                        </Button>
+                      ) : (
+                        <Button
+                          className="ml-auto"
+                          color="primary"
+                          isDisabled={jobRunning || busy !== ""}
+                          isLoading={busy === "auto"}
+                          size="sm"
+                          variant="bordered"
+                          onPress={() => void run("auto")}
+                        >
+                          自动调优并继续
+                        </Button>
+                      )}
                     </div>
-                    <p className="text-xs text-default-500">
-                      深度优化（限速器拐点扫描 + HTB/fq
-                      整形）随批次二提供。开始前会显示预计流量与本次预算，勾选允许后才执行。
-                      {detection && detection.estimatedGB > 0
-                        ? `按当前测速结果，预计流量约 ${detection.estimatedGB} GB。`
-                        : "需要 24 小时内的自动调优测速结果作为前置。"}
-                    </p>
+                    {deepReady && detection ? (
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-default-500">
+                          按当前测速结果（{detection.bandwidthMbps}{" "}
+                          Mbps），预计流量约 {detection.estimatedGB} GB，本次预算{" "}
+                          {deepBudget} GB。扫描限速器拐点后应用 HTB/fq
+                          整形并验证吞吐；扫描可能需要数分钟，单个任务最长
+                          25 分钟，达到预算即停并恢复扫描前的队列。
+                        </p>
+                        {detection.estimatedGB > 1000 ? (
+                          <p className="text-xs text-warning-600">
+                            预计流量超过 1000 GB 上限，不会启动扫描。
+                          </p>
+                        ) : (
+                          <label className="flex cursor-pointer items-start gap-2 text-xs text-default-600">
+                            <input
+                              checked={deepAgreed}
+                              className="mt-0.5"
+                              type="checkbox"
+                              onChange={(e) =>
+                                setDeepAgreed(e.target.checked)
+                              }
+                            />
+                            <span>
+                              允许本次测速使用上述流量（预计约{" "}
+                              {detection.estimatedGB} GB，本次预算{" "}
+                              {deepBudget} GB）
+                            </span>
+                          </label>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-default-500">
+                        深度优化（限速器拐点扫描 + HTB/fq
+                        整形）需要 24 小时内的自动调优测速结果。
+                        {detection
+                          ? "上次测速结果已超过 24 小时，请重新测速。"
+                          : "还没有测速结果。"}
+                        点「自动调优并继续」，完成后会自动显示预计流量和本次流量预算。
+                      </p>
+                    )}
                   </div>
 
                   {/* 已应用分组（只读） */}

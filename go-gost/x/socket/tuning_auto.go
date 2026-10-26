@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -22,27 +22,32 @@ import (
 	"time"
 )
 
-// Automatic tuning (upstream 3.3.43, D43-T1): the agent picks a public
-// iperf3 peer, measures the egress bandwidth, sizes the buffers for it,
-// applies them, and verifies single- and multi-stream throughput —
-// all as a background job the panel polls. Batch 1 ports the job
-// model, the peer list, the dependency install, and the restore
-// half; the measurement engine (tcpfit.sh + bridge.sh, go:embed) and
-// the deep-scan half (estimateTuneTraffic, executeDeepTuning,
-// tuning_queues.go) land with batch 2. Until then a job reaches the
-// measuring stage and fails with errTuneEngineMissing — explicitly,
-// never by pretending the peers are busy.
+//go:embed tcpfit/*.sh tcpfit/LICENSE
+var tuneEngine embed.FS
+
+// Automatic tuning (upstream 3.3.43, D43-T1) + deep optimization
+// (D43-T2, batch 2): the agent picks a public iperf3 peer, measures
+// the egress bandwidth, sizes the buffers for it, applies them, and
+// verifies single- and multi-stream throughput — all as a background
+// job the panel polls. Deep optimization additionally scans for the
+// policer knee (tuning_queues.go) and applies an HTB/fq shaper.
+//
+// The measurement engine (tcpfit.sh + bridge.sh, Kylin010/tcpfit
+// 0.5.9, go:embed) is vendored under tcpfit/; see tcpfit/README.md.
 //
 // FLMX notes vs upstream (flyx):
-//   - user-visible strings say FLMX; the FLYX_SAMPLE= wire marker is
-//     kept verbatim so the vendored engine (batch 2, upstream bytes)
-//     needs no patch.
-//   - findTunePeers probes twice and ranks by the lower latency: the
+//   - user-visible strings say FLMX; the FLYX_SAMPLE= / FLYX_SWEEP_
+//     wire markers are kept verbatim so the vendored engine (upstream
+//     bytes) needs no patch.
+//   - findTunePeers probes twice and ranks by the lower latency, and
+//     rankTunePeers then short-samples the top candidates: the
 //     pre-port probe (port-3343/IPERF3-PROBE-REPORT.md §2) showed
 //     cold-start handshakes inflated by 80–310 ms, which made a
 //     single-pass sort pick a 139 Mbps peer over the true 4140 Mbps
-//     line (~30x mis-size). The stronger fix — short-sample ranking
-//     of the top candidates — needs the engine and is a batch-2 item.
+//     line (~30x mis-size). Handshake latency is only a proxy for
+//     bandwidth, so the top four are re-ranked by a 5 s single-stream
+//     sample (bridge action "short", FLMX-only) before the full
+//     4-stream 10 s sample runs; see rankTunePeers.
 
 type tuneSample struct {
 	Mbps        float64 `json:"mbps"`
@@ -96,12 +101,7 @@ var tuneCommand = runTuneCommand
 var tunePrepare = prepareTuneEngine
 var tuneFindPeers = findTunePeers
 var tuneMeasure = measureTuneSample
-
-// errTuneEngineMissing is returned when the tuning engine (tcpfit.sh +
-// bridge.sh, vendored with batch 2) is not on disk yet. Batch 1 creates
-// the engine directory and the call path; the files land with batch 2.
-// Callers must surface this as-is — never as "peers busy".
-var errTuneEngineMissing = errors.New("测速引擎尚未提供（tcpfit 引擎随批次二提供），自动调优暂不可测速")
+var tuneShortMeasure = measureTuneShortSample
 
 func tuneStatePath(name string) string { return filepath.Join(filepath.Dir(tuneBackupPath), name) }
 func tuneEngineDir() string            { return tuneStatePath("tcpfit") }
@@ -169,12 +169,15 @@ func startTuneJob(mode string, maxGB float64) (tuneStatus, error) {
 		return tuneStatus{}, fmt.Errorf("先前任务的队列尚未恢复，请先恢复原配置：%w", err)
 	}
 	if mode == "deep" {
-		// Batch 2: the deep branch (24h-result precondition +
-		// maxGB budget check against EstimatedGB) is restored with
-		// estimateTuneTraffic / executeDeepTuning. Until then deep
-		// is refused outright, never half-run.
-		tuningOperation.Unlock()
-		return tuneStatus{}, fmt.Errorf("深度优化尚未移植（随批次二提供），请先使用自动调优")
+		d := loadTuneDetection()
+		if d == nil || !d.Applied || time.Now().UnixMilli()-d.MeasuredAt > int64(24*time.Hour/time.Millisecond) {
+			tuningOperation.Unlock()
+			return tuneStatus{}, fmt.Errorf("请先完成自动调优，24 小时内的测速结果才能用于深度优化")
+		}
+		if math.IsNaN(maxGB) || math.IsInf(maxGB, 0) || maxGB < d.EstimatedGB || maxGB > 1000 {
+			tuningOperation.Unlock()
+			return tuneStatus{}, fmt.Errorf("请先确认本次深度优化的预计流量（约 %.1f GB）", d.EstimatedGB)
+		}
 	}
 	var token [12]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -333,10 +336,15 @@ func prepareTuneEngine(ctx context.Context) error {
 	if err := os.MkdirAll(tuneEngineDir(), 0o700); err != nil {
 		return err
 	}
-	// Batch 1: the directory and its path convention are established
-	// here; the engine files (tcpfit.sh, bridge.sh, LICENSE) are
-	// vendored with batch 2, which also restores the go:embed
-	// extraction loop at this point.
+	for _, name := range []string{"tcpfit.sh", "bridge.sh", "LICENSE"} {
+		b, err := tuneEngine.ReadFile("tcpfit/" + name)
+		if err != nil {
+			return err
+		}
+		if err = writeFileAtomic(filepath.Join(tuneEngineDir(), name), b, 0o700); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -446,11 +454,7 @@ func tuneInterface(ctx context.Context, p tunePeer) (string, error) {
 }
 
 func callTuneEngine(ctx context.Context, action string, d *tuneDetection, args ...string) (string, error) {
-	bridge := filepath.Join(tuneEngineDir(), "bridge.sh")
-	if _, err := os.Stat(bridge); err != nil {
-		return "", errTuneEngineMissing
-	}
-	a := []string{bridge, tuneEngineDir(), action, d.Interface, d.Peer, strconv.Itoa(d.Port), "-" + d.Family}
+	a := []string{filepath.Join(tuneEngineDir(), "bridge.sh"), tuneEngineDir(), action, d.Interface, d.Peer, strconv.Itoa(d.Port), "-" + d.Family}
 	return tuneCommand(ctx, "bash", append(a, args...)...)
 }
 
@@ -491,6 +495,72 @@ func measureTuneSample(ctx context.Context, d *tuneDetection, parallel int) (*tu
 	return parseTuneSample(out)
 }
 
+// measureTuneShortSample runs the 5 s single-stream probe (bridge
+// action "short", FLMX-only) used to rank handshake candidates by
+// measured bandwidth. It never feeds the sizing decision directly:
+// only the full 4-stream 10 s sample does that.
+func measureTuneShortSample(ctx context.Context, d *tuneDetection) (*tuneSample, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := callTuneEngine(ctx, "short", d)
+	if err != nil {
+		return nil, err
+	}
+	return parseTuneSample(out)
+}
+
+// rankTunePeers re-ranks the handshake-sorted candidates by measured
+// bandwidth: the first four each get a 5 s single-stream short sample
+// and the ones that return a sample come first, fastest first. Peers
+// whose short sample fails keep their handshake order after the
+// ranked ones, and peers beyond the first four keep their handshake
+// order at the tail. With one candidate there is nothing to rank —
+// the full sample measures it anyway — so no short sample runs.
+// When every short sample fails the handshake order is preserved, so
+// the result is never worse than the batch-1 dual-pass ordering.
+// Traffic cost at line rate is bounded by 4 × 5 s single-stream
+// (~2.5 GB on a gigabit line); the modal copy states the total.
+func rankTunePeers(ctx context.Context, peers []tunePeer) []tunePeer {
+	if len(peers) <= 1 {
+		return peers
+	}
+	limit := len(peers)
+	if limit > 4 {
+		limit = 4
+	}
+	type ranked struct {
+		peer tunePeer
+		mbps float64
+	}
+	var rankedPeers []ranked
+	var unranked []tunePeer
+	for _, p := range peers[:limit] {
+		if ctx.Err() != nil {
+			break
+		}
+		iface, err := tuneInterface(ctx, p)
+		if err != nil {
+			unranked = append(unranked, p)
+			continue
+		}
+		candidate := &tuneDetection{Interface: iface, Peer: p.host, Port: p.port, Family: p.family}
+		s, err := tuneShortMeasure(ctx, candidate)
+		if err != nil || ctx.Err() != nil {
+			unranked = append(unranked, p)
+			continue
+		}
+		rankedPeers = append(rankedPeers, ranked{peer: p, mbps: s.Mbps})
+	}
+	sort.SliceStable(rankedPeers, func(i, j int) bool { return rankedPeers[i].mbps > rankedPeers[j].mbps })
+	out := make([]tunePeer, 0, len(peers))
+	for _, r := range rankedPeers {
+		out = append(out, r.peer)
+	}
+	out = append(out, unranked...)
+	out = append(out, peers[limit:]...)
+	return out
+}
+
 func recoverAutomaticTuningOnStart() {
 	if !tuningOperation.TryLock() {
 		return
@@ -501,8 +571,7 @@ func recoverAutomaticTuningOnStart() {
 		return
 	}
 	// Containers have no systemd; reapply a committed shaper when the agent
-	// starts after a host/container restart. (No shaper exists before
-	// batch 2, so this branch is dormant until then.)
+	// starts after a host/container restart.
 	if InContainer() {
 		if d := loadTuneDetection(); d != nil && d.ShapeMbps > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -514,23 +583,31 @@ func recoverAutomaticTuningOnStart() {
 	}
 }
 
+func estimateTuneTraffic(bw int) float64 {
+	step := math.Max(20, math.Floor(float64(bw)/300+0.5)*10)
+	steps := math.Floor(float64(bw)*0.4/step) + 1
+	mb := float64(bw)*10/8 + float64(bw)*0.4 + (steps+3)*float64(bw)*12/8 + float64(bw)*10/8*2
+	return math.Ceil(mb/1024*10) / 10
+}
+
 func executeTuneJob(ctx context.Context, mode string, maxGB float64) error {
 	if mode == "restore" {
 		return restoreAutomaticTuning(ctx)
 	}
-	if mode == "deep" {
-		// Batch 2: estimateTuneTraffic + executeDeepTuning land with
-		// the deep-optimization port (tuning_queues.go + tcpfit).
-		// startTuneJob already refuses deep; this is defense in depth.
-		return fmt.Errorf("深度优化尚未移植（随批次二提供），请先使用自动调优")
-	}
 	if err := tunePrepare(ctx); err != nil {
 		return err
+	}
+	if mode == "deep" {
+		return executeDeepTuning(ctx, loadTuneDetection(), maxGB)
 	}
 	tuneProgress("selecting", 12, "自动选择可用的公共测速对端")
 	peers := tuneFindPeers(ctx)
 	if len(peers) == 0 {
 		return fmt.Errorf("公共测速对端不可达，未更改系统参数，请稍后重试")
+	}
+	if len(peers) > 1 {
+		tuneProgress("selecting", 18, "短测候选对端，取实测最快的对端")
+		peers = rankTunePeers(ctx, peers)
 	}
 	var d *tuneDetection
 	for i, p := range peers {
@@ -548,12 +625,6 @@ func executeTuneJob(ctx context.Context, mode string, maxGB float64) error {
 			return ctx.Err()
 		}
 		if err != nil {
-			// Batch 1: without the engine every candidate fails
-			// the same way; say so once instead of reporting
-			// "peers busy" after four identical failures.
-			if errors.Is(err, errTuneEngineMissing) {
-				return err
-			}
 			continue
 		}
 		candidate.Before = sample
@@ -581,8 +652,7 @@ func executeTuneJob(ctx context.Context, mode string, maxGB float64) error {
 				candidate.BandwidthSource = "沿用整形前实测（当前测速受出向整形限制）"
 			}
 		}
-		// Batch 2 restores: candidate.EstimatedGB =
-		// estimateTuneTraffic(candidate.BandwidthMbps) (deep-scan budget).
+		candidate.EstimatedGB = estimateTuneTraffic(candidate.BandwidthMbps)
 		d = candidate
 		break
 	}

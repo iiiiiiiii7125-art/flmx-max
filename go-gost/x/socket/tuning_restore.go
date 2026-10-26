@@ -11,10 +11,10 @@ import (
 )
 
 // Tuning restore and crash recovery (upstream 3.3.43 tuning_queues.go,
-// restore half). Batch 1 ports only what restoreAuto and the startup
-// recovery need; the deep-scan half of that file — captureTuneQueues,
+// restore half). The deep-scan half of that file — captureTuneQueues,
 // tuneQueueReplay, executeDeepTuning, persistTuneShape,
-// tuneShapeScript, tuneTrafficBytes — lands with batch 2.
+// tuneShapeScript, tuneTrafficBytes — lives in tuning_queues.go
+// (batch 2); the two files do not overlap.
 //
 // FLMX notes vs upstream (flyx): the systemd unit is
 // flmx-tuning-qdisc.service (fork rename rule); the backup path stays

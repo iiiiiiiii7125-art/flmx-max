@@ -81,9 +81,10 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		SpeedtestURL     string `json:"speedtestURL"`
 		ReferenceHost    string `json:"referenceHost"`
 		// Deep-scan traffic budget in GB (action "deep" only, upstream
-		// 3.3.43 TuneStart mode "deep"). Batch 1: the agent refuses
-		// deep outright (batch 2); the panel still validates the
-		// range so a bad budget is rejected before any node traffic.
+		// 3.3.43 TuneStart mode "deep"). The range is checked here so
+		// a bad budget never reaches a node; the agent additionally
+		// enforces EstimatedGB <= maxGB <= 1000 against the last
+		// 24-hour measurement (startTuneJob).
 		MaxTrafficGB float64 `json:"maxTrafficGB"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil || req.ID <= 0 {
@@ -159,9 +160,10 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		command, data = "TuneStart", map[string]interface{}{"mode": "auto"}
 	case "deep":
 		// Deep optimization (upstream 3.3.43 TuneStart mode "deep"):
-		// budget is this run's hard cap, 0 < maxGB <= 1000. Batch 1:
-		// the agent refuses deep outright (batch 2); the range is
-		// still checked here so a bad budget never reaches a node.
+		// budget is this run's hard cap, 0 < maxGB <= 1000. The
+		// range is checked here so a bad budget never reaches a
+		// node; the agent checks it against the estimated traffic
+		// and the 24-hour measurement precondition.
 		if req.MaxTrafficGB <= 0 || req.MaxTrafficGB > 1000 {
 			response.WriteJSON(w, response.ErrDefault("流量预算需大于 0 且不超过 1000 GB"))
 			return
