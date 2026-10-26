@@ -67,9 +67,31 @@ export function eligibleNodes(nodes: NodeApiItem[]): NodeApiItem[] {
   );
 }
 
+/** Strip a trailing :port from a stored node address — mirrors backend
+ * stripShareHostPort (kernel_share_address.go, R25-X-01): bracketed IPv6
+ * "[v6]:port" yields the bare v6; "host:port" yields host; a bare value
+ * passes through with brackets trimmed. PORT-REVIEW-L3-001: without this,
+ * a stock node stored as "203.0.113.10:6366" made nodeFamilyIP return ""
+ * for both families and validate() blocked the save. */
+export function stripShareHostPort(value: string): string {
+  const trimmed = (value ?? "").trim();
+
+  if (!trimmed) return "";
+  const bracketed = trimmed.match(/^\[(.*)\](?::.*)?$/);
+
+  if (bracketed) return bracketed[1];
+  const hostPort = trimmed.match(/^([^:]+):[^:]*$/);
+
+  if (hostPort) return hostPort[1];
+  return trimmed.replace(/^\[|\]$/g, "");
+}
+
 /** The node's address of one family (DB-2): the family field wins; the
- * primary serverIp counts when it belongs to that family. Mirrors the
- * backend resolver — the server re-validates on save regardless. */
+ * primary serverIp counts when it belongs to that family. Each candidate
+ * is stripped of a trailing :port first (see stripShareHostPort), so a
+ * stock node stored with a port still yields its bare family address.
+ * Mirrors the backend resolver — the server re-validates on save
+ * regardless. */
 export function nodeFamilyIP(
   node: NodeApiItem | undefined,
   ipv6: boolean,
@@ -78,7 +100,7 @@ export function nodeFamilyIP(
   const candidates = [ipv6 ? node.serverIpV6 : node.serverIpV4, node.serverIp];
 
   for (const raw of candidates) {
-    const value = (raw ?? "").trim().replace(/^\[|\]$/g, "");
+    const value = stripShareHostPort(raw ?? "");
 
     if (!value) continue;
     const isV6 = value.includes(":") && !value.includes(".");
