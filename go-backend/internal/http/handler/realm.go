@@ -97,7 +97,13 @@ func realmListenAddr(node *nodeRecord, port int, bindIP string) string {
 		}
 		return processServerAddress(net.JoinHostPort(strings.Trim(bindIP, "[]"), strconv.Itoa(port)))
 	}
-	return processServerAddress(fmt.Sprintf("%s:%d", node.TCPListenAddr, port))
+	// R32-FIX-F01：监听地址先剥离 :port 再与服务端口拼接——含端口
+	// 的 TCPListenAddr（如 "203.0.113.7:9999"）否则产出
+	// "203.0.113.7:9999:443" 畸形地址。须用 JoinHostPort 而非
+	// "%s:%d" 直拼：裸 IPv6 监听地址拼端口后形如 "2001:db8::1:443"，
+	// 会被 processServerAddress 误读成另一个合法 IPv6 地址
+	// （"[2001:db8::1:443]"）。bindIP 分支（D-01「端口胜出」）不动。
+	return processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(node.TCPListenAddr), "[]"), strconv.Itoa(port)))
 }
 
 // realmNodeEndpoints lists the realm forwards to run on a node. override

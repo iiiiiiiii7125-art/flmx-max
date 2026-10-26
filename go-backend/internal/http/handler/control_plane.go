@@ -2054,7 +2054,12 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 				serviceAddr = processServerAddress(net.JoinHostPort(strings.Trim(trimmedBindIP, "[]"), strconv.Itoa(port)))
 			}
 		} else {
-			serviceAddr = processServerAddress(fmt.Sprintf("%s:%d", listenerAddr, port))
+			// R32-FIX-F01：监听地址先剥离 :port 再与服务端口拼接
+			// （bindIP 分支为 D-01「端口胜出」设计，不动）。须用
+			// JoinHostPort 而非 "%s:%d" 直拼：裸 IPv6 监听地址拼
+			// 端口后会被 processServerAddress 误读成另一个合法
+			// IPv6 地址（见 realm.go 同注释）。
+			serviceAddr = processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(listenerAddr), "[]"), strconv.Itoa(port)))
 		}
 		service := map[string]interface{}{
 			"name": fmt.Sprintf("%s_%s", baseName, protocol),

@@ -85,6 +85,25 @@ func stripShareHostPortList(value string) string {
 	return strings.Join(parts, ",")
 }
 
+// stripListenAddrPort strips a trailing :port from a node listen address
+// (R32-L4-E01 / R32-FIX-F01): operators paste the panel address
+// ("203.0.113.7:9999") into TCP/UDPListenAddr, and the consumption
+// sites splice "%s:%d" with the service port, so a ported value yields
+// "203.0.113.7:9999:443" (too many colons) and the agent bind fails.
+// Unlike stripShareHostPort this never trims brackets: the stored
+// default "[::]" must pass through unchanged (stripShareHostPort would
+// return "::" and rewrite the default's shape), and a bracketed IPv6
+// with port ("[2001:db8::1]:9999") strips to its bare host. A value
+// that is not a host:port pair (bare host/IP, bare IPv6, "[::]")
+// passes through unchanged.
+func stripListenAddrPort(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	return value
+}
+
 // normalizeShareHost returns the stored form of a share host value:
 // whitespace-trimmed, with a single trailing dot removed (B2-01 — the
 // FQDN root dot is a legitimate way to write a hostname, and stored
