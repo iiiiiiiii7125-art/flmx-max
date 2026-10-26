@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -3426,9 +3427,47 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			serverIP = ""
 		}
 		// R30-FIX-F05（写侧归一化，用户 2026-10-26 拍板）：备份恢复
-		// 亦属节点入库语义，同口径剥离 :port 后再存。extraIPs 不在
-		// 本次三字段口径内。
+		// 亦属节点入库语义，同口径剥离 :port 后再存。
 		serverIP = stripIngressHostPort(serverIP)
+		// PORT-CLOSURE F-07(ii)：单次剥离后追加与保存面
+		// IsValidNodeAddress 同口径的格式校验（R3-E-01 结构字符
+		// 集 + 双端口拒绝）；非法值清空 + 回执披露，不猜测修
+		// 正。双端口值剥离为 no-op，须经此门才闭合。
+		if !validImportNodeAddress(serverIP) {
+			rep.warnf("备份恢复：节点地址（节点 #%d）格式非法，已清空，恢复后请在节点设置中重新填写", n.ID)
+			serverIP = ""
+		}
+		serverIPv4 := stripIngressHostPort(n.ServerIPv4)
+		if !validImportNodeAddress(serverIPv4) {
+			rep.warnf("备份恢复：节点 IPv4 地址（节点 #%d）格式非法，已清空，恢复后请在节点设置中重新填写", n.ID)
+			serverIPv4 = ""
+		}
+		serverIPv6 := stripIngressHostPort(n.ServerIPv6)
+		if !validImportNodeAddress(serverIPv6) {
+			rep.warnf("备份恢复：节点 IPv6 地址（节点 #%d）格式非法，已清空，恢复后请在节点设置中重新填写", n.ID)
+			serverIPv6 = ""
+		}
+		// PORT-CLOSURE B-NEW-01（顺手收口，观察级）：ExtraIPs
+		// 逐项剥离 :port 后入库；双端口项剥离为 no-op，原值保
+		// 留（后端唯一消费 nodeAddresses 逐 token 剥离，无未
+		// 剥离消费点）。
+		extraIPs := stripIngressHostPortList(n.ExtraIPs)
+		// PORT-CLOSURE F-02：监听地址恢复侧收口。
+		// stripListenAddrPort 与 R32-FIX-F01 同口径（handler 侧
+		// 同名 helper 的 repo 镜像）：不修剪括号，默认 "[::]"
+		// 原样通过；单端口剥离。双端口值剥离为 no-op——ledger
+		// RED 实例即双端口——须经格式校验回落默认 "[::]" 并回
+		// 执披露，单次剥离本身闭合不了该实例。
+		tcpListenAddr := stripListenAddrPort(n.TCPListenAddr)
+		if !validImportListenAddr(tcpListenAddr) {
+			rep.warnf("备份恢复：节点 TCP 监听地址（节点 #%d）格式非法，已回落默认 [::]，恢复后请在节点设置中重新填写", n.ID)
+			tcpListenAddr = "[::]"
+		}
+		udpListenAddr := stripListenAddrPort(n.UDPListenAddr)
+		if !validImportListenAddr(udpListenAddr) {
+			rep.warnf("备份恢复：节点 UDP 监听地址（节点 #%d）格式非法，已回落默认 [::]，恢复后请在节点设置中重新填写", n.ID)
+			udpListenAddr = "[::]"
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3437,10 +3476,10 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			RenewalCycle: sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
 			Secret:       n.Secret,
 			ServerIP:     serverIP,
-			ServerIPV4:   sql.NullString{String: stripIngressHostPort(n.ServerIPv4), Valid: n.ServerIPv4 != ""},
-			ServerIPV6:   sql.NullString{String: stripIngressHostPort(n.ServerIPv6), Valid: n.ServerIPv6 != ""},
+			ServerIPV4:   sql.NullString{String: serverIPv4, Valid: serverIPv4 != ""},
+			ServerIPV6:   sql.NullString{String: serverIPv6, Valid: serverIPv6 != ""},
 			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。
-			ExtraIPs:      sql.NullString{String: n.ExtraIPs, Valid: n.ExtraIPs != ""},
+			ExtraIPs:      sql.NullString{String: extraIPs, Valid: extraIPs != ""},
 			Port:          n.Port,
 			InterfaceName: sql.NullString{String: n.InterfaceName, Valid: n.InterfaceName != ""},
 			Version:       sql.NullString{String: n.Version, Valid: n.Version != ""},
@@ -3450,8 +3489,8 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			CreatedTime:   n.CreatedTime,
 			UpdatedTime:   sql.NullInt64{Int64: now, Valid: true},
 			Status:        n.Status,
-			TCPListenAddr: n.TCPListenAddr,
-			UDPListenAddr: n.UDPListenAddr,
+			TCPListenAddr: tcpListenAddr,
+			UDPListenAddr: udpListenAddr,
 			Inx:           n.Inx,
 			IsRemote:      n.IsRemote,
 			// 导出仅在 Valid 时写 remote* 三字段，'' 不是合法取值：
@@ -3702,10 +3741,14 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 		// R2X-016：TrafficRatio 意图值在 Create 前捕获（Create 后
 		// GORM 会把 default:1.0 回填进 item，读 item 判不出意图）。
 		ratioIntent := t.TrafficRatio
-		// R32-L4-E02：备份 in_ip 可能含 :port（≤1.5.1 面板备份
-		// 原值落库的残留）；导入侧逐项剥离后入库，剥离后为空
-		// 即 NULL——导出往返自此自愈（重导入即裸值）。
-		strippedInIP := stripIngressHostPortList(t.InIP)
+		// PORT-CLOSURE F-07(iii)：备份 in_ip 可能含 :port（单端口
+		// 逐项剥离，R32-L4-E02 同口径）；双端口项剥离为 no-op，
+		// 须经格式校验丢弃该项 + 回执披露（非法值清空，沿
+		// F-07(a)）。剥离后为空即 NULL（空即 NULL 既有口径）。
+		strippedInIP, droppedInIP := stripAndValidateImportInIPList(t.InIP)
+		if droppedInIP > 0 {
+			rep.warnf("备份恢复：隧道 #%d（%q）的 in_ip 含 %d 项格式非法地址，已丢弃该项，恢复后请检查隧道入口配置", t.ID, t.Name, droppedInIP)
+		}
 		item := model.Tunnel{
 			ID:           t.ID,
 			Name:         t.Name,
@@ -4463,11 +4506,21 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 		if updated == 0 {
 			updated = now
 		}
+		// PORT-CLOSURE F-08：恢复面绕过创建/更新两门（A-31/A-33）。
+		// Target 复用两门格式口径（tcp 须为 host:port、双端口拒；
+		// icmp 同 PC-09 口径：含 ":" 且非合法 IP 字面量即拒），
+		// 非法值清空 + 回执披露。SSRF 硬拒层（LookupIP/netguard）
+		// 仍属创建/更新面，恢复侧不做 DNS 解析。
+		target := r.Target
+		if target != "" && !validImportMonitorTarget(r.Type, target) {
+			rep.warnf("备份恢复：监控 #%d（%q）的目标地址 %q 格式非法，已清空，恢复后请在监控设置中重新填写", r.ID, r.Name, r.Target)
+			target = ""
+		}
 		item := model.ServiceMonitor{
 			ID:          r.ID,
 			Name:        r.Name,
 			Type:        r.Type,
-			Target:      r.Target,
+			Target:      target,
 			IntervalSec: r.IntervalSec,
 			TimeoutSec:  r.TimeoutSec,
 			NodeID:      r.NodeID,
@@ -5858,6 +5911,130 @@ func nullableInIPString(v sql.NullString) interface{} {
 		return nil
 	}
 	return stripIngressHostPortList(v.String)
+}
+
+// stripListenAddrPort strips a trailing :port from a node listen
+// address (PORT-CLOSURE F-02): repo-side mirror of handler
+// stripListenAddrPort (R32-FIX-F01), same semantics — repo cannot
+// import handler. Unlike stripIngressHostPort this never trims
+// brackets: the stored default "[::]" must pass through unchanged
+// (stripIngressHostPort would return "::" and rewrite the
+// default's shape), and a bracketed IPv6 with port
+// ("[2001:db8::1]:9999") strips to its bare host. A value that is
+// not a host:port pair (bare host/IP, bare IPv6, "[::]") passes
+// through unchanged.
+func stripListenAddrPort(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	return value
+}
+
+// validImportNodeAddress is the repo-side mirror of handler
+// IsValidNodeAddress (PORT-CLOSURE F-07(ii)); repo cannot import
+// handler. Same gate: the R3-E-01 structural character set
+// (@ # , / ? whitespace/control, via kernel.HostHasStructuralChars)
+// plus the double-port refusal — a bare IPv6 literal passes via
+// netip.ParseAddr, a plain hostname passes via the SplitHostPort
+// "missing port" allowance, and anything else SplitHostPort rejects
+// (e.g. "too many colons") fails. Empty counts as valid (empty
+// means NULL/unset; callers handle it per field).
+func validImportNodeAddress(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return true
+	}
+	if kernel.HostHasStructuralChars(addr) {
+		return false
+	}
+	if _, err := netip.ParseAddr(addr); err == nil {
+		return true
+	}
+	_, _, err := net.SplitHostPort(addr)
+	if err != nil && !strings.Contains(err.Error(), "missing port in address") {
+		return false
+	}
+	return true
+}
+
+// validImportListenAddr validates a stripped node listen address
+// (PORT-CLOSURE F-02): a bare IP/hostname, a bare or bracketed IPv6
+// literal, or empty (pass-through, no rewrite). A value still
+// carrying ":" that is not a valid IP literal — e.g. a double-port
+// value the single strip could not remove — is invalid.
+func validImportListenAddr(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return true
+	}
+	if kernel.HostHasStructuralChars(addr) {
+		return false
+	}
+	if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
+		return net.ParseIP(strings.Trim(addr, "[]")) != nil
+	}
+	if _, err := netip.ParseAddr(addr); err == nil {
+		return true
+	}
+	return !strings.Contains(addr, ":")
+}
+
+// stripAndValidateImportInIPList strips :port per item of a tunnel
+// in_ip list and drops items that are still not valid node addresses
+// after stripping (PORT-CLOSURE F-07(iii)): a double-port item is a
+// no-op for a single strip and must not land in the DB. Returns the
+// cleaned list and the number of dropped items. Empty items are
+// preserved as-is (R32-L4-E02 shape rule).
+func stripAndValidateImportInIPList(value string) (string, int) {
+	parts := strings.Split(value, ",")
+	kept := parts[:0]
+	dropped := 0
+	for _, part := range parts {
+		stripped := stripIngressHostPort(part)
+		if stripped != "" && !validImportNodeAddress(stripped) {
+			dropped++
+			continue
+		}
+		kept = append(kept, stripped)
+	}
+	return strings.Join(kept, ","), dropped
+}
+
+// validImportMonitorTarget is the format layer of the create/update
+// monitor Target gates (PORT-CLOSURE F-08), mirrored repo-side:
+// tcp must be exactly one host:port (double-port / portless
+// rejected, port 1-65535); icmp must be a bare host — a value
+// containing ":" that is not a valid IP literal is rejected (the
+// PC-09 gate: bracketed IPv6 and bare IPv6 literals pass). Unknown
+// types get no new gate. The SSRF hard-deny layer (LookupIP /
+// netguard) stays on the create/update surface; restore does no DNS
+// resolution.
+func validImportMonitorTarget(typ, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "tcp":
+		host, port, err := net.SplitHostPort(target)
+		if err != nil || strings.TrimSpace(host) == "" {
+			return false
+		}
+		p, err := strconv.Atoi(port)
+		return err == nil && p >= 1 && p <= 65535
+	case "icmp":
+		host := target
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = host[1 : len(host)-1]
+		}
+		if net.ParseIP(host) != nil {
+			return true
+		}
+		return !strings.Contains(host, ":")
+	default:
+		return true
+	}
 }
 
 func nullableString(v sql.NullString) interface{} {

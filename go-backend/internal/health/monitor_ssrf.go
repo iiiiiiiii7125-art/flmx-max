@@ -99,6 +99,16 @@ func ValidateNodeMonitorTarget(typ, target string) error {
 		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 			host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 		}
+		// PC-09：icmp 目标含端口即拒——"host:port"（如 "203.0.113.7:80"）
+		// 此前经 ParseIP/LookupIP 双失败后不拒存而容忍落库，agent
+		// icmpPing ResolveIPAddr 失败致 probe 失败（loud）。裸 IPv6
+		// 字面量含冒号但 ParseIP 成功，不在此限；域名目标不含冒号，
+		// 不受影响（R4X-008「解析失败不拒存」的容忍原由只针对域名
+		// Lookup，见函数头注）。与 tcp 面口径对齐（tcp 面 SplitHostPort
+		// 失败即拒）。
+		if strings.Contains(host, ":") && net.ParseIP(host) == nil {
+			return fmt.Errorf("目标地址格式错误（icmp 目标应为裸主机，不含端口）")
+		}
 	}
 	if strings.TrimSpace(host) == "" {
 		return fmt.Errorf("目标主机为空")

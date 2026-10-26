@@ -553,6 +553,68 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// PORT-CLOSURE Lane C（F-04/F-05/F-07(i)）：intake 侧“剥离 + 格式校验”。
+// 全部剥离 helper 均为单次剥离（SplitHostPort 一次成功即取 host，
+// 失败原样返回），双端口值 "host:port:port" 会以 too many colons
+// 失败而原样穿透；IsValidNodeAddress 对该形态明确拒绝（裸 IPv6 先
+// 经 ParseAddr 放行、SplitHostPort 失败且非 missing port 即拒）。
+// 故 intake 在剥离后追加同一校验，非法值直接拒绝、不落库。
+// 存量双端口行不改写（与 R32 F-01 存量口径一致）：未提交字段保持
+// 原值；已落库的双端口值仍由消费侧既有容忍/跳过行为承接。
+
+// stripAndValidateNodeAddress strips a single trailing :port (R25 口径
+// stripShareHostPort) and rejects the result unless it is a valid bare
+// host/IP or single host:port. Empty input stays empty (nullable fields).
+func stripAndValidateNodeAddress(value string) (string, error) {
+	stripped := stripShareHostPort(value)
+	if strings.TrimSpace(stripped) == "" {
+		return "", nil
+	}
+	if err := IsValidNodeAddress(stripped); err != nil {
+		return "", err
+	}
+	return stripped, nil
+}
+
+// validateListenAddrValue strips a single trailing :port from a node
+// listen address and validates the result. Unlike stripShareHostPort
+// it never trims brackets, so the stored default "[::]" passes through
+// unchanged (same semantics as R32-FIX-F01 stripListenAddrPort, which
+// lives in kernel_share_address.go on the R32 branch; this lane is
+// scoped to mutations.go, so the bracket-preserving strip is spelled
+// out here — dedup with stripListenAddrPort at integration).
+// Double-port values fail the single strip and are rejected by
+// IsValidNodeAddress. Empty input stays empty (caller defaults it).
+func validateListenAddrValue(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	if err := IsValidNodeAddress(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// validatePanelInstallAddr validates a panel address from the site
+// config (O-C-01) before it is baked into the node install command:
+// an optional scheme is stripped first (normalizeNodeInstallAddr
+// accepts http/https/ws/wss), then the host part must be a valid bare
+// host/IP or single host:port — a double-port value is rejected.
+func validatePanelInstallAddr(panelAddr string) error {
+	raw := strings.TrimSpace(panelAddr)
+	if raw == "" {
+		return nil
+	}
+	if idx := strings.Index(raw, "://"); idx > 0 {
+		raw = raw[idx+3:]
+	}
+	return IsValidNodeAddress(raw)
+}
+
 func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -610,14 +672,38 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// PORT-CLOSURE F-07(i)：显式 V4/V6 在剥离后复用 IsValidNodeAddress，
+	// 双端口即拒（此前只单次剥离、无校验）。
+	serverIPV4, err := stripAndValidateNodeAddress(asString(req["serverIpV4"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("节点 IPv4 地址格式无效："+err.Error()))
+		return
+	}
+	serverIPV6, err := stripAndValidateNodeAddress(asString(req["serverIpV6"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("节点 IPv6 地址格式无效："+err.Error()))
+		return
+	}
+	// PORT-CLOSURE F-05：监听地址剥离后须过格式校验，双端口即拒
+	// （此前原值落库、零校验；单次剥离缺口见 FIX-PLAN F-05）。
+	tcpListenAddr, err := validateListenAddrValue(asString(req["tcpListenAddr"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("TCP 监听地址格式无效："+err.Error()))
+		return
+	}
+	udpListenAddr, err := validateListenAddrValue(asString(req["udpListenAddr"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("UDP 监听地址格式无效："+err.Error()))
+		return
+	}
 	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
 	nodeID, err := h.repo.CreateNode(
 		name,
 		nodeSecret,
 		serverIP,
 		// R30-FIX-F04：显式字段同口径归一化（写侧）。
-		nullableText(stripShareHostPort(asString(req["serverIpV4"]))),
-		nullableText(stripShareHostPort(asString(req["serverIpV6"]))),
+		nullableText(serverIPV4),
+		nullableText(serverIPV6),
 		defaultString(asString(req["port"]), "1000-65535"),
 		nullableText(asString(req["interfaceName"])),
 		nullableText(""),
@@ -629,17 +715,18 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		asInt(req["socks"], 0),
 		now,
 		status,
-		// R32-FIX-F01：监听地址同口径剥离 :port 后存（与 ServerIP
-		// intake 前例一致；stripListenAddrPort 不修剪括号，默认
-		// "[::]" 原样通过）。
-		defaultString(stripListenAddrPort(asString(req["tcpListenAddr"])), "[::]"),
-		defaultString(stripListenAddrPort(asString(req["udpListenAddr"])), "[::]"),
+		// PORT-CLOSURE F-05：监听地址已在上方剥离 + 校验后落库。
+		defaultString(tcpListenAddr, "[::]"),
+		defaultString(udpListenAddr, "[::]"),
 		inx,
 		asInt(req["isRemote"], 0),
 		nullableText(asString(req["remoteUrl"])),
 		nullableText(asString(req["remoteToken"])),
 		nullableText(asString(req["remoteConfig"])),
-		nullableText(asString(req["extraIPs"])),
+		// PORT-CLOSURE B-NEW-01（顺手收口）：extraIPs 按逗号分项剥离
+		// :port 后落库（此前原值落库；唯一消费 nodeAddresses 逐 token
+		// 剥离，故此前无未剥离消费点）。
+		nullableText(stripShareHostPortList(asString(req["extraIPs"]))),
 		forwardMode,
 	)
 	if err != nil {
@@ -749,6 +836,28 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return current
 	}
+	// PORT-CLOSURE B-NEW-01（顺手收口）：仅提交的 extraIPs 按逗号
+	// 分项剥离 :port 后存；未提交的字段保持存量原值。
+	resolveExtraIPs := func(key string, current interface{}) interface{} {
+		if _, ok := req[key]; ok {
+			return nullableText(stripShareHostPortList(asString(req[key])))
+		}
+		return current
+	}
+	// PORT-CLOSURE F-07(i)：仅提交的 V4/V6 字段在剥离后复用
+	// IsValidNodeAddress，双端口即拒（与 nodeCreate 同口径）。
+	if _, ok := req["serverIpV4"]; ok {
+		if _, err := stripAndValidateNodeAddress(asString(req["serverIpV4"])); err != nil {
+			response.WriteJSON(w, response.ErrDefault("节点 IPv4 地址格式无效："+err.Error()))
+			return
+		}
+	}
+	if _, ok := req["serverIpV6"]; ok {
+		if _, err := stripAndValidateNodeAddress(asString(req["serverIpV6"])); err != nil {
+			response.WriteJSON(w, response.ErrDefault("节点 IPv6 地址格式无效："+err.Error()))
+			return
+		}
+	}
 	nodeName := currentNode.Name
 	if _, ok := req["name"]; ok {
 		nodeName = asString(req["name"])
@@ -774,16 +883,26 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	tcpAddr := currentNode.TCPListenAddr
 	if _, ok := req["tcpListenAddr"]; ok {
-		// R32-FIX-F01：仅提交的字段剥离 :port 后存；未提交的字段
-		// 保持存量原值（存量不改写）。
-		tcpAddr = defaultString(stripListenAddrPort(asString(req["tcpListenAddr"])), "[::]")
+		// PORT-CLOSURE F-05：仅提交的字段剥离 + 校验后存；未提交的
+		// 字段保持存量原值（存量不改写）。
+		v, err := validateListenAddrValue(asString(req["tcpListenAddr"]))
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault("TCP 监听地址格式无效："+err.Error()))
+			return
+		}
+		tcpAddr = defaultString(v, "[::]")
 	}
 	if strings.TrimSpace(tcpAddr) == "" {
 		tcpAddr = "[::]"
 	}
 	udpAddr := currentNode.UDPListenAddr
 	if _, ok := req["udpListenAddr"]; ok {
-		udpAddr = defaultString(stripListenAddrPort(asString(req["udpListenAddr"])), "[::]")
+		v, err := validateListenAddrValue(asString(req["udpListenAddr"]))
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault("UDP 监听地址格式无效："+err.Error()))
+			return
+		}
+		udpAddr = defaultString(v, "[::]")
 	}
 	if strings.TrimSpace(udpAddr) == "" {
 		udpAddr = "[::]"
@@ -797,7 +916,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		resolveNodeIP("serverIpV6", currentNode.ServerIPV6),
 		nodePort,
 		resolveText("interfaceName", currentNode.InterfaceName),
-		resolveText("extraIPs", currentNode.ExtraIPs),
+		resolveExtraIPs("extraIPs", currentNode.ExtraIPs),
 		remarkVal,
 		expiryVal,
 		renewalVal,
@@ -835,7 +954,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := req["serverIpV6"]; ok && stripShareHostPort(asString(req["serverIpV6"])) != currentNode.ServerIPV6.String {
 		addrChanged = true
 	}
-	if _, ok := req["extraIPs"]; ok && asString(req["extraIPs"]) != currentNode.ExtraIPs.String {
+	if _, ok := req["extraIPs"]; ok && stripShareHostPortList(asString(req["extraIPs"])) != currentNode.ExtraIPs.String {
 		addrChanged = true
 	}
 	if addrChanged {
@@ -1105,6 +1224,13 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	// PORT-CLOSURE O-C-01（顺手收口）：面板地址在生成安装命令前须
+	// 过格式校验——双端口值产出畸形 WS 地址、安装 loud 失败；此处
+	// 直接拒绝并指向网站配置（单 host:port 为正常面板地址，放行）。
+	if err := validatePanelInstallAddr(panelAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault("网站配置中的面板地址格式无效："+err.Error()+"，请前往网站配置检查"))
 		return
 	}
 	enabled, proxyURL := h.getGithubProxyConfig()
@@ -3346,7 +3472,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	// 同口径复用 stripShareHostPort，R25 口径）。节点显式字段含
 	// :port 时前端下拉会原样提交该值；不剥离则原值落库，下发层
 	// “端口胜出”致 inPort 被静默丢弃、服务监听在嵌入端口上。
-	inIp = stripShareHostPort(inIp)
+	// PORT-CLOSURE F-04：剥离后追加格式校验——双端口值单次剥离
+	// 穿透（too many colons），此处直接拒绝并提示；一次收口同时
+	// 覆盖 gost/realm/nft 三面。存量双端口 inIp 不改写。
+	if inIp, err = stripAndValidateNodeAddress(inIp); err != nil {
+		response.WriteJSON(w, response.ErrDefault("监听IP格式无效："+err.Error()))
+		return
+	}
 	if inIp != "" && len(entryNodes) > 1 {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
@@ -3552,7 +3684,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		// R30-FIX-F01：与 forwardCreate 同口径，intake 剥离含 :port
 		// 的 inIp（含取自 extraIPs 的下拉值）；hasInIP 时原值进
 		// replaceForwardPorts，此处一次收敛。
-		inIp = stripShareHostPort(inIp)
+		// PORT-CLOSURE F-04：剥离后追加格式校验，双端口值直接拒绝
+		// （与 forwardCreate 同口径；存量双端口 inIp 不改写）。
+		var err error
+		if inIp, err = stripAndValidateNodeAddress(inIp); err != nil {
+			response.WriteJSON(w, response.ErrDefault("监听IP格式无效："+err.Error()))
+			return
+		}
 	}
 	fwdEntryNodes, _ := h.tunnelEntryNodeIDs(tunnelID)
 	if hasInIP && strings.TrimSpace(inIp) != "" && len(fwdEntryNodes) > 1 {
@@ -5559,12 +5697,27 @@ func buildTunnelInIP(inNodes []tunnelRuntimeNode, nodes map[int64]*nodeRecord, i
 }
 
 func validateTunnelConnectIPConstraints(req map[string]interface{}) error {
+	// PORT-CLOSURE ConnectIP（顺手收口）：自定义连接 IP 只做格式
+	// 校验、不剥离——存储 chain_tunnel.connect_ip 保持原值（R30
+	// F-02 口径，消费点 selectTunnelDialHost 已剥离）；双端口值
+	// 单次剥离穿透，此处直接拒绝。空值放行（走节点地址 pick 口径）。
+	validateConnectIP := func(v string) error {
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return IsValidNodeAddress(strings.TrimSpace(v))
+	}
 	outNodes := asMapSlice(req["outNodeId"])
 	if len(outNodes) > 1 {
 		for _, item := range outNodes {
 			if strings.TrimSpace(asString(item["connectIp"])) != "" {
 				return fmt.Errorf("多出口隧道不支持设置自定义连接IP")
 			}
+		}
+	}
+	for _, item := range outNodes {
+		if err := validateConnectIP(asString(item["connectIp"])); err != nil {
+			return fmt.Errorf("自定义连接IP格式无效：%v", err)
 		}
 	}
 
@@ -5577,6 +5730,13 @@ func validateTunnelConnectIPConstraints(req map[string]interface{}) error {
 		for _, item := range hopNodes {
 			if strings.TrimSpace(asString(item["connectIp"])) != "" {
 				return fmt.Errorf("转发链第%d跳有多个节点时不支持设置自定义连接IP", hopIdx+1)
+			}
+		}
+	}
+	for _, hopRaw := range asAnySlice(req["chainNodes"]) {
+		for _, item := range asMapSlice(hopRaw) {
+			if err := validateConnectIP(asString(item["connectIp"])); err != nil {
+				return fmt.Errorf("自定义连接IP格式无效：%v", err)
 			}
 		}
 	}

@@ -75,9 +75,11 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 			return err
 		}
 	}
-	// R32-FIX-F01：与 realm/gost/链式三处同形——监听地址先剥离 :port
+	// R32-FIX-F01 / PC-01：第 4 处 TCPListenAddr 直拼——监听地址先剥离 :port
 	// 再与服务端口拼接（枚举 A12–A14 之外的第四处同形直拼点；须用
 	// JoinHostPort：裸 IPv6 直拼会被误读，见 realm.go 同注释）。
+	// 注：不用裸 processServerAddress 包裹——它对 "host:port:port" 原样返回，
+	// 包了也修不了本处。
 	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(node.TCPListenAddr), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName)
 	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
 		service["handler"].(map[string]interface{})["auth"] = auth

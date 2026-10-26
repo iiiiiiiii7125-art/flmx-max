@@ -1899,6 +1899,14 @@ func parseTargetAddress(addr string) (string, int, error) {
 		}
 		host = strings.TrimSpace(addr[:idx])
 		portStr = strings.TrimSpace(addr[idx+1:])
+		// PC-06: the fallback must not silently slice a double-port value
+		// ("203.0.113.7:8080:9090" -> host "203.0.113.7:8080"). The sliced
+		// host must be a bare IP or contain no colon (hostname); otherwise
+		// the input is malformed. The bare-IPv6 fallback ("2001:db8::1:443"
+		// -> host "2001:db8::1") is preserved because ParseIP succeeds.
+		if net.ParseIP(host) == nil && strings.Contains(host, ":") {
+			return "", 0, errors.New("invalid host")
+		}
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(portStr))
 	if err != nil || port <= 0 || port > 65535 {
@@ -2158,6 +2166,18 @@ func processServerAddress(serverAddr string) string {
 	// IPv6-with-port must be provided in bracket form: [::1]:443.
 	if looksLikeIPv6(serverAddr) {
 		if ip := net.ParseIP(serverAddr); ip != nil && ip.To4() == nil {
+			// PC-03: "2001:db8::1:443" parses as a valid IPv6 literal, but
+			// it arrives here as a bare-IPv6 host + Sprintf port
+			// (mutations.go:6460, federation.go:146, control_plane.go:2057,
+			// realm.go:100). If the tail after the last ":" is a decimal
+			// port and the prefix is itself a valid IP, treat the input as
+			// host:port instead of bracketing the whole string (which would
+			// fold the port into the address and drop the port component).
+			if idx := strings.LastIndex(serverAddr, ":"); idx > 0 {
+				if hostPart, portPart := serverAddr[:idx], serverAddr[idx+1:]; isDecimalPort(portPart) && net.ParseIP(hostPart) != nil {
+					return "[" + hostPart + "]:" + portPart
+				}
+			}
 			return "[" + serverAddr + "]"
 		}
 	}
@@ -2203,6 +2223,20 @@ func normalizeServerAddressInput(serverAddr string) string {
 
 func looksLikeIPv6(address string) bool {
 	return strings.Count(address, ":") >= 2
+}
+
+// isDecimalPort reports whether s is a decimal TCP/UDP port number (1-65535).
+func isDecimalPort(s string) bool {
+	if s == "" || len(s) > 5 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	port, err := strconv.Atoi(s)
+	return err == nil && port >= 1 && port <= 65535
 }
 
 func asBool(v interface{}, def bool) bool {
