@@ -561,11 +561,18 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
       certMode: form.securityType === "tls" ? form.certMode : undefined,
       certFile: form.certFile.trim() || undefined,
       keyFile: form.keyFile.trim() || undefined,
-      realityDest: form.realityDest.trim() || undefined,
-      realityPrivateKey: form.realityPrivateKey.trim() || undefined,
-      realityShortIds: form.realityShortIds.trim()
-        ? splitList(form.realityShortIds)
-        : undefined,
+      realityDest:
+        form.securityType === "reality"
+          ? form.realityDest.trim() || undefined
+          : undefined,
+      realityPrivateKey:
+        form.securityType === "reality"
+          ? form.realityPrivateKey.trim() || undefined
+          : undefined,
+      realityShortIds:
+        form.securityType === "reality" && form.realityShortIds.trim()
+          ? splitList(form.realityShortIds)
+          : undefined,
       realityMinClientVer:
         form.securityType === "reality"
           ? form.realityMinClientVer.trim() || undefined
