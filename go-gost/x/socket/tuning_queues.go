@@ -341,6 +341,17 @@ func executeDeepTuning(ctx context.Context, d *tuneDetection, maxGB float64) (er
 	return nil
 }
 
+// D4 (PORT-3343-BATCH2-D4-FIX.md): the root line used to be
+// `tc qdisc replace ... root handle 1: htb`. The kernel refuses
+// replace on a live HTB root that already has children, and
+// persistTuneShape runs this script right after the engine installed
+// exactly such a root, so every deep run that found a knee failed at
+// the persist step. Delete the root first — tolerating a missing or
+// kernel-default root, which plain del cannot remove — and add it
+// back: the same del+add sequence apply_test_shaper already uses.
+// The class/leaf lines stay `replace`: replace is add-or-replace and
+// works whether or not the objects exist yet. Deliberate FLMX
+// deviation from upstream tuneShapeScript (upstream :405).
 func tuneShapeScript(iface string, rate int) string {
 	q := tuneShellQuote(iface)
 	r := strconv.Itoa(rate) + "mbit"
@@ -348,7 +359,7 @@ func tuneShapeScript(iface string, rate int) string {
 	if burst < 32768 {
 		burst = 32768
 	}
-	return fmt.Sprintf("#!/bin/sh\nset -eu\ntc qdisc replace dev %s root handle 1: htb default 10\ntc class replace dev %s parent 1: classid 1:10 htb rate %s ceil %s burst %d cburst %d quantum 1514\ntc qdisc replace dev %s parent 1:10 handle 10: fq limit 40960 flow_limit 8192 maxrate %s\n", q, q, r, r, burst, burst, q, r)
+	return fmt.Sprintf("#!/bin/sh\nset -eu\ntc qdisc del dev %s root || true\ntc qdisc add dev %s root handle 1: htb default 10\ntc class replace dev %s parent 1: classid 1:10 htb rate %s ceil %s burst %d cburst %d quantum 1514\ntc qdisc replace dev %s parent 1:10 handle 10: fq limit 40960 flow_limit 8192 maxrate %s\n", q, q, q, r, r, burst, burst, q, r)
 }
 
 func persistTuneShape(ctx context.Context, d *tuneDetection, rate int) error {
