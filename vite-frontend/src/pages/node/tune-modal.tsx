@@ -80,6 +80,9 @@ export function NodeTuneModal({
   const deepBudget = detection
     ? Math.min(1000, Math.ceil(detection.estimatedGB * 1.25 * 10) / 10)
     : 0;
+  // 残留 tuning-result.json 的 0 值按缺失处理：bb66240 自产结果恒 ≥ 0.1 GB，
+  // 0 只来自批次一 agent 的残留文件（PORT-REVIEW-L4-001）。0 值下不展示
+  // “预计 0 GB / 预算 0 GB”，按钮禁用、文案改报无法估算。
 
   const refresh = async (id: number) => {
     const res = await nodeTune(id, "status");
@@ -120,8 +123,16 @@ export function NodeTuneModal({
 
   // 任务刚结束时再拉一次状态：最后一次轮询可能停在 running 态，
   // 而完成的测速结果（深度优化的前置）要靠这次刷新才出现。
+  // restoreAuto 的完成 toast 只在此派发一次：成功报“已恢复”，失败报失败；
+  // auto/deep 的既有行为不动（只有“已开始” toast，无完成 toast）。
+  // job.mode === "restore" 即 restoreAuto 任务（后端 TuneStart mode "restore"，
+  // 旧 restore 动作走 TuneApply 不建任务，故不会误判）。
   useEffect(() => {
     if (prevRunningRef.current && !jobRunning && node) {
+      if (job?.mode === "restore") {
+        if (job.state === "succeeded") toast.success("已恢复调优前的配置");
+        else if (job.state === "failed") toast.error("恢复原配置失败");
+      }
       void refresh(node.id).catch(() => {
         // 刷新失败不报错，下次打开弹窗再读。
       });
@@ -147,7 +158,11 @@ export function NodeTuneModal({
         setDeepAgreed(false);
       }
       if (action === "cancel") toast.success("已停止任务");
-      if (action === "restoreAuto") toast.success("已恢复调优前的配置");
+      // restoreAuto 是后台任务：code 0 只表示已启动，完成与否看任务终态，
+      // 成功 toast 改在任务结束分支（上）派发，此处只报“已开始”
+      // （PORT-REVIEW-L4-002；与 auto/deep 的“已开始”口径一致）。
+      if (action === "restoreAuto")
+        toast.success("恢复任务已开始，后台执行中");
     } catch {
       if (aliveRef.current) toast.error("调优失败");
     } finally {
@@ -320,6 +335,7 @@ export function NodeTuneModal({
                             busy !== "" ||
                             !deepAgreed ||
                             !detection ||
+                            detection.estimatedGB <= 0 ||
                             detection.estimatedGB > 1000
                           }
                           isLoading={busy === "deep"}
@@ -345,14 +361,26 @@ export function NodeTuneModal({
                     </div>
                     {deepReady && detection ? (
                       <div className="space-y-1.5">
-                        <p className="text-xs text-default-500">
-                          按当前测速结果（{detection.bandwidthMbps}{" "}
-                          Mbps），预计流量约 {detection.estimatedGB} GB，本次预算{" "}
-                          {deepBudget} GB。扫描限速器拐点后应用 HTB/fq
-                          整形并验证吞吐；扫描可能需要数分钟，单个任务最长
-                          25 分钟，达到预算即停并恢复扫描前的队列。
-                        </p>
-                        {detection.estimatedGB > 1000 ? (
+                        {detection.estimatedGB <= 0 ? (
+                          <p className="text-xs text-warning-600">
+                            无法估算流量，请先跑自动调优。
+                          </p>
+                        ) : (
+                          <p className="text-xs text-default-500">
+                            按当前测速结果（{detection.bandwidthMbps}{" "}
+                            Mbps），预计流量约 {detection.estimatedGB}{" "}
+                            GB，本次预算 {deepBudget}{" "}
+                            GB。扫描限速器拐点后应用 HTB/fq
+                            整形并验证吞吐；扫描可能需要数分钟，单个任务最长
+                            25 分钟，达到预算即停并恢复扫描前的队列。
+                          </p>
+                        )}
+                        {detection.estimatedGB <= 0 ? (
+                          <p className="text-xs text-default-500">
+                            测速结果中没有有效的流量估算（可能是旧版 Agent
+                            留下的结果），请先跑一次自动调优。
+                          </p>
+                        ) : detection.estimatedGB > 1000 ? (
                           <p className="text-xs text-warning-600">
                             预计流量超过 1000 GB 上限，不会启动扫描。
                           </p>
