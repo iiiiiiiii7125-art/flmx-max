@@ -125,7 +125,7 @@ func TestPortReviewDeepJobMessageCountsFailedSettings(t *testing.T) {
 	tunePlatform = "linux"
 	tuneAutoExecute = func(ctx context.Context, mode string, maxGB float64) error { return nil }
 	t.Cleanup(func() { tunePlatform, tuneAutoExecute = oldPlatform, oldExec })
-	if _, err := startTuneJob("deep", 10); err != nil {
+	if _, err := startTuneJob("deep", 10, 0); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
