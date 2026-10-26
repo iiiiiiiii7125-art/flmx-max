@@ -2178,13 +2178,11 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	autoBackup, err := h.repo.ExportAllContext(r.Context())
-	if err != nil {
-		// O7-010：导入前自动备份失败时只记录警告、继续导入流程。
-		// 旧逻辑直接中断恢复——但数据库损坏时正是备份失败的时候，
-		// 此时最需要从完好的外部备份恢复。
-		log.Printf("backupImport: pre-import auto backup failed, continuing: %v", err)
-	}
+	// SEC-01：导入前不再做全量自动备份导出。旧逻辑把 ExportAllContext
+	// 的整库快照（用户密码 hash、节点 secret、配置 token）经
+	// runBackupImportTailHooks 塞进回执 AutoBackup 字段，直接向 API
+	// 调用方泄露凭据；且 ImportContext 失败时直接返回错误，从不用该
+	// 快照回滚，该导出只为回执服务。
 
 	// O7-009：版本兼容性检查（repo.Import 同样校验，此处提前给中文提示）。
 	if req.BackupData.Version != "1.0" {
@@ -2202,20 +2200,20 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.runBackupImportTailHooks(result, &req.BackupData, req.Types, autoBackup)
+	h.runBackupImportTailHooks(result, &req.BackupData, req.Types)
 	response.WriteJSON(w, response.OK(result))
 }
 
-// runBackupImportTailHooks is the post-import tail-hook chain shared
-// verbatim by backupImport (file import) and gistBackupRestore
-// (PORT-3342/G-recovery). It must stay a pure move of the former
 // backupImport tail: metering reconciliation, configs cache
 // invalidation, kernel reconcile, revoked-authorization cleanup,
 // forward repush (backup_import_repush.go, FINAL-P2-1 seven-segment
-// predicate, untouched by this batch), and the AutoBackup receipt.
+// predicate, untouched by this batch). SEC-01: no AutoBackup receipt —
+// the pre-import full-database snapshot used to be embedded in the
+// receipt and leaked live credentials, and ImportContext never used
+// it for rollback.
 // Gist restore must never call Import and stop here, and must never
 // call only reconcileNodeKernels: every hook below runs.
-func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *model.BackupData, types []string, autoBackup *model.BackupData) {
+func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *model.BackupData, types []string) {
 	// R6X-010：恢复也是 origin 状态的写路径——导入成功后同步触发
 	// 一次计量对账，使恢复出的 metering origin 的伴生行立即物化，
 	// 与入站保存/删除路径同口径。此前 backupImport 不在触发点全集
@@ -2280,8 +2278,6 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 		result.RepushFailedNodeIDs = outcome.failed
 		result.ImportWarnings = append(result.ImportWarnings, outcome.warnings...)
 	}
-
-	result.AutoBackup = autoBackup
 }
 
 func (h *Handler) getAnnouncement(w http.ResponseWriter, r *http.Request) {

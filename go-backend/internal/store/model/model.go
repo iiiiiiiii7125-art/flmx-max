@@ -1009,6 +1009,12 @@ type ImportResult struct {
 	// 失败节点重连时经 onNodeOnline 全量重布再次收敛）。
 	RepushNodeIDs       []int64     `json:"repushNodeIds,omitempty"`
 	RepushFailedNodeIDs []int64     `json:"repushFailedNodeIds,omitempty"`
+	// SEC-01：字段保留仅为 wire 兼容（旧客户端解析时字段缺席即为
+	// 空，omitempty 下不输出），后端永不赋值。导入前全量快照是整库
+	// 导出（含用户密码 hash、节点 secret、配置 token），一旦填入即
+	// 随回执泄露凭据；且 Import 失败时直接返回错误，从不用它回滚。
+	// 如需恢复导入前状态，须另走服务端留存快照 + 下载端点，不得
+	// 再把快照塞进导入回执。
 	AutoBackup          *BackupData `json:"autoBackup,omitempty"`
 }
 

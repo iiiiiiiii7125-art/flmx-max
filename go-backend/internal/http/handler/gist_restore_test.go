@@ -18,8 +18,9 @@ import (
 
 // PORT-3342/G-recovery：Gist 指定版本恢复必须走与现有 backupImport
 // 完全相同的导入尾钩子全集（计量对账、configs 缓存失效、内核
-// reconcile、撤销清理、转发重推含 FINAL-P2-1 七段谓词、缓存失效、
-// AutoBackup），恢复段用我方 16 段全集，不得照抄上游 11 段直调 Import。
+// reconcile、撤销清理、转发重推含 FINAL-P2-1 七段谓词、缓存失效），
+// 恢复段用我方 16 段全集，不得照抄上游 11 段直调 Import。SEC-01：
+// 回执不再含 AutoBackup（导入前快照会泄露凭据），以下测试断言其缺席。
 // 全部用 httptest mock GitHub API，不联网、不使用真实令牌。
 
 func gistRestoreMockServer(t *testing.T, content []byte) {
@@ -93,7 +94,7 @@ func TestGistRestoreTypesAreSixteenSegmentFullSet(t *testing.T) {
 // 全尾钩子 + 在线节点转发重推：复用 R13BR 在线 agent 场景，
 // Gist 全量备份里转发端口改 20000→20001，恢复后在线入口节点
 // 必须收到带新端口的 UpdateService，回执重推清单含该节点、
-// 失败清单为空，且 AutoBackup（恢复前快照）非空。
+// 失败清单为空；SEC-01：回执不得含 AutoBackup（导入前快照）。
 func TestGistRestoreRunsFullTailHooksAndRepushesOnlineNode(t *testing.T) {
 	s := setupR13BR(t)
 	seedGistRestoreConfigs(t, s.repo)
@@ -141,8 +142,8 @@ func TestGistRestoreRunsFullTailHooksAndRepushesOnlineNode(t *testing.T) {
 	if len(result.RepushFailedNodeIDs) != 0 {
 		t.Fatalf("repushFailedNodeIds must be empty, got %v", result.RepushFailedNodeIDs)
 	}
-	if result.AutoBackup == nil || result.AutoBackup.Version != "1.0" {
-		t.Fatalf("AutoBackup must be the pre-import snapshot (version 1.0), got %+v", result.AutoBackup)
+	if result.AutoBackup != nil {
+		t.Fatal("SEC-01: AutoBackup must be absent from the restore receipt (pre-import snapshot leaks credentials)")
 	}
 	s.waitFrontUpdateWith(t, baseline, "20001")
 	// 恢复不得覆盖当前 Gist 设置与凭据（B1 隔离 + importConfigs 过滤双层）。
@@ -155,9 +156,10 @@ func TestGistRestoreRunsFullTailHooksAndRepushesOnlineNode(t *testing.T) {
 	}
 }
 
-// O7-010：恢复前自动备份失败只记日志、继续导入（不得照抄上游中止语义）。
-// 注入法：删掉 ExportAll 末段 service_monitor 表，使 ExportAll 在末段
-// 失败；待恢复备份的 serviceMonitors 段为空，Import 跳过该段仍成功。
+// O7-010 旧语义已随 SEC-01 废止：恢复前不再做自动备份导出，恢复
+// 路径彻底不依赖 ExportAll。本测试保留为独立性守卫：即使 ExportAll
+// 已损坏（删掉末段 service_monitor 表），恢复仍须成功、且回执不含
+// AutoBackup。
 func TestGistRestoreAutoBackupFailureContinuesImport(t *testing.T) {
 	h := setupGistTest(t)
 	r := gistTestRepo(t, h)
@@ -190,7 +192,7 @@ func TestGistRestoreAutoBackupFailureContinuesImport(t *testing.T) {
 		t.Fatalf("usersImported = %d, want >= 1 (import must have run)", result.UsersImported)
 	}
 	if result.AutoBackup != nil {
-		t.Fatal("AutoBackup must be nil when the pre-import snapshot failed")
+		t.Fatal("SEC-01: AutoBackup must be absent from the restore receipt")
 	}
 }
 
