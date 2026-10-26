@@ -1440,7 +1440,7 @@ func (r *Repository) ListTunnels() ([]map[string]interface{}, error) {
 			"type": t.Type, "flow": t.Flow, "trafficRatio": t.TrafficRatio,
 			"status": t.Status, "createdTime": t.CreatedTime,
 			"engine":          t.Engine,
-			"inIp":            nullableString(t.InIP),
+			"inIp":            nullableInIPString(t.InIP),
 			"ipPreference":    t.IPPreference,
 			"probeTargetHost": t.ProbeTargetHost,
 			"probeTargetPort": t.ProbeTargetPort,
@@ -3695,6 +3695,10 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 		// R2X-016：TrafficRatio 意图值在 Create 前捕获（Create 后
 		// GORM 会把 default:1.0 回填进 item，读 item 判不出意图）。
 		ratioIntent := t.TrafficRatio
+		// R32-L4-E02：备份 in_ip 可能含 :port（≤1.5.1 面板备份
+		// 原值落库的残留）；导入侧逐项剥离后入库，剥离后为空
+		// 即 NULL——导出往返自此自愈（重导入即裸值）。
+		strippedInIP := stripIngressHostPortList(t.InIP)
 		item := model.Tunnel{
 			ID:           t.ID,
 			Name:         t.Name,
@@ -3708,7 +3712,7 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 			// 导出仅在 Valid 时写 inIp，'' 不是合法 IP：空即 NULL，
 			// 与 ConnectIP 的既有口径一致（旧实现无条件 Valid:true
 			// 把 NULL 写成 ''，同 BUG-A2-3 的丢 NULL 类）。
-			InIP:            sql.NullString{String: t.InIP, Valid: t.InIP != ""},
+			InIP:            sql.NullString{String: strippedInIP, Valid: strippedInIP != ""},
 			Inx:             t.Inx,
 			IPPreference:    t.IPPreference,
 			ProbeTargetHost: t.ProbeTargetHost,
@@ -5820,6 +5824,33 @@ func stripIngressHostPort(value string) string {
 		return host
 	}
 	return strings.Trim(value, "[]")
+}
+
+// stripIngressHostPortList strips a trailing :port from each
+// comma-separated item of a multi-value host list (R32-L4-E02).
+// Same per-item semantics as handler stripShareHostPortList
+// (R31-L1-E01); repo cannot import handler, so local mirror —
+// stripIngressHostPort on the whole string is a no-op because
+// net.SplitHostPort fails on the comma. Empty items are preserved
+// as-is so the item count/shape of the input is unchanged.
+func stripIngressHostPortList(value string) string {
+	parts := strings.Split(value, ",")
+	for i, part := range parts {
+		parts[i] = stripIngressHostPort(part)
+	}
+	return strings.Join(parts, ",")
+}
+
+// nullableInIPString renders a stored tunnel in_ip for ListTunnels
+// (R32-L4-E02): legacy residue restored from ≤1.5.1 backups may still
+// carry a trailing :port; render strips it per item so the list shows
+// the bare host. Stored value is untouched（存量不改写）— the import
+// side strips on the way in, so fresh restores never leave residue.
+func nullableInIPString(v sql.NullString) interface{} {
+	if !v.Valid {
+		return nil
+	}
+	return stripIngressHostPortList(v.String)
 }
 
 func nullableString(v sql.NullString) interface{} {
