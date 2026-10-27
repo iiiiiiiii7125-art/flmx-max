@@ -311,7 +311,7 @@ func TestR6B1ChainTargetGuards(t *testing.T) {
 	}
 	good := map[string]Proxy{
 		"vmess-auto":    {"type": "vmess", "uuid": r5b1UUID, "cipher": "auto"},
-		"vless-reality": {"type": "vless", "uuid": r5b1UUID, "flow": "xtls-rprx-vision", "tls": true, "reality-opts": map[string]interface{}{"public-key": goodPBK, "short-id": "ab12"}},
+		"vless-reality": {"type": "vless", "uuid": r5b1UUID, "flow": "xtls-rprx-vision", "tls": true, "servername": "a.example.com", "reality-opts": map[string]interface{}{"public-key": goodPBK, "short-id": "ab12"}},
 		"ss-aes128gcm":  {"type": "ss", "cipher": "aes-128-gcm", "password": "pw"},
 	}
 	for name, p := range good {
