@@ -389,7 +389,7 @@ func TestT01EmptyLabelTransportHostAndSNI(t *testing.T) {
 
 // TestImportHostnamesEmptyLabel：sweep §3——导入路径的 TLS SNI 与传输
 // Host 空标签须拒。finishProxy 是四格式共同收口，在此一处按
-// hasEmptyLabel 校验 SNI（servername/sni 两键都认）与各传输 Host
+// HasEmptyLabel 校验 SNI（servername/sni 两键都认）与各传输 Host
 // （ws-opts / http-opts / h2-opts / xhttp-opts），文案各复用自建面
 // 原有文案（"SNI 格式错误" / "Host 格式错误"）。
 func TestImportHostnamesEmptyLabel(t *testing.T) {

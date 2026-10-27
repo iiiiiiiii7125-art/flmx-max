@@ -258,13 +258,13 @@ var (
 	hostPattern    = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
 )
 
-// hasEmptyLabel reports whether host contains an empty DNS label
+// HasEmptyLabel reports whether host contains an empty DNS label
 // (leading, trailing, or consecutive dots). T-01: `a..b` matches
 // hostPattern yet can never resolve (a DNS zone cannot hold an empty
 // label), so it must be rejected wherever a hostname is validated —
 // the import host, the transport Host, and the SNI. Empty string is
 // not an empty label here; callers handle emptiness separately.
-func hasEmptyLabel(host string) bool {
+func HasEmptyLabel(host string) bool {
 	if host == "" {
 		return false
 	}
@@ -405,7 +405,7 @@ func normalizeTransport(t *Transport) error {
 	t.Host = strings.TrimSpace(t.Host)
 	t.ServiceName = strings.TrimSpace(t.ServiceName)
 	t.Mode = strings.TrimSpace(t.Mode)
-	if t.Host != "" && (!hostPattern.MatchString(t.Host) || hasEmptyLabel(t.Host)) {
+	if t.Host != "" && (!hostPattern.MatchString(t.Host) || HasEmptyLabel(t.Host)) {
 		return errors.New("Host 格式错误")
 	}
 	switch t.Type {
@@ -645,7 +645,7 @@ func normalizeSecurity(in *Inbound) error {
 			return errors.New("client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）")
 		}
 	}
-	if sec.SNI != "" && (!hostPattern.MatchString(sec.SNI) || hasEmptyLabel(sec.SNI)) {
+	if sec.SNI != "" && (!hostPattern.MatchString(sec.SNI) || HasEmptyLabel(sec.SNI)) {
 		return errors.New("SNI 格式错误")
 	}
 
@@ -789,7 +789,7 @@ func normalizeACME(sec *Security) error {
 		// 空标签（`x@a..b.com`），域名按 `.` 分段判空标签，与主机名
 		// 同口径；文案复用既有邮箱校验。
 		_, domain, _ := strings.Cut(sec.ACMEEmail, "@")
-		if !acmeEmailPattern.MatchString(sec.ACMEEmail) || hasEmptyLabel(domain) {
+		if !acmeEmailPattern.MatchString(sec.ACMEEmail) || HasEmptyLabel(domain) {
 			return errors.New("ACME 邮箱格式错误")
 		}
 	}

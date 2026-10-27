@@ -118,7 +118,7 @@ func ValidateImportHost(host string) error {
 	if err := rejectNonCanonicalImportHost(host); err != nil {
 		return err
 	}
-	if host == "" || len(host) > 253 || !hostPattern.MatchString(host) || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || hasEmptyLabel(host) {
+	if host == "" || len(host) > 253 || !hostPattern.MatchString(host) || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || HasEmptyLabel(host) {
 		return fmt.Errorf("地址 %q 不正确", host)
 	}
 	return nil

@@ -90,15 +90,15 @@ func parseLines(text string) ([]ImportedNode, []string) {
 // of an imported proxy. The import path never validated these hostname
 // fields (sweep §3): an empty-label SNI/Host (e.g. `a..b`) sailed
 // through ParseImport while the self-built face rejects the same values
-// (normalizeSecurity / normalizeTransport). Reuse the T-01 hasEmptyLabel
+// (normalizeSecurity / normalizeTransport). Reuse the T-01 HasEmptyLabel
 // predicate so both faces share one verdict; messages reuse the
 // self-built face's wording.
 func validateImportHostnames(p Proxy) error {
-	if sni := p.serverName(); sni != "" && (!hostPattern.MatchString(sni) || hasEmptyLabel(sni)) {
+	if sni := p.serverName(); sni != "" && (!hostPattern.MatchString(sni) || HasEmptyLabel(sni)) {
 		return errors.New("SNI 格式错误")
 	}
 	for _, h := range importTransportHosts(p) {
-		if h != "" && (!hostPattern.MatchString(h) || hasEmptyLabel(h)) {
+		if h != "" && (!hostPattern.MatchString(h) || HasEmptyLabel(h)) {
 			return errors.New("Host 格式错误")
 		}
 	}
