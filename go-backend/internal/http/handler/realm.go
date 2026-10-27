@@ -74,6 +74,11 @@ func validateRealmForwardStrategy(tunnel *tunnelRecord, remoteAddr, strategy str
 	if !tunnelIsRealm(tunnel) {
 		return nil
 	}
+	// 终审 L1-F-06：realm 隧道经手 forward 目标 host，同口径补语法层
+	// 空标签判（只判语法、不做 DNS）；非 realm 隧道由调用方覆盖。
+	if err := validateNoEmptyLabelAddr(remoteAddr); err != nil {
+		return fmt.Errorf("转发目标地址主机名格式无效：%w", err)
+	}
 	switch strings.TrimSpace(strategy) {
 	case "", "round", "hash":
 		return nil
