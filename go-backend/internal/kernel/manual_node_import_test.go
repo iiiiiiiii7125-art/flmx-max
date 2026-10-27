@@ -373,14 +373,14 @@ func TestValidateImportHostEmbeddedLoopbackMessage(t *testing.T) {
 // 传输 Host（model.go:390）与 SNI（model.go:630），共用 helper 须
 // 顺带覆盖这两处；文案各复用本字段原有文案，不改。
 func TestT01EmptyLabelTransportHostAndSNI(t *testing.T) {
-	if err := normalizeTransport(&Transport{Type: TransportWS, Host: "a..b", Path: "/ws"}); err == nil || err.Error() != "Host 格式错误" {
-		t.Errorf("normalizeTransport(Host=a..b) = %v, want %q", err, "Host 格式错误")
+	if err := normalizeTransport(&Transport{Type: TransportWS, Host: "a..b", Path: "/ws"}); err == nil || err.Error() != "Host 格式错误：\"a..b\"" {
+		t.Errorf("normalizeTransport(Host=a..b) = %v, want %q", err, "Host 格式错误：\"a..b\"")
 	}
 	if err := normalizeTransport(&Transport{Type: TransportWS, Host: "example.com", Path: "/ws"}); err != nil {
 		t.Errorf("normalizeTransport(Host=example.com) = %v, want nil", err)
 	}
-	if err := normalizeSecurity(&Inbound{Security: Security{Type: SecurityTLS, SNI: "a..b"}}); err == nil || err.Error() != "SNI 格式错误" {
-		t.Errorf("normalizeSecurity(SNI=a..b) = %v, want %q", err, "SNI 格式错误")
+	if err := normalizeSecurity(&Inbound{Security: Security{Type: SecurityTLS, SNI: "a..b"}}); err == nil || err.Error() != "SNI 格式错误：\"a..b\"" {
+		t.Errorf("normalizeSecurity(SNI=a..b) = %v, want %q", err, "SNI 格式错误：\"a..b\"")
 	}
 	if err := normalizeSecurity(&Inbound{Security: Security{Type: SecurityNone, SNI: "example.com"}}); err != nil {
 		t.Errorf("normalizeSecurity(SNI=example.com) = %v, want nil", err)
@@ -391,7 +391,7 @@ func TestT01EmptyLabelTransportHostAndSNI(t *testing.T) {
 // Host 空标签须拒。finishProxy 是四格式共同收口，在此一处按
 // HasEmptyLabel 校验 SNI（servername/sni 两键都认）与各传输 Host
 // （ws-opts / http-opts / h2-opts / xhttp-opts），文案各复用自建面
-// 原有文案（"SNI 格式错误" / "Host 格式错误"）。
+// 原有文案（"SNI 格式错误" / "Host 格式错误"，F-LIVE-01 起附引坏值原文）。
 func TestImportHostnamesEmptyLabel(t *testing.T) {
 	// SNI：各协议的 SNI 键（vless/vmess 存 servername，trojan/hy2/
 	// tuic/anytls 存 sni）都要拒空标签。

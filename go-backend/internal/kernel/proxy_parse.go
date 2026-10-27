@@ -94,17 +94,19 @@ func parseLines(text string) ([]ImportedNode, []string) {
 // predicate so both faces share one verdict; messages reuse the
 // self-built face's wording.
 func validateImportHostnames(p Proxy) error {
+	// F-LIVE-01：错误附引坏值原文——与自建面同口径，备份恢复入站段
+	// 汇总 warning 才能与转发/订阅源/分享/配置四段一样引用坏值。
 	if sni := p.serverName(); sni != "" && (!hostPattern.MatchString(sni) || HasEmptyLabel(sni)) {
-		return errors.New("SNI 格式错误")
+		return fmt.Errorf("SNI 格式错误：%q", sni)
 	}
 	for _, h := range importTransportHosts(p) {
 		if h != "" && (!hostPattern.MatchString(h) || HasEmptyLabel(h)) {
-			return errors.New("Host 格式错误")
+			return fmt.Errorf("Host 格式错误：%q", h)
 		}
 	}
 	for _, h := range importPluginHosts(p) {
 		if h != "" && (!hostPattern.MatchString(h) || HasEmptyLabel(h)) {
-			return errors.New("Host 格式错误")
+			return fmt.Errorf("Host 格式错误：%q", h)
 		}
 	}
 	return nil
