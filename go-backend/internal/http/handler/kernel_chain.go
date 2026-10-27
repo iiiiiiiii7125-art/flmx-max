@@ -56,11 +56,30 @@ func (h *Handler) chainEndpoint(target *model.NodeInbound, fromNodeID int64) (ke
 	if e.Host == "" {
 		return e, fmt.Errorf("出站节点「%s」没有可用的地址", target.Name)
 	}
-	if inboundShareMode(target) == "custom" && validateShareHostValue(e.Host) != nil {
-		// F-A-01/C-01：存量坏 ShareHost 不进链式下一跳配置。
-		return e, fmt.Errorf("出站节点「%s」的自定义分享地址不正确", target.Name)
+	if err := validateShareHostValue(e.Host); err != nil {
+		// R35-LC-01：auto/ipv4/ipv6 的地址源是节点 ServerIP /
+		// ServerIPV4 / ServerIPV6，与订阅面 inboundEndpoints 同口径
+		// （坏值跳过/拒绝）；存量坏分享主机不进链式下一跳配置。
+		// 同节点 127.0.0.1 与导入行在上方早返回，不受影响。
+		return e, fmt.Errorf("出站节点「%s」的%s不正确", target.Name, chainShareHostLabel(inboundShareMode(target)))
 	}
 	return e, nil
+}
+
+// chainShareHostLabel names the share-address mode in chain errors, so
+// auto/ipv4/ipv6 failures are not misreported as a custom-address
+// problem (R35-LC-01).
+func chainShareHostLabel(mode string) string {
+	switch mode {
+	case "ipv4":
+		return "IPv4 分享地址"
+	case "ipv6":
+		return "IPv6 分享地址"
+	case "custom":
+		return "自定义分享地址"
+	default:
+		return "自动分享地址"
+	}
 }
 
 // rowSplitRules returns an inbound's stored 分流 rules.

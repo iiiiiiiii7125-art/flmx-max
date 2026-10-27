@@ -166,6 +166,12 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 			if isWildcardListen(host) {
 				host = "127.0.0.1"
 			}
+			// R35-FIX-F02：与最终分支同口径——监听地址可含 :port 时
+			// 先剥离，残值仍畸形则拒收（空值沿旧口径原样进 JoinHostPort）。
+			host = stripShareHostPort(host)
+			if host != "" && !isBareDialHost(host) {
+				return "", fmt.Errorf("入站「%s」的监听地址不正确", row.Name)
+			}
 			return net.JoinHostPort(host, port), nil
 		}
 	}
@@ -195,7 +201,13 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 	// 放行）；进 JoinHostPort 前须剥离，否则产出不可拨号的
 	// [IP:port]:port。stripShareHostPort 与订阅直连面（R25-X-01）
 	// 同口径：SplitHostPort 成功取 host，失败原样去括号。
-	return net.JoinHostPort(stripShareHostPort(host), port), nil
+	// R35-FIX-F02：单次剥离对双端口值是 no-op，残值仍含 ":port:port"；
+	// 须拒收，不产出 "[IP:port]:port" 畸形 RemoteAddr。
+	host = stripShareHostPort(host)
+	if !isBareDialHost(host) {
+		return "", fmt.Errorf("入站「%s」的落地节点地址不正确", row.Name)
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 // validateTunnelRelayExits re-runs the landing-exit rule for every
