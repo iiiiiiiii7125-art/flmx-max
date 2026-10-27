@@ -7846,34 +7846,70 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 	h.refreshInboundWhitelists(affectedInboundIDs)
 }
 
+// normalizeSpeedLimitReference validates an explicitly passed speed-limit
+// reference. R35-F-05 (R35-L-02): nil stays nil (no reference requested)
+// and a non-positive id is treated as no reference (not a real rule id);
+// a positive id must resolve to an existing, enabled rule. A missing rule
+// and a disabled rule are distinct, explicit errors — previously both were
+// silently folded to nil, so editing a forward after its rule was disabled
+// quietly dropped the limit (and re-enabling the rule could not restore
+// it). O2-005 only requires a disabled rule not to take effect; it does
+// not license silently discarding the reference. The status=1 effect
+// predicate itself (speedLimitExists / GetSpeedLimitSpeed) is untouched.
 func (h *Handler) normalizeSpeedLimitReference(speedID *int64) (*int64, error) {
-	if speedID == nil {
+	if speedID == nil || *speedID <= 0 {
 		return nil, nil
 	}
-
 	exists, err := h.repo.SpeedLimitExists(*speedID)
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		return nil, nil
+	if exists {
+		return speedID, nil
 	}
-
-	return speedID, nil
+	return nil, h.speedLimitReferenceError(*speedID)
 }
 
 func (h *Handler) normalizeSpeedLimitReferenceTx(tx *gorm.DB, speedID *int64) (*int64, error) {
-	if speedID == nil {
+	if speedID == nil || *speedID <= 0 {
 		return nil, nil
 	}
 	exists, err := h.repo.SpeedLimitExistsTx(tx, *speedID)
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		return nil, nil
+	if exists {
+		return speedID, nil
 	}
-	return speedID, nil
+	return nil, h.speedLimitReferenceErrorTx(tx, *speedID)
+}
+
+// speedLimitReferenceError distinguishes the two ways a reference can
+// fail the status=1 gate: the rule does not exist at all, or it exists
+// but is disabled. The row is read without the status predicate so the
+// error can name the actual state (GetSpeedLimit cannot serve this — it
+// filters status=1 and cannot tell the two apart).
+func (h *Handler) speedLimitReferenceError(id int64) error {
+	row, err := h.repo.GetSpeedLimit(id)
+	if err != nil {
+		return err
+	}
+	return speedLimitReferenceErrorForRow(id, row)
+}
+
+func (h *Handler) speedLimitReferenceErrorTx(tx *gorm.DB, id int64) error {
+	row, err := h.repo.GetSpeedLimitTx(tx, id)
+	if err != nil {
+		return err
+	}
+	return speedLimitReferenceErrorForRow(id, row)
+}
+
+func speedLimitReferenceErrorForRow(id int64, row *model.SpeedLimit) error {
+	if row == nil {
+		return fmt.Errorf("限速规则不存在（id=%d）", id)
+	}
+	return fmt.Errorf("限速规则已停用（id=%d）", id)
 }
 
 func sameSpeedLimitSelection(current sql.NullInt64, requested *int64) bool {
