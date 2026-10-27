@@ -1,7 +1,7 @@
 {
   "generatedBy": "vite-frontend/scripts/gen-manual-links.mjs",
   "source": "vite-frontend/src/pages/inbound/manual-node.tsx",
-  "sourceSha256": "fd0aadfc07da2624ddd41c13972f6cccee016249a0cf4356bf9beebe57de00cf",
+  "sourceSha256": "bd8a61658f688fac39fdee60dde640bdc3451e8b4eea125b7938b37455cfdfd7",
   "cases": [
     {
       "name": "ss",
@@ -366,18 +366,18 @@
   ],
   "uuids": {
     "randomUUID": [
-      "a944f0c2-e8da-4c1d-98bf-5dee9773ceec",
-      "c946b1ce-7727-4310-81a7-b8c8c80142d3",
-      "6a7f0d68-4365-48a8-bcb9-a5caaca91606",
-      "ab1d29ff-bec6-4c2e-825d-c08afa7d0a5f",
-      "37dfe85d-8488-4ba4-8ec6-94b1d598368d"
+      "5a8a6efe-1a9b-4656-b902-97bbfdea696f",
+      "cc23abae-e1ad-43dc-8963-e35994f95b31",
+      "fb53803a-83d6-4fbb-af45-646b11e1e0e9",
+      "f3eb719a-dacf-4c6a-b2f6-d83051367447",
+      "c8f4d1cd-c8c5-4479-b579-e88f435151e3"
     ],
     "fallback": [
-      "dff26e34-7860-43d3-bc0b-1f2b797b40e3",
-      "1a46d2f6-a091-4442-802f-74ad92a3507d",
-      "a22542e9-73ac-42e9-82b1-59156cfb286c",
-      "a24a1b71-0119-4012-a042-24b46aa1f26c",
-      "2b208039-67da-4757-b67d-09c8eb87ba39"
+      "b4dffdbe-2ea1-4068-856f-03a1c8cc3a2f",
+      "1c1f5fa1-f968-42d1-8850-32f0c537e150",
+      "1c3addac-e7b8-4929-ac5e-63da5a8947db",
+      "f9fcc5e2-aebf-4dad-be08-0d44bc8f0f11",
+      "477ebd99-0bc0-4faf-8493-f20ad63167ed"
     ]
   }
 }

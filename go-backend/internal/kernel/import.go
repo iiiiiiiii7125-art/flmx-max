@@ -96,6 +96,15 @@ func ValidateImportHost(host string) error {
 		// N-01（1.4.0 调和）：fe80 的拒绝即由此严格政策的
 		// ClassLinkLocal 补拒达成，不入 netguard 硬拒层。
 		if d := netguard.Judge(ip, netguard.PolicyHardDenyOrLoopback, false); !d.Allowed {
+			// R1-F-01：翻译内嵌特殊地址（NAT64/6to4 内嵌 127/8 回环、
+			// 内嵌 0.0.0.0 未指定）时 netguard 只给 loopback 判定或
+			// unspecified 硬拒；前端同口径报“本机”文案，后端原先一律
+			// 报云元数据桶文案。按更准确的一方对齐：这两类报本机文案
+			// （裁决本身仍是拒绝，不变）。直接回环/未指定形态已在上
+			// 方先行返回，走到这里的两类只能是翻译内嵌。
+			if d.Reason == "loopback" || d.Result.HardReason == "unspecified" {
+				return errors.New("地址不能是本机或 0.0.0.0")
+			}
 			return errors.New("地址不能是云元数据、链路本地或保留/组播地址")
 		}
 		return nil
@@ -109,7 +118,7 @@ func ValidateImportHost(host string) error {
 	if err := rejectNonCanonicalImportHost(host); err != nil {
 		return err
 	}
-	if host == "" || len(host) > 253 || !hostPattern.MatchString(host) || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+	if host == "" || len(host) > 253 || !hostPattern.MatchString(host) || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || hasEmptyLabel(host) {
 		return fmt.Errorf("地址 %q 不正确", host)
 	}
 	return nil

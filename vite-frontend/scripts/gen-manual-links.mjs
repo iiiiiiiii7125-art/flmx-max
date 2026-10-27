@@ -307,6 +307,41 @@ for (const c of cases) {
   console.log(`  ${c.name}: ${link}`);
   outCases.push({ name: c.name, protocol: c.protocol, input: c.input, link });
 }
+
+// T-01：空标签主机名（连续点号）必须被拒收、不出链，文案与后端同口径；
+// 对照 a.b 仍出链（防过修）。
+const t01bad = manualNodeLink(base({
+  protocol: "vless",
+  name: "manual-t01",
+  port: "443",
+  uuid: MANUAL_UUID,
+  security: "tls",
+  sni: "example.com",
+  fingerprint: "chrome",
+  network: "tcp",
+  host: "a..b",
+}));
+check(
+  "manualNodeLink(host=a..b) 拒收（T-01）",
+  !!t01bad.error && !t01bad.link && t01bad.error.includes('地址 "a..b" 不正确'),
+  t01bad.error ?? "未拒收",
+);
+const t01ok = manualNodeLink(base({
+  protocol: "vless",
+  name: "manual-t01-ok",
+  port: "443",
+  uuid: MANUAL_UUID,
+  security: "tls",
+  sni: "example.com",
+  fingerprint: "chrome",
+  network: "tcp",
+  host: "a.b",
+}));
+check(
+  "manualNodeLink(host=a.b) 出链（T-01 对照）",
+  !t01ok.error && typeof t01ok.link === "string" && t01ok.link.length > 0,
+  t01ok.error ?? "",
+);
 if (failures.length > 0) process.exit(1);
 
 // F-10 显式验证：anytls 分支从不写 security 参数，golden 里的 anytls

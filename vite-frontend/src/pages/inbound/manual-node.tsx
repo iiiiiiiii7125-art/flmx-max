@@ -329,7 +329,9 @@ function validateImportHost(host: string): string | null {
     host.length > 253 ||
     !/^[A-Za-z0-9.-]+$/.test(host) ||
     host.startsWith(".") ||
-    host.endsWith(".")
+    host.endsWith(".") ||
+    // T-01：标签内连续点号即空标签（a..b），DNS 无法容纳，须与后端同拒。
+    host.split(".").some((seg) => seg === "")
   )
     return `地址 "${host}" 不正确`;
 

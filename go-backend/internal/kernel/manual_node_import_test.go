@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -290,12 +291,88 @@ func TestManualNodeLinksRejectBadInput(t *testing.T) {
 		"tuic-no-password": "tuic://" + manualUUID +
 			":@203.0.113.10:443#bad",
 		"hy2-bad-ports": "hysteria2://secretpass@203.0.113.10:443/?mport=abc#bad",
+		// T-01：空标签主机名（连续点号）须拒，前后端同口径。
+		"host-empty-label":       "vless://" + manualUUID + "@a..b:443#bad",
+		"host-empty-label-3dots": "vless://" + manualUUID + "@a...b:443#bad",
 	}
 	for kind, link := range bad {
 		nodes, errs := ParseImport(link)
 		if len(nodes) != 0 || len(errs) == 0 {
 			t.Errorf("%s: ParseImport = %d nodes, errs=%v, want 0 nodes with error", kind, len(nodes), errs)
 		}
+	}
+}
+
+// TestValidateImportHostEmptyLabelMatrix：T-01 空标签主机名 12 形态矩阵
+// （再审计 lane-2 核查表原样）。仅标签内连续点号（a..b / a...b）是
+// 本轮补的洞；其余形态早已被拒，矩阵钉死“修后仍同判”，防过修与回归。
+func TestValidateImportHostEmptyLabelMatrix(t *testing.T) {
+	cases := []struct {
+		host    string
+		wantErr bool
+	}{
+		{"a..b", true},
+		{"a...b", true},
+		{".a", true},
+		{"a.", true},
+		{".", true},
+		{"..", true},
+		{"a..", true},
+		{"..b", true},
+		{"a.b.", true},
+		{".a.b", true},
+		{"example.com", false},
+		{"a.b", false},
+	}
+	for _, c := range cases {
+		err := ValidateImportHost(c.host)
+		if c.wantErr && err == nil {
+			t.Errorf("ValidateImportHost(%q) = nil, want error", c.host)
+			continue
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("ValidateImportHost(%q) = %v, want nil", c.host, err)
+			continue
+		}
+		if c.wantErr && err.Error() != fmt.Sprintf("地址 %q 不正确", c.host) {
+			t.Errorf("ValidateImportHost(%q) = %q, want %q", c.host, err.Error(), fmt.Sprintf("地址 %q 不正确", c.host))
+		}
+	}
+}
+
+// TestValidateImportHostEmbeddedLoopbackMessage：R1-F-01 翻译内嵌特殊
+// 地址（NAT64/6to4 内嵌 127/8 回环、内嵌 0.0.0.0 未指定）的拒错文案
+// 须与前端同口径。内嵌地址确是回环/未指定，“本机”文案比后端原先的
+// 云元数据桶文案更准确，故以后端改就前端为准；裁决（拒绝）本身不变。
+// 内嵌 0.0.0.0 两例是 F-03 全族 sweep 时发现的同根残留，一并覆盖。
+func TestValidateImportHostEmbeddedLoopbackMessage(t *testing.T) {
+	for _, host := range []string{"64:ff9b::127.0.0.1", "2002:7f00:1::", "64:ff9b::0", "2002::"} {
+		err := ValidateImportHost(host)
+		if err == nil {
+			t.Errorf("ValidateImportHost(%q) = nil, want rejection", host)
+			continue
+		}
+		if err.Error() != "地址不能是本机或 0.0.0.0" {
+			t.Errorf("ValidateImportHost(%q) = %q, want %q", host, err.Error(), "地址不能是本机或 0.0.0.0")
+		}
+	}
+}
+
+// TestT01EmptyLabelTransportHostAndSNI：T-01 同一 hostPattern 还守着
+// 传输 Host（model.go:390）与 SNI（model.go:630），共用 helper 须
+// 顺带覆盖这两处；文案各复用本字段原有文案，不改。
+func TestT01EmptyLabelTransportHostAndSNI(t *testing.T) {
+	if err := normalizeTransport(&Transport{Type: TransportWS, Host: "a..b", Path: "/ws"}); err == nil || err.Error() != "Host 格式错误" {
+		t.Errorf("normalizeTransport(Host=a..b) = %v, want %q", err, "Host 格式错误")
+	}
+	if err := normalizeTransport(&Transport{Type: TransportWS, Host: "example.com", Path: "/ws"}); err != nil {
+		t.Errorf("normalizeTransport(Host=example.com) = %v, want nil", err)
+	}
+	if err := normalizeSecurity(&Inbound{Security: Security{Type: SecurityTLS, SNI: "a..b"}}); err == nil || err.Error() != "SNI 格式错误" {
+		t.Errorf("normalizeSecurity(SNI=a..b) = %v, want %q", err, "SNI 格式错误")
+	}
+	if err := normalizeSecurity(&Inbound{Security: Security{Type: SecurityNone, SNI: "example.com"}}); err != nil {
+		t.Errorf("normalizeSecurity(SNI=example.com) = %v, want nil", err)
 	}
 }
 

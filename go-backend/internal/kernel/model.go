@@ -258,6 +258,24 @@ var (
 	hostPattern    = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
 )
 
+// hasEmptyLabel reports whether host contains an empty DNS label
+// (leading, trailing, or consecutive dots). T-01: `a..b` matches
+// hostPattern yet can never resolve (a DNS zone cannot hold an empty
+// label), so it must be rejected wherever a hostname is validated —
+// the import host, the transport Host, and the SNI. Empty string is
+// not an empty label here; callers handle emptiness separately.
+func hasEmptyLabel(host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, seg := range strings.Split(host, ".") {
+		if seg == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // SSMethods lists the Shadowsocks ciphers the panel offers.
 func SSMethods() []string {
 	out := make([]string, len(ssMethods))
@@ -387,7 +405,7 @@ func normalizeTransport(t *Transport) error {
 	t.Host = strings.TrimSpace(t.Host)
 	t.ServiceName = strings.TrimSpace(t.ServiceName)
 	t.Mode = strings.TrimSpace(t.Mode)
-	if t.Host != "" && !hostPattern.MatchString(t.Host) {
+	if t.Host != "" && (!hostPattern.MatchString(t.Host) || hasEmptyLabel(t.Host)) {
 		return errors.New("Host 格式错误")
 	}
 	switch t.Type {
@@ -627,7 +645,7 @@ func normalizeSecurity(in *Inbound) error {
 			return errors.New("client-fingerprint 不受支持（须为 sing-box uTLS 指纹：chrome / firefox / edge / safari / 360 / qq / ios / android / random / randomized / chrome_psk）")
 		}
 	}
-	if sec.SNI != "" && !hostPattern.MatchString(sec.SNI) {
+	if sec.SNI != "" && (!hostPattern.MatchString(sec.SNI) || hasEmptyLabel(sec.SNI)) {
 		return errors.New("SNI 格式错误")
 	}
 
