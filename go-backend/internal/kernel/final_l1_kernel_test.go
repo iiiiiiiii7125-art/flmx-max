@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -17,16 +18,18 @@ func TestFinalL1RealityDestEmptyLabel(t *testing.T) {
 	bad := []string{"a..b:443", "a...b:443"}
 	for _, dest := range bad {
 		in := &Inbound{Security: Security{Type: SecurityReality, SNI: "example.com", RealityDest: dest}}
-		if err := normalizeSecurity(in); err == nil || err.Error() != "Reality 目标地址不正确" {
-			t.Errorf("normalizeSecurity(RealityDest=%q) = %v, want %q", dest, err, "Reality 目标地址不正确")
+		want := fmt.Sprintf("Reality 目标地址不正确：%q", dest)
+		if err := normalizeSecurity(in); err == nil || err.Error() != want {
+			t.Errorf("normalizeSecurity(RealityDest=%q) = %v, want %q", dest, err, want)
 		}
 	}
 	// Normalize 面同判（lane-1 探针原样：Normalize 返回 nil、原值落库）。
 	for _, dest := range bad {
 		in := &Inbound{Protocol: ProtocolVLESS, Port: 443,
 			Security: Security{Type: SecurityReality, SNI: "example.com", RealityDest: dest}}
-		if err := Normalize(TypeXray, in); err == nil || err.Error() != "Reality 目标地址不正确" {
-			t.Errorf("Normalize(RealityDest=%q) = %v, want %q", dest, err, "Reality 目标地址不正确")
+		want := fmt.Sprintf("Reality 目标地址不正确：%q", dest)
+		if err := Normalize(TypeXray, in); err == nil || err.Error() != want {
+			t.Errorf("Normalize(RealityDest=%q) = %v, want %q", dest, err, want)
 		}
 	}
 	// 合法对照：域名与 IP 字面量放行。
@@ -146,9 +149,9 @@ func TestFinalL1ValidateImportedProxyDrift(t *testing.T) {
 			"plugin": "obfs", "plugin-opts": map[string]interface{}{"mode": "http", "host": "a..b"}},
 	}
 	wantErr := map[string]string{
-		"sni":         "SNI 格式错误",
-		"ws-host":     "Host 格式错误",
-		"plugin-host": "Host 格式错误",
+		"sni":         "SNI 格式错误：\"a..b\"",
+		"ws-host":     "Host 格式错误：\"a..b\"",
+		"plugin-host": "Host 格式错误：\"a..b\"",
 	}
 	for kind, p := range bad {
 		if err := ValidateImportedProxy(p); err == nil || err.Error() != wantErr[kind] {

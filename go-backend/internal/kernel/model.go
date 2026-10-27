@@ -406,7 +406,9 @@ func normalizeTransport(t *Transport) error {
 	t.ServiceName = strings.TrimSpace(t.ServiceName)
 	t.Mode = strings.TrimSpace(t.Mode)
 	if t.Host != "" && (!hostPattern.MatchString(t.Host) || HasEmptyLabel(t.Host)) {
-		return errors.New("Host 格式错误")
+		// F-LIVE-01：错误附引坏值原文——备份恢复入站段汇总 warning
+		// 只点名行号/错误、不含坏值，与其余恢复面披露口径不一致。
+		return fmt.Errorf("Host 格式错误：%q", t.Host)
 	}
 	switch t.Type {
 	case TransportTCP, TransportQUIC:
@@ -652,7 +654,8 @@ func normalizeSecurity(in *Inbound) error {
 		}
 	}
 	if sec.SNI != "" && (!hostPattern.MatchString(sec.SNI) || HasEmptyLabel(sec.SNI)) {
-		return errors.New("SNI 格式错误")
+		// F-LIVE-01：同 normalizeTransport，错误附引坏值原文。
+		return fmt.Errorf("SNI 格式错误：%q", sec.SNI)
 	}
 
 	switch sec.Type {
@@ -746,7 +749,8 @@ func normalizeSecurity(in *Inbound) error {
 			// L1-F-01：RealityDest host 段此前只走 SplitHostPort +
 			// 端口检查，空标签（`a..b:443`）原值落库；与同函数 SNI
 			//（:648）同口径拒。IP 字面量无空标签，不受影响。
-			return errors.New("Reality 目标地址不正确")
+			// F-LIVE-01：错误附引坏值原文（同 SNI/Host 两处）。
+			return fmt.Errorf("Reality 目标地址不正确：%q", sec.RealityDest)
 		} else if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
 			return errors.New("Reality 目标端口错误")
 		}
