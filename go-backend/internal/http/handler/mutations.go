@@ -831,6 +831,23 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// R35-FIX-F01（a）：转发模式翻转不迁移任何数据面服务——由 agent
+	// 翻为 nftables 时既有 gost 服务会继续监听，由 nftables 翻回
+	// agent 时既有 nft 规则会继续生效；翻转后 tunnelUsesNftables
+	//（ANY 语义）立即改变，暂停/删除/恢复只走 nft 分支且只处理
+	// entryNodeIDs[0]，另一引擎的服务永不被触碰。任一方向的翻转在
+	// 节点仍是已有转发隧道的入口节点时一律前置拒绝并点名隧道；
+	// 修复路径是先删除或移出该隧道的转发（或编辑隧道去掉本节点
+	// 入口），而不是翻完再补。未改变模式的部分更新不受影响。
+	if forwardMode != defaultNodeForwardMode(currentForwardMode) {
+		if tunnelID, tunnelName, gErr := h.entryNodeTunnelWithForwards(id); gErr != nil {
+			response.WriteJSON(w, response.Err(-2, gErr.Error()))
+			return
+		} else if tunnelID > 0 {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点 %s 是隧道 %s（ID %d）的入口节点，该隧道下已有转发；请先删除或移出转发后再切换转发模式", currentNode.Name, tunnelName, tunnelID)))
+			return
+		}
+	}
 	usesNftablesRuntime := forwardMode == "nftables" || defaultNodeForwardMode(currentForwardMode) == "nftables"
 	if currentStatus == 1 && !usesNftablesRuntime && (newHTTP != currentHTTP || newTLS != currentTLS || newSocks != currentSocks) {
 		if err := h.applyNodeProtocolChange(id, newHTTP, newTLS, newSocks); err != nil {
@@ -2085,6 +2102,20 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			return err, 0
 		}
 		nftPairs = pairs
+		// R35-FIX-F01（a）：任一新入口为 nftables 节点时，编辑后的
+		// 入口集必须仍满足 validateNftablesForwardRequest 口径（直
+		// 连隧道 + 单入口）——否则新入口写进 forward_port 后，
+		// syncForwardServices 即被单入口门拒绝（此前该错误被 `_ =`
+		// 吞掉），DB 与数据面分叉。realm 隧道由下方
+		// validateRealmTunnelTx 另行拒绝 nft 入口。
+		if len(pairs) > 0 {
+			if typeVal != 1 {
+				return errors.New("nftables 节点仅支持直连隧道"), 0
+			}
+			if len(entryNodeIDs) != 1 {
+				return errors.New("nftables 节点仅支持单入口隧道"), 0
+			}
+		}
 		if engine == tunnelEngineRealm {
 			if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
 				return err, 0
@@ -2365,8 +2396,15 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			respondTunnelUpdateOK()
 			return
 		}
+		// R35-FIX-F01：此前 `_ =` 吞掉 syncForwardServices 的错误——
+		// 隧道已落库为多入口/nft 混合态而同步被单入口门拒绝时，回执
+		// 仍报成功、DB 与数据面分叉。现在每条失败记日志并进回执
+		// warnings（与 relayResyncWarnings 同通道），不静默。
 		for i := range forwards {
-			_ = h.syncForwardServices(&forwards[i], "UpdateService", true)
+			if err := h.syncForwardServices(&forwards[i], "UpdateService", true); err != nil {
+				log.Printf("tunnel update: forward sync failed tunnel_id=%d forward_id=%d err=%v", id, forwards[i].ID, err)
+				relayResyncWarnings = append(relayResyncWarnings, fmt.Sprintf("转发 %s 数据面同步失败：%v", forwards[i].Name, err))
+			}
 		}
 	}
 
@@ -3141,6 +3179,13 @@ func (h *Handler) tunnelBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 				failures = appendBatchFailureReason(failures, tunnelID, tunnelName, "nftables 转发缺少入口节点")
 				continue
 			}
+			// R35-FIX-F01：遗留/竞态混合态下记失败而不是 reconcile
+			// 首节点后报成功（其余入口的服务不会被重推）。
+			if err := h.rejectMixedNftForwardState(tunnelID, nftMode, entryNodeIDs); err != nil {
+				fail++
+				failures = appendBatchFailure(failures, tunnelID, tunnelName, err)
+				continue
+			}
 			if reconcileErr := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); reconcileErr != nil {
 				fail++
 				failures = appendBatchFailure(failures, tunnelID, tunnelName, reconcileErr)
@@ -3879,6 +3924,12 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
 			return
 		}
+		// R35-FIX-F01：遗留/竞态混合态下拒绝删除而不是报成功删库
+		// （gost/realm 服务会残留监听）。
+		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 		nftNodeID = entryNodeIDs[0]
 	} else if err := h.controlForwardServices(forward, "DeleteService", true); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -4051,6 +4102,12 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
 			return
 		}
+		// R35-FIX-F01：遗留/竞态混合态下拒绝暂停而不是报成功（gost/
+		// realm 服务会继续监听、继续计费）。
+		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 		if err := h.syncNftablesNodeWithOverrides(entryNodeIDs[0], map[int64]bool{id: true}, nil); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
@@ -4124,6 +4181,12 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 	} else if nftMode {
 		if len(entryNodeIDs) == 0 {
 			response.WriteJSON(w, response.ErrDefault("nftables 转发缺少入口节点"))
+			return
+		}
+		// R35-FIX-F01：遗留/竞态混合态下拒绝恢复而不是报成功（nft
+		// 规则与 gost/realm 服务会双份下发）。
+		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 		if err := h.syncNftablesNodeWithOverrides(entryNodeIDs[0], nil, []*forwardRecord{forward}); err != nil {
@@ -4286,6 +4349,13 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 				failures = appendBatchFailureReason(failures, id, forward.Name, "nftables 转发缺少入口节点")
 				continue
 			}
+			// R35-FIX-F01：遗留/竞态混合态下记失败而不是先标记 pending
+			// 再报成功（gost/realm 服务会残留监听）。
+			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+				f++
+				failures = appendBatchFailure(failures, id, forward.Name, err)
+				continue
+			}
 			// D6: 先标记 pending，再按节点聚合 reconcile。
 			if err := h.repo.MarkForwardPendingDelete(id, entryNodeIDs[0], time.Now()); err != nil {
 				f++
@@ -4398,6 +4468,13 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 				failures = appendBatchFailureReason(failures, id, forward.Name, "nftables 转发缺少入口节点")
 				continue
 			}
+			// R35-FIX-F01：遗留/竞态混合态下记失败而不是进 nft 分组
+			// 后报成功（另一引擎的服务不会被暂停/恢复）。
+			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+				f++
+				failures = appendBatchFailure(failures, id, forward.Name, err)
+				continue
+			}
 			intent, ok := nftGroups[entryNodeIDs[0]]
 			if !ok {
 				intent = &nftIntent{exclude: make(map[int64]bool), names: make(map[int64]string)}
@@ -4487,6 +4564,13 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 			if len(entryNodeIDs) == 0 {
 				f++
 				failures = appendBatchFailureReason(failures, id, forward.Name, "nftables 转发缺少入口节点")
+				continue
+			}
+			// R35-FIX-F01：遗留/竞态混合态下记失败而不是 reconcile
+			// 首节点后报成功（其余入口的服务不会被重推）。
+			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+				f++
+				failures = appendBatchFailure(failures, id, forward.Name, err)
 				continue
 			}
 			if err := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); err != nil {
@@ -7715,6 +7799,13 @@ func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) {
 			continue
 		}
 		if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(f.TunnelID); modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			// R35-FIX-F01：遗留/竞态混合态下跳过、不删库（gost/realm
+			// 服务不会被触碰）；行保留待管理员先编辑隧道去掉 nft/
+			// 多余入口后再清理，记日志不静默。
+			if err := h.rejectMixedNftForwardState(f.TunnelID, nftMode, entryNodeIDs); err != nil {
+				log.Printf("cleanup forwards for user tunnel: mixed nft state skipped forward_id=%d err=%v", f.ID, err)
+				continue
+			}
 			if markErr := h.repo.MarkForwardPendingDelete(f.ID, entryNodeIDs[0], time.Now()); markErr == nil {
 				nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], f.ID)
 				continue

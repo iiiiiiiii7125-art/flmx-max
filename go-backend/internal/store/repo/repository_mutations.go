@@ -972,6 +972,25 @@ func (r *Repository) TunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
 	return ids, nil
 }
 
+// TunnelIDsByEntryNode returns the tunnel IDs for which nodeID is an entry
+// node (chain_type "1"), ordered by tunnel ID. R35-FIX-F01: nodeUpdate
+// must refuse a forward-mode flip while the node still serves forwards
+// through any of these tunnels.
+func (r *Repository) TunnelIDsByEntryNode(nodeID int64) ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.ChainTunnel{}).
+		Where("node_id = ? AND chain_type = ?", nodeID, "1").
+		Order("tunnel_id ASC").
+		Pluck("tunnel_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // DeleteUserTunnel removes a user_tunnel row together with its
 // GroupPermissionGrant ledger rows (R2X-035): every other UT deletion path
 // (tunnel/user cascades, group revoke) clears the ledger first; leaving it

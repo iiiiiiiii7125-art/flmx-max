@@ -161,6 +161,13 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 		}
 		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
 		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			// R35-FIX-F01：遗留/竞态混合态下跳过、不进 pausedSet（gost/
+			// realm 服务不会被暂停）；行保持 active、恢复依据回写时
+			// 被剔除，下次上报重试，记日志不静默。
+			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+				log.Printf("applyUserQuotaBlock: mixed nft state skipped forward_id=%d err=%v", forward.ID, err)
+				continue
+			}
 			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
 			continue
 		}
@@ -244,6 +251,13 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 		}
 		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
 		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			// R35-FIX-F01：遗留/竞态混合态下跳过、不恢复（nft 规则与
+			// gost/realm 服务会双份下发）；行保持 paused 待管理员先
+			// 编辑隧道去掉 nft/多余入口，记日志不静默。
+			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+				log.Printf("quota release skipped op=mixed_nft_state forward_id=%d err=%v", forwardID, err)
+				continue
+			}
 			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
 			continue
 		}

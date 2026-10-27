@@ -321,6 +321,13 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		return nil, err
 	}
 	if nftMode {
+		// R35-FIX-F01：realm 隧道绝不能走 nft 分支——nft 分支优先于
+		// realm 分支会使 realm 配置不被触碰。realm 隧道入口含 nft
+		// 节点即为混合态（validateRealmTunnelTx 禁止该组合），拒绝
+		// 而不是静默按 nft 下发。
+		if tunnelIsRealm(tunnel) {
+			return nil, fmt.Errorf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", forward.TunnelID)
+		}
 		if err := h.validateNftablesForwardRequest(tunnel, forward.RemoteAddr, entryNodeIDs); err != nil {
 			return nil, err
 		}

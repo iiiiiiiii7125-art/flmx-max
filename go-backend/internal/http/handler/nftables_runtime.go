@@ -89,6 +89,70 @@ func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAdd
 	return nil
 }
 
+// mixedNftForwardStateError 是 [0]-only 的 nft 分发点的 fail-closed
+// 守卫（R35-F-01）：nft 分支只对「单入口、非 realm、直连隧道」的转发合
+// 法——此时全部入口节点就是 entryNodeIDs[0]，取首元即全量。多入口含
+// nft 节点、或 realm 隧道入口为 nft 节点时，[0] 分支会静默漏掉其余引
+// 擎的服务（gost/realm 继续监听而 DB 称成功），此时拒绝操作而不是报
+// 成功。validateNftablesForwardRequest 只在转发创建/编辑 intake 与
+// sync 漏斗设防，本函数是其余分发点的同一口径后防线（单入口门不再是
+// 唯一防线）；遗留混合态的修复路径是先编辑隧道去掉 nft/多余入口，
+// 而不是在此处静默放行。
+func mixedNftForwardStateError(tunnel *tunnelRecord, entryNodeIDs []int64) error {
+	if tunnel == nil {
+		return errors.New("隧道不存在")
+	}
+	if len(entryNodeIDs) != 1 {
+		return errors.New("nftables 节点仅支持单入口隧道：该转发所在隧道存在多个入口且其中有 nftables 节点，请先编辑隧道去掉多余入口")
+	}
+	if tunnel.Type != 1 {
+		return errors.New("nftables 节点仅支持直连隧道")
+	}
+	if tunnelIsRealm(tunnel) {
+		return fmt.Errorf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", tunnel.ID)
+	}
+	return nil
+}
+
+// rejectMixedNftForwardState 是 mixedNftForwardStateError 的调用点版：
+// 非 nft 隧道直接放行（走 gost/realm 分支）；nft 隧道先取隧道记录再
+// 按同一口径校验。调用方在 nftMode 分支内、触碰数据面前调用。
+func (h *Handler) rejectMixedNftForwardState(tunnelID int64, nftMode bool, entryNodeIDs []int64) error {
+	if !nftMode {
+		return nil
+	}
+	tunnel, err := h.getTunnelRecord(tunnelID)
+	if err != nil {
+		return err
+	}
+	return mixedNftForwardStateError(tunnel, entryNodeIDs)
+}
+
+// entryNodeTunnelWithForwards 找节点作为入口节点、且名下已有转发的第一
+// 条隧道（按隧道 ID 升序），供 nodeUpdate 翻转发模式前置拒绝时点名。
+// 无此类隧道时返回 tunnelID 0。
+func (h *Handler) entryNodeTunnelWithForwards(nodeID int64) (int64, string, error) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return 0, "", errors.New("handler not initialized")
+	}
+	tunnelIDs, err := h.repo.TunnelIDsByEntryNode(nodeID)
+	if err != nil {
+		return 0, "", err
+	}
+	for _, tunnelID := range tunnelIDs {
+		forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
+		if err != nil {
+			return 0, "", err
+		}
+		if len(forwards) == 0 {
+			continue
+		}
+		name, _ := h.repo.GetTunnelName(tunnelID)
+		return tunnelID, name, nil
+	}
+	return 0, "", nil
+}
+
 func sshConfigFromModel(cfg *model.NodeSSHConfig) (runtimenft.SSHConfig, error) {
 	if cfg == nil {
 		return runtimenft.SSHConfig{}, errors.New("节点缺少 SSH 配置")
