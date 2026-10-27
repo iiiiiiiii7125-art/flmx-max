@@ -108,11 +108,19 @@ func IsValidNodeAddress(addr string) error {
 		return nil
 	}
 
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		if !strings.Contains(err.Error(), "missing port in address") {
-			return fmt.Errorf("invalid address format")
-		}
+	// L1-F-04: 空标签主机名（a..b）在任何 DNS 下都不可解析，写面即拒。
+	// IP 字面量已在上方返回；此处 host 为主机名（host:port 取 host 段，
+	// 裸主机名即自身；括号 IPv6 的 host 段不含点，不会误判）。
+	// RFC1918/回环的既有可存性一概不变——只加空标签拒绝，不加任何
+	// IP 政策（回环在订阅面的拒绝是拉取期的口径，不在此处收紧）。
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	} else if !strings.Contains(err.Error(), "missing port in address") {
+		return fmt.Errorf("invalid address format")
+	}
+	if kernel.HasEmptyLabel(host) {
+		return fmt.Errorf("address contains an empty DNS label (e.g. \"a..b\")")
 	}
 	return nil
 }
