@@ -514,6 +514,26 @@ func (r *Repository) GetSpeedLimit(id int64) (*model.SpeedLimit, error) {
 	return &sl, nil
 }
 
+// GetSpeedLimitTx is the transactional twin of GetSpeedLimit, for
+// normalizeSpeedLimitReferenceTx (R35-F-05): the distinction between a
+// missing rule and a disabled rule must be read inside the caller's
+// transaction. It returns the full stored row (any status), or nil when
+// it does not exist.
+func (r *Repository) GetSpeedLimitTx(tx *gorm.DB, id int64) (*model.SpeedLimit, error) {
+	if tx == nil {
+		return nil, errors.New("database unavailable")
+	}
+	var sl model.SpeedLimit
+	err := tx.Where("id = ?", id).First(&sl).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &sl, nil
+}
+
 // SpeedLimitAffectedForwardIDs 返回引用某限速规则的全部转发 ID
 // （R6X-017 引用集正本，去重升序）：转发直引两列（forward.speed_id /
 // forward.ip_speed_id）+ user_tunnel.speed_id 间接引（该 UT 的
