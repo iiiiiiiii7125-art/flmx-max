@@ -13,11 +13,12 @@
 
 ## 手动填写
 
-导入窗口顶部可以切到 **手动填写**：选好协议（SS / VLESS / VMess / Trojan / Hysteria2 / TUIC v5 / AnyTLS / SOCKS5），逐项填地址、端口、密码 / UUID，以及 TLS / Reality、传输方式（TCP / WebSocket / gRPC）等参数，UUID 可以点 **生成** 一键生成。点 **添加** 后，面板把填好的内容拼成标准分享链接，走与粘贴导入完全相同的解析与校验链路；添加后的节点和粘贴导入的节点一样，可以对接中转、放进订阅。
+导入窗口顶部可以切到 **手动填写**：选好协议（SS / VLESS / VMess / Trojan / Hysteria2 / TUIC v5 / AnyTLS / SOCKS5），逐项填地址、端口、密码 / UUID，以及 TLS / Reality、传输方式（TCP / WebSocket / gRPC）等参数，UUID 可以点 **生成** 一键生成。点 **添加** 后，面板把填好的内容拼成标准分享链接，走与粘贴导入完全相同的解析与校验链路；添加后的节点和粘贴导入的节点一样，可以对接中转、放进订阅。Hysteria2 / TUIC / AnyTLS 作中转目标只能走 sing-box 内核，Xray 内核会拒绝。
 
-- 表单只显示当前协议可用的字段与选项（例如 VMess 没有 Reality；Trojan / Hysteria2 / TUIC / AnyTLS 固定用 TLS），不合法的协议×传输组合选不出来
+- 表单只显示当前协议可用的字段与选项（例如 VMess 没有 Reality；Trojan / Hysteria2 / TUIC / AnyTLS 固定用 TLS）。流控（Vision）只在 VLESS + TCP 且安全不是「无」时可选；传输选 WebSocket / gRPC 或安全选「无」时选不出 Vision（已选的会被置空并提示），后端也会拒绝无 TLS 且无加密的 flow
 - 地址栏只填域名或 IP，不要带端口（端口填在端口栏）；地址不能是本机地址（`127.0.0.1` 等）或保留段/组播段，端口必须是 1–65535 的整数
-- 按协议必填：VLESS / VMess / TUIC 须填 UUID；SS / Trojan / Hysteria2 / AnyTLS 须填密码；VLESS + Reality 须填公钥（pbk）；缺了会在点 **添加** 时直接提示，不会先建一个坏节点
+- 按协议必填：VLESS / VMess / TUIC 须填 UUID；SS / Trojan / Hysteria2 / TUIC / AnyTLS 须填密码（TUIC 同时须填 UUID 和密码，是唯一同时要两样的协议）；VLESS + Reality 须填公钥（pbk）；缺了会在点 **添加** 时直接提示，不会先建一个坏节点
+- 名称可以留空，留空时用「地址:端口」作为节点名称
 
 ## 说明
 
@@ -45,7 +46,7 @@
 
 ## 对接中转
 
-导入后的节点和面板部署的入站一样：点击节点 → **中转** → 选择隧道即可，端口转发和隧道转发（包括经 IX 的多跳）都可以用。见 [对接中转](./relay.md)。
+导入后的节点和面板部署的入站一样：点击节点 → **中转** → 选择隧道即可，端口转发和隧道转发（包括经 IX 的多跳）都可以用。Hysteria2 / TUIC / AnyTLS 作中转目标只能走 sing-box 内核，Xray 内核会拒绝。见 [对接中转](./relay.md)。
 
 ## 订阅源地址安全策略
 
