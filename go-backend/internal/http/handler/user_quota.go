@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -282,6 +283,40 @@ func (h *Handler) resetUserQuotaWindows(now time.Time) {
 	nowMs := now.UnixMilli()
 	for i := range releases {
 		h.applyUserQuotaRelease(&releases[i], nowMs)
+		// R35-G-001 对称面：窗口滚动解禁是「已恢复」事件，与超额通知
+		// 成对——否则管理员只收到超额、不知何时恢复。每真实解禁一条，
+		// 通知通道的指纹去重吸收 30 分钟内的同文案重复。
+		if releases[i].UnblockUser {
+			h.notifyUserQuotaRecovered(releases[i].UserID, "配额窗口已滚动")
+		}
+	}
+}
+
+// notifyUserQuotaRecovered reports that a user's daily/monthly quota block
+// was lifted (R35-G-001 symmetric face of the exceed notify). Best effort:
+// a failed username lookup only skips the message, never the release.
+func (h *Handler) notifyUserQuotaRecovered(userID int64, reason string) {
+	if h == nil || h.repo == nil || userID <= 0 {
+		return
+	}
+	u, err := h.repo.GetUserByID(userID)
+	if err != nil || u == nil {
+		log.Printf("quota recovery notify skipped user_id=%d err=%v", userID, err)
+		return
+	}
+	h.notify(notifyEventUserQuota, "用户配额已恢复",
+		fmt.Sprintf("用户：%s\n%s，转发限制已解除", u.User, reason))
+}
+
+// quotaResetReason renders the manual-reset scope for the recovery notice.
+func quotaResetReason(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "daily":
+		return "日配额已手动重置"
+	case "monthly":
+		return "月配额已手动重置"
+	default:
+		return "日/月配额已手动重置"
 	}
 }
 
@@ -309,6 +344,10 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	}
 	nowMs := time.Now().UnixMilli()
 	h.applyUserQuotaRelease(release, nowMs)
+	// R35-G-001 对称面：手动重置解禁是「已恢复」事件（见 resetUserQuotaWindows）。
+	if release != nil && release.UnblockUser {
+		h.notifyUserQuotaRecovered(req.UserID, quotaResetReason(req.Scope))
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
