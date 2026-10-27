@@ -399,6 +399,16 @@ func (n *notifier) forgetUserQuotaFlow(user string) {
 	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00用户流量即将用完\x00" + msgPrefix)
 }
 
+// forgetUserQuotaPeriod 清掉某用户某配额档（日/月）warn/full 两子型的
+// 已发送指纹（R35-G-001）：forgetUserQuotaFlow 的档位对偶——用量回落
+// 是配额档的静默恢复，alertOnce 已被 clearAlerts 再武装、指纹却仍在
+// 30 分钟窗内会把同文案再越界成对吞掉（R3X-030 同型）。
+func (n *notifier) forgetUserQuotaPeriod(user, period string) {
+	msgPrefix := "用户：" + user + "\n"
+	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00用户" + period + "配额已用完\x00" + msgPrefix)
+	n.forgetFingerprintPrefix(notifyEventUserQuota + "\x00用户" + period + "配额即将用完\x00" + msgPrefix)
+}
+
 // forgetSubQuotaFlow 是 forgetUserQuotaFlow 的订阅面对偶：清掉某分享
 // 订阅流量 warn/full 两子型的指纹，到期类子型（分享订阅即将到期/
 // 已到期）不被波及。
