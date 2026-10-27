@@ -145,28 +145,328 @@ function tlsOn(n: ManualNode): boolean {
   return false;
 }
 
+/** Vision 仅在 VLESS + TCP + 安全≠无时合法（presets.ts visionAllowed
+ *  口径；手动表单无 ENC 字段，故安全=无时恒不合法）。 */
+function visionAllowedManual(n: ManualNode): boolean {
+  return n.protocol === "vless" && n.network === "tcp" && n.security !== "none";
+}
+
+// ---- 与后端同口径的前端校验（F-03/F-05/F-06）---------------------------
+
+/** 严格 IPv4 字面量：4 段十进制、无前导 0（Go net.ParseIP 同口径）。 */
+function parseIPv4Literal(s: string): number[] | null {
+  const parts = s.split(".");
+
+  if (parts.length !== 4) return null;
+  const out: number[] = [];
+
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    if (p.length > 1 && p[0] === "0") return null;
+    const v = Number(p);
+
+    if (v > 255) return null;
+    out.push(v);
+  }
+
+  return out;
+}
+
+/** IPv6 字面量解析（Go net.ParseIP 同口径）：至多一个 ::，末段可为内嵌
+ *  IPv4；返回 16 字节，非法即 null。 */
+function parseIPv6Literal(s: string): number[] | null {
+  if (s.includes("%")) return null; // zone id 不接受
+  const dbl = s.indexOf("::");
+
+  if (dbl !== -1 && s.indexOf("::", dbl + 2) !== -1) return null;
+  const parseGroup = (g: string, last: boolean): number[] | null => {
+    if (g.includes(".")) {
+      if (!last) return null;
+
+      return parseIPv4Literal(g);
+    }
+    if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+    const v = parseInt(g, 16);
+
+    return [v >> 8, v & 0xff];
+  };
+  const parseSide = (
+    side: string,
+  ): { bytes: number[]; groups: number } | null => {
+    if (side === "") return { bytes: [], groups: 0 };
+    const parts = side.split(":");
+    const bytes: number[] = [];
+    let groups = 0;
+
+    for (let i = 0; i < parts.length; i++) {
+      const b = parseGroup(parts[i], i === parts.length - 1);
+
+      if (b === null) return null;
+      bytes.push(...b);
+      groups += b.length / 2;
+    }
+
+    return { bytes, groups };
+  };
+
+  if (dbl === -1) {
+    const r = parseSide(s);
+
+    if (!r || r.groups !== 8) return null;
+
+    return r.bytes;
+  }
+  const head = parseSide(s.slice(0, dbl));
+  const tail = parseSide(s.slice(dbl + 2));
+
+  if (!head || !tail) return null;
+  const total = head.groups + tail.groups;
+
+  if (total >= 8) return null; // :: 至少压缩一组
+  const zeros = new Array<number>((8 - total) * 2).fill(0);
+
+  return [...head.bytes, ...zeros, ...tail.bytes];
+}
+
+const IMPORT_HOST_LOOPBACK = "地址不能是本机或 0.0.0.0";
+const IMPORT_HOST_DENIED = "地址不能是云元数据、链路本地或保留/组播地址";
+
+/** IPv4 按 netguard PolicyHardDenyOrLoopback 判定：RFC1918 与 CGNAT
+ *  私网是合法导入对象，不拦。 */
+function checkIPv4Import(o: number[]): string | null {
+  if (o[0] === 0 && o[1] === 0 && o[2] === 0 && o[3] === 0)
+    return IMPORT_HOST_LOOPBACK;
+  if (o[0] === 127) return IMPORT_HOST_LOOPBACK;
+  if (
+    (o[0] === 169 && o[1] === 254 && o[2] === 169 && o[3] === 254) || // 云元数据
+    (o[0] === 100 && o[1] === 100 && o[2] === 100 && o[3] === 200) || // 云元数据
+    (o[0] === 169 && o[1] === 254) || // 169.254/16 链路本地
+    o[0] === 0 || // 0.0.0.0/8 保留
+    (o[0] === 192 && o[1] === 0 && o[2] === 0) || // 192.0.0.0/24 保留
+    (o[0] === 198 && (o[1] & 0xfe) === 18) || // 198.18.0.0/15 保留
+    o[0] >= 240 || // 240.0.0.0/4 保留
+    (o[0] >= 224 && o[0] < 240) // 224.0.0.0/4 组播
+  )
+    return IMPORT_HOST_DENIED;
+
+  return null;
+}
+
+/** IPv6 按同一政策判定：映射/翻译地址按内嵌 IPv4 同判。 */
+function checkIPv6Import(b: number[]): string | null {
+  if (b.every((x) => x === 0)) return IMPORT_HOST_LOOPBACK;
+  if (b.slice(0, 15).every((x) => x === 0) && b[15] === 1)
+    return IMPORT_HOST_LOOPBACK; // ::1
+  // IPv4 映射 ::ffff:a.b.c.d
+  if (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff)
+    return checkIPv4Import(b.slice(12));
+  // 本地 NAT64 64:ff9b:1::/48 整段保留
+  if (
+    b[0] === 0x00 &&
+    b[1] === 0x64 &&
+    b[2] === 0xff &&
+    b[3] === 0x9b &&
+    b[4] === 0x00 &&
+    b[5] === 0x01
+  )
+    return IMPORT_HOST_DENIED;
+  // NAT64 64:ff9b::/96：按内嵌 IPv4 判定
+  if (
+    b[0] === 0x00 &&
+    b[1] === 0x64 &&
+    b[2] === 0xff &&
+    b[3] === 0x9b &&
+    b.slice(4, 12).every((x) => x === 0)
+  )
+    return checkIPv4Import(b.slice(12));
+  // 6to4 2002::/16：按内嵌 IPv4 判定
+  if (b[0] === 0x20 && b[1] === 0x02) return checkIPv4Import(b.slice(2, 6));
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return IMPORT_HOST_DENIED; // fe80::/10
+  if (b[0] === 0xff) return IMPORT_HOST_DENIED; // ff00::/8 组播
+  if (b[0] === 0x01 && b[1] === 0x00 && b.slice(2, 8).every((x) => x === 0))
+    return IMPORT_HOST_DENIED; // 100::/64 保留
+  // 云元数据 fd00:ec2::254
+  if (
+    b[0] === 0xfd &&
+    b[1] === 0x00 &&
+    b[2] === 0x0e &&
+    b[3] === 0xc2 &&
+    b.slice(4, 14).every((x) => x === 0) &&
+    b[14] === 0x02 &&
+    b[15] === 0x54
+  )
+    return IMPORT_HOST_DENIED;
+
+  return null;
+}
+
+/** 与后端 ValidateImportHost（go-backend/internal/kernel/import.go）
+ *  同口径：IP 字面量走 netguard 严格政策，主机名走 localhost 与非规范
+ *  编码拦截；错误文案复用后端原文。 */
+function validateImportHost(host: string): string | null {
+  const v4 = parseIPv4Literal(host);
+
+  if (v4) return checkIPv4Import(v4);
+  const v6 = parseIPv6Literal(host);
+
+  if (v6) return checkIPv6Import(v6);
+  const lower = host.toLowerCase();
+
+  if (lower === "localhost" || lower.endsWith(".localhost"))
+    return "地址不能是 localhost";
+  if (
+    lower === "ip6-localhost" ||
+    lower === "ip6-loopback" ||
+    lower === "localhost.localdomain"
+  )
+    return "地址不能是 localhost";
+  for (const seg of lower.split(".")) {
+    if (seg.startsWith("0x")) return `地址 "${host}" 不正确`;
+  }
+  if (host !== "" && /^[0-9.]+$/.test(host)) return `地址 "${host}" 不正确`;
+  if (
+    host === "" ||
+    host.length > 253 ||
+    !/^[A-Za-z0-9.-]+$/.test(host) ||
+    host.startsWith(".") ||
+    host.endsWith(".")
+  )
+    return `地址 "${host}" 不正确`;
+
+  return null;
+}
+
+/** 与后端 ValidHy2Ports（credentials.go）同口径：逗号分隔的端口或端口段。 */
+function validHy2Ports(ports: string): boolean {
+  if (ports.trim() === "") return true;
+  for (const raw of ports.split(",")) {
+    const item = raw.trim();
+    const dash = item.indexOf("-");
+    const lo = dash === -1 ? item : item.slice(0, dash);
+    const hi = dash === -1 ? item : item.slice(dash + 1);
+
+    for (const s of [lo, hi]) {
+      const t = s.trim();
+
+      if (!/^[+-]?\d+$/.test(t)) return false;
+      const v = Number(t);
+
+      if (!Number.isInteger(v) || v < 1 || v > 65535) return false;
+    }
+  }
+
+  return true;
+}
+
+/** RawURL base64 解出的字节数；非法字符/填充/长度即 null（后端
+ *  validateRealityOpts 只认 RawURLEncoding 解出恰 32 字节）。 */
+function rawURLBase64ByteLength(s: string): number | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(s)) return null;
+  if (s.length % 4 === 1) return null;
+  const padded =
+    s.replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - (s.length % 4)) % 4);
+
+  return atob(padded).length;
+}
+
 /** The node as a share link, or an error message for a missing field. */
 export function manualNodeLink(n: ManualNode): {
   link?: string;
   error?: string;
 } {
-  const host = n.host.trim().replace(/^\[|\]$/g, "");
+  // F-06：地址栏不得带端口。方括号只接受严格 [IPv6] 形；[IPv6]:端口形
+  // 按“地址不要带端口”拒；其余 ] 残留 / 未闭合括号按地址不正确拒。
+  const rawHost = n.host.trim();
+
+  if (!rawHost) return { error: "请填写地址" };
+  let host = rawHost;
+
+  if (rawHost.includes("]")) {
+    if (!rawHost.startsWith("[")) return { error: `地址 "${rawHost}" 不正确` };
+    const bracketed = /^\[([^\[\]]+)\]$/.exec(rawHost);
+
+    if (!bracketed) {
+      if (/^\[[^\[\]]+\]:/.test(rawHost))
+        return { error: "地址不要带端口，端口请填在端口栏" };
+
+      return { error: `地址 "${rawHost}" 不正确` };
+    }
+    host = bracketed[1];
+  } else if (rawHost.startsWith("[")) {
+    return { error: `地址 "${rawHost}" 不正确` };
+  }
+  if (/[\s/?#@]/.test(host)) return { error: "地址只填域名或 IP" };
+  // 含冒号的 host 须为合法 IPv6 字面量，否则是 host:port / 多冒号形态。
+  if (host.includes(":") && !parseIPv6Literal(host))
+    return { error: "地址不要带端口，端口请填在端口栏" };
   const port = Number(n.port);
 
-  if (!host) return { error: "请填写地址" };
-  if (/[\s/?#@]/.test(host)) return { error: "地址只填域名或 IP" };
-  // R30 封口：地址栏不得带端口（host:port 形，只含一个冒号），端口请填
-  // 在端口栏；否则带端口值会绕过写侧剥离入库。IPv6 字面量含多个冒号，
-  // 不在此限。
-  if (host.split(":").length === 2)
-    return { error: "地址不要带端口，端口请填在端口栏" };
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     return { error: "端口应为 1–65535" };
+  // F-03：地址类别校验（与后端 ValidateImportHost 同口径）。
+  const hostErr = validateImportHost(host);
+
+  if (hostErr) return { error: hostErr };
+  // F-08：密码统一 trim，全空格即按空处理。
+  const pw = n.password.trim();
+
   if (usesUUID(n.protocol) && !n.uuid.trim()) return { error: "请填写 UUID" };
-  if (usesPassword(n.protocol) && n.protocol !== "socks5" && !n.password)
+  // F-05：UUID 格式（与后端 uuidPattern 同形，大小写不敏感）。
+  if (
+    usesUUID(n.protocol) &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      n.uuid.trim(),
+    )
+  )
+    return { error: "UUID 格式错误" };
+  if (usesPassword(n.protocol) && n.protocol !== "socks5" && !pw)
     return { error: "请填写密码" };
+  // F-07：SOCKS5 用户名/密码成对填写，或都留空。
+  if (n.protocol === "socks5" && Boolean(n.username.trim()) !== Boolean(pw))
+    return { error: "用户名和密码请成对填写（或都留空）" };
+  // F-09：VMess alterId 非空时须为非负整数，不再静默归零。
+  if (n.protocol === "vmess") {
+    const aid = n.alterId.trim();
+
+    if (aid !== "" && !/^\d+$/.test(aid)) return { error: "alterId 应为整数" };
+  }
   if (n.protocol === "vless" && n.security === "reality" && !n.publicKey.trim())
     return { error: "Reality 需要填写公钥" };
+  if (n.protocol === "vless" && n.security === "reality") {
+    // F-05：pbk 须为 RawURL base64 解出恰 32 字节；sid 偶数位小写十六
+    // 进制且 ≤16 位（与后端 validateRealityOpts 同口径）。
+    if (rawURLBase64ByteLength(n.publicKey.trim()) !== 32)
+      return {
+        error: "Reality 公钥 pbk 格式错误（须为 32 字节的 RawURL base64）",
+      };
+    const sid = n.shortId.trim();
+
+    if (
+      sid !== "" &&
+      (!/^[0-9a-f]+$/.test(sid) || sid.length % 2 !== 0 || sid.length > 16)
+    )
+      return {
+        error:
+          "Reality short-id 格式错误（须为偶数位小写十六进制，最多 16 位）",
+      };
+    // F-02：Reality 必须填 SNI（伪装站域名）。
+    if (!n.sni.trim()) return { error: "Reality 需要填写 SNI（伪装站域名）" };
+  }
+  // F-01：Vision 仅在 VLESS + TCP + 安全≠无时合法（手动表单无 ENC
+  // 字段，故安全=无时恒不合法；纯 ENC 形态表单表达不出来，不放行）。
+  if (
+    n.protocol === "vless" &&
+    n.flow.trim() !== "" &&
+    (n.network !== "tcp" || n.security === "none")
+  )
+    return { error: "Vision 流控仅支持 TCP 传输且需要 TLS 或 Reality" };
+  // F-05：Hysteria2 端口跳跃（与后端 ValidHy2Ports 同口径）。
+  if (n.protocol === "hysteria2" && !validHy2Ports(n.ports))
+    return {
+      error:
+        "Hysteria2 ports 格式错误（须为逗号分隔的端口或端口段，端口在 1–65535 内）",
+    };
 
   const addr = `${host.includes(":") ? `[${host}]` : host}:${port}`;
   const name = n.name.trim() || addr;
@@ -194,7 +494,7 @@ export function manualNodeLink(n: ManualNode): {
   switch (n.protocol) {
     case "ss":
       return {
-        link: `ss://${base64UTF8(`${n.method}:${n.password}`, true)}@${addr}${tag}`,
+        link: `ss://${base64UTF8(`${n.method}:${pw}`, true)}@${addr}${tag}`,
       };
     case "vmess": {
       const v: Record<string, string | boolean> = {
@@ -203,7 +503,7 @@ export function manualNodeLink(n: ManualNode): {
         add: host,
         port: String(port),
         id: n.uuid.trim(),
-        aid: String(Number(n.alterId) || 0),
+        aid: String(Number(n.alterId.trim()) || 0),
         scy: "auto",
         net: n.network,
         type: "none",
@@ -236,7 +536,7 @@ export function manualNodeLink(n: ManualNode): {
     case "trojan":
       q.set("security", "tls");
 
-      return { link: `trojan://${enc(n.password)}@${addr}${query()}${tag}` };
+      return { link: `trojan://${enc(pw)}@${addr}${query()}${tag}` };
     case "hysteria2":
       if (n.obfsPassword) {
         q.set("obfs", "salamander");
@@ -245,7 +545,7 @@ export function manualNodeLink(n: ManualNode): {
       set("mport", n.ports);
 
       return {
-        link: `hysteria2://${enc(n.password)}@${addr}/${query()}${tag}`,
+        link: `hysteria2://${enc(pw)}@${addr}/${query()}${tag}`,
       };
     case "tuic":
       q.set("alpn", "h3");
@@ -253,15 +553,13 @@ export function manualNodeLink(n: ManualNode): {
       q.set("udp_relay_mode", "native");
 
       return {
-        link: `tuic://${enc(n.uuid.trim())}:${enc(n.password)}@${addr}${query()}${tag}`,
+        link: `tuic://${enc(n.uuid.trim())}:${enc(pw)}@${addr}${query()}${tag}`,
       };
     case "anytls":
-      return { link: `anytls://${enc(n.password)}@${addr}/${query()}${tag}` };
+      return { link: `anytls://${enc(pw)}@${addr}/${query()}${tag}` };
     case "socks5": {
-      const auth =
-        n.username || n.password
-          ? `${enc(n.username)}:${enc(n.password)}@`
-          : "";
+      const user = n.username.trim();
+      const auth = user || pw ? `${enc(user)}:${enc(pw)}@` : "";
 
       return { link: `socks5://${auth}${addr}${tag}` };
     }
@@ -276,14 +574,17 @@ function Pick({
   value,
   options,
   onChange,
+  disabled,
 }: {
   label: string;
   value: string;
   options: Array<[string, string]>;
   onChange: (v: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <Select
+      isDisabled={disabled}
       label={label}
       selectedKeys={[value || NONE_KEY]}
       onSelectionChange={(keys) => {
@@ -337,18 +638,32 @@ export function ManualNodeFields({
         value={n.protocol}
         onChange={(v) => {
           const protocol = v as ManualProtocol;
+          // VMess has no Reality; the other TLS protocols always use TLS.
+          const security: Security =
+            alwaysTLS(protocol) ||
+            (protocol === "vmess" && n.security === "reality")
+              ? "tls"
+              : n.security;
 
           set({
             protocol,
-            // VMess has no Reality; the other TLS protocols always use TLS.
-            security:
-              alwaysTLS(protocol) ||
-              (protocol === "vmess" && n.security === "reality")
-                ? "tls"
-                : n.security,
+            security,
+            // F-01：切到 VLESS 时若当前组合不允许 Vision，顺手清掉 flow。
+            flow:
+              protocol === "vless" &&
+              (security === "none" || n.network !== "tcp")
+                ? ""
+                : n.flow,
           });
         }}
       />
+      {(n.protocol === "hysteria2" ||
+        n.protocol === "tuic" ||
+        n.protocol === "anytls") && (
+        <p className="text-xs text-warning-600 dark:text-warning-400">
+          作链式中转目标时只能走 sing-box 内核，Xray 会拒绝该协议
+        </p>
+      )}
       {field("name", "名称", { placeholder: "留空用 地址:端口" })}
       <div className="grid grid-cols-3 gap-3">
         <div className="col-span-2">
@@ -382,26 +697,39 @@ export function ManualNodeFields({
           onChange={(e) => set({ uuid: e.target.value })}
         />
       )}
-      {n.protocol === "socks5" && field("username", "用户名（可选）")}
+      {n.protocol === "socks5" &&
+        field("username", "用户名（可选）", {
+          description: "与密码成对填写，或都留空",
+        })}
       {usesPassword(n.protocol) &&
         field("password", n.protocol === "socks5" ? "密码（可选）" : "密码", {
           description:
-            n.protocol === "ss" && n.method.startsWith("2022-")
-              ? "SS2022 的密码是 Base64 密钥，长度要和加密方式匹配"
-              : undefined,
+            n.protocol === "socks5"
+              ? "与用户名成对填写，或都留空"
+              : n.protocol === "ss" && n.method.startsWith("2022-")
+                ? "SS2022 的密码是 Base64 密钥，长度要和加密方式匹配"
+                : undefined,
         })}
       {n.protocol === "vmess" &&
         field("alterId", "alterId", { type: "number", placeholder: "0" })}
       {n.protocol === "vless" && (
-        <Pick
-          label="流控 (flow)"
-          options={[
-            ["", "无"],
-            ["xtls-rprx-vision", "xtls-rprx-vision"],
-          ]}
-          value={n.flow}
-          onChange={(flow) => set({ flow })}
-        />
+        <div className="space-y-1.5">
+          <Pick
+            disabled={!visionAllowedManual(n)}
+            label="流控 (flow)"
+            options={[
+              ["", "无"],
+              ["xtls-rprx-vision", "xtls-rprx-vision"],
+            ]}
+            value={n.flow}
+            onChange={(flow) => set({ flow })}
+          />
+          {!visionAllowedManual(n) && (
+            <p className="text-xs text-warning-600 dark:text-warning-400">
+              Vision 仅支持 TCP 且需要 TLS/Reality，当前组合不可用
+            </p>
+          )}
+        </div>
       )}
       {n.protocol === "tuic" && (
         <Pick
@@ -433,14 +761,23 @@ export function ManualNodeFields({
                   ]
             }
             value={n.security}
-            onChange={(security) => set({ security: security as Security })}
+            onChange={(security) =>
+              set({
+                security: security as Security,
+                // F-01：切到“无”时 Vision 即非法，顺手清掉 flow。
+                flow: security === "none" ? "" : n.flow,
+              })
+            }
           />
         </div>
       )}
       {tls && (
         <div className="space-y-3 rounded-xl border border-divider p-3">
           {field("sni", "SNI", {
-            placeholder: "留空用地址",
+            placeholder:
+              n.protocol === "vless" && n.security === "reality"
+                ? "必填，如 www.microsoft.com"
+                : "留空用地址",
             description:
               n.security === "reality" && n.protocol === "vless"
                 ? "Reality 伪装的网站域名，比如 www.microsoft.com"
@@ -481,7 +818,13 @@ export function ManualNodeFields({
               ["grpc", "gRPC"],
             ]}
             value={n.network}
-            onChange={(network) => set({ network: network as Network })}
+            onChange={(network) =>
+              set({
+                network: network as Network,
+                // F-01：切离 TCP 时 Vision 即非法，顺手清掉 flow。
+                flow: network !== "tcp" ? "" : n.flow,
+              })
+            }
           />
         </div>
       )}
