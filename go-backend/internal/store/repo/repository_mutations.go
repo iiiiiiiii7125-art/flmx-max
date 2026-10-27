@@ -2488,13 +2488,22 @@ func parsePortRangeSpec(input string) []int {
 			if end < start {
 				start, end = end, start
 			}
+			// 复扫 F-PORT-01：端口范围串无上限钳制——"1-99999" 会把
+			// >65535 的端口发给分配器，最终只能在 agent 绑定时失败；
+			// 与单值端口的 1–65535 校验同口径，区间上界钳到 65535。
+			if start > 65535 {
+				continue
+			}
+			if end > 65535 {
+				end = 65535
+			}
 			for p := start; p <= end; p++ {
 				set[p] = struct{}{}
 			}
 			continue
 		}
 		p, err := strconv.Atoi(part)
-		if err != nil || p <= 0 {
+		if err != nil || p <= 0 || p > 65535 {
 			continue
 		}
 		set[p] = struct{}{}

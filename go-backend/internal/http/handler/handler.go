@@ -1628,6 +1628,14 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 			return "", fmt.Errorf("代理地址主机名格式无效：%w", err)
 		}
 		return value, nil
+	case "notify_webhook_url":
+		// 复扫 R-03：与 github_proxy_url / 订阅源保存面同口径——
+		// 保存期补语法层空标签判；使用期 validateNotifyURL 的 DNS
+		// fail-closed 口径不变。
+		if err := validateNoEmptyLabelURLHost(value); err != nil {
+			return "", fmt.Errorf("通知地址主机名格式无效：%w", err)
+		}
+		return value, nil
 	default:
 		return value, nil
 	}

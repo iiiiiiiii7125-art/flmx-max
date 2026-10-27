@@ -1092,6 +1092,13 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if host == "" || username == "" {
 		return errors.New("nftables 节点 SSH 配置不完整")
 	}
+	// 复扫 R-04：SSH host 是拨号目标主机名（runner 以
+	// JoinHostPort(host, sshPort) 拼地址），显式填值此前无任何
+	// 主机名校验；空标签在任何 DNS 下都不可解析，写面即拒。
+	// serverIp 派生分支已由节点地址门覆盖，此处复核无害。
+	if err := validateNoEmptyLabelAddr(host); err != nil {
+		return fmt.Errorf("nftables 节点 SSH 主机名格式无效：%w", err)
+	}
 	if port <= 0 || port > 65535 {
 		return errors.New("nftables 节点 SSH 端口无效")
 	}

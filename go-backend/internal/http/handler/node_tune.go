@@ -132,6 +132,16 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// 复扫 R-02：两值均透传给 agent 拨号/下载，空标签主机名在
+		// 任何 DNS 下都不可解析，写面即拒（只判语法、不做 DNS）。
+		if err := validateNoEmptyLabelAddr(req.ReferenceHost); err != nil {
+			response.WriteJSON(w, response.ErrDefault("参考地址主机名格式无效："+err.Error()))
+			return
+		}
+		if err := validateNoEmptyLabelURLHost(req.SpeedtestURL); err != nil {
+			response.WriteJSON(w, response.ErrDefault("测速地址主机名格式无效："+err.Error()))
+			return
+		}
 		command, data = "TuneProbe", map[string]interface{}{"withSpeed": req.WithSpeed || req.MeasureBandwidth}
 		if req.SpeedtestURL != "" {
 			data["speedtestURL"] = req.SpeedtestURL
