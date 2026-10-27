@@ -535,6 +535,12 @@ func normalizeSettings(in *Inbound) error {
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				return errors.New("伪装地址必须是 http(s):// 开头的网址")
 			}
+			// 复扫 R-01：伪装地址主机名此前只查 scheme + host 非空，
+			// 空标签（`https://a..b/`）原值落库并渲染进 sing-box
+			// masquerade，节点取伪装内容时 DNS 失败；与 SNI 同口径拒。
+			if HasEmptyLabel(u.Hostname()) {
+				return errors.New("伪装地址主机名格式错误")
+			}
 		}
 	case ProtocolNaive:
 		s.Username = strings.TrimSpace(s.Username)

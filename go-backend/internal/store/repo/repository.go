@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1401,6 +1402,14 @@ func parsePortRangeMinMax(input string) (int, int) {
 			if end < start {
 				start, end = end, start
 			}
+			// 复扫 F-PORT-01：与 parsePortRangeSpec 同口径，上界钳到
+			// 65535（展示口径亦不许报出非法端口）。
+			if start > 65535 {
+				continue
+			}
+			if end > 65535 {
+				end = 65535
+			}
 			if minPort == 0 || start < minPort {
 				minPort = start
 			}
@@ -1410,7 +1419,7 @@ func parsePortRangeMinMax(input string) (int, int) {
 			continue
 		}
 		p := parseIntPort(part)
-		if p <= 0 {
+		if p <= 0 || p > 65535 {
 			continue
 		}
 		if minPort == 0 || p < minPort {
@@ -3146,7 +3155,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.PermissionsImported = count
 		}
 		if typeSet["configs"] && len(backup.Configs) > 0 {
-			count, err := importConfigs(tx, backup.Configs, now)
+			count, err := importConfigs(tx, backup.Configs, now, rep)
 			if err != nil {
 				return fmt.Errorf("import configs failed: %w", err)
 			}
@@ -3536,9 +3545,17 @@ func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int
 			rep.skip("nodeSSHConfigs")
 			continue
 		}
+		// 复扫 R-04：恢复面与写面同口径——空标签 SSH host 清空 +
+		// warning（与监控恢复面同型；其余字段保留，管理员可在节点
+		// 设置中重填）。
+		host := c.Host
+		if host != "" && addrHostHasEmptyLabel(host) {
+			rep.warnf("备份恢复：节点 #%d 的 SSH 配置主机 %q 含空标签主机名，已清空，恢复后请在节点设置中重新填写", c.NodeID, c.Host)
+			host = ""
+		}
 		item := model.NodeSSHConfig{
 			NodeID:      c.NodeID,
-			Host:        c.Host,
+			Host:        host,
 			Port:        c.Port,
 			Username:    c.Username,
 			AuthType:    c.AuthType,
@@ -3610,13 +3627,19 @@ func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep 
 		if updated == 0 {
 			updated = now
 		}
+		// 复扫 R-08：恢复面与写面同口径——剔除空标签域名条目 + warning。
+		allowedDomains := s.AllowedDomains
+		if cleaned, dropped := filterPeerShareAllowedDomains(s.AllowedDomains); dropped {
+			rep.warnf("备份恢复：面板共享 #%d（%q）的域名白名单含空标签条目 %q，已剔除", s.ID, s.Name, s.AllowedDomains)
+			allowedDomains = cleaned
+		}
 		item := model.PeerShare{
 			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
 			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
 			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
 			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
 			CreatedTime: s.CreatedTime, UpdatedTime: updated,
-			AllowedDomains: s.AllowedDomains, AllowedIPs: s.AllowedIPs,
+			AllowedDomains: allowedDomains, AllowedIPs: s.AllowedIPs,
 			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
 		}
 		if item.CreatedTime == 0 {
@@ -4163,6 +4186,12 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		default:
 			rep.skip("forwards")
 			rep.warnf("备份恢复：转发 #%d（%q）的 status=%d 不在合法枚举 {0,1,2} 内，已跳过该行未恢复", f.ID, f.Name, f.Status)
+			continue
+		}
+		// 复扫 R-05：恢复面与创建面同口径——空标签目标行跳过 + warning。
+		if addrsHaveEmptyLabel(f.RemoteAddr) {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）的目标地址 %q 含空标签主机名，已跳过该行未恢复", f.ID, f.Name, f.RemoteAddr)
 			continue
 		}
 		// D4-03：引用（用户/隧道）不存在时整行跳过并计数，不写悬空行。
@@ -5072,10 +5101,18 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 	return count, nil
 }
 
-func importConfigs(tx *gorm.DB, configs map[string]string, now int64) (int, error) {
+func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *importReport) (int, error) {
 	configs = FilterBackupConfigs(configs)
 	count := 0
 	for name, value := range configs {
+		// 复扫 R-09：恢复面与保存面同口径——主机名类配置键的空标签值
+		// 跳过 + warning（latency_targets 不在内：读取期
+		// parseLatencyTargets 即拒，fail-safe）。
+		if configValueHasEmptyLabelHost(name, value) {
+			rep.skip("configs")
+			rep.warnf("备份恢复：配置 %q 的值 %q 含空标签主机名，已跳过未恢复", name, value)
+			continue
+		}
 		err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
@@ -6052,6 +6089,79 @@ func validImportMonitorTarget(typ, target string) bool {
 	default:
 		return true
 	}
+}
+
+// ─── 复扫空标签 helper（fix/final-resweep）─────────────────────────
+// repo 层不能 import handler，故此处镜像 handler 侧的空标签谓词
+// （validateNoEmptyLabelAddr / validateNoEmptyLabelURLHost），只做
+// 语法层 HasEmptyLabel 判定、不做 DNS 解析。恢复面专用。
+
+// addrHostHasEmptyLabel 报告单个地址（裸主机或 host:port）的 host 段
+// 是否含空标签；IP 字面量无空标签。
+func addrHostHasEmptyLabel(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		addr = h
+	}
+	return kernel.HasEmptyLabel(addr)
+}
+
+// addrsHaveEmptyLabel 报告逗号/换行分隔的多目标地址中是否有任一 host
+// 含空标签（转发 RemoteAddr 形态）。
+func addrsHaveEmptyLabel(addr string) bool {
+	for _, part := range strings.FieldsFunc(addr, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		if addrHostHasEmptyLabel(strings.TrimSpace(part)) {
+			return true
+		}
+	}
+	return false
+}
+
+// urlHostHasEmptyLabel 报告 URL 的 host 段是否含空标签；解析失败或
+// 无 host 时返回 false（不在此判，由调用面已有的结构校验处理）。
+func urlHostHasEmptyLabel(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	return kernel.HasEmptyLabel(u.Hostname())
+}
+
+// configValueHasEmptyLabelHost 报告主机名类配置键的值是否含空标签
+// （恢复面与保存面 normalizeAndValidateConfigValue 同口径）。
+func configValueHasEmptyLabelHost(name, value string) bool {
+	switch strings.TrimSpace(name) {
+	case "panel_domain":
+		return kernel.HasEmptyLabel(strings.TrimSpace(value))
+	case "ip":
+		return addrsHaveEmptyLabel(strings.TrimSpace(value))
+	case "github_proxy_url", "notify_webhook_url":
+		return urlHostHasEmptyLabel(value)
+	default:
+		return false
+	}
+}
+
+// filterPeerShareAllowedDomains 剔除分享域名白名单中的空标签条目，
+// 返回清理后的列表与是否剔除过（恢复面；fail-closed 方向：
+// 被剔除的条目在等值匹配中永不命中，收紧而非放宽）。
+func filterPeerShareAllowedDomains(raw string) (string, bool) {
+	kept := make([]string, 0)
+	dropped := false
+	for _, d := range strings.Split(raw, ",") {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if kernel.HasEmptyLabel(d) {
+			dropped = true
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return strings.Join(kept, ","), dropped
 }
 
 func nullableString(v sql.NullString) interface{} {

@@ -582,6 +582,11 @@ func (h *Handler) federationShareCreate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// 复扫 R-08：域名白名单与 IP 白名单同口径在写面校验。
+	if err := validatePeerShareAllowedDomains(req.AllowedDomains); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	node, err := h.repo.GetNodeByID(req.NodeID)
 	if err != nil {
@@ -769,6 +774,11 @@ func (h *Handler) federationShareUpdate(w http.ResponseWriter, r *http.Request) 
 
 	allowedIPs, err := normalizePeerShareAllowedIPs(req.AllowedIPs)
 	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	// 复扫 R-08：与创建面同口径。
+	if err := validatePeerShareAllowedDomains(req.AllowedDomains); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -1388,6 +1398,13 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 
 	if req.RemotePort < share.PortRangeStart || req.RemotePort > share.PortRangeEnd {
 		response.WriteJSON(w, response.Err(403, "Port out of range"))
+		return
+	}
+
+	// 复扫 R-07：对端提交的转发目标与本地 forwardCreate 同口径补
+	// 语法层空标签判（只判语法、不做 DNS）；空值放行（既有语义）。
+	if err := validateNoEmptyLabelAddr(req.Target); err != nil {
+		response.WriteJSON(w, response.ErrDefault("转发目标地址主机名格式无效："+err.Error()))
 		return
 	}
 
@@ -2250,12 +2267,27 @@ func isPeerShareFlowExceeded(share *repo.PeerShare) bool {
 	return share.CurrentFlow >= share.MaxBandwidth
 }
 
+// validatePeerShareAllowedDomains 校验分享域名白名单（复扫 R-08）：
+// 逗号分隔的域名列表逐项做空标签判；空值放行（不限制）。消费面为等值
+// 匹配，坏条目永不命中——写面即拒，避免管理员误以为放行了某域名。
+func validatePeerShareAllowedDomains(raw string) error {
+	for _, d := range strings.Split(raw, ",") {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if kernel.HasEmptyLabel(d) {
+			return fmt.Errorf("分享域名 %q 包含空标签", d)
+		}
+	}
+	return nil
+}
+
 func normalizePeerShareAllowedIPs(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", nil
 	}
-
 	parts := strings.Split(raw, ",")
 	normalized := make([]string, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))

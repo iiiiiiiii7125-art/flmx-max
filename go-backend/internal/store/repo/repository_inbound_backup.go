@@ -488,6 +488,13 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if kind != model.RemoteSourceFile {
 			kind = model.RemoteSourceURL // backups from before file sources
 		}
+		// 复扫 R-06：恢复面与保存面同口径——空标签订阅源 URL 行跳过 +
+		// warning（文件源无 URL，不判）。
+		if kind == model.RemoteSourceURL && urlHostHasEmptyLabel(src.URL) {
+			rep.skip("sources")
+			rep.warnf("备份恢复：订阅源 #%d（%q）的地址 %q 含空标签主机名，已跳过该源未恢复", src.ID, src.Name, src.URL)
+			continue
+		}
 		item := model.RemoteSource{
 			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
 			RelayOnly: src.RelayOnly, Kind: kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
