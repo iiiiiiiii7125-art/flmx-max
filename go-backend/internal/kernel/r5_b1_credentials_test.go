@@ -77,7 +77,10 @@ func TestR5B1EnumLegalValuesAccepted(t *testing.T) {
 	for _, p := range []string{"443", "20000-30000", "443,9000-10000", "1-65535"} {
 		docs["hy2-ports-"+p] = clash(fmt.Sprintf("type: hysteria2, server: 1.2.3.4, port: 443, password: pw, ports: '%s', udp: true", p))
 	}
-	docs["vless-flow-vision"] = clash(fmt.Sprintf("type: vless, server: 1.2.3.4, port: 443, uuid: %s, flow: xtls-rprx-vision, udp: true", r5b1UUID))
+	// F-01 修复后 flow 单独出现仍须有 TLS 或 ENC 才能入库：本格原为
+	// 无 TLS/无 ENC 的 vision（即 F-01 缺陷组合本身），现补 tls +
+	// servername 使其仍为“vision 是合法 flow 枚举值”的对照格。
+	docs["vless-flow-vision"] = clash(fmt.Sprintf("type: vless, server: 1.2.3.4, port: 443, uuid: %s, flow: xtls-rprx-vision, tls: true, servername: a.example.com, udp: true", r5b1UUID))
 	docs["vless-flow-empty"] = clash(fmt.Sprintf("type: vless, server: 1.2.3.4, port: 443, uuid: %s, udp: true", r5b1UUID))
 	for _, cc := range []string{"bbr", "cubic", "new_reno"} {
 		docs["tuic-cc-"+cc] = clash(fmt.Sprintf("type: tuic, server: 1.2.3.4, port: 443, uuid: %s, password: pw, congestion-controller: %s, udp: true", r5b1UUID, cc))
@@ -213,7 +216,10 @@ func TestR5B1StockRenderSkip(t *testing.T) {
 		"vless-vision": {"type": "vless", "server": "1.2.3.4", "port": 443, "uuid": r5b1UUID, "flow": "xtls-rprx-vision", "udp": true},
 		"tuic-newreno": {"type": "tuic", "server": "1.2.3.4", "port": 443, "uuid": r5b1UUID, "password": "pw", "congestion-controller": "new_reno", "udp": true},
 		"snell-tls":    {"type": "snell", "server": "1.2.3.4", "port": 443, "psk": "pw", "version": 4, "obfs-opts": map[string]interface{}{"mode": "tls", "host": "example.com"}, "udp": true},
-		"reality-good": {"type": "vless", "server": "1.2.3.4", "port": 443, "uuid": r5b1UUID, "tls": true, "reality-opts": map[string]interface{}{"public-key": goodPBK, "short-id": "ab12"}, "udp": true},
+		// F-02 修复后合法 Reality 存量须带 SNI：本格原无 servername
+		//（即 F-02 缺陷形态），现补 servername 使其仍为“合法 Reality
+		// 存量两面不得误略”的对照格。
+		"reality-good": {"type": "vless", "server": "1.2.3.4", "port": 443, "uuid": r5b1UUID, "tls": true, "servername": "a.example.com", "reality-opts": map[string]interface{}{"public-key": goodPBK, "short-id": "ab12"}, "udp": true},
 	}
 	for name, p := range good {
 		e := mk(p)

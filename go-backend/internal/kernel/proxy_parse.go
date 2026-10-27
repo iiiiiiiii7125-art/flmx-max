@@ -269,6 +269,16 @@ func validateProxyCredentials(p Proxy) error {
 		if !ValidVLESSEncryption(p.str("encryption")) {
 			return errors.New("VLESS encryption 格式错误（须为 none 或 mlkem768x25519plus 客户端加密串）")
 		}
+		// 手动填写节点修复（F-01）：flow 与 TLS/ENC 的耦合校验——
+		// xtls-rprx-vision 是 TLS 之上的 XTLS 优化，无 TLS 且无真实
+		// 加密时无意义（面板自建面 visionAllowed 同口径：VLESS +
+		// TCP +（安全≠无 或 开了加密））。只查 TLS/ENC 耦合，不查
+		// network（Vision+WS 的网络维由前端设防）。
+		if p.str("flow") != "" && !p.flag("tls") {
+			if enc := p.str("encryption"); enc == "" || enc == "none" {
+				return errors.New("VLESS flow 需要 TLS 或加密（xtls-rprx-vision 不能用于无 TLS 且无加密的节点）")
+			}
+		}
 	case "trojan", "anytls":
 		if p.str("password") == "" {
 			return errors.New("缺少密码")
@@ -438,6 +448,13 @@ func validateRealityOpts(p Proxy) error {
 		if !shortIDPattern.MatchString(sid) || len(sid)%2 != 0 {
 			return errors.New("Reality short-id 格式错误（须为偶数位小写十六进制，最多 16 位）")
 		}
+	}
+	// 手动填写节点修复（F-02）：Reality 须填 SNI——serverName 是
+	// 伪装站域名，空 SNI 的 Reality 节点在直连订阅路径下恒缺
+	// server_name，地址为 IP 时握手必然失败。横切校验：vless /
+	// vmess 存 servername，trojan 存 sni，serverName() 两键都认。
+	if p.serverName() == "" {
+		return errors.New("Reality 须填写 SNI（伪装站域名）")
 	}
 	return nil
 }
