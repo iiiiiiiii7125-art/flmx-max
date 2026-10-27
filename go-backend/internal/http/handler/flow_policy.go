@@ -406,6 +406,13 @@ func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
 		forward := &forwards[i]
 		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
 		if modeErr == nil && nftMode && len(entryNodeIDs) > 0 {
+			// R35-FIX-F01：遗留/竞态混合态下跳过、不写 paused（gost/
+			// realm 服务不会被暂停）；行保持 active 待管理员先编辑
+			// 隧道去掉 nft/多余入口，记日志不静默。
+			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+				log.Printf("quota pause skipped op=mixed_nft_state forward_id=%d err=%v", forward.ID, err)
+				continue
+			}
 			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward.ID)
 			continue
 		}

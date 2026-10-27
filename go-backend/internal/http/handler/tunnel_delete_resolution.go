@@ -805,6 +805,12 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 		if len(entryNodeIDs) == 0 {
 			return nil, errors.New("nftables 转发缺少入口节点")
 		}
+		// R35-FIX-F01：遗留/竞态混合态下拒绝级联删除而不是标记
+		// pending 后删库报成功（gost/realm 服务会残留监听）；隧道
+		// 删除失败、转发保留，管理员先编辑隧道去掉 nft/多余入口。
+		if err := h.rejectMixedNftForwardState(tunnelID, nftMode, entryNodeIDs); err != nil {
+			return nil, err
+		}
 		nodeID := entryNodeIDs[0]
 		now := time.Now()
 		var marked []model.ForwardRecord

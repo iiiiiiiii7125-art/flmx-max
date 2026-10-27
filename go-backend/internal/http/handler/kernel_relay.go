@@ -598,6 +598,11 @@ func (h *Handler) removeForwardWithServices(forward *forwardRecord) error {
 	if nftMode, entryNodeIDs, err := h.tunnelUsesNftables(forward.TunnelID); err != nil {
 		return err
 	} else if nftMode {
+		// R35-FIX-F01：遗留/竞态混合态下拒绝删除而不是只 reconcile
+		// 首节点后删库（gost/realm 服务会残留监听）。
+		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			return err
+		}
 		if len(entryNodeIDs) > 0 {
 			nftNodeID = entryNodeIDs[0]
 		}
