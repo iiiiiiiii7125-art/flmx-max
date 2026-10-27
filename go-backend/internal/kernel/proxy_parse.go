@@ -102,6 +102,11 @@ func validateImportHostnames(p Proxy) error {
 			return errors.New("Host 格式错误")
 		}
 	}
+	for _, h := range importPluginHosts(p) {
+		if h != "" && (!hostPattern.MatchString(h) || HasEmptyLabel(h)) {
+			return errors.New("Host 格式错误")
+		}
+	}
 	return nil
 }
 
@@ -117,6 +122,29 @@ func importTransportHosts(p Proxy) []string {
 	out = append(out, p.sub("http-opts").sub("headers").strs("Host")...)
 	out = append(out, p.sub("h2-opts").strs("host")...)
 	if h := p.sub("xhttp-opts").str("host"); h != "" {
+		out = append(out, h)
+	}
+	return out
+}
+
+// importPluginHosts collects the plugin/obfs Host from the
+// Shadowsocks/Snell plugin carriers (plugin-opts / obfs-opts /
+// shadow-tls). L1-F-02: validateImportHostnames enumerated only the
+// four transport carriers, so a plugin Host (`obfs-host=a..b`,
+// `v2ray-plugin host=a..b`, `shadow-tls host=a..b`, Surge obfs-host,
+// Clash plugin-opts host, sing-box SS/Snell shadowtls detour
+// server_name — all normalized into these three keys by the time
+// finishProxy runs) sailed through import and rendered verbatim into
+// subscriptions. Same verdict and wording as the transport carriers.
+func importPluginHosts(p Proxy) []string {
+	var out []string
+	if h := p.sub("plugin-opts").str("host"); h != "" {
+		out = append(out, h)
+	}
+	if h := p.sub("obfs-opts").str("host"); h != "" {
+		out = append(out, h)
+	}
+	if h := p.sub("shadow-tls").str("host"); h != "" {
 		out = append(out, h)
 	}
 	return out
@@ -447,10 +475,14 @@ func ValidateImportedProxyRowAddress(host string, port int) error {
 // Extra proxy object) validate through this one implementation, so
 // the two faces can never drift apart (R6X-008 — the R5X-024 restore
 // gate covered only self-built inbounds because the restore face had
-// no shared predicate to call). The predicate covers both columns of
-// the import gate: the address column (validateImportedProxyAddress,
-// R7X-003) and the credential column (validateProxyCredentials). The
-// predicate may normalize fields on the passed Proxy (case healing,
+// no shared predicate to call). The predicate covers all three columns
+// of the import gate: the address column (validateImportedProxyAddress,
+// R7X-003), the credential column (validateProxyCredentials), and the
+// hostname column (validateImportHostnames, L1-F-03 — the sweep added
+// it to finishProxy only, so a bad SNI/Host in an old backup row
+// restored verbatim while ParseImport rejected the same row). The
+// call order mirrors finishProxy (address → credentials → hostnames).
+// The predicate may normalize fields on the passed Proxy (case healing,
 // mirroring import); callers checking stored content must pass a
 // throwaway copy and must not write the copy back — restore keeps the
 // backup bytes verbatim.
@@ -458,7 +490,10 @@ func ValidateImportedProxy(p Proxy) error {
 	if _, _, err := validateImportedProxyAddress(p); err != nil {
 		return err
 	}
-	return validateProxyCredentials(p)
+	if err := validateProxyCredentials(p); err != nil {
+		return err
+	}
+	return validateImportHostnames(p)
 }
 
 // validateRealityOpts checks the Reality fields of any proxy carrying
