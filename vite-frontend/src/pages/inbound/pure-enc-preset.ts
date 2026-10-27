@@ -21,9 +21,8 @@ export function applyPureEncPreset(prev: InboundForm): InboundForm {
     encryptionMode: "xorpub",
     // 纯 ENC 不需要 SNI。
     sni: "",
-    // Reality 残留字段：toPayload 在 securityType 为 "none" 时仍会把
-    // realityDest / realityPrivateKey / realityShortIds 原样发出去，
-    // 切到纯 ENC 时一并清空，避免脏数据进后端。
+    // Reality 残留字段：toPayload 已按 securityType 设防（仅 reality 发
+    // 出）；此处清零为纵深防御，切到纯 ENC 时一并清空，避免脏数据进后端。
     realityDest: "",
     realityPrivateKey: "",
     realityShortIds: "",
