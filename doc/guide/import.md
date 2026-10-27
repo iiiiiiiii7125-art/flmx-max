@@ -11,6 +11,14 @@
 - Surge / Loon 节点行，例如 `名称 = snell, 1.2.3.4, 6160, psk=..., version=4`
 - 订阅地址（`https://...`）：面板服务器以 `flmx-panel/1.0` 为 User-Agent 去下载（IMP-002：手册曾写"以 Mihomo 的身份"，与实际不符，已更正），拿到的通常是参数最完整的 Clash 配置。打开 **定时同步**（默认打开）会存成 [订阅源](./subscription.md#订阅源)，按时更新；关掉则只导入一次。注意：依赖 UA 嗅探返回差异化内容的订阅源，可能返回参数不完整的内容
 
+## 手动填写
+
+导入窗口顶部可以切到 **手动填写**：选好协议（SS / VLESS / VMess / Trojan / Hysteria2 / TUIC v5 / AnyTLS / SOCKS5），逐项填地址、端口、密码 / UUID，以及 TLS / Reality、传输方式（TCP / WebSocket / gRPC）等参数，UUID 可以点 **生成** 一键生成。点 **添加** 后，面板把填好的内容拼成标准分享链接，走与粘贴导入完全相同的解析与校验链路；添加后的节点和粘贴导入的节点一样，可以对接中转、放进订阅。
+
+- 表单只显示当前协议可用的字段与选项（例如 VMess 没有 Reality；Trojan / Hysteria2 / TUIC / AnyTLS 固定用 TLS），不合法的协议×传输组合选不出来
+- 地址栏只填域名或 IP，不要带端口（端口填在端口栏）；地址不能是本机地址（`127.0.0.1` 等）或保留段/组播段，端口必须是 1–65535 的整数
+- 按协议必填：VLESS / VMess / TUIC 须填 UUID；SS / Trojan / Hysteria2 / AnyTLS 须填密码；VLESS + Reality 须填公钥（pbk）；缺了会在点 **添加** 时直接提示，不会先建一个坏节点
+
 ## 说明
 
 - 暂不支持 WireGuard、SSR、Hysteria v1 等类型，导入时会逐条提示

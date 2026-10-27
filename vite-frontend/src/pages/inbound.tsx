@@ -1509,6 +1509,7 @@ export default function InboundPage() {
       />
       <ImportModal
         isOpen={importOpen}
+        ssMethods={caps?.ssMethods ?? []}
         onClose={() => setImportOpen(false)}
         onImported={() => loadData(false)}
         onSourceAdded={() => {
