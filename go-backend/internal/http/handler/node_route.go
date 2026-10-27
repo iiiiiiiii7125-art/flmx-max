@@ -235,6 +235,12 @@ type nodeRoute struct {
 	// agent is the node's agent version when traced, so an upgraded agent
 	// (one that gained Traceroute, say) is traced again right away.
 	agent string
+	// routeChangePending marks a baseline restored after a failed
+	// route_change notify: the change it records has not been
+	// delivered yet, so a later failed trace must not overwrite it
+	// (R35-I-01). A successful trace clears it by storing a fresh
+	// result; a failed notify restores it.
+	routeChangePending bool
 }
 
 type nodeRouteStore struct {
@@ -257,6 +263,15 @@ func (s *nodeRouteStore) set(nodeID int64, r nodeRoute) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.results[nodeID] = r
+}
+
+// hasPendingRouteChange reports whether the stored baseline for a node
+// is still waiting to resend a route change (R35-I-01).
+func (s *nodeRouteStore) hasPendingRouteChange(nodeID int64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.results[nodeID]
+	return ok && r.routeChangePending
 }
 
 // nodeTraceroute runs one Traceroute from a node; tests replace it.
@@ -446,8 +461,12 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 								// 置 0——prev 的原始追踪时刻可能仍新鲜
 								// （手动 force 探测），不置 0 则下一周期轮
 								// 被 routeFresh 挡住、补发最长延迟 24h。
+								// R35-I-01：同时记 routeChangePending——
+								// 该基准记录的变化尚未送达，后续失败追踪
+								// 不得覆盖它，否则补发永久丢失。
 								restored := prev
 								restored.CheckedAt = 0
+								restored.routeChangePending = true
 								h.nodeRoutes.set(nodeID, restored)
 								return
 							}
@@ -462,7 +481,15 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 						})
 				}
 			}
-			h.nodeRoutes.set(nodeID, r)
+			// R35-I-01：本轮追踪失败时，若库内仍是待补发的已恢复基准，
+			// 不得用失败追踪覆盖它——失败点无已知线路，下一轮
+			// routeChanges 因 known() 排除失败点而比不出变化，
+			// 补发永久丢失。跳过落库：下一次成功追踪仍以该基准
+			// 比对并补发；本轮实测仍进 results，供调用方读取。
+			// 非待补发基准的失败追踪照常落库（失败重试/展示面不变）。
+			if !r.failed || !h.nodeRoutes.hasPendingRouteChange(nodeID) {
+				h.nodeRoutes.set(nodeID, r)
+			}
 			mu.Lock()
 			results[nodeID] = r
 			mu.Unlock()
