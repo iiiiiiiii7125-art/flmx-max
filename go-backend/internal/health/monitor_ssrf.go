@@ -3,6 +3,7 @@ package health
 import (
 	"fmt"
 	"go-backend/internal/config"
+	"go-backend/internal/kernel"
 	"go-backend/internal/netguard"
 	"net"
 	"strconv"
@@ -112,6 +113,12 @@ func ValidateNodeMonitorTarget(typ, target string) error {
 	}
 	if strings.TrimSpace(host) == "" {
 		return fmt.Errorf("目标主机为空")
+	}
+	// L1-F-05: 空标签主机名在任何 DNS 下都不可解析，语法层即拒。
+	// 不触碰「解析失败不拒存」（面板与节点 DNS 分视图）的设计：
+	// 该容忍只针对 LookupIP 失败的合法主机名。IP 字面量无空标签。
+	if kernel.HasEmptyLabel(host) {
+		return fmt.Errorf("目标主机名含空标签（例如 \"a..b\"），无法解析: %s", target)
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if netguard.Classify(ip).HardDeny {

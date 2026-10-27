@@ -5938,7 +5938,8 @@ func stripListenAddrPort(value string) string {
 // plus the double-port refusal — a bare IPv6 literal passes via
 // netip.ParseAddr, a plain hostname passes via the SplitHostPort
 // "missing port" allowance, and anything else SplitHostPort rejects
-// (e.g. "too many colons") fails. Empty counts as valid (empty
+// (e.g. "too many colons") fails. L1-F-04: plus the empty-label
+// refusal, same as the handler predicate. Empty counts as valid (empty
 // means NULL/unset; callers handle it per field).
 func validImportNodeAddress(addr string) bool {
 	addr = strings.TrimSpace(addr)
@@ -5951,11 +5952,13 @@ func validImportNodeAddress(addr string) bool {
 	if _, err := netip.ParseAddr(addr); err == nil {
 		return true
 	}
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil && !strings.Contains(err.Error(), "missing port in address") {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	} else if !strings.Contains(err.Error(), "missing port in address") {
 		return false
 	}
-	return true
+	return !kernel.HasEmptyLabel(host)
 }
 
 // validImportListenAddr validates a stripped node listen address
@@ -5977,7 +5980,11 @@ func validImportListenAddr(addr string) bool {
 	if _, err := netip.ParseAddr(addr); err == nil {
 		return true
 	}
-	return !strings.Contains(addr, ":")
+	if strings.Contains(addr, ":") {
+		return false
+	}
+	// L1-F-04: 裸主机名补空标签判（与 IsValidNodeAddress 同口径）。
+	return !kernel.HasEmptyLabel(addr)
 }
 
 // stripAndValidateImportInIPList strips :port per item of a tunnel
@@ -6006,8 +6013,9 @@ func stripAndValidateImportInIPList(value string) (string, int) {
 // tcp must be exactly one host:port (double-port / portless
 // rejected, port 1-65535); icmp must be a bare host — a value
 // containing ":" that is not a valid IP literal is rejected (the
-// PC-09 gate: bracketed IPv6 and bare IPv6 literals pass). Unknown
-// types get no new gate. The SSRF hard-deny layer (LookupIP /
+// PC-09 gate: bracketed IPv6 and bare IPv6 literals pass). L1-F-05:
+// both forms additionally reject empty-label hostnames at the format
+// layer. Unknown types get no new gate. The SSRF hard-deny layer (LookupIP /
 // netguard) stays on the create/update surface; restore does no DNS
 // resolution.
 func validImportMonitorTarget(typ, target string) bool {
@@ -6021,6 +6029,11 @@ func validImportMonitorTarget(typ, target string) bool {
 		if err != nil || strings.TrimSpace(host) == "" {
 			return false
 		}
+		// L1-F-05: 空标签在任何 DNS 下都不可解析，格式层即拒；
+		// 恢复面不做 DNS 解析的口径不变。
+		if kernel.HasEmptyLabel(host) {
+			return false
+		}
 		p, err := strconv.Atoi(port)
 		return err == nil && p >= 1 && p <= 65535
 	case "icmp":
@@ -6030,6 +6043,10 @@ func validImportMonitorTarget(typ, target string) bool {
 		}
 		if net.ParseIP(host) != nil {
 			return true
+		}
+		// L1-F-05: 同 tcp 面，空标签格式层即拒。
+		if kernel.HasEmptyLabel(host) {
+			return false
 		}
 		return !strings.Contains(host, ":")
 	default:
