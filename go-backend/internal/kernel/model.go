@@ -736,6 +736,11 @@ func normalizeSecurity(in *Inbound) error {
 		}
 		if host, port, err := net.SplitHostPort(sec.RealityDest); err != nil || host == "" {
 			return errors.New("Reality 目标地址格式应为 host:port")
+		} else if HasEmptyLabel(host) {
+			// L1-F-01：RealityDest host 段此前只走 SplitHostPort +
+			// 端口检查，空标签（`a..b:443`）原值落库；与同函数 SNI
+			//（:648）同口径拒。IP 字面量无空标签，不受影响。
+			return errors.New("Reality 目标地址不正确")
 		} else if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
 			return errors.New("Reality 目标端口错误")
 		}
