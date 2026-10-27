@@ -1578,7 +1578,17 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 				// R28-FIX-F01（sweep）：ServerIP 可含 :port；先剥离再
 				// 拼 outNode.Port，否则联邦建链地址成 "IP:6366:port"
 				// 双端口。processServerAddress 本身不剥 :port。
-				targetAddr = processServerAddress(stripShareHostPort(outNodeRec.ServerIP))
+				// R35-FIX-F02：stripShareHostPort 剥不动无括号 IPv6
+				// host:port（"2001:db8::1:8080"），须用 stripHostPortOnce
+				//（PC-03 读法）；剥离后仍带端口/畸形者直接拒绝，
+				// 不把畸形地址发给对端面板。
+				fedHost := stripHostPortOnce(outNodeRec.ServerIP)
+				if fedHost != "" && (!isBareDialHost(fedHost) || stripHostPortOnce(fedHost) != fedHost) {
+					validationTx.Rollback()
+					response.WriteJSON(w, response.ErrDefault("出站节点地址不正确"))
+					return
+				}
+				targetAddr = processServerAddress(fedHost)
 				if outNode.Port > 0 {
 					targetAddr = fmt.Sprintf("%s:%d", targetAddr, outNode.Port)
 				}
@@ -6834,7 +6844,23 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 	return []map[string]interface{}{service}
 }
 
+// selectTunnelDialHost returns the bare host a tunnel hop dials to reach
+// toNode. R35-FIX-F02：返回值须为单个裸 host——单次剥离对双端口值
+// 是 no-op，残值原值穿透后下游再拼端口即成 "[IP:port]:port" 畸形
+// 地址；此处统一校验，畸形值直接报错（裸 IPv6 主机原值放行，
+// 主机名/单端口值不受影响；空值沿旧口径由调用方处置）。
 func selectTunnelDialHost(fromNode, toNode *nodeRecord, ipPreference string, connectIp string) (string, error) {
+	host, err := selectTunnelDialHostRaw(fromNode, toNode, ipPreference, connectIp)
+	if err != nil || host == "" {
+		return host, err
+	}
+	if !isBareDialHost(host) {
+		return "", fmt.Errorf("节点「%s」的地址不正确", nodeDisplayName(toNode))
+	}
+	return host, nil
+}
+
+func selectTunnelDialHostRaw(fromNode, toNode *nodeRecord, ipPreference string, connectIp string) (string, error) {
 	if fromNode == nil || toNode == nil {
 		return "", errors.New("节点不存在")
 	}

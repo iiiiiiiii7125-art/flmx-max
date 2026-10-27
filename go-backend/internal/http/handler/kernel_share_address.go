@@ -52,6 +52,51 @@ func nodeShareIP(node *model.Node, ipv6 bool) string {
 	return ""
 }
 
+// stripHostPortOnce strips a single trailing :port from a stored host
+// value (R35-FIX-F02): net.SplitHostPort handles "host:port" and
+// "[v6]:port"; an unbracketed IPv6 host:port ("2001:db8::1:8080") is
+// not a valid host:port pair for SplitHostPort, so the PC-03 reading
+// applies — last segment decimal + prefix a valid IP → host:port
+// (same reading processServerAddress applies, control_plane.go:2167).
+// Anything else passes through with brackets trimmed, like
+// stripShareHostPort. A genuine bare IPv6 ending in a decimal group
+// is indistinguishable from host:port here; callers must only use
+// this where the value is known to possibly carry a port and a port
+// will be appended (federation target construction), never for
+// bare-host display or dial-host selection.
+func stripHostPortOnce(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	if ip := net.ParseIP(value); ip != nil && ip.To4() == nil {
+		if idx := strings.LastIndex(value, ":"); idx > 0 {
+			if hostPart, portPart := value[:idx], value[idx+1:]; isDecimalPort(portPart) && net.ParseIP(hostPart) != nil {
+				return hostPart
+			}
+		}
+	}
+	return strings.Trim(value, "[]")
+}
+
+// isBareDialHost reports whether host is a single bare host value fit
+// to have a port appended: no colon at all (hostname / IPv4), or one
+// IP literal (bracketed or bare IPv6, zone included). A value that
+// still carries ":port:port" or other multi-colon garbage that is not
+// one IP literal is not — it must be refused, not spliced into a dial
+// address (R35-FIX-F02).
+func isBareDialHost(host string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" {
+		return false
+	}
+	if !strings.Contains(host, ":") {
+		return true
+	}
+	_, err := netip.ParseAddr(host)
+	return err == nil
+}
+
 // stripShareHostPort strips a trailing :port from a stored node address
 // (R25-X-01): IsValidNodeAddress explicitly allows host:port — the agent
 // install flow uses the panel address with port as the WS target, and
