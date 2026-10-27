@@ -526,6 +526,27 @@ func TestSingboxACMEAndNaive(t *testing.T) {
 	}
 }
 
+// TestACMEEmailEmptyLabel：sweep §3——ACME 邮箱域名含空标签（`x@a..b.com`）
+// 须拒。acmeEmailPattern 的域名段 `[A-Za-z0-9.-]+` 放行连续点号，域名
+// 按 `.` 分段判空标签，与主机名同口径；文案复用既有邮箱校验。
+func TestACMEEmailEmptyLabel(t *testing.T) {
+	bad := []string{"x@a..b.com", "x@a...b.com"}
+	for _, email := range bad {
+		in := Inbound{ID: 1, Protocol: ProtocolNaive, Port: 443,
+			Settings: Settings{Username: "flvx", Password: "naive-secret"},
+			Security: Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "hk.example.com", ACMEEmail: email}}
+		if err := Normalize(TypeSingbox, &in); err == nil || err.Error() != "ACME 邮箱格式错误" {
+			t.Errorf("ACMEEmail %q: Normalize = %v, want %q", email, err, "ACME 邮箱格式错误")
+		}
+	}
+	good := Inbound{ID: 2, Protocol: ProtocolNaive, Port: 443,
+		Settings: Settings{Username: "flvx", Password: "naive-secret"},
+		Security: Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "hk.example.com", ACMEEmail: "me@example.com"}}
+	if err := Normalize(TypeSingbox, &good); err != nil {
+		t.Errorf("ACMEEmail me@example.com: Normalize = %v, want nil", err)
+	}
+}
+
 func TestRealityMinClientVer(t *testing.T) {
 	in := Inbound{ID: 1, Protocol: ProtocolVLESS, Port: 443, Security: Security{Type: SecurityReality}}
 	if err := Normalize(TypeXray, &in); err != nil || in.Security.RealityMinClientVer != "1.0.0" {

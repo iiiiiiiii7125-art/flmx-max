@@ -784,8 +784,14 @@ func normalizeACME(sec *Security) error {
 		return errors.New("自动申请证书需要填写解析到该节点的域名")
 	}
 	sec.ACMEEmail = strings.TrimSpace(sec.ACMEEmail)
-	if sec.ACMEEmail != "" && !acmeEmailPattern.MatchString(sec.ACMEEmail) {
-		return errors.New("ACME 邮箱格式错误")
+	if sec.ACMEEmail != "" {
+		// T-01 同族：acmeEmailPattern 的域名段 `[A-Za-z0-9.-]+` 放行
+		// 空标签（`x@a..b.com`），域名按 `.` 分段判空标签，与主机名
+		// 同口径；文案复用既有邮箱校验。
+		_, domain, _ := strings.Cut(sec.ACMEEmail, "@")
+		if !acmeEmailPattern.MatchString(sec.ACMEEmail) || hasEmptyLabel(domain) {
+			return errors.New("ACME 邮箱格式错误")
+		}
 	}
 	sec.ACMEDNS = strings.ToLower(strings.TrimSpace(sec.ACMEDNS))
 	sec.ACMEDNSKey = strings.TrimSpace(sec.ACMEDNSKey)

@@ -86,6 +86,42 @@ func parseLines(text string) ([]ImportedNode, []string) {
 	return nodes, errs
 }
 
+// validateImportHostnames validates the TLS SNI and transport Host fields
+// of an imported proxy. The import path never validated these hostname
+// fields (sweep §3): an empty-label SNI/Host (e.g. `a..b`) sailed
+// through ParseImport while the self-built face rejects the same values
+// (normalizeSecurity / normalizeTransport). Reuse the T-01 hasEmptyLabel
+// predicate so both faces share one verdict; messages reuse the
+// self-built face's wording.
+func validateImportHostnames(p Proxy) error {
+	if sni := p.serverName(); sni != "" && (!hostPattern.MatchString(sni) || hasEmptyLabel(sni)) {
+		return errors.New("SNI 格式错误")
+	}
+	for _, h := range importTransportHosts(p) {
+		if h != "" && (!hostPattern.MatchString(h) || hasEmptyLabel(h)) {
+			return errors.New("Host 格式错误")
+		}
+	}
+	return nil
+}
+
+// importTransportHosts collects the transport Host header from every
+// network option that carries one (ws-opts / http-opts / h2-opts /
+// xhttp-opts). One field, four carriers — validate them all so the same
+// gap cannot recur in another network type.
+func importTransportHosts(p Proxy) []string {
+	var out []string
+	if h := p.sub("ws-opts").sub("headers").str("Host"); h != "" {
+		out = append(out, h)
+	}
+	out = append(out, p.sub("http-opts").sub("headers").strs("Host")...)
+	out = append(out, p.sub("h2-opts").strs("host")...)
+	if h := p.sub("xhttp-opts").str("host"); h != "" {
+		out = append(out, h)
+	}
+	return out
+}
+
 // finishProxy validates a parsed proxy and fills the node fields.
 func finishProxy(p Proxy) (ImportedNode, error) {
 	t := p.Type()
@@ -137,6 +173,9 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 		}
 	}
 	if err := validateProxyCredentials(p); err != nil {
+		return ImportedNode{}, err
+	}
+	if err := validateImportHostnames(p); err != nil {
 		return ImportedNode{}, err
 	}
 	name := p.str("name")

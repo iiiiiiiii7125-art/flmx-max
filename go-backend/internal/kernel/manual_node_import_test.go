@@ -294,6 +294,17 @@ func TestManualNodeLinksRejectBadInput(t *testing.T) {
 		// T-01：空标签主机名（连续点号）须拒，前后端同口径。
 		"host-empty-label":       "vless://" + manualUUID + "@a..b:443#bad",
 		"host-empty-label-3dots": "vless://" + manualUUID + "@a...b:443#bad",
+		// sweep §3：导入路径 SNI / WS Host 空标签须拒——导入路径此前
+		// 根本不校验这两字段格式（自建面 normalizeSecurity /
+		// normalizeTransport 早已拒）。
+		"sni-empty-label": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=a..b&fp=chrome&type=tcp&encryption=none&security=tls#bad",
+		"sni-empty-label-3dots": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=a...b&fp=chrome&type=tcp&encryption=none&security=tls#bad",
+		"ws-host-empty-label": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=ws&path=%2Fws&host=a..b&encryption=none&security=tls#bad",
+		"ws-host-empty-label-3dots": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=ws&path=%2Fws&host=a...b&encryption=none&security=tls#bad",
 	}
 	for kind, link := range bad {
 		nodes, errs := ParseImport(link)
@@ -373,6 +384,77 @@ func TestT01EmptyLabelTransportHostAndSNI(t *testing.T) {
 	}
 	if err := normalizeSecurity(&Inbound{Security: Security{Type: SecurityNone, SNI: "example.com"}}); err != nil {
 		t.Errorf("normalizeSecurity(SNI=example.com) = %v, want nil", err)
+	}
+}
+
+// TestImportHostnamesEmptyLabel：sweep §3——导入路径的 TLS SNI 与传输
+// Host 空标签须拒。finishProxy 是四格式共同收口，在此一处按
+// hasEmptyLabel 校验 SNI（servername/sni 两键都认）与各传输 Host
+// （ws-opts / http-opts / h2-opts / xhttp-opts），文案各复用自建面
+// 原有文案（"SNI 格式错误" / "Host 格式错误"）。
+func TestImportHostnamesEmptyLabel(t *testing.T) {
+	// SNI：各协议的 SNI 键（vless/vmess 存 servername，trojan/hy2/
+	// tuic/anytls 存 sni）都要拒空标签。
+	sniBad := map[string]string{
+		"vless-tls": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=a..b&fp=chrome&type=tcp&encryption=none&security=tls#bad",
+		"trojan-tls": "trojan://secretpass@203.0.113.10:443?sni=a..b&fp=chrome&type=tcp&security=tls#bad",
+		"hy2":        "hysteria2://secretpass@203.0.113.10:443/?sni=a..b#bad",
+		"tuic":       "tuic://" + manualUUID + ":secretpass@203.0.113.10:443?sni=a..b&alpn=h3#bad",
+		"anytls":     "anytls://secretpass@203.0.113.10:443/?sni=a..b&fp=chrome#bad",
+	}
+	for kind, link := range sniBad {
+		nodes, errs := ParseImport(link)
+		if len(nodes) != 0 || len(errs) == 0 {
+			t.Errorf("%s: ParseImport = %d nodes, errs=%v, want 0 nodes with error", kind, len(nodes), errs)
+			continue
+		}
+		if !strings.Contains(errs[0], "SNI 格式错误") {
+			t.Errorf("%s: err = %q, want %q", kind, errs[0], "SNI 格式错误")
+		}
+	}
+	// VMess SNI 走 JSON 解析，单独构造。
+	vmessJSON := `{"v":"2","ps":"bad","add":"203.0.113.10","port":"443","id":"` + manualUUID +
+		`","aid":"0","scy":"auto","net":"ws","type":"none","host":"example.com","path":"/ws","tls":"tls","sni":"a..b","fp":"chrome"}`
+	vmessLink := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON)) + "#bad"
+	if nodes, errs := ParseImport(vmessLink); len(nodes) != 0 || len(errs) == 0 || !strings.Contains(errs[0], "SNI 格式错误") {
+		t.Errorf("vmess-tls: ParseImport = %d nodes, errs=%v, want 0 nodes with %q", len(nodes), errs, "SNI 格式错误")
+	}
+	// 传输 Host：ws / httpupgrade / h2 / xhttp / tcp-http 五路都要拒
+	// 空标签；SNI 均为合法 example.com，只测 Host 这一格。
+	hostBad := map[string]string{
+		"ws": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=ws&path=%2Fws&host=a..b&encryption=none&security=tls#bad",
+		"httpupgrade": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=httpupgrade&path=%2Fws&host=a..b&encryption=none&security=tls#bad",
+		"h2": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=h2&host=a..b&encryption=none&security=tls#bad",
+		"xhttp": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=xhttp&host=a..b&encryption=none&security=tls#bad",
+		"tcp-http": "vless://" + manualUUID +
+			"@203.0.113.10:443?sni=example.com&fp=chrome&type=tcp&headerType=http&host=a..b&encryption=none&security=tls#bad",
+	}
+	for kind, link := range hostBad {
+		nodes, errs := ParseImport(link)
+		if len(nodes) != 0 || len(errs) == 0 {
+			t.Errorf("%s: ParseImport = %d nodes, errs=%v, want 0 nodes with error", kind, len(nodes), errs)
+			continue
+		}
+		if !strings.Contains(errs[0], "Host 格式错误") {
+			t.Errorf("%s: err = %q, want %q", kind, errs[0], "Host 格式错误")
+		}
+	}
+	// 合法对照：SNI 域名/IP、WS Host 域名均须放行。
+	good := []string{
+		"vless://" + manualUUID + "@203.0.113.10:443?sni=example.com&fp=chrome&type=tcp&encryption=none&security=tls#good",
+		"vless://" + manualUUID + "@203.0.113.10:443?sni=203.0.113.20&fp=chrome&type=tcp&encryption=none&security=tls#good",
+		"vless://" + manualUUID + "@203.0.113.10:443?sni=example.com&fp=chrome&type=ws&path=%2Fws&host=example.com&encryption=none&security=tls#good",
+	}
+	for _, link := range good {
+		nodes, errs := ParseImport(link)
+		if len(nodes) != 1 || len(errs) != 0 {
+			t.Errorf("good link: ParseImport = %d nodes, errs=%v, want 1 node", len(nodes), errs)
+		}
 	}
 }
 
