@@ -407,6 +407,14 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请填写 http(s) 订阅地址"))
 		return
 	}
+	// 终审 L1-F-08：订阅源 URL 保存期对主机名做语法层空标签判（只判
+	// 语法、不做 DNS 解析；同步/拉取期 fail-closed 语义不动）。
+	if req.Kind == model.RemoteSourceURL {
+		if err := validateNoEmptyLabelURLHost(req.URL); err != nil {
+			response.WriteJSON(w, response.ErrDefault("订阅地址主机名格式无效："+err.Error()))
+			return
+		}
+	}
 	if req.IntervalHours < 0 || req.IntervalHours > 24*7 {
 		response.WriteJSON(w, response.ErrDefault("更新间隔不正确"))
 		return

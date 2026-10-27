@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strings"
 
 	"go-backend/internal/http/client"
@@ -79,6 +80,42 @@ func checkSingleRemoteAddr(addr string) error {
 	}
 
 	return nil
+}
+
+// validateNoEmptyLabelHost 是空标签主机名的语法层校验（终审 L1-F-06/07/08）：
+// 只判语法、不做 DNS 解析。空串不是空标签，由调用方另行处理空值；IP
+// 字面量无空标签，可直接传入。
+func validateNoEmptyLabelHost(host string) error {
+	if kernel.HasEmptyLabel(host) {
+		return fmt.Errorf("主机名 %q 包含空标签", host)
+	}
+	return nil
+}
+
+// validateNoEmptyLabelAddr 对 host:port 形态（多目标以逗号/换行分隔）逐个取
+// host 做空标签校验；无端口时整段即 host。格式错误由既有校验处理，此处
+// 只补空标签判，不新增格式拒绝。
+func validateNoEmptyLabelAddr(addr string) error {
+	for _, part := range splitRemoteParts(addr) {
+		host := part
+		if h, _, err := net.SplitHostPort(part); err == nil {
+			host = h
+		}
+		if err := validateNoEmptyLabelHost(host); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateNoEmptyLabelURLHost 解析 URL 取 hostname 做空标签校验；解析
+// 失败时不报错，由既有校验处理。
+func validateNoEmptyLabelURLHost(rawURL string) error {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil
+	}
+	return validateNoEmptyLabelHost(u.Hostname())
 }
 
 // IsValidNodeAddress ensures the address is strictly a host or host:port.

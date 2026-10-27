@@ -3487,6 +3487,12 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("转发名称和目标地址不能为空"))
 		return
 	}
+	// 终审 L1-F-06：管理员面同样补语法层空标签判——只判语法、不做 DNS；
+	// 不调 IsSafeRemoteAddr，避免改变管理员转发到内网地址的行为。
+	if err := validateNoEmptyLabelAddr(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault("转发目标地址主机名格式无效："+err.Error()))
+		return
+	}
 	if roleID != 0 && !h.allowLocalRemoteAddr() {
 		if err := IsSafeRemoteAddr(remoteAddr); err != nil {
 			response.WriteJSON(w, response.Err(403, err.Error()))
@@ -3676,6 +3682,11 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	remoteAddr := strings.TrimSpace(asString(req["remoteAddr"]))
 	if remoteAddr == "" {
 		remoteAddr = forward.RemoteAddr
+	}
+	// 终审 L1-F-06：与创建面同口径，管理员面同样补语法层空标签判。
+	if err := validateNoEmptyLabelAddr(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault("转发目标地址主机名格式无效："+err.Error()))
+		return
 	}
 	isNftTunnel, entryNodes, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {

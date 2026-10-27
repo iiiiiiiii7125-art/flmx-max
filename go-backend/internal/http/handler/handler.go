@@ -1607,6 +1607,27 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		return monitoring.NormalizeMonitoringRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
 		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
+	case "panel_domain":
+		// 终审 L1-F-07：裸域名，语法层空标签判（只判语法、不做 DNS）；
+		// 空值走调用方的可清空语义，不在此拒。
+		if err := validateNoEmptyLabelHost(strings.TrimSpace(value)); err != nil {
+			return "", fmt.Errorf("面板域名格式无效：%w", err)
+		}
+		return value, nil
+	case "ip":
+		// 终审 L1-F-07：domain:port 形态，取 host 做空标签判；使用面
+		// validatePanelInstallAddr 由 Lane 2 修谓词本体覆盖。
+		if err := validateNoEmptyLabelAddr(strings.TrimSpace(value)); err != nil {
+			return "", fmt.Errorf("面板地址主机名格式无效：%w", err)
+		}
+		return value, nil
+	case "github_proxy_url":
+		// 终审 L1-F-07/L1-F-08：URL 取 hostname 做空标签判；与订阅源
+		// 保存面同一口径，在此一次写好，不做 DNS。
+		if err := validateNoEmptyLabelURLHost(value); err != nil {
+			return "", fmt.Errorf("代理地址主机名格式无效：%w", err)
+		}
+		return value, nil
 	default:
 		return value, nil
 	}
