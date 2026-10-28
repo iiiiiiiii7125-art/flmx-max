@@ -119,14 +119,19 @@ func validateImportHostnames(p Proxy) error {
 //
 // B-01: the key lookup is case-insensitive (EqualFold over the map
 // keys) instead of enumerating spellings by hand. HTTP header names
-// are case-insensitive, and the render faces read both spellings
-// (transportFields reads "Host" and "host" for ws; forEndpoint fills
-// either) or pass the map through verbatim (Clash), so the previous
+// are case-insensitive, and the render faces read every spelling
+// (transportFields reads Host/host case-insensitively for every carrier
+// via firstHeaderHostValue, which shares the collector below; forEndpoint
+// fills either) or pass the map through verbatim (Clash), so the previous
 // exact-spelling enumeration ("Host" for ws/http-opts, "host" for
 // h2/xhttp-opts) let the opposite spelling escape validation and land
-// verbatim in subscriptions. Values are collected without splitting
-// on commas: a Host header is a single host, and a comma-joined value
-// fails hostPattern as a whole (fail-closed).
+// verbatim in subscriptions. R2-L-01: the render side used to dual-read
+// only ws — http/h2/xhttp each read one spelling — so the premise above
+// was false for the render faces until firstHeaderHostValue closed it;
+// the "store keys unchanged" decision (CLOSED-LIST §2e) stands on the
+// render side now reading every spelling. Values are collected without
+// splitting on commas: a Host header is a single host, and a comma-joined
+// value fails hostPattern as a whole (fail-closed).
 func importTransportHosts(p Proxy) []string {
 	var out []string
 	out = append(out, headerHostValues(p.sub("ws-opts").sub("headers"))...)
