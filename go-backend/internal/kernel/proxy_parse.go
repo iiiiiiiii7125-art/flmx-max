@@ -1397,7 +1397,13 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		}
 	}
 	if t := o.sub("transport"); len(t) > 0 {
-		host := t.sub("headers").str("Host")
+		// R5-D-01: headers keys are HTTP header names (case-insensitive,
+		// RFC 9110 §5.1) and list-valued in sing-box, so read them with
+		// the same list-aware, spelling-folding helper the render faces
+		// use. The previous exact-spelling string read silently dropped
+		// non-canonical spellings and fmt.Sprint-stringified list values
+		// into a malformed hostname.
+		host := firstHeaderHostValue(t.sub("headers"))
 		if hosts := t.strs("host"); host == "" && len(hosts) > 0 {
 			host = hosts[0]
 		}
