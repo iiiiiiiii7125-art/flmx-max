@@ -432,7 +432,7 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 			// R5 批 1：mode 用 mihomo 规范拼写 shadow-tls——历史拼写
 			// shadowtls 经 mihomo v1.19.33 实测被本体拒绝（obfs mode
 			// error），自产形态此前即毒化 mihomo 整表。
-			p["obfs-opts"] = map[string]interface{}{"mode": "shadow-tls", "host": st.str("host"),
+			p["obfs-opts"] = map[string]interface{}{"mode": "shadow-tls", "host": firstHeaderHostValue(st),
 				"password": st.str("password"), "version": version}
 		}
 		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
@@ -704,7 +704,7 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			return []map[string]interface{}{o, {
 				"type": "shadowtls", "tag": tag, "server": strings.Trim(e.Host, "[]"), "server_port": e.Port,
 				"version": version, "password": st.str("password"),
-				"tls": map[string]interface{}{"enabled": true, "server_name": st.str("host"),
+				"tls": map[string]interface{}{"enabled": true, "server_name": firstHeaderHostValue(st),
 					"utls": map[string]interface{}{"enabled": true, "fingerprint": firstNonEmptyString(p.str("client-fingerprint"), "chrome")}},
 			}}, true
 		}
