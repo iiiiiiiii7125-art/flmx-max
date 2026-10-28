@@ -59,6 +59,13 @@ func proxyURI(e Endpoint) (string, bool) {
 			}
 		case "http":
 			v["type"], v["host"], v["path"] = "http", host, path
+		case "xhttp":
+			// B-05：VMess+XHTTP 回放 net/host/path（与 VLESS 支同
+			// 口径；VMess JSON 无 mode 字段，applyTransport 读入时
+			// mode 恒为空，不回放 mode 不改变语义）。此前无分支、
+			// 缺省 net=tcp 致静默降级为明文 TCP。
+			v["net"] = "xhttp"
+			v["host"], v["path"] = host, path
 		}
 		if ro := p.sub("reality-opts"); len(ro) > 0 {
 			// R2-L3-F-01：Reality 节点回放 tls=reality + pbk/sid/
@@ -109,9 +116,6 @@ func proxyURI(e Endpoint) (string, bool) {
 		if !validImportedProxyFields(p, ssFaceOther) {
 			return "", false
 		}
-		if p.network() == "http" {
-			return "", false
-		}
 		q := url.Values{}
 		user := url.PathEscape(p.str("password"))
 		if p.Type() == "vless" {
@@ -129,10 +133,18 @@ func proxyURI(e Endpoint) (string, bool) {
 		if p.sub("ws-opts").flag("v2ray-http-upgrade") {
 			netType = "httpupgrade"
 		}
-		q.Set("type", netType)
+		if p.network() == "http" {
+			// B-02：TCP+HTTP 头伪装——type 仍为 tcp，headerType=http
+			// 承载形态（与 parseUserURI/applyTransport 的读入互为逆
+			// 操作）；此前整节点丢弃，base64 面静默缺失。
+			q.Set("type", "tcp")
+			q.Set("headerType", "http")
+		} else {
+			q.Set("type", netType)
+		}
 		host, path, service, mode := transportFields(p)
 		switch p.network() {
-		case "ws", "h2", "xhttp":
+		case "ws", "h2", "xhttp", "http":
 			setIf(q, "path", path)
 			setIf(q, "host", host)
 			setIf(q, "mode", mode)
@@ -220,6 +232,11 @@ func proxyURI(e Endpoint) (string, bool) {
 			q.Set("insecure", "1")
 		}
 		return "anytls://" + url.PathEscape(p.str("password")) + "@" + hp + "/?" + q.Encode() + frag, true
+	case "naive":
+		// B-06：NekoBox / v2rayN 分享形态 naive://user:pass@host:port
+		//（NaïveProxy 恒为 TLS，无需参数）。此前无分支、整节点在
+		// base64 面静默缺失；Clash 面仍略过（见 proxyClash）。
+		return "naive://" + url.PathEscape(p.str("username")) + ":" + url.PathEscape(p.str("password")) + "@" + hp + frag, true
 	case "socks5":
 		auth := ""
 		if u := p.str("username"); u != "" {
