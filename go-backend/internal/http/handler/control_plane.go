@@ -175,14 +175,26 @@ func (h *Handler) ActivateForwardIfNotPending(forwardID int64, now int64) error 
 	if h == nil || h.repo == nil {
 		return errors.New("handler not initialized")
 	}
-	forward, err := h.getForwardRecord(forwardID)
+	// F-02：原子条件更新——检查与写入合一（WHERE status<>2），
+	// 消除先读后写的 TOCTOU：并发删除已置 pending 的行不再被复活。
+	updated, err := h.repo.UpdateForwardStatusIfNotPending(forwardID, model.ForwardStatusActive, now)
 	if err != nil {
 		return err
+	}
+	if updated {
+		return nil
+	}
+	// 0 行受影响：行不存在或已 pending-delete，读一次区分。
+	forward, readErr := h.getForwardRecord(forwardID)
+	if readErr != nil {
+		return readErr
 	}
 	if isForwardPendingDelete(forward) {
 		return errForwardPendingDelete
 	}
-	return h.repo.UpdateForwardStatus(forwardID, model.ForwardStatusActive, now)
+	// 行存在且非 pending（已是 active 且 updated_time 恰与 now
+	// 相同致驱动报 0 行）：激活后置条件已成立，按成功返回。
+	return nil
 }
 
 func (h *Handler) ensureForwardAccessByActor(actorUserID int64, actorRole int, forwardID int64) (*forwardRecord, error) {

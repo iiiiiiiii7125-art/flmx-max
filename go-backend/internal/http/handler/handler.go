@@ -1332,13 +1332,23 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 	secret := r.URL.Query().Get("secret")
 	node, _ := h.repo.GetNodeBySecret(secret)
 	if node == nil {
+		// F-01：未知 secret 整批拒收返非 ok（原回 ok 使 agent 清零、
+		// 该批流量永久丢失且零日志）。secret 本身不记日志。
+		log.Printf("flow upload unknown secret")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("error"))
 		return
 	}
 
 	raw, err := readAndDecryptFlowBody(r.Body, secret)
-	if err == nil && strings.TrimSpace(raw) != "" {
+	if err != nil {
+		// F-01：解密失败整批拒收返非 ok，agent 不清零、可重报。
+		log.Printf("flow upload decrypt failed node_id=%d err=%v", node.ID, err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("error"))
+		return
+	}
+	if strings.TrimSpace(raw) != "" {
 		// R5-B6 E-001: seq 优先从 HTTP 头 X-Flmx-Seq 读取（改名后新头），
 		// 回退旧头 X-Flvx-Seq，其次从 body 的 {seq, items} 对象读取，
 		// 最后兼容纯数组（legacy）。
@@ -1358,6 +1368,14 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			// 旧格式：纯数组，seq 可能来自 header，否则为 nil（legacy）。
 		} else {
 			items = nil
+		}
+		if items == nil {
+			// F-01：非空 body 但两次解析均失败，整批无法解析、拒收
+			// 返非 ok（原静默落到末尾 ok 丢流量）。只记长度，不记内容。
+			log.Printf("flow upload unparsable body node_id=%d body_len=%d", node.ID, len(raw))
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte("error"))
+			return
 		}
 		if items != nil {
 			now := time.Now()
@@ -2100,13 +2118,16 @@ func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 		return text, nil
 	}
 
+	// F-01：解密失败必须返回 error，不得把密文原文当明文返回——
+	// 调用方无法区分“明文 body”与“解密失败的密文 body”，后者会
+	// 因两次解析失败被静默丢弃。密文不记日志。
 	crypto := getOrCreateFlowCrypto(secret)
 	if crypto == nil {
-		return text, nil
+		return "", errors.New("flow crypto unavailable")
 	}
 	plain, err := crypto.Decrypt(wrap.Data)
 	if err != nil {
-		return text, nil
+		return "", err
 	}
 	return string(plain), nil
 }
