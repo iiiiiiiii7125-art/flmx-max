@@ -2,10 +2,12 @@ package repo
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
 )
 
@@ -371,5 +373,124 @@ func TestResweepPortRangeSpecClampsTo65535(t *testing.T) {
 	minP, maxP = parsePortRangeMinMax("70000-80000")
 	if minP != 0 || maxP != 0 {
 		t.Fatalf("parsePortRangeMinMax(70000-80000) = (%d, %d), want (0, 0)", minP, maxP)
+	}
+}
+
+// X-05（第二轮再审计）：备份恢复面分流规则域名 `a..b` 逐字恢复（写面
+// NormalizeSplitRules 明明拒收）。恢复面按 R-08 同口径：坏 domains 逐项
+// 剔除 + warning；剔除后无任何匹配项的规则整条丢弃（写面亦拒收空选择
+// 子规则）；合法条目逐字保留。先红后绿。
+
+// x05SplitInboundSource 在源库建一个带分流规则的入站（四整对象全空，
+// 绕过 validateImportedInboundObjects 的 Normalize 门，只测 SplitRules 面）。
+func x05SplitInboundSource(t *testing.T, splitRules string) *Repository {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	source := openBackupRepo(t, "x05-split-src.db")
+	createRow(t, source, &model.Node{ID: 3, Name: "n3", Secret: "s", ServerIP: "10.0.0.3", Port: "10000-10100",
+		CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, source, &model.NodeKernel{ID: 5, NodeID: 3, KernelType: "xray", Version: "latest",
+		Enabled: 1, CreatedTime: now, UpdatedTime: now})
+	createRow(t, source, &model.NodeInbound{ID: 7, KernelID: 5, NodeID: 3, Name: "split-in",
+		Protocol: "vless", Listen: "::", Port: 12345, Enabled: 1,
+		SplitRules: splitRules, CreatedTime: now, UpdatedTime: now})
+	return source
+}
+
+func x05RestoredSplitRules(t *testing.T, dest *Repository) []kernel.SplitRule {
+	t.Helper()
+	var row model.NodeInbound
+	if err := dest.DB().Where("id = ?", 7).First(&row).Error; err != nil {
+		t.Fatalf("X-05: inbound must be restored: %v", err)
+	}
+	if strings.TrimSpace(row.SplitRules) == "" {
+		return nil
+	}
+	var rules []kernel.SplitRule
+	if err := json.Unmarshal([]byte(row.SplitRules), &rules); err != nil {
+		t.Fatalf("X-05: restored split_rules %q must parse: %v", row.SplitRules, err)
+	}
+	return rules
+}
+
+func x05WarningsMention(t *testing.T, result *model.ImportResult, want string) {
+	t.Helper()
+	for _, w := range result.ImportWarnings {
+		if strings.Contains(w, want) {
+			return
+		}
+	}
+	t.Fatalf("X-05: import warnings must mention %q, got %v", want, result.ImportWarnings)
+}
+
+// 坏 domains 单条：整条规则失效，应整条丢弃 + warning，SplitRules 清空。
+func TestResweepImportSplitRulesDropsEmptyLabelOnlyRule(t *testing.T) {
+	source := x05SplitInboundSource(t, `[{"domains":["a..b"],"action":"direct"}]`)
+	dest := openBackupRepo(t, "x05-split-dst.db")
+	result := roundTripBackup(t, source, dest)
+
+	if rules := x05RestoredSplitRules(t, dest); len(rules) != 0 {
+		t.Fatalf("X-05: restored split rules = %v, want empty (bad-only rule dropped)", rules)
+	}
+	x05WarningsMention(t, result, "a..b")
+}
+
+// 坏 domains 与合法 domains 同条：只剔除坏条目，合法条目与规则照常恢复。
+func TestResweepImportSplitRulesDropsEmptyLabelDomainMixed(t *testing.T) {
+	source := x05SplitInboundSource(t, `[{"domains":["a..b","example.com"],"action":"direct"}]`)
+	dest := openBackupRepo(t, "x05-split-dst.db")
+	result := roundTripBackup(t, source, dest)
+
+	rules := x05RestoredSplitRules(t, dest)
+	if len(rules) != 1 || len(rules[0].Domains) != 1 || rules[0].Domains[0] != "example.com" {
+		t.Fatalf("X-05: restored split rules = %v, want [{domains:[example.com] action:direct}]", rules)
+	}
+	x05WarningsMention(t, result, "a..b")
+}
+
+// 多条规则混坏与合法：坏-only 规则丢弃、全坏 domains 规则丢弃、
+// 分类兜底的规则保留（domains 清空）、合法规则逐字恢复；原本就无
+// 选择子的规则保持原样（R2X-015 既有口径，本轮不重判其去留）。
+func TestResweepImportSplitRulesMixedRules(t *testing.T) {
+	source := x05SplitInboundSource(t, `[{"domains":["a..b"],"action":"direct"},`+
+		`{"domains":["example.com"],"action":"direct"},`+
+		`{"domains":["a..b","b..c"],"action":"block"},`+
+		`{"categories":["cn"],"domains":["a..b"],"action":"direct"},`+
+		`{"action":"direct"}]`)
+	dest := openBackupRepo(t, "x05-split-dst.db")
+	result := roundTripBackup(t, source, dest)
+
+	rules := x05RestoredSplitRules(t, dest)
+	if len(rules) != 3 {
+		t.Fatalf("X-05: restored split rules = %v, want 3 rules (legal + category fallback + bare direct)", rules)
+	}
+	if len(rules[0].Domains) != 1 || rules[0].Domains[0] != "example.com" || rules[0].Action != "direct" {
+		t.Fatalf("X-05: rules[0] = %+v, want {domains:[example.com] action:direct}", rules[0])
+	}
+	if len(rules[1].Categories) != 1 || rules[1].Categories[0] != "cn" || len(rules[1].Domains) != 0 {
+		t.Fatalf("X-05: rules[1] = %+v, want {categories:[cn] domains:[] action:direct}", rules[1])
+	}
+	if rules[2].Action != "direct" || len(rules[2].Domains) != 0 || len(rules[2].Categories) != 0 {
+		t.Fatalf("X-05: rules[2] = %+v, want bare {action:direct} kept verbatim (R2X-015)", rules[2])
+	}
+	x05WarningsMention(t, result, "a..b")
+	x05WarningsMention(t, result, "b..c")
+}
+
+// OBS-L1-1 顺带探针（不立案）：恢复面 X-04 镜像谓词
+// configValueHasEmptyLabelHost 须直接覆盖——既有 R-09 探针只覆盖
+// panel_domain/github_proxy_url，且走 Export 往返测不到该镜像本体
+// （Export 已滤除 sensitive 键）。
+func TestResweepX04RestoreMirrorProbe(t *testing.T) {
+	if !configValueHasEmptyLabelHost("notify_telegram_api_base", "https://a..b/") {
+		t.Fatalf("OBS-L1-1: configValueHasEmptyLabelHost(notify_telegram_api_base, https://a..b/) = false, want true")
+	}
+	if !configValueHasEmptyLabelHost("notify_telegram_api_base", "https://a...b/") {
+		t.Fatalf("OBS-L1-1: configValueHasEmptyLabelHost(notify_telegram_api_base, https://a...b/) = false, want true")
+	}
+	for _, good := range []string{"", "https://example.com/", "https://api.telegram.org", "https://203.0.113.9/"} {
+		if configValueHasEmptyLabelHost("notify_telegram_api_base", good) {
+			t.Fatalf("OBS-L1-1: configValueHasEmptyLabelHost(notify_telegram_api_base, %q) = true, want false", good)
+		}
 	}
 }

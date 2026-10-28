@@ -124,6 +124,95 @@ func sanitizeBackupWhitelistExtra(raw string) (restored string, bad []string, li
 	return cleaned, bad, nil
 }
 
+// sanitizeBackupSplitRules applies the save surface's split-rule domain
+// standard (kernel.NormalizeSplitRules) to an inbound's SplitRules
+// coming back from a backup (X-05): the field is a JSON string column,
+// so its `domains` subfield escaped every earlier enumeration round —
+// the restore face stored it verbatim while the write face rejects
+// `a..b`, and both kernels render it verbatim (`domain:a..b` /
+// `domain_suffix`) where it can never match, so the rule silently
+// never fires (same harm class as R-08 AllowedDomains).
+//
+// Disposition is per-entry pruning, R-08 style: bad domains are
+// dropped and reported, legal entries restore verbatim (never
+// rewritten into normalized form, per the validateImportedInboundObjects
+// 口径). A rule this pass itself emptied (its only selectors were bad
+// domains) is dropped whole — the write face rejects such a rule, and
+// both kernels emit zero routing fragments for it, so keeping it
+// would only preserve a dead rule (same whole-rule drop as
+// pruneDanglingSplitRulesTx). Rules that arrived selector-less are
+// left alone (R2X-015 keeps them verbatim). When nothing is dropped the input
+// restores verbatim; when no rule survives the field restores as ""
+// (the write face's canonical empty, setInboundRouting). An
+// unparseable SplitRules blob restores verbatim (parsed=false) —
+// this pass must not invent a new failure surface, same as the
+// dangling-split pruning.
+func sanitizeBackupSplitRules(raw string) (restored string, droppedDomains []string, droppedRules int, parsed bool) {
+	if strings.TrimSpace(raw) == "" {
+		return raw, nil, 0, true
+	}
+	var rawRules []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &rawRules); err != nil {
+		return raw, nil, 0, false
+	}
+	kept := make([]json.RawMessage, 0, len(rawRules))
+	for _, rr := range rawRules {
+		var rule kernel.SplitRule
+		if err := json.Unmarshal(rr, &rule); err != nil {
+			kept = append(kept, rr)
+			continue
+		}
+		changed := false
+		droppedHere := 0
+		domains := make([]string, 0, len(rule.Domains))
+		for _, d := range rule.Domains {
+			if kernel.HasEmptyLabel(d) {
+				droppedDomains = append(droppedDomains, d)
+				changed = true
+				droppedHere++
+				continue
+			}
+			domains = append(domains, d)
+		}
+		rule.Domains = domains
+		// Only drop a rule this pass itself emptied: a rule that
+		// arrived with no selectors at all (e.g. {"action":"direct"}
+		// or a bare proxy rule) is pre-existing stored shape — the
+		// R2X-015 dangling-ref pruning keeps such rules verbatim,
+		// and this pass must not re-decide their fate. A rule left
+		// selector-less only because its bad domains were just
+		// pruned can never match (both kernels emit zero routing
+		// fragments for it), so dropping it loses nothing.
+		if droppedHere > 0 && len(rule.Categories)+len(rule.Domains)+len(rule.IPs) == 0 {
+			droppedRules++
+			continue
+		}
+		if !changed {
+			kept = append(kept, rr)
+			continue
+		}
+		// Stored SplitRules is always struct-produced (NormalizeSplitRules
+		// output), so re-marshalling the struct cannot drift fields.
+		encoded, err := json.Marshal(rule)
+		if err != nil {
+			kept = append(kept, rr)
+			continue
+		}
+		kept = append(kept, encoded)
+	}
+	if len(droppedDomains) == 0 && droppedRules == 0 {
+		return raw, nil, 0, true
+	}
+	if len(kept) == 0 {
+		return "", droppedDomains, droppedRules, true
+	}
+	out, err := json.Marshal(kept)
+	if err != nil {
+		return raw, nil, 0, false
+	}
+	return string(out), droppedDomains, droppedRules, true
+}
+
 func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	out := &model.InboundsBackup{
 		Kernels:  []model.KernelBackup{},
@@ -414,6 +503,15 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	invalidWhitelistRows := 0
 	invalidWhitelistEntries := 0
 	var invalidWhitelistIdentities []string
+	// X-05：SplitRules.domains sanitize 的回执计数（受影响行数 + 被
+	// 剔除的非法域名数 + 被丢弃的失效规则数）与逐行身份/坏域名披露
+	// 清单（汇总 warning 在入站循环后统一发，形态同
+	// invalidWhitelistRows；行照常落库，故不计 SkippedRows，同
+	// R5X-014 sanitize 回执口径）。
+	invalidSplitRows := 0
+	invalidSplitDomains := 0
+	invalidSplitRules := 0
+	var invalidSplitIdentities []string
 	// R5X-016：入站段返回实落计数（被跳过行不计入，与 SkippedRows
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
 	var counts inboundImportCounts
@@ -586,6 +684,27 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			invalidWhitelistIdentities = append(invalidWhitelistIdentities,
 				fmt.Sprintf("#%d %s（%s）", i.ID, i.Name, detail))
 		}
+		// X-05：SplitRules 是入站行内的一段 JSON 字符串，其 domains
+		// 子字段不在顶层列枚举视野内——写面拒收 `a..b`，恢复面此前
+		// 逐字落库。按 R-08 同口径逐项剔除坏域名 + warning；剔除后
+		// 无任何匹配项的规则整条丢弃，合法条目逐字保留，入站行本身
+		// 照常恢复（不整行跳过）。
+		splitRules, splitBadDomains, splitDroppedRules, splitParsed := sanitizeBackupSplitRules(i.SplitRules)
+		if splitParsed && (len(splitBadDomains) > 0 || splitDroppedRules > 0) {
+			invalidSplitRows++
+			invalidSplitDomains += len(splitBadDomains)
+			invalidSplitRules += splitDroppedRules
+			quoted := make([]string, 0, len(splitBadDomains))
+			for _, d := range splitBadDomains {
+				quoted = append(quoted, fmt.Sprintf("%q", d))
+			}
+			detail := "非法域名：" + strings.Join(quoted, "、")
+			if splitDroppedRules > 0 {
+				detail += fmt.Sprintf("；丢弃失效规则 %d 条", splitDroppedRules)
+			}
+			invalidSplitIdentities = append(invalidSplitIdentities,
+				fmt.Sprintf("#%d %s（%s）", i.ID, i.Name, detail))
+		}
 		// R13X-006：导入型入站（kernel_id<=0）的 Protocol 是派生字段，
 		// 须以 Extra 承载的代理对象重推导（与创建路径 externalRow /
 		// 编辑路径 row.Protocol = kernel.ProxyProtocol(proxy) 同口径），
@@ -614,7 +733,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: whitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
-			SplitRules: i.SplitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
+			SplitRules: splitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
 			ConnIdleSeconds: i.ConnIdleSeconds,
 		}
 		if err := tx.Clauses(clause.OnConflict{
@@ -670,6 +789,20 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		rep.warnf("备份恢复：%d 条入站的白名单附加清单（WhitelistExtra）未通过保存面同口径校验（ParseAllowList），已逐项剔除 %d 个非法条目后恢复（合法条目逐字保留，整表不合法时整表清空）：%s%s，请核对被剔除条目后在入站设置中重新填写",
 			invalidWhitelistRows, invalidWhitelistEntries, strings.Join(identities, "、"), suffix)
+	}
+	if invalidSplitRows > 0 {
+		// X-05：汇总披露受影响行数 + 被剔除非法域名数 + 被丢弃失效
+		// 规则数 + 逐行身份与坏域名原文（前 10 条，超出以总数收尾，
+		// 同 invalidWhitelistRows 的截断口径）。行已照常恢复，此处
+		// 计数只入 ImportWarnings、不计 SkippedRows。
+		identities := invalidSplitIdentities
+		suffix := ""
+		if len(identities) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(identities))
+			identities = identities[:10]
+		}
+		rep.warnf("备份恢复：%d 条入站的分流规则域名（SplitRules.domains）含空标签主机名，已剔除 %d 个非法域名、丢弃 %d 条失效规则后恢复（合法域名与规则逐字保留）：%s%s，请核对被剔除的域名后在入站分流设置中重新填写",
+			invalidSplitRows, invalidSplitDomains, invalidSplitRules, strings.Join(identities, "、"), suffix)
 	}
 
 	// R2X-015：入站附属引用后置校验。出站目标可能是同批入站列表的
