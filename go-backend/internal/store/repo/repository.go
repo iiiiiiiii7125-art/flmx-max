@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"go-backend/internal/kernel"
+	"go-backend/internal/netguard"
 	"go-backend/internal/security"
 	"go-backend/internal/store/model"
 )
@@ -5154,6 +5156,15 @@ func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *impor
 				continue
 			}
 		}
+		// R2-H-02：app_logo / app_favicon 走保存面同口径品牌图校验
+		// （见 validateBrandAssetConfigValue），坏值跳过 + warning。
+		if trimmed := strings.TrimSpace(name); trimmed == "app_logo" || trimmed == "app_favicon" {
+			if err := validateBrandAssetConfigValue(value); err != nil {
+				rep.skip("configs")
+				rep.warnf("备份恢复：配置 %q 的值无效（%v），已跳过未恢复", name, err)
+				continue
+			}
+		}
 		err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
@@ -6203,14 +6214,15 @@ type latencyTargetBackup struct {
 // save-side handler.normalizeLatencyTargetsConfig / parseLatencyTargets
 // (node_latency.go) for restore: JSON shape, name rules, count/pinned
 // caps, host grammar and port range. Restore does no DNS resolution
-// (same rule as validImportMonitorTarget above); the deterministic
-// literal guards below (loopback/unspecified IP, localhost aliases)
-// cover the loopback-shaped values the save-side policy rejects
-// without any lookup. A value failing here must be skipped with a
-// warning by importConfigs, not stored: latencyPool fails to parse a
-// bad stored value and returns an empty pool, silently stopping all
-// node latency/route measurements (H-171-01). The two copies are
-// locked to the same verdicts by TestR171B5ValidateLatencyTargets-
+// (same rule as validImportMonitorTarget above); literal IPs get the
+// full deterministic policy verdict via validLatencyTargetHost
+// (netguard PolicyHardDenyOrLoopback, same as the save side — R2-H-01
+// closed the gap where only loopback/unspecified literals were
+// rejected). A value failing here must be skipped with a warning by
+// importConfigs, not stored: latencyPool fails to parse a bad stored
+// value and returns an empty pool, silently stopping all node
+// latency/route measurements (H-171-01). The two copies are locked
+// to the same verdicts by TestR171B5ValidateLatencyTargets-
 // ConfigValue (repo) and TestR171B5LatencyTargetsSaveSideCorpus
 // (handler) over a shared corpus.
 func validateLatencyTargetsConfigValue(raw string) error {
@@ -6252,6 +6264,44 @@ func validateLatencyTargetsConfigValue(raw string) error {
 	return nil
 }
 
+// brandAssetDataURLPrefix / maxBrandAssetDataURLBytes mirror the
+// save-side handler.normalizeAndValidateConfigValue app_logo /
+// app_favicon branch (handler.go): PNG data URL prefix + 1MiB cap.
+// R2-H-02: restore must reuse the same rule — an oversize or
+// non-PNG value must be skipped with a warning by importConfigs,
+// not stored (a 2MiB illegal value previously landed with zero
+// warning and the brand image silently fell back to the default
+// icon). Empty values pass through unchanged (same as the save side
+// returning "" for empty, which the handler then treats as clear).
+const (
+	brandAssetDataURLPrefix    = "data:image/png;base64,"
+	maxBrandAssetDataURLBytes = 1024 * 1024
+)
+
+// validateBrandAssetConfigValue mirrors the save-side brand-asset
+// rule for restore: non-empty values must be a PNG data URL within
+// 1MiB with valid base64 payload.
+func validateBrandAssetConfigValue(raw string) error {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		return nil
+	}
+	if !strings.HasPrefix(normalized, brandAssetDataURLPrefix) {
+		return errors.New("品牌图片必须通过上传生成 PNG 数据")
+	}
+	if len(normalized) > maxBrandAssetDataURLBytes {
+		return errors.New("品牌图片过大，请上传更小图片")
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(normalized, brandAssetDataURLPrefix))
+	if payload == "" {
+		return errors.New("品牌图片数据不能为空")
+	}
+	if _, err := base64.StdEncoding.DecodeString(payload); err != nil {
+		return errors.New("品牌图片数据格式无效")
+	}
+	return nil
+}
+
 // validateLatencyTargetHostPort mirrors the format layer of
 // handler.normalizeTunnelProbeTarget: empty host, port range, and the
 // host grammar of normalizeTunnelProbeTargetHost.
@@ -6274,8 +6324,17 @@ func validateLatencyTargetHostPort(host string, port int) error {
 
 // validLatencyTargetHost mirrors handler.normalizeTunnelProbeTargetHost
 // + isValidTunnelProbeTargetHost, plus the deterministic part of the
-// save-side host policy (loopback/unspecified literals and localhost
-// aliases) that needs no DNS lookup.
+// save-side host policy (netguard PolicyHardDenyOrLoopback on literal
+// IPs: hard-deny metadata set, loopback, unspecified, reserved,
+// multicast and link-local — the same verdict the save side gives via
+// validateTunnelProbeTargetHostPolicy). Restore does no DNS resolution
+// (same rule as validImportMonitorTarget above), so hostname verdicts
+// stay format-only; only literal IPs get the policy verdict, which
+// needs no lookup. R2-H-01: the previous version only rejected
+// loopback/unspecified literals, so 13 policy-denied literals
+// (169.254.169.254, 100.100.100.200, fe80::1, 224.0.0.1, 198.18/15,
+// 240/4, 0.0.0.0/8, 4-in-6 metadata, fd00:ec2::254, 64:ff9b:1::/48)
+// landed in the store and poisoned the whole pool at read time.
 func validLatencyTargetHost(host string) bool {
 	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
 		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
@@ -6283,10 +6342,13 @@ func validLatencyTargetHost(host string) bool {
 		}
 		inner := host[1 : len(host)-1]
 		addr, err := netip.ParseAddr(inner)
-		return err == nil && addr.Is6() && !addr.IsLoopback() && !addr.IsUnspecified()
+		if err != nil || !addr.Is6() {
+			return false
+		}
+		return netguard.JudgeAddr(addr, netguard.PolicyHardDenyOrLoopback, false).Allowed
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
-		return !addr.IsLoopback() && !addr.IsUnspecified()
+		return netguard.JudgeAddr(addr, netguard.PolicyHardDenyOrLoopback, false).Allowed
 	}
 	if strings.Contains(host, ":") || isLatencyTargetIPv4Like(host) {
 		return false
