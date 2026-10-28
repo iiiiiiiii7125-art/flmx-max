@@ -404,7 +404,10 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 	if out.network() == "ws" {
 		ws := out.sub("ws-opts").clone()
 		headers := ws.sub("headers").clone()
-		if headers.str("Host") == "" && headers.str("host") == "" {
+		// R5-D-02：全拼写判空——firstHeaderHostValue 覆盖全部拼写与
+		// 列表值，任一非空用户值在位即不注入，避免注入的规范键
+		// 在规范优先的读取下遮蔽用户非规范拼写键。
+		if firstHeaderHostValue(headers) == "" {
 			headers["Host"] = orig
 			ws["headers"] = map[string]interface{}(headers)
 			out["ws-opts"] = map[string]interface{}(ws)
