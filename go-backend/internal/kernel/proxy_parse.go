@@ -629,6 +629,12 @@ func parseURI(line string) (Proxy, error) {
 	return nil, fmt.Errorf("暂不支持 %s:// 链接", scheme)
 }
 
+// errBadQuery marks a splitURI failure to parse the link query
+// (B-04): callers with a legacy fallback (parseSSURI / parseSocksURI)
+// must not treat it as a host-parse failure and silently retry
+// without the query.
+var errBadQuery = errors.New("链接参数解析失败")
+
 // splitURI splits "userinfo@host:port/path?query#name".
 func splitURI(rest string) (user, host string, port int, query url.Values, name string, err error) {
 	if i := strings.IndexByte(rest, '#'); i >= 0 {
@@ -640,7 +646,15 @@ func splitURI(rest string) (user, host string, port int, query url.Values, name 
 	}
 	query = url.Values{}
 	if i := strings.IndexByte(rest, '?'); i >= 0 {
-		query, _ = url.ParseQuery(rest[i+1:])
+		// B-04：不再丢弃 url.ParseQuery 错误——单对编码非法时
+		// ParseQuery 只丢该对、其余照常返回，于是 security=%zz 的
+		// security 对被无声剔除、节点以明文入库（sni=%zz 同理丢
+		// SNI）。解析失败即整条拒收，与 security=bogus 明拒同口径。
+		q, qerr := url.ParseQuery(rest[i+1:])
+		if qerr != nil {
+			return "", "", 0, nil, "", fmt.Errorf("%w：%v", errBadQuery, qerr)
+		}
+		query = q
 		rest = rest[:i]
 	}
 	rest = strings.TrimSuffix(rest, "/")
@@ -656,7 +670,7 @@ func splitURI(rest string) (user, host string, port int, query url.Values, name 
 
 func parseSSURI(rest string) (Proxy, error) {
 	user, host, port, q, name, err := splitURI(rest)
-	if err != nil && user == "" {
+	if err != nil && user == "" && !errors.Is(err, errBadQuery) {
 		// Legacy: ss://base64(method:password@host:port)#name
 		body := rest
 		if i := strings.IndexAny(body, "#?"); i >= 0 {
@@ -969,6 +983,11 @@ func applyTransport(p Proxy, netType, headerType, host, path, serviceName, mode 
 func parseSocksURI(rest string) (Proxy, error) {
 	user, host, port, _, name, err := splitURI(rest)
 	if err != nil {
+		// B-04：query 解析失败不得走 legacy base64 回退（回退体会
+		// 丢掉整个 query、把坏链接当好链接导入）。
+		if errors.Is(err, errBadQuery) {
+			return nil, err
+		}
 		// v2rayN: socks://base64(user:pass@host:port)#name
 		body := rest
 		if i := strings.IndexByte(body, '#'); i >= 0 {
