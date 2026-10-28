@@ -445,10 +445,27 @@ func (h *Handler) runGistBackupLoop(ctx context.Context) {
 // persisted in vite_config under notifyGistFailurePendingConfigKey.
 // Single record (one gist, one current failure); a newer failure
 // overwrites the message, a later successful upload clears it.
+//
+// Gen is the generation of the mark (R6-I-01): every mark advances it
+// monotonically, clears never move it. A Failed callback carries the
+// generation its dispatch was sent under, so a stale callback can be
+// told apart from the current mark — the whole class of "old callback
+// overwrites newer pending value" is closed at this helper, not per
+// call site. Records written before generations existed unmarshal with
+// Gen 0 and are advanced past by the next mark.
 type pendingGistFailure struct {
 	Message string `json:"message"`
 	At      int64  `json:"at"`
+	Gen     int64  `json:"gen"`
 }
+
+// notifyGistFailurePendingGenConfigKey holds the last issued generation
+// for the pending Gist failure mark (R6-I-01). Runtime ledger, excluded
+// from backups like the pending record itself: it is advanced only by
+// markGistFailurePending, never by clear, so that after a newer
+// generation's dispatch succeeds and clears the record, an older
+// generation's late failure cannot resurrect the stale message.
+const notifyGistFailurePendingGenConfigKey = "notify_gist_failure_pending_gen"
 
 func (h *Handler) loadPendingGistFailure() *pendingGistFailure {
 	if h == nil || h.repo == nil {
@@ -471,13 +488,90 @@ func (h *Handler) loadPendingGistFailure() *pendingGistFailure {
 	return &p
 }
 
-func (h *Handler) markGistFailurePending(message string) {
+func (h *Handler) gistFailureGenLocked() int64 {
+	cfg, err := h.repo.GetConfigByName(notifyGistFailurePendingGenConfigKey)
+	if err != nil || cfg == nil {
+		return 0
+	}
+	gen, _ := strconv.ParseInt(strings.TrimSpace(cfg.Value), 10, 64)
+	return gen
+}
+
+// markGistFailurePending arms (or re-arms) the pending mark with a fresh
+// generation and returns it. The caller passes the generation to the
+// dispatch callback so remarkGistFailurePendingIfCurrent can reject
+// stale callbacks. The watermark is written before the record: a
+// failed record write after a watermark advance is harmless (the next
+// mark advances past it), while a record written ahead of the
+// watermark could let a stale callback resurrect after a success-clear.
+func (h *Handler) markGistFailurePending(message string) int64 {
 	if h == nil || h.repo == nil || strings.TrimSpace(message) == "" {
+		return 0
+	}
+	h.gistFailureMu.Lock()
+	defer h.gistFailureMu.Unlock()
+	gen := h.gistFailureGenLocked() + 1
+	if cfg, err := h.repo.GetConfigByName(notifyGistFailurePendingConfigKey); err == nil && cfg != nil && strings.TrimSpace(cfg.Value) != "" {
+		var cur pendingGistFailure
+		if err := json.Unmarshal([]byte(cfg.Value), &cur); err == nil && cur.Gen >= gen {
+			gen = cur.Gen + 1
+		}
+	}
+	if err := h.repo.UpsertConfig(notifyGistFailurePendingGenConfigKey, strconv.FormatInt(gen, 10), time.Now().UnixMilli()); err != nil {
+		log.Printf("gist failure pending generation save failed: %v", err)
+	}
+	raw, err := json.Marshal(pendingGistFailure{Message: message, At: time.Now().UnixMilli(), Gen: gen})
+	if err != nil {
+		log.Printf("gist failure pending marshal failed: %v", err)
+		return gen
+	}
+	if err := h.repo.UpsertConfig(notifyGistFailurePendingConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+		log.Printf("gist failure pending save failed: %v", err)
+	}
+	return gen
+}
+
+// remarkGistFailurePendingIfCurrent re-arms the pending mark for a
+// Failed callback, but only if the callback's generation is still
+// current (R6-I-01). Two cases re-arm: the record still carries gen
+// (the failure is still the newest), or the record is gone and no newer
+// mark has been issued since gen (a same-generation outcome cleared
+// it — e.g. a concurrent Suppressed outcome — and the failure must
+// survive for the next retry round). If a newer mark exists, or a
+// newer generation was issued and has since cleared, the callback is
+// stale and must not overwrite the newer message or resurrect a
+// cleared one. Clears deliberately do not touch the watermark, so the
+// second case stays distinguishable from a newer generation's
+// success-clear.
+func (h *Handler) remarkGistFailurePendingIfCurrent(gen int64, message string) {
+	if h == nil || h.repo == nil || gen <= 0 || strings.TrimSpace(message) == "" {
 		return
 	}
 	h.gistFailureMu.Lock()
 	defer h.gistFailureMu.Unlock()
-	raw, err := json.Marshal(pendingGistFailure{Message: message, At: time.Now().UnixMilli()})
+	if cfg, err := h.repo.GetConfigByName(notifyGistFailurePendingConfigKey); err == nil && cfg != nil && strings.TrimSpace(cfg.Value) != "" {
+		var cur pendingGistFailure
+		if err := json.Unmarshal([]byte(cfg.Value), &cur); err == nil {
+			if cur.Gen != gen {
+				return
+			}
+			raw, err := json.Marshal(pendingGistFailure{Message: message, At: time.Now().UnixMilli(), Gen: gen})
+			if err != nil {
+				log.Printf("gist failure pending marshal failed: %v", err)
+				return
+			}
+			if err := h.repo.UpsertConfig(notifyGistFailurePendingConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+				log.Printf("gist failure pending save failed: %v", err)
+			}
+			return
+		}
+		// Corrupt record: loadPendingGistFailure drops it, so treat
+		// the record as absent and fall through to the watermark.
+	}
+	if h.gistFailureGenLocked() != gen {
+		return
+	}
+	raw, err := json.Marshal(pendingGistFailure{Message: message, At: time.Now().UnixMilli(), Gen: gen})
 	if err != nil {
 		log.Printf("gist failure pending marshal failed: %v", err)
 		return
@@ -505,6 +599,11 @@ func (h *Handler) clearGistFailurePending() {
 // (gist_last_error non-empty): a later successful upload clears
 // lastError, which supersedes the failure — a stale notice must neither
 // be armed nor sent.
+//
+// R6-I-01: the failure re-mark is generation-guarded. The lastError
+// check alone is identity-blind (a newer failure also leaves lastError
+// non-empty), so a late old callback used to overwrite the newer
+// pending message; remarkGistFailurePendingIfCurrent rejects it.
 func (h *Handler) notifyGistBackupFailed(err error) {
 	if h == nil || h.repo == nil || err == nil {
 		return
@@ -513,14 +612,15 @@ func (h *Handler) notifyGistBackupFailed(err error) {
 	if strings.TrimSpace(h.gistConfig()[gistConfigLastError]) == "" {
 		return
 	}
-	h.markGistFailurePending(msg)
+	gen := h.markGistFailurePending(msg)
 	h.notifyTracked(notifyEventBackup, "Gist 备份失败", msg,
 		func(outcome notifyOutcome) {
 			if outcome == notifyOutcomeFailed {
 				// 失败重记，但仅当失败仍为当前状态；其间若上传已成功
 				// （lastError 已清空），不复活已过时的失败通知。
+				// 世代守卫见 remarkGistFailurePendingIfCurrent。
 				if strings.TrimSpace(h.gistConfig()[gistConfigLastError]) != "" {
-					h.markGistFailurePending(msg)
+					h.remarkGistFailurePendingIfCurrent(gen, msg)
 				}
 				return
 			}

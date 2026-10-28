@@ -227,6 +227,11 @@ var backupRuntimeExcludedConfigKeys = map[string]struct{}{
 	// 失败的补发依据），不是管理员配置——随备份往返会在恢复旧备份
 	// 时把已过时的失败通知在目标实例上重发一遍。
 	"notify_gist_failure_pending": {},
+	// R6-I-01：两待发标记的世代水位与标记本身同为运行时台账——
+	// 随备份往返会在恢复旧备份时把水位回滚，使旧回调在目标实例上
+	// 重新满足“同代”条件而复活过时消息。
+	"notify_gist_failure_pending_gen":   {},
+	"notify_quota_recovery_pending_gen": {},
 }
 
 func isBackupRuntimeExcludedConfigKey(name string) bool {
