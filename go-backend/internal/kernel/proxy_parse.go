@@ -470,6 +470,15 @@ func validateProxyCredentials(p Proxy) error {
 			return errors.New("缺少用户名或密码")
 		}
 	}
+	// K-01: transport x security coupling — Vision only on TCP,
+	// Reality only on TCP (see transportSecurityViolation). Checked
+	// here, after the per-type columns, because Reality is
+	// cross-protocol (vless / vmess / trojan) and flow is validated
+	// for vless above. The backup-restore face inherits the same
+	// rejection through ValidateImportedProxy.
+	if v := transportSecurityViolation(p); v != "" {
+		return errors.New(v)
+	}
 	return nil
 }
 
