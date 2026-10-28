@@ -267,6 +267,14 @@ func setIf(q url.Values, k, v string) {
 // branch used str(), which stringified a list value into "[example.com]".
 // A legal Host under the other spelling was silently lost on every face
 // but Clash. All four carriers now go through this helper.
+//
+// R4-B-01: the h2/xhttp arms used to read only the direct key, so a
+// legal Host under the nested `headers` sub-map (the non-canonical
+// Clash YAML shape) was lost on every face but Clash/Stash — the same
+// stored row was seen differently on each face. The arms now fall back
+// to the nested headers map when the direct key is empty, mirroring
+// ws/http; the direct key still wins when both are present, so no
+// existing direct-key row can change its rendering.
 func firstHeaderHostValue(m Proxy) string {
 	for _, k := range []string{"Host", "host"} {
 		if vals := m.strs(k); len(vals) > 0 {
@@ -292,6 +300,10 @@ func transportFields(p Proxy) (host, path, service, mode string) {
 		ho := p.sub("h2-opts")
 		path = ho.str("path")
 		host = firstHeaderHostValue(ho)
+		if host == "" {
+			// R4-B-01: nested headers fallback (see firstHeaderHostValue).
+			host = firstHeaderHostValue(ho.sub("headers"))
+		}
 	case "http":
 		ho := p.sub("http-opts")
 		if paths := ho.strs("path"); len(paths) > 0 {
@@ -302,6 +314,10 @@ func transportFields(p Proxy) (host, path, service, mode string) {
 		xo := p.sub("xhttp-opts")
 		path, mode = xo.str("path"), xo.str("mode")
 		host = firstHeaderHostValue(xo)
+		if host == "" {
+			// R4-B-01: nested headers fallback (see firstHeaderHostValue).
+			host = firstHeaderHostValue(xo.sub("headers"))
+		}
 	}
 	return
 }

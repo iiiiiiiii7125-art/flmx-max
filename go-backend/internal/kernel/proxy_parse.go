@@ -139,12 +139,27 @@ func validateImportHostnames(p Proxy) error {
 // keys still unchanged. Values are collected without
 // splitting on commas: a Host header is a single host, and a comma-joined
 // value fails hostPattern as a whole (fail-closed).
+//
+// R4-B-01: the collector above missed one more form — the nested
+// `headers` sub-map under h2-opts/xhttp-opts (the non-canonical Clash
+// YAML shape, `h2-opts: {headers: {Host: ...}}`). ws/http read their
+// nested headers from the start; h2/xhttp read only the direct key,
+// so a bad label under the nested form escaped both import validation
+// and the render predicate (which shares this collector) and was
+// emitted verbatim on the Clash/Stash faces. The enumeration is now
+// two forms per carrier — the direct `host` key and the nested
+// `headers` map — every spelling via headerHostValues, string and
+// list values alike. Enumeration boundary: `headers` must be a map
+// (Proxy.sub returns empty for non-maps); Clash YAML headers is a
+// map, and no other Host-bearing shape exists under these opts.
 func importTransportHosts(p Proxy) []string {
 	var out []string
 	out = append(out, headerHostValues(p.sub("ws-opts").sub("headers"))...)
 	out = append(out, headerHostValues(p.sub("http-opts").sub("headers"))...)
 	out = append(out, headerHostValues(p.sub("h2-opts"))...)
+	out = append(out, headerHostValues(p.sub("h2-opts").sub("headers"))...)
 	out = append(out, headerHostValues(p.sub("xhttp-opts"))...)
+	out = append(out, headerHostValues(p.sub("xhttp-opts").sub("headers"))...)
 	return out
 }
 
