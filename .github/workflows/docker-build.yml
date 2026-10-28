@@ -331,6 +331,14 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           OWNER="${{ needs.check-version.outputs.image_owner }}"
 
+          # J-02: 非纯数字 tag（beta/alpha/rc 等）须以 prerelease 身份发布，
+          # 否则 /releases/latest 会指向测试版，脚本稳定渠道将静默装上 beta。
+          if [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            PRERELEASE_FLAG=()
+          else
+            PRERELEASE_FLAG=(--prerelease)
+          fi
+
           # 获取 commit 信息
           COMMIT_MSG=$(git log -1 --pretty=format:"%s")
           COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
@@ -341,7 +349,7 @@ jobs:
           if gh release view "${VERSION}" --repo ${{ github.repository }} >/dev/null 2>&1; then
             echo "ℹ️ Release ${VERSION} 已存在，跳过 create，直接上传资产"
           else
-          gh release create "${VERSION}" \
+          gh release create "${VERSION}" "${PRERELEASE_FLAG[@]}" \
             --target "${{ github.sha }}" \
             --title "Release ${VERSION}" \
             --notes "## 📝 Release Information
