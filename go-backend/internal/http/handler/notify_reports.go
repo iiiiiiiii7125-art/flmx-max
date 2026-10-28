@@ -185,6 +185,9 @@ func (h *Handler) checkUserReminders(now time.Time) {
 				})
 		}
 	}
+	// I-01：补发解禁时发送失败的配额恢复通知（与超额侧
+	// alertOnce/unalert 的下一轮补发同口径）。
+	h.retryPendingQuotaRecoveryNotices(now)
 }
 
 // checkUserQuotaReminders reports a forward user's daily/monthly quota

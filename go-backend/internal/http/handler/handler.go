@@ -88,6 +88,9 @@ type Handler struct {
 	notifyCfgVals map[string]string
 	notifyCfgAt   time.Time
 
+	// I-01：配额恢复通知待发标记的串行化锁（user_quota.go）。
+	quotaRecoveryMu sync.Mutex
+
 	// R2X-018：日报待发原文缓存（notify_reports.go）。首次生成后
 	// 同日重试逐字复用，snapshot 与 daily_last 仅整条投递成功时推进。
 	dailyMu      sync.Mutex

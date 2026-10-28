@@ -219,6 +219,10 @@ func FilterSensitiveConfigs(in map[string]string) map[string]string {
 var backupRuntimeExcludedConfigKeys = map[string]struct{}{
 	"notify_daily_last":          {},
 	"notify_daily_inbound_total": {},
+	// I-01：待发配额恢复通知是运行时台账（解禁时发送失败的补发
+	// 依据），不是管理员配置——随备份往返会在恢复旧备份时把已
+	// 送达过的恢复通知在目标实例上重发一遍。
+	"notify_quota_recovery_pending": {},
 }
 
 func isBackupRuntimeExcludedConfigKey(name string) bool {

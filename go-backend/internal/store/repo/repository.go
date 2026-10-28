@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -5134,12 +5135,24 @@ func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *impor
 	count := 0
 	for name, value := range configs {
 		// 复扫 R-09：恢复面与保存面同口径——主机名类配置键的空标签值
-		// 跳过 + warning（latency_targets 不在内：读取期
-		// parseLatencyTargets 即拒，fail-safe）。
+		// 跳过 + warning。
 		if configValueHasEmptyLabelHost(name, value) {
 			rep.skip("configs")
 			rep.warnf("备份恢复：配置 %q 的值 %q 含空标签主机名，已跳过未恢复", name, value)
 			continue
+		}
+		// H-171-01：latency_targets 走保存面等价校验（见
+		// validateLatencyTargetsConfigValue），坏值跳过 + warning。
+		// 旧注释称“读取期 parseLatencyTargets 即拒，fail-safe”——该
+		// 论证只覆盖“不崩溃、不用坏数据”，不覆盖“解析失败即返空池、
+		// 全部延迟/回程测量静默停摆”：保存期拒收与读取期拒收的后果
+		// 并不等价，坏值留在库里、故障态随每次读取复现。
+		if strings.TrimSpace(name) == "latency_targets" {
+			if err := validateLatencyTargetsConfigValue(value); err != nil {
+				rep.skip("configs")
+				rep.warnf("备份恢复：配置 %q 的值 %q 无效（%v），已跳过未恢复", name, value, err)
+				continue
+			}
 		}
 		err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "name"}},
@@ -6174,6 +6187,177 @@ func configValueHasEmptyLabelHost(name, value string) bool {
 	default:
 		return false
 	}
+}
+
+// latencyTargetBackup mirrors the save-side latencyTarget shape
+// (handler/node_latency.go) for restore-side validation only.
+type latencyTargetBackup struct {
+	Name    string `json:"name"`
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	Enabled bool   `json:"enabled"`
+	Pinned  bool   `json:"pinned,omitempty"`
+}
+
+// validateLatencyTargetsConfigValue mirrors the format layer of the
+// save-side handler.normalizeLatencyTargetsConfig / parseLatencyTargets
+// (node_latency.go) for restore: JSON shape, name rules, count/pinned
+// caps, host grammar and port range. Restore does no DNS resolution
+// (same rule as validImportMonitorTarget above); the deterministic
+// literal guards below (loopback/unspecified IP, localhost aliases)
+// cover the loopback-shaped values the save-side policy rejects
+// without any lookup. A value failing here must be skipped with a
+// warning by importConfigs, not stored: latencyPool fails to parse a
+// bad stored value and returns an empty pool, silently stopping all
+// node latency/route measurements (H-171-01). The two copies are
+// locked to the same verdicts by TestR171B5ValidateLatencyTargets-
+// ConfigValue (repo) and TestR171B5LatencyTargetsSaveSideCorpus
+// (handler) over a shared corpus.
+func validateLatencyTargetsConfigValue(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var targets []latencyTargetBackup
+	if err := json.Unmarshal([]byte(raw), &targets); err != nil {
+		return errors.New("测试点格式无效")
+	}
+	// Caps mirror handler.maxLatencyTargets / maxPinnedLatencyTargets /
+	// maxLatencyTargetName (30 / 3 / 20).
+	if len(targets) > 30 {
+		return fmt.Errorf("测试点最多 %d 个", 30)
+	}
+	names := make(map[string]bool, len(targets))
+	pinned := 0
+	for i := range targets {
+		t := &targets[i]
+		t.Name = strings.TrimSpace(t.Name)
+		if t.Name == "" || len([]rune(t.Name)) > 20 {
+			return fmt.Errorf("测试点名称不能为空且不超过 %d 字", 20)
+		}
+		if names[t.Name] {
+			return fmt.Errorf("测试点名称重复：%s", t.Name)
+		}
+		names[t.Name] = true
+		if err := validateLatencyTargetHostPort(t.Host, t.Port); err != nil {
+			return fmt.Errorf("测试点 %s：地址无效", t.Name)
+		}
+		if t.Pinned {
+			pinned++
+		}
+	}
+	if pinned > 3 {
+		return fmt.Errorf("卡片最多固定显示 %d 个测试点", 3)
+	}
+	return nil
+}
+
+// validateLatencyTargetHostPort mirrors the format layer of
+// handler.normalizeTunnelProbeTarget: empty host, port range, and the
+// host grammar of normalizeTunnelProbeTargetHost.
+func validateLatencyTargetHostPort(host string, port int) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return errors.New("测试目标 Host 不能为空")
+	}
+	if port <= 0 || port > 65535 {
+		return errors.New("测试目标端口必须是 1-65535")
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, "/?#") || strings.ContainsAny(host, " \t\r\n") || isLatencyTargetSchemeLikeHost(host) {
+		return errors.New("测试目标 Host 不能包含协议或路径")
+	}
+	if !validLatencyTargetHost(host) {
+		return errors.New("测试目标 Host 格式无效")
+	}
+	return nil
+}
+
+// validLatencyTargetHost mirrors handler.normalizeTunnelProbeTargetHost
+// + isValidTunnelProbeTargetHost, plus the deterministic part of the
+// save-side host policy (loopback/unspecified literals and localhost
+// aliases) that needs no DNS lookup.
+func validLatencyTargetHost(host string) bool {
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return false
+		}
+		inner := host[1 : len(host)-1]
+		addr, err := netip.ParseAddr(inner)
+		return err == nil && addr.Is6() && !addr.IsLoopback() && !addr.IsUnspecified()
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return !addr.IsLoopback() && !addr.IsUnspecified()
+	}
+	if strings.Contains(host, ":") || isLatencyTargetIPv4Like(host) {
+		return false
+	}
+	if lower := strings.ToLower(strings.TrimSuffix(host, ".")); lower == "localhost" || strings.HasSuffix(lower, ".localhost") ||
+		lower == "ip6-localhost" || lower == "ip6-loopback" || lower == "localhost.localdomain" {
+		return false
+	}
+	return isValidLatencyTargetHostname(host)
+}
+
+// isValidLatencyTargetHostname mirrors handler.isValidTunnelProbeTargetHost.
+func isValidLatencyTargetHostname(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !latencyTargetIsASCIILetter(r) && !latencyTargetIsASCIIDigit(r) && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isLatencyTargetIPv4Like mirrors handler.isTunnelProbeTargetIPv4Like.
+func isLatencyTargetIPv4Like(host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, r := range host {
+		if !latencyTargetIsASCIIDigit(r) && r != '.' {
+			return false
+		}
+	}
+	return strings.Contains(host, ".")
+}
+
+// isLatencyTargetSchemeLikeHost mirrors handler.isTunnelProbeTargetSchemeLikeHost.
+func isLatencyTargetSchemeLikeHost(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	colon := strings.IndexByte(host, ':')
+	if colon <= 0 {
+		return false
+	}
+	for i, r := range host[:colon] {
+		if i == 0 {
+			if !latencyTargetIsASCIILetter(r) {
+				return false
+			}
+			continue
+		}
+		if !latencyTargetIsASCIILetter(r) && !latencyTargetIsASCIIDigit(r) && r != '+' && r != '-' && r != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func latencyTargetIsASCIILetter(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+func latencyTargetIsASCIIDigit(r rune) bool {
+	return r >= '0' && r <= '9'
 }
 
 // filterPeerShareAllowedDomains 剔除分享域名白名单中的空标签条目，

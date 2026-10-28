@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -309,6 +310,13 @@ func (h *Handler) resetUserQuotaWindows(now time.Time) {
 // notifyUserQuotaRecovered reports that a user's daily/monthly quota block
 // was lifted (R35-G-001 symmetric face of the exceed notify). Best effort:
 // a failed username lookup only skips the message, never the release.
+//
+// I-01：恢复通知不再走裸 h.notify。发送前先把“待发恢复通知”标记持久
+// 化进 vite_config（notify_quota_recovery_pending，按用户去重），再经
+// notifyTracked 派发；回调里发送成功（或 30 分钟指纹窗内已送达而被
+// 抑制、或通知未启用）才清除标记，发送失败则（重新）记下标记，由
+// checkUserReminders 的后续轮次（retryPendingQuotaRecoveryNotices）
+// 补发。标记先写后清、失败重记，任一交错下失败的恢复通知都不会丢失。
 func (h *Handler) notifyUserQuotaRecovered(userID int64, reason string) {
 	if h == nil || h.repo == nil || userID <= 0 {
 		return
@@ -318,8 +326,143 @@ func (h *Handler) notifyUserQuotaRecovered(userID int64, reason string) {
 		log.Printf("quota recovery notify skipped user_id=%d err=%v", userID, err)
 		return
 	}
-	h.notify(notifyEventUserQuota, "用户配额已恢复",
-		fmt.Sprintf("用户：%s\n%s，转发限制已解除", u.User, reason))
+	h.markQuotaRecoveryPending(userID, reason)
+	h.notifyTracked(notifyEventUserQuota, "用户配额已恢复",
+		fmt.Sprintf("用户：%s\n%s，转发限制已解除", u.User, reason),
+		func(outcome notifyOutcome) {
+			if outcome == notifyOutcomeFailed {
+				// 失败重记：与另一路并发派发的抑制清除交错时，标记
+				// 仍能留下来等下一轮补发（见上）。
+				h.markQuotaRecoveryPending(userID, reason)
+				return
+			}
+			h.clearQuotaRecoveryPending(userID)
+		})
+}
+
+// pendingQuotaRecovery is one undelivered quota-recovery notice,
+// persisted in vite_config under notifyQuotaRecoveryPendingConfigKey.
+type pendingQuotaRecovery struct {
+	UserID int64  `json:"userId"`
+	Reason string `json:"reason"`
+	At     int64  `json:"at"`
+}
+
+// notifyQuotaRecoveryPendingConfigKey holds the pending quota-recovery
+// notices (I-01). Runtime ledger, not admin config: excluded from
+// backups by backupRuntimeExcludedConfigKeys.
+const notifyQuotaRecoveryPendingConfigKey = "notify_quota_recovery_pending"
+
+func (h *Handler) loadPendingQuotaRecoveries() []pendingQuotaRecovery {
+	if h == nil || h.repo == nil {
+		return nil
+	}
+	h.quotaRecoveryMu.Lock()
+	defer h.quotaRecoveryMu.Unlock()
+	return h.loadPendingQuotaRecoveriesLocked()
+}
+
+func (h *Handler) loadPendingQuotaRecoveriesLocked() []pendingQuotaRecovery {
+	cfg, err := h.repo.GetConfigByName(notifyQuotaRecoveryPendingConfigKey)
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Value) == "" {
+		return nil
+	}
+	var list []pendingQuotaRecovery
+	if err := json.Unmarshal([]byte(cfg.Value), &list); err != nil {
+		// 损坏的待发记录无法解析：记日志后丢弃，避免每轮重试都
+		// 卡在同一行上。
+		log.Printf("quota recovery pending list corrupt, dropping: %v", err)
+		_ = h.repo.UpsertConfig(notifyQuotaRecoveryPendingConfigKey, "[]", time.Now().UnixMilli())
+		return nil
+	}
+	return list
+}
+
+func (h *Handler) savePendingQuotaRecoveriesLocked(list []pendingQuotaRecovery) {
+	if len(list) == 0 {
+		if err := h.repo.UpsertConfig(notifyQuotaRecoveryPendingConfigKey, "[]", time.Now().UnixMilli()); err != nil {
+			log.Printf("quota recovery pending clear failed: %v", err)
+		}
+		return
+	}
+	raw, err := json.Marshal(list)
+	if err != nil {
+		log.Printf("quota recovery pending marshal failed: %v", err)
+		return
+	}
+	if err := h.repo.UpsertConfig(notifyQuotaRecoveryPendingConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+		log.Printf("quota recovery pending save failed: %v", err)
+	}
+}
+
+func (h *Handler) markQuotaRecoveryPending(userID int64, reason string) {
+	if h == nil || h.repo == nil || userID <= 0 {
+		return
+	}
+	h.quotaRecoveryMu.Lock()
+	defer h.quotaRecoveryMu.Unlock()
+	list := h.loadPendingQuotaRecoveriesLocked()
+	now := time.Now().UnixMilli()
+	for i := range list {
+		if list[i].UserID == userID {
+			list[i].Reason = reason
+			list[i].At = now
+			h.savePendingQuotaRecoveriesLocked(list)
+			return
+		}
+	}
+	list = append(list, pendingQuotaRecovery{UserID: userID, Reason: reason, At: now})
+	h.savePendingQuotaRecoveriesLocked(list)
+}
+
+func (h *Handler) clearQuotaRecoveryPending(userID int64) {
+	if h == nil || h.repo == nil || userID <= 0 {
+		return
+	}
+	h.quotaRecoveryMu.Lock()
+	defer h.quotaRecoveryMu.Unlock()
+	list := h.loadPendingQuotaRecoveriesLocked()
+	kept := list[:0]
+	for _, p := range list {
+		if p.UserID != userID {
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) == len(list) {
+		return
+	}
+	h.savePendingQuotaRecoveriesLocked(kept)
+}
+
+// retryPendingQuotaRecoveryNotices resends recovery notices whose send
+// failed at unblock time (I-01). Called from the 10-minute
+// checkUserReminders round, the same loop that retries failed exceed
+// notices via alertOnce/unalert. Entries whose user is gone, or who
+// has since been blocked again, are dropped: the recovery is no
+// longer true, and a later unblock re-creates the mark.
+func (h *Handler) retryPendingQuotaRecoveryNotices(now time.Time) {
+	if h == nil || h.repo == nil || h.notifier == nil {
+		return
+	}
+	pending := h.loadPendingQuotaRecoveries()
+	for _, p := range pending {
+		if p.UserID <= 0 {
+			h.clearQuotaRecoveryPending(p.UserID)
+			continue
+		}
+		u, err := h.repo.GetUserByID(p.UserID)
+		if err != nil || u == nil {
+			log.Printf("quota recovery retry dropped user_id=%d: user gone", p.UserID)
+			h.clearQuotaRecoveryPending(p.UserID)
+			continue
+		}
+		if view, err := h.repo.GetUserQuotaView(p.UserID, now); err == nil && view != nil &&
+			(view.DisabledByQuota == 1 || isUserQuotaExceeded(view)) {
+			h.clearQuotaRecoveryPending(p.UserID)
+			continue
+		}
+		h.notifyUserQuotaRecovered(p.UserID, p.Reason)
+	}
 }
 
 // quotaResetReason renders the manual-reset scope for the recovery notice.
@@ -349,6 +492,17 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.UserID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("用户ID不能为空"))
+		return
+	}
+	// G-QUOTA-01：重置前校验用户存在（与 userSubscriptionSet 的
+	// R2X-012 同口径），不存在即报错，不建孤儿 user_quota 行。
+	u, err := h.repo.GetUserByID(req.UserID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if u == nil {
+		response.WriteJSON(w, response.ErrDefault("用户不存在"))
 		return
 	}
 	release, err := h.repo.ResetUserQuotaUsage(req.UserID, req.Scope, time.Now())
