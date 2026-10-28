@@ -239,9 +239,12 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 	// 三处 A2-03 门），致 sing-box 与 Surge 面整节点丢弃、URI 面静默
 	// 丢插件参数。finishProxy 为四格式的共同收口（与 R4X-001 cipher
 	// 小写化同形），在此一处把两别名拼写归一为 obfs；其余三格式进口
-	// 已归一，本处对它们是空操作。plugin-opts 的 {mode, host} 键
-	// Clash 原生即与面板内形态一致，无需转换（与 applySSPlugin 的
-	// obfs/obfs-host 键映射不同，彼为 SIP003 串形态）。归一后 A2-03
+	// 已归一，本处对它们是空操作。plugin-opts 的 mode 键 Clash 原生
+	// 即与面板内形态一致，无需转换（与 applySSPlugin 的 obfs/obfs-host
+	// 键映射不同，彼为 SIP003 串形态）；但 host 键不在此列——R3-L-01：
+	// Clash 用户常写大写 `Host`，该键原样落库（存储键不改写，见
+	// CLOSED-LIST §2e），渲染面须经 firstHeaderHostValue 大小写不敏感
+	// 读取，不得精确读小写 `host`。归一后 A2-03
 	// 门（mode 合法集 {http, tls} + 小写愈合）对别名拼写同样生效。
 	// 大小写不敏感判定与 A2-03 门 / ssPluginString 同口径。
 	// B-03：先把 plugin 名本身小写愈合落库（OBFS / V2Ray-Plugin /

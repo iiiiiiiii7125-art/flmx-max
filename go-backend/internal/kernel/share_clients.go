@@ -248,11 +248,11 @@ func loonLine(p Proxy) (string, bool) {
 		case "":
 		case "obfs":
 			add("obfs-name=" + po.str("mode"))
-			addIf("obfs-host", po.str("host"))
+			addIf("obfs-host", firstHeaderHostValue(po))
 			addIf("obfs-uri", po.str("path"))
 		case "shadow-tls":
 			add("shadow-tls-password=" + loonEscape(po.str("password")))
-			addIf("shadow-tls-sni", po.str("host"))
+			addIf("shadow-tls-sni", firstHeaderHostValue(po))
 			if v := po.num("version"); v > 0 {
 				add(fmt.Sprintf("shadow-tls-version=%d", v))
 			}
@@ -451,7 +451,7 @@ func qxLine(p Proxy) (string, bool) {
 		case "":
 		case "obfs":
 			add("obfs=" + po.str("mode"))
-			addIf("obfs-host", po.str("host"))
+			addIf("obfs-host", firstHeaderHostValue(po))
 			addIf("obfs-uri", po.str("path"))
 		default:
 			return "", false
