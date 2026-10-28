@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -121,6 +122,11 @@ func isValidAgentVersion(v string) bool {
 	return agentVersionRe.MatchString(v)
 }
 
+// C-01：重定向解析出的 tag 会进入 nodeInstall 的 shell 命令
+// （VERSION=%s 无引号拼接），生产处必须校验字符集：只允
+// [0-9A-Za-z.-]，拒一切 shell 元字符（; $ 空格 | 等）。
+var redirectTagPattern = regexp.MustCompile(`^[0-9A-Za-z.-]+$`)
+
 // ---- GitHub 版本列表缓存 ----
 // 未认证 GitHub API 限流 60 次/小时/IP（面板出口常为共享 NAT，更易耗尽）。
 // 版本列表不需要实时：成功结果缓存 10 分钟，节点升级下拉、系统检查更新、
@@ -216,7 +222,9 @@ func fetchGitHubReleasesWithProxy(perPage int, proxyURL string) ([]githubRelease
 
 func fetchGitHubReleasesPage(url string) ([]githubRelease, error) {
 	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）。
-	client := &http.Client{Timeout: 30 * time.Second}
+	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检），原始客户端
+	// 会被代理 302 引向内网地址。
+	client := githubVersionFetchClient()
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
@@ -276,6 +284,11 @@ func fetchLatestTagByRedirect(url string) (string, error) {
 	}
 	defer resp.Body.Close()
 	loc := resp.Header.Get("Location")
+	// C-01：Location host 须为 githubHTMLBase 的 host（相对 Location
+	// 无 host 时跳过本项）；恶意代理不得把 tag 解析引向站外地址。
+	if err := validateRedirectLocationHost(loc); err != nil {
+		return "", err
+	}
 	const marker = "/releases/tag/"
 	i := strings.Index(loc, marker)
 	if i < 0 {
@@ -288,7 +301,31 @@ func fetchLatestTagByRedirect(url string) (string, error) {
 	if tag == "" {
 		return "", fmt.Errorf("无法从重定向解析最新版本: %q", loc)
 	}
+	// C-01：tag 字符集校验（纵深第一道；第二道在 nodeInstall）。
+	if !redirectTagPattern.MatchString(tag) {
+		return "", fmt.Errorf("重定向解析的版本号格式无效: %q", tag)
+	}
 	return tag, nil
+}
+
+// validateRedirectLocationHost 校验重定向 Location 的 host：绝对地址
+// 必须指向 githubHTMLBase 的 host；相对地址（无 host）放行。
+func validateRedirectLocationHost(loc string) error {
+	u, err := url.Parse(loc)
+	if err != nil {
+		return fmt.Errorf("重定向地址解析失败: %v", err)
+	}
+	if u.Host == "" {
+		return nil
+	}
+	expected, err := url.Parse(githubHTMLBase)
+	if err != nil {
+		return fmt.Errorf("GitHub 地址配置无效: %v", err)
+	}
+	if !strings.EqualFold(u.Hostname(), expected.Hostname()) {
+		return fmt.Errorf("重定向地址主机不受信任: %q", u.Host)
+	}
+	return nil
 }
 
 func resolveLatestReleaseByChannel(channel string) (string, error) {
@@ -301,8 +338,11 @@ func resolveLatestReleaseByChannelWithProxy(channel string, proxyURL string) (st
 	releases, err := fetchGitHubReleasesWithProxy(50, proxyURL)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
+		// J-03：兜底亦须过渠道过滤——稳定渠道只接受纯数字 tag
+		// （releaseChannelFromTag(tag)==stable），命中 beta 时继续报
+		// API 错误，不得把测试版当成最新正式版返回。
 		if normalizedChannel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirectWithProxy(proxyURL); ferr == nil {
+			if tag, ferr := resolveLatestTagByRedirectWithProxy(proxyURL); ferr == nil && releaseChannelFromTag(tag) == normalizedChannel {
 				return tag, nil
 			}
 		}

@@ -140,3 +140,12 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_unique;"
 - 单个文件上限 300MB，总缓存上限 2GB，缓存目录随数据库路径自动推导
 - release tag 的文件永久缓存；`latest`、raw 文件和 API 响应按 TTL 刷新
 - GitHub 不可达时返回已缓存的旧副本，不会直接报错
+
+### 版本发现的出站安全策略
+
+内核版本列表、节点升级版本列表与面板自升级版本发现（即系统设置里「开启 GitHub 加速」走的版本查询）与订阅源共用同一套出站安全策略：重定向逐跳复检，云元数据地址（`169.254.169.254`）在任何配置下都被拒绝，私网/回环/链路本地目标默认拒绝。
+
+- 用内网代理或本地代理（如 `http://127.0.0.1:8080` 的 gh-proxy）做加速地址时，须显式放行，否则版本列表会报错：
+  - `FLMX_FETCH_PRIVATE_ALLOWLIST=127.0.0.1/32`：仅放行指定 CIDR（推荐）
+  - `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
+- 公网加速地址（如默认的 `https://gcode.hostcentral.cc`）不受影响，无需配置。

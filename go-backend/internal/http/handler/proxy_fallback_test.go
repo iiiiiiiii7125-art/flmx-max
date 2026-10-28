@@ -27,6 +27,9 @@ func failingUpstreamForTest(t *testing.T) *httptest.Server {
 }
 
 func TestFetchGitHubReleasesViaProxyWhenDirectFails(t *testing.T) {
+	// C-02：版本发现走加固 fetch 助手后，本地测试代理须配 allowlist
+	// 才放行（与生产内网代理同口径）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
 	direct := failingUpstreamForTest(t)
 	var proxyHits atomic.Int32
@@ -55,6 +58,8 @@ func TestFetchGitHubReleasesViaProxyWhenDirectFails(t *testing.T) {
 }
 
 func TestFetchGitHubReleasesFallsBackToDirectWhenProxyFails(t *testing.T) {
+	// C-02：同上，本地测试代理须配 allowlist。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
 	proxy := failingUpstreamForTest(t)
 	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +101,8 @@ func TestResolveLatestTagByRedirectViaProxy(t *testing.T) {
 }
 
 func TestKernelReleaseVersionsViaProxyWhenDirectFails(t *testing.T) {
+	// C-02：同上，本地测试代理须配 allowlist。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	resetKernelVersionCache(t)
 	direct := failingUpstreamForTest(t)
 	var proxyHits atomic.Int32

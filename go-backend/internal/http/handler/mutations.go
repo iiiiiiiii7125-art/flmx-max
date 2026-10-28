@@ -357,8 +357,13 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// G-UPDATE-01：与同函数 syncUserMaxConnForwards（:415-419）同口径——
+	// 隧道限额同步失败即上抛，不再只记日志回成功（否则用户行是新值、
+	// 全部 user_tunnel 行仍是旧限额，且前端无任何信号）。
 	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
 		log.Printf("propagate user flow to tunnels failed user_id=%d err=%v", id, err)
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("隧道限额同步失败: %v", err)))
+		return
 	}
 	if hasUpdateQuota {
 		tx := h.repo.BeginTx()
@@ -1251,6 +1256,14 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	version, err := resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
+		return
+	}
+
+	// C-01（纵深第二道）：version 随后无引号拼入以 root 执行的安装
+	// 命令（VERSION=%s），与 nodeUpgrade/nodeBatchUpgrade 同口径
+	// 严格校验；第一道在 fetchLatestTagByRedirect。
+	if !isValidAgentVersion(version) {
+		response.WriteJSON(w, response.ErrDefault("版本号格式无效"))
 		return
 	}
 
@@ -7110,11 +7123,25 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			continue
 		}
 		port := asInt(n["port"], 0)
+		portVal := sql.NullInt64{Int64: int64(port), Valid: true}
 		if port <= 0 {
-			var pickErr error
-			port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
-			if pickErr != nil {
-				return pickErr
+			// E-01：与 prepareTunnelCreateState（:5578）同口径——远端
+			// 节点端口留 NULL，待联邦层预留后由 bindTx 写回；此前无
+			// 条件 PickRandomNodePortTx 会把未预留的随机端口写进链行，
+			// 无端口段分享更会误报"节点端口已满"。
+			isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
+			if remoteErr != nil {
+				return remoteErr
+			}
+			if isRemote {
+				portVal = sql.NullInt64{}
+			} else {
+				var pickErr error
+				port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
+				if pickErr != nil {
+					return pickErr
+				}
+				portVal = sql.NullInt64{Int64: int64(port), Valid: true}
 			}
 		}
 		connectIp := asString(n["connectIp"])
@@ -7123,7 +7150,7 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			tunnelID,
 			"3",
 			nodeID,
-			sql.NullInt64{Int64: int64(port), Valid: true},
+			portVal,
 			defaultString(asString(n["strategy"]), "round"),
 			i+1,
 			defaultString(asString(n["protocol"]), "tls"),
@@ -7140,11 +7167,23 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 				continue
 			}
 			port := asInt(n["port"], 0)
+			portVal := sql.NullInt64{Int64: int64(port), Valid: true}
 			if port <= 0 {
-				var pickErr error
-				port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
-				if pickErr != nil {
-					return pickErr
+				// E-01：与 prepareTunnelCreateState（:5617）同口径——
+				// 远端节点端口留 NULL（见出口分支注释）。
+				isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
+				if remoteErr != nil {
+					return remoteErr
+				}
+				if isRemote {
+					portVal = sql.NullInt64{}
+				} else {
+					var pickErr error
+					port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
+					if pickErr != nil {
+						return pickErr
+					}
+					portVal = sql.NullInt64{Int64: int64(port), Valid: true}
 				}
 			}
 			connectIp := asString(n["connectIp"])
@@ -7153,7 +7192,7 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 				tunnelID,
 				"2",
 				nodeID,
-				sql.NullInt64{Int64: int64(port), Valid: true},
+				portVal,
 				defaultString(asString(n["strategy"]), "round"),
 				i+1,
 				defaultString(asString(n["protocol"]), "tls"),
