@@ -960,7 +960,12 @@ func parseClashProfile(text string) ([]ImportedNode, []string) {
 			errs = append(errs, fmt.Sprintf("第 %d 个节点：%v", i+1, err))
 			continue
 		}
-		node, err := finishProxy(normalizeYAML(raw).(map[string]interface{}))
+		// R2-L3-F-02：Clash 原生 `fingerprint`（uTLS）归一为面板内规范键
+		// `client-fingerprint`（见 normalizeClashFingerprint），再进
+		// finishProxy 的 R10X-001 合法集校验。
+		rawMap := normalizeYAML(raw).(map[string]interface{})
+		normalizeClashFingerprint(Proxy(rawMap))
+		node, err := finishProxy(rawMap)
 		if err != nil {
 			name := Proxy(raw).str("name")
 			if name == "" {
@@ -975,6 +980,61 @@ func parseClashProfile(text string) ([]ImportedNode, []string) {
 		errs = append(errs, "Clash 配置里没有 proxies")
 	}
 	return nodes, errs
+}
+
+// normalizeClashFingerprint 把 Clash 原生键 `fingerprint` 归一为面板内
+// 规范键 `client-fingerprint`（R2-L3-F-02）。parseClashProfile 此前整条
+// 透传、无键映射：合法 uTLS 值只存于 `fingerprint` 键，sing-box 面回落
+// chrome、分享链接丢 `fp` 参数、Xray 链式面回落默认指纹，仅 Clash 面靠
+// 原 map 透传存活；垃圾值更绕过 finishProxy 的 R10X-001 合法集校验。
+//
+// 只归一 vless / vmess / trojan / anytls 四类：这四类在 Mihomo 里
+// `fingerprint` 即 uTLS 指纹，且面板三面（sing-box utls、分享链接 fp、
+// Xray 链式 Fingerprint）只读 `client-fingerprint`。hysteria2 的
+// `fingerprint` 是证书 pin（SHA-256，与内部 `fingerprint` 键同义，
+// proxyURI 的 pinSHA256 与 chain.go:443 的 PinSHA256 消费），须原样
+// 保留；tuic / ss 等其余类型在 Mihomo 里无 uTLS fingerprint 键，同样不动。
+//
+// `fingerprint` 本身是双义键：uTLS 指纹（11 值短 token）与证书 pin
+// （64 位十六进制 SHA-256）无交集——按值形态区分：pin 形态原样保留
+// （此时 `fingerprint` 键仍为 pin 的唯一载体，删不得）；其余形态按
+// 链接面 `fp` 的口径处理（`p.set` 只写非空、已有规范值不被覆盖）：
+// 优先级 client-fingerprint（面板规范键，已在位者为准）> fingerprint
+// （Clash 原生）> fp（非标准别名，末位兜底）。归一后删除原键：
+// 映射掉的值若残留，Clash 面透传时新旧双键并存、面板内成双源头；
+// 落入 `client-fingerprint` 的垃圾值由 finishProxy 的 R10X-001 拒收
+// （0 落库），不由本函数另设校验。
+func normalizeClashFingerprint(p Proxy) {
+	switch p.Type() {
+	case "vless", "vmess", "trojan", "anytls":
+	default:
+		return
+	}
+	if isSHA256HexPin(p.str("fingerprint")) {
+		delete(p, "fp")
+		return
+	}
+	if p.str("client-fingerprint") == "" {
+		p.set("client-fingerprint", firstNonEmptyString(p.str("fingerprint"), p.str("fp")))
+	}
+	delete(p, "fingerprint")
+	delete(p, "fp")
+}
+
+// isSHA256HexPin reports whether s is a 64-hex-digit SHA-256 value — the
+// certificate-pin shape of the `fingerprint` key (vs. the short uTLS
+// tokens in ValidClientFingerprint's set).
+func isSHA256HexPin(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeYAML turns yaml.v3 values into JSON-compatible ones.
