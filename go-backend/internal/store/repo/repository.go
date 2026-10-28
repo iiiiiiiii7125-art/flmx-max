@@ -4304,10 +4304,26 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 					rep.skip("forwardPorts")
 					continue
 				}
+				// R3-H-01：恢复侧 ForwardPort.InIP 复用与保存侧 intake
+				// （stripAndValidateNodeAddress）及隧道 InIP（F-07(iii)）
+				// 同口径的剥离 + 校验：单端口剥离后入库；非法值（含空
+				// 标签主机名、双端口）丢弃该端口行 + warning 点名
+				// （warning 不含值原文，防大值膨胀回执；R2-H-02 同例）。
+				// 空即 NULL（与隧道 InIP 既有口径一致）。
+				inIP := strings.TrimSpace(fp.InIP)
+				if inIP != "" {
+					stripped := stripIngressHostPort(inIP)
+					if !validImportNodeAddress(stripped) {
+						rep.skip("forwardPorts")
+						rep.warnf("备份恢复：转发 #%d（%q）的端口行（节点 #%d，端口 %d）的监听 IP 格式非法，已跳过该端口行未恢复，请核对转发端口配置", f.ID, f.Name, fp.NodeID, fp.Port)
+						continue
+					}
+					inIP = stripped
+				}
 				// O7-005：恢复 ForwardPort 的 InIP（sql.NullString）
 				if err := tx.Create(&model.ForwardPort{
 					ForwardID: f.ID, NodeID: fp.NodeID, Port: fp.Port,
-					InIP: sql.NullString{String: fp.InIP, Valid: fp.InIP != ""},
+					InIP: sql.NullString{String: inIP, Valid: inIP != ""},
 				}).Error; err != nil {
 					return count, err
 				}
