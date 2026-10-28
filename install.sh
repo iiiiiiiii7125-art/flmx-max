@@ -156,7 +156,16 @@ ask_proxy_config() {
 }
 
 resolve_latest_release_tag() {
-  local effective_url tag api_tag latest_url api_url
+  local effective_url tag api_tag latest_url api_url tag_pattern
+
+  # J-02: 渠道分流（与 Go 侧 releaseChannelFromTag / stableVersionPattern
+  # 同口径）。稳定渠道只接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta
+  # 时接受任意数字开头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta；
+  # beta 须显式 VERSION 指定或切 dev/beta 渠道安装。
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) tag_pattern='^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) tag_pattern='^[0-9]+(\.[0-9]+)+$' ;;
+  esac
 
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
@@ -165,13 +174,13 @@ resolve_latest_release_tag() {
   tag="${effective_url##*/}"
   # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
   # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
-  if [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
+  if [[ "$tag" =~ $tag_pattern ]]; then
     echo "$tag"
     return 0
   fi
 
   api_tag=$(curl -fsSL "$(maybe_proxy_url "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  if [[ "$api_tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
+  if [[ "$api_tag" =~ $tag_pattern ]]; then
     echo "$api_tag"
     return 0
   fi

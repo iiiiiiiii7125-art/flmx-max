@@ -164,7 +164,16 @@ ask_proxy_config() {
 }
 
 resolve_latest_release_tag() {
-  local effective_url tag api_tag latest_url api_url
+  local effective_url tag api_tag latest_url api_url tag_pattern
+
+  # J-02: 渠道分流（与 Go 侧 releaseChannelFromTag / stableVersionPattern
+  # 同口径）。稳定渠道只接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta
+  # 时接受任意数字开头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta；
+  # beta 须显式 VERSION 指定或切 dev/beta 渠道安装。
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) tag_pattern='^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) tag_pattern='^[0-9]+(\.[0-9]+)+$' ;;
+  esac
 
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
@@ -173,13 +182,13 @@ resolve_latest_release_tag() {
   tag="${effective_url##*/}"
   # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
   # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
-  if [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
+  if [[ "$tag" =~ $tag_pattern ]]; then
     echo "$tag"
     return 0
   fi
 
   api_tag=$(curl -fsSL "$(maybe_proxy_url "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  if [[ "$api_tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]]; then
+  if [[ "$api_tag" =~ $tag_pattern ]]; then
     echo "$api_tag"
     return 0
   fi
@@ -583,7 +592,7 @@ setup_domain_proxy() {
     for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
       [[ "$_env_file" == "/.env" ]] && continue
       _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
-      if [[ "$_port" =~ ^[0-9]+$ ]] && (( _port >= 1 && _port <= 65535 )); then
+      if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
         FRONTEND_PORT="$_port"
         echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
         break
@@ -785,11 +794,11 @@ validate_panel_update_environment() {
 
   backend_port=$(get_env_var "BACKEND_PORT" || true)
   frontend_port=$(get_env_var "FRONTEND_PORT" || true)
-  if [[ ! "$backend_port" =~ ^[0-9]+$ || "$backend_port" -lt 1 || "$backend_port" -gt 65535 ]]; then
+  if [[ ! "$backend_port" =~ ^[0-9]+$ ]] || (( 10#$backend_port < 1 || 10#$backend_port > 65535 )); then
     echo "❌ BACKEND_PORT 不是有效端口：$backend_port"
     return 1
   fi
-  if [[ ! "$frontend_port" =~ ^[0-9]+$ || "$frontend_port" -lt 1 || "$frontend_port" -gt 65535 ]]; then
+  if [[ ! "$frontend_port" =~ ^[0-9]+$ ]] || (( 10#$frontend_port < 1 || 10#$frontend_port > 65535 )); then
     echo "❌ FRONTEND_PORT 不是有效端口：$frontend_port"
     return 1
   fi
