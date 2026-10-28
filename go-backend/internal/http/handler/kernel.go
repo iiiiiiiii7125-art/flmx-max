@@ -1892,7 +1892,8 @@ func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernel
 
 func fetchKernelReleaseVersionsPage(url string) ([]kernelVersionItem, error) {
 	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）。
-	client := &http.Client{Timeout: 30 * time.Second}
+	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检）。
+	client := githubVersionFetchClient()
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("获取版本列表失败: %v", err)

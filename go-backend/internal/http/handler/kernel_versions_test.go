@@ -21,6 +21,9 @@ func resetKernelVersionCache(t *testing.T) {
 
 func stubReleasesAPI(t *testing.T, payload string) {
 	t.Helper()
+	// C-02：内核版本列表走加固 fetch 助手后，本地测试服务器须配
+	// allowlist 才放行（与生产内网代理同口径）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(payload))

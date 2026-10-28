@@ -855,7 +855,8 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	}
 
 	// U1-006：超时 15s → 30s（经代理多一跳 + 50 条 release JSON，慢代理下 15s 偏紧）。
-	client := &http.Client{Timeout: 30 * time.Second}
+	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检）。
+	client := githubVersionFetchClient()
 	apiURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, perPage)
 
 	// U1-001：代理开启时先试代理路径，失败降级直连。
@@ -913,8 +914,10 @@ func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (st
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
 		// F-029：重定向解析也走代理感知变体，与节点侧同口径。
+		// J-03：兜底亦须过渠道过滤——稳定渠道只接受纯数字 tag，
+		// 命中 beta 时继续报 API 错误（与节点侧同口径）。
 		if normalizedChannel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirectWithProxy(h.githubProxyURLForFetch()); ferr == nil {
+			if tag, ferr := resolveLatestTagByRedirectWithProxy(h.githubProxyURLForFetch()); ferr == nil && releaseChannelFromTag(tag) == normalizedChannel {
 				return tag, nil
 			}
 		}

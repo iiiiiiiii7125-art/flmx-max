@@ -33,6 +33,9 @@ func swapGitHubBasesForTest(t *testing.T, api, html string) {
 }
 
 func TestFetchGitHubReleasesCachesSuccess(t *testing.T) {
+	// C-02：版本发现走加固 fetch 助手后，本地测试服务器须配 allowlist
+	// 才放行（与生产内网代理同口径）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +61,8 @@ func TestFetchGitHubReleasesCachesSuccess(t *testing.T) {
 }
 
 func TestFetchGitHubReleasesRateLimitMessage(t *testing.T) {
+	// C-02：同上，本地测试服务器须配 allowlist。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -73,6 +78,9 @@ func TestFetchGitHubReleasesRateLimitMessage(t *testing.T) {
 }
 
 func TestResolveLatestFallsBackToRedirect(t *testing.T) {
+	// C-02：同上，API 侧本地测试服务器须配 allowlist（重定向侧
+	// fetchLatestTagByRedirect 保持不跟随、不走加固助手）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
 	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

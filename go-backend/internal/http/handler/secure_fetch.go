@@ -293,6 +293,37 @@ func redactFetchErrorChanged(err error) (error, bool) {
 	return err, false
 }
 
+// C-02：GitHub 版本发现共用加固 fetch 助手——三处版本列表拉取
+// （内核 fetchKernelReleaseVersionsPage、节点 fetchGitHubReleasesPage、
+// 面板 fetchSystemUpgradeReleases）此前用原始 http.Client，代理 302
+// 可把面板引向内网地址（盲 SSRF，违反 S-C）。本助手复用 SecureFetch
+// 的同一套守卫：钉死拨号（硬拒层 + 私网须 allowlist）与逐跳重定向
+// 复检（限 5 跳）；状态码/响应体处理仍由各调用方自行负责。
+// 行为变更：本机/私网代理目标默认被禁，须配
+// FLMX_FETCH_PRIVATE_ALLOWLIST（或 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true）
+// 显式放行，见 doc/guide/upgrade.md。
+func githubVersionFetchClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: secureFetchDialContext,
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= secureFetchMaxRedirects {
+				return fmt.Errorf("too many redirects")
+			}
+			// 每跳重跑全链（硬拒层 + 私网 allowlist + 公网强制 https）。
+			if _, err := validateFetchURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
 // SecureFetch 安全下载（R5-B5B D17）。
 func SecureFetch(ctx context.Context, rawURL string) ([]byte, error) {
 	body, _, err := SecureFetchWithHeader(ctx, rawURL)
