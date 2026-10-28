@@ -1636,6 +1636,16 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 			return "", fmt.Errorf("通知地址主机名格式无效：%w", err)
 		}
 		return value, nil
+	case "notify_telegram_api_base":
+		// 再审计 X-04：与 notify_webhook_url（R-03）同型同口径——
+		// Telegram API 基址亦为 URL 型主机名字段，保存期补语法层
+		// 空标签判；使用期 sendTelegram → validateNotifyURL 的 DNS
+		// fail-closed 口径不变。空值走调用方的可清空语义（留空回落
+		// 默认 https://api.telegram.org），在此不拒。
+		if err := validateNoEmptyLabelURLHost(value); err != nil {
+			return "", fmt.Errorf("通知地址主机名格式无效：%w", err)
+		}
+		return value, nil
 	default:
 		return value, nil
 	}

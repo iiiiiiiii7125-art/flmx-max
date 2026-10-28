@@ -6165,7 +6165,11 @@ func configValueHasEmptyLabelHost(name, value string) bool {
 		return kernel.HasEmptyLabel(strings.TrimSpace(value))
 	case "ip":
 		return addrsHaveEmptyLabel(strings.TrimSpace(value))
-	case "github_proxy_url", "notify_webhook_url":
+	case "github_proxy_url", "notify_webhook_url", "notify_telegram_api_base":
+		// X-04 镜像同步：保存面新增 notify_telegram_api_base 后恢复面
+		// 同口径补齐。当前该键在 sensitiveConfigKeys 中、FilterBackupConfigs
+		// 在 importConfigs 之前已滤除，故恢复面本就触不到此 case；补齐只
+		// 为守住“恢复面与保存面同口径”的不变量，防过滤口径日后变化重开缺口。
 		return urlHostHasEmptyLabel(value)
 	default:
 		return false

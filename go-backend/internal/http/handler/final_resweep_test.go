@@ -32,6 +32,25 @@ func TestResweepNotifyWebhookURLConfigRejectsEmptyLabel(t *testing.T) {
 	}
 }
 
+// X-04：配置 `notify_telegram_api_base` 保存面接受 `https://a..b/`。
+// normalizeAndValidateConfigValue 中该键无 case，落入 default 原样放行；
+// 与 R-03（notify_webhook_url）同型同口径。前端 notify-card.tsx 两键均为
+// 纯文本输入、webhook 亦无前端校验，故前端不动。
+func TestResweepNotifyTelegramAPIBaseConfigRejectsEmptyLabel(t *testing.T) {
+	for _, u := range []string{"https://a..b/", "https://a...b/"} {
+		if _, err := normalizeAndValidateConfigValue("notify_telegram_api_base", u); err == nil {
+			t.Errorf("normalizeAndValidateConfigValue(notify_telegram_api_base, %q) = nil, want error", u)
+		} else if !strings.Contains(err.Error(), "空标签") {
+			t.Errorf("normalizeAndValidateConfigValue(notify_telegram_api_base, %q) = %v, want empty-label error", u, err)
+		}
+	}
+	for _, u := range []string{"", "https://example.com/", "https://api.telegram.org", "https://203.0.113.9/"} {
+		if _, err := normalizeAndValidateConfigValue("notify_telegram_api_base", u); err != nil {
+			t.Errorf("normalizeAndValidateConfigValue(notify_telegram_api_base, %q) = %v, want nil", u, err)
+		}
+	}
+}
+
 // R-02：一键测算探测 ReferenceHost / SpeedtestURL 接受空标签主机名。
 // nodeTune probe 动作只做 SplitHostPort / scheme 前缀检查，两值透传给 agent
 // 拨号/下载，探测期才 loud 失败。Handler 边界测试：修复前应走到
