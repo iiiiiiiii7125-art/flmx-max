@@ -240,6 +240,55 @@ func importPluginHosts(p Proxy) []string {
 	return out
 }
 
+// winnerHostKey returns the spelling key that firstHeaderHostValue
+// reads from m, or "" when m carries no host value. It mirrors
+// firstHeaderHostValue step for step: exact "Host" first, exact
+// "host" second (both via strs, which drops empty elements), then the
+// byte-order smallest remaining EqualFold spelling that contributes a
+// value under headerHostValues expansion (checked per key through
+// headerHostValues itself, so the expansion rules cannot drift apart).
+func winnerHostKey(m Proxy) string {
+	if vals := m.strs("Host"); len(vals) > 0 {
+		return "Host"
+	}
+	if vals := m.strs("host"); len(vals) > 0 {
+		return "host"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if strings.EqualFold(k, "host") {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if len(headerHostValues(Proxy{k: m[k]})) > 0 {
+			return k
+		}
+	}
+	return ""
+}
+
+// normalizeHostKeySpelling collapses every host-spelling key in m to
+// the single winner spelling (R-STORE-01). Only the key names change:
+// the winner key keeps its value verbatim (string stays string, list
+// stays list, list-first-element semantics unchanged), so every render
+// face still reads the same winner value through firstHeaderHostValue.
+// With no winner (no host value at all) the map is left untouched.
+// Callers must run this only after validation has passed: validation
+// reads every spelling's values, while this drops the loser values.
+func normalizeHostKeySpelling(m Proxy) {
+	winner := winnerHostKey(m)
+	if winner == "" {
+		return
+	}
+	for k := range m {
+		if k != winner && strings.EqualFold(k, "host") {
+			delete(m, k)
+		}
+	}
+}
+
 // finishProxy validates a parsed proxy and fills the node fields.
 func finishProxy(p Proxy) (ImportedNode, error) {
 	t := p.Type()
@@ -282,9 +331,11 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 	// 已归一，本处对它们是空操作。plugin-opts 的 mode 键 Clash 原生
 	// 即与面板内形态一致，无需转换（与 applySSPlugin 的 obfs/obfs-host
 	// 键映射不同，彼为 SIP003 串形态）；但 host 键不在此列——R3-L-01：
-	// Clash 用户常写大写 `Host`，该键原样落库（存储键不改写，见
-	// CLOSED-LIST §2e），渲染面须经 firstHeaderHostValue 大小写不敏感
-	// 读取，不得精确读小写 `host`。归一后 A2-03
+	// Clash 用户常写大写 `Host`，渲染面须经 firstHeaderHostValue 大小
+	// 写不敏感读取，不得精确读小写 `host`。R-STORE-01：新导入行
+	// 的 host 键在 finishProxy 末尾归一为胜者拼写（原 §2e“存储键
+	// 不改写”设计变更为新导入行归一；存量行不迁移，仍经 helper
+	// 读取）。归一后 A2-03
 	// 门（mode 合法集 {http, tls} + 小写愈合）对别名拼写同样生效。
 	// 大小写不敏感判定与 A2-03 门 / ssPluginString 同口径。
 	// B-03：先把 plugin 名本身小写愈合落库（OBFS / V2Ray-Plugin /
@@ -306,6 +357,22 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 	if err := validateImportHostnames(p); err != nil {
 		return ImportedNode{}, err
 	}
+	// R-STORE-01：校验通过后，在 finishProxy 这一处把各载体 host 键
+	// 归一为 firstHeaderHostValue 的胜者拼写（新导入行；存量行不迁
+	// 移，仍经 helper 确定性读取）。归一范围与校验侧收集器严格同
+	// 构：四载体直接键 + 嵌套 headers + 三插件子 map；只改键名，
+	// 不改值形，渲染三面所见胜者值不变。
+	normalizeHostKeySpelling(p.sub("ws-opts"))
+	normalizeHostKeySpelling(p.sub("ws-opts").sub("headers"))
+	normalizeHostKeySpelling(p.sub("http-opts"))
+	normalizeHostKeySpelling(p.sub("http-opts").sub("headers"))
+	normalizeHostKeySpelling(p.sub("h2-opts"))
+	normalizeHostKeySpelling(p.sub("h2-opts").sub("headers"))
+	normalizeHostKeySpelling(p.sub("xhttp-opts"))
+	normalizeHostKeySpelling(p.sub("xhttp-opts").sub("headers"))
+	normalizeHostKeySpelling(p.sub("plugin-opts"))
+	normalizeHostKeySpelling(p.sub("obfs-opts"))
+	normalizeHostKeySpelling(p.sub("shadow-tls"))
 	name := p.str("name")
 	if name == "" {
 		name = net.JoinHostPort(host, strconv.Itoa(port))
