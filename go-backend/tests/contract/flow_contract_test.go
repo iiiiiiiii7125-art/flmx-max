@@ -22,7 +22,10 @@ func TestFlowEndpointsStringResponses(t *testing.T) {
 	}{
 		{name: "flow test", method: http.MethodGet, path: "/flow/test", expected: "test"},
 		{name: "flow config", method: http.MethodPost, path: "/flow/config?secret=abc", expected: "ok"},
-		{name: "flow upload", method: http.MethodPost, path: "/flow/upload?secret=abc", expected: "ok"},
+		// F-01: flow upload is fail-closed — an unknown secret must get
+		// "error" (not "ok"), so the agent keeps its counters and retries
+		// instead of dropping the batch silently.
+		{name: "flow upload", method: http.MethodPost, path: "/flow/upload?secret=abc", expected: "error"},
 	}
 
 	for _, tc := range tests {
