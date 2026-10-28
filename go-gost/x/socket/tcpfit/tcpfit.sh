@@ -1928,7 +1928,9 @@ cmd_harden(){
   # 单位一律按 GB. "2" 和 "2G" 都收 —— 向导和文档里写的都是 2G, 只收纯数字
   # 会把它们全挡掉（v0.4.3 就是这样, 向导结尾的 swap 提示按 y 之后直接 die 退出）.
   # 但不收 "2M": fallocate 会建 2MB, 而失败回退的 dd 建 2GB, 两条路差 1000 倍.
-  local gb="${swap_size%[Gg]}"
+  # 前导零要去掉: is_posint 认为 "08" 合法, 下面的 dd 回退分支
+  # count=$(( gb * 1024 )) 却按八进制解析致死 (R2-J-F-01; README.md D2).
+  local gb=$(strip_zeros "${swap_size%[Gg]}")
   is_posint "$gb" 1 20 || die "swap 大小请填 1-20 之间的整数, 单位 GB（例如 2 或 2G）"
   swap_size="${gb}G"
 
@@ -2696,15 +2698,17 @@ cmd_sweep(){
       --port) PEER_PORT="$2"; shift 2 ;;
       -4) IP_FAMILY="-4"; shift ;;
       -6) IP_FAMILY="-6"; shift ;;
-      --nominal) nominal="$2"; shift 2 ;;
+      --nominal) nominal=$(strip_zeros "$2"); shift 2 ;;
       # 前导零要去掉: is_posint 认为 "08" 合法, 后面的 bash 算术却按八进制
       # 解析并报 "value too great for base", 实际跳过预期起点.
+      # --dur/--margin 与 --from/--to/--step 同属此循环, --nominal 同上,
+      # 一并剥离 (R2-J-F-01; 见 README.md FLMX deviation D2).
       --from) lo=$(strip_zeros "$2"); shift 2 ;;
       --to) hi=$(strip_zeros "$2"); shift 2 ;;
       --step) step=$(strip_zeros "$2"); shift 2 ;;
-      --dur) dur="$2"; shift 2 ;;
+      --dur) dur=$(strip_zeros "$2"); shift 2 ;;
       --parallel) par="$2"; shift 2 ;;
-      --margin) margin="$2"; shift 2 ;;   # 校验在下面统一做
+      --margin) margin=$(strip_zeros "$2"); shift 2 ;;   # 校验在下面统一做
       --gap) GAP="$2"; shift 2 ;;
       --cap) cap="$2"; shift 2 ;;
       --no-refine) refine=0; shift ;;
@@ -3679,7 +3683,10 @@ auto_pick_peer(){
 # 用标称带宽的 40% 跑一次：这个速率远低于任何限速器, 此时还有明显重传,
 # 就说明是链路本身在丢包, 拿它测拐点必然测偏.
 validate_peer(){
-  local peer="$1" nominal="$2" iface="$3"
+  # 向导把手填带宽直接传进来 (wizard :4167), 不经过 cmd_sweep 的 --nominal
+  # 解析; 前导零同样会在下面的 $(( )) 里按八进制解析致死, 故在此剥离
+  # (R2-J-F-01; 见 README.md FLMX deviation D2).
+  local peer="$1" nominal="$(strip_zeros "$2")" iface="$3"
   # 低带宽线路不能硬抬到 20M: 15M 线路会被验证流量自己打穿.
   local rate=$(( nominal * 40 / 100 )); [ "$rate" -lt 1 ] && rate=1
   qdisc_save "$iface" || { echo "skip:guard"; return 1; }
