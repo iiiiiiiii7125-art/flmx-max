@@ -232,8 +232,15 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 	// obfs/obfs-host 键映射不同，彼为 SIP003 串形态）。归一后 A2-03
 	// 门（mode 合法集 {http, tls} + 小写愈合）对别名拼写同样生效。
 	// 大小写不敏感判定与 A2-03 门 / ssPluginString 同口径。
+	// B-03：先把 plugin 名本身小写愈合落库（OBFS / V2Ray-Plugin /
+	// Shadow-TLS 等变体名原样落库时，四面渲染开关的精确匹配整节点
+	// 丢弃），再走别名归一；未知插件名小写化后仍为未知名，仍由各面
+	// 谓词/开关处置，接受集不扩大。
 	if t == "ss" {
-		switch strings.ToLower(strings.TrimSpace(p.str("plugin"))) {
+		if pl := strings.ToLower(strings.TrimSpace(p.str("plugin"))); pl != "" {
+			p["plugin"] = pl
+		}
+		switch p.str("plugin") {
 		case "obfs-local", "simple-obfs":
 			p["plugin"] = "obfs"
 		}
