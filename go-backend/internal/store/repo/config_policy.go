@@ -223,6 +223,10 @@ var backupRuntimeExcludedConfigKeys = map[string]struct{}{
 	// 依据），不是管理员配置——随备份往返会在恢复旧备份时把已
 	// 送达过的恢复通知在目标实例上重发一遍。
 	"notify_quota_recovery_pending": {},
+	// R2-I-02：待发 Gist 备份失败通知是运行时台账（上传失败时发送
+	// 失败的补发依据），不是管理员配置——随备份往返会在恢复旧备份
+	// 时把已过时的失败通知在目标实例上重发一遍。
+	"notify_gist_failure_pending": {},
 }
 
 func isBackupRuntimeExcludedConfigKey(name string) bool {

@@ -188,6 +188,9 @@ func (h *Handler) checkUserReminders(now time.Time) {
 	// I-01：补发解禁时发送失败的配额恢复通知（与超额侧
 	// alertOnce/unalert 的下一轮补发同口径）。
 	h.retryPendingQuotaRecoveryNotices(now)
+	// R2-I-02：补发上传失败时发送失败的 Gist 备份失败通知（与 I-01
+	// 同口径；失败已被后续成功上传 supersede 时由重试侧丢弃标记）。
+	h.retryPendingGistFailureNotice()
 }
 
 // checkUserQuotaReminders reports a forward user's daily/monthly quota
