@@ -116,15 +116,53 @@ func validateImportHostnames(p Proxy) error {
 // network option that carries one (ws-opts / http-opts / h2-opts /
 // xhttp-opts). One field, four carriers — validate them all so the same
 // gap cannot recur in another network type.
+//
+// B-01: the key lookup is case-insensitive (EqualFold over the map
+// keys) instead of enumerating spellings by hand. HTTP header names
+// are case-insensitive, and the render faces read both spellings
+// (transportFields reads "Host" and "host" for ws; forEndpoint fills
+// either) or pass the map through verbatim (Clash), so the previous
+// exact-spelling enumeration ("Host" for ws/http-opts, "host" for
+// h2/xhttp-opts) let the opposite spelling escape validation and land
+// verbatim in subscriptions. Values are collected without splitting
+// on commas: a Host header is a single host, and a comma-joined value
+// fails hostPattern as a whole (fail-closed).
 func importTransportHosts(p Proxy) []string {
 	var out []string
-	if h := p.sub("ws-opts").sub("headers").str("Host"); h != "" {
-		out = append(out, h)
-	}
-	out = append(out, p.sub("http-opts").sub("headers").strs("Host")...)
-	out = append(out, p.sub("h2-opts").strs("host")...)
-	if h := p.sub("xhttp-opts").str("host"); h != "" {
-		out = append(out, h)
+	out = append(out, headerHostValues(p.sub("ws-opts").sub("headers"))...)
+	out = append(out, headerHostValues(p.sub("http-opts").sub("headers"))...)
+	out = append(out, headerHostValues(p.sub("h2-opts"))...)
+	out = append(out, headerHostValues(p.sub("xhttp-opts"))...)
+	return out
+}
+
+// headerHostValues collects every value stored under any case spelling
+// of the "host" key in m (Host / host / HOST / ...), expanding list
+// values element-wise. Non-string, non-list values are ignored.
+func headerHostValues(m Proxy) []string {
+	var out []string
+	for k, v := range m {
+		if !strings.EqualFold(k, "host") {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			if s := strings.TrimSpace(t); s != "" {
+				out = append(out, s)
+			}
+		case []string:
+			for _, s := range t {
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
+			}
+		case []interface{}:
+			for _, x := range t {
+				if s := strings.TrimSpace(fmt.Sprint(x)); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
 	}
 	return out
 }
@@ -138,17 +176,15 @@ func importTransportHosts(p Proxy) []string {
 // server_name — all normalized into these three keys by the time
 // finishProxy runs) sailed through import and rendered verbatim into
 // subscriptions. Same verdict and wording as the transport carriers.
+// B-01 (same mechanism): the keys are read case-insensitively via
+// headerHostValues — a capitalised `Host` key in a Clash profile
+// passes the map through to Mihomo exactly like the transport
+// carriers did, so it must be validated under every spelling too.
 func importPluginHosts(p Proxy) []string {
 	var out []string
-	if h := p.sub("plugin-opts").str("host"); h != "" {
-		out = append(out, h)
-	}
-	if h := p.sub("obfs-opts").str("host"); h != "" {
-		out = append(out, h)
-	}
-	if h := p.sub("shadow-tls").str("host"); h != "" {
-		out = append(out, h)
-	}
+	out = append(out, headerHostValues(p.sub("plugin-opts"))...)
+	out = append(out, headerHostValues(p.sub("obfs-opts"))...)
+	out = append(out, headerHostValues(p.sub("shadow-tls"))...)
 	return out
 }
 
@@ -196,8 +232,15 @@ func finishProxy(p Proxy) (ImportedNode, error) {
 	// obfs/obfs-host 键映射不同，彼为 SIP003 串形态）。归一后 A2-03
 	// 门（mode 合法集 {http, tls} + 小写愈合）对别名拼写同样生效。
 	// 大小写不敏感判定与 A2-03 门 / ssPluginString 同口径。
+	// B-03：先把 plugin 名本身小写愈合落库（OBFS / V2Ray-Plugin /
+	// Shadow-TLS 等变体名原样落库时，四面渲染开关的精确匹配整节点
+	// 丢弃），再走别名归一；未知插件名小写化后仍为未知名，仍由各面
+	// 谓词/开关处置，接受集不扩大。
 	if t == "ss" {
-		switch strings.ToLower(strings.TrimSpace(p.str("plugin"))) {
+		if pl := strings.ToLower(strings.TrimSpace(p.str("plugin"))); pl != "" {
+			p["plugin"] = pl
+		}
+		switch p.str("plugin") {
 		case "obfs-local", "simple-obfs":
 			p["plugin"] = "obfs"
 		}
@@ -427,6 +470,15 @@ func validateProxyCredentials(p Proxy) error {
 			return errors.New("缺少用户名或密码")
 		}
 	}
+	// K-01: transport x security coupling — Vision only on TCP,
+	// Reality only on TCP (see transportSecurityViolation). Checked
+	// here, after the per-type columns, because Reality is
+	// cross-protocol (vless / vmess / trojan) and flow is validated
+	// for vless above. The backup-restore face inherits the same
+	// rejection through ValidateImportedProxy.
+	if v := transportSecurityViolation(p); v != "" {
+		return errors.New(v)
+	}
 	return nil
 }
 
@@ -578,6 +630,11 @@ func parseURI(line string) (Proxy, error) {
 		return parseUserURI("tuic", rest)
 	case "anytls":
 		return parseUserURI("anytls", rest)
+	case "naive":
+		// Supplementary (B-06 round-trip): the panel renders naive://
+		// links but could not import them back — "暂不支持". Userinfo
+		// is user:pass, PathEscape'd on emit, decoded like trojan's.
+		return parseUserURI("naive", rest)
 	case "socks", "socks5":
 		return parseSocksURI(rest)
 	case "http", "https":
@@ -585,6 +642,12 @@ func parseURI(line string) (Proxy, error) {
 	}
 	return nil, fmt.Errorf("暂不支持 %s:// 链接", scheme)
 }
+
+// errBadQuery marks a splitURI failure to parse the link query
+// (B-04): callers with a legacy fallback (parseSSURI / parseSocksURI)
+// must not treat it as a host-parse failure and silently retry
+// without the query.
+var errBadQuery = errors.New("链接参数解析失败")
 
 // splitURI splits "userinfo@host:port/path?query#name".
 func splitURI(rest string) (user, host string, port int, query url.Values, name string, err error) {
@@ -597,7 +660,15 @@ func splitURI(rest string) (user, host string, port int, query url.Values, name 
 	}
 	query = url.Values{}
 	if i := strings.IndexByte(rest, '?'); i >= 0 {
-		query, _ = url.ParseQuery(rest[i+1:])
+		// B-04：不再丢弃 url.ParseQuery 错误——单对编码非法时
+		// ParseQuery 只丢该对、其余照常返回，于是 security=%zz 的
+		// security 对被无声剔除、节点以明文入库（sni=%zz 同理丢
+		// SNI）。解析失败即整条拒收，与 security=bogus 明拒同口径。
+		q, qerr := url.ParseQuery(rest[i+1:])
+		if qerr != nil {
+			return "", "", 0, nil, "", fmt.Errorf("%w：%v", errBadQuery, qerr)
+		}
+		query = q
 		rest = rest[:i]
 	}
 	rest = strings.TrimSuffix(rest, "/")
@@ -613,7 +684,7 @@ func splitURI(rest string) (user, host string, port int, query url.Values, name 
 
 func parseSSURI(rest string) (Proxy, error) {
 	user, host, port, q, name, err := splitURI(rest)
-	if err != nil && user == "" {
+	if err != nil && user == "" && !errors.Is(err, errBadQuery) {
 		// Legacy: ss://base64(method:password@host:port)#name
 		body := rest
 		if i := strings.IndexAny(body, "#?"); i >= 0 {
@@ -870,6 +941,16 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 		p.set("skip-cert-verify", insecure)
 		p.set("alpn", alpn)
 		p.set("client-fingerprint", q.Get("fp"))
+	case "naive":
+		// naive://user:pass@host:port — the B-06 render shape.
+		// userinfo is already PathUnescaped above, like trojan's;
+		// split on the first ":" so an escaped ":" in the password
+		// survives. A missing half is rejected by finishProxy's
+		// naive credential check, not here. SNI and other cross-cut
+		// fields are deliberately not wired yet.
+		u, pw, _ := strings.Cut(user, ":")
+		p.set("username", u)
+		p.set("password", pw)
 	}
 	return p, nil
 }
@@ -926,6 +1007,11 @@ func applyTransport(p Proxy, netType, headerType, host, path, serviceName, mode 
 func parseSocksURI(rest string) (Proxy, error) {
 	user, host, port, _, name, err := splitURI(rest)
 	if err != nil {
+		// B-04：query 解析失败不得走 legacy base64 回退（回退体会
+		// 丢掉整个 query、把坏链接当好链接导入）。
+		if errors.Is(err, errBadQuery) {
+			return nil, err
+		}
 		// v2rayN: socks://base64(user:pass@host:port)#name
 		body := rest
 		if i := strings.IndexByte(body, '#'); i >= 0 {

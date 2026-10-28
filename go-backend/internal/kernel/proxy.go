@@ -303,6 +303,14 @@ func (p Proxy) forEndpoint(e Endpoint) Proxy {
 		if pw, ok := out["password"].(string); ok {
 			out["password"] = NormalizedSS2022Password(out.str("cipher"), pw)
 		}
+		// B-03（渲染自愈，同 cipher 口径）：存量 plugin 名大小写
+		// 变体行（进口愈合上线前落库）在渲染克隆上小写化——四面
+		// 渲染开关为精确匹配，变体名原样渲染即整节点丢弃；小写化
+		// 后未知插件名仍为未知名、仍被各面开关略过，接受集不扩大。
+		// 存储值不动。
+		if pl := out.str("plugin"); pl != "" {
+			out["plugin"] = strings.ToLower(pl)
+		}
 	}
 	// R9X-004（渲染自愈，同 SS cipher 口径）：其余四枚举字段的谓词
 	// 均大小写不敏感（credentials.go 各 Valid* 以 ToLower 判定），

@@ -685,6 +685,32 @@ const (
 	ssFaceXrayChain = "xray-chain"
 )
 
+// transportSecurityViolation reports the transport x security coupling
+// violation of an imported proxy, or "" when the combination is legal.
+// xtls-rprx-vision runs on TLS over plain TCP only (self-built face:
+// model.go visionOK is VLESS + TCP + security != none / ENC), and
+// Reality likewise only on TCP: Normalize rejects "ws reality" via
+// the capabilities matrix, and the import face applies the same
+// fail-closed bar to every non-TCP transport (K-01: Vision+WS/gRPC
+// and Reality+WS/gRPC sailed through import and were rendered verbatim
+// into sing-box / Clash / Xray-chain subscriptions). The flow match
+// is case-insensitive: the import face lowercases it for VLESS, but a
+// stray key on another type must not slip past the check. Network
+// defaults to TCP when absent (Proxy.network), so plain-TCP nodes are
+// unaffected.
+func transportSecurityViolation(p Proxy) string {
+	if p.network() == "tcp" {
+		return ""
+	}
+	if strings.EqualFold(p.str("flow"), FlowVision) {
+		return "VLESS flow xtls-rprx-vision 仅支持 TCP 传输（不能用于 " + p.network() + "）"
+	}
+	if len(p.sub("reality-opts")) > 0 {
+		return "Reality 仅支持 TCP 传输（不能用于 " + p.network() + "）"
+	}
+	return ""
+}
+
 // validImportedProxyFields is the shared stock/import predicate over
 // every field that entered the R5 batch-1 validation set, extended by
 // R6 batch 1 with the SS格 (cipher 合法集 + SS2022 key 逐段谓词——
@@ -706,6 +732,13 @@ func validImportedProxyFields(p Proxy, face string) bool {
 		return false
 	}
 	if !ValidXHTTPMode(p.sub("xhttp-opts").str("mode")) {
+		return false
+	}
+	// K-01: transport x security coupling — the render faces skip
+	// whole stock nodes failing it, so rows imported before the
+	// import-side rejection never reach a subscription (same
+	// predicate-skip rule as the other enum/format gates above).
+	if transportSecurityViolation(p) != "" {
 		return false
 	}
 	switch p.Type() {

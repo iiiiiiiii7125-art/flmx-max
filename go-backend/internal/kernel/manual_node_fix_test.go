@@ -13,6 +13,12 @@ import (
 //（无 TLS 且无 ENC）须拒绝；flow+TLS（含 Reality）、flow+真实
 // ENC 串须放行。只查 TLS/ENC 耦合，不查 network——Vision+WS/gRPC
 // +TLS 在后端放行、由前端按 visionAllowed 设防，见测试内注释。
+// K-01（1.7.1 发版后审计）：上述分工被推翻——前端只在手动表单
+// 的 flow 选择框设防，粘贴/文件/订阅源三路进口无任何设防，
+// Vision+WS/gRPC 与 Reality+WS/gRPC 经 ParseImport 落库并原样进
+// 订阅。后端进口谓词自此补 transport x security 耦合列
+// （transportSecurityViolation），Vision+WS/gRPC 与 Reality+WS/gRPC
+// 在后端即拒；下述两例自此由放行改为拒绝，旧分工不再钉死。
 // F-02：带 reality-opts 的节点须有 SNI（vless/vmess 用 servername，
 // trojan 用 sni），否则拒绝。
 
@@ -26,6 +32,12 @@ func TestManualNodeFixF01FlowRequiresTLSOrENC(t *testing.T) {
 		//（无 TLS 且 encryption 为 none），须在后端被拒。
 		"vision-security-none": "vless://" + manualUUID +
 			"@203.0.113.10:443?type=tcp&encryption=none&security=none&flow=xtls-rprx-vision#v",
+		// K-01：Vision+WS/gRPC+TLS 在后端亦拒（transport x security
+		// 耦合列）。旧分工（后端放行、前端设防）已被推翻，见文件头注。
+		"vision-ws-tls": "vless://" + manualUUID +
+			"@203.0.113.10:443?type=ws&path=%2Fws&host=example.com&encryption=none&security=tls&flow=xtls-rprx-vision#v",
+		"vision-grpc-tls": "vless://" + manualUUID +
+			"@203.0.113.10:443?type=grpc&serviceName=grpc&encryption=none&security=tls&flow=xtls-rprx-vision#v",
 	}
 	for name, link := range reject {
 		nodes, errs := ParseImport(link)
@@ -44,14 +56,6 @@ func TestManualNodeFixF01FlowRequiresTLSOrENC(t *testing.T) {
 			"@203.0.113.10:443?type=tcp&encryption=none&security=reality&sni=www.microsoft.com&fp=chrome&pbk=" + manualFixPBK + "&flow=xtls-rprx-vision#v",
 		"vision-enc-none": "vless://" + manualUUID +
 			"@203.0.113.10:443?type=tcp&encryption=" + manualFixENC + "&security=none&flow=xtls-rprx-vision#v",
-		// 注意：Vision+WS+TLS、Vision+gRPC+TLS 在后端放行——后端
-		// 只查 TLS/ENC 耦合，不查 network（任务书与 AUDIT-FINAL
-		// F-01 修复方向均如此定；网络维由前端按 visionAllowed 设防）。
-		// 此处显式钉死该分工，防止后人误把前端责任搬进后端。
-		"vision-ws-tls-backend-passes": "vless://" + manualUUID +
-			"@203.0.113.10:443?type=ws&path=%2Fws&host=example.com&encryption=none&security=tls&flow=xtls-rprx-vision#v",
-		"vision-grpc-tls-backend-passes": "vless://" + manualUUID +
-			"@203.0.113.10:443?type=grpc&serviceName=grpc&encryption=none&security=tls&flow=xtls-rprx-vision#v",
 	}
 	for name, link := range accept {
 		nodes, errs := ParseImport(link)
