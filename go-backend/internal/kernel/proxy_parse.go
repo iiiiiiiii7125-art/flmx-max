@@ -471,7 +471,8 @@ func validateProxyCredentials(p Proxy) error {
 		}
 	}
 	// K-01: transport x security coupling — Vision only on TCP,
-	// Reality only on TCP (see transportSecurityViolation). Checked
+	// Reality banned only on WS (TCP/gRPC/XHTTP legal per the
+	// capabilities matrix, see transportSecurityViolation). Checked
 	// here, after the per-type columns, because Reality is
 	// cross-protocol (vless / vmess / trojan) and flow is validated
 	// for vless above. The backup-restore face inherits the same

@@ -688,16 +688,19 @@ const (
 // transportSecurityViolation reports the transport x security coupling
 // violation of an imported proxy, or "" when the combination is legal.
 // xtls-rprx-vision runs on TLS over plain TCP only (self-built face:
-// model.go visionOK is VLESS + TCP + security != none / ENC), and
-// Reality likewise only on TCP: Normalize rejects "ws reality" via
-// the capabilities matrix, and the import face applies the same
-// fail-closed bar to every non-TCP transport (K-01: Vision+WS/gRPC
-// and Reality+WS/gRPC sailed through import and were rendered verbatim
-// into sing-box / Clash / Xray-chain subscriptions). The flow match
-// is case-insensitive: the import face lowercases it for VLESS, but a
-// stray key on another type must not slip past the check. Network
-// defaults to TCP when absent (Proxy.network), so plain-TCP nodes are
-// unaffected.
+// model.go visionOK is VLESS + TCP + security != none / ENC).
+// Reality is banned only on WS: the capabilities matrix lists Reality
+// under TCP/gRPC/XHTTP for Xray VLESS, under TCP/gRPC for sing-box
+// VLESS and for Trojan on both kernels, and under no WS row — and
+// Normalize enforces exactly that matrix (Reality+gRPC passes,
+// Reality+WS is rejected), as does the D-domain-verified XHTTP
+// Reality template (Xray only). An earlier batch-2 version barred
+// Reality on every non-TCP transport, over-rejecting the legal
+// gRPC/XHTTP combinations; this is the correction (K-01
+// over-rejection). The flow match is case-insensitive: the import
+// face lowercases it for VLESS, but a stray key on another type must
+// not slip past the check. Network defaults to TCP when absent
+// (Proxy.network), so plain-TCP nodes are unaffected.
 func transportSecurityViolation(p Proxy) string {
 	if p.network() == "tcp" {
 		return ""
@@ -705,8 +708,8 @@ func transportSecurityViolation(p Proxy) string {
 	if strings.EqualFold(p.str("flow"), FlowVision) {
 		return "VLESS flow xtls-rprx-vision 仅支持 TCP 传输（不能用于 " + p.network() + "）"
 	}
-	if len(p.sub("reality-opts")) > 0 {
-		return "Reality 仅支持 TCP 传输（不能用于 " + p.network() + "）"
+	if p.network() == "ws" && len(p.sub("reality-opts")) > 0 {
+		return "Reality 不支持 WS 传输（仅支持 TCP / gRPC / XHTTP）"
 	}
 	return ""
 }

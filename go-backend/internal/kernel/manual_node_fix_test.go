@@ -17,8 +17,9 @@ import (
 // 的 flow 选择框设防，粘贴/文件/订阅源三路进口无任何设防，
 // Vision+WS/gRPC 与 Reality+WS/gRPC 经 ParseImport 落库并原样进
 // 订阅。后端进口谓词自此补 transport x security 耦合列
-// （transportSecurityViolation），Vision+WS/gRPC 与 Reality+WS/gRPC
-// 在后端即拒；下述两例自此由放行改为拒绝，旧分工不再钉死。
+// （transportSecurityViolation），Vision+WS/gRPC 与 Reality+WS
+// 在后端即拒（Reality+gRPC/XHTTP 按 capabilities 矩阵合法，不拒）；
+// 下述两例自此由放行改为拒绝，旧分工不再钉死。
 // F-02：带 reality-opts 的节点须有 SNI（vless/vmess 用 servername，
 // trojan 用 sni），否则拒绝。
 
