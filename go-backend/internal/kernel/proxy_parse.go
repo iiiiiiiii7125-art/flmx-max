@@ -621,6 +621,11 @@ func parseURI(line string) (Proxy, error) {
 		return parseUserURI("tuic", rest)
 	case "anytls":
 		return parseUserURI("anytls", rest)
+	case "naive":
+		// Supplementary (B-06 round-trip): the panel renders naive://
+		// links but could not import them back — "暂不支持". Userinfo
+		// is user:pass, PathEscape'd on emit, decoded like trojan's.
+		return parseUserURI("naive", rest)
 	case "socks", "socks5":
 		return parseSocksURI(rest)
 	case "http", "https":
@@ -927,6 +932,16 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 		p.set("skip-cert-verify", insecure)
 		p.set("alpn", alpn)
 		p.set("client-fingerprint", q.Get("fp"))
+	case "naive":
+		// naive://user:pass@host:port — the B-06 render shape.
+		// userinfo is already PathUnescaped above, like trojan's;
+		// split on the first ":" so an escaped ":" in the password
+		// survives. A missing half is rejected by finishProxy's
+		// naive credential check, not here. SNI and other cross-cut
+		// fields are deliberately not wired yet.
+		u, pw, _ := strings.Cut(user, ":")
+		p.set("username", u)
+		p.set("password", pw)
 	}
 	return p, nil
 }
