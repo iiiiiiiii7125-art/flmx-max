@@ -744,14 +744,25 @@ func parseSSURI(rest string) (Proxy, error) {
 
 // applySSPlugin converts a SIP003 plugin string ("obfs-local;obfs=http;...")
 // to Mihomo plugin / plugin-opts.
+//
+// R4-C-01: fold the plugin name and the option keys to lowercase before
+// matching (same caliber as the B-03 healing in finishProxy and the
+// case-insensitive switch in ssPluginString). Before this, an uppercase
+// name ("OBFS-LOCAL") was rejected at the door on the URI and sing-box
+// faces, and uppercase option keys ("OBFS", "OBFS-HOST") were silently
+// dropped while the node still imported — the finishProxy healing runs
+// after parsing and is unreachable for these two call sites. Option
+// values are NOT folded here: mode-value healing stays with the A2-03
+// gate in finishProxy. Unknown names stay rejected after folding, so
+// the acceptance set does not expand.
 func applySSPlugin(p Proxy, spec string) error {
 	parts := strings.Split(spec, ";")
 	opts := map[string]string{}
 	for _, kv := range parts[1:] {
 		k, v, _ := strings.Cut(kv, "=")
-		opts[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		opts[strings.ToLower(strings.TrimSpace(k))] = strings.TrimSpace(v)
 	}
-	switch strings.TrimSpace(parts[0]) {
+	switch strings.ToLower(strings.TrimSpace(parts[0])) {
 	case "obfs-local", "simple-obfs", "obfs":
 		po := Proxy{}
 		po.set("mode", opts["obfs"])
