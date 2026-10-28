@@ -4200,6 +4200,13 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 	if rep != nil {
 		portsSkippedBefore = rep.skipped["forwardPorts"]
 	}
+	// R4-F-01：两类端口行跳过分别计数——(a) 引用节点不存在、
+	// (b) InIP 格式非法；汇总 warning 按类披露条数与原因。两类
+	// 仍共用 rep.skipped["forwardPorts"] 合计数（回执 SkippedRows
+	// 口径不变），分计数仅用于汇总文案归因。本函数内全部
+	// rep.skip("forwardPorts") 调用点（仅以下两处）都须同步累
+	// 计对应分计数，否则汇总条数与合计数对不上。
+	var portsSkippedMissingNode, portsSkippedBadInIP int
 	for _, f := range forwards {
 		// R6X-007：status 分格门。合法值域 {0,1,2} 之外逐行跳过 +
 		// warning（R5X-009 同型口径）；status=2（删除待处理）的重试
@@ -4302,6 +4309,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 				}
 				if !portNodeExists {
 					rep.skip("forwardPorts")
+					portsSkippedMissingNode++
 					continue
 				}
 				// R3-H-01：恢复侧 ForwardPort.InIP 复用与保存侧 intake
@@ -4315,6 +4323,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 					stripped := stripIngressHostPort(inIP)
 					if !validImportNodeAddress(stripped) {
 						rep.skip("forwardPorts")
+						portsSkippedBadInIP++
 						rep.warnf("备份恢复：转发 #%d（%q）的端口行（节点 #%d，端口 %d）的监听 IP 格式非法，已跳过该端口行未恢复，请核对转发端口配置", f.ID, f.Name, fp.NodeID, fp.Port)
 						continue
 					}
@@ -4336,10 +4345,20 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		rep.warnf("备份恢复：恢复的转发在目标库存在删除待处理记账（nft_pending_delete），已随恢复取消 %d 条：转发 %s；这些转发不会再被待删重试流程删除", len(cancelledPending), strings.Join(cancelledPending, "、"))
 	}
 	// R5X-017：预删>0 且本批端口跳过>0 时补 warning（口径同
-	// importTunnels 的 chain 段）。
+	// importTunnels 的 chain 段）。R4-F-01：两类跳过分别披露——
+	// 引用节点不存在与监听 IP 格式非法各写各的条数；旧文案把
+	// InIP 非法跳过误归因为节点不存在（该类行的节点检查已通过、
+	// 节点必然存在）。仅当某类跳过 >0 时才出现该类分句。
 	if rep != nil && preDeletedPorts > 0 {
 		if skipped := rep.skipped["forwardPorts"] - portsSkippedBefore; skipped > 0 {
-			rep.warnf("备份恢复：转发端口（forwardPorts）重建时目标库原有 %d 条端口行已被移除，其中 %d 条备份端口行因引用节点不存在被跳过未恢复（原端口已移除且未恢复），请核对转发端口配置", preDeletedPorts, skipped)
+			var reasons []string
+			if portsSkippedMissingNode > 0 {
+				reasons = append(reasons, fmt.Sprintf("引用节点不存在 %d 条", portsSkippedMissingNode))
+			}
+			if portsSkippedBadInIP > 0 {
+				reasons = append(reasons, fmt.Sprintf("监听 IP 格式非法 %d 条", portsSkippedBadInIP))
+			}
+			rep.warnf("备份恢复：转发端口（forwardPorts）重建时目标库原有 %d 条端口行已被移除，其中 %d 条备份端口行被跳过未恢复（%s），请核对转发端口配置", preDeletedPorts, skipped, strings.Join(reasons, "、"))
 		}
 	}
 	return count, nil
