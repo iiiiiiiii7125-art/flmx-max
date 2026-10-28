@@ -116,15 +116,53 @@ func validateImportHostnames(p Proxy) error {
 // network option that carries one (ws-opts / http-opts / h2-opts /
 // xhttp-opts). One field, four carriers — validate them all so the same
 // gap cannot recur in another network type.
+//
+// B-01: the key lookup is case-insensitive (EqualFold over the map
+// keys) instead of enumerating spellings by hand. HTTP header names
+// are case-insensitive, and the render faces read both spellings
+// (transportFields reads "Host" and "host" for ws; forEndpoint fills
+// either) or pass the map through verbatim (Clash), so the previous
+// exact-spelling enumeration ("Host" for ws/http-opts, "host" for
+// h2/xhttp-opts) let the opposite spelling escape validation and land
+// verbatim in subscriptions. Values are collected without splitting
+// on commas: a Host header is a single host, and a comma-joined value
+// fails hostPattern as a whole (fail-closed).
 func importTransportHosts(p Proxy) []string {
 	var out []string
-	if h := p.sub("ws-opts").sub("headers").str("Host"); h != "" {
-		out = append(out, h)
-	}
-	out = append(out, p.sub("http-opts").sub("headers").strs("Host")...)
-	out = append(out, p.sub("h2-opts").strs("host")...)
-	if h := p.sub("xhttp-opts").str("host"); h != "" {
-		out = append(out, h)
+	out = append(out, headerHostValues(p.sub("ws-opts").sub("headers"))...)
+	out = append(out, headerHostValues(p.sub("http-opts").sub("headers"))...)
+	out = append(out, headerHostValues(p.sub("h2-opts"))...)
+	out = append(out, headerHostValues(p.sub("xhttp-opts"))...)
+	return out
+}
+
+// headerHostValues collects every value stored under any case spelling
+// of the "host" key in m (Host / host / HOST / ...), expanding list
+// values element-wise. Non-string, non-list values are ignored.
+func headerHostValues(m Proxy) []string {
+	var out []string
+	for k, v := range m {
+		if !strings.EqualFold(k, "host") {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			if s := strings.TrimSpace(t); s != "" {
+				out = append(out, s)
+			}
+		case []string:
+			for _, s := range t {
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
+			}
+		case []interface{}:
+			for _, x := range t {
+				if s := strings.TrimSpace(fmt.Sprint(x)); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
 	}
 	return out
 }
@@ -138,17 +176,15 @@ func importTransportHosts(p Proxy) []string {
 // server_name — all normalized into these three keys by the time
 // finishProxy runs) sailed through import and rendered verbatim into
 // subscriptions. Same verdict and wording as the transport carriers.
+// B-01 (same mechanism): the keys are read case-insensitively via
+// headerHostValues — a capitalised `Host` key in a Clash profile
+// passes the map through to Mihomo exactly like the transport
+// carriers did, so it must be validated under every spelling too.
 func importPluginHosts(p Proxy) []string {
 	var out []string
-	if h := p.sub("plugin-opts").str("host"); h != "" {
-		out = append(out, h)
-	}
-	if h := p.sub("obfs-opts").str("host"); h != "" {
-		out = append(out, h)
-	}
-	if h := p.sub("shadow-tls").str("host"); h != "" {
-		out = append(out, h)
-	}
+	out = append(out, headerHostValues(p.sub("plugin-opts"))...)
+	out = append(out, headerHostValues(p.sub("obfs-opts"))...)
+	out = append(out, headerHostValues(p.sub("shadow-tls"))...)
 	return out
 }
 
