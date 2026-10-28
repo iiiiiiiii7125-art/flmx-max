@@ -203,6 +203,154 @@ func TestResweepImportConfigsSkipsEmptyLabelHostKeys(t *testing.T) {
 	}
 }
 
+// D-01（发版后审计）：备份恢复面 importTunnels 逐字恢复链路 ConnectIP
+// `a..b`（写面 C-16 明明拒收）。链路行跳过 + warning，与 R-05 同口径。
+func TestResweepImportTunnelsSkipsEmptyLabelChainConnectIP(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dest := openBackupRepo(t, "tun-chain-restore-dst.db")
+	createRow(t, dest, &model.Node{ID: 3, Name: "n3", Secret: "s", ServerIP: "10.0.0.3", Port: "10000-10100",
+		CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	badConnectIP := "a..b"
+	goodConnectIP := "203.0.113.9"
+	backup := &model.BackupData{
+		Version: "1.0",
+		Tunnels: []model.TunnelBackup{
+			{ID: 21, Name: "tun-bad-chain", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now,
+				ChainTunnels: []model.ChainTunnelBackup{
+					{ID: 31, TunnelID: 21, NodeID: 3, ConnectIP: &badConnectIP},
+					{ID: 32, TunnelID: 21, NodeID: 3, ConnectIP: &goodConnectIP},
+				}},
+		},
+	}
+	result, err := dest.Import(backup, []string{"tunnels"})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	var count int64
+	if err := dest.DB().Model(&model.ChainTunnel{}).Where("id = ?", 31).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("D-01: chain with ConnectIP=a..b must be skipped on restore, got restored")
+	}
+	if err := dest.DB().Model(&model.ChainTunnel{}).Where("id = ?", 32).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("D-01: chain with ConnectIP=203.0.113.9 must be restored (control)")
+	}
+	// 隧道行本身照常恢复（只跳坏链路行）。
+	if err := dest.DB().Model(&model.Tunnel{}).Where("id = ?", 21).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("D-01: tunnel row itself must be restored (only the bad chain row is skipped)")
+	}
+	found := false
+	for _, w := range result.ImportWarnings {
+		if strings.Contains(w, "a..b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("D-01: import warnings must disclose skipped chain, got %v", result.ImportWarnings)
+	}
+}
+
+// D-02（发版后审计）：备份恢复面 importTunnels 逐字恢复隧道
+// ProbeTargetHost `a..b`（写面 C-26 明明拒收）。整行跳过 + warning。
+func TestResweepImportTunnelsSkipsEmptyLabelProbeTargetHost(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dest := openBackupRepo(t, "tun-probe-restore-dst.db")
+	backup := &model.BackupData{
+		Version: "1.0",
+		Tunnels: []model.TunnelBackup{
+			{ID: 6, Name: "bad-probe", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now,
+				ProbeTargetHost: "a..b", ProbeTargetPort: 443},
+			{ID: 7, Name: "good-probe", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now,
+				ProbeTargetHost: "www.bing.com", ProbeTargetPort: 443},
+		},
+	}
+	result, err := dest.Import(backup, []string{"tunnels"})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	var count int64
+	if err := dest.DB().Model(&model.Tunnel{}).Where("id = ?", 6).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("D-02: tunnel with ProbeTargetHost=a..b must be skipped on restore, got restored")
+	}
+	var tun model.Tunnel
+	if err := dest.DB().Where("id = ?", 7).First(&tun).Error; err != nil {
+		t.Fatalf("D-02: tunnel with ProbeTargetHost=www.bing.com must be restored (control): %v", err)
+	}
+	if tun.ProbeTargetHost != "www.bing.com" {
+		t.Fatalf("D-02: restored probe target host = %q, want %q", tun.ProbeTargetHost, "www.bing.com")
+	}
+	found := false
+	for _, w := range result.ImportWarnings {
+		if strings.Contains(w, "a..b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("D-02: import warnings must disclose skipped tunnel, got %v", result.ImportWarnings)
+	}
+}
+
+// X-03（本轮重推新发现）：备份恢复面 importNodes 逐字恢复远端节点 URL
+// `https://a..b:8443`（写面 C-35 validateRemoteNodeURL 明明拒收——
+// IsSafeRemoteAddr 做 DNS，`a..b` 解析失败即拒）。恢复面与写面同口径：
+// 空标签 URL 清空 + warning（与同函数 C-17 节点地址面同型，不整行跳过，
+// 否则依赖该节点的隧道/转发段同批恢复会被连带误伤）。
+func TestResweepImportNodesClearsEmptyLabelRemoteURL(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dest := openBackupRepo(t, "node-remoteurl-restore-dst.db")
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 3, Name: "bad-remote", Secret: "s", ServerIP: "10.0.0.3", Port: "10000-10100",
+				IsRemote: 1, RemoteURL: "https://a..b:8443", CreatedTime: now},
+			{ID: 4, Name: "good-remote", Secret: "s", ServerIP: "10.0.0.4", Port: "10000-10100",
+				IsRemote: 1, RemoteURL: "https://example.com:8443", CreatedTime: now},
+		},
+	}
+	result, err := dest.Import(backup, []string{"nodes"})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	var node3 model.Node
+	if err := dest.DB().Where("id = ?", 3).First(&node3).Error; err != nil {
+		t.Fatalf("X-03: node row must be restored (only the bad URL is cleared): %v", err)
+	}
+	if node3.RemoteURL.Valid && node3.RemoteURL.String != "" {
+		t.Fatalf("X-03: restored remote_url = %q, want empty (cleared) for https://a..b:8443", node3.RemoteURL.String)
+	}
+	// 注意：不得复用 node3 做第二次 First——GORM 会把结构体主键
+	// 作为附加条件，导致 id=4 的查询恒为空。
+	var node4 model.Node
+	if err := dest.DB().Where("id = ?", 4).First(&node4).Error; err != nil {
+		t.Fatalf("X-03: node with RemoteURL=https://example.com:8443 must be restored (control): %v", err)
+	}
+	if !node4.RemoteURL.Valid || node4.RemoteURL.String != "https://example.com:8443" {
+		t.Fatalf("X-03: restored remote_url = %q, want %q", node4.RemoteURL.String, "https://example.com:8443")
+	}
+	found := false
+	for _, w := range result.ImportWarnings {
+		if strings.Contains(w, "a..b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("X-03: import warnings must disclose cleared remote URL, got %v", result.ImportWarnings)
+	}
+}
+
 // F-PORT-01（任务 3）：节点端口段无上限——`1-99999` 会产出 >65535 的候选端口。
 func TestResweepPortRangeSpecClampsTo65535(t *testing.T) {
 	for _, p := range parsePortRangeSpec("1-99999") {

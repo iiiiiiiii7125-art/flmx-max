@@ -3477,6 +3477,16 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 UDP 监听地址（节点 #%d）格式非法，已回落默认 [::]，恢复后请在节点设置中重新填写", n.ID)
 			udpListenAddr = "[::]"
 		}
+		// X-03（本轮重推）：恢复面与写面同口径——远端节点 URL 的
+		// host 含空标签时清空 + warning（与同函数 ServerIP 面同型；
+		// 写面 C-35 validateRemoteNodeURL 经 IsSafeRemoteAddr 做 DNS，
+		// `a..b` 解析失败即拒。恢复面不做 DNS，只判空标签语法；
+		// 不整行跳过，否则依赖该节点的隧道/转发段同批恢复会被连带误伤）。
+		remoteURL := n.RemoteURL
+		if remoteURL != "" && urlHostHasEmptyLabel(remoteURL) {
+			rep.warnf("备份恢复：节点 #%d 的远端节点地址 %q 含空标签主机名，已清空，恢复后请在节点设置中重新填写", n.ID, n.RemoteURL)
+			remoteURL = ""
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3505,7 +3515,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			// 导出仅在 Valid 时写 remote* 三字段，'' 不是合法取值：
 			// 空即 NULL（旧实现无条件 Valid:true 把 NULL 写成 ''，
 			// 同 BUG-A2-3 的丢 NULL 类）。
-			RemoteURL:      sql.NullString{String: n.RemoteURL, Valid: n.RemoteURL != ""},
+			RemoteURL:      sql.NullString{String: remoteURL, Valid: remoteURL != ""},
 			RemoteToken:    sql.NullString{String: n.RemoteToken, Valid: n.RemoteToken != ""},
 			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: n.RemoteConfig != ""},
 			LatencyTargets: n.LatencyTargets,
@@ -3728,6 +3738,15 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 			rep.warnf("备份恢复：隧道 #%d（%q）的流量倍率=%v 不在合法范围 [0,100] 内，已跳过该行未恢复", t.ID, t.Name, t.TrafficRatio)
 			continue
 		}
+		// D-02（发版后审计）：恢复面与写面同口径——探测目标主机
+		// 含空标签时整行跳过 + warning（与 R-05/R-06/R-09 同型；
+		// 写面 C-26 isValidTunnelProbeTargetHost 明明拒收）。
+		// 恢复面不做 DNS，只判空标签语法。
+		if host := strings.TrimSpace(t.ProbeTargetHost); host != "" && kernel.HasEmptyLabel(host) {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d（%q）的探测目标主机 %q 含空标签主机名，已跳过该行未恢复", t.ID, t.Name, t.ProbeTargetHost)
+			continue
+		}
 		validTunnels = append(validTunnels, t)
 	}
 	tunnels = validTunnels
@@ -3816,6 +3835,15 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 				rep.skip("chainTunnels")
 				continue
 			}
+			// D-01（发版后审计）：恢复面与写面同口径——链路连接
+			// 地址含空标签时该链路行跳过 + warning（与 R-05 同型；
+			// 写面 C-16 validateTunnelConnectIPConstraints 明明拒收）。
+			// addrHostHasEmptyLabel 覆盖裸主机与 host:port 两形态。
+			if ct.ConnectIP != nil && addrHostHasEmptyLabel(*ct.ConnectIP) {
+				rep.skip("chainTunnels")
+				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的连接地址 %q 含空标签主机名，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.ConnectIP)
+				continue
+			}
 			// BUG-A2-3：可空列按指针还原 NULL（旧实现一律 Valid:true，
 			// NULL port 被写成 0，两条同节点 NULL 链路即撞唯一索引
 			// 整单回滚）。chain 行已在上方整批删除，这里直接插入。
@@ -3845,7 +3873,7 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 	// 已被移除而备份链路未恢复，不得只剩一个无上下文的跳过数字。
 	if rep != nil && preDeletedChains > 0 {
 		if skipped := rep.skipped["chainTunnels"] - chainSkippedBefore; skipped > 0 {
-			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行因引用节点不存在被跳过未恢复（原链路已移除且未恢复），请核对链路配置", preDeletedChains, skipped)
+			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行被跳过未恢复（引用节点不存在或连接地址含空标签主机名），请核对链路配置", preDeletedChains, skipped)
 		}
 	}
 	return count, nil
