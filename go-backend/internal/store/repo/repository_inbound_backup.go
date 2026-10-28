@@ -347,7 +347,8 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // 不豁免地址/端口门。例外之例外（R6-H-01）：导入型行 Listen 为 ::（含
 // 原始空值经调用方归一）且 Extra 校验必跑时，行载体拨号校验跳过——
 // 此时行载体不携带拨号地址，地址由 Extra 载体校验覆盖；其余情形恒检
-// 不变（非空 Listen 的 facet A 校验、Extra 缺席行的行载体门均不受影响）。导入型入站（kernel_id≤0）的行内 Listen/Port
+// 不变（非空 Listen 的 facet A 校验、Extra 缺席行的行载体门均不受影响）。
+// R6-H-01-R1：上述跳过仅豁免拨号主机门，行 Port 1–65535 门恒保留。导入型入站（kernel_id≤0）的行内 Listen/Port
 // 是导入地址的行内第二载体（externalRow 恒以经 finishProxy 校验的
 // Host/Port 双写行字段与 Extra），经 kernel.ValidateImportedProxyRowAddress
 // 走与 finishProxy 共用的同一地址实现 validateImportedProxyAddress
@@ -382,12 +383,22 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		// address check, and any other Listen value (including
 		// "0.0.0.0", which no code path here produces as an unspecified
 		// form) stays under the R8X-004 facet A dial check.
+		// R6-H-01-R1: the carve-out skips only the dial host check,
+		// never the row Port gate (see below).
 		extra := strings.TrimSpace(i.Extra)
 		extraValidated := extra != "" && extra != "null" && hasContent
-		if !(listen == "::" && extraValidated) {
-			if err := kernel.ValidateImportedProxyRowAddress(listen, i.Port); err != nil {
-				return err
+		if listen == "::" && extraValidated {
+			// R6-H-01-R1: the carve-out skips only the row-carrier
+			// dial host check. ValidateImportedProxyRowAddress
+			// bundles that host check with the row Port 1-65535
+			// gate, so skipping the whole call would exempt the
+			// port too; retain the port gate here, mirroring the
+			// self-built branch below.
+			if i.Port < 1 || i.Port > 65535 {
+				return errors.New("端口必须在 1-65535 之间")
 			}
+		} else if err := kernel.ValidateImportedProxyRowAddress(listen, i.Port); err != nil {
+			return err
 		}
 	} else {
 		if i.Port < 1 || i.Port > 65535 {
