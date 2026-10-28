@@ -60,7 +60,32 @@ func proxyURI(e Endpoint) (string, bool) {
 		case "http":
 			v["type"], v["host"], v["path"] = "http", host, path
 		}
-		if p.usesTLS() {
+		if ro := p.sub("reality-opts"); len(ro) > 0 {
+			// R2-L3-F-01：Reality 节点回放 tls=reality + pbk/sid/
+			// spx/realityDest，否则再导入一轮即丢 Reality（与
+			// VLESS 支 L5-F-01 的 realityDest/spx 回放同口径；
+			// 本支入口的 validImportedProxyFields 已过
+			// validateRealityOpts，坏值到不了这里）。
+			v["tls"] = "reality"
+			v["sni"] = p.serverName()
+			v["fp"] = p.str("client-fingerprint")
+			if alpn := p.strs("alpn"); len(alpn) > 0 {
+				v["alpn"] = strings.Join(alpn, ",")
+			}
+			if p.flag("skip-cert-verify") {
+				v["allowInsecure"] = "1"
+			}
+			v["pbk"] = ro.str("public-key")
+			if sid := ro.str("short-id"); sid != "" {
+				v["sid"] = sid
+			}
+			if spx := ro.str("spider-x"); spx != "" {
+				v["spx"] = spx
+			}
+			if dest := ro.str("dest"); dest != "" {
+				v["realityDest"] = dest
+			}
+		} else if p.usesTLS() {
 			v["tls"] = "tls"
 			v["sni"] = p.serverName()
 			v["fp"] = p.str("client-fingerprint")

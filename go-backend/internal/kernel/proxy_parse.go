@@ -723,7 +723,8 @@ func parseVMessURI(rest string) (Proxy, error) {
 		p["cipher"] = c
 	}
 	tls := strings.ToLower(j.str("tls"))
-	if tls == "tls" || tls == "1" || tls == "true" {
+	switch tls {
+	case "tls", "1", "true":
 		p["tls"] = true
 		p.set("servername", j.str("sni"))
 		p.set("client-fingerprint", j.str("fp"))
@@ -731,6 +732,39 @@ func parseVMessURI(rest string) (Proxy, error) {
 		if Proxy(v).flag("allowInsecure") || j.flag("skip-cert-verify") {
 			p["skip-cert-verify"] = true
 		}
+	case "reality":
+		// R2-L3-F-01：接入 tls=reality，与 sing-box 入口同口径
+		// （sing-box VMess 出站 tls.reality.enabled 早已接纳并透传
+		// reality-opts，共享谓词 validateRealityOpts 亦接纳
+		// VMess+Reality）。此前本分支只认 tls∈{tls,1,true}，
+		// tls=reality 无声落到明文，sni/fp/alpn 一并丢弃。pbk/sid/
+		// spx 为 v2rayN VMess JSON 的 Reality 字段，realityDest
+		// 与 VLESS 链接面同名（本面板分享链接回放键，见
+		// proxyURI vmess 支）；缺 pbk 解析期即明拒，其余坏值
+		// （坏 pbk/sid/dest/spx、缺 SNI、坏指纹）由 finishProxy
+		// 的 validateRealityOpts / 横切校验收口，与 L5-F-01 同口径。
+		p["tls"] = true
+		p.set("servername", j.str("sni"))
+		p.set("client-fingerprint", j.str("fp"))
+		p.set("alpn", j.strs("alpn"))
+		if Proxy(v).flag("allowInsecure") || j.flag("skip-cert-verify") {
+			p["skip-cert-verify"] = true
+		}
+		ro := Proxy{}
+		ro.set("public-key", j.str("pbk"))
+		ro.set("short-id", j.str("sid"))
+		ro.set("dest", j.str("realityDest"))
+		ro.set("spider-x", j.str("spx"))
+		if ro.str("public-key") == "" {
+			return nil, errors.New("VMess Reality 链接缺少公钥 pbk")
+		}
+		p["reality-opts"] = map[string]interface{}(ro)
+	case "", "none", "0", "false":
+		// 明文：无 TLS 参数可读。
+	default:
+		// R2-L3-F-01 同机制：未识别的 tls 值不得静默降级为明文
+		//（旧代码白名单 if 无 else 拒，xtls 等值无声消失）。
+		return nil, fmt.Errorf("VMess tls 值不受支持：%q（仅支持 tls / reality / 留空表示明文）", j.str("tls"))
 	}
 	applyTransport(p, strings.ToLower(j.str("net")), j.str("type"), j.str("host"), j.str("path"), j.str("path"), "")
 	return p, nil
@@ -767,6 +801,8 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 			sec = "tls"
 		}
 		switch sec {
+		case "", "none":
+			// 明文：无 TLS 参数可读。
 		case "tls", "xtls", "reality":
 			if typ == "vless" {
 				p["tls"] = true
@@ -796,6 +832,11 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 					p["client-fingerprint"] = "chrome"
 				}
 			}
+		default:
+			// R2-L3-F-01 复扫同族残留：未识别的 security 值此前无声
+			// 落到明文（sni/fp 一并丢弃），与 VMess JSON tls 白名单
+			// if 同机制。仅放行已知值，其余明拒并点名该值。
+			return nil, fmt.Errorf("security 值不受支持：%q（仅支持 tls / xtls / reality / none）", q.Get("security"))
 		}
 		netType := strings.ToLower(firstNonEmptyString(q.Get("type"), "tcp"))
 		applyTransport(p, netType, q.Get("headerType"), q.Get("host"), q.Get("path"), q.Get("serviceName"), q.Get("mode"))
