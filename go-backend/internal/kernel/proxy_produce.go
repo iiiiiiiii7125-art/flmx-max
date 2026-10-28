@@ -121,6 +121,12 @@ func proxyURI(e Endpoint) (string, bool) {
 			ro := p.sub("reality-opts")
 			q.Set("pbk", ro.str("public-key"))
 			setIf(q, "sid", ro.str("short-id"))
+			// L5-F-01：dest/spx 回放——导入时保留的值须能原样回到
+			// 链接里，否则仍是单向丢弃（本支入口的
+			// validImportedProxyFields 已过 validateRealityOpts，
+			// 坏值到不了这里）。
+			setIf(q, "realityDest", ro.str("dest"))
+			setIf(q, "spx", ro.str("spider-x"))
 		case p.usesTLS():
 			q.Set("security", "tls")
 		default:

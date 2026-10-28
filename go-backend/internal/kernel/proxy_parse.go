@@ -511,6 +511,9 @@ func ValidateImportedProxy(p Proxy) error {
 // condition on its own: empty is allowed; a non-empty value must be
 // lowercase hex, even length, at most 16 chars (the self-built face's
 // shortIDPattern plus its even-length rule in normalizeSecurity).
+// dest (L5-F-01) reuses the self-built face's L1-F-01 predicate and
+// wording verbatim; spider-x must not contain whitespace/control
+// characters (it is a URL path segment).
 func validateRealityOpts(p Proxy) error {
 	ro := p.sub("reality-opts")
 	if len(ro) == 0 {
@@ -523,6 +526,27 @@ func validateRealityOpts(p Proxy) error {
 	if sid := ro.str("short-id"); sid != "" {
 		if !shortIDPattern.MatchString(sid) || len(sid)%2 != 0 {
 			return errors.New("Reality short-id 格式错误（须为偶数位小写十六进制，最多 16 位）")
+		}
+	}
+	// L5-F-01：Reality dest 与自建面 normalizeSecurity 的 L1-F-01
+	// 校验同谓词、同文案——SplitHostPort + 空标签拒 + 端口 1-65535。
+	// 导入面此前根本不读该字段，`a..b:443` 无声丢弃而创建面拒收。
+	if dest := ro.str("dest"); dest != "" {
+		if host, port, err := net.SplitHostPort(dest); err != nil || host == "" {
+			return errors.New("Reality 目标地址格式应为 host:port")
+		} else if HasEmptyLabel(host) {
+			return fmt.Errorf("Reality 目标地址不正确：%q", dest)
+		} else if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			return errors.New("Reality 目标端口错误")
+		}
+	}
+	// L5-F-01 同型残留 spx：标准链接参数，对应 Xray 客户端 spiderX。
+	// spiderX 是 URL 路径段，不可能含空白或控制字符，含则拒收。
+	if spx := ro.str("spider-x"); spx != "" {
+		for _, r := range spx {
+			if r <= 0x20 || r == 0x7f {
+				return errors.New("Reality spiderX 格式错误（不能含空白或控制字符）")
+			}
 		}
 	}
 	// 手动填写节点修复（F-02）：Reality 须填 SNI——serverName 是
@@ -757,6 +781,13 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 				ro := Proxy{}
 				ro.set("public-key", q.Get("pbk"))
 				ro.set("short-id", q.Get("sid"))
+				// L5-F-01：链接上的 realityDest（目标地址）与 spx
+				// （spiderX）此前根本不读，合法值也静默丢弃。
+				// 与 pbk/sid 同进 reality-opts，校验收口于
+				// validateRealityOpts（finishProxy / 恢复谓词 /
+				// 渲染面谓词共用），坏值整条拒收。
+				ro.set("dest", q.Get("realityDest"))
+				ro.set("spider-x", q.Get("spx"))
 				if ro.str("public-key") == "" {
 					return nil, errors.New("Reality 链接缺少公钥 pbk")
 				}
