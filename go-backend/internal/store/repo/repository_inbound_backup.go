@@ -344,7 +344,10 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 //
 // 例外（R8X-004）：行字段 Listen/Port 不属于任何被校验对象，恒检
 // 与内容豁免解耦、置于 hasContent 判定之前——豁免只豁免内容、
-// 不豁免地址/端口门。导入型入站（kernel_id≤0）的行内 Listen/Port
+// 不豁免地址/端口门。例外之例外（R6-H-01）：导入型行 Listen 为 ::（含
+// 原始空值经调用方归一）且 Extra 校验必跑时，行载体拨号校验跳过——
+// 此时行载体不携带拨号地址，地址由 Extra 载体校验覆盖；其余情形恒检
+// 不变（非空 Listen 的 facet A 校验、Extra 缺席行的行载体门均不受影响）。导入型入站（kernel_id≤0）的行内 Listen/Port
 // 是导入地址的行内第二载体（externalRow 恒以经 finishProxy 校验的
 // Host/Port 双写行字段与 Extra），经 kernel.ValidateImportedProxyRowAddress
 // 走与 finishProxy 共用的同一地址实现 validateImportedProxyAddress
@@ -354,9 +357,37 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // listen 已由调用方完成空→"::" 归一）。不要求行内 Listen/Port 与
 // Extra 的 server/port 相等（只设合法性门，防过修）。
 func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, strategy string) error {
+	// hasContent is computed up front only so the R6-H-01 carve-out below
+	// can tell whether the Extra-carrier check is guaranteed to run; the
+	// row-carrier gate itself is NOT content-gated (R8X-004) and still
+	// runs for content-less rows except for that carve-out.
+	hasContent := strings.TrimSpace(i.Settings) != "" || strings.TrimSpace(i.Transport) != "" ||
+		strings.TrimSpace(i.Security) != ""
+	if !hasContent {
+		if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" && extra != "{}" {
+			hasContent = true
+		}
+	}
 	if i.KernelID <= 0 {
-		if err := kernel.ValidateImportedProxyRowAddress(listen, i.Port); err != nil {
-			return err
+		// R6-H-01: the caller normalizes an empty row Listen to "::"
+		// (the canonical unspecified form of this codebase: DB default
+		// and Normalize's "" -> "::"), so at this point an originally
+		// empty Listen and a literal "::" are indistinguishable -- and
+		// neither carries a dial address. The dial address of an
+		// imported row lives in Extra and is validated below by
+		// ValidateImportedProxy. Skip the row-carrier dial check for
+		// "::" ONLY when that Extra check is guaranteed to run (Extra
+		// present and the row has content, so the function reaches it);
+		// legacy Extra-less rows keep the row gate as their only
+		// address check, and any other Listen value (including
+		// "0.0.0.0", which no code path here produces as an unspecified
+		// form) stays under the R8X-004 facet A dial check.
+		extra := strings.TrimSpace(i.Extra)
+		extraValidated := extra != "" && extra != "null" && hasContent
+		if !(listen == "::" && extraValidated) {
+			if err := kernel.ValidateImportedProxyRowAddress(listen, i.Port); err != nil {
+				return err
+			}
 		}
 	} else {
 		if i.Port < 1 || i.Port > 65535 {
@@ -364,13 +395,6 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		}
 		if net.ParseIP(listen) == nil {
 			return errors.New("监听地址必须是 IP")
-		}
-	}
-	hasContent := strings.TrimSpace(i.Settings) != "" || strings.TrimSpace(i.Transport) != "" ||
-		strings.TrimSpace(i.Security) != ""
-	if !hasContent {
-		if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" && extra != "{}" {
-			hasContent = true
 		}
 	}
 	if !hasContent {
