@@ -130,6 +130,23 @@ func (r *Repository) UpdateForwardStatus(forwardID int64, status int, now int64)
 	}).Error
 }
 
+// UpdateForwardStatusIfNotPending 原子条件更新（F-02）：仅当行当前
+// 不是 pending-delete 时才改 status。返回是否命中 1 行；0 行表示
+// 行不存在或已 pending-delete，调用方读一次区分。检查与写入合一，
+// 消除 ActivateForwardIfNotPending 先读后写的 TOCTOU。
+func (r *Repository) UpdateForwardStatusIfNotPending(forwardID int64, status int, now int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Forward{}).Where("id = ? AND status <> ?", forwardID, model.ForwardStatusPendingDelete).Updates(map[string]interface{}{
+		"status": status, "updated_time": now,
+	})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
 func (r *Repository) ListActiveForwardsByUser(userID int64) ([]model.ForwardRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
