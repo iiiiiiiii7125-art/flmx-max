@@ -550,9 +550,29 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R2-G-01：重置前按 type 校验存在（与 userQuotaReset 的 G-QUOTA-01
+	// 同口径），不存在即报错，不再幻影回成功。type=1 查用户，
+	// type=2 查 user_tunnel 行。
 	if typeVal == 1 {
+		u, err := h.repo.GetUserByID(id)
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if u == nil {
+			response.WriteJSON(w, response.ErrDefault("用户不存在"))
+			return
+		}
 		h.repo.ResetUserFlowByUser(id, time.Now().UnixMilli())
 	} else {
+		if _, _, err := h.repo.GetUserTunnelUserAndTunnel(id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				response.WriteJSON(w, response.ErrDefault("隧道不存在"))
+			} else {
+				response.WriteJSON(w, response.Err(-2, err.Error()))
+			}
+			return
+		}
 		h.repo.ResetUserFlowByUserTunnel(id)
 	}
 	response.WriteJSON(w, response.OKEmpty())
