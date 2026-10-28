@@ -318,13 +318,13 @@ func ssPluginString(p Proxy) string {
 	switch strings.ToLower(strings.TrimSpace(p.str("plugin"))) {
 	case "obfs":
 		s := "obfs-local;obfs=" + strings.ToLower(po.str("mode"))
-		if h := po.str("host"); h != "" {
+		if h := firstHeaderHostValue(po); h != "" {
 			s += ";obfs-host=" + h
 		}
 		return s
 	case "v2ray-plugin":
 		s := "v2ray-plugin;mode=websocket"
-		if h := po.str("host"); h != "" {
+		if h := firstHeaderHostValue(po); h != "" {
 			s += ";host=" + h
 		}
 		if path := po.str("path"); path != "" {
@@ -339,7 +339,7 @@ func ssPluginString(p Proxy) string {
 		if version == 0 {
 			version = 3
 		}
-		return fmt.Sprintf("shadow-tls;host=%s;password=%s;version=%d", po.str("host"), po.str("password"), version)
+		return fmt.Sprintf("shadow-tls;host=%s;password=%s;version=%d", firstHeaderHostValue(po), po.str("password"), version)
 	}
 	return ""
 }
@@ -552,7 +552,7 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			return []map[string]interface{}{o, {
 				"type": "shadowtls", "tag": tag, "server": strings.Trim(e.Host, "[]"), "server_port": e.Port,
 				"version": version, "password": po.str("password"),
-				"tls": map[string]interface{}{"enabled": true, "server_name": po.str("host"),
+				"tls": map[string]interface{}{"enabled": true, "server_name": firstHeaderHostValue(po),
 					"utls": map[string]interface{}{"enabled": true, "fingerprint": firstNonEmptyString(p.str("client-fingerprint"), "chrome")}},
 			}}, true
 		default:
@@ -759,7 +759,7 @@ func proxySurge(e Endpoint) (string, bool) {
 		if version == 0 {
 			version = 3
 		}
-		parts = append(parts, "shadow-tls-password="+surgeEscape(po.str("password")), "shadow-tls-sni="+surgeEscape(po.str("host")),
+		parts = append(parts, "shadow-tls-password="+surgeEscape(po.str("password")), "shadow-tls-sni="+surgeEscape(firstHeaderHostValue(po)),
 			fmt.Sprintf("shadow-tls-version=%d", version))
 	}
 	switch p.Type() {
@@ -776,7 +776,7 @@ func proxySurge(e Endpoint) (string, bool) {
 			parts = append(parts, "udp-relay=true")
 		case "obfs":
 			parts = append(parts, "obfs="+po.str("mode"))
-			if h := po.str("host"); h != "" {
+			if h := firstHeaderHostValue(po); h != "" {
 				parts = append(parts, "obfs-host="+h)
 			}
 		case "shadow-tls":
@@ -814,7 +814,7 @@ func proxySurge(e Endpoint) (string, bool) {
 		}
 		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
 			parts = append(parts, "obfs="+oo.str("mode"))
-			if h := oo.str("host"); h != "" {
+			if h := firstHeaderHostValue(oo); h != "" {
 				parts = append(parts, "obfs-host="+h)
 			}
 		}
