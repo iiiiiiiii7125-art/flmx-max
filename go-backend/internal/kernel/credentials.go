@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"strconv"
 	"strings"
@@ -725,6 +726,25 @@ func transportSecurityViolation(p Proxy) string {
 // verdicts §3.4). TUIC udp-relay-mode is deliberately absent:
 // unverified (see above).
 func validImportedProxyFields(p Proxy, face string) bool {
+	// R3-D-01: hostname labels — the render faces must give the same
+	// verdict as the import face (validateImportHostnames: SNI +
+	// transport Hosts + plugin Hosts, every spelling via
+	// headerHostValues). Pre-B-01 imports read only one spelling per
+	// carrier, so a bad label under the opposite spelling escaped
+	// validation and landed in storage; B-01 closed only the import
+	// gate, and R2-L-01 (render-side dual read) widened the stored
+	// rows' emission from 1 carrier to 4. Without this check the
+	// stored rows render verbatim, while the same value is rejected
+	// at import — K-01 stored-poison precedent: skip whole stock
+	// nodes failing the shared predicate, one place closing the set.
+	// The skip is logged (node name + face + reason) so the operator
+	// can find the poisoned rows — they are otherwise invisible
+	// without a full-DB scan. Storage is never rewritten
+	// (CLOSED-LIST §2e).
+	if err := validateImportHostnames(p); err != nil {
+		log.Printf("kernel: skip stock node %q at render (%s face): %v", p.str("name"), face, err)
+		return false
+	}
 	if err := validateRealityOpts(p); err != nil {
 		return false
 	}

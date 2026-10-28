@@ -129,7 +129,14 @@ func validateImportHostnames(p Proxy) error {
 // only ws — http/h2/xhttp each read one spelling — so the premise above
 // was false for the render faces until firstHeaderHostValue closed it;
 // the "store keys unchanged" decision (CLOSED-LIST §2e) stands on the
-// render side now reading every spelling. Values are collected without
+// render side now reading every spelling. R3-D-01: the premise's other
+// half — "values the render side reads out are legal" — never held
+// for stored rows: rows that escaped the pre-B-01 import check kept
+// rendering verbatim, and R2-L-01 widened their emission from 1
+// carrier to 4. The render predicate (validImportedProxyFields) now
+// re-validates hostname labels at render with this same collector,
+// so stored bad-label rows are skipped instead of emitted; storage
+// keys still unchanged. Values are collected without
 // splitting on commas: a Host header is a single host, and a comma-joined
 // value fails hostPattern as a whole (fail-closed).
 func importTransportHosts(p Proxy) []string {
