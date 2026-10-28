@@ -326,14 +326,15 @@ func (h *Handler) notifyUserQuotaRecovered(userID int64, reason string) {
 		log.Printf("quota recovery notify skipped user_id=%d err=%v", userID, err)
 		return
 	}
-	h.markQuotaRecoveryPending(userID, reason)
+	gen := h.markQuotaRecoveryPending(userID, reason)
 	h.notifyTracked(notifyEventUserQuota, "用户配额已恢复",
 		fmt.Sprintf("用户：%s\n%s，转发限制已解除", u.User, reason),
 		func(outcome notifyOutcome) {
 			if outcome == notifyOutcomeFailed {
 				// 失败重记：与另一路并发派发的抑制清除交错时，标记
-				// 仍能留下来等下一轮补发（见上）。
-				h.markQuotaRecoveryPending(userID, reason)
+				// 仍能留下来等下一轮补发（见上）。R6-I-01：重记须
+				// 经世代守卫，旧回调不得覆写更新的原因。
+				h.remarkQuotaRecoveryPendingIfCurrent(userID, gen, reason)
 				return
 			}
 			h.clearQuotaRecoveryPending(userID)
@@ -342,16 +343,35 @@ func (h *Handler) notifyUserQuotaRecovered(userID int64, reason string) {
 
 // pendingQuotaRecovery is one undelivered quota-recovery notice,
 // persisted in vite_config under notifyQuotaRecoveryPendingConfigKey.
+//
+// Gen is the generation of the mark (R6-I-01), same mechanism as the
+// Gist face: every mark advances it monotonically per user, clears
+// never move it, and a Failed callback carries the generation its
+// dispatch was sent under. Records written before generations existed
+// unmarshal with Gen 0 and are advanced past by the next mark.
 type pendingQuotaRecovery struct {
 	UserID int64  `json:"userId"`
 	Reason string `json:"reason"`
 	At     int64  `json:"at"`
+	Gen    int64  `json:"gen"`
 }
 
 // notifyQuotaRecoveryPendingConfigKey holds the pending quota-recovery
 // notices (I-01). Runtime ledger, not admin config: excluded from
 // backups by backupRuntimeExcludedConfigKeys.
 const notifyQuotaRecoveryPendingConfigKey = "notify_quota_recovery_pending"
+
+// notifyQuotaRecoveryPendingGenConfigKey holds the last issued
+// generation per user (R6-I-01), as a JSON object mapping decimal user
+// ID to generation. Runtime ledger, excluded from backups like the
+// pending list itself: it is advanced only by
+// markQuotaRecoveryPending, never by clear, so that after a newer
+// generation's dispatch succeeds and clears the record, an older
+// generation's late failure cannot resurrect the stale reason. A
+// re-mark after a retry-loop drop is benign: the retry loop
+// re-validates (user gone / blocked again / exceeded again) before
+// any resend, so a restored record is dropped again, never sent stale.
+const notifyQuotaRecoveryPendingGenConfigKey = "notify_quota_recovery_pending_gen"
 
 func (h *Handler) loadPendingQuotaRecoveries() []pendingQuotaRecovery {
 	if h == nil || h.repo == nil {
@@ -395,8 +415,79 @@ func (h *Handler) savePendingQuotaRecoveriesLocked(list []pendingQuotaRecovery) 
 	}
 }
 
-func (h *Handler) markQuotaRecoveryPending(userID int64, reason string) {
+func (h *Handler) quotaRecoveryGenLocked() map[string]int64 {
+	cfg, err := h.repo.GetConfigByName(notifyQuotaRecoveryPendingGenConfigKey)
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Value) == "" {
+		return map[string]int64{}
+	}
+	var gens map[string]int64
+	if err := json.Unmarshal([]byte(cfg.Value), &gens); err != nil {
+		log.Printf("quota recovery pending generation map corrupt, dropping: %v", err)
+		return map[string]int64{}
+	}
+	if gens == nil {
+		return map[string]int64{}
+	}
+	return gens
+}
+
+func (h *Handler) saveQuotaRecoveryGenLocked(gens map[string]int64) {
+	raw, err := json.Marshal(gens)
+	if err != nil {
+		log.Printf("quota recovery pending generation marshal failed: %v", err)
+		return
+	}
+	if err := h.repo.UpsertConfig(notifyQuotaRecoveryPendingGenConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+		log.Printf("quota recovery pending generation save failed: %v", err)
+	}
+}
+
+// markQuotaRecoveryPending arms (or re-arms) the pending mark for one
+// user with a fresh generation and returns it. The watermark is written
+// before the list for the same reason as the Gist face: a failed list
+// write after a watermark advance is harmless, while a list written
+// ahead of the watermark could let a stale callback resurrect after a
+// success-clear.
+func (h *Handler) markQuotaRecoveryPending(userID int64, reason string) int64 {
 	if h == nil || h.repo == nil || userID <= 0 {
+		return 0
+	}
+	h.quotaRecoveryMu.Lock()
+	defer h.quotaRecoveryMu.Unlock()
+	list := h.loadPendingQuotaRecoveriesLocked()
+	gens := h.quotaRecoveryGenLocked()
+	key := strconv.FormatInt(userID, 10)
+	gen := gens[key] + 1
+	for i := range list {
+		if list[i].UserID == userID && list[i].Gen >= gen {
+			gen = list[i].Gen + 1
+		}
+	}
+	gens[key] = gen
+	h.saveQuotaRecoveryGenLocked(gens)
+	now := time.Now().UnixMilli()
+	for i := range list {
+		if list[i].UserID == userID {
+			list[i].Reason = reason
+			list[i].At = now
+			list[i].Gen = gen
+			h.savePendingQuotaRecoveriesLocked(list)
+			return gen
+		}
+	}
+	list = append(list, pendingQuotaRecovery{UserID: userID, Reason: reason, At: now, Gen: gen})
+	h.savePendingQuotaRecoveriesLocked(list)
+	return gen
+}
+
+// remarkQuotaRecoveryPendingIfCurrent is the quota face of the R6-I-01
+// generation guard (see remarkGistFailurePendingIfCurrent for the
+// rule): re-arm only if the record still carries gen, or the record
+// is gone and no newer mark for this user has been issued since gen.
+// A newer reason, or a newer generation's success-clear, makes the
+// callback stale.
+func (h *Handler) remarkQuotaRecoveryPendingIfCurrent(userID, gen int64, reason string) {
+	if h == nil || h.repo == nil || userID <= 0 || gen <= 0 {
 		return
 	}
 	h.quotaRecoveryMu.Lock()
@@ -405,13 +496,20 @@ func (h *Handler) markQuotaRecoveryPending(userID int64, reason string) {
 	now := time.Now().UnixMilli()
 	for i := range list {
 		if list[i].UserID == userID {
+			if list[i].Gen != gen {
+				return
+			}
 			list[i].Reason = reason
 			list[i].At = now
 			h.savePendingQuotaRecoveriesLocked(list)
 			return
 		}
 	}
-	list = append(list, pendingQuotaRecovery{UserID: userID, Reason: reason, At: now})
+	gens := h.quotaRecoveryGenLocked()
+	if gens[strconv.FormatInt(userID, 10)] != gen {
+		return
+	}
+	list = append(list, pendingQuotaRecovery{UserID: userID, Reason: reason, At: now, Gen: gen})
 	h.savePendingQuotaRecoveriesLocked(list)
 }
 
