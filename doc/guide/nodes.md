@@ -128,10 +128,10 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 | Clash / Mihomo | Clash Verge、Stash、FlClash | NaïveProxy |
 | sing-box | SFA / SFI / SFM | XHTTP |
 | Shadowrocket | Shadowrocket | NaïveProxy |
-| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy |
-| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy |
+| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy、TCP+HTTP 头伪装 |
+| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy、TCP+HTTP 头伪装 |
 | 通用 base64 | v2rayN、NekoBox | Snell |
-| Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy |
+| Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy、TCP+HTTP 头伪装 |
 
 Snell 的下发按版本与客户端区分：Clash / Mihomo 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发。注意：sing-box 是否下发 Snell 按**拉取请求的 UA** 判定（须 sing-box 1.14+ 的 UA），与是否用 `?format=` 指定格式无关；用浏览器或普通工具拉取（UA 不带 sing-box 版本）时不含 Snell，属正常现象，用 sing-box 1.14+ 客户端直接拉取（含 `?format=singbox` 链接）即可。另注意：导入的 Snell v1–v3 节点在 sing-box 订阅侧会被略过（sing-box 侧只下发 v4 / v6 口径），在其他格式中照常出现。
 
