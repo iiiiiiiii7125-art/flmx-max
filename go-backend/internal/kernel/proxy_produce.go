@@ -254,32 +254,54 @@ func setIf(q url.Values, k, v string) {
 	}
 }
 
+// firstHeaderHostValue returns the first Host header value stored under
+// any case spelling of "host" in m, expanding list values element-wise
+// (first element only). Canonical "Host" wins over "host" so the pick is
+// deterministic when both keys are present with different values; any
+// other spelling falls back to headerHostValues — the same collector the
+// import validator uses — so render and validation can never disagree
+// about which values a carrier holds.
+//
+// R2-L-01: transportFields used to read only one spelling per carrier
+// (ws dual-read, http only "Host", h2/xhttp only "host") and the ws
+// branch used str(), which stringified a list value into "[example.com]".
+// A legal Host under the other spelling was silently lost on every face
+// but Clash. All four carriers now go through this helper.
+func firstHeaderHostValue(m Proxy) string {
+	for _, k := range []string{"Host", "host"} {
+		if vals := m.strs(k); len(vals) > 0 {
+			return vals[0]
+		}
+	}
+	if vals := headerHostValues(m); len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
+}
+
 // transportFields extracts host / path / gRPC service / XHTTP mode.
 func transportFields(p Proxy) (host, path, service, mode string) {
 	switch p.network() {
 	case "ws":
 		wo := p.sub("ws-opts")
 		path = wo.str("path")
-		host = firstNonEmptyString(wo.sub("headers").str("Host"), wo.sub("headers").str("host"))
+		host = firstHeaderHostValue(wo.sub("headers"))
 	case "grpc":
 		service = p.sub("grpc-opts").str("grpc-service-name")
 	case "h2":
 		ho := p.sub("h2-opts")
 		path = ho.str("path")
-		if hosts := ho.strs("host"); len(hosts) > 0 {
-			host = hosts[0]
-		}
+		host = firstHeaderHostValue(ho)
 	case "http":
 		ho := p.sub("http-opts")
 		if paths := ho.strs("path"); len(paths) > 0 {
 			path = paths[0]
 		}
-		if hosts := ho.sub("headers").strs("Host"); len(hosts) > 0 {
-			host = hosts[0]
-		}
+		host = firstHeaderHostValue(ho.sub("headers"))
 	case "xhttp":
 		xo := p.sub("xhttp-opts")
-		path, host, mode = xo.str("path"), xo.str("host"), xo.str("mode")
+		path, mode = xo.str("path"), xo.str("mode")
+		host = firstHeaderHostValue(xo)
 	}
 	return
 }
