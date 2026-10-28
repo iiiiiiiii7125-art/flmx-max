@@ -1741,13 +1741,13 @@ func firstPortFromRange(portRange string) int {
 			return 0
 		}
 		p, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-		if err != nil || p <= 0 {
+		if err != nil || p <= 0 || p > 65535 {
 			return 0
 		}
 		return p
 	}
 	p, err := strconv.Atoi(first)
-	if err != nil || p <= 0 {
+	if err != nil || p <= 0 || p > 65535 {
 		return 0
 	}
 	return p

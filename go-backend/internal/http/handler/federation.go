@@ -1396,6 +1396,13 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// D-03：分享端口段未设置（0-0）或半设置时 fail-closed，与
+	// pickPeerSharePort 同口径；此前仅凭 RemotePort 与段端比较，
+	// RemotePort=0 在 0-0 下两边都不成立而漏过，生成 Port=0 的 runtime。
+	if share.PortRangeStart <= 0 || share.PortRangeEnd <= 0 || share.PortRangeEnd < share.PortRangeStart {
+		response.WriteJSON(w, response.Err(403, "No available port"))
+		return
+	}
 	if req.RemotePort < share.PortRangeStart || req.RemotePort > share.PortRangeEnd {
 		response.WriteJSON(w, response.Err(403, "Port out of range"))
 		return

@@ -7392,6 +7392,20 @@ func parsePorts(portRange string) ([]int, error) {
 			if err1 != nil || err2 != nil || start > end {
 				return nil, errors.New("invalid port range values")
 			}
+			// E-01（F-PORT-01 未守住）：与 parsePortRangeSpec 同口径，
+			// 区间钳到 1–65535——此前 "1-99999" 会把 >65535 的端口发
+			// 给 pickTunnelPort/pickRandomPortForNode，随机挑中后由
+			// 调用方以“端口必须在 1-65535 范围内”挡回（窄范围 100%
+			// 失败）；全段越界的段直接丢弃（不报错，调用方按空集处理）。
+			if start > 65535 || end < 1 {
+				continue
+			}
+			if start < 1 {
+				start = 1
+			}
+			if end > 65535 {
+				end = 65535
+			}
 			for i := start; i <= end; i++ {
 				ports = append(ports, i)
 			}
@@ -7399,6 +7413,10 @@ func parsePorts(portRange string) ([]int, error) {
 			p, err := strconv.Atoi(part)
 			if err != nil {
 				return nil, errors.New("invalid port value")
+			}
+			// E-01：单值越界同样丢弃（与 parsePortRangeSpec 同口径）。
+			if p < 1 || p > 65535 {
+				continue
 			}
 			ports = append(ports, p)
 		}
@@ -8209,8 +8227,18 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 	// parsePortRangeSpec 一致）。此前压成 min-max 区间校验，段间空隙
 	// 端口被误放行——校验通过但自动分配永不选、agent 按规格不认。
 	ports, err := parsePorts(portRange)
-	if err != nil || len(ports) == 0 {
+	if err != nil {
 		return nil // 规格不可解析时保持既有宽松行为，不新设拒绝面
+	}
+	if len(ports) == 0 {
+		// E-01：parsePorts 钳制后，可解析但全段越界的规格（如
+		// "70000-80000"）返回空集、无错误；此前同一规格下合法端口
+		// 均不在集合中而被拒，空集不能反转为放行，仍按“不在允许范围”
+		// 拒绝。无数字的垃圾规格（如 ","）仍保持既有宽松行为。
+		if strings.ContainsAny(portRange, "0123456789") {
+			return fmt.Errorf("端口 %d 不在节点 %s 允许范围 %s 内（该范围仅约束转发/中转/隧道入口端口）", port, node.Name, portRange)
+		}
+		return nil
 	}
 	for _, p := range ports {
 		if p == port {
@@ -8288,6 +8316,15 @@ func parsePortRangeMinMax(input string) (int, int) {
 			if end < start {
 				start, end = end, start
 			}
+			// E-01：与 repo 的 parsePortRangeMinMax 同口径，上界钳到
+			// 65535（此前孪生实现未钳制；目前零调用方，仍先钳住，
+			// 防止后人接线后重蹈 E-01）。
+			if start > 65535 {
+				continue
+			}
+			if end > 65535 {
+				end = 65535
+			}
 			if minPort == 0 || start < minPort {
 				minPort = start
 			}
@@ -8297,7 +8334,7 @@ func parsePortRangeMinMax(input string) (int, int) {
 			continue
 		}
 		p, err := strconv.Atoi(part)
-		if err != nil || p <= 0 {
+		if err != nil || p <= 0 || p > 65535 {
 			continue
 		}
 		if minPort == 0 || p < minPort {
