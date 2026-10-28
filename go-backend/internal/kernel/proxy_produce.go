@@ -272,9 +272,16 @@ func setIf(q url.Values, k, v string) {
 // legal Host under the nested `headers` sub-map (the non-canonical
 // Clash YAML shape) was lost on every face but Clash/Stash — the same
 // stored row was seen differently on each face. The arms now fall back
-// to the nested headers map when the direct key is empty, mirroring
-// ws/http; the direct key still wins when both are present, so no
-// existing direct-key row can change its rendering.
+// to the nested headers map when the direct key is empty; the direct
+// key still wins when both are present, so no existing direct-key row
+// can change its rendering.
+//
+// R5-B-01: the ws/http arms had the mirror gap — they read only the
+// nested headers map, so a legal Host under the direct `host` key was
+// lost on every face but Clash/Stash. The arms now fall back to the
+// direct key when the nested headers map is empty; the nested value
+// remains canonical for ws/http and still wins when both are present,
+// so no existing nested-key row can change its rendering.
 func firstHeaderHostValue(m Proxy) string {
 	for _, k := range []string{"Host", "host"} {
 		if vals := m.strs(k); len(vals) > 0 {
@@ -294,6 +301,10 @@ func transportFields(p Proxy) (host, path, service, mode string) {
 		wo := p.sub("ws-opts")
 		path = wo.str("path")
 		host = firstHeaderHostValue(wo.sub("headers"))
+		if host == "" {
+			// R5-B-01: direct-key fallback (see firstHeaderHostValue).
+			host = firstHeaderHostValue(wo)
+		}
 	case "grpc":
 		service = p.sub("grpc-opts").str("grpc-service-name")
 	case "h2":
@@ -310,6 +321,10 @@ func transportFields(p Proxy) (host, path, service, mode string) {
 			path = paths[0]
 		}
 		host = firstHeaderHostValue(ho.sub("headers"))
+		if host == "" {
+			// R5-B-01: direct-key fallback (see firstHeaderHostValue).
+			host = firstHeaderHostValue(ho)
+		}
 	case "xhttp":
 		xo := p.sub("xhttp-opts")
 		path, mode = xo.str("path"), xo.str("mode")

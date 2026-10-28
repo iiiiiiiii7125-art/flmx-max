@@ -146,15 +146,26 @@ func validateImportHostnames(p Proxy) error {
 // nested headers from the start; h2/xhttp read only the direct key,
 // so a bad label under the nested form escaped both import validation
 // and the render predicate (which shares this collector) and was
-// emitted verbatim on the Clash/Stash faces. The enumeration is now
-// two forms per carrier — the direct `host` key and the nested
-// `headers` map — every spelling via headerHostValues, string and
-// list values alike. Enumeration boundary: `headers` must be a map
+// emitted verbatim on the Clash/Stash faces.
+//
+// R5-B-01: the "two forms per carrier" claim above was false for
+// ws/http — those two carriers read ONLY the nested headers map, so
+// a bad label under the direct `host` key escaped the same two gates
+// and was emitted verbatim on Clash/Stash. Read lines, per carrier
+// (direct key first, nested headers second; every spelling via
+// headerHostValues, string and list values alike):
+//   ws-opts:    direct `host` key + `headers` sub-map
+//   http-opts:  direct `host` key + `headers` sub-map
+//   h2-opts:    direct `host` key + `headers` sub-map
+//   xhttp-opts: direct `host` key + `headers` sub-map
+// Enumeration boundary: `headers` must be a map
 // (Proxy.sub returns empty for non-maps); Clash YAML headers is a
 // map, and no other Host-bearing shape exists under these opts.
 func importTransportHosts(p Proxy) []string {
 	var out []string
+	out = append(out, headerHostValues(p.sub("ws-opts"))...)
 	out = append(out, headerHostValues(p.sub("ws-opts").sub("headers"))...)
+	out = append(out, headerHostValues(p.sub("http-opts"))...)
 	out = append(out, headerHostValues(p.sub("http-opts").sub("headers"))...)
 	out = append(out, headerHostValues(p.sub("h2-opts"))...)
 	out = append(out, headerHostValues(p.sub("h2-opts").sub("headers"))...)
