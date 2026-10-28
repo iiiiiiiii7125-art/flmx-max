@@ -255,6 +255,14 @@ type chainTarget struct {
 	PinSHA256      string
 	RealityPublic  string
 	RealityShortID string
+	// RealityDest / RealitySpiderX carry the client-link Reality
+	// params realityDest / spx (L5-F-01): user-supplied, validated
+	// values from an imported proxy. A self-built inbound never fills
+	// them — its Security.RealityDest is the server-side decoy target
+	// (probe forwarding), not a client dial value, and must not leak
+	// into the chain outbound.
+	RealityDest    string
+	RealitySpiderX string
 }
 
 // HasVLESSEncryption reports whether the endpoint carries VLESS
@@ -426,6 +434,10 @@ func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 		if ro := p.sub("reality-opts"); len(ro) > 0 {
 			t.Security = SecurityReality
 			t.RealityPublic, t.RealityShortID = ro.str("public-key"), ro.str("short-id")
+			// L5-F-01：导入链接带来的 dest/spx 透传给 Xray 链式出站
+			// （realitySettings 的同名字段）。自建目标不填这两项
+			// （见 chainTarget 注释），此处只搬运导入值。
+			t.RealityDest, t.RealitySpiderX = ro.str("dest"), ro.str("spider-x")
 		} else if p.flag("skip-cert-verify") {
 			// Mihomo's fingerprint is the certificate's SHA-256.
 			t.PinSHA256 = p.str("fingerprint")
@@ -546,6 +558,15 @@ func xrayChainOutbound(e Endpoint, tag string, level int) (obj, error) {
 		}
 		if t.RealityShortID != "" {
 			r["shortId"] = t.RealityShortID
+		}
+		// L5-F-01：导入链接的 dest/spx（仅导入目标携带，自建目标
+		// 永不填）透传入客户端 realitySettings。Xray 忽略未知/
+		// 未用字段，故无此值的旧目标行为逐字不变。
+		if t.RealityDest != "" {
+			r["dest"] = t.RealityDest
+		}
+		if t.RealitySpiderX != "" {
+			r["spiderX"] = t.RealitySpiderX
 		}
 		stream["security"] = SecurityReality
 		stream["realitySettings"] = r
