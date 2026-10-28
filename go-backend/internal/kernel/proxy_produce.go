@@ -262,6 +262,11 @@ func setIf(q url.Values, k, v string) {
 // import validator uses — so render and validation can never disagree
 // about which values a carrier holds.
 //
+// R6-L-01: the fallback is deterministic too. headerHostValues visits
+// spellings in ascending byte order, so with two or more non-canonical
+// spellings and no canonical key, the pick is always the first element
+// of the byte-order smallest spelling — never map iteration order.
+//
 // R2-L-01: transportFields used to read only one spelling per carrier
 // (ws dual-read, http only "Host", h2/xhttp only "host") and the ws
 // branch used str(), which stringified a list value into "[example.com]".

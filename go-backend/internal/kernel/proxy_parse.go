@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -154,10 +155,12 @@ func validateImportHostnames(p Proxy) error {
 // and was emitted verbatim on Clash/Stash. Read lines, per carrier
 // (direct key first, nested headers second; every spelling via
 // headerHostValues, string and list values alike):
-//   ws-opts:    direct `host` key + `headers` sub-map
-//   http-opts:  direct `host` key + `headers` sub-map
-//   h2-opts:    direct `host` key + `headers` sub-map
-//   xhttp-opts: direct `host` key + `headers` sub-map
+//
+//	ws-opts:    direct `host` key + `headers` sub-map
+//	http-opts:  direct `host` key + `headers` sub-map
+//	h2-opts:    direct `host` key + `headers` sub-map
+//	xhttp-opts: direct `host` key + `headers` sub-map
+//
 // Enumeration boundary: `headers` must be a map
 // (Proxy.sub returns empty for non-maps); Clash YAML headers is a
 // map, and no other Host-bearing shape exists under these opts.
@@ -177,12 +180,23 @@ func importTransportHosts(p Proxy) []string {
 // headerHostValues collects every value stored under any case spelling
 // of the "host" key in m (Host / host / HOST / ...), expanding list
 // values element-wise. Non-string, non-list values are ignored.
+//
+// R6-L-01: keys are visited in ascending byte order, not map iteration
+// order, so the collected order is deterministic: firstHeaderHostValue
+// takes vals[0], which is then always the first element of the
+// byte-order smallest spelling, and validators that consume the whole
+// list still see every value.
 func headerHostValues(m Proxy) []string {
-	var out []string
-	for k, v := range m {
-		if !strings.EqualFold(k, "host") {
-			continue
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if strings.EqualFold(k, "host") {
+			keys = append(keys, k)
 		}
+	}
+	sort.Strings(keys)
+	var out []string
+	for _, k := range keys {
+		v := m[k]
 		switch t := v.(type) {
 		case string:
 			if s := strings.TrimSpace(t); s != "" {
