@@ -74,6 +74,12 @@ const (
 	notifyEventBackup  = "backup_failed"
 )
 
+// notifyGistFailurePendingConfigKey holds the pending Gist backup-failure
+// notice (R2-I-02). Runtime ledger, not admin config: excluded from
+// backups by backupRuntimeExcludedConfigKeys, like the I-01 quota
+// recovery pending key.
+const notifyGistFailurePendingConfigKey = "notify_gist_failure_pending"
+
 // gistIntervals 是自动上传的可选项（小时；0 为关闭）。
 var gistIntervals = map[int]bool{0: true, 6: true, 12: true, 24: true, 168: true}
 
@@ -345,6 +351,11 @@ func (h *Handler) gistUpload(ctx context.Context, force bool) (gistUploadResult,
 		fields[gistConfigLastError] = truncate(err.Error(), 255)
 	}
 	_ = h.repo.UpsertConfigs(fields, now)
+	if err == nil {
+		// R2-I-02：上传成功即 supersede 此前的失败——与 lastError
+		// 被清空同一时刻清掉待发失败通知，下一轮不再补发已过时的失败。
+		h.clearGistFailurePending()
+	}
 	return result, err
 }
 
@@ -423,9 +434,119 @@ func (h *Handler) runGistBackupLoop(ctx context.Context) {
 			// 给管理员看；通知文案同样不含令牌（err 来自 GitHub 侧
 			// 通用信息，见 gistRequest 的状态码翻译）。
 			log.Printf("gist backup failed: %v", err)
-			h.notify(notifyEventBackup, "Gist 备份失败", err.Error())
+			// R2-I-02：失败通知不再走裸 h.notify（全后端最后一处），
+			// 改走 notifyTracked + 待发标记，发送失败由后续检查轮次补发。
+			h.notifyGistBackupFailed(err)
 		}
 	}
+}
+
+// pendingGistFailure is one undelivered Gist backup-failure notice,
+// persisted in vite_config under notifyGistFailurePendingConfigKey.
+// Single record (one gist, one current failure); a newer failure
+// overwrites the message, a later successful upload clears it.
+type pendingGistFailure struct {
+	Message string `json:"message"`
+	At      int64  `json:"at"`
+}
+
+func (h *Handler) loadPendingGistFailure() *pendingGistFailure {
+	if h == nil || h.repo == nil {
+		return nil
+	}
+	h.gistFailureMu.Lock()
+	defer h.gistFailureMu.Unlock()
+	cfg, err := h.repo.GetConfigByName(notifyGistFailurePendingConfigKey)
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Value) == "" {
+		return nil
+	}
+	var p pendingGistFailure
+	if err := json.Unmarshal([]byte(cfg.Value), &p); err != nil {
+		// 损坏的待发记录无法解析：记日志后丢弃，避免每轮重试都
+		// 卡在同一行上（与 I-01 的待发列表同口径）。
+		log.Printf("gist failure pending record corrupt, dropping: %v", err)
+		_ = h.repo.UpsertConfig(notifyGistFailurePendingConfigKey, "", time.Now().UnixMilli())
+		return nil
+	}
+	return &p
+}
+
+func (h *Handler) markGistFailurePending(message string) {
+	if h == nil || h.repo == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	h.gistFailureMu.Lock()
+	defer h.gistFailureMu.Unlock()
+	raw, err := json.Marshal(pendingGistFailure{Message: message, At: time.Now().UnixMilli()})
+	if err != nil {
+		log.Printf("gist failure pending marshal failed: %v", err)
+		return
+	}
+	if err := h.repo.UpsertConfig(notifyGistFailurePendingConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+		log.Printf("gist failure pending save failed: %v", err)
+	}
+}
+
+func (h *Handler) clearGistFailurePending() {
+	if h == nil || h.repo == nil {
+		return
+	}
+	h.gistFailureMu.Lock()
+	defer h.gistFailureMu.Unlock()
+	if err := h.repo.UpsertConfig(notifyGistFailurePendingConfigKey, "", time.Now().UnixMilli()); err != nil {
+		log.Printf("gist failure pending clear failed: %v", err)
+	}
+}
+
+// notifyGistBackupFailed sends the backup-failure notice with I-01 rearm
+// semantics (R2-I-02): mark pending before dispatch; the notifyTracked
+// callback re-marks on failure and clears on sent / suppressed /
+// disabled. The mark is armed only while the failure is still current
+// (gist_last_error non-empty): a later successful upload clears
+// lastError, which supersedes the failure — a stale notice must neither
+// be armed nor sent.
+func (h *Handler) notifyGistBackupFailed(err error) {
+	if h == nil || h.repo == nil || err == nil {
+		return
+	}
+	msg := err.Error()
+	if strings.TrimSpace(h.gistConfig()[gistConfigLastError]) == "" {
+		return
+	}
+	h.markGistFailurePending(msg)
+	h.notifyTracked(notifyEventBackup, "Gist 备份失败", msg,
+		func(outcome notifyOutcome) {
+			if outcome == notifyOutcomeFailed {
+				// 失败重记，但仅当失败仍为当前状态；其间若上传已成功
+				// （lastError 已清空），不复活已过时的失败通知。
+				if strings.TrimSpace(h.gistConfig()[gistConfigLastError]) != "" {
+					h.markGistFailurePending(msg)
+				}
+				return
+			}
+			h.clearGistFailurePending()
+		})
+}
+
+// retryPendingGistFailureNotice resends a Gist backup-failure notice
+// whose send failed (R2-I-02). Called from the 10-minute
+// checkUserReminders round, the same loop that retries failed quota
+// recovery notices (I-01). The mark is dropped when the failure no
+// longer stands (a later upload succeeded and cleared gist_last_error):
+// re-sending a stale failure after the backup healed would be wrong.
+func (h *Handler) retryPendingGistFailureNotice() {
+	if h == nil || h.repo == nil || h.notifier == nil {
+		return
+	}
+	pending := h.loadPendingGistFailure()
+	if pending == nil {
+		return
+	}
+	if strings.TrimSpace(h.gistConfig()[gistConfigLastError]) == "" {
+		h.clearGistFailurePending()
+		return
+	}
+	h.notifyGistBackupFailed(errors.New(pending.Message))
 }
 
 // --- API ---

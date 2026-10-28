@@ -373,19 +373,28 @@ func TestR2B8ImportKernelReplacementRepointsInbounds(t *testing.T) {
 
 // R2X-047（单元）：FilterBackupConfigs 精确排除日报运行时两键；
 // pending_realm_settle:* 与 notify_daily_hour 必须豁免（禁止前缀匹配）。
+// R2-I-02：两待发通知运行时键（I-01 配额恢复、R2-I-02 Gist 失败）同样排除。
 func TestR2B8FilterBackupConfigsExcludesDailyRuntimeKeys(t *testing.T) {
 	filtered := FilterBackupConfigs(map[string]string{
-		"notify_daily_last":          "2026-10-21",
-		"notify_daily_inbound_total": "12345",
-		"notify_daily_hour":          "9",
-		"pending_realm_settle:7":     `{"nodeId":7}`,
-		"app_name":                   "FLMX",
+		"notify_daily_last":             "2026-10-21",
+		"notify_daily_inbound_total":    "12345",
+		"notify_daily_hour":             "9",
+		"pending_realm_settle:7":        `{"nodeId":7}`,
+		"notify_quota_recovery_pending": `[{"userId":1}]`,
+		"notify_gist_failure_pending":   `{"message":"GitHub API 500"}`,
+		"app_name":                      "FLMX",
 	})
 	if _, ok := filtered["notify_daily_last"]; ok {
 		t.Fatalf("R2X-047: notify_daily_last must be excluded from backups, got %v", filtered)
 	}
 	if _, ok := filtered["notify_daily_inbound_total"]; ok {
 		t.Fatalf("R2X-047: notify_daily_inbound_total must be excluded from backups, got %v", filtered)
+	}
+	if _, ok := filtered["notify_quota_recovery_pending"]; ok {
+		t.Fatalf("R2X-047: notify_quota_recovery_pending must be excluded from backups, got %v", filtered)
+	}
+	if _, ok := filtered["notify_gist_failure_pending"]; ok {
+		t.Fatalf("R2-I-02: notify_gist_failure_pending must be excluded from backups, got %v", filtered)
 	}
 	if filtered["notify_daily_hour"] != "9" {
 		t.Fatalf("R2X-047: notify_daily_hour is a config key and must stay, got %v", filtered)
