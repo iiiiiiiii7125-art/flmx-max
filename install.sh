@@ -234,13 +234,26 @@ verify_downloaded_binary() {
         return 1
     fi
     echo "🔐 下载 SHA256 校验文件..."
-    local checksum_file
+    local checksum_file checksum_log
     checksum_file=$(mktemp)
-    if ! curl -fL --max-time 60 -o "$checksum_file" "${download_url}.sha256" 2>/dev/null; then
+    checksum_log=$(mktemp)
+    # R8-J-A: .sha256 是全流程最小的文件，旧实现单次尝试且以
+    # 2>/dev/null 吞掉 curl 错误——镜像瞬时故障即整次安装/更新
+    # fail-closed 终止且零诊断（2026-10-29 节点 C202610292237590
+    # 实例：资产事后验证 5/5 可达）。加有界重试；stderr 改落临时
+    # 文件，成功即丢弃（保持无噪音），失败时原文露给用户。
+    # fail-closed 不变：校验文件拿不到，仍拒绝未校验的二进制。
+    if ! curl -fL --max-time 60 --retry 3 --retry-delay 2 -o "$checksum_file" "${download_url}.sha256" 2>"$checksum_log"; then
         rm -f "$checksum_file"
         echo "❌ 无法获取 .sha256 校验文件，拒绝安装未校验的二进制。"
+        if [[ -s "$checksum_log" ]]; then
+            echo "   curl 错误信息:"
+            sed 's/^/   /' "$checksum_log"
+        fi
+        rm -f "$checksum_log"
         return 1
     fi
+    rm -f "$checksum_log"
     local expected
     expected=$(awk '{print $1}' "$checksum_file")
     rm -f "$checksum_file"
@@ -979,6 +992,11 @@ update_flux_agent() {
   rm -f "$INSTALL_DIR/flux_agent.bak"
 
   echo "✅ 更新完成，服务已重新启动。"
+  # R8-J-B: 与安装路径完成块同口径（OBS-R7-J-01 的上线确认指引）——
+  # 服务重启只证明进程已启动，不代表节点已连上面板；更新路径此前
+  # 只有一行成功断言、无确认指引、无日志指针。
+  echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——更新完成只表示服务已重新启动，不代表已连上面板。"
+  echo "   若面板未显示在线，请在节点机执行 journalctl -u flux_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flux_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
 }
 
 # A9: 更新失败时恢复备份的旧版本并重启

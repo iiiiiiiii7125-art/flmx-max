@@ -179,6 +179,74 @@ test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
   assert_equals "0" "$ask_called" "update_flux_agent should not prompt for proxy config when the agent is missing"
 )
 
+# R8-J-B: 更新成功后必须打印与安装路径同口径的上线确认指引
+# （回面板确认节点在线 + journalctl 日志指针）——服务重启只证明
+# 进程已启动，不代表已连上面板。旧实现仅一行「更新完成」断言，
+# 本测试对旧代码为红。
+test_update_flux_agent_prints_online_confirmation_guidance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+
+  ask_proxy_config() {
+    PROXY_ENABLED="false"
+    DOWNLOAD_URL=""
+  }
+  cleanup_legacy_gost_installation() { :; }
+  check_and_install_tcpkill() { :; }
+  sleep() { :; }
+  systemctl() {
+    if [[ "$*" == *MainPID* ]]; then
+      echo 4242
+    fi
+    return 0
+  }
+  curl() {
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+
+    cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+    chmod +x "$output"
+  }
+
+  local out_log
+  out_log=$(mktemp)
+  update_flux_agent >"$out_log" 2>&1
+
+  grep -q "更新完成" "$out_log" || fail "R8-J-B: update should still print its completion line"
+  grep -q "节点管理" "$out_log" && grep -q "在线" "$out_log" || \
+    fail "R8-J-B: update completion must tell the operator to confirm the node is online in the panel"
+  grep -q "journalctl -u flux_agent" "$out_log" || \
+    fail "R8-J-B: update completion must include the journalctl log pointer"
+)
+
 # X-P2-11 (J-01): 双采样判活的四个关键场景（与 agent 侧
 # fix3_health_test 同口径）：PID 稳定才活、第二次采样已死不活、
 # 两次 PID 不一致不活、PID 为 0/空不活。采样间隔 sleep 桩为空转，
@@ -1292,6 +1360,9 @@ test_install_panel_refuses_existing_deployment() (
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
   download_verified() { return 0; }
+  # R8-J-C: install_panel 完成块前新增 wait_for_backend_healthy 把关，
+  # 夹具以恒成功桩承接（本例验的是 F-049 守卫，不验健康等待本身）。
+  wait_for_backend_healthy() { return 0; }
   check_ipv6_support() { return 1; }
   configure_docker_ipv6() { return 0; }
   docker_ipv6_usable() { return 1; }
@@ -1309,6 +1380,63 @@ test_install_panel_refuses_existing_deployment() (
   assert_equals "0" "$rc2" "F-049: PANEL_FORCE_REINSTALL=1 should allow reinstall"
   ls "$work"/.env.bak.* >/dev/null 2>&1 || fail "F-049: forced reinstall must back up the old .env first"
   grep -q "keepme" "$work"/.env.bak.* || fail "F-049: .env backup must contain the old secrets"
+)
+
+# R8-J-C: 全新安装的成功断言必须受后端健康等待把关——健康等待
+# 失败时 install_panel 返回 1、不印「部署完成」与默认凭据、改印
+# logs 指引；通过时才印成功块。旧实现 up -d 后直达成功块，
+# 本测试对旧代码为红。
+test_install_panel_waits_for_backend_health() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+
+  ask_proxy_config() { :; }
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+    POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="pw"; JWT_SECRET="secret"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() { return 0; }
+
+  # 健康等待失败：不得宣称部署完成
+  wait_for_backend_healthy() { return 1; }
+  local rc="0" out_log
+  out_log="$work/fail.log"
+  ( cd "$work" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R8-J-C: install_panel must fail when the backend never becomes healthy"
+  if grep -q "部署完成" "$out_log"; then
+    fail "R8-J-C: success block must not be printed when the backend health gate fails"
+  fi
+  if grep -q "默认管理员账号" "$out_log"; then
+    fail "R8-J-C: default credentials must not be printed when the backend health gate fails"
+  fi
+  grep -q "logs backend" "$out_log" || \
+    fail "R8-J-C: health-gate failure must print a docker compose logs pointer"
+
+  # 健康等待通过：正常印成功块
+  wait_for_backend_healthy() { return 0; }
+  rc="0"
+  out_log="$work/ok.log"
+  ( cd "$work" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R8-J-C: install_panel should succeed once the backend is healthy"
+  grep -q "部署完成" "$out_log" || \
+    fail "R8-J-C: success block should be printed after the health gate passes"
 )
 
 # F-050: Docker 安装脚本未通过 pin 校验时不得执行（哨兵法）。
@@ -1376,6 +1504,141 @@ test_download_verified_fail_closed_edges() (
   rc="0"
   ( FLMX_VERIFY_DOWNLOADS=yes download_verified "https://example.com/f.bin" "$dest" >/dev/null 2>&1 ) || rc="$?"
   [[ "$rc" != "0" ]] || fail "F-138: FLMX_VERIFY_DOWNLOADS=yes must not silently skip verification"
+)
+
+# R8-J-A: .sha256 下载加有界重试。桩 curl 按 argv 中的 --retry N
+# 模拟真实 curl 的传输层重试语义并计数：首次传输失败、第二次成功
+# 时校验必须通过。基线代码无 --retry，同桩只有一次传输机会、必然
+# 失败——本测试对旧代码为红。
+test_verify_downloaded_binary_retries_transient_checksum_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local state payload
+  state=$(mktemp -d)
+  payload="$state/bin.sh"
+  printf '#!/bin/bash\necho payload\n' > "$payload"
+  echo 0 > "$state/attempts"
+  STATE_DIR="$state"
+  PAYLOAD_FILE="$payload"
+
+  curl() {
+    local output="" url="" retries=0
+    local args=("$@") i
+    for ((i=0; i<${#args[@]}; i++)); do
+      if [[ "${args[i]}" == "--retry" ]]; then retries="${args[i+1]:-0}"; fi
+      if [[ "${args[i]}" == "-o" ]]; then output="${args[i+1]:-}"; fi
+      case "${args[i]}" in http*) url="${args[i]}";; esac
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      local attempt=0 n
+      while (( attempt <= retries )); do
+        attempt=$((attempt+1))
+        n=$(cat "$STATE_DIR/attempts"); n=$((n+1)); echo "$n" > "$STATE_DIR/attempts"
+        if (( n < 2 )); then
+          if (( attempt <= retries )); then continue; fi
+          echo "curl: (22) The requested URL returned error: 503" >&2
+          return 22
+        fi
+        sha256sum "$PAYLOAD_FILE" | awk '{print $1"  gost"}' > "$output"
+        return 0
+      done
+    fi
+    return 0
+  }
+
+  verify_downloaded_binary "$payload" "https://example.com/gost-amd64" >/dev/null 2>&1 || \
+    fail "R8-J-A: verify_downloaded_binary should survive one transient checksum fetch failure"
+  assert_equals "2" "$(cat "$STATE_DIR/attempts")" \
+    "R8-J-A: checksum fetch should be retried after a transient failure"
+)
+
+# R8-J-A: 校验下载持续失败时仍 fail-closed（返回 1），但传输尝试
+# 须达 1+3 次，且 curl 的错误信息必须露给用户（旧实现 2>/dev/null
+# 全吞，用户只看到一句无诊断的拒绝）。
+test_verify_downloaded_binary_surfaces_curl_error_after_retries() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local state payload
+  state=$(mktemp -d)
+  payload="$state/bin.sh"
+  printf '#!/bin/bash\necho payload\n' > "$payload"
+  echo 0 > "$state/attempts"
+  STATE_DIR="$state"
+
+  curl() {
+    local url="" retries=0
+    local args=("$@") i
+    for ((i=0; i<${#args[@]}; i++)); do
+      if [[ "${args[i]}" == "--retry" ]]; then retries="${args[i+1]:-0}"; fi
+      case "${args[i]}" in http*) url="${args[i]}";; esac
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      local attempt=0 n
+      while (( attempt <= retries )); do
+        attempt=$((attempt+1))
+        n=$(cat "$STATE_DIR/attempts"); n=$((n+1)); echo "$n" > "$STATE_DIR/attempts"
+      done
+      echo "curl: (7) Failed to connect R8JA_MARKER" >&2
+      return 7
+    fi
+    return 0
+  }
+
+  local rc="0" out
+  out=$(verify_downloaded_binary "$payload" "https://example.com/gost-amd64" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R8-J-A: persistent checksum fetch failure must stay fail-closed"
+  assert_equals "4" "$(cat "$STATE_DIR/attempts")" \
+    "R8-J-A: checksum fetch should attempt 1 + 3 retries before giving up"
+  [[ "$out" == *"R8JA_MARKER"* ]] || \
+    fail "R8-J-A: curl error output must be surfaced to the user, not swallowed"
+)
+
+# R8-J-A: panel 侧 download_verified 的 .sha256 腿同口径——首次
+# 传输失败经重试恢复后校验通过、本体保留（旧实现单次尝试失败即
+# 删除已下好的本体并终止整次操作）。
+test_download_verified_retries_transient_checksum_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local state dest
+  state=$(mktemp -d)
+  dest="$state/docker-compose.yml"
+  echo 0 > "$state/attempts"
+  STATE_DIR="$state"
+
+  curl() {
+    local output="" url="" retries=0
+    local args=("$@") i
+    for ((i=0; i<${#args[@]}; i++)); do
+      if [[ "${args[i]}" == "--retry" ]]; then retries="${args[i+1]:-0}"; fi
+      if [[ "${args[i]}" == "-o" ]]; then output="${args[i+1]:-}"; fi
+      case "${args[i]}" in http*) url="${args[i]}";; esac
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      local attempt=0 n
+      while (( attempt <= retries )); do
+        attempt=$((attempt+1))
+        n=$(cat "$STATE_DIR/attempts"); n=$((n+1)); echo "$n" > "$STATE_DIR/attempts"
+        if (( n < 2 )); then
+          if (( attempt <= retries )); then continue; fi
+          echo "curl: (22) The requested URL returned error: 503" >&2
+          return 22
+        fi
+        printf 'payload' | sha256sum | awk '{print $1"  docker-compose.yml"}' > "$output"
+        return 0
+      done
+    fi
+    printf 'payload' > "$output"
+    return 0
+  }
+
+  FLMX_VERIFY_DOWNLOADS=1 download_verified "https://example.com/docker-compose-v4.yml" "$dest" >/dev/null 2>&1 || \
+    fail "R8-J-A: download_verified should survive one transient checksum fetch failure"
+  assert_equals "2" "$(cat "$STATE_DIR/attempts")" \
+    "R8-J-A: panel checksum fetch should be retried after a transient failure"
+  [[ -f "$dest" ]] || fail "R8-J-A: verified body must be kept after a retried checksum fetch"
 )
 
 test_preserve_compose_networks_keeps_existing_subnet() (
@@ -1726,13 +1989,18 @@ test_get_deployed_panel_version_parses_image_tag
 test_update_panel_crosschecks_deployed_image_version
 test_install_flux_agent_keeps_service_when_download_fails
 test_install_panel_refuses_existing_deployment
+test_install_panel_waits_for_backend_health
 test_install_docker_rejects_unverified_script
 test_download_verified_fail_closed_edges
+test_verify_downloaded_binary_retries_transient_checksum_failure
+test_verify_downloaded_binary_surfaces_curl_error_after_retries
+test_download_verified_retries_transient_checksum_failure
 test_install_script_respects_disabled_proxy
 test_install_script_asks_for_proxy_config
 test_install_script_recomputes_download_url_after_prompt
 test_update_flux_agent_asks_for_proxy_config
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
+test_update_flux_agent_prints_online_confirmation_guidance
 test_flux_agent_health_ok_requires_stable_pid
 test_update_flux_agent_rolls_back_flapping_binary
 test_extract_leading_semver_matches_go_rules

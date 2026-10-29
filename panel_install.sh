@@ -565,7 +565,19 @@ setup_domain_proxy() {
     fi
     rm -f "$caddy_key_tmp"
     if ! command -v caddy &> /dev/null; then
-      curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' 2>/dev/null | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+      # R8-J-D: 源列表先落临时文件，下载成功且非空才移入持久路径——
+      # 旧实现未检查结果、吞 stderr 的 curl 直通 tee 写目标文件，
+      # 失败/半截内容落盘并在运行结束后留存，持续污染本机后续所有
+      # apt 操作（与上方 GPG key 的临时文件处置同形）。
+      local caddy_list_tmp
+      caddy_list_tmp=$(mktemp)
+      if curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]]; then
+        mv -f "$caddy_list_tmp" /etc/apt/sources.list.d/caddy-stable.list
+        chmod 644 /etc/apt/sources.list.d/caddy-stable.list
+      else
+        rm -f "$caddy_list_tmp"
+        echo "⚠️  Caddy 官方源列表下载失败，未写入 apt 源文件，尝试使用现有软件源安装..."
+      fi
       apt-get update && apt-get install -y caddy || {
         echo "❌ Caddy 安装失败"
         return 1
@@ -834,7 +846,9 @@ download_verified() {
   local dest="$2"
   local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
 
-  if ! curl -fL -o "$dest" "$url"; then
+  # R8-J-A: 本体与下方 .sha256 均加有界重试——旧实现单次尝试，
+  # 镜像瞬时故障即整次操作终止（校验腿失败还会删掉已下好的本体）。
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$dest" "$url"; then
     echo "❌ 下载失败: $url" >&2
     return 1
   fi
@@ -855,7 +869,7 @@ download_verified() {
   # 下载 .sha256 并校验。
   local sha_url="${url}.sha256"
   local sha_file="${dest}.sha256"
-  if ! curl -fL -o "$sha_file" "$sha_url"; then
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$sha_file" "$sha_url"; then
     rm -f "$dest" "$sha_file"
     echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
     echo "   （设置 FLMX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
@@ -1296,7 +1310,12 @@ install_panel() {
     DOCKER_COMPOSE_URL="$DOCKER_COMPOSEV4_URL"
   fi
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
+  # R8-J-A 附带清理：不再靠 set -e 隐式中止，显式判返回值并给出
+  # 路径信息，与更新路径（download_panel_update_compose）的口径对齐。
+  if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+    echo "❌ 下载 Compose 配置失败，安装终止: $DOCKER_COMPOSE_URL"
+    return 1
+  fi
   echo "✅ 文件准备完成"
 
   cat > .env <<EOF
@@ -1321,6 +1340,17 @@ EOF
     $DOCKER_CMD up -d backend frontend
   else
     $DOCKER_CMD up -d backend frontend
+  fi
+
+  # R8-J-C: 完成块之前先过既有后端健康等待——更新（start_panel_
+  # after_update）与迁移路径均有此把关，安装路径此前独缺，up -d 后
+  # 直达成功块：后端 crash-loop 时用户拿到的是打不开的访问地址与
+  # 默认凭据、且无日志指引。失败时不印成功块，改印失败 + logs
+  # 指引（与迁移路径的处置风格一致）。
+  if ! wait_for_backend_healthy; then
+    echo "❌ 部署未完成：后端服务未通过健康检查，已跳过成功信息与默认凭据打印。"
+    echo "🔍 排查指引：在部署目录执行 $DOCKER_CMD logs backend 查看后端日志；修复后重新运行本脚本、选择「2. 更新面板」即可完成启动。"
+    return 1
   fi
 
   echo "🎉 部署完成"
@@ -1481,7 +1511,11 @@ migrate_to_postgres() {
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
+    # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
+    if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+      echo "❌ 下载 Compose 配置失败，迁移终止: $DOCKER_COMPOSE_URL"
+      return 1
+    fi
     echo "✅ docker-compose.yml 下载完成"
   fi
 
@@ -1619,7 +1653,11 @@ uninstall_panel() {
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
+    # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
+    if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+      echo "❌ 下载 Compose 配置失败，卸载终止: $DOCKER_COMPOSE_URL"
+      return 1
+    fi
     echo "✅ docker-compose.yml 下载完成"
   fi
 
