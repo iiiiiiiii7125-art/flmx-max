@@ -69,6 +69,40 @@ import { clearSession } from "@/utils/session";
 
 export type ReleaseChannel = "stable" | "dev";
 
+/**
+ * R8-T 族（超时预算三层错位）的前端预算助手。后端界与逐格推导见裁定
+ * x-verdicts-r8.md §2 与 r8-lane-t.md 矩阵；此处数值与批 T1 的服务端
+ * per-endpoint 放宽、批 T-GATE 的超时登记表对账，改动任一处须同步其余。
+ */
+/** 批量端点在后端串行逐项执行：每项按 30s 计，下限 120s，上限 30 分钟。 */
+const batchCallTimeout = (count: number): number =>
+  Math.min(1_800_000, Math.max(120_000, Math.max(0, count) * 30_000));
+
+/**
+ * 延迟探测（R8-T-08）：作业数 = 节点数 × 每节点测试点（服务端上限 30），
+ * 16 路并发、单作业界 22.6s（latencyCommandTimeout）；空 ids = 全部节点
+ * （服务端上限 50）。公式界随舰队规模增长，600s 为前端封顶，超出部分
+ * 仍可能假超时——只抬阈值，不宣称根除（裁定 §2.8 口径）。
+ */
+const latencyProbeTimeout = (nodeCount: number): number => {
+  const nodes = nodeCount > 0 ? nodeCount : 50;
+  const waves = Math.ceil((nodes * 30) / 16);
+
+  return Math.min(600_000, Math.max(90_000, waves * 22_600 + 20_000));
+};
+
+/**
+ * 中转探测（R8-T-08）：第一段为入口节点延迟探测（按 120s 计），
+ * 第二段逐跳 TcpPing，16 路并发、单跳界 22.6s。空 ids = 全部线路，
+ * 按 50 条计；同 latencyProbeTimeout 的封顶与残余口径。
+ */
+const relayProbeTimeout = (relayCount: number): number => {
+  const relays = relayCount > 0 ? relayCount : 50;
+  const waves = Math.ceil(relays / 16);
+
+  return Math.min(600_000, Math.max(180_000, 120_000 + waves * 22_600));
+};
+
 // 登陆相关接口
 export interface LoginData {
   username: string;
@@ -180,7 +214,8 @@ export const upgradeNode = (
   Network.post(
     "/node/upgrade",
     { id, version: version || "", channel },
-    { timeout: 5 * 60 * 1000 },
+    // R8-T-04：后端界 upgradeTimeout 300s，须破「前端 = 后端」恰等。
+    { timeout: 360_000 },
   );
 export const batchUpgradeNodes = (
   ids: number[],
@@ -193,19 +228,24 @@ export const batchUpgradeNodes = (
     { timeout: 15 * 60 * 1000 },
   );
 export const getNodeReleases = (channel: ReleaseChannel = "stable") =>
-  Network.post<NodeReleaseApiItem[]>("/node/releases", { channel });
+  // R8-T-03：冷缓存版本发现后端界 60s（双腿各 30s 客户端），前端须 ≥90s。
+  Network.post<NodeReleaseApiItem[]>("/node/releases", { channel }, { timeout: 90_000 });
 export const rollbackNode = (id: number) =>
-  Network.post("/node/rollback", { id });
+  // R8-T-04：后端界 30s，须破恰等。
+  Network.post("/node/rollback", { id }, { timeout: 45_000 });
+// R8-T-07：nftables 三面后端为逐操作 15s SSH、无 handler 上限，前端放宽到
+// 与典型对账时长相称的 300s；handler 侧封顶属 BC 路线，本批不做。
 export const testNodeNftables = (nodeId: number) =>
-  Network.post("/node/nftables/test", { nodeId });
+  Network.post("/node/nftables/test", { nodeId }, { timeout: 300_000 });
 export const reconcileNodeNftables = (nodeId: number) =>
-  Network.post("/node/nftables/reconcile", { nodeId });
+  Network.post("/node/nftables/reconcile", { nodeId }, { timeout: 300_000 });
 export const clearNodeNftables = (nodeId: number) =>
-  Network.post("/node/nftables/clear", { nodeId });
+  Network.post("/node/nftables/clear", { nodeId }, { timeout: 300_000 });
 
 // 隧道CRUD操作 - 全部使用POST请求
 export const createTunnel = (data: TunnelMutationPayload, idemKey?: string) =>
-  Network.post("/tunnel/create", data, { idemKey });
+  // R8-T-07：与 update 共用同等重腿，前端预算与 update 对齐 120s。
+  Network.post("/tunnel/create", data, { idemKey, timeout: 120_000 });
 export const getTunnelList = () =>
   Network.post<TunnelApiItem[]>("/tunnel/list");
 export const getTunnelById = (id: number) =>
@@ -213,9 +253,14 @@ export const getTunnelById = (id: number) =>
 export const updateTunnel = (data: TunnelMutationPayload) =>
   Network.post("/tunnel/update", data, { timeout: 120_000 });
 export const deleteTunnel = (id: number) =>
-  Network.post("/tunnel/delete", { id });
+  // R8-T-07：删除按入口节点扇出（每节点 6s 命令），前端放宽至 120s。
+  Network.post("/tunnel/delete", { id }, { timeout: 120_000 });
 export const previewTunnelDelete = (id: number) =>
-  Network.post<TunnelDeletePreviewApiData>("/tunnel/delete-preview", { id });
+  Network.post<TunnelDeletePreviewApiData>(
+    "/tunnel/delete-preview",
+    { id },
+    { timeout: 120_000 },
+  );
 export const deleteTunnelWithForwards = (data: {
   id: number;
   action: "replace" | "delete_forwards";
@@ -224,6 +269,7 @@ export const deleteTunnelWithForwards = (data: {
   Network.post<TunnelDeleteWithForwardsApiData | BatchOperationResult>(
     "/tunnel/delete-with-forwards",
     data,
+    { timeout: 120_000 },
   );
 export const previewBatchTunnelDelete = (ids: number[]) =>
   Network.post<TunnelBatchDeletePreviewApiData>(
@@ -231,6 +277,7 @@ export const previewBatchTunnelDelete = (ids: number[]) =>
     {
       ids,
     },
+    { timeout: batchCallTimeout(ids.length) },
   );
 export const batchDeleteTunnelsWithForwards = (data: {
   ids: number[];
@@ -240,12 +287,14 @@ export const batchDeleteTunnelsWithForwards = (data: {
   Network.post<TunnelBatchDeleteWithForwardsApiData>(
     "/tunnel/batch-delete-with-forwards",
     data,
+    { timeout: batchCallTimeout(data.ids.length) },
   );
 export const diagnoseTunnel = (tunnelId: number) =>
   Network.post<TunnelDiagnosisApiData>(
     "/tunnel/diagnose",
     { tunnelId },
-    { timeout: 120 * 1000 },
+    // R8-T-05：后端诊断 ctx 120s 为设计上限保留，前端抬到 ~150s 破三层恰等。
+    { timeout: 150_000 },
   );
 export const updateTunnelOrder = (data: {
   tunnels: Array<{ id: number; inx: number }>;
@@ -277,7 +326,8 @@ export const getForwardList = () =>
 export const updateForward = (data: ForwardMutationPayload) =>
   Network.post("/forward/update", data);
 export const deleteForward = (id: number) =>
-  Network.post("/forward/delete", { id });
+  // R8-T-07：删除按入口节点扇出（每节点 6s 命令），前端放宽至 120s。
+  Network.post("/forward/delete", { id }, { timeout: 120_000 });
 export const forceDeleteForward = (id: number) =>
   Network.post("/forward/force-delete", { id });
 
@@ -294,7 +344,8 @@ export const diagnoseForward = (forwardId: number) =>
   Network.post<ForwardDiagnosisApiData>(
     "/forward/diagnose",
     { forwardId },
-    { timeout: 120 * 1000 },
+    // R8-T-05：同 diagnoseTunnel，外层抬到 ~150s。
+    { timeout: 150_000 },
   );
 
 // 转发排序操作
@@ -354,7 +405,8 @@ export const checkSystemUpgrade = (
     {
       channel,
     },
-    options,
+    // R8-T-03：冷缓存版本发现后端界 60s，前端默认 ≥90s（调用方可覆盖）。
+    { timeout: 90_000, ...options },
   );
 
 export const runSystemUpgrade = (
@@ -364,41 +416,52 @@ export const runSystemUpgrade = (
   Network.post<SystemUpgradeRunApiData>(
     "/system/upgrade",
     { version: version || "", channel },
-    { timeout: 60 * 1000 },
+    // R8-T-04：同步前奏最坏 ≈210s（版本解析 + 资产下载），前端须 ≥240s。
+    { timeout: 240_000 },
   );
 
 // 面板升级状态查询：升级后后端容器重启期间请求会失败，调用方需静默重试
 export const getSystemUpgradeStatus = () =>
   Network.get<SystemUpgradeStatusApiData>("/system/upgrade/status");
 
-export const exportBackupData = () => Network.post("/backup/export");
+// R8-T-02 元素 (a) / R8-T-08：备份导入/恢复/导出的耗时随后备规模与舰队
+// 规模增长、后端无界，前端统一按 30 分钟计（与仓内 gh-mirror 长响应先例
+// 同量级）；导入本身不得封顶（裁定 §2.2）。注意：导入事务仍绑定请求 ctx
+// （元素 (b) 待用户裁定），前端放宽只抬高武装阈值，不改变断连回滚语义。
+export const exportBackupData = () =>
+  Network.post("/backup/export", undefined, { timeout: 1_800_000 });
 export const importBackupData = (data: BackupImportPayload) =>
-  Network.post("/backup/import", data);
+  Network.post("/backup/import", data, { timeout: 1_800_000 });
 export const restoreBackupData = (data: BackupImportPayload) =>
-  Network.post("/backup/restore", data);
+  Network.post("/backup/restore", data, { timeout: 1_800_000 });
 
 // 验证码相关接口
 export const checkCaptcha = () => Network.post("/captcha/check");
 
-// 批量操作接口
+// 批量操作接口（R8-T-07：后端串行逐项，前端按项数放宽，见 batchCallTimeout）
 export const batchDeleteForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-delete", { ids });
+  Network.post<BatchOperationResult>("/forward/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchPauseForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-pause", { ids });
+  Network.post<BatchOperationResult>("/forward/batch-pause", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchResumeForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-resume", { ids });
+  Network.post<BatchOperationResult>("/forward/batch-resume", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchDeleteTunnels = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/tunnel/batch-delete", { ids });
+  Network.post<BatchOperationResult>("/tunnel/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchDeleteNodes = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/node/batch-delete", { ids });
+  Network.post<BatchOperationResult>("/node/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchRedeployForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-redeploy", { ids });
+  Network.post<BatchOperationResult>("/forward/batch-redeploy", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchRedeployTunnels = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/tunnel/batch-redeploy", { ids });
+  Network.post<BatchOperationResult>("/tunnel/batch-redeploy", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchChangeTunnel = (data: {
   forwardIds: number[];
   targetTunnelId: number;
-}) => Network.post<BatchOperationResult>("/forward/batch-change-tunnel", data);
+}) =>
+  Network.post<BatchOperationResult>(
+    "/forward/batch-change-tunnel",
+    data,
+    { timeout: batchCallTimeout(data.forwardIds.length) },
+  );
 
 // 分组与权限分配接口
 export const getTunnelGroupList = () =>
@@ -515,6 +578,8 @@ export const exportBackup = async (types: string[] = []) => {
         "Content-Type": "application/json",
       },
       responseType: "blob",
+      // R8-T-08：与 exportBackupData 统一口径（此前裸 axios 无超时）。
+      timeout: 1_800_000,
     },
   );
 
@@ -569,7 +634,8 @@ export const exportBackup = async (types: string[] = []) => {
 };
 
 export const importBackup = (data: BackupImportPayload) =>
-  Network.post("/backup/import", data);
+  // R8-T-02 元素 (a)：同 importBackupData 口径。
+  Network.post("/backup/import", data, { timeout: 1_800_000 });
 
 // SEC-01 BC-01(b)：导入前自动备份快照留存服务端 24 小时（A10-10 承诺的
 // 服务端版）。回执自 SEC-01 起不再含快照内容，快照只经以下两端点取用，
@@ -617,6 +683,8 @@ export const downloadImportAutoBackup = async () => {
         Authorization: token,
       },
       responseType: "blob",
+      // R8-T-08：备份文件下载同导出规模口径（此前裸 axios 无超时）。
+      timeout: 1_800_000,
     });
   } catch (error) {
     // 无快照时后端回 HTTP 404 + JSON 信封（非 200 信封），axios 直接抛错：
@@ -734,12 +802,16 @@ export interface GistBackupVersion {
 }
 
 export const getGistBackupVersions = () =>
-  Network.post<GistBackupVersion[]>("/backup/gist/versions", {});
+  // R8-T-03：后端为单次 gist 调用、逐调用 ctx 60s，前端须 ≥90s。
+  Network.post<GistBackupVersion[]>("/backup/gist/versions", {}, { timeout: 90_000 });
 
 export const restoreGistBackup = (data: {
   version: string;
   password: string;
-}) => Network.post("/backup/gist/restore", data, { timeout: 120000 });
+}) =>
+  // R8-T-02 元素 (a)：下载腿 ≤120s（两次串行 gist 调用）叠同落点导入
+  // （无界），与本地恢复统一 30 分钟口径；ctx 绑定语义同 importBackupData 注。
+  Network.post("/backup/gist/restore", data, { timeout: 1_800_000 });
 
 export interface AnnouncementData {
   content: string;
@@ -893,8 +965,17 @@ export const getServiceMonitorLatestResults = () =>
     { silent: true },
   );
 
-export const runServiceMonitor = (id: number) =>
-  Network.post<ServiceMonitorResultApiItem>("/monitor/services/run", { id });
+export const runServiceMonitor = (id: number, timeoutSec?: number) =>
+  Network.post<ServiceMonitorResultApiItem>(
+    "/monitor/services/run",
+    { id },
+    {
+      // R8-T-08：后端界 = 该监控配置的 timeoutSec + 2s（on-node 命令余量），
+      // 前端按配置动态取值并留边距；未知配置时按下限 70s（覆盖默认
+      // MaxTimeoutSec 60s + 边距）。
+      timeout: Math.max(70_000, ((timeoutSec ?? 0) + 15) * 1000),
+    },
+  );
 
 export const getMonitorNodes = () =>
   Network.get<MonitorNodeApiItem[]>("/monitor/nodes", {}, { silent: true });
@@ -920,16 +1001,20 @@ export const getKernelCapabilities = () =>
   Network.post<KernelCapabilitiesApiData>("/kernel/capabilities");
 export const getKernelList = (nodeId?: number) =>
   Network.post<KernelApiItem[]>("/kernel/list", nodeId ? { nodeId } : {});
+// R8-T-03：冷缓存后端界 60s（双腿各 30s 客户端），前端须 ≥90s。
 export const getKernelVersions = (kernelType: string) =>
   Network.post<
     { version: string; prerelease: boolean; publishedAt?: string }[]
-  >("/kernel/versions", { kernelType });
+  >("/kernel/versions", { kernelType }, { timeout: 90_000 });
 
 export const installKernel = (data: {
   nodeId: number;
   kernelType: string;
   version: string;
-}) => Network.post("/kernel/install", data);
+}) =>
+  // R8-T-01：后端界 kernelApplyTimeout 300s，前端须 ≥330s（且服务端
+  // /kernel/install 由批 T1 作 per-endpoint 写时限放宽，单层不算修完）。
+  Network.post("/kernel/install", data, { timeout: 330_000 });
 export const controlKernel = (
   id: number,
   action: "start" | "stop" | "restart" | "remove",
@@ -942,9 +1027,17 @@ export const getInboundList = () =>
 export const createInbound = (
   data: InboundMutationPayload,
   idemKey?: string,
-) => Network.post<{ id: number }>("/inbound/create", data, { idemKey });
+) =>
+  // R8-T-01：保存末尾在内核未装版本时条件性继承 300s 内核应用预算，
+  // 前端与 installKernel 同口径 ≥330s。
+  Network.post<{ id: number }>("/inbound/create", data, {
+    idemKey,
+    timeout: 330_000,
+  });
 export const updateInbound = (data: InboundMutationPayload) =>
-  Network.post<{ id: number }>("/inbound/update", data);
+  Network.post<{ id: number }>("/inbound/update", data, {
+    timeout: 330_000,
+  });
 export const deleteInbound = (id: number) =>
   Network.post("/inbound/delete", { id });
 export const batchDeleteInbounds = (ids: number[]) =>
@@ -1137,12 +1230,17 @@ export const testNotify = (data: {
   telegramChatId: string;
   telegramApiBase: string;
   webhookUrl: string;
-}) => Network.post("/notify/test", data, { timeout: 30000 });
+}) =>
+  // R8-T-08：双通道最坏 (10+10)+3+(10+10)=43s，前端须 ≥50s。
+  Network.post("/notify/test", data, { timeout: 50_000 });
 export const probeInbounds = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(
     "/inbound/probe",
     { ids },
-    { timeout: 60000 },
+    // R8-T-08：后端界 = ⌈N/16⌉×4s 拨号（N = 外部入站数，空 ids 为全部、
+    // 前端不可知），静态放宽至 300s，可覆盖约 1200 个全失联入站；
+    // 超出仍可能假超时，只抬阈值（裁定 §2.8 口径）。
+    { timeout: 300_000 },
   );
 export const updateInboundSplit = (data: {
   id: number;
@@ -1189,7 +1287,8 @@ export const probeInboundRelays = (ids: number[] = []) =>
   Network.post<Record<string, RelayLatency>>(
     "/inbound/relay/probe",
     { ids },
-    { timeout: 90000 },
+    // R8-T-08：两段扇出按公式放宽（见 relayProbeTimeout）。
+    { timeout: relayProbeTimeout(ids.length) },
   );
 export const createInboundRelay = (data: {
   inboundId: number;
@@ -1287,7 +1386,8 @@ export const probeNodeLatency = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(
     "/node/latency/probe",
     { ids },
-    { timeout: 60000 },
+    // R8-T-08：扇出作业按公式放宽（见 latencyProbeTimeout）。
+    { timeout: latencyProbeTimeout(ids.length) },
   );
 /** 设置节点的延迟测试点：自选或跟随默认。 */
 export const setNodeLatencyTargets = (data: {
@@ -1473,5 +1573,8 @@ export const probeNodeRoute = (id: number) =>
   Network.post<NodeRoute | null>(
     "/node/route/probe",
     { id },
-    { timeout: 300000 },
+    // R8-T-08：逐目标串行追踪的现实界 ≈360s（≤30 目标 × agent 每腿 ≈6s
+    // 上限 × 双腿），前端抬至 390s；面板侧命令界 20s/腿的最坏 1200s
+    // 与服务端 120s 截断不在本批口径内，残余见修复报告。
+    { timeout: 390_000 },
   );

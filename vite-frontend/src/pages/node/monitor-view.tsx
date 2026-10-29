@@ -1198,7 +1198,9 @@ export function MonitorView({
 
   const handleRunMonitor = async (id: number) => {
     try {
-      const response = await runServiceMonitor(id);
+      // R8-T-08：把该监控配置的 timeoutSec 传给 API 层按公式定前端预算。
+      const timeoutSec = serviceMonitors.find((m) => m.id === id)?.timeoutSec;
+      const response = await runServiceMonitor(id, timeoutSec);
 
       if (response.code === 0) {
         const ok = response.data?.success === 1;
