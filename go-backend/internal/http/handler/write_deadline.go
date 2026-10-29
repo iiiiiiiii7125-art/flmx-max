@@ -45,6 +45,14 @@ const (
 	// 120s cap an exact-equality bound; the relief breaks the
 	// equality. The work itself remains uncapped.
 	tunnelUpdateWriteDeadline = 300 * time.Second
+	// tunnelCreate: batch A flagged that create runs the same
+	// composite legs as update but was not in the verdict's T1
+	// endpoint list, so after batch T2 raised its frontend budget to
+	// 120s it sat at FE 120s = SV 120s — the same exact-equality
+	// shape. The T-GATE batch completes R8-T-07 for this cell with
+	// the parity relief (same value as update); the work itself
+	// remains uncapped.
+	tunnelCreateWriteDeadline = 300 * time.Second
 	// Backup import/restore/export and gist restore/upload perform
 	// size-proportional, unbounded work (a full export/import scales
 	// with the backup and the fleet). The magnitude follows the
