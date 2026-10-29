@@ -3417,6 +3417,14 @@ func randomPasswordHash() (string, error) {
 func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, n := range nodes {
+		// R7-H-01：节点端口范围串（node.port）过恢复面端口门——
+		// 任一 token 不是 1-65535 的端口/有序区间即整行跳过 +
+		// warning（与入站行同处置）；空串为未设置形态，放行。
+		if !validRestoreNodePortSpec(n.Port) {
+			rep.skip("nodes")
+			rep.warnf("备份恢复：节点 #%d（%q）的端口范围 %q 不是合法的 1-65535 端口/有序区间，已跳过该行未恢复", n.ID, n.Name, n.Port)
+			continue
+		}
 		// D4-03：同 id 异源顶替不再静默——覆盖前比对既有行的身份
 		// 字段（名称/密钥），不同则在回执中如实提示（备份为准的
 		// 恢复语义不变，仅补披露，同订阅段 BUG-A2-4 的回执口径）。
@@ -3550,6 +3558,15 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, c := range rows {
+		// R7-H-01：SSH 端口过恢复面端口门，且必须在落库之前判——
+		// port 列带 GORM default:22，先落库再判会把备份里的 0
+		// 静默改写成 22（连坏值都看不见）。域外整行跳过 + warning，
+		// 与入站行同处置（保存面 persistNodeSSHConfig 同口径拒收）。
+		if !validRestorePort(c.Port) {
+			rep.skip("nodeSSHConfigs")
+			rep.warnf("备份恢复：节点 #%d 的 SSH 配置端口 %d 不在 1-65535 之间，已跳过该行未恢复", c.NodeID, c.Port)
+			continue
+		}
 		nodeExists, err := rowExistsTx(tx, &model.Node{}, c.NodeID)
 		if err != nil {
 			return count, err
@@ -3608,6 +3625,16 @@ func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int
 func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, s := range rows {
+		// R7-H-01：共享端口范围过恢复面端口门（界 + 顺序；0-0 为
+		// 未设置形态放行），且必须在下方 token 占位清理之前判——
+		// 被跳过的行不得触发对目标库既有共享的删除。域外整行
+		// 跳过 + warning，与入站行同处置（保存面 federation 双面
+		// 同口径拒收）。
+		if !validRestorePeerSharePortRange(s.PortRangeStart, s.PortRangeEnd) {
+			rep.skip("peerShares")
+			rep.warnf("备份恢复：面板共享 #%d（%q）的端口范围 %d-%d 不是合法的 1-65535 有序区间，已跳过该行未恢复", s.ID, s.Name, s.PortRangeStart, s.PortRangeEnd)
+			continue
+		}
 		nodeExists, err := rowExistsTx(tx, &model.Node{}, s.NodeID)
 		if err != nil {
 			return count, err
@@ -3725,6 +3752,73 @@ func validateImportedTunnelTrafficRatio(ratio float64) error {
 	return nil
 }
 
+// R7-H-01: the restore-face port gate. Before this batch the 1-65535
+// gate had exactly two restore landings (inbound rows and service
+// monitor targets); every other port carrier in a backup restored
+// out-of-range values verbatim with no skip and no warning, while the
+// save face rejects the same values for every carrier. The helpers
+// below are the single restore-side definition for the remaining
+// carriers (see the CLOSED-LIST section "restore port carrier full
+// set"): a value that is SET must be a port in 1-65535 (ranges: both
+// bounds in range and ordered). Carriers with a defined unset form
+// keep it: chain_tunnel.port NULL/0 ("undetermined"), an unconfigured
+// tunnel probe target (empty host + port 0, judged by the caller), a
+// peer_share range of 0-0 ("not configured", save face accepts it and
+// consumers fail closed on it), and an empty node.port spec.
+func validRestorePort(port int) bool {
+	return port >= 1 && port <= 65535
+}
+
+// validRestorePeerSharePortRange judges a peer_share port range: the
+// fully unset form (0,0) is legitimate; any set range must satisfy
+// 1 <= start <= end <= 65535 (a half-set range is not a range).
+func validRestorePeerSharePortRange(start, end int) bool {
+	if start == 0 && end == 0 {
+		return true
+	}
+	return validRestorePort(start) && validRestorePort(end) && start <= end
+}
+
+// validRestoreNodePortSpec judges a node.port range spec string: the
+// empty spec is the unset form; otherwise every comma-separated token
+// must be a single port in 1-65535 or an ordered range "a-b" with
+// 1 <= a <= b <= 65535. Unlike parsePortRangeSpec (the allocation
+// consumer, which silently drops/clamps/swaps bad tokens), the
+// restore gate is strict: one bad token invalidates the whole spec,
+// so no part of a restored spec can silently mean something else.
+func validRestoreNodePortSpec(spec string) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return true
+	}
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return false
+		}
+		if strings.Contains(part, "-") {
+			if strings.Count(part, "-") != 1 {
+				return false
+			}
+			bounds := strings.SplitN(part, "-", 2)
+			start, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err1 != nil || err2 != nil {
+				return false
+			}
+			if !validRestorePort(start) || !validRestorePort(end) || start > end {
+				return false
+			}
+			continue
+		}
+		p, err := strconv.Atoi(part)
+		if err != nil || !validRestorePort(p) {
+			return false
+		}
+	}
+	return true
+}
+
 func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *importReport) (int, error) {
 	// R13X-007：先过门、再预删——被跳过的行不得触发其存量链路
 	// 预删（预删在门后只覆盖通过门的行），跳过 + 逐行点名（与
@@ -3748,6 +3842,17 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 		if host := strings.TrimSpace(t.ProbeTargetHost); host != "" && kernel.HasEmptyLabel(host) {
 			rep.skip("tunnels")
 			rep.warnf("备份恢复：隧道 #%d（%q）的探测目标主机 %q 含空标签主机名，已跳过该行未恢复", t.ID, t.Name, t.ProbeTargetHost)
+			continue
+		}
+		// R7-H-01：探测目标端口过恢复面端口门——已设置的目标
+		// （host 非空，或端口本身域外）端口必须是 1-65535，整行
+		// 跳过 + warning（保存面 normalizeTunnelProbeTarget 同
+		// 口径拒收）；未设置形态（host 空 + port 0）放行，消费面
+		// 按默认目标处理。
+		if t.ProbeTargetPort < 0 || t.ProbeTargetPort > 65535 ||
+			(t.ProbeTargetPort == 0 && strings.TrimSpace(t.ProbeTargetHost) != "") {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d（%q）的探测目标端口 %d 不在 1-65535 之间，已跳过该行未恢复", t.ID, t.Name, t.ProbeTargetPort)
 			continue
 		}
 		validTunnels = append(validTunnels, t)
@@ -3847,6 +3952,16 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的连接地址 %q 含空标签主机名，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.ConnectIP)
 				continue
 			}
+			// R7-H-01：链路显式端口过恢复面端口门——NULL/0 是
+			// 既有「未定端口」语义（CLOSED-LIST R-02/A3-S1），
+			// 不在门内；负值与 >65535 无此语义，链路行跳过 +
+			// warning（保存面 validateExplicitPort 同口径拒收
+			// >65535，负值在运行时被当未定端口静默忽略）。
+			if ct.Port != nil && *ct.Port != 0 && !validRestorePort(*ct.Port) {
+				rep.skip("chainTunnels")
+				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的端口 %d 不在 1-65535 之间，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Port)
+				continue
+			}
 			// BUG-A2-3：可空列按指针还原 NULL（旧实现一律 Valid:true，
 			// NULL port 被写成 0，两条同节点 NULL 链路即撞唯一索引
 			// 整单回滚）。chain 行已在上方整批删除，这里直接插入。
@@ -3876,7 +3991,7 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 	// 已被移除而备份链路未恢复，不得只剩一个无上下文的跳过数字。
 	if rep != nil && preDeletedChains > 0 {
 		if skipped := rep.skipped["chainTunnels"] - chainSkippedBefore; skipped > 0 {
-			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行被跳过未恢复（引用节点不存在或连接地址含空标签主机名），请核对链路配置", preDeletedChains, skipped)
+			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行被跳过未恢复（引用节点不存在、连接地址含空标签主机名或链路端口超出 1-65535 范围），请核对链路配置", preDeletedChains, skipped)
 		}
 	}
 	return count, nil
@@ -4200,13 +4315,14 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 	if rep != nil {
 		portsSkippedBefore = rep.skipped["forwardPorts"]
 	}
-	// R4-F-01：两类端口行跳过分别计数——(a) 引用节点不存在、
-	// (b) InIP 格式非法；汇总 warning 按类披露条数与原因。两类
-	// 仍共用 rep.skipped["forwardPorts"] 合计数（回执 SkippedRows
-	// 口径不变），分计数仅用于汇总文案归因。本函数内全部
-	// rep.skip("forwardPorts") 调用点（仅以下两处）都须同步累
+	// R4-F-01：三类端口行跳过分别计数——(a) 引用节点不存在、
+	// (b) InIP 格式非法、(c) 端口超出 1-65535（R7-H-01）；汇总
+	// warning 按类披露条数与原因。三类仍共用
+	// rep.skipped["forwardPorts"] 合计数（回执 SkippedRows 口径
+	// 不变），分计数仅用于汇总文案归因。本函数内全部
+	// rep.skip("forwardPorts") 调用点（仅以下三处）都须同步累
 	// 计对应分计数，否则汇总条数与合计数对不上。
-	var portsSkippedMissingNode, portsSkippedBadInIP int
+	var portsSkippedMissingNode, portsSkippedBadInIP, portsSkippedBadPort int
 	for _, f := range forwards {
 		// R6X-007：status 分格门。合法值域 {0,1,2} 之外逐行跳过 +
 		// warning（R5X-009 同型口径）；status=2（删除待处理）的重试
@@ -4312,6 +4428,18 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 					portsSkippedMissingNode++
 					continue
 				}
+				// R7-H-01：转发端口过恢复面端口门——转发端口恒为
+				// 已分配的合法监听端口、无未设置形态，0/负/>65535
+				// 一律跳过该端口行 + warning（保存面
+				// validateLocalNodePort/validateRemoteNodePort 与
+				// 端口占用校验同口径；处置与入站行、与本函数
+				// InIP 门同型：只跳端口行，转发本体照常恢复）。
+				if !validRestorePort(fp.Port) {
+					rep.skip("forwardPorts")
+					portsSkippedBadPort++
+					rep.warnf("备份恢复：转发 #%d（%q）的端口行（节点 #%d，端口 %d）端口不在 1-65535 之间，已跳过该端口行未恢复，请核对转发端口配置", f.ID, f.Name, fp.NodeID, fp.Port)
+					continue
+				}
 				// R3-H-01：恢复侧 ForwardPort.InIP 复用与保存侧 intake
 				// （stripAndValidateNodeAddress）及隧道 InIP（F-07(iii)）
 				// 同口径的剥离 + 校验：单端口剥离后入库；非法值（含空
@@ -4345,8 +4473,8 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		rep.warnf("备份恢复：恢复的转发在目标库存在删除待处理记账（nft_pending_delete），已随恢复取消 %d 条：转发 %s；这些转发不会再被待删重试流程删除", len(cancelledPending), strings.Join(cancelledPending, "、"))
 	}
 	// R5X-017：预删>0 且本批端口跳过>0 时补 warning（口径同
-	// importTunnels 的 chain 段）。R4-F-01：两类跳过分别披露——
-	// 引用节点不存在与监听 IP 格式非法各写各的条数；旧文案把
+	// importTunnels 的 chain 段）。R4-F-01：各类跳过分别披露——
+	// 引用节点不存在、监听 IP 格式非法与端口域外（R7-H-01）各写各的条数；旧文案把
 	// InIP 非法跳过误归因为节点不存在（该类行的节点检查已通过、
 	// 节点必然存在）。仅当某类跳过 >0 时才出现该类分句。
 	if rep != nil && preDeletedPorts > 0 {
@@ -4357,6 +4485,9 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			}
 			if portsSkippedBadInIP > 0 {
 				reasons = append(reasons, fmt.Sprintf("监听 IP 格式非法 %d 条", portsSkippedBadInIP))
+			}
+			if portsSkippedBadPort > 0 {
+				reasons = append(reasons, fmt.Sprintf("端口超出 1-65535 范围 %d 条", portsSkippedBadPort))
 			}
 			rep.warnf("备份恢复：转发端口（forwardPorts）重建时目标库原有 %d 条端口行已被移除，其中 %d 条备份端口行被跳过未恢复（%s），请核对转发端口配置", preDeletedPorts, skipped, strings.Join(reasons, "、"))
 		}
