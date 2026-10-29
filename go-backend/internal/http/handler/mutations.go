@@ -3430,6 +3430,18 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if v := asInt(req["status"], -1); v >= 0 {
 		status = v
 	}
+	// R7-G-02：status / flowResetTime 合法集校验，与 user 面同口径
+	// （O5-007/O5-008，校验对象为 presence 回填后的合并值，与
+	// userUpdate / groupUpdate 的既有口径一致）——越界直拒不落库，
+	// 不再出现 user 面拒绝、user_tunnel 面落库的口径分裂。
+	if status != 0 && status != 1 {
+		response.WriteJSON(w, response.ErrDefault("状态值无效，仅允许 0 或 1"))
+		return
+	}
+	if flowResetTime < 0 || flowResetTime > 31 {
+		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
+		return
+	}
 
 	effectiveSpeedID := interface{}(oldSpeedID)
 	if speedID != nil {
@@ -7692,6 +7704,17 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 	reqExpTime := asInt64(req["expTime"], -1)
 	reqFlowReset := asInt64(req["flowResetTime"], -1)
 	reqStatus := asInt(req["status"], -1)
+
+	// R7-G-02：status / flowResetTime 合法集校验，与 user 面同口径
+	// （O5-007/O5-008）。-1 为「未传」哨兵（走存量/用户默认回填，
+	// 来源均已过门）；显式传入的越界值在此直拒，assign 与
+	// batch-assign 共用本落点，一并覆盖。
+	if reqStatus > 1 {
+		return nil, fmt.Errorf("状态值无效，仅允许 0 或 1")
+	}
+	if reqFlowReset > 31 {
+		return nil, fmt.Errorf("流量重置日无效，仅允许 0-31（0 表示不自动重置）")
+	}
 
 	if lookupErr == sql.ErrNoRows {
 		if reqFlow < 0 || reqNum < 0 || reqExpTime < 0 || reqFlowReset < 0 {
