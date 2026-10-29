@@ -68,12 +68,52 @@ var (
 	mirrorNAT64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
 	mirrorNAT64Local     = netip.MustParsePrefix("64:ff9b:1::/48")
 	mirrorSixToFour      = netip.MustParsePrefix("2002::/16")
+	mirrorLinkLocalV4    = netip.MustParsePrefix("169.254.0.0/16")
 	mirrorMetadataExact  = []netip.Addr{
 		netip.MustParseAddr("169.254.169.254"),
 		netip.MustParseAddr("100.100.100.200"),
 		netip.MustParseAddr("fd00:ec2::254"),
 	}
 )
+
+// IsHardDenyIP reports whether ip hits the hard-deny layer only
+// (the netguard ClassifyAddr hard set, mirrored): metadata exact
+// set, the whole 169.254.0.0/16 link-local segment, unspecified,
+// the local-NAT64 segment, and NAT64/6to4 forms judged on their
+// embedded IPv4. Unlike IsNonPublicIP it does NOT cover loopback or
+// RFC1918 — callers like the kernel download primitive (R7-C-03)
+// layer it separately: hard-deny at the entry URL, full non-public
+// judgment on redirect hops.
+func IsHardDenyIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	a, err := netip.ParseAddr(ip.String())
+	if err != nil {
+		return true
+	}
+	a = a.Unmap()
+	if mirrorNAT64Local.Contains(a) {
+		return true
+	}
+	eff := a
+	if mirrorNAT64WellKnown.Contains(a) {
+		b := a.As16()
+		eff = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+	} else if mirrorSixToFour.Contains(a) {
+		b := a.As16()
+		eff = netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]})
+	}
+	if eff.IsUnspecified() {
+		return true
+	}
+	for _, m := range mirrorMetadataExact {
+		if eff == m {
+			return true
+		}
+	}
+	return mirrorLinkLocalV4.Contains(eff)
+}
 
 // IsNonPublicIP is the exported form of isNonPublicIP for the
 // agent's own outbound fetch policy faces (R7-C-02 speedtest probe,

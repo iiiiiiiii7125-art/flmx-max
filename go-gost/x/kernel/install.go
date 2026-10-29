@@ -11,13 +11,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/go-gost/x/bypass"
 )
 
 const (
@@ -54,12 +58,144 @@ func resolveArch(d *Download) (string, error) {
 	return "", fmt.Errorf("内核不支持当前架构 %s", runtime.GOARCH)
 }
 
+// --- R7-C-03: fetch() outbound policy ---
+//
+// fetch is the shared download primitive for kernel installs and geo
+// data, but it rode http.DefaultClient: redirects were followed
+// without any scheme or target policy, so the geo face's F-090
+// "https-only" entry check could be undone by a single 302 to an
+// http / internal address — while the agent self-upgrade path has
+// had a redirect whitelist since S-02. fetch now uses an explicit
+// client, layered like the verdict's adopted scheme:
+//
+//   - Entry URL: scheme http/https, host present, every resolved IP
+//     clear of the hard-deny layer (bypass.IsHardDenyIP, the agent
+//     mirror of netguard's hard set). The entry itself is built by
+//     the panel or the GitHub API and its consumers add their own
+//     gates on top (geo validate() requires https, F-090; content
+//     is sha256-verified before use), so the primitive does not ban
+//     non-public entries outright.
+//   - Redirect hops (max 3, same cap as the S-02 self-upgrade path):
+//     https is preserved — a hop may never downgrade below a scheme
+//     already seen in the chain — and the hop target is fully
+//     judged: hard-deny and every non-public range rejected
+//     (bypass.IsNonPublicIP). GitHub's official 302s to
+//     *.githubusercontent.com are https + public and unaffected.
+//   - The dial is pinned and re-judges the hard-deny layer on the
+//     IPs it actually dials, so rebinding cannot swap in a metadata
+//     target between the hop check and the connect.
+
+var fetchLookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+}
+
+// judgeFetchHost resolves host and judges every answer. hardOnly
+// applies just the hard-deny layer (entry / dial); otherwise the
+// full non-public judgment applies (redirect hops).
+func judgeFetchHost(ctx context.Context, host string, hardOnly bool) ([]net.IP, error) {
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		var err error
+		ips, err = fetchLookupIP(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("下载地址无法解析，已拒绝: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if bypass.IsHardDenyIP(ip) {
+			return nil, fmt.Errorf("下载地址指向云元数据服务，已拒绝: %s", host)
+		}
+		if !hardOnly && bypass.IsNonPublicIP(ip) {
+			return nil, fmt.Errorf("下载地址指向非公网地址，已拒绝: %s", host)
+		}
+	}
+	return ips, nil
+}
+
+func validateFetchEntryURL(ctx context.Context, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("下载地址无效，已拒绝")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("下载地址 scheme 不支持，已拒绝: %s", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("下载地址主机为空，已拒绝")
+	}
+	_, err = judgeFetchHost(ctx, host, true)
+	return err
+}
+
+// fetchDialContext pins the dial: re-resolve, re-judge the hard-deny
+// layer, dial a validated IP.
+func fetchDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := judgeFetchHost(ctx, host, true)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	var lastErr error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func fetchHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil // pinned dialing is meaningless via a proxy
+	tr.DialContext = fetchDialContext
+	return &http.Client{
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("下载重定向次数过多，已拒绝")
+			}
+			// https preservation: once any hop in the chain was
+			// https, no later hop may drop to http.
+			for _, v := range via {
+				if v.URL.Scheme == "https" && req.URL.Scheme != "https" {
+					return fmt.Errorf("下载重定向降级到 http，已拒绝: %s", req.URL.Host)
+				}
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("下载重定向 scheme 不支持，已拒绝: %s", req.URL.Scheme)
+			}
+			host := req.URL.Hostname()
+			if host == "" {
+				return fmt.Errorf("下载重定向主机为空，已拒绝")
+			}
+			_, err := judgeFetchHost(req.Context(), host, false)
+			return err
+		},
+	}
+}
+
 func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
+	if err := validateFetchEntryURL(ctx, url); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetchHTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败: %v", err)
 	}
