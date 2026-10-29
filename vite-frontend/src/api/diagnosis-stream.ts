@@ -5,7 +5,9 @@ import axios from "axios";
 import { IS_DEMO } from "@/demo";
 import { clearSession, getToken } from "@/utils/session";
 
-const DIAGNOSIS_STREAM_TIMEOUT_MS = 2 * 60 * 1000;
+// R8-T-05：后端诊断 ctx 120s 为设计上限保留，流中止抬到 ~150s，
+// 破「前端 = ctx = 服务端 WriteTimeout」三层恰等。
+const DIAGNOSIS_STREAM_TIMEOUT_MS = 150 * 1000;
 
 type RawObject = Record<string, unknown>;
 
