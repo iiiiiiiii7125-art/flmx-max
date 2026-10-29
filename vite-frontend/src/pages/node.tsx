@@ -305,6 +305,7 @@ export default function NodePage({
   // 安装命令相关状态
   const [installCommandModal, setInstallCommandModal] = useState(false);
   const [installCommand, setInstallCommand] = useState("");
+  const [installWarning, setInstallWarning] = useState("");
   const [currentNodeName, setCurrentNodeName] = useState("");
 
   // 升级相关状态
@@ -1010,14 +1011,26 @@ export default function NodePage({
       const res = await getNodeInstallCommand(node.id, channel);
 
       if (res.code === 0 && res.data) {
-        const copied = await tryCopyInstallCommand(res.data);
-
-        if (copied) {
-          toast.success("安装命令已复制到剪贴板");
-        } else {
+        // R7-J-01: a plaintext (ws://) install address must be shown
+        // explicitly BEFORE the command is copied/used — never let it
+        // go straight to the clipboard in silence.
+        if (res.warning) {
           setInstallCommand(res.data);
+          setInstallWarning(res.warning);
           setCurrentNodeName(node.name);
           setInstallCommandModal(true);
+          toast.error(res.warning, { duration: 8000 });
+        } else {
+          setInstallWarning("");
+          const copied = await tryCopyInstallCommand(res.data);
+
+          if (copied) {
+            toast.success("安装命令已复制到剪贴板");
+          } else {
+            setInstallCommand(res.data);
+            setCurrentNodeName(node.name);
+            setInstallCommandModal(true);
+          }
         }
       } else {
         toast.error(res.msg || "获取安装命令失败");
@@ -2800,6 +2813,7 @@ export default function NodePage({
         handleManualCopy={handleManualCopy}
         installCommand={installCommand}
         installCommandModal={installCommandModal}
+        installWarning={installWarning}
         setInstallCommandModal={setInstallCommandModal}
       />
 
