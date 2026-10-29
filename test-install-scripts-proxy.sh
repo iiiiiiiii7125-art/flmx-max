@@ -179,6 +179,74 @@ test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
   assert_equals "0" "$ask_called" "update_flux_agent should not prompt for proxy config when the agent is missing"
 )
 
+# R8-J-B: 更新成功后必须打印与安装路径同口径的上线确认指引
+# （回面板确认节点在线 + journalctl 日志指针）——服务重启只证明
+# 进程已启动，不代表已连上面板。旧实现仅一行「更新完成」断言，
+# 本测试对旧代码为红。
+test_update_flux_agent_prints_online_confirmation_guidance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+
+  ask_proxy_config() {
+    PROXY_ENABLED="false"
+    DOWNLOAD_URL=""
+  }
+  cleanup_legacy_gost_installation() { :; }
+  check_and_install_tcpkill() { :; }
+  sleep() { :; }
+  systemctl() {
+    if [[ "$*" == *MainPID* ]]; then
+      echo 4242
+    fi
+    return 0
+  }
+  curl() {
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+
+    cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+    chmod +x "$output"
+  }
+
+  local out_log
+  out_log=$(mktemp)
+  update_flux_agent >"$out_log" 2>&1
+
+  grep -q "更新完成" "$out_log" || fail "R8-J-B: update should still print its completion line"
+  grep -q "节点管理" "$out_log" && grep -q "在线" "$out_log" || \
+    fail "R8-J-B: update completion must tell the operator to confirm the node is online in the panel"
+  grep -q "journalctl -u flux_agent" "$out_log" || \
+    fail "R8-J-B: update completion must include the journalctl log pointer"
+)
+
 # X-P2-11 (J-01): 双采样判活的四个关键场景（与 agent 侧
 # fix3_health_test 同口径）：PID 稳定才活、第二次采样已死不活、
 # 两次 PID 不一致不活、PID 为 0/空不活。采样间隔 sleep 桩为空转，
@@ -1871,6 +1939,7 @@ test_install_script_asks_for_proxy_config
 test_install_script_recomputes_download_url_after_prompt
 test_update_flux_agent_asks_for_proxy_config
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
+test_update_flux_agent_prints_online_confirmation_guidance
 test_flux_agent_health_ok_requires_stable_pid
 test_update_flux_agent_rolls_back_flapping_binary
 test_extract_leading_semver_matches_go_rules

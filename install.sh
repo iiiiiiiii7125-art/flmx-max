@@ -992,6 +992,11 @@ update_flux_agent() {
   rm -f "$INSTALL_DIR/flux_agent.bak"
 
   echo "✅ 更新完成，服务已重新启动。"
+  # R8-J-B: 与安装路径完成块同口径（OBS-R7-J-01 的上线确认指引）——
+  # 服务重启只证明进程已启动，不代表节点已连上面板；更新路径此前
+  # 只有一行成功断言、无确认指引、无日志指针。
+  echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——更新完成只表示服务已重新启动，不代表已连上面板。"
+  echo "   若面板未显示在线，请在节点机执行 journalctl -u flux_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flux_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
 }
 
 # A9: 更新失败时恢复备份的旧版本并重启
