@@ -9,6 +9,8 @@
 #   5. install.md Caddy 示例反代目标 vs 脚本刻意使用的 127.0.0.1
 #   6. [known-pending] 默认账号字面量：guide vs seed/脚本——F-064 属 §十一.4
 #      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）。
+#   7. notify.md Webhook `event` 取值枚举 vs handler notifyEvent* 常量全集
+#      （R7-M-01 常设门：文档自称列全的枚举与代码常量集 diff 必须为 ∅）。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -92,6 +94,22 @@ if [ -n "$seed_user" ] && [ -n "$guide_user" ] && [ "$seed_user" != "$guide_user
   note_pend "guide 默认账号为 $guide_user，seed 为 $seed_user（改文档还是改 seed 待用户决策）"
 else
   echo "OK:   默认账号字面量一致：$guide_user"
+fi
+
+# ── 7. Webhook event 枚举：notify.md `event` 取值 vs 代码 notifyEvent* 常量全集（R7-M-01）
+# 代码侧机械枚举全部 notifyEvent* 常量定义（排除测试文件）；文档侧取 notify.md
+# 中以 "- `event`" 开头的那一行的全部反引号取值（首个 `event` 本身除外，
+# 含行尾以「测试消息是 `test`」形式列出的 test）。
+NOTIFY_MD="doc/guide/notify.md"
+code_events=$(grep -rhoP --exclude='*_test.go' 'notifyEvent[A-Za-z]+\s*=\s*"\K[a-z_]+' go-backend/internal/http/handler/ | sort -u)
+doc_events=$(grep -P '^- `event`' "$NOTIFY_MD" | grep -oP '`[a-z_]+`' | tr -d '`' | grep -vx event | sort -u)
+if [ -z "$code_events" ] || [ -z "$doc_events" ]; then
+  note_fail "notify.md event 枚举检查前提失效（代码常量集或文档枚举为空，请人工复核）"
+elif [ "$code_events" = "$doc_events" ]; then
+  note_ok "notify.md event 枚举与代码 notifyEvent* 常量全集一致（$(echo "$code_events" | wc -l) 项）"
+else
+  note_fail "notify.md event 枚举与代码 notifyEvent* 常量全集不一致（< 代码有文档无 / > 文档有代码无）："
+  diff <(echo "$code_events") <(echo "$doc_events") | sed 's/^/    /'
 fi
 
 echo "----"
