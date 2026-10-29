@@ -834,7 +834,9 @@ download_verified() {
   local dest="$2"
   local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
 
-  if ! curl -fL -o "$dest" "$url"; then
+  # R8-J-A: 本体与下方 .sha256 均加有界重试——旧实现单次尝试，
+  # 镜像瞬时故障即整次操作终止（校验腿失败还会删掉已下好的本体）。
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$dest" "$url"; then
     echo "❌ 下载失败: $url" >&2
     return 1
   fi
@@ -855,7 +857,7 @@ download_verified() {
   # 下载 .sha256 并校验。
   local sha_url="${url}.sha256"
   local sha_file="${dest}.sha256"
-  if ! curl -fL -o "$sha_file" "$sha_url"; then
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$sha_file" "$sha_url"; then
     rm -f "$dest" "$sha_file"
     echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
     echo "   （设置 FLMX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
@@ -1296,7 +1298,12 @@ install_panel() {
     DOCKER_COMPOSE_URL="$DOCKER_COMPOSEV4_URL"
   fi
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
+  # R8-J-A 附带清理：不再靠 set -e 隐式中止，显式判返回值并给出
+  # 路径信息，与更新路径（download_panel_update_compose）的口径对齐。
+  if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+    echo "❌ 下载 Compose 配置失败，安装终止: $DOCKER_COMPOSE_URL"
+    return 1
+  fi
   echo "✅ 文件准备完成"
 
   cat > .env <<EOF
@@ -1481,7 +1488,11 @@ migrate_to_postgres() {
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
+    # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
+    if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+      echo "❌ 下载 Compose 配置失败，迁移终止: $DOCKER_COMPOSE_URL"
+      return 1
+    fi
     echo "✅ docker-compose.yml 下载完成"
   fi
 
@@ -1619,7 +1630,11 @@ uninstall_panel() {
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml
+    # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
+    if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+      echo "❌ 下载 Compose 配置失败，卸载终止: $DOCKER_COMPOSE_URL"
+      return 1
+    fi
     echo "✅ docker-compose.yml 下载完成"
   fi
 
