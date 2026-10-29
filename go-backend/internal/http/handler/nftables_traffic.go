@@ -600,7 +600,18 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 	return batch
 }
 
-func scaleNftTrafficBytes(bytes int64, ratio float64) (int64, bool) {
+// scaleTrafficBytes is the ONE shared traffic-scaling guard for every
+// accounting engine (gost flow upload and nftables/realm). R7-F-01: the
+// two engines must never carry separate criteria again — the gost path
+// previously judged overflow by `scaledF > float64(MaxInt64)`, but
+// float64(MaxInt64) IS 2^63, so a product of exactly 2^63 passed the
+// check and int64(2^63) wrapped to MinInt64 and persisted into the
+// user/user_tunnel totals. Semantics (identical on both engines):
+// ratio == 1 passes the byte count through untouched (no float64
+// round-trip, so values above 2^53 keep their low bits); a product
+// >= 2^63, NaN, Inf, or any negative operand/result is rejected and
+// the caller discards the whole item and logs it.
+func scaleTrafficBytes(bytes int64, ratio float64) (int64, bool) {
 	if bytes < 0 || ratio < 0 {
 		return 0, false
 	}
@@ -615,4 +626,11 @@ func scaleNftTrafficBytes(bytes int64, ratio float64) (int64, bool) {
 		scaled = int64(scaledFloat)
 	}
 	return scaled, true
+}
+
+// scaleNftTrafficBytes is the nft path's name for the shared scaling
+// guard. It must never grow its own criteria: all scaling semantics
+// live in scaleTrafficBytes so the gost and nft engines cannot drift.
+func scaleNftTrafficBytes(bytes int64, ratio float64) (int64, bool) {
+	return scaleTrafficBytes(bytes, ratio)
 }

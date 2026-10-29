@@ -131,19 +131,23 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		// Flow=1 单向：仅入方向（InFlow）；Flow!=1 双向：入+出。
 		// 历史 bug：曾把 Flow 当乘数用，导致 Flow=2 双倍扣费（1.0.7
 		// M-001 已修复）；quotaUsage 始终为 scaledIn+scaledOut。
-		scaledInF := float64(item.D) * meta.TrafficRatio
-		var scaledOutF float64
-		if meta.TunnelFlow != 1 {
-			scaledOutF = float64(item.U) * meta.TrafficRatio
+		// R7-F-01：缩放统一走共用守卫 scaleTrafficBytes，与 nft 路径
+		// 同一语义（ratio==1 直通不走 float64 往返、乘积 >=2^63 /
+		// NaN / Inf / 负值整条丢弃）。旧判据 `scaledF > float64
+		// (MaxInt64)` 中 float64(MaxInt64) 本身即 2^63，乘积恰为
+		// 2^63 时判据为假、int64(2^63) 回绕 MinInt64 并落入
+		// user/user_tunnel 总量；本路径不得再自写缩放判据。
+		scaledIn, scaleOK := scaleTrafficBytes(item.D, meta.TrafficRatio)
+		var scaledOut int64
+		if scaleOK && meta.TunnelFlow != 1 {
+			scaledOut, scaleOK = scaleTrafficBytes(item.U, meta.TrafficRatio)
 		}
-		if scaledInF > math.MaxInt64 || scaledOutF > math.MaxInt64 || scaledInF < 0 || scaledOutF < 0 {
+		if !scaleOK {
 			log.Printf("gost scale overflow discard forward_id=%d u=%d d=%d ratio=%v", forwardID, item.U, item.D, meta.TrafficRatio)
 			delete(pending, forwardID)
 			droppedLocal[forwardID] = struct{}{}
 			continue
 		}
-		scaledIn := int64(scaledInF)
-		scaledOut := int64(scaledOutF)
 
 		pl, seen := pending[forwardID]
 		if !seen {
