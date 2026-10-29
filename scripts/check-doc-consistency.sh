@@ -11,6 +11,9 @@
 #      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）。
 #   7. notify.md Webhook `event` 取值枚举 vs handler notifyEvent* 常量全集
 #      （R7-M-01 常设门：文档自称列全的枚举与代码常量集 diff 必须为 ∅）。
+#   8. 超时预算登记表 vs 产品代码（R8 T-GATE 常设门：转跑
+#      scripts/check-timeout-budgets.sh，前端超时/服务端放宽/后端界三层
+#      与 doc/audit/timeout-budgets.tsv 逐格对账，漂移点名失败）。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -111,6 +114,15 @@ else
   note_fail "notify.md event 枚举与代码 notifyEvent* 常量全集不一致（< 代码有文档无 / > 文档有代码无）："
   diff <(echo "$code_events") <(echo "$doc_events") | sed 's/^/    /'
 fi
+
+# ── 8. 超时预算常设门（R8 T-GATE）：转跑 check-timeout-budgets.sh
+if bash scripts/check-timeout-budgets.sh > /tmp/.timeout-budgets.out 2>&1; then
+  note_ok "超时预算登记表与产品代码逐格一致（$(grep -oP 'timeout-budgets: \K[0-9]+' /tmp/.timeout-budgets.out) 格）"
+else
+  note_fail "超时预算登记表与产品代码不一致（明细见下）"
+  sed 's/^/    /' /tmp/.timeout-budgets.out
+fi
+rm -f /tmp/.timeout-budgets.out
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
