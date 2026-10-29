@@ -565,7 +565,19 @@ setup_domain_proxy() {
     fi
     rm -f "$caddy_key_tmp"
     if ! command -v caddy &> /dev/null; then
-      curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' 2>/dev/null | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+      # R8-J-D: 源列表先落临时文件，下载成功且非空才移入持久路径——
+      # 旧实现未检查结果、吞 stderr 的 curl 直通 tee 写目标文件，
+      # 失败/半截内容落盘并在运行结束后留存，持续污染本机后续所有
+      # apt 操作（与上方 GPG key 的临时文件处置同形）。
+      local caddy_list_tmp
+      caddy_list_tmp=$(mktemp)
+      if curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]]; then
+        mv -f "$caddy_list_tmp" /etc/apt/sources.list.d/caddy-stable.list
+        chmod 644 /etc/apt/sources.list.d/caddy-stable.list
+      else
+        rm -f "$caddy_list_tmp"
+        echo "⚠️  Caddy 官方源列表下载失败，未写入 apt 源文件，尝试使用现有软件源安装..."
+      fi
       apt-get update && apt-get install -y caddy || {
         echo "❌ Caddy 安装失败"
         return 1
