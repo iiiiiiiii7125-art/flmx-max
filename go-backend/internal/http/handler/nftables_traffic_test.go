@@ -689,3 +689,96 @@ func mustHandlerCount(t *testing.T, h *Handler, query string, args ...interface{
 	}
 	return value
 }
+
+// R7-F-01 permanent gate (nft engine): the same scaling boundary trio
+// as the gost engine gate in flow_upload_batch_test.go must stay in the
+// nft regression set — a scaled product of exactly 2^63 is discarded
+// whole, MaxInt64 at ratio 1 passes through exactly, and 2^53+1 at
+// ratio 1 keeps its low bit. Both engines share one scaling guard, so
+// any future divergence between the two sets fails one side.
+func TestBuildNftFlowUploadBatchScalingBoundaryCells(t *testing.T) {
+	cells := []struct {
+		name       string
+		ratio      float64
+		tunnelFlow int64
+		bytesIn    int64
+		bytesOut   int64
+		wantDeltas int
+		wantIn     int64
+		wantOut    int64
+		wantQuota  int64
+	}{
+		{name: "product exactly 2^63 in 2^62 x ratio 2", ratio: 2, tunnelFlow: 2, bytesIn: 1 << 62, bytesOut: 0, wantDeltas: 0},
+		{name: "product exactly 2^63 in 2^61 x ratio 4", ratio: 4, tunnelFlow: 2, bytesIn: 1 << 61, bytesOut: 0, wantDeltas: 0},
+		{name: "product exactly 2^63 out 2^62 x ratio 2", ratio: 2, tunnelFlow: 2, bytesIn: 0, bytesOut: 1 << 62, wantDeltas: 0},
+		{name: "MaxInt64 x ratio 1 passes through exactly", ratio: 1, tunnelFlow: 2, bytesIn: math.MaxInt64, bytesOut: 0, wantDeltas: 1, wantIn: math.MaxInt64, wantOut: 0, wantQuota: math.MaxInt64},
+		{name: "2^53+1 at ratio 1 is exact in", ratio: 1, tunnelFlow: 2, bytesIn: 9007199254740993, bytesOut: 0, wantDeltas: 1, wantIn: 9007199254740993, wantOut: 0, wantQuota: 9007199254740993},
+		{name: "2^53+1 at ratio 1 is exact out", ratio: 1, tunnelFlow: 2, bytesIn: 0, bytesOut: 9007199254740993, wantDeltas: 1, wantIn: 0, wantOut: 9007199254740993, wantQuota: 9007199254740993},
+	}
+	for _, cell := range cells {
+		batch := buildNftFlowUploadBatch([]nftTrafficDelta{
+			{ForwardID: 20, BytesIn: cell.bytesIn, BytesOut: cell.bytesOut},
+		}, map[int64]repo.FlowUploadForwardMeta{
+			20: {ForwardID: 20, UserID: 2, UserTunnelID: 10, TunnelID: 1, TrafficRatio: cell.ratio, TunnelFlow: cell.tunnelFlow},
+		})
+		if len(batch.flowDeltas) != cell.wantDeltas {
+			t.Fatalf("%s: expected %d flow deltas, got %#v", cell.name, cell.wantDeltas, batch.flowDeltas)
+		}
+		if cell.wantDeltas == 0 {
+			if len(batch.quotaUsage) != 0 {
+				t.Fatalf("%s: expected no quota usage for discarded cell, got %#v", cell.name, batch.quotaUsage)
+			}
+			if len(batch.forwardTraffic) != 0 {
+				t.Fatalf("%s: expected no raw traffic for discarded cell, got %#v", cell.name, batch.forwardTraffic)
+			}
+			continue
+		}
+		delta := batch.flowDeltas[0]
+		if delta.InFlow != cell.wantIn || delta.OutFlow != cell.wantOut {
+			t.Fatalf("%s: expected scaled in=%d out=%d, got in=%d out=%d", cell.name, cell.wantIn, cell.wantOut, delta.InFlow, delta.OutFlow)
+		}
+		if delta.InFlow < 0 || delta.OutFlow < 0 {
+			t.Fatalf("%s: scaled flow must never be negative, got in=%d out=%d", cell.name, delta.InFlow, delta.OutFlow)
+		}
+		if batch.quotaUsage[2] != cell.wantQuota {
+			t.Fatalf("%s: expected quota %d, got %d", cell.name, cell.wantQuota, batch.quotaUsage[2])
+		}
+	}
+}
+
+// R7-F-01 permanent gate for the shared scaling guard itself: both
+// engine entry points (scaleTrafficBytes and the nft alias) must agree
+// on every cell, including the non-finite and negative rejections the
+// old gost criterion lacked.
+func TestScaleTrafficBytesSharedGuardCells(t *testing.T) {
+	cells := []struct {
+		name  string
+		bytes int64
+		ratio float64
+		want  int64
+		ok    bool
+	}{
+		{name: "ratio 1 passthrough", bytes: 100, ratio: 1, want: 100, ok: true},
+		{name: "ratio 1 passthrough above 2^53", bytes: 9007199254740993, ratio: 1, want: 9007199254740993, ok: true},
+		{name: "ratio 1 passthrough MaxInt64", bytes: math.MaxInt64, ratio: 1, want: math.MaxInt64, ok: true},
+		{name: "product exactly 2^63 via 2^62 x 2", bytes: 1 << 62, ratio: 2, ok: false},
+		{name: "product exactly 2^63 via 2^61 x 4", bytes: 1 << 61, ratio: 4, ok: false},
+		{name: "product above 2^63", bytes: math.MaxInt64, ratio: 2, ok: false},
+		{name: "zero ratio yields zero", bytes: 100, ratio: 0, want: 0, ok: true},
+		{name: "fractional ratio truncates", bytes: 100, ratio: 0.5, want: 50, ok: true},
+		{name: "negative bytes rejected", bytes: -1, ratio: 1, ok: false},
+		{name: "negative ratio rejected", bytes: 100, ratio: -1, ok: false},
+		{name: "NaN ratio rejected", bytes: 100, ratio: math.NaN(), ok: false},
+		{name: "Inf ratio rejected", bytes: 100, ratio: math.Inf(1), ok: false},
+	}
+	for _, cell := range cells {
+		gotShared, okShared := scaleTrafficBytes(cell.bytes, cell.ratio)
+		gotNft, okNft := scaleNftTrafficBytes(cell.bytes, cell.ratio)
+		if okShared != cell.ok || okNft != cell.ok {
+			t.Fatalf("%s: expected ok=%v from both guards, got shared=%v nft=%v", cell.name, cell.ok, okShared, okNft)
+		}
+		if cell.ok && (gotShared != cell.want || gotNft != cell.want) {
+			t.Fatalf("%s: expected %d from both guards, got shared=%d nft=%d", cell.name, cell.want, gotShared, gotNft)
+		}
+	}
+}

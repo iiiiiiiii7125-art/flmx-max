@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -356,5 +357,108 @@ func TestFlowDirectionParityAcrossEngines(t *testing.T) {
 					sc.name, label, sc.inBytes, sc.outBytes, raw.bytesIn, raw.bytesOut)
 			}
 		}
+	}
+}
+
+// R7-F-01 permanent gate (gost engine): the scaling boundary trio must
+// behave exactly as on the nft engine — a scaled product of exactly
+// 2^63 is discarded whole (never wraps to MinInt64 and persists),
+// MaxInt64 at ratio 1 passes through exactly (no float64 round-trip),
+// and 2^53+1 at ratio 1 keeps its low bit. On the pre-fix gost guard
+// (`scaledF > float64(MaxInt64)`, where float64(MaxInt64) IS 2^63) the
+// exactly-2^63 cells wrapped to MinInt64 and the ratio-1 cells lost
+// precision, so this test FAILS on 69bfcc4.
+func TestBuildFlowUploadBatchScalingBoundaryCells(t *testing.T) {
+	h := &Handler{}
+	cells := []struct {
+		name       string
+		ratio      float64
+		tunnelFlow int64
+		inBytes    int64 // client -> remote, wire format D
+		outBytes   int64 // remote -> client, wire format U
+		wantDeltas int
+		wantIn     int64
+		wantOut    int64
+		wantQuota  int64
+	}{
+		{name: "product exactly 2^63 in 2^62 x ratio 2", ratio: 2, tunnelFlow: 2, inBytes: 1 << 62, outBytes: 0, wantDeltas: 0},
+		{name: "product exactly 2^63 in 2^61 x ratio 4", ratio: 4, tunnelFlow: 2, inBytes: 1 << 61, outBytes: 0, wantDeltas: 0},
+		{name: "product exactly 2^63 out 2^62 x ratio 2", ratio: 2, tunnelFlow: 2, inBytes: 0, outBytes: 1 << 62, wantDeltas: 0},
+		{name: "MaxInt64 x ratio 1 passes through exactly", ratio: 1, tunnelFlow: 2, inBytes: math.MaxInt64, outBytes: 0, wantDeltas: 1, wantIn: math.MaxInt64, wantOut: 0, wantQuota: math.MaxInt64},
+		{name: "2^53+1 at ratio 1 is exact in", ratio: 1, tunnelFlow: 2, inBytes: 9007199254740993, outBytes: 0, wantDeltas: 1, wantIn: 9007199254740993, wantOut: 0, wantQuota: 9007199254740993},
+		{name: "2^53+1 at ratio 1 is exact out", ratio: 1, tunnelFlow: 2, inBytes: 0, outBytes: 9007199254740993, wantDeltas: 1, wantIn: 0, wantOut: 9007199254740993, wantQuota: 9007199254740993},
+	}
+	for _, cell := range cells {
+		metas := map[int64]repo.FlowUploadForwardMeta{
+			20: {ForwardID: 20, UserID: 2, UserTunnelID: 10, TunnelID: 1, TrafficRatio: cell.ratio, TunnelFlow: cell.tunnelFlow},
+		}
+		batch := h.buildFlowUploadBatch([]flowItem{{N: "20_2_10", U: cell.outBytes, D: cell.inBytes}}, metas)
+		if len(batch.flowDeltas) != cell.wantDeltas {
+			t.Fatalf("%s: expected %d flow deltas, got %#v", cell.name, cell.wantDeltas, batch.flowDeltas)
+		}
+		if cell.wantDeltas == 0 {
+			if len(batch.quotaUsage) != 0 {
+				t.Fatalf("%s: expected no quota usage for discarded cell, got %#v", cell.name, batch.quotaUsage)
+			}
+			if len(batch.forwardTraffic) != 0 {
+				t.Fatalf("%s: expected no raw traffic for discarded cell, got %#v", cell.name, batch.forwardTraffic)
+			}
+			continue
+		}
+		delta := batch.flowDeltas[0]
+		if delta.InFlow != cell.wantIn || delta.OutFlow != cell.wantOut {
+			t.Fatalf("%s: expected scaled in=%d out=%d, got in=%d out=%d", cell.name, cell.wantIn, cell.wantOut, delta.InFlow, delta.OutFlow)
+		}
+		if delta.InFlow < 0 || delta.OutFlow < 0 {
+			t.Fatalf("%s: scaled flow must never be negative, got in=%d out=%d", cell.name, delta.InFlow, delta.OutFlow)
+		}
+		if batch.quotaUsage[2] != cell.wantQuota {
+			t.Fatalf("%s: expected quota %d, got %d", cell.name, cell.wantQuota, batch.quotaUsage[2])
+		}
+	}
+}
+
+// R7-F-01 end-to-end persistence gate: a forged gost report whose scaled
+// product is exactly 2^63 must not persist a wrapped negative total into
+// user.in_flow / user_tunnel.in_flow. On 69bfcc4 both totals were driven
+// to -9223372036854775808 by this input, so this test FAILS pre-fix.
+func TestGostScalingBoundaryDoesNotPersistNegativeTotals(t *testing.T) {
+	r, err := repo.Open(filepath.Join(t.TempDir(), "flow-upload-scaling-boundary.db"))
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now()
+	nowMs := now.UnixMilli()
+	if err := r.DB().Create(&model.User{ID: 2, User: "flow-user", Pwd: "pwd", RoleID: 1, ExpTime: 2727251700000, Flow: 99999, Num: 99999, CreatedTime: nowMs, Status: 1}).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := r.DB().Create(&model.Tunnel{ID: 1, Name: "tunnel-1", TrafficRatio: 2, Type: 1, Protocol: "tls", Flow: 2, CreatedTime: nowMs, UpdatedTime: nowMs, Status: 1}).Error; err != nil {
+		t.Fatalf("seed tunnel: %v", err)
+	}
+	if err := r.DB().Create(&model.UserTunnel{ID: 10, UserID: 2, TunnelID: 1, Num: 99999, Flow: 0, ExpTime: 2727251700000, Status: 1}).Error; err != nil {
+		t.Fatalf("seed user tunnel: %v", err)
+	}
+	if err := r.DB().Create(&model.Forward{ID: 20, UserID: 2, UserName: "flow-user", Name: "forward-20", TunnelID: 1, RemoteAddr: "1.1.1.1:80", Strategy: "fifo", CreatedTime: nowMs, UpdatedTime: nowMs, Status: 1}).Error; err != nil {
+		t.Fatalf("seed forward: %v", err)
+	}
+
+	h := &Handler{repo: r}
+	metas := map[int64]repo.FlowUploadForwardMeta{
+		20: {ForwardID: 20, UserID: 2, UserTunnelID: 10, TunnelID: 1, TrafficRatio: 2, TunnelFlow: 2},
+	}
+	batch := h.buildFlowUploadBatch([]flowItem{{N: "20_2_10", U: 0, D: 1 << 62}}, metas)
+	if err := h.applyFlowUploadBatch(1, batch, now); err != nil {
+		t.Fatalf("apply batch: %v", err)
+	}
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM user WHERE id = 2`); got != 0 {
+		t.Fatalf("expected user in_flow to stay 0 for discarded 2^63 cell, got %d", got)
+	}
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM user_tunnel WHERE id = 10`); got != 0 {
+		t.Fatalf("expected user_tunnel in_flow to stay 0 for discarded 2^63 cell, got %d", got)
+	}
+	if got := mustQueryInt(t, r, `SELECT in_flow FROM forward WHERE id = 20`); got != 0 {
+		t.Fatalf("expected forward in_flow to stay 0 for discarded 2^63 cell, got %d", got)
 	}
 }

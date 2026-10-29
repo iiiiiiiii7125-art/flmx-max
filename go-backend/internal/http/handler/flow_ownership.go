@@ -88,7 +88,15 @@ func (h *Handler) buildNodeFlowUploadBatch(nodeID int64, items []flowItem, metas
 			}
 			if len(owners) == 1 && item.U >= 0 && item.D >= 0 {
 				for shareID := range owners {
-					sharedUsage[shareID] += item.U + item.D
+					// OBS-R7-F-02（随 R7-F-01 批同口径）：legacy-owner
+					// 分支与上方 peer-share 分支同一溢出守卫——U+D
+					// 本身或累计和溢出即整条丢弃，不得回绕为负后
+					// 落入 sharedUsage。
+					if item.U > math.MaxInt64-item.D || sharedUsage[shareID] > math.MaxInt64-(item.U+item.D) {
+						log.Printf("gost overflow discard legacy peer-share service=%s u=%d d=%d", name, item.U, item.D)
+					} else {
+						sharedUsage[shareID] += item.U + item.D
+					}
 				}
 			}
 			continue

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"math"
+
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 	"testing"
@@ -240,5 +242,33 @@ func TestFlowOwnershipDoesNotCrossNodes(t *testing.T) {
 	}
 	if len(commands) != 0 {
 		t.Errorf("node2 flow deleted node1 shared service: %+v", commands)
+	}
+}
+
+// OBS-R7-F-02 (handled with the R7-F-01 batch, verdict §3): the
+// legacy-owner branch of buildNodeFlowUploadBatch must apply the same
+// overflow guard as the peer-share branch — a U+D sum or a running
+// total that would overflow int64 is discarded whole, never wrapped.
+// On 69bfcc4 the branch accumulated unguarded, so the second cell
+// wrapped the running total negative and the first cell wrapped its
+// own U+D sum; both FAIL pre-fix.
+func TestFlowOwnershipLegacyBranchOverflowGuard(t *testing.T) {
+	a := newCleanupAgent(t)
+	shareID := a.addRuntime(t, "70_1_0", 1, 1, 1, time.Now())
+
+	// Per-item U+D overflow: MaxInt64 + 1 must be discarded, not wrapped.
+	batch := a.h.buildNodeFlowUploadBatch(1, []flowItem{{N: "70_1_0_tcp", U: math.MaxInt64, D: 1}}, nil)
+	if got := batch.peerShareUsage[shareID]; got != 0 {
+		t.Fatalf("expected per-item overflowing legacy usage to be discarded, got %d", got)
+	}
+
+	// Running-total overflow: the first item lands exactly, the second
+	// identical item must be discarded instead of wrapping the total.
+	batch = a.h.buildNodeFlowUploadBatch(1, []flowItem{
+		{N: "70_1_0_tcp", U: math.MaxInt64 - 10, D: 0},
+		{N: "70_1_0_tcp", U: math.MaxInt64 - 10, D: 0},
+	}, nil)
+	if got := batch.peerShareUsage[shareID]; got != math.MaxInt64-10 {
+		t.Fatalf("expected legacy usage to stay at %d after overflow discard, got %d", int64(math.MaxInt64-10), got)
 	}
 }
