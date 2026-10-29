@@ -75,6 +75,13 @@ var (
 	}
 )
 
+// IsNonPublicIP is the exported form of isNonPublicIP for the
+// agent's own outbound fetch policy faces (R7-C-02 speedtest probe,
+// R7-C-03 kernel download primitive): those call sites live in other
+// packages of this module but must judge targets with exactly this
+// mirrored classifier, not a second copy of the range set.
+func IsNonPublicIP(ip net.IP) bool { return isNonPublicIP(ip) }
+
 // isNonPublicIP reports whether ip is loopback, private, link-local,
 // multicast, unspecified, in one of the special-purpose ranges, a
 // hard-denied metadata address, or a translated address (NAT64 /96,
