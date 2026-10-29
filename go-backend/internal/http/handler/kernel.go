@@ -320,6 +320,8 @@ func (h *Handler) kernelNodeEligible(nodeID int64) (*model.Node, error) {
 }
 
 func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
+	// R8-T-01: kernelApplyTimeout is 300s; arm the write relief first.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -760,6 +762,9 @@ func (h *Handler) inboundUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update bool) {
+	// R8-T-01: a save against a kernel with no installed version
+	// escalates to a full kernel apply (kernelApplyTimeout, 300s).
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

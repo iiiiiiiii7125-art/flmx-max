@@ -122,6 +122,9 @@ func (h *Handler) streamDiagnosisRuntime(ctx context.Context, cancel context.Can
 }
 
 func (h *Handler) tunnelDiagnoseStream(w http.ResponseWriter, r *http.Request) {
+	// R8-T-05: the stream's done event must remain writable when a
+	// diagnosis runs its full 120s ctx budget.
+	extendWriteDeadline(w, diagnosisWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -161,6 +164,8 @@ func (h *Handler) tunnelDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardDiagnoseStream(w http.ResponseWriter, r *http.Request) {
+	// R8-T-05: see tunnelDiagnoseStream.
+	extendWriteDeadline(w, diagnosisWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

@@ -2000,6 +2000,9 @@ func tunnelRequestNodeIDs(req map[string]interface{}) []int64 {
 }
 
 func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
+	// R8-T-07: same composite legs as tunnel create; the global
+	// 120s write cap was an exact-equality bound here.
+	extendWriteDeadline(w, tunnelUpdateWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -2928,6 +2931,9 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) tunnelDiagnose(w http.ResponseWriter, r *http.Request) {
+	// R8-T-05: outer write layer rises to ~150s; the 120s request
+	// ctx below stays the designed work cap.
+	extendWriteDeadline(w, diagnosisWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -4308,6 +4314,8 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardDiagnose(w http.ResponseWriter, r *http.Request) {
+	// R8-T-05: see tunnelDiagnose.
+	extendWriteDeadline(w, diagnosisWriteDeadline)
 	id := asInt64FromBodyKey(r, w, "forwardId")
 	if id <= 0 {
 		return

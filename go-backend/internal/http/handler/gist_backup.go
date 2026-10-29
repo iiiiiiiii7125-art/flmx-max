@@ -940,6 +940,9 @@ func (h *Handler) gistBackupSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) gistBackupUpload(w http.ResponseWriter, r *http.Request) {
+	// R8-T-08: full export build plus up to two 60s gist calls on
+	// the PATCH-404 rebuild path.
+	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

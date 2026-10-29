@@ -29,6 +29,15 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hj.Hijack()
 }
 
+// Unwrap lets http.ResponseController reach the underlying writer.
+// Without it, per-endpoint SetWriteDeadline relief (R8 T-family, the
+// gh_mirror.go precedent form) silently returns "feature not
+// supported" behind this wrapper and long responses are truncated at
+// the server's global WriteTimeout despite the handler's relief call.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *statusWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()

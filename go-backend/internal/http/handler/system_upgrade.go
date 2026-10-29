@@ -1169,6 +1169,9 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
+	// R8-T-04: the synchronous prelude (release resolution plus
+	// asset download) runs up to ~210s worst case.
+	extendWriteDeadline(w, systemUpgradeWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

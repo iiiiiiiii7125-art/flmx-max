@@ -2182,6 +2182,9 @@ type backupExportRequest struct {
 }
 
 func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
+	// R8-T-08: export generation scales with DB size and can pass
+	// the global 120s write cap.
+	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
