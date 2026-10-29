@@ -1682,7 +1682,9 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fcCall != nil {
-		fc := client.NewFederationClient()
+		// R8-T-06: CreateTunnel is a runtime face; see
+		// federationRuntimeClientTimeout.
+		fc := client.NewFederationClientWithTimeout(federationRuntimeClientTimeout)
 		if _, err := fc.CreateTunnel(fcCall.url, fcCall.token, localDomain, fcCall.proto, fcCall.port, fcCall.addr); err != nil {
 			response.WriteJSON(w, response.ErrDefault("Remote tunnel creation failed: "+err.Error()))
 			return
@@ -2000,6 +2002,9 @@ func tunnelRequestNodeIDs(req map[string]interface{}) []int64 {
 }
 
 func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
+	// R8-T-07: same composite legs as tunnel create; the global
+	// 120s write cap was an exact-equality bound here.
+	extendWriteDeadline(w, tunnelUpdateWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -2928,6 +2933,9 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) tunnelDiagnose(w http.ResponseWriter, r *http.Request) {
+	// R8-T-05: outer write layer rises to ~150s; the 120s request
+	// ctx below stays the designed work cap.
+	extendWriteDeadline(w, diagnosisWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -4308,6 +4316,8 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardDiagnose(w http.ResponseWriter, r *http.Request) {
+	// R8-T-05: see tunnelDiagnose.
+	extendWriteDeadline(w, diagnosisWriteDeadline)
 	id := asInt64FromBodyKey(r, w, "forwardId")
 	if id <= 0 {
 		return
@@ -6064,7 +6074,11 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 	if h == nil || state == nil {
 		return bindings, releaseRefs, nil
 	}
-	fc := client.NewFederationClient()
+	// R8-T-06: this client drives Connect/ReservePort/ApplyRole —
+	// runtime faces whose peer work is sequential 6s node commands
+	// under a shared mutex; give it the explicit runtime budget
+	// instead of the 10s default.
+	fc := client.NewFederationClientWithTimeout(federationRuntimeClientTimeout)
 	now := time.Now().UnixMilli()
 
 	// D3-04: 下发前为所有远端节点自愈 relay 凭据（每个节点至多一次
@@ -6622,7 +6636,9 @@ func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, own
 		}
 	}
 
-	_, err = client.NewFederationClient().ApplyRole(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeApplyRoleRequest{
+	// R8-T-06: ApplyRole is a runtime face; see
+	// federationRuntimeClientTimeout.
+	_, err = client.NewFederationClientWithTimeout(federationRuntimeClientTimeout).ApplyRole(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeApplyRoleRequest{
 		ResourceKey: strings.TrimSpace(binding.ResourceKey),
 		Role:        "middle",
 		Protocol:    defaultString(ownerRuntimeNode.Protocol, "tls"),

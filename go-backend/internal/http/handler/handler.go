@@ -2182,6 +2182,9 @@ type backupExportRequest struct {
 }
 
 func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
+	// R8-T-08: export generation scales with DB size and can pass
+	// the global 120s write cap.
+	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -2231,6 +2234,13 @@ type backupImportRequest struct {
 }
 
 func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
+	// R8-T-02 element (a) only: a non-trivial import runs far past
+	// the global 120s write cap, so arm the write relief first. The
+	// import itself is NOT capped, and the transaction's binding to
+	// r.Context() (X-P3-21, element (b)) is deliberately unchanged
+	// pending a user ruling — the abort-amplified shape is NOT
+	// eradicated by this batch.
+	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

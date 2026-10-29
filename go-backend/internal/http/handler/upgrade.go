@@ -366,6 +366,9 @@ func resolveLatestReleaseByChannelWithProxy(channel string, proxyURL string) (st
 }
 
 func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
+	// R8-T-04: upgradeTimeout is 300s; the global 120s write cap
+	// truncated every slow upgrade's response.
+	extendWriteDeadline(w, nodeUpgradeWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -464,6 +467,8 @@ func resolveLatestReleaseAPI() (string, error) {
 }
 
 func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
+	// R8-T-04: the batch bound is ceil(N/5) x upgradeTimeout.
+	extendWriteDeadline(w, nodeBatchUpgradeWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
