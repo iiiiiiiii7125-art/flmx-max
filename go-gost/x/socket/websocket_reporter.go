@@ -1913,6 +1913,58 @@ func readAgentChecksum(r io.Reader) (string, error) {
 	return fields[0], nil
 }
 
+// stripUpgradeProxyPrefix mirrors x/kernel's stripMirrorPrefix: if
+// rawURL is in mirror-prefix form (<prefix>/https://target), it
+// returns the direct target URL; otherwise it returns "".
+func stripUpgradeProxyPrefix(rawURL string) string {
+	for _, scheme := range []string{"/https://", "/http://"} {
+		if i := strings.Index(rawURL, scheme); i > 0 {
+			return rawURL[i+1:]
+		}
+	}
+	return ""
+}
+
+// getWithUpgradeProxyFallback performs one GET for an agent-upgrade
+// download (R7-J-02). If the URL is a proxy-prefixed form and the
+// proxied attempt fails — transport error or non-200, the same
+// failure caliber as x/kernel's fetch — it retries exactly once with
+// the proxy prefix stripped (direct). When both attempts fail the
+// returned error merges both causes. A URL without a proxy prefix is
+// fetched exactly once, with its original error preserved. The
+// caller's client (and therefore the S-02 redirect allowlist) is used
+// unchanged for both attempts.
+func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Response, error) {
+	resp, err := client.Get(rawURL)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		return resp, nil
+	}
+	var firstErr error
+	if err != nil {
+		firstErr = err
+	} else {
+		firstErr = fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+		resp.Body.Close()
+	}
+	direct := stripUpgradeProxyPrefix(rawURL)
+	if direct == "" || direct == rawURL {
+		return nil, firstErr
+	}
+	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", firstErr, sanitizeWebSocketURL(direct))
+	resp2, err2 := client.Get(direct)
+	if err2 == nil && resp2.StatusCode == http.StatusOK {
+		return resp2, nil
+	}
+	var secondErr error
+	if err2 != nil {
+		secondErr = err2
+	} else {
+		secondErr = fmt.Errorf("HTTP状态码: %d", resp2.StatusCode)
+		resp2.Body.Close()
+	}
+	return nil, fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", firstErr, secondErr)
+}
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -1994,15 +2046,13 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
 		},
 	}
-	resp, err := httpClient.Get(downloadURL)
+	// R7-J-02: proxy failure falls back to a stripped-prefix direct
+	// retry once, like every other download surface in the repo.
+	resp, err := getWithUpgradeProxyFallback(httpClient, downloadURL)
 	if err != nil {
 		return fmt.Errorf("下载升级包失败: %v", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载升级包失败, HTTP状态码: %d", resp.StatusCode)
-	}
 
 	// S-02: 限制下载大小，防止超大文件耗尽磁盘
 	const maxAgentBinarySize = 100 << 20 // 100MB
@@ -2068,16 +2118,14 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// S-02: Checksum 校验强制，不再允许为空或跳过
 	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
 	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-	checksumResp, err := httpClient.Get(checksumURL)
+	// R7-J-02: the checksum GET gets the same proxy->direct fallback
+	// as the binary GET above.
+	checksumResp, err := getWithUpgradeProxyFallback(httpClient, checksumURL)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
 	}
 	defer checksumResp.Body.Close()
-	if checksumResp.StatusCode != http.StatusOK {
-		os.Remove(tmpPath)
-		return fmt.Errorf("S-02: 获取校验值失败, HTTP状态码: %d", checksumResp.StatusCode)
-	}
 	// 格式: "<hash>  <filename>" 或 "<hash>"；读取带上限 (D1-08)
 	expectedHash, err := readAgentChecksum(checksumResp.Body)
 	if err != nil {
