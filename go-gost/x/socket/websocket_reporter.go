@@ -1935,7 +1935,18 @@ func stripUpgradeProxyPrefix(rawURL string) string {
 // caller's client (and therefore the S-02 redirect allowlist) is used
 // unchanged for both attempts.
 func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Response, error) {
-	resp, err := client.Get(rawURL)
+	return getWithUpgradeProxyFallbackCtx(context.Background(), client, rawURL)
+}
+
+// getWithUpgradeProxyFallbackCtx is getWithUpgradeProxyFallback with
+// the caller's context threaded through both attempts (R8-T-09): the
+// direct retry runs on whatever budget remains in ctx instead of
+// behind a fresh per-GET wall, so one logical download — headers and
+// body, first attempt and retry — is bounded by the caller's single
+// operation deadline, the same shape as x/kernel's fetch under its
+// whole-install ctx.
+func getWithUpgradeProxyFallbackCtx(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
+	resp, err := upgradeGET(ctx, client, rawURL)
 	if err == nil && resp.StatusCode == http.StatusOK {
 		return resp, nil
 	}
@@ -1951,7 +1962,7 @@ func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Resp
 		return nil, firstErr
 	}
 	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", firstErr, sanitizeWebSocketURL(direct))
-	resp2, err2 := client.Get(direct)
+	resp2, err2 := upgradeGET(ctx, client, direct)
 	if err2 == nil && resp2.StatusCode == http.StatusOK {
 		return resp2, nil
 	}
@@ -1963,6 +1974,65 @@ func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Resp
 		resp2.Body.Close()
 	}
 	return nil, fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", firstErr, secondErr)
+}
+
+func upgradeGET(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
+}
+
+// R8-T-09: the whole upgrade download phase — binary GET, checksum
+// GET, and any proxy->direct fallback retries — shares ONE budget,
+// mirroring x/kernel's downloadTimeout for kernel installs. The
+// previous shape set Timeout: 60s on the HTTP client: a
+// whole-request wall counted from byte zero (it spans the body
+// read), so a link slow enough that the ~10MB binary needs >60s in
+// a single GET could never upgrade, however patient the panel's
+// 300s upgradeTimeout is. 4 minutes keeps the download phase inside
+// the panel's patience with room for verify/install afterwards,
+// exactly the kernel face's arithmetic (240s < 300s). A var so
+// tests can shrink it.
+var upgradeDownloadTimeout = 4 * time.Minute
+
+// upgradeDownloadHeaderTimeout bounds only the wait for response
+// headers on each attempt. A peer that never sends headers is
+// stuck, not slow: failing the attempt at this cap lets the J-02
+// fallback spend the remaining shared budget on the direct URL
+// instead of starving behind a hung proxy. Body transfer is NOT
+// bounded by this value; it runs on upgradeDownloadTimeout. A var
+// so tests can shrink it.
+var upgradeDownloadHeaderTimeout = 60 * time.Second
+
+// newUpgradeDownloadClient builds the S-02 download client for
+// handleUpgradeAgent. The redirect allowlist is unchanged (GitHub
+// hosts, plus the proxy's own host when downloading via a proxy
+// prefix), but there is deliberately no client-level Timeout: the
+// overall deadline lives in the caller's context (see
+// upgradeDownloadTimeout) and per-attempt header patience in the
+// transport, so no per-GET wall can kill a slow body transfer
+// mid-flight (R8-T-09).
+func newUpgradeDownloadClient(proxyHost string) *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = upgradeDownloadHeaderTimeout
+	return &http.Client{
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("S-02: 重定向次数过多")
+			}
+			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
+			// githubusercontent.com 及其子域名（release 下载必经此域名）；
+			// 经代理下载时额外允许代理自身域名（镜像站内跳转）。
+			host := strings.ToLower(req.URL.Host)
+			if isGitHubDownloadHost(host) || (proxyHost != "" && host == proxyHost) {
+				return nil
+			}
+			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+		},
+	}
 }
 
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
@@ -2029,26 +2099,15 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	backupPath := binaryPath + ".old"
 
 	// S-02: 限制重定向只允许 GitHub 官方域名，防止跳转到恶意域名
-	// 限制下载大小 100MB，超时 60 秒
-	httpClient := &http.Client{
-		Timeout: 60 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("S-02: 重定向次数过多")
-			}
-			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
-			// githubusercontent.com 及其子域名（release 下载必经此域名）；
-			// 经代理下载时额外允许代理自身域名（镜像站内跳转）。
-			host := strings.ToLower(req.URL.Host)
-			if isGitHubDownloadHost(host) || (proxyHost != "" && host == proxyHost) {
-				return nil
-			}
-			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
-		},
-	}
+	// 限制下载大小 100MB。时限形态见 upgradeDownloadTimeout
+	// (R8-T-09)：整段下载（本体 + 校验 + 降级重试）共享一个整程
+	// 预算，不再有单 GET 的 60 秒整请求墙。
+	httpClient := newUpgradeDownloadClient(proxyHost)
+	dlCtx, dlCancel := context.WithTimeout(context.Background(), upgradeDownloadTimeout)
+	defer dlCancel()
 	// R7-J-02: proxy failure falls back to a stripped-prefix direct
 	// retry once, like every other download surface in the repo.
-	resp, err := getWithUpgradeProxyFallback(httpClient, downloadURL)
+	resp, err := getWithUpgradeProxyFallbackCtx(dlCtx, httpClient, downloadURL)
 	if err != nil {
 		return fmt.Errorf("下载升级包失败: %v", err)
 	}
@@ -2119,8 +2178,9 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
 	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
 	// R7-J-02: the checksum GET gets the same proxy->direct fallback
-	// as the binary GET above.
-	checksumResp, err := getWithUpgradeProxyFallback(httpClient, checksumURL)
+	// as the binary GET above, under the same shared download budget
+	// (dlCtx, R8-T-09).
+	checksumResp, err := getWithUpgradeProxyFallbackCtx(dlCtx, httpClient, checksumURL)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
