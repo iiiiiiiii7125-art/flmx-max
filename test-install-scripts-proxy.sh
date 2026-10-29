@@ -1360,6 +1360,9 @@ test_install_panel_refuses_existing_deployment() (
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
   download_verified() { return 0; }
+  # R8-J-C: install_panel 完成块前新增 wait_for_backend_healthy 把关，
+  # 夹具以恒成功桩承接（本例验的是 F-049 守卫，不验健康等待本身）。
+  wait_for_backend_healthy() { return 0; }
   check_ipv6_support() { return 1; }
   configure_docker_ipv6() { return 0; }
   docker_ipv6_usable() { return 1; }
@@ -1377,6 +1380,63 @@ test_install_panel_refuses_existing_deployment() (
   assert_equals "0" "$rc2" "F-049: PANEL_FORCE_REINSTALL=1 should allow reinstall"
   ls "$work"/.env.bak.* >/dev/null 2>&1 || fail "F-049: forced reinstall must back up the old .env first"
   grep -q "keepme" "$work"/.env.bak.* || fail "F-049: .env backup must contain the old secrets"
+)
+
+# R8-J-C: 全新安装的成功断言必须受后端健康等待把关——健康等待
+# 失败时 install_panel 返回 1、不印「部署完成」与默认凭据、改印
+# logs 指引；通过时才印成功块。旧实现 up -d 后直达成功块，
+# 本测试对旧代码为红。
+test_install_panel_waits_for_backend_health() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+
+  ask_proxy_config() { :; }
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+    POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="pw"; JWT_SECRET="secret"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() { return 0; }
+
+  # 健康等待失败：不得宣称部署完成
+  wait_for_backend_healthy() { return 1; }
+  local rc="0" out_log
+  out_log="$work/fail.log"
+  ( cd "$work" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R8-J-C: install_panel must fail when the backend never becomes healthy"
+  if grep -q "部署完成" "$out_log"; then
+    fail "R8-J-C: success block must not be printed when the backend health gate fails"
+  fi
+  if grep -q "默认管理员账号" "$out_log"; then
+    fail "R8-J-C: default credentials must not be printed when the backend health gate fails"
+  fi
+  grep -q "logs backend" "$out_log" || \
+    fail "R8-J-C: health-gate failure must print a docker compose logs pointer"
+
+  # 健康等待通过：正常印成功块
+  wait_for_backend_healthy() { return 0; }
+  rc="0"
+  out_log="$work/ok.log"
+  ( cd "$work" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R8-J-C: install_panel should succeed once the backend is healthy"
+  grep -q "部署完成" "$out_log" || \
+    fail "R8-J-C: success block should be printed after the health gate passes"
 )
 
 # F-050: Docker 安装脚本未通过 pin 校验时不得执行（哨兵法）。
@@ -1929,6 +1989,7 @@ test_get_deployed_panel_version_parses_image_tag
 test_update_panel_crosschecks_deployed_image_version
 test_install_flux_agent_keeps_service_when_download_fails
 test_install_panel_refuses_existing_deployment
+test_install_panel_waits_for_backend_health
 test_install_docker_rejects_unverified_script
 test_download_verified_fail_closed_edges
 test_verify_downloaded_binary_retries_transient_checksum_failure

@@ -1330,6 +1330,17 @@ EOF
     $DOCKER_CMD up -d backend frontend
   fi
 
+  # R8-J-C: 完成块之前先过既有后端健康等待——更新（start_panel_
+  # after_update）与迁移路径均有此把关，安装路径此前独缺，up -d 后
+  # 直达成功块：后端 crash-loop 时用户拿到的是打不开的访问地址与
+  # 默认凭据、且无日志指引。失败时不印成功块，改印失败 + logs
+  # 指引（与迁移路径的处置风格一致）。
+  if ! wait_for_backend_healthy; then
+    echo "❌ 部署未完成：后端服务未通过健康检查，已跳过成功信息与默认凭据打印。"
+    echo "🔍 排查指引：在部署目录执行 $DOCKER_CMD logs backend 查看后端日志；修复后重新运行本脚本、选择「2. 更新面板」即可完成启动。"
+    return 1
+  fi
+
   echo "🎉 部署完成"
   local _pub_ip
   _pub_ip=$(get_public_ip)
