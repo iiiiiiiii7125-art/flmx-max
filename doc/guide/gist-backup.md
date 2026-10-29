@@ -75,4 +75,4 @@
 
 ## 高级：API 基地址
 
-默认 `https://api.github.com`。测试或自托管 GitHub API 时可用环境变量改写：`FLMX_GIST_API_BASE` 优先，`FLVX_GIST_API_BASE` 兜底（旧名前缀兼容）。GitHub 请求头为 `Authorization: Bearer <token>`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28`、`User-Agent: flmx-panel`；401 提示“令牌无效或已过期”，403 提示“需要 gist 权限或太频繁”，大文件 `truncated=true` 时走 `raw_url` 再取。
+默认 `https://api.github.com`。测试或自托管 GitHub API 时可用环境变量改写：`FLMX_GIST_API_BASE` 优先，`FLVX_GIST_API_BASE` 兜底（旧名前缀兼容）。GitHub 请求头为 `Authorization: Bearer <token>`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28`、`User-Agent: flmx-panel`；其中令牌只发往 API 基地址同源的请求与官方 API 主机（`api.github.com`），大文件 `truncated=true` 时走 `raw_url` 再取的那一腿不带令牌；401 提示“令牌无效或已过期”，403 提示“需要 gist 权限或太频繁”。

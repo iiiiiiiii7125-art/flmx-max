@@ -144,12 +144,18 @@ func clampProbeValue(v, lo, hi int) (int, bool) {
 func probeSpeedtestDownload(ctx context.Context, url string) (bytes int64, elapsed time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(ctx, probeSpeedtestTimeout)
 	defer cancel()
+	// R7-C-02: judge the target before any dial (hard-deny always,
+	// non-public rejected by default); the client re-judges every
+	// redirect hop and pins the dial — see outbound_guard.go.
+	if err := validateProbeSpeedtestURL(ctx, url); err != nil {
+		return 0, 0, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, 0, err
 	}
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := probeSpeedtestClient().Do(req)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -173,11 +179,30 @@ func probeSpeedtestDownload(ctx context.Context, url string) (bytes int64, elaps
 // in ms. Connect time, not application RTT, and labelled as a
 // reference value in the result.
 func probeReferenceConnectRTT(host string) (int, error) {
+	// R7-C-02: judge before dialing (hard-deny always, non-public
+	// rejected by default, port range checked) and dial the
+	// validated IPs, not the name — see outbound_guard.go.
+	_, port, ips, err := validateProbeReferenceHost(context.Background(), host)
+	if err != nil {
+		return 0, err
+	}
+	dialer := &net.Dialer{Timeout: probeReferenceTimeout}
 	var samples []int
 	for i := 0; i < probeReferenceTries; i++ {
 		start := time.Now()
-		conn, err := net.DialTimeout("tcp", host, probeReferenceTimeout)
-		if err != nil {
+		var conn net.Conn
+		var derr error
+		for _, ip := range ips {
+			dialIP := ip
+			if ip4 := ip.To4(); ip4 != nil {
+				dialIP = ip4
+			}
+			conn, derr = dialer.Dial("tcp", net.JoinHostPort(dialIP.String(), port))
+			if derr == nil {
+				break
+			}
+		}
+		if derr != nil {
 			continue
 		}
 		ms := int(time.Since(start).Milliseconds())

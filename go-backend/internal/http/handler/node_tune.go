@@ -4,11 +4,82 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/netguard"
 )
+
+// --- R7-C-02: panel-side probe target policy (before dispatch) ---
+//
+// The probe branch used to check only the scheme prefix and the
+// empty-label syntax of speedtestURL / referenceHost, then handed
+// both to the agent verbatim — a blind SSRF / port-scan primitive
+// into every managed node's network. The panel now judges both
+// targets with netguard PolicyPublicOnly before dispatch (hard-deny
+// layer always; every non-public range rejected by default), and
+// the agent re-judges before executing (see x/socket
+// outbound_guard.go), the same panel-checks + agent-backstops shape
+// as the federation face. Hosts are judged on their resolved IPs
+// (fail-closed on resolution failure); url.Parse Hostname() is the
+// real host, so userinfo masking cannot smuggle a target past.
+//
+// Allowlist design (explicit, no silent hole): there is deliberately
+// NO private-target exception here. A legitimate private speedtest
+// target needs a new explicit channel — a panel-side CIDR allowlist
+// (e.g. FLMX_SPEEDTEST_PRIVATE_ALLOWLIST) judged here and forwarded
+// to the agent in the probe payload for re-judging — which does not
+// exist yet; until it does, private probe targets are rejected.
+
+var probeLookupIP = net.LookupIP
+
+func judgeProbeDispatchHost(host string) error {
+	var ips []net.IP
+	var err error
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		ips, err = probeLookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("无法解析，已拒绝: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyPublicOnly, false); !d.Allowed {
+			return fmt.Errorf("指向非公网地址，已拒绝: %s", host)
+		}
+	}
+	return nil
+}
+
+func validateSpeedtestURLDispatch(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("测速地址无效，已拒绝")
+	}
+	if err := judgeProbeDispatchHost(u.Hostname()); err != nil {
+		return fmt.Errorf("测速地址%s", err.Error())
+	}
+	return nil
+}
+
+func validateReferenceHostDispatch(ref string) error {
+	host, portStr, err := net.SplitHostPort(ref)
+	if err != nil {
+		return fmt.Errorf("参考地址须为 host:port 格式")
+	}
+	port, perr := strconv.Atoi(portStr)
+	if perr != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("参考地址端口超出范围，已拒绝: %s", portStr)
+	}
+	if err := judgeProbeDispatchHost(host); err != nil {
+		return fmt.Errorf("参考地址%s", err.Error())
+	}
+	return nil
+}
 
 const nodeTuneTimeout = 30 * time.Second
 
@@ -141,6 +212,21 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		if err := validateNoEmptyLabelURLHost(req.SpeedtestURL); err != nil {
 			response.WriteJSON(w, response.ErrDefault("测速地址主机名格式无效："+err.Error()))
 			return
+		}
+		// R7-C-02：netguard 政策判定（硬拒恒拒、私网默认拒），在
+		// 下发前拦下打向节点内网/云元数据的探测；agent 侧执行前
+		// 同口径复判。放在空标签语法门之后，保证既有语法口径不变。
+		if req.SpeedtestURL != "" {
+			if err := validateSpeedtestURLDispatch(req.SpeedtestURL); err != nil {
+				response.WriteJSON(w, response.ErrDefault(err.Error()))
+				return
+			}
+		}
+		if req.ReferenceHost != "" {
+			if err := validateReferenceHostDispatch(req.ReferenceHost); err != nil {
+				response.WriteJSON(w, response.ErrDefault(err.Error()))
+				return
+			}
 		}
 		command, data = "TuneProbe", map[string]interface{}{"withSpeed": req.WithSpeed || req.MeasureBandwidth}
 		if req.SpeedtestURL != "" {

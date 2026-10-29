@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"golang.org/x/crypto/scrypt"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/netguard"
 	"go-backend/internal/store/model"
 )
 
@@ -237,7 +240,152 @@ type gistHistoryEntry struct {
 
 var errGistNotFound = errors.New("gist not found")
 
+// --- R7-C-01: controlled Gist outbound client ---
+//
+// gistRequest used to ride http.DefaultClient with no SSRF guard at
+// all, and attached the GitHub token to every URL it was handed —
+// including the raw_url taken from an API response (C-02 family
+// recurrence). All Gist outbound now goes through gistHTTPClient:
+//
+//   - Hard-deny layer always on (netguard PolicyHardDenyOnly, the
+//     notify-face policy: a self-hosted API base on a private address
+//     stays legal, metadata / link-local segment / unspecified never
+//     are), judged on the initial URL and again at every redirect hop
+//     (max 5), and re-judged at dial time on the pinned IPs so DNS
+//     rebinding cannot swap the target between check and dial.
+//   - The Authorization Bearer token is attached only when the
+//     request host is the configured API base's host or the official
+//     API host (api.github.com). The raw_url download leg uses
+//     gistRawRequest, which never carries the token, whatever host
+//     the response named.
+
+var gistLookupIP = net.LookupIP
+
+// validateGistURL judges one Gist outbound URL (initial or redirect
+// hop): http/https only, host present, every resolved IP clear of
+// the hard-deny layer. Hostname() is the real host, so userinfo
+// masking (https://example.com@169.254.169.254/) is judged on the
+// address actually dialed.
+func validateGistURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return errors.New("Gist 地址无效，已拒绝")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("Gist 地址 scheme 不支持，已拒绝: %s", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("Gist 地址主机为空，已拒绝")
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		ips, err = gistLookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("Gist 地址无法解析，已拒绝: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOnly, false); !d.Allowed {
+			return errors.New("Gist 地址指向云元数据服务，已拒绝")
+		}
+	}
+	return nil
+}
+
+// gistDialContext is the pinned dial for Gist outbound: resolve,
+// re-judge every IP against the hard-deny layer, dial a validated IP
+// (same shape as notifyDialContext, R2X-044).
+func gistDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		ips, err = gistLookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("Gist 地址无法解析: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if d := netguard.Judge(ip, netguard.PolicyHardDenyOnly, false); !d.Allowed {
+			return nil, errors.New("Gist 地址指向云元数据服务，已拒绝")
+		}
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	var lastErr error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// gistTokenAllowedForURL reports whether the Gist token may be sent
+// to this URL: only the configured API base's own host (same-origin,
+// which covers self-hosted bases) or the official API host.
+func gistTokenAllowedForURL(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	if base, err := url.Parse(gistAPIBase()); err == nil && strings.EqualFold(host, base.Hostname()) {
+		return true
+	}
+	return host == "api.github.com"
+}
+
+func gistHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// Pinned dialing only works direct: via a proxy the proxy would
+	// resolve the target and the pin would be meaningless (same
+	// rationale as notifyTransport / federation transport).
+	tr.Proxy = nil
+	tr.DialContext = gistDialContext
+	return &http.Client{
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("Gist 地址重定向次数过多，已拒绝")
+			}
+			if err := validateGistURL(req.URL.String()); err != nil {
+				return err
+			}
+			if !gistTokenAllowedForURL(req.URL) {
+				req.Header.Del("Authorization")
+			}
+			return nil
+		},
+	}
+}
+
 func gistRequest(ctx context.Context, method, url, token string, body interface{}, out interface{}) error {
+	return gistDo(ctx, method, url, token, true, body, out)
+}
+
+// gistRawRequest is the raw_url download leg: same controlled client
+// and hard-deny policy, but the token is never attached — the URL
+// comes from an API response, not from the panel's own config.
+func gistRawRequest(ctx context.Context, method, rawURL string, body interface{}, out interface{}) error {
+	return gistDo(ctx, method, rawURL, "", false, body, out)
+}
+
+func gistDo(ctx context.Context, method, rawURL, token string, attachToken bool, body interface{}, out interface{}) error {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -246,22 +394,34 @@ func gistRequest(ctx context.Context, method, url, token string, body interface{
 		}
 		reader = bytes.NewReader(b)
 	}
+	// R7-C-01: the initial URL is judged before any request is built;
+	// redirect hops are re-judged by the client's CheckRedirect and
+	// the dial is pinned (see gistHTTPClient).
+	if err := validateGistURL(rawURL); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
 		return err
 	}
 	// 注意：此处 Bearer 是 GitHub API 的要求，与面板自身的 raw JWT
-	//（无 Bearer 前缀）无关，不得混用。
-	req.Header.Set("Authorization", "Bearer "+token)
+	//（无 Bearer 前缀）无关，不得混用。R7-C-01：令牌只发往 API
+	// 基址同源或官方 API 主机（gistTokenAllowedForURL）；raw_url
+	// 下载腿走 gistRawRequest，永不带令牌。
+	if attachToken && token != "" {
+		if parsed, perr := url.Parse(rawURL); perr == nil && gistTokenAllowedForURL(parsed) {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "flmx-panel")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gistHTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("连接 GitHub 失败：%v", err)
 	}
@@ -883,7 +1043,9 @@ func gistVersionContent(ctx context.Context, token, id, version, password string
 			return nil, false, errText("备份文件过大，无法读取完整内容")
 		}
 		var raw []byte
-		if err := gistRequest(ctx, http.MethodGet, file.RawURL, token, nil, &raw); err != nil {
+		// R7-C-01: raw_url comes from the API response — download it
+		// via gistRawRequest so the token never leaves for it.
+		if err := gistRawRequest(ctx, http.MethodGet, file.RawURL, nil, &raw); err != nil {
 			return nil, false, err
 		}
 		content = string(raw)
