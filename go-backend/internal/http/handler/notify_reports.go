@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 const (
@@ -204,8 +205,8 @@ func (h *Handler) checkUserQuotaReminders(u *model.User, view *model.UserQuotaVi
 	if view == nil {
 		return
 	}
-	h.checkUserQuotaLevel(u, "日", "qday", view.DailyUsedBytes, view.DailyLimitGB*bytesPerGB)
-	h.checkUserQuotaLevel(u, "月", "qmon", view.MonthlyUsedBytes, view.MonthlyLimitGB*bytesPerGB)
+	h.checkUserQuotaLevel(u, "日", "qday", view.DailyUsedBytes, repo.QuotaLimitBytes(view.DailyLimitGB))
+	h.checkUserQuotaLevel(u, "月", "qmon", view.MonthlyUsedBytes, repo.QuotaLimitBytes(view.MonthlyLimitGB))
 }
 
 // checkUserQuotaLevel applies the warn/full dual档 to one quota period

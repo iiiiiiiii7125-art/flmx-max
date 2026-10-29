@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,27 @@ import (
 )
 
 const userQuotaBytesPerGB int64 = 1024 * 1024 * 1024
+
+// QuotaLimitBytes converts a user-quota limit expressed in GB to bytes
+// with saturation, the same caliber as the flow limit conversion
+// (flowLimitBytes in the handler package). R7-G-01: the bare
+// multiplication wrapped for limits >= 2^33 GB (2^33 * 2^30 = 2^63 wraps
+// to MinInt64; 2^34 * 2^30 wraps to 0), which made the enforcement and
+// unblock predicates judge a zero-usage user as over quota while the
+// notify face read the wrapped value as "unlimited". Saturating keeps
+// such limits effectively unlimited and makes every face agree; stored
+// over-range rows heal at consumption, no migration needed. Negative
+// inputs saturate symmetrically so a negative stored limit keeps its
+// "unlimited" (<= 0) reading on every face.
+func QuotaLimitBytes(limitGB int64) int64 {
+	if limitGB > math.MaxInt64/userQuotaBytesPerGB {
+		return math.MaxInt64
+	}
+	if limitGB < math.MinInt64/userQuotaBytesPerGB {
+		return math.MinInt64
+	}
+	return limitGB * userQuotaBytesPerGB
+}
 
 type UserQuotaRelease struct {
 	UserID      int64
@@ -62,10 +84,10 @@ func userQuotaExceeded(view *model.UserQuotaView) bool {
 	if view == nil {
 		return false
 	}
-	if view.DailyLimitGB > 0 && view.DailyUsedBytes >= view.DailyLimitGB*userQuotaBytesPerGB {
+	if view.DailyLimitGB > 0 && view.DailyUsedBytes >= QuotaLimitBytes(view.DailyLimitGB) {
 		return true
 	}
-	if view.MonthlyLimitGB > 0 && view.MonthlyUsedBytes >= view.MonthlyLimitGB*userQuotaBytesPerGB {
+	if view.MonthlyLimitGB > 0 && view.MonthlyUsedBytes >= QuotaLimitBytes(view.MonthlyLimitGB) {
 		return true
 	}
 	return false

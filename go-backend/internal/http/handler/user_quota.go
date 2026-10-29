@@ -21,10 +21,10 @@ func isUserQuotaExceeded(view *model.UserQuotaView) bool {
 	if view == nil {
 		return false
 	}
-	if view.DailyLimitGB > 0 && view.DailyUsedBytes >= view.DailyLimitGB*bytesPerGB {
+	if view.DailyLimitGB > 0 && view.DailyUsedBytes >= repo.QuotaLimitBytes(view.DailyLimitGB) {
 		return true
 	}
-	if view.MonthlyLimitGB > 0 && view.MonthlyUsedBytes >= view.MonthlyLimitGB*bytesPerGB {
+	if view.MonthlyLimitGB > 0 && view.MonthlyUsedBytes >= repo.QuotaLimitBytes(view.MonthlyLimitGB) {
 		return true
 	}
 	return false

@@ -4511,6 +4511,19 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, now in
 			rep.skip("userTunnels")
 			continue
 		}
+		// R7-G-02：status / flowResetTime 合法集门（与 importUsers 的
+		// status 门 R5X-009 及运行时写入口同口径）——非法值整行跳过
+		// + 点名警告，不静默原样落库。
+		if ut.Status != 0 && ut.Status != 1 {
+			rep.skip("userTunnels")
+			rep.warnf("备份恢复：用户隧道授权 #%d 的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", ut.ID, ut.Status)
+			continue
+		}
+		if ut.FlowResetTime < 0 || ut.FlowResetTime > 31 {
+			rep.skip("userTunnels")
+			rep.warnf("备份恢复：用户隧道授权 #%d 的 flowResetTime=%d 不在合法范围 0-31 内，已跳过该行未恢复", ut.ID, ut.FlowResetTime)
+			continue
+		}
 		item := model.UserTunnel{
 			ID:            ut.ID,
 			UserID:        ut.UserID,
