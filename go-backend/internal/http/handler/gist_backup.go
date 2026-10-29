@@ -1083,6 +1083,11 @@ var gistRestoreTypes = []string{
 // 仅管理员；请求体 {version, password}，password 为上传时用的加密
 // 密码（明文 Gist 内容可空密码直通，由 gistOpen 判定）。
 func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
+	// R8-T-02 element (a) only: the download leg alone can take
+	// 120s (two sequential 60s gist calls) before the same
+	// ctx-bound import as backupImport runs; see handler.go. The
+	// r.Context() binding (element (b)) is unchanged.
+	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
