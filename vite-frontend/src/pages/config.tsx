@@ -133,9 +133,9 @@ const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: "ip",
     label: "面板后端地址",
-    placeholder: "请输入面板后端IP:PORT",
+    placeholder: "如 https://panel.example.com 或 192.0.2.10:6365",
     description:
-      '格式"ip:port"或"domain:port",用于对接节点时使用。支持套CDN和HTTPS,通讯数据有加密',
+      "节点通过此地址回连面板，生成节点安装命令时使用。面板经 HTTPS（Caddy/nginx 反向代理）对外时必须填 https://域名（可带端口），明文面板填 http://IP:端口。只填裸地址（不带 scheme）时，生成命令的连接方式取自你当前访问面板的方式，可能与节点回连面板的方式不一致，请优先写明 https:// 或 http://。",
     type: "input",
   },
   {

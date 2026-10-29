@@ -47,6 +47,8 @@ interface ApiResponse<T = unknown> {
   code: number;
   msg: string;
   data: T;
+  /** Optional explicit operator warning (e.g. R7-J-01 plaintext install address); must be surfaced, never silently dropped. */
+  warning?: string;
 }
 
 interface RequestOptions {

@@ -19,6 +19,8 @@ export interface InstallCommandModalProps {
   handleManualCopy: () => Promise<void>;
   installCommand: string;
   installCommandModal: boolean;
+  /** R7-J-01: explicit plaintext warning from the install API, shown before copying. */
+  installWarning?: string;
   setInstallCommandModal: Dispatch<SetStateAction<boolean>>;
 }
 
@@ -28,6 +30,7 @@ export function InstallCommandModal({
   handleManualCopy,
   installCommand,
   installCommandModal,
+  installWarning,
   setInstallCommandModal,
 }: InstallCommandModalProps) {
   return (
@@ -46,6 +49,11 @@ export function InstallCommandModal({
         <ModalHeader>安装命令 - {currentNodeName}</ModalHeader>
         <ModalBody>
           <div className="space-y-4">
+            {installWarning ? (
+              <div className="rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-800 dark:border-danger-900/40 dark:bg-danger-950/30 dark:text-danger-200">
+                ⚠️ {installWarning}
+              </div>
+            ) : null}
             <p className="text-sm text-default-600">
               请复制以下安装命令到服务器上执行：
             </p>
@@ -73,6 +81,16 @@ export function InstallCommandModal({
             </div>
             <div className="text-xs text-default-500">
               💡 提示：如果复制按钮失效，请手动选择上方文本进行复制
+            </div>
+            <div className="text-xs text-default-500">
+              ✅ 执行后确认上线：脚本显示「安装完成」只代表 agent
+              服务已启动，不代表已连上面板。请回到节点列表确认该节点显示为
+              <b>在线</b>；若未上线，在节点服务器执行{" "}
+              <span className="font-mono">
+                journalctl -u flux_agent -n 100
+              </span>{" "}
+              查看 WebSocket 连接日志，并核对「网站配置」中面板后端地址的
+              scheme 是否与面板实际对外方式一致（HTTPS 面板须为 https://）。
             </div>
           </div>
         </ModalBody>

@@ -806,6 +806,13 @@ EOF
     echo "✅ 安装完成，flux_agent服务已启动并设置为开机启动。"
     echo "📁 配置目录: $INSTALL_DIR"
     echo "🔧 服务状态: $(flux_agent_service_status)"
+    # OBS-R7-J-01 (folded into R7-J-01): "service active" only proves
+    # the process is up, not that the node connected to the panel.
+    # Tell the operator the actual online check and where the
+    # WebSocket connection log lives when it does not come online.
+    echo "📍 节点连接地址: $SERVER_ADDR"
+    echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——安装完成只表示服务已启动，不代表已连上面板。"
+    echo "   若面板未显示在线，请在节点机执行 journalctl -u flux_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flux_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
     return 0
   else
     echo "❌ flux_agent服务启动失败，请执行以下命令查看状态："

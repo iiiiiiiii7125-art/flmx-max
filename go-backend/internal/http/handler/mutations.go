@@ -1253,6 +1253,21 @@ func normalizeNodeInstallAddr(panelAddr, panelScheme string) string {
 	return "ws://" + host
 }
 
+// nodeInstallPlaintextWarning returns the explicit operator warning
+// carried in the nodeInstall response envelope when the generated
+// agent address is plaintext ws:// (R7-J-01, non-BC part): the node
+// secret channel would run in plaintext, and a TLS-only panel (Caddy /
+// nginx terminating HTTPS) can never be reached this way — the
+// 2026-10-29 incident shape, which previously surfaced nowhere. The
+// generated command string itself is unchanged; only the warning is
+// new. wss:// (and anything else) yields no warning.
+func nodeInstallPlaintextWarning(agentAddr string) string {
+	if !strings.HasPrefix(agentAddr, "ws://") {
+		return ""
+	}
+	return "警告：本次安装命令的节点连接地址为明文 " + agentAddr + "，节点密钥将经明文通道发送，且明文地址无法连接仅提供 HTTPS 的面板（如经 Caddy/nginx 反向代理终止 TLS）。如面板经 HTTPS 对外，请先在「网站配置」把面板后端地址改为 https:// 开头的地址再重新生成安装命令；确认该面板就是明文部署时可忽略本警告。"
+}
+
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -1326,6 +1341,13 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cmd = fmt.Sprintf("curl -fsSL https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
 			githubRepo, version, githubRepo, version, version, agentAddr, secret)
+	}
+	// R7-J-01 (non-BC part): a plaintext ws:// result must not leave
+	// silently — carry the explicit warning in the envelope. The
+	// command string above is generated exactly as before.
+	if warning := nodeInstallPlaintextWarning(agentAddr); warning != "" {
+		response.WriteJSON(w, response.OKWithWarning(cmd, warning))
+		return
 	}
 	response.WriteJSON(w, response.OK(cmd))
 }
