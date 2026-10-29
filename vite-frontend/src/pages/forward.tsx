@@ -1816,7 +1816,9 @@ export default function ForwardPage() {
 
   const mergeFederationShareFlow = useCallback(
     async (forwardsData: Forward[]): Promise<Forward[]> => {
-      if (forwardsData.length === 0) {
+      // R8-K-01：/federation/share/* 为管理员接口，普通用户调用必 403 并
+      // 触发 Network 全局误报提示；共享流量合并只对管理员有意义。
+      if (!isAdmin || forwardsData.length === 0) {
         return forwardsData;
       }
 
@@ -1990,7 +1992,7 @@ export default function ForwardPage() {
         return forwardsData;
       }
     },
-    [],
+    [isAdmin],
   );
 
   // 切换显示模式并保存到localStorage
@@ -2056,13 +2058,16 @@ export default function ForwardPage() {
     async (lod = true) => {
       setLoading(lod);
       try {
+        // R8-K-01：限速/隧道/节点三列表均为管理员接口，普通用户调用必 403
+        // 并触发全局误报提示；其数据仅供管理面下拉与名称映射，普通用户
+        // 自有数据走 userTunnel + /forward/list，故按 isAdmin 门控不发请求。
         const [tunnelsRes, speedLimitsRes] = await Promise.all([
           userTunnel(),
-          getSpeedLimitList(),
+          isAdmin ? getSpeedLimitList() : Promise.resolve(null),
         ]);
         const [allTunnelsRes, nodesRes] = await Promise.allSettled([
-          getTunnelList(),
-          getNodeList(),
+          isAdmin ? getTunnelList() : Promise.resolve(null),
+          isAdmin ? getNodeList() : Promise.resolve(null),
         ]);
 
         await refreshForwardList(false);
@@ -2074,16 +2079,21 @@ export default function ForwardPage() {
 
         if (
           allTunnelsRes.status === "fulfilled" &&
+          allTunnelsRes.value &&
           allTunnelsRes.value.code === 0
         ) {
           setAllTunnels((allTunnelsRes.value.data || []) as Tunnel[]);
         }
 
-        if (nodesRes.status === "fulfilled" && nodesRes.value.code === 0) {
+        if (
+          nodesRes.status === "fulfilled" &&
+          nodesRes.value &&
+          nodesRes.value.code === 0
+        ) {
           setNodes((nodesRes.value.data || []) as Node[]);
         }
 
-        if (speedLimitsRes.code === 0) {
+        if (speedLimitsRes && speedLimitsRes.code === 0) {
           setSpeedLimits(speedLimitsRes.data || []);
         }
       } catch {
@@ -2092,7 +2102,7 @@ export default function ForwardPage() {
         setLoading(false);
       }
     },
-    [refreshForwardList],
+    [refreshForwardList, isAdmin],
   );
 
   useEffect(() => {
