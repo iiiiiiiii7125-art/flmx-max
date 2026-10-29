@@ -103,6 +103,18 @@ const relayProbeTimeout = (relayCount: number): number => {
   return Math.min(600_000, Math.max(180_000, 120_000 + waves * 22_600));
 };
 
+/**
+ * 与 diagnosis-stream.ts 的 resolveApiPath 同款规范化拼接：baseURL 恒以
+ * `/` 结尾，裸拼会产生 `//`；无斜杠归一的拓扑下 POST 被 Go ServeMux
+ * 301 降级为 GET 而失败（R8-K-02）。
+ */
+const resolveApiPath = (path: string): string => {
+  const baseURL = axios.defaults.baseURL || "/api/v1/";
+  const normalizedBase = baseURL.endsWith("/") ? baseURL : `${baseURL}/`;
+
+  return `${normalizedBase}${path.replace(/^\//, "")}`;
+};
+
 // 登陆相关接口
 export interface LoginData {
   username: string;
@@ -567,10 +579,9 @@ export interface BackupTypes {
 
 export const exportBackup = async (types: string[] = []) => {
   const token = window.localStorage.getItem("token");
-  const baseURL = axios.defaults.baseURL || "/api/v1/";
 
   const response = await axios.post(
-    `${baseURL}/backup/export`,
+    resolveApiPath("/backup/export"),
     { types },
     {
       headers: {
@@ -674,11 +685,10 @@ const readBlobEnvelope = async (
 
 export const downloadImportAutoBackup = async () => {
   const token = window.localStorage.getItem("token");
-  const baseURL = axios.defaults.baseURL || "/api/v1/";
 
   let response;
   try {
-    response = await axios.get(`${baseURL}/backup/import-auto-backup`, {
+    response = await axios.get(resolveApiPath("/backup/import-auto-backup"), {
       headers: {
         Authorization: token,
       },
