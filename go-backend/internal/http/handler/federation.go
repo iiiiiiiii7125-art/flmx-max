@@ -1091,7 +1091,10 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		localDomain = domainCfg.Value
 	}
 
-	fc := client.NewFederationClient()
+	// R8-T-06: the import-node Connect gets the explicit runtime
+	// budget instead of the 10s default (see
+	// federationRuntimeClientTimeout in control_plane.go).
+	fc := client.NewFederationClientWithTimeout(federationRuntimeClientTimeout)
 	info, err := fc.Connect(req.RemoteURL, req.Token, localDomain)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, "Failed to connect: "+err.Error()))

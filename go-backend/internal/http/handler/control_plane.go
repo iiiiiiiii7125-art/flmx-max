@@ -148,6 +148,41 @@ const (
 	diagnosisRequestTimeoutMsg = "诊断超时（2分钟）"
 )
 
+const (
+	// R8-T-06: a federation HTTP client's patience must exceed the
+	// peer's own work budget, never equal it. The peer executes a
+	// threaded command under its global resource mutex as sequential
+	// per-item node commands (defaultNodeCommandTimeout apiece), so a
+	// client timeout constructed as exactly the command budget T is
+	// consumed by one full-budget item plus HTTP traversal and any
+	// mutex queueing — the caller recorded failure while the peer
+	// succeeded, and compensation legs then churned against the
+	// succeeded state. Threaded call sites add this fixed margin.
+	federationClientMargin = 10 * time.Second
+	// federationRuntimeClientTimeout is the explicit client budget
+	// for the federation runtime faces that carry no threaded budget
+	// (Connect / CreateTunnel / ReservePort / ApplyRole): the peer
+	// applies share resources as sequential node commands at
+	// defaultNodeCommandTimeout apiece under the shared role mutex,
+	// so the previous 10s default client could declare failure while
+	// the peer was still legitimately working. 60s is an order of
+	// magnitude over the per-item budget while staying inside the
+	// patience of every calling flow.
+	federationRuntimeClientTimeout = 60 * time.Second
+)
+
+// federationClientTimeout returns the HTTP client timeout for a
+// federation call whose peer work is budgeted at commandTimeout: the
+// budget plus federationClientMargin (R8-T-06). A non-positive budget
+// falls back to defaultNodeCommandTimeout, mirroring
+// sendNodeCommandWithTimeout's normalization.
+func federationClientTimeout(commandTimeout time.Duration) time.Duration {
+	if commandTimeout <= 0 {
+		commandTimeout = defaultNodeCommandTimeout
+	}
+	return commandTimeout + federationClientMargin
+}
+
 func (h *Handler) resolveForwardAccess(r *http.Request, forwardID int64) (*forwardRecord, int64, int, error) {
 	userID, roleID, err := userRoleFromRequest(r)
 	if err != nil {
@@ -906,10 +941,9 @@ func (h *Handler) sendRemoteNodeCommandWithTimeout(node *nodeRecord, commandType
 		return ws.CommandResult{}, errors.New("远程节点缺少共享配置")
 	}
 
-	fc := client.NewFederationClient()
-	if timeout > 0 {
-		fc = client.NewFederationClientWithTimeout(timeout)
-	}
+	// R8-T-06: client patience = command budget + fixed margin; the
+	// peer spends the budget itself under its resource mutex.
+	fc := client.NewFederationClientWithTimeout(federationClientTimeout(timeout))
 	res, err := fc.Command(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeNodeCommandRequest{
 		CommandType: commandType,
 		Data:        data,
@@ -1815,7 +1849,9 @@ func (h *Handler) tcpPingViaRemoteNode(node *nodeRecord, ip string, port int, op
 		pingCount = 4
 	}
 
-	fc := client.NewFederationClientWithTimeout(options.commandTimeout)
+	// R8-T-06: the peer clamps its agent command budget to the same
+	// requested timeout, so the client must carry budget + margin.
+	fc := client.NewFederationClientWithTimeout(federationClientTimeout(options.commandTimeout))
 	return fc.Diagnose(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeDiagnoseRequest{
 		IP:       strings.TrimSpace(ip),
 		Port:     port,
@@ -1841,7 +1877,8 @@ func (h *Handler) udpPingViaRemoteNode(node *nodeRecord, ip string, port int, op
 		options.pingTimeoutMS = int(diagnosisCommandTimeout / time.Millisecond)
 	}
 
-	fc := client.NewFederationClientWithTimeout(options.commandTimeout)
+	// R8-T-06: see tcpPingViaRemoteNode.
+	fc := client.NewFederationClientWithTimeout(federationClientTimeout(options.commandTimeout))
 	return fc.Diagnose(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeDiagnoseRequest{
 		IP:       strings.TrimSpace(ip),
 		Port:     port,
