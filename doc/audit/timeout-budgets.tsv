@@ -1,0 +1,251 @@
+# timeout-budgets.tsv - FLMX timeout-budget registry (R8 T-GATE standing gate).
+# Canonical artifact for x-verdicts-r8.md §7 batch T-GATE. Seeded from the
+# r8-lane-t.md closed matrix as corrected by fix batches A (server relief),
+# B (frontend table), C (agent download budget) and D, plus the T-GATE
+# batch's own completion of R8-T-07 for /tunnel/create.
+# Columns (tab-separated):
+#   cell        stable row id
+#   call        frontend export name / chain name (census key)
+#   surface     fe | fe-raw | fe-stream | fe-external | internal | federation | agent | mirror
+#   endpoint    route or chain description
+#   fe_s        frontend (caller) budget, seconds (empty for formula rows: see fe_floor_s/fe_cap_s)
+#   fe_kind     literal | default | const | formula | dynamic | none
+#   fe_src      extraction anchor used by scripts/check-timeout-budgets.sh
+#   fe_floor_s  formula/dynamic rows: floor, seconds
+#   fe_cap_s    formula rows: cap, seconds (empty = uncapped)
+#   sv_s        effective server write limit, seconds (endpoint relief or the global WriteTimeout)
+#   sv_src      'global' (app.go WriteTimeout) or the relief constant symbol
+#   be_s        backend bound, seconds (empty when composite/unbounded/formula: see note)
+#   be_kind     const | literal | expr | formula | composite | unbounded | class | db | var
+#   be_src      constant symbol / literal anchor / derivation source
+#   check       strict | aligned | formula | composite | class | exception | observed | pin | agent
+#   exception   named exception (registry-row property; empty = none). An
+#               exception is a deliberate, reasoned registration - the note
+#               column carries the reason and the residual it leaves open.
+#   item        adjudicated item id (R8-T-xx) or '-' for OK/observed rows
+#   note        derivation, residual, or registration reason
+# Check rules (scripts/check-timeout-budgets.sh; margin = >=10s or >=10%):
+#   strict:    fe > be and sv > be, both with margin; all three values are
+#              mechanically extracted from the tree and must equal this table.
+#   aligned:   be is unbounded; fe == sv == the registered aligned budget.
+#   formula:   fe/be are formulas; extracted helper parameters / literals /
+#              constants must equal this table (drift detection).
+#   composite: be is a composite of legs with no single constant; fe/sv are
+#              extracted and must equal this table (drift detection).
+#   class:     DB/local class; fe extracted must equal this table and fe > be.
+#   exception: values reconciled like composite, plus a named exception.
+#   observed:  registered for census closure; values reconciled, no verdict.
+#   pin:       internal bound; the Go gate test pins be to the product constant.
+#   agent:     cross-client pair; agent budget must stay below panel patience.
+# Census rule: every exported call in vite-frontend/src/api/index.ts plus the
+# two diagnosis-stream surfaces must appear exactly once in the call column;
+# an unregistered call point fails the gate (verdict §7 T-GATE (2)).
+# Named Go constants are additionally pinned by Go gate tests
+# (handler: timeout_budgets_r8_test.go; agent: x/socket timeout_budgets_r8_test.go).
+cell	call	surface	endpoint	fe_s	fe_kind	fe_src	fe_floor_s	fe_cap_s	sv_s	sv_src	be_s	be_kind	be_src	check	exception	item	note
+T001	installKernel	fe	/kernel/install	330	literal	literal			360	kernelApplyWriteDeadline	300	const	kernelApplyTimeout	strict		R8-T-01	
+T002	createInbound	fe	/inbound/create	330	literal	literal			360	kernelApplyWriteDeadline	300	const	kernelApplyTimeout	strict		R8-T-01	bound is conditional: 20s normally, escalates to kernelApplyTimeout when the pinned kernel has no installed version (inboundSave)
+T003	updateInbound	fe	/inbound/update	330	literal	literal			360	kernelApplyWriteDeadline	300	const	kernelApplyTimeout	strict		R8-T-01	same conditional escalation as createInbound
+T004	runSystemUpgrade	fe	/system/upgrade	240	literal	literal			300	systemUpgradeWriteDeadline	210	expr	system_upgrade.go resolve+download legs	strict		R8-T-04	bound = resolve <=90s (60s cold discovery + 30s redirect fallback) + asset download 2x60s shared-ctx legs
+T005	upgradeNode	fe	/node/upgrade	360	literal	literal			360	nodeUpgradeWriteDeadline	300	const	upgradeTimeout	strict		R8-T-04	
+T006	rollbackNode	fe	/node/rollback	45	literal	literal			120	global	30	literal	upgrade.go SendCommand RollbackAgent 30*time.Second	strict		R8-T-04	
+T007	getKernelVersions	fe	/kernel/versions	90	literal	literal			120	global	60	expr	secure_fetch.go githubVersionFetchClient 30s per attempt	strict		R8-T-03	bound = 2 sequential attempts (proxy, direct) x 30s client, cold cache
+T008	getNodeReleases	fe	/node/releases	90	literal	literal			120	global	60	expr	secure_fetch.go githubVersionFetchClient 30s per attempt	strict		R8-T-03	same discovery pattern as getKernelVersions
+T009	checkSystemUpgrade	fe	/system/check-updates	90	literal	literal			120	global	60	expr	secure_fetch.go githubVersionFetchClient 30s per attempt	strict		R8-T-03	frontend value is the options default (callers may override upward)
+T010	getGistBackupVersions	fe	/backup/gist/versions	90	literal	literal			120	global	60	literal	gist_backup.go gistDo WithTimeout 60*time.Second	strict		R8-T-03	one gist call
+T011	diagnoseTunnel	fe	/tunnel/diagnose	150	literal	literal			150	diagnosisWriteDeadline	120	const	diagnosisRequestTimeout	strict		R8-T-05	120s request ctx retained as the designed work cap
+T012	diagnoseForward	fe	/forward/diagnose	150	literal	literal			150	diagnosisWriteDeadline	120	const	diagnosisRequestTimeout	strict		R8-T-05	same as diagnoseTunnel
+T015	runServiceMonitor	fe	/monitor/services/run	70	dynamic	dynamic	70		120	global	62	expr	monitoring limits MaxTimeoutSec default 60 + checker +2s	strict		R8-T-08	fe is dynamic: max(70s, configured timeoutSec+15s); strict check evaluated at the floor and at max config (75s)
+T016	testNotify	fe	/notify/test	50	literal	literal			120	global	43	expr	notifySendTimeout + notifyRetryDelay	strict		R8-T-08	bound = 2 rounds x 2 channels x 10s attempts + 3s retry delay, both channels hanging
+T017	saveRemoteSource	fe	/subscription/source/save	60	literal	literal			120	global	20	literal	kernel_external.go WithTimeout 20*time.Second	strict		-	fetch leg capped at 20s ctx (E-R8-01); residual global-mutex queueing observation registered in verdict §3, not a cell defect
+T018	refreshRemoteSource	fe	/subscription/source/refresh	60	literal	literal			120	global	20	literal	kernel_external.go WithTimeout 20*time.Second	strict		-	same as saveRemoteSource
+T019	nodeTune	fe	/node/tune	40	literal	literal			120	global	30	const	nodeTuneTimeout	strict		-	aligned exemplar chain (agent ~25s < panel 30s < FE 40s)
+T020	nodeTuneProbe	fe	/node/tune	120	literal	literal			120	global	90	const	nodeTuneProbeTimeout	strict		-	aligned exemplar (agent ~25s < panel 90s < FE 120s)
+T021	probeNodeTune	fe	/node/tune	120	literal	literal			120	global	90	const	nodeTuneProbeTimeout	strict		-	same as nodeTuneProbe
+T022	controlKernel	fe	/kernel/control	30	default	network-default			120	global	20	const	kernelCommandTimeout	strict		-	
+T023	getKernelLogs	fe	/kernel/logs	30	default	network-default			120	global	20	const	kernelCommandTimeout	strict		-	
+T024	importInbounds	fe	/inbound/import	30	default	network-default			120	global	20	literal	kernel_external.go WithTimeout 20*time.Second	strict		-	bound is the subscription-URL fetch leg; parse/create leg (<=500 rows, DB) registered in the lane T matrix row 33 as marginal-OK
+T013	diagnoseTunnelStream	fe-stream	/tunnel/diagnose/stream	150	const	streamconst:DIAGNOSIS_STREAM_TIMEOUT_MS			150	diagnosisWriteDeadline	120	const	diagnosisRequestTimeout	strict		R8-T-05	client abort via DIAGNOSIS_STREAM_TIMEOUT_MS in api/diagnosis-stream.ts
+T014	diagnoseForwardStream	fe-stream	/forward/diagnose/stream	150	const	streamconst:DIAGNOSIS_STREAM_TIMEOUT_MS			150	diagnosisWriteDeadline	120	const	diagnosisRequestTimeout	strict		R8-T-05	client abort via DIAGNOSIS_STREAM_TIMEOUT_MS in api/diagnosis-stream.ts
+T025	importBackupData	fe	/backup/import	1800	literal	literal			1800	backupWriteDeadline		unbounded		aligned		R8-T-02	import transaction bound to r.Context() (X-P3-21 semantics retained; element (b) detachment not adopted)
+T026	restoreBackupData	fe	/backup/restore	1800	literal	literal			1800	backupWriteDeadline		unbounded		aligned		R8-T-02	routes to the backupImport handler; same aligned budget
+T027	importBackup	fe	/backup/import	1800	literal	literal			1800	backupWriteDeadline		unbounded		aligned		R8-T-02	second export for the same endpoint (auto-backup flow)
+T028	restoreGistBackup	fe	/backup/gist/restore	1800	literal	literal			1800	backupWriteDeadline		unbounded		aligned		R8-T-02	download leg <=120s (2x60s gist per-call) + unbounded import on the same ImportContext
+T029	exportBackupData	fe	/backup/export	1800	literal	literal			1800	backupWriteDeadline		unbounded		aligned		R8-T-08	generation proportional to DB size
+T030	exportBackup	fe-raw	/backup/export	1800	literal	axios			1800	backupWriteDeadline		unbounded		aligned		R8-T-08	raw axios twin of exportBackupData; URL via resolveApiPath (R8-K-02)
+T031	batchUpgradeNodes	fe	/node/batch-upgrade	900	literal	literal			1800	nodeBatchUpgradeWriteDeadline	300	const	upgradeTimeout	formula		R8-T-04	backend bound is formula ceil(N/5)x300s (5 workers); FE 900s covers N<=15
+T032	batchDeleteForwards	fe	/forward/batch-delete		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T033	batchPauseForwards	fe	/forward/batch-pause		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T034	batchResumeForwards	fe	/forward/batch-resume		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T035	batchDeleteTunnels	fe	/tunnel/batch-delete		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T036	batchDeleteNodes	fe	/node/batch-delete		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T037	batchRedeployForwards	fe	/forward/batch-redeploy		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T038	batchRedeployTunnels	fe	/tunnel/batch-redeploy		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T039	batchChangeTunnel	fe	/forward/batch-change-tunnel		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T040	previewBatchTunnelDelete	fe	/tunnel/batch-delete-preview		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T041	batchDeleteTunnelsWithForwards	fe	/tunnel/batch-delete-with-forwards		formula	helper:batchCallTimeout	120	1800	120	global		formula	defaultNodeCommandTimeout per item (nft items: SSH ops x 15s)	formula		R8-T-07	FE = batchCallTimeout(n) = clamp(n*30s, 120s, 1800s); server stays at the global 120s (verdict T1 scope) - registered residual, batch B residual #2
+T042	probeNodeLatency	fe	/node/latency/probe		formula	helper:latencyProbeTimeout	90	600	120	global	22.6	formula	latencyCommandTimeout per wave (16-wide)	formula		R8-T-08	FE grows with fleet size, capped 600s; >~26 fully unresponsive nodes x 30 targets can still exceed (batch B residual #3); SV global 120s registered
+T043	probeInboundRelays	fe	/inbound/relay/probe		formula	helper:relayProbeTimeout	180	600	120	global	22.6	formula	latencyCommandTimeout per wave (16-wide)	formula		R8-T-08	two phases: entry latency probe (120s allowance) + per-hop TcpPing waves
+T044	probeInbounds	fe	/inbound/probe	300	literal	literal			120	global	4	formula	kernel_probe.go 4s dial per wave (16-wide)	formula		R8-T-08	FE static 300s covers ~1200 dead external inbounds (N not knowable frontend-side); beyond that still false-times-out (batch B residual #3)
+T045	createTunnel	fe	/tunnel/create	120	literal	literal			300	tunnelCreateWriteDeadline		composite		composite		R8-T-07	parity relief with update landed by the T-GATE batch, closing batch A's flagged observation (same composite legs: per-entry SSH Test ops x 15s, federation applies, guarded sync)
+T046	updateTunnel	fe	/tunnel/update	120	literal	literal			300	tunnelUpdateWriteDeadline		composite		composite		R8-T-07	composite legs; work itself uncapped by design
+T047	deleteForward	fe	/forward/delete	120	literal	literal			120	global		composite		composite		R8-T-07	SV == FE registered as-is (verdict T1 scope); residual shape per batch B residual #2
+T048	deleteTunnel	fe	/tunnel/delete	120	literal	literal			120	global		composite		composite		R8-T-07	same as deleteForward
+T049	previewTunnelDelete	fe	/tunnel/delete-preview	120	literal	literal			120	global		composite		composite		R8-T-07	same as deleteForward
+T050	deleteTunnelWithForwards	fe	/tunnel/delete-with-forwards	120	literal	literal			120	global		composite		composite		R8-T-07	same as deleteForward
+T051	testNodeNftables	fe	/node/nftables/test	300	literal	literal			120	global		composite		composite		R8-T-07	backend unbounded at handler layer (context.Background, SSH ops x 15s); capping the work was a rejected BC route in the verdict
+T052	reconcileNodeNftables	fe	/node/nftables/reconcile	300	literal	literal			120	global		composite		composite		R8-T-07	same as testNodeNftables
+T053	clearNodeNftables	fe	/node/nftables/clear	300	literal	literal			120	global		composite		composite		R8-T-07	same as testNodeNftables
+T054	downloadImportAutoBackup	fe-raw	/backup/import-auto-backup	1800	literal	axios			120	global		composite		composite		R8-T-08	FE unified at 1800s with the raw backup pair (batch B); handler serves the pre-generated auto-backup file; no T1 relief was prescribed for this endpoint
+T055	getNodeMetrics	fe	/monitor/nodes/:id/metrics	60	literal	literal			120	global		db		composite		-	DB query bound (lane T row 30)
+T056	uploadGistBackup	fe	/backup/gist/upload	120	literal	literal			1800	backupWriteDeadline		expr	export (size) + gist per-call 60s; PATCH-404 rebuild path adds a second 60s call	exception	fe-retained-server-side-fix	R8-T-08	verdict §2.8: FE retained at 120s, fix assigned to the server layer (relief 1800s landed); worst-case rebuild path can still exceed FE - batch B residual #5
+T057	probeNodeRoute	fe	/node/route/probe	390	literal	literal			120	global	360	expr	routeCommandTimeout 20s/leg panel budget; agent realistic ~6s/leg	exception	sv-no-relief-registered	R8-T-08	no T1 relief prescribed; realistic bound 360s > SV 120s is a registered TR-pathological residual (batch B residual #4); panel-side worst bound 20s x <=60 legs = 1200s
+T058	setNodeLatencyTargets	fe	/node/latency/targets	60	literal	literal			120	global	12	class	class-ceiling	class		-	explicit 60s on a DB/local-class call (untouched OK cell, batch B guard row)
+T059	batchDeleteInbounds	fe	/inbound/batch-delete	30	default	network-default			120	global		formula	serial per-item backend (lane T row 16 class)	observed		-	not rowed defective by lane T (census row-34 class); registered for drift coverage per batch B residual #6
+T060	batchToggleInbounds	fe	/inbound/batch-toggle	30	default	network-default			120	global		formula	serial per-item backend (lane T row 16 class)	observed		-	not rowed defective by lane T (census row-34 class); registered for drift coverage per batch B residual #6
+P001	idemWait	internal	idemKey-carrying creates (12 sites)								20	const	idemWaitTimeout	pin		-	wait caps at 20s then answers HTTP 409 - bounded and explicit, not silent (lane T row 35)
+P002	guardedAddServiceJoin	internal	forward/tunnel service sync fallback legs								36	expr	addServiceGuardJoinTimeout + defaultNodeCommandTimeout	pin		-	join <=30s + own send 6s; contributor to the batch/delete rows (lane T row 36)
+M001	ghMirrorServe	mirror	/gh-mirror/* (agent-facing)						1800	ghMirrorServeFor	600	var	ghMirrorHTTP (upstream client Timeout)	agent		-	relief effectiveness depends on the middleware statusWriter Unwrap passthrough (batch A discovery; pinned by TestRequestLogWriteDeadlinePassthrough)
+F001	fedRemoteCommand	federation	peer /federation/runtime command chain		formula	const:federationClientMargin	10				6	const	defaultNodeCommandTimeout (peer per-item)	formula		R8-T-06	client timeout = caller command budget T + federationClientMargin via federationClientTimeout(); peer sums 6s per item under its global mutex
+F002	fedDiagnose	federation	peer /federation/runtime diagnose chain		formula	const:federationClientMargin	10				6	const	defaultNodeCommandTimeout	formula		R8-T-06	client = requested commandTimeout + margin; peer clamps its agent budget to the same requested timeout
+F003	fedRuntimeFaces	federation	peer Connect/ReservePort/ApplyRole/CreateTunnel faces	60	const	const:federationRuntimeClientTimeout					6	const	defaultNodeCommandTimeout (peer per-resource, sequential)	formula		R8-T-06	explicit 60s runtime client (federationRuntimeClientTimeout) landed by batch A (T3)
+F004	fedReleaseRole	federation	peer ReleaseRole (cleanup leg)	10	literal	client-default:NewFederationClient					6	const	defaultNodeCommandTimeout	observed		-	batch A exclusion, registered: cleanup leg with a pending-release retry mechanism by design; left on the 10s default client
+F005	fedStatusSync	federation	peer status sync / remote-usage polls	5	literal	literal:federation.go NewFederationClientWithTimeout(5s)						db		observed		-	batch A exclusion, registered: fan-out info polls against the DB-only peer face; lengthening them would let one hung peer stall the whole list/sync flow
+A001	agentKernelDownload	agent	KernelApply download (agent x/kernel)	300	const	panel:kernelApplyTimeout					240	literal	go-gost/x/kernel/install.go downloadTimeout	agent		-	agent whole-fetch budget 240s < panel patience 300s (~60s install/restart margin, lane T §6.2)
+A002	agentUpgradeDownload	agent	UpgradeAgent download (agent x/socket)	300	const	panel:upgradeTimeout					240	var	upgradeDownloadTimeout	agent		R8-T-09	one shared 4-minute budget across binary+checksum GETs and proxy->direct retries (batch C); per-attempt response-header cap 60s (upgradeDownloadHeaderTimeout)
+A003	agentTuneProbe	agent	TuneProbe execution (agent x/socket)	90	const	panel:nodeTuneProbeTimeout					25	expr	tuning_probe.go speedtest 10s + 3x2s reference dials + ~5s sock_diag	agent		-	aligned exemplar (lane T §3.8)
+A004	agentTracerouteLeg	agent	Traceroute per leg (agent x/socket)	20	const	panel:routeCommandTimeout					6	expr	x/socket/traceroute.go read deadline 2 rounds x 3s	agent		-	per-leg alignment; the probe exposure is the number of legs (see T057)
+A005	agentMonitorCheck	agent	ServiceMonitorCheck (agent x/socket)									expr	checker.go sends timeoutSec + 2s; agent clamps to req.TimeoutSec	observed		-	headroom +2s added by construction at the panel side (lane T §6.2)
+X001	versionUpdateGithub	fe-external	browser -> api.github.com (utils/version-update.ts)		none	none								observed		-	outside the panel chain; no panel layers apply (lane T census completeness)
+C001	assignGroupPermission	fe	/group/permission/assign	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C002	assignMonitorPermission	fe	/monitor/permission/assign	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C003	assignTunnelsToGroup	fe	/group/tunnel/assign	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C004	assignUserTunnel	fe	/tunnel/user/assign	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C005	assignUsersToGroup	fe	/group/user/assign	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C006	batchAssignUserTunnel	fe	/tunnel/user/batch-assign	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C007	beginPasskeyLogin	fe	/user/passkey/login/begin	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C008	beginPasskeyRegistration	fe	/user/passkey/register/begin	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C009	checkCaptcha	fe	/captcha/check	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C010	checkNodeStatus	fe	/node/check-status	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C011	createForward	fe	/forward/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C012	createInboundRelay	fe	/inbound/relay/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C013	createNode	fe	/node/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C014	createPeerShare	fe	/federation/share/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C015	createServiceMonitor	fe	/monitor/services/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C016	createSpeedLimit	fe	/speed-limit/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C017	createTunnelGroup	fe	/group/tunnel/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C018	createUser	fe	/user/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C019	createUserGroup	fe	/group/user/create	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C020	deleteInbound	fe	/inbound/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C021	deleteInboundRelay	fe	/inbound/relay/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C022	deleteNode	fe	/node/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C023	deletePasskey	fe	/user/passkey/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C024	deletePeerShare	fe	/federation/share/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C025	deleteRemoteSource	fe	/subscription/source/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C026	deleteServiceMonitor	fe	/monitor/services/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C027	deleteSpeedLimit	fe	/speed-limit/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C028	deleteSubscription	fe	/subscription/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C029	deleteTunnelGroup	fe	/group/tunnel/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C030	deleteUser	fe	/user/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C031	deleteUserGroup	fe	/group/user/delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C032	dismissNodeExpiryReminder	fe	/node/dismiss-expiry-reminder	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C033	finishPasskeyLogin	fe	/user/passkey/login/finish	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C034	finishPasskeyRegistration	fe	/user/passkey/register/finish	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C035	forceDeleteForward	fe	/forward/force-delete	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C036	getAllUsers	fe	/user/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C037	getAnnouncement	fe	/announcement/get	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C038	getConfigByName	fe	/config/get	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C039	getConfigs	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C040	getDashboardNodeExpiryList	fe	/node/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C041	getForwardList	fe	/forward/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C042	getGistBackupStatus	fe	/backup/gist/status	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C043	getGroupPermissionList	fe	/group/permission/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C044	getImportAutoBackupStatus	fe	/backup/import-auto-backup/status	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C045	getInboundList	fe	/inbound/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C046	getInboundRelays	fe	/inbound/relay/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C047	getInboundShare	fe	/inbound/share	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C048	getKernelCapabilities	fe	/kernel/capabilities	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C049	getKernelList	fe	/kernel/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C050	getMonitorAccess	fe	/monitor/access	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C051	getMonitorNodes	fe	/monitor/nodes	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C052	getMonitorPermissionList	fe	/monitor/permission/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C053	getMonitorTunnelQuality	fe	/monitor/tunnels/quality	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C054	getMonitorTunnelQualityHistory	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C055	getMonitorTunnels	fe	/monitor/tunnels	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C056	getMyInbounds	fe	/user-inbound/mine	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C057	getMySubscriptionTraffic	fe	/user/subscription/traffic	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C058	getMySubscriptions	fe	/user-subscription/mine	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C059	getNodeInstallCommand	fe	/node/install	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C060	getNodeLatencyHistory	fe	/node/latency/history	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C061	getNodeList	fe	/node/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C062	getNodeMetricsLatest	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C063	getNodeMonthTraffic	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C064	getNodeRoute	fe	/node/route	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C065	getPasskeyStatus	fe	/user/passkey/status	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C066	getPeerRemoteUsageList	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C067	getPeerShareList	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C068	getPublicConfigByName	fe	/public/config/get	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C069	getRemoteSources	fe	/subscription/source/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C070	getServiceMonitorLatestResults	fe	/monitor/services/latest-results	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C071	getServiceMonitorLimits	fe	/monitor/services/limits	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C072	getServiceMonitorList	fe	/monitor/services	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C073	getServiceMonitorResults	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C074	getSpeedLimitList	fe	/speed-limit/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C075	getStorageSummary	fe	/system/storage	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C076	getSubInfo	fe	/inbound/sub/info	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C077	getSubscriptionTraffic	fe	/subscription/traffic	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C078	getSubscriptions	fe	/subscription/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C079	getSystemUpgradeStatus	fe	/system/upgrade/status	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C080	getSystemUpgradeVersion	fe	/system/version	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C081	getTunnelById	fe	/tunnel/get	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C082	getTunnelGroupList	fe	/group/tunnel/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C083	getTunnelList	fe	/tunnel/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C084	getTunnelMetrics	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C085	getUserGroupList	fe	/group/user/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C086	getUserGroups	fe	/user/groups	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C087	getUserInbounds	fe	/user-inbound/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C088	getUserPackageInfo	fe	/user/package	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C089	getUserSubscriptions	fe	/user-subscription/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C090	getUserTunnelList	fe	/tunnel/user/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C091	importRemoteNode	fe	/federation/node/import	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C092	listPasskeys	fe	/user/passkey/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C093	login	fe	/user/login	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C094	pauseForwardService	fe	/forward/pause	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C095	previewSubscription	fe	/subscription/preview	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C096	regenerateInbound	fe	/inbound/regenerate	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C097	removeGroupPermission	fe	/group/permission/remove	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C098	removeMonitorPermission	fe	/monitor/permission/remove	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C099	removeUserTunnel	fe	/tunnel/user/remove	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C100	resetForwardFlow	fe	/forward/reset-flow	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C101	resetInboundTraffic	fe	/inbound/reset-traffic	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C102	resetPeerShareFlow	fe	/federation/share/reset-flow	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C103	resetSubscription	fe	/subscription/reset	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C104	resetSubscriptionTraffic	fe	/subscription/reset-traffic	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C105	resetUserFlow	fe	/user/reset	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C106	resetUserQuota	fe	/user/quota/reset	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C107	resumeForwardService	fe	/forward/resume	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C108	saveGistBackup	fe	/backup/gist/save	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C109	saveSubscription	fe	/subscription/save	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C110	setUserInbounds	fe	/user-inbound/set	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C111	setUserInboundsLegacy	fe	/user-inbound/set	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C112	setUserSubscriptions	fe	/user-subscription/set	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C113	toggleInbound	fe	/inbound/toggle	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C114	updateAnnouncement	fe	/announcement/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C115	updateConfig	fe	/config/update-single	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C116	updateConfigs	fe	/config/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C117	updateExternalInbound	fe	/inbound/external/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C118	updateForward	fe	/forward/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C119	updateForwardOrder	fe	/forward/update-order	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C120	updateInboundSplit	fe	/inbound/split	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C121	updateNode	fe	/node/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C122	updateNodeOrder	fe	/node/update-order	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C123	updatePassword	fe	/user/updatePassword	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C124	updatePeerShare	fe	/federation/share/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C125	updateServiceMonitor	fe	/monitor/services/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C126	updateSpeedLimit	fe	/speed-limit/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C127	updateTunnelGroup	fe	/group/tunnel/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C128	updateTunnelOrder	fe	/tunnel/update-order	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C129	updateUser	fe	/user/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C130	updateUserGroup	fe	/group/user/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C131	updateUserTunnel	fe	/tunnel/user/update	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
+C132	userTunnel	fe	/tunnel/user/tunnel	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
