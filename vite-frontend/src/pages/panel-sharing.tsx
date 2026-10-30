@@ -499,7 +499,15 @@ export default function PanelSharingPage() {
       });
 
       if (res.code === 0) {
-        toast.success("导入成功，请前往节点列表查看");
+        // B13-001: 后端对重复导入改为刷新既有远端节点并在 data.refreshed 标记。
+        const refreshed =
+          (res.data as { refreshed?: boolean } | null)?.refreshed === true;
+
+        toast.success(
+          refreshed
+            ? "远端节点已存在，已刷新其信息"
+            : "导入成功，请前往节点列表查看",
+        );
         setImportNodeOpen(false);
         setImportForm({ remoteUrl: "", token: "" });
         loadRemoteUsage();
