@@ -3592,6 +3592,15 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	_, flowSupplied := req["flow"]
 	_, flowMiBSupplied := req["flowMiB"]
 	if flowSupplied || flowMiBSupplied {
+		// R2 B09-001：GB 键 flow 补 FIX2-A 同族守卫——在场但不可解析
+		// （"abc"/1.5）时 fail-closed 报错。parseTrafficLimit 的 GB 路径
+		// 经 asInt64 解析失败静默回 0，而 flow=0 是「不限额」语义，
+		// 缺守卫等于把配额无声取消且回执成功（flowMiB 键已有
+		// parseTrafficLimit 内部 ParseInt 校验，不在此列）。
+		if presentNumericFieldInvalid(req, "flow") {
+			response.WriteJSON(w, response.ErrDefault("flow 参数无效"))
+			return
+		}
 		var flowErr error
 		flow, flowMiB, flowErr = parseTrafficLimit(req, 0)
 		if flowErr != nil {
@@ -7990,6 +7999,13 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 		return nil, err
 	}
 
+	// R2 B09-001：同 userTunnelUpdate——显式在场的 flow 不可解析时
+	// 直拒，不得被 asInt64/parseTrafficLimit 吞成 0 绕过 -1 哨兵的
+	// 用户默认回填（assign {flow:"abc", flowMiB:0} 曾静默落 0=不限额，
+	// 而非用户默认上限）。
+	if presentNumericFieldInvalid(req, "flow") {
+		return nil, fmt.Errorf("flow 参数无效")
+	}
 	reqFlow := asInt64(req["flow"], -1)
 	var reqFlowMiB int64
 	if _, hasFlowMiB := req["flowMiB"]; hasFlowMiB {
