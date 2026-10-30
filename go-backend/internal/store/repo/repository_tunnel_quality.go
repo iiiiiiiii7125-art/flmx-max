@@ -35,14 +35,25 @@ func (r *Repository) InsertTunnelQuality(q *model.TunnelQuality) error {
 // GetTunnelQualityHistory returns quality probe results for a tunnel
 // within a time range, ordered by timestamp ascending.
 // (Mirrors GetServiceMonitorResults pattern.)
+//
+// B12-001: capped at the newest 5000 rows like the sibling range
+// queries (GetServiceMonitorResultsByTimeRange / GetTunnelMetrics):
+// query newest-first with Limit(5000), then reverse back to ascending
+// so callers keep the chronological order they already consume.
 func (r *Repository) GetTunnelQualityHistory(tunnelID int64, startMs, endMs int64) ([]model.TunnelQuality, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
 	var results []model.TunnelQuality
 	err := r.db.Where("tunnel_id = ? AND timestamp >= ? AND timestamp <= ?", tunnelID, startMs, endMs).
-		Order("timestamp ASC").
+		Order("timestamp DESC, id DESC").
+		Limit(5000).
 		Find(&results).Error
+	if len(results) > 1 {
+		for i, j := 0, len(results)-1; i < j; i, j = i+1, j-1 {
+			results[i], results[j] = results[j], results[i]
+		}
+	}
 	return results, err
 }
 
