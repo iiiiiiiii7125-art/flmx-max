@@ -43,3 +43,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+# Test-only project: pip installs must not try to package the test tree
+# (flat-layout discovery fails on the pages/ and fixtures/ directories).
+[tool.setuptools]
+packages = []
