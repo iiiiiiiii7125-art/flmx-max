@@ -358,6 +358,28 @@ func TestC09HelperScriptHasPullTimeoutAndHeartbeat(t *testing.T) {
 	}
 }
 
+// ---- B05-001（R2-K2）：心跳循环绑定主脚本 PID ----
+// 主脚本被 SIGKILL 时 EXIT trap 不执行；心跳子进程必须逐拍校验
+// 原父 PID 存活、父死即自退，否则孤儿心跳会让面板无限期误判
+// 「升级中」（upgradeInProgressBlocking 对新鲜心跳无条件拦截）。
+// 不得改回无条件刷新，也不得在面板侧加 StartedAt 硬顶（会误放
+// 行 B05-005 的合法长升级）。
+func TestR2K2HelperHeartbeatBindsParentPID(t *testing.T) {
+	exec := &systemUpgradeExecutor{deployDir: "/opt/flmx-panel", backendContainer: "flux-panel-backend"}
+	script := exec.helperScript()
+	if !strings.Contains(script, "HB_PARENT=$$") {
+		t.Fatal("helper heartbeat must capture the main script PID (HB_PARENT=$$)")
+	}
+	if !strings.Contains(script, "kill -0 \"$HB_PARENT\"") {
+		t.Fatal("helper heartbeat loop must check parent liveness each tick (kill -0 \"$HB_PARENT\")")
+	}
+	hbIdx := strings.Index(script, "HB_PARENT=$$")
+	pullIdx := strings.Index(script, fmt.Sprintf("timeout %d docker compose pull", systemUpgradePullTimeoutSeconds))
+	if hbIdx < 0 || pullIdx < 0 || hbIdx > pullIdx {
+		t.Fatal("parent-bound heartbeat must start before the pull stage")
+	}
+}
+
 // ---- B11-001：内核版本缓存 singleflight ----
 
 func c09DelayedReleasesStub(t *testing.T, delay time.Duration, hits *atomic.Int32) {
