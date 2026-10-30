@@ -417,8 +417,9 @@ rm -rf "$BODY_DIR"; rm -f "$ROUTE_MAP" "$CLASS_ROWS"
 # handler 体以同一常量 extendWriteDeadline 武装。登记行带命名例
 # 外（exception 列）时放行并在此点名（当前无存续例外）。机械定
 # 义仅限函数体直调；传递性可达面（refreshInboundWhitelist 白名
-# 单刷新、realm 同步链、订阅凭据轮换等）不在本规则内，仍按其各
-# 自登记行对账。变体自检见 check-timeout-budgets-selftest.sh。
+# 单刷新——经其触达的端点共 12 个、realm 同步链、订阅凭据轮换
+# 等）不在本规则内，仍按其各自登记行对账。变体自检见
+# check-timeout-budgets-selftest.sh。
 APPLY_ENTRY_RE='h\.(applyKernel|applyKernelWith|applyChainReferrers|applyChangedTargets|applyWhitelistedTarget|applyKernelsForInbounds)[[:space:]]*\('
 REG_ROW_MAP="$(mktemp)"; ROUTE_MAP2="$(mktemp)"; BODY_DIR2="$(mktemp -d)"
 grep -v '^#' "$REG" | tail -n +2 | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\t%s\n", $4, $1, $15, $11, $16 }' > "$REG_ROW_MAP"
