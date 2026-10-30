@@ -1741,6 +1741,10 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
+	// LB-REQ-05：binding_id 在下方快照点之前生成，先捕获原值供失败
+	// 回滚恢复（纯预留的 binding_id 本应为空，reserve-port 重用行时
+	// 亦按空重置——它属于「纯预留状态」定义的一部分）。
+	prevBindingID := runtime.BindingID
 	if strings.TrimSpace(runtime.BindingID) == "" {
 		bindingID, randErr := randomToken(24)
 		if randErr != nil {
@@ -1760,7 +1764,12 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 	// 期望状态待对账）失败时保留新期望状态待重连恢复——那是
 	// TestPeerShareUnacknowledgedApplyRecoversOrReleases 锁定的既有
 	// 契约，本回滚不得触碰。
-	prevRole, prevServiceName, prevChainName, prevTarget, prevApplied := runtime.Role, runtime.ServiceName, runtime.ChainName, runtime.Target, runtime.Applied
+	// LB-REQ-05：快照集必须覆盖本 handler 在 apply 路径上改写并经
+	// UpdatePeerShareRuntime 落库的全部字段——除上述五项外还有
+	// protocol/strategy（下方改写，漏回滚时失败尝试的值会残留：
+	// 重试不带 protocol 经 defaultString 继承残留值并下发）与
+	// binding_id（上方生成，prevBindingID 已在生成前捕获）。
+	prevRole, prevServiceName, prevChainName, prevTarget, prevApplied, prevProtocol, prevStrategy := runtime.Role, runtime.ServiceName, runtime.ChainName, runtime.Target, runtime.Applied, runtime.Protocol, runtime.Strategy
 	wasPlainReservation := prevRole == "" && prevServiceName == "" && prevChainName == ""
 	runtime.Role = req.Role
 	runtime.ServiceName = fmt.Sprintf("fed_svc_%d", runtime.ID)
@@ -1774,7 +1783,7 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 	runtime.Target = string(targetBytes)
 	if err := h.applyPeerShareRoleRuntime(runtime); err != nil {
 		if wasPlainReservation {
-			runtime.Role, runtime.ServiceName, runtime.ChainName, runtime.Target, runtime.Applied = prevRole, prevServiceName, prevChainName, prevTarget, prevApplied
+			runtime.Role, runtime.ServiceName, runtime.ChainName, runtime.Target, runtime.Applied, runtime.Protocol, runtime.Strategy, runtime.BindingID = prevRole, prevServiceName, prevChainName, prevTarget, prevApplied, prevProtocol, prevStrategy, prevBindingID
 			runtime.UpdatedTime = time.Now().UnixMilli()
 			if rbErr := h.repo.UpdatePeerShareRuntime(runtime); rbErr != nil {
 				log.Printf("federation: rollback failed apply for runtime %d failed: %v (apply error: %v)", runtime.ID, rbErr, err)

@@ -222,6 +222,61 @@ func TestB13ApplyFailureRollsBackReservation(t *testing.T) {
 	}
 }
 
+// LB-REQ-05：回滚快照须覆盖 apply 路径改写并落库的全部字段。
+// protocol/strategy/binding_id 漏回滚时，失败尝试的请求参数会残留
+// 在行里：重试不带 protocol 经 defaultString(req.Protocol,
+// runtime.Protocol) 继承残留值并下发——一个从未在成功请求里出现
+// 过的值生效。构造：纯预留（reserve 默认 protocol=tls、
+// strategy=round、binding_id 空）→ 携带 udp/fifo 的 apply 离线失败
+// → 三列必须恢复为申请前值 → 不带 protocol/strategy 重试（仍离线
+// 失败）后三列仍为申请前值，证明重试继承的是恢复后的预留原值。
+func TestLBReq05ApplyFailureRollsBackProtocolStrategyBinding(t *testing.T) {
+	h, r, share := b13Provider(t, 31000, 31002)
+
+	env := b13Reserve(t, h, "rkLB")
+	if env.Code != 0 {
+		t.Fatalf("reserve failed: %+v", env)
+	}
+	reservationID := b13ReservationID(t, env)
+
+	load := func() *repo.PeerShareRuntime {
+		stored, err := r.GetPeerShareRuntimeByReservationID(share.ID, reservationID)
+		if err != nil || stored == nil {
+			t.Fatalf("load runtime: %v", err)
+		}
+		return stored
+	}
+	before := load()
+	if before.Protocol != "tls" || before.Strategy != "round" || before.BindingID != "" {
+		t.Fatalf("plain reservation precondition: protocol=tls strategy=round binding empty, got %+v", before)
+	}
+
+	apply := func(body string) b13Envelope {
+		return b13Call(t, h.federationRuntimeApplyRole, "/api/v1/federation/runtime/apply-role", "b13-share-token", body)
+	}
+	if env := apply(`{"reservationId":"` + reservationID + `","role":"exit","protocol":"udp","strategy":"fifo"}`); env.Code == 0 {
+		t.Fatal("apply against offline node must fail")
+	}
+	stored := load()
+	if stored.Role != "" || stored.ServiceName != "" || stored.ChainName != "" || stored.Applied != 0 {
+		t.Fatalf("failed apply must roll back occupation fields, got %+v", stored)
+	}
+	if stored.Protocol != before.Protocol || stored.Strategy != before.Strategy || stored.BindingID != before.BindingID {
+		t.Fatalf("failed apply must roll back protocol/strategy/binding_id to pre-apply values (tls/round/empty), got protocol=%q strategy=%q binding=%q",
+			stored.Protocol, stored.Strategy, stored.BindingID)
+	}
+
+	// 不带 protocol/strategy 重试：继承的应是恢复后的预留原值。
+	if env := apply(`{"reservationId":"` + reservationID + `","role":"exit"}`); env.Code == 0 {
+		t.Fatal("retry against offline node must fail")
+	}
+	stored = load()
+	if stored.Protocol != before.Protocol || stored.Strategy != before.Strategy || stored.BindingID != before.BindingID {
+		t.Fatalf("retry without protocol must inherit the restored reservation values, got protocol=%q strategy=%q binding=%q",
+			stored.Protocol, stored.Strategy, stored.BindingID)
+	}
+}
+
 // share/delete 同原则：share 下只有「首次 apply 失败已回滚」的纯预留
 // 时，离线删 share 必须能本地走完（回滚后清理不依赖节点在线）。
 // 注：曾成功下发的 runtime 离线删 share 仍按既有契约失败保留
