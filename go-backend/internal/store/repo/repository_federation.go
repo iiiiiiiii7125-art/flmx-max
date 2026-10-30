@@ -170,62 +170,20 @@ func (r *Repository) CreateFederationTunnel(name string, tunnelType int, protoco
 	return tunnel.ID, nil
 }
 
-// ListUsedPortsOnNode returns all ports in use on a given node from chain_tunnel and forward_port tables.
+// ListUsedPortsOnNode returns all ports in use on a given node.
+// P01-001: the source set is the unified four-source predicate
+// (UsedPortsOnNodeTx: forward_port / node_inbound / chain_tunnel /
+// active peer_share_runtime reservations — X-P2-13's inclusion of share
+// reservations is carried by the unified predicate); this wrapper only
+// adapts the set to a slice for the federation pickers.
 func (r *Repository) ListUsedPortsOnNode(nodeID int64) ([]int, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
-	used := make(map[int]struct{})
-
-	var chainPorts []int
-	err := r.db.Model(&model.ChainTunnel{}).
-		Where("node_id = ? AND port > 0", nodeID).
-		Pluck("port", &chainPorts).Error
+	used, err := r.UsedPortsOnNodeTx(r.db, nodeID, PortExclusions{})
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range chainPorts {
-		if p > 0 {
-			used[p] = struct{}{}
-		}
-	}
-
-	var forwardPorts []int
-	err = r.db.Model(&model.ForwardPort{}).
-		Where("node_id = ? AND port > 0", nodeID).
-		Pluck("port", &forwardPorts).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range forwardPorts {
-		if p > 0 {
-			used[p] = struct{}{}
-		}
-	}
-
-	inboundPorts, err := listNodeInboundPortsTx(r.db, nodeID, 0)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range inboundPorts {
-		used[p] = struct{}{}
-	}
-
-	// X-P2-13（L-08-1）：有效 peer_share_runtime 预留口一并计入已用集，
-	// 联邦侧选口/占用检查与本地谓词同口径。
-	var peerPorts []int
-	err = r.db.Model(&model.PeerShareRuntime{}).
-		Where("node_id = ? AND port > 0 AND status = 1", nodeID).
-		Pluck("port", &peerPorts).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range peerPorts {
-		if p > 0 {
-			used[p] = struct{}{}
-		}
-	}
-
 	result := make([]int, 0, len(used))
 	for p := range used {
 		result = append(result, p)
@@ -360,4 +318,25 @@ func (r *Repository) CreateRemoteNode(name, secret, serverIP, portRange string, 
 		RemoteConfig:  sql.NullString{String: remoteConfigJSON, Valid: remoteConfigJSON != ""},
 	}
 	return r.db.Create(&node).Error
+}
+
+// RefreshRemoteNode updates an existing remote node in place with the
+// latest provider data (B13-001: re-import of the same share refreshes
+// instead of creating a duplicate node). The local secret and index
+// are kept; display fields, port range, status, token and the stored
+// RemoteConfig are overwritten with the freshly fetched values.
+func (r *Repository) RefreshRemoteNode(nodeID int64, name, serverIP, portRange string, now int64, status int, remoteToken, remoteConfigJSON string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	updates := map[string]interface{}{
+		"name":          name,
+		"server_ip":     stripIngressHostPort(serverIP),
+		"port":          portRange,
+		"status":        status,
+		"updated_time":  now,
+		"remote_token":  remoteToken,
+		"remote_config": remoteConfigJSON,
+	}
+	return r.db.Model(&model.Node{}).Where("id = ? AND is_remote = 1", nodeID).Updates(updates).Error
 }

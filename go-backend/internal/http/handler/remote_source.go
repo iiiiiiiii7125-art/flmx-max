@@ -128,6 +128,12 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	if err != nil {
 		return fail(err)
 	}
+	// X04-001：本轮同步的链式引用查询（更新分支重下发、移除分支守卫）
+	// 共用这份已加载快照的索引——旧实现逐行经 chainReferrers /
+	// applyChainReferrers 各重载一次全表。同步更新只改地址/名称等
+	// 字段、不动 OutboundID 与分流，快照的引用边整轮有效；移除分支
+	// 已删行另以 deletedIDs 滤除（与逐行现查口径一致）。
+	guardIx := chainRefIndexFromRows(rows)
 	var mine []*model.NodeInbound
 	byName := map[string][]*model.NodeInbound{}
 	byAddr := map[string][]*model.NodeInbound{}
@@ -234,11 +240,12 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 				res.Errors = append(res.Errors, row.Name+"："+p)
 			}
 		}
-		for _, p := range h.applyChainReferrers(row.ID) {
+		for _, p := range h.applyChainReferrersIx(guardIx, row.ID) {
 			res.Errors = append(res.Errors, row.Name+"："+p)
 		}
 	}
 
+	deletedIDs := make(map[int64]bool)
 	for _, row := range mine {
 		if used[row.ID] {
 			continue
@@ -258,12 +265,14 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			continue
 		}
 		// R3X-015：守卫查询失败 fail-closed——无法确认无引用时保留
-		// 该节点并记错，不得当作无引用删除。
-		refs, refErr := h.chainReferrers(row.ID)
-		if refErr != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", row.Name, refErr))
-			res.Kept++
-			continue
+		// 该节点并记错，不得当作无引用删除。X04-001 后引用集取自
+		// 本轮开局已成功加载的快照（加载失败在函数入口已中止整轮），
+		// 本轮内已删行经 deletedIDs 滤除，与逐行现查口径一致。
+		var refs []model.NodeInbound
+		for _, ref := range guardIx.referrers(row.ID) {
+			if !deletedIDs[ref.ID] {
+				refs = append(refs, ref)
+			}
 		}
 		if len(refs) > 0 {
 			res.Kept++
@@ -273,6 +282,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", row.Name, err))
 			continue
 		}
+		deletedIDs[row.ID] = true
 		res.Removed++
 	}
 
@@ -509,6 +519,9 @@ func (h *Handler) applyRemoteSourceRelayOnly(src *model.RemoteSource) {
 		log.Printf("remote source %d relay-only apply list failed: %v", src.ID, err)
 		return
 	}
+	// X04-001：引用方查询共用这份已加载快照（旧实现逐行重载全表）；
+	// 本路径只改 RelayOnly，引用边整轮不变。
+	guardIx := chainRefIndexFromRows(rows)
 	now := time.Now().UnixMilli()
 	for i := range rows {
 		row := &rows[i]
@@ -524,7 +537,7 @@ func (h *Handler) applyRemoteSourceRelayOnly(src *model.RemoteSource) {
 			log.Printf("remote source %d relay-only apply inbound %d failed: %v", src.ID, row.ID, err)
 			continue
 		}
-		for _, problem := range h.applyChainReferrers(row.ID) {
+		for _, problem := range h.applyChainReferrersIx(guardIx, row.ID) {
 			log.Printf("remote source %d relay-only chain re-apply inbound %d: %s", src.ID, row.ID, problem)
 		}
 	}
@@ -592,16 +605,15 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		// X04-001：守卫共用这份已加载快照（旧实现逐行 chainInUseMessage
+		// 各重载一次全表）；加载已成功，逐行不再有查询失败面，删除在
+		// 守卫全过后才开始，快照与逐行现查等价。
+		guardIx := chainRefIndexFromRows(rows)
 		for i := range rows {
 			if rows[i].SourceID != req.ID {
 				continue
 			}
-			msg, guardErr := h.chainInUseMessage(&rows[i])
-			if guardErr != nil {
-				response.WriteJSON(w, response.Err(-2, guardErr.Error()))
-				return
-			}
-			if msg != "" {
+			if msg := h.chainInUseMessageFromRefs(&rows[i], guardIx.referrers(rows[i].ID)); msg != "" {
 				response.WriteJSON(w, response.ErrDefault(msg+"，或删除时保留节点"))
 				return
 			}

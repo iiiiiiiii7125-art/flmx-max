@@ -790,40 +790,18 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 		return 0, errors.New("节点端口已满，无可用端口")
 	}
 
-	used := make(map[int]struct{})
-
-	chainQuery := tx.Model(&model.ChainTunnel{}).Where("node_id = ? AND port > 0", nodeID)
+	// P01-001：已用集走统一四源谓词 UsedPortsOnNodeTx。此前这里手写
+	// 三源（chain/forward/inbound），漏联邦有效预留口：随机选口能挑中
+	// 分享运行时正在用的口，同节点同口双分配、后下发方绑口失败。
+	// 排除口径不变：仅排除本隧道自身链路行（更新沿用/重挑时不被
+	// 自己的旧行挡住）。
+	var pickExcl PortExclusions
 	if excludeTunnelID > 0 {
-		chainQuery = chainQuery.Where("tunnel_id != ?", excludeTunnelID)
+		pickExcl.TunnelIDs = []int64{excludeTunnelID}
 	}
-	var chainPorts []int
-	if err := chainQuery.Pluck("port", &chainPorts).Error; err != nil {
-		return 0, err
-	}
-	for _, p := range chainPorts {
-		if p > 0 {
-			used[p] = struct{}{}
-		}
-	}
-
-	var forwardPorts []int
-	if err := tx.Model(&model.ForwardPort{}).
-		Where("node_id = ? AND port > 0", nodeID).
-		Pluck("port", &forwardPorts).Error; err != nil {
-		return 0, err
-	}
-	for _, p := range forwardPorts {
-		if p > 0 {
-			used[p] = struct{}{}
-		}
-	}
-
-	inboundPorts, err := listNodeInboundPortsTx(tx, nodeID, 0)
+	used, err := r.UsedPortsOnNodeTx(tx, nodeID, pickExcl)
 	if err != nil {
 		return 0, err
-	}
-	for _, p := range inboundPorts {
-		used[p] = struct{}{}
 	}
 
 	var available []int
@@ -1447,41 +1425,17 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
-	used := make(map[int]bool)
-	var forwardPorts []int
-	if err := r.db.Model(&model.ForwardPort{}).Where("node_id = ?", nodeID).Pluck("port", &forwardPorts).Error; err != nil {
+	// P01-001：四源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
+	// map[int]struct{} → map[int]bool 的形状适配。B4/F-013（入站口纳入
+	// 自动选口排除集）与 X-P2-13（联邦有效预留口纳入）的结论由统一
+	// 谓词承载；external 入站行 node_id=0 天然不在本节点集合内。
+	set, err := r.UsedPortsOnNodeTx(r.db, nodeID, PortExclusions{})
+	if err != nil {
 		return nil, err
 	}
-	for _, p := range forwardPorts {
+	used := make(map[int]bool, len(set))
+	for p := range set {
 		used[p] = true
-	}
-	var chainPorts []int
-	if err := r.db.Model(&model.ChainTunnel{}).Where("node_id = ? AND port > 0", nodeID).Pluck("port", &chainPorts).Error; err != nil {
-		return nil, err
-	}
-	for _, p := range chainPorts {
-		used[p] = true
-	}
-	// B4/F-013: 自动选港同样必须排除入站占用端口（此前只排除了
-	// forward_port 与 chain_tunnel，随机选中入站端口后转发建得出、
-	// 起不来）。external 行 node_id=0 天然不在本节点集合内。
-	var inboundPorts []int
-	if err := r.db.Model(&model.NodeInbound{}).Where("node_id = ?", nodeID).Pluck("port", &inboundPorts).Error; err != nil {
-		return nil, err
-	}
-	for _, p := range inboundPorts {
-		used[p] = true
-	}
-	// X-P2-13（L-08-1）：联邦 peer_share_runtime 有效预留口纳入已用集，
-	// 自动选口不得挑中预留口（与本地占用谓词双向对齐）。
-	var peerPorts []int
-	if err := r.db.Model(&model.PeerShareRuntime{}).Where("node_id = ? AND port > 0 AND status = 1", nodeID).Pluck("port", &peerPorts).Error; err != nil {
-		return nil, err
-	}
-	for _, p := range peerPorts {
-		if p > 0 {
-			used[p] = true
-		}
 	}
 	return used, nil
 }

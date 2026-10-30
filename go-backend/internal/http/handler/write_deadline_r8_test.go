@@ -90,14 +90,32 @@ func TestR8T1EndpointsExtendWriteDeadline(t *testing.T) {
 		{"backupExport", h.backupExport, 30 * time.Minute},
 		// R8-T-08: gist upload = export build + up to 120s of gist calls.
 		{"gistBackupUpload", h.gistBackupUpload, 30 * time.Minute},
-		// R8-T-04: upgradeTimeout = 300s; frontend 360s (T2).
-		{"nodeUpgrade", h.nodeUpgrade, 360 * time.Second},
+		// R8-T-04 + B05-002 (R2-K2): empty version pays the <=120s
+		// discovery prelude before upgradeTimeout 300s (bound 420s);
+		// server relief and frontend both 480s.
+		{"nodeUpgrade", h.nodeUpgrade, 480 * time.Second},
 		// R8-T-04: batch bound is ceil(N/5) x 300s, unbounded in N.
 		{"nodeBatchUpgrade", h.nodeBatchUpgrade, 30 * time.Minute},
 		// R8-T-04: self-upgrade synchronous prelude <= ~210s; frontend >= 240s (T2).
 		{"systemUpgrade", h.systemUpgrade, 300 * time.Second},
 		// R8-T-07: tunnel update's composite legs vs the 120s global cap.
 		{"tunnelUpdate", h.tunnelUpdate, 300 * time.Second},
+		// B11-001 (R2-K2): kernel control start/stop conditionally
+		// inherits the 300s apply budget via applyKernelWith, like
+		// kernelInstall; formerly only the 120s global cap applied.
+		{"kernelControl", h.kernelControl, 360 * time.Second},
+		// B11-001 family closure (R2-K2): inbound/subscription tails
+		// that synchronously await a kernel apply carry the same
+		// conditional 300s bound; batch tails apply per distinct
+		// kernel and take the batch relief.
+		{"inboundDelete", h.inboundDelete, 360 * time.Second},
+		{"inboundToggle", h.inboundToggle, 360 * time.Second},
+		{"inboundRegenerate", h.inboundRegenerate, 360 * time.Second},
+		{"inboundSplitSave", h.inboundSplitSave, 360 * time.Second},
+		{"inboundExternalUpdate", h.inboundExternalUpdate, 360 * time.Second},
+		{"subscriptionSave", h.subscriptionSave, 360 * time.Second},
+		{"inboundBatchDelete", h.inboundBatchDelete, 30 * time.Minute},
+		{"inboundBatchToggle", h.inboundBatchToggle, 30 * time.Minute},
 		// R8-T-05: the 120s diagnosis ctx stays; outer layers rise to ~150s.
 		{"tunnelDiagnose", h.tunnelDiagnose, 150 * time.Second},
 		{"forwardDiagnose", h.forwardDiagnose, 150 * time.Second},

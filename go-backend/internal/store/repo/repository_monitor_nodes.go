@@ -21,6 +21,11 @@ func (r *Repository) ListMonitorNodes() ([]model.Node, error) {
 
 // SetNodesLatencyTargets 存储节点自选的延迟测试点（"" 表示跟随全局默认）。
 // 移植自 kure29/flyx。
+//
+// R2 X01-001（硬化）：被调层按 chunkInt64IDs 分块，与 IN 分块家族
+// 口径对齐——当前唯一批量调用方有 200 条硬上限、影响不可达，但
+// 函数本身不得依赖调用方守约，未来新增无上限调用方会直接撞
+// SQLite/PG 的 SQL 变量上限。
 func (r *Repository) SetNodesLatencyTargets(ids []int64, value string) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -28,8 +33,13 @@ func (r *Repository) SetNodesLatencyTargets(ids []int64, value string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	return r.db.Model(&model.Node{}).Where("id IN ? AND is_remote = ?", ids, 0).
-		Update("latency_targets", value).Error
+	for _, chunk := range chunkInt64IDs(ids) {
+		if err := r.db.Model(&model.Node{}).Where("id IN ? AND is_remote = ?", chunk, 0).
+			Update("latency_targets", value).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListNodeLatencyTargets returns every node's stored explicit latency

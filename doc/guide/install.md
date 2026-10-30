@@ -125,13 +125,13 @@ sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https cu
 # GPG key：先下载到临时文件并核对官方指纹，通过后才写入 keyring
 # （与 panel_install.sh 同口径；各步以 && 串联，任一步失败即停步、不要继续）
 caddy_key_tmp=$(mktemp) && \
-curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/gpg.key' -o "$caddy_key_tmp" && \
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o "$caddy_key_tmp" && \
 gpg --show-keys --with-colons "$caddy_key_tmp" | grep -q '65760C51EDEA2017CEA2CA15155B6D79CA56EA34' && \
 sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$caddy_key_tmp" && \
 rm -f "$caddy_key_tmp"
 # 源列表：同样先落临时文件，下载成功且非空才写入 /etc/apt
 caddy_list_tmp=$(mktemp) && \
-curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' -o "$caddy_list_tmp" && \
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$caddy_list_tmp" && \
 test -s "$caddy_list_tmp" && \
 sudo tee /etc/apt/sources.list.d/caddy-stable.list < "$caddy_list_tmp" > /dev/null && \
 rm -f "$caddy_list_tmp"

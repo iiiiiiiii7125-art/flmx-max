@@ -857,7 +857,7 @@ export function ManualNodeFields({
           />
           {realityActive && (
             <p className="text-xs text-warning-600 dark:text-warning-400">
-              Reality 不支持 WebSocket 传输（仅支持 TCP / gRPC），已禁用
+              Reality 不支持 WS 传输（仅支持 TCP / gRPC / XHTTP），已禁用
             </p>
           )}
         </div>

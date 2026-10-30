@@ -588,8 +588,19 @@ cd "$PANEL_DEPLOY_DIR"
 # B05-005：存活心跳——运行期每 30s 刷新心跳文件 mtime，面板的残留
 # 判定据此识别 helper 仍在执行（慢链路合法超过 30 分钟不再被误判
 # 残留、放行第二轮覆盖 .upgrade.bak）。EXIT trap 收尾心跳循环。
+# B05-001（R2-K2）：心跳循环绑定主脚本 PID 并逐拍校验其存活——主
+# 脚本被 SIGKILL 时 EXIT trap 不执行，心跳子进程若被 init 收养就会
+# 成为孤儿、永远刷新心跳，面板据此无限期误判「升级中」。父死即自
+# 退后心跳自然过期，残留判定按既有新鲜度规则放行。容器形态下主
+# 脚本是命名空间 PID 1，$$ 恒为 1、校验恒真，命名空间拆除时循环
+# 随之消亡，原有连带回收行为不变。
 touch "$HEARTBEAT_FILE" 2>/dev/null || true
-( while :; do sleep 30; touch "$HEARTBEAT_FILE" 2>/dev/null || exit 0; done ) &
+HB_PARENT=$$
+( while :; do
+    sleep 30
+    kill -0 "$HB_PARENT" 2>/dev/null || exit 0
+    touch "$HEARTBEAT_FILE" 2>/dev/null || exit 0
+  done ) &
 HB_PID=$!
 trap 'kill "$HB_PID" 2>/dev/null || true' EXIT
 

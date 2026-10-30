@@ -27,6 +27,27 @@ func validateTunnelFlow(flow int64) error {
 	return nil
 }
 
+// B06-001（Round 2 K9）：Tunnel.Type / Tunnel.Status 的合法集为
+// {1=端口转发, 2=隧道转发} / {0=停用, 1=启用}。同文件 flow、
+// trafficRatio 与分组 status（R4X-012）都已立门，唯独这两个字段在
+// create/update 两侧无校验：type=0/3/9、status=-1/7 原样落库并经
+// list/get 回吐——消费面靠 ==1/==2 正向判定兜底暂未出事故，但脏值
+// 与前端 {0,1}/{1,2} 映射错位、未来按闭集假设写的新消费面必踩。
+// 拒绝文案与 validateTunnelFlow 同格（点名字段 + 合法集 + 实际值）。
+func validateTunnelType(typeVal int) error {
+	if typeVal != 1 && typeVal != 2 {
+		return fmt.Errorf("隧道类型超出范围 {1,2}: %d", typeVal)
+	}
+	return nil
+}
+
+func validateTunnelStatus(status int) error {
+	if status != 0 && status != 1 {
+		return fmt.Errorf("隧道状态超出范围 {0,1}: %d", status)
+	}
+	return nil
+}
+
 // flowMiB is optional so older clients can keep sending the GB-based flow field.
 // A positive value takes precedence and preserves sub-GB limits exactly.
 func parseTrafficLimit(req map[string]interface{}, defaultGB int64) (flowGB, flowMiB int64, err error) {

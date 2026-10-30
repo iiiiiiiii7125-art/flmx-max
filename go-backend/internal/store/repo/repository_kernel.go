@@ -406,12 +406,12 @@ func (r *Repository) ResetNodeInboundTraffic(id int64, now int64) error {
 }
 
 func listNodeInboundPortsTx(tx *gorm.DB, nodeID int64, excludeInboundID int64) ([]int, error) {
-	var ports []int
-	q := tx.Model(&model.NodeInbound{}).Where("node_id = ? AND port > 0", nodeID)
+	// P01-001：实现收敛到统一占用文件的多值排除形，本函数只做单值适配。
+	var excl []int64
 	if excludeInboundID > 0 {
-		q = q.Where("id <> ?", excludeInboundID)
+		excl = []int64{excludeInboundID}
 	}
-	return ports, q.Pluck("port", &ports).Error
+	return listNodeInboundPortsExclTx(tx, nodeID, excl)
 }
 
 // NodePortOccupant names what already uses port on a node, or "" when free.
@@ -429,47 +429,41 @@ func (r *Repository) ListNodeInboundsByNode(nodeID int64) ([]model.NodeInbound, 
 }
 
 // NodePortRangeOccupant reports what listens on any port in [lo, hi] of a
-// node: an inbound, a forward or a tunnel ("" when free).
+// node: an inbound, a forward, a tunnel or a federation share reservation
+// ("" when free). P01-001: the occupancy knowledge lives in the unified
+// four-source predicate (NodePortRangeOccupancyTx); this function only
+// maps sources to display names, keeping the historical precedence
+// (inbound → forward → tunnel, with the companion special case).
 func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInboundID int64) (string, error) {
 	if r == nil || r.db == nil {
 		return "", errors.New("repository not initialized")
 	}
-	var count int64
-	q := r.db.Model(&model.NodeInbound{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi)
+	var excl PortExclusions
 	if excludeInboundID > 0 {
-		q = q.Where("id <> ?", excludeInboundID)
+		excl.InboundIDs = []int64{excludeInboundID}
 	}
-	if err := q.Count(&count).Error; err != nil {
+	occ, err := r.NodePortRangeOccupancyTx(r.db, nodeID, lo, hi, excl)
+	if err != nil {
 		return "", err
 	}
-	if count > 0 {
+	switch {
+	case occ.Sources[PortSourceInbound]:
 		// F7 (B-05): name a metering companion when one occupies the
 		// range — it appears in no user-facing list and cannot be
 		// moved or deleted directly, so the generic label would send
 		// the user hunting for a service that does not exist for
 		// them. The port frees up by disabling subscription metering
 		// on the origin inbound.
-		cq := r.db.Model(&model.NodeInbound{}).Where("node_id = ? AND port BETWEEN ? AND ? AND companion_of > 0", nodeID, lo, hi)
-		if excludeInboundID > 0 {
-			cq = cq.Where("id <> ?", excludeInboundID)
-		}
-		var compCount int64
-		if err := cq.Count(&compCount).Error; err == nil && compCount > 0 {
+		if occ.InboundCompanion {
 			return "SS 计量伴生入站", nil
 		}
 		return "其他节点服务", nil
-	}
-	if err := r.db.Model(&model.ForwardPort{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi).Count(&count).Error; err != nil {
-		return "", err
-	}
-	if count > 0 {
+	case occ.Sources[PortSourceForward]:
 		return "转发", nil
-	}
-	if err := r.db.Model(&model.ChainTunnel{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi).Count(&count).Error; err != nil {
-		return "", err
-	}
-	if count > 0 {
+	case occ.Sources[PortSourceChain]:
 		return "隧道", nil
+	case occ.Sources[PortSourcePeer]:
+		return "联邦分享预留", nil
 	}
 	return "", nil
 }

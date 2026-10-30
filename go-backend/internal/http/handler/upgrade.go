@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -553,6 +554,15 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	sem := make(chan struct{}, batchWorkers)
 	var wg sync.WaitGroup
 
+	// B05-002（R2-K2）：已派发命令的等待与请求 ctx 解绑——沿备份导入
+	// 写入相位的既有范式（context.WithoutCancel，handler.go）。X-P3-26
+	// 的「断开即停派发」只作用于派发前检查（下方仍读 r.Context()）：
+	// 客户端断开后不再派发新节点；但命令一旦已发给 agent，前端超时/
+	// 关页不得把在途升级半途掐断、连带丢掉整批回执与待重部署标记。
+	// 单条命令仍受 upgradeTimeout 约束，解绑 ctx 以整批写截止为总界。
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.WithoutCancel(r.Context()), nodeBatchUpgradeWriteDeadline)
+	defer cancelDispatch()
+
 	for i, id := range req.IDs {
 		// X-P3-26：派发前检查请求上下文——客户端断开/取消后不再派发剩余节点。
 		if ctxErr := r.Context().Err(); ctxErr != nil {
@@ -594,7 +604,7 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			result, err := h.wsServer.SendCommandContext(r.Context(), nodeID, "UpgradeAgent", batchUpgradeData, upgradeTimeout)
+			result, err := h.wsServer.SendCommandContext(dispatchCtx, nodeID, "UpgradeAgent", batchUpgradeData, upgradeTimeout)
 			if err != nil {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: err.Error()}
 				return

@@ -68,4 +68,34 @@ fi
 grep -q 'C080' "$TMP/var.log" || { echo "FAIL: gate failed but did not name C080:"; cat "$TMP/var.log"; exit 1; }
 grep -q 'B05-001' "$TMP/var.log" || { echo "FAIL: gate failure does not cite the discovery-class rule (B05-001):"; cat "$TMP/var.log"; exit 1; }
 echo "OK: variant caught, C080 named"
+
+echo "== variant: C113 re-misclassified as class must FAIL, naming C113 =="
+cp "$ROOT/doc/audit/timeout-budgets.tsv" "$MIR/doc/audit/timeout-budgets.tsv"
+python3 - "$MIR/doc/audit/timeout-budgets.tsv" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+for i, l in enumerate(lines):
+    if l.startswith('C113\t'):
+        f = l.split('\t')
+        # 只变分类与登记口径：服务端改回 global、后端界改回 class
+        # 天花板、校验改回 class；前端真实值 330s 保持不动，使 class
+        # 分支自身断言全部满足——能抓住这个变体的只剩「内核下发家
+        # 族禁登小界」规则（handler 体仍直调 applyKernel 且仍以
+        # kernelApplyWriteDeadline 武装，与登记口径脱钩）。
+        f[9] = '120'; f[10] = 'global'
+        f[11] = '12'; f[12] = 'class'; f[13] = 'class-ceiling'; f[14] = 'class'
+        lines[i] = '\t'.join(f)
+        break
+else:
+    sys.exit('C113 row not found in mirror registry')
+open(p, 'w', encoding='utf-8').write('\n'.join(lines))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var2.log" 2>&1; then
+  echo "FAIL: gate PASSED on the C113 class variant — kernel-apply misclassification not caught"
+  exit 1
+fi
+grep -q 'C113' "$TMP/var2.log" || { echo "FAIL: gate failed but did not name C113:"; cat "$TMP/var2.log"; exit 1; }
+grep -q 'B11-001' "$TMP/var2.log" || { echo "FAIL: gate failure does not cite the kernel-apply family rule (B11-001):"; cat "$TMP/var2.log"; exit 1; }
+echo "OK: variant caught, C113 named"
 echo "SELFTEST: PASS"

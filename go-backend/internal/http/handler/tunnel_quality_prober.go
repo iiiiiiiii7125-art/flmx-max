@@ -421,9 +421,18 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 	}
 
 	now := time.Now().UnixMilli()
+	// B07-001/B07-002（Round 2）：两段量测值一律以 -1/100 哨兵起步，
+	// 只有真实探测成功才覆写为实测值。这样任何未测到的段——三条
+	// 前置早退（隧道不存在/目标不允许/配置不完整）、入口/出口离线
+	// 被门控跳过的段、以及类型1 本就不存在的「入口→出口」段——
+	// 落库与缓存都呈哨兵，绝不留 0/0 冒充完美样本。
 	snap := &tunnelQualitySnapshot{
-		TunnelID:  tunnelID,
-		Timestamp: now,
+		TunnelID:           tunnelID,
+		Timestamp:          now,
+		EntryToExitLatency: -1,
+		EntryToExitLoss:    100,
+		ExitToBingLatency:  -1,
+		ExitToBingLoss:     100,
 	}
 
 	// Get tunnel chain info

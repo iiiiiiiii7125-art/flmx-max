@@ -549,7 +549,7 @@ setup_domain_proxy() {
     # 避免用未核对的 key 当后续 apt 验签的信任锚。
     local caddy_key_tmp caddy_key_fp=""
     caddy_key_tmp=$(mktemp)
-    if curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/gpg.key' -o "$caddy_key_tmp" 2>/dev/null; then
+    if curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o "$caddy_key_tmp" 2>/dev/null; then
       caddy_key_fp=$(gpg --show-keys --with-colons "$caddy_key_tmp" 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')
     fi
     if [[ "$caddy_key_fp" == "65760C51EDEA2017CEA2CA15155B6D79CA56EA34" ]] \
@@ -571,7 +571,7 @@ setup_domain_proxy() {
       # apt 操作（与上方 GPG key 的临时文件处置同形）。
       local caddy_list_tmp
       caddy_list_tmp=$(mktemp)
-      if curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]]; then
+      if curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]]; then
         mv -f "$caddy_list_tmp" /etc/apt/sources.list.d/caddy-stable.list
         chmod 644 /etc/apt/sources.list.d/caddy-stable.list
       else

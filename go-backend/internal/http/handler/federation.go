@@ -1067,6 +1067,42 @@ func writeRemoteURLValidationError(w http.ResponseWriter, err error) {
 	response.WriteJSON(w, response.ErrDefault(err.Error()))
 }
 
+// findImportedRemoteNode locates an already-imported remote node for
+// the same provider share (B13-001 dedupe key: remoteUrl + token or
+// shareId). A row matches when its stored remote URL equals the import
+// URL (modulo surrounding spaces / trailing slashes) and either the
+// stored token equals the presented token, or the shareId recorded in
+// its RemoteConfig equals the connected share's ID — the latter covers
+// a provider that rotated the token for the same share. Returns the
+// node ID, or 0 when no row matches (including on lookup errors, in
+// which case the import proceeds to create and surfaces any real DB
+// error there).
+func (h *Handler) findImportedRemoteNode(remoteURL, token string, shareID int64) int64 {
+	rows, err := h.repo.ListRemoteNodes()
+	if err != nil {
+		return 0
+	}
+	wantURL := normalizeRemoteURLForMatch(remoteURL)
+	for _, row := range rows {
+		if !row.RemoteURL.Valid || normalizeRemoteURLForMatch(row.RemoteURL.String) != wantURL {
+			continue
+		}
+		if token != "" && row.RemoteToken.Valid && row.RemoteToken.String == token {
+			return row.ID
+		}
+		if shareID > 0 && row.RemoteConfig.Valid {
+			if existingShareID, _, _, _, _, _ := parseRemoteShareUsageConfig(row.RemoteConfig.String); existingShareID == shareID {
+				return row.ID
+			}
+		}
+	}
+	return 0
+}
+
+func normalizeRemoteURLForMatch(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
+}
+
 func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("Invalid method"))
@@ -1126,7 +1162,6 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		portRange = fmt.Sprintf("%d-%d", info.PortRangeStart, info.PortRangeEnd)
 	}
 
-	inx := h.repo.NextIndex("node")
 	now := time.Now().UnixMilli()
 
 	// R3-E-01：对端面板提供的节点地址在本侧唯一落库点——含结构
@@ -1139,6 +1174,38 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		serverIP = ""
 	}
 
+	// B13-001：同一 (remoteUrl, token/shareId) 重复导入不再新建同名
+	// 远端节点——命中既有行则原地刷新其远端信息，回执明确提示
+	// 「已存在、已刷新」（轻微行为变更，Round 2 分诊已知悉）。
+	if existingID := h.findImportedRemoteNode(req.RemoteURL, req.Token, info.ShareID); existingID > 0 {
+		if err := h.repo.RefreshRemoteNode(
+			existingID,
+			fmt.Sprintf("%s (Remote)", info.NodeName),
+			serverIP,
+			portRange,
+			now,
+			info.Status,
+			req.Token,
+			string(configBytes),
+		); err != nil {
+			response.WriteJSON(w, response.Err(-2, "Database error: "+err.Error()))
+			return
+		}
+		data := map[string]interface{}{
+			"refreshed": true,
+			"nodeId":    existingID,
+		}
+		if strings.TrimSpace(info.VersionWarning) != "" {
+			data["versionWarning"] = info.VersionWarning
+			data["panelVersion"] = info.PanelVersion
+		}
+		resp := response.OK(data)
+		resp.Msg = "远端节点已存在，已刷新"
+		response.WriteJSON(w, resp)
+		return
+	}
+
+	inx := h.repo.NextIndex("node")
 	nodeSecret, randErr := randomToken(16)
 	if randErr != nil {
 		response.WriteJSON(w, response.Err(-2, randErr.Error()))

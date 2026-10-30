@@ -12,6 +12,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	"github.com/go-gost/core/recorder"
 	ctxvalue "github.com/go-gost/x/ctx"
+	netudp "github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/internal/util/relay"
 	"github.com/go-gost/x/internal/util/ss"
 	rate_limiter "github.com/go-gost/x/limiter/rate"
@@ -165,23 +166,45 @@ type dialTargetPinner interface {
 // pinUDPTarget returns the address a packet must actually be
 // written to: with a pinning bypass, a hostname target is replaced
 // by its validated IP literal (an error drops the packet); anything
-// else passes through unchanged.
-func (h *ssuHandler) pinUDPTarget(ctx context.Context, addr net.Addr) (net.Addr, error) {
+// else passes through unchanged. Successful pins are memoized in
+// pins — one memo per relayPacket call, i.e. per UDP association
+// (R2-A02-001, see netudp.PinMemo's scope rule: never shared across
+// associations, failures never memoized).
+func (h *ssuHandler) pinUDPTarget(ctx context.Context, pins *netudp.PinMemo, addr net.Addr) (net.Addr, error) {
 	pinner, ok := h.options.Bypass.(dialTargetPinner)
 	if !ok || addr == nil {
 		return addr, nil
 	}
-	pinned, err := pinner.PinDialTarget(ctx, "udp", addr.String())
+	key := addr.String()
+	if pins != nil {
+		if pinned, hit := pins.Lookup(key); hit {
+			return pinned, nil
+		}
+	}
+	pinned, err := pinner.PinDialTarget(ctx, "udp", key)
 	if err != nil {
 		return nil, err
 	}
-	if pinned == addr.String() {
-		return addr, nil
+	var out net.Addr
+	if pinned == key {
+		out = addr
+	} else {
+		ua, err := net.ResolveUDPAddr("udp", pinned)
+		if err != nil {
+			return nil, err
+		}
+		out = ua
 	}
-	return net.ResolveUDPAddr("udp", pinned)
+	if pins != nil {
+		pins.Store(key, out)
+	}
+	return out, nil
 }
 
 func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, ro *xrecorder.HandlerRecorderObject, log logger.Logger) (err error) {
+	// R2-A02-001: one pin memo per association (this relayPacket
+	// call), shared by both directions of the same association only.
+	pins := &netudp.PinMemo{}
 	errc := make(chan error, 2)
 
 	go func() {
@@ -202,7 +225,7 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 					return nil
 				}
 
-				target, perr := h.pinUDPTarget(ctx, addr)
+				target, perr := h.pinUDPTarget(ctx, pins, addr)
 				if perr != nil {
 					log.Warn("bypass pin: ", perr)
 					return nil
@@ -238,7 +261,7 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 					return nil
 				}
 
-				target, perr := h.pinUDPTarget(ctx, raddr)
+				target, perr := h.pinUDPTarget(ctx, pins, raddr)
 				if perr != nil {
 					log.Warn("bypass pin: ", perr)
 					return nil

@@ -260,6 +260,78 @@ func (h *Handler) chainReaches(start *model.NodeInbound, id int64) bool {
 	return false
 }
 
+// chainRefIndex is a single-load snapshot of the whole inbound table,
+// indexed by outbound target: targetID -> referrer rows. X04-001: the
+// chain-reference guards used to re-run ListNodeInbounds (a full-table
+// load plus a per-row outboundTargets parse) once per checked target —
+// per inbound of a deleted node, per row of an uninstalled kernel, and
+// (via chainDialerNodeIDs) once per row of the whole table — so one
+// guard round cost O(rounds x table) full scans and a node delete at
+// ~1000 inbounds already took minutes on the single SQLite connection.
+// A guard round now loads the table once, builds this index, and every
+// lookup in the round is served from it.
+//
+// Equivalence: rows are indexed in ListNodeInbounds order (inx ASC, id
+// ASC) and each row appears at most once per target, exactly matching
+// what repeated chainReferrers calls over the same snapshot returned.
+type chainRefIndex struct {
+	rows     []model.NodeInbound
+	byTarget map[int64][]model.NodeInbound
+}
+
+// chainRefIndexFromRows builds the index from an already-loaded table
+// snapshot (callers that load the table for their own matching logic
+// reuse it instead of querying again).
+func chainRefIndexFromRows(rows []model.NodeInbound) *chainRefIndex {
+	ix := &chainRefIndex{rows: rows, byTarget: make(map[int64][]model.NodeInbound)}
+	for _, row := range rows {
+		targets := outboundTargets(row)
+		for i, targetID := range targets {
+			dup := false
+			for _, prev := range targets[:i] {
+				if prev == targetID {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				ix.byTarget[targetID] = append(ix.byTarget[targetID], row)
+			}
+		}
+	}
+	return ix
+}
+
+// loadChainRefIndex loads the inbound table once and indexes it. The
+// raw repository error is returned; callers wrap it in the message
+// shape their guard has always produced.
+func (h *Handler) loadChainRefIndex() (*chainRefIndex, error) {
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		return nil, err
+	}
+	return chainRefIndexFromRows(rows), nil
+}
+
+// referrers returns the snapshot rows that send traffic through
+// targetID, in table order — chainReferrers over the snapshot.
+func (ix *chainRefIndex) referrers(targetID int64) []model.NodeInbound {
+	return ix.byTarget[targetID]
+}
+
+// dialerNodeIDs returns the nodes that dial the inbound as a chained
+// outbound — chainDialerNodeIDs over the snapshot (same order, same
+// duplicate behaviour, external referrers skipped).
+func (ix *chainRefIndex) dialerNodeIDs(inboundID int64) []int64 {
+	var ids []int64
+	for _, ref := range ix.byTarget[inboundID] {
+		if !isExternalInbound(&ref) {
+			ids = append(ids, ref.NodeID)
+		}
+	}
+	return ids
+}
+
 // chainReferrers returns the inbounds that send traffic through the given
 // one, as their chained outbound or a 分流 target.
 //
@@ -267,20 +339,11 @@ func (h *Handler) chainReaches(start *model.NodeInbound, id int64) bool {
 // 返回 nil 被调用方读作「无引用」放行删除（fail-open），与同文件
 // chainReaches 的 fail-closed 口径冲突。调用方不得把 error 当空集。
 func (h *Handler) chainReferrers(targetID int64) ([]model.NodeInbound, error) {
-	rows, err := h.repo.ListNodeInbounds()
+	ix, err := h.loadChainRefIndex()
 	if err != nil {
 		return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targetID, err)
 	}
-	var out []model.NodeInbound
-	for _, row := range rows {
-		for _, id := range outboundTargets(row) {
-			if id == targetID {
-				out = append(out, row)
-				break
-			}
-		}
-	}
-	return out, nil
+	return ix.referrers(targetID), nil
 }
 
 // chainReferrerDisplayName renders a referrer inbound as
@@ -301,14 +364,20 @@ func (h *Handler) chainInUseMessage(target *model.NodeInbound) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return h.chainInUseMessageFromRefs(target, refs), nil
+}
+
+// chainInUseMessageFromRefs renders the guard message from an already
+// resolved referrer list (single-snapshot guard rounds, X04-001).
+func (h *Handler) chainInUseMessageFromRefs(target *model.NodeInbound, refs []model.NodeInbound) string {
 	if len(refs) == 0 {
-		return "", nil
+		return ""
 	}
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
 		names = append(names, "「"+h.chainReferrerDisplayName(r)+"」")
 	}
-	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、")), nil
+	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、"))
 }
 
 // nodeCrossReferrer is one entry of the cross-node referrer list: the
@@ -334,14 +403,25 @@ func (h *Handler) nodeCrossReferrers(nodeID int64) ([]nodeCrossReferrer, error) 
 	if err != nil {
 		return nil, fmt.Errorf("查询节点 %d 的入站失败: %w", nodeID, err)
 	}
+	if len(targets) == 0 {
+		return make([]nodeCrossReferrer, 0), nil
+	}
+	ix, err := h.loadChainRefIndex()
+	if err != nil {
+		// Same failure shape the per-target chainReferrers loop produced:
+		// the table load failed at the first target.
+		return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, err)
+	}
+	return h.nodeCrossReferrersIx(targets, nodeID, ix), nil
+}
+
+// nodeCrossReferrersIx is nodeCrossReferrers over a shared snapshot
+// (X04-001): the per-target lookups no longer reload the whole table.
+func (h *Handler) nodeCrossReferrersIx(targets []model.NodeInbound, nodeID int64, ix *chainRefIndex) []nodeCrossReferrer {
 	seen := make(map[int64]struct{})
 	out := make([]nodeCrossReferrer, 0)
 	for _, target := range targets {
-		refs, err := h.chainReferrers(target.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, ref := range refs {
+		for _, ref := range ix.referrers(target.ID) {
 			if ref.NodeID == nodeID {
 				continue
 			}
@@ -352,7 +432,7 @@ func (h *Handler) nodeCrossReferrers(nodeID int64) ([]nodeCrossReferrer, error) 
 			out = append(out, nodeCrossReferrer{ID: ref.ID, Display: h.chainReferrerDisplayName(ref)})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // kernelChainGuard 是 R1 X-P2-2（D-R1-02，按 V-03）的卸载守卫：对内核的
@@ -365,6 +445,21 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 	if err != nil {
 		return nil, "", fmt.Errorf("查询内核 %d 的入站失败: %w", kernelID, err)
 	}
+	if len(rows) == 0 {
+		return nil, "", nil
+	}
+	ix, err := h.loadChainRefIndex()
+	if err != nil {
+		// Same failure shape the per-row chainReferrers loop produced.
+		return nil, "", fmt.Errorf("查询入站 %d 的链式引用方失败: %w", rows[0].ID, err)
+	}
+	names, msg := h.kernelChainGuardIx(rows, ix)
+	return names, msg, nil
+}
+
+// kernelChainGuardIx is kernelChainGuard over a shared snapshot
+// (X04-001): one table load for the whole uninstall guard round.
+func (h *Handler) kernelChainGuardIx(rows []model.NodeInbound, ix *chainRefIndex) (referrerNames []string, message string) {
 	own := make(map[int64]struct{}, len(rows))
 	for _, row := range rows {
 		own[row.ID] = struct{}{}
@@ -375,10 +470,7 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 	var parts []string
 	for _, row := range rows {
 		var refNames []string
-		refs, rerr := h.chainReferrers(row.ID)
-		if rerr != nil {
-			return nil, "", rerr
-		}
+		refs := ix.referrers(row.ID)
 		for _, ref := range refs {
 			if _, isOwn := own[ref.ID]; isOwn {
 				continue
@@ -394,7 +486,7 @@ func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, mess
 			parts = append(parts, fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", row.Name, strings.Join(refNames, "、")))
 		}
 	}
-	return referrerNames, strings.Join(parts, "；"), nil
+	return referrerNames, strings.Join(parts, "；")
 }
 
 // applyChainReferrers re-applies the kernels of inbounds chained through the
@@ -406,6 +498,16 @@ func (h *Handler) applyChainReferrers(targetID int64) []string {
 	if err != nil {
 		return []string{err.Error()}
 	}
+	return h.applyChainReferrersFromRefs(refs)
+}
+
+// applyChainReferrersIx is applyChainReferrers over a shared snapshot
+// (X04-001) for rounds that re-apply many targets in a row.
+func (h *Handler) applyChainReferrersIx(ix *chainRefIndex, targetID int64) []string {
+	return h.applyChainReferrersFromRefs(ix.referrers(targetID))
+}
+
+func (h *Handler) applyChainReferrersFromRefs(refs []model.NodeInbound) []string {
 	var warnings []string
 	seen := map[int64]bool{}
 	for _, ref := range refs {
@@ -519,6 +621,10 @@ func (h *Handler) applyChangedTargets(prevTargets []int64, row model.NodeInbound
 
 // inboundSplitSave saves only an inbound's default exit and 分流 rules.
 func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the tail awaits applyKernel and
+	// the changed targets' applies, each with the conditional
+	// kernelApplyTimeout bound; arm the write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

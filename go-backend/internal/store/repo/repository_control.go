@@ -175,102 +175,34 @@ func (r *Repository) HasOtherForwardOnNodePort(nodeID int64, port int, currentFo
 }
 
 func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port int, currentForwardID int64) (bool, error) {
-	if tx == nil {
-		return false, errors.New("database unavailable")
+	// P01-001：四源占用知识收敛到统一谓词 NodePortOccupiedTx
+	// （repository_port_occupancy.go）。本函数只做 forward 视角的
+	// 排除适配：排除自己这条转发，其余三源（入站/链路/联邦有效
+	// 预留）全部计入——O2-003 与 X-P2-13 的纳入结论由统一谓词承载。
+	var excl PortExclusions
+	if currentForwardID != 0 {
+		excl.ForwardIDs = []int64{currentForwardID}
 	}
-	if nodeID <= 0 || port <= 0 {
-		return false, nil
-	}
-
-	var count int64
-	err := tx.Model(&model.ForwardPort{}).
-		Where("node_id = ? AND port = ? AND forward_id <> ?", nodeID, port, currentForwardID).
-		Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-
-	// Ports served by a proxy kernel on the node are just as occupied.
-	err = tx.Model(&model.NodeInbound{}).
-		Where("node_id = ? AND port = ?", nodeID, port).
-		Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-
-	// O2-003：chain_tunnel 占用节点端口（idx_chain_tunnel_node_port 唯一索引），
-	// 预检必须纳入，否则跨表冲突漏检。Port 为 NullInt64，仅 > 0 视为占用。
-	err = tx.Model(&model.ChainTunnel{}).
-		Where("node_id = ? AND port = ? AND port > 0", nodeID, port).
-		Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-
-	// X-P2-13（L-08-1）：联邦 peer_share_runtime 的有效预留口同样占用
-	// 节点端口空间。此前本地谓词不查该表、联邦分配又只走
-	// peerRoleRuntimeMu 全局锁（与本地 per-node 端口锁不同域），同节点
-	// 同口可被联邦与本地双分配、后下发方绑口失败。双向对齐：本地谓词
-	// 纳入预留口，联邦分配入口接入 per-node 端口锁（federation.go）。
-	err = tx.Model(&model.PeerShareRuntime{}).
-		Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
-		Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	return r.NodePortOccupiedTx(tx, nodeID, port, excl)
 }
 
 // NodePortOccupiedForTunnelTx reports whether (nodeID, port) is occupied
-// for tunnel-port purposes: any forward_port row, any node_inbound row,
-// or a chain_tunnel row belonging to a DIFFERENT tunnel (excludeTunnelID
-// is the tunnel being created/updated; 0 excludes nothing). B4/F-015:
-// prepareTunnelCreateState validates explicit exit/chain ports with it —
-// HasOtherForwardOnNodePortTx cannot be reused because its chain branch
-// does not exclude the tunnel being updated (keeping the same port
-// during an update would false-positive).
+// for tunnel-port purposes. B4/F-015: prepareTunnelCreateState validates
+// explicit exit/chain ports with it — HasOtherForwardOnNodePortTx cannot
+// be reused because its chain branch does not exclude the tunnel being
+// updated (keeping the same port during an update would false-positive).
+// P01-001: the source set is the unified four-source predicate
+// (NodePortOccupiedTx) — this wrapper only adapts the exclusion to
+// "chain rows of a DIFFERENT tunnel" (excludeTunnelID is the tunnel
+// being created/updated; 0 excludes nothing). Before the convergence
+// this hand-written copy checked only three sources and missed active
+// federation share reservations (peer_share_runtime).
 func (r *Repository) NodePortOccupiedForTunnelTx(tx *gorm.DB, nodeID int64, port int, excludeTunnelID int64) (bool, error) {
-	if tx == nil {
-		return false, errors.New("database unavailable")
-	}
-	if nodeID <= 0 || port <= 0 {
-		return false, nil
-	}
-	var count int64
-	if err := tx.Model(&model.ForwardPort{}).
-		Where("node_id = ? AND port = ?", nodeID, port).
-		Count(&count).Error; err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-	if err := tx.Model(&model.NodeInbound{}).
-		Where("node_id = ? AND port = ?", nodeID, port).
-		Count(&count).Error; err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-	chainQuery := tx.Model(&model.ChainTunnel{}).
-		Where("node_id = ? AND port = ?", nodeID, port)
+	var excl PortExclusions
 	if excludeTunnelID > 0 {
-		chainQuery = chainQuery.Where("tunnel_id != ?", excludeTunnelID)
+		excl.TunnelIDs = []int64{excludeTunnelID}
 	}
-	if err := chainQuery.Count(&count).Error; err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	return r.NodePortOccupiedTx(tx, nodeID, port, excl)
 }
 
 func (r *Repository) GetTunnelOutProtocol(tunnelID int64) (string, error) {
@@ -451,6 +383,18 @@ func (r *Repository) ListChainNodesForTunnel(tunnelID int64) ([]model.ChainNodeR
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
+	return r.ListChainNodesForTunnelTx(r.db, tunnelID)
+}
+
+// ListChainNodesForTunnelTx is the transactional form of
+// ListChainNodesForTunnel. P01-002: prepareTunnelCreateState reads the
+// tunnel's existing chain rows inside the update transaction (the pool
+// form would take a second connection and deadlock SQLite's single
+// connection — the Round 1 F1 lesson).
+func (r *Repository) ListChainNodesForTunnelTx(tx *gorm.DB, tunnelID int64) ([]model.ChainNodeRecord, error) {
+	if tx == nil {
+		return nil, errors.New("database unavailable")
+	}
 	type row struct {
 		ChainType string
 		Inx       sql.NullInt64
@@ -462,7 +406,7 @@ func (r *Repository) ListChainNodesForTunnel(tunnelID int64) ([]model.ChainNodeR
 		ConnectIP sql.NullString
 	}
 	var rows []row
-	err := r.db.Model(&model.ChainTunnel{}).
+	err := tx.Model(&model.ChainTunnel{}).
 		Select("chain_tunnel.chain_type, chain_tunnel.inx, chain_tunnel.node_id, chain_tunnel.port, node.name, chain_tunnel.protocol, chain_tunnel.strategy, chain_tunnel.connect_ip").
 		Joins("LEFT JOIN node ON node.id = chain_tunnel.node_id").
 		Where("chain_tunnel.tunnel_id = ?", tunnelID).
