@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -309,6 +310,77 @@ func TestK10_MigrationV5DirtyDataDegradesThenRecovers(t *testing.T) {
 	}
 	if err := r.db.Where("version = ?", migrationK10V5Version).First(&schemaMigration{}).Error; err != nil {
 		t.Fatalf("v5 not recorded after cleanup: %v", err)
+	}
+}
+
+// LB-K10-02 钉死：CreateUserTx 咨询锁键的折叠必须取自 DB
+// LOWER()（dbFoldUsername），不得用 Go strings.ToLower 另算一份。
+// 见证输入取希腊大写 ΟΣ（\u039f\u03a3）：Go 的 ToLower 得 οσ
+// （\u03bf\u03c3，逐 rune 简单映射、无词尾 sigma 规则），SQLite 的
+// LOWER() 仅折叠 ASCII、原样返回 ΟΣ——两源在此输入上必然不等，
+// 故返回值与 Go 折叠不等即证明取数自 SQL 一侧；若取数路径被改回
+// Go 折叠，本用例立即转红。ASCII 输入两口径一致（abc）作对照。
+// PG 侧的词尾 sigma 全映射与降级态并发串行化由 contract 套件
+// TestPostgresUsernameFoldLockFoldFromSQL 钉死。
+func TestK10_LockKeyFoldSourcedFromSQLLower(t *testing.T) {
+	r := k10OpenRepo(t)
+	if got, err := dbFoldUsername(r.db, "AbC"); err != nil || got != "abc" {
+		t.Fatalf("dbFoldUsername(AbC) = %q, %v; want \"abc\", nil", got, err)
+	}
+	sigmaUpper := "ΟΣ"
+	goFold := strings.ToLower(sigmaUpper)
+	if goFold != "οσ" {
+		t.Fatalf("test premise broken: Go ToLower(ΟΣ) = %q; want οσ", goFold)
+	}
+	got, err := dbFoldUsername(r.db, sigmaUpper)
+	if err != nil {
+		t.Fatalf("dbFoldUsername(ΟΣ): %v", err)
+	}
+	if got == goFold {
+		t.Fatalf("dbFoldUsername(ΟΣ) = %q equals the Go fold; lock-key fold must come from SQL LOWER()", got)
+	}
+	if got != sigmaUpper {
+		t.Fatalf("dbFoldUsername(ΟΣ) = %q; want ΟΣ (SQLite LOWER is ASCII-only)", got)
+	}
+}
+
+// LB-K10-03 钉死：备份导入 upsert 按 id 改名撞第三人大小写变体——
+// 预检 ensureUsernameAvailable（excludeID=被改名者）按折叠口径
+// 先拦，整单按既有语义失败：错误是友好文案（用户名已存在）而非
+// DB 原文，被改名者与第三人数据不变，同单先行处理的新用户行
+// 随整单事务回滚不得落库。
+func TestK10_ImportUpsertRenameOntoThirdPartyVariantFails(t *testing.T) {
+	r := k10OpenRepo(t)
+	thirdID := k10CreateUser(t, r, "ThirdParty")
+	victimID := k10CreateUser(t, r, "victim")
+	now := time.Now().UnixMilli()
+
+	backup := &model.BackupData{Version: "1.0", Users: []model.UserBackup{
+		{ID: 4242, User: "fresh-face", Pwd: "$2a$10$abcdefghijklmnopqrstuv", RoleID: 1, Status: 1, CreatedTime: now},
+		{ID: victimID, User: "thirdparty", Pwd: "$2a$10$abcdefghijklmnopqrstuv", RoleID: 1, Status: 1, CreatedTime: now},
+	}}
+	_, err := r.Import(backup, []string{"users"})
+	if err == nil {
+		t.Fatal("import renaming victim onto the third party's case variant must fail")
+	}
+	if !errors.Is(err, errUsernameExists) {
+		t.Fatalf("import error = %v; want wrapped errUsernameExists", err)
+	}
+	if !strings.Contains(err.Error(), "用户名已存在") {
+		t.Fatalf("import error must be the friendly message, got: %v", err)
+	}
+	// 整单回滚：先行导入的新用户不得落库。
+	if ok, err := r.UserExists("fresh-face"); err != nil || ok {
+		t.Fatalf("rolled-back import left fresh-face behind: exists=%v err=%v", ok, err)
+	}
+	// 被改名者与第三人原样。
+	v, err := r.GetUserByID(victimID)
+	if err != nil || v == nil || v.User != "victim" {
+		t.Fatalf("victim after failed import = %+v, %v; want unchanged victim", v, err)
+	}
+	third, err := r.GetUserByID(thirdID)
+	if err != nil || third == nil || third.User != "ThirdParty" {
+		t.Fatalf("third party after failed import = %+v, %v; want unchanged ThirdParty", third, err)
 	}
 }
 

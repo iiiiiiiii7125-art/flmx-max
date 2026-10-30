@@ -148,6 +148,70 @@ func TestPostgresUsernameFoldConcurrentVariants(t *testing.T) {
 	}
 }
 
+// LB-K10-02 钉死：咨询锁键的折叠必须与判重同源（SQL lower()）。
+// 见证对 (ΟΣ, ος) 与 (İ, i̇)：PG lower() 把每对折为同值，而 Go
+// strings.ToLower 对每对给出不同结果——旧实现以 Go 折叠派生锁键
+// 时，两变体各持一把锁、事务内复检互不可见，在 D23 降级态
+// （折叠索引缺席）下并发 CreateUserTx 可双双落库。本用例 DROP
+// 折叠索引把防线压到咨询锁+复检本身，每对并发只许 1 个成功；
+// 锁键若回退 Go 折叠，本用例将以双成功转红。每对先经 SQL 探针
+// 确认本库 lower() 确实同折（C locale 等不做 Unicode 折叠的库
+// 里两名在判重口径下本就不同名、无分歧，探针不成立即跳过该对）。
+func TestPostgresUsernameFoldLockFoldFromSQL(t *testing.T) {
+	r, _ := openUsernameFoldContractRepo(t)
+	sqlFold := func(name string) string {
+		var folded string
+		if err := r.DB().Raw(`SELECT LOWER(?)`, name).Scan(&folded).Error; err != nil {
+			t.Fatalf("probe LOWER(%q): %v", name, err)
+		}
+		return folded
+	}
+	pairs := [][2]string{
+		{"ΟΣ", "ος"}, // ΟΣ / ος（词尾 sigma）
+		{"İ", "i̇"},  // İ / i + combining dot above
+	}
+	probed := make([][2]string, 0, len(pairs))
+	for _, pair := range pairs {
+		if sqlFold(pair[0]) == sqlFold(pair[1]) {
+			probed = append(probed, pair)
+		}
+	}
+	if len(probed) == 0 {
+		t.Skip("test database lower() folds neither witness pair (locale without Unicode case folding); no lock/check fold divergence exists there")
+	}
+	if err := r.DB().Exec(`DROP INDEX IF EXISTS idx_user_username_fold_unique`).Error; err != nil {
+		t.Fatalf("drop fold index to test lock+recheck line: %v", err)
+	}
+	for _, pair := range probed {
+		start := make(chan struct{})
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		for i, name := range pair {
+			wg.Add(1)
+			go func(idx int, uname string) {
+				defer wg.Done()
+				<-start
+				errs[idx] = createUserTx(t, r, uname)
+			}(i, name)
+		}
+		close(start)
+		wg.Wait()
+		success := 0
+		for i, err := range errs {
+			if err == nil {
+				success++
+				continue
+			}
+			if !errors.Is(err, repo.ErrUsernameExists) {
+				t.Fatalf("pair %q/%q goroutine %d: want ErrUsernameExists, got %v", pair[0], pair[1], i, err)
+			}
+		}
+		if success != 1 {
+			t.Fatalf("pair %q/%q: concurrent successes = %d, want exactly 1 (lock key must fold via SQL lower(), not Go strings.ToLower)", pair[0], pair[1], success)
+		}
+	}
+}
+
 // 脏数据面：存量双生子在库（模拟旧版精确口径建出的 Admin+admin）
 // 时重新 OpenPostgres 必须成功（v5 按 D23 跳过、不报错、不合并），
 // 双生子原样保留，应用层判重对第三个变体仍拒绝。
