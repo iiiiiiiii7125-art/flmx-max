@@ -1600,7 +1600,15 @@ func (h *Handler) inboundResetTraffic(w http.ResponseWriter, r *http.Request) {
 	if id <= 0 {
 		return
 	}
-	if row, err := h.repo.GetNodeInbound(id); err == nil && row != nil && row.CompanionOf > 0 {
+	// B10-001：与同族 toggle/update/regenerate 同口径——先查行，
+	// 不存在直接报错；此前仅拦伴生行、其余更新 0 行也回成功，
+	// 不存在 id 静默 code=0。
+	row, err := h.repo.GetNodeInbound(id)
+	if err != nil || row == nil {
+		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	if row.CompanionOf > 0 {
 		response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能重置流量"))
 		return
 	}

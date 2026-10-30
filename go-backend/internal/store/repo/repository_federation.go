@@ -319,3 +319,24 @@ func (r *Repository) CreateRemoteNode(name, secret, serverIP, portRange string, 
 	}
 	return r.db.Create(&node).Error
 }
+
+// RefreshRemoteNode updates an existing remote node in place with the
+// latest provider data (B13-001: re-import of the same share refreshes
+// instead of creating a duplicate node). The local secret and index
+// are kept; display fields, port range, status, token and the stored
+// RemoteConfig are overwritten with the freshly fetched values.
+func (r *Repository) RefreshRemoteNode(nodeID int64, name, serverIP, portRange string, now int64, status int, remoteToken, remoteConfigJSON string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	updates := map[string]interface{}{
+		"name":          name,
+		"server_ip":     stripIngressHostPort(serverIP),
+		"port":          portRange,
+		"status":        status,
+		"updated_time":  now,
+		"remote_token":  remoteToken,
+		"remote_config": remoteConfigJSON,
+	}
+	return r.db.Model(&model.Node{}).Where("id = ? AND is_remote = 1", nodeID).Updates(updates).Error
+}
