@@ -1386,6 +1386,34 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 	var targetIDs []int64
 	kernelIDs := make([]int64, 0)
 	seenKernel := make(map[int64]bool)
+	// X04-001：整批守卫共用一份全表快照——旧实现逐条 chainInUseMessage
+	// 与 chainReferrers 各重载一次全表，批量删即 O(条数) 次全表扫描。
+	// 批内已删行从引用方里滤除，与逐条现查口径一致（现查时先删的行
+	// 已不在表中，不会出现在后续条目的引用方里）。
+	var guardIx *chainRefIndex
+	var guardIxErr error
+	guardIxTried := false
+	loadGuardIx := func() (*chainRefIndex, error) {
+		if !guardIxTried {
+			guardIxTried = true
+			guardIx, guardIxErr = h.loadChainRefIndex()
+		}
+		return guardIx, guardIxErr
+	}
+	deletedIDs := make(map[int64]bool)
+	liveRefs := func(ix *chainRefIndex, targetID int64) []model.NodeInbound {
+		refs := ix.referrers(targetID)
+		if len(deletedIDs) == 0 {
+			return refs
+		}
+		out := make([]model.NodeInbound, 0, len(refs))
+		for _, ref := range refs {
+			if !deletedIDs[ref.ID] {
+				out = append(out, ref)
+			}
+		}
+		return out
+	}
 	for _, id := range ids {
 		row, err := h.repo.GetNodeInbound(id)
 		if err != nil || row == nil {
@@ -1400,19 +1428,14 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		// R3X-015：守卫查询失败 fail-closed——该条记失败、不删除，
 		// 不得把查询失败读作无引用或「引用方全在批内」。
-		msg, guardErr := h.chainInUseMessage(row)
+		ix, guardErr := loadGuardIx()
 		if guardErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, row.Name, guardErr)
+			failures = appendBatchFailure(failures, id, row.Name, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", id, guardErr))
 			continue
 		}
-		if msg != "" {
-			refs, refErr := h.chainReferrers(id)
-			if refErr != nil {
-				f++
-				failures = appendBatchFailure(failures, id, row.Name, refErr)
-				continue
-			}
+		refs := liveRefs(ix, id)
+		if msg := h.chainInUseMessageFromRefs(row, refs); msg != "" {
 			if !batchDeletesReferrers(ids, refs) {
 				f++
 				failures = appendBatchFailureReason(failures, id, row.Name, msg)
@@ -1436,6 +1459,7 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		// E6-S1 同型补齐：伴生连带删除同样移至本行删除成功之后
 		// （失败项的伴生保持原样，理由同 inboundDelete）。
 		h.deleteCompanionOf(id)
+		deletedIDs[id] = true
 		s++
 		if !isExternalInbound(row) && !seenKernel[row.KernelID] {
 			seenKernel[row.KernelID] = true
@@ -1719,6 +1743,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			originEnabled[row.ID] = row.Enabled == 1
 		}
 	}
+	// X04-001：白名单入站的链式拨号集共用一份全表快照，首个白名单
+	// 入站时懒加载——旧实现逐入站经 chainDialerNodeIDs 重载全表。
+	var chainIx *chainRefIndex
 	for _, row := range rows {
 		if row.Enabled != 1 {
 			continue
@@ -1782,7 +1809,14 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		if row.RelayWhitelist == 1 {
 			// R3X-015：白名单的链式拨号节点查询失败则整单中止，不
 			// 下发少算拨号节点的白名单。
-			allow, aerr := h.inboundAllowList(row)
+			if chainIx == nil {
+				loaded, lerr := h.loadChainRefIndex()
+				if lerr != nil {
+					return nil, "", fmt.Errorf("查询入站 %d 的链式引用方失败: %w", row.ID, lerr)
+				}
+				chainIx = loaded
+			}
+			allow, aerr := h.inboundAllowListIx(row, chainIx)
 			if aerr != nil {
 				return nil, "", aerr
 			}

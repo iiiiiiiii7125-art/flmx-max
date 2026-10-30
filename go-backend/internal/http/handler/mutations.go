@@ -7689,13 +7689,24 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 		// R3X-015：跨节点引用守卫查询失败 fail-closed——清单不可信
 		// 时中止删除并上抛（单删/批删/创建补偿三入口同受此约束），
 		// 不得记录日志后照删。
-		refs, guardErr := h.nodeCrossReferrers(id)
-		if guardErr != nil {
-			return nil, guardErr
+		// X04-001：整轮守卫共用一份全表快照——旧实现跨节点守卫按
+		// 目标逐个重载全表、受影响收集再按全表逐行经 chainDialer-
+		// NodeIDs 重载，删一个节点即 O(目标数+全表行数) 次全表扫描。
+		targets, targetErr := h.repo.ListNodeInboundsByNode(id)
+		if targetErr != nil {
+			return nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
 		}
-		brokenReferrers = refs
+		ix, ixErr := h.loadChainRefIndex()
+		if ixErr != nil {
+			if len(targets) > 0 {
+				// 与逐目标 chainReferrers 首败的失败形态一致。
+				return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
+			}
+			return nil, ixErr
+		}
+		brokenReferrers = h.nodeCrossReferrersIx(targets, id, ix)
 		// 同 R3X-015 口径：受影响入站收集失败同样中止删除。
-		affected, collectErr := h.inboundIDsAffectedByNodeDelete(id)
+		affected, collectErr := h.inboundIDsAffectedByNodeDeleteIx(id, ix)
 		if collectErr != nil {
 			return nil, collectErr
 		}
