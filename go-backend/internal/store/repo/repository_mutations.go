@@ -18,23 +18,22 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// UserExists 用户名占用检查。B02-003：大小写不敏感（经
+// usernameFoldCount 统一口径），Admin 存在时 admin 亦视为已占用。
 func (r *Repository) UserExists(username string) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("repository not initialized")
 	}
-	var cnt int64
-	err := r.db.Model(&model.User{}).Where(`"user" = ?`, username).Count(&cnt).Error
+	cnt, err := usernameFoldCount(r.db, username, 0)
 	return cnt > 0, err
 }
 
+// UserExistsExcluding 同 UserExists，排除自身行（改名自查）。
 func (r *Repository) UserExistsExcluding(username string, excludeID int64) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("repository not initialized")
 	}
-	var cnt int64
-	err := r.db.Model(&model.User{}).
-		Where(`"user" = ? AND id != ?`, username, excludeID).
-		Count(&cnt).Error
+	cnt, err := usernameFoldCount(r.db, username, excludeID)
 	return cnt > 0, err
 }
 
@@ -88,11 +87,22 @@ func (r *Repository) CreateUserTx(tx *gorm.DB, username, pwdHash string, roleID 
 	// X01-001：PG 默认隔离下 Count 复检本身不构成互斥（两并发事务
 	// 可双双读到 0），复检前先按用户名取事务级咨询锁兜底串行化；
 	// SQLite 为空操作，靠 MaxOpenConns(1) 串行化。见 pg_name_lock.go。
-	if err := lockNameForTx(tx, nameLockScopeUser, username); err != nil {
+	// B02-003：复检与锁键均按大小写折叠口径——锁键折叠经
+	// dbFoldUsername 由 DB LOWER() 取数（LB-K10-02：与判重同一
+	// 折叠定义源，不用 Go strings.ToLower 另算），使 Admin/admin
+	// 两路并发在锁层即互斥（旧实现按原文取锁，变体并发各持一把
+	// 锁、复检又精确比较，双双落库）；复检经 usernameFoldCount
+	// 与全部判重面同口径。v5 折叠唯一索引在场时另有 DB 兜底
+	// （tx.Create 的 mapUniqueViolation）。
+	lockFold, err := dbFoldUsername(tx, username)
+	if err != nil {
 		return 0, err
 	}
-	var dupCnt int64
-	if err := tx.Model(&model.User{}).Where(`"user" = ?`, username).Count(&dupCnt).Error; err != nil {
+	if err := lockNameForTx(tx, nameLockScopeUser, lockFold); err != nil {
+		return 0, err
+	}
+	dupCnt, err := usernameFoldCount(tx, username, 0)
+	if err != nil {
 		return 0, err
 	}
 	if dupCnt > 0 {
