@@ -1,3 +1,5 @@
+import type { BatchOperationFailure } from "@/api/types";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   useIdemKey,
@@ -5,6 +7,7 @@ import {
 } from "@/hooks/useIdemKey";
 import toast from "react-hot-toast";
 
+import { BatchActionResultModal } from "@/components/batch-action-result-modal";
 import { PageShell } from "@/components/page-kit";
 import { PageLoadingState } from "@/components/page-state";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
@@ -85,6 +88,20 @@ interface GroupPermission {
   createdTime: number;
 }
 
+interface BatchResultModalState {
+  failures: BatchOperationFailure[];
+  open: boolean;
+  summary: string;
+  title: string;
+}
+
+const EMPTY_BATCH_RESULT_MODAL_STATE: BatchResultModalState = {
+  failures: [],
+  open: false,
+  summary: "",
+  title: "",
+};
+
 const formatDate = (timestamp?: number): string => {
   if (!timestamp) {
     return "-";
@@ -115,6 +132,8 @@ export default function GroupPage({
   >(null);
 
   const [savingPermission, setSavingPermission] = useState(false);
+  const [batchResultModal, setBatchResultModal] =
+    useState<BatchResultModalState>(EMPTY_BATCH_RESULT_MODAL_STATE);
 
   const {
     isOpen: tunnelGroupModalOpen,
@@ -499,7 +518,11 @@ export default function GroupPage({
         // R2X-021：后端部分失败时 code=0 且 data={message,failures:[{userId,tunnelId,error}]}
         // （信封 msg 恒为「操作成功」），须消费 failures，否则部分失败被报成全成功。
         const data = (res.data ?? null) as {
-          failures?: Array<{ error?: string }>;
+          failures?: Array<{
+            userId?: number;
+            tunnelId?: number;
+            error?: string;
+          }>;
         } | null;
         const failures =
           typeof data === "object" && data !== null && Array.isArray(data.failures)
@@ -507,10 +530,41 @@ export default function GroupPage({
             : [];
 
         if (failures.length > 0) {
-          toast(
-            `权限分配部分失败：${failures.length} 条失败，首条：${failures[0]?.error || "未知错误"}`,
-            { icon: "⚠️", duration: 5000 },
+          // 与其余批量面同口径：逐条明细走 BatchActionResultModal 呈现，
+          // 不得只在 toast 里报条数+首条、其余明细丢弃（F01-003）。
+          const failureItems: BatchOperationFailure[] = failures.map((f) => {
+            const userName = users.find((u) => u.id === f.userId)?.user;
+            const tunnelName = tunnels.find((t) => t.id === f.tunnelId)?.name;
+
+            return {
+              name: `${userName || `用户 ${f.userId ?? "?"}`} → ${tunnelName || `隧道 ${f.tunnelId ?? "?"}`}`,
+              reason: f.error || "未知错误",
+            };
+          });
+          const selectedUserGroup = userGroups.find(
+            (g) => g.id === selectedUserGroupId,
           );
+          const selectedTunnelGroup = tunnelGroups.find(
+            (g) => g.id === selectedTunnelGroupId,
+          );
+          const totalPairs =
+            (selectedUserGroup?.userIds.length ?? 0) *
+            (selectedTunnelGroup?.tunnelIds.length ?? 0);
+          const summary =
+            totalPairs > 0
+              ? `成功 ${Math.max(totalPairs - failures.length, 0)} 项，失败 ${failures.length} 项`
+              : `失败 ${failures.length} 项`;
+
+          toast(`权限分配部分失败：${failures.length} 条失败`, {
+            icon: "⚠️",
+            duration: 5000,
+          });
+          setBatchResultModal({
+            failures: failureItems,
+            open: true,
+            summary,
+            title: "权限分配结果",
+          });
         } else {
           toast.success(res.msg || "权限分配成功");
         }
@@ -1066,6 +1120,20 @@ export default function GroupPage({
         </>
       )}
       </div>
+      <BatchActionResultModal
+        failures={batchResultModal.failures}
+        isOpen={batchResultModal.open}
+        summary={batchResultModal.summary}
+        title={batchResultModal.title}
+        onOpenChange={(open) => {
+          if (open) {
+            setBatchResultModal((prev) => ({ ...prev, open: true }));
+
+            return;
+          }
+          setBatchResultModal(EMPTY_BATCH_RESULT_MODAL_STATE);
+        }}
+      />
     </PageShell>
   );
 }

@@ -450,8 +450,12 @@ export default function UserPage({
 
       if (response.code === 0) {
         setTunnels(Array.isArray(response.data) ? response.data : []);
+      } else {
+        toast.error(response.msg || "获取隧道列表失败");
       }
-    } catch {}
+    } catch {
+      toast.error("获取隧道列表失败");
+    }
   }, []);
 
   const loadSpeedLimits = useCallback(async () => {
@@ -470,8 +474,12 @@ export default function UserPage({
           : [];
 
         setSpeedLimits(speedLimitList);
+      } else {
+        toast.error(response.msg || "获取限速列表失败");
       }
-    } catch {}
+    } catch {
+      toast.error("获取限速列表失败");
+    }
   }, []);
 
   const loadUserGroups = useCallback(async () => {
@@ -480,8 +488,12 @@ export default function UserPage({
 
       if (response.code === 0) {
         setUserGroups(Array.isArray(response.data) ? response.data : []);
+      } else {
+        toast.error(response.msg || "获取用户分组列表失败");
       }
-    } catch {}
+    } catch {
+      toast.error("获取用户分组列表失败");
+    }
   }, []);
 
   const loadMonitorPermissions = useCallback(async () => {
