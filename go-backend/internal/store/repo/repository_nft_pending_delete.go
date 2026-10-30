@@ -240,6 +240,14 @@ func (r *Repository) FindOtherForwardOnNodePort(nodeID int64, port int, currentF
 // (nodeID, port), including its status so the caller can distinguish a normal
 // occupant from a pending-delete occupant (纠正 C). It MUST run inside the
 // caller's tx (补充 B: no second global query — that is the C-001 pattern).
+//
+// P01-001: WHICH source occupies the port is decided by the unified
+// four-source predicate (NodePortOccupantTx, same check order
+// forward → inbound → chain → peer); this function only fetches the
+// winning source's display details. The per-source history — B4/F-013
+// (inbound invisible to the forward precheck), O2-003 (chain_tunnel),
+// X-P2-13 (federation share reservations) — is carried by the unified
+// predicate, so a future source lands in exactly one place.
 func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port int, currentForwardID int64) (*ForwardPortConflict, error) {
 	if tx == nil {
 		return nil, errors.New("database unavailable")
@@ -247,86 +255,89 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 	if nodeID <= 0 || port <= 0 {
 		return nil, nil
 	}
-	var row struct {
-		ForwardID int64
-		Name      string
-		Status    int
+	var excl PortExclusions
+	if currentForwardID != 0 {
+		excl.ForwardIDs = []int64{currentForwardID}
 	}
-	err := tx.Model(&model.ForwardPort{}).
-		Select("forward_port.forward_id AS forward_id, forward.name AS name, COALESCE(forward.status, 1) AS status").
-		Joins("LEFT JOIN forward ON forward.id = forward_port.forward_id").
-		Where("forward_port.node_id = ? AND forward_port.port = ? AND forward_port.forward_id <> ?",
-			nodeID, port, currentForwardID).
-		Order("forward_port.forward_id ASC").
-		Limit(1).
-		Scan(&row).Error
+	source, err := r.NodePortOccupantTx(tx, nodeID, port, excl)
 	if err != nil {
 		return nil, err
 	}
-	if row.ForwardID != 0 {
-		return &ForwardPortConflict{ForwardID: row.ForwardID, Name: row.Name, Status: row.Status, Source: "forward"}, nil
-	}
-
-	// B4/F-013: 内核入站与转发共享节点端口空间（port_alloc_lock 设计
-	// 明示三表共享），本函数此前只查 forward_port + chain_tunnel，
-	// 入站占用对转发预检不可见——与 HasOtherForwardOnNodePortTx 的
-	// 三表口径分叉。补 node_inbound 分支（external 行 node_id=0 不在此
-	// 列：其端口在远端主机上，不占本地节点端口）。
-	var ib struct {
-		ID   int64
-		Name string
-	}
-	err = tx.Model(&model.NodeInbound{}).
-		Select("id, name").
-		Where("node_id = ? AND port = ?", nodeID, port).
-		Order("id ASC").
-		Limit(1).
-		Scan(&ib).Error
-	if err != nil {
-		return nil, err
-	}
-	if ib.ID != 0 {
-		return &ForwardPortConflict{ForwardID: ib.ID, Name: ib.Name, Status: 1, Source: "inbound"}, nil
-	}
-
-	// O2-003：chain_tunnel 也有 idx_chain_tunnel_node_port 唯一索引，同样占用节点端口。
-	// 预检遗漏它会导致跨表端口冲突漏检。chain_tunnel 的 Port 是 NullInt64，
-	// 只有 port > 0 才真实占用监听端口（GetUsedPortsOnNodeAsMap 同样语义）。
-	var ct struct {
-		ID       int64
-		TunnelID int64
-	}
-	err = tx.Model(&model.ChainTunnel{}).
-		Select("id, tunnel_id").
-		Where("node_id = ? AND port = ?", nodeID, port).
-		Order("id ASC").
-		Limit(1).
-		Scan(&ct).Error
-	if err != nil {
-		return nil, err
-	}
-	if ct.ID != 0 {
-		var tunnelName string
-		_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
-		return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: "chain_tunnel"}, nil
-	}
-
-	// X-P2-13（L-08-1）：联邦 peer_share_runtime 预留口同为占用（与
-	// HasOtherForwardOnNodePortTx 同口径），本地预检须能报告该冲突。
-	var pr struct {
-		ID int64
-	}
-	err = tx.Model(&model.PeerShareRuntime{}).
-		Select("id").
-		Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
-		Order("id ASC").
-		Limit(1).
-		Scan(&pr).Error
-	if err != nil {
-		return nil, err
-	}
-	if pr.ID != 0 {
-		return &ForwardPortConflict{ForwardID: pr.ID, Name: "联邦共享预留端口", Status: 1, Source: "peer_share_runtime"}, nil
+	switch source {
+	case PortSourceForward:
+		var row struct {
+			ForwardID int64
+			Name      string
+			Status    int
+		}
+		err := tx.Model(&model.ForwardPort{}).
+			Select("forward_port.forward_id AS forward_id, forward.name AS name, COALESCE(forward.status, 1) AS status").
+			Joins("LEFT JOIN forward ON forward.id = forward_port.forward_id").
+			Where("forward_port.node_id = ? AND forward_port.port = ? AND forward_port.forward_id <> ?",
+				nodeID, port, currentForwardID).
+			Order("forward_port.forward_id ASC").
+			Limit(1).
+			Scan(&row).Error
+		if err != nil {
+			return nil, err
+		}
+		if row.ForwardID != 0 {
+			return &ForwardPortConflict{ForwardID: row.ForwardID, Name: row.Name, Status: row.Status, Source: PortSourceForward}, nil
+		}
+	case PortSourceInbound:
+		// external 入站行 node_id=0 不在此列：其端口在远端主机上，
+		// 不占本地节点端口（统一谓词按 node_id 命中，天然排除）。
+		var ib struct {
+			ID   int64
+			Name string
+		}
+		err := tx.Model(&model.NodeInbound{}).
+			Select("id, name").
+			Where("node_id = ? AND port = ?", nodeID, port).
+			Order("id ASC").
+			Limit(1).
+			Scan(&ib).Error
+		if err != nil {
+			return nil, err
+		}
+		if ib.ID != 0 {
+			return &ForwardPortConflict{ForwardID: ib.ID, Name: ib.Name, Status: 1, Source: PortSourceInbound}, nil
+		}
+	case PortSourceChain:
+		var ct struct {
+			ID       int64
+			TunnelID int64
+		}
+		err := tx.Model(&model.ChainTunnel{}).
+			Select("id, tunnel_id").
+			Where("node_id = ? AND port = ?", nodeID, port).
+			Order("id ASC").
+			Limit(1).
+			Scan(&ct).Error
+		if err != nil {
+			return nil, err
+		}
+		if ct.ID != 0 {
+			var tunnelName string
+			_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
+			return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: PortSourceChain}, nil
+		}
+	case PortSourcePeer:
+		var pr struct {
+			ID int64
+		}
+		err := tx.Model(&model.PeerShareRuntime{}).
+			Select("id").
+			Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
+			Order("id ASC").
+			Limit(1).
+			Scan(&pr).Error
+		if err != nil {
+			return nil, err
+		}
+		if pr.ID != 0 {
+			return &ForwardPortConflict{ForwardID: pr.ID, Name: "联邦共享预留端口", Status: 1, Source: PortSourcePeer}, nil
+		}
 	}
 	return nil, nil
 }
