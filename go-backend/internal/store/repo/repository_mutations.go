@@ -87,12 +87,18 @@ func (r *Repository) CreateUserTx(tx *gorm.DB, username, pwdHash string, roleID 
 	// X01-001：PG 默认隔离下 Count 复检本身不构成互斥（两并发事务
 	// 可双双读到 0），复检前先按用户名取事务级咨询锁兜底串行化；
 	// SQLite 为空操作，靠 MaxOpenConns(1) 串行化。见 pg_name_lock.go。
-	// B02-003：复检与锁键均按大小写折叠口径——锁以 foldUsername
-	// 为键，使 Admin/admin 两路并发在锁层即互斥（旧实现按原文取锁，
-	// 变体并发各持一把锁、复检又精确比较，双双落库）；复检经
-	// usernameFoldCount 与全部判重面同口径。v5 折叠唯一索引在场
-	// 时另有 DB 兜底（tx.Create 的 mapUniqueViolation）。
-	if err := lockNameForTx(tx, nameLockScopeUser, foldUsername(username)); err != nil {
+	// B02-003：复检与锁键均按大小写折叠口径——锁键折叠经
+	// dbFoldUsername 由 DB LOWER() 取数（LB-K10-02：与判重同一
+	// 折叠定义源，不用 Go strings.ToLower 另算），使 Admin/admin
+	// 两路并发在锁层即互斥（旧实现按原文取锁，变体并发各持一把
+	// 锁、复检又精确比较，双双落库）；复检经 usernameFoldCount
+	// 与全部判重面同口径。v5 折叠唯一索引在场时另有 DB 兜底
+	// （tx.Create 的 mapUniqueViolation）。
+	lockFold, err := dbFoldUsername(tx, username)
+	if err != nil {
+		return 0, err
+	}
+	if err := lockNameForTx(tx, nameLockScopeUser, lockFold); err != nil {
 		return 0, err
 	}
 	dupCnt, err := usernameFoldCount(tx, username, 0)
