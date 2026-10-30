@@ -69,6 +69,21 @@ GROUP BY "user"
 HAVING COUNT(*) > 1
 ORDER BY cnt DESC;
 
+.print "=== 6b. 用户名大小写变体重复（B02-003 口径：按 LOWER(user) 分组） ==="
+-- 判重不区分大小写后，仅大小写不同的同名用户（Admin 与 admin）视为
+-- 重复：v5 迁移（k10_v5_username_casefold_unique）会因这些组跳过折叠
+-- 唯一索引并在启动日志逐组点名。本节即迁移预检的同形查询，清理前
+-- 先在此定位、人工决定每组保留哪一个，系统不自动合并/改名。
+-- PostgreSQL 等价写法：GROUP_CONCAT 换成 string_agg(id::text, ',') /
+-- string_agg("user", ',')，其余同形。
+SELECT LOWER("user") AS folded, COUNT(*) AS cnt,
+       GROUP_CONCAT(id) AS user_ids,
+       GROUP_CONCAT("user") AS stored_forms
+FROM "user"
+GROUP BY LOWER("user")
+HAVING COUNT(*) > 1
+ORDER BY cnt DESC;
+
 .print "=== 7. subscription 概览（DefaultSubscription 取 inx 最小第一条，无 is_default 列） ==="
 SELECT COUNT(*) AS total_subs FROM subscription;
 SELECT id, name, inx FROM subscription ORDER BY inx ASC, id ASC LIMIT 5;
@@ -89,6 +104,10 @@ SELECT 'node_inbound_dup_groups' AS item, COUNT(*) AS n FROM (
 -- 在真实 schema 上直接报错、整段汇总中断。
 SELECT 'username_dup_groups' AS item, COUNT(*) AS n FROM (
   SELECT 1 FROM "user" GROUP BY "user" HAVING COUNT(*) > 1
+);
+-- B02-003: 大小写变体重复组数（与第 6b 节同口径）。
+SELECT 'username_fold_dup_groups' AS item, COUNT(*) AS n FROM (
+  SELECT 1 FROM "user" GROUP BY LOWER("user") HAVING COUNT(*) > 1
 );
 -- F-122: subscription 既无 is_default 列也无 user_id 列——「默认订阅」
 -- 是运行时按排序第一条计算的概念（见第 7 节），原汇总查询必然报错。

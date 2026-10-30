@@ -75,6 +75,21 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 			})
 		}
 	}
+
+	// K10 v5（B02-003）：折叠唯一索引未落地且存量有大小写变体
+	// 同名组时如实报告待处理（无变体重复时下次启动自动建，不报）。
+	if !applied(migrationK10V5Version) {
+		if groups, err := listUsernameFoldDupGroups(r.db); err == nil && len(groups) > 0 {
+			status.Required = true
+			status.Guide = "doc/guide/upgrade.md#从旧版本升级"
+			sample := "大小写变体同名: folded=" + groups[0].Fold + " ids=[" + groups[0].IDs + "] stored=[" + groups[0].Forms + "]"
+			status.Tables = append(status.Tables, DuplicateDetail{
+				Table:           "user",
+				DuplicateGroups: int64(len(groups)),
+				Sample:          sample,
+			})
+		}
+	}
 	return status
 }
 

@@ -509,6 +509,10 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
 			return err
 		}
+		// K10 v5（B02-003）: 用户名大小写折叠唯一索引（双后端同口径）。
+		if err := migrateV5UsernameCasefoldUnique(db); err != nil {
+			return err
+		}
 		// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填。
 		backfillPeerShareRelayCredentials(db)
 		return nil
@@ -555,6 +559,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// C12 v4（X04-001/X04-002）: 转发查询面普通索引——
 	// forward_port(forward_id)、forward(user_id)、forward(status, inx)。
 	if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
+		return err
+	}
+
+	// K10 v5（B02-003）: 用户名大小写折叠唯一索引 (LOWER("user"))；
+	// 存量折叠重复时按 D23 跳过并逐组点名，不阻塞启动。
+	if err := migrateV5UsernameCasefoldUnique(db); err != nil {
 		return err
 	}
 
@@ -679,8 +689,9 @@ func seedData(db *gorm.DB) {
 	var adminCount int64
 	if err := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error; err == nil && adminCount == 0 {
 		// R5-B4C: 补建前检查用户名是否被占用（防改名后撞唯一约束）。
-		var nameCount int64
-		db.Model(&model.User{}).Where("\"user\" = ?", "admin@user").Count(&nameCount)
+		// B02-003/K10: 占用检查按折叠口径——存量有 Admin@User 变体时
+		// 同样视为占用（补建会撞 v1/v5 唯一索引），走人工处理路径。
+		nameCount, _ := usernameFoldCount(db, "admin@user", 0)
 		if nameCount > 0 {
 			// 修正 A：不得静默跳过。ERROR 日志 + API 状态可见。
 			adminBootstrapRequired = true
@@ -764,21 +775,23 @@ func getUserByID(db *gorm.DB, id int64) (*model.User, error) {
 	return &user, nil
 }
 
+// UsernameExists 用户名占用检查。B02-003：大小写不敏感（经
+// usernameFoldCount 统一口径）。
 func (r *Repository) UsernameExists(username string) (bool, error) {
-	var count int64
-	err := r.db.Model(&model.User{}).Where(`"user" = ?`, username).Count(&count).Error
+	count, err := usernameFoldCount(r.db, username, 0)
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
 }
 
+// UsernameExistsExceptID 同 UsernameExists，排除自身行（updatePassword
+// 改名预检）。
 func (r *Repository) UsernameExistsExceptID(username string, exceptID int64) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("repository not initialized")
 	}
-	var count int64
-	err := r.db.Model(&model.User{}).Where(`"user" = ? AND id != ?`, username, exceptID).Count(&count).Error
+	count, err := usernameFoldCount(r.db, username, exceptID)
 	if err != nil {
 		return false, err
 	}
@@ -789,12 +802,17 @@ func (r *Repository) UpdateUserNameAndPassword(userID int64, username, passwordM
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+	err := r.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"user":                username,
 		"pwd":                 passwordMD5,
 		"password_changed_at": now,
 		"updated_time":        now,
 	}).Error
+	// B02-003/K10: 并发兜底（handler 已折叠查重，但有竞态窗口）——
+	// 与 UpdateUserWithPassword/WithoutPassword 同口径映射唯一冲突，
+	// 不把 DB 原文回吐给改名用户。本函数此前漏了这层映射，折叠
+	// 索引（v5）命中时 PG/SQLite 原始错误会直达响应。
+	return mapUniqueViolation(err, "username")
 }
 
 // ─── Config Queries ──────────────────────────────────────────────────
