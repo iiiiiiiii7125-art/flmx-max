@@ -27,6 +27,15 @@ var loopbackAllow = []string{"127.0.0.0/8", "::1/128"}
 // 下发面中止整单而非下发少算拨号节点的白名单（其余既有查询的
 // log-and-continue 口径不在本条范围）。
 func (h *Handler) inboundAllowList(row model.NodeInbound) ([]string, error) {
+	return h.inboundAllowListIx(row, nil)
+}
+
+// inboundAllowListIx is inboundAllowList with the chain-dialer lookup
+// served from a shared snapshot when ix is non-nil (X04-001: kernel
+// apply rounds compute one allow list per whitelisted inbound and used
+// to reload the whole inbound table for each); a nil ix keeps the
+// single-call behaviour.
+func (h *Handler) inboundAllowListIx(row model.NodeInbound, ix *chainRefIndex) ([]string, error) {
 	set := make(map[string]bool)
 	for _, c := range loopbackAllow {
 		set[c] = true
@@ -68,9 +77,15 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) ([]string, error) {
 	}
 
 	// Kernels chained through the inbound dial it from their own node.
-	chainDialers, err := h.chainDialerNodeIDs(row.ID)
-	if err != nil {
-		return nil, err
+	var chainDialers []int64
+	if ix != nil {
+		chainDialers = ix.dialerNodeIDs(row.ID)
+	} else {
+		var err error
+		chainDialers, err = h.chainDialerNodeIDs(row.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, nodeID := range chainDialers {
 		if seenNodes[nodeID] {
@@ -252,6 +267,17 @@ func (h *Handler) inboundIDsForForwards(forwardIDs []int64) []int64 {
 // 故本函数同步上抛——收集失败时调用方中止删除（fail-closed），不得
 // 以不完整清单照删后漏刷新白名单。
 func (h *Handler) inboundIDsAffectedByNodeDelete(nodeID int64) ([]int64, error) {
+	ix, err := h.loadChainRefIndex()
+	if err != nil {
+		return nil, err
+	}
+	return h.inboundIDsAffectedByNodeDeleteIx(nodeID, ix)
+}
+
+// inboundIDsAffectedByNodeDeleteIx is inboundIDsAffectedByNodeDelete
+// over a shared snapshot (X04-001): the dialed-set scan and the
+// per-target referrer pass both read the one table load.
+func (h *Handler) inboundIDsAffectedByNodeDeleteIx(nodeID int64, ix *chainRefIndex) ([]int64, error) {
 	own := make(map[int64]struct{})
 	if targets, err := h.repo.ListNodeInboundsByNode(nodeID); err == nil {
 		for _, target := range targets {
@@ -270,7 +296,7 @@ func (h *Handler) inboundIDsAffectedByNodeDelete(nodeID int64) ([]int64, error) 
 		seen[inboundID] = struct{}{}
 		out = append(out, inboundID)
 	}
-	dialedIDs, err := h.inboundIDsDialedByNode(nodeID)
+	dialedIDs, err := h.inboundIDsDialedByNodeIx(nodeID, ix)
 	if err != nil {
 		return nil, err
 	}
@@ -279,11 +305,7 @@ func (h *Handler) inboundIDsAffectedByNodeDelete(nodeID int64) ([]int64, error) 
 	}
 	if targets, err := h.repo.ListNodeInboundsByNode(nodeID); err == nil {
 		for _, target := range targets {
-			refs, rerr := h.chainReferrers(target.ID)
-			if rerr != nil {
-				return nil, rerr
-			}
-			for _, ref := range refs {
+			for _, ref := range ix.referrers(target.ID) {
 				if ref.NodeID != nodeID {
 					add(ref.ID)
 				}
@@ -322,12 +344,20 @@ func (h *Handler) inboundIDsForTunnel(tunnelID int64) []int64 {
 // R3X-015: 顶层列表查询与 chainDialerNodeIDs 的失败上抛（旧实现
 // 返回 nil 被调用方读作「无入站经本节点拨号」跳过刷新）。
 func (h *Handler) inboundIDsDialedByNode(nodeID int64) ([]int64, error) {
-	rows, err := h.repo.ListNodeInbounds()
+	ix, err := h.loadChainRefIndex()
 	if err != nil {
 		return nil, err
 	}
+	return h.inboundIDsDialedByNodeIx(nodeID, ix)
+}
+
+// inboundIDsDialedByNodeIx is inboundIDsDialedByNode over a shared
+// snapshot (X04-001). This scan is the Θ(T) half of the old blowup: it
+// walks every row of the table and used to call chainDialerNodeIDs —
+// a full table reload plus parse — for each one.
+func (h *Handler) inboundIDsDialedByNodeIx(nodeID int64, ix *chainRefIndex) ([]int64, error) {
 	var out []int64
-	for _, row := range rows {
+	for _, row := range ix.rows {
 		hit := false
 		if relays, err := h.repo.ListInboundRelays(row.ID); err == nil {
 			for _, rel := range relays {
@@ -350,11 +380,7 @@ func (h *Handler) inboundIDsDialedByNode(nodeID int64) ([]int64, error) {
 			}
 		}
 		if !hit {
-			chainDialers, cerr := h.chainDialerNodeIDs(row.ID)
-			if cerr != nil {
-				return nil, cerr
-			}
-			for _, d := range chainDialers {
+			for _, d := range ix.dialerNodeIDs(row.ID) {
 				if d == nodeID {
 					hit = true
 					break
