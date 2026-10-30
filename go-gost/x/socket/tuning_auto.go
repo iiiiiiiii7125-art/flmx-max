@@ -103,6 +103,13 @@ var tuneFindPeers = findTunePeers
 var tuneMeasure = measureTuneSample
 var tuneShortMeasure = measureTuneShortSample
 
+// tuneLookupIP is the resolver seam for tuneInterface, mirroring
+// probeLookupIP in outbound_guard.go: production keeps the default
+// resolver, tests stub it so ranking tests never depend on real DNS.
+var tuneLookupIP = func(ctx context.Context, network, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, network, host)
+}
+
 func tuneStatePath(name string) string { return filepath.Join(filepath.Dir(tuneBackupPath), name) }
 func tuneEngineDir() string            { return tuneStatePath("tcpfit") }
 
@@ -468,7 +475,7 @@ func probeTunePeersOnce(ctx context.Context) []tunePeer {
 }
 
 func tuneInterface(ctx context.Context, p tunePeer) (string, error) {
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip"+p.family, p.host)
+	ips, err := tuneLookupIP(ctx, "ip"+p.family, p.host)
 	if err != nil || len(ips) == 0 {
 		return "", fmt.Errorf("无法解析测速对端")
 	}
