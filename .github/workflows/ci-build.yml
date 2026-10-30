@@ -21,7 +21,10 @@ jobs:
 
   frontend:
     name: Build Frontend
-    runs-on: ubuntu-latest
+    # Pinned (not ubuntu-latest): the demo check installs Chromium with the
+    # pinned playwright-core 1.55.0, whose newest supported Ubuntu is
+    # 24.04; floating latest drifted to 26.04 and the install hard-fails.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: vite-frontend

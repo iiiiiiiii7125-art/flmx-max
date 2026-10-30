@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +42,7 @@ func fakeTuneAutomation(t *testing.T) {
 	oldExecute, oldPlatform, oldCommand := tuneAutoExecute, tunePlatform, tuneCommand
 	oldPrepare, oldPeers, oldMeasure := tunePrepare, tuneFindPeers, tuneMeasure
 	oldShort, oldTraffic, oldUnit, oldBaseline := tuneShortMeasure, tuneReadTraffic, tuneShapeUnitPath, tuneTrafficBaseline
+	oldLookup := tuneLookupIP
 	oldMarker, oldCgroup := containerMarkerPath, containerCgroupPath
 	tunePlatform = "linux"
 	tunePrepare = func(context.Context) error { return os.MkdirAll(tuneEngineDir(), 0o700) }
@@ -56,6 +58,11 @@ func fakeTuneAutomation(t *testing.T) {
 	}
 	tuneMeasure = func(context.Context, *tuneDetection, int) (*tuneSample, error) { return &tuneSample{Mbps: 200}, nil }
 	tuneShortMeasure = func(context.Context, *tuneDetection) (*tuneSample, error) { return &tuneSample{Mbps: 200}, nil }
+	// Hermetic resolver: peer hosts in these tests are *.example names
+	// that real DNS cannot resolve; ranking must not depend on it.
+	tuneLookupIP = func(_ context.Context, _ string, _ string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("192.0.2.1")}, nil
+	}
 	tuneReadTraffic = func(string) (uint64, error) { return 0, nil }
 	tuneTrafficBaseline = 0
 	unit := filepath.Join(filepath.Dir(tuneBackupPath), "flmx-tuning-qdisc.service")
@@ -76,6 +83,7 @@ func fakeTuneAutomation(t *testing.T) {
 		tuneAutoExecute, tunePlatform, tuneCommand = oldExecute, oldPlatform, oldCommand
 		tunePrepare, tuneFindPeers, tuneMeasure = oldPrepare, oldPeers, oldMeasure
 		tuneShortMeasure, tuneReadTraffic, tuneShapeUnitPath, tuneTrafficBaseline = oldShort, oldTraffic, oldUnit, oldBaseline
+		tuneLookupIP = oldLookup
 		containerMarkerPath, containerCgroupPath = oldMarker, oldCgroup
 		tuningTasks.Lock()
 		tuningTasks.job = nil
