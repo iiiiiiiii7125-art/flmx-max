@@ -81,14 +81,29 @@ const batchCallTimeout = (count: number): number =>
 /**
  * 批量节点升级：后端 5 并发、每节点界 300s（upgradeTimeout），整批界为
  * ceil(n/5)×300s，服务端封顶 25 台（maxBatchUpgradeNodes，界 ≤1500s，
- * 写截止 1800s）。前端按台数取「界 + 60s 余量」，下限 360s，上限与
- * 服务端写截止齐平 1800s（B05-002 前端面；登记表 T031）。
+ * 写截止 1800s）。空版本时整批先付一次版本发现前奏（两段链 ≤120s，
+ * 只在派发前解析一次），故前端按台数取「界 + 前奏 120s + 60s 余量」，
+ * 下限 360s，上限与服务端写截止齐平 1800s（B05-002 前端面，R2-K2
+ * 补计前奏；登记表 T031）。
  */
 const batchCallTimeoutUpgrade = (count: number): number => {
   const n = count > 0 ? count : 0;
   const waves = Math.ceil(n / 5);
 
-  return Math.min(1_800_000, Math.max(360_000, waves * 300_000 + 60_000));
+  return Math.min(1_800_000, Math.max(360_000, waves * 300_000 + 180_000));
+};
+
+/**
+ * 批量入站删除/启停：后端逐项处理后对受影响内核各下发一次（跨项去
+ * 重），每次下发带条件界——内核未装版本时升至 kernelApplyTimeout
+ * 300s。不同内核数 ≤ 项数，前端按项数取「n×300s + 60s 余量」，下限
+ * 360s，上限与服务端写截止齐平 1800s（B11-001 家族收口，R2-K2；
+ * 登记表 T059/T060）。
+ */
+const batchCallTimeoutKernelApply = (count: number): number => {
+  const n = count > 0 ? count : 0;
+
+  return Math.min(1_800_000, Math.max(360_000, n * 300_000 + 60_000));
 };
 
 /**
@@ -243,8 +258,10 @@ export const upgradeNode = (
   Network.post(
     "/node/upgrade",
     { id, version: version || "", channel },
-    // R8-T-04：后端界 upgradeTimeout 300s，须破「前端 = 后端」恰等。
-    { timeout: 360_000 },
+    // R8-T-04 + B05-002（R2-K2）：空版本先走版本发现两段链（≤120s
+    // 前奏），再等 upgradeTimeout 300s，后端界 420s；前端 480s，
+    // 须破「前端 = 后端」恰等。
+    { timeout: 480_000 },
   );
 export const batchUpgradeNodes = (
   ids: number[],
@@ -456,8 +473,10 @@ export const runSystemUpgrade = (
   Network.post<SystemUpgradeRunApiData>(
     "/system/upgrade",
     { version: version || "", channel },
-    // R8-T-04：同步前奏最坏 ≈210s（版本解析 + 资产下载），前端须 ≥240s。
-    { timeout: 240_000 },
+    // R8-T-04 + B05-002（R2-K2）：同步前奏最坏 240s（版本解析两段链
+    // 120s——重定向段为代理+直连两腿而非一腿——加资产下载 2×60s），
+    // 前端 300s。
+    { timeout: 300_000 },
   );
 
 // 面板升级状态查询：升级后后端容器重启期间请求会失败，调用方需静默重试
@@ -1062,7 +1081,11 @@ export const controlKernel = (
   id: number,
   action: "start" | "stop" | "restart" | "remove",
   force = false,
-) => Network.post("/kernel/control", { id, action, force });
+) =>
+  // B11-001（R2-K2）：启停在内核未装版本时条件性继承 300s 内核应用
+  // 预算（applyKernelWith 条件升级），与 installKernel 同口径 ≥330s；
+  // 此前走默认 30s、服务端全局 120s，慢下发必假超时。
+  Network.post("/kernel/control", { id, action, force }, { timeout: 330_000 });
 export const getKernelLogs = (id: number) =>
   Network.post<KernelStateApiData>("/kernel/logs", { id });
 export const getInboundList = () =>
@@ -1082,14 +1105,26 @@ export const updateInbound = (data: InboundMutationPayload) =>
     timeout: 330_000,
   });
 export const deleteInbound = (id: number) =>
-  Network.post("/inbound/delete", { id });
+  // B11-001 家族（R2-K2）：删除末尾下发所在内核，未装版本时条件性
+  // 继承 300s 应用预算，前端 ≥330s（与 createInbound 同口径）。
+  Network.post("/inbound/delete", { id }, { timeout: 330_000 });
 export const batchDeleteInbounds = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/inbound/batch-delete", { ids });
+  Network.post<BatchOperationResult>(
+    "/inbound/batch-delete",
+    { ids },
+    // B11-001 家族（R2-K2）：逐项删除后对受影响内核逐个下发
+    // （去重），每次带 300s 条件界，按项数放宽。
+    { timeout: batchCallTimeoutKernelApply(ids.length) },
+  );
 export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
-  Network.post<BatchOperationResult>("/inbound/batch-toggle", {
-    ids,
-    enabled,
-  });
+  Network.post<BatchOperationResult>(
+    "/inbound/batch-toggle",
+    {
+      ids,
+      enabled,
+    },
+    { timeout: batchCallTimeoutKernelApply(ids.length) },
+  );
 export interface SubPipeline {
   lines: "" | "relay" | "direct";
   regions: string[];
@@ -1200,7 +1235,13 @@ export const getSubscriptions = () =>
     ruleGroups: SubRuleGroup[];
   }>("/subscription/list");
 export const saveSubscription = (data: SubscriptionDraft, idemKey?: string) =>
-  Network.post<SubscriptionItem>("/subscription/save", data, { idemKey });
+  // B11-001 家族（R2-K2）：保存后同步下发订阅涉及的各内核，未装
+  // 版本时每次下发带 300s 条件界，前端 ≥330s（与 createInbound 同
+  // 口径的条件界登记）。
+  Network.post<SubscriptionItem>("/subscription/save", data, {
+    idemKey,
+    timeout: 330_000,
+  });
 export const deleteSubscription = (id: number) =>
   Network.post("/subscription/delete", { id });
 export const resetSubscription = (id: number) =>
@@ -1295,13 +1336,19 @@ export const updateInboundSplit = (data: {
     | "ipv6_only"
     | "prefer_ipv4"
     | "prefer_ipv6";
-}) => Network.post("/inbound/split", data);
+}) =>
+  // B11-001 家族（R2-K2）：保存末尾下发所在内核及变更目标，未装
+  // 版本时带 300s 条件界，前端 ≥330s。
+  Network.post("/inbound/split", data, { timeout: 330_000 });
 export const toggleInbound = (id: number, enabled: boolean) =>
-  Network.post("/inbound/toggle", { id, enabled });
+  // B11-001 家族（R2-K2）：启停末尾下发所在内核，同上 ≥330s。
+  Network.post("/inbound/toggle", { id, enabled }, { timeout: 330_000 });
 export const resetInboundTraffic = (id: number) =>
   Network.post("/inbound/reset-traffic", { id });
 export const regenerateInbound = (id: number) =>
-  Network.post("/inbound/regenerate", { id });
+  // B11-001 家族（R2-K2）：重生成末尾下发所在内核及链式引用方，
+  // 未装版本时带 300s 条件界，前端 ≥330s。
+  Network.post("/inbound/regenerate", { id }, { timeout: 330_000 });
 export const importInbounds = (links: string, relayOnly: boolean) =>
   Network.post<{ created: number[]; errors: string[] }>("/inbound/import", {
     links,
@@ -1318,7 +1365,10 @@ export const updateExternalInbound = (data: {
   link?: string;
   remark: string;
   relayOnly: boolean;
-}) => Network.post("/inbound/external/update", data);
+}) =>
+  // B11-001 家族（R2-K2）：保存后同步下发经本入站链式引用的各
+  // 内核，未装版本时带 300s 条件界，前端 ≥330s。
+  Network.post("/inbound/external/update", data, { timeout: 330_000 });
 export const getInboundShare = (id: number) =>
   Network.post<InboundShareEntry[]>("/inbound/share", { id });
 export const getSubInfo = (reset = false, silent = false) =>

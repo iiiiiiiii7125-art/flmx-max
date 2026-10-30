@@ -89,6 +89,7 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 	pins := map[string]time.Duration{
 		// write_deadline.go 放宽常量组
 		"kernelApplyWriteDeadline":      kernelApplyWriteDeadline,
+		"inboundBatchWriteDeadline":     inboundBatchWriteDeadline,
 		"nodeUpgradeWriteDeadline":      nodeUpgradeWriteDeadline,
 		"nodeBatchUpgradeWriteDeadline": nodeBatchUpgradeWriteDeadline,
 		"systemUpgradeWriteDeadline":    systemUpgradeWriteDeadline,
@@ -102,7 +103,6 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 		// 后端界常量
 		"kernelApplyTimeout":        kernelApplyTimeout,
 		"kernelCommandTimeout":      kernelCommandTimeout,
-		"upgradeTimeout":            upgradeTimeout,
 		"diagnosisRequestTimeout":   diagnosisRequestTimeout,
 		"defaultNodeCommandTimeout": defaultNodeCommandTimeout,
 		"idemWaitTimeout":           idemWaitTimeout,
@@ -125,6 +125,13 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 
 func TestR8TimeoutBudgetComposites(t *testing.T) {
 	rows := r8LoadBudgetRegistry(t)
+	// upgradeTimeout 300s（B05-002，R2-K2）：登记表 T005/T031 的 be
+	// 已改为含版本发现前奏的 expr/formula 界，不再以本常量原值登记，
+	// 故退出上方通用 pin 表、改在此直钉；shell 门另以 A002 行逐行
+	// 对账 go_const_s upgradeTimeout == 登记 300。
+	if upgradeTimeout != 300*time.Second {
+		t.Errorf("upgradeTimeout = %v, want 300s (T005/T031/A002 component)", upgradeTimeout)
+	}
 	// 联邦 client = 对端命令预算 + federationClientMargin（构造性余量）。
 	if got := federationClientTimeout(120 * time.Second); got != 130*time.Second {
 		t.Errorf("federationClientTimeout(120s) = %v, want 130s (budget + margin)", got)
