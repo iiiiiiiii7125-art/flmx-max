@@ -2144,30 +2144,14 @@ export default function ForwardPage() {
   }, [loadData]);
 
   // 表单验证
-  const noLimitSpeedLimitIds = useMemo(() => {
-    return new Set(
-      speedLimits
-        .filter((speedLimit) => speedLimit.name.trim() === "不限速")
-        .map((speedLimit) => speedLimit.id),
-    );
-  }, [speedLimits]);
-
+  // 限速选择只按 id/空值判定：id 为空即不限速，任何规则（含恰好名为
+  // 「不限速」的真实规则）都按普通规则可选、绑定不得按名归一清除。
   const speedLimitIds = useMemo(() => {
     return new Set(speedLimits.map((speedLimit) => speedLimit.id));
   }, [speedLimits]);
 
-  const availableSpeedLimits = useMemo(() => {
-    return speedLimits.filter(
-      (speedLimit) => !noLimitSpeedLimitIds.has(speedLimit.id),
-    );
-  }, [speedLimits, noLimitSpeedLimitIds]);
-
   const normalizeSpeedId = (speedId?: number | null): number | null => {
     if (speedId === null || speedId === undefined) {
-      return null;
-    }
-
-    if (noLimitSpeedLimitIds.has(speedId)) {
       return null;
     }
 
@@ -2183,7 +2167,7 @@ export default function ForwardPage() {
       return false;
     }
 
-    if (speedLimits.length === 0 || noLimitSpeedLimitIds.has(speedId)) {
+    if (speedLimits.length === 0) {
       return false;
     }
 
@@ -3929,7 +3913,7 @@ export default function ForwardPage() {
         className="group h-full flex flex-col overflow-hidden bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
       >
         <CardHeader className="pb-2 md:pb-2">
-          <div className="flex justify-between items-start w-full">
+          <div className="flex flex-wrap justify-between items-start w-full gap-y-1">
             {true && (
               <Checkbox
                 className="mr-2"
@@ -3937,12 +3921,15 @@ export default function ForwardPage() {
                 onValueChange={(checked) => toggleSelect(forward.id, checked)}
               />
             )}
-            <div className="flex-1 min-w-0">
-              <h3 className="font-semibold text-foreground truncate text-sm">
+            <div className="flex-1 min-w-20">
+              <h3
+                className="font-semibold text-foreground truncate text-sm"
+                title={forward.name}
+              >
                 {forward.name}
               </h3>
             </div>
-            <div className="flex items-center gap-1.5 ml-2">
+            <div className="flex items-center gap-1.5 ml-auto">
               <ForwardBindWarningBadge warnings={forward.bindWarnings} />
               <Switch
                 isDisabled={forward.status !== 1 && forward.status !== 0}
@@ -5247,7 +5234,7 @@ export default function ForwardPage() {
                               }));
                             }}
                           >
-                            {availableSpeedLimits.map((speedLimit) => (
+                            {speedLimits.map((speedLimit) => (
                               <SelectItem
                                 key={speedLimit.id.toString()}
                                 textValue={speedLimit.name}
@@ -5281,7 +5268,7 @@ export default function ForwardPage() {
                               }));
                             }}
                           >
-                            {availableSpeedLimits.map((speedLimit) => (
+                            {speedLimits.map((speedLimit) => (
                               <SelectItem
                                 key={speedLimit.id.toString()}
                                 textValue={speedLimit.name}

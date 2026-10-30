@@ -361,24 +361,14 @@ export default function UserPage({
   const [speedLimits, setSpeedLimits] = useState<SpeedLimit[]>([]);
   const [userGroups, setUserGroups] = useState<UserGroup[]>([]);
 
-  const noLimitSpeedLimitIds = useMemo(() => {
-    return new Set(
-      speedLimits
-        .filter((speedLimit) => speedLimit.name.trim() === "不限速")
-        .map((speedLimit) => speedLimit.id),
-    );
-  }, [speedLimits]);
-
+  // 限速选择只按 id/空值判定：id 为空即不限速，任何规则（含恰好名为
+  // 「不限速」的真实规则）都按普通规则可选、绑定不得按名归一清除。
   const speedLimitIds = useMemo(() => {
     return new Set(speedLimits.map((speedLimit) => speedLimit.id));
   }, [speedLimits]);
 
   const normalizeSpeedId = (speedId?: number | null): number | null => {
     if (speedId === null || speedId === undefined) {
-      return null;
-    }
-
-    if (noLimitSpeedLimitIds.has(speedId)) {
       return null;
     }
 
@@ -394,7 +384,7 @@ export default function UserPage({
       return false;
     }
 
-    if (speedLimits.length === 0 || noLimitSpeedLimitIds.has(speedId)) {
+    if (speedLimits.length === 0) {
       return false;
     }
 
@@ -1130,14 +1120,10 @@ export default function UserPage({
     }
   };
 
-  const editAvailableSpeedLimits = speedLimits.filter(
-    (speedLimit) => !noLimitSpeedLimitIds.has(speedLimit.id),
-  );
+  const editAvailableSpeedLimits = speedLimits;
 
   const getSpeedLimitsForTunnel = (_tunnelId: number) => {
-    return speedLimits.filter(
-      (speedLimit) => !noLimitSpeedLimitIds.has(speedLimit.id),
-    );
+    return speedLimits;
   };
 
   const editTunnelSelectedSpeedId = normalizeSpeedId(editTunnelForm?.speedId);
