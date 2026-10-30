@@ -119,6 +119,39 @@ func TestUpdateLocalConfigJSONCorruptFileFailsClosed(t *testing.T) {
 	}
 }
 
+func TestUpdateLocalConfigJSONNullContent(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	path := filepath.Join(dir, "config.json")
+
+	if err := os.WriteFile(path, []byte(`null`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 裸 null 解码会把目标 map 置 nil；写回不得 panic（LB174-01）。
+	if err := updateLocalConfigJSON(1, 0, 1); err != nil {
+		t.Fatalf("updateLocalConfigJSON on null content: %v", err)
+	}
+	_, keys := readConfigKeys(t, path)
+	if !reflect.DeepEqual(keys, []string{"http", "socks", "tls"}) {
+		t.Fatalf("null 写回后键集 = %v, want [http socks tls]", keys)
+	}
+	var got struct {
+		HTTP  int `json:"http"`
+		TLS   int `json:"tls"`
+		Socks int `json:"socks"`
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("写回文件不是合法 JSON 对象: %v", err)
+	}
+	if got.HTTP != 1 || got.TLS != 0 || got.Socks != 1 {
+		t.Fatalf("目标三键 = %d/%d/%d, want 1/0/1", got.HTTP, got.TLS, got.Socks)
+	}
+}
+
 func TestUpdateLocalConfigJSONMissingFileCreates(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

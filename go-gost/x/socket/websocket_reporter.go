@@ -2313,6 +2313,10 @@ func updateLocalConfigJSON(httpVal int, tlsVal int, socksVal int) error {
 		if err := json.Unmarshal(b, &fields); err != nil {
 			return fmt.Errorf("解析现有 config.json 失败，拒绝覆盖写回: %w", err)
 		}
+		// 裸 JSON null 解码成功但会把 map 置为 nil，后续赋值 panic（LB174-01 守卫）。
+		if fields == nil {
+			fields = map[string]json.RawMessage{}
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
