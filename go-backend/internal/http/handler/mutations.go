@@ -631,8 +631,22 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 // stripAndValidateNodeAddress strips a single trailing :port (R25 口径
 // stripShareHostPort) and rejects the result unless it is a valid bare
 // host/IP or single host:port. Empty input stays empty (nullable fields).
+//
+// R2 B04-001：校验顺序改「先验原始值、后剥离」。旧序先用
+// net.SplitHostPort 剥离再验剥离产物——SplitHostPort 不验端口数值性，
+// "http://evil.com" 剥成 "http"、"example.com:abc" 剥成 "example.com"
+// 后 IsValidNodeAddress 的 scheme 拒绝与端口数值/范围校验（B04-005）
+// 在主写路径上不可达，残缺地址静默落库。先以原始值过同一校验器
+// （host:port 合法形态本就放行），再剥离、再验剥离产物兜底。
 func stripAndValidateNodeAddress(value string) (string, error) {
-	stripped := stripShareHostPort(value)
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if err := IsValidNodeAddress(trimmed); err != nil {
+		return "", err
+	}
+	stripped := stripShareHostPort(trimmed)
 	if strings.TrimSpace(stripped) == "" {
 		return "", nil
 	}
@@ -673,6 +687,11 @@ func validateListenAddrValue(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", nil
+	}
+	// R2 B04-001：同 stripAndValidateNodeAddress——先验原始值，
+	// 端口段数值/范围非法（":abc"/":99999"）不得被剥离静默吞掉。
+	if err := IsValidNodeAddress(value); err != nil {
+		return "", err
 	}
 	if host, _, err := net.SplitHostPort(value); err == nil {
 		value = host
@@ -721,16 +740,29 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	name := asString(req["name"])
 	// R30-FIX-F04（写侧归一化，用户 2026-10-26 拍板）：入库前剥离
-	// :port 再存。先归一化再校验，":port-only" 等退化值归一化为
-	// 空后由下方的空值检查拒绝；非法值（非 host:port 形态）按
-	// stripShareHostPort 语义原样通过。
-	serverIP := stripShareHostPort(asString(req["serverIp"]))
+	// :port 再存。":port-only" 等退化值归一化为空后由下方的空值检查
+	// 拒绝。
+	// R2 B04-001：归一走 stripAndValidateNodeAddress（先验原始值后
+	// 剥离）——旧序「先剥离再校验」使 IsValidNodeAddress 的端口数值
+	// 校验不可达，"example.com:abc"、"http://evil.com" 被静默剥成
+	// 残缺地址落库。
+	serverIP, sErr := stripAndValidateNodeAddress(asString(req["serverIp"]))
+	if sErr != nil {
+		response.WriteJSON(w, response.ErrDefault(sErr.Error()))
+		return
+	}
 	if name == "" || serverIP == "" {
 		response.WriteJSON(w, response.ErrDefault("节点名称和地址不能为空"))
 		return
 	}
-	if err := IsValidNodeAddress(serverIP); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+	// R2 K1 枚举复扫（B03-001 同族）：名称按列宽 varchar(100)、网卡名
+	// 按 varchar(200) 校验——此前无门，PG 吐原始错误、SQLite 静默存入。
+	if len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("节点名称长度不能超过100个字符"))
+		return
+	}
+	if len([]rune(asString(req["interfaceName"]))) > 200 {
+		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
 		return
 	}
 	// D3-02: 直填 remoteUrl 与 nodeImport 共用同一校验（validateRemoteNodeURL），
@@ -780,6 +812,13 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("UDP 监听地址格式无效："+err.Error()))
 		return
 	}
+	// R2 K1 枚举复扫（B04-001 同族）：extraIPs 与 V4/V6 同口径逐项
+	// 先验后剥（此前只剥离不校验，坏端口段被静默吞掉）。
+	extraIPs, err := stripAndValidateNodeAddressList(asString(req["extraIPs"]))
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("节点附加 IP 地址格式无效："+err.Error()))
+		return
+	}
 	// B04-003：port 写侧按 parsePortRangeSpec 同口径校验（不可解析/
 	// 越界/反序拒绝），不再原样落库。
 	portSpec := defaultString(asString(req["port"]), "1000-65535")
@@ -814,10 +853,9 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		nullableText(asString(req["remoteUrl"])),
 		nullableText(asString(req["remoteToken"])),
 		nullableText(asString(req["remoteConfig"])),
-		// PORT-CLOSURE B-NEW-01（顺手收口）：extraIPs 按逗号分项剥离
-		// :port 后落库（此前原值落库；唯一消费 nodeAddresses 逐 token
-		// 剥离，故此前无未剥离消费点）。
-		nullableText(stripShareHostPortList(asString(req["extraIPs"]))),
+		// PORT-CLOSURE B-NEW-01 + R2 K1 枚举复扫：extraIPs 已在上方
+		// 逐项先验后剥（extraIPs 变量），校验口径与 V4/V6 一致。
+		nullableText(extraIPs),
 		forwardMode,
 	)
 	if err != nil {
@@ -895,8 +933,15 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	serverIP := currentNode.ServerIP
 	if _, ok := req["serverIp"]; ok {
 		// R30-FIX-F04（写侧归一化）：仅提交的字段归一化；未提交
-		// 的字段保持存量原值。先归一化再校验（下方 IsValidNodeAddress）。
-		serverIP = stripShareHostPort(asString(req["serverIp"]))
+		// 的字段保持存量原值。
+		// R2 B04-001：同 nodeCreate——先验原始值后剥离（下方对合并值
+		// 的 IsValidNodeAddress 仍保留，覆盖未提交的存量保值路径）。
+		v, vErr := stripAndValidateNodeAddress(asString(req["serverIp"]))
+		if vErr != nil {
+			response.WriteJSON(w, response.ErrDefault(vErr.Error()))
+			return
+		}
+		serverIP = v
 	}
 	if serverIP != "" {
 		if err := IsValidNodeAddress(serverIP); err != nil {
@@ -946,9 +991,12 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// PORT-CLOSURE B-NEW-01（顺手收口）：仅提交的 extraIPs 按逗号
 	// 分项剥离 :port 后存；未提交的字段保持存量原值。
+	// R2 K1 枚举复扫（B04-001 同族）：剥离改走先验后剥的 List 变体
+	// （提交值已在下方预检报错，此处结果与其一致）。
 	resolveExtraIPs := func(key string, current interface{}) interface{} {
 		if _, ok := req[key]; ok {
-			return nullableText(stripShareHostPortList(asString(req[key])))
+			stripped, _ := stripAndValidateNodeAddressList(asString(req[key]))
+			return nullableText(stripped)
 		}
 		return current
 	}
@@ -966,9 +1014,27 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// R2 K1 枚举复扫（B04-001 同族）：extraIPs 仅提交时逐项先验后剥，
+	// 与 nodeCreate 同口径。
+	if _, ok := req["extraIPs"]; ok {
+		if _, err := stripAndValidateNodeAddressList(asString(req["extraIPs"])); err != nil {
+			response.WriteJSON(w, response.ErrDefault("节点附加 IP 地址格式无效："+err.Error()))
+			return
+		}
+	}
 	nodeName := currentNode.Name
 	if _, ok := req["name"]; ok {
 		nodeName = asString(req["name"])
+	}
+	// R2 K1 枚举复扫（B03-001 同族）：显式提交的名称/网卡名按列宽
+	// 校验（presence 口径，存量值不连坐）。
+	if _, ok := req["name"]; ok && len([]rune(nodeName)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("节点名称长度不能超过100个字符"))
+		return
+	}
+	if _, ok := req["interfaceName"]; ok && len([]rune(asString(req["interfaceName"]))) > 200 {
+		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
+		return
 	}
 	nodePort := currentNode.Port
 	if _, ok := req["port"]; ok {
@@ -1579,6 +1645,12 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	name := asString(req["name"])
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("隧道名称不能为空"))
+		return
+	}
+	// R2 K1 枚举复扫（B03-001 同族）：名称按列宽 varchar(100) 校验，
+	// 与分组/限速规则同口径——此前无门，PG 吐原始错误、SQLite 静默存入。
+	if len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("隧道名称长度不能超过100个字符"))
 		return
 	}
 	nameDup, err := h.repo.TunnelNameExists(name)
@@ -2222,6 +2294,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	resolvedName := asString(req["name"])
 	if _, ok := req["name"]; !ok {
 		resolvedName, _ = h.repo.GetTunnelName(id)
+	}
+	// R2 K1 枚举复扫（B03-001 同族）：显式提交的改名按列宽 100 校验
+	// （presence 口径，未提交的存量名不连坐）。
+	if _, ok := req["name"]; ok && len([]rune(resolvedName)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("隧道名称长度不能超过100个字符"))
+		return
 	}
 	// B06-001：改名补与 create 同口径的重名校验——create 有 handler
 	// 预检 + InsertTunnelTx 事务内复检，update 此前全程无校验且
@@ -3635,6 +3713,15 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	_, flowSupplied := req["flow"]
 	_, flowMiBSupplied := req["flowMiB"]
 	if flowSupplied || flowMiBSupplied {
+		// R2 B09-001：GB 键 flow 补 FIX2-A 同族守卫——在场但不可解析
+		// （"abc"/1.5）时 fail-closed 报错。parseTrafficLimit 的 GB 路径
+		// 经 asInt64 解析失败静默回 0，而 flow=0 是「不限额」语义，
+		// 缺守卫等于把配额无声取消且回执成功（flowMiB 键已有
+		// parseTrafficLimit 内部 ParseInt 校验，不在此列）。
+		if presentNumericFieldInvalid(req, "flow") {
+			response.WriteJSON(w, response.ErrDefault("flow 参数无效"))
+			return
+		}
 		var flowErr error
 		flow, flowMiB, flowErr = parseTrafficLimit(req, 0)
 		if flowErr != nil {
@@ -3769,6 +3856,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	remoteAddr := asString(req["remoteAddr"])
 	if name == "" || remoteAddr == "" {
 		response.WriteJSON(w, response.ErrDefault("转发名称和目标地址不能为空"))
+		return
+	}
+	// R2 K1 枚举复扫（B03-001 同族）：名称按列宽 varchar(100) 校验。
+	if len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("转发名称长度不能超过100个字符"))
 		return
 	}
 	// 终审 L1-F-06：管理员面同样补语法层空标签判——只判语法、不做 DNS；
@@ -3967,6 +4059,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSpace(asString(req["name"]))
+	// R2 K1 枚举复扫（B03-001 同族）：显式提交的改名按列宽 100 校验
+	// （空名回填的存量名不连坐，故须在回填前判）。
+	if _, ok := req["name"]; ok && name != "" && len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("转发名称长度不能超过100个字符"))
+		return
+	}
 	if name == "" {
 		name = forward.Name
 	}
@@ -5179,6 +5277,12 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空"))
 		return
 	}
+	// R2 B09-004：名称按列宽 varchar(100) 校验（O5-002 同型），
+	// 堵住 PG 下超长名吐原始落库错误、SQLite 静默存入的分裂。
+	if len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("名称长度不能超过100个字符"))
+		return
+	}
 
 	// B09-001：写侧合法集校验——在场不可解析先 fail-closed（FIX2-A
 	// 同族），再验 speed≥1、status∈{0,1}，非法不落库。
@@ -5242,6 +5346,13 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空"))
+		return
+	}
+	// R2 B09-004：同 create 按列宽 100 校验——仅验本次在场字段
+	// （presence 口径，与下方 speed/status 一致，存量超长名做无关
+	// 编辑不连坐）。
+	if _, ok := req["name"]; ok && len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("名称长度不能超过100个字符"))
 		return
 	}
 
@@ -5612,6 +5723,12 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
 		return
 	}
+	// R2 B03-001：名称按列宽 varchar(100) 校验（O5-002 同型）——此前
+	// 无长度门，SQLite 静默落库、PG 吐未转译的原始落库错误。
+	if len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("分组名称长度不能超过100个字符"))
+		return
+	}
 	// R4X-012: status 枚举 {0,1}（与 user 族同口径）——非法值直存会造出
 	// 既非启用又非停用的「僵尸组」：sync/分配面按 !=1 不展开、撤销谓词
 	// 按 ==0 不触发，两头不靠。
@@ -5682,6 +5799,11 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 	// 拒绝即整单不生效（存量授权不得被非法更新连带收敛）。
 	if newName == "" {
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
+		return
+	}
+	// R2 B03-001：同 groupCreate——回填后的合并名按列宽 100 校验。
+	if len([]rune(newName)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("分组名称长度不能超过100个字符"))
 		return
 	}
 	if newStatus != 0 && newStatus != 1 {
@@ -8126,6 +8248,13 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 		return nil, err
 	}
 
+	// R2 B09-001：同 userTunnelUpdate——显式在场的 flow 不可解析时
+	// 直拒，不得被 asInt64/parseTrafficLimit 吞成 0 绕过 -1 哨兵的
+	// 用户默认回填（assign {flow:"abc", flowMiB:0} 曾静默落 0=不限额，
+	// 而非用户默认上限）。
+	if presentNumericFieldInvalid(req, "flow") {
+		return nil, fmt.Errorf("flow 参数无效")
+	}
 	reqFlow := asInt64(req["flow"], -1)
 	var reqFlowMiB int64
 	if _, hasFlowMiB := req["flowMiB"]; hasFlowMiB {

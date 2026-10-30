@@ -170,6 +170,13 @@ func loginClientIP(r *http.Request) net.IP {
 // splitXFFEntries 健壮切分 XFF：去空白/引号，跳过空条目，
 // 超长头整体视为不可信（返回 nil），条目数封顶。
 // 注意：只做切分，不做单个条目的合法性判定，留给 parseIPLiteral。
+//
+// R2 B01-001：条目数超上限时截断必须保右弃左（右锚）。可信代理把
+// 真实客户端条目追加在 XFF 最右侧，消费方（loginClientIP /
+// federationClientIP）一律从右按跳数索引；旧实现保留最左 64 条，
+// 攻击者塞满 ≥65 条即可把代理追加的真实条目挤出保留集，限流键落到
+// 其自填的第 64 条上、轮换即绕过。头部总长已由 maxXFFHeaderBytes
+// 封顶，全量收集后再截尾无无界分配风险。
 func splitXFFEntries(raw string) []string {
 	if len(raw) > maxXFFHeaderBytes {
 		return nil
@@ -181,10 +188,10 @@ func splitXFFEntries(raw string) []string {
 		if p == "" {
 			continue
 		}
-		if len(out) >= maxXFFEntries {
-			break
-		}
 		out = append(out, p)
+	}
+	if len(out) > maxXFFEntries {
+		out = out[len(out)-maxXFFEntries:]
 	}
 	return out
 }

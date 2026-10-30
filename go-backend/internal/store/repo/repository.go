@@ -5929,13 +5929,14 @@ func getUserTunnelByID(db *gorm.DB, id int64) (*model.UserTunnel, error) {
 
 // ─── Migration ───────────────────────────────────────────────────────
 
-const currentSchemaVersion = 6
+const currentSchemaVersion = 7
 
 var ensurePostgresIDDefaultsFn = ensurePostgresIDDefaults
 var migrateViteConfigValueColumnTypeFn = migrateViteConfigValueColumnType
 var migrateSpeedLimitTunnelBindingFn = migrateSpeedLimitTunnelBinding
 var migratePostgresTrafficInt64ColumnsFn = migratePostgresTrafficInt64Columns
 var migrateTunnelMetricBucketUniqueIndexFn = migrateTunnelMetricBucketUniqueIndex
+var migrateConfigKeyCaseShadowsFn = migrateConfigKeyCaseShadows
 
 // getSchemaVersion 读取 schema_version 当前版本。仅「表在但无行」
 // （ErrRecordNotFound）走建行回 0 的新库分支；其余读错误一律上抛
@@ -6034,6 +6035,12 @@ func migrateSchema(db *gorm.DB) error {
 		}
 	}
 
+	if ver < 7 {
+		if err := migrateConfigKeyCaseShadowsFn(db); err != nil {
+			return err
+		}
+	}
+
 	// X01-002：版本推进失败必须让 migrateSchema 报错、启动显式失败，
 	// 与本函数其余迁移步骤（及 autoMigrateAll / migrateSubscriptions
 	// 在 Open/OpenPostgres 的处置）同口径——迁移已执行而版本未落库
@@ -6042,6 +6049,73 @@ func migrateSchema(db *gorm.DB) error {
 		return err
 	}
 	return nil
+}
+
+// migrateConfigKeyCaseShadows 合并 R2 B14-001 的存量影子行：写入口
+// 归一上线前，管理员以大写/混合大小写变体写入的配置行（name 与读路径
+// 的 normalizeConfigKey 口径不一致）永远读不到。按归一键分组——组内
+// 已有规范行（name == 归一键）时删全部变体行（读路径恒命中规范行，
+// 变体值从未生效）；只有变体行时保留最近一行（time 最大、id 最大
+// 兜底）改名为规范键、删其余变体。全程单事务。
+func migrateConfigKeyCaseShadows(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("nil db")
+	}
+	if !db.Migrator().HasTable(&model.ViteConfig{}) {
+		return nil
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var rows []model.ViteConfig
+		if err := tx.Find(&rows).Error; err != nil {
+			return fmt.Errorf("load vite_config for case-shadow merge: %w", err)
+		}
+		groups := make(map[string][]model.ViteConfig)
+		for _, row := range rows {
+			key := normalizeConfigKey(row.Name)
+			groups[key] = append(groups[key], row)
+		}
+		for key, group := range groups {
+			var canonical *model.ViteConfig
+			var variants []model.ViteConfig
+			for i := range group {
+				if group[i].Name == key {
+					canonical = &group[i]
+				} else {
+					variants = append(variants, group[i])
+				}
+			}
+			if len(variants) == 0 {
+				continue
+			}
+			if canonical == nil {
+				// 仅变体行：最近写入的一行改名为规范键，其余删除。
+				keep := variants[0]
+				for _, v := range variants[1:] {
+					if v.Time > keep.Time || (v.Time == keep.Time && v.ID > keep.ID) {
+						keep = v
+					}
+				}
+				if err := tx.Model(&model.ViteConfig{}).Where("id = ?", keep.ID).Update("name", key).Error; err != nil {
+					return fmt.Errorf("rename config shadow row %q: %w", keep.Name, err)
+				}
+				for _, v := range variants {
+					if v.ID == keep.ID {
+						continue
+					}
+					if err := tx.Delete(&model.ViteConfig{}, v.ID).Error; err != nil {
+						return fmt.Errorf("delete config shadow row %q: %w", v.Name, err)
+					}
+				}
+				continue
+			}
+			for _, v := range variants {
+				if err := tx.Delete(&model.ViteConfig{}, v.ID).Error; err != nil {
+					return fmt.Errorf("delete config shadow row %q: %w", v.Name, err)
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func migrateViteConfigValueColumnType(db *gorm.DB) error {

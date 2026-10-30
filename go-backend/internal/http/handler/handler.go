@@ -1483,9 +1483,18 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 	hooks := make([]string, 0, len(payload))
 	prevPools := make(map[string][]latencyTarget, len(payload))
 	for k, v := range payload {
-		key := strings.TrimSpace(k)
+		// R2 B14-001：键名按 repo.NormalizeConfigKey 归一（小写+去空白）
+		// 后再校验落库，与读路径同口径——此前只 TrimSpace，大写变体写出
+		// 读不到的影子行、变体更新静默不生效。
+		key := repo.NormalizeConfigKey(k)
 		if key == "" {
 			continue
+		}
+		// R2 K1 枚举复扫（B03-001 同族）：键名按列宽 varchar(200) 校验，
+		// 超长键不再让 PG 吐原始落库错误。
+		if len([]rune(key)) > 200 {
+			response.WriteJSON(w, response.ErrDefault("配置名称长度不能超过200个字符"))
+			return
 		}
 		if repo.IsSensitiveConfigKey(key) && !isAdminRequest(r) {
 			response.WriteJSON(w, response.Err(403, "禁止访问敏感配置"))
@@ -1541,9 +1550,15 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("配置名称不能为空"))
 		return
 	}
-	name := strings.TrimSpace(req.Name)
+	// R2 B14-001：同 updateConfigs——键名归一后再校验落库。
+	name := repo.NormalizeConfigKey(req.Name)
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("配置名称不能为空"))
+		return
+	}
+	// R2 K1 枚举复扫（B03-001 同族）：键名按列宽 varchar(200) 校验。
+	if len([]rune(name)) > 200 {
+		response.WriteJSON(w, response.ErrDefault("配置名称长度不能超过200个字符"))
 		return
 	}
 	if repo.IsSensitiveConfigKey(name) && !isAdminRequest(r) {
@@ -1876,8 +1891,18 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(req.NewUsername) == "" {
+	// R2 B02-001：改名面与 create/update 同口径归一+限长。create/update
+	// 经 asString 隐式 TrimSpace 且有 O5-002 的 1-100 rune 校验，本面
+	// 此前两者皆无——带尾空格名、101 rune 名可原样落库，导致同一逻辑名
+	// 的落库形态与可登录形态随写入面分裂（PG 还会吐原始落库错误）。
+	// 归一后的形态落库；存量已带尾空格的用户名在此后以 trim 形态登录。
+	newUsername := strings.TrimSpace(req.NewUsername)
+	if newUsername == "" {
 		response.WriteJSON(w, response.ErrDefault("新用户名不能为空"))
+		return
+	}
+	if n := len([]rune(newUsername)); n < 1 || n > 100 {
+		response.WriteJSON(w, response.ErrDefault("用户名长度必须为 1-100 个字符"))
 		return
 	}
 	if strings.TrimSpace(req.CurrentPassword) == "" {
@@ -1926,7 +1951,7 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists, err := h.repo.UsernameExistsExceptID(req.NewUsername, userID)
+	exists, err := h.repo.UsernameExistsExceptID(newUsername, userID)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1941,7 +1966,7 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if err := h.repo.UpdateUserNameAndPassword(userID, req.NewUsername, hashedPassword, time.Now().UnixMilli()); err != nil {
+	if err := h.repo.UpdateUserNameAndPassword(userID, newUsername, hashedPassword, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}

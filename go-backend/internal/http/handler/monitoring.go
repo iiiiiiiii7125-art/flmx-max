@@ -451,6 +451,11 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("名称不能为空"))
 		return
 	}
+	// R2 K1 枚举复扫（B03-001 同族）：名称按列宽 varchar(100) 校验。
+	if len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("名称长度不能超过100个字符"))
+		return
+	}
 
 	monitorType := strings.ToLower(strings.TrimSpace(req.Type))
 	if monitorType != "tcp" && monitorType != "icmp" {
@@ -590,11 +595,23 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSpace(req.Name)
+	// R2 K1 枚举复扫（B03-001 同族）：显式提交的改名按列宽 100 校验。
+	if name != "" && len([]rune(name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("名称长度不能超过100个字符"))
+		return
+	}
 	if name != "" {
 		existing.Name = name
 	}
 
 	monitorType := strings.ToLower(strings.TrimSpace(req.Type))
+	// R2 B12-002：非空但非法的 type 与 create 同口径点名报错——旧实现
+	// 仅在等于 tcp/icmp 时赋值，传 "http" 返回成功却静默不改，管理员
+	// 误以为已切换类型。空值仍是「不改类型」的部分更新语义。
+	if monitorType != "" && monitorType != "tcp" && monitorType != "icmp" {
+		response.WriteJSON(w, response.ErrDefault("类型必须是 tcp 或 icmp"))
+		return
+	}
 	if monitorType == "tcp" || monitorType == "icmp" {
 		existing.Type = monitorType
 	}
@@ -628,9 +645,13 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		existing.NodeID = *req.NodeID
 	}
 	if req.Enabled != nil {
-		if *req.Enabled == 0 || *req.Enabled == 1 {
-			existing.Enabled = *req.Enabled
+		// R2 B12-002：域外值（如 5）同 type 口径点名报错，不再静默忽略
+		// 后回成功。
+		if *req.Enabled != 0 && *req.Enabled != 1 {
+			response.WriteJSON(w, response.ErrDefault("启用状态只能为 0 或 1"))
+			return
 		}
+		existing.Enabled = *req.Enabled
 	}
 
 	// AUDIT-R2 (F1X-001): 终态为面板本机 tcp 且目标/类型/执行位置被改动时做 SSRF 校验。

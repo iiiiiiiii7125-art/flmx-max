@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -80,6 +81,62 @@ func TestR24A_FederationCorrectTwoHopChainUnaffected(t *testing.T) {
 	got := federationClientIP(loginReqWithXFF("10.0.0.5:1", "203.0.113.7, 10.0.0.9"))
 	if got == nil || got.String() != "203.0.113.7" {
 		t.Fatalf("correct 2-hop chain: federationClientIP = %v, want 203.0.113.7", got)
+	}
+}
+
+// R2 B01-001 回归：XFF 条目数超过 maxXFFEntries 时截断保右弃左。
+// 可信代理追加的真实条目在最右侧，永不被截断丢弃；攻击者在左侧
+// 塞满假条目、轮换第 64 条不得再移动限流键。
+func xff65(rotating string) string {
+	parts := make([]string, 0, 65)
+	for i := 0; i < 63; i++ {
+		parts = append(parts, "203.0.113.1")
+	}
+	parts = append(parts, rotating)       // 第 64 条（攻击者轮换）
+	parts = append(parts, "198.51.100.1") // 第 65 条（模拟代理追加的真实条目）
+	return strings.Join(parts, ", ")
+}
+
+func TestR2B01_SplitXFFEntriesRightAnchoredTruncation(t *testing.T) {
+	entries := splitXFFEntries(xff65("192.0.2.55"))
+	if len(entries) != maxXFFEntries {
+		t.Fatalf("len(entries) = %d, want %d", len(entries), maxXFFEntries)
+	}
+	if entries[len(entries)-1] != "198.51.100.1" {
+		t.Fatalf("rightmost entry = %q, want 198.51.100.1 (proxy-appended entry must survive truncation)", entries[len(entries)-1])
+	}
+	if entries[len(entries)-2] != "192.0.2.55" {
+		t.Fatalf("second-from-right entry = %q, want 192.0.2.55", entries[len(entries)-2])
+	}
+}
+
+func TestR2B01_XFFTruncationKeepsRateLimitKeyOnRealClient(t *testing.T) {
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
+	// 解析面：第 64 条任意轮换，键恒落在代理追加的真实条目上。
+	for _, rot := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
+		got := loginClientIP(loginReqWithXFF("127.0.0.1:1", xff65(rot)))
+		if got == nil || got.String() != "198.51.100.1" {
+			t.Fatalf("loginClientIP with 65-entry XFF (rot=%s) = %v, want 198.51.100.1", rot, got)
+		}
+	}
+
+	// 限流面：轮换第 64 条连打，第 11 次起必须 429。
+	resetLoginLimitersForTest()
+	h := &Handler{}
+	blocked := false
+	for i := 0; i < 20; i++ {
+		xff := xff65(fmt.Sprintf("192.0.2.%d", i%250+1))
+		w := httptest.NewRecorder()
+		if !h.checkLoginRateLimit(w, loginReqWithXFF("127.0.0.1:54321", xff)) {
+			blocked = true
+			if i < 10 {
+				t.Fatalf("blocked too early at attempt %d", i+1)
+			}
+			break
+		}
+	}
+	if !blocked {
+		t.Fatal("65-entry XFF with rotating 64th entry evaded the IP rate limit (want 429 on 11th)")
 	}
 }
 
