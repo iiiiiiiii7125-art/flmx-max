@@ -444,6 +444,11 @@ func normalizeKernelVersion(v string) string {
 }
 
 func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
+	// B11-001 (R2-K2): start/stop (and the remove failure-repush)
+	// await applyKernelWith, whose timeout conditionally escalates
+	// to kernelApplyTimeout (300s) when the kernel has no installed
+	// version; arm the same write relief as kernelInstall first.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -1314,6 +1319,10 @@ func (h *Handler) inboundPortConflict(nodeID int64, in kernel.Inbound, excludeIn
 }
 
 func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the tail awaits applyKernel for
+	// the deleted inbound's kernel, whose timeout conditionally
+	// escalates to kernelApplyTimeout (300s); arm the write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	id := idFromBody(r, w)
 	if id <= 0 {
 		return
@@ -1376,6 +1385,10 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 // inboundBatchDelete removes several inbounds and their relays, then pushes
 // each affected kernel's config once instead of once per inbound.
 func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the tail applies each affected
+	// kernel once (deduped), each with the conditional
+	// kernelApplyTimeout bound; arm the batch write relief.
+	extendWriteDeadline(w, inboundBatchWriteDeadline)
 	ids := idsFromBody(r, w)
 	if ids == nil {
 		return
@@ -1487,6 +1500,9 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 // inboundBatchToggle enables or disables several inbounds, then pushes each
 // affected kernel's config once.
 func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): same conditional per-kernel
+	// apply tail as inboundBatchDelete; arm the batch write relief.
+	extendWriteDeadline(w, inboundBatchWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -1555,6 +1571,10 @@ func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the tail awaits applyKernel,
+	// whose timeout conditionally escalates to kernelApplyTimeout
+	// (300s); arm the write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -1620,6 +1640,10 @@ func (h *Handler) inboundResetTraffic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the tail awaits applyKernel and
+	// the chain referrers' applies, each with the conditional
+	// kernelApplyTimeout bound; arm the write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	id := idFromBody(r, w)
 	if id <= 0 {
 		return

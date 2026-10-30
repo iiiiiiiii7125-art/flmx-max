@@ -1070,6 +1070,11 @@ func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]in
 }
 
 func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the response awaits
+	// applyKernelsForInbounds for the saved subscription's kernels,
+	// each with the conditional kernelApplyTimeout bound; arm the
+	// write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

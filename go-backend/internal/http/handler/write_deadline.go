@@ -24,18 +24,34 @@ const (
 	// conditionally when the pinned kernel has no installed version).
 	// Frontend >= 330s (batch T2).
 	kernelApplyWriteDeadline = 360 * time.Second
-	// nodeUpgrade: the backend bound is upgradeTimeout (300s).
-	// Frontend 360s (batch T2).
-	nodeUpgradeWriteDeadline = 360 * time.Second
+	// nodeUpgrade: with an empty version the handler first resolves
+	// the latest release through the two-stage discovery chain
+	// (<=120s prelude, same chain as systemVersion), then waits out
+	// upgradeTimeout (300s) — backend bound 420s (B05-002, R2-K2;
+	// formerly registered as the bare 300s command leg, so both this
+	// relief and the frontend aborted before a slow-prelude upgrade
+	// could answer). Frontend 480s.
+	nodeUpgradeWriteDeadline = 480 * time.Second
 	// nodeBatchUpgrade: the backend bound is ceil(N/5) x
 	// upgradeTimeout and grows with N; the handler now caps N at
-	// maxBatchUpgradeNodes (25, bound 1500s — B05-002), so 30 minutes
-	// (the gh-mirror precedent magnitude) covers the reachable range
-	// with headroom.
+	// maxBatchUpgradeNodes (25, bound 1500s — B05-002), and an empty
+	// version first pays the <=120s discovery prelude, for a worst
+	// case of 1620s (R2-K2), so 30 minutes (the gh-mirror precedent
+	// magnitude) covers the reachable range with headroom.
 	nodeBatchUpgradeWriteDeadline = 30 * time.Minute
-	// systemUpgrade (run): the synchronous prelude is <= ~210s in the
-	// worst case; frontend >= 240s (batch T2).
+	// systemUpgrade (run): the synchronous prelude is <= 240s in the
+	// worst case (resolve <=120s — the redirect stage is two 30s legs,
+	// not one as the R8 note had it — plus 2x60s shared-ctx asset
+	// download legs; B05-002, R2-K2). Frontend 300s.
 	systemUpgradeWriteDeadline = 300 * time.Second
+	// inboundBatchDelete / inboundBatchToggle (R2-K2 family closure):
+	// after the per-item DB work both handlers apply each affected
+	// kernel once (deduped across items); every apply carries the
+	// conditional kernelApplyTimeout bound (300s when a kernel has no
+	// installed version), serially per distinct kernel. The magnitude
+	// follows the nodeBatchUpgrade precedent; the frontend sizes its
+	// timeout by item count (batchCallTimeoutKernelApply, cap 1800s).
+	inboundBatchWriteDeadline = 30 * time.Minute
 	// systemVersion / systemCheckUpdates (B05-001/B05-003): the version
 	// discovery chain is two sequential stages — the releases API
 	// (proxy + direct attempts, 30s client each = 60s) and, on API

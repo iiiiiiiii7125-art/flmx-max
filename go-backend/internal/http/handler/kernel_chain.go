@@ -621,6 +621,10 @@ func (h *Handler) applyChangedTargets(prevTargets []int64, row model.NodeInbound
 
 // inboundSplitSave saves only an inbound's default exit and 分流 rules.
 func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): the tail awaits applyKernel and
+	// the changed targets' applies, each with the conditional
+	// kernelApplyTimeout bound; arm the write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return

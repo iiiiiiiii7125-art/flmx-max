@@ -26,6 +26,10 @@
 #（discovery-prelude-legacy），已按 C080 同法收口为 strict 专行、
 # 例外摘除，现无存续例外。变体自检见
 # scripts/check-timeout-budgets-selftest.sh。
+# B11-001 常设门（R2-K2）：函数体直调内核下发入口的 handler 必须
+# 改登 strict/formula 条件界行并以登记的放宽常量武装——kernel
+# 启停与入站家族曾分别以 20s 界 / class 12s 登记，对「内核未装
+# 版本时下发升至 kernelApplyTimeout 300s」的条件升级不可见。
 #
 # 用法：check-timeout-budgets.sh [REPO_ROOT]（默认脚本所在仓库根）。
 # 退出码：0 = 全格对账通过；1 = 存在漂移/缺格；2 = 前提失效。
@@ -161,6 +165,13 @@ be_literal_anchor() {
 # be_component_check CELL：expr 界的分量锚点（分量值由 Go 门测试/脚本常量复算）
 be_component_check() {
   case "$1" in
+    T005)
+      # B05-002（R2-K2）：界 = 两段发现链前奏 120s（API 段与重定向
+      # 段各两腿 × 30s 逐尝试客户端）+ upgradeTimeout 300s；任一分量
+      # 锚点漂移即界漂移。
+      grep -qP 'Timeout:\s*30 \* time\.Second' "$HANDLER_DIR/secure_fetch.go" &&
+      grep -qP 'Timeout:\s*30 \* time\.Second' "$HANDLER_DIR/upgrade.go" &&
+      [ "$(go_const_s upgradeTimeout "$HANDLER_DIR")" = 300 ] ;;
     T007|T008)
       grep -qP 'Timeout:\s*30 \* time\.Second' "$HANDLER_DIR/secure_fetch.go" ;;
     T009|C080|C059)
@@ -393,6 +404,64 @@ while IFS=$'\t' read -r d_cell d_ep d_exc; do
   fi
 done < "$CLASS_ROWS"
 rm -rf "$BODY_DIR"; rm -f "$ROUTE_MAP" "$CLASS_ROWS"
+
+# ── 内核下发家族禁登小界（B11-001 常设门）──────────────────────────
+# B11-001 家族：handler 函数体直接调用内核下发入口（applyKernel /
+# applyKernelWith / applyChainReferrers / applyChangedTargets /
+# applyWhitelistedTarget / applyKernelsForInbounds）的端点，其下发
+# 在所钉内核未装版本时条件性升至 kernelApplyTimeout（300s）；此
+# 前 kernelControl 与入站家族六格分别以 20s 界 / class 12s 登记，
+# 对该条件升级全不可见。此类端点必须：①登记为 strict（单内核）
+# 或 formula（批量）行；②sv 登记为内核下发放宽常量
+#（kernelApplyWriteDeadline / inboundBatchWriteDeadline）；③
+# handler 体以同一常量 extendWriteDeadline 武装。登记行带命名例
+# 外（exception 列）时放行并在此点名（当前无存续例外）。机械定
+# 义仅限函数体直调；传递性可达面（refreshInboundWhitelist 白名
+# 单刷新、realm 同步链、订阅凭据轮换等）不在本规则内，仍按其各
+# 自登记行对账。变体自检见 check-timeout-budgets-selftest.sh。
+APPLY_ENTRY_RE='h\.(applyKernel|applyKernelWith|applyChainReferrers|applyChangedTargets|applyWhitelistedTarget|applyKernelsForInbounds)[[:space:]]*\('
+REG_ROW_MAP="$(mktemp)"; ROUTE_MAP2="$(mktemp)"; BODY_DIR2="$(mktemp -d)"
+grep -v '^#' "$REG" | tail -n +2 | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\t%s\n", $4, $1, $15, $11, $16 }' > "$REG_ROW_MAP"
+grep -rhoP --exclude='*_test.go' '"/api/v1[^"]*", h\.[A-Za-z0-9]+' "$ROOT/go-backend/internal/http" 2>/dev/null \
+  | sed -E 's#"/api/v1([^"]*)", h\.(.*)#\1\t\2#' | sort -u > "$ROUTE_MAP2"
+awk -v dir="$BODY_DIR2" '
+  /^func \(h \*Handler\) [A-Za-z0-9]+\(/ {
+    if (out) close(out)
+    name = $0; sub(/^func \(h \*Handler\) /, "", name); sub(/\(.*/, "", name)
+    out = dir "/" name; print > out; next
+  }
+  /^func / { if (out) { close(out); out = "" } }
+  out { print >> out }
+' "$HANDLER_DIR"/*.go 2>/dev/null
+while IFS=$'\t' read -r a_ep a_fn; do
+  [ -n "$a_fn" ] || continue
+  [ -f "$BODY_DIR2/$a_fn" ] || continue
+  grep -qE "$APPLY_ENTRY_RE" "$BODY_DIR2/$a_fn" || continue
+  a_row="$(awk -F'\t' -v ep="$a_ep" '$1==ep { print; exit }' "$REG_ROW_MAP")"
+  if [ -z "$a_row" ]; then
+    fail "B11-001 家族：端点 $a_ep（handler $a_fn）函数体直调内核下发入口但未登记"
+    continue
+  fi
+  a_cell="$(printf '%s' "$a_row" | cut -f2)"
+  a_check="$(printf '%s' "$a_row" | cut -f3)"
+  a_svsrc="$(printf '%s' "$a_row" | cut -f4)"
+  a_exc="$(printf '%s' "$a_row" | cut -f5)"
+  if [ -n "$a_exc" ]; then
+    echo "NOTE: $a_cell($a_ep) 的 handler $a_fn 直调内核下发入口，以命名例外「$a_exc」保留 $a_check 登记（待收口）"
+    continue
+  fi
+  case "$a_check" in
+    strict|formula) ;;
+    *) fail "$a_cell($a_ep) 的 handler $a_fn 函数体直调内核下发入口，却登记为 $a_check——内核下发家族必须改登 strict/formula 条件界行（B11-001）" ;;
+  esac
+  case "$a_svsrc" in
+    kernelApplyWriteDeadline|inboundBatchWriteDeadline) ;;
+    *) fail "$a_cell($a_ep) 服务端放宽登记为 ${a_svsrc:-（空）}，不是内核下发放宽常量（B11-001）" ;;
+  esac
+  grep -q "extendWriteDeadline(w, $a_svsrc)" "$BODY_DIR2/$a_fn" \
+    || fail "$a_cell($a_ep) 登记放宽 $a_svsrc 但 handler $a_fn 未以该常量 extendWriteDeadline 武装（B11-001）"
+done < "$ROUTE_MAP2"
+rm -rf "$BODY_DIR2"; rm -f "$ROUTE_MAP2" "$REG_ROW_MAP"
 
 # ── 普查差集：api/index.ts 全部导出调用点必须恰登记一次 ────────────────
 CEN_FAIL=0

@@ -219,6 +219,11 @@ func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, 
 // inboundExternalUpdate edits an imported node: its name, address and
 // options, and optionally replaces its parameters with a new share link.
 func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) {
+	// R2-K2 family closure (B11-001): after the save, the handler
+	// awaits applyChainReferrers for kernels chained through this
+	// inbound, each with the conditional kernelApplyTimeout bound;
+	// arm the write relief.
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
