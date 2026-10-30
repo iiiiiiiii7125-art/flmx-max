@@ -3,7 +3,7 @@ name: flmx-api
 description: Operate FLMX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management, federation clustering, and traffic monitoring. Use when user wants to manage FLMX panel programmatically or via natural language.
 metadata:
   author: FLMX Team
-  version: "1.7.2"
+  version: "1.7.3"
   requires_env:
     - FLMX_BASE_URL
     - FLMX_USERNAME
