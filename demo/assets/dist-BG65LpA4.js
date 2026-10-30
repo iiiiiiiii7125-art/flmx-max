@@ -1,0 +1,1 @@
+import{Hi as e,hi as t,zi as n}from"./index-DkMKzjMQ.js";var r=t(`check`,[[`path`,{d:`M20 6 9 17l-5-5`,key:`1gmf2c`}]]),i=e(n(),1);function a(e){let t=i.useRef({value:e,previous:e});return i.useMemo(()=>(t.current.value!==e&&(t.current.previous=t.current.value,t.current.value=e),t.current.previous),[e])}export{r as n,a as t};
