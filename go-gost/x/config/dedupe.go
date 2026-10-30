@@ -185,6 +185,387 @@ func DeduplicateRLimiters(cfg *Config) []string {
 	return removed
 }
 
+// R2-A01-001: 启动自愈去重补齐全部命名切片。R17/R18/INT 三代自愈只接线
+// 了 service / chain / limiter / climiter / rlimiter 五类，但 loader.Load
+// 对 Config 的全部 17 类命名切片一律按名 Register、遇重名即返回
+// registry: duplicate object、program.Start 失败退出——其余 12 类
+// （hop / auther / admission / bypass / resolver / hosts / ingress /
+// router / sd / recorder / observer / logger）的毒化文件没有任何生路：
+// agent 致命退出、文件不被清理、服务管理器重启循环、节点永久离线
+// （hop 与 bypass 已实证，resolver 同型复证）。本节按 DeduplicateServices
+// 的同一口径（保留首次出现、名按 TrimSpace 后比较、nil 项原样保留）为
+// 12 类补齐 Deduplicate*/HealPersisted*，并以 HealPersistedDuplicates
+// 作为全集聚合入口：namedHealKinds 是与 Config 命名切片全集对齐的闭合
+// 枚举，r2_a01_001 测试以反射枚举 Config 字段断言差集为 ∅——将来
+// Config 新增命名切片而未接线自愈时测试直接失败，不等下一轮审计。
+func HealPersistedHops(cfg *Config) ([]string, error) {
+	removed := DeduplicateHops(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateHops removes later entries in cfg.Hops that repeat an earlier
+// hop name, keeping the first occurrence. Nil entries are kept as-is.
+func DeduplicateHops(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Hops, func(h *HopConfig) string { return h.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Hops = kept
+	return removed
+}
+
+func HealPersistedAuthers(cfg *Config) ([]string, error) {
+	removed := DeduplicateAuthers(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateAuthers removes later entries in cfg.Authers that repeat an
+// earlier auther name, keeping the first occurrence. Nil entries are kept
+// as-is.
+func DeduplicateAuthers(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Authers, func(a *AutherConfig) string { return a.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Authers = kept
+	return removed
+}
+
+func HealPersistedAdmissions(cfg *Config) ([]string, error) {
+	removed := DeduplicateAdmissions(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateAdmissions removes later entries in cfg.Admissions that
+// repeat an earlier admission name, keeping the first occurrence. Nil
+// entries are kept as-is.
+func DeduplicateAdmissions(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Admissions, func(a *AdmissionConfig) string { return a.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Admissions = kept
+	return removed
+}
+
+func HealPersistedBypasses(cfg *Config) ([]string, error) {
+	removed := DeduplicateBypasses(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateBypasses removes later entries in cfg.Bypasses that repeat an
+// earlier bypass name, keeping the first occurrence. Nil entries are kept
+// as-is.
+func DeduplicateBypasses(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Bypasses, func(b *BypassConfig) string { return b.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Bypasses = kept
+	return removed
+}
+
+func HealPersistedResolvers(cfg *Config) ([]string, error) {
+	removed := DeduplicateResolvers(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateResolvers removes later entries in cfg.Resolvers that repeat
+// an earlier resolver name, keeping the first occurrence. Nil entries are
+// kept as-is.
+func DeduplicateResolvers(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Resolvers, func(r *ResolverConfig) string { return r.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Resolvers = kept
+	return removed
+}
+
+func HealPersistedHosts(cfg *Config) ([]string, error) {
+	removed := DeduplicateHosts(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateHosts removes later entries in cfg.Hosts that repeat an
+// earlier hosts name, keeping the first occurrence. Nil entries are kept
+// as-is.
+func DeduplicateHosts(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Hosts, func(h *HostsConfig) string { return h.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Hosts = kept
+	return removed
+}
+
+func HealPersistedIngresses(cfg *Config) ([]string, error) {
+	removed := DeduplicateIngresses(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateIngresses removes later entries in cfg.Ingresses that repeat
+// an earlier ingress name, keeping the first occurrence. Nil entries are
+// kept as-is.
+func DeduplicateIngresses(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Ingresses, func(i *IngressConfig) string { return i.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Ingresses = kept
+	return removed
+}
+
+func HealPersistedRouters(cfg *Config) ([]string, error) {
+	removed := DeduplicateRouters(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateRouters removes later entries in cfg.Routers that repeat an
+// earlier router name, keeping the first occurrence. Nil entries are kept
+// as-is.
+func DeduplicateRouters(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Routers, func(r *RouterConfig) string { return r.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Routers = kept
+	return removed
+}
+
+func HealPersistedSDs(cfg *Config) ([]string, error) {
+	removed := DeduplicateSDs(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateSDs removes later entries in cfg.SDs that repeat an earlier
+// sd name, keeping the first occurrence. Nil entries are kept as-is.
+func DeduplicateSDs(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.SDs, func(s *SDConfig) string { return s.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.SDs = kept
+	return removed
+}
+
+func HealPersistedRecorders(cfg *Config) ([]string, error) {
+	removed := DeduplicateRecorders(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateRecorders removes later entries in cfg.Recorders that repeat
+// an earlier recorder name, keeping the first occurrence. Nil entries are
+// kept as-is.
+func DeduplicateRecorders(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Recorders, func(r *RecorderConfig) string { return r.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Recorders = kept
+	return removed
+}
+
+func HealPersistedObservers(cfg *Config) ([]string, error) {
+	removed := DeduplicateObservers(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateObservers removes later entries in cfg.Observers that repeat
+// an earlier observer name, keeping the first occurrence. Nil entries are
+// kept as-is.
+func DeduplicateObservers(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Observers, func(o *ObserverConfig) string { return o.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Observers = kept
+	return removed
+}
+
+func HealPersistedLoggers(cfg *Config) ([]string, error) {
+	removed := DeduplicateLoggers(cfg)
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := PersistNow(cfg); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// DeduplicateLoggers removes later entries in cfg.Loggers that repeat an
+// earlier logger name, keeping the first occurrence. Nil entries are kept
+// as-is.
+func DeduplicateLoggers(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	kept, removed := dedupeNamed(cfg.Loggers, func(l *LoggerConfig) string { return l.Name })
+	if len(removed) == 0 {
+		return nil
+	}
+	cfg.Loggers = kept
+	return removed
+}
+
+// DuplicateHeal reports one named category healed by
+// HealPersistedDuplicates: the category label, the removed duplicate
+// names, and the re-persist error when the healed config could not be
+// written back (the in-memory config is healed either way).
+type DuplicateHeal struct {
+	Kind    string
+	Removed []string
+	Err     error
+}
+
+// namedHealKinds is the closed enumeration of every named slice in
+// Config, in struct field order. HealPersistedDuplicates walks exactly
+// this table; the R2-A01-001 regression test enumerates Config's named
+// slices by reflection and fails if this table and the struct ever drift
+// apart (差集 ∅).
+var namedHealKinds = []struct {
+	kind string
+	heal func(*Config) ([]string, error)
+}{
+	{"service", HealPersistedServices},
+	{"chain", HealPersistedChains},
+	{"hop", HealPersistedHops},
+	{"auther", HealPersistedAuthers},
+	{"admission", HealPersistedAdmissions},
+	{"bypass", HealPersistedBypasses},
+	{"resolver", HealPersistedResolvers},
+	{"hosts", HealPersistedHosts},
+	{"ingress", HealPersistedIngresses},
+	{"router", HealPersistedRouters},
+	{"sd", HealPersistedSDs},
+	{"recorder", HealPersistedRecorders},
+	{"limiter", HealPersistedLimiters},
+	{"conn limiter", HealPersistedCLimiters},
+	{"rate limiter", HealPersistedRLimiters},
+	{"observer", HealPersistedObservers},
+	{"logger", HealPersistedLoggers},
+}
+
+// HealPersistedDuplicates dedupes every named slice of cfg (all 17
+// categories, see namedHealKinds) and re-persists after each category
+// that changed. It returns one DuplicateHeal per category that had
+// duplicates removed, in table order; a clean (or nil) config returns
+// nil and triggers no persist write.
+func HealPersistedDuplicates(cfg *Config) []DuplicateHeal {
+	if cfg == nil {
+		return nil
+	}
+	var heals []DuplicateHeal
+	for _, entry := range namedHealKinds {
+		removed, err := entry.heal(cfg)
+		if len(removed) == 0 {
+			continue
+		}
+		heals = append(heals, DuplicateHeal{Kind: entry.kind, Removed: removed, Err: err})
+	}
+	return heals
+}
+
 // R20-F04: 启动自愈剪无引用 conn limiter（存量孤儿清理）。
 // F-03（R19）只防新增：删转发路径补发 DeleteCLimiters 后不再产生新孤儿，
 // 但存量孤儿（测试机 gost.json 内 rule_conn_limit_12 ["$ 7"] 与
