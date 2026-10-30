@@ -22,6 +22,11 @@ await call(tok, "POST", "kernel/capabilities");
 // config walk fails. Record the seed panel's honest answer (no token
 // configured) like every other item-level endpoint here.
 await call(tok, "POST", "backup/gist/status", {});
+// The config page also polls the pre-import auto-backup snapshot status
+// (GET, no body) on mount; without a direct recording the demo adapter
+// warns "[demo] not recorded" and the config walk fails. Record the seed
+// panel's honest answer (no import has run, so no snapshot exists).
+await call(tok, "GET", "backup/import-auto-backup/status");
 await call(tok, "POST", "group/user/list");
 await call(tok, "POST", "group/tunnel/list");
 await call(tok, "POST", "group/permission/list");
