@@ -493,12 +493,6 @@ func resumeServices(req resumeServicesRequest) error {
 			return errors.New("service name is required")
 		}
 
-		// 检查服务是否存在
-		svc := registry.ServiceRegistry().Get(name)
-		if svc == nil {
-			return errors.New(fmt.Sprintf("service %s not found", name))
-		}
-
 		// 查找配置中的服务
 		var serviceConfig *config.ServiceConfig
 		for _, s := range cfg.Services {
@@ -513,6 +507,15 @@ func resumeServices(req resumeServicesRequest) error {
 			}
 		}
 
+		// 检查服务是否存在：注册表与配置任一在册即可继续判定（两者
+		// 皆无才是真未知）。R2-A01-003：已暂停服务在 agent 重启/重载
+		// 后被 loader 跳过、不进注册表，但配置仍在册——不能再凭注册表
+		// 缺失一律报 not found，否则暂停服务重启后永远恢复不了（与
+		// updateServices 的 upsert 口径矛盾）。
+		svc := registry.ServiceRegistry().Get(name)
+		if svc == nil && serviceConfig == nil {
+			return errors.New(fmt.Sprintf("service %s not found", name))
+		}
 		if serviceConfig == nil {
 			return errors.New(fmt.Sprintf("service %s configuration not found", name))
 		}
@@ -523,6 +526,13 @@ func resumeServices(req resumeServicesRequest) error {
 			if pausedVal, exists := serviceConfig.Metadata["paused"]; exists && pausedVal == true {
 				paused = true
 			}
+		}
+
+		// 未注册且未暂停：状态不一致（未暂停服务本应已注册运行），
+		// 保持历史 not found 口径，不静默跳过。未注册且已暂停则进入
+		// 恢复名单（service 为 nil），第二阶段按配置重建。
+		if svc == nil && !paused {
+			return errors.New(fmt.Sprintf("service %s not found", name))
 		}
 
 		// 如果服务没有暂停(即正在运行)，跳过
@@ -547,17 +557,22 @@ func resumeServices(req resumeServicesRequest) error {
 
 	// 逐个恢复服务，如果失败则回滚
 	for _, str := range servicesToResume {
-		// 先关闭现有服务
-		str.service.Close()
-		registry.ServiceRegistry().Unregister(str.name)
+		// str.service == nil 是 R2-A01-003 的重建路径（已暂停但未
+		// 注册）：无旧实例可关，直接按配置重建；端口若被他人占用，
+		// ParseService 绑定失败、整单回滚（fail-closed）。
+		if str.service != nil {
+			// 先关闭现有服务
+			str.service.Close()
+			registry.ServiceRegistry().Unregister(str.name)
 
-		// 强制断开端口的所有连接
-		if str.serviceConfig.Addr != "" {
-			_ = kill.ForceClosePortConnections(str.serviceConfig.Addr)
+			// 强制断开端口的所有连接
+			if str.serviceConfig.Addr != "" {
+				_ = kill.ForceClosePortConnections(str.serviceConfig.Addr)
+			}
+
+			// 等待端口释放
+			time.Sleep(500 * time.Millisecond)
 		}
-
-		// 等待端口释放
-		time.Sleep(500 * time.Millisecond)
 
 		// 重新解析并启动服务
 		svc, err := parser.ParseService(str.serviceConfig)
