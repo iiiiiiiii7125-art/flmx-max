@@ -1745,6 +1745,13 @@ func (r *Repository) ListTunnels() ([]map[string]interface{}, error) {
 			"chainType": chainTypeInt,
 			"inx":       inx,
 		}
+		// P01-003：回吐链路行实际落库端口（链路段/出口段）。此前组装
+		// 丢弃 port，非入口段口在任何列表/详情面不可见——撞口/漂移
+		// 发生时用户只能看到下发失败、查不到各段拿了什么口。入口行
+		// port 恒 NULL 不带此字段；NULL（远端待预留）同样省略。
+		if c.Port.Valid && c.Port.Int64 > 0 {
+			nodeObj["port"] = int(c.Port.Int64)
+		}
 		if c.Protocol.Valid {
 			nodeObj["protocol"] = c.Protocol.String
 		}

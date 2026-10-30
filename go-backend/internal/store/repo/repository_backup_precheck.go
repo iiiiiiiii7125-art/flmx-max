@@ -12,10 +12,11 @@ import (
 // 跨表同口（入站 vs 转发 vs 链路）在无唯一索引兜底时静默恢复出坏
 // 配置，有索引时整单事务裸冲突失败且报错不指名。现在 Import 在写
 // 入前先做预检，并在预检+事务全程持有相关节点的 per-node 端口锁：
-//   - 占用全景 = 当前 DB 三表（forward_port / chain_tunnel /
-//     node_inbound），排除将被本次恢复按 ID 替换的行；
-//   - 备份内的声明逐条与全景及彼此核对，冲突即以「节点+端口+占用
-//     方」报错中止，什么都不写。
+//   - 占用判重走统一四源谓词 NodePortOccupantTx（P01-001 收敛；
+//     此前本文件自拼三表全景，漏联邦有效预留——恢复落口撞现行预留
+//     会放行、落库后跨表重复），排除将被本次恢复按 ID 替换的行；
+//   - 备份内的声明逐条与 DB 占用及彼此核对，冲突即以「节点+端口+
+//     占用方」报错中止，什么都不写。
 // external 入站（node_id=0）的端口在远端主机上，不参与本地节点
 // 端口空间，跳过。
 
@@ -81,29 +82,49 @@ func lockBackupPortNodes(claims []backupPortClaim) func() {
 	}
 }
 
+// backupPortSourceLabel 把统一谓词的来源标识译成预检报错里的占用方
+// 文案（与收敛前的三表全景文案保持一致，联邦预留为新增第四源）。
+func backupPortSourceLabel(source string) string {
+	switch source {
+	case PortSourceForward:
+		return "已有转发"
+	case PortSourceChain:
+		return "已有隧道链路"
+	case PortSourceInbound:
+		return "已有入站"
+	case PortSourcePeer:
+		return "联邦分享预留"
+	}
+	return "其他服务"
+}
+
 func (r *Repository) precheckBackupPortConflicts(backup *model.BackupData, typeSet map[string]bool, claims []backupPortClaim) error {
 	if len(claims) == 0 {
 		return nil
 	}
 	// 将被本次恢复按 ID 替换的行不算冲突（重复恢复同一备份须幂等）。
-	replacedForwards := make(map[int64]bool)
+	// 排除集按恢复语义组装：转发按 forward_id、入站按入站 id、链路
+	// 按所属隧道 id（统一谓词的链路排除粒度是隧道——同一
+	// (node, port) 上属于该隧道的行只可能是将被替换的那一行，与
+	// 此前按链路行 id 排除等价）。联邦有效预留不在备份内、无排除。
+	var excl PortExclusions
 	if typeSet["forwards"] {
 		for _, f := range backup.Forwards {
-			replacedForwards[f.ID] = true
+			excl.ForwardIDs = append(excl.ForwardIDs, f.ID)
 		}
 	}
-	replacedChains := make(map[int64]bool)
 	if typeSet["tunnels"] {
+		seen := make(map[int64]bool)
 		for _, t := range backup.Tunnels {
-			for _, ct := range t.ChainTunnels {
-				replacedChains[ct.ID] = true
+			if !seen[t.ID] {
+				seen[t.ID] = true
+				excl.TunnelIDs = append(excl.TunnelIDs, t.ID)
 			}
 		}
 	}
-	replacedInbounds := make(map[int64]bool)
 	if typeSet["inbounds"] && backup.Inbounds != nil {
 		for _, ib := range backup.Inbounds.Inbounds {
-			replacedInbounds[ib.ID] = true
+			excl.InboundIDs = append(excl.InboundIDs, ib.ID)
 		}
 	}
 
@@ -111,60 +132,22 @@ func (r *Repository) precheckBackupPortConflicts(backup *model.BackupData, typeS
 		nodeID int64
 		port   int
 	}
-	occupied := make(map[portKey]string)
-	var fpRows []struct {
-		ForwardID int64
-		NodeID    int64
-		Port      int
-	}
-	if err := r.db.Model(&model.ForwardPort{}).Select("forward_id, node_id, port").
-		Where("node_id > 0 AND port > 0").Scan(&fpRows).Error; err != nil {
-		return err
-	}
-	for _, row := range fpRows {
-		if replacedForwards[row.ForwardID] {
-			continue
-		}
-		occupied[portKey{row.NodeID, row.Port}] = "已有转发"
-	}
-	var ctRows []struct {
-		ID     int64
-		NodeID int64
-		Port   int64
-	}
-	if err := r.db.Model(&model.ChainTunnel{}).Select("id, node_id, port").
-		Where("node_id > 0 AND port > 0").Scan(&ctRows).Error; err != nil {
-		return err
-	}
-	for _, row := range ctRows {
-		if replacedChains[row.ID] {
-			continue
-		}
-		occupied[portKey{row.NodeID, int(row.Port)}] = "已有隧道链路"
-	}
-	var ibRows []struct {
-		ID     int64
-		NodeID int64
-		Port   int
-	}
-	if err := r.db.Model(&model.NodeInbound{}).Select("id, node_id, port").
-		Where("node_id > 0 AND port > 0").Scan(&ibRows).Error; err != nil {
-		return err
-	}
-	for _, row := range ibRows {
-		if replacedInbounds[row.ID] {
-			continue
-		}
-		occupied[portKey{row.NodeID, row.Port}] = "已有入站"
-	}
-
+	claimed := make(map[portKey]string)
 	for _, claim := range claims {
 		key := portKey{claim.nodeID, claim.port}
-		if owner, ok := occupied[key]; ok {
+		if owner, ok := claimed[key]; ok {
 			return fmt.Errorf("备份恢复端口冲突：节点 %d 端口 %d 已被%s占用（备份中的%s需要该端口），已中止恢复，未写入任何数据",
 				claim.nodeID, claim.port, owner, claim.owner)
 		}
-		occupied[key] = "备份中的" + claim.owner
+		source, err := r.NodePortOccupantTx(r.db, claim.nodeID, claim.port, excl)
+		if err != nil {
+			return err
+		}
+		if source != "" {
+			return fmt.Errorf("备份恢复端口冲突：节点 %d 端口 %d 已被%s占用（备份中的%s需要该端口），已中止恢复，未写入任何数据",
+				claim.nodeID, claim.port, backupPortSourceLabel(source), claim.owner)
+		}
+		claimed[key] = "备份中的" + claim.owner
 	}
 	return nil
 }

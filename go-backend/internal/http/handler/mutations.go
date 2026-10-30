@@ -1621,6 +1621,16 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// B06-001（Round 2 K9）：Type ∈ {1,2}、Status ∈ {0,1} 同口径立门
+	// （此前两字段无合法集校验、域外值原样落库回吐）。
+	if err := validateTunnelType(typeVal); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := validateTunnelStatus(status); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	// R31-L1-E01：显式 inIp 与系统派生值同口径——按 , 分项复用
 	// stripShareHostPort 剥离 :port 后落库（整串 strip 对含逗号串
 	// 无效）。空值仍走下方 buildTunnelInIP 派生；存量不改写。
@@ -2138,6 +2148,21 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// B06-001（Round 2 K9）：Type ∈ {1,2}、Status ∈ {0,1} 同口径立门，
+	// presence 语义与 flow/trafficRatio 一致（仅校验在场非空字段，
+	// 缺席字段的存量回填值不连坐）。
+	if raw, ok := req["type"]; ok && asString(raw) != "" {
+		if err := validateTunnelType(asInt(raw, 1)); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
+	if raw, ok := req["status"]; ok && asString(raw) != "" {
+		if err := validateTunnelStatus(asInt(raw, 1)); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 	typeVal := asInt(req["type"], 1)
 	_, hasType := req["type"]
 	ipPreference := asString(req["ipPreference"])
@@ -2352,6 +2377,23 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// P01-002：验证段 prepare 若把非入口段口换掉（现口被占/越界），
+	// 换口事实必须随回执显形——与 relayResyncWarnings 同通道进
+	// data.warnings（前端已有逐条 toast），不再静默漂移。
+	var portChangeWarnings []string
+	if runtimeState != nil {
+		for _, ch := range runtimeState.PortChanges {
+			nodeName := ""
+			if n := runtimeState.Nodes[ch.NodeID]; n != nil {
+				nodeName = n.Name
+			}
+			segment := "出口"
+			if ch.ChainType == 2 {
+				segment = "链路"
+			}
+			portChangeWarnings = append(portChangeWarnings, fmt.Sprintf("节点 %s %s端口由 %d 变更为 %d（原端口已被占用或不在节点端口范围内）", nodeName, segment, ch.OldPort, ch.NewPort))
+		}
+	}
 	// X-P2-4 ①（E-S1）：名下中转转发逐条复跑 onLanding 判定——新出口集
 	// 让某个落地入站「出口为落地但非单出口」时拒绝保存（文案与
 	// relayTarget 一致），否则转发继续拨回环地址静默错向。置于验证段
@@ -2529,8 +2571,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// warnings 随成功回执带出（不静默）。
 	relayResyncWarnings := h.resyncManagedRelayRemoteAddrsForTunnel(id)
 	respondTunnelUpdateOK := func() {
-		if len(relayResyncWarnings) > 0 {
-			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(relayResyncWarnings, "；"), TS: now, Data: map[string]interface{}{"warnings": relayResyncWarnings}})
+		warnings := append(append([]string{}, portChangeWarnings...), relayResyncWarnings...)
+		if len(warnings) > 0 {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"warnings": warnings}})
 			return
 		}
 		response.WriteJSON(w, response.OKEmpty())
@@ -5853,6 +5896,16 @@ type tunnelRuntimeNode struct {
 	ConnectIP string
 }
 
+// tunnelPortChange describes one non-entry segment port that an update
+// prepare had to move because the persisted port was no longer usable
+// (occupied by someone else, or outside the node's current port spec).
+type tunnelPortChange struct {
+	NodeID    int64
+	ChainType int // 2 = chain hop, 3 = exit
+	OldPort   int
+	NewPort   int
+}
+
 type tunnelCreateState struct {
 	TunnelID     int64
 	Type         int
@@ -5862,6 +5915,75 @@ type tunnelCreateState struct {
 	OutNodes     []tunnelRuntimeNode
 	Nodes        map[int64]*nodeRecord
 	NodeIDList   []int64
+	// PortChanges records non-entry port re-picks made during an update
+	// prepare (P01-002), so tunnelUpdate can surface them in the
+	// receipt's warnings instead of drifting ports silently.
+	PortChanges []tunnelPortChange
+}
+
+// tunnelChainPortKey identifies one non-entry segment slot of a tunnel
+// by (chainType, inx, nodeID) — the same identity replaceTunnelChainsTx
+// persists (inx = 1-based position within the segment list).
+type tunnelChainPortKey struct {
+	chainType int
+	inx       int
+	nodeID    int64
+}
+
+// existingTunnelChainPorts loads the tunnel's persisted non-entry ports
+// (chain hops + exits) for update-time reuse decisions (P01-002).
+func (h *Handler) existingTunnelChainPorts(tx *gorm.DB, tunnelID int64) (map[tunnelChainPortKey]int, error) {
+	rows, err := h.repo.ListChainNodesForTunnelTx(tx, tunnelID)
+	if err != nil {
+		return nil, err
+	}
+	ports := make(map[tunnelChainPortKey]int, len(rows))
+	for _, row := range rows {
+		if row.Port > 0 && (row.ChainType == 2 || row.ChainType == 3) {
+			ports[tunnelChainPortKey{chainType: row.ChainType, inx: int(row.Inx), nodeID: row.NodeID}] = row.Port
+		}
+	}
+	return ports, nil
+}
+
+// resolveTunnelSegmentPort decides the port for one non-entry segment
+// node during prepareTunnelCreateState when the request carries no
+// explicit port:
+//   - create (excludeTunnelID == 0): random pick, as before;
+//   - update: reuse the slot's persisted port while it is still legal —
+//     inside the node's port spec and unoccupied under the unified
+//     four-source predicate (excluding this tunnel). A rename-only edit
+//     must not silently drift ports (P01-002). Only when the old port
+//     is taken, out of spec, or the slot has no persisted port does it
+//     re-pick — with the same random policy as create (the old update
+//     path used the sequential minimum, which drifted ports on every
+//     edit and piled them at the bottom of the range). A re-pick that
+//     moves the port is recorded in state.PortChanges so the update
+//     receipt can warn about it.
+func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState, nodeID int64, chainType int, inx int, allocated map[int64]int, excludeTunnelID int64, existing map[tunnelChainPortKey]int) (int, error) {
+	if excludeTunnelID > 0 {
+		if oldPort, ok := existing[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}]; ok && oldPort > 0 {
+			reusable, err := h.repo.TunnelChainPortReusableTx(tx, nodeID, oldPort, excludeTunnelID)
+			if err != nil {
+				return 0, err
+			}
+			if reusable {
+				allocated[nodeID] = oldPort
+				return oldPort, nil
+			}
+			port, err := h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
+			if err != nil {
+				return 0, err
+			}
+			if port != oldPort {
+				state.PortChanges = append(state.PortChanges, tunnelPortChange{
+					NodeID: nodeID, ChainType: chainType, OldPort: oldPort, NewPort: port,
+				})
+			}
+			return port, nil
+		}
+	}
+	return h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
 }
 
 func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface{}, tunnelType int, excludeTunnelID int64) (*tunnelCreateState, error) {
@@ -5897,8 +6019,19 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			return nil, errors.New("出口不能为空")
 		}
 
+		// P01-002：更新时先载入本隧道现存的非入口段口，供缺省口走
+		// 「沿用现口、不可用才重挑」口径（见 resolveTunnelSegmentPort）。
+		existingPorts := map[tunnelChainPortKey]int{}
+		if excludeTunnelID > 0 {
+			var err error
+			existingPorts, err = h.existingTunnelChainPorts(tx, excludeTunnelID)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		allocated := map[int64]int{}
-		for _, item := range outNodesRaw {
+		for idx, item := range outNodesRaw {
 			nodeID := asInt64(item["nodeId"], 0)
 			if nodeID <= 0 {
 				continue
@@ -5912,11 +6045,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				}
 				if !isRemote {
 					var err error
-					if excludeTunnelID > 0 {
-						port, err = h.repo.PickNodePortTx(tx, nodeID, allocated, excludeTunnelID)
-					} else {
-						port, err = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
-					}
+					port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 3, idx+1, allocated, excludeTunnelID, existingPorts)
 					if err != nil {
 						return nil, err
 					}
@@ -5951,11 +6080,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 					}
 					if !isRemote {
 						var err error
-						if excludeTunnelID > 0 {
-							port, err = h.repo.PickNodePortTx(tx, nodeID, allocated, excludeTunnelID)
-						} else {
-							port, err = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
-						}
+						port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 2, hopIdx+1, allocated, excludeTunnelID, existingPorts)
 						if err != nil {
 							return nil, err
 						}
