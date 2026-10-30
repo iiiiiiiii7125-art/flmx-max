@@ -256,3 +256,11 @@ func FilterBackupConfigs(in map[string]string) map[string]string {
 func normalizeConfigKey(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
+
+// NormalizeConfigKey 是 normalizeConfigKey 的导出形态，供写入口
+// （R2 B14-001：config update / update-single）在落库前把键名归一到
+// 与读路径/策略判定同一口径——此前写面只 TrimSpace，管理员写大写
+// 变体返回成功却生成读不到的影子行、变体更新静默不生效。
+func NormalizeConfigKey(name string) string {
+	return normalizeConfigKey(name)
+}
