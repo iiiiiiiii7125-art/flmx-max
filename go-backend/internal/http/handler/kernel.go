@@ -225,6 +225,12 @@ func applyInboundToModel(in kernel.Inbound, row *model.NodeInbound) error {
 // ---- kernel endpoints ----
 
 func (h *Handler) kernelCapabilities(w http.ResponseWriter, r *http.Request) {
+	// B11-004：与 kernelList/kernelInstall/kernelVersions/kernelControl 等
+	// 兄弟端点统一 POST-only，非 POST 返回信封化的「请求失败」。
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"kernels":   kernel.Catalog(),
 		"ssMethods": kernel.SSMethods(),
@@ -469,7 +475,10 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.applyKernel(k.ID, false); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			// B11-002：enabled 已先行落库（节点重连时按新状态对账生效），
+			// 与 kernelInstall 的部分成功口径对齐——回执必须明示状态已
+			// 更新、仅下发失败，不得只回原始错误让用户误判启停未生效。
+			response.WriteJSON(w, response.ErrDefault("已更新启停状态，但下发失败: "+err.Error()))
 			return
 		}
 	case "restart":
@@ -1145,7 +1154,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 				return
 			case update && prevMetering == 1 && prevMeteringBlock == "":
 				releasePortAlloc()
-				response.WriteJSON(w, response.ErrDefault("该入站已开启订阅计量：" + block + "，请先关闭订阅计量"))
+				response.WriteJSON(w, response.ErrDefault("该入站已开启订阅计量："+block+"，请先关闭订阅计量"))
 				return
 			default:
 				row.MeteringEnabled = 0
@@ -1846,11 +1855,21 @@ type kernelVersionItem struct {
 	PublishedAt string `json:"publishedAt,omitempty"`
 }
 
+// kernelVersionFetchCall 是一次进行中的内核版本抓取（singleflight
+// 合并单元）：同 key 的并发调用方等在 done 上共享结果，不再各自排队
+// 重抓（B11-001）。
+type kernelVersionFetchCall struct {
+	done  chan struct{}
+	items []kernelVersionItem
+	err   error
+}
+
 var kernelVersionCache = struct {
 	sync.Mutex
-	at    map[string]time.Time
-	items map[string][]kernelVersionItem
-}{at: map[string]time.Time{}, items: map[string][]kernelVersionItem{}}
+	at      map[string]time.Time
+	items   map[string][]kernelVersionItem
+	flights map[string]*kernelVersionFetchCall
+}{at: map[string]time.Time{}, items: map[string][]kernelVersionItem{}, flights: map[string]*kernelVersionFetchCall{}}
 
 // kernelReleaseVersions lists recent releases of a kernel from GitHub,
 // cached for 30 minutes. Kernels with a pinned list return that list.
@@ -1872,11 +1891,43 @@ func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernel
 	if info.ReleaseRepo == "" {
 		return nil, nil
 	}
+	// B11-001：锁只护 map 读写，网络抓取在锁外。同 key 的并发冷请求
+	// 经 flights 合并为一次抓取（等待方共享结果，总等待 ≤ 一次抓取
+	// 界 60s < 前端 90s）；不同 key 互不阻塞。旧实现一把全局锁横跨
+	// 整个抓取循环，第二个冷请求最坏 排队 60s + 自身 60s ≈ 120s，
+	// 先被前端 90s 掐断报假超时。
 	kernelVersionCache.Lock()
-	defer kernelVersionCache.Unlock()
 	if at, ok := kernelVersionCache.at[info.Type]; ok && time.Since(at) < 30*time.Minute {
-		return kernelVersionCache.items[info.Type], nil
+		items := kernelVersionCache.items[info.Type]
+		kernelVersionCache.Unlock()
+		return items, nil
 	}
+	if call, ok := kernelVersionCache.flights[info.Type]; ok {
+		kernelVersionCache.Unlock()
+		<-call.done
+		return call.items, call.err
+	}
+	call := &kernelVersionFetchCall{done: make(chan struct{})}
+	kernelVersionCache.flights[info.Type] = call
+	kernelVersionCache.Unlock()
+
+	items, err := fetchKernelReleaseVersionsWithFallback(info, proxyURL)
+
+	kernelVersionCache.Lock()
+	if err == nil {
+		kernelVersionCache.at[info.Type] = time.Now()
+		kernelVersionCache.items[info.Type] = items
+	}
+	delete(kernelVersionCache.flights, info.Type)
+	call.items, call.err = items, err
+	close(call.done)
+	kernelVersionCache.Unlock()
+	return items, err
+}
+
+// fetchKernelReleaseVersionsWithFallback 是内核版本列表的一次实际
+// 抓取：代理先行、失败降级直连（F-059 口径），结果由调用方回填缓存。
+func fetchKernelReleaseVersionsWithFallback(info kernel.Info, proxyURL string) ([]kernelVersionItem, error) {
 	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo)
 	urls := []string{directURL}
 	if proxyURL != "" {
@@ -1886,8 +1937,6 @@ func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernel
 	for _, url := range urls {
 		out, err := fetchKernelReleaseVersionsPage(url)
 		if err == nil {
-			kernelVersionCache.at[info.Type] = time.Now()
-			kernelVersionCache.items[info.Type] = out
 			return out, nil
 		}
 		lastErr = err
@@ -2045,8 +2094,8 @@ func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
 // naiveDialGate 是 R9X-005 的 Naive 拨号侧版本门：链式/分流目标为
 // Naive（自建入站或导入节点）时，拨号方 sing-box 需要 1.13+——naive
 // 出站随 1.13 的 cronet 构建引入，1.12 及以下整单 FATAL。保存
-//（validateChainVersion 经 CheckChainWith）、下发
-//（buildKernelApplyPayload）与换版扫描（checkKernelVersionGates）
+// （validateChainVersion 经 CheckChainWith）、下发
+// （buildKernelApplyPayload）与换版扫描（checkKernelVersionGates）
 // 三面共用同一口径；返回空串表示通过。
 func naiveDialGate(kernelType, version string, e *kernel.Endpoint) string {
 	if e == nil || kernelType != kernel.TypeSingbox || !versionBelow(version, 1, 13) || !kernel.IsNaiveEndpoint(*e) {

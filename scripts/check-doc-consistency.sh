@@ -14,6 +14,10 @@
 #   8. 超时预算登记表 vs 产品代码（R8 T-GATE 常设门：转跑
 #      scripts/check-timeout-budgets.sh，前端超时/服务端放宽/后端界三层
 #      与 doc/audit/timeout-budgets.tsv 逐格对账，漂移点名失败）。
+#   9. 安装脚本打印的文档站链接 vs doc 路由表（X05-001 常设门：
+#      panel_install.sh / install.sh 中本站 github.io 链接逐个按
+#      doc 结构 + cleanUrls 规则映射，映射不到即失败——成功提示曾
+#      打印 guide.html，该地址在 cleanUrls 下必然 404）。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -45,7 +49,17 @@ fi
 # ── 2. 技能包接口覆盖：handler.go 全部 /api/v1 路由必须在技能包或 ai-skill.md 中被引用
 HANDLER="go-backend/internal/http/handler/handler.go"
 GH_MIRROR_GO="go-backend/internal/http/handler/gh_mirror.go"
+# 路由提取三路并集：
+#  (a) 逐行字面量 mux.HandleFunc("/api/v1/...", ...)
+#  (b) 路由表清单行 {"/api/v1/...", h.<fn>}——B14-002 起备份端点改由同一
+#      清单循环注册，逐行字面量提取识别不到表行（Phase E 补齐此路）；
+#  (c) 表行派生的双前缀别名：循环体对每个表行另注册 "/api/v1"+path，
+#      与表行同源派生——删一行则规范路径与其别名同时从路由集消失，
+#      门禁两侧（未覆盖/幽灵）都应点名报红。
+table_routes=$(grep -oP '\{\s*"\K/api/v1/[^"]+(?="\s*,\s*h\.)' "$HANDLER" | sort -u)
 routes=$( { grep -oP 'mux\.HandleFunc\("\K[^"]+' "$HANDLER";
+            echo "$table_routes";
+            echo "$table_routes" | grep . | sed 's|^|/api/v1|';
             grep -oP 'ghMirrorPath\s*=\s*"\K[^"]+' "$GH_MIRROR_GO"; } | grep '^/api/v1/' | sort -u )
 refs=$(grep -rhoP '/api/v1/[a-zA-Z0-9/_-]+' skills/flmx-api/ doc/ai-skill.md | sort -u)
 missing=$(comm -23 <(echo "$routes") <(echo "$refs"))
@@ -123,6 +137,36 @@ else
   sed 's/^/    /' /tmp/.timeout-budgets.out
 fi
 rm -f /tmp/.timeout-budgets.out
+
+# ── 9. 脚本文档站链接须命中 doc 路由表（X05-001）
+# 路由映射规则（cleanUrls=true、base=/flmx-max/）：站点根 → doc/index.md；
+# 路径 <p> → doc/<p>.md 或 doc/<p>/index.md；doc/public 下同名静态文件亦可。
+# 映射不到即 404（如旧值 guide.html：doc 下无 guide.md、亦无同名静态文件）。
+site_urls=$(grep -hoP 'https://iiiiiiiii7125-art\.github\.io/flmx-max[^"'\'' ]*' panel_install.sh install.sh | sort -u)
+if [ -z "$site_urls" ]; then
+  note_fail "安装脚本中未找到文档站链接（检查前提失效，请人工复核）"
+else
+  bad_urls=""
+  while IFS= read -r u; do
+    rel=${u#https://iiiiiiiii7125-art.github.io/flmx-max}
+    rel=${rel#/}
+    rel=${rel%/}
+    if [ -z "$rel" ]; then
+      [ -f doc/index.md ] || bad_urls="$bad_urls $u"
+    elif [ -f "doc/public/$rel" ] || [ -f "doc/$rel.md" ] || [ -f "doc/$rel/index.md" ]; then
+      :
+    else
+      bad_urls="$bad_urls $u"
+    fi
+  done <<SITEEOF
+$site_urls
+SITEEOF
+  if [ -n "$bad_urls" ]; then
+    note_fail "安装脚本打印的文档站链接无法映射到 doc 路由（线上将 404）：$bad_urls"
+  else
+    note_ok "安装脚本文档站链接全部命中 doc 路由表（$(echo "$site_urls" | wc -l) 条）"
+  fi
+fi
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then

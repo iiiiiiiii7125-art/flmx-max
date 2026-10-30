@@ -45,6 +45,20 @@ playwright install chromium
 
 ## Running Tests
 
+Notes (X02-002):
+
+- The seed admin is `admin@user` / `admin@user`. Its first login returns a
+  restricted token, so `authenticated_api` changes the password once per
+  session (to `E2E_ADMIN_PASSWORD`) and restores the seed password at
+  session teardown.
+- Run against a fresh backend (as `with_server.py` and CI do). The backend
+  rate-limits logins per IP (10/min); back-to-back runs against a
+  long-lived server can hit that bucket.
+- If the servers are not running, tests fail hard. Set `E2E_SKIP_OK=1`
+  only when you explicitly want them skipped; the skip is then called
+  out in the run summary. CI runs the `-m api` subset on every push
+  (job `e2e-api` in `.github/workflows/ci-build.yml`).
+
 ### Quick Start
 
 ```bash

@@ -106,6 +106,8 @@ export interface ForwardApiItem {
   proxyProtocol?: number;
   proxyProtocolReceive?: number;
   proxyProtocolSend?: number;
+  /** B08-005：监听 IP 同步回退为默认监听后持久化的告警（按端口一条）；无回退时后端不下发此字段。 */
+  bindWarnings?: string[];
   inx?: number;
   [key: string]: unknown;
 }

@@ -75,8 +75,12 @@ func TestSubscriptionContract(t *testing.T) {
 		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"小明","kind":"share","sourceAll":false,"inboundIds":[]}`); out.Code == 0 {
 			t.Fatal("picking nothing must be rejected")
 		}
+		// R1-C08（B10-002）：不存在的入站 ID 不再被静默丢弃——save
+		// 整体报错。本用例旧版在此混入 999 并预期其被过滤，该口径
+		// 已废止；拒绝行为由 c08 契约测试专门守
+		// （TestC08SubscriptionSaveUnknownRejectedCompanionAnnotated）。
 		out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`,`+jsonInt64(ss)+`,999]}`)
+			`{"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`,`+jsonInt64(ss)+`]}`)
 		if out.Code != 0 {
 			t.Fatalf("create: %+v", out)
 		}

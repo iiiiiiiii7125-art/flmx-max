@@ -3,6 +3,7 @@ package repo
 import (
 	"database/sql"
 	"errors"
+	"sync"
 
 	"go-backend/internal/store/model"
 
@@ -256,6 +257,22 @@ func (r *Repository) ListTunnelIDsByNamePrefix(prefix string) ([]int64, error) {
 	return ids, nil
 }
 
+// inxAllocMu 与 inxAllocLast 是 NextIndex 的进程内发放台账
+// （B04-001）：按 *gorm.DB 实例 + 表记录上次发放的 inx。
+//
+// 旧实现是「SELECT MIN(inx) → handler 再 Create」的读-写分离：并发
+// 建节点/隧道/转发时多个请求读到同一最小值、拿到相同 inx，排序
+// 序号撞车（12 路并发实测重复）。改为发放时持锁并取
+// min(DB 当前最小值-1, 上次发放值-1)：发放值在本进程内单调递减、
+// 绝不重复，落库先后不影响唯一性；每次仍重读 DB 最小值，导入或
+// 手动排序把 inx 压到更低时自动跟随。面板为单进程部署，进程内
+// 原子即足够；不走 inx 唯一索引路线——存量库可能已有撞车数据，
+// 建唯一索引会在迁移期失败。
+var (
+	inxAllocMu   sync.Mutex
+	inxAllocLast = map[*gorm.DB]map[string]int{}
+)
+
 func (r *Repository) NextIndex(table string) int {
 	if r == nil || r.db == nil {
 		return 0
@@ -272,6 +289,12 @@ func (r *Repository) NextIndex(table string) int {
 		return 0
 	}
 
+	inxAllocMu.Lock()
+	defer inxAllocMu.Unlock()
+
+	// DB 当前口径下的下一个值（与旧实现一致：空表 0，否则最小值-1）。
+	dbNext := 0
+	dbKnown := true
 	type inxRow struct {
 		Inx int
 	}
@@ -281,13 +304,29 @@ func (r *Repository) NextIndex(table string) int {
 		Order("inx ASC, id ASC").
 		Limit(1).
 		Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	switch {
+	case err == nil:
+		dbNext = row.Inx - 1
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		dbNext = 0
+	default:
+		// 查询失败：有台账时靠台账继续保唯一；无台账才回旧兜底 0。
+		dbKnown = false
+	}
+
+	byTable, ok := inxAllocLast[r.db]
+	if !ok {
+		byTable = map[string]int{}
+		inxAllocLast[r.db] = byTable
+	}
+	next := dbNext
+	if last, handed := byTable[table]; handed && last-1 < next {
+		next = last - 1
+	} else if !dbKnown && !handed {
 		return 0
 	}
-	if err != nil {
-		return 0
-	}
-	return row.Inx - 1
+	byTable[table] = next
+	return next
 }
 
 // CreateRemoteNode inserts a new remote node.

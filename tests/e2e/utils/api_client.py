@@ -241,7 +241,10 @@ class APIClient:
 class TestUser:
     """Test user helper for E2E tests."""
 
-    DEFAULT_ADMIN = ("admin_user", "admin_user")
+    # Must match the backend seed (go-backend repository.go seedData):
+    # admin@user / admin@user. The seed login returns a restricted token
+    # until the password is changed — see conftest.bootstrap_admin_client.
+    DEFAULT_ADMIN = ("admin@user", "admin@user")
 
     def __init__(self, api: APIClient, username: str, password: str):
         self.api = api

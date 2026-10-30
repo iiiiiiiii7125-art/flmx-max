@@ -42,6 +42,9 @@ type tunnelBatchDeletePreviewData struct {
 	TunnelCount       int                       `json:"tunnelCount"`
 	TotalForwardCount int                       `json:"totalForwardCount"`
 	Items             []tunnelDeletePreviewData `json:"items"`
+	// B06-005：逐条口径——混入的不存在/坏 id 挂在这里（与 batch-delete
+	// 的 failures 同型），有效条目仍照常进 Items，不再整批失败。
+	Failures []batchFailureDetail `json:"failures,omitempty"`
 }
 
 type tunnelDeleteWithForwardsRequest struct {
@@ -220,7 +223,11 @@ func (h *Handler) tunnelBatchDeleteWithForwards(w http.ResponseWriter, r *http.R
 	}
 
 	if action == tunnelDeleteActionReplace {
-		if req.TargetTunnelID <= 0 {
+		// B06-002：与单条入口共用 validateTunnelDeleteReplaceTarget
+		// 做循环前预检（此处只验目标存在性：传 tunnelID=0 时自身
+		// 互斥分支不可达，目标与删除列表的互斥由下方逐 id 检查；
+		// 执行侧逐隧道再做含自身的完整校验）。
+		if err := validateTunnelDeleteReplaceTarget(0, req.TargetTunnelID); err != nil {
 			response.WriteJSON(w, response.ErrDefault("目标隧道不能为空"))
 			return
 		}
@@ -312,11 +319,16 @@ func (h *Handler) buildTunnelDeletePreview(tunnelID int64) (*tunnelDeletePreview
 func (h *Handler) buildTunnelBatchDeletePreview(ids []int64) (*tunnelBatchDeletePreviewData, error) {
 	normalizedIDs := normalizeTunnelIDs(ids)
 	items := make([]tunnelDeletePreviewData, 0, len(normalizedIDs))
+	failures := make([]batchFailureDetail, 0)
 	totalForwardCount := 0
 	for _, id := range normalizedIDs {
 		preview, err := h.buildTunnelDeletePreview(id)
 		if err != nil {
-			return nil, err
+			// B06-005：改为逐条收集——单个坏 id（如隧道不存在）只挂
+			// failures，不再整批放弃；与 batch-delete 的逐条回执口径
+			// 一致，确认弹窗能打开并让用户修正选择。
+			failures = appendBatchFailure(failures, id, "", err)
+			continue
 		}
 		items = append(items, *preview)
 		totalForwardCount += preview.ForwardCount
@@ -325,6 +337,7 @@ func (h *Handler) buildTunnelBatchDeletePreview(ids []int64) (*tunnelBatchDelete
 		TunnelCount:       len(items),
 		TotalForwardCount: totalForwardCount,
 		Items:             items,
+		Failures:          failures,
 	}, nil
 }
 
@@ -387,6 +400,16 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 	}
 
 	result := tunnelDeleteWithForwardsResult{ForwardCount: preview.ForwardCount}
+	// B06-002：replace 的目标校验必须先于一切删除动作、无转发时同样
+	// 执行。旧实现把校验放在 ForwardCount>0 分支之后，无转发隧道的
+	// replace 请求（不带 target）越过校验被当作普通删除执行并报
+	// 成功。单条与批量入口最终都经本函数执行，此处即统一校验点
+	//（批量入口另有循环前预检，口径一致）。
+	if action == tunnelDeleteActionReplace {
+		if err := validateTunnelDeleteReplaceTarget(tunnelID, targetTunnelID); err != nil {
+			return tunnelDeleteWithForwardsResult{}, nil, err
+		}
+	}
 	if preview.ForwardCount == 0 {
 		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
 			// R5X-004(c)：无转发分支收集集恒空、补刷为空转，仍保留
@@ -414,13 +437,23 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 		return result, nil, nil
 	}
 
+	// replace 目标已在本函数入口统一校验（B06-002，见上方
+	// validateTunnelDeleteReplaceTarget），此处直接进入迁移执行。
+	return h.processTunnelDeleteReplaceAction(tunnelID, targetTunnelID, result)
+}
+
+// validateTunnelDeleteReplaceTarget 是 delete-with-forwards 的 replace
+// 目标校验（B06-002）：目标必填、不得等于被删隧道自身。单条入口与
+// 批量入口（逐隧道调用 processTunnelDeleteWithForwards）共用本函数
+// 作为执行侧校验点，且校验先于任何删除动作——无转发时亦然。
+func validateTunnelDeleteReplaceTarget(tunnelID, targetTunnelID int64) error {
 	if targetTunnelID <= 0 {
-		return tunnelDeleteWithForwardsResult{}, nil, errInvalidTunnelDeleteTarget
+		return errInvalidTunnelDeleteTarget
 	}
 	if targetTunnelID == tunnelID {
-		return tunnelDeleteWithForwardsResult{}, nil, errors.New("目标隧道不能与当前隧道相同")
+		return errors.New("目标隧道不能与当前隧道相同")
 	}
-	return h.processTunnelDeleteReplaceAction(tunnelID, targetTunnelID, result)
+	return nil
 }
 
 func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int64, result tunnelDeleteWithForwardsResult) (tunnelDeleteWithForwardsResult, []batchFailureDetail, error) {

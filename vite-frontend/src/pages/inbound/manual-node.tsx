@@ -151,6 +151,15 @@ function visionAllowedManual(n: ManualNode): boolean {
   return n.protocol === "vless" && n.network === "tcp" && n.security !== "none";
 }
 
+/** Reality 与 WS 传输的非法组合（后端 transportSecurityViolation 同
+ *  口径：Reality 仅支持 TCP / gRPC / XHTTP，手动表单传输只有
+ *  tcp/ws/grpc，故冲突面就是 VLESS + Reality + WS 一格）。 */
+function realityWsConflict(n: ManualNode): boolean {
+  return (
+    n.protocol === "vless" && n.security === "reality" && n.network === "ws"
+  );
+}
+
 // ---- 与后端同口径的前端校验（F-03/F-05/F-06）---------------------------
 
 /** 严格 IPv4 字面量：4 段十进制、无前导 0（Go net.ParseIP 同口径）。 */
@@ -463,6 +472,9 @@ export function manualNodeLink(n: ManualNode): {
     (n.network !== "tcp" || n.security === "none")
   )
     return { error: "Vision 流控仅支持 TCP 传输且需要 TLS 或 Reality" };
+  // Reality + WS 是后端导入层必拒的组合，前端同口径、同文案前置拦截。
+  if (realityWsConflict(n))
+    return { error: "Reality 不支持 WS 传输（仅支持 TCP / gRPC / XHTTP）" };
   // F-05：Hysteria2 端口跳跃（与后端 ValidHy2Ports 同口径）。
   if (n.protocol === "hysteria2" && !validHy2Ports(n.ports))
     return {
@@ -616,6 +628,7 @@ export function ManualNodeFields({
   const set = (patch: Partial<ManualNode>) => onChange({ ...n, ...patch });
   const methods = ssMethods.length > 0 ? ssMethods : FALLBACK_SS_METHODS;
   const tls = tlsOn(n);
+  const realityActive = n.protocol === "vless" && n.security === "reality";
   const field = (
     key: keyof ManualNode,
     label: string,
@@ -656,6 +669,14 @@ export function ManualNodeFields({
               (security === "none" || n.network !== "tcp")
                 ? ""
                 : n.flow,
+            // 切到 VLESS + Reality 时若传输还停在 WS（非法组合），
+            // 顺手切回 TCP，与下方传输段的禁用口径一致。
+            network:
+              protocol === "vless" &&
+              security === "reality" &&
+              n.network === "ws"
+                ? "tcp"
+                : n.network,
           });
         }}
       />
@@ -768,6 +789,11 @@ export function ManualNodeFields({
                 security: security as Security,
                 // F-01：切到“无”时 Vision 即非法，顺手清掉 flow。
                 flow: security === "none" ? "" : n.flow,
+                // 切到 Reality 时若传输是 WS（非法组合），顺手切回 TCP。
+                network:
+                  security === "reality" && n.network === "ws"
+                    ? "tcp"
+                    : n.network,
               })
             }
           />
@@ -814,6 +840,7 @@ export function ManualNodeFields({
         <div className="space-y-1.5">
           <p className="text-sm">传输</p>
           <Segmented
+            disabledOptions={realityActive ? ["ws"] : []}
             options={[
               ["tcp", "TCP"],
               ["ws", "WebSocket"],
@@ -828,6 +855,11 @@ export function ManualNodeFields({
               })
             }
           />
+          {realityActive && (
+            <p className="text-xs text-warning-600 dark:text-warning-400">
+              Reality 不支持 WebSocket 传输（仅支持 TCP / gRPC），已禁用
+            </p>
+          )}
         </div>
       )}
       {usesTransport(n.protocol) && n.network === "ws" && (

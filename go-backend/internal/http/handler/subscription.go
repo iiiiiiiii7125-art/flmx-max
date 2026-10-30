@@ -676,8 +676,9 @@ func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbou
 }
 
 // filterInboundRowsByUserAssignments 保留用户被分配的入站行
-// （openSubscription ?user= 拉取侧第一段过滤；FIX2-B/V5-1 起与
-// mine 计数共用同一实现，保证两侧口径永不分叉）。
+// （openSubscription ?user= 拉取侧第一段过滤，FIX2-B/V5-1）。
+// B10-001 起 mine 计数不再共用本过滤：mine 的卡片是独立链接
+// （无 ?user=），按全量口径计数，见 userSubscriptionMine。
 func filterInboundRowsByUserAssignments(rows []model.NodeInbound, assignments []repo.UserInboundAssignment) []model.NodeInbound {
 	allowedInbound := make(map[int64]bool, len(assignments))
 	for _, a := range assignments {
@@ -779,6 +780,10 @@ type subscriptionView struct {
 	RelayIDs []int64 `json:"relayIds"`
 	// IsDefault 标记"默认订阅"（个人订阅链接的载体）：排序第一条，由 subscriptionList 回填。
 	IsDefault bool `json:"isDefault"`
+	// ExcludedCompanionIDs 是本次 save 校验时被排除的伴生入站 ID
+	// （B-06：伴生入站不能作订阅源，B10-002：排除须对管理员可见）。
+	// 仅 subscriptionSave 的响应回填；列表等其他视图恒空、omitempty 不出现。
+	ExcludedCompanionIDs []int64 `json:"excludedCompanionIds,omitempty"`
 }
 
 // subFormatAlias resolves format aliases shared by the pull side
@@ -830,10 +835,12 @@ func (h *Handler) subscriptionViewMemo(s *model.Subscription, rows []model.NodeI
 }
 
 // subscriptionViewForAssignments 在 subscriptionView 基础上按用户入站
-// 分配收紧 NodeCount（FIX2-B/V5-1）：assignments 为 nil 表示管理员
-// 全量口径；非 nil（含空集）时先按拉取侧同一组过滤函数收紧行与
-// 端点，使「我的订阅」显示数与该用户经 ?user=&sig= 个性化链接实际
-// 拉到的节点数恒等。空集 = 该用户个性化链接拉到 0 个节点。
+// 分配收紧 NodeCount（FIX2-B/V5-1）：assignments 为 nil 表示全量
+// 口径；非 nil（含空集）时先按拉取侧同一组过滤函数收紧行与端点，
+// 使显示数与该用户经 ?user=&sig= 个性化链接实际拉到的节点数恒等。
+// 空集 = 该用户个性化链接拉到 0 个节点。注意「我的订阅」（mine）
+// 呈现的是独立链接而非个性化链接，B10-001 起 mine 恒传 nil 按
+// 全量口径计数；本收紧口径只对个性化链接视图成立。
 func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment) subscriptionView {
 	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, assignments, nil)
 }
@@ -975,10 +982,26 @@ type subscriptionRequest struct {
 }
 
 // validate checks the request and returns the inbound ids it selects.
+// It discards the excluded-companion detail validateDetailed reports;
+// callers that render a response use validateDetailed so the exclusion
+// is visible to the caller (B10-002).
 func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, error) {
+	ids, _, err := req.validateDetailed(rows)
+	return ids, err
+}
+
+// validateDetailed is validate plus the companion inbound ids it
+// excluded. Inbound ids that do not exist at all are a hard error
+// (B10-002: silently dropping them left admins believing a mistyped
+// or deleted inbound was selected — the assignment surface
+// userSubscriptionSet refuses unknown ids outright, and save now
+// matches that stance). Companion ids keep the B-06 exclusion (they can
+// never be subscription sources), but are returned so the save/preview
+// responses can name them instead of dropping them silently.
+func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]int64, []int64, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
-		return nil, errText("请填写名称（最多 100 个字）")
+		return nil, nil, errText("请填写名称（最多 100 个字）")
 	}
 	// Every subscription has its own credentials.
 	req.Kind = model.SubscriptionShare
@@ -989,27 +1012,48 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 		req.TrafficLimit = 0
 	}
 	if req.ResetDay < 0 || req.ResetDay > 28 {
-		return nil, errText("每月重置日只能是 1–28 号")
+		return nil, nil, errText("每月重置日只能是 1–28 号")
 	}
 	if err := req.Options.normalize(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Companion inbounds are never subscription sources (the same
 	// choke point subInboundIDs enforces at read time): exclude them
 	// here so a crafted save cannot store an id every reader would
 	// then silently drop (B-06; the assignment surface refuses them
-	// outright).
+	// outright). Ids that match no inbound row at all are a different
+	// case — a typo or a since-deleted inbound — and are refused
+	// outright (B10-002), never silently dropped.
 	known := make(map[int64]bool, len(rows))
+	companion := make(map[int64]bool, len(rows))
 	for _, r := range rows {
 		if r.CompanionOf == 0 {
 			known[r.ID] = true
+		} else {
+			companion[r.ID] = true
 		}
 	}
 	var ids []int64
+	var excluded []int64
+	var unknown []int64
+	seenExcluded := make(map[int64]bool)
+	seenUnknown := make(map[int64]bool)
 	for _, id := range req.InboundIDs {
-		if known[id] {
+		switch {
+		case known[id]:
 			ids = append(ids, id)
+		case companion[id]:
+			if !seenExcluded[id] {
+				seenExcluded[id] = true
+				excluded = append(excluded, id)
+			}
+		case !seenUnknown[id]:
+			seenUnknown[id] = true
+			unknown = append(unknown, id)
 		}
+	}
+	if len(unknown) > 0 {
+		return nil, nil, errText(fmt.Sprintf("入站不存在: %v", unknown))
 	}
 	var sources []int64
 	for _, id := range req.SourceIDs {
@@ -1020,9 +1064,9 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 	req.SourceIDs = sources
 	chainSources := len(req.Options.ChainLandingSources) + len(req.Options.ChainRelaySources)
 	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 {
-		return nil, errText("请至少选择一个入站或订阅源，或选择全部")
+		return nil, nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
-	return ids, nil
+	return ids, excluded, nil
 }
 
 func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
@@ -1040,7 +1084,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	ids, err := req.validate(rows)
+	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -1129,15 +1173,18 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	if isShare(s) {
 		push = append(push, subInboundIDs(s, rows)...)
 	}
+	// B10-002：响应视图回填本次被排除的伴生入站，管理员可见。
+	view := h.subscriptionView(s, rows, now, req.Format)
+	view.ExcludedCompanionIDs = excludedCompanions
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		// 下发失败：不更新 AppliedActive，循环会重试；仅提示用户。
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), Data: h.subscriptionView(s, rows, now, req.Format), TS: time.Now().UnixMilli()})
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), Data: view, TS: time.Now().UnixMilli()})
 		return
 	}
 	// 下发成功：更新 AppliedActive。
 	_ = h.repo.UpdateSubscriptionApplied(s.ID, newAppliedActive)
 	s.AppliedActive = newAppliedActive
-	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, now, req.Format), TS: time.Now().UnixMilli()})
+	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: view, TS: time.Now().UnixMilli()})
 }
 
 func (h *Handler) respondAfterSubPush(w http.ResponseWriter, inboundIDs []int64, data interface{}) {
@@ -1339,7 +1386,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	ids, err := req.validate(rows)
+	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -1367,6 +1414,10 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		"items":   items,
 		"total":   len(source),
 		"dropped": len(source) - len(items),
+	}
+	if len(excludedCompanions) > 0 {
+		// B10-002：与 save 同口径，预览也标注被排除的伴生入站。
+		resp["excludedCompanionIds"] = excludedCompanions
 	}
 	if scriptErr != nil {
 		resp["scriptError"] = scriptErr.Error()

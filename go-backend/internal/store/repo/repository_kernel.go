@@ -611,10 +611,12 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 				delta = s.Bytes
 			}
 			if delta > 0 {
+				// B08-001 同族：批内合并走饱和加，与落库面守卫同口径，
+				// 防多样本增量先在 Go 层回绕为负再绕过 SQL 守卫。
 				if s.Direction == "in" {
-					upload[s.InboundID] += delta
+					upload[s.InboundID] = saturatingAddInt64(upload[s.InboundID], delta)
 				} else {
-					download[s.InboundID] += delta
+					download[s.InboundID] = saturatingAddInt64(download[s.InboundID], delta)
 				}
 			}
 			row := model.NodeInboundCounter{
@@ -640,9 +642,11 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 			if up == 0 && down == 0 {
 				continue
 			}
+			// B08-001 同族：入站累计字节是持久累加器，裸加溢出同
+			// flow 三面（SQLite 回绕落库 / PG 报错回滚整批），走饱和口径。
 			if err := tx.Model(&model.NodeInbound{}).Where("id = ?", id).Updates(map[string]interface{}{
-				"upload_bytes":   gorm.Expr("upload_bytes + ?", up),
-				"download_bytes": gorm.Expr("download_bytes + ?", down),
+				"upload_bytes":   saturatingCounterIncrExpr("upload_bytes", up),
+				"download_bytes": saturatingCounterIncrExpr("download_bytes", down),
 			}).Error; err != nil {
 				return err
 			}

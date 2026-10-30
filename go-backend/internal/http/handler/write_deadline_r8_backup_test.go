@@ -10,11 +10,11 @@ import (
 // server legs of R8-T-02 (x-verdicts-r8 §2.2): /backup/import,
 // /backup/restore (both served by backupImport) and
 // /backup/gist/restore get per-endpoint write-deadline relief so the
-// aligned budget chain can deliver a long import's response. The import
-// work itself is NOT capped, and the transaction's binding to
-// r.Context() (element (b), X-P3-21 semantics) is deliberately left
-// untouched pending a user ruling — this test asserts only the
-// server-layer patience.
+// aligned budget chain can deliver a long import's response. Element
+// (b) was resolved by user ruling ④ on 2026-10-30 (B14-001): the
+// snapshot phase stays bound to r.Context(), the write phase runs on
+// a detached ctx capped at backupImportTimeout — this test asserts
+// only the server-layer patience.
 func TestR8T02BackupEndpointsExtendWriteDeadline(t *testing.T) {
 	h := r8NewHandler(t)
 	cases := []struct {

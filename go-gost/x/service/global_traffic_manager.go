@@ -16,6 +16,9 @@ type GlobalTrafficManager struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	reportTicker   *time.Ticker
+	// inflight 是待确认的冻结批次（A02-002）；非 nil 时
+	// collectAndReport 只重试它，不再快照新批次。
+	inflight *pendingBatch
 }
 
 // ServiceTraffic 单个服务的流量累积
@@ -24,6 +27,25 @@ type ServiceTraffic struct {
 	ServiceName string
 	UpBytes     int64 // 上行流量（累积）
 	DownBytes   int64 // 下行流量（累积）
+}
+
+// pendingItem 是一个服务在某批快照中的待上报计数。
+type pendingItem struct {
+	name string
+	up   int64
+	down int64
+}
+
+// pendingBatch 是一批已快照、已分配 seq、但尚未收到面板 ok 的
+// 冻结批次（A02-002）。seq 标识的是批次而不是尝试次：面板的幂等
+// 契约是「同 seq 重报」——面板已入账但响应丢失时，同 seq 重发被
+// 判重放回 ok 且不重复入账；面板未入账返非 ok，同 seq 重发才被
+// 入账一次。若每次重试都换新 seq，面板已入账的那批会被当作新
+// 批次二次入账。故批次一经快照即冻结：重试原样重发（同条目、
+// 同 seq），期间新计入的流量留在计数器里等本批确认后再组下一批。
+type pendingBatch struct {
+	items []pendingItem
+	seq   int64
 }
 
 var (
@@ -139,59 +161,66 @@ func (m *GlobalTrafficManager) startReporting() {
 func (m *GlobalTrafficManager) collectAndReport() {
 	m.mu.Lock()
 
-	if len(m.serviceTraffic) == 0 {
-		m.mu.Unlock()
-		return
-	}
-
-	// R5-B6 D1-010: 先收集不上报（不清零），发送成功后再清零。
-	// 失败则保留，下次重试。
-	type pendingItem struct {
-		name string
-		up   int64
-		down int64
-	}
-	var pending []pendingItem
-
-	for name, traffic := range m.serviceTraffic {
-		traffic.mu.Lock()
-		up := traffic.UpBytes
-		down := traffic.DownBytes
-		// D1-010: 不在此处清零。
-		traffic.mu.Unlock()
-		isStale := !registry.ServiceRegistry().IsRegistered(name)
-
-		if up > 0 || down > 0 {
-			pending = append(pending, pendingItem{name: name, up: up, down: down})
+	// A02-002: 有待确认的冻结批次时只重试它——原样条目、原 seq。
+	// 不在此期间快照新批次：若把新流量并进同 seq 重发，面板一旦
+	// 已入账旧批便整包判重放回 ok，新流量会被随成功路径一起扣掉
+	// 而从未入账（静默漏计）；若换新 seq 重发旧批则二次入账。
+	if m.inflight == nil {
+		if len(m.serviceTraffic) == 0 {
+			m.mu.Unlock()
+			return
 		}
-		if isStale && up == 0 && down == 0 {
-			// F-087: 无待上报流量时才可立即清理。有流量的 stale 条目
-			// 必须等发送成功后再删（见下方清零段）——旧实现先删后发，
-			// 发送失败时该批流量随条目一起永久丢失，违 D1-010 本意。
-			delete(m.serviceTraffic, name)
+
+		// R5-B6 D1-010: 先收集不上报（不清零），发送成功后再清零。
+		// 失败则保留，下次重试。
+		var pending []pendingItem
+
+		for name, traffic := range m.serviceTraffic {
+			traffic.mu.Lock()
+			up := traffic.UpBytes
+			down := traffic.DownBytes
+			// D1-010: 不在此处清零。
+			traffic.mu.Unlock()
+			isStale := !registry.ServiceRegistry().IsRegistered(name)
+
+			if up > 0 || down > 0 {
+				pending = append(pending, pendingItem{name: name, up: up, down: down})
+			}
+			if isStale && up == 0 && down == 0 {
+				// F-087: 无待上报流量时才可立即清理。有流量的 stale 条目
+				// 必须等发送成功后再删（见下方清零段）——旧实现先删后发，
+				// 发送失败时该批流量随条目一起永久丢失，违 D1-010 本意。
+				delete(m.serviceTraffic, name)
+			}
 		}
+
+		if len(pending) == 0 {
+			m.mu.Unlock()
+			return
+		}
+
+		// seq 在快照时分配一次并与批次绑定（A02-002）；重试复用
+		// 同一 seq 直至收到 ok 才组下一批、分配新 seq。
+		m.inflight = &pendingBatch{items: pending, seq: nextSeq()}
 	}
 
+	batch := m.inflight
 	m.mu.Unlock()
 
-	if len(pending) == 0 {
-		return
-	}
-
-	reportItems := make([]TrafficReportItem, 0, len(pending))
+	reportItems := make([]TrafficReportItem, 0, len(batch.items))
 	var totalUp, totalDown int64
-	for _, p := range pending {
+	for _, p := range batch.items {
 		reportItems = append(reportItems, TrafficReportItem{N: p.name, U: p.up, D: p.down})
 		totalUp += p.up
 		totalDown += p.down
 	}
 
 	// R5-B6 E-001: 携带 seq 上报。
-	seq := nextSeq()
+	seq := batch.seq
 	success, err := sendBatchTrafficReportWithSeq(m.ctx, reportItems, seq)
 	if err != nil {
 		fmt.Printf("❌ 全局流量上报失败: %v (总流量: ↑%d ↓%d, %d个服务, seq=%d)\n", err, totalUp, totalDown, len(reportItems), seq)
-		// D1-010: 失败不清零，下次重试。
+		// D1-010: 失败不清零、批次不解冻，下次以同 seq 原样重试。
 		return
 	}
 
@@ -200,8 +229,9 @@ func (m *GlobalTrafficManager) collectAndReport() {
 		return
 	}
 
-	// D1-010: 成功后才清零。
+	// D1-010: 成功后才清零（只扣冻结批次的量，其间新计入的保留）。
 	m.mu.Lock()
+	pending := batch.items
 	for _, p := range pending {
 		if traffic, ok := m.serviceTraffic[p.name]; ok {
 			traffic.mu.Lock()
@@ -223,6 +253,8 @@ func (m *GlobalTrafficManager) collectAndReport() {
 			}
 		}
 	}
+	// 本批已确认：解冻，下一轮快照新批次并分配新 seq（A02-002）。
+	m.inflight = nil
 	m.mu.Unlock()
 }
 

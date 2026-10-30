@@ -24,10 +24,38 @@ var httpAESCrypto *crypto.AESCrypto // 新增：HTTP上报加密器
 var reportURLPreferenceMutex sync.RWMutex
 var preferredUploadURL string
 var preferredConfigURL string
-var reportDo = func(ctx context.Context, req *http.Request, timeout time.Duration) (*http.Response, error) {
-	client := &http.Client{
+// reportHTTPClient 构造上报用 HTTP 客户端（A01-001）。此前 reportDo
+// 用裸客户端默认跟随重定向（最多 10 次、任意主机）：307/308 会把
+// 加密上报体原样带到异机，且异机回的 "ok" 会被当作面板确认——
+// 流量（计费依据）与配置上报可被静默吞掉。与同族出站面（kernel
+// fetch、测速探测、升级下载均逐跳再判）对齐：重定向只许跳到与
+// 原始上报 URL 完全相同的 authority（Host 含端口——同 IP 异端口
+// 正是把上报引到异机的形态），跨 authority 一律拒绝；同
+// authority 也禁止 https→http 降级、并限制跳数。面板前置代理需
+// 做端口/scheme 变换时，应把变换后的地址直接写进节点配置的上报
+// 地址，而不是靠重定向（fail-closed，与 F-089 同调）。
+func reportHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
 		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("上报重定向次数过多，已拒绝")
+			}
+			origin := via[0].URL
+			if !strings.EqualFold(req.URL.Host, origin.Host) {
+				return fmt.Errorf("上报重定向跨主机，已拒绝: %s -> %s",
+					sanitizeReportURL(origin.String()), sanitizeReportURL(req.URL.String()))
+			}
+			if origin.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("上报重定向降级到 http，已拒绝: %s", sanitizeReportURL(req.URL.String()))
+			}
+			return nil
+		},
 	}
+}
+
+var reportDo = func(ctx context.Context, req *http.Request, timeout time.Duration) (*http.Response, error) {
+	client := reportHTTPClient(timeout)
 	return client.Do(req.WithContext(ctx))
 }
 

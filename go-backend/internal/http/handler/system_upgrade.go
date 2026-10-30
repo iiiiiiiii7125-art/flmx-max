@@ -42,6 +42,19 @@ const (
 	// U1-003：状态文件显示进行中但开始时间早于此时长，视为残留
 	// （helper 被强杀等异常情况），允许新升级覆盖，避免永久锁死。
 	systemUpgradeStaleAfter = 30 * time.Minute
+	// B05-005：helper 存活心跳文件（落盘于部署目录）。helper 运行期
+	// 每 30s 刷新其 mtime；心跳新鲜（< systemUpgradeHeartbeatFresh）
+	// 即证明 helper 仍在执行，残留判定不得仅凭开始时间一刀切——
+	// 慢链路拉镜像可合法超过 systemUpgradeStaleAfter，此前第二轮
+	// 升级会被放行并覆盖第一轮的 .upgrade.bak。
+	systemUpgradeHeartbeatFileName = ".flmx_upgrade_heartbeat"
+	systemUpgradeHeartbeatFresh    = 3 * time.Minute
+	// B05-005：helper 内 docker compose pull 的单段上限（秒）。pull
+	// 无界时慢链路可无限拖长 helper；超时按拉取失败走回滚终态。
+	// 其余段均有界（健康等待 300s×2、up 短），合法总时长由心跳
+	// 存活证据覆盖，不再依赖与残留阈值的大小关系。helperScript
+	// 中的字面量与本常量由回归测试同值钉住。
+	systemUpgradePullTimeoutSeconds = 1200
 )
 
 var safeBackendContainerPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -146,6 +159,9 @@ type systemUpgradeCheckData struct {
 	Channel        string                      `json:"channel"`
 	Capability     systemUpgradeCapabilityData `json:"capability"`
 	Releases       []systemUpgradeReleaseData  `json:"releases"`
+	// B05-003：版本列表拉取失败但重定向兜底成功时的降级说明（与
+	// /system/version 的同名字段同口径）；正常路径为空。
+	Reason string `json:"reason,omitempty"`
 }
 
 type systemUpgradeRunData struct {
@@ -208,6 +224,47 @@ func upgradeStatusStale(st systemUpgradeStatusData, now time.Time) bool {
 		return true
 	}
 	return now.Sub(started) > systemUpgradeStaleAfter
+}
+
+// upgradeHeartbeat 返回 helper 心跳文件的最近刷新时间；文件不存在
+// （旧版 helper 写入的进行中状态没有心跳）时 ok=false。
+func (e *systemUpgradeExecutor) upgradeHeartbeat() (time.Time, bool) {
+	info, err := os.Stat(filepath.Join(e.deployDir, systemUpgradeHeartbeatFileName))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return info.ModTime(), true
+}
+
+// touchUpgradeHeartbeat 由同步段在写下进行中状态后调用：helper 容器
+// 启动到脚本首次心跳之间有秒级间隙，先由 handler 预触一次心跳，
+// 避免这段间隙里并发请求把刚启动的升级误判为残留。helper 启动失败
+// 时同步段会立即回写终态（inProgress=false），预触无副作用。
+func (e *systemUpgradeExecutor) touchUpgradeHeartbeat() {
+	path := filepath.Join(e.deployDir, systemUpgradeHeartbeatFileName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return
+	}
+	_ = f.Close()
+	now := time.Now()
+	_ = os.Chtimes(path, now, now)
+}
+
+// upgradeInProgressBlocking 判断落盘的进行中状态是否应拦截新升级
+// （B05-005）：helper 心跳文件存在时以心跳新鲜度为准——心跳新鲜
+// 证明 helper 仍在执行，无论开始多久都拦截；心跳过期证明 helper
+// 已死（每 30s 一拍，3 分钟 ≈ 6 拍未达），立即视为残留放行，不再
+// 干等 30 分钟。心跳文件不存在（跨版本升级中、状态由旧 helper
+// 写入）时回退 U1-003 的纯时间规则。
+func (e *systemUpgradeExecutor) upgradeInProgressBlocking(st systemUpgradeStatusData, now time.Time) bool {
+	if !st.InProgress {
+		return false
+	}
+	if hb, ok := e.upgradeHeartbeat(); ok {
+		return now.Sub(hb) <= systemUpgradeHeartbeatFresh
+	}
+	return !upgradeStatusStale(st, now)
 }
 
 type systemUpgradeRequest struct {
@@ -445,6 +502,7 @@ func (e *systemUpgradeExecutor) helperScript() string {
 	return `set -eu
 LOGFILE="$PANEL_DEPLOY_DIR/upgrade.log"
 STATUS_FILE="$PANEL_DEPLOY_DIR/.flmx_upgrade_status.json"
+HEARTBEAT_FILE="$PANEL_DEPLOY_DIR/.flmx_upgrade_heartbeat"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
 
 # U1-003：回写升级状态文件（与后端 systemUpgradeStatusData 结构体对应）。
@@ -526,6 +584,15 @@ wait_backend_healthy() {
 }
 
 cd "$PANEL_DEPLOY_DIR"
+
+# B05-005：存活心跳——运行期每 30s 刷新心跳文件 mtime，面板的残留
+# 判定据此识别 helper 仍在执行（慢链路合法超过 30 分钟不再被误判
+# 残留、放行第二轮覆盖 .upgrade.bak）。EXIT trap 收尾心跳循环。
+touch "$HEARTBEAT_FILE" 2>/dev/null || true
+( while :; do sleep 30; touch "$HEARTBEAT_FILE" 2>/dev/null || exit 0; done ) &
+HB_PID=$!
+trap 'kill "$HB_PID" 2>/dev/null || true' EXIT
+
 echo "" > "$LOGFILE"
 log "开始面板升级"
 log "工作目录: $(pwd)"
@@ -543,7 +610,10 @@ if [ ! -f .env ]; then
 fi
 
 log "拉取新镜像..."
-if ! docker compose pull backend frontend >> "$LOGFILE" 2>&1; then
+# B05-005：pull 单段上限 1200s（与面板 systemUpgradePullTimeoutSeconds
+# 同值，回归测试钉住）；无界 pull 在慢链路上可无限拖长本 helper，
+# 超时按拉取失败走回滚终态（files 恢复，容器未动）。
+if ! timeout 1200 docker compose pull backend frontend >> "$LOGFILE" 2>&1; then
   log "错误: 拉取镜像失败"
   rollback files
   exit 1
@@ -847,9 +917,13 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	if perPage <= 0 {
 		perPage = 20
 	}
-	// 与 fetchGitHubReleases 共用 10 分钟缓存（版本列表不需要实时，
-	// 页脚检查更新每次打开页面都会调这里，是 API 配额的主要消耗方）。
-	cacheKey := "sysapi:" + strings.TrimRight(systemUpgradeAPIBaseURL, "/")
+	// B05-004：与 fetchGitHubReleasesWithProxy 共用同一缓存键与同一
+	// 条目（releasesCacheKey ins upgrade.go）——旧实现两路同表异键
+	// （"sysapi:"/"api:"）永不互相命中，同一份列表冷缓存时向 GitHub
+	// 请求两遍，未认证配额双倍消耗。现两路都全量拉取
+	// releasesFetchPerPage 条存缓存、读取时各自 slice，本注释与实现
+	// 自此一致（生产中 systemUpgradeAPIBaseURL 与 githubAPIBase 同值）。
+	cacheKey := releasesCacheKey(systemUpgradeAPIBaseURL)
 	if releases, ok := cachedReleases(cacheKey); ok {
 		return sliceReleases(releases, perPage), nil
 	}
@@ -857,7 +931,7 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	// U1-006：超时 15s → 30s（经代理多一跳 + 50 条 release JSON，慢代理下 15s 偏紧）。
 	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检）。
 	client := githubVersionFetchClient()
-	apiURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, perPage)
+	apiURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, releasesFetchPerPage)
 
 	// U1-001：代理开启时先试代理路径，失败降级直连。
 	// gh-proxy 类服务不一定转发 api.github.com（实测 ghfast.top 返回 403
@@ -1104,6 +1178,10 @@ func systemUpgradeVersionResponse(current, channel, latest string, lookupErr err
 }
 
 func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
+	// B05-001：版本发现两段链（API 60s + 重定向兜底 60s）后端界
+	// 120s，此前独缺 extendWriteDeadline 而与全局 WriteTimeout 120s
+	// 恰等、且被登记表误分类为 DB/local（C080）逃过三层对账。
+	extendWriteDeadline(w, systemVersionWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -1125,6 +1203,9 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
+	// B05-003：补重定向兜底后本接口与 /system/version 同为发现两段
+	// 链（界 120s），同享 systemVersionWriteDeadline 放宽（T009 行）。
+	extendWriteDeadline(w, systemVersionWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -1142,6 +1223,29 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 
 	githubReleases, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
+		// B05-003：与 /system/version（resolveSystemUpgradeLatest
+		// ReleaseByChannel）口径对齐——API 不可用（限流等）时稳定
+		// 渠道回退重定向解析：最新版照常给出，列表留空并在 Reason
+		// 中标注降级；dev 渠道与兜底失败保留原错误。J-03：兜底结果
+		// 仍须过渠道过滤（beta tag 不冒充稳定版）。
+		if channel == releaseChannelStable {
+			if tag, ferr := resolveLatestTagByRedirectWithProxy(h.githubProxyURLForFetch()); ferr == nil && releaseChannelFromTag(tag) == channel {
+				hasUpdate := false
+				if cmp, cerr := compareVersions(tag, current); cerr == nil && cmp > 0 {
+					hasUpdate = true
+				}
+				response.WriteJSON(w, response.OK(systemUpgradeCheckData{
+					CurrentVersion: current,
+					LatestVersion:  tag,
+					HasUpdate:      hasUpdate,
+					Channel:        channel,
+					Capability:     capability,
+					Releases:       []systemUpgradeReleaseData{},
+					Reason:         fmt.Sprintf("版本列表获取失败（%v），已降级为仅解析最新版本号，版本列表暂不可用", err),
+				}))
+				return
+			}
+		}
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取版本列表失败: %v", err)))
 		return
 	}
@@ -1185,7 +1289,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// U1-003：落盘状态检查。systemUpgradeMu 只覆盖同步段，helper 异步执行数分钟，
 	// 期间必须靠状态文件拦截二次升级（否则 .bak 会被中间态覆盖污染）。
 	exec := newSystemUpgradeExecutor()
-	if st := exec.readUpgradeStatus(); st.InProgress && !upgradeStatusStale(st, time.Now()) {
+	if st := exec.readUpgradeStatus(); st.InProgress && exec.upgradeInProgressBlocking(st, time.Now()) {
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s（目标版本 %s，开始于 %s）", systemUpgradeConflictError, st.Version, st.StartedAt)))
 		return
 	} else if st.InProgress {
@@ -1294,6 +1398,8 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "写入升级状态失败: "+err.Error()))
 		return
 	}
+	// B05-005：预触心跳，覆盖 helper 启动到首次心跳的间隙。
+	exec.touchUpgradeHeartbeat()
 	helperName := fmt.Sprintf("flmx-upgrade-helper-%d", time.Now().Unix())
 	helperContainer, err := exec.startHelper(r.Context(), imageID, helperName)
 	if err != nil {

@@ -79,6 +79,19 @@ const batchCallTimeout = (count: number): number =>
   Math.min(1_800_000, Math.max(120_000, Math.max(0, count) * 30_000));
 
 /**
+ * 批量节点升级：后端 5 并发、每节点界 300s（upgradeTimeout），整批界为
+ * ceil(n/5)×300s，服务端封顶 25 台（maxBatchUpgradeNodes，界 ≤1500s，
+ * 写截止 1800s）。前端按台数取「界 + 60s 余量」，下限 360s，上限与
+ * 服务端写截止齐平 1800s（B05-002 前端面；登记表 T031）。
+ */
+const batchCallTimeoutUpgrade = (count: number): number => {
+  const n = count > 0 ? count : 0;
+  const waves = Math.ceil(n / 5);
+
+  return Math.min(1_800_000, Math.max(360_000, waves * 300_000 + 60_000));
+};
+
+/**
  * 延迟探测（R8-T-08）：作业数 = 节点数 × 每节点测试点（服务端上限 30），
  * 16 路并发、单作业界 22.6s（latencyCommandTimeout）；空 ids = 全部节点
  * （服务端上限 50）。公式界随舰队规模增长，600s 为前端封顶，超出部分
@@ -206,7 +219,11 @@ export const deleteNode = (id: number) =>
 export const getNodeInstallCommand = (
   id: number,
   channel: ReleaseChannel = "stable",
-) => Network.post<string>("/node/install", { id, channel });
+) =>
+  // C059：/node/install 生成命令前无条件走版本发现两段链（API 60s +
+  // 重定向兜底 60s），后端界 120s，与 /system/version（C080）同型，
+  // 前端 150s、服务端放宽 180s（原走默认 30s 必被前端先行中止）。
+  Network.post<string>("/node/install", { id, channel }, { timeout: 150_000 });
 export const updateNodeOrder = (data: {
   nodes: Array<{ id: number; inx: number }>;
 }) => Network.post("/node/update-order", data);
@@ -237,7 +254,9 @@ export const batchUpgradeNodes = (
   Network.post(
     "/node/batch-upgrade",
     { ids, version: version || "", channel },
-    { timeout: 15 * 60 * 1000 },
+    // B05-002：静态 900s 只覆盖 N≤15，后端界 ceil(N/5)×300s 随台数增长；
+    // 改按台数动态计算（batchCallTimeoutUpgrade），上限对齐服务端 1800s。
+    { timeout: batchCallTimeoutUpgrade(ids.length) },
   );
 export const getNodeReleases = (channel: ReleaseChannel = "stable") =>
   // R8-T-03：冷缓存版本发现后端界 60s（双腿各 30s 客户端），前端须 ≥90s。
@@ -406,7 +425,15 @@ export const getStorageSummary = () =>
   Network.get<StorageSummaryApiData>("/system/storage");
 
 export const getSystemUpgradeVersion = () =>
-  Network.post<SystemUpgradeVersionApiData>("/system/version");
+  Network.post<SystemUpgradeVersionApiData>(
+    "/system/version",
+    undefined,
+    // B05-001：版本发现两段链后端界 120s（API 代理+直连两腿 60s +
+    // 失败后重定向兜底两腿 60s），前端须 ≥150s。此前走 Network 默认
+    // 30s 且被超时登记表误分类为 DB/local（C080），慢代理/限流冷缓存
+    // 时配置页误报网络错误。
+    { timeout: 150_000 },
+  );
 
 export const checkSystemUpgrade = (
   channel: ReleaseChannel = "stable",
@@ -417,8 +444,9 @@ export const checkSystemUpgrade = (
     {
       channel,
     },
-    // R8-T-03：冷缓存版本发现后端界 60s，前端默认 ≥90s（调用方可覆盖）。
-    { timeout: 90_000, ...options },
+    // B05-003：check-updates 补重定向兜底后与 /system/version 同为
+    // 发现两段链，后端界 120s，前端默认 150s（调用方可覆盖向上）。
+    { timeout: 150_000, ...options },
   );
 
 export const runSystemUpgrade = (
@@ -438,8 +466,11 @@ export const getSystemUpgradeStatus = () =>
 
 // R8-T-02 元素 (a) / R8-T-08：备份导入/恢复/导出的耗时随后备规模与舰队
 // 规模增长、后端无界，前端统一按 30 分钟计（与仓内 gh-mirror 长响应先例
-// 同量级）；导入本身不得封顶（裁定 §2.2）。注意：导入事务仍绑定请求 ctx
-// （元素 (b) 待用户裁定），前端放宽只抬高武装阈值，不改变断连回滚语义。
+// 同量级）。元素 (b) 已按用户裁决④落地（B14-001）：导入分两相位——
+// 快照相位（写入前）仍绑请求 ctx，此相位关页/断网整单取消、无副作用；
+// 进入写入相位后 ctx 解绑，服务端整单跑完，关页/断网不再回滚、也
+// 无法取消。前端放宽只抬高武装阈值；结果需重进页面核对（见导入确认框
+// 与 doc/guide/nodes.md 的同口径说明）。
 export const exportBackupData = () =>
   Network.post("/backup/export", undefined, { timeout: 1_800_000 });
 export const importBackupData = (data: BackupImportPayload) =>
@@ -820,7 +851,9 @@ export const restoreGistBackup = (data: {
   password: string;
 }) =>
   // R8-T-02 元素 (a)：下载腿 ≤120s（两次串行 gist 调用）叠同落点导入
-  // （无界），与本地恢复统一 30 分钟口径；ctx 绑定语义同 importBackupData 注。
+  // （无界），与本地恢复统一 30 分钟口径；ctx 语义与本地导入同口径
+  //（B14-001 裁决④的机制扩展）：下载/准备相位绑请求 ctx 可取消，
+  // 进入 ImportContext 写入相位后解绑整单跑完，见 importBackupData 注。
   Network.post("/backup/gist/restore", data, { timeout: 1_800_000 });
 
 export interface AnnouncementData {

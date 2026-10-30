@@ -1042,15 +1042,18 @@ var (
 
 // validateRemoteNodeURL 是远端节点 URL 的唯一校验实现（D3-02）：
 // nodeImport 与 nodeCreate 直填 remoteUrl 共用。格式（http/https
-// scheme）+ IsSafeRemoteAddr（解析后逐 IP 拒 loopback/private）两段，
+// scheme）+ checkFederationRemoteAddr（解析后逐 IP 判定）两段，
 // 任一入口不得绕过。此前 nodeCreate 直填路径零校验，对端给什么就
 // 存什么、后续 Connect/同步/命令通道照单全打。
+// B13-001：地址判定与联邦传输层同口径（checkFederationRemoteAddr）——
+// 硬拒段恒拒，非公网地址在运维显式开启私网放行策略时放行，不再用
+// IsSafeRemoteAddr 的公网-only 口径无条件拒绝内网/Tailscale 联邦。
 func validateRemoteNodeURL(raw string) error {
 	rURL, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (rURL.Scheme != "http" && rURL.Scheme != "https") || rURL.Host == "" {
 		return errInvalidRemoteURLFormat
 	}
-	if err := IsSafeRemoteAddr(rURL.Host); err != nil {
+	if err := checkFederationRemoteAddr(rURL.Host); err != nil {
 		return errUnsafeRemoteURL
 	}
 	return nil
@@ -1551,6 +1554,15 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// B13-003：分配前惰性回收本 share 的过期纯预留，弃单端口先回到
+	// 可用池再参与本次 pickPeerSharePort 的占用计算。回收失败只记
+	// 日志、不挡本次预留（最坏情况退回旧行为：过期行继续占位）。
+	if expired, expErr := h.repo.ExpireStalePeerShareReservations(share.ID, time.Now().Add(-peerShareReservationTTL).UnixMilli()); expErr != nil {
+		log.Printf("federation: expire stale reservations for share %d failed: %v", share.ID, expErr)
+	} else if expired > 0 {
+		log.Printf("federation: expired %d stale reservation(s) for share %d", expired, share.ID)
+	}
+
 	existing, err := h.repo.GetPeerShareRuntimeByResourceKey(share.ID, req.ResourceKey)
 	if err != nil {
 		writePeerInternalError(w, "reserve-port runtime lookup", err)
@@ -1699,6 +1711,17 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 		response.WriteJSON(w, response.ErrDefault("Runtime release is pending"))
 		return
 	}
+	// B13-003：纯预留过期后不得再被 apply——先把该行本地释放，再按
+	// 预留不存在处理（对端可重新 reserve）。已带 role 的 runtime 是
+	// 在途/已生效的期望状态，不在此列（重复 apply 是修复路径）。
+	if peerShareReservationExpired(runtime, time.Now()) {
+		if err := h.repo.CompletePeerShareRuntimeRelease(runtime.ID); err != nil {
+			writePeerInternalError(w, "apply-role expire stale reservation", err)
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault("Reservation not found"))
+		return
+	}
 	if isPeerShareFlowExceeded(share) {
 		response.WriteJSON(w, response.Err(403, "Share traffic limit exceeded"))
 		return
@@ -1726,6 +1749,19 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 		}
 		runtime.BindingID = bindingID
 	}
+	// B13-002：apply 前快照本次要改写的占用字段。applyPeerShareRoleRuntime
+	// 会先把期望状态落库再下发命令（为崩溃恢复保留期望状态）；但对
+	// 「首次 apply 的纯预留」而言，同步 API 一旦失败即向对端返回失败，
+	// 若不回滚，预留会停在 role/service_name 已占用、applied=0 的
+	// 终态——换角色重试被 role-cannot-change 拒、release 与 share
+	// 删除又被离线节点卡死，端口无限期占用。故仅当 apply 前是纯预留
+	// （无 role/service/chain）时，失败回滚到快照，预留回到可重新
+	// apply 或可本地释放的状态。已有 role 的 runtime（曾成功下发或
+	// 期望状态待对账）失败时保留新期望状态待重连恢复——那是
+	// TestPeerShareUnacknowledgedApplyRecoversOrReleases 锁定的既有
+	// 契约，本回滚不得触碰。
+	prevRole, prevServiceName, prevChainName, prevTarget, prevApplied := runtime.Role, runtime.ServiceName, runtime.ChainName, runtime.Target, runtime.Applied
+	wasPlainReservation := prevRole == "" && prevServiceName == "" && prevChainName == ""
 	runtime.Role = req.Role
 	runtime.ServiceName = fmt.Sprintf("fed_svc_%d", runtime.ID)
 	runtime.ChainName = ""
@@ -1737,6 +1773,13 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 	targetBytes, _ := json.Marshal(req.Targets)
 	runtime.Target = string(targetBytes)
 	if err := h.applyPeerShareRoleRuntime(runtime); err != nil {
+		if wasPlainReservation {
+			runtime.Role, runtime.ServiceName, runtime.ChainName, runtime.Target, runtime.Applied = prevRole, prevServiceName, prevChainName, prevTarget, prevApplied
+			runtime.UpdatedTime = time.Now().UnixMilli()
+			if rbErr := h.repo.UpdatePeerShareRuntime(runtime); rbErr != nil {
+				log.Printf("federation: rollback failed apply for runtime %d failed: %v (apply error: %v)", runtime.ID, rbErr, err)
+			}
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -2208,6 +2251,21 @@ func validateFederationCommandPorts(share *repo.PeerShare, data interface{}) err
 	}
 
 	return nil
+}
+
+// peerShareReservationTTL 是纯预留（reserve-port 成功、尚未 apply 角色）
+// 的存活上限（B13-003）：对端在 reserve 后崩溃/弃单时预留到期自动释放，
+// 端口回到可用池，不再永久占用直至耗尽整个端口段。消费方 reserve→apply
+// 是同一操作内的连续调用，30 分钟远超正常流程耗时。回收走惰性路径：
+// reserve 分配前批量回收本 share 的过期预留、apply 时校验目标预留未
+// 过期；已进入 apply 的 runtime（role 非空）是期望状态、对账对象，
+// 不在本 TTL 范围内。
+const peerShareReservationTTL = 30 * time.Minute
+
+// peerShareReservationExpired 判断一条 runtime 是否为已过期的纯预留。
+func peerShareReservationExpired(runtime *repo.PeerShareRuntime, now time.Time) bool {
+	return runtime != nil && runtime.Role == "" && runtime.Applied == 0 &&
+		runtime.UpdatedTime > 0 && runtime.UpdatedTime < now.Add(-peerShareReservationTTL).UnixMilli()
 }
 
 func (h *Handler) pickPeerSharePort(share *repo.PeerShare, requestedPort int) (int, error) {

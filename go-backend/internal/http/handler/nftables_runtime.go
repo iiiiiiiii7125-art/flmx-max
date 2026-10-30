@@ -29,6 +29,14 @@ func isNftablesForwardMode(mode string) bool {
 	return strings.EqualFold(strings.TrimSpace(mode), runtimenft.ModeNftables)
 }
 
+// errNftablesNodeNotFound 是 nodeUsesNftables(Tx) 对「节点不存在」的
+// 转译哨兵（B04-004）：repo 层把未找到归一为 sql.ErrNoRows，旧实现经
+// 各 handler 以 Err(-2, err.Error()) 原样回出，泄漏 SQL 原文
+// （"sql: no rows in result set"）。前置查询统一在此转译，上层按
+// errors.Is 命中后回人话「节点不存在」；其余传播路径 err.Error()
+// 亦为该人话文案。
+var errNftablesNodeNotFound = errors.New("节点不存在")
+
 func (h *Handler) nodeUsesNftables(nodeID int64) (bool, error) {
 	return h.nodeUsesNftablesTx(nil, nodeID)
 }
@@ -47,6 +55,9 @@ func (h *Handler) nodeUsesNftablesTx(tx *gorm.DB, nodeID int64) (bool, error) {
 		mode, err = h.repo.GetNodeForwardMode(nodeID)
 	}
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, errNftablesNodeNotFound
+		}
 		return false, err
 	}
 	return isNftablesForwardMode(mode), nil
@@ -512,6 +523,10 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 	}
 	usesNft, err := h.nodeUsesNftables(nodeID)
 	if err != nil {
+		if errors.Is(err, errNftablesNodeNotFound) {
+			response.WriteJSON(w, response.ErrDefault("节点不存在"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -599,6 +614,10 @@ func (h *Handler) nodeNftablesClear(w http.ResponseWriter, r *http.Request) {
 	}
 	usesNft, err := h.nodeUsesNftables(nodeID)
 	if err != nil {
+		if errors.Is(err, errNftablesNodeNotFound) {
+			response.WriteJSON(w, response.ErrDefault("节点不存在"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}

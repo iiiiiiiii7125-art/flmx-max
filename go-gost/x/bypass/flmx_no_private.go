@@ -7,6 +7,7 @@ package bypass
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 
@@ -202,4 +203,82 @@ func (bp *noPrivateBypass) Contains(ctx context.Context, network, addr string, o
 
 func (bp *noPrivateBypass) IsWhitelist() bool {
 	return false
+}
+
+// DialTargetPinner is implemented by bypasses that can validate the
+// final dial target and pin a hostname target to a validated IP
+// literal. The plain Bypass.Contains check and the actual dial
+// historically resolved the hostname independently (check via
+// net.DefaultResolver, dial via the service resolver — or, with no
+// service resolver, again inside the net dialer), so a rebinding DNS
+// (first answer public, second answer private) walked straight past
+// the check (A02-001). Consumers that perform the dial (chain.Router
+// via SetDialTargetGuard, the UDP packet relays) call PinDialTarget
+// at the dial point so that the address that gets connected to is
+// the address set that was validated — one resolution, pinned.
+type DialTargetPinner interface {
+	PinDialTarget(ctx context.Context, network, addr string) (string, error)
+}
+
+// PinDialTarget implements DialTargetPinner for the no-private bypass.
+func (bp *noPrivateBypass) PinDialTarget(ctx context.Context, network, addr string) (string, error) {
+	return PinNoPrivateDialTarget(ctx, network, addr)
+}
+
+// PinNoPrivateDialTarget validates the router's final dial target for
+// a service guarded by flmx-no-private and returns the address to
+// actually dial:
+//
+//   - IP-literal target: returned unchanged when public, rejected
+//     when non-public.
+//   - Hostname target: resolved once here (the same resolver the
+//     Contains check uses); rejected when resolution fails, yields
+//     nothing, or any answer is non-public; otherwise pinned to one
+//     validated IP literal so no second, divergent resolution can
+//     happen downstream (router resolver, hosts mapper and the
+//     DefaultRoute net dialer all consume the pinned literal).
+//   - Target without a host (e.g. a UDP association's empty address):
+//     returned unchanged; per-packet targets are pinned by the UDP
+//     relays instead.
+func PinNoPrivateDialTarget(ctx context.Context, network, addr string) (string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return addr, nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isNonPublicIP(ip) {
+			return "", fmt.Errorf("flmx-no-private: dial target %s is a non-public address", addr)
+		}
+		return addr, nil
+	}
+	ips, err := noPrivateLookupIP(ctx, host)
+	if err != nil {
+		return "", fmt.Errorf("flmx-no-private: cannot verify dial target %s: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("flmx-no-private: cannot verify dial target %s: no addresses", host)
+	}
+	for _, ip := range ips {
+		if isNonPublicIP(ip) {
+			return "", fmt.Errorf("flmx-no-private: dial target %s resolves to a non-public address", addr)
+		}
+	}
+	picked := ips[0]
+	switch network {
+	case "tcp4", "udp4", "ip4":
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				picked = ip
+				break
+			}
+		}
+	case "tcp6", "udp6", "ip6":
+		for _, ip := range ips {
+			if ip.To4() == nil {
+				picked = ip
+				break
+			}
+		}
+	}
+	return net.JoinHostPort(picked.String(), port), nil
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, Check, QrCode, ChevronDown } from "lucide-react";
 
@@ -39,13 +39,18 @@ export default function MySubscriptionPage() {
   const [data, setData] = useState<{ userId: number; inbounds: InboundApiItem[]; relays?: MyRelay[]; sig?: string } | null>(null);
   const [subPath, setSubPath] = useState("");
   const [loading, setLoading] = useState(true);
+  // 首屏关键接口（分配订阅 / 个人订阅）加载失败的文案：与「暂无订阅」
+  // 空态区分，故障不得伪装成未分配（network 层失败是 resolve 非 0 码
+  // 而非 reject，.catch 兜不住，必须按返回 code 判失败）。
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   // 展开了流量统计的分配订阅 id（同一时间只展开一条）。
   const [expandedTrafficId, setExpandedTrafficId] = useState<number | null>(
     null,
   );
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
     // getSubInfo 查默认订阅：未被分配默认订阅是正常状态，后端会回 403，
     // 静默处理（不弹全局「权限不足」），页面只隐藏默认订阅区即可。
     Promise.all([getMySubscriptions(), getMyInbounds(), getSubInfo(false, true)])
@@ -59,12 +64,48 @@ export default function MySubscriptionPage() {
         if (subRes.code === 0) {
           setSubPath(subRes.data?.path || "");
         }
+        // 两个关键接口任一非 0 即加载失败（getSubInfo 的 403 静默豁免
+        // 保持不变，不计入失败判定）。
+        const failedMsg =
+          assignedRes.code !== 0
+            ? assignedRes.msg
+            : myRes.code !== 0
+              ? myRes.msg
+              : "";
+
+        if (assignedRes.code !== 0 || myRes.code !== 0) {
+          setLoadError(failedMsg || "加载订阅信息失败");
+          // 本次仍有可呈现内容（部分成功）时弹提示即可；无内容时由
+          // 下方错误态整页呈现，不重复打扰。
+          const myData =
+            myRes.code === 0
+              ? (myRes.data as
+                  | { inbounds?: InboundApiItem[]; relays?: MyRelay[] }
+                  | undefined)
+              : undefined;
+          const hasContent =
+            (assignedRes.code === 0 &&
+              (assignedRes.data?.subscriptions?.length ?? 0) > 0) ||
+            (myData?.inbounds?.length ?? 0) > 0 ||
+            (myData?.relays?.length ?? 0) > 0;
+
+          if (hasContent) {
+            toast.error(failedMsg || "加载订阅信息失败");
+          }
+        } else {
+          setLoadError(null);
+        }
       })
       .catch(() => {
+        setLoadError("加载订阅信息失败");
         toast.error("加载订阅信息失败");
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const subUrl = (format?: string, inboundId?: number, relayId?: number) => {
     if (!subPath || !data) return "";
@@ -152,6 +193,26 @@ export default function MySubscriptionPage() {
     data &&
     ((data.inbounds && data.inbounds.length > 0) ||
       (data.relays && data.relays.length > 0));
+
+  // 加载失败且无任何可呈现内容：错误态（带重试），不得落到「暂无订阅」
+  // 空态误导用户去找管理员分配。
+  if (loadError && assigned.length === 0 && !hasLegacy) {
+    return (
+      <div className="p-6">
+        <Card>
+          <CardBody className="py-12 text-center">
+            <p className="text-danger">订阅信息加载失败</p>
+            <p className="text-xs text-default-400 mt-1">{loadError}</p>
+            <div className="mt-4">
+              <Button color="primary" variant="flat" onPress={load}>
+                重试
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+    );
+  }
 
   if (assigned.length === 0 && !hasLegacy) {
     return (

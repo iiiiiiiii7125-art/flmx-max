@@ -1,5 +1,6 @@
 import type { RemoteSourceItem } from "@/api";
 import type {
+  BatchOperationFailure,
   InboundApiItem,
   KernelApiItem,
   KernelCapabilitiesApiData,
@@ -30,6 +31,8 @@ import {
   StaggerItem,
   StaggerList,
 } from "@/components/animated-page";
+import { BatchActionResultModal } from "@/components/batch-action-result-modal";
+import { extractBatchFailures } from "@/api/error-message";
 import { PageLoadingState } from "@/components/page-state";
 import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
@@ -74,6 +77,20 @@ const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
 
 type ConfirmAction = "delete" | "regenerate" | "reset";
+
+interface BatchResultModalState {
+  failures: BatchOperationFailure[];
+  open: boolean;
+  summary: string;
+  title: string;
+}
+
+const EMPTY_BATCH_RESULT_MODAL_STATE: BatchResultModalState = {
+  failures: [],
+  open: false,
+  summary: "",
+  title: "",
+};
 
 type PageTab = "inbounds" | "sources" | "sub";
 
@@ -248,6 +265,8 @@ export default function InboundPage() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchResultModal, setBatchResultModal] =
+    useState<BatchResultModalState>(EMPTY_BATCH_RESULT_MODAL_STATE);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [batchToggling, setBatchToggling] = useState(false);
   const [probing, setProbing] = useState(false);
@@ -471,6 +490,10 @@ export default function InboundPage() {
         return;
       }
       const { successCount = 0, failCount = 0 } = res.data ?? {};
+      // 后端逐条回填 failures（id/name/reason）：部分失败时必须把明细
+      // 呈现给用户，只报计数无法定位失败项与原因（与 forward/tunnel
+      // 页的 BatchActionResultModal 范式对齐）。
+      const failures = extractBatchFailures(res.data);
 
       if (res.msg && res.msg !== "操作成功") {
         toast(res.msg, { icon: "⚠️" });
@@ -480,6 +503,14 @@ export default function InboundPage() {
         });
       } else {
         toast.success(`已删除 ${successCount} 个入站`);
+      }
+      if (failCount > 0 && failures.length > 0) {
+        setBatchResultModal({
+          failures,
+          open: true,
+          summary: `成功 ${successCount} 项，失败 ${failCount} 项`,
+          title: "批量删除结果",
+        });
       }
       setBatchDeleteOpen(false);
       exitSelectMode();
@@ -504,6 +535,7 @@ export default function InboundPage() {
       }
       const { successCount = 0, failCount = 0 } = res.data ?? {};
       const verb = enabled ? "启用" : "停用";
+      const failures = extractBatchFailures(res.data);
 
       if (res.msg && res.msg !== "操作成功") {
         toast(res.msg, { icon: "⚠️" });
@@ -513,6 +545,14 @@ export default function InboundPage() {
         });
       } else {
         toast.success(`已${verb} ${successCount} 个入站`);
+      }
+      if (failCount > 0 && failures.length > 0) {
+        setBatchResultModal({
+          failures,
+          open: true,
+          summary: `成功 ${successCount} 项，失败 ${failCount} 项`,
+          title: enabled ? "批量启用结果" : "批量停用结果",
+        });
       }
       exitSelectMode();
       await loadData(false);
@@ -1695,6 +1735,21 @@ export default function InboundPage() {
           }}
         </ModalContent>
       </Modal>
+
+      <BatchActionResultModal
+        failures={batchResultModal.failures}
+        isOpen={batchResultModal.open}
+        summary={batchResultModal.summary}
+        title={batchResultModal.title}
+        onOpenChange={(open) => {
+          if (open) {
+            setBatchResultModal((prev) => ({ ...prev, open: true }));
+
+            return;
+          }
+          setBatchResultModal(EMPTY_BATCH_RESULT_MODAL_STATE);
+        }}
+      />
     </AnimatedPage>
   );
 }

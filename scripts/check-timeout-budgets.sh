@@ -19,6 +19,13 @@
 # 有效服务端时限 > 后端界；aligned 格 前端 == 服务端 == 登记对齐值；
 # 登记表外的调用点（普查差集非 ∅）即 FAIL；class 格调用点若获得
 # 专属 timeout（不再走默认）必须改登专行，否则 FAIL。
+# B05-001 常设门：class 格端点的 handler 函数体若直接调用版本发现
+# 函数，必须改登 strict 专行——/system/version 曾以 DB/local class
+# 误分类逃过三层对账（C080）；仅登记行带命名例外（exception 列）
+# 时放行并在输出中点名。C059（/node/install）原为唯一例外
+#（discovery-prelude-legacy），已按 C080 同法收口为 strict 专行、
+# 例外摘除，现无存续例外。变体自检见
+# scripts/check-timeout-budgets-selftest.sh。
 #
 # 用法：check-timeout-budgets.sh [REPO_ROOT]（默认脚本所在仓库根）。
 # 退出码：0 = 全格对账通过；1 = 存在漂移/缺格；2 = 前提失效。
@@ -154,8 +161,15 @@ be_literal_anchor() {
 # be_component_check CELL：expr 界的分量锚点（分量值由 Go 门测试/脚本常量复算）
 be_component_check() {
   case "$1" in
-    T007|T008|T009)
+    T007|T008)
       grep -qP 'Timeout:\s*30 \* time\.Second' "$HANDLER_DIR/secure_fetch.go" ;;
+    T009|C080|C059)
+      # 两段链界（B05-001/B05-003）：版本发现 API 段与 stable 重定向
+      # 兜底段各两腿 × 30s，两个逐尝试客户端锚点缺一即界漂移。
+      # C059（/node/install）无条件走同一解析链，按 C080 同法收口后
+      # 同列（原 class + discovery-prelude-legacy 例外已摘除）。
+      grep -qP 'Timeout:\s*30 \* time\.Second' "$HANDLER_DIR/secure_fetch.go" &&
+      grep -qP 'Timeout:\s*30 \* time\.Second' "$HANDLER_DIR/upgrade.go" ;;
     T015)
       grep -qP 'MaxTimeoutSec:\s*60' "$ROOT/go-backend/internal/monitoring/limits.go" &&
       grep -qP 'cmdTimeout = cmdTimeout \+ 2\*time\.Second' "$ROOT/go-backend/internal/health/checker.go" ;;
@@ -196,11 +210,13 @@ fi
 # 错位——必须先经 awk 转为 \037（非空白）分隔再 read -a 保真切分。
 ROWS=0
 SEEN_CALLS="$(mktemp)"
+CLASS_ROWS="$(mktemp)"
 while IFS= read -r _line; do
   [ -n "$_line" ] || continue
   _conv="$(printf '%s' "$_line" | awk -F'\t' 'BEGIN{OFS="\037"} { out=$1; for(i=2;i<=18;i++) out=out OFS $i; print out }')"
   IFS=$'\x1f' read -ra F <<< "$_conv"
   cell="${F[0]:-}"; call="${F[1]:-}"; surface="${F[2]:-}"; endpoint="${F[3]:-}"
+  [ "${F[14]:-}" = "class" ] && printf '%s\t%s\t%s\n' "$cell" "$endpoint" "${F[15]:-}" >> "$CLASS_ROWS"
   fe_s="${F[4]:-}"; fe_kind="${F[5]:-}"; fe_src="${F[6]:-}"; fe_floor="${F[7]:-}"; fe_cap="${F[8]:-}"
   sv_s="${F[9]:-}"; sv_src="${F[10]:-}"; be_s="${F[11]:-}"; be_kind="${F[12]:-}"; be_src="${F[13]:-}"
   check="${F[14]:-}"; exception="${F[15]:-}"
@@ -340,6 +356,43 @@ EOF
       ;;
   esac
 done < <(grep -v '^#' "$REG" | tail -n +2)
+
+# ── 版本发现面禁登 class（B05-001 常设门）────────────────────────────
+# class 格的后端界只是类天花板（12s），不做三层对账；/system/version
+# 曾以此逃过对账（C080：实际界 120s、前端仅 30s）。规则：class 格
+# 端点的 handler 函数体若直接调用任一版本发现函数，必须改登 strict
+# 专行；登记行带命名例外（exception 列非空）时放行但在此点名。路由
+# 按 handler.go 的两种注册形态（mux.HandleFunc 与路由表字面量）解析，
+# 函数体取自 handler 目录；无法机械解析的格（模板路径等）跳过。
+DISCOVERY_FN_RE='(fetchSystemUpgradeReleases|resolveSystemUpgradeLatestReleaseByChannel|fetchGitHubReleasesWithProxy|fetchGitHubReleases|resolveLatestReleaseByChannelWithProxy|resolveLatestReleaseByChannel|resolveLatestTagByRedirectWithProxy|kernelReleaseVersionsWithProxy|fetchKernelReleaseVersionsPage)[[:space:]]*\('
+# 一次性建索引：路由表（端点 -> handler 函数名）与函数体拆分文件，
+# 避免逐格重复全树 grep。
+ROUTE_MAP="$(mktemp)"; BODY_DIR="$(mktemp -d)"
+grep -rhoP --exclude='*_test.go' '"/api/v1[^"]*", h\.[A-Za-z0-9]+' "$ROOT/go-backend/internal/http" 2>/dev/null \
+  | sed -E 's#"/api/v1([^"]*)", h\.(.*)#\1\t\2#' | sort -u > "$ROUTE_MAP"
+awk -v dir="$BODY_DIR" '
+  /^func \(h \*Handler\) [A-Za-z0-9]+\(/ {
+    if (out) close(out)
+    name = $0; sub(/^func \(h \*Handler\) /, "", name); sub(/\(.*/, "", name)
+    out = dir "/" name; print > out; next
+  }
+  /^func / { if (out) { close(out); out = "" } }
+  out { print >> out }
+' "$HANDLER_DIR"/*.go 2>/dev/null
+while IFS=$'\t' read -r d_cell d_ep d_exc; do
+  [ -n "$d_cell" ] || continue
+  d_fn="$(awk -F'\t' -v ep="$d_ep" '$1==ep { print $2; exit }' "$ROUTE_MAP")"
+  [ -n "$d_fn" ] || continue
+  [ -f "$BODY_DIR/$d_fn" ] || continue
+  if grep -qE "$DISCOVERY_FN_RE" "$BODY_DIR/$d_fn"; then
+    if [ -n "$d_exc" ]; then
+      echo "NOTE: $d_cell($d_ep) 的 handler $d_fn 含版本发现调用，以命名例外「$d_exc」保留 class 登记（待收口）"
+    else
+      fail "$d_cell($d_ep) 登记为 class，但其 handler $d_fn 含版本发现调用——版本发现端点必须改登 strict 专行（B05-001）"
+    fi
+  fi
+done < "$CLASS_ROWS"
+rm -rf "$BODY_DIR"; rm -f "$ROUTE_MAP" "$CLASS_ROWS"
 
 # ── 普查差集：api/index.ts 全部导出调用点必须恰登记一次 ────────────────
 CEN_FAIL=0

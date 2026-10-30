@@ -365,6 +365,14 @@ func TestNftScriptWhitelist(t *testing.T) {
 
 	// Validate with the real nft parser when we can (root + nft installed).
 	if _, err := exec.LookPath("nft"); err == nil && os.Geteuid() == 0 {
+		// X02-004（审计闭环 Round 1 / C17）：与 TestNftScriptPortHopping 的
+		// F-091 口径对齐——受限容器/沙箱里 nft 存在且 euid=0，但 netlink
+		// 操作被内核拒绝（Operation not permitted），此时 nft -c 对任何
+		// 脚本都失败，属环境缺失而非脚本缺陷。先用最小脚本探测 nft -c
+		// 本身可用，不可用则跳过实机校验腿（脚本内容断言在上方已执行）。
+		if !nftCheckSupported() {
+			t.Skip("当前环境 nft -c 不可用（netlink 受限），跳过 nft -c 实机校验（X02-004 环境定性，与 F-091 同口径）")
+		}
 		cmd := exec.Command("nft", "-c", "-f", "-")
 		cmd.Stdin = strings.NewReader(script)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -522,6 +530,15 @@ func TestLogRingStripsANSI(t *testing.T) {
 	if got := r.tail(1)[0]; got != "[stls-3] 2026-10-14T16:14:14Z ERROR bind failed" {
 		t.Fatalf("got %q", got)
 	}
+}
+
+// nftCheckSupported 用最小脚本探测当前环境能否运行 nft -c 本身
+// （受限容器中 netlink 初始化即被拒绝，与脚本内容无关）。
+func nftCheckSupported() bool {
+	probe := "table inet flmx_check_probe {}\n"
+	cmd := exec.Command("nft", "-c", "-f", "-")
+	cmd.Stdin = strings.NewReader(probe)
+	return cmd.Run() == nil
 }
 
 // nftFibSupported 用最小脚本探测当前内核是否支持 nft fib 表达式。

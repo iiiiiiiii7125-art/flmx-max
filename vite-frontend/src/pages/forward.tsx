@@ -141,6 +141,8 @@ interface Forward {
   proxyProtocol?: number;
   proxyProtocolReceive?: number;
   proxyProtocolSend?: number;
+  /** B08-005：后端经列表透出的绑定回退告警（bindWarnings）；无告警为 undefined。 */
+  bindWarnings?: string[];
 }
 
 interface Tunnel {
@@ -627,6 +629,10 @@ const mapForwardApiItems = (items: ForwardApiItem[]): Forward[] => {
         : typeof forward.proxyProtocol === "number"
           ? forward.proxyProtocol
           : 0,
+    bindWarnings:
+      Array.isArray(forward.bindWarnings) && forward.bindWarnings.length > 0
+        ? forward.bindWarnings
+        : undefined,
     serviceRunning: forward.status === 1,
   }));
 };
@@ -764,6 +770,28 @@ const SortableForwardCard = ({ forward, renderCard }: any) => {
   );
 };
 
+// B08-005：绑定回退告警徽标。后端在同步时把显式监听 IP 回退为默认
+// 监听的事件持久化，并经转发列表 bindWarnings 透出（按端口一条完整
+// 文案）；有告警的行显示徽标、悬停看全文，无告警行渲染为 null 零变化。
+const ForwardBindWarningBadge = ({ warnings }: { warnings?: string[] }) => {
+  if (!warnings || warnings.length === 0) {
+    return null;
+  }
+
+  return (
+    <span className="inline-flex shrink-0" title={warnings.join("；")}>
+      <Chip
+        className="text-xs font-medium whitespace-nowrap"
+        color="warning"
+        size="sm"
+        variant="flat"
+      >
+        ⚠ 监听IP已回退
+      </Chip>
+    </span>
+  );
+};
+
 // 可拖拽的表格行组件
 const SortableTableRow = ({
   copyToClipboard,
@@ -833,7 +861,10 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.name} whitespace-nowrap text-foreground cursor-pointer hover:text-primary transition-colors`}
         onClick={() => copyToClipboard(forward.name, "规则名")}
       >
-        {forward.name}
+        <span className="inline-flex items-center gap-2">
+          {forward.name}
+          <ForwardBindWarningBadge warnings={forward.bindWarnings} />
+        </span>
       </TableCell>
       <TableCell
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.inbound} max-w-[280px]`}
@@ -1052,13 +1083,16 @@ const SortableCompactTableRow = ({
       <TableCell
         className={`whitespace-nowrap text-foreground ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
       >
-        <button
-          className="cursor-pointer hover:text-primary transition-colors text-left bg-transparent border-none p-0 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded-sm"
-          type="button"
-          onClick={() => copyToClipboard(forward.name, "规则名")}
-        >
-          {forward.name}
-        </button>
+        <span className="inline-flex items-center gap-2">
+          <button
+            className="cursor-pointer hover:text-primary transition-colors text-left bg-transparent border-none p-0 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded-sm"
+            type="button"
+            onClick={() => copyToClipboard(forward.name, "规则名")}
+          >
+            {forward.name}
+          </button>
+          <ForwardBindWarningBadge warnings={forward.bindWarnings} />
+        </span>
       </TableCell>
       <TableCell
         className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
@@ -3909,6 +3943,7 @@ export default function ForwardPage() {
               </h3>
             </div>
             <div className="flex items-center gap-1.5 ml-2">
+              <ForwardBindWarningBadge warnings={forward.bindWarnings} />
               <Switch
                 isDisabled={forward.status !== 1 && forward.status !== 0}
                 isSelected={forward.serviceRunning}

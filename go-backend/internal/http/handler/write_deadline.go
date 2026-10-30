@@ -28,13 +28,34 @@ const (
 	// Frontend 360s (batch T2).
 	nodeUpgradeWriteDeadline = 360 * time.Second
 	// nodeBatchUpgrade: the backend bound is ceil(N/5) x
-	// upgradeTimeout and grows with N; 30 minutes (the gh-mirror
-	// precedent magnitude) covers the frontend's registered range
+	// upgradeTimeout and grows with N; the handler now caps N at
+	// maxBatchUpgradeNodes (25, bound 1500s — B05-002), so 30 minutes
+	// (the gh-mirror precedent magnitude) covers the reachable range
 	// with headroom.
 	nodeBatchUpgradeWriteDeadline = 30 * time.Minute
 	// systemUpgrade (run): the synchronous prelude is <= ~210s in the
 	// worst case; frontend >= 240s (batch T2).
 	systemUpgradeWriteDeadline = 300 * time.Second
+	// systemVersion / systemCheckUpdates (B05-001/B05-003): the version
+	// discovery chain is two sequential stages — the releases API
+	// (proxy + direct attempts, 30s client each = 60s) and, on API
+	// failure for the stable channel, the redirect fallback (again
+	// proxy + direct, 30s each = 60s) — for a 120s backend bound.
+	// These two handlers were the last discovery endpoints still on
+	// the global 120s cap (an exact-equality bound) because the
+	// registry misfiled /system/version as DB/local class (C080).
+	// Frontend 150s.
+	systemVersionWriteDeadline = 180 * time.Second
+	// nodeInstall (C059 closure): getNodeInstallCommand composes the
+	// install command only after unconditionally resolving the latest
+	// agent version through the same two-stage discovery chain as
+	// systemVersion (120s backend bound), yet it stayed on the global
+	// 120s cap — an exact-equality bound — because the registry
+	// misfiled /node/install as DB/local class and hid the prelude
+	// behind the discovery-prelude-legacy named exception. The relief
+	// and the frontend value (150s) now match the C080 treatment and
+	// the exception is removed. Frontend 150s.
+	nodeInstallWriteDeadline = 180 * time.Second
 	// Diagnosis: the 120s request context (diagnosisRequestTimeout)
 	// stays as the designed work cap; only the outer write layer
 	// rises, to ~150s, so a diagnosis that runs its full budget can
@@ -54,10 +75,14 @@ const (
 	// remains uncapped.
 	tunnelCreateWriteDeadline = 300 * time.Second
 	// Backup import/restore/export and gist restore/upload perform
-	// size-proportional, unbounded work (a full export/import scales
-	// with the backup and the fleet). The magnitude follows the
-	// gh-mirror precedent; the relief extends write patience only —
-	// capping the import itself would be data-hostile and is not done.
+	// size-proportional work (a full export/import scales with the
+	// backup and the fleet). The magnitude follows the gh-mirror
+	// precedent; the relief extends write patience only. The import
+	// itself is not capped as a whole: its pre-write snapshot phase
+	// stays bound to the request context (an abort there cancels the
+	// import with no side effects), and only the detached write phase
+	// carries its own same-magnitude cap (backupImportTimeout in
+	// handler.go, B14-001 ruling ④).
 	backupWriteDeadline = 30 * time.Minute
 )
 

@@ -1358,7 +1358,7 @@ EOF
   _pub_ip=$(get_public_ip)
   echo "🌐 访问地址: http://${_pub_ip}:$FRONTEND_PORT"
   echo "📖 部署完成后请阅读下使用文档，求求了啊，不要上去就是一顿操作"
-  echo "📚 文档地址: https://iiiiiiiii7125-art.github.io/flmx-max/guide.html"
+  echo "📚 文档地址: https://iiiiiiiii7125-art.github.io/flmx-max/"
   echo "💡 默认管理员账号: admin@user / admin@user"
   echo "⚠️  登录后请立即修改默认密码！"
 

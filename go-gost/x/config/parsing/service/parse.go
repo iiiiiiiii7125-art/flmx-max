@@ -188,6 +188,22 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		)
 	}
 
+	// A02-001: a service guarded by flmx-no-private gets the dial-point
+	// target guard on both of its routers. The handler's pre-dial
+	// Bypass.Contains and the router's dial used to resolve the target
+	// independently (check via the system resolver, dial via the
+	// service resolver / hosts mapper / net dialer), so a rebinding
+	// DNS could pass the check with a public answer and land on a
+	// private address at dial time. The guard re-validates the final
+	// resolved target inside Router.Dial and pins hostnames to the
+	// validated IP literal.
+	noPrivateGuard := serviceHasNoPrivateBypass(cfg)
+
+	listenerRouter := xchain.NewRouter(routerOpts...)
+	if noPrivateGuard {
+		listenerRouter.SetDialTargetGuard(xbypass.PinNoPrivateDialTarget)
+	}
+
 	var trafficLimiter listener.Option
 	if cfg.Limiter != "" {
 		lim := resolveTrafficLimiter(cfg.Limiter)
@@ -203,7 +219,7 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 
 	listenOpts := []listener.Option{
 		listener.AddrOption(cfg.Addr),
-		listener.RouterOption(xchain.NewRouter(routerOpts...)),
+		listener.RouterOption(listenerRouter),
 		listener.AutherOption(auther),
 		listener.AuthOption(auth_parser.Info(cfg.Listener.Auth)),
 		listener.TLSConfigOption(tlsConfig),
@@ -334,10 +350,15 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		)
 	}
 
+	handlerRouter := xchain.NewRouter(routerOpts...)
+	if noPrivateGuard {
+		handlerRouter.SetDialTargetGuard(xbypass.PinNoPrivateDialTarget)
+	}
+
 	var h handler.Handler
 	if rf := registry.HandlerRegistry().Get(cfg.Handler.Type); rf != nil {
 		h = rf(
-			handler.RouterOption(xchain.NewRouter(routerOpts...)),
+			handler.RouterOption(handlerRouter),
 			handler.AutherOption(auther),
 			handler.AuthOption(auth_parser.Info(cfg.Handler.Auth)),
 			handler.BypassOption(xbypass.BypassGroup(bypass_parser.List(cfg.Bypass, cfg.Bypasses...)...)),
@@ -397,6 +418,27 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	serviceLogger.Infof("listening on %s/%s", s.Addr().String(), s.Addr().Network())
 	configured = true
 	return s, nil
+}
+
+// serviceHasNoPrivateBypass reports whether the service references
+// the built-in flmx-no-private bypass. Name-based detection is exact
+// here: bypass_parser.List resolves this name to the built-in
+// implementation at parse time (never to a registry wrapper), and a
+// handler's Bypass can only come from cfg.Bypass/cfg.Bypasses — no
+// handler metadata overrides it.
+func serviceHasNoPrivateBypass(cfg *config.ServiceConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.Bypass == xbypass.NoPrivateBypassName {
+		return true
+	}
+	for _, name := range cfg.Bypasses {
+		if name == xbypass.NoPrivateBypassName {
+			return true
+		}
+	}
+	return false
 }
 
 func parseForwarder(cfg *config.ForwarderConfig, log logger.Logger) (hop.Hop, error) {

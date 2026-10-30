@@ -19,7 +19,7 @@ class TestUserManagementUI:
         """Login before each test."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin_user", "admin_user")
+        login_page.login("admin@user", "admin@user")
 
     def test_user_page_loads(self, page: Page, frontend_url: str):
         """Test that user management page loads."""
@@ -66,7 +66,7 @@ class TestUserManagementUI:
             search_input.first.press("Enter")
             page.wait_for_load_state("networkidle")
 
-            assert page.locator("text=admin_user").count() >= 1
+            assert page.locator("text=admin@user").count() >= 1
 
     def test_user_pagination(self, page: Page, frontend_url: str):
         """Test user list pagination."""

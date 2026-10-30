@@ -3,7 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
-		"net/http/httptest"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -64,6 +64,12 @@ func TestA001_DirectConnectionIgnoresXFF(t *testing.T) {
 
 // 场景 2：hop=1 与 hop=2。
 func TestA001_TrustedProxyHops(t *testing.T) {
+	// hops=1 + 单条客户端条目：合法单跳形态（Caddy/nginx 同机→后端，
+	// 回环对端、代理追加的真实客户端 IP 即该条目），采信条目。
+	// 复查结论（B01-001 收窄）：此处原期望即编码该合法形态，v1 曾以
+	// run==0 fail-closed 改严、误伤默认单跳拓扑，现按对端类型判别
+	// 恢复原期望；自填轮换的封堵只针对公网直连对端（见
+	// TestA001_DirectConnectionIgnoresXFF 与 C02 验收 1）。
 	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
 	got := loginClientIP(loginReqWithXFF("127.0.0.1:1", "198.51.100.9"))
 	if got.String() != "198.51.100.9" {
@@ -82,6 +88,9 @@ func TestA001_TrustedProxyHops(t *testing.T) {
 }
 
 // 场景 3：解析健壮性。
+// 复查结论（B01-001 收窄）：v1 曾把本用例改用两跳链行使解析路径
+// （单条形态在当时一律 fail-closed）；收窄后单跳单条即合法形态，
+// 恢复原始单条用例行使同一批 parseIPLiteral 路径，断言强度不变。
 func TestA001_XFFParsingRobustness(t *testing.T) {
 	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
 	cases := []struct {
@@ -95,7 +104,7 @@ func TestA001_XFFParsingRobustness(t *testing.T) {
 		{"ipv6-port", "[2001:db8::1]:443", "2001:db8::1"},
 		{"blank-entries", "  203.0.113.7 ,, ", "203.0.113.7"},
 		{"quoted", `"203.0.113.7"`, "203.0.113.7"},
-		{"empty", "", "127.0.0.1"},       // 回退 RemoteAddr
+		{"empty", "", "127.0.0.1"},                // 回退 RemoteAddr
 		{"all-invalid", "not-an-ip", "127.0.0.1"}, // 回退 RemoteAddr
 	}
 	for _, tc := range cases {

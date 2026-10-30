@@ -518,6 +518,13 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 			//（upsert 语义：不存在则创建），记入确认集供补发守卫使用。
 			h.noteAddServiceConfirmed(node.ID, extractAddServiceNames(services))
 		}
+		if err == nil && strings.TrimSpace(fp.InIP) != "" {
+			// B08-005：显式监听 IP 已被 agent 接受，清掉该端口历史的
+			// 回退告警（best-effort，失败只记日志不挡同步）。
+			if cerr := h.repo.ClearForwardPortBindWarning(forward.ID, node.ID, fp.Port); cerr != nil {
+				log.Printf("forward bind warning clear failed forward_id=%d node_id=%d port=%d: %v", forward.ID, node.ID, fp.Port, cerr)
+			}
+		}
 		if err != nil && allowFallbackAdd && method == "UpdateService" {
 			if isNotFoundError(err) {
 				if delErr := h.deleteForwardServicesOnNode(forward, node.ID); delErr != nil && !isNotFoundError(delErr) {
@@ -604,6 +611,13 @@ func (h *Handler) fallbackForwardPortToDefaultBind(forward *forwardRecord, tunne
 	}
 
 	warning := fmt.Sprintf("节点 %s 监听IP %s 不在主机网卡地址中，已自动回退为默认监听IP", strings.TrimSpace(node.Name), explicitBindIP)
+	// B08-005：回退事件持久落到转发端口行，经转发列表 bindWarnings
+	// 长期可见——本函数的返回值只抵达当次同步的调用方，节点重连后的
+	// 后台重推触发回退时没有用户在场接收。落库失败只记日志：回退本身
+	// 已成功，不得因告警留痕失败把同步判失败。
+	if werr := h.repo.UpdateForwardPortBindWarning(forward.ID, node.ID, fp.Port, warning); werr != nil {
+		log.Printf("forward bind fallback warning persist failed forward_id=%d node_id=%d port=%d: %v", forward.ID, node.ID, fp.Port, werr)
+	}
 	return warning, nil
 }
 

@@ -16,6 +16,7 @@ func resetKernelVersionCache(t *testing.T) {
 	kernelVersionCache.Lock()
 	kernelVersionCache.at = map[string]time.Time{}
 	kernelVersionCache.items = map[string][]kernelVersionItem{}
+	kernelVersionCache.flights = map[string]*kernelVersionFetchCall{}
 	kernelVersionCache.Unlock()
 }
 

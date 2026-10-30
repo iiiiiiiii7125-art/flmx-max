@@ -107,8 +107,17 @@ func (r *Repository) GetForwardStatusMap(forwardIDs []int64) (map[int64]int, err
 		ID     int64
 		Status int
 	}
-	if err := r.db.Model(&model.Forward{}).Select("id, status").Where("id IN ?", ids).Scan(&rows).Error; err != nil {
-		return nil, err
+	// T2-NEW-01：ids 为采集层一轮待过滤的 forward 集合（数据派生、
+	// 无条数上限），按块查避免 IN ? 变量越界；结果进 map 与分块无关。
+	for _, chunk := range chunkInt64IDs(ids) {
+		var chunkRows []struct {
+			ID     int64
+			Status int
+		}
+		if err := r.db.Model(&model.Forward{}).Select("id, status").Where("id IN ?", chunk).Scan(&chunkRows).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, chunkRows...)
 	}
 	for _, row := range rows {
 		out[row.ID] = row.Status

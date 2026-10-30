@@ -154,13 +154,21 @@ jobs:
 
   # F-008：全量 go test 门禁。此前 CI 只有 build + 单条 PG 契约用例，
   # B0 盘点的 10 个基线失败长期无人拦。纳入 go-backend 与 go-gost 两
-  # 个模块；go-gost/x 暂不纳入：其 TestNftScriptPortHopping 依赖宿主机
-  # nftables fib 能力，托管 runner 上不可靠，待该用例可独立打标后补。
+  # 个模块。
+  # X02-004（审计闭环 Round 1 / C17）：go-gost/x 不再整模块排除。x 共
+  # 206 个包，其中 27 个带测试文件，现以 -short 全量纳入本 job；宿主机
+  # 依赖的实机校验腿已在用例内自带能力探测门（TestNftScriptPortHopping
+  # 的 fib 探测 F-091、TestNftScriptWhitelist 的 nft -c 可用性探测），
+  # 环境不支持时只跳实机腿、脚本内容断言照常执行。FLMX 自研包必测
+  # 清单（不得再被排除）：x/socket、x/kernel、x/bypass、x/service、
+  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余 179 个
+  # 包无任何测试文件（继承上游的协议处理面包），属已知缺口、非本 job
+  # 引入，新增 FLMX 改动落到无测试包时须同步补测试。
   # 已知状态（B7 落地时）：fix 分支基线不含 B4，go-backend 全量测试含
   # B0 已确认的 2 个 F-003 确定性失败，本 job 在 B4 合入 main 前会红、
   # 合入后转绿——属预期，不是本 job 引入的回归。
   backend-tests:
-    name: Go Full Tests (backend + agent)
+    name: Go Full Tests (backend + agent + x)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -172,6 +180,7 @@ jobs:
           cache-dependency-path: |
             go-backend/go.sum
             go-gost/go.sum
+            go-gost/x/go.sum
 
       - name: Backend full tests
         working-directory: go-backend
@@ -180,3 +189,56 @@ jobs:
       - name: Agent full tests
         working-directory: go-gost
         run: go test ./...
+
+      - name: Agent x module tests
+        working-directory: go-gost/x
+        run: go test -short ./...
+
+  # X02-002（审计闭环 Round 1 / C17）：tests/e2e 此前无任何 CI 接入，
+  # 且默认账号与后端 seed 不一致（admin_user 不是用户名、必然登录失败），
+  # 整套 42 条用例实际零回归保护。本 job 跑 API 子集（-m api，不起
+  # 浏览器）：构建真后端、以临时 DB 启动，再跑 pytest。conftest 在
+  # 服务缺席时硬失败（仅显式 E2E_SKIP_OK 才跳过并汇总提示），本 job
+  # 不设 E2E_SKIP_OK，杜绝全量 skip 假绿。浏览器子集（-m e2e）需前端
+  # 构建与浏览器下载，暂未纳入，属已知缺口登记。
+  e2e-api:
+    name: E2E API Subset (pytest -m api)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: go-backend/go.sum
+
+      - name: Build backend
+        working-directory: go-backend
+        run: go build -o /tmp/paneld ./cmd/paneld
+
+      - name: Start backend
+        run: |
+          SERVER_ADDR=:6365 JWT_SECRET=test-secret-e2e-key-do-not-use-in-production DB_PATH=/tmp/e2e-panel.db /tmp/paneld > /tmp/paneld.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:6365/; then
+              echo "backend up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -s -o /dev/null http://localhost:6365/ || (cat /tmp/paneld.log && exit 1)
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install e2e dependencies
+        run: pip install "./tests/e2e[dev]"
+
+      - name: Run API e2e subset
+        working-directory: tests/e2e
+        env:
+          E2E_BACKEND_PORT: '6365'
+        run: python -m pytest -m api

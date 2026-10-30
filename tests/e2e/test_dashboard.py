@@ -18,7 +18,7 @@ class TestDashboard:
         """Login before each test."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin_user", "admin_user")
+        login_page.login("admin@user", "admin@user")
 
     def test_login_redirects_to_change_password(self, page: Page, frontend_url: str):
         """Test that login with default password redirects to change-password."""
@@ -32,7 +32,7 @@ class TestDashboard:
         """Test that page shows user information."""
         page.wait_for_load_state("networkidle")
 
-        user_element = page.locator("text=admin_user, [data-testid='user-name']")
+        user_element = page.locator("text=admin@user, [data-testid='user-name']")
         if user_element.count() > 0:
             expect(user_element.first).to_be_visible()
 
@@ -67,7 +67,7 @@ class TestNavigation:
         """Login before each test."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin_user", "admin_user")
+        login_page.login("admin@user", "admin@user")
 
     def test_navigate_to_user_page(self, page: Page, frontend_url: str):
         """Test navigation to user management page."""

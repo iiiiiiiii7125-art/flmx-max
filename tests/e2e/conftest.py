@@ -5,6 +5,7 @@ Pytest configuration and fixtures for FLMX E2E tests.
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from typing import Any, Callable, Generator, Optional
 
@@ -16,8 +17,64 @@ from utils.api_client import APIClient, TestUser
 DEFAULT_BACKEND_PORT = 6365
 DEFAULT_FRONTEND_PORT = 3000
 DEFAULT_JWT_SECRET = "test-secret-e2e-key-do-not-use-in-production"
-DEFAULT_ADMIN_USER = "admin_user"
-DEFAULT_ADMIN_PASSWORD = "admin_user"
+# Must match the backend seed (go-backend repository.go seedData). The old
+# value "admin_user" is only a default-*password candidate* in the backend,
+# never a username — every login with it failed by construction (X02-002).
+DEFAULT_ADMIN_USER = "admin@user"
+DEFAULT_ADMIN_PASSWORD = "admin@user"
+# The seed admin's token is restricted to /user/updatePassword until the
+# default password is changed (backend M-05), so authenticated fixtures
+# change it once per server lifetime and use this password afterwards.
+E2E_ADMIN_PASSWORD = os.getenv("E2E_ADMIN_PASSWORD", "E2eAdmin!2026x")
+
+
+def _login_wait_rate_limit(api_client: APIClient, username: str, password: str) -> dict:
+    """Login, waiting out the per-IP rate-limit bucket (10/min) if needed.
+
+    Only relevant when re-running against a long-lived server whose
+    bucket is still warm from a previous run; a fresh server (the
+    supported mode: with_server.py / CI) never triggers the wait.
+    """
+    response = api_client.login(username, password)
+    for _ in range(6):
+        if response.get("code") != 429:
+            break
+        time.sleep(10)
+        response = api_client.login(username, password)
+    return response
+
+
+def bootstrap_admin_client(api_client: APIClient) -> APIClient:
+    """Log in as the seed admin and return a client with a full token.
+
+    Flow: login with the seed credentials; if the response asks for a
+    password change, change it to E2E_ADMIN_PASSWORD and re-login. If the
+    seed login fails outright, the password was probably already changed
+    against a long-lived server — fall back to E2E_ADMIN_PASSWORD.
+    """
+    response = _login_wait_rate_limit(api_client, DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PASSWORD)
+    if response.get("code") != 0:
+        response = _login_wait_rate_limit(api_client, DEFAULT_ADMIN_USER, E2E_ADMIN_PASSWORD)
+        if response.get("code") != 0:
+            raise RuntimeError(f"E2E admin login failed: {response}")
+        return api_client
+
+    if response.get("data", {}).get("requirePasswordChange"):
+        change = api_client.post(
+            "/user/updatePassword",
+            {
+                "newUsername": DEFAULT_ADMIN_USER,
+                "currentPassword": DEFAULT_ADMIN_PASSWORD,
+                "newPassword": E2E_ADMIN_PASSWORD,
+                "confirmPassword": E2E_ADMIN_PASSWORD,
+            },
+        )
+        if change.get("code") != 0:
+            raise RuntimeError(f"E2E admin password change failed: {change}")
+        relogin = _login_wait_rate_limit(api_client, DEFAULT_ADMIN_USER, E2E_ADMIN_PASSWORD)
+        if relogin.get("code") != 0:
+            raise RuntimeError(f"E2E admin re-login failed: {relogin}")
+    return api_client
 
 
 def get_server_info() -> dict:
@@ -89,11 +146,38 @@ def api_client(backend_url: str) -> APIClient:
     return APIClient(backend_url)
 
 
-@pytest.fixture
-def authenticated_api(api_client: APIClient) -> APIClient:
-    """Create authenticated API client."""
-    api_client.login(*TestUser.DEFAULT_ADMIN)
-    return api_client
+@pytest.fixture(scope="session")
+def authenticated_api(backend_url: str, server_info: dict) -> Generator[APIClient, None, None]:
+    """Create authenticated API client (full, unrestricted token).
+
+    Session-scoped on purpose: the backend rate-limits logins per IP
+    (10/min), so bootstrapping per test (login + password change +
+    re-login) exhausts the bucket and later tests fail with 429.
+    The no-server gate runs here too: session fixtures are instantiated
+    before the function-scoped autouse gate, so without this check a
+    missing backend surfaced as a raw ConnectionError instead of the
+    explicit skip/fail (defined below; resolved at call time).
+
+    Teardown restores the seed password (best effort) so the suite
+    leaves the server as it found it: test_login_success logs in with
+    the seed credentials, and repeated runs against a long-lived
+    server must stay idempotent.
+    """
+    _gate_no_server(_probe_missing([(server_info["backend_port"], "backend")]))
+    client = bootstrap_admin_client(APIClient(backend_url))
+    yield client
+    try:
+        client.post(
+            "/user/updatePassword",
+            {
+                "newUsername": DEFAULT_ADMIN_USER,
+                "currentPassword": E2E_ADMIN_PASSWORD,
+                "newPassword": DEFAULT_ADMIN_PASSWORD,
+                "confirmPassword": DEFAULT_ADMIN_PASSWORD,
+            },
+        )
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -157,16 +241,9 @@ def api_context(playwright: Playwright, api_base_url: str) -> Generator[APIReque
 
 
 @pytest.fixture
-def auth_token(api_context: APIRequestContext) -> Optional[str]:
-    """Get authentication token for API calls."""
-    response = api_context.post(
-        "/user/login",
-        data={"username": DEFAULT_ADMIN_USER, "password": DEFAULT_ADMIN_PASSWORD},
-    )
-    data = response.json()
-    if data.get("code") == 0:
-        return data.get("data", {}).get("token")
-    return None
+def auth_token(authenticated_api: APIClient) -> Optional[str]:
+    """Get a full (unrestricted) authentication token for API calls."""
+    return authenticated_api.token
 
 
 @pytest.fixture
@@ -175,19 +252,60 @@ def fresh_db_path(tmp_path: Path) -> str:
     return str(tmp_path / "test.db")
 
 
-@pytest.fixture(autouse=True)
-def skip_if_no_server(server_info: dict):
-    """Skip tests if server is not available."""
-    backend_port = server_info["backend_port"]
-    frontend_port = server_info["frontend_port"]
+_no_server_skips = {"count": 0}
 
-    for port, name in [(backend_port, "backend"), (frontend_port, "frontend")]:
+
+def _probe_missing(ports) -> list:
+    """Return descriptions of the given (port, name) servers not listening."""
+    missing = []
+    for port, name in ports:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(1)
                 s.connect(("localhost", port))
         except OSError:
-            pytest.skip(f"{name} server not available on port {port}")
+            missing.append(f"{name} server not available on port {port}")
+    return missing
+
+
+def _gate_no_server(missing) -> None:
+    """Skip (explicit E2E_SKIP_OK only) or hard-fail when servers are missing."""
+    if not missing:
+        return
+    detail = "; ".join(missing)
+    if os.getenv("E2E_SKIP_OK"):
+        _no_server_skips["count"] += 1
+        pytest.skip(f"{detail} (E2E_SKIP_OK set)")
+    pytest.fail(
+        f"{detail}; start the servers first (see with_server.py) "
+        "or set E2E_SKIP_OK=1 to skip explicitly"
+    )
+
+
+@pytest.fixture(autouse=True)
+def skip_if_no_server(request, server_info: dict):
+    """Gate tests on the servers they actually need.
+
+    API-marked tests only need the backend; everything else needs the
+    frontend too. Missing servers used to skip the whole suite silently
+    (pytest still exited 0 — X02-002). Now a missing server is a hard
+    failure unless E2E_SKIP_OK is explicitly set, and explicit skips are
+    totalled in the terminal summary so they cannot pass unnoticed.
+    """
+    ports = [(server_info["backend_port"], "backend")]
+    if request.node.get_closest_marker("api") is None:
+        ports.append((server_info["frontend_port"], "frontend"))
+    _gate_no_server(_probe_missing(ports))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Make explicit no-server skips visible in the run summary."""
+    if _no_server_skips["count"]:
+        terminalreporter.write_sep(
+            "=",
+            f"E2E: no-server skip gate fired {_no_server_skips['count']} "
+            "time(s); affected tests were skipped (E2E_SKIP_OK was set)",
+        )
 
 
 def pytest_configure(config):

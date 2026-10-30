@@ -40,9 +40,13 @@ func (r *Repository) CheckAndUpdateSeq(nodeID int64, seq *int64, now int64) (acc
 		// PG-2: DO UPDATE 的右值必须用表名限定原行列（node_seq.legacy_count）；
 		// 裸列名在 PG 解析期于目标行与 EXCLUDED 间歧义（SQLSTATE 42702），
 		// 空表首插亦报错。限定形式 SQLite 同样接受，两方言同形。
+		// SAT2: legacy_count 是上报驱动的持久累加器，+1 必须饱和——裸加在
+		// MaxInt64 处会于 SQLite 宽化为 REAL 毒化行、于 PG 报错中止入账，
+		// 与 saturatingExcludedAddExpr 同一 CASE 守卫形态（字面量边界、
+		// 两侧有类型）。advanceSeqTx 的同名语句必须与此处逐字同形。
 		if err := r.db.Exec(`INSERT INTO node_seq (node_id, last_seq, legacy_count, updated_time)
 			VALUES (?, 0, 1, ?)
-			ON CONFLICT (node_id) DO UPDATE SET legacy_count = node_seq.legacy_count + 1, updated_time = ?`,
+			ON CONFLICT (node_id) DO UPDATE SET legacy_count = CASE WHEN node_seq.legacy_count < 9223372036854775807 THEN node_seq.legacy_count + 1 ELSE node_seq.legacy_count END, updated_time = ?`,
 			nodeID, now, now).Error; err != nil {
 			return false, false, true, err
 		}
@@ -120,9 +124,11 @@ var ErrSeqReplay = errors.New("flow upload seq replay")
 // 返回 ErrSeqReplay 使整 tx 回滚，杜绝 TOCTOU 双入账。
 func advanceSeqTx(tx *gorm.DB, nodeID int64, seq *int64, now int64) error {
 	if seq == nil {
+		// SAT2: legacy_count +1 饱和守卫，与 CheckAndUpdateSeq 的同名
+		// 语句逐字同形（理由见彼处注释）。
 		return tx.Exec(`INSERT INTO node_seq (node_id, last_seq, legacy_count, updated_time)
 			VALUES (?, 0, 1, ?)
-			ON CONFLICT (node_id) DO UPDATE SET legacy_count = node_seq.legacy_count + 1, updated_time = ?`,
+			ON CONFLICT (node_id) DO UPDATE SET legacy_count = CASE WHEN node_seq.legacy_count < 9223372036854775807 THEN node_seq.legacy_count + 1 ELSE node_seq.legacy_count END, updated_time = ?`,
 			nodeID, now, now).Error
 	}
 	res := tx.Clauses(clause.OnConflict{DoNothing: true}).

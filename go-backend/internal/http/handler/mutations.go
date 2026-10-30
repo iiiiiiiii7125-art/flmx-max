@@ -61,7 +61,7 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("用户名长度必须为 1-100 个字符"))
 		return
 	}
-	if len([]rune(pwd)) < 6 {
+	if passwordTooShort(pwd) {
 		response.WriteJSON(w, response.ErrDefault("密码至少6位"))
 		return
 	}
@@ -74,6 +74,17 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 	if exists {
 		response.WriteJSON(w, response.ErrDefault("用户名已存在"))
 		return
+	}
+
+	// B02-001（FIX2-A 同族补齐）：与 userUpdate 同口径——在场但不可
+	// 解析的数值字段 fail-closed 报错、不落库。此前 create 面无此
+	// 守卫：配额传 "abc"/1.5 时 asInt64 静默回 0，而配额只在 >0 时
+	// 才落行，等于「传了配额却不限额」且界面显示成功。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
 	}
 
 	status := asInt(req["status"], 1)
@@ -345,6 +356,11 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+	} else if passwordTooShort(pwd) {
+		// B02-002：改密与 create 共用最小长度口径（≥6 位，此前 update
+		// 面无此校验，可把密码改成 3 位且正常登录）。
+		response.WriteJSON(w, response.ErrDefault("密码至少6位"))
+		return
 	} else {
 		hashedPassword, err := security.HashPassword(pwd)
 		if err != nil {
@@ -352,6 +368,20 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.repo.UpdateUserWithPassword(id, username, hashedPassword, flow, num, expTime, flowResetTime, status, maxConn, now, flowMiB); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	}
+
+	// B01-002：启用→停用构成一次会话吊销。标准停用走
+	// UpdateUserWithoutPassword 不推进 password_changed_at，旧 token
+	// 只被 Status 门暂停、重新启用后自动复活。此处在主行落库成功后
+	// 同步 RevokeUserSessions，使停用前签发的 token 在中间件
+	// IatMs<=PasswordChangedAt 判据下永久失效；启用不回退该时间戳，
+	// 与改密/删 passkey 的既有吊销口径一致。带 pwd 的更新已由
+	// UpdateUserWithPassword 推进同一时间戳，重复推进无副作用。
+	if oldUser.Status == 1 && status == 0 {
+		if err := h.repo.RevokeUserSessions(id, now); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -450,6 +480,17 @@ func (h *Handler) userGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	if roleID != 0 && actorID != id {
 		response.WriteJSON(w, response.Err(403, "无权限"))
+		return
+	}
+	// B02-004：与同族接口（G-QUOTA-01 等）对齐——查不存在的用户
+	// 报错，不再回 code=0 空列表（空列表与「真实无分组」不可区分）。
+	u, err := h.repo.GetUserByID(id)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if u == nil {
+		response.WriteJSON(w, response.ErrDefault("用户不存在"))
 		return
 	}
 	ids, err := h.repo.GetUserGroupIDsByUserID(id)
@@ -739,6 +780,13 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("UDP 监听地址格式无效："+err.Error()))
 		return
 	}
+	// B04-003：port 写侧按 parsePortRangeSpec 同口径校验（不可解析/
+	// 越界/反序拒绝），不再原样落库。
+	portSpec := defaultString(asString(req["port"]), "1000-65535")
+	if err := validateNodePortSpec(portSpec); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
 	nodeID, err := h.repo.CreateNode(
 		name,
@@ -747,7 +795,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		// R30-FIX-F04：显式字段同口径归一化（写侧）。
 		nullableText(serverIPV4),
 		nullableText(serverIPV6),
-		defaultString(asString(req["port"]), "1000-65535"),
+		portSpec,
 		nullableText(asString(req["interfaceName"])),
 		nullableText(""),
 		nullableText(strings.TrimSpace(asString(req["remark"]))),
@@ -928,6 +976,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(nodePort) == "" {
 		nodePort = "1000-65535"
+	}
+	// B04-003：仅校验本次提交的 port（存量非法值做无关编辑不连坐，
+	// 与 R11X-008/009 的 presence 口径一致），口径同 nodeCreate。
+	if _, ok := req["port"]; ok {
+		if err := validateNodePortSpec(nodePort); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 	}
 	remarkVal := interface{}(currentNode.Remark)
 	if _, ok := req["remark"]; ok {
@@ -1269,6 +1325,12 @@ func nodeInstallPlaintextWarning(agentAddr string) string {
 }
 
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
+	// C059：版本发现两段链（API 60s + 重定向兜底 60s）后端界 120s，
+	// 此前独缺 extendWriteDeadline 而与全局 WriteTimeout 120s 恰等，
+	// 且被登记表误分类为 DB/local（class）+ discovery-prelude-legacy
+	// 命名例外逃过三层对账——与 C080（/system/version）同型，现按
+	// 同法收口：武装放宽、改登 strict、摘除例外。
+	extendWriteDeadline(w, nodeInstallWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
@@ -1367,10 +1429,31 @@ func (h *Handler) nodeUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// B04-002（handler 半）：逐条聚合回执，与 nodeBatchDelete /
+	// tunnelUpdateOrder 同口径。repo 的 UpdateNodeOrder 已改返回
+	// (RowsAffected, error)（C04 立契约），此处消费之：0 行=节点不
+	// 存在、err=写库失败，均计 failures 并带 id+原因；部分失败不再
+	// 报全量成功。此前 handler 丢弃返回值恒 OKEmpty，前端只能按提交
+	// 数虚报成功、排错位刷新后才暴露。
+	success := 0
+	fail := 0
+	failures := make([]batchFailureDetail, 0)
+	now := time.Now().UnixMilli()
 	for _, n := range req.Nodes {
-		h.repo.UpdateNodeOrder(n.ID, n.Inx, time.Now().UnixMilli())
+		rows, err := h.repo.UpdateNodeOrder(n.ID, n.Inx, now)
+		if err != nil {
+			fail++
+			failures = appendBatchFailureReason(failures, n.ID, "", "更新节点排序失败："+err.Error())
+			continue
+		}
+		if rows == 0 {
+			fail++
+			failures = appendBatchFailureReason(failures, n.ID, "", "节点不存在")
+			continue
+		}
+		success++
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
 }
 
 func (h *Handler) nodeDismissExpiryReminder(w http.ResponseWriter, r *http.Request) {
@@ -2115,6 +2198,25 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := req["name"]; !ok {
 		resolvedName, _ = h.repo.GetTunnelName(id)
 	}
+	// B06-001：改名补与 create 同口径的重名校验——create 有 handler
+	// 预检 + InsertTunnelTx 事务内复检，update 此前全程无校验且
+	// tunnel 表无唯一索引，可改出同名隧道。仅显式提交且与现名不同
+	// 才查（同名即自身不算重复）；提交段落库前再复检一次（见下方
+	// 提交段），把竞态窗口收敛到与 create 同级。
+	currentTunnelName, _ := h.repo.GetTunnelName(id)
+	_, tunnelNameSubmitted := req["name"]
+	tunnelRenamed := tunnelNameSubmitted && resolvedName != currentTunnelName
+	if tunnelRenamed {
+		nameDup, dupErr := h.repo.TunnelNameExists(resolvedName)
+		if dupErr != nil {
+			response.WriteJSON(w, response.Err(-2, dupErr.Error()))
+			return
+		}
+		if nameDup {
+			response.WriteJSON(w, response.ErrDefault("隧道名称重复"))
+			return
+		}
+	}
 	resolvedFlow := asInt64(req["flow"], 1)
 	if _, ok := req["flow"]; !ok {
 		resolvedFlow = oldTunnel.Flow
@@ -2337,6 +2439,26 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 			if occupied {
 				return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, n.Port), 0
+			}
+		}
+
+		// B06-001：提交段复检改名重名（与 create 的 InsertTunnelTx
+		// 事务内复检同形，防验证段之后并发改入同名）。F1：复检必须
+		// 走本事务句柄（TunnelNameExistsTx）——池版走 r.db 另取连接，
+		// SQLite 单连接下事务占住唯一连接会自死锁。
+		// X01-001：与 InsertTunnelTx 同族——PG 下两并发改名事务的
+		// Count 复检可双双读到 0，复检前先按目标名取事务级咨询锁
+		// 串行化（LockTunnelNameTx，SQLite 下为空操作）。
+		if tunnelRenamed {
+			if lockErr := h.repo.LockTunnelNameTx(tx, resolvedName); lockErr != nil {
+				return lockErr, -2
+			}
+			nameDup, dupErr := h.repo.TunnelNameExistsTx(tx, resolvedName)
+			if dupErr != nil {
+				return dupErr, -2
+			}
+			if nameDup {
+				return errors.New("隧道名称重复"), 0
 			}
 		}
 
@@ -2888,6 +3010,19 @@ func (h *Handler) pickRandomPortForNode(nodeID int64) int {
 	return available[idx.Int64()]
 }
 
+// 隧道删除的两种回执口径（B06-003 口径登记，勿再当不一致立案）：
+//   - 单删（本函数 tunnel/delete）：对不存在的隧道返回 code=0 幂等
+//     成功——这是 X-P3-28 的既定语义（单删清单 user/forward/inbound/
+//     subscription + 对齐原点 node/tunnel/speedLimit 一律如此，由
+//     TestR1B8_XP328 锁定），目的是重复删除/删后重试不报错。
+//   - 复合操作（delete-with-forwards、delete-preview、
+//     batch-delete、batch-delete-preview）：逐条给出存在性回执
+//     （不存在即报错或计入 failures），因为这类请求携带迁移/预览
+//     等附加语义，调用方需要逐条对账。
+//
+// 两者并存是有意设计：单删只承诺「删完即无此隧道」，复合操作承诺
+// 「逐条可对账」。用户侧说明见 doc/guide/relay.md「删除隧道与节点
+// 离线时的语义」。
 func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -2977,10 +3112,30 @@ func (h *Handler) tunnelUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// B06-004：逐条回执（batchOperationResult 口径，与 tunnel
+	// batch-delete 一致）——不存在的 id（0 行更新）与真实 DB 错误
+	// 计入 failures，不再无条件报全成功。repo.UpdateTunnelOrder 已
+	// 改为返回受影响行数与错误，返回值不得丢弃。
+	success := 0
+	fail := 0
+	failures := make([]batchFailureDetail, 0)
+	now := time.Now().UnixMilli()
 	for _, t := range req.Tunnels {
-		h.repo.UpdateTunnelOrder(t.ID, t.Inx, time.Now().UnixMilli())
+		rows, err := h.repo.UpdateTunnelOrder(t.ID, t.Inx, now)
+		if err != nil {
+			fail++
+			name, _ := h.repo.GetTunnelName(t.ID)
+			failures = appendBatchFailure(failures, t.ID, name, err)
+			continue
+		}
+		if rows == 0 {
+			fail++
+			failures = appendBatchFailureReason(failures, t.ID, "", "隧道不存在")
+			continue
+		}
+		success++
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
 }
 
 func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
@@ -3678,6 +3833,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		userName = "user"
 	}
 	maxConn := asInt(req["maxConn"], 0)
+	// B09-002：maxConn 与用户面 O5-006 同口径拒绝负值（此前只钳
+	// ipMaxConn，maxConn 负值原样落库、消费面 MaxConn>0 门控下静
+	// 默等价无限制，与填写意图相反且无提示）。
+	if maxConn < 0 {
+		response.WriteJSON(w, response.ErrDefault("连接数限制不能小于0"))
+		return
+	}
 	ipMaxConn := asInt(req["ipMaxConn"], 0)
 	if ipMaxConn < 0 {
 		ipMaxConn = 0
@@ -3905,6 +4067,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UnixMilli()
 	maxConn := asInt(req["maxConn"], forward.MaxConn)
+	// B09-002：同 forwardCreate——maxConn 负值与 O5-006 同口径拒绝
+	// （仅在本次显式提交时判定，存量负值做无关编辑不连坐）。
+	if _, ok := req["maxConn"]; ok && maxConn < 0 {
+		response.WriteJSON(w, response.ErrDefault("连接数限制不能小于0"))
+		return
+	}
 	ipMaxConn := asInt(req["ipMaxConn"], forward.IPMaxConn)
 	if ipMaxConn < 0 {
 		ipMaxConn = 0
@@ -4370,6 +4538,12 @@ func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// B08-002：两段式——先全量校验所有条目的归属/存在性，全部通过
+	// 后才逐条落库。旧实现单循环内「校验一条、写一条」，中途某条
+	// 不存在即报错返回，但排在它前面的条目排序已落库，前端按失败
+	// 处理与实际状态不一致。落库阶段逐条检查 UpdateForwardOrder
+	// 的返回 error（旧实现连同 repo 层一并吞错），写失败即报错；
+	// 此阶段的失败只剩真实 DB 错误，不再有「不存在」形态。
 	for _, f := range req.Forwards {
 		if _, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, f.ID); accessErr != nil {
 			if errors.Is(accessErr, errForwardNotFound) {
@@ -4379,7 +4553,13 @@ func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		h.repo.UpdateForwardOrder(f.ID, f.Inx, time.Now().UnixMilli())
+	}
+	now := time.Now().UnixMilli()
+	for _, f := range req.Forwards {
+		if err := h.repo.UpdateForwardOrder(f.ID, f.Inx, now); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -4418,7 +4598,7 @@ func (h *Handler) reconcileGroupedNftDeletes(groups map[int64][]int64) map[int64
 }
 
 func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
-	ids := idsFromBody(r, w)
+	ids, invalidIDs := idsFromBodyWithInvalid(r, w)
 	if ids == nil {
 		return
 	}
@@ -4431,6 +4611,11 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 	f := 0
 	failures := make([]batchFailureDetail, 0)
 	pending := make([]batchFailureDetail, 0)
+	// B08-003：id<=0 与不存在 id 同口径计入 failures，不再静默吞。
+	for _, badID := range invalidIDs {
+		f++
+		failures = appendBatchFailureReason(failures, badID, "", "无效的转发ID")
+	}
 	// X-P2-3：删库前按 forwardID 反查 relay 的 InboundID（并集），删后刷新
 	// 白名单。刷新按当前 DB 重算：仅已删转发掉出 allow，pending/失败项
 	// 的行仍在库、口径不变。
@@ -4526,7 +4711,7 @@ func (h *Handler) forwardBatchResume(w http.ResponseWriter, r *http.Request) {
 // nft 转发按 D6 数据面优先：按节点聚合，一节点只 reconcile 一次，成功后才写 DB。
 // gost 转发保持原语义（先动数据面后写库），仅补齐 DB 错误检查。
 func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request, action string) {
-	ids := idsFromBody(r, w)
+	ids, invalidIDs := idsFromBodyWithInvalid(r, w)
 	if ids == nil {
 		return
 	}
@@ -4545,6 +4730,11 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 	f := 0
 	now := time.Now().UnixMilli()
 	failures := make([]batchFailureDetail, 0)
+	// B08-003：id<=0 与不存在 id 同口径计入 failures，不再静默吞。
+	for _, badID := range invalidIDs {
+		f++
+		failures = appendBatchFailureReason(failures, badID, "", "无效的转发ID")
+	}
 	type nftIntent struct {
 		exclude map[int64]bool
 		include []*forwardRecord
@@ -4645,7 +4835,7 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
-	ids := idsFromBody(r, w)
+	ids, invalidIDs := idsFromBodyWithInvalid(r, w)
 	if ids == nil {
 		return
 	}
@@ -4658,6 +4848,11 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 	f := 0
 	failures := make([]batchFailureDetail, 0)
 	batchWarnings := make([]string, 0)
+	// B08-003：id<=0 与不存在 id 同口径计入 failures，不再静默吞。
+	for _, badID := range invalidIDs {
+		f++
+		failures = appendBatchFailureReason(failures, badID, "", "无效的转发ID")
+	}
 	for _, id := range ids {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
@@ -4742,6 +4937,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	var failedInboundIDs []int64
 	for _, id := range req.ForwardIDs {
 		if id <= 0 {
+			// B08-003：非法 id 与不存在 id 同口径计入 failures，
+			// 不再静默跳过（回执须能对账）。
+			fail++
+			failures = appendBatchFailureReason(failures, id, "", "无效的转发ID")
 			continue
 		}
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
@@ -4938,10 +5137,27 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// B09-001：写侧合法集校验——在场不可解析先 fail-closed（FIX2-A
+	// 同族），再验 speed≥1、status∈{0,1}，非法不落库。
+	for _, key := range []string{"speed", "status"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
 	speed := asInt(req["speed"], 100)
+	status := asInt(req["status"], 1)
+	if err := validateSpeedLimitSpeed(speed); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := validateSpeedLimitStatus(status); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	now := time.Now().UnixMilli()
-	_, err := h.repo.CreateSpeedLimit(name, speed, now, asInt(req["status"], 1))
+	_, err := h.repo.CreateSpeedLimit(name, speed, now, status)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -4988,6 +5204,28 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 
 	speed := asInt(req["speed"], old.Speed)
 	status := asInt(req["status"], old.Status)
+
+	// B09-001：与 create 同口径的合法集校验——仅验本次在场字段
+	// （presence 口径：存量非法值做无关编辑不连坐，与 R11X-008/009
+	// 一致）；在场不可解析先 fail-closed（FIX2-A 同族）。
+	for _, key := range []string{"speed", "status"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	if _, ok := req["speed"]; ok {
+		if err := validateSpeedLimitSpeed(speed); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
+	if _, ok := req["status"]; ok {
+		if err := validateSpeedLimitStatus(status); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 
 	// R6X-017：引用集在写 DB 前枚举（与删除面同口径；引用关系不因
 	// 本次改值/禁用而变，写后按此集重下发即按新 DB 口径现查现算）。
@@ -5273,6 +5511,14 @@ func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// B03-003（拆分项）：permission/remove 对不存在的记录报错——
+	// remove 非单删、不在 X-P3-28 单删幂等清单内，且同族 assign/
+	// update 均对不存在报错；此前 exists=false 仍走完删除回成功，
+	// 管理员删错 id 无从察觉。（分组单删子项属既定幂等语义，不修。）
+	if !exists {
+		response.WriteJSON(w, response.ErrDefault("分组权限记录不存在"))
+		return
+	}
 
 	if err := h.repo.DeleteGroupPermissionByIDTx(tx, id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -5332,6 +5578,12 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 	}
 	now := time.Now().UnixMilli()
 	if err := h.repo.GroupCreate(table, name, asInt(req["status"], 1), now); err != nil {
+		// B03-002：重名命中唯一约束时转译为人话文案（与隧道创建的
+		// 「隧道名称重复」口径对齐），不回吐 DB 原文。
+		if isUniqueConstraintErr(err) {
+			response.WriteJSON(w, response.ErrDefault("分组名称已存在"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -5394,6 +5646,11 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		return
 	}
 	if err := h.repo.GroupUpdateTx(tx, table, id, newName, newStatus, time.Now().UnixMilli()); err != nil {
+		// B03-002：改名撞重名同 groupCreate 转译，不回吐 DB 原文。
+		if isUniqueConstraintErr(err) {
+			response.WriteJSON(w, response.ErrDefault("分组名称已存在"))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -8130,6 +8387,85 @@ func asString(v interface{}) string {
 	}
 }
 
+// validateSpeedLimitSpeed / validateSpeedLimitStatus 是 B09-001 的
+// 限速合法集（create/update/import 三载体同口径）：speed 必须 ≥1、
+// status ∈{0,1}。speed<=0 的规则此前可创建、可被引用，但下发面以
+// speed>0 为门控静默丢弃——限速实际不存在且无任何警告；写侧拒绝
+// 与 parseTrafficLimit/validateTunnelTrafficRatio 同格点名字段。
+func validateSpeedLimitSpeed(speed int) error {
+	if speed < 1 {
+		return fmt.Errorf("限速 speed 必须大于等于 1，当前 %d", speed)
+	}
+	return nil
+}
+
+func validateSpeedLimitStatus(status int) error {
+	if status != 0 && status != 1 {
+		return fmt.Errorf("限速 status 只能为 0 或 1，当前 %d", status)
+	}
+	return nil
+}
+
+// validateNodePortSpec 是 B04-003 的节点 port 写侧校验：接受集与
+// 消费面 parsePortRangeSpec 同口径（逗号多段、单值或 start-end 区
+// 间、端口 1-65535），但写侧对不可解析、越界、反序一律拒绝而非
+// 静默丢弃/交换/钳制——非法值原样落库会在下游 fail-soft 后远离
+// 输入处爆发。
+func validateNodePortSpec(spec string) error {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return errors.New("端口范围不能为空")
+	}
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return fmt.Errorf("端口范围格式无效: %q", spec)
+		}
+		if strings.Contains(part, "-") {
+			r := strings.SplitN(part, "-", 2)
+			start, err1 := strconv.Atoi(strings.TrimSpace(r[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(r[1]))
+			if err1 != nil || err2 != nil {
+				return fmt.Errorf("端口范围格式无效: %q", part)
+			}
+			if start < 1 || start > 65535 || end < 1 || end > 65535 {
+				return fmt.Errorf("端口必须在 1-65535 范围内: %q", part)
+			}
+			if end < start {
+				return fmt.Errorf("端口范围起始不能大于结束: %q", part)
+			}
+			continue
+		}
+		p, err := strconv.Atoi(part)
+		if err != nil {
+			return fmt.Errorf("端口范围格式无效: %q", part)
+		}
+		if p < 1 || p > 65535 {
+			return fmt.Errorf("端口必须在 1-65535 范围内: %q", part)
+		}
+	}
+	return nil
+}
+
+// isUniqueConstraintErr 识别两方言的唯一约束冲突短语（与 repo
+// FIX132-C 的 isUniqueConstraintViolation 同短语集），供 handler
+// 把 DB 原文错误转译为人话文案，不泄漏表名/驱动错误码（B03-002）。
+func isUniqueConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") ||
+		strings.Contains(msg, "duplicate key value")
+}
+
+// passwordTooShort 是 create/update 共用的密码最小长度口径
+// （B02-002：此前只有 userCreate 校验 ≥6 位，userUpdate 改密无
+// 下限，两面共用本 helper 防再分叉）。
+func passwordTooShort(pwd string) bool {
+	return len([]rune(pwd)) < 6
+}
+
 // presentNumericFieldInvalid 是 FIX2-A（V2-07）的 fail-closed 守
 // 卫：部分更新中字段「在场、非空、但不可解析为整数」时返回 true，
 // 调用方必须报错且不落库。旧实现对这类输入静默套用硬默认
@@ -8234,30 +8570,67 @@ func asInt64FromBodyKey(r *http.Request, w http.ResponseWriter, key string) int6
 	return id
 }
 
-func idsFromBody(r *http.Request, w http.ResponseWriter) []int64 {
+// parseIDsFromBody 解析批量请求体的 ids 数组（原始值，含 <=0
+// 条目）；失败时已写出错误回执，ok=false，调用方直接 return。
+func parseIDsFromBody(r *http.Request, w http.ResponseWriter) (ids []int64, ok bool) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return nil
+		return nil, false
 	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return nil
+		return nil, false
 	}
 	arr := asAnySlice(req["ids"])
 	if len(arr) == 0 {
 		response.WriteJSON(w, response.ErrDefault("ids不能为空"))
+		return nil, false
+	}
+	ids = make([]int64, 0, len(arr))
+	for _, x := range arr {
+		ids = append(ids, asInt64(x, 0))
+	}
+	return ids, true
+}
+
+func idsFromBody(r *http.Request, w http.ResponseWriter) []int64 {
+	raw, ok := parseIDsFromBody(r, w)
+	if !ok {
 		return nil
 	}
-	ids := make([]int64, 0, len(arr))
-	for _, x := range arr {
-		id := asInt64(x, 0)
+	ids := make([]int64, 0, len(raw))
+	for _, id := range raw {
 		if id > 0 {
 			ids = append(ids, id)
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
+}
+
+// idsFromBodyWithInvalid 与 idsFromBody 同源解析，但把 id<=0 的条目
+// 单列返回（B08-003）：forward 批量入口据此把非法 id 与不存在 id
+// 同口径计入 failures 回执，而不是在计数前就静默过滤掉（旧行为
+// 下 {"ids":[0]} 会得到 successCount=0/failCount=0 的全成功回执）。
+// valid 保持升序（与 idsFromBody 一致）；invalid 按请求顺序保留。
+// 解析失败时已写出错误回执，valid 返回 nil，调用方直接 return。
+func idsFromBodyWithInvalid(r *http.Request, w http.ResponseWriter) (valid []int64, invalid []int64) {
+	raw, ok := parseIDsFromBody(r, w)
+	if !ok {
+		return nil, nil
+	}
+	valid = make([]int64, 0, len(raw))
+	invalid = make([]int64, 0)
+	for _, id := range raw {
+		if id > 0 {
+			valid = append(valid, id)
+		} else {
+			invalid = append(invalid, id)
+		}
+	}
+	sort.Slice(valid, func(i, j int) bool { return valid[i] < valid[j] })
+	return valid, invalid
 }
 
 func nullableText(s string) interface{} {

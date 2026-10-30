@@ -66,18 +66,11 @@ func TrustedProxyHops() int {
 	return n
 }
 
-// trustedXFFChainLen 推导实际可信代理链长 P。
-//
-// XFF 由可信代理逐跳追加：每跳代理追加一个条目（它看到的上游 IP），
-// 故从右向左连续的可信代理 IP 条目数 + 直接对端（RemoteAddr 本身
-// 就是一跳可信代理）= 实际可信代理数 P。左侧预置条目（攻击者可控）
-// 不在此列——信任边界不可由左侧预置移动。
-//
-// 用途：调用方以 hops <= P 为采信 XFF 的前提；hops > P 即超配，
-// 须 fail-closed 回 RemoteAddr，不得取到预置条目（R24-X-01）。
+// trustedXFFRun 从右向左数 XFF 内连续的可信代理条目数（不含直接对端）。
+// 左侧预置条目（攻击者可控）不在此列——信任边界不可由左侧预置移动。
 // 判定谓词由调用方给：浏览器侧用 isTrustedProxyIP（回环/私网/
 // 链路本地），联邦侧用“落在已配置可信 CIDR 内”。
-func trustedXFFChainLen(entries []string, isTrusted func(net.IP) bool) int {
+func trustedXFFRun(entries []string, isTrusted func(net.IP) bool) int {
 	run := 0
 	for i := len(entries) - 1; i >= 0; i-- {
 		ip := parseIPLiteral(entries[i])
@@ -86,7 +79,23 @@ func trustedXFFChainLen(entries []string, isTrusted func(net.IP) bool) int {
 		}
 		run++
 	}
-	return run + 1 // +1：直接对端 RemoteAddr 本身就是一跳可信代理
+	return run
+}
+
+// trustedXFFChainLen 推导实际可信代理链长 P。
+//
+// XFF 由可信代理逐跳追加：每跳代理追加一个条目（它看到的上游 IP），
+// 故从右向左连续的可信代理 IP 条目数 + 直接对端（RemoteAddr 本身
+// 就是一跳可信代理）= 实际可信代理数 P。
+//
+// 用途：调用方以 hops <= P 为采信 XFF 的前提；hops > P 即超配，
+// 须 fail-closed 回 RemoteAddr，不得取到预置条目（R24-X-01）。
+// 注意：P 中的 +1 是「对端即代理」的假设。浏览器侧援用该假设的
+// 前提是直接对端已先按类型判别为回环/私网代理对端（B01-001 收窄
+// 口径，见 loginClientIP）；公网直连对端根本不进入本推导。联邦侧
+// 对端可信由显式 CIDR 配置背书，同理成立。
+func trustedXFFChainLen(entries []string, isTrusted func(net.IP) bool) int {
+	return trustedXFFRun(entries, isTrusted) + 1 // +1：直接对端 RemoteAddr 本身就是一跳可信代理
 }
 
 // loginClientIP 浏览器侧客户端 IP 解析（登录限流用）。
@@ -102,6 +111,25 @@ func trustedXFFChainLen(entries []string, isTrusted func(net.IP) bool) int {
 // R24-X-01：链长按可信条目计量，不按总条目数计量——hops 超过实际
 // 可信代理链长（trustedXFFChainLen）时 fail-closed 回 RemoteAddr，
 // 信任边界不可由攻击者预置的左侧条目移动。
+// B01-001（收窄口径，取代 v1 的 run==0 一律 fail-closed）：判别点
+// 是直接对端本身的类型，而非链内可信条目数。
+//   - 直接对端为公网地址：请求未经任何本机/内网代理到达后端，
+//     XFF 整条只能是对端自填、完全不可信——由下方首行分支整体
+//     忽略，限流键恒为 RemoteAddr，轮换自填在此被杀。v1 曾以
+//     run==0 一律 fail-closed 封堵，但默认单跳反代拓扑（Caddy/
+//     nginx 同机→后端 127.0.0.1）的真实链同样 run==0，误伤后
+//     限流粒度退化为代理 IP 共享桶（一人连错、全站 429），代价
+//     比原缺陷在该拓扑下的影响更实，故收窄。
+//   - 直接对端落在回环/私网：对端是本机或容器网络里的代理，
+//     沿用 hops 索引解析 + 超配 fail-closed（R24-X-01 不变）。
+//     追加型代理把真实客户端 IP 追加在 XFF 右侧，索引天然锚定
+//     在该条目上；攻击者在左侧预置的伪造条目无法移动限流键。
+//
+// 残余：对端同为回环/私网、却根本没有代理的直连客户端（内网
+// 直达后端端口、同机进程直达）与单跳代理链在协议层不可区分，
+// 其自填条目仍可能被索引选中——这是保住默认单跳拓扑按真实
+// 客户端 IP 限流粒度的既定取舍；后端端口不应暴露在不可信的
+// 私网直达范围内。
 func loginClientIP(r *http.Request) net.IP {
 	remoteIP := parseIPLiteral(r.RemoteAddr)
 	if !isTrustedProxyIP(remoteIP) {
@@ -115,9 +143,12 @@ func loginClientIP(r *http.Request) net.IP {
 	if hops <= 0 {
 		return remoteIP
 	}
+	// 至此直接对端已判别为回环/私网代理对端（公网对端在首行已
+	// 忽略 XFF 返回，见 B01-001 收窄口径），以下按索引解析。
+	run := trustedXFFRun(entries, isTrustedProxyIP)
 	// R24-X-01：hops 超配（大于实际可信代理链长）时，idx = len-hops
 	// 会落在攻击者可控的左侧预置条目上。先夹紧：超配即 fail-closed。
-	if chainLen := trustedXFFChainLen(entries, isTrustedProxyIP); hops > chainLen {
+	if chainLen := run + 1; hops > chainLen {
 		log.Printf("warning: XFF has %d entries but trusted proxy chain is %d hops (FLMX_TRUSTED_PROXY_HOPS=%d); ignoring XFF (fail-closed), using RemoteAddr", len(entries), chainLen, hops)
 		return remoteIP
 	}

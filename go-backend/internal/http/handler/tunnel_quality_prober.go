@@ -490,6 +490,10 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				snap.ExitToBingLoss = loss
 				snap.Success = true
 			} else {
+				// B07-002：失败段写 -1/100 哨兵，与类型2 入口段口径
+				// 一致，不得留 0/0 冒充完美样本进历史/统计。
+				snap.ExitToBingLatency = -1
+				snap.ExitToBingLoss = 100
 				snap.ErrorMessage = latencyCommandError(err)
 			}
 		} else {
@@ -599,6 +603,9 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				snap.ExitToBingLatency = lat
 				snap.ExitToBingLoss = loss
 			} else {
+				// B07-002：同类型1，失败段写 -1/100 哨兵。
+				snap.ExitToBingLatency = -1
+				snap.ExitToBingLoss = 100
 				if snap.ErrorMessage == "" {
 					snap.ErrorMessage = latencyCommandError(err)
 				}
@@ -616,6 +623,9 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				snap.ExitToBingLoss = loss
 				snap.Success = true
 			} else {
+				// B07-002：同类型1，失败段写 -1/100 哨兵。
+				snap.ExitToBingLatency = -1
+				snap.ExitToBingLoss = 100
 				snap.ErrorMessage = latencyCommandError(err)
 			}
 		} else {
@@ -841,6 +851,9 @@ func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chai
 	if len(owners) == 0 {
 		return
 	}
+	// B07-003：按当前探测间隔换算确认新鲜度窗口（2×间隔）注入
+	// 状态机，使切换的连续确认必须发生在窗口之内。
+	p.handler.bestExit.setPendingFreshWindow(2 * p.probeInterval())
 	nodeMap := make(map[int64]*nodeRecord, len(owners)+len(outNodes))
 	for _, owner := range owners {
 		if node, err := p.nodeRecord(owner.NodeID); err == nil && node != nil {
@@ -902,6 +915,23 @@ func (p *tunnelQualityProber) tcpPingNode(nodeID int64, ip string, port int, opt
 	}
 	if pingErr != nil {
 		return 0, 100, pingErr
+	}
+
+	// B07-001：agent 数据面全失败时命令本身 err=nil、报文 success=false，
+	// 且 AverageTime/PacketLoss 为零值——只看数值会把死链路读成
+	// 0ms/0% 丢包的完美样本并喂给最优出口评分（诊断面
+	// appendPathDiagnosis 与延迟面 latencyPointFrom 均查 success，
+	// 此前唯独质量面漏查）。success=false 一律归类为探测失败，
+	// 错误文案与延迟面同口径取 errorMessage。
+	if !asBool(pingData["success"], false) {
+		msg := strings.TrimSpace(asString(pingData["errorMessage"]))
+		if msg == "" {
+			msg = strings.TrimSpace(asString(pingData["message"]))
+		}
+		if msg == "" {
+			msg = "探测失败"
+		}
+		return 0, 100, errors.New(msg)
 	}
 
 	avgTime := asFloat(pingData["averageTime"], 0)

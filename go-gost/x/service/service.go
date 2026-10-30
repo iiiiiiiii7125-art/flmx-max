@@ -59,6 +59,14 @@ func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
 	needWrap = isTls+isSocks+isHttp > 0
 }
 
+// GetProtocolBlock returns the current protocol blocking switches.
+// Partial SetProtocol commands (A01-002) read their defaults from
+// here so fields the panel did not send keep their live values
+// instead of being reset to 0.
+func GetProtocolBlock() (httpOn int, tlsOn int, socksOn int) {
+	return isHttp, isTls, isSocks
+}
+
 type Option func(opts *options)
 
 func init() {
@@ -408,13 +416,26 @@ func (s *defaultService) observeStats(ctx context.Context) {
 				// OutputBytes（远端→客户端）、down=gost InputBytes
 				// （客户端→远端）。上报线格式 U/D 沿用此映射，面板按
 				// U=出、D=入解读（N-01 钉死，勿按 U=上行字面修改）。
+				//
+				// 计数口径（A02-003）：此处读的是服务级 stats，其来源
+				// 是客户端连接在 listener 接受时挂的 wrapper——计的是
+				// 客户端侧连接的全部线字节。带握手的协议（SOCKS5 的
+				// greeting+请求/应答、HTTP 的请求行与头）其协议字节
+				// 一并计入（SOCKS5 每连接双向各约 +12B）；无握手的
+				// forward/local 即纯载荷。这是统一的「客户端连接线
+				// 字节」口径，非逐协议载荷口径，配额/计费标定须按此
+				// 理解（见 observer/stats/wrapper 的同注）。
 				if outputBytes > 0 || inputBytes > 0 {
 					globalManager := GetGlobalTrafficManager()
 					globalManager.AddTraffic(s.name, int64(outputBytes), int64(inputBytes))
 
-					// 立即重置流量计数（因为已经记录到全局管理器中）
+					// 扣减已转移到全局管理器的快照量（因为已经记录到
+					// 全局管理器中）。A02-004：ResetTraffic 按快照量
+					// 原子扣减，此处直接传快照值——旧写法传
+					// 「Get-快照」的剩余值由其 Store 回写，本次 Get
+					// 与 Store 之间新计入的字节会被覆盖丢失。
 					if xstats, ok := st.(*xstats.Stats); ok {
-						xstats.ResetTraffic(st.Get(stats.KindInputBytes)-inputBytes, st.Get(stats.KindOutputBytes)-outputBytes)
+						xstats.ResetTraffic(inputBytes, outputBytes)
 					}
 				}
 

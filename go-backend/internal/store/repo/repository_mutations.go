@@ -85,6 +85,12 @@ func (r *Repository) CreateUserTx(tx *gorm.DB, username, pwdHash string, roleID 
 	// 存在即拒绝。此处不依赖 DB 唯一索引：model.User 无 uniqueIndex
 	// tag，R5-B4 v1 迁移在存量有重复时按 D23 跳过建索引，「无用户名
 	// 唯一索引」是受支持状态，复检是该状态下的唯一防线。
+	// X01-001：PG 默认隔离下 Count 复检本身不构成互斥（两并发事务
+	// 可双双读到 0），复检前先按用户名取事务级咨询锁兜底串行化；
+	// SQLite 为空操作，靠 MaxOpenConns(1) 串行化。见 pg_name_lock.go。
+	if err := lockNameForTx(tx, nameLockScopeUser, username); err != nil {
+		return 0, err
+	}
 	var dupCnt int64
 	if err := tx.Model(&model.User{}).Where(`"user" = ?`, username).Count(&dupCnt).Error; err != nil {
 		return 0, err
@@ -475,25 +481,45 @@ func (r *Repository) GetViteConfigValue(name string) (string, error) {
 	return cfg.Value, nil
 }
 
-func (r *Repository) UpdateNodeOrder(nodeID int64, inx int, now int64) {
+// UpdateNodeOrder 更新单个节点的排序序号，返回受影响行数与错误
+// （B04-002：旧实现 `_ = ....Error` 且不看 RowsAffected，对不存在
+// 的节点也静默无回执，handler 只能恒报成功）。handler 侧的逐条
+// 聚合回执（batchOperationResult 口径）在 mutations.go 的
+// nodeUpdateOrder 里补齐——该文件属其他簇，本函数先把契约立住：
+// 调用方必须检查返回值，不得再静默丢弃。
+func (r *Repository) UpdateNodeOrder(nodeID int64, inx int, now int64) (int64, error) {
 	if r == nil || r.db == nil {
-		return
+		return 0, errors.New("repository not initialized")
 	}
-	_ = r.db.Model(&model.Node{}).
+	res := r.db.Model(&model.Node{}).
 		Where("id = ?", nodeID).
 		Updates(map[string]interface{}{
 			"inx":          inx,
 			"updated_time": sql.NullInt64{Int64: now, Valid: true},
-		}).Error
+		})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 func (r *Repository) UpdateNodeExpiryReminderDismissed(nodeID int64, dismissed int) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.Node{}).
+	res := r.db.Model(&model.Node{}).
 		Where("id = ?", nodeID).
-		Update("expiry_reminder_dismissed", dismissed).Error
+		Update("expiry_reminder_dismissed", dismissed)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		// B04-002：GORM 对不存在的行 Update 不报错，旧实现据此对
+		// 不存在的节点也报成功。对齐 node/update 口径回「节点不
+		// 存在」（handler 的既有 err 分支会原样透出该文案）。
+		return errors.New("节点不存在")
+	}
+	return nil
 }
 
 func (r *Repository) DeleteNodeCascade(nodeID int64) error {
@@ -616,8 +642,21 @@ func (r *Repository) TunnelNameExists(name string) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("repository not initialized")
 	}
+	return r.TunnelNameExistsTx(r.db, name)
+}
+
+// TunnelNameExistsTx 是 TunnelNameExists 的事务句柄版（F1）：查询走
+// 传入的 tx/r.db 句柄本身。事务闭包内必须用本函数——SQLite
+// MaxOpenConns(1) 下事务已占住唯一连接，闭包内再调池版
+// TunnelNameExists（走 r.db 另取连接）会无限等待连接释放、自死锁
+// （tunnelUpdate 提交段改名复检曾中招，生产 SQLite 部署任何隧道
+// 改名都会挂死）。与 NodePortOccupiedForTunnelTx 同口径。
+func (r *Repository) TunnelNameExistsTx(tx *gorm.DB, name string) (bool, error) {
+	if tx == nil {
+		return false, errors.New("database unavailable")
+	}
 	var cnt int64
-	err := r.db.Model(&model.Tunnel{}).Where("name = ?", name).Count(&cnt).Error
+	err := tx.Model(&model.Tunnel{}).Where("name = ?", name).Count(&cnt).Error
 	return cnt > 0, err
 }
 
@@ -628,13 +667,23 @@ func (r *Repository) BeginTx() *gorm.DB {
 	return r.db.Begin()
 }
 
-func (r *Repository) UpdateTunnelOrder(tunnelID int64, inx int, now int64) {
+// UpdateTunnelOrder 更新单个隧道的排序序号，返回受影响行数与错误
+// （B06-004：旧实现无返回值且 `_ = ....Error` 吞掉一切错误，不存在
+// 的隧道 0 行更新与真实 DB 错误都不可见，handler 只能恒报成功）。
+// handler 侧的逐条聚合回执（batchOperationResult 口径）在
+// mutations.go 的 tunnelUpdateOrder 里补齐：调用方必须检查返回值，
+// 不得再静默丢弃；与 UpdateNodeOrder（B04-002）同口径。
+func (r *Repository) UpdateTunnelOrder(tunnelID int64, inx int, now int64) (int64, error) {
 	if r == nil || r.db == nil {
-		return
+		return 0, errors.New("repository not initialized")
 	}
-	_ = r.db.Model(&model.Tunnel{}).
+	res := r.db.Model(&model.Tunnel{}).
 		Where("id = ?", tunnelID).
-		Updates(map[string]interface{}{"inx": inx, "updated_time": now}).Error
+		Updates(map[string]interface{}{"inx": inx, "updated_time": now})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 func (r *Repository) UpdateTunnelTx(tx *gorm.DB, tunnelID int64, name string, typeVal int, flow int64, trafficRatio float64, status int, inIP, ipPreference string, protocol string, probeTargetHost string, probeTargetPort int, now int64) error {
@@ -816,8 +865,14 @@ func (r *Repository) ListTunnelIPPreferences(ids []int64) (map[int64]string, err
 		return out, nil
 	}
 	var rows []model.Tunnel
-	if err := r.db.Select("id", "ip_preference").Where("id IN ?", ids).Find(&rows).Error; err != nil {
-		return nil, err
+	// T2-NEW-01：ids 为整轮质量探测的全部隧道集合（整表规模），按块
+	// 查避免 IN ? 变量越界；结果进 map 与分块无关。
+	for _, chunk := range chunkInt64IDs(ids) {
+		var chunkRows []model.Tunnel
+		if err := r.db.Select("id", "ip_preference").Where("id IN ?", chunk).Find(&chunkRows).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, chunkRows...)
 	}
 	for _, t := range rows {
 		out[t.ID] = t.IPPreference
@@ -1169,11 +1224,15 @@ func (r *Repository) UpdateForward(id int64, name string, tunnelID int64, remote
 		}).Error
 }
 
-func (r *Repository) UpdateForwardOrder(forwardID int64, inx int, now int64) {
+// UpdateForwardOrder 更新单个转发的排序序号并返回错误（B08-002：
+// 旧实现 `_ = ....Error` 吞掉写库错误，handler 丢弃返回值后 DB 写
+// 失败仍报成功）。handler（forwardUpdateOrder）已改两段式：先全量
+// 校验归属/存在性、全部通过后才逐条调用本函数并检查返回值。
+func (r *Repository) UpdateForwardOrder(forwardID int64, inx int, now int64) error {
 	if r == nil || r.db == nil {
-		return
+		return errors.New("repository not initialized")
 	}
-	_ = r.db.Model(&model.Forward{}).
+	return r.db.Model(&model.Forward{}).
 		Where("id = ?", forwardID).
 		Updates(map[string]interface{}{"inx": inx, "updated_time": now}).Error
 }
@@ -1739,12 +1798,35 @@ func (r *Repository) ListUserIDsByUserGroupTx(tx *gorm.DB, userGroupID int64) ([
 	return ids, nil
 }
 
+// rejectNonPositiveMemberIDs 是 B03-001 的 fail-closed 守卫：组成员
+// 替换面（assign）中任一成员 ID 非正即整单拒绝。validateIDsExistTx
+// 与落库循环都把 id<=0 当「不在场」跳过，于是 [-5] 会被等价处理为
+// 「替换为空集」——成员被整体清空、组授权连带撤销却回成功；与不
+// 存在正 ID 的报错口径对齐，非正 ID 同样在首写之前拒绝。
+func rejectNonPositiveMemberIDs(ids []int64) error {
+	bad := make([]int64, 0)
+	for _, id := range ids {
+		if id <= 0 {
+			bad = append(bad, id)
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("成员ID非法: %v", bad)
+	}
+	return nil
+}
+
 func (r *Repository) ReplaceTunnelGroupMembersTx(tx *gorm.DB, groupID int64, tunnelIDs []int64, now int64) error {
 	if tx == nil {
 		return errors.New("database unavailable")
 	}
 	// R2X-012: the group itself and every referenced tunnel must exist;
 	// phantom member rows would silently become live grants later.
+	// B03-001: 非正成员 ID 在校验/删除之前整单拒绝（见
+	// rejectNonPositiveMemberIDs）。
+	if err := rejectNonPositiveMemberIDs(tunnelIDs); err != nil {
+		return err
+	}
 	if err := validateIDsExistTx(tx, &model.TunnelGroup{}, "隧道分组不存在", []int64{groupID}); err != nil {
 		return err
 	}
@@ -1775,6 +1857,11 @@ func (r *Repository) ReplaceUserGroupMembersTx(tx *gorm.DB, groupID int64, userI
 		return errors.New("database unavailable")
 	}
 	// R2X-012: the group itself and every referenced user must exist.
+	// B03-001: 非正成员 ID 在校验/删除之前整单拒绝（见
+	// rejectNonPositiveMemberIDs）。
+	if err := rejectNonPositiveMemberIDs(userIDs); err != nil {
+		return err
+	}
 	if err := validateIDsExistTx(tx, &model.UserGroup{}, "用户分组不存在", []int64{groupID}); err != nil {
 		return err
 	}
@@ -2316,9 +2403,14 @@ func (r *Repository) BatchUpdateForwardStatus(ids []int64, status int) (int, int
 // 提交段，无复检时并发同名可双建；tunnel 表无任何唯一索引，复检是
 // 唯一防线（裁定明确不加 uniqueIndex：N-29 迁移口径 + 存量重名
 // 未预检）。
+// X01-001：与 CreateUserTx 同族——PG 下复检前先按隧道名取事务级
+// 咨询锁串行化同名并发（见 pg_name_lock.go）。
 func (r *Repository) InsertTunnelTx(tx *gorm.DB, tunnel *model.Tunnel) error {
 	if tx == nil || tunnel == nil {
 		return errors.New("database unavailable")
+	}
+	if err := lockNameForTx(tx, nameLockScopeTunnel, tunnel.Name); err != nil {
+		return err
 	}
 	var dupCnt int64
 	if err := tx.Model(&model.Tunnel{}).Where("name = ?", tunnel.Name).Count(&dupCnt).Error; err != nil {
@@ -2537,8 +2629,15 @@ func validateIDsExistTx(tx *gorm.DB, target interface{}, label string, ids []int
 		return nil
 	}
 	var existing []int64
-	if err := tx.Model(target).Where("id IN ?", uniq).Pluck("id", &existing).Error; err != nil {
-		return err
+	// T2-NEW-01：uniq 来自请求载荷、无条数上限，按块查避免 IN ?
+	// 变量越界（跨块累加进同一集合，与单查等价；下方缺失判定仍按
+	// uniq 原序逐个核对，错误文案不变）。
+	for _, chunk := range chunkInt64IDs(uniq) {
+		var chunkExisting []int64
+		if err := tx.Model(target).Where("id IN ?", chunk).Pluck("id", &chunkExisting).Error; err != nil {
+			return err
+		}
+		existing = append(existing, chunkExisting...)
 	}
 	existingSet := make(map[int64]struct{}, len(existing))
 	for _, id := range existing {

@@ -8,7 +8,7 @@
 
 ### 环境要求
 - 操作系统：Linux (推荐 Debian 10+ / Ubuntu 20.04+)
-- 必须安装 Docker 和 Docker Compose
+- Docker 和 Docker Compose：无需预先安装，未安装时一键脚本会自动安装；仅手动 `docker compose` 部署（不经一键脚本）时需自行安装
 
 ### 一键安装
 
@@ -115,11 +115,26 @@ agent 与面板之间有两条通道，都**不再自动降级到明文**：
 
 ### 安装 Caddy
 
+::: tip
+面板用户可直接运行 `panel_install.sh`、选菜单 **5. 配置域名反向代理（自动 HTTPS）**，脚本会自动安装 Caddy 并生成配置，无需手工执行本节步骤；以下手工步骤仅供独立部署 Caddy 时参考。
+:::
+
 ```bash
 # Debian / Ubuntu
 sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+# GPG key：先下载到临时文件并核对官方指纹，通过后才写入 keyring
+# （与 panel_install.sh 同口径；各步以 && 串联，任一步失败即停步、不要继续）
+caddy_key_tmp=$(mktemp) && \
+curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/gpg.key' -o "$caddy_key_tmp" && \
+gpg --show-keys --with-colons "$caddy_key_tmp" | grep -q '65760C51EDEA2017CEA2CA15155B6D79CA56EA34' && \
+sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$caddy_key_tmp" && \
+rm -f "$caddy_key_tmp"
+# 源列表：同样先落临时文件，下载成功且非空才写入 /etc/apt
+caddy_list_tmp=$(mktemp) && \
+curl -1sLf 'https://dl.cloudflare.com/content/v1/e2qwFJ2fRP2b2q/stable/debian.deb.txt' -o "$caddy_list_tmp" && \
+test -s "$caddy_list_tmp" && \
+sudo tee /etc/apt/sources.list.d/caddy-stable.list < "$caddy_list_tmp" > /dev/null && \
+rm -f "$caddy_list_tmp"
 sudo apt update
 sudo apt install caddy
 ```
@@ -176,6 +191,12 @@ sudo systemctl restart caddy
 面板会拒绝信任 XFF、回退到直连对端 IP（同样是代理 IP、共享桶），并
 在日志里告警提示检查配置。两种配错都不会取到攻击者伪造的条目。启动
 日志会打印生效值，请核对它与你的实际拓扑一致。面板直连公网（无代理）时忽略 XFF。
+
+后端对 XFF 的采信先按**直接对端的类型**判别，再谈跳数：
+
+- **直接对端是公网地址**（面板直连公网、前面没有代理）：XFF 整体忽略，限流键恒为对端 IP。此时 XFF 只能是对端自填的，轮换它换限流桶的做法无效。
+- **直接对端是回环/私网地址**（本机 Caddy/nginx、容器网络里的前端等代理）：才按上表的跳数从右向左解析真实 IP；跳数超过实际可信链长时回退对端 IP 并告警（见上）。
+- **残余形态**：内网客户端不经代理、直接连到后端端口（或同机进程直达）时，对端同为回环/私网，与「单跳代理链」在协议层不可区分，其自填的 XFF 仍可能被解析为限流键。这是保住默认单跳反代拓扑按真实客户端 IP 限流粒度的既定取舍——因此后端端口不要直接暴露在不可信的私网直达范围内，需要内网直达时请收紧来源网段或另加一层可信代理。
 
 限流的具体阈值（固定值，不在设置里开放调整）：
 

@@ -28,7 +28,7 @@ class TestAuthentication:
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
 
-        result = login_page.login("admin_user", "admin_user")
+        result = login_page.login("admin@user", "admin@user")
         assert result, "Login should succeed with valid credentials"
 
         assert "/change-password" in page.url
@@ -78,7 +78,7 @@ class TestAuthentication:
         """Test that session persists after page refresh."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin_user", "admin_user")
+        login_page.login("admin@user", "admin@user")
 
         assert "/change-password" in page.url
 
@@ -91,7 +91,7 @@ class TestAuthentication:
         """Test that logout clears the session."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin_user", "admin_user")
+        login_page.login("admin@user", "admin@user")
 
         assert "/change-password" in page.url
 
@@ -112,6 +112,6 @@ class TestPasswordChange:
         """Test that password change page is accessible after login with default password."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin_user", "admin_user")
+        login_page.login("admin@user", "admin@user")
 
         assert "/change-password" in page.url

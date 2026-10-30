@@ -129,12 +129,121 @@ func (r *Repository) ApplyFlowUploadDeltasBatch(deltas []FlowUploadCounterDelta)
 	})
 }
 
+// saturatingAddInt64 returns a+b clamped to the int64 range. Traffic
+// counters must never wrap: a wrapped Go sum would persist a negative
+// counter, and (at the SQL layer) an overflowing addition widens the
+// stored value out of int64 entirely — see saturatingCounterIncrExpr.
+func saturatingAddInt64(a, b int64) int64 {
+	if b > 0 && a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	if b < 0 && a < math.MinInt64-b {
+		return math.MinInt64
+	}
+	return a + b
+}
+
+// SaturatingAddInt64 is saturatingAddInt64 for the ingest-side batch
+// merges outside this package (handler tunnel-metric aggregation,
+// metrics node-traffic buffering): those merges sum report-driven
+// deltas before the values reach the SQL saturation guards, so they
+// must saturate by the same rule instead of wrapping first.
+func SaturatingAddInt64(a, b int64) int64 {
+	return saturatingAddInt64(a, b)
+}
+
+// saturatingCounterIncrExpr builds the SQL expression `column + delta`
+// with saturation at the int64 bounds, portable across SQLite and
+// PostgreSQL: the addition is only evaluated when the result stays in
+// range. B08-001: applyFlowUploadDeltasTx previously used a bare
+// `column + ?`, so a single report near MaxInt64 against a row with
+// any positive balance overflowed at the DB layer — on SQLite the
+// counter silently widened to REAL and poisoned the forward / user /
+// user_tunnel row (the owner's login and the forward list then failed
+// with scan errors until the row was repaired by hand); on PG the
+// whole accounting tx aborted on int8 overflow. This is the DB
+// accumulation face of the R7-F-01 family: scaleTrafficBytes guards
+// scaling and buildFlowUploadBatch guards in-batch merging, but
+// neither sees the stored balance, so the guard has to live here,
+// where the balance is.
+//
+// The saturation bounds (MaxInt64-delta / MinInt64-delta) are computed
+// in Go, never as `? - ?` inside the SQL. T2 real-machine lesson
+// (2026-10-30): pgx sends parameters without type annotations, and
+// PostgreSQL resolves an operator only when at least one operand has a
+// known type — `? - ?` has none, so EVERY flow-accounting write on PG
+// failed with "operator is not unique: unknown - unknown (SQLSTATE
+// 42725)", including ordinary small batches. SQLite's dynamic typing
+// had masked this in sandbox testing. Every placeholder below is
+// compared against (or added to) the typed column or an integer
+// literal, so PG always has a known type to infer the parameter from.
+// TestSaturatingCounterIncrExprNoParamParamArithmetic_C06PG locks this
+// shape.
+func saturatingCounterIncrExpr(column string, delta int64) clause.Expr {
+	// hi is the largest stored value that can still absorb delta
+	// without exceeding MaxInt64; lo is the mirror image at MinInt64.
+	// Each bound is only consulted in the branch gated on delta's sign,
+	// so the inert default for the other sign is never load-bearing.
+	hi := int64(math.MaxInt64)
+	if delta > 0 {
+		hi = math.MaxInt64 - delta
+	}
+	lo := int64(math.MinInt64)
+	if delta < 0 {
+		lo = math.MinInt64 - delta
+	}
+	return gorm.Expr(
+		"CASE WHEN ? > 0 AND "+column+" > ? THEN ? "+
+			"WHEN ? < 0 AND "+column+" < ? THEN ? "+
+			"ELSE "+column+" + ? END",
+		delta, hi, int64(math.MaxInt64),
+		delta, lo, int64(math.MinInt64),
+		delta)
+}
+
+// saturatingExcludedAddExpr is saturatingCounterIncrExpr's upsert
+// twin: it builds `table.column + excluded.column` under the same
+// saturation CASE, for ON CONFLICT DO UPDATE assignments where the
+// delta is the incoming row's value rather than a call-site int64, so
+// the bounds cannot be precomputed in Go. The bounds here are int64
+// literals — typed on both dialects, with no untyped placeholder
+// arithmetic, so the C06PG 42725 failure mode cannot recur — and
+// MinInt64 is spelled (-9223372036854775807 - 1) because the bare
+// literal 9223372036854775808 overflows int64 literal parsing.
+// The upsert bucket faces accumulate through this helper: subscription
+// hourly buckets, node_traffic hourly buckets and tunnel_metric
+// per-minute buckets. Every batch adds its delta onto the stored row,
+// so the stored value is a persistent accumulator with the same wrap
+// (SQLite) / abort (PG) exposure as the counters
+// saturatingCounterIncrExpr guards.
+func saturatingExcludedAddExpr(table, column string) clause.Expr {
+	delta := "excluded." + column
+	stored := table + "." + column
+	return gorm.Expr(
+		"CASE WHEN " + delta + " > 0 AND " + stored + " > 9223372036854775807 - " + delta + " THEN 9223372036854775807 " +
+			"WHEN " + delta + " < 0 AND " + stored + " < (-9223372036854775807 - 1) - " + delta + " THEN (-9223372036854775807 - 1) " +
+			"ELSE " + stored + " + " + delta + " END")
+}
+
 func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error {
 	if tx == nil {
 		return errors.New("database unavailable")
 	}
 	if len(deltas) == 0 {
 		return nil
+	}
+
+	// B08-001：批内合并同样走饱和加——两条各自合法的增量相加可先在
+	// Go 层回绕为负，再以负增量落账绕过 DB 层守卫。
+	mergeDelta := func(totals map[int64][2]int64, id int64, kind string, in, out int64) {
+		current := totals[id]
+		nextIn := saturatingAddInt64(current[0], in)
+		nextOut := saturatingAddInt64(current[1], out)
+		if (in > 0 && nextIn == math.MaxInt64 && current[0] != math.MaxInt64) ||
+			(out > 0 && nextOut == math.MaxInt64 && current[1] != math.MaxInt64) {
+			log.Printf("flow accounting: %s id=%d batch merge saturates counter (in=%d out=%d)", kind, id, in, out)
+		}
+		totals[id] = [2]int64{nextIn, nextOut}
 	}
 
 	forwardTotals := make(map[int64][2]int64, len(deltas))
@@ -147,30 +256,21 @@ func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error
 			if delta.HasRaw {
 				fwdIn, fwdOut = delta.RawInFlow, delta.RawOutFlow
 			}
-			current := forwardTotals[delta.ForwardID]
-			current[0] += fwdIn
-			current[1] += fwdOut
-			forwardTotals[delta.ForwardID] = current
+			mergeDelta(forwardTotals, delta.ForwardID, "forward", fwdIn, fwdOut)
 		}
 		if delta.UserID > 0 {
-			current := userTotals[delta.UserID]
-			current[0] += delta.InFlow
-			current[1] += delta.OutFlow
-			userTotals[delta.UserID] = current
+			mergeDelta(userTotals, delta.UserID, "user", delta.InFlow, delta.OutFlow)
 		}
 		if delta.UserTunnelID > 0 {
-			current := userTunnelTotals[delta.UserTunnelID]
-			current[0] += delta.InFlow
-			current[1] += delta.OutFlow
-			userTunnelTotals[delta.UserTunnelID] = current
+			mergeDelta(userTunnelTotals, delta.UserTunnelID, "user_tunnel", delta.InFlow, delta.OutFlow)
 		}
 	}
 
 	for _, forwardID := range sortedFlowUploadTargetIDs(forwardTotals) {
 		total := forwardTotals[forwardID]
 		if err := tx.Model(&model.Forward{}).Where("id = ?", forwardID).UpdateColumns(map[string]interface{}{
-			"in_flow":  gorm.Expr("in_flow + ?", total[0]),
-			"out_flow": gorm.Expr("out_flow + ?", total[1]),
+			"in_flow":  saturatingCounterIncrExpr("in_flow", total[0]),
+			"out_flow": saturatingCounterIncrExpr("out_flow", total[1]),
 		}).Error; err != nil {
 			return err
 		}
@@ -178,8 +278,8 @@ func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error
 	for _, userID := range sortedFlowUploadTargetIDs(userTotals) {
 		total := userTotals[userID]
 		if err := tx.Model(&model.User{}).Where("id = ?", userID).UpdateColumns(map[string]interface{}{
-			"in_flow":  gorm.Expr("in_flow + ?", total[0]),
-			"out_flow": gorm.Expr("out_flow + ?", total[1]),
+			"in_flow":  saturatingCounterIncrExpr("in_flow", total[0]),
+			"out_flow": saturatingCounterIncrExpr("out_flow", total[1]),
 		}).Error; err != nil {
 			return err
 		}
@@ -187,8 +287,8 @@ func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error
 	for _, userTunnelID := range sortedFlowUploadTargetIDs(userTunnelTotals) {
 		total := userTunnelTotals[userTunnelID]
 		if err := tx.Model(&model.UserTunnel{}).Where("id = ?", userTunnelID).UpdateColumns(map[string]interface{}{
-			"in_flow":  gorm.Expr("in_flow + ?", total[0]),
-			"out_flow": gorm.Expr("out_flow + ?", total[1]),
+			"in_flow":  saturatingCounterIncrExpr("in_flow", total[0]),
+			"out_flow": saturatingCounterIncrExpr("out_flow", total[1]),
 		}).Error; err != nil {
 			return err
 		}
@@ -405,6 +505,10 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
 			return err
 		}
+		// C12 v4（X04）: 转发查询面普通索引（双后端同口径执行）。
+		if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
+			return err
+		}
 		// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填。
 		backfillPeerShareRelayCredentials(db)
 		return nil
@@ -445,6 +549,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// resource_key 改为复合 (share_id, resource_key)，存量单列索引
 	// 显式 DROP + CREATE 转换（预检同 share 内重复时跳过、下次重试）。
 	if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
+		return err
+	}
+
+	// C12 v4（X04-001/X04-002）: 转发查询面普通索引——
+	// forward_port(forward_id)、forward(user_id)、forward(status, inx)。
+	if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
 		return err
 	}
 
@@ -894,12 +1004,21 @@ func (r *Repository) GetUserPackageForwards(userID int64) ([]model.UserForwardDe
 		return nil, err
 	}
 
+	// X04-001：入口解析改批量预取（原逐条 resolveForwardIngress 为
+	// 每条 2 次查询、无 forward_id 索引时 forward_port 全表扫描）。
+	forwardIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		forwardIDs = append(forwardIDs, row.ID)
+	}
+	ingressByForward, err := resolveForwardIngressBatch(r.db, forwardIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	items := make([]model.UserForwardDetail, 0, len(rows))
 	for _, row := range rows {
-		inIP, inPort, err := resolveForwardIngress(r.db, row.ID, row.TunnelID)
-		if err != nil {
-			return nil, err
-		}
+		ing := ingressByForward[row.ID]
+		inIP, inPort := ing.IP, ing.Port
 		items = append(items, model.UserForwardDetail{
 			ID: row.ID, Name: row.Name, TunnelID: row.TunnelID,
 			TunnelName: row.TunnelName, InIP: inIP, InPort: inPort,
@@ -1014,26 +1133,29 @@ func (r *Repository) AddFlow(forwardID, userID int64, userTunnelID int64, inFlow
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	// B08-001：与 applyFlowUploadDeltasTx 同口径走饱和守卫——同一组
+	// 计数器（forward/user/user_tunnel 的 in_flow/out_flow）的累加面
+	// 不得留裸 `+ ?`，否则极端增量同样溢出污染行。
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.Forward{}).Where("id = ?", forwardID).
 			UpdateColumns(map[string]interface{}{
-				"in_flow":  gorm.Expr("in_flow + ?", inFlow),
-				"out_flow": gorm.Expr("out_flow + ?", outFlow),
+				"in_flow":  saturatingCounterIncrExpr("in_flow", inFlow),
+				"out_flow": saturatingCounterIncrExpr("out_flow", outFlow),
 			}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&model.User{}).Where("id = ?", userID).
 			UpdateColumns(map[string]interface{}{
-				"in_flow":  gorm.Expr("in_flow + ?", inFlow),
-				"out_flow": gorm.Expr("out_flow + ?", outFlow),
+				"in_flow":  saturatingCounterIncrExpr("in_flow", inFlow),
+				"out_flow": saturatingCounterIncrExpr("out_flow", outFlow),
 			}).Error; err != nil {
 			return err
 		}
 		if userTunnelID > 0 {
 			if err := tx.Model(&model.UserTunnel{}).Where("id = ?", userTunnelID).
 				UpdateColumns(map[string]interface{}{
-					"in_flow":  gorm.Expr("in_flow + ?", inFlow),
-					"out_flow": gorm.Expr("out_flow + ?", outFlow),
+					"in_flow":  saturatingCounterIncrExpr("in_flow", inFlow),
+					"out_flow": saturatingCounterIncrExpr("out_flow", outFlow),
 				}).Error; err != nil {
 				return err
 			}
@@ -1059,9 +1181,11 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 		}
 	}
 	sshConfigByNodeID := make(map[int64]map[string]interface{}, len(nodeIDs))
-	if len(nodeIDs) > 0 {
+	// T2-NEW-01：nodeIDs 为整表节点集合，按块查避免 IN ? 变量越界
+	// （统一口径见 inListChunkSize）；结果进 map 与分块无关。
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
 		var configs []model.NodeSSHConfig
-		if err := r.db.Where("node_id IN ?", nodeIDs).Find(&configs).Error; err != nil {
+		if err := r.db.Where("node_id IN ?", chunk).Find(&configs).Error; err != nil {
 			return nil, err
 		}
 		for _, cfg := range configs {
@@ -1206,13 +1330,24 @@ func (r *Repository) ListForwards() ([]map[string]interface{}, error) {
 		return nil, err
 	}
 
+	// X04-001：入口解析改批量预取（原逐条 resolveForwardIngress 为
+	// 每条 2 次查询、无 forward_id 索引时 forward_port 全表扫描，
+	// 耗时随条数二次增长）。组装逻辑与单条版共用 assembleForwardIngress，
+	// 逐字段口径不变；C06 的 bindWarnings 批量透出在下方保持不变。
+	forwardIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		forwardIDs = append(forwardIDs, row.ID)
+	}
+	ingressByForward, err := resolveForwardIngressBatch(r.db, forwardIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	items := make([]map[string]interface{}, 0, len(rows))
 	for _, row := range rows {
 		proxyProtocolReceive, proxyProtocolSend := normalizeForwardProxyProtocol(row.ProxyProtocol, row.ProxyProtocolReceive, row.ProxyProtocolSend)
-		inIP, inPort, err := resolveForwardIngress(r.db, row.ID, row.TunnelID)
-		if err != nil {
-			return nil, err
-		}
+		ing := ingressByForward[row.ID]
+		inIP, inPort := ing.IP, ing.Port
 		item := map[string]interface{}{
 			"id": row.ID, "userId": row.UserID, "userName": row.UserName,
 			"name": row.Name, "tunnelId": row.TunnelID, "tunnelName": row.TunnelName,
@@ -1238,7 +1373,96 @@ func (r *Repository) ListForwards() ([]map[string]interface{}, error) {
 		}
 		items = append(items, item)
 	}
+	// B08-005：把各转发端口持久化的绑定回退告警挂到列表项
+	// （bindWarnings），使回退事件不只抵达当次同步的调用方——节点
+	// 重连后的后台重推发生回退时，用户在列表上仍能看到。一次批量
+	// 查询，不新增逐行往返。
+	if len(rows) > 0 {
+		forwardIDs := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			forwardIDs = append(forwardIDs, row.ID)
+		}
+		type bindWarningRow struct {
+			ForwardID   int64
+			BindWarning sql.NullString
+		}
+		var bwRows []bindWarningRow
+		bwOK := true
+		// T2-NEW-01：forwardIDs 为整表转发集合，按块查避免 IN ? 变量
+		// 越界。同一转发的端口行必落同一块（按 forward_id 分块）、块内
+		// 仍 id ASC 追加，每转发告警的相对顺序与单查一致；任一块失败
+		// 沿旧口径整体不挂告警（bwOK=false 时不进下方挂载段）。
+		for _, chunk := range chunkInt64IDs(forwardIDs) {
+			var chunkRows []bindWarningRow
+			if err := r.db.Model(&model.ForwardPort{}).
+				Select("forward_id, bind_warning").
+				Where("forward_id IN ? AND bind_warning IS NOT NULL AND bind_warning <> ''", chunk).
+				Order("id ASC").
+				Find(&chunkRows).Error; err != nil {
+				bwOK = false
+				break
+			}
+			bwRows = append(bwRows, chunkRows...)
+		}
+		if bwOK {
+			warningsByForward := make(map[int64][]string)
+			for _, bw := range bwRows {
+				if bw.BindWarning.Valid && strings.TrimSpace(bw.BindWarning.String) != "" {
+					warningsByForward[bw.ForwardID] = append(warningsByForward[bw.ForwardID], bw.BindWarning.String)
+				}
+			}
+			if len(warningsByForward) > 0 {
+				for _, item := range items {
+					if ws, ok := warningsByForward[asInt64Value(item["id"])]; ok {
+						item["bindWarnings"] = ws
+					}
+				}
+			}
+		}
+	}
 	return items, nil
+}
+
+// UpdateForwardPortBindWarning B08-005：把一次监听 IP 回退事件持久
+// 记录到转发端口行（与清空 in_ip 的 UpdateForwardPortBindIP 配对），
+// 使事件可经转发列表 bindWarnings 长期可见，而不只记日志/回当次调用方。
+func (r *Repository) UpdateForwardPortBindWarning(forwardID, nodeID int64, port int, warning string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if forwardID <= 0 || nodeID <= 0 || port <= 0 {
+		return nil
+	}
+	return r.db.Model(&model.ForwardPort{}).
+		Where("forward_id = ? AND node_id = ? AND port = ?", forwardID, nodeID, port).
+		Update("bind_warning", sql.NullString{String: warning, Valid: strings.TrimSpace(warning) != ""}).Error
+}
+
+// ClearForwardPortBindWarning B08-005：显式监听 IP 再次同步成功后
+// 清除该端口的历史回退告警（best-effort 语义由调用方把握）。
+func (r *Repository) ClearForwardPortBindWarning(forwardID, nodeID int64, port int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if forwardID <= 0 || nodeID <= 0 || port <= 0 {
+		return nil
+	}
+	return r.db.Model(&model.ForwardPort{}).
+		Where("forward_id = ? AND node_id = ? AND port = ?", forwardID, nodeID, port).
+		Update("bind_warning", sql.NullString{Valid: false}).Error
+}
+
+func asInt64Value(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
 }
 
 func (r *Repository) ListUserAccessibleTunnels(userID int64) ([]map[string]interface{}, error) {
@@ -1328,10 +1552,17 @@ func (r *Repository) getTunnelEntryPortRanges(tunnelIDs []int64) map[int64]tunne
 		NodeID   int64
 	}
 	var entries []entryNode
-	r.db.Model(&model.ChainTunnel{}).
-		Select("tunnel_id, node_id").
-		Where("tunnel_id IN (?) AND chain_type = ?", tunnelIDs, "1").
-		Find(&entries)
+	// T2-NEW-01：tunnelIDs 可为整表隧道集合（ListEnabledTunnelSummaries
+	// 传全量），按块查避免 IN ? 变量越界；结果按隧道聚合 min/max，
+	// 与分块无关。旧口径不查 Error，保持不变。
+	for _, chunk := range chunkInt64IDs(tunnelIDs) {
+		var chunkEntries []entryNode
+		r.db.Model(&model.ChainTunnel{}).
+			Select("tunnel_id, node_id").
+			Where("tunnel_id IN (?) AND chain_type = ?", chunk, "1").
+			Find(&chunkEntries)
+		entries = append(entries, chunkEntries...)
+	}
 
 	nodeIDs := make([]int64, 0, len(entries))
 	nodeSet := make(map[int64]struct{})
@@ -1347,8 +1578,11 @@ func (r *Repository) getTunnelEntryPortRanges(tunnelIDs []int64) map[int64]tunne
 		Port string
 	}
 	var nodePorts []nodePort
-	if len(nodeIDs) > 0 {
-		r.db.Model(&model.Node{}).Select("id, port").Where("id IN (?)", nodeIDs).Find(&nodePorts)
+	// T2-NEW-01：nodeIDs 由上方 entries 派生（整表节点子集），同按块查。
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
+		var chunkPorts []nodePort
+		r.db.Model(&model.Node{}).Select("id, port").Where("id IN (?)", chunk).Find(&chunkPorts)
+		nodePorts = append(nodePorts, chunkPorts...)
 	}
 
 	nodePortMap := make(map[int64]string)
@@ -1798,7 +2032,9 @@ func (r *Repository) AddPeerShareCurrentFlow(shareID int64, delta int64) error {
 	}
 	return r.db.Model(&model.PeerShare{}).Where("id = ?", shareID).
 		UpdateColumns(map[string]interface{}{
-			"current_flow": gorm.Expr("current_flow + ?", delta),
+			// B08-001 同族：current_flow 是对端上报驱动的持久累加器，
+			// 裸加溢出同 flow 三面（SQLite 回绕落库 / PG 报错），走饱和口径。
+			"current_flow": saturatingCounterIncrExpr("current_flow", delta),
 			"updated_time": unixMilliNow(),
 		}).Error
 }
@@ -2700,6 +2936,17 @@ func (r *Repository) exportForwards() ([]model.ForwardBackup, error) {
 	if err := r.db.Order("id ASC").Find(&forwards).Error; err != nil {
 		return nil, err
 	}
+	// X04-002：端口行改批量预取（原逐条 exportForwardPorts 为每条
+	// 转发一次查询、无 forward_id 索引时全表扫描）。
+	forwardIDs := make([]int64, 0, len(forwards))
+	for _, f := range forwards {
+		forwardIDs = append(forwardIDs, f.ID)
+	}
+	portsByForward, err := r.exportForwardPortsBatch(forwardIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]model.ForwardBackup, 0, len(forwards))
 	for _, f := range forwards {
 		b := model.ForwardBackup{
@@ -2721,10 +2968,7 @@ func (r *Repository) exportForwards() ([]model.ForwardBackup, error) {
 			v := f.IPSpeedID.Int64
 			b.IPSpeedID = &v
 		}
-		ports, err := r.exportForwardPorts(f.ID)
-		if err != nil {
-			return nil, err
-		}
+		ports := portsByForward[f.ID]
 		portsCopy := append([]model.ForwardPortBackup(nil), ports...)
 		b.ForwardPorts = &portsCopy
 		out = append(out, b)
@@ -2744,6 +2988,32 @@ func (r *Repository) exportForwardPorts(forwardID int64) ([]model.ForwardPortBac
 			b.InIP = fp.InIP.String
 		}
 		out = append(out, b)
+	}
+	return out, nil
+}
+
+// exportForwardPortsBatch 是 exportForwardPorts 的批量版：按
+// forward_id 集合分块 IN 查询（ORDER BY id ASC 与单条版一致），内存
+// 分组。无端口的 forward 不出现在结果 map 中（调用方取 nil，与单条
+// 版经 append(nil, 空...) 后得到 nil 切片的 JSON null 口径一致）。
+func (r *Repository) exportForwardPortsBatch(forwardIDs []int64) (map[int64][]model.ForwardPortBackup, error) {
+	out := make(map[int64][]model.ForwardPortBackup, len(forwardIDs))
+	for start := 0; start < len(forwardIDs); start += forwardIngressBatchChunk {
+		end := start + forwardIngressBatchChunk
+		if end > len(forwardIDs) {
+			end = len(forwardIDs)
+		}
+		var fps []model.ForwardPort
+		if err := r.db.Where("forward_id IN ?", forwardIDs[start:end]).Order("id ASC").Find(&fps).Error; err != nil {
+			return nil, err
+		}
+		for _, fp := range fps {
+			b := model.ForwardPortBackup{NodeID: fp.NodeID, Port: fp.Port}
+			if fp.InIP.Valid {
+				b.InIP = fp.InIP.String
+			}
+			out[fp.ForwardID] = append(out[fp.ForwardID], b)
+		}
 	}
 	return out, nil
 }
@@ -2889,15 +3159,25 @@ func (r *Repository) exportTunnelGroups() ([]model.TunnelGroupBackup, error) {
 	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
 		return nil, err
 	}
+	// X04-002：成员行改一次批量取数（原逐组 Pluck）。组内顺序与原
+	// Pluck 一致——原查询走唯一索引 (tunnel_group_id, tunnel_id)，
+	// 组内按 tunnel_id 升序（探针实测），故批量查询同序 ORDER BY。
+	var memberRows []model.TunnelGroupTunnel
+	r.db.Order("tunnel_group_id ASC, tunnel_id ASC").Find(&memberRows)
+	tunnelsByGroup := make(map[int64][]int64, len(groups))
+	for _, mr := range memberRows {
+		tunnelsByGroup[mr.TunnelGroupID] = append(tunnelsByGroup[mr.TunnelGroupID], mr.TunnelID)
+	}
+
 	out := make([]model.TunnelGroupBackup, 0, len(groups))
 	for _, tg := range groups {
 		b := model.TunnelGroupBackup{
 			ID: tg.ID, Name: tg.Name, CreatedTime: tg.CreatedTime,
 			UpdatedTime: tg.UpdatedTime, Status: tg.Status,
 		}
-		var tunnelIDs []int64
-		r.db.Model(&model.TunnelGroupTunnel{}).Where("tunnel_group_id = ?", tg.ID).Pluck("tunnel_id", &tunnelIDs)
-		b.Tunnels = tunnelIDs
+		if tunnelIDs, ok := tunnelsByGroup[tg.ID]; ok {
+			b.Tunnels = tunnelIDs
+		}
 		out = append(out, b)
 	}
 	return out, nil
@@ -2908,15 +3188,25 @@ func (r *Repository) exportUserGroups() ([]model.UserGroupBackup, error) {
 	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
 		return nil, err
 	}
+	// X04-002：成员行改一次批量取数（原逐组 Pluck）。组内顺序与原
+	// Pluck 一致——原查询走唯一索引 (user_group_id, user_id)，组内
+	// 按 user_id 升序（探针实测），故批量查询同序 ORDER BY。
+	var memberRows []model.UserGroupUser
+	r.db.Order("user_group_id ASC, user_id ASC").Find(&memberRows)
+	usersByGroup := make(map[int64][]int64, len(groups))
+	for _, mr := range memberRows {
+		usersByGroup[mr.UserGroupID] = append(usersByGroup[mr.UserGroupID], mr.UserID)
+	}
+
 	out := make([]model.UserGroupBackup, 0, len(groups))
 	for _, ug := range groups {
 		b := model.UserGroupBackup{
 			ID: ug.ID, Name: ug.Name, CreatedTime: ug.CreatedTime,
 			UpdatedTime: ug.UpdatedTime, Status: ug.Status,
 		}
-		var userIDs []int64
-		r.db.Model(&model.UserGroupUser{}).Where("user_group_id = ?", ug.ID).Pluck("user_id", &userIDs)
-		b.Users = userIDs
+		if userIDs, ok := usersByGroup[ug.ID]; ok {
+			b.Users = userIDs
+		}
 		out = append(out, b)
 	}
 	return out, nil
@@ -2927,14 +3217,26 @@ func (r *Repository) exportPermissions() ([]model.PermissionBackup, error) {
 	if err := r.db.Order("id ASC").Find(&perms).Error; err != nil {
 		return nil, err
 	}
+	// X04-002：grants 改一次批量取数（原逐权限 Find）。同一
+	// (user_group_id, tunnel_group_id) 内的顺序与原 Find 一致——原
+	// 查询走唯一索引 (user_group_id, tunnel_group_id, user_tunnel_id)，
+	// 组内按 user_tunnel_id 升序（探针实测），故批量查询同序 ORDER BY。
+	var allGrants []model.GroupPermissionGrant
+	r.db.Order("user_group_id ASC, tunnel_group_id ASC, user_tunnel_id ASC").Find(&allGrants)
+	type permPair struct{ userGroupID, tunnelGroupID int64 }
+	grantsByPair := make(map[permPair][]model.GroupPermissionGrant, len(perms))
+	for _, g := range allGrants {
+		k := permPair{g.UserGroupID, g.TunnelGroupID}
+		grantsByPair[k] = append(grantsByPair[k], g)
+	}
+
 	out := make([]model.PermissionBackup, 0, len(perms))
 	for _, p := range perms {
 		b := model.PermissionBackup{
 			ID: p.ID, UserGroupID: p.UserGroupID, TunnelGroupID: p.TunnelGroupID,
 			CreatedTime: p.CreatedTime,
 		}
-		var grants []model.GroupPermissionGrant
-		r.db.Where("user_group_id = ? AND tunnel_group_id = ?", p.UserGroupID, p.TunnelGroupID).Find(&grants)
+		grants := grantsByPair[permPair{p.UserGroupID, p.TunnelGroupID}]
 		for _, g := range grants {
 			b.Grants = append(b.Grants, model.PermissionGrantBackup{
 				ID: g.ID, UserGroupID: g.UserGroupID, TunnelGroupID: g.TunnelGroupID,
@@ -3053,8 +3355,14 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				ids = append(ids, ut.ID)
 			}
 			var existing []int64
-			if err := tx.Model(&model.UserTunnel{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
-				return fmt.Errorf("import pre-snapshot user tunnels failed: %w", err)
+			// T2-NEW-01：ids 为备份载荷全量，按块查避免 IN ? 变量
+			// 越界（跨块累加进同一集合，与单查等价）。
+			for _, chunk := range chunkInt64IDs(ids) {
+				var chunkExisting []int64
+				if err := tx.Model(&model.UserTunnel{}).Where("id IN ?", chunk).Pluck("id", &chunkExisting).Error; err != nil {
+					return fmt.Errorf("import pre-snapshot user tunnels failed: %w", err)
+				}
+				existing = append(existing, chunkExisting...)
 			}
 			for _, id := range existing {
 				preUserTunnelIDs[id] = true
@@ -3067,8 +3375,13 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				ids = append(ids, f.ID)
 			}
 			var existing []int64
-			if err := tx.Model(&model.Forward{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
-				return fmt.Errorf("import pre-snapshot forwards failed: %w", err)
+			// T2-NEW-01：同上，按块查跨块累加。
+			for _, chunk := range chunkInt64IDs(ids) {
+				var chunkExisting []int64
+				if err := tx.Model(&model.Forward{}).Where("id IN ?", chunk).Pluck("id", &chunkExisting).Error; err != nil {
+					return fmt.Errorf("import pre-snapshot forwards failed: %w", err)
+				}
+				existing = append(existing, chunkExisting...)
 			}
 			for _, id := range existing {
 				preForwardIDs[id] = true
@@ -3490,8 +3803,9 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 		}
 		// X-03（本轮重推）：恢复面与写面同口径——远端节点 URL 的
 		// host 含空标签时清空 + warning（与同函数 ServerIP 面同型；
-		// 写面 C-35 validateRemoteNodeURL 经 IsSafeRemoteAddr 做 DNS，
-		// `a..b` 解析失败即拒。恢复面不做 DNS，只判空标签语法；
+		// 写面 C-35 validateRemoteNodeURL 经 checkFederationRemoteAddr
+		// 做 DNS 判定（B13-001 起与传输层同口径），`a..b` 解析失败即
+		// 拒。恢复面不做 DNS，只判空标签语法；
 		// 不整行跳过，否则依赖该节点的隧道/转发段同批恢复会被连带误伤）。
 		remoteURL := n.RemoteURL
 		if remoteURL != "" && urlHostHasEmptyLabel(remoteURL) {
@@ -3875,11 +4189,18 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 		for _, t := range tunnels {
 			tunnelIDs = append(tunnelIDs, t.ID)
 		}
-		if err := tx.Model(&model.ChainTunnel{}).Where("tunnel_id IN ?", tunnelIDs).Count(&preDeletedChains).Error; err != nil {
-			return 0, err
-		}
-		if err := tx.Where("tunnel_id IN ?", tunnelIDs).Delete(&model.ChainTunnel{}).Error; err != nil {
-			return 0, err
+		// T2-NEW-01：tunnelIDs 为备份载荷全量，按块计数/删除避免
+		// IN ? 变量越界（计数跨块累加，与单查等价；同事务内逐块删
+		// 与整批删结果一致）。
+		for _, chunk := range chunkInt64IDs(tunnelIDs) {
+			var chunkCount int64
+			if err := tx.Model(&model.ChainTunnel{}).Where("tunnel_id IN ?", chunk).Count(&chunkCount).Error; err != nil {
+				return 0, err
+			}
+			preDeletedChains += chunkCount
+			if err := tx.Where("tunnel_id IN ?", chunk).Delete(&model.ChainTunnel{}).Error; err != nil {
+				return 0, err
+			}
 		}
 	}
 	count := 0
@@ -4558,6 +4879,15 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, now in
 func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, sl := range speedLimits {
+		// B09-001：与 create/update 写侧同口径的合法集——speed<1 或
+		// status∉{0,1} 的行整行跳过并计数 + warning（D4-03 同形）。
+		// 这类规则下发面以 speed>0 门控静默丢弃，导入落库只会造出
+		// 「可引用但不存在」的假限速。
+		if sl.Speed < 1 || (sl.Status != 0 && sl.Status != 1) {
+			rep.skip("speedLimits")
+			rep.warnf("备份恢复：限速规则 #%d（%s）speed=%d status=%d 不在合法集（speed≥1、status∈{0,1}），已跳过该行未恢复", sl.ID, sl.Name, sl.Speed, sl.Status)
+			continue
+		}
 		// D4-03：绑定了隧道而隧道不存在时整行跳过并计数（未绑定
 		// 的全局限速不受影响）。
 		if sl.TunnelID != nil {
@@ -5600,17 +5930,37 @@ var migrateSpeedLimitTunnelBindingFn = migrateSpeedLimitTunnelBinding
 var migratePostgresTrafficInt64ColumnsFn = migratePostgresTrafficInt64Columns
 var migrateTunnelMetricBucketUniqueIndexFn = migrateTunnelMetricBucketUniqueIndex
 
-func getSchemaVersion(db *gorm.DB) int {
+// getSchemaVersion 读取 schema_version 当前版本。仅「表在但无行」
+// （ErrRecordNotFound）走建行回 0 的新库分支；其余读错误一律上抛
+// （X01-002：旧实现对任何错误都吞掉并伪装成版本 0，读失败会被当成
+// 空表触发全量迁移重跑、写失败会被当成已推进，migrateSchema 还
+// 无条件报完成，迁移状态彻底不可见）。建行本身失败同样上抛。
+func getSchemaVersion(db *gorm.DB) (int, error) {
 	var v model.SchemaVersion
 	if err := db.First(&v).Error; err != nil {
-		db.Create(&model.SchemaVersion{Version: 0})
-		return 0
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if err := db.Create(&model.SchemaVersion{Version: 0}).Error; err != nil {
+				return 0, fmt.Errorf("create schema_version row: %w", err)
+			}
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read schema_version: %w", err)
 	}
-	return v.Version
+	return v.Version, nil
 }
 
-func setSchemaVersion(db *gorm.DB, ver int) {
-	db.Model(&model.SchemaVersion{}).Where("1=1").Update("version", ver)
+// setSchemaVersion 推进 schema_version。写错误与 0 行更新（行不存在
+// ——调用方 migrateSchema 的不变量是 getSchemaVersion 已保证行存在）
+// 均上抛（X01-002），不得静默当作已推进。
+func setSchemaVersion(db *gorm.DB, ver int) error {
+	res := db.Model(&model.SchemaVersion{}).Where("1=1").Update("version", ver)
+	if res.Error != nil {
+		return fmt.Errorf("update schema_version: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("update schema_version: no row updated")
+	}
+	return nil
 }
 
 func migrateSchema(db *gorm.DB) error {
@@ -5622,7 +5972,10 @@ func migrateSchema(db *gorm.DB) error {
 		return err
 	}
 
-	ver := getSchemaVersion(db)
+	ver, err := getSchemaVersion(db)
+	if err != nil {
+		return err
+	}
 	if ver >= currentSchemaVersion {
 		return nil
 	}
@@ -5674,7 +6027,13 @@ func migrateSchema(db *gorm.DB) error {
 		}
 	}
 
-	setSchemaVersion(db, currentSchemaVersion)
+	// X01-002：版本推进失败必须让 migrateSchema 报错、启动显式失败，
+	// 与本函数其余迁移步骤（及 autoMigrateAll / migrateSubscriptions
+	// 在 Open/OpenPostgres 的处置）同口径——迁移已执行而版本未落库
+	// 时静默成功，下次启动会把整批迁移当作未执行重跑且无人知晓。
+	if err := setSchemaVersion(db, currentSchemaVersion); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -6072,26 +6431,22 @@ func quoteSQLLiteral(value string) string {
 
 // ─── Helper Functions ────────────────────────────────────────────────
 
-func resolveForwardIngress(db *gorm.DB, forwardID int64, tunnelID int64) (string, sql.NullInt64, error) {
-	var tunnelInIP sql.NullString
-	db.Model(&model.Tunnel{}).Select("in_ip").Where("id = ?", tunnelID).Limit(1).Scan(&tunnelInIP)
+// forwardIngressPortRow 是入口解析的原始行（forward_port LEFT JOIN
+// node）。单条版 resolveForwardIngress 与批量版
+// resolveForwardIngressBatch 共用同一组装逻辑 assembleForwardIngress，
+// 保证两条路径逐字段同口径（X04-001 批量化改造）。
+type forwardIngressPortRow struct {
+	ForwardID int64
+	Port      sql.NullInt64
+	ServerIP  sql.NullString
+	InIP      sql.NullString
+}
 
-	type fpRow struct {
-		Port     sql.NullInt64
-		ServerIP sql.NullString
-		InIP     sql.NullString
-	}
-	var fpRows []fpRow
-	err := db.Model(&model.ForwardPort{}).
-		Select("forward_port.port, node.server_ip, forward_port.in_ip").
-		Joins("LEFT JOIN node ON node.id = forward_port.node_id").
-		Where("forward_port.forward_id = ?", forwardID).
-		Order("forward_port.id ASC").
-		Find(&fpRows).Error
-	if err != nil {
-		return "", sql.NullInt64{}, err
-	}
-
+// assembleForwardIngress 把一个转发的端口行（已按 forward_port.id ASC
+// 排序）组装为 (inIp 串, 首端口)。逻辑与原 resolveForwardIngress 内联
+// 实现逐行一致，包括 port<=0 时 formatForwardIngressAddress 返回空串
+// 仍作为条目参与 Join 的既有边沿行为，不得在此「顺手修正」。
+func assembleForwardIngress(fpRows []forwardIngressPortRow) (string, sql.NullInt64) {
 	ports := make([]int64, 0)
 	entries := make([]string, 0)
 	seenPorts := make(map[int64]struct{})
@@ -6123,12 +6478,83 @@ func resolveForwardIngress(db *gorm.DB, forwardID int64, tunnelID int64) (string
 	}
 
 	if len(ports) == 0 {
-		return "", sql.NullInt64{}, nil
+		return "", sql.NullInt64{}
 	}
 
 	inPort := sql.NullInt64{Int64: ports[0], Valid: true}
 
-	return strings.Join(entries, ","), inPort, nil
+	return strings.Join(entries, ","), inPort
+}
+
+func resolveForwardIngress(db *gorm.DB, forwardID int64, tunnelID int64) (string, sql.NullInt64, error) {
+	var tunnelInIP sql.NullString
+	db.Model(&model.Tunnel{}).Select("in_ip").Where("id = ?", tunnelID).Limit(1).Scan(&tunnelInIP)
+
+	var fpRows []forwardIngressPortRow
+	err := db.Model(&model.ForwardPort{}).
+		Select("forward_port.forward_id, forward_port.port, node.server_ip, forward_port.in_ip").
+		Joins("LEFT JOIN node ON node.id = forward_port.node_id").
+		Where("forward_port.forward_id = ?", forwardID).
+		Order("forward_port.id ASC").
+		Find(&fpRows).Error
+	if err != nil {
+		return "", sql.NullInt64{}, err
+	}
+
+	inIP, inPort := assembleForwardIngress(fpRows)
+	return inIP, inPort, nil
+}
+
+// forwardIngress 是批量解析的结果（与 resolveForwardIngress 的
+// (inIp, inPort) 返回对齐）。
+type forwardIngress struct {
+	IP   string
+	Port sql.NullInt64
+}
+
+// forwardIngressBatchChunk 是批量 IN 查询的分块大小：远低于 SQLite
+// 历史变量上限（999），同时使查询次数随条数亚线性（每 500 条一条）。
+const forwardIngressBatchChunk = 500
+
+// resolveForwardIngressBatch 一次（按块）查出全部 forward 的端口行后
+// 在内存组装，替代列表路径逐条调用 resolveForwardIngress 的 2N 次
+// 查询（X04-001）。无端口行的 forward 不出现在结果 map 中，调用方取
+// 零值（"", 无效端口）与单条版返回一致。
+func resolveForwardIngressBatch(db *gorm.DB, forwardIDs []int64) (map[int64]forwardIngress, error) {
+	out := make(map[int64]forwardIngress, len(forwardIDs))
+	seen := make(map[int64]struct{}, len(forwardIDs))
+	uniq := make([]int64, 0, len(forwardIDs))
+	for _, id := range forwardIDs {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			uniq = append(uniq, id)
+		}
+	}
+	for start := 0; start < len(uniq); start += forwardIngressBatchChunk {
+		end := start + forwardIngressBatchChunk
+		if end > len(uniq) {
+			end = len(uniq)
+		}
+		var rows []forwardIngressPortRow
+		err := db.Model(&model.ForwardPort{}).
+			Select("forward_port.forward_id, forward_port.port, node.server_ip, forward_port.in_ip").
+			Joins("LEFT JOIN node ON node.id = forward_port.node_id").
+			Where("forward_port.forward_id IN ?", uniq[start:end]).
+			Order("forward_port.id ASC").
+			Find(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		grouped := make(map[int64][]forwardIngressPortRow)
+		for _, row := range rows {
+			grouped[row.ForwardID] = append(grouped[row.ForwardID], row)
+		}
+		for fid, grows := range grouped {
+			ip, port := assembleForwardIngress(grows)
+			out[fid] = forwardIngress{IP: ip, Port: port}
+		}
+	}
+	return out, nil
 }
 
 func formatForwardIngressAddress(host string, port int64) string {
@@ -6772,8 +7198,8 @@ func (r *Repository) AddNodeTraffic(rows []model.NodeTraffic) error {
 	return r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "node_id"}, {Name: "hour"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"in_bytes":  gorm.Expr("node_traffic.in_bytes + excluded.in_bytes"),
-			"out_bytes": gorm.Expr("node_traffic.out_bytes + excluded.out_bytes"),
+			"in_bytes":  saturatingExcludedAddExpr("node_traffic", "in_bytes"),
+			"out_bytes": saturatingExcludedAddExpr("node_traffic", "out_bytes"),
 		}),
 	}).Create(&rows).Error
 }
@@ -6878,10 +7304,10 @@ func (r *Repository) UpsertTunnelMetricBuckets(metrics []*model.TunnelMetric) er
 
 		k := bucketKey{tunnelID: m.TunnelID, nodeID: m.NodeID, timestamp: m.Timestamp}
 		if existing, ok := agg[k]; ok {
-			existing.BytesIn += m.BytesIn
-			existing.BytesOut += m.BytesOut
-			existing.Connections += m.Connections
-			existing.Errors += m.Errors
+			existing.BytesIn = saturatingAddInt64(existing.BytesIn, m.BytesIn)
+			existing.BytesOut = saturatingAddInt64(existing.BytesOut, m.BytesOut)
+			existing.Connections = saturatingAddInt64(existing.Connections, m.Connections)
+			existing.Errors = saturatingAddInt64(existing.Errors, m.Errors)
 			if existing.AvgLatencyMs == 0 && m.AvgLatencyMs != 0 {
 				existing.AvgLatencyMs = m.AvgLatencyMs
 			}
@@ -6902,10 +7328,10 @@ func (r *Repository) UpsertTunnelMetricBuckets(metrics []*model.TunnelMetric) er
 	return r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "tunnel_id"}, {Name: "node_id"}, {Name: "timestamp"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"bytes_in":    gorm.Expr("tunnel_metric.bytes_in + excluded.bytes_in"),
-			"bytes_out":   gorm.Expr("tunnel_metric.bytes_out + excluded.bytes_out"),
-			"connections": gorm.Expr("tunnel_metric.connections + excluded.connections"),
-			"errors":      gorm.Expr("tunnel_metric.errors + excluded.errors"),
+			"bytes_in":    saturatingExcludedAddExpr("tunnel_metric", "bytes_in"),
+			"bytes_out":   saturatingExcludedAddExpr("tunnel_metric", "bytes_out"),
+			"connections": saturatingExcludedAddExpr("tunnel_metric", "connections"),
+			"errors":      saturatingExcludedAddExpr("tunnel_metric", "errors"),
 			// avg_latency_ms is not additive; keep the existing bucket value.
 		}),
 	}).CreateInBatches(rows, 100).Error

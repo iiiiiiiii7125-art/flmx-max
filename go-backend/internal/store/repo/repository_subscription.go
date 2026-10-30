@@ -393,10 +393,11 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 				delta = s.Bytes
 			}
 			if delta > 0 {
+				// B08-001 同族：批内合并走饱和加，与落库面守卫同口径。
 				if s.Direction == "up" {
-					up[s.SubscriptionID] += delta
+					up[s.SubscriptionID] = saturatingAddInt64(up[s.SubscriptionID], delta)
 				} else {
-					down[s.SubscriptionID] += delta
+					down[s.SubscriptionID] = saturatingAddInt64(down[s.SubscriptionID], delta)
 				}
 			}
 			row := model.SubscriptionCounter{NodeID: nodeID, SubscriptionID: s.SubscriptionID, Direction: s.Direction,
@@ -420,9 +421,11 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 		hour := now - now%int64(time.Hour/time.Millisecond)
 		var hourly []model.SubscriptionTraffic
 		for id := range ids {
+			// B08-001 同族：订阅累计字节是持久累加器，裸加溢出同
+			// flow 三面（SQLite 回绕落库 / PG 报错回滚整批），走饱和口径。
 			if err := tx.Model(&model.Subscription{}).Where("id = ?", id).Updates(map[string]interface{}{
-				"upload_bytes":   gorm.Expr("upload_bytes + ?", up[id]),
-				"download_bytes": gorm.Expr("download_bytes + ?", down[id]),
+				"upload_bytes":   saturatingCounterIncrExpr("upload_bytes", up[id]),
+				"download_bytes": saturatingCounterIncrExpr("download_bytes", down[id]),
 			}).Error; err != nil {
 				return err
 			}
@@ -435,8 +438,10 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 		return tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "subscription_id"}, {Name: "hour"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
-				"upload_bytes":   gorm.Expr("subscription_traffic.upload_bytes + excluded.upload_bytes"),
-				"download_bytes": gorm.Expr("subscription_traffic.download_bytes + excluded.download_bytes"),
+				// B08-001 同族：小时桶在冲突时把本批增量加到已存行上，
+				// 是持久累加器（非纯新行插入），同走饱和口径。
+				"upload_bytes":   saturatingExcludedAddExpr("subscription_traffic", "upload_bytes"),
+				"download_bytes": saturatingExcludedAddExpr("subscription_traffic", "download_bytes"),
 			}),
 		}).Create(&hourly).Error
 	})

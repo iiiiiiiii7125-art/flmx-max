@@ -592,6 +592,15 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("用户ID不能为空"))
 		return
 	}
+	// B02-005：scope 合法集在调 repo 前校验（与 repo 的归一化同口
+	// 径：空 = all），非法即人话报错，不再把 repo 的英文内部错误
+	// 以 code=-2 原样透出。
+	switch strings.ToLower(strings.TrimSpace(req.Scope)) {
+	case "", "daily", "monthly", "all":
+	default:
+		response.WriteJSON(w, response.ErrDefault("重置范围无效，仅支持 daily、monthly、all"))
+		return
+	}
 	// G-QUOTA-01：重置前校验用户存在（与 userSubscriptionSet 的
 	// R2X-012 同口径），不存在即报错，不建孤儿 user_quota 行。
 	u, err := h.repo.GetUserByID(req.UserID)

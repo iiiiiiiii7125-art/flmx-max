@@ -55,8 +55,12 @@ func (h *Handler) recordTunnelMetricsFromForwardBatch(nodeID int64, forwardDelta
 			continue
 		}
 		current := tunnelAgg[meta.TunnelID]
-		current.bytesIn += delta.bytesIn
-		current.bytesOut += delta.bytesOut
+		// SAT2: 跨 forward 按隧道合并是落库（UpsertTunnelMetricBuckets）
+		// 前的批内合并点，增量来自节点上报——与 repo 侧批内合并同口径
+		// 走饱和加，防多条近 MaxInt64 增量先在 Go 层回绕为负、绕过
+		// SQL 饱和守卫落进指标桶。
+		current.bytesIn = repo.SaturatingAddInt64(current.bytesIn, delta.bytesIn)
+		current.bytesOut = repo.SaturatingAddInt64(current.bytesOut, delta.bytesOut)
 		tunnelAgg[meta.TunnelID] = current
 	}
 

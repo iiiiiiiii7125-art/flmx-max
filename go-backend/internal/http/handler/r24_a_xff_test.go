@@ -13,7 +13,12 @@ import (
 // 左侧预置 XFF 条目上，IP 维登录限流可规避、联邦 AllowedIPs 可欺骗。
 // 修复：实际可信代理链长由右侧连续可信代理条目数 + 直接对端推导；
 // hops 超过该链长即 fail-closed 回 RemoteAddr，不得取预置条目。
-// 默认 hops=1 行为不变。
+// 后续变更（B01-001 收窄口径）：判别点改为直接对端类型——公网直连
+// 对端的 XFF 完全忽略（轮换自填在该面被杀）；回环/私网代理对端
+// 沿用本文件的索引解析与超配 fail-closed，本文件的超配红 repro
+// 语义不变。v1 的 run==0 一律 fail-closed 已被取代（误伤默认单跳
+// 反代拓扑），hops=1 单条条目的采信期望已恢复，见
+// TestR24A_XFFCorrectHopsUnaffected 的复查说明。
 
 // 红 repro 1（L3 探针名）：超配 hops + 预置 XFF，不得取到被骗条目。
 func TestR24A_XFFOverconfiguredHopsSpoofedBucket(t *testing.T) {
@@ -78,7 +83,13 @@ func TestR24A_FederationCorrectTwoHopChainUnaffected(t *testing.T) {
 	}
 }
 
-// 对照（L3 探针名）：正确配置 hops=1 时行为不变——解析真实客户端，第 11 次 429。
+// 对照（L3 探针名）：正确配置 hops=1 时行为不变——解析真实客户端，
+// 第 11 次 429。
+// 复查结论（B01-001 收窄）：此处原采信期望编码的是合法单跳形态
+// （回环对端 + 代理追加的单条真实 IP），v1 的 fail-closed 期望已
+// 按对端类型判别恢复为采信；本对照守护的实质性质（同一来源的
+// 失败尝试必落同一桶、第 11 次起 429）不变。自填轮换的封堵面是
+// 公网直连对端，见 TestC02_PublicPeerRotatingXFFRateLimited。
 func TestR24A_XFFCorrectHopsUnaffected(t *testing.T) {
 	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 	got := loginClientIP(loginReqWithXFF("127.0.0.1:1", "203.0.113.7"))

@@ -66,9 +66,24 @@ func (s *Stats) Get(kind stats.Kind) uint64 {
 	return 0
 }
 
+// ResetTraffic deducts the just-reported snapshot amounts from the
+// traffic counters. The parameters are the snapshot values that were
+// taken BEFORE reporting (the amounts to subtract), not the values
+// to store.
+//
+// A02-004: the old contract made the caller compute the remainder
+// (Get - snapshot) and Store it here. That read-modify-write is not
+// atomic: bytes the data plane Adds between the caller's Get and
+// this Store were silently overwritten and lost, once per observe
+// period on busy services. Subtracting the snapshot atomically
+// (uint64 wraparound arithmetic on the atomic counters) leaves
+// concurrently added bytes untouched.
 func (s *Stats) ResetTraffic(reportedInputBytes, reportedOutputBytes uint64) {
-	s.inputBytes.Store(reportedInputBytes)
-	s.outputBytes.Store(reportedOutputBytes)
+	if s == nil {
+		return
+	}
+	s.inputBytes.Add(-reportedInputBytes)
+	s.outputBytes.Add(-reportedOutputBytes)
 }
 
 func (s *Stats) Reset() {

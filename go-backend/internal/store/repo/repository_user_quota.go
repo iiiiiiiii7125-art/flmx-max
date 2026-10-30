@@ -213,12 +213,19 @@ func (r *Repository) ListUserQuotaViewsByUserIDs(userIDs []int64, now time.Time)
 	if len(userIDs) == 0 {
 		return out, nil
 	}
-	var rows []model.UserQuota
-	if err := r.db.Where("user_id IN ?", userIDs).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		out[row.UserID] = normalizeUserQuotaView(cloneUserQuotaView(row), now)
+	// T2-NEW-01：userIDs 可为整表用户集合（备份导出 exportUsers、用户
+	// 列表 ListUsers、通知汇总都传全量），整体塞单个 IN ? 会越过
+	// SQLite 32766 / PostgreSQL 65535 的变量上限使查询整体失败
+	// （备份导出约 3.3 万用户实证）——按块查、内存合表，结果进 map
+	// 与分块无关（user_id 唯一索引保证每用户至多一行）。
+	for _, chunk := range chunkInt64IDs(userIDs) {
+		var rows []model.UserQuota
+		if err := r.db.Where("user_id IN ?", chunk).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out[row.UserID] = normalizeUserQuotaView(cloneUserQuotaView(row), now)
+		}
 	}
 	return out, nil
 }
@@ -260,9 +267,10 @@ func (r *Repository) AddUserQuotaUsage(userID int64, usedBytes int64, now time.T
 			// AUDIT-R10 (F9X-001): 窗口滚动时重置计数器。滚动为每日/每月一次的低频事件，
 			// 并发命中的概率极低，保持原有的写回逻辑（接受理论上的微小竞态）。
 			// 高频的稳态累加路径（下）已改为原子增量。
+			// B08-001：写回值走饱和加（同 addUserQuotaUsageBatchTx 口径）。
 			if usedBytes > 0 {
-				q.DailyUsedBytes += usedBytes
-				q.MonthlyUsedBytes += usedBytes
+				q.DailyUsedBytes = saturatingAddInt64(q.DailyUsedBytes, usedBytes)
+				q.MonthlyUsedBytes = saturatingAddInt64(q.MonthlyUsedBytes, usedBytes)
 			}
 			if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
 				"daily_used_bytes":   q.DailyUsedBytes,
@@ -276,16 +284,17 @@ func (r *Repository) AddUserQuotaUsage(userID int64, usedBytes int64, now time.T
 		} else {
 			// AUDIT-R10 (F9X-001): 稳态累加改用原子增量，避免 PG 下的 lost-update。
 			// SQLite 因 MaxOpenConns(1) 本就串行，此改动对双后端均安全。
+			// B08-001：增量表达式走饱和守卫 saturatingCounterIncrExpr（同批量路径）。
 			if usedBytes > 0 {
 				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
-					"daily_used_bytes":   gorm.Expr("daily_used_bytes + ?", usedBytes),
-					"monthly_used_bytes": gorm.Expr("monthly_used_bytes + ?", usedBytes),
+					"daily_used_bytes":   saturatingCounterIncrExpr("daily_used_bytes", usedBytes),
+					"monthly_used_bytes": saturatingCounterIncrExpr("monthly_used_bytes", usedBytes),
 					"updated_time":       q.UpdatedTime,
 				}).Error; err != nil {
 					return err
 				}
-				q.DailyUsedBytes += usedBytes
-				q.MonthlyUsedBytes += usedBytes
+				q.DailyUsedBytes = saturatingAddInt64(q.DailyUsedBytes, usedBytes)
+				q.MonthlyUsedBytes = saturatingAddInt64(q.MonthlyUsedBytes, usedBytes)
 			} else {
 				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Update("updated_time", q.UpdatedTime).Error; err != nil {
 					return err
@@ -348,9 +357,11 @@ func (r *Repository) addUserQuotaUsageBatchTx(tx *gorm.DB, usages map[int64]int6
 		usedBytes := usages[userID]
 		if rolled {
 			// AUDIT-R10 (F9X-001): 窗口滚动时保持原有写回逻辑（低频事件，见 AddUserQuotaUsage 注释）。
+			// B08-001：写回值走饱和加，与 applyFlowUploadDeltasTx 同口径，
+			// 已用量计数不得回绕/溢出污染行。
 			if usedBytes > 0 {
-				q.DailyUsedBytes += usedBytes
-				q.MonthlyUsedBytes += usedBytes
+				q.DailyUsedBytes = saturatingAddInt64(q.DailyUsedBytes, usedBytes)
+				q.MonthlyUsedBytes = saturatingAddInt64(q.MonthlyUsedBytes, usedBytes)
 			}
 			if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
 				"daily_used_bytes":   q.DailyUsedBytes,
@@ -363,16 +374,19 @@ func (r *Repository) addUserQuotaUsageBatchTx(tx *gorm.DB, usages map[int64]int6
 			}
 		} else {
 			// AUDIT-R10 (F9X-001): 稳态累加改用原子增量（同 AddUserQuotaUsage）。
+			// B08-001：增量表达式走饱和守卫 saturatingCounterIncrExpr——
+			// 本函数与 applyFlowUploadDeltasTx 同 tx 入账，裸 `+ ?` 在
+			// 已用量接近 MaxInt64 时同样会溢出污染 user_quota 行。
 			if usedBytes > 0 {
 				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
-					"daily_used_bytes":   gorm.Expr("daily_used_bytes + ?", usedBytes),
-					"monthly_used_bytes": gorm.Expr("monthly_used_bytes + ?", usedBytes),
+					"daily_used_bytes":   saturatingCounterIncrExpr("daily_used_bytes", usedBytes),
+					"monthly_used_bytes": saturatingCounterIncrExpr("monthly_used_bytes", usedBytes),
 					"updated_time":       q.UpdatedTime,
 				}).Error; err != nil {
 					return nil, err
 				}
-				q.DailyUsedBytes += usedBytes
-				q.MonthlyUsedBytes += usedBytes
+				q.DailyUsedBytes = saturatingAddInt64(q.DailyUsedBytes, usedBytes)
+				q.MonthlyUsedBytes = saturatingAddInt64(q.MonthlyUsedBytes, usedBytes)
 			} else {
 				if err := tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Update("updated_time", q.UpdatedTime).Error; err != nil {
 					return nil, err

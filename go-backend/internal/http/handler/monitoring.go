@@ -18,6 +18,45 @@ const (
 	maxMetricsRangeMs     = int64(24 * 60 * 60 * 1000) // 24h
 )
 
+// parseMetricsRange 解析监控指标面共用的 start/end 毫秒查询参数
+// （节点指标、隧道指标、隧道质量、服务监控结果四处统一调用）。
+//
+// 口径：
+//   - 两界均未提供时用默认窗口 [now-1h, now]；
+//   - 任一界非空即生效：未提供的一界取默认值（start=now-1h、end=now）；
+//   - 任一界非空但不可解析、非正、或 end<start，一律返回「无效的时间范围」，
+//     不得静默回退默认窗口或全量结果；
+//   - 窗口跨度超过 24h 返回「时间范围过大」。
+//
+// 返回 errMsg 非空时调用方应以 ErrDefault(errMsg) 回执并中止。
+func parseMetricsRange(r *http.Request) (startMs, endMs int64, errMsg string) {
+	now := time.Now().UnixMilli()
+	startMs = now - defaultMetricsRangeMs
+	endMs = now
+
+	if s := r.URL.Query().Get("start"); s != "" {
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, 0, "无效的时间范围"
+		}
+		startMs = v
+	}
+	if e := r.URL.Query().Get("end"); e != "" {
+		v, err := strconv.ParseInt(e, 10, 64)
+		if err != nil {
+			return 0, 0, "无效的时间范围"
+		}
+		endMs = v
+	}
+	if startMs <= 0 || endMs <= 0 || endMs < startMs {
+		return 0, 0, "无效的时间范围"
+	}
+	if endMs-startMs > maxMetricsRangeMs {
+		return 0, 0, "时间范围过大"
+	}
+	return startMs, endMs, ""
+}
+
 func (h *Handler) resolveServiceMonitorLimits() monitoring.ServiceMonitorLimits {
 	defaults := monitoring.DefaultServiceMonitorLimits()
 	if h == nil || h.repo == nil {
@@ -154,30 +193,9 @@ func (h *Handler) handleNodeMetrics(w http.ResponseWriter, r *http.Request, node
 		return
 	}
 
-	now := time.Now().UnixMilli()
-	startMs := now - defaultMetricsRangeMs
-	endMs := now
-
-	if s := r.URL.Query().Get("start"); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
-			startMs = v
-		}
-	}
-	if e := r.URL.Query().Get("end"); e != "" {
-		if v, err := strconv.ParseInt(e, 10, 64); err == nil {
-			endMs = v
-		}
-	}
-	if startMs <= 0 || endMs <= 0 {
-		response.WriteJSON(w, response.ErrDefault("无效的时间范围"))
-		return
-	}
-	if endMs < startMs {
-		response.WriteJSON(w, response.ErrDefault("无效的时间范围"))
-		return
-	}
-	if endMs-startMs > maxMetricsRangeMs {
-		response.WriteJSON(w, response.ErrDefault("时间范围过大"))
+	startMs, endMs, rangeErr := parseMetricsRange(r)
+	if rangeErr != "" {
+		response.WriteJSON(w, response.ErrDefault(rangeErr))
 		return
 	}
 
@@ -311,26 +329,9 @@ func (h *Handler) monitorTunnelQualityHistory(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	now := time.Now().UnixMilli()
-	startMs := now - defaultMetricsRangeMs
-	endMs := now
-
-	if s := r.URL.Query().Get("start"); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
-			startMs = v
-		}
-	}
-	if e := r.URL.Query().Get("end"); e != "" {
-		if v, err := strconv.ParseInt(e, 10, 64); err == nil {
-			endMs = v
-		}
-	}
-	if startMs <= 0 || endMs <= 0 || endMs < startMs {
-		response.WriteJSON(w, response.ErrDefault("无效的时间范围"))
-		return
-	}
-	if endMs-startMs > maxMetricsRangeMs {
-		response.WriteJSON(w, response.ErrDefault("时间范围过大"))
+	startMs, endMs, rangeErr := parseMetricsRange(r)
+	if rangeErr != "" {
+		response.WriteJSON(w, response.ErrDefault(rangeErr))
 		return
 	}
 
@@ -375,30 +376,9 @@ func (h *Handler) monitorTunnelMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().UnixMilli()
-	startMs := now - defaultMetricsRangeMs
-	endMs := now
-
-	if s := r.URL.Query().Get("start"); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
-			startMs = v
-		}
-	}
-	if e := r.URL.Query().Get("end"); e != "" {
-		if v, err := strconv.ParseInt(e, 10, 64); err == nil {
-			endMs = v
-		}
-	}
-	if startMs <= 0 || endMs <= 0 {
-		response.WriteJSON(w, response.ErrDefault("无效的时间范围"))
-		return
-	}
-	if endMs < startMs {
-		response.WriteJSON(w, response.ErrDefault("无效的时间范围"))
-		return
-	}
-	if endMs-startMs > maxMetricsRangeMs {
-		response.WriteJSON(w, response.ErrDefault("时间范围过大"))
+	startMs, endMs, rangeErr := parseMetricsRange(r)
+	if rangeErr != "" {
+		response.WriteJSON(w, response.ErrDefault(rangeErr))
 		return
 	}
 
@@ -788,18 +768,16 @@ func (h *Handler) monitorServiceResultsHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// If start/end time range is provided, use time-based query (mirrors node metrics / tunnel quality pattern).
+	// If either start or end is provided, use the time-range query with the
+	// shared parseMetricsRange semantics (a single provided bound takes
+	// effect; the other bound falls back to the default window edge).
+	// Only when neither is provided do we use the count-based limit query.
 	startStr := r.URL.Query().Get("start")
 	endStr := r.URL.Query().Get("end")
-	if startStr != "" && endStr != "" {
-		startMs, err1 := strconv.ParseInt(startStr, 10, 64)
-		endMs, err2 := strconv.ParseInt(endStr, 10, 64)
-		if err1 != nil || err2 != nil || startMs <= 0 || endMs <= 0 || endMs < startMs {
-			response.WriteJSON(w, response.ErrDefault("无效的时间范围"))
-			return
-		}
-		if endMs-startMs > maxMetricsRangeMs {
-			response.WriteJSON(w, response.ErrDefault("时间范围过大"))
+	if startStr != "" || endStr != "" {
+		startMs, endMs, rangeErr := parseMetricsRange(r)
+		if rangeErr != "" {
+			response.WriteJSON(w, response.ErrDefault(rangeErr))
 			return
 		}
 		results, err := h.repo.GetServiceMonitorResultsByTimeRange(monitorID, startMs, endMs)

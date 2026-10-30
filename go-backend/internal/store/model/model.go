@@ -68,6 +68,10 @@ type ForwardPort struct {
 	NodeID    int64          `gorm:"column:node_id;not null"`
 	Port      int            `gorm:"not null"`
 	InIP      sql.NullString `gorm:"column:in_ip;type:text"`
+	// BindWarning B08-005：显式监听 IP 在同步时被回退为默认监听后，
+	// 回退事件持久记录在此（回退同时会清空 InIP，若不另存则事件无痕）。
+	// 转发列表以 bindWarnings 字段透出；显式绑定再次同步成功时清除。
+	BindWarning sql.NullString `gorm:"column:bind_warning;type:text"`
 }
 
 func (ForwardPort) TableName() string { return "forward_port" }

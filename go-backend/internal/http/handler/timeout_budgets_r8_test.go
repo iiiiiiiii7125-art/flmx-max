@@ -92,6 +92,7 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 		"nodeUpgradeWriteDeadline":      nodeUpgradeWriteDeadline,
 		"nodeBatchUpgradeWriteDeadline": nodeBatchUpgradeWriteDeadline,
 		"systemUpgradeWriteDeadline":    systemUpgradeWriteDeadline,
+		"systemVersionWriteDeadline":    systemVersionWriteDeadline,
 		"diagnosisWriteDeadline":        diagnosisWriteDeadline,
 		"tunnelUpdateWriteDeadline":     tunnelUpdateWriteDeadline,
 		"tunnelCreateWriteDeadline":     tunnelCreateWriteDeadline,

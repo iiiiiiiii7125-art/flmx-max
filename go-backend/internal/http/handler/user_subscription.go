@@ -2,13 +2,11 @@ package handler
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/model"
-	"go-backend/internal/store/repo"
 )
 
 // userSubscriptionList 返回某用户被分配的订阅 ID 列表（仅管理员）。
@@ -138,19 +136,15 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	// FIX2-B（V5-1）：计数须按当前用户的入站分配收紧——该页主链接是
-	// 带 ?user=&sig= 的个性化链接，拉取侧按 UserInboundAssignment
-	// 过滤端点；此前 mine 以全量 rows 计数，部分分配用户看到的节点
-	// 数大于其链接实得。与拉取侧同口径：查询失败时按空分配计 0
-	// （拉取侧同为失败即空集），不回退全量口径以免高估。
-	assignments, aerr := h.repo.ListUserInboundAssignments(userID)
-	if aerr != nil {
-		log.Printf("userSubscriptionMine: list assignments for user %d failed, counting as none: %v", userID, aerr)
-		assignments = []repo.UserInboundAssignment{}
-	}
-	if assignments == nil {
-		assignments = []repo.UserInboundAssignment{}
-	}
+	// B10-001（R1-C08）：mine 返回的每条订阅在「我的订阅」页都以
+	// 独立链接卡片呈现——assignedUrl = path 自带 token、不带 ?user=
+	// （my-subscription.tsx），拉取侧对无 ?user= 的请求不做入站分配
+	// 过滤，端点为订阅全量口径。故计数必须用全量口径（nil
+	// assignments），与卡片实际链接恒等。此前 FIX2-B（V5-1）按
+	// ?user=&sig= 个性化链接口径收紧计数，前提与页面实际呈现的
+	// 链接不符：只走订阅分配（无旧入站分配）的用户恒看到 0。
+	// FIX2-B 的收紧只保留在它真正适用的面——openSubscription 的
+	// ?user= 拉取过滤本身不变，个性化链接实得仍按分配过滤。
 	now := time.Now()
 	// One F4 gate memo for the whole request (Y-01), as in the admin
 	// subscription list.
@@ -159,7 +153,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 	for i := range subs {
 		var s *model.Subscription = &subs[i]
 		// 复用 subscriptionView 保证 path 与 nodeCount（中转过滤后）口径一致。
-		v := h.subscriptionViewForAssignmentsMemo(s, rows, now, mineReq.Format, assignments, gateMemo)
+		v := h.subscriptionViewForAssignmentsMemo(s, rows, now, mineReq.Format, nil, gateMemo)
 		items = append(items, userSubscriptionMineView{
 			ID: v.ID, Name: v.Name, Path: v.Path, NodeCount: v.NodeCount,
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,

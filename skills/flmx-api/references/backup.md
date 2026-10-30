@@ -144,12 +144,19 @@ curl -s -X POST "${TARGET_URL}/api/v1/backup/import" \
 
 ## Compatibility aliases
 
-The three backup endpoints are also registered under a doubled prefix for
+All backup endpoints are also registered under a doubled prefix for
 backward compatibility with older clients; behavior is identical:
 
 - `POST /api/v1/api/v1/backup/export`
 - `POST /api/v1/api/v1/backup/import`
 - `POST /api/v1/api/v1/backup/restore`
+- `POST /api/v1/api/v1/backup/import-auto-backup`
+- `POST /api/v1/api/v1/backup/import-auto-backup/status`
+- `POST /api/v1/api/v1/backup/gist/status`
+- `POST /api/v1/api/v1/backup/gist/save`
+- `POST /api/v1/api/v1/backup/gist/upload`
+- `POST /api/v1/api/v1/backup/gist/versions`
+- `POST /api/v1/api/v1/backup/gist/restore`
 
 New integrations should use the canonical backup paths listed above.
 

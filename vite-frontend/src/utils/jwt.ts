@@ -24,7 +24,16 @@ function getPayloadFromToken(token: string): JWTPayload | null {
     if (parts.length !== 3) return null;
 
     const encodedPayload = parts[1];
-    const decodedPayload = atob(encodedPayload);
+    // JWT 的 payload 段是 base64url 编码：直接 atob 遇到 -/_ 会抛错
+    // （含这类字符的 token 被误判无效，中文用户名大面积中招），且解出
+    // 的字节是 UTF-8，按 Latin-1 当字符串会让中文用户名乱码。先归一
+    // -/_ 并补齐 padding，再按 UTF-8 还原（与 passkey.ts 同款处理）。
+    const base64 = encodedPayload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const bytes = Uint8Array.from(atob(padded), (character) =>
+      character.charCodeAt(0),
+    );
+    const decodedPayload = new TextDecoder("utf-8").decode(bytes);
 
     return JSON.parse(decodedPayload) as JWTPayload;
   } catch {

@@ -14,8 +14,30 @@ import (
 	xnet "github.com/go-gost/x/internal/net"
 )
 
+// DialTargetGuard validates the resolved dial target immediately
+// before any connection is attempted, and may rewrite it (pin a
+// hostname to a validated IP literal). A non-nil error aborts the
+// dial (fail-closed, no retries: the verdict is deterministic for a
+// given resolution). Installed by service parsing for services whose
+// bypass must hold at the dial point, not only at the handler's
+// pre-check (A02-001: check and dial used to resolve independently,
+// so a rebinding DNS could pass the check and land on a private
+// address at dial time).
+type DialTargetGuard func(ctx context.Context, network, address string) (string, error)
+
 type Router struct {
 	options chain.RouterOptions
+
+	dialTargetGuard DialTargetGuard
+}
+
+// SetDialTargetGuard installs the dial-point target guard. It is a
+// setter rather than a RouterOption because core RouterOptions has no
+// field for it; service parsing wires it right after NewRouter.
+func (r *Router) SetDialTargetGuard(g DialTargetGuard) {
+	if r != nil {
+		r.dialTargetGuard = g
+	}
 }
 
 func NewRouter(opts ...chain.RouterOption) *Router {
@@ -106,6 +128,20 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		if err != nil {
 			log.Error(err)
 			break
+		}
+
+		// Dial-point re-validation (A02-001): whatever resolution
+		// produced ipAddr (service resolver, hosts mapper, or none —
+		// in which case ipAddr is still a hostname the route's dialer
+		// would resolve a second time), the guard validates the final
+		// target and pins hostnames to a validated IP literal, so the
+		// address that is connected to is the address that was judged.
+		if r.dialTargetGuard != nil {
+			ipAddr, err = r.dialTargetGuard(ctx, network, ipAddr)
+			if err != nil {
+				log.Error(err)
+				return nil, err
+			}
 		}
 
 		if buf != nil {

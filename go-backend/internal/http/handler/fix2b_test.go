@@ -22,8 +22,10 @@ import (
 // FIX2-B 回归批（V4-N1 / V5-1 / V5-2）：
 //   - V4-N1：备份导入写 configs 段后未失效通知/prober 配置缓存；
 //     prober 失效 switch 漏 retention 键。
-//   - V5-1：mine 视图 nodeCount 未按用户入站分配过滤，与该页个性化
-//     链接（?user=&sig=）实际拉取数分叉。
+//   - V5-1：拉取侧 ?user=&sig= 个性化链接按用户入站分配过滤端点；
+//     其计数口径曾被 mine 复用——R1-C08（B10-001）纠正：mine 的
+//     卡片是独立链接（无 ?user=），计数改全量口径并与无 ?user=
+//     拉取恒等；个性化拉取的过滤语义本身不变，仍在此守。
 //   - V5-2：format 参数大小写口径两入口不一致（计数侧敏感、拉取侧
 //     ToLower），"Clash" 在计数侧静默回落 base64。
 
@@ -75,9 +77,13 @@ func TestFix2BFilterEndpointsByUserAssignments(t *testing.T) {
 	}
 }
 
-// V5-1 集成面：mine 的 nodeCount 必须等于同一用户经个性化链接
-// （?user=&sig=）实际拉到的节点数；管理员全量口径不受影响。
-func TestFix2BMineNodeCountMatchesPersonalizedPull(t *testing.T) {
+// V5-1 集成面（R1-C08/B10-001 纠正口径）：mine 的卡片是独立链接
+// （path 自带 token、不带 ?user=），其 nodeCount 必须等于无 ?user=
+// 拉取实际拿到的节点数，对只走订阅分配的用户亦然；同时守住
+// FIX2-B 的原语义——?user=&sig= 个性化拉取仍按入站分配过滤
+// （同 fixture 下三名用户的个性化实得仍为 1/0/0），管理员全量
+// 口径不受影响。
+func TestFix2BMineNodeCountMatchesIndependentPull(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/fix2b_mine.db")
 	if err != nil {
 		t.Fatal(err)
@@ -150,18 +156,16 @@ func TestFix2BMineNodeCountMatchesPersonalizedPull(t *testing.T) {
 		return env.Data.Subscriptions[0].NodeCount
 	}
 
-	pullCount := func(userID int64) int {
-		sig := h.subURLSigForToken(token, userID)
-		url := fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=%d&sig=%s", token, userID, sig)
+	countPull := func(url string) int {
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		rec := httptest.NewRecorder()
 		h.openSubscription(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("pull user %d: status=%d body=%s", userID, rec.Code, rec.Body.String())
+			t.Fatalf("pull %s: status=%d body=%s", url, rec.Code, rec.Body.String())
 		}
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
 		if err != nil {
-			t.Fatalf("pull user %d: body not base64: %v", userID, err)
+			t.Fatalf("pull %s: body not base64: %v", url, err)
 		}
 		n := 0
 		for _, line := range strings.Split(string(raw), "\n") {
@@ -170,6 +174,14 @@ func TestFix2BMineNodeCountMatchesPersonalizedPull(t *testing.T) {
 			}
 		}
 		return n
+	}
+	personalizedPullCount := func(userID int64) int {
+		sig := h.subURLSigForToken(token, userID)
+		return countPull(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=%d&sig=%s", token, userID, sig))
+	}
+	// 独立链接：mine 卡片实际呈现的链接（无 ?user=、不带 sig）。
+	independentPullCount := func() int {
+		return countPull(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64", token))
 	}
 
 	// 管理员全量口径：两个入站都计。
@@ -181,12 +193,20 @@ func TestFix2BMineNodeCountMatchesPersonalizedPull(t *testing.T) {
 		t.Fatalf("admin view nodeCount = %d, want 2", got)
 	}
 
-	for userID, want := range map[int64]int{2: 1, 3: 0, 4: 0} {
-		if got := mineCount(userID); got != want {
-			t.Fatalf("V5-1: mine nodeCount user %d = %d, want %d", userID, got, want)
+	// B10-001：独立链接实得 2；三名被分配用户的 mine 必须都等于它，
+	// 与各自的旧入站分配无关（用户 3 无任何入站分配，旧口径计 0）。
+	if got := independentPullCount(); got != 2 {
+		t.Fatalf("independent pull = %d, want 2 (fixture sanity)", got)
+	}
+	for _, userID := range []int64{2, 3, 4} {
+		if got := mineCount(userID); got != 2 {
+			t.Fatalf("B10-001: mine nodeCount user %d = %d, want 2 (independent-link count)", userID, got)
 		}
-		if got := pullCount(userID); got != want {
-			t.Fatalf("pull count user %d = %d, want %d (fixture sanity)", userID, got, want)
+	}
+	// FIX2-B 原语义守恒：个性化拉取仍按入站分配过滤。
+	for userID, want := range map[int64]int{2: 1, 3: 0, 4: 0} {
+		if got := personalizedPullCount(userID); got != want {
+			t.Fatalf("personalized pull count user %d = %d, want %d (FIX2-B pull semantics)", userID, got, want)
 		}
 	}
 }

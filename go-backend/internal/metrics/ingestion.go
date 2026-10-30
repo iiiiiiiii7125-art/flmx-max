@@ -140,8 +140,12 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	if prev, ok := s.lastBytes[nodeID]; ok {
 		k := trafficKey{nodeID, m.Timestamp - m.Timestamp%int64(time.Hour/time.Millisecond)}
 		t := s.traffic[k]
-		t[0] += counterDeltaForBoot(prev[0], m.NetInBytes, s.lastBoot[nodeID], info.BootID)
-		t[1] += counterDeltaForBoot(prev[1], m.NetOutBytes, s.lastBoot[nodeID], info.BootID)
+		// SAT2: flush 窗口内的缓冲合并是 AddNodeTraffic 落库前的合并
+		// 点；增量虽为计数器差分，伪造的计数器序列（如 boot id 交替 +
+		// 近 MaxInt64 读数）可造出多个近上限差分，裸 += 会先在内存回
+		// 绕再绕过 SQL 饱和守卫——与 repo 批内合同口径走饱和加。
+		t[0] = repo.SaturatingAddInt64(t[0], counterDeltaForBoot(prev[0], m.NetInBytes, s.lastBoot[nodeID], info.BootID))
+		t[1] = repo.SaturatingAddInt64(t[1], counterDeltaForBoot(prev[1], m.NetOutBytes, s.lastBoot[nodeID], info.BootID))
 		s.traffic[k] = t
 	}
 	s.lastBytes[nodeID] = [2]int64{m.NetInBytes, m.NetOutBytes}

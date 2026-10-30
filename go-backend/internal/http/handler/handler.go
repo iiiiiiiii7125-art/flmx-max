@@ -42,9 +42,14 @@ type Handler struct {
 	//留存写与过期清理。
 	importAutoBackupDir string
 	importAutoBackupMu  sync.Mutex
-	wsServer            *ws.Server
-	metrics             *metrics.IngestionService
-	healthCheck         *health.Checker
+	// B14-001（用户 2026-10-30 裁决④）：备份导入进程内互斥。导入的
+	// 写入相位已与请求 ctx 解绑（见 backupImport），关页/断开不再是
+	// 取消手段，重复提交或双开页面并发导入会基于中间态叠写，故同一
+	// 时刻只允许一单备份导入（快照相位与写入相位全程持锁）。
+	backupImportMu sync.Mutex
+	wsServer       *ws.Server
+	metrics        *metrics.IngestionService
+	healthCheck    *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
 	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
 	nftablesManager *serializedNftManager
@@ -290,19 +295,29 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system/check-updates", h.systemCheckUpdates)
 	mux.HandleFunc("/api/v1/system/upgrade", h.systemUpgrade)
 	mux.HandleFunc("/api/v1/system/upgrade/status", h.systemUpgradeStatus)
-	mux.HandleFunc("/api/v1/backup/export", h.backupExport)
-	mux.HandleFunc("/api/v1/backup/import-auto-backup", h.backupImportAutoBackup)
-	mux.HandleFunc("/api/v1/backup/import-auto-backup/status", h.backupImportAutoBackupStatus)
-	mux.HandleFunc("/api/v1/backup/gist/status", h.gistBackupStatus)
-	mux.HandleFunc("/api/v1/backup/gist/save", h.gistBackupSave)
-	mux.HandleFunc("/api/v1/backup/gist/upload", h.gistBackupUpload)
-	mux.HandleFunc("/api/v1/backup/gist/versions", h.gistBackupVersions)
-	mux.HandleFunc("/api/v1/backup/gist/restore", h.gistBackupRestore)
-	mux.HandleFunc("/api/v1/backup/import", h.backupImport)
-	mux.HandleFunc("/api/v1/backup/restore", h.backupImport)
-	mux.HandleFunc("/api/v1/api/v1/backup/export", h.backupExport)
-	mux.HandleFunc("/api/v1/api/v1/backup/import", h.backupImport)
-	mux.HandleFunc("/api/v1/api/v1/backup/restore", h.backupImport)
+	// 备份端点全集（B14-002）：正常前缀与历史双前缀别名
+	// （/api/v1/api/v1/backup/...，兼容曾把基址拼重一层的旧客户端/脚本）
+	// 由同一清单注册。新增备份端点只许往此清单加行，两个前缀自动齐全；
+	// 此前别名靠手工枚举，import-auto-backup 两端点（SEC-01 后加）漏注册，
+	// 双前缀访问拿到裸文本 404 而非 {code,msg} 信封。
+	for _, route := range []struct {
+		path string
+		fn   http.HandlerFunc
+	}{
+		{"/api/v1/backup/export", h.backupExport},
+		{"/api/v1/backup/import-auto-backup", h.backupImportAutoBackup},
+		{"/api/v1/backup/import-auto-backup/status", h.backupImportAutoBackupStatus},
+		{"/api/v1/backup/gist/status", h.gistBackupStatus},
+		{"/api/v1/backup/gist/save", h.gistBackupSave},
+		{"/api/v1/backup/gist/upload", h.gistBackupUpload},
+		{"/api/v1/backup/gist/versions", h.gistBackupVersions},
+		{"/api/v1/backup/gist/restore", h.gistBackupRestore},
+		{"/api/v1/backup/import", h.backupImport},
+		{"/api/v1/backup/restore", h.backupImport},
+	} {
+		mux.HandleFunc(route.path, route.fn)
+		mux.HandleFunc("/api/v1"+route.path, route.fn)
+	}
 	mux.HandleFunc("/api/v1/captcha/check", h.checkCaptcha)
 	mux.HandleFunc("/api/v1/captcha/verify", h.captchaVerify)
 	mux.HandleFunc("/api/v1/user/package", h.userPackage)
@@ -1902,6 +1917,15 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// B01-003：新密码与当前密码相同不算「修改」——直接拒绝，且不落库、
+	// 不推进 PasswordChangedAt。此前同值提交返回成功并推进
+	// PasswordChangedAt 把其它会话踢下线，强制改密（默认口令）可被同值
+	// 提交空转满足、普通用户则产生「已改密」假象。
+	if req.NewPassword == req.CurrentPassword {
+		response.WriteJSON(w, response.ErrDefault("新密码不能与当前密码相同"))
+		return
+	}
+
 	exists, err := h.repo.UsernameExistsExceptID(req.NewUsername, userID)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -2233,13 +2257,29 @@ type backupImportRequest struct {
 	repo.BackupData
 }
 
+// backupImportTimeout caps the detached write phase of backupImport
+// (B14-001, user ruling ④ on 2026-10-30). It shares the
+// backupWriteDeadline magnitude (30min) so the server-side work cap
+// and the write relief stay aligned: any import the server allows
+// to run to completion can still deliver its response.
+const backupImportTimeout = backupWriteDeadline
+
 func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
-	// R8-T-02 element (a) only: a non-trivial import runs far past
-	// the global 120s write cap, so arm the write relief first. The
-	// import itself is NOT capped, and the transaction's binding to
-	// r.Context() (X-P3-21, element (b)) is deliberately unchanged
-	// pending a user ruling — the abort-amplified shape is NOT
-	// eradicated by this batch.
+	// R8-T-02 element (a): a non-trivial import runs far past the
+	// global 120s write cap, so arm the write relief first.
+	//
+	// R8-T-02 element (b) — resolved by user ruling ④ on 2026-10-30
+	// (B14-001): the two phases now differ deliberately. The
+	// pre-import snapshot phase below stays bound to r.Context(), so
+	// a client abort before any DB write cancels the whole import
+	// with no side effects. Once the snapshot is done, the import
+	// transaction runs on a detached context (WithoutCancel plus
+	// backupImportTimeout): a disconnect or page close can no longer
+	// roll back a legitimate import mid-write. This supersedes the
+	// handler-layer half of X-P3-21; the whole-import transaction
+	// itself is retained, and the repo-layer ImportContext contract
+	// (it honours whatever ctx it is given — TestR1B8_XP321) is
+	// unchanged.
 	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -2282,16 +2322,47 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// 致 ExportAll 失败，用户正是最需要从完好备份恢复的场景，失败即
 	// 中断会把恢复路堵死；警告进 result.ImportWarnings 向用户披露，
 	// 详情只记服务端日志。快照字节绝不进回执、日志与错误信息。
+	// B14-001（用户 2026-10-30 裁决④）：写入相位与请求 ctx 解绑后，
+	// 关页/断开不再能取消导入，重复提交或双开页面并发导入会基于
+	// 中间态叠写。进程内同一时刻只允许一单备份导入（快照+写入
+	// 全程持锁），第二单直接拒绝并说明原因，不排队。
+	if !h.backupImportMu.TryLock() {
+		// J-008：错误码统一为 -2
+		response.WriteJSON(w, response.Err(-2, "已有备份导入正在执行，请等待其完成后再试"))
+		return
+	}
+	defer h.backupImportMu.Unlock()
+
 	h.purgeExpiredImportAutoBackup()
 	snapshotErr := h.saveImportAutoBackup(r.Context())
 	if snapshotErr != nil {
 		log.Printf("backupImport: save pre-import auto-backup snapshot failed: %v", snapshotErr)
 	}
 
-	// X-P3-21（L-08-3）：导入整单事务维持（语义有意），事务绑定请求
-	// ctx——导入期间其余请求经 SQLite busy_timeout（DSN 5000ms）/
-	// PG 语句超时走正常超时错误，导入本身断连可取消，不再无限排队。
-	result, err := h.repo.ImportContext(r.Context(), &req.BackupData, req.Types)
+	// B14-001（裁决④的可取消窗口边界）：快照相位结束、写入相位开始
+	// 之前，请求 ctx 已死（客户端在写入前中止/关页）则整单不启动、
+	// 无副作用。须与 O7-010 区分：快照因别的原因失败（如现有库损坏
+	// 致导出失败）只警告续行、不堵恢复路；唯有请求 ctx 取消构成
+	// 「写入前取消」。越过此边界后 ctx 解绑，断连不再影响导入。
+	if err := r.Context().Err(); err != nil {
+		// J-008：错误码统一为 -2
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入已取消: %v", err)))
+		return
+	}
+
+	// B14-001（用户 2026-10-30 裁决④折中）：自此进入写入相位。快照
+	// 相位在上方仍绑请求 ctx——写入前中止则整单不启动、无副作用；
+	// 写入相位改用解绑 ctx 并叠加与写截止对齐的独立上限
+	// （backupImportTimeout）——断连/关页不再回滚整单，整单要么
+	// 跑完、要么被服务端上限终止。整单事务维持（X-P3-21 的事务性
+	// 部分保留，其 handler 层「断连可取消」语义经本次裁决废止）；
+	// 导入期间其余请求经 SQLite busy_timeout（DSN 5000ms）/ PG
+	// 语句超时走正常超时错误，并发导入由上方 backupImportMu 互斥。
+	// repo 层 ImportContext 尊重所传入 ctx 的契约（TestR1B8_XP321）
+	// 不触碰：此处只是改传解绑后的 ctx。
+	importCtx, cancelImport := context.WithTimeout(context.WithoutCancel(r.Context()), backupImportTimeout)
+	defer cancelImport()
+	result, err := h.repo.ImportContext(importCtx, &req.BackupData, req.Types)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return

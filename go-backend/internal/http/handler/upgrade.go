@@ -36,6 +36,15 @@ const (
 	upgradeTimeout = 5 * time.Minute
 	batchWorkers   = 5
 
+	// maxBatchUpgradeNodes 是单次批量升级的节点数上限（B05-002 服务
+	// 端收口）：后端界 ⌈N/5⌉×upgradeTimeout(300s) 必须小于服务端写
+	// 截止 nodeBatchUpgradeWriteDeadline(1800s)，N=25 时界为 1500s、
+	// 留 300s 余量。此前 ids 无上限、前端静态 900s 只覆盖 N≤15，
+	// N>15 时前端中止经请求 ctx 连带取消未派发节点且回执整份丢失；
+	// 超限请求现在明确报错并提示分批（前端按 N 动态放大超时为
+	// B05-002 的前端面，见登记表 T031 注）。
+	maxBatchUpgradeNodes = 25
+
 	releaseChannelStable = "stable"
 	releaseChannelDev    = "dev"
 
@@ -133,6 +142,20 @@ var redirectTagPattern = regexp.MustCompile(`^[0-9A-Za-z.-]+$`)
 // 页脚探测共用同一份配额预算。
 const releasesCacheTTL = 10 * time.Minute
 
+// releasesFetchPerPage 是版本发现两路（节点侧 fetchGitHubReleasesWithProxy
+// 与面板侧 fetchSystemUpgradeReleases）共同的全量拉取条数：一次拉满
+// 存缓存，读取方各自 slice 到所需条数（B05-004 统一键的前提）。
+const releasesFetchPerPage = 50
+
+// releasesCacheKey 是版本列表缓存的统一键（B05-004）：以仓库 + 实际
+// 使用的 API base 为键。旧实现两路同表异键（"api:"/"sysapi:"）永不
+// 互相命中，同一份列表在冷缓存时被请求两遍、配额双倍消耗；现两路
+// 共用一条目（生产中 githubAPIBase 与 systemUpgradeAPIBaseURL 同值，
+// 测试中各自换 base 时键随实际 base 走，不串扰）。
+func releasesCacheKey(apiBase string) string {
+	return "releases:" + githubRepo + "@" + strings.TrimRight(apiBase, "/")
+}
+
 var releasesCache = struct {
 	sync.Mutex
 	entries map[string]releasesCacheEntry
@@ -192,12 +215,12 @@ func fetchGitHubReleasesWithProxy(perPage int, proxyURL string) ([]githubRelease
 	if perPage <= 0 {
 		perPage = 20
 	}
-	cacheKey := "api:" + githubAPIBase
+	cacheKey := releasesCacheKey(githubAPIBase)
 	if releases, ok := cachedReleases(cacheKey); ok {
 		return sliceReleases(releases, perPage), nil
 	}
 
-	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, 50)
+	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, releasesFetchPerPage)
 	if proxyURL == "" {
 		releases, err := fetchGitHubReleasesPage(directURL)
 		if err != nil {
@@ -485,6 +508,10 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.IDs) == 0 {
 		response.WriteJSON(w, response.ErrDefault("ids不能为空"))
+		return
+	}
+	if len(req.IDs) > maxBatchUpgradeNodes {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("单次批量升级最多 %d 台节点，请分批提交", maxBatchUpgradeNodes)))
 		return
 	}
 

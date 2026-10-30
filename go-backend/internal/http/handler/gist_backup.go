@@ -1083,10 +1083,22 @@ var gistRestoreTypes = []string{
 // 仅管理员；请求体 {version, password}，password 为上传时用的加密
 // 密码（明文 Gist 内容可空密码直通，由 gistOpen 判定）。
 func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
-	// R8-T-02 element (a) only: the download leg alone can take
-	// 120s (two sequential 60s gist calls) before the same
-	// ctx-bound import as backupImport runs; see handler.go. The
-	// r.Context() binding (element (b)) is unchanged.
+	// R8-T-02 element (a): the download leg alone can take 120s
+	// (two sequential 60s gist calls) before the import runs; see
+	// handler.go.
+	//
+	// Element (b) — B14-001 ruling ④ mechanism extension (user
+	// ruling 2026-10-30): the restore now follows the same two-phase
+	// ctx semantics as the local backup import. The download/decrypt
+	// preparation phase below stays bound to r.Context(), so an
+	// abort before any DB write cancels the restore with no side
+	// effects; once preparation is done, the ImportContext write
+	// phase runs on a detached context (WithoutCancel plus
+	// backupImportTimeout, the same magnitude as the local import),
+	// so a disconnect can no longer roll back a legitimate restore
+	// mid-write. The write phase also takes the shared process-wide
+	// backupImportMu, so a gist restore and a local import can never
+	// write concurrently.
 	extendWriteDeadline(w, backupWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -1119,7 +1131,27 @@ func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "备份版本为空，拒绝恢复"))
 		return
 	}
-	result, err := h.repo.ImportContext(r.Context(), &backup, gistRestoreTypes)
+	// B14-001 裁决④机制扩展（相位边界，与本地 backupImport 同口径）：
+	// 下载/解密/解析属准备相位、全程绑请求 ctx；到此仍未取消才进入
+	// 写入相位。准备相位中止（关页/断网）则整单不启动、无副作用。
+	if err := r.Context().Err(); err != nil {
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("恢复已取消: %v", err)))
+		return
+	}
+	// 与本地导入共用同一把进程内互斥（backupImportMu）：解绑后关页
+	// 不再是取消手段，两路并发写同一 DB 必须互斥；第二单直接拒绝、
+	// 不排队（与本地导入回执同文案）。
+	if !h.backupImportMu.TryLock() {
+		response.WriteJSON(w, response.Err(-2, "已有备份导入正在执行，请等待其完成后再试"))
+		return
+	}
+	defer h.backupImportMu.Unlock()
+	// 写入相位：解绑 ctx + 与本地导入同量级的独立上限
+	//（backupImportTimeout）。整单事务维持；repo 层 ImportContext
+	// 尊重所传入 ctx 的契约（TestR1B8_XP321）不触碰。
+	importCtx, cancelImport := context.WithTimeout(context.WithoutCancel(r.Context()), backupImportTimeout)
+	defer cancelImport()
+	result, err := h.repo.ImportContext(importCtx, &backup, gistRestoreTypes)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return

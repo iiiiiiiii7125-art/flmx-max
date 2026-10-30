@@ -24,6 +24,19 @@ type conn struct {
 	mu     sync.Mutex
 }
 
+// WrapConn wraps a client-facing connection with traffic counting.
+//
+// Counting caliber (A02-003): the counters fed from here are the
+// service-level stats the panel bills against, and they count ALL
+// wire bytes on the client-facing connection — including protocol
+// handshake bytes of handshake-style protocols (SOCKS5 greeting +
+// request/reply, ≈12B per direction per connection; HTTP request
+// line/headers), because counting starts when the listener accepts
+// the connection, before any handler handshake runs. Protocols
+// without a client-side handshake (forward/local) therefore measure
+// pure payload under the same rule. The caliber is uniformly
+// "client-connection wire bytes", NOT per-protocol payload bytes;
+// quota/billing calibration must be read that way.
 func WrapConn(c net.Conn, pStats stats.Stats) net.Conn {
 	if c == nil || pStats == nil {
 		return c

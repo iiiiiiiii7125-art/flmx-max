@@ -43,8 +43,8 @@ def test_login_flow():
 
             print("Login form elements found")
 
-            username_input.fill("admin_user")
-            password_input.fill("admin_user")
+            username_input.fill("admin@user")
+            password_input.fill("admin@user")
             login_button.click()
 
             page.wait_for_url("**/dashboard**", timeout=5000)

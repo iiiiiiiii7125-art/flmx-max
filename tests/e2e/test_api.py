@@ -30,7 +30,7 @@ class TestAPIAuthentication:
 
     def test_login_success(self, api_client: APIClient):
         """Test successful login."""
-        response = api_client.login("admin_user", "admin_user")
+        response = api_client.login("admin@user", "admin@user")
         assert response["code"] == 0
         assert "token" in response["data"]
         assert api_client.token is not None
@@ -42,7 +42,7 @@ class TestAPIAuthentication:
 
     def test_login_invalid_password(self, api_client: APIClient):
         """Test login with invalid password."""
-        response = api_client.login("admin_user", "wrong_password")
+        response = api_client.login("admin@user", "wrong_password")
         assert response["code"] != 0
 
     def test_login_empty_username(self, api_client: APIClient):
@@ -52,7 +52,7 @@ class TestAPIAuthentication:
 
     def test_login_empty_password(self, api_client: APIClient):
         """Test login with empty password."""
-        response = api_client.login("admin_user", "")
+        response = api_client.login("admin@user", "")
         assert response["code"] != 0
 
     def test_protected_endpoint_without_token(self, api_client: APIClient):

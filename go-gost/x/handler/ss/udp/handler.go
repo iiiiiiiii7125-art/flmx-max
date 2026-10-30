@@ -153,6 +153,34 @@ func (h *ssuHandler) Handle(ctx context.Context, conn net.Conn, opts ...handler.
 	return nil
 }
 
+// dialTargetPinner mirrors bypass.DialTargetPinner: bypasses that
+// can pin a hostname target to a validated IP literal at the dial
+// point (A02-001). A shadowsocks UDP target may be a domain name;
+// Bypass.Contains and the packet conn's WriteTo would resolve it
+// independently, leaving a rebinding gap between check and dial.
+type dialTargetPinner interface {
+	PinDialTarget(ctx context.Context, network, addr string) (string, error)
+}
+
+// pinUDPTarget returns the address a packet must actually be
+// written to: with a pinning bypass, a hostname target is replaced
+// by its validated IP literal (an error drops the packet); anything
+// else passes through unchanged.
+func (h *ssuHandler) pinUDPTarget(ctx context.Context, addr net.Addr) (net.Addr, error) {
+	pinner, ok := h.options.Bypass.(dialTargetPinner)
+	if !ok || addr == nil {
+		return addr, nil
+	}
+	pinned, err := pinner.PinDialTarget(ctx, "udp", addr.String())
+	if err != nil {
+		return nil, err
+	}
+	if pinned == addr.String() {
+		return addr, nil
+	}
+	return net.ResolveUDPAddr("udp", pinned)
+}
+
 func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, ro *xrecorder.HandlerRecorderObject, log logger.Logger) (err error) {
 	errc := make(chan error, 2)
 
@@ -174,7 +202,13 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 					return nil
 				}
 
-				if _, err = pc2.WriteTo(b[:n], addr); err != nil {
+				target, perr := h.pinUDPTarget(ctx, addr)
+				if perr != nil {
+					log.Warn("bypass pin: ", perr)
+					return nil
+				}
+
+				if _, err = pc2.WriteTo(b[:n], target); err != nil {
 					return err
 				}
 
@@ -204,7 +238,13 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 					return nil
 				}
 
-				if _, err = pc1.WriteTo(b[:n], raddr); err != nil {
+				target, perr := h.pinUDPTarget(ctx, raddr)
+				if perr != nil {
+					log.Warn("bypass pin: ", perr)
+					return nil
+				}
+
+				if _, err = pc1.WriteTo(b[:n], target); err != nil {
 					return err
 				}
 

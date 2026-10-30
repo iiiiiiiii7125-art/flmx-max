@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +61,9 @@ func TestTunnelCreateWithIPPreferenceContract(t *testing.T) {
 			stored, err := tryQueryString(t, repo, `SELECT COALESCE(ip_preference, '') FROM tunnel WHERE name = ?`, "tunnel-"+tc.name)
 			if err != nil {
 				if err == sql.ErrNoRows {
-					t.Skipf("tunnel not created (nodes offline), skipping DB verification")
+					// X02-005 同型掩盖：创建未落库时旧实现 Skip 掉 DB 验证，
+					// 用例可假绿。创建响应已在上方解码，落库失败必须变红。
+					t.Fatalf("tunnel not created (create response code=%d), DB verification cannot be skipped", out.Code)
 				}
 				t.Fatalf("query ip_preference: %v", err)
 			}
@@ -200,22 +203,51 @@ func TestIPPreferenceColumnMigrationContract(t *testing.T) {
 	if colCount != 1 {
 		t.Fatalf("expected ip_preference column to exist in tunnel table, found %d", colCount)
 	}
+	// X02-005: 列可空性必须被显式断言锁定——该列 NOT NULL 是
+	// TestIPPreferenceCoalesceNullSafety 的结构前提，漂移须在此变红，
+	// 而不是让下游用例静默 Skip。
+	notNull := mustQueryInt(t, repo, `SELECT "notnull" FROM pragma_table_info('tunnel') WHERE name = 'ip_preference'`)
+	if notNull != 1 {
+		t.Fatalf("expected ip_preference column to be NOT NULL, pragma notnull=%d", notNull)
+	}
 }
 
+// TestIPPreferenceCoalesceNullSafety 原实现向 NOT NULL 列插入 NULL、失败即
+// Skip，导致断言行从未执行（X02-005，永久 SKIP）。现两个分支都真断言：
+// 列已可空时直接在真表验 COALESCE；仍 NOT NULL 时先断言插入失败确系
+// NOT NULL 约束，再在同型可空临时表上验证读侧 COALESCE 表达式本身。
 func TestIPPreferenceCoalesceNullSafety(t *testing.T) {
 	_, repo := setupContractRouter(t, "contract-jwt-secret")
 	now := time.Now().UnixMilli()
 
-	if err := repo.DB().Exec(`
+	insertErr := repo.DB().Exec(`
 		INSERT INTO tunnel(name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx, ip_preference)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-	`, "null-pref-tunnel", 1.0, 2, "tls", 99999, now, now, 1, nil, 0).Error; err != nil {
-		t.Skipf("DB does not allow NULL ip_preference (NOT NULL constraint): %v", err)
+	`, "null-pref-tunnel", 1.0, 2, "tls", 99999, now, now, 1, nil, 0).Error
+	if insertErr == nil {
+		// schema 已改为可空：在真表上直接验证读侧 COALESCE 口径。
+		stored := mustQueryString(t, repo, `SELECT COALESCE(ip_preference, '') FROM tunnel WHERE name = ?`, "null-pref-tunnel")
+		if stored != "" {
+			t.Fatalf("COALESCE should convert NULL to empty string, got %q", stored)
+		}
+		return
 	}
-
-	stored := mustQueryString(t, repo, `SELECT COALESCE(ip_preference, '') FROM tunnel WHERE name = ?`, "null-pref-tunnel")
-	if stored != "" {
-		t.Fatalf("COALESCE should convert NULL to empty string, got %q", stored)
+	if !strings.Contains(insertErr.Error(), "NOT NULL") {
+		t.Fatalf("insert NULL ip_preference should fail with NOT NULL constraint, got: %v", insertErr)
+	}
+	if err := repo.DB().Exec(`CREATE TEMP TABLE tunnel_ip_pref_coalesce_probe (ip_preference varchar(10))`).Error; err != nil {
+		t.Fatalf("create probe table: %v", err)
+	}
+	if err := repo.DB().Exec(`INSERT INTO tunnel_ip_pref_coalesce_probe(ip_preference) VALUES (NULL), ('v6')`).Error; err != nil {
+		t.Fatalf("insert probe rows: %v", err)
+	}
+	nullStored := mustQueryString(t, repo, `SELECT COALESCE(ip_preference, '') FROM tunnel_ip_pref_coalesce_probe WHERE ip_preference IS NULL`)
+	if nullStored != "" {
+		t.Fatalf("COALESCE should convert NULL to empty string, got %q", nullStored)
+	}
+	v6Stored := mustQueryString(t, repo, `SELECT COALESCE(ip_preference, '') FROM tunnel_ip_pref_coalesce_probe WHERE ip_preference = 'v6'`)
+	if v6Stored != "v6" {
+		t.Fatalf("COALESCE must preserve non-NULL value, got %q", v6Stored)
 	}
 }
 

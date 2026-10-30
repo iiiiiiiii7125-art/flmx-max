@@ -1556,8 +1556,12 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 		return fmt.Errorf("解析协议设置失败: %v", err)
 	}
 
-	// 读取当前值作为默认
-	httpVal, tlsVal, socksVal := 0, 0, 0
+	// 读取当前值作为默认（A01-002）：未下发的字段沿用现值。此前
+	// 默认一律 0，部分字段下发会把未给出的开关清零并落盘——静默
+	// 解除协议屏蔽且重启不恢复，与本函数注释自相矛盾。现值以
+	// service 包的内存态为准（启动时由 config.json 加载、每次
+	// SetProtocolBlock 更新），与下方落盘的是同一组值。
+	httpVal, tlsVal, socksVal := service.GetProtocolBlock()
 
 	if req.HTTP != nil {
 		if *req.HTTP != 0 && *req.HTTP != 1 {
@@ -1578,7 +1582,7 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 		socksVal = *req.SOCKS
 	}
 
-	// 设置至 service，全量传递（未提供的值沿用0）
+	// 设置至 service，全量传递（未提供的值沿用当前值，见上方 A01-002）
 	service.SetProtocolBlock(httpVal, tlsVal, socksVal)
 
 	// 同步写入本地 config.json

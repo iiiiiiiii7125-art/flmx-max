@@ -45,7 +45,11 @@ import {
   probeNodeLatency,
   type ReleaseChannel,
 } from "@/api";
-import type { InboundApiItem } from "@/api/types";
+import type {
+  BatchOperationFailure,
+  BatchOperationResult,
+  InboundApiItem,
+} from "@/api/types";
 import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
@@ -115,6 +119,22 @@ import {
   UpgradeNodeModal,
 } from "@/pages/node/agent-modals";
 import { NodeFilterModal } from "@/pages/node/filter-modal";
+import { BatchActionResultModal } from "@/components/batch-action-result-modal";
+import { extractBatchFailures } from "@/api/error-message";
+
+interface BatchResultModalState {
+  failures: BatchOperationFailure[];
+  open: boolean;
+  summary: string;
+  title: string;
+}
+
+const EMPTY_BATCH_RESULT_MODAL_STATE: BatchResultModalState = {
+  failures: [],
+  open: false,
+  summary: "",
+  title: "",
+};
 
 /**
  * R2X-045：计算删除给定节点将打断的跨节点引用——出站/分流指向被删
@@ -300,6 +320,8 @@ export default function NodePage({
   const [targetNodes, setTargetNodes] = useState<Node[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
+  const [batchResultModal, setBatchResultModal] =
+    useState<BatchResultModalState>(EMPTY_BATCH_RESULT_MODAL_STATE);
   const [batchLoading, setBatchLoading] = useState(false);
 
   // 安装命令相关状态
@@ -1200,11 +1222,23 @@ export default function NodePage({
               );
             }
           }
+        } else if (res.code === -1) {
+          // B05-002：code=-1 是无回执（超时/断连/中止），不等于服务端
+          // 未执行——请求可能已抵达且服务端仍在逐台升级。不得呈现为
+          // 确定失败、更不得诱导立即重试（与在途升级叠加），明示刷新
+          // 节点列表核对各节点版本。
+          toast(
+            "未收到批量升级回执，服务端可能仍在执行，请稍后刷新节点列表核对各节点版本，勿立即重复提交",
+            { icon: "⚠️", duration: 8000 },
+          );
         } else {
           toast.error(res.msg || "批量升级失败");
         }
       } catch {
-        toast.error("网络错误，请重试");
+        toast(
+          "未收到批量升级回执，服务端可能仍在执行，请稍后刷新节点列表核对各节点版本，勿立即重复提交",
+          { icon: "⚠️", duration: 8000 },
+        );
       } finally {
         setBatchUpgradeLoading(false);
       }
@@ -1561,19 +1595,15 @@ export default function NodePage({
 
       if (res.code === 0) {
         const result = res.data as
-          | {
-              successCount?: number;
-              failCount?: number;
-              failures?: { id?: number }[];
-              brokenReferrers?: string[];
-            }
+          | (BatchOperationResult & { brokenReferrers?: string[] })
           | null
           | undefined;
 
+        // 用全量类型消费逐条回执：failures 带 name/reason，失败时经
+        // 结果弹窗逐条呈现，不得只取 id 把原因丢弃。
+        const failures = extractBatchFailures(result);
         const failedIds = new Set(
-          (result?.failures || [])
-            .map((f) => Number(f.id ?? 0))
-            .filter((id) => id > 0),
+          failures.map((f) => Number(f.id ?? 0)).filter((id) => id > 0),
         );
         const failCount = result?.failCount ?? failedIds.size;
 
@@ -1594,6 +1624,14 @@ export default function NodePage({
             toast.error(
               `成功删除 ${successCount} 个节点，失败 ${failCount} 个，失败的节点已保留在列表中`,
             );
+            if (failures.length > 0) {
+              setBatchResultModal({
+                failures,
+                open: true,
+                summary: `成功 ${successCount} 项，失败 ${failCount} 项`,
+                title: "批量删除结果",
+              });
+            }
           } else {
             toast.success(`成功删除 ${successCount} 个节点`);
           }
@@ -1610,6 +1648,14 @@ export default function NodePage({
           // 后端未给逐条回执时不按选中数虚报全成功：以服务器列表为准刷新，
           // 删除失败的节点会重新出现（A9-04 前端半）
           toast.success("删除请求已完成，正在刷新列表确认结果");
+          if (failures.length > 0) {
+            setBatchResultModal({
+              failures,
+              open: true,
+              summary: `失败 ${failCount} 项`,
+              title: "批量删除结果",
+            });
+          }
           await loadNodes({ silent: true });
         }
         setSelectedIds(new Set());
@@ -2838,6 +2884,21 @@ export default function NodePage({
         handleBatchDelete={handleBatchDelete}
         selectedIds={selectedIds}
         setBatchDeleteModalOpen={setBatchDeleteModalOpen}
+      />
+
+      <BatchActionResultModal
+        failures={batchResultModal.failures}
+        isOpen={batchResultModal.open}
+        summary={batchResultModal.summary}
+        title={batchResultModal.title}
+        onOpenChange={(open) => {
+          if (open) {
+            setBatchResultModal((prev) => ({ ...prev, open: true }));
+
+            return;
+          }
+          setBatchResultModal(EMPTY_BATCH_RESULT_MODAL_STATE);
+        }}
       />
 
       <NodeFilterModal

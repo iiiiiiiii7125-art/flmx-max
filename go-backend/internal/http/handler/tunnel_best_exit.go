@@ -19,6 +19,11 @@ const (
 	bestExitApplyRetryCooldown      = bestExitSwitchCooldown
 	bestExitMinLatencyAdvantageMs   = 20.0
 	bestExitMinScoreAdvantageRatio  = 0.15
+	// bestExitPendingFreshWindow 是切换确认计数的新鲜度窗口回退值：
+	// prober 每轮按 2×探测间隔注入实际窗口（见 setPendingFreshWindow），
+	// 未注入时（如单元测试直调状态机）用 2×冷却兜底。相邻两次确认
+	// 间隔超过窗口即视为陈旧确认，计数从头开始（B07-003）。
+	bestExitPendingFreshWindow = 2 * bestExitSwitchCooldown
 )
 
 type bestExitOwnerKey struct {
@@ -64,9 +69,15 @@ type bestExitProbeCacheKey struct {
 }
 
 type bestExitDecision struct {
-	AppliedExitNodeID          int64
-	PendingExitNodeID          int64
-	PendingCount               int
+	AppliedExitNodeID int64
+	PendingExitNodeID int64
+	PendingCount      int
+	// PendingSince/LastConfirmAt 是待确认候选的确认时间戳
+	// （B07-003 新鲜度）：PendingSince 为本串确认的起始轮，
+	// LastConfirmAt 为最近一次确认轮；相邻确认间隔超过新鲜度
+	// 窗口时整串作废重数。
+	PendingSince               time.Time
+	LastConfirmAt              time.Time
 	LastSwitchAt               time.Time
 	LastApplyFailureAt         time.Time
 	LastApplyFailureExitNodeID int64
@@ -74,9 +85,38 @@ type bestExitDecision struct {
 	Scores                     []bestExitCandidateScore
 }
 
+// clearPending 作废待确认候选及其确认时间戳。
+func (d *bestExitDecision) clearPending() {
+	d.PendingExitNodeID = 0
+	d.PendingCount = 0
+	d.PendingSince = time.Time{}
+	d.LastConfirmAt = time.Time{}
+}
+
 type bestExitManager struct {
 	mu        sync.Mutex
 	decisions map[bestExitOwnerKey]*bestExitDecision
+	// freshWindow 是确认新鲜度窗口，由 prober 每轮按 2×探测间隔
+	// 注入；<=0 时回退 bestExitPendingFreshWindow。
+	freshWindow time.Duration
+}
+
+// setPendingFreshWindow 记录当前探测节奏对应的新鲜度窗口。
+func (m *bestExitManager) setPendingFreshWindow(window time.Duration) {
+	if m == nil || window <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.freshWindow = window
+	m.mu.Unlock()
+}
+
+// pendingFreshWindowLocked 返回生效的新鲜度窗口（调用方须持 m.mu）。
+func (m *bestExitManager) pendingFreshWindowLocked() time.Duration {
+	if m.freshWindow > 0 {
+		return m.freshWindow
+	}
+	return bestExitPendingFreshWindow
 }
 
 func newBestExitManager() *bestExitManager {
@@ -304,8 +344,7 @@ func (m *bestExitManager) setApplied(key bestExitOwnerKey, exitNodeID int64, at 
 	defer m.mu.Unlock()
 	d := m.decisionLocked(key)
 	d.AppliedExitNodeID = exitNodeID
-	d.PendingExitNodeID = 0
-	d.PendingCount = 0
+	d.clearPending()
 	d.LastApplyFailureAt = time.Time{}
 	d.LastApplyFailureExitNodeID = 0
 	d.LastSwitchAt = at
@@ -343,6 +382,9 @@ func (m *bestExitManager) observeScores(key bestExitOwnerKey, scores []bestExitC
 	d.Scores = cloneBestExitScores(ordered)
 
 	if len(ordered) == 0 || !ordered[0].Success {
+		// B07-003：全失败轮打断确认的连续性，待确认计数一并清零，
+		// 不得让故障前的旧计数与恢复后的新胜出跨故障拼接。
+		d.clearPending()
 		d.LastReason = "all exits failed"
 		return bestExitDecisionResult(false, 0, d.LastReason, ordered)
 	}
@@ -355,8 +397,7 @@ func (m *bestExitManager) observeScores(key bestExitOwnerKey, scores []bestExitC
 		return bestExitDecisionResult(false, 0, d.LastReason, ordered)
 	}
 	if candidate.ExitNodeID == d.AppliedExitNodeID {
-		d.PendingExitNodeID = 0
-		d.PendingCount = 0
+		d.clearPending()
 		d.LastApplyFailureAt = time.Time{}
 		d.LastApplyFailureExitNodeID = 0
 		d.LastReason = "current exit remains best"
@@ -373,8 +414,7 @@ func (m *bestExitManager) observeScores(key bestExitOwnerKey, scores []bestExitC
 
 	current := findBestExitScore(ordered, d.AppliedExitNodeID)
 	if !bestExitHasMinimumAdvantage(candidate, current) {
-		d.PendingExitNodeID = 0
-		d.PendingCount = 0
+		d.clearPending()
 		d.LastReason = "insufficient advantage"
 		return bestExitDecisionResult(false, 0, d.LastReason, ordered)
 	}
@@ -382,10 +422,22 @@ func (m *bestExitManager) observeScores(key bestExitOwnerKey, scores []bestExitC
 	if d.PendingExitNodeID != candidate.ExitNodeID {
 		d.PendingExitNodeID = candidate.ExitNodeID
 		d.PendingCount = 1
+		d.PendingSince = now
+		d.LastConfirmAt = now
+		d.LastReason = "candidate pending confirmation"
+		return bestExitDecisionResult(false, 0, d.LastReason, ordered)
+	}
+	// B07-003 新鲜度：距上次确认超过窗口（含探测间隔被调大、
+	// 中间轮次缺席等情形），旧确认串作废，本轮按第一轮重数。
+	if !d.LastConfirmAt.IsZero() && now.Sub(d.LastConfirmAt) > m.pendingFreshWindowLocked() {
+		d.PendingCount = 1
+		d.PendingSince = now
+		d.LastConfirmAt = now
 		d.LastReason = "candidate pending confirmation"
 		return bestExitDecisionResult(false, 0, d.LastReason, ordered)
 	}
 	d.PendingCount++
+	d.LastConfirmAt = now
 	if d.PendingCount < bestExitConfirmationRounds {
 		d.LastReason = "candidate pending confirmation"
 		return bestExitDecisionResult(false, 0, d.LastReason, ordered)
