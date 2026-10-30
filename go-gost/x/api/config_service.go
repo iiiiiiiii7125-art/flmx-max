@@ -633,12 +633,10 @@ func resumeService(ctx *gin.Context) {
 
 	name := strings.TrimSpace(req.Service)
 
-	// 检查服务是否存在于注册表中
+	// 检查服务是否存在于注册表中。R2-A01-003：注册表缺失不再直接
+	// 判死——已暂停服务在 agent 重启/重载后被 loader 跳过、不进注册
+	// 表，但配置仍在册；先查配置，已暂停的在册服务走重建路径（见下）。
 	existingSvc := registry.ServiceRegistry().Get(name)
-	if existingSvc == nil {
-		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
-		return
-	}
 
 	// 查找配置中的服务
 	var serviceConfig *config.ServiceConfig
@@ -656,7 +654,11 @@ func resumeService(ctx *gin.Context) {
 	}
 
 	if serviceConfig == nil {
-		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s configuration not found", name)))
+		if existingSvc == nil {
+			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
+		} else {
+			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s configuration not found", name)))
+		}
 		return
 	}
 
@@ -667,21 +669,31 @@ func resumeService(ctx *gin.Context) {
 
 	paused, exists := serviceConfig.Metadata["paused"]
 	if !exists || paused != true {
+		if existingSvc == nil {
+			// 未注册且未暂停：与全未知服务同口径（历史行为）。
+			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
+			return
+		}
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, fmt.Sprintf("service %s is not paused", name)))
 		return
 	}
 
-	// 先关闭现有服务
-	existingSvc.Close()
-	registry.ServiceRegistry().Unregister(name)
+	// R2-A01-003: existingSvc == nil 即重建路径（已暂停但未注册，
+	// agent 重启/重载后）：无旧实例可关，直接按配置重建；端口被占时
+	// ParseService 绑定失败、fail-closed 报错。
+	if existingSvc != nil {
+		// 先关闭现有服务
+		existingSvc.Close()
+		registry.ServiceRegistry().Unregister(name)
 
-	// 强制断开端口的所有连接
-	if serviceConfig.Addr != "" {
-		_ = kill.ForceClosePortConnections(serviceConfig.Addr)
+		// 强制断开端口的所有连接
+		if serviceConfig.Addr != "" {
+			_ = kill.ForceClosePortConnections(serviceConfig.Addr)
+		}
+
+		// 等待端口释放
+		time.Sleep(500 * time.Millisecond)
 	}
-
-	// 等待端口释放
-	time.Sleep(500 * time.Millisecond)
 
 	// 重新解析并启动服务
 	svc, err := parser.ParseService(serviceConfig)
@@ -1075,13 +1087,6 @@ func resumeServices(ctx *gin.Context) {
 			return
 		}
 
-		// 检查服务是否存在
-		svc := registry.ServiceRegistry().Get(name)
-		if svc == nil {
-			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
-			return
-		}
-
 		// 查找配置中的服务
 		var serviceConfig *config.ServiceConfig
 		for _, s := range cfg.Services {
@@ -1096,8 +1101,17 @@ func resumeServices(ctx *gin.Context) {
 			}
 		}
 
+		// 检查服务是否存在：注册表与配置任一在册即可继续判定（两者
+		// 皆无才是真未知）。R2-A01-003：已暂停服务在 agent 重启/重载
+		// 后被 loader 跳过、不进注册表，但配置仍在册——不能再凭注册表
+		// 缺失一律报 not found，否则暂停服务重启后永远恢复不了。
+		svc := registry.ServiceRegistry().Get(name)
 		if serviceConfig == nil {
-			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s configuration not found", name)))
+			if svc == nil {
+				writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
+			} else {
+				writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s configuration not found", name)))
+			}
 			return
 		}
 
@@ -1107,6 +1121,14 @@ func resumeServices(ctx *gin.Context) {
 			if pausedVal, exists := serviceConfig.Metadata["paused"]; exists && pausedVal == true {
 				paused = true
 			}
+		}
+
+		// 未注册且未暂停：状态不一致（未暂停服务本应已注册运行），
+		// 保持历史 not found 口径，不静默跳过。未注册且已暂停则进入
+		// 恢复名单（service 为 nil），第二阶段按配置重建。
+		if svc == nil && !paused {
+			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
+			return
 		}
 
 		// 如果服务没有暂停(即正在运行)，跳过
@@ -1131,17 +1153,22 @@ func resumeServices(ctx *gin.Context) {
 
 	// 逐个恢复服务，如果失败则回滚
 	for _, str := range servicesToResume {
-		// 先关闭现有服务
-		str.service.Close()
-		registry.ServiceRegistry().Unregister(str.name)
+		// str.service == nil 是 R2-A01-003 的重建路径（已暂停但未
+		// 注册）：无旧实例可关，直接按配置重建；端口若被他人占用，
+		// ParseService 绑定失败、整单回滚（fail-closed）。
+		if str.service != nil {
+			// 先关闭现有服务
+			str.service.Close()
+			registry.ServiceRegistry().Unregister(str.name)
 
-		// 强制断开端口的所有连接
-		if str.serviceConfig.Addr != "" {
-			_ = kill.ForceClosePortConnections(str.serviceConfig.Addr)
+			// 强制断开端口的所有连接
+			if str.serviceConfig.Addr != "" {
+				_ = kill.ForceClosePortConnections(str.serviceConfig.Addr)
+			}
+
+			// 等待端口释放
+			time.Sleep(500 * time.Millisecond)
 		}
-
-		// 等待端口释放
-		time.Sleep(500 * time.Millisecond)
 
 		// 重新解析并启动服务
 		svc, err := parser.ParseService(str.serviceConfig)

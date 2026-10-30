@@ -73,7 +73,7 @@ func (p *program) Start() (err error) {
 		return err
 	}
 
-	// R17-A: 存量毒化 gost.json 自愈（见 healPersistedConfig；R18-F03 扩展
+	// R17-A: 存量毒化 gost.json 自愈（见 healPersistedConfig；R2-A01-001 补齐全部 17 类，R18-F03 扩展
 	// 到 chains / limiters / climiters）。
 	healPersistedConfig(cfg)
 
@@ -300,7 +300,7 @@ func (p *program) reloadConfig() error {
 	if err != nil {
 		return err
 	}
-	// R17-A: SIGHUP 重载走同一加载路径，毒化文件同样先自愈（R18-F03：含
+	// R17-A: SIGHUP 重载走同一加载路径，毒化文件同样先自愈（R2-A01-001：全部 17 类，R18-F03：含
 	// chains / limiters / climiters）。
 	healPersistedConfig(cfg)
 	if err := loader.Reload(cfg, p.run); err != nil {
@@ -318,20 +318,21 @@ func (p *program) reloadConfig() error {
 }
 
 // healPersistedConfig 去重启动/重载时加载的落盘配置（R17-A 仅服务；
-// R18-F03 扩展到链与限流器；R18-INT 补 rate limiter；R20-F04 补无引用
-// conn limiter 剪除），并剥离 nil 项
+// R18-F03 扩展到链与限流器；R18-INT 补 rate limiter；R2-A01-001 补齐
+// 全部 17 类命名切片；R20-F04 补无引用 conn limiter 剪除），并剥离
+// nil 项
 // （R19-F02：落盘 JSON null 读入后的内存形态，先剥离再加载、并重新落盘，
 // 否则 loader.Load 在首个 nil 类 panic、agent 退出且文件不被清理，
 // 重启后再次崩溃）。返回被去掉的重复名、无引用 conn limiter 名与 nil 项
-// 描述（五类去重 + nil 剥离 + 无引用剪除合并）。存量 gost.json
+// 描述（全集去重 + nil 剥离 + 无引用剪除合并）。存量 gost.json
 // 若含重复服务名，loader.Load 会在第二个同名服务处失败（监听器 eager 绑定报
-// address already in use，或 Register 报 registry: duplicate object）；若含
-// 重复链/限流器名，同样在第二个同名项的 Register 处报 registry: duplicate
+// address already in use，或 Register 报 registry: duplicate object）；其余
+// 命名类别同名时同样在第二个同名项的 Register 处报 registry: duplicate
 // object——任一分支都使 program.Start 直接返回错误、agent 退出，故先去重
 // （保留首次出现）再加载；去重后把清理过的配置重新落盘，否则下次启动仍会读
 // 到毒化文件。去重了哪些名以 Warn 日志按类写明。落盘失败只告警、不阻塞启动
-// （下次启动会再次自愈）。五类各调一次 Heal*、各落盘一次（毒化多类时最多
-// 5 次原子写；最终落盘文件含全部五类的愈合结果）。去重之后再剪无引用
+// （下次启动会再次自愈）。各类各调一次 Heal*、各落盘一次（毒化多类时每类
+// 一次原子写；最终落盘文件含全部类别的愈合结果）。去重之后再剪无引用
 // conn limiter（R20-F04，见 config.PruneUnreferencedCLimiters）：存量孤儿
 // （如删转发/更新去限流后残留的 rule_conn_limit_<id>）在下次启动/重载时
 // 自愈，剪掉后同样重新落盘；user_conn_limit_* 永不剪。
@@ -349,22 +350,18 @@ func healPersistedConfig(cfg *config.Config) []string {
 		}
 		removed = append(removed, stripped...)
 	}
-	heal := func(kind string, fn func(*config.Config) ([]string, error)) {
-		names, err := fn(cfg)
-		if len(names) == 0 {
-			return
+	// R2-A01-001: 去重走 config.HealPersistedDuplicates 的全集聚合入口
+	// （全部 17 类命名切片，枚举与 Config 结构由 x/config 的回归测试以
+	// 反射断言差集 ∅）。此前只接线五类，其余 12 类（hop / bypass /
+	// resolver 等）同名毒化时 loader.Load 直接 duplicate object 致命
+	// 退出、文件无人清理、节点永久离线。
+	for _, heal := range config.HealPersistedDuplicates(cfg) {
+		logger.Default().Warnf("startup config self-heal: removed duplicate %s(s) %v from persisted config", heal.Kind, heal.Removed)
+		if heal.Err != nil {
+			logger.Default().Warnf("startup config self-heal: failed to persist deduplicated config: %v", heal.Err)
 		}
-		logger.Default().Warnf("startup config self-heal: removed duplicate %s(s) %v from persisted config", kind, names)
-		if err != nil {
-			logger.Default().Warnf("startup config self-heal: failed to persist deduplicated config: %v", err)
-		}
-		removed = append(removed, names...)
+		removed = append(removed, heal.Removed...)
 	}
-	heal("service", config.HealPersistedServices)
-	heal("chain", config.HealPersistedChains)
-	heal("limiter", config.HealPersistedLimiters)
-	heal("conn limiter", config.HealPersistedCLimiters)
-	heal("rate limiter", config.HealPersistedRLimiters)
 	// R20-F04: 剪无引用 conn limiter（存量孤儿清理）。去重之后、加载之前：
 	// 引用集按去重后的存活服务算；user_conn_limit_* 永不剪；剪掉后重新
 	// 落盘，否则下次启动仍会读到孤儿。落盘失败只告警、不阻塞启动。

@@ -2296,29 +2296,46 @@ func buildAgentRestartScript(tmpPath, binaryPath string) string {
 }
 
 // updateLocalConfigJSON 将 http/tls/socks 写入工作目录下的 config.json
+//
+// R2-A01-002: 写回必须保全其余字段。此前用仅含 addr/secret/http/tls/
+// socks 五字段的结构体整表重构写回，安装时落盘的 proxy（升级代理前缀，
+// resolveAgentUpgradeProxy 的本地兜底）与任何结构体外字段（手工加的
+// 键）都被静默吞掉，后续不带 proxyUrl 的升级失去本地代理兜底且无日志。
+// 改为 map 合并：既有键以 json.RawMessage 原样保留、只覆写三个目标键，
+// 规范字段全集与未知字段均不丢失。文件不存在时按空 map 起步（与旧行为
+// 一致地新建）；文件存在但不是 JSON 对象时 fail-closed 报错——解析不了
+// 的文件不许整表覆盖销毁（LoadConfig 启动期亦会拒绝该文件）。
 func updateLocalConfigJSON(httpVal int, tlsVal int, socksVal int) error {
 	path := "config.json"
 
-	// 读取现有配置
-	type LocalConfig struct {
-		Addr   string `json:"addr"`
-		Secret string `json:"secret"`
-		Http   int    `json:"http"`
-		Tls    int    `json:"tls"`
-		Socks  int    `json:"socks"`
-	}
-
-	var cfg LocalConfig
+	fields := map[string]json.RawMessage{}
 	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &cfg)
+		if err := json.Unmarshal(b, &fields); err != nil {
+			return fmt.Errorf("解析现有 config.json 失败，拒绝覆盖写回: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 
-	cfg.Http = httpVal
-	cfg.Tls = tlsVal
-	cfg.Socks = socksVal
+	setInt := func(key string, val int) error {
+		raw, err := json.Marshal(val)
+		if err != nil {
+			return err
+		}
+		fields[key] = raw
+		return nil
+	}
+	if err := setInt("http", httpVal); err != nil {
+		return err
+	}
+	if err := setInt("tls", tlsVal); err != nil {
+		return err
+	}
+	if err := setInt("socks", socksVal); err != nil {
+		return err
+	}
 
-	// 写回
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return err
 	}
