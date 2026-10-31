@@ -45,3 +45,31 @@ func (p *bypassWrapper) IsWhitelist() bool {
 	}
 	return bp.IsWhitelist()
 }
+
+// dialTargetPinner mirrors bypass.DialTargetPinner (kept local so
+// this package does not import the bypass implementation package):
+// bypasses that can pin a hostname dial target to a validated IP
+// literal at the dial point.
+type dialTargetPinner interface {
+	PinDialTarget(ctx context.Context, network, addr string) (string, error)
+}
+
+// PinDialTarget forwards the dial-point pin to the registered
+// bypass when it implements DialTargetPinner (R3-K1 / A02-001).
+// This name wrapper is an indirection layer of the same kind as
+// BypassGroup and must not hide the pinning capability from
+// consumers asserting the interface. When the name does not
+// resolve or the underlying bypass cannot pin, the target passes
+// through unchanged — the same "no pinning member" semantics as a
+// group without a pinner.
+func (w *bypassWrapper) PinDialTarget(ctx context.Context, network, addr string) (string, error) {
+	bp := w.r.get(w.name)
+	if bp == nil {
+		return addr, nil
+	}
+	pinner, ok := bp.(dialTargetPinner)
+	if !ok {
+		return addr, nil
+	}
+	return pinner.PinDialTarget(ctx, network, addr)
+}
