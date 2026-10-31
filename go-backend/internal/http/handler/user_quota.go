@@ -248,6 +248,13 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 			log.Printf("quota release skipped op=pending_delete forward_id=%d", forwardID)
 			continue
 		}
+		// R3 B08-001：配额释放是自动恢复面，同样受隧道禁用门约束——
+		// 禁用隧道上的转发保持暂停、留待隧道重新启用后由管理员恢复，
+		// 不得被配额窗口滚动连带激活（与恢复/批量恢复/重部署同口径）。
+		if err := h.ensureTunnelEnabledForForward(forward.TunnelID); err != nil {
+			log.Printf("quota release skipped op=tunnel_not_enabled forward_id=%d err=%v", forwardID, err)
+			continue
+		}
 		if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
 			continue
 		}

@@ -4623,6 +4623,24 @@ func (h *Handler) forwardResetFlow(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// ensureTunnelEnabledForForward 是「使转发由暂停/停止转为运行」各入口
+// 共用的隧道禁用门（R3 B08-001）：隧道不存在/已禁用即拒绝，与
+// forwardCreate 的「隧道已禁用」同口径。此前恢复/批量恢复/批量重部署/
+// 配额释放四面都漏了这道门，禁用隧道上的暂停转发可被重新激活且三引擎
+// 后果分裂（gost 真下发、realm 被 override 强行恢复、nft 规则不生成但
+// DB 假活）。四面共用本函数，不再各自漏检（闭合枚举见
+// lanes/K6/r3/enumeration.md）。
+func (h *Handler) ensureTunnelEnabledForForward(tunnelID int64) error {
+	tunnel, err := h.getTunnelRecord(tunnelID)
+	if err != nil {
+		return errors.New("隧道不存在")
+	}
+	if tunnel.Status != 1 {
+		return errors.New("隧道已禁用")
+	}
+	return nil
+}
+
 func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 	id := idFromBody(r, w)
 	if id <= 0 {
@@ -4635,6 +4653,10 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if err := h.ensureTunnelEnabledForForward(forward.TunnelID); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	now := time.Now().UnixMilli()
@@ -4936,6 +4958,13 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 		names   map[int64]string
 	}
 	nftGroups := make(map[int64]*nftIntent)
+	// R3 B08-002：nft 意图项的 status 写入推迟到分组 reconcile 之后，
+	// 批前 DB 计数会被同批多条共享。恢复判定通过的 nft 意图项按
+	// （用户）与（用户，隧道）两维度预留名额，后续条目的 Num 判定
+	// 把预留计入；gost 条目即时写库、计数实时可见，不占预留。
+	type numReservationKey struct{ userID, tunnelID int64 }
+	reservedByUser := make(map[int64]int64)
+	reservedByUserTunnel := make(map[numReservationKey]int64)
 	for _, id := range ids {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
@@ -4943,8 +4972,15 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			failures = appendBatchFailure(failures, id, "", accessErr)
 			continue
 		}
+		resKey := numReservationKey{userID: forward.UserID, tunnelID: forward.TunnelID}
 		if action == "resume" {
-			if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
+			// R3 B08-001：与单条恢复共用隧道禁用门，逐条记失败。
+			if err := h.ensureTunnelEnabledForForward(forward.TunnelID); err != nil {
+				f++
+				failures = appendBatchFailure(failures, id, forward.Name, err)
+				continue
+			}
+			if err := h.ensureUserTunnelForwardAllowedWithReserved(forward.UserID, forward.TunnelID, now, reservedByUser[forward.UserID], reservedByUserTunnel[resKey]); err != nil {
 				f++
 				failures = appendBatchFailure(failures, id, forward.Name, err)
 				continue
@@ -4978,6 +5014,10 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 				intent.exclude[id] = true
 			} else {
 				intent.include = append(intent.include, forward)
+				// R3 B08-002：意图项已通过 Num 判定但尚未写库，
+				// 预留名额供同批后续条目计数（见循环前注释）。
+				reservedByUser[forward.UserID]++
+				reservedByUserTunnel[resKey]++
 			}
 			intent.names[id] = forward.Name
 			continue
@@ -5053,6 +5093,13 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 		if accessErr != nil {
 			f++
 			failures = appendBatchFailure(failures, id, "", accessErr)
+			continue
+		}
+		// R3 B08-001：重部署会把转发服务重新下发到节点，与恢复同属
+		// 「转入运行」面，同步前共用隧道禁用门，逐条记失败。
+		if err := h.ensureTunnelEnabledForForward(forward.TunnelID); err != nil {
+			f++
+			failures = appendBatchFailure(failures, id, forward.Name, err)
 			continue
 		}
 		if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
@@ -6130,60 +6177,114 @@ type tunnelChainPortKey struct {
 	nodeID    int64
 }
 
+// tunnelChainNodePort is a tunnel's persisted non-entry port for one
+// node, indexed by node alone (R3 B06-001): a node appears at most once
+// among a tunnel's non-entry segments, so the node identifies its
+// persisted port unambiguously even when its position (inx) moved.
+type tunnelChainNodePort struct {
+	chainType int
+	port      int
+}
+
 // existingTunnelChainPorts loads the tunnel's persisted non-entry ports
-// (chain hops + exits) for update-time reuse decisions (P01-002).
-func (h *Handler) existingTunnelChainPorts(tx *gorm.DB, tunnelID int64) (map[tunnelChainPortKey]int, error) {
+// (chain hops + exits) for update-time reuse decisions (P01-002). It
+// returns two indexes over the same rows: by exact slot
+// (chainType, inx, nodeID) and by node (R3 B06-001 — position shifts
+// must still find the node's own port).
+func (h *Handler) existingTunnelChainPorts(tx *gorm.DB, tunnelID int64) (map[tunnelChainPortKey]int, map[int64]tunnelChainNodePort, error) {
 	rows, err := h.repo.ListChainNodesForTunnelTx(tx, tunnelID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ports := make(map[tunnelChainPortKey]int, len(rows))
+	byNode := make(map[int64]tunnelChainNodePort, len(rows))
 	for _, row := range rows {
 		if row.Port > 0 && (row.ChainType == 2 || row.ChainType == 3) {
 			ports[tunnelChainPortKey{chainType: row.ChainType, inx: int(row.Inx), nodeID: row.NodeID}] = row.Port
+			byNode[row.NodeID] = tunnelChainNodePort{chainType: row.ChainType, port: row.Port}
 		}
 	}
-	return ports, nil
+	return ports, byNode, nil
 }
 
 // resolveTunnelSegmentPort decides the port for one non-entry segment
 // node during prepareTunnelCreateState when the request carries no
 // explicit port:
 //   - create (excludeTunnelID == 0): random pick, as before;
-//   - update: reuse the slot's persisted port while it is still legal —
+//   - update: reuse the node's persisted port while it is still legal —
 //     inside the node's port spec and unoccupied under the unified
 //     four-source predicate (excluding this tunnel). A rename-only edit
 //     must not silently drift ports (P01-002). Only when the old port
-//     is taken, out of spec, or the slot has no persisted port does it
+//     is taken, out of spec, or the node has no persisted port does it
 //     re-pick — with the same random policy as create (the old update
 //     path used the sequential minimum, which drifted ports on every
 //     edit and piled them at the bottom of the range). A re-pick that
 //     moves the port is recorded in state.PortChanges so the update
 //     receipt can warn about it.
-func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState, nodeID int64, chainType int, inx int, allocated map[int64]int, excludeTunnelID int64, existing map[tunnelChainPortKey]int) (int, error) {
+//
+// R3 B06-001: reuse identity is the node, not the slot. The exact-slot
+// index (chainType, inx, nodeID) is tried first; on a miss the by-node
+// index (chainType, nodeID) still finds the node's own persisted port
+// after position shifts (hop reorder, prepend, deleting an earlier
+// segment), so a position-only edit keeps the port. Any update-time
+// re-pick of a node that had a persisted port in this tunnel — whatever
+// the reason — is recorded in state.PortChanges; only a genuinely new
+// segment (node had no persisted port here) picks silently, as create
+// does. Entry segments never pass through this function and keep their
+// create-time immutability (P01 口径）.
+func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState, nodeID int64, chainType int, inx int, allocated map[int64]int, excludeTunnelID int64, existing map[tunnelChainPortKey]int, existingByNode map[int64]tunnelChainNodePort) (int, error) {
 	if excludeTunnelID > 0 {
 		if oldPort, ok := existing[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}]; ok && oldPort > 0 {
-			reusable, err := h.repo.TunnelChainPortReusableTx(tx, nodeID, oldPort, excludeTunnelID)
-			if err != nil {
-				return 0, err
+			return h.reuseOrRepickTunnelSegmentPort(tx, state, nodeID, chainType, oldPort, allocated, excludeTunnelID)
+		}
+		if nodePort, ok := existingByNode[nodeID]; ok && nodePort.port > 0 {
+			if nodePort.chainType == chainType {
+				// Same node, same segment role, new position: the
+				// persisted port is still this node's port.
+				return h.reuseOrRepickTunnelSegmentPort(tx, state, nodeID, chainType, nodePort.port, allocated, excludeTunnelID)
 			}
-			if reusable {
-				allocated[nodeID] = oldPort
-				return oldPort, nil
-			}
+			// The node kept a persisted port in this tunnel but in a
+			// different segment role: not reused, and the re-pick must
+			// not be silent (P01 口径：未沿用存量口的重挑一律回执点名）。
 			port, err := h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
 			if err != nil {
 				return 0, err
 			}
-			if port != oldPort {
+			if port != nodePort.port {
 				state.PortChanges = append(state.PortChanges, tunnelPortChange{
-					NodeID: nodeID, ChainType: chainType, OldPort: oldPort, NewPort: port,
+					NodeID: nodeID, ChainType: chainType, OldPort: nodePort.port, NewPort: port,
 				})
 			}
 			return port, nil
 		}
 	}
 	return h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
+}
+
+// reuseOrRepickTunnelSegmentPort keeps oldPort while it is still legal
+// for the node (in spec, unoccupied under the unified four-source
+// predicate excluding this tunnel); otherwise it re-picks with the
+// create-time random policy and records the move in state.PortChanges
+// so the update receipt warns instead of drifting silently (P01-002).
+func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState, nodeID int64, chainType int, oldPort int, allocated map[int64]int, excludeTunnelID int64) (int, error) {
+	reusable, err := h.repo.TunnelChainPortReusableTx(tx, nodeID, oldPort, excludeTunnelID)
+	if err != nil {
+		return 0, err
+	}
+	if reusable {
+		allocated[nodeID] = oldPort
+		return oldPort, nil
+	}
+	port, err := h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
+	if err != nil {
+		return 0, err
+	}
+	if port != oldPort {
+		state.PortChanges = append(state.PortChanges, tunnelPortChange{
+			NodeID: nodeID, ChainType: chainType, OldPort: oldPort, NewPort: port,
+		})
+	}
+	return port, nil
 }
 
 func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface{}, tunnelType int, excludeTunnelID int64) (*tunnelCreateState, error) {
@@ -6222,9 +6323,10 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		// P01-002：更新时先载入本隧道现存的非入口段口，供缺省口走
 		// 「沿用现口、不可用才重挑」口径（见 resolveTunnelSegmentPort）。
 		existingPorts := map[tunnelChainPortKey]int{}
+		existingPortsByNode := map[int64]tunnelChainNodePort{}
 		if excludeTunnelID > 0 {
 			var err error
-			existingPorts, err = h.existingTunnelChainPorts(tx, excludeTunnelID)
+			existingPorts, existingPortsByNode, err = h.existingTunnelChainPorts(tx, excludeTunnelID)
 			if err != nil {
 				return nil, err
 			}
@@ -6245,7 +6347,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				}
 				if !isRemote {
 					var err error
-					port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 3, idx+1, allocated, excludeTunnelID, existingPorts)
+					port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 3, idx+1, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
 					if err != nil {
 						return nil, err
 					}
@@ -6280,7 +6382,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 					}
 					if !isRemote {
 						var err error
-						port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 2, hopIdx+1, allocated, excludeTunnelID, existingPorts)
+						port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 2, hopIdx+1, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
 						if err != nil {
 							return nil, err
 						}
@@ -8517,7 +8619,13 @@ func (h *Handler) syncUserTunnelForwards(userID, tunnelID int64) error {
 }
 
 func (h *Handler) syncUserMaxConnForwards(userID int64) ([]string, error) {
-	forwards, err := h.listActiveForwardsByUser(userID)
+	// R3 B09-002（分诊 §5.2 方案 ①）：枚举该用户全部转发，不限
+	// status=1。此前只重下发启用中的转发，暂停中的转发被跳过后，
+	// 其节点上的 user_conn_limit 停留在旧值、恢复路径又不补下发，
+	// 与 DB 永久分叉且无告警。syncForwardServicesWithWarnings 内部
+	// 对 status!=1 的转发在推送后复位暂停（与限速规则/用户隧道两条
+	// 重下发面同形），故全量枚举不改变暂停态语义。
+	forwards, err := h.repo.ListForwardsByUser(userID)
 	if err != nil {
 		return nil, err
 	}
