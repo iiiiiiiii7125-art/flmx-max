@@ -57,7 +57,7 @@ FLMX — traffic forwarding panel: Go admin API + Vite/React UI + Go agent.
 
 - Backend: `(cd go-backend && go test ./...)` — includes contract tests in `tests/contract/`.
 - Frontend: no test infrastructure.
-- CI runs a group of six PostgreSQL contract tests (`TestPostgres*`): env var `FLMX_POSTGRES_TEST_DSN`.
+- CI runs a group of ten PostgreSQL contract tests (`TestPostgres*`): env var `FLMX_POSTGRES_TEST_DSN`. <!-- [K11-COUNT:testpostgres=10] count is mechanically reconciled against the code by scripts/check-doc-consistency.sh item 10; update number and marker together when TestPostgres* cases change -->
 
 ## Build quirks
 

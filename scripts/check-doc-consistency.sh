@@ -18,6 +18,16 @@
 #      panel_install.sh / install.sh 中本站 github.io 链接逐个按
 #      doc 结构 + cleanUrls 规则映射，映射不到即失败——成功提示曾
 #      打印 guide.html，该地址在 cleanUrls 下必然 404）。
+#   10. 易漂移计数对账（X05-OPT-01 / R3-K11 常设门）：文档与注释中写死的
+#      TestPostgres* 用例数、go-gost/x 有/无测试包数，须以方括号标记
+#      [K11-COUNT:<键>=<数字>] 声明（标记藏于 HTML/YAML 注释内、渲染
+#      不可见），本门机械实数与声称值对账，不符即失败。新机制合入若
+#      新增同类写死计数，必须改用标记形态并在本门登记对账键；裸数字
+#      计数无机械门可守，只能靠审计枚举人工复扫（立此规矩防 K10 式
+#      「新增 4 个 PG 契约用例、文档仍写 6 个」的静默漂移复发）。
+#      x 包计数需 go 工具链（go list）：CI 的 frontend job 跑本门时
+#      GitHub 托管镜像自带 go；本地无 go 时该子项以 PENDING 显式报告
+#      未核（不计失败、不得静默跳过），TestPostgres 子项纯 grep、恒硬核。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -166,6 +176,42 @@ SITEEOF
   else
     note_ok "安装脚本文档站链接全部命中 doc 路由表（$(echo "$site_urls" | wc -l) 条）"
   fi
+fi
+
+# ── 10. 易漂移计数对账（X05-OPT-01 / R3-K11）：TestPostgres* 用例数 + x 包计数
+# 声称值只认 [K11-COUNT:<键>=<数字>] 标记（可多处声明，各处须彼此一致且等于实数）。
+# (a) TestPostgres* 契约用例数：文档声称 vs tests/contract 的 func TestPostgres* 实数。
+tp_actual=$(grep -rh 'func TestPostgres' go-backend/tests/contract --include='*_test.go' | wc -l | tr -d ' ')
+tp_claims=$(grep -rhoP '\[K11-COUNT:testpostgres=\K[0-9]+' doc/guide/postgresql.md AGENTS.md 2>/dev/null | sort -u)
+if [ -z "$tp_actual" ] || [ "$tp_actual" = "0" ]; then
+  note_fail "计数对账前提失效：go-backend/tests/contract 未数到 TestPostgres* 用例"
+elif [ -z "$tp_claims" ]; then
+  note_fail "计数对账：doc/guide/postgresql.md 与 AGENTS.md 未声明 [K11-COUNT:testpostgres=N] 标记（实数 $tp_actual，裸数字计数不受门守）"
+elif [ "$tp_claims" != "$tp_actual" ]; then
+  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（grep 'func TestPostgres' go-backend/tests/contract）"
+else
+  note_ok "计数对账：TestPostgres* 用例数文档声称与实数一致（$tp_actual）"
+fi
+# (b) go-gost/x 包计数：ci-build.yml 注释声称 vs go list 实数（TestGoFiles+XTestGoFiles）。
+if command -v go >/dev/null 2>&1; then
+  x_total=$(cd go-gost/x && go list ./... 2>/dev/null | wc -l | tr -d ' ')
+  x_tested=$(cd go-gost/x && go list -f '{{if or .TestGoFiles .XTestGoFiles}}1{{end}}' ./... 2>/dev/null | grep -c 1 | tr -d ' ')
+  if [ -z "$x_total" ] || [ "$x_total" = "0" ]; then
+    note_fail "计数对账前提失效：go list 无法枚举 go-gost/x 包"
+  else
+    x_untested=$((x_total - x_tested))
+    x_claims_t=$(grep -hoP '\[K11-COUNT:x-tested=\K[0-9]+' .github/workflows/ci-build.yml | sort -u)
+    x_claims_u=$(grep -hoP '\[K11-COUNT:x-untested=\K[0-9]+' .github/workflows/ci-build.yml | sort -u)
+    if [ -z "$x_claims_t" ] || [ -z "$x_claims_u" ]; then
+      note_fail "计数对账：ci-build.yml 未声明 [K11-COUNT:x-tested/x-untested=N] 标记（实数 有测试 $x_tested / 无测试 $x_untested / 共 $x_total）"
+    elif [ "$x_claims_t" = "$x_tested" ] && [ "$x_claims_u" = "$x_untested" ]; then
+      note_ok "计数对账：x 模块包计数与 go list 实数一致（有测试 $x_tested / 无测试 $x_untested / 共 $x_total）"
+    else
+      note_fail "计数对账：x 包计数声称 tested=${x_claims_t} untested=${x_claims_u} ≠ 实数 tested=$x_tested untested=$x_untested（共 $x_total）"
+    fi
+  fi
+else
+  note_pend "计数对账：当前环境无 go 工具链，x 模块包计数未核（TestPostgres 子项已硬核）；请在装有 Go 的环境复跑本门"
 fi
 
 echo "----"

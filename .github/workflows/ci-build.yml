@@ -132,7 +132,7 @@ jobs:
       - name: Run PostgreSQL contract test
         env:
           FLMX_POSTGRES_TEST_DSN: 'postgres://flux_test:flux_test_pass@127.0.0.1:5432/flux_test?sslmode=disable'
-        run: go test ./tests/contract -run 'TestPostgres' -count=1 -v
+        run: go test ./tests/contract -run 'TestPostgres' -count=1 -v -timeout 30m
 
   agent:
     name: Build Agent
@@ -159,17 +159,27 @@ jobs:
   # B0 盘点的 10 个基线失败长期无人拦。纳入 go-backend 与 go-gost 两
   # 个模块。
   # X02-004（审计闭环 Round 1 / C17）：go-gost/x 不再整模块排除。x 共
-  # 206 个包，其中 27 个带测试文件，现以 -short 全量纳入本 job；宿主机
+  # 206 个包，其中 29 个带测试文件，现以 -short 全量纳入本 job；宿主机
   # 依赖的实机校验腿已在用例内自带能力探测门（TestNftScriptPortHopping
   # 的 fib 探测 F-091、TestNftScriptWhitelist 的 nft -c 可用性探测），
   # 环境不支持时只跳实机腿、脚本内容断言照常执行。FLMX 自研包必测
   # 清单（不得再被排除）：x/socket、x/kernel、x/bypass、x/service、
-  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余 179 个
+  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余 177 个
   # 包无任何测试文件（继承上游的协议处理面包），属已知缺口、非本 job
   # 引入，新增 FLMX 改动落到无测试包时须同步补测试。
+  # [K11-COUNT:x-tested=29] [K11-COUNT:x-untested=177] 上行包计数由
+  # scripts/check-doc-consistency.sh 第 10 项以 go list 机械对账
+  # （R3-K11 / X02-002），增减包或测试文件须同步更新数字与标记。
   # 已知状态（B7 落地时）：fix 分支基线不含 B4，go-backend 全量测试含
   # B0 已确认的 2 个 F-003 确定性失败，本 job 在 B4 合入 main 前会红、
   # 合入后转绿——属预期，不是本 job 引入的回归。
+  # X02-001（R3-K11）：三腿统一显式 -timeout 30m，与本仓本地长测试
+  # 纪律对齐。此前裸 go test 靠单包默认 600s 上限，而 go-backend 的
+  # internal/http/handler 包串行基线已达 568s（默认上限的 94%）且逐轮
+  # 增长，逼近上限触发的超时假 FAIL 形态为裸 FAIL、易误判成回归。
+  # 水位线（预警口径）：handler 包串行基线 >480s（默认上限的 80%）
+  # 即视为逼近预警——新增大用例前先评估拆包/并行化，不得再靠抬高
+  # 超时续命；本节三腿的 -timeout 只许在基线复核后随本注释同步调整。
   backend-tests:
     name: Go Full Tests (backend + agent + x)
     runs-on: ubuntu-latest
@@ -187,15 +197,15 @@ jobs:
 
       - name: Backend full tests
         working-directory: go-backend
-        run: go test ./...
+        run: go test -timeout 30m ./...
 
       - name: Agent full tests
         working-directory: go-gost
-        run: go test ./...
+        run: go test -timeout 30m ./...
 
       - name: Agent x module tests
         working-directory: go-gost/x
-        run: go test -short ./...
+        run: go test -short -timeout 30m ./...
 
   # X02-002（审计闭环 Round 1 / C17）：tests/e2e 此前无任何 CI 接入，
   # 且默认账号与后端 seed 不一致（admin_user 不是用户名、必然登录失败），
