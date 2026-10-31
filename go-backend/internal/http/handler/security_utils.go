@@ -183,6 +183,17 @@ func IsValidNodeAddress(addr string) error {
 	if kernel.HostHasStructuralChars(addr) {
 		return fmt.Errorf("address must not contain @, #, commas, whitespace or control characters")
 	}
+	// R3 B04-001：主机名字符集门（LDH 口径）。节点/面板地址会被无
+	// 引号拼入以 root 执行的安装命令（-a %s）与订阅权威段，结构字符
+	// 集（上方）只拒 @ # , / ? 与空白控制字符，; $ ` | & ' " ( ) 等
+	// shell 元字符仍可穿透。此处把地址整体收紧为地址字符集：字母、
+	// 数字、连字符、点、冒号（端口/IPv6）、方括号（括号 IPv6）与 %
+	// （IPv6 zone id，fe80::1%eth0 既有可存性保留）。本谓词是全部
+	// 地址写面与 validatePanelInstallAddr（安装命令生成面）的共同
+	// 祖先，一处落门全集覆盖。
+	if !isAddressCharset(addr) {
+		return fmt.Errorf("address must contain only letters, digits, hyphens, dots, colons, brackets or %% (IPv6 zone id)")
+	}
 	// A bare IPv6 literal contains multiple colons, so net.SplitHostPort treats
 	// it as a malformed host:port pair. Accept IP literals before attempting
 	// host:port parsing; netip also handles scoped IPv6 addresses.
@@ -221,6 +232,72 @@ func IsValidNodeAddress(addr string) error {
 		if _, err := netip.ParseAddr(host); err != nil {
 			return fmt.Errorf("invalid IPv4 address")
 		}
+	}
+	return nil
+}
+
+// isAddressCharset 判断字符串是否全由地址字符组成（R3 B04-001）：
+// 字母、数字与 - . : [ ] %。主机名（LDH）、IPv4、host:port、裸/括号
+// IPv6 字面量与 zone id 形态都在集内；shell 元字符与非 ASCII 一律
+// 在集外。供 IsValidNodeAddress（地址整体）与代理 URL 的 Host 段共用。
+func isAddressCharset(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-' || c == '.' || c == ':' || c == '[' || c == ']' || c == '%':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// shellMetaChars 是不得出现在无引号拼入 root 安装命令的值中的
+// shell 元字符集（R3 B04-001）：含命令分隔/替换/引用/重定向/通配
+// 与交互式 shell 的历史展开字符。
+const shellMetaChars = ";$`|&'\"()<>\\{}*!?#"
+
+// validateGithubProxyURL 校验 GitHub 代理地址（R3 B04-001）：该值在
+// 节点安装命令里以 PROXY_URL=%s 与 curl 前缀 %s/... 两处无引号拼入
+// 以 root 执行的命令。写面（normalizeAndValidateConfigValue）与消费
+// 面（getGithubProxyConfig 兜底）共用本谓词：全串不得含 shell 元字
+// 符或空白/控制字符；URL 必须可解析、scheme 为 http/https、无
+// userinfo/查询/片段（前缀型地址语义下查询只会破坏拼接路径）、
+// Host 过 isAddressCharset。空值合法（调用方回落默认）。
+func validateGithubProxyURL(value string) error {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return nil
+	}
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c <= ' ' || c == 0x7f || strings.ContainsRune(shellMetaChars, rune(c)) {
+			return fmt.Errorf("包含 shell 元字符或空白/控制字符")
+		}
+	}
+	candidate := raw
+	if !strings.Contains(candidate, "://") {
+		candidate = "https://" + candidate
+	}
+	u, err := url.Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败：%v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("只允许 http/https 协议")
+	}
+	if u.User != nil {
+		return fmt.Errorf("不得包含用户信息")
+	}
+	if u.Host == "" || !isAddressCharset(u.Host) {
+		return fmt.Errorf("主机名包含非法字符")
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("不得包含查询串或片段")
 	}
 	return nil
 }

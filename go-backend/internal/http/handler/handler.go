@@ -1697,12 +1697,25 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		if err := validateNoEmptyLabelAddr(strings.TrimSpace(value)); err != nil {
 			return "", fmt.Errorf("面板地址主机名格式无效：%w", err)
 		}
+		// R3 B04-001：写面先拒——面板地址是安装命令 -a 的无引号拼接
+		// 值，与生成面共用 validatePanelInstallAddr（内含 LDH 字符集
+		// 门），保存期即拦截 shell 元字符，不等生成安装命令时才发现。
+		if err := validatePanelInstallAddr(value); err != nil {
+			return "", fmt.Errorf("面板地址格式无效：%w", err)
+		}
 		return value, nil
 	case "github_proxy_url":
 		// 终审 L1-F-07/L1-F-08：URL 取 hostname 做空标签判；与订阅源
 		// 保存面同一口径，在此一次写好，不做 DNS。
 		if err := validateNoEmptyLabelURLHost(value); err != nil {
 			return "", fmt.Errorf("代理地址主机名格式无效：%w", err)
+		}
+		// R3 B04-001：写面先拒——代理地址无引号拼入 root 安装命令
+		// （PROXY_URL 与 curl 前缀两处），保存期即过完整校验（URL
+		// 解析＋Host 字符集＋全串元字符）；消费面 getGithubProxyConfig
+		// 对存量坏值另有兜底。
+		if err := validateGithubProxyURL(value); err != nil {
+			return "", fmt.Errorf("代理地址格式无效：%w", err)
 		}
 		return value, nil
 	case "notify_webhook_url":
@@ -1893,6 +1906,14 @@ func (h *Handler) userPackage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+
+	// R3 B01-001：改密是持 JWT 的在线密码校验面，此前无任何限流——
+	// token 泄露后可无限猜测当前密码（猜中即改密完成持久接管）。
+	// 与 login / passkeyRegisterBegin 同口径接入 IP 限流（10/min）。
+	// 密码校验面全集与守卫对应关系见 password_verify_census 回归。
+	if !h.checkLoginRateLimit(w, r) {
 		return
 	}
 

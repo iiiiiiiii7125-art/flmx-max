@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -81,7 +82,16 @@ func ValidateToken(token, secret string) (Claims, bool) {
 	return claims, true
 }
 
+// maxTokenBytes 是 ParseClaims 入口的 token 总长上限（R3 B01-002）。
+// 本包签发的 token 约 300B；8KB 留足余量，未认证超长 Authorization
+// 头在任何解析/验签工作之前即被拒绝。两个消费方（HTTP middleware
+// 与 WS ValidateToken）共用 ParseClaims，一处设限两处覆盖。
+const maxTokenBytes = 8192
+
 func ParseClaims(token, secret string) (Claims, error) {
+	if len(token) > maxTokenBytes {
+		return Claims{}, errors.New("token too long")
+	}
 	parts := splitToken(token)
 	if len(parts) != 3 {
 		return Claims{}, errors.New("invalid token")
@@ -125,19 +135,12 @@ func ParseClaims(token, secret string) (Claims, error) {
 	return claims, nil
 }
 
+// splitToken 按 '.' 切分 token（R3 B01-002：旧实现逐字节
+// current += string(token[i]) 拼接呈 O(n²)，未认证超长头单请求
+// 可烧数秒 CPU；strings.Split 为线性实现，语义与旧实现等价——
+// 空串得 [""]、尾点保留空段）。
 func splitToken(token string) []string {
-	parts := make([]string, 0, 3)
-	current := ""
-	for i := 0; i < len(token); i++ {
-		if token[i] == '.' {
-			parts = append(parts, current)
-			current = ""
-			continue
-		}
-		current += string(token[i])
-	}
-	parts = append(parts, current)
-	return parts
+	return strings.Split(token, ".")
 }
 
 func encodeJSON(v interface{}) (string, error) {
