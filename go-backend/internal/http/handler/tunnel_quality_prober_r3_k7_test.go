@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,6 +88,9 @@ func TestR3K7ProbeAllRecordsRoundDuration(t *testing.T) {
 	seedProbeTargetTunnel(t, h, 307, "quality-r3-k7-round", "speed.example.com", 8443)
 
 	p := newTunnelQualityProber(h)
+	// probeAll 的派发循环读 p.ctx（生产由 Start 注入）；直调须自备，
+	// 否则 nil ctx 在 select 处 panic（首跑实测教训）。
+	p.ctx = context.Background()
 	p.probeNode = func(nodeID int64, ip string, port int, options diagnosisExecOptions) (float64, float64, error) {
 		time.Sleep(60 * time.Millisecond)
 		return 10, 0, nil
