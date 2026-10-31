@@ -36,6 +36,8 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 
+import { classifyQualityHistoryBar } from "./quality-history-bar";
+
 import { formatTraffic } from "@/utils/traffic";
 import {
   getMonitorTunnels,
@@ -177,33 +179,15 @@ function UptimeHistoryBar({
           }
           const isEntry = type === "entryToExit";
           const latency = isEntry ? q.entryToExitLatency : q.exitToBingLatency;
-          const loss = isEntry ? q.entryToExitLoss : q.exitToBingLoss;
           const timeStr = new Date(q.timestamp).toLocaleTimeString("zh-CN");
 
-          let colorClass = "bg-success";
-          let statusText = "优秀";
-
-          if (q.errorMessage) {
-            colorClass = "bg-danger";
-            statusText = "错误";
-          } else if (latency < 0) {
-            // 未测段哨兵（-1/100）：如类型1 不存在的「入口→出口」段。
-            // 无错误文案时不得按丢包涂红，也不得涂绿冒充优秀。
-            colorClass = "bg-default-200 dark:bg-default-100/50";
-            statusText = "无数据";
-          } else if (loss !== undefined && loss > 0) {
-            colorClass = "bg-danger";
-            statusText = `丢包 ${loss?.toFixed(1)}%`;
-          } else if (latency > 200) {
-            colorClass = "bg-danger";
-            statusText = "极差";
-          } else if (latency > 100) {
-            colorClass = "bg-warning";
-            statusText = "较差";
-          }
+          // R3-B07-003：段级归因着色（见 quality-history-bar.ts）——
+          // errorMessage 是整行单值，不再首判短路两段；仅拼进
+          // tooltip 作整行补充。
+          const { colorClass, statusText } = classifyQualityHistoryBar(q, type);
 
           const displayLatency = latency >= 0 ? `${latency.toFixed(0)}ms` : "-";
-          const tooltip = `${timeStr} | ${displayLatency} | ${statusText} | 测试目标: ${probeTargetLabel(q)}`;
+          const tooltip = `${timeStr} | ${displayLatency} | ${statusText} | 测试目标: ${probeTargetLabel(q)}${q.errorMessage ? ` | 错误: ${q.errorMessage}` : ""}`;
 
           return (
             <div

@@ -82,6 +82,11 @@ type tunnelQualityProber struct {
 	lastPrune int64
 	probing   int32 // atomic flag: 1 = probeAll running, 0 = idle
 	probeNode bestExitProbeFunc
+	// R3-B07-001：上一整轮 probeAll 的实际耗时（原子，纳秒）。
+	// loop 的实际周期 = 间隔 + 整轮耗时，pendingFreshWindow 推导
+	// 必须把整轮耗时计入，否则整轮超过间隔时相邻确认间隔恒大于
+	// 窗口、最优出口确认永不累积。
+	lastRoundDurationNs int64 // atomic
 
 	// D6-02：探测配置短时缓存（三键合读一次，替代每轮 2 次配置查询）。
 	cfgMu       sync.Mutex
@@ -286,6 +291,7 @@ func (p *tunnelQualityProber) probeAll() {
 		return
 	}
 	defer atomic.StoreInt32(&p.probing, 0)
+	roundStart := time.Now()
 
 	h := p.handler
 	if h == nil || h.repo == nil {
@@ -339,6 +345,32 @@ func (p *tunnelQualityProber) probeAll() {
 		}(tunnelID)
 	}
 	wg.Wait()
+	// R3-B07-001：整轮耗时落盘供下一轮的新鲜度窗口推导（只有真正
+	// 跑完探测的轮才记录，前置早退不覆盖估计）。
+	atomic.StoreInt64(&p.lastRoundDurationNs, time.Since(roundStart).Nanoseconds())
+}
+
+// pendingFreshWindow 推导最优出口确认新鲜度窗口（R3-B07-001）。
+//
+// 口径选型：窗口 = 2 × (探测间隔 + 上一整轮耗时)。loop() 在
+// probeAll 返回后才起间隔定时器，相邻两轮确认的实际间隔是
+// 「间隔 + 整轮耗时」；窗口须覆盖一个完整周期并留一倍余量。
+// Round 2 B07-003 的旧推导只取 2×间隔：默认间隔 1s 时整轮只要
+// 超过 1s（多候选对串行 TcpPing、单个慢目标 5s 超时都可达到），
+// 相邻确认间隔恒大于窗口、计数每轮重置为 1，3 轮确认永不达成，
+// 自动切换在默认配置下静默失效。
+//
+// 未选「状态机改按连续轮次计数」：observeScores 还被轮外路径喂
+// 数（节点重连探测直调 probeTunnel，无轮次身份），且探测停摆、
+// 间隔被调大等真实陈旧场景需要墙钟语义兜底；按周期推导的墙钟
+// 窗口对两类调用方一致成立，陈旧确认仍被作废（B07-003 语义不变）。
+func (p *tunnelQualityProber) pendingFreshWindow() time.Duration {
+	interval := p.probeInterval()
+	lastRound := time.Duration(atomic.LoadInt64(&p.lastRoundDurationNs))
+	if lastRound < 0 {
+		lastRound = 0
+	}
+	return 2 * (interval + lastRound)
 }
 
 // beginProbeRound 开启一轮的共享缓存：节点记录 map 清空待填，隧道
@@ -860,9 +892,10 @@ func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chai
 	if len(owners) == 0 {
 		return
 	}
-	// B07-003：按当前探测间隔换算确认新鲜度窗口（2×间隔）注入
-	// 状态机，使切换的连续确认必须发生在窗口之内。
-	p.handler.bestExit.setPendingFreshWindow(2 * p.probeInterval())
+	// B07-003/R3-B07-001：按当前探测周期（间隔 + 上一整轮耗时）
+	// 换算确认新鲜度窗口注入状态机，使切换的连续确认必须发生在
+	// 窗口之内，且窗口覆盖真实周期（见 pendingFreshWindow）。
+	p.handler.bestExit.setPendingFreshWindow(p.pendingFreshWindow())
 	nodeMap := make(map[int64]*nodeRecord, len(owners)+len(outNodes))
 	for _, owner := range owners {
 		if node, err := p.nodeRecord(owner.NodeID); err == nil && node != nil {

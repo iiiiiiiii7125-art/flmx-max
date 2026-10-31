@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -20,9 +19,10 @@ const (
 	bestExitMinLatencyAdvantageMs   = 20.0
 	bestExitMinScoreAdvantageRatio  = 0.15
 	// bestExitPendingFreshWindow 是切换确认计数的新鲜度窗口回退值：
-	// prober 每轮按 2×探测间隔注入实际窗口（见 setPendingFreshWindow），
-	// 未注入时（如单元测试直调状态机）用 2×冷却兜底。相邻两次确认
-	// 间隔超过窗口即视为陈旧确认，计数从头开始（B07-003）。
+	// prober 每轮按 2×(探测间隔+上一整轮耗时) 注入实际窗口
+	// （见 setPendingFreshWindow 与 prober.pendingFreshWindow，
+	// R3-B07-001），未注入时（如单元测试直调状态机）用 2×冷却兜底。
+	// 相邻两次确认间隔超过窗口即视为陈旧确认，计数从头开始（B07-003）。
 	bestExitPendingFreshWindow = 2 * bestExitSwitchCooldown
 )
 
@@ -96,8 +96,9 @@ func (d *bestExitDecision) clearPending() {
 type bestExitManager struct {
 	mu        sync.Mutex
 	decisions map[bestExitOwnerKey]*bestExitDecision
-	// freshWindow 是确认新鲜度窗口，由 prober 每轮按 2×探测间隔
-	// 注入；<=0 时回退 bestExitPendingFreshWindow。
+	// freshWindow 是确认新鲜度窗口，由 prober 每轮按
+	// 2×(探测间隔+上一整轮耗时) 注入（R3-B07-001）；<=0 时回退
+	// bestExitPendingFreshWindow。
 	freshWindow time.Duration
 }
 
@@ -221,25 +222,15 @@ func evaluateBestExitOwner(owner chainNodeRecord, exits []chainNodeRecord, nodes
 	return scores
 }
 
+// resolveBestExitProbeTarget 与 resolveChainProbeTarget 收敛为同一
+// 实现（R3-B07-002）：此前这里是复制实现，独缺 selectTunnelDialHost
+// 失败时 stripShareHostPort(ServerIP) 的回退分支，地址带 :port 的
+// 存量节点（或栈/偏好不匹配时回退源带端口）在最优出口评分中恒判
+// 失败，与质量/诊断面同机制分叉。此后只允许经 resolveChainProbeTarget
+// 解析，两入口逐项等价由 TestR3K7ProbeTargetResolversAgree 钉死，
+// 不得再复制实现。
 func resolveBestExitProbeTarget(fromNode, targetNode *nodeRecord, preferredPort int, ipPreference string, connectIP string) (string, int, error) {
-	if targetNode == nil {
-		return "", 0, errors.New("目标节点不存在")
-	}
-	host, err := selectTunnelDialHost(fromNode, targetNode, ipPreference, connectIP)
-	if err != nil {
-		return "", 0, err
-	}
-	if strings.TrimSpace(host) == "" {
-		return "", 0, errors.New("目标节点地址为空")
-	}
-	port := preferredPort
-	if port <= 0 {
-		port = firstPortFromRange(targetNode.PortRange)
-	}
-	if port <= 0 {
-		port = 443
-	}
-	return host, port, nil
+	return resolveChainProbeTarget(fromNode, targetNode, preferredPort, ipPreference, connectIP)
 }
 
 func newBestExitRoundPinger(base bestExitProbeFunc) bestExitProbeFunc {
