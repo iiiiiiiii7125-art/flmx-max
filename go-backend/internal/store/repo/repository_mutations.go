@@ -2705,6 +2705,12 @@ func (r *Repository) AddUserToGroupsTx(tx *gorm.DB, userID int64, groupIDs []int
 	if tx == nil {
 		return errors.New("database unavailable")
 	}
+	// B03-001（R3 K4）：非正分组 ID 在首写之前整单拒绝，与分组
+	// assign 面 rejectNonPositiveMemberIDs 同口径（此前 [-5] 被
+	// validateIDsExistTx 与落库循环双双跳过、静默当作未指定）。
+	if err := rejectNonPositiveMemberIDs(groupIDs); err != nil {
+		return err
+	}
 	if len(groupIDs) == 0 {
 		return nil
 	}
@@ -2734,6 +2740,12 @@ func (r *Repository) AddUserToGroupsTx(tx *gorm.DB, userID int64, groupIDs []int
 func (r *Repository) ReplaceUserGroupsByUserIDTx(tx *gorm.DB, userID int64, newGroupIDs []int64, now int64) (affectedGroupIDs []int64, removedGroupIDs []int64, err error) {
 	if tx == nil {
 		return nil, nil, errors.New("database unavailable")
+	}
+	// B03-001（R3 K4）：非正分组 ID 在首写之前整单拒绝，与分组
+	// assign 面同口径。此前 [-5] 的 newSet 为空集、替换语义即清空
+	// 该用户全部分组归属并连带撤销组授权却回成功（数据伤害面）。
+	if err := rejectNonPositiveMemberIDs(newGroupIDs); err != nil {
+		return nil, nil, err
 	}
 	if err := validateUserGroupIDsExistTx(tx, newGroupIDs); err != nil {
 		return nil, nil, err

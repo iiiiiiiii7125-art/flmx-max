@@ -445,6 +445,13 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// B12-002（R3 K4）：nodeId 负值在归一化之前拒绝（0=面板本机、
+	// >0 须存在、<0 非法）；此前负值直落库并传播进结果行，且被
+	// Checker 当作面板本机执行、与提交意图脱钩。
+	if req.NodeID < 0 {
+		response.WriteJSON(w, response.ErrDefault("无效的节点ID"))
+		return
+	}
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -511,9 +518,13 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 
 	enabled := 1
 	if req.Enabled != nil {
-		if *req.Enabled == 0 || *req.Enabled == 1 {
-			enabled = *req.Enabled
+		// B12-001（R3 K4）：与更新面 R2 B12-002 同口径——域外值
+		// 点名报错拒绝，不再静默回落为启用落库。
+		if *req.Enabled != 0 && *req.Enabled != 1 {
+			response.WriteJSON(w, response.ErrDefault("启用状态只能为 0 或 1"))
+			return
 		}
+		enabled = *req.Enabled
 	}
 
 	now := time.Now().UnixMilli()
@@ -642,6 +653,11 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.NodeID != nil {
+		// B12-002（R3 K4）：负值与创建面同口径拒绝（此前直落库）。
+		if *req.NodeID < 0 {
+			response.WriteJSON(w, response.ErrDefault("无效的节点ID"))
+			return
+		}
 		existing.NodeID = *req.NodeID
 	}
 	if req.Enabled != nil {
