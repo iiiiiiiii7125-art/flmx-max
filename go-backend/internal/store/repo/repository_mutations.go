@@ -144,48 +144,72 @@ func (r *Repository) GetUserRoleID(userID int64) (int, error) {
 	return user.RoleID, nil
 }
 
-func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
+// updateUserWithRenameGuard 是全部改名 repo 方法的事务封装（R3
+// B02-002）：与 CreateUserTx 同构——事务内先经 dbFoldUsername 由 SQL
+// LOWER() 取折叠键（与判重同一定义源，LB-K10-02）、取同名咨询锁
+// （lockNameForTx，PG；SQLite 为空操作、靠单连接串行）、再以
+// usernameFoldCount 折叠复检（排除自身），通过后才 Updates。
+//
+// 此前三个改名方法（UpdateUserWithPassword / UpdateUserWithoutPassword
+// / UpdateUserNameAndPassword）均为非事务 Updates、只靠 handler 事务
+// 外预检 + 唯一冲突映射兜底：v5 折叠索引在场时兜底成立，但降级态
+// （存量双生子致索引按 D23 跳过）下并发改名交错可双双通过预检、
+// 新建大小写双生子——正是 S-17 降级语义下应用层判重必须照常执法
+// 的面，create 面已对齐、改名面漏齐，本封装补齐差集。v5 索引在场
+// 时另有 mapUniqueViolation DB 兜底，口径不变。
+func (r *Repository) updateUserWithRenameGuard(id int64, username string, updates map[string]interface{}) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	err := r.db.Model(&model.User{}).
-		Where("id = ?", id).
-		Updates(map[string]interface{}{
-			"user":                username,
-			"pwd":                 pwdHash,
-			"flow":                flow,
-			"flow_mib":            optionalFlowMiB(flowMiB),
-			"num":                 num,
-			"exp_time":            expTime,
-			"flow_reset_time":     flowResetTime,
-			"status":              status,
-			"max_conn":            maxConn,
-			"password_changed_at": now,
-			"updated_time":        sql.NullInt64{Int64: now, Valid: true},
-		}).Error
-	// R5-B4C: 并发兜底（handler 已查重，但有竞态窗口）。
-	return mapUniqueViolation(err, "username")
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		lockFold, err := dbFoldUsername(tx, username)
+		if err != nil {
+			return err
+		}
+		if err := lockNameForTx(tx, nameLockScopeUser, lockFold); err != nil {
+			return err
+		}
+		if err := ensureUsernameAvailable(tx, username, id); err != nil {
+			return err
+		}
+		if err := tx.Model(&model.User{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return mapUniqueViolation(err, "username")
+		}
+		return nil
+	})
+}
+
+func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
+	// R3 B02-002：改名经 updateUserWithRenameGuard 事务内折叠复检
+	// （降级态同样执法），不再只靠事务外预检 + 唯一冲突映射。
+	return r.updateUserWithRenameGuard(id, username, map[string]interface{}{
+		"user":                username,
+		"pwd":                 pwdHash,
+		"flow":                flow,
+		"flow_mib":            optionalFlowMiB(flowMiB),
+		"num":                 num,
+		"exp_time":            expTime,
+		"flow_reset_time":     flowResetTime,
+		"status":              status,
+		"max_conn":            maxConn,
+		"password_changed_at": now,
+		"updated_time":        sql.NullInt64{Int64: now, Valid: true},
+	})
 }
 
 func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	err := r.db.Model(&model.User{}).
-		Where("id = ?", id).
-		Updates(map[string]interface{}{
-			"user":            username,
-			"flow":            flow,
-			"flow_mib":        optionalFlowMiB(flowMiB),
-			"num":             num,
-			"exp_time":        expTime,
-			"flow_reset_time": flowResetTime,
-			"status":          status,
-			"max_conn":        maxConn,
-			"updated_time":    sql.NullInt64{Int64: now, Valid: true},
-		}).Error
-	// R5-B4C: 并发兜底。
-	return mapUniqueViolation(err, "username")
+	// R3 B02-002：同 UpdateUserWithPassword，事务内折叠复检。
+	return r.updateUserWithRenameGuard(id, username, map[string]interface{}{
+		"user":            username,
+		"flow":            flow,
+		"flow_mib":        optionalFlowMiB(flowMiB),
+		"num":             num,
+		"exp_time":        expTime,
+		"flow_reset_time": flowResetTime,
+		"status":          status,
+		"max_conn":        maxConn,
+		"updated_time":    sql.NullInt64{Int64: now, Valid: true},
+	})
 }
 
 func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64) error {

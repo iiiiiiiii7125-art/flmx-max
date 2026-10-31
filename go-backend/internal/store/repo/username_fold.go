@@ -17,11 +17,11 @@ import (
 //     LOWER() 仅折叠 ASCII，PG 的 lower() 按库编码/locale 折叠
 //     （UTF8 库下含 Unicode）——裁决示例的 ASCII 名在两方言下
 //     结论一致，非 ASCII 名的折叠范围随部署方言，属已知边界。
-//   - 并发串行化：CreateUserTx 的 PG 咨询锁键由 dbFoldUsername 经
-//     DB LOWER() 取数派生，与判重同一折叠定义源，使大小写变体在
-//     锁层互斥（pg_name_lock.go；LB-K10-02：不得再用 Go
-//     strings.ToLower 另算一份折叠，两者在词尾 sigma 等形态上
-//     与 SQL LOWER() 不一致）。
+//   - 并发串行化：CreateUserTx 与改名封装 updateUserWithRenameGuard
+//     （R3 B02-002）的 PG 咨询锁键由 dbFoldUsername 经 DB LOWER()
+//     取数派生，与判重同一折叠定义源，使大小写变体在锁层互斥
+//     （pg_name_lock.go；LB-K10-02：不得再用 Go strings.ToLower
+//     另算一份折叠，两者在词尾 sigma 等形态上与 SQL LOWER() 不一致）。
 //   - DB 兜底：v5 迁移建函数唯一索引 (LOWER("user"))，见
 //     migration_k10_v5.go；存量折叠重复时按 D23 范式跳过建索引、
 //     逐组点名日志，应用层判重仍照常执法。
