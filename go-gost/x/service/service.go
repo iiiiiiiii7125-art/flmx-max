@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/core/admission"
@@ -43,20 +44,25 @@ type options struct {
 	logger         logger.Logger
 }
 
-var isTls = 0
+// R3-A01（顺手项）: the three protocol-block switches are atomic.
+// SetProtocolBlock writes them from the command path while
+// detectProtocol reads them on the connection-sniffing path; the
+// plain ints raced (a connection could observe a mixed old/new
+// combination). Scope is exactly these three globals.
+var isTls atomic.Int32
 
-var isHttp = 0
+var isHttp atomic.Int32
 
-var isSocks = 0
+var isSocks atomic.Int32
 
 var needWrap = false
 
 // SetProtocolBlock sets protocol blocking switches and recomputes wrapper need
 func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
-	isHttp = httpOn
-	isTls = tlsOn
-	isSocks = socksOn
-	needWrap = isTls+isSocks+isHttp > 0
+	isHttp.Store(int32(httpOn))
+	isTls.Store(int32(tlsOn))
+	isSocks.Store(int32(socksOn))
+	needWrap = isTls.Load()+isSocks.Load()+isHttp.Load() > 0
 }
 
 // GetProtocolBlock returns the current protocol blocking switches.
@@ -64,7 +70,7 @@ func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
 // here so fields the panel did not send keep their live values
 // instead of being reset to 0.
 func GetProtocolBlock() (httpOn int, tlsOn int, socksOn int) {
-	return isHttp, isTls, isSocks
+	return int(isHttp.Load()), int(isTls.Load()), int(isSocks.Load())
 }
 
 type Option func(opts *options)
@@ -73,7 +79,7 @@ func init() {
 	// NOTE: This package can be imported by tests/tools that don't have a local
 	// config.json. Missing config should not crash the process.
 	_, _ = LoadConfig("config.json")
-	needWrap = isTls+isSocks+isHttp > 0
+	needWrap = isTls.Load()+isSocks.Load()+isHttp.Load() > 0
 }
 
 func AdmissionOption(admission admission.Admission) Option {
@@ -492,17 +498,17 @@ func detectProtocol(data []byte, conn net.Conn) (blocked bool) {
 		return false
 	}
 
-	if isHttp == 1 && detectHTTP(data) {
+	if isHttp.Load() == 1 && detectHTTP(data) {
 		conn.Close()
 		return true
 	}
 
-	if isTls == 1 && detectTLS(data) {
+	if isTls.Load() == 1 && detectTLS(data) {
 		conn.Close()
 		return true
 	}
 
-	if isSocks == 1 && detectSOCKS(data) {
+	if isSocks.Load() == 1 && detectSOCKS(data) {
 		conn.Close()
 		return true
 	}
@@ -606,9 +612,9 @@ func LoadConfig(configPath string) (string, error) {
 		return "", fmt.Errorf("解析配置文件失败: %v", err)
 	}
 
-	isTls = config.Tls
-	isSocks = config.Socks
-	isHttp = config.Http
+	isTls.Store(int32(config.Tls))
+	isSocks.Store(int32(config.Socks))
+	isHttp.Store(int32(config.Http))
 
 	return "", nil
 

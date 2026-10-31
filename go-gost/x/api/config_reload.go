@@ -39,14 +39,29 @@ func reloadConfig(ctx *gin.Context) {
 		return
 	}
 
-	// R19-F02: API 重载与 SIGHUP 走同一自愈——先剥离落盘 JSON null 读入
-	// 的 nil 项并重新落盘，否则 loader.Load 在首个 nil 类 panic（经 gin
-	// Recovery 变 500，但文件仍毒化、下次重载/启动仍失败）。落盘失败只
-	// 告警、不阻塞重载（loader 守卫仍会干净报错）。
-	if stripped := config.StripNilConfigItems(cfg); len(stripped) > 0 {
-		logger.Default().Warnf("config reload self-heal: removed %s from persisted config", strings.Join(stripped, ", "))
-		if err := config.PersistNow(cfg); err != nil {
-			logger.Default().Warnf("config reload self-heal: failed to persist nil-stripped config: %v", err)
+	// R19-F02 + R3-A01-003: API 重载与启动/SIGHUP 走同一自愈全集——
+	// 共用入口 config.HealPersistedConfig（剥 nil → 17 类去重 → 剪
+	// 无引用 conn limiter，逐步重新落盘）。此前本入口只有剥 nil 一
+	// 步：重复名毒化配置经 SIGHUP/重启能自愈、经 API 重载却永远在
+	// loader.Reload 的 duplicate object 处失败。落盘失败只告警、
+	// 不阻塞重载（loader 守卫仍会干净报错）。
+	report := config.HealPersistedConfig(cfg)
+	if len(report.Stripped) > 0 {
+		logger.Default().Warnf("config reload self-heal: removed %s from persisted config", strings.Join(report.Stripped, ", "))
+		if report.StripPersistErr != nil {
+			logger.Default().Warnf("config reload self-heal: failed to persist nil-stripped config: %v", report.StripPersistErr)
+		}
+	}
+	for _, heal := range report.Duplicates {
+		logger.Default().Warnf("config reload self-heal: removed duplicate %s(s) %v from persisted config", heal.Kind, heal.Removed)
+		if heal.Err != nil {
+			logger.Default().Warnf("config reload self-heal: failed to persist deduplicated config: %v", heal.Err)
+		}
+	}
+	if len(report.Pruned) > 0 {
+		logger.Default().Warnf("config reload self-heal: removed unreferenced conn limiter(s) %v from persisted config", report.Pruned)
+		if report.PrunePersistErr != nil {
+			logger.Default().Warnf("config reload self-heal: failed to persist pruned config: %v", report.PrunePersistErr)
 		}
 	}
 

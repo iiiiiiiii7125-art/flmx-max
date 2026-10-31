@@ -94,6 +94,13 @@ func (m *Manager) UpdateGeoData(ctx context.Context) {
 // stageGeoFiles downloads the files that differ from the installed ones to
 // "<name>.new" and returns their names. Files are kept as they are when the
 // download or the checksum fails.
+//
+// R3-WDG-01: the per-file loop is the serial-budget ruling for the
+// shared 5-minute round ctx — a file that fails (including a stall
+// failed fast by fetch's no-progress watchdog, after its mirror
+// fallback leg) is recorded and the round continues with the
+// remaining files; one stalled file must not starve the whole
+// round. The round ctx itself stays a single 5-minute budget.
 func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]string, error) {
 	var staged []string
 	var errs []string

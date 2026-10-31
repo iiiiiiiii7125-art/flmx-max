@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/util/crypto"
+	"github.com/go-gost/x/internal/util/download"
 	"github.com/go-gost/x/service"
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -1055,7 +1056,9 @@ func isMutationCommand(commandType string) bool {
 		"addchains", "updatechains", "deletechains",
 		"addlimiters", "updatelimiters", "deletelimiters",
 		"addclimiters", "updateclimiters", "deleteclimiters",
-		"setprotocol", "upgradeagent", "rollbackagent", "reload":
+		// R3-A01-OPT-01: 原列表尾部的 "reload" 是死分类——
+		// routeCommand 无此命令分支、面板从不下发，删去防误接线。
+		"setprotocol", "upgradeagent", "rollbackagent":
 		return true
 	default:
 		return false
@@ -1562,6 +1565,8 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 	// service 包的内存态为准（启动时由 config.json 加载、每次
 	// SetProtocolBlock 更新），与下方落盘的是同一组值。
 	httpVal, tlsVal, socksVal := service.GetProtocolBlock()
+	// R3-A01-001: 落盘失败回滚运行时需要旧值（见函数尾）。
+	oldHTTP, oldTLS, oldSOCKS := httpVal, tlsVal, socksVal
 
 	if req.HTTP != nil {
 		if *req.HTTP != 0 && *req.HTTP != 1 {
@@ -1585,8 +1590,12 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 	// 设置至 service，全量传递（未提供的值沿用当前值，见上方 A01-002）
 	service.SetProtocolBlock(httpVal, tlsVal, socksVal)
 
-	// 同步写入本地 config.json
+	// 同步写入本地 config.json。R3-A01-001: 落盘失败必须回滚运行时
+	// ——与 createServices 的 D1-06 同口径（先改运行时、落盘失败回滚）。
+	// 此前不回滚：命令报失败但新屏蔽值已在运行时生效、文件仍是旧值，
+	// 面板/运行时/落盘三态分裂，直到重启才以静默撤销的方式「自愈」。
 	if err := updateLocalConfigJSON(httpVal, tlsVal, socksVal); err != nil {
+		service.SetProtocolBlock(oldHTTP, oldTLS, oldSOCKS)
 		return fmt.Errorf("写入config.json失败: %v", err)
 	}
 	return nil
@@ -2039,6 +2048,124 @@ func newUpgradeDownloadClient(proxyHost string) *http.Client {
 	}
 }
 
+// maxAgentBinarySize caps the self-upgrade binary download (S-02).
+const maxAgentBinarySize = 100 << 20 // 100MB
+
+// upgradeStallWindow is the no-progress watchdog window for each
+// self-upgrade download attempt (R3-WDG-01): an attempt with zero
+// byte progress for this long is declared stalled and fails, so
+// the proxy->direct fallback leg runs with budget to spare instead
+// of the attempt burning the whole upgradeDownloadTimeout (the
+// 2026-10-30 batch-upgrade failure: a trickling proxy body cost
+// the full 240s per node). The value is the shared
+// download.StallWindow (45s), registered in
+// doc/audit/timeout-budgets.tsv row A002. A var so tests can
+// shrink it.
+var upgradeStallWindow = download.StallWindow
+
+// downloadUpgradeAttempt performs ONE self-upgrade binary download
+// attempt: GET rawURL on ctx, stream the body into tmpPath while
+// hashing it, and report integer percents when the server
+// advertised a content length. The attempt runs under a
+// no-progress watchdog (upgradeStallWindow) fed by every chunk
+// read; a stalled or trickling peer fails the attempt with
+// download.ErrNoProgress. tmpPath is (re)created per attempt — on
+// error its content is partial and the caller removes it (a retry
+// truncates it anyway).
+func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tmpPath string, report func(percent int)) (int64, string, error) {
+	watcher := download.NewWatcher(upgradeStallWindow)
+	actx, stopWatch := watcher.Watch(ctx)
+	defer stopWatch()
+	resp, err := upgradeGET(actx, client, rawURL)
+	if err != nil {
+		if watcher.Stalled() {
+			return 0, "", download.ErrNoProgress
+		}
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, "", fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+	}
+	// S-02: 限制下载大小，防止超大文件耗尽磁盘
+	if resp.ContentLength > maxAgentBinarySize {
+		return 0, "", fmt.Errorf("S-02: 升级包过大 (%d bytes)，拒绝下载", resp.ContentLength)
+	}
+	// S-02: 临时文件权限 0700，仅所有者可读写
+	outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700)
+	if err != nil {
+		return 0, "", fmt.Errorf("创建临时文件失败: %v", err)
+	}
+	totalSize := resp.ContentLength
+	var downloaded int64
+	buf := make([]byte, 32*1024)
+	hasher := sha256.New()
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			watcher.Note(n)
+			// S-02: 下载过程中也检查大小（防 ContentLength 欺骗）
+			if downloaded+int64(n) > maxAgentBinarySize {
+				outFile.Close()
+				return 0, "", fmt.Errorf("S-02: 升级包超过大小限制 (%d bytes)", maxAgentBinarySize)
+			}
+			if _, wErr := outFile.Write(buf[:n]); wErr != nil {
+				outFile.Close()
+				return 0, "", fmt.Errorf("写入升级包失败: %v", wErr)
+			}
+			hasher.Write(buf[:n])
+			downloaded += int64(n)
+			if totalSize > 0 && report != nil {
+				report(int(downloaded * 100 / totalSize))
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			outFile.Close()
+			if watcher.Stalled() {
+				return 0, "", fmt.Errorf("读取升级包失败: %w", download.ErrNoProgress)
+			}
+			return 0, "", fmt.Errorf("读取升级包失败: %v", readErr)
+		}
+	}
+	if err := outFile.Close(); err != nil {
+		return 0, "", fmt.Errorf("写入升级包失败: %v", err)
+	}
+	if downloaded == 0 {
+		return 0, "", fmt.Errorf("下载的升级包为空")
+	}
+	return downloaded, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// downloadUpgradeBinary downloads the self-upgrade binary from
+// rawURL into tmpPath and returns the byte count and SHA-256 hex
+// of the content. Fallback (R7-J-02, extended by R3-WDG-01): when
+// rawURL is in proxy-prefixed form, ANY failure of the proxied
+// attempt — transport error, non-200, or a body that stalls or
+// breaks mid-transfer — retries exactly once with the prefix
+// stripped (direct). Before the watchdog existed only GET-level
+// failures could fall back: a stalled body burned the whole
+// shared budget before any retry. A URL without a proxy prefix is
+// attempted exactly once, with its original error preserved.
+func downloadUpgradeBinary(ctx context.Context, client *http.Client, rawURL, tmpPath string, report func(percent int)) (int64, string, error) {
+	downloaded, hash, err := downloadUpgradeAttempt(ctx, client, rawURL, tmpPath, report)
+	if err == nil {
+		return downloaded, hash, nil
+	}
+	direct := stripUpgradeProxyPrefix(rawURL)
+	if direct == "" || direct == rawURL {
+		return 0, "", err
+	}
+	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", err, sanitizeWebSocketURL(direct))
+	downloaded, hash, derr := downloadUpgradeAttempt(ctx, client, direct, tmpPath, report)
+	if derr != nil {
+		return 0, "", fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", err, derr)
+	}
+	return downloaded, hash, nil
+}
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -2109,71 +2236,20 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	httpClient := newUpgradeDownloadClient(proxyHost)
 	dlCtx, dlCancel := context.WithTimeout(context.Background(), upgradeDownloadTimeout)
 	defer dlCancel()
-	// R7-J-02: proxy failure falls back to a stripped-prefix direct
-	// retry once, like every other download surface in the repo.
-	resp, err := getWithUpgradeProxyFallbackCtx(dlCtx, httpClient, downloadURL)
-	if err != nil {
-		return fmt.Errorf("下载升级包失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// S-02: 限制下载大小，防止超大文件耗尽磁盘
-	const maxAgentBinarySize = 100 << 20 // 100MB
-	if resp.ContentLength > maxAgentBinarySize {
-		return fmt.Errorf("S-02: 升级包过大 (%d bytes)，拒绝下载", resp.ContentLength)
-	}
-
-	// S-02: 临时文件权限 0700，仅所有者可读写
-	outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700)
-	if err != nil {
-		return fmt.Errorf("创建临时文件失败: %v", err)
-	}
-
-	// 带进度的下载
-	totalSize := resp.ContentLength
-	var downloaded int64
-	buf := make([]byte, 32*1024)
+	// R7-J-02 + R3-WDG-01: downloadUpgradeBinary 跑下载尝试，代理
+	// 前缀形态下任一次尝试失败（含正文停滞被看门狗判失败）都剥离
+	// 前缀直连重试一次，口径见该函数注释。
 	lastPercent := 0
-	hasher := sha256.New()
-
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			// S-02: 下载过程中也检查大小（防 ContentLength 欺骗）
-			if downloaded+int64(n) > maxAgentBinarySize {
-				outFile.Close()
-				os.Remove(tmpPath)
-				return fmt.Errorf("S-02: 升级包超过大小限制 (%d bytes)", maxAgentBinarySize)
-			}
-			if _, wErr := outFile.Write(buf[:n]); wErr != nil {
-				outFile.Close()
-				os.Remove(tmpPath)
-				return fmt.Errorf("写入升级包失败: %v", wErr)
-			}
-			hasher.Write(buf[:n])
-			downloaded += int64(n)
-			if totalSize > 0 {
-				percent := int(downloaded * 100 / totalSize)
-				if percent-lastPercent >= 10 {
-					lastPercent = percent
-					w.sendUpgradeProgress("downloading", percent, fmt.Sprintf("下载中... %d%%", percent))
-				}
-			}
-		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			outFile.Close()
-			os.Remove(tmpPath)
-			return fmt.Errorf("读取升级包失败: %v", readErr)
+	report := func(percent int) {
+		if percent-lastPercent >= 10 {
+			lastPercent = percent
+			w.sendUpgradeProgress("downloading", percent, fmt.Sprintf("下载中... %d%%", percent))
 		}
 	}
-	outFile.Close()
-
-	if downloaded == 0 {
+	downloaded, actualHash, err := downloadUpgradeBinary(dlCtx, httpClient, downloadURL, tmpPath, report)
+	if err != nil {
 		os.Remove(tmpPath)
-		return fmt.Errorf("下载的升级包为空")
+		return fmt.Errorf("下载升级包失败: %v", err)
 	}
 
 	w.sendUpgradeProgress("downloading", 100, fmt.Sprintf("下载完成 (%d bytes)", downloaded))
@@ -2183,20 +2259,28 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
 	// R7-J-02: the checksum GET gets the same proxy->direct fallback
 	// as the binary GET above, under the same shared download budget
-	// (dlCtx, R8-T-09).
-	checksumResp, err := getWithUpgradeProxyFallbackCtx(dlCtx, httpClient, checksumURL)
+	// (dlCtx, R8-T-09). R3-WDG-01: it also rides the no-progress
+	// watchdog (its own watcher under dlCtx), so a checksum leg that
+	// stalls after 200 fails fast instead of burning the budget.
+	sumWatcher := download.NewWatcher(upgradeStallWindow)
+	sumCtx, stopSumWatch := sumWatcher.Watch(dlCtx)
+	checksumResp, err := getWithUpgradeProxyFallbackCtx(sumCtx, httpClient, checksumURL)
 	if err != nil {
+		stopSumWatch()
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
 	}
 	defer checksumResp.Body.Close()
 	// 格式: "<hash>  <filename>" 或 "<hash>"；读取带上限 (D1-08)
-	expectedHash, err := readAgentChecksum(checksumResp.Body)
+	expectedHash, err := readAgentChecksum(sumWatcher.Reader(checksumResp.Body))
+	stopSumWatch()
 	if err != nil {
 		os.Remove(tmpPath)
+		if sumWatcher.Stalled() {
+			return fmt.Errorf("S-02: 读取校验值失败: %w", download.ErrNoProgress)
+		}
 		return fmt.Errorf("S-02: 读取校验值失败: %v", err)
 	}
-	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if !strings.EqualFold(expectedHash, actualHash) {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 校验失败: 期望 %s, 实际 %s", expectedHash, actualHash)
@@ -2343,7 +2427,17 @@ func updateLocalConfigJSON(httpVal int, tlsVal int, socksVal int) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	// R3-A01-002: 原子写（temp+rename，复用 tuning.go 的
+	// writeFileAtomic）。config.json 是 LoadConfig 的启动必读文件，
+	// 此前 os.WriteFile 整表直写是全 agent 唯一对启动关键配置的
+	// 直写点：写中途崩溃留下截断 JSON，下次启动直接失败、节点永久
+	// 离线。rename 保证磁盘上恒为完整旧版或完整新版。权限口径与直
+	// 写时代一致：已存在文件保留其现有权限，新建为 0644。
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	return writeFileAtomic(path, data, mode)
 }
 
 // handleCall 处理服务端的call回调消息
@@ -2728,7 +2822,7 @@ func hardDeniedIP(a netip.Addr) bool {
 }
 
 // serviceMonitorTargetHardDenied 是服务监控执行端的字面量硬拒复检
-//（R4X-008）：host 为字面 IP 且命中硬拒层时返回 true；主机名返回
+// （R4X-008）：host 为字面 IP 且命中硬拒层时返回 true；主机名返回
 // false（解析落点的硬拒复检在拨号/发包路径对解析结果另行执行，
 // 见 handleServiceMonitorCheck 与 icmpPing 的调用点）。
 func serviceMonitorTargetHardDenied(host string) bool {
@@ -2755,7 +2849,7 @@ func resolvedAddrDenied(ip net.IP, deny func(netip.Addr) bool) bool {
 }
 
 // tcpPingResolvedDenied 是 TcpPing/Traceroute 解析落点的整集判定
-//（与 tcpPingLiteralTargetDenied 同集，入参为已解析的 netip.Addr）。
+// （与 tcpPingLiteralTargetDenied 同集，入参为已解析的 netip.Addr）。
 func tcpPingResolvedDenied(a netip.Addr) bool {
 	eff, localNAT64 := effectivePingIP(a)
 	if localNAT64 {
