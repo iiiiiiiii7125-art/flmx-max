@@ -28,6 +28,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"go-backend/internal/kernel"
+	"go-backend/internal/monitoring"
 	"go-backend/internal/netguard"
 	"go-backend/internal/security"
 	"go-backend/internal/store/model"
@@ -799,20 +800,17 @@ func (r *Repository) UsernameExistsExceptID(username string, exceptID int64) (bo
 }
 
 func (r *Repository) UpdateUserNameAndPassword(userID int64, username, passwordMD5 string, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	err := r.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+	// R3 B02-002：与 UpdateUserWithPassword/WithoutPassword 同走
+	// updateUserWithRenameGuard——事务内折叠键咨询锁 + 折叠复检
+	// （排除自身），降级态（v5 索引缺席）下并发改名交错同样被拒，
+	// 不再只靠事务外预检 + 唯一冲突映射兜底；唯一冲突映射由封装内
+	// mapUniqueViolation 保留，DB 原文不回吐。
+	return r.updateUserWithRenameGuard(userID, username, map[string]interface{}{
 		"user":                username,
 		"pwd":                 passwordMD5,
 		"password_changed_at": now,
 		"updated_time":        now,
-	}).Error
-	// B02-003/K10: 并发兜底（handler 已折叠查重，但有竞态窗口）——
-	// 与 UpdateUserWithPassword/WithoutPassword 同口径映射唯一冲突，
-	// 不把 DB 原文回吐给改名用户。本函数此前漏了这层映射，折叠
-	// 索引（v5）命中时 PG/SQLite 原始错误会直达响应。
-	return mapUniqueViolation(err, "username")
+	})
 }
 
 // ─── Config Queries ──────────────────────────────────────────────────
@@ -5666,10 +5664,66 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 	return count, nil
 }
 
+// normalizeImportedMonitoringConfigValue 是 B14-002 的恢复面校验落点：
+// 保存面 normalizeAndValidateConfigValue（handler）对监控三键的校验在
+// 恢复面等价复刻——监控开关枚举 true/false（归一为小写）、保留天数与
+// 探测间隔走 monitoring.Normalize* 可解析性（归一为标准整数串）。
+// 与保存面同源的 Normalize* 是唯一校验源，不另写一份范围常量；
+// 非监控键原样返回。返回归一后的值（与保存面落库形态一致）。
+func normalizeImportedMonitoringConfigValue(name, value string) (string, error) {
+	switch name {
+	case "monitor_tunnel_quality_enabled":
+		normalized := strings.TrimSpace(strings.ToLower(value))
+		switch normalized {
+		case "true", "false":
+			return normalized, nil
+		default:
+			return "", fmt.Errorf("隧道质量检测开关配置值无效")
+		}
+	case monitoring.ConfigMonitorRetentionDays:
+		return monitoring.NormalizeMonitoringRetentionDays(value)
+	case monitoring.ConfigTunnelQualityProbeIntervalSec:
+		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
+	}
+	return value, nil
+}
+
 func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *importReport) (int, error) {
 	configs = FilterBackupConfigs(configs)
+	// R3 B14-001：落库前对每个键执行 NormalizeConfigKey 归一并按归一
+	// 键合并——导入面此前以原始键名直接落库，Round 2 B14-001 的影子
+	// 行缺陷（UI 两写面已修）在导入面复发：变体键落库成读不到的影子
+	// 行，且影子合并迁移被 schema 版本门控、永不自愈。归一口径与保存
+	// 面（updateConfigs/updateSingleConfig）同源：NormalizeConfigKey
+	// 归一、归一后为空或 >200 rune（varchar(200) 列宽，K1 写面口径）
+	// 的键跳过 + 点名。输入是 map 无出现序，按原始键字典序定序合并，
+	// 同归一键取序后者并 warn，保证结果确定。
+	rawNames := make([]string, 0, len(configs))
+	for name := range configs {
+		rawNames = append(rawNames, name)
+	}
+	sort.Strings(rawNames)
+	merged := make(map[string]string, len(configs))
+	mergedFrom := make(map[string]string, len(configs))
+	orderedNames := make([]string, 0, len(configs))
+	for _, rawName := range rawNames {
+		name := NormalizeConfigKey(rawName)
+		if name == "" || len([]rune(name)) > 200 {
+			rep.skip("configs")
+			rep.warnf("备份恢复：配置键 %q 归一后为空或长度超过 200 个字符，已跳过未恢复", rawName)
+			continue
+		}
+		if prevRaw, dup := mergedFrom[name]; dup {
+			rep.warnf("备份恢复：配置键 %q 与 %q 归一后同为 %q，已按后出现者 %q 的值恢复，前者被覆盖", prevRaw, rawName, name, rawName)
+		} else {
+			orderedNames = append(orderedNames, name)
+		}
+		merged[name] = configs[rawName]
+		mergedFrom[name] = rawName
+	}
 	count := 0
-	for name, value := range configs {
+	for _, name := range orderedNames {
+		value := merged[name]
 		// 复扫 R-09：恢复面与保存面同口径——主机名类配置键的空标签值
 		// 跳过 + warning。
 		if configValueHasEmptyLabelHost(name, value) {
@@ -5699,7 +5753,17 @@ func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *impor
 				continue
 			}
 		}
-		err := tx.Clauses(clause.OnConflict{
+		// R3 B14-002：监控三键（开关枚举/保留天数/探测间隔）走保存面
+		// 等价校验（normalizeImportedMonitoringConfigValue），坏值跳过
+		// + warning——此前差集 3 键无校验、坏值直接落库，与保存面分裂。
+		normalizedValue, err := normalizeImportedMonitoringConfigValue(name, value)
+		if err != nil {
+			rep.skip("configs")
+			rep.warnf("备份恢复：配置 %q 的值 %q 无效（%v），已跳过未恢复", name, value, err)
+			continue
+		}
+		value = normalizedValue
+		err = tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
 		}).Create(&model.ViteConfig{Name: name, Value: value, Time: now}).Error

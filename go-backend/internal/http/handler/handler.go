@@ -1482,6 +1482,16 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 	cleared := make([]string, 0, len(payload))
 	hooks := make([]string, 0, len(payload))
 	prevPools := make(map[string][]latencyTarget, len(payload))
+	// R3 B14-003：归一撞键定序——两个不同原始键归一到同一键时，此前
+	// 靠 map 迭代序决定 validated[key] 谁生效、同 payload 多次调用结果
+	// 不确定。现按归一键登记（原始键, 最终意图)：意图一致（同值写入、
+	// 或同为清空）按一处生效；不一致整批拒绝并点名归一键与两个原始键。
+	type configIntent struct {
+		rawKey  string
+		cleared bool
+		value   string
+	}
+	seenIntents := make(map[string]configIntent, len(payload))
 	for k, v := range payload {
 		// R2 B14-001：键名按 repo.NormalizeConfigKey 归一（小写+去空白）
 		// 后再校验落库，与读路径同口径——此前只 TrimSpace，大写变体写出
@@ -1511,11 +1521,24 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if value == "" {
-			if !repo.IsClearableConfigKey(key) {
-				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("配置值不能为空：%s", key)))
+		intent := configIntent{rawKey: k, cleared: value == "", value: value}
+		if value == "" && !repo.IsClearableConfigKey(key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("配置值不能为空：%s", key)))
+			return
+		}
+		// R3 B14-003：撞键检出（同一原始键不可能重复出现于 map，
+		// 命中的必是不同原始键归一同键）。
+		if prev, seen := seenIntents[key]; seen {
+			if prev.cleared != intent.cleared || prev.value != intent.value {
+				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("配置键冲突：%q 与 %q 归一后同为 %q 且取值不一致，请只保留一个", prev.rawKey, k, key)))
 				return
 			}
+			// 意图一致：一处已登记，再写一遍结果相同，跳过重复登记。
+			continue
+		}
+		seenIntents[key] = intent
+
+		if value == "" {
 			cleared = append(cleared, key)
 			hooks = append(hooks, key)
 			prevPools[key] = h.latencyPoolBefore(key)

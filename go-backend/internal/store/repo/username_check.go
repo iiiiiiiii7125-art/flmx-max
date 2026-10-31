@@ -13,9 +13,11 @@ import (
 //   - userCreate → UserExists 预检 + CreateUserTx（事务内折叠复检 +
 //     折叠键咨询锁 + v5 函数唯一索引兜底）
 //   - userUpdate → UserExistsExcluding 预检 + UpdateUserWithPassword /
-//     UpdateUserWithoutPassword（唯一冲突映射兜底）
+//     UpdateUserWithoutPassword（R3 B02-002 起经 updateUserWithRenameGuard
+//     事务内折叠复检 + 折叠键咨询锁，与 CreateUserTx 同构；唯一冲突
+//     映射兜底保留）
 //   - updatePassword 改名 → UsernameExistsExceptID 预检 +
-//     UpdateUserNameAndPassword（唯一冲突映射兜底）
+//     UpdateUserNameAndPassword（同上，R3 B02-002 起事务内复检）
 //   - 备份导入 importUsers → 本函数（事务内）+ upsert 冲突映射
 //   - seedData 管理员补建 → usernameFoldCount 占用检查（仅 id=1 缺失时）
 //   - Repository.CreateUser（非事务版，生产无调用方）→ 唯一索引 +
