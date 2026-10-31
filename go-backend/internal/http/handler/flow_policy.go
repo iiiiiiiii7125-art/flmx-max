@@ -239,6 +239,16 @@ func (h *Handler) enforceFlowPolicies(userID int64, userTunnelID int64) {
 }
 
 func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, now int64) error {
+	return h.ensureUserTunnelForwardAllowedWithReserved(userID, tunnelID, now, 0, 0)
+}
+
+// ensureUserTunnelForwardAllowedWithReserved 是
+// ensureUserTunnelForwardAllowed 的带预留计数变体（R3 B08-002）：
+// reservedUser / reservedUserTunnel 表示同一批量操作中已判定通过、
+// 但 DB 计数尚未反映的待激活条数（批量恢复的 nft 意图项 status 写入
+// 推迟到分组 reconcile 之后），Num 上限判定必须把预留计入，否则同批
+// 多条共用批前计数越限激活。即时写库的调用方传 0/0，口径不变。
+func (h *Handler) ensureUserTunnelForwardAllowedWithReserved(userID int64, tunnelID int64, now int64, reservedUser int64, reservedUserTunnel int64) error {
 	if h == nil || h.repo == nil {
 		return errors.New("invalid flow policy context")
 	}
@@ -278,7 +288,7 @@ func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, n
 		if err != nil {
 			return err
 		}
-		if currentForwardCount >= int64(user.Num) {
+		if currentForwardCount+reservedUser >= int64(user.Num) {
 			return errors.New("转发数量已达上限")
 		}
 	}
@@ -318,7 +328,7 @@ func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, n
 		if err != nil {
 			return err
 		}
-		if currentTunnelForwardCount >= int64(policy.Num) {
+		if currentTunnelForwardCount+reservedUserTunnel >= int64(policy.Num) {
 			return errors.New("该隧道转发数量已达上限")
 		}
 	}

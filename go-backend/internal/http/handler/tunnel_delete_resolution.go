@@ -223,12 +223,17 @@ func (h *Handler) tunnelBatchDeleteWithForwards(w http.ResponseWriter, r *http.R
 	}
 
 	if action == tunnelDeleteActionReplace {
-		// B06-002：与单条入口共用 validateTunnelDeleteReplaceTarget
-		// 做循环前预检（此处只验目标存在性：传 tunnelID=0 时自身
-		// 互斥分支不可达，目标与删除列表的互斥由下方逐 id 检查；
-		// 执行侧逐隧道再做含自身的完整校验）。
-		if err := validateTunnelDeleteReplaceTarget(0, req.TargetTunnelID); err != nil {
-			response.WriteJSON(w, response.ErrDefault("目标隧道不能为空"))
+		// R3 B06-002：与单条入口共用完整校验
+		// validateTunnelDeleteReplaceTargetFull 做循环前预检（形态 +
+		// 目标存在性 + 启用状态；传 tunnelID=0 时自身互斥分支不可达，
+		// 目标与删除列表的互斥由下方逐 id 检查；执行侧逐隧道再做含
+		// 自身的完整校验）。
+		if err := h.validateTunnelDeleteReplaceTargetFull(0, req.TargetTunnelID); err != nil {
+			if err == errInvalidTunnelDeleteTarget {
+				response.WriteJSON(w, response.ErrDefault("目标隧道不能为空"))
+				return
+			}
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 		for _, id := range normalizedIDs {
@@ -405,8 +410,12 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 	// replace 请求（不带 target）越过校验被当作普通删除执行并报
 	// 成功。单条与批量入口最终都经本函数执行，此处即统一校验点
 	//（批量入口另有循环前预检，口径一致）。
+	// R3 B06-002：统一校验点必须是完整校验——目标存在性 + 启用状态。
+	// 此前此处只验形态（target>0、≠自身），存在性/状态校验仍留在
+	// processTunnelDeleteReplaceAction 内、仅 ForwardCount>0 才到达，
+	// 无转发 replace 到不存在/已禁用目标照样删隧道报成功。
 	if action == tunnelDeleteActionReplace {
-		if err := validateTunnelDeleteReplaceTarget(tunnelID, targetTunnelID); err != nil {
+		if err := h.validateTunnelDeleteReplaceTargetFull(tunnelID, targetTunnelID); err != nil {
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 	}
@@ -437,21 +446,38 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 		return result, nil, nil
 	}
 
-	// replace 目标已在本函数入口统一校验（B06-002，见上方
-	// validateTunnelDeleteReplaceTarget），此处直接进入迁移执行。
+	// replace 目标已在本函数入口完整校验（B06-002 / R3 B06-002，
+	// 见上方 validateTunnelDeleteReplaceTargetFull），此处直接进入
+	// 迁移执行（函数内存在性/状态复查为纵深防御）。
 	return h.processTunnelDeleteReplaceAction(tunnelID, targetTunnelID, result)
 }
 
 // validateTunnelDeleteReplaceTarget 是 delete-with-forwards 的 replace
-// 目标校验（B06-002）：目标必填、不得等于被删隧道自身。单条入口与
-// 批量入口（逐隧道调用 processTunnelDeleteWithForwards）共用本函数
-// 作为执行侧校验点，且校验先于任何删除动作——无转发时亦然。
+// 目标形态校验（B06-002）：目标必填、不得等于被删隧道自身。
 func validateTunnelDeleteReplaceTarget(tunnelID, targetTunnelID int64) error {
 	if targetTunnelID <= 0 {
 		return errInvalidTunnelDeleteTarget
 	}
 	if targetTunnelID == tunnelID {
 		return errors.New("目标隧道不能与当前隧道相同")
+	}
+	return nil
+}
+
+// validateTunnelDeleteReplaceTargetFull 是 replace 目标的完整校验
+// （R3 B06-002）：形态校验之上补目标存在性 + 启用状态。执行侧
+// （processTunnelDeleteWithForwards 在 ForwardCount 判断之前）与批量
+// 入口的循环前预检共用本校验，保证无转发时也执行、单条/批量同口径。
+func (h *Handler) validateTunnelDeleteReplaceTargetFull(tunnelID, targetTunnelID int64) error {
+	if err := validateTunnelDeleteReplaceTarget(tunnelID, targetTunnelID); err != nil {
+		return err
+	}
+	targetTunnel, err := h.getTunnelRecord(targetTunnelID)
+	if err != nil {
+		return errors.New("目标隧道不存在")
+	}
+	if targetTunnel.Status != 1 {
+		return errors.New("目标隧道已禁用")
 	}
 	return nil
 }
