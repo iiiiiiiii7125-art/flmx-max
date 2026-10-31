@@ -710,8 +710,8 @@ export default function InboundPage() {
               {describeInbound(item)}
             </Chip>
             {item.settings.encryptionAuth && (
-              <Chip color="secondary" size="sm" variant="flat">
-                IX 中转专用协议
+              <Chip color="danger" size="sm" variant="flat">
+                IEPL专用
               </Chip>
             )}
             <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
@@ -883,11 +883,11 @@ export default function InboundPage() {
             {item.settings.encryptionAuth && (
               <Chip
                 className="shrink-0 whitespace-nowrap"
-                color="secondary"
+                color="danger"
                 size="sm"
                 variant="flat"
               >
-                IX 中转专用协议
+                IEPL专用
               </Chip>
             )}
             {item.outboundIpStrategy && item.outboundIpStrategy !== "auto" && (
@@ -1445,8 +1445,8 @@ export default function InboundPage() {
                     sheetItem.kernelType)}
               </Chip>
               {sheetItem.settings.encryptionAuth && (
-                <Chip color="secondary" size="sm" variant="flat">
-                  IX 中转专用协议
+                <Chip color="danger" size="sm" variant="flat">
+                  IEPL专用
                 </Chip>
               )}
               {sheetItem.relayOnly && (

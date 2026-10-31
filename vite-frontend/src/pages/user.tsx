@@ -516,7 +516,10 @@ export default function UserPage({
         toast.error(response.msg || "获取监控权限失败");
       }
     } catch {
-      // ignore
+      // 传输失败与业务失败同口径提示（F01-001）：静默会让权限开关呈
+      // 假「未授予」状态、误导管理员判断。本函数仅挂载时加载一次、
+      // 无轮询，不存在重复打扰场景。
+      toast.error("获取监控权限失败");
     } finally {
       setMonitorPermissionLoading(false);
     }
