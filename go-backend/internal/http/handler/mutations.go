@@ -134,6 +134,14 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 
 	// O5-004：CreateUser + 配额配置 + 分组三步包在同一个事务里，任一步失败整体回滚。
 	// 旧逻辑三步各自提交，后续失败会留下半成品账号（重试时用户名已被占用）。
+	// B03-001（R3 K4）：groupIds 原始值先于 asInt64Slice 的过滤做
+	// fail-closed 检查——asInt64Slice 静默丢弃 id<=0，[-5] 会被当作
+	// 未指定分组静默建户；与分组 assign 面「成员ID非法」同口径整单
+	// 拒绝（首写之前；repo 侧 AddUserToGroupsTx 另有同守卫兜底）。
+	if bad := nonPositiveRawIDs(req["groupIds"]); len(bad) > 0 {
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("成员ID非法: %v", bad)))
+		return
+	}
 	groupIDs := asInt64Slice(req["groupIds"])
 	tx := h.repo.BeginTx()
 	if tx == nil || tx.Error != nil {
@@ -315,6 +323,15 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	hasUpdateGroupIDs := false
 	if groupIDsRaw, ok := req["groupIds"]; ok {
 		hasUpdateGroupIDs = true
+		// B03-001（R3 K4）：同 userCreate——原始值 fail-closed 前置
+		// 检查（本块为 R2X-036 校验前置段，仍在首写之前）。此前
+		// [-5] 被 asInt64Slice 过滤为空集，替换语义清空该用户全部
+		// 分组归属并连带撤销组授权却回成功（repo 侧
+		// ReplaceUserGroupsByUserIDTx 另有同守卫兜底）。
+		if bad := nonPositiveRawIDs(groupIDsRaw); len(bad) > 0 {
+			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("成员ID非法: %v", bad)))
+			return
+		}
 		updateGroupIDs = asInt64Slice(groupIDsRaw)
 		if err := h.repo.ValidateIDsExist("user_group", updateGroupIDs); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -738,6 +755,15 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// B04-003（R3 K4）：与 nodeUpdate 同口径——在场但不可解析的数值
+	// 字段 fail-closed 拒绝（FIX2-A 门此前唯独漏了创建面，expiryTime
+	// 传 "abc" 被静默套 0 = 到期时间丢失且回成功）。
+	for _, key := range []string{"http", "tls", "socks", "expiryTime"} {
+		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
 	name := asString(req["name"])
 	// R30-FIX-F04（写侧归一化，用户 2026-10-26 拍板）：入库前剥离
 	// :port 再存。":port-only" 等退化值归一化为空后由下方的空值检查
@@ -941,6 +967,13 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(vErr.Error()))
 			return
 		}
+		// B04-002（R3 K4）：显式提交的 serverIp 归一后为空与
+		// nodeCreate 同口径拒绝（空串按 strip 定义返回 ("", nil)，
+		// 旧口径直接落库空地址、节点随即不可拨）。
+		if v == "" {
+			response.WriteJSON(w, response.ErrDefault("节点名称和地址不能为空"))
+			return
+		}
 		serverIP = v
 	}
 	if serverIP != "" {
@@ -1025,6 +1058,12 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	nodeName := currentNode.Name
 	if _, ok := req["name"]; ok {
 		nodeName = asString(req["name"])
+		// B04-002（R3 K4）：显式提交空名称与 nodeCreate 同口径拒绝
+		//（未提交时保持现值，A2-04 语义不变）。
+		if nodeName == "" {
+			response.WriteJSON(w, response.ErrDefault("节点名称和地址不能为空"))
+			return
+		}
 	}
 	// R2 K1 枚举复扫（B03-001 同族）：显式提交的名称/网卡名按列宽
 	// 校验（presence 口径，存量值不连坐）。
@@ -3565,6 +3604,9 @@ func (h *Handler) tunnelBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) userTunnelAssign(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -3578,6 +3620,9 @@ func (h *Handler) userTunnelAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) userTunnelBatchAssign(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req struct {
 		UserID  int64 `json:"userId"`
 		Tunnels []struct {
@@ -3663,6 +3708,9 @@ func (h *Handler) userTunnelRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -3810,6 +3858,9 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -4014,6 +4065,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -5039,6 +5093,9 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req struct {
 		ForwardIDs     []int64 `json:"forwardIds"`
 		TargetTunnelID int64   `json:"targetTunnelId"`
@@ -5256,6 +5313,9 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -5314,6 +5374,9 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -5499,6 +5562,9 @@ func (h *Handler) groupUserDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req struct {
 		GroupID   int64   `json:"groupId"`
 		TunnelIDs []int64 `json:"tunnelIds"`
@@ -5540,6 +5606,9 @@ func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) groupUserAssign(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req struct {
 		GroupID int64   `json:"groupId"`
 		UserIDs []int64 `json:"userIds"`
@@ -5580,6 +5649,9 @@ func (h *Handler) groupUserAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req struct {
 		UserGroupID   int64 `json:"userGroupId"`
 		TunnelGroupID int64 `json:"tunnelGroupId"`
@@ -5699,6 +5771,9 @@ func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table string) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -5751,6 +5826,9 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 }
 
 func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table string) {
+	if !requirePost(w, r) {
+		return
+	}
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -8813,6 +8891,18 @@ func asAnyToInt64Ptr(v interface{}) *int64 {
 	return &i
 }
 
+// requirePost 是写面的方法守卫（B03-002 同族口径）：仅接受 POST，
+// 非 POST 回「请求失败」且不执行任何写操作。已守卫面多为内联同形
+// 校验，本助手供新增/补守卫面单点复用；返回 false 时回执已写出，
+// 调用方直接 return。
+func requirePost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return false
+	}
+	return true
+}
+
 func idFromBody(r *http.Request, w http.ResponseWriter) int64 {
 	return asInt64FromBodyKey(r, w, "id")
 }
@@ -8956,6 +9046,20 @@ func randomToken(n int) (string, error) {
 		return "", fmt.Errorf("生成随机凭据失败: %w", err)
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// nonPositiveRawIDs 返回原始 JSON 数组中的非正整数元素（B03-001）。
+// asInt64Slice 的语义是静默过滤 id<=0（只读拼装面适用）；写面在
+// 过滤前须以本助手对原始值做 fail-closed 检查，否则 [-5] 会被等价
+// 处理为「空集/未指定」。
+func nonPositiveRawIDs(v interface{}) []int64 {
+	bad := make([]int64, 0)
+	for _, x := range asAnySlice(v) {
+		if id := asInt64(x, 0); id <= 0 {
+			bad = append(bad, id)
+		}
+	}
+	return bad
 }
 
 func asInt64Slice(v interface{}) []int64 {

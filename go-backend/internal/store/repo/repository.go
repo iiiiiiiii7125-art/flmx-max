@@ -3619,6 +3619,23 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, u := range users {
+		// B02-001（R3 K4）：用户名先 TrimSpace 归一再判重/落库，与
+		// create/update/updatePassword 写面同口径。此前原样落库：
+		// 带空格名只能以原名登录、带空格的大小写变体绕过 K10 折叠
+		// 判重构成逻辑同名、空名成永久不可登录的死账号、超长名在
+		// PG 使整单导入失败。归一后为空或 >100 rune 按 R5X-009
+		// 同形逐行 skip+warn（不整单失败）。
+		username := strings.TrimSpace(u.User)
+		if username == "" {
+			rep.skip("users")
+			rep.warnf("备份恢复：用户 #%d 的用户名 %q 归一（去首尾空格）后为空，已跳过该行未恢复", u.ID, u.User)
+			continue
+		}
+		if len([]rune(username)) > 100 {
+			rep.skip("users")
+			rep.warnf("备份恢复：用户 #%d 的用户名归一后长度 %d 超过 100 字符，已跳过该行未恢复", u.ID, len([]rune(username)))
+			continue
+		}
 		// R5X-009：status 合法域 {0,1} 枚举门（与运行时写入口同
 		// 口径）——非法值逐行跳过 + skipped/warning，不静默原样
 		// 落库（非法值会形成「登录发 token、其余全拒」的僵尸账号）。
@@ -3640,7 +3657,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 		}
 		item := model.User{
 			ID:            u.ID,
-			User:          u.User,
+			User:          username,
 			Pwd:           pwdHash,
 			RoleID:        u.RoleID,
 			ExpTime:       u.ExpTime,
@@ -3660,8 +3677,8 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			MaxConn:           u.MaxConn,
 		}
 		// R5-B4C: 备份导入查重。重名时明确报错，不静默覆盖。
-		if err := ensureUsernameAvailable(tx, u.User, u.ID); err != nil {
-			return count, fmt.Errorf("import user %q: %w", u.User, err)
+		if err := ensureUsernameAvailable(tx, username, u.ID); err != nil {
+			return count, fmt.Errorf("import user %q: %w", username, err)
 		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -4911,6 +4928,15 @@ func importSpeedLimits(tx *gorm.DB, speedLimits []model.SpeedLimitBackup, now in
 		if sl.Speed < 1 || (sl.Status != 0 && sl.Status != 1) {
 			rep.skip("speedLimits")
 			rep.warnf("备份恢复：限速规则 #%d（%s）speed=%d status=%d 不在合法集（speed≥1、status∈{0,1}），已跳过该行未恢复", sl.ID, sl.Name, sl.Speed, sl.Status)
+			continue
+		}
+		// B09-001（R3 K4）：名称长度与新建/编辑两载体同口径
+		// （speed_limit.name 列宽 varchar(100)，R2 B09-004）——超长
+		// 名此前在 SQLite 静默落库、在 PG 使整单导入失败并透出
+		// 原始错误；现同形逐行跳过 + 点名。
+		if len([]rune(sl.Name)) > 100 {
+			rep.skip("speedLimits")
+			rep.warnf("备份恢复：限速规则 #%d 的名称长度 %d 超过 100 字符，已跳过该行未恢复", sl.ID, len([]rune(sl.Name)))
 			continue
 		}
 		// D4-03：绑定了隧道而隧道不存在时整行跳过并计数（未绑定
