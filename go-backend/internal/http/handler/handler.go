@@ -1873,6 +1873,14 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R3 B01-001：改密是持 JWT 的在线密码校验面，此前无任何限流——
+	// token 泄露后可无限猜测当前密码（猜中即改密完成持久接管）。
+	// 与 login / passkeyRegisterBegin 同口径接入 IP 限流（10/min）。
+	// 密码校验面全集与守卫对应关系见 password_verify_census 回归。
+	if !h.checkLoginRateLimit(w, r) {
+		return
+	}
+
 	claims, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims)
 	if !ok {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))

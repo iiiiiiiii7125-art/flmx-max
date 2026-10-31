@@ -441,6 +441,12 @@ func (h *Handler) passkeyDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
+	// R3 B01-001：删除通行证密钥同为持 JWT 的在线密码校验面，此前
+	// 无限流（猜中即证明口令正确，可转 updatePassword 接管）。与
+	// passkeyRegisterBegin 同口径接入 IP 限流（10/min）。
+	if !h.checkLoginRateLimit(w, r) {
+		return
+	}
 	userID, err := userIDFromRequest(r)
 	if err != nil {
 		response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
