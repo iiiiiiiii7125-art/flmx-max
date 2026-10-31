@@ -81,10 +81,11 @@ SELECT fp.node_id, fp.port FROM forward_port fp LEFT JOIN "forward" f ON f.id = 
 SELECT node_id, port, COUNT(*) FROM chain_tunnel WHERE port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1;
 SELECT node_id, port, COUNT(*) FROM node_inbound WHERE kernel_id > 0 GROUP BY node_id, port HAVING COUNT(*) > 1;
 SELECT "user", COUNT(*) FROM "user" GROUP BY "user" HAVING COUNT(*) > 1;
+SELECT LOWER("user"), COUNT(*) FROM "user" GROUP BY LOWER("user") HAVING COUNT(*) > 1;
 SQLEOF
 ```
 
-> 以上 SQL 中的 4 条重复检查与代码启动预检逻辑（`runV1Precheck`）一致；`forward_port` 孤儿检查不在启动预检内，只包含在 `scripts/phase_a_dryrun.sql` 的 dry-run 清单中。
+> 以上 SQL 中的前 4 条重复检查与代码启动预检逻辑（`runV1Precheck`）一致；`forward_port` 孤儿检查不在启动预检内，只包含在 `scripts/phase_a_dryrun.sql` 的 dry-run 清单中。最后一条是用户名**大小写折叠**重复检查，与 v5 迁移（`k10_v5_username_casefold_unique`，1.7.5 起）的预检同形，即 dry-run 清单的第 6b 节：1.7.5 起用户名判重不区分大小写，仅大小写不同的同名用户（如 `Admin` 与 `admin`）同样算重复，不清理会使折叠唯一索引降级缺席（见 §5）。
 
 ### 3. 清理步骤
 
@@ -95,6 +96,7 @@ SQLEOF
 | chain_tunnel 重复 | tunnel_id 最小 | 先建优先 |
 | node_inbound 重复（仅 kernel_id > 0 的内核入站） | enabled=1；都有则 id 最小 | 启用优先；导入节点（kernel_id=0）同端口不同主机是合法数据，不要清理 |
 | 用户名重复 | 最早创建未停用；其余改名加 `_dup` | 不删账号 |
+| 用户名大小写折叠重复（仅大小写不同） | 保留其一；其余按上一行口径改名 | 1.7.5 起判重不区分大小写；系统只在启动日志中逐组点名，不自动合并/改名/删账号，保留哪个由管理员决定 |
 
 ### 4. 触发迁移
 
@@ -107,6 +109,8 @@ docker logs <backend容器> 2>&1 | grep -i migration
 
 若日志显示 `PRECHECK FAILED`：面板正常启动，按 §2 重新检查清理后重启即可（迁移幂等，会重试）。
 
+大小写折叠唯一索引（`idx_user_username_fold_unique`，v5 迁移 `k10_v5_username_casefold_unique`，1.7.5 起）同理：存量库存在折叠重复组时迁移**降级跳过**——不建索引、不记迁移版本，启动日志逐组点名（折叠名、成员 id、实际存储形态）；面板正常启动，应用层判重照常按大小写不敏感执法，只是少了数据库层对并发写入的最终兜底。按 §3 清理折叠双生子后**重启面板即自动补建**该索引（迁移未记版本、下次启动重试），无需手工建索引；不清理则每次启动都会重复点名、索引持续缺席。
+
 ### 6. 回滚
 
 ```bash
@@ -114,6 +118,7 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_forward_port_node_port;"
 sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_chain_tunnel_node_port;"
 sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_node_inbound_node_port;"
 sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_unique;"
+sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
 ```
 
 ### 7. 停用用户名释放
