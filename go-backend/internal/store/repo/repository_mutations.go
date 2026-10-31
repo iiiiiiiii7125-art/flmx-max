@@ -256,7 +256,7 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := tx.Model(&model.Forward{}).Where("user_id = ?", userID).Pluck("id", &userForwardIDs).Error; err != nil {
 			return err
 		}
-		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", userForwardIDs)
+		relayIDs, err := pluckInboundRelayIDsByColumnTx(tx, "forward_id", userForwardIDs)
 		if err != nil {
 			return err
 		}
@@ -934,33 +934,36 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 			cascadeForwardIDs = append(cascadeForwardIDs, id)
 		}
 	}
-	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
+	// K8/X01-001：物化集（forwardIDs / cascadeForwardIDs /
+	// userTunnelIDs）随隧道规模无上界，全部回灌删除走分块助手，
+	// 删除顺序与集合语义不变（物化本身因 TST-001 顺序约束保留）。
+	if err := deleteByIDSliceInChunksTx(tx, &model.ForwardPort{}, "forward_id", cascadeForwardIDs); err != nil {
 		return err
 	}
 	// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
 	// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
 	// X2-01：删 relay 行前先物化其 id 集合，同步清理指向这些 relay
 	// 的 user_inbound 授权行，避免孤儿授权残留。
-	relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id IN ?", forwardIDs)
+	relayIDs, err := pluckInboundRelayIDsByColumnTx(tx, "forward_id", forwardIDs)
 	if err != nil {
 		return err
 	}
 	if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 		return err
 	}
-	if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+	if err := deleteByIDSliceInChunksTx(tx, &model.NodeInboundRelay{}, "forward_id", forwardIDs); err != nil {
 		return err
 	}
-	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
+	if err := deleteByIDSliceInChunksTx(tx, &model.NftCounterState{}, "forward_id", cascadeForwardIDs); err != nil {
 		return err
 	}
-	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftRuleBinding{}).Error; err != nil {
+	if err := deleteByIDSliceInChunksTx(tx, &model.NftRuleBinding{}, "forward_id", cascadeForwardIDs); err != nil {
 		return err
 	}
 	// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
 	// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致；
 	// R1 X-P1-1：pending 墓碑转发的台账行除外（见上方分流注释）。
-	if err := tx.Where("forward_id IN (?)", cascadeForwardIDs).Delete(&model.NftPendingDelete{}).Error; err != nil {
+	if err := deleteByIDSliceInChunksTx(tx, &model.NftPendingDelete{}, "forward_id", cascadeForwardIDs); err != nil {
 		return err
 	}
 	if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, model.ForwardStatusPendingDelete).Delete(&model.Forward{}).Error; err != nil {
@@ -968,7 +971,7 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 	}
 	// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
 	// user_tunnel_id 关联本隧道的用户隧道；在 UserTunnel 删除前清理。
-	if err := tx.Where("user_tunnel_id IN (?)", userTunnelIDs).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+	if err := deleteByIDSliceInChunksTx(tx, &model.GroupPermissionGrant{}, "user_tunnel_id", userTunnelIDs); err != nil {
 		return err
 	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {

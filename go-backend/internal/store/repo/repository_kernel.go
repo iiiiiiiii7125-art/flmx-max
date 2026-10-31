@@ -128,26 +128,8 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 		if err := tx.Model(&model.NodeInbound{}).Where("kernel_id = ?", id).Pluck("id", &ids).Error; err != nil {
 			return err
 		}
-		if len(ids) > 0 {
-			relayIDs, err := pluckInboundRelayIDsTx(tx, "inbound_id IN ?", ids)
-			if err != nil {
-				return err
-			}
-			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundCounter{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundRelay{}).Error; err != nil {
-				return err
-			}
-			// B4/F-010（变体）: 单删入站（DeleteNodeInbound）会清 user_inbound，
-			// 删内核/删节点级联此前独漏，孤儿分配行可阻断后续订阅分配保存。
-			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
-				return err
-			}
-			// A3-02/X2-01 统一手法：指向被删 relay 行的授权按物化集合清。
-			if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-				return err
-			}
+		if err := deleteInboundRowsByIDsTx(tx, ids); err != nil {
+			return err
 		}
 		if err := tx.Where("kernel_id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
 			return err
@@ -164,6 +146,9 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 // forward id 是相互独立的自增序列：清理授权行必须用物化的 relay id
 // 集合，严禁用其它实体的 id 集合代替（A3-02：旧 deleteNodeKernelsTx
 // 用入站 id 集合套 relay_id，数值碰撞时静默误删其它节点中转的授权）。
+// 本函数只供单值谓词调用点（forward_id = ? / inbound_id = ?）；
+// 按 id 集合物化的调用点必须走分块变体 pluckInboundRelayIDsByColumnTx
+// （K8/X01-001：集合无上界，整体塞单个 IN ? 会越 SQL 变量上限）。
 func pluckInboundRelayIDsTx(tx *gorm.DB, where string, args ...interface{}) ([]int64, error) {
 	var relayIDs []int64
 	if err := tx.Model(&model.NodeInboundRelay{}).Where(where, args...).Pluck("id", &relayIDs).Error; err != nil {
@@ -172,13 +157,61 @@ func pluckInboundRelayIDsTx(tx *gorm.DB, where string, args ...interface{}) ([]i
 	return relayIDs, nil
 }
 
+// pluckInboundRelayIDsByColumnTx 是 pluckInboundRelayIDsTx 的分块
+// 变体：按 column（inbound_id / forward_id，调用点写死的字面量）
+// 的 id 集合分块物化 relay id，一处收口全部级联调用方。每块
+// inListChunkSize 个变量，同时低于 SQLite 32766 与 PG 65535 上限。
+func pluckInboundRelayIDsByColumnTx(tx *gorm.DB, column string, ids []int64) ([]int64, error) {
+	var relayIDs []int64
+	for _, chunk := range chunkInt64IDs(ids) {
+		var part []int64
+		if err := tx.Model(&model.NodeInboundRelay{}).Where(column+" IN ?", chunk).Pluck("id", &part).Error; err != nil {
+			return nil, err
+		}
+		relayIDs = append(relayIDs, part...)
+	}
+	return relayIDs, nil
+}
+
 // deleteUserInboundGrantsByRelayIDsTx 按物化的 relay id 集合清理
 // user_inbound 授权行（各删除级联统一手法，A3-02/X2-01）。
+// relay 集合随级联规模无上界，内部分块回灌——全部调用方经此
+// 一处收口（K8/X01-001）。
 func deleteUserInboundGrantsByRelayIDsTx(tx *gorm.DB, relayIDs []int64) error {
-	if len(relayIDs) == 0 {
+	return deleteByIDSliceInChunksTx(tx, &model.UserInbound{}, "relay_id", relayIDs)
+}
+
+// deleteInboundRowsByIDsTx 清理一组入站的计数行、中转行与授权行
+// （删内核与删节点级联共用）。ids 为单内核/单节点的全部入站 id，
+// 规模无上界（K8/X01-001：33k 入站整体回灌单个 IN ? 必越 SQLite
+// 32766 / PG 65535 变量上限），全部回灌点走 chunkInt64IDs 分块；
+// relay 授权按删除前物化的 relay id 集合清（A3-02，见
+// pluckInboundRelayIDsTx 注记）。删除顺序与旧实现一致：先物化
+// relay 集，再删计数/中转/按入站授权，最后按 relay 集删授权。
+func deleteInboundRowsByIDsTx(tx *gorm.DB, ids []int64) error {
+	if len(ids) == 0 {
 		return nil
 	}
-	return tx.Where("relay_id IN ?", relayIDs).Delete(&model.UserInbound{}).Error
+	relayIDs, err := pluckInboundRelayIDsByColumnTx(tx, "inbound_id", ids)
+	if err != nil {
+		return err
+	}
+	for _, chunk := range chunkInt64IDs(ids) {
+		if err := tx.Where("inbound_id IN ?", chunk).Delete(&model.NodeInboundCounter{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("inbound_id IN ?", chunk).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+			return err
+		}
+		// B4/F-010: 级联删入站时同步清 user_inbound（按 inbound_id），
+		// 与单删入站（DeleteNodeInbound）口径一致，否则孤儿分配行
+		// 可阻断后续订阅分配保存。
+		if err := tx.Where("inbound_id IN ?", chunk).Delete(&model.UserInbound{}).Error; err != nil {
+			return err
+		}
+	}
+	// A3-02/X2-01 统一手法：指向被删 relay 行的授权按物化集合清。
+	return deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs)
 }
 
 func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
@@ -186,27 +219,8 @@ func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
 	if err := tx.Model(&model.NodeInbound{}).Where("node_id = ?", nodeID).Pluck("id", &ids).Error; err != nil {
 		return err
 	}
-	if len(ids) > 0 {
-		relayIDs, err := pluckInboundRelayIDsTx(tx, "inbound_id IN ?", ids)
-		if err != nil {
-			return err
-		}
-		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundCounter{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundRelay{}).Error; err != nil {
-			return err
-		}
-		// B4/F-010: 节点级联删入站时同步清 user_inbound（按 inbound_id），
-		// 与 DeleteNodeInbound 的口径一致；指向被删 relay 行的分配行
-		// （relay_id）按物化的 relay id 集合一并清理（A3-02 修正：
-		// 旧实现误用入站 id 集合，会误删其它节点同号 relay 的授权）。
-		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.UserInbound{}).Error; err != nil {
-			return err
-		}
-		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-			return err
-		}
+	if err := deleteInboundRowsByIDsTx(tx, ids); err != nil {
+		return err
 	}
 	if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeInbound{}).Error; err != nil {
 		return err

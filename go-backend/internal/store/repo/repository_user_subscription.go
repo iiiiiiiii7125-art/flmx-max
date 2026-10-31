@@ -2,6 +2,7 @@ package repo
 
 import (
 	"errors"
+	"sort"
 	"time"
 
 	"go-backend/internal/store/model"
@@ -70,10 +71,23 @@ func (r *Repository) ListUserSubscriptions(userID int64) ([]model.Subscription, 
 	if len(ids) == 0 {
 		return []model.Subscription{}, nil
 	}
-	var out []model.Subscription
-	if err := r.db.Where("id IN ?", ids).Order("inx ASC, id ASC").Find(&out).Error; err != nil {
-		return nil, err
+	// K8/X01-001：单用户的订阅分配数无上界，整体回灌单个 IN ? 会
+	// 越 SQL 变量上限（SQLite 32766 / PG 65535）；分块查后按
+	// (inx, id) 在内存重排，保持与原单查 Order 的全局序一致。
+	out := []model.Subscription{}
+	for _, chunk := range chunkInt64IDs(ids) {
+		var part []model.Subscription
+		if err := r.db.Where("id IN ?", chunk).Find(&part).Error; err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Inx != out[j].Inx {
+			return out[i].Inx < out[j].Inx
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 

@@ -107,6 +107,9 @@ func (r *Repository) precheckBackupPortConflicts(backup *model.BackupData, typeS
 	// 按所属隧道 id（统一谓词的链路排除粒度是隧道——同一
 	// (node, port) 上属于该隧道的行只可能是将被替换的那一行，与
 	// 此前按链路行 id 排除等价）。联邦有效预留不在备份内、无排除。
+	// 排除集为整单规模（无上界）：消费侧 NodePortOccupantTx 对大
+	// 集合走候选反连接判定，每条 claim 的 SQL 变量数恒定，不整体
+	// 回灌 NOT IN（K8/X01-001，OPT-01 随之消除）。
 	var excl PortExclusions
 	if typeSet["forwards"] {
 		for _, f := range backup.Forwards {
