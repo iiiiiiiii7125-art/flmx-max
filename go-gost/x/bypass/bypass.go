@@ -347,3 +347,36 @@ func (p *bypassGroup) Contains(ctx context.Context, network, addr string, opts .
 func (p *bypassGroup) IsWhitelist() bool {
 	return false
 }
+
+// PinDialTarget implements DialTargetPinner for the group by
+// delegating to every member that implements DialTargetPinner
+// (R3-K1 / A02-001). Production wiring always wraps the handler's
+// bypass in this group (config/parsing/service, hop and chain node
+// parsing all build BypassGroup(List(...))), so the group itself
+// must carry the pinning capability: without this forwarding, the
+// UDP relays' DialTargetPinner assertion on the handler bypass
+// always failed and per-packet targets were written out unpinned —
+// the Contains check and the packet conn resolved the hostname
+// independently, reopening the rebinding gap the pin exists to
+// close. Semantics are fail-closed: members validate the evolving
+// target in order (each pinner sees the previous pinner's pinned
+// result) and any rejection fails the whole pin. A group with no
+// pinning member passes the target through unchanged, the pre-pin
+// behavior for services without a pinning bypass.
+func (p *bypassGroup) PinDialTarget(ctx context.Context, network, addr string) (string, error) {
+	pinned := addr
+	for _, bp := range p.bypasses {
+		pinner, ok := bp.(DialTargetPinner)
+		if !ok {
+			continue
+		}
+		next, err := pinner.PinDialTarget(ctx, network, pinned)
+		if err != nil {
+			return "", err
+		}
+		pinned = next
+	}
+	return pinned, nil
+}
+
+var _ DialTargetPinner = (*bypassGroup)(nil)
