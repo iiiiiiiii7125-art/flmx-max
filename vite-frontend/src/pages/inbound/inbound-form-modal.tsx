@@ -692,8 +692,13 @@ export function InboundFormModal({
                                 set("encryptionEnabled", false);
                                 return;
                               }
-                              // 开启 ENC 时一键套用 IX 中转标准配置，避免逐项点错
-                              // 导致组合不可用（TCP + 安全无 + Vision + 后量子认证）。
+                              // 开启 ENC 时一键套用标准配置，避免逐项点错
+                              // 导致组合不可用（TCP + 安全无 + 后量子认证）。
+                              // 流控口径（S-21 已定，单一判据）：本填充产生
+                              // 纯 ENC 形态（ENC 开 + 安全无），不开启流控，
+                              // flowVision 必须置 false——与「IEPL专用」标签
+                              // 预设同口径，不存在第二套开关面口径。Vision
+                              // 功能本身保留，Reality 等其他形态照常可开。
                               setForm((prev) => ({
                                 ...prev,
                                 encryptionEnabled: true,
@@ -701,25 +706,25 @@ export function InboundFormModal({
                                 encryptionMode: "native",
                                 transportType: "tcp",
                                 securityType: "none",
-                                flowVision: true,
+                                flowVision: false,
                               }));
                             }}
                           />
                           <span className="text-sm">
                             启用 VLESS 加密（ENC）
                           </span>
-                          <Chip color="secondary" size="sm" variant="flat">
-                            IX 中转专用协议
-                          </Chip>
                         </>
                       )}
+                      {/* CHG-01（S-21）：原 ENC 专用标签与独立的 ENC 快捷
+                          标签合并为红色「IEPL专用」标签，预设能力并入标签
+                          本身——点按即套用纯 ENC 预设。 */}
                       <Chip
                         className="cursor-pointer"
-                        color="primary"
+                        color="danger"
                         role="button"
                         size="sm"
                         tabIndex={0}
-                        title="一键填入纯 ENC 配置：VLESS / TCP / 安全无 / Vision / ML-KEM-768 后量子认证 / xorpub 外观，无 SNI。只填表单，不创建。"
+                        title="一键填入 IEPL 专用（纯 ENC）配置：VLESS / TCP / 安全无 / ML-KEM-768 后量子认证 / xorpub 外观，无 SNI、不启用 Vision 流控，并勾选空闲超时「不限」。只填表单，不创建。"
                         variant="flat"
                         onClick={() =>
                           setForm((prev) => applyPureEncPreset(prev))
@@ -731,7 +736,7 @@ export function InboundFormModal({
                           }
                         }}
                       >
-                        纯ENC
+                        IEPL专用
                       </Chip>
                     </div>
                     {form.protocol === "vless" && form.encryptionEnabled && (
@@ -781,8 +786,8 @@ export function InboundFormModal({
                           </SelectItem>
                         </Select>
                         <p className="text-xs text-default-400">
-                          开启时自动套用 IX 中转标准配置（TCP、安全无、Vision 流控、ML-KEM-768
-                          认证、native 外观），需要节点 Xray 25.9.5 及以上。启用后 sing-box、Surge、Loon、Quantumult
+                          开启时自动套用标准配置（TCP、安全无、ML-KEM-768
+                          认证、native 外观；纯 ENC 形态不开启 Vision 流控），需要节点 Xray 25.9.5 及以上。启用后 sing-box、Surge、Loon、Quantumult
                           X、小火箭格式的订阅不会包含此入站，请用 Clash（请使用近一年内的 Mihomo 核心）或通用链接分发。
                         </p>
                       </>

@@ -225,8 +225,8 @@ function LinesView() {
                   <div className="flex items-center gap-1.5">
                     <div className="truncate font-semibold">{i.name}</div>
                     {i.settings.encryptionAuth && (
-                      <Chip color="secondary" size="sm" variant="flat">
-                        IX 中转专用协议
+                      <Chip color="danger" size="sm" variant="flat">
+                        IEPL专用
                       </Chip>
                     )}
                   </div>
@@ -323,8 +323,8 @@ function LinesView() {
                     {i.name}
                   </span>
                   {i.settings.encryptionAuth && (
-                    <Chip color="secondary" size="sm" variant="flat">
-                      IX 中转专用协议
+                    <Chip color="danger" size="sm" variant="flat">
+                      IEPL专用
                     </Chip>
                   )}
                   {i.relayOnly && (
