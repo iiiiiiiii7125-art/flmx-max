@@ -503,7 +503,10 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		Version string  `json:"version"`
 		Channel string  `json:"channel"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// B05-001（R3-K9）：与升级家族其余端点同口径走 decodeJSON
+	// （MaxBytesReader 10MB + DisallowUnknownFields）；旧实现裸
+	// NewDecoder 无大小上限、无严格字段，超大请求体可无界读入。
+	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
