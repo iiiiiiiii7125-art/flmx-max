@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -119,6 +120,13 @@ func (h *Handler) getGithubProxyConfig() (enabled bool, proxyURL string) {
 		}
 		// U2-P3-4：去全部尾斜杠（旧逻辑 TrimSuffix 只去一个，双尾斜杠会拼出双斜杠路径）
 		proxyURL = strings.TrimRight(proxyURL, "/")
+		// R3 B04-001 消费面兜底：写面已先拒，但存量坏值（旧版本存入
+		// 或经其它路径写入）不得进入无引号拼入 root 安装命令的
+		// PROXY_URL/curl 前缀——校验不过即回落内置默认并留日志。
+		if err := validateGithubProxyURL(proxyURL); err != nil {
+			log.Printf("github_proxy_url stored value rejected (%v); falling back to default proxy", err)
+			proxyURL = defaultGithubProxyURL
+		}
 	}
 
 	return
