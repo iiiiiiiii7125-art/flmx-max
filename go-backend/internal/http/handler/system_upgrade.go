@@ -191,28 +191,85 @@ func (e *systemUpgradeExecutor) statusPath() string {
 // readUpgradeStatus 读取落盘的升级状态；文件不存在或损坏时返回零值
 // （inProgress=false），不视为错误。新名文件缺失时回退读改名前的旧名
 // 文件（跨改名版本升级中的状态由旧 helper 写在旧名下）。
+// 注意：损坏态在此被折叠为零值——需要区分「无状态」与「文件存在但
+// 不可解析」的判定面一律走 assessUpgradeStatus（B05-002），不得依据
+// 本函数的零值直接放行。
 func (e *systemUpgradeExecutor) readUpgradeStatus() systemUpgradeStatusData {
-	var st systemUpgradeStatusData
+	st, _ := e.readUpgradeStatusDetailed()
+	return st
+}
+
+// readUpgradeStatusDetailed 在 readUpgradeStatus 基础上报告 corrupt：
+// 状态文件（新名或旧名回退）存在但 JSON 解析失败时为 true。
+func (e *systemUpgradeExecutor) readUpgradeStatusDetailed() (st systemUpgradeStatusData, corrupt bool) {
 	data, err := os.ReadFile(e.statusPath())
 	if err != nil {
 		data, err = os.ReadFile(filepath.Join(e.deployDir, legacySystemUpgradeStatusFileName))
 	}
 	if err != nil {
-		return st
+		return st, false
 	}
 	if err := json.Unmarshal(data, &st); err != nil {
-		return systemUpgradeStatusData{}
+		return systemUpgradeStatusData{}, true
 	}
-	return st
+	return st, false
 }
 
-// writeUpgradeStatus 以 0600 权限落盘升级状态。
+// writeUpgradeStatus 以 0600 权限原子落盘升级状态（B05-002：临时文件
+// + Rename 覆盖，读方不会再读到截断中的撕裂内容）。
 func (e *systemUpgradeExecutor) writeUpgradeStatus(st systemUpgradeStatusData) error {
 	data, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	return writeFileWithMode(e.statusPath(), append(data, '\n'), 0o600)
+	return writeFileAtomicWithMode(e.statusPath(), append(data, '\n'), 0o600)
+}
+
+// upgradeStatusAssessment 是升级状态的统一判定结果（B05-002/B14-004）：
+// 发起拦截面与状态展示面共用同一判定，杜绝两面口径分裂。
+type upgradeStatusAssessment struct {
+	// Raw 为落盘原样状态（折算前；损坏时为零值）。
+	Raw systemUpgradeStatusData
+	// Status 为可对外展示的状态：残留进行中已折算为
+	// inProgress=false + result="interrupted"（只读折算，不落盘改写）。
+	Status systemUpgradeStatusData
+	// Blocking 为 true 时新升级必须被拦截。
+	Blocking bool
+	// Corrupt 表示状态文件存在但不可解析（撕裂读/文件系统损坏）。
+	Corrupt bool
+}
+
+// assessUpgradeStatus 是升级状态的唯一判定入口（发起路径与状态端点
+// 共用同一函数，三面同口径）：
+//   - 完好状态：Blocking 沿 upgradeInProgressBlocking（心跳新鲜度 +
+//     30 分钟残留规则）；进行中但不拦截者，展示折算为已中断。
+//   - 损坏状态（B05-002）：内容不可解析、无从得知是否进行中，结合
+//     心跳新鲜度保守处置——心跳新鲜证明 helper 仍在运行，按进行中
+//     拦截且展示同为进行中；心跳缺失/过期按残留放行、展示无进行中。
+func (e *systemUpgradeExecutor) assessUpgradeStatus(now time.Time) upgradeStatusAssessment {
+	st, corrupt := e.readUpgradeStatusDetailed()
+	if corrupt {
+		blocking := false
+		if hb, ok := e.upgradeHeartbeat(); ok {
+			blocking = now.Sub(hb) <= systemUpgradeHeartbeatFresh
+		}
+		return upgradeStatusAssessment{
+			Raw:      st,
+			Status:   systemUpgradeStatusData{InProgress: blocking},
+			Blocking: blocking,
+			Corrupt:  true,
+		}
+	}
+	a := upgradeStatusAssessment{Raw: st, Status: st}
+	if !st.InProgress {
+		return a
+	}
+	a.Blocking = e.upgradeInProgressBlocking(st, now)
+	if !a.Blocking {
+		a.Status.InProgress = false
+		a.Status.Result = "interrupted"
+	}
+	return a
 }
 
 // upgradeStatusStale 判断进行中状态是否为残留（开始时间解析失败或距今
@@ -508,9 +565,12 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
 # U1-003：回写升级状态文件（与后端 systemUpgradeStatusData 结构体对应）。
 # $1=inProgress(true/false)，$2=result。version/startedAt 由环境变量传入。
 write_status() {
+  # B05-002：先写同目录临时文件再 mv 原子覆盖，避免后端在回写瞬间
+  # 读到截断中的撕裂内容（旧实现 printf > 直接截断目标文件）。
   printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"}\n' \
-    "$1" "${FLUX_UPGRADE_VERSION:-}" "${FLUX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$STATUS_FILE"
-  chmod 600 "$STATUS_FILE" 2>/dev/null || true
+    "$1" "${FLUX_UPGRADE_VERSION:-}" "${FLUX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$STATUS_FILE.tmp"
+  chmod 600 "$STATUS_FILE.tmp" 2>/dev/null || true
+  mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
 
 # O9-002：失败时自动恢复备份文件
@@ -1043,6 +1103,35 @@ func writeFileWithMode(path string, data []byte, mode os.FileMode) error {
 	return os.Chmod(path, mode)
 }
 
+// writeFileAtomicWithMode 以「同目录临时文件 + Rename 覆盖」原子落盘：
+// 并发读者只会看到旧内容或新内容，不会读到截断写中途的撕裂态。用于
+// 升级状态文件这类写方回写瞬间读方正在判定的跨进程文件（B05-002）。
+func writeFileAtomicWithMode(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
 func (e *systemUpgradeExecutor) currentBackendImage(ctx context.Context) (string, error) {
 	if err := validateBackendContainerName(e.backendContainer); err != nil {
 		return "", err
@@ -1152,7 +1241,9 @@ func releasesForChannel(releases []githubRelease, channel string) []systemUpgrad
 
 func decodeSystemUpgradeRequest(r *http.Request, req *systemUpgradeRequest) error {
 	defer r.Body.Close()
-	body, err := io.ReadAll(r.Body)
+	// B05-001（R3-K9）：ReadAll 前以 MaxBytesReader 包裹与 decodeJSON
+	// 同一 10MB 上限（旧实现无上限读入）；DisallowUnknownFields 语义保留。
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 10<<20))
 	if err != nil {
 		return err
 	}
@@ -1300,10 +1391,21 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// U1-003：落盘状态检查。systemUpgradeMu 只覆盖同步段，helper 异步执行数分钟，
 	// 期间必须靠状态文件拦截二次升级（否则 .bak 会被中间态覆盖污染）。
 	exec := newSystemUpgradeExecutor()
-	if st := exec.readUpgradeStatus(); st.InProgress && exec.upgradeInProgressBlocking(st, time.Now()) {
+	// B05-002/B14-004：拦截判定与状态端点共用 assessUpgradeStatus 同一
+	// 判定（含状态文件损坏时的心跳保守口径），不再各行其是。
+	assessment := exec.assessUpgradeStatus(time.Now())
+	st := assessment.Raw
+	switch {
+	case assessment.Corrupt && assessment.Blocking:
+		log.Printf("system_upgrade: 升级状态文件损坏但 helper 心跳新鲜，保守按升级进行中拦截")
+		response.WriteJSON(w, response.ErrDefault(systemUpgradeConflictError+"（升级状态文件损坏，helper 心跳新鲜，保守拦截）"))
+		return
+	case assessment.Corrupt:
+		log.Printf("system_upgrade: 升级状态文件损坏且心跳缺失/过期，视为残留，允许新升级")
+	case assessment.Blocking:
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s（目标版本 %s，开始于 %s）", systemUpgradeConflictError, st.Version, st.StartedAt)))
 		return
-	} else if st.InProgress {
+	case st.InProgress:
 		log.Printf("system_upgrade: 检测到残留的升级中状态（版本 %s，开始于 %s），视为已中断，允许新升级", st.Version, st.StartedAt)
 	}
 
@@ -1454,11 +1556,14 @@ func wrapUpgradeDownloadError(err error) error {
 
 // systemUpgradeStatus 返回落盘的升级状态（U1-007）：是否正在升级、目标版本、
 // 上次升级结果。无状态文件时返回 {inProgress:false}。
+// B14-004：返回前套用与发起路径同一判定（assessUpgradeStatus）做只读
+// 折算——残留进行中状态折算为 inProgress=false + result="interrupted"，
+// 不再原样回吐与「可否再发起升级」分裂的口径。
 func (h *Handler) systemUpgradeStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
 	exec := newSystemUpgradeExecutor()
-	response.WriteJSON(w, response.OK(exec.readUpgradeStatus()))
+	response.WriteJSON(w, response.OK(exec.assessUpgradeStatus(time.Now()).Status))
 }

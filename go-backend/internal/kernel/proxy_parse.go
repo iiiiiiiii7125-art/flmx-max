@@ -758,6 +758,14 @@ func parseURI(line string) (Proxy, error) {
 		// links but could not import them back — "暂不支持". Userinfo
 		// is user:pass, PathEscape'd on emit, decoded like trojan's.
 		return parseUserURI("naive", rest)
+	case "naive+https":
+		// B11-001（R3-K9，沿 Round 2 B11-002 处方）：ShareURI 对 Naive
+		// 生成 NekoBox/v2rayN 形态的 naive+https:// 链接，此前导入面无
+		// 此 case、面板自己生成的分享链接导不回来。userinfo 同为
+		// user:pass PathEscape 形态，与 naive:// 走同一解析；?sni= 由
+		// parseUserURI 的 naive 既有处理消费（导入不记 SNI，与
+		// batch2_naive_test 既定口径一致）。
+		return parseUserURI("naive", rest)
 	case "socks", "socks5":
 		return parseSocksURI(rest)
 	case "http", "https":

@@ -591,6 +591,13 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	remoteSourceMu.Lock()
 	defer remoteSourceMu.Unlock()
+	// B10-001（R3-K9，分诊 §5.1 裁定 (a)）：与同面 refresh/save 同口径，
+	// 先校验订阅源存在性——旧实现对不存在 id 静默返回成功（不在 S-1
+	// 单删幂等清单内），管理员删错 id 仍得成功回执、目标源继续被刷新。
+	if src, err := h.repo.GetRemoteSource(req.ID); err != nil || src == nil {
+		response.WriteJSON(w, response.ErrDefault("订阅源不存在"))
+		return
+	}
 	if req.KeepNodes {
 		if err := h.repo.DetachSourceInbounds(req.ID); err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))

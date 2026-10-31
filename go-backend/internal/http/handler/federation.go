@@ -797,7 +797,58 @@ func (h *Handler) federationShareUpdate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	response.WriteJSON(w, response.OKEmpty())
+	// B13-001（R3-K9，分诊 §5.3 裁定）：端口段是分享对对端的授权边界，
+	// 段改小后段外存量 runtime 不会被任何对账判据回收（只有停用/过期/
+	// 超额），其监听会无限期越界存活。落库后对新段之外的 active
+	// runtime 走既有释放路径回收；释放失败的端口在回执中点名，不静默
+	// （失败者已置 ReleasePending，由对账继续重试）。
+	releasedPorts, failedPorts := h.releaseOutOfRangePeerShareRuntimes(share)
+	if len(releasedPorts) == 0 && len(failedPorts) == 0 {
+		response.WriteJSON(w, response.OKEmpty())
+		return
+	}
+	data := map[string]interface{}{
+		"releasedPorts": releasedPorts,
+	}
+	if len(failedPorts) > 0 {
+		data["releaseFailedPorts"] = failedPorts
+		data["warning"] = fmt.Sprintf("端口段已更新，但段外端口 %v 的存量运行时释放失败（已标记待重试），请稍后核对", failedPorts)
+	}
+	response.WriteJSON(w, response.OK(data))
+}
+
+// releaseOutOfRangePeerShareRuntimes 回收分享端口段之外的 active
+// runtime（B13-001）：逐条走 releasePeerShareRuntime 既有释放语义
+// （本地可释放者即时 CompletePeerShareRuntimeRelease/资源墓碑，带
+// service/chain 者下发删除命令，失败置 ReleasePending 待对账重试），
+// 返回（已释放端口, 释放失败端口）供调用方在回执中点名。端口段未
+// 定义（起止非正）时无授权边界可依，不做任何回收。
+func (h *Handler) releaseOutOfRangePeerShareRuntimes(share *repo.PeerShare) (released []int, failed []int) {
+	released, failed = []int{}, []int{}
+	if h == nil || h.repo == nil || share == nil {
+		return released, failed
+	}
+	if share.PortRangeStart <= 0 || share.PortRangeEnd < share.PortRangeStart {
+		return released, failed
+	}
+	runtimes, err := h.repo.ListActivePeerShareRuntimesByShareID(share.ID)
+	if err != nil {
+		log.Printf("federation: share %d 改段后枚举段外 runtime 失败: %v", share.ID, err)
+		return released, failed
+	}
+	for i := range runtimes {
+		rt := &runtimes[i]
+		if rt.Port <= 0 || (rt.Port >= share.PortRangeStart && rt.Port <= share.PortRangeEnd) {
+			continue
+		}
+		if err := h.releasePeerShareRuntime(rt); err != nil {
+			log.Printf("federation: share %d 段外 runtime %d（端口 %d）释放失败，已标记待重试: %v", share.ID, rt.ID, rt.Port, err)
+			failed = append(failed, rt.Port)
+			continue
+		}
+		released = append(released, rt.Port)
+	}
+	return released, failed
 }
 
 func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Request) {
