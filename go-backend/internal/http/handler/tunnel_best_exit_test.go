@@ -451,19 +451,52 @@ func TestEvaluateBestExitOwnerMarksCandidateFailedWhenOwnerToExitFails(t *testin
 }
 
 func TestEvaluateBestExitOwnerMarksCandidateFailedWhenTargetResolutionFails(t *testing.T) {
+	// R3-B07-002 口径更新：解析已与质量/诊断面收敛为同一实现，
+	// selectTunnelDialHost 失败时有 stripShareHostPort(ServerIP)
+	// 回退——只有节点地址全空（回退源也为空）才真的解析失败。
+	// 旧用例（v6-only 出口 + v4 偏好）修后走回退正常探测，见
+	// TestEvaluateBestExitOwnerProbesPortedAddressViaFallback。
 	owner := chainNodeRecord{NodeID: 10, NodeName: "entry"}
-	exits := []chainNodeRecord{{NodeID: 30, NodeName: "exit-v6", Port: 30030}}
+	exits := []chainNodeRecord{{NodeID: 30, NodeName: "exit-noaddr", Port: 30030}}
 	nodes := map[int64]*nodeRecord{
 		10: {ID: 10, Name: "entry", Status: 1, ServerIP: "10.0.0.10", ServerIPv4: "10.0.0.10", TCPListenAddr: "[::]"},
-		30: {ID: 30, Name: "exit-v6", Status: 1, ServerIP: "2001:db8::30", ServerIPv6: "2001:db8::30", TCPListenAddr: "[::]"},
+		30: {ID: 30, Name: "exit-noaddr", Status: 1, TCPListenAddr: "[::]"},
 	}
 	pinger := func(nodeID int64, ip string, port int, _ diagnosisExecOptions) (float64, float64, error) {
 		t.Fatalf("ping should not be called when target resolution fails: node=%d ip=%s port=%d", nodeID, ip, port)
 		return 0, 100, nil
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "v4", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
 	if len(scores) != 1 || scores[0].Success {
 		t.Fatalf("expected failed candidate, got %+v", scores)
+	}
+}
+
+// R3-B07-002：存量地址带 :port 且栈/偏好使 selectTunnelDialHost
+// 报错时，最优出口评分必须与质量面同口径走 stripShareHostPort
+// 回退探测，不得恒判失败（修前本场景恒产出 Success=false）。
+func TestEvaluateBestExitOwnerProbesPortedAddressViaFallback(t *testing.T) {
+	owner := chainNodeRecord{NodeID: 10, NodeName: "entry"}
+	exits := []chainNodeRecord{{NodeID: 30, NodeName: "exit-ported", Port: 30030}}
+	nodes := map[int64]*nodeRecord{
+		10: {ID: 10, Name: "entry", Status: 1, ServerIP: "10.0.0.10", ServerIPv4: "10.0.0.10", TCPListenAddr: "[::]"},
+		// ServerIPv6 在场使 nodeSupportsV4=false，v4 偏好下
+		// selectTunnelDialHost 无从选取而报错；回退源 ServerIP
+		// 带 :port，剥离后为可探测的 10.0.0.30。
+		30: {ID: 30, Name: "exit-ported", Status: 1, ServerIP: "10.0.0.30:8443", ServerIPv6: "2001:db8::30", TCPListenAddr: "[::]"},
+	}
+	var probed []string
+	pinger := func(nodeID int64, ip string, port int, _ diagnosisExecOptions) (float64, float64, error) {
+		probed = append(probed, fmt.Sprintf("%d|%s|%d", nodeID, ip, port))
+		return 15, 0, nil
+	}
+
+	scores := evaluateBestExitOwner(owner, exits, nodes, "v4", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
+	if len(scores) != 1 || !scores[0].Success {
+		t.Fatalf("ported-address exit must be scored via fallback, got %+v", scores)
+	}
+	if !slices.Contains(probed, "10|10.0.0.30|30030") {
+		t.Fatalf("owner must probe the stripped fallback host, probed=%+v", probed)
 	}
 }
