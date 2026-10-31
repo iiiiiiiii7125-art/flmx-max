@@ -337,45 +337,43 @@ func (p *program) reloadConfig() error {
 // （如删转发/更新去限流后残留的 rule_conn_limit_<id>）在下次启动/重载时
 // 自愈，剪掉后同样重新落盘；user_conn_limit_* 永不剪。
 func healPersistedConfig(cfg *config.Config) []string {
-	var removed []string
+	// R3-A01-003: 自愈序本体已抽到 config.HealPersistedConfig 共用
+	// 入口（StripNil → HealDuplicates → HealOrphanCLimiters），本函数
+	// 只负责按启动口径打日志。本地管理 API 的重载入口同调共用入口，
+	// 两条加载路径自愈同序同果，不再各维护一份清单。
+	report := config.HealPersistedConfig(cfg)
 	// R19-F02: 先剥离 nil 项（落盘 JSON null 读入后的内存形态）并重新
 	// 落盘——nil 项拒绝落盘、不得进自愈保留；否则随后 loader.Load 在
 	// 首个 nil 类的 `.Name` 处 panic、agent 退出，且文件未被清理，
 	// 重启后再次崩溃（崩溃循环）。落盘失败只告警、不阻塞启动（下次
 	// 启动会再次自愈）。
-	if stripped := config.StripNilConfigItems(cfg); len(stripped) > 0 {
-		logger.Default().Warnf("startup config self-heal: removed %s from persisted config", strings.Join(stripped, ", "))
-		if err := config.PersistNow(cfg); err != nil {
-			logger.Default().Warnf("startup config self-heal: failed to persist nil-stripped config: %v", err)
+	if len(report.Stripped) > 0 {
+		logger.Default().Warnf("startup config self-heal: removed %s from persisted config", strings.Join(report.Stripped, ", "))
+		if report.StripPersistErr != nil {
+			logger.Default().Warnf("startup config self-heal: failed to persist nil-stripped config: %v", report.StripPersistErr)
 		}
-		removed = append(removed, stripped...)
 	}
-	// R2-A01-001: 去重走 config.HealPersistedDuplicates 的全集聚合入口
-	// （全部 17 类命名切片，枚举与 Config 结构由 x/config 的回归测试以
-	// 反射断言差集 ∅）。此前只接线五类，其余 12 类（hop / bypass /
-	// resolver 等）同名毒化时 loader.Load 直接 duplicate object 致命
-	// 退出、文件无人清理、节点永久离线。
-	for _, heal := range config.HealPersistedDuplicates(cfg) {
+	// R2-A01-001: 去重走全集聚合（全部 17 类命名切片，枚举与 Config
+	// 结构由 x/config 的回归测试以反射断言差集 ∅）。此前只接线五类，
+	// 其余 12 类（hop / bypass / resolver 等）同名毒化时 loader.Load
+	// 直接 duplicate object 致命退出、文件无人清理、节点永久离线。
+	for _, heal := range report.Duplicates {
 		logger.Default().Warnf("startup config self-heal: removed duplicate %s(s) %v from persisted config", heal.Kind, heal.Removed)
 		if heal.Err != nil {
 			logger.Default().Warnf("startup config self-heal: failed to persist deduplicated config: %v", heal.Err)
 		}
-		removed = append(removed, heal.Removed...)
 	}
-	// R20-F04: 剪无引用 conn limiter（存量孤儿清理）。去重之后、加载之前：
-	// 引用集按去重后的存活服务算；user_conn_limit_* 永不剪；剪掉后重新
-	// 落盘，否则下次启动仍会读到孤儿。落盘失败只告警、不阻塞启动。
-	if pruned, err := config.HealPersistedOrphanCLimiters(cfg); len(pruned) > 0 {
-		logger.Default().Warnf("startup config self-heal: removed unreferenced conn limiter(s) %v from persisted config", pruned)
-		if err != nil {
-			logger.Default().Warnf("startup config self-heal: failed to persist pruned config: %v", err)
+	// R20-F04: 剪无引用 conn limiter（存量孤儿清理）。去重之后、加载
+	// 之前：引用集按去重后的存活服务算；user_conn_limit_* 永不剪；
+	// 剪掉后重新落盘，否则下次启动仍会读到孤儿。落盘失败只告警、
+	// 不阻塞启动。
+	if len(report.Pruned) > 0 {
+		logger.Default().Warnf("startup config self-heal: removed unreferenced conn limiter(s) %v from persisted config", report.Pruned)
+		if report.PrunePersistErr != nil {
+			logger.Default().Warnf("startup config self-heal: failed to persist pruned config: %v", report.PrunePersistErr)
 		}
-		removed = append(removed, pruned...)
 	}
-	if len(removed) == 0 {
-		return nil
-	}
-	return removed
+	return report.Removed()
 }
 
 func buildApiService(cfg *config.APIConfig) (service.Service, error) {

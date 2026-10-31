@@ -602,6 +602,76 @@ func HealPersistedOrphanCLimiters(cfg *Config) ([]string, error) {
 	return removed, nil
 }
 
+// PersistHealReport is the outcome of one HealPersistedConfig pass,
+// step by step, so each caller can log with its own prefix while the
+// heal sequence itself lives in exactly one place.
+type PersistHealReport struct {
+	// Stripped describes the nil items removed by step 1
+	// (StripNilConfigItems), in its "N nil kind(s)" description
+	// form. StripPersistErr is the re-persist error after that
+	// step (the in-memory config is healed either way).
+	Stripped        []string
+	StripPersistErr error
+	// Duplicates is step 2's per-category result
+	// (HealPersistedDuplicates; each entry re-persists itself).
+	Duplicates []DuplicateHeal
+	// Pruned lists the unreferenced conn limiters removed by
+	// step 3 (HealPersistedOrphanCLimiters); PrunePersistErr is
+	// that step's re-persist error.
+	Pruned          []string
+	PrunePersistErr error
+}
+
+// Removed flattens the report into a single ordered list: nil-item
+// descriptions, then duplicate names per category, then pruned
+// conn limiter names — the same concatenation the startup caller
+// historically returned. Nil when nothing was healed.
+func (r *PersistHealReport) Removed() []string {
+	if r == nil {
+		return nil
+	}
+	var removed []string
+	removed = append(removed, r.Stripped...)
+	for _, heal := range r.Duplicates {
+		removed = append(removed, heal.Removed...)
+	}
+	removed = append(removed, r.Pruned...)
+	return removed
+}
+
+// HealPersistedConfig applies the full persisted-config self-heal
+// sequence, in the one canonical order:
+//
+//  1. StripNilConfigItems — drop nil items read back from persisted
+//     JSON nulls, then re-persist;
+//  2. HealPersistedDuplicates — dedupe all 17 named slices
+//     (re-persists per healed category);
+//  3. HealPersistedOrphanCLimiters — prune conn limiters no live
+//     service references (after dedupe, so the reference set is
+//     computed on the surviving services), then re-persist.
+//
+// R3-A01-003: this is the single shared entry for every config-load
+// path — program startup/SIGHUP and the local management API's
+// reload handler both call here. The API reload used to run step 1
+// only, so a duplicate-name-poisoned gost.json healed on restart
+// but failed API reloads forever with "registry: duplicate object".
+// Persist failures are reported in the report, never returned as a
+// blocking error: the in-memory config is healed either way and
+// the next load heals again.
+func HealPersistedConfig(cfg *Config) *PersistHealReport {
+	report := &PersistHealReport{}
+	if cfg == nil {
+		return report
+	}
+	if stripped := StripNilConfigItems(cfg); len(stripped) > 0 {
+		report.Stripped = stripped
+		report.StripPersistErr = PersistNow(cfg)
+	}
+	report.Duplicates = HealPersistedDuplicates(cfg)
+	report.Pruned, report.PrunePersistErr = HealPersistedOrphanCLimiters(cfg)
+	return report
+}
+
 // PruneUnreferencedCLimiters 就地剪掉 cfg.CLimiters 中无任何服务引用的项
 // （名按 TrimSpace 后比较），返回被剪掉的名字（原名、按原顺序）；无剪除
 // 时返回 nil 且不改动 cfg。nil cfg 返回 nil；nil 服务项跳过；nil

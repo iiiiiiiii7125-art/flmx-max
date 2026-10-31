@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/go-gost/x/bypass"
+	"github.com/go-gost/x/internal/util/download"
 )
 
 const (
@@ -29,6 +30,17 @@ const (
 	maxEntryBytes    = 256 << 20
 	downloadTimeout  = 4 * time.Minute
 )
+
+// fetchStallWindow is the no-progress watchdog window applied to
+// every fetch attempt (R3-WDG-01): a peer that answers and then
+// stalls or trickles the body fails the attempt after this long
+// with zero byte progress instead of burning the whole-operation
+// budget (downloadTimeout / geoTimeout), so the mirror/direct
+// fallback leg runs with budget to spare. The value is the shared
+// download.StallWindow (45s), registered in
+// doc/audit/timeout-budgets.tsv rows A001/A002. A var so tests can
+// shrink it.
+var fetchStallWindow = download.StallWindow
 
 var sha256HexPattern = regexp.MustCompile(`\b[0-9a-fA-F]{64}\b`)
 
@@ -191,20 +203,35 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 	if err := validateFetchEntryURL(ctx, url); err != nil {
 		return err
 	}
+	// R3-WDG-01: no-progress watchdog for this attempt. The watch
+	// starts now, so a peer that never sends headers trips it too;
+	// body bytes count as progress via the wrapped writer. On a
+	// stall the derived context is cancelled and the attempt fails
+	// with download.ErrNoProgress, leaving the caller's fallback
+	// sequence (mirror strip / next file) its remaining budget.
+	watcher := download.NewWatcher(fetchStallWindow)
+	ctx, stopWatch := watcher.Watch(ctx)
+	defer stopWatch()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 	resp, err := fetchHTTPClient().Do(req)
 	if err != nil {
+		if watcher.Stalled() {
+			return fmt.Errorf("下载失败: %w", download.ErrNoProgress)
+		}
 		return fmt.Errorf("下载失败: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载失败: HTTP %d (%s)", resp.StatusCode, url)
 	}
-	n, err := io.Copy(w, io.LimitReader(resp.Body, limit+1))
+	n, err := io.Copy(watcher.Writer(w), io.LimitReader(resp.Body, limit+1))
 	if err != nil {
+		if watcher.Stalled() {
+			return fmt.Errorf("下载中断: %w", download.ErrNoProgress)
+		}
 		return fmt.Errorf("下载中断: %v", err)
 	}
 	if n > limit {

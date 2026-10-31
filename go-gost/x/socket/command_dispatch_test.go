@@ -32,12 +32,17 @@ func TestMutationCommandsAreSerialized(t *testing.T) {
 		"AddChains", "UpdateChains", "DeleteChains",
 		"AddLimiters", "UpdateLimiters", "DeleteLimiters",
 		"AddCLimiters", "UpdateCLimiters", "DeleteCLimiters",
-		"SetProtocol", "UpgradeAgent", "RollbackAgent", "reload",
+		"SetProtocol", "UpgradeAgent", "RollbackAgent",
 	}
 	for _, command := range mutations {
 		if !isMutationCommand(command) {
 			t.Fatalf("expected %s to use the serialized mutation queue", command)
 		}
+	}
+	// R3-A01-OPT-01: "reload" was a dead classification (no route
+	// branch, never sent by the panel) and must stay out.
+	if isMutationCommand("reload") {
+		t.Fatal("reload must not be classified as a mutation command (dead classification, R3-A01-OPT-01)")
 	}
 }
 
