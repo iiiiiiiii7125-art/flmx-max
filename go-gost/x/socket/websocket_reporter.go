@@ -1938,15 +1938,48 @@ func stripUpgradeProxyPrefix(rawURL string) string {
 	return ""
 }
 
+// upgradeWithProxyFallback is the single proxy->direct fallback
+// policy for every self-upgrade download leg (R7-J-02): attempt
+// runs once against rawURL; when rawURL is in proxy-prefixed form
+// and the attempt fails for ANY reason, it retries exactly once
+// with the prefix stripped (direct), and when both attempts fail
+// the returned error merges both causes. A URL without a proxy
+// prefix is attempted exactly once, with its original error
+// preserved. What counts as one attempt is the caller's choice —
+// crucially, a leg whose failure can happen while READING the body
+// (binary file, checksum file) must define its attempt as
+// GET+body-read (downloadUpgradeAttempt,
+// fetchUpgradeChecksumAttempt): a fallback decided at response-
+// header time cannot see a body that stalls after a 200 (Phase F:
+// the checksum leg aborted the whole upgrade with ErrNoProgress
+// and no retry because its read sat outside the fallback).
+func upgradeWithProxyFallback(rawURL string, attempt func(url string) error) error {
+	err := attempt(rawURL)
+	if err == nil {
+		return nil
+	}
+	direct := stripUpgradeProxyPrefix(rawURL)
+	if direct == "" || direct == rawURL {
+		return err
+	}
+	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", err, sanitizeWebSocketURL(direct))
+	if derr := attempt(direct); derr != nil {
+		return fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", err, derr)
+	}
+	return nil
+}
+
 // getWithUpgradeProxyFallback performs one GET for an agent-upgrade
-// download (R7-J-02). If the URL is a proxy-prefixed form and the
-// proxied attempt fails — transport error or non-200, the same
-// failure caliber as x/kernel's fetch — it retries exactly once with
-// the proxy prefix stripped (direct). When both attempts fail the
-// returned error merges both causes. A URL without a proxy prefix is
-// fetched exactly once, with its original error preserved. The
-// caller's client (and therefore the S-02 redirect allowlist) is used
-// unchanged for both attempts.
+// download (R7-J-02), via upgradeWithProxyFallback. If the URL is a
+// proxy-prefixed form and the proxied attempt fails — transport
+// error or non-200, the same failure caliber as x/kernel's fetch —
+// it retries exactly once with the proxy prefix stripped (direct).
+// The caller's client (and therefore the S-02 redirect allowlist)
+// is used unchanged for both attempts. NOTE: this helper decides
+// the fallback at header time and returns the body unread; callers
+// that consume a body must use an attempt-level wrapper instead
+// (downloadUpgradeBinary / downloadUpgradeChecksum), never pair
+// this helper with an outside read.
 func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Response, error) {
 	return getWithUpgradeProxyFallbackCtx(context.Background(), client, rawURL)
 }
@@ -1954,39 +1987,27 @@ func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Resp
 // getWithUpgradeProxyFallbackCtx is getWithUpgradeProxyFallback with
 // the caller's context threaded through both attempts (R8-T-09): the
 // direct retry runs on whatever budget remains in ctx instead of
-// behind a fresh per-GET wall, so one logical download — headers and
-// body, first attempt and retry — is bounded by the caller's single
-// operation deadline, the same shape as x/kernel's fetch under its
-// whole-install ctx.
+// behind a fresh per-GET wall, so one logical download is bounded
+// by the caller's single operation deadline, the same shape as
+// x/kernel's fetch under its whole-install ctx.
 func getWithUpgradeProxyFallbackCtx(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
-	resp, err := upgradeGET(ctx, client, rawURL)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		return resp, nil
-	}
-	var firstErr error
+	var resp *http.Response
+	err := upgradeWithProxyFallback(rawURL, func(url string) error {
+		r, gerr := upgradeGET(ctx, client, url)
+		if gerr != nil {
+			return gerr
+		}
+		if r.StatusCode != http.StatusOK {
+			r.Body.Close()
+			return fmt.Errorf("HTTP状态码: %d", r.StatusCode)
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
-		firstErr = err
-	} else {
-		firstErr = fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
-		resp.Body.Close()
+		return nil, err
 	}
-	direct := stripUpgradeProxyPrefix(rawURL)
-	if direct == "" || direct == rawURL {
-		return nil, firstErr
-	}
-	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", firstErr, sanitizeWebSocketURL(direct))
-	resp2, err2 := upgradeGET(ctx, client, direct)
-	if err2 == nil && resp2.StatusCode == http.StatusOK {
-		return resp2, nil
-	}
-	var secondErr error
-	if err2 != nil {
-		secondErr = err2
-	} else {
-		secondErr = fmt.Errorf("HTTP状态码: %d", resp2.StatusCode)
-		resp2.Body.Close()
-	}
-	return nil, fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", firstErr, secondErr)
+	return resp, nil
 }
 
 func upgradeGET(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
@@ -2148,22 +2169,79 @@ func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tm
 // stripped (direct). Before the watchdog existed only GET-level
 // failures could fall back: a stalled body burned the whole
 // shared budget before any retry. A URL without a proxy prefix is
-// attempted exactly once, with its original error preserved.
+// attempted exactly once, with its original error preserved. The
+// fallback policy itself is upgradeWithProxyFallback, shared with
+// the checksum leg (downloadUpgradeChecksum) so the two legs
+// cannot drift apart.
 func downloadUpgradeBinary(ctx context.Context, client *http.Client, rawURL, tmpPath string, report func(percent int)) (int64, string, error) {
-	downloaded, hash, err := downloadUpgradeAttempt(ctx, client, rawURL, tmpPath, report)
-	if err == nil {
-		return downloaded, hash, nil
-	}
-	direct := stripUpgradeProxyPrefix(rawURL)
-	if direct == "" || direct == rawURL {
+	var downloaded int64
+	var hash string
+	err := upgradeWithProxyFallback(rawURL, func(url string) error {
+		var aerr error
+		downloaded, hash, aerr = downloadUpgradeAttempt(ctx, client, url, tmpPath, report)
+		return aerr
+	})
+	if err != nil {
 		return 0, "", err
 	}
-	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", err, sanitizeWebSocketURL(direct))
-	downloaded, hash, derr := downloadUpgradeAttempt(ctx, client, direct, tmpPath, report)
-	if derr != nil {
-		return 0, "", fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", err, derr)
-	}
 	return downloaded, hash, nil
+}
+
+// fetchUpgradeChecksumAttempt performs ONE checksum download
+// attempt: GET rawURL under a fresh no-progress watchdog, then
+// read and parse the body through the watcher. The whole attempt —
+// headers and body — is the unit of failure, exactly like one
+// binary attempt (downloadUpgradeAttempt): a body that stalls
+// after the 200 headers fails the attempt with
+// download.ErrNoProgress instead of escaping the fallback.
+func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawURL string) (string, error) {
+	watcher := download.NewWatcher(upgradeStallWindow)
+	actx, stopWatch := watcher.Watch(ctx)
+	defer stopWatch()
+	resp, err := upgradeGET(actx, client, rawURL)
+	if err != nil {
+		if watcher.Stalled() {
+			return "", download.ErrNoProgress
+		}
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+	}
+	// 格式: "<hash>  <filename>" 或 "<hash>"；读取带上限 (D1-08)
+	hash, err := readAgentChecksum(watcher.Reader(resp.Body))
+	if err != nil {
+		if watcher.Stalled() {
+			return "", fmt.Errorf("读取校验文件失败: %w", download.ErrNoProgress)
+		}
+		return "", err
+	}
+	return hash, nil
+}
+
+// downloadUpgradeChecksum downloads and parses the expected sha256
+// of the self-upgrade binary, under the same shared ctx budget as
+// the binary leg and with the SAME fallback semantics via
+// upgradeWithProxyFallback: any failure of the proxied attempt —
+// transport error, non-200, or a body that stalls or breaks
+// mid-read — retries exactly once with the prefix stripped, and
+// only when both attempts fail does the checksum leg fail. Phase F
+// regression: the checksum read used to sit outside a
+// header-stage-only GET fallback, so a checksum body stalling
+// after 200 aborted the whole upgrade with ErrNoProgress and no
+// retry, contradicting the A002 registered caliber.
+func downloadUpgradeChecksum(ctx context.Context, client *http.Client, rawURL string) (string, error) {
+	var hash string
+	err := upgradeWithProxyFallback(rawURL, func(url string) error {
+		var aerr error
+		hash, aerr = fetchUpgradeChecksumAttempt(ctx, client, url)
+		return aerr
+	})
+	if err != nil {
+		return "", err
+	}
+	return hash, nil
 }
 
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
@@ -2257,29 +2335,18 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// S-02: Checksum 校验强制，不再允许为空或跳过
 	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
 	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-	// R7-J-02: the checksum GET gets the same proxy->direct fallback
-	// as the binary GET above, under the same shared download budget
-	// (dlCtx, R8-T-09). R3-WDG-01: it also rides the no-progress
-	// watchdog (its own watcher under dlCtx), so a checksum leg that
-	// stalls after 200 fails fast instead of burning the budget.
-	sumWatcher := download.NewWatcher(upgradeStallWindow)
-	sumCtx, stopSumWatch := sumWatcher.Watch(dlCtx)
-	checksumResp, err := getWithUpgradeProxyFallbackCtx(sumCtx, httpClient, checksumURL)
+	// R7-J-02 + R3-WDG-01 + Phase F 修复：校验腿经
+	// downloadUpgradeChecksum 与二进制腿同回退语义、同共享预算
+	// （dlCtx, R8-T-09）——每次尝试是 GET+正文读取的整体、自带
+	// 无进展看门狗（upgradeStallWindow），任一失败（含 200 头后
+	// 正文停滞被看门狗掐断）都剥离前缀直连重试一次，两次都失败
+	// 才整单失败。此前正文读取在只管响应头阶段的 GET 回退之外，
+	// 正文停滞即整单 ErrNoProgress 终止、无回退（Phase F 实测
+	// 自升级 90.5s 失败；对照形态见 fetchUpgradeChecksumAttempt）。
+	expectedHash, err := downloadUpgradeChecksum(dlCtx, httpClient, checksumURL)
 	if err != nil {
-		stopSumWatch()
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
-	}
-	defer checksumResp.Body.Close()
-	// 格式: "<hash>  <filename>" 或 "<hash>"；读取带上限 (D1-08)
-	expectedHash, err := readAgentChecksum(sumWatcher.Reader(checksumResp.Body))
-	stopSumWatch()
-	if err != nil {
-		os.Remove(tmpPath)
-		if sumWatcher.Stalled() {
-			return fmt.Errorf("S-02: 读取校验值失败: %w", download.ErrNoProgress)
-		}
-		return fmt.Errorf("S-02: 读取校验值失败: %v", err)
 	}
 	if !strings.EqualFold(expectedHash, actualHash) {
 		os.Remove(tmpPath)
