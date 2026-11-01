@@ -36,7 +36,7 @@ export function SearchBar({
             <Button
               isIconOnly
               aria-label="搜索"
-              className="text-default-600"
+              className="text-foreground"
               color="default"
               size="sm"
               variant="flat"
@@ -68,7 +68,7 @@ export function SearchBar({
             <Button
               isIconOnly
               aria-label="关闭搜索"
-              className="text-default-600 shrink-0"
+              className="text-foreground shrink-0"
               color="default"
               size="sm"
               variant="light"

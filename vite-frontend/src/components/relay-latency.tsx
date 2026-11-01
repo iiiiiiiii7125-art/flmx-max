@@ -12,7 +12,7 @@ function RelayPath({ latency }: { latency: RelayLatency }) {
   if (latency.hops.length === 0 && !latency.error) return null;
 
   return (
-    <div className="space-y-1 border-t border-divider px-2 py-2 text-xs">
+    <div className="space-y-1 border-t border-divider px-2 py-2 text-xs font-semibold">
       <div className="text-foreground">
         {pathOnly
           ? "入口到落地的各段延迟"

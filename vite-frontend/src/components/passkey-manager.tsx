@@ -187,7 +187,7 @@ export function PasskeyManager() {
             >
               <div>
                 <div className="text-sm font-medium">{item.name}</div>
-                <div className="text-xs text-foreground">
+                <div className="text-xs font-semibold text-foreground">
                   创建于 {new Date(item.createdAt).toLocaleDateString()}{" "}
                   {item.lastUsedAt
                     ? ` · 最近使用 ${new Date(item.lastUsedAt).toLocaleDateString()}`

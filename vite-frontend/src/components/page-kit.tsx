@@ -43,10 +43,12 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0 rounded-xl tray-plate px-3 py-2">
+      <div className="min-w-0 rounded-xl glass-card px-3 py-2">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && (
-          <p className="mt-0.5 text-xs text-foreground">{description}</p>
+          <p className="mt-0.5 text-xs font-semibold text-foreground">
+            {description}
+          </p>
         )}
       </div>
       {(primary || secondary) && (
@@ -104,7 +106,7 @@ export function PageTabs<T extends string>({
           aria-selected={value === t.key}
           className={`truncate rounded-lg px-3 py-1.5 text-sm transition-colors ${
             value === t.key
-              ? "bg-tray font-medium shadow-sm"
+              ? "bg-tray font-semibold shadow-sm"
               : "text-foreground"
           }`}
           role="tab"
@@ -113,7 +115,7 @@ export function PageTabs<T extends string>({
         >
           {t.label}
           {t.badge !== undefined && t.badge !== null && (
-            <span className="ml-1 text-xs text-foreground">{t.badge}</span>
+            <span className="ml-1 text-xs font-semibold text-foreground">{t.badge}</span>
           )}
         </button>
       ))}
@@ -227,8 +229,10 @@ export function SelectionBar({
   onExit: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl tray-plate px-3 py-2 shadow-sm">
-      <span className="text-sm text-default-600">已选 {count} 个</span>
+    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl glass-surface px-3 py-2 shadow-sm">
+      <span className="text-sm font-semibold text-foreground">
+        已选 {count} 个
+      </span>
       <div className="ml-auto flex flex-wrap justify-end gap-2">
         <Button size="sm" variant="flat" onPress={onToggleAll}>
           {allSelected ? "取消全选" : "全选"}
@@ -314,7 +318,7 @@ export function ListRow({
           <span className="truncate font-medium">{title}</span>
           {badges}
         </div>
-        {meta && <div className="truncate text-xs text-foreground">{meta}</div>}
+        {meta && <div className="truncate text-xs font-semibold text-foreground">{meta}</div>}
       </div>
       {right && !selectMode && (
         <div
@@ -373,10 +377,12 @@ export function ListGroup({
   return (
     <section className="space-y-2">
       {title && (
-        <h2 className="flex w-fit items-baseline gap-2 rounded-lg tray-plate px-2.5 py-1 text-sm font-semibold">
+        <h2 className="flex w-fit items-baseline gap-2 rounded-lg glass-surface px-2.5 py-1 text-sm font-semibold">
           {title}
           {count !== undefined && (
-            <span className="text-xs font-normal text-foreground">{count}</span>
+            <span className="text-xs font-semibold text-foreground">
+              {count}
+            </span>
           )}
         </h2>
       )}

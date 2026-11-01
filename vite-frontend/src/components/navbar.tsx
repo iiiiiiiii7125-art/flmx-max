@@ -65,7 +65,7 @@ export const Navbar = () => {
         <NavbarContent className="basis-1/5 sm:basis-full" justify="start">
           <NavbarBrand className="gap-2 max-w-fit">
             <Link
-              className="flex justify-start items-center gap-2 max-w-[200px] sm:max-w-none tray-plate rounded-full py-1 pl-1.5 pr-3"
+              className="flex justify-start items-center gap-2 max-w-[200px] sm:max-w-none glass-surface rounded-full py-1 pl-1.5 pr-3"
               color="foreground"
               href="/"
             >
@@ -79,7 +79,7 @@ export const Navbar = () => {
           {/* WebView设置图标 */}
           {isWebView && (
             <button
-              className="p-2 tray-plate rounded-full text-foreground hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+              className="p-2 glass-surface rounded-full text-foreground hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
               title="面板设置"
               onClick={() => navigate("/config")}
             >

@@ -32,7 +32,7 @@ export const TONE: Record<Tone, [string, string]> = {
     "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
     "bg-rose-500",
   ],
-  default: ["bg-tray text-default-600", "bg-default-400"],
+  default: ["bg-tray text-foreground", "bg-default-400"],
 };
 
 const RANK: Record<Tone, number> = {
@@ -141,7 +141,7 @@ function Pill({
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${pill}`}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ${pill}`}
     >
       {spinning ? (
         <Loader2 className="h-3 w-3 animate-spin" />
@@ -174,7 +174,7 @@ function Tile({
     <span
       className={`flex min-w-0 flex-col items-start overflow-hidden rounded-lg px-2 py-1 text-left ${pill}`}
     >
-      <span className="flex w-full min-w-0 items-center gap-1 text-[11px] opacity-80">
+      <span className="flex w-full min-w-0 items-center gap-1 text-[11px] font-semibold opacity-80">
         {spinning ? (
           <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
         ) : (
@@ -185,7 +185,7 @@ function Tile({
       <span className="flex w-full items-baseline gap-1 whitespace-nowrap font-mono text-sm font-semibold">
         {valueText(point)}
         {loss > 0 && (
-          <span className="text-[10px] font-normal opacity-80">丢{loss}%</span>
+          <span className="text-[10px] font-semibold opacity-80">丢{loss}%</span>
         )}
       </span>
       {/* Always its own line so tiles line up whatever the width. */}
@@ -211,7 +211,7 @@ function V6Route({ point }: { point: InboundProbePoint }) {
 
   return (
     <span className="inline-flex items-center gap-0.5">
-      <span className="text-[10px] opacity-70">v6</span>
+      <span className="text-[10px] font-semibold">v6</span>
       <RouteTag short route={point.routeV6} />
     </span>
   );
@@ -262,7 +262,7 @@ export function LatencyCell({
   if (points.length === 0) {
     return (
       <button
-        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${TONE.default[0]}`}
+        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${TONE.default[0]}`}
         disabled={probing}
         type="button"
         onClick={(e) => {
@@ -300,8 +300,8 @@ export function LatencyCell({
             onKeyDown={stop}
           >
             <span className="mb-1.5 flex items-center justify-between text-sm">
-              <span className="text-default-600">延迟</span>
-              <span className="text-xs text-foreground">
+              <span className="text-foreground">延迟</span>
+              <span className="text-xs font-semibold text-foreground">
                 {note ? `${note} · ` : ""}
                 {more > 0 ? `共 ${points.length} 个 · ` : ""}
                 {hiddenBad > 0 && (
@@ -347,7 +347,7 @@ export function LatencyCell({
         className="w-80 max-w-[calc(100vw-32px)]"
       >
         <div role="presentation" onClick={stop} onPointerDown={stop}>
-          <div className="flex items-center justify-between px-2 pb-1.5 pt-1 text-xs text-foreground">
+          <div className="flex items-center justify-between px-2 pb-1.5 pt-1 text-xs font-semibold text-foreground">
             <span>{title}</span>
             {probe && <span>{ago(probe.checkedAt)}</span>}
           </div>
@@ -368,7 +368,7 @@ export function LatencyCell({
                       <V6Route point={p} />
                     </span>
                   </span>
-                  <span className="shrink-0 font-mono text-xs">
+                  <span className="shrink-0 font-mono text-xs font-semibold">
                     <span className={TONE[pointTone(p)][0].split(" ")[1]}>
                       {valueText(p)}
                     </span>
@@ -385,7 +385,7 @@ export function LatencyCell({
           {footer}
           <div className="grid auto-cols-fr grid-flow-col border-t border-divider">
             <DropdownItem
-              className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
+              className="justify-center whitespace-nowrap px-1 text-xs font-semibold text-primary-700"
               startContent={
                 probing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -399,7 +399,7 @@ export function LatencyCell({
             </DropdownItem>
             {onShowTrend && (
               <DropdownItem
-                className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
+                className="justify-center whitespace-nowrap px-1 text-xs font-semibold text-primary-700"
                 startContent={<ChartLine className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onShowTrend, 0)}
               >
@@ -408,7 +408,7 @@ export function LatencyCell({
             )}
             {onShowRoute && (
               <DropdownItem
-                className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
+                className="justify-center whitespace-nowrap px-1 text-xs font-semibold text-primary-700"
                 startContent={<Route className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onShowRoute, 0)}
               >
@@ -417,7 +417,7 @@ export function LatencyCell({
             )}
             {onEditTargets && (
               <DropdownItem
-                className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
+                className="justify-center whitespace-nowrap px-1 text-xs font-semibold text-primary-700"
                 startContent={<ListChecks className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onEditTargets, 0)}
               >

@@ -503,7 +503,7 @@ export default function AdminLayout({
                            ? "text-white font-semibold"
                            : isMonitorBlocked
                              ? "text-foreground font-medium"
-                             : "text-gray-600 dark:text-gray-200 font-medium"
+                             : "text-foreground font-medium"
                        }
                      `}
                     title={
@@ -554,13 +554,13 @@ export default function AdminLayout({
         {/* 底部版权信息和折叠按钮 */}
         <div className="px-5 py-6 mt-auto flex-shrink-0 flex flex-col gap-4 overflow-hidden whitespace-nowrap box-border">
           <div
-            className={`transition-all duration-200 overflow-hidden flex items-center rounded-full tray-plate px-3 py-1.5 w-fit ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[220px] opacity-100"}`}
+            className={`transition-all duration-200 overflow-hidden flex items-center rounded-full glass-surface px-3 py-1.5 w-fit ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[220px] opacity-100"}`}
           >
             <VersionFooter
-              poweredClassName="text-xs text-foreground"
+              poweredClassName="text-xs font-semibold text-foreground"
               updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
               version={siteConfig.version}
-              versionClassName="text-xs text-foreground"
+              versionClassName="text-xs font-semibold text-foreground"
             />
           </div>
 
@@ -615,7 +615,7 @@ export default function AdminLayout({
         {isMobile && (
           <Button
             isIconOnly
-            className="absolute top-4 left-4 z-40 tray-plate shadow-md"
+            className="absolute top-4 left-4 z-40 shadow-md"
             variant="light"
             onPress={toggleMobileMenu}
           >

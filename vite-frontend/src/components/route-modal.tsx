@@ -24,7 +24,7 @@ const ROUTES: Record<string, [string, string]> = {
     "CN2 GT",
     "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
   ],
-  "电信 163": ["163", "bg-tray text-default-600"],
+  "电信 163": ["163", "bg-tray text-foreground"],
   "联通 9929": [
     "9929",
     "bg-violet-500/15 text-violet-700 dark:text-violet-400",
@@ -69,7 +69,7 @@ export function RouteTag({
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded px-1 font-sans text-[10px] font-medium leading-4 ${cls}`}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded px-1 font-sans text-[10px] font-semibold leading-4 ${cls}`}
       title={`回程 ${route}`}
     >
       {short ? tag : route}
@@ -89,7 +89,7 @@ function ago(ts: number) {
 
 function HopRow({ hop }: { hop: NodeRouteHop }) {
   return (
-    <div className="grid grid-cols-[2rem_1fr_auto] items-center gap-2 py-0.5 font-mono text-xs">
+    <div className="grid grid-cols-[2rem_1fr_auto] items-center gap-2 py-0.5 font-mono text-xs font-semibold">
       <span className="text-foreground">{hop.ttl}</span>
       <span className={`break-all ${hop.ip ? "" : "text-foreground"}`}>
         {hop.ip || "*"}
@@ -178,7 +178,7 @@ export function RouteModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
           <h2 className="text-lg font-bold">回程路由</h2>
-          <p className="text-xs font-normal text-foreground">
+          <p className="text-xs font-semibold text-foreground">
             {nodeName ? `${nodeName} → 各测试点` : "节点 → 各测试点"}
             {route ? ` · ${ago(route.checkedAt)}检测` : ""}
           </p>
@@ -220,23 +220,23 @@ export function RouteModal({
                           <span className="shrink-0 font-medium">{p.name}</span>
                         )}
                         {label && (
-                          <span className="w-9 shrink-0 rounded bg-tray px-1 text-center text-[10px] text-foreground">
+                          <span className="w-9 shrink-0 rounded bg-tray px-1 text-center text-[10px] font-semibold text-foreground">
                             {label}
                           </span>
                         )}
                         {leg.error ? (
-                          <span className="min-w-0 text-xs text-rose-600">
+                          <span className="min-w-0 text-xs font-semibold text-rose-600">
                             {leg.error}
                           </span>
                         ) : leg.route && leg.route !== "未识别" ? (
                           <RouteTag route={leg.route} />
                         ) : (
-                          <span className="text-xs text-foreground">
+                          <span className="text-xs font-semibold text-foreground">
                             未识别线路
                           </span>
                         )}
                         {!leg.error && (
-                          <span className="ml-auto text-xs text-foreground">
+                          <span className="ml-auto text-xs font-semibold text-foreground">
                             {leg.hops?.length ?? 0} 跳{" "}
                             {open === key ? "▴" : "▾"}
                           </span>
@@ -248,7 +248,7 @@ export function RouteModal({
                             <HopRow key={h.ttl} hop={h} />
                           ))}
                           {!leg.reached && (
-                            <p className="pt-1 text-xs text-foreground">
+                            <p className="pt-1 text-xs font-semibold text-foreground">
                               目标没有回应，只显示到最后一个有回应的路由器
                             </p>
                           )}
@@ -260,7 +260,7 @@ export function RouteModal({
               );
             })
           )}
-          <p className="text-xs text-foreground">
+          <p className="text-xs font-semibold text-foreground">
             按经过的骨干网识别：59.43 段为 CN2（不经过 202.97 即 GIA），202.97
             为 163，219.158 为联通 4837，218.105 / 210.51 为联通
             9929，223.118–223.121 为移动 CMI，其中归属 AS58807 的为 CMIN2；IPv6

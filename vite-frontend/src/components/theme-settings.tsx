@@ -36,13 +36,13 @@ export const ThemeSettings: React.FC = () => {
   return (
     <Card className="shadow-md">
       <CardBody className="p-6">
-        <h2 className="text-lg font-medium text-gray-900 mb-5">主题设置</h2>
+        <h2 className="text-lg font-medium text-foreground mb-5">主题设置</h2>
 
         {/* ── Theme grid ─────────────────────────────────────── */}
         <div className="mb-4">
-          <p className="text-sm font-medium text-gray-700 mb-3">
+          <p className="text-sm font-medium text-foreground mb-3">
             选择主题
-            <span className="ml-2 text-xs text-foreground font-normal">
+            <span className="ml-2 text-xs text-foreground font-semibold">
               共 {themes.length} 个可用主题
             </span>
           </p>
@@ -88,7 +88,7 @@ export const ThemeSettings: React.FC = () => {
                   {/* Info */}
                   <div className="p-3">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-gray-900 truncate">
+                      <p className="text-sm font-semibold text-foreground truncate">
                         {theme.name}
                       </p>
                       {isActive && (
@@ -98,11 +98,11 @@ export const ThemeSettings: React.FC = () => {
                       )}
                     </div>
                     {theme.description && (
-                      <p className="text-xs text-foreground mt-0.5 truncate">
+                      <p className="text-xs font-semibold text-foreground mt-0.5 truncate">
                         {theme.description}
                       </p>
                     )}
-                    <p className="text-[10px] text-foreground mt-1">
+                    <p className="text-[10px] font-semibold text-foreground mt-1">
                       {theme.author} · v{theme.version}
                     </p>
                   </div>

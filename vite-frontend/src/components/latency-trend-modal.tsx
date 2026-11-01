@@ -124,7 +124,7 @@ export function LatencyTrendModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
           <h2 className="text-lg font-bold">延迟趋势</h2>
-          <p className="text-xs font-normal text-foreground">
+          <p className="text-xs font-semibold text-foreground">
             {nodeName ? `${nodeName} → 各测试点` : "节点 → 各测试点"}
             ，每 3 分钟一次
           </p>
@@ -136,7 +136,7 @@ export function LatencyTrendModal({
                 key={r.hours}
                 className={`rounded-md px-3 py-1 text-xs transition-colors ${
                   hours === r.hours
-                    ? "bg-tray font-medium shadow-sm"
+                    ? "bg-tray font-semibold shadow-sm"
                     : "text-foreground hover:text-default-700"
                 }`}
                 type="button"
@@ -224,7 +224,7 @@ export function LatencyTrendModal({
 
           {points.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="w-full text-xs font-semibold">
                 <thead className="text-foreground">
                   <tr className="border-b border-divider">
                     <th className="py-1.5 text-left font-normal">测试点</th>

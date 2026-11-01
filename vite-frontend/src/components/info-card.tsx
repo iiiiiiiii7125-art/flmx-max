@@ -32,7 +32,7 @@ const PILL: Record<CardTone, [string, string]> = {
     "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
     "bg-amber-500",
   ],
-  default: ["bg-tray text-default-600", "bg-default-400"],
+  default: ["bg-tray text-foreground", "bg-default-400"],
 };
 
 export interface InfoCardAction {
@@ -106,7 +106,7 @@ export function InfoCard({
                   {title}
                 </h3>
                 <div
-                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${pill}`}
+                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ${pill}`}
                 >
                   <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
                   {status}
@@ -134,8 +134,8 @@ export function InfoCard({
               key={label}
               className="flex min-w-0 items-center justify-between gap-2 text-sm"
             >
-              <span className="flex-shrink-0 text-default-600">{label}</span>
-              <span className="min-w-0 truncate text-right text-xs">
+              <span className="flex-shrink-0 text-foreground">{label}</span>
+              <span className="min-w-0 truncate text-right text-xs font-semibold">
                 {value}
               </span>
             </div>

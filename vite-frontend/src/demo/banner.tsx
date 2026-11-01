@@ -13,7 +13,7 @@ export function DemoBanner() {
   if (!open) {
     return (
       <button
-        className="fixed bottom-[84px] right-3 z-[60] rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-white shadow-lg lg:bottom-4"
+        className="fixed bottom-[84px] right-3 z-[60] rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-lg lg:bottom-4"
         type="button"
         onClick={() => setOpen(true)}
       >
@@ -23,7 +23,7 @@ export function DemoBanner() {
   }
 
   return (
-    <div className="glass-surface fixed bottom-[84px] right-3 z-[60] w-[min(20rem,calc(100vw-24px))] rounded-2xl p-3 text-xs shadow-xl lg:bottom-4">
+    <div className="glass-surface fixed bottom-[84px] right-3 z-[60] w-[min(20rem,calc(100vw-24px))] rounded-2xl p-3 text-xs font-semibold shadow-xl lg:bottom-4">
       <div className="mb-1 flex items-center justify-between">
         <span className="font-semibold text-sm">FLMX 在线演示</span>
         <button
