@@ -1,7 +1,7 @@
 // Package clientip 是限流面客户端 IP 解析的单一收口（R5-FC，
 // L2-09 / L8-F-02 同族修复）：登录限流、gh 镜像限流、WS 鉴权失败
 // 限流三面共用本包的可信代理链解析，不再各以裸 RemoteAddr 为键——
-// 标准反代部署（Caddy/nginx → 后端）下 RemoteAddr 恒为代理机地址，
+// 标准反代部署（Caddy → 前端 nginx → 后端）下 RemoteAddr 恒为代理机地址，
 // 裸键意味着全站共用一桶（一人刷满、全体 429；批量升级走面板源时
 // 节点群还会自触发 429）。
 //
@@ -40,9 +40,10 @@ const (
 const UnresolvedKey = "unresolved"
 
 // TrustedProxyHops 读取 FLMX_TRUSTED_PROXY_HOPS，默认 1。
-// 覆盖两种默认拓扑：panel_install.sh 的 Caddy→backend、
-// docker-compose 的 nginx(frontend 容器)→backend。
-// 多一跳（如 Caddy→nginx→backend）请设为 2，并见部署文档。
+// 脚本默认拓扑是 Caddy → 前端 → 后端（panel_install.sh 生成的 Caddy
+// 配置反代的是前端端口，再由前端容器 nginx 把 API 请求转给后端），
+// 链上共两跳，必须显式设为 2；默认值 1 只适用于面板直连或单跳
+// 反代，并见部署文档（doc/guide/install.md 登录限流一节）。
 func TrustedProxyHops() int {
 	raw := strings.TrimSpace(config.GetEnvAny("FLMX_TRUSTED_PROXY_HOPS", "FLVX_TRUSTED_PROXY_HOPS"))
 	if raw == "" {

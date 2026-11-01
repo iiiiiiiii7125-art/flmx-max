@@ -31,8 +31,8 @@ func main() {
 		log.Println("warning: JWT_SECRET is not set, using an ephemeral secret (sessions will not survive a restart)")
 	}
 	log.Printf("starting go-backend on %s (db=%s)", cfg.Addr, cfg.DBPath)
-	// R5-B2 A-001: 登录限流 XFF 解析的可信跳数（默认 1，覆盖 Caddy→backend
-	// 与 nginx→backend 两种默认拓扑；Caddy→nginx→backend 请设为 2）。
+	// R5-B2 A-001: 登录限流 XFF 解析的可信跳数（默认 1；脚本默认拓扑为
+	// Caddy→前端→后端共两跳，必须显式设为 2，见 doc/guide/install.md）。
 	log.Printf("proxy trust: FLMX_TRUSTED_PROXY_HOPS=%d (login XFF parsed right-to-left)", handler.TrustedProxyHops())
 
 	a, err := app.New(cfg)
