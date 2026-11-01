@@ -126,7 +126,7 @@ function getOptions<T>(
 
 function sizeClass(size: SelectProps["size"]) {
   if (size === "sm") {
-    return "h-8 text-xs";
+    return "h-8 text-xs font-semibold";
   }
   if (size === "lg") {
     return "h-10 text-base";
@@ -137,7 +137,7 @@ function sizeClass(size: SelectProps["size"]) {
 
 function textSizeClass(size: SelectProps["size"]) {
   if (size === "sm") {
-    return "text-xs";
+    return "text-xs font-semibold";
   }
   if (size === "lg") {
     return "text-base";

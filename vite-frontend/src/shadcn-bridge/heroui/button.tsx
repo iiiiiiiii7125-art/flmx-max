@@ -83,7 +83,7 @@ function mapSize(
 }
 
 const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
-  default: "bg-default-200 text-default-800 shadow-none hover:bg-default-300",
+  default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
   success: "bg-success text-white shadow-sm hover:bg-success/90",
   warning: "bg-warning text-white shadow-sm hover:bg-warning/90",
   primary:
@@ -108,28 +108,30 @@ const borderedColorClassMap: Record<HeroButtonColor, string> = {
     "border-danger/50 text-danger-700 hover:bg-danger/5 dark:text-danger-300 dark:hover:bg-danger/10",
 };
 
-// Round 4 tray standard: light buttons sit on the neutral tray with a
-// coloured label; flat buttons sit on the semantic tint tray. Both are
-// opaque in either theme, so coloured text never lands on glass or
-// wallpaper (the pre-Round 4 /10 tints and bg-transparent light were the
-// factory of the invisible-text bug family).
+// Round 6 wash standard: light buttons and the flat/solid defaults sit
+// on a translucent glass wash (white/30 + blur + white/50 edge) with a
+// -700/-800 label. Round 4 put light on the opaque white tray; rendered
+// on the wallpaper those trays read as solid white boards (the user's
+// Round 6 verdict), while the wash keeps the label on a light, blurred
+// carrier in both wallpaper regions. Flat semantic colours keep their
+// tint trays (chip-scale, tinted, never white).
 const lightColorClassMap: Record<HeroButtonColor, string> = {
   default:
-    "bg-tray text-default-700 shadow-sm hover:bg-default-100 dark:text-default-600 dark:hover:bg-default-200",
+    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
   primary:
-    "bg-tray text-primary-700 shadow-sm hover:bg-primary-50 dark:text-primary-300 dark:hover:bg-primary-900",
+    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-primary-700",
   secondary:
-    "bg-tray text-secondary-700 shadow-sm hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-900",
+    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-secondary-700",
   success:
-    "bg-tray text-success-700 shadow-sm hover:bg-success-50 dark:text-success-300 dark:hover:bg-success-900",
+    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-success-700",
   warning:
-    "bg-tray text-warning-700 shadow-sm hover:bg-warning-50 dark:text-warning-300 dark:hover:bg-warning-900",
+    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-warning-700",
   danger:
-    "bg-tray text-danger-700 shadow-sm hover:bg-danger-50 dark:text-danger-300 dark:hover:bg-danger-900",
+    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-danger-700",
 };
 
 const flatColorClassMap: Record<HeroButtonColor, string> = {
-  default: "tray-default",
+  default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
   primary: "tray-primary",
   secondary: "tray-secondary",
   success: "tray-success",

@@ -39,7 +39,7 @@ export interface TextareaProps
 
 function inputSizeClass(size: "sm" | "md" | "lg" | undefined) {
   if (size === "sm") {
-    return "h-8 text-xs";
+    return "h-8 text-xs font-semibold";
   }
   if (size === "lg") {
     return "h-10 text-base";
@@ -144,7 +144,7 @@ export function Textarea({
         aria-invalid={isInvalid}
         className={cn(
           variant === "bordered" ? "border border-input" : "",
-          size === "sm" ? "text-xs" : "",
+          size === "sm" ? "text-xs font-semibold" : "",
           size === "lg" ? "text-base" : "",
           maxRows ? "max-h-[40vh]" : "",
           classNames?.input,

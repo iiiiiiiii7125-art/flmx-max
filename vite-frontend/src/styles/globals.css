@@ -214,16 +214,16 @@ body {
   --tray-primary-foreground: #4338ca;
   --tray-secondary: #ede9fe;
   --tray-secondary-hover: #ddd6fe;
-  --tray-secondary-foreground: #6d28d9;
+  --tray-secondary-foreground: #5b21b6;
   --tray-success: #dcfce7;
   --tray-success-hover: #bbf7d0;
-  --tray-success-foreground: #15803d;
+  --tray-success-foreground: #14532d;
   --tray-warning: #fef3c7;
   --tray-warning-hover: #fde68a;
-  --tray-warning-foreground: #b45309;
+  --tray-warning-foreground: #713f12;
   --tray-danger: #fee2e2;
   --tray-danger-hover: #fecaca;
-  --tray-danger-foreground: #b91c1c;
+  --tray-danger-foreground: #7f1d1d;
   --tray-default: #f4f4f5;
   --tray-default-hover: #e4e4e7;
   --tray-default-foreground: #3f3f46;
@@ -375,6 +375,27 @@ body {
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.5),
       0 8px 24px rgb(24 24 27 / 0.07);
+  }
+
+  /* Glass inset (Round 6): the recessed inner panel that sits INSIDE a
+     glass card — stat blocks, detail boards, info boxes. Same recipe
+     family as .glass-card but a lower white stop (.22 -> .05), so the
+     rendered result reads as a translucent recess in the card, never as
+     a white board: Round 5's bg-white/40 insets compounded with the
+     card's own .30 stop to ~.58 effective white and rendered as solid
+     white slabs on the wallpaper. Any surface that still needs a truly
+     opaque light carrier is a registered functional tray (code/log
+     viewers, QR), not an inset. */
+  .glass-inset {
+    background: linear-gradient(
+      160deg,
+      rgb(255 255 255 / 0.22),
+      rgb(255 255 255 / 0.08) 55%,
+      rgb(255 255 255 / 0.05)
+    );
+    -webkit-backdrop-filter: blur(3px) saturate(150%) brightness(1.03);
+    backdrop-filter: blur(3px) saturate(150%) brightness(1.03);
+    border: 1px solid rgb(255 255 255 / 0.5);
   }
 
   /* Bridge accordion "splitted" items are glass cards. Written against

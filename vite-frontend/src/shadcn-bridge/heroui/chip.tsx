@@ -58,7 +58,7 @@ export function Chip({
       className={cn(
         variant === "solid" ? solidColorClassMap[color] : "",
         variant === "bordered" ? "border-current bg-tray" : "",
-        size === "sm" ? "px-2 py-0 text-xs" : "",
+        size === "sm" ? "px-2 py-0 text-xs font-semibold" : "",
         size === "lg" ? "px-3 py-1 text-sm" : "",
         className,
       )}
