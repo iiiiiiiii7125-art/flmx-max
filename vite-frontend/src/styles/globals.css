@@ -2,6 +2,14 @@
 @import "./tailwind-theme.pcss";
 @plugin "tailwindcss-animate";
 
+/* Dark variant follows the app's theme class (.dark on <html>, toggled
+   by the theme provider) — not the OS media query — so dark: utilities
+   and the .dark design tokens always switch together. With the default
+   media-query variant, picking dark in the app on a light OS flipped
+   the tokens but left dark: utilities disengaged (dark glass surfaces
+   carrying light-mode text colors), and vice versa. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* GPU acceleration helper - prevents font blurriness during transforms */
 .gpu-accelerated {
   will-change: transform;

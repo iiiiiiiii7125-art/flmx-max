@@ -397,7 +397,7 @@ export function EmptyHint({
   action?: PageAction;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-divider bg-tray px-4 py-8 text-center text-sm text-default-500">
+    <div className="glass-card flex flex-col items-center gap-3 rounded-xl border-dashed px-4 py-8 text-center text-sm text-default-500">
       <p>{text}</p>
       {action && (
         <Button

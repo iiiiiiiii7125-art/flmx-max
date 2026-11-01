@@ -4593,7 +4593,7 @@ export default function ForwardPage() {
               return (
                 <div
                   key={`grouped-table-${group.userId}-${group.userName}`}
-                  className="tray-plate rounded-2xl shadow-sm"
+                  className="glass-card rounded-2xl shadow-sm"
                 >
                   <div className="flex items-center justify-between border-b border-divider bg-default-100 px-5 py-4">
                     <div className="flex items-center gap-2">

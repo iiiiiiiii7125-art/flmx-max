@@ -298,7 +298,7 @@ export function Select<T>({
       <div
         ref={listboxRef}
         className={cn(
-          "tray-plate absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
+          "glass-surface absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
           placementClasses,
         )}
         id={`${generatedId}-listbox`}

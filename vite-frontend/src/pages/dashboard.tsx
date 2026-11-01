@@ -1089,7 +1089,7 @@ function UserDashboard() {
               {groupedForwards().map((group) => (
                 <div
                   key={group.tunnelName}
-                  className="tray-plate rounded-xl p-3 lg:p-4 shadow-sm"
+                  className="glass-card rounded-xl p-3 lg:p-4 shadow-sm"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-foreground">

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { Card } from "@/shadcn-bridge/heroui/card";
+import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 
 interface MetricCardProps {
   title: string;
@@ -18,11 +18,11 @@ export const MetricCard = ({
   bottomContent,
 }: MetricCardProps) => {
   return (
-    <Card className="h-48 flex flex-col overflow-hidden">
-      {/* Round 5: the glass shell holds segmented trays (headline plate,
-          bottom plate) with transparent gaps — no full-card plate. */}
-      <div className="flex h-full flex-col gap-2">
-        <div className="rounded-[14px] bg-tray px-4 pb-3.5 pt-4 md:px-5">
+    <Card className="h-48 flex flex-col justify-between overflow-hidden">
+      {/* Round 5 anchor (kernel page cards): content sits directly on
+          the clear-glass card; only the icon chip is a solid tray. */}
+      <CardBody className="!p-4 md:!p-6 h-full flex flex-col justify-between overflow-visible">
+        <div className="flex flex-col space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-default-600 truncate">
               {title}
@@ -35,12 +35,8 @@ export const MetricCard = ({
             {value}
           </p>
         </div>
-        {bottomContent && (
-          <div className="mt-auto rounded-[14px] bg-tray px-4 py-3 md:px-5">
-            {bottomContent}
-          </div>
-        )}
-      </div>
+        <div className="mt-auto pt-4">{bottomContent}</div>
+      </CardBody>
     </Card>
   );
 };

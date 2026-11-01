@@ -155,57 +155,51 @@ function Metric({
 
   return (
     <button
-      className="glass-card rounded-2xl p-2 text-left shadow-sm transition-shadow hover:shadow-md"
+      className="glass-card rounded-2xl p-4 text-left shadow-sm transition-shadow hover:shadow-md lg:p-5"
       type="button"
       onClick={onPress}
     >
-      {/* Round 5: two segmented trays (headline / meter) floating in the
-          glass shell with a transparent gap, not one full-card plate. */}
-      <div className="flex h-full flex-col gap-2">
-        <div className="rounded-[14px] bg-tray px-4 pb-3.5 pt-4 lg:px-5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate text-sm text-default-600">{label}</span>
-            <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
-              <Icon className={`h-4 w-4 lg:h-5 lg:w-5 ${iconColor}`} />
-            </span>
-          </div>
-          <div className="mt-2 text-2xl font-bold lg:text-3xl">
-            {value}
-            {total !== undefined && (
-              <span className="ml-1 text-base font-normal text-default-400">
-                / {total}
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="mt-auto rounded-[14px] bg-tray px-4 py-3 lg:px-5">
-          <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
-            {total !== undefined && total > 0 && (
-              <div
-                className={`h-full rounded-full ${bar}`}
-                style={{ width: `${pct}%` }}
-              />
-            )}
-          </div>
-          <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-            <span
-              className={`truncate ${
-                footTone === "danger"
-                  ? "text-danger"
-                  : footTone === "warning"
-                    ? "text-warning-600"
-                    : footTone === "success"
-                      ? "text-success-600"
-                      : "text-default-500"
-              }`}
-            >
-              {foot}
-            </span>
-            {footRight && (
-              <span className="shrink-0 text-default-400">{footRight}</span>
-            )}
-          </div>
-        </div>
+      {/* Round 5 anchor (kernel page cards): one clear-glass surface,
+          content directly on the glass; only the icon chip is a tray. */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-sm text-default-600">{label}</span>
+        <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
+          <Icon className={`h-4 w-4 lg:h-5 lg:w-5 ${iconColor}`} />
+        </span>
+      </div>
+      <div className="mt-2 text-2xl font-bold lg:text-3xl">
+        {value}
+        {total !== undefined && (
+          <span className="ml-1 text-base font-normal text-default-400">
+            / {total}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-default-100">
+        {total !== undefined && total > 0 && (
+          <div
+            className={`h-full rounded-full ${bar}`}
+            style={{ width: `${pct}%` }}
+          />
+        )}
+      </div>
+      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
+        <span
+          className={`truncate ${
+            footTone === "danger"
+              ? "text-danger"
+              : footTone === "warning"
+                ? "text-warning-600"
+                : footTone === "success"
+                  ? "text-success-700 dark:text-success-400"
+                  : "text-default-500"
+          }`}
+        >
+          {foot}
+        </span>
+        {footRight && (
+          <span className="shrink-0 text-default-400">{footRight}</span>
+        )}
       </div>
     </button>
   );
@@ -223,17 +217,13 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="glass-card rounded-2xl p-2 shadow-sm">
-      {/* Round 5: title tray + content tray as separate plates in the
-          glass shell (transparent gap between), not one full panel. */}
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 rounded-[14px] bg-tray px-4 py-3 lg:px-5">
-          <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
-          {badge}
-          {action && <div className="ml-auto">{action}</div>}
-        </div>
-        <div className="rounded-[14px] bg-tray p-4 lg:p-5">{children}</div>
+    <section className="glass-card rounded-2xl p-4 shadow-sm lg:p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
+        {badge}
+        {action && <div className="ml-auto">{action}</div>}
       </div>
+      {children}
     </section>
   );
 }
@@ -613,7 +603,7 @@ export function AdminOverview() {
                   数据加载失败，暂时无法判断
                 </p>
               ) : (
-                <p className="py-3 text-center text-sm text-success-600">
+                <p className="py-3 text-center text-sm text-success-700 dark:text-success-400">
                   一切正常
                 </p>
               )

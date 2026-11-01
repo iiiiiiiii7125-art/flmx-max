@@ -12,13 +12,13 @@ function Card({
     <div
       className={cn(
         "relative flex flex-col transition-[transform,box-shadow] duration-200 ease-refined hover:-translate-y-px hover:shadow-md",
-        // Round 4 "壳透字托" put one opaque tray plate under the whole
-        // card interior; Round 5 segments it: the shell stays clear
-        // glass and the tray moves down to the section components
-        // (CardHeader / CardContent / CardFooter below), so a card
-        // reads as a glass frame holding separate text plates with
-        // transparent gaps — never one solid board edge to edge.
-        "glass-card rounded-2xl p-2 text-card-foreground shadow-sm",
+        // Round 5 (user anchor: the kernel page's node cards): a card is
+        // ONE clear-glass surface and its content sits directly on the
+        // glass — no opaque tray plate under card interiors. Readability
+        // comes from paired foreground colors on the glass (dark text in
+        // light mode, light text in dark mode); solid trays survive only
+        // on small elements (pills, chips, badges, primary buttons).
+        "glass-card rounded-2xl text-card-foreground shadow-sm",
         className,
       )}
       data-slot="card"
@@ -27,7 +27,7 @@ function Card({
       }}
       {...props}
     >
-      <div className="flex flex-1 flex-col gap-2">{children}</div>
+      <div className="flex flex-1 flex-col">{children}</div>
     </div>
   );
 }
@@ -35,10 +35,7 @@ function Card({
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn(
-        "flex flex-col gap-1.5 rounded-[14px] bg-tray p-6",
-        className,
-      )}
+      className={cn("flex flex-col gap-1.5 p-6", className)}
       data-slot="card-header"
       {...props}
     />
@@ -76,18 +73,14 @@ function CardDescription({ className, ...props }: React.ComponentProps<"p">) {
 
 function CardContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div
-      className={cn("rounded-[14px] bg-tray p-6", className)}
-      data-slot="card-content"
-      {...props}
-    />
+    <div className={cn("p-6", className)} data-slot="card-content" {...props} />
   );
 }
 
 function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("flex items-center rounded-[14px] bg-tray p-6", className)}
+      className={cn("flex items-center p-6 pt-0", className)}
       data-slot="card-footer"
       {...props}
     />
