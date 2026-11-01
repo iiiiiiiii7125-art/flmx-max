@@ -1,23 +1,5 @@
-import axios from "axios";
-
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-
-/**
- * The panel origin text, resolved exactly like panelOrigin() in
- * inbound/share.tsx (axios baseURL resolved against the page
- * origin). It is re-implemented here instead of imported: share.tsx
- * imports this picker, so importing it back would create a cycle.
- * Keep the two in sync.
- */
-function panelOriginText(): string {
-  const base = axios.defaults.baseURL || "";
-
-  try {
-    return new URL(base, window.location.origin).origin;
-  } catch {
-    return window.location.origin;
-  }
-}
+import { panelOrigin } from "@/utils/panel-origin";
 
 /**
  * Base picker for subscription link assembly: the panel origin
@@ -48,7 +30,7 @@ export function SubFrontPicker({
       <Select
         aria-label="订阅链接地址"
         className="max-w-[280px]"
-        placeholder={panelOriginText()}
+        placeholder={panelOrigin()}
         selectedKeys={[value]}
         size="sm"
         onSelectionChange={(keys) => {

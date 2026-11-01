@@ -4,13 +4,13 @@ import type {
   InboundShareEntry,
 } from "@/api/types";
 
-import axios from "axios";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, QrCode, RefreshCw } from "lucide-react";
 
 import { copyWithToast } from "@/utils/clipboard";
+import { panelOrigin } from "@/utils/panel-origin";
 import { SubFrontPicker } from "@/pages/subscription/front-picker";
 import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import {
@@ -36,16 +36,9 @@ export async function copyText(text: string, label = "已复制") {
   await copyWithToast(text, label);
 }
 
-/** The panel origin the browser talks to, so links work behind a proxy. */
-export function panelOrigin(): string {
-  const base = axios.defaults.baseURL || "";
-
-  try {
-    return new URL(base, window.location.origin).origin;
-  } catch {
-    return window.location.origin;
-  }
-}
+// Re-exported for existing importers; the single definition lives in
+// @/utils/panel-origin so every link surface shares one origin rule.
+export { panelOrigin };
 
 export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   const [src, setSrc] = useState("");
