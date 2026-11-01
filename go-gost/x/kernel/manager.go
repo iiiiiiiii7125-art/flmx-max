@@ -86,6 +86,7 @@ func (m *Manager) Restore() {
 	m.restoreOnce.Do(func() {
 		m.restore()
 		m.startGeoUpdater()
+		m.startRuleSetUpdater()
 	})
 }
 
@@ -200,9 +201,21 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.setErr(inst, err)
 		return m.state(req.Type, false), err
 	}
-	prevFiles := readFiles(runDir, req.Files)
+	files := req.Files
+	if req.Type == "singbox" {
+		// FN34: localize the config's remote rule sets (downloaded
+		// through the probe-selected plan) before anything is
+		// written; on failure the previous files stay untouched.
+		localized, lerr := m.localizeSingboxRuleSets(inst, req, runDir)
+		if lerr != nil {
+			m.setErr(inst, lerr)
+			return m.state(req.Type, false), lerr
+		}
+		files = localized
+	}
+	prevFiles := readFiles(runDir, files)
 	fix := adapters[req.Type].fixFile
-	for _, f := range req.Files {
+	for _, f := range files {
 		content := f.Content
 		if fix != nil {
 			content = fix(f.Name, content)
