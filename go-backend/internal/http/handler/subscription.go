@@ -1478,7 +1478,7 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if roleID != 0 {
-			allowed, err := h.canReadDefaultSubscription(userID, s.ID)
+			allowed, err := h.canReadDefaultSubscription(userID, s)
 			if err != nil {
 				response.WriteJSON(w, response.Err(-2, err.Error()))
 				return
@@ -1498,20 +1498,45 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 // canReadDefaultSubscription 判断普通用户是否有权读取默认订阅 token：
 // 被分配了该订阅（1.0.12 user_subscription），或持有旧入站分配
 // （user_inbound——「我的订阅」存量 ?user=+sig 回退链靠本端点的 path
-// 拼链接，分配为空集时 openSubscription 本就过滤为空，见 X1 §7）。
-func (h *Handler) canReadDefaultSubscription(userID, subscriptionID int64) (bool, error) {
+// 拼链接，见 X1 §7）且至少一条分配入站属于该订阅。
+//
+// L1-F01（Round 5）：旧实现第二条腿只看「有任意一条 user_inbound 行」，
+// 不问该入站属不属于默认订阅——仅在其他订阅下有分配（错位分配）、或
+// 分配行指向不存在入站的用户，都能拿到默认订阅裸 token，不带 ?user=
+// 拉全量，绕过 ?user=&sig= 按分配过滤面。现收紧为与拉取侧同一成员
+// 口径：分配入站 ∩ subInboundIDs(订阅) 非空才放行（subInboundIDs 是
+// 拉取侧成员判定的唯一收口——SourceAll 全量、否则显式列表＋来源派生、
+// 伴生行不计；分配键与 filterInboundRowsByUserAssignments 同为 origin
+// 入站 id，含中转分配行）。
+func (h *Handler) canReadDefaultSubscription(userID int64, s *model.Subscription) (bool, error) {
 	ids, err := h.repo.ListUserSubscriptionIDs(userID)
 	if err != nil {
 		return false, err
 	}
 	for _, id := range ids {
-		if id == subscriptionID {
+		if id == s.ID {
 			return true, nil
 		}
 	}
-	legacy, err := h.repo.ListUserInboundIDs(userID)
+	assigned, err := h.repo.ListUserInboundIDs(userID)
 	if err != nil {
 		return false, err
 	}
-	return len(legacy) > 0, nil
+	if len(assigned) == 0 {
+		return false, nil
+	}
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		return false, err
+	}
+	member := make(map[int64]bool, len(assigned))
+	for _, id := range subInboundIDs(s, rows) {
+		member[id] = true
+	}
+	for _, id := range assigned {
+		if member[id] {
+			return true, nil
+		}
+	}
+	return false, nil
 }
