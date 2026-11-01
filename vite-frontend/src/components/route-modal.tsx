@@ -18,11 +18,11 @@ import {
 const ROUTES: Record<string, [string, string]> = {
   "电信 CN2 GIA": [
     "CN2 GIA",
-    "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+    "tray-warning",
   ],
   "电信 CN2 GT": [
     "CN2 GT",
-    "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
+    "bg-orange-500/10 text-orange-700",
   ],
   "电信 163": ["163", "bg-tray text-foreground"],
   "联通 9929": [
@@ -31,15 +31,15 @@ const ROUTES: Record<string, [string, string]> = {
   ],
   "联通 4837": [
     "4837",
-    "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300",
+    "bg-sky-500/10 text-sky-700",
   ],
   "移动 CMIN2": [
     "CMIN2",
-    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+    "tray-success",
   ],
   "移动 CMI": [
     "CMI",
-    "bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300",
+    "bg-teal-500/10 text-teal-700",
   ],
 };
 

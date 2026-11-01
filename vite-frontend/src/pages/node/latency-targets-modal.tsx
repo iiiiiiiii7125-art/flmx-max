@@ -234,7 +234,7 @@ export function LatencyTargetsModal({
                         {t.host}:{t.port}
                       </span>
                       <button
-                        className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-30 ${
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
                           pin
                             ? "tray-primary"
                             : "text-foreground hover:text-foreground"

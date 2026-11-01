@@ -1859,7 +1859,7 @@ export default function TunnelPage() {
             ) : (
               <>
                 <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900 dark:text-sky-300 dark:hover:bg-sky-800"
+                  className="bg-sky-500/10 font-semibold text-sky-700 hover:bg-sky-500/20"
                   color="default"
                   size="sm"
                   variant="flat"
@@ -2134,7 +2134,7 @@ export default function TunnelPage() {
                                 </div>
                               </div>
                               <div
-                                className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-foreground hover:text-default-600 transition-colors touch-manipulation flex-shrink-0"
+                                className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-foreground hover:text-foreground transition-colors touch-manipulation flex-shrink-0"
                                 {...listeners}
                                 style={{ touchAction: "none" }}
                                 title="拖拽排序"

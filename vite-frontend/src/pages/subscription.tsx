@@ -1011,7 +1011,7 @@ function Editor({
                         <span className="truncate text-sm">{src.name}</span>
                         {src.role && (
                           <span
-                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${src.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-900" : "bg-warning-100 text-warning-700 dark:bg-warning-900"}`}
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${src.role === "relay" ? "tray-secondary" : "tray-warning"}`}
                           >
                             用途：{src.role === "relay" ? "中转" : "落地"}
                           </span>
@@ -1144,7 +1144,7 @@ function Editor({
                       </span>
                       {p.chain && (
                         <span
-                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-900" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-900"}`}
+                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "tray-warning" : "tray-secondary"}`}
                         >
                           {p.chain === "landing" ? "落地" : "中转"}
                         </span>
@@ -1600,7 +1600,7 @@ export default function SubscriptionPage() {
                           </button>
                           <button
                             aria-label={`复制 ${c.label} 订阅链接`}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-foreground hover:bg-white/40 hover:text-default-600"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-foreground hover:bg-white/40 hover:text-foreground"
                             type="button"
                             onClick={() =>
                               copyText(link, `${c.label} 订阅已复制`)

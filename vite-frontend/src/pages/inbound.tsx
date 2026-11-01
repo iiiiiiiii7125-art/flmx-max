@@ -1170,7 +1170,7 @@ export default function InboundPage() {
               )}
               {inbounds.length > 0 && (
                 <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900 dark:text-sky-300 dark:hover:bg-sky-800"
+                  className="bg-sky-500/10 font-semibold text-sky-700 hover:bg-sky-500/20"
                   size="sm"
                   variant="flat"
                   onPress={() => setSelectMode(true)}

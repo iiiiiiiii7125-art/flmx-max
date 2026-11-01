@@ -105,7 +105,7 @@ export function VersionFooter({
         <p className={poweredClassName}>
           Powered by{" "}
           <a
-            className="text-foreground hover:text-gray-600 transition-colors"
+            className="text-foreground hover:text-foreground transition-colors"
             href={siteConfig.github_repo}
             rel="noopener noreferrer"
             target="_blank"

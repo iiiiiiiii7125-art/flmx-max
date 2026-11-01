@@ -55,7 +55,7 @@ export function ViewModeToggle({
           className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
             value === m
               ? "bg-tray text-foreground shadow-sm"
-              : "text-foreground hover:text-default-600"
+              : "text-foreground hover:text-foreground"
           }`}
           role="radio"
           title={label}

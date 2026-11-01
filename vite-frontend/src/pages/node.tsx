@@ -2041,7 +2041,7 @@ export default function NodePage({
                             <div className="flex justify-between items-start w-full gap-3">
                               <div className="flex items-start gap-2 flex-1 min-w-0">
                                 <div
-                                  className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-foreground hover:text-default-600 transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
+                                  className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-foreground hover:text-foreground transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
                                   {...listeners}
                                   style={{ touchAction: "none" }}
                                   title="拖拽排序"

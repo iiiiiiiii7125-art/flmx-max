@@ -114,7 +114,7 @@ function UserDashboard() {
       return {
         label: "已逾期",
         badgeClassName:
-          "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+          "tray-danger",
         nextDueTime,
       };
     }
@@ -132,7 +132,7 @@ function UserDashboard() {
       badgeClassName:
         diffDays <= 7
           ? "tray-warning"
-          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+          : "tray-success",
       nextDueTime,
     };
   };
@@ -1112,7 +1112,7 @@ function UserDashboard() {
                             </h4>
                             <div className="space-y-1">
                               <button
-                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-white/40 dark:hover:bg-white/50" : ""}`}
                                 disabled={!hasMultipleIps(forward.inIp)}
                                 title={formatInAddress(
                                   forward.inIp,
@@ -1133,7 +1133,7 @@ function UserDashboard() {
                                 ↓
                               </div>
                               <button
-                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-white/40 dark:hover:bg-white/50" : ""}`}
                                 disabled={
                                   !hasMultipleRemoteAddresses(
                                     forward.remoteAddr,

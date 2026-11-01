@@ -1489,7 +1489,7 @@ export function MonitorView({
                                   ? formatBytesPerSecond(metric.netOutSpeed)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-success-50 dark:bg-success-900 text-success-700">
+                              <div className="flex items-center justify-center p-[3px] rounded-full tray-success">
                                 <ArrowUp
                                   className="w-3 h-3"
                                   strokeWidth={2.5}
@@ -1502,7 +1502,7 @@ export function MonitorView({
                                   ? formatBytesPerSecond(metric.netInSpeed)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-primary-50 dark:bg-primary-900 text-primary-700">
+                              <div className="flex items-center justify-center p-[3px] rounded-full tray-primary">
                                 <ArrowDown
                                   className="w-3 h-3"
                                   strokeWidth={2.5}

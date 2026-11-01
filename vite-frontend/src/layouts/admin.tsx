@@ -568,7 +568,7 @@ export default function AdminLayout({
           {!isMobile && (
             <Button
               isIconOnly
-              className="flex-shrink-0 text-foreground hover:text-gray-700 min-w-0 w-10 h-10 rounded-full mx-auto"
+              className="flex-shrink-0 text-foreground min-w-0 w-10 h-10 rounded-full mx-auto"
               size="sm"
               variant="light"
               onPress={toggleCollapse}

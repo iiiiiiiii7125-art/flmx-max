@@ -345,7 +345,7 @@ export function RemoteSourcesSection({
                     )}
                     {s.role && (
                       <span
-                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${s.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-900" : "bg-warning-100 text-warning-700 dark:bg-warning-900"}`}
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${s.role === "relay" ? "tray-secondary" : "tray-warning"}`}
                       >
                         {s.role === "relay" ? "中转" : "落地"}
                       </span>

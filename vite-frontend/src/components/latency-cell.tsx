@@ -21,15 +21,15 @@ type Tone = "success" | "warning" | "danger" | "default";
 
 export const TONE: Record<Tone, [string, string]> = {
   success: [
-    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+    "tray-success",
     "bg-emerald-500",
   ],
   warning: [
-    "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+    "tray-warning",
     "bg-amber-500",
   ],
   danger: [
-    "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
+    "tray-danger",
     "bg-rose-500",
   ],
   default: ["bg-tray text-foreground", "bg-default-400"],

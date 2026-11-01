@@ -718,7 +718,7 @@ const SortableTunnelGroupContainer = ({
         <div className="flex items-center gap-2">
           <span className={countClassName}>{tunnel.items.length} 条规则</span>
           <div
-            className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-default-600 transition-colors"
+            className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-foreground transition-colors"
             title="拖拽分组排序"
             {...attributes}
             {...listeners}
@@ -842,7 +842,7 @@ const SortableTableRow = ({
       )}
       <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.drag}>
         <div
-          className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-default-600 transition-colors"
+          className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-foreground transition-colors"
           {...attributes}
           {...listeners}
           title="拖拽排序"
@@ -1070,7 +1070,7 @@ const SortableCompactTableRow = ({
         className={`${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <div
-          className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-default-600 transition-colors"
+          className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-foreground transition-colors"
           {...attributes}
           {...listeners}
         >
@@ -3958,7 +3958,7 @@ export default function ForwardPage() {
               </Chip>
               {viewMode === "direct" && (
                 <div
-                  className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-foreground hover:text-default-600 transition-colors touch-manipulation flex-shrink-0"
+                  className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-foreground hover:text-foreground transition-colors touch-manipulation flex-shrink-0"
                   {...listeners}
                   style={{ touchAction: "none" }}
                   title="拖拽排序"
@@ -3984,7 +3984,7 @@ export default function ForwardPage() {
               <button
                 className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.inIp)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200"
+                    ? "hover:bg-white/40"
                     : ""
                 }`}
                 title={formatInAddress(forward.inIp, forward.inPort)}
@@ -4024,7 +4024,7 @@ export default function ForwardPage() {
               <button
                 className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.remoteAddr)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200"
+                    ? "hover:bg-white/40"
                     : ""
                 }`}
                 title={formatRemoteAddress(forward.remoteAddr)}
