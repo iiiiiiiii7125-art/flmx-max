@@ -241,8 +241,9 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 }
 
 // stripMirrorPrefix 若 url 是镜像前缀形式（<前缀>/https://目标地址），
-// 返回其中的直连地址；否则返回空串。镜像对某些仓库有黑名单（如 ghfast
-// 拒绝 XTLS/Xray-core），下载失败时用直连地址兜底。
+// 返回其中的直连地址；否则返回空串。KU4 (1.7.7) 起它只作 URL 归一化：
+// 面板下发的地址可能带某个镜像前缀，下载路由改由本机的测速计划
+// （download.Plan）决定，先剥到直连形式再由计划按候选重建前缀。
 func stripMirrorPrefix(url string) string {
 	for _, scheme := range []string{"/https://", "/http://"} {
 		if i := strings.Index(url, scheme); i > 0 {
@@ -252,27 +253,99 @@ func stripMirrorPrefix(url string) string {
 	return ""
 }
 
-// fetchWithMirrorFallback 先按原地址下载；失败且地址是镜像前缀形式时，
-// 剥离前缀回退直连再试一次。内容先落缓冲、成功才写入 w，避免失败尝试的
-// 半截内容污染。仅用于小文件（校验文件/API 响应），大文件走 install 的
-// 可重置下载闭包。
-func fetchWithMirrorFallback(ctx context.Context, url string, limit int64, w io.Writer) error {
+// directForm returns url in direct form (any mirror prefix the
+// panel attached stripped); already-direct URLs pass through.
+func directForm(url string) string {
+	if d := stripMirrorPrefix(url); d != "" {
+		return d
+	}
+	return url
+}
+
+// --- KU4 (1.7.7): probe-selected routes for kernel downloads ---
+//
+// Kernel downloads used to derive their route from the panel: the
+// download URLs could arrive mirror-prefixed and GitHubRelease
+// named ONE mirror; a failed attempt then stripped the prefix and
+// retried direct (the deleted fetchWithMirrorFallback and its
+// twins). The route is now decided where the download happens,
+// by the shared direct-first probe plan (download.Plan): direct
+// is probed alone against the operation's real small target;
+// only when direct is not admitted are the built-in mirrors
+// probed and ranked by latency. Panel-supplied routing (a
+// prefixed URL, g.Proxy) no longer decides anything.
+
+// checksumProbe admits a route only when it delivers the real
+// checksum file with a parseable SHA-256 — never a bare 200 (a
+// mirror's landing page is fake-alive and stays out).
+func checksumProbe(ctx context.Context, url string) error {
 	var buf bytes.Buffer
-	if err := fetch(ctx, url, limit, &buf); err == nil {
-		_, err = io.Copy(w, &buf)
+	if err := fetch(ctx, url, 64<<10, &buf); err != nil {
 		return err
-	} else {
-		direct := stripMirrorPrefix(url)
-		if direct == "" {
+	}
+	if _, ok := parseChecksum(buf.String()); !ok {
+		return fmt.Errorf("校验文件内容无可解析的 SHA256")
+	}
+	return nil
+}
+
+// apiProbe admits a route only when it delivers a parseable
+// GitHub release JSON with a tag — mirrors that answer their
+// landing page (or refuse API paths, like ghfast) stay out.
+func apiProbe(ctx context.Context, url string) error {
+	var buf bytes.Buffer
+	if err := fetch(ctx, url, 4<<20, &buf); err != nil {
+		return err
+	}
+	var rel githubReleaseJSON
+	if err := json.Unmarshal(buf.Bytes(), &rel); err != nil {
+		return fmt.Errorf("发布信息不可解析: %v", err)
+	}
+	if rel.TagName == "" {
+		return fmt.Errorf("发布信息缺少 tag_name")
+	}
+	return nil
+}
+
+// assetProbe is the light admission probe for operations with no
+// small companion file: the route must answer the asset URL
+// itself with 200; only the first bytes are read, so the cost
+// stays bounded by the probe context the plan wraps it in.
+func assetProbe(ctx context.Context, url string) error {
+	if err := validateFetchEntryURL(ctx, url); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := fetchHTTPClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("下载失败: HTTP %d (%s)", resp.StatusCode, url)
+	}
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return err
+}
+
+// fetchRanked fetches a small file (checksum / API response) over
+// the route plan: each attempt's content lands in a buffer first
+// and is written to w only on success, so a failed attempt never
+// leaves partial content behind (the deleted
+// fetchWithMirrorFallback contract, generalized to the plan).
+func fetchRanked(ctx context.Context, plan *download.Plan, directURL string, limit int64, w io.Writer) error {
+	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
+		var buf bytes.Buffer
+		if err := fetch(ctx, url, limit, &buf); err != nil {
 			return err
 		}
-		buf.Reset()
-		if ferr := fetch(ctx, direct, limit, &buf); ferr != nil {
-			return fmt.Errorf("%v；镜像失败后回退直连亦失败: %v", err, ferr)
-		}
-		_, ferr := io.Copy(w, &buf)
-		return ferr
-	}
+		_, err := io.Copy(w, &buf)
+		return err
+	})
+	return err
 }
 
 // githubAPIBase is a variable so tests can point it at a local server.
@@ -295,17 +368,15 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 		path = "tags/" + g.Tag
 	}
 	apiURL := fmt.Sprintf("%s/repos/%s/releases/%s", githubAPIBase, g.Repo, path)
+	// F-061 口径、KU4 (1.7.7) 形态：API 请求与下载/校验走同一路由
+	// 策略——测速计划。计划以 API 地址本身为探针目标：某条线路
+	// 只有真回一份可解析的发布 JSON 才准入，不转发 API 的镜像
+	// （ghfast 回 403/落地页）被自动排除。g.Proxy 不再参与路由
+	// （面板 GitHub 加速设置已退役，路由由本机内置候选测速决定）；
+	// 返回的资产地址是直连形式，由 install 的计划负责选线。
+	plan := download.NewPlan(ctx, apiURL, apiProbe)
 	var body strings.Builder
-	if p := strings.TrimSuffix(strings.TrimSpace(g.Proxy), "/"); p != "" {
-		// F-061: API 请求与下载/校验走同一网络策略——先经代理前缀，
-		// 镜像不转发 API（如 ghfast 回 403）时 fetchWithMirrorFallback
-		// 剥离前缀回退直连。此前 API 直连 api.github.com，镜像-only
-		// 节点在此一步整单失败。
-		err = fetchWithMirrorFallback(ctx, p+"/"+apiURL, 4<<20, &body)
-	} else {
-		err = fetch(ctx, apiURL, 4<<20, &body)
-	}
-	if err != nil {
+	if err := fetchRanked(ctx, plan, apiURL, 4<<20, &body); err != nil {
 		return "", "", fmt.Errorf("查询 GitHub 发布信息失败: %v", err)
 	}
 	var rel githubReleaseJSON
@@ -323,9 +394,6 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 			return "", "", fmt.Errorf("GitHub 未提供 %s 的校验值", name)
 		}
 		url = a.BrowserDownloadURL
-		if p := strings.TrimSuffix(strings.TrimSpace(g.Proxy), "/"); p != "" {
-			url = p + "/" + url
-		}
 		return url, digest, nil
 	}
 	return "", "", fmt.Errorf("发布 %s 中没有文件 %s", rel.TagName, name)
@@ -369,10 +437,23 @@ func install(d *Download, binDir string) error {
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 
+	// KU4 (1.7.7): 面板下发的地址可能带镜像前缀——先归一化为直连
+	// 形式，路由由本次安装的测速计划决定（二进制与校验两腿共用
+	// 一次探测，不逐文件重测）。探针目标优先校验文件（小且内容
+	// 可验），没有校验文件时以资产地址本身作轻量探针。
+	url = directForm(url)
+	sumURL = directForm(sumURL)
+	var plan *download.Plan
+	if sumURL != "" {
+		plan = download.NewPlan(ctx, sumURL, checksumProbe)
+	} else {
+		plan = download.NewPlan(ctx, url, assetProbe)
+	}
+
 	hasher := sha256.New()
-	// download 把 url 下载到临时文件并同步计算 SHA256；每次尝试前重置
-	// 文件与哈希状态。镜像前缀地址失败时回退直连地址再试一次。
-	download := func(u string) error {
+	// downloadOnce 把 url 下载到临时文件并同步计算 SHA256；每次
+	// 尝试前重置文件与哈希状态，使失败线路的半截内容不污染重试。
+	downloadOnce := func(u string) error {
 		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
@@ -382,18 +463,14 @@ func install(d *Download, binDir string) error {
 		hasher.Reset()
 		return fetch(ctx, u, maxDownloadBytes, io.MultiWriter(tmp, hasher))
 	}
-	if err := download(url); err != nil {
-		direct := stripMirrorPrefix(url)
-		if direct == "" {
-			return err
-		}
-		if ferr := download(direct); ferr != nil {
-			return fmt.Errorf("%v；镜像失败后回退直连亦失败: %v", err, ferr)
-		}
+	if _, err := download.TryPlan(plan, url, func(route download.Route, u string) error {
+		return downloadOnce(u)
+	}); err != nil {
+		return err
 	}
 	if want == "" {
 		var sb strings.Builder
-		if err := fetchWithMirrorFallback(ctx, sumURL, 64<<10, &sb); err != nil {
+		if err := fetchRanked(ctx, plan, sumURL, 64<<10, &sb); err != nil {
 			return fmt.Errorf("获取校验文件失败: %v", err)
 		}
 		var ok bool

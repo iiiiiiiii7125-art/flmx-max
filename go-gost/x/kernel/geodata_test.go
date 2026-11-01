@@ -13,8 +13,10 @@ import (
 )
 
 // F-139：geodata 下载的镜像回退——校验文件与数据文件在镜像不可用时
-// 都应剥离镜像前缀直连成功（此前 stageGeoFile 两处都是裸 fetch 单次
-// 尝试，镜像一挂整轮更新失败）。
+// 都应直连成功（此前 stageGeoFile 两处都是裸 fetch 单次尝试，镜像
+// 一挂整轮更新失败）。KU4 (1.7.7) 形态：带前缀的地址先归一化为
+// 直连形式、走测速计划；本用例的计划在 TestMain 的空候选下只有
+// 直连，前缀指向的 502 镜像根本不会被请求，断言不变。
 func TestStageGeoFileFallsBackToDirectWhenMirrorFails(t *testing.T) {
 	data := []byte("geo data via direct")
 	sum := sha256.Sum256(data)
@@ -41,7 +43,7 @@ func TestStageGeoFileFallsBackToDirectWhenMirrorFails(t *testing.T) {
 		URL:         mirror.URL + "/" + direct.URL + "/geosite.dat",
 		ChecksumURL: mirror.URL + "/" + direct.URL + "/geosite.dat.sha256sum",
 	}
-	changed, err := stageGeoFile(context.Background(), binDir, f)
+	changed, err := stageGeoFile(context.Background(), binDir, f, nil)
 	if err != nil {
 		t.Fatalf("镜像失败时应回退直连: %v", err)
 	}

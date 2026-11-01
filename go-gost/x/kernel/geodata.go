@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/go-gost/x/internal/util/download"
 )
 
 // GeoFile is a data file a kernel reads next to its binary (Xray's
@@ -102,10 +104,17 @@ func (m *Manager) UpdateGeoData(ctx context.Context) {
 // remaining files; one stalled file must not starve the whole
 // round. The round ctx itself stays a single 5-minute budget.
 func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]string, error) {
+	// KU4 (1.7.7): one probe plan per round, shared by every file
+	// (probe target: the first file's checksum URL) — routes are
+	// measured once per operation, not per file.
+	var plan *download.Plan
+	if len(files) > 0 {
+		plan = download.NewPlan(ctx, directForm(files[0].ChecksumURL), checksumProbe)
+	}
 	var staged []string
 	var errs []string
 	for _, f := range files {
-		changed, err := stageGeoFile(ctx, binDir, f)
+		changed, err := stageGeoFile(ctx, binDir, f, plan)
 		if err != nil {
 			errs = append(errs, f.Name+": "+err.Error())
 			continue
@@ -120,11 +129,14 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 	return staged, nil
 }
 
-func stageGeoFile(ctx context.Context, binDir string, f GeoFile) (bool, error) {
+func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.Plan) (bool, error) {
+	if plan == nil {
+		plan = download.NewPlan(ctx, directForm(f.ChecksumURL), checksumProbe)
+	}
 	var sumBody strings.Builder
-	// F-139：校验文件此前裸 fetch 单次尝试，镜像不可用整轮失败；改走
-	// install.go 的镜像回退（小文件路径，与 verifyChecksum 同口径）。
-	if err := fetchWithMirrorFallback(ctx, f.ChecksumURL, 4096, &sumBody); err != nil {
+	// F-139 口径、KU4 (1.7.7) 形态：校验文件走本轮共享的测速计划
+	// （替代原 fetchWithMirrorFallback 的镜像->直连双试）。
+	if err := fetchRanked(ctx, plan, directForm(f.ChecksumURL), 4096, &sumBody); err != nil {
 		return false, err
 	}
 	want, ok := parseChecksum(sumBody.String())
@@ -136,21 +148,17 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile) (bool, error) {
 		return false, nil
 	}
 
-	// F-139：数据文件（大文件流式）同样的双试：先原址（可为镜像前缀
-	// 形式），失败剥镜像前缀直连；每次尝试都重建临时文件与哈希。
-	urls := []string{f.URL}
-	if direct := stripMirrorPrefix(f.URL); direct != "" {
-		urls = append(urls, direct)
-	}
+	// F-139 口径、KU4 形态：数据文件（大文件流式）走同一计划；每次
+	// 尝试都重建临时文件与哈希（downloadGeoFile 以 O_TRUNC 打开）。
 	tmp := path + ".new"
-	var lastErr error
-	for _, u := range urls {
-		if lastErr = downloadGeoFile(ctx, u, tmp, want); lastErr == nil {
-			return true, nil
-		}
+	_, err := download.TryPlan(plan, directForm(f.URL), func(route download.Route, u string) error {
+		return downloadGeoFile(ctx, u, tmp, want)
+	})
+	if err != nil {
+		_ = os.Remove(tmp)
+		return false, err
 	}
-	_ = os.Remove(tmp)
-	return false, lastErr
+	return true, nil
 }
 
 func downloadGeoFile(ctx context.Context, url, tmp, want string) error {

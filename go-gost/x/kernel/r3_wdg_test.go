@@ -105,9 +105,12 @@ func TestR3WDGFetchSlowProgressCompletes(t *testing.T) {
 	}
 }
 
-// Mirror leg stalls after 200 -> watchdog fails it -> the existing
-// strip-prefix direct leg succeeds with the real content.
-func TestR3WDGFetchMirrorStallFallsBackToDirect(t *testing.T) {
+// Mirror leg stalls after 200 -> watchdog fails it -> the next
+// route of the plan (direct) succeeds with the real content.
+// KU4 (1.7.7): the old fetchWithMirrorFallback two-try became
+// fetchRanked over an explicit route plan; the stall caliber is
+// unchanged.
+func TestR3WDGFetchRankedStallFallsBackToDirect(t *testing.T) {
 	shrinkFetchStallWindow(t, 300*time.Millisecond)
 	payload := []byte("kernel-bytes-via-direct")
 	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +124,8 @@ func TestR3WDGFetchMirrorStallFallsBackToDirect(t *testing.T) {
 	defer cancel()
 	var buf bytes.Buffer
 	start := time.Now()
-	err := fetchWithMirrorFallback(ctx, mirror.URL+"/"+direct.URL+"/file", 1<<20, &buf)
+	plan := download.NewStaticPlan([]download.Route{{Prefix: mirror.URL}, {}})
+	err := fetchRanked(ctx, plan, direct.URL+"/file", 1<<20, &buf)
 	if err != nil {
 		t.Fatalf("stalled mirror must fall back to direct, got: %v", err)
 	}

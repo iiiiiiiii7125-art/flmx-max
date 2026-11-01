@@ -31,7 +31,7 @@ type GitHubRelease struct {
 	Repo  string `json:"repo"`  // owner/name
 	Tag   string `json:"tag"`   // "" = latest
 	Asset string `json:"asset"` // file name template with {VERSION} and {ARCH}
-	Proxy string `json:"proxy"` // optional mirror prefix for the download URL
+	Proxy string `json:"proxy"` // retired (KU4, 1.7.7): parsed for wire compatibility but ignored — download routing is probe-selected locally from built-in candidates
 }
 
 // ExtraBinary is a helper program a kernel needs next to its main binary
@@ -121,9 +121,9 @@ type Status struct {
 	Kernels      []State       `json:"kernels"`
 	Counters     []Counter     `json:"counters"`
 	Users        []UserCounter `json:"users,omitempty"`
-	Epoch        string    `json:"epoch"`
-	NftAvailable bool      `json:"nftAvailable"`
-	NftError     string    `json:"nftError,omitempty"`
+	Epoch        string        `json:"epoch"`
+	NftAvailable bool          `json:"nftAvailable"`
+	NftError     string        `json:"nftError,omitempty"`
 }
 
 type adapter struct {
