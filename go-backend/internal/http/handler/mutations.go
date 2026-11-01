@@ -7649,16 +7649,17 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 		"type": "relay",
 	}
 	handlerMetadata := tunnelRelayMetadata(protocol)
-	if chainNode.ChainType == 3 {
-		// KU9: 出口是链终端——relay handler 无 chain 时才分发
-		// handleBind（中继跳走 forward 转发、不查此开关），而
-		// SOCKS5 UDP associate 经 relay 链恒走 connector Bind，
-		// 终端不开 bind opt-in 时出口回 "relay: BIND is disabled"、
-		// 整形态不可达（Phase F 真机定性；隔离验证仅出口多带
-		// bind:true 即同链 6/6）。与联邦 exit 同口径
-		// （buildFederationServiceConfig）。
-		handlerMetadata["bind"] = true
-	}
+	// KU10: relay BIND 是逐跳门控、逐跳传递的命令——x 的 relay
+	// handler 对 BIND 在每一跳 handler 都先查 enableBind，未开即
+	// 回 "relay: BIND is disabled" 拒绝、根本不进 chain 转发
+	// （Phase F 收尾复验真机定性：本地多跳链 middle 未开 bind
+	// 时第一跳即 0/6，middle 日志实锤）。本 builder 产出的服务
+	// 只有 ChainType 2（中段）与 ChainType 3（出口）两种，全部
+	// 位于 BIND 逐跳路径上，故无条件开 bind opt-in；与联邦
+	// builder 同口径（buildFederationServiceConfig）。KU9 的
+	// 终端-only 口径（有 chain 即 forward、不查开关）已被真机
+	// 证伪，勿回退。
+	handlerMetadata["bind"] = true
 	if len(handlerMetadata) > 0 {
 		handlerCfg["metadata"] = handlerMetadata
 	}

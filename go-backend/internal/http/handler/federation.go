@@ -338,13 +338,15 @@ func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName s
 	}
 	// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata。
 	handlerMetadata := tunnelRelayMetadata(protocol)
-	if role == "exit" {
-		// KU9: exit 是链终端，relay BIND 在此执行；与本地链出口
-		// （buildTunnelChainServiceConfig ChainType==3）同口径开
-		// bind opt-in，否则 SOCKS5 UDP associate 经链在出口被
-		// "relay: BIND is disabled" 拒绝（Phase F 真机定性）。
-		handlerMetadata["bind"] = true
-	}
+	// KU10: relay BIND 逐跳门控、逐跳传递（同
+	// buildTunnelChainServiceConfig 注释）：middle 未开 bind 时
+	// BIND 在第一跳即被 "relay: BIND is disabled" 拒绝、到不了
+	// exit。本 builder 经 applyPeerShareRoleRuntime 只产出
+	// middle/exit 两种角色服务（入口硬校验），两者都是 BIND
+	// 逐跳路径上的 relay handler，故无条件开 bind opt-in。
+	// KU9 的 exit-only 口径已被 Phase F 收尾复验真机证伪，
+	// 勿回退。
+	handlerMetadata["bind"] = true
 	if len(handlerMetadata) > 0 {
 		service["handler"].(map[string]interface{})["metadata"] = handlerMetadata
 	}

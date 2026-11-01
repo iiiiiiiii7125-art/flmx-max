@@ -276,8 +276,15 @@ func TestBuildFederationServiceConfig_TLSTunnelProtocol_SetsNodelay(t *testing.T
 func TestBuildFederationServiceConfig_NonTLSProtocol_NoNodelay(t *testing.T) {
 	service := buildFederationServiceConfig("svc-tcp", ":40000", "tcp", "middle", "chain-next", 2, "")
 	handler := service["handler"].(map[string]interface{})
-	if _, hasMeta := handler["metadata"]; hasMeta {
-		t.Fatalf("expected no metadata for non-TLS protocol, got %v", handler["metadata"])
+	meta, _ := handler["metadata"].(map[string]interface{})
+	if _, hasNodelay := meta["nodelay"]; hasNodelay {
+		t.Fatalf("expected no nodelay for non-TLS protocol, got %v", meta)
+	}
+	// KU10: 非 TLS 协议无 mux metadata，但 relay handler 恒带
+	// bind opt-in（BIND 逐跳门控、middle 同样在路径上），故
+	// metadata 恰为 {bind:true}，不再为空。
+	if len(meta) != 1 || meta["bind"] != true {
+		t.Fatalf("expected metadata exactly {bind:true} for tcp middle, got %v", meta)
 	}
 }
 

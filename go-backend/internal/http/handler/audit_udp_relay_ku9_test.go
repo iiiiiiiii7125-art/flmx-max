@@ -5,14 +5,18 @@ import (
 	"testing"
 )
 
-// KU9 回归门：SOCKS5 UDP associate 经 relay 链的 bind 生成缺口
-// （Phase F 真机定性）。gost socks 的 associate 恒走 connector
-// Bind；relay handler 的 bind 是 metadata opt-in，且只有链终端
-// （handler 无 chain）才分发 handleBind 并查此开关，中继跳走
-// forward 转发不查。故 bind 只能开在终端 handler 上：
-//   - 本地链出口（buildTunnelChainServiceConfig ChainType==3）
-//   - 联邦 exit（buildFederationServiceConfig role=="exit"）
-// 两面同口径；中继面、connector 面、forward 服务逐字不变。
+// KU9/KU10 回归门：SOCKS5 UDP associate 经 relay 链的 bind 生成
+// 缺口（Phase F 真机定性）。gost socks 的 associate 恒走
+// connector Bind；relay handler 的 bind 是 metadata opt-in。
+// KU9 曾假设「有 chain 的 handler 一律 forward、不查开关」，只给
+// 链终端开 bind；Phase F 收尾复验真机证伪该前提——BIND 逐跳
+// 门控、逐跳传递：每一跳 handler 都先查 enableBind，未开即
+// "relay: BIND is disabled" 拒绝、根本不进 chain 转发（本地多跳
+// 链 middle 第一跳 0/6）。KU10 起改为全集口径：relay handler
+// 生成面全集（本地 ChainType 2/3、联邦 middle/exit）全部下发
+// bind:true；非 relay 面（connector 链配置、forward 服务）仍
+// 不得出现 bind 键。本文件的终端断言继续有效，全角色断言见
+// audit_udp_relay_ku10_test.go。
 
 func ku9HandlerMetadata(t *testing.T, service map[string]interface{}) map[string]interface{} {
 	t.Helper()
@@ -104,22 +108,17 @@ func TestKU9TLSExitBindMergesWithMuxMetadata(t *testing.T) {
 	}
 }
 
-// 对照面：中继跳（forward 模式、不执行 BIND）、connector 面、
-// forward 服务都不得出现 bind 键——开启面最小化、非 relay 形态
-// 逐字不变。
-func TestKU9NonTerminalSurfacesHaveNoBind(t *testing.T) {
+// 对照面：非 relay 面——connector 链配置、forward 服务——都
+// 不得出现 bind 键（connector 不读 bind、forward handler 非
+// relay）。中继跳的 relay handler 服务属开启面（KU10 起恒带
+// bind），其正向断言见 audit_udp_relay_ku10_test.go；本测试
+// 前身曾断言「中继面全树无 bind」，该口径已被真机证伪、删除。
+func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	fromNode := &nodeRecord{ID: 1, TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	targetNode := &nodeRecord{ID: 2, TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 
 	for _, protocol := range []string{"udp", "tls"} {
-		middleServices := buildTunnelChainServiceConfig(99,
-			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 2}, node, 1)
-		ku9AssertNoBindKey(t, "local middle service", middleServices[0])
-
-		fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", protocol, "middle", "fed_chain_1", 1, "")
-		ku9AssertNoBindKey(t, "federation middle service", fedMiddle)
-
 		localChain, err := buildTunnelChainConfig(99, 1,
 			[]tunnelRuntimeNode{{NodeID: 2, Protocol: protocol, Port: 24001, ConnectIP: "10.0.0.2"}},
 			map[int64]*nodeRecord{1: fromNode, 2: targetNode}, "")
