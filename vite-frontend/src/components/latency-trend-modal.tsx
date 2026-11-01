@@ -228,10 +228,10 @@ export function LatencyTrendModal({
               <table className="w-full text-xs font-semibold">
                 <thead className="text-foreground">
                   <tr className="border-b border-divider">
-                    <th className="py-1.5 text-left font-normal">测试点</th>
-                    <th className="py-1.5 text-right font-normal">平均</th>
-                    <th className="py-1.5 text-right font-normal">最高</th>
-                    <th className="py-1.5 text-right font-normal">平均丢包</th>
+                    <th className="py-1.5 text-left font-semibold">测试点</th>
+                    <th className="py-1.5 text-right font-semibold">平均</th>
+                    <th className="py-1.5 text-right font-semibold">最高</th>
+                    <th className="py-1.5 text-right font-semibold">平均丢包</th>
                   </tr>
                 </thead>
                 <tbody className="font-mono">
