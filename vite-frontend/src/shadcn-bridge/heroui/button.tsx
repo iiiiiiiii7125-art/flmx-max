@@ -87,7 +87,7 @@ const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
   success: "bg-success text-white shadow-sm hover:bg-success/90",
   warning: "bg-warning text-white shadow-sm hover:bg-warning/90",
   primary:
-    "bg-gradient-to-r from-primary-500 to-secondary-500 text-white shadow-sm hover:from-primary-600 hover:to-secondary-600",
+    "bg-gradient-to-r from-primary-700 to-secondary-700 text-white shadow-sm hover:from-primary-800 hover:to-secondary-800",
   secondary:
     "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/90",
   danger: "bg-danger text-white shadow-sm hover:bg-danger/90",

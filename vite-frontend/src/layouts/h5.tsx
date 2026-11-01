@@ -262,7 +262,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                 transition-colors duration-200 ease-refined min-h-[44px]
                 ${
                   isActive
-                    ? "bg-gradient-to-r from-primary-600 to-secondary-600 shadow-sm"
+                    ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm"
                     : ""
                 }
                 ${isMonitorBlocked ? "opacity-60" : ""}

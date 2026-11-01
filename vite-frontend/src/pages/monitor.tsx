@@ -439,7 +439,7 @@ function AdminMonitorOverview() {
           <button
             className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "nodes"
-                ? "bg-gradient-to-r from-primary-500 to-secondary-500 shadow-sm text-white"
+                ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm text-white"
                 : "tray-plate text-default-600 hover:text-foreground"
             }`}
             onClick={() => setActiveTab("nodes")}
@@ -450,7 +450,7 @@ function AdminMonitorOverview() {
           <button
             className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "tunnels"
-                ? "bg-gradient-to-r from-primary-500 to-secondary-500 shadow-sm text-white"
+                ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm text-white"
                 : "tray-plate text-default-600 hover:text-foreground"
             }`}
             onClick={() => setActiveTab("tunnels")}

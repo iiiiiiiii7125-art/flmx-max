@@ -313,7 +313,7 @@ function UserDashboard() {
             className={`w-full bg-gradient-to-r from-primary-200 to-secondary-200 dark:from-primary-500/30 dark:to-secondary-500/30 rounded-full ${height}`}
           >
             <div
-              className={`${height} bg-gradient-to-r from-primary-500 to-secondary-500 rounded-full w-full opacity-60`}
+              className={`${height} bg-gradient-to-r from-primary-700 to-secondary-700 rounded-full w-full opacity-60`}
             />
           </div>
         </div>
@@ -660,7 +660,7 @@ function UserDashboard() {
             <DropdownTrigger>
               <Button
                 isIconOnly
-                className="rounded-full w-10 h-10 min-w-0 bg-gradient-to-br from-primary-500 to-secondary-500 text-white font-semibold text-sm shadow-sm"
+                className="rounded-full w-10 h-10 min-w-0 bg-gradient-to-br from-primary-700 to-secondary-700 text-white font-semibold text-sm shadow-sm"
                 variant="solid"
               >
                 {username.slice(0, 2).toUpperCase()}
