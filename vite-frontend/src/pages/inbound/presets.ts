@@ -253,6 +253,28 @@ export const PRESETS: Preset[] = [
     transport: "tcp",
     security: "shadowtls",
   },
+  // F-L3-03: sing-box 目录同样支持 Snell（内置服务端，≥1.14，传输/安全
+  // 组合与 Snell 内核面逐字一致），此前预设只挂 Snell 内核、sing-box
+  // 只能手选协议到达。此处补同名预设入口，供给面与目录对齐；版本门
+  // （sing-box ≥1.14）仍由后端保存期校验并点名拒绝。
+  {
+    key: "snell-singbox",
+    label: "Snell",
+    description: "Surge 专用协议（sing-box 内置，需 sing-box 1.14+）",
+    kernel: "singbox",
+    protocol: "snell",
+    transport: "tcp",
+    security: "none",
+  },
+  {
+    key: "snell-shadowtls-singbox",
+    label: "Snell + ShadowTLS",
+    description: "Surge 专用，握手伪装成访问真实网站（sing-box 内置，需 1.14+）",
+    kernel: "singbox",
+    protocol: "snell",
+    transport: "tcp",
+    security: "shadowtls",
+  },
 ];
 
 /** Presets the given kernel can serve with its exact transport + security. */
