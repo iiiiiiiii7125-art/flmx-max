@@ -84,18 +84,22 @@ function mapSize(
 
 const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
   default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
-  success: "bg-success text-white shadow-sm hover:bg-success/90",
-  warning: "bg-warning text-white shadow-sm hover:bg-warning/90",
+  // Round 6: bright success/warning/danger solids pair with white at
+  // only ≈2.2/2.0/4.1 — rest on the -800 shades (≈7.1/7.1/6.9) and
+  // hover one shade up. The default rests on the glass wash instead:
+  // the old bg-default-200 slab read as a pale board on the wallpaper.
+  success: "bg-success-800 text-white shadow-sm hover:bg-success-700",
+  warning: "bg-warning-800 text-white shadow-sm hover:bg-warning-700",
   primary:
     "bg-gradient-to-r from-primary-700 to-secondary-700 text-white shadow-sm hover:from-primary-800 hover:to-secondary-800",
   secondary:
     "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/90",
-  danger: "bg-danger text-white shadow-sm hover:bg-danger/90",
+  danger: "bg-danger-800 text-white shadow-sm hover:bg-danger-700",
 };
 
 const borderedColorClassMap: Record<HeroButtonColor, string> = {
   default:
-    "border-default-300 text-default-700 hover:bg-default-100 dark:border-default-200 dark:text-default-600 dark:hover:bg-default-100",
+    "border-default-300 text-default-700 hover:bg-white/40 dark:border-default-200 dark:text-default-600 dark:hover:bg-default-100",
   primary:
     "border-primary/50 text-primary-700 hover:bg-primary/5 dark:text-primary-300 dark:hover:bg-primary/10",
   secondary:

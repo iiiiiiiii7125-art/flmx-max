@@ -6030,8 +6030,8 @@ export default function ForwardPage() {
                                               <span
                                                 className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${
                                                   isSuccess
-                                                    ? "bg-success-700 text-white"
-                                                    : "bg-danger-700 text-white"
+                                                    ? "bg-success-800 text-white"
+                                                    : "bg-danger-800 text-white"
                                                 }`}
                                               >
                                                 {isSuccess ? "✓" : "✗"}
@@ -6216,8 +6216,8 @@ export default function ForwardPage() {
                                         <span
                                           className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
                                             isSuccess
-                                              ? "bg-success-700 text-white"
-                                              : "bg-danger-700 text-white"
+                                              ? "bg-success-800 text-white"
+                                              : "bg-danger-800 text-white"
                                           }`}
                                         >
                                           {isSuccess ? "✓" : "✗"}
