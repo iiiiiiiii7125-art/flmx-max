@@ -118,7 +118,7 @@ function LatencyDisplay({
     return <RefreshCw className="w-3 h-3 animate-spin inline text-primary" />;
   }
   if (value === undefined || value < 0) {
-    return <span className="text-default-400">-</span>;
+    return <span className="text-default-500">-</span>;
   }
   const ms = value.toFixed(0);
   let colorClass = "text-success";
@@ -1367,7 +1367,7 @@ export function TunnelMonitorView({
           隧道 {tunnelStats.enabled}/{tunnelStats.total}
         </Chip>
         {lastQualityUpdate ? (
-          <div className="flex items-center gap-1.5 text-xs text-default-500">
+          <div className="flex items-center gap-1.5 text-xs text-default-600">
             {monitorTunnelQualityEnabled ? (
               <>
                 <LiveDot />
@@ -1381,7 +1381,7 @@ export function TunnelMonitorView({
             )}
           </div>
         ) : !monitorTunnelQualityEnabled ? (
-          <div className="flex items-center gap-1.5 text-xs text-default-500">
+          <div className="flex items-center gap-1.5 text-xs text-default-600">
             <WifiOff className="w-3.5 h-3.5 text-warning" />
             <span>实时质量检测已关闭</span>
           </div>
@@ -1417,7 +1417,7 @@ export function TunnelMonitorView({
             return (
               <Card
                 key={tunnel.id}
-                className="group relative overflow-hidden glass-card shadow-sm hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
+                className="group relative overflow-hidden glass-card-strong shadow-sm hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
                 onClick={() => setDetailTunnelId(tunnel.id)}
               >
                 <div
@@ -1443,7 +1443,7 @@ export function TunnelMonitorView({
                       <h3 className="font-semibold text-foreground text-sm truncate">
                         {tunnel.name}
                       </h3>
-                      <div className="flex items-center gap-1.5 text-[11px] text-default-500 mt-0.5">
+                      <div className="flex items-center gap-1.5 text-[11px] text-default-600 mt-0.5">
                         <span className="font-mono">
                           {isEnabled ? "启用" : "禁用"}
                         </span>
@@ -1455,7 +1455,7 @@ export function TunnelMonitorView({
                 <CardBody className="py-3 px-5 flex-1 flex flex-col justify-end gap-3 z-10 w-full overflow-hidden">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <div className="text-[10px] text-default-500 flex items-center gap-1">
+                      <div className="text-[10px] font-medium text-default-600 flex items-center gap-1">
                         <Zap className="w-3 h-3" />
                         入口→出口
                       </div>
@@ -1466,13 +1466,13 @@ export function TunnelMonitorView({
                       />
                     </div>
                     <div className="space-y-1">
-                      <div className="text-[10px] text-default-500 flex items-center gap-1">
+                      <div className="text-[10px] font-medium text-default-600 flex items-center gap-1">
                         <Globe className="w-3 h-3" />
                         出口→测试目标
                       </div>
                       <div
                         aria-label={`测试目标 ${targetLabel}`}
-                        className="text-[10px] text-default-400 truncate"
+                        className="text-[10px] text-default-500 truncate"
                       >
                         {targetLabel}
                       </div>
@@ -1490,7 +1490,7 @@ export function TunnelMonitorView({
                         {quality.errorMessage}
                       </span>
                     ) : quality?.timestamp ? (
-                      <span className="text-[11px] text-default-500 flex items-center gap-1">
+                      <span className="text-[11px] text-default-600 flex items-center gap-1">
                         {monitorTunnelQualityEnabled ? (
                           <LiveDot />
                         ) : (
@@ -1501,7 +1501,7 @@ export function TunnelMonitorView({
                         )}
                       </span>
                     ) : (
-                      <span className="text-[11px] text-default-400">
+                      <span className="text-[11px] text-default-500">
                         {monitorTunnelQualityEnabled
                           ? "等待探测..."
                           : "实时检测已关闭"}
@@ -1576,14 +1576,14 @@ export function TunnelMonitorView({
                           latestValue={quality?.exitToBingLatency}
                           type="exitToBing"
                         />
-                        <span className="block max-w-[160px] truncate text-[10px] text-default-400">
+                        <span className="block max-w-[160px] truncate text-[10px] text-default-500">
                           {targetLabel}
                         </span>
                       </div>
                     </TableCell>
                     <TableCell>
                       {quality?.timestamp ? (
-                        <span className="text-xs text-default-500 flex items-center gap-1 whitespace-nowrap">
+                        <span className="text-xs text-default-600 flex items-center gap-1 whitespace-nowrap">
                           {monitorTunnelQualityEnabled ? (
                             <LiveDot />
                           ) : (
@@ -1594,7 +1594,7 @@ export function TunnelMonitorView({
                           )}
                         </span>
                       ) : (
-                        <span className="text-xs text-default-400">
+                        <span className="text-xs text-default-500">
                           {monitorTunnelQualityEnabled ? "-" : "实时检测已关闭"}
                         </span>
                       )}

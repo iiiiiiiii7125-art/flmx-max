@@ -1246,7 +1246,13 @@ export default function UserPage({
               <List className="w-4 h-4" />
             )}
           </Button>
-          <Button color="primary" size="sm" variant="flat" onPress={handleAdd}>
+          <Button
+            className="font-semibold"
+            color="primary"
+            size="sm"
+            variant="solid"
+            onPress={handleAdd}
+          >
             新增
           </Button>
         </div>

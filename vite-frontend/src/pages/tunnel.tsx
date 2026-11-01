@@ -1882,9 +1882,10 @@ export default function TunnelPage() {
                   )}
                 </Button>
                 <Button
+                  className="font-semibold"
                   color="primary"
                   size="sm"
-                  variant="flat"
+                  variant="solid"
                   onPress={handleAdd}
                 >
                   新增

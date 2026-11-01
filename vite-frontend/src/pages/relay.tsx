@@ -408,7 +408,7 @@ export default function RelayPage() {
           className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
             tab === t.key
               ? "bg-background font-medium shadow-sm"
-              : "text-default-500"
+              : "text-default-600"
           }`}
           type="button"
           onClick={() => setTab(t.key)}
