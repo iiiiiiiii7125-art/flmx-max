@@ -185,7 +185,7 @@ export default function LimitPage({
 
   // 确认删除规则
   const confirmDelete = async () => {
-    if (!ruleToDelete) return;
+    if (!ruleToDelete || deleteLoading) return;
 
     setDeleteLoading(true);
     try {

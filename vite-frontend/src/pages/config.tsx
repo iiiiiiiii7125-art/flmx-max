@@ -715,6 +715,7 @@ export default function ConfigPage() {
   };
 
   const handleConfirmSystemUpgrade = async () => {
+    if (systemUpgradeExecuting) return;
     setSystemUpgradeExecuting(true);
     try {
       const response = await runSystemUpgrade(

@@ -7,27 +7,6 @@ const CHANNEL_STABLE: UpdateReleaseChannel = "stable";
 const CHANNEL_DEV: UpdateReleaseChannel = "dev";
 
 const stableVersionPattern = /^\d+(?:\.\d+)+$/;
-const testKeywordPattern = /(alpha|beta|rc)/i;
-
-const VERSION_CACHE_TTL_MS = 10 * 60 * 1000;
-
-type ReleaseItem = {
-  tag_name?: string;
-  draft?: boolean;
-};
-
-type LatestVersionCacheEntry = {
-  value: string | null;
-  expiresAt: number;
-};
-
-const latestVersionCache: Record<
-  UpdateReleaseChannel,
-  LatestVersionCacheEntry
-> = {
-  stable: { value: null, expiresAt: 0 },
-  dev: { value: null, expiresAt: 0 },
-};
 
 const normalizeChannel = (
   value: string | null | undefined,
@@ -52,26 +31,6 @@ export const setUpdateReleaseChannel = (
 
 const normalizeTag = (tag: string): string => {
   return tag.trim().replace(/^v/i, "");
-};
-
-type ReleaseTagChannel = UpdateReleaseChannel | null;
-
-const releaseChannelFromTag = (tag: string): ReleaseTagChannel => {
-  const normalizedTag = normalizeTag(tag).toLowerCase();
-
-  if (!normalizedTag) {
-    return null;
-  }
-
-  if (stableVersionPattern.test(normalizedTag)) {
-    return CHANNEL_STABLE;
-  }
-
-  if (testKeywordPattern.test(normalizedTag)) {
-    return CHANNEL_DEV;
-  }
-
-  return null;
 };
 
 type VersionParts = {
@@ -134,81 +93,7 @@ export const compareVersions = (left: string, right: string): number => {
   return 0;
 };
 
-const repoPathFromUrl = (repoUrl: string): string | null => {
-  try {
-    const parsed = new URL(repoUrl);
-    const segments = parsed.pathname
-      .replace(/\.git$/i, "")
-      .split("/")
-      .filter(Boolean);
-
-    if (segments.length < 2) {
-      return null;
-    }
-
-    return `${segments[0]}/${segments[1]}`;
-  } catch {
-    return null;
-  }
-};
-
-export const getLatestVersionByChannel = async (
-  channel: UpdateReleaseChannel,
-  repoUrl: string,
-): Promise<string | null> => {
-  const normalizedChannel = normalizeChannel(channel);
-  const now = Date.now();
-  const cached = latestVersionCache[normalizedChannel];
-
-  if (cached.value && cached.expiresAt > now) {
-    return cached.value;
-  }
-
-  const repoPath = repoPathFromUrl(repoUrl);
-
-  if (!repoPath) {
-    return null;
-  }
-
-  const response = await fetch(
-    `https://api.github.com/repos/${repoPath}/releases?per_page=50`,
-    {
-      headers: {
-        Accept: "application/vnd.github+json",
-      },
-    },
-  );
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const releases = (await response.json()) as ReleaseItem[];
-  const candidateTags = releases
-    .filter((release) => !release.draft && typeof release.tag_name === "string")
-    .map((release) => (release.tag_name || "").trim())
-    .filter((tag) => releaseChannelFromTag(tag) === normalizedChannel);
-
-  if (candidateTags.length === 0) {
-    return null;
-  }
-
-  const latest = candidateTags.sort((a, b) => compareVersions(b, a))[0];
-
-  latestVersionCache[normalizedChannel] = {
-    value: latest,
-    expiresAt: now + VERSION_CACHE_TTL_MS,
-  };
-
-  return latest;
-};
-
-export const hasVersionUpdate = (
-  currentVersion: string,
-  latestVersion: string,
-): boolean => {
-  return (
-    compareVersions(normalizeTag(currentVersion), normalizeTag(latestVersion)) <
-    0
-  );
-};
+// F-L5-05：原 getLatestVersionByChannel / hasVersionUpdate（浏览器直连
+// GitHub 查版本）在 P3-3 改走后端 checkSystemUpgrade 后已无消费者，
+// 整段删除，避免旧路径被误接回任一表面绕过后端代理/限流口径。版本
+// 发现统一走后端，前端仅保留渠道与版本比较工具。

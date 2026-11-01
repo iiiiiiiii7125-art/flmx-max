@@ -873,6 +873,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   };
 
   const handleBatchAssignTunnel = async () => {
+    if (assignLoading) return;
     if (batchTunnelSelections.size === 0 || !currentUser) {
       toast.error("请选择至少一个隧道");
 
@@ -1036,7 +1037,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   };
 
   const handleConfirmResetFlow = async () => {
-    if (!userToReset) return;
+    if (!userToReset || resetFlowLoading) return;
 
     setResetFlowLoading(true);
     try {
@@ -1099,7 +1100,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   };
 
   const handleConfirmResetTunnelFlow = async () => {
-    if (!tunnelToReset) return;
+    if (!tunnelToReset || resetTunnelFlowLoading) return;
 
     setResetTunnelFlowLoading(true);
     try {
