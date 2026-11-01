@@ -6,10 +6,28 @@
 // the entire budget before the mirror/direct fallback leg could run
 // (measured in audit/round-2/batch-upgrade-repro.md: 240s for 165KB
 // of a 9.3MB body). The Watcher below adds the missing progress
-// judgment: if no byte moves for StallWindow, the download context
-// is cancelled and the attempt fails fast, so the caller's existing
-// fallback sequence runs with budget to spare. It never extends any
-// budget — the caller's overall deadline still applies unchanged.
+// judgments:
+//
+//   - No progress (WDG-01): if no byte moves for StallWindow, the
+//     download context is cancelled and the attempt fails fast
+//     with ErrNoProgress.
+//   - Trickle (WDG-02, round-5 L2-01): a peer that keeps making
+//     SOME progress resets the no-progress timer forever, so the
+//     zero-byte rule alone let a token-bucket line (~30KB/s after
+//     a fast start) hold the whole 240s budget while every later
+//     route starved on the expired context. The watcher therefore
+//     also averages the attempt's throughput from its start: once
+//     TrickleGrace has elapsed, an attempt whose average rate is
+//     below TrickleMinRate fails with ErrTooSlow. That floor is
+//     far under what a viable line needs (a body of even 15MB
+//     needs ~64KB/s to land inside the 240s budget at all), so a
+//     line it condemns could never have finished in budget — and
+//     thanks to FileTransfer resume, the bytes it did deliver are
+//     kept for the next route.
+//
+// Either way the caller's existing fallback sequence runs with
+// budget to spare. The watcher never extends any budget — the
+// caller's overall deadline still applies unchanged.
 package download
 
 import (
@@ -31,6 +49,25 @@ const StallWindow = 45 * time.Second
 // because no byte moved for the whole stall window.
 var ErrNoProgress = errors.New("下载停滞：长时间无字节进展，已判失败")
 
+// ErrTooSlow reports a download attempt aborted by the watchdog
+// because bytes kept moving, but at an average rate below
+// TrickleMinRate — progress too slow to ever finish inside the
+// caller's whole-operation budget (round-5 L2-01).
+var ErrTooSlow = errors.New("下载过慢：平均速率低于可用下限，已判失败")
+
+// Trickle judgment parameters (WDG-02), registered alongside
+// StallWindow in doc/audit/timeout-budgets.tsv rows A001/A002.
+// TrickleGrace is the observation period before the rate judgment
+// applies, so a line is never condemned on its first seconds
+// (connect + TLS + slow start are measured into the average, but
+// a viable line recovers its average well inside the grace).
+// TrickleMinRate is the floor on the attempt's average throughput
+// since its start. Vars so tests can shrink them.
+var (
+	TrickleGrace   = 15 * time.Second
+	TrickleMinRate = int64(64 << 10) // 64 KiB/s
+)
+
 // Watcher tracks byte progress of one download attempt. Create one
 // per attempt (fallback legs get a fresh window), wrap the attempt
 // context with Watch, and feed every transferred chunk to Note —
@@ -38,8 +75,11 @@ var ErrNoProgress = errors.New("下载停滞：长时间无字节进展，已判
 // reuse across attempts.
 type Watcher struct {
 	window  time.Duration
+	start   atomic.Int64 // unix nano of Watch start (trickle average base)
+	bytes   atomic.Int64 // total bytes noted since Watch start
 	last    atomic.Int64 // unix nano of last progress (or Watch start)
 	stalled atomic.Bool
+	slow    atomic.Bool
 }
 
 // NewWatcher returns a Watcher with the given no-progress window.
@@ -59,7 +99,9 @@ func (w *Watcher) Watch(ctx context.Context) (context.Context, context.CancelFun
 	if w.window <= 0 {
 		return ctx, func() {}
 	}
-	w.last.Store(time.Now().UnixNano())
+	start := time.Now()
+	w.start.Store(start.UnixNano())
+	w.last.Store(start.UnixNano())
 	dctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -84,6 +126,18 @@ func (w *Watcher) Watch(ctx context.Context) (context.Context, context.CancelFun
 					cancel()
 					return
 				}
+				// WDG-02 trickle judgment: past the grace period,
+				// the attempt's average rate since its start must
+				// clear the floor. Zero bytes is the stall rule's
+				// case, not this one's (a peer still inside its
+				// header wait is not "trickling").
+				if elapsed := now.Sub(start); elapsed >= TrickleGrace {
+					if b := w.bytes.Load(); b > 0 && b*int64(time.Second) < TrickleMinRate*int64(elapsed) {
+						w.slow.Store(true)
+						cancel()
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -101,12 +155,21 @@ func (w *Watcher) Watch(ctx context.Context) (context.Context, context.CancelFun
 func (w *Watcher) Note(n int) {
 	if n > 0 {
 		w.last.Store(time.Now().UnixNano())
+		w.bytes.Add(int64(n))
 	}
 }
 
-// Stalled reports whether the watchdog fired for this attempt.
+// Stalled reports whether the no-progress watchdog fired for this
+// attempt.
 func (w *Watcher) Stalled() bool {
 	return w.stalled.Load()
+}
+
+// TooSlow reports whether the trickle judgment fired for this
+// attempt (progress existed but averaged below TrickleMinRate past
+// TrickleGrace).
+func (w *Watcher) TooSlow() bool {
+	return w.slow.Load()
 }
 
 // Writer wraps wr so every successful write counts as progress.

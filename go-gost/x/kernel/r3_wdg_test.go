@@ -125,7 +125,7 @@ func TestR3WDGFetchRankedStallFallsBackToDirect(t *testing.T) {
 	var buf bytes.Buffer
 	start := time.Now()
 	plan := download.NewStaticPlan([]download.Route{{Prefix: mirror.URL}, {}})
-	err := fetchRanked(ctx, plan, direct.URL+"/file", 1<<20, &buf)
+	_, err := fetchRanked(ctx, plan, direct.URL+"/file", 1<<20, nil, &buf)
 	if err != nil {
 		t.Fatalf("stalled mirror must fall back to direct, got: %v", err)
 	}
