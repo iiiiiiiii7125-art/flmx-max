@@ -669,7 +669,7 @@ function UserDashboard() {
             </DropdownTrigger>
             <DropdownMenu
               aria-label="用户菜单"
-              className="bg-white/75 dark:bg-zinc-900/70 backdrop-blur-[18px] backdrop-saturate-150 border border-white/50 dark:border-white/10 rounded-2xl shadow-lg"
+              className="bg-white/30 dark:bg-zinc-900/35 backdrop-blur-[3px] backdrop-saturate-[1.6] backdrop-brightness-105 border border-white/45 dark:border-white/15 rounded-2xl shadow-lg"
             >
               <DropdownItem
                 key="profile"
