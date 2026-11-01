@@ -91,6 +91,15 @@ func resolveArch(d *Download) (string, error) {
 //     judged: hard-deny and every non-public range rejected
 //     (bypass.IsNonPublicIP). GitHub's official 302s to
 //     *.githubusercontent.com are https + public and unaffected.
+//     One exception: a hop back to the entry URL's own host
+//     (same origin) is judged by the entry layer (hard-deny only).
+//     The origin was already admitted as the entry, and the panel
+//     gh endpoint 301s every combined URL to its own cleaned path —
+//     under the full judgment a privately addressed panel (LAN /
+//     tailnet) could never serve a kernel through its own route,
+//     while the very same 301 is harmless on the upgrade path
+//     (GATE F2). Cross-host hops keep the full judgment, so the
+//     SSRF line does not move.
 //   - The dial is pinned and re-judges the hard-deny layer on the
 //     IPs it actually dials, so rebinding cannot swap in a metadata
 //     target between the hop check and the connect.
@@ -190,6 +199,17 @@ func fetchHTTPClient() *http.Client {
 			host := req.URL.Hostname()
 			if host == "" {
 				return fmt.Errorf("下载重定向主机为空，已拒绝")
+			}
+			// Same-origin hop (target host identical to the entry
+			// URL's host, port included): the entry layer applies —
+			// the origin was already admitted as the entry. This is
+			// the panel gh endpoint's 301 to its own cleaned path;
+			// full judgment here made the kernel panel route fail
+			// for every privately addressed panel (GATE F2).
+			// Cross-host hops keep the full non-public judgment.
+			if len(via) > 0 && strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				_, err := judgeFetchHost(req.Context(), host, true)
+				return err
 			}
 			_, err := judgeFetchHost(req.Context(), host, false)
 			return err
