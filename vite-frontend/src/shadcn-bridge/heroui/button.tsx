@@ -87,7 +87,7 @@ const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
   // Round 6: bright success/warning/danger solids pair with white at
   // only ≈2.2/2.0/4.1 — rest on the -800 shades (≈7.1/7.1/6.9) and
   // hover one shade up. The default rests on the glass wash instead:
-  // the old bg-default-200 slab read as a pale board on the wallpaper.
+  // the old opaque 200-stop slab read as a pale board on the wallpaper.
   success: "bg-success-800 text-white shadow-sm hover:bg-success-700",
   warning: "bg-warning-800 text-white shadow-sm hover:bg-warning-700",
   primary:

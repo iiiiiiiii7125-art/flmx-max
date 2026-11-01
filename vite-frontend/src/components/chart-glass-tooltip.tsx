@@ -34,7 +34,7 @@ export function ChartGlassTooltip({
   const labelText = formatLabel ? formatLabel(label) : (label as ReactNode);
 
   return (
-    <div className="glass-surface rounded-xl px-3 py-2 text-xs shadow-lg">
+    <div className="glass-surface rounded-xl px-3 py-2 text-xs font-semibold shadow-lg">
       {labelText !== undefined && labelText !== null && labelText !== "" && (
         <p className="font-semibold text-foreground">{labelText}</p>
       )}
