@@ -282,7 +282,7 @@ export function RemoteSourcesSection({
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between">
-        <h2 className="w-fit rounded-lg text-tray px-2.5 py-1 text-sm font-semibold text-default-600">
+        <h2 className="w-fit rounded-lg tray-plate px-2.5 py-1 text-sm font-semibold text-default-600">
           订阅源
         </h2>
         <Button

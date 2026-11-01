@@ -650,7 +650,7 @@ function UserDashboard() {
     <AnimatedPage className="px-3 lg:px-6 py-6">
       {/* 顶部个人状态和下拉菜单 */}
       <div className="flex justify-between items-center mb-4">
-        <div className="rounded-xl text-tray px-3 py-2">
+        <div className="rounded-xl tray-plate px-3 py-2">
           <h1 className="text-lg font-semibold">概览</h1>
           <p className="text-xs font-medium text-default-600">
             {username}，这里是你的流量和转发规则
@@ -1089,7 +1089,7 @@ function UserDashboard() {
               {groupedForwards().map((group) => (
                 <div
                   key={group.tunnelName}
-                  className="text-tray rounded-xl p-3 lg:p-4 shadow-sm"
+                  className="tray-plate rounded-xl p-3 lg:p-4 shadow-sm"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-foreground">

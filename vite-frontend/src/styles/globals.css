@@ -221,10 +221,11 @@ body {
    wallpaper. Every text-bearing element rides an opaque tray: --tray for
    neutral plates, --tray-<color> for semantic-tinted plates (bridge
    Button flat/light, Badge/Chip tints). One definition point — pages
-   reference the .text-tray / .tray-* classes or the bg-tray utility,
+   reference the .tray-plate / .tray-* classes or the bg-tray utility,
    never hand-mixed rgba tints. */
 :root {
   --tray: #ffffff;
+  --tray-foreground: #18181b;
   --tray-border: rgb(24 24 27 / 0.08);
   --tray-primary: #e0e7ff;
   --tray-primary-hover: #c7d2fe;
@@ -248,6 +249,7 @@ body {
 
 .dark {
   --tray: #18181b;
+  --tray-foreground: #f4f4f5;
   --tray-border: rgb(255 255 255 / 0.1);
   --tray-primary: #312e81;
   --tray-primary-hover: #3730a3;
@@ -487,13 +489,23 @@ body {
   }
 
   /* Text Trays (Round 4): opaque plates that carry text over glass or
-     wallpaper. .text-tray is the neutral plate (bars, pills, rows);
+     wallpaper. .tray-plate is the neutral plate (bars, pills, rows);
      .tray-<color> pairs a solid semantic tint with a contrast-checked
      foreground and hover shade — the single definition point for the
      bridge Button flat/light maps and the Badge/Chip tint variants, so
-     any component using those variants gets a tray automatically. */
-  .text-tray {
+     any component using those variants gets a tray automatically.
+     Round 5 rename: this class was called .text-tray in Round 4, which
+     collided with the Tailwind text-tray color utility generated from
+     the --color-tray theme token (color: var(--tray)) — the utility won
+     the cascade and painted plate text the plate's own color, hiding
+     sidebar labels in both modes. The neutral plate now also carries
+     its paired foreground (--tray-foreground) instead of relying on
+     children to set one. Never name a hand-written class after a
+     text-/bg-/border- color utility a theme token can generate;
+     check-tray-contrast.sh gates this. */
+  .tray-plate {
     background: var(--tray);
+    color: var(--tray-foreground);
     border: 1px solid var(--tray-border);
     box-shadow: 0 1px 2px rgb(24 24 27 / 0.05);
   }

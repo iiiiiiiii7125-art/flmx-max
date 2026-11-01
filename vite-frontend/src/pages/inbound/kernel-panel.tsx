@@ -318,7 +318,7 @@ export function KernelPanel({
   return (
     <div>
       <div className="flex items-center justify-between mb-3 gap-2">
-        <p className="text-xs text-default-500 text-tray w-fit rounded-full px-2.5 py-1">
+        <p className="text-xs text-default-500 tray-plate w-fit rounded-full px-2.5 py-1">
           点击内核可启停、重启、查看日志或卸载
         </p>
         <Button

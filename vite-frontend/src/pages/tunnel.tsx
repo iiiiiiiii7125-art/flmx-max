@@ -2262,7 +2262,7 @@ export default function TunnelPage() {
                               <div
                                 className={`grid gap-2 ${tunnel.type === 2 && tunnel.ipPreference ? "grid-cols-3" : "grid-cols-2"}`}
                               >
-                                <div className="text-center p-1.5 text-tray rounded-lg">
+                                <div className="text-center p-1.5 tray-plate rounded-lg">
                                   <div className="text-xs text-default-500">
                                     流量计算
                                   </div>
@@ -2270,7 +2270,7 @@ export default function TunnelPage() {
                                     {getTunnelFlowDisplay(tunnel.flow)}
                                   </div>
                                 </div>
-                                <div className="text-center p-1.5 text-tray rounded-lg">
+                                <div className="text-center p-1.5 tray-plate rounded-lg">
                                   <div className="text-xs text-default-500">
                                     流量倍率
                                   </div>
@@ -2279,7 +2279,7 @@ export default function TunnelPage() {
                                   </div>
                                 </div>
                                 {tunnel.type === 2 && tunnel.ipPreference && (
-                                  <div className="text-center p-1.5 text-tray rounded-lg">
+                                  <div className="text-center p-1.5 tray-plate rounded-lg">
                                     <div className="text-xs text-default-500">
                                       连接偏好
                                     </div>

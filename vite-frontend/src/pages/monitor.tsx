@@ -113,7 +113,7 @@ function UserTunnelMonitorOverview() {
     <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       <div className="mb-6 space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 rounded-xl text-tray px-3 py-2">
+          <div className="min-w-0 rounded-xl tray-plate px-3 py-2">
             <h2 className="text-xl font-semibold truncate">监控面板</h2>
           </div>
           <Button
@@ -340,11 +340,11 @@ function AdminMonitorOverview() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
-            <span className="text-tray rounded-full px-2.5 py-1 text-default-600 font-medium text-sm">
+            <span className="tray-plate rounded-full px-2.5 py-1 text-default-600 font-medium text-sm">
               System Load
             </span>
           </div>
-          <div className="z-10 relative w-fit rounded-xl text-tray px-3 py-1.5">
+          <div className="z-10 relative w-fit rounded-xl tray-plate px-3 py-1.5">
             <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {aggregateMetrics.avgCpu.toFixed(1)}%
             </span>
@@ -361,11 +361,11 @@ function AdminMonitorOverview() {
 
         <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
-            <span className="text-tray rounded-full px-2.5 py-1 text-default-600 font-medium text-sm">
+            <span className="tray-plate rounded-full px-2.5 py-1 text-default-600 font-medium text-sm">
               Active Connections
             </span>
           </div>
-          <div className="z-10 relative w-fit rounded-xl text-tray px-3 py-1.5">
+          <div className="z-10 relative w-fit rounded-xl tray-plate px-3 py-1.5">
             <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {aggregateMetrics.totalConns}
             </span>
@@ -382,11 +382,11 @@ function AdminMonitorOverview() {
 
         <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
-            <span className="text-tray rounded-full px-2.5 py-1 text-default-600 font-medium text-sm">
+            <span className="tray-plate rounded-full px-2.5 py-1 text-default-600 font-medium text-sm">
               Bandwidth
             </span>
           </div>
-          <div className="z-10 relative w-fit rounded-xl text-tray px-3 py-1.5">
+          <div className="z-10 relative w-fit rounded-xl tray-plate px-3 py-1.5">
             <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {formatBytesPerSecond(aggregateMetrics.totalBandwidth)}
             </span>
@@ -404,7 +404,7 @@ function AdminMonitorOverview() {
 
       <div className="mb-6 space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 rounded-xl text-tray px-3 py-2">
+          <div className="min-w-0 rounded-xl tray-plate px-3 py-2">
             <h2 className="text-xl font-semibold truncate">监控面板</h2>
           </div>
           <div className="flex items-center gap-2">
@@ -440,7 +440,7 @@ function AdminMonitorOverview() {
             className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "nodes"
                 ? "bg-gradient-to-r from-primary-500 to-secondary-500 shadow-sm text-white"
-                : "text-tray text-default-600 hover:text-foreground"
+                : "tray-plate text-default-600 hover:text-foreground"
             }`}
             onClick={() => setActiveTab("nodes")}
           >
@@ -451,7 +451,7 @@ function AdminMonitorOverview() {
             className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "tunnels"
                 ? "bg-gradient-to-r from-primary-500 to-secondary-500 shadow-sm text-white"
-                : "text-tray text-default-600 hover:text-foreground"
+                : "tray-plate text-default-600 hover:text-foreground"
             }`}
             onClick={() => setActiveTab("tunnels")}
           >

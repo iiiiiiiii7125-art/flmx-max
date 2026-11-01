@@ -43,7 +43,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0 rounded-xl text-tray px-3 py-2">
+      <div className="min-w-0 rounded-xl tray-plate px-3 py-2">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && (
           <p className="mt-0.5 text-xs text-default-500">{description}</p>
@@ -227,7 +227,7 @@ export function SelectionBar({
   onExit: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl text-tray px-3 py-2 shadow-sm">
+    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl tray-plate px-3 py-2 shadow-sm">
       <span className="text-sm text-default-600">已选 {count} 个</span>
       <div className="ml-auto flex flex-wrap justify-end gap-2">
         <Button size="sm" variant="flat" onPress={onToggleAll}>
@@ -375,7 +375,7 @@ export function ListGroup({
   return (
     <section className="space-y-2">
       {title && (
-        <h2 className="flex w-fit items-baseline gap-2 rounded-lg text-tray px-2.5 py-1 text-sm font-semibold">
+        <h2 className="flex w-fit items-baseline gap-2 rounded-lg tray-plate px-2.5 py-1 text-sm font-semibold">
           {title}
           {count !== undefined && (
             <span className="text-xs font-normal text-default-500">

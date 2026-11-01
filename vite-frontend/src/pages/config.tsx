@@ -1111,7 +1111,7 @@ export default function ConfigPage() {
             className="relative rounded-xl border border-divider h-32 flex items-center justify-center"
             style={{ backgroundColor: bgImage }}
           >
-            <span className="text-tray px-2 py-1 rounded text-sm font-medium shadow-sm">
+            <span className="tray-plate px-2 py-1 rounded text-sm font-medium shadow-sm">
               纯色背景 ({bgImage})
             </span>
           </div>

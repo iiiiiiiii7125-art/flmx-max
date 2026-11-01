@@ -301,10 +301,10 @@ export default function IndexPage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-4 text-center py-4"
-          poweredClassName="text-xs text-gray-500 dark:text-gray-400 mx-auto mt-1 w-fit text-tray rounded-full px-3 py-0.5"
+          poweredClassName="text-xs text-gray-500 dark:text-gray-400 mx-auto mt-1 w-fit tray-plate rounded-full px-3 py-0.5"
           updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={isWebView ? siteConfig.app_version : siteConfig.version}
-          versionClassName="text-xs text-gray-500 dark:text-gray-400 mt-1 mx-auto w-fit text-tray rounded-full px-3 py-1"
+          versionClassName="text-xs text-gray-500 dark:text-gray-400 mt-1 mx-auto w-fit tray-plate rounded-full px-3 py-1"
         />
 
         {/* 验证码弹层 */}
