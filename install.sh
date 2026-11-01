@@ -525,12 +525,11 @@ json_escape() {
 
 write_flux_agent_config() {
   local path="$1"
-  # GitHub 代理落盘口径（1.7.7）：agent 自 1.7.7 起内置候选、在下
-  # 载处自行测速直选，安装脚本不再把内置/默认代理写入 config.json。
-  # 仅当运维显式以 PROXY_URL 传入手动覆盖（override 模式）时才落
-  # 盘 proxy 字段，供 agent 的面板内升级固定走该前缀；direct 与
-  # builtin 模式均不写。（KU4 对账点：agent 侧须保持「config 无
-  # proxy 字段 = 内置测速直选」口径。）
+  # GitHub 代理落盘口径（1.7.7）：agent 的下载路由恒由内置候选测速
+  # 直选决定——面板内升级不读落盘 proxy 字段，面板下发的 proxyUrl
+  # 亦仅作兼容解析、不参与路由。PROXY_URL 手动覆盖（override 模式）
+  # 只决定本脚本当次安装的下载路由；该模式下仍落盘 proxy 字段，但
+  # 仅为数据兼容保留，agent 侧不消费。direct 与 builtin 模式不写。
   local proxy_json=""
   if [[ "$(route_mode)" == "override" ]]; then
     local proxy
