@@ -13,8 +13,9 @@ type Config struct {
 	Http   int    `json:"http"`
 	Tls    int    `json:"tls"`
 	Socks  int    `json:"socks"`
-	// Proxy 是安装时落盘的 GitHub 代理前缀（可选），供 agent 面板内升级时
-	// 经代理下载升级包；为空表示直连。面板下发的 proxyUrl 优先于此值。
+	// Proxy 是安装时落盘的 GitHub 代理前缀（可选）。自 1.7.7 起该字段
+	// 不再被消费：面板内升级与内核下载的路由恒由内置候选测速直选
+	// 决定，面板下发的 proxyUrl 亦仅作兼容解析。保留仅为数据兼容。
 	Proxy string `json:"proxy,omitempty"`
 }
 
