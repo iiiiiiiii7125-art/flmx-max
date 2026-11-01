@@ -29,7 +29,7 @@ FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构�
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
-| `DB_TYPE` | 数据库类型，`sqlite` 或 `postgres` | `sqlite` | `postgres` |
+| `DB_TYPE` | 数据库类型：`sqlite` 或 `postgres`（另接受别名 `postgresql`，留空等同 `sqlite`；填其他值启动时报错） | `sqlite` | `postgres` |
 | `DATABASE_URL` | PostgreSQL 连接字符串（仅 `DB_TYPE=postgres` 时必填） | 空 | `postgres://flux_panel:密码@postgres:5432/flux_panel?sslmode=disable` |
 | `DB_PATH` | SQLite 数据库文件路径（仅 `DB_TYPE=sqlite` 时使用） | `/app/data/gost.db` | `/app/data/gost.db` |
 
@@ -43,7 +43,7 @@ FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构�
 
 > ⚠️ **安全提示**：生产环境中请务必修改 `POSTGRES_PASSWORD` 为强密码，不要使用默认值！
 
-> ⛔ **拒绝启动（1.2.0 起）**：后端启动时会校验口令——`POSTGRES_PASSWORD` 为空、等于默认值 `flux_panel_change_me` 或等于 `postgres` 时，后端**直接拒绝启动**并在日志里报错。上表「默认值」只是 compose 模板里的占位值，不能原样用于实际部署。另外，后端只校验 `DATABASE_URL` 里的口令、不会替你比对两者是否一致，`DATABASE_URL` 与 `POSTGRES_PASSWORD` 不一致时表现为数据库连接认证失败（28P01）。脚本一键迁移时若发现 `.env` 里的口令为空或仍是默认值，会自动生成随机口令并写回 `.env`。
+> ⛔ **拒绝启动（1.2.0 起）**：后端启动时校验的是 **`DATABASE_URL` 里内嵌的口令**——该口令为空、等于默认值 `flux_panel_change_me` 或等于 `postgres` 时，后端**直接拒绝启动**并在日志里报错。后端从不读取 `POSTGRES_PASSWORD` 环境变量本身：只改 `POSTGRES_PASSWORD`、不改 `DATABASE_URL` 里的口令，照样会被拒绝启动，排障时请先核对 `DATABASE_URL`。上表「默认值」只是 compose 模板里的占位值，不能原样用于实际部署。另外，后端不会替你比对两者是否一致，`DATABASE_URL` 与 `POSTGRES_PASSWORD` 不一致时表现为数据库连接认证失败（28P01）。脚本一键迁移时若发现 `.env` 里的口令为空或仍是默认值，会自动生成随机口令并写回 `.env`（同时写入 `DATABASE_URL`）。
 
 ---
 
@@ -147,16 +147,26 @@ docker inspect --format='{{.State.Health.Status}}' flux-panel-postgres
 
 ### 4. 使用 pgloader 迁移数据
 
+**不要把口令拼在 pgloader 的命令行参数里**：含口令的连接串会以明文出现在宿主机的进程列表（`ps`）和 `docker inspect` 输出里，迁移持续的几分钟内可被本机其他进程读到（脚本一键迁移已因此改走命令文件，手动迁移同口径）。把连接串写进一张权限 0600 的 pgloader 命令文件、只把文件路径作为参数传入，用后立即删除：
+
 ```bash
 source .env
+umask 077
+cat > /tmp/flmx-migrate.load <<EOF
+LOAD DATABASE
+     FROM sqlite:///sqlite/gost.db
+     INTO postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB};
+EOF
 docker run --rm \
   --network gost-network \
   -v sqlite_data:/sqlite \
+  -v /tmp/flmx-migrate.load:/tmp/flmx-migrate.load:ro \
   dimitri/pgloader:latest \
-  pgloader /sqlite/gost.db "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+  pgloader /tmp/flmx-migrate.load
+rm -f /tmp/flmx-migrate.load
 ```
 
-> 📌 建议直接从 `.env` 读取 `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`，避免手填密码导致认证失败。
+> 📌 命令文件的内容从 `.env` 的 `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` 生成，避免手填密码导致认证失败；`INTO` 行尾的分号是命令文件的语句终止符，不可省略。
 
 #### 迁移被 `release_legacy_family` 堵住时（1.3.2 及更早版本的库）
 
@@ -177,8 +187,8 @@ docker run --rm -v sqlite_data:/sqlite alpine sh -c '
   rm -f /sqlite/gost-migrate.db
   sqlite3 /sqlite/gost-migrate.db < /tmp/dump-fixed.sql
 '
-# 然后把 pgloader 的源换成副本：
-# pgloader /sqlite/gost-migrate.db "postgresql://..."
+# 然后把上面第 4 步命令文件里的 FROM 源换成副本：
+# FROM sqlite:///sqlite/gost-migrate.db
 ```
 
 适用范围：1.3.2 及更早版本创建的 SQLite 库。后续版本模型侧修复后该列默认值不再是 `false`，上述预处理替换不命中、可跳过；对已修复的库执行也无害（生成一份等价副本而已）。（在 pgloader 的 load 文件里给该列写 CAST 规则是等价的另一种变通，二选一即可。）
@@ -251,11 +261,11 @@ docker exec -i flux-panel-postgres psql -U flux_panel flux_panel < backup_202601
 
 ### 定时备份（cron）
 
-创建备份脚本 `/opt/flmx/backup.sh`：
+创建备份脚本 `/opt/flmx-panel/backup.sh`（`/opt/flmx-panel` 是面板的部署目录）：
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/opt/flmx/backups"
+BACKUP_DIR="/opt/flmx-panel/backups"
 mkdir -p "$BACKUP_DIR"
 docker exec flux-panel-postgres pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
 # 清理 30 天前的备份
@@ -265,8 +275,8 @@ find "$BACKUP_DIR" -name "flmx_*.sql.gz" -mtime +30 -delete
 添加 cron 任务（每天凌晨 3 点执行）：
 
 ```bash
-chmod +x /opt/flmx/backup.sh
-echo "0 3 * * * /opt/flmx/backup.sh" | crontab -
+chmod +x /opt/flmx-panel/backup.sh
+echo "0 3 * * * /opt/flmx-panel/backup.sh" | crontab -
 ```
 
 ---
@@ -298,7 +308,7 @@ docker exec flux-panel-backend printenv DB_TYPE
 
 ### Q: 可以同时使用 SQLite 和 PostgreSQL 吗？
 
-**A**: 不可以。`DB_TYPE` 只能设置为 `sqlite` 或 `postgres` 之一。后端启动时根据此配置连接对应的数据库。
+**A**: 不可以。`DB_TYPE` 取 `sqlite` 或 `postgres`（`postgresql` 是 `postgres` 的别名，留空等同 `sqlite`；填其他值后端会报错拒绝启动）。后端启动时根据此配置连接对应的数据库。
 
 ### Q: PostgreSQL 数据存储在哪里？
 

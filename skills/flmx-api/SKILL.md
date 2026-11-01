@@ -15,7 +15,10 @@ metadata:
 Operate FLMX panel through REST API. All endpoints use POST method and return JSON with `{code, msg, data, ts}` envelope.
 
 > **Versioning:** this skill's version follows the FLMX product release line
-> (skill `1.1.1` ↔ panel `1.1.1`). Releases are tagged `skill-v<version>`.
+> (the skill version always equals the panel version). Releases use plain
+> numeric tags shared with the product; the pipeline publishes the skill
+> from the same tag. Do not use `skill-v<version>` tags — they trigger
+> nothing.
 > The endpoint list is checked against the backend route table by
 > `scripts/check-doc-consistency.sh` — if you add a route, add it here too.
 
