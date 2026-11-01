@@ -221,6 +221,9 @@ export const getNodeList = () => Network.post<NodeApiItem[]>("/node/list");
 export const getNodeMonthTraffic = () =>
   Network.post<Record<string, [number, number]>>("/node/traffic/month", {
     tzOffset: -new Date().getTimezoneOffset(),
+    // IANA 时区名（R4B10-001）：后端据此按 1 号当天的实际偏移取月初
+    // 起点，DST 切换月不再偏移；tzOffset 保留作旧后端回落。
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
 export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
