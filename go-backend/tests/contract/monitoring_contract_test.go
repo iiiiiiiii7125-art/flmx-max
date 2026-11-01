@@ -1410,13 +1410,14 @@ func TestMonitoringPermissionRequired(t *testing.T) {
 		})
 	}
 
-	// Grant monitor permission and verify access.
+	// Grant monitor permission. 1.7.11 口径：监控授权只放开本人隧道的
+	// 监控，服务监控改为仅管理员可见——授权后 service list 仍须 403。
 	now := time.Now().UnixMilli()
 	if err := repo.InsertMonitorPermission(2, now); err != nil {
 		t.Fatalf("insert monitor permission: %v", err)
 	}
 
-	allowed := []struct {
+	forbiddenWithGrant := []struct {
 		name   string
 		method string
 		path   string
@@ -1425,8 +1426,8 @@ func TestMonitoringPermissionRequired(t *testing.T) {
 		{"service list", http.MethodGet, "/api/v1/monitor/services", nil},
 	}
 
-	for _, tc := range allowed {
-		t.Run(tc.name+" allowed with grant", func(t *testing.T) {
+	for _, tc := range forbiddenWithGrant {
+		t.Run(tc.name+" forbidden with grant (admin-only)", func(t *testing.T) {
 			var req *http.Request
 			if tc.body != nil {
 				req = httptest.NewRequest(tc.method, tc.path, bytes.NewReader(tc.body))
@@ -1442,8 +1443,8 @@ func TestMonitoringPermissionRequired(t *testing.T) {
 			if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			if out.Code != 0 {
-				t.Fatalf("expected code 0 with grant, got %d msg=%q", out.Code, out.Msg)
+			if out.Code != 403 {
+				t.Fatalf("expected 403 with grant (service monitors are admin-only), got %d msg=%q", out.Code, out.Msg)
 			}
 		})
 	}
