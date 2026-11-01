@@ -1440,6 +1440,26 @@ func nodeInstallPlaintextWarning(agentAddr string) string {
 	return "警告：本次安装命令的节点连接地址为明文 " + agentAddr + "，节点密钥将经明文通道发送，且明文地址无法连接仅提供 HTTPS 的面板（如经 Caddy/nginx 反向代理终止 TLS）。如面板经 HTTPS 对外，请先在「网站配置」把面板后端地址改为 https:// 开头的地址再重新生成安装命令；确认该面板就是明文部署时可忽略本警告。"
 }
 
+// panelMirrorPrefixFromAgentAddr 从待安装节点的 agent 连接地址
+// 派生面板源候选前缀（面板源分发一期③）：normalizeNodeInstallAddr
+// 的逆映射——wss → https、ws → http，再拼面板 GitHub 镜像端点
+// 路径（ghMirrorPath）。agent 地址恒带显式 scheme（归一化的产
+// 物）；无 scheme 或派生不出时返回空串，安装命令不带面板候选、
+// 与旧形态逐字一致。派生源是生成命令时已过 validatePanelInstallAddr
+// 字符集校验的面板地址，与其余候选同样以引号形式进入命令。
+func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
+	var base string
+	switch {
+	case strings.HasPrefix(agentAddr, "wss://"):
+		base = "https://" + strings.TrimPrefix(agentAddr, "wss://")
+	case strings.HasPrefix(agentAddr, "ws://"):
+		base = "http://" + strings.TrimPrefix(agentAddr, "ws://")
+	default:
+		return ""
+	}
+	return base + strings.TrimSuffix(ghMirrorPath, "/")
+}
+
 // buildNodeInstallCommand 生成节点安装命令（1.7.7 KU5 重构）。
 //
 // 首跳（install.sh 本体的获取）不再依赖面板的 GitHub 加速配置——
@@ -1451,6 +1471,12 @@ func nodeInstallPlaintextWarning(agentAddr string) string {
 // 取 install.sh 本体；首个两件齐备的候选即停，随后仍过 F-060 的
 // sha256sum 同源比对才 chmod 执行。全部候选失败则整条命令失败
 // （ok 恒为 0、test 中止），不执行任何已下载内容。
+//
+// 面板源一期③：候选表最前面 prepend 面板源（由 agentAddr 派生，
+// 见 panelMirrorPrefixFromAgentAddr）——新节点此刻唯一已证可达
+// 的目的地就是面板本身，国内机经面板拉 install.sh 不再先撞
+// GitHub 直连；面板候选与其余候选受同一套 F-060 校验约束，镜
+// 像回源失败时端点回 502、命令自动顺延下一候选，不劣化现状。
 //
 // 脚本本体内的二进制下载由 install.sh 内置测速直选负责（同候选
 // 清单），命令不再注入 PROXY_ENABLED / PROXY_URL；运维显式传入
@@ -1464,7 +1490,10 @@ func nodeInstallPlaintextWarning(agentAddr string) string {
 // 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
 func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
-	routes := make([]string, 0, len(githubFetchProxyCandidates)+1)
+	routes := make([]string, 0, len(githubFetchProxyCandidates)+2)
+	if panelPrefix := panelMirrorPrefixFromAgentAddr(agentAddr); panelPrefix != "" {
+		routes = append(routes, panelPrefix)
+	}
 	routes = append(routes, "")
 	routes = append(routes, githubFetchProxyCandidates...)
 	quoted := make([]string, 0, len(routes))
@@ -1517,6 +1546,12 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("版本号格式无效"))
 		return
 	}
+
+	// 面板源二期：异步预热本版本安装资产到镜像缓存（纯后台、零
+	// 等待，不改变本 handler 的时间界，登记表 C059 注已登记）；
+	// 命令生成与节点机执行之间隔着人工粘贴执行的时间差，预热
+	// 届时已落地。失败只记日志，命令的候选回退不依赖它。
+	preheatInstallReleaseAssets(version)
 
 	secret, err := h.repo.GetNodeSecret(req.ID)
 	if err != nil {

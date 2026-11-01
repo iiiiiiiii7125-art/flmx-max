@@ -563,3 +563,55 @@ func ghMirrorPrune(dir, keep string) {
 func isPanelGithubMirror(proxyURL string) bool {
 	return strings.HasSuffix(strings.TrimRight(proxyURL, "/"), strings.TrimRight(ghMirrorPath, "/"))
 }
+
+// --- 面板源分发二期：升级/安装下发前的缓存预热与期望哈希 ---
+//
+// agent 侧已把本端点作为一条下载线路纳入测速排名（面板源一期），
+// 缓存冷时首台节点要等本端点回源 GitHub。下发侧在派发前先行
+// 预热：同一版本同一架构全网只回源一次（singleflight + 永久
+// 缓存），预热失败只记日志、绝不阻塞下发（agent 侧有懒加载与
+// 全套线路回退兜底）。期望哈希取自本端点缓存的官方 .sha256，
+// 经 WSS 控制通道随升级命令下发，成为校验的信任根。
+
+var ghMirrorSHA256Hex = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
+// ghMirrorReleaseAssetUpstream 组装本仓库某个 release 资产的镜像
+// 上游描述（tag 资产，永久缓存形态）。
+func ghMirrorReleaseAssetUpstream(version, file string) (*ghMirrorUpstream, error) {
+	return parseGHMirrorPath("https://github.com/"+githubRepo+"/releases/download/"+version+"/"+file, "")
+}
+
+// ghMirrorWarmReleaseAsset 确保一个 release 资产已在镜像缓存中
+// （缺失/过期时回源抓取）。供下发前预热调用。
+func ghMirrorWarmReleaseAsset(version, file string) error {
+	up, err := ghMirrorReleaseAssetUpstream(version, file)
+	if err != nil {
+		return err
+	}
+	_, err = ghMirrorFetch(up)
+	return err
+}
+
+// ghMirrorReleaseSHA256 返回版本 version 的 gost-<arch> 期望
+// SHA256：取镜像缓存中官方 .sha256 的首字段（缓存缺失时先回源
+// 抓取）。取不到、内容不合法时返回空串——调用方据此不下发期望
+// 哈希，agent 回落同源 .sha256 比对（一期口径）。
+func ghMirrorReleaseSHA256(version, arch string) string {
+	up, err := ghMirrorReleaseAssetUpstream(version, "gost-"+arch+".sha256")
+	if err != nil {
+		return ""
+	}
+	path, err := ghMirrorFetch(up)
+	if err != nil {
+		return ""
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(body))
+	if len(fields) == 0 || !ghMirrorSHA256Hex.MatchString(fields[0]) {
+		return ""
+	}
+	return strings.ToLower(fields[0])
+}

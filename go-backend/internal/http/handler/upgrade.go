@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -58,6 +59,98 @@ var (
 )
 
 const nodeOnlineRedeployCooldown = 30 * time.Second
+
+// --- 面板源分发二期：下发前预热 + 期望哈希 ---
+
+// agentReleaseArches 是本产品 release 的全部 agent 架构。预热两
+// 架构都做（免去逐节点辨认与竞态，多花的只是一次 ~9.4MB 回源，
+// 且同版本全网只发生一次）。
+var agentReleaseArches = []string{"amd64", "arm64"}
+
+// upgradePreheatHashWait 是下发为取期望哈希最多等待预热落地的
+// 时间。等待只覆盖「哈希已缓存或回源很快」的常态；超时、失败
+// 一律不带哈希下发（agent 回落同源 .sha256 比对），绝不阻塞、绝
+// 不取消下发。登记表 T005/T031 的后端界已把这 15s 计入（界
+// 420s→435s，仍小于 480s 写截止）。var 以便测试收缩。
+var upgradePreheatHashWait = 15 * time.Second
+
+// warmAgentReleaseAssets 后台预热目标版本的双架构 agent 资产
+// （二进制 + .sha256）到面板镜像缓存；逐个文件失败只记日志。
+func warmAgentReleaseAssets(version string) {
+	for _, arch := range agentReleaseArches {
+		for _, file := range []string{"gost-" + arch, "gost-" + arch + ".sha256"} {
+			if err := ghMirrorWarmReleaseAsset(version, file); err != nil {
+				log.Printf("gh_mirror: 预热 %s %s 失败（不影响下发）: %v", version, file, err)
+			}
+		}
+	}
+}
+
+// preheatAgentReleaseHashes 启动后台预热，并在一个共享的
+// upgradePreheatHashWait 窗口内收集各架构的期望哈希（取自面板
+// 镜像缓存的官方 .sha256）。窗口内没落地的架构不在结果里——对
+// 应节点的命令不带 expectedSha256，agent 按一期口径校验。
+func preheatAgentReleaseHashes(version string) map[string]string {
+	go warmAgentReleaseAssets(version)
+
+	type hashResult struct {
+		arch string
+		sum  string
+	}
+	ch := make(chan hashResult, len(agentReleaseArches))
+	for _, arch := range agentReleaseArches {
+		go func(arch string) {
+			ch <- hashResult{arch: arch, sum: ghMirrorReleaseSHA256(version, arch)}
+		}(arch)
+	}
+	hashes := make(map[string]string, len(agentReleaseArches))
+	deadline := time.After(upgradePreheatHashWait)
+	for range agentReleaseArches {
+		select {
+		case r := <-ch:
+			if r.sum != "" {
+				hashes[r.arch] = r.sum
+			}
+		case <-deadline:
+			log.Printf("gh_mirror: 等待 %s 期望哈希超时（不影响下发）", version)
+			return hashes
+		}
+	}
+	return hashes
+}
+
+// preheatInstallReleaseAssets 后台预热节点安装要用的全套资产
+// （install.sh 本体与其 .sha256、双架构二进制与其 .sha256），
+// 供 nodeInstall 在生成安装命令前调用：纯异步、零等待——安装
+// 命令在节点机上真正执行下载是数秒到数分钟之后，预热届时已
+// 落地；失败只记日志，命令的候选回退与 F-060 校验不依赖它。
+func preheatInstallReleaseAssets(version string) {
+	go func() {
+		files := []string{"install.sh", "install.sh.sha256"}
+		for _, arch := range agentReleaseArches {
+			files = append(files, "gost-"+arch, "gost-"+arch+".sha256")
+		}
+		for _, file := range files {
+			if err := ghMirrorWarmReleaseAsset(version, file); err != nil {
+				log.Printf("gh_mirror: 预热 %s %s 失败（不影响安装命令生成）: %v", version, file, err)
+			}
+		}
+	}()
+}
+
+// agentArchFromReportedVersion 从节点上报的 fullVersion
+// （"1.8.0 (debian/amd64)" 形态：版本 + 空格 + 括号内发行版/架构，
+// go-gost/main.go 口径）提取 release 架构；后缀缺失或不是已知
+// 架构时返回空串（调用方据此不带期望哈希）。
+func agentArchFromReportedVersion(v string) string {
+	v = strings.TrimSpace(v)
+	for _, arch := range agentReleaseArches {
+		if strings.HasSuffix(v, "/"+arch+")") {
+			return arch
+		}
+	}
+	return ""
+}
 
 type githubRelease struct {
 	TagName     string `json:"tag_name"`
@@ -413,7 +506,9 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	// O9-005：目标版本低于节点当前版本时拒绝升级（防误降级；有意降级请用独立的
 	// nodeRollback 接口）。节点版本未知（未上报）时不拦截。
+	nodeArch := ""
 	if node, err := h.repo.GetNodeByID(req.ID); err == nil && node != nil && node.Version.Valid {
+		nodeArch = agentArchFromReportedVersion(node.Version.String)
 		if cur := strings.TrimSpace(node.Version.String); cur != "" {
 			// A11-132-06：不可比版本 fail-closed（与面板自升级口径一致）。
 			// R4-N1：cur 是 fullVersion（带 " (debian/amd64)" 后缀），
@@ -449,6 +544,16 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	// （已知过渡行为，见 1.7.7 发版说明）。
 	upgradeData := map[string]interface{}{
 		"version": version,
+	}
+	// 面板源二期：下发前预热镜像缓存（后台进行、失败不阻塞），并
+	// 在窗口内拿到本节点架构的期望哈希时随命令下发——哈希是值、
+	// 经已鉴权的 WSS 控制通道走，在 agent 侧是校验信任根（老
+	// agent 忽略未知字段；架构辨不出或哈希没落地则不带，agent
+	// 回落一期口径）。
+	if hashes := preheatAgentReleaseHashes(version); nodeArch != "" {
+		if sum := hashes[nodeArch]; sum != "" {
+			upgradeData["expectedSha256"] = sum
+		}
 	}
 	result, err := h.wsServer.SendCommand(req.ID, "UpgradeAgent", upgradeData, upgradeTimeout)
 	if err != nil {
@@ -528,6 +633,9 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	batchUpgradeData := map[string]interface{}{
 		"version": version,
 	}
+	// 面板源二期：整批只预热一次（后台进行、失败不阻塞下发），
+	// 期望哈希按各节点架构在派发时逐个附加（见循环内 data 组装）。
+	batchExpectedHashes := preheatAgentReleaseHashes(version)
 
 	type upgradeResult struct {
 		ID      int64  `json:"id"`
@@ -564,7 +672,9 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 
 			// O9-005：目标版本低于该节点当前版本时拒绝（防误降级；有意降级请用 nodeRollback）
 			// A11-132-06：不可比版本同样 fail-closed 拒绝。
+			nodeArch := ""
 			if node, err := h.repo.GetNodeByID(nodeID); err == nil && node != nil && node.Version.Valid {
+				nodeArch = agentArchFromReportedVersion(node.Version.String)
 				if cur := strings.TrimSpace(node.Version.String); cur != "" {
 					// R4-N1：同单节点路径，cur 经上报型比较提取首段版本。
 					cmp, cmpErr := compareWithReportedVersion(strings.TrimPrefix(version, "v"), cur)
@@ -584,7 +694,16 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			result, err := h.wsServer.SendCommandContext(dispatchCtx, nodeID, "UpgradeAgent", batchUpgradeData, upgradeTimeout)
+			// 面板源二期：本节点架构的期望哈希落地了才附加（逐节点
+			// 克隆命令数据，不动整批共享的 batchUpgradeData）。
+			data := batchUpgradeData
+			if sum := batchExpectedHashes[nodeArch]; nodeArch != "" && sum != "" {
+				data = map[string]interface{}{
+					"version":        version,
+					"expectedSha256": sum,
+				}
+			}
+			result, err := h.wsServer.SendCommandContext(dispatchCtx, nodeID, "UpgradeAgent", data, upgradeTimeout)
 			if err != nil {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: err.Error()}
 				return
