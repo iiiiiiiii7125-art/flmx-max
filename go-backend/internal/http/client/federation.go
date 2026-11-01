@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+// federationErrorBodyLimit 是对端返回非 200 时读取错误体的上限（LB-01）。
+// 错误体只用于拼错误文案，与 handler 侧错误体读入口径同值：upgrade.go 与
+// system_upgrade.go 对 GitHub 错误体均为 io.ReadAll(io.LimitReader(resp.Body,
+// 512))。无界读入会让异常/恶意对端以超大错误体线性放大本机内存，故七个
+// 方法的错误路径统一经此上限截断。
+const federationErrorBodyLimit = 512
+
 type FederationClient struct {
 	client *http.Client
 }
@@ -149,7 +156,7 @@ func (c *FederationClient) Connect(url, token, localDomain string) (*RemoteNodeI
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return nil, fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -193,7 +200,7 @@ func (c *FederationClient) CreateTunnel(url, token, localDomain, protocol string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return nil, fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -232,7 +239,7 @@ func (c *FederationClient) ReservePort(url, token, localDomain string, reqData R
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return nil, fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -271,7 +278,7 @@ func (c *FederationClient) ApplyRole(url, token, localDomain string, reqData Run
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return nil, fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -310,7 +317,7 @@ func (c *FederationClient) ReleaseRole(url, token, localDomain string, reqData R
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -348,7 +355,7 @@ func (c *FederationClient) Diagnose(url, token, localDomain string, reqData Runt
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return nil, fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -391,7 +398,7 @@ func (c *FederationClient) Command(url, token, localDomain string, reqData Runti
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, federationErrorBodyLimit))
 		return nil, fmt.Errorf("remote error %d: %s", resp.StatusCode, string(body))
 	}
 
