@@ -3826,8 +3826,8 @@ export default function TunnelPage() {
                               key={title}
                               className="border border-divider rounded-lg overflow-hidden"
                             >
-                              <div className="bg-primary-500/10 px-3 py-2 border-b border-divider">
-                                <h3 className="text-sm font-semibold text-primary-700">
+                              <div className="tray-primary px-3 py-2 border-b border-divider">
+                                <h3 className="text-sm font-semibold">
                                   {title}
                                 </h3>
                               </div>
@@ -4035,8 +4035,8 @@ export default function TunnelPage() {
 
                           return (
                             <div key={title} className="space-y-2">
-                              <div className="px-2 py-1.5 bg-primary-500/10 rounded-lg border border-primary-500/30">
-                                <h3 className="text-sm font-semibold text-primary-700">
+                              <div className="px-2 py-1.5 tray-primary rounded-lg">
+                                <h3 className="text-sm font-semibold">
                                   {title}
                                 </h3>
                               </div>
