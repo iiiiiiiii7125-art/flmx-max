@@ -1672,6 +1672,12 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		// normalizeLatencyTargetsConfig 本为此写就，现正式接线（空串
 		// 返回 ""，与既有可清空语义兼容）。
 		return normalizeLatencyTargetsConfig(value)
+	case subscriptionFrontURLsConfigKey:
+		// 订阅前置地址（KU6）：JSON 数组、逐个 base 归一化校验
+		// （仅 scheme+host[:port]），非法整批拒绝；空串在
+		// normalizeSubscriptionFrontURLs 内返回 ""，走调用方的可
+		// 清空语义（本键非必填、非系统管理，天然可清空）。
+		return normalizeSubscriptionFrontURLs(value)
 	case monitorTunnelQualityEnabledConfigKey:
 		normalized := strings.TrimSpace(strings.ToLower(value))
 		switch normalized {

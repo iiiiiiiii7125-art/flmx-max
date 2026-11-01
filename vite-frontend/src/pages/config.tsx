@@ -46,6 +46,7 @@ import { BackIcon, SettingsIcon } from "@/components/icons";
 import { NotifyCard } from "@/pages/config/notify-card";
 import { GistBackup } from "@/pages/config/gist-backup";
 import { LatencySettings } from "@/pages/config/latency-card";
+import { SubFrontSettings } from "@/pages/config/sub-front-card";
 import { ThemeSettings } from "@/components/theme-settings";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
@@ -282,6 +283,7 @@ const getInitialConfigs = (): Record<string, string> => {
     "login_bg_image",
     "allow_local_remote_addr",
     "hide_footer_brand",
+    "subscription_front_urls",
   ];
   const initialConfigs: Record<string, string> = {};
 
@@ -2004,6 +2006,21 @@ export default function ConfigPage() {
           </CardHeader>
           <CardBody>
             <LatencySettings configs={configs} onChange={handleConfigChange} />
+          </CardBody>
+        </Card>
+      )}
+
+      {/* 订阅前置地址（仅管理员可见）：链接组装层设置，随页面统一保存 */}
+      {isAdmin() && (
+        <Card className="mt-6 shadow-md">
+          <CardHeader className="pb-2">
+            <h3 className="text-base font-semibold">订阅前置地址</h3>
+            <p className="text-xs text-default-500 mt-1">
+              面板域名被部分运营商阻断时，订阅链接可改走前置地址拉取
+            </p>
+          </CardHeader>
+          <CardBody>
+            <SubFrontSettings configs={configs} onChange={handleConfigChange} />
           </CardBody>
         </Card>
       )}

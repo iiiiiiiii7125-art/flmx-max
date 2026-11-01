@@ -122,6 +122,10 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"captcha_enabled":         {},
 	"panel_domain":            {},
 	"ip":                      {},
+	// 订阅前置地址（KU6）：链接组装层设置（前置 base 列表），无凭据；
+	// 普通用户的「我的订阅」页也要读它组装前置链接，故同
+	// panel_domain 一样归 authenticated（已登录可读）。
+	"subscription_front_urls": {},
 	// 1.7.7（KU5）：github_proxy_enabled / github_proxy_url 已随
 	// 「开启 GitHub 加速」设置整体移除，不再列入 authenticated
 	// 可读面——两键落默认 sensitive（非管理员不可读），已存值不
