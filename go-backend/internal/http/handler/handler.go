@@ -985,6 +985,19 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
+	// L8-F-01（Round 5）：补种子默认口令门，与 login / passkey 登录
+	// 同口径。isStoredDefaultPassword 是「管理员仍用默认口令 ⇒ 不得
+	// 获得完整能力」的单一裁决点：login 命中只签发受限 token、
+	// passkey 登录同口径；本面是裸口令鉴权、不签发 token，无受限
+	// 形态可给，命中即拒——否则种子默认口令（源码公开、零猜测
+	// 成本）可直接兑换本接口的完整能力，绕过强制改密。本判定在
+	// 口令已验通过之后，非枚举面；拒绝经下方 authOK=false 的失败
+	// 审计通道留痕。
+	if isStoredDefaultPassword(user.RoleID, user.Pwd) {
+		log.Printf("sub_store rejected: stored default password still in use user=%q ip=%s", username, ipStr)
+		response.WriteJSON(w, response.ErrDefault("账号仍在使用默认密码，请先登录面板修改密码"))
+		return
+	}
 	if passwordWasLegacy {
 		// R4B01-002：同 login 路径——透明 rehash 走
 		// MigrateUserPasswordHash，不推进 password_changed_at。
