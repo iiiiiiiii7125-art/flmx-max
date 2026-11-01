@@ -36,37 +36,38 @@ test_install_script_respects_disabled_proxy() (
   PROXY_ENABLED="false"
   PROXY_URL=""
 
-  local actual
-  actual=$(maybe_proxy_url "https://github.com/example/release")
+  assert_equals "direct" "$(route_mode)" "install.sh should use direct mode when the proxy is disabled"
 
+  ensure_download_routes
+
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "direct mode should produce exactly one route"
+  assert_equals "" "${DOWNLOAD_ROUTES[0]}" "direct mode route should be the empty (direct) prefix"
   assert_equals \
     "https://github.com/example/release" \
-    "$actual" \
+    "$(route_url "${DOWNLOAD_ROUTES[0]}" "https://github.com/example/release")" \
     "install.sh should bypass the proxy when disabled"
 )
 
-test_install_script_asks_for_proxy_config() (
+test_install_script_never_asks_for_proxy_config() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # 1.7.7: the interactive GitHub-proxy prompt is removed entirely;
+  # routes come from the built-in candidate speed selection.
+  if declare -F ask_proxy_config >/dev/null; then
+    fail "install.sh should not define ask_proxy_config anymore"
+  fi
+  if declare -F maybe_proxy_url >/dev/null; then
+    fail "install.sh should not define maybe_proxy_url anymore"
+  fi
 
   PROXY_ENABLED=""
   PROXY_URL=""
 
-  ask_proxy_config >/dev/null < <(printf '\nmirror.example.com/\n')
-
-  assert_equals "true" "$PROXY_ENABLED" "install.sh should enable proxy by default"
-  assert_equals "mirror.example.com/" "$PROXY_URL" "install.sh should keep the entered proxy URL"
-
-  local actual
-  actual=$(maybe_proxy_url "https://github.com/example/release")
-
-  assert_equals \
-    "https://mirror.example.com/https://github.com/example/release" \
-    "$actual" \
-    "install.sh should normalize the entered proxy URL"
+  assert_equals "builtin" "$(route_mode)" "install.sh should default to built-in route selection"
 )
 
-test_install_script_recomputes_download_url_after_prompt() (
+test_install_script_builds_canonical_download_url() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -74,7 +75,6 @@ test_install_script_recomputes_download_url_after_prompt() (
   PROXY_URL=""
   DOWNLOAD_URL=""
 
-  ask_proxy_config >/dev/null < <(printf 'n\n')
   ensure_download_url_initialized
 
   local expected
@@ -83,10 +83,10 @@ test_install_script_recomputes_download_url_after_prompt() (
   assert_equals \
     "$expected" \
     "$DOWNLOAD_URL" \
-    "install.sh should build the final download URL after the interactive proxy choice"
+    "install.sh should keep the canonical download URL (route prefixes apply at download time)"
 )
 
-test_update_flux_agent_asks_for_proxy_config() (
+test_update_flux_agent_downloads_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -98,14 +98,7 @@ echo "old version"
 EOF
   chmod +x "$INSTALL_DIR/flux_agent"
 
-  local ask_called="0"
   local cleanup_called="0"
-
-  ask_proxy_config() {
-    ask_called="1"
-    PROXY_ENABLED="false"
-    DOWNLOAD_URL=""
-  }
 
   cleanup_legacy_gost_installation() {
     cleanup_called="1"
@@ -155,9 +148,8 @@ EOF
 
   update_flux_agent >/dev/null
 
-  assert_equals "1" "$ask_called" "update_flux_agent should ask for proxy config before downloading"
   assert_equals "1" "$cleanup_called" "update_flux_agent should clean up legacy gost before restarting the agent"
-  assert_equals "$(build_download_url)" "$DOWNLOAD_URL" "update_flux_agent should honor the prompted proxy choice"
+  assert_equals "$(build_download_url)" "$DOWNLOAD_URL" "update_flux_agent should build the canonical download URL"
 )
 
 test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
@@ -166,17 +158,10 @@ test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
 
   INSTALL_DIR=$(mktemp -u)
 
-  local ask_called="0"
-
-  ask_proxy_config() {
-    ask_called="1"
-  }
-
   local rc="0"
   update_flux_agent >/dev/null || rc="$?"
 
   assert_equals "1" "$rc" "update_flux_agent should fail when the agent is not installed"
-  assert_equals "0" "$ask_called" "update_flux_agent should not prompt for proxy config when the agent is missing"
 )
 
 # R8-J-B: 更新成功后必须打印与安装路径同口径的上线确认指引
@@ -952,33 +937,38 @@ test_install_script_accepts_proxy_url_env_without_prompt() (
   PROXY_ENABLED=""
   PROXY_URL="mirror.example.com"
 
-  ask_proxy_config >/dev/null < <(printf '\n\n')
-
-  assert_equals "true" "$PROXY_ENABLED" "install.sh should treat PROXY_URL as enabling the proxy"
+  assert_equals "override" "$(route_mode)" "install.sh should treat PROXY_URL as a manual route override"
   assert_equals "mirror.example.com" "$PROXY_URL" "install.sh should preserve PROXY_URL when provided via env"
+
+  ensure_download_routes
+
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "override mode should produce exactly one route"
+  assert_equals "https://mirror.example.com" "${DOWNLOAD_ROUTES[0]}" "install.sh should normalize the override prefix"
+  assert_equals \
+    "https://mirror.example.com/https://github.com/example/release" \
+    "$(route_url "${DOWNLOAD_ROUTES[0]}" "https://github.com/example/release")" \
+    "install.sh should apply the override prefix at request time"
 )
 
 test_panel_install_script_can_disable_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
 
-  PROXY_ENABLED=""
+  PROXY_ENABLED="false"
   PROXY_URL=""
 
-  ask_proxy_config >/dev/null < <(printf 'n\n')
+  assert_equals "direct" "$(route_mode)" "panel_install.sh should use direct mode when the proxy is disabled"
 
-  assert_equals "false" "$PROXY_ENABLED" "panel_install.sh should allow disabling proxy"
+  ensure_download_routes
 
-  local actual
-  actual=$(maybe_proxy_url "https://github.com/example/release")
-
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "direct mode should produce exactly one route"
   assert_equals \
     "https://github.com/example/release" \
-    "$actual" \
+    "$(route_url "${DOWNLOAD_ROUTES[0]}" "https://github.com/example/release")" \
     "panel_install.sh should bypass the proxy after disabling it"
 )
 
-test_panel_install_script_recomputes_compose_urls_after_prompt() (
+test_panel_install_script_builds_canonical_compose_urls() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
 
@@ -987,28 +977,23 @@ test_panel_install_script_recomputes_compose_urls_after_prompt() (
   DOCKER_COMPOSEV4_URL=""
   DOCKER_COMPOSEV6_URL=""
 
-  ask_proxy_config >/dev/null < <(printf 'n\n')
   ensure_compose_urls_initialized
 
   assert_equals \
     "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/docker-compose-v4.yml" \
     "$DOCKER_COMPOSEV4_URL" \
-    "panel_install.sh should build the compose URL after the interactive proxy choice"
+    "panel_install.sh should build the canonical compose URL (route prefixes apply at download time)"
+  assert_equals \
+    "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/docker-compose-v6.yml" \
+    "$DOCKER_COMPOSEV6_URL" \
+    "panel_install.sh should build the canonical v6 compose URL"
 )
 
-test_update_panel_asks_for_proxy_config() (
+test_update_panel_downloads_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
 
-  local ask_called="0"
   local calls=""
-
-  ask_proxy_config() {
-    ask_called="1"
-    PROXY_ENABLED="false"
-    DOCKER_COMPOSEV4_URL=""
-    DOCKER_COMPOSEV6_URL=""
-  }
 
   check_docker() {
     DOCKER_CMD="true"
@@ -1061,11 +1046,10 @@ test_update_panel_asks_for_proxy_config() (
 
   update_panel >/dev/null
 
-  assert_equals "1" "$ask_called" "update_panel should ask for proxy config before downloading"
   assert_equals \
     "https://github.com/${REPO}/releases/download/v-test/docker-compose-v4.yml" \
     "$DOCKER_COMPOSEV4_URL" \
-    "update_panel should honor the prompted proxy choice"
+    "update_panel should build the canonical compose URL"
   assert_equals \
     " resolve validate-current download validate-new backup pull activate start" \
     "$calls" \
@@ -1144,13 +1128,15 @@ test_panel_install_script_accepts_proxy_url_env_without_prompt() (
   PROXY_ENABLED=""
   PROXY_URL="mirror.example.com"
 
-  ask_proxy_config >/dev/null < <(printf '\n\n')
-
-  assert_equals "true" "$PROXY_ENABLED" "panel_install.sh should treat PROXY_URL as enabling the proxy"
+  assert_equals "override" "$(route_mode)" "panel_install.sh should treat PROXY_URL as a manual route override"
   assert_equals "mirror.example.com" "$PROXY_URL" "panel_install.sh should preserve PROXY_URL when provided via env"
+
+  ensure_download_routes
+
+  assert_equals "https://mirror.example.com" "${DOWNLOAD_ROUTES[0]}" "panel_install.sh should normalize the override prefix"
 )
 
-test_panel_install_script_defaults_proxy_on_eof() {
+test_panel_install_script_ignores_eof_without_prompt() {
   local rc="0"
   local output
   local temp_script
@@ -1160,31 +1146,31 @@ test_panel_install_script_defaults_proxy_on_eof() {
   cat >> "$temp_script" <<'EOF'
 PROXY_ENABLED=""
 PROXY_URL=""
-ask_proxy_config >/dev/null < /dev/null
-printf '%s\n%s\n' "$PROXY_ENABLED" "$PROXY_URL"
+printf '%s\n' "$(route_mode)"
 EOF
 
-  output=$(bash "$temp_script") || rc="$?"
+  output=$(bash "$temp_script" < /dev/null) || rc="$?"
   rm -f "$temp_script"
 
-  assert_equals "0" "$rc" "panel_install.sh should not fail when proxy prompt receives EOF"
-  assert_equals $'true\ngcode.hostcentral.cc' "$output" "panel_install.sh should fall back to the default proxy on EOF"
+  assert_equals "0" "$rc" "panel_install.sh should not fail on EOF without any prompt"
+  assert_equals "builtin" "$output" "panel_install.sh should default to built-in route selection on EOF (no prompt, no implicit default proxy)"
 }
 
-test_panel_install_script_uses_default_proxy() (
+test_panel_install_script_uses_builtin_routes_by_default() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  if declare -F ask_proxy_config >/dev/null; then
+    fail "panel_install.sh should not define ask_proxy_config anymore"
+  fi
+  if declare -F maybe_proxy_url >/dev/null; then
+    fail "panel_install.sh should not define maybe_proxy_url anymore"
+  fi
 
   PROXY_ENABLED="true"
   PROXY_URL=""
 
-  local actual
-  actual=$(maybe_proxy_url "https://github.com/example/release")
-
-  assert_equals \
-    "https://gcode.hostcentral.cc/https://github.com/example/release" \
-    "$actual" \
-    "panel_install.sh should keep the default proxy when enabled"
+  assert_equals "builtin" "$(route_mode)" "panel_install.sh should use built-in route selection when no override is given (no implicit default proxy)"
 )
 
 # F-006: panel_install 自更新必须走带 sha256 校验的 Release 通道。
@@ -1982,6 +1968,183 @@ test_rollback_restarts_service_from_failed_state() (
     fail "R2X-020: rollback should restore the old binary"
 )
 
+# 1.7.7 路线机制（install.sh）：直连探测通过 → 路线表只有直连，
+# 不得再测任何代理（curl 桩对带代理前缀的探测一律失败也不影响）。
+test_install_script_routes_direct_first() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *ghfast.top*|*gh-proxy.com*|*ghproxy*|*gitmirror*|*ghps.cc*|*gh.llkk.cc*|*ghp.ci*) return 22 ;;
+          *) printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "direct-first: a healthy direct route must short-circuit proxy probing"
+  assert_equals "" "${DOWNLOAD_ROUTES[0]}" "direct-first: the only route should be direct"
+  assert_equals "1" "$ROUTES_STAGE" "direct-first: stage should stay 1 until a download fails"
+)
+
+# 1.7.7 路线机制（install.sh）：直连判死 → 并行探测代理按延迟排名
+# （ghps 0.05 < ghfast 0.30，其余判死按清单原序殿后），直连排最末。
+test_install_script_routes_rank_proxies_when_direct_dead() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *ghps.cc*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *ghfast.top*) printf '0.300 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "10" "${#DOWNLOAD_ROUTES[@]}" "direct-dead: routes should be 9 proxies + direct fallback"
+  assert_equals "https://ghps.cc" "${DOWNLOAD_ROUTES[0]}" "direct-dead: fastest probed proxy should rank first"
+  assert_equals "https://ghfast.top" "${DOWNLOAD_ROUTES[1]}" "direct-dead: second fastest probed proxy should rank second"
+  assert_equals "https://gcode.hostcentral.cc" "${DOWNLOAD_ROUTES[2]}" "direct-dead: unprobed-dead proxies should follow in canonical order"
+  assert_equals "" "${DOWNLOAD_ROUTES[9]}" "direct-dead: direct should be the last-resort route"
+)
+
+# 1.7.7 路线机制（install.sh）：直连已定（阶段 1）后二进制下载失败
+# → 补测代理排名续切（extend），经 ghfast 下载成功且校验通过。
+test_install_script_download_failover_extends_routes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v-test/gost-amd64"
+
+  curl() {
+    local all_args="$*"
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    # 探测请求带 -w 输出格式串（url 变量可能被格式串污染）：以整串判别
+    case "$all_args" in
+      *url_effective*)
+        case "$all_args" in
+          *ghfast.top*) printf '0.200 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *" https://github.com/"*) printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        return 0
+        ;;
+    esac
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    # 二进制本体：直连下载失败、ghfast 路线成功
+    case "$url" in
+      https://ghfast.top/*)
+        cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+        chmod +x "$output"
+        return 0
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  local dest
+  dest=$(mktemp)
+  rm -f "$dest"
+
+  download_agent_binary "$dest"
+
+  grep -q "new version" "$dest" || fail "failover: binary should arrive via the ghfast route after direct fails"
+  [[ ${#DOWNLOAD_ROUTES[@]} -gt 1 ]] || fail "failover: routes should have been extended with probed proxies"
+  assert_equals "https://ghfast.top" "${DOWNLOAD_ROUTES[1]}" "failover: first extension route should be the fastest probed proxy"
+)
+
+# 1.7.7 路线机制（panel_install.sh）：download_verified_routed 按
+# 路线序续切——直连判死、ghps 探测最快且下载成功，其余路线不得
+# 被尝试（download_verified 桩记录调用并按前缀决定成败）。
+test_panel_download_verified_routed_failover() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  local calls_log
+  calls_log=$(mktemp)
+
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *ghps.cc*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  download_verified() {
+    echo "$1" >> "$calls_log"
+    case "$1" in
+      https://ghps.cc/*) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  local dest
+  dest=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest"
+
+  assert_equals \
+    "https://ghps.cc/https://github.com/example/asset.yml" \
+    "$(head -n1 "$calls_log")" \
+    "routed download should try the fastest probed proxy first when direct is dead"
+  assert_equals "1" "$(wc -l < "$calls_log")" "routed download should stop at the first successful route"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet
 test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
@@ -1996,9 +2159,13 @@ test_verify_downloaded_binary_retries_transient_checksum_failure
 test_verify_downloaded_binary_surfaces_curl_error_after_retries
 test_download_verified_retries_transient_checksum_failure
 test_install_script_respects_disabled_proxy
-test_install_script_asks_for_proxy_config
-test_install_script_recomputes_download_url_after_prompt
-test_update_flux_agent_asks_for_proxy_config
+test_install_script_never_asks_for_proxy_config
+test_install_script_builds_canonical_download_url
+test_install_script_routes_direct_first
+test_install_script_routes_rank_proxies_when_direct_dead
+test_install_script_download_failover_extends_routes
+test_panel_download_verified_routed_failover
+test_update_flux_agent_downloads_without_prompt
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
 test_update_flux_agent_prints_online_confirmation_guidance
 test_flux_agent_health_ok_requires_stable_pid
@@ -2018,14 +2185,14 @@ test_cleanup_legacy_gost_installation_preserves_unrelated_gost
 test_cleanup_legacy_gost_installation_skips_systemd_on_openrc
 test_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_can_disable_proxy
-test_panel_install_script_recomputes_compose_urls_after_prompt
-test_update_panel_asks_for_proxy_config
+test_panel_install_script_builds_canonical_compose_urls
+test_update_panel_downloads_without_prompt
 test_resolve_panel_deployment_uses_container_labels
 test_validate_panel_update_environment_rejects_empty_required_values
 test_backup_sqlite_for_update_pauses_copies_and_unpauses
-test_panel_install_script_uses_default_proxy
+test_panel_install_script_uses_builtin_routes_by_default
 test_panel_install_script_accepts_proxy_url_env_without_prompt
-test_panel_install_script_defaults_proxy_on_eof
+test_panel_install_script_ignores_eof_without_prompt
 test_install_flux_agent_returns_nonzero_when_service_not_active
 test_systemd_starts_reset_failed_before_start
 test_rollback_restarts_service_from_failed_state

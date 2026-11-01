@@ -54,21 +54,9 @@ curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-m
 
 节点：在面板 **节点** 页新建节点，复制生成的安装命令到服务器上执行。
 
-中转机 / 落地机（国内机器代理加速版，把下面命令里的面板地址和密钥换成你自己的）：
+中转机 / 落地机（把下面命令里的面板地址和密钥换成你自己的）：
 
-```bash
-curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && PROXY_ENABLED=true PROXY_URL=https://gcode.hostcentral.cc ./install.sh -a 面板地址 -s 密钥
-```
-
-> 提示：面板 **节点** 页生成的安装命令已按你的代理设置自动拼接好，直接复制用就行。
->
-> 常用 GitHub 加速代理（把要加速的地址拼在后面即可）：
->
-> - `https://gcode.hostcentral.cc`
-> - `https://gh-proxy.com`
-> - `https://ghfast.top`
-> - `https://mirror.ghproxy.com`
-> - `https://gh.llkk.cc`
+> 提示：直接复制面板 **节点** 页生成的安装命令即可——命令会逐个候选试取安装脚本，脚本运行后内置多代理自动测速直选（先测直连、直连不通按延迟选代理），无需再手工拼代理前缀或设置面板里的 GitHub 加速（该设置已移除）。确需固定某条路线时，可在执行安装脚本时用环境变量 `PROXY_URL=<代理前缀>` 手动覆盖，或 `PROXY_ENABLED=false` 强制直连。
 
 更多说明见 [使用文档](https://iiiiiiiii7125-art.github.io/flmx-max/)：[安装部署](https://iiiiiiiii7125-art.github.io/flmx-max/guide/install) · [搭建节点](https://iiiiiiiii7125-art.github.io/flmx-max/guide/nodes) · [对接中转](https://iiiiiiiii7125-art.github.io/flmx-max/guide/relay) · [导入节点](https://iiiiiiiii7125-art.github.io/flmx-max/guide/import) · [升级](https://iiiiiiiii7125-art.github.io/flmx-max/guide/upgrade) · [常见问题](https://iiiiiiiii7125-art.github.io/flmx-max/guide/faq)
 

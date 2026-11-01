@@ -69,7 +69,9 @@ type Download struct {
 	// GitHub repo + asset template for digest lookup ("" when unused).
 	GitHubRepo  string `json:"-"`
 	GitHubAsset string `json:"-"`
-	// Mirrorable: the GitHub download mirror (github_proxy_url) may be used.
+	// Mirrorable: this download may go through a GitHub mirror prefix
+	// (the agent's built-in candidate routes since 1.7.7; the panel's
+	// removed github_proxy_url setting no longer feeds this).
 	Mirrorable bool `json:"-"`
 }
 

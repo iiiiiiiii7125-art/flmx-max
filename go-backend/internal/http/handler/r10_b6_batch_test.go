@@ -369,7 +369,7 @@ func TestR10B6ConfigGetClassifiedKeysRegressionForNonAdmin(t *testing.T) {
 		"latency_targets",
 		"monitor_tunnel_quality_enabled", "monitor_tunnel_quality_interval_sec", "monitor_retention_days",
 		"captcha_enabled", "panel_domain", "ip",
-		"github_proxy_enabled", "github_proxy_url", "allow_local_remote_addr",
+		"allow_local_remote_addr",
 		"notify_enabled", "notify_events", "notify_daily_hour",
 		"notify_latency_loss_pct", "notify_latency_ms",
 		"service_monitor_checker_scan_interval_sec", "service_monitor_worker_limit",

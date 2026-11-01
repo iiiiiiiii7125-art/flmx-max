@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"go-backend/internal/store/repo"
 )
@@ -109,9 +108,8 @@ func TestJ03SystemUpgradeRedirectFallbackRejectsBeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	if err := r.UpsertConfig("github_proxy_enabled", "false", time.Now().UnixMilli()); err != nil {
-		t.Fatalf("disable github proxy: %v", err)
-	}
+	// 1.7.7：github_proxy_enabled 设置已整体移除，无需再写配置关代理；
+	// 路线由 swapGitHubBasesForTest 钉为直连-only。
 	h := &Handler{repo: r}
 	tag, err := h.resolveSystemUpgradeLatestReleaseByChannel("stable")
 	if err == nil {

@@ -52,9 +52,8 @@ func r7J01CallNodeInstall(t *testing.T, panelAddr string) r7J01Envelope {
 	if err := r.DB().Exec(`INSERT INTO vite_config(name, value, time) VALUES(?, ?, ?)`, "ip", panelAddr, now).Error; err != nil {
 		t.Fatalf("seed vite_config ip: %v", err)
 	}
-	if err := r.UpsertConfig("github_proxy_enabled", "false", now); err != nil {
-		t.Fatalf("disable github proxy: %v", err)
-	}
+	// 1.7.7：github_proxy_enabled 设置已整体移除，无需再写配置关代理；
+	// 路线由 swapGitHubBasesForTest 钉为直连-only。
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `[{"tag_name":"1.7.2","name":"x","draft":false,"prerelease":false}]`)

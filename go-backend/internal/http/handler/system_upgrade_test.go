@@ -16,8 +16,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"go-backend/internal/store/repo"
 )
 
 func TestSelectComposeAssetUsesIPv6Template(t *testing.T) {
@@ -29,48 +27,33 @@ func TestSelectComposeAssetUsesIPv6Template(t *testing.T) {
 	}
 }
 
-// U1-004 重写：原测试 stub 的 systemUpgradeHTTPGet 自 D16 起已不在
-// downloadReleaseAsset 的实际路径上（实际走 SecureFetch），断言永不命中。
-// 改为直接断言 buildSystemUpgradeDownloadURL 在代理开/关/默认三种配置下的
-// URL 形态——这正是原测试想守护的「代理前缀拼接」行为。
-func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	repoStore, err := repo.Open(dbPath)
-	if err != nil {
-		t.Fatalf("repo.Open() error = %v", err)
-	}
-	defer repoStore.Close()
-
-	h := &Handler{repo: repoStore}
+// U1-004 的后继（1.7.7 KU5）：「开启 GitHub 加速」设置整体移除后，
+// 面板自升级资产的候选 URL 不再由面板配置决定，而是
+// systemUpgradeDownloadURLs 按直选路线序（gitHubRouteOrder）拼全
+// 候选。本用例钉死路线序 → URL 表的映射：直连判活时直连居首、
+// 直连判死时代理居首且直连殿后兜底、无代理排名时只有直连。
+func TestSystemUpgradeDownloadURLsFollowRouteOrder(t *testing.T) {
+	h := &Handler{}
 	originalBase := systemUpgradeReleaseBaseURL
 	systemUpgradeReleaseBaseURL = "https://example.invalid"
 	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
 
-	// 默认（无配置行）：代理开启，默认代理地址
-	wantDefault := "https://gcode.hostcentral.cc/https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
-	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantDefault {
-		t.Fatalf("default download URL = %q, want %q", got, wantDefault)
+	direct := "https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
+	proxied := "https://proxy.example.com/" + direct
+
+	seedGitHubRoutesForTest(t, false, []string{"https://proxy.example.com"})
+	if got, want := h.systemUpgradeDownloadURLs("2.1.9", "docker-compose-v4.yml"), []string{proxied, direct}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct-dead download URLs = %v, want %v", got, want)
 	}
 
-	now := time.Now().UnixMilli()
-	if err := repoStore.UpsertConfig("github_proxy_enabled", "true", now); err != nil {
-		t.Fatalf("UpsertConfig() github_proxy_enabled error = %v", err)
-	}
-	if err := repoStore.UpsertConfig("github_proxy_url", "https://proxy.example.com", now); err != nil {
-		t.Fatalf("UpsertConfig() github_proxy_url error = %v", err)
-	}
-	wantProxy := "https://proxy.example.com/https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
-	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantProxy {
-		t.Fatalf("proxied download URL = %q, want %q", got, wantProxy)
+	seedGitHubRoutesForTest(t, true, []string{"https://proxy.example.com"})
+	if got, want := h.systemUpgradeDownloadURLs("2.1.9", "docker-compose-v4.yml"), []string{direct, proxied}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct-alive download URLs = %v, want %v", got, want)
 	}
 
-	// 关闭代理：直连形态，无前缀
-	if err := repoStore.UpsertConfig("github_proxy_enabled", "false", now); err != nil {
-		t.Fatalf("UpsertConfig() github_proxy_enabled=false error = %v", err)
-	}
-	wantDirect := "https://example.invalid/iiiiiiiii7125-art/flmx-max/releases/download/2.1.9/docker-compose-v4.yml"
-	if got := h.buildSystemUpgradeDownloadURL("2.1.9", "docker-compose-v4.yml"); got != wantDirect {
-		t.Fatalf("direct download URL = %q, want %q", got, wantDirect)
+	seedGitHubRoutesForTest(t, true, nil)
+	if got, want := h.systemUpgradeDownloadURLs("2.1.9", "docker-compose-v4.yml"), []string{direct}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct-only download URLs = %v, want %v", got, want)
 	}
 }
 
@@ -79,16 +62,8 @@ func TestDownloadReleaseAssetUsesGithubProxyWhenEnabled(t *testing.T) {
 // 改为走真实路径：本地 HTTP 服务器 + 放行私网 + 临时调小上限，验证
 // downloadReleaseAsset 对超限资产的拒绝。
 func TestDownloadReleaseAssetRejectsOversizedBody(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	repoStore, err := repo.Open(dbPath)
-	if err != nil {
-		t.Fatalf("repo.Open() error = %v", err)
-	}
-	defer repoStore.Close()
-	now := time.Now().UnixMilli()
-	if err := repoStore.UpsertConfig("github_proxy_enabled", "false", now); err != nil {
-		t.Fatalf("UpsertConfig() github_proxy_enabled error = %v", err)
-	}
+	// 1.7.7：路线钉为直连-only，资产直接从 stub 基址取。
+	seedGitHubRoutesForTest(t, true, nil)
 
 	big := bytes.Repeat([]byte("a"), 4096)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,8 +81,8 @@ func TestDownloadReleaseAssetRejectsOversizedBody(t *testing.T) {
 	secureFetchMaxBody = 1024
 	t.Cleanup(func() { secureFetchMaxBody = originalMax })
 
-	h := &Handler{repo: repoStore}
-	_, err = h.downloadReleaseAsset("2.1.9", "docker-compose-v4.yml")
+	h := &Handler{}
+	_, err := h.downloadReleaseAsset("2.1.9", "docker-compose-v4.yml")
 	if err == nil || !strings.Contains(err.Error(), "response too large") {
 		t.Fatalf("downloadReleaseAsset() error = %v, want SecureFetch oversized error", err)
 	}
@@ -491,21 +466,12 @@ func mustArgs(t *testing.T, e *systemUpgradeExecutor) []string {
 	return args
 }
 
-// U1-001：代理路径失败（ghfast 对 api.github.com 返回 403）时降级直连。
+// U1-001 的后继（1.7.7 KU5）：首选路线失败（gh-proxy 类服务对
+// api.github.com 返回 403）时按路线序续切到直连。路线钉死为
+// 「直连判死 + 代理序 [ghfast.example]」，尝试序应为代理 → 直连。
 func TestFetchSystemUpgradeReleasesFallsBackToDirect(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	repoStore, err := repo.Open(dbPath)
-	if err != nil {
-		t.Fatalf("repo.Open() error = %v", err)
-	}
-	defer repoStore.Close()
-	now := time.Now().UnixMilli()
-	if err := repoStore.UpsertConfig("github_proxy_enabled", "true", now); err != nil {
-		t.Fatalf("UpsertConfig() error = %v", err)
-	}
-	if err := repoStore.UpsertConfig("github_proxy_url", "https://ghfast.example", now); err != nil {
-		t.Fatalf("UpsertConfig() error = %v", err)
-	}
+	clearReleasesCacheForTest(t)
+	seedGitHubRoutesForTest(t, false, []string{"https://ghfast.example"})
 
 	originalGet := systemUpgradeHTTPGet
 	defer func() { systemUpgradeHTTPGet = originalGet }()
@@ -524,7 +490,7 @@ func TestFetchSystemUpgradeReleasesFallsBackToDirect(t *testing.T) {
 		}, nil
 	}
 
-	h := &Handler{repo: repoStore}
+	h := &Handler{}
 	releases, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
 		t.Fatalf("fetchSystemUpgradeReleases() error = %v", err)
@@ -740,19 +706,11 @@ echo "2026-01-01T00:00:00Z"
 	}
 }
 
-// F-139：代理开启时 downloadReleaseAsset 此前只有代理 URL 一条路，
-// 代理对该资产不可用即整体失败。现应先试代理、失败后以直连 URL 重试
-// 整组（资产 + .sha256 同源同次），本用例代理全 502、直连提供正确
-// 资产与校验，断言最终成功且代理确实被先试过。
+// F-139 的后继（1.7.7 KU5）：downloadReleaseAsset 按直选路线序逐个
+// 候选重试整组（资产 + .sha256 同源同次）。本用例路线钉死为
+// 「直连判死 + 代理序 [proxy]」（即代理居首、直连殿后），代理全
+// 502、直连提供正确资产与校验，断言最终成功且代理确实被先试过。
 func TestDownloadReleaseAssetFallsBackToDirectWhenProxyFails(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	repoStore, err := repo.Open(dbPath)
-	if err != nil {
-		t.Fatalf("repo.Open() error = %v", err)
-	}
-	defer repoStore.Close()
-	now := time.Now().UnixMilli()
-
 	content := []byte("services: {}\n")
 	sum := fmt.Sprintf("%x", sha256.Sum256(content))
 	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -771,19 +729,14 @@ func TestDownloadReleaseAssetFallsBackToDirectWhenProxyFails(t *testing.T) {
 	}))
 	defer proxy.Close()
 
-	if err := repoStore.UpsertConfig("github_proxy_enabled", "true", now); err != nil {
-		t.Fatalf("UpsertConfig() github_proxy_enabled error = %v", err)
-	}
-	if err := repoStore.UpsertConfig("github_proxy_url", proxy.URL, now); err != nil {
-		t.Fatalf("UpsertConfig() github_proxy_url error = %v", err)
-	}
+	seedGitHubRoutesForTest(t, false, []string{proxy.URL})
 
 	originalBase := systemUpgradeReleaseBaseURL
 	systemUpgradeReleaseBaseURL = direct.URL
 	t.Cleanup(func() { systemUpgradeReleaseBaseURL = originalBase })
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
 
-	h := &Handler{repo: repoStore}
+	h := &Handler{}
 	body, err := h.downloadReleaseAsset("9.9.9", "docker-compose-v4.yml")
 	if err != nil {
 		t.Fatalf("代理失败时应降级直连下载资产: %v", err)

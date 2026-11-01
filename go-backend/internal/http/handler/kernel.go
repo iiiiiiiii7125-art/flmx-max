@@ -1861,10 +1861,11 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			return nil, "", fmt.Errorf("入站「%s」的 ShadowTLS 回环端口 %d 与入站「%s」的监听端口冲突，已拒绝下发", name, bp, owner)
 		}
 	}
+	// 1.7.7（KU5）：给 agent 下发的下载描述不再带面板配置的代理前
+	// 缀——「开启 GitHub 加速」设置已整体移除，proxy 恒为空（直连
+	// 形态的 URL / rule-set 引用），实际下载路线由 agent 侧内置候
+	// 选在下载处自行测速直选（KU4）。
 	proxy := ""
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		proxy = proxyURL
-	}
 	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelow(k.Version, 1, 14),
@@ -1939,14 +1940,11 @@ var kernelVersionCache = struct {
 
 // kernelReleaseVersions lists recent releases of a kernel from GitHub,
 // cached for 30 minutes. Kernels with a pinned list return that list.
+//
+// F-059 的「代理先行/直连降级」在 1.7.7 升级为内置候选测速直选
+// （KU5，github_routes.go），与节点侧/面板侧版本发现同口径；流式
+// 解码与 256MiB 兜底保持不变（见 fetchKernelReleaseVersionsPageCtx）。
 func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
-	return kernelReleaseVersionsWithProxy(info, "")
-}
-
-// F-059：内核版本列表是版本发现的第三个孪生实现，此前只直连 api.github.com
-// ——与 F-029 的节点侧列表同病。补同样的代理先行/直连降级；流式解码与
-// 256MiB 兜底保持不变（见 fetchKernelReleaseVersionsPage）。
-func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernelVersionItem, error) {
 	if len(info.Versions) > 0 {
 		out := make([]kernelVersionItem, 0, len(info.Versions))
 		for _, v := range info.Versions {
@@ -1977,7 +1975,7 @@ func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernel
 	kernelVersionCache.flights[info.Type] = call
 	kernelVersionCache.Unlock()
 
-	items, err := fetchKernelReleaseVersionsWithFallback(info, proxyURL)
+	items, err := fetchKernelReleaseVersionsWithFallback(info)
 
 	kernelVersionCache.Lock()
 	if err == nil {
@@ -1992,29 +1990,41 @@ func kernelReleaseVersionsWithProxy(info kernel.Info, proxyURL string) ([]kernel
 }
 
 // fetchKernelReleaseVersionsWithFallback 是内核版本列表的一次实际
-// 抓取：代理先行、失败降级直连（F-059 口径），结果由调用方回填缓存。
-func fetchKernelReleaseVersionsWithFallback(info kernel.Info, proxyURL string) ([]kernelVersionItem, error) {
+// 抓取：按内置直选路线逐个尝试（F-059 的后继口径，见
+// kernelReleaseVersions），结果由调用方回填缓存。
+func fetchKernelReleaseVersionsWithFallback(info kernel.Info) ([]kernelVersionItem, error) {
 	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo)
-	urls := []string{directURL}
-	if proxyURL != "" {
-		urls = []string{proxyURL + "/" + directURL, directURL}
-	}
-	var lastErr error
-	for _, url := range urls {
-		out, err := fetchKernelReleaseVersionsPage(url)
-		if err == nil {
-			return out, nil
+	var out []kernelVersionItem
+	err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+		defer cancel()
+		items, err := fetchKernelReleaseVersionsPageCtx(ctx, prefixURL(prefix, directURL), attemptTimeout)
+		if err != nil {
+			return err
 		}
-		lastErr = err
+		out = items
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, lastErr
+	return out, nil
 }
 
 func fetchKernelReleaseVersionsPage(url string) ([]kernelVersionItem, error) {
-	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）。
+	return fetchKernelReleaseVersionsPageCtx(context.Background(), url, 30*time.Second)
+}
+
+func fetchKernelReleaseVersionsPageCtx(ctx context.Context, url string, clientTimeout time.Duration) ([]kernelVersionItem, error) {
+	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）；
+	// 直选尝试时由 clientTimeout 按段预算剩余量收紧。
 	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检）。
-	client := githubVersionFetchClient()
-	resp, err := client.Get(url)
+	client := githubVersionFetchClientWithTimeout(clientTimeout)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("获取版本列表失败: %v", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("获取版本列表失败: %v", err)
 	}
@@ -2065,7 +2075,7 @@ func (h *Handler) kernelVersions(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("未知内核"))
 		return
 	}
-	items, err := kernelReleaseVersionsWithProxy(info, h.githubProxyURLForFetch())
+	items, err := kernelReleaseVersions(info)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return

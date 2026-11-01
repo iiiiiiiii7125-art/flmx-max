@@ -7,9 +7,6 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"go-backend/internal/store/repo"
 )
 
 // C-02（P1）：三处 GitHub 版本发现走原始 http.Client，无重定向/SSRF
@@ -75,7 +72,8 @@ func TestC02RedirectToPrivateNotFollowedSystemUpgrade(t *testing.T) {
 	internal := c02InternalServer(t, &internalHits)
 	proxy := c02RedirectProxy(t, internal.URL+"/latest/meta-data/")
 
-	// 直连端点恒失败，迫使 fetchSystemUpgradeReleases 只走代理路径。
+	// 直连端点恒失败；路线钉死为「直连判死 + 代理序仅该重定向代理」，
+	// fetchSystemUpgradeReleases 经代理尝试时不得跟随其 302 到内网。
 	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
@@ -83,20 +81,9 @@ func TestC02RedirectToPrivateNotFollowedSystemUpgrade(t *testing.T) {
 	oldAPIBase := systemUpgradeAPIBaseURL
 	systemUpgradeAPIBaseURL = direct.URL
 	t.Cleanup(func() { systemUpgradeAPIBaseURL = oldAPIBase })
+	seedGitHubRoutesForTest(t, false, []string{proxy.URL})
 
-	r, err := repo.Open(t.TempDir() + "/c02-sysup.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
-	now := time.Now().UnixMilli()
-	if err := r.UpsertConfig("github_proxy_enabled", "true", now); err != nil {
-		t.Fatalf("enable proxy: %v", err)
-	}
-	if err := r.UpsertConfig("github_proxy_url", proxy.URL, now); err != nil {
-		t.Fatalf("set proxy url: %v", err)
-	}
-	h := &Handler{repo: r}
+	h := &Handler{}
 	if releases, err := h.fetchSystemUpgradeReleases(50); err == nil {
 		t.Fatalf("fetchSystemUpgradeReleases must not follow 302 to private target, got %+v", releases)
 	}

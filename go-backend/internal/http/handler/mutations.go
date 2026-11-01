@@ -1429,6 +1429,44 @@ func nodeInstallPlaintextWarning(agentAddr string) string {
 	return "警告：本次安装命令的节点连接地址为明文 " + agentAddr + "，节点密钥将经明文通道发送，且明文地址无法连接仅提供 HTTPS 的面板（如经 Caddy/nginx 反向代理终止 TLS）。如面板经 HTTPS 对外，请先在「网站配置」把面板后端地址改为 https:// 开头的地址再重新生成安装命令；确认该面板就是明文部署时可忽略本警告。"
 }
 
+// buildNodeInstallCommand 生成节点安装命令（1.7.7 KU5 重构）。
+//
+// 首跳（install.sh 本体的获取）不再依赖面板的 GitHub 加速配置——
+// 该设置已整体移除，且命令在节点机上执行、面板无法替节点测速。
+// 命令内置与全产品统一的候选清单（githubFetchProxyCandidates +
+// 直连，github_routes.go），按「直连优先、其后代理清单原序」的顺
+// 序逐个试取：每个候选先取 install.sh.sha256 并校验内容为 64 位
+// 十六进制哈希（真实目标判活，防代理落地页假活），再从同一候选
+// 取 install.sh 本体；首个两件齐备的候选即停，随后仍过 F-060 的
+// sha256sum 同源比对才 chmod 执行。全部候选失败则整条命令失败
+// （ok 恒为 0、test 中止），不执行任何已下载内容。
+//
+// 脚本本体内的二进制下载由 install.sh 内置测速直选负责（同候选
+// 清单），命令不再注入 PROXY_ENABLED / PROXY_URL；运维显式传入
+// 环境变量 PROXY_URL 时脚本仍将其作手动覆盖（见 install.sh）。
+//
+// F-060：生成的命令此前对将以 root 执行的 install.sh 本体零校验
+// （curl -L 连 HTTP 错误都会把错误页存下来执行）。现在与全仓
+// fail-closed 标准对齐：同下 release 的 install.sh.sha256（流水线
+// 为每个脚本资产生成，内容为纯哈希），sha256sum 比对通过才 chmod
+// 执行；任一步失败整条 && 链中止。校验锚与被校验文件同源同版本，
+// 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
+func buildNodeInstallCommand(version, agentAddr, secret string) string {
+	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
+	routes := make([]string, 0, len(githubFetchProxyCandidates)+1)
+	routes = append(routes, "")
+	routes = append(routes, githubFetchProxyCandidates...)
+	quoted := make([]string, 0, len(routes))
+	for _, prefix := range routes {
+		quoted = append(quoted, `"`+prefix+`"`)
+	}
+	base := "https://github.com/" + githubRepo + "/releases/download/" + version
+	return `ok=0; for p in ` + strings.Join(quoted, " ") + `; do u="${p:+$p/}` + base + `"; ` +
+		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; break; fi; done; test "$ok" = 1` +
+		verifyStep +
+		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + agentAddr + ` -s ` + secret
+}
+
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	// C059：版本发现两段链（API 60s + 重定向兜底 60s）后端界 120s，
 	// 此前独缺 extendWriteDeadline 而与全局 WriteTimeout 120s 恰等，
@@ -1455,7 +1493,7 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channel := normalizeReleaseChannel(req.Channel)
-	version, err := resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
+	version, err := resolveLatestReleaseByChannel(channel)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 		return
@@ -1490,25 +1528,9 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("网站配置中的面板地址格式无效："+err.Error()+"，请前往网站配置检查"))
 		return
 	}
-	enabled, proxyURL := h.getGithubProxyConfig()
-
-	// F-060：生成的命令此前对将以 root 执行的 install.sh 本体零校验
-	// （curl -L 连 HTTP 错误都会把错误页存下来执行）。现在与全仓
-	// fail-closed 标准对齐：同下 release 的 install.sh.sha256（流水线
-	// 为每个脚本资产生成，内容为纯哈希），sha256sum 比对通过才 chmod
-	// 执行；任一步失败整条 && 链中止。校验锚与被校验文件同源同版本，
-	// 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
-	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
 	// FIX2-C #2：节点 addr 归一为显式 scheme（见 normalizeNodeInstallAddr）。
 	agentAddr := normalizeNodeInstallAddr(panelAddr, panelRequestScheme(r))
-	var cmd string
-	if enabled {
-		cmd = fmt.Sprintf("curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL %s/https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=true PROXY_URL=%s VERSION=%s ./install.sh -a %s -s %s",
-			proxyURL, githubRepo, version, proxyURL, githubRepo, version, proxyURL, version, agentAddr, secret)
-	} else {
-		cmd = fmt.Sprintf("curl -fsSL https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && curl -fsSL https://github.com/%s/releases/download/%s/install.sh.sha256 -o ./install.sh.sha256"+verifyStep+" && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
-			githubRepo, version, githubRepo, version, version, agentAddr, secret)
-	}
+	cmd := buildNodeInstallCommand(version, agentAddr, secret)
 	// R7-J-01 (non-BC part): a plaintext ws:// result must not leave
 	// silently — carry the explicit warning in the envelope. The
 	// command string above is generated exactly as before.

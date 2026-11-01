@@ -65,7 +65,11 @@ LEGACY_GOST_SERVICE_FILE_LIB="/lib/systemd/system/gost.service"
 LEGACY_GOST_SERVICE_FILE_USR_LIB="/usr/lib/systemd/system/gost.service"
 SERVICE_MANAGER="${SERVICE_MANAGER:-}"
 
-# 镜像加速配置（可由面板传入或交互式询问）
+# GitHub 下载路线配置（1.7.7）：默认走内置候选测速直选（见下方
+# PROXY_CANDIDATES 与 ensure_download_routes），不再交互询问、不再
+# 读面板的「GitHub 加速」设置（该设置已整体移除）。环境变量仅作
+# 运维逃生口：PROXY_ENABLED=false 强制直连；PROXY_URL=<前缀> 为
+# 手动覆盖，固定单条代理前缀路线（并落盘到 agent 配置）。
 PROXY_ENABLED="${PROXY_ENABLED:-}"
 PROXY_URL="${PROXY_URL:-}"
 
@@ -101,58 +105,143 @@ ensure_alpine_runtime_dependencies() {
   fi
 }
 
-# 镜像加速
-maybe_proxy_url() {
-  local url="$1"
+# ---- 内置 GitHub 下载候选与测速直选（1.7.7）----
+# 候选清单全产品统一（面板后端 github_routes.go、agent 侧、
+# panel_install.sh 同表同序，改一处须同步其余）：9 个代理前缀 +
+# 直连（""）。路线选择口径（与面板侧一致）：
+#   1) 先单独探测直连（真实目标、~3-5s）：通 → 只用直连，不测代理；
+#   2) 直连不通 → 并行探测 9 个代理按延迟排名，未判活的按清单原
+#      序殿后，直连排最末兜底；已选路线下载失败时逐个续切；
+#   3) 仅直连已定（阶段 1）而下载全败时，补测代理排名续切
+#      （extend_download_routes）。
+# 判活只认真实目标可解析：探测 releases/latest 的最终重定向末段
+# 必须长得像版本号，任意 HTTP 200 落地页不算活。
+PROXY_CANDIDATES=(
+  "https://ghfast.top"
+  "https://gcode.hostcentral.cc"
+  "https://gh-proxy.com"
+  "https://ghproxy.net"
+  "https://hub.gitmirror.com"
+  "https://ghps.cc"
+  "https://gh.llkk.cc"
+  "https://ghp.ci"
+  "https://ghproxy.cc"
+)
 
+route_mode() {
   if [[ "$PROXY_ENABLED" == "false" ]]; then
-    echo "$url"
-    return
+    echo "direct"
+  elif [[ -n "$PROXY_URL" ]]; then
+    echo "override"
+  else
+    echo "builtin"
   fi
+}
 
-  local proxy="${PROXY_URL:-gcode.hostcentral.cc}"
-
+normalize_proxy_prefix() {
+  local proxy="$1"
   if [[ "$proxy" == https://* || "$proxy" == http://* ]]; then
     proxy="${proxy%/}"
   else
     proxy="https://${proxy%/}"
   fi
-
-  echo "${proxy}/${url}"
+  echo "$proxy"
 }
 
-ask_proxy_config() {
-  if [[ -n "$PROXY_ENABLED" ]]; then
-    return
+route_url() {
+  local prefix="$1" url="$2"
+  if [[ -z "$prefix" ]]; then
+    echo "$url"
+  else
+    echo "${prefix}/${url}"
   fi
+}
 
-  if [[ -n "$PROXY_URL" ]]; then
-    PROXY_ENABLED="true"
-    return
-  fi
+# probe_route <前缀>：探测单条路线，活则回显耗时秒数、死则失败。
+probe_route() {
+  local prefix="$1"
+  local out effective tag
+  out=$(curl -fsSL -o /dev/null --connect-timeout 3 --max-time 5 -w '%{time_total} %{url_effective}' "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || return 1
+  effective="${out#* }"
+  tag="${effective##*/}"
+  [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]] || return 1
+  printf '%s' "${out%% *}"
+}
 
-  echo ""
-  echo "==============================================="
-  echo "           GitHub 加速配置"
-  echo "==============================================="
-  if ! read -r -p "是否开启 GitHub 加速? (Y/n): " proxy_choice; then
-    proxy_choice=""
+PROXY_RANKED=()
+
+# rank_proxy_routes：并行探测全部代理候选（单候选超时 ~5s、一轮
+# 总界有界），活者按延迟升序、未判活者按清单原序殿后，结果写入
+# PROXY_RANKED（只含代理，不含直连）。
+rank_proxy_routes() {
+  PROXY_RANKED=()
+  local tmpdir i prefix
+  tmpdir=$(mktemp -d) || return 1
+  for i in "${!PROXY_CANDIDATES[@]}"; do
+    prefix="${PROXY_CANDIDATES[$i]}"
+    (
+      t=$(probe_route "$prefix") && printf '%s %s\n' "$t" "$i" > "$tmpdir/$i"
+    ) &
+  done
+  wait
+  local line idx
+  while IFS= read -r line; do
+    idx="${line##* }"
+    PROXY_RANKED+=("${PROXY_CANDIDATES[$idx]}")
+  done < <(cat "$tmpdir"/* 2>/dev/null | sort -n)
+  rm -rf "$tmpdir"
+  local seen=" ${PROXY_RANKED[*]} "
+  for prefix in "${PROXY_CANDIDATES[@]}"; do
+    case "$seen" in
+      *" $prefix "*) ;;
+      *) PROXY_RANKED+=("$prefix") ;;
+    esac
+  done
+}
+
+DOWNLOAD_ROUTES=()
+ROUTES_STAGE=0
+
+# ensure_download_routes：懒初始化路线表（只在真正下载/解析版本时
+# 触发，纯本地操作不触网）。状态行走 stderr，避免污染 $(...) 捕获。
+ensure_download_routes() {
+  if [[ ${#DOWNLOAD_ROUTES[@]} -gt 0 ]]; then
+    return 0
   fi
-  case "$proxy_choice" in
-    n|N)
-      PROXY_ENABLED="false"
-      echo "已关闭加速，将直连 GitHub"
+  case "$(route_mode)" in
+    direct)
+      DOWNLOAD_ROUTES=("")
+      ROUTES_STAGE=2
+      ;;
+    override)
+      DOWNLOAD_ROUTES=("$(normalize_proxy_prefix "$PROXY_URL")")
+      ROUTES_STAGE=2
       ;;
     *)
-      PROXY_ENABLED="true"
-      if ! read -r -p "加速地址 (默认 gcode.hostcentral.cc): " input_url; then
-        input_url=""
+      if probe_route "" >/dev/null; then
+        DOWNLOAD_ROUTES=("")
+        ROUTES_STAGE=1
+        echo "🌐 GitHub 下载路线: 直连" >&2
+      else
+        rank_proxy_routes
+        DOWNLOAD_ROUTES=("${PROXY_RANKED[@]}" "")
+        ROUTES_STAGE=2
+        echo "🌐 GitHub 直连不通，按测速排名选用代理路线（首选: ${DOWNLOAD_ROUTES[0]}）" >&2
       fi
-      PROXY_URL="${input_url:-gcode.hostcentral.cc}"
-      echo "已开启加速: $PROXY_URL"
       ;;
   esac
-  echo "==============================================="
+}
+
+# extend_download_routes：阶段 1（仅直连）路线全败时补测代理排名
+# 并追加；有新增路线返回 0，否则返回 1。
+extend_download_routes() {
+  if [[ "$(route_mode)" == "builtin" && "$ROUTES_STAGE" == "1" ]]; then
+    rank_proxy_routes
+    DOWNLOAD_ROUTES+=("${PROXY_RANKED[@]}")
+    ROUTES_STAGE=2
+    return 0
+  fi
+  return 1
 }
 
 resolve_latest_release_tag() {
@@ -170,20 +259,29 @@ resolve_latest_release_tag() {
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
 
-  effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L "$(maybe_proxy_url "$latest_url")" 2>/dev/null || true)
-  tag="${effective_url##*/}"
-  # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
-  # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
-  if [[ "$tag" =~ $tag_pattern ]]; then
-    echo "$tag"
-    return 0
-  fi
+  # 1.7.7：逐路线尝试（每条路线内先重定向法、后 API 法），首个解析
+  # 出合格 tag 的路线即用；路线全败时按直选口径补测/续切一次。
+  ensure_download_routes
+  local prefix
+  while :; do
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$latest_url")" 2>/dev/null || true)
+      tag="${effective_url##*/}"
+      # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
+      # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
+      if [[ "$tag" =~ $tag_pattern ]]; then
+        echo "$tag"
+        return 0
+      fi
 
-  api_tag=$(curl -fsSL "$(maybe_proxy_url "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  if [[ "$api_tag" =~ $tag_pattern ]]; then
-    echo "$api_tag"
-    return 0
-  fi
+      api_tag=$(curl -fsSL --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+      if [[ "$api_tag" =~ $tag_pattern ]]; then
+        echo "$api_tag"
+        return 0
+      fi
+    done
+    extend_download_routes || break
+  done
 
   return 1
 }
@@ -261,6 +359,13 @@ verify_downloaded_binary() {
         echo "❌ 校验文件为空，拒绝安装未校验的二进制。"
         return 1
     fi
+    # 1.7.7：期望哈希必须是 64 位十六进制（与 panel_install.sh 的
+    # download_verified 同口径）——代理落地页/错误页即使被当作校验
+    # 文件取回，也不得进入比对环节混淆失败形态。
+    if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "❌ 校验文件内容格式无效（非 64 位 SHA256），拒绝安装未校验的二进制。"
+        return 1
+    fi
     local actual
     actual=$(sha256sum "$binary_file" | awk '{print $1}')
     if [[ "$actual" != "$expected" ]]; then
@@ -271,6 +376,33 @@ verify_downloaded_binary() {
     fi
     echo "✅ SHA256 校验通过"
     return 0
+}
+
+# download_agent_binary <目标路径>：按路线表逐个下载 agent 二进制，
+# 每条路线内完成下载 + 同源 .sha256 校验（verify_downloaded_binary
+# 从实际路线 URL 派生校验地址），首个全过者即用；下载错误/校验
+# 失败/无进展（--speed-limit/--speed-time 看门狗）自动切下一名，
+# 不需要重跑脚本。DOWNLOAD_URL 恒为无前缀的 canonical 地址，路线
+# 前缀只在实际请求时拼（route_url）。
+download_agent_binary() {
+  local dest="$1"
+  ensure_download_routes
+  local prefix url
+  while :; do
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      url=$(route_url "$prefix" "$DOWNLOAD_URL")
+      rm -f "$dest"
+      if curl -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 "$url" -o "$dest" && [[ -s "$dest" ]]; then
+        if verify_downloaded_binary "$dest" "$url"; then
+          echo "✅ 下载完成（路线: ${prefix:-直连}）"
+          return 0
+        fi
+      fi
+      rm -f "$dest"
+    done
+    extend_download_routes || break
+  done
+  return 1
 }
 
 ensure_download_url_initialized() {
@@ -285,7 +417,8 @@ ensure_download_url_initialized() {
   # 自动中断外层（无 set -e），必须分步检查，否则会拿空 ARCH 拼出错误 URL。
   local _dl_url
   _dl_url=$(build_download_url) || return 1
-  DOWNLOAD_URL=$(maybe_proxy_url "$_dl_url")
+  # 1.7.7：DOWNLOAD_URL 只存 canonical 地址，路线前缀在下载时拼。
+  DOWNLOAD_URL="$_dl_url"
 }
 
 
@@ -392,17 +525,16 @@ json_escape() {
 
 write_flux_agent_config() {
   local path="$1"
-  # GitHub 代理落盘：agent 的面板内升级下载会读 config.json 的 proxy 字段
-  # （国内节点直连 GitHub 不通）。归一化与 maybe_proxy_url 一致：
-  # 无协议头补 https://、去尾斜杠；未开启代理时不写该字段。
+  # GitHub 代理落盘口径（1.7.7）：agent 自 1.7.7 起内置候选、在下
+  # 载处自行测速直选，安装脚本不再把内置/默认代理写入 config.json。
+  # 仅当运维显式以 PROXY_URL 传入手动覆盖（override 模式）时才落
+  # 盘 proxy 字段，供 agent 的面板内升级固定走该前缀；direct 与
+  # builtin 模式均不写。（KU4 对账点：agent 侧须保持「config 无
+  # proxy 字段 = 内置测速直选」口径。）
   local proxy_json=""
-  if [[ "$PROXY_ENABLED" == "true" ]]; then
-    local proxy="${PROXY_URL:-gcode.hostcentral.cc}"
-    if [[ "$proxy" == https://* || "$proxy" == http://* ]]; then
-      proxy="${proxy%/}"
-    else
-      proxy="https://${proxy%/}"
-    fi
+  if [[ "$(route_mode)" == "override" ]]; then
+    local proxy
+    proxy=$(normalize_proxy_prefix "$PROXY_URL")
     proxy_json=$(printf ',\n  "proxy": "%s"' "$(json_escape "$proxy")")
   fi
   printf '{\n  "addr": "%s",\n  "secret": "%s"%s\n}\n' \
@@ -742,7 +874,6 @@ done
 install_flux_agent() {
   echo "🚀 开始安装 flux_agent..."
 
-  ask_proxy_config
   ensure_download_url_initialized || exit 1
 
   get_config_params
@@ -755,16 +886,10 @@ install_flux_agent() {
 
   local tmp_binary="$INSTALL_DIR/flux_agent.new"
 
-  # 下载 flux_agent
+  # 下载 flux_agent（内置路线逐个尝试、首成即用；同源校验在
+  # download_agent_binary 内完成，失败自动切下一条路线）
   echo "⬇️ 下载 flux_agent 中..."
-  rm -f "$tmp_binary"
-  curl -fL "$DOWNLOAD_URL" -o "$tmp_binary"
-  if [[ ! -f "$tmp_binary" || ! -s "$tmp_binary" ]]; then
-    rm -f "$tmp_binary"
-    echo "❌ 下载失败，请检查网络或下载链接。"
-    exit 1
-  fi
-  verify_downloaded_binary "$tmp_binary" "$DOWNLOAD_URL" || { rm -f "$tmp_binary"; exit 1; }
+  download_agent_binary "$tmp_binary" || { rm -f "$tmp_binary"; echo "❌ 下载失败，请检查网络或下载链接。"; exit 1; }
   cleanup_legacy_gost_installation
 
   # F-048: 停止并禁用已有服务移到下载+校验成功之后（与 update_flux_agent
@@ -911,7 +1036,6 @@ update_flux_agent() {
     return 1
   fi
 
-  ask_proxy_config
   ensure_download_url_initialized || return 1
 
   # X-P2-12 (J-02, BC-09): 下载前防降级。读现装版本（-V 经
@@ -936,15 +1060,10 @@ update_flux_agent() {
   check_and_install_tcpkill
   ensure_service_manager || return 1
 
-  # 先下载新版本
+  # 先下载新版本（内置路线逐个尝试、首成即用；同源校验在
+  # download_agent_binary 内完成，失败自动切下一条路线）
   echo "⬇️ 下载最新版本..."
-  rm -f "$INSTALL_DIR/flux_agent.new"
-  curl -fL "$DOWNLOAD_URL" -o "$INSTALL_DIR/flux_agent.new"
-  if [[ ! -f "$INSTALL_DIR/flux_agent.new" || ! -s "$INSTALL_DIR/flux_agent.new" ]]; then
-    echo "❌ 下载失败。"
-    return 1
-  fi
-  verify_downloaded_binary "$INSTALL_DIR/flux_agent.new" "$DOWNLOAD_URL" || { rm -f "$INSTALL_DIR/flux_agent.new"; return 1; }
+  download_agent_binary "$INSTALL_DIR/flux_agent.new" || { rm -f "$INSTALL_DIR/flux_agent.new"; echo "❌ 下载失败。"; return 1; }
   cleanup_legacy_gost_installation
 
   # 停止服务

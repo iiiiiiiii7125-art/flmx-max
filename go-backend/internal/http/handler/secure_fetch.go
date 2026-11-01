@@ -303,7 +303,15 @@ func redactFetchErrorChanged(err error) (error, bool) {
 // FLMX_FETCH_PRIVATE_ALLOWLIST（或 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true）
 // 显式放行，见 doc/guide/upgrade.md。
 func githubVersionFetchClient() *http.Client {
-	return &http.Client{
+	return githubVersionFetchClientWithTimeout(30 * time.Second)
+}
+
+// githubVersionFetchClientWithTimeout 是 githubVersionFetchClient 的
+// 超时可调变体（1.7.7 KU5）：面板侧测速直选的逐候选尝试按段预算
+// 剩余量收紧单次超时（见 github_routes.go 的 forEachGitHubRoute），
+// 守卫链（钉死拨号 + 逐跳复检）与默认变体完全一致。
+func githubVersionFetchClientWithTimeout(timeout time.Duration) *http.Client {
+	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			DialContext: secureFetchDialContext,
@@ -322,6 +330,11 @@ func githubVersionFetchClient() *http.Client {
 			return nil
 		},
 	}
+	// 逐尝试超时只能比默认 30s 更紧（段预算剩余量），不得放宽。
+	if timeout > 0 && timeout < client.Timeout {
+		client.Timeout = timeout
+	}
+	return client
 }
 
 // SecureFetch 安全下载（R5-B5B D17）。

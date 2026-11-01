@@ -94,7 +94,9 @@ func TestR8T1EndpointsExtendWriteDeadline(t *testing.T) {
 		// discovery prelude before upgradeTimeout 300s (bound 420s);
 		// server relief and frontend both 480s.
 		{"nodeUpgrade", h.nodeUpgrade, 480 * time.Second},
-		// R8-T-04: batch bound is ceil(N/5) x 300s, unbounded in N.
+		// R8-T-04, one-wave since 1.7.7: batch bound is the <=120s
+		// discovery prelude + a single 300s upgradeTimeout (420s),
+		// independent of N (cap 50); relief stays 30min headroom.
 		{"nodeBatchUpgrade", h.nodeBatchUpgrade, 30 * time.Minute},
 		// R8-T-04: self-upgrade synchronous prelude <= ~210s; frontend >= 240s (T2).
 		{"systemUpgrade", h.systemUpgrade, 300 * time.Second},

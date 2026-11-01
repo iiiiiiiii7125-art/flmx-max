@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -36,22 +35,21 @@ var (
 
 const (
 	upgradeTimeout = 5 * time.Minute
-	batchWorkers   = 5
 
 	// maxBatchUpgradeNodes 是单次批量升级的节点数上限（B05-002 服务
-	// 端收口）：后端界 ⌈N/5⌉×upgradeTimeout(300s) 必须小于服务端写
-	// 截止 nodeBatchUpgradeWriteDeadline(1800s)，N=25 时界为 1500s、
-	// 留 300s 余量。此前 ids 无上限、前端静态 900s 只覆盖 N≤15，
-	// N>15 时前端中止经请求 ctx 连带取消未派发节点且回执整份丢失；
-	// 超限请求现在明确报错并提示分批（前端按 N 动态放大超时为
-	// B05-002 的前端面，见登记表 T031 注）。
-	maxBatchUpgradeNodes = 25
+	// 端收口，1.7.7 由 25 抬到 50）：上限只防超大请求在小内存面板上
+	// 让 goroutine 与待回执命令无界增长（L-001 内存 spike 前科），
+	// 无正确性隐患。派发为一波全下发（1.7.7 用户口径：批量命令本
+	// 就应同时下发到各机并行执行，不再按 batchWorkers=5 分波等待），
+	// 后端界 = 版本发现前奏（≤120s，空 version 时）+ 单节点
+	// upgradeTimeout(300s) ≈ 420s，远小于服务端写截止
+	// nodeBatchUpgradeWriteDeadline(1800s)；超限请求明确报错并提示
+	// 分批（前端超时公式仍按旧波次口径放大，为安全余量，见登记表
+	// T031 注）。
+	maxBatchUpgradeNodes = 50
 
 	releaseChannelStable = "stable"
 	releaseChannelDev    = "dev"
-
-	defaultGithubProxyEnabled = true
-	defaultGithubProxyURL     = "https://gcode.hostcentral.cc"
 )
 
 var (
@@ -101,37 +99,6 @@ func releaseChannelLabel(channel string) string {
 	return "正式版"
 }
 
-func (h *Handler) getGithubProxyConfig() (enabled bool, proxyURL string) {
-	enabled = defaultGithubProxyEnabled
-	proxyURL = defaultGithubProxyURL
-
-	if h == nil || h.repo == nil {
-		return
-	}
-
-	if enabledCfg, err := h.repo.GetConfigByName("github_proxy_enabled"); err == nil && enabledCfg != nil {
-		enabled = enabledCfg.Value != "false"
-	}
-
-	if urlCfg, err := h.repo.GetConfigByName("github_proxy_url"); err == nil && urlCfg != nil && urlCfg.Value != "" {
-		proxyURL = strings.TrimSpace(urlCfg.Value)
-		if !strings.HasPrefix(proxyURL, "http://") && !strings.HasPrefix(proxyURL, "https://") {
-			proxyURL = "https://" + proxyURL
-		}
-		// U2-P3-4：去全部尾斜杠（旧逻辑 TrimSuffix 只去一个，双尾斜杠会拼出双斜杠路径）
-		proxyURL = strings.TrimRight(proxyURL, "/")
-		// R3 B04-001 消费面兜底：写面已先拒，但存量坏值（旧版本存入
-		// 或经其它路径写入）不得进入无引号拼入 root 安装命令的
-		// PROXY_URL/curl 前缀——校验不过即回落内置默认并留日志。
-		if err := validateGithubProxyURL(proxyURL); err != nil {
-			log.Printf("github_proxy_url stored value rejected (%v); falling back to default proxy", err)
-			proxyURL = defaultGithubProxyURL
-		}
-	}
-
-	return
-}
-
 // S-02: Agent 版本号严格校验，防止路径穿越
 // 只允许 ^v?[0-9]+\.[0-9]+\.[0-9]+$ 格式
 var agentVersionRe = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -151,7 +118,7 @@ var redirectTagPattern = regexp.MustCompile(`^[0-9A-Za-z.-]+$`)
 // 页脚探测共用同一份配额预算。
 const releasesCacheTTL = 10 * time.Minute
 
-// releasesFetchPerPage 是版本发现两路（节点侧 fetchGitHubReleasesWithProxy
+// releasesFetchPerPage 是版本发现两路（节点侧 fetchGitHubReleases
 // 与面板侧 fetchSystemUpgradeReleases）共同的全量拉取条数：一次拉满
 // 存缓存，读取方各自 slice 到所需条数（B05-004 统一键的前提）。
 const releasesFetchPerPage = 50
@@ -198,29 +165,19 @@ func sliceReleases(releases []githubRelease, perPage int) []githubRelease {
 	return releases
 }
 
-// githubProxyURLForFetch 返回版本发现类请求应使用的代理前缀；
-// 代理未启用时返回 ""（调用方只直连）。
-func (h *Handler) githubProxyURLForFetch() string {
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		return proxyURL
-	}
-	return ""
-}
-
 // maxGitHubAPIResponseBytes 是版本列表解码的体积兜底（防异常端点无限
 // 灌数据），正常 releases 负载远低于此，与内核版本列表的 256MiB 同口径。
 const maxGitHubAPIResponseBytes = 256 << 20
 
+// fetchGitHubReleases 拉取版本列表（10 分钟缓存口径不变）。
+//
+// F-029 的「代理先行/直连降级」在 1.7.7 升级为内置候选测速直选
+// （KU5，github_routes.go）：面板设置里的 GitHub 加速已整体移除，
+// 路线按「直连优先短路 → 代理探测排名续切」逐个尝试、首个成功即
+// 用——gh-proxy 类服务不转发 api.github.com 时该候选的 API 请求
+// 自行失败、自然落到下一名，不再依赖单点配置。任一候选回限流
+// 错误时优先报限流人话（其余候选也全失败才轮到它）。
 func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
-	return fetchGitHubReleasesWithProxy(perPage, "")
-}
-
-// F-029：节点侧版本列表拉取此前只有直连一条路，与面板侧
-// fetchSystemUpgradeReleases（U1-001 已有代理→直连降级）口径不一致：
-// gh-proxy 类服务不转发 api.github.com 时节点升级下拉整体失效；纯直连
-// 又在代理必经的网络里连不上。现在同口径：传了 proxyURL 先走代理
-// （proxyURL + "/" + apiURL），失败降级直连；无代理时与旧行为等价。
-func fetchGitHubReleasesWithProxy(perPage int, proxyURL string) ([]githubRelease, error) {
 	if perPage <= 0 {
 		perPage = 20
 	}
@@ -230,34 +187,46 @@ func fetchGitHubReleasesWithProxy(perPage int, proxyURL string) ([]githubRelease
 	}
 
 	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, releasesFetchPerPage)
-	if proxyURL == "" {
-		releases, err := fetchGitHubReleasesPage(directURL)
+	var releases []githubRelease
+	var rateLimitedErr error
+	err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+		defer cancel()
+		rs, err := fetchGitHubReleasesPageCtx(ctx, prefixURL(prefix, directURL), attemptTimeout)
 		if err != nil {
-			return nil, err
+			if strings.Contains(err.Error(), "已限流") && rateLimitedErr == nil {
+				rateLimitedErr = err
+			}
+			return err
 		}
-		storeReleasesCache(cacheKey, releases)
-		return sliceReleases(releases, perPage), nil
-	}
-
-	releases, proxyErr := fetchGitHubReleasesPage(proxyURL + "/" + directURL)
-	if proxyErr == nil {
-		storeReleasesCache(cacheKey, releases)
-		return sliceReleases(releases, perPage), nil
-	}
-	releases, directErr := fetchGitHubReleasesPage(directURL)
-	if directErr != nil {
-		return nil, fmt.Errorf("代理与直连均失败（代理: %v；直连: %v）", proxyErr, directErr)
+		releases = rs
+		return nil
+	})
+	if err != nil {
+		if rateLimitedErr != nil {
+			return nil, rateLimitedErr
+		}
+		return nil, err
 	}
 	storeReleasesCache(cacheKey, releases)
 	return sliceReleases(releases, perPage), nil
 }
 
 func fetchGitHubReleasesPage(url string) ([]githubRelease, error) {
-	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）。
+	return fetchGitHubReleasesPageCtx(context.Background(), url, 30*time.Second)
+}
+
+func fetchGitHubReleasesPageCtx(ctx context.Context, url string, clientTimeout time.Duration) ([]githubRelease, error) {
+	// X1-403：超时 15s → 30s（经代理多一跳 + 大响应，口径同 U1-006）；
+	// 直选尝试时由 clientTimeout 按段预算剩余量收紧。
 	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检），原始客户端
 	// 会被代理 302 引向内网地址。
-	client := githubVersionFetchClient()
-	resp, err := client.Get(url)
+	client := githubVersionFetchClientWithTimeout(clientTimeout)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
 	}
@@ -281,34 +250,42 @@ func fetchGitHubReleasesPage(url string) ([]githubRelease, error) {
 // resolveLatestTagByRedirect 通过 github.com 的 releases/latest 重定向
 // 解析最新稳定版 tag。该端点不走 API、不消耗限流配额，用作 API 不可用
 // （限流等）时"最新版"解析的兜底。
+//
+// F-029 的代理感知在 1.7.7 升级为内置候选测速直选（KU5，
+// github_routes.go）：stable 渠道的 API 兜底与 API 段同路线口径，
+// 代理必经网络里不再形同虚设；路线探测本身也复用本函数的校验链
+// （见 probeGitHubDirectLocked / probeGitHubProxiesLocked）。
 func resolveLatestTagByRedirect() (string, error) {
-	return resolveLatestTagByRedirectWithProxy("")
-}
-
-// F-029：重定向解析同样补代理先行/直连降级——stable 渠道的 API 兜底
-// 若只直连，代理必经网络里 API 与重定向会一起失效，兜底形同虚设。
-func resolveLatestTagByRedirectWithProxy(proxyURL string) (string, error) {
 	directURL := githubHTMLBase + "/" + githubRepo + "/releases/latest"
-	if proxyURL == "" {
-		return fetchLatestTagByRedirect(directURL)
-	}
-	tag, proxyErr := fetchLatestTagByRedirect(proxyURL + "/" + directURL)
-	if proxyErr == nil {
-		return tag, nil
-	}
-	tag, directErr := fetchLatestTagByRedirect(directURL)
-	if directErr != nil {
-		return "", fmt.Errorf("代理与直连均失败（代理: %v；直连: %v）", proxyErr, directErr)
+	var tag string
+	err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
+		t, err := fetchLatestTagByRedirectWithTimeout(prefixURL(prefix, directURL), attemptTimeout)
+		if err != nil {
+			return err
+		}
+		tag = t
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 	return tag, nil
 }
 
 func fetchLatestTagByRedirect(url string) (string, error) {
+	return fetchLatestTagByRedirectWithTimeout(url, 30*time.Second)
+}
+
+func fetchLatestTagByRedirectWithTimeout(url string, timeout time.Duration) (string, error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	// 逐尝试超时只能比默认 30s 更紧（段预算剩余量），不得放宽。
+	if timeout > 0 && timeout < client.Timeout {
+		client.Timeout = timeout
 	}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -360,21 +337,18 @@ func validateRedirectLocationHost(loc string) error {
 	return nil
 }
 
+// resolveLatestReleaseByChannel 解析渠道最新版：API 段与重定向兜底
+// 段均走内置候选测速直选（1.7.7 KU5；F-029 的代理感知后继）。
 func resolveLatestReleaseByChannel(channel string) (string, error) {
-	return resolveLatestReleaseByChannelWithProxy(channel, "")
-}
-
-// F-029：渠道最新版解析的代理感知版（机制同 fetchGitHubReleasesWithProxy）。
-func resolveLatestReleaseByChannelWithProxy(channel string, proxyURL string) (string, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
-	releases, err := fetchGitHubReleasesWithProxy(50, proxyURL)
+	releases, err := fetchGitHubReleases(50)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
 		// J-03：兜底亦须过渠道过滤——稳定渠道只接受纯数字 tag
 		// （releaseChannelFromTag(tag)==stable），命中 beta 时继续报
 		// API 错误，不得把测试版当成最新正式版返回。
 		if normalizedChannel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirectWithProxy(proxyURL); ferr == nil && releaseChannelFromTag(tag) == normalizedChannel {
+			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil && releaseChannelFromTag(tag) == normalizedChannel {
 				return tag, nil
 			}
 		}
@@ -424,7 +398,7 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		var err error
-		version, err = resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
+		version, err = resolveLatestReleaseByChannel(channel)
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 			return
@@ -468,14 +442,13 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
-	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL
-	// 代理支持：系统设置开启 GitHub 代理时下发 proxyUrl 前缀（与内核下载同模式），
-	// agent 仅作前缀拼接，路径仍由其本地构造。
+	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL。
+	// 1.7.7（KU5）：不再下发面板配置的 proxyUrl——「开启 GitHub 加
+	// 速」设置已整体移除，1.7.7 agent 内置候选并在下载处自行测速
+	// 直选；老 agent 收不到 proxyUrl 时走其本地持久化配置/直连
+	// （已知过渡行为，见 1.7.7 发版说明）。
 	upgradeData := map[string]interface{}{
 		"version": version,
-	}
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		upgradeData["proxyUrl"] = proxyURL
 	}
 	result, err := h.wsServer.SendCommand(req.ID, "UpgradeAgent", upgradeData, upgradeTimeout)
 	if err != nil {
@@ -499,7 +472,8 @@ func resolveLatestReleaseAPI() (string, error) {
 }
 
 func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
-	// R8-T-04: the batch bound is ceil(N/5) x upgradeTimeout.
+	// R8-T-04 口径更新（1.7.7）：一波全下发后批量界 = 版本发现前奏
+	// ≤120s + 单节点 upgradeTimeout 300s ≈ 420s，不再按波次叠加。
 	extendWriteDeadline(w, nodeBatchUpgradeWriteDeadline)
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -531,7 +505,7 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		var err error
-		version, err = resolveLatestReleaseByChannelWithProxy(channel, h.githubProxyURLForFetch())
+		version, err = resolveLatestReleaseByChannel(channel)
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取最新%s失败: %v", releaseChannelLabel(channel), err)))
 			return
@@ -544,15 +518,11 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
-
-	// 代理支持：系统设置开启 GitHub 代理时下发 proxyUrl 前缀（与单节点升级同模式）。
-	// 在循环外计算一次，避免每个 goroutine 重复读配置。
+	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version。
+	// 1.7.7（KU5）：与单节点升级同口径停发 proxyUrl（agent 自行测速
+	// 直选；老 agent 走本地持久化/直连，为已知过渡行为）。
 	batchUpgradeData := map[string]interface{}{
 		"version": version,
-	}
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		batchUpgradeData["proxyUrl"] = proxyURL
 	}
 
 	type upgradeResult struct {
@@ -562,7 +532,6 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := make([]upgradeResult, len(req.IDs))
-	sem := make(chan struct{}, batchWorkers)
 	var wg sync.WaitGroup
 
 	// B05-002（R2-K2）：已派发命令的等待与请求 ctx 解绑——沿备份导入
@@ -574,24 +543,20 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	dispatchCtx, cancelDispatch := context.WithTimeout(context.WithoutCancel(r.Context()), nodeBatchUpgradeWriteDeadline)
 	defer cancelDispatch()
 
+	// 1.7.7 一波全下发（用户口径）：单批内全部节点同时派发、各机
+	// 并行执行、回执整批汇总——删除原 batchWorkers=5 信号量（>5 台
+	// 被分波串行等待，尾波节点迟迟不动、前端长等待下整批回执易被
+	// 误判「根本没执行」）。goroutine 数由 maxBatchUpgradeNodes(50)
+	// 上限收口，L-001 的无界 spike 隐患不成立。
 	for i, id := range req.IDs {
 		// X-P3-26：派发前检查请求上下文——客户端断开/取消后不再派发剩余节点。
 		if ctxErr := r.Context().Err(); ctxErr != nil {
 			results[i] = upgradeResult{ID: id, Success: false, Message: fmt.Sprintf("请求已取消: %v", ctxErr)}
 			continue
 		}
-		// L-001：先获取信号量再启动 goroutine，避免大量 IDs 时 goroutine 数 = IDs 数导致内存 spike
-		// 旧逻辑：先启动所有 goroutine，信号量在内部限制并发，1000 个 IDs 就创建 1000 个 goroutine
-		select {
-		case sem <- struct{}{}:
-		case <-r.Context().Done():
-			results[i] = upgradeResult{ID: id, Success: false, Message: fmt.Sprintf("请求已取消: %v", r.Context().Err())}
-			continue
-		}
 		wg.Add(1)
 		go func(index int, nodeID int64) {
 			defer wg.Done()
-			defer func() { <-sem }()
 
 			// O9-005：目标版本低于该节点当前版本时拒绝（防误降级；有意降级请用 nodeRollback）
 			// A11-132-06：不可比版本同样 fail-closed 拒绝。
@@ -648,7 +613,7 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request) {
 
 	channel := normalizeReleaseChannel(req.Channel)
 
-	releases, err := fetchGitHubReleasesWithProxy(50, h.githubProxyURLForFetch())
+	releases, err := fetchGitHubReleases(50)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取版本列表失败: %v", err)))
 		return

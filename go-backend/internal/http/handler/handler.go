@@ -1704,22 +1704,11 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 			return "", fmt.Errorf("面板地址格式无效：%w", err)
 		}
 		return value, nil
-	case "github_proxy_url":
-		// 终审 L1-F-07/L1-F-08：URL 取 hostname 做空标签判；与订阅源
-		// 保存面同一口径，在此一次写好，不做 DNS。
-		if err := validateNoEmptyLabelURLHost(value); err != nil {
-			return "", fmt.Errorf("代理地址主机名格式无效：%w", err)
-		}
-		// R3 B04-001：写面先拒——代理地址无引号拼入 root 安装命令
-		// （PROXY_URL 与 curl 前缀两处），保存期即过完整校验（URL
-		// 解析＋Host 字符集＋全串元字符）；消费面 getGithubProxyConfig
-		// 对存量坏值另有兜底。
-		if err := validateGithubProxyURL(value); err != nil {
-			return "", fmt.Errorf("代理地址格式无效：%w", err)
-		}
-		return value, nil
+	// 1.7.7（KU5）：github_proxy_url 的专属写面校验已随「开启
+	// GitHub 加速」设置整体移除——该键不再有任何读写消费面，落
+	// default 直通；已存值不做破坏性迁移、仅不再读写。
 	case "notify_webhook_url":
-		// 复扫 R-03：与 github_proxy_url / 订阅源保存面同口径——
+		// 复扫 R-03：与订阅源保存面同口径——
 		// 保存期补语法层空标签判；使用期 validateNotifyURL 的 DNS
 		// fail-closed 口径不变。
 		if err := validateNoEmptyLabelURLHost(value); err != nil {
