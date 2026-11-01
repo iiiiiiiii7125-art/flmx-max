@@ -749,6 +749,9 @@ export function MonitorView({
   const monitorResultsSeqRef = useRef<Record<number, number>>({});
   // loadServiceMonitors 在途守卫：5s 轮询下慢请求不得叠加
   const serviceMonitorsInFlightRef = useRef(false);
+  // handleDeleteMonitor 在途守卫（按监控项分键）：原生 confirm 关闭后
+  // 按钮无 loading 态，同目标连点会二次下发删除。
+  const deleteMonitorInFlightRef = useRef<Set<number>>(new Set());
 
   const loadMetrics = useCallback(
     async (nodeId: number, options?: { silent?: boolean }) => {
@@ -1195,7 +1198,9 @@ export function MonitorView({
   };
 
   const handleDeleteMonitor = async (id: number) => {
+    if (deleteMonitorInFlightRef.current.has(id)) return;
     if (!confirm("确定删除该监控项?")) return;
+    deleteMonitorInFlightRef.current.add(id);
     try {
       const response = await deleteServiceMonitor(id);
 
@@ -1208,6 +1213,8 @@ export function MonitorView({
       }
     } catch {
       toast.error("删除失败");
+    } finally {
+      deleteMonitorInFlightRef.current.delete(id);
     }
   };
 

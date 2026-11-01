@@ -79,6 +79,7 @@ export function PasskeyManager() {
   if (!enabled) return null;
 
   const register = async () => {
+    if (busy) return;
     if (!password) {
       toast.error("请输入当前密码");
 
@@ -117,6 +118,7 @@ export function PasskeyManager() {
   };
 
   const remove = async (id: string) => {
+    if (busy) return;
     if (!password) {
       toast.error("请输入当前密码以删除密钥");
 

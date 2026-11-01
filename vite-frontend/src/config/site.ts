@@ -96,6 +96,7 @@ const fetchPublicBrandConfigs = async (): Promise<Record<string, string>> => {
 
           publicConfigMap[key] = value;
           configCache.set(key, value);
+          markConfigVerified(key);
         }
       } catch {
         // ignore single key fetch error
@@ -243,31 +244,83 @@ export const configCache = {
   },
 };
 
-// 获取单个配置（优先从缓存）
+// F-L5-04：单项配置的复验计时。原先 getCachedConfig 缓存优先、永不
+// 复验，长会话内配置被其他浏览器/管理员修改后本机不可见（订阅前置
+// 域名、app_name 等），须整页刷新。改为 TTL 复验：新鲜期内用缓存，
+// 过期回源拉取（同 key 在途去重），失败有缓存回退缓存。
+const CONFIG_REVALIDATE_TTL_MS = 60 * 1000;
+const configVerifiedAt = new Map<string, number>();
+const configFetchInFlight = new Map<string, Promise<string | null>>();
+
+const markConfigVerified = (key: string): void => {
+  configVerifiedAt.set(key.trim().toLowerCase(), Date.now());
+};
+
+const fetchConfigByName = (key: string): Promise<string | null> => {
+  const normalizedKey = key.trim().toLowerCase();
+  const inFlight = configFetchInFlight.get(normalizedKey);
+
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = (async (): Promise<string | null> => {
+    try {
+      const response = await getConfigByName(key);
+
+      if (
+        response.code === 0 &&
+        response.data &&
+        typeof response.data.value === "string"
+      ) {
+        const value = response.data.value;
+
+        if (shouldPersistConfigKey(key)) {
+          configCache.set(key, value);
+        }
+        markConfigVerified(normalizedKey);
+
+        return value;
+      }
+
+      return null;
+    } catch {
+      return null;
+    } finally {
+      configFetchInFlight.delete(normalizedKey);
+    }
+  })();
+
+  configFetchInFlight.set(normalizedKey, request);
+
+  return request;
+};
+
+// 获取单个配置（缓存优先，TTL 内不回源；过期回源复验）
 export const getCachedConfig = async (key: string): Promise<string | null> => {
   const cachedValue = configCache.get(key);
 
   if (cachedValue !== null) {
+    const verifiedAt =
+      configVerifiedAt.get(key.trim().toLowerCase()) ?? 0;
+
+    if (Date.now() - verifiedAt < CONFIG_REVALIDATE_TTL_MS) {
+      return cachedValue;
+    }
+
+    const freshValue = await fetchConfigByName(key);
+
+    if (freshValue !== null) {
+      return freshValue;
+    }
+
+    // 复验失败：回退缓存并刷新计时，避免失败期间每次调用都回源。
+    markConfigVerified(key);
+
     return cachedValue;
   }
 
-  const response = await getConfigByName(key);
-
-  if (
-    response.code === 0 &&
-    response.data &&
-    typeof response.data.value === "string"
-  ) {
-    const value = response.data.value;
-
-    if (shouldPersistConfigKey(key)) {
-      configCache.set(key, value);
-    }
-
-    return value;
-  }
-
-  return null;
+  return fetchConfigByName(key);
 };
 
 // 获取所有配置（优先从缓存）
@@ -311,6 +364,9 @@ export const getCachedConfigs = async (): Promise<Record<string, string>> => {
           configCache.set(normalizedKey, value as string);
         }
       });
+
+      // 全量拉取成功：本批 key 均为新鲜值，刷新复验计时。
+      Object.keys(configs).forEach((key) => markConfigVerified(key));
 
       return configs;
     }
@@ -402,6 +458,8 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
     if (shouldPersistConfigKey(normalizedKey)) {
       configCache.set(normalizedKey, String(value));
     }
+
+    markConfigVerified(normalizedKey);
   });
 
   const hasAppName = Object.prototype.hasOwnProperty.call(
@@ -482,10 +540,14 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
 export const clearConfigCache = (keys?: string[]) => {
   if (keys && keys.length > 0) {
     // 删除指定的配置缓存
-    keys.forEach((key) => configCache.remove(key));
+    keys.forEach((key) => {
+      configCache.remove(key);
+      configVerifiedAt.delete(key.trim().toLowerCase());
+    });
   } else {
     // 清空所有配置缓存
     configCache.clear();
+    configVerifiedAt.clear();
   }
 };
 

@@ -84,6 +84,7 @@ import {
 } from "@/pages/tunnel/form";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
+import { JwtUtil } from "@/utils/jwt";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
   buildBatchFailureMessage,
@@ -222,6 +223,24 @@ const EMPTY_BATCH_RESULT_MODAL_STATE: BatchResultModalState = {
 const DEFAULT_TUNNEL_DELETE_ACTION: TunnelDeleteAction = "replace";
 
 const TUNNEL_ORDER_KEY = "tunnel-order";
+
+// F-L5-03：排序键按登录用户分键（与 forward 的 `:u:<id>` 口径一致），
+// 避免同一浏览器多账号登录时排序互相串扰。
+const tunnelOrderLocalKey = (): string => {
+  const userId = JwtUtil.getUserIdFromToken();
+
+  return userId ? `${TUNNEL_ORDER_KEY}:u:${userId}` : TUNNEL_ORDER_KEY;
+};
+
+// 读取时分键下尚无存量则回退读一次旧全局键（升级迁移，写入只写分键）。
+const tunnelOrderLoadKey = (): string => {
+  const scopedKey = tunnelOrderLocalKey();
+
+  return scopedKey === TUNNEL_ORDER_KEY ||
+    localStorage.getItem(scopedKey) !== null
+    ? scopedKey
+    : TUNNEL_ORDER_KEY;
+};
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
@@ -504,7 +523,7 @@ export default function TunnelPage() {
 
     setTunnelOrder(
       loadStoredOrder(
-        TUNNEL_ORDER_KEY,
+        tunnelOrderLoadKey(),
         items.map((tunnel) => tunnel.id),
       ),
     );
@@ -705,7 +724,7 @@ export default function TunnelPage() {
   };
 
   const confirmDelete = async () => {
-    if (!tunnelToDelete) return;
+    if (!tunnelToDelete || deleteLoading) return;
 
     const forwardCount = tunnelDeletePreview?.forwardCount ?? 0;
     const action: TunnelDeleteAction =
@@ -754,7 +773,7 @@ export default function TunnelPage() {
         setTunnelOrder((prev) => {
           const next = prev.filter((id) => id !== tunnelToDelete.id);
 
-          saveOrder(TUNNEL_ORDER_KEY, next);
+          saveOrder(tunnelOrderLocalKey(), next);
 
           return next;
         });
@@ -1271,7 +1290,7 @@ export default function TunnelPage() {
 
     setTunnelOrder(newOrder);
 
-    saveOrder(TUNNEL_ORDER_KEY, newOrder);
+    saveOrder(tunnelOrderLocalKey(), newOrder);
 
     // 持久化到数据库
     try {
@@ -1289,12 +1308,12 @@ export default function TunnelPage() {
       } else {
         // 保存失败回滚乐观更新的本地顺序（状态 + localStorage），与 DB 保持一致
         setTunnelOrder(tunnelOrder);
-        saveOrder(TUNNEL_ORDER_KEY, tunnelOrder);
+        saveOrder(tunnelOrderLocalKey(), tunnelOrder);
         toast.error("保存排序失败：" + (response.msg || "未知错误"));
       }
     } catch {
       setTunnelOrder(tunnelOrder);
-      saveOrder(TUNNEL_ORDER_KEY, tunnelOrder);
+      saveOrder(tunnelOrderLocalKey(), tunnelOrder);
       toast.error("保存排序失败，请重试");
     }
   };
@@ -1385,7 +1404,7 @@ export default function TunnelPage() {
   };
 
   const handleBatchDelete = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchLoading) return;
     if (
       batchDeleteHasForwardDependencies &&
       batchDeleteAction === "replace" &&
@@ -1474,7 +1493,7 @@ export default function TunnelPage() {
   };
 
   const handleBatchRedeploy = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchLoading) return;
     setBatchLoading(true);
     setBatchProgress({
       active: true,
