@@ -500,6 +500,10 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("单次批量升级最多 %d 台节点，请分批提交", maxBatchUpgradeNodes)))
 		return
 	}
+	// R4B03-004：上限检查后去重保序——同批同节点只下发一次。重复
+	// 命令在 agent 串行队列里会撞上首条升级的进程重启而永不回执，
+	// 整批回执便出现同节点一成一败的自相矛盾结果。
+	req.IDs = uniqueInt64s(req.IDs)
 
 	channel := normalizeReleaseChannel(req.Channel)
 	version := strings.TrimSpace(req.Version)
