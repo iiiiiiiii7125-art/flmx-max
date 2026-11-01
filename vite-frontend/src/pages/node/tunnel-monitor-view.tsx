@@ -38,6 +38,7 @@ import toast from "react-hot-toast";
 
 import { classifyQualityHistoryBar } from "./quality-history-bar";
 
+import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
 import { formatTraffic } from "@/utils/traffic";
 import {
   getMonitorTunnels,
@@ -291,40 +292,51 @@ const QualityChartCard = React.memo(function QualityChartCard({
           <div className="h-64">
             <ResponsiveContainer height="100%" width="100%">
               <LineChart data={data}>
-                <CartesianGrid opacity={0.3} strokeDasharray="3 3" />
-                <XAxis dataKey="time" fontSize={11} tick={{ fill: "#888" }} />
+                <CartesianGrid
+                  stroke="currentColor"
+                  strokeDasharray="3 3"
+                  strokeOpacity={0.15}
+                />
+                <XAxis
+                  dataKey="time"
+                  fontSize={11}
+                  tick={{ fill: "currentColor", fontWeight: 600 }}
+                />
                 <YAxis
                   fontSize={11}
                   label={{
                     value: "延迟 (ms)",
                     angle: -90,
                     position: "insideLeft",
-                    style: { fontSize: 11, fill: "#888" },
+                    style: {
+                      fontSize: 11,
+                      fill: "currentColor",
+                      fontWeight: 600,
+                    },
                   }}
-                  tick={{ fill: "#888" }}
+                  tick={{ fill: "currentColor", fontWeight: 600 }}
                   tickFormatter={(v: any) => `${Number(v).toFixed(0)}ms`}
                 />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: "rgba(0,0,0,0.85)",
-                    border: "none",
-                    borderRadius: "8px",
-                    fontSize: 12,
-                  }}
-                  formatter={(value: unknown, name: string) => {
-                    const n = Number(value);
+                  content={
+                    <ChartGlassTooltip
+                      formatEntry={(entry) => {
+                        const n = Number(entry.value);
+                        const label =
+                          entry.name === "entryToExit"
+                            ? "入口→出口"
+                            : entry.name === "exitToBing"
+                              ? "出口→测试目标"
+                              : String(entry.name);
 
-                    if (!Number.isFinite(n)) return "-";
-                    const label =
-                      name === "entryToExit"
-                        ? "入口→出口"
-                        : name === "exitToBing"
-                          ? "出口→测试目标"
-                          : name;
-
-                    return [`${n.toFixed(1)}ms`, label];
-                  }}
-                  labelStyle={{ color: "#fff" }}
+                        return {
+                          name: label,
+                          value: Number.isFinite(n) ? `${n.toFixed(1)}ms` : "-",
+                        };
+                      }}
+                    />
+                  }
+                  cursor={{ stroke: "currentColor", strokeOpacity: 0.25 }}
                 />
                 <Line
                   connectNulls
@@ -417,22 +429,31 @@ const TrafficChartCard = React.memo(function TrafficChartCard({
           <div className="h-64">
             <ResponsiveContainer height="100%" width="100%">
               <LineChart data={data}>
-                <CartesianGrid opacity={0.3} strokeDasharray="3 3" />
-                <XAxis dataKey="time" fontSize={11} tick={{ fill: "#888" }} />
+                <CartesianGrid
+                  stroke="currentColor"
+                  strokeDasharray="3 3"
+                  strokeOpacity={0.15}
+                />
+                <XAxis
+                  dataKey="time"
+                  fontSize={11}
+                  tick={{ fill: "currentColor", fontWeight: 600 }}
+                />
                 <YAxis
                   fontSize={11}
-                  tick={{ fill: "#888" }}
+                  tick={{ fill: "currentColor", fontWeight: 600 }}
                   tickFormatter={yFormatter}
                 />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: "rgba(0,0,0,0.85)",
-                    border: "none",
-                    borderRadius: "8px",
-                    fontSize: 12,
-                  }}
-                  formatter={yFormatter}
-                  labelStyle={{ color: "#fff" }}
+                  content={
+                    <ChartGlassTooltip
+                      formatEntry={(entry) => ({
+                        name: String(entry.name ?? ""),
+                        value: String(yFormatter(entry.value)),
+                      })}
+                    />
+                  }
+                  cursor={{ stroke: "currentColor", strokeOpacity: 0.25 }}
                 />
                 <Line
                   dataKey="bytesIn"

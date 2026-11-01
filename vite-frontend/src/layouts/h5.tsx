@@ -266,13 +266,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                     : ""
                 }
                 ${isMonitorBlocked ? "opacity-60" : ""}
-                ${
-                  isActive
-                    ? "text-white"
-                    : isMonitorBlocked
-                      ? "text-foreground"
-                      : "text-foreground"
-                }
+                ${isActive ? "text-white" : "text-foreground"}
               `}
               onClick={() => handleTabClick(item.path)}
             >
