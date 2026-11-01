@@ -530,6 +530,7 @@ test_main_propagates_operation_exit_codes() (
     cat >> "$file" <<STUBEOF
 $stub
 delete_self() { :; }
+require_root_privileges() { return 0; }
 main
 STUBEOF
     printf '%s' "$file"
@@ -657,7 +658,15 @@ test_install_flux_agent_writes_json_safe_config() (
   get_config_params() { :; }
   check_and_install_tcpkill() { :; }
   cleanup_legacy_gost_installation() { :; }
-  systemctl() { return 0; }
+  # R4B11-003: 安装路径判活改走 flux_agent_health_ok 双采样后，
+  # systemctl 桩须能答 MainPID（恒定非 0），sleep 桩空转避免真实等待。
+  sleep() { :; }
+  systemctl() {
+    if [[ "$*" == *MainPID* ]]; then
+      echo 4242
+    fi
+    return 0
+  }
   curl() {
     local output=""
     local url=""
@@ -717,6 +726,10 @@ test_install_flux_agent_uses_openrc() (
   temp_root=$(mktemp -d)
   INSTALL_DIR="$temp_root/flux_agent"
   FLUX_AGENT_OPENRC_SERVICE_FILE="$temp_root/init.d/flux_agent"
+  # R4B11-003: 安装判活改双采样后，OpenRC 侧主 PID 取自 pidfile，
+  # 须预置恒定 PID 供两次采样比对。
+  FLUX_AGENT_OPENRC_PIDFILE="$temp_root/flux_agent.pid"
+  echo 4242 > "$FLUX_AGENT_OPENRC_PIDFILE"
   SERVICE_MANAGER="openrc"
   SERVER_ADDR="panel.example.com:443"
   SECRET="secret"
@@ -769,6 +782,7 @@ EOF
     rc_update_calls+=$'\n'"$*"
     return 0
   }
+  sleep() { :; }
 
   install_flux_agent >/dev/null
 
@@ -1863,8 +1877,11 @@ EOF
   grep -q "服务启动失败" "$INSTALL_DIR/fail.log" || \
     fail "R2X-019: install should still print the startup failure hint"
 
-  # 判活成功（防过修）：同路径必须 return 0
+  # 判活成功（防过修）：同路径必须 return 0。
+  # R4B11-003: 判活改双采样后还须主 PID 恒定非 0，一并覆写采样源
+  # （本例 systemctl 桩不答 MainPID）。
   flux_agent_service_is_active() { return 0; }
+  flux_agent_main_pid() { echo 4242; }
 
   rc="0"
   ( install_flux_agent >"$INSTALL_DIR/ok.log" 2>&1 ) || rc="$?"
@@ -2158,6 +2175,315 @@ test_download_verified_fail_closed_edges
 test_verify_downloaded_binary_retries_transient_checksum_failure
 test_verify_downloaded_binary_surfaces_curl_error_after_retries
 test_download_verified_retries_transient_checksum_failure
+# R4B11-001/002: 菜单 5/6 的 Caddyfile 行为干跑（CADDYFILE_PATH 钩子，
+# 此前 shipped 夹具对该钩子零覆盖）。桩口径：caddy validate 与
+# systemctl restart 各由标志文件控制成败，is-active 恒真，getent 恒
+# 解析成功，sleep 空转；Caddyfile 全程落在临时目录，不碰真实 /etc。
+panel_caddyfile_fixture_env() {
+  FIXTURE_DIR=$(mktemp -d)
+  export CADDYFILE_PATH="$FIXTURE_DIR/Caddyfile"
+  FRONTEND_PORT=6366
+  VALIDATE_FAIL_FLAG="$FIXTURE_DIR/validate-fail"
+  RESTART_FAIL_FLAG="$FIXTURE_DIR/restart-fail"
+  sleep() { :; }
+  getent() { printf '203.0.113.10 %s\n' "$2"; }
+  caddy() {
+    if [[ -f "$VALIDATE_FAIL_FLAG" ]]; then
+      return 1
+    fi
+    return 0
+  }
+  systemctl() {
+    if [[ "$1" == "restart" && -f "$RESTART_FAIL_FLAG" ]]; then
+      return 1
+    fi
+    return 0
+  }
+}
+
+# R4B11-001: 先菜单 6 追加订阅前置块、再重跑菜单 5 时，前置块必须被
+# 保留（旧实现整文件覆盖、无声抹除）；无关站点块同样保留，面板块在
+# 同域名重配后恰一份且有保留提示。旧代码对本用例必红（sub 块消失）。
+test_panel_menu5_preserves_front_block_after_menu6() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "R4B11-001: initial menu 5 run should succeed"
+  grep -q "^panel.example.com {" "$CADDYFILE_PATH" || \
+    fail "R4B11-001: panel block missing after menu 5"
+
+  setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
+    fail "R4B11-001: menu 6 run should succeed"
+  grep -q "^sub.example.com {" "$CADDYFILE_PATH" || \
+    fail "R4B11-001: front block missing after menu 6"
+
+  cat >> "$CADDYFILE_PATH" <<'EOF'
+other.example.com {
+    respond "hi"
+}
+EOF
+
+  local out_log="$FIXTURE_DIR/menu5-rerun.log"
+  setup_domain_proxy <<< "panel.example.com" >"$out_log" 2>&1 || \
+    fail "R4B11-001: menu 5 re-run should succeed"
+  grep -q "^sub.example.com {" "$CADDYFILE_PATH" || \
+    fail "R4B11-001: menu 5 re-run must preserve the subscription front block"
+  grep -q "^other.example.com {" "$CADDYFILE_PATH" || \
+    fail "R4B11-001: menu 5 re-run must preserve unrelated site blocks"
+  assert_equals "1" "$(grep -c '^panel.example.com {' "$CADDYFILE_PATH")" \
+    "R4B11-001: panel block must appear exactly once after re-run"
+  grep -q "已保留" "$out_log" || \
+    fail "R4B11-001: menu 5 re-run should report the preserved blocks"
+)
+
+# R4B11-002（菜单 5 validate 腿）：菜单 5 写文件后 caddy validate 失败
+# 必须回滚备份、返回 1，文件与写前逐字一致（旧实现无 validate、直达
+# restart，本用例对旧代码必红）。
+test_panel_menu5_rolls_back_on_validate_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "R4B11-002: initial menu 5 run should succeed"
+  setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
+    fail "R4B11-002: menu 6 run should succeed"
+  cp "$CADDYFILE_PATH" "$FIXTURE_DIR/expected-good"
+
+  : > "$VALIDATE_FAIL_FLAG"
+  local rc="0"
+  setup_domain_proxy <<< "panel.example.com" >"$FIXTURE_DIR/fail.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R4B11-002: menu 5 must fail when caddy validate fails"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "R4B11-002: menu 5 must roll back the Caddyfile when validate fails"
+  grep -q "校验失败" "$FIXTURE_DIR/fail.log" || \
+    fail "R4B11-002: validate failure must be reported"
+)
+
+# R4B11-002（菜单 5 restart 腿）：restart 返回非 0 时不得被 set -e 在
+# is-active 检查前吞掉——必须回滚并落到 journalctl 日志指引分支。
+test_panel_menu5_restart_failure_rolls_back_with_guidance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "R4B11-002: initial menu 5 run should succeed"
+  cp "$CADDYFILE_PATH" "$FIXTURE_DIR/expected-good"
+
+  : > "$RESTART_FAIL_FLAG"
+  local rc="0" log="$FIXTURE_DIR/restart-fail.log"
+  setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R4B11-002: menu 5 must fail when caddy restart fails"
+  grep -q "journalctl -u caddy" "$log" || \
+    fail "R4B11-002: menu 5 restart failure must reach the journalctl guidance branch"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "R4B11-002: menu 5 must roll back the Caddyfile when restart fails"
+)
+
+# R4B11-002（菜单 6 restart 腿）：菜单 6 的 restart 同样加守卫——失败
+# 时回滚追加并给出日志指引（旧实现该指引在 set -e 下不可达）。
+test_panel_menu6_restart_failure_rolls_back_with_guidance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "R4B11-002: initial menu 5 run should succeed"
+  cp "$CADDYFILE_PATH" "$FIXTURE_DIR/expected-good"
+
+  : > "$RESTART_FAIL_FLAG"
+  local rc="0" log="$FIXTURE_DIR/restart-fail.log"
+  setup_subscription_front_domain <<< "sub.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R4B11-002: menu 6 must fail when caddy restart fails"
+  grep -q "journalctl -u caddy" "$log" || \
+    fail "R4B11-002: menu 6 restart failure must reach the journalctl guidance branch"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "R4B11-002: menu 6 must roll back the appended block when restart fails"
+)
+
+# R4B11-003: 安装路径判活改双采样后，flap 服务（第一次采样活、第二
+# 次已死）必须判安装失败且不印「安装完成」（旧实现单次采样必红）；
+# 恒活对照仍成功。
+test_install_flux_agent_rejects_flapping_service() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  SERVER_ADDR="panel.example.com:443"
+  SECRET="secret"
+  DOWNLOAD_URL="https://example.com/gost"
+
+  ask_proxy_config() { :; }
+  ensure_download_url_initialized() { :; }
+  get_config_params() { :; }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  sleep() { :; }
+  systemctl() {
+    if [[ "$*" == *MainPID* ]]; then
+      echo 4242
+    fi
+    return 0
+  }
+  curl() {
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+
+    cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+    chmod +x "$output"
+  }
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  echo 0 > "$state_dir/active_cnt"
+  STATE_DIR="$state_dir"
+  flux_agent_service_is_active() {
+    local n
+    n=$(cat "$STATE_DIR/active_cnt"); n=$((n+1)); echo "$n" > "$STATE_DIR/active_cnt"
+    [[ "$n" -le 1 ]]
+  }
+
+  local rc="0" log="$INSTALL_DIR/install.log"
+  ( install_flux_agent >"$log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R4B11-003: install must fail when the service flaps after start"
+  if grep -q "安装完成" "$log"; then
+    fail "R4B11-003: install must not print completion for a flapping service"
+  fi
+
+  flux_agent_service_is_active() { return 0; }
+  rc="0"
+  ( install_flux_agent >"$log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R4B11-003: install should succeed when the service stays healthy"
+  grep -q "安装完成" "$log" || \
+    fail "R4B11-003: healthy install should print completion"
+)
+
+# R4B11-005: delete_self 只在成功路径执行且文案与成败一致。夹具以
+# 子进程实跑 main（保留真实 delete_self）：失败时退出码非 0、脚本
+# 文件保留、无「操作已完成」；成功时脚本自删且有完成文案。
+test_main_delete_self_only_on_success() (
+  set -euo pipefail
+
+  local work
+  work=$(mktemp -d)
+
+  build_case() {
+    local name="$1" stub="$2"
+    local file="$work/$name.sh"
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$file"
+    cat >> "$file" <<STUBEOF
+$stub
+require_root_privileges() { return 0; }
+main
+STUBEOF
+    printf '%s' "$file"
+  }
+
+  local rc="0" file out
+
+  file=$(build_case del-fail 'install_flux_agent() { return 1; }')
+  rc="0"; out=$(printf '1\n' | bash "$file" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R4B11-005: failed install should exit non-zero"
+  [[ -f "$file" ]] || fail "R4B11-005: script must be kept after a failed operation"
+  if [[ "$out" == *"操作已完成"* ]]; then
+    fail "R4B11-005: failure path must not print 操作已完成"
+  fi
+  [[ "$out" == *"已保留"* ]] || \
+    fail "R4B11-005: failure path should say the script was kept for retry"
+
+  file=$(build_case del-ok 'install_flux_agent() { return 0; }')
+  rc="0"; out=$(printf '1\n' | bash "$file" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R4B11-005: successful install should exit 0"
+  [[ ! -f "$file" ]] || fail "R4B11-005: script should delete itself after success"
+  [[ "$out" == *"操作已完成"* ]] || \
+    fail "R4B11-005: success path should print the completion line"
+)
+
+# R4B11-004: main 的 root 前置检查。EUID 只读、夹具内无法伪造，
+# root 环境（本地沙箱）下跳过；非 root 环境（CI）实测 fail-fast。
+test_main_requires_root() (
+  set -euo pipefail
+  if [[ $EUID -eq 0 ]]; then
+    echo "skip: test_main_requires_root needs a non-root environment"
+    return 0
+  fi
+  local file rc="0"
+  file=$(mktemp)
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$file"
+  printf 'main\n' >> "$file"
+  bash "$file" >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R4B11-004: main must fail fast when not run as root"
+)
+
+# R4B11-006: 交互式密钥读取必须关回显；迁移 PG 口令不得再作为
+# docker run 的 pgloader 进程参数出现（改走只读挂载的命令文件）。
+test_script_secret_surfaces_closed() (
+  set -euo pipefail
+  grep -Fq 'read -s -p "密钥: "' "$ROOT_DIR/install.sh" || \
+    fail "R4B11-006: interactive secret prompt must use read -s"
+  if grep -Fq 'read -p "密钥: "' "$ROOT_DIR/install.sh"; then
+    fail "R4B11-006: the echoing secret prompt must not remain"
+  fi
+  if grep -F 'pgloader "$pgloader_source" "postgresql://' "$ROOT_DIR/panel_install.sh" >/dev/null; then
+    fail "R4B11-006: pgloader target URL carrying the password must not be a docker run argument"
+  fi
+  grep -Fq 'flmx-migrate.load' "$ROOT_DIR/panel_install.sh" || \
+    fail "R4B11-006: pgloader should receive its target via the mounted command file"
+  grep -Fq 'chmod 600 "$pgloader_load_file"' "$ROOT_DIR/panel_install.sh" || \
+    fail "R4B11-006: the pgloader command file must be created with 0600 permissions"
+)
+
+# R4B11-007: tcpkill 安装失败不得静默——check_and_install_tcpkill 在
+# 尝试后复检，缺失时必须给出点名受影响能力的告警（旧实现全部输出
+# 吞 /dev/null 且恒 return 0、无任何复检，本用例对旧代码必红）。
+test_tcpkill_missing_warns_instead_of_silent() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  attempt_install_tcpkill() { :; }
+  local out rc="0"
+  out=$(check_and_install_tcpkill 2>&1)
+  if command -v tcpkill >/dev/null 2>&1; then
+    [[ -z "$out" ]] || fail "R4B11-007: no warning expected when tcpkill is present"
+  else
+    [[ "$out" == *"tcpkill"* && "$out" == *"强制断开"* ]] || \
+      fail "R4B11-007: missing tcpkill must produce an explicit warning naming the affected capability"
+  fi
+
+  rc="0"
+  verify_tcpkill_available >/dev/null 2>&1 || rc="$?"
+  if command -v tcpkill >/dev/null 2>&1; then
+    assert_equals "0" "$rc" "R4B11-007: verify should pass when tcpkill exists"
+  else
+    assert_equals "1" "$rc" "R4B11-007: verify should fail when tcpkill is missing"
+  fi
+)
+
 test_install_script_respects_disabled_proxy
 test_install_script_never_asks_for_proxy_config
 test_install_script_builds_canonical_download_url
@@ -2196,5 +2522,14 @@ test_panel_install_script_ignores_eof_without_prompt
 test_install_flux_agent_returns_nonzero_when_service_not_active
 test_systemd_starts_reset_failed_before_start
 test_rollback_restarts_service_from_failed_state
+test_panel_menu5_preserves_front_block_after_menu6
+test_panel_menu5_rolls_back_on_validate_failure
+test_panel_menu5_restart_failure_rolls_back_with_guidance
+test_panel_menu6_restart_failure_rolls_back_with_guidance
+test_install_flux_agent_rejects_flapping_service
+test_main_delete_self_only_on_success
+test_main_requires_root
+test_script_secret_surfaces_closed
+test_tcpkill_missing_warns_instead_of_silent
 
 echo "install script tests passed"

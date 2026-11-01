@@ -437,16 +437,32 @@ show_menu() {
 }
 
 # 删除脚本自身
+# R4B11-005: 只在成功路径自删且文案与成败一致。旧实现被 main 无条件
+# 调用：操作失败后脚本仍被删、且恒印「操作已完成」，用户重试须重新
+# 下载脚本，自动化消费者也被文案误导。现按 main 传入的返回码分流：
+# 失败时保留脚本并给出失败文案。另补与 panel_install.sh 同口径的
+# /dev/fd 守卫：进程替换/管道执行时 $0 解析出的是 /dev/fd/* 而非脚本
+# 文件，不得对无关路径执行 rm、也不得照印「已删除」。
 delete_self() {
+  local rc="${1:-0}"
+  if [[ "$rc" != "0" ]]; then
+    echo ""
+    echo "⚠️ 操作未成功（退出码 $rc），脚本文件已保留，可直接重新运行重试"
+    return 0
+  fi
+  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+  if [[ "$SCRIPT_PATH" == /dev/fd/* ]]; then
+    return 0
+  fi
   echo ""
   echo "🗑️ 操作已完成，正在清理脚本文件..."
-  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
   sleep 1
   rm -f "$SCRIPT_PATH" && echo "✅ 脚本文件已删除" || echo "❌ 删除脚本文件失败"
 }
 
-# 检查并安装 tcpkill
-check_and_install_tcpkill() {
+# 尝试安装 tcpkill（各发行版分支；安装命令的输出保持静默，成败由
+# check_and_install_tcpkill 在事后统一复检并告警，见 R4B11-007）
+attempt_install_tcpkill() {
   # 检查 tcpkill 是否已安装
   if command -v tcpkill &> /dev/null; then
     return 0
@@ -509,7 +525,30 @@ check_and_install_tcpkill() {
       $SUDO_CMD xbps-install -Sy dsniff &> /dev/null
       ;;
   esac
-  
+
+  return 0
+}
+
+# R4B11-007: tcpkill 缺失复检。tcpkill 供 agent 的
+# ForceClosePortConnections 使用（强制断开指定端口上的现有连接）；
+# 缺失不阻断安装/更新，但不得静默——点名受影响的能力与补救方式。
+verify_tcpkill_available() {
+  if command -v tcpkill &> /dev/null; then
+    return 0
+  fi
+  echo "⚠️ tcpkill（dsniff 软件包）未能安装：节点将无法强制断开指定端口上的现有连接（规则/用户变更时的连接清理会缺失），其余功能不受影响；如需该能力，请手动安装 dsniff 后重试。"
+  return 1
+}
+
+# 检查并安装 tcpkill：安装（install_flux_agent）与更新
+# （update_flux_agent）两个调用点共用本入口，返回前统一复检存在性，
+# 缺失时明示告警（不阻断主流程，恒返回 0）。
+check_and_install_tcpkill() {
+  if command -v tcpkill &> /dev/null; then
+    return 0
+  fi
+  attempt_install_tcpkill
+  verify_tcpkill_available || true
   return 0
 }
 
@@ -850,7 +889,10 @@ get_config_params() {
     fi
     
     if [[ -z "$SECRET" ]]; then
-      read -p "密钥: " SECRET
+      # R4B11-006: 密钥读取关回显（-s），避免明文留在终端回显/
+      # 录屏/滚动回溯中；-s 不回显换行，读完补一个换行保持版面。
+      read -s -p "密钥: " SECRET
+      echo ""
     fi
     
     if [[ -z "$SERVER_ADDR" || -z "$SECRET" ]]; then
@@ -938,8 +980,13 @@ EOF
   # R2X-019 (R2-J-01): 判活结果必须进返回码——main（X-P3-6）只传播
   # 本函数给出的信号；旧实现失败分支末条是 echo 提示、恒返回 0，
   # 以退出码判断成败的自动化部署（-a/-s）会误判安装成功。
+  # R4B11-003: 判活口径与更新/回滚路径统一（X-P2-11）：先沉降 3 秒
+  # 让 flap 二进制越过最初的存活窗口，再走 flux_agent_health_ok 双
+  # 采样（间隔 2 秒、主 PID 稳定）。旧实现启动后立即单次 is-active，
+  # 同样的 flap 形态在全新安装时会被误报「安装完成」。
   echo "🔄 检查服务状态..."
-  if flux_agent_service_is_active; then
+  sleep 3
+  if flux_agent_health_ok; then
     echo "✅ 安装完成，flux_agent服务已启动并设置为开机启动。"
     echo "📁 配置目录: $INSTALL_DIR"
     echo "🔧 服务状态: $(flux_agent_service_status)"
@@ -1169,19 +1216,37 @@ uninstall_flux_agent() {
   echo "✅ 卸载完成"
 }
 
+# R4B11-004: 前置 root 检查（对齐 panel_install.sh 的 F-125）。安装/
+# 更新/卸载都要写 /etc/flux_agent 与系统服务文件；旧实现无此前置，
+# 非 root 运行要到 mkdir/下载落盘时才失败，且失败点落在下载分支、
+# 被误报为「下载失败，请检查网络」，掩盖真实根因（权限）。这里在
+# 任何落盘动作之前 fail-fast。独立成函数便于测试夹具以恒真桩承接
+# （X-P3-6 夹具以非 root 身份实跑 main 的返回码传播）。
+require_root_privileges() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "❌ install.sh 需要 root 权限运行（涉及 /etc/flux_agent 与系统服务写入）"
+    echo "   请使用 root 用户或 sudo 重新执行"
+    return 1
+  fi
+  return 0
+}
+
 # 主逻辑
 main() {
+  require_root_privileges || exit 1
+
   # X-P3-6 (J-03, BC-12): 各分支捕获操作函数返回码并以其退出。
   # 旧实现无条件 exit 0，菜单更新/卸载失败（函数以 return 1 报告）
   # 也被以退出码判断成败的自动化消费者误判为成功；成功路径仍
-  # exit 0、delete_self 行为不变。install_flux_agent 内部直接
-  # exit 1 的失败路径不受影响（进程已以 1 退出）。
+  # exit 0。delete_self 接收同一返回码分流（R4B11-005：失败保留
+  # 脚本、成功才自删）。install_flux_agent 内部直接 exit 1 的失败
+  # 路径不受影响（进程已以 1 退出）。
   local rc=0
 
   # 如果提供了命令行参数，直接执行安装
   if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
     install_flux_agent || rc=$?
-    delete_self
+    delete_self "$rc"
     exit "$rc"
   fi
 
@@ -1193,17 +1258,17 @@ main() {
     case $choice in
       1)
         install_flux_agent || rc=$?
-        delete_self
+        delete_self "$rc"
         exit "$rc"
         ;;
       2)
         update_flux_agent || rc=$?
-        delete_self
+        delete_self "$rc"
         exit "$rc"
         ;;
       3)
         uninstall_flux_agent || rc=$?
-        delete_self
+        delete_self "$rc"
         exit "$rc"
         ;;
       4)
