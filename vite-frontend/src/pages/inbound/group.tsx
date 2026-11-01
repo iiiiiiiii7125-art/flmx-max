@@ -45,7 +45,7 @@ export function GroupToggle({
   onChange: (g: GroupBy) => void;
 }) {
   return (
-    <div className="inline-grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1 text-xs">
+    <div className="inline-grid grid-cols-2 gap-1 rounded-xl bg-default-500/10 p-1 text-xs">
       {(
         [
           ["node", "按节点"],
@@ -55,9 +55,7 @@ export function GroupToggle({
         <button
           key={key}
           className={`rounded-lg px-3 py-1 transition-colors ${
-            value === key
-              ? "bg-background shadow-sm font-medium"
-              : "text-default-600"
+            value === key ? "bg-tray shadow-sm font-medium" : "text-default-600"
           }`}
           type="button"
           onClick={() => onChange(key)}

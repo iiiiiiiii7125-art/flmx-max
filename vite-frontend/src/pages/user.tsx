@@ -1188,10 +1188,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             <div className="flex w-full items-center gap-2 animate-appearance-in">
               <Input
                 classNames={{
-                  base: "bg-default-100",
+                  base: "bg-transparent",
                   input: "bg-transparent",
                   inputWrapper:
-                    "bg-default-100 border-2 border-default-200 hover:border-default-300 data-[hover=true]:border-default-300",
+                    "bg-content1 border-2 border-default-200 hover:border-default-300 data-[hover=true]:border-default-300",
                 }}
                 placeholder="搜索用户名"
                 value={searchKeyword}
@@ -1258,7 +1258,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : users.length === 0 ? (
-        <Card className="shadow-sm border border-gray-200 dark:border-gray-700 bg-default-50">
+        <Card className="shadow-sm">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无用户数据
@@ -1829,7 +1829,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               ((editingUser.dailyQuotaGB ?? 0) > 0 ||
                 (editingUser.monthlyQuotaGB ?? 0) > 0 ||
                 (editingUser.disabledByQuota ?? 0) > 0) && (
-                <div className="space-y-3 rounded-xl border border-default-200 bg-default-50 p-4">
+                <div className="glass-card space-y-3 rounded-xl p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-semibold text-foreground">
@@ -1851,14 +1851,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div className="rounded-lg bg-background p-3">
+                    <div className="rounded-lg bg-white/40 p-3">
                       <div className="text-xs text-default-500">每日用量</div>
                       <div className="mt-1 text-sm font-semibold text-foreground">
                         {formatFlow(Number(editingUser.dailyUsedBytes ?? 0))} /{" "}
                         {formatQuotaLimit(editingUser.dailyQuotaGB)}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-background p-3">
+                    <div className="rounded-lg bg-white/40 p-3">
                       <div className="text-xs text-default-500">每月用量</div>
                       <div className="mt-1 text-sm font-semibold text-foreground">
                         {formatFlow(Number(editingUser.monthlyUsedBytes ?? 0))}{" "}
@@ -1971,7 +1971,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               {/* 监控权限部分 */}
               <div>
                 <h3 className="text-lg font-semibold mb-4">监控权限</h3>
-                <div className="flex items-center justify-between gap-4 bg-default-100 dark:bg-default-50 p-4 rounded-lg border border-default-200 dark:border-default-100/30">
+                <div className="flex items-center justify-between gap-4 bg-white/40 p-4 rounded-lg border border-divider">
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-foreground">
                       允许访问监控功能
@@ -2006,7 +2006,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <div>
                 <h3 className="text-lg font-semibold mb-4">分配新权限</h3>
                 <div className="space-y-4">
-                  <div className="text-sm text-default-500 bg-default-100 dark:bg-default-50 p-3 rounded-lg border border-default-200 dark:border-default-100/30">
+                  <div className="text-sm text-default-500 bg-white/40 p-3 rounded-lg border border-divider">
                     流量限制、规则数量、到期时间、流量重置时间将自动继承用户设置
                   </div>
 
@@ -2026,10 +2026,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                             px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer
                             ${
                               isAssigned
-                                ? "bg-default-100 dark:bg-default-50 border-default-200/50 dark:border-default-100/20 opacity-60 cursor-not-allowed"
+                                ? "bg-white/40 border-divider opacity-60 cursor-not-allowed"
                                 : isSelected
-                                  ? "bg-primary-50 dark:bg-primary-900 border-primary-300 dark:border-primary-500/50 shadow-sm"
-                                  : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
+                                  ? "bg-primary-500/10 border-primary-300 shadow-sm"
+                                  : "glass-card border-divider hover:border-primary-200 hover:shadow-sm"
                             }
                           `}
                           role="button"
@@ -2127,7 +2127,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                       );
                     })}
                     {tunnels.length === 0 && (
-                      <div className="p-8 text-center text-default-400 bg-default-50 dark:bg-default-100 rounded-lg border border-dashed border-default-200 dark:border-default-100/30">
+                      <div className="p-8 text-center text-default-400 rounded-lg border border-dashed border-divider">
                         暂无可用隧道
                       </div>
                     )}

@@ -300,7 +300,7 @@ export function NodeTuneModal({
                           {job.percent}% · {job.message}
                         </p>
                         {job.logs && (
-                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-default-100 p-2 font-mono text-[11px] text-default-600">
+                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white/40 p-2 font-mono text-[11px] text-default-600">
                             {job.logs}
                           </pre>
                         )}
@@ -424,7 +424,7 @@ export function NodeTuneModal({
                                 {deepBudget} GB）
                               </span>
                             </label>
-                            <div className="space-y-1 rounded-lg bg-default-100 p-2">
+                            <div className="space-y-1 rounded-lg bg-white/40 p-2">
                               <p className="text-xs text-default-600">
                                 单流探测未发现拐点时可用：填入你用多流
                                 sweep 实测的拐点附近整形值（如 4710
@@ -435,7 +435,7 @@ export function NodeTuneModal({
                               <div className="flex flex-wrap items-center gap-2">
                                 <input
                                   aria-label="手动整形速率（Mbps）"
-                                  className="w-32 rounded-md border border-divider bg-background px-2 py-1 text-xs"
+                                  className="w-32 rounded-md border border-divider bg-content1 px-2 py-1 text-xs"
                                   inputMode="numeric"
                                   placeholder="如 4710"
                                   type="number"

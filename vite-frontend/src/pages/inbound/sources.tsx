@@ -314,7 +314,7 @@ export function RemoteSourcesSection({
             return (
               <div
                 key={s.id}
-                className="flex cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
+                className="glass-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
                 role="button"
                 tabIndex={0}
                 onClick={() => setDraft(draftOf(s))}
@@ -339,7 +339,7 @@ export function RemoteSourcesSection({
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-medium">{s.name}</span>
                     {s.kind === "file" && (
-                      <span className="shrink-0 rounded-full bg-default-100 px-1.5 py-0.5 text-[10px] text-default-600">
+                      <span className="shrink-0 rounded-full bg-tray px-1.5 py-0.5 text-[10px] text-default-600">
                         文件
                       </span>
                     )}
@@ -602,7 +602,7 @@ export function FilePick({
   return (
     <div className="space-y-1">
       <button
-        className="flex w-full items-center gap-2 rounded-xl border border-dashed border-divider px-3 py-3 text-left text-sm hover:bg-default-100"
+        className="flex w-full items-center gap-2 rounded-xl border border-dashed border-divider px-3 py-3 text-left text-sm hover:bg-white/40"
         type="button"
         onClick={() => input.current?.click()}
       >

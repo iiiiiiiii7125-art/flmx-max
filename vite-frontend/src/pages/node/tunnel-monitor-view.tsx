@@ -1430,7 +1430,7 @@ export function TunnelMonitorView({
                 <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative flex-shrink-0">
-                      <div className="w-10 h-10 rounded-xl bg-default-100 flex items-center justify-center border border-divider">
+                      <div className="w-10 h-10 rounded-xl bg-tray flex items-center justify-center border border-divider">
                         <ArrowRightLeft
                           className={`w-5 h-5 ${isEnabled ? "text-success" : "text-danger"}`}
                         />

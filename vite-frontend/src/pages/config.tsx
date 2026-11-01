@@ -122,7 +122,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "app_bg_image",
     label: "主界面壁纸",
     description:
-      "登录后主界面的背景。默认背景用于未单独设置壁纸的模式。可分别上传亮色和暗色壁纸，保存后随外观模式自动切换。",
+      "登录后主界面的背景。默认背景用于未单独设置壁纸的情况；也可单独上传一张壁纸覆盖默认背景（应用只有亮色模式，无需分模式上传）。",
     type: "bg_image",
   },
   {
@@ -1093,7 +1093,7 @@ export default function ConfigPage() {
         {bgImage && isWallpaper && (
           <div className="relative rounded-xl border border-divider bg-background h-32 flex items-center justify-center">
             <span className="text-foreground text-sm font-medium">
-              当前为内置壁纸（亮色 / 暗色各一张）
+              当前为内置壁纸
             </span>
           </div>
         )}
@@ -1270,7 +1270,9 @@ export default function ConfigPage() {
 
     switch (item.type) {
       case "bg_image":
-        // 登录页壁纸：单个上传器；主界面壁纸：默认+亮色/暗色三个上传器
+        // 登录页壁纸：单个上传器；主界面壁纸：默认+单独壁纸两个上传器。
+        // 暗色模式已下线（2026-11-02），不再提供暗色壁纸上传器；
+        // app_bg_image_dark 配置键仅保留数据兼容，界面不再读写展示。
         if (item.key === "login_bg_image") {
           return renderBgImageUploader("login_bg_image", item.label);
         }
@@ -1280,8 +1282,7 @@ export default function ConfigPage() {
             <div className="lg:col-span-2">
               {renderBgImageUploader("app_bg_image", "默认背景")}
             </div>
-            {renderBgImageUploader("app_bg_image_light", "☀️ 亮色模式壁纸")}
-            {renderBgImageUploader("app_bg_image_dark", "🌙 暗色模式壁纸")}
+            {renderBgImageUploader("app_bg_image_light", "☀️ 壁纸")}
           </div>
         );
 
@@ -1613,7 +1614,7 @@ export default function ConfigPage() {
                 aria-pressed={isSelected}
                 className={`w-full px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer text-left ${
                   isSelected
-                    ? "bg-primary-50 dark:bg-primary-900 border-primary-300 dark:border-primary-500/50 shadow-sm"
+                    ? "bg-primary-500/10 border-primary-300 shadow-sm"
                     : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
                 }`}
                 type="button"
@@ -1800,7 +1801,7 @@ export default function ConfigPage() {
             </div>
 
             {systemUpgradeLoading ? (
-              <div className="flex items-center gap-2 rounded-lg border border-divider bg-background px-4 py-3 text-sm text-default-500">
+              <div className="flex items-center gap-2 rounded-lg border border-divider bg-white/40 px-4 py-3 text-sm text-default-500">
                 <Spinner size="sm" />
                 正在加载升级状态...
               </div>
@@ -1847,7 +1848,7 @@ export default function ConfigPage() {
                 </div>
 
                 {!systemUpgradeInfo?.capability.capable && (
-                  <div className="rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950 dark:text-warning-200">
+                  <div className="rounded-lg border border-warning-300 bg-warning-500/10 px-4 py-3 text-warning-800">
                     <p className="text-xs font-medium">当前无法升级</p>
                     <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
                       {(systemUpgradeInfo?.capability.reasons?.length
@@ -1862,7 +1863,7 @@ export default function ConfigPage() {
 
                 {/* P3-2：升级状态来自后端状态接口，页面刷新/后端重启后不丢失 */}
                 {systemUpgradeStatus?.inProgress && (
-                  <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-primary-800 dark:border-primary-900/40 dark:bg-primary-950 dark:text-primary-200">
+                  <div className="flex items-center gap-2 rounded-lg border border-primary-300 bg-primary-500/10 px-4 py-3 text-primary-800">
                     <Spinner size="sm" />
                     <p className="text-xs font-medium">
                       升级进行中
@@ -2033,7 +2034,7 @@ export default function ConfigPage() {
       </div>
 
       {hasChanges && (
-        <Card className="mt-4 border-warning-200 dark:border-warning-800 shadow-sm overflow-hidden [&>div]:bg-warning-50 [&>div]:dark:bg-warning-900">
+        <Card className="mt-4 border-warning-200 shadow-sm overflow-hidden [&>div]:bg-warning-500/10">
           <div className="h-10 flex items-center justify-center gap-2 text-warning-700 dark:text-warning-300">
             <div className="w-2 h-2 bg-warning-500 rounded-full animate-pulse flex-shrink-0" />
             <span className="text-sm font-medium leading-none">

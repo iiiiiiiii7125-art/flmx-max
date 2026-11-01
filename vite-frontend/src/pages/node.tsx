@@ -1495,7 +1495,7 @@ export default function NodePage({
     node.isRemote !== 1 && node.connectionStatus === "online" ? (
       node.latencyTargets?.points.length === 0 ? (
         <button
-          className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
+          className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
           title="这台节点没选测试点，点此设置"
           type="button"
           onClick={(e) => {
@@ -1507,7 +1507,7 @@ export default function NodePage({
         </button>
       ) : latencyPoolEmpty === true ? (
         <button
-          className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
+          className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
           title="还没有配置延迟测试点，点此去设置添加"
           type="button"
           onClick={(e) => {
@@ -2086,7 +2086,7 @@ export default function NodePage({
                                   <div className="group/info relative">
                                     <button
                                       aria-label={`查看节点信息，共 ${infoCount} 项`}
-                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-background text-default-500 shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
+                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-tray text-default-500 shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
                                       type="button"
                                       onFocus={(event) =>
                                         updateInfoPopoverPlacement(
@@ -2120,7 +2120,7 @@ export default function NodePage({
                                       )}
                                     </button>
                                     <div
-                                      className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl border border-divider/80 bg-background p-3 opacity-0 shadow-lg backdrop-blur transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
+                                      className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl glass-surface p-3 opacity-0 shadow-lg transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
                                         infoPlacement === "bottom"
                                           ? "right-0 top-[calc(100%+0.75rem)] translate-y-1 group-hover/info:translate-y-0 group-focus-within/info:translate-y-0"
                                           : "right-[calc(100%+0.75rem)] top-1/2 -translate-y-1/2 translate-x-1 group-hover/info:translate-x-0 group-focus-within/info:translate-x-0"
@@ -2157,7 +2157,7 @@ export default function NodePage({
                                                 {expiryMeta.label}
                                               </Chip>
                                             </div>
-                                            <div className="rounded-lg border border-divider/80 bg-default-50 px-3 py-2 text-xs leading-5 text-default-700">
+                                            <div className="rounded-lg border border-divider/80 bg-white/40 px-3 py-2 text-xs leading-5 text-default-700">
                                               {formatNodeRenewalTime(
                                                 expiryMeta.nextDueTime,
                                               )}
@@ -2171,7 +2171,7 @@ export default function NodePage({
                                               备注
                                             </div>
                                             <div
-                                              className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 bg-default-50 px-3 py-2 text-xs leading-5 text-default-700 break-all [scrollbar-width:thin]"
+                                              className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 bg-white/40 px-3 py-2 text-xs leading-5 text-default-700 break-all [scrollbar-width:thin]"
                                               title={node.remark?.trim()}
                                             >
                                               {node.remark?.trim()}
@@ -2188,7 +2188,7 @@ export default function NodePage({
 
                           <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
                             {isRemoteNode && node.syncError && (
-                              <div className="mb-3 px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-900 text-warning-700 dark:text-warning-400 text-xs">
+                              <div className="mb-3 px-2 py-1.5 rounded-md bg-warning-500/10 text-warning-700 text-xs">
                                 {getRemoteSyncErrorMessage(node.syncError)}
                               </div>
                             )}
@@ -2288,7 +2288,7 @@ export default function NodePage({
                               <div className="space-y-3 mb-4">
                                 {remoteUsage ? (
                                   <>
-                                    <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100 p-2.5 space-y-2">
+                                    <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5 space-y-2">
                                       <div className="flex justify-between gap-2">
                                         <span className="text-default-500">
                                           远程地址
@@ -2336,7 +2336,7 @@ export default function NodePage({
                                       </div>
                                     </div>
 
-                                    <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100 p-2.5">
+                                    <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5">
                                       <div className="flex items-center justify-between mb-2">
                                         <span className="text-default-500">
                                           占用端口
@@ -2351,7 +2351,7 @@ export default function NodePage({
                                           )}
                                         </span>
                                       </div>
-                                      <div className="max-h-20 overflow-y-auto rounded bg-default-100 p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
+                                      <div className="max-h-20 overflow-y-auto rounded bg-white/40 p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
                                         {remoteUsage.usedPorts.length > 0 ? (
                                           <div className="flex flex-wrap gap-1">
                                             {remoteUsage.usedPorts.map(
@@ -2375,7 +2375,7 @@ export default function NodePage({
                                       </div>
                                     </div>
 
-                                    <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100 p-2.5">
+                                    <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5">
                                       <div className="flex items-center justify-between mb-2">
                                         <span className="text-default-500">
                                           绑定明细
@@ -2426,7 +2426,7 @@ export default function NodePage({
                                     </div>
                                   </>
                                 ) : (
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100 p-2.5 text-default-500">
+                                  <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5 text-default-500">
                                     暂未获取到远程占用数据
                                   </div>
                                 )}
@@ -2824,7 +2824,7 @@ export default function NodePage({
             {node && (
               <div className="space-y-2 text-sm">
                 {isRemoteNode && node.syncError && (
-                  <p className="rounded-lg bg-warning-50 px-2 py-1.5 text-xs text-warning-700 dark:bg-warning-900 dark:text-warning-400">
+                  <p className="rounded-lg bg-warning-500/10 px-2 py-1.5 text-xs text-warning-700">
                     {getRemoteSyncErrorMessage(node.syncError)}
                   </p>
                 )}

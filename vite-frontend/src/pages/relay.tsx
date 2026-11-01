@@ -204,7 +204,7 @@ function LinesView() {
       </div>
 
       {shown.length === 0 ? (
-        <Card className="bg-default-50 shadow-sm">
+        <Card className="shadow-sm">
           <CardBody className="py-12 text-center text-sm text-default-500">
             {inbounds.length === 0
               ? "还没有落地。先在“落地”里搭建或导入节点，再回来对接中转。"
@@ -219,7 +219,7 @@ function LinesView() {
             return (
               <div
                 key={i.id}
-                className="flex flex-col gap-3 rounded-2xl border border-divider bg-content1 p-4 shadow-sm"
+                className="glass-card flex flex-col gap-3 rounded-2xl p-4"
               >
                 <div>
                   <div className="flex items-center gap-1.5">
@@ -245,7 +245,7 @@ function LinesView() {
                       return (
                         <div
                           key={l.id}
-                          className="rounded-xl bg-default-100 px-3 py-2"
+                          className="rounded-xl bg-white/40 px-3 py-2"
                         >
                           <div className="flex items-center gap-2 text-sm">
                             <span
@@ -307,7 +307,7 @@ function LinesView() {
             return (
               <div
                 key={i.id}
-                className="cursor-pointer rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
+                className="glass-card cursor-pointer rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
                 role="button"
                 tabIndex={0}
                 onClick={() => setEditing(i)}
@@ -401,14 +401,12 @@ export default function RelayPage() {
   };
 
   const tabBar = (
-    <div className="grid grid-cols-4 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+    <div className="glass-surface grid grid-cols-4 gap-1 rounded-xl p-1 sm:max-w-md">
       {TABS.map((t) => (
         <button
           key={t.key}
           className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
-            tab === t.key
-              ? "bg-background font-medium shadow-sm"
-              : "text-default-600"
+            tab === t.key ? "bg-tray font-medium shadow-sm" : "text-default-600"
           }`}
           type="button"
           onClick={() => setTab(t.key)}

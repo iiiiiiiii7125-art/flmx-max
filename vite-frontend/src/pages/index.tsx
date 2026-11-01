@@ -326,21 +326,17 @@ export default function IndexPage() {
               }}
             />
             {/* 验证码容器 */}
-            <div className="mb-4 relative z-50 bg-white dark:bg-zinc-900 p-6 rounded-lg shadow-xl">
+            <div className="glass-surface mb-4 relative z-50 p-6 rounded-lg shadow-xl">
               <div className="mb-4 text-center text-sm font-medium text-gray-700 dark:text-gray-200">
                 请完成安全验证
               </div>
               <div className="flex justify-center">
                 <Turnstile
                   options={{
-                    theme: (document.documentElement.classList.contains(
-                      "dark",
-                    ) ||
-                    document.documentElement.getAttribute("data-theme") ===
-                      "dark" ||
-                    window.matchMedia("(prefers-color-scheme: dark)").matches
-                      ? "dark"
-                      : "light") as "light" | "dark" | "auto",
+                    // LIGHT-ONLY: the app has no dark mode (removed
+                    // 2026-11-02), so the captcha widget is pinned to
+                    // its light theme instead of probing class/OS.
+                    theme: "light",
                   }}
                   siteKey={siteKey}
                   onError={() => {

@@ -397,7 +397,7 @@ function ChainRoleButtons({
                 ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-900"
                 : r === "relay"
                   ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-900"
-                  : "border-default-400 bg-default-100 text-default-700"
+                  : "border-divider bg-tray text-default-700"
               : "border-default-200 text-default-500 hover:border-default-400 dark:border-default-100"
           }`}
           type="button"
@@ -640,7 +640,7 @@ function Editor({
             </label>
             <div className="flex gap-2">
               <input
-                className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
+                className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-content1 px-2 text-sm"
                 id="sub-expire"
                 type="date"
                 value={draft.expire}
@@ -671,7 +671,7 @@ function Editor({
             <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
                 <input
-                  className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
+                  className="h-10 w-full rounded-lg border border-divider bg-content1 px-2 pr-9 text-sm"
                   id="sub-limit"
                   inputMode="decimal"
                   placeholder="不限"
@@ -701,7 +701,7 @@ function Editor({
                 每月重置
               </label>
               <select
-                className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
+                className="h-9 rounded-lg border border-divider bg-content1 px-2 text-sm"
                 id="sub-reset-day"
                 value={draft.resetDay}
                 onChange={(e) => set({ resetDay: Number(e.target.value) })}
@@ -1084,7 +1084,7 @@ function Editor({
             <p className="text-xs font-medium">自定义脚本</p>
             <p className="text-xs text-default-500">
               对处理后的节点再做筛选、改名、排序。写一个{" "}
-              <code className="rounded bg-default-100 px-1">
+              <code className="rounded bg-tray px-1">
                 function operator(nodes)
               </code>{" "}
               函数返回新的节点数组；每个节点有
@@ -1357,7 +1357,7 @@ export default function SubscriptionPage() {
   const card = (s: SubscriptionItem) => (
     <div
       key={s.id}
-      className="flex cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
+      className="glass-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
       role="button"
       tabIndex={0}
       onClick={() => setDetail(s)}
@@ -1456,7 +1456,7 @@ export default function SubscriptionPage() {
       </div>
 
       {/* 订阅管理 / 订阅分配 Tab */}
-      <div className="grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1">
+      <div className="glass-surface grid grid-cols-2 gap-1 rounded-xl p-1">
         {(
           [
             { key: "manage", label: "订阅管理" },
@@ -1467,7 +1467,7 @@ export default function SubscriptionPage() {
             key={t.key}
             className={`rounded-lg px-3 py-2 text-sm font-medium transition-all ${
               tab === t.key
-                ? "bg-white dark:bg-default-50 shadow-sm"
+                ? "bg-tray shadow-sm"
                 : "text-default-500 hover:text-foreground"
             }`}
             onClick={() => setTab(t.key)}
@@ -1491,7 +1491,7 @@ export default function SubscriptionPage() {
       {tab === "manage" && (
         <>
           {inbounds.length === 0 && (
-            <Card className="bg-default-50 shadow-sm">
+            <Card className="shadow-sm">
               <CardBody className="py-6 text-center text-sm text-default-500">
                 还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容。
               </CardBody>
@@ -1533,7 +1533,7 @@ export default function SubscriptionPage() {
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
-                  <div className="space-y-2 rounded-xl bg-default-100 p-3">
+                  <div className="space-y-2 rounded-xl bg-white/40 p-3">
                     <Usage s={detail} />
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-default-500">
@@ -1586,7 +1586,7 @@ export default function SubscriptionPage() {
                       return (
                         <div
                           key={c.key}
-                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-default-100"
+                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-white/40"
                         >
                           <button
                             className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
@@ -1600,7 +1600,7 @@ export default function SubscriptionPage() {
                           </button>
                           <button
                             aria-label={`复制 ${c.label} 订阅链接`}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-default-400 hover:bg-default-200 hover:text-default-600"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-default-400 hover:bg-white/40 hover:text-default-600"
                             type="button"
                             onClick={() =>
                               copyText(link, `${c.label} 订阅已复制`)

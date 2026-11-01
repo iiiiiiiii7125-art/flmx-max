@@ -148,7 +148,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
             ["合计", shown ? shown.up + shown.down : undefined, "", ""],
           ] as Array<[string, number | undefined, string, string]>
         ).map(([label, value, color, textColor]) => (
-          <div key={label} className="rounded-xl bg-default-100 px-3 py-2">
+          <div key={label} className="rounded-xl bg-white/40 px-3 py-2">
             <div className="flex items-center gap-1.5 text-xs text-default-500">
               {color && (
                 <span
@@ -207,7 +207,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
                     if (!active || !p) return null;
 
                     return (
-                      <div className="rounded-xl border border-divider bg-content1 px-3 py-2 text-xs shadow-lg">
+                      <div className="glass-surface rounded-xl px-3 py-2 text-xs shadow-lg">
                         <p className="font-medium">{p.long}</p>
                         <p className={`mt-1 ${DOWN_TEXT}`}>
                           下载 {bytes(p.down)}
@@ -276,7 +276,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
           </div>
 
           <div className="overflow-hidden rounded-xl border border-divider">
-            <div className="grid grid-cols-[4.75rem_minmax(0,1fr)_4.5rem] gap-2 bg-default-100 px-3 py-1.5 text-xs text-default-500">
+            <div className="grid grid-cols-[4.75rem_minmax(0,1fr)_4.5rem] gap-2 px-3 py-1.5 text-xs text-default-500">
               <span>时间</span>
               <span>下载 / 上传</span>
               <span className="text-right">合计</span>

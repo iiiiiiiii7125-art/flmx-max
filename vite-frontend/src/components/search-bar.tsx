@@ -56,10 +56,10 @@ export function SearchBar({
           >
             <Input
               classNames={{
-                base: "bg-default-100",
+                base: "bg-transparent",
                 input:
                   "bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none",
-                inputWrapper: "bg-default-100 border-0 shadow-none h-8 min-h-8",
+                inputWrapper: "bg-content1 border-0 shadow-none h-8 min-h-8",
               }}
               placeholder={placeholder}
               value={value}

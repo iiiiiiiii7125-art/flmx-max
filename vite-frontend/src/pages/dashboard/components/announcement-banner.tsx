@@ -16,7 +16,7 @@ export const AnnouncementBanner = ({
   }
 
   return (
-    <Card className="mb-4 lg:mb-6 border-primary/20 dark:border-primary/25 shadow-sm [&>div]:bg-primary-50 [&>div]:dark:bg-primary-900">
+    <Card className="mb-4 lg:mb-6 border-primary/20 shadow-sm [&>div]:bg-primary-500/10">
       <CardBody className="p-4 sm:p-5">
         <div className="flex items-center gap-3.5 sm:gap-4">
           <div className="w-10 h-10 sm:w-11 sm:h-11 bg-white dark:bg-primary-900 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm border border-primary/20 dark:border-primary/25">

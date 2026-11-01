@@ -645,14 +645,14 @@ export function AdminOverview() {
                           {g.items.slice(0, 6).map((it) => (
                             <span
                               key={it.name}
-                              className="max-w-[12rem] truncate rounded-full border border-divider bg-content1 px-2 py-0.5 text-xs text-default-700"
+                              className="max-w-[12rem] truncate rounded-full border border-divider bg-tray px-2 py-0.5 text-xs text-default-700"
                               title={it.detail}
                             >
                               {it.name}
                             </span>
                           ))}
                           {g.items.length > 6 && (
-                            <span className="rounded-full border border-divider bg-content1 px-2 py-0.5 text-xs text-default-500">
+                            <span className="rounded-full border border-divider bg-tray px-2 py-0.5 text-xs text-default-500">
                               +{g.items.length - 6}
                             </span>
                           )}
@@ -691,7 +691,7 @@ export function AdminOverview() {
                   return (
                     <button
                       key={n.id}
-                      className="flex items-center gap-2.5 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-50"
+                      className="flex items-center gap-2.5 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-white/40"
                       type="button"
                       onClick={() => navigate("/node")}
                     >
@@ -727,10 +727,7 @@ export function AdminOverview() {
                   ["↓ 下载", down],
                 ] as Array<[string, number]>
               ).map(([label, bytes]) => (
-                <div
-                  key={label}
-                  className="rounded-xl bg-default-100 px-3 py-2"
-                >
+                <div key={label} className="rounded-xl bg-white/40 px-3 py-2">
                   <div className="text-xs text-default-500">{label}</div>
                   <div className="font-mono text-base font-semibold">
                     {formatTraffic(bytes)}

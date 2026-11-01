@@ -223,7 +223,7 @@ export default function ProfilePage() {
                 adminMenuItems.map((item) => (
                   <button
                     key={item.path}
-                    className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
+                    className="glass-card flex flex-col items-center p-3 rounded-2xl hover:bg-white/40 transition-colors duration-200"
                     onClick={() => navigate(item.path)}
                   >
                     <div
@@ -239,7 +239,7 @@ export default function ProfilePage() {
 
               {/* 修改密码 */}
               <button
-                className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
+                className="glass-card flex flex-col items-center p-3 rounded-2xl hover:bg-white/40 transition-colors duration-200"
                 onClick={onOpen}
               >
                 <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-2">
@@ -262,7 +262,7 @@ export default function ProfilePage() {
 
               {/* 退出登录 */}
               <button
-                className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
+                className="glass-card flex flex-col items-center p-3 rounded-2xl hover:bg-white/40 transition-colors duration-200"
                 onClick={handleLogout}
               >
                 <div className="w-10 h-10 bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-2">

@@ -271,7 +271,7 @@ export function KernelPanel({
     return (
       <div
         key={k.id}
-        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-default-100"
+        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/40"
         role="button"
         tabIndex={0}
         onClick={() => setSheetFor(k.id)}
@@ -332,7 +332,7 @@ export function KernelPanel({
       </div>
 
       {kernels.length === 0 ? (
-        <Card className="shadow-sm bg-default-50">
+        <Card className="shadow-sm">
           <CardBody className="text-center py-10 text-sm text-default-500">
             还没有在任何节点上安装内核。点击“安装内核”，先在落地节点上安装
             Xray，再到“入站”里创建节点。
@@ -663,7 +663,7 @@ export function KernelPanel({
                 )}
               </ModalHeader>
               <ModalBody>
-                <pre className="text-xs whitespace-pre-wrap break-all bg-default-100 rounded-xl p-3 max-h-[60vh] overflow-auto">
+                <pre className="text-xs whitespace-pre-wrap break-all bg-white/40 rounded-xl p-3 max-h-[60vh] overflow-auto">
                   {logsLoading
                     ? "加载中..."
                     : (logs?.logs ?? []).join("\n") || "暂无日志"}

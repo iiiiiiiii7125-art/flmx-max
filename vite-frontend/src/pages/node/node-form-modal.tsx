@@ -509,10 +509,10 @@ export function NodeFormModal({
                       />
                     )}
                     <div
-                      className={`grid grid-cols-1 sm:grid-cols-3 gap-3 bg-content1 dark:bg-content1 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
+                      className={`grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
                     >
                       {/* HTTP tile */}
-                      <div className="px-3 py-3 rounded-lg bg-content1 dark:bg-content1 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
+                      <div className="px-3 py-3 rounded-lg bg-white/40 border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -553,7 +553,7 @@ export function NodeFormModal({
                       </div>
 
                       {/* TLS tile */}
-                      <div className="px-3 py-3 rounded-lg bg-content1 dark:bg-content1 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
+                      <div className="px-3 py-3 rounded-lg bg-white/40 border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -591,7 +591,7 @@ export function NodeFormModal({
                       </div>
 
                       {/* SOCKS tile */}
-                      <div className="px-3 py-3 rounded-lg bg-content1 dark:bg-content1 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
+                      <div className="px-3 py-3 rounded-lg bg-white/40 border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"

@@ -94,7 +94,7 @@ export function PageTabs<T extends string>({
 }) {
   return (
     <div
-      className="mb-4 grid gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md"
+      className="glass-surface mb-4 grid gap-1 rounded-xl p-1 sm:max-w-md"
       role="tablist"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
     >
@@ -104,7 +104,7 @@ export function PageTabs<T extends string>({
           aria-selected={value === t.key}
           className={`truncate rounded-lg px-3 py-1.5 text-sm transition-colors ${
             value === t.key
-              ? "bg-background font-medium shadow-sm"
+              ? "bg-tray font-medium shadow-sm"
               : "text-default-500"
           }`}
           role="tab"
@@ -147,7 +147,7 @@ export function PageToolbar({
   return (
     <div className="mb-3 flex items-center gap-2">
       {onSearch && (
-        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-default-100 px-3 sm:max-w-xs">
+        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-content1 px-3 sm:max-w-xs">
           <Search className="h-4 w-4 shrink-0 text-default-400" />
           <input
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-400"
@@ -333,12 +333,12 @@ export function ListRow({
   return (
     <div
       aria-pressed={selectMode ? selected : undefined}
-      className={`flex w-full cursor-pointer gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
+      className={`flex w-full cursor-pointer gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${
         footer && !selectMode ? "flex-col" : "items-center"
       } ${
         selected
-          ? "border-primary bg-primary-50 dark:bg-primary-900"
-          : "border-divider bg-content1 hover:bg-default-100"
+          ? "glass-card border-primary bg-primary-500/10"
+          : "glass-card hover:bg-white/40"
       }`}
       role="button"
       tabIndex={0}

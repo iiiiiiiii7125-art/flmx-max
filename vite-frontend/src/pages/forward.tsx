@@ -825,7 +825,7 @@ const SortableTableRow = ({
     zIndex: isDragging ? 50 : undefined,
     position: isDragging ? ("relative" as const) : undefined,
     willChange: "transform",
-    backgroundColor: isDragging ? "var(--nextui-default-100)" : undefined,
+    backgroundColor: isDragging ? "rgba(255,255,255,0.4)" : undefined,
   };
 
   const strategyDisplay = getStrategyDisplay(forward.strategy);
@@ -870,7 +870,7 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.inbound} max-w-[280px]`}
       >
         <button
-          className="w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
+          className="w-full truncate rounded-md bg-white/40 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-white/60 hover:shadow-sm cursor-pointer"
           title={formatInAddress(forward.inIp, forward.inPort)}
           type="button"
           onClick={() =>
@@ -884,7 +884,7 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.target} max-w-[280px]`}
       >
         <button
-          className="w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
+          className="w-full truncate rounded-md bg-white/40 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-white/60 hover:shadow-sm cursor-pointer"
           title={formatRemoteAddress(forward.remoteAddr)}
           type="button"
           onClick={() => showAddressModal(forward.remoteAddr, null, "目标地址")}
@@ -1051,7 +1051,7 @@ const SortableCompactTableRow = ({
     zIndex: isDragging ? 50 : undefined,
     position: isDragging ? ("relative" as const) : undefined,
     willChange: "transform",
-    backgroundColor: isDragging ? "var(--nextui-default-100)" : undefined,
+    backgroundColor: isDragging ? "rgba(255,255,255,0.4)" : undefined,
   };
 
   const strategyDisplay = getStrategyDisplay(forward.strategy);
@@ -1117,9 +1117,9 @@ const SortableCompactTableRow = ({
         className={`max-w-[220px] ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <button
-          className={`w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
+          className={`w-full truncate rounded-md bg-white/40 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
             hasMultipleAddresses(forward.inIp)
-              ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
+              ? "hover:bg-white/60 hover:shadow-sm cursor-pointer"
               : "cursor-default"
           }`}
           title={formatInAddress(forward.inIp, forward.inPort)}
@@ -1135,9 +1135,9 @@ const SortableCompactTableRow = ({
         className={`max-w-[240px] ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <button
-          className={`w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
+          className={`w-full truncate rounded-md bg-white/40 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
             hasMultipleAddresses(forward.remoteAddr)
-              ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
+              ? "hover:bg-white/60 hover:shadow-sm cursor-pointer"
               : "cursor-default"
           }`}
           title={formatRemoteAddress(forward.remoteAddr)}
@@ -4455,7 +4455,7 @@ export default function ForwardPage() {
                       classNames={{
                         wrapper:
                           "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                        th: "bg-default-100 text-default-600 font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                        th: "text-default-600 font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                         td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                         tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors group",
                       }}
@@ -4595,7 +4595,7 @@ export default function ForwardPage() {
                   key={`grouped-table-${group.userId}-${group.userName}`}
                   className="glass-card rounded-2xl shadow-sm"
                 >
-                  <div className="flex items-center justify-between border-b border-divider bg-default-100 px-5 py-4">
+                  <div className="flex items-center justify-between border-b border-divider px-5 py-4">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">
                         {group.userName}
@@ -4681,7 +4681,7 @@ export default function ForwardPage() {
                               collapsed={collapsed}
                               countClassName="text-xs text-default-600"
                               groupUserId={group.userId}
-                              headerClassName="flex items-center justify-between border-b border-divider bg-default-100 px-4 py-2.5"
+                              headerClassName="flex items-center justify-between border-b border-divider px-4 py-2.5"
                               titleClassName="truncate text-sm font-semibold text-default-700"
                               tunnel={tunnel}
                               wrapperClassName="rounded-2xl"
@@ -4906,10 +4906,10 @@ export default function ForwardPage() {
                             collapsed={collapsed}
                             countClassName="text-xs text-default-600"
                             groupUserId={group.userId}
-                            headerClassName="flex items-center justify-between rounded-lg bg-default-100 border border-divider px-3 py-2"
+                            headerClassName="flex items-center justify-between rounded-lg bg-white/40 border border-divider px-3 py-2"
                             titleClassName="truncate text-sm font-semibold text-default-700"
                             tunnel={tunnel}
-                            wrapperClassName="rounded-xl border border-divider bg-content1 space-y-3"
+                            wrapperClassName="glass-card rounded-xl space-y-3"
                             onToggleCollapsed={() =>
                               toggleTunnelGroupCollapsed(
                                 group.userId,
@@ -5835,7 +5835,7 @@ export default function ForwardPage() {
       <Modal
         backdrop="blur"
         classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden [&>div]:bg-content1 [&>div]:dark:bg-content1",
+          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
         isOpen={diagnosisModalOpen}
         placement="center"
@@ -5902,7 +5902,7 @@ export default function ForwardPage() {
 
                     {/* 统计摘要 */}
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="text-center p-3 bg-default-100 rounded-lg border border-divider">
+                      <div className="text-center p-3 bg-white/40 rounded-lg border border-divider">
                         <div className="text-2xl font-bold text-foreground">
                           {diagnosisProgress.total > 0
                             ? diagnosisProgress.total
@@ -5982,7 +5982,7 @@ export default function ForwardPage() {
                                 </h3>
                               </div>
                               <table className="w-full text-sm">
-                                <thead className="bg-default-100">
+                                <thead>
                                   <tr>
                                     <th className="px-3 py-2 text-left font-semibold text-xs">
                                       路径
@@ -6001,7 +6001,7 @@ export default function ForwardPage() {
                                     </th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-divider bg-content1">
+                                <tbody className="divide-y divide-divider">
                                   {results.map((result, index) => {
                                     const isDiagnosing = Boolean(
                                       result.diagnosing,
@@ -6016,12 +6016,12 @@ export default function ForwardPage() {
                                     return (
                                       <tr
                                         key={index}
-                                        className={`hover:bg-default-50 dark:hover:bg-gray-700 ${
+                                        className={`hover:bg-white/40 ${
                                           isDiagnosing
-                                            ? "bg-warning-50 dark:bg-warning-900"
+                                            ? "bg-warning-500/10"
                                             : isSuccess
-                                              ? "bg-content1"
-                                              : "bg-danger-50 dark:bg-danger-900"
+                                              ? ""
+                                              : "bg-danger-500/10"
                                         }`}
                                       >
                                         <td className="px-3 py-2">
@@ -6205,10 +6205,10 @@ export default function ForwardPage() {
                                     key={index}
                                     className={`border rounded-lg p-3 ${
                                       isDiagnosing
-                                        ? "border-warning-200 dark:border-warning-300/30 bg-warning-50 dark:bg-warning-900"
+                                        ? "border-warning-200 bg-warning-500/10"
                                         : isSuccess
-                                          ? "border-divider bg-content1"
-                                          : "border-danger-200 dark:border-danger-300/30 bg-danger-50 dark:bg-danger-900"
+                                          ? "border-divider bg-white/40"
+                                          : "border-danger-200 bg-danger-500/10"
                                     }`}
                                   >
                                     <div className="flex items-start gap-2 mb-2">
@@ -6373,7 +6373,7 @@ export default function ForwardPage() {
                   </div>
                 ) : (
                   <div className="text-center py-16">
-                    <div className="w-16 h-16 bg-default-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <div className="w-16 h-16 bg-tray rounded-full flex items-center justify-center mx-auto mb-4">
                       <svg
                         aria-hidden="true"
                         className="w-8 h-8 text-default-400"

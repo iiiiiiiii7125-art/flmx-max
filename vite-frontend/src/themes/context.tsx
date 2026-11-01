@@ -10,7 +10,6 @@ import type { ThemePackage, ComponentKey, LayoutKey, PageKey } from "./types";
 import React, {
   createContext,
   useContext,
-  useEffect,
   useSyncExternalStore,
   useCallback,
   useMemo,
@@ -106,15 +105,8 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   // Re-render whenever register changes
   useSyncExternalStore(originalSubscribe, getSnapshot);
 
-  // Listen for system mode changes
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => reapplyActiveTheme();
-
-    mq.addEventListener("change", handler);
-
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  // LIGHT-ONLY: no system-mode listener — the OS colour scheme no
+  // longer has any effect on the app (dark mode removed 2026-11-02).
 
   const switchTheme = useCallback((id: string) => activateTheme(id), []);
   const resetTheme = useCallback(() => {

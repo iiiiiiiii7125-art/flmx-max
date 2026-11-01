@@ -96,7 +96,7 @@ export function BatchActionResultModal({
                 {failures.map((failure, index) => (
                   <details
                     key={`${failure.id ?? "unknown"}-${index}`}
-                    className="group rounded-xl border border-divider bg-content2 px-4 py-3"
+                    className="group rounded-xl border border-divider px-4 py-3"
                   >
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -111,7 +111,7 @@ export function BatchActionResultModal({
                         失败
                       </Chip>
                     </summary>
-                    <div className="mt-3 rounded-lg bg-background p-3 text-sm leading-6 text-foreground/90">
+                    <div className="mt-3 rounded-lg bg-white/40 p-3 text-sm leading-6 text-foreground/90">
                       {getFailureReason(failure)}
                     </div>
                   </details>

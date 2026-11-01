@@ -326,7 +326,7 @@ export function ImportModal({
             </span>
           </Checkbox>
           {errors.length > 0 && (
-            <ul className="space-y-1 rounded-xl bg-danger-50 p-3 text-xs text-danger">
+            <ul className="space-y-1 rounded-xl bg-danger-500/10 p-3 text-xs text-danger">
               {errors.map((e) => (
                 <li key={e} className="break-all">
                   {e}

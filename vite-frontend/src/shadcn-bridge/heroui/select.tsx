@@ -321,7 +321,7 @@ export function Select<T>({
                   "flex items-center gap-2 rounded-md px-2 py-1.5",
                   optionDisabled
                     ? "cursor-not-allowed opacity-60"
-                    : "hover:bg-default-100",
+                    : "hover:bg-white/40",
                 )}
               >
                 <BaseCheckbox

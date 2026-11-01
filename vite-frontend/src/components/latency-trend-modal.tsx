@@ -130,13 +130,13 @@ export function LatencyTrendModal({
           </p>
         </ModalHeader>
         <ModalBody className="space-y-3">
-          <div className="flex gap-1 self-start rounded-lg bg-default-100 p-1">
+          <div className="flex gap-1 self-start rounded-lg bg-default-500/10 p-1">
             {RANGES.map((r) => (
               <button
                 key={r.hours}
                 className={`rounded-md px-3 py-1 text-xs transition-colors ${
                   hours === r.hours
-                    ? "bg-content1 font-medium shadow-sm"
+                    ? "bg-tray font-medium shadow-sm"
                     : "text-default-500 hover:text-default-700"
                 }`}
                 type="button"

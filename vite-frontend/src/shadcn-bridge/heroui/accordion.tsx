@@ -24,10 +24,13 @@ export interface AccordionItemProps {
 
 function variantClass(variant: AccordionProps["variant"]) {
   if (variant === "splitted") {
-    return "[&>[data-slot=accordion-item]]:mb-3 [&>[data-slot=accordion-item]]:rounded-xl [&>[data-slot=accordion-item]]:border [&>[data-slot=accordion-item]]:border-divider [&>[data-slot=accordion-item]]:border-b-0 [&>[data-slot=accordion-item]]:bg-content1 [&>[data-slot=accordion-item]]:shadow-sm [&>[data-slot=accordion-item]]:overflow-hidden [&>[data-slot=accordion-item]:last-child]:mb-0";
+    // Item glass comes from the .accordion-splitted rule in globals.css
+    // (a component class like .glass-card cannot be applied through a
+    // Tailwind arbitrary variant — it is not a utility).
+    return "accordion-splitted [&>[data-slot=accordion-item]]:mb-3 [&>[data-slot=accordion-item]]:rounded-xl [&>[data-slot=accordion-item]]:overflow-hidden [&>[data-slot=accordion-item]:last-child]:mb-0";
   }
   if (variant === "bordered") {
-    return "rounded-xl border border-divider bg-content1 overflow-hidden [&>[data-slot=accordion-item]]:border-b [&>[data-slot=accordion-item]:last-child]:border-b-0";
+    return "glass-card rounded-xl overflow-hidden [&>[data-slot=accordion-item]]:border-b [&>[data-slot=accordion-item]:last-child]:border-b-0";
   }
 
   return "";

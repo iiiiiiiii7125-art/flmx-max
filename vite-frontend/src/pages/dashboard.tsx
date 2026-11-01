@@ -219,7 +219,7 @@ function UserDashboard() {
     if (!expTime)
       return {
         color: "text-green-600 dark:text-green-400",
-        bg: "bg-green-50 dark:bg-green-900 border-green-200 dark:border-green-800",
+        bg: "bg-green-500/10 border-green-300",
         text: "永久",
       };
 
@@ -229,7 +229,7 @@ function UserDashboard() {
     if (isNaN(expDate.getTime())) {
       return {
         color: "text-gray-600 dark:text-gray-400",
-        bg: "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700",
+        bg: "bg-default-500/10 border-default-300",
         text: "无效",
       };
     }
@@ -237,7 +237,7 @@ function UserDashboard() {
     if (expDate < now) {
       return {
         color: "text-red-600 dark:text-red-400",
-        bg: "bg-red-50 dark:bg-red-900 border-red-200 dark:border-red-800",
+        bg: "bg-red-500/10 border-red-300",
         text: "已过期",
       };
     }
@@ -248,19 +248,19 @@ function UserDashboard() {
     if (diffDays <= 7) {
       return {
         color: "text-red-600 dark:text-red-400",
-        bg: "bg-red-50 dark:bg-red-900 border-red-200 dark:border-red-800",
+        bg: "bg-red-500/10 border-red-300",
         text: `${diffDays}天后过期`,
       };
     } else if (diffDays <= 30) {
       return {
         color: "text-orange-600 dark:text-orange-400",
-        bg: "bg-orange-50 dark:bg-orange-900 border-orange-200 dark:border-orange-800",
+        bg: "bg-orange-500/10 border-orange-300",
         text: `${diffDays}天后过期`,
       };
     } else {
       return {
         color: "text-green-600 dark:text-green-400",
-        bg: "bg-green-50 dark:bg-green-900 border-green-200 dark:border-green-800",
+        bg: "bg-green-500/10 border-green-300",
         text: `${diffDays}天后过期`,
       };
     }
@@ -1104,7 +1104,7 @@ function UserDashboard() {
                     {group.forwards.map((forward) => (
                       <div
                         key={forward.id}
-                        className="bg-default-100 dark:bg-default-100 border border-divider rounded-lg p-3 shadow-sm hover:shadow-md transition-all duration-300"
+                        className="glass-card rounded-lg p-3 hover:shadow-md transition-all duration-300"
                       >
                         <div className="space-y-3">
                           <div>

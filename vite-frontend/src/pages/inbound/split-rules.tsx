@@ -39,7 +39,7 @@ const chipClass = (on: boolean) =>
   `rounded-full border px-3 py-1 text-xs transition-colors ${
     on
       ? "border-primary bg-primary text-primary-foreground"
-      : "border-divider bg-content1 text-default-600"
+      : "border-divider bg-tray text-default-600"
   }`;
 
 const countEntries = (v: string) => v.split(/[\s,，]+/).filter(Boolean).length;
@@ -118,7 +118,7 @@ export function SplitRulesEditor({
         return (
           <div
             key={i}
-            className={`overflow-hidden rounded-xl border bg-content1 ${
+            className={`overflow-hidden rounded-xl glass-card ${
               isOpen ? "border-primary/40" : "border-divider"
             }`}
           >

@@ -66,7 +66,7 @@ export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   if (!src) {
     return (
       <div
-        className="flex items-center justify-center text-xs text-default-500 bg-default-100 rounded-xl"
+        className="flex items-center justify-center text-xs text-default-500 bg-white/40 rounded-xl"
         style={{ width: size, height: size }}
       >
         {failed ? "内容过长，无法生成二维码" : "二维码生成中..."}
@@ -95,7 +95,7 @@ export function QrCodeButton({ url, label }: { url: string; label: string }) {
         type="button"
         title={`查看${label}二维码`}
         onClick={() => setOpen(true)}
-        className="inline-flex items-center justify-center w-10 h-10 rounded hover:bg-default-100 text-default-500 hover:text-primary transition-colors"
+        className="inline-flex items-center justify-center w-10 h-10 rounded hover:bg-white/40 text-default-500 hover:text-primary transition-colors"
       >
         <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
           <path
@@ -166,7 +166,7 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
         </p>
       </div>
 
-      <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded-xl bg-default-100 p-3 max-h-32 overflow-y-auto select-all">
+      <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded-xl bg-white/40 p-3 max-h-32 overflow-y-auto select-all">
         {text}
       </pre>
 
@@ -362,7 +362,7 @@ function InboundRelaySubList({
         {relays.map((r) => (
           <div
             key={r.id}
-            className="rounded-lg bg-default-50 px-2.5 py-2"
+            className="rounded-lg bg-white/40 px-2.5 py-2"
           >
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-xs font-medium truncate">
@@ -389,7 +389,7 @@ function InboundRelaySubList({
                 return (
                   <div key={f.key || "auto"} className="flex items-center gap-1">
                     <button
-                      className="flex-1 text-xs rounded border border-divider px-1.5 py-1 hover:bg-default-100 transition-colors disabled:opacity-50 text-center"
+                      className="flex-1 text-xs rounded border border-divider px-1.5 py-1 hover:bg-white/40 transition-colors disabled:opacity-50 text-center"
                       disabled={!path}
                       type="button"
                       onClick={() =>
@@ -527,7 +527,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
             return (
               <div key={f.key || "auto"} className="flex items-center gap-1">
                 <button
-                  className="flex-1 text-left rounded-xl border border-divider px-3 py-2 hover:bg-default-100 transition-colors disabled:opacity-50"
+                  className="flex-1 text-left rounded-xl border border-divider px-3 py-2 hover:bg-white/40 transition-colors disabled:opacity-50"
                   disabled={!path}
                   type="button"
                   onClick={() => copyText(fmtUrl, `${f.label} 订阅已复制`)}
@@ -616,7 +616,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                                 className="flex items-center gap-1"
                               >
                                 <button
-                                  className="flex-1 text-left rounded-lg border border-divider px-2 py-1.5 hover:bg-default-100 transition-colors disabled:opacity-50"
+                                  className="flex-1 text-left rounded-lg border border-divider px-2 py-1.5 hover:bg-white/40 transition-colors disabled:opacity-50"
                                   disabled={!path}
                                   type="button"
                                   onClick={() =>

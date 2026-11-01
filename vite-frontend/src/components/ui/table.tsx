@@ -37,10 +37,7 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
 function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
   return (
     <tfoot
-      className={cn(
-        "border-t bg-default-50 font-medium [&>tr]:last:border-b-0",
-        className,
-      )}
+      className={cn("border-t font-medium [&>tr]:last:border-b-0", className)}
       data-slot="table-footer"
       {...props}
     />
@@ -50,10 +47,7 @@ function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
 function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   return (
     <tr
-      className={cn(
-        "border-b transition-colors hover:bg-default-50",
-        className,
-      )}
+      className={cn("border-b transition-colors hover:bg-white/40", className)}
       data-slot="table-row"
       {...props}
     />

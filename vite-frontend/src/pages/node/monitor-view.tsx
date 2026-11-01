@@ -214,7 +214,7 @@ function ServerCard({
       <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="relative flex-shrink-0">
-            <div className="w-10 h-10 rounded-xl bg-default-100 dark:bg-default-100 flex items-center justify-center border border-divider">
+            <div className="w-10 h-10 rounded-xl bg-tray flex items-center justify-center border border-divider">
               <DistroIcon
                 className="w-5 h-5"
                 distro={distro}
@@ -267,7 +267,7 @@ function ServerCard({
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-2.5 rounded-lg bg-default-50 dark:bg-default-100 border border-divider mt-1 w-full">
+        <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/40 border border-divider mt-1 w-full">
           <div className="flex flex-col gap-0.5 min-w-0 flex-1">
             <div className="flex items-center gap-1 text-[10px] text-default-500">
               <span className="text-primary-500 inline-block font-bold">↑</span>
@@ -1517,7 +1517,7 @@ export function MonitorView({
                                   ? formatBytes(metric.netOutBytes)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-default-100 text-default-500 dark:bg-default-100">
+                              <div className="flex items-center justify-center p-[3px] rounded-full bg-tray text-default-500">
                                 <ArrowUp
                                   className="w-3 h-3"
                                   strokeWidth={2.5}
@@ -1530,7 +1530,7 @@ export function MonitorView({
                                   ? formatBytes(metric.netInBytes)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-default-100 text-default-500 dark:bg-default-100">
+                              <div className="flex items-center justify-center p-[3px] rounded-full bg-tray text-default-500">
                                 <ArrowDown
                                   className="w-3 h-3"
                                   strokeWidth={2.5}

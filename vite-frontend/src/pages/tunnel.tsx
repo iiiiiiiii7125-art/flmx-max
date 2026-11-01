@@ -2919,7 +2919,7 @@ export default function TunnelPage() {
                       )}
 
                       {getChainGroups().length === 0 && (
-                        <div className="text-center py-8 bg-default-50 dark:bg-default-100 rounded border border-dashed border-default-300">
+                        <div className="text-center py-8 rounded border border-dashed border-default-300">
                           <p className="text-sm text-default-500">
                             还没有添加转发链，点击上方&quot;添加一跳&quot;按钮开始添加
                           </p>
@@ -3493,7 +3493,7 @@ export default function TunnelPage() {
               </ModalHeader>
               <ModalBody className="space-y-3 sm:space-y-4">
                 {deletePreviewLoading ? (
-                  <div className="flex items-center gap-3 rounded-xl border border-divider bg-content2 px-3 py-5 text-sm text-default-600 sm:px-4 sm:py-6">
+                  <div className="glass-card flex items-center gap-3 rounded-xl px-3 py-5 text-sm text-default-600 sm:px-4 sm:py-6">
                     <Spinner size="sm" />
                     正在检查是否有规则正在使用该隧道...
                   </div>
@@ -3507,7 +3507,7 @@ export default function TunnelPage() {
                     />
 
                     {(tunnelDeletePreview?.sampleForwards?.length ?? 0) > 0 ? (
-                      <div className="space-y-3 rounded-xl border border-divider bg-content2 p-3 sm:p-4">
+                      <div className="glass-card space-y-3 rounded-xl p-3 sm:p-4">
                         <div className="flex items-center justify-between gap-3">
                           <h3 className="text-sm font-semibold text-foreground">
                             关联规则预览
@@ -3523,7 +3523,7 @@ export default function TunnelPage() {
                             (forward) => (
                               <div
                                 key={forward.id}
-                                className="rounded-lg border border-divider/70 bg-background px-2.5 py-2 sm:px-3"
+                                className="rounded-lg border border-divider/70 bg-white/40 px-2.5 py-2 sm:px-3"
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <span className="truncate text-sm font-medium text-foreground">
@@ -3661,7 +3661,7 @@ export default function TunnelPage() {
       <Modal
         backdrop="blur"
         classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden [&>div]:bg-content1 [&>div]:dark:bg-content1",
+          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
         isOpen={diagnosisModalOpen}
         placement="center"
@@ -3679,7 +3679,7 @@ export default function TunnelPage() {
         <ModalContent>
           {(onClose) => (
             <>
-              <ModalHeader className="flex flex-col gap-1 bg-content1 border-b border-divider">
+              <ModalHeader className="flex flex-col gap-1 border-b border-divider">
                 <h2 className="text-xl font-bold">隧道诊断结果</h2>
                 {currentDiagnosisTunnel && (
                   <div className="flex items-center gap-2">
@@ -3733,7 +3733,7 @@ export default function TunnelPage() {
 
                     {/* 统计摘要 */}
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="text-center p-3 bg-default-100 rounded-lg border border-divider">
+                      <div className="text-center p-3 bg-white/40 rounded-lg border border-divider">
                         <div className="text-2xl font-bold text-foreground">
                           {diagnosisProgress.total > 0
                             ? diagnosisProgress.total
@@ -3813,7 +3813,7 @@ export default function TunnelPage() {
                                 </h3>
                               </div>
                               <table className="w-full text-sm">
-                                <thead className="bg-default-100">
+                                <thead>
                                   <tr>
                                     <th className="px-3 py-2 text-left font-semibold text-xs">
                                       路径
@@ -3832,7 +3832,7 @@ export default function TunnelPage() {
                                     </th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-divider bg-content1">
+                                <tbody className="divide-y divide-divider">
                                   {results.map((result, index) => {
                                     const isDiagnosing = Boolean(
                                       result.diagnosing,
@@ -3846,12 +3846,12 @@ export default function TunnelPage() {
                                     return (
                                       <tr
                                         key={index}
-                                        className={`hover:bg-default-50 dark:hover:bg-gray-700 ${
+                                        className={`hover:bg-white/40 ${
                                           isDiagnosing
-                                            ? "bg-warning-50 dark:bg-warning-900"
+                                            ? "bg-warning-500/10"
                                             : isSuccess
-                                              ? "bg-content1"
-                                              : "bg-danger-50 dark:bg-danger-900"
+                                              ? ""
+                                              : "bg-danger-500/10"
                                         }`}
                                       >
                                         <td className="px-3 py-2">
@@ -4034,10 +4034,10 @@ export default function TunnelPage() {
                                     key={index}
                                     className={`border rounded-lg p-3 ${
                                       isDiagnosing
-                                        ? "border-warning-200 dark:border-warning-300/30 bg-warning-50 dark:bg-warning-900"
+                                        ? "border-warning-200 bg-warning-500/10"
                                         : isSuccess
-                                          ? "border-divider bg-content1"
-                                          : "border-danger-200 dark:border-danger-300/30 bg-danger-50 dark:bg-danger-900"
+                                          ? "border-divider bg-white/40"
+                                          : "border-danger-200 bg-danger-500/10"
                                     }`}
                                   >
                                     <div className="flex items-start gap-2 mb-2">
@@ -4202,7 +4202,7 @@ export default function TunnelPage() {
                   </div>
                 ) : (
                   <div className="text-center py-16">
-                    <div className="w-16 h-16 bg-default-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <div className="w-16 h-16 bg-tray rounded-full flex items-center justify-center mx-auto mb-4">
                       <svg
                         aria-hidden="true"
                         className="w-8 h-8 text-default-400"
@@ -4263,7 +4263,7 @@ export default function TunnelPage() {
               </ModalHeader>
               <ModalBody className="space-y-3 sm:space-y-4">
                 {batchDeletePreviewLoading ? (
-                  <div className="flex items-center gap-3 rounded-xl border border-divider bg-content2 px-3 py-5 text-sm text-default-600 sm:px-4 sm:py-6">
+                  <div className="glass-card flex items-center gap-3 rounded-xl px-3 py-5 text-sm text-default-600 sm:px-4 sm:py-6">
                     <Spinner size="sm" />
                     正在检查选中隧道是否有关联规则...
                   </div>
@@ -4276,11 +4276,11 @@ export default function TunnelPage() {
                       variant="flat"
                     />
 
-                    <div className="max-h-64 space-y-3 overflow-y-auto scrollbar-hide rounded-xl border border-divider bg-content2 p-3 sm:max-h-72 sm:p-4">
+                    <div className="glass-card max-h-64 space-y-3 overflow-y-auto scrollbar-hide rounded-xl p-3 sm:max-h-72 sm:p-4">
                       {batchDeleteDependentItems.map((item) => (
                         <div
                           key={item.tunnelId}
-                          className="rounded-lg border border-divider/70 bg-background p-2.5 sm:p-3"
+                          className="rounded-lg border border-divider/70 bg-white/40 p-2.5 sm:p-3"
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
@@ -4301,7 +4301,7 @@ export default function TunnelPage() {
                               {item.sampleForwards.map((forward) => (
                                 <div
                                   key={forward.id}
-                                  className="rounded-md bg-content1 px-2.5 py-2 sm:px-3"
+                                  className="rounded-md bg-tray px-2.5 py-2 sm:px-3"
                                 >
                                   <div className="flex items-center justify-between gap-3">
                                     <span className="truncate text-xs font-medium text-foreground">

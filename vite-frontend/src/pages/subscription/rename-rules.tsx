@@ -77,7 +77,7 @@ export function RenameRules({
     onChange(formatRules(next));
   };
   const field =
-    "h-9 w-full min-w-0 rounded-lg border bg-background px-2 font-mono text-xs";
+    "h-9 w-full min-w-0 rounded-lg border bg-content1 px-2 font-mono text-xs";
 
   return (
     <div className="space-y-2">
@@ -116,7 +116,7 @@ export function RenameRules({
               />
               <button
                 aria-label={`删除第 ${i + 1} 条`}
-                className="shrink-0 rounded-lg p-2 text-default-400 hover:bg-danger-50 hover:text-danger"
+                className="shrink-0 rounded-lg p-2 text-default-400 hover:bg-danger-500/10 hover:text-danger"
                 type="button"
                 onClick={() => update(rows.filter((_, j) => j !== i))}
               >

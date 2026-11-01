@@ -570,7 +570,7 @@ export default function PanelSharingPage() {
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50 dark:bg-default-100 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-white/40 p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Provider 共享
@@ -594,7 +594,7 @@ export default function PanelSharingPage() {
                   加载中...
                 </div>
               ) : shares.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50 dark:bg-default-100 px-6 py-10 text-center">
+                <div className="rounded-lg border border-dashed border-divider px-6 py-10 text-center">
                   <p className="text-base font-semibold text-foreground">
                     暂无分享
                   </p>
@@ -678,7 +678,7 @@ export default function PanelSharingPage() {
                               {share.usedPortDetails.map((item) => (
                                 <span
                                   key={item.runtimeId}
-                                  className="text-xs rounded-full px-2 py-1 bg-default-100"
+                                  className="text-xs rounded-full px-2 py-1 bg-tray"
                                 >
                                   {item.port} / {item.role || "reserved"}
                                 </span>
@@ -727,7 +727,7 @@ export default function PanelSharingPage() {
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50 dark:bg-default-100 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-white/40 p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Consumer 接入
@@ -750,7 +750,7 @@ export default function PanelSharingPage() {
                   加载中...
                 </div>
               ) : remoteUsageNodes.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50 dark:bg-default-100 px-6 py-10 text-center">
+                <div className="rounded-lg border border-dashed border-divider px-6 py-10 text-center">
                   <p className="text-base font-semibold text-foreground">
                     暂无远程节点占用记录
                   </p>

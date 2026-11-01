@@ -452,7 +452,7 @@ export default function LimitPage({
         )
       ) : (
         /* 空状态 */
-        <Card className="shadow-sm bg-default-50">
+        <Card className="shadow-sm">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无限速规则

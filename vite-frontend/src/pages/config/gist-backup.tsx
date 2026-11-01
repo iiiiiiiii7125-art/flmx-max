@@ -45,7 +45,7 @@ const INTERVALS: Array<[number, string]> = [
 ];
 
 const SELECT_CLASS =
-  "h-10 w-full rounded-lg border border-divider bg-background px-2 text-sm";
+  "h-10 w-full rounded-lg border border-divider bg-content1 px-2 text-sm";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString("zh-CN", {

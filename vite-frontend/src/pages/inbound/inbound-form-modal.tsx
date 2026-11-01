@@ -571,7 +571,7 @@ export function InboundFormModal({
                             className={`text-left rounded-xl border px-3 py-2 transition-colors ${
                               active
                                 ? "border-primary bg-primary-50 dark:bg-primary-900"
-                                : "border-divider hover:bg-default-100"
+                                : "border-divider hover:bg-white/40"
                             }`}
                             type="button"
                             onClick={() =>
@@ -1278,7 +1278,7 @@ export function InboundFormModal({
                     </div>
                     {form.kernelType !== "xray" &&
                       form.connIdleSeconds.trim() !== "" && (
-                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider bg-default-50 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider bg-white/40 px-3 py-2">
                           <p className="text-xs text-warning-600">
                             该入站为非 Xray 内核，存量空闲超时{" "}
                             {form.connIdleSeconds === "-1"

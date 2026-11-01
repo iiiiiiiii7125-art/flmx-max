@@ -2,12 +2,12 @@
  * ThemeSettings — theme picker card for the Settings page
  * ========================================================
  * Shows:
- *  • Mode toggle (light / dark / system)
  *  • Grid of registered themes with preview dots
  *  • "Reset to default" option
+ *
+ * There is deliberately no light/dark mode toggle: dark mode was
+ * removed app-wide (2026-11-02) and the app renders in light mode only.
  */
-
-import type { ThemeMode } from "@/themes/registry";
 
 import React from "react";
 import toast from "react-hot-toast";
@@ -16,33 +16,10 @@ import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { useThemeContext } from "@/themes/context";
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const MODE_OPTIONS: Array<{ value: ThemeMode; label: string; icon: string }> = [
-  { value: "light", label: "亮色", icon: "☀️" },
-  { value: "dark", label: "暗色", icon: "🌙" },
-  { value: "system", label: "跟随系统", icon: "🖥️" },
-];
-
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export const ThemeSettings: React.FC = () => {
-  const {
-    themes,
-    activeThemeId,
-    mode,
-    effectiveMode,
-    switchTheme,
-    resetTheme,
-    setMode,
-  } = useThemeContext();
-
-  const handleModeChange = (m: ThemeMode) => {
-    setMode(m);
-    const label = m === "light" ? "亮色" : m === "dark" ? "暗色" : "跟随系统";
-
-    toast.success(`已切换为${label}模式`);
-  };
+  const { themes, activeThemeId, switchTheme, resetTheme } = useThemeContext();
 
   const handleThemeSelect = (id: string) => {
     switchTheme(id);
@@ -63,30 +40,6 @@ export const ThemeSettings: React.FC = () => {
           主题设置
         </h2>
 
-        {/* ── Mode toggle ────────────────────────────────────── */}
-        <div className="mb-6">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            外观模式
-          </p>
-          <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-600 p-1 gap-1">
-            {MODE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                  mode === opt.value
-                    ? "bg-primary text-white shadow-sm"
-                    : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                }`}
-                type="button"
-                onClick={() => handleModeChange(opt.value)}
-              >
-                <span className="mr-1.5">{opt.icon}</span>
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* ── Theme grid ─────────────────────────────────────── */}
         <div className="mb-4">
           <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -99,11 +52,8 @@ export const ThemeSettings: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {themes.map((theme) => {
               const isActive = activeThemeId === theme.id;
-              // Pick the right token set for preview
-              const previewTokens =
-                effectiveMode === "dark" && theme.tokens?.dark
-                  ? theme.tokens.dark
-                  : theme.tokens?.light;
+              // LIGHT-ONLY: previews always show the light token set
+              const previewTokens = theme.tokens?.light ?? theme.tokens?.dark;
 
               const primary = previewTokens?.["--primary"] ?? "#2563eb";
               const secondary = previewTokens?.["--secondary"] ?? "#6366f1";

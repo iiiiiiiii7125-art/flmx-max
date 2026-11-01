@@ -651,7 +651,7 @@ export default function InboundPage() {
           className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
             selected
               ? "border-primary bg-primary-50 dark:bg-primary-900"
-              : "border-divider bg-content1 hover:bg-default-100"
+              : "glass-card hover:bg-white/40"
           }`}
           role="button"
           tabIndex={0}
@@ -714,11 +714,11 @@ export default function InboundPage() {
                 IEPL专用
               </Chip>
             )}
-            <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+            <span className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-600">
               端口 {item.port}
             </span>
             {where && (
-              <span className="max-w-full truncate rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+              <span className="max-w-full truncate rounded-full bg-tray px-2 py-0.5 text-xs text-default-600">
                 {where}
               </span>
             )}
@@ -757,7 +757,7 @@ export default function InboundPage() {
               </Chip>
             )}
             {item.relayOnly && (
-              <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+              <span className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-600">
                 仅中转
               </span>
             )}
@@ -779,10 +779,10 @@ export default function InboundPage() {
           </div>
           {!item.external && (
             <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs">
-              <div className="rounded-lg bg-default-100 py-1.5">
+              <div className="rounded-lg bg-white/40 py-1.5">
                 ↑ {formatTraffic(item.uploadBytes)}
               </div>
-              <div className="rounded-lg bg-default-100 py-1.5">
+              <div className="rounded-lg bg-white/40 py-1.5">
                 ↓ {formatTraffic(item.downloadBytes)}
               </div>
             </div>
@@ -829,7 +829,7 @@ export default function InboundPage() {
         className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
           selected
             ? "border-primary bg-primary-50 dark:bg-primary-900"
-            : "border-divider bg-content1 hover:bg-default-100"
+            : "glass-card hover:bg-white/40"
         }`}
         role="button"
         tabIndex={0}
@@ -1100,13 +1100,13 @@ export default function InboundPage() {
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+      <div className="glass-surface mb-4 grid grid-cols-3 gap-1 rounded-xl p-1 sm:max-w-md">
         {tabs.map((t) => (
           <button
             key={t.key}
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
               tab === t.key
-                ? "bg-background font-medium shadow-sm"
+                ? "bg-tray font-medium shadow-sm"
                 : "text-default-600"
             }`}
             type="button"
@@ -1145,7 +1145,7 @@ export default function InboundPage() {
             {nodeOptions.length > 1 && (
               <select
                 aria-label="按节点筛选"
-                className="h-8 max-w-[10rem] rounded-lg border border-divider bg-background px-2 text-sm"
+                className="h-8 max-w-[10rem] rounded-lg border border-divider bg-content1 px-2 text-sm"
                 value={nodeFilter}
                 onChange={(e) => setNodeFilter(e.target.value)}
               >
@@ -1214,7 +1214,7 @@ export default function InboundPage() {
           </div>
 
           {selectMode && (
-            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background px-3 py-2 shadow-sm backdrop-blur">
+            <div className="glass-surface sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2">
               <span className="text-sm text-default-600">
                 已选 {selectedIds.size} 个
               </span>
@@ -1263,7 +1263,7 @@ export default function InboundPage() {
           )}
 
           {filtered.length === 0 ? (
-            <Card className="shadow-sm bg-default-50">
+            <Card className="shadow-sm">
               <CardBody className="text-center py-16 flex flex-col items-center justify-center gap-3">
                 <h3 className="text-lg font-medium">
                   {inbounds.length === 0 ? "暂无入站" : "没有匹配的入站"}

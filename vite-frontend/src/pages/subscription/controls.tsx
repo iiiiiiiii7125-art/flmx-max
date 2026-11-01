@@ -15,7 +15,7 @@ export function Segmented<T extends string>({
 }) {
   return (
     <div
-      className="grid gap-1 rounded-xl bg-default-100 p-1 text-sm"
+      className="glass-surface grid gap-1 rounded-xl p-1 text-sm"
       style={{
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
       }}
@@ -28,7 +28,7 @@ export function Segmented<T extends string>({
             key={k}
             className={`rounded-lg px-2 py-1.5 transition-colors ${
               value === k
-                ? "bg-background font-medium shadow-sm"
+                ? "bg-tray font-medium shadow-sm"
                 : disabled
                   ? "cursor-not-allowed text-default-300"
                   : "text-default-500"
@@ -95,7 +95,7 @@ export function EditorTabs<T extends string>({
 }) {
   return (
     <div
-      className="grid gap-1 rounded-xl bg-default-100 p-1 backdrop-blur-md"
+      className="glass-surface grid gap-1 rounded-xl p-1"
       role="tablist"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
     >
@@ -105,7 +105,7 @@ export function EditorTabs<T extends string>({
           aria-selected={value === t.key}
           className={`relative whitespace-nowrap rounded-lg px-1 py-1.5 text-sm transition-colors ${
             value === t.key
-              ? "bg-content1 font-medium text-primary shadow-sm"
+              ? "bg-tray font-medium text-primary shadow-sm"
               : "text-default-500 hover:text-foreground"
           }`}
           role="tab"

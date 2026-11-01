@@ -220,7 +220,7 @@ export function RouteModal({
                           <span className="shrink-0 font-medium">{p.name}</span>
                         )}
                         {label && (
-                          <span className="w-9 shrink-0 rounded bg-default-100 px-1 text-center text-[10px] text-default-500">
+                          <span className="w-9 shrink-0 rounded bg-tray px-1 text-center text-[10px] text-default-500">
                             {label}
                           </span>
                         )}
