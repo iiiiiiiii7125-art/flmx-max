@@ -2194,7 +2194,11 @@ func getOrCreateFlowCrypto(secret string) *security.AESCrypto {
 
 func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 	defer body.Close()
-	raw, err := io.ReadAll(body)
+	// R4B03-003：ReadAll 前以 MaxBytesReader 包裹与 decodeJSON/WS 同一
+	// 10MB 上限（旧实现无上限读入，持任一节点 secret 即可用超大请求
+	// 让面板内存随体大小线性膨胀）；超限返回 error，两调用方现有
+	// error 分支整批拒收（flowUpload 返非 ok、agent 可重报）。
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, body, 10<<20))
 	if err != nil {
 		return "", err
 	}
