@@ -377,6 +377,18 @@ export function InboundFormModal({
         return "高级配置不是合法的 JSON";
       }
     }
+    // F-L3-01：Vision 仅 VLESS + TCP + TLS/Reality 安全层（或开启 VLESS
+    // 加密）可用。编辑既有 Vision 入站改了传输/安全层后，开关随
+    // visionAllowed 转假而隐藏、flowVision 状态仍在——保存前在此显式
+    // 拦下并点名，不许把 flow 从 payload 里静默省略（后端 Normalize
+    // 同口径拒绝兜底）。
+    if (
+      form.protocol === "vless" &&
+      form.flowVision &&
+      !visionAllowed(form)
+    ) {
+      return "当前传输/安全组合不支持 XTLS Vision 流控（仅 VLESS + TCP + TLS/Reality 安全层，或开启 VLESS 加密时可用）：请改回 TCP + TLS/Reality、开启 VLESS 加密，或关闭 Vision 流控";
+    }
 
     return null;
   };
@@ -666,16 +678,30 @@ export function InboundFormModal({
                     onChange={(e) => set("uuid", e.target.value)}
                   />
                 )}
-                {visionAllowed(form) && (
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      isSelected={form.flowVision}
-                      size="sm"
-                      onValueChange={(v) => set("flowVision", v)}
-                    />
-                    <span className="text-sm">启用 XTLS Vision 流控</span>
-                  </div>
-                )}
+                {/* F-L3-01：flowVision 已开但当前组合不再支持 Vision 时
+                    （编辑既有 Vision 入站改了传输/安全层）开关必须留面，
+                    否则用户无从关闭、保存又会被后端拒绝。开关下方明示
+                    不支持原因与出路，validate() 同口径拦截。 */}
+                {form.protocol === "vless" &&
+                  (visionAllowed(form) || form.flowVision) && (
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          isSelected={form.flowVision}
+                          size="sm"
+                          onValueChange={(v) => set("flowVision", v)}
+                        />
+                        <span className="text-sm">启用 XTLS Vision 流控</span>
+                      </div>
+                      {!visionAllowed(form) && (
+                        <p className="text-xs font-semibold text-foreground">
+                          当前传输/安全组合不支持 Vision 流控（仅 TCP +
+                          TLS/Reality 安全层，或开启 VLESS
+                          加密时可用），保存会被拒绝；请关闭此开关，或改回支持的组合。
+                        </p>
+                      )}
+                    </div>
+                  )}
                 {form.kernelType === "xray" && (
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2">
@@ -697,6 +723,18 @@ export function InboundFormModal({
                               // flowVision 必须置 false——与「IEPL专用」标签
                               // 预设同口径，不存在第二套开关面口径。Vision
                               // 功能本身保留，Reality 等其他形态照常可开。
+                              // 外观口径（F-L3-02）：本开关是通用 ENC 入口，
+                              // 填充 native 外观；红色「IEPL专用」标签是
+                              // IEPL 场景的整套预设（CHG-01 定案），外观用
+                              // xorpub 并联动空闲超时「不限」与清 SNI。
+                              // native 与 xorpub 不等效：外观是加密串的
+                              // 「流量外观」段——native 公钥以原生形态上线，
+                              // xorpub 公钥经 XOR 混淆后上线（抗识别更强），
+                              // 且服务端与客户端必须一致（面板由同一存储
+                              // 配置同源生成两端串，各自自洽）。两入口的
+                              // 差异是有意分层、不是同一形态的两套标准：
+                              // 要 IEPL 形态点标签，不要用本开关逐项凑；
+                              // 差异同时写明于开关下方注记与预设文件头。
                               setForm((prev) => ({
                                 ...prev,
                                 encryptionEnabled: true,
@@ -793,6 +831,11 @@ export function InboundFormModal({
                           sing-box、Surge、Loon、Quantumult
                           X、小火箭格式的订阅不会包含此入站，请用
                           Clash（请使用近一年内的 Mihomo 核心）或通用链接分发。
+                          本开关的外观 native 是公钥原生形态；红色「IEPL专用」
+                          标签的外观 xorpub 是公钥混淆形态（抗识别更强），且
+                          会一并勾选空闲超时「不限」并清 SNI——两者生成的
+                          订阅链接不同，需要 IEPL 形态时请点标签，不要用本
+                          开关代替。
                         </p>
                       </>
                     )}

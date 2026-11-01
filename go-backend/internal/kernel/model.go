@@ -491,9 +491,28 @@ func normalizeSettings(in *Inbound) error {
 			return errors.New("UUID 格式错误")
 		}
 		s.Password, s.Method = "", ""
-		visionOK := in.Protocol == ProtocolVLESS && in.Transport.Type == TransportTCP && (in.Security.Type != SecurityNone || s.EncryptionEnabled())
-		if s.Flow != "" && (s.Flow != FlowVision || !visionOK) {
-			s.Flow = ""
+		if s.Flow != "" {
+			// F-L3-01: flow 是 VLESS/VMess 本协议族的自身特性，不是异协议
+			// 外来字段（那些在各协议分支随 UUID/Method 一并清零属字段
+			// 卫生）。此前 flow 在组合不成立时被静默清零，与本函数其他
+			// 非法值（XHTTP mode、fingerprint、SS method 等）显式拒绝
+			// 并点名的口径不一致，也与「不匹配直接拒绝＋明确提示」的
+			// 产品口径相悖：API 直调 VLESS+WS+flow 保存成功但 Vision
+			// 不生效、编辑既有 Vision 入站改传输后 Vision 无声丢失。
+			// 改为三种情形全部显式拒绝：VMess 携带 flow、flow 取值
+			// 非法、VLESS Vision 组合不成立（非 TCP，或安全无且未开
+			// ENC——Vision 需 TLS/Reality 或真实加密层，与导入面
+			// proxy_parse.go、凭据面 credentials.go 同口径）。
+			if in.Protocol == ProtocolVMess {
+				return errors.New("VMess 不支持 flow（xtls-rprx-vision 仅 VLESS 可用），请清空 flow")
+			}
+			if s.Flow != FlowVision {
+				return fmt.Errorf("不支持的 VLESS flow %s（仅 xtls-rprx-vision 或留空）", s.Flow)
+			}
+			visionOK := in.Transport.Type == TransportTCP && (in.Security.Type != SecurityNone || s.EncryptionEnabled())
+			if !visionOK {
+				return fmt.Errorf("xtls-rprx-vision（Vision 流控）仅支持 VLESS + TCP 传输 + TLS/Reality 安全层（或开启 VLESS 加密），当前为 %s 传输 + %s 安全层且未开启 VLESS 加密：请改用 TCP + TLS/Reality、开启 VLESS 加密，或关闭 Vision 流控", in.Transport.Type, in.Security.Type)
+			}
 		}
 	case ProtocolTrojan:
 		if s.Password == "" {
