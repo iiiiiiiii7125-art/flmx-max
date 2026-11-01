@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261102.01"
+SCRIPT_VERSION="20261102.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -138,11 +138,20 @@ PROXY_CANDIDATES=(
 )
 
 route_mode() {
-  if [[ "$PROXY_ENABLED" == "false" ]]; then
+  # L2-33（R5-FD）：PROXY_ENABLED 改大小写不敏感——False/FALSE/0 与
+  # false 同义。旧实现仅精确匹配小写 "false"，运维逃生口误写大小写
+  # 时静默落入内置选路且无任何告警；无法识别的非空值在 stderr 点名
+  # 后按启用处理，不静默吞掉。
+  local proxy_enabled_lc
+  proxy_enabled_lc=$(printf '%s' "${PROXY_ENABLED:-}" | tr 'A-Z' 'a-z')
+  if [[ "$proxy_enabled_lc" == "false" || "$proxy_enabled_lc" == "0" ]]; then
     echo "direct"
   elif [[ -n "$PROXY_URL" ]]; then
     echo "override"
   else
+    if [[ -n "$proxy_enabled_lc" && "$proxy_enabled_lc" != "true" && "$proxy_enabled_lc" != "1" ]]; then
+      echo "⚠️ PROXY_ENABLED 取值无法识别（\"${PROXY_ENABLED:-}\"），按启用内置选路处理（仅 false/0 可关闭）" >&2
+    fi
     echo "builtin"
   fi
 }
@@ -178,12 +187,15 @@ probe_route() {
 }
 
 PROXY_RANKED=()
+PROXY_RANKED_LATENCY=()
 
 # rank_proxy_routes：并行探测全部代理候选（单候选超时 ~5s、一轮
 # 总界有界），活者按延迟升序、未判活者按清单原序殿后，结果写入
-# PROXY_RANKED（只含代理，不含直连）。
+# PROXY_RANKED（只含代理，不含直连）；PROXY_RANKED_LATENCY 与之
+# 并行记录实测延迟（未判活者为空串），供慢直连按延迟并入排名。
 rank_proxy_routes() {
   PROXY_RANKED=()
+  PROXY_RANKED_LATENCY=()
   local tmpdir i prefix
   tmpdir=$(mktemp -d) || return 1
   for i in "${!PROXY_CANDIDATES[@]}"; do
@@ -197,15 +209,45 @@ rank_proxy_routes() {
   while IFS= read -r line; do
     idx="${line##* }"
     PROXY_RANKED+=("${PROXY_CANDIDATES[$idx]}")
+    PROXY_RANKED_LATENCY+=("${line% *}")
   done < <(cat "$tmpdir"/* 2>/dev/null | sort -n)
   rm -rf "$tmpdir"
   local seen=" ${PROXY_RANKED[*]} "
   for prefix in "${PROXY_CANDIDATES[@]}"; do
     case "$seen" in
       *" $prefix "*) ;;
-      *) PROXY_RANKED+=("$prefix") ;;
+      *) PROXY_RANKED+=("$prefix"); PROXY_RANKED_LATENCY+=("") ;;
     esac
   done
+}
+
+# direct_latency_within_gate <秒>：与 Go 侧 routes.go 同口径——直连
+# 探测延迟 ≤800ms 才配短路独占；shell 浮点比较走 awk。
+direct_latency_within_gate() {
+  awk -v t="$1" 'BEGIN { exit !(t + 0 <= 0.8) }'
+}
+
+# routes_insert_slow_direct <直连实测延迟秒>：须在 rank_proxy_routes
+# 之后调用。把慢直连按实测延迟插入已排名路线表（与 Go 侧口径一
+# 致：慢直连不丢弃、按延迟参与排序；未判活代理无延迟值，直连排在
+# 已判活段末尾、未判活段之前）。结果写入 DOWNLOAD_ROUTES，
+# ROUTES_STAGE 置 2。
+routes_insert_slow_direct() {
+  local direct_latency="$1"
+  DOWNLOAD_ROUTES=()
+  local i lat inserted=0
+  for i in "${!PROXY_RANKED[@]}"; do
+    lat="${PROXY_RANKED_LATENCY[$i]:-}"
+    if [[ "$inserted" == "0" ]] && { [[ -z "$lat" ]] || awk -v a="$direct_latency" -v b="$lat" 'BEGIN { exit !(a + 0 <= b + 0) }'; }; then
+      DOWNLOAD_ROUTES+=("")
+      inserted=1
+    fi
+    DOWNLOAD_ROUTES+=("${PROXY_RANKED[$i]}")
+  done
+  if [[ "$inserted" == "0" ]]; then
+    DOWNLOAD_ROUTES+=("")
+  fi
+  ROUTES_STAGE=2
 }
 
 DOWNLOAD_ROUTES=()
@@ -227,10 +269,21 @@ ensure_download_routes() {
       ROUTES_STAGE=2
       ;;
     *)
-      if probe_route "" >/dev/null; then
-        DOWNLOAD_ROUTES=("")
-        ROUTES_STAGE=1
-        echo "🌐 GitHub 下载路线: 直连" >&2
+      local direct_latency=""
+      if direct_latency=$(probe_route ""); then
+        if direct_latency_within_gate "$direct_latency"; then
+          DOWNLOAD_ROUTES=("")
+          ROUTES_STAGE=1
+          echo "🌐 GitHub 下载路线: 直连" >&2
+        else
+          # L2-35（R5-FD，与 install.sh 的 L2-06 同族）：慢直连不得
+          # 短路独占——按实测延迟并入代理排名，与 Go 侧 routes.go
+          # 的 800ms 门同口径。旧实现对面板侧直连只判成败，一条
+          # 「探针 2.9s」的慢直连也会被恒排首位。
+          rank_proxy_routes
+          routes_insert_slow_direct "$direct_latency"
+          echo "🌐 GitHub 直连较慢（${direct_latency}s 超过 0.8s 门限），按测速排名选路（首选: ${DOWNLOAD_ROUTES[0]:-直连}）" >&2
+        fi
       else
         rank_proxy_routes
         DOWNLOAD_ROUTES=("${PROXY_RANKED[@]}" "")
@@ -270,11 +323,23 @@ resolve_latest_release_tag() {
 
   # 1.7.7：逐路线尝试（每条路线内先重定向法、后 API 法），首个解析
   # 出合格 tag 的路线即用；路线全败时按直选口径补测/续切一次。
+  # L2-06③（R5-FD）：整轮总量上限（默认 120s，FLMX_RESOLVE_BUDGET_SECONDS
+  # 可调）——旧实现每路线重定向法 30s＋API 法 30s 串行，11 线路＋
+  # extend 一轮可达 11 分钟以上且无上限。逐次尝试按剩余预算收紧
+  # --max-time，耗尽即整轮失败返回。
+  local resolve_deadline=$(( $(date +%s) + ${FLMX_RESOLVE_BUDGET_SECONDS:-120} ))
   ensure_download_routes
-  local prefix
+  local prefix remain max_time
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
-      effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$latest_url")" 2>/dev/null || true)
+      remain=$(( resolve_deadline - $(date +%s) ))
+      if (( remain <= 0 )); then
+        echo "❌ 解析最新版本超时（总预算 ${FLMX_RESOLVE_BUDGET_SECONDS:-120}s 已耗尽）" >&2
+        return 1
+      fi
+      max_time=30
+      if (( remain < max_time )); then max_time=$remain; fi
+      effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "$latest_url")" 2>/dev/null || true)
       tag="${effective_url##*/}"
       # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
       # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
@@ -283,7 +348,14 @@ resolve_latest_release_tag() {
         return 0
       fi
 
-      api_tag=$(curl -fsSL --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+      remain=$(( resolve_deadline - $(date +%s) ))
+      if (( remain <= 0 )); then
+        echo "❌ 解析最新版本超时（总预算 ${FLMX_RESOLVE_BUDGET_SECONDS:-120}s 已耗尽）" >&2
+        return 1
+      fi
+      max_time=30
+      if (( remain < max_time )); then max_time=$remain; fi
+      api_tag=$(curl -fsSL --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
       if [[ "$api_tag" =~ $tag_pattern ]]; then
         echo "$api_tag"
         return 0
@@ -617,6 +689,7 @@ docker_ipv6_usable() {
 caddyfile_without_site() {
   local file="$1" domain="$2"
   awk -v d="$domain" '
+    BEGIN { dl = tolower(d) }
     function flush_block(   line, n, parts, i, tok, keep) {
       if (buf == "") return
       keep = 1
@@ -628,7 +701,10 @@ caddyfile_without_site() {
           tok = parts[i]
           sub(/^https?:\/\//, "", tok)
           sub(/:[0-9]+$/, "", tok)
-          if (tok == d) { keep = 0; break }
+          # L2-31（R5-FD）：域名比较大小写不敏感（DNS 本就不分大小
+          # 写）——旧实现字节比较，已存小写时输入大写会漏判、把同
+          # 一站点块再写一份。
+          if (tolower(tok) == dl) { keep = 0; break }
         }
       }
       if (keep) printf "%s", buf
@@ -655,10 +731,35 @@ caddyfile_without_site() {
   ' "$file"
 }
 
+# L2-29（R5-FD）：菜单 5/6 的系统前置检查——这两处菜单的 Caddy 安
+# 装走 apt 体系、重启/判活硬编码 systemctl，系统兼容面远窄于同脚本
+# install_docker 的 Debian/RHEL/Alpine 多发行版支持面。旧实现无任何
+# 前置检查、失败点落在流程中段（菜单 6 此时已完成备份与追加，菜单
+# 5 还会先动 apt 源）。写任何文件之前先 fail-fast 并点名受限面。
+caddy_menu_prereqs() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "❌ 本功能依赖 systemd（用 systemctl 重启/判活 Caddy），当前系统不支持，操作未执行（未修改任何文件）"
+    echo "   请按 doc/guide/install.md 在 Caddy 中手动添加该站点的反向代理配置"
+    return 1
+  fi
+  return 0
+}
+
+# 仅菜单 5 在 Caddy 缺失、需要自动安装时调用（apt 体系限定）。
+caddy_install_prereqs() {
+  if ! command -v caddy >/dev/null 2>&1 && ! command -v apt-get >/dev/null 2>&1; then
+    echo "❌ 未检测到 Caddy，且当前系统无 apt-get（本脚本仅支持在 Debian/Ubuntu 上自动安装 Caddy），操作未执行（未修改任何文件）"
+    echo "   请先按发行版文档手动安装 Caddy 后重试"
+    return 1
+  fi
+  return 0
+}
+
 # 配置域名反向代理（Caddy 自动 HTTPS）
 setup_domain_proxy() {
   echo "🌐 配置域名反向代理"
   echo ""
+  caddy_menu_prereqs || return 1
   read -p "请输入域名（如 panel.example.com）: " DOMAIN
   DOMAIN=$(echo "$DOMAIN" | tr -d ' \n\r\t')
   if [ -z "$DOMAIN" ]; then
@@ -685,7 +786,9 @@ setup_domain_proxy() {
     echo "✅ 域名解析到: $resolved_ip"
   fi
 
-  # 安装 Caddy（如未安装）
+  # 安装 Caddy（如未安装）。L2-29（R5-FD）：动 apt 源之前先过
+  # apt 体系前置检查，非 Debian 系直接拒绝、不留半截源配置。
+  caddy_install_prereqs || return 1
   if ! command -v caddy &> /dev/null; then
     echo "🔧 正在安装 Caddy..."
     apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl 2>/dev/null || true
@@ -822,6 +925,18 @@ EOF
     echo "⚠️  重要：请在面板 → 网站配置 中将「面板后端地址」改为 https://$DOMAIN"
     echo "   否则节点无法通过域名回连面板"
   else
+    # L2-28（R5-FD）：restart 返回 0 但 is-active 失败（服务起来又
+    # 死）同样回滚——旧实现此分支只有日志指引，坏配置留盘、下次
+    # 重启仍加载、面板站点持续不可用且无人提示文件已被改动。与
+    # 上方 validate/restart 失败分支同口径：回滚备份并尝试以旧
+    # 配置恢复服务。无备份（此前无 Caddyfile）时删除新写文件。
+    echo "❌ Caddy 重启后未处于运行状态，正在回滚到之前的配置..."
+    if [ -n "$caddyfile_bak" ]; then
+      cp "$caddyfile_bak" "$caddyfile"
+    else
+      rm -f "$caddyfile"
+    fi
+    systemctl restart caddy || true
     echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
     return 1
   fi
@@ -838,6 +953,7 @@ EOF
 setup_subscription_front_domain() {
   echo "🌐 配置订阅前置域名"
   echo ""
+  caddy_menu_prereqs || return 1
   read -p "请输入订阅前置域名（如 sub.example.com）: " SUB_DOMAIN
   SUB_DOMAIN=$(echo "$SUB_DOMAIN" | tr -d ' \n\r\t')
   if [ -z "$SUB_DOMAIN" ]; then
@@ -865,7 +981,7 @@ setup_subscription_front_domain() {
   fi
   # 幂等：输入域名已是任一站点块的地址（含面板域名本身、带 scheme/端口
   # 的写法）时拒绝重复追加。
-  if awk -v d="$SUB_DOMAIN" '/\{[[:space:]]*$/ { line = $0; sub(/\{[[:space:]]*$/, "", line); n = split(line, parts, /[[:space:],]+/); for (i = 1; i <= n; i++) { tok = parts[i]; sub(/^https?:\/\//, "", tok); sub(/:[0-9]+$/, "", tok); if (tok == d) found = 1 } } END { exit(found ? 0 : 1) }' "$caddyfile"; then
+  if awk -v d="$SUB_DOMAIN" 'BEGIN { dl = tolower(d) } /\{[[:space:]]*$/ { line = $0; sub(/\{[[:space:]]*$/, "", line); n = split(line, parts, /[[:space:],]+/); for (i = 1; i <= n; i++) { tok = parts[i]; sub(/^https?:\/\//, "", tok); sub(/:[0-9]+$/, "", tok); if (tolower(tok) == dl) found = 1 } } END { exit(found ? 0 : 1) }' "$caddyfile"; then
     echo "❌ 域名 $SUB_DOMAIN 已存在于 $caddyfile 的站点块中，请勿重复配置"
     return 1
   fi
@@ -944,12 +1060,26 @@ EOF
     echo "      ⚠️ 千万不要选「URI 完整（完整 URL）」字段填这个路径：它按整条 URL 全串匹配、"
     echo "      永不命中，规则会静默失效。"
     echo "      可选收紧：再用 And 加一个「主机名 等于 $SUB_DOMAIN」的条件，把规则只作用于前置域名。"
-    echo "   3）在面板「设置 → 订阅前置地址」中填入 https://$SUB_DOMAIN ：必须带 https:// 、"
-    echo "      末尾不要斜杠、不要带任何路径。之后订阅链接即可按该前置地址复制给用户。"
+    echo "   3）在面板里保存前置地址（以下四步缺一不可，漏了任何一步设置都不会生效）："
+    echo "      ① 打开面板 → 左侧菜单进入「设置」页 → 找到「订阅前置地址」卡片；"
+    echo "      ② 点卡片里的「添加前置地址」按钮——该卡片初始没有任何输入框，"
+    echo "         必须先点这个按钮，页面上才会出现一行新的输入框；"
+    echo "      ③ 在新出现的输入框中填入 https://$SUB_DOMAIN ：必须带 https:// 、"
+    echo "         末尾不要斜杠、不要带任何路径；"
+    echo "      ④ 点配置页上的「保存配置」按钮——只在输入框里填了内容、没点保存"
+    echo "         是不会落库的，离开页面即丢失。保存成功后，订阅链接旁的地址"
+    echo "         选择里应能看到 https://$SUB_DOMAIN ；看不到即未保存成功，请重做 ②–④。"
+    echo "      完成后，订阅链接即可按该前置地址复制给用户。"
     echo "   4）自检：规则部署后，用任意可达网络执行"
     echo "      curl -sI <一条前置订阅链接> | grep -i cf-cache-status"
     echo "      显示 BYPASS 即缓存规则已生效；也可在拉不到订阅的网络下实拉一次订阅验证。"
   else
+    # L2-28（R5-FD）：restart 返回 0 但 is-active 失败同样回滚追加
+    # （同菜单 5 口径）——旧实现此分支只有日志指引，本次追加的坏
+    # 配置会留盘、下次重启仍加载且无人提示文件已被改动。
+    echo "❌ Caddy 重启后未处于运行状态，正在回滚到之前的配置..."
+    cp "$caddyfile_bak" "$caddyfile"
+    systemctl restart caddy || true
     echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
     return 1
   fi
@@ -1170,7 +1300,12 @@ download_verified() {
 
   # R8-J-A: 本体与下方 .sha256 均加有界重试——旧实现单次尝试，
   # 镜像瞬时故障即整次操作终止（校验腿失败还会删掉已下好的本体）。
-  if ! curl -fL --retry 3 --retry-delay 2 -o "$dest" "$url"; then
+  # L2-11（R5-FD）：两腿补超时看门狗——旧实现只有 --retry（只对已
+  # 发生的错误重试），TCP 已连通但零字节/涓流的假活慢死路线永不让
+  # curl 返回，install/update/migrate/uninstall 的 compose 下载与
+  # 脚本自更新（同一函数）全部无限挂死。与 install.sh 本体腿同口
+  # 径：连接 10s、1KB/s 地板 30s 无进展判死，另加单次 600s 总界。
+  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$dest" "$url"; then
     echo "❌ 下载失败: $url" >&2
     return 1
   fi
@@ -1191,7 +1326,7 @@ download_verified() {
   # 下载 .sha256 并校验。
   local sha_url="${url}.sha256"
   local sha_file="${dest}.sha256"
-  if ! curl -fL --retry 3 --retry-delay 2 -o "$sha_file" "$sha_url"; then
+  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$sha_file" "$sha_url"; then
     rm -f "$dest" "$sha_file"
     echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
     echo "   （设置 FLMX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
@@ -1738,9 +1873,9 @@ update_panel() {
   echo "🗄️ 当前数据库类型：$CURRENT_DB_TYPE"
 
   # A11-132-03: 目标版本感知 + 防降级。旧实现恒取 latest 且不看当前版本：
-  # ① VERSION 定版意图被静默忽略、直升 latest；② 本机版本高于 latest 时
+  # ① 定版意图被静默忽略、直升 latest；② 本机版本高于 latest 时
   # 构成静默降级覆写。现与面板内升级（system_upgrade）口径对齐：
-  # VERSION 非空时以其为目标；写入前与 .env 的 FLUX_VERSION 比较，
+  # 目标版本走下方优先级链；写入前与 .env 的 FLUX_VERSION 比较，
   # 两侧都可解析且目标更低时拒绝；同版本按重装继续（与面板口径一致）。
   local current_version cmp_result
   current_version=$(get_env_var "FLUX_VERSION" || true)
@@ -1753,9 +1888,26 @@ update_panel() {
     echo "⚠️ .env 记录版本（${current_version:-未知}）与实际运行版本（$deployed_version）不一致，防降级判定以实际运行版本为准"
     current_version="$deployed_version"
   fi
+  # L2-12（R5-FD）：目标版本走 resolve_version 同一优先级链
+  # VERSION > FLUX_VERSION > PINNED_VERSION > latest。旧实现只认
+  # VERSION、其余情形直取 latest：以 FLUX_VERSION 定版更新时被静默
+  # 升到 latest（且自更新腿先按 FLUX_VERSION 换上定版脚本再 re-exec，
+  # 菜单 2 却跳 latest，意图自相矛盾）；定版 install.sh 更新 agent
+  # 时 honors PINNED、本脚本却恒升 latest，两侧不对齐。定版来源在
+  # 输出中点名，不静默吞掉。
+  local target_source=""
   if [[ -n "${VERSION:-}" ]]; then
     LATEST_VERSION="$VERSION"
-    echo "📌 指定更新版本：$LATEST_VERSION（当前版本：${current_version:-未知}）"
+    target_source="VERSION"
+  elif [[ -n "${FLUX_VERSION:-}" ]]; then
+    LATEST_VERSION="$FLUX_VERSION"
+    target_source="FLUX_VERSION"
+  elif [[ -n "${PINNED_VERSION:-}" ]]; then
+    LATEST_VERSION="$PINNED_VERSION"
+    target_source="PINNED_VERSION"
+  fi
+  if [[ -n "$target_source" ]]; then
+    echo "📌 指定更新版本：$LATEST_VERSION（来源：环境变量 $target_source，当前版本：${current_version:-未知}）"
   else
     echo "🔍 获取最新版本号..."
     LATEST_VERSION=$(resolve_latest_release_tag) || {
@@ -1885,6 +2037,19 @@ migrate_to_postgres() {
   env_snapshot="$(pwd)/.env.pre-postgres-migration"
   cp ".env" "$env_snapshot"
 
+  # L2-02（R5-FD）：迁移失败统一回滚口——恢复 .env 为快照、尝试拉起
+  # 迁移前服务、删除快照（恢复后快照与 .env 逐字相同，留着只是一份
+  # 含密钥的陈旧副本；旧实现仅成功路径删它，三条失败返回全都长留）。
+  # 旧实现只有最末端健康检查失败一条路接了回滚，down/up 裸命令在
+  # set -e 下先于任何回滚退出：down 失败时服务已 stop、快照未恢复；
+  # up 失败时 .env 已切 PG、服务半停，正是快照机制要防的坏状态却
+  # 走不到回滚。以下每个失败点一律经此口回滚。
+  migrate_restore_snapshot() {
+    cp "$env_snapshot" ".env"
+    $DOCKER_CMD up -d backend frontend || true
+    rm -f "$env_snapshot"
+  }
+
   upsert_env_var ".env" "POSTGRES_DB" "$postgres_db"
   upsert_env_var ".env" "POSTGRES_USER" "$postgres_user"
   upsert_env_var ".env" "POSTGRES_PASSWORD" "$postgres_password"
@@ -1894,20 +2059,28 @@ migrate_to_postgres() {
   docker stop -t 10 vite-frontend 2>/dev/null || true
   echo "⏳ 等待数据同步..."
   sleep 5
-  $DOCKER_CMD down
+  if ! $DOCKER_CMD down; then
+    echo "❌ 停止现有服务失败（docker compose down），迁移终止，正在恢复迁移前状态..."
+    migrate_restore_snapshot
+    return 1
+  fi
 
   echo "💾 备份 SQLite 数据到当前目录..."
   if ! docker run --rm -v sqlite_data:/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
-    echo "❌ SQLite 备份失败，迁移终止，正在恢复原服务..."
-    $DOCKER_CMD up -d backend frontend || true
+    echo "❌ SQLite 备份失败，迁移终止，正在恢复迁移前状态..."
+    migrate_restore_snapshot
     return 1
   fi
 
   echo "🚀 启动 PostgreSQL..."
-  $DOCKER_CMD up -d postgres
+  if ! $DOCKER_CMD up -d postgres; then
+    echo "❌ PostgreSQL 容器启动失败，迁移终止，正在恢复迁移前状态..."
+    migrate_restore_snapshot
+    return 1
+  fi
   if ! wait_for_postgres_healthy; then
-    echo "🛑 PostgreSQL 未就绪，迁移终止，正在恢复原服务..."
-    $DOCKER_CMD up -d backend frontend || true
+    echo "🛑 PostgreSQL 未就绪，迁移终止，正在恢复迁移前状态..."
+    migrate_restore_snapshot
     return 1
   fi
 
@@ -1955,8 +2128,8 @@ EOF
   rm -f "$pgloader_load_file"
   if [[ $pgloader_rc -ne 0 ]]; then
     echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm postgres_data 后重试）"
-    echo "↩️ .env 尚未切换，正在恢复迁移前的 SQLite 服务..."
-    $DOCKER_CMD up -d backend frontend || true
+    echo "↩️ 正在恢复迁移前的 .env 与 SQLite 服务..."
+    migrate_restore_snapshot
     return 1
   fi
 
@@ -1965,19 +2138,33 @@ EOF
   upsert_env_var ".env" "DATABASE_URL" "$database_url"
 
   echo "🚀 启动迁移后的服务..."
-  $DOCKER_CMD up -d postgres backend frontend
+  # L2-02（R5-FD）：此 up 旧实现是裸调用——非 0 时 set -e 在下方健康
+  # 检查（及其回滚块）之前就退出，.env 已切 PG、服务半停。显式守卫
+  # 后与健康检查失败共用同一回滚形态。
+  if ! $DOCKER_CMD up -d postgres backend frontend; then
+    echo "🛑 迁移后服务启动命令失败，正在回滚 .env 并恢复迁移前的服务..."
+    migrate_restore_snapshot
+    if wait_for_backend_healthy; then
+      echo "✅ 已回滚：面板恢复为迁移前的 SQLite 部署（数据未动）。请排查 PostgreSQL 侧问题后重试迁移"
+    else
+      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为迁移前快照的内容（快照已删除），SQLite 数据在 sqlite_data 卷中未动"
+    fi
+    return 1
+  fi
 
   echo "⏳ 等待服务启动..."
   if ! wait_for_backend_healthy; then
     # A11-132-04: 启动失败自动回滚 .env 到迁移前快照并恢复 SQLite 服务，
     # 不把面板留在「配置已切 PG、服务起不来」的坏状态。
+    # L2-02（R5-FD）：回滚后删除快照，不留含密钥的陈旧副本。
     echo "🛑 迁移后服务启动失败，正在回滚 .env 并恢复迁移前的服务..."
     cp "$env_snapshot" ".env"
+    rm -f "$env_snapshot"
     $DOCKER_CMD up -d backend frontend || true
     if wait_for_backend_healthy; then
       echo "✅ 已回滚：面板恢复为迁移前的 SQLite 部署（数据未动）。请排查 PostgreSQL 侧问题后重试迁移"
     else
-      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为 $env_snapshot 的内容，SQLite 数据在 sqlite_data 卷中未动"
+      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为迁移前快照的内容（快照已删除），SQLite 数据在 sqlite_data 卷中未动"
     fi
     return 1
   fi
@@ -2002,17 +2189,17 @@ uninstall_panel() {
     return 0
   fi
 
+  # L2-14（R5-FD）：先定位部署目录再动手（与 update_panel 同口径）。
+  # 旧实现全程以 cwd 为准、从不定位：cwd 无 compose 时反而下载一份
+  # 新的、对空项目 down 并报「卸载完成」——真实部署毫发无损的假阴
+  # 性。定位失败即终止，不做任何删除。
+  if ! resolve_panel_deployment; then
+    echo "❌ 未能定位面板部署目录，卸载终止（未删除任何内容）。请 cd 到部署目录后重试，或用 PANEL_DEPLOY_DIR=<目录> 指定"
+    return 1
+  fi
   if [[ ! -f "docker-compose.yml" ]]; then
-    echo "⚠️ 未找到 docker-compose.yml 文件，正在下载以完成卸载..."
-    ensure_compose_urls_initialized || return 1
-    DOCKER_COMPOSE_URL=$(get_docker_compose_url)
-    echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
-    if ! download_verified_routed "$DOCKER_COMPOSE_URL" docker-compose.yml; then
-      echo "❌ 下载 Compose 配置失败，卸载终止: $DOCKER_COMPOSE_URL"
-      return 1
-    fi
-    echo "✅ docker-compose.yml 下载完成"
+    echo "❌ 部署目录 $PANEL_DEPLOY_DIR 缺少 docker-compose.yml，卸载终止（未删除任何内容）"
+    return 1
   fi
 
   read -p "确认卸载面板吗？此操作将停止并删除所有容器和数据 (y/N): " confirm
@@ -2022,9 +2209,20 @@ uninstall_panel() {
   fi
 
   echo "🛑 停止并删除容器、镜像、卷..."
-  $DOCKER_CMD down --rmi all --volumes --remove-orphans
-  echo "🧹 删除配置文件..."
+  # L2-14（R5-FD）：down 失败不得被 set -e 无声吞掉后仍报完成。
+  if ! $DOCKER_CMD down --rmi all --volumes --remove-orphans; then
+    echo "❌ 停止并删除容器失败，卸载未完成（配置文件与备份均未动）"
+    return 1
+  fi
+  echo "🧹 删除配置文件与备份产物..."
   rm -f docker-compose.yml .env
+  # L2-14（R5-FD）：「删除所有数据」的承诺须闭合——更新备份目录
+  # backups/（含 .env 副本与完整 DB 备份）、.env 历史备份、PG 迁移
+  # 快照、SQLite 备份与更新中的 compose 临时文件均含密钥/全量数据，
+  # 一并清除，不留残口。
+  rm -rf backups
+  rm -f .env.bak.* .env.pre-postgres-migration gost.db.bak
+  rm -f .docker-compose.yml.update.*
   echo "✅ 卸载完成"
 }
 

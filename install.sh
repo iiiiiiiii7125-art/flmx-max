@@ -112,9 +112,11 @@ ensure_alpine_runtime_dependencies() {
 #   0) 面板源分发：先单探由 -a 面板地址派生的面板线路（见
 #      derive_panel_prefix），通 → 独占使用，不测其余候选；下载
 #      全败时经 extend_download_routes 补测代理排名 + 直连兜底；
-#   1) 先单独探测直连（真实目标、~3-5s）：通 → 只用直连，不测代理；
-#   2) 直连不通 → 并行探测 9 个代理按延迟排名，未判活的按清单原
-#      序殿后，直连排最末兜底；已选路线下载失败时逐个续切；
+#   1) 先单独探测直连（真实目标、~3-5s）：通且延迟 ≤800ms → 只用
+#      直连，不测代理（与 Go 侧 routes.go 的短路门同口径）；通但
+#      慢 → 按实测延迟并入第 2) 步的排名，不丢弃也不短路独占；
+#   2) 直连不通/过慢 → 并行探测 9 个代理按延迟排名，未判活的按清
+#      单原序殿后，直连兜底；已选路线下载失败时逐个续切；
 #   3) 仅直连已定（阶段 1）而下载全败时，补测代理排名续切
 #      （extend_download_routes）。
 # 判活只认真实目标可解析：探测 releases/latest 的最终重定向末段
@@ -132,11 +134,20 @@ PROXY_CANDIDATES=(
 )
 
 route_mode() {
-  if [[ "$PROXY_ENABLED" == "false" ]]; then
+  # L2-33（R5-FD）：PROXY_ENABLED 改大小写不敏感——False/FALSE/0 与
+  # false 同义。旧实现仅精确匹配小写 "false"，运维逃生口误写大小写
+  # 时静默落入内置选路且无任何告警；无法识别的非空值在 stderr 点名
+  # 后按启用处理，不静默吞掉。
+  local proxy_enabled_lc
+  proxy_enabled_lc=$(printf '%s' "${PROXY_ENABLED:-}" | tr 'A-Z' 'a-z')
+  if [[ "$proxy_enabled_lc" == "false" || "$proxy_enabled_lc" == "0" ]]; then
     echo "direct"
   elif [[ -n "$PROXY_URL" ]]; then
     echo "override"
   else
+    if [[ -n "$proxy_enabled_lc" && "$proxy_enabled_lc" != "true" && "$proxy_enabled_lc" != "1" ]]; then
+      echo "⚠️ PROXY_ENABLED 取值无法识别（\"${PROXY_ENABLED:-}\"），按启用内置选路处理（仅 false/0 可关闭）" >&2
+    fi
     echo "builtin"
   fi
 }
@@ -205,12 +216,15 @@ probe_route() {
 }
 
 PROXY_RANKED=()
+PROXY_RANKED_LATENCY=()
 
 # rank_proxy_routes：并行探测全部代理候选（单候选超时 ~5s、一轮
 # 总界有界），活者按延迟升序、未判活者按清单原序殿后，结果写入
-# PROXY_RANKED（只含代理，不含直连）。
+# PROXY_RANKED（只含代理，不含直连）；PROXY_RANKED_LATENCY 与之
+# 并行记录实测延迟（未判活者为空串），供慢直连按延迟并入排名。
 rank_proxy_routes() {
   PROXY_RANKED=()
+  PROXY_RANKED_LATENCY=()
   local tmpdir i prefix
   tmpdir=$(mktemp -d) || return 1
   for i in "${!PROXY_CANDIDATES[@]}"; do
@@ -224,15 +238,45 @@ rank_proxy_routes() {
   while IFS= read -r line; do
     idx="${line##* }"
     PROXY_RANKED+=("${PROXY_CANDIDATES[$idx]}")
+    PROXY_RANKED_LATENCY+=("${line% *}")
   done < <(cat "$tmpdir"/* 2>/dev/null | sort -n)
   rm -rf "$tmpdir"
   local seen=" ${PROXY_RANKED[*]} "
   for prefix in "${PROXY_CANDIDATES[@]}"; do
     case "$seen" in
       *" $prefix "*) ;;
-      *) PROXY_RANKED+=("$prefix") ;;
+      *) PROXY_RANKED+=("$prefix"); PROXY_RANKED_LATENCY+=("") ;;
     esac
   done
+}
+
+# direct_latency_within_gate <秒>：与 Go 侧 routes.go 同口径——直连
+# 探测延迟 ≤800ms 才配短路独占；shell 浮点比较走 awk。
+direct_latency_within_gate() {
+  awk -v t="$1" 'BEGIN { exit !(t + 0 <= 0.8) }'
+}
+
+# routes_insert_slow_direct <直连实测延迟秒>：须在 rank_proxy_routes
+# 之后调用。把慢直连按实测延迟插入已排名路线表（与 Go 侧口径一
+# 致：慢直连不丢弃、按延迟参与排序；未判活代理无延迟值，直连排在
+# 已判活段末尾、未判活段之前）。结果写入 DOWNLOAD_ROUTES，
+# ROUTES_STAGE 置 2。
+routes_insert_slow_direct() {
+  local direct_latency="$1"
+  DOWNLOAD_ROUTES=()
+  local i lat inserted=0
+  for i in "${!PROXY_RANKED[@]}"; do
+    lat="${PROXY_RANKED_LATENCY[$i]:-}"
+    if [[ "$inserted" == "0" ]] && { [[ -z "$lat" ]] || awk -v a="$direct_latency" -v b="$lat" 'BEGIN { exit !(a + 0 <= b + 0) }'; }; then
+      DOWNLOAD_ROUTES+=("")
+      inserted=1
+    fi
+    DOWNLOAD_ROUTES+=("${PROXY_RANKED[$i]}")
+  done
+  if [[ "$inserted" == "0" ]]; then
+    DOWNLOAD_ROUTES+=("")
+  fi
+  ROUTES_STAGE=2
 }
 
 DOWNLOAD_ROUTES=()
@@ -262,14 +306,25 @@ ensure_download_routes() {
       # 理，不受本步影响（运维逃生口语义不变）。
       local panel_prefix=""
       panel_prefix=$(derive_panel_prefix 2>/dev/null || true)
+      local direct_latency=""
       if [[ -n "$panel_prefix" ]] && probe_route "$panel_prefix" >/dev/null; then
         DOWNLOAD_ROUTES=("$panel_prefix")
         ROUTES_STAGE=3
         echo "🌐 GitHub 下载路线: 面板源（经本机面板镜像）" >&2
-      elif probe_route "" >/dev/null; then
-        DOWNLOAD_ROUTES=("")
-        ROUTES_STAGE=1
-        echo "🌐 GitHub 下载路线: 直连" >&2
+      elif direct_latency=$(probe_route ""); then
+        if direct_latency_within_gate "$direct_latency"; then
+          DOWNLOAD_ROUTES=("")
+          ROUTES_STAGE=1
+          echo "🌐 GitHub 下载路线: 直连" >&2
+        else
+          # L2-06①（R5-FD）：慢直连门——旧实现 probe_route 回读了
+          # time_total 却只用成败，探针耗时近 5s 的直连也短路独占。
+          # 与 Go 侧 routes.go 同口径：>800ms 不短路，按实测延迟
+          # 并入代理排名（不丢弃）。
+          rank_proxy_routes
+          routes_insert_slow_direct "$direct_latency"
+          echo "🌐 GitHub 直连较慢（${direct_latency}s 超过 0.8s 门限），按测速排名选路（首选: ${DOWNLOAD_ROUTES[0]:-直连}）" >&2
+        fi
       else
         rank_proxy_routes
         DOWNLOAD_ROUTES=("${PROXY_RANKED[@]}" "")
@@ -322,11 +377,23 @@ resolve_latest_release_tag() {
 
   # 1.7.7：逐路线尝试（每条路线内先重定向法、后 API 法），首个解析
   # 出合格 tag 的路线即用；路线全败时按直选口径补测/续切一次。
+  # L2-06③（R5-FD）：整轮总量上限（默认 120s，FLMX_RESOLVE_BUDGET_SECONDS
+  # 可调）——旧实现每路线重定向法 30s＋API 法 30s 串行，11 线路＋
+  # extend 一轮可达 11 分钟以上且无上限。逐次尝试按剩余预算收紧
+  # --max-time，耗尽即整轮失败返回。
+  local resolve_deadline=$(( $(date +%s) + ${FLMX_RESOLVE_BUDGET_SECONDS:-120} ))
   ensure_download_routes
-  local prefix
+  local prefix remain max_time
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
-      effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$latest_url")" 2>/dev/null || true)
+      remain=$(( resolve_deadline - $(date +%s) ))
+      if (( remain <= 0 )); then
+        echo "❌ 解析最新版本超时（总预算 ${FLMX_RESOLVE_BUDGET_SECONDS:-120}s 已耗尽）" >&2
+        return 1
+      fi
+      max_time=30
+      if (( remain < max_time )); then max_time=$remain; fi
+      effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "$latest_url")" 2>/dev/null || true)
       tag="${effective_url##*/}"
       # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
       # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
@@ -335,7 +402,14 @@ resolve_latest_release_tag() {
         return 0
       fi
 
-      api_tag=$(curl -fsSL --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+      remain=$(( resolve_deadline - $(date +%s) ))
+      if (( remain <= 0 )); then
+        echo "❌ 解析最新版本超时（总预算 ${FLMX_RESOLVE_BUDGET_SECONDS:-120}s 已耗尽）" >&2
+        return 1
+      fi
+      max_time=30
+      if (( remain < max_time )); then max_time=$remain; fi
+      api_tag=$(curl -fsSL --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
       if [[ "$api_tag" =~ $tag_pattern ]]; then
         echo "$api_tag"
         return 0
@@ -414,7 +488,11 @@ verify_downloaded_binary() {
     fi
     rm -f "$checksum_log"
     local expected
-    expected=$(awk '{print $1}' "$checksum_file")
+    # L2-32（R5-FD）：期望值先小写归一再做格式校验（与 panel_install.sh
+    # 的 download_verified 同口径）。旧实现直接以 ^[0-9a-f]{64}$ 校验，
+    # 镜像给出大写哈希文件时会把合法资产误判「格式无效」拒绝安装
+    # （fail-closed 方向无安全问题，但误伤可用性、口径漂移）。
+    expected=$(awk '{print $1}' "$checksum_file" | tr 'A-F' 'a-f' | tr -d '\r')
     rm -f "$checksum_file"
     if [[ -z "$expected" ]]; then
         echo "❌ 校验文件为空，拒绝安装未校验的二进制。"
@@ -445,24 +523,45 @@ verify_downloaded_binary() {
 # 失败/无进展（--speed-limit/--speed-time 看门狗）自动切下一名，
 # 不需要重跑脚本。DOWNLOAD_URL 恒为无前缀的 canonical 地址，路线
 # 前缀只在实际请求时拼（route_url）。
+# L2-06②（R5-FD）：与 Go 侧 FileTransfer 口径对齐，补两条——
+# ① 整轮总预算（默认 240s，与 Go 侧总预算同值，FLMX_DOWNLOAD_BUDGET_SECONDS
+# 可调）：逐路线按剩余时间收紧 --max-time，耗尽即整轮失败；旧实现
+# 只有 1KB/s 地板，一条 2KB/s 的线路下 10MB 需约 80 分钟且永不切线。
+# ② 跨线路续传：本体先落 <dest>.part，后续路线以 curl -C - 接着已
+# 落盘字节继续（Range），不再每条路线 rm 后从零重下；校验通过才
+# mv 为正式文件。校验失败说明字节本身不对/不完整，丢弃 .part 防
+# 坏前缀污染后续路线；服务端忽略 Range 时 curl 可能报错或拼出坏
+# 字节，最终由 sha256 校验兜底丢弃，不会装错文件。已知残口：某路
+# 已下满全部字节但 curl 以错误退出时，后续路线会收到 416 而非续
+# 传成功，整轮按失败处理、重跑脚本从零开始（fail-closed 方向）。
 download_agent_binary() {
   local dest="$1"
   ensure_download_routes
-  local prefix url
+  local part="${dest}.part"
+  rm -f "$part"
+  local deadline=$(( $(date +%s) + ${FLMX_DOWNLOAD_BUDGET_SECONDS:-240} ))
+  local prefix url remain
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
       url=$(route_url "$prefix" "$DOWNLOAD_URL")
-      rm -f "$dest"
-      if curl -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 "$url" -o "$dest" && [[ -s "$dest" ]]; then
-        if verify_downloaded_binary "$dest" "$url"; then
+      remain=$(( deadline - $(date +%s) ))
+      if (( remain <= 0 )); then
+        echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+        rm -f "$part"
+        return 1
+      fi
+      if curl -fL -C - --connect-timeout 10 --max-time "$remain" --speed-limit 1024 --speed-time 30 "$url" -o "$part" && [[ -s "$part" ]]; then
+        if verify_downloaded_binary "$part" "$url"; then
+          mv -f "$part" "$dest"
           echo "✅ 下载完成（路线: ${prefix:-直连}）"
           return 0
         fi
+        rm -f "$part"
       fi
-      rm -f "$dest"
     done
     extend_download_routes || break
   done
+  rm -f "$part"
   return 1
 }
 

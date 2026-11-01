@@ -314,6 +314,16 @@ jobs:
           # 发出，客户端自更新的定版一致校验会拒绝接管且旧通道无从察觉。
           grep -q "^PINNED_VERSION=\"${VERSION}\"" ./artifacts/install.sh && grep -q "^PINNED_VERSION=\"${VERSION}\"" ./artifacts/panel_install.sh
 
+          # L2-30: SCRIPT_VERSION 是 panel_install.sh 自更新的短路键，
+          # 仓库内为手工字面量、无注入。发版资产必须与仓库副本逐字一
+          # 致且格式合法（YYYYMMDD.NN），漂移/丢失即构建红——旧流程对
+          # 该字面量零门禁，漏 bump 或被 sed 误伤时自更新静默失效。
+          # （格式与唯一性由 scripts/check-doc-consistency.sh 第 11 项
+          # 在 CI 常设门硬核。）
+          SV_REPO=$(grep -o '^SCRIPT_VERSION="[^"]*"' panel_install.sh | head -n1)
+          SV_ARTIFACT=$(grep -o '^SCRIPT_VERSION="[^"]*"' ./artifacts/panel_install.sh | head -n1)
+          test -n "$SV_REPO" && test "$SV_REPO" = "$SV_ARTIFACT" && printf '%s' "$SV_REPO" | grep -qE '^SCRIPT_VERSION="[0-9]{8}\.[0-9]{2}"$'
+
           # R5-B5B D19: 为下载资产发布 .sha256（panel_install.sh 校验用）。
           cd ./artifacts
           for f in docker-compose-v4.yml docker-compose-v6.yml install.sh panel_install.sh; do
