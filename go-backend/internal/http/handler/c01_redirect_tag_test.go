@@ -21,6 +21,9 @@ import (
 
 func c01TagServer(t *testing.T, location string) *httptest.Server {
 	t.Helper()
+	// R5-FC（L8-F-04）：fetchLatestTagByRedirect 已改走钉死拨号
+	// 守卫客户端，本地 stub 须按 C-02 先例显式放行回环段。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", location)
 		w.WriteHeader(http.StatusFound)

@@ -86,6 +86,9 @@ func TestFetchGitHubReleasesFallsBackToDirectWhenProxyFails(t *testing.T) {
 }
 
 func TestResolveLatestTagByRedirectViaProxy(t *testing.T) {
+	// R5-FC（L8-F-04）：重定向解析已改走钉死拨号守卫客户端，
+	// 本地测试代理须配 allowlist（与本文件 C-02 各例同口径）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	direct := failingUpstreamForTest(t)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {

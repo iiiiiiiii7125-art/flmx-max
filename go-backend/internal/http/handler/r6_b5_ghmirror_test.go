@@ -22,6 +22,9 @@ import (
 // up 与其缓存文件路径；up.url 每例唯一，避免缓存/节流状态串扰。
 func setupR6B5GHFetch(t *testing.T, name string) (*ghMirrorUpstream, string, *atomic.Int64) {
 	t.Helper()
+	// R5-FC（L8-F-04）：gh_mirror 上游已改钉死拨号，本地 stub 须
+	// 显式放行回环段，使失败模式保持「上游 500」而非拨号被拒。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)

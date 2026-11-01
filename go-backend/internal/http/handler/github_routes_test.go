@@ -44,6 +44,9 @@ func swapGitHubCandidatesForTest(t *testing.T, prefixes ...string) {
 
 func redirectTagStub(t *testing.T, tag string, delay time.Duration, hits *atomic.Int32) *httptest.Server {
 	t.Helper()
+	// R5-FC（L8-F-04）：重定向探测已改走钉死拨号守卫客户端，
+	// 本地 stub 须显式放行回环段（与 proxy_fallback 先例同口径）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		if delay > 0 {
