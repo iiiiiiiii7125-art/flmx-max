@@ -261,20 +261,40 @@ func TestR5FEL4ForwardDiagnosisTargetLegProbesBothProtocols(t *testing.T) {
 	}
 }
 
-// ---- L4-07：链路腿探测口只认真实监听口 ----
+// ---- L4-07：诊断链路腿只认真实监听口；探测面回退链维持 R3 口径 ----
 
 func TestR5FEL4ResolveChainProbeTargetRejectsFabricatedPorts(t *testing.T) {
 	from := &nodeRecord{ID: 1, Name: "from"}
 	target := &nodeRecord{ID: 2, Name: "to", PortRange: "20000-29999", ServerIP: "203.0.113.5"}
 
+	// 真实口透传（两面共用）。
 	host, port, err := resolveChainProbeTarget(from, target, 23456, "", "")
 	if err != nil || host != "203.0.113.5" || port != 23456 {
 		t.Fatalf("real port must pass through, got host=%q port=%d err=%v", host, port, err)
 	}
-	// 旧行为：port≤0 回退范围首口（20000）、再回退 443——都与真实
-	// 监听无关。新行为：显式报错，调用方呈现为该腿失败＋原因。
-	if _, _, err := resolveChainProbeTarget(from, target, 0, "", ""); err == nil {
-		t.Fatalf("L4-07: portless chain hop must not be probed at a fabricated port")
+	// 解析器回退链是 R3 收敛的探测面统一口径（K7 钉一致性），
+	// 不许单边删除：port≤0 仍回退范围首口。
+	if _, port, err := resolveChainProbeTarget(from, target, 0, "", ""); err != nil || port != 20000 {
+		t.Fatalf("probe-surface fallback must stay (R3/K7), got port=%d err=%v", port, err)
+	}
+
+	// 诊断呈现面守卫：链行无真实监听口时 appendChainHopDiagnosis
+	// 不发起探测、直接给「未分配监听端口」的失败项，不让回退口
+	// 的结果冒充该腿健康结论（L4-07 本体）。
+	h := &Handler{repo: openHandlerRepo(t)}
+	now := time.Now().UnixMilli()
+	nodeID, err := h.repo.CreateNode("diag-hop-node", "secret", "203.0.113.5", nil, nil, "20000-29999", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	results := []map[string]interface{}{}
+	h.appendChainHopDiagnosis(&results, map[int64]*nodeRecord{}, nodeID,
+		chainNodeRecord{NodeID: nodeID, Port: 0}, "hop", map[string]interface{}{}, "", "tcp", diagnosisExecOptions{})
+	if len(results) != 1 {
+		t.Fatalf("portless hop must yield exactly one honest item, got %#v", results)
+	}
+	if results[0]["success"] != false || !strings.Contains(asString(results[0]["message"]), "未分配监听端口") {
+		t.Fatalf("portless hop must be an unprobed failure item, got %#v", results[0])
 	}
 }
 
@@ -452,13 +472,22 @@ func TestR5FEL9Type1DetachedExitPortLifecycle(t *testing.T) {
 		t.Fatalf("re-pick must be recorded for the receipt warning, got %+v", state.PortChanges)
 	}
 
-	// ③ 显式指定被占口：与 type-2 同口径拒绝（旧行为无校验直达落库）。
+	// ③ 显式口与 type-2 同口径：prepare 原样登记（不做范围/占用
+	// 校验——占用兜底在提交段锁内复检与唯一索引）；且必须回写进
+	// SegmentPorts，否则落库兜底会把它换掉。此处验被入站占用的口
+	// 与任意显式口两形态；出池口（29000 对 10000-20000 池）的合法
+	// 存量形态由 C001 latent-guard 与 R2B2 幂等两钉守护。
 	req = newReq()
 	asMapSlice(req["outNodeId"])[0]["port"] = 20282
-	tx := r.BeginTx()
-	defer func() { _ = tx.Rollback() }()
-	if _, err := h.prepareTunnelCreateState(tx, req, 1, tunnelID); err == nil {
-		t.Fatalf("explicit occupied detached port must be rejected")
+	state = prepare(req)
+	if got := state.SegmentPorts[key]; got != 20282 {
+		t.Fatalf("explicit detached port must be kept as-is, got %d", got)
+	}
+	req = newReq()
+	asMapSlice(req["outNodeId"])[0]["port"] = 29000
+	state = prepare(req)
+	if got := state.SegmentPorts[key]; got != 29000 {
+		t.Fatalf("explicit out-of-pool detached port must be kept as-is, got %d", got)
 	}
 }
 

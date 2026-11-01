@@ -99,7 +99,7 @@ func (h *Handler) buildDiagnosisStreamStartItems(workItems []diagnosisWorkItem) 
 	for _, workItem := range workItems {
 		targetIP := strings.TrimSpace(workItem.targetIP)
 		targetPort := workItem.targetPort
-		if workItem.hasChainHop {
+		if workItem.hasChainHop && workItem.toNode.Port > 0 {
 			fromNode, _ := h.cachedNode(nodeCache, workItem.fromNodeID)
 			targetNode, err := h.cachedNode(nodeCache, workItem.toNode.NodeID)
 			if err == nil {
@@ -110,9 +110,9 @@ func (h *Handler) buildDiagnosisStreamStartItems(workItems []diagnosisWorkItem) 
 				}
 			}
 		}
-		// L4-07：占位项也不编造端口——链行无真实监听口时保持 0，
-		// 最终结果项会以失败＋原因替换本占位项（旧实现填 443，与
-		// resolveChainProbeTarget 的虚构回退同病）。
+		// L4-07：占位项也不编造端口——链行无真实监听口（port≤0）时
+		// 不走解析器回退链、保持 0，最终结果项由 appendChainHopDiagnosis
+		// 的守卫以「未分配监听端口」失败项替换本占位项（旧实现填 443）。
 
 		nodeName := fmt.Sprintf("node_%d", workItem.fromNodeID)
 		if node, err := h.cachedNode(nodeCache, workItem.fromNodeID); err == nil && strings.TrimSpace(node.Name) != "" {
@@ -202,7 +202,7 @@ func isForwardPendingDelete(forward *forwardRecord) bool {
 }
 
 // ActivateForwardIfNotPending 是 UpdateForwardStatus(id, 1, ...) 的语义化封装
-//（R5-B5 D15）。所有把 status 写成 1（active）的路径必须走此函数，
+// （R5-B5 D15）。所有把 status 写成 1（active）的路径必须走此函数，
 // pending-delete 行会被拒绝并返回哨兵错误，调用方不得忽略。
 var errForwardPendingDelete = errors.New("forward is pending delete")
 
@@ -1820,6 +1820,16 @@ func (h *Handler) appendChainHopDiagnosis(results *[]map[string]interface{}, nod
 		h.appendFailedDiagnosis(results, nodeCache, fromNodeID, "", 0, description, metadata, err.Error())
 		return
 	}
+	// L4-07：链行未分配监听口（port≤0，仅存量异常行/联邦待预留行）
+	// 时不发起探测。resolveChainProbeTarget 的回退链（范围首口→
+	// 443）是 R3 收敛的探测面统一代表性口径（质量探测/延迟/best-
+	// exit 共用、K7 钉一致性），但诊断呈现面把每条腿当作链路健康
+	// 结论：打虚构口得到的结果（443 上无关服务应答/无关失败）不
+	// 得冒充该腿结论，故诊断面在此守卫、诚实呈现为未探测失败项。
+	if toNode.Port <= 0 {
+		h.appendFailedDiagnosis(results, nodeCache, fromNodeID, stripShareHostPort(targetNode.ServerIP), 0, description, metadata, "链路段未分配监听端口，无法探测")
+		return
+	}
 	targetIP, targetPort, err := resolveChainProbeTarget(fromNode, targetNode, toNode.Port, ipPreference, toNode.ConnectIP)
 	if err != nil {
 		// R28-FIX-F01（sweep）：展示面 targetIp 亦须为裸 host。
@@ -1843,16 +1853,19 @@ func resolveChainProbeTarget(fromNode, targetNode *nodeRecord, preferredPort int
 	if host == "" {
 		return "", 0, errors.New("目标节点地址为空")
 	}
-	// L4-07：探测口只能是链行落库的真实监听口。此前 port≤0 时回退
-	// 「节点端口范围首口 → 443」：与该跳实际监听无关，探测结果（成功
-	// 可能是 443 上无关服务的应答、失败与链路健康无关）却以正常腿
-	// 呈现。正常落库的链行恒有口（replaceTunnelChainsTx 兜底选口），
-	// 回退只在存量异常行/联邦待预留行触发——这些行本就没有可探测的
-	// 真实监听口，显式报错由调用方呈现为该腿失败＋原因，不编造目标。
-	if preferredPort <= 0 {
-		return "", 0, errors.New("链路段未分配监听端口，无法探测")
+	// 回退链（首选口→范围首口→443）是 R3 收敛的探测面统一代表性
+	// 口径：resolveBestExitProbeTarget 已与本函数收敛为同一实现，
+	// 质量探测/中转延迟/best-exit 共用，K7 钉两解析器一致——不得
+	// 在此单边改动。诊断呈现面对「链行无真实监听口」的诚实性由
+	// appendChainHopDiagnosis 的守卫单独保证（L4-07）。
+	port := preferredPort
+	if port <= 0 {
+		port = firstPortFromRange(targetNode.PortRange)
 	}
-	return host, preferredPort, nil
+	if port <= 0 {
+		port = 443
+	}
+	return host, port, nil
 }
 
 func firstPortFromRange(portRange string) int {

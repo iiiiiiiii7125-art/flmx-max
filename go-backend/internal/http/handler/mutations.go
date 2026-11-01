@@ -6426,20 +6426,26 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 //   - omitted port on update: reuse the persisted port while legal,
 //     re-pick only when unusable, and record the move in
 //     state.PortChanges so the receipt warns (P01-002);
-//   - explicit port: the same three checks type-2 explicit ports get
-//     (range / node spec / four-source occupancy, B4/F-015) — before
-//     this, a detached explicit port reached the database unchecked
-//     and could collide with an inbound or forward on the node;
+//   - explicit port: taken as-is, exactly like type-2 segment ports
+//     in prepare (no prepare-time checks) — the node's port pool
+//     only constrains entry-side ports (validateLocalNodePort's own
+//     scope note), so an out-of-pool segment port is legitimate
+//     stock (pinned by the C001 latent-guard and R2B2 idempotency
+//     tests); cross-source occupancy for explicit segment ports is
+//     enforced where it is enforced for type 2 as well — the
+//     commit-segment in-lock recheck, whose finalPortNodes include
+//     these SegmentPorts, plus the chain_tunnel (node_id, port)
+//     unique index;
 //   - the resolved port lands in state.SegmentPorts so
 //     applyTunnelPortsToRequest writes it back and
 //     replaceTunnelChainsTx persists prepare's port instead of
 //     silently re-picking its own random one.
 //
-// Node records are loaded best-effort (for validation and for the
-// receipt's node names); an unreadable record keeps the historical
-// tolerance for these detached rows instead of failing the whole
-// save, but an omitted port still resolves through the shared
-// segment-port machinery.
+// Node records are loaded best-effort (for the receipt's node
+// names in port-change warnings); an unreadable record keeps the
+// historical tolerance for these detached rows instead of failing
+// the whole save, but an omitted port still resolves through the
+// shared segment-port machinery.
 func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interface{}, state *tunnelCreateState, excludeTunnelID int64) error {
 	outRaw := asMapSlice(req["outNodeId"])
 	chainRaw := asAnySlice(req["chainNodes"])
@@ -6468,24 +6474,10 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 		}
 		port := asInt(item["port"], 0)
 		if port > 0 {
-			if node := state.Nodes[nodeID]; node != nil && node.IsRemote != 1 {
-				if port > 65535 {
-					return fmt.Errorf("端口 %d 超出有效范围 1-65535", port)
-				}
-				if err := validateRemoteNodePort(node, port); err != nil {
-					return err
-				}
-				if err := validateLocalNodePort(node, port); err != nil {
-					return err
-				}
-				occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
-				if err != nil {
-					return err
-				}
-				if occupied {
-					return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, port)
-				}
-			}
+			// 与 type-2 段口同口径：显式口在 prepare 原样收下（不做
+			// 范围/规格/占用校验——占用兜底在提交段锁内复检与唯一
+			// 索引，见函数头注），登记后经回写落库，不再被落库兜底
+			// 改口。
 			state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = port
 			return nil
 		}
@@ -6645,8 +6637,8 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		// 时拓扑，但 replaceTunnelChainsTx 照样落库。此前 prepare 不
 		// 解析这些行的端口：更新时省略 port 的行在落库兜底被随机重
 		// 挑（与 P01-002「缺省沿用现口、重挑必回执警示」口径不符，
-		// 且无任何 PortChanges 记录），显式口也无规格/占用校验。
-		// 在此按同一口径解析（沿用/重挑＋显式三检），结果经
+		// 且无任何 PortChanges 记录）。在此按 type-2 同口径解析
+		// （缺省沿用/重挑＋记录，显式口原样登记），结果经
 		// SegmentPorts 回写请求后落库。
 		if err := h.prepareDetachedSegmentPorts(tx, req, state, excludeTunnelID); err != nil {
 			return nil, err
