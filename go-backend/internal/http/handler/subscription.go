@@ -489,6 +489,26 @@ func (h *Handler) activeUsersByInbound(now time.Time) map[int64][]kernel.User {
 	return out
 }
 
+// uncountableSubWarned dedupes the L4-08 over-capacity warning:
+// rawActiveUsersByInbound runs on every kernel push / sync cycle, so
+// the warning fires once per subscription id per process, not per push.
+var uncountableSubWarned sync.Map
+
+// warnUncountableSubscription logs loudly, once per subscription,
+// when an active share subscription's id exceeds the socket-mark
+// metering capacity (kernel.MaxUserMarkID): markedUsers drops it, so
+// its traffic is never metered and its TrafficLimit never triggers.
+// Before L4-08 this drop was silent apart from a code comment.
+func warnUncountableSubscription(s *model.Subscription) {
+	if s == nil || s.ID <= kernel.MaxUserMarkID {
+		return
+	}
+	if _, loaded := uncountableSubWarned.LoadOrStore(s.ID, struct{}{}); loaded {
+		return
+	}
+	log.Printf("subscription metering capacity exceeded: subscription_id=%d name=%q exceeds the per-user mark limit %d; this subscription's traffic will NOT be metered and its traffic limit will NOT trigger (L4-08)", s.ID, s.Name, kernel.MaxUserMarkID)
+}
+
 // rawActiveUsersByInbound is activeUsersByInbound before the SS
 // companion remap: users are keyed by the inbound the subscription
 // sources (the origin). Metering reconcile reads demand from this form.
@@ -505,6 +525,7 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 		if !isShare(s) || !subActive(s, now) {
 			continue
 		}
+		warnUncountableSubscription(s)
 		if rows == nil {
 			if rows, err = h.repo.ListNodeInbounds(); err != nil {
 				return nil
@@ -784,6 +805,11 @@ type subscriptionView struct {
 	// （B-06：伴生入站不能作订阅源，B10-002：排除须对管理员可见）。
 	// 仅 subscriptionSave 的响应回填；列表等其他视图恒空、omitempty 不出现。
 	ExcludedCompanionIDs []int64 `json:"excludedCompanionIds,omitempty"`
+	// MeteringUnsupported（L4-08）：订阅 ID 超出 socket mark 计量
+	// 编码上限（kernel.MaxUserMarkID）时为 true——该订阅的流量永不
+	// 计量、TrafficLimit 永不触发，须对管理员显式可见，不许静默。
+	// 视图构建单点回填，列表/保存/详情同口径。
+	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
 }
 
 // subFormatAlias resolves format aliases shared by the pull side
@@ -907,6 +933,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s), RelayIDs: relayIDs,
+		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
 	}
 }
 

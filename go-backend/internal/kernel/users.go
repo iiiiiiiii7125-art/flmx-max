@@ -173,8 +173,19 @@ const (
 	userMarkMax  = 0xffff
 )
 
+// MaxUserMarkID is the largest subscription (user) id the socket-mark
+// metering scheme can encode. The mark layout is mirrored by the
+// agent (go-gost/x/kernel carries the same constants), so widening
+// the id field is a coordinated two-sided protocol change — during a
+// mixed-version rollout the two sides would mint different marks and
+// miscount silently. Until such a change ships, ids above this limit
+// are guarded explicitly on the panel side (L4-08): the subscription
+// view flags them (meteringUnsupported) and the mount path logs a
+// one-time warning, instead of the previous silent drop.
+const MaxUserMarkID = userMarkMax
+
 // UserMark is the socket mark of the user's traffic; 0 when the id does not
-// fit, and the user is then not counted.
+// fit (id > MaxUserMarkID), and the user is then not counted.
 func UserMark(id int64) int64 {
 	if id <= 0 || id > userMarkMax {
 		return 0

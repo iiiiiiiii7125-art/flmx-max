@@ -892,7 +892,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
 		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
 		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
-		if _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+		if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1348,7 +1348,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
-	brokenEntries, err := h.deleteNodeByID(id)
+	brokenEntries, soleRoleWarnings, err := h.deleteNodeByID(id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1364,9 +1364,14 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range brokenEntries {
 		brokenReferrers = append(brokenReferrers, entry.Display)
 	}
+	if soleRoleWarnings == nil {
+		soleRoleWarnings = []string{}
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"brokenReferrers":     brokenReferrers,
 		"brokenReferrerCount": len(brokenReferrers),
+		// L4-03：唯一入口/出口点名（新增字段，向后兼容）。
+		"soleRoleWarnings": soleRoleWarnings,
 	}))
 }
 
@@ -1674,6 +1679,9 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// 同节点的两个不同引用方显示串相同会被吞掉一条。
 	var brokenReferrers []string
 	seenReferrer := make(map[int64]struct{})
+	// L4-03：唯一入口/出口点名同 funnel 汇总（同文案只报一次）。
+	var soleRoleWarnings []string
+	seenSoleRole := make(map[string]struct{})
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1685,7 +1693,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
 			continue
 		}
-		nodeReferrers, delErr := h.deleteNodeByID(id)
+		nodeReferrers, nodeSoleWarnings, delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
@@ -1703,9 +1711,16 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			seenReferrer[referrer.ID] = struct{}{}
 			brokenReferrers = append(brokenReferrers, referrer.Display)
 		}
+		for _, warning := range nodeSoleWarnings {
+			if _, dup := seenSoleRole[warning]; dup {
+				continue
+			}
+			seenSoleRole[warning] = struct{}{}
+			soleRoleWarnings = append(soleRoleWarnings, warning)
+		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -2652,6 +2667,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		for _, hop := range runtimeState.ChainHops {
 			finalPortNodes = append(finalPortNodes, hop...)
 		}
+		// L9 观察 1：type-1 游离段口不在 OutNodes/ChainHops 里，从
+		// SegmentPorts 补入提交段复检（与验证段同口径，堵两段之间
+		// 被并发占用的窗口；重复条目排除本隧道后恒通过，无副作用）。
+		for key, port := range runtimeState.SegmentPorts {
+			finalPortNodes = append(finalPortNodes, tunnelRuntimeNode{NodeID: key.nodeID, Port: port})
+		}
 		for _, n := range finalPortNodes {
 			if n.Port <= 0 {
 				continue
@@ -3032,18 +3053,47 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 	}
 }
 
+// forwardPortConflictMessage 按统一四源谓词给出的占用来源措辞
+// （L9 观察 2）：入站/链路段/联邦预留占用不得误报为「已被其他转发
+// 占用」——归因错误会让排障找错对象。conflict 为 nil（来源不可知）
+// 时退回不点名的「已被占用」。
+func forwardPortConflictMessage(node *nodeRecord, port int, conflict *repo.ForwardPortConflict) string {
+	if conflict != nil {
+		name := strings.TrimSpace(conflict.Name)
+		switch conflict.Source {
+		case repo.PortSourceInbound:
+			if name != "" {
+				return fmt.Sprintf("节点 %s 端口 %d 已被入站 %s 占用", node.Name, port, name)
+			}
+			return fmt.Sprintf("节点 %s 端口 %d 已被入站占用", node.Name, port)
+		case repo.PortSourceChain:
+			if name != "" {
+				return fmt.Sprintf("节点 %s 端口 %d 已被隧道 %s 的链路段占用", node.Name, port, name)
+			}
+			return fmt.Sprintf("节点 %s 端口 %d 已被隧道链路段占用", node.Name, port)
+		case repo.PortSourcePeer:
+			return fmt.Sprintf("节点 %s 端口 %d 已被联邦共享预留占用", node.Name, port)
+		}
+	}
+	return fmt.Sprintf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
+}
+
 func (h *Handler) validateForwardPortAvailabilityTx(tx *gorm.DB, node *nodeRecord, port int, currentForwardID int64) error {
 	if h == nil || h.repo == nil || tx == nil || node == nil || port <= 0 {
 		return nil
 	}
-	occupied, err := h.repo.HasOtherForwardOnNodePortTx(tx, node.ID, port, currentForwardID)
+	conflict, err := h.repo.FindOtherForwardOnNodePortTx(tx, node.ID, port, currentForwardID)
 	if err != nil {
 		return err
 	}
-	if occupied {
-		return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
+	if conflict == nil {
+		return nil
 	}
-	return nil
+	if conflict.Source == repo.PortSourceForward && conflict.Status == model.ForwardStatusPendingDelete {
+		return fmt.Errorf("节点 %s 端口 %d 正等待节点清理（转发 %s），请稍后重试或联系管理员",
+			node.Name, port, conflict.Name)
+	}
+	return errors.New(forwardPortConflictMessage(node, port, conflict))
 }
 
 func (h *Handler) validateTunnelEntryPortConflictsForNewEntriesTx(tx *gorm.DB, tunnelID int64, oldEntryNodeIDs, newEntryNodeIDs []int64) error {
@@ -3573,6 +3623,9 @@ type batchOperationResult struct {
 	// R2X-045：批量删节点打断的跨节点引用清单（与单删的
 	// brokenReferrers 同名字段/同口径）；仅删节点批量入口填充。
 	BrokenReferrers []string `json:"brokenReferrers,omitempty"`
+	// L4-03：批量删节点的「唯一入口/出口」点名清单（与单删的
+	// soleRoleWarnings 同名字段/同口径）；仅删节点批量入口填充。
+	SoleRoleWarnings []string `json:"soleRoleWarnings,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -6234,6 +6287,15 @@ type tunnelCreateState struct {
 	// prepare (P01-002), so tunnelUpdate can surface them in the
 	// receipt's warnings instead of drifting ports silently.
 	PortChanges []tunnelPortChange
+	// SegmentPorts records the port prepare resolved for every
+	// non-entry segment slot present in the request, keyed by
+	// (chainType, inx, nodeID) — the same identity
+	// replaceTunnelChainsTx persists. applyTunnelPortsToRequest
+	// writes them back into the request so the persisted rows carry
+	// exactly prepare's ports for every tunnel type, including
+	// type-1 tunnels whose segment rows prepare builds no runtime
+	// topology for (L9 观察 1).
+	SegmentPorts map[tunnelChainPortKey]int
 }
 
 // tunnelChainPortKey identifies one non-entry segment slot of a tunnel
@@ -6355,13 +6417,107 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 	return port, nil
 }
 
+// prepareDetachedSegmentPorts resolves ports for the non-entry
+// segment rows of a non-type-2 tunnel request (L9 观察 1). These rows
+// never enter the runtime topology (state.OutNodes/ChainHops stay
+// empty for type 1), but replaceTunnelChainsTx persists them for
+// every tunnel type — so their ports must go through the same
+// discipline as type-2 segments:
+//   - omitted port on update: reuse the persisted port while legal,
+//     re-pick only when unusable, and record the move in
+//     state.PortChanges so the receipt warns (P01-002);
+//   - explicit port: taken as-is, exactly like type-2 segment ports
+//     in prepare (no prepare-time checks) — the node's port pool
+//     only constrains entry-side ports (validateLocalNodePort's own
+//     scope note), so an out-of-pool segment port is legitimate
+//     stock (pinned by the C001 latent-guard and R2B2 idempotency
+//     tests); cross-source occupancy for explicit segment ports is
+//     enforced where it is enforced for type 2 as well — the
+//     commit-segment in-lock recheck, whose finalPortNodes include
+//     these SegmentPorts, plus the chain_tunnel (node_id, port)
+//     unique index;
+//   - the resolved port lands in state.SegmentPorts so
+//     applyTunnelPortsToRequest writes it back and
+//     replaceTunnelChainsTx persists prepare's port instead of
+//     silently re-picking its own random one.
+//
+// Node records are loaded best-effort (for the receipt's node
+// names in port-change warnings); an unreadable record keeps the
+// historical tolerance for these detached rows instead of failing
+// the whole save, but an omitted port still resolves through the
+// shared segment-port machinery.
+func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interface{}, state *tunnelCreateState, excludeTunnelID int64) error {
+	outRaw := asMapSlice(req["outNodeId"])
+	chainRaw := asAnySlice(req["chainNodes"])
+	if len(outRaw) == 0 && len(chainRaw) == 0 {
+		return nil
+	}
+	existingPorts := map[tunnelChainPortKey]int{}
+	existingPortsByNode := map[int64]tunnelChainNodePort{}
+	if excludeTunnelID > 0 {
+		var err error
+		existingPorts, existingPortsByNode, err = h.existingTunnelChainPorts(tx, excludeTunnelID)
+		if err != nil {
+			return err
+		}
+	}
+	allocated := map[int64]int{}
+	resolve := func(item map[string]interface{}, chainType int, inx int) error {
+		nodeID := asInt64(item["nodeId"], 0)
+		if nodeID <= 0 {
+			return nil
+		}
+		if _, ok := state.Nodes[nodeID]; !ok {
+			if node, nErr := h.repo.GetNodeRecordTx(tx, nodeID); nErr == nil && node != nil {
+				state.Nodes[nodeID] = node
+			}
+		}
+		port := asInt(item["port"], 0)
+		if port > 0 {
+			// 与 type-2 段口同口径：显式口在 prepare 原样收下（不做
+			// 范围/规格/占用校验——占用兜底在提交段锁内复检与唯一
+			// 索引，见函数头注），登记后经回写落库，不再被落库兜底
+			// 改口。
+			state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = port
+			return nil
+		}
+		isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
+		if remoteErr != nil {
+			return remoteErr
+		}
+		if isRemote {
+			return nil
+		}
+		resolved, err := h.resolveTunnelSegmentPort(tx, state, nodeID, chainType, inx, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
+		if err != nil {
+			return err
+		}
+		state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = resolved
+		return nil
+	}
+	for idx, item := range outRaw {
+		if err := resolve(item, 3, idx+1); err != nil {
+			return err
+		}
+	}
+	for hopIdx, hopRaw := range chainRaw {
+		for _, item := range asMapSlice(hopRaw) {
+			if err := resolve(item, 2, hopIdx+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface{}, tunnelType int, excludeTunnelID int64) (*tunnelCreateState, error) {
 	state := &tunnelCreateState{
-		Type:      tunnelType,
-		InNodes:   make([]tunnelRuntimeNode, 0),
-		ChainHops: make([][]tunnelRuntimeNode, 0),
-		OutNodes:  make([]tunnelRuntimeNode, 0),
-		Nodes:     make(map[int64]*nodeRecord),
+		Type:         tunnelType,
+		InNodes:      make([]tunnelRuntimeNode, 0),
+		ChainHops:    make([][]tunnelRuntimeNode, 0),
+		OutNodes:     make([]tunnelRuntimeNode, 0),
+		Nodes:        make(map[int64]*nodeRecord),
+		SegmentPorts: make(map[tunnelChainPortKey]int),
 	}
 	nodeIDs := make([]int64, 0)
 
@@ -6421,6 +6577,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 					}
 				}
 			}
+			if port > 0 {
+				state.SegmentPorts[tunnelChainPortKey{chainType: 3, inx: idx + 1, nodeID: nodeID}] = port
+			}
 			state.OutNodes = append(state.OutNodes, tunnelRuntimeNode{
 				NodeID:    nodeID,
 				Protocol:  defaultString(asString(item["protocol"]), "tls"),
@@ -6456,6 +6615,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 						}
 					}
 				}
+				if port > 0 {
+					state.SegmentPorts[tunnelChainPortKey{chainType: 2, inx: hopIdx + 1, nodeID: nodeID}] = port
+				}
 				hop = append(hop, tunnelRuntimeNode{
 					NodeID:    nodeID,
 					Protocol:  defaultString(asString(item["protocol"]), "tls"),
@@ -6469,6 +6631,17 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			if len(hop) > 0 {
 				state.ChainHops = append(state.ChainHops, hop)
 			}
+		}
+	} else {
+		// L9 观察 1：非 type-2 隧道的 outNodeId/chainNodes 行不进运行
+		// 时拓扑，但 replaceTunnelChainsTx 照样落库。此前 prepare 不
+		// 解析这些行的端口：更新时省略 port 的行在落库兜底被随机重
+		// 挑（与 P01-002「缺省沿用现口、重挑必回执警示」口径不符，
+		// 且无任何 PortChanges 记录）。在此按 type-2 同口径解析
+		// （缺省沿用/重挑＋记录，显式口原样登记），结果经
+		// SegmentPorts 回写请求后落库。
+		if err := h.prepareDetachedSegmentPorts(tx, req, state, excludeTunnelID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -6773,6 +6946,29 @@ func applyTunnelPortsToRequest(req map[string]interface{}, state *tunnelCreateSt
 			nodeID := asInt64(item["nodeId"], 0)
 			if port, ok := chainPorts[nodeID]; ok && port > 0 {
 				item["port"] = port
+			}
+		}
+	}
+
+	// L9 观察 1：按 (chainType, inx, nodeID) 精确回写 prepare 解析的
+	// 全部段口。按节点回写覆盖不到 type-1 的游离段行（不在
+	// state.OutNodes/ChainHops 里），省略 port 的行到
+	// replaceTunnelChainsTx 时仍是 0、被随机重挑且无回执警示；
+	// 精确键与落库迭代同序（outNodeId→3、chainNodes 组序→2），
+	// 回写值与 prepare 定型值逐行一致。
+	if len(state.SegmentPorts) > 0 {
+		for idx, item := range asMapSlice(req["outNodeId"]) {
+			nodeID := asInt64(item["nodeId"], 0)
+			if port, ok := state.SegmentPorts[tunnelChainPortKey{chainType: 3, inx: idx + 1, nodeID: nodeID}]; ok && port > 0 {
+				item["port"] = port
+			}
+		}
+		for hopIdx, hopRaw := range asAnySlice(req["chainNodes"]) {
+			for _, item := range asMapSlice(hopRaw) {
+				nodeID := asInt64(item["nodeId"], 0)
+				if port, ok := state.SegmentPorts[tunnelChainPortKey{chainType: 2, inx: hopIdx + 1, nodeID: nodeID}]; ok && port > 0 {
+					item["port"] = port
+				}
 			}
 		}
 	}
@@ -8096,8 +8292,13 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
 // R3X-014：清单元素为 (引用方入站 ID, 显示串) 结构，供批量入口按 ID
 // 合并；单删入口在响应层投影回 []string，响应契约不变。
-func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
+// L4-03：第二返回值是「唯一入口/出口」点名清单——本节点是某隧道
+// 唯一入口或唯一出口时，级联删其全部链路段行会让该隧道结构残缺，
+// 此前无任何回执点名（brokenReferrers 只覆盖跨节点入站引用），现
+// 在删除前查明、随回执显式披露（删除语义不变，仍尽力而为）。
+func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error) {
 	var brokenReferrers []nodeCrossReferrer
+	var soleRoleWarnings []string
 	// R3X-017（E3-03）：删节点此前从不刷新白名单——走共用漏斗，级联
 	// 删前收集受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点
 	// 入站为链式出站目标，见 inboundIDsAffectedByNodeDelete），级联
@@ -8112,23 +8313,46 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 		// NodeIDs 重载，删一个节点即 O(目标数+全表行数) 次全表扫描。
 		targets, targetErr := h.repo.ListNodeInboundsByNode(id)
 		if targetErr != nil {
-			return nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
+			return nil, nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
 		}
 		ix, ixErr := h.loadChainRefIndex()
 		if ixErr != nil {
 			if len(targets) > 0 {
 				// 与逐目标 chainReferrers 首败的失败形态一致。
-				return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
+				return nil, nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
 			}
-			return nil, ixErr
+			return nil, nil, ixErr
 		}
 		brokenReferrers = h.nodeCrossReferrersIx(targets, id, ix)
 		// 同 R3X-015 口径：受影响入站收集失败同样中止删除。
 		affected, collectErr := h.inboundIDsAffectedByNodeDeleteIx(id, ix)
 		if collectErr != nil {
-			return nil, collectErr
+			return nil, nil, collectErr
 		}
 		affectedInboundIDs = affected
+		// L4-03：唯一入口/出口点名收集，同守卫口径 fail-closed。
+		soleRoles, soleErr := h.repo.ListSoleSegmentTunnelsForNode(id)
+		if soleErr != nil {
+			return nil, nil, soleErr
+		}
+		if len(soleRoles) > 0 {
+			nodeName := fmt.Sprintf("节点 %d", id)
+			if n, nErr := h.repo.GetNodeRecord(id); nErr == nil && n != nil && strings.TrimSpace(n.Name) != "" {
+				nodeName = "节点 " + n.Name
+			}
+			for _, sr := range soleRoles {
+				role := "入口"
+				if sr.ChainType == 3 {
+					role = "出口"
+				}
+				tunnelName := strings.TrimSpace(sr.TunnelName)
+				if tunnelName == "" {
+					tunnelName = fmt.Sprintf("隧道 %d", sr.TunnelID)
+				}
+				soleRoleWarnings = append(soleRoleWarnings,
+					fmt.Sprintf("隧道 %s 将失去唯一%s（%s 被删除后该隧道无%s节点）", tunnelName, role, nodeName, role))
+			}
+		}
 	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
@@ -8151,7 +8375,7 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 		}
 	}
 	if err := h.repo.DeleteNodeCascade(id); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
@@ -8162,7 +8386,7 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 	}
 	// R3X-017：级联删后统一刷新（漏斗收尾，见函数头收集段）。
 	h.refreshInboundWhitelists(affectedInboundIDs)
-	return brokenReferrers, nil
+	return brokenReferrers, soleRoleWarnings, nil
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {
@@ -9378,7 +9602,8 @@ func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, cu
 		return fmt.Errorf("节点 %s 端口 %d 正等待节点清理（转发 %s），请稍后重试或联系管理员",
 			node.Name, port, conflict.Name)
 	}
-	return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
+	// L9 观察 2：按占用来源措辞，入站/链路段/联邦预留不再误报转发占用。
+	return errors.New(forwardPortConflictMessage(node, port, conflict))
 }
 
 func parsePortRangeMinMax(input string) (int, int) {
