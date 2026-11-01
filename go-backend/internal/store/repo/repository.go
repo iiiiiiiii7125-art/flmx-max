@@ -1494,7 +1494,7 @@ func (r *Repository) ListUserAccessibleTunnels(userID int64) ([]map[string]inter
 	err := r.db.Model(&model.UserTunnel{}).
 		Select("tunnel.id, tunnel.name").
 		Joins("JOIN tunnel ON tunnel.id = user_tunnel.tunnel_id").
-		Where("user_tunnel.user_id = ? AND tunnel.status = 1", userID).
+		Where("user_tunnel.user_id = ? AND user_tunnel.status = 1 AND tunnel.status = 1", userID).
 		Order("tunnel.inx ASC, tunnel.id ASC").
 		Find(&rows).Error
 	if err != nil {
