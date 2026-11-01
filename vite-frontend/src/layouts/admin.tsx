@@ -502,7 +502,7 @@ export default function AdminLayout({
                          isActive
                            ? "text-white font-semibold"
                            : isMonitorBlocked
-                             ? "text-gray-500 dark:text-gray-400 font-medium"
+                             ? "text-foreground font-medium"
                              : "text-gray-600 dark:text-gray-200 font-medium"
                        }
                      `}
@@ -557,10 +557,10 @@ export default function AdminLayout({
             className={`transition-all duration-200 overflow-hidden flex items-center rounded-full tray-plate px-3 py-1.5 w-fit ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[220px] opacity-100"}`}
           >
             <VersionFooter
-              poweredClassName="text-xs text-gray-500 dark:text-gray-400"
+              poweredClassName="text-xs text-foreground"
               updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
               version={siteConfig.version}
-              versionClassName="text-xs text-gray-500 dark:text-gray-400"
+              versionClassName="text-xs text-foreground"
             />
           </div>
 
@@ -568,7 +568,7 @@ export default function AdminLayout({
           {!isMobile && (
             <Button
               isIconOnly
-              className="flex-shrink-0 text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300 min-w-0 w-10 h-10 rounded-full mx-auto"
+              className="flex-shrink-0 text-foreground hover:text-gray-700 min-w-0 w-10 h-10 rounded-full mx-auto"
               size="sm"
               variant="light"
               onPress={toggleCollapse}

@@ -24,7 +24,7 @@ const ROUTES: Record<string, [string, string]> = {
     "CN2 GT",
     "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
   ],
-  "电信 163": ["163", "bg-default-200 text-default-600 dark:text-default-300"],
+  "电信 163": ["163", "bg-tray text-default-600"],
   "联通 9929": [
     "9929",
     "bg-violet-500/15 text-violet-700 dark:text-violet-400",
@@ -45,12 +45,12 @@ const ROUTES: Record<string, [string, string]> = {
 
 const NET_CLASS: Record<string, string> = {
   CN2: "text-amber-600",
-  "163": "text-default-500",
+  "163": "text-foreground",
   "4837": "text-sky-600",
   "9929": "text-violet-600",
   CMIN2: "text-emerald-600",
   CMI: "text-teal-600",
-  CT: "text-default-500",
+  CT: "text-foreground",
 };
 
 // IPv6 hops in AS4134 may be the 163 backbone or provincial ChinaNet.
@@ -90,8 +90,8 @@ function ago(ts: number) {
 function HopRow({ hop }: { hop: NodeRouteHop }) {
   return (
     <div className="grid grid-cols-[2rem_1fr_auto] items-center gap-2 py-0.5 font-mono text-xs">
-      <span className="text-default-400">{hop.ttl}</span>
-      <span className={`break-all ${hop.ip ? "" : "text-default-300"}`}>
+      <span className="text-foreground">{hop.ttl}</span>
+      <span className={`break-all ${hop.ip ? "" : "text-foreground"}`}>
         {hop.ip || "*"}
         {hop.net && (
           <span className={`ml-2 font-sans ${NET_CLASS[hop.net] ?? ""}`}>
@@ -99,7 +99,7 @@ function HopRow({ hop }: { hop: NodeRouteHop }) {
           </span>
         )}
       </span>
-      <span className="text-default-500">
+      <span className="text-foreground">
         {hop.rttMs ? `${hop.rttMs.toFixed(1)} ms` : ""}
       </span>
     </div>
@@ -178,7 +178,7 @@ export function RouteModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
           <h2 className="text-lg font-bold">回程路由</h2>
-          <p className="text-xs font-normal text-default-500">
+          <p className="text-xs font-normal text-foreground">
             {nodeName ? `${nodeName} → 各测试点` : "节点 → 各测试点"}
             {route ? ` · ${ago(route.checkedAt)}检测` : ""}
           </p>
@@ -186,10 +186,10 @@ export function RouteModal({
         <ModalBody className="space-y-2">
           {loading ? (
             <div className="flex justify-center py-6">
-              <Loader2 className="h-5 w-5 animate-spin text-default-400" />
+              <Loader2 className="h-5 w-5 animate-spin text-foreground" />
             </div>
           ) : !route || route.points.length === 0 ? (
-            <p className="py-6 text-center text-sm text-default-500">
+            <p className="py-6 text-center text-sm text-foreground">
               还没有检测结果，点下方按钮检测
             </p>
           ) : (
@@ -220,7 +220,7 @@ export function RouteModal({
                           <span className="shrink-0 font-medium">{p.name}</span>
                         )}
                         {label && (
-                          <span className="w-9 shrink-0 rounded bg-tray px-1 text-center text-[10px] text-default-500">
+                          <span className="w-9 shrink-0 rounded bg-tray px-1 text-center text-[10px] text-foreground">
                             {label}
                           </span>
                         )}
@@ -231,12 +231,12 @@ export function RouteModal({
                         ) : leg.route && leg.route !== "未识别" ? (
                           <RouteTag route={leg.route} />
                         ) : (
-                          <span className="text-xs text-default-400">
+                          <span className="text-xs text-foreground">
                             未识别线路
                           </span>
                         )}
                         {!leg.error && (
-                          <span className="ml-auto text-xs text-default-400">
+                          <span className="ml-auto text-xs text-foreground">
                             {leg.hops?.length ?? 0} 跳{" "}
                             {open === key ? "▴" : "▾"}
                           </span>
@@ -248,7 +248,7 @@ export function RouteModal({
                             <HopRow key={h.ttl} hop={h} />
                           ))}
                           {!leg.reached && (
-                            <p className="pt-1 text-xs text-default-400">
+                            <p className="pt-1 text-xs text-foreground">
                               目标没有回应，只显示到最后一个有回应的路由器
                             </p>
                           )}
@@ -260,7 +260,7 @@ export function RouteModal({
               );
             })
           )}
-          <p className="text-xs text-default-400">
+          <p className="text-xs text-foreground">
             按经过的骨干网识别：59.43 段为 CN2（不经过 202.97 即 GIA），202.97
             为 163，219.158 为联通 4837，218.105 / 210.51 为联通
             9929，223.118–223.121 为移动 CMI，其中归属 AS58807 的为 CMIN2；IPv6

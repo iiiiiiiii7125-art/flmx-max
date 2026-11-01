@@ -172,7 +172,7 @@ export default function MySubscriptionPage() {
               <button
                 type="button"
                 title={`订阅${inactiveReason}，链接不可用`}
-                className="inline-flex items-center justify-center w-10 h-10 rounded text-default-300 cursor-not-allowed"
+                className="inline-flex items-center justify-center w-10 h-10 rounded text-foreground cursor-not-allowed"
                 onClick={() =>
                   toast.error(`订阅${inactiveReason}，链接不可用`)
                 }
@@ -191,7 +191,7 @@ export default function MySubscriptionPage() {
   if (loading) {
     return (
       <div className="p-6">
-        <p className="text-sm text-default-500">加载中...</p>
+        <p className="text-sm text-foreground">加载中...</p>
       </div>
     );
   }
@@ -208,8 +208,8 @@ export default function MySubscriptionPage() {
       <div className="p-6">
         <Card>
           <CardBody className="py-12 text-center">
-            <p className="text-danger">订阅信息加载失败</p>
-            <p className="text-xs text-default-400 mt-1">{loadError}</p>
+            <p className="text-danger-700">订阅信息加载失败</p>
+            <p className="text-xs text-foreground mt-1">{loadError}</p>
             <div className="mt-4">
               <Button color="primary" variant="flat" onPress={load}>
                 重试
@@ -226,8 +226,8 @@ export default function MySubscriptionPage() {
       <div className="p-6">
         <Card>
           <CardBody className="py-12 text-center">
-            <p className="text-default-500">暂无订阅</p>
-            <p className="text-xs text-default-400 mt-1">请联系管理员为你分配订阅权限</p>
+            <p className="text-foreground">暂无订阅</p>
+            <p className="text-xs text-foreground mt-1">请联系管理员为你分配订阅权限</p>
           </CardBody>
         </Card>
       </div>
@@ -241,7 +241,7 @@ export default function MySubscriptionPage() {
     <div className="p-6 space-y-4 max-w-4xl mx-auto">
       <div>
         <h1 className="text-xl font-bold">我的订阅</h1>
-        <p className="text-sm text-default-500 mt-1">
+        <p className="text-sm text-foreground mt-1">
           管理员为你分配的代理订阅，点击复制链接导入客户端使用
         </p>
       </div>
@@ -290,16 +290,16 @@ export default function MySubscriptionPage() {
                         </Chip>
                       ) : null}
                     </p>
-                    <span className="text-xs text-default-500">{s.nodeCount} 个节点</span>
+                    <span className="text-xs text-foreground">{s.nodeCount} 个节点</span>
                   </div>
-                  <p className="text-xs text-default-500">
+                  <p className="text-xs text-foreground">
                     {s.trafficLimit > 0
                       ? `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`
                       : `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} · 不限流量`}
                     {s.expireTime > 0 ? ` · ${dateText(s.expireTime)} 到期` : ""}
                   </p>
                   <div className="rounded-lg bg-white/40 p-3">
-                    <p className="text-xs text-default-500 mb-2 break-all select-all">
+                    <p className="text-xs text-foreground mb-2 break-all select-all">
                       {assignedUrl(s)}
                     </p>
                     {formatButtons(`assigned-${s.id}`, s.name, (f) => assignedUrl(s, f), true, inactiveReason)}
@@ -339,7 +339,7 @@ export default function MySubscriptionPage() {
         </CardHeader>
         <CardBody className="space-y-2">
           <div className="rounded-lg bg-white/40 p-3">
-            <p className="text-xs text-default-500 mb-2 break-all select-all">
+            <p className="text-xs text-foreground mb-2 break-all select-all">
               {subUrl()}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -383,13 +383,13 @@ export default function MySubscriptionPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium">{inbound.name}</p>
-                  <p className="text-xs text-default-500">
+                  <p className="text-xs text-foreground">
                     {inbound.protocol} · {inbound.nodeName}
                   </p>
                 </div>
               </div>
               <div className="rounded-lg bg-white/40 p-3">
-                <p className="text-xs text-default-500 mb-2 break-all select-all">
+                <p className="text-xs text-foreground mb-2 break-all select-all">
                   {subUrl(undefined, inbound.id)}
                 </p>
                 <div className="flex flex-wrap gap-2">
@@ -437,12 +437,12 @@ export default function MySubscriptionPage() {
                   <div>
                     <p className="font-medium">
                       {relay.name}
-                      <span className="ml-2 text-xs font-normal text-default-500">中转</span>
+                      <span className="ml-2 text-xs font-normal text-foreground">中转</span>
                     </p>
                   </div>
                 </div>
                 <div className="rounded-lg bg-white/40 p-3">
-                  <p className="text-xs text-default-500 mb-2 break-all select-all">
+                  <p className="text-xs text-foreground mb-2 break-all select-all">
                     {subUrl(undefined, undefined, relay.id)}
                   </p>
                   <div className="flex flex-wrap gap-2">

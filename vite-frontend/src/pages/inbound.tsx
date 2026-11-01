@@ -680,10 +680,10 @@ export default function InboundPage() {
             )}
             <div className="min-w-0 flex-1">
               <div className="truncate font-semibold">{item.name}</div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-default-500">
+              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-foreground">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
                 <span
-                  className={`truncate ${unreachable ? "text-danger" : kernelBad ? "text-warning" : ""}`}
+                  className={`truncate ${unreachable ? "text-danger-700" : kernelBad ? "text-warning-700" : ""}`}
                 >
                   {stateText}
                 </span>
@@ -996,7 +996,7 @@ export default function InboundPage() {
               </Chip>
             )}
           </div>
-          <div className="truncate text-xs text-default-500">
+          <div className="truncate text-xs text-foreground">
             {describeInbound(item)} · {item.port}
             {where ? ` · ${where}` : ""}
             {item.enabled && probe?.ok ? ` · ${probe.latencyMs} ms` : ""}
@@ -1006,7 +1006,7 @@ export default function InboundPage() {
             </span>
           </div>
         </div>
-        <div className="hidden shrink-0 text-right font-mono text-xs text-default-500 sm:block">
+        <div className="hidden shrink-0 text-right font-mono text-xs text-foreground sm:block">
           <div>↑ {formatTraffic(item.uploadBytes)}</div>
           <div>↓ {formatTraffic(item.downloadBytes)}</div>
         </div>
@@ -1091,7 +1091,7 @@ export default function InboundPage() {
         key: "sources",
         label: "订阅源",
         badge: sources.some((s) => s.lastError) ? (
-          <span className="text-danger">异常</span>
+          <span className="text-danger-700">异常</span>
         ) : (
           sources.length || undefined
         ),
@@ -1114,7 +1114,7 @@ export default function InboundPage() {
           >
             {t.label}
             {t.badge !== undefined && (
-              <span className="ml-1 text-xs font-medium text-default-500">
+              <span className="ml-1 text-xs font-medium text-foreground">
                 {t.badge}
               </span>
             )}
@@ -1268,7 +1268,7 @@ export default function InboundPage() {
                 <h3 className="text-lg font-medium">
                   {inbounds.length === 0 ? "暂无入站" : "没有匹配的入站"}
                 </h3>
-                <p className="text-default-500 text-sm max-w-sm">
+                <p className="text-foreground text-sm max-w-sm">
                   {kernels.length === 0 && inbounds.length === 0
                     ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
                     : inbounds.length === 0
@@ -1524,19 +1524,19 @@ export default function InboundPage() {
               </Chip>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-default-500">流量</span>
+              <span className="text-foreground">流量</span>
               <span className="font-mono text-xs">
                 ↑ {formatTraffic(sheetItem.uploadBytes)} · ↓{" "}
                 {formatTraffic(sheetItem.downloadBytes)}
               </span>
             </div>
             {sheetItem.external && (
-              <p className="text-xs text-default-500">
+              <p className="text-xs text-foreground">
                 没有流量统计；原服务器上的配置变了，请在“编辑”里同步
               </p>
             )}
             {sheetItem.remark && (
-              <p className="text-xs text-default-500">{sheetItem.remark}</p>
+              <p className="text-xs text-foreground">{sheetItem.remark}</p>
             )}
           </div>
         )}
@@ -1598,7 +1598,7 @@ export default function InboundPage() {
             <>
               <ModalHeader className="flex flex-col gap-1">
                 <h2 className="text-lg font-bold">{details?.name}</h2>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   手动配置客户端时使用；一般直接用“分享”或订阅导入即可
                 </p>
               </ModalHeader>
@@ -1610,7 +1610,7 @@ export default function InboundPage() {
                         key={k}
                         className="flex items-center justify-between gap-3 py-2"
                       >
-                        <span className="text-sm text-default-500 shrink-0">
+                        <span className="text-sm text-foreground shrink-0">
                           {k}
                         </span>
                         <div className="flex items-center gap-1 min-w-0">
@@ -1655,7 +1655,7 @@ export default function InboundPage() {
                 <ModalHeader>
                   <h2
                     className={`text-lg font-bold ${
-                      confirm.action === "delete" ? "text-danger" : ""
+                      confirm.action === "delete" ? "text-danger-700" : ""
                     }`}
                   >
                     {CONFIRM_TEXT[confirm.action].title}
@@ -1668,7 +1668,7 @@ export default function InboundPage() {
                       {confirm.item.name}
                     </span>
                   </p>
-                  <p className="text-small text-default-500">
+                  <p className="text-small text-foreground">
                     {confirm.item.external && confirm.action === "delete"
                       ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
                       : CONFIRM_TEXT[confirm.action].body}
@@ -1707,7 +1707,7 @@ export default function InboundPage() {
             return (
               <>
                 <ModalHeader>
-                  <h2 className="text-lg font-bold text-danger">
+                  <h2 className="text-lg font-bold text-danger-700">
                     删除 {chosen.length} 个入站
                   </h2>
                 </ModalHeader>
@@ -1715,7 +1715,7 @@ export default function InboundPage() {
                   <p className="max-h-40 overflow-y-auto text-small text-default-600 break-all">
                     {chosen.map((i) => i.name).join("、")}
                   </p>
-                  <p className="text-small text-default-500">
+                  <p className="text-small text-foreground">
                     {panelOnly
                       ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
                       : "相关中转会一并删除；面板创建的入站会在节点上立即停止，且无法恢复。"}

@@ -10,10 +10,10 @@ export interface LinkProps extends React.ComponentProps<"a"> {
 
 function mapColor(color: LinkColor) {
   if (color === "primary") {
-    return "text-primary hover:text-primary/80";
+    return "text-primary-700 hover:text-primary-700/80";
   }
   if (color === "foreground") {
-    return "text-foreground hover:text-foreground/80";
+    return "text-foreground hover:text-foreground";
   }
 
   return "text-default-600 hover:text-default-700";

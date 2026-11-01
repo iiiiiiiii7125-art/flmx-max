@@ -101,8 +101,7 @@ function UserDashboard() {
     if (!nextDueTime || renewalState === "unset") {
       return {
         label: "未设置",
-        badgeClassName:
-          "bg-default-100 text-default-700 dark:bg-default-50 dark:text-default-300",
+        badgeClassName: "bg-tray text-default-700",
         nextDueTime: undefined as number | undefined,
       };
     }
@@ -158,7 +157,7 @@ function UserDashboard() {
             <div className="text-sm font-semibold text-foreground truncate">
               {node.name}
             </div>
-            <div className="mt-1 text-xs text-default-500">
+            <div className="mt-1 text-xs text-foreground">
               节点 ID: {node.id}
             </div>
           </div>
@@ -169,16 +168,16 @@ function UserDashboard() {
           </span>
         </div>
 
-        <div className="mt-3 text-sm text-default-700 dark:text-default-300">
+        <div className="mt-3 text-sm text-default-700">
           {formatNodeRenewalTime(renewalSnapshot.nextDueTime)}
         </div>
 
-        <div className="mt-1 text-xs text-default-500">
+        <div className="mt-1 text-xs text-foreground">
           {getNodeRenewalCycleLabel(node.renewalCycle)}
         </div>
 
         {node.remark?.trim() && (
-          <p className="mt-3 line-clamp-2 text-xs leading-5 text-default-600 dark:text-default-400">
+          <p className="mt-3 line-clamp-2 text-xs leading-5 text-default-600">
             {node.remark.trim()}
           </p>
         )}
@@ -228,7 +227,7 @@ function UserDashboard() {
 
     if (isNaN(expDate.getTime())) {
       return {
-        color: "text-gray-600 dark:text-gray-400",
+        color: "text-gray-600",
         bg: "bg-default-500/10 border-default-300",
         text: "无效",
       };
@@ -691,7 +690,7 @@ function UserDashboard() {
               </DropdownItem>
               <DropdownItem
                 key="logout"
-                className="text-danger"
+                className="text-danger-700"
                 color="danger"
                 startContent={
                   <svg
@@ -752,7 +751,7 @@ function UserDashboard() {
                   flowLimitBytes(userInfo.flow || 0, userInfo.flowMiB) <= 0,
               )}
               <div className="flex items-center justify-between mt-1">
-                <p className="text-xs text-default-500 truncate">
+                <p className="text-xs text-foreground truncate">
                   {(userInfo.flow === 99999 && !userInfo.flowMiB) ||
                   flowLimitBytes(userInfo.flow || 0, userInfo.flowMiB) <= 0
                     ? "无限制"
@@ -760,7 +759,7 @@ function UserDashboard() {
                 </p>
                 {userInfo.flowResetTime !== undefined &&
                   userInfo.flowResetTime !== null && (
-                    <div className="text-xs text-default-500 flex items-center gap-1">
+                    <div className="text-xs text-foreground flex items-center gap-1">
                       <svg
                         aria-hidden="true"
                         className="w-3 h-3"
@@ -829,7 +828,7 @@ function UserDashboard() {
                 // R11X-011：num<=0 与 99999 同为无限制形态。
                 userInfo.num === 99999 || userInfo.num <= 0,
               )}
-              <p className="text-xs text-default-500 mt-1 truncate">
+              <p className="text-xs text-foreground mt-1 truncate">
                 {userInfo.num === 99999 || userInfo.num <= 0
                   ? "无限制"
                   : `${calculateUsagePercentage("forwards").toFixed(1)}%`}
@@ -885,7 +884,7 @@ function UserDashboard() {
                   <h2 className="text-lg lg:text-xl font-semibold text-foreground">
                     节点到期提醒
                   </h2>
-                  <p className="text-sm text-default-500">
+                  <p className="text-sm text-foreground">
                     展示 7
                     天内需要续费或已经逾期的节点，基于月付/季付/年付周期自动推算
                   </p>
@@ -901,7 +900,7 @@ function UserDashboard() {
               {nodeExpiryReminders.slice(0, 6).map(renderNodeExpiryCard)}
             </div>
             {nodeExpiryReminders.length > 6 && (
-              <p className="mt-4 text-xs text-default-500">
+              <p className="mt-4 text-xs text-foreground">
                 还有 {nodeExpiryReminders.length - 6}{" "}
                 个节点未展开显示，可前往节点页面继续处理。
               </p>
@@ -917,7 +916,7 @@ function UserDashboard() {
             <div className="flex items-center gap-2">
               <svg
                 aria-hidden="true"
-                className="w-5 h-5 text-primary"
+                className="w-5 h-5 text-primary-700"
                 fill="currentColor"
                 viewBox="0 0 20 20"
               >
@@ -930,7 +929,7 @@ function UserDashboard() {
               <h2 className="text-lg lg:text-xl font-semibold text-foreground">
                 隧道权限
               </h2>
-              <span className="px-2 py-1 bg-default-100 dark:bg-default-50 text-default-600 rounded-full text-xs">
+              <span className="px-2 py-1 bg-tray text-default-600 rounded-full text-xs">
                 {userTunnels.length}
               </span>
             </div>
@@ -955,7 +954,7 @@ function UserDashboard() {
                           </h3>
                           <div className="flex flex-wrap items-center gap-2 mt-1">
                             <span
-                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300" : tunnel.tunnelFlow === 2 ? "bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300" : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"}`}
+                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-500/10 text-blue-700" : tunnel.tunnelFlow === 2 ? "bg-orange-500/10 text-orange-700" : "bg-tray text-foreground"}`}
                             >
                               {tunnel.tunnelFlow === 1
                                 ? "单向计费"
@@ -970,7 +969,7 @@ function UserDashboard() {
                             </span>
                             {tunnel.flowResetTime !== undefined &&
                               tunnel.flowResetTime !== null && (
-                                <span className="text-xs text-default-500">
+                                <span className="text-xs text-foreground">
                                   {formatResetTime(tunnel.flowResetTime)}
                                 </span>
                               )}
@@ -1047,7 +1046,7 @@ function UserDashboard() {
           <div className="flex items-center gap-2">
             <svg
               aria-hidden="true"
-              className="w-5 h-5 text-primary"
+              className="w-5 h-5 text-primary-700"
               fill="currentColor"
               viewBox="0 0 20 20"
             >
@@ -1060,7 +1059,7 @@ function UserDashboard() {
             <h2 className="text-lg lg:text-xl font-semibold text-foreground">
               规则配置
             </h2>
-            <span className="px-2 py-1 bg-default-100 dark:bg-default-50 text-default-600 rounded-full text-xs">
+            <span className="px-2 py-1 bg-tray text-default-600 rounded-full text-xs">
               {forwardList.length}
             </span>
           </div>
@@ -1070,7 +1069,7 @@ function UserDashboard() {
             <div className="text-center py-12">
               <svg
                 aria-hidden="true"
-                className="w-12 h-12 text-default-400 mx-auto mb-4"
+                className="w-12 h-12 text-foreground mx-auto mb-4"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -1082,7 +1081,7 @@ function UserDashboard() {
                   strokeWidth={1.5}
                 />
               </svg>
-              <p className="text-default-500">暂无规则配置</p>
+              <p className="text-foreground">暂无规则配置</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -1130,7 +1129,7 @@ function UserDashboard() {
                               >
                                 {formatInAddress(forward.inIp, forward.inPort)}
                               </button>
-                              <div className="text-center text-default-400 text-xs">
+                              <div className="text-center text-foreground text-xs">
                                 ↓
                               </div>
                               <button
@@ -1157,26 +1156,22 @@ function UserDashboard() {
                           <div className="pt-2 border-t border-gray-200 dark:border-default-200">
                             <div className="grid grid-cols-3 gap-1 text-xs">
                               <div className="text-center">
-                                <div className="text-default-500 mb-1">
-                                  上传
-                                </div>
+                                <div className="text-foreground mb-1">上传</div>
                                 <div className="font-medium text-green-600 dark:text-green-400 truncate">
                                   {formatFlow(forward.inFlow || 0)}
                                 </div>
                               </div>
                               <div className="text-center">
-                                <div className="text-default-500 mb-1">
-                                  下载
-                                </div>
+                                <div className="text-foreground mb-1">下载</div>
                                 <div className="font-medium text-orange-600 dark:text-orange-400 truncate">
                                   {formatFlow(forward.outFlow || 0)}
                                 </div>
                               </div>
                               <div className="text-center">
-                                <div className="text-default-500 mb-1">
+                                <div className="text-foreground mb-1">
                                   总流量
                                 </div>
-                                <div className="font-medium text-primary truncate">
+                                <div className="font-medium text-primary-700 truncate">
                                   {formatFlow(
                                     calculateForwardTotalFlow(forward),
                                   )}

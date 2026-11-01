@@ -86,7 +86,7 @@ function TableCaption({
 }: React.ComponentProps<"caption">) {
   return (
     <caption
-      className={cn("mt-4 text-sm text-default-500", className)}
+      className={cn("mt-4 text-sm text-foreground", className)}
       data-slot="table-caption"
       {...props}
     />

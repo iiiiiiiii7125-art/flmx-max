@@ -261,7 +261,7 @@ body {
   );
   --glass-overlay: rgba(0, 0, 0, 0.3);
 
-  --toaster-bg: rgb(255 255 255);
+  --toaster-bg: linear-gradient(160deg, rgb(255 255 255 / 0.3), rgb(255 255 255 / 0.1) 45%, rgb(255 255 255 / 0.06));
   --toaster-color: #18181b;
   --toaster-border: rgb(24 24 27 / 0.08);
 }

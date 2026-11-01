@@ -46,7 +46,7 @@ export function PageHeader({
       <div className="min-w-0 rounded-xl tray-plate px-3 py-2">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && (
-          <p className="mt-0.5 text-xs text-default-500">{description}</p>
+          <p className="mt-0.5 text-xs text-foreground">{description}</p>
         )}
       </div>
       {(primary || secondary) && (
@@ -105,7 +105,7 @@ export function PageTabs<T extends string>({
           className={`truncate rounded-lg px-3 py-1.5 text-sm transition-colors ${
             value === t.key
               ? "bg-tray font-medium shadow-sm"
-              : "text-default-500"
+              : "text-foreground"
           }`}
           role="tab"
           type="button"
@@ -113,7 +113,7 @@ export function PageTabs<T extends string>({
         >
           {t.label}
           {t.badge !== undefined && t.badge !== null && (
-            <span className="ml-1 text-xs text-default-500">{t.badge}</span>
+            <span className="ml-1 text-xs text-foreground">{t.badge}</span>
           )}
         </button>
       ))}
@@ -148,7 +148,7 @@ export function PageToolbar({
     <div className="mb-3 flex items-center gap-2">
       {onSearch && (
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-content1 px-3 sm:max-w-xs">
-          <Search className="h-4 w-4 shrink-0 text-default-400" />
+          <Search className="h-4 w-4 shrink-0 text-foreground" />
           <input
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-400"
             enterKeyHint="search"
@@ -160,7 +160,7 @@ export function PageToolbar({
           {search && (
             <button
               aria-label="清除搜索"
-              className="text-default-400"
+              className="text-foreground"
               type="button"
               onClick={() => onSearch("")}
             >
@@ -314,9 +314,7 @@ export function ListRow({
           <span className="truncate font-medium">{title}</span>
           {badges}
         </div>
-        {meta && (
-          <div className="truncate text-xs text-default-500">{meta}</div>
-        )}
+        {meta && <div className="truncate text-xs text-foreground">{meta}</div>}
       </div>
       {right && !selectMode && (
         <div
@@ -378,9 +376,7 @@ export function ListGroup({
         <h2 className="flex w-fit items-baseline gap-2 rounded-lg tray-plate px-2.5 py-1 text-sm font-semibold">
           {title}
           {count !== undefined && (
-            <span className="text-xs font-normal text-default-500">
-              {count}
-            </span>
+            <span className="text-xs font-normal text-foreground">{count}</span>
           )}
         </h2>
       )}
@@ -397,7 +393,7 @@ export function EmptyHint({
   action?: PageAction;
 }) {
   return (
-    <div className="glass-card flex flex-col items-center gap-3 rounded-xl border-dashed px-4 py-8 text-center text-sm text-default-500">
+    <div className="glass-card flex flex-col items-center gap-3 rounded-xl border-dashed px-4 py-8 text-center text-sm text-foreground">
       <p>{text}</p>
       {action && (
         <Button

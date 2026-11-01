@@ -222,13 +222,13 @@ export function GistBackup() {
   return (
     <div className="space-y-4">
       <h3 className="text-lg font-medium">上传到 GitHub Gist</h3>
-      <p className="text-sm text-gray-600 dark:text-gray-400">
+      <p className="text-sm text-gray-600">
         全量备份加密后上传到私有 Gist，同一 Gist 每次上传产生
         一个新版本；自动上传默认关闭。明文上传不放行：必须设置加密密码
         才能上传。版本列表见下方，恢复入口见下方。
       </p>
       {status.configured && status.lastAt > 0 && (
-        <p className="flex flex-wrap items-center gap-x-1 text-xs text-default-500">
+        <p className="flex flex-wrap items-center gap-x-1 text-xs text-foreground">
           <span
             className={`mr-1 inline-block h-2 w-2 rounded-full ${failed ? "bg-danger" : "bg-success"}`}
           />
@@ -239,7 +239,7 @@ export function GistBackup() {
             <>
               <span>·</span>
               <a
-                className="text-primary"
+                className="text-primary-700"
                 href={status.gistUrl}
                 rel="noreferrer"
                 target="_blank"
@@ -264,12 +264,12 @@ export function GistBackup() {
           variant="bordered"
           onChange={(e) => setToken(e.target.value)}
         />
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-foreground">
           {status.configured ? (
             <>
               已保存，留空不修改 ·{" "}
               <button
-                className="text-danger"
+                className="text-danger-700"
                 type="button"
                 onClick={() => void save({ clearToken: true })}
               >
@@ -298,11 +298,11 @@ export function GistBackup() {
           variant="bordered"
           onChange={(e) => setPassword(e.target.value)}
         />
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-foreground">
           {status.encrypted ? (
             "已设置，留空不修改 · 如需更换，直接输入新密码后保存（加密密码不可清除为空）"
           ) : (
-            <span className="text-danger">
+            <span className="text-danger-700">
               必须设置加密密码才能上传（明文上传不放行）
             </span>
           )}
@@ -326,7 +326,7 @@ export function GistBackup() {
             </option>
           ))}
         </select>
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-foreground">
           默认关闭：未开启前不向外上传。
         </p>
       </div>
@@ -355,7 +355,7 @@ export function GistBackup() {
         )}
       </div>
       {!hasPassword && (
-        <p className="text-xs text-danger">
+        <p className="text-xs text-danger-700">
           必须设置加密密码才能上传（明文上传不放行）：上传按钮已禁用，
           保存时亦会明确拒绝。
         </p>
@@ -375,15 +375,15 @@ export function GistBackup() {
           </Button>
         </div>
         {!status.configured && (
-          <p className="text-xs text-default-500">
+          <p className="text-xs text-foreground">
             先保存令牌并完成一次上传后，可在此查看版本并打开恢复入口。
           </p>
         )}
         {versionsError !== "" && (
-          <p className="text-xs text-danger">{versionsError}</p>
+          <p className="text-xs text-danger-700">{versionsError}</p>
         )}
         {versions !== null && versions.length === 0 && (
-          <p className="text-xs text-default-500">暂无版本。</p>
+          <p className="text-xs text-foreground">暂无版本。</p>
         )}
         {versions !== null && versions.length > 0 && (
           <ul className="space-y-1">
@@ -395,7 +395,7 @@ export function GistBackup() {
                 <span>
                   {formatTime(v.committedAt)}
                   {i === 0 ? "（最新）" : ""}
-                  <span className="ml-2 text-xs text-default-500">
+                  <span className="ml-2 text-xs text-foreground">
                     {v.version}
                   </span>
                 </span>
@@ -410,7 +410,7 @@ export function GistBackup() {
             ))}
           </ul>
         )}
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-foreground">
           恢复会按所选版本覆盖面板里的全部数据（Gist 设置除外）。
         </p>
       </div>
@@ -494,10 +494,10 @@ function GistRestoreModal({
               ))}
             </select>
             {versionsError !== "" && (
-              <p className="text-xs text-danger">{versionsError}</p>
+              <p className="text-xs text-danger-700">{versionsError}</p>
             )}
             {versions !== null && versions.length === 0 && (
-              <p className="text-xs text-default-500">暂无版本。</p>
+              <p className="text-xs text-foreground">暂无版本。</p>
             )}
             {versionsError !== "" && (
               <Button size="sm" variant="flat" onPress={onReload}>
@@ -522,13 +522,13 @@ function GistRestoreModal({
               variant="bordered"
               onChange={(e) => setPassword(e.target.value)}
             />
-            <p className="text-xs text-default-500">
+            <p className="text-xs text-foreground">
               {encrypted
                 ? "恢复时需填写上传时用的加密密码。"
                 : "当前 Gist 设置尚未标记加密；按明文不放行口径，上传均为加密，恢复时仍需填写上传时用的加密密码。"}
             </p>
           </div>
-          <p className="text-xs text-default-500">
+          <p className="text-xs text-foreground">
             恢复会覆盖面板里的全部数据（Gist 设置除外），之后可能需要重新登录。
           </p>
         </ModalBody>

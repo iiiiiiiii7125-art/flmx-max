@@ -79,10 +79,10 @@ export function InstallCommandModal({
                 复制
               </Button>
             </div>
-            <div className="text-xs text-default-500">
+            <div className="text-xs text-foreground">
               💡 提示：如果复制按钮失效，请手动选择上方文本进行复制
             </div>
-            <div className="text-xs text-default-500">
+            <div className="text-xs text-foreground">
               ✅ 执行后确认上线：脚本显示「安装完成」只代表 agent
               服务已启动，不代表已连上面板。请回到节点列表确认该节点显示为
               <b>在线</b>；若未上线，在节点服务器执行{" "}
@@ -175,7 +175,7 @@ export function UpgradeNodeModal({
                       <SelectItem key={r.version} textValue={r.version}>
                         <div className="flex justify-between items-center">
                           <span>{r.version}</span>
-                          <span className="text-xs text-default-400">
+                          <span className="text-xs text-foreground">
                             {r.publishedAt
                               ? new Date(r.publishedAt).toLocaleDateString()
                               : ""}
@@ -194,7 +194,7 @@ export function UpgradeNodeModal({
                       </SelectItem>
                     ))}
                   </Select>
-                  <p className="text-sm text-default-500">
+                  <p className="text-sm text-foreground">
                     {selectedVersion
                       ? `将升级到版本 ${selectedVersion}`
                       : "未选择版本，将自动使用最新版"}

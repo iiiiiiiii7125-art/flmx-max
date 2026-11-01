@@ -149,14 +149,14 @@ export default function SubscriptionAssignSection() {
     [users, userId],
   );
 
-  if (loading) return <p className="text-sm text-default-500">加载中...</p>;
+  if (loading) return <p className="text-sm text-foreground">加载中...</p>;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex flex-col gap-1">
           <h3 className="text-sm font-semibold">订阅分配</h3>
-          <p className="text-xs text-default-500">
+          <p className="text-xs text-foreground">
             按订阅分配：用户将使用被分配订阅的独立链接，流量与到期按订阅单独计算。
           </p>
         </CardHeader>
@@ -180,7 +180,7 @@ export default function SubscriptionAssignSection() {
           </Select>
 
           {!userId ? (
-            <p className="text-sm text-default-400">
+            <p className="text-sm text-foreground">
               请先选择用户，再勾选要分配给他的订阅
             </p>
           ) : (
@@ -191,7 +191,7 @@ export default function SubscriptionAssignSection() {
                 </p>
               )}
               {subs.length === 0 ? (
-                <p className="text-sm text-default-400">
+                <p className="text-sm text-foreground">
                   还没有订阅，先在「订阅管理」里新建订阅再来分配
                 </p>
               ) : (
@@ -221,7 +221,7 @@ export default function SubscriptionAssignSection() {
                           <p className="truncate text-sm font-medium">
                             {s.name}
                             {s.isDefault && (
-                              <span className="ml-2 text-xs font-normal text-default-500">
+                              <span className="ml-2 text-xs font-normal text-foreground">
                                 默认
                               </span>
                             )}
@@ -231,7 +231,7 @@ export default function SubscriptionAssignSection() {
                               </Chip>
                             )}
                           </p>
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs text-foreground">
                             {s.nodeCount} 个节点 ·{" "}
                             {s.trafficLimit
                               ? `限额 ${formatTraffic(s.trafficLimit)}（已用 ${formatTraffic(used)}）`
@@ -260,7 +260,7 @@ export default function SubscriptionAssignSection() {
                       : `保存订阅分配（已选 ${selected.size} 个）`}
                 </Button>
                 {selectedUser && (
-                  <span className="text-xs text-default-500">
+                  <span className="text-xs text-foreground">
                     正在为 {selectedUser.user || selectedUser.name} 分配
                   </span>
                 )}

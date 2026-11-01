@@ -46,7 +46,7 @@ export function SubFrontSettings({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-default-500">
+      <p className="text-xs text-foreground">
         前置地址是订阅链接的备用入口：当面板域名被部分运营商阻断或烂路由时，用户可经前置地址拉取同一条订阅（前置只需把订阅路径反代回面板，token
         不变）。填协议 + 域名（可带端口），如
         https://sub.example.com，必须带 https://、末尾不要斜杠、不要带路径。配置后，订阅管理、我的订阅等页面的链接旁会出现地址选择，可按前置地址复制链接；不配置则只用面板域名，与此前一致。
@@ -83,7 +83,7 @@ export function SubFrontSettings({
         添加前置地址
       </Button>
       {full && (
-        <p className="text-xs text-default-400">
+        <p className="text-xs text-foreground">
           最多填写 {MAX_FRONTS} 个前置地址
         </p>
       )}

@@ -179,7 +179,7 @@ export default function ProfilePage() {
             <div className="flex items-center space-x-4">
               <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900 rounded-full flex items-center justify-center">
                 <svg
-                  className="w-6 h-6 text-primary"
+                  className="w-6 h-6 text-primary-700"
                   fill="currentColor"
                   viewBox="0 0 20 20"
                 >
@@ -204,7 +204,7 @@ export default function ProfilePage() {
                   >
                     {isAdmin ? "管理员" : "普通用户"}
                   </span>
-                  <span className="text-xs text-default-500">
+                  <span className="text-xs text-foreground">
                     {new Date().toLocaleDateString("zh-CN")}
                   </span>
                 </div>
@@ -288,12 +288,12 @@ export default function ProfilePage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-20 text-center py-4"
-          poweredClassName="text-xs text-gray-500 dark:text-gray-400 mx-auto mt-1 w-fit tray-plate rounded-full px-3 py-0.5"
+          poweredClassName="text-xs text-foreground mx-auto mt-1 w-fit tray-plate rounded-full px-3 py-0.5"
           updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={
             isWebViewFunc() ? siteConfig.app_version : siteConfig.version
           }
-          versionClassName="text-xs text-gray-500 dark:text-gray-400 mt-1 mx-auto w-fit tray-plate rounded-full px-3 py-1"
+          versionClassName="text-xs text-foreground mt-1 mx-auto w-fit tray-plate rounded-full px-3 py-1"
         />
       </div>
 

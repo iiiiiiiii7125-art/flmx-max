@@ -32,10 +32,7 @@ export const TONE: Record<Tone, [string, string]> = {
     "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
     "bg-rose-500",
   ],
-  default: [
-    "bg-default-200 text-default-600 dark:text-default-300",
-    "bg-default-400",
-  ],
+  default: ["bg-tray text-default-600", "bg-default-400"],
 };
 
 const RANK: Record<Tone, number> = {
@@ -304,7 +301,7 @@ export function LatencyCell({
           >
             <span className="mb-1.5 flex items-center justify-between text-sm">
               <span className="text-default-600">延迟</span>
-              <span className="text-xs text-default-400">
+              <span className="text-xs text-foreground">
                 {note ? `${note} · ` : ""}
                 {more > 0 ? `共 ${points.length} 个 · ` : ""}
                 {hiddenBad > 0 && (
@@ -350,7 +347,7 @@ export function LatencyCell({
         className="w-80 max-w-[calc(100vw-32px)]"
       >
         <div role="presentation" onClick={stop} onPointerDown={stop}>
-          <div className="flex items-center justify-between px-2 pb-1.5 pt-1 text-xs text-default-500">
+          <div className="flex items-center justify-between px-2 pb-1.5 pt-1 text-xs text-foreground">
             <span>{title}</span>
             {probe && <span>{ago(probe.checkedAt)}</span>}
           </div>
@@ -376,7 +373,7 @@ export function LatencyCell({
                       {valueText(p)}
                     </span>
                     {p.ok && (
-                      <span className="ml-2 text-default-400">
+                      <span className="ml-2 text-foreground">
                         丢包 {p.lossPct ?? 0}%
                       </span>
                     )}
@@ -388,7 +385,7 @@ export function LatencyCell({
           {footer}
           <div className="grid auto-cols-fr grid-flow-col border-t border-divider">
             <DropdownItem
-              className="justify-center whitespace-nowrap px-1 text-xs text-primary"
+              className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
               startContent={
                 probing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -402,7 +399,7 @@ export function LatencyCell({
             </DropdownItem>
             {onShowTrend && (
               <DropdownItem
-                className="justify-center whitespace-nowrap px-1 text-xs text-primary"
+                className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
                 startContent={<ChartLine className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onShowTrend, 0)}
               >
@@ -411,7 +408,7 @@ export function LatencyCell({
             )}
             {onShowRoute && (
               <DropdownItem
-                className="justify-center whitespace-nowrap px-1 text-xs text-primary"
+                className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
                 startContent={<Route className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onShowRoute, 0)}
               >
@@ -420,7 +417,7 @@ export function LatencyCell({
             )}
             {onEditTargets && (
               <DropdownItem
-                className="justify-center whitespace-nowrap px-1 text-xs text-primary"
+                className="justify-center whitespace-nowrap px-1 text-xs text-primary-700"
                 startContent={<ListChecks className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onEditTargets, 0)}
               >

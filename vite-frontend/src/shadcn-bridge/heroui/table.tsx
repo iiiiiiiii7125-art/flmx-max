@@ -97,7 +97,7 @@ export const TableBody = React.forwardRef<
     return (
       <tbody ref={ref} className={className} {...props}>
         <tr>
-          <td className="p-4 text-center text-default-500" colSpan={999}>
+          <td className="p-4 text-center text-foreground" colSpan={999}>
             {loadingContent ?? "加载中..."}
           </td>
         </tr>
@@ -110,7 +110,7 @@ export const TableBody = React.forwardRef<
       return (
         <tbody ref={ref} className={className} {...props}>
           <tr>
-            <td className="p-4 text-center text-default-500" colSpan={999}>
+            <td className="p-4 text-center text-foreground" colSpan={999}>
               {emptyContent ?? "暂无数据"}
             </td>
           </tr>
@@ -139,7 +139,7 @@ export const TableBody = React.forwardRef<
     return (
       <tbody ref={ref} className={className} {...props}>
         <tr>
-          <td className="p-4 text-center text-default-500" colSpan={999}>
+          <td className="p-4 text-center text-foreground" colSpan={999}>
             {emptyContent ?? "暂无数据"}
           </td>
         </tr>

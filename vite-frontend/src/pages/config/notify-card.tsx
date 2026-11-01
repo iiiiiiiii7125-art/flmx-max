@@ -79,13 +79,9 @@ function Field({
   return (
     <div className="space-y-2">
       <div className="flex flex-col gap-1">
-        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {label}
-        </label>
+        <label className="text-sm font-medium text-gray-700">{label}</label>
         {description && (
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            {description}
-          </p>
+          <p className="text-xs text-foreground">{description}</p>
         )}
       </div>
       {children}
@@ -165,7 +161,7 @@ export function NotifyCard({
       <CardHeader className="pb-6">
         <div>
           <h2 className="text-xl font-semibold">通知</h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
+          <p className="text-sm text-gray-600">
             节点掉线、导入节点连不上、内核出错、节点快到期时推送到 Telegram 或
             Webhook
           </p>
@@ -183,7 +179,7 @@ export function NotifyCard({
                 onChange("notify_enabled", on ? "true" : "false")
               }
             />
-            <span className="text-sm text-gray-700 dark:text-gray-300">
+            <span className="text-sm text-gray-700">
               {enabled ? "已启用" : "已禁用"}
             </span>
           </div>
@@ -225,7 +221,7 @@ export function NotifyCard({
               >
                 <div className="flex flex-col">
                   <span className="text-sm">{e.label}</span>
-                  <span className="text-xs text-default-500">
+                  <span className="text-xs text-foreground">
                     {e.description}
                   </span>
                 </div>
@@ -241,9 +237,7 @@ export function NotifyCard({
           >
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex items-center gap-2">
-                <span className="shrink-0 text-sm text-gray-700 dark:text-gray-300">
-                  丢包率 ≥
-                </span>
+                <span className="shrink-0 text-sm text-gray-700">丢包率 ≥</span>
                 <Input
                   classNames={{
                     input: "text-sm",
@@ -263,9 +257,7 @@ export function NotifyCard({
                 />
               </div>
               <div className="flex items-center gap-2">
-                <span className="shrink-0 text-sm text-gray-700 dark:text-gray-300">
-                  延迟 ≥
-                </span>
+                <span className="shrink-0 text-sm text-gray-700">延迟 ≥</span>
                 <Input
                   classNames={{
                     input: "text-sm",
@@ -311,7 +303,7 @@ export function NotifyCard({
         )}
 
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-divider/50 pt-6">
-          <span className="text-xs text-default-500">
+          <span className="text-xs text-foreground">
             测试会用当前填写的内容，不用先保存
           </span>
           <Button

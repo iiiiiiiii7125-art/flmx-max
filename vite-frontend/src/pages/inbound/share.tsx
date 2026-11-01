@@ -66,7 +66,7 @@ export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   if (!src) {
     return (
       <div
-        className="flex items-center justify-center text-xs text-default-500 bg-white/40 rounded-xl"
+        className="flex items-center justify-center text-xs text-foreground bg-white/40 rounded-xl"
         style={{ width: size, height: size }}
       >
         {failed ? "内容过长，无法生成二维码" : "二维码生成中..."}
@@ -95,7 +95,7 @@ export function QrCodeButton({ url, label }: { url: string; label: string }) {
         type="button"
         title={`查看${label}二维码`}
         onClick={() => setOpen(true)}
-        className="inline-flex items-center justify-center w-10 h-10 rounded hover:bg-white/40 text-default-500 hover:text-primary transition-colors"
+        className="inline-flex items-center justify-center w-10 h-10 rounded hover:bg-white/40 text-foreground hover:text-primary-700 transition-colors"
       >
         <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
           <path
@@ -121,7 +121,7 @@ export function QrCodeButton({ url, label }: { url: string; label: string }) {
               </ModalHeader>
               <ModalBody className="flex flex-col items-center gap-3">
                 <QrImage text={url} size={240} />
-                <p className="text-xs text-default-500 break-all select-all text-center max-w-full">
+                <p className="text-xs text-foreground break-all select-all text-center max-w-full">
                   {url}
                 </p>
               </ModalBody>
@@ -161,7 +161,7 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
           </Chip>
           <span className="font-medium truncate">{entry.name}</span>
         </div>
-        <p className="text-xs text-default-500 font-mono mt-1 break-all">
+        <p className="text-xs text-foreground font-mono mt-1 break-all">
           {entry.host}:{entry.port}
         </p>
       </div>
@@ -194,7 +194,7 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
       </div>
 
       {surgeOnly && (
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-foreground">
           Snell 没有通用分享链接，粘贴到 Surge 配置的 [Proxy] 段，或使用 Surge
           订阅。
         </p>
@@ -262,20 +262,20 @@ export function ShareModal({
           <>
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-lg font-bold">分享 · {item?.name}</h2>
-              <p className="text-small text-default-500">
+              <p className="text-small text-foreground">
                 复制链接或扫码导入 v2rayN、Shadowrocket、NekoBox 等客户端；Surge
                 请使用订阅
               </p>
             </ModalHeader>
             <ModalBody>
-              {loading && <p className="text-sm text-default-500">加载中...</p>}
+              {loading && <p className="text-sm text-foreground">加载中...</p>}
               {!loading && loadFailed && (
-                <p className="text-sm text-danger-500">
+                <p className="text-sm text-danger-700">
                   获取分享链接失败，请关闭后重试。
                 </p>
               )}
               {!loading && !loadFailed && entries.length === 0 && (
-                <p className="text-sm text-default-500">
+                <p className="text-sm text-foreground">
                   没有可分享的地址：入站仅监听本机或设置了仅中转，但还没有对接中转。
                 </p>
               )}
@@ -344,10 +344,10 @@ function InboundRelaySubList({
   }, [inbound.id]);
 
   if (loading) {
-    return <p className="text-xs text-default-500">加载中转列表...</p>;
+    return <p className="text-xs text-foreground">加载中转列表...</p>;
   }
   if (loadFailed) {
-    return <p className="text-xs text-danger-500">中转列表加载失败，请稍后重试</p>;
+    return <p className="text-xs text-danger-700">中转列表加载失败，请稍后重试</p>;
   }
   if (relays.length === 0) {
     return null;
@@ -367,10 +367,10 @@ function InboundRelaySubList({
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-xs font-medium truncate">
                 🔀 {r.name || r.forwardName}
-                <span className="text-default-400 ml-1">{r.remoteAddr}</span>
+                <span className="text-foreground ml-1">{r.remoteAddr}</span>
               </span>
               <button
-                className="text-xs text-primary flex items-center gap-1 shrink-0 disabled:opacity-50"
+                className="text-xs text-primary-700 flex items-center gap-1 shrink-0 disabled:opacity-50"
                 disabled={!path}
                 type="button"
                 onClick={() =>
@@ -476,7 +476,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-base font-semibold">订阅</h3>
-            <p className="text-xs text-default-500">
+            <p className="text-xs text-foreground">
               包含全部已启用入站及其中转，客户端定期更新即可同步
             </p>
           </div>
@@ -520,7 +520,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
             复制订阅链接（自动识别客户端）
           </Button>
         </div>
-        <p className="pt-1 text-xs text-default-500">指定格式</p>
+        <p className="pt-1 text-xs text-foreground">指定格式</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
           {SUB_FORMATS.filter((f) => f.key).map((f) => {
             const fmtUrl = url(f.key);
@@ -534,9 +534,9 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium">{f.label}</span>
-                    <Copy className="w-3.5 h-3.5 text-default-400" />
+                    <Copy className="w-3.5 h-3.5 text-foreground" />
                   </div>
-                  <div className="text-xs text-default-500">{f.hint}</div>
+                  <div className="text-xs text-foreground">{f.hint}</div>
                 </button>
                 <QrCodeButton url={fmtUrl} label={`${f.label}订阅`} />
               </div>
@@ -546,7 +546,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
         {showQr && path && (
           <div className="flex flex-col items-center gap-2 pt-1">
             <QrImage text={url("")} />
-            <p className="text-xs text-default-500 font-mono break-all text-center">
+            <p className="text-xs text-foreground font-mono break-all text-center">
               {url("")}
             </p>
           </div>
@@ -556,7 +556,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
           <div className="pt-2 space-y-2">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold">按入站单独订阅</h4>
-              <p className="text-xs text-default-500">
+              <p className="text-xs text-foreground">
                 每个入站独立链接，只包含该入站
               </p>
             </div>
@@ -579,7 +579,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                         <p className="text-sm font-medium truncate">
                           {inbound.name}
                         </p>
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs text-foreground">
                           {inbound.protocol} · {inbound.nodeName}
                         </p>
                       </div>
@@ -599,7 +599,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                           复制链接
                         </Button>
                         <span
-                          className={`text-default-400 transition-transform ${expanded ? "rotate-180" : ""}`}
+                          className={`text-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
                         >
                           ▾
                         </span>
@@ -630,7 +630,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                                     <span className="text-xs font-medium">
                                       {f.label}
                                     </span>
-                                    <Copy className="w-3 h-3 text-default-400" />
+                                    <Copy className="w-3 h-3 text-foreground" />
                                   </div>
                                 </button>
                                 <QrCodeButton

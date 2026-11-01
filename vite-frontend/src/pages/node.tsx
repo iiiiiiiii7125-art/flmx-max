@@ -1495,7 +1495,7 @@ export default function NodePage({
     node.isRemote !== 1 && node.connectionStatus === "online" ? (
       node.latencyTargets?.points.length === 0 ? (
         <button
-          className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
+          className="rounded-full bg-tray px-2 py-0.5 text-xs text-foreground hover:text-default-700"
           title="这台节点没选测试点，点此设置"
           type="button"
           onClick={(e) => {
@@ -1507,7 +1507,7 @@ export default function NodePage({
         </button>
       ) : latencyPoolEmpty === true ? (
         <button
-          className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
+          className="rounded-full bg-tray px-2 py-0.5 text-xs text-foreground hover:text-default-700"
           title="还没有配置延迟测试点，点此去设置添加"
           type="button"
           onClick={(e) => {
@@ -2041,7 +2041,7 @@ export default function NodePage({
                             <div className="flex justify-between items-start w-full gap-3">
                               <div className="flex items-start gap-2 flex-1 min-w-0">
                                 <div
-                                  className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
+                                  className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-foreground hover:text-default-600 transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
                                   {...listeners}
                                   style={{ touchAction: "none" }}
                                   title="拖拽排序"
@@ -2086,7 +2086,7 @@ export default function NodePage({
                                   <div className="group/info relative">
                                     <button
                                       aria-label={`查看节点信息，共 ${infoCount} 项`}
-                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-tray text-default-500 shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
+                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-tray text-foreground shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
                                       type="button"
                                       onFocus={(event) =>
                                         updateInfoPopoverPlacement(
@@ -2130,11 +2130,11 @@ export default function NodePage({
                                         {hasExpiryInfo && (
                                           <div className="space-y-2">
                                             <div className="flex items-center justify-between">
-                                              <div className="text-[11px] font-medium text-default-500">
+                                              <div className="text-[11px] font-medium text-foreground">
                                                 到期提醒
                                               </div>
                                               <button
-                                                className="text-[10px] text-default-400 hover:text-default-600 transition-colors"
+                                                className="text-[10px] text-foreground hover:text-default-600 transition-colors"
                                                 type="button"
                                                 onClick={(e) => {
                                                   e.stopPropagation();
@@ -2167,7 +2167,7 @@ export default function NodePage({
 
                                         {hasRemark && (
                                           <div className="space-y-2">
-                                            <div className="text-[11px] font-medium text-default-500">
+                                            <div className="text-[11px] font-medium text-foreground">
                                               备注
                                             </div>
                                             <div
@@ -2290,7 +2290,7 @@ export default function NodePage({
                                   <>
                                     <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5 space-y-2">
                                       <div className="flex justify-between gap-2">
-                                        <span className="text-default-500">
+                                        <span className="text-foreground">
                                           远程地址
                                         </span>
                                         <span
@@ -2307,7 +2307,7 @@ export default function NodePage({
                                         </span>
                                       </div>
                                       <div className="flex justify-between gap-2">
-                                        <span className="text-default-500">
+                                        <span className="text-foreground">
                                           共享ID
                                         </span>
                                         <span className="font-mono">
@@ -2315,7 +2315,7 @@ export default function NodePage({
                                         </span>
                                       </div>
                                       <div className="flex justify-between gap-2">
-                                        <span className="text-default-500">
+                                        <span className="text-foreground">
                                           流量
                                         </span>
                                         <span className="font-mono">
@@ -2323,7 +2323,7 @@ export default function NodePage({
                                         </span>
                                       </div>
                                       <div className="flex justify-between gap-2">
-                                        <span className="text-default-500">
+                                        <span className="text-foreground">
                                           带宽上限
                                         </span>
                                         <span className="font-mono">
@@ -2338,10 +2338,10 @@ export default function NodePage({
 
                                     <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5">
                                       <div className="flex items-center justify-between mb-2">
-                                        <span className="text-default-500">
+                                        <span className="text-foreground">
                                           占用端口
                                         </span>
-                                        <span className="font-mono text-default-700 dark:text-default-300">
+                                        <span className="font-mono text-default-700">
                                           {remoteUsage.usedPorts.length}/
                                           {Math.max(
                                             remoteUsage.portRangeEnd -
@@ -2368,7 +2368,7 @@ export default function NodePage({
                                             )}
                                           </div>
                                         ) : (
-                                          <div className="text-default-400">
+                                          <div className="text-foreground">
                                             暂无占用端口
                                           </div>
                                         )}
@@ -2377,10 +2377,10 @@ export default function NodePage({
 
                                     <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5">
                                       <div className="flex items-center justify-between mb-2">
-                                        <span className="text-default-500">
+                                        <span className="text-foreground">
                                           绑定明细
                                         </span>
-                                        <span className="font-mono text-default-700 dark:text-default-300">
+                                        <span className="font-mono text-default-700">
                                           {remoteUsage.activeBindingNum}
                                         </span>
                                       </div>
@@ -2403,7 +2403,7 @@ export default function NodePage({
                                                     #{binding.tunnelId}
                                                   </span>
                                                 </div>
-                                                <div className="mt-1 text-[11px] text-default-500 flex items-center justify-between gap-2">
+                                                <div className="mt-1 text-[11px] text-foreground flex items-center justify-between gap-2">
                                                   <span>
                                                     {formatChainType(
                                                       binding.chainType,
@@ -2418,7 +2418,7 @@ export default function NodePage({
                                             ),
                                           )
                                         ) : (
-                                          <div className="text-default-400">
+                                          <div className="text-foreground">
                                             暂无绑定明细
                                           </div>
                                         )}
@@ -2426,7 +2426,7 @@ export default function NodePage({
                                     </div>
                                   </>
                                 ) : (
-                                  <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5 text-default-500">
+                                  <div className="text-xs rounded-md border border-divider bg-white/40 p-2.5 text-foreground">
                                     暂未获取到远程占用数据
                                   </div>
                                 )}
@@ -2632,7 +2632,7 @@ export default function NodePage({
                             {renderLatency(node, "list")}
                             {!isDisplayFiltered && (
                               <span
-                                className="cursor-grab touch-none p-1 text-default-300 hover:text-default-500 active:cursor-grabbing"
+                                className="cursor-grab touch-none p-1 text-foreground hover:text-foreground active:cursor-grabbing"
                                 title="拖动排序"
                                 {...listeners}
                               >
@@ -2830,7 +2830,7 @@ export default function NodePage({
                 )}
                 {rows.map(([k, v]) => (
                   <div key={k} className="flex justify-between gap-3">
-                    <span className="shrink-0 text-default-500">{k}</span>
+                    <span className="shrink-0 text-foreground">{k}</span>
                     <span className="min-w-0 break-all text-right font-mono text-xs leading-5">
                       {v}
                     </span>
@@ -2847,7 +2847,7 @@ export default function NodePage({
                   />
                 )}
                 {node.remark?.trim() && (
-                  <p className="whitespace-pre-wrap break-all text-xs text-default-500">
+                  <p className="whitespace-pre-wrap break-all text-xs text-foreground">
                     {node.remark.trim()}
                   </p>
                 )}

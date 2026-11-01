@@ -137,7 +137,7 @@ function SplitForm({
     <>
       <ModalHeader className="flex flex-col gap-1">
         <h2 className="text-lg font-bold">出站</h2>
-        <p className="truncate text-small font-normal text-default-500">
+        <p className="truncate text-small font-normal text-foreground">
           {item.name}
         </p>
       </ModalHeader>
@@ -156,7 +156,7 @@ function SplitForm({
             onPress={() => setPicking("default")}
           />
           <p
-            className={`text-xs ${outboundMissing ? "text-danger" : "text-default-400"}`}
+            className={`text-xs ${outboundMissing ? "text-danger-700" : "text-foreground"}`}
           >
             {outboundMissing
               ? "原出站节点已被删除，该入站的流量会被丢弃，请重新选择"
@@ -168,10 +168,10 @@ function SplitForm({
             <p className="text-sm font-medium">
               分流规则
               {rules.length > 0 && (
-                <span className="ml-1.5 text-default-400">{rules.length}</span>
+                <span className="ml-1.5 text-foreground">{rules.length}</span>
               )}
             </p>
-            <p className="text-xs text-default-400">从上到下，先命中先生效</p>
+            <p className="text-xs text-foreground">从上到下，先命中先生效</p>
           </div>
           <SplitRulesEditor
             categories={categories}

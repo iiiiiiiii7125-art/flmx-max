@@ -170,7 +170,7 @@ function Metric({
       <div className="mt-2 text-2xl font-bold lg:text-3xl">
         {value}
         {total !== undefined && (
-          <span className="ml-1 text-base font-normal text-default-400">
+          <span className="ml-1 text-base font-normal text-foreground">
             / {total}
           </span>
         )}
@@ -187,18 +187,18 @@ function Metric({
         <span
           className={`truncate ${
             footTone === "danger"
-              ? "text-danger"
+              ? "text-danger-700"
               : footTone === "warning"
                 ? "text-warning-600"
                 : footTone === "success"
                   ? "text-success-700 dark:text-success-400"
-                  : "text-default-500"
+                  : "text-foreground"
           }`}
         >
           {foot}
         </span>
         {footRight && (
-          <span className="shrink-0 text-default-400">{footRight}</span>
+          <span className="shrink-0 text-foreground">{footRight}</span>
         )}
       </div>
     </button>
@@ -456,7 +456,7 @@ export function AdminOverview() {
     <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
       <div>
         <h1 className="text-lg font-semibold">概览</h1>
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-foreground">
           {new Date().toLocaleDateString("zh-CN", {
             month: "long",
             day: "numeric",
@@ -623,8 +623,8 @@ export function AdminOverview() {
                       key={g.kind}
                       className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
                         danger
-                          ? "border-danger-100 bg-danger-50 hover:bg-danger-100 dark:border-danger-800 dark:bg-danger-900 dark:hover:bg-danger-800"
-                          : "border-warning-100 bg-warning-50 hover:bg-warning-100 dark:border-warning-800 dark:bg-warning-900 dark:hover:bg-warning-800"
+                          ? "border-danger-300 bg-danger-500/10 hover:bg-danger-500/20"
+                          : "border-warning-300 bg-warning-500/10 hover:bg-warning-500/20"
                       }`}
                       type="button"
                       onClick={() => navigate(meta.path)}
@@ -638,7 +638,7 @@ export function AdminOverview() {
                         <span className="block text-sm font-semibold">
                           {meta.label(g.items.length)}
                         </span>
-                        <span className="block truncate text-xs text-default-500">
+                        <span className="block truncate text-xs text-foreground">
                           {hint}
                         </span>
                         <span className="mt-1.5 flex flex-wrap gap-1.5">
@@ -652,13 +652,13 @@ export function AdminOverview() {
                             </span>
                           ))}
                           {g.items.length > 6 && (
-                            <span className="rounded-full border border-divider bg-tray px-2 py-0.5 text-xs text-default-500">
+                            <span className="rounded-full border border-divider bg-tray px-2 py-0.5 text-xs text-foreground">
                               +{g.items.length - 6}
                             </span>
                           )}
                         </span>
                       </span>
-                      <span className="hidden shrink-0 items-center self-center text-xs text-default-500 sm:flex">
+                      <span className="hidden shrink-0 items-center self-center text-xs text-foreground sm:flex">
                         去处理
                         <ChevronRight className="h-3.5 w-3.5" />
                       </span>
@@ -673,7 +673,7 @@ export function AdminOverview() {
             <Panel
               action={
                 <button
-                  className="flex items-center text-xs text-primary"
+                  className="flex items-center text-xs text-primary-700"
                   type="button"
                   onClick={() => navigate("/node")}
                 >
@@ -702,7 +702,7 @@ export function AdminOverview() {
                         <span className="block truncate text-sm font-medium">
                           {n.name}
                         </span>
-                        <span className="block truncate font-mono text-xs text-default-500">
+                        <span className="block truncate font-mono text-xs text-foreground">
                           {up ? "在线" : "离线"}
                           {ip ? ` · ${ip}` : ""}
                         </span>
@@ -717,7 +717,7 @@ export function AdminOverview() {
 
         <div className="space-y-4">
           <Panel
-            action={<span className="text-xs text-default-400">累计</span>}
+            action={<span className="text-xs text-foreground">累计</span>}
             title="落地流量"
           >
             <div className="mb-3 grid grid-cols-2 gap-2">
@@ -728,7 +728,7 @@ export function AdminOverview() {
                 ] as Array<[string, number]>
               ).map(([label, bytes]) => (
                 <div key={label} className="rounded-xl bg-white/40 px-3 py-2">
-                  <div className="text-xs text-default-500">{label}</div>
+                  <div className="text-xs text-foreground">{label}</div>
                   <div className="font-mono text-base font-semibold">
                     {formatTraffic(bytes)}
                   </div>
@@ -736,7 +736,7 @@ export function AdminOverview() {
               ))}
             </div>
             {top.length === 0 ? (
-              <p className="py-1 text-center text-xs text-default-500">
+              <p className="py-1 text-center text-xs text-foreground">
                 还没有流量数据（导入的节点不统计流量）
               </p>
             ) : (
@@ -748,7 +748,7 @@ export function AdminOverview() {
                     <div key={i.id}>
                       <div className="mb-1 flex items-center justify-between gap-2 text-xs">
                         <span className="truncate">{i.name}</span>
-                        <span className="shrink-0 font-mono text-default-500">
+                        <span className="shrink-0 font-mono text-foreground">
                           {formatTraffic(total)}
                         </span>
                       </div>
@@ -781,13 +781,13 @@ export function AdminOverview() {
                       onClick={() => navigate(e.path)}
                     >
                       <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${e.kind === "节点" ? "tray-warning" : "bg-orange-50 text-orange-700 dark:bg-orange-900 dark:text-orange-300"}`}
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${e.kind === "节点" ? "tray-warning" : "bg-orange-500/10 text-orange-700 dark:bg-orange-900 dark:text-orange-300"}`}
                       >
                         {e.kind}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{e.name}</span>
                       <span
-                        className={`shrink-0 text-xs ${days <= 3 ? "text-warning-600" : "text-default-500"}`}
+                        className={`shrink-0 text-xs ${days <= 3 ? "text-warning-600" : "text-foreground"}`}
                       >
                         {daysLeft(e.at)}
                       </span>

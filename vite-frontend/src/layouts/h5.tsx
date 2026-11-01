@@ -270,7 +270,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                   isActive
                     ? "text-white"
                     : isMonitorBlocked
-                      ? "text-gray-500 dark:text-gray-400"
+                      ? "text-foreground"
                       : "text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-gray-100"
                 }
               `}

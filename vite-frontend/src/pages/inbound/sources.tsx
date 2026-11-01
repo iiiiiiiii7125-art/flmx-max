@@ -303,7 +303,7 @@ export function RemoteSourcesSection({
         </Button>
       </div>
       {sources.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-divider bg-tray px-3 py-4 text-center text-xs text-default-500">
+        <p className="rounded-xl border border-dashed border-divider bg-tray px-3 py-4 text-center text-xs text-foreground">
           填机场或别人的订阅链接，或上传订阅文件：节点出现在“入站”里，可以给自建落地做前置中转，也能和自己的落地合并成一个订阅。在“导入”里粘贴订阅地址并打开“定时同步”也会存到这里
         </p>
       ) : (
@@ -351,7 +351,7 @@ export function RemoteSourcesSection({
                       </span>
                     )}
                   </div>
-                  <div className="truncate text-xs text-default-500">
+                  <div className="truncate text-xs text-foreground">
                     {s.nodeCount} 个节点 ·{" "}
                     {s.kind === "file"
                       ? s.lastFetch
@@ -365,12 +365,12 @@ export function RemoteSourcesSection({
                         : " · 手动更新"}
                   </div>
                   {s.lastError ? (
-                    <div className="truncate text-xs text-danger">
+                    <div className="truncate text-xs text-danger-700">
                       {s.lastError}
                     </div>
                   ) : (
                     plan && (
-                      <div className="truncate text-xs text-default-400">
+                      <div className="truncate text-xs text-foreground">
                         {plan}
                       </div>
                     )
@@ -509,7 +509,7 @@ export function RemoteSourcesSection({
                       />
                     </div>
                   )}
-                  <p className="text-xs text-default-500">
+                  <p className="text-xs text-foreground">
                     {draft.kind === "url" ? "更新" : "重新上传"}
                     时按名称对上已有节点：改了地址就跟着改（中转也跟着改），没了就移除；挂着中转的会保留
                   </p>
@@ -525,7 +525,7 @@ export function RemoteSourcesSection({
                         })
                       }
                     />
-                    <p className="text-xs text-default-500">
+                    <p className="text-xs text-foreground">
                       {ROLE_HINTS[draft.role]}
                     </p>
                   </div>
@@ -537,13 +537,13 @@ export function RemoteSourcesSection({
                     onChange={(relayOnly) => setDraft({ ...draft, relayOnly })}
                   />
                   {editing && (
-                    <p className="text-xs text-default-500">
+                    <p className="text-xs text-foreground">
                       当前 {editing.nodeCount} 个节点 · {ago(editing.lastFetch)}
                     </p>
                   )}
                   {draft.id && (
                     <div className="space-y-2 rounded-xl border border-danger/30 p-3">
-                      <p className="text-xs text-default-500">删除订阅源</p>
+                      <p className="text-xs text-foreground">删除订阅源</p>
                       <div className="flex flex-wrap gap-2">
                         <Button
                           color="danger"
@@ -606,17 +606,17 @@ export function FilePick({
         type="button"
         onClick={() => input.current?.click()}
       >
-        <FileUp className="h-4 w-4 shrink-0 text-default-500" />
+        <FileUp className="h-4 w-4 shrink-0 text-foreground" />
         <span
-          className={`min-w-0 flex-1 truncate ${fileName ? "" : "text-default-500"}`}
+          className={`min-w-0 flex-1 truncate ${fileName ? "" : "text-foreground"}`}
         >
           {fileName || "选择订阅文件"}
         </span>
         {fileName && (
-          <span className="shrink-0 text-xs text-primary">更换</span>
+          <span className="shrink-0 text-xs text-primary-700">更换</span>
         )}
       </button>
-      {hint && <p className="text-xs text-default-500">{hint}</p>}
+      {hint && <p className="text-xs text-foreground">{hint}</p>}
       <input
         ref={input}
         className="hidden"

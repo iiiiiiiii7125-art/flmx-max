@@ -22,7 +22,7 @@ function Meter({ label, value }: { label: string; value?: number }) {
   return (
     <div className="min-w-0 space-y-1">
       <div className="flex items-baseline justify-between gap-1 text-[11px] leading-none">
-        <span className="text-default-500">{label}</span>
+        <span className="text-foreground">{label}</span>
         <span className="font-mono font-semibold">
           {value === undefined ? "—" : `${Math.round(value)}%`}
         </span>
@@ -69,8 +69,8 @@ export function NodeLiveStats({
     </>
   );
   const rate = (v?: number) => (v === undefined ? "—" : `${bytes(v)}/s`);
-  const upIcon = <ArrowUp className="h-3 w-3 shrink-0 text-emerald-500" />;
-  const downIcon = <ArrowDown className="h-3 w-3 shrink-0 text-sky-500" />;
+  const upIcon = <ArrowUp className="h-3 w-3 shrink-0 text-emerald-700" />;
+  const downIcon = <ArrowDown className="h-3 w-3 shrink-0 text-sky-700" />;
   const total = month ? bytes(month[0] + month[1]) : "—";
   const split = month ? `↑${bytes(month[1])} ↓${bytes(month[0])}` : "";
 
@@ -80,7 +80,7 @@ export function NodeLiveStats({
         <div className="grid grid-cols-3 gap-3">{meters}</div>
         <div className="grid grid-cols-2 divide-x divide-divider rounded-lg py-1.5 text-[11px] tabular-nums">
           <div className="min-w-0 px-2.5">
-            <div className="text-[10px] text-default-400">网速</div>
+            <div className="text-[10px] text-foreground">网速</div>
             <div className="flex flex-wrap items-center gap-x-2 font-medium">
               <span className="flex items-center gap-1 whitespace-nowrap">
                 {upIcon}
@@ -93,10 +93,10 @@ export function NodeLiveStats({
             </div>
           </div>
           <div className="min-w-0 px-2.5" title={split}>
-            <div className="text-[10px] text-default-400">本月流量（网卡）</div>
+            <div className="text-[10px] text-foreground">本月流量（网卡）</div>
             <div className="flex flex-wrap items-baseline gap-x-1.5">
               <span className="font-semibold">{total}</span>
-              <span className="whitespace-nowrap text-[10px] text-default-400">
+              <span className="whitespace-nowrap text-[10px] text-foreground">
                 {split}
               </span>
             </div>
@@ -121,10 +121,10 @@ export function NodeLiveStats({
       </div>
       <div className="w-28 space-y-0.5 leading-tight tabular-nums">
         <div className="flex items-baseline gap-1.5 text-[11px]">
-          <span className="text-[10px] text-default-400">本月（网卡）</span>
+          <span className="text-[10px] text-foreground">本月（网卡）</span>
           <span className="font-semibold">{total}</span>
         </div>
-        <div className="text-[10px] text-default-400">{split || "—"}</div>
+        <div className="text-[10px] text-foreground">{split || "—"}</div>
       </div>
     </div>
   );

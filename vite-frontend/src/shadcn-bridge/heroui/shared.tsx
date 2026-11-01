@@ -32,15 +32,15 @@ export function FieldContainer({
       {label ? (
         <Label htmlFor={id}>
           {label}
-          {isRequired ? <span className="ml-1 text-danger">*</span> : null}
+          {isRequired ? <span className="ml-1 text-danger-700">*</span> : null}
         </Label>
       ) : null}
       {children}
       {description ? (
-        <p className="text-xs text-default-500">{description}</p>
+        <p className="text-xs text-foreground">{description}</p>
       ) : null}
       {isInvalid && errorMessage ? (
-        <p className="text-xs text-danger">{errorMessage}</p>
+        <p className="text-xs text-danger-700">{errorMessage}</p>
       ) : null}
     </div>
   );

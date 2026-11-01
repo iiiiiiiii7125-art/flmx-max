@@ -36,15 +36,13 @@ export const ThemeSettings: React.FC = () => {
   return (
     <Card className="shadow-md">
       <CardBody className="p-6">
-        <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-5">
-          主题设置
-        </h2>
+        <h2 className="text-lg font-medium text-gray-900 mb-5">主题设置</h2>
 
         {/* ── Theme grid ─────────────────────────────────────── */}
         <div className="mb-4">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+          <p className="text-sm font-medium text-gray-700 mb-3">
             选择主题
-            <span className="ml-2 text-xs text-gray-400 dark:text-gray-500 font-normal">
+            <span className="ml-2 text-xs text-foreground font-normal">
               共 {themes.length} 个可用主题
             </span>
           </p>
@@ -90,7 +88,7 @@ export const ThemeSettings: React.FC = () => {
                   {/* Info */}
                   <div className="p-3">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                      <p className="text-sm font-semibold text-gray-900 truncate">
                         {theme.name}
                       </p>
                       {isActive && (
@@ -100,11 +98,11 @@ export const ThemeSettings: React.FC = () => {
                       )}
                     </div>
                     {theme.description && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                      <p className="text-xs text-foreground mt-0.5 truncate">
                         {theme.description}
                       </p>
                     )}
-                    <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">
+                    <p className="text-[10px] text-foreground mt-1">
                       {theme.author} · v{theme.version}
                     </p>
                   </div>
@@ -123,7 +121,7 @@ export const ThemeSettings: React.FC = () => {
         {activeThemeId && activeThemeId !== "default" && (
           <div className="pt-2">
             <Button
-              className="text-gray-500 dark:text-gray-400"
+              className="text-foreground"
               size="sm"
               variant="light"
               onPress={handleReset}

@@ -85,7 +85,7 @@ export function Input({
         )}
       >
         {startContent ? (
-          <div className="pl-3 text-default-500">{startContent}</div>
+          <div className="pl-3 text-foreground">{startContent}</div>
         ) : null}
         <BaseInput
           aria-invalid={isInvalid}
@@ -103,7 +103,7 @@ export function Input({
           {...props}
         />
         {endContent ? (
-          <div className="pr-3 text-default-500">{endContent}</div>
+          <div className="pr-3 text-foreground">{endContent}</div>
         ) : null}
       </div>
     </FieldContainer>

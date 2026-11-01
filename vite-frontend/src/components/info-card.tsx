@@ -32,10 +32,7 @@ const PILL: Record<CardTone, [string, string]> = {
     "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
     "bg-amber-500",
   ],
-  default: [
-    "bg-default-200 text-default-600 dark:text-default-300",
-    "bg-default-400",
-  ],
+  default: ["bg-tray text-default-600", "bg-default-400"],
 };
 
 export interface InfoCardAction {

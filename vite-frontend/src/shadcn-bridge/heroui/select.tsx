@@ -305,9 +305,7 @@ export function Select<T>({
         role="listbox"
       >
         {options.length === 0 ? (
-          <div
-            className={cn("px-2 py-1 text-default-500", textSizeClass(size))}
-          >
+          <div className={cn("px-2 py-1 text-foreground", textSizeClass(size))}>
             暂无可选项
           </div>
         ) : (
@@ -384,7 +382,7 @@ export function Select<T>({
                 textSizeClass(size),
                 selectedArray.length > 0
                   ? "text-foreground"
-                  : "text-default-500",
+                  : "text-foreground",
               )}
               title={selectedArray.length > 0 ? selectedFullText : undefined}
             >
@@ -392,7 +390,7 @@ export function Select<T>({
             </span>
             <ChevronDownIcon
               className={cn(
-                "h-4 w-4 flex-shrink-0 text-default-500 transition-transform",
+                "h-4 w-4 flex-shrink-0 text-foreground transition-transform",
                 isExpanded ? "rotate-180" : "rotate-0",
               )}
             />

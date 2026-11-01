@@ -30,9 +30,9 @@ export function Spinner({
   return (
     <div className={cn("inline-flex items-center gap-2", className)} {...props}>
       <Loader2Icon
-        className={cn("animate-spin text-default-500", iconSize(size))}
+        className={cn("animate-spin text-foreground", iconSize(size))}
       />
-      {label ? <span className="text-sm text-default-500">{label}</span> : null}
+      {label ? <span className="text-sm text-foreground">{label}</span> : null}
     </div>
   );
 }

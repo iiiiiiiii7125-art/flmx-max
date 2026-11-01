@@ -28,14 +28,14 @@ export function DemoBanner() {
         <span className="font-semibold text-sm">FLMX 在线演示</span>
         <button
           aria-label="收起"
-          className="rounded p-1 text-default-400 hover:bg-white/40"
+          className="rounded p-1 text-foreground hover:bg-white/40"
           type="button"
           onClick={() => setOpen(false)}
         >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      <p className="text-default-500">
+      <p className="text-foreground">
         数据都是示例，可以随便点；修改不会保存，刷新后还原。
       </p>
       <div className="mt-2 flex gap-2">

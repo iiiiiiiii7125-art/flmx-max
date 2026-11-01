@@ -19,10 +19,10 @@ export const AnnouncementBanner = ({
     <Card className="mb-4 lg:mb-6 border-primary/20 shadow-sm [&>div]:bg-primary-500/10">
       <CardBody className="p-4 sm:p-5">
         <div className="flex items-center gap-3.5 sm:gap-4">
-          <div className="w-10 h-10 sm:w-11 sm:h-11 bg-white dark:bg-primary-900 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm border border-primary/20 dark:border-primary/25">
+          <div className="w-10 h-10 sm:w-11 sm:h-11 bg-white/40 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm border border-primary/20">
             <svg
               aria-hidden="true"
-              className="w-5 h-5 sm:w-5 sm:h-5 text-primary-500 dark:text-primary-400"
+              className="w-5 h-5 sm:w-5 sm:h-5 text-primary-700 dark:text-primary-400"
               fill="currentColor"
               viewBox="0 0 20 20"
             >

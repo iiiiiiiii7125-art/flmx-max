@@ -12,8 +12,9 @@ export interface ProvidersProps {
 
 // Shared toast surface for every toast type: the per-type style in
 // react-hot-toast replaces rather than merges, so each type spreads this.
-// Round 4: --toaster-bg is fully opaque — toast text rides this tray,
-// never glass (the backdrop filter is inert over an opaque fill).
+// Round 5d: --toaster-bg is the glass gradient (same stops as
+// --glass-card) and --toaster-color is the near-black foreground, so
+// toasts follow the site-wide glass recipe like every floating surface.
 const toastSurfaceStyle = {
   background: "var(--toaster-bg)",
   color: "var(--toaster-color)",

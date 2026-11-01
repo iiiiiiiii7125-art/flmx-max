@@ -220,7 +220,7 @@ export function ImportModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">
           <h2 className="text-lg font-bold">导入节点</h2>
-          <p className="text-small font-normal text-default-500">
+          <p className="text-small font-normal text-foreground">
             导入别处搭好的节点或机场订阅，用来对接中转和加入订阅。面板不会部署或修改这些节点。
           </p>
         </ModalHeader>
@@ -273,7 +273,7 @@ export function ImportModal({
                       <p className="text-sm">
                         {subURL ? "定时同步" : "存为订阅源"}
                       </p>
-                      <p className="text-xs text-default-500">
+                      <p className="text-xs text-foreground">
                         {!sync
                           ? "只导入一次，之后不再更新"
                           : subURL
@@ -310,7 +310,7 @@ export function ImportModal({
                           value={role}
                           onChange={(v) => setRole(v as RemoteSourceRole)}
                         />
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs text-foreground">
                           {ROLE_HINTS[role]}
                         </p>
                       </div>
@@ -326,7 +326,7 @@ export function ImportModal({
             </span>
           </Checkbox>
           {errors.length > 0 && (
-            <ul className="space-y-1 rounded-xl bg-danger-500/10 p-3 text-xs text-danger">
+            <ul className="space-y-1 rounded-xl bg-danger-500/10 p-3 text-xs text-danger-700">
               {errors.map((e) => (
                 <li key={e} className="break-all">
                   {e}
@@ -477,7 +477,7 @@ export function ExternalEditModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">
           <h2 className="text-lg font-bold">编辑导入的节点</h2>
-          <p className="text-small font-normal text-default-500">
+          <p className="text-small font-normal text-foreground">
             只修改面板里的记录；原服务器上的配置变了才需要在这里同步
           </p>
         </ModalHeader>

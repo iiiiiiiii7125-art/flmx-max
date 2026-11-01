@@ -599,7 +599,7 @@ export default function GroupPage({
       <div className="px-3 lg:px-6 py-8">
         <Card>
           <CardBody>
-            <p className="text-danger">
+            <p className="text-danger-700">
               权限不足，只有管理员可以访问分组管理页面。
             </p>
           </CardBody>
@@ -658,6 +658,7 @@ export default function GroupPage({
                         <Chip
                           color={item.status === 1 ? "success" : "danger"}
                           size="sm"
+                          variant="flat"
                         >
                           {item.status === 1 ? "启用" : "停用"}
                         </Chip>
@@ -745,6 +746,7 @@ export default function GroupPage({
                         <Chip
                           color={item.status === 1 ? "success" : "danger"}
                           size="sm"
+                          variant="flat"
                         >
                           {item.status === 1 ? "启用" : "停用"}
                         </Chip>
@@ -1043,12 +1045,12 @@ export default function GroupPage({
                   {(item) => <SelectItem key={item.id}>{item.name}</SelectItem>}
                 </Select>
                 <p
-                  className="w-full min-w-0 max-w-full text-xs text-default-500 truncate"
+                  className="w-full min-w-0 max-w-full text-xs text-foreground truncate"
                   title={`当前已选：${selectedTunnelSummary}`}
                 >
                   当前已选：{selectedTunnelSummary}
                 </p>
-                <p className="text-xs text-default-500">
+                <p className="text-xs text-foreground">
                   不选择任何隧道并保存将清空该分组成员。
                 </p>
               </ModalBody>
@@ -1094,12 +1096,12 @@ export default function GroupPage({
                   {(item) => <SelectItem key={item.id}>{item.user}</SelectItem>}
                 </Select>
                 <p
-                  className="w-full min-w-0 max-w-full text-xs text-default-500 truncate"
+                  className="w-full min-w-0 max-w-full text-xs text-foreground truncate"
                   title={`当前已选：${selectedUserSummary}`}
                 >
                   当前已选：{selectedUserSummary}
                 </p>
-                <p className="text-xs text-default-500">
+                <p className="text-xs text-foreground">
                   不选择任何用户并保存将清空该分组成员。
                 </p>
               </ModalBody>
