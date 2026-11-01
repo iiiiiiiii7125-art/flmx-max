@@ -1,10 +1,10 @@
 # 导入节点
 
-在 **落地** 页点击 **导入**，可以把不是面板部署的节点（脚本搭的、没装 agent 的机器、机场节点）加进来，用来对接中转和加入订阅。转换规则参考 Sub-Store：所有格式先转成 Mihomo（Clash Meta）节点格式保存，再按订阅格式输出，参数不会丢失。
+在 **落地** 页点击 **导入**，可以把不是面板部署的节点（脚本搭的、没装 agent 的机器、机场节点）加进来，用来对接中转和加入订阅。转换规则参考 Sub-Store：所有格式先转成 Mihomo（Clash Meta）节点格式保存，再按订阅格式输出，绝大多数参数会完整保留；少数只在 sing-box 原格式里有落点的字段没有对应搬运位置、转换时会丢弃，例如 Hysteria2 的 `up_mbps` / `down_mbps`、VLESS 的 `packet_encoding`。
 
 ## 支持的输入
 
-- 分享链接（每行一个）：`ss://`（含 obfs / v2ray-plugin / shadow-tls 插件）、`vmess://`（v2rayN 格式）、`vless://`（含 Reality、WS、gRPC、H2、XHTTP）、`trojan://`、`hysteria2://` / `hy2://`、`tuic://`、`anytls://`、`socks5://`
+- 分享链接（每行一个）：`ss://`（含 obfs / v2ray-plugin / shadow-tls 插件）、`vmess://`（v2rayN 格式）、`vless://`（含 Reality、WS、gRPC、H2、XHTTP）、`trojan://`、`hysteria2://` / `hy2://`、`tuic://`、`anytls://`、`socks5://`、`naive://` / `naive+https://`（NaïveProxy，含面板自产的分享链接）
 - base64 订阅内容
 - Clash / Mihomo 配置（读取 `proxies`）
 - sing-box 配置（读取 `outbounds`）
@@ -26,8 +26,8 @@
 - Shadowsocks 类条目必须带密码：1.3.4 起，无密码（或加密方式为空）的 SS / SSU / TAP 配置在节点侧会**直接报错、服务起不来**，不再像旧版本那样静默以明文运行。导入或手工编写 gost 配置、手工链里有这类条目时，请先补上密码再下发；报错信息会明确指出缺 auth。面板正常创建的 SS 入站与 SS 链恒带密码，不受影响
 - 节点地址不能是本机地址（`127.0.0.1` 等 loopback 地址或 `0.0.0.0`），导入时会被逐条拒绝并提示「地址不能是本机或 0.0.0.0」
 - 保留段与组播段地址同样拒绝：云元数据地址、保留地址段（如 `0.x.x.x`）与组播地址（如 `224.0.0.0/4` 段）在导入与连通性检测时同样会被拒绝；公网、私网与运营商 NAT（CGNAT）地址不受影响
-- Shadowsocks 2022（`2022-blake3-*`）节点的密钥会校验格式：base64 解码后须为 16/32 字节，SIP023 冒号多段密钥按段逐段校验；不合规的单条节点会被拒绝并提示原因，其余节点照常导入。SIP023 多段合法节点在 sing-box 订阅中会逐段规范化为带填充的标准 base64 后下发（解码出的密钥字节不变；sing-box 1.11 / 1.12 / 1.14 均已实测可正常解析多段密钥）。此前已导入的异常节点（任一段密钥不合规）在 sing-box 订阅渲染时仍会被略过（Clash 等其他格式仍原样输出）
-- Reality 链接参数（`pbk` / `sid` / `spx` / `realityDest`）都会解析保留：`realityDest` 须为 `host:port` 形式，坏值（缺端口、端口越界、空标签主机名如 `a..b:443`）整条拒绝，与创建入站同口径；`spx` 不能含空白或控制字符。合法值存入节点参数（入站详情的导入参数中可见 `reality-opts.dest` / `reality-opts.spider-x`），分享链接会原样回放，Xray 链式出站也会透传。sing-box / Clash 等订阅格式没有对应的 `dest` / `spiderX` 字段，下发时不带这两项（值仍保留在节点记录中，再导出分享链接时还在）。VMess 链接（v2rayN JSON）同样支持 `tls=reality`：`sni` / `fp` / `alpn` / `pbk` / `sid` / `spx` / `realityDest` 都会解析保留，坏值（缺 `pbk`、坏 `realityDest`、缺 SNI 等）整条拒绝；`tls` 取值不在 `tls / reality / 留空（明文）` 内时整条拒绝，不会静默降级为明文；VLESS / Trojan 链接的 `security` 取未识别值时同样整条拒绝。
+- Shadowsocks 2022（`2022-blake3-*`）节点的密钥会校验格式：base64 解码后须为 16/32 字节，SIP023 冒号多段密钥按段逐段校验；不合规的单条节点会被拒绝并提示原因，其余节点照常导入。SIP023 多段合法节点在 sing-box 订阅中会逐段规范化为带填充的标准 base64 后下发（解码出的密钥字节不变；sing-box 1.11 / 1.12 / 1.14 均已实测可正常解析多段密钥）。此前已导入的异常节点（任一段密钥不合规）在**所有**订阅格式（sing-box、Clash、通用 base64、Loon、Quantumult X、Surge）渲染时都会被整节点略过、不再输出——面板不会为此单独提示，使用者在客户端里找不到该节点时多半是这个原因
+- Reality 链接参数（`pbk` / `sid` / `spx` / `realityDest`）都会解析保留：`realityDest` 须为 `host:port` 形式，坏值（缺端口、端口越界、空标签主机名如 `a..b:443`）整条拒绝，与创建入站同口径；`spx` 不能含空白或控制字符。合法值存入节点参数（入站详情的导入参数中可见 `reality-opts.dest` / `reality-opts.spider-x`），分享链接会原样回放，Xray 链式出站也会透传。sing-box 订阅格式没有对应的 `dest` / `spiderX` 字段，下发时不带这两项；Clash 家族（含 Stash、Shadowrocket 的 Clash 档案）则会把 `reality-opts` 整段透传输出，`dest` / `spider-x` 会随之带出（客户端一般会忽略这两个未知字段，不影响使用）。两种情况下值都仍保留在节点记录中，再导出分享链接时还在。VMess 链接（v2rayN JSON）同样支持 `tls=reality`：`sni` / `fp` / `alpn` / `pbk` / `sid` / `spx` / `realityDest` 都会解析保留，坏值（缺 `pbk`、坏 `realityDest`、缺 SNI 等）整条拒绝；`tls` 取值不在 `tls / reality / 留空（明文）` 内时整条拒绝，不会静默降级为明文；VLESS / Trojan 链接的 `security` 取未识别值时同样整条拒绝。
 - 经中转连接时，原节点用域名连接的，会自动把域名保留为 TLS SNI 和 WebSocket Host；Hysteria2 端口跳跃只在直连线路上保留
 - 面板不会部署、修改这些节点，也没有流量统计、白名单、换密钥等功能
 - 原节点的地址或参数变了，点击该节点 → **编辑**，修改地址或粘贴新的链接替换参数，相关中转会自动指向新地址
