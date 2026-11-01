@@ -141,11 +141,17 @@ async function visit(role, route) {
 // never proves their recordings exist. A step that cannot find its
 // control is itself a failure — the blind spot stays in CI's view.
 const INTERACTIONS = {
-  // Switching to the tunnel tab mounts the tunnel monitor, which pulls
-  // per-tunnel quality history (and metrics on detail open). Since the
-  // DA-1 IA merge this lives on the user walk (R5X-008): admins are
-  // redirected away from /monitor, the authorized demo user is not.
-  "user monitor": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.trim() === "隧道"); if (!b) return false; b.click(); return true; })()`,
+  // The tunnel monitor pulls per-tunnel quality history (and metrics
+  // on detail open). Since the DA-1 IA merge this lives on the user
+  // walk (R5X-008): admins are redirected away from /monitor, the
+  // authorized demo user is not. It used to mount only after a click
+  // on the "隧道" tab; since the 1.7.11 monitor scoping the
+  // authorized user's /monitor renders the tunnel monitor directly
+  // (UserTunnelMonitorOverview), so there is no tab left to click —
+  // the step instead asserts the view is presented, by its "监控面板"
+  // heading. The mount itself (and with it the endpoint calls this
+  // step exists to keep in CI's view) happens either way.
+  "user monitor": `(() => { const h = [...(document.querySelector("main") ?? document).querySelectorAll("h2")].find((x) => x.textContent.trim() === "监控面板"); return !!h; })()`,
   // Expanding a subscription's traffic section mounts SubTrafficStats,
   // which pulls user/subscription/traffic.
   "user my-subscription": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.includes("该订阅流量统计")); if (!b) return false; b.click(); return true; })()`,

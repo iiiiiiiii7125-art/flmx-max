@@ -95,18 +95,15 @@ await session("admin", "admin@user", "demo-admin-123", [
 // monitoring-authorized persona, see seed_2) — this is the page-level
 // recording source for the user book's monitor keys; record_items.mjs
 // adds the item-level monitor endpoints for the same book. The tunnel
-// tab step mirrors check.mjs's "user monitor" interaction so the
-// tunnel monitor's endpoints are page-recorded too, not only direct.
-const clickMonitorTunnelTab = async (p) => {
-  const clicked = await p.evaluate(() => {
-    const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.trim() === "隧道");
-    if (!b) return false;
-    b.click();
-    return true;
-  });
-  if (!clicked) throw new Error("monitor tunnel tab not found");
+// step mirrors check.mjs's "user monitor" interaction so the tunnel
+// monitor's endpoints are page-recorded too, not only direct. It
+// used to click the "隧道" tab; since the 1.7.11 monitor scoping
+// the tunnel monitor renders directly on /monitor, so the step now
+// waits for the view's "监控面板" heading instead of clicking.
+const awaitMonitorTunnelView = async (p) => {
+  await p.waitForFunction(() => [...(document.querySelector("main") ?? document).querySelectorAll("h2")].some((x) => x.textContent.trim() === "监控面板"), null, { timeout: 10000 });
 };
-await session("user", "xiaoming", "demo123456", [["/dashboard"], ["/my-subscription"], ["/forward"], ["/monitor", [clickMonitorTunnelTab]], ["/profile"]]);
+await session("user", "xiaoming", "demo123456", [["/dashboard"], ["/my-subscription"], ["/forward"], ["/monitor", [awaitMonitorTunnelView]], ["/profile"]]);
 fs.writeFileSync(out, JSON.stringify(rec));
 const n = (r) => Object.keys(rec[r]).length;
 console.log("admin paths", n("admin"), "user paths", n("user"));
