@@ -57,8 +57,14 @@ type udpConn struct {
 	wbuf *bytes.Buffer
 	once sync.Once
 	mu   sync.Mutex
+	rbuf []byte // unread remainder of the current frame
 }
 
+// Read returns the payload of one B-frame per call. If the caller's
+// buffer is smaller than the frame, the unread remainder is retained
+// in rbuf for the next Read instead of being discarded: this conn is a
+// byte-stream face for the frame layer (U1-003), and silently dropping
+// the tail of a frame would desynchronise the stream.
 func (c *udpConn) Read(b []byte) (n int, err error) {
 	c.once.Do(func() {
 		if c.wbuf != nil {
@@ -67,6 +73,12 @@ func (c *udpConn) Read(b []byte) (n int, err error) {
 	})
 	if err != nil {
 		return
+	}
+
+	if len(c.rbuf) > 0 {
+		n = copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
 	}
 
 	var bb [2]byte
@@ -83,7 +95,11 @@ func (c *udpConn) Read(b []byte) (n int, err error) {
 	buf := bufpool.Get(dlen)
 	defer bufpool.Put(buf)
 	_, err = io.ReadFull(c.Conn, buf)
+	if err != nil {
+		return
+	}
 	n = copy(b, buf)
+	c.rbuf = append(c.rbuf, buf[n:dlen]...)
 
 	return
 }
@@ -125,7 +141,7 @@ func readResponse(r io.Reader) (err error) {
 	}
 
 	if resp.Version != relay.Version1 {
-		err = relay.ErrBadVersion
+		err = fmt.Errorf("relay connector: %w", relay.ErrBadVersion)
 		return
 	}
 
@@ -161,9 +177,16 @@ type bindUDPConn struct {
 	localAddr  net.Addr
 	remoteAddr net.Addr
 	md         mdata.Metadata
+	rbuf       []byte // unread remainder of the current frame
 }
 
 func (c *bindUDPConn) Read(b []byte) (n int, err error) {
+	if len(c.rbuf) > 0 {
+		n = copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
+	}
+
 	// 2-byte data length header
 	var bh [2]byte
 	_, err = io.ReadFull(c.Conn, bh[:])
@@ -181,7 +204,11 @@ func (c *bindUDPConn) Read(b []byte) (n int, err error) {
 	defer bufpool.Put(buf)
 
 	_, err = io.ReadFull(c.Conn, buf)
+	if err != nil {
+		return
+	}
 	n = copy(b, buf)
+	c.rbuf = append(c.rbuf, buf[n:dlen]...)
 
 	return
 }

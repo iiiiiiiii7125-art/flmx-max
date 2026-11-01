@@ -32,9 +32,19 @@ func (c *tcpConn) Write(b []byte) (n int, err error) {
 type udpConn struct {
 	net.Conn
 	wbuf bytes.Buffer
+	rbuf []byte // unread remainder of the current frame
 }
 
+// Read returns the payload of one B-frame per call; a remainder that
+// does not fit the caller's buffer is retained for the next Read
+// instead of being discarded (stream face, see connector/relay).
 func (c *udpConn) Read(b []byte) (n int, err error) {
+	if len(c.rbuf) > 0 {
+		n = copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
+	}
+
 	var bb [2]byte
 	_, err = io.ReadFull(c.Conn, bb[:])
 	if err != nil {
@@ -47,7 +57,11 @@ func (c *udpConn) Read(b []byte) (n int, err error) {
 	}
 	buf := make([]byte, dlen)
 	_, err = io.ReadFull(c.Conn, buf)
+	if err != nil {
+		return
+	}
 	n = copy(b, buf)
+	c.rbuf = append(c.rbuf, buf[n:dlen]...)
 
 	return
 }

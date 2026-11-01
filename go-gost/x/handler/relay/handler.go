@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
@@ -160,7 +161,10 @@ func (h *relayHandler) Handle(ctx context.Context, conn net.Conn, opts ...handle
 
 	req := relay.Request{}
 	if _, err := req.ReadFrom(conn); err != nil {
-		return err
+		// Wrap with the layer: the relay module's own ErrBadVersion
+		// text ("bad version") is identical across layers and
+		// misdirected diagnosis before (F-UDP-8).
+		return fmt.Errorf("relay: read request: %w", err)
 	}
 
 	conn.SetReadDeadline(time.Time{})

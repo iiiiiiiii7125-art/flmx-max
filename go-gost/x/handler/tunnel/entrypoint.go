@@ -623,7 +623,7 @@ func (ep *entrypoint) HandleTLS(ctx context.Context, conn net.Conn, ro *xrecorde
 func (ep *entrypoint) handleConnect(ctx context.Context, conn net.Conn, ro *xrecorder.HandlerRecorderObject, log logger.Logger) (err error) {
 	req := relay.Request{}
 	if _, err := req.ReadFrom(conn); err != nil {
-		return err
+		return fmt.Errorf("tunnel entrypoint: read request: %w", err)
 	}
 
 	resp := relay.Response{

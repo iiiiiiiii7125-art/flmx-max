@@ -8,11 +8,20 @@ import (
 
 	"github.com/go-gost/core/connector"
 	"github.com/go-gost/relay"
+	xudp "github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/internal/util/mux"
 )
 
 // Bind implements connector.Binder.
 func (c *tunnelConnector) Bind(ctx context.Context, conn net.Conn, network, address string, opts ...connector.BindOption) (net.Listener, error) {
+
+	switch network {
+	case "udp", "udp4", "udp6":
+		// Same datagram-transport hazard as connector/relay: the
+		// bind handshake is parsed with small stream reads
+		// (F-UDP-2).
+		conn = xudp.NewStreamConn(conn)
+	}
 
 	addr, cid, err := c.initTunnel(conn, network, address)
 	if err != nil {
