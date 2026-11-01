@@ -2458,6 +2458,38 @@ test_script_secret_surfaces_closed() (
     fail "R4B11-006: the pgloader command file must be created with 0600 permissions"
 )
 
+# F-R4-01: pgloader 命令文件的 LOAD DATABASE 语句必须以分号终止——
+# 缺失时现行 dimitri/pgloader:latest（3.6.7~devel）解析 KABOOM
+# （ESRAP-PARSE-ERROR）、SQLite→PostgreSQL 迁移整体不可用。本用例
+# 从出厂脚本抽出命令文件生成段原文实际执行，钉住生成文件的确切
+# 形态与 0600 权限（旧形态无分号，本用例对旧代码必红）。
+test_pgloader_command_file_terminated() (
+  set -euo pipefail
+  local work snippet expected actual
+  work=$(mktemp -d)
+  snippet="$work/generate.sh"
+  awk '/pgloader_load_file=\$\(mktemp\)/,/^EOF$/' "$ROOT_DIR/panel_install.sh" > "$snippet"
+  grep -q 'INTO postgresql://' "$snippet" || \
+    fail "F-R4-01: could not extract the pgloader command-file generation block from panel_install.sh"
+
+  pgloader_source="/sqlite/gost.db"
+  postgres_user="fixture_user"
+  postgres_password="fixture_pass"
+  postgres_db="fixture_db"
+  source "$snippet"
+
+  [[ -f "$pgloader_load_file" ]] || \
+    fail "F-R4-01: the generation block must produce the pgloader command file"
+  assert_equals "600" "$(stat -c %a "$pgloader_load_file")" \
+    "F-R4-01: the pgloader command file must keep 0600 permissions"
+  expected=$(printf 'LOAD DATABASE\n     FROM sqlite:///sqlite/gost.db\n     INTO postgresql://fixture_user:fixture_pass@postgres:5432/fixture_db;')
+  actual=$(cat "$pgloader_load_file")
+  assert_equals "$expected" "$actual" \
+    "F-R4-01: the pgloader command file must be one LOAD DATABASE statement terminated by a semicolon"
+  rm -f "$pgloader_load_file"
+  rm -rf "$work"
+)
+
 # R4B11-007: tcpkill 安装失败不得静默——check_and_install_tcpkill 在
 # 尝试后复检，缺失时必须给出点名受影响能力的告警（旧实现全部输出
 # 吞 /dev/null 且恒 return 0、无任何复检，本用例对旧代码必红）。
@@ -2530,6 +2562,7 @@ test_install_flux_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
 test_main_requires_root
 test_script_secret_surfaces_closed
+test_pgloader_command_file_terminated
 test_tcpkill_missing_warns_instead_of_silent
 
 echo "install script tests passed"
