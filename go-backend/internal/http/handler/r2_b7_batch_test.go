@@ -281,68 +281,38 @@ func TestR2B7_013_AssignToDisabledGroupRejected(t *testing.T) {
 	}
 }
 
-func TestR2B7_013_DisableUserGroupRevokesGrants(t *testing.T) {
+// R5-FGRP 改版：停用用户组只改状态——既有授权、台账、转发逐行保留；
+// 重新启用也不补发任何授权（授权集合与操作前逐行一致）。
+func TestR2B7_013_DisableUserGroupLeavesGrantsIntact(t *testing.T) {
 	f := seedB2Fixture(t)
 	code, body := f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 1, "name": "g-one", "status": 0})
 	if code != 0 {
 		t.Fatalf("groupUserUpdate disable code=%d body=%s", code, body)
 	}
-	f.assertRevokedT1(t)
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_group_id = 1`); n != 0 {
-		t.Fatalf("grants of disabled group must be revoked, got %d", n)
+	f.assertGrantsIntactT1(t)
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_group_id = 1`); n != 3 {
+		t.Fatalf("R5-FGRP: grant ledger of disabled group must be retained, got %d", n)
 	}
-	// 重新启用按成员关系补发组授权。
 	code, body = f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 1, "name": "g-one", "status": 1})
 	if code != 0 {
 		t.Fatalf("groupUserUpdate enable code=%d body=%s", code, body)
 	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE user_id = 2 AND tunnel_id = 1`); n != 1 {
-		t.Fatalf("re-enable must restore group grant for U2/T1, got %d", n)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE user_id = 4 AND tunnel_id = 1`); n != 1 {
-		t.Fatalf("re-enable must restore group grant for U4/T1, got %d", n)
-	}
-	if err := f.h.ensureTunnelPermission(2, 1, 1); err != nil {
-		t.Fatalf("re-enabled grant must be usable: %v", err)
+	f.assertGrantsIntactT1(t)
+	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel`); n != 4 {
+		t.Fatalf("R5-FGRP: re-enable must not materialize any user_tunnel, got %d total", n)
 	}
 }
 
-func TestR2B7_013_DisableTunnelGroupRevokesGrants(t *testing.T) {
+// R5-FGRP 改版：停用隧道组同口径——只改状态，授权逐行保留。
+func TestR2B7_013_DisableTunnelGroupLeavesGrantsIntact(t *testing.T) {
 	f := seedB2Fixture(t)
 	code, body := f.post(t, f.h.groupTunnelUpdate, map[string]interface{}{"id": 1, "name": "tg-one", "status": 0})
 	if code != 0 {
 		t.Fatalf("groupTunnelUpdate disable code=%d body=%s", code, body)
 	}
-	f.assertRevokedT1(t)
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE tunnel_group_id = 1`); n != 0 {
-		t.Fatalf("grants of disabled group must be revoked, got %d", n)
-	}
-}
-
-func TestR2B7_013_SyncSkipsDisabledSide(t *testing.T) {
-	f := seedB2Fixture(t)
-	// 存量停用分组（直接落库模拟升级前已停用）：UG2 停用 + TG2 启用，
-	// 已有 group_permission 对；sync 不得展开出任何新 UT。
-	f.execB7(t,
-		`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(2, 'g-off', 1000, 1000, 0)`,
-		`INSERT INTO tunnel_group(id, name, created_time, updated_time, status) VALUES(2, 'tg-on', 1000, 1000, 1)`,
-		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(2, 4, 1000)`,
-		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(2, 2, 1000)`,
-		`INSERT INTO group_permission(user_group_id, tunnel_group_id, created_time) VALUES(2, 2, 1000)`,
-		`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(3, 'g-on', 1000, 1000, 1)`,
-		`INSERT INTO tunnel_group(id, name, created_time, updated_time, status) VALUES(3, 'tg-off', 1000, 1000, 0)`,
-		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(3, 4, 1000)`,
-		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(3, 2, 1000)`,
-		`INSERT INTO group_permission(user_group_id, tunnel_group_id, created_time) VALUES(3, 3, 1000)`,
-	)
-	if err := f.h.syncPermissionsByUserGroup(2); err != nil {
-		t.Fatalf("sync by disabled user group: %v", err)
-	}
-	if err := f.h.syncPermissionsByTunnelGroup(3); err != nil {
-		t.Fatalf("sync by disabled tunnel group: %v", err)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE user_id = 4 AND tunnel_id = 2`); n != 0 {
-		t.Fatalf("sync must skip pairs with a disabled side, materialized %d", n)
+	f.assertGrantsIntactT1(t)
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE tunnel_group_id = 1`); n != 3 {
+		t.Fatalf("R5-FGRP: grant ledger of disabled tunnel group must be retained, got %d", n)
 	}
 }
 

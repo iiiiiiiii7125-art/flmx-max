@@ -7,15 +7,16 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// R6 批 2 回归（grant 生命周期两端对账）：
+// R6 批 2 回归（grant 台账保真）：
 //   - R6X-004：importPermissions 的 grant 同键占位直删须先做来源
 //     OR——占位行 cb=1 且备份行有效 cb（effectiveCB，经 R5X-014
 //     降级判定后）为 0 时，把落库行提升为 cb=1 并以 warning 披露
-//     合并；四格与 R5X-005 同构。
-//   - R6X-005：sweep 的 grants>0 豁免须改逐条 grantPairMembershipHoldsTx
-//     验对应——任一 grant 对应成立才豁免；全假时走停用对裁定并
-//     对错位 grant 计 warning。ShieldChain / Control / 合法覆盖
-//     变体三例互为对照。
+//     合并；四格与 R5X-005 同构。R5-FGRP 后 cb 只作来源记录：
+//     四格删除组后 UT10 一律存活。
+//   - R6X-005（原 sweep 豁免口径已随 R5-FGRP 删除）：导入 UT 不再
+//     按停用对/台账对应裁定——ShieldChain / Control / 合法覆盖
+//     三例的 UT10 一律逐字落行、无 userTunnelsRevoked skipped、
+//     无错位 warning。
 
 // ─── R6X-004 同键占位 cb 四格 ─────────────────────────────────────────
 
@@ -37,26 +38,25 @@ func b2SeedPlaceholder(t *testing.T, r *Repository, now int64, occCB int) {
 
 // 四格 = (占位行 cb, 备份有效 cb)：
 //
-//	(1,0) 本条缺陷格：落库行 cb 须提升为 1、warning 含合并披露；
-//	      后续组撤销可达该 UT（UT10 被删、回传 (2,1) 对）。
+//	(1,0) 本条缺陷格：落库行 cb 须提升为 1、warning 含合并披露。
 //	(0,1) 防过修格：备份行本已 cb=1，占位 cb=0 不得覆盖/降级，
 //	      落库 cb=1、无合并披露（无损）。
 //	(1,1) 落库 cb=1、无合并披露（无损）。
-//	(0,0) 防过修格：两行皆 cb=0，不得凭空造出组建来源，落库
-//	      cb=0、后续组撤销不可达（UT10 存活）。
+//	(0,0) 防过修格：两行皆 cb=0，不得凭空造出组建来源，落库 cb=0。
+//
+// 四格共同尾声（R5-FGRP）：删除组只做记账级联，UT10 一律存活。
 func TestR6B2_004_PlaceholderGrantCreatorFlagOR(t *testing.T) {
 	cells := []struct {
-		name       string
-		occCB      int
-		backupCB   int
-		wantCB     int
-		wantMerge  bool
-		wantUTGone bool
+		name      string
+		occCB     int
+		backupCB  int
+		wantCB    int
+		wantMerge bool
 	}{
-		{"placeholder cb=1 backup cb=0", 1, 0, 1, true, true},
-		{"placeholder cb=0 backup cb=1", 0, 1, 1, false, true},
-		{"both cb=1", 1, 1, 1, false, true},
-		{"both cb=0", 0, 0, 0, false, false},
+		{"placeholder cb=1 backup cb=0", 1, 0, 1, true},
+		{"placeholder cb=0 backup cb=1", 0, 1, 1, false},
+		{"both cb=1", 1, 1, 1, false},
+		{"both cb=0", 0, 0, 0, false},
 	}
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {
@@ -89,37 +89,17 @@ func TestR6B2_004_PlaceholderGrantCreatorFlagOR(t *testing.T) {
 			if got := b8WarningsContain(result.ImportWarnings, "合并"); got != cell.wantMerge {
 				t.Fatalf("R6X-004: merge disclosure in warnings = %v, want %v (warnings=%v)", got, cell.wantMerge, result.ImportWarnings)
 			}
-			revoked, err := r.RevokeGroupGrantsByGroup("user_group", 1)
-			if err != nil {
-				t.Fatalf("revoke group: %v", err)
+			if err := r.GroupDeleteCascade("user_group", 1); err != nil {
+				t.Fatalf("delete group: %v", err)
 			}
-			utRows := countWhere(t, r, "user_tunnel", "id = ?", 10)
-			if cell.wantUTGone {
-				if utRows != 0 {
-					t.Fatalf("R6X-004: group-created UT10 must be reachable by the later group revoke, got %d rows (revoked=%v)", utRows, revoked)
-				}
-				found := false
-				for _, p := range revoked {
-					if p.UserID == 2 && p.TunnelID == 1 {
-						found = true
-					}
-				}
-				if !found {
-					t.Fatalf("revoke must return the (2,1) pair for UT10, got %v", revoked)
-				}
-			} else {
-				if utRows != 1 {
-					t.Fatalf("manual UT10 (merged cb=0) must survive group revoke, got %d rows", utRows)
-				}
-				if len(revoked) != 0 {
-					t.Fatalf("no pair may be revoked for a merged cb=0 grant, got %v", revoked)
-				}
+			if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+				t.Fatalf("R5-FGRP: UT10 must survive group deletion in every merge cell (merged cb=%d), got %d rows", cell.wantCB, n)
 			}
 		})
 	}
 }
 
-// ─── R6X-005 sweep 逐条验对应三例 ────────────────────────────────────
+// ─── R6X-005 原 sweep 三例（裁定已删，改为逐字落行口径） ───────────
 
 // b2SeedShield 造 R6-G-01 探针同形态：停用覆盖对 UG1（status=0，
 // 成员含 U2）×TG1（成员含 T1）、权限对 (1,1)；另置 UG2×TG2 权限对
@@ -159,10 +139,10 @@ func b2ShieldBackup(now int64, withGrant bool) *model.BackupData {
 }
 
 // ShieldChain 例：同批落位的错位 grant（cb=0、成员对应不成立）
-// 不得再屏蔽停用对裁定——UT10 被 sweep 裁定删除、skipped 含
-// userTunnelsRevoked、错位 grant 计 warning；其后 UG1/UG2 两组
-// 撤销对该 UT 均无对象（已裁定，不再复活）。
-func TestR6B2_005_ShieldChainSweptDespiteMisplacedGrant(t *testing.T) {
+// 在 R5-FGRP 后不再触发任何裁定——UT10 逐字落行、无
+// userTunnelsRevoked skipped、无错位 warning（grant 行本身仍按
+// 写回口径落库）。
+func TestR6B2_005_ShieldChainLandsVerbatim(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b2-005-shield.db")
 	b2SeedShield(t, r, now, false)
@@ -174,21 +154,20 @@ func TestR6B2_005_ShieldChainSweptDespiteMisplacedGrant(t *testing.T) {
 	if n := countWhere(t, r, "group_permission_grant", "id = ?", 60); n != 1 {
 		t.Fatalf("misplaced grant row itself still lands (write-back口径不变), got %d rows", n)
 	}
-	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("R6X-005: UT10 shielded only by a misplaced grant must be swept by the disabled pair, got %d rows (warnings=%v)", n, result.ImportWarnings)
+	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: UT10 must land verbatim regardless of pair/grant state, got %d rows (warnings=%v)", n, result.ImportWarnings)
 	}
-	if result.SkippedRows["userTunnelsRevoked"] != 1 {
-		t.Fatalf("R6X-005: skipped must count userTunnelsRevoked=1, got %v", result.SkippedRows)
+	if result.SkippedRows["userTunnelsRevoked"] != 0 {
+		t.Fatalf("R5-FGRP: no userTunnelsRevoked skip may be counted, got %v", result.SkippedRows)
 	}
-	if !b8WarningsContain(result.ImportWarnings, "错位") {
-		t.Fatalf("R6X-005: misplaced grant must be counted in ImportWarnings, got %v", result.ImportWarnings)
+	if b8WarningsContain(result.ImportWarnings, "错位") {
+		t.Fatalf("R5-FGRP: the removed misplaced-grant sweep warning must not be emitted, got %v", result.ImportWarnings)
 	}
 }
 
 // Control 对照：同预置、无屏蔽 grant，仅导入 userTunnels——UT10
-// 照旧被 sweep 裁定（与 ShieldChain 修复后终态一致、与既有
-// TestR4B4_006 探针 C 同终态）。
-func TestR6B2_005_ControlNoGrantSwept(t *testing.T) {
+// 同样逐字落行（旧 sweep 终态已废止）。
+func TestR6B2_005_ControlNoGrantLandsVerbatim(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b2-005-control.db")
 	b2SeedShield(t, r, now, false)
@@ -197,18 +176,18 @@ func TestR6B2_005_ControlNoGrantSwept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("control: UT10 covered by a disabled pair with no grant must be swept, got %d rows", n)
+	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: UT10 covered by a disabled pair with no grant must land verbatim, got %d rows", n)
 	}
-	if result.SkippedRows["userTunnelsRevoked"] != 1 {
-		t.Fatalf("control: skipped must count userTunnelsRevoked=1, got %v", result.SkippedRows)
+	if result.SkippedRows["userTunnelsRevoked"] != 0 {
+		t.Fatalf("R5-FGRP: no userTunnelsRevoked skip may be counted, got %v", result.SkippedRows)
 	}
 }
 
-// 合法覆盖变体（防过修）：grant60 改挂成员齐备的启用对 (2,2)
-// （U2∈UG2、T1∈TG2）——对应成立的 grant 仍构成豁免，UT10 存续
-// 逐字不变、无撤销 skipped、无错位 warning。
-func TestR6B2_005_LegitimateGrantStillExempts(t *testing.T) {
+// 合法覆盖变体：grant60 挂成员齐备的启用对 (2,2)（U2∈UG2、
+// T1∈TG2）——UT10 逐字落行、grant 存续、无撤销 skipped、无错位
+// warning（与另两例同终态：分组状态不再裁定授权）。
+func TestR6B2_005_LegitimateGrantLandsVerbatim(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b2-005-legit.db")
 	b2SeedShield(t, r, now, true)

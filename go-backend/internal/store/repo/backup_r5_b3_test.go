@@ -9,14 +9,15 @@ import (
 
 // R5 批 3 回归（授权台账族）：
 //   - R5X-005：备份导入同名组合并去重不得直删 cb=1 grant 而不做来源
-//     OR/提升——合并后保留行 cb = 两行 cb 的 OR；继任组停用/撤销时
-//     组建 UT 的终态只取决于合并后的 cb（cb=1 被删、cb=0 存活）。
+//     OR/提升——合并后保留行 cb = 两行 cb 的 OR（来源台账保真）。
+//     R5-FGRP 后 cb 不再驱动任何授权生杀：四格合并后删除继任组，
+//     UT10 一律存活（台账行随组记账级联清除）。
 //   - R5X-014：窄硬门案 A——importPermissions 写回时，cb=1 且成员
 //     对应不成立（!holds）的 grant 降级为 cb=0 写回 + warning 明示
 //     降级；cb=0 行维持原 warning；合法对应 cb=1 行逐字不变。
-//   - R5X-015（定案项，过渡 warning）：sweep 对本次新落、无 grant、
-//     现行无任何权限对覆盖的 UT 增计一条通用 warning（行仍落库、
-//     不删除）；被权限对覆盖的手工 UT 不得新增该 warning（防过修）。
+//   - R5X-015（原过渡 warning 已随 R5-FGRP 删除）：导入的 UT 一律
+//     逐字落行——不再按分组覆盖/台账有无删除（旧 R4X-006 sweep）
+//     或增计「无台账」warning（旧 R5X-015）。
 
 // ─── R5X-005 同名合并 cb 四格 ──────────────────────────────────────────
 
@@ -40,25 +41,25 @@ func b3SeedSameNameMerge(t *testing.T, r *Repository, now int64, occCB, keepCB i
 
 // 四格 = (占位/被删行 cb, 继任/保留行 cb)：
 //
-//	(1,0) 本条缺陷格：被删行 cb=1 必须提升到保留行，合并后 cb=1，
-//	      继任组撤销时 UT10 被删并回传 (2,1)。
+//	(1,0) 本条缺陷格：被删行 cb=1 必须提升到保留行，合并后 cb=1。
 //	(0,1) 防过修格：保留行本已 cb=1，被删行 cb=0 不得把保留行 cb
-//	      覆盖/降级，合并后仍 cb=1，撤销时 UT10 被删。
-//	(1,1) 合并后 cb=1，撤销时 UT10 被删。
+//	      覆盖/降级，合并后仍 cb=1。
+//	(1,1) 合并后 cb=1。
 //	(0,0) 防过修格：两行皆 cb=0，合并不得凭空造出组建来源，
-//	      合并后 cb=0，撤销时 UT10 存活。
+//	      合并后 cb=0。
+//
+// 四格共同尾声（R5-FGRP）：删除继任组只做记账级联，UT10 一律存活。
 func TestR5B3_005_SameNameMergeCreatorFlagOR(t *testing.T) {
 	cells := []struct {
-		name       string
-		occCB      int
-		keepCB     int
-		wantCB     int
-		wantUTGone bool
+		name   string
+		occCB  int
+		keepCB int
+		wantCB int
 	}{
-		{"deleted cb=1 kept cb=0", 1, 0, 1, true},
-		{"deleted cb=0 kept cb=1", 0, 1, 1, true},
-		{"both cb=1", 1, 1, 1, true},
-		{"both cb=0", 0, 0, 0, false},
+		{"deleted cb=1 kept cb=0", 1, 0, 1},
+		{"deleted cb=0 kept cb=1", 0, 1, 1},
+		{"both cb=1", 1, 1, 1},
+		{"both cb=0", 0, 0, 0},
 	}
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {
@@ -88,31 +89,14 @@ func TestR5B3_005_SameNameMergeCreatorFlagOR(t *testing.T) {
 			if kept.CreatedByGroup != cell.wantCB {
 				t.Fatalf("R5X-005: merged grant created_by_group = %d, want OR(%d,%d) = %d", kept.CreatedByGroup, cell.occCB, cell.keepCB, cell.wantCB)
 			}
-			revoked, err := r.RevokeGroupGrantsByGroup("user_group", 1)
-			if err != nil {
-				t.Fatalf("revoke successor group: %v", err)
+			if err := r.GroupDeleteCascade("user_group", 1); err != nil {
+				t.Fatalf("delete successor group: %v", err)
 			}
-			utRows := countWhere(t, r, "user_tunnel", "id = ?", 10)
-			if cell.wantUTGone {
-				if utRows != 0 {
-					t.Fatalf("R5X-005: group-created UT10 must be revoked with the successor group, got %d rows (revoked=%v)", utRows, revoked)
-				}
-				found := false
-				for _, p := range revoked {
-					if p.UserID == 2 && p.TunnelID == 1 {
-						found = true
-					}
-				}
-				if !found {
-					t.Fatalf("revoke must return the (2,1) pair for UT10, got %v", revoked)
-				}
-			} else {
-				if utRows != 1 {
-					t.Fatalf("manual UT10 (merged cb=0) must survive successor-group revoke, got %d rows", utRows)
-				}
-				if len(revoked) != 0 {
-					t.Fatalf("no pair may be revoked for a merged cb=0 grant, got %v", revoked)
-				}
+			if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+				t.Fatalf("R5-FGRP: UT10 must survive successor-group deletion in every merge cell (merged cb=%d), got %d rows", cell.wantCB, n)
+			}
+			if n := countWhere(t, r, "group_permission_grant", "user_group_id = ?", 1); n != 0 {
+				t.Fatalf("successor group's grant ledger rows must be cascade-cleared, got %d rows", n)
 			}
 		})
 	}
@@ -149,12 +133,11 @@ func TestR5B3_005_SameNameMergeTunnelGroupSide(t *testing.T) {
 	if kept.CreatedByGroup != 1 {
 		t.Fatalf("R5X-005 (tunnel-group side): merged grant created_by_group = %d, want 1 (OR of deleted cb=1 and kept cb=0)", kept.CreatedByGroup)
 	}
-	revoked, err := r.RevokeGroupGrantsByGroup("tunnel_group", 1)
-	if err != nil {
-		t.Fatalf("revoke successor tunnel group: %v", err)
+	if err := r.GroupDeleteCascade("tunnel_group", 1); err != nil {
+		t.Fatalf("delete successor tunnel group: %v", err)
 	}
-	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("group-created UT10 must be revoked with the successor tunnel group, got %d rows (revoked=%v)", n, revoked)
+	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: UT10 must survive successor tunnel-group deletion, got %d rows", n)
 	}
 }
 
@@ -193,7 +176,7 @@ func b3ImportGrant(t *testing.T, r *Repository, now int64, cb int) *model.Import
 
 // 案 A 主格：cb=1 且成员对应不成立 → 写回降级 cb=0、warning 明示
 // 降级（回执语义与 H 域对齐：走 ImportWarnings、不计 SkippedRows、
-// 行照常落库）；其后停用 UG1 不得连带删除手工 UT10（第二跳封堵）。
+// 行照常落库）；其后删除 UG1 只做记账级联，手工 UT10 不受影响。
 func TestR5B3_014_MismatchCB1DowngradedOnWriteBack(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b3-014-downgrade.db")
@@ -216,17 +199,11 @@ func TestR5B3_014_MismatchCB1DowngradedOnWriteBack(t *testing.T) {
 	if len(result.SkippedRows) != 0 {
 		t.Fatalf("R5X-014 case A: downgrade must not be counted as skipped rows, got %v", result.SkippedRows)
 	}
-	revoked, err := r.RevokeGroupGrantsByGroup("user_group", 1)
-	if err != nil {
-		t.Fatalf("revoke: %v", err)
+	if err := r.GroupDeleteCascade("user_group", 1); err != nil {
+		t.Fatalf("delete group: %v", err)
 	}
 	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
-		t.Fatalf("R5X-014 second hop: manual UT10 must survive the unrelated group revoke, got %d rows (revoked=%v)", n, revoked)
-	}
-	for _, p := range revoked {
-		if p.UserID == 2 && p.TunnelID == 1 {
-			t.Fatalf("revoked pairs must not contain the manual (2,1) pair, got %v", revoked)
-		}
+		t.Fatalf("R5-FGRP: manual UT10 must survive unrelated group deletion, got %d rows", n)
 	}
 }
 
@@ -253,7 +230,8 @@ func TestR5B3_014_MismatchCB0WarningUnchanged(t *testing.T) {
 }
 
 // 合法对照（防过修）：成员对应成立的 cb=1 grant 逐字写回、无降级
-// warning，其后撤销仍按组建口径删除 UT。
+// warning；R5-FGRP 后 cb 只是来源记录，其后删除该组也不得连带
+// 删除 UT10（台账行随组记账级联清除）。
 func TestR5B3_014_MatchingCB1Unchanged(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b3-014-holds.db")
@@ -276,16 +254,18 @@ func TestR5B3_014_MatchingCB1Unchanged(t *testing.T) {
 	if b8WarningsContain(result.ImportWarnings, "成员对应") || b8WarningsContain(result.ImportWarnings, "降级") {
 		t.Fatalf("legitimate grant must produce no mismatch/downgrade warning, got %v", result.ImportWarnings)
 	}
-	revoked, err := r.RevokeGroupGrantsByGroup("user_group", 1)
-	if err != nil {
-		t.Fatalf("revoke: %v", err)
+	if err := r.GroupDeleteCascade("user_group", 1); err != nil {
+		t.Fatalf("delete group: %v", err)
 	}
-	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("legitimate group-created UT10 must still be revoked with its group, got %d rows (revoked=%v)", n, revoked)
+	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: UT10 must survive group deletion even with a cb=1 ledger row, got %d rows", n)
+	}
+	if n := countWhere(t, r, "group_permission_grant", "user_group_id = ?", 1); n != 0 {
+		t.Fatalf("deleted group's grant ledger rows must be cascade-cleared, got %d rows", n)
 	}
 }
 
-// ─── R5X-015 过渡 warning（定案项，非关闭依据） ────────────────────────
+// ─── R5X-015 原过渡 warning 已删除（R5-FGRP）：导入 UT 逐字落行 ────
 
 func b3ImportUT10(t *testing.T, r *Repository) *model.ImportResult {
 	t.Helper()
@@ -300,10 +280,9 @@ func b3ImportUT10(t *testing.T, r *Repository) *model.ImportResult {
 	return result
 }
 
-// 子形态 ①：权限对保留启用、用户已被移出成员（差集撤销终态）——
-// UT 照常落行（不删除、不 skipped），但必须增计一条无台账通用
-// warning，不得再静默复活。
-func TestR5B3_015_UncoveredNewUTWarnsPairKeptMemberRemoved(t *testing.T) {
+// 子形态 ①：权限对保留启用、用户已被移出成员——UT 逐字落行（不
+// 删除、不 skipped），且不得再增计已删除的「无台账」warning。
+func TestR5B3_015_UncoveredNewUTLandsVerbatimPairKeptMemberRemoved(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b3-015-pair.db")
 	createRow(t, r, &model.User{ID: 2, User: "u2", Pwd: "x", RoleID: 1, Status: 1, CreatedTime: now})
@@ -317,18 +296,18 @@ func TestR5B3_015_UncoveredNewUTWarnsPairKeptMemberRemoved(t *testing.T) {
 
 	result := b3ImportUT10(t, r)
 	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
-		t.Fatalf("R5X-015 transition warning must not delete the UT row, got %d rows", n)
+		t.Fatalf("R5-FGRP: imported UT must land verbatim, got %d rows", n)
 	}
 	if result.UserTunnelsImported != 1 {
 		t.Fatalf("UT must still count as imported, got %d", result.UserTunnelsImported)
 	}
-	if !b8WarningsContain(result.ImportWarnings, "无台账") {
-		t.Fatalf("R5X-015: newly landed UT with no grant and no covering pair must add a generic warning, got %v", result.ImportWarnings)
+	if b8WarningsContain(result.ImportWarnings, "无台账") {
+		t.Fatalf("R5-FGRP: the removed uncovered-UT warning must not be emitted, got %v", result.ImportWarnings)
 	}
 }
 
-// 子形态 ②：权限对已移除、成员保留（pair 撤销终态）——同口径 warning。
-func TestR5B3_015_UncoveredNewUTWarnsPairRemoved(t *testing.T) {
+// 子形态 ②：权限对已移除、成员保留——同口径逐字落行、无 warning。
+func TestR5B3_015_UncoveredNewUTLandsVerbatimPairRemoved(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b3-015-nopair.db")
 	createRow(t, r, &model.User{ID: 2, User: "u2", Pwd: "x", RoleID: 1, Status: 1, CreatedTime: now})
@@ -341,16 +320,16 @@ func TestR5B3_015_UncoveredNewUTWarnsPairRemoved(t *testing.T) {
 
 	result := b3ImportUT10(t, r)
 	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
-		t.Fatalf("R5X-015 transition warning must not delete the UT row, got %d rows", n)
+		t.Fatalf("R5-FGRP: imported UT must land verbatim, got %d rows", n)
 	}
-	if !b8WarningsContain(result.ImportWarnings, "无台账") {
-		t.Fatalf("R5X-015: newly landed UT with no grant and no covering pair must add a generic warning, got %v", result.ImportWarnings)
+	if b8WarningsContain(result.ImportWarnings, "无台账") {
+		t.Fatalf("R5-FGRP: the removed uncovered-UT warning must not be emitted, got %v", result.ImportWarnings)
 	}
 }
 
-// 防过修对照：被现行启用权限对覆盖的手工 UT（无 grant）照常落行
-// 且不得新增无台账 warning；被停用对覆盖的 UT 仍按 R4X-006 删除
-// 并只计撤销 warning，不得重复计无台账 warning。
+// 对照：被现行启用权限对覆盖的手工 UT（无 grant）照常落行；被停用
+// 对覆盖的 UT 在 R5-FGRP 后同样逐字落行（旧 R4X-006 sweep 已删），
+// 两者均不得出现已删除的无台账 warning。
 func TestR5B3_015_CoveredNewUTNoUncoveredWarning(t *testing.T) {
 	now := time.Now().UnixMilli()
 
@@ -373,16 +352,16 @@ func TestR5B3_015_CoveredNewUTNoUncoveredWarning(t *testing.T) {
 		}
 	})
 
-	t.Run("covered by disabled pair still swept without uncovered warning", func(t *testing.T) {
+	t.Run("covered by disabled pair lands verbatim", func(t *testing.T) {
 		r := openBackupRepo(t, "b3-015-disabled.db")
 		b4SeedRevokedState(t, r, now)
 
 		result := b3ImportUT10(t, r)
-		if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 0 {
-			t.Fatalf("UT covered by a disabled pair must still be swept (R4X-006), got %d rows", n)
+		if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+			t.Fatalf("R5-FGRP: UT covered by a disabled pair must land verbatim (R4X-006 sweep removed), got %d rows", n)
 		}
 		if b8WarningsContain(result.ImportWarnings, "无台账授权存续") {
-			t.Fatalf("swept UT must not also be counted in the uncovered warning, got %v", result.ImportWarnings)
+			t.Fatalf("landed UT must not be counted in the removed uncovered warning, got %v", result.ImportWarnings)
 		}
 	})
 }

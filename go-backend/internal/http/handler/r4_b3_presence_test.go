@@ -180,7 +180,7 @@ func TestR4B3SpeedLimitUpdatePresence(t *testing.T) {
 	}
 }
 
-// ─── R4X-012：分组校验 + 撤销谓词 ───────────────────────────────────────
+// ─── R4X-012：分组校验 ──────────────────────────────────────────────────
 
 func TestR4B3GroupValidation(t *testing.T) {
 	f := seedB2Fixture(t)
@@ -216,13 +216,14 @@ func TestR4B3GroupValidation(t *testing.T) {
 	if name, _ := b5GroupNameStatus(t, f, "user_group", 1); name != "g-one" {
 		t.Fatalf("rejected empty-name update must not clear the name, got %q", name)
 	}
-	// update：合法 status=0 仍触发撤销（谓词 !=1 路径）。
+	// update：合法 status=0 成功落库；R5-FGRP 后停用不撤销任何
+	// 存量授权（旧「撤销谓词」已删）。
 	seedB5Stock(t, f, 0, 1)
 	code, body = f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 2, "status": 0})
 	if code != 0 {
 		t.Fatalf("group update status=0 must succeed, code=%d body=%s", code, body)
 	}
-	assertB5StockRevoked(t, f)
+	assertB5StockIntact(t, f)
 
 	// create：status=0 合法（置于存量种子之后，避免自增 ID 与 seedB5Stock 的显式 id=2 相撞）。
 	code, body = f.post(t, f.h.groupUserCreate, map[string]interface{}{"name": "g-off-new", "status": 0})

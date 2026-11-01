@@ -9,8 +9,9 @@ import (
 )
 
 // R3 批 5 回归：分组授权生命周期。
-//   - R3X-004：存量停用分组的组建授权在 sync / groupUpdate 0→0 两触点
-//     追溯撤销（R2X-013 重开半）；手工授权不动、启用组不受影响。
+//   - R3X-004（R5-FGRP 改版）：存量停用分组的组建授权不再追溯
+//     撤销——groupUpdate 0→0、成员/隧道替换等任何组操作后逐行
+//     保留；手工授权同样不动、启用组不受影响。
 //   - R3X-020：groupUpdate presence 语义——未传 name/status 保持现值。
 //   - R3X-022：setUserInbounds 回执补 skippedRelays 计数，跳过语义与
 //     整体成败不变。
@@ -45,19 +46,19 @@ func b5StatusLiteral(v int) string {
 	return "1"
 }
 
-// assertB5StockRevoked 断言存量组建授权三清（UT/grant/forward）、手工
-// 授权不动、ensureTunnelPermission 对被撤销隧道拒绝、对启用组（G1）
-// 的授权无误伤。
-func assertB5StockRevoked(t *testing.T, f *b2Fixture) {
+// assertB5StockIntact 断言 R5-FGRP 语义：存量组建授权（UT50/台账/
+// forward50）与手工授权（UT51/forward51）在任何组操作后逐行保留、
+// 权限照常可用，启用组（G1）的授权无误伤。
+func assertB5StockIntact(t *testing.T, f *b2Fixture) {
 	t.Helper()
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 50`); n != 0 {
-		t.Fatalf("stock group-created user_tunnel 50 must be revoked, got %d", n)
+	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 50`); n != 1 {
+		t.Fatalf("R5-FGRP: stock group-created user_tunnel 50 must survive, got %d", n)
 	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_tunnel_id = 50`); n != 0 {
-		t.Fatalf("grant ledger for UT50 must be cleared, got %d", n)
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_tunnel_id = 50`); n != 1 {
+		t.Fatalf("R5-FGRP: grant ledger for UT50 must be retained, got %d", n)
 	}
-	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 50`); n != 0 {
-		t.Fatalf("forward on revoked stock tunnel must be cleaned")
+	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 50`); n != 1 {
+		t.Fatalf("R5-FGRP: forward on stock tunnel must survive")
 	}
 	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 51`); n != 1 {
 		t.Fatalf("manual user_tunnel 51 must survive, got %d", n)
@@ -65,8 +66,8 @@ func assertB5StockRevoked(t *testing.T, f *b2Fixture) {
 	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 51`); n != 1 {
 		t.Fatalf("forward on manual tunnel must survive")
 	}
-	if err := f.h.ensureTunnelPermission(4, 1, 2); err == nil {
-		t.Fatalf("ensureTunnelPermission must reject revoked stock tunnel")
+	if err := f.h.ensureTunnelPermission(4, 1, 2); err != nil {
+		t.Fatalf("R5-FGRP: stock tunnel permission must stay usable: %v", err)
 	}
 	if err := f.h.ensureTunnelPermission(4, 1, 3); err != nil {
 		t.Fatalf("manual tunnel permission must stay usable: %v", err)
@@ -87,38 +88,11 @@ func b5GroupNameStatus(t *testing.T, f *b2Fixture, table string, id int64) (stri
 	return name, status
 }
 
-// ─── R3X-004 触点一：sync 收敛 ─────────────────────────────────────────────
+// ─── R3X-004（R5-FGRP 改版）：组操作不追溯撤销存量授权 ──────────────
 
-func TestR3B5_004_SyncRevokesStockDisabledGrants(t *testing.T) {
-	t.Run("user group side disabled, sync by user group", func(t *testing.T) {
-		f := seedB2Fixture(t)
-		seedB5Stock(t, f, 0, 1)
-		if err := f.h.syncPermissionsByUserGroup(2); err != nil {
-			t.Fatalf("sync by disabled user group: %v", err)
-		}
-		assertB5StockRevoked(t, f)
-	})
-	t.Run("tunnel group side disabled, sync by tunnel group", func(t *testing.T) {
-		f := seedB2Fixture(t)
-		seedB5Stock(t, f, 1, 0)
-		if err := f.h.syncPermissionsByTunnelGroup(2); err != nil {
-			t.Fatalf("sync by disabled tunnel group: %v", err)
-		}
-		assertB5StockRevoked(t, f)
-	})
-	t.Run("both sides disabled, sync by tunnel group", func(t *testing.T) {
-		f := seedB2Fixture(t)
-		seedB5Stock(t, f, 0, 0)
-		if err := f.h.syncPermissionsByTunnelGroup(2); err != nil {
-			t.Fatalf("sync by tunnel group: %v", err)
-		}
-		assertB5StockRevoked(t, f)
-	})
-}
-
-// ─── R3X-004 触点二：groupUpdate 0→0 ──────────────────────────────────────
-
-func TestR3B5_004_ZeroToZeroUpdateRevokesStockDisabledGrants(t *testing.T) {
+// 旧 sync 触点已随组语义改版删除；现存触点（groupUpdate 0→0、
+// 成员/隧道替换）对存量停用分组的组建授权一律不动。
+func TestR3B5_004_StockDisabledGrantsSurviveGroupOps(t *testing.T) {
 	t.Run("user group rename while disabled", func(t *testing.T) {
 		f := seedB2Fixture(t)
 		seedB5Stock(t, f, 0, 1)
@@ -126,7 +100,7 @@ func TestR3B5_004_ZeroToZeroUpdateRevokesStockDisabledGrants(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("groupUserUpdate 0->0 code=%d body=%s", code, body)
 		}
-		assertB5StockRevoked(t, f)
+		assertB5StockIntact(t, f)
 		name, status := b5GroupNameStatus(t, f, "user_group", 2)
 		if name != "g-off-renamed" || status != 0 {
 			t.Fatalf("group row must be renamed and stay disabled, got name=%q status=%d", name, status)
@@ -139,25 +113,44 @@ func TestR3B5_004_ZeroToZeroUpdateRevokesStockDisabledGrants(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("groupTunnelUpdate 0->0 code=%d body=%s", code, body)
 		}
-		assertB5StockRevoked(t, f)
+		assertB5StockIntact(t, f)
 		name, status := b5GroupNameStatus(t, f, "tunnel_group", 2)
 		if name != "tg-two-renamed" || status != 0 {
 			t.Fatalf("group row must be renamed and stay disabled, got name=%q status=%d", name, status)
 		}
 	})
+	t.Run("both sides disabled, member removed", func(t *testing.T) {
+		f := seedB2Fixture(t)
+		seedB5Stock(t, f, 0, 0)
+		code, body := f.post(t, f.h.groupUserAssign, map[string]interface{}{"groupId": 2, "userIds": []int64{}})
+		if code != 0 {
+			t.Fatalf("groupUserAssign code=%d body=%s", code, body)
+		}
+		assertB5StockIntact(t, f)
+	})
+	t.Run("both sides disabled, tunnel removed", func(t *testing.T) {
+		f := seedB2Fixture(t)
+		seedB5Stock(t, f, 0, 0)
+		code, body := f.post(t, f.h.groupTunnelAssign, map[string]interface{}{"groupId": 2, "tunnelIds": []int64{}})
+		if code != 0 {
+			t.Fatalf("groupTunnelAssign code=%d body=%s", code, body)
+		}
+		assertB5StockIntact(t, f)
+	})
 }
 
-// 防过修：启用组的 sync 只展开、不撤销既有组建授权。
-func TestR3B5_004_EnabledGroupSyncUnaffected(t *testing.T) {
+// 防过修：启用组成员原样替换（无实际变动）不得增删任何授权/台账。
+func TestR3B5_004_EnabledGroupOpsUnaffected(t *testing.T) {
 	f := seedB2Fixture(t)
-	if err := f.h.syncPermissionsByUserGroup(1); err != nil {
-		t.Fatalf("sync enabled group: %v", err)
+	code, body := f.post(t, f.h.groupUserAssign, map[string]interface{}{"groupId": 1, "userIds": []int64{2, 4}})
+	if code != 0 {
+		t.Fatalf("groupUserAssign code=%d body=%s", code, body)
 	}
 	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id IN (10, 13)`); n != 2 {
-		t.Fatalf("enabled group grants must survive sync, got %d", n)
+		t.Fatalf("enabled group grants must survive member replace, got %d", n)
 	}
 	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_group_id = 1 AND user_tunnel_id IN (10, 13)`); n != 2 {
-		t.Fatalf("enabled group ledger must survive sync, got %d", n)
+		t.Fatalf("enabled group ledger must survive member replace, got %d", n)
 	}
 	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 20`); n != 1 {
 		t.Fatalf("forward on enabled group tunnel must survive")

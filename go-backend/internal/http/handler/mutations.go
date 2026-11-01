@@ -176,11 +176,8 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 分组父权限同步是提交后的副作用，不纳入事务。
-	for _, gid := range groupIDs {
-		_ = h.syncPermissionsByUserGroup(gid)
-	}
-
+	// R5-FGRP：分组只是分配范围记账——建用户时登记成员关系即止，
+	// 不再按组权限展开任何隧道授权（旧「分组父权限同步」已删除）。
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -325,8 +322,8 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		hasUpdateGroupIDs = true
 		// B03-001（R3 K4）：同 userCreate——原始值 fail-closed 前置
 		// 检查（本块为 R2X-036 校验前置段，仍在首写之前）。此前
-		// [-5] 被 asInt64Slice 过滤为空集，替换语义清空该用户全部
-		// 分组归属并连带撤销组授权却回成功（repo 侧
+		// [-5] 被 asInt64Slice 过滤为空集，替换语义会把该用户全部
+		// 分组归属静默清空却回成功（repo 侧
 		// ReplaceUserGroupsByUserIDTx 另有同守卫兜底）。
 		if bad := nonPositiveRawIDs(groupIDsRaw); len(bad) > 0 {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("成员ID非法: %v", bad)))
@@ -431,37 +428,23 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if hasUpdateGroupIDs {
 		newGroupIDs := updateGroupIDs
-		// X-P2-6 + X-P1-2①：分组替换与「被移出分组的组建授权撤销」在同一
-		// 事务内完成；replaceErr 必须上抛，不再吞错回成功。
+		// X-P2-6：分组成员替换在事务内完成；replaceErr 必须上抛，
+		// 不再吞错回成功。R5-FGRP：成员变动只是范围记账——被移出
+		// 分组不再连带撤销任何隧道授权、加入分组也不再展开授权
+		// （旧 X-P1-2① 撤销与父权限同步已随组语义改版删除）。
 		tx := h.repo.BeginTx()
 		if tx == nil || tx.Error != nil {
 			response.WriteJSON(w, response.Err(-2, "database unavailable"))
 			return
 		}
 		defer func() { tx.Rollback() }()
-		affected, removed, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now)
-		if replaceErr != nil {
+		if _, _, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now); replaceErr != nil {
 			response.WriteJSON(w, response.Err(-2, replaceErr.Error()))
 			return
-		}
-		var revokedPairs []repo.RevokedUserTunnelPair
-		for _, gid := range removed {
-			pairs, revokeErr := h.repo.RevokeGroupGrantsForUserTx(tx, gid, id)
-			if revokeErr != nil {
-				response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
-				return
-			}
-			revokedPairs = append(revokedPairs, pairs...)
 		}
 		if err := tx.Commit().Error; err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
-		}
-		for _, pair := range revokedPairs {
-			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-		}
-		for _, gid := range affected {
-			_ = h.syncPermissionsByUserGroup(gid)
 		}
 	}
 	if oldUser.MaxConn != maxConn {
@@ -5694,29 +5677,17 @@ func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { tx.Rollback() }()
-	// X-P1-2②：替换前取旧成员差集，被移出隧道的组建授权在同一事务内撤销。
-	previousTunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroupTx(tx, req.GroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
+	// R5-FGRP：隧道入组/出组只是范围记账——成员替换即止，不再按
+	// 差集撤销任何隧道授权、不再同步展开（旧 X-P1-2② 撤销与父
+	// 权限同步已随组语义改版删除）。
 	if err := h.repo.ReplaceTunnelGroupMembersTx(tx, req.GroupID, req.TunnelIDs, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	revokedPairs, revokeErr := h.repo.RevokeGroupGrantsForRemovedTunnelsTx(tx, req.GroupID, previousTunnelIDs, req.TunnelIDs)
-	if revokeErr != nil {
-		response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
-	_ = h.syncPermissionsByTunnelGroup(req.GroupID)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -5738,28 +5709,17 @@ func (h *Handler) groupUserAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { tx.Rollback() }()
-	previousUserIDs, err := h.repo.ListUserIDsByUserGroupTx(tx, req.GroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
+	// R5-FGRP：成员增减只是范围记账——替换即止，不再按差集撤销
+	// 被移出成员的任何隧道授权、不再同步展开（与 groupTunnelAssign
+	// 同口径，旧差集撤销与父权限同步已随组语义改版删除）。
 	if err := h.repo.ReplaceUserGroupMembersTx(tx, req.GroupID, req.UserIDs, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	revokedPairs, revokeErr := h.repo.RevokeGroupGrantsForRemovedUsersTx(tx, req.GroupID, previousUserIDs, req.UserIDs)
-	if revokeErr != nil {
-		response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
-	_ = h.syncPermissionsByUserGroup(req.GroupID)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -5799,37 +5759,12 @@ func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	// R2X-036（G-S02 子项，校验/读取前置档）：展开所需的两份成员名单在
-	// Insert 之前预读，读失败零落库；Insert 后用预读名单展开，不再重读。
-	userIDs, err := h.repo.ListUserIDsByUserGroup(req.UserGroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(req.TunnelGroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
+	// R5-FGRP：组权限只是范围登记——Insert 即止，不再把组内用户
+	// ×组内隧道展开成实体授权、不触发任何转发下发。该范围只在
+	// 日后给组内用户逐个分配隧道时，由 upsertUserTunnelDB 的
+	// 分组范围门执法（超范围分配显式拒绝并点名）。
 	if err := h.repo.InsertGroupPermission(req.UserGroupID, req.TunnelGroupID, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	// X-P2-16：展开失败不再静默——部分失败在回执逐条列明，全失败报错。
-	result, applyErr := h.applyGroupPermissionWithLists(req.UserGroupID, req.TunnelGroupID, userIDs, tunnelIDs)
-	if applyErr != nil {
-		response.WriteJSON(w, response.Err(-2, applyErr.Error()))
-		return
-	}
-	if len(result.Failures) > 0 {
-		if result.Succeeded == 0 {
-			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("权限分配失败: %v", result.Failures[0].Error)))
-			return
-		}
-		response.WriteJSON(w, response.OK(map[string]interface{}{
-			"message":  "权限分配部分失败",
-			"failures": result.Failures,
-		}))
 		return
 	}
 	response.WriteJSON(w, response.OK("权限分配成功"))
@@ -5847,7 +5782,7 @@ func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) 
 	}
 	defer func() { tx.Rollback() }()
 
-	ug, tg, exists, err := h.repo.GetGroupPermissionPairByIDTx(tx, id)
+	_, _, exists, err := h.repo.GetGroupPermissionPairByIDTx(tx, id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -5861,26 +5796,17 @@ func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// R5-FGRP：撤权只是删范围登记行——不再按台账撤销任何实体
+	// 授权、不清理转发（旧 pair 撤销已随组语义改版删除）。范围
+	// 收缩只影响之后的新分配。
 	if err := h.repo.DeleteGroupPermissionByIDTx(tx, id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	var revokedPairs []repo.RevokedUserTunnelPair
-	if exists {
-		var revokeErr error
-		revokedPairs, revokeErr = h.repo.RevokeGroupPermissionPairTx(tx, ug, tg)
-		if revokeErr != nil {
-			response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
-			return
-		}
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -5920,8 +5846,8 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 		return
 	}
 	// R4X-012: status 枚举 {0,1}（与 user 族同口径）——非法值直存会造出
-	// 既非启用又非停用的「僵尸组」：sync/分配面按 !=1 不展开、撤销谓词
-	// 按 ==0 不触发，两头不靠。
+	// 既非启用又非停用的「僵尸组」：分配范围门按 !=1 不计入约束、
+	// 停用记账又不触发，两头不靠。
 	if status := asInt(req["status"], 1); status != 0 && status != 1 {
 		response.WriteJSON(w, response.ErrDefault("分组状态只能为 0 或 1"))
 		return
@@ -5954,13 +5880,10 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
 		return
 	}
-	// R2X-013（BC-R2-02）：停用开始执法。先在事务内读旧行：结果状态为
-	// 停用时在同一事务内按 grant 台账撤销该组组建授权（手工授权不动，
-	// 级联候选收集复用删组同款逻辑），提交后清理被撤销授权的转发；
-	// 0→1 时走既有 sync 按成员关系补发。
-	// R3X-004（R2X-013 重开半）：撤销按「电平」而非「转换沿」触发——
-	// 0→0 保存（停用组改名等）只要仍有台账同样收敛撤销，与 sync 侧的
-	// applyGroupPermission 收敛互为双触点；无台账时撤销为空操作。
+	// R5-FGRP（取代 R2X-013/R3X-004 的停用执法）：停用/启用只是
+	// 范围记账的状态位——停用使该组不再产生分配范围约束，启用使
+	// 其恢复，两种方向都不新建、不删除任何实体授权、不清理转发
+	// （旧「停用按台账撤销＋启用 sync 补发」已随组语义改版删除）。
 	// R3X-020：presence 语义（对照 userUpdate 正本）——req 缺 name/
 	// status key 时以旧行现值填充，不再把缺省 status 当 1 启用停用组、
 	// 不再把缺省 name 清空。
@@ -5988,8 +5911,8 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		newStatus = asInt(req["status"], oldStatus)
 	}
 	// R4X-012: presence 回填后仍须过 create 同口径校验——显式空名拒绝
-	// （缺席已由旧行回填）、status 枚举 {0,1}；校验在落库与撤销之前，
-	// 拒绝即整单不生效（存量授权不得被非法更新连带收敛）。
+	// （缺席已由旧行回填）、status 枚举 {0,1}；校验在落库之前，
+	// 拒绝即整单不生效。
 	if newName == "" {
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
 		return
@@ -6012,30 +5935,9 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	var revokedPairs []repo.RevokedUserTunnelPair
-	// R4X-012: 撤销谓词与全族对齐为 !=1（原 ==0）——存量非法 status
-	// （校验上线前已落库）在此收敛撤销，sync 侧 !=1 收敛兜底同口径。
-	if newStatus != 1 {
-		var revokeErr error
-		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
-		if revokeErr != nil {
-			response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
-			return
-		}
-	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
-	if oldStatus == 0 && newStatus == 1 {
-		if table == "user_group" {
-			_ = h.syncPermissionsByUserGroup(id)
-		} else {
-			_ = h.syncPermissionsByTunnelGroup(id)
-		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -6045,160 +5947,14 @@ func (h *Handler) groupDelete(w http.ResponseWriter, r *http.Request, table stri
 	if id <= 0 {
 		return
 	}
-	// X-P1-2③：删组在删台账前先收集该组全部组建授权并撤销、清理转发，
-	// 否则台账删除后残留授权无从追溯。
-	revokedPairs, err := h.repo.GroupDeleteCascadeWithRevoke(table, id)
-	if err != nil {
+	// R5-FGRP：删组只删组与范围记账行（成员/权限对/台账），不再
+	// 撤销任何实体授权、不清理转发（旧 X-P1-2③ 的级联撤销已随
+	// 组语义改版删除）；已分配授权的增删只走用户分配面。
+	if err := h.repo.GroupDeleteCascade(table, id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
 	response.WriteJSON(w, response.OKEmpty())
-}
-
-// groupGrantFailure is one failed entry of a group-permission expansion
-// (X-P2-16): the expansion no longer swallows per-entry failures.
-type groupGrantFailure struct {
-	UserID   int64  `json:"userId"`
-	TunnelID int64  `json:"tunnelId"`
-	Error    string `json:"error"`
-}
-
-type groupApplyResult struct {
-	Succeeded int
-	Failures  []groupGrantFailure
-	// RevokedPairs carries user_tunnels revoked by the R3X-004 disabled-
-	// side convergence below, so sync callers can clean their forwards.
-	RevokedPairs []repo.RevokedUserTunnelPair
-}
-
-func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
-	var result groupApplyResult
-	// R2X-013: expansion skips a pair when either side's group is not
-	// enabled (status != 1) — disabled groups never materialize grants,
-	// including for pre-existing pairs synced after the fact.
-	// R3X-004 (R2X-013 reopened half): skipping is not enough for stock
-	// formed before the disable — when either side is disabled, converge
-	// that group's ledger instead: revoke every grant recorded under it
-	// (manual user_tunnels are untouched, as RevokeGroupGrantsByGroupTx
-	// only orphans group-created rows) and report the revoked pairs so
-	// the caller can clean up their forwards. This makes sync a real
-	// retroactive-revocation touchpoint (BC-R2-02), not just a gate on
-	// new grants.
-	type groupRef struct {
-		table string
-		id    int64
-	}
-	var disabled []groupRef
-	for _, g := range []groupRef{
-		{"user_group", userGroupID},
-		{"tunnel_group", tunnelGroupID},
-	} {
-		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
-		if gErr != nil {
-			return result, gErr
-		}
-		if !gExists {
-			return result, nil
-		}
-		if gStatus != 1 {
-			disabled = append(disabled, g)
-		}
-	}
-	if len(disabled) > 0 {
-		for _, g := range disabled {
-			pairs, revokeErr := h.repo.RevokeGroupGrantsByGroup(g.table, g.id)
-			if revokeErr != nil {
-				return result, revokeErr
-			}
-			result.RevokedPairs = append(result.RevokedPairs, pairs...)
-		}
-		return result, nil
-	}
-	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
-	if err != nil {
-		return result, err
-	}
-	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(tunnelGroupID)
-	if err != nil {
-		return result, err
-	}
-	return h.applyGroupPermissionWithLists(userGroupID, tunnelGroupID, userIDs, tunnelIDs)
-}
-
-// applyGroupPermissionWithLists expands one group-permission pair from
-// caller-supplied member lists (R2X-036: groupPermissionAssign pre-reads
-// both lists before inserting the permission row, so a read failure can
-// no longer strand a persisted pair with no expansion).
-func (h *Handler) applyGroupPermissionWithLists(userGroupID, tunnelGroupID int64, userIDs, tunnelIDs []int64) (groupApplyResult, error) {
-	var result groupApplyResult
-	for _, uid := range userIDs {
-		for _, tid := range tunnelIDs {
-			utID, created, err := h.repo.EnsureUserTunnelGrant(uid, tid)
-			if err != nil {
-				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
-				continue
-			}
-			createdByGroup := 0
-			if created {
-				createdByGroup = 1
-			}
-			if err := h.repo.InsertGroupPermissionGrant(userGroupID, tunnelGroupID, utID, createdByGroup, time.Now().UnixMilli()); err != nil {
-				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
-				continue
-			}
-			result.Succeeded++
-		}
-	}
-	return result, nil
-}
-
-func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
-	pairs, err := h.repo.ListGroupPermissionPairsByUserGroup(userGroupID)
-	if err != nil {
-		return err
-	}
-	for _, p := range pairs {
-		result, applyErr := h.applyGroupPermission(p[0], p[1])
-		if applyErr != nil {
-			log.Printf("sync permissions by user group %d failed: %v", userGroupID, applyErr)
-			continue
-		}
-		// R3X-004: pairs revoked by the disabled-side convergence lose
-		// their forwards, exactly like the groupUpdate revoke path.
-		for _, pair := range result.RevokedPairs {
-			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-		}
-		for _, f := range result.Failures {
-			log.Printf("sync permissions by user group %d: grant failed user=%d tunnel=%d err=%s", userGroupID, f.UserID, f.TunnelID, f.Error)
-		}
-	}
-	return nil
-}
-
-func (h *Handler) syncPermissionsByTunnelGroup(tunnelGroupID int64) error {
-	pairs, err := h.repo.ListGroupPermissionPairsByTunnelGroup(tunnelGroupID)
-	if err != nil {
-		return err
-	}
-	for _, p := range pairs {
-		result, applyErr := h.applyGroupPermission(p[0], p[1])
-		if applyErr != nil {
-			log.Printf("sync permissions by tunnel group %d failed: %v", tunnelGroupID, applyErr)
-			continue
-		}
-		// R3X-004: pairs revoked by the disabled-side convergence lose
-		// their forwards, exactly like the groupUpdate revoke path.
-		for _, pair := range result.RevokedPairs {
-			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-		}
-		for _, f := range result.Failures {
-			log.Printf("sync permissions by tunnel group %d: grant failed user=%d tunnel=%d err=%s", tunnelGroupID, f.UserID, f.TunnelID, f.Error)
-		}
-	}
-	return nil
 }
 
 type tunnelRuntimeNode struct {
@@ -8494,6 +8250,43 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 	return nil
 }
 
+// checkGroupAssignmentScope enforces the R5-FGRP group scope on NEW
+// user-tunnel assignments (the single chokepoint shared by single and
+// batch assignment): when the user's enabled user groups hold group
+// permissions, the assignable set is the union of the authorized
+// tunnel groups' tunnels, and assigning a tunnel outside it is an
+// explicit rejection naming the tunnel — groups define the selectable
+// range only, they never grant anything by themselves. Users without
+// constraining pairs assign freely. Existing rows (the update branch
+// of upsertUserTunnelDB) are not gated: editing a grant that already
+// exists is not a new assignment.
+func (h *Handler) checkGroupAssignmentScope(tx *gorm.DB, userID, tunnelID int64) error {
+	var constrained bool
+	var scope map[int64]struct{}
+	var err error
+	if tx != nil {
+		constrained, scope, err = h.repo.GroupAssignmentScopeTx(tx, userID)
+	} else {
+		constrained, scope, err = h.repo.GroupAssignmentScope(userID)
+	}
+	if err != nil {
+		return err
+	}
+	if !constrained {
+		return nil
+	}
+	if _, ok := scope[tunnelID]; ok {
+		return nil
+	}
+	// 点名取隧道名必须走同一事务（批量路径）：连接池句柄会被未决
+	// 事务占住（SQLite MaxOpenConns(1)），池上查询将死锁。
+	name, nameErr := h.repo.GetTunnelNameTx(tx, tunnelID)
+	if nameErr != nil || name == "" {
+		return fmt.Errorf("隧道 #%d 不在该用户所属分组的授权范围内，无法分配（分组仅限定可分配范围，请先调整分组权限或分组成员）", tunnelID)
+	}
+	return fmt.Errorf("隧道「%s」(#%d) 不在该用户所属分组的授权范围内，无法分配（分组仅限定可分配范围，请先调整分组权限或分组成员）", name, tunnelID)
+}
+
 // upsertUserTunnelDB performs only the DB portion of a user-tunnel
 // assignment. With tx == nil it writes directly (single assignment); with a
 // tx it participates in the caller's transaction (X-P3-22 batch assignment).
@@ -8577,6 +8370,11 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 	}
 
 	if lookupErr == sql.ErrNoRows {
+		// R5-FGRP 分组范围门：新建授权时执法（单条与批量分配共用
+		// 本落点）；命中范围外即整单拒绝，批量时整批回滚不落半批。
+		if err := h.checkGroupAssignmentScope(tx, userID, tunnelID); err != nil {
+			return nil, err
+		}
 		if reqFlow < 0 || reqNum < 0 || reqExpTime < 0 || reqFlowReset < 0 {
 			var uFlow, uExp, uReset int64
 			var uNum int

@@ -24,7 +24,8 @@ func TestTrafficLimitMiBSurvivesBackupRestore(t *testing.T) {
 	if err := source.DB().Create(&tunnel).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := source.EnsureUserTunnelGrant(userID, tunnel.ID); err != nil {
+	// 物化用户自身套餐值（与旧 EnsureUserTunnelGrant 夹具同口径）。
+	if err := source.InsertUserTunnel(userID, tunnel.ID, nil, 10, 1, 0, now+86400000, 1, 500); err != nil {
 		t.Fatal(err)
 	}
 	grants, err := source.GetUserPackageTunnels(userID)

@@ -1676,127 +1676,6 @@ func (r *Repository) GetGroupRowTx(tx *gorm.DB, table string, id int64) (name st
 	}
 }
 
-// RevokeGroupGrantsByGroup is the non-transactional variant of
-// RevokeGroupGrantsByGroupTx (R3X-004: the sync/apply convergence path
-// runs outside a caller transaction and revokes in its own).
-func (r *Repository) RevokeGroupGrantsByGroup(table string, id int64) ([]RevokedUserTunnelPair, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var revoked []RevokedUserTunnelPair
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		var revokeErr error
-		revoked, revokeErr = r.RevokeGroupGrantsByGroupTx(tx, table, id)
-		return revokeErr
-	})
-	return revoked, err
-}
-
-// RevokeGroupGrantsByGroupTx revokes every grant recorded under one group
-// (R2X-013 group disable): the group's ledger rows are deleted and any
-// group-created user_tunnel left without grants is removed and returned
-// so the handler can clean up its forwards. Manual user_tunnels
-// (created_by_group=0, or still granted by another group) survive; the
-// group_permission pairs and memberships are kept, so re-enabling the
-// group re-expands them.
-func (r *Repository) RevokeGroupGrantsByGroupTx(tx *gorm.DB, table string, id int64) ([]RevokedUserTunnelPair, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-	var grantWhere string
-	switch table {
-	case "tunnel_group":
-		grantWhere = "tunnel_group_id = ?"
-	case "user_group":
-		grantWhere = "user_group_id = ?"
-	default:
-		return nil, errors.New("invalid group table")
-	}
-	var rows []groupGrantRow
-	if err := tx.Model(&model.GroupPermissionGrant{}).
-		Select("user_tunnel_id, created_by_group").
-		Where(grantWhere, id).
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	candidates := groupCreatedUTIDs(rows)
-	if err := tx.Where(grantWhere, id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-		return nil, err
-	}
-	return deleteOrphanedGroupCreatedUserTunnelsTx(tx, candidates)
-}
-
-// GroupDeleteCascadeWithRevoke deletes a group, first collecting the
-// group's GroupPermissionGrant ledger so group-created
-// user_tunnel rows are revoked (and returned) instead of being orphaned
-// with no ledger left to trace them (X-P1-2 path: groupDelete). Manual
-// user_tunnel rows (created_by_group=0, or still granted by another group)
-// survive.
-func (r *Repository) GroupDeleteCascadeWithRevoke(table string, id int64) ([]RevokedUserTunnelPair, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var revoked []RevokedUserTunnelPair
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		var grantWhere string
-		switch table {
-		case "tunnel_group":
-			grantWhere = "tunnel_group_id = ?"
-		case "user_group":
-			grantWhere = "user_group_id = ?"
-		default:
-			return errors.New("invalid group table")
-		}
-		var rows []groupGrantRow
-		if err := tx.Model(&model.GroupPermissionGrant{}).
-			Select("user_tunnel_id, created_by_group").
-			Where(grantWhere, id).
-			Find(&rows).Error; err != nil {
-			return err
-		}
-		candidates := groupCreatedUTIDs(rows)
-
-		switch table {
-		case "tunnel_group":
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("id = ?", id).Delete(&model.TunnelGroup{}).Error; err != nil {
-				return err
-			}
-		case "user_group":
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.UserGroupUser{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("id = ?", id).Delete(&model.UserGroup{}).Error; err != nil {
-				return err
-			}
-		}
-		pairs, err := deleteOrphanedGroupCreatedUserTunnelsTx(tx, candidates)
-		if err != nil {
-			return err
-		}
-		revoked = pairs
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return revoked, nil
-}
-
 func (r *Repository) ListUserIDsByUserGroupTx(tx *gorm.DB, userGroupID int64) ([]int64, error) {
 	if tx == nil {
 		return nil, errors.New("database unavailable")
@@ -1935,9 +1814,11 @@ type RevokedUserTunnelPair struct {
 // grantPairMembershipHoldsTx reports whether a grant's (user, tunnel)
 // matches its permission pair's memberships: the user belongs to the
 // grant's user_group and the tunnel belongs to its tunnel_group. This
-// is the correspondence invariant legitimate grants always satisfy
-// (they are materialized from exactly those memberships); it is the
-// G-S02 yardstick for imported grants and the R4X-005 promotion guard.
+// is the correspondence invariant legitimate group-expanded grants
+// always satisfied (they were materialized from exactly those
+// memberships); it is the G-S02 yardstick for imported grant ledger
+// rows (R5-FGRP: the ledger is provenance bookkeeping only — nothing
+// materializes or revokes grants from it any more).
 func grantPairMembershipHoldsTx(tx *gorm.DB, userGroupID, tunnelGroupID, userID, tunnelID int64) (bool, error) {
 	var n int64
 	if err := tx.Model(&model.UserGroupUser{}).
@@ -1956,199 +1837,6 @@ func grantPairMembershipHoldsTx(tx *gorm.DB, userGroupID, tunnelGroupID, userID,
 	return n > 0, nil
 }
 
-// promoteCreatorFlagTx transfers the group-created origin flag to a
-// surviving grant of userTunnelID (R4X-005): created_by_group is a
-// per-grant-row record of "this expansion created the user_tunnel",
-// not a property of the user_tunnel itself, so when the creator row
-// is revoked while other grants keep the user_tunnel alive, the
-// origin record must move to a remaining grant — otherwise the last
-// revoke no longer sees the row as a candidate and a group-created
-// authorization leaks depending on revocation order.
-//
-// Anti-mispromotion guard: only a remaining grant whose permission
-// pair membership correspondence holds (see
-// grantPairMembershipHoldsTx) may be promoted. A grant written back
-// by backup import for a (user, tunnel) that is not a member of its
-// pair (the G-S02 surface) must not be elevated to "group-created":
-// promoting it would let that pair's later revocation delete a
-// user_tunnel whose group origin is not established. If no remaining
-// grant qualifies, nothing is promoted and the user_tunnel survives
-// the last revoke, exactly as a manual row does.
-func promoteCreatorFlagTx(tx *gorm.DB, userTunnelID int64) error {
-	var grants []model.GroupPermissionGrant
-	if err := tx.Where("user_tunnel_id = ?", userTunnelID).Order("id ASC").Find(&grants).Error; err != nil {
-		return err
-	}
-	for _, g := range grants {
-		if g.CreatedByGroup == 1 {
-			return nil // origin already recorded on a surviving grant
-		}
-	}
-	var ut model.UserTunnel
-	if err := tx.Select("user_id", "tunnel_id").Where("id = ?", userTunnelID).First(&ut).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil // dangling grants only; nothing to promote against
-		}
-		return err
-	}
-	for _, g := range grants {
-		holds, err := grantPairMembershipHoldsTx(tx, g.UserGroupID, g.TunnelGroupID, ut.UserID, ut.TunnelID)
-		if err != nil {
-			return err
-		}
-		if !holds {
-			continue
-		}
-		return tx.Model(&model.GroupPermissionGrant{}).Where("id = ?", g.ID).Update("created_by_group", 1).Error
-	}
-	return nil
-}
-
-// deleteOrphanedGroupCreatedUserTunnelsTx deletes the given group-created
-// user_tunnel rows that no longer have any GroupPermissionGrant referencing
-// them, returning the (userID, tunnelID) pairs actually deleted so the
-// handler can clean up their forwards. Manual grants (created_by_group=0)
-// are never in the candidate set, so hand-assigned tunnels survive.
-// Candidates that survive on other grants get their origin flag
-// promoted to a remaining grant first (R4X-005, see
-// promoteCreatorFlagTx), so a later last-revoke still deletes them.
-func deleteOrphanedGroupCreatedUserTunnelsTx(tx *gorm.DB, candidates map[int64]struct{}) ([]RevokedUserTunnelPair, error) {
-	var revoked []RevokedUserTunnelPair
-	for userTunnelID := range candidates {
-		var remaining int64
-		if err := tx.Model(&model.GroupPermissionGrant{}).Where("user_tunnel_id = ?", userTunnelID).Count(&remaining).Error; err != nil {
-			return revoked, err
-		}
-		if remaining == 0 {
-			var ut model.UserTunnel
-			if lookupErr := tx.Select("user_id", "tunnel_id").Where("id = ?", userTunnelID).First(&ut).Error; lookupErr == nil {
-				revoked = append(revoked, RevokedUserTunnelPair{UserID: ut.UserID, TunnelID: ut.TunnelID})
-			}
-			if err := tx.Where("id = ?", userTunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
-				return revoked, err
-			}
-			continue
-		}
-		if err := promoteCreatorFlagTx(tx, userTunnelID); err != nil {
-			return revoked, err
-		}
-	}
-	return revoked, nil
-}
-
-type groupGrantRow struct {
-	UserTunnelID   int64
-	CreatedByGroup int
-}
-
-func groupCreatedUTIDs(rows []groupGrantRow) map[int64]struct{} {
-	out := make(map[int64]struct{})
-	for _, row := range rows {
-		if row.CreatedByGroup == 1 && row.UserTunnelID > 0 {
-			out[row.UserTunnelID] = struct{}{}
-		}
-	}
-	return out
-}
-
-// RevokeGroupGrantsForUserTx revokes one user's group-created grants that
-// came through userGroupID (X-P1-2 path: userUpdate removing the user from
-// that group). Only grants recorded under this user group are removed, and
-// only user_tunnel rows the group materialization created are deleted.
-func (r *Repository) RevokeGroupGrantsForUserTx(tx *gorm.DB, userGroupID, userID int64) ([]RevokedUserTunnelPair, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-	var rows []groupGrantRow
-	if err := tx.Model(&model.GroupPermissionGrant{}).
-		Select("group_permission_grant.user_tunnel_id, group_permission_grant.created_by_group").
-		Joins("JOIN user_tunnel ON user_tunnel.id = group_permission_grant.user_tunnel_id").
-		Where("group_permission_grant.user_group_id = ? AND user_tunnel.user_id = ?", userGroupID, userID).
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	userTunnelIDs := tx.Model(&model.UserTunnel{}).Select("id").Where("user_id = ?", userID)
-	if err := tx.Where("user_group_id = ? AND user_tunnel_id IN (?)", userGroupID, userTunnelIDs).
-		Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-		return nil, err
-	}
-	return deleteOrphanedGroupCreatedUserTunnelsTx(tx, groupCreatedUTIDs(rows))
-}
-
-func (r *Repository) RevokeGroupGrantsForRemovedUsersTx(tx *gorm.DB, userGroupID int64, previousUserIDs, currentUserIDs []int64) ([]RevokedUserTunnelPair, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-	currentSet := make(map[int64]struct{}, len(currentUserIDs))
-	for _, uid := range currentUserIDs {
-		if uid > 0 {
-			currentSet[uid] = struct{}{}
-		}
-	}
-
-	var revoked []RevokedUserTunnelPair
-	for _, uid := range previousUserIDs {
-		if uid <= 0 {
-			continue
-		}
-		if _, ok := currentSet[uid]; ok {
-			continue
-		}
-		pairs, err := r.RevokeGroupGrantsForUserTx(tx, userGroupID, uid)
-		if err != nil {
-			return revoked, err
-		}
-		revoked = append(revoked, pairs...)
-	}
-	return revoked, nil
-}
-
-// RevokeGroupGrantsForRemovedTunnelsTx revokes group-created grants whose
-// tunnel was removed from tunnelGroupID (X-P1-2 path: groupTunnelAssign
-// replacing the tunnel group's members). Scoped by
-// (tunnelGroupID, removed tunnel): grants from other tunnel groups and
-// manual (created_by_group=0) user_tunnel rows are untouched.
-func (r *Repository) RevokeGroupGrantsForRemovedTunnelsTx(tx *gorm.DB, tunnelGroupID int64, previousTunnelIDs, currentTunnelIDs []int64) ([]RevokedUserTunnelPair, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-	currentSet := make(map[int64]struct{}, len(currentTunnelIDs))
-	for _, tid := range currentTunnelIDs {
-		if tid > 0 {
-			currentSet[tid] = struct{}{}
-		}
-	}
-
-	var revoked []RevokedUserTunnelPair
-	for _, tunnelID := range previousTunnelIDs {
-		if tunnelID <= 0 {
-			continue
-		}
-		if _, ok := currentSet[tunnelID]; ok {
-			continue
-		}
-		var rows []groupGrantRow
-		if err := tx.Model(&model.GroupPermissionGrant{}).
-			Select("group_permission_grant.user_tunnel_id, group_permission_grant.created_by_group").
-			Joins("JOIN user_tunnel ON user_tunnel.id = group_permission_grant.user_tunnel_id").
-			Where("group_permission_grant.tunnel_group_id = ? AND user_tunnel.tunnel_id = ?", tunnelGroupID, tunnelID).
-			Find(&rows).Error; err != nil {
-			return revoked, err
-		}
-		userTunnelIDs := tx.Model(&model.UserTunnel{}).Select("id").Where("tunnel_id = ?", tunnelID)
-		if err := tx.Where("tunnel_group_id = ? AND user_tunnel_id IN (?)", tunnelGroupID, userTunnelIDs).
-			Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-			return revoked, err
-		}
-		pairs, err := deleteOrphanedGroupCreatedUserTunnelsTx(tx, groupCreatedUTIDs(rows))
-		if err != nil {
-			return revoked, err
-		}
-		revoked = append(revoked, pairs...)
-	}
-	return revoked, nil
-}
-
 // ListTunnelIDsByTunnelGroupTx is the Tx variant of ListTunnelIDsByTunnelGroup.
 func (r *Repository) ListTunnelIDsByTunnelGroupTx(tx *gorm.DB, tunnelGroupID int64) ([]int64, error) {
 	if tx == nil {
@@ -2165,34 +1853,6 @@ func (r *Repository) ListTunnelIDsByTunnelGroupTx(tx *gorm.DB, tunnelGroupID int
 		ids = make([]int64, 0)
 	}
 	return ids, nil
-}
-
-func (r *Repository) RevokeGroupPermissionPairTx(tx *gorm.DB, userGroupID, tunnelGroupID int64) ([]RevokedUserTunnelPair, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-
-	var rows []groupGrantRow
-	if err := tx.Model(&model.GroupPermissionGrant{}).
-		Select("user_tunnel_id, created_by_group").
-		Where("user_group_id = ? AND tunnel_group_id = ?", userGroupID, tunnelGroupID).
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-
-	candidates := groupCreatedUTIDs(rows)
-
-	if err := tx.Where("user_group_id = ? AND tunnel_group_id = ?", userGroupID, tunnelGroupID).
-		Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-		return nil, err
-	}
-
-	// R4X-005: the candidate/orphan logic (including creator-flag
-	// promotion to surviving grants) is shared with every other
-	// revocation path via deleteOrphanedGroupCreatedUserTunnelsTx —
-	// this pair path previously carried its own inline copy, which is
-	// exactly where the order-dependent leak survived.
-	return deleteOrphanedGroupCreatedUserTunnelsTx(tx, candidates)
 }
 
 func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int64, bindings []FederationTunnelBinding) error {
@@ -2250,12 +1910,144 @@ func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int
 	return nil
 }
 
+// GroupDeleteCascade deletes a group and its bookkeeping rows (member
+// rows, group_permission pairs, and the group's grant-ledger rows) in
+// one transaction (R5-FGRP). Groups are pure scope bookkeeping: the
+// cascade never touches user_tunnel rows or forwards — entity grants
+// are created and removed only by explicit per-user assignment,
+// regardless of how they were historically recorded in the ledger.
+func (r *Repository) GroupDeleteCascade(table string, id int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		switch table {
+		case "tunnel_group":
+			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+				return err
+			}
+			return tx.Where("id = ?", id).Delete(&model.TunnelGroup{}).Error
+		case "user_group":
+			if err := tx.Where("user_group_id = ?", id).Delete(&model.UserGroupUser{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
+				return err
+			}
+			return tx.Where("id = ?", id).Delete(&model.UserGroup{}).Error
+		default:
+			return errors.New("invalid group table")
+		}
+	})
+}
+
+// GroupAssignmentScope resolves the group-scope constraint that applies
+// to manually assigning tunnels to userID (R5-FGRP, replacing the
+// pre-1.9.2 grant-expansion semantics):
+//
+//   - the user belongs to at least one ENABLED user group,
+//   - at least one of those groups holds a group_permission pair with
+//     an ENABLED tunnel group,
+//
+// then manual assignment is constrained to the union of those tunnel
+// groups' tunnels (constrained=true, scope=that union). In every other
+// case — no groups, only disabled groups, groups without permission
+// pairs — the user is unconstrained and any tunnel may be assigned.
+// Disabled groups contribute neither constraint nor scope, matching
+// the rest of the group machinery (disabled groups are inert).
+func (r *Repository) GroupAssignmentScope(userID int64) (bool, map[int64]struct{}, error) {
+	if r == nil || r.db == nil {
+		return false, nil, errors.New("repository not initialized")
+	}
+	return r.groupAssignmentScope(r.db, userID)
+}
+
+// GroupAssignmentScopeTx is the Tx variant of GroupAssignmentScope.
+func (r *Repository) GroupAssignmentScopeTx(tx *gorm.DB, userID int64) (bool, map[int64]struct{}, error) {
+	if tx == nil {
+		return false, nil, errors.New("database unavailable")
+	}
+	return r.groupAssignmentScope(tx, userID)
+}
+
+func (r *Repository) groupAssignmentScope(db *gorm.DB, userID int64) (bool, map[int64]struct{}, error) {
+	// 全部 IN 点位经 chunkInt64IDs 分块（用户组归属/权限对集无
+	// 上界；见 in_list_sentinel 登记 groupAssignmentScope）。
+	pluckChunked := func(model interface{}, where, column string, ids []int64) ([]int64, error) {
+		var out []int64
+		for _, chunk := range chunkInt64IDs(ids) {
+			var part []int64
+			if err := db.Model(model).Where(where, chunk).Pluck(column, &part).Error; err != nil {
+				return nil, err
+			}
+			out = append(out, part...)
+		}
+		return out, nil
+	}
+	var userGroupIDs []int64
+	if err := db.Model(&model.UserGroupUser{}).
+		Where("user_id = ?", userID).
+		Pluck("user_group_id", &userGroupIDs).Error; err != nil {
+		return false, nil, err
+	}
+	if len(userGroupIDs) == 0 {
+		return false, nil, nil
+	}
+	enabledUserGroups, err := pluckChunked(&model.UserGroup{}, "id IN ? AND status = 1", "id", userGroupIDs)
+	if err != nil {
+		return false, nil, err
+	}
+	if len(enabledUserGroups) == 0 {
+		return false, nil, nil
+	}
+	pairedTunnelGroups, err := pluckChunked(&model.GroupPermission{}, "user_group_id IN ?", "tunnel_group_id", enabledUserGroups)
+	if err != nil {
+		return false, nil, err
+	}
+	if len(pairedTunnelGroups) == 0 {
+		return false, nil, nil
+	}
+	tunnelGroupSet := make(map[int64]struct{}, len(pairedTunnelGroups))
+	for _, id := range pairedTunnelGroups {
+		tunnelGroupSet[id] = struct{}{}
+	}
+	pairedIDs := make([]int64, 0, len(tunnelGroupSet))
+	for id := range tunnelGroupSet {
+		pairedIDs = append(pairedIDs, id)
+	}
+	enabledTunnelGroups, err := pluckChunked(&model.TunnelGroup{}, "id IN ? AND status = 1", "id", pairedIDs)
+	if err != nil {
+		return false, nil, err
+	}
+	if len(enabledTunnelGroups) == 0 {
+		return false, nil, nil
+	}
+	tunnelIDs, err := pluckChunked(&model.TunnelGroupTunnel{}, "tunnel_group_id IN ?", "tunnel_id", enabledTunnelGroups)
+	if err != nil {
+		return false, nil, err
+	}
+	scope := make(map[int64]struct{}, len(tunnelIDs))
+	for _, id := range tunnelIDs {
+		scope[id] = struct{}{}
+	}
+	return true, scope, nil
+}
+
 func (r *Repository) InsertGroupPermission(userGroupID, tunnelGroupID int64, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
 	// R2X-012: both groups must exist; a permission pair pointing at
-	// nonexistent groups expands to nothing yet reported success.
+	// nonexistent groups constrains nothing yet reported success.
 	if err := validateIDsExistTx(r.db, &model.UserGroup{}, "用户分组不存在", []int64{userGroupID}); err != nil {
 		return err
 	}
@@ -2264,60 +2056,6 @@ func (r *Repository) InsertGroupPermission(userGroupID, tunnelGroupID int64, now
 	}
 	gp := model.GroupPermission{UserGroupID: userGroupID, TunnelGroupID: tunnelGroupID, CreatedTime: now}
 	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&gp).Error
-}
-
-func (r *Repository) InsertGroupPermissionGrant(userGroupID, tunnelGroupID, userTunnelID int64, createdByGroup int, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	g := model.GroupPermissionGrant{
-		UserGroupID:    userGroupID,
-		TunnelGroupID:  tunnelGroupID,
-		UserTunnelID:   userTunnelID,
-		CreatedByGroup: createdByGroup,
-		CreatedTime:    now,
-	}
-	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&g).Error
-}
-
-func (r *Repository) EnsureUserTunnelGrant(userID, tunnelID int64) (int64, bool, error) {
-	if r == nil || r.db == nil {
-		return 0, false, errors.New("repository not initialized")
-	}
-	var existing model.UserTunnel
-	err := r.db.Select("id").Where("user_id = ? AND tunnel_id = ?", userID, tunnelID).First(&existing).Error
-	if err == nil {
-		return existing.ID, false, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return 0, false, err
-	}
-	var user model.User
-	if err := r.db.Select("flow, flow_mib, num, exp_time, flow_reset_time").Where("id = ?", userID).First(&user).Error; err != nil {
-		return 0, false, err
-	}
-	flow := user.Flow
-	num := user.Num
-	expTime := user.ExpTime
-	flowReset := user.FlowResetTime
-	ut := model.UserTunnel{
-		UserID:        userID,
-		TunnelID:      tunnelID,
-		Num:           num,
-		Flow:          flow,
-		FlowMiB:       user.FlowMiB,
-		InFlow:        0,
-		OutFlow:       0,
-		FlowResetTime: flowReset,
-		// R11X-005: see insertUserTunnel (marker = creation time).
-		FlowLastResetTime: unixMilliNow(),
-		ExpTime:           expTime,
-		Status:            1,
-	}
-	if err := r.db.Create(&ut).Error; err != nil {
-		return 0, false, err
-	}
-	return ut.ID, true, nil
 }
 
 func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnelID int64, remoteAddr, strategy string, now int64, inx int, entryNodeIDs []int64, port int, inIp string, speedID interface{}, maxConn int, ipMaxConn int, ipSpeedID interface{}, proxyProtocol int, proxyProtocolReceive int, proxyProtocolSend int) (int64, error) {
