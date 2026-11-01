@@ -115,7 +115,7 @@ function UserDashboard() {
       return {
         label: "已逾期",
         badgeClassName:
-          "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300",
+          "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
         nextDueTime,
       };
     }
@@ -123,7 +123,7 @@ function UserDashboard() {
     if (diffDays === 1) {
       return {
         label: "明天到期",
-        badgeClassName: "bg-warning/10 text-warning-700 dark:text-warning-300",
+        badgeClassName: "tray-warning",
         nextDueTime,
       };
     }
@@ -132,8 +132,8 @@ function UserDashboard() {
       label: `${diffDays}天后到期`,
       badgeClassName:
         diffDays <= 7
-          ? "bg-warning/10 text-warning-700 dark:text-warning-300"
-          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300",
+          ? "tray-warning"
+          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
       nextDueTime,
     };
   };
@@ -151,7 +151,7 @@ function UserDashboard() {
     return (
       <div
         key={node.id}
-        className="rounded-xl border border-warning/30 bg-warning/5 p-4 dark:border-warning/20"
+        className="rounded-xl border border-warning/30 tray-warning p-4 dark:border-warning/20"
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -219,7 +219,7 @@ function UserDashboard() {
     if (!expTime)
       return {
         color: "text-green-600 dark:text-green-400",
-        bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20",
+        bg: "bg-green-50 dark:bg-green-900 border-green-200 dark:border-green-800",
         text: "永久",
       };
 
@@ -229,7 +229,7 @@ function UserDashboard() {
     if (isNaN(expDate.getTime())) {
       return {
         color: "text-gray-600 dark:text-gray-400",
-        bg: "bg-gray-50 dark:bg-black/10 border-gray-200 dark:border-gray-500/20",
+        bg: "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700",
         text: "无效",
       };
     }
@@ -237,7 +237,7 @@ function UserDashboard() {
     if (expDate < now) {
       return {
         color: "text-red-600 dark:text-red-400",
-        bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20",
+        bg: "bg-red-50 dark:bg-red-900 border-red-200 dark:border-red-800",
         text: "已过期",
       };
     }
@@ -248,19 +248,19 @@ function UserDashboard() {
     if (diffDays <= 7) {
       return {
         color: "text-red-600 dark:text-red-400",
-        bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20",
+        bg: "bg-red-50 dark:bg-red-900 border-red-200 dark:border-red-800",
         text: `${diffDays}天后过期`,
       };
     } else if (diffDays <= 30) {
       return {
         color: "text-orange-600 dark:text-orange-400",
-        bg: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/20",
+        bg: "bg-orange-50 dark:bg-orange-900 border-orange-200 dark:border-orange-800",
         text: `${diffDays}天后过期`,
       };
     } else {
       return {
         color: "text-green-600 dark:text-green-400",
-        bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20",
+        bg: "bg-green-50 dark:bg-green-900 border-green-200 dark:border-green-800",
         text: `${diffDays}天后过期`,
       };
     }
@@ -650,7 +650,7 @@ function UserDashboard() {
     <AnimatedPage className="px-3 lg:px-6 py-6">
       {/* 顶部个人状态和下拉菜单 */}
       <div className="flex justify-between items-center mb-4">
-        <div>
+        <div className="rounded-xl text-tray px-3 py-2">
           <h1 className="text-lg font-semibold">概览</h1>
           <p className="text-xs font-medium text-default-600">
             {username}，这里是你的流量和转发规则
@@ -667,10 +667,7 @@ function UserDashboard() {
                 {username.slice(0, 2).toUpperCase()}
               </Button>
             </DropdownTrigger>
-            <DropdownMenu
-              aria-label="用户菜单"
-              className="bg-white/30 dark:bg-zinc-900/35 backdrop-blur-[3px] backdrop-saturate-[1.6] backdrop-brightness-105 border border-white/45 dark:border-white/15 rounded-2xl shadow-lg"
-            >
+            <DropdownMenu aria-label="用户菜单" className="rounded-2xl">
               <DropdownItem
                 key="profile"
                 startContent={
@@ -738,7 +735,7 @@ function UserDashboard() {
               <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
             </svg>
           }
-          iconClassName="bg-blue-100 dark:bg-blue-500/20"
+          iconClassName="bg-blue-100 dark:bg-blue-900"
           title="总流量"
           value={formatFlowLimit(userInfo.flow, userInfo.flowMiB)}
         />
@@ -798,7 +795,7 @@ function UserDashboard() {
               />
             </svg>
           }
-          iconClassName="bg-green-100 dark:bg-green-500/20"
+          iconClassName="bg-green-100 dark:bg-green-900"
           title="已用流量"
           value={formatFlow(calculateUserTotalUsedFlow())}
         />
@@ -818,7 +815,7 @@ function UserDashboard() {
               />
             </svg>
           }
-          iconClassName="bg-purple-100 dark:bg-purple-500/20"
+          iconClassName="bg-purple-100 dark:bg-purple-900"
           title="规则配额"
           value={formatNumber(userInfo.num || 0)}
         />
@@ -853,7 +850,7 @@ function UserDashboard() {
               />
             </svg>
           }
-          iconClassName="bg-orange-100 dark:bg-orange-500/20"
+          iconClassName="bg-orange-100 dark:bg-orange-900"
           title="已用规则"
           value={forwardList.length}
         />
@@ -870,7 +867,7 @@ function UserDashboard() {
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full">
               <div className="flex items-center gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning/10 text-warning-700 dark:text-warning-300">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl tray-warning">
                   <svg
                     aria-hidden="true"
                     className="h-5 w-5"
@@ -894,7 +891,7 @@ function UserDashboard() {
                   </p>
                 </div>
               </div>
-              <span className="inline-flex w-fit items-center rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200/80 dark:bg-white/5 dark:text-amber-300 dark:ring-amber-500/20">
+              <span className="inline-flex w-fit items-center rounded-full tray-warning px-3 py-1 text-xs font-medium ring-1 ring-amber-200/80 dark:ring-amber-500/30">
                 {nodeExpiryReminders.length} 个提醒
               </span>
             </div>
@@ -958,7 +955,7 @@ function UserDashboard() {
                           </h3>
                           <div className="flex flex-wrap items-center gap-2 mt-1">
                             <span
-                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" : tunnel.tunnelFlow === 2 ? "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300" : "bg-gray-100 dark:bg-gray-500/20 text-gray-700 dark:text-gray-300"}`}
+                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300" : tunnel.tunnelFlow === 2 ? "bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300" : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"}`}
                             >
                               {tunnel.tunnelFlow === 1
                                 ? "单向计费"
@@ -1092,13 +1089,13 @@ function UserDashboard() {
               {groupedForwards().map((group) => (
                 <div
                   key={group.tunnelName}
-                  className="border border-gray-200 dark:border-default-100 rounded-lg p-3 lg:p-4"
+                  className="text-tray rounded-xl p-3 lg:p-4 shadow-sm"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-foreground">
                       {group.tunnelName}
                     </h3>
-                    <span className="px-2 py-1 bg-primary-100 dark:bg-primary-500/20 text-primary-700 dark:text-primary-300 rounded-md text-sm">
+                    <span className="px-2 py-1 tray-primary rounded-md text-sm">
                       {group.forwards.length} 个规则
                     </span>
                   </div>
@@ -1107,7 +1104,7 @@ function UserDashboard() {
                     {group.forwards.map((forward) => (
                       <div
                         key={forward.id}
-                        className="bg-white/10 dark:bg-black/10 backdrop-blur-md border border-white/20 dark:border-white/10 rounded-lg p-3 shadow-sm hover:shadow-md transition-all duration-300"
+                        className="bg-default-100 dark:bg-default-100 border border-divider rounded-lg p-3 shadow-sm hover:shadow-md transition-all duration-300"
                       >
                         <div className="space-y-3">
                           <div>
@@ -1116,7 +1113,7 @@ function UserDashboard() {
                             </h4>
                             <div className="space-y-1">
                               <button
-                                className={`block px-2 py-1 bg-white/20 dark:bg-black/20 backdrop-blur-md rounded-lg border border-white/20 dark:border-white/10 font-mono text-xs truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-white/30 dark:hover:bg-white/10" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
                                 disabled={!hasMultipleIps(forward.inIp)}
                                 title={formatInAddress(
                                   forward.inIp,
@@ -1137,7 +1134,7 @@ function UserDashboard() {
                                 ↓
                               </div>
                               <button
-                                className={`block px-2 py-1 bg-white/20 dark:bg-black/20 backdrop-blur-md rounded-lg border border-white/20 dark:border-white/10 font-mono text-xs truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-white/30 dark:hover:bg-white/10" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
                                 disabled={
                                   !hasMultipleRemoteAddresses(
                                     forward.remoteAddr,

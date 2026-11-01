@@ -20,10 +20,22 @@ const CARD_POINTS = 3;
 type Tone = "success" | "warning" | "danger" | "default";
 
 export const TONE: Record<Tone, [string, string]> = {
-  success: ["bg-emerald-500/15 text-emerald-600", "bg-emerald-500"],
-  warning: ["bg-amber-500/15 text-amber-600", "bg-amber-500"],
-  danger: ["bg-rose-500/15 text-rose-600", "bg-rose-500"],
-  default: ["bg-default-200/70 text-default-500", "bg-default-400"],
+  success: [
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+    "bg-emerald-500",
+  ],
+  warning: [
+    "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+    "bg-amber-500",
+  ],
+  danger: [
+    "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
+    "bg-rose-500",
+  ],
+  default: [
+    "bg-default-200 text-default-600 dark:text-default-300",
+    "bg-default-400",
+  ],
 };
 
 const RANK: Record<Tone, number> = {
@@ -399,7 +411,6 @@ export function LatencyCell({
             )}
             {onShowRoute && (
               <DropdownItem
-                
                 className="justify-center whitespace-nowrap px-1 text-xs text-primary"
                 startContent={<Route className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onShowRoute, 0)}
@@ -409,7 +420,6 @@ export function LatencyCell({
             )}
             {onEditTargets && (
               <DropdownItem
-                
                 className="justify-center whitespace-nowrap px-1 text-xs text-primary"
                 startContent={<ListChecks className="h-3.5 w-3.5" />}
                 onPress={() => setTimeout(onEditTargets, 0)}

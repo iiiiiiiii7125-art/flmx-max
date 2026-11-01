@@ -318,7 +318,7 @@ export function KernelPanel({
   return (
     <div>
       <div className="flex items-center justify-between mb-3 gap-2">
-        <p className="text-xs text-default-500">
+        <p className="text-xs text-default-500 text-tray w-fit rounded-full px-2.5 py-1">
           点击内核可启停、重启、查看日志或卸载
         </p>
         <Button
@@ -332,7 +332,7 @@ export function KernelPanel({
       </div>
 
       {kernels.length === 0 ? (
-        <Card className="shadow-sm bg-default-50/50">
+        <Card className="shadow-sm bg-default-50">
           <CardBody className="text-center py-10 text-sm text-default-500">
             还没有在任何节点上安装内核。点击“安装内核”，先在落地节点上安装
             Xray，再到“入站”里创建节点。

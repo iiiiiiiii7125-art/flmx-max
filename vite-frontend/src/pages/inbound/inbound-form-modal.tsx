@@ -30,10 +30,7 @@ import { applyPureEncPreset } from "./pure-enc-preset";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
 
 import { createInbound, updateInbound } from "@/api";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
 import {
@@ -84,6 +81,7 @@ export function stripShareHostPort(value: string): string {
   const hostPort = trimmed.match(/^([^:]+):[^:]*$/);
 
   if (hostPort) return hostPort[1];
+
   return trimmed.replace(/^\[|\]$/g, "");
 }
 
@@ -127,8 +125,7 @@ export function InboundFormModal({
   const [form, setForm] = useState<InboundForm>(initial);
   const [initialKey, setInitialKey] = useState(initial);
   // “不限”复选框勾上时数字框存 -1（哨兵值）；取消勾选恢复勾选前的值（或留空）。
-  const [connIdleBeforeUnlimited, setConnIdleBeforeUnlimited] =
-    useState("");
+  const [connIdleBeforeUnlimited, setConnIdleBeforeUnlimited] = useState("");
   const connIdleUnlimited = form.connIdleSeconds === "-1";
   const toggleConnIdleUnlimited = (v: boolean) => {
     if (v) {
@@ -216,8 +213,7 @@ export function InboundFormModal({
             ? prev.outboundIpStrategy
             : "auto",
         // 空闲超时只有 Xray 支持，切走时清空，避免保存时被后端拒绝。
-        connIdleSeconds:
-          kernelType === "xray" ? prev.connIdleSeconds : "",
+        connIdleSeconds: kernelType === "xray" ? prev.connIdleSeconds : "",
       };
 
       if (info?.protocols?.some((p) => p.protocol === prev.protocol)) {
@@ -387,6 +383,7 @@ export function InboundFormModal({
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(isOpen, !isEdit, rotateIdemKey);
 
@@ -541,7 +538,7 @@ export function InboundFormModal({
                 </div>
 
                 {form.nodeId && !installedKernel && (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-warning-50 dark:bg-warning-500/10 px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-warning-50 dark:bg-warning-900 px-3 py-2 text-sm">
                     <span className="text-warning-700 dark:text-warning-400">
                       该节点还没有安装 {kernelInfo?.name ?? form.kernelType}
                     </span>
@@ -573,7 +570,7 @@ export function InboundFormModal({
                             key={p.key}
                             className={`text-left rounded-xl border px-3 py-2 transition-colors ${
                               active
-                                ? "border-primary bg-primary-50 dark:bg-primary-500/10"
+                                ? "border-primary bg-primary-50 dark:bg-primary-900"
                                 : "border-divider hover:bg-default-100"
                             }`}
                             type="button"
@@ -690,6 +687,7 @@ export function InboundFormModal({
                             onValueChange={(v) => {
                               if (!v) {
                                 set("encryptionEnabled", false);
+
                                 return;
                               }
                               // 开启 ENC 时一键套用标准配置，避免逐项点错
@@ -753,7 +751,10 @@ export function InboundFormModal({
                             }))
                           }
                         >
-                          <SelectItem key="x25519" textValue="X25519 认证（链接短）">
+                          <SelectItem
+                            key="x25519"
+                            textValue="X25519 认证（链接短）"
+                          >
                             X25519 认证（链接短）
                           </SelectItem>
                           <SelectItem
@@ -787,8 +788,11 @@ export function InboundFormModal({
                         </Select>
                         <p className="text-xs text-default-400">
                           开启时自动套用标准配置（TCP、安全无、ML-KEM-768
-                          认证、native 外观；纯 ENC 形态不开启 Vision 流控），需要节点 Xray 25.9.5 及以上。启用后 sing-box、Surge、Loon、Quantumult
-                          X、小火箭格式的订阅不会包含此入站，请用 Clash（请使用近一年内的 Mihomo 核心）或通用链接分发。
+                          认证、native 外观；纯 ENC 形态不开启 Vision
+                          流控），需要节点 Xray 25.9.5 及以上。启用后
+                          sing-box、Surge、Loon、Quantumult
+                          X、小火箭格式的订阅不会包含此入站，请用
+                          Clash（请使用近一年内的 Mihomo 核心）或通用链接分发。
                         </p>
                       </>
                     )}
@@ -1266,9 +1270,9 @@ export function InboundFormModal({
                       <div>
                         <p className="text-sm">不限</p>
                         <p className="text-xs text-default-500">
-                          勾选后空闲超时不限：渲染为 365
-                          天，Xray 按 (N, 2N]
-                          窗口计时、实际 1–2 年才断，等同于永不因空闲断开；常驻连接（如自动客服）用此项。取消勾选恢复原值。
+                          勾选后空闲超时不限：渲染为 365 天，Xray 按 (N, 2N]
+                          窗口计时、实际 1–2
+                          年才断，等同于永不因空闲断开；常驻连接（如自动客服）用此项。取消勾选恢复原值。
                         </p>
                       </div>
                     </div>
@@ -1295,7 +1299,9 @@ export function InboundFormModal({
                       <div className="space-y-3 rounded-xl border border-divider p-3">
                         <div className="flex items-start gap-2">
                           <Switch
-                            isDisabled={meteringBlocked && !form.meteringEnabled}
+                            isDisabled={
+                              meteringBlocked && !form.meteringEnabled
+                            }
                             isSelected={form.meteringEnabled}
                             size="sm"
                             onValueChange={(v) => set("meteringEnabled", v)}

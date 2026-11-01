@@ -1111,7 +1111,7 @@ export default function ConfigPage() {
             className="relative rounded-xl border border-divider h-32 flex items-center justify-center"
             style={{ backgroundColor: bgImage }}
           >
-            <span className="text-gray-500 bg-white/80 dark:bg-black/80 px-2 py-1 rounded text-sm font-medium border border-gray-200 dark:border-gray-800 shadow-sm">
+            <span className="text-tray px-2 py-1 rounded text-sm font-medium shadow-sm">
               纯色背景 ({bgImage})
             </span>
           </div>
@@ -1127,7 +1127,7 @@ export default function ConfigPage() {
     const showImage = previewUrl.length > 0 && !failed;
 
     return (
-      <div className="mt-3 rounded-lg border border-default-200 dark:border-default-100/30 bg-default-50/60 dark:bg-default-100/10 p-3">
+      <div className="mt-3 rounded-lg border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100 p-3">
         <p className="text-xs text-default-500">实时预览</p>
         <div className="mt-2 rounded-md border border-default-200 dark:border-default-100/30 bg-white dark:bg-black px-3 py-2">
           {key === "app_logo" ? (
@@ -1154,7 +1154,7 @@ export default function ConfigPage() {
               </span>
             </div>
           ) : (
-            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-default-200 bg-default-100/70 px-2 dark:border-default-100/30 dark:bg-default-100/20">
+            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-default-200 bg-default-100 px-2 dark:border-default-100/30 dark:bg-default-100">
               {showImage ? (
                 <img
                   alt="favicon preview"
@@ -1274,6 +1274,7 @@ export default function ConfigPage() {
         if (item.key === "login_bg_image") {
           return renderBgImageUploader("login_bg_image", item.label);
         }
+
         return (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="lg:col-span-2">
@@ -1612,7 +1613,7 @@ export default function ConfigPage() {
                 aria-pressed={isSelected}
                 className={`w-full px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer text-left ${
                   isSelected
-                    ? "bg-primary-50 dark:bg-primary-900/20 border-primary-300 dark:border-primary-500/50 shadow-sm"
+                    ? "bg-primary-50 dark:bg-primary-900 border-primary-300 dark:border-primary-500/50 shadow-sm"
                     : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
                 }`}
                 type="button"
@@ -1781,14 +1782,14 @@ export default function ConfigPage() {
                 当前后端数据库文件或实例占用空间，仅用于容量参考。
               </p>
             </div>
-            <div className="rounded-lg border border-divider bg-default-50/60 dark:bg-default-100/10 px-4 py-3 text-sm font-semibold text-default-800 dark:text-default-200">
+            <div className="rounded-lg border border-divider bg-default-50 dark:bg-default-100 px-4 py-3 text-sm font-semibold text-default-800 dark:text-default-200">
               {storageSummary}
             </div>
           </div>
 
           <Divider className="my-2" />
 
-          <div className="space-y-4 rounded-xl border border-divider bg-default-50/60 p-4 dark:bg-default-100/10">
+          <div className="space-y-4 rounded-xl border border-divider bg-default-50 p-4 dark:bg-default-100">
             <div className="space-y-1">
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 面板自升级
@@ -1846,7 +1847,7 @@ export default function ConfigPage() {
                 </div>
 
                 {!systemUpgradeInfo?.capability.capable && (
-                  <div className="rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950/30 dark:text-warning-200">
+                  <div className="rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950 dark:text-warning-200">
                     <p className="text-xs font-medium">当前无法升级</p>
                     <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
                       {(systemUpgradeInfo?.capability.reasons?.length
@@ -1861,7 +1862,7 @@ export default function ConfigPage() {
 
                 {/* P3-2：升级状态来自后端状态接口，页面刷新/后端重启后不丢失 */}
                 {systemUpgradeStatus?.inProgress && (
-                  <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-primary-800 dark:border-primary-900/40 dark:bg-primary-950/30 dark:text-primary-200">
+                  <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-primary-800 dark:border-primary-900/40 dark:bg-primary-950 dark:text-primary-200">
                     <Spinner size="sm" />
                     <p className="text-xs font-medium">
                       升级进行中
@@ -1880,8 +1881,8 @@ export default function ConfigPage() {
                   <div
                     className={
                       systemUpgradeStatus.result === "success"
-                        ? "rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-success-800 dark:border-success-900/40 dark:bg-success-950/30 dark:text-success-200"
-                        : "rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950/30 dark:text-danger-200"
+                        ? "rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-success-800 dark:border-success-900/40 dark:bg-success-950 dark:text-success-200"
+                        : "rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950 dark:text-danger-200"
                     }
                   >
                     <p className="text-xs font-medium">
@@ -1892,7 +1893,8 @@ export default function ConfigPage() {
                           ? "失败，已自动回滚到旧版本"
                           : systemUpgradeStatus.result === "aborted"
                             ? "已中止"
-                            : systemUpgradeStatus.result === "helper_start_failed"
+                            : systemUpgradeStatus.result ===
+                                "helper_start_failed"
                               ? "失败（升级助手启动失败）"
                               : `失败（${systemUpgradeStatus.result}）`}
                       {systemUpgradeStatus.finishedAt
@@ -2031,7 +2033,7 @@ export default function ConfigPage() {
       </div>
 
       {hasChanges && (
-        <Card className="mt-4 bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800 shadow-sm overflow-hidden">
+        <Card className="mt-4 border-warning-200 dark:border-warning-800 shadow-sm overflow-hidden [&>div]:bg-warning-50 [&>div]:dark:bg-warning-900">
           <div className="h-10 flex items-center justify-center gap-2 text-warning-700 dark:text-warning-300">
             <div className="w-2 h-2 bg-warning-500 rounded-full animate-pulse flex-shrink-0" />
             <span className="text-sm font-medium leading-none">
@@ -2382,7 +2384,7 @@ export default function ConfigPage() {
                       systemUpgradeSelectedVersion,
                       systemUpgradeInfo.currentVersion,
                     ) < 0 && (
-                      <div className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950/30 dark:text-danger-200">
+                      <div className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950 dark:text-danger-200">
                         <p className="text-xs font-medium">
                           降级警告：目标版本（
                           {systemUpgradeSelectedVersion}）低于当前版本（
@@ -2391,7 +2393,7 @@ export default function ConfigPage() {
                         </p>
                       </div>
                     )}
-                  <div className="space-y-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950/30 dark:text-warning-200">
+                  <div className="space-y-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950 dark:text-warning-200">
                     <p className="text-xs font-medium">升级前请确认</p>
                     <ul className="list-disc space-y-1 pl-4 text-xs">
                       <li>Docker Socket 可用且挂载权限正常。</li>

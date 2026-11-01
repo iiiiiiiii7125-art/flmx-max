@@ -95,7 +95,7 @@ export function EditorTabs<T extends string>({
 }) {
   return (
     <div
-      className="grid gap-1 rounded-xl bg-default-100/90 p-1 backdrop-blur-md"
+      className="grid gap-1 rounded-xl bg-default-100 p-1 backdrop-blur-md"
       role="tablist"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
     >

@@ -216,6 +216,59 @@ body {
   }
 }
 
+/* Text Tray tokens (Round 4 — "透明壳＋实色字托"): the clear-glass shell
+   stays the global surface, but no text may sit directly on glass or
+   wallpaper. Every text-bearing element rides an opaque tray: --tray for
+   neutral plates, --tray-<color> for semantic-tinted plates (bridge
+   Button flat/light, Badge/Chip tints). One definition point — pages
+   reference the .text-tray / .tray-* classes or the bg-tray utility,
+   never hand-mixed rgba tints. */
+:root {
+  --tray: #ffffff;
+  --tray-border: rgb(24 24 27 / 0.08);
+  --tray-primary: #e0e7ff;
+  --tray-primary-hover: #c7d2fe;
+  --tray-primary-foreground: #4338ca;
+  --tray-secondary: #ede9fe;
+  --tray-secondary-hover: #ddd6fe;
+  --tray-secondary-foreground: #6d28d9;
+  --tray-success: #dcfce7;
+  --tray-success-hover: #bbf7d0;
+  --tray-success-foreground: #15803d;
+  --tray-warning: #fef3c7;
+  --tray-warning-hover: #fde68a;
+  --tray-warning-foreground: #b45309;
+  --tray-danger: #fee2e2;
+  --tray-danger-hover: #fecaca;
+  --tray-danger-foreground: #b91c1c;
+  --tray-default: #f4f4f5;
+  --tray-default-hover: #e4e4e7;
+  --tray-default-foreground: #3f3f46;
+}
+
+.dark {
+  --tray: #18181b;
+  --tray-border: rgb(255 255 255 / 0.1);
+  --tray-primary: #312e81;
+  --tray-primary-hover: #3730a3;
+  --tray-primary-foreground: #c7d2fe;
+  --tray-secondary: #4c1d95;
+  --tray-secondary-hover: #5b21b6;
+  --tray-secondary-foreground: #ddd6fe;
+  --tray-success: #14532d;
+  --tray-success-hover: #166534;
+  --tray-success-foreground: #86efac;
+  --tray-warning: #78350f;
+  --tray-warning-hover: #92400e;
+  --tray-warning-foreground: #fcd34d;
+  --tray-danger: #7f1d1d;
+  --tray-danger-hover: #991b1b;
+  --tray-danger-foreground: #fca5a5;
+  --tray-default: #27272a;
+  --tray-default-hover: #3f3f46;
+  --tray-default-foreground: #e4e4e7;
+}
+
 /* Clear Glass Variables (Round 2 — replaces the Round 1 frosted recipe:
    blur 18px + tinted milk-glass read as a pink haze over the wallpaper and
    shifted the whole palette). Clear glass is near-transparent: the
@@ -247,7 +300,7 @@ body {
   );
   --glass-overlay: rgba(0, 0, 0, 0.3);
 
-  --toaster-bg: rgb(255 255 255 / 0.85);
+  --toaster-bg: rgb(255 255 255);
   --toaster-color: #18181b;
   --toaster-border: rgb(24 24 27 / 0.08);
 }
@@ -273,7 +326,7 @@ body {
     rgb(24 24 27 / 0.42)
   );
 
-  --toaster-bg: rgb(24 24 27 / 0.85);
+  --toaster-bg: rgb(24 24 27);
   --toaster-color: #f4f4f5;
   --toaster-border: rgb(255 255 255 / 0.1);
 }
@@ -431,6 +484,66 @@ body {
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.12),
       0 8px 24px rgb(0 0 0 / 0.35);
+  }
+
+  /* Text Trays (Round 4): opaque plates that carry text over glass or
+     wallpaper. .text-tray is the neutral plate (bars, pills, rows);
+     .tray-<color> pairs a solid semantic tint with a contrast-checked
+     foreground and hover shade — the single definition point for the
+     bridge Button flat/light maps and the Badge/Chip tint variants, so
+     any component using those variants gets a tray automatically. */
+  .text-tray {
+    background: var(--tray);
+    border: 1px solid var(--tray-border);
+    box-shadow: 0 1px 2px rgb(24 24 27 / 0.05);
+  }
+
+  .tray-default {
+    background: var(--tray-default);
+    color: var(--tray-default-foreground);
+  }
+  .tray-default:hover {
+    background: var(--tray-default-hover);
+  }
+
+  .tray-primary {
+    background: var(--tray-primary);
+    color: var(--tray-primary-foreground);
+  }
+  .tray-primary:hover {
+    background: var(--tray-primary-hover);
+  }
+
+  .tray-secondary {
+    background: var(--tray-secondary);
+    color: var(--tray-secondary-foreground);
+  }
+  .tray-secondary:hover {
+    background: var(--tray-secondary-hover);
+  }
+
+  .tray-success {
+    background: var(--tray-success);
+    color: var(--tray-success-foreground);
+  }
+  .tray-success:hover {
+    background: var(--tray-success-hover);
+  }
+
+  .tray-warning {
+    background: var(--tray-warning);
+    color: var(--tray-warning-foreground);
+  }
+  .tray-warning:hover {
+    background: var(--tray-warning-hover);
+  }
+
+  .tray-danger {
+    background: var(--tray-danger);
+    color: var(--tray-danger-foreground);
+  }
+  .tray-danger:hover {
+    background: var(--tray-danger-hover);
   }
 }
 

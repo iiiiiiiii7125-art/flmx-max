@@ -215,8 +215,8 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-col min-h-screen bg-mesh-gradient">
       {/* 顶部导航栏 */}
-      <header className="bg-white/25 dark:bg-zinc-950/35 backdrop-blur-[3px] backdrop-saturate-[1.6] backdrop-brightness-105 border-b border-white/45 dark:border-white/15 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
-        <div className="flex items-center gap-2">
+      <header className="[background:var(--glass-bg)] backdrop-blur-[3px] backdrop-saturate-[1.6] backdrop-brightness-105 border-b border-white/45 dark:border-white/15 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
+        <div className="flex items-center gap-2 text-tray rounded-full py-1 pl-1.5 pr-3">
           <BrandLogo size={20} />
           <h1 className="text-sm font-bold text-foreground">
             {siteConfig.name}
@@ -260,14 +260,18 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
               className={`
                 flex flex-col items-center justify-center flex-1 rounded-full px-2 py-1.5
                 transition-colors duration-200 ease-refined min-h-[44px]
-                ${isActive ? "bg-primary/10 dark:bg-primary/15" : ""}
+                ${
+                  isActive
+                    ? "bg-gradient-to-r from-primary-500 to-secondary-500 shadow-sm"
+                    : "text-tray"
+                }
                 ${isMonitorBlocked ? "opacity-60" : ""}
                 ${
                   isActive
-                    ? "text-primary dark:text-primary-400"
+                    ? "text-white"
                     : isMonitorBlocked
                       ? "text-gray-500 dark:text-gray-400"
-                      : "text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
+                      : "text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-gray-100"
                 }
               `}
               onClick={() => handleTabClick(item.path)}
@@ -279,9 +283,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
               <span
                 aria-hidden
                 className={`mt-0.5 h-1 w-4 rounded-full ${
-                  isActive
-                    ? "bg-gradient-to-r from-primary-500 to-secondary-500"
-                    : "bg-transparent"
+                  isActive ? "bg-white/80" : "bg-transparent"
                 }`}
               />
             </button>

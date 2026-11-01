@@ -43,7 +43,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0">
+      <div className="min-w-0 rounded-xl text-tray px-3 py-2">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && (
           <p className="mt-0.5 text-xs text-default-500">{description}</p>
@@ -113,7 +113,7 @@ export function PageTabs<T extends string>({
         >
           {t.label}
           {t.badge !== undefined && t.badge !== null && (
-            <span className="ml-1 text-xs text-default-400">{t.badge}</span>
+            <span className="ml-1 text-xs text-default-500">{t.badge}</span>
           )}
         </button>
       ))}
@@ -227,7 +227,7 @@ export function SelectionBar({
   onExit: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background/95 px-3 py-2 shadow-sm backdrop-blur">
+    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl text-tray px-3 py-2 shadow-sm">
       <span className="text-sm text-default-600">已选 {count} 个</span>
       <div className="ml-auto flex flex-wrap justify-end gap-2">
         <Button size="sm" variant="flat" onPress={onToggleAll}>
@@ -337,7 +337,7 @@ export function ListRow({
         footer && !selectMode ? "flex-col" : "items-center"
       } ${
         selected
-          ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+          ? "border-primary bg-primary-50 dark:bg-primary-900"
           : "border-divider bg-content1 hover:bg-default-100"
       }`}
       role="button"
@@ -375,10 +375,10 @@ export function ListGroup({
   return (
     <section className="space-y-2">
       {title && (
-        <h2 className="flex items-baseline gap-2 px-1 text-sm font-semibold">
+        <h2 className="flex w-fit items-baseline gap-2 rounded-lg text-tray px-2.5 py-1 text-sm font-semibold">
           {title}
           {count !== undefined && (
-            <span className="text-xs font-normal text-default-400">
+            <span className="text-xs font-normal text-default-500">
               {count}
             </span>
           )}
@@ -397,7 +397,7 @@ export function EmptyHint({
   action?: PageAction;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-divider px-4 py-8 text-center text-sm text-default-500">
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-divider bg-tray px-4 py-8 text-center text-sm text-default-500">
       <p>{text}</p>
       {action && (
         <Button

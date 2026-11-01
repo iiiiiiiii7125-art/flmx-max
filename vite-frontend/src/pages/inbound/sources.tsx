@@ -3,15 +3,12 @@ import type {
   RemoteSourceRole,
   RemoteSyncResult,
 } from "@/api";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
 
 import { useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { FileUp, RefreshCw } from "lucide-react";
 
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import {
   deleteRemoteSource,
   refreshRemoteSource,
@@ -56,9 +53,7 @@ export const ROLE_HINTS: Record<string, string> = {
 const MAX_FILE_BYTES = 5 << 20;
 
 /** Reads an uploaded subscription file as text; null (with a toast) when it can't be used. */
-export async function readSubscriptionFile(
-  file: File,
-): Promise<string | null> {
+export async function readSubscriptionFile(file: File): Promise<string | null> {
   if (file.size > MAX_FILE_BYTES) {
     toast.error("文件超过 5MB");
 
@@ -217,6 +212,7 @@ export function RemoteSourcesSection({
 
   // R2X-004：订阅源新建表单幂等键（同表单复用、成功轮换；更新不带键）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(
     Boolean(draft),
@@ -233,16 +229,19 @@ export function RemoteSourcesSection({
     }
     setSaving(true);
     try {
-      const res = await saveRemoteSource({
-        id: draft.id,
-        name: draft.name,
-        url: draft.url,
-        kind: draft.kind,
-        role: draft.role,
-        intervalHours: draft.intervalHours,
-        relayOnly: draft.relayOnly,
-        content: draft.kind === "file" ? draft.content : undefined,
-      }, draft.id ? undefined : idemKey);
+      const res = await saveRemoteSource(
+        {
+          id: draft.id,
+          name: draft.name,
+          url: draft.url,
+          kind: draft.kind,
+          role: draft.role,
+          intervalHours: draft.intervalHours,
+          relayOnly: draft.relayOnly,
+          content: draft.kind === "file" ? draft.content : undefined,
+        },
+        draft.id ? undefined : idemKey,
+      );
 
       report(res);
       if (res.code === 0 && !draft.id) rotateIdemKey();
@@ -283,7 +282,9 @@ export function RemoteSourcesSection({
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-default-600">订阅源</h2>
+        <h2 className="w-fit rounded-lg text-tray px-2.5 py-1 text-sm font-semibold text-default-600">
+          订阅源
+        </h2>
         <Button
           size="sm"
           variant="light"
@@ -302,7 +303,7 @@ export function RemoteSourcesSection({
         </Button>
       </div>
       {sources.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
+        <p className="rounded-xl border border-dashed border-divider bg-tray px-3 py-4 text-center text-xs text-default-500">
           填机场或别人的订阅链接，或上传订阅文件：节点出现在“入站”里，可以给自建落地做前置中转，也能和自己的落地合并成一个订阅。在“导入”里粘贴订阅地址并打开“定时同步”也会存到这里
         </p>
       ) : (
@@ -344,7 +345,7 @@ export function RemoteSourcesSection({
                     )}
                     {s.role && (
                       <span
-                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${s.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20" : "bg-warning-100 text-warning-700 dark:bg-warning-500/20"}`}
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${s.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-900" : "bg-warning-100 text-warning-700 dark:bg-warning-900"}`}
                       >
                         {s.role === "relay" ? "中转" : "落地"}
                       </span>
@@ -490,8 +491,7 @@ export function RemoteSourcesSection({
                             content,
                             fileName: file.name,
                             name:
-                              draft.name ||
-                              file.name.replace(/\.[^.]+$/, ""),
+                              draft.name || file.name.replace(/\.[^.]+$/, ""),
                           });
                         }
                       }}

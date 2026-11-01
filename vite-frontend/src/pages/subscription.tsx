@@ -6,16 +6,15 @@ import type {
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
 import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { ChevronDown, Copy } from "lucide-react";
 
+import SubscriptionAssignSection from "./subscription/assign";
+
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import {
   deleteSubscription,
   getInboundList,
@@ -38,7 +37,6 @@ import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
-import SubscriptionAssignSection from "./subscription/assign";
 import {
   Modal,
   ModalBody,
@@ -176,7 +174,7 @@ function ChipPicker({
       <button
         className={`rounded-full border px-2.5 py-1 text-xs ${
           selected.length === 0
-            ? "border-primary bg-primary-50 text-primary dark:bg-primary-900/30"
+            ? "border-primary bg-primary-50 text-primary dark:bg-primary-900"
             : "border-divider text-default-500"
         }`}
         type="button"
@@ -192,7 +190,7 @@ function ChipPicker({
             key={value}
             className={`rounded-full border px-2.5 py-1 text-xs ${
               on
-                ? "border-primary bg-primary-50 text-primary dark:bg-primary-900/30"
+                ? "border-primary bg-primary-50 text-primary dark:bg-primary-900"
                 : "border-divider text-default-600"
             }`}
             type="button"
@@ -396,9 +394,9 @@ function ChainRoleButtons({
           className={`rounded-lg border px-2 py-1 text-xs transition-colors ${
             value === r
               ? r === "landing"
-                ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-500/20"
+                ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-900"
                 : r === "relay"
-                  ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-500/20"
+                  ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-900"
                   : "border-default-400 bg-default-100 text-default-700"
               : "border-default-200 text-default-500 hover:border-default-400 dark:border-default-100"
           }`}
@@ -755,9 +753,7 @@ function Editor({
                         key={src.id}
                         className="w-full"
                         isDisabled={inChain}
-                        isSelected={
-                          inChain || draft.sourceIds.includes(src.id)
-                        }
+                        isSelected={inChain || draft.sourceIds.includes(src.id)}
                         onValueChange={(on) =>
                           set({
                             sourceIds: on
@@ -983,7 +979,7 @@ function Editor({
             />
           </div>
           {(o.chainLanding || o.chainRelay) && (
-            <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs text-warning-700 dark:bg-warning-500/10">
+            <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs text-warning-700 dark:bg-warning-900">
               现在用的是上面的关键词方式。在下面按来源设置角色后会改用按来源设置，关键词会被清空
             </p>
           )}
@@ -1015,7 +1011,7 @@ function Editor({
                         <span className="truncate text-sm">{src.name}</span>
                         {src.role && (
                           <span
-                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${src.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20" : "bg-warning-100 text-warning-700 dark:bg-warning-500/20"}`}
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${src.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-900" : "bg-warning-100 text-warning-700 dark:bg-warning-900"}`}
                           >
                             用途：{src.role === "relay" ? "中转" : "落地"}
                           </span>
@@ -1088,8 +1084,12 @@ function Editor({
             <p className="text-xs font-medium">自定义脚本</p>
             <p className="text-xs text-default-500">
               对处理后的节点再做筛选、改名、排序。写一个{" "}
-              <code className="rounded bg-default-100 px-1">function operator(nodes)</code>{" "}
-              函数返回新的节点数组；每个节点有 name（可改）、original、server、port、protocol、region、line 字段。
+              <code className="rounded bg-default-100 px-1">
+                function operator(nodes)
+              </code>{" "}
+              函数返回新的节点数组；每个节点有
+              name（可改）、original、server、port、protocol、region、line
+              字段。
             </p>
             <Textarea
               className="font-mono text-xs"
@@ -1114,7 +1114,7 @@ function Editor({
           {preview && (
             <>
               {preview.scriptError && (
-                <p className="rounded-lg bg-warning-100 px-3 py-2 text-xs text-warning-700 dark:bg-warning-500/20 dark:text-warning-300">
+                <p className="rounded-lg bg-warning-100 px-3 py-2 text-xs text-warning-700 dark:bg-warning-900 dark:text-warning-300">
                   {preview.scriptError}
                   <br />
                   已保留其余处理步骤生成的节点；修复脚本后请重新预览。
@@ -1144,7 +1144,7 @@ function Editor({
                       </span>
                       {p.chain && (
                         <span
-                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-500/20" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20"}`}
+                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-900" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-900"}`}
                         >
                           {p.chain === "landing" ? "落地" : "中转"}
                         </span>
@@ -1153,8 +1153,8 @@ function Editor({
                         <span className="max-w-28 shrink-0 truncate text-default-400">
                           {p.own
                             ? "自建"
-                            : (sources.find((s) => s.id === p.sourceId)
-                                ?.name ?? "订阅源")}
+                            : (sources.find((s) => s.id === p.sourceId)?.name ??
+                              "订阅源")}
                         </span>
                       )}
                       <span className="shrink-0 text-default-500">
@@ -1258,6 +1258,7 @@ export default function SubscriptionPage() {
 
   // R2X-004：订阅新建表单幂等键（同表单复用、成功轮换；更新不带键）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(
     Boolean(draft),
@@ -1464,12 +1465,12 @@ export default function SubscriptionPage() {
         ).map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
             className={`rounded-lg px-3 py-2 text-sm font-medium transition-all ${
               tab === t.key
                 ? "bg-white dark:bg-default-50 shadow-sm"
                 : "text-default-500 hover:text-foreground"
             }`}
+            onClick={() => setTab(t.key)}
           >
             {t.label}
           </button>
@@ -1486,15 +1487,11 @@ export default function SubscriptionPage() {
         </div>
       )}
 
-      {tab === "assign" ? (
-        <SubscriptionAssignSection />
-      ) : (
-        <></>
-      )}
+      {tab === "assign" ? <SubscriptionAssignSection /> : <></>}
       {tab === "manage" && (
         <>
           {inbounds.length === 0 && (
-            <Card className="bg-default-50/50 shadow-sm">
+            <Card className="bg-default-50 shadow-sm">
               <CardBody className="py-6 text-center text-sm text-default-500">
                 还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容。
               </CardBody>

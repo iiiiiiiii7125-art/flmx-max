@@ -236,7 +236,7 @@ export function LatencyTargetsModal({
                       <button
                         className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors disabled:opacity-30 ${
                           pin
-                            ? "bg-primary/10 text-primary"
+                            ? "tray-primary"
                             : "text-default-400 hover:text-default-600"
                         }`}
                         disabled={!on || (!pin && pinned.length >= MAX_PINNED)}

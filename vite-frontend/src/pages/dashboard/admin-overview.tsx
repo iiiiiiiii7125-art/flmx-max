@@ -106,22 +106,22 @@ const KINDS: Record<
 
 const TONES = {
   blue: [
-    "bg-primary-100 dark:bg-primary-500/20",
+    "bg-primary-100 dark:bg-primary-900",
     "text-blue-600 dark:text-blue-400",
     "bg-primary-500",
   ],
   green: [
-    "bg-green-100 dark:bg-green-500/20",
+    "bg-green-100 dark:bg-green-900",
     "text-green-600 dark:text-green-400",
     "bg-green-500",
   ],
   purple: [
-    "bg-secondary-100 dark:bg-secondary-500/20",
+    "bg-secondary-100 dark:bg-secondary-900",
     "text-purple-600 dark:text-purple-400",
     "bg-secondary-500",
   ],
   orange: [
-    "bg-orange-100 dark:bg-orange-500/20",
+    "bg-orange-100 dark:bg-orange-900",
     "text-orange-600 dark:text-orange-400",
     "bg-orange-500",
   ],
@@ -155,49 +155,51 @@ function Metric({
 
   return (
     <button
-      className="rounded-2xl border border-divider bg-content1 p-4 text-left shadow-sm transition-shadow hover:shadow-md lg:p-5"
+      className="glass-card rounded-2xl p-1.5 text-left shadow-sm transition-shadow hover:shadow-md"
       type="button"
       onClick={onPress}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-sm text-default-600">{label}</span>
-        <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
-          <Icon className={`h-4 w-4 lg:h-5 lg:w-5 ${iconColor}`} />
-        </span>
-      </div>
-      <div className="mt-2 text-2xl font-bold lg:text-3xl">
-        {value}
-        {total !== undefined && (
-          <span className="ml-1 text-base font-normal text-default-400">
-            / {total}
+      <div className="flex h-full flex-col rounded-[14px] bg-tray p-4 lg:p-5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-sm text-default-600">{label}</span>
+          <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
+            <Icon className={`h-4 w-4 lg:h-5 lg:w-5 ${iconColor}`} />
           </span>
-        )}
-      </div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-default-100">
-        {total !== undefined && total > 0 && (
-          <div
-            className={`h-full rounded-full ${bar}`}
-            style={{ width: `${pct}%` }}
-          />
-        )}
-      </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-        <span
-          className={`truncate ${
-            footTone === "danger"
-              ? "text-danger"
-              : footTone === "warning"
-                ? "text-warning-600"
-                : footTone === "success"
-                  ? "text-success-600"
-                  : "text-default-500"
-          }`}
-        >
-          {foot}
-        </span>
-        {footRight && (
-          <span className="shrink-0 text-default-400">{footRight}</span>
-        )}
+        </div>
+        <div className="mt-2 text-2xl font-bold lg:text-3xl">
+          {value}
+          {total !== undefined && (
+            <span className="ml-1 text-base font-normal text-default-400">
+              / {total}
+            </span>
+          )}
+        </div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-default-100">
+          {total !== undefined && total > 0 && (
+            <div
+              className={`h-full rounded-full ${bar}`}
+              style={{ width: `${pct}%` }}
+            />
+          )}
+        </div>
+        <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
+          <span
+            className={`truncate ${
+              footTone === "danger"
+                ? "text-danger"
+                : footTone === "warning"
+                  ? "text-warning-600"
+                  : footTone === "success"
+                    ? "text-success-600"
+                    : "text-default-500"
+            }`}
+          >
+            {foot}
+          </span>
+          {footRight && (
+            <span className="shrink-0 text-default-400">{footRight}</span>
+          )}
+        </div>
       </div>
     </button>
   );
@@ -215,13 +217,15 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-divider bg-content1 p-4 shadow-sm lg:p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
-        {badge}
-        {action && <div className="ml-auto">{action}</div>}
+    <section className="glass-card rounded-2xl p-1.5 shadow-sm">
+      <div className="rounded-[14px] bg-tray p-4 lg:p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
+          {badge}
+          {action && <div className="ml-auto">{action}</div>}
+        </div>
+        {children}
       </div>
-      {children}
     </section>
   );
 }
@@ -261,9 +265,7 @@ export function AdminOverview() {
       if (i.code === 0) setInbounds(i.data ?? []);
       if (r.code === 0) setRelays(r.data ?? []);
       if (s.code === 0) setSubs(s.data?.items ?? []);
-      setLoadError(
-        [n, k, i, r, s].some((res) => res.code !== 0),
-      );
+      setLoadError([n, k, i, r, s].some((res) => res.code !== 0));
     } finally {
       loadInFlightRef.current = false;
       setLoading(false);
@@ -290,10 +292,7 @@ export function AdminOverview() {
 
     return () => {
       window.clearInterval(timer);
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange,
-      );
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [load]);
 
@@ -470,8 +469,10 @@ export function AdminOverview() {
       </div>
 
       {loadError && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-400">
-          <span>部分数据加载失败，当前显示可能不完整，请勿据此判断系统状态。</span>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700 dark:border-warning-500/30 dark:bg-warning-900 dark:text-warning-400">
+          <span>
+            部分数据加载失败，当前显示可能不完整，请勿据此判断系统状态。
+          </span>
           <button
             className="shrink-0 font-medium underline underline-offset-2"
             type="button"
@@ -591,7 +592,7 @@ export function AdminOverview() {
           <Panel
             badge={
               issues.length > 0 && (
-                <span className="rounded-full bg-danger-50 px-2 text-xs font-semibold text-danger dark:bg-danger-500/20">
+                <span className="rounded-full tray-danger px-2 py-0.5 text-xs font-semibold">
                   {issues.length}
                 </span>
               )
@@ -624,8 +625,8 @@ export function AdminOverview() {
                       key={g.kind}
                       className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
                         danger
-                          ? "border-danger-100 bg-danger-50/70 hover:bg-danger-50 dark:border-danger-500/20 dark:bg-danger-500/10"
-                          : "border-warning-100 bg-warning-50/70 hover:bg-warning-50 dark:border-warning-500/20 dark:bg-warning-500/10"
+                          ? "border-danger-100 bg-danger-50 hover:bg-danger-100 dark:border-danger-800 dark:bg-danger-900 dark:hover:bg-danger-800"
+                          : "border-warning-100 bg-warning-50 hover:bg-warning-100 dark:border-warning-800 dark:bg-warning-900 dark:hover:bg-warning-800"
                       }`}
                       type="button"
                       onClick={() => navigate(meta.path)}
@@ -730,7 +731,7 @@ export function AdminOverview() {
               ).map(([label, bytes]) => (
                 <div
                   key={label}
-                  className="rounded-xl bg-default-100/70 px-3 py-2"
+                  className="rounded-xl bg-default-100 px-3 py-2"
                 >
                   <div className="text-xs text-default-500">{label}</div>
                   <div className="font-mono text-base font-semibold">
@@ -785,7 +786,7 @@ export function AdminOverview() {
                       onClick={() => navigate(e.path)}
                     >
                       <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${e.kind === "节点" ? "bg-warning-50 text-warning-700 dark:bg-warning-500/20" : "bg-orange-50 text-orange-700 dark:bg-orange-500/20"}`}
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${e.kind === "节点" ? "tray-warning" : "bg-orange-50 text-orange-700 dark:bg-orange-900 dark:text-orange-300"}`}
                       >
                         {e.kind}
                       </span>

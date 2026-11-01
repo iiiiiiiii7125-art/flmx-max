@@ -75,7 +75,7 @@ export const ThemeSettings: React.FC = () => {
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                   mode === opt.value
                     ? "bg-primary text-white shadow-sm"
-                    : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50"
+                    : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                 }`}
                 type="button"
                 onClick={() => handleModeChange(opt.value)}
@@ -144,7 +144,7 @@ export const ThemeSettings: React.FC = () => {
                         {theme.name}
                       </p>
                       {isActive && (
-                        <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/15 text-primary">
+                        <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold tray-primary">
                           当前
                         </span>
                       )}

@@ -57,7 +57,7 @@ export function Chip({
     <Badge
       className={cn(
         variant === "solid" ? solidColorClassMap[color] : "",
-        variant === "bordered" ? "border-current bg-transparent" : "",
+        variant === "bordered" ? "border-current bg-tray" : "",
         size === "sm" ? "px-2 py-0 text-xs" : "",
         size === "lg" ? "px-3 py-1 text-sm" : "",
         className,

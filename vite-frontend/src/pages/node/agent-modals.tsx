@@ -50,7 +50,7 @@ export function InstallCommandModal({
         <ModalBody>
           <div className="space-y-4">
             {installWarning ? (
-              <div className="rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-800 dark:border-danger-900/40 dark:bg-danger-950/30 dark:text-danger-200">
+              <div className="rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-800 dark:border-danger-900/40 dark:bg-danger-950 dark:text-danger-200">
                 ⚠️ {installWarning}
               </div>
             ) : null}
@@ -86,11 +86,9 @@ export function InstallCommandModal({
               ✅ 执行后确认上线：脚本显示「安装完成」只代表 agent
               服务已启动，不代表已连上面板。请回到节点列表确认该节点显示为
               <b>在线</b>；若未上线，在节点服务器执行{" "}
-              <span className="font-mono">
-                journalctl -u flux_agent -n 100
-              </span>{" "}
-              查看 WebSocket 连接日志，并核对「网站配置」中面板后端地址的
-              scheme 是否与面板实际对外方式一致（HTTPS 面板须为 https://）。
+              <span className="font-mono">journalctl -u flux_agent -n 100</span>{" "}
+              查看 WebSocket 连接日志，并核对「网站配置」中面板后端地址的 scheme
+              是否与面板实际对外方式一致（HTTPS 面板须为 https://）。
             </div>
           </div>
         </ModalBody>

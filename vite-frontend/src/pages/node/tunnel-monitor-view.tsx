@@ -172,7 +172,7 @@ function UptimeHistoryBar({
             return (
               <div
                 key={idx}
-                className="w-1.5 h-4 rounded-full bg-default-200 dark:bg-default-100/50"
+                className="w-1.5 h-4 rounded-full bg-default-200 dark:bg-default-100"
                 title="暂无数据"
               />
             );
@@ -674,7 +674,7 @@ function TopologyNodeChip({
       <span className="flex items-center gap-1.5">
         <span>{name}</span>
         {isAlternative ? (
-          <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-warning">
+          <span className="rounded-full tray-warning px-1.5 py-0.5 text-[9px] font-semibold leading-none">
             备选
           </span>
         ) : null}
@@ -1417,7 +1417,7 @@ export function TunnelMonitorView({
             return (
               <Card
                 key={tunnel.id}
-                className="group relative overflow-hidden glass-card-strong shadow-sm hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
+                className="group relative overflow-hidden shadow-sm hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
                 onClick={() => setDetailTunnelId(tunnel.id)}
               >
                 <div
@@ -1430,7 +1430,7 @@ export function TunnelMonitorView({
                 <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative flex-shrink-0">
-                      <div className="w-10 h-10 rounded-xl bg-default-100 dark:bg-default-50/10 flex items-center justify-center border border-divider">
+                      <div className="w-10 h-10 rounded-xl bg-default-100 flex items-center justify-center border border-divider">
                         <ArrowRightLeft
                           className={`w-5 h-5 ${isEnabled ? "text-success" : "text-danger"}`}
                         />

@@ -36,12 +36,16 @@ export function Alert({
   color = "default",
   description,
   title,
-  variant,
+  // Accepted for HeroUI API compatibility; Round 4 alerts are always
+  // rendered on the opaque tray, so the variant no longer alters the fill.
+  variant: _variant,
   ...props
 }: AlertProps) {
   return (
     <BaseAlert
-      className={variant === "flat" ? "bg-opacity-15" : undefined}
+      // Round 4: the old flat variant forced a 15% bg opacity (translucent
+      // alert text over glass); alerts always ride the opaque tray now.
+      className={undefined}
       variant={mapVariant(color)}
       {...props}
     >

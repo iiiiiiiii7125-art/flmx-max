@@ -1,3 +1,5 @@
+import type { UserMutationPayload } from "@/api/types";
+
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import { parseDate } from "@internationalized/date";
@@ -61,7 +63,6 @@ import {
   assignMonitorPermission,
   removeMonitorPermission,
 } from "@/api";
-import type { UserMutationPayload } from "@/api/types";
 import {
   EditIcon,
   DeleteIcon,
@@ -71,10 +72,7 @@ import {
 import { PageLoadingState } from "@/components/page-state";
 import { TrafficLimitField } from "@/components/traffic-limit-field";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { removeItemsById, replaceItemById } from "@/utils/list-state";
 import {
   formatTraffic,
@@ -213,11 +211,7 @@ const normalizeUserTunnelItem = (item: Partial<UserTunnel>): UserTunnel => {
   };
 };
 
-export default function UserPage({
-  embedded = false,
-}: {
-  embedded?: boolean;
-}) {
+export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   // 状态管理
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -416,8 +410,9 @@ export default function UserPage({
         if (response.code === 0) {
           const rawUsers = Array.isArray(response.data) ? response.data : [];
           const nextHasNext = rawUsers.length > size;
-          const nextUsers = (nextHasNext ? rawUsers.slice(0, size) : rawUsers)
-            .map((item) => normalizeUserItem(item));
+          const nextUsers = (
+            nextHasNext ? rawUsers.slice(0, size) : rawUsers
+          ).map((item) => normalizeUserItem(item));
 
           setHasNextPage(nextHasNext);
           setUsers(nextUsers);
@@ -703,6 +698,7 @@ export default function UserPage({
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(isUserModalOpen, !isEdit, rotateIdemKey);
 
@@ -1262,7 +1258,7 @@ export default function UserPage({
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : users.length === 0 ? (
-        <Card className="shadow-sm border border-gray-200 dark:border-gray-700 bg-default-50/50">
+        <Card className="shadow-sm border border-gray-200 dark:border-gray-700 bg-default-50">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无用户数据
@@ -1406,7 +1402,7 @@ export default function UserPage({
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400"
+                          className="h-6 px-2 min-w-0 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950 dark:text-emerald-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleManageTunnels(user)}
@@ -1414,7 +1410,7 @@ export default function UserPage({
                           权限
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-400"
+                          className="h-6 px-2 min-w-0 text-xs bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400"
                           size="sm"
                           title="重置流量"
                           variant="flat"
@@ -1423,7 +1419,7 @@ export default function UserPage({
                           重置
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:text-indigo-400"
+                          className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleEdit(user)}
@@ -1431,7 +1427,7 @@ export default function UserPage({
                           编辑
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/30 dark:text-rose-400"
+                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleDelete(user)}
@@ -1833,7 +1829,7 @@ export default function UserPage({
               ((editingUser.dailyQuotaGB ?? 0) > 0 ||
                 (editingUser.monthlyQuotaGB ?? 0) > 0 ||
                 (editingUser.disabledByQuota ?? 0) > 0) && (
-                <div className="space-y-3 rounded-xl border border-default-200 bg-default-50/60 p-4">
+                <div className="space-y-3 rounded-xl border border-default-200 bg-default-50 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-semibold text-foreground">
@@ -2030,9 +2026,9 @@ export default function UserPage({
                             px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer
                             ${
                               isAssigned
-                                ? "bg-default-100/50 dark:bg-default-50/50 border-default-200/50 dark:border-default-100/20 opacity-60 cursor-not-allowed"
+                                ? "bg-default-100 dark:bg-default-50 border-default-200/50 dark:border-default-100/20 opacity-60 cursor-not-allowed"
                                 : isSelected
-                                  ? "bg-primary-50 dark:bg-primary-900/20 border-primary-300 dark:border-primary-500/50 shadow-sm"
+                                  ? "bg-primary-50 dark:bg-primary-900 border-primary-300 dark:border-primary-500/50 shadow-sm"
                                   : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
                             }
                           `}
@@ -2131,7 +2127,7 @@ export default function UserPage({
                       );
                     })}
                     {tunnels.length === 0 && (
-                      <div className="p-8 text-center text-default-400 bg-default-50 dark:bg-default-100/50 rounded-lg border border-dashed border-default-200 dark:border-default-100/30">
+                      <div className="p-8 text-center text-default-400 bg-default-50 dark:bg-default-100 rounded-lg border border-dashed border-default-200 dark:border-default-100/30">
                         暂无可用隧道
                       </div>
                     )}
@@ -2629,7 +2625,7 @@ export default function UserPage({
                 <p className="text-small text-default-500 mt-1">
                   该操作只会重置账号流量不会重置隧道权限流量，重置后该用户的上下行流量将归零，此操作不可撤销。
                 </p>
-                <div className="mt-2 p-2 bg-warning-50 dark:bg-warning-100/10 rounded text-xs">
+                <div className="mt-2 p-2 bg-warning-50 dark:bg-warning-900 rounded text-xs">
                   <div className="text-warning-700 dark:text-warning-300">
                     当前流量使用情况：
                   </div>
@@ -2723,7 +2719,7 @@ export default function UserPage({
                 <p className="text-small text-default-500 mt-1">
                   该操作只会重置隧道权限流量不会重置账号流量，重置后该隧道权限的上下行流量将归零，此操作不可撤销。
                 </p>
-                <div className="mt-2 p-2 bg-warning-50 dark:bg-warning-100/10 rounded text-xs">
+                <div className="mt-2 p-2 bg-warning-50 dark:bg-warning-900 rounded text-xs">
                   <div className="text-warning-700 dark:text-warning-300">
                     当前流量使用情况：
                   </div>
