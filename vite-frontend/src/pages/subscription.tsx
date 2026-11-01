@@ -31,6 +31,8 @@ import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
 import { copyText, panelOrigin } from "@/pages/inbound/share";
+import { SubFrontPicker } from "@/pages/subscription/front-picker";
+import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -1201,6 +1203,10 @@ export default function SubscriptionPage() {
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [resettingTraffic, setResettingTraffic] = useState(false);
+  // 订阅前置地址（KU6）：选中的链接组装 base，"" = 面板域名。未配置
+  // 前置时 fronts 为空、选择器不渲染，url() 与此前逐字一致。
+  const fronts = useSubscriptionFrontURLs();
+  const [frontBase, setFrontBase] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -1243,7 +1249,7 @@ export default function SubscriptionPage() {
   }, [load]);
 
   const url = (s: SubscriptionItem, format = "") =>
-    `${panelOrigin()}${s.path}${format ? `?format=${format}` : ""}`;
+    `${frontBase || panelOrigin()}${s.path}${format ? `?format=${format}` : ""}`;
 
   const showResult = (msg: string | undefined, ok: string) => {
     if (msg && msg !== "操作成功") toast(msg, { icon: "⚠️" });
@@ -1468,6 +1474,16 @@ export default function SubscriptionPage() {
           </button>
         ))}
       </div>
+
+      {tab === "manage" && fronts.length > 0 && (
+        <div className="flex justify-end">
+          <SubFrontPicker
+            fronts={fronts}
+            value={frontBase}
+            onChange={setFrontBase}
+          />
+        </div>
+      )}
 
       {tab === "assign" ? (
         <SubscriptionAssignSection />
