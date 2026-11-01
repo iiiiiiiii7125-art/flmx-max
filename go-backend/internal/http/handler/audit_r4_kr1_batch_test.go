@@ -12,6 +12,7 @@ import (
 // TestNodeBatchUpgradeDedupesIDs 钉 R4B03-004：同批重复 id 只下发
 // 一条 UpgradeAgent、回执每节点恰一条。
 func TestNodeBatchUpgradeDedupesIDs(t *testing.T) {
+	stubGHMirror404(t) // 下发预热本地化＋排空（GATE F3），不研究预热本身
 	r, err := repo.Open(t.TempDir() + "/r4-batch-dedupe.db")
 	if err != nil {
 		t.Fatal(err)

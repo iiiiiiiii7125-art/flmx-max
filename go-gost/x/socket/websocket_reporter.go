@@ -27,6 +27,7 @@ import (
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/internal/util/download"
+	"github.com/go-gost/x/kernel"
 	"github.com/go-gost/x/service"
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -450,6 +451,81 @@ func mapToWebSocketScheme(scheme string) string {
 	default:
 		return ""
 	}
+}
+
+// --- Panel-source download route (panel distribution, phase 1) ---
+//
+// The panel has served a GitHub mirror endpoint
+// (/api/v1/open_api/gh/<full GitHub URL>) all along, built for nodes
+// that can reach the panel but not GitHub. The self-upgrade now
+// derives ONE extra download route from it — locally, from the
+// agent's OWN configured panel address (config.json addr, persisted
+// at install time), never from anything the panel sends at upgrade
+// time. The downloadable URL set therefore stays a pure function of
+// (compile-time repo constant × strictly validated version × the
+// agent's own configuration), exactly like the built-in mirror
+// routes: S-02 is preserved (see verifyUpgradeHashes for the
+// phase-2 hash anchor on this channel).
+
+// panelMirrorPath is the panel GitHub-mirror endpoint path; it must
+// match ghMirrorPath in the backend handler.
+const panelMirrorPath = "/api/v1/open_api/gh"
+
+// mapToHTTPOriginScheme maps a configured address scheme to the
+// HTTP scheme of the panel origin — the counterpart of
+// mapToWebSocketScheme, with the same caliber as the traffic
+// reporter's mapToHTTPScheme: wss/https → https, ws/http → http,
+// anything else (including no explicit scheme) → "" and the caller
+// applies the secure https default. No silent downgrade: an
+// explicit ws/http address is an operator-confirmed plaintext
+// deployment (D1-02), and only then is the asset route plaintext.
+func mapToHTTPOriginScheme(scheme string) string {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "wss", "https":
+		return "https"
+	case "ws", "http":
+		return "http"
+	default:
+		return ""
+	}
+}
+
+// derivePanelOrigin returns the panel's HTTP origin
+// (scheme://host[:port]) for addr, or false when addr carries no
+// usable host. Only the origin survives: any path/query in addr is
+// dropped by normalizeReporterAddress, so the mirror endpoint must
+// (and does) live at the origin root. A non-standard port is kept
+// as part of the host.
+func derivePanelOrigin(addr string) (string, bool) {
+	host, explicitScheme := normalizeReporterAddress(addr)
+	if host == "" {
+		return "", false
+	}
+	scheme := mapToHTTPOriginScheme(explicitScheme)
+	if scheme == "" {
+		scheme = "https"
+	}
+	return scheme + "://" + host, true
+}
+
+// panelSourceRoute builds the panel-source download route for
+// addr: a download.Route whose prefix is the panel origin plus the
+// mirror path (the route's URL form is then prefix + "/" + the
+// locally built GitHub URL, byte-identical in shape to the
+// built-in mirror routes). It also returns the panel host (for the
+// download client's redirect allowlist extra slot). False when no
+// origin can be derived — callers then simply run without the
+// panel route, i.e. exactly the pre-panel-source behavior.
+func panelSourceRoute(addr string) (download.Route, string, bool) {
+	origin, ok := derivePanelOrigin(addr)
+	if !ok {
+		return download.Route{}, "", false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return download.Route{}, "", false
+	}
+	return download.Route{Prefix: origin + panelMirrorPath}, strings.ToLower(u.Host), true
 }
 
 func detectWebSocketScheme(rawURL string) string {
@@ -1986,6 +2062,29 @@ func isSHA256Hex(s string) bool {
 	return true
 }
 
+// verifyUpgradeHashes is the self-upgrade integrity gate (S-02).
+// panelExpected is the expected SHA-256 the panel attached to the
+// upgrade command (expectedSha256, panel-source phase 2): it
+// arrives over the authenticated, AES-encrypted control channel,
+// so when present it is the trust anchor — a download route (even
+// the panel's own HTTP cache) serving a matched fake binary +
+// fake .sha256 pair still fails here. downloadedChecksum is the
+// .sha256 fetched over the download routes; it stays mandatory
+// (its leg failing aborts the upgrade in the caller, unchanged)
+// and acts as the cross-check / sole anchor when panelExpected is
+// absent (old panel). The panel value is a hash VALUE, never a
+// URL — the request struct's idle ChecksumURL field stays
+// unconsumed for exactly that reason.
+func verifyUpgradeHashes(panelExpected, downloadedChecksum, actual string) error {
+	if panelExpected != "" && !strings.EqualFold(panelExpected, actual) {
+		return fmt.Errorf("S-02: 校验失败: 实际哈希与面板下发的期望校验值(expectedSha256)不符: 期望 %s, 实际 %s", panelExpected, actual)
+	}
+	if !strings.EqualFold(downloadedChecksum, actual) {
+		return fmt.Errorf("S-02: 校验失败: 期望 %s, 实际 %s", downloadedChecksum, actual)
+	}
+	return nil
+}
+
 // probeUpgradeRoute is the route admission probe for the
 // self-upgrade (KU4): a candidate counts as alive ONLY if it
 // delivers the release's real .sha256 file with a parseable
@@ -2192,6 +2291,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		// 线格式兼容保留解析。下载地址仍由 agent 用固定仓库+版本号
 		// 本地构造，S-02 模型不变。
 		ProxyURL string `json:"proxyUrl"`
+		// 面板源二期：面板随升级命令下发的期望 SHA256（哈希值，
+		// 不是 URL）。它走已鉴权+AES 加密的控制通道，在场时是校验
+		// 的信任根（见 verifyUpgradeHashes）；缺失（旧面板）时回落
+		// 现行同源 .sha256 比对。闲置的 ChecksumURL 字段不作此用——
+		// URL 正是 S-02 禁止信任的形态，载体只能是哈希值本身。
+		ExpectedSha256 string `json:"expectedSha256"`
 	}
 	if err := json.Unmarshal(jsonData, &req); err != nil {
 		return fmt.Errorf("解析升级参数失败: %v", err)
@@ -2206,6 +2311,10 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 	if !agentVersionRe.MatchString(version) {
 		return fmt.Errorf("S-02: 版本号格式无效: %s", version)
+	}
+	expectedSha256 := strings.TrimSpace(req.ExpectedSha256)
+	if expectedSha256 != "" && !isSHA256Hex(expectedSha256) {
+		return fmt.Errorf("S-02: 面板下发的期望校验值(expectedSha256)格式无效")
 	}
 
 	// S-02: Agent 本地用固定仓库 + 严格校验的版本号拼 URL（直连形态）。
@@ -2228,7 +2337,13 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// upgradeDownloadTimeout (R8-T-09)：整段下载（测速 + 本体 +
 	// 校验 + 逐线路重试）共享一个整程预算，不再有单 GET 的
 	// 60 秒整请求墙。
-	httpClient := newUpgradeDownloadClient("")
+	// 面板源一期：从本机配置的面板地址（w.addr）派生面板线路，
+	// 派生不出（地址为空/非法）则不注入、行为退化为现状。面板
+	// 主机名同时填进下载客户端的重定向放行位（既有 proxyHost
+	// 钩子）：gh_mirror 正常形态直接 200 出文件无重定向，此位只
+	// 兜运维方反代自跳（www→apex 等）的情形。
+	panelRoute, panelHost, hasPanelRoute := panelSourceRoute(w.addr)
+	httpClient := newUpgradeDownloadClient(panelHost)
 	dlCtx, dlCancel := context.WithTimeout(context.Background(), upgradeDownloadTimeout)
 	defer dlCancel()
 	// KU4: 下载线路走内置候选的测速计划（download.Plan）：先单独
@@ -2238,7 +2353,13 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// （单次 ~3s、代理段总界 ~4s）。下载途中已选线路失败时计划
 	// 自动补测/顺排名续切（见 download.TryPlan）。选中的线路经
 	// 进度消息上报面板，运维能看到本次走的哪条线。
-	plan := download.NewPlan(dlCtx, checksumURL, probeUpgradeRoute(httpClient))
+	// 面板源一期：面板线路作为额外线路与 9 个代理同场参与阶段 2
+	// 排名（实测延迟定胜负、无无条件先行），直连短路行为不变。
+	var extraRoutes []download.Route
+	if hasPanelRoute {
+		extraRoutes = append(extraRoutes, panelRoute)
+	}
+	plan := download.NewPlan(dlCtx, checksumURL, probeUpgradeRoute(httpClient), extraRoutes...)
 	routes := plan.Routes()
 	if len(routes) > 0 && routes[0].Probed {
 		w.sendUpgradeProgress("downloading", 0, fmt.Sprintf("下载线路测速完成，选用 %s（实测 %dms）", routes[0].Name(), routes[0].Latency.Milliseconds()))
@@ -2280,9 +2401,15 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
 	}
-	if !strings.EqualFold(expectedHash, actualHash) {
+	// 面板源二期：命令带了 expectedSha256 时它就是信任根（控制
+	// 通道下发），下载通道的 .sha256 退为交叉核对；未带时与旧
+	// 口径逐字一致（见 verifyUpgradeHashes）。
+	if err := verifyUpgradeHashes(expectedSha256, expectedHash, actualHash); err != nil {
 		os.Remove(tmpPath)
-		return fmt.Errorf("S-02: 校验失败: 期望 %s, 实际 %s", expectedHash, actualHash)
+		return err
+	}
+	if expectedSha256 != "" {
+		fmt.Printf("✅ 与面板下发的期望校验值一致: %s\n", actualHash)
 	}
 	fmt.Printf("✅ Checksum 校验通过: %s\n", actualHash)
 	w.sendUpgradeProgress("verifying", 100, "校验通过")
@@ -2694,6 +2821,12 @@ func StartWebSocketReporterWithConfig(addr string, secret string, http int, tls 
 	reporter.http = http
 	reporter.tls = tls
 	reporter.socks = socks
+	// 面板源三期：把同一条由本机面板地址派生的面板线路注册给
+	// 内核下载面（x/kernel 的 install/geodata 计划与自升级同
+	// 口径纳入排名）；派生不出则不注册，内核面行为与现状一致。
+	if route, _, ok := panelSourceRoute(addr); ok {
+		kernel.SetPanelRoute(route)
+	}
 	reporter.Start()
 	return reporter
 }

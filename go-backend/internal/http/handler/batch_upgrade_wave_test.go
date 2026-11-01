@@ -142,6 +142,7 @@ type batchResultsPayload struct {
 }
 
 func TestNodeBatchUpgradeDispatchesAllInOneWave(t *testing.T) {
+	stubGHMirror404(t) // 下发预热本地化＋排空（GATE F3），不研究预热本身
 	r, err := repo.Open(t.TempDir() + "/batch-wave.db")
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +220,7 @@ func TestNodeBatchUpgradeDispatchesAllInOneWave(t *testing.T) {
 // 不得被上限误拒；51 台由 TestC09BatchUpgradeRejectsTooManyIDs 钉
 // （其用例数按 maxBatchUpgradeNodes+1 动态生成）。
 func TestNodeBatchUpgradeAcceptsFiftyNodes(t *testing.T) {
+	stubGHMirror404(t) // 下发预热本地化＋排空（GATE F3），不研究预热本身
 	r, err := repo.Open(t.TempDir() + "/batch-fifty.db")
 	if err != nil {
 		t.Fatal(err)

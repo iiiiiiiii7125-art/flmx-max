@@ -109,6 +109,9 @@ ensure_alpine_runtime_dependencies() {
 # 候选清单全产品统一（面板后端 github_routes.go、agent 侧、
 # panel_install.sh 同表同序，改一处须同步其余）：9 个代理前缀 +
 # 直连（""）。路线选择口径（与面板侧一致）：
+#   0) 面板源分发：先单探由 -a 面板地址派生的面板线路（见
+#      derive_panel_prefix），通 → 独占使用，不测其余候选；下载
+#      全败时经 extend_download_routes 补测代理排名 + 直连兜底；
 #   1) 先单独探测直连（真实目标、~3-5s）：通 → 只用直连，不测代理；
 #   2) 直连不通 → 并行探测 9 个代理按延迟排名，未判活的按清单原
 #      序殿后，直连排最末兜底；已选路线下载失败时逐个续切；
@@ -146,6 +149,39 @@ normalize_proxy_prefix() {
     proxy="https://${proxy%/}"
   fi
   echo "$proxy"
+}
+
+# derive_panel_prefix：从 $SERVER_ADDR 派生面板源前缀（面板源分发
+# 一期②）。映射与 Go 侧两处实现互为对表，改一处须同步其余：
+# agent 的 derivePanelOrigin（go-gost/x/socket）与面板后端的
+# panelMirrorPrefixFromAgentAddr（go-backend mutations.go）：
+#   wss:// → https://、ws:// → http://、https:// → https://、
+#   http:// → http://、裸地址 → https://（默认加密，不静默降级）；
+# 只取 origin（scheme://host[:port]），addr 中的路径/query/片段
+# 丢弃，非标准端口保留。派生不出（SERVER_ADDR 为空——手动裸跑
+# 脚本无 -a 的情形，或 scheme 不认识）时无输出且返回非 0，调用
+# 方跳过面板候选、行为与旧版一致。
+derive_panel_prefix() {
+  local addr="${SERVER_ADDR:-}"
+  [[ -n "$addr" ]] || return 1
+  local scheme="" rest="$addr"
+  case "$addr" in
+    *://*)
+      scheme="${addr%%://*}"
+      rest="${addr#*://}"
+      ;;
+  esac
+  rest="${rest%%/*}"
+  rest="${rest%%\?*}"
+  rest="${rest%%#*}"
+  [[ -n "$rest" ]] || return 1
+  case "$scheme" in
+    wss|https) scheme="https" ;;
+    ws|http) scheme="http" ;;
+    "") scheme="https" ;;
+    *) return 1 ;;
+  esac
+  printf '%s://%s/api/v1/open_api/gh' "$scheme" "$rest"
 }
 
 route_url() {
@@ -218,7 +254,19 @@ ensure_download_routes() {
       ROUTES_STAGE=2
       ;;
     *)
-      if probe_route "" >/dev/null; then
+      # 面板源分发一期②：先单探面板线路（由 -a 的面板地址派生，
+      # 见 derive_panel_prefix）。新节点此刻唯一已证可达的目的地
+      # 就是面板本身，通则独占、不再测速其余候选；不通或派生不
+      # 出，则原样走下方直连短路 → 代理排名的既有流程。PROXY_URL
+      # 显式覆盖与 PROXY_ENABLED=false 在 route_mode 层已先行处
+      # 理，不受本步影响（运维逃生口语义不变）。
+      local panel_prefix=""
+      panel_prefix=$(derive_panel_prefix 2>/dev/null || true)
+      if [[ -n "$panel_prefix" ]] && probe_route "$panel_prefix" >/dev/null; then
+        DOWNLOAD_ROUTES=("$panel_prefix")
+        ROUTES_STAGE=3
+        echo "🌐 GitHub 下载路线: 面板源（经本机面板镜像）" >&2
+      elif probe_route "" >/dev/null; then
         DOWNLOAD_ROUTES=("")
         ROUTES_STAGE=1
         echo "🌐 GitHub 下载路线: 直连" >&2
@@ -233,14 +281,27 @@ ensure_download_routes() {
 }
 
 # extend_download_routes：阶段 1（仅直连）路线全败时补测代理排名
-# 并追加；有新增路线返回 0，否则返回 1。
+# 并追加；阶段 3（面板源独占）全败时同口径补测——代理排名续切、
+# 直连殿后兜底（面板线路已在表内，不重复追加）。有新增路线返回
+# 0，否则返回 1。
 extend_download_routes() {
-  if [[ "$(route_mode)" == "builtin" && "$ROUTES_STAGE" == "1" ]]; then
-    rank_proxy_routes
-    DOWNLOAD_ROUTES+=("${PROXY_RANKED[@]}")
-    ROUTES_STAGE=2
-    return 0
+  if [[ "$(route_mode)" != "builtin" ]]; then
+    return 1
   fi
+  case "$ROUTES_STAGE" in
+    1)
+      rank_proxy_routes
+      DOWNLOAD_ROUTES+=("${PROXY_RANKED[@]}")
+      ROUTES_STAGE=2
+      return 0
+      ;;
+    3)
+      rank_proxy_routes
+      DOWNLOAD_ROUTES+=("${PROXY_RANKED[@]}" "")
+      ROUTES_STAGE=2
+      return 0
+      ;;
+  esac
   return 1
 }
 

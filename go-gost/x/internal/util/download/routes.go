@@ -223,8 +223,8 @@ collect:
 //	         the admitted direct route is slow — in which case
 //	         direct joins the ranking — or via Advance when an
 //	         admitted direct route fails mid-download);
-//	stage 3: static tail — every route not yet tried, in
-//	         AllRoutes order (the all-probes-dead degradation).
+//	stage 3: static tail — every route not yet tried, in static
+//	         order (the all-probes-dead degradation).
 //
 // A Plan is not safe for concurrent use; one operation uses it
 // from one goroutine.
@@ -232,6 +232,7 @@ type Plan struct {
 	ctx    context.Context
 	target string
 	probe  ProbeFunc
+	extra  []Route // caller-injected routes (panel-source), see NewPlan
 
 	stage   int // 0 undecided, 1 direct, 2 mirrors, 3 static tail
 	current []Route
@@ -241,8 +242,53 @@ type Plan struct {
 
 // NewPlan builds a plan probing target (the direct-form URL of the
 // small probe file, typically the release's .sha256) with probe.
-func NewPlan(ctx context.Context, probeTarget string, probe ProbeFunc) *Plan {
-	return &Plan{ctx: ctx, target: probeTarget, probe: probe}
+//
+// extraRoutes optionally injects additional Prefix routes into the
+// plan — the panel-source route (the agent's own panel's GitHub
+// mirror endpoint, derived by the caller from the agent's own
+// configured panel address; see doc panel-source DESIGN). Extra
+// routes compete in the stage-2 parallel probe ranking on equal
+// footing with the built-in mirrors and sit near the front of the
+// stage-3 static tail (after direct, before the mirrors). Stage 1
+// is untouched: a fast admitted direct route still short-circuits
+// and extra routes are never probed. The URL set stays a pure
+// function of compile-time data and the agent's own configuration —
+// an extra route is a fixed prefix built locally by the caller,
+// never a panel-pushed URL (S-02). Empty-prefix extras (that would
+// duplicate direct) and duplicates of built-in mirrors are dropped.
+func NewPlan(ctx context.Context, probeTarget string, probe ProbeFunc, extraRoutes ...Route) *Plan {
+	p := &Plan{ctx: ctx, target: probeTarget, probe: probe}
+	seen := map[string]bool{}
+	for _, r := range extraRoutes {
+		if r.Prefix == "" || seen[r.Prefix] {
+			continue
+		}
+		seen[r.Prefix] = true
+		dup := false
+		for _, m := range MirrorPrefixes {
+			if r.Prefix == m {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			p.extra = append(p.extra, r)
+		}
+	}
+	return p
+}
+
+// staticRoutes is the plan's stage-3 order: direct first (the
+// product caliber), then any injected extra routes, then the
+// built-in mirrors in listed order.
+func (p *Plan) staticRoutes() []Route {
+	routes := make([]Route, 0, len(MirrorPrefixes)+len(p.extra)+1)
+	routes = append(routes, Route{})
+	routes = append(routes, p.extra...)
+	for _, prefix := range MirrorPrefixes {
+		routes = append(routes, Route{Prefix: prefix})
+	}
+	return routes
 }
 
 // NewStaticPlan builds a plan over a fixed route list with no
@@ -257,7 +303,7 @@ func (p *Plan) prepare() {
 	}
 	if p.probe == nil || p.target == "" {
 		p.stage = 3
-		p.current = AllRoutes()
+		p.current = p.staticRoutes()
 		return
 	}
 	// Stage 1: direct alone, short-circuit — unless the admitted
@@ -282,7 +328,10 @@ func (p *Plan) prepare() {
 
 func (p *Plan) enterMirrors() {
 	p.stage = 2
-	p.current = probeParallel(p.ctx, p.target, mirrorRoutes(), p.probe)
+	candidates := make([]Route, 0, len(p.extra)+len(MirrorPrefixes))
+	candidates = append(candidates, p.extra...)
+	candidates = append(candidates, mirrorRoutes()...)
+	p.current = probeParallel(p.ctx, p.target, candidates, p.probe)
 	p.probed = append(p.probed, p.current...)
 }
 
@@ -316,7 +365,7 @@ func (p *Plan) Advance() bool {
 		return true
 	case 2:
 		p.stage = 3
-		p.current = AllRoutes()
+		p.current = p.staticRoutes()
 		return true
 	}
 	return false

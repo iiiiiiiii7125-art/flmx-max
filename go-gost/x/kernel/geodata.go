@@ -109,7 +109,7 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 	// measured once per operation, not per file.
 	var plan *download.Plan
 	if len(files) > 0 {
-		plan = download.NewPlan(ctx, directForm(files[0].ChecksumURL), checksumProbe)
+		plan = download.NewPlan(ctx, directForm(files[0].ChecksumURL), checksumProbe, panelExtraRoutes()...)
 	}
 	var staged []string
 	var errs []string
@@ -131,7 +131,7 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 
 func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.Plan) (bool, error) {
 	if plan == nil {
-		plan = download.NewPlan(ctx, directForm(f.ChecksumURL), checksumProbe)
+		plan = download.NewPlan(ctx, directForm(f.ChecksumURL), checksumProbe, panelExtraRoutes()...)
 	}
 	var sumBody strings.Builder
 	// F-139 口径、KU4 (1.7.7) 形态：校验文件走本轮共享的测速计划

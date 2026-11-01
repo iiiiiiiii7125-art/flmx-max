@@ -15,6 +15,7 @@ import (
 // 取消后剩余节点不再派发。以已取消 ctx 调用 nodeBatchUpgrade，
 // 全部结果应为「已取消」而非逐个真下发（离线错误）。
 func TestR1B8_XP326_BatchUpgradeStopsOnCancelledContext(t *testing.T) {
+	stubGHMirror404(t) // 批量下发前置预热本地化＋排空（GATE F3），不研究预热本身
 	r, err := repo.Open(t.TempDir() + "/xp326.db")
 	if err != nil {
 		t.Fatal(err)

@@ -91,6 +91,15 @@ func resolveArch(d *Download) (string, error) {
 //     judged: hard-deny and every non-public range rejected
 //     (bypass.IsNonPublicIP). GitHub's official 302s to
 //     *.githubusercontent.com are https + public and unaffected.
+//     One exception: a hop back to the entry URL's own host
+//     (same origin) is judged by the entry layer (hard-deny only).
+//     The origin was already admitted as the entry, and the panel
+//     gh endpoint 301s every combined URL to its own cleaned path —
+//     under the full judgment a privately addressed panel (LAN /
+//     tailnet) could never serve a kernel through its own route,
+//     while the very same 301 is harmless on the upgrade path
+//     (GATE F2). Cross-host hops keep the full judgment, so the
+//     SSRF line does not move.
 //   - The dial is pinned and re-judges the hard-deny layer on the
 //     IPs it actually dials, so rebinding cannot swap in a metadata
 //     target between the hop check and the connect.
@@ -190,6 +199,17 @@ func fetchHTTPClient() *http.Client {
 			host := req.URL.Hostname()
 			if host == "" {
 				return fmt.Errorf("下载重定向主机为空，已拒绝")
+			}
+			// Same-origin hop (target host identical to the entry
+			// URL's host, port included): the entry layer applies —
+			// the origin was already admitted as the entry. This is
+			// the panel gh endpoint's 301 to its own cleaned path;
+			// full judgment here made the kernel panel route fail
+			// for every privately addressed panel (GATE F2).
+			// Cross-host hops keep the full non-public judgment.
+			if len(via) > 0 && strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				_, err := judgeFetchHost(req.Context(), host, true)
+				return err
 			}
 			_, err := judgeFetchHost(req.Context(), host, false)
 			return err
@@ -389,7 +409,7 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 	// （ghfast 回 403/落地页）被自动排除。g.Proxy 不再参与路由
 	// （面板 GitHub 加速设置已退役，路由由本机内置候选测速决定）；
 	// 返回的资产地址是直连形式，由 install 的计划负责选线。
-	plan := download.NewPlan(ctx, apiURL, apiProbe)
+	plan := download.NewPlan(ctx, apiURL, apiProbe, panelExtraRoutes()...)
 	var body strings.Builder
 	if err := fetchRanked(ctx, plan, apiURL, 4<<20, &body); err != nil {
 		return "", "", fmt.Errorf("查询 GitHub 发布信息失败: %v", err)
@@ -460,9 +480,9 @@ func install(d *Download, binDir string) error {
 	sumURL = directForm(sumURL)
 	var plan *download.Plan
 	if sumURL != "" {
-		plan = download.NewPlan(ctx, sumURL, checksumProbe)
+		plan = download.NewPlan(ctx, sumURL, checksumProbe, panelExtraRoutes()...)
 	} else {
-		plan = download.NewPlan(ctx, url, assetProbe)
+		plan = download.NewPlan(ctx, url, assetProbe, panelExtraRoutes()...)
 	}
 
 	// 本体下载走可续传的共享 transfer（download.FileTransfer，

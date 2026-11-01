@@ -131,6 +131,8 @@ func TestB04R3InstallCommandIgnoresStoredGithubProxy(t *testing.T) {
 	}))
 	t.Cleanup(api.Close)
 	swapGitHubBasesForTest(t, api.URL, api.URL)
+	// 同 r7_j01：nodeInstall 的安装资产预热须本地化＋排空（GATE F3）。
+	swapGHMirrorGitHubBase(t, api.URL)
 
 	raw, _ := json.Marshal(map[string]interface{}{"id": nodeID, "channel": "stable"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/node/install", bytes.NewReader(raw))

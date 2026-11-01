@@ -57,6 +57,7 @@ func TestR1B8_XP328_DeleteNonexistentReturnsSuccess(t *testing.T) {
 // 不下发 UpgradeAgent、不重启。修复前同版本会真下发（本用例节点
 // 离线，下发必失败回 -2，可作区分）。
 func TestR1B8_XP329_NodeUpgradeSameVersionShortCircuits(t *testing.T) {
+	stubGHMirror404(t) // 真升级一腿会走到下发预热：本地化＋排空（GATE F3）
 	r, err := repo.Open(t.TempDir() + "/xp329.db")
 	if err != nil {
 		t.Fatal(err)
