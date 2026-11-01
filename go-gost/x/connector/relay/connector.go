@@ -11,6 +11,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	"github.com/go-gost/relay"
 	ctxvalue "github.com/go-gost/x/ctx"
+	xudp "github.com/go-gost/x/internal/net/udp"
 	relay_util "github.com/go-gost/x/internal/util/relay"
 	"github.com/go-gost/x/registry"
 )
@@ -52,6 +53,21 @@ func (c *relayConnector) Connect(ctx context.Context, conn net.Conn, network, ad
 	if c.md.connectTimeout > 0 {
 		conn.SetDeadline(time.Now().Add(c.md.connectTimeout))
 		defer conn.SetDeadline(time.Time{})
+	}
+
+	switch network {
+	case "udp", "udp4", "udp6":
+		// The transport underneath may be datagram-oriented (e.g.
+		// the udp dialer), while this protocol layer reads a byte
+		// stream (response header, then length-prefixed frames).
+		// Small reads on a raw datagram socket discard the tail of
+		// any datagram carrying more than the requested bytes - the
+		// server merges the response with the first data frame into
+		// one datagram, so the first frame was lost deterministically
+		// (F-UDP-2). Present stream semantics over the transport for
+		// everything below (bind handshake, response drain, frames,
+		// UDP association). Writes are unaffected.
+		conn = xudp.NewStreamConn(conn)
 	}
 
 	req := relay.Request{

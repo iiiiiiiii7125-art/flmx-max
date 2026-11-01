@@ -16,9 +16,16 @@ import (
 
 type udpConn struct {
 	net.Conn
+	rbuf []byte // unread remainder of the current frame
 }
 
 func (c *udpConn) Read(b []byte) (n int, err error) {
+	if len(c.rbuf) > 0 {
+		n = copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
+	}
+
 	var bb [2]byte
 	_, err = io.ReadFull(c.Conn, bb[:])
 	if err != nil {
@@ -33,7 +40,11 @@ func (c *udpConn) Read(b []byte) (n int, err error) {
 	buf := bufpool.Get(dlen)
 	defer bufpool.Put(buf)
 	_, err = io.ReadFull(c.Conn, buf)
+	if err != nil {
+		return
+	}
 	n = copy(b, buf)
+	c.rbuf = append(c.rbuf, buf[n:dlen]...)
 
 	return
 }
@@ -63,7 +74,7 @@ func readResponse(r io.Reader) (err error) {
 	}
 
 	if resp.Version != relay.Version1 {
-		err = relay.ErrBadVersion
+		err = fmt.Errorf("tunnel connector: %w", relay.ErrBadVersion)
 		return
 	}
 
@@ -99,9 +110,16 @@ type bindUDPConn struct {
 	localAddr  net.Addr
 	remoteAddr net.Addr
 	md         mdata.Metadata
+	rbuf       []byte // unread remainder of the current frame
 }
 
 func (c *bindUDPConn) Read(b []byte) (n int, err error) {
+	if len(c.rbuf) > 0 {
+		n = copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
+	}
+
 	// 2-byte data length header
 	var bh [2]byte
 	_, err = io.ReadFull(c.Conn, bh[:])
@@ -119,7 +137,11 @@ func (c *bindUDPConn) Read(b []byte) (n int, err error) {
 	defer bufpool.Put(buf)
 
 	_, err = io.ReadFull(c.Conn, buf)
+	if err != nil {
+		return
+	}
 	n = copy(b, buf)
+	c.rbuf = append(c.rbuf, buf[n:dlen]...)
 
 	return
 }

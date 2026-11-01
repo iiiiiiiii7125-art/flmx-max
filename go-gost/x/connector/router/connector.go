@@ -10,6 +10,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	"github.com/go-gost/relay"
 	ctxvalue "github.com/go-gost/x/ctx"
+	xudp "github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/registry"
 )
 
@@ -51,6 +52,12 @@ func (c *routerConnector) Connect(ctx context.Context, conn net.Conn, network, a
 		conn.SetDeadline(time.Now().Add(c.md.connectTimeout))
 		defer conn.SetDeadline(time.Time{})
 	}
+
+	// Same datagram-transport hazard as connector/relay: this
+	// protocol layer reads a byte stream (response header, then
+	// length-prefixed frames) over a possibly datagram-oriented
+	// transport; small reads would discard datagram tails (F-UDP-2).
+	conn = xudp.NewStreamConn(conn)
 
 	req := relay.Request{
 		Version: relay.Version1,

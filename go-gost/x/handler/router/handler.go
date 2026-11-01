@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	ErrBadVersion   = errors.New("bad version")
+	ErrBadVersion   = errors.New("router: bad version")
 	ErrUnknownCmd   = errors.New("unknown command")
 	ErrRouterID     = errors.New("invalid router ID")
 	ErrUnauthorized = errors.New("unauthorized")
@@ -159,7 +159,10 @@ func (h *routerHandler) Handle(ctx context.Context, conn net.Conn, opts ...handl
 
 	req := relay.Request{}
 	if _, err := req.ReadFrom(conn); err != nil {
-		return err
+		// Wrap with the layer: the relay module's own ErrBadVersion
+		// text ("bad version") is identical across layers and
+		// misdirected diagnosis before (F-UDP-8).
+		return fmt.Errorf("router: read request: %w", err)
 	}
 
 	conn.SetReadDeadline(time.Time{})

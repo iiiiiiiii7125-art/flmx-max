@@ -31,6 +31,9 @@ func (c *relayConnector) Bind(ctx context.Context, conn net.Conn, network, addre
 	case "tcp", "tcp4", "tcp6":
 		return c.bindTCP(ctx, conn, network, address, log)
 	case "udp", "udp4", "udp6":
+		// Same datagram-transport hazard as in Connect: the bind
+		// handshake is parsed with small stream reads (F-UDP-2).
+		conn = udp.NewStreamConn(conn)
 		return c.bindUDP(ctx, conn, network, address, &options, log)
 	default:
 		err := fmt.Errorf("network %s is unsupported", network)
@@ -111,7 +114,7 @@ func (c *relayConnector) bind(conn net.Conn, cmd relay.CmdType, network, address
 	// first reply, bind status
 	resp := relay.Response{}
 	if _, err := resp.ReadFrom(conn); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("relay connector bind: read response: %w", err)
 	}
 
 	if resp.Status != relay.StatusOK {

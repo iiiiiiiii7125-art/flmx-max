@@ -10,6 +10,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	"github.com/go-gost/relay"
 	ctxvalue "github.com/go-gost/x/ctx"
+	xudp "github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/registry"
 )
 
@@ -63,6 +64,10 @@ func (c *tunnelConnector) Connect(ctx context.Context, conn net.Conn, network, a
 		req.Features = append(req.Features, &relay.NetworkFeature{
 			Network: relay.NetworkUDP,
 		})
+		// Same datagram-transport hazard as connector/relay:
+		// stream-style reads must not discard datagram tails
+		// (F-UDP-2).
+		conn = xudp.NewStreamConn(conn)
 	}
 
 	if c.options.Auth != nil {

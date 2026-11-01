@@ -15,9 +15,16 @@ import (
 
 type packetConn struct {
 	net.Conn
+	rbuf []byte // unread remainder of the current frame
 }
 
 func (c *packetConn) Read(b []byte) (n int, err error) {
+	if len(c.rbuf) > 0 {
+		n = copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
+	}
+
 	var bb [2]byte
 	_, err = io.ReadFull(c.Conn, bb[:])
 	if err != nil {
@@ -32,8 +39,12 @@ func (c *packetConn) Read(b []byte) (n int, err error) {
 	buf := bufpool.Get(dlen)
 	defer bufpool.Put(buf)
 
-	n, err = io.ReadFull(c.Conn, buf)
-	copy(b, buf[:n])
+	_, err = io.ReadFull(c.Conn, buf)
+	if err != nil {
+		return
+	}
+	n = copy(b, buf[:dlen])
+	c.rbuf = append(c.rbuf, buf[n:dlen]...)
 
 	return
 }
@@ -61,7 +72,7 @@ func readResponse(r io.Reader) (err error) {
 	}
 
 	if resp.Version != relay.Version1 {
-		err = relay.ErrBadVersion
+		err = fmt.Errorf("router connector: %w", relay.ErrBadVersion)
 		return
 	}
 
