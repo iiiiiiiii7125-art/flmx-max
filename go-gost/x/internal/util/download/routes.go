@@ -25,12 +25,17 @@ import (
 //
 //  1. Probe DIRECT alone against the real small target (the
 //     release's .sha256 file). Admitted (file delivered, content
-//     parseable) within ProbeRouteTimeout → download goes direct
+//     parseable) within ProbeRouteTimeout AND fast enough
+//     (DirectShortCircuitMaxLatency) → download goes direct
 //     and no proxy is ever probed. Overseas nodes with working
-//     direct GitHub access pay zero proxy overhead.
-//  2. Direct not admitted → probe the mirrors in parallel and
-//     rank the admitted ones by measured latency; downloads try
-//     them in rank order, switching on any attempt failure.
+//     direct GitHub access pay zero proxy overhead. A direct
+//     route that is admitted but SLOW skips the short-circuit
+//     and competes in the stage-2 ranking with its measured
+//     latency (see DirectShortCircuitMaxLatency).
+//  2. Direct not admitted (or admitted but slow) → probe the
+//     mirrors in parallel and rank the admitted ones by measured
+//     latency; downloads try them in rank order, switching on
+//     any attempt failure.
 //  3. If the admitted direct route fails mid-download, the plan
 //     advances: mirrors are probed then (if not yet) and the
 //     download continues down the ranking. If no probe admits
@@ -65,6 +70,22 @@ var (
 	ProbeRouteTimeout = 3 * time.Second
 	ProbeBudget       = 4 * time.Second
 )
+
+// DirectShortCircuitMaxLatency bounds the stage-1 short-circuit:
+// an admitted direct route whose probe — a fetch of the tiny
+// checksum file — already took longer than this does NOT get the
+// download to itself. The caliber behind the bound (production
+// report 2026-11-01): a route needing >800ms for the small probe
+// file moves the ~10MB body at a trickle relative to the shared
+// 240s whole-operation budget; short-circuiting on it let the
+// direct leg eat the budget while every mirror leg died on the
+// expired context. A slow direct route is not discarded either:
+// it keeps its measured latency and joins the stage-2 parallel
+// ranking, so it still wins exactly when it is genuinely the
+// fastest admitted route. Below the bound, behavior is unchanged
+// (overseas nodes with healthy direct access keep paying zero
+// proxy overhead). A var so tests can adjust it.
+var DirectShortCircuitMaxLatency = 800 * time.Millisecond
 
 // Route is one download route: a mirror prefix, or direct when
 // Prefix is "". Latency/Probed are set when the route was admitted
@@ -196,11 +217,12 @@ collect:
 // that all share the plan's probe results but iterate it
 // independently via TryPlan). Stages resolve on demand:
 //
-//	stage 1: direct, admitted by its solo probe;
+//	stage 1: direct, admitted fast by its solo probe;
 //	stage 2: mirrors, admitted by a parallel probe, latency-ranked
-//	         (entered immediately when the direct probe fails, or
-//	         via Advance when an admitted direct route fails
-//	         mid-download);
+//	         (entered immediately when the direct probe fails or
+//	         the admitted direct route is slow — in which case
+//	         direct joins the ranking — or via Advance when an
+//	         admitted direct route fails mid-download);
 //	stage 3: static tail — every route not yet tried, in
 //	         AllRoutes order (the all-probes-dead degradation).
 //
@@ -238,11 +260,21 @@ func (p *Plan) prepare() {
 		p.current = AllRoutes()
 		return
 	}
-	// Stage 1: direct alone, short-circuit.
+	// Stage 1: direct alone, short-circuit — unless the admitted
+	// direct route is slow (DirectShortCircuitMaxLatency): then
+	// it joins the stage-2 ranking with its measured latency
+	// instead of monopolizing the download.
 	if r, ok := probeOne(p.ctx, p.target, Route{}, p.probe); ok {
-		p.stage = 1
-		p.current = []Route{r}
+		if r.Latency <= DirectShortCircuitMaxLatency {
+			p.stage = 1
+			p.current = []Route{r}
+			p.probed = []Route{r}
+			return
+		}
 		p.probed = []Route{r}
+		p.enterMirrors()
+		p.current = append(p.current, r)
+		sort.SliceStable(p.current, func(i, j int) bool { return p.current[i].Latency < p.current[j].Latency })
 		return
 	}
 	p.enterMirrors()
