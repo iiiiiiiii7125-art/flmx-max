@@ -1573,7 +1573,12 @@ export default function SubscriptionPage() {
                     {SUB_CLIENTS.map((c) => {
                       const link = url(detail, c.format);
                       const open = () => {
-                        if (c.importURL) {
+                        if (detail.options.rules && c.configImportURL) {
+                          window.location.href = c.configImportURL(
+                            link,
+                            detail.name,
+                          );
+                        } else if (c.importURL) {
                           window.location.href = c.importURL(link, detail.name);
                         } else {
                           copyText(link, `${c.label}订阅已复制`);
