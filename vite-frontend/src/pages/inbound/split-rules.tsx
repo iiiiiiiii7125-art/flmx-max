@@ -36,10 +36,10 @@ export const ruleFromTarget = (key: string): Partial<SplitRuleForm> =>
     : { action: "proxy", outboundId: key };
 
 const chipClass = (on: boolean) =>
-  `rounded-full border px-3 py-1 text-xs transition-colors ${
+  `rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
     on
       ? "border-primary bg-primary text-primary-foreground"
-      : "border-divider bg-content1 text-default-600"
+      : "border-divider glass-inset text-foreground"
   }`;
 
 const countEntries = (v: string) => v.split(/[\s,，]+/).filter(Boolean).length;
@@ -93,7 +93,7 @@ export function SplitRulesEditor({
   return (
     <div className="space-y-2">
       {rules.length === 0 && (
-        <div className="rounded-xl border border-dashed border-divider px-4 py-6 text-center text-sm text-default-500">
+        <div className="rounded-xl border border-dashed border-divider px-4 py-6 text-center text-sm text-foreground">
           还没有分流规则，所有流量走默认去向
         </div>
       )}
@@ -118,7 +118,7 @@ export function SplitRulesEditor({
         return (
           <div
             key={i}
-            className={`overflow-hidden rounded-xl border bg-content1 ${
+            className={`overflow-hidden rounded-xl glass-card ${
               isOpen ? "border-primary/40" : "border-divider"
             }`}
           >
@@ -134,23 +134,23 @@ export function SplitRulesEditor({
               <span className="min-w-0 flex-1">
                 <span
                   className={`block truncate text-sm ${
-                    match ? "font-medium" : "text-default-400"
+                    match ? "font-medium" : "text-foreground"
                   }`}
                 >
                   {match || "未选择匹配内容"}
                 </span>
                 <span
-                  className={`block truncate text-xs ${
+                  className={`block truncate text-xs font-semibold ${
                     r.action === "block" || missing || !target
-                      ? "text-danger"
-                      : "text-default-500"
+                      ? "text-danger-700"
+                      : "text-foreground"
                   }`}
                 >
                   → {targetName}
                 </span>
               </span>
               <ChevronDown
-                className={`h-4 w-4 shrink-0 text-default-400 transition-transform ${
+                className={`h-4 w-4 shrink-0 text-foreground transition-transform ${
                   isOpen ? "rotate-180" : ""
                 }`}
               />
@@ -159,7 +159,7 @@ export function SplitRulesEditor({
               <div className="space-y-3 border-t border-divider px-3 pb-3 pt-3">
                 {groups.map((g) => (
                   <div key={g} className="space-y-1.5">
-                    <p className="text-[11px] text-default-400">{g}</p>
+                    <p className="text-[11px] font-semibold text-foreground">{g}</p>
                     <div className="flex flex-wrap gap-1.5">
                       {categories
                         .filter((c) => c.group === g)
@@ -208,7 +208,7 @@ export function SplitRulesEditor({
                   </div>
                 ) : (
                   <button
-                    className="text-xs text-primary"
+                    className="text-xs font-semibold text-primary-700"
                     type="button"
                     onClick={() =>
                       setCustomOpen((prev) => new Set(prev).add(i))
@@ -218,7 +218,7 @@ export function SplitRulesEditor({
                   </button>
                 )}
                 <div className="space-y-1.5">
-                  <p className="text-[11px] text-default-400">去向</p>
+                  <p className="text-[11px] font-semibold text-foreground">去向</p>
                   <TargetButton
                     missing={missing}
                     targets={targets}
@@ -226,7 +226,7 @@ export function SplitRulesEditor({
                     onPress={() => onChooseTarget(i)}
                   />
                   {missing && (
-                    <p className="text-xs text-danger">
+                    <p className="text-xs font-semibold text-danger-700">
                       所选节点已被删除，匹配的流量会被丢弃，请重新选择
                     </p>
                   )}
@@ -271,7 +271,7 @@ export function SplitRulesEditor({
         );
       })}
       <button
-        className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/40 py-2.5 text-sm text-primary active:bg-primary/5"
+        className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/40 py-2.5 text-sm text-primary-700 active:bg-primary/5"
         type="button"
         onClick={() => {
           onChange([...rules, emptySplitRule()]);

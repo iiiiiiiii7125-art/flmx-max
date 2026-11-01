@@ -650,8 +650,8 @@ export default function InboundPage() {
           aria-pressed={selectMode ? selected : undefined}
           className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
             selected
-              ? "border-primary bg-primary-50 dark:bg-primary-900"
-              : "border-divider bg-content1 hover:bg-default-100"
+              ? "border-primary bg-primary-500/10"
+              : "glass-card hover:bg-white/40"
           }`}
           role="button"
           tabIndex={0}
@@ -680,10 +680,10 @@ export default function InboundPage() {
             )}
             <div className="min-w-0 flex-1">
               <div className="truncate font-semibold">{item.name}</div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-default-500">
+              <div className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-foreground">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
                 <span
-                  className={`truncate ${unreachable ? "text-danger" : kernelBad ? "text-warning" : ""}`}
+                  className={`truncate ${unreachable ? "text-danger-700" : kernelBad ? "text-warning-700" : ""}`}
                 >
                   {stateText}
                 </span>
@@ -714,11 +714,11 @@ export default function InboundPage() {
                 IEPL专用
               </Chip>
             )}
-            <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+            <span className="rounded-full bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
               端口 {item.port}
             </span>
             {where && (
-              <span className="max-w-full truncate rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+              <span className="max-w-full truncate rounded-full bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
                 {where}
               </span>
             )}
@@ -757,7 +757,7 @@ export default function InboundPage() {
               </Chip>
             )}
             {item.relayOnly && (
-              <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+              <span className="rounded-full bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
                 仅中转
               </span>
             )}
@@ -778,11 +778,11 @@ export default function InboundPage() {
             )}
           </div>
           {!item.external && (
-            <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs">
-              <div className="rounded-lg bg-default-100 py-1.5">
+            <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs font-semibold">
+              <div className="rounded-lg glass-inset py-1.5">
                 ↑ {formatTraffic(item.uploadBytes)}
               </div>
-              <div className="rounded-lg bg-default-100 py-1.5">
+              <div className="rounded-lg glass-inset py-1.5">
                 ↓ {formatTraffic(item.downloadBytes)}
               </div>
             </div>
@@ -828,8 +828,8 @@ export default function InboundPage() {
         aria-pressed={selectMode ? selected : undefined}
         className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
           selected
-            ? "border-primary bg-primary-50 dark:bg-primary-900"
-            : "border-divider bg-content1 hover:bg-default-100"
+            ? "border-primary bg-primary-500/10"
+            : "glass-card hover:bg-white/40"
         }`}
         role="button"
         tabIndex={0}
@@ -996,7 +996,7 @@ export default function InboundPage() {
               </Chip>
             )}
           </div>
-          <div className="truncate text-xs text-default-500">
+          <div className="truncate text-xs font-semibold text-foreground">
             {describeInbound(item)} · {item.port}
             {where ? ` · ${where}` : ""}
             {item.enabled && probe?.ok ? ` · ${probe.latencyMs} ms` : ""}
@@ -1006,7 +1006,7 @@ export default function InboundPage() {
             </span>
           </div>
         </div>
-        <div className="hidden shrink-0 text-right font-mono text-xs text-default-500 sm:block">
+        <div className="hidden shrink-0 text-right font-mono text-xs font-semibold text-foreground sm:block">
           <div>↑ {formatTraffic(item.uploadBytes)}</div>
           <div>↓ {formatTraffic(item.downloadBytes)}</div>
         </div>
@@ -1091,7 +1091,7 @@ export default function InboundPage() {
         key: "sources",
         label: "订阅源",
         badge: sources.some((s) => s.lastError) ? (
-          <span className="text-danger">异常</span>
+          <span className="text-danger-700">异常</span>
         ) : (
           sources.length || undefined
         ),
@@ -1100,21 +1100,21 @@ export default function InboundPage() {
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+      <div className="glass-surface mb-4 grid grid-cols-3 gap-1 rounded-xl p-1 sm:max-w-md">
         {tabs.map((t) => (
           <button
             key={t.key}
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
               tab === t.key
-                ? "bg-background font-medium shadow-sm"
-                : "text-default-600"
+                ? "bg-tray font-semibold shadow-sm"
+                : "text-foreground"
             }`}
             type="button"
             onClick={() => setTab(t.key)}
           >
             {t.label}
             {t.badge !== undefined && (
-              <span className="ml-1 text-xs font-medium text-default-500">
+              <span className="ml-1 text-xs font-semibold text-foreground">
                 {t.badge}
               </span>
             )}
@@ -1145,7 +1145,7 @@ export default function InboundPage() {
             {nodeOptions.length > 1 && (
               <select
                 aria-label="按节点筛选"
-                className="h-8 max-w-[10rem] rounded-lg border border-divider bg-background px-2 text-sm"
+                className="h-8 max-w-[10rem] rounded-lg border border-divider bg-content1 px-2 text-sm"
                 value={nodeFilter}
                 onChange={(e) => setNodeFilter(e.target.value)}
               >
@@ -1170,7 +1170,7 @@ export default function InboundPage() {
               )}
               {inbounds.length > 0 && (
                 <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900 dark:text-sky-300 dark:hover:bg-sky-800"
+                  className="bg-sky-500/10 font-semibold text-sky-700 hover:bg-sky-500/20"
                   size="sm"
                   variant="flat"
                   onPress={() => setSelectMode(true)}
@@ -1214,8 +1214,8 @@ export default function InboundPage() {
           </div>
 
           {selectMode && (
-            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background px-3 py-2 shadow-sm backdrop-blur">
-              <span className="text-sm text-default-600">
+            <div className="glass-surface sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2">
+              <span className="text-sm text-foreground">
                 已选 {selectedIds.size} 个
               </span>
               <div className="ml-auto flex flex-wrap justify-end gap-2">
@@ -1263,12 +1263,12 @@ export default function InboundPage() {
           )}
 
           {filtered.length === 0 ? (
-            <Card className="shadow-sm bg-default-50">
+            <Card className="shadow-sm">
               <CardBody className="text-center py-16 flex flex-col items-center justify-center gap-3">
                 <h3 className="text-lg font-medium">
                   {inbounds.length === 0 ? "暂无入站" : "没有匹配的入站"}
                 </h3>
-                <p className="text-default-500 text-sm max-w-sm">
+                <p className="text-foreground text-sm max-w-sm">
                   {kernels.length === 0 && inbounds.length === 0
                     ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
                     : inbounds.length === 0
@@ -1524,19 +1524,19 @@ export default function InboundPage() {
               </Chip>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-default-500">流量</span>
-              <span className="font-mono text-xs">
+              <span className="text-foreground">流量</span>
+              <span className="font-mono text-xs font-semibold">
                 ↑ {formatTraffic(sheetItem.uploadBytes)} · ↓{" "}
                 {formatTraffic(sheetItem.downloadBytes)}
               </span>
             </div>
             {sheetItem.external && (
-              <p className="text-xs text-default-500">
+              <p className="text-xs font-semibold text-foreground">
                 没有流量统计；原服务器上的配置变了，请在“编辑”里同步
               </p>
             )}
             {sheetItem.remark && (
-              <p className="text-xs text-default-500">{sheetItem.remark}</p>
+              <p className="text-xs font-semibold text-foreground">{sheetItem.remark}</p>
             )}
           </div>
         )}
@@ -1598,7 +1598,7 @@ export default function InboundPage() {
             <>
               <ModalHeader className="flex flex-col gap-1">
                 <h2 className="text-lg font-bold">{details?.name}</h2>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   手动配置客户端时使用；一般直接用“分享”或订阅导入即可
                 </p>
               </ModalHeader>
@@ -1610,7 +1610,7 @@ export default function InboundPage() {
                         key={k}
                         className="flex items-center justify-between gap-3 py-2"
                       >
-                        <span className="text-sm text-default-500 shrink-0">
+                        <span className="text-sm text-foreground shrink-0">
                           {k}
                         </span>
                         <div className="flex items-center gap-1 min-w-0">
@@ -1655,20 +1655,20 @@ export default function InboundPage() {
                 <ModalHeader>
                   <h2
                     className={`text-lg font-bold ${
-                      confirm.action === "delete" ? "text-danger" : ""
+                      confirm.action === "delete" ? "text-danger-700" : ""
                     }`}
                   >
                     {CONFIRM_TEXT[confirm.action].title}
                   </h2>
                 </ModalHeader>
                 <ModalBody>
-                  <p className="text-default-600">
+                  <p className="text-foreground">
                     入站{" "}
                     <span className="font-semibold text-foreground">
                       {confirm.item.name}
                     </span>
                   </p>
-                  <p className="text-small text-default-500">
+                  <p className="text-small text-foreground">
                     {confirm.item.external && confirm.action === "delete"
                       ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
                       : CONFIRM_TEXT[confirm.action].body}
@@ -1707,15 +1707,15 @@ export default function InboundPage() {
             return (
               <>
                 <ModalHeader>
-                  <h2 className="text-lg font-bold text-danger">
+                  <h2 className="text-lg font-bold text-danger-700">
                     删除 {chosen.length} 个入站
                   </h2>
                 </ModalHeader>
                 <ModalBody>
-                  <p className="max-h-40 overflow-y-auto text-small text-default-600 break-all">
+                  <p className="max-h-40 overflow-y-auto text-small text-foreground break-all">
                     {chosen.map((i) => i.name).join("、")}
                   </p>
-                  <p className="text-small text-default-500">
+                  <p className="text-small text-foreground">
                     {panelOnly
                       ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
                       : "相关中转会一并删除；面板创建的入站会在节点上立即停止，且无法恢复。"}

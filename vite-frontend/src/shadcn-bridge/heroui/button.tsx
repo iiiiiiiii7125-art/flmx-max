@@ -83,53 +83,57 @@ function mapSize(
 }
 
 const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
-  default: "bg-default-200 text-default-800 shadow-none hover:bg-default-300",
-  success: "bg-success text-white shadow-sm hover:bg-success/90",
-  warning: "bg-warning text-white shadow-sm hover:bg-warning/90",
+  default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
+  // Round 6: bright success/warning/danger solids pair with white at
+  // only ≈2.2/2.0/4.1 — rest on the -800 shades (≈7.1/7.1/6.9) and
+  // hover one shade up. The default rests on the glass wash instead:
+  // the old opaque 200-stop slab read as a pale board on the wallpaper.
+  success: "bg-success-800 text-white shadow-sm hover:bg-success-700",
+  warning: "bg-warning-800 text-white shadow-sm hover:bg-warning-700",
   primary:
-    "bg-gradient-to-r from-primary-500 to-secondary-500 text-white shadow-sm hover:from-primary-600 hover:to-secondary-600",
+    "bg-gradient-to-r from-primary-700 to-secondary-700 text-white shadow-sm hover:from-primary-800 hover:to-secondary-800",
   secondary:
     "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/90",
-  danger: "bg-danger text-white shadow-sm hover:bg-danger/90",
+  danger: "bg-danger-800 text-white shadow-sm hover:bg-danger-700",
 };
 
+// Round 6: bordered labels sat directly on glass at -700, which the
+// rendered sampling put at ~2.5 over the wallpaper's dark streak. They
+// keep their outline identity but gain a white/25 blurred carrier and
+// the -800 label shade; hover lifts the carrier, not a colour wash.
 const borderedColorClassMap: Record<HeroButtonColor, string> = {
   default:
-    "border-default-300 text-default-700 hover:bg-default-100 dark:border-default-200 dark:text-default-600 dark:hover:bg-default-100",
+    "border-default-300 bg-white/25 backdrop-blur-[3px] text-default-800 hover:bg-white/40",
   primary:
-    "border-primary/50 text-primary hover:bg-primary/5 dark:text-primary-300 dark:hover:bg-primary/10",
+    "border-primary/50 bg-white/25 backdrop-blur-[3px] text-primary-800 hover:bg-white/40",
   secondary:
-    "border-secondary/50 text-secondary hover:bg-secondary/5 dark:text-secondary-300 dark:hover:bg-secondary/10",
+    "border-secondary/50 bg-white/25 backdrop-blur-[3px] text-secondary-800 hover:bg-white/40",
   success:
-    "border-success/50 text-success hover:bg-success/5 dark:text-success-300 dark:hover:bg-success/10",
+    "border-success/50 bg-white/25 backdrop-blur-[3px] text-success-800 hover:bg-white/40",
   warning:
-    "border-warning/50 text-warning-700 hover:bg-warning/5 dark:text-warning-300 dark:hover:bg-warning/10",
+    "border-warning/50 bg-white/25 backdrop-blur-[3px] text-warning-800 hover:bg-white/40",
   danger:
-    "border-danger/50 text-danger hover:bg-danger/5 dark:text-danger-300 dark:hover:bg-danger/10",
+    "border-danger/50 bg-white/25 backdrop-blur-[3px] text-danger-800 hover:bg-white/40",
 };
 
-// Round 4 tray standard: light buttons sit on the neutral tray with a
-// coloured label; flat buttons sit on the semantic tint tray. Both are
-// opaque in either theme, so coloured text never lands on glass or
-// wallpaper (the pre-Round 4 /10 tints and bg-transparent light were the
-// factory of the invisible-text bug family).
+// Round 6 final verdict on light buttons: the glass-wash carrier was
+// tried first, but rendered sampling over the wallpaper's dark streak
+// put wash + semantic-label pairs at 2.2-4.4 local contrast — under the
+// floor. Light buttons therefore take the user-sanctioned tray fallback
+// (tinted solid tray + deepest label, >= 8 measured): the same tray
+// tokens as flat. Button scale is chip scale, not a board. The flat and
+// solid defaults keep the glass wash (near-black label, verified).
 const lightColorClassMap: Record<HeroButtonColor, string> = {
-  default:
-    "bg-tray text-default-700 shadow-sm hover:bg-default-100 dark:text-default-600 dark:hover:bg-default-200",
-  primary:
-    "bg-tray text-primary-700 shadow-sm hover:bg-primary-50 dark:text-primary-300 dark:hover:bg-primary-900",
-  secondary:
-    "bg-tray text-secondary-700 shadow-sm hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-900",
-  success:
-    "bg-tray text-success-700 shadow-sm hover:bg-success-50 dark:text-success-300 dark:hover:bg-success-900",
-  warning:
-    "bg-tray text-warning-700 shadow-sm hover:bg-warning-50 dark:text-warning-300 dark:hover:bg-warning-900",
-  danger:
-    "bg-tray text-danger-700 shadow-sm hover:bg-danger-50 dark:text-danger-300 dark:hover:bg-danger-900",
+  default: "tray-default shadow-sm",
+  primary: "tray-primary shadow-sm",
+  secondary: "tray-secondary shadow-sm",
+  success: "tray-success shadow-sm",
+  warning: "tray-warning shadow-sm",
+  danger: "tray-danger shadow-sm",
 };
 
 const flatColorClassMap: Record<HeroButtonColor, string> = {
-  default: "tray-default",
+  default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
   primary: "tray-primary",
   secondary: "tray-secondary",
   success: "tray-success",

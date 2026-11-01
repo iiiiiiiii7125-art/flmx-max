@@ -50,11 +50,11 @@ export function InstallCommandModal({
         <ModalBody>
           <div className="space-y-4">
             {installWarning ? (
-              <div className="rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-800 dark:border-danger-900/40 dark:bg-danger-950 dark:text-danger-200">
+              <div className="rounded-xl border border-danger-500/25 bg-danger-500/10 px-3 py-2 text-sm font-medium text-danger-800">
                 ⚠️ {installWarning}
               </div>
             ) : null}
-            <p className="text-sm text-default-600">
+            <p className="text-sm text-foreground">
               请复制以下安装命令到服务器上执行：
             </p>
             <div className="relative">
@@ -79,10 +79,10 @@ export function InstallCommandModal({
                 复制
               </Button>
             </div>
-            <div className="text-xs text-default-500">
+            <div className="text-xs font-semibold text-foreground">
               💡 提示：如果复制按钮失效，请手动选择上方文本进行复制
             </div>
-            <div className="text-xs text-default-500">
+            <div className="text-xs font-semibold text-foreground">
               ✅ 执行后确认上线：脚本显示「安装完成」只代表 agent
               服务已启动，不代表已连上面板。请回到节点列表确认该节点显示为
               <b>在线</b>；若未上线，在节点服务器执行{" "}
@@ -175,7 +175,7 @@ export function UpgradeNodeModal({
                       <SelectItem key={r.version} textValue={r.version}>
                         <div className="flex justify-between items-center">
                           <span>{r.version}</span>
-                          <span className="text-xs text-default-400">
+                          <span className="text-xs font-semibold text-foreground">
                             {r.publishedAt
                               ? new Date(r.publishedAt).toLocaleDateString()
                               : ""}
@@ -194,7 +194,7 @@ export function UpgradeNodeModal({
                       </SelectItem>
                     ))}
                   </Select>
-                  <p className="text-sm text-default-500">
+                  <p className="text-sm text-foreground">
                     {selectedVersion
                       ? `将升级到版本 ${selectedVersion}`
                       : "未选择版本，将自动使用最新版"}

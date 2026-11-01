@@ -564,18 +564,18 @@ export default function PanelSharingPage() {
               <span className="text-sm font-semibold text-foreground">
                 Provider
               </span>
-              <span className="text-xs text-default-500">我分享的</span>
+              <span className="text-xs font-semibold text-foreground">我分享的</span>
             </div>
           }
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50 dark:bg-default-100 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider glass-inset p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Provider 共享
                   </h2>
-                  <p className="text-sm text-default-500">
+                  <p className="text-sm text-foreground">
                     将本地节点分享给其他面板，统一管理
                     Token、端口范围和到期策略。
                   </p>
@@ -590,15 +590,15 @@ export default function PanelSharingPage() {
               </div>
 
               {loading ? (
-                <div className="text-center py-12 text-default-500">
+                <div className="text-center py-12 text-foreground">
                   加载中...
                 </div>
               ) : shares.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50 dark:bg-default-100 px-6 py-10 text-center">
+                <div className="rounded-lg border border-dashed border-divider px-6 py-10 text-center">
                   <p className="text-base font-semibold text-foreground">
                     暂无分享
                   </p>
-                  <p className="mt-2 text-sm text-default-500">
+                  <p className="mt-2 text-sm text-foreground">
                     先创建一个分享，把本地节点开放给其他面板使用。
                   </p>
                   <div className="mt-5 flex justify-center">
@@ -678,7 +678,7 @@ export default function PanelSharingPage() {
                               {share.usedPortDetails.map((item) => (
                                 <span
                                   key={item.runtimeId}
-                                  className="text-xs rounded-full px-2 py-1 bg-default-100"
+                                  className="text-xs font-semibold rounded-full px-2 py-1 bg-tray"
                                 >
                                   {item.port} / {item.role || "reserved"}
                                 </span>
@@ -721,18 +721,18 @@ export default function PanelSharingPage() {
               <span className="text-sm font-semibold text-foreground">
                 Consumer
               </span>
-              <span className="text-xs text-default-500">远程节点</span>
+              <span className="text-xs font-semibold text-foreground">远程节点</span>
             </div>
           }
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50 dark:bg-default-100 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider glass-inset p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Consumer 接入
                   </h2>
-                  <p className="text-sm text-default-500">
+                  <p className="text-sm text-foreground">
                     导入远程节点后，可在这里查看端口占用和同步状态。
                   </p>
                 </div>
@@ -746,15 +746,15 @@ export default function PanelSharingPage() {
               </div>
 
               {remoteUsageLoading ? (
-                <div className="text-center py-12 text-default-500">
+                <div className="text-center py-12 text-foreground">
                   加载中...
                 </div>
               ) : remoteUsageNodes.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50 dark:bg-default-100 px-6 py-10 text-center">
+                <div className="rounded-lg border border-dashed border-divider px-6 py-10 text-center">
                   <p className="text-base font-semibold text-foreground">
                     暂无远程节点占用记录
                   </p>
-                  <p className="mt-2 text-sm text-default-500">
+                  <p className="mt-2 text-sm text-foreground">
                     导入远程节点并创建隧道后，这里会显示远端端口占用情况。
                   </p>
                   <div className="mt-5 flex justify-center">
@@ -773,13 +773,13 @@ export default function PanelSharingPage() {
                     <Card key={node.nodeId} className="overflow-hidden">
                       <CardHeader className="flex justify-between pb-2 md:pb-2">
                         <h3 className="font-bold">{node.nodeName}</h3>
-                        <span className="text-xs text-default-500">
+                        <span className="text-xs font-semibold text-foreground">
                           绑定 {node.activeBindingNum || 0}
                         </span>
                       </CardHeader>
                       <CardBody className="text-sm space-y-2 pt-0 md:pt-0">
                         {node.syncError && (
-                          <div className="px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-900 text-warning-700 dark:text-warning-400 text-xs">
+                          <div className="px-2 py-1.5 rounded-md bg-warning-500/10 text-warning-700 text-xs font-semibold">
                             {node.syncError === "provider_share_deleted"
                               ? "提供方已删除该分享"
                               : node.syncError === "provider_share_disabled"
@@ -814,7 +814,7 @@ export default function PanelSharingPage() {
                             {node.bindings.map((binding) => (
                               <p
                                 key={binding.bindingId}
-                                className="text-xs text-default-600"
+                                className="text-xs font-semibold text-foreground"
                               >
                                 隧道{" "}
                                 {binding.tunnelName || `#${binding.tunnelId}`}
@@ -1119,7 +1119,7 @@ export default function PanelSharingPage() {
         <ModalContent>
           <ModalHeader>{pendingShareConfirm?.title}</ModalHeader>
           <ModalBody>
-            <p className="text-sm text-default-600">
+            <p className="text-sm text-foreground">
               {pendingShareConfirm?.description}
             </p>
           </ModalBody>

@@ -155,51 +155,51 @@ function Metric({
 
   return (
     <button
-      className="glass-card rounded-2xl p-1.5 text-left shadow-sm transition-shadow hover:shadow-md"
+      className="glass-card rounded-2xl p-4 text-left shadow-sm transition-shadow hover:shadow-md lg:p-5"
       type="button"
       onClick={onPress}
     >
-      <div className="flex h-full flex-col rounded-[14px] bg-tray p-4 lg:p-5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm text-default-600">{label}</span>
-          <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
-            <Icon className={`h-4 w-4 lg:h-5 lg:w-5 ${iconColor}`} />
+      {/* Round 5 anchor (kernel page cards): one clear-glass surface,
+          content directly on the glass; only the icon chip is a tray. */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-sm text-foreground">{label}</span>
+        <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
+          <Icon className={`h-4 w-4 lg:h-5 lg:w-5 ${iconColor}`} />
+        </span>
+      </div>
+      <div className="mt-2 text-2xl font-bold lg:text-3xl">
+        {value}
+        {total !== undefined && (
+          <span className="ml-1 text-base font-normal text-foreground">
+            / {total}
           </span>
-        </div>
-        <div className="mt-2 text-2xl font-bold lg:text-3xl">
-          {value}
-          {total !== undefined && (
-            <span className="ml-1 text-base font-normal text-default-400">
-              / {total}
-            </span>
-          )}
-        </div>
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-default-100">
-          {total !== undefined && total > 0 && (
-            <div
-              className={`h-full rounded-full ${bar}`}
-              style={{ width: `${pct}%` }}
-            />
-          )}
-        </div>
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-          <span
-            className={`truncate ${
-              footTone === "danger"
-                ? "text-danger"
-                : footTone === "warning"
-                  ? "text-warning-600"
-                  : footTone === "success"
-                    ? "text-success-600"
-                    : "text-default-500"
-            }`}
-          >
-            {foot}
-          </span>
-          {footRight && (
-            <span className="shrink-0 text-default-400">{footRight}</span>
-          )}
-        </div>
+        )}
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-default-100">
+        {total !== undefined && total > 0 && (
+          <div
+            className={`h-full rounded-full ${bar}`}
+            style={{ width: `${pct}%` }}
+          />
+        )}
+      </div>
+      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs font-semibold">
+        <span
+          className={`truncate ${
+            footTone === "danger"
+              ? "tray-danger rounded-full px-1.5 py-0.5"
+              : footTone === "warning"
+                ? "tray-warning rounded-full px-1.5 py-0.5"
+                : footTone === "success"
+                  ? "tray-success rounded-full px-1.5 py-0.5"
+                  : "text-foreground"
+          }`}
+        >
+          {foot}
+        </span>
+        {footRight && (
+          <span className="shrink-0 text-foreground">{footRight}</span>
+        )}
       </div>
     </button>
   );
@@ -217,15 +217,13 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="glass-card rounded-2xl p-1.5 shadow-sm">
-      <div className="rounded-[14px] bg-tray p-4 lg:p-5">
-        <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
-          {badge}
-          {action && <div className="ml-auto">{action}</div>}
-        </div>
-        {children}
+    <section className="glass-card rounded-2xl p-4 shadow-sm lg:p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
+        {badge}
+        {action && <div className="ml-auto">{action}</div>}
       </div>
+      {children}
     </section>
   );
 }
@@ -458,7 +456,7 @@ export function AdminOverview() {
     <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
       <div>
         <h1 className="text-lg font-semibold">概览</h1>
-        <p className="text-xs text-default-500">
+        <p className="text-xs font-semibold text-foreground">
           {new Date().toLocaleDateString("zh-CN", {
             month: "long",
             day: "numeric",
@@ -469,7 +467,7 @@ export function AdminOverview() {
       </div>
 
       {loadError && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700 dark:border-warning-500/30 dark:bg-warning-900 dark:text-warning-400">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-warning-500/25 bg-warning-500/10 px-4 py-3 text-sm font-medium text-warning-700">
           <span>
             部分数据加载失败，当前显示可能不完整，请勿据此判断系统状态。
           </span>
@@ -605,7 +603,7 @@ export function AdminOverview() {
                   数据加载失败，暂时无法判断
                 </p>
               ) : (
-                <p className="py-3 text-center text-sm text-success-600">
+                <p className="py-3 text-center text-sm text-success-700 dark:text-success-400">
                   一切正常
                 </p>
               )
@@ -625,8 +623,8 @@ export function AdminOverview() {
                       key={g.kind}
                       className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
                         danger
-                          ? "border-danger-100 bg-danger-50 hover:bg-danger-100 dark:border-danger-800 dark:bg-danger-900 dark:hover:bg-danger-800"
-                          : "border-warning-100 bg-warning-50 hover:bg-warning-100 dark:border-warning-800 dark:bg-warning-900 dark:hover:bg-warning-800"
+                          ? "border-danger-300 bg-danger-500/10 hover:bg-danger-500/20"
+                          : "border-warning-300 bg-warning-500/10 hover:bg-warning-500/20"
                       }`}
                       type="button"
                       onClick={() => navigate(meta.path)}
@@ -640,27 +638,27 @@ export function AdminOverview() {
                         <span className="block text-sm font-semibold">
                           {meta.label(g.items.length)}
                         </span>
-                        <span className="block truncate text-xs text-default-500">
+                        <span className="block truncate text-xs font-semibold text-foreground">
                           {hint}
                         </span>
                         <span className="mt-1.5 flex flex-wrap gap-1.5">
                           {g.items.slice(0, 6).map((it) => (
                             <span
                               key={it.name}
-                              className="max-w-[12rem] truncate rounded-full border border-divider bg-content1 px-2 py-0.5 text-xs text-default-700"
+                              className="max-w-[12rem] truncate rounded-full border border-divider bg-tray px-2 py-0.5 text-xs font-semibold text-default-700"
                               title={it.detail}
                             >
                               {it.name}
                             </span>
                           ))}
                           {g.items.length > 6 && (
-                            <span className="rounded-full border border-divider bg-content1 px-2 py-0.5 text-xs text-default-500">
+                            <span className="rounded-full border border-divider bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
                               +{g.items.length - 6}
                             </span>
                           )}
                         </span>
                       </span>
-                      <span className="hidden shrink-0 items-center self-center text-xs text-default-500 sm:flex">
+                      <span className="hidden shrink-0 items-center self-center text-xs font-semibold text-foreground sm:flex">
                         去处理
                         <ChevronRight className="h-3.5 w-3.5" />
                       </span>
@@ -675,7 +673,7 @@ export function AdminOverview() {
             <Panel
               action={
                 <button
-                  className="flex items-center text-xs text-primary"
+                  className="flex items-center text-xs font-semibold text-primary-700"
                   type="button"
                   onClick={() => navigate("/node")}
                 >
@@ -693,7 +691,7 @@ export function AdminOverview() {
                   return (
                     <button
                       key={n.id}
-                      className="flex items-center gap-2.5 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-50"
+                      className="flex items-center gap-2.5 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-white/40"
                       type="button"
                       onClick={() => navigate("/node")}
                     >
@@ -704,7 +702,7 @@ export function AdminOverview() {
                         <span className="block truncate text-sm font-medium">
                           {n.name}
                         </span>
-                        <span className="block truncate font-mono text-xs text-default-500">
+                        <span className="block truncate font-mono text-xs font-semibold text-foreground">
                           {up ? "在线" : "离线"}
                           {ip ? ` · ${ip}` : ""}
                         </span>
@@ -719,7 +717,7 @@ export function AdminOverview() {
 
         <div className="space-y-4">
           <Panel
-            action={<span className="text-xs text-default-400">累计</span>}
+            action={<span className="text-xs font-semibold text-foreground">累计</span>}
             title="落地流量"
           >
             <div className="mb-3 grid grid-cols-2 gap-2">
@@ -729,11 +727,8 @@ export function AdminOverview() {
                   ["↓ 下载", down],
                 ] as Array<[string, number]>
               ).map(([label, bytes]) => (
-                <div
-                  key={label}
-                  className="rounded-xl bg-default-100 px-3 py-2"
-                >
-                  <div className="text-xs text-default-500">{label}</div>
+                <div key={label} className="rounded-xl glass-inset px-3 py-2">
+                  <div className="text-xs font-semibold text-foreground">{label}</div>
                   <div className="font-mono text-base font-semibold">
                     {formatTraffic(bytes)}
                   </div>
@@ -741,7 +736,7 @@ export function AdminOverview() {
               ))}
             </div>
             {top.length === 0 ? (
-              <p className="py-1 text-center text-xs text-default-500">
+              <p className="py-1 text-center text-xs font-semibold text-foreground">
                 还没有流量数据（导入的节点不统计流量）
               </p>
             ) : (
@@ -751,9 +746,9 @@ export function AdminOverview() {
 
                   return (
                     <div key={i.id}>
-                      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold">
                         <span className="truncate">{i.name}</span>
-                        <span className="shrink-0 font-mono text-default-500">
+                        <span className="shrink-0 font-mono text-foreground">
                           {formatTraffic(total)}
                         </span>
                       </div>
@@ -786,13 +781,13 @@ export function AdminOverview() {
                       onClick={() => navigate(e.path)}
                     >
                       <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${e.kind === "节点" ? "tray-warning" : "bg-orange-50 text-orange-700 dark:bg-orange-900 dark:text-orange-300"}`}
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${e.kind === "节点" ? "tray-warning" : "bg-orange-500/10 text-orange-700 dark:bg-orange-900 dark:text-orange-300"}`}
                       >
                         {e.kind}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{e.name}</span>
                       <span
-                        className={`shrink-0 text-xs ${days <= 3 ? "text-warning-600" : "text-default-500"}`}
+                        className={`shrink-0 text-xs font-semibold ${days <= 3 ? "text-warning-600" : "text-foreground"}`}
                       >
                         {daysLeft(e.at)}
                       </span>

@@ -8,7 +8,7 @@ const alertVariants = cva(
   {
     variants: {
       variant: {
-        default: "border-default-200 bg-default-50 text-foreground",
+        default: "glass-card border-default-200 text-foreground",
         // Round 4: semantic alerts ride the tint trays (opaque in both
         // themes; the old -50 tints kept their light shade in dark mode
         // and washed the light text out).
@@ -45,7 +45,10 @@ function AlertTitle({
 }: React.ComponentProps<"h5">) {
   return (
     <h5
-      className={cn("mb-1 font-medium leading-none tracking-tight", className)}
+      className={cn(
+        "mb-1 font-semibold leading-none tracking-tight",
+        className,
+      )}
       data-slot="alert-title"
       {...props}
     >
@@ -60,7 +63,7 @@ function AlertDescription({
 }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("text-sm opacity-90", className)}
+      className={cn("text-sm", className)}
       data-slot="alert-description"
       {...props}
     />

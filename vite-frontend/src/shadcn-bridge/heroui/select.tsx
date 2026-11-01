@@ -126,7 +126,7 @@ function getOptions<T>(
 
 function sizeClass(size: SelectProps["size"]) {
   if (size === "sm") {
-    return "h-8 text-xs";
+    return "h-8 text-xs font-semibold";
   }
   if (size === "lg") {
     return "h-10 text-base";
@@ -137,7 +137,7 @@ function sizeClass(size: SelectProps["size"]) {
 
 function textSizeClass(size: SelectProps["size"]) {
   if (size === "sm") {
-    return "text-xs";
+    return "text-xs font-semibold";
   }
   if (size === "lg") {
     return "text-base";
@@ -298,16 +298,14 @@ export function Select<T>({
       <div
         ref={listboxRef}
         className={cn(
-          "text-tray absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
+          "glass-surface absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
           placementClasses,
         )}
         id={`${generatedId}-listbox`}
         role="listbox"
       >
         {options.length === 0 ? (
-          <div
-            className={cn("px-2 py-1 text-default-500", textSizeClass(size))}
-          >
+          <div className={cn("px-2 py-1 text-foreground", textSizeClass(size))}>
             暂无可选项
           </div>
         ) : (
@@ -321,7 +319,7 @@ export function Select<T>({
                   "flex items-center gap-2 rounded-md px-2 py-1.5",
                   optionDisabled
                     ? "cursor-not-allowed opacity-60"
-                    : "hover:bg-default-100",
+                    : "hover:bg-white/40",
                 )}
               >
                 <BaseCheckbox
@@ -384,7 +382,7 @@ export function Select<T>({
                 textSizeClass(size),
                 selectedArray.length > 0
                   ? "text-foreground"
-                  : "text-default-500",
+                  : "text-foreground",
               )}
               title={selectedArray.length > 0 ? selectedFullText : undefined}
             >
@@ -392,7 +390,7 @@ export function Select<T>({
             </span>
             <ChevronDownIcon
               className={cn(
-                "h-4 w-4 flex-shrink-0 text-default-500 transition-transform",
+                "h-4 w-4 flex-shrink-0 text-foreground transition-transform",
                 isExpanded ? "rotate-180" : "rotate-0",
               )}
             />

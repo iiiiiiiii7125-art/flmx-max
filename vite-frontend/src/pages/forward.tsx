@@ -711,14 +711,14 @@ const SortableTunnelGroupContainer = ({
           </Button>
           {/* 倍率 */}
           <span className={titleClassName}>{tunnel.tunnelName}</span>
-          <span className="text-default-500 font-semibold text-[10px] mr-1.5">
+          <span className="text-foreground font-semibold text-[10px] mr-1.5">
             [{formatTunnelTrafficRatio(tunnel.tunnelTrafficRatio)}]
           </span>
         </div>
         <div className="flex items-center gap-2">
           <span className={countClassName}>{tunnel.items.length} 条规则</span>
           <div
-            className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
+            className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-foreground transition-colors"
             title="拖拽分组排序"
             {...attributes}
             {...listeners}
@@ -781,7 +781,7 @@ const ForwardBindWarningBadge = ({ warnings }: { warnings?: string[] }) => {
   return (
     <span className="inline-flex shrink-0" title={warnings.join("；")}>
       <Chip
-        className="text-xs font-medium whitespace-nowrap"
+        className="text-xs font-semibold whitespace-nowrap"
         color="warning"
         size="sm"
         variant="flat"
@@ -825,7 +825,7 @@ const SortableTableRow = ({
     zIndex: isDragging ? 50 : undefined,
     position: isDragging ? ("relative" as const) : undefined,
     willChange: "transform",
-    backgroundColor: isDragging ? "var(--nextui-default-100)" : undefined,
+    backgroundColor: isDragging ? "rgba(255,255,255,0.4)" : undefined,
   };
 
   const strategyDisplay = getStrategyDisplay(forward.strategy);
@@ -842,7 +842,7 @@ const SortableTableRow = ({
       )}
       <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.drag}>
         <div
-          className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
+          className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-foreground transition-colors"
           {...attributes}
           {...listeners}
           title="拖拽排序"
@@ -858,7 +858,7 @@ const SortableTableRow = ({
         </div>
       </TableCell>
       <TableCell
-        className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.name} whitespace-nowrap text-foreground cursor-pointer hover:text-primary transition-colors`}
+        className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.name} whitespace-nowrap text-foreground cursor-pointer hover:text-primary-700 transition-colors`}
         onClick={() => copyToClipboard(forward.name, "规则名")}
       >
         <span className="inline-flex items-center gap-2">
@@ -870,7 +870,7 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.inbound} max-w-[280px]`}
       >
         <button
-          className="w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
+          className="w-full truncate rounded-md glass-inset px-2.5 py-1.5 text-left font-mono text-xs font-semibold text-default-700 transition-all hover:bg-white/60 hover:shadow-sm cursor-pointer"
           title={formatInAddress(forward.inIp, forward.inPort)}
           type="button"
           onClick={() =>
@@ -884,7 +884,7 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.target} max-w-[280px]`}
       >
         <button
-          className="w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
+          className="w-full truncate rounded-md glass-inset px-2.5 py-1.5 text-left font-mono text-xs font-semibold text-default-700 transition-all hover:bg-white/60 hover:shadow-sm cursor-pointer"
           title={formatRemoteAddress(forward.remoteAddr)}
           type="button"
           onClick={() => showAddressModal(forward.remoteAddr, null, "目标地址")}
@@ -894,7 +894,7 @@ const SortableTableRow = ({
       </TableCell>
       <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.strategy}>
         <Chip
-          className="text-xs font-medium shrink-0 whitespace-nowrap"
+          className="text-xs font-semibold shrink-0 whitespace-nowrap"
           color={strategyDisplay.color as any}
           size="sm"
           variant="flat"
@@ -905,7 +905,7 @@ const SortableTableRow = ({
       <TableCell
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.totalFlow} whitespace-nowrap`}
       >
-        <span className="text-sm font-medium text-default-600 font-mono">
+        <span className="text-sm font-medium text-foreground font-mono">
           {formatFlow(getForwardDisplayFlow(forward))}
         </span>
       </TableCell>
@@ -1051,7 +1051,7 @@ const SortableCompactTableRow = ({
     zIndex: isDragging ? 50 : undefined,
     position: isDragging ? ("relative" as const) : undefined,
     willChange: "transform",
-    backgroundColor: isDragging ? "var(--nextui-default-100)" : undefined,
+    backgroundColor: isDragging ? "rgba(255,255,255,0.4)" : undefined,
   };
 
   const strategyDisplay = getStrategyDisplay(forward.strategy);
@@ -1067,10 +1067,10 @@ const SortableCompactTableRow = ({
         </TableCell>
       )}
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <div
-          className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
+          className="cursor-grab active:cursor-grabbing p-1 text-foreground hover:text-foreground transition-colors"
           {...attributes}
           {...listeners}
         >
@@ -1085,11 +1085,11 @@ const SortableCompactTableRow = ({
         </div>
       </TableCell>
       <TableCell
-        className={`whitespace-nowrap text-foreground ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`whitespace-nowrap text-foreground ${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <span className="inline-flex items-center gap-2">
           <button
-            className="cursor-pointer hover:text-primary transition-colors text-left bg-transparent border-none p-0 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded-sm"
+            className="cursor-pointer hover:text-primary-700 transition-colors text-left bg-transparent border-none p-0 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded-sm"
             type="button"
             onClick={() => copyToClipboard(forward.name, "规则名")}
           >
@@ -1099,7 +1099,7 @@ const SortableCompactTableRow = ({
         </span>
       </TableCell>
       <TableCell
-        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <div className="flex items-center">
           <span className="font-medium text-default-700 text-sm">
@@ -1114,12 +1114,12 @@ const SortableCompactTableRow = ({
         </div>
       </TableCell>
       <TableCell
-        className={`max-w-[220px] ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`max-w-[220px] ${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <button
-          className={`w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
+          className={`w-full truncate rounded-md glass-inset px-2.5 py-1.5 text-left font-mono text-xs font-semibold text-default-700 transition-all ${
             hasMultipleAddresses(forward.inIp)
-              ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
+              ? "hover:bg-white/60 hover:shadow-sm cursor-pointer"
               : "cursor-default"
           }`}
           title={formatInAddress(forward.inIp, forward.inPort)}
@@ -1132,12 +1132,12 @@ const SortableCompactTableRow = ({
         </button>
       </TableCell>
       <TableCell
-        className={`max-w-[240px] ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`max-w-[240px] ${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <button
-          className={`w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
+          className={`w-full truncate rounded-md glass-inset px-2.5 py-1.5 text-left font-mono text-xs font-semibold text-default-700 transition-all ${
             hasMultipleAddresses(forward.remoteAddr)
-              ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
+              ? "hover:bg-white/60 hover:shadow-sm cursor-pointer"
               : "cursor-default"
           }`}
           title={formatRemoteAddress(forward.remoteAddr)}
@@ -1149,7 +1149,7 @@ const SortableCompactTableRow = ({
       </TableCell>
 
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <Chip
           className="text-sm font-medium shrink-0 whitespace-nowrap"
@@ -1161,14 +1161,14 @@ const SortableCompactTableRow = ({
         </Chip>
       </TableCell>
       <TableCell
-        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
-        <span className="text-sm font-medium text-default-600 font-mono">
+        <span className="text-sm font-medium text-foreground font-mono">
           {formatFlow(getForwardDisplayFlow(forward))}
         </span>
       </TableCell>
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <div className="flex items-center gap-2.5 whitespace-nowrap">
           <Switch
@@ -1181,7 +1181,7 @@ const SortableCompactTableRow = ({
         </div>
       </TableCell>
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <div className="flex justify-start gap-2 pl-2">
           <Button
@@ -3949,7 +3949,7 @@ export default function ForwardPage() {
                 onValueChange={() => handleServiceToggle(forward)}
               />
               <Chip
-                className="text-xs"
+                className="text-xs font-semibold"
                 color={statusDisplay.color as any}
                 size="sm"
                 variant="flat"
@@ -3958,7 +3958,7 @@ export default function ForwardPage() {
               </Chip>
               {viewMode === "direct" && (
                 <div
-                  className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation flex-shrink-0"
+                  className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-foreground hover:text-foreground transition-colors touch-manipulation flex-shrink-0"
                   {...listeners}
                   style={{ touchAction: "none" }}
                   title="拖拽排序"
@@ -3982,9 +3982,9 @@ export default function ForwardPage() {
             {/* 地址信息 */}
             <div className="space-y-1">
               <button
-                className={`cursor-pointer px-2 py-1 bg-default-100 rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
+                className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.inIp)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200"
+                    ? "hover:bg-white/40"
                     : ""
                 }`}
                 title={formatInAddress(forward.inIp, forward.inPort)}
@@ -3995,17 +3995,17 @@ export default function ForwardPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                    <span className="text-xs font-medium text-default-600 flex-shrink-0">
+                    <span className="text-xs font-semibold text-foreground flex-shrink-0">
                       入口:
                     </span>
-                    <code className="text-xs font-mono text-foreground truncate min-w-0">
+                    <code className="text-xs font-semibold font-mono text-foreground truncate min-w-0">
                       {formatInAddress(forward.inIp, forward.inPort)}
                     </code>
                   </div>
                   {hasMultipleAddresses(forward.inIp) && (
                     <svg
                       aria-hidden="true"
-                      className="w-3 h-3 text-default-400 flex-shrink-0"
+                      className="w-3 h-3 text-foreground flex-shrink-0"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -4022,9 +4022,9 @@ export default function ForwardPage() {
               </button>
 
               <button
-                className={`cursor-pointer px-2 py-1 bg-default-100 rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
+                className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.remoteAddr)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200"
+                    ? "hover:bg-white/40"
                     : ""
                 }`}
                 title={formatRemoteAddress(forward.remoteAddr)}
@@ -4035,17 +4035,17 @@ export default function ForwardPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                    <span className="text-xs font-medium text-default-600 flex-shrink-0">
+                    <span className="text-xs font-semibold text-foreground flex-shrink-0">
                       目标:
                     </span>
-                    <code className="text-xs font-mono text-foreground truncate min-w-0">
+                    <code className="text-xs font-semibold font-mono text-foreground truncate min-w-0">
                       {formatRemoteAddress(forward.remoteAddr)}
                     </code>
                   </div>
                   {hasMultipleAddresses(forward.remoteAddr) && (
                     <svg
                       aria-hidden="true"
-                      className="w-3 h-3 text-default-400 flex-shrink-0"
+                      className="w-3 h-3 text-foreground flex-shrink-0"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -4065,7 +4065,7 @@ export default function ForwardPage() {
             {/* 统计信息 */}
             <div className="flex flex-wrap items-center justify-between pt-2 border-t border-divider gap-1">
               <Chip
-                className="text-xs whitespace-nowrap shrink-0"
+                className="text-xs font-semibold whitespace-nowrap shrink-0"
                 color={strategyDisplay.color as any}
                 size="sm"
                 variant="flat"
@@ -4076,7 +4076,7 @@ export default function ForwardPage() {
                 <>
                   <div className="flex items-center gap-1">
                     <Chip
-                      className="text-xs whitespace-nowrap"
+                      className="text-xs font-semibold whitespace-nowrap"
                       color="primary"
                       size="sm"
                       variant="flat"
@@ -4085,7 +4085,7 @@ export default function ForwardPage() {
                     </Chip>
                   </div>
                   <Chip
-                    className="text-xs whitespace-nowrap"
+                    className="text-xs font-semibold whitespace-nowrap"
                     color="success"
                     size="sm"
                     variant="flat"
@@ -4095,7 +4095,7 @@ export default function ForwardPage() {
                 </>
               ) : (forward.federationShareFlow || 0) > 0 ? (
                 <Chip
-                  className="text-xs whitespace-nowrap"
+                  className="text-xs font-semibold whitespace-nowrap"
                   color="secondary"
                   size="sm"
                   variant="flat"
@@ -4104,7 +4104,7 @@ export default function ForwardPage() {
                 </Chip>
               ) : (
                 <Chip
-                  className="text-xs whitespace-nowrap"
+                  className="text-xs font-semibold whitespace-nowrap"
                   color="default"
                   size="sm"
                   variant="flat"
@@ -4263,7 +4263,7 @@ export default function ForwardPage() {
           <div className="flex min-h-9 w-max min-w-full items-center justify-end gap-2 whitespace-nowrap sm:gap-3 [&>*]:shrink-0">
             {selectedIds.size > 0 ? (
               <>
-                <span className="text-sm text-default-600 shrink-0">
+                <span className="text-sm text-foreground shrink-0">
                   已选择 {selectedIds.size} 项
                 </span>
                 <Button
@@ -4435,7 +4435,7 @@ export default function ForwardPage() {
                 <span className="text-sm font-semibold text-foreground">
                   全部规则
                 </span>
-                <span className="text-xs text-default-600">
+                <span className="text-xs font-semibold text-foreground">
                   {sortedForwards.length} 条规则
                 </span>
               </div>
@@ -4455,7 +4455,7 @@ export default function ForwardPage() {
                       classNames={{
                         wrapper:
                           "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                        th: "bg-default-100 text-default-600 font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                        th: "text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                         td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                         tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors group",
                       }}
@@ -4478,7 +4478,7 @@ export default function ForwardPage() {
                         <TableColumn className="w-[180px]">规则名</TableColumn>
                         <TableColumn className="w-[180px]">
                           隧道
-                          <sup className="text-success font-bold text-[10px] mr-1">
+                          <sup className="text-success-700 font-bold text-[10px] mr-1">
                             ‾倍率
                           </sup>
                         </TableColumn>
@@ -4527,7 +4527,7 @@ export default function ForwardPage() {
                 <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
                   暂无规则配置
                 </h3>
-                <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
+                <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
                   还没有创建任何规则配置，点击上方按钮开始创建
                 </p>
               </CardBody>
@@ -4539,7 +4539,7 @@ export default function ForwardPage() {
               <span className="text-sm font-semibold text-foreground">
                 全部规则
               </span>
-              <span className="text-xs text-default-600">
+              <span className="text-xs font-semibold text-foreground">
                 {sortedForwards.length} 条规则
               </span>
             </div>
@@ -4573,7 +4573,7 @@ export default function ForwardPage() {
               <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
                 暂无规则配置
               </h3>
-              <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
+              <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
                 还没有创建任何规则配置，点击上方按钮开始创建
               </p>
             </CardBody>
@@ -4593,9 +4593,9 @@ export default function ForwardPage() {
               return (
                 <div
                   key={`grouped-table-${group.userId}-${group.userName}`}
-                  className="text-tray rounded-2xl shadow-sm"
+                  className="glass-card rounded-2xl shadow-sm"
                 >
-                  <div className="flex items-center justify-between border-b border-divider bg-default-100 px-5 py-4">
+                  <div className="flex items-center justify-between border-b border-divider px-5 py-4">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">
                         {group.userName}
@@ -4606,7 +4606,7 @@ export default function ForwardPage() {
                         </Chip>
                       )}
                     </div>
-                    <span className="text-xs text-default-600">
+                    <span className="text-xs font-semibold text-foreground">
                       {groupForwardCount} 条规则
                     </span>
                   </div>
@@ -4679,9 +4679,9 @@ export default function ForwardPage() {
                               key={`grouped-table-${group.userId}-${tunnel.tunnelKey}`}
                               bodyClassName=""
                               collapsed={collapsed}
-                              countClassName="text-xs text-default-600"
+                              countClassName="text-xs font-semibold text-foreground"
                               groupUserId={group.userId}
-                              headerClassName="flex items-center justify-between border-b border-divider bg-default-100 px-4 py-2.5"
+                              headerClassName="flex items-center justify-between border-b border-divider px-4 py-2.5"
                               titleClassName="truncate text-sm font-semibold text-default-700"
                               tunnel={tunnel}
                               wrapperClassName="rounded-2xl"
@@ -4707,7 +4707,7 @@ export default function ForwardPage() {
                                     classNames={{
                                       wrapper:
                                         "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                                      th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                                      th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                                       td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                                       tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                                     }}
@@ -4835,7 +4835,7 @@ export default function ForwardPage() {
               <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
                 暂无规则配置
               </h3>
-              <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
+              <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
                 还没有创建任何规则配置，点击上方按钮开始创建
               </p>
             </CardBody>
@@ -4867,7 +4867,7 @@ export default function ForwardPage() {
                       </Chip>
                     )}
                   </div>
-                  <span className="text-xs text-default-600">
+                  <span className="text-xs font-semibold text-foreground">
                     {groupForwardCount} 条规则
                   </span>
                 </div>
@@ -4904,12 +4904,12 @@ export default function ForwardPage() {
                             key={`direct-group-${group.userId}-${tunnel.tunnelKey}`}
                             bodyClassName="p-3"
                             collapsed={collapsed}
-                            countClassName="text-xs text-default-600"
+                            countClassName="text-xs font-semibold text-foreground"
                             groupUserId={group.userId}
-                            headerClassName="flex items-center justify-between rounded-lg bg-default-100 border border-divider px-3 py-2"
+                            headerClassName="flex items-center justify-between rounded-lg glass-inset border border-divider px-3 py-2"
                             titleClassName="truncate text-sm font-semibold text-default-700"
                             tunnel={tunnel}
-                            wrapperClassName="rounded-xl border border-divider bg-content1 space-y-3"
+                            wrapperClassName="glass-card rounded-xl space-y-3"
                             onToggleCollapsed={() =>
                               toggleTunnelGroupCollapsed(
                                 group.userId,
@@ -4956,7 +4956,7 @@ export default function ForwardPage() {
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无规则配置
             </h3>
-            <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
+            <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
               还没有创建任何规则配置，点击上方按钮开始创建
             </p>
           </CardBody>
@@ -4982,7 +4982,7 @@ export default function ForwardPage() {
                 <h2 className="text-xl font-bold">
                   {isEdit ? "编辑规则" : "新增规则"}
                 </h2>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   {isEdit ? "修改现有规则配置的信息" : "创建新的规则配置"}
                 </p>
               </ModalHeader>
@@ -5133,7 +5133,7 @@ export default function ForwardPage() {
                       aria-label="高级设置"
                       className="border-b-0 [&_[data-slot=accordion-trigger]]:no-underline [&_[data-slot=accordion-trigger]]:hover:no-underline"
                       title={
-                        <span className="text-small text-default-500 font-medium">
+                        <span className="text-small text-foreground font-medium">
                           高级设置
                         </span>
                       }
@@ -5328,17 +5328,17 @@ export default function ForwardPage() {
           {(onClose) => (
             <>
               <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-lg font-bold text-danger">确认删除</h2>
+                <h2 className="text-lg font-bold text-danger-700">确认删除</h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-default-600">
+                <p className="text-foreground">
                   确定要删除规则{" "}
                   <span className="font-semibold text-foreground">
                     &quot;{forwardToDelete?.name}&quot;
                   </span>{" "}
                   吗？
                 </p>
-                <p className="text-small text-default-500 mt-2">
+                <p className="text-small text-foreground mt-2">
                   此操作无法撤销，删除后该规则将永久消失。
                 </p>
               </ModalBody>
@@ -5375,19 +5375,19 @@ export default function ForwardPage() {
           {(onClose) => (
             <>
               <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-lg font-bold text-secondary">
+                <h2 className="text-lg font-bold text-secondary-700">
                   确认流量清零
                 </h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-default-600">
+                <p className="text-foreground">
                   确定要清零规则{" "}
                   <span className="font-semibold text-foreground">
                     &quot;{forwardToResetFlow?.name}&quot;
                   </span>{" "}
                   当前显示的上传和下载流量吗？
                 </p>
-                <p className="text-small text-default-500 mt-2">
+                <p className="text-small text-foreground mt-2">
                   此操作不可撤销，但不会影响用户总流量、用户隧道配额和历史统计。
                 </p>
               </ModalBody>
@@ -5474,7 +5474,7 @@ export default function ForwardPage() {
         <ModalContent>
           <ModalHeader className="flex flex-col gap-1">
             <h2 className="text-xl font-bold">导出规则数据</h2>
-            <p className="text-small text-default-500">
+            <p className="text-small text-foreground">
               格式：目标地址|规则名称|入口端口
             </p>
           </ModalHeader>
@@ -5631,19 +5631,19 @@ export default function ForwardPage() {
             <h2 className="text-xl font-bold">导入规则数据</h2>
             {importFormat === "flmx" ? (
               <>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   格式：目标地址|规则名称|入口端口，每行一个，入口端口留空将自动分配可用端口
                 </p>
-                <p className="text-small text-default-400">
+                <p className="text-small text-foreground">
                   目标地址支持单个地址(如：example.com:8080)或多个地址用逗号分隔(如：3.3.3.3:3,4.4.4.4:4)
                 </p>
               </>
             ) : (
               <>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   ny格式：JSON对象，支持多个目标地址（负载均衡），按所选隧道导入
                 </p>
-                <p className="text-small text-default-400">
+                <p className="text-small text-foreground">
                   格式：&#123;&quot;dest&quot;:[&quot;地址:端口&quot;],&quot;listen_port&quot;:端口,&quot;name&quot;:&quot;名称&quot;&#125;（listen_port可省略，自动分配端口）
                 </p>
               </>
@@ -5729,7 +5729,7 @@ export default function ForwardPage() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-base font-semibold">导入结果</h3>
-                    <span className="text-xs text-default-500">
+                    <span className="text-xs font-semibold text-foreground">
                       成功：{importResults.filter((r) => r.success).length} /
                       总计：{importResults.length}
                     </span>
@@ -5747,8 +5747,8 @@ export default function ForwardPage() {
                         key={index}
                         className={`p-2 rounded border ${
                           result.success
-                            ? "bg-success-50 dark:bg-success-900 border-success-200 dark:border-success-300/20"
-                            : "bg-danger-50 dark:bg-danger-900 border-danger-200 dark:border-danger-300/20"
+                            ? "bg-success-500/10 border-success-500/25"
+                            : "bg-danger-500/10 border-danger-500/25"
                         }`}
                       >
                         <div className="flex items-center gap-2">
@@ -5782,7 +5782,7 @@ export default function ForwardPage() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-0.5">
                               <span
-                                className={`text-xs font-medium ${
+                                className={`text-xs font-semibold ${
                                   result.success
                                     ? "text-success-700 dark:text-success-300"
                                     : "text-danger-700 dark:text-danger-300"
@@ -5790,15 +5790,13 @@ export default function ForwardPage() {
                               >
                                 {result.success ? "成功" : "失败"}
                               </span>
-                              <span className="text-xs text-default-500">
-                                |
-                              </span>
-                              <code className="text-xs font-mono text-default-600 truncate">
+                              <span className="text-xs font-semibold text-foreground">|</span>
+                              <code className="text-xs font-semibold font-mono text-foreground truncate">
                                 {result.line}
                               </code>
                             </div>
                             <div
-                              className={`text-xs ${
+                              className={`text-xs font-semibold ${
                                 result.success
                                   ? "text-success-600 dark:text-success-400"
                                   : "text-danger-600 dark:text-danger-400"
@@ -5835,7 +5833,7 @@ export default function ForwardPage() {
       <Modal
         backdrop="blur"
         classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden [&>div]:bg-content1 [&>div]:dark:bg-content1",
+          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
         isOpen={diagnosisModalOpen}
         placement="center"
@@ -5857,7 +5855,7 @@ export default function ForwardPage() {
                 <h2 className="text-xl font-bold">规则诊断结果</h2>
                 {currentDiagnosisForward && (
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-small text-default-500 truncate flex-1 min-w-0">
+                    <span className="text-small text-foreground truncate flex-1 min-w-0">
                       {currentDiagnosisForward.name}
                     </span>
                     <Chip
@@ -5875,8 +5873,8 @@ export default function ForwardPage() {
                 {diagnosisResult ? (
                   <div className="space-y-4">
                     {diagnosisLoading && (
-                      <div className="flex items-center justify-between rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 dark:border-primary-800 dark:bg-primary-900">
-                        <div className="flex items-center gap-2 text-sm text-primary">
+                      <div className="flex items-center justify-between rounded-lg border border-primary-500/25 bg-primary-500/10 px-3 py-2">
+                        <div className="flex items-center gap-2 text-sm text-primary-700">
                           <Spinner size="sm" />
                           <span>
                             正在诊断 {diagnosisProgress.completed}/
@@ -5902,37 +5900,37 @@ export default function ForwardPage() {
 
                     {/* 统计摘要 */}
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="text-center p-3 bg-default-100 rounded-lg border border-divider">
+                      <div className="text-center p-3 glass-inset rounded-lg border border-divider">
                         <div className="text-2xl font-bold text-foreground">
                           {diagnosisProgress.total > 0
                             ? diagnosisProgress.total
                             : diagnosisResult.results.length}
                         </div>
-                        <div className="text-xs text-default-500 mt-1">
+                        <div className="text-xs font-semibold text-foreground mt-1">
                           总测试数
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-success-50 dark:bg-success-900 rounded-lg border border-success-200 dark:border-success-700">
-                        <div className="text-2xl font-bold text-success-600 dark:text-success-400">
+                      <div className="text-center p-3 tray-success rounded-lg">
+                        <div className="text-2xl font-bold text-success-900">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.success
                             : diagnosisResult.results.filter((r) => r.success)
                                 .length}
                         </div>
-                        <div className="text-xs text-success-600 dark:text-success-400/80 mt-1">
+                        <div className="text-xs font-semibold text-success-900 mt-1">
                           成功
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-danger-50 dark:bg-danger-900 rounded-lg border border-danger-200 dark:border-danger-700">
-                        <div className="text-2xl font-bold text-danger-600 dark:text-danger-400">
+                      <div className="text-center p-3 tray-danger rounded-lg">
+                        <div className="text-2xl font-bold text-danger-900">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.failed
                             : diagnosisResult.results.filter((r) => !r.success)
                                 .length}
                         </div>
-                        <div className="text-xs text-danger-600 dark:text-danger-400/80 mt-1">
+                        <div className="text-xs font-semibold text-danger-900 mt-1">
                           失败
                         </div>
                       </div>
@@ -5976,13 +5974,13 @@ export default function ForwardPage() {
                               key={title}
                               className="border border-divider rounded-lg overflow-hidden"
                             >
-                              <div className="bg-primary-50 dark:bg-primary-900 px-3 py-2 border-b border-divider">
-                                <h3 className="text-sm font-semibold text-primary">
+                              <div className="bg-primary-500/10 px-3 py-2 border-b border-divider">
+                                <h3 className="text-sm font-semibold text-primary-700">
                                   {title}
                                 </h3>
                               </div>
                               <table className="w-full text-sm">
-                                <thead className="bg-default-100">
+                                <thead>
                                   <tr>
                                     <th className="px-3 py-2 text-left font-semibold text-xs">
                                       路径
@@ -6001,7 +5999,7 @@ export default function ForwardPage() {
                                     </th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-divider bg-content1">
+                                <tbody className="divide-y divide-divider">
                                   {results.map((result, index) => {
                                     const isDiagnosing = Boolean(
                                       result.diagnosing,
@@ -6016,12 +6014,12 @@ export default function ForwardPage() {
                                     return (
                                       <tr
                                         key={index}
-                                        className={`hover:bg-default-50 dark:hover:bg-gray-700 ${
+                                        className={`hover:bg-white/40 ${
                                           isDiagnosing
-                                            ? "bg-warning-50 dark:bg-warning-900"
+                                            ? "bg-warning-500/10"
                                             : isSuccess
-                                              ? "bg-content1"
-                                              : "bg-danger-50 dark:bg-danger-900"
+                                              ? ""
+                                              : "bg-danger-500/10"
                                         }`}
                                       >
                                         <td className="px-3 py-2">
@@ -6030,10 +6028,10 @@ export default function ForwardPage() {
                                               <Spinner size="sm" />
                                             ) : (
                                               <span
-                                                className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
+                                                className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${
                                                   isSuccess
-                                                    ? "bg-success text-white"
-                                                    : "bg-danger text-white"
+                                                    ? "bg-success-800 text-white"
+                                                    : "bg-danger-800 text-white"
                                                 }`}
                                               >
                                                 {isSuccess ? "✓" : "✗"}
@@ -6043,7 +6041,7 @@ export default function ForwardPage() {
                                               <div className="font-medium text-foreground truncate">
                                                 {result.description}
                                               </div>
-                                              <div className="text-xs text-default-500 truncate">
+                                              <div className="text-xs font-semibold text-foreground truncate">
                                                 {result.targetIp}:
                                                 {result.targetPort}
                                               </div>
@@ -6071,11 +6069,11 @@ export default function ForwardPage() {
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess ? (
-                                            <span className="font-semibold text-primary">
+                                            <span className="tray-primary inline-flex rounded-full px-2 py-0.5 text-xs font-semibold">
                                               {result.averageTime?.toFixed(0)}
                                             </span>
                                           ) : (
-                                            <span className="text-default-400">
+                                            <span className="text-foreground">
                                               -
                                             </span>
                                           )}
@@ -6083,16 +6081,16 @@ export default function ForwardPage() {
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess ? (
                                             <span
-                                              className={`font-semibold ${
+                                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                                                 (result.packetLoss || 0) > 0
-                                                  ? "text-warning"
-                                                  : "text-success"
+                                                  ? "tray-warning"
+                                                  : "tray-success"
                                               }`}
                                             >
                                               {result.packetLoss?.toFixed(1)}%
                                             </span>
                                           ) : (
-                                            <span className="text-default-400">
+                                            <span className="text-foreground">
                                               -
                                             </span>
                                           )}
@@ -6100,7 +6098,7 @@ export default function ForwardPage() {
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess && quality ? (
                                             <Chip
-                                              className="text-xs whitespace-nowrap"
+                                              className="text-xs font-semibold whitespace-nowrap"
                                               color={quality.color as any}
                                               size="sm"
                                               variant="flat"
@@ -6108,7 +6106,7 @@ export default function ForwardPage() {
                                               {quality.text}
                                             </Chip>
                                           ) : (
-                                            <span className="text-default-400">
+                                            <span className="text-foreground">
                                               -
                                             </span>
                                           )}
@@ -6186,8 +6184,8 @@ export default function ForwardPage() {
 
                           return (
                             <div key={title} className="space-y-2">
-                              <div className="px-2 py-1.5 bg-primary-50 dark:bg-primary-900 rounded-lg border border-primary-300 dark:border-primary-700">
-                                <h3 className="text-sm font-semibold text-primary">
+                              <div className="px-2 py-1.5 bg-primary-500/10 rounded-lg border border-primary-500/30">
+                                <h3 className="text-sm font-semibold text-primary-700">
                                   {title}
                                 </h3>
                               </div>
@@ -6205,10 +6203,10 @@ export default function ForwardPage() {
                                     key={index}
                                     className={`border rounded-lg p-3 ${
                                       isDiagnosing
-                                        ? "border-warning-200 dark:border-warning-300/30 bg-warning-50 dark:bg-warning-900"
+                                        ? "border-warning-200 bg-warning-500/10"
                                         : isSuccess
-                                          ? "border-divider bg-content1"
-                                          : "border-danger-200 dark:border-danger-300/30 bg-danger-50 dark:bg-danger-900"
+                                          ? "border-divider glass-inset"
+                                          : "border-danger-200 bg-danger-500/10"
                                     }`}
                                   >
                                     <div className="flex items-start gap-2 mb-2">
@@ -6216,10 +6214,10 @@ export default function ForwardPage() {
                                         <Spinner size="sm" />
                                       ) : (
                                         <span
-                                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${
+                                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
                                             isSuccess
-                                              ? "bg-success text-white"
-                                              : "bg-danger text-white"
+                                              ? "bg-success-800 text-white"
+                                              : "bg-danger-800 text-white"
                                           }`}
                                         >
                                           {isSuccess ? "✓" : "✗"}
@@ -6229,7 +6227,7 @@ export default function ForwardPage() {
                                         <div className="font-semibold text-sm text-foreground break-words">
                                           {result.description}
                                         </div>
-                                        <div className="text-xs text-default-500 mt-0.5 break-all">
+                                        <div className="text-xs font-semibold text-foreground mt-0.5 break-all">
                                           {result.targetIp}:{result.targetPort}
                                         </div>
                                       </div>
@@ -6256,24 +6254,20 @@ export default function ForwardPage() {
                                     {isSuccess ? (
                                       <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-divider">
                                         <div className="text-center">
-                                          <div className="text-lg font-bold text-primary">
+                                          <div className="tray-primary inline-flex items-center rounded-full px-2.5 py-0.5 text-lg font-bold">
                                             {result.averageTime?.toFixed(0)}
                                           </div>
-                                          <div className="text-xs text-default-500">
+                                          <div className="text-xs font-semibold text-foreground">
                                             延迟(ms)
                                           </div>
                                         </div>
                                         <div className="text-center">
                                           <div
-                                            className={`text-lg font-bold ${
-                                              (result.packetLoss || 0) > 0
-                                                ? "text-warning"
-                                                : "text-success"
-                                            }`}
+                                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-lg font-bold ${(result.packetLoss || 0) > 0 ? "tray-warning" : "tray-success"}`}
                                           >
                                             {result.packetLoss?.toFixed(1)}%
                                           </div>
-                                          <div className="text-xs text-default-500">
+                                          <div className="text-xs font-semibold text-foreground">
                                             丢包率
                                           </div>
                                         </div>
@@ -6281,14 +6275,14 @@ export default function ForwardPage() {
                                           {quality && (
                                             <>
                                               <Chip
-                                                className="text-xs whitespace-nowrap"
+                                                className="text-xs font-semibold whitespace-nowrap"
                                                 color={quality.color as any}
                                                 size="sm"
                                                 variant="flat"
                                               >
                                                 {quality.text}
                                               </Chip>
-                                              <div className="text-xs text-default-500 mt-0.5">
+                                              <div className="text-xs font-semibold text-foreground mt-0.5">
                                                 质量
                                               </div>
                                             </>
@@ -6298,10 +6292,10 @@ export default function ForwardPage() {
                                     ) : (
                                       <div className="mt-2 pt-2 border-t border-divider">
                                         <div
-                                          className={`text-xs ${
+                                          className={`text-xs font-semibold ${
                                             isDiagnosing
-                                              ? "text-warning"
-                                              : "text-danger"
+                                              ? "text-warning-700"
+                                              : "text-danger-700"
                                           }`}
                                         >
                                           {isDiagnosing
@@ -6351,7 +6345,7 @@ export default function ForwardPage() {
                       (r) => r.success === false && !r.diagnosing,
                     ) && (
                       <div className="space-y-2 hidden md:block">
-                        <h4 className="text-sm font-semibold text-danger">
+                        <h4 className="text-sm font-semibold text-danger-700">
                           失败详情
                         </h4>
                         <div className="space-y-2">
@@ -6360,7 +6354,7 @@ export default function ForwardPage() {
                             .map((result, index) => (
                               <Alert
                                 key={index}
-                                className="text-xs"
+                                className="text-xs font-semibold"
                                 color="danger"
                                 description={result.message || "连接失败"}
                                 title={result.description}
@@ -6373,10 +6367,10 @@ export default function ForwardPage() {
                   </div>
                 ) : (
                   <div className="text-center py-16">
-                    <div className="w-16 h-16 bg-default-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <div className="w-16 h-16 glass-surface rounded-full flex items-center justify-center mx-auto mb-4">
                       <svg
                         aria-hidden="true"
-                        className="w-8 h-8 text-default-400"
+                        className="w-8 h-8 text-foreground"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"

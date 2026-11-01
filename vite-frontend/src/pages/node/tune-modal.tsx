@@ -210,7 +210,7 @@ export function NodeTuneModal({
           <>
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">节点调优</h2>
-              <p className="text-sm font-normal text-default-500">
+              <p className="text-sm font-normal text-foreground">
                 {node?.name}
                 {status &&
                   ` · 内核 ${status.kernel || "未知"} · 拥塞控制 ${status.congestion || "未知"}`}
@@ -218,7 +218,7 @@ export function NodeTuneModal({
             </ModalHeader>
             <ModalBody>
               {error ? (
-                <p className="py-6 text-center text-sm text-danger">{error}</p>
+                <p className="py-6 text-center text-sm text-danger-700">{error}</p>
               ) : !status ? (
                 <div className="flex justify-center py-10">
                   <Spinner />
@@ -229,19 +229,19 @@ export function NodeTuneModal({
                     这台服务器的 Agent
                     不支持自动调优，请先升级服务器 Agent。
                   </p>
-                  <p className="text-xs text-default-500">
+                  <p className="text-xs font-semibold text-foreground">
                     自动调优与深度优化要求节点 Agent
                     为调优移植版；旧 Agent 只能看到本提示，不会悄悄沿用固定带宽。
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-xs text-default-500">
+                  <p className="text-xs font-semibold text-foreground">
                     无需填写带宽和延迟：Agent
                     自动选择公共 iperf3 对端，实测四并发吞吐，读取服务器内存后计算并应用参数，最后验证单连接和多连接吞吐。任务在
                     Agent 后台执行，关闭窗口不会中断，再次打开可继续查看。
                   </p>
-                  <p className="text-xs text-default-500">
+                  <p className="text-xs font-semibold text-foreground">
                     测速会向 Leaseweb、Clouvider 或 OVH
                     提供的公共对端发送流量，千兆线路基础测速约消耗 4–7
                     GB（含短测排序）；公共对端忙或不可达时会报错，不会用假定的千兆带宽代替实测。
@@ -296,11 +296,11 @@ export function NodeTuneModal({
                             style={{ width: `${job.percent}%` }}
                           />
                         </div>
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs font-semibold text-foreground">
                           {job.percent}% · {job.message}
                         </p>
                         {job.logs && (
-                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-default-100 p-2 font-mono text-[11px] text-default-600">
+                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white/40 p-2 font-mono text-[11px] font-semibold text-foreground">
                             {job.logs}
                           </pre>
                         )}
@@ -312,7 +312,7 @@ export function NodeTuneModal({
                   {detection && (
                     <div className="space-y-1 rounded-xl border border-divider px-3 py-2.5">
                       <p className="text-sm font-medium">测速结果</p>
-                      <div className="space-y-0.5 text-xs text-default-600">
+                      <div className="space-y-0.5 text-xs font-semibold text-foreground">
                         <p>
                           实测带宽 {detection.bandwidthMbps} Mbps
                           （{detection.bandwidthSource}）· 出口{" "}
@@ -385,11 +385,11 @@ export function NodeTuneModal({
                     {deepReady && detection ? (
                       <div className="space-y-1.5">
                         {detection.estimatedGB <= 0 ? (
-                          <p className="text-xs text-warning-600">
+                          <p className="text-xs font-semibold text-warning-600">
                             无法估算流量，请先跑自动调优。
                           </p>
                         ) : (
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             按当前测速结果（{detection.bandwidthMbps}{" "}
                             Mbps），预计流量约 {detection.estimatedGB}{" "}
                             GB，本次预算 {deepBudget}{" "}
@@ -399,17 +399,17 @@ export function NodeTuneModal({
                           </p>
                         )}
                         {detection.estimatedGB <= 0 ? (
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             测速结果中没有有效的流量估算（可能是旧版 Agent
                             留下的结果），请先跑一次自动调优。
                           </p>
                         ) : detection.estimatedGB > 1000 ? (
-                          <p className="text-xs text-warning-600">
+                          <p className="text-xs font-semibold text-warning-600">
                             预计流量超过 1000 GB 上限，不会启动扫描。
                           </p>
                         ) : (
                           <>
-                            <label className="flex cursor-pointer items-start gap-2 text-xs text-default-600">
+                            <label className="flex cursor-pointer items-start gap-2 text-xs font-semibold text-foreground">
                               <input
                                 checked={deepAgreed}
                                 className="mt-0.5"
@@ -424,8 +424,8 @@ export function NodeTuneModal({
                                 {deepBudget} GB）
                               </span>
                             </label>
-                            <div className="space-y-1 rounded-lg bg-default-100 p-2">
-                              <p className="text-xs text-default-600">
+                            <div className="space-y-1 rounded-lg glass-inset p-2">
+                              <p className="text-xs font-semibold text-foreground">
                                 单流探测未发现拐点时可用：填入你用多流
                                 sweep 实测的拐点附近整形值（如 4710
                                 Mbps），Agent
@@ -435,7 +435,7 @@ export function NodeTuneModal({
                               <div className="flex flex-wrap items-center gap-2">
                                 <input
                                   aria-label="手动整形速率（Mbps）"
-                                  className="w-32 rounded-md border border-divider bg-background px-2 py-1 text-xs"
+                                  className="w-32 rounded-md border border-divider bg-content1 px-2 py-1 text-xs font-semibold"
                                   inputMode="numeric"
                                   placeholder="如 4710"
                                   type="number"
@@ -444,7 +444,7 @@ export function NodeTuneModal({
                                     setManualRate(e.target.value)
                                   }
                                 />
-                                <span className="text-xs text-default-500">
+                                <span className="text-xs font-semibold text-foreground">
                                   Mbps
                                 </span>
                                 <Button
@@ -475,7 +475,7 @@ export function NodeTuneModal({
                         )}
                       </div>
                     ) : (
-                      <p className="text-xs text-default-500">
+                      <p className="text-xs font-semibold text-foreground">
                         深度优化（限速器拐点扫描 + HTB/fq
                         整形）需要 24 小时内的自动调优测速结果。
                         {detection
@@ -510,7 +510,7 @@ export function NodeTuneModal({
                                 </Chip>
                               ) : null}
                               <button
-                                className="ml-auto text-xs text-primary"
+                                className="ml-auto text-xs font-semibold text-primary-700"
                                 type="button"
                                 onClick={() =>
                                   setDetail(detail === g.id ? null : g.id)
@@ -519,23 +519,23 @@ export function NodeTuneModal({
                                 {detail === g.id ? "收起" : "参数"}
                               </button>
                             </div>
-                            <p className="text-xs text-default-500">{g.desc}</p>
+                            <p className="text-xs font-semibold text-foreground">{g.desc}</p>
                             {detail === g.id && (
-                              <div className="mt-2 space-y-0.5 font-mono text-[11px] text-default-600">
+                              <div className="mt-2 space-y-0.5 font-mono text-[11px] font-semibold text-foreground">
                                 {g.settings.map((s) => (
                                   <div key={s.key} className="break-all">
                                     {s.key}:{" "}
                                     {s.supported ? (
                                       <>
                                         <span
-                                          className={s.ok ? "text-success" : ""}
+                                          className={s.ok ? "text-success-700" : ""}
                                         >
                                           {s.current}
                                         </span>
                                         {!s.ok && ` → ${s.target}`}
                                       </>
                                     ) : (
-                                      <span className="text-default-400">
+                                      <span className="text-foreground">
                                         不支持
                                       </span>
                                     )}

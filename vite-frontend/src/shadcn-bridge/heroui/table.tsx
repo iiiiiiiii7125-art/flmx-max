@@ -37,7 +37,7 @@ export function Table({
     >
       <div
         className={cn(
-          "w-full overflow-auto rounded-xl border border-border bg-content1",
+          "glass-card w-full overflow-auto rounded-xl",
           classNames?.wrapper,
         )}
       >
@@ -63,7 +63,10 @@ export function TableHeader({
   );
 
   return (
-    <thead className={cn("border-b bg-default-100", className)} {...props}>
+    <thead
+      className={cn("border-b border-divider", className)}
+      {...props}
+    >
       {hasRow ? children : <TableRow>{children}</TableRow>}
     </thead>
   );
@@ -95,9 +98,13 @@ export const TableBody = React.forwardRef<
 ) {
   if (isLoading) {
     return (
-      <tbody ref={ref} className={className} {...props}>
+      <tbody
+        ref={ref}
+        className={className}
+        {...props}
+      >
         <tr>
-          <td className="p-4 text-center text-default-500" colSpan={999}>
+          <td className="p-4 text-center text-foreground" colSpan={999}>
             {loadingContent ?? "加载中..."}
           </td>
         </tr>
@@ -108,9 +115,13 @@ export const TableBody = React.forwardRef<
   if (items && typeof children === "function") {
     if (items.length === 0) {
       return (
-        <tbody ref={ref} className={className} {...props}>
+        <tbody
+          ref={ref}
+          className={className}
+          {...props}
+        >
           <tr>
-            <td className="p-4 text-center text-default-500" colSpan={999}>
+            <td className="p-4 text-center text-foreground" colSpan={999}>
               {emptyContent ?? "暂无数据"}
             </td>
           </tr>
@@ -119,7 +130,11 @@ export const TableBody = React.forwardRef<
     }
 
     return (
-      <tbody ref={ref} className={className} {...props}>
+      <tbody
+        ref={ref}
+        className={className}
+        {...props}
+      >
         {items.map((item) => {
           const key =
             typeof item === "object" && item !== null && "id" in item
@@ -137,9 +152,13 @@ export const TableBody = React.forwardRef<
 
   if (staticChildren.length === 0) {
     return (
-      <tbody ref={ref} className={className} {...props}>
+      <tbody
+        ref={ref}
+        className={className}
+        {...props}
+      >
         <tr>
-          <td className="p-4 text-center text-default-500" colSpan={999}>
+          <td className="p-4 text-center text-foreground" colSpan={999}>
             {emptyContent ?? "暂无数据"}
           </td>
         </tr>
@@ -148,7 +167,11 @@ export const TableBody = React.forwardRef<
   }
 
   return (
-    <tbody ref={ref} className={className} {...props}>
+    <tbody
+      ref={ref}
+      className={className}
+      {...props}
+    >
       {typeof children === "function" ? null : children}
     </tbody>
   );
@@ -163,7 +186,7 @@ export function TableColumn({
   return (
     <th
       className={cn(
-        "px-3 py-2 text-left font-medium text-default-600",
+        "px-3 py-2 text-left font-semibold text-foreground",
         thClassName,
         className,
       )}
@@ -182,7 +205,7 @@ export const TableRow = React.forwardRef<
     <tr
       ref={ref}
       className={cn(
-        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-default-100",
+        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-white/40",
         trClassName,
         className,
       )}

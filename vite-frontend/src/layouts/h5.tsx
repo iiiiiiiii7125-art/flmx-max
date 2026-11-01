@@ -216,7 +216,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col min-h-screen bg-mesh-gradient">
       {/* 顶部导航栏 */}
       <header className="[background:var(--glass-bg)] backdrop-blur-[3px] backdrop-saturate-[1.6] backdrop-brightness-105 border-b border-white/45 dark:border-white/15 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
-        <div className="flex items-center gap-2 text-tray rounded-full py-1 pl-1.5 pr-3">
+        <div className="flex items-center gap-2 glass-surface rounded-full py-1 pl-1.5 pr-3">
           <BrandLogo size={20} />
           <h1 className="text-sm font-bold text-foreground">
             {siteConfig.name}
@@ -262,22 +262,16 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                 transition-colors duration-200 ease-refined min-h-[44px]
                 ${
                   isActive
-                    ? "bg-gradient-to-r from-primary-500 to-secondary-500 shadow-sm"
-                    : "text-tray"
+                    ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm"
+                    : ""
                 }
                 ${isMonitorBlocked ? "opacity-60" : ""}
-                ${
-                  isActive
-                    ? "text-white"
-                    : isMonitorBlocked
-                      ? "text-gray-500 dark:text-gray-400"
-                      : "text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-gray-100"
-                }
+                ${isActive ? "text-white" : "text-foreground"}
               `}
               onClick={() => handleTabClick(item.path)}
             >
               <div className="flex-shrink-0">{item.icon}</div>
-              <span className="text-xs font-medium leading-tight">
+              <span className="text-xs font-semibold leading-tight">
                 {(isAdmin && item.adminLabel) || item.label}
               </span>
               <span

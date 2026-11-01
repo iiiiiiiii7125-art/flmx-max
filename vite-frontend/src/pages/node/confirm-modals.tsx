@@ -47,7 +47,7 @@ export function RollbackNodeModal({
                 确定要将节点 <strong>&quot;{nodeToRollback?.name}&quot;</strong>{" "}
                 回退到上一个版本吗？
               </p>
-              <p className="text-small text-default-500">
+              <p className="text-small text-foreground">
                 节点将执行版本回退并自动重启，期间会导致节点短暂离线。
               </p>
             </ModalBody>
@@ -109,13 +109,13 @@ export function DeleteNodeModal({
                 吗？
               </p>
               {brokenReferrers && brokenReferrers.length > 0 ? (
-                <p className="text-small text-danger">
+                <p className="text-small text-danger-700">
                   删除将打断 {brokenReferrers.length} 个跨节点引用：
                   {brokenReferrers.join("、")}
                   。这些入站经本节点出去的流量将被丢弃，请先解除引用或确认继续。
                 </p>
               ) : null}
-              <p className="text-small text-default-500">
+              <p className="text-small text-foreground">
                 此操作不可恢复，请谨慎操作。
               </p>
             </ModalBody>
@@ -180,13 +180,13 @@ export function BatchDeleteNodesModal({
                 确定要删除选中的 <strong>{selectedIds.size}</strong> 个节点吗？
               </p>
               {brokenReferrers && brokenReferrers.length > 0 ? (
-                <p className="text-small text-danger">
+                <p className="text-small text-danger-700">
                   删除将打断 {brokenReferrers.length} 个跨节点引用：
                   {brokenReferrers.join("、")}
                   。这些入站经被删节点出去的流量将被丢弃，请先解除引用或确认继续。
                 </p>
               ) : null}
-              <p className="text-small text-default-500">
+              <p className="text-small text-foreground">
                 此操作不可恢复，请谨慎操作。
               </p>
             </ModalBody>

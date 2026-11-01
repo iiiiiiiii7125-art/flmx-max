@@ -316,12 +316,12 @@ const renderBestExitState = (state?: BestExitState) => {
       ? `等待探测 · ${summaryText}`
       : summaryText;
   const className = isWaiting
-    ? "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-800 dark:bg-warning-900 dark:text-warning-300"
-    : "border-success-200 bg-success-50 text-success-700 dark:border-success-800 dark:bg-success-900 dark:text-success-300";
+    ? "border-warning-500/25 bg-warning-500/10 font-semibold text-warning-700"
+    : "border-success-500/25 bg-success-500/10 font-semibold text-success-700";
 
   return (
     <span
-      className={`inline-flex max-w-full items-center rounded border px-1.5 py-0.5 text-[11px] leading-4 ${className}`}
+      className={`inline-flex max-w-full items-center rounded border px-1.5 py-0.5 text-[11px] font-semibold leading-4 ${className}`}
       title={bestExitDetailTitle(state)}
     >
       <span className="min-w-0 truncate">最优出口：{displaySummary}</span>
@@ -1809,7 +1809,7 @@ export default function TunnelPage() {
           <div className="flex min-h-9 w-max min-w-full items-center justify-end gap-2 whitespace-nowrap [&>*]:shrink-0">
             {selectMode ? (
               <>
-                <span className="text-sm text-default-600 shrink-0">
+                <span className="text-sm text-foreground shrink-0">
                   已选择 {selectedIds.size} 项
                 </span>
                 <Button
@@ -1859,7 +1859,7 @@ export default function TunnelPage() {
             ) : (
               <>
                 <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900 dark:text-sky-300 dark:hover:bg-sky-800"
+                  className="bg-sky-500/10 font-semibold text-sky-700 hover:bg-sky-500/20"
                   color="default"
                   size="sm"
                   variant="flat"
@@ -1923,7 +1923,7 @@ export default function TunnelPage() {
               classNames={{
                 wrapper:
                   "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                 td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                 tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors",
               }}
@@ -1955,8 +1955,8 @@ export default function TunnelPage() {
                   const typeDisplay = getTunnelTypeDisplay(tunnel.type);
                   const tunnelTypeChipClassName =
                     tunnel.type === 1
-                      ? "text-[10px] h-5 bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900 dark:text-primary-200 dark:border-primary-700"
-                      : "text-[10px] h-5 bg-success-100 text-success-800 border-success-300 dark:bg-success-900 dark:text-success-200 dark:border-success-700";
+                      ? "text-[10px] font-semibold h-5 bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900 dark:text-primary-200 dark:border-primary-700"
+                      : "text-[10px] font-semibold h-5 bg-success-100 text-success-800 border-success-300 dark:bg-success-900 dark:text-success-200 dark:border-success-700";
                   const bestExitStateContent = renderBestExitState(
                     tunnel.bestExitState,
                   );
@@ -2004,18 +2004,18 @@ export default function TunnelPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex min-w-0 flex-col gap-1.5">
-                          <div className="flex items-center gap-1.5 text-xs">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold">
                             <span className="font-semibold text-primary-700 dark:text-primary-400">
                               {tunnel.inNodeId?.length || 0}入口
                             </span>
-                            <span className="text-default-400">→</span>
+                            <span className="text-foreground">→</span>
                             <span className="font-semibold text-secondary-700 dark:text-secondary-400">
                               {tunnel.type === 2
                                 ? tunnel.chainNodes?.length || 0
                                 : 0}
                               跳
                             </span>
-                            <span className="text-default-400">→</span>
+                            <span className="text-foreground">→</span>
                             <span className="font-semibold text-success-700 dark:text-success-400">
                               {tunnel.type === 2
                                 ? tunnel.outNodeId?.length || 0
@@ -2027,18 +2027,18 @@ export default function TunnelPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="text-default-500">
+                        <div className="flex items-center gap-2 text-xs font-semibold">
+                          <span className="text-foreground">
                             {getTunnelFlowDisplay(tunnel.flow)}
                           </span>
-                          <span className="text-default-300">|</span>
-                          <span className="text-default-500">
+                          <span className="text-foreground">|</span>
+                          <span className="text-foreground">
                             {tunnel.trafficRatio}x
                           </span>
                           {tunnel.type === 2 && tunnel.ipPreference && (
                             <>
-                              <span className="text-default-300">|</span>
-                              <span className="text-default-500">
+                              <span className="text-foreground">|</span>
+                              <span className="text-foreground">
                                 {tunnel.ipPreference === "v4" ? "IPv4" : "IPv6"}
                               </span>
                             </>
@@ -2048,7 +2048,7 @@ export default function TunnelPage() {
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                           <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-400"
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 dark:bg-indigo-950 dark:text-indigo-400"
                             size="sm"
                             variant="flat"
                             onPress={() => handleEdit(tunnel)}
@@ -2056,7 +2056,7 @@ export default function TunnelPage() {
                             编辑
                           </Button>
                           <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400"
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:bg-amber-950 dark:text-amber-400"
                             size="sm"
                             variant="flat"
                             onPress={() => handleDiagnose(tunnel)}
@@ -2064,7 +2064,7 @@ export default function TunnelPage() {
                             诊断
                           </Button>
                           <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-400"
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 dark:bg-rose-950 dark:text-rose-400"
                             size="sm"
                             variant="flat"
                             onPress={() => handleDelete(tunnel)}
@@ -2090,8 +2090,8 @@ export default function TunnelPage() {
                   const typeDisplay = getTunnelTypeDisplay(tunnel.type);
                   const tunnelTypeChipClassName =
                     tunnel.type === 1
-                      ? "text-xs bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900 dark:text-primary-200 dark:border-primary-700"
-                      : "text-xs bg-success-100 text-success-800 border-success-300 dark:bg-success-900 dark:text-success-200 dark:border-success-700";
+                      ? "text-xs font-semibold bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900 dark:text-primary-200 dark:border-primary-700"
+                      : "text-xs font-semibold bg-success-100 text-success-800 border-success-300 dark:bg-success-900 dark:text-success-200 dark:border-success-700";
                   const bestExitStateContent = renderBestExitState(
                     tunnel.bestExitState,
                   );
@@ -2134,7 +2134,7 @@ export default function TunnelPage() {
                                 </div>
                               </div>
                               <div
-                                className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation flex-shrink-0"
+                                className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-foreground hover:text-foreground transition-colors touch-manipulation flex-shrink-0"
                                 {...listeners}
                                 style={{ touchAction: "none" }}
                                 title="拖拽排序"
@@ -2155,7 +2155,7 @@ export default function TunnelPage() {
                             <div className="space-y-3">
                               {/* 拓扑结构 */}
                               <div className="pt-2 border-t border-divider">
-                                <div className="flex items-center justify-center gap-2 text-xs">
+                                <div className="flex items-center justify-center gap-2 text-xs font-semibold">
                                   {/* 入口节点 */}
                                   <div className="flex items-center gap-1 px-2 py-1 tray-primary rounded">
                                     <svg
@@ -2178,7 +2178,7 @@ export default function TunnelPage() {
                                   {/* 箭头 */}
                                   <svg
                                     aria-hidden="true"
-                                    className="w-4 h-4 text-default-400"
+                                    className="w-4 h-4 text-foreground"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -2216,7 +2216,7 @@ export default function TunnelPage() {
                                   {/* 箭头 */}
                                   <svg
                                     aria-hidden="true"
-                                    className="w-4 h-4 text-default-400"
+                                    className="w-4 h-4 text-foreground"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -2262,16 +2262,16 @@ export default function TunnelPage() {
                               <div
                                 className={`grid gap-2 ${tunnel.type === 2 && tunnel.ipPreference ? "grid-cols-3" : "grid-cols-2"}`}
                               >
-                                <div className="text-center p-1.5 text-tray rounded-lg">
-                                  <div className="text-xs text-default-500">
+                                <div className="text-center p-1.5 glass-inset rounded-lg">
+                                  <div className="text-xs font-semibold text-foreground">
                                     流量计算
                                   </div>
                                   <div className="text-sm font-semibold text-foreground mt-0.5">
                                     {getTunnelFlowDisplay(tunnel.flow)}
                                   </div>
                                 </div>
-                                <div className="text-center p-1.5 text-tray rounded-lg">
-                                  <div className="text-xs text-default-500">
+                                <div className="text-center p-1.5 glass-inset rounded-lg">
+                                  <div className="text-xs font-semibold text-foreground">
                                     流量倍率
                                   </div>
                                   <div className="text-sm font-semibold text-foreground mt-0.5">
@@ -2279,8 +2279,8 @@ export default function TunnelPage() {
                                   </div>
                                 </div>
                                 {tunnel.type === 2 && tunnel.ipPreference && (
-                                  <div className="text-center p-1.5 text-tray rounded-lg">
-                                    <div className="text-xs text-default-500">
+                                  <div className="text-center p-1.5 glass-inset rounded-lg">
+                                    <div className="text-xs font-semibold text-foreground">
                                       连接偏好
                                     </div>
                                     <div className="text-sm font-semibold text-foreground mt-0.5">
@@ -2382,7 +2382,7 @@ export default function TunnelPage() {
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无隧道配置
             </h3>
-            <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
+            <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
               还没有创建任何隧道配置，点击上方按钮开始创建
             </p>
           </CardBody>
@@ -2408,7 +2408,7 @@ export default function TunnelPage() {
                 <h2 className="text-xl font-bold">
                   {isEdit ? "编辑隧道" : "新增隧道"}
                 </h2>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   {isEdit
                     ? "修改节点配置会中断现有连接，隧道类型不可修改"
                     : "创建新的隧道配置"}
@@ -2452,7 +2452,7 @@ export default function TunnelPage() {
                   {form.type === 1 &&
                     (getTunnelForwardMode(form.inNodeId, nodes) ===
                     "nftables" ? (
-                      <p className="text-small text-default-500">
+                      <p className="text-small text-foreground">
                         入口是 nftables 节点，由 nftables
                         转发（在节点的转发模式里设置）
                       </p>
@@ -2644,7 +2644,7 @@ export default function TunnelPage() {
                                 className="border border-default-200 rounded-lg p-3"
                               >
                                 <div className="flex items-center justify-between mb-2">
-                                  <span className="text-sm font-medium text-default-600">
+                                  <span className="text-sm font-medium text-foreground">
                                     第{groupIndex + 1}跳
                                   </span>
                                   <Button
@@ -2677,7 +2677,7 @@ export default function TunnelPage() {
                                   <div className="col-span-1 md:col-span-2">
                                     <Select
                                       classNames={{
-                                        label: "text-xs",
+                                        label: "text-xs font-semibold",
                                         value: "text-sm",
                                       }}
                                       disabledKeys={[
@@ -2801,7 +2801,7 @@ export default function TunnelPage() {
                                   {/* 协议选择 - 25% */}
                                   <Select
                                     classNames={{
-                                      label: "text-xs",
+                                      label: "text-xs font-semibold",
                                       value: "text-sm",
                                     }}
                                     label="协议"
@@ -2834,7 +2834,7 @@ export default function TunnelPage() {
                                   {/* 负载策略 - 25% */}
                                   <Select
                                     classNames={{
-                                      label: "text-xs",
+                                      label: "text-xs font-semibold",
                                       value: "text-sm",
                                     }}
                                     label="负载策略"
@@ -2864,7 +2864,7 @@ export default function TunnelPage() {
                                 {/* 连接IP - 转发链节点 */}
                                 <Select
                                   classNames={{
-                                    label: "text-xs",
+                                    label: "text-xs font-semibold",
                                     value: "text-sm",
                                   }}
                                   description={
@@ -2919,8 +2919,8 @@ export default function TunnelPage() {
                       )}
 
                       {getChainGroups().length === 0 && (
-                        <div className="text-center py-8 bg-default-50 dark:bg-default-100 rounded border border-dashed border-default-300">
-                          <p className="text-sm text-default-500">
+                        <div className="text-center py-8 rounded border border-dashed border-default-300">
+                          <p className="text-sm text-foreground">
                             还没有添加转发链，点击上方&quot;添加一跳&quot;按钮开始添加
                           </p>
                         </div>
@@ -2949,7 +2949,7 @@ export default function TunnelPage() {
                               <div className="col-span-1 md:col-span-2">
                                 <Select
                                   classNames={{
-                                    label: "text-xs",
+                                    label: "text-xs font-semibold",
                                     value: "text-sm",
                                   }}
                                   disabledKeys={[
@@ -3071,7 +3071,7 @@ export default function TunnelPage() {
                               {/* 协议选择 - 25% */}
                               <Select
                                 classNames={{
-                                  label: "text-xs",
+                                  label: "text-xs font-semibold",
                                   value: "text-sm",
                                 }}
                                 errorMessage={errors.protocol}
@@ -3146,7 +3146,7 @@ export default function TunnelPage() {
                               {/* 负载策略 - 25% */}
                               <Select
                                 classNames={{
-                                  label: "text-xs",
+                                  label: "text-xs font-semibold",
                                   value: "text-sm",
                                 }}
                                 label="负载策略"
@@ -3216,7 +3216,7 @@ export default function TunnelPage() {
                             {/* 连接IP - 出口节点 */}
                             <Select
                               classNames={{
-                                label: "text-xs",
+                                label: "text-xs font-semibold",
                                 value: "text-sm",
                               }}
                               description={
@@ -3302,7 +3302,7 @@ export default function TunnelPage() {
                       aria-label="高级设置"
                       className="border-b-0 [&_[data-slot=accordion-trigger]]:no-underline [&_[data-slot=accordion-trigger]]:hover:no-underline"
                       title={
-                        <span className="text-small text-default-500 font-medium">
+                        <span className="text-small text-foreground font-medium">
                           高级设置
                         </span>
                       }
@@ -3396,7 +3396,7 @@ export default function TunnelPage() {
                           <div className="text-sm font-medium">
                             质量检测目标
                           </div>
-                          <p className="text-xs text-default-500 mt-0.5">
+                          <p className="text-xs font-semibold text-foreground mt-0.5">
                             用于实时隧道质量检测、诊断目标和 best
                             最优出口评分，留空使用 www.bing.com:443
                           </p>
@@ -3485,7 +3485,7 @@ export default function TunnelPage() {
             <>
               <ModalHeader className="flex flex-col gap-1">
                 <h2 className="text-lg font-bold sm:text-xl">删除隧道</h2>
-                <p className="text-xs font-normal leading-5 text-default-500 sm:text-sm">
+                <p className="text-xs font-semibold leading-5 text-foreground sm:text-sm">
                   {tunnelDeletePreview?.tunnelName || tunnelToDelete?.name
                     ? `即将删除“${tunnelDeletePreview?.tunnelName || tunnelToDelete?.name}”，删除前会先检查是否有关联规则。`
                     : "删除前会先检查是否有关联规则。"}
@@ -3493,7 +3493,7 @@ export default function TunnelPage() {
               </ModalHeader>
               <ModalBody className="space-y-3 sm:space-y-4">
                 {deletePreviewLoading ? (
-                  <div className="flex items-center gap-3 rounded-xl border border-divider bg-content2 px-3 py-5 text-sm text-default-600 sm:px-4 sm:py-6">
+                  <div className="glass-card flex items-center gap-3 rounded-xl px-3 py-5 text-sm text-foreground sm:px-4 sm:py-6">
                     <Spinner size="sm" />
                     正在检查是否有规则正在使用该隧道...
                   </div>
@@ -3507,12 +3507,12 @@ export default function TunnelPage() {
                     />
 
                     {(tunnelDeletePreview?.sampleForwards?.length ?? 0) > 0 ? (
-                      <div className="space-y-3 rounded-xl border border-divider bg-content2 p-3 sm:p-4">
+                      <div className="glass-card space-y-3 rounded-xl p-3 sm:p-4">
                         <div className="flex items-center justify-between gap-3">
                           <h3 className="text-sm font-semibold text-foreground">
                             关联规则预览
                           </h3>
-                          <span className="text-xs text-default-500">
+                          <span className="text-xs font-semibold text-foreground">
                             前{" "}
                             {tunnelDeletePreview?.sampleForwards?.length ?? 0}{" "}
                             条
@@ -3523,17 +3523,17 @@ export default function TunnelPage() {
                             (forward) => (
                               <div
                                 key={forward.id}
-                                className="rounded-lg border border-divider/70 bg-background px-2.5 py-2 sm:px-3"
+                                className="rounded-lg border border-divider/70 glass-inset px-2.5 py-2 sm:px-3"
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <span className="truncate text-sm font-medium text-foreground">
                                     {forward.name}
                                   </span>
-                                  <span className="shrink-0 font-mono text-xs text-default-500">
+                                  <span className="shrink-0 font-mono text-xs font-semibold text-foreground">
                                     :{forward.inPort || 0}
                                   </span>
                                 </div>
-                                <p className="mt-1 text-xs text-default-500">
+                                <p className="mt-1 text-xs font-semibold text-foreground">
                                   用户：
                                   {forward.userName || `#${forward.userId}`}
                                 </p>
@@ -3543,7 +3543,7 @@ export default function TunnelPage() {
                         </div>
                         {deletePreviewForwardCount >
                         (tunnelDeletePreview?.sampleForwards?.length ?? 0) ? (
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             还有{" "}
                             {deletePreviewForwardCount -
                               (tunnelDeletePreview?.sampleForwards?.length ??
@@ -3616,7 +3616,7 @@ export default function TunnelPage() {
                             </SelectItem>
                           ))}
                         </Select>
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs font-semibold text-foreground">
                           关联规则会迁移到这里，当前要删除的隧道不会出现在可选项里。
                         </p>
                       </div>
@@ -3630,7 +3630,7 @@ export default function TunnelPage() {
                     variant="flat"
                   />
                 )}
-                <p className="text-xs text-default-500">
+                <p className="text-xs font-semibold text-foreground">
                   注：若相关节点当前离线，本次仅删除面板记录；节点侧的隧道服务会在节点重新连接时自动清理。
                 </p>
               </ModalBody>
@@ -3661,7 +3661,7 @@ export default function TunnelPage() {
       <Modal
         backdrop="blur"
         classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden [&>div]:bg-content1 [&>div]:dark:bg-content1",
+          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
         isOpen={diagnosisModalOpen}
         placement="center"
@@ -3679,11 +3679,11 @@ export default function TunnelPage() {
         <ModalContent>
           {(onClose) => (
             <>
-              <ModalHeader className="flex flex-col gap-1 bg-content1 border-b border-divider">
+              <ModalHeader className="flex flex-col gap-1 border-b border-divider">
                 <h2 className="text-xl font-bold">隧道诊断结果</h2>
                 {currentDiagnosisTunnel && (
                   <div className="flex items-center gap-2">
-                    <span className="text-small text-default-500">
+                    <span className="text-small text-foreground">
                       {currentDiagnosisTunnel.name}
                     </span>
                     <Chip
@@ -3706,8 +3706,8 @@ export default function TunnelPage() {
                 {diagnosisResult ? (
                   <div className="space-y-4">
                     {diagnosisLoading && (
-                      <div className="flex items-center justify-between rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 dark:border-primary-800 dark:bg-primary-900">
-                        <div className="flex items-center gap-2 text-sm text-primary">
+                      <div className="flex items-center justify-between rounded-lg border border-primary-500/25 bg-primary-500/10 px-3 py-2">
+                        <div className="flex items-center gap-2 text-sm text-primary-700">
                           <Spinner size="sm" />
                           <span>
                             正在诊断 {diagnosisProgress.completed}/
@@ -3733,37 +3733,37 @@ export default function TunnelPage() {
 
                     {/* 统计摘要 */}
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="text-center p-3 bg-default-100 rounded-lg border border-divider">
+                      <div className="text-center p-3 glass-inset rounded-lg border border-divider">
                         <div className="text-2xl font-bold text-foreground">
                           {diagnosisProgress.total > 0
                             ? diagnosisProgress.total
                             : diagnosisResult.results.length}
                         </div>
-                        <div className="text-xs text-default-500 mt-1">
+                        <div className="text-xs font-semibold text-foreground mt-1">
                           总测试数
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-success-50 dark:bg-success-900 rounded-lg border border-success-200 dark:border-success-700">
-                        <div className="text-2xl font-bold text-success-600 dark:text-success-400">
+                      <div className="text-center p-3 tray-success rounded-lg">
+                        <div className="text-2xl font-bold text-success-900">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.success
                             : diagnosisResult.results.filter((r) => r.success)
                                 .length}
                         </div>
-                        <div className="text-xs text-success-600 dark:text-success-400/80 mt-1">
+                        <div className="text-xs font-semibold text-success-900 mt-1">
                           成功
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-danger-50 dark:bg-danger-900 rounded-lg border border-danger-200 dark:border-danger-700">
-                        <div className="text-2xl font-bold text-danger-600 dark:text-danger-400">
+                      <div className="text-center p-3 tray-danger rounded-lg">
+                        <div className="text-2xl font-bold text-danger-900">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.failed
                             : diagnosisResult.results.filter((r) => !r.success)
                                 .length}
                         </div>
-                        <div className="text-xs text-danger-600 dark:text-danger-400/80 mt-1">
+                        <div className="text-xs font-semibold text-danger-900 mt-1">
                           失败
                         </div>
                       </div>
@@ -3807,13 +3807,13 @@ export default function TunnelPage() {
                               key={title}
                               className="border border-divider rounded-lg overflow-hidden"
                             >
-                              <div className="bg-primary-50 dark:bg-primary-900 px-3 py-2 border-b border-divider">
-                                <h3 className="text-sm font-semibold text-primary">
+                              <div className="bg-primary-500/10 px-3 py-2 border-b border-divider">
+                                <h3 className="text-sm font-semibold text-primary-700">
                                   {title}
                                 </h3>
                               </div>
                               <table className="w-full text-sm">
-                                <thead className="bg-default-100">
+                                <thead>
                                   <tr>
                                     <th className="px-3 py-2 text-left font-semibold text-xs">
                                       路径
@@ -3832,7 +3832,7 @@ export default function TunnelPage() {
                                     </th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-divider bg-content1">
+                                <tbody className="divide-y divide-divider">
                                   {results.map((result, index) => {
                                     const isDiagnosing = Boolean(
                                       result.diagnosing,
@@ -3846,12 +3846,12 @@ export default function TunnelPage() {
                                     return (
                                       <tr
                                         key={index}
-                                        className={`hover:bg-default-50 dark:hover:bg-gray-700 ${
+                                        className={`hover:bg-white/40 ${
                                           isDiagnosing
-                                            ? "bg-warning-50 dark:bg-warning-900"
+                                            ? "bg-warning-500/10"
                                             : isSuccess
-                                              ? "bg-content1"
-                                              : "bg-danger-50 dark:bg-danger-900"
+                                              ? ""
+                                              : "bg-danger-500/10"
                                         }`}
                                       >
                                         <td className="px-3 py-2">
@@ -3860,10 +3860,10 @@ export default function TunnelPage() {
                                               <Spinner size="sm" />
                                             ) : (
                                               <span
-                                                className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
+                                                className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${
                                                   isSuccess
-                                                    ? "bg-success text-white"
-                                                    : "bg-danger text-white"
+                                                    ? "bg-success-800 text-white"
+                                                    : "bg-danger-800 text-white"
                                                 }`}
                                               >
                                                 {isSuccess ? "✓" : "✗"}
@@ -3873,7 +3873,7 @@ export default function TunnelPage() {
                                               <div className="font-medium text-foreground truncate">
                                                 {result.description}
                                               </div>
-                                              <div className="text-xs text-default-500 truncate">
+                                              <div className="text-xs font-semibold text-foreground truncate">
                                                 {result.targetIp}:
                                                 {result.targetPort}
                                               </div>
@@ -3901,11 +3901,11 @@ export default function TunnelPage() {
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess ? (
-                                            <span className="font-semibold text-primary">
+                                            <span className="tray-primary inline-flex rounded-full px-2 py-0.5 text-xs font-semibold">
                                               {result.averageTime?.toFixed(0)}
                                             </span>
                                           ) : (
-                                            <span className="text-default-400">
+                                            <span className="text-foreground">
                                               -
                                             </span>
                                           )}
@@ -3913,16 +3913,16 @@ export default function TunnelPage() {
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess ? (
                                             <span
-                                              className={`font-semibold ${
+                                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                                                 (result.packetLoss || 0) > 0
-                                                  ? "text-warning"
-                                                  : "text-success"
+                                                  ? "tray-warning"
+                                                  : "tray-success"
                                               }`}
                                             >
                                               {result.packetLoss?.toFixed(1)}%
                                             </span>
                                           ) : (
-                                            <span className="text-default-400">
+                                            <span className="text-foreground">
                                               -
                                             </span>
                                           )}
@@ -3930,7 +3930,7 @@ export default function TunnelPage() {
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess && quality ? (
                                             <Chip
-                                              className="text-xs whitespace-nowrap"
+                                              className="text-xs font-semibold whitespace-nowrap"
                                               color={quality.color as any}
                                               size="sm"
                                               variant="flat"
@@ -3938,7 +3938,7 @@ export default function TunnelPage() {
                                               {quality.text}
                                             </Chip>
                                           ) : (
-                                            <span className="text-default-400">
+                                            <span className="text-foreground">
                                               -
                                             </span>
                                           )}
@@ -4016,8 +4016,8 @@ export default function TunnelPage() {
 
                           return (
                             <div key={title} className="space-y-2">
-                              <div className="px-2 py-1.5 bg-primary-50 dark:bg-primary-900 rounded-lg border border-primary-300 dark:border-primary-700">
-                                <h3 className="text-sm font-semibold text-primary">
+                              <div className="px-2 py-1.5 bg-primary-500/10 rounded-lg border border-primary-500/30">
+                                <h3 className="text-sm font-semibold text-primary-700">
                                   {title}
                                 </h3>
                               </div>
@@ -4034,10 +4034,10 @@ export default function TunnelPage() {
                                     key={index}
                                     className={`border rounded-lg p-3 ${
                                       isDiagnosing
-                                        ? "border-warning-200 dark:border-warning-300/30 bg-warning-50 dark:bg-warning-900"
+                                        ? "border-warning-200 bg-warning-500/10"
                                         : isSuccess
-                                          ? "border-divider bg-content1"
-                                          : "border-danger-200 dark:border-danger-300/30 bg-danger-50 dark:bg-danger-900"
+                                          ? "border-divider glass-inset"
+                                          : "border-danger-200 bg-danger-500/10"
                                     }`}
                                   >
                                     <div className="flex items-start gap-2 mb-2">
@@ -4045,10 +4045,10 @@ export default function TunnelPage() {
                                         <Spinner size="sm" />
                                       ) : (
                                         <span
-                                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${
+                                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
                                             isSuccess
-                                              ? "bg-success text-white"
-                                              : "bg-danger text-white"
+                                              ? "bg-success-800 text-white"
+                                              : "bg-danger-800 text-white"
                                           }`}
                                         >
                                           {isSuccess ? "✓" : "✗"}
@@ -4058,7 +4058,7 @@ export default function TunnelPage() {
                                         <div className="font-semibold text-sm text-foreground break-words">
                                           {result.description}
                                         </div>
-                                        <div className="text-xs text-default-500 mt-0.5 break-all">
+                                        <div className="text-xs font-semibold text-foreground mt-0.5 break-all">
                                           {result.targetIp}:{result.targetPort}
                                         </div>
                                       </div>
@@ -4085,24 +4085,20 @@ export default function TunnelPage() {
                                     {isSuccess ? (
                                       <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-divider">
                                         <div className="text-center">
-                                          <div className="text-lg font-bold text-primary">
+                                          <div className="tray-primary inline-flex items-center rounded-full px-2.5 py-0.5 text-lg font-bold">
                                             {result.averageTime?.toFixed(0)}
                                           </div>
-                                          <div className="text-xs text-default-500">
+                                          <div className="text-xs font-semibold text-foreground">
                                             延迟(ms)
                                           </div>
                                         </div>
                                         <div className="text-center">
                                           <div
-                                            className={`text-lg font-bold ${
-                                              (result.packetLoss || 0) > 0
-                                                ? "text-warning"
-                                                : "text-success"
-                                            }`}
+                                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-lg font-bold ${(result.packetLoss || 0) > 0 ? "tray-warning" : "tray-success"}`}
                                           >
                                             {result.packetLoss?.toFixed(1)}%
                                           </div>
-                                          <div className="text-xs text-default-500">
+                                          <div className="text-xs font-semibold text-foreground">
                                             丢包率
                                           </div>
                                         </div>
@@ -4110,14 +4106,14 @@ export default function TunnelPage() {
                                           {quality && (
                                             <>
                                               <Chip
-                                                className="text-xs whitespace-nowrap"
+                                                className="text-xs font-semibold whitespace-nowrap"
                                                 color={quality.color as any}
                                                 size="sm"
                                                 variant="flat"
                                               >
                                                 {quality.text}
                                               </Chip>
-                                              <div className="text-xs text-default-500 mt-0.5">
+                                              <div className="text-xs font-semibold text-foreground mt-0.5">
                                                 质量
                                               </div>
                                             </>
@@ -4127,10 +4123,10 @@ export default function TunnelPage() {
                                     ) : (
                                       <div className="mt-2 pt-2 border-t border-divider">
                                         <div
-                                          className={`text-xs ${
+                                          className={`text-xs font-semibold ${
                                             isDiagnosing
-                                              ? "text-warning"
-                                              : "text-danger"
+                                              ? "text-warning-700"
+                                              : "text-danger-700"
                                           }`}
                                         >
                                           {isDiagnosing
@@ -4180,7 +4176,7 @@ export default function TunnelPage() {
                       (r) => r.success === false && !r.diagnosing,
                     ) && (
                       <div className="space-y-2 hidden md:block">
-                        <h4 className="text-sm font-semibold text-danger">
+                        <h4 className="text-sm font-semibold text-danger-700">
                           失败详情
                         </h4>
                         <div className="space-y-2">
@@ -4189,7 +4185,7 @@ export default function TunnelPage() {
                             .map((result, index) => (
                               <Alert
                                 key={index}
-                                className="text-xs"
+                                className="text-xs font-semibold"
                                 color="danger"
                                 description={result.message || "连接失败"}
                                 title={result.description}
@@ -4202,10 +4198,10 @@ export default function TunnelPage() {
                   </div>
                 ) : (
                   <div className="text-center py-16">
-                    <div className="w-16 h-16 bg-default-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <div className="w-16 h-16 glass-surface rounded-full flex items-center justify-center mx-auto mb-4">
                       <svg
                         aria-hidden="true"
-                        className="w-8 h-8 text-default-400"
+                        className="w-8 h-8 text-foreground"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -4256,14 +4252,14 @@ export default function TunnelPage() {
             <>
               <ModalHeader className="flex flex-col gap-1">
                 <h2 className="text-lg font-bold sm:text-xl">批量删除隧道</h2>
-                <p className="text-xs font-normal leading-5 text-default-500 sm:text-sm">
+                <p className="text-xs font-semibold leading-5 text-foreground sm:text-sm">
                   即将删除这 {selectedTunnelIdList.length}{" "}
                   条隧道，删除前会先检查是否有关联规则。
                 </p>
               </ModalHeader>
               <ModalBody className="space-y-3 sm:space-y-4">
                 {batchDeletePreviewLoading ? (
-                  <div className="flex items-center gap-3 rounded-xl border border-divider bg-content2 px-3 py-5 text-sm text-default-600 sm:px-4 sm:py-6">
+                  <div className="glass-card flex items-center gap-3 rounded-xl px-3 py-5 text-sm text-foreground sm:px-4 sm:py-6">
                     <Spinner size="sm" />
                     正在检查选中隧道是否有关联规则...
                   </div>
@@ -4276,18 +4272,18 @@ export default function TunnelPage() {
                       variant="flat"
                     />
 
-                    <div className="max-h-64 space-y-3 overflow-y-auto scrollbar-hide rounded-xl border border-divider bg-content2 p-3 sm:max-h-72 sm:p-4">
+                    <div className="glass-card max-h-64 space-y-3 overflow-y-auto scrollbar-hide rounded-xl p-3 sm:max-h-72 sm:p-4">
                       {batchDeleteDependentItems.map((item) => (
                         <div
                           key={item.tunnelId}
-                          className="rounded-lg border border-divider/70 bg-background p-2.5 sm:p-3"
+                          className="rounded-lg border border-divider/70 glass-inset p-2.5 sm:p-3"
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium text-foreground">
                                 {item.tunnelName}
                               </p>
-                              <p className="mt-1 text-xs text-default-500">
+                              <p className="mt-1 text-xs font-semibold text-foreground">
                                 {item.forwardCount} 条规则依赖
                               </p>
                             </div>
@@ -4301,17 +4297,17 @@ export default function TunnelPage() {
                               {item.sampleForwards.map((forward) => (
                                 <div
                                   key={forward.id}
-                                  className="rounded-md bg-content1 px-2.5 py-2 sm:px-3"
+                                  className="rounded-md glass-inset px-2.5 py-2 sm:px-3"
                                 >
                                   <div className="flex items-center justify-between gap-3">
-                                    <span className="truncate text-xs font-medium text-foreground">
+                                    <span className="truncate text-xs font-semibold text-foreground">
                                       {forward.name}
                                     </span>
-                                    <span className="shrink-0 font-mono text-[11px] text-default-500">
+                                    <span className="shrink-0 font-mono text-[11px] font-semibold text-foreground">
                                       :{forward.inPort || 0}
                                     </span>
                                   </div>
-                                  <p className="mt-1 text-[11px] text-default-500">
+                                  <p className="mt-1 text-[11px] font-semibold text-foreground">
                                     用户：
                                     {forward.userName || `#${forward.userId}`}
                                   </p>
@@ -4319,7 +4315,7 @@ export default function TunnelPage() {
                               ))}
                               {item.forwardCount >
                               item.sampleForwards.length ? (
-                                <p className="text-[11px] text-default-500">
+                                <p className="text-[11px] font-semibold text-foreground">
                                   还有{" "}
                                   {item.forwardCount -
                                     item.sampleForwards.length}{" "}
@@ -4395,7 +4391,7 @@ export default function TunnelPage() {
                             </SelectItem>
                           ))}
                         </Select>
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs font-semibold text-foreground">
                           所有关联规则都会迁移到这里，删除列表中的隧道不会出现在可选项里。
                         </p>
                       </div>
@@ -4409,7 +4405,7 @@ export default function TunnelPage() {
                     variant="flat"
                   />
                 )}
-                <p className="text-xs text-default-500">
+                <p className="text-xs font-semibold text-foreground">
                   注：若相关节点当前离线，本次仅删除面板记录；节点侧的隧道服务会在节点重新连接时自动清理。
                 </p>
               </ModalBody>

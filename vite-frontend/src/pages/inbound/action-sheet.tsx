@@ -46,7 +46,7 @@ export function ActionSheet({
         <ModalHeader className="flex flex-col gap-1">
           <h2 className="text-lg font-bold break-all">{title}</h2>
           {subtitle && (
-            <div className="text-small font-normal text-default-500">
+            <div className="text-small font-normal text-foreground">
               {subtitle}
             </div>
           )}

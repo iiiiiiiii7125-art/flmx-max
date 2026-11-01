@@ -21,21 +21,18 @@ export type CardTone = "success" | "danger" | "warning" | "default";
 
 const PILL: Record<CardTone, [string, string]> = {
   success: [
-    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+    "tray-success",
     "bg-emerald-500",
   ],
   danger: [
-    "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
+    "tray-danger",
     "bg-rose-500",
   ],
   warning: [
-    "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+    "tray-warning",
     "bg-amber-500",
   ],
-  default: [
-    "bg-default-200 text-default-600 dark:text-default-300",
-    "bg-default-400",
-  ],
+  default: ["bg-tray text-foreground", "bg-default-400"],
 };
 
 export interface InfoCardAction {
@@ -109,7 +106,7 @@ export function InfoCard({
                   {title}
                 </h3>
                 <div
-                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${pill}`}
+                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ${pill}`}
                 >
                   <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
                   {status}
@@ -137,8 +134,8 @@ export function InfoCard({
               key={label}
               className="flex min-w-0 items-center justify-between gap-2 text-sm"
             >
-              <span className="flex-shrink-0 text-default-600">{label}</span>
-              <span className="min-w-0 truncate text-right text-xs">
+              <span className="flex-shrink-0 text-foreground">{label}</span>
+              <span className="min-w-0 truncate text-right text-xs font-semibold">
                 {value}
               </span>
             </div>

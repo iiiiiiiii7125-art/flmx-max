@@ -43,10 +43,12 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0 rounded-xl text-tray px-3 py-2">
+      <div className="min-w-0 rounded-xl glass-card px-3 py-2">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && (
-          <p className="mt-0.5 text-xs text-default-500">{description}</p>
+          <p className="mt-0.5 text-xs font-semibold text-foreground">
+            {description}
+          </p>
         )}
       </div>
       {(primary || secondary) && (
@@ -94,7 +96,7 @@ export function PageTabs<T extends string>({
 }) {
   return (
     <div
-      className="mb-4 grid gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md"
+      className="glass-surface mb-4 grid gap-1 rounded-xl p-1 sm:max-w-md"
       role="tablist"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
     >
@@ -104,8 +106,8 @@ export function PageTabs<T extends string>({
           aria-selected={value === t.key}
           className={`truncate rounded-lg px-3 py-1.5 text-sm transition-colors ${
             value === t.key
-              ? "bg-background font-medium shadow-sm"
-              : "text-default-500"
+              ? "bg-tray font-semibold shadow-sm"
+              : "text-foreground"
           }`}
           role="tab"
           type="button"
@@ -113,7 +115,7 @@ export function PageTabs<T extends string>({
         >
           {t.label}
           {t.badge !== undefined && t.badge !== null && (
-            <span className="ml-1 text-xs text-default-500">{t.badge}</span>
+            <span className="ml-1 text-xs font-semibold text-foreground">{t.badge}</span>
           )}
         </button>
       ))}
@@ -147,10 +149,10 @@ export function PageToolbar({
   return (
     <div className="mb-3 flex items-center gap-2">
       {onSearch && (
-        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-default-100 px-3 sm:max-w-xs">
-          <Search className="h-4 w-4 shrink-0 text-default-400" />
+        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-content1 px-3 sm:max-w-xs">
+          <Search className="h-4 w-4 shrink-0 text-foreground" />
           <input
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-400"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-700"
             enterKeyHint="search"
             placeholder={placeholder}
             type="text"
@@ -160,7 +162,7 @@ export function PageToolbar({
           {search && (
             <button
               aria-label="清除搜索"
-              className="text-default-400"
+              className="text-foreground"
               type="button"
               onClick={() => onSearch("")}
             >
@@ -227,8 +229,10 @@ export function SelectionBar({
   onExit: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl text-tray px-3 py-2 shadow-sm">
-      <span className="text-sm text-default-600">已选 {count} 个</span>
+    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl glass-surface px-3 py-2 shadow-sm">
+      <span className="text-sm font-semibold text-foreground">
+        已选 {count} 个
+      </span>
       <div className="ml-auto flex flex-wrap justify-end gap-2">
         <Button size="sm" variant="flat" onPress={onToggleAll}>
           {allSelected ? "取消全选" : "全选"}
@@ -314,9 +318,7 @@ export function ListRow({
           <span className="truncate font-medium">{title}</span>
           {badges}
         </div>
-        {meta && (
-          <div className="truncate text-xs text-default-500">{meta}</div>
-        )}
+        {meta && <div className="truncate text-xs font-semibold text-foreground">{meta}</div>}
       </div>
       {right && !selectMode && (
         <div
@@ -333,12 +335,12 @@ export function ListRow({
   return (
     <div
       aria-pressed={selectMode ? selected : undefined}
-      className={`flex w-full cursor-pointer gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
+      className={`flex w-full cursor-pointer gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${
         footer && !selectMode ? "flex-col" : "items-center"
       } ${
         selected
-          ? "border-primary bg-primary-50 dark:bg-primary-900"
-          : "border-divider bg-content1 hover:bg-default-100"
+          ? "glass-card border-primary bg-primary-500/10"
+          : "glass-card hover:bg-white/40"
       }`}
       role="button"
       tabIndex={0}
@@ -375,10 +377,10 @@ export function ListGroup({
   return (
     <section className="space-y-2">
       {title && (
-        <h2 className="flex w-fit items-baseline gap-2 rounded-lg text-tray px-2.5 py-1 text-sm font-semibold">
+        <h2 className="flex w-fit items-baseline gap-2 rounded-lg glass-surface px-2.5 py-1 text-sm font-semibold">
           {title}
           {count !== undefined && (
-            <span className="text-xs font-normal text-default-500">
+            <span className="text-xs font-semibold text-foreground">
               {count}
             </span>
           )}
@@ -397,7 +399,7 @@ export function EmptyHint({
   action?: PageAction;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-divider bg-tray px-4 py-8 text-center text-sm text-default-500">
+    <div className="glass-card flex flex-col items-center gap-3 rounded-xl border-dashed px-4 py-8 text-center text-sm text-foreground">
       <p>{text}</p>
       {action && (
         <Button

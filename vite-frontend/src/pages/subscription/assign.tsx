@@ -149,14 +149,14 @@ export default function SubscriptionAssignSection() {
     [users, userId],
   );
 
-  if (loading) return <p className="text-sm text-default-500">加载中...</p>;
+  if (loading) return <p className="text-sm text-foreground">加载中...</p>;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex flex-col gap-1">
           <h3 className="text-sm font-semibold">订阅分配</h3>
-          <p className="text-xs text-default-500">
+          <p className="text-xs font-semibold text-foreground">
             按订阅分配：用户将使用被分配订阅的独立链接，流量与到期按订阅单独计算。
           </p>
         </CardHeader>
@@ -180,18 +180,18 @@ export default function SubscriptionAssignSection() {
           </Select>
 
           {!userId ? (
-            <p className="text-sm text-default-400">
+            <p className="text-sm text-foreground">
               请先选择用户，再勾选要分配给他的订阅
             </p>
           ) : (
             <>
               {assignLoadError && (
-                <p className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-600 dark:border-danger-500/30 dark:bg-danger-900 dark:text-danger-400">
+                <p className="rounded-lg border border-danger-500/25 bg-danger-500/10 px-4 py-3 text-sm font-medium text-danger-700">
                   该用户的已分配订阅加载失败，下方勾选状态不可信，保存已禁用。请重新选择该用户重试。
                 </p>
               )}
               {subs.length === 0 ? (
-                <p className="text-sm text-default-400">
+                <p className="text-sm text-foreground">
                   还没有订阅，先在「订阅管理」里新建订阅再来分配
                 </p>
               ) : (
@@ -205,8 +205,8 @@ export default function SubscriptionAssignSection() {
                         key={s.id}
                         className={`flex cursor-pointer items-center gap-3 rounded-lg border border-divider px-4 py-3 transition-all ${
                           isSelected
-                            ? "bg-primary-50 dark:bg-primary-900"
-                            : "bg-white hover:bg-default-100 dark:bg-default-50"
+                            ? "glass-card border-primary bg-primary-500/10"
+                            : "glass-card hover:bg-white/40"
                         }`}
                       >
                         <input
@@ -221,7 +221,7 @@ export default function SubscriptionAssignSection() {
                           <p className="truncate text-sm font-medium">
                             {s.name}
                             {s.isDefault && (
-                              <span className="ml-2 text-xs font-normal text-default-500">
+                              <span className="ml-2 text-xs font-semibold text-foreground">
                                 默认
                               </span>
                             )}
@@ -231,7 +231,7 @@ export default function SubscriptionAssignSection() {
                               </Chip>
                             )}
                           </p>
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             {s.nodeCount} 个节点 ·{" "}
                             {s.trafficLimit
                               ? `限额 ${formatTraffic(s.trafficLimit)}（已用 ${formatTraffic(used)}）`
@@ -260,7 +260,7 @@ export default function SubscriptionAssignSection() {
                       : `保存订阅分配（已选 ${selected.size} 个）`}
                 </Button>
                 {selectedUser && (
-                  <span className="text-xs text-default-500">
+                  <span className="text-xs font-semibold text-foreground">
                     正在为 {selectedUser.user || selectedUser.name} 分配
                   </span>
                 )}

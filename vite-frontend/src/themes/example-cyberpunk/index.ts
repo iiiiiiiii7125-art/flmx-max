@@ -120,9 +120,10 @@ const cyberpunkTheme: ThemePackage = {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   onActivate: () => {
-    // Force dark mode for this theme
-    document.documentElement.classList.add("dark");
-    document.documentElement.style.colorScheme = "dark";
+    // LIGHT-ONLY: this theme once forced dark mode on activation; dark
+    // mode was removed app-wide (2026-11-02), so activation must not
+    // touch the root class or colorScheme (the registry also re-asserts
+    // light after lifecycle hooks as a choke point).
     // Mark the body for theme-specific CSS selectors
     document.body.setAttribute("data-flmx-theme", "cyberpunk");
   },

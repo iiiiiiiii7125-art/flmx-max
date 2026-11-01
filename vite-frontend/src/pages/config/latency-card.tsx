@@ -77,7 +77,7 @@ export function LatencySettings({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-default-500">
+      <p className="text-xs font-semibold text-foreground">
         节点定时用 TCP
         连接测到这些地址的延迟和丢包，代表该地区运营商用户到节点的延迟。
         打开“默认”的测试点所有节点都测；某台节点要测别的，到节点页的“测试点”单独选或批量设置。
@@ -86,7 +86,7 @@ export function LatencySettings({
       </p>
 
       {targets.length === 0 && (
-        <div className="rounded-lg border border-dashed border-divider px-3 py-4 text-center text-sm text-default-500">
+        <div className="rounded-lg border border-dashed border-divider px-3 py-4 text-center text-sm text-foreground">
           还没有测试点
           <div className="mt-2">
             <Button
@@ -149,7 +149,7 @@ export function LatencySettings({
                 }
               />
             </div>
-            <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-3 text-xs font-semibold">
               <span className="flex items-center gap-1.5">
                 <Switch
                   aria-label="默认"
@@ -165,7 +165,7 @@ export function LatencySettings({
                 size="sm"
                 onValueChange={(v) => update(i, { pinned: v })}
               >
-                <span className="text-xs">卡片显示</span>
+                <span className="text-xs font-semibold">卡片显示</span>
               </Checkbox>
               <span className="ml-auto flex items-center gap-0.5">
                 <Button
@@ -215,7 +215,7 @@ export function LatencySettings({
             {PRESETS.map((p) => (
               <DropdownItem
                 key={p.name}
-                className={names.has(p.name) ? "opacity-40" : ""}
+                className={names.has(p.name) ? "font-semibold" : ""}
                 onPress={() => add([p])}
               >
                 {p.name}
@@ -235,7 +235,7 @@ export function LatencySettings({
         >
           自定义
         </Button>
-        <span className="self-center text-xs text-default-400">
+        <span className="self-center text-xs font-semibold text-foreground">
           {targets.length} / {MAX_TARGETS}
         </span>
       </div>

@@ -44,7 +44,7 @@ export function ViewModeToggle({
   return (
     <div
       aria-label="展示方式"
-      className="flex h-9 shrink-0 items-center gap-0.5 rounded-xl bg-default-100 p-1"
+      className="glass-surface flex h-9 shrink-0 items-center gap-0.5 rounded-xl p-1"
       role="radiogroup"
     >
       {options.map(([m, label, Icon]) => (
@@ -54,8 +54,8 @@ export function ViewModeToggle({
           aria-label={label}
           className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
             value === m
-              ? "bg-background text-foreground shadow-sm"
-              : "text-default-400 hover:text-default-600"
+              ? "bg-tray text-foreground shadow-sm"
+              : "text-foreground hover:text-foreground"
           }`}
           role="radio"
           title={label}

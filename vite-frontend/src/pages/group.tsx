@@ -599,7 +599,7 @@ export default function GroupPage({
       <div className="px-3 lg:px-6 py-8">
         <Card>
           <CardBody>
-            <p className="text-danger">
+            <p className="text-danger-700">
               权限不足，只有管理员可以访问分组管理页面。
             </p>
           </CardBody>
@@ -619,7 +619,7 @@ export default function GroupPage({
             <CardHeader className="flex flex-row items-center gap-3 pb-2">
               <h3 className="text-lg font-semibold">隧道分组</h3>
               <Button
-                className="h-7 px-3 text-xs font-medium min-w-0 shadow-sm"
+                className="h-7 px-3 text-xs font-semibold min-w-0 shadow-sm"
                 color="primary"
                 size="sm"
                 onPress={openCreateTunnelGroup}
@@ -633,7 +633,7 @@ export default function GroupPage({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                   tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                 }}
@@ -658,6 +658,7 @@ export default function GroupPage({
                         <Chip
                           color={item.status === 1 ? "success" : "danger"}
                           size="sm"
+                          variant="flat"
                         >
                           {item.status === 1 ? "启用" : "停用"}
                         </Chip>
@@ -706,7 +707,7 @@ export default function GroupPage({
             <CardHeader className="flex flex-row items-center gap-3 pb-2">
               <h3 className="text-lg font-semibold">用户分组</h3>
               <Button
-                className="h-7 px-3 text-xs font-medium min-w-0 shadow-sm"
+                className="h-7 px-3 text-xs font-semibold min-w-0 shadow-sm"
                 color="primary"
                 size="sm"
                 onPress={openCreateUserGroup}
@@ -720,7 +721,7 @@ export default function GroupPage({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                   tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                 }}
@@ -745,6 +746,7 @@ export default function GroupPage({
                         <Chip
                           color={item.status === 1 ? "success" : "danger"}
                           size="sm"
+                          variant="flat"
                         >
                           {item.status === 1 ? "启用" : "停用"}
                         </Chip>
@@ -839,7 +841,7 @@ export default function GroupPage({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                   tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                 }}
@@ -897,7 +899,7 @@ export default function GroupPage({
             <ModalContent>
               <ModalHeader>{pendingConfirm?.title}</ModalHeader>
               <ModalBody>
-                <p className="text-sm text-default-600">
+                <p className="text-sm text-foreground">
                   {pendingConfirm?.description}
                 </p>
               </ModalBody>
@@ -1043,12 +1045,12 @@ export default function GroupPage({
                   {(item) => <SelectItem key={item.id}>{item.name}</SelectItem>}
                 </Select>
                 <p
-                  className="w-full min-w-0 max-w-full text-xs text-default-500 truncate"
+                  className="w-full min-w-0 max-w-full text-xs font-semibold text-foreground truncate"
                   title={`当前已选：${selectedTunnelSummary}`}
                 >
                   当前已选：{selectedTunnelSummary}
                 </p>
-                <p className="text-xs text-default-500">
+                <p className="text-xs font-semibold text-foreground">
                   不选择任何隧道并保存将清空该分组成员。
                 </p>
               </ModalBody>
@@ -1094,12 +1096,12 @@ export default function GroupPage({
                   {(item) => <SelectItem key={item.id}>{item.user}</SelectItem>}
                 </Select>
                 <p
-                  className="w-full min-w-0 max-w-full text-xs text-default-500 truncate"
+                  className="w-full min-w-0 max-w-full text-xs font-semibold text-foreground truncate"
                   title={`当前已选：${selectedUserSummary}`}
                 >
                   当前已选：{selectedUserSummary}
                 </p>
-                <p className="text-xs text-default-500">
+                <p className="text-xs font-semibold text-foreground">
                   不选择任何用户并保存将清空该分组成员。
                 </p>
               </ModalBody>

@@ -13,7 +13,7 @@ export const PageLoadingState = ({
     <div className={`flex items-center justify-center ${className}`}>
       <div className="flex items-center gap-3">
         <Spinner size="sm" />
-        <span className="text-default-600">{message}</span>
+        <span className="text-foreground">{message}</span>
       </div>
     </div>
   );
@@ -25,7 +25,7 @@ export const PageEmptyState = ({
 }: BaseStateProps) => {
   return (
     <div className={`flex items-center justify-center ${className}`}>
-      <span className="text-default-500">{message}</span>
+      <span className="text-foreground">{message}</span>
     </div>
   );
 };
@@ -36,7 +36,7 @@ export const PageErrorState = ({
 }: BaseStateProps) => {
   return (
     <div className={`flex items-center justify-center ${className}`}>
-      <span className="text-danger">{message}</span>
+      <span className="text-danger-700">{message}</span>
     </div>
   );
 };

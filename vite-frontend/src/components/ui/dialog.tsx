@@ -68,7 +68,7 @@ function DialogContent({
         data-slot="dialog-content"
         {...props}
       >
-        <div className="flex flex-col flex-1 min-h-0 gap-4 p-6 rounded-[inherit] overflow-hidden w-full h-full relative z-10 pointer-events-auto bg-tray">
+        <div className="flex flex-col flex-1 min-h-0 gap-4 p-6 rounded-[inherit] overflow-hidden w-full h-full relative z-10 pointer-events-auto">
           {children}
           {showCloseButton && (
             <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none">
@@ -130,7 +130,7 @@ function DialogDescription({
 }: React.ComponentProps<typeof DialogPrimitive.Description>) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-sm text-default-500", className)}
+      className={cn("text-sm text-foreground", className)}
       data-slot="dialog-description"
       {...props}
     />

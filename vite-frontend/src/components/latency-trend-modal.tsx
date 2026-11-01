@@ -13,6 +13,7 @@ import {
 } from "recharts";
 
 import { getNodeLatencyHistory } from "@/api";
+import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import {
   Modal,
@@ -38,7 +39,7 @@ const COLORS = [
   "#ec4899",
   "#84cc16",
   "#f97316",
-  "#64748b",
+  "#475569",
 ];
 
 function timeLabel(t: number, hours: number) {
@@ -124,20 +125,20 @@ export function LatencyTrendModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
           <h2 className="text-lg font-bold">延迟趋势</h2>
-          <p className="text-xs font-normal text-default-500">
+          <p className="text-xs font-semibold text-foreground">
             {nodeName ? `${nodeName} → 各测试点` : "节点 → 各测试点"}
             ，每 3 分钟一次
           </p>
         </ModalHeader>
         <ModalBody className="space-y-3">
-          <div className="flex gap-1 self-start rounded-lg bg-default-100 p-1">
+          <div className="flex gap-1 self-start rounded-lg bg-default-500/10 p-1">
             {RANGES.map((r) => (
               <button
                 key={r.hours}
                 className={`rounded-md px-3 py-1 text-xs transition-colors ${
                   hours === r.hours
-                    ? "bg-content1 font-medium shadow-sm"
-                    : "text-default-500 hover:text-default-700"
+                    ? "bg-tray font-semibold shadow-sm"
+                    : "text-foreground hover:text-default-700"
                 }`}
                 type="button"
                 onClick={() => setHours(r.hours)}
@@ -149,60 +150,60 @@ export function LatencyTrendModal({
 
           {loading && !trend ? (
             <div className="flex h-52 items-center sm:h-64 justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-default-400" />
+              <Loader2 className="h-5 w-5 animate-spin text-foreground" />
             </div>
           ) : rows.length === 0 ? (
-            <p className="flex h-52 items-center sm:h-64 justify-center text-sm text-default-500">
+            <p className="flex h-52 items-center sm:h-64 justify-center text-sm text-foreground">
               这段时间还没有记录
             </p>
           ) : (
             <div className="h-52 sm:h-64">
               <ResponsiveContainer height="100%" width="100%">
                 <LineChart data={rows}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid
+                    stroke="currentColor"
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.15}
+                  />
                   <XAxis
                     dataKey="t"
                     fontSize={11}
                     minTickGap={32}
+                    tick={{ fill: "currentColor", fontWeight: 600 }}
                     tickFormatter={(t: number) => timeLabel(t, hours)}
                   />
                   <YAxis
                     fontSize={11}
+                    tick={{ fill: "currentColor", fontWeight: 600 }}
                     tickFormatter={(v: number) => `${Math.round(v)}ms`}
                     width={52}
                   />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "rgba(0,0,0,0.8)",
-                      border: "none",
-                      borderRadius: "8px",
-                      fontSize: 12,
-                    }}
-                    formatter={(
-                      value: unknown,
-                      name: unknown,
-                      item: { payload?: unknown },
-                    ) => {
-                      const loss = Number(
-                        (item?.payload as Record<string, unknown>)?.[
-                          `${String(name)}\u0000loss`
-                        ] ?? 0,
-                      );
+                    content={
+                      <ChartGlassTooltip
+                        formatEntry={(entry) => {
+                          const loss = Number(
+                            (entry.payload as Record<string, unknown>)?.[
+                              `${String(entry.name)}\u0000loss`
+                            ] ?? 0,
+                          );
 
-                      return [
-                        value === null || value === undefined
-                          ? "超时"
-                          : `${Number(value).toFixed(0)}ms${
-                              loss > 0 ? ` · 丢包 ${loss}%` : ""
-                            }`,
-                        String(name),
-                      ];
-                    }}
-                    itemStyle={{ padding: 0 }}
-                    labelFormatter={(t: unknown) =>
-                      timeLabel(Number(t), hours > 24 ? 48 : 24)
+                          return {
+                            name: String(entry.name),
+                            value:
+                              entry.value === null || entry.value === undefined
+                                ? "超时"
+                                : `${Number(entry.value).toFixed(0)}ms${
+                                    loss > 0 ? ` · 丢包 ${loss}%` : ""
+                                  }`,
+                          };
+                        }}
+                        formatLabel={(t) =>
+                          timeLabel(Number(t), hours > 24 ? 48 : 24)
+                        }
+                      />
                     }
-                    labelStyle={{ color: "#fff" }}
+                    cursor={{ stroke: "currentColor", strokeOpacity: 0.25 }}
                   />
                   {points.map((p, i) => (
                     <Line
@@ -224,13 +225,13 @@ export function LatencyTrendModal({
 
           {points.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="text-default-500">
+              <table className="w-full text-xs font-semibold">
+                <thead className="text-foreground">
                   <tr className="border-b border-divider">
-                    <th className="py-1.5 text-left font-normal">测试点</th>
-                    <th className="py-1.5 text-right font-normal">平均</th>
-                    <th className="py-1.5 text-right font-normal">最高</th>
-                    <th className="py-1.5 text-right font-normal">平均丢包</th>
+                    <th className="py-1.5 text-left font-semibold">测试点</th>
+                    <th className="py-1.5 text-right font-semibold">平均</th>
+                    <th className="py-1.5 text-right font-semibold">最高</th>
+                    <th className="py-1.5 text-right font-semibold">平均丢包</th>
                   </tr>
                 </thead>
                 <tbody className="font-mono">

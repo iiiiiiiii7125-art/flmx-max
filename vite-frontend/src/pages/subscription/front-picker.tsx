@@ -24,7 +24,7 @@ export function SubFrontPicker({
 
   return (
     <div className="flex items-center gap-2">
-      <span className="whitespace-nowrap text-xs font-medium text-default-600">
+      <span className="whitespace-nowrap text-xs font-semibold text-foreground">
         链接地址
       </span>
       <Select

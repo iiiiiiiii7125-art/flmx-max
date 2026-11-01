@@ -1176,7 +1176,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             <Button
               isIconOnly
               aria-label="搜索"
-              className="text-default-600"
+              className="text-foreground"
               color="default"
               size="sm"
               variant="flat"
@@ -1188,10 +1188,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             <div className="flex w-full items-center gap-2 animate-appearance-in">
               <Input
                 classNames={{
-                  base: "bg-default-100",
+                  base: "bg-transparent",
                   input: "bg-transparent",
                   inputWrapper:
-                    "bg-default-100 border-2 border-default-200 hover:border-default-300 data-[hover=true]:border-default-300",
+                    "bg-content1 border-2 border-default-200 hover:border-default-300 data-[hover=true]:border-default-300",
                 }}
                 placeholder="搜索用户名"
                 value={searchKeyword}
@@ -1201,7 +1201,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <Button
                 isIconOnly
                 aria-label="关闭搜索"
-                className="text-default-600 shrink-0"
+                className="text-foreground shrink-0"
                 color="default"
                 size="sm"
                 variant="light"
@@ -1258,12 +1258,12 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : users.length === 0 ? (
-        <Card className="shadow-sm border border-gray-200 dark:border-gray-700 bg-default-50">
+        <Card className="shadow-sm">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无用户数据
             </h3>
-            <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
+            <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
               还没有创建任何用户，点击上方按钮开始创建
             </p>
           </CardBody>
@@ -1276,7 +1276,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             classNames={{
               wrapper:
                 "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-              th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+              th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
               td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
               tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
             }}
@@ -1311,13 +1311,13 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           <span className="font-medium text-foreground text-sm">
                             {user.name || user.user}
                           </span>
-                          <span className="text-xs text-default-500">
+                          <span className="text-xs font-semibold text-foreground">
                             @{user.user}
                           </span>
                         </div>
                         {user.disabledByQuota && (
                           <Chip
-                            className="text-[10px] h-4 px-1 ml-1"
+                            className="text-[10px] font-semibold h-4 px-1 ml-1"
                             color="danger"
                             size="sm"
                             variant="flat"
@@ -1329,14 +1329,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1 text-xs">
-                          <span className="text-default-500">已用:</span>
-                          <span className="text-danger font-medium whitespace-nowrap">
+                        <div className="flex items-center gap-1 text-xs font-semibold">
+                          <span className="text-foreground">已用:</span>
+                          <span className="text-danger-700 font-medium whitespace-nowrap">
                             {formatFlow(usedFlow)}
                           </span>
                         </div>
-                        <div className="flex items-center gap-1 text-xs">
-                          <span className="text-default-500">限制:</span>
+                        <div className="flex items-center gap-1 text-xs font-semibold">
+                          <span className="text-foreground">限制:</span>
                           <span className="text-default-700 font-medium whitespace-nowrap">
                             {formatFlowLimit(user.flow, user.flowMiB)}
                           </span>
@@ -1345,19 +1345,19 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-0.5 whitespace-nowrap text-[11px]">
+                      <div className="flex flex-col gap-0.5 whitespace-nowrap text-[11px] font-semibold">
                         {(user.dailyQuotaGB ?? 0) > 0 ||
                         (user.monthlyQuotaGB ?? 0) > 0 ? (
                           <>
                             <div className="flex gap-1 justify-between">
-                              <span className="text-default-500">日配额:</span>
+                              <span className="text-foreground">日配额:</span>
                               <span>
                                 {formatFlow(user.dailyUsedBytes ?? 0)} /{" "}
                                 {formatQuotaLimit(user.dailyQuotaGB)}
                               </span>
                             </div>
                             <div className="flex gap-1 justify-between">
-                              <span className="text-default-500">月配额:</span>
+                              <span className="text-foreground">月配额:</span>
                               <span>
                                 {formatFlow(user.monthlyUsedBytes ?? 0)} /{" "}
                                 {formatQuotaLimit(user.monthlyQuotaGB)}
@@ -1365,7 +1365,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                             </div>
                           </>
                         ) : (
-                          <span className="text-default-400">无配额</span>
+                          <span className="text-foreground">无配额</span>
                         )}
                       </div>
                     </TableCell>
@@ -1383,7 +1383,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                             </span>
                             {expStatus && (
                               <Chip
-                                className="h-5 px-1 text-[10px]"
+                                className="h-5 px-1 text-[10px] font-semibold"
                                 color={expStatus.color}
                                 size="sm"
                                 variant="flat"
@@ -1393,7 +1393,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                             )}
                           </>
                         ) : (
-                          <span className="text-default-400 text-sm">
+                          <span className="text-foreground text-sm">
                             无限期
                           </span>
                         )}
@@ -1402,7 +1402,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950 dark:text-emerald-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-950 dark:text-emerald-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleManageTunnels(user)}
@@ -1410,7 +1410,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           权限
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:bg-amber-950 dark:text-amber-400"
                           size="sm"
                           title="重置流量"
                           variant="flat"
@@ -1419,7 +1419,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           重置
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 dark:bg-indigo-950 dark:text-indigo-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleEdit(user)}
@@ -1427,7 +1427,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           编辑
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 dark:bg-rose-950 dark:text-rose-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleDelete(user)}
@@ -1478,14 +1478,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           <h3 className="font-semibold text-foreground truncate text-sm">
                             {user.name || user.user}
                           </h3>
-                          <p className="text-xs text-default-500 truncate">
+                          <p className="text-xs font-semibold text-foreground truncate">
                             @{user.user}
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 ml-2">
                         <Chip
-                          className="text-xs"
+                          className="text-xs font-semibold"
                           color={userStatus.color}
                           size="sm"
                           variant="flat"
@@ -1494,7 +1494,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         </Chip>
                         {user.disabledByQuota ? (
                           <Chip
-                            className="text-xs"
+                            className="text-xs font-semibold"
                             color="danger"
                             size="sm"
                             variant="flat"
@@ -1511,14 +1511,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                       {/* 流量信息 */}
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-sm">
-                          <span className="text-default-600">流量限制</span>
-                          <span className="font-medium text-xs">
+                          <span className="text-foreground">流量限制</span>
+                          <span className="font-semibold text-xs">
                             {formatFlowLimit(user.flow, user.flowMiB)}
                           </span>
                         </div>
                         <div className="flex justify-between text-sm">
-                          <span className="text-default-600">已使用</span>
-                          <span className="font-medium text-xs text-danger">
+                          <span className="text-foreground">已使用</span>
+                          <span className="font-semibold text-xs text-danger-700">
                             {formatFlow(usedFlow)}
                           </span>
                         </div>
@@ -1544,15 +1544,15 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         (user.disabledByQuota ?? 0) > 0 ? (
                           <>
                             <div className="flex justify-between text-sm">
-                              <span className="text-default-600">每日配额</span>
-                              <span className="font-medium text-xs">
+                              <span className="text-foreground">每日配额</span>
+                              <span className="font-semibold text-xs">
                                 {formatFlow(Number(user.dailyUsedBytes ?? 0))} /{" "}
                                 {formatQuotaLimit(user.dailyQuotaGB)}
                               </span>
                             </div>
                             <div className="flex justify-between text-sm">
-                              <span className="text-default-600">每月配额</span>
-                              <span className="font-medium text-xs">
+                              <span className="text-foreground">每月配额</span>
+                              <span className="font-semibold text-xs">
                                 {formatFlow(Number(user.monthlyUsedBytes ?? 0))}{" "}
                                 / {formatQuotaLimit(user.monthlyQuotaGB)}
                               </span>
@@ -1560,14 +1560,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           </>
                         ) : null}
                         <div className="flex justify-between text-sm">
-                          <span className="text-default-600">规则数量</span>
-                          <span className="font-medium text-xs">
+                          <span className="text-foreground">规则数量</span>
+                          <span className="font-semibold text-xs">
                             {user.num <= 0 ? "无限制" : user.num}
                           </span>
                         </div>
                         <div className="flex justify-between text-sm">
-                          <span className="text-default-600">重置日期</span>
-                          <span className="text-xs">
+                          <span className="text-foreground">重置日期</span>
+                          <span className="text-xs font-semibold">
                             {user.flowResetTime === 0
                               ? "不重置"
                               : `每月${user.flowResetTime}号`}
@@ -1575,15 +1575,15 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         </div>
                         {user.expTime && (
                           <div className="flex justify-between text-sm">
-                            <span className="text-default-600">过期时间</span>
+                            <span className="text-foreground">过期时间</span>
                             <div className="text-right">
                               {expStatus && expStatus.color === "success" ? (
-                                <div className="text-xs">
+                                <div className="text-xs font-semibold">
                                   {formatDate(user.expTime)}
                                 </div>
                               ) : (
                                 <Chip
-                                  className="text-xs"
+                                  className="text-xs font-semibold"
                                   color={expStatus?.color || "default"}
                                   size="sm"
                                   variant="flat"
@@ -1679,7 +1679,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
           >
             上一页
           </Button>
-          <span className="text-sm text-default-500">
+          <span className="text-sm font-medium text-foreground">
             第 {pagination.current} 页 · 本页 {users.length} 条
             {!hasNextPage &&
               ` · 共 ${(pagination.current - 1) * pagination.size + users.length} 个用户`}
@@ -1829,13 +1829,13 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               ((editingUser.dailyQuotaGB ?? 0) > 0 ||
                 (editingUser.monthlyQuotaGB ?? 0) > 0 ||
                 (editingUser.disabledByQuota ?? 0) > 0) && (
-                <div className="space-y-3 rounded-xl border border-default-200 bg-default-50 p-4">
+                <div className="glass-card space-y-3 rounded-xl p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-semibold text-foreground">
                         当前配额状态
                       </h3>
-                      <p className="text-xs text-default-500">
+                      <p className="text-xs font-semibold text-foreground">
                         配额超额后会自动暂停该用户的转发，重置后可恢复
                       </p>
                     </div>
@@ -1851,15 +1851,15 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div className="rounded-lg bg-background p-3">
-                      <div className="text-xs text-default-500">每日用量</div>
+                    <div className="rounded-lg glass-inset p-3">
+                      <div className="text-xs font-semibold text-foreground">每日用量</div>
                       <div className="mt-1 text-sm font-semibold text-foreground">
                         {formatFlow(Number(editingUser.dailyUsedBytes ?? 0))} /{" "}
                         {formatQuotaLimit(editingUser.dailyQuotaGB)}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-background p-3">
-                      <div className="text-xs text-default-500">每月用量</div>
+                    <div className="rounded-lg glass-inset p-3">
+                      <div className="text-xs font-semibold text-foreground">每月用量</div>
                       <div className="mt-1 text-sm font-semibold text-foreground">
                         {formatFlow(Number(editingUser.monthlyUsedBytes ?? 0))}{" "}
                         / {formatQuotaLimit(editingUser.monthlyQuotaGB)}
@@ -1933,7 +1933,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             )}
 
             {isEdit && userGroupLoadFailed && (
-              <p className="text-xs text-danger-500">
+              <p className="text-xs font-semibold text-danger-700">
                 该用户的分组归属加载失败，上方分组选择不可信；本次保存不会修改其分组归属。
               </p>
             )}
@@ -1971,12 +1971,12 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               {/* 监控权限部分 */}
               <div>
                 <h3 className="text-lg font-semibold mb-4">监控权限</h3>
-                <div className="flex items-center justify-between gap-4 bg-default-100 dark:bg-default-50 p-4 rounded-lg border border-default-200 dark:border-default-100/30">
+                <div className="flex items-center justify-between gap-4 glass-inset p-4 rounded-lg border border-divider">
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-foreground">
                       允许访问监控功能
                     </div>
-                    <div className="text-xs text-default-500 mt-1">
+                    <div className="text-xs font-semibold text-foreground mt-1">
                       授予后，该用户可以访问监控页面并管理服务监控（TCP/ICMP）。
                     </div>
                   </div>
@@ -2006,7 +2006,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <div>
                 <h3 className="text-lg font-semibold mb-4">分配新权限</h3>
                 <div className="space-y-4">
-                  <div className="text-sm text-default-500 bg-default-100 dark:bg-default-50 p-3 rounded-lg border border-default-200 dark:border-default-100/30">
+                  <div className="text-sm text-foreground glass-inset p-3 rounded-lg border border-divider">
                     流量限制、规则数量、到期时间、流量重置时间将自动继承用户设置
                   </div>
 
@@ -2026,10 +2026,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                             px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer
                             ${
                               isAssigned
-                                ? "bg-default-100 dark:bg-default-50 border-default-200/50 dark:border-default-100/20 opacity-60 cursor-not-allowed"
+                                ? "glass-inset border-divider opacity-60 cursor-not-allowed"
                                 : isSelected
-                                  ? "bg-primary-50 dark:bg-primary-900 border-primary-300 dark:border-primary-500/50 shadow-sm"
-                                  : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
+                                  ? "bg-primary-500/10 border-primary-300 shadow-sm"
+                                  : "glass-card border-divider hover:border-primary-200 hover:shadow-sm"
                             }
                           `}
                           role="button"
@@ -2062,7 +2062,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                                 }
                               />
                               <span
-                                className={`font-medium truncate ${isAssigned ? "text-default-400" : "text-default-700 dark:text-default-600"}`}
+                                className={`font-medium truncate ${isAssigned ? "text-foreground" : "text-default-700 dark:text-default-600"}`}
                               >
                                 {tunnel.name}
                               </span>
@@ -2127,7 +2127,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                       );
                     })}
                     {tunnels.length === 0 && (
-                      <div className="p-8 text-center text-default-400 bg-default-50 dark:bg-default-100 rounded-lg border border-dashed border-default-200 dark:border-default-100/30">
+                      <div className="p-8 text-center text-foreground rounded-lg border border-dashed border-divider">
                         暂无可用隧道
                       </div>
                     )}
@@ -2158,7 +2158,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                 <Table
                   aria-label="用户隧道权限列表"
                   classNames={{
-                    th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                    th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                     td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                     tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                   }}
@@ -2186,7 +2186,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         <TableCell>
                           <div className="flex flex-col gap-1">
                             <div className="flex justify-between text-small">
-                              <span className="text-gray-600">限制:</span>
+                              <span className="text-foreground">限制:</span>
                               <span className="font-medium">
                                 {formatFlowLimit(
                                   userTunnel.flow,
@@ -2195,8 +2195,8 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                               </span>
                             </div>
                             <div className="flex justify-between text-small">
-                              <span className="text-gray-600">已用:</span>
-                              <span className="font-medium text-danger">
+                              <span className="text-foreground">已用:</span>
+                              <span className="font-medium text-danger-700">
                                 {formatFlow(
                                   calculateTunnelUsedFlow(userTunnel),
                                 )}
@@ -2241,7 +2241,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           {userTunnel.expTime ? (
                             formatDate(userTunnel.expTime)
                           ) : (
-                            <span className="text-default-400 text-sm">
+                            <span className="text-foreground text-sm">
                               永久
                             </span>
                           )}
@@ -2499,17 +2499,17 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
           <ModalBody>
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-danger-100 rounded-full flex items-center justify-center">
-                <DeleteIcon className="w-6 h-6 text-danger" />
+                <DeleteIcon className="w-6 h-6 text-danger-700" />
               </div>
               <div className="flex-1">
                 <p className="text-foreground">
                   确定要删除用户{" "}
-                  <span className="font-semibold text-danger">
+                  <span className="font-semibold text-danger-700">
                     &quot;{userToDelete?.user}&quot;
                   </span>{" "}
                   吗？
                 </p>
-                <p className="text-small text-default-500 mt-1">
+                <p className="text-small text-foreground mt-1">
                   此操作不可撤销，用户的所有数据将被永久删除。
                 </p>
               </div>
@@ -2549,19 +2549,19 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
           <ModalBody>
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-danger-100 rounded-full flex items-center justify-center">
-                <DeleteIcon className="w-6 h-6 text-danger" />
+                <DeleteIcon className="w-6 h-6 text-danger-700" />
               </div>
               <div className="flex-1">
                 <p className="text-foreground">
                   确定要删除用户{" "}
                   <span className="font-semibold">{currentUser?.user}</span>{" "}
                   对隧道{" "}
-                  <span className="font-semibold text-danger">
+                  <span className="font-semibold text-danger-700">
                     &quot;{tunnelToDelete?.tunnelName}&quot;
                   </span>{" "}
                   的权限吗？
                 </p>
-                <p className="text-small text-default-500 mt-1">
+                <p className="text-small text-foreground mt-1">
                   删除后该用户将无法使用此隧道创建规则，此操作不可撤销。{" "}
                 </p>
               </div>
@@ -2603,7 +2603,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <div className="w-12 h-12 bg-warning-100 rounded-full flex items-center justify-center">
                 <svg
                   aria-hidden="true"
-                  className="w-6 h-6 text-warning"
+                  className="w-6 h-6 text-warning-700"
                   fill="currentColor"
                   viewBox="0 0 20 20"
                 >
@@ -2617,15 +2617,15 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <div className="flex-1">
                 <p className="text-foreground">
                   确定要重置用户{" "}
-                  <span className="font-semibold text-warning">
+                  <span className="font-semibold text-warning-700">
                     &quot;{userToReset?.user}&quot;
                   </span>{" "}
                   的流量吗？
                 </p>
-                <p className="text-small text-default-500 mt-1">
+                <p className="text-small text-foreground mt-1">
                   该操作只会重置账号流量不会重置隧道权限流量，重置后该用户的上下行流量将归零，此操作不可撤销。
                 </p>
-                <div className="mt-2 p-2 bg-warning-50 dark:bg-warning-900 rounded text-xs">
+                <div className="mt-2 p-2 bg-warning-500/10 rounded text-xs font-semibold">
                   <div className="text-warning-700 dark:text-warning-300">
                     当前流量使用情况：
                   </div>
@@ -2695,7 +2695,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <div className="w-12 h-12 bg-warning-100 rounded-full flex items-center justify-center">
                 <svg
                   aria-hidden="true"
-                  className="w-6 h-6 text-warning"
+                  className="w-6 h-6 text-warning-700"
                   fill="currentColor"
                   viewBox="0 0 20 20"
                 >
@@ -2711,15 +2711,15 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                   确定要重置用户{" "}
                   <span className="font-semibold">{currentUser?.user}</span>{" "}
                   对隧道{" "}
-                  <span className="font-semibold text-warning">
+                  <span className="font-semibold text-warning-700">
                     &quot;{tunnelToReset?.tunnelName}&quot;
                   </span>{" "}
                   的流量吗？
                 </p>
-                <p className="text-small text-default-500 mt-1">
+                <p className="text-small text-foreground mt-1">
                   该操作只会重置隧道权限流量不会重置账号流量，重置后该隧道权限的上下行流量将归零，此操作不可撤销。
                 </p>
-                <div className="mt-2 p-2 bg-warning-50 dark:bg-warning-900 rounded text-xs">
+                <div className="mt-2 p-2 bg-warning-500/10 rounded text-xs font-semibold">
                   <div className="text-warning-700 dark:text-warning-300">
                     当前流量使用情况：
                   </div>

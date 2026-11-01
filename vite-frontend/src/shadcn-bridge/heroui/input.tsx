@@ -39,7 +39,7 @@ export interface TextareaProps
 
 function inputSizeClass(size: "sm" | "md" | "lg" | undefined) {
   if (size === "sm") {
-    return "h-8 text-xs";
+    return "h-8 text-xs font-semibold";
   }
   if (size === "lg") {
     return "h-10 text-base";
@@ -85,7 +85,7 @@ export function Input({
         )}
       >
         {startContent ? (
-          <div className="pl-3 text-default-500">{startContent}</div>
+          <div className="pl-3 text-foreground">{startContent}</div>
         ) : null}
         <BaseInput
           aria-invalid={isInvalid}
@@ -103,7 +103,7 @@ export function Input({
           {...props}
         />
         {endContent ? (
-          <div className="pr-3 text-default-500">{endContent}</div>
+          <div className="pr-3 text-foreground">{endContent}</div>
         ) : null}
       </div>
     </FieldContainer>
@@ -144,7 +144,7 @@ export function Textarea({
         aria-invalid={isInvalid}
         className={cn(
           variant === "bordered" ? "border border-input" : "",
-          size === "sm" ? "text-xs" : "",
+          size === "sm" ? "text-xs font-semibold" : "",
           size === "lg" ? "text-base" : "",
           maxRows ? "max-h-[40vh]" : "",
           classNames?.input,

@@ -28,7 +28,7 @@ export default function H5SimpleLayout({
           <Button isIconOnly size="sm" variant="light" onPress={handleBack}>
             <BackIcon className="w-5 h-5" />
           </Button>
-          <div className="flex items-center gap-2 text-tray rounded-full py-1 pl-1.5 pr-3">
+          <div className="flex items-center gap-2 glass-surface rounded-full py-1 pl-1.5 pr-3">
             <BrandLogo size={20} />
             <h1 className="text-sm font-bold text-foreground">
               {siteConfig.name}

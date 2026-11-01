@@ -494,7 +494,7 @@ export function InboundFormModal({
               <h2 className="text-xl font-bold">
                 {isEdit ? "编辑入站" : "新建入站"}
               </h2>
-              <p className="text-small text-default-500">
+              <p className="text-small text-foreground">
                 留空的 UUID、密码、密钥会自动生成，端口留空则随机分配
               </p>
             </ModalHeader>
@@ -538,7 +538,7 @@ export function InboundFormModal({
                 </div>
 
                 {form.nodeId && !installedKernel && (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-warning-50 dark:bg-warning-900 px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-warning-500/10 px-3 py-2 text-sm font-medium">
                     <span className="text-warning-700 dark:text-warning-400">
                       该节点还没有安装 {kernelInfo?.name ?? form.kernelType}
                     </span>
@@ -570,8 +570,8 @@ export function InboundFormModal({
                             key={p.key}
                             className={`text-left rounded-xl border px-3 py-2 transition-colors ${
                               active
-                                ? "border-primary bg-primary-50 dark:bg-primary-900"
-                                : "border-divider hover:bg-default-100"
+                                ? "border-primary bg-primary-500/10"
+                                : "border-divider hover:bg-white/40"
                             }`}
                             type="button"
                             onClick={() =>
@@ -579,7 +579,7 @@ export function InboundFormModal({
                             }
                           >
                             <div className="text-sm font-medium">{p.label}</div>
-                            <div className="text-xs text-default-500">
+                            <div className="text-xs font-semibold text-foreground">
                               {p.description}
                             </div>
                           </button>
@@ -786,7 +786,7 @@ export function InboundFormModal({
                             random 全随机
                           </SelectItem>
                         </Select>
-                        <p className="text-xs text-default-400">
+                        <p className="text-xs font-semibold text-foreground">
                           开启时自动套用标准配置（TCP、安全无、ML-KEM-768
                           认证、native 外观；纯 ENC 形态不开启 Vision
                           流控），需要节点 Xray 25.9.5 及以上。启用后
@@ -1060,7 +1060,7 @@ export function InboundFormModal({
                     </div>
                     {certMode === "acme" && (
                       <div className="space-y-3">
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs font-semibold text-foreground">
                           由 sing-box 向 Let&apos;s Encrypt
                           申请并自动续期，域名需要解析到该节点。 HTTP
                           验证要求节点 80 端口可从公网访问；用 DNS
@@ -1170,7 +1170,7 @@ export function InboundFormModal({
                 )}
 
                 <button
-                  className="text-sm text-primary"
+                  className="text-sm text-primary-700"
                   type="button"
                   onClick={() => setShowAdvanced((v) => !v)}
                 >
@@ -1239,7 +1239,7 @@ export function InboundFormModal({
                           : "仅 Xray 内核支持空闲超时：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout）；存量值会在保存时自动清除"
                       }
                       endContent={
-                        <span className="text-xs text-default-400">秒</span>
+                        <span className="text-xs font-semibold text-foreground">秒</span>
                       }
                       inputMode="numeric"
                       isDisabled={
@@ -1269,7 +1269,7 @@ export function InboundFormModal({
                       />
                       <div>
                         <p className="text-sm">不限</p>
-                        <p className="text-xs text-default-500">
+                        <p className="text-xs font-semibold text-foreground">
                           勾选后空闲超时不限：渲染为 365 天，Xray 按 (N, 2N]
                           窗口计时、实际 1–2
                           年才断，等同于永不因空闲断开；常驻连接（如自动客服）用此项。取消勾选恢复原值。
@@ -1278,8 +1278,8 @@ export function InboundFormModal({
                     </div>
                     {form.kernelType !== "xray" &&
                       form.connIdleSeconds.trim() !== "" && (
-                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider bg-default-50 px-3 py-2">
-                          <p className="text-xs text-warning-600">
+                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider glass-inset px-3 py-2">
+                          <p className="text-xs font-semibold text-warning-600">
                             该入站为非 Xray 内核，存量空闲超时{" "}
                             {form.connIdleSeconds === "-1"
                               ? "不限"
@@ -1308,7 +1308,7 @@ export function InboundFormModal({
                           />
                           <div>
                             <p className="text-sm">按订阅计量流量</p>
-                            <p className="text-xs text-default-500">
+                            <p className="text-xs font-semibold text-foreground">
                               {meteringEligibilityReason
                                 ? form.meteringEnabled
                                   ? `${meteringEligibilityReason}，不支持订阅计量；当前已开启，请先关闭计量后再保存，或改回 Shadowsocks 2022 方法并取消 ShadowTLS 前置。关闭计量后可与本次修改同单保存。`
@@ -1339,7 +1339,7 @@ export function InboundFormModal({
                         />
                         <div>
                           <p className="text-sm">仅通过中转提供</p>
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             订阅和分享中不再给出落地节点的直连地址
                           </p>
                         </div>
@@ -1358,7 +1358,7 @@ export function InboundFormModal({
                           <p className="text-sm">
                             获取真实客户端 IP（PROXY protocol）
                           </p>
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             {form.kernelType === "xray"
                               ? "中转转发会附带客户端地址，落地内核日志可见真实 IP。开启后直连将无法使用，自动变为仅中转"
                               : "目前只有 Xray 内核支持"}
@@ -1375,7 +1375,7 @@ export function InboundFormModal({
                           <p className="text-sm">
                             仅允许中转机访问（防火墙白名单）
                           </p>
-                          <p className="text-xs text-default-500">
+                          <p className="text-xs font-semibold text-foreground">
                             只放行已对接中转的入口节点 IP
                             和本机，其他来源访问该端口一律丢弃；需要节点安装
                             nftables

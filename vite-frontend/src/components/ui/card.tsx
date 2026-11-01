@@ -12,10 +12,13 @@ function Card({
     <div
       className={cn(
         "relative flex flex-col transition-[transform,box-shadow] duration-200 ease-refined hover:-translate-y-px hover:shadow-md",
-        // Round 4 "壳透字托": the card shell is clear glass; all content
-        // rides the opaque tray plate inset inside it (see below), so
-        // card text never sits directly on glass or wallpaper.
-        "glass-card rounded-2xl p-1.5 text-card-foreground shadow-sm",
+        // Round 5 (user anchor: the kernel page's node cards): a card is
+        // ONE clear-glass surface and its content sits directly on the
+        // glass — no opaque tray plate under card interiors. Readability
+        // comes from paired foreground colors on the glass (dark text in
+        // light mode, light text in dark mode); solid trays survive only
+        // on small elements (pills, chips, badges, primary buttons).
+        "glass-card rounded-2xl text-card-foreground shadow-sm",
         className,
       )}
       data-slot="card"
@@ -24,9 +27,7 @@ function Card({
       }}
       {...props}
     >
-      <div className="flex flex-1 flex-col overflow-hidden rounded-[14px] bg-tray">
-        {children}
-      </div>
+      <div className="flex flex-1 flex-col">{children}</div>
     </div>
   );
 }
@@ -63,7 +64,7 @@ function CardTitle({
 function CardDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <p
-      className={cn("text-sm text-default-600", className)}
+      className={cn("text-sm font-medium text-foreground", className)}
       data-slot="card-description"
       {...props}
     />

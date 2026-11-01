@@ -227,7 +227,7 @@ export default function IndexPage() {
               <h1 className="text-2xl font-bold tracking-tight text-foreground">
                 {siteName}
               </h1>
-              <p className="text-sm text-default-500 mt-2 font-medium">
+              <p className="text-sm text-foreground mt-2 font-medium">
                 Sign in to manage your networks
               </p>
             </CardHeader>
@@ -301,10 +301,10 @@ export default function IndexPage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-4 text-center py-4"
-          poweredClassName="text-xs text-gray-500 dark:text-gray-400 mx-auto mt-1 w-fit text-tray rounded-full px-3 py-0.5"
-          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
+          poweredClassName="text-xs font-semibold text-foreground mx-auto mt-1 w-fit glass-surface rounded-full px-3 py-0.5"
+          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={isWebView ? siteConfig.app_version : siteConfig.version}
-          versionClassName="text-xs text-gray-500 dark:text-gray-400 mt-1 mx-auto w-fit text-tray rounded-full px-3 py-1"
+          versionClassName="text-xs font-semibold text-foreground mt-1 mx-auto w-fit glass-surface rounded-full px-3 py-1"
         />
 
         {/* 验证码弹层 */}
@@ -326,21 +326,17 @@ export default function IndexPage() {
               }}
             />
             {/* 验证码容器 */}
-            <div className="mb-4 relative z-50 bg-white dark:bg-zinc-900 p-6 rounded-lg shadow-xl">
-              <div className="mb-4 text-center text-sm font-medium text-gray-700 dark:text-gray-200">
+            <div className="glass-surface mb-4 relative z-50 p-6 rounded-lg shadow-xl">
+              <div className="mb-4 text-center text-sm font-medium text-foreground dark:text-gray-200">
                 请完成安全验证
               </div>
               <div className="flex justify-center">
                 <Turnstile
                   options={{
-                    theme: (document.documentElement.classList.contains(
-                      "dark",
-                    ) ||
-                    document.documentElement.getAttribute("data-theme") ===
-                      "dark" ||
-                    window.matchMedia("(prefers-color-scheme: dark)").matches
-                      ? "dark"
-                      : "light") as "light" | "dark" | "auto",
+                    // LIGHT-ONLY: the app has no dark mode (removed
+                    // 2026-11-02), so the captcha widget is pinned to
+                    // its light theme instead of probing class/OS.
+                    theme: "light",
                   }}
                   siteKey={siteKey}
                   onError={() => {

@@ -32,7 +32,7 @@ export const FlowChartCard = ({
         <div className="flex items-center gap-2">
           <svg
             aria-hidden="true"
-            className="w-5 h-5 text-primary"
+            className="w-5 h-5 text-primary-700"
             fill="currentColor"
             viewBox="0 0 20 20"
           >
@@ -57,12 +57,12 @@ export const FlowChartCard = ({
                 <XAxis
                   axisLine={false}
                   dataKey="time"
-                  tick={{ fill: "currentColor", opacity: 0.5, fontSize: 12 }}
+                  tick={{ fill: "currentColor", fontSize: 12, fontWeight: 600 }}
                   tickLine={false}
                 />
                 <YAxis
                   axisLine={false}
-                  tick={{ fill: "currentColor", opacity: 0.5, fontSize: 12 }}
+                  tick={{ fill: "currentColor", fontSize: 12, fontWeight: 600 }}
                   tickFormatter={(value: number | string) => {
                     const v = typeof value === "number" ? value : Number(value);
 
@@ -98,16 +98,16 @@ export const FlowChartCard = ({
                         : 0;
 
                       return (
-                        <div className="text-tray rounded-2xl shadow-lg p-4">
+                        <div className="glass-surface rounded-2xl shadow-lg p-4">
                           <p className="font-medium text-foreground">{`时间: ${label ?? ""}`}</p>
-                          <p className="text-primary font-semibold mt-1">{`流量: ${formatFlow(flowValue)}`}</p>
+                          <p className="text-primary-700 font-semibold mt-1">{`流量: ${formatFlow(flowValue)}`}</p>
                         </div>
                       );
                     }
 
                     return null;
                   }}
-                  cursor={{ fill: "rgba(0, 122, 255, 0.05)" }}
+                  cursor={{ fill: "rgba(0, 122, 255, 0.1)" }}
                 />
                 <Line dataKey="flow" stroke="#007aff" type="monotone" />
               </LineChart>

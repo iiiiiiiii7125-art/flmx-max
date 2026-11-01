@@ -271,7 +271,7 @@ export function KernelPanel({
     return (
       <div
         key={k.id}
-        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-default-100"
+        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/40"
         role="button"
         tabIndex={0}
         onClick={() => setSheetFor(k.id)}
@@ -287,22 +287,20 @@ export function KernelPanel({
             <span className="shrink-0 font-medium">
               {kernelName(k.kernelType)}
             </span>
-            <span className="truncate text-xs text-default-500 font-mono">
+            <span className="truncate text-xs font-semibold text-foreground font-mono">
               {k.installedVersion
                 ? shortVersion(k.installedVersion)
                 : k.version}
             </span>
           </div>
-          <div className="text-xs text-default-500">
-            {k.inboundCount} 个入站
-          </div>
+          <div className="text-xs font-semibold text-foreground">{k.inboundCount} 个入站</div>
           {k.lastError && (
-            <p className="mt-1 text-xs text-danger break-all line-clamp-2">
+            <p className="mt-1 text-xs font-semibold text-danger-700 break-all line-clamp-2">
               {k.lastError}
             </p>
           )}
           {!k.synced && !k.lastError && (
-            <p className="mt-1 text-xs text-warning">
+            <p className="mt-1 text-xs font-semibold text-warning-700">
               配置尚未同步，节点上线后自动下发
             </p>
           )}
@@ -310,7 +308,7 @@ export function KernelPanel({
         <Chip color={st.color} size="sm" variant="flat">
           {st.label}
         </Chip>
-        <MoreHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-default-400" />
+        <MoreHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />
       </div>
     );
   };
@@ -318,7 +316,7 @@ export function KernelPanel({
   return (
     <div>
       <div className="flex items-center justify-between mb-3 gap-2">
-        <p className="text-xs text-default-500 text-tray w-fit rounded-full px-2.5 py-1">
+        <p className="text-xs font-semibold text-foreground tray-plate w-fit rounded-full px-2.5 py-1">
           点击内核可启停、重启、查看日志或卸载
         </p>
         <Button
@@ -332,8 +330,8 @@ export function KernelPanel({
       </div>
 
       {kernels.length === 0 ? (
-        <Card className="shadow-sm bg-default-50">
-          <CardBody className="text-center py-10 text-sm text-default-500">
+        <Card className="shadow-sm">
+          <CardBody className="text-center py-10 text-sm text-foreground">
             还没有在任何节点上安装内核。点击“安装内核”，先在落地节点上安装
             Xray，再到“入站”里创建节点。
           </CardBody>
@@ -444,7 +442,7 @@ export function KernelPanel({
         onClose={() => setSheetFor(null)}
       >
         {sheetKernel?.lastError && (
-          <p className="text-xs text-danger break-all">
+          <p className="text-xs font-semibold text-danger-700 break-all">
             {sheetKernel.lastError}
           </p>
         )}
@@ -462,7 +460,7 @@ export function KernelPanel({
             <>
               <ModalHeader className="flex flex-col gap-1">
                 <h2 className="text-xl font-bold">安装内核</h2>
-                <p className="text-small text-default-500">
+                <p className="text-small text-foreground">
                   节点会从官方 Release 下载并校验
                   SHA256，首次安装可能需要一两分钟
                 </p>
@@ -654,7 +652,7 @@ export function KernelPanel({
                   日志
                 </h2>
                 {logs && (
-                  <p className="text-small text-default-500">
+                  <p className="text-small text-foreground">
                     {logs.running ? `运行中 PID ${logs.pid}` : "未运行"}
                     {logs.restarts > 0
                       ? ` · 已自动重启 ${logs.restarts} 次`
@@ -663,7 +661,7 @@ export function KernelPanel({
                 )}
               </ModalHeader>
               <ModalBody>
-                <pre className="text-xs whitespace-pre-wrap break-all bg-default-100 rounded-xl p-3 max-h-[60vh] overflow-auto">
+                <pre className="text-xs font-semibold whitespace-pre-wrap break-all bg-white/40 rounded-xl p-3 max-h-[60vh] overflow-auto">
                   {logsLoading
                     ? "加载中..."
                     : (logs?.logs ?? []).join("\n") || "暂无日志"}
@@ -696,22 +694,22 @@ export function KernelPanel({
           {(onClose) => (
             <>
               <ModalHeader>
-                <h2 className="text-lg font-bold text-danger">卸载内核</h2>
+                <h2 className="text-lg font-bold text-danger-700">卸载内核</h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-default-600">
+                <p className="text-foreground">
                   确定从{" "}
                   <span className="font-semibold text-foreground">
                     {removeTarget?.nodeName}
                   </span>{" "}
                   卸载 {kernelName(removeTarget?.kernelType ?? "")} 吗？
                 </p>
-                <p className="text-small text-danger">
+                <p className="text-small text-danger-700">
                   该内核下的 {removeTarget?.inboundCount ?? 0}{" "}
                   个入站会一起删除，且无法恢复。
                 </p>
                 {removeReferrers.length > 0 && (
-                  <p className="text-small text-warning">
+                  <p className="text-small text-warning-700">
                     该内核下的入站正被 {removeReferrers.length}{" "}
                     个入站用作出站代理或分流出口：
                     {removeReferrers.map((n) => `「${n}」`).join("、")}
@@ -719,7 +717,7 @@ export function KernelPanel({
                   </p>
                 )}
                 {removeFailed && (
-                  <p className="text-small text-warning">
+                  <p className="text-small text-warning-700">
                     节点卸载失败（可能离线）。可以强制删除面板记录，节点上线后会自动清理。
                   </p>
                 )}

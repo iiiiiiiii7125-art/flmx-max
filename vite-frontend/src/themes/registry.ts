@@ -99,11 +99,10 @@ export function getActiveTheme(): ThemePackage | null {
 export type ThemeMode = "light" | "dark" | "system";
 
 export function resolveSystemMode(): "light" | "dark" {
-  if (typeof window === "undefined") return "light";
-
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  // LIGHT-ONLY: dark mode was removed (2026-11-02, user directive — one
+  // light mode for the whole app). The system preference is never
+  // consulted; this stays exported only for API compatibility.
+  return "light";
 }
 
 export function getSavedMode(): ThemeMode {
@@ -121,9 +120,10 @@ export function saveMode(mode: ThemeMode): void {
 }
 
 export function getEffectiveMode(): "light" | "dark" {
-  const mode = getSavedMode();
-
-  return mode === "system" ? resolveSystemMode() : mode;
+  // LIGHT-ONLY: pinned to "light" regardless of any stored preference
+  // (a legacy "dark"/"system" value in localStorage must never render
+  // dark again) and regardless of the OS setting.
+  return "light";
 }
 
 // ─── activation ──────────────────────────────────────────────────────────────
@@ -148,9 +148,8 @@ export function activateTheme(id: string): void {
 
   activeId = id;
 
-  // Inject tokens
-  const mode = getEffectiveMode();
-  const tokens = mode === "dark" ? pkg.tokens?.dark : pkg.tokens?.light;
+  // Inject tokens (LIGHT-ONLY: always the light token set)
+  const tokens = pkg.tokens?.light ?? pkg.tokens?.dark;
 
   if (tokens) injectTokens(tokens);
 
@@ -162,14 +161,19 @@ export function activateTheme(id: string): void {
     document.head.appendChild(injectedStyleEl);
   }
 
-  // Update dark class
+  // LIGHT-ONLY: the app never carries the dark class
   const root = document.documentElement;
 
-  root.classList.toggle("dark", mode === "dark");
-  root.style.colorScheme = mode;
+  root.classList.remove("dark");
+  root.style.colorScheme = "light";
 
   // Lifecycle
   pkg.onActivate?.();
+
+  // Choke point: a theme package's lifecycle hook must not be able to
+  // re-enable dark (the bundled cyberpunk example once forced it).
+  root.classList.remove("dark");
+  root.style.colorScheme = "light";
 
   // Persist
   localStorage.setItem(STORAGE_KEY, id);
@@ -205,22 +209,20 @@ export function reapplyActiveTheme(): void {
     if (!pkg) return;
 
     clearInjectedTokens();
-    const mode = getEffectiveMode();
-    const tokens = mode === "dark" ? pkg.tokens?.dark : pkg.tokens?.light;
+    const tokens = pkg.tokens?.light ?? pkg.tokens?.dark;
 
     if (tokens) injectTokens(tokens);
 
     const root = document.documentElement;
 
-    root.classList.toggle("dark", mode === "dark");
-    root.style.colorScheme = mode;
+    root.classList.remove("dark");
+    root.style.colorScheme = "light";
   } else {
-    // No theme active — just set dark class based on mode
-    const mode = getEffectiveMode();
+    // No theme active — LIGHT-ONLY: ensure the dark class stays off
     const root = document.documentElement;
 
-    root.classList.toggle("dark", mode === "dark");
-    root.style.colorScheme = mode;
+    root.classList.remove("dark");
+    root.style.colorScheme = "light";
   }
   notify();
 }

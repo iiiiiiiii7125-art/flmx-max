@@ -136,7 +136,7 @@ export default function ChangePasswordPage() {
               </div>
 
               <h1 className={title({ size: "sm" })}>安全提醒</h1>
-              <p className="text-small text-default-500 mt-2 text-center">
+              <p className="text-small text-foreground mt-2 text-center">
                 检测到您使用的是默认账号密码，为了您的账户安全，请立即修改
               </p>
             </CardHeader>
@@ -213,7 +213,7 @@ export default function ChangePasswordPage() {
                   {loading ? "修改中..." : "立即修改账号密码"}
                 </Button>
 
-                <div className="bg-warning-50 border border-warning-200 text-warning-700 px-3 py-2 rounded-lg text-sm text-center">
+                <div className="bg-warning-500/10 border border-warning-300 font-semibold text-warning-900 px-3 py-2 rounded-lg text-sm text-center">
                   ⚠️ 注意：修改账号密码后需要重新登录
                 </div>
               </div>

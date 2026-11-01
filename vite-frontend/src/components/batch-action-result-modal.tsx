@@ -96,14 +96,14 @@ export function BatchActionResultModal({
                 {failures.map((failure, index) => (
                   <details
                     key={`${failure.id ?? "unknown"}-${index}`}
-                    className="group rounded-xl border border-divider bg-content2 px-4 py-3"
+                    className="group rounded-xl border border-divider px-4 py-3"
                   >
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium text-foreground">
                           {getFailureTitle(failure, index)}
                         </p>
-                        <p className="mt-1 text-xs text-default-500 group-open:hidden">
+                        <p className="mt-1 text-xs font-semibold text-foreground group-open:hidden">
                           点击展开查看失败原因
                         </p>
                       </div>
@@ -111,7 +111,7 @@ export function BatchActionResultModal({
                         失败
                       </Chip>
                     </summary>
-                    <div className="mt-3 rounded-lg bg-background p-3 text-sm leading-6 text-foreground/90">
+                    <div className="mt-3 rounded-lg glass-inset p-3 text-sm leading-6 text-foreground">
                       {getFailureReason(failure)}
                     </div>
                   </details>

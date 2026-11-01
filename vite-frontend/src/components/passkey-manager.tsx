@@ -65,7 +65,7 @@ export function PasskeyManager() {
       <Card>
         <CardBody className="p-4 space-y-3">
           <h3 className="text-base font-medium">通行证密钥</h3>
-          <p className="text-sm text-danger-500">
+          <p className="text-sm text-danger-700">
             通行证密钥状态加载失败，暂时无法确认是否可用。
           </p>
           <Button size="sm" variant="flat" onPress={loadStatus}>
@@ -146,7 +146,7 @@ export function PasskeyManager() {
       <CardBody className="p-4 space-y-4">
         <div>
           <h3 className="text-base font-medium">通行证密钥</h3>
-          <p className="text-sm text-default-500">
+          <p className="text-sm text-foreground">
             绑定后可使用设备解锁登录，无需 Cloudflare
             验证。绑定和删除均需输入当前密码。
           </p>
@@ -170,7 +170,7 @@ export function PasskeyManager() {
         <div className="space-y-2">
           {listFailed ? (
             <div className="flex items-center gap-3">
-              <p className="text-sm text-danger-500">
+              <p className="text-sm text-danger-700">
                 已绑定密钥列表加载失败，当前显示不可信，请先重试确认，不要重复绑定。
               </p>
               <Button size="sm" variant="flat" onPress={() => void refresh()}>
@@ -178,7 +178,7 @@ export function PasskeyManager() {
               </Button>
             </div>
           ) : items.length === 0 ? (
-            <p className="text-sm text-default-500">尚未绑定通行证密钥</p>
+            <p className="text-sm text-foreground">尚未绑定通行证密钥</p>
           ) : null}
           {items.map((item) => (
             <div
@@ -187,7 +187,7 @@ export function PasskeyManager() {
             >
               <div>
                 <div className="text-sm font-medium">{item.name}</div>
-                <div className="text-xs text-default-500">
+                <div className="text-xs font-semibold text-foreground">
                   创建于 {new Date(item.createdAt).toLocaleDateString()}{" "}
                   {item.lastUsedAt
                     ? ` · 最近使用 ${new Date(item.lastUsedAt).toLocaleDateString()}`

@@ -88,46 +88,12 @@
           shortcutIconLink.removeAttribute('type');
         }
 
-        // 立即检测主题并应用（优先读取 localStorage 中的用户偏好）
-        var savedMode = '';
-        try { savedMode = localStorage.getItem('flmx:theme') || localStorage.getItem('flvx:theme') || ''; } catch (_) {}
+        // 统一亮色（2026-11-02 起应用不再提供深色模式）：无论本地存量
+        // 偏好（flmx:theme / flvx:theme）或系统设置为何，恒为亮色——
+        // 清除任何残留的 dark 类并锁定 colorScheme，避免首帧闪烁。
+        document.documentElement.classList.remove('dark');
+        document.documentElement.style.colorScheme = 'light';
 
-        var useDark;
-        if (savedMode === 'dark') {
-          useDark = true;
-        } else if (savedMode === 'light') {
-          useDark = false;
-        } else {
-          // "system" 或无保存：跟随系统
-          useDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        }
-        
-        // 立即设置主题类，避免闪烁
-        if (useDark) {
-          document.documentElement.classList.add('dark');
-          document.documentElement.style.colorScheme = 'dark';
-        } else {
-          document.documentElement.classList.remove('dark');
-          document.documentElement.style.colorScheme = 'light';
-        }
-        
-        // 仅在"跟随系统"模式下监听系统主题变化
-        if ((!savedMode || savedMode === 'system') && window.matchMedia) {
-          window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
-            // 运行时可能已由 React 接管，这里仅做 fallback
-            var currentMode = '';
-            try { currentMode = localStorage.getItem('flmx:theme') || localStorage.getItem('flvx:theme') || ''; } catch (_) {}
-            if (currentMode && currentMode !== 'system') return; // 用户已手动选择，不干预
-            if (e.matches) {
-              document.documentElement.classList.add('dark');
-              document.documentElement.style.colorScheme = 'dark';
-            } else {
-              document.documentElement.classList.remove('dark');
-              document.documentElement.style.colorScheme = 'light';
-            }
-          });
-        }
-        
         // 检测H5模式并设置标记，避免布局切换时的闪屏
         const isMobile = window.innerWidth <= 768;
         const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);

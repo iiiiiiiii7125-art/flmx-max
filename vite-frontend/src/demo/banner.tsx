@@ -13,7 +13,7 @@ export function DemoBanner() {
   if (!open) {
     return (
       <button
-        className="fixed bottom-[84px] right-3 z-[60] rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-white shadow-lg lg:bottom-4"
+        className="fixed bottom-[84px] right-3 z-[60] rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-lg lg:bottom-4"
         type="button"
         onClick={() => setOpen(true)}
       >
@@ -23,24 +23,24 @@ export function DemoBanner() {
   }
 
   return (
-    <div className="fixed bottom-[84px] right-3 z-[60] w-[min(20rem,calc(100vw-24px))] rounded-2xl border border-divider bg-content1 p-3 text-xs shadow-xl backdrop-blur lg:bottom-4">
+    <div className="glass-surface fixed bottom-[84px] right-3 z-[60] w-[min(20rem,calc(100vw-24px))] rounded-2xl p-3 text-xs font-semibold shadow-xl lg:bottom-4">
       <div className="mb-1 flex items-center justify-between">
         <span className="font-semibold text-sm">FLMX 在线演示</span>
         <button
           aria-label="收起"
-          className="rounded p-1 text-default-400 hover:bg-default-100"
+          className="rounded p-1 text-foreground hover:bg-white/40"
           type="button"
           onClick={() => setOpen(false)}
         >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      <p className="text-default-500">
+      <p className="text-foreground">
         数据都是示例，可以随便点；修改不会保存，刷新后还原。
       </p>
       <div className="mt-2 flex gap-2">
         <button
-          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-default-100 px-2 py-1.5 hover:bg-default-200"
+          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-tray px-2 py-1.5 hover:bg-white/40"
           type="button"
           onClick={() => switchDemoRole(role === "admin" ? "user" : "admin")}
         >
