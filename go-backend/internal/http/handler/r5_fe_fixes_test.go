@@ -430,10 +430,13 @@ func TestR5FEL9Type1DetachedExitPortLifecycle(t *testing.T) {
 			"outNodeId": []interface{}{map[string]interface{}{"nodeId": nodeID}},
 		}
 	}
-	prepare := func(req map[string]interface{}) *tunnelCreateState {
+	prepareE := func(req map[string]interface{}, excludeID int64) (*tunnelCreateState, error) {
 		tx := r.BeginTx()
 		defer func() { _ = tx.Rollback() }()
-		state, err := h.prepareTunnelCreateState(tx, req, 1, tunnelID)
+		return h.prepareTunnelCreateState(tx, req, 1, excludeID)
+	}
+	prepare := func(req map[string]interface{}) *tunnelCreateState {
+		state, err := prepareE(req, tunnelID)
 		if err != nil {
 			t.Fatalf("prepare: %v", err)
 		}
@@ -457,6 +460,15 @@ func TestR5FEL9Type1DetachedExitPortLifecycle(t *testing.T) {
 		t.Fatalf("resolved port must be written back into the request, got %v", req["outNodeId"])
 	}
 
+	// ①b 创建路（excludeTunnelID=0）显式口撞已播种隧道的链路出口
+	// 行 20282：创建路没有 tunnelUpdate 那种提交段复检，prepare
+	// 的四源占用检是唯一闸门（RV3-02）——拒绝并点名链路段来源。
+	reqCreate := newReq()
+	asMapSlice(reqCreate["outNodeId"])[0]["port"] = 20282
+	if _, err := prepareE(reqCreate, 0); err == nil || !strings.Contains(err.Error(), "链路段") {
+		t.Fatalf("create-path explicit detached port colliding with a chain segment must be rejected naming the source, got err=%v", err)
+	}
+
 	// ② 现口被入站占用：重挑＋PortChanges 点名旧口。
 	if err := r.CreateNodeInbound(&model.NodeInbound{
 		KernelID: 1, NodeID: nodeID, Name: "squatter", Protocol: "vless",
@@ -472,17 +484,27 @@ func TestR5FEL9Type1DetachedExitPortLifecycle(t *testing.T) {
 		t.Fatalf("re-pick must be recorded for the receipt warning, got %+v", state.PortChanges)
 	}
 
-	// ③ 显式口与 type-2 同口径：prepare 原样登记（不做范围/占用
-	// 校验——占用兜底在提交段锁内复检与唯一索引）；且必须回写进
-	// SegmentPorts，否则落库兜底会把它换掉。此处验被入站占用的口
-	// 与任意显式口两形态；出池口（29000 对 10000-20000 池）的合法
-	// 存量形态由 C001 latent-guard 与 R2B2 幂等两钉守护。
+	// ③ 显式口恢复范围＋四源占用两检、规格（端口池）检保持豁免
+	// （RV3-02；afa3d05d 曾以「type-2 在 prepare 无校验」为据整体
+	// 撤销三检，该依据不成立——validateExplicitPort 对 type-2
+	// 显式口本有三检、提交段复检又只有 tunnelUpdate 有）：
+	// (a) 更新路：20282 已被入站 squatter 占用（本隧道自有链路行
+	// 经 excludeTunnelID 排除、不算占用）——拒绝并点名入站来源。
 	req = newReq()
 	asMapSlice(req["outNodeId"])[0]["port"] = 20282
-	state = prepare(req)
-	if got := state.SegmentPorts[key]; got != 20282 {
-		t.Fatalf("explicit detached port must be kept as-is, got %d", got)
+	if _, err := prepareE(req, tunnelID); err == nil || !strings.Contains(err.Error(), "入站") {
+		t.Fatalf("explicit detached port occupied by an inbound must be rejected naming the source, got err=%v", err)
 	}
+	// (b) 范围外：>65535 创建/更新两路皆拒。
+	req = newReq()
+	asMapSlice(req["outNodeId"])[0]["port"] = 70000
+	if _, err := prepareE(req, tunnelID); err == nil || !strings.Contains(err.Error(), "超出有效范围") {
+		t.Fatalf("explicit detached port >65535 must be rejected, got err=%v", err)
+	}
+	// (c) 合法未占用口原样登记进 SegmentPorts（不登记则落库兜底
+	// 会把它换掉）；出池形态的规格豁免由 C001 latent-guard 与
+	// R2B2 幂等两钉守护（其 29000/29001 在 10000-20000 池外、
+	// 在范围内且未占用，两检不误伤）。
 	req = newReq()
 	asMapSlice(req["outNodeId"])[0]["port"] = 29000
 	state = prepare(req)

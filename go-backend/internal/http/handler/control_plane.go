@@ -71,6 +71,11 @@ type diagnosisWorkItem struct {
 	hasChainHop  bool
 	ipPreference string
 	protocol     string
+	// decorate（可空）：结果项产出后由 runDiagnosisWorkItems 统一
+	// 调用，供构造方并入附加字段/改写文案（RV3-01：nft applied 的
+	// 探测项并入规则字段、给 message 加规则状态前缀——非流式与
+	// 流式两面经同一执行器产出，装饰必须在此单点生效）。
+	decorate func(item map[string]interface{})
 }
 
 type diagnosisExecOptions struct {
@@ -991,59 +996,78 @@ func (h *Handler) diagnoseForwardRuntime(ctx context.Context, forward *forwardRe
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if payload, handled, err := h.diagnoseNftablesForwardRuntime(ctx, forward); handled || err != nil {
-		return payload, err
-	}
-	forwardName, workItems, err := h.prepareForwardDiagnosis(forward)
+	plan, err := h.prepareForwardDiagnosisPlan(forward)
 	if err != nil {
 		return nil, err
 	}
 
-	results := h.runDiagnosisWorkItems(ctx, workItems, nil)
+	results := make([]map[string]interface{}, 0, len(plan.statusItems)+len(plan.workItems))
+	results = append(results, plan.statusItems...)
+	results = append(results, h.runDiagnosisWorkItems(ctx, plan.workItems, nil)...)
 
 	payload := map[string]interface{}{
-		"forwardName": forwardName,
+		"forwardName": plan.name,
 		"timestamp":   time.Now().UnixMilli(),
 		"results":     results,
 	}
 	return payload, nil
 }
 
-func (h *Handler) diagnoseNftablesForwardRuntime(ctx context.Context, forward *forwardRecord) (map[string]interface{}, bool, error) {
+// forwardDiagnosisPlan 是非流式（diagnoseForwardRuntime）与流式
+// （forwardDiagnoseStream）两个转发诊断端点共用的准备结果
+// （RV3-01）。statusItems 是无需探测的既成结果项（nft 规则未
+// applied 入口的规则状态失败项），workItems 是真实探测项；两面
+// 的结果集恒为 statusItems ++ workItems 的执行结果。
+//
+// 此前只有非流式面经 diagnoseNftablesForwardRuntime 走 nft 分支，
+// 流式面（前端诊断弹窗首选）直走 prepareForwardDiagnosis：nft
+// 转发在规则缺失/下发失败时流式面只剩与规则无关的 agent 直拨
+// 探测、目标可达即全绿，与非流式面的规则状态结论互相矛盾
+// （L4-04 同机制残留面）。nft 判定与结果构造前置到本 prepare
+// 层后，两面同口径。
+type forwardDiagnosisPlan struct {
+	name        string
+	statusItems []map[string]interface{}
+	workItems   []diagnosisWorkItem
+}
+
+func (h *Handler) prepareForwardDiagnosisPlan(forward *forwardRecord) (*forwardDiagnosisPlan, error) {
 	if forward == nil {
-		return nil, false, errForwardNotFound
+		return nil, errForwardNotFound
 	}
 	nftMode, entryNodeIDs, err := h.tunnelUsesNftables(forward.TunnelID)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if !nftMode {
-		return nil, false, nil
+		name, workItems, err := h.prepareForwardDiagnosis(forward)
+		if err != nil {
+			return nil, err
+		}
+		return &forwardDiagnosisPlan{name: name, workItems: workItems}, nil
 	}
 	if len(entryNodeIDs) == 0 {
-		return nil, true, errors.New("nftables 转发缺少入口节点")
+		return nil, errors.New("nftables 转发缺少入口节点")
 	}
 	targets, err := resolveDiagnosisTargets(forward.RemoteAddr)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	// L4-05：逐个入口节点诊断。此前只查 entryNodeIDs[0]，多入口
 	// 转发其余入口的规则缺失/失败完全不检，诊断全绿也可能有入口
 	// 未下发。
-	results := make([]map[string]interface{}, 0, len(entryNodeIDs))
+	plan := &forwardDiagnosisPlan{name: forward.Name}
 	for _, nodeID := range entryNodeIDs {
-		nodeResults, err := h.buildNftablesForwardDiagnosisResults(ctx, forward, nodeID, targets)
+		nodePlan, err := h.planNftablesForwardDiagnosis(forward, nodeID, targets)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
-		results = append(results, nodeResults...)
+		if nodePlan.statusItem != nil {
+			plan.statusItems = append(plan.statusItems, nodePlan.statusItem)
+		}
+		plan.workItems = append(plan.workItems, nodePlan.probeItems...)
 	}
-	payload := map[string]interface{}{
-		"forwardName": forward.Name,
-		"timestamp":   time.Now().UnixMilli(),
-		"results":     results,
-	}
-	return payload, true, nil
+	return plan, nil
 }
 
 // parseNftBindingProtocols 解析 binding 的协议集（落库形态
@@ -1064,7 +1088,16 @@ func parseNftBindingProtocols(raw string) []string {
 	return out
 }
 
-func (h *Handler) buildNftablesForwardDiagnosisResults(ctx context.Context, forward *forwardRecord, nodeID int64, targets []diagnosisTarget) ([]map[string]interface{}, error) {
+// nftForwardDiagnosisPlan 是单个入口节点的 nft 转发诊断计划：
+// 规则未 applied 时只有 statusItem（既成失败项，不探测）；
+// applied 时只有 probeItems（真实探测项，结果项产出后经其
+// decorate 并入规则字段）。
+type nftForwardDiagnosisPlan struct {
+	statusItem map[string]interface{}
+	probeItems []diagnosisWorkItem
+}
+
+func (h *Handler) planNftablesForwardDiagnosis(forward *forwardRecord, nodeID int64, targets []diagnosisTarget) (*nftForwardDiagnosisPlan, error) {
 	if h == nil || h.repo == nil {
 		return nil, errors.New("handler not initialized")
 	}
@@ -1140,7 +1173,7 @@ func (h *Handler) buildNftablesForwardDiagnosisResults(ctx context.Context, forw
 		for k, v := range nftFields {
 			result[k] = v
 		}
-		return []map[string]interface{}{result}, nil
+		return &nftForwardDiagnosisPlan{statusItem: result}, nil
 	}
 
 	// L4-04：规则已下发只说明数据面规则在位，不等于路径可达——旧
@@ -1148,7 +1181,19 @@ func (h *Handler) buildNftablesForwardDiagnosisResults(ctx context.Context, forw
 	// 与 gost 真实探测同表呈现，规则在位但目标不通时假阳性误导
 	// 排障。现在按 binding 协议集对每个目标做与 gost 入口→目标腿
 	// 相同的真实探测，success/averageTime/packetLoss 全部来自探测
-	// 结果，规则状态经 nftRuleStatus 与 message 前缀单独呈现。
+	// 结果，规则状态经 nftRuleStatus 与 message 前缀单独呈现——
+	// 字段并入与前缀由每个探测项的 decorate 在结果产出时生效
+	// （runDiagnosisWorkItems 统一调用），非流式/流式两面同形。
+	decorate := func(item map[string]interface{}) {
+		for k, v := range nftFields {
+			item[k] = v
+		}
+		if probeMsg := strings.TrimSpace(asString(item["message"])); probeMsg != "" {
+			item["message"] = "nftables 规则已下发；" + probeMsg
+		} else {
+			item["message"] = "nftables 规则已下发"
+		}
+	}
 	workItems := make([]diagnosisWorkItem, 0, len(targets)*2)
 	for _, tgt := range targets {
 		description := fmt.Sprintf("入口(%s)->目标(%s)", node.Name, defaultString(tgt.Address, targetAddr))
@@ -1163,21 +1208,11 @@ func (h *Handler) buildNftablesForwardDiagnosisResults(ctx context.Context, forw
 					"fromChainType": 1,
 					"protocol":      proto,
 				},
+				decorate: decorate,
 			})
 		}
 	}
-	results := h.runDiagnosisWorkItems(ctx, workItems, nil)
-	for _, item := range results {
-		for k, v := range nftFields {
-			item[k] = v
-		}
-		if probeMsg := strings.TrimSpace(asString(item["message"])); probeMsg != "" {
-			item["message"] = "nftables 规则已下发；" + probeMsg
-		} else {
-			item["message"] = "nftables 规则已下发"
-		}
-	}
-	return results, nil
+	return &nftForwardDiagnosisPlan{probeItems: workItems}, nil
 }
 
 // appendTargetDiagnosisWorkItems 为一条「节点→目标」腿生成 TCP 与
@@ -1703,6 +1738,9 @@ enqueueLoop:
 	progress := diagnosisProgress{Total: len(workItems)}
 	for result := range resultCh {
 		results[result.index] = result.item
+		if decorate := workItems[result.index].decorate; decorate != nil {
+			decorate(result.item)
+		}
 		progress.Completed++
 		if asBool(result.item["success"], false) {
 			progress.Success++
@@ -1717,6 +1755,9 @@ enqueueLoop:
 	for i := range results {
 		if results[i] == nil {
 			results[i] = newDiagnosisTimeoutItem(workItems[i], diagnosisCommandTimeoutMsg)
+			if decorate := workItems[i].decorate; decorate != nil {
+				decorate(results[i])
+			}
 		}
 	}
 	return results

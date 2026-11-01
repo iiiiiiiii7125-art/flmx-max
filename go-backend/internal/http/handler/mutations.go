@@ -6173,6 +6173,41 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 	return port, nil
 }
 
+// detachedSegmentPortConflictError 为游离显式段口的占用拒绝生成
+// 点名来源的文案（RV3-02，与 L9 观察 2 的 forwardPortConflictMessage
+// 同口径：入站/链路段/联邦预留占用不得误报为「已被其他转发占用」）。
+// 来源判定走统一谓词 NodePortOccupantTx，排除集与触发拒绝的
+// NodePortOccupiedForTunnelTx 完全一致（本隧道链路行不算占用），
+// 保证点名的来源就是触发拒绝的来源。
+func (h *Handler) detachedSegmentPortConflictError(tx *gorm.DB, nodeID int64, node *nodeRecord, port int, excludeTunnelID int64) error {
+	nodeName := ""
+	if node != nil {
+		nodeName = strings.TrimSpace(node.Name)
+	}
+	if nodeName == "" {
+		nodeName = strconv.FormatInt(nodeID, 10)
+	}
+	var excl repo.PortExclusions
+	if excludeTunnelID > 0 {
+		excl.TunnelIDs = []int64{excludeTunnelID}
+	}
+	source, err := h.repo.NodePortOccupantTx(tx, nodeID, port, excl)
+	if err != nil {
+		return err
+	}
+	switch source {
+	case repo.PortSourceInbound:
+		return fmt.Errorf("节点 %s 端口 %d 已被入站占用", nodeName, port)
+	case repo.PortSourceChain:
+		return fmt.Errorf("节点 %s 端口 %d 已被隧道链路段占用", nodeName, port)
+	case repo.PortSourcePeer:
+		return fmt.Errorf("节点 %s 端口 %d 已被联邦共享预留占用", nodeName, port)
+	case repo.PortSourceForward:
+		return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", nodeName, port)
+	}
+	return fmt.Errorf("节点 %s 端口 %d 已被占用", nodeName, port)
+}
+
 // prepareDetachedSegmentPorts resolves ports for the non-entry
 // segment rows of a non-type-2 tunnel request (L9 观察 1). These rows
 // never enter the runtime topology (state.OutNodes/ChainHops stay
@@ -6182,16 +6217,20 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 //   - omitted port on update: reuse the persisted port while legal,
 //     re-pick only when unusable, and record the move in
 //     state.PortChanges so the receipt warns (P01-002);
-//   - explicit port: taken as-is, exactly like type-2 segment ports
-//     in prepare (no prepare-time checks) — the node's port pool
-//     only constrains entry-side ports (validateLocalNodePort's own
-//     scope note), so an out-of-pool segment port is legitimate
-//     stock (pinned by the C001 latent-guard and R2B2 idempotency
-//     tests); cross-source occupancy for explicit segment ports is
-//     enforced where it is enforced for type 2 as well — the
-//     commit-segment in-lock recheck, whose finalPortNodes include
-//     these SegmentPorts, plus the chain_tunnel (node_id, port)
-//     unique index;
+//   - explicit port: range (1-65535) and four-source occupancy are
+//     checked here — the same position type-2 explicit ports get
+//     in validateExplicitPort (B4/F-015), minus the node-spec
+//     (port pool) check. The spec check stays exempt: the pool
+//     does not constrain these detached rows, and out-of-pool
+//     segment ports are legitimate stock (pinned by the C001
+//     latent-guard and R2B2 idempotency tests — their 29000/29001
+//     requests are in-range and unoccupied, so the two restored
+//     checks do not touch them). The occupancy check is the only
+//     gate on the create path: tunnelUpdate re-checks occupancy
+//     in its commit segment, tunnelCreate has no such recheck,
+//     and replaceTunnelChainsTx persists explicit ports verbatim
+//     (the chain_tunnel (node_id, port) unique index only catches
+//     chain-vs-chain collisions, as a raw DB error);
 //   - the resolved port lands in state.SegmentPorts so
 //     applyTunnelPortsToRequest writes it back and
 //     replaceTunnelChainsTx persists prepare's port instead of
@@ -6230,10 +6269,29 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 		}
 		port := asInt(item["port"], 0)
 		if port > 0 {
-			// 与 type-2 段口同口径：显式口在 prepare 原样收下（不做
-			// 范围/规格/占用校验——占用兜底在提交段锁内复检与唯一
-			// 索引，见函数头注），登记后经回写落库，不再被落库兜底
-			// 改口。
+			// RV3-02：显式口恢复范围＋四源占用两检（规格/端口池检
+			// 保持豁免，见函数头注）。范围检与 validateExplicitPort
+			// 同位、无条件；占用检按节点远端性分流（远端节点的口
+			// 不在本地端口空间，与 validateExplicitPort 对远端跳
+			// 过占用检同口径），远端判定走 IsRemoteNodeTx 而非尽力
+			// 而为的节点记录缓存——记录读不到时占用检照常执行，
+			// 不重蹈「无检落库」。
+			if port > 65535 {
+				return fmt.Errorf("端口 %d 超出有效范围 1-65535", port)
+			}
+			isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
+			if remoteErr != nil {
+				return remoteErr
+			}
+			if !isRemote {
+				occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
+				if err != nil {
+					return err
+				}
+				if occupied {
+					return h.detachedSegmentPortConflictError(tx, nodeID, state.Nodes[nodeID], port, excludeTunnelID)
+				}
+			}
 			state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = port
 			return nil
 		}
@@ -6393,9 +6451,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		// 时拓扑，但 replaceTunnelChainsTx 照样落库。此前 prepare 不
 		// 解析这些行的端口：更新时省略 port 的行在落库兜底被随机重
 		// 挑（与 P01-002「缺省沿用现口、重挑必回执警示」口径不符，
-		// 且无任何 PortChanges 记录）。在此按 type-2 同口径解析
-		// （缺省沿用/重挑＋记录，显式口原样登记），结果经
-		// SegmentPorts 回写请求后落库。
+		// 且无任何 PortChanges 记录）。在此解析（缺省沿用/重挑
+		// ＋记录，显式口过范围＋四源占用两检、规格检豁免），
+		// 结果经 SegmentPorts 回写请求后落库。
 		if err := h.prepareDetachedSegmentPorts(tx, req, state, excludeTunnelID); err != nil {
 			return nil, err
 		}

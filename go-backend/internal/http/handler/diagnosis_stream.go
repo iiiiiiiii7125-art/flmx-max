@@ -185,7 +185,11 @@ func (h *Handler) forwardDiagnoseStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	forwardName, workItems, err := h.prepareForwardDiagnosis(forward)
+	// RV3-01：与非流式面共用 prepareForwardDiagnosisPlan——nft
+	// 转发先出规则状态项、applied 后走真实探测，不再直走
+	// prepareForwardDiagnosis 绕过 nft 分支（规则缺失时流式面
+	// 曾只剩与规则无关的直拨探测、与非流式结论矛盾）。
+	plan, err := h.prepareForwardDiagnosisPlan(forward)
 	if err != nil {
 		if strings.Contains(err.Error(), "不存在") || strings.Contains(err.Error(), "不能为空") || strings.Contains(err.Error(), "错误") {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -199,9 +203,9 @@ func (h *Handler) forwardDiagnoseStream(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 
 	startPayload := map[string]interface{}{
-		"forwardName": forwardName,
+		"forwardName": plan.name,
 	}
-	if err := h.streamDiagnosisRuntime(ctx, cancel, w, startPayload, workItems); err != nil {
+	if err := h.streamForwardDiagnosisRuntime(ctx, cancel, w, startPayload, plan); err != nil {
 		if shouldIgnoreDiagnosisStreamError(err) {
 			return
 		}
@@ -211,4 +215,102 @@ func (h *Handler) forwardDiagnoseStream(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
+}
+
+// diagnosisStreamStartItemFromResult 把既成结果项转成流式 start
+// 占位项：标识字段（description/nodeId/targetIp/targetPort）与
+// 结果项逐字一致——前端按这四元组把后续 item 事件对位替换；
+// 其余字段先随占位下发，item 事件到达后以结果项为准。
+func diagnosisStreamStartItemFromResult(item map[string]interface{}) map[string]interface{} {
+	placeholder := make(map[string]interface{}, len(item)+1)
+	for key, value := range item {
+		placeholder[key] = value
+	}
+	placeholder["diagnosing"] = true
+	placeholder["message"] = "诊断中..."
+	return placeholder
+}
+
+// streamForwardDiagnosisRuntime 流式呈现 forwardDiagnosisPlan
+// （RV3-01）：statusItems（nft 规则状态项）是既成结果，随 start
+// 下发占位后立即以 item 事件给出；workItems 走与隧道共用的并发
+// 执行器。进度以 statusItems+workItems 为 total，两类项在同一
+// index 空间编号（statusItems 在前），结果集顺序与非流式
+// diagnoseForwardRuntime 恒一致。
+func (h *Handler) streamForwardDiagnosisRuntime(ctx context.Context, cancel context.CancelFunc, w http.ResponseWriter, startPayload map[string]interface{}, plan *forwardDiagnosisPlan) error {
+	flusher, err := prepareDiagnosisStreamResponse(w)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(w)
+
+	startItems := make([]map[string]interface{}, 0, len(plan.statusItems)+len(plan.workItems))
+	for _, item := range plan.statusItems {
+		startItems = append(startItems, diagnosisStreamStartItemFromResult(item))
+	}
+	startItems = append(startItems, h.buildDiagnosisStreamStartItems(plan.workItems)...)
+	payload := map[string]interface{}{
+		"total":     len(startItems),
+		"timestamp": time.Now().UnixMilli(),
+		"items":     startItems,
+	}
+	for key, value := range startPayload {
+		payload[key] = value
+	}
+	if err := writeDiagnosisStreamEvent(encoder, flusher, "start", payload); err != nil {
+		return err
+	}
+
+	total := len(plan.statusItems) + len(plan.workItems)
+	streamBroken := false
+	writeItem := func(index int, item map[string]interface{}, progress diagnosisProgress) {
+		if streamBroken {
+			return
+		}
+		itemPayload := map[string]interface{}{
+			"index":    index,
+			"result":   item,
+			"progress": progress,
+		}
+		if err := writeDiagnosisStreamEvent(encoder, flusher, "item", itemPayload); err != nil {
+			streamBroken = true
+			if cancel != nil {
+				cancel()
+			}
+		}
+	}
+
+	progress := diagnosisProgress{Total: total}
+	for i, item := range plan.statusItems {
+		progress.Completed++
+		if asBool(item["success"], false) {
+			progress.Success++
+		} else {
+			progress.Failed++
+		}
+		writeItem(i, item, progress)
+	}
+	base := progress
+	offset := len(plan.statusItems)
+	emitter := func(index int, item map[string]interface{}, probeProgress diagnosisProgress) {
+		writeItem(offset+index, item, diagnosisProgress{
+			Total:     total,
+			Completed: base.Completed + probeProgress.Completed,
+			Success:   base.Success + probeProgress.Success,
+			Failed:    base.Failed + probeProgress.Failed,
+		})
+	}
+	probeResults := h.runDiagnosisWorkItems(ctx, plan.workItems, emitter)
+	if streamBroken {
+		return context.Canceled
+	}
+
+	results := make([]map[string]interface{}, 0, total)
+	results = append(results, plan.statusItems...)
+	results = append(results, probeResults...)
+	donePayload := map[string]interface{}{
+		"progress": summarizeDiagnosisProgress(results),
+		"timedOut": errors.Is(ctx.Err(), context.DeadlineExceeded),
+	}
+	return writeDiagnosisStreamEvent(encoder, flusher, "done", donePayload)
 }
