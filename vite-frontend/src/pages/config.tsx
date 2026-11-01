@@ -228,21 +228,6 @@ const CONFIG_ITEMS: ConfigItem[] = [
     dependsValue: "true",
   },
   {
-    key: "github_proxy_enabled",
-    label: "开启 GitHub 加速",
-    description: "用于节点更新和安装脚本下载，解决部分地区 GitHub 访问受限问题",
-    type: "switch",
-  },
-  {
-    key: "github_proxy_url",
-    label: "加速地址",
-    placeholder: "https://gcode.hostcentral.cc",
-    description: "GitHub 下载加速代理地址，开启加速后生效",
-    type: "input",
-    dependsOn: "github_proxy_enabled",
-    dependsValue: "true",
-  },
-  {
     key: "allow_local_remote_addr",
     label: "允许转发到本地地址",
     description:
@@ -295,8 +280,6 @@ const getInitialConfigs = (): Record<string, string> => {
     "app_bg_image_light",
     "app_bg_image_dark",
     "login_bg_image",
-    "github_proxy_enabled",
-    "github_proxy_url",
     "allow_local_remote_addr",
     "hide_footer_brand",
   ];
@@ -788,35 +771,7 @@ export default function ConfigPage() {
       return;
     }
 
-    // P3-4：保存前归一化 GitHub 加速地址——去首尾空白；缺协议头补 https://；
-    // 带其他协议头视为非法直接拦截；去掉全部尾斜杠。与后端
-    // getGithubProxyConfig 的归一化对齐，避免拼出双斜杠路径或填错后
-    // 要到下载失败时才暴露。归一化结果同时写回界面输入框。
     const effectiveConfigs = { ...configs };
-    const rawProxyUrl = (effectiveConfigs["github_proxy_url"] || "").trim();
-
-    if (rawProxyUrl) {
-      if (
-        /^[a-z][a-z0-9+.-]*:\/\//i.test(rawProxyUrl) &&
-        !/^https?:\/\//i.test(rawProxyUrl)
-      ) {
-        toast.error("加速地址格式不正确，请以 http:// 或 https:// 开头");
-
-        return;
-      }
-
-      let normalizedProxyUrl = rawProxyUrl;
-
-      if (!/^https?:\/\//i.test(normalizedProxyUrl)) {
-        normalizedProxyUrl = `https://${normalizedProxyUrl}`;
-      }
-      normalizedProxyUrl = normalizedProxyUrl.replace(/\/+$/, "");
-
-      if (normalizedProxyUrl !== effectiveConfigs["github_proxy_url"]) {
-        effectiveConfigs["github_proxy_url"] = normalizedProxyUrl;
-        setConfigs(effectiveConfigs);
-      }
-    }
 
     setSaving(true);
     try {
@@ -901,17 +856,11 @@ export default function ConfigPage() {
     }
   };
 
-  // 检查配置项是否应该显示（依赖检查）
-  // P2-2：github_proxy_enabled 后端缺省默认开启（defaultGithubProxyEnabled=true），
-  // 前端从未保存该键（configs 无此值）时按开启处理，避免开关/地址框与实际相反。
   const resolveSwitchSelected = (key: string): boolean => {
-    if (key === "github_proxy_enabled") {
-      return configs[key] !== "false";
-    }
-
     return configs[key] === "true";
   };
 
+  // 检查配置项是否应该显示（依赖检查）
   const shouldShowItem = (item: ConfigItem): boolean => {
     // 品牌设置项在单独的卡片中展示
     if (
@@ -924,14 +873,6 @@ export default function ConfigPage() {
 
     if (!item.dependsOn || !item.dependsValue) {
       return true;
-    }
-
-    // github_proxy_enabled 未保存时后端默认开启，依赖项也按开启显示（P2-2）
-    if (
-      item.dependsOn === "github_proxy_enabled" &&
-      configs[item.dependsOn] === undefined
-    ) {
-      return item.dependsValue === "true";
     }
 
     return configs[item.dependsOn] === item.dependsValue;

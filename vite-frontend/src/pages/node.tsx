@@ -1105,19 +1105,45 @@ export default function NodePage({
     await loadReleasesByChannel(defaultChannel);
   };
 
-  // 升级/回退确认在途守卫：弹窗关闭动画期间的连点不得重复下发破坏性命令
-  const upgradeConfirmInFlightRef = useRef(false);
-  const rollbackConfirmInFlightRef = useRef(false);
+  // 升级/回退确认的下发瞬间守卫：按操作目标分键（单节点按 nodeId、
+  // 批量独立一键、回退按 nodeId），只覆盖「点击→下发」瞬间。
+  // runConfirmUpgrade/runConfirmRollback 同步执行到首个 await 之前已
+  // 关弹窗、置目标 loading 态并发出请求，守卫随即释放，绝不跨整段
+  // 长请求持有。此前用全局单例守卫包住整段请求（单节点最长约
+  // 480s、批量最长 1800s），任一升级在途时其余节点/批量的确认点击
+  // 全被静默吞掉。请求在途期间的重复确认由目标自身的 loading 态
+  // （upgradeLoading/batchUpgradeLoading/rollbackLoading）在入口
+  // 检查拦截；不同目标互不影响，可并发下发。
+  const upgradeConfirmGuardRef = useRef<Set<string>>(new Set());
+  const rollbackConfirmGuardRef = useRef<Set<number>>(new Set());
 
   // 确认升级（从版本弹窗）
   const handleConfirmUpgrade = async () => {
-    if (upgradeConfirmInFlightRef.current) return;
-    upgradeConfirmInFlightRef.current = true;
+    const guardKey =
+      upgradeTarget === "batch"
+        ? "batch"
+        : upgradeTargetNodeId != null
+          ? `single:${upgradeTargetNodeId}`
+          : null;
 
+    if (guardKey === null) return;
+    if (upgradeConfirmGuardRef.current.has(guardKey)) return;
+    // 同一目标已有升级在途（loading 态呈现中）时忽略重复确认
+    if (upgradeTarget === "batch") {
+      if (batchUpgradeLoading) return;
+    } else if (
+      nodeList.find((n) => n.id === upgradeTargetNodeId)?.upgradeLoading
+    ) {
+      return;
+    }
+
+    upgradeConfirmGuardRef.current.add(guardKey);
     try {
-      await runConfirmUpgrade();
+      // 不 await：runConfirmUpgrade 的同步段已完成下发，余下的长
+      // 请求由其内部按目标维护 loading 态与回执 toast。
+      void runConfirmUpgrade();
     } finally {
-      upgradeConfirmInFlightRef.current = false;
+      upgradeConfirmGuardRef.current.delete(guardKey);
     }
   };
 
@@ -1252,10 +1278,23 @@ export default function NodePage({
   };
 
   const confirmRollback = async () => {
-    if (!nodeToRollback || rollbackConfirmInFlightRef.current) return;
-    rollbackConfirmInFlightRef.current = true;
+    if (!nodeToRollback) return;
     const node = nodeToRollback;
 
+    if (rollbackConfirmGuardRef.current.has(node.id)) return;
+    // 该节点已有回退在途（rollbackLoading 呈现中）时忽略重复确认
+    if (nodeList.find((n) => n.id === node.id)?.rollbackLoading) return;
+
+    rollbackConfirmGuardRef.current.add(node.id);
+    try {
+      // 不 await：runConfirmRollback 的同步段已完成下发。
+      void runConfirmRollback(node);
+    } finally {
+      rollbackConfirmGuardRef.current.delete(node.id);
+    }
+  };
+
+  const runConfirmRollback = async (node: Node) => {
     setRollbackModalOpen(false);
     setNodeList((prev) =>
       prev.map((n) => (n.id === node.id ? { ...n, rollbackLoading: true } : n)),
@@ -1271,13 +1310,14 @@ export default function NodePage({
     } catch {
       toast.error("网络错误，请重试");
     } finally {
-      rollbackConfirmInFlightRef.current = false;
       setNodeList((prev) =>
         prev.map((n) =>
           n.id === node.id ? { ...n, rollbackLoading: false } : n,
         ),
       );
-      setNodeToRollback(null);
+      // 仅当待回退选择仍是本节点时才清空，避免抹掉用户在本次回退
+      // 在途期间为另一节点打开的选择。
+      setNodeToRollback((prev) => (prev && prev.id === node.id ? null : prev));
     }
   };
 
