@@ -23,6 +23,8 @@ import (
 // 未分配用户拿到 token 后可不带 ?user= 拉全量节点，绕过 1.0.12 订阅分配。
 // 放行条件（X1 §7 回归点）：管理员 ∨ 被分配该默认订阅（user_subscription）
 // ∨ 有旧入站分配（user_inbound，存量 ?user=+sig 回退链拼链接依赖此 path）。
+// L1-F01（Round 5）后第三条腿收紧：分配入站须属于该订阅（成员相交），
+// 错位/悬空分配不再放行，专测见 sub_info_scope_r5_test.go。
 
 type subInfoTestEnv struct {
 	h          *Handler
@@ -69,8 +71,16 @@ func newSubInfoTestEnv(t *testing.T) *subInfoTestEnv {
 	if err := r.SetUserSubscriptions(env.assignedID, []int64{sub.ID}); err != nil {
 		t.Fatalf("assign subscription: %v", err)
 	}
-	// 旧模型分配：只有 user_inbound 行（inbound 不必真实存在，本检查只读分配行）。
-	if err := r.SetUserInbounds(env.legacyID, []int64{999}); err != nil {
+	// 旧模型分配：user_inbound 行指向真实入站（默认订阅 SourceAll=1，
+	// 该入站属其成员）。L1-F01（Round 5）起 legacy 腿要求分配入站与
+	// 订阅成员相交，悬空 id / 错位分配不再放行——见
+	// sub_info_scope_r5_test.go 的四情形专测。
+	inbound := &model.NodeInbound{Name: "legacy-member", Protocol: "vless", Listen: "0.0.0.0", Port: 443,
+		Enabled: 1, CreatedTime: now, UpdatedTime: now}
+	if err := r.CreateNodeInbound(inbound); err != nil {
+		t.Fatalf("create inbound: %v", err)
+	}
+	if err := r.SetUserInbounds(env.legacyID, []int64{inbound.ID}); err != nil {
 		t.Fatalf("assign legacy inbound: %v", err)
 	}
 	return env
