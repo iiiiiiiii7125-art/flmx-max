@@ -114,7 +114,10 @@ func TestValidateAdminSessionRejectsExpiredToken(t *testing.T) {
 	}
 }
 
-func TestServeHTTPAllowsMonitorTokenWithPermission(t *testing.T) {
+// 监控权限范围收窄（2026-11-01 用户拍板）：节点实时流仅管理员可
+// 订阅，持有监控权限的普通用户拨号必须被拒（403）。本用例由
+// TestServeHTTPAllowsMonitorTokenWithPermission 按新口径翻转而来。
+func TestServeHTTPRejectsMonitorTokenWithPermission(t *testing.T) {
 	secret := "unit-test-secret"
 	token, err := auth.GenerateToken(2, "normal_user", 1, secret)
 	if err != nil {
@@ -142,13 +145,17 @@ func TestServeHTTPAllowsMonitorTokenWithPermission(t *testing.T) {
 		"ws"+strings.TrimPrefix(ts.URL, "http")+"/system-info?type=0&secret="+url.QueryEscape(token),
 		nil,
 	)
-	if err != nil {
-		if resp != nil {
-			t.Fatalf("dial websocket error = %v, status=%d", err, resp.StatusCode)
-		}
-		t.Fatalf("dial websocket error = %v", err)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("monitor-permission user must no longer connect to the realtime stream")
 	}
-	_ = conn.Close()
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		code := 0
+		if resp != nil {
+			code = resp.StatusCode
+		}
+		t.Fatalf("dial websocket status = %d err = %v, want 403", code, err)
+	}
 }
 
 func TestConnWrapSerializesConcurrentWrites(t *testing.T) {

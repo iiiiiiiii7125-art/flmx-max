@@ -82,7 +82,9 @@ func (h *Handler) monitorNodeMetricsHandler(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	// 监控权限范围收窄（2026-11-01 用户拍板）：节点面仅管理员，
+	// 监控权限只覆盖本人隧道的监控数据。
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -120,7 +122,8 @@ func (h *Handler) monitorNodeListHandler(w http.ResponseWriter, r *http.Request)
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	// 监控权限范围收窄：节点面仅管理员（同 monitorNodeMetricsHandler）。
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -170,6 +173,22 @@ func (h *Handler) monitorTunnelListHandler(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+
+	// 监控权限范围收窄：非管理员只见自己可达的隧道（口径见
+	// monitorTunnelScope），管理员全量不变。
+	scope, isAdmin, ok := h.monitorTunnelScope(w, r)
+	if !ok {
+		return
+	}
+	if !isAdmin {
+		visible := make([]model.Tunnel, 0, len(tunnels))
+		for _, t := range tunnels {
+			if scope[t.ID] {
+				visible = append(visible, t)
+			}
+		}
+		tunnels = visible
 	}
 
 	items := make([]monitorTunnelListItem, 0, len(tunnels))
@@ -246,8 +265,18 @@ func (h *Handler) monitorTunnelQualityHandler(w http.ResponseWriter, r *http.Req
 			enabledSet[id] = true
 		}
 	}
+	// 监控权限范围收窄：在 F-084 之上再交集调用者的可达隧道集合
+	// （授权边界不 fail-open：集合查询失败已在 monitorTunnelScope
+	// 内回执中止）。管理员 scope 为 nil，不收窄。
+	scope, isAdmin, ok := h.monitorTunnelScope(w, r)
+	if !ok {
+		return
+	}
 	qualityVisible := func(tunnelID int64) bool {
-		return enabledSet == nil || enabledSet[tunnelID]
+		if enabledSet != nil && !enabledSet[tunnelID] {
+			return false
+		}
+		return isAdmin || scope[tunnelID]
 	}
 
 	// Try in-memory cache first
@@ -328,6 +357,10 @@ func (h *Handler) monitorTunnelQualityHistory(w http.ResponseWriter, r *http.Req
 		response.WriteJSON(w, response.ErrDefault("无效的隧道ID"))
 		return
 	}
+	// 监控权限范围收窄：非管理员按 ID 只能看自己隧道的质量历史。
+	if !h.ensureMonitorTunnelVisible(w, r, tunnelID) {
+		return
+	}
 
 	startMs, endMs, rangeErr := parseMetricsRange(r)
 	if rangeErr != "" {
@@ -375,6 +408,10 @@ func (h *Handler) monitorTunnelMetrics(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("无效的隧道ID"))
 		return
 	}
+	// 监控权限范围收窄：非管理员按 ID 只能看自己隧道的指标。
+	if !h.ensureMonitorTunnelVisible(w, r, tunnelID) {
+		return
+	}
 
 	startMs, endMs, rangeErr := parseMetricsRange(r)
 	if rangeErr != "" {
@@ -396,7 +433,8 @@ func (h *Handler) monitorServiceListHandler(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	// 监控权限范围收窄：服务监控不挂任何用户隧道，仅管理员。
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -794,7 +832,8 @@ func (h *Handler) monitorServiceResultsHandler(w http.ResponseWriter, r *http.Re
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	// 监控权限范围收窄：服务监控结果仅管理员（同 monitorServiceListHandler）。
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -848,7 +887,8 @@ func (h *Handler) monitorServiceLatestResultsHandler(w http.ResponseWriter, r *h
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	// 监控权限范围收窄：服务监控最新结果仅管理员。
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 
@@ -902,7 +942,8 @@ func (h *Handler) monitorServiceLimitsHandler(w http.ResponseWriter, r *http.Req
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	if !h.ensureMonitoringAccess(w, r) {
+	// 监控权限范围收窄：limits 只在服务监控 UI 内使用，随服务面收管理员。
+	if !h.ensureAdminAccess(w, r) {
 		return
 	}
 	response.WriteJSON(w, response.OK(h.resolveServiceMonitorLimits()))
@@ -989,6 +1030,60 @@ func (h *Handler) ensureMonitoringAccess(w http.ResponseWriter, r *http.Request)
 		return false
 	}
 	return true
+}
+
+// accessibleTunnelIDSet 返回某用户可达的隧道 ID 集合，与用户隧道列表
+// userTunnelVisibleList 同口径（ListUserAccessibleTunnels：
+// user_tunnel.status=1 且 tunnel.status=1）。
+func (h *Handler) accessibleTunnelIDSet(userID int64) (map[int64]bool, error) {
+	items, err := h.repo.ListUserAccessibleTunnels(userID)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[int64]bool, len(items))
+	for _, item := range items {
+		if id := asInt64(item["id"], 0); id > 0 {
+			set[id] = true
+		}
+	}
+	return set, nil
+}
+
+// monitorTunnelScope 解析调用方在监控隧道面的可见范围：管理员返回
+// (nil, true, true)，nil 集合表示不收窄；非管理员返回其可达隧道 ID
+// 集合。ok=false 时已回执（401 / -2），调用方直接 return——授权边界
+// 不 fail-open，集合查询失败不回落全量。
+func (h *Handler) monitorTunnelScope(w http.ResponseWriter, r *http.Request) (set map[int64]bool, isAdmin bool, ok bool) {
+	userID, roleID, err := userRoleFromRequest(r)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
+		return nil, false, false
+	}
+	if roleID == 0 {
+		return nil, true, true
+	}
+	set, err = h.accessibleTunnelIDSet(userID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return nil, false, false
+	}
+	return set, false, true
+}
+
+// ensureMonitorTunnelVisible 校验调用方对某条隧道的监控可见性：
+// 管理员恒可见；非管理员仅限其可达隧道，不可见时回执 403「无权限」
+// （与 user_subscription.go、user_inbound.go 等用户面所有权拒绝同
+// 形态），返回 false。
+func (h *Handler) ensureMonitorTunnelVisible(w http.ResponseWriter, r *http.Request, tunnelID int64) bool {
+	set, isAdmin, ok := h.monitorTunnelScope(w, r)
+	if !ok {
+		return false
+	}
+	if isAdmin || set[tunnelID] {
+		return true
+	}
+	response.WriteJSON(w, response.Err(403, "无权限"))
+	return false
 }
 
 func (h *Handler) monitorPermissionList(w http.ResponseWriter, r *http.Request) {
