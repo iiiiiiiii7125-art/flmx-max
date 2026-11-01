@@ -106,9 +106,9 @@ const KINDS: Record<
 
 const TONES = {
   blue: [
-    "bg-blue-100 dark:bg-blue-500/20",
+    "bg-primary-100 dark:bg-primary-500/20",
     "text-blue-600 dark:text-blue-400",
-    "bg-blue-500",
+    "bg-primary-500",
   ],
   green: [
     "bg-green-100 dark:bg-green-500/20",
@@ -116,9 +116,9 @@ const TONES = {
     "bg-green-500",
   ],
   purple: [
-    "bg-purple-100 dark:bg-purple-500/20",
+    "bg-secondary-100 dark:bg-secondary-500/20",
     "text-purple-600 dark:text-purple-400",
-    "bg-purple-500",
+    "bg-secondary-500",
   ],
   orange: [
     "bg-orange-100 dark:bg-orange-500/20",

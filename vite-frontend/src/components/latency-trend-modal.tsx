@@ -30,7 +30,7 @@ const RANGES = [
 
 const COLORS = [
   "#10b981",
-  "#3b82f6",
+  "#6366f1",
   "#f59e0b",
   "#ef4444",
   "#8b5cf6",

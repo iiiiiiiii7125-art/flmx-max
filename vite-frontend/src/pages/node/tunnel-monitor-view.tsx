@@ -336,7 +336,7 @@ const QualityChartCard = React.memo(function QualityChartCard({
                   dataKey="exitToBing"
                   dot={false}
                   name="exitToBing"
-                  stroke="#3b82f6"
+                  stroke="#6366f1"
                   strokeWidth={2}
                   type="monotone"
                 />
@@ -700,7 +700,7 @@ const ForwardingChainTopology = React.memo(function ForwardingChainTopology({
   if (topologyPaths.length === 0) return null;
 
   return (
-    <Card className="border border-divider/60 shadow-sm transition-shadow bg-gradient-to-br from-background to-default-50/50 mt-4">
+    <Card className="border border-divider/60 shadow-sm transition-shadow mt-4">
       <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
         <h3 className="text-sm font-semibold flex items-center gap-1.5 text-default-700">
           <Activity className="w-4 h-4 text-primary" />
@@ -1242,7 +1242,7 @@ export function TunnelMonitorView({
 
         {/* Quality KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br from-background to-default-50/50">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span className="text-[11px] text-default-500 mb-1.5 flex items-center gap-1">
                 <Zap className="w-3 h-3" />
@@ -1254,7 +1254,7 @@ export function TunnelMonitorView({
               />
             </CardBody>
           </Card>
-          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br from-background to-default-50/50">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span
                 className="text-[11px] text-default-500 mb-1.5 flex items-center gap-1"
@@ -1269,7 +1269,7 @@ export function TunnelMonitorView({
               />
             </CardBody>
           </Card>
-          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br from-background to-default-50/50">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span className="text-[11px] text-default-500 mb-1.5">
                 入口 → 出口 丢包
@@ -1283,7 +1283,7 @@ export function TunnelMonitorView({
               </span>
             </CardBody>
           </Card>
-          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br from-background to-default-50/50">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span
                 className="text-[11px] text-default-500 mb-1.5"
@@ -1417,7 +1417,7 @@ export function TunnelMonitorView({
             return (
               <Card
                 key={tunnel.id}
-                className="group relative overflow-hidden shadow-sm border border-divider dark:border-default-100 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 h-full flex flex-col cursor-pointer bg-background"
+                className="group relative overflow-hidden glass-card shadow-sm hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
                 onClick={() => setDetailTunnelId(tunnel.id)}
               >
                 <div
