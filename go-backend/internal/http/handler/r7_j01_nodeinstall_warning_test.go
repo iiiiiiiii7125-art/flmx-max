@@ -60,6 +60,10 @@ func r7J01CallNodeInstall(t *testing.T, panelAddr string) r7J01Envelope {
 	}))
 	t.Cleanup(api.Close)
 	swapGitHubBasesForTest(t, api.URL, api.URL)
+	// nodeInstall 成功后会触发安装资产预热（preheatInstallReleaseAssets）：
+	// 资产基址一并钉到本地 stub＋隔离缓存＋结束前排空（GATE F3），
+	// 否则预热会对真实 github.com 下载整包并跨用例泄漏。
+	swapGHMirrorGitHubBase(t, api.URL)
 
 	h := New(r, "test-jwt-secret")
 	raw, _ := json.Marshal(map[string]interface{}{"id": nodeID, "channel": "stable"})

@@ -74,6 +74,21 @@ var agentReleaseArches = []string{"amd64", "arm64"}
 // 420s→435s，仍小于 480s 写截止）。var 以便测试收缩。
 var upgradePreheatHashWait = 15 * time.Second
 
+// preheatWG 跟踪全部后台预热 goroutine（warmAgentReleaseAssets 与
+// 期望哈希收集者）。生产侧只 Add/Done、从不等待（预热不阻塞下发
+// 的口径不变）；测试侧在用例结束前以 drainPreheatForTest 排空，
+// 消除预热 goroutine 的跨用例泄漏——泄漏的预热曾在本包全量跑时
+// 写进他人用例的 TempDir 缓存、与 t.TempDir 的 RemoveAll 清理相
+// 撞（GATE F3），也曾在 ghMirrorBases 被恢复后继续敲真实
+// github.com，给整包添时序扰动。
+var preheatWG sync.WaitGroup
+
+// drainPreheatForTest 阻塞到全部在飞预热 goroutine 落定。仅测试
+// 调用（handler 包内同包测试）。
+func drainPreheatForTest() {
+	preheatWG.Wait()
+}
+
 // warmAgentReleaseAssets 后台预热目标版本的双架构 agent 资产
 // （二进制 + .sha256）到面板镜像缓存；逐个文件失败只记日志。
 func warmAgentReleaseAssets(version string) {
@@ -91,7 +106,11 @@ func warmAgentReleaseAssets(version string) {
 // 镜像缓存的官方 .sha256）。窗口内没落地的架构不在结果里——对
 // 应节点的命令不带 expectedSha256，agent 按一期口径校验。
 func preheatAgentReleaseHashes(version string) map[string]string {
-	go warmAgentReleaseAssets(version)
+	preheatWG.Add(1)
+	go func() {
+		defer preheatWG.Done()
+		warmAgentReleaseAssets(version)
+	}()
 
 	type hashResult struct {
 		arch string
@@ -99,7 +118,9 @@ func preheatAgentReleaseHashes(version string) map[string]string {
 	}
 	ch := make(chan hashResult, len(agentReleaseArches))
 	for _, arch := range agentReleaseArches {
+		preheatWG.Add(1)
 		go func(arch string) {
+			defer preheatWG.Done()
 			ch <- hashResult{arch: arch, sum: ghMirrorReleaseSHA256(version, arch)}
 		}(arch)
 	}
@@ -125,7 +146,9 @@ func preheatAgentReleaseHashes(version string) map[string]string {
 // 命令在节点机上真正执行下载是数秒到数分钟之后，预热届时已
 // 落地；失败只记日志，命令的候选回退与 F-060 校验不依赖它。
 func preheatInstallReleaseAssets(version string) {
+	preheatWG.Add(1)
 	go func() {
+		defer preheatWG.Done()
 		files := []string{"install.sh", "install.sh.sha256"}
 		for _, arch := range agentReleaseArches {
 			files = append(files, "gost-"+arch, "gost-"+arch+".sha256")

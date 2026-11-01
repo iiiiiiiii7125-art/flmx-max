@@ -74,6 +74,10 @@ func TestAgentArchFromReportedVersion(t *testing.T) {
 
 // swapGHMirrorGitHubBase 把 gh_mirror 的 GitHub 基址换成本地 stub
 // 并把缓存目录指向独立临时目录（与 r6_b5 夹具同式）。
+// GATE F3：清理链最后登记 drain（t.Cleanup 为 LIFO，drain 最先执
+// 行）——本用例触发的预热 goroutine 必须在基址/缓存目录恢复与
+// TempDir 删除之前全部落定，否则其缓存写入会与 RemoveAll 相撞，
+// 且恢复基址后还会敲真实 github.com。
 func swapGHMirrorGitHubBase(t *testing.T, base string) {
 	t.Helper()
 	savedBase := ghMirrorBases.github
@@ -82,6 +86,21 @@ func swapGHMirrorGitHubBase(t *testing.T, base string) {
 	savedDir := ghMirrorDir
 	ghMirrorDir = t.TempDir()
 	t.Cleanup(func() { ghMirrorDir = savedDir })
+	t.Cleanup(drainPreheatForTest)
+}
+
+// stubGHMirror404 把 gh_mirror 基址换成本地 404 服务并隔离缓存
+// 目录，供不研究预热本身、但会走到下发预热的用例使用：预热全程
+// 本地化（不再敲真实 github.com），期望哈希恒为空（与预热未命中
+// 时的下发口径一致），且用例结束前排空全部预热 goroutine
+// （swapGHMirrorGitHubBase 内含 drain 清理）。
+func stubGHMirror404(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	swapGHMirrorGitHubBase(t, srv.URL)
 }
 
 const panelSourceTestHashAmd64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
