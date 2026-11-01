@@ -15,13 +15,13 @@ export const AnnouncementBanner = ({
   }
 
   return (
-    <Card className="mb-4 lg:mb-6 border border-blue-100 dark:border-blue-500/20 bg-gradient-to-br from-blue-50/80 to-indigo-50/80 dark:from-blue-500/5 dark:to-indigo-500/5 shadow-sm">
+    <Card className="mb-4 lg:mb-6 border-primary/20 dark:border-primary/25 bg-primary/5 shadow-sm">
       <CardBody className="p-4 sm:p-5">
         <div className="flex items-center gap-3.5 sm:gap-4">
-          <div className="w-10 h-10 sm:w-11 sm:h-11 bg-white dark:bg-blue-500/10 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm border border-blue-100 dark:border-blue-500/20">
+          <div className="w-10 h-10 sm:w-11 sm:h-11 bg-white dark:bg-primary-500/10 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm border border-primary/20 dark:border-primary/25">
             <svg
               aria-hidden="true"
-              className="w-5 h-5 sm:w-5 sm:h-5 text-blue-500 dark:text-blue-400"
+              className="w-5 h-5 sm:w-5 sm:h-5 text-primary-500 dark:text-primary-400"
               fill="currentColor"
               viewBox="0 0 20 20"
             >
@@ -44,7 +44,7 @@ export const AnnouncementBanner = ({
                   ),
                   a: ({ children, href }) => (
                     <a
-                      className="underline decoration-blue-500/70 underline-offset-2 hover:text-blue-700 dark:hover:text-blue-100"
+                      className="underline decoration-primary-500/70 underline-offset-2 hover:text-primary-700 dark:hover:text-primary-100"
                       href={href}
                       rel="noopener noreferrer"
                       target="_blank"
@@ -73,7 +73,7 @@ export const AnnouncementBanner = ({
                     </pre>
                   ),
                   blockquote: ({ children }) => (
-                    <blockquote className="mb-2 border-l-2 border-blue-300/80 dark:border-blue-500/60 pl-3 italic">
+                    <blockquote className="mb-2 border-l-2 border-primary-300/80 dark:border-primary-500/60 pl-3 italic">
                       {children}
                     </blockquote>
                   ),

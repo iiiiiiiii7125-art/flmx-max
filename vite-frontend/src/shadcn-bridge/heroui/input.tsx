@@ -79,7 +79,7 @@ export function Input({
     >
       <div
         className={cn(
-          "relative flex items-center rounded-md",
+          "relative flex items-center rounded-lg",
           variant === "bordered" ? "border border-input" : "",
           classNames?.inputWrapper,
         )}

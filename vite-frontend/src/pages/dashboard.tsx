@@ -123,8 +123,7 @@ function UserDashboard() {
     if (diffDays === 1) {
       return {
         label: "明天到期",
-        badgeClassName:
-          "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
+        badgeClassName: "bg-warning/10 text-warning-700 dark:text-warning-300",
         nextDueTime,
       };
     }
@@ -133,7 +132,7 @@ function UserDashboard() {
       label: `${diffDays}天后到期`,
       badgeClassName:
         diffDays <= 7
-          ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+          ? "bg-warning/10 text-warning-700 dark:text-warning-300"
           : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300",
       nextDueTime,
     };
@@ -152,7 +151,7 @@ function UserDashboard() {
     return (
       <div
         key={node.id}
-        className="rounded-xl border border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-orange-50 p-4 shadow-sm dark:border-amber-500/20 dark:from-amber-950/20 dark:via-background dark:to-orange-950/10"
+        className="rounded-xl border border-warning/30 bg-warning/5 p-4 dark:border-warning/20"
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -312,10 +311,10 @@ function UserDashboard() {
       return (
         <div className="w-full">
           <div
-            className={`w-full bg-gradient-to-r from-blue-200 to-purple-200 dark:from-blue-500/30 dark:to-purple-500/30 rounded-full ${height}`}
+            className={`w-full bg-gradient-to-r from-primary-200 to-secondary-200 dark:from-primary-500/30 dark:to-secondary-500/30 rounded-full ${height}`}
           >
             <div
-              className={`${height} bg-gradient-to-r from-blue-500 to-purple-500 rounded-full w-full opacity-60`}
+              className={`${height} bg-gradient-to-r from-primary-500 to-secondary-500 rounded-full w-full opacity-60`}
             />
           </div>
         </div>
@@ -662,7 +661,7 @@ function UserDashboard() {
             <DropdownTrigger>
               <Button
                 isIconOnly
-                className="rounded-full w-10 h-10 min-w-0 bg-primary text-white font-bold text-sm shadow-[0_4px_12px_rgba(0,122,255,0.3)]"
+                className="rounded-full w-10 h-10 min-w-0 bg-gradient-to-br from-primary-500 to-secondary-500 text-white font-semibold text-sm shadow-sm"
                 variant="solid"
               >
                 {username.slice(0, 2).toUpperCase()}
@@ -670,7 +669,7 @@ function UserDashboard() {
             </DropdownTrigger>
             <DropdownMenu
               aria-label="用户菜单"
-              className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-white/50 dark:border-white/10 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.1)]"
+              className="bg-white/75 dark:bg-zinc-900/70 backdrop-blur-[18px] backdrop-saturate-150 border border-white/50 dark:border-white/10 rounded-2xl shadow-lg"
             >
               <DropdownItem
                 key="profile"
@@ -867,11 +866,11 @@ function UserDashboard() {
       />
 
       {isAdmin && nodeExpiryReminders.length > 0 && (
-        <Card className="mb-6 lg:mb-8 border border-amber-200/80 bg-gradient-to-br from-amber-50/90 via-background to-orange-50/70 shadow-md dark:border-amber-500/20 dark:from-amber-950/10 dark:to-orange-950/10">
+        <Card className="mb-6 lg:mb-8 border-warning/30 shadow-sm dark:border-warning/20">
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full">
               <div className="flex items-center gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning/10 text-warning-700 dark:text-warning-300">
                   <svg
                     aria-hidden="true"
                     className="h-5 w-5"

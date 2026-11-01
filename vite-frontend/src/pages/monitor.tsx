@@ -88,7 +88,7 @@ function MonitorOverview() {
   if (accessState === "admin") return <AdminMonitorOverview />;
   if (accessState === "denied") {
     return (
-      <AnimatedPage className="px-3 lg:px-6 py-8">
+      <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
         <Card>
           <CardHeader>
             <h3 className="text-sm font-semibold">监控</h3>
@@ -110,7 +110,7 @@ function UserTunnelMonitorOverview() {
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
+    <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       <div className="mb-6 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -338,17 +338,17 @@ function AdminMonitorOverview() {
   }, [nodeMap, realtimeNodeMetrics]);
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
+    <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       {/* 顶部英雄数据指标 (Hero Metrics) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="rounded-3xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] p-6 relative overflow-hidden flex flex-col justify-between h-40">
+        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
             <span className="text-default-600 font-medium text-sm">
               System Load
             </span>
           </div>
           <div className="z-10 relative">
-            <span className="text-4xl font-bold text-foreground">
+            <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {aggregateMetrics.avgCpu.toFixed(1)}%
             </span>
           </div>
@@ -358,18 +358,18 @@ function AdminMonitorOverview() {
             <div className="w-full bg-primary/40 h-1.5 rounded-t-sm" />
             <div className="w-full bg-primary/40 h-4 rounded-t-sm" />
             <div className="w-full bg-primary/40 h-2.5 rounded-t-sm" />
-            <div className="w-full bg-primary h-5 rounded-t-sm shadow-[0_0_10px_rgba(0,122,255,0.5)]" />
+            <div className="w-full bg-primary h-5 rounded-t-sm" />
           </div>
         </div>
 
-        <div className="rounded-3xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] p-6 relative overflow-hidden flex flex-col justify-between h-40">
+        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
             <span className="text-default-600 font-medium text-sm">
               Active Connections
             </span>
           </div>
           <div className="z-10 relative">
-            <span className="text-4xl font-bold text-foreground">
+            <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {aggregateMetrics.totalConns}
             </span>
           </div>
@@ -379,18 +379,18 @@ function AdminMonitorOverview() {
             <div className="w-full bg-success/40 h-2.5 rounded-t-sm" />
             <div className="w-full bg-success/40 h-6 rounded-t-sm" />
             <div className="w-full bg-success/40 h-5.5 rounded-t-sm" />
-            <div className="w-full bg-success h-7 rounded-t-sm shadow-[0_0_10px_rgba(52,199,89,0.5)]" />
+            <div className="w-full bg-success h-7 rounded-t-sm" />
           </div>
         </div>
 
-        <div className="rounded-3xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] p-6 relative overflow-hidden flex flex-col justify-between h-40">
+        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
             <span className="text-default-600 font-medium text-sm">
               Bandwidth
             </span>
           </div>
           <div className="z-10 relative">
-            <span className="text-4xl font-bold text-foreground">
+            <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {formatBytesPerSecond(aggregateMetrics.totalBandwidth)}
             </span>
           </div>
@@ -400,7 +400,7 @@ function AdminMonitorOverview() {
             <div className="w-full bg-secondary/40 h-5 rounded-t-sm" />
             <div className="w-full bg-secondary/40 h-8 rounded-t-sm" />
             <div className="w-full bg-secondary/40 h-7 rounded-t-sm" />
-            <div className="w-full bg-secondary h-10 rounded-t-sm shadow-[0_0_10px_rgba(175,82,222,0.5)]" />
+            <div className="w-full bg-secondary h-10 rounded-t-sm" />
           </div>
         </div>
       </div>
@@ -438,11 +438,11 @@ function AdminMonitorOverview() {
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex items-center gap-1 p-1 rounded-2xl bg-white/20 dark:bg-black/20 backdrop-blur-3xl border border-white/50 dark:border-white/10 w-fit shadow-sm">
+        <div className="glass-surface flex items-center gap-1 p-1 rounded-full w-fit shadow-sm">
           <button
-            className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${
+            className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "nodes"
-                ? "bg-white dark:bg-zinc-800 shadow-[0_2px_8px_rgba(0,0,0,0.08)] text-foreground"
+                ? "bg-white dark:bg-zinc-800 shadow-sm text-foreground"
                 : "text-default-500 hover:text-foreground"
             }`}
             onClick={() => setActiveTab("nodes")}
@@ -451,9 +451,9 @@ function AdminMonitorOverview() {
             节点
           </button>
           <button
-            className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${
+            className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "tunnels"
-                ? "bg-white dark:bg-zinc-800 shadow-[0_2px_8px_rgba(0,0,0,0.08)] text-foreground"
+                ? "bg-white dark:bg-zinc-800 shadow-sm text-foreground"
                 : "text-default-500 hover:text-foreground"
             }`}
             onClick={() => setActiveTab("tunnels")}

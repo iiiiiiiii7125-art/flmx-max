@@ -214,10 +214,10 @@ export default function IndexPage() {
         <motion.div
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-[420px] px-4 sm:px-0"
-          initial={{ opacity: 0, y: 24 }}
-          transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
+          initial={{ opacity: 0, y: 8 }}
+          transition={{ duration: 0.2, ease: [0.2, 0.7, 0.3, 1] }}
         >
-          <Card className="w-full bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_20px_40px_rgba(0,0,0,0.15)] border-white/80 dark:border-white/10 rounded-[32px] p-2 sm:p-4">
+          <Card className="w-full rounded-2xl shadow-lg p-2 sm:p-4">
             <CardHeader className="pb-0 pt-6 px-6 flex-col items-center">
               <BrandLogo className="w-14 h-14 rounded-2xl mb-4" size={56} />
               <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -232,7 +232,7 @@ export default function IndexPage() {
                 <Input
                   classNames={{
                     inputWrapper:
-                      "bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/30 dark:border-white/10 h-12 shadow-sm rounded-xl",
+                      "bg-white/50 dark:bg-white/5 border border-white/60 dark:border-white/10 h-12 rounded-lg",
                     input: "text-base font-medium",
                   }}
                   errorMessage={errors.username}
@@ -251,7 +251,7 @@ export default function IndexPage() {
                 <Input
                   classNames={{
                     inputWrapper:
-                      "bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/30 dark:border-white/10 h-12 shadow-sm rounded-xl",
+                      "bg-white/50 dark:bg-white/5 border border-white/60 dark:border-white/10 h-12 rounded-lg",
                     input: "text-base font-medium tracking-wider",
                   }}
                   isDisabled={loading}
@@ -268,7 +268,8 @@ export default function IndexPage() {
                 />
 
                 <Button
-                  className="mt-4 h-12 rounded-xl bg-primary text-white font-bold text-base shadow-[0_8px_16px_rgba(0,122,255,0.3)] transition-transform active:scale-[0.98]"
+                  className="mt-4 h-12 rounded-lg font-semibold text-base"
+                  color="primary"
                   disabled={loading}
                   isLoading={loading}
                   onPress={handleLogin}
@@ -281,7 +282,7 @@ export default function IndexPage() {
                 </Button>
                 {passkeyEnabled && (
                   <Button
-                    className="h-12 rounded-xl"
+                    className="h-12 rounded-lg"
                     disabled={loading}
                     variant="bordered"
                     onPress={() => void handlePasskeyLogin()}

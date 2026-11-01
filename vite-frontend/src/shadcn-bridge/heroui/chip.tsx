@@ -36,6 +36,15 @@ function colorVariant(color: ChipColor) {
   return "default" as const;
 }
 
+const solidColorClassMap: Record<ChipColor, string> = {
+  default: "border-transparent bg-default-800 text-default-50",
+  primary: "border-transparent bg-primary text-primary-foreground",
+  secondary: "border-transparent bg-secondary text-secondary-foreground",
+  success: "border-transparent bg-success text-white",
+  warning: "border-transparent bg-warning text-white",
+  danger: "border-transparent bg-danger text-white",
+};
+
 export function Chip({
   children,
   className,
@@ -47,9 +56,9 @@ export function Chip({
   return (
     <Badge
       className={cn(
-        variant === "flat" || variant === "light" ? "bg-opacity-15" : "",
+        variant === "solid" ? solidColorClassMap[color] : "",
         variant === "bordered" ? "border-current bg-transparent" : "",
-        size === "sm" ? "px-2 py-0 text-[10px]" : "",
+        size === "sm" ? "px-2 py-0 text-xs" : "",
         size === "lg" ? "px-3 py-1 text-sm" : "",
         className,
       )}

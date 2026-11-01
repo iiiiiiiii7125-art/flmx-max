@@ -201,7 +201,7 @@ function ServerCard({
 
   return (
     <Card
-      className="group relative hover:-translate-y-1 hover:shadow-[0_20px_40px_rgba(0,0,0,0.15)] transition-all duration-300 h-full flex flex-col cursor-pointer"
+      className="group relative hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
       onClick={onPress}
     >
       {/* Dynamic top gradient bar based on status */}
@@ -367,7 +367,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
     switch (activeMetricType) {
       case "cpu":
         return {
-          lines: [{ dataKey: "cpu", color: "#3b82f6", name: "CPU %" }],
+          lines: [{ dataKey: "cpu", color: "#6366f1", name: "CPU %" }],
           yAxisLabel: "使用率 (%)",
         };
       case "memory":
@@ -391,7 +391,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
       case "load":
         return {
           lines: [
-            { dataKey: "load1", color: "#3b82f6", name: "负载 1m" },
+            { dataKey: "load1", color: "#6366f1", name: "负载 1m" },
             { dataKey: "load5", color: "#8b5cf6", name: "负载 5m" },
             { dataKey: "load15", color: "#f59e0b", name: "负载 15m" },
           ],
@@ -400,7 +400,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
       case "connections":
         return {
           lines: [
-            { dataKey: "tcp", color: "#3b82f6", name: "TCP 连接" },
+            { dataKey: "tcp", color: "#6366f1", name: "TCP 连接" },
             { dataKey: "udp", color: "#10b981", name: "UDP 连接" },
           ],
           yAxisLabel: "连接数",
@@ -1723,7 +1723,7 @@ export function MonitorView({
               ].map((item) => (
                 <Card
                   key={item.label}
-                  className="hover:shadow-[0_15px_40px_rgba(0,0,0,0.15)] transition-shadow"
+                  className="hover:shadow-md transition-shadow duration-200"
                 >
                   <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
                     <span className="text-[11px] text-default-500 mb-1.5">
@@ -1899,7 +1899,7 @@ export function MonitorView({
 
                       {/* Active monitor info bar */}
                       {resolvedActiveMonitor && (
-                        <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-white/20 dark:bg-black/20 backdrop-blur-3xl border border-white/50 dark:border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.05)]">
+                        <div className="glass-surface flex items-center justify-between gap-3 p-3 rounded-2xl shadow-sm">
                           <div className="flex items-center gap-3 min-w-0 flex-wrap">
                             <Chip color="primary" size="sm" variant="flat">
                               {resolvedActiveMonitor.type.toUpperCase()}

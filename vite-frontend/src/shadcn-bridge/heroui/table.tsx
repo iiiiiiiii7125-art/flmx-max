@@ -36,9 +36,15 @@ export function Table({
       }}
     >
       <div
-        className={cn("w-full overflow-auto rounded-md", classNames?.wrapper)}
+        className={cn(
+          "w-full overflow-auto rounded-xl border border-border bg-content1",
+          classNames?.wrapper,
+        )}
       >
-        <table className={cn("w-full text-sm", className)} {...props}>
+        <table
+          className={cn("w-full text-sm tabular-nums", className)}
+          {...props}
+        >
           {children}
         </table>
       </div>
@@ -57,7 +63,7 @@ export function TableHeader({
   );
 
   return (
-    <thead className={cn("border-b", className)} {...props}>
+    <thead className={cn("border-b bg-default-100/50", className)} {...props}>
       {hasRow ? children : <TableRow>{children}</TableRow>}
     </thead>
   );
@@ -175,7 +181,11 @@ export const TableRow = React.forwardRef<
   return (
     <tr
       ref={ref}
-      className={cn("border-b last:border-b-0", trClassName, className)}
+      className={cn(
+        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-default-100/50",
+        trClassName,
+        className,
+      )}
       {...props}
     />
   );

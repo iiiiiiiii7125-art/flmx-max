@@ -10,6 +10,18 @@ export interface ProvidersProps {
   children: React.ReactNode;
 }
 
+// Shared frosted surface for every toast type: the per-type style in
+// react-hot-toast replaces rather than merges, so each type spreads this.
+const toastSurfaceStyle = {
+  background: "var(--toaster-bg)",
+  color: "var(--toaster-color)",
+  border: "1px solid var(--toaster-border)",
+  borderRadius: 12,
+  boxShadow: "0 6px 20px rgb(24 24 27 / 0.08)",
+  backdropFilter: "blur(18px) saturate(150%)",
+  WebkitBackdropFilter: "blur(18px) saturate(150%)",
+} as const;
+
 export function Provider({ children }: ProvidersProps) {
   const navigate = useNavigate();
 
@@ -22,26 +34,17 @@ export function Provider({ children }: ProvidersProps) {
             position="top-center"
             toastOptions={{
               duration: 2000,
-              className: "dark:bg-gray-800 dark:text-white",
-              style: {
-                background: "var(--toaster-bg, #ffffff)",
-                color: "var(--toaster-color, #000000)",
-                border: "1px solid var(--toaster-border, #e5e7eb)",
-              },
+              style: { ...toastSurfaceStyle },
               success: {
                 duration: 2000,
-                style: {
-                  background: "#10b981",
-                  color: "#ffffff",
-                },
+                style: { ...toastSurfaceStyle },
               },
               error: {
                 // P2-3：错误常含长 URL/堆栈，2 秒看不全且不折行会被截断；
                 // 延长到 8 秒并允许长串断行、限制最大宽度。
                 duration: 8000,
                 style: {
-                  background: "#ef4444",
-                  color: "#ffffff",
+                  ...toastSurfaceStyle,
                   maxWidth: "90vw",
                   wordBreak: "break-all",
                 },
