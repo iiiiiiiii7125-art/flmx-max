@@ -2185,6 +2185,7 @@ panel_caddyfile_fixture_env() {
   FRONTEND_PORT=6366
   VALIDATE_FAIL_FLAG="$FIXTURE_DIR/validate-fail"
   RESTART_FAIL_FLAG="$FIXTURE_DIR/restart-fail"
+  ISACTIVE_FAIL_FLAG="$FIXTURE_DIR/isactive-fail"
   sleep() { :; }
   getent() { printf '203.0.113.10 %s\n' "$2"; }
   caddy() {
@@ -2195,6 +2196,9 @@ panel_caddyfile_fixture_env() {
   }
   systemctl() {
     if [[ "$1" == "restart" && -f "$RESTART_FAIL_FLAG" ]]; then
+      return 1
+    fi
+    if [[ "$1" == "is-active" && -f "$ISACTIVE_FAIL_FLAG" ]]; then
       return 1
     fi
     return 0
@@ -2693,6 +2697,571 @@ EOF
   assert_equals "" "${DOWNLOAD_ROUTES[-1]}" "panel-extend: direct should be appended as the last-resort route"
 )
 
+# L2-33（R5-FD）：PROXY_ENABLED 大小写不敏感——False/FALSE/0 必须与
+# false 同义走直连（旧实现仅精确匹配小写 false，运维逃生口误写大小
+# 写时静默落入内置选路且无告警）。两脚本同口径，对旧代码必红。
+test_proxy_enabled_case_insensitive() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  PROXY_URL=""
+  local v
+  for v in false False FALSE 0; do
+    PROXY_ENABLED="$v"
+    assert_equals "direct" "$(route_mode)" "L2-33: install.sh PROXY_ENABLED=$v should select direct mode"
+  done
+  PROXY_ENABLED="true"
+  assert_equals "builtin" "$(route_mode)" "L2-33: install.sh PROXY_ENABLED=true should stay builtin"
+
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  for v in false False FALSE 0; do
+    PROXY_ENABLED="$v"
+    assert_equals "direct" "$(route_mode)" "L2-33: panel_install.sh PROXY_ENABLED=$v should select direct mode"
+  done
+)
+
+# L2-06①（R5-FD）：install.sh 慢直连门——直连探针 2.5s（通但慢）不
+# 得短路独占，须按实测延迟并入代理排名：ghps 0.100、ghfast 0.200
+# 在前，直连按 2.5s 排第三，其后为未判活代理（清单原序），阶段为
+# 2 而非 1。对旧代码必红（旧实现只判成败、慢直连恒阶段 1 独占）。
+test_install_script_slow_direct_joins_ranking() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *ghps.cc*) printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *ghfast.top*) printf '0.200 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *" https://github.com/"*) printf '2.500 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "2" "$ROUTES_STAGE" "L2-06(1): slow direct must not short-circuit (stage 2, not 1)"
+  assert_equals "10" "${#DOWNLOAD_ROUTES[@]}" "L2-06(1): routes should be 9 proxies + direct"
+  assert_equals "https://ghps.cc" "${DOWNLOAD_ROUTES[0]}" "L2-06(1): fastest proxy first"
+  assert_equals "https://ghfast.top" "${DOWNLOAD_ROUTES[1]}" "L2-06(1): second fastest proxy second"
+  assert_equals "" "${DOWNLOAD_ROUTES[2]}" "L2-06(1): slow direct inserted by measured latency (third)"
+)
+
+# L2-35（R5-FD）：panel_install.sh 同族第三面——慢直连同样不得短路
+# 独占，口径与 install.sh 一致。
+test_panel_slow_direct_joins_ranking() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *ghps.cc*) printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *ghfast.top*) printf '0.200 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *" https://github.com/"*) printf '2.500 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "2" "$ROUTES_STAGE" "L2-35: slow direct must not short-circuit on the panel side either"
+  assert_equals "https://ghps.cc" "${DOWNLOAD_ROUTES[0]}" "L2-35: fastest proxy first"
+  assert_equals "" "${DOWNLOAD_ROUTES[2]}" "L2-35: slow direct inserted by measured latency (third)"
+)
+
+# L2-06②（R5-FD）：download_agent_binary 整轮总预算——预算耗尽时必
+# 须整轮失败（桩 curl 恒成功也救不了已过期的预算），且正式文件与
+# .part 均不得落地/残留。
+test_install_script_download_budget_enforced() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED="false"
+  PROXY_URL=""
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v-test/gost-amd64"
+  FLMX_DOWNLOAD_BUDGET_SECONDS=0
+
+  curl() { return 0; }
+
+  local dest rc="0"
+  dest=$(mktemp -u)
+  download_agent_binary "$dest" >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-06(2): an exhausted total budget must fail the whole download"
+  [[ ! -e "$dest" ]] || fail "L2-06(2): no binary may be installed when the budget is exhausted"
+  [[ ! -e "$dest.part" ]] || fail "L2-06(2): the partial file must be cleaned up when the budget is exhausted"
+)
+
+# L2-06②（R5-FD）：跨线路续传——第一条路线写下前 9 字节后失败，
+# 第二条路线必须带 -C - 从断点续传（桩按已有文件大小补齐剩余字节
+# 模拟 Range），最终文件为完整内容且校验通过、.part 被移交为正式
+# 文件。旧实现每条路线 rm 从零重下，本用例必红。
+test_install_script_download_resumes_across_routes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v-test/gost-amd64"
+
+  local full_body="FULLBODY-0123456789"
+  local args_log
+  args_log=$(mktemp)
+
+  curl() {
+    echo "$*" >> "$args_log"
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    case "$*" in
+      *url_effective*)
+        printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO"
+        return 0
+        ;;
+    esac
+    if [[ "$url" == *.sha256 ]]; then
+      printf '%s' "$full_body" | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    case "$url" in
+      https://ghfast.top/*)
+        # 模拟支持 Range 的服务端：按已有字节数补齐剩余部分
+        local have=0
+        if [[ -f "$output" ]]; then
+          have=$(stat -c %s "$output")
+        fi
+        printf '%s' "${full_body:$have}" >> "$output"
+        return 0
+        ;;
+      *)
+        # 直连：只写前 9 字节后失败，留下可续传的断点
+        printf '%s' "${full_body:0:9}" > "$output"
+        return 1
+        ;;
+    esac
+  }
+
+  local dest
+  dest=$(mktemp -u)
+  download_agent_binary "$dest" >/dev/null || fail "L2-06(2): download should succeed via the second route"
+  assert_equals "$full_body" "$(cat "$dest")" "L2-06(2): final binary must be the full body assembled across routes"
+  grep -q -- '-C' "$args_log" || fail "L2-06(2): later routes must request a Range resume (-C -)"
+  [[ ! -e "$dest.part" ]] || fail "L2-06(2): the partial file must be moved into place on success"
+)
+
+# L2-06③（R5-FD）：resolve_latest_release_tag 整轮总预算——预算耗尽
+# 时必须整轮失败，而不是逐路线 30s+30s 无上限串行下去。
+test_install_script_resolve_budget_enforced() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED="false"
+  PROXY_URL=""
+  FLMX_RESOLVE_BUDGET_SECONDS=0
+
+  curl() { return 0; }
+
+  local rc="0"
+  resolve_latest_release_tag >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-06(3): an exhausted resolve budget must fail tag resolution"
+)
+
+# L2-32（R5-FD）：.sha256 给出大写哈希时须先归一再比对——旧实现直
+# 接以 ^[0-9a-f]{64}$ 校验，合法资产被误判「格式无效」拒绝安装。
+test_install_script_uppercase_sha256_accepted() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  curl() {
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf 'fixture-body' | sha256sum | awk '{print toupper($1)"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    return 1
+  }
+
+  local bin
+  bin=$(mktemp)
+  printf 'fixture-body' > "$bin"
+  verify_downloaded_binary "$bin" "https://example.com/gost-amd64" >/dev/null || \
+    fail "L2-32: a valid uppercase checksum file must be accepted after normalization"
+)
+
+# L2-02（R5-FD）：PG 迁移失败回滚四幕——down 失败 / pgloader 失败 /
+# 最终 up 失败（.env 已切 PG）都必须把 .env 恢复为迁移前快照、删除
+# 快照并返回 1；旧实现 down/up 裸调用在 set -e 下先于回滚退出、快
+# 照（含密钥）失败路径长留。成功幕 .env 切 postgres、快照删除。
+test_panel_migrate_postgres_rollbacks() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'JWT_SECRET=test-secret\nDB_TYPE=sqlite\nPOSTGRES_DB=flux_panel\nPOSTGRES_USER=flux_panel\nPOSTGRES_PASSWORD=test-pg-pass\n' > .env
+  printf 'services: {}\n' > docker-compose.yml
+  cp .env env-original
+
+  local flags="$work/flags"
+  mkdir -p "$flags"
+  FIXTURE_FLAGS="$flags"
+
+  check_docker() { DOCKER_CMD="fixture_compose"; return 0; }
+  fixture_compose() {
+    case "$*" in
+      "down") [[ ! -f "$FIXTURE_FLAGS/down-fail" ]] ;;
+      "up -d postgres backend frontend") [[ ! -f "$FIXTURE_FLAGS/final-up-fail" ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  docker() {
+    case "$*" in
+      *pgloader*) [[ ! -f "$FIXTURE_FLAGS/pgloader-fail" ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  wait_for_postgres_healthy() { return 0; }
+  wait_for_backend_healthy() { return 0; }
+  sleep() { :; }
+
+  local rc
+
+  : > "$flags/down-fail"
+  rc="0"
+  migrate_to_postgres >"$work/act1.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-02: down failure must fail the migration"
+  diff -q env-original .env >/dev/null || fail "L2-02: down failure must restore .env from the snapshot"
+  [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: down failure must delete the env snapshot after rollback"
+  grep -q "恢复迁移前" "$work/act1.log" || fail "L2-02: down failure rollback must be reported"
+  rm -f "$flags/down-fail"
+
+  : > "$flags/pgloader-fail"
+  rc="0"
+  migrate_to_postgres >"$work/act2.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-02: pgloader failure must fail the migration"
+  diff -q env-original .env >/dev/null || fail "L2-02: pgloader failure must restore .env from the snapshot"
+  [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: pgloader failure must delete the env snapshot after rollback"
+  rm -f "$flags/pgloader-fail"
+
+  : > "$flags/final-up-fail"
+  rc="0"
+  migrate_to_postgres >"$work/act3.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-02: final up failure must fail the migration"
+  diff -q env-original .env >/dev/null || fail "L2-02: final up failure must roll .env back from the PG switch"
+  [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: final up failure must delete the env snapshot after rollback"
+  grep -q "已回滚" "$work/act3.log" || fail "L2-02: final up failure must report the completed rollback"
+  rm -f "$flags/final-up-fail"
+
+  rc="0"
+  migrate_to_postgres >"$work/act4.log" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "L2-02: migration should succeed when every step succeeds"
+  grep -q '^DB_TYPE=postgres' .env || fail "L2-02: successful migration must switch .env to postgres"
+  [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: successful migration must delete the env snapshot"
+)
+
+# L2-12（R5-FD）：update_panel 必须走 VERSION > FLUX_VERSION >
+# PINNED_VERSION > latest 优先级链——旧实现只认 VERSION，FLUX_VERSION
+# /PINNED 定版被静默吞掉直升 latest（桩 latest=9.9.9 不得被选中），
+# 且定版来源须在输出中点名。
+test_panel_update_honors_version_priority_chain() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  get_deployed_panel_version() { return 1; }
+  resolve_latest_release_tag() { echo "9.9.9"; }
+  download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
+  validate_panel_update_compose() { return 0; }
+  create_panel_update_backup() { UPDATE_BACKUP_DIR="backup"; return 0; }
+  pull_panel_update_images() { return 0; }
+  activate_panel_update_files() { return 0; }
+  start_panel_after_update() { return 0; }
+  check_ipv6_support() { return 1; }
+
+  local log
+  log=$(mktemp)
+
+  VERSION=""
+  FLUX_VERSION="1.5.0"
+  PINNED_VERSION=""
+  update_panel >"$log" 2>&1 || fail "L2-12: update should succeed with FLUX_VERSION pinned"
+  assert_equals "1.5.0" "$LATEST_VERSION" "L2-12: FLUX_VERSION must win over latest"
+  grep -q "FLUX_VERSION" "$log" || fail "L2-12: the pinned version source must be named in the output"
+
+  VERSION=""
+  FLUX_VERSION=""
+  PINNED_VERSION="1.5.1"
+  update_panel >"$log" 2>&1 || fail "L2-12: update should succeed with PINNED_VERSION pinned"
+  assert_equals "1.5.1" "$LATEST_VERSION" "L2-12: PINNED_VERSION must win over latest"
+  grep -q "PINNED_VERSION" "$log" || fail "L2-12: the pinned version source must be named in the output"
+
+  VERSION=""
+  FLUX_VERSION=""
+  PINNED_VERSION=""
+  update_panel >"$log" 2>&1 || fail "L2-12: update should succeed via latest"
+  assert_equals "9.9.9" "$LATEST_VERSION" "L2-12: latest is the fallback when nothing is pinned"
+)
+
+# L2-14（R5-FD）：卸载必须先定位部署目录（不以 cwd 为准）、down 在
+# 部署目录内执行、含密钥的备份产物（backups/、.env.bak.*、迁移快
+# 照、gost.db.bak）一并清除；定位失败时不删任何东西、不报完成。
+test_panel_uninstall_locates_deployment_and_cleans_artifacts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local deploy_dir other_dir
+  deploy_dir=$(mktemp -d)
+  other_dir=$(mktemp -d)
+  printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
+  printf 'JWT_SECRET=test\n' > "$deploy_dir/.env"
+  mkdir -p "$deploy_dir/backups"
+  printf 'JWT_SECRET=test\n' > "$deploy_dir/backups/panel-update-x.env"
+  printf 'JWT_SECRET=test\n' > "$deploy_dir/.env.bak.123"
+  printf 'db' > "$deploy_dir/gost.db.bak"
+  printf 'JWT_SECRET=test\n' > "$deploy_dir/.env.pre-postgres-migration"
+
+  DEPLOY_DIR_FIXTURE="$deploy_dir"
+  DOWN_CWD_LOG=$(mktemp)
+
+  check_docker() { DOCKER_CMD="fixture_compose_down"; return 0; }
+  fixture_compose_down() { pwd -P > "$DOWN_CWD_LOG"; return 0; }
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$DEPLOY_DIR_FIXTURE"
+    cd "$PANEL_DEPLOY_DIR"
+  }
+
+  cd "$other_dir"
+  local rc="0"
+  uninstall_panel <<< "y" >"$other_dir/uninstall.log" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "L2-14: uninstall should succeed against the located deployment"
+  assert_equals "$deploy_dir" "$(cat "$DOWN_CWD_LOG")" "L2-14: compose down must run inside the deployment directory, not the caller's cwd"
+  [[ ! -e "$deploy_dir/docker-compose.yml" ]] || fail "L2-14: docker-compose.yml must be removed"
+  [[ ! -e "$deploy_dir/.env" ]] || fail "L2-14: .env must be removed"
+  [[ ! -e "$deploy_dir/backups" ]] || fail "L2-14: backups/ (env copies + DB backups) must be removed"
+  [[ ! -e "$deploy_dir/.env.bak.123" ]] || fail "L2-14: .env.bak.* must be removed"
+  [[ ! -e "$deploy_dir/gost.db.bak" ]] || fail "L2-14: gost.db.bak must be removed"
+  [[ ! -e "$deploy_dir/.env.pre-postgres-migration" ]] || fail "L2-14: the PG migration snapshot must be removed"
+  grep -q "卸载完成" "$other_dir/uninstall.log" || fail "L2-14: completion must be reported after real removal"
+
+  printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
+  printf 'JWT_SECRET=test\n' > "$deploy_dir/.env"
+  resolve_panel_deployment() { return 1; }
+  rc="0"
+  uninstall_panel <<< "y" >"$other_dir/uninstall2.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-14: an unlocatable deployment must fail the uninstall"
+  [[ -e "$deploy_dir/docker-compose.yml" && -e "$deploy_dir/.env" ]] || fail "L2-14: nothing may be deleted when the deployment cannot be located"
+  if grep -q "卸载完成" "$other_dir/uninstall2.log"; then
+    fail "L2-14: completion must not be reported when nothing was uninstalled"
+  fi
+)
+
+# L2-11（R5-FD）：panel 资产下载两腿必须带超时看门狗参数——桩 curl
+# 记录 argv，本体腿与 .sha256 腿都必须出现 --max-time 与
+# --speed-limit（旧实现两腿皆无，假活慢死路线可无限挂死）。
+test_panel_download_verified_uses_timeouts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local log dest
+  log=$(mktemp)
+  dest=$(mktemp -u)
+  CURL_ARGS_LOG="$log"
+
+  curl() {
+    echo "$*" >> "$CURL_ARGS_LOG"
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf 'fixture-body' | sha256sum | awk '{print $1"  asset.sha256"}' > "$output"
+    else
+      printf 'fixture-body' > "$output"
+    fi
+    return 0
+  }
+
+  download_verified "https://example.com/asset.yml" "$dest" >/dev/null || \
+    fail "L2-11: download_verified should succeed with the stub"
+  assert_equals "2" "$(grep -c -- '--max-time' "$log")" "L2-11: both download legs must carry --max-time"
+  assert_equals "2" "$(grep -c -- '--speed-limit' "$log")" "L2-11: both download legs must carry the stall watchdog (--speed-limit)"
+)
+
+# L2-13/L2-34（R5-FD）：菜单 6 专属覆盖补齐——重复域名幂等拒绝、
+# validate 失败回滚（菜单 6 自己的那份校验/回滚代码）、缺
+# Caddyfile 前置拒绝、完成输出四步文案断言（第 2 步 Cache Rules 字
+# 段级文案、第 3 步必须含「添加前置地址」＋「保存配置」两个持久化
+# 动作、第 4 步 cf-cache-status/BYPASS 自检）。
+test_panel_menu6_dedicated_coverage() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "L2-34: initial menu 5 run should succeed"
+
+  local ok_log="$FIXTURE_DIR/menu6-ok.log"
+  setup_subscription_front_domain <<< "sub.example.com" >"$ok_log" 2>&1 || \
+    fail "L2-34: menu 6 run should succeed"
+  grep -q "URI 路径" "$ok_log" || fail "L2-34: step 2 must name the Cache Rules field (URI 路径)"
+  grep -q "绕过缓存" "$ok_log" || fail "L2-34: step 2 must name the bypass-cache action"
+  grep -q "URI 完整" "$ok_log" || fail "L2-34: step 2 must carry the URI 完整 anti-mistake warning"
+  grep -q "添加前置地址" "$ok_log" || fail "L2-13: step 3 must include the 添加前置地址 action"
+  grep -q "保存配置" "$ok_log" || fail "L2-13: step 3 must include the 保存配置 action"
+  grep -q "cf-cache-status" "$ok_log" || fail "L2-34: step 4 self-check must use cf-cache-status"
+  grep -q "BYPASS" "$ok_log" || fail "L2-34: step 4 self-check must expect BYPASS"
+
+  cp "$CADDYFILE_PATH" "$FIXTURE_DIR/expected-good"
+
+  local rc="0" dup_log="$FIXTURE_DIR/menu6-dup.log"
+  setup_subscription_front_domain <<< "sub.example.com" >"$dup_log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-34: a duplicate front domain must be rejected"
+  grep -q "已存在" "$dup_log" || fail "L2-34: duplicate rejection must be reported"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "L2-34: duplicate rejection must not modify the Caddyfile"
+
+  : > "$VALIDATE_FAIL_FLAG"
+  rc="0"
+  setup_subscription_front_domain <<< "other.example.com" >"$FIXTURE_DIR/menu6-vfail.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-34: menu 6 must fail when caddy validate fails"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "L2-34: menu 6 must roll back the appended block when validate fails"
+  rm -f "$VALIDATE_FAIL_FLAG"
+
+  CADDYFILE_PATH="$FIXTURE_DIR/no-such-Caddyfile"
+  rc="0"
+  setup_subscription_front_domain <<< "sub2.example.com" >"$FIXTURE_DIR/menu6-nofile.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-34: menu 6 must refuse when the Caddyfile is missing"
+  grep -q "请先运行菜单 5" "$FIXTURE_DIR/menu6-nofile.log" || \
+    fail "L2-34: missing-Caddyfile refusal must point at menu 5"
+)
+
+# L2-28（R5-FD）：菜单 5/6 在 restart 成功但 is-active 失败分支必须
+# 回滚 Caddyfile——旧实现该分支只有日志指引，坏配置留盘、下次重启
+# 仍加载且无人提示文件已被改动（本用例对旧代码必红）。
+test_panel_menu_is_active_failure_rolls_back() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "L2-28: initial menu 5 run should succeed"
+  cp "$CADDYFILE_PATH" "$FIXTURE_DIR/expected-good"
+
+  : > "$ISACTIVE_FAIL_FLAG"
+  local rc="0" log="$FIXTURE_DIR/menu5-isactive.log"
+  setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-28: menu 5 must fail when caddy is not active after restart"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "L2-28: menu 5 must roll back the Caddyfile when is-active fails"
+  grep -q "回滚" "$log" || fail "L2-28: menu 5 rollback must be reported"
+  rm -f "$ISACTIVE_FAIL_FLAG"
+
+  setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
+    fail "L2-28: menu 6 run should succeed"
+  cp "$CADDYFILE_PATH" "$FIXTURE_DIR/expected-good"
+
+  : > "$ISACTIVE_FAIL_FLAG"
+  rc="0"
+  log="$FIXTURE_DIR/menu6-isactive.log"
+  setup_subscription_front_domain <<< "other.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-28: menu 6 must fail when caddy is not active after restart"
+  diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
+    fail "L2-28: menu 6 must roll back the appended block when is-active fails"
+  grep -q "回滚" "$log" || fail "L2-28: menu 6 rollback must be reported"
+)
+
+# L2-31（R5-FD）：域名幂等/剔除比较大小写不敏感——已存小写站点块
+# 时以大写输入跑菜单 6 必须被幂等拒绝；以不同大小写重跑菜单 5 必
+# 须恰留一份站点块（旧实现字节比较，两幕都会写出重复块）。
+test_panel_domain_compare_case_insensitive() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "L2-31: initial menu 5 run should succeed"
+
+  local rc="0"
+  setup_subscription_front_domain <<< "PANEL.example.com" >"$FIXTURE_DIR/case-dup.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "L2-31: menu 6 must reject a case-variant duplicate of an existing site block"
+
+  setup_domain_proxy <<< "Panel.Example.COM" >/dev/null || \
+    fail "L2-31: menu 5 re-run with different case should succeed"
+  assert_equals "1" "$(grep -ci '^panel\.example\.com {' "$CADDYFILE_PATH")" \
+    "L2-31: exactly one panel site block may remain after a case-variant re-run"
+)
+
+test_proxy_enabled_case_insensitive
+test_install_script_slow_direct_joins_ranking
+test_panel_slow_direct_joins_ranking
+test_install_script_download_budget_enforced
+test_install_script_download_resumes_across_routes
+test_install_script_resolve_budget_enforced
+test_install_script_uppercase_sha256_accepted
+test_panel_migrate_postgres_rollbacks
+test_panel_update_honors_version_priority_chain
+test_panel_uninstall_locates_deployment_and_cleans_artifacts
+test_panel_download_verified_uses_timeouts
+test_panel_menu6_dedicated_coverage
+test_panel_menu_is_active_failure_rolls_back
+test_panel_domain_compare_case_insensitive
 test_install_script_respects_disabled_proxy
 test_install_script_never_asks_for_proxy_config
 test_install_script_builds_canonical_download_url
