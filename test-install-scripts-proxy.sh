@@ -2516,12 +2516,193 @@ test_tcpkill_missing_warns_instead_of_silent() (
   fi
 )
 
+# 面板源分发（install.sh）：derive_panel_prefix 映射表与 Go 侧
+# derivePanelOrigin / 后端 panelMirrorPrefixFromAgentAddr 对表：
+# wss→https、ws→http、裸地址→https、路径丢弃、端口保留、空地址
+# 与未知 scheme 派生失败。
+test_derive_panel_prefix_table() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVER_ADDR="wss://panel.example.com"
+  assert_equals "https://panel.example.com/api/v1/open_api/gh" "$(derive_panel_prefix)" "wss should derive https panel prefix"
+  SERVER_ADDR="ws://panel.example.com:6365"
+  assert_equals "http://panel.example.com:6365/api/v1/open_api/gh" "$(derive_panel_prefix)" "ws should derive http panel prefix with port"
+  SERVER_ADDR="panel.example.com:8443"
+  assert_equals "https://panel.example.com:8443/api/v1/open_api/gh" "$(derive_panel_prefix)" "bare address should default to https"
+  SERVER_ADDR="https://panel.example.com/sub/path?x=1"
+  assert_equals "https://panel.example.com/api/v1/open_api/gh" "$(derive_panel_prefix)" "path/query in addr should be dropped (origin only)"
+  SERVER_ADDR=""
+  if derive_panel_prefix >/dev/null; then
+    fail "empty SERVER_ADDR must not derive a panel prefix"
+  fi
+  SERVER_ADDR="ftp://panel.example.com"
+  if derive_panel_prefix >/dev/null; then
+    fail "unknown scheme must not derive a panel prefix"
+  fi
+)
+
+# 面板源分发（install.sh）：面板线路探活 -> 独占路线表（阶段 3），
+# 直连与代理根本不被探测（桩对非面板探测一律判死也不影响）。
+test_install_script_routes_panel_first_when_panel_alive() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR="wss://panel.example.com:8443"
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *panel.example.com*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "panel-alive: routes should be exactly the panel route"
+  assert_equals "https://panel.example.com:8443/api/v1/open_api/gh" "${DOWNLOAD_ROUTES[0]}" "panel-alive: the only route should be the derived panel prefix"
+  assert_equals "3" "$ROUTES_STAGE" "panel-alive: stage should be 3 (panel-exclusive, extendable)"
+)
+
+# 面板源分发（install.sh）：面板线路探不通 -> 原样回退既有流程：
+# 直连活则直连短路（阶段 1）；直连也死则代理排名（阶段 2）且路线
+# 表里没有面板前缀。
+test_install_script_routes_panel_dead_falls_back() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR="wss://panel.example.com:8443"
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  # 第一幕：面板死、直连活
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *panel.example.com*) return 22 ;;
+          *) printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "panel-dead/direct-alive: routes should be direct only"
+  assert_equals "" "${DOWNLOAD_ROUTES[0]}" "panel-dead/direct-alive: the only route should be direct"
+  assert_equals "1" "$ROUTES_STAGE" "panel-dead/direct-alive: stage should be 1"
+
+  # 第二幕：面板死、直连死、ghps 活
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  curl() {
+    case "$*" in
+      *url_effective*)
+        case "$*" in
+          *ghps.cc*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "10" "${#DOWNLOAD_ROUTES[@]}" "panel-dead/direct-dead: routes should be 9 proxies + direct fallback"
+  assert_equals "https://ghps.cc" "${DOWNLOAD_ROUTES[0]}" "panel-dead/direct-dead: fastest probed proxy should rank first"
+  case " ${DOWNLOAD_ROUTES[*]} " in
+    *panel.example.com*) fail "panel-dead: a dead panel route must not enter the route table" ;;
+  esac
+  assert_equals "2" "$ROUTES_STAGE" "panel-dead/direct-dead: stage should be 2"
+)
+
+# 面板源分发（install.sh）：面板独占（阶段 3）后二进制下载失败 ->
+# extend 补测代理排名 + 直连殿后，经 ghfast 下载成功且校验通过。
+test_install_script_panel_route_extends_on_download_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR="wss://panel.example.com:8443"
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v-test/gost-amd64"
+
+  curl() {
+    local all_args="$*"
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    case "$all_args" in
+      *url_effective*)
+        case "$all_args" in
+          *panel.example.com*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *ghfast.top*) printf '0.200 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) return 22 ;;
+        esac
+        return 0
+        ;;
+    esac
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    case "$url" in
+      *panel.example.com*) return 22 ;;
+      https://ghfast.top/*)
+        cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+        chmod +x "$output"
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  local dest
+  dest=$(mktemp)
+  download_agent_binary "$dest" || fail "panel-extend: download should succeed via ghfast after the panel route fails"
+  grep -q "new version" "$dest" || fail "panel-extend: downloaded body should come from the ghfast route"
+  assert_equals "" "${DOWNLOAD_ROUTES[-1]}" "panel-extend: direct should be appended as the last-resort route"
+)
+
 test_install_script_respects_disabled_proxy
 test_install_script_never_asks_for_proxy_config
 test_install_script_builds_canonical_download_url
 test_install_script_routes_direct_first
 test_install_script_routes_rank_proxies_when_direct_dead
 test_install_script_download_failover_extends_routes
+test_derive_panel_prefix_table
+test_install_script_routes_panel_first_when_panel_alive
+test_install_script_routes_panel_dead_falls_back
+test_install_script_panel_route_extends_on_download_failure
 test_panel_download_verified_routed_failover
 test_update_flux_agent_downloads_without_prompt
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
