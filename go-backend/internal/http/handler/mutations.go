@@ -7648,7 +7648,18 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 	handlerCfg := map[string]interface{}{
 		"type": "relay",
 	}
-	if handlerMetadata := tunnelRelayMetadata(protocol); len(handlerMetadata) > 0 {
+	handlerMetadata := tunnelRelayMetadata(protocol)
+	if chainNode.ChainType == 3 {
+		// KU9: 出口是链终端——relay handler 无 chain 时才分发
+		// handleBind（中继跳走 forward 转发、不查此开关），而
+		// SOCKS5 UDP associate 经 relay 链恒走 connector Bind，
+		// 终端不开 bind opt-in 时出口回 "relay: BIND is disabled"、
+		// 整形态不可达（Phase F 真机定性；隔离验证仅出口多带
+		// bind:true 即同链 6/6）。与联邦 exit 同口径
+		// （buildFederationServiceConfig）。
+		handlerMetadata["bind"] = true
+	}
+	if len(handlerMetadata) > 0 {
 		handlerCfg["metadata"] = handlerMetadata
 	}
 	if nextHopCandidateCount > 1 {

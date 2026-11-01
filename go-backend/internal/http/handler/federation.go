@@ -337,7 +337,15 @@ func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName s
 		"listener": buildTunnelListenerConfig(protocol),
 	}
 	// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata。
-	if handlerMetadata := tunnelRelayMetadata(protocol); len(handlerMetadata) > 0 {
+	handlerMetadata := tunnelRelayMetadata(protocol)
+	if role == "exit" {
+		// KU9: exit 是链终端，relay BIND 在此执行；与本地链出口
+		// （buildTunnelChainServiceConfig ChainType==3）同口径开
+		// bind opt-in，否则 SOCKS5 UDP associate 经链在出口被
+		// "relay: BIND is disabled" 拒绝（Phase F 真机定性）。
+		handlerMetadata["bind"] = true
+	}
+	if len(handlerMetadata) > 0 {
 		service["handler"].(map[string]interface{})["metadata"] = handlerMetadata
 	}
 	if role == "middle" {
