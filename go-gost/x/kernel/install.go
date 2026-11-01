@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -240,6 +238,23 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 	return nil
 }
 
+// fetchFileResume performs ONE attempt of a resumable file
+// download (download.FileTransfer) with fetch's entry-URL SSRF
+// judging and no-progress watchdog caliber: the attempt's bytes
+// stay in the transfer when the leg fails, and the caller's next
+// route resumes after them (1.7.12 cross-route resume, shared by
+// the kernel binary leg in install and the geodata body leg in
+// stageGeoFile). The watchdog is created per attempt, exactly as
+// in fetch, and a stall surfaces from the transfer as
+// download.ErrNoProgress.
+func fetchFileResume(ctx context.Context, transfer *download.FileTransfer, url string) error {
+	if err := validateFetchEntryURL(ctx, url); err != nil {
+		return err
+	}
+	watcher := download.NewWatcher(fetchStallWindow)
+	return transfer.Attempt(ctx, watcher, fetchHTTPClient().Do, url, nil)
+}
+
 // stripMirrorPrefix 若 url 是镜像前缀形式（<前缀>/https://目标地址），
 // 返回其中的直连地址；否则返回空串。KU4 (1.7.7) 起它只作 URL 归一化：
 // 面板下发的地址可能带某个镜像前缀，下载路由改由本机的测速计划
@@ -450,21 +465,14 @@ func install(d *Download, binDir string) error {
 		plan = download.NewPlan(ctx, url, assetProbe)
 	}
 
-	hasher := sha256.New()
-	// downloadOnce 把 url 下载到临时文件并同步计算 SHA256；每次
-	// 尝试前重置文件与哈希状态，使失败线路的半截内容不污染重试。
-	downloadOnce := func(u string) error {
-		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-		if err := tmp.Truncate(0); err != nil {
-			return err
-		}
-		hasher.Reset()
-		return fetch(ctx, u, maxDownloadBytes, io.MultiWriter(tmp, hasher))
-	}
+	// 本体下载走可续传的共享 transfer（download.FileTransfer，
+	// 1.7.12）：一条线路中途失败时已落盘字节保留，下一线路以
+	// Range 续传，不再每腿从 0 重下（慢节点在整程预算内被首腿
+	// 涓流饿死的修复口径，与 agent 自升级同源）。哈希由 transfer
+	// 持续累计，成功后与 want 的比对口径不变。
+	transfer := download.NewFileTransfer(tmp.Name(), maxDownloadBytes, 0o600)
 	if _, err := download.TryPlan(plan, url, func(route download.Route, u string) error {
-		return downloadOnce(u)
+		return fetchFileResume(ctx, transfer, u)
 	}); err != nil {
 		return err
 	}
@@ -478,7 +486,7 @@ func install(d *Download, binDir string) error {
 			return fmt.Errorf("校验文件中没有 SHA256")
 		}
 	}
-	if got := hex.EncodeToString(hasher.Sum(nil)); got != want {
+	if got := transfer.Sum(); got != want {
 		return fmt.Errorf("SHA256 校验失败: %s != %s", got, want)
 	}
 

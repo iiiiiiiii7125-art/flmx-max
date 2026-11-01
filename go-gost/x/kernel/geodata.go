@@ -148,33 +148,28 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.
 		return false, nil
 	}
 
-	// F-139 口径、KU4 形态：数据文件（大文件流式）走同一计划；每次
-	// 尝试都重建临时文件与哈希（downloadGeoFile 以 O_TRUNC 打开）。
+	// F-139 口径、KU4 形态 + 1.7.12 续传：数据文件（大文件流式）
+	// 走同一计划与可续传 transfer——中途失败的线路保留已落盘
+	// 字节、下一线路以 Range 续传。一条线路下完但组装哈希不符
+	// 时丢弃断点（Reset），由下一线路从 0 重下，保住续传前的
+	// 校验回退口径。
 	tmp := path + ".new"
+	transfer := download.NewFileTransfer(tmp, geoMaxSize, 0o644)
 	_, err := download.TryPlan(plan, directForm(f.URL), func(route download.Route, u string) error {
-		return downloadGeoFile(ctx, u, tmp, want)
+		if err := fetchFileResume(ctx, transfer, u); err != nil {
+			return err
+		}
+		if transfer.Sum() != want {
+			_ = transfer.Reset()
+			return errors.New("SHA256 校验失败")
+		}
+		return nil
 	})
 	if err != nil {
 		_ = os.Remove(tmp)
 		return false, err
 	}
 	return true, nil
-}
-
-func downloadGeoFile(ctx context.Context, url, tmp, want string) error {
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	h := sha256.New()
-	err = fetch(ctx, url, geoMaxSize, io.MultiWriter(out, h))
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil && hex.EncodeToString(h.Sum(nil)) != want {
-		err = errors.New("SHA256 校验失败")
-	}
-	return err
 }
 
 func fileSHA256(path string) (string, error) {

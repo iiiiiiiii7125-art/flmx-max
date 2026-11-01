@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2046,110 +2044,69 @@ const maxAgentBinarySize = 100 << 20 // 100MB
 // shrink it.
 var upgradeStallWindow = download.StallWindow
 
-// downloadUpgradeAttempt performs ONE self-upgrade binary download
-// attempt: GET rawURL on ctx, stream the body into tmpPath while
-// hashing it, and report integer percents when the server
-// advertised a content length. The attempt runs under a
-// no-progress watchdog (upgradeStallWindow) fed by every chunk
-// read; a stalled or trickling peer fails the attempt with
-// download.ErrNoProgress. tmpPath is (re)created per attempt — on
-// error its content is partial and the caller removes it (a retry
-// truncates it anyway).
-func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tmpPath string, report func(percent int)) (int64, string, error) {
+// upgradeTransferAttempt performs ONE self-upgrade binary
+// download leg over an existing resumable transfer
+// (download.FileTransfer): the persisted bytes of earlier legs
+// stay on disk and this leg resumes after them with a Range
+// request (a route answering the full body instead restarts the
+// file inside the transfer — see FileTransfer.Attempt). The leg
+// runs under a fresh no-progress watchdog (upgradeStallWindow): a
+// stalled or trickling peer fails the leg with
+// download.ErrNoProgress, keeping its persisted bytes for the
+// next route.
+func upgradeTransferAttempt(ctx context.Context, client *http.Client, transfer *download.FileTransfer, rawURL string, report func(percent int)) error {
 	watcher := download.NewWatcher(upgradeStallWindow)
-	actx, stopWatch := watcher.Watch(ctx)
-	defer stopWatch()
-	resp, err := upgradeGET(actx, client, rawURL)
-	if err != nil {
-		if watcher.Stalled() {
-			return 0, "", download.ErrNoProgress
+	return transfer.Attempt(ctx, watcher, client.Do, rawURL, func(downloaded, total int64) {
+		if report != nil && total > 0 {
+			report(int(downloaded * 100 / total))
 		}
+	})
+}
+
+// downloadUpgradeAttempt performs ONE self-upgrade binary download
+// attempt from byte zero into tmpPath and returns its byte count
+// and SHA-256. It is the one-shot shape kept for direct callers
+// (tests); the production path (downloadUpgradeBinary) drives one
+// resumable transfer across all of the plan's legs instead, so a
+// failed leg no longer discards the bytes it already fetched.
+func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tmpPath string, report func(percent int)) (int64, string, error) {
+	transfer := download.NewFileTransfer(tmpPath, maxAgentBinarySize, 0o700)
+	if err := transfer.Reset(); err != nil {
 		return 0, "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, "", fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
-	}
-	// S-02: 限制下载大小，防止超大文件耗尽磁盘
-	if resp.ContentLength > maxAgentBinarySize {
-		return 0, "", fmt.Errorf("S-02: 升级包过大 (%d bytes)，拒绝下载", resp.ContentLength)
-	}
-	// S-02: 临时文件权限 0700，仅所有者可读写
-	outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700)
-	if err != nil {
-		return 0, "", fmt.Errorf("创建临时文件失败: %v", err)
-	}
-	totalSize := resp.ContentLength
-	var downloaded int64
-	buf := make([]byte, 32*1024)
-	hasher := sha256.New()
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			watcher.Note(n)
-			// S-02: 下载过程中也检查大小（防 ContentLength 欺骗）
-			if downloaded+int64(n) > maxAgentBinarySize {
-				outFile.Close()
-				return 0, "", fmt.Errorf("S-02: 升级包超过大小限制 (%d bytes)", maxAgentBinarySize)
-			}
-			if _, wErr := outFile.Write(buf[:n]); wErr != nil {
-				outFile.Close()
-				return 0, "", fmt.Errorf("写入升级包失败: %v", wErr)
-			}
-			hasher.Write(buf[:n])
-			downloaded += int64(n)
-			if totalSize > 0 && report != nil {
-				report(int(downloaded * 100 / totalSize))
-			}
-		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			outFile.Close()
-			if watcher.Stalled() {
-				return 0, "", fmt.Errorf("读取升级包失败: %w", download.ErrNoProgress)
-			}
-			return 0, "", fmt.Errorf("读取升级包失败: %v", readErr)
-		}
-	}
-	if err := outFile.Close(); err != nil {
-		return 0, "", fmt.Errorf("写入升级包失败: %v", err)
-	}
-	if downloaded == 0 {
-		return 0, "", fmt.Errorf("下载的升级包为空")
-	}
-	return downloaded, hex.EncodeToString(hasher.Sum(nil)), nil
+	err := upgradeTransferAttempt(ctx, client, transfer, rawURL, report)
+	return transfer.Size(), transfer.Sum(), err
 }
 
 // downloadUpgradeBinary downloads the self-upgrade binary (the
 // direct-form URL directURL) into tmpPath over the probe-selected
 // route plan, and returns the byte count and SHA-256 hex of the
-// content. Each route gets ONE attempt whose unit of failure is
-// GET+body-read (downloadUpgradeAttempt, with its no-progress
-// watchdog): ANY failure of an attempt — transport error, non-200,
-// or a body that stalls or breaks mid-transfer — moves to the
-// plan's next route (KU4; generalizes the R7-J-02 proxy->direct
-// fallback and the R3-WDG-01 watchdog caliber to the candidate
-// plan). When every route fails, download.TryPlan's error names
-// each route and its cause. The route policy is shared with the
-// checksum leg (downloadUpgradeChecksum) so the two legs cannot
-// drift apart.
+// content. All legs share ONE resumable transfer
+// (download.FileTransfer): ANY failure of a leg — transport
+// error, non-200, or a body that stalls or breaks mid-transfer —
+// moves to the plan's next route, which resumes from the bytes
+// already on disk instead of restarting from zero (1.7.12; the
+// pre-resume caliber burned the shared budget on slow nodes: the
+// first leg's trickle left the later legs an expired context).
+// When every route fails, download.TryPlan's error names each
+// route and its cause, and the per-leg log lines carry the
+// persisted byte count for diagnosis. The route policy is shared
+// with the checksum leg (downloadUpgradeChecksum) so the two
+// legs cannot drift apart; the checksum leg itself is a tiny
+// file and deliberately does not resume.
 func downloadUpgradeBinary(ctx context.Context, client *http.Client, plan *download.Plan, directURL, tmpPath string, report func(percent int)) (int64, string, error) {
-	var downloaded int64
-	var hash string
+	transfer := download.NewFileTransfer(tmpPath, maxAgentBinarySize, 0o700)
 	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
-		var aerr error
-		downloaded, hash, aerr = downloadUpgradeAttempt(ctx, client, url, tmpPath, report)
+		aerr := upgradeTransferAttempt(ctx, client, transfer, url, report)
 		if aerr != nil {
-			fmt.Printf("⚠️ 下载线路 %s 失败 (%v)，按测速排名尝试下一线路\n", route.Name(), aerr)
+			fmt.Printf("⚠️ 下载线路 %s 失败 (%v)，已下载 %d bytes，按测速排名尝试下一线路（保留断点续传）\n", route.Name(), aerr, transfer.Size())
 		}
 		return aerr
 	})
 	if err != nil {
 		return 0, "", err
 	}
-	return downloaded, hash, nil
+	return transfer.Size(), transfer.Sum(), nil
 }
 
 // fetchUpgradeChecksumAttempt performs ONE checksum download
