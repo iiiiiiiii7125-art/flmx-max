@@ -64,7 +64,7 @@ function CardTitle({
 function CardDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <p
-      className={cn("text-sm text-default-600", className)}
+      className={cn("text-sm font-medium text-foreground", className)}
       data-slot="card-description"
       {...props}
     />
