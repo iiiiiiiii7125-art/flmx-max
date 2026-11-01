@@ -273,7 +273,7 @@ export function ImportModal({
                       <p className="text-sm">
                         {subURL ? "定时同步" : "存为订阅源"}
                       </p>
-                      <p className="text-xs text-foreground">
+                      <p className="text-xs font-semibold text-foreground">
                         {!sync
                           ? "只导入一次，之后不再更新"
                           : subURL
@@ -310,7 +310,7 @@ export function ImportModal({
                           value={role}
                           onChange={(v) => setRole(v as RemoteSourceRole)}
                         />
-                        <p className="text-xs text-foreground">
+                        <p className="text-xs font-semibold text-foreground">
                           {ROLE_HINTS[role]}
                         </p>
                       </div>
@@ -326,7 +326,7 @@ export function ImportModal({
             </span>
           </Checkbox>
           {errors.length > 0 && (
-            <ul className="space-y-1 rounded-xl bg-danger-500/10 p-3 text-xs text-danger-700">
+            <ul className="space-y-1 rounded-xl bg-danger-500/10 p-3 text-xs font-semibold text-danger-700">
               {errors.map((e) => (
                 <li key={e} className="break-all">
                   {e}

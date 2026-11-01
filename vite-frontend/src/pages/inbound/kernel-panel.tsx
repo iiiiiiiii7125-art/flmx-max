@@ -287,20 +287,20 @@ export function KernelPanel({
             <span className="shrink-0 font-medium">
               {kernelName(k.kernelType)}
             </span>
-            <span className="truncate text-xs text-foreground font-mono">
+            <span className="truncate text-xs font-semibold text-foreground font-mono">
               {k.installedVersion
                 ? shortVersion(k.installedVersion)
                 : k.version}
             </span>
           </div>
-          <div className="text-xs text-foreground">{k.inboundCount} 个入站</div>
+          <div className="text-xs font-semibold text-foreground">{k.inboundCount} 个入站</div>
           {k.lastError && (
-            <p className="mt-1 text-xs text-danger-700 break-all line-clamp-2">
+            <p className="mt-1 text-xs font-semibold text-danger-700 break-all line-clamp-2">
               {k.lastError}
             </p>
           )}
           {!k.synced && !k.lastError && (
-            <p className="mt-1 text-xs text-warning-700">
+            <p className="mt-1 text-xs font-semibold text-warning-700">
               配置尚未同步，节点上线后自动下发
             </p>
           )}
@@ -316,7 +316,7 @@ export function KernelPanel({
   return (
     <div>
       <div className="flex items-center justify-between mb-3 gap-2">
-        <p className="text-xs text-foreground tray-plate w-fit rounded-full px-2.5 py-1">
+        <p className="text-xs font-semibold text-foreground tray-plate w-fit rounded-full px-2.5 py-1">
           点击内核可启停、重启、查看日志或卸载
         </p>
         <Button
@@ -442,7 +442,7 @@ export function KernelPanel({
         onClose={() => setSheetFor(null)}
       >
         {sheetKernel?.lastError && (
-          <p className="text-xs text-danger-700 break-all">
+          <p className="text-xs font-semibold text-danger-700 break-all">
             {sheetKernel.lastError}
           </p>
         )}
@@ -661,7 +661,7 @@ export function KernelPanel({
                 )}
               </ModalHeader>
               <ModalBody>
-                <pre className="text-xs whitespace-pre-wrap break-all bg-white/40 rounded-xl p-3 max-h-[60vh] overflow-auto">
+                <pre className="text-xs font-semibold whitespace-pre-wrap break-all bg-white/40 rounded-xl p-3 max-h-[60vh] overflow-auto">
                   {logsLoading
                     ? "加载中..."
                     : (logs?.logs ?? []).join("\n") || "暂无日志"}
@@ -697,7 +697,7 @@ export function KernelPanel({
                 <h2 className="text-lg font-bold text-danger-700">卸载内核</h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-default-600">
+                <p className="text-foreground">
                   确定从{" "}
                   <span className="font-semibold text-foreground">
                     {removeTarget?.nodeName}

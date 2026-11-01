@@ -24,7 +24,7 @@ export const MetricCard = ({
       <CardBody className="!p-4 md:!p-6 h-full flex flex-col justify-between overflow-visible">
         <div className="flex flex-col space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-default-600 truncate">
+            <p className="text-sm font-medium text-foreground truncate">
               {title}
             </p>
             <div className={`p-2 rounded-xl flex-shrink-0 ${iconClassName}`}>

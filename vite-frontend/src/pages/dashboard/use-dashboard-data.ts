@@ -131,7 +131,7 @@ const checkExpirationNotifications = (
         toast("账户已过期，请立即续费", {
           icon: "⚠️",
           duration: 8000,
-          style: { background: "#ef4444", color: "#fff" },
+          style: { background: "#991b1b", color: "#fff" },
         });
       } else {
         const diffTime = expDate.getTime() - now.getTime();
@@ -143,13 +143,13 @@ const checkExpirationNotifications = (
             toast("账户将于明天过期，请及时续费", {
               icon: "⚠️",
               duration: 6000,
-              style: { background: "#f59e0b", color: "#fff" },
+              style: { background: "#f59e0b", color: "#451a03" },
             });
           } else {
             toast(`账户将于${diffDays}天后过期，请及时续费`, {
               icon: "⚠️",
               duration: 6000,
-              style: { background: "#f59e0b", color: "#fff" },
+              style: { background: "#f59e0b", color: "#451a03" },
             });
           }
         }
@@ -172,7 +172,7 @@ const checkExpirationNotifications = (
         toast(`隧道"${tunnel.tunnelName}"已过期`, {
           icon: "⚠️",
           duration: 6000,
-          style: { background: "#ef4444", color: "#fff" },
+          style: { background: "#991b1b", color: "#fff" },
         });
       } else {
         const diffTime = expDate.getTime() - now.getTime();
@@ -184,13 +184,13 @@ const checkExpirationNotifications = (
             toast(`隧道"${tunnel.tunnelName}"将于明天过期`, {
               icon: "⚠️",
               duration: 5000,
-              style: { background: "#f59e0b", color: "#fff" },
+              style: { background: "#f59e0b", color: "#451a03" },
             });
           } else {
             toast(`隧道"${tunnel.tunnelName}"将于${diffDays}天后过期`, {
               icon: "⚠️",
               duration: 5000,
-              style: { background: "#f59e0b", color: "#fff" },
+              style: { background: "#f59e0b", color: "#451a03" },
             });
           }
         }

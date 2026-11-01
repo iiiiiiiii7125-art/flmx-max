@@ -213,7 +213,7 @@ export default function ChangePasswordPage() {
                   {loading ? "修改中..." : "立即修改账号密码"}
                 </Button>
 
-                <div className="bg-warning-500/10 border border-warning-300 text-warning-800 px-3 py-2 rounded-lg text-sm text-center">
+                <div className="bg-warning-500/10 border border-warning-300 font-semibold text-warning-800 px-3 py-2 rounded-lg text-sm text-center">
                   ⚠️ 注意：修改账号密码后需要重新登录
                 </div>
               </div>

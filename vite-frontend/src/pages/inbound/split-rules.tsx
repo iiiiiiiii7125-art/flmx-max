@@ -36,10 +36,10 @@ export const ruleFromTarget = (key: string): Partial<SplitRuleForm> =>
     : { action: "proxy", outboundId: key };
 
 const chipClass = (on: boolean) =>
-  `rounded-full border px-3 py-1 text-xs transition-colors ${
+  `rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
     on
       ? "border-primary bg-primary text-primary-foreground"
-      : "border-divider bg-tray text-default-600"
+      : "border-divider glass-inset text-foreground"
   }`;
 
 const countEntries = (v: string) => v.split(/[\s,，]+/).filter(Boolean).length;
@@ -140,7 +140,7 @@ export function SplitRulesEditor({
                   {match || "未选择匹配内容"}
                 </span>
                 <span
-                  className={`block truncate text-xs ${
+                  className={`block truncate text-xs font-semibold ${
                     r.action === "block" || missing || !target
                       ? "text-danger-700"
                       : "text-foreground"
@@ -159,7 +159,7 @@ export function SplitRulesEditor({
               <div className="space-y-3 border-t border-divider px-3 pb-3 pt-3">
                 {groups.map((g) => (
                   <div key={g} className="space-y-1.5">
-                    <p className="text-[11px] text-foreground">{g}</p>
+                    <p className="text-[11px] font-semibold text-foreground">{g}</p>
                     <div className="flex flex-wrap gap-1.5">
                       {categories
                         .filter((c) => c.group === g)
@@ -208,7 +208,7 @@ export function SplitRulesEditor({
                   </div>
                 ) : (
                   <button
-                    className="text-xs text-primary-700"
+                    className="text-xs font-semibold text-primary-700"
                     type="button"
                     onClick={() =>
                       setCustomOpen((prev) => new Set(prev).add(i))
@@ -218,7 +218,7 @@ export function SplitRulesEditor({
                   </button>
                 )}
                 <div className="space-y-1.5">
-                  <p className="text-[11px] text-foreground">去向</p>
+                  <p className="text-[11px] font-semibold text-foreground">去向</p>
                   <TargetButton
                     missing={missing}
                     targets={targets}
@@ -226,7 +226,7 @@ export function SplitRulesEditor({
                     onPress={() => onChooseTarget(i)}
                   />
                   {missing && (
-                    <p className="text-xs text-danger-700">
+                    <p className="text-xs font-semibold text-danger-700">
                       所选节点已被删除，匹配的流量会被丢弃，请重新选择
                     </p>
                   )}

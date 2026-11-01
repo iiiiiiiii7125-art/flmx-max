@@ -196,7 +196,7 @@ export default function ProfilePage() {
                 </h3>
                 <div className="flex items-center space-x-2 mt-1">
                   <span
-                    className={`px-2 py-1 rounded-md text-xs font-medium ${
+                    className={`px-2 py-1 rounded-md text-xs font-semibold ${
                       isAdmin
                         ? "bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300"
                         : "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
@@ -204,7 +204,7 @@ export default function ProfilePage() {
                   >
                     {isAdmin ? "管理员" : "普通用户"}
                   </span>
-                  <span className="text-xs text-foreground">
+                  <span className="text-xs font-semibold text-foreground">
                     {new Date().toLocaleDateString("zh-CN")}
                   </span>
                 </div>
@@ -231,7 +231,7 @@ export default function ProfilePage() {
                     >
                       {item.icon}
                     </div>
-                    <span className="text-xs text-foreground text-center">
+                    <span className="text-xs font-semibold text-foreground text-center">
                       {item.label}
                     </span>
                   </button>
@@ -255,7 +255,7 @@ export default function ProfilePage() {
                     />
                   </svg>
                 </div>
-                <span className="text-xs text-foreground text-center">
+                <span className="text-xs font-semibold text-foreground text-center">
                   修改密码
                 </span>
               </button>
@@ -278,7 +278,7 @@ export default function ProfilePage() {
                     />
                   </svg>
                 </div>
-                <span className="text-xs text-foreground text-center">
+                <span className="text-xs font-semibold text-foreground text-center">
                   退出登录
                 </span>
               </button>
@@ -288,12 +288,12 @@ export default function ProfilePage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-20 text-center py-4"
-          poweredClassName="text-xs text-foreground mx-auto mt-1 w-fit tray-plate rounded-full px-3 py-0.5"
+          poweredClassName="text-xs font-semibold text-foreground mx-auto mt-1 w-fit glass-surface rounded-full px-3 py-0.5"
           updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={
             isWebViewFunc() ? siteConfig.app_version : siteConfig.version
           }
-          versionClassName="text-xs text-foreground mt-1 mx-auto w-fit tray-plate rounded-full px-3 py-1"
+          versionClassName="text-xs font-semibold text-foreground mt-1 mx-auto w-fit glass-surface rounded-full px-3 py-1"
         />
       </div>
 

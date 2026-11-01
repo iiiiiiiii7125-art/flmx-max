@@ -130,7 +130,7 @@ function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
 
   return (
     <div className={compact ? "space-y-1" : "space-y-1.5"}>
-      <div className="flex items-baseline justify-between gap-2 text-xs text-foreground">
+      <div className="flex items-baseline justify-between gap-2 text-xs font-semibold text-foreground">
         <span className="font-mono">
           {formatTraffic(used)}
           {s.trafficLimit
@@ -150,7 +150,7 @@ function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
         </div>
       )}
       {!compact && (
-        <div className="font-mono text-xs text-foreground">
+        <div className="font-mono text-xs font-semibold text-foreground">
           ↑ {formatTraffic(s.uploadBytes)} · ↓ {formatTraffic(s.downloadBytes)}
         </div>
       )}
@@ -172,9 +172,9 @@ function ChipPicker({
   return (
     <div className="flex flex-wrap gap-1.5">
       <button
-        className={`rounded-full border px-2.5 py-1 text-xs ${
+        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
           selected.length === 0
-            ? "border-primary bg-primary-50 text-primary-700 dark:bg-primary-900"
+            ? "border-primary bg-primary-500/10 text-primary-700"
             : "border-divider text-foreground"
         }`}
         type="button"
@@ -188,10 +188,10 @@ function ChipPicker({
         return (
           <button
             key={value}
-            className={`rounded-full border px-2.5 py-1 text-xs ${
+            className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
               on
-                ? "border-primary bg-primary-50 text-primary-700 dark:bg-primary-900"
-                : "border-divider text-default-600"
+                ? "border-primary bg-primary-500/10 text-primary-700"
+                : "border-divider text-foreground"
             }`}
             type="button"
             onClick={() =>
@@ -240,12 +240,12 @@ function Section({
             <h3 className="text-sm font-semibold">
               {title}
               {!open && summary && (
-                <span className="ml-2 text-xs font-normal text-primary-700">
+                <span className="ml-2 text-xs font-semibold text-primary-700">
                   {summary}
                 </span>
               )}
             </h3>
-            {open && hint && <p className="text-xs text-foreground">{hint}</p>}
+            {open && hint && <p className="text-xs font-semibold text-foreground">{hint}</p>}
           </div>
           <ChevronDown
             className={`mt-0.5 h-4 w-4 shrink-0 text-foreground transition-transform ${open ? "rotate-180" : ""}`}
@@ -254,7 +254,7 @@ function Section({
       ) : (
         <div>
           <h3 className="text-sm font-semibold">{title}</h3>
-          {hint && <p className="text-xs text-foreground">{hint}</p>}
+          {hint && <p className="text-xs font-semibold text-foreground">{hint}</p>}
         </div>
       )}
       {shown && children}
@@ -391,13 +391,13 @@ function ChainRoleButtons({
       ).map(([r, label]) => (
         <button
           key={r || "none"}
-          className={`rounded-lg border px-2 py-1 text-xs transition-colors ${
+          className={`rounded-lg border px-2 py-1 text-xs font-semibold transition-colors ${
             value === r
               ? r === "landing"
-                ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-900"
+                ? "border-warning-500/40 bg-warning-500/10 text-warning-700"
                 : r === "relay"
-                  ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-900"
-                  : "border-divider bg-tray text-default-700"
+                  ? "border-secondary-500/40 bg-secondary-500/10 text-secondary-700"
+                  : "border-divider glass-inset text-foreground"
               : "border-default-200 text-foreground hover:border-default-400 dark:border-default-100"
           }`}
           type="button"
@@ -588,7 +588,7 @@ function Editor({
   const pickList = (title: string, list: InboundApiItem[]) =>
     list.length > 0 && (
       <div className="space-y-1">
-        <p className="text-xs text-foreground">{title}</p>
+        <p className="text-xs font-semibold text-foreground">{title}</p>
         {list.map((i) => (
           <Checkbox
             key={i.id}
@@ -604,10 +604,10 @@ function Editor({
           >
             <span className="text-sm">{i.name}</span>
             {!i.enabled && (
-              <span className="ml-1 text-xs text-foreground">已停用</span>
+              <span className="ml-1 text-xs font-semibold text-foreground">已停用</span>
             )}
             {(i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)) && (
-              <span className="ml-1 text-xs text-warning-700">共用凭据</span>
+              <span className="ml-1 text-xs font-semibold text-warning-700">共用凭据</span>
             )}
           </Checkbox>
         ))}
@@ -630,7 +630,7 @@ function Editor({
             variant="bordered"
             onChange={(e) => set({ name: e.target.value })}
           />
-          <p className="text-xs text-foreground">
+          <p className="text-xs font-semibold text-foreground">
             有独立的 UUID /
             密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
           </p>
@@ -660,7 +660,7 @@ function Editor({
                 </Button>
               ))}
             </div>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
             </p>
           </div>
@@ -680,7 +680,7 @@ function Editor({
                     set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
                   }
                 />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-foreground">
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs font-semibold text-foreground">
                   GB
                 </span>
               </div>
@@ -714,7 +714,7 @@ function Editor({
                 ))}
               </select>
             </div>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               上传 +
               下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
             </p>
@@ -731,7 +731,7 @@ function Editor({
             onChange={(v) => set({ sourceAll: v === "all" })}
           />
           {draft.sourceAll ? (
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               包括以后新增的落地；只想要一部分可以用下面的过滤
             </p>
           ) : (
@@ -740,7 +740,7 @@ function Editor({
               {pickList("导入", imported)}
               {sources.length > 0 && (
                 <div className="space-y-1">
-                  <p className="text-xs text-foreground">
+                  <p className="text-xs font-semibold text-foreground">
                     订阅源（整个源，更新后的节点自动跟上）
                   </p>
                   {sources.map((src) => {
@@ -763,7 +763,7 @@ function Editor({
                         }
                       >
                         <span className="text-sm">{src.name}</span>
-                        <span className="ml-1 text-xs text-foreground">
+                        <span className="ml-1 text-xs font-semibold text-foreground">
                           {src.nodeCount} 个节点
                           {inChain && " · 链式代理在用，自动包含"}
                         </span>
@@ -775,7 +775,7 @@ function Editor({
             </div>
           )}
           {sharedPicked > 0 && (
-            <p className="text-xs text-warning-700">
+            <p className="text-xs font-semibold text-warning-700">
               其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
               Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
             </p>
@@ -792,7 +792,7 @@ function Editor({
           title="中转范围"
         >
           {scopeInbounds.length === 0 ? (
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               先在「来源」里选择落地，这里才能挑端点
             </p>
           ) : (
@@ -804,7 +804,7 @@ function Editor({
 
                 return (
                   <div key={inbound.id} className="space-y-1">
-                    <p className="text-xs text-foreground">
+                    <p className="text-xs font-semibold text-foreground">
                       {inbound.name}
                       <span className="ml-1 text-foreground">
                         {inbound.protocol} · {inbound.nodeName}
@@ -829,7 +829,7 @@ function Editor({
                         <span className="text-sm">
                           {relay.name || `中转 ${relay.id}`}
                         </span>
-                        <span className="ml-1 text-xs text-foreground">
+                        <span className="ml-1 text-xs font-semibold text-foreground">
                           中转
                         </span>
                       </Checkbox>
@@ -849,7 +849,7 @@ function Editor({
           title="处理"
         >
           <div className="space-y-1.5">
-            <p className="text-xs font-medium">线路</p>
+            <p className="text-xs font-semibold">线路</p>
             <Segmented
               options={[
                 ["", "全部"],
@@ -861,7 +861,7 @@ function Editor({
             />
           </div>
           <div className="space-y-1.5">
-            <p className="text-xs font-medium">地区</p>
+            <p className="text-xs font-semibold">地区</p>
             <ChipPicker
               emptyText="全部地区"
               options={regions.map((r) => [r, r])}
@@ -871,7 +871,7 @@ function Editor({
           </div>
           {protocols.length > 1 && (
             <div className="space-y-1.5">
-              <p className="text-xs font-medium">协议</p>
+              <p className="text-xs font-semibold">协议</p>
               <ChipPicker
                 emptyText="全部协议"
                 options={protocols}
@@ -898,13 +898,13 @@ function Editor({
             />
           </div>
           <div className="space-y-1.5">
-            <p className="text-xs font-medium">改名规则</p>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold">改名规则</p>
+            <p className="text-xs font-semibold text-foreground">
               每行一条 <code>要替换的 =&gt; 替换成</code>，右边留空就是删除，
               <code>/.../</code> 是正则
             </p>
             <Textarea
-              classNames={{ input: "font-mono text-xs" }}
+              classNames={{ input: "font-mono text-xs font-semibold" }}
               minRows={2}
               placeholder={"花云| =>\n/\\|[0-9.]+x/ =>"}
               value={o.rename}
@@ -934,7 +934,7 @@ function Editor({
             onChange={(dedupe) => setOpts({ dedupe })}
           />
           <div className="space-y-1.5">
-            <p className="text-xs font-medium">排序</p>
+            <p className="text-xs font-semibold">排序</p>
             <Segmented
               options={[
                 ["", "面板顺序"],
@@ -979,12 +979,12 @@ function Editor({
             />
           </div>
           {(o.chainLanding || o.chainRelay) && (
-            <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs text-warning-700 dark:bg-warning-900">
+            <p className="rounded-xl bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700 dark:bg-warning-900">
               现在用的是上面的关键词方式。在下面按来源设置角色后会改用按来源设置，关键词会被清空
             </p>
           )}
           <div className="space-y-3">
-            <p className="text-xs font-medium">按来源</p>
+            <p className="text-xs font-semibold">按来源</p>
             <ToggleRow
               hint="自己面板上的节点（含它们的中转线路）都作为出口"
               id="chain-landing-own"
@@ -1011,13 +1011,13 @@ function Editor({
                         <span className="truncate text-sm">{src.name}</span>
                         {src.role && (
                           <span
-                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${src.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-900" : "bg-warning-100 text-warning-700 dark:bg-warning-900"}`}
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${src.role === "relay" ? "bg-secondary-100 text-secondary-700 dark:bg-secondary-900" : "bg-warning-100 text-warning-700 dark:bg-warning-900"}`}
                           >
                             用途：{src.role === "relay" ? "中转" : "落地"}
                           </span>
                         )}
                       </div>
-                      <div className="truncate text-xs text-foreground">
+                      <div className="truncate text-xs font-semibold text-foreground">
                         {src.nodeCount} 个节点
                       </div>
                     </div>
@@ -1029,7 +1029,7 @@ function Editor({
                 ))}
               </div>
             )}
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               给订阅源设了角色，它的节点会自动加入这个订阅；机场改名、增删节点会自动跟上
             </p>
           </div>
@@ -1057,8 +1057,8 @@ function Editor({
           />
           {o.rules && ruleGroups.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-xs font-medium">规则分组</p>
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold">规则分组</p>
+              <p className="text-xs font-semibold text-foreground">
                 每组可在客户端里单独选节点
               </p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -1081,8 +1081,8 @@ function Editor({
             </div>
           )}
           <div className="space-y-1.5">
-            <p className="text-xs font-medium">自定义脚本</p>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold">自定义脚本</p>
+            <p className="text-xs font-semibold text-foreground">
               对处理后的节点再做筛选、改名、排序。写一个{" "}
               <code className="rounded bg-tray px-1">
                 function operator(nodes)
@@ -1092,7 +1092,7 @@ function Editor({
               字段。
             </p>
             <Textarea
-              className="font-mono text-xs"
+              className="font-mono text-xs font-semibold"
               minRows={6}
               placeholder={`// 示例：过滤并改名\nfunction operator(nodes) {\n  return nodes\n    .filter((n) => !/过期/.test(n.name))\n    .map((n) => {\n      n.name = n.name.replace("IEPL", "专线");\n      return n;\n    });\n}`}
               value={o.script}
@@ -1114,24 +1114,24 @@ function Editor({
           {preview && (
             <>
               {preview.scriptError && (
-                <p className="rounded-lg bg-warning-100 px-3 py-2 text-xs text-warning-700 dark:bg-warning-900 dark:text-warning-300">
+                <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700">
                   {preview.scriptError}
                   <br />
                   已保留其余处理步骤生成的节点；修复脚本后请重新预览。
                 </p>
               )}
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 共 {preview.items.length} 个节点
                 {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
               </p>
               <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
                 {preview.items.length === 0 ? (
-                  <p className="p-3 text-xs text-foreground">没有节点</p>
+                  <p className="p-3 text-xs font-semibold text-foreground">没有节点</p>
                 ) : (
                   preview.items.map((p, i) => (
                     <div
                       key={`${p.original}-${i}`}
-                      className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs last:border-b-0"
+                      className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs font-semibold last:border-b-0"
                     >
                       <span className="min-w-0 flex-1 truncate">
                         {p.name}
@@ -1392,7 +1392,7 @@ export default function SubscriptionPage() {
             )
           )}
         </div>
-        <div className="truncate text-xs text-foreground">
+        <div className="truncate text-xs font-semibold text-foreground">
           {s.nodeCount} 个节点
           {" · "}
           {s.sourceAll
@@ -1440,7 +1440,7 @@ export default function SubscriptionPage() {
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-semibold">订阅</h1>
-          <p className="text-xs text-default-600">
+          <p className="text-xs font-semibold text-foreground">
             每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式
           </p>
         </div>
@@ -1499,7 +1499,7 @@ export default function SubscriptionPage() {
           )}
 
           {subs.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-foreground">
+            <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs font-semibold text-foreground">
               每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
             </p>
           ) : (
@@ -1533,10 +1533,10 @@ export default function SubscriptionPage() {
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
-                  <div className="space-y-2 rounded-xl bg-white/40 p-3">
+                  <div className="space-y-2 rounded-xl glass-inset p-3">
                     <Usage s={detail} />
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-foreground">
+                      <span className="text-xs font-semibold text-foreground">
                         {detail.overQuota
                           ? "流量已用完，已从节点上断开"
                           : `${toDateInput(detail.trafficSince)} 起的上传 + 下载合计`}
@@ -1612,11 +1612,11 @@ export default function SubscriptionPage() {
                       );
                     })}
                   </div>
-                  <p className="text-center text-xs text-foreground">
+                  <p className="text-center text-xs font-semibold text-foreground">
                     点客户端直接导入，右侧按钮复制链接
                   </p>
                   {detail.sharedIds.length > 0 && (
-                    <p className="text-xs text-warning-700">
+                    <p className="text-xs font-semibold text-warning-700">
                       其中 {detail.sharedIds.length}{" "}
                       个落地用的是共用凭据，停用后已导入的配置仍能连接
                     </p>
@@ -1704,7 +1704,7 @@ export default function SubscriptionPage() {
                 </h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-sm text-default-600">
+                <p className="text-sm text-foreground">
                   {confirm === "reset"
                     ? "旧链接和已导入的配置会立即失效，需要用新链接重新导入。"
                     : "订阅链接立即失效，无法恢复。"}

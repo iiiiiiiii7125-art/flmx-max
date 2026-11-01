@@ -60,7 +60,7 @@ export function TargetButton({
   return (
     <button
       className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors active:bg-white/40 ${
-        missing ? "border-danger/50 bg-white/40" : "glass-card"
+        missing ? "border-danger/50 glass-card" : "glass-card"
       }`}
       type="button"
       onClick={onPress}
@@ -75,7 +75,7 @@ export function TargetButton({
           {title}
         </span>
         {t && (
-          <span className="block truncate text-xs text-foreground">
+          <span className="block truncate text-xs font-semibold text-foreground">
             {targetSource(t)}
           </span>
         )}
@@ -131,7 +131,7 @@ export function TargetPicker({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">{name}</span>
         {sub && (
-          <span className="block truncate text-xs text-foreground">{sub}</span>
+          <span className="block truncate text-xs font-semibold text-foreground">{sub}</span>
         )}
       </span>
       {value === k && <Check className="h-4 w-4 shrink-0 text-primary-700" />}
@@ -177,15 +177,15 @@ export function TargetPicker({
         )}
         <ModalBody className="space-y-1 pb-4">
           {!q && (
-            <div className="rounded-xl bg-white/40">
+            <div className="rounded-xl glass-inset">
               {row("direct", "直连", "从本节点出去")}
               {withBlock && row("block", "阻断", "丢弃匹配的流量")}
             </div>
           )}
           {groups.map((g) => (
             <div key={g} className="pt-2">
-              <p className="px-3 pb-1 text-xs text-foreground">{g}</p>
-              <div className="rounded-xl bg-white/40">
+              <p className="px-3 pb-1 text-xs font-semibold text-foreground">{g}</p>
+              <div className="rounded-xl glass-inset">
                 {shown
                   .filter((t) => targetSource(t) === g)
                   .map((t) => row(String(t.id), t.name))}

@@ -126,7 +126,7 @@ export function LatencyTargetsModal({
     <button
       className={`flex-1 rounded-md px-3 py-1.5 text-sm transition-colors ${
         on
-          ? "bg-tray font-medium shadow-sm"
+          ? "bg-tray font-semibold shadow-sm"
           : "text-foreground hover:text-default-700"
       }`}
       type="button"
@@ -153,7 +153,7 @@ export function LatencyTargetsModal({
           <h2 className="text-lg font-bold">
             {batch ? `为 ${nodes.length} 个节点设置测试点` : "测试点"}
           </h2>
-          <p className="truncate text-xs font-normal text-foreground">
+          <p className="truncate text-xs font-semibold text-foreground">
             {nodes.map((n) => n.name).join("、")}
           </p>
         </ModalHeader>
@@ -171,14 +171,14 @@ export function LatencyTargetsModal({
             </p>
           ) : !custom ? (
             <div className="space-y-1.5 text-sm">
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 测网站配置里打开“默认”的测试点，那边改了这里跟着变：
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {defaults.map((t) => (
                   <span
                     key={t.name}
-                    className="inline-flex items-center gap-1 rounded-full bg-tray px-2 py-0.5 text-xs"
+                    className="inline-flex items-center gap-1 rounded-full bg-tray px-2 py-0.5 text-xs font-semibold"
                   >
                     {t.pinned && <Pin className="h-3 w-3 text-primary-700" />}
                     {t.name}
@@ -188,7 +188,7 @@ export function LatencyTargetsModal({
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-foreground">
+              <div className="flex items-center justify-between text-xs font-semibold text-foreground">
                 <span>
                   已选 {points.length} 个 · 卡片显示 {pinned.length}/
                   {MAX_PINNED}
@@ -230,14 +230,14 @@ export function LatencyTargetsModal({
                       >
                         <span className="text-sm">{t.name}</span>
                       </Checkbox>
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-semibold text-foreground">
                         {t.host}:{t.port}
                       </span>
                       <button
-                        className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors disabled:opacity-30 ${
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-30 ${
                           pin
                             ? "tray-primary"
-                            : "text-foreground hover:text-default-600"
+                            : "text-foreground hover:text-foreground"
                         }`}
                         disabled={!on || (!pin && pinned.length >= MAX_PINNED)}
                         title="卡片上固定显示"
@@ -254,13 +254,13 @@ export function LatencyTargetsModal({
             </div>
           )}
           {custom && pool.length > 0 && points.length === 0 && (
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               一个都不选：{batch ? "这些节点" : "这台节点"}
               不测延迟和回程，卡片上显示“不测延迟”。
             </p>
           )}
           {batch && (
-            <p className="text-xs text-warning-600">
+            <p className="text-xs font-semibold text-warning-600">
               保存后会覆盖这些节点原来的测试点设置。
             </p>
           )}

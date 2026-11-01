@@ -307,7 +307,7 @@ export default function LimitPage({
               classNames={{
                 wrapper:
                   "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                 td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                 tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
               }}
@@ -333,14 +333,14 @@ export default function LimitPage({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm font-mono text-default-600">
+                      <span className="text-sm font-mono text-foreground">
                         {rule.speed} Mbps
                       </span>
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-indigo-500/10 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 dark:bg-indigo-950 dark:text-indigo-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleEdit(rule)}
@@ -348,7 +348,7 @@ export default function LimitPage({
                           编辑
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-rose-500/10 text-rose-600 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 dark:bg-rose-950 dark:text-rose-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleDelete(rule)}
@@ -386,7 +386,7 @@ export default function LimitPage({
                   <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3">
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
-                        <span className="text-small text-default-600">
+                        <span className="text-small text-foreground">
                           速度限制
                         </span>
                         <Chip color="secondary" size="sm" variant="flat">
@@ -534,7 +534,7 @@ export default function LimitPage({
                       }
                     />
                     <span className="text-sm text-default-700">启用此规则</span>
-                    <span className="text-xs text-foreground">
+                    <span className="text-xs font-semibold text-foreground">
                       停用后规则不再生效，可随时重新启用
                     </span>
                   </div>
@@ -576,7 +576,7 @@ export default function LimitPage({
                 <h2 className="text-lg font-bold text-danger-700">确认删除</h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-default-600">
+                <p className="text-foreground">
                   确定要删除限速规则{" "}
                   <span className="font-semibold text-foreground">
                     &quot;{ruleToDelete?.name}&quot;

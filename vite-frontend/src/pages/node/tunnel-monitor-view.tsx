@@ -631,7 +631,7 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
               title={hop.errorMessage}
             >
               <span
-                className={`mb-1 text-[10px] font-mono leading-none ${colorClass}`}
+                className={`mb-1 text-[10px] font-semibold font-mono leading-none ${colorClass}`}
               >
                 {hop.latency >= 0 && !hop.errorMessage
                   ? `${hop.latency.toFixed(0)}ms`
@@ -645,7 +645,7 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
                 />
               </div>
               <span
-                className={`mt-1.5 text-[10px] font-mono leading-none ${hop.errorMessage || hop.loss > 0 ? "text-warning-700" : "text-foreground"}`}
+                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${hop.errorMessage || hop.loss > 0 ? "text-warning-700" : "text-foreground"}`}
               >
                 {hop.errorMessage ? "探测失败" : `${hop.loss.toFixed(0)}% 丢包`}
               </span>
@@ -1197,8 +1197,8 @@ export function TunnelMonitorView({
           <h3 className="text-lg font-semibold">监控权限</h3>
         </CardHeader>
         <CardBody>
-          <div className="text-sm text-default-600">{accessDenied}</div>
-          <div className="text-xs text-foreground mt-2">
+          <div className="text-sm text-foreground">{accessDenied}</div>
+          <div className="text-xs font-semibold text-foreground mt-2">
             如需使用监控功能，请联系管理员在用户页面授予监控权限。
           </div>
         </CardBody>
@@ -1250,7 +1250,7 @@ export function TunnelMonitorView({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
-              <span className="text-[11px] text-foreground mb-1.5 flex items-center gap-1">
+              <span className="text-[11px] font-semibold text-foreground mb-1.5 flex items-center gap-1">
                 <Zap className="w-3 h-3" />
                 入口 → 出口 延迟
               </span>
@@ -1263,7 +1263,7 @@ export function TunnelMonitorView({
           <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span
-                className="text-[11px] text-foreground mb-1.5 flex items-center gap-1"
+                className="text-[11px] font-semibold text-foreground mb-1.5 flex items-center gap-1"
                 title={probeTargetLabel(quality)}
               >
                 <Globe className="w-3 h-3" />
@@ -1277,7 +1277,7 @@ export function TunnelMonitorView({
           </Card>
           <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
-              <span className="text-[11px] text-foreground mb-1.5">
+              <span className="text-[11px] font-semibold text-foreground mb-1.5">
                 入口 → 出口 丢包
               </span>
               <span
@@ -1292,7 +1292,7 @@ export function TunnelMonitorView({
           <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span
-                className="text-[11px] text-foreground mb-1.5"
+                className="text-[11px] font-semibold text-foreground mb-1.5"
                 title={probeTargetLabel(quality)}
               >
                 出口 → 测试目标 丢包
@@ -1309,7 +1309,7 @@ export function TunnelMonitorView({
         </div>
 
         {/* Auto-probe status */}
-        <div className="flex items-center gap-2 text-xs text-foreground">
+        <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
           {monitorTunnelQualityEnabled ? (
             <>
               <LiveDot />
@@ -1373,7 +1373,7 @@ export function TunnelMonitorView({
           隧道 {tunnelStats.enabled}/{tunnelStats.total}
         </Chip>
         {lastQualityUpdate ? (
-          <div className="flex items-center gap-1.5 text-xs text-default-600">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
             {monitorTunnelQualityEnabled ? (
               <>
                 <LiveDot />
@@ -1387,7 +1387,7 @@ export function TunnelMonitorView({
             )}
           </div>
         ) : !monitorTunnelQualityEnabled ? (
-          <div className="flex items-center gap-1.5 text-xs text-default-600">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
             <WifiOff className="w-3.5 h-3.5 text-warning-700" />
             <span>实时质量检测已关闭</span>
           </div>
@@ -1408,7 +1408,7 @@ export function TunnelMonitorView({
       {tunnelsError ? (
         <Card>
           <CardBody>
-            <div className="text-sm text-default-600">{tunnelsError}</div>
+            <div className="text-sm text-foreground">{tunnelsError}</div>
           </CardBody>
         </Card>
       ) : null}
@@ -1436,7 +1436,7 @@ export function TunnelMonitorView({
                 <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative flex-shrink-0">
-                      <div className="w-10 h-10 rounded-xl bg-tray flex items-center justify-center border border-divider">
+                      <div className="w-10 h-10 rounded-xl glass-inset flex items-center justify-center border border-divider">
                         <ArrowRightLeft
                           className={`w-5 h-5 ${isEnabled ? "text-success-700" : "text-danger-700"}`}
                         />
@@ -1449,7 +1449,7 @@ export function TunnelMonitorView({
                       <h3 className="font-semibold text-foreground text-sm truncate">
                         {tunnel.name}
                       </h3>
-                      <div className="flex items-center gap-1.5 text-[11px] text-default-600 mt-0.5">
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground mt-0.5">
                         <span className="font-mono">
                           {isEnabled ? "启用" : "禁用"}
                         </span>
@@ -1461,7 +1461,7 @@ export function TunnelMonitorView({
                 <CardBody className="py-3 px-5 flex-1 flex flex-col justify-end gap-3 z-10 w-full overflow-hidden">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <div className="text-[10px] font-medium text-default-600 flex items-center gap-1">
+                      <div className="text-[10px] font-semibold text-foreground flex items-center gap-1">
                         <Zap className="w-3 h-3" />
                         入口→出口
                       </div>
@@ -1472,13 +1472,13 @@ export function TunnelMonitorView({
                       />
                     </div>
                     <div className="space-y-1">
-                      <div className="text-[10px] font-medium text-default-600 flex items-center gap-1">
+                      <div className="text-[10px] font-semibold text-foreground flex items-center gap-1">
                         <Globe className="w-3 h-3" />
                         出口→测试目标
                       </div>
                       <div
                         aria-label={`测试目标 ${targetLabel}`}
-                        className="text-[10px] text-foreground truncate"
+                        className="text-[10px] font-semibold text-foreground truncate"
                       >
                         {targetLabel}
                       </div>
@@ -1492,11 +1492,11 @@ export function TunnelMonitorView({
 
                   <div className="flex justify-between items-center pt-2 border-t border-divider/50">
                     {quality?.errorMessage ? (
-                      <span className="text-[11px] text-danger-700 truncate">
+                      <span className="text-[11px] font-semibold text-danger-700 truncate">
                         {quality.errorMessage}
                       </span>
                     ) : quality?.timestamp ? (
-                      <span className="text-[11px] text-default-600 flex items-center gap-1">
+                      <span className="text-[11px] font-semibold text-foreground flex items-center gap-1">
                         {monitorTunnelQualityEnabled ? (
                           <LiveDot />
                         ) : (
@@ -1507,7 +1507,7 @@ export function TunnelMonitorView({
                         )}
                       </span>
                     ) : (
-                      <span className="text-[11px] text-foreground">
+                      <span className="text-[11px] font-semibold text-foreground">
                         {monitorTunnelQualityEnabled
                           ? "等待探测..."
                           : "实时检测已关闭"}
@@ -1527,7 +1527,7 @@ export function TunnelMonitorView({
             classNames={{
               wrapper:
                 "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-              th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+              th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
               td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
               tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
             }}
@@ -1582,14 +1582,14 @@ export function TunnelMonitorView({
                           latestValue={quality?.exitToBingLatency}
                           type="exitToBing"
                         />
-                        <span className="block max-w-[160px] truncate text-[10px] text-foreground">
+                        <span className="block max-w-[160px] truncate text-[10px] font-semibold text-foreground">
                           {targetLabel}
                         </span>
                       </div>
                     </TableCell>
                     <TableCell>
                       {quality?.timestamp ? (
-                        <span className="text-xs text-default-600 flex items-center gap-1 whitespace-nowrap">
+                        <span className="text-xs font-semibold text-foreground flex items-center gap-1 whitespace-nowrap">
                           {monitorTunnelQualityEnabled ? (
                             <LiveDot />
                           ) : (
@@ -1600,7 +1600,7 @@ export function TunnelMonitorView({
                           )}
                         </span>
                       ) : (
-                        <span className="text-xs text-foreground">
+                        <span className="text-xs font-semibold text-foreground">
                           {monitorTunnelQualityEnabled ? "-" : "实时检测已关闭"}
                         </span>
                       )}

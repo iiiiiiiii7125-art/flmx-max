@@ -650,7 +650,7 @@ export default function InboundPage() {
           aria-pressed={selectMode ? selected : undefined}
           className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
             selected
-              ? "border-primary bg-primary-50 dark:bg-primary-900"
+              ? "border-primary bg-primary-500/10"
               : "glass-card hover:bg-white/40"
           }`}
           role="button"
@@ -680,7 +680,7 @@ export default function InboundPage() {
             )}
             <div className="min-w-0 flex-1">
               <div className="truncate font-semibold">{item.name}</div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-foreground">
+              <div className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-foreground">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
                 <span
                   className={`truncate ${unreachable ? "text-danger-700" : kernelBad ? "text-warning-700" : ""}`}
@@ -714,11 +714,11 @@ export default function InboundPage() {
                 IEPL专用
               </Chip>
             )}
-            <span className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-600">
+            <span className="rounded-full bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
               端口 {item.port}
             </span>
             {where && (
-              <span className="max-w-full truncate rounded-full bg-tray px-2 py-0.5 text-xs text-default-600">
+              <span className="max-w-full truncate rounded-full bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
                 {where}
               </span>
             )}
@@ -757,7 +757,7 @@ export default function InboundPage() {
               </Chip>
             )}
             {item.relayOnly && (
-              <span className="rounded-full bg-tray px-2 py-0.5 text-xs text-default-600">
+              <span className="rounded-full bg-tray px-2 py-0.5 text-xs font-semibold text-foreground">
                 仅中转
               </span>
             )}
@@ -778,11 +778,11 @@ export default function InboundPage() {
             )}
           </div>
           {!item.external && (
-            <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs">
-              <div className="rounded-lg bg-white/40 py-1.5">
+            <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs font-semibold">
+              <div className="rounded-lg glass-inset py-1.5">
                 ↑ {formatTraffic(item.uploadBytes)}
               </div>
-              <div className="rounded-lg bg-white/40 py-1.5">
+              <div className="rounded-lg glass-inset py-1.5">
                 ↓ {formatTraffic(item.downloadBytes)}
               </div>
             </div>
@@ -828,7 +828,7 @@ export default function InboundPage() {
         aria-pressed={selectMode ? selected : undefined}
         className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
           selected
-            ? "border-primary bg-primary-50 dark:bg-primary-900"
+            ? "border-primary bg-primary-500/10"
             : "glass-card hover:bg-white/40"
         }`}
         role="button"
@@ -996,7 +996,7 @@ export default function InboundPage() {
               </Chip>
             )}
           </div>
-          <div className="truncate text-xs text-foreground">
+          <div className="truncate text-xs font-semibold text-foreground">
             {describeInbound(item)} · {item.port}
             {where ? ` · ${where}` : ""}
             {item.enabled && probe?.ok ? ` · ${probe.latencyMs} ms` : ""}
@@ -1006,7 +1006,7 @@ export default function InboundPage() {
             </span>
           </div>
         </div>
-        <div className="hidden shrink-0 text-right font-mono text-xs text-foreground sm:block">
+        <div className="hidden shrink-0 text-right font-mono text-xs font-semibold text-foreground sm:block">
           <div>↑ {formatTraffic(item.uploadBytes)}</div>
           <div>↓ {formatTraffic(item.downloadBytes)}</div>
         </div>
@@ -1106,15 +1106,15 @@ export default function InboundPage() {
             key={t.key}
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
               tab === t.key
-                ? "bg-tray font-medium shadow-sm"
-                : "text-default-600"
+                ? "bg-tray font-semibold shadow-sm"
+                : "text-foreground"
             }`}
             type="button"
             onClick={() => setTab(t.key)}
           >
             {t.label}
             {t.badge !== undefined && (
-              <span className="ml-1 text-xs font-medium text-foreground">
+              <span className="ml-1 text-xs font-semibold text-foreground">
                 {t.badge}
               </span>
             )}
@@ -1215,7 +1215,7 @@ export default function InboundPage() {
 
           {selectMode && (
             <div className="glass-surface sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2">
-              <span className="text-sm text-default-600">
+              <span className="text-sm text-foreground">
                 已选 {selectedIds.size} 个
               </span>
               <div className="ml-auto flex flex-wrap justify-end gap-2">
@@ -1525,18 +1525,18 @@ export default function InboundPage() {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-foreground">流量</span>
-              <span className="font-mono text-xs">
+              <span className="font-mono text-xs font-semibold">
                 ↑ {formatTraffic(sheetItem.uploadBytes)} · ↓{" "}
                 {formatTraffic(sheetItem.downloadBytes)}
               </span>
             </div>
             {sheetItem.external && (
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 没有流量统计；原服务器上的配置变了，请在“编辑”里同步
               </p>
             )}
             {sheetItem.remark && (
-              <p className="text-xs text-foreground">{sheetItem.remark}</p>
+              <p className="text-xs font-semibold text-foreground">{sheetItem.remark}</p>
             )}
           </div>
         )}
@@ -1662,7 +1662,7 @@ export default function InboundPage() {
                   </h2>
                 </ModalHeader>
                 <ModalBody>
-                  <p className="text-default-600">
+                  <p className="text-foreground">
                     入站{" "}
                     <span className="font-semibold text-foreground">
                       {confirm.item.name}
@@ -1712,7 +1712,7 @@ export default function InboundPage() {
                   </h2>
                 </ModalHeader>
                 <ModalBody>
-                  <p className="max-h-40 overflow-y-auto text-small text-default-600 break-all">
+                  <p className="max-h-40 overflow-y-auto text-small text-foreground break-all">
                     {chosen.map((i) => i.name).join("、")}
                   </p>
                   <p className="text-small text-foreground">

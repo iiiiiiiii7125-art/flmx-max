@@ -276,7 +276,7 @@ export function RelayModal({
                               </Chip>
                             ) : null}
                           </div>
-                          <p className="text-xs text-foreground font-mono mt-0.5 break-all">
+                          <p className="text-xs font-semibold text-foreground font-mono mt-0.5 break-all">
                             {rel.tunnelName} ·{" "}
                             {rel.entries.length > 0
                               ? rel.entries
@@ -304,7 +304,7 @@ export function RelayModal({
                   <div className="space-y-3 rounded-xl border border-divider p-3">
                     <p className="text-sm font-medium">添加中转</p>
                     {usable.length === 0 && !loading && (
-                      <p className="text-xs text-warning-700">
+                      <p className="text-xs font-semibold text-warning-700">
                         没有可用的隧道：请先在“隧道”页创建以中转机为入口的端口转发或隧道转发。
                       </p>
                     )}
@@ -335,7 +335,7 @@ export function RelayModal({
                       })}
                     </Select>
                     {selectedRoute === "隧道经出口节点转发到公网地址" && (
-                      <p className="text-xs text-foreground">
+                      <p className="text-xs font-semibold text-foreground">
                         流量经隧道到出口节点（如
                         IX），再由出口节点连接落地机的公网地址。
                         开启入站白名单后，会自动放行出口节点的地址。
@@ -408,7 +408,7 @@ export function RelayModal({
                 <h2 className="text-lg font-bold text-danger-700">删除中转</h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-sm text-default-600">
+                <p className="text-sm text-foreground">
                   会同时删除中转机上的转发 “
                   {removing?.forwardName || removing?.name}
                   ”，订阅中对应的节点随之消失。

@@ -156,7 +156,7 @@ function SplitForm({
             onPress={() => setPicking("default")}
           />
           <p
-            className={`text-xs ${outboundMissing ? "text-danger-700" : "text-foreground"}`}
+            className={`text-xs font-semibold ${outboundMissing ? "text-danger-700" : "text-foreground"}`}
           >
             {outboundMissing
               ? "原出站节点已被删除，该入站的流量会被丢弃，请重新选择"
@@ -171,7 +171,7 @@ function SplitForm({
                 <span className="ml-1.5 text-foreground">{rules.length}</span>
               )}
             </p>
-            <p className="text-xs text-foreground">从上到下，先命中先生效</p>
+            <p className="text-xs font-semibold text-foreground">从上到下，先命中先生效</p>
           </div>
           <SplitRulesEditor
             categories={categories}

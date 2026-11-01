@@ -66,7 +66,7 @@ export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   if (!src) {
     return (
       <div
-        className="flex items-center justify-center text-xs text-foreground bg-white/40 rounded-xl"
+        className="flex items-center justify-center text-xs font-semibold text-foreground glass-inset rounded-xl"
         style={{ width: size, height: size }}
       >
         {failed ? "内容过长，无法生成二维码" : "二维码生成中..."}
@@ -121,7 +121,7 @@ export function QrCodeButton({ url, label }: { url: string; label: string }) {
               </ModalHeader>
               <ModalBody className="flex flex-col items-center gap-3">
                 <QrImage text={url} size={240} />
-                <p className="text-xs text-foreground break-all select-all text-center max-w-full">
+                <p className="text-xs font-semibold text-foreground break-all select-all text-center max-w-full">
                   {url}
                 </p>
               </ModalBody>
@@ -161,12 +161,12 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
           </Chip>
           <span className="font-medium truncate">{entry.name}</span>
         </div>
-        <p className="text-xs text-foreground font-mono mt-1 break-all">
+        <p className="text-xs font-semibold text-foreground font-mono mt-1 break-all">
           {entry.host}:{entry.port}
         </p>
       </div>
 
-      <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded-xl bg-white/40 p-3 max-h-32 overflow-y-auto select-all">
+      <pre className="text-xs font-semibold font-mono whitespace-pre-wrap break-all rounded-xl bg-white/40 p-3 max-h-32 overflow-y-auto select-all">
         {text}
       </pre>
 
@@ -194,7 +194,7 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
       </div>
 
       {surgeOnly && (
-        <p className="text-xs text-foreground">
+        <p className="text-xs font-semibold text-foreground">
           Snell 没有通用分享链接，粘贴到 Surge 配置的 [Proxy] 段，或使用 Surge
           订阅。
         </p>
@@ -344,10 +344,10 @@ function InboundRelaySubList({
   }, [inbound.id]);
 
   if (loading) {
-    return <p className="text-xs text-foreground">加载中转列表...</p>;
+    return <p className="text-xs font-semibold text-foreground">加载中转列表...</p>;
   }
   if (loadFailed) {
-    return <p className="text-xs text-danger-700">中转列表加载失败，请稍后重试</p>;
+    return <p className="text-xs font-semibold text-danger-700">中转列表加载失败，请稍后重试</p>;
   }
   if (relays.length === 0) {
     return null;
@@ -355,22 +355,22 @@ function InboundRelaySubList({
 
   return (
     <div className="pt-1 space-y-1.5">
-      <p className="text-xs font-medium text-default-600">
+      <p className="text-xs font-semibold text-foreground">
         按中转线路单独订阅（共 {relays.length} 条）
       </p>
       <div className="space-y-2">
         {relays.map((r) => (
           <div
             key={r.id}
-            className="rounded-lg bg-white/40 px-2.5 py-2"
+            className="rounded-lg glass-inset px-2.5 py-2"
           >
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs font-medium truncate">
+              <span className="text-xs font-semibold truncate">
                 🔀 {r.name || r.forwardName}
                 <span className="text-foreground ml-1">{r.remoteAddr}</span>
               </span>
               <button
-                className="text-xs text-primary-700 flex items-center gap-1 shrink-0 disabled:opacity-50"
+                className="text-xs font-semibold text-primary-700 flex items-center gap-1 shrink-0 disabled:opacity-50"
                 disabled={!path}
                 type="button"
                 onClick={() =>
@@ -389,7 +389,7 @@ function InboundRelaySubList({
                 return (
                   <div key={f.key || "auto"} className="flex items-center gap-1">
                     <button
-                      className="flex-1 text-xs rounded border border-divider px-1.5 py-1 hover:bg-white/40 transition-colors disabled:opacity-50 text-center"
+                      className="flex-1 text-xs font-semibold rounded border border-divider px-1.5 py-1 hover:bg-white/40 transition-colors disabled:opacity-50 text-center"
                       disabled={!path}
                       type="button"
                       onClick={() =>
@@ -476,7 +476,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-base font-semibold">订阅</h3>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               包含全部已启用入站及其中转，客户端定期更新即可同步
             </p>
           </div>
@@ -520,7 +520,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
             复制订阅链接（自动识别客户端）
           </Button>
         </div>
-        <p className="pt-1 text-xs text-foreground">指定格式</p>
+        <p className="pt-1 text-xs font-semibold text-foreground">指定格式</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
           {SUB_FORMATS.filter((f) => f.key).map((f) => {
             const fmtUrl = url(f.key);
@@ -536,7 +536,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                     <span className="text-sm font-medium">{f.label}</span>
                     <Copy className="w-3.5 h-3.5 text-foreground" />
                   </div>
-                  <div className="text-xs text-foreground">{f.hint}</div>
+                  <div className="text-xs font-semibold text-foreground">{f.hint}</div>
                 </button>
                 <QrCodeButton url={fmtUrl} label={`${f.label}订阅`} />
               </div>
@@ -546,7 +546,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
         {showQr && path && (
           <div className="flex flex-col items-center gap-2 pt-1">
             <QrImage text={url("")} />
-            <p className="text-xs text-foreground font-mono break-all text-center">
+            <p className="text-xs font-semibold text-foreground font-mono break-all text-center">
               {url("")}
             </p>
           </div>
@@ -556,7 +556,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
           <div className="pt-2 space-y-2">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold">按入站单独订阅</h4>
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 每个入站独立链接，只包含该入站
               </p>
             </div>
@@ -579,7 +579,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                         <p className="text-sm font-medium truncate">
                           {inbound.name}
                         </p>
-                        <p className="text-xs text-foreground">
+                        <p className="text-xs font-semibold text-foreground">
                           {inbound.protocol} · {inbound.nodeName}
                         </p>
                       </div>
@@ -627,7 +627,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                                   }
                                 >
                                   <div className="flex items-center justify-between">
-                                    <span className="text-xs font-medium">
+                                    <span className="text-xs font-semibold">
                                       {f.label}
                                     </span>
                                     <Copy className="w-3 h-3 text-foreground" />
@@ -670,7 +670,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                 <h2 className="text-lg font-bold">重置订阅地址</h2>
               </ModalHeader>
               <ModalBody>
-                <p className="text-sm text-default-600">
+                <p className="text-sm text-foreground">
                   旧的订阅地址会立即失效，所有客户端都需要重新导入新地址。
                 </p>
               </ModalBody>

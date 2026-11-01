@@ -77,7 +77,7 @@ export function RenameRules({
     onChange(formatRules(next));
   };
   const field =
-    "h-9 w-full min-w-0 rounded-lg border bg-content1 px-2 font-mono text-xs";
+    "h-9 w-full min-w-0 rounded-lg border bg-content1 px-2 font-mono text-xs font-semibold";
 
   return (
     <div className="space-y-2">
@@ -100,7 +100,7 @@ export function RenameRules({
                   )
                 }
               />
-              <span className="shrink-0 text-xs text-foreground">→</span>
+              <span className="shrink-0 text-xs font-semibold text-foreground">→</span>
               <input
                 aria-label={`第 ${i + 1} 条：替换为`}
                 className={`${field} flex-[2] border-divider`}
@@ -123,7 +123,7 @@ export function RenameRules({
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
-            {err && <p className="text-xs text-danger-700">{err}</p>}
+            {err && <p className="text-xs font-semibold text-danger-700">{err}</p>}
           </div>
         );
       })}

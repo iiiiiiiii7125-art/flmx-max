@@ -250,12 +250,12 @@ export function NodeFormModal({
               >
                 <div className="space-y-4 pb-2">
                   {form.forwardMode === "nftables" ? (
-                    <div className="space-y-4 rounded-xl border border-warning-200 bg-warning-50 p-4 dark:border-warning-500/30 dark:bg-warning-950">
+                    <div className="space-y-4 rounded-xl border border-warning-500/25 bg-warning-500/10 p-4">
                       <div>
                         <div className="text-sm font-medium text-warning-700 dark:text-warning-300">
                           SSH 配置
                         </div>
-                        <div className="text-xs text-foreground">
+                        <div className="text-xs font-semibold text-foreground">
                           面板会通过 SSH 下发 nftables 规则，不会安装 agent。
                         </div>
                       </div>
@@ -497,7 +497,7 @@ export function NodeFormModal({
                     <div className="text-sm font-medium text-default-700 mb-2">
                       屏蔽协议
                     </div>
-                    <div className="text-xs text-foreground mb-2">
+                    <div className="text-xs font-semibold text-foreground mb-2">
                       开启开关以屏蔽对应协议
                     </div>
                     {protocolControlsDisabled && (
@@ -512,7 +512,7 @@ export function NodeFormModal({
                       className={`grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
                     >
                       {/* HTTP tile */}
-                      <div className="px-3 py-3 rounded-lg bg-white/40 border border-divider hover:border-primary-200 transition-colors">
+                      <div className="px-3 py-3 rounded-lg glass-inset border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -532,7 +532,7 @@ export function NodeFormModal({
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
-                          <div className="text-xs text-foreground">
+                          <div className="text-xs font-semibold text-foreground">
                             禁用/启用
                           </div>
                           <Switch
@@ -547,13 +547,13 @@ export function NodeFormModal({
                             }
                           />
                         </div>
-                        <div className="mt-1 text-xs text-foreground">
+                        <div className="mt-1 text-xs font-semibold text-foreground">
                           {form.http === 1 ? "已开启" : "已关闭"}
                         </div>
                       </div>
 
                       {/* TLS tile */}
-                      <div className="px-3 py-3 rounded-lg bg-white/40 border border-divider hover:border-primary-200 transition-colors">
+                      <div className="px-3 py-3 rounded-lg glass-inset border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -573,7 +573,7 @@ export function NodeFormModal({
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
-                          <div className="text-xs text-foreground">
+                          <div className="text-xs font-semibold text-foreground">
                             禁用/启用
                           </div>
                           <Switch
@@ -585,13 +585,13 @@ export function NodeFormModal({
                             }
                           />
                         </div>
-                        <div className="mt-1 text-xs text-foreground">
+                        <div className="mt-1 text-xs font-semibold text-foreground">
                           {form.tls === 1 ? "已开启" : "已关闭"}
                         </div>
                       </div>
 
                       {/* SOCKS tile */}
-                      <div className="px-3 py-3 rounded-lg bg-white/40 border border-divider hover:border-primary-200 transition-colors">
+                      <div className="px-3 py-3 rounded-lg glass-inset border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -612,7 +612,7 @@ export function NodeFormModal({
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
-                          <div className="text-xs text-foreground">
+                          <div className="text-xs font-semibold text-foreground">
                             禁用/启用
                           </div>
                           <Switch
@@ -627,7 +627,7 @@ export function NodeFormModal({
                             }
                           />
                         </div>
-                        <div className="mt-1 text-xs text-foreground">
+                        <div className="mt-1 text-xs font-semibold text-foreground">
                           {form.socks === 1 ? "已开启" : "已关闭"}
                         </div>
                       </div>

@@ -98,7 +98,7 @@ export const FlowChartCard = ({
                         : 0;
 
                       return (
-                        <div className="tray-plate rounded-2xl shadow-lg p-4">
+                        <div className="glass-surface rounded-2xl shadow-lg p-4">
                           <p className="font-medium text-foreground">{`时间: ${label ?? ""}`}</p>
                           <p className="text-primary-700 font-semibold mt-1">{`流量: ${formatFlow(flowValue)}`}</p>
                         </div>

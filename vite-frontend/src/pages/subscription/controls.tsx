@@ -28,7 +28,7 @@ export function Segmented<T extends string>({
             key={k}
             className={`rounded-lg px-2 py-1.5 transition-colors ${
               value === k
-                ? "bg-tray font-medium shadow-sm"
+                ? "bg-tray font-semibold shadow-sm"
                 : disabled
                   ? "cursor-not-allowed text-foreground"
                   : "text-foreground"
@@ -73,7 +73,7 @@ export function ToggleRow({
         id={`${id}-label`}
       >
         <span className="text-sm">{label}</span>
-        {hint && <span className="text-xs text-foreground">{hint}</span>}
+        {hint && <span className="text-xs font-semibold text-foreground">{hint}</span>}
       </label>
     </div>
   );
@@ -105,7 +105,7 @@ export function EditorTabs<T extends string>({
           aria-selected={value === t.key}
           className={`relative whitespace-nowrap rounded-lg px-1 py-1.5 text-sm transition-colors ${
             value === t.key
-              ? "bg-tray font-medium text-primary-700 shadow-sm"
+              ? "bg-tray font-semibold text-primary-700 shadow-sm"
               : "text-foreground hover:text-foreground"
           }`}
           role="tab"
@@ -115,7 +115,7 @@ export function EditorTabs<T extends string>({
           {t.label}
           {t.badge !== undefined && t.badge !== "" && (
             <span
-              className={`absolute right-0.5 top-0.5 rounded-full px-1 text-[10px] leading-4 ${
+              className={`absolute right-0.5 top-0.5 rounded-full px-1 text-[10px] font-semibold leading-4 ${
                 value === t.key
                   ? "bg-primary text-white"
                   : "bg-default-300 text-default-700"

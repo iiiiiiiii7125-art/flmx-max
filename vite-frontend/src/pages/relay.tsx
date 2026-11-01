@@ -166,7 +166,7 @@ function LinesView() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-foreground">
+        <p className="text-xs font-semibold text-foreground">
           {inbounds.length} 个落地 · {total} 条中转线路。点落地可添加或删除中转
         </p>
         <div className="flex shrink-0 gap-2">
@@ -230,7 +230,7 @@ function LinesView() {
                       </Chip>
                     )}
                   </div>
-                  <div className="mt-0.5 truncate text-xs text-foreground">
+                  <div className="mt-0.5 truncate text-xs font-semibold text-foreground">
                     {i.external ? "导入的节点" : i.nodeName}
                     {" · "}
                     {lines.length > 0 ? `${lines.length} 条中转` : "无中转"}
@@ -245,7 +245,7 @@ function LinesView() {
                       return (
                         <div
                           key={l.id}
-                          className="rounded-xl bg-white/40 px-3 py-2"
+                          className="rounded-xl glass-inset px-3 py-2"
                         >
                           <div className="flex items-center gap-2 text-sm">
                             <span
@@ -259,20 +259,20 @@ function LinesView() {
                             </Chip>
                           </div>
                           {l.tunnelName && (
-                            <div className="mt-1 truncate text-xs text-foreground">
+                            <div className="mt-1 truncate text-xs font-semibold text-foreground">
                               隧道：{l.tunnelName}
                             </div>
                           )}
                           {l.entries.map((en) => (
                             <div
                               key={`${en.Host}:${en.Port}`}
-                              className="truncate font-mono text-xs text-foreground"
+                              className="truncate font-mono text-xs font-semibold text-foreground"
                             >
                               入口：{l.shareHost || en.Host}:{en.Port}
                             </div>
                           ))}
                           {!ok && (
-                            <div className="text-xs text-warning-700">
+                            <div className="text-xs font-semibold text-warning-700">
                               {l.forwardExists ? "转发已暂停" : "转发已被删除"}
                             </div>
                           )}
@@ -332,7 +332,7 @@ function LinesView() {
                       仅中转
                     </Chip>
                   )}
-                  <span className="shrink-0 text-xs text-foreground">
+                  <span className="shrink-0 text-xs font-semibold text-foreground">
                     {lines.length > 0 ? `${lines.length} 条` : "无中转"}
                   </span>
                 </div>
@@ -345,7 +345,7 @@ function LinesView() {
                       return (
                         <div
                           key={l.id}
-                          className="flex items-center gap-2 text-xs text-foreground"
+                          className="flex items-center gap-2 text-xs font-semibold text-foreground"
                         >
                           <span
                             className={`h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-success" : "bg-warning"}`}
@@ -406,7 +406,7 @@ export default function RelayPage() {
         <button
           key={t.key}
           className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
-            tab === t.key ? "bg-tray font-medium shadow-sm" : "text-default-600"
+            tab === t.key ? "bg-tray font-semibold shadow-sm" : "font-semibold text-foreground"
           }`}
           type="button"
           onClick={() => setTab(t.key)}

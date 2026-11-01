@@ -214,7 +214,7 @@ function ServerCard({
       <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="relative flex-shrink-0">
-            <div className="w-10 h-10 rounded-xl bg-tray flex items-center justify-center border border-divider">
+            <div className="w-10 h-10 rounded-xl glass-inset flex items-center justify-center border border-divider">
               <DistroIcon
                 className="w-5 h-5"
                 distro={distro}
@@ -229,7 +229,7 @@ function ServerCard({
             <h3 className="font-semibold text-foreground text-sm truncate">
               {node.name}
             </h3>
-            <div className="flex items-center gap-1.5 text-[11px] text-foreground mt-0.5">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground mt-0.5">
               <span className="font-mono">{isOnline ? "在线" : "离线"}</span>
             </div>
           </div>
@@ -239,7 +239,7 @@ function ServerCard({
       <CardBody className="py-3 px-5 flex-1 flex flex-col justify-end gap-4 z-10 w-full overflow-hidden">
         <div className="grid grid-cols-2 gap-5 w-full">
           <div className="space-y-1.5 min-w-0">
-            <div className="flex justify-between items-center text-xs">
+            <div className="flex justify-between items-center text-xs font-semibold">
               <span className="text-foreground">CPU</span>
               <span className="font-mono font-medium">
                 {isOnline && metric ? `${metric.cpuUsage.toFixed(1)}%` : "-"}
@@ -252,7 +252,7 @@ function ServerCard({
             />
           </div>
           <div className="space-y-1.5 min-w-0">
-            <div className="flex justify-between items-center text-xs">
+            <div className="flex justify-between items-center text-xs font-semibold">
               <span className="text-foreground">内存</span>
               <span className="font-mono font-medium">
                 {isOnline && metric ? `${metric.memoryUsage.toFixed(1)}%` : "-"}
@@ -267,9 +267,9 @@ function ServerCard({
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/40 border border-divider mt-1 w-full">
+        <div className="flex items-center justify-between p-2.5 rounded-lg glass-inset border border-divider mt-1 w-full">
           <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-            <div className="flex items-center gap-1 text-[10px] text-foreground">
+            <div className="flex items-center gap-1 text-[10px] font-semibold text-foreground">
               <span className="text-primary-700 inline-block font-bold">↑</span>
               <span>上传</span>
             </div>
@@ -281,7 +281,7 @@ function ServerCard({
           </div>
           <div className="w-px h-6 bg-divider mx-2" />
           <div className="flex flex-col gap-0.5 items-end min-w-0 flex-1">
-            <div className="flex items-center gap-1 text-[10px] text-foreground">
+            <div className="flex items-center gap-1 text-[10px] font-semibold text-foreground">
               <span>下载</span>
               <span className="text-success-700 inline-block font-bold">↓</span>
             </div>
@@ -294,13 +294,13 @@ function ServerCard({
         </div>
 
         <div className="flex justify-between items-center mt-1 pt-3 border-t border-divider/50 w-full overflow-hidden">
-          <div className="flex items-center gap-1.5 text-[11px] text-foreground min-w-0">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground min-w-0">
             <Clock className="w-3.5 h-3.5 text-foreground shrink-0" />
             <span className="font-mono truncate">
               {metric ? formatUptime(metric.uptime) : "-"}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-foreground shrink-0 ml-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground shrink-0 ml-2">
             <Activity className="w-3.5 h-3.5 text-foreground" />
             <span className="font-mono">
               Load: {metric ? metric.load1.toFixed(2) : "-"}
@@ -526,7 +526,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
               </ResponsiveContainer>
             </div>
             {truncated && (
-              <div className="text-xs text-foreground">
+              <div className="text-xs font-semibold text-foreground">
                 数据点过多，已截断为最近 {maxRows} 条，建议缩小时间范围。
               </div>
             )}
@@ -1371,8 +1371,8 @@ export function MonitorView({
             <h3 className="text-lg font-semibold">监控权限</h3>
           </CardHeader>
           <CardBody>
-            <div className="text-sm text-default-600">{accessDenied}</div>
-            <div className="text-xs text-foreground mt-2">
+            <div className="text-sm text-foreground">{accessDenied}</div>
+            <div className="text-xs font-semibold text-foreground mt-2">
               如需使用监控功能，请联系管理员在用户页面授予监控权限。
             </div>
           </CardBody>
@@ -1383,7 +1383,7 @@ export function MonitorView({
       {!accessDenied && !detailNodeId && (
         <>
           <div className="flex flex-wrap items-center gap-3 mb-1">
-            <div className="flex items-center gap-2 text-xs text-foreground">
+            <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
               <div
                 className={`w-2 h-2 rounded-full ${wsConnected ? "bg-success" : wsConnecting ? "bg-warning" : "bg-default-300"}`}
               />
@@ -1434,7 +1434,7 @@ export function MonitorView({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                   tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                 }}
@@ -1482,7 +1482,7 @@ export function MonitorView({
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-col gap-2 py-1 text-xs whitespace-nowrap">
+                          <div className="flex flex-col gap-2 py-1 text-xs font-semibold whitespace-nowrap">
                             <div className="flex items-center gap-1.5 font-mono text-success-700">
                               <span className="w-[86px] text-right inline-block">
                                 {isOnline && metric
@@ -1512,8 +1512,8 @@ export function MonitorView({
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-col gap-2 py-1 text-xs whitespace-nowrap">
-                            <div className="flex items-center gap-1.5 font-mono text-default-600">
+                          <div className="flex flex-col gap-2 py-1 text-xs font-semibold whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 font-mono text-foreground">
                               <span className="w-[86px] text-right inline-block">
                                 {isOnline && metric
                                   ? formatBytes(metric.netOutBytes)
@@ -1526,7 +1526,7 @@ export function MonitorView({
                                 />
                               </div>
                             </div>
-                            <div className="flex items-center gap-1.5 font-mono text-default-600">
+                            <div className="flex items-center gap-1.5 font-mono text-foreground">
                               <span className="w-[86px] text-right inline-block">
                                 {isOnline && metric
                                   ? formatBytes(metric.netInBytes)
@@ -1542,14 +1542,14 @@ export function MonitorView({
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className="font-mono text-xs text-foreground whitespace-nowrap">
+                          <span className="font-mono text-xs font-semibold text-foreground whitespace-nowrap">
                             {isOnline && metric
                               ? formatUptime(metric.uptime)
                               : "-"}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-col gap-1.5 text-xs font-mono text-foreground">
+                          <div className="flex flex-col gap-1.5 text-xs font-semibold font-mono text-foreground">
                             <div>
                               TCP {isOnline && metric ? metric.tcpConns : "-"}
                             </div>
@@ -1570,7 +1570,7 @@ export function MonitorView({
                             ) : (
                               <div className="w-[40px] md:w-[60px] h-2 rounded-full bg-default-100" />
                             )}
-                            <span className="text-xs font-mono w-9 text-right text-foreground">
+                            <span className="text-xs font-semibold font-mono w-9 text-right text-foreground">
                               {isOnline && metric
                                 ? `${metric.cpuUsage.toFixed(1)}%`
                                 : "-"}
@@ -1589,7 +1589,7 @@ export function MonitorView({
                             ) : (
                               <div className="w-[40px] md:w-[60px] h-2 rounded-full bg-default-100" />
                             )}
-                            <span className="text-xs font-mono w-9 text-right text-foreground">
+                            <span className="text-xs font-semibold font-mono w-9 text-right text-foreground">
                               {isOnline && metric
                                 ? `${metric.memoryUsage.toFixed(1)}%`
                                 : "-"}
@@ -1608,7 +1608,7 @@ export function MonitorView({
                             ) : (
                               <div className="w-[40px] md:w-[60px] h-2 rounded-full bg-default-100" />
                             )}
-                            <span className="text-xs font-mono w-9 text-right text-foreground">
+                            <span className="text-xs font-semibold font-mono w-9 text-right text-foreground">
                               {isOnline && metric
                                 ? `${metric.diskUsage.toFixed(1)}%`
                                 : "-"}
@@ -1672,7 +1672,7 @@ export function MonitorView({
                 {detailNode?.connectionStatus === "online" ? "在线" : "离线"}
               </Chip>
             </div>
-            <div className="flex items-center gap-2 text-xs text-foreground ml-auto">
+            <div className="flex items-center gap-2 text-xs font-semibold text-foreground ml-auto">
               <div
                 className={`w-2 h-2 rounded-full ${wsConnected ? "bg-success" : wsConnecting ? "bg-warning" : "bg-default-300"}`}
               />
@@ -1726,7 +1726,7 @@ export function MonitorView({
                   className="hover:shadow-md transition-shadow duration-200"
                 >
                   <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
-                    <span className="text-[11px] text-foreground mb-1.5">
+                    <span className="text-[11px] font-semibold text-foreground mb-1.5">
                       {item.label}
                     </span>
                     <span
@@ -1904,10 +1904,10 @@ export function MonitorView({
                             <Chip color="primary" size="sm" variant="flat">
                               {resolvedActiveMonitor.type.toUpperCase()}
                             </Chip>
-                            <span className="font-mono text-xs text-default-600 tray-plate rounded-full px-2 py-0.5">
+                            <span className="font-mono text-xs font-semibold text-foreground glass-surface rounded-full px-2 py-0.5">
                               {resolvedActiveMonitor.target}
                             </span>
-                            <span className="text-xs text-default-600 tray-plate rounded-full px-2 py-0.5">
+                            <span className="text-xs font-semibold text-foreground glass-surface rounded-full px-2 py-0.5">
                               {`每 ${resolvedActiveMonitor.intervalSec || resolvedServiceMonitorLimits.defaultIntervalSec} 秒测试，30 秒上报`}
                             </span>
                             {activeLatestResult &&
@@ -2057,17 +2057,17 @@ export function MonitorView({
                 {resultsMonitor?.name ? ` - ${resultsMonitor.name}` : ""}
               </div>
               {resultsMonitor?.nodeId && resultsMonitor.nodeId > 0 ? (
-                <div className="text-xs text-foreground truncate">
+                <div className="text-xs font-semibold text-foreground truncate">
                   节点:{" "}
                   {nodeMap.get(resultsMonitor.nodeId)?.name ||
                     resultsMonitor.nodeId}
                 </div>
               ) : (
-                <div className="text-xs text-foreground truncate">面板执行</div>
+                <div className="text-xs font-semibold text-foreground truncate">面板执行</div>
               )}
 
               {modalResults.length > 0 ? (
-                <div className="text-xs text-foreground truncate">
+                <div className="text-xs font-semibold text-foreground truncate">
                   最新检查:{" "}
                   <span className="font-mono">
                     {formatDateTime(modalResults[0].timestamp)}
@@ -2128,7 +2128,7 @@ export function MonitorView({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                   tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
                 }}
@@ -2169,8 +2169,8 @@ export function MonitorView({
                         <span
                           className={
                             r.errorMessage
-                              ? "text-danger-700 text-xs"
-                              : "text-foreground text-xs"
+                              ? "text-danger-700 text-xs font-semibold"
+                              : "text-foreground text-xs font-semibold"
                           }
                         >
                           {r.errorMessage || "-"}

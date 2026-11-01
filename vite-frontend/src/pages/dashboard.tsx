@@ -150,19 +150,19 @@ function UserDashboard() {
     return (
       <div
         key={node.id}
-        className="rounded-xl border border-warning/30 tray-warning p-4 dark:border-warning/20"
+        className="rounded-xl border border-warning-500/25 bg-warning-500/10 p-4"
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-foreground truncate">
               {node.name}
             </div>
-            <div className="mt-1 text-xs text-foreground">
+            <div className="mt-1 text-xs font-semibold text-foreground">
               节点 ID: {node.id}
             </div>
           </div>
           <span
-            className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${expiryStatus.badgeClassName}`}
+            className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${expiryStatus.badgeClassName}`}
           >
             {expiryStatus.label}
           </span>
@@ -172,12 +172,12 @@ function UserDashboard() {
           {formatNodeRenewalTime(renewalSnapshot.nextDueTime)}
         </div>
 
-        <div className="mt-1 text-xs text-foreground">
+        <div className="mt-1 text-xs font-semibold text-foreground">
           {getNodeRenewalCycleLabel(node.renewalCycle)}
         </div>
 
         {node.remark?.trim() && (
-          <p className="mt-3 line-clamp-2 text-xs leading-5 text-default-600">
+          <p className="mt-3 line-clamp-2 text-xs font-semibold leading-5 text-foreground">
             {node.remark.trim()}
           </p>
         )}
@@ -227,7 +227,7 @@ function UserDashboard() {
 
     if (isNaN(expDate.getTime())) {
       return {
-        color: "text-gray-600",
+        color: "text-foreground",
         bg: "bg-default-500/10 border-default-300",
         text: "无效",
       };
@@ -323,7 +323,7 @@ function UserDashboard() {
     return (
       <div className="w-full">
         <div
-          className={`w-full bg-gray-200 dark:bg-gray-800 rounded-full ${height}`}
+          className={`w-full bg-default-200 dark:bg-gray-800 rounded-full ${height}`}
         >
           <div
             className={`${height} rounded-full transition-all duration-300 ${getUsageColor(percentage)}`}
@@ -649,9 +649,9 @@ function UserDashboard() {
     <AnimatedPage className="px-3 lg:px-6 py-6">
       {/* 顶部个人状态和下拉菜单 */}
       <div className="flex justify-between items-center mb-4">
-        <div className="rounded-xl tray-plate px-3 py-2">
+        <div className="rounded-xl glass-card px-3 py-2">
           <h1 className="text-lg font-semibold">概览</h1>
-          <p className="text-xs font-medium text-default-600">
+          <p className="text-xs font-semibold text-foreground">
             {username}，这里是你的流量和转发规则
           </p>
         </div>
@@ -751,7 +751,7 @@ function UserDashboard() {
                   flowLimitBytes(userInfo.flow || 0, userInfo.flowMiB) <= 0,
               )}
               <div className="flex items-center justify-between mt-1">
-                <p className="text-xs text-foreground truncate">
+                <p className="text-xs font-semibold text-foreground truncate">
                   {(userInfo.flow === 99999 && !userInfo.flowMiB) ||
                   flowLimitBytes(userInfo.flow || 0, userInfo.flowMiB) <= 0
                     ? "无限制"
@@ -759,7 +759,7 @@ function UserDashboard() {
                 </p>
                 {userInfo.flowResetTime !== undefined &&
                   userInfo.flowResetTime !== null && (
-                    <div className="text-xs text-foreground flex items-center gap-1">
+                    <div className="text-xs font-semibold text-foreground flex items-center gap-1">
                       <svg
                         aria-hidden="true"
                         className="w-3 h-3"
@@ -828,7 +828,7 @@ function UserDashboard() {
                 // R11X-011：num<=0 与 99999 同为无限制形态。
                 userInfo.num === 99999 || userInfo.num <= 0,
               )}
-              <p className="text-xs text-foreground mt-1 truncate">
+              <p className="text-xs font-semibold text-foreground mt-1 truncate">
                 {userInfo.num === 99999 || userInfo.num <= 0
                   ? "无限制"
                   : `${calculateUsagePercentage("forwards").toFixed(1)}%`}
@@ -890,7 +890,7 @@ function UserDashboard() {
                   </p>
                 </div>
               </div>
-              <span className="inline-flex w-fit items-center rounded-full tray-warning px-3 py-1 text-xs font-medium ring-1 ring-amber-200/80 dark:ring-amber-500/30">
+              <span className="inline-flex w-fit items-center rounded-full tray-warning px-3 py-1 text-xs font-semibold ring-1 ring-amber-200/80 dark:ring-amber-500/30">
                 {nodeExpiryReminders.length} 个提醒
               </span>
             </div>
@@ -900,7 +900,7 @@ function UserDashboard() {
               {nodeExpiryReminders.slice(0, 6).map(renderNodeExpiryCard)}
             </div>
             {nodeExpiryReminders.length > 6 && (
-              <p className="mt-4 text-xs text-foreground">
+              <p className="mt-4 text-xs font-semibold text-foreground">
                 还有 {nodeExpiryReminders.length - 6}{" "}
                 个节点未展开显示，可前往节点页面继续处理。
               </p>
@@ -929,7 +929,7 @@ function UserDashboard() {
               <h2 className="text-lg lg:text-xl font-semibold text-foreground">
                 隧道权限
               </h2>
-              <span className="px-2 py-1 bg-tray text-default-600 rounded-full text-xs">
+              <span className="px-2 py-1 bg-tray text-foreground rounded-full text-xs font-semibold">
                 {userTunnels.length}
               </span>
             </div>
@@ -954,7 +954,7 @@ function UserDashboard() {
                           </h3>
                           <div className="flex flex-wrap items-center gap-2 mt-1">
                             <span
-                              className={`px-2 py-1 rounded-md text-xs font-medium ${tunnel.tunnelFlow === 1 ? "bg-blue-500/10 text-blue-700" : tunnel.tunnelFlow === 2 ? "bg-orange-500/10 text-orange-700" : "bg-tray text-foreground"}`}
+                              className={`px-2 py-1 rounded-md text-xs font-semibold ${tunnel.tunnelFlow === 1 ? "bg-blue-500/10 text-blue-700" : tunnel.tunnelFlow === 2 ? "bg-orange-500/10 text-orange-700" : "bg-tray text-foreground"}`}
                             >
                               {tunnel.tunnelFlow === 1
                                 ? "单向计费"
@@ -963,13 +963,13 @@ function UserDashboard() {
                                   : "未知"}
                             </span>
                             <span
-                              className={`px-2 py-1 rounded-md text-xs font-medium border ${tunnelExpStatus.bg} ${tunnelExpStatus.color}`}
+                              className={`px-2 py-1 rounded-md text-xs font-semibold border ${tunnelExpStatus.bg} ${tunnelExpStatus.color}`}
                             >
                               {tunnelExpStatus.text}
                             </span>
                             {tunnel.flowResetTime !== undefined &&
                               tunnel.flowResetTime !== null && (
-                                <span className="text-xs text-foreground">
+                                <span className="text-xs font-semibold text-foreground">
                                   {formatResetTime(tunnel.flowResetTime)}
                                 </span>
                               )}
@@ -979,7 +979,7 @@ function UserDashboard() {
 
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
                         <div>
-                          <p className="text-sm text-default-600 mb-1">
+                          <p className="text-sm text-foreground mb-1">
                             流量配额
                           </p>
                           <p className="font-semibold text-foreground">
@@ -987,7 +987,7 @@ function UserDashboard() {
                           </p>
                         </div>
                         <div>
-                          <p className="text-sm text-default-600 mb-1">
+                          <p className="text-sm text-foreground mb-1">
                             已用流量
                           </p>
                           <p className="font-semibold text-foreground">
@@ -1007,7 +1007,7 @@ function UserDashboard() {
                           </div>
                         </div>
                         <div>
-                          <p className="text-sm text-default-600 mb-1">
+                          <p className="text-sm text-foreground mb-1">
                             规则配额
                           </p>
                           <p className="font-semibold text-foreground">
@@ -1015,7 +1015,7 @@ function UserDashboard() {
                           </p>
                         </div>
                         <div>
-                          <p className="text-sm text-default-600 mb-1">
+                          <p className="text-sm text-foreground mb-1">
                             已用规则
                           </p>
                           <p className="font-semibold text-foreground">
@@ -1059,7 +1059,7 @@ function UserDashboard() {
             <h2 className="text-lg lg:text-xl font-semibold text-foreground">
               规则配置
             </h2>
-            <span className="px-2 py-1 bg-tray text-default-600 rounded-full text-xs">
+            <span className="px-2 py-1 bg-tray text-foreground rounded-full text-xs font-semibold">
               {forwardList.length}
             </span>
           </div>
@@ -1112,7 +1112,7 @@ function UserDashboard() {
                             </h4>
                             <div className="space-y-1">
                               <button
-                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
                                 disabled={!hasMultipleIps(forward.inIp)}
                                 title={formatInAddress(
                                   forward.inIp,
@@ -1129,11 +1129,11 @@ function UserDashboard() {
                               >
                                 {formatInAddress(forward.inIp, forward.inPort)}
                               </button>
-                              <div className="text-center text-foreground text-xs">
+                              <div className="text-center text-foreground text-xs font-semibold">
                                 ↓
                               </div>
                               <button
-                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-default-100 dark:hover:bg-default-200" : ""}`}
                                 disabled={
                                   !hasMultipleRemoteAddresses(
                                     forward.remoteAddr,
@@ -1154,7 +1154,7 @@ function UserDashboard() {
                           </div>
 
                           <div className="pt-2 border-t border-gray-200 dark:border-default-200">
-                            <div className="grid grid-cols-3 gap-1 text-xs">
+                            <div className="grid grid-cols-3 gap-1 text-xs font-semibold">
                               <div className="text-center">
                                 <div className="text-foreground mb-1">上传</div>
                                 <div className="font-medium text-green-600 dark:text-green-400 truncate">

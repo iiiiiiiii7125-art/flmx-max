@@ -1017,9 +1017,9 @@ export default function ConfigPage() {
     return (
       <div className="flex flex-col gap-3 w-full rounded-xl border border-divider p-4">
         <div>
-          <p className="text-sm font-medium text-gray-700">{label}</p>
+          <p className="text-sm font-medium text-foreground">{label}</p>
           {!isDefault && !bgImage && (
-            <p className="text-xs text-foreground mt-1">
+            <p className="text-xs font-semibold text-foreground mt-1">
               未单独设置，使用默认背景
             </p>
           )}
@@ -1125,8 +1125,8 @@ export default function ConfigPage() {
     const showImage = previewUrl.length > 0 && !failed;
 
     return (
-      <div className="mt-3 rounded-lg border border-divider bg-white/40 p-3">
-        <p className="text-xs text-foreground">实时预览</p>
+      <div className="mt-3 rounded-lg border border-divider glass-inset p-3">
+        <p className="text-xs font-semibold text-foreground">实时预览</p>
         <div className="mt-2 rounded-md border border-default-200 dark:border-default-100/30 bg-white dark:bg-black px-3 py-2">
           {key === "app_logo" ? (
             <div className="flex h-10 items-center gap-2">
@@ -1143,7 +1143,7 @@ export default function ConfigPage() {
                   }
                 />
               ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-sm bg-default-200 text-[10px] font-semibold text-default-600 dark:bg-default-700 dark:text-default-200">
+                <div className="flex h-7 w-7 items-center justify-center rounded-sm bg-default-200 text-[10px] font-semibold text-foreground dark:bg-default-700 dark:text-default-200">
                   LOGO
                 </div>
               )}
@@ -1152,7 +1152,7 @@ export default function ConfigPage() {
               </span>
             </div>
           ) : (
-            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-divider bg-white/40 px-2">
+            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-divider glass-inset px-2">
               {showImage ? (
                 <img
                   alt="favicon preview"
@@ -1168,7 +1168,7 @@ export default function ConfigPage() {
               ) : (
                 <div className="h-4 w-4 rounded-sm bg-default-300 dark:bg-default-600" />
               )}
-              <span className="truncate text-xs text-default-700">
+              <span className="truncate text-xs font-semibold text-default-700">
                 {appNamePreview}
               </span>
             </div>
@@ -1176,19 +1176,19 @@ export default function ConfigPage() {
         </div>
 
         {previewUrl.length === 0 ? (
-          <p className="mt-2 text-xs text-foreground">
+          <p className="mt-2 text-xs font-semibold text-foreground">
             上传图片后会实时显示预览
           </p>
         ) : null}
 
         {previewUrl.length > 0 && failed ? (
-          <p className="mt-2 text-xs text-danger-700">
+          <p className="mt-2 text-xs font-semibold text-danger-700">
             图片加载失败，请重新上传
           </p>
         ) : null}
 
         {previewUrl.length > 0 && !isPngDataURL(previewUrl) ? (
-          <p className="mt-2 text-xs text-warning-600 dark:text-warning-400">
+          <p className="mt-2 text-xs font-semibold text-warning-700">
             当前是旧版 URL 配置，建议重新上传图片以启用无闪烁加载
           </p>
         ) : null}
@@ -1247,12 +1247,12 @@ export default function ConfigPage() {
           >
             清除
           </Button>
-          <span className="text-xs text-foreground">
+          <span className="text-xs font-semibold text-foreground">
             仅支持图片文件，自动转换为 PNG
           </span>
         </div>
 
-        <p className="mt-2 text-xs text-foreground">
+        <p className="mt-2 text-xs font-semibold text-foreground">
           {isLogo
             ? "建议上传方形图片，系统会统一转换为 96x96 PNG"
             : "建议上传方形图片，系统会统一转换为 64x64 PNG"}
@@ -1364,7 +1364,7 @@ export default function ConfigPage() {
               handleConfigChange(item.key, checked ? "true" : "false")
             }
           >
-            <span className="text-sm text-gray-700">
+            <span className="text-sm text-foreground">
               {resolveSwitchSelected(item.key) ? "已启用" : "已禁用"}
             </span>
           </Switch>
@@ -1613,7 +1613,7 @@ export default function ConfigPage() {
                 className={`w-full px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer text-left ${
                   isSelected
                     ? "bg-primary-500/10 border-primary-300 shadow-sm"
-                    : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
+                    : "glass-card border-default-200 hover:border-primary-300 hover:shadow-sm"
                 }`}
                 type="button"
                 onClick={() => toggleTypeSelection(option.value, setTypes)}
@@ -1670,7 +1670,7 @@ export default function ConfigPage() {
         <SettingsIcon className="w-8 h-8 text-primary-700" />
         <div>
           <h1 className="text-2xl font-bold">网站配置</h1>
-          <p className="text-gray-600">管理网站的基本信息和显示设置</p>
+          <p className="text-foreground">管理网站的基本信息和显示设置</p>
         </div>
       </div>
 
@@ -1679,7 +1679,7 @@ export default function ConfigPage() {
           <div className="flex items-center w-full">
             <div>
               <h2 className="text-xl font-semibold">品牌设置</h2>
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-foreground">
                 自定义面板名称、Logo、网站图标和底部版权信息
               </p>
             </div>
@@ -1703,7 +1703,7 @@ export default function ConfigPage() {
                       {item.label}
                     </label>
                     {item.description && (
-                      <p className="text-xs text-foreground">
+                      <p className="text-xs font-semibold text-foreground">
                         {item.description}
                       </p>
                     )}
@@ -1724,7 +1724,7 @@ export default function ConfigPage() {
           <div className="flex items-center w-full">
             <div>
               <h2 className="text-xl font-semibold">基本设置</h2>
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-foreground">
                 配置网站的基本信息，这些设置会影响网站的显示效果
               </p>
             </div>
@@ -1749,11 +1749,11 @@ export default function ConfigPage() {
             return (
               <div key={item.key} className="space-y-3">
                 <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-gray-700">
+                  <label className="text-sm font-medium text-foreground">
                     {item.label}
                   </label>
                   {item.description && (
-                    <p className="text-xs text-foreground">
+                    <p className="text-xs font-semibold text-foreground">
                       {item.description}
                     </p>
                   )}
@@ -1772,12 +1772,12 @@ export default function ConfigPage() {
 
           <div className="space-y-3">
             <div className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-gray-700">数据库占用</p>
-              <p className="text-xs text-foreground">
+              <p className="text-sm font-medium text-foreground">数据库占用</p>
+              <p className="text-xs font-semibold text-foreground">
                 当前后端数据库文件或实例占用空间，仅用于容量参考。
               </p>
             </div>
-            <div className="rounded-lg border border-divider bg-white/40 px-4 py-3 text-sm font-semibold text-default-800">
+            <div className="rounded-lg border border-divider glass-inset px-4 py-3 text-sm font-semibold text-default-800">
               {storageSummary}
             </div>
           </div>
@@ -1786,34 +1786,34 @@ export default function ConfigPage() {
 
           <div className="glass-card space-y-4 rounded-xl p-4">
             <div className="space-y-1">
-              <p className="text-sm font-medium text-gray-700">面板自升级</p>
-              <p className="text-xs text-foreground">
+              <p className="text-sm font-medium text-foreground">面板自升级</p>
+              <p className="text-xs font-semibold text-foreground">
                 检查当前版本、可用发布并在容器环境中触发面板升级。
               </p>
             </div>
 
             {systemUpgradeLoading ? (
-              <div className="flex items-center gap-2 rounded-lg border border-divider bg-white/40 px-4 py-3 text-sm text-foreground">
+              <div className="flex items-center gap-2 rounded-lg border border-divider glass-inset px-4 py-3 text-sm text-foreground">
                 <Spinner size="sm" />
                 正在加载升级状态...
               </div>
             ) : (
-              <div className="space-y-4 rounded-lg border border-divider bg-background px-4 py-4 text-sm text-default-700">
+              <div className="space-y-4 rounded-lg border border-divider glass-inset px-4 py-4 text-sm text-foreground">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <p className="text-xs text-foreground">当前版本</p>
+                    <p className="text-xs font-semibold text-foreground">当前版本</p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.currentVersion || "未获取到版本信息"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-foreground">最新版本</p>
+                    <p className="text-xs font-semibold text-foreground">最新版本</p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.latestVersion || "未获取到可用版本"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-foreground">升级能力</p>
+                    <p className="text-xs font-semibold text-foreground">升级能力</p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.capability.capable
                         ? "可升级"
@@ -1824,14 +1824,14 @@ export default function ConfigPage() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <p className="text-xs text-foreground">部署目录</p>
+                    <p className="text-xs font-semibold text-foreground">部署目录</p>
                     <p className="mt-1 break-all font-medium">
                       {systemUpgradeInfo?.capability.deployDir ||
                         "未获取到部署目录"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-foreground">后端容器</p>
+                    <p className="text-xs font-semibold text-foreground">后端容器</p>
                     <p className="mt-1 break-all font-medium">
                       {systemUpgradeInfo?.capability.backendContainer ||
                         "未获取到容器信息"}
@@ -1841,8 +1841,8 @@ export default function ConfigPage() {
 
                 {!systemUpgradeInfo?.capability.capable && (
                   <div className="rounded-lg border border-warning-300 bg-warning-500/10 px-4 py-3 text-warning-800">
-                    <p className="text-xs font-medium">当前无法升级</p>
-                    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
+                    <p className="text-xs font-semibold">当前无法升级</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs font-semibold">
                       {(systemUpgradeInfo?.capability.reasons?.length
                         ? systemUpgradeInfo.capability.reasons
                         : ["暂未获取到不可升级原因"]
@@ -1857,7 +1857,7 @@ export default function ConfigPage() {
                 {systemUpgradeStatus?.inProgress && (
                   <div className="flex items-center gap-2 rounded-lg border border-primary-300 bg-primary-500/10 px-4 py-3 text-primary-800">
                     <Spinner size="sm" />
-                    <p className="text-xs font-medium">
+                    <p className="text-xs font-semibold">
                       升级进行中
                       {systemUpgradeStatus.version
                         ? `：目标版本 ${systemUpgradeStatus.version}`
@@ -1874,11 +1874,11 @@ export default function ConfigPage() {
                   <div
                     className={
                       systemUpgradeStatus.result === "success"
-                        ? "rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-success-800 dark:border-success-900/40 dark:bg-success-950 dark:text-success-200"
-                        : "rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950 dark:text-danger-200"
+                        ? "rounded-lg border border-success-500/25 bg-success-500/10 px-4 py-3 font-medium text-success-800"
+                        : "rounded-lg border border-danger-500/25 bg-danger-500/10 px-4 py-3 font-medium text-danger-800"
                     }
                   >
-                    <p className="text-xs font-medium">
+                    <p className="text-xs font-semibold">
                       上次升级
                       {systemUpgradeStatus.result === "success"
                         ? "成功"
@@ -1899,10 +1899,10 @@ export default function ConfigPage() {
 
                 <div className="space-y-3">
                   <div className="flex flex-col gap-1">
-                    <p className="text-sm font-medium text-gray-700">
+                    <p className="text-sm font-medium text-foreground">
                       可用发布版本
                     </p>
-                    <p className="text-xs text-foreground">
+                    <p className="text-xs font-semibold text-foreground">
                       选择指定版本后执行升级；留空则使用当前通道下最新可用版本。
                     </p>
                   </div>
@@ -1995,7 +1995,7 @@ export default function ConfigPage() {
         <Card className="mt-6 shadow-md" id="latency-targets">
           <CardHeader className="pb-2">
             <h3 className="text-base font-semibold">延迟测试点</h3>
-            <p className="text-xs text-foreground mt-1">
+            <p className="text-xs font-semibold text-foreground mt-1">
               配置节点测量延迟的参考点，节点页将显示各节点到这些点的延迟
             </p>
           </CardHeader>
@@ -2010,7 +2010,7 @@ export default function ConfigPage() {
         <Card className="mt-6 shadow-md">
           <CardHeader className="pb-2">
             <h3 className="text-base font-semibold">订阅前置地址</h3>
-            <p className="text-xs text-foreground mt-1">
+            <p className="text-xs font-semibold text-foreground mt-1">
               面板域名被部分运营商阻断时，订阅链接可改走前置地址拉取
             </p>
           </CardHeader>
@@ -2041,7 +2041,7 @@ export default function ConfigPage() {
           <div className="flex justify-between items-center w-full">
             <div>
               <h2 className="text-xl font-semibold">公告管理</h2>
-              <p className="text-sm text-gray-600">设置首页显示的公告内容</p>
+              <p className="text-sm text-foreground">设置首页显示的公告内容</p>
             </div>
           </div>
         </CardHeader>
@@ -2074,11 +2074,11 @@ export default function ConfigPage() {
                     })
                   }
                 >
-                  <span className="text-sm text-gray-700">
+                  <span className="text-sm text-foreground">
                     {announcement.enabled === 1 ? "已启用" : "已禁用"}
                   </span>
                 </Switch>
-                <p className="text-xs text-foreground">
+                <p className="text-xs font-semibold text-foreground">
                   启用后，公告将在首页顶部显示
                 </p>
               </div>
@@ -2093,7 +2093,7 @@ export default function ConfigPage() {
                   setAnnouncement({ ...announcement, content: e.target.value })
                 }
               />
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 公告支持 Markdown 语法，链接会在新标签页打开
               </p>
 
@@ -2118,7 +2118,7 @@ export default function ConfigPage() {
           <div className="flex justify-between items-center w-full">
             <div>
               <h2 className="text-xl font-semibold">数据备份与恢复</h2>
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-foreground">
                 导出或导入系统数据，支持选择特定数据类型
               </p>
             </div>
@@ -2131,10 +2131,10 @@ export default function ConfigPage() {
           {/* 导出部分 */}
           <div className="space-y-4">
             <h3 className="text-lg font-medium">导出数据</h3>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-foreground">
               选择要导出的数据类型，导出为 JSON 格式文件
             </p>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               当前已选 {exportTypes.length} / {BACKUP_TYPE_VALUES.length}
             </p>
 
@@ -2154,10 +2154,10 @@ export default function ConfigPage() {
           {/* 导入部分 */}
           <div className="space-y-4">
             <h3 className="text-lg font-medium">导入数据</h3>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-foreground">
               选择要导入的数据类型，支持从备份文件恢复数据
             </p>
-            <p className="text-xs text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               当前已选 {importTypes.length} / {BACKUP_TYPE_VALUES.length}
             </p>
 
@@ -2179,14 +2179,14 @@ export default function ConfigPage() {
                 {importing ? "导入中..." : "选择并导入"}
               </Button>
               {importFileName && (
-                <span className="self-center text-sm text-gray-600">
+                <span className="self-center text-sm text-foreground">
                   已选择: {importFileName}
                 </span>
               )}
             </div>
             {importAutoBackupStatus?.exists && (
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="text-xs text-foreground">
+                <span className="text-xs font-semibold text-foreground">
                   上次导入前已自动备份当前全部数据
                 </span>
                 <Button
@@ -2375,8 +2375,8 @@ export default function ConfigPage() {
                       systemUpgradeSelectedVersion,
                       systemUpgradeInfo.currentVersion,
                     ) < 0 && (
-                      <div className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-danger-800 dark:border-danger-900/40 dark:bg-danger-950 dark:text-danger-200">
-                        <p className="text-xs font-medium">
+                      <div className="rounded-lg border border-danger-500/25 bg-danger-500/10 px-4 py-3 font-medium text-danger-800">
+                        <p className="text-xs font-semibold">
                           降级警告：目标版本（
                           {systemUpgradeSelectedVersion}）低于当前版本（
                           {systemUpgradeInfo.currentVersion}
@@ -2384,9 +2384,9 @@ export default function ConfigPage() {
                         </p>
                       </div>
                     )}
-                  <div className="space-y-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950 dark:text-warning-200">
-                    <p className="text-xs font-medium">升级前请确认</p>
-                    <ul className="list-disc space-y-1 pl-4 text-xs">
+                  <div className="space-y-2 rounded-lg border border-warning-500/25 bg-warning-500/10 px-4 py-3 font-medium text-warning-800">
+                    <p className="text-xs font-semibold">升级前请确认</p>
+                    <ul className="list-disc space-y-1 pl-4 text-xs font-semibold">
                       <li>Docker Socket 可用且挂载权限正常。</li>
                       <li>当前面板允许短暂停止和重启。</li>
                       <li>已选择正确的更新通道与目标版本。</li>

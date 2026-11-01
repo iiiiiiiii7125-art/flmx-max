@@ -683,7 +683,7 @@ export function ManualNodeFields({
       {(n.protocol === "hysteria2" ||
         n.protocol === "tuic" ||
         n.protocol === "anytls") && (
-        <p className="text-xs text-warning-600 dark:text-warning-400">
+        <p className="text-xs font-semibold text-warning-700">
           作链式中转目标时只能走 sing-box 内核，Xray 会拒绝该协议
         </p>
       )}
@@ -748,7 +748,7 @@ export function ManualNodeFields({
             onChange={(flow) => set({ flow })}
           />
           {!visionAllowedManual(n) && (
-            <p className="text-xs text-warning-600 dark:text-warning-400">
+            <p className="text-xs font-semibold text-warning-700">
               Vision 仅支持 TCP 且需要 TLS/Reality，当前组合不可用
             </p>
           )}
@@ -856,7 +856,7 @@ export function ManualNodeFields({
             }
           />
           {realityActive && (
-            <p className="text-xs text-warning-600 dark:text-warning-400">
+            <p className="text-xs font-semibold text-warning-700">
               Reality 不支持 WS 传输（仅支持 TCP / gRPC / XHTTP），已禁用
             </p>
           )}

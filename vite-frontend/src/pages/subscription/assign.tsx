@@ -156,7 +156,7 @@ export default function SubscriptionAssignSection() {
       <Card>
         <CardHeader className="flex flex-col gap-1">
           <h3 className="text-sm font-semibold">订阅分配</h3>
-          <p className="text-xs text-foreground">
+          <p className="text-xs font-semibold text-foreground">
             按订阅分配：用户将使用被分配订阅的独立链接，流量与到期按订阅单独计算。
           </p>
         </CardHeader>
@@ -186,7 +186,7 @@ export default function SubscriptionAssignSection() {
           ) : (
             <>
               {assignLoadError && (
-                <p className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-600 dark:border-danger-500/30 dark:bg-danger-900 dark:text-danger-400">
+                <p className="rounded-lg border border-danger-500/25 bg-danger-500/10 px-4 py-3 text-sm font-medium text-danger-700">
                   该用户的已分配订阅加载失败，下方勾选状态不可信，保存已禁用。请重新选择该用户重试。
                 </p>
               )}
@@ -221,7 +221,7 @@ export default function SubscriptionAssignSection() {
                           <p className="truncate text-sm font-medium">
                             {s.name}
                             {s.isDefault && (
-                              <span className="ml-2 text-xs font-normal text-foreground">
+                              <span className="ml-2 text-xs font-semibold text-foreground">
                                 默认
                               </span>
                             )}
@@ -231,7 +231,7 @@ export default function SubscriptionAssignSection() {
                               </Chip>
                             )}
                           </p>
-                          <p className="text-xs text-foreground">
+                          <p className="text-xs font-semibold text-foreground">
                             {s.nodeCount} 个节点 ·{" "}
                             {s.trafficLimit
                               ? `限额 ${formatTraffic(s.trafficLimit)}（已用 ${formatTraffic(used)}）`
@@ -260,7 +260,7 @@ export default function SubscriptionAssignSection() {
                       : `保存订阅分配（已选 ${selected.size} 个）`}
                 </Button>
                 {selectedUser && (
-                  <span className="text-xs text-foreground">
+                  <span className="text-xs font-semibold text-foreground">
                     正在为 {selectedUser.user || selectedUser.name} 分配
                   </span>
                 )}
