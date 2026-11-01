@@ -12,7 +12,7 @@ import IndexPage from "@/pages/index";
 import AdminLayout from "@/layouts/admin";
 import H5Layout from "@/layouts/h5";
 import H5SimpleLayout from "@/layouts/h5-simple";
-import { isLoggedIn } from "@/utils/auth";
+import { isAdmin, isLoggedIn } from "@/utils/auth";
 import { siteConfig, updateSiteConfig } from "@/config/site";
 import { useH5Mode } from "@/hooks/useH5Mode";
 import { SESSION_UPDATED_EVENT } from "@/utils/session";
@@ -39,16 +39,22 @@ const ProtectedRoute = ({
   children,
   useSimpleLayout = false,
   skipLayout = false,
+  adminOnly = false,
 }: {
   children: React.ReactNode;
   useSimpleLayout?: boolean;
   skipLayout?: boolean;
+  adminOnly?: boolean;
 }) => {
   const isH5 = useH5Mode();
   const authenticated = isLoggedIn();
 
   if (!authenticated) {
     return <Navigate replace to="/" />;
+  }
+
+  if (adminOnly && !isAdmin()) {
+    return <Navigate replace to="/dashboard" />;
   }
 
   // 如果跳过布局，直接返回子组件
@@ -227,7 +233,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute adminOnly={true}>
               <TunnelPage />
             </ProtectedRoute>
           }
@@ -235,7 +241,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute adminOnly={true}>
               <NodeHubPage />
             </ProtectedRoute>
           }
@@ -243,7 +249,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute useSimpleLayout={true}>
+            <ProtectedRoute adminOnly={true} useSimpleLayout={true}>
               <UserHubPage />
             </ProtectedRoute>
           }
@@ -251,7 +257,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute useSimpleLayout={true}>
+            <ProtectedRoute adminOnly={true} useSimpleLayout={true}>
               <UserHubPage />
             </ProtectedRoute>
           }
@@ -267,7 +273,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute useSimpleLayout={true}>
+            <ProtectedRoute adminOnly={true} useSimpleLayout={true}>
               <UserHubPage />
             </ProtectedRoute>
           }
@@ -275,7 +281,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute adminOnly={true}>
               <InboundPage />
             </ProtectedRoute>
           }
@@ -283,7 +289,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute adminOnly={true}>
               <RelayPage />
             </ProtectedRoute>
           }
@@ -291,7 +297,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute adminOnly={true}>
               <SubscriptionPage />
             </ProtectedRoute>
           }
@@ -299,7 +305,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute adminOnly={true}>
               <ConfigPage />
             </ProtectedRoute>
           }
@@ -307,7 +313,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute useSimpleLayout={true}>
+            <ProtectedRoute adminOnly={true} useSimpleLayout={true}>
               <PanelSharingPage />
             </ProtectedRoute>
           }

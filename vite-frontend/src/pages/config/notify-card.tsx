@@ -34,7 +34,7 @@ const NOTIFY_EVENTS = [
     key: "latency_bad",
     label: "延迟 / 丢包异常",
     description:
-      "某测试点连续 3 次检测（约 9 分钟）丢包 ≥ 20% 或延迟超阈值才提醒，恢复时再提醒一次；阈值可用 notify_latency_loss_pct / notify_latency_ms 配置",
+      "某测试点连续 3 次检测（约 9 分钟）丢包 ≥ 20% 或延迟超阈值才提醒，恢复时再提醒一次；阈值可在下方「延迟 / 丢包阈值」调整",
   },
   {
     key: "route_change",
@@ -233,6 +233,59 @@ export function NotifyCard({
             ))}
           </div>
         </Field>
+
+        {selected.includes("latency_bad") && (
+          <Field
+            description="连续 3 次检测（约 9 分钟）触发提醒；留空使用默认（丢包 20%、延迟不判断）"
+            label="延迟 / 丢包阈值"
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-sm text-gray-700 dark:text-gray-300">
+                  丢包率 ≥
+                </span>
+                <Input
+                  classNames={{
+                    input: "text-sm",
+                    inputWrapper: changedClass("notify_latency_loss_pct"),
+                  }}
+                  endContent="%"
+                  max={100}
+                  min={1}
+                  placeholder="20"
+                  size="md"
+                  type="number"
+                  value={configs.notify_latency_loss_pct ?? ""}
+                  variant="bordered"
+                  onChange={(e) =>
+                    onChange("notify_latency_loss_pct", e.target.value)
+                  }
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-sm text-gray-700 dark:text-gray-300">
+                  延迟 ≥
+                </span>
+                <Input
+                  classNames={{
+                    input: "text-sm",
+                    inputWrapper: changedClass("notify_latency_ms"),
+                  }}
+                  endContent="ms"
+                  min={0}
+                  placeholder="0"
+                  size="md"
+                  type="number"
+                  value={configs.notify_latency_ms ?? ""}
+                  variant="bordered"
+                  onChange={(e) =>
+                    onChange("notify_latency_ms", e.target.value)
+                  }
+                />
+              </div>
+            </div>
+          </Field>
+        )}
 
         {selected.includes("daily_report") && (
           <Field

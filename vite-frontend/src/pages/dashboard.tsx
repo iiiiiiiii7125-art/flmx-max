@@ -653,7 +653,7 @@ function UserDashboard() {
       <div className="flex justify-between items-center mb-4">
         <div>
           <h1 className="text-lg font-semibold">概览</h1>
-          <p className="text-xs text-default-500">
+          <p className="text-xs font-medium text-default-600">
             {username}，这里是你的流量和转发规则
           </p>
         </div>

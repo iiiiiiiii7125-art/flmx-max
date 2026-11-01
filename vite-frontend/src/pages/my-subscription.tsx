@@ -10,6 +10,7 @@ import { SubFrontPicker } from "@/pages/subscription/front-picker";
 import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import { formatTraffic } from "@/utils/traffic";
 import { QrCodeButton } from "@/pages/inbound/share";
+import { panelOrigin } from "@/utils/panel-origin";
 import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -115,7 +116,7 @@ export default function MySubscriptionPage() {
 
   const subUrl = (format?: string, inboundId?: number, relayId?: number) => {
     if (!subPath || !data) return "";
-    let u = `${frontBase || window.location.origin}${subPath}?user=${data.userId}`;
+    let u = `${frontBase || panelOrigin()}${subPath}?user=${data.userId}`;
     if (data.sig) u += `&sig=${data.sig}`;
     if (format) u += `&format=${format}`;
     if (inboundId) u += `&inbound=${inboundId}`;
@@ -125,7 +126,7 @@ export default function MySubscriptionPage() {
 
   // 分配订阅的独立链接：path 自带 token，不带 ?user= 过滤。
   const assignedUrl = (s: MySubscriptionItem, format?: string) =>
-    `${frontBase || window.location.origin}${s.path}${format ? `?format=${format}` : ""}`;
+    `${frontBase || panelOrigin()}${s.path}${format ? `?format=${format}` : ""}`;
 
   const handleCopy = async (url: string, key: string, label: string) => {
     const ok = await copyWithToast(url, `${label} 已复制`);
