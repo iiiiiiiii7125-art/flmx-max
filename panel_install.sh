@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261022.01"
+SCRIPT_VERSION="20261101.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -42,7 +42,7 @@ SCRIPT_VERSION="20261022.01"
 #   3) 单跳上限：换版 exec 时置 FLMX_SELF_UPDATE_HOPS=1，新进程据此
 #      不再自更新——任何未知翻转模式下至多跳一次。
 # 注：调用点在本文件末尾（main 之前）——此处仅定义函数，因为
-# resolve_version / maybe_proxy_url / download_verified 定义在后面。
+# resolve_version / 路由助手 / download_verified 定义在后面。
 self_update_check() {
   # 通过进程替换 bash <(...) 执行时 $0 不是常规文件，跳过自更新；
   # 被 source 加载（测试夹具）时 BASH_SOURCE 与 $0 不一致，同样跳过。
@@ -56,14 +56,15 @@ self_update_check() {
     echo "⚠️ 下载校验未开启，跳过脚本自更新（不执行未校验的新脚本）"
     return 0
   fi
-  local version tmp_script url latest_version pinned_version
+  local version tmp_script latest_version pinned_version
   version=$(resolve_version 2>/dev/null) || {
     echo "⚠️ 无法解析目标版本，跳过脚本自更新"
     return 0
   }
   tmp_script=$(mktemp) || return 0
-  url=$(maybe_proxy_url "https://github.com/${REPO}/releases/download/${version}/panel_install.sh")
-  if ! download_verified "$url" "$tmp_script"; then
+  # 1.7.7：自更新下载同样走内置路线直选（download_verified_routed），
+  # F-006 三不变量（定版一致/方向单调/单跳）不变。
+  if ! download_verified_routed "https://github.com/${REPO}/releases/download/${version}/panel_install.sh" "$tmp_script"; then
     rm -f "$tmp_script"
     echo "⚠️ 新版脚本下载或校验失败，继续使用当前版本"
     return 0
@@ -102,65 +103,154 @@ self_update_check() {
 # 固定版本号（Release 构建时自动填充，留空则获取最新版）
 PINNED_VERSION=""
 
-# 镜像加速配置（可由面板传入或交互式询问）
+# GitHub 下载路线配置（1.7.7）：默认走内置候选测速直选（见下方
+# PROXY_CANDIDATES 与 ensure_download_routes），不再交互询问、不再
+# 读面板的「GitHub 加速」设置（该设置已整体移除）。环境变量仅作
+# 运维逃生口：PROXY_ENABLED=false 强制直连；PROXY_URL=<前缀> 为
+# 手动覆盖，固定单条代理前缀路线。
 PROXY_ENABLED="${PROXY_ENABLED:-}"
 PROXY_URL="${PROXY_URL:-}"
 DEFAULT_PANEL_BACKEND_CONTAINER="flux-panel-backend"
 DEFAULT_PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
 PANEL_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
-# 镜像加速
-maybe_proxy_url() {
-  local url="$1"
+# ---- 内置 GitHub 下载候选与测速直选（1.7.7）----
+# 候选清单全产品统一（面板后端 github_routes.go、agent 侧、
+# install.sh 同表同序，改一处须同步其余）：9 个代理前缀 + 直连
+# （""）。路线选择口径（与面板侧一致）：
+#   1) 先单独探测直连（真实目标、~3-5s）：通 → 只用直连，不测代理；
+#   2) 直连不通 → 并行探测 9 个代理按延迟排名，未判活的按清单原
+#      序殿后，直连排最末兜底；已选路线下载失败时逐个续切；
+#   3) 仅直连已定（阶段 1）而下载全败时，补测代理排名续切
+#      （extend_download_routes）。
+# 判活只认真实目标可解析：探测 releases/latest 的最终重定向末段
+# 必须长得像版本号，任意 HTTP 200 落地页不算活。
+PROXY_CANDIDATES=(
+  "https://ghfast.top"
+  "https://gcode.hostcentral.cc"
+  "https://gh-proxy.com"
+  "https://ghproxy.net"
+  "https://hub.gitmirror.com"
+  "https://ghps.cc"
+  "https://gh.llkk.cc"
+  "https://ghp.ci"
+  "https://ghproxy.cc"
+)
 
+route_mode() {
   if [[ "$PROXY_ENABLED" == "false" ]]; then
-    echo "$url"
-    return
+    echo "direct"
+  elif [[ -n "$PROXY_URL" ]]; then
+    echo "override"
+  else
+    echo "builtin"
   fi
+}
 
-  local proxy="${PROXY_URL:-gcode.hostcentral.cc}"
-
+normalize_proxy_prefix() {
+  local proxy="$1"
   if [[ "$proxy" == https://* || "$proxy" == http://* ]]; then
     proxy="${proxy%/}"
   else
     proxy="https://${proxy%/}"
   fi
-
-  echo "${proxy}/${url}"
+  echo "$proxy"
 }
 
-ask_proxy_config() {
-  if [[ -n "$PROXY_ENABLED" ]]; then
-    return
+route_url() {
+  local prefix="$1" url="$2"
+  if [[ -z "$prefix" ]]; then
+    echo "$url"
+  else
+    echo "${prefix}/${url}"
   fi
+}
 
-  if [[ -n "$PROXY_URL" ]]; then
-    PROXY_ENABLED="true"
-    return
-  fi
+# probe_route <前缀>：探测单条路线，活则回显耗时秒数、死则失败。
+probe_route() {
+  local prefix="$1"
+  local out effective tag
+  out=$(curl -fsSL -o /dev/null --connect-timeout 3 --max-time 5 -w '%{time_total} %{url_effective}' "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || return 1
+  effective="${out#* }"
+  tag="${effective##*/}"
+  [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]] || return 1
+  printf '%s' "${out%% *}"
+}
 
-  echo ""
-  echo "==============================================="
-  echo "           GitHub 加速配置"
-  echo "==============================================="
-  if ! read -r -p "是否开启 GitHub 加速? (Y/n): " proxy_choice; then
-    proxy_choice=""
+PROXY_RANKED=()
+
+# rank_proxy_routes：并行探测全部代理候选（单候选超时 ~5s、一轮
+# 总界有界），活者按延迟升序、未判活者按清单原序殿后，结果写入
+# PROXY_RANKED（只含代理，不含直连）。
+rank_proxy_routes() {
+  PROXY_RANKED=()
+  local tmpdir i prefix
+  tmpdir=$(mktemp -d) || return 1
+  for i in "${!PROXY_CANDIDATES[@]}"; do
+    prefix="${PROXY_CANDIDATES[$i]}"
+    (
+      t=$(probe_route "$prefix") && printf '%s %s\n' "$t" "$i" > "$tmpdir/$i"
+    ) &
+  done
+  wait
+  local line idx
+  while IFS= read -r line; do
+    idx="${line##* }"
+    PROXY_RANKED+=("${PROXY_CANDIDATES[$idx]}")
+  done < <(cat "$tmpdir"/* 2>/dev/null | sort -n)
+  rm -rf "$tmpdir"
+  local seen=" ${PROXY_RANKED[*]} "
+  for prefix in "${PROXY_CANDIDATES[@]}"; do
+    case "$seen" in
+      *" $prefix "*) ;;
+      *) PROXY_RANKED+=("$prefix") ;;
+    esac
+  done
+}
+
+DOWNLOAD_ROUTES=()
+ROUTES_STAGE=0
+
+# ensure_download_routes：懒初始化路线表（只在真正下载/解析版本时
+# 触发，纯本地操作不触网）。状态行走 stderr，避免污染 $(...) 捕获。
+ensure_download_routes() {
+  if [[ ${#DOWNLOAD_ROUTES[@]} -gt 0 ]]; then
+    return 0
   fi
-  case "$proxy_choice" in
-    n|N)
-      PROXY_ENABLED="false"
-      echo "已关闭加速，将直连 GitHub"
+  case "$(route_mode)" in
+    direct)
+      DOWNLOAD_ROUTES=("")
+      ROUTES_STAGE=2
+      ;;
+    override)
+      DOWNLOAD_ROUTES=("$(normalize_proxy_prefix "$PROXY_URL")")
+      ROUTES_STAGE=2
       ;;
     *)
-      PROXY_ENABLED="true"
-      if ! read -r -p "加速地址 (默认 gcode.hostcentral.cc): " input_url; then
-        input_url=""
+      if probe_route "" >/dev/null; then
+        DOWNLOAD_ROUTES=("")
+        ROUTES_STAGE=1
+        echo "🌐 GitHub 下载路线: 直连" >&2
+      else
+        rank_proxy_routes
+        DOWNLOAD_ROUTES=("${PROXY_RANKED[@]}" "")
+        ROUTES_STAGE=2
+        echo "🌐 GitHub 直连不通，按测速排名选用代理路线（首选: ${DOWNLOAD_ROUTES[0]}）" >&2
       fi
-      PROXY_URL="${input_url:-gcode.hostcentral.cc}"
-      echo "已开启加速: $PROXY_URL"
       ;;
   esac
-  echo "==============================================="
+}
+
+# extend_download_routes：阶段 1（仅直连）路线全败时补测代理排名
+# 并追加；有新增路线返回 0，否则返回 1。
+extend_download_routes() {
+  if [[ "$(route_mode)" == "builtin" && "$ROUTES_STAGE" == "1" ]]; then
+    rank_proxy_routes
+    DOWNLOAD_ROUTES+=("${PROXY_RANKED[@]}")
+    ROUTES_STAGE=2
+    return 0
+  fi
+  return 1
 }
 
 resolve_latest_release_tag() {
@@ -178,20 +268,29 @@ resolve_latest_release_tag() {
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
 
-  effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L "$(maybe_proxy_url "$latest_url")" 2>/dev/null || true)
-  tag="${effective_url##*/}"
-  # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
-  # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
-  if [[ "$tag" =~ $tag_pattern ]]; then
-    echo "$tag"
-    return 0
-  fi
+  # 1.7.7：逐路线尝试（每条路线内先重定向法、后 API 法），首个解析
+  # 出合格 tag 的路线即用；路线全败时按直选口径补测/续切一次。
+  ensure_download_routes
+  local prefix
+  while :; do
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$latest_url")" 2>/dev/null || true)
+      tag="${effective_url##*/}"
+      # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
+      # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
+      if [[ "$tag" =~ $tag_pattern ]]; then
+        echo "$tag"
+        return 0
+      fi
 
-  api_tag=$(curl -fsSL "$(maybe_proxy_url "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  if [[ "$api_tag" =~ $tag_pattern ]]; then
-    echo "$api_tag"
-    return 0
-  fi
+      api_tag=$(curl -fsSL --connect-timeout 5 --max-time 30 "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+      if [[ "$api_tag" =~ $tag_pattern ]]; then
+        echo "$api_tag"
+        return 0
+      fi
+    done
+    extend_download_routes || break
+  done
 
   return 1
 }
@@ -252,11 +351,12 @@ panel_version_cmp() {
   echo 0
 }
 
-# 根据版本号设置 compose 下载地址
+# 根据版本号设置 compose 下载地址（1.7.7：只存 canonical 地址，
+# 路线前缀在 download_verified_routed 实际下载时按路线表拼）
 set_compose_urls_by_version() {
   local version="$1"
-  DOCKER_COMPOSEV4_URL=$(maybe_proxy_url "https://github.com/${REPO}/releases/download/${version}/docker-compose-v4.yml")
-  DOCKER_COMPOSEV6_URL=$(maybe_proxy_url "https://github.com/${REPO}/releases/download/${version}/docker-compose-v6.yml")
+  DOCKER_COMPOSEV4_URL="https://github.com/${REPO}/releases/download/${version}/docker-compose-v4.yml"
+  DOCKER_COMPOSEV6_URL="https://github.com/${REPO}/releases/download/${version}/docker-compose-v6.yml"
 }
 
 ensure_compose_urls_initialized() {
@@ -897,11 +997,30 @@ download_verified() {
   return 0
 }
 
+# download_verified_routed <canonical URL> <dest>：按内置路线表逐个
+# 以 download_verified 下载（资产 + .sha256 同源同腿、fail-closed
+# 口径不变），首个成功即用；阶段 1 路线全败时补测代理排名续切。
+download_verified_routed() {
+  local url="$1"
+  local dest="$2"
+  ensure_download_routes
+  local prefix
+  while :; do
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      if download_verified "$(route_url "$prefix" "$url")" "$dest"; then
+        return 0
+      fi
+    done
+    extend_download_routes || break
+  done
+  return 1
+}
+
 download_panel_update_compose() {
   local compose_url="$1"
 
   UPDATE_COMPOSE_CANDIDATE=$(mktemp "$PANEL_DEPLOY_DIR/.docker-compose.yml.update.XXXXXX")
-  if ! download_verified "$compose_url" "$UPDATE_COMPOSE_CANDIDATE"; then
+  if ! download_verified_routed "$compose_url" "$UPDATE_COMPOSE_CANDIDATE"; then
     rm -f "$UPDATE_COMPOSE_CANDIDATE"
     UPDATE_COMPOSE_CANDIDATE=""
     echo "❌ 下载最新 Compose 配置失败，更新终止"
@@ -1282,7 +1401,6 @@ install_panel() {
     echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 .env 到 $env_bak，继续重装"
   fi
 
-  ask_proxy_config
   ensure_compose_urls_initialized || return 1
 
   check_docker
@@ -1312,7 +1430,7 @@ install_panel() {
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
   # R8-J-A 附带清理：不再靠 set -e 隐式中止，显式判返回值并给出
   # 路径信息，与更新路径（download_panel_update_compose）的口径对齐。
-  if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+  if ! download_verified_routed "$DOCKER_COMPOSE_URL" docker-compose.yml; then
     echo "❌ 下载 Compose 配置失败，安装终止: $DOCKER_COMPOSE_URL"
     return 1
   fi
@@ -1392,7 +1510,6 @@ update_panel() {
     return 1
   }
   resolve_panel_deployment || return 1
-  ask_proxy_config
   validate_panel_update_environment || return 1
 
   CURRENT_DB_TYPE=$(get_current_db_type)
@@ -1507,12 +1624,11 @@ migrate_to_postgres() {
 
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "⚠️ 未找到 docker-compose.yml 文件，正在下载..."
-    ask_proxy_config
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
     # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
-    if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+    if ! download_verified_routed "$DOCKER_COMPOSE_URL" docker-compose.yml; then
       echo "❌ 下载 Compose 配置失败，迁移终止: $DOCKER_COMPOSE_URL"
       return 1
     fi
@@ -1649,12 +1765,11 @@ uninstall_panel() {
 
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "⚠️ 未找到 docker-compose.yml 文件，正在下载以完成卸载..."
-    ask_proxy_config
     ensure_compose_urls_initialized || return 1
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
     # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
-    if ! download_verified "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+    if ! download_verified_routed "$DOCKER_COMPOSE_URL" docker-compose.yml; then
       echo "❌ 下载 Compose 配置失败，卸载终止: $DOCKER_COMPOSE_URL"
       return 1
     fi
@@ -1677,7 +1792,7 @@ uninstall_panel() {
 # 主逻辑
 main() {
   # F-006: 自更新检查放在 main 入口（自更新依赖 resolve_version /
-  # maybe_proxy_url / download_verified，均已在上文定义）。放在 main 内
+  # 路由助手 / download_verified，均已在上文定义）。放在 main 内
   # 而非顶层还有一层考虑：测试夹具以「截断到 main 之前 + source」方式
   # 加载本脚本的函数，顶层调用会误入夹具；main 不会被夹具调用。
   if [ "${SELF_UPDATE_SKIP:-}" != "1" ]; then
