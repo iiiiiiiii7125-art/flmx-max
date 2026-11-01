@@ -212,6 +212,10 @@ func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow i
 	})
 }
 
+// UpdateUserPassword 设置新哈希并推进 password_changed_at——推进即
+// 吊销该用户全部既有会话（中间件/WS 以 IatMs<=PasswordChangedAt
+// 判失效）。只适用于真实凭据变更语义；legacy 哈希透明迁移（密码
+// 本身未变更）禁用本方法，须走 MigrateUserPasswordHash（R4B01-002）。
 func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -222,6 +226,27 @@ func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64)
 			"pwd":                 pwdHash,
 			"password_changed_at": now,
 			"updated_time":        sql.NullInt64{Int64: now, Valid: true},
+		}).Error
+}
+
+// MigrateUserPasswordHash 只替换存储哈希，不推进 password_changed_at
+// （R4B01-002 机制根治）。专供 legacy 哈希透明迁移（rehash）：密码
+// 本身未变更，纯存储格式升级不得产生会话吊销副作用——
+// password_changed_at 只由真实凭据变更事件推进（本人改密
+// UpdateUserNameAndPassword、管理员重置 UpdateUserWithPassword /
+// UpdateUserPassword、RevokeUserSessions）。旧实现两条 rehash 路径
+// 都走 UpdateUserPassword：login 路径靠签发补偿掩盖，sub_store 路径
+// 不签发任何 token、无从补偿，存量 legacy 用户经其拉取一次订阅
+// 用量即被吊销全部既有面板会话，两面口径分裂。
+func (r *Repository) MigrateUserPasswordHash(userID int64, pwdHash string, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"pwd":          pwdHash,
+			"updated_time": sql.NullInt64{Int64: now, Valid: true},
 		}).Error
 }
 
