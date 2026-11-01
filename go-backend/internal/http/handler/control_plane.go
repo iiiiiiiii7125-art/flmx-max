@@ -110,9 +110,9 @@ func (h *Handler) buildDiagnosisStreamStartItems(workItems []diagnosisWorkItem) 
 				}
 			}
 		}
-		if targetPort <= 0 {
-			targetPort = 443
-		}
+		// L4-07：占位项也不编造端口——链行无真实监听口时保持 0，
+		// 最终结果项会以失败＋原因替换本占位项（旧实现填 443，与
+		// resolveChainProbeTarget 的虚构回退同病）。
 
 		nodeName := fmt.Sprintf("node_%d", workItem.fromNodeID)
 		if node, err := h.cachedNode(nodeCache, workItem.fromNodeID); err == nil && strings.TrimSpace(node.Name) != "" {
@@ -629,12 +629,14 @@ func (h *Handler) rebindForwardServiceOnSelfOccupiedPort(forward *forwardRecord,
 		return errors.New("invalid forward port")
 	}
 
-	hasOtherForward, err := h.repo.HasOtherForwardOnNodePort(node.ID, port, forward.ID)
+	conflict, err := h.repo.FindOtherForwardOnNodePort(node.ID, port, forward.ID)
 	if err != nil {
 		return err
 	}
-	if hasOtherForward {
-		return fmt.Errorf("端口 %d 已被其他转发占用", port)
+	if conflict != nil {
+		// L9 观察 2：四源判重命中的未必是转发，按来源措辞（助手在
+		// mutations.go），不误报「已被其他转发占用」。
+		return errors.New(forwardPortConflictMessage(node, port, conflict))
 	}
 
 	bases, err := h.forwardServiceBaseCandidates(forward)
@@ -989,7 +991,7 @@ func (h *Handler) diagnoseForwardRuntime(ctx context.Context, forward *forwardRe
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if payload, handled, err := h.diagnoseNftablesForwardRuntime(forward); handled || err != nil {
+	if payload, handled, err := h.diagnoseNftablesForwardRuntime(ctx, forward); handled || err != nil {
 		return payload, err
 	}
 	forwardName, workItems, err := h.prepareForwardDiagnosis(forward)
@@ -1007,7 +1009,7 @@ func (h *Handler) diagnoseForwardRuntime(ctx context.Context, forward *forwardRe
 	return payload, nil
 }
 
-func (h *Handler) diagnoseNftablesForwardRuntime(forward *forwardRecord) (map[string]interface{}, bool, error) {
+func (h *Handler) diagnoseNftablesForwardRuntime(ctx context.Context, forward *forwardRecord) (map[string]interface{}, bool, error) {
 	if forward == nil {
 		return nil, false, errForwardNotFound
 	}
@@ -1025,9 +1027,16 @@ func (h *Handler) diagnoseNftablesForwardRuntime(forward *forwardRecord) (map[st
 	if err != nil {
 		return nil, true, err
 	}
-	results, err := h.buildNftablesForwardDiagnosisResults(forward, entryNodeIDs[0], targets)
-	if err != nil {
-		return nil, true, err
+	// L4-05：逐个入口节点诊断。此前只查 entryNodeIDs[0]，多入口
+	// 转发其余入口的规则缺失/失败完全不检，诊断全绿也可能有入口
+	// 未下发。
+	results := make([]map[string]interface{}, 0, len(entryNodeIDs))
+	for _, nodeID := range entryNodeIDs {
+		nodeResults, err := h.buildNftablesForwardDiagnosisResults(ctx, forward, nodeID, targets)
+		if err != nil {
+			return nil, true, err
+		}
+		results = append(results, nodeResults...)
 	}
 	payload := map[string]interface{}{
 		"forwardName": forward.Name,
@@ -1037,7 +1046,25 @@ func (h *Handler) diagnoseNftablesForwardRuntime(forward *forwardRecord) (map[st
 	return payload, true, nil
 }
 
-func (h *Handler) buildNftablesForwardDiagnosisResults(forward *forwardRecord, nodeID int64, targets []diagnosisTarget) ([]map[string]interface{}, error) {
+// parseNftBindingProtocols 解析 binding 的协议集（落库形态
+// "tcp,udp"），只认 tcp/udp；空/非法时按模型默认双协议。
+func parseNftBindingProtocols(raw string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, 2)
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.ToLower(strings.TrimSpace(part))
+		if (p == "tcp" || p == "udp") && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"tcp", "udp"}
+	}
+	return out
+}
+
+func (h *Handler) buildNftablesForwardDiagnosisResults(ctx context.Context, forward *forwardRecord, nodeID int64, targets []diagnosisTarget) ([]map[string]interface{}, error) {
 	if h == nil || h.repo == nil {
 		return nil, errors.New("handler not initialized")
 	}
@@ -1063,7 +1090,6 @@ func (h *Handler) buildNftablesForwardDiagnosisResults(forward *forwardRecord, n
 
 	status := "missing"
 	message := "nftables 规则未下发"
-	success := false
 	inPort := 0
 	protocols := ""
 	targetAddr := strings.TrimSpace(forward.RemoteAddr)
@@ -1077,31 +1103,16 @@ func (h *Handler) buildNftablesForwardDiagnosisResults(forward *forwardRecord, n
 		if status == "" {
 			status = "pending"
 		}
-		if status == runtimenft.StatusApplied {
-			success = true
-			message = "nftables 规则已下发"
-		} else if strings.TrimSpace(binding.LastError) != "" {
-			message = binding.LastError
-		} else {
-			message = "nftables 规则未完成下发"
+		if status != runtimenft.StatusApplied {
+			if strings.TrimSpace(binding.LastError) != "" {
+				message = binding.LastError
+			} else {
+				message = "nftables 规则未完成下发"
+			}
 		}
 	}
 
-	packetLoss := 100
-	if success {
-		packetLoss = 0
-	}
-	result := map[string]interface{}{
-		"success":       success,
-		"nodeName":      node.Name,
-		"nodeId":        strconv.FormatInt(nodeID, 10),
-		"targetIp":      target.IP,
-		"targetPort":    target.Port,
-		"description":   fmt.Sprintf("nftables规则(%s)->目标(%s)", node.Name, defaultString(target.Address, targetAddr)),
-		"averageTime":   0,
-		"packetLoss":    packetLoss,
-		"message":       message,
-		"fromChainType": 1,
+	nftFields := map[string]interface{}{
 		"forwardMode":   "nftables",
 		"nftRuleStatus": status,
 		"nftRuleHash":   ruleHash,
@@ -1109,7 +1120,88 @@ func (h *Handler) buildNftablesForwardDiagnosisResults(forward *forwardRecord, n
 		"protocols":     protocols,
 		"targetAddr":    targetAddr,
 	}
-	return []map[string]interface{}{result}, nil
+
+	// L4-04：规则未 applied 时该入口的转发路径本身就不成立，如实
+	// 报失败＋规则状态原因（averageTime/packetLoss 取失败项的既有
+	// 约定值，与探测失败项同形），不做连通探测、更不报成功。
+	if status != runtimenft.StatusApplied {
+		result := map[string]interface{}{
+			"success":       false,
+			"nodeName":      node.Name,
+			"nodeId":        strconv.FormatInt(nodeID, 10),
+			"targetIp":      target.IP,
+			"targetPort":    target.Port,
+			"description":   fmt.Sprintf("nftables规则(%s)->目标(%s)", node.Name, defaultString(target.Address, targetAddr)),
+			"averageTime":   0,
+			"packetLoss":    100,
+			"message":       message,
+			"fromChainType": 1,
+		}
+		for k, v := range nftFields {
+			result[k] = v
+		}
+		return []map[string]interface{}{result}, nil
+	}
+
+	// L4-04：规则已下发只说明数据面规则在位，不等于路径可达——旧
+	// 实现据此直接报 success 并伪造 packetLoss=0/averageTime=0，
+	// 与 gost 真实探测同表呈现，规则在位但目标不通时假阳性误导
+	// 排障。现在按 binding 协议集对每个目标做与 gost 入口→目标腿
+	// 相同的真实探测，success/averageTime/packetLoss 全部来自探测
+	// 结果，规则状态经 nftRuleStatus 与 message 前缀单独呈现。
+	workItems := make([]diagnosisWorkItem, 0, len(targets)*2)
+	for _, tgt := range targets {
+		description := fmt.Sprintf("入口(%s)->目标(%s)", node.Name, defaultString(tgt.Address, targetAddr))
+		for _, proto := range parseNftBindingProtocols(protocols) {
+			workItems = append(workItems, diagnosisWorkItem{
+				fromNodeID:  nodeID,
+				targetIP:    tgt.IP,
+				targetPort:  tgt.Port,
+				description: fmt.Sprintf("%s · %s", description, strings.ToUpper(proto)),
+				protocol:    proto,
+				metadata: map[string]interface{}{
+					"fromChainType": 1,
+					"protocol":      proto,
+				},
+			})
+		}
+	}
+	results := h.runDiagnosisWorkItems(ctx, workItems, nil)
+	for _, item := range results {
+		for k, v := range nftFields {
+			item[k] = v
+		}
+		if probeMsg := strings.TrimSpace(asString(item["message"])); probeMsg != "" {
+			item["message"] = "nftables 规则已下发；" + probeMsg
+		} else {
+			item["message"] = "nftables 规则已下发"
+		}
+	}
+	return results, nil
+}
+
+// appendTargetDiagnosisWorkItems 为一条「节点→目标」腿生成 TCP 与
+// UDP 两个探测项（L4-06）。转发恒双协议服务目标：gost 面
+// buildForwardServiceConfigs 固定建 tcp+udp 两条服务、nftables 规则
+// 同口径。此前目标腿硬编码 TCP 探测，UDP-only 目标（DNS、游戏/语音
+// 服务器）必报失败而 UDP 转发实际正常——假阴性误导排障。两项以
+// description 后缀与 metadata.protocol 区分，各自呈现本协议的真实
+// 探测结果，不合并、不互相掩盖。
+func appendTargetDiagnosisWorkItems(workItems []diagnosisWorkItem, fromNodeID int64, target diagnosisTarget, description string, fromChainType int) []diagnosisWorkItem {
+	for _, proto := range []string{"tcp", "udp"} {
+		workItems = append(workItems, diagnosisWorkItem{
+			fromNodeID:  fromNodeID,
+			targetIP:    target.IP,
+			targetPort:  target.Port,
+			description: fmt.Sprintf("%s · %s", description, strings.ToUpper(proto)),
+			protocol:    proto,
+			metadata: map[string]interface{}{
+				"fromChainType": fromChainType,
+				"protocol":      proto,
+			},
+		})
+	}
+	return workItems
 }
 
 func (h *Handler) prepareForwardDiagnosis(forward *forwardRecord) (string, []diagnosisWorkItem, error) {
@@ -1145,16 +1237,7 @@ func (h *Handler) prepareForwardDiagnosis(forward *forwardRecord) (string, []dia
 		for _, inNode := range inNodes {
 			for _, target := range targets {
 				description := fmt.Sprintf("入口(%s)->目标(%s)", inNode.NodeName, target.Address)
-				workItems = append(workItems, diagnosisWorkItem{
-					fromNodeID:  inNode.NodeID,
-					targetIP:    target.IP,
-					targetPort:  target.Port,
-					description: description,
-					protocol:    "tcp",
-					metadata: map[string]interface{}{
-						"fromChainType": 1,
-					},
-				})
+				workItems = appendTargetDiagnosisWorkItems(workItems, inNode.NodeID, target, description, 1)
 			}
 		}
 	case 2:
@@ -1239,32 +1322,14 @@ func (h *Handler) prepareForwardDiagnosis(forward *forwardRecord) (string, []dia
 		for _, outNode := range outNodes {
 			for _, target := range targets {
 				description := fmt.Sprintf("出口(%s)->目标(%s)", outNode.NodeName, target.Address)
-				workItems = append(workItems, diagnosisWorkItem{
-					fromNodeID:  outNode.NodeID,
-					targetIP:    target.IP,
-					targetPort:  target.Port,
-					description: description,
-					protocol:    "tcp",
-					metadata: map[string]interface{}{
-						"fromChainType": 3,
-					},
-				})
+				workItems = appendTargetDiagnosisWorkItems(workItems, outNode.NodeID, target, description, 3)
 			}
 		}
 	default:
 		for _, inNode := range inNodes {
 			for _, target := range targets {
 				description := fmt.Sprintf("入口(%s)->目标(%s)", inNode.NodeName, target.Address)
-				workItems = append(workItems, diagnosisWorkItem{
-					fromNodeID:  inNode.NodeID,
-					targetIP:    target.IP,
-					targetPort:  target.Port,
-					description: description,
-					protocol:    "tcp",
-					metadata: map[string]interface{}{
-						"fromChainType": 1,
-					},
-				})
+				workItems = appendTargetDiagnosisWorkItems(workItems, inNode.NodeID, target, description, 1)
 			}
 		}
 	}
@@ -1778,14 +1843,16 @@ func resolveChainProbeTarget(fromNode, targetNode *nodeRecord, preferredPort int
 	if host == "" {
 		return "", 0, errors.New("目标节点地址为空")
 	}
-	port := preferredPort
-	if port <= 0 {
-		port = firstPortFromRange(targetNode.PortRange)
+	// L4-07：探测口只能是链行落库的真实监听口。此前 port≤0 时回退
+	// 「节点端口范围首口 → 443」：与该跳实际监听无关，探测结果（成功
+	// 可能是 443 上无关服务的应答、失败与链路健康无关）却以正常腿
+	// 呈现。正常落库的链行恒有口（replaceTunnelChainsTx 兜底选口），
+	// 回退只在存量异常行/联邦待预留行触发——这些行本就没有可探测的
+	// 真实监听口，显式报错由调用方呈现为该腿失败＋原因，不编造目标。
+	if preferredPort <= 0 {
+		return "", 0, errors.New("链路段未分配监听端口，无法探测")
 	}
-	if port <= 0 {
-		port = 443
-	}
-	return host, port, nil
+	return host, preferredPort, nil
 }
 
 func firstPortFromRange(portRange string) int {

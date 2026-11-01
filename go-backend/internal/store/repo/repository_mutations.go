@@ -581,6 +581,57 @@ func (r *Repository) UpdateNodeExpiryReminderDismissed(nodeID int64, dismissed i
 	return nil
 }
 
+// SoleSegmentTunnel 表示一条隧道在某个段角色（入口/出口）上只剩
+// 指定节点一行：删掉该节点后隧道在该角色上再无节点、结构不完整。
+type SoleSegmentTunnel struct {
+	TunnelID   int64
+	TunnelName string
+	ChainType  int // 1 = 入口，3 = 出口
+}
+
+// ListSoleSegmentTunnelsForNode 返回「该节点是唯一入口 / 唯一出口」
+// 的隧道清单（L4-03）。DeleteNodeCascade 会删掉该节点全部
+// ChainTunnel 行；此前删节点回执只披露跨节点入站引用
+// （brokenReferrers），被删节点是某隧道唯一入口/出口时无任何点名，
+// 隧道变残缺只能靠后续 apply/诊断报错显形。本查询供 handler 在级
+// 联删除前点名披露（守卫面，与 R3X-015 同口径：查询失败由调用方
+// 中止删除）。
+func (r *Repository) ListSoleSegmentTunnelsForNode(nodeID int64) ([]SoleSegmentTunnel, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []struct {
+		TunnelID  int64  `gorm:"column:tunnel_id"`
+		ChainType string `gorm:"column:chain_type"`
+	}
+	if err := r.db.Model(&model.ChainTunnel{}).
+		Select("DISTINCT tunnel_id, chain_type").
+		Where("node_id = ? AND chain_type IN ?", nodeID, []string{"1", "3"}).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]SoleSegmentTunnel, 0, len(rows))
+	for _, row := range rows {
+		var others int64
+		if err := r.db.Model(&model.ChainTunnel{}).
+			Where("tunnel_id = ? AND chain_type = ? AND node_id <> ?", row.TunnelID, row.ChainType, nodeID).
+			Count(&others).Error; err != nil {
+			return nil, err
+		}
+		if others > 0 {
+			continue
+		}
+		chainType := 1
+		if row.ChainType == "3" {
+			chainType = 3
+		}
+		var name string
+		_ = r.db.Model(&model.Tunnel{}).Select("name").Where("id = ?", row.TunnelID).Scan(&name).Error
+		out = append(out, SoleSegmentTunnel{TunnelID: row.TunnelID, TunnelName: name, ChainType: chainType})
+	}
+	return out, nil
+}
+
 func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
