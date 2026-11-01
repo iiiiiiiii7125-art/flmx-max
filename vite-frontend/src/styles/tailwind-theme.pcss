@@ -1,5 +1,5 @@
 @theme inline {
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -81,4 +81,50 @@
   --color-warning-700: var(--warning-700);
   --color-warning-800: var(--warning-800);
   --color-warning-900: var(--warning-900);
+}
+
+/* Refined Glass design tokens: system font stack, converged type scale
+   (12/13/14/16/20/24), radii (controls 12px, cards 20px), one soft
+   single-layer shadow scale, one motion curve. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    Arial, sans-serif;
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.5rem;
+
+  --shadow-sm: 0 1px 2px rgb(24 24 27 / 0.05);
+  --shadow-md: 0 6px 20px rgb(24 24 27 / 0.08);
+  --shadow-lg: 0 16px 40px rgb(24 24 27 / 0.12);
+
+  --ease-refined: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  --animate-fade-in: fade-in 0.2s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
 }
