@@ -1622,7 +1622,7 @@ func (w *WebSocketReporter) sendUpgradeProgress(stage string, percent int, messa
 // mirror burned the whole budget before the direct fallback ran).
 // Routing is now probe-selected at download time from the built-in
 // candidate set (download.MirrorPrefixes + direct): see
-// probeUpgradeRoute and download.RankRoutes. The config.json field
+// probeUpgradeRoute and download.Plan. The config.json field
 // itself is left on disk untouched (updateLocalConfigJSON preserves
 // unknown fields); it simply has no consumer anymore.
 

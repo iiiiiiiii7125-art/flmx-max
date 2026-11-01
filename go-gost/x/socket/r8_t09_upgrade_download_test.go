@@ -30,10 +30,10 @@ import (
 //
 // KU4 (1.7.7): the header-stage GET helper these tests originally
 // drove (getWithUpgradeProxyFallbackCtx) is deleted — route
-// policy now lives in download.TryRoutes and the attempt unit is
+// policy now lives in download.TryPlan and the attempt unit is
 // GET+body (downloadUpgradeAttempt). The tests below keep every
 // T-09 behavioral assertion, re-expressed against
-// downloadUpgradeBinary with explicit route lists.
+// downloadUpgradeBinary with explicit static route plans.
 
 // dribbleUpgradeServer serves payload slowly: headers and the first
 // chunk immediately, then one chunk per gap.
