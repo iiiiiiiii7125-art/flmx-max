@@ -164,10 +164,10 @@ jobs:
   # 的 fib 探测 F-091、TestNftScriptWhitelist 的 nft -c 可用性探测），
   # 环境不支持时只跳实机腿、脚本内容断言照常执行。FLMX 自研包必测
   # 清单（不得再被排除）：x/socket、x/kernel、x/bypass、x/service、
-  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余 177 个
+  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余 176 个
   # 包无任何测试文件（继承上游的协议处理面包），属已知缺口、非本 job
   # 引入，新增 FLMX 改动落到无测试包时须同步补测试。
-  # [K11-COUNT:x-tested=30] [K11-COUNT:x-untested=177] 上行包计数由
+  # [K11-COUNT:x-tested=31] [K11-COUNT:x-untested=176] 上行包计数由
   # scripts/check-doc-consistency.sh 第 10 项以 go list 机械对账
   # （R3-K11 / X02-002），增减包或测试文件须同步更新数字与标记。
   # 已知状态（B7 落地时）：fix 分支基线不含 B4，go-backend 全量测试含
