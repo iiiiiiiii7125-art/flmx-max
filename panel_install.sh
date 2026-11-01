@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261101.01"
+SCRIPT_VERSION="20261101.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -734,6 +734,110 @@ EOF
   fi
 }
 
+# 配置订阅前置域名（Caddy 自动 HTTPS）：为订阅拉取另设一个前置域名，
+# 与面板域名反代到同一前端端口，配合 Cloudflare 橙云承接订阅拉取，
+# 绕开部分运营商对面板域名的阻断/烂路由。源站侧只是在现有 Caddyfile
+# 上追加一个站点块（手工流程已在生产验证：追加→自动签证书→直连 200）。
+# SCR-020: 与菜单 5 的整文件覆盖不同，本函数是追加语义：必须幂等
+# （同名站点块已存在即拒绝重复追加）且先校验后生效（caddy validate
+# 不过即回滚备份、不 restart），否则重复运行会写出同名站点块、坏配置
+# 会在 restart 时连面板域名的反代一起打断。
+setup_subscription_front_domain() {
+  echo "🌐 配置订阅前置域名"
+  echo ""
+  read -p "请输入订阅前置域名（如 sub.example.com）: " SUB_DOMAIN
+  SUB_DOMAIN=$(echo "$SUB_DOMAIN" | tr -d ' \n\r\t')
+  if [ -z "$SUB_DOMAIN" ]; then
+    echo "❌ 域名不能为空"
+    return 1
+  fi
+  # 字符集校验同 SCR-019：非法字符串会原样写入 Caddyfile 导致 caddy
+  # 加载失败，写文件前直接拒绝。
+  if [[ ! "$SUB_DOMAIN" =~ ^[A-Za-z0-9.*-]+$ ]]; then
+    echo "❌ 域名含非法字符（仅允许字母/数字/./-/*）：$SUB_DOMAIN"
+    return 1
+  fi
+
+  # 前置检查：前置域名复用面板的 Caddy 与前端端口，要求菜单 5 已跑过
+  # （Caddyfile 存在且至少含一个站点块）。CADDYFILE_PATH 仅供测试夹具
+  # 覆盖，默认即现行硬编码路径，菜单 5 不受影响。
+  local caddyfile="${CADDYFILE_PATH:-/etc/caddy/Caddyfile}"
+  if [ ! -f "$caddyfile" ]; then
+    echo "❌ 未找到 $caddyfile ，请先运行菜单 5「配置域名反向代理（自动 HTTPS）」后再配置订阅前置域名"
+    return 1
+  fi
+  if ! awk '/\{[[:space:]]*$/ { line = $0; sub(/\{[[:space:]]*$/, "", line); if (line ~ /[^[:space:],]/) found = 1 } END { exit(found ? 0 : 1) }' "$caddyfile"; then
+    echo "❌ $caddyfile 中未找到任何站点块，请先运行菜单 5「配置域名反向代理（自动 HTTPS）」"
+    return 1
+  fi
+  # 幂等：输入域名已是任一站点块的地址（含面板域名本身、带 scheme/端口
+  # 的写法）时拒绝重复追加。
+  if awk -v d="$SUB_DOMAIN" '/\{[[:space:]]*$/ { line = $0; sub(/\{[[:space:]]*$/, "", line); n = split(line, parts, /[[:space:],]+/); for (i = 1; i <= n; i++) { tok = parts[i]; sub(/^https?:\/\//, "", tok); sub(/:[0-9]+$/, "", tok); if (tok == d) found = 1 } } END { exit(found ? 0 : 1) }' "$caddyfile"; then
+    echo "❌ 域名 $SUB_DOMAIN 已存在于 $caddyfile 的站点块中，请勿重复配置"
+    return 1
+  fi
+
+  # 前端端口解析与菜单 5 完全一致（SCR-003）：独立流程不经过
+  # get_config_params，从部署目录 .env 读取实际前端端口，找不到回退 6366。
+  local _env_file _port
+  if [[ -z "${FRONTEND_PORT:-}" ]]; then
+    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
+      [[ "$_env_file" == "/.env" ]] && continue
+      _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
+      if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
+        FRONTEND_PORT="$_port"
+        echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
+        break
+      fi
+    done
+  fi
+
+  # 写前备份（命名沿用菜单 5），追加站点块而非整文件覆盖，原有站点
+  # 块（面板域名等）逐字保留。
+  echo "📝 配置 Caddy..."
+  local caddyfile_bak="${caddyfile}.bak.$(date +%s)"
+  cp "$caddyfile" "$caddyfile_bak"
+  echo "🗄️  已备份现有配置到 $caddyfile_bak"
+  cat >> "$caddyfile" <<EOF
+$SUB_DOMAIN {
+    reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
+}
+EOF
+
+  # SCR-020: 先校验后生效。validate 不过即回滚备份并退出，此时尚未
+  # restart，正在运行的 Caddy 仍用旧配置，不受影响。caddy 不在 PATH
+  # 时跳过校验，靠下方 restart + is-active 兜底（同菜单 5）。
+  if command -v caddy &> /dev/null; then
+    if ! caddy validate --config "$caddyfile" > /dev/null 2>&1; then
+      echo "❌ Caddy 配置校验失败，已回滚到 $caddyfile_bak ，未做任何生效变更"
+      cp "$caddyfile_bak" "$caddyfile"
+      return 1
+    fi
+    echo "✅ Caddy 配置校验通过"
+  fi
+
+  systemctl restart caddy
+  sleep 3
+
+  if systemctl is-active --quiet caddy; then
+    echo ""
+    echo "🎉 订阅前置域名配置完成"
+    echo "🌐 前置地址: https://$SUB_DOMAIN"
+    echo "📜 HTTPS 证书由 Caddy 自动申请和续期"
+    echo ""
+    echo "⚠️  后续步骤（缺一不可）："
+    echo "   1）在 Cloudflare 为 $SUB_DOMAIN 添加 A 记录，指向本机公网 IP（与面板域名相同），"
+    echo "      先保持灰云（仅 DNS），待 Caddy 完成证书签发后再开启橙云（代理）。"
+    echo "   2）在 Cloudflare 为路径 /api/v1/open_api/sub/* 创建 Cache Rule 并设置为绕过缓存，"
+    echo "      避免订阅内容被 CDN 缓存。"
+    echo "   3）在面板设置「订阅前置地址」中填入 https://$SUB_DOMAIN ，"
+    echo "      之后订阅链接即可按该前置地址复制给用户。"
+  else
+    echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
+    return 1
+  fi
+}
+
 # 显示菜单
 show_menu() {
   echo "==============================================="
@@ -745,7 +849,8 @@ show_menu() {
   echo "3. 卸载面板"
   echo "4. 迁移到 PostgreSQL"
   echo "5. 配置域名反向代理（自动 HTTPS）"
-  echo "6. 退出"
+  echo "6. 配置订阅前置域名（自动 HTTPS）"
+  echo "7. 退出"
   echo "==============================================="
 }
 
@@ -1811,7 +1916,7 @@ main() {
   # 显示交互式菜单
   while true; do
     show_menu
-    read -p "请输入选项 (1-6): " choice
+    read -p "请输入选项 (1-7): " choice
 
     case $choice in
       1)
@@ -1840,12 +1945,17 @@ main() {
         exit 0
         ;;
       6)
+        setup_subscription_front_domain
+        delete_self
+        exit 0
+        ;;
+      7)
         echo "👋 退出脚本"
         delete_self
         exit 0
         ;;
       *)
-        echo "❌ 无效选项，请输入 1-6"
+        echo "❌ 无效选项，请输入 1-7"
         echo ""
         ;;
     esac

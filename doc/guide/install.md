@@ -45,7 +45,8 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 3. 卸载面板
 4. 迁移到 PostgreSQL
 5. 配置域名反向代理（自动 HTTPS）
-6. 退出
+6. 配置订阅前置域名（自动 HTTPS）
+7. 退出
 
 
 ## 节点端
