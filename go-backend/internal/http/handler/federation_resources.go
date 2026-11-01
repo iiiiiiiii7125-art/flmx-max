@@ -333,8 +333,9 @@ func (h *Handler) applyPeerShareResource(item repo.PeerShareResource) (ws.Comman
 			return result, err
 		}
 		if item.Kind == "service" {
-			// F-UDP-4 / VB2-002：下发前归一化 udp listener metadata，
-			// 防对端推送的裸 udp relay 服务重建 F-UDP-1 坏形态。
+			// F-UDP-4 / VB2-002 + LB-F-P3-1：下发前归一化 udp listener
+			// metadata 与 relay handler bind，防对端推送的裸 relay
+			// 服务重建 F-UDP-1 坏形态、或 SOCKS5-associate 被门控拒。
 			normalizePeerServiceUDPListenerMetadata(config)
 			result, err = h.sendNodeCommand(item.NodeID, "UpdateService", []interface{}{config}, false, false)
 		} else {
@@ -762,7 +763,35 @@ func normalizeTunnelProtocol(protocol string) string {
 // handler 为 relay 时 keepAlive 强制为 true（relay-over-UDP 无
 // keepAlive 不是合法形态，显式 false 同样归一）。只改下发副本，
 // 存量 Config 原文不动；每次 apply 重演同一纯函数，结果确定。
+//
+// LB-F-P3-1: 同一透传面还缺 handler 侧的一半——relay handler 的
+// BIND 命令（含 SOCKS5 UDP associate）在 x 侧被 metadata bind
+// 门控，面板自身生成面已由 KU9/KU10 在两个 builder 无条件开启；
+// 对端以 <1.7.7 生成或手工构造的 relay 服务缺 bind 时，经此下发
+// 后 associate 会被逐跳以 "BIND is disabled" 拒掉，且存量重新
+// apply 只是重演归一化、同样补不上。故在同一收口补齐：handler
+// 为 relay 且 metadata 缺 bind 键（键名大小写不敏感判定）时置
+// true，metadata 缺失则建；已有 bind（对端显式值）不动、其他键
+// 合并保留。此归一与 listener 类型无关（BIND 门控不分监听协议），
+// 故在 listener 门之前先行；非 relay 的 handler 逐字不变。
 func normalizePeerServiceUDPListenerMetadata(config map[string]interface{}) {
+	if handler, _ := config["handler"].(map[string]interface{}); handler != nil &&
+		strings.EqualFold(strings.TrimSpace(asString(handler["type"])), "relay") {
+		hmeta, _ := handler["metadata"].(map[string]interface{})
+		if hmeta == nil {
+			hmeta = map[string]interface{}{}
+			handler["metadata"] = hmeta
+		}
+		hasBind := false
+		for key := range hmeta {
+			if strings.EqualFold(key, "bind") {
+				hasBind = true
+			}
+		}
+		if !hasBind {
+			hmeta["bind"] = true
+		}
+	}
 	listener, ok := config["listener"].(map[string]interface{})
 	if !ok {
 		return
