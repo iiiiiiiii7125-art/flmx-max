@@ -286,6 +286,12 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载失败: HTTP %d (%s)", resp.StatusCode, url)
 	}
+	// RV2-01: with the total known, the watchdog's trickle
+	// judgment projects against the caller's deadline instead of
+	// the fixed floor (see download.Watcher.SetGoal).
+	if resp.ContentLength > 0 {
+		watcher.SetGoal(resp.ContentLength)
+	}
 	n, err := io.Copy(watcher.Writer(w), io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return watchFailure(watcher, "下载中断", err)
@@ -504,10 +510,14 @@ func corroborateAnchorPlan(winner download.Route) *download.Plan {
 // extracts the digest. Verdicts: a second route answering with a
 // DIFFERENT digest is a hard failure (the caller must refuse the
 // install); a second route not answering at all (every other
-// route dead) degrades to the single anchor with a log line —
-// single-route environments keep today's trust level instead of
-// losing installs, and the residual risk is exactly that case.
-func corroborateAnchorDigest(ctx context.Context, winner download.Route, directURL string, fetchOne func(context.Context, *download.Plan) (string, error), want string) error {
+// route dead) degrades to the single anchor — single-route
+// environments keep today's trust level instead of losing
+// installs, and the residual risk is exactly that case. The
+// degradation is announced through note, the caller's
+// panel-visible log surface (RV2-03: a security control silently
+// weakening must not exist only in the agent's stdout); a nil
+// note falls back to stdout for callers without a surface.
+func corroborateAnchorDigest(ctx context.Context, winner download.Route, directURL string, fetchOne func(context.Context, *download.Plan) (string, error), want string, note func(string)) error {
 	alt := corroborateAnchorPlan(winner)
 	if alt == nil {
 		return nil
@@ -516,7 +526,12 @@ func corroborateAnchorDigest(ctx context.Context, winner download.Route, directU
 	defer cancel()
 	got, err := fetchOne(actx, alt)
 	if err != nil {
-		fmt.Printf("⚠️ 校验锚跨线路复核不可用（其他线路均未给出校验值），按单锚继续: %v\n", err)
+		msg := fmt.Sprintf("跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（%v）", err)
+		if note != nil {
+			note(msg)
+		} else {
+			fmt.Printf("⚠️ %s\n", msg)
+		}
 		return nil
 	}
 	if got != want {
@@ -539,7 +554,9 @@ type githubReleaseJSON struct {
 
 // resolveGitHub fills in the download URL and digest of a release asset from
 // the GitHub API (the asset "digest" field is "sha256:<hex>").
-func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, digest string, err error) {
+// note is the caller's panel-visible log surface for the anchor
+// corroboration's degradation notice (RV2-03); nil logs to stdout.
+func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string, note func(string)) (url, digest string, err error) {
 	path := "latest"
 	if g.Tag != "" {
 		path = "tags/" + g.Tag
@@ -581,7 +598,7 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 		}
 		_, altDigest, err := releaseAssetDigest(&altRel, name)
 		return altDigest, err
-	}, digest); err != nil {
+	}, digest, note); err != nil {
 		return "", "", err
 	}
 	return url, digest, nil
@@ -604,8 +621,10 @@ func releaseAssetDigest(rel *githubReleaseJSON, name string) (string, string, er
 }
 
 // install downloads, verifies and unpacks a binary into binDir. It refuses to
-// install anything whose SHA-256 it cannot establish.
-func install(d *Download, binDir string) error {
+// install anything whose SHA-256 it cannot establish. note is the
+// caller's panel-visible log surface for the anchor
+// corroboration's degradation notice (RV2-03); nil logs to stdout.
+func install(d *Download, binDir string, note func(string)) error {
 	arch, err := resolveArch(d)
 	if err != nil {
 		return err
@@ -618,7 +637,7 @@ func install(d *Download, binDir string) error {
 	defer cancel()
 
 	if d.GitHub != nil && (strings.Contains(url, "{VERSION}") || url == "" || (want == "" && sumURL == "")) {
-		ghURL, digest, err := resolveGitHub(ctx, d.GitHub, arch)
+		ghURL, digest, err := resolveGitHub(ctx, d.GitHub, arch, note)
 		if err != nil {
 			return err
 		}
@@ -679,7 +698,7 @@ func install(d *Download, binDir string) error {
 				return "", fmt.Errorf("校验文件中没有 SHA256")
 			}
 			return altWant, nil
-		}, want); err != nil {
+		}, want, note); err != nil {
 			return err
 		}
 	}

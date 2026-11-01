@@ -154,7 +154,11 @@ func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir st
 		return path, nil
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] 安装 %s", label))
-	if err := install(d, dir); err != nil {
+	// RV2-03: anchor-corroboration degradations land in this
+	// instance's log ring — the surface the panel shows for the
+	// kernel — not only in the agent's stdout.
+	note := func(msg string) { inst.logs.add("[flmx] " + msg) }
+	if err := install(d, dir, note); err != nil {
 		return "", fmt.Errorf("安装 %s 失败: %v", label, err)
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] %s 安装完成", label))

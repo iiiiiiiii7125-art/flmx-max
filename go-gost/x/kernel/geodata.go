@@ -83,7 +83,10 @@ func (m *Manager) UpdateGeoData(ctx context.Context) {
 	m.mu.Unlock()
 
 	for _, job := range jobs {
-		staged, err := stageGeoFiles(ctx, job.binDir, job.files)
+		// RV2-03: anchor-corroboration degradations surface in the
+		// instance log (the panel-visible kernel log), not stdout.
+		note := func(msg string) { m.logGeo(job.kernelType, msg) }
+		staged, err := stageGeoFiles(ctx, job.binDir, job.files, note)
 		if err != nil {
 			m.logGeo(job.kernelType, "分流数据更新失败: "+err.Error())
 		}
@@ -103,7 +106,7 @@ func (m *Manager) UpdateGeoData(ctx context.Context) {
 // fallback leg) is recorded and the round continues with the
 // remaining files; one stalled file must not starve the whole
 // round. The round ctx itself stays a single 5-minute budget.
-func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]string, error) {
+func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile, note func(string)) ([]string, error) {
 	// KU4 (1.7.7): one probe plan per round, shared by every file
 	// (probe target: the first file's checksum URL) — routes are
 	// measured once per operation, not per file.
@@ -114,7 +117,7 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 	var staged []string
 	var errs []string
 	for _, f := range files {
-		changed, err := stageGeoFile(ctx, binDir, f, plan)
+		changed, err := stageGeoFile(ctx, binDir, f, plan, note)
 		if err != nil {
 			errs = append(errs, f.Name+": "+err.Error())
 			continue
@@ -129,7 +132,7 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 	return staged, nil
 }
 
-func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.Plan) (bool, error) {
+func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.Plan, note func(string)) (bool, error) {
 	if plan == nil {
 		plan = download.NewPlan(ctx, directForm(f.ChecksumURL), checksumProbe, panelExtraRoutes()...)
 	}
@@ -158,7 +161,7 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.
 			return "", errors.New("校验文件中没有 SHA256")
 		}
 		return altWant, nil
-	}, want); err != nil {
+	}, want, note); err != nil {
 		return false, err
 	}
 	path := filepath.Join(binDir, f.Name)

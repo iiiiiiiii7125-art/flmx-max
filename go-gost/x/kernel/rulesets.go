@@ -212,27 +212,47 @@ func ruleSetProbe(ctx context.Context, url string) error {
 	return nil
 }
 
-// fetchRuleSet downloads one rule set over the plan. Content
-// validation runs INSIDE the attempt: a route that delivers anything
-// but a valid SRS file fails the leg and the plan moves on, instead
-// of poisoning the whole operation after the fact.
+// fetchRuleSet downloads one rule set over the plan through a
+// resumable FileTransfer staged in a scratch file (RV2-02): the
+// in-memory fetch() shape restarted every leg from byte zero, so
+// under the trickle watchdog a multi-MB set on slow routes lost
+// ALL progress per leg and could never land — the kernel binary
+// and geodata legs already resume, and the rule-set leg now does
+// too (a condemned leg keeps its bytes; the next route resumes
+// after them, and with the size/budget-aware judgment a leg that
+// can finish inside the round budget is not condemned at all).
+// Content validation still runs INSIDE the attempt: a route that
+// assembles anything but a valid SRS file loses the leg — its
+// bytes are discarded (Reset), since a junk prefix cannot be
+// resumed onto — and the plan moves on, instead of poisoning the
+// whole operation after the fact.
 func fetchRuleSet(ctx context.Context, plan *download.Plan, directURL string) ([]byte, error) {
-	var out []byte
-	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
-		var buf bytes.Buffer
-		if err := fetch(ctx, url, ruleSetMaxSize, &buf); err != nil {
+	tmp, err := os.CreateTemp("", "flmx-ruleset-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
+	transfer := download.NewFileTransfer(tmpPath, ruleSetMaxSize, 0o600)
+	_, err = download.TryPlan(plan, directURL, func(route download.Route, url string) error {
+		if err := fetchFileResume(ctx, transfer, url); err != nil {
 			return err
 		}
-		if err := validateSRSBytes(buf.Bytes()); err != nil {
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
 			return err
 		}
-		out = buf.Bytes()
+		if err := validateSRSBytes(data); err != nil {
+			_ = transfer.Reset()
+			return err
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return os.ReadFile(tmpPath)
 }
 
 // localizeSingboxRuleSets prepares the files of a sing-box Apply:

@@ -82,7 +82,7 @@ func TestKU4ResolveGitHubAPIThroughAdmittedProxy(t *testing.T) {
 	defer func() { githubAPIBase = old }()
 
 	g := &GitHubRelease{Repo: "SagerNet/sing-box", Asset: "sing-box-{VERSION}-{ARCH}.tar.gz"}
-	url, digest, err := resolveGitHub(context.Background(), g, "amd64")
+	url, digest, err := resolveGitHub(context.Background(), g, "amd64", nil)
 	if err != nil {
 		t.Fatalf("直连 API 被阻断时必须经准入代理成功: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestKU4ResolveGitHubIgnoresPanelProxy(t *testing.T) {
 	defer func() { githubAPIBase = old }()
 
 	g := &GitHubRelease{Repo: "SagerNet/sing-box", Asset: "sing-box-{VERSION}-{ARCH}.tar.gz", Proxy: badProxy.URL}
-	url, digest, err := resolveGitHub(context.Background(), g, "amd64")
+	url, digest, err := resolveGitHub(context.Background(), g, "amd64", nil)
 	if err != nil {
 		t.Fatalf("面板 Proxy 必须被忽略、直连成功: %v", err)
 	}

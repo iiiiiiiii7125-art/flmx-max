@@ -138,7 +138,7 @@ func TestInstallWrongBodyRouteFallsOverToNextRoute(t *testing.T) {
 		BinName:     "xray",
 	}
 	binDir := filepath.Join(t.TempDir(), "xray")
-	if err := install(d, binDir); err != nil {
+	if err := install(d, binDir, nil); err != nil {
 		t.Fatalf("一条线路给出错误本体时必须换线完成安装, got: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(binDir, "xray"))
@@ -181,7 +181,7 @@ func TestInstallChecksumAnchorDisagreementRefused(t *testing.T) {
 		Archive:     "zip",
 		BinName:     "xray",
 	}
-	err := install(d, filepath.Join(t.TempDir(), "xray"))
+	err := install(d, filepath.Join(t.TempDir(), "xray"), nil)
 	if err == nil {
 		t.Fatal("两条线路给出的校验值不一致时必须拒绝安装")
 	}
@@ -244,7 +244,7 @@ func TestStageGeoFileAcceptsChecksumLargerThan4096(t *testing.T) {
 		ChecksumURL: srv.URL + "/geoip.dat.sha256",
 	}
 	plan := download.NewStaticPlan([]download.Route{{}})
-	changed, err := stageGeoFile(context.Background(), binDir, f, plan)
+	changed, err := stageGeoFile(context.Background(), binDir, f, plan, nil)
 	if err != nil {
 		t.Fatalf("4–64KiB 校验文件必须可拉取并完成暂存, got: %v", err)
 	}

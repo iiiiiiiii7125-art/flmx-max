@@ -59,7 +59,7 @@ func TestInstallFallsBackToDirectWhenMirrorBlacklists(t *testing.T) {
 		BinName:     "xray",
 	}
 	binDir := filepath.Join(t.TempDir(), "xray")
-	if err := install(d, binDir); err != nil {
+	if err := install(d, binDir, nil); err != nil {
 		t.Fatalf("镜像 403 时应回退直连完成安装，实际失败: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(binDir, "xray"))
@@ -86,7 +86,7 @@ func TestInstallReportsFallbackFailure(t *testing.T) {
 		Archive:     "zip",
 		BinName:     "xray",
 	}
-	err := install(d, filepath.Join(t.TempDir(), "xray"))
+	err := install(d, filepath.Join(t.TempDir(), "xray"), nil)
 	if err == nil {
 		t.Fatal("两条路径都 403 时安装必须失败")
 	}

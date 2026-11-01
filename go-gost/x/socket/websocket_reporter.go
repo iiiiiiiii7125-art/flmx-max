@@ -2430,9 +2430,12 @@ func downloadUpgradeChecksumRouted(ctx context.Context, client *http.Client, pla
 // expectedSha256 — with a panel anchor the .sha256 is already a
 // mere cross-check against an out-of-band value. A second route
 // answering with a DIFFERENT hash aborts the upgrade; no second
-// route answering degrades to the single anchor with a log line
-// (single-route environments keep today's trust level).
-func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner download.Route, checksumURL, want string) error {
+// route answering degrades to the single anchor (single-route
+// environments keep today's trust level), announced through
+// note — the caller's panel-visible surface (RV2-03: the upgrade
+// progress channel), not only the agent's stdout; a nil note
+// falls back to stdout.
+func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner download.Route, checksumURL, want string, note func(string)) error {
 	var routes []download.Route
 	for _, r := range download.AllRoutes() {
 		if r.Prefix != winner.Prefix {
@@ -2446,7 +2449,12 @@ func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner
 	defer cancel()
 	got, err := downloadUpgradeChecksum(actx, client, download.NewStaticPlan(routes), checksumURL)
 	if err != nil {
-		fmt.Printf("⚠️ 升级校验锚跨线路复核不可用（其他线路均未给出校验值），按单锚继续: %v\n", err)
+		msg := fmt.Sprintf("跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续（%v）", err)
+		if note != nil {
+			note(msg)
+		} else {
+			fmt.Printf("⚠️ %s\n", msg)
+		}
 		return nil
 	}
 	if !strings.EqualFold(got, want) {
@@ -2592,7 +2600,10 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// .sha256 本就是交叉核对，不必复核（见
 	// corroborateUpgradeChecksum）。
 	if expectedSha256 == "" {
-		if err := corroborateUpgradeChecksum(dlCtx, httpClient, checksumRoute, checksumURL, expectedHash); err != nil {
+		// RV2-03: a corroboration degradation is reported on the
+		// upgrade progress channel (panel-visible), not stdout only.
+		note := func(msg string) { w.sendUpgradeProgress("verifying", 0, msg) }
+		if err := corroborateUpgradeChecksum(dlCtx, httpClient, checksumRoute, checksumURL, expectedHash, note); err != nil {
 			return err
 		}
 	}
