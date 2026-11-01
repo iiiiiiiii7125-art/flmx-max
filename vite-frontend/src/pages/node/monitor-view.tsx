@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 
+import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
 import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { formatTraffic } from "@/utils/traffic";
 import {
@@ -499,17 +500,31 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
             <div className="h-64">
               <ResponsiveContainer height="100%" width="100%">
                 <LineChart data={data}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time" fontSize={12} />
-                  <YAxis fontSize={12} tickFormatter={yAxisTickFormatter} />
+                  <CartesianGrid
+                    stroke="currentColor"
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.15}
+                  />
+                  <XAxis
+                    dataKey="time"
+                    fontSize={12}
+                    tick={{ fill: "currentColor", fontWeight: 600 }}
+                  />
+                  <YAxis
+                    fontSize={12}
+                    tick={{ fill: "currentColor", fontWeight: 600 }}
+                    tickFormatter={yAxisTickFormatter}
+                  />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "rgba(0,0,0,0.8)",
-                      border: "none",
-                      borderRadius: "8px",
-                    }}
-                    formatter={tooltipFormatter}
-                    labelStyle={{ color: "#fff" }}
+                    content={
+                      <ChartGlassTooltip
+                        formatEntry={(entry) => ({
+                          name: String(entry.name ?? ""),
+                          value: String(tooltipFormatter(entry.value) ?? ""),
+                        })}
+                      />
+                    }
+                    cursor={{ stroke: "currentColor", strokeOpacity: 0.25 }}
                   />
                   {chartConfig.lines.map((line) => (
                     <Line
@@ -1988,25 +2003,42 @@ export function MonitorView({
                         <div className="h-64">
                           <ResponsiveContainer height="100%" width="100%">
                             <LineChart data={activeLatencyData}>
-                              <CartesianGrid strokeDasharray="3 3" />
-                              <XAxis dataKey="time" fontSize={12} />
+                              <CartesianGrid
+                                stroke="currentColor"
+                                strokeDasharray="3 3"
+                                strokeOpacity={0.15}
+                              />
+                              <XAxis
+                                dataKey="time"
+                                fontSize={12}
+                                tick={{
+                                  fill: "currentColor",
+                                  fontWeight: 600,
+                                }}
+                              />
                               <YAxis
                                 fontSize={12}
+                                tick={{
+                                  fill: "currentColor",
+                                  fontWeight: 600,
+                                }}
                                 tickFormatter={(v: number) =>
                                   `${Math.round(v)}ms`
                                 }
                               />
                               <Tooltip
-                                contentStyle={{
-                                  backgroundColor: "rgba(0,0,0,0.8)",
-                                  border: "none",
-                                  borderRadius: "8px",
+                                content={
+                                  <ChartGlassTooltip
+                                    formatEntry={(entry) => ({
+                                      name: "延迟",
+                                      value: `${Number(entry.value).toFixed(0)}ms`,
+                                    })}
+                                  />
+                                }
+                                cursor={{
+                                  stroke: "currentColor",
+                                  strokeOpacity: 0.25,
                                 }}
-                                formatter={(value: unknown) => [
-                                  `${Number(value).toFixed(0)}ms`,
-                                  "延迟",
-                                ]}
-                                labelStyle={{ color: "#fff" }}
                               />
                               <Line
                                 connectNulls={false}

@@ -57,12 +57,12 @@ export const FlowChartCard = ({
                 <XAxis
                   axisLine={false}
                   dataKey="time"
-                  tick={{ fill: "currentColor", opacity: 0.5, fontSize: 12 }}
+                  tick={{ fill: "currentColor", fontSize: 12, fontWeight: 600 }}
                   tickLine={false}
                 />
                 <YAxis
                   axisLine={false}
-                  tick={{ fill: "currentColor", opacity: 0.5, fontSize: 12 }}
+                  tick={{ fill: "currentColor", fontSize: 12, fontWeight: 600 }}
                   tickFormatter={(value: number | string) => {
                     const v = typeof value === "number" ? value : Number(value);
 
@@ -107,7 +107,7 @@ export const FlowChartCard = ({
 
                     return null;
                   }}
-                  cursor={{ fill: "rgba(0, 122, 255, 0.05)" }}
+                  cursor={{ fill: "rgba(0, 122, 255, 0.1)" }}
                 />
                 <Line dataKey="flow" stroke="#007aff" type="monotone" />
               </LineChart>

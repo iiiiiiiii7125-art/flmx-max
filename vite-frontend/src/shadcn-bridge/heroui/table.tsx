@@ -63,7 +63,10 @@ export function TableHeader({
   );
 
   return (
-    <thead className={cn("border-b border-divider", className)} {...props}>
+    <thead
+      className={cn("border-b border-divider [&_tr]:bg-white/30", className)}
+      {...props}
+    >
       {hasRow ? children : <TableRow>{children}</TableRow>}
     </thead>
   );
@@ -95,7 +98,11 @@ export const TableBody = React.forwardRef<
 ) {
   if (isLoading) {
     return (
-      <tbody ref={ref} className={className} {...props}>
+      <tbody
+        ref={ref}
+        className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+        {...props}
+      >
         <tr>
           <td className="p-4 text-center text-foreground" colSpan={999}>
             {loadingContent ?? "加载中..."}
@@ -108,7 +115,11 @@ export const TableBody = React.forwardRef<
   if (items && typeof children === "function") {
     if (items.length === 0) {
       return (
-        <tbody ref={ref} className={className} {...props}>
+        <tbody
+          ref={ref}
+          className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+          {...props}
+        >
           <tr>
             <td className="p-4 text-center text-foreground" colSpan={999}>
               {emptyContent ?? "暂无数据"}
@@ -119,7 +130,11 @@ export const TableBody = React.forwardRef<
     }
 
     return (
-      <tbody ref={ref} className={className} {...props}>
+      <tbody
+        ref={ref}
+        className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+        {...props}
+      >
         {items.map((item) => {
           const key =
             typeof item === "object" && item !== null && "id" in item
@@ -137,7 +152,11 @@ export const TableBody = React.forwardRef<
 
   if (staticChildren.length === 0) {
     return (
-      <tbody ref={ref} className={className} {...props}>
+      <tbody
+        ref={ref}
+        className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+        {...props}
+      >
         <tr>
           <td className="p-4 text-center text-foreground" colSpan={999}>
             {emptyContent ?? "暂无数据"}
@@ -148,7 +167,11 @@ export const TableBody = React.forwardRef<
   }
 
   return (
-    <tbody ref={ref} className={className} {...props}>
+    <tbody
+      ref={ref}
+      className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+      {...props}
+    >
       {typeof children === "function" ? null : children}
     </tbody>
   );
@@ -163,7 +186,7 @@ export function TableColumn({
   return (
     <th
       className={cn(
-        "px-3 py-2 text-left font-medium text-default-600",
+        "px-3 py-2 text-left font-semibold text-foreground",
         thClassName,
         className,
       )}

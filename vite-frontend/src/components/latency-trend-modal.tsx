@@ -13,6 +13,7 @@ import {
 } from "recharts";
 
 import { getNodeLatencyHistory } from "@/api";
+import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import {
   Modal,
@@ -38,7 +39,7 @@ const COLORS = [
   "#ec4899",
   "#84cc16",
   "#f97316",
-  "#64748b",
+  "#475569",
 ];
 
 function timeLabel(t: number, hours: number) {
@@ -159,50 +160,50 @@ export function LatencyTrendModal({
             <div className="h-52 sm:h-64">
               <ResponsiveContainer height="100%" width="100%">
                 <LineChart data={rows}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid
+                    stroke="currentColor"
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.15}
+                  />
                   <XAxis
                     dataKey="t"
                     fontSize={11}
                     minTickGap={32}
+                    tick={{ fill: "currentColor", fontWeight: 600 }}
                     tickFormatter={(t: number) => timeLabel(t, hours)}
                   />
                   <YAxis
                     fontSize={11}
+                    tick={{ fill: "currentColor", fontWeight: 600 }}
                     tickFormatter={(v: number) => `${Math.round(v)}ms`}
                     width={52}
                   />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "rgba(0,0,0,0.8)",
-                      border: "none",
-                      borderRadius: "8px",
-                      fontSize: 12,
-                    }}
-                    formatter={(
-                      value: unknown,
-                      name: unknown,
-                      item: { payload?: unknown },
-                    ) => {
-                      const loss = Number(
-                        (item?.payload as Record<string, unknown>)?.[
-                          `${String(name)}\u0000loss`
-                        ] ?? 0,
-                      );
+                    content={
+                      <ChartGlassTooltip
+                        formatEntry={(entry) => {
+                          const loss = Number(
+                            (entry.payload as Record<string, unknown>)?.[
+                              `${String(entry.name)}\u0000loss`
+                            ] ?? 0,
+                          );
 
-                      return [
-                        value === null || value === undefined
-                          ? "超时"
-                          : `${Number(value).toFixed(0)}ms${
-                              loss > 0 ? ` · 丢包 ${loss}%` : ""
-                            }`,
-                        String(name),
-                      ];
-                    }}
-                    itemStyle={{ padding: 0 }}
-                    labelFormatter={(t: unknown) =>
-                      timeLabel(Number(t), hours > 24 ? 48 : 24)
+                          return {
+                            name: String(entry.name),
+                            value:
+                              entry.value === null || entry.value === undefined
+                                ? "超时"
+                                : `${Number(entry.value).toFixed(0)}ms${
+                                    loss > 0 ? ` · 丢包 ${loss}%` : ""
+                                  }`,
+                          };
+                        }}
+                        formatLabel={(t) =>
+                          timeLabel(Number(t), hours > 24 ? 48 : 24)
+                        }
+                      />
                     }
-                    labelStyle={{ color: "#fff" }}
+                    cursor={{ stroke: "currentColor", strokeOpacity: 0.25 }}
                   />
                   {points.map((p, i) => (
                     <Line

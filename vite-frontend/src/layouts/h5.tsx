@@ -266,18 +266,12 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                     : ""
                 }
                 ${isMonitorBlocked ? "opacity-60" : ""}
-                ${
-                  isActive
-                    ? "text-white"
-                    : isMonitorBlocked
-                      ? "text-foreground"
-                      : "text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-gray-100"
-                }
+                ${isActive ? "text-white" : "text-foreground"}
               `}
               onClick={() => handleTabClick(item.path)}
             >
               <div className="flex-shrink-0">{item.icon}</div>
-              <span className="text-xs font-medium leading-tight">
+              <span className="text-xs font-semibold leading-tight">
                 {(isAdmin && item.adminLabel) || item.label}
               </span>
               <span

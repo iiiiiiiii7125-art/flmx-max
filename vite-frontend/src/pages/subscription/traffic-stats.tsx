@@ -184,12 +184,12 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
                   dataKey="label"
                   interval="preserveStartEnd"
                   minTickGap={24}
-                  tick={{ fill: "currentColor", opacity: 0.55, fontSize: 11 }}
+                  tick={{ fill: "currentColor", fontSize: 11, fontWeight: 600 }}
                   tickLine={false}
                 />
                 <YAxis
                   axisLine={false}
-                  tick={{ fill: "currentColor", opacity: 0.55, fontSize: 11 }}
+                  tick={{ fill: "currentColor", fontSize: 11, fontWeight: 600 }}
                   tickFormatter={(v: number) => axisBytes(v)}
                   tickLine={false}
                   width={48}
@@ -216,13 +216,13 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
                       </div>
                     );
                   }}
-                  cursor={{ stroke: "currentColor", strokeOpacity: 0.2 }}
+                  cursor={{ stroke: "currentColor", strokeOpacity: 0.35 }}
                 />
                 {sinceAt && (
                   <ReferenceLine
                     stroke="currentColor"
                     strokeDasharray="2 3"
-                    strokeOpacity={0.35}
+                    strokeOpacity={0.5}
                     x={sinceAt.label}
                   />
                 )}
