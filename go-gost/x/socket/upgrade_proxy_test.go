@@ -1,8 +1,6 @@
 package socket
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -40,36 +38,8 @@ func TestIsGitHubDownloadHost(t *testing.T) {
 	}
 }
 
-func TestResolveAgentUpgradeProxy(t *testing.T) {
-	// 无 config.json 的目录中运行，避免开发机残留配置干扰
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	if got := resolveAgentUpgradeProxy(""); got != "" {
-		t.Errorf("无任何代理配置时应返回空, got %q", got)
-	}
-	if got := resolveAgentUpgradeProxy("https://proxy.example.com/"); got != "https://proxy.example.com" {
-		t.Errorf("面板代理应去尾斜杠返回, got %q", got)
-	}
-	if got := resolveAgentUpgradeProxy("notaurl"); got != "" {
-		t.Errorf("无 host 的代理应被忽略, got %q", got)
-	}
-	if got := resolveAgentUpgradeProxy("ftp://proxy.example.com"); got != "" {
-		t.Errorf("非 http/https 代理应被忽略, got %q", got)
-	}
-
-	// config.json 落盘代理作为兜底，面板下发优先
-	cfg := []byte("{\n  \"addr\": \"1.2.3.4:8080\",\n  \"secret\": \"x\",\n  \"proxy\": \"https://cfg.example.com\"\n}\n")
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), cfg, 0o600); err != nil {
-		t.Fatalf("write config.json: %v", err)
-	}
-	if got := resolveAgentUpgradeProxy(""); got != "https://cfg.example.com" {
-		t.Errorf("应回退到 config.json 的 proxy, got %q", got)
-	}
-	if got := resolveAgentUpgradeProxy("https://panel.example.com"); got != "https://panel.example.com" {
-		t.Errorf("面板下发应优先于 config.json, got %q", got)
-	}
-	if got := resolveAgentUpgradeProxy("::bad::"); got != "https://cfg.example.com" {
-		t.Errorf("面板代理无效时应回退 config.json, got %q", got)
-	}
-}
+// KU4 (1.7.7): TestResolveAgentUpgradeProxy is deleted together
+// with the function — the panel-pushed proxyUrl and the local
+// config.json "proxy" fallback are both retired as routing inputs;
+// the self-upgrade's route is probe-selected from the built-in
+// candidate set (see ku4_upgrade_routes_test.go).

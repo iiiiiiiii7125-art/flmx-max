@@ -169,9 +169,10 @@ func TestR3WDGUpgradeAttemptStallFailsFast(t *testing.T) {
 	}
 }
 
-// 代理腿停滞 -> 看门狗判失败 -> 剥离前缀直连腿成功，且内容与
-// 哈希完整（WDG-01 的回退口径：一台的最坏成本由 240s 压到
-// 看门狗窗 + 直连腿）。
+// 代理线路停滞 -> 看门狗判失败 -> 按排名切直连线路成功，且内容
+// 与哈希完整（WDG-01 的回退口径：一台的最坏成本由 240s 压到
+// 看门狗窗 + 直连腿；KU4 起线路以排名列表显式给出，旧形态是
+// 单代理前缀 URL + 剥离回退）。
 func TestR3WDGUpgradeStallFallsBackToDirect(t *testing.T) {
 	shrinkUpgradeStallWindow(t, 300*time.Millisecond)
 	payload := []byte("new-agent-binary-payload")
@@ -187,7 +188,8 @@ func TestR3WDGUpgradeStallFallsBackToDirect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	start := time.Now()
-	n, hash, err := downloadUpgradeBinary(ctx, newUpgradeDownloadClient(""), proxy.URL+"/"+direct.URL+"/gost-amd64", tmp, nil)
+	plan := download.NewStaticPlan([]download.Route{{Prefix: proxy.URL}, {}})
+	n, hash, err := downloadUpgradeBinary(ctx, newUpgradeDownloadClient(""), plan, direct.URL+"/gost-amd64", tmp, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("代理停滞后应直连成功: %v", err)

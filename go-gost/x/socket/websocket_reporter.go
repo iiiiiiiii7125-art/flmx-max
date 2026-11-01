@@ -1615,34 +1615,16 @@ func (w *WebSocketReporter) sendUpgradeProgress(stage string, percent int, messa
 	w.sendResponse(response)
 }
 
-// resolveAgentUpgradeProxy 返回升级下载用的代理前缀（无尾斜杠），无代理时返回 ""。
-// 来源优先级：面板下发 > 本地 config.json 的 proxy 字段（安装时落盘）。
-// 候选必须能解析为 http/https URL 且 host 非空，否则忽略并打日志（不硬失败，
-// 直连兜底让错误暴露在下载阶段而不是配置阶段）。
-func resolveAgentUpgradeProxy(panelProxy string) string {
-	candidates := []string{panelProxy}
-	type proxyConfig struct {
-		Proxy string `json:"proxy"`
-	}
-	var cfg proxyConfig
-	if b, err := os.ReadFile("config.json"); err == nil {
-		_ = json.Unmarshal(b, &cfg)
-	}
-	candidates = append(candidates, cfg.Proxy)
-	for _, c := range candidates {
-		c = strings.TrimSuffix(strings.TrimSpace(c), "/")
-		if c == "" {
-			continue
-		}
-		u, err := url.Parse(c)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			fmt.Printf("⚠️ 忽略无效的升级代理配置: %q\n", c)
-			continue
-		}
-		return c
-	}
-	return ""
-}
+// KU4 (1.7.7): the self-upgrade no longer resolves ONE proxy from
+// the panel's proxyUrl or the local config.json "proxy" field. Both
+// were single static routes chosen out-of-band — the failure mode
+// behind the recurring "upgrade never executes" reports (one sick
+// mirror burned the whole budget before the direct fallback ran).
+// Routing is now probe-selected at download time from the built-in
+// candidate set (download.MirrorPrefixes + direct): see
+// probeUpgradeRoute and download.RankRoutes. The config.json field
+// itself is left on disk untouched (updateLocalConfigJSON preserves
+// unknown fields); it simply has no consumer anymore.
 
 // isGitHubDownloadHost 判断重定向目标是否为 GitHub 官方下载域名。
 // release 文件会先 302 到 release-assets.githubusercontent.com
@@ -1926,90 +1908,6 @@ func readAgentChecksum(r io.Reader) (string, error) {
 	return fields[0], nil
 }
 
-// stripUpgradeProxyPrefix mirrors x/kernel's stripMirrorPrefix: if
-// rawURL is in mirror-prefix form (<prefix>/https://target), it
-// returns the direct target URL; otherwise it returns "".
-func stripUpgradeProxyPrefix(rawURL string) string {
-	for _, scheme := range []string{"/https://", "/http://"} {
-		if i := strings.Index(rawURL, scheme); i > 0 {
-			return rawURL[i+1:]
-		}
-	}
-	return ""
-}
-
-// upgradeWithProxyFallback is the single proxy->direct fallback
-// policy for every self-upgrade download leg (R7-J-02): attempt
-// runs once against rawURL; when rawURL is in proxy-prefixed form
-// and the attempt fails for ANY reason, it retries exactly once
-// with the prefix stripped (direct), and when both attempts fail
-// the returned error merges both causes. A URL without a proxy
-// prefix is attempted exactly once, with its original error
-// preserved. What counts as one attempt is the caller's choice —
-// crucially, a leg whose failure can happen while READING the body
-// (binary file, checksum file) must define its attempt as
-// GET+body-read (downloadUpgradeAttempt,
-// fetchUpgradeChecksumAttempt): a fallback decided at response-
-// header time cannot see a body that stalls after a 200 (Phase F:
-// the checksum leg aborted the whole upgrade with ErrNoProgress
-// and no retry because its read sat outside the fallback).
-func upgradeWithProxyFallback(rawURL string, attempt func(url string) error) error {
-	err := attempt(rawURL)
-	if err == nil {
-		return nil
-	}
-	direct := stripUpgradeProxyPrefix(rawURL)
-	if direct == "" || direct == rawURL {
-		return err
-	}
-	fmt.Printf("⚠️ 代理下载失败 (%v)，剥离代理前缀直连重试: %s\n", err, sanitizeWebSocketURL(direct))
-	if derr := attempt(direct); derr != nil {
-		return fmt.Errorf("代理下载失败: %v；剥离代理直连重试亦失败: %v", err, derr)
-	}
-	return nil
-}
-
-// getWithUpgradeProxyFallback performs one GET for an agent-upgrade
-// download (R7-J-02), via upgradeWithProxyFallback. If the URL is a
-// proxy-prefixed form and the proxied attempt fails — transport
-// error or non-200, the same failure caliber as x/kernel's fetch —
-// it retries exactly once with the proxy prefix stripped (direct).
-// The caller's client (and therefore the S-02 redirect allowlist)
-// is used unchanged for both attempts. NOTE: this helper decides
-// the fallback at header time and returns the body unread; callers
-// that consume a body must use an attempt-level wrapper instead
-// (downloadUpgradeBinary / downloadUpgradeChecksum), never pair
-// this helper with an outside read.
-func getWithUpgradeProxyFallback(client *http.Client, rawURL string) (*http.Response, error) {
-	return getWithUpgradeProxyFallbackCtx(context.Background(), client, rawURL)
-}
-
-// getWithUpgradeProxyFallbackCtx is getWithUpgradeProxyFallback with
-// the caller's context threaded through both attempts (R8-T-09): the
-// direct retry runs on whatever budget remains in ctx instead of
-// behind a fresh per-GET wall, so one logical download is bounded
-// by the caller's single operation deadline, the same shape as
-// x/kernel's fetch under its whole-install ctx.
-func getWithUpgradeProxyFallbackCtx(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
-	var resp *http.Response
-	err := upgradeWithProxyFallback(rawURL, func(url string) error {
-		r, gerr := upgradeGET(ctx, client, url)
-		if gerr != nil {
-			return gerr
-		}
-		if r.StatusCode != http.StatusOK {
-			r.Body.Close()
-			return fmt.Errorf("HTTP状态码: %d", r.StatusCode)
-		}
-		resp = r
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
 func upgradeGET(ctx context.Context, client *http.Client, rawURL string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -2041,16 +1939,19 @@ var upgradeDownloadTimeout = 4 * time.Minute
 var upgradeDownloadHeaderTimeout = 60 * time.Second
 
 // newUpgradeDownloadClient builds the S-02 download client for
-// handleUpgradeAgent. The redirect allowlist is unchanged (GitHub
-// hosts, plus the proxy's own host when downloading via a proxy
-// prefix), but there is deliberately no client-level Timeout: the
-// overall deadline lives in the caller's context (see
-// upgradeDownloadTimeout) and per-attempt header patience in the
-// transport, so no per-GET wall can kill a slow body transfer
-// mid-flight (R8-T-09).
+// handleUpgradeAgent. The redirect allowlist covers GitHub hosts
+// plus the built-in mirror candidates' own hosts (KU4: downloads
+// may ride any candidate route, and a mirror may redirect within
+// itself); proxyHost remains as an optional extra allowed host for
+// compatibility with existing callers/tests. There is deliberately
+// no client-level Timeout: the overall deadline lives in the
+// caller's context (see upgradeDownloadTimeout) and per-attempt
+// header patience in the transport, so no per-GET wall can kill a
+// slow body transfer mid-flight (R8-T-09).
 func newUpgradeDownloadClient(proxyHost string) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = upgradeDownloadHeaderTimeout
+	mirrorHosts := download.MirrorHosts()
 	return &http.Client{
 		Transport: tr,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -2059,14 +1960,75 @@ func newUpgradeDownloadClient(proxyHost string) *http.Client {
 			}
 			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
 			// githubusercontent.com 及其子域名（release 下载必经此域名）；
-			// 经代理下载时额外允许代理自身域名（镜像站内跳转）。
+			// 另允许内置镜像候选自身域名（镜像站内跳转）。
 			host := strings.ToLower(req.URL.Host)
 			if isGitHubDownloadHost(host) || (proxyHost != "" && host == proxyHost) {
 				return nil
 			}
+			for _, mh := range mirrorHosts {
+				if host == mh {
+					return nil
+				}
+			}
 			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
 		},
 	}
+}
+
+// isSHA256Hex reports whether s is a full-length hex SHA-256.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// probeUpgradeRoute is the route admission probe for the
+// self-upgrade (KU4): a candidate counts as alive ONLY if it
+// delivers the release's real .sha256 file with a parseable
+// SHA-256 in it. A mirror that answers its landing page (or any
+// other 200 junk) is rejected, so fake-alive proxies never enter
+// the ranking. The probe target is the checksum URL in direct
+// form; the route plan builds each candidate's form from it.
+func probeUpgradeRoute(client *http.Client) download.ProbeFunc {
+	return func(ctx context.Context, rawURL string) error {
+		resp, err := upgradeGET(ctx, client, rawURL)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+		}
+		hash, err := readAgentChecksum(resp.Body)
+		if err != nil {
+			return fmt.Errorf("校验文件不可解析: %v", err)
+		}
+		if !isSHA256Hex(hash) {
+			return fmt.Errorf("校验文件内容不是合法 SHA256")
+		}
+		return nil
+	}
+}
+
+// describeUpgradeRoutes renders the probe ranking for the agent
+// log and the panel progress message, e.g.
+// "gcode.hostcentral.cc(38ms) > 直连(120ms) > ghfast.top(210ms)".
+func describeUpgradeRoutes(routes []download.Route) string {
+	parts := make([]string, 0, len(routes))
+	for _, r := range routes {
+		if r.Probed {
+			parts = append(parts, fmt.Sprintf("%s(%dms)", r.Name(), r.Latency.Milliseconds()))
+		} else {
+			parts = append(parts, r.Name())
+		}
+	}
+	return strings.Join(parts, " > ")
 }
 
 // maxAgentBinarySize caps the self-upgrade binary download (S-02).
@@ -2160,25 +2122,28 @@ func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tm
 	return downloaded, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// downloadUpgradeBinary downloads the self-upgrade binary from
-// rawURL into tmpPath and returns the byte count and SHA-256 hex
-// of the content. Fallback (R7-J-02, extended by R3-WDG-01): when
-// rawURL is in proxy-prefixed form, ANY failure of the proxied
-// attempt — transport error, non-200, or a body that stalls or
-// breaks mid-transfer — retries exactly once with the prefix
-// stripped (direct). Before the watchdog existed only GET-level
-// failures could fall back: a stalled body burned the whole
-// shared budget before any retry. A URL without a proxy prefix is
-// attempted exactly once, with its original error preserved. The
-// fallback policy itself is upgradeWithProxyFallback, shared with
-// the checksum leg (downloadUpgradeChecksum) so the two legs
-// cannot drift apart.
-func downloadUpgradeBinary(ctx context.Context, client *http.Client, rawURL, tmpPath string, report func(percent int)) (int64, string, error) {
+// downloadUpgradeBinary downloads the self-upgrade binary (the
+// direct-form URL directURL) into tmpPath over the probe-selected
+// route plan, and returns the byte count and SHA-256 hex of the
+// content. Each route gets ONE attempt whose unit of failure is
+// GET+body-read (downloadUpgradeAttempt, with its no-progress
+// watchdog): ANY failure of an attempt — transport error, non-200,
+// or a body that stalls or breaks mid-transfer — moves to the
+// plan's next route (KU4; generalizes the R7-J-02 proxy->direct
+// fallback and the R3-WDG-01 watchdog caliber to the candidate
+// plan). When every route fails, download.TryPlan's error names
+// each route and its cause. The route policy is shared with the
+// checksum leg (downloadUpgradeChecksum) so the two legs cannot
+// drift apart.
+func downloadUpgradeBinary(ctx context.Context, client *http.Client, plan *download.Plan, directURL, tmpPath string, report func(percent int)) (int64, string, error) {
 	var downloaded int64
 	var hash string
-	err := upgradeWithProxyFallback(rawURL, func(url string) error {
+	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		var aerr error
 		downloaded, hash, aerr = downloadUpgradeAttempt(ctx, client, url, tmpPath, report)
+		if aerr != nil {
+			fmt.Printf("⚠️ 下载线路 %s 失败 (%v)，按测速排名尝试下一线路\n", route.Name(), aerr)
+		}
 		return aerr
 	})
 	if err != nil {
@@ -2221,21 +2186,24 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 }
 
 // downloadUpgradeChecksum downloads and parses the expected sha256
-// of the self-upgrade binary, under the same shared ctx budget as
-// the binary leg and with the SAME fallback semantics via
-// upgradeWithProxyFallback: any failure of the proxied attempt —
-// transport error, non-200, or a body that stalls or breaks
-// mid-read — retries exactly once with the prefix stripped, and
-// only when both attempts fail does the checksum leg fail. Phase F
-// regression: the checksum read used to sit outside a
-// header-stage-only GET fallback, so a checksum body stalling
-// after 200 aborted the whole upgrade with ErrNoProgress and no
-// retry, contradicting the A002 registered caliber.
-func downloadUpgradeChecksum(ctx context.Context, client *http.Client, rawURL string) (string, error) {
+// of the self-upgrade binary (the direct-form URL directURL) over
+// the same probe-selected route plan and the same shared ctx
+// budget as the binary leg: any failure of an attempt — transport
+// error, non-200, or a body that stalls or breaks mid-read —
+// moves to the plan's next route, and only when every route fails
+// does the checksum leg fail. Phase F regression (fixed by keeping
+// the whole GET+read inside the attempt): the checksum read used
+// to sit outside a header-stage-only GET fallback, so a checksum
+// body stalling after 200 aborted the whole upgrade with
+// ErrNoProgress and no retry, contradicting the A002 caliber.
+func downloadUpgradeChecksum(ctx context.Context, client *http.Client, plan *download.Plan, directURL string) (string, error) {
 	var hash string
-	err := upgradeWithProxyFallback(rawURL, func(url string) error {
+	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		var aerr error
 		hash, aerr = fetchUpgradeChecksumAttempt(ctx, client, url)
+		if aerr != nil {
+			fmt.Printf("⚠️ 校验文件线路 %s 失败 (%v)，按测速排名尝试下一线路\n", route.Name(), aerr)
+		}
 		return aerr
 	})
 	if err != nil {
@@ -2260,9 +2228,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		// 兼容旧面板：若仍发送 downloadUrl 则拒绝（不允许任意 URL）
 		DownloadURL string `json:"downloadUrl"`
 		ChecksumURL string `json:"checksumUrl"`
-		// 代理前缀（可选）：面板在系统设置开启 GitHub 代理时下发，或 agent
-		// 本地 config.json 的 proxy 字段（安装时落盘）。仅作前缀拼接，
-		// 下载地址仍由 agent 用固定仓库+版本号本地构造，S-02 模型不变。
+		// 兼容字段：旧面板在系统设置开启 GitHub 代理时下发 proxyUrl。
+		// KU4 (1.7.7) 起不再消费此字段决定路由——面板的 GitHub 加速
+		// 设置已整体退役，下载线路由 agent 在执行前对内置候选集
+		// （download.MirrorPrefixes + 直连）实测排名决定；字段仅作
+		// 线格式兼容保留解析。下载地址仍由 agent 用固定仓库+版本号
+		// 本地构造，S-02 模型不变。
 		ProxyURL string `json:"proxyUrl"`
 	}
 	if err := json.Unmarshal(jsonData, &req); err != nil {
@@ -2280,24 +2251,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		return fmt.Errorf("S-02: 版本号格式无效: %s", version)
 	}
 
-	// S-02: Agent 本地用固定仓库 + 严格校验的版本号拼 URL
+	// S-02: Agent 本地用固定仓库 + 严格校验的版本号拼 URL（直连形态）。
+	// 实际下载线路在下方测速后按排名逐条构造（<候选>/<直连地址>），
+	// 路径仍由固定仓库+已校验版本号构造；完整性由 SHA256 兜底。
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", agentRepo, version)
 	downloadURL := base + "gost-" + runtime.GOARCH
 	checksumURL := base + "gost-" + runtime.GOARCH + ".sha256"
-
-	// 代理支持：国内节点直连 GitHub 不通时经代理前缀下载（与 install.sh 的
-	// maybe_proxy_url 同一模式：<proxy>/https://github.com/...）。
-	// 代理仅作前缀，路径仍由固定仓库+已校验版本号构造；完整性由 SHA256 兜底。
-	proxyPrefix := resolveAgentUpgradeProxy(req.ProxyURL)
-	proxyHost := ""
-	if proxyPrefix != "" {
-		downloadURL = proxyPrefix + "/" + downloadURL
-		checksumURL = proxyPrefix + "/" + checksumURL
-		if u, err := url.Parse(proxyPrefix); err == nil {
-			proxyHost = strings.ToLower(u.Host)
-		}
-		fmt.Printf("📦 升级包经代理下载: %s\n", proxyPrefix)
-	}
 
 	w.sendUpgradeProgress("downloading", 0, "开始下载升级包...")
 	fmt.Printf("📦 开始下载升级包: %s\n", sanitizeWebSocketURL(downloadURL))
@@ -2307,16 +2266,32 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	tmpPath := binaryPath + ".new"
 	backupPath := binaryPath + ".old"
 
-	// S-02: 限制重定向只允许 GitHub 官方域名，防止跳转到恶意域名
-	// 限制下载大小 100MB。时限形态见 upgradeDownloadTimeout
-	// (R8-T-09)：整段下载（本体 + 校验 + 降级重试）共享一个整程
-	// 预算，不再有单 GET 的 60 秒整请求墙。
-	httpClient := newUpgradeDownloadClient(proxyHost)
+	// S-02: 限制重定向只允许 GitHub 官方域名与内置镜像候选域名，
+	// 防止跳转到恶意域名。限制下载大小 100MB。时限形态见
+	// upgradeDownloadTimeout (R8-T-09)：整段下载（测速 + 本体 +
+	// 校验 + 逐线路重试）共享一个整程预算，不再有单 GET 的
+	// 60 秒整请求墙。
+	httpClient := newUpgradeDownloadClient("")
 	dlCtx, dlCancel := context.WithTimeout(context.Background(), upgradeDownloadTimeout)
 	defer dlCancel()
-	// R7-J-02 + R3-WDG-01: downloadUpgradeBinary 跑下载尝试，代理
-	// 前缀形态下任一次尝试失败（含正文停滞被看门狗判失败）都剥离
-	// 前缀直连重试一次，口径见该函数注释。
+	// KU4: 下载线路走内置候选的测速计划（download.Plan）：先单独
+	// 测直连（以本次的 .sha256 文件为准入探针——拉到且内容是
+	// 合法 SHA256 才算活，防落地页假活），通则直连、不测任何
+	// 代理；不通才并行测 9 个代理按延迟排名。测速计入整程预算
+	// （单次 ~3s、代理段总界 ~4s）。下载途中已选线路失败时计划
+	// 自动补测/顺排名续切（见 download.TryPlan）。选中的线路经
+	// 进度消息上报面板，运维能看到本次走的哪条线。
+	plan := download.NewPlan(dlCtx, checksumURL, probeUpgradeRoute(httpClient))
+	routes := plan.Routes()
+	if len(routes) > 0 && routes[0].Probed {
+		w.sendUpgradeProgress("downloading", 0, fmt.Sprintf("下载线路测速完成，选用 %s（实测 %dms）", routes[0].Name(), routes[0].Latency.Milliseconds()))
+	} else {
+		w.sendUpgradeProgress("downloading", 0, "下载线路测速未选出准入线路，按内置顺序逐个尝试")
+	}
+	fmt.Printf("📦 升级下载线路排名: %s\n", describeUpgradeRoutes(plan.Probed()))
+	// R7-J-02 + R3-WDG-01 + KU4: downloadUpgradeBinary 按测速排名
+	// 逐线路跑下载尝试，任一线路失败（含正文停滞被看门狗判失败）
+	// 自动切下一线路，口径见该函数注释。
 	lastPercent := 0
 	report := func(percent int) {
 		if percent-lastPercent >= 10 {
@@ -2324,7 +2299,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 			w.sendUpgradeProgress("downloading", percent, fmt.Sprintf("下载中... %d%%", percent))
 		}
 	}
-	downloaded, actualHash, err := downloadUpgradeBinary(dlCtx, httpClient, downloadURL, tmpPath, report)
+	downloaded, actualHash, err := downloadUpgradeBinary(dlCtx, httpClient, plan, downloadURL, tmpPath, report)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("下载升级包失败: %v", err)
@@ -2335,15 +2310,15 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// S-02: Checksum 校验强制，不再允许为空或跳过
 	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
 	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-	// R7-J-02 + R3-WDG-01 + Phase F 修复：校验腿经
-	// downloadUpgradeChecksum 与二进制腿同回退语义、同共享预算
+	// R7-J-02 + R3-WDG-01 + Phase F 修复 + KU4：校验腿经
+	// downloadUpgradeChecksum 与二进制腿同线路排名、同共享预算
 	// （dlCtx, R8-T-09）——每次尝试是 GET+正文读取的整体、自带
 	// 无进展看门狗（upgradeStallWindow），任一失败（含 200 头后
-	// 正文停滞被看门狗掐断）都剥离前缀直连重试一次，两次都失败
-	// 才整单失败。此前正文读取在只管响应头阶段的 GET 回退之外，
-	// 正文停滞即整单 ErrNoProgress 终止、无回退（Phase F 实测
-	// 自升级 90.5s 失败；对照形态见 fetchUpgradeChecksumAttempt）。
-	expectedHash, err := downloadUpgradeChecksum(dlCtx, httpClient, checksumURL)
+	// 正文停滞被看门狗掐断）切下一排名线路，全部失败才整单失败。
+	// 此前正文读取在只管响应头阶段的 GET 回退之外，正文停滞即
+	// 整单 ErrNoProgress 终止、无回退（Phase F 实测自升级 90.5s
+	// 失败；对照形态见 fetchUpgradeChecksumAttempt）。
+	expectedHash, err := downloadUpgradeChecksum(dlCtx, httpClient, plan, checksumURL)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
@@ -2449,9 +2424,9 @@ func buildAgentRestartScript(tmpPath, binaryPath string) string {
 // updateLocalConfigJSON 将 http/tls/socks 写入工作目录下的 config.json
 //
 // R2-A01-002: 写回必须保全其余字段。此前用仅含 addr/secret/http/tls/
-// socks 五字段的结构体整表重构写回，安装时落盘的 proxy（升级代理前缀，
-// resolveAgentUpgradeProxy 的本地兜底）与任何结构体外字段（手工加的
-// 键）都被静默吞掉，后续不带 proxyUrl 的升级失去本地代理兜底且无日志。
+// socks 五字段的结构体整表重构写回，安装时落盘的 proxy（原升级代理
+// 前缀；KU4 起该字段已无消费方、仅作未知字段保全）与任何结构体外
+// 字段（手工加的键）都被静默吞掉，无声改变节点本地配置且无日志。
 // 改为 map 合并：既有键以 json.RawMessage 原样保留、只覆写三个目标键，
 // 规范字段全集与未知字段均不丢失。文件不存在时按空 map 起步（与旧行为
 // 一致地新建）；文件存在但不是 JSON 对象时 fail-closed 报错——解析不了
