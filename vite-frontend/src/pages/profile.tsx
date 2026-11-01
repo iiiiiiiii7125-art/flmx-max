@@ -65,7 +65,7 @@ export default function ProfilePage() {
         </svg>
       ),
       color:
-        "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400",
+        "bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-400",
       description: "与其他面板进行联邦共享",
     },
     {
@@ -76,7 +76,7 @@ export default function ProfilePage() {
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
         </svg>
       ),
-      color: "bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400",
+      color: "bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400",
       description: "管理系统用户",
     },
     {
@@ -92,7 +92,7 @@ export default function ProfilePage() {
         </svg>
       ),
       color:
-        "bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400",
+        "bg-purple-100 dark:bg-purple-900 text-purple-600 dark:text-purple-400",
       description: "配置网站设置",
     },
   ];
@@ -177,7 +177,7 @@ export default function ProfilePage() {
         <Card>
           <CardBody className="p-4">
             <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900/30 rounded-full flex items-center justify-center">
+              <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900 rounded-full flex items-center justify-center">
                 <svg
                   className="w-6 h-6 text-primary"
                   fill="currentColor"
@@ -198,8 +198,8 @@ export default function ProfilePage() {
                   <span
                     className={`px-2 py-1 rounded-md text-xs font-medium ${
                       isAdmin
-                        ? "bg-primary-100 dark:bg-primary-500/20 text-primary-700 dark:text-primary-300"
-                        : "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300"
+                        ? "bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300"
+                        : "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
                     }`}
                   >
                     {isAdmin ? "管理员" : "普通用户"}
@@ -242,7 +242,7 @@ export default function ProfilePage() {
                 className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
                 onClick={onOpen}
               >
-                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-2">
+                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-2">
                   <svg
                     className="w-5 h-5"
                     fill="currentColor"
@@ -265,7 +265,7 @@ export default function ProfilePage() {
                 className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
                 onClick={handleLogout}
               >
-                <div className="w-10 h-10 bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-2">
+                <div className="w-10 h-10 bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-2">
                   <svg
                     className="w-5 h-5"
                     fill="currentColor"
@@ -288,12 +288,12 @@ export default function ProfilePage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-20 text-center py-4"
-          poweredClassName="text-xs text-gray-400 dark:text-gray-500"
-          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
+          poweredClassName="text-xs text-gray-500 dark:text-gray-400 mx-auto mt-1 w-fit text-tray rounded-full px-3 py-0.5"
+          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={
             isWebViewFunc() ? siteConfig.app_version : siteConfig.version
           }
-          versionClassName="text-xs text-gray-400 dark:text-gray-500 mt-1"
+          versionClassName="text-xs text-gray-500 dark:text-gray-400 mt-1 mx-auto w-fit text-tray rounded-full px-3 py-1"
         />
       </div>
 

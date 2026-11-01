@@ -42,10 +42,14 @@ export default function IndexPage() {
   const [passkeyEnabled, setPasskeyEnabled] = useState(false);
   // 站点标题跟随配置更新（无缓存首次打开时，异步配置回来后刷新标题）
   const [siteName, setSiteName] = useState(siteConfig.name);
+
   useEffect(() => {
     const onConfigUpdate = () => setSiteName(siteConfig.name);
+
     window.addEventListener("site-config-updated", onConfigUpdate);
-    return () => window.removeEventListener("site-config-updated", onConfigUpdate);
+
+    return () =>
+      window.removeEventListener("site-config-updated", onConfigUpdate);
   }, []);
   const navigate = useNavigate();
   const isWebView = useWebViewMode();
@@ -231,8 +235,7 @@ export default function IndexPage() {
               <div className="flex flex-col gap-5">
                 <Input
                   classNames={{
-                    inputWrapper:
-                      "bg-white/50 dark:bg-white/5 border border-white/60 dark:border-white/10 h-12 rounded-lg",
+                    inputWrapper: "h-12 rounded-lg",
                     input: "text-base font-medium",
                   }}
                   errorMessage={errors.username}
@@ -250,8 +253,7 @@ export default function IndexPage() {
 
                 <Input
                   classNames={{
-                    inputWrapper:
-                      "bg-white/50 dark:bg-white/5 border border-white/60 dark:border-white/10 h-12 rounded-lg",
+                    inputWrapper: "h-12 rounded-lg",
                     input: "text-base font-medium tracking-wider",
                   }}
                   isDisabled={loading}
@@ -299,10 +301,10 @@ export default function IndexPage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-4 text-center py-4"
-          poweredClassName="text-xs text-gray-400 dark:text-gray-500"
-          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
+          poweredClassName="text-xs text-gray-500 dark:text-gray-400 mx-auto mt-1 w-fit text-tray rounded-full px-3 py-0.5"
+          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={isWebView ? siteConfig.app_version : siteConfig.version}
-          versionClassName="text-xs text-gray-400 dark:text-gray-500 mt-1"
+          versionClassName="text-xs text-gray-500 dark:text-gray-400 mt-1 mx-auto w-fit text-tray rounded-full px-3 py-1"
         />
 
         {/* 验证码弹层 */}

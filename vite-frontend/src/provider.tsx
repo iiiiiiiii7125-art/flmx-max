@@ -10,10 +10,10 @@ export interface ProvidersProps {
   children: React.ReactNode;
 }
 
-// Shared clear-glass surface for every toast type: the per-type style in
+// Shared toast surface for every toast type: the per-type style in
 // react-hot-toast replaces rather than merges, so each type spreads this.
-// The near-solid --toaster-bg tint carries readability; the backdrop
-// filter matches the Round 2 clear-glass recipe.
+// Round 4: --toaster-bg is fully opaque — toast text rides this tray,
+// never glass (the backdrop filter is inert over an opaque fill).
 const toastSurfaceStyle = {
   background: "var(--toaster-bg)",
   color: "var(--toaster-color)",

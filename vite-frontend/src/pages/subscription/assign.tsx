@@ -1,5 +1,8 @@
+import type { UserApiItem } from "@/api/types";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
+
 import {
   getAllUsers,
   getSubscriptions,
@@ -7,7 +10,6 @@ import {
   setUserSubscriptions,
   type SubscriptionItem,
 } from "@/api";
-import type { UserApiItem } from "@/api/types";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
@@ -19,6 +21,7 @@ function expiryText(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   const label = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
   if (ms <= Date.now()) return `${label} 已过期`;
 
   return `${label} 到期`;
@@ -183,7 +186,7 @@ export default function SubscriptionAssignSection() {
           ) : (
             <>
               {assignLoadError && (
-                <p className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-600 dark:border-danger-500/30 dark:bg-danger-500/10 dark:text-danger-400">
+                <p className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-600 dark:border-danger-500/30 dark:bg-danger-900 dark:text-danger-400">
                   该用户的已分配订阅加载失败，下方勾选状态不可信，保存已禁用。请重新选择该用户重试。
                 </p>
               )}
@@ -202,7 +205,7 @@ export default function SubscriptionAssignSection() {
                         key={s.id}
                         className={`flex cursor-pointer items-center gap-3 rounded-lg border border-divider px-4 py-3 transition-all ${
                           isSelected
-                            ? "bg-primary-50 dark:bg-primary-900/20"
+                            ? "bg-primary-50 dark:bg-primary-900"
                             : "bg-white hover:bg-default-100 dark:bg-default-50"
                         }`}
                       >
@@ -223,11 +226,7 @@ export default function SubscriptionAssignSection() {
                               </span>
                             )}
                             {!s.enabled && (
-                              <Chip
-                                className="ml-2"
-                                size="sm"
-                                variant="flat"
-                              >
+                              <Chip className="ml-2" size="sm" variant="flat">
                                 已停用
                               </Chip>
                             )}

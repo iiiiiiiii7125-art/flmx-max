@@ -8,13 +8,13 @@ const alertVariants = cva(
   {
     variants: {
       variant: {
-        default: "border-default-200 bg-default-50/70 text-foreground",
-        destructive:
-          "border-danger-200 bg-danger-50 text-danger-700 dark:text-danger-300",
-        success:
-          "border-success-200 bg-success-50 text-success-700 dark:text-success-300",
-        warning:
-          "border-warning-200 bg-warning-50 text-warning-700 dark:text-warning-300",
+        default: "border-default-200 bg-default-50 text-foreground",
+        // Round 4: semantic alerts ride the tint trays (opaque in both
+        // themes; the old -50 tints kept their light shade in dark mode
+        // and washed the light text out).
+        destructive: "border-danger-200 tray-danger dark:border-danger-800",
+        success: "border-success-200 tray-success dark:border-success-800",
+        warning: "border-warning-200 tray-warning dark:border-warning-800",
       },
     },
     defaultVariants: {

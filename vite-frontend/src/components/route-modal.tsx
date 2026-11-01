@@ -18,23 +18,29 @@ import {
 const ROUTES: Record<string, [string, string]> = {
   "电信 CN2 GIA": [
     "CN2 GIA",
-    "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+    "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
   ],
   "电信 CN2 GT": [
     "CN2 GT",
-    "bg-orange-500/15 text-orange-700 dark:text-orange-400",
+    "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
   ],
-  "电信 163": ["163", "bg-default-200/70 text-default-600"],
+  "电信 163": ["163", "bg-default-200 text-default-600 dark:text-default-300"],
   "联通 9929": [
     "9929",
     "bg-violet-500/15 text-violet-700 dark:text-violet-400",
   ],
-  "联通 4837": ["4837", "bg-sky-500/15 text-sky-700 dark:text-sky-400"],
+  "联通 4837": [
+    "4837",
+    "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300",
+  ],
   "移动 CMIN2": [
     "CMIN2",
-    "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
   ],
-  "移动 CMI": ["CMI", "bg-teal-500/15 text-teal-700 dark:text-teal-400"],
+  "移动 CMI": [
+    "CMI",
+    "bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300",
+  ],
 };
 
 const NET_CLASS: Record<string, string> = {

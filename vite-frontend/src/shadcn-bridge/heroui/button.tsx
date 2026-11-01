@@ -83,8 +83,7 @@ function mapSize(
 }
 
 const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
-  default:
-    "bg-default-200/70 text-default-800 shadow-none hover:bg-default-200",
+  default: "bg-default-200 text-default-800 shadow-none hover:bg-default-300",
   success: "bg-success text-white shadow-sm hover:bg-success/90",
   warning: "bg-warning text-white shadow-sm hover:bg-warning/90",
   primary:
@@ -109,32 +108,33 @@ const borderedColorClassMap: Record<HeroButtonColor, string> = {
     "border-danger/50 text-danger hover:bg-danger/5 dark:text-danger-300 dark:hover:bg-danger/10",
 };
 
+// Round 4 tray standard: light buttons sit on the neutral tray with a
+// coloured label; flat buttons sit on the semantic tint tray. Both are
+// opaque in either theme, so coloured text never lands on glass or
+// wallpaper (the pre-Round 4 /10 tints and bg-transparent light were the
+// factory of the invisible-text bug family).
 const lightColorClassMap: Record<HeroButtonColor, string> = {
-  default: "text-default-700 hover:bg-default-100 dark:text-default-600",
+  default:
+    "bg-tray text-default-700 shadow-sm hover:bg-default-100 dark:text-default-600 dark:hover:bg-default-200",
   primary:
-    "text-primary hover:bg-primary/10 dark:text-primary-300 dark:hover:bg-primary/15",
+    "bg-tray text-primary-700 shadow-sm hover:bg-primary-50 dark:text-primary-300 dark:hover:bg-primary-900",
   secondary:
-    "text-secondary hover:bg-secondary/10 dark:text-secondary-300 dark:hover:bg-secondary/15",
+    "bg-tray text-secondary-700 shadow-sm hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-900",
   success:
-    "text-success hover:bg-success/10 dark:text-success-300 dark:hover:bg-success/15",
+    "bg-tray text-success-700 shadow-sm hover:bg-success-50 dark:text-success-300 dark:hover:bg-success-900",
   warning:
-    "text-warning-700 hover:bg-warning/10 dark:text-warning-300 dark:hover:bg-warning/15",
+    "bg-tray text-warning-700 shadow-sm hover:bg-warning-50 dark:text-warning-300 dark:hover:bg-warning-900",
   danger:
-    "text-danger hover:bg-danger/10 dark:text-danger-300 dark:hover:bg-danger/15",
+    "bg-tray text-danger-700 shadow-sm hover:bg-danger-50 dark:text-danger-300 dark:hover:bg-danger-900",
 };
 
 const flatColorClassMap: Record<HeroButtonColor, string> = {
-  default: "bg-default-100 text-default-700 hover:bg-default-200",
-  primary:
-    "bg-primary/10 text-primary-700 hover:bg-primary/15 dark:bg-primary/15 dark:text-primary-300 dark:hover:bg-primary/20",
-  secondary:
-    "bg-secondary/10 text-secondary-700 hover:bg-secondary/15 dark:bg-secondary/15 dark:text-secondary-300 dark:hover:bg-secondary/20",
-  success:
-    "bg-success/10 text-success-700 hover:bg-success/15 dark:bg-success/15 dark:text-success-300 dark:hover:bg-success/20",
-  warning:
-    "bg-warning/10 text-warning-700 hover:bg-warning/15 dark:bg-warning/15 dark:text-warning-300 dark:hover:bg-warning/20",
-  danger:
-    "bg-danger/10 text-danger-700 hover:bg-danger/15 dark:bg-danger/15 dark:text-danger-300 dark:hover:bg-danger/20",
+  default: "tray-default",
+  primary: "tray-primary",
+  secondary: "tray-secondary",
+  success: "tray-success",
+  warning: "tray-warning",
+  danger: "tray-danger",
 };
 
 const shadowColorClassMap: Record<HeroButtonColor, string> = {

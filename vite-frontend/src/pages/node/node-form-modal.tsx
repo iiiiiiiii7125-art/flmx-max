@@ -250,7 +250,7 @@ export function NodeFormModal({
               >
                 <div className="space-y-4 pb-2">
                   {form.forwardMode === "nftables" ? (
-                    <div className="space-y-4 rounded-xl border border-warning-200 bg-warning-50/60 p-4 dark:border-warning-500/30 dark:bg-warning-950/20">
+                    <div className="space-y-4 rounded-xl border border-warning-200 bg-warning-50 p-4 dark:border-warning-500/30 dark:bg-warning-950">
                       <div>
                         <div className="text-sm font-medium text-warning-700 dark:text-warning-300">
                           SSH 配置
@@ -509,10 +509,10 @@ export function NodeFormModal({
                       />
                     )}
                     <div
-                      className={`grid grid-cols-1 sm:grid-cols-3 gap-3 bg-content1/30 dark:bg-content1/20 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
+                      className={`grid grid-cols-1 sm:grid-cols-3 gap-3 bg-content1 dark:bg-content1 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
                     >
                       {/* HTTP tile */}
-                      <div className="px-3 py-3 rounded-lg bg-content1/55 dark:bg-content1/35 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
+                      <div className="px-3 py-3 rounded-lg bg-content1 dark:bg-content1 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -553,7 +553,7 @@ export function NodeFormModal({
                       </div>
 
                       {/* TLS tile */}
-                      <div className="px-3 py-3 rounded-lg bg-content1/55 dark:bg-content1/35 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
+                      <div className="px-3 py-3 rounded-lg bg-content1 dark:bg-content1 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -591,7 +591,7 @@ export function NodeFormModal({
                       </div>
 
                       {/* SOCKS tile */}
-                      <div className="px-3 py-3 rounded-lg bg-content1/55 dark:bg-content1/35 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
+                      <div className="px-3 py-3 rounded-lg bg-content1 dark:bg-content1 border border-divider hover:border-primary-200 dark:hover:border-primary-500/30 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"

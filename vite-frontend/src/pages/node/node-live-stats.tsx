@@ -78,7 +78,7 @@ export function NodeLiveStats({
     return (
       <div className={`space-y-2 ${variant === "footer" ? "mt-2" : ""}`}>
         <div className="grid grid-cols-3 gap-3">{meters}</div>
-        <div className="grid grid-cols-2 divide-x divide-divider rounded-lg bg-default-100/60 py-1.5 text-[11px] tabular-nums">
+        <div className="grid grid-cols-2 divide-x divide-divider rounded-lg bg-default-100 py-1.5 text-[11px] tabular-nums">
           <div className="min-w-0 px-2.5">
             <div className="text-[10px] text-default-400">网速</div>
             <div className="flex flex-wrap items-center gap-x-2 font-medium">

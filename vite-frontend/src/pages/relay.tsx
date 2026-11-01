@@ -204,7 +204,7 @@ function LinesView() {
       </div>
 
       {shown.length === 0 ? (
-        <Card className="bg-default-50/50 shadow-sm">
+        <Card className="bg-default-50 shadow-sm">
           <CardBody className="py-12 text-center text-sm text-default-500">
             {inbounds.length === 0
               ? "还没有落地。先在“落地”里搭建或导入节点，再回来对接中转。"

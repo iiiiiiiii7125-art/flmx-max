@@ -5,10 +5,6 @@ import type {
   ServiceMonitorMutationPayload,
   ServiceMonitorLimitsApiData,
 } from "@/api/types";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
 
 import React, {
   useCallback,
@@ -43,6 +39,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { formatTraffic } from "@/utils/traffic";
 import {
   DistroIcon,
@@ -217,7 +214,7 @@ function ServerCard({
       <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="relative flex-shrink-0">
-            <div className="w-10 h-10 rounded-xl bg-default-100 dark:bg-default-50/10 flex items-center justify-center border border-divider">
+            <div className="w-10 h-10 rounded-xl bg-default-100 dark:bg-default-100 flex items-center justify-center border border-divider">
               <DistroIcon
                 className="w-5 h-5"
                 distro={distro}
@@ -270,7 +267,7 @@ function ServerCard({
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-2.5 rounded-lg bg-default-50 dark:bg-default-100/30 border border-divider mt-1 w-full">
+        <div className="flex items-center justify-between p-2.5 rounded-lg bg-default-50 dark:bg-default-100 border border-divider mt-1 w-full">
           <div className="flex flex-col gap-0.5 min-w-0 flex-1">
             <div className="flex items-center gap-1 text-[10px] text-default-500">
               <span className="text-primary-500 inline-block font-bold">↑</span>
@@ -1097,6 +1094,7 @@ export function MonitorView({
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(editModalOpen, !editingMonitor, rotateIdemKey);
 
@@ -1489,7 +1487,7 @@ export function MonitorView({
                                   ? formatBytesPerSecond(metric.netOutSpeed)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-success-50 dark:bg-success-500/10 text-success-500">
+                              <div className="flex items-center justify-center p-[3px] rounded-full bg-success-50 dark:bg-success-900 text-success-500">
                                 <ArrowUp
                                   className="w-3 h-3"
                                   strokeWidth={2.5}
@@ -1502,7 +1500,7 @@ export function MonitorView({
                                   ? formatBytesPerSecond(metric.netInSpeed)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-primary-50 dark:bg-primary-500/10 text-primary-500">
+                              <div className="flex items-center justify-center p-[3px] rounded-full bg-primary-50 dark:bg-primary-900 text-primary-500">
                                 <ArrowDown
                                   className="w-3 h-3"
                                   strokeWidth={2.5}
@@ -1519,7 +1517,7 @@ export function MonitorView({
                                   ? formatBytes(metric.netOutBytes)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-default-100 text-default-500 dark:bg-default-100/50">
+                              <div className="flex items-center justify-center p-[3px] rounded-full bg-default-100 text-default-500 dark:bg-default-100">
                                 <ArrowUp
                                   className="w-3 h-3"
                                   strokeWidth={2.5}
@@ -1532,7 +1530,7 @@ export function MonitorView({
                                   ? formatBytes(metric.netInBytes)
                                   : "-"}
                               </span>
-                              <div className="flex items-center justify-center p-[3px] rounded-full bg-default-100 text-default-500 dark:bg-default-100/50">
+                              <div className="flex items-center justify-center p-[3px] rounded-full bg-default-100 text-default-500 dark:bg-default-100">
                                 <ArrowDown
                                   className="w-3 h-3"
                                   strokeWidth={2.5}
@@ -1904,15 +1902,15 @@ export function MonitorView({
                             <Chip color="primary" size="sm" variant="flat">
                               {resolvedActiveMonitor.type.toUpperCase()}
                             </Chip>
-                            <span className="font-mono text-xs text-default-600">
+                            <span className="font-mono text-xs text-default-600 text-tray rounded-full px-2 py-0.5">
                               {resolvedActiveMonitor.target}
                             </span>
-                            <span className="text-xs text-default-600">
+                            <span className="text-xs text-default-600 text-tray rounded-full px-2 py-0.5">
                               {`每 ${resolvedActiveMonitor.intervalSec || resolvedServiceMonitorLimits.defaultIntervalSec} 秒测试，30 秒上报`}
                             </span>
                             {activeLatestResult &&
                             Number.isFinite(activeLatestResult.latencyMs) ? (
-                              <span className="font-mono text-xs font-semibold text-success">
+                              <span className="font-mono text-xs font-semibold tray-success rounded-full px-2 py-0.5">
                                 {activeLatestResult.latencyMs.toFixed(0)}ms
                               </span>
                             ) : null}
@@ -2208,152 +2206,156 @@ export function MonitorView({
             <ModalHeader>
               {editingMonitor ? "编辑监控" : "添加监控"}
             </ModalHeader>
-          <ModalBody className="space-y-4">
-            <Input
-              label="名称"
-              placeholder="例如: Google DNS"
-              value={monitorForm.name}
-              onChange={(e) =>
-                setMonitorForm((f) => ({ ...f, name: e.target.value }))
-              }
-            />
-            <Select
-              label="类型"
-              selectedKeys={[monitorForm.type]}
-              onSelectionChange={(keys) => {
-                const nextType = Array.from(keys)[0] as "tcp" | "icmp";
+            <ModalBody className="space-y-4">
+              <Input
+                label="名称"
+                placeholder="例如: Google DNS"
+                value={monitorForm.name}
+                onChange={(e) =>
+                  setMonitorForm((f) => ({ ...f, name: e.target.value }))
+                }
+              />
+              <Select
+                label="类型"
+                selectedKeys={[monitorForm.type]}
+                onSelectionChange={(keys) => {
+                  const nextType = Array.from(keys)[0] as "tcp" | "icmp";
 
-                setMonitorForm((f) => {
-                  let nextNodeId = f.nodeId;
+                  setMonitorForm((f) => {
+                    let nextNodeId = f.nodeId;
 
-                  if (nextType === "icmp" && (!nextNodeId || nextNodeId <= 0)) {
-                    nextNodeId = onlineNodes.length > 0 ? onlineNodes[0].id : 0;
+                    if (
+                      nextType === "icmp" &&
+                      (!nextNodeId || nextNodeId <= 0)
+                    ) {
+                      nextNodeId =
+                        onlineNodes.length > 0 ? onlineNodes[0].id : 0;
+                    }
+
+                    return {
+                      ...f,
+                      type: nextType,
+                      nodeId: nextNodeId,
+                    };
+                  });
+                }}
+              >
+                <SelectItem key="tcp">TCP</SelectItem>
+                <SelectItem key="icmp">ICMP Ping</SelectItem>
+              </Select>
+              <Input
+                label="目标"
+                placeholder={
+                  monitorForm.type === "icmp"
+                    ? "例如: 8.8.8.8 或 1.1.1.1"
+                    : "例如: 8.8.8.8:53"
+                }
+                value={monitorForm.target}
+                onChange={(e) =>
+                  setMonitorForm((f) => ({ ...f, target: e.target.value }))
+                }
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  description={`最小 ${resolvedServiceMonitorLimits.minIntervalSec}s（扫描周期 ${resolvedServiceMonitorLimits.checkerScanIntervalSec}s）`}
+                  errorMessage={
+                    monitorForm.intervalSec <
+                    resolvedServiceMonitorLimits.minIntervalSec
+                      ? `不能小于 ${resolvedServiceMonitorLimits.minIntervalSec}s`
+                      : undefined
                   }
-
-                  return {
-                    ...f,
-                    type: nextType,
-                    nodeId: nextNodeId,
-                  };
-                });
-              }}
-            >
-              <SelectItem key="tcp">TCP</SelectItem>
-              <SelectItem key="icmp">ICMP Ping</SelectItem>
-            </Select>
-            <Input
-              label="目标"
-              placeholder={
-                monitorForm.type === "icmp"
-                  ? "例如: 8.8.8.8 或 1.1.1.1"
-                  : "例如: 8.8.8.8:53"
-              }
-              value={monitorForm.target}
-              onChange={(e) =>
-                setMonitorForm((f) => ({ ...f, target: e.target.value }))
-              }
-            />
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                description={`最小 ${resolvedServiceMonitorLimits.minIntervalSec}s（扫描周期 ${resolvedServiceMonitorLimits.checkerScanIntervalSec}s）`}
-                errorMessage={
-                  monitorForm.intervalSec <
-                  resolvedServiceMonitorLimits.minIntervalSec
-                    ? `不能小于 ${resolvedServiceMonitorLimits.minIntervalSec}s`
-                    : undefined
+                  isInvalid={
+                    monitorForm.intervalSec <
+                    resolvedServiceMonitorLimits.minIntervalSec
+                  }
+                  label="检查间隔(秒)"
+                  type="number"
+                  value={String(monitorForm.intervalSec)}
+                  onChange={(e) =>
+                    setMonitorForm((f) => ({
+                      ...f,
+                      intervalSec:
+                        Number(e.target.value) ||
+                        resolvedServiceMonitorLimits.defaultIntervalSec,
+                    }))
+                  }
+                />
+                <Input
+                  description={`范围 ${resolvedServiceMonitorLimits.minTimeoutSec}-${resolvedServiceMonitorLimits.maxTimeoutSec}s`}
+                  errorMessage={
+                    monitorForm.timeoutSec <
+                      resolvedServiceMonitorLimits.minTimeoutSec ||
+                    monitorForm.timeoutSec >
+                      resolvedServiceMonitorLimits.maxTimeoutSec
+                      ? `需在 ${resolvedServiceMonitorLimits.minTimeoutSec}-${resolvedServiceMonitorLimits.maxTimeoutSec}s 范围内`
+                      : undefined
+                  }
+                  isInvalid={
+                    monitorForm.timeoutSec <
+                      resolvedServiceMonitorLimits.minTimeoutSec ||
+                    monitorForm.timeoutSec >
+                      resolvedServiceMonitorLimits.maxTimeoutSec
+                  }
+                  label="超时时间(秒)"
+                  type="number"
+                  value={String(monitorForm.timeoutSec)}
+                  onChange={(e) =>
+                    setMonitorForm((f) => ({
+                      ...f,
+                      timeoutSec:
+                        Number(e.target.value) ||
+                        resolvedServiceMonitorLimits.defaultTimeoutSec,
+                    }))
+                  }
+                />
+              </div>
+              <Select
+                label="执行节点"
+                selectedKeys={
+                  monitorForm.type === "icmp"
+                    ? monitorForm.nodeId
+                      ? [String(monitorForm.nodeId)]
+                      : []
+                    : monitorForm.nodeId
+                      ? [String(monitorForm.nodeId)]
+                      : ["0"]
                 }
-                isInvalid={
-                  monitorForm.intervalSec <
-                  resolvedServiceMonitorLimits.minIntervalSec
-                }
-                label="检查间隔(秒)"
-                type="number"
-                value={String(monitorForm.intervalSec)}
-                onChange={(e) =>
+                onSelectionChange={(keys) =>
                   setMonitorForm((f) => ({
                     ...f,
-                    intervalSec:
-                      Number(e.target.value) ||
-                      resolvedServiceMonitorLimits.defaultIntervalSec,
+                    nodeId: Number(Array.from(keys)[0]),
                   }))
                 }
-              />
-              <Input
-                description={`范围 ${resolvedServiceMonitorLimits.minTimeoutSec}-${resolvedServiceMonitorLimits.maxTimeoutSec}s`}
-                errorMessage={
-                  monitorForm.timeoutSec <
-                    resolvedServiceMonitorLimits.minTimeoutSec ||
-                  monitorForm.timeoutSec >
-                    resolvedServiceMonitorLimits.maxTimeoutSec
-                    ? `需在 ${resolvedServiceMonitorLimits.minTimeoutSec}-${resolvedServiceMonitorLimits.maxTimeoutSec}s 范围内`
-                    : undefined
-                }
-                isInvalid={
-                  monitorForm.timeoutSec <
-                    resolvedServiceMonitorLimits.minTimeoutSec ||
-                  monitorForm.timeoutSec >
-                    resolvedServiceMonitorLimits.maxTimeoutSec
-                }
-                label="超时时间(秒)"
-                type="number"
-                value={String(monitorForm.timeoutSec)}
-                onChange={(e) =>
-                  setMonitorForm((f) => ({
-                    ...f,
-                    timeoutSec:
-                      Number(e.target.value) ||
-                      resolvedServiceMonitorLimits.defaultTimeoutSec,
-                  }))
-                }
-              />
-            </div>
-            <Select
-              label="执行节点"
-              selectedKeys={
-                monitorForm.type === "icmp"
-                  ? monitorForm.nodeId
-                    ? [String(monitorForm.nodeId)]
-                    : []
-                  : monitorForm.nodeId
-                    ? [String(monitorForm.nodeId)]
-                    : ["0"]
-              }
-              onSelectionChange={(keys) =>
-                setMonitorForm((f) => ({
-                  ...f,
-                  nodeId: Number(Array.from(keys)[0]),
-                }))
-              }
-            >
-              {monitorForm.type !== "icmp" && (
-                <SelectItem key="0">面板执行</SelectItem>
-              )}
-              {onlineNodes.map((node) => (
-                <SelectItem key={String(node.id)}>{node.name}</SelectItem>
-              ))}
-            </Select>
-            <div className="flex items-center gap-2">
-              <Switch
-                isSelected={monitorForm.enabled}
-                onValueChange={(v) =>
-                  setMonitorForm((f) => ({ ...f, enabled: v }))
-                }
-              />
-              <span className="text-sm">启用</span>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="flat" onPress={() => setEditModalOpen(false)}>
-              取消
-            </Button>
-            <Button
-              color="primary"
-              isLoading={submitLoading}
-              onPress={handleSubmitMonitor}
-            >
-              {editingMonitor ? "更新" : "创建"}
-            </Button>
-          </ModalFooter>
+              >
+                {monitorForm.type !== "icmp" && (
+                  <SelectItem key="0">面板执行</SelectItem>
+                )}
+                {onlineNodes.map((node) => (
+                  <SelectItem key={String(node.id)}>{node.name}</SelectItem>
+                ))}
+              </Select>
+              <div className="flex items-center gap-2">
+                <Switch
+                  isSelected={monitorForm.enabled}
+                  onValueChange={(v) =>
+                    setMonitorForm((f) => ({ ...f, enabled: v }))
+                  }
+                />
+                <span className="text-sm">启用</span>
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="flat" onPress={() => setEditModalOpen(false)}>
+                取消
+              </Button>
+              <Button
+                color="primary"
+                isLoading={submitLoading}
+                onPress={handleSubmitMonitor}
+              >
+                {editingMonitor ? "更新" : "创建"}
+              </Button>
+            </ModalFooter>
           </ModalContent>
         </Modal>
       )}

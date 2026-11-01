@@ -870,7 +870,7 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.inbound} max-w-[280px]`}
       >
         <button
-          className="w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
+          className="w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
           title={formatInAddress(forward.inIp, forward.inPort)}
           type="button"
           onClick={() =>
@@ -884,7 +884,7 @@ const SortableTableRow = ({
         className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.target} max-w-[280px]`}
       >
         <button
-          className="w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
+          className="w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
           title={formatRemoteAddress(forward.remoteAddr)}
           type="button"
           onClick={() => showAddressModal(forward.remoteAddr, null, "目标地址")}
@@ -924,9 +924,10 @@ const SortableTableRow = ({
         <div className="flex justify-start gap-2 pl-2">
           <Button
             isIconOnly
-            className="bg-primary/10 text-primary hover:bg-primary/20"
+            color="primary"
             size="sm"
             title="编辑"
+            variant="flat"
             onPress={() => handleEdit(forward)}
           >
             <svg
@@ -945,9 +946,10 @@ const SortableTableRow = ({
           </Button>
           <Button
             isIconOnly
-            className="bg-warning/10 text-warning hover:bg-warning/20"
+            color="warning"
             size="sm"
             title="诊断"
+            variant="flat"
             onPress={() => handleDiagnose(forward)}
           >
             <svg
@@ -966,10 +968,11 @@ const SortableTableRow = ({
           </Button>
           <Button
             isIconOnly
-            className="bg-secondary/10 text-secondary hover:bg-secondary/20"
+            color="secondary"
             isDisabled={(forward.inFlow || 0) + (forward.outFlow || 0) <= 0}
             size="sm"
             title="流量清零"
+            variant="flat"
             onPress={() => handleResetFlow(forward)}
           >
             <svg
@@ -989,9 +992,10 @@ const SortableTableRow = ({
           </Button>
           <Button
             isIconOnly
-            className="bg-danger/10 text-danger hover:bg-danger/20"
+            color="danger"
             size="sm"
             title="删除"
+            variant="flat"
             onPress={() => handleDelete(forward)}
           >
             <svg
@@ -1063,7 +1067,7 @@ const SortableCompactTableRow = ({
         </TableCell>
       )}
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <div
           className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
@@ -1081,7 +1085,7 @@ const SortableCompactTableRow = ({
         </div>
       </TableCell>
       <TableCell
-        className={`whitespace-nowrap text-foreground ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`whitespace-nowrap text-foreground ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <span className="inline-flex items-center gap-2">
           <button
@@ -1095,7 +1099,7 @@ const SortableCompactTableRow = ({
         </span>
       </TableCell>
       <TableCell
-        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <div className="flex items-center">
           <span className="font-medium text-default-700 text-sm">
@@ -1103,17 +1107,17 @@ const SortableCompactTableRow = ({
           </span>
           {forward.tunnelTrafficRatio !== undefined &&
             normalizeTunnelTrafficRatio(forward.tunnelTrafficRatio) !== 1 && (
-              <span className="text-success font-bold text-[12px] ml-1.5 border border-success/30 rounded px-1 bg-success/10">
+              <span className="tray-success font-bold text-[12px] ml-1.5 rounded px-1 py-0.5">
                 {formatTunnelTrafficRatio(forward.tunnelTrafficRatio)}
               </span>
             )}
         </div>
       </TableCell>
       <TableCell
-        className={`max-w-[220px] ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`max-w-[220px] ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <button
-          className={`w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
+          className={`w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
             hasMultipleAddresses(forward.inIp)
               ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
               : "cursor-default"
@@ -1128,10 +1132,10 @@ const SortableCompactTableRow = ({
         </button>
       </TableCell>
       <TableCell
-        className={`max-w-[240px] ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`max-w-[240px] ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <button
-          className={`w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
+          className={`w-full truncate rounded-md bg-default-100 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
             hasMultipleAddresses(forward.remoteAddr)
               ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
               : "cursor-default"
@@ -1145,7 +1149,7 @@ const SortableCompactTableRow = ({
       </TableCell>
 
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <Chip
           className="text-sm font-medium shrink-0 whitespace-nowrap"
@@ -1157,14 +1161,14 @@ const SortableCompactTableRow = ({
         </Chip>
       </TableCell>
       <TableCell
-        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <span className="text-sm font-medium text-default-600 font-mono">
           {formatFlow(getForwardDisplayFlow(forward))}
         </span>
       </TableCell>
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <div className="flex items-center gap-2.5 whitespace-nowrap">
           <Switch
@@ -1177,13 +1181,14 @@ const SortableCompactTableRow = ({
         </div>
       </TableCell>
       <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
+        className={`${selectedIds.has(forward.id) ? "bg-primary-50 dark:bg-primary-900" : ""}`}
       >
         <div className="flex justify-start gap-2 pl-2">
           <Button
             isIconOnly
-            className="bg-primary/10 text-primary hover:bg-primary/20"
+            color="primary"
             size="sm"
+            variant="flat"
             onPress={() => handleEdit(forward)}
           >
             <svg
@@ -1200,8 +1205,9 @@ const SortableCompactTableRow = ({
           </Button>
           <Button
             isIconOnly
-            className="bg-warning/10 text-warning hover:bg-warning/20"
+            color="warning"
             size="sm"
+            variant="flat"
             onPress={() => handleDiagnose(forward)}
           >
             <svg
@@ -1218,10 +1224,11 @@ const SortableCompactTableRow = ({
           </Button>
           <Button
             isIconOnly
-            className="bg-secondary/10 text-secondary hover:bg-secondary/20"
+            color="secondary"
             isDisabled={(forward.inFlow || 0) + (forward.outFlow || 0) <= 0}
             size="sm"
             title="流量清零"
+            variant="flat"
             onPress={() => handleResetFlow(forward)}
           >
             <svg
@@ -1241,8 +1248,9 @@ const SortableCompactTableRow = ({
           </Button>
           <Button
             isIconOnly
-            className="bg-danger/10 text-danger hover:bg-danger/20"
+            color="danger"
             size="sm"
+            variant="flat"
             onPress={() => handleDelete(forward)}
           >
             <svg
@@ -2190,11 +2198,7 @@ export default function ForwardPage() {
       newErrors.tunnelId = "请选择关联隧道";
     }
 
-    if (
-      form.inPort !== null &&
-      form.inPort !== undefined &&
-      form.inPort > 0
-    ) {
+    if (form.inPort !== null && form.inPort !== undefined && form.inPort > 0) {
       // 与后端 mutations.go 口径一致：端口本身须在 1-65535，
       // 有隧道端口范围时还须落在范围内（留空/0 走后端自动分配，不校验）。
       if (form.inPort < 1 || form.inPort > 65535) {
@@ -2439,6 +2443,7 @@ export default function ForwardPage() {
   // 提交表单
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(modalOpen, !isEdit, rotateIdemKey);
 
@@ -2978,14 +2983,17 @@ export default function ForwardPage() {
           const nyForwardInput = convertNyItemToForwardInput(parsedNyItem);
 
           try {
-            const response = await createForward({
-              name: nyForwardInput.name,
-              tunnelId: selectedTunnelForImport,
-              inPort: nyForwardInput.inPort,
-              remoteAddr: nyForwardInput.remoteAddr,
-              strategy: nyForwardInput.strategy,
-              // 批量导入逐行是独立创建：每行各自一把键（非同表单复用）。
-            }, newIdemKey());
+            const response = await createForward(
+              {
+                name: nyForwardInput.name,
+                tunnelId: selectedTunnelForImport,
+                inPort: nyForwardInput.inPort,
+                remoteAddr: nyForwardInput.remoteAddr,
+                strategy: nyForwardInput.strategy,
+                // 批量导入逐行是独立创建：每行各自一把键（非同表单复用）。
+              },
+              newIdemKey(),
+            );
 
             if (response.code === 0) {
               recordImportResult({
@@ -3071,14 +3079,17 @@ export default function ForwardPage() {
               portNumber = port;
             }
 
-            const response = await createForward({
-              name: name.trim(),
-              tunnelId: selectedTunnelForImport,
-              inPort: portNumber,
-              remoteAddr: remoteAddr.trim(),
-              strategy: "fifo",
-              // 批量导入逐行是独立创建：每行各自一把键（非同表单复用）。
-            }, newIdemKey());
+            const response = await createForward(
+              {
+                name: name.trim(),
+                tunnelId: selectedTunnelForImport,
+                inPort: portNumber,
+                remoteAddr: remoteAddr.trim(),
+                strategy: "fifo",
+                // 批量导入逐行是独立创建：每行各自一把键（非同表单复用）。
+              },
+              newIdemKey(),
+            );
 
             if (response.code === 0) {
               recordImportResult({
@@ -3910,7 +3921,7 @@ export default function ForwardPage() {
     return (
       <Card
         key={forward.id}
-        className="group h-full flex flex-col overflow-hidden bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
+        className="group h-full flex flex-col overflow-hidden"
       >
         <CardHeader className="pb-2 md:pb-2">
           <div className="flex flex-wrap justify-between items-start w-full gap-y-1">
@@ -3971,9 +3982,9 @@ export default function ForwardPage() {
             {/* 地址信息 */}
             <div className="space-y-1">
               <button
-                className={`cursor-pointer px-2 py-1 bg-white/20 dark:bg-black/20 backdrop-blur-md rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
+                className={`cursor-pointer px-2 py-1 bg-default-100 rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.inIp)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200/50"
+                    ? "hover:bg-default-100 dark:hover:bg-default-200"
                     : ""
                 }`}
                 title={formatInAddress(forward.inIp, forward.inPort)}
@@ -4011,9 +4022,9 @@ export default function ForwardPage() {
               </button>
 
               <button
-                className={`cursor-pointer px-2 py-1 bg-white/20 dark:bg-black/20 backdrop-blur-md rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
+                className={`cursor-pointer px-2 py-1 bg-default-100 rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.remoteAddr)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200/50"
+                    ? "hover:bg-default-100 dark:hover:bg-default-200"
                     : ""
                 }`}
                 title={formatRemoteAddress(forward.remoteAddr)}
@@ -4217,7 +4228,7 @@ export default function ForwardPage() {
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between mb-6 gap-3">
         <div className="flex-1 flex items-center gap-2">
           <Button
-            className="bg-default/10 dark:bg-default/20 backdrop-blur-md text-default-700 dark:text-default-300 font-semibold hover:bg-default/20 dark:hover:bg-default/30"
+            className="tray-default font-semibold"
             startContent={
               <svg
                 className="w-4 h-4"
@@ -4428,7 +4439,7 @@ export default function ForwardPage() {
                   {sortedForwards.length} 条规则
                 </span>
               </div>
-              <Card className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
+              <Card className="rounded-2xl">
                 <DndContext
                   collisionDetection={pointerWithin}
                   sensors={sensors}
@@ -4444,7 +4455,7 @@ export default function ForwardPage() {
                       classNames={{
                         wrapper:
                           "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                        th: "bg-default-100/50 text-default-600 font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                        th: "bg-default-100 text-default-600 font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                         td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
                         tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors group",
                       }}
@@ -4511,7 +4522,7 @@ export default function ForwardPage() {
               </Card>
             </>
           ) : (
-            <Card className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
+            <Card>
               <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
                 <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
                   暂无规则配置
@@ -4557,7 +4568,7 @@ export default function ForwardPage() {
             </DndContext>
           </>
         ) : (
-          <Card className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
+          <Card>
             <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
               <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
                 暂无规则配置
@@ -4582,9 +4593,9 @@ export default function ForwardPage() {
               return (
                 <div
                   key={`grouped-table-${group.userId}-${group.userName}`}
-                  className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
+                  className="text-tray rounded-2xl shadow-sm"
                 >
-                  <div className="flex items-center justify-between border-b border-white/20 dark:border-white/10 bg-white/20 dark:bg-black/20 backdrop-blur-3xl px-5 py-4">
+                  <div className="flex items-center justify-between border-b border-divider bg-default-100 px-5 py-4">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">
                         {group.userName}
@@ -4670,10 +4681,10 @@ export default function ForwardPage() {
                               collapsed={collapsed}
                               countClassName="text-xs text-default-600"
                               groupUserId={group.userId}
-                              headerClassName="flex items-center justify-between border-b border-white/20 dark:border-white/10 bg-white/20 dark:bg-black/20 backdrop-blur-3xl px-4 py-2.5"
+                              headerClassName="flex items-center justify-between border-b border-divider bg-default-100 px-4 py-2.5"
                               titleClassName="truncate text-sm font-semibold text-default-700"
                               tunnel={tunnel}
-                              wrapperClassName="rounded-2xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
+                              wrapperClassName="rounded-2xl"
                               onToggleCollapsed={() =>
                                 toggleTunnelGroupCollapsed(
                                   group.userId,
@@ -4819,7 +4830,7 @@ export default function ForwardPage() {
             })}
           </div>
         ) : (
-          <Card className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
+          <Card>
             <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
               <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
                 暂无规则配置
@@ -4895,10 +4906,10 @@ export default function ForwardPage() {
                             collapsed={collapsed}
                             countClassName="text-xs text-default-600"
                             groupUserId={group.userId}
-                            headerClassName="flex items-center justify-between rounded-lg bg-white/10 dark:bg-black/10 backdrop-blur-md border border-white/20 dark:border-white/10 px-3 py-2"
+                            headerClassName="flex items-center justify-between rounded-lg bg-default-100 border border-divider px-3 py-2"
                             titleClassName="truncate text-sm font-semibold text-default-700"
                             tunnel={tunnel}
-                            wrapperClassName="rounded-xl border border-divider bg-white/5 dark:bg-black/5 space-y-3"
+                            wrapperClassName="rounded-xl border border-divider bg-content1 space-y-3"
                             onToggleCollapsed={() =>
                               toggleTunnelGroupCollapsed(
                                 group.userId,
@@ -5736,8 +5747,8 @@ export default function ForwardPage() {
                         key={index}
                         className={`p-2 rounded border ${
                           result.success
-                            ? "bg-success-50 dark:bg-success-100/10 border-success-200 dark:border-success-300/20"
-                            : "bg-danger-50 dark:bg-danger-100/10 border-danger-200 dark:border-danger-300/20"
+                            ? "bg-success-50 dark:bg-success-900 border-success-200 dark:border-success-300/20"
+                            : "bg-danger-50 dark:bg-danger-900 border-danger-200 dark:border-danger-300/20"
                         }`}
                       >
                         <div className="flex items-center gap-2">
@@ -5864,7 +5875,7 @@ export default function ForwardPage() {
                 {diagnosisResult ? (
                   <div className="space-y-4">
                     {diagnosisLoading && (
-                      <div className="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+                      <div className="flex items-center justify-between rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 dark:border-primary-800 dark:bg-primary-900">
                         <div className="flex items-center gap-2 text-sm text-primary">
                           <Spinner size="sm" />
                           <span>
@@ -5901,7 +5912,7 @@ export default function ForwardPage() {
                           总测试数
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-success-50 dark:bg-success-900/20 rounded-lg border border-success-200 dark:border-success-700">
+                      <div className="text-center p-3 bg-success-50 dark:bg-success-900 rounded-lg border border-success-200 dark:border-success-700">
                         <div className="text-2xl font-bold text-success-600 dark:text-success-400">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
@@ -5913,7 +5924,7 @@ export default function ForwardPage() {
                           成功
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-danger-50 dark:bg-danger-900/20 rounded-lg border border-danger-200 dark:border-danger-700">
+                      <div className="text-center p-3 bg-danger-50 dark:bg-danger-900 rounded-lg border border-danger-200 dark:border-danger-700">
                         <div className="text-2xl font-bold text-danger-600 dark:text-danger-400">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
@@ -5965,7 +5976,7 @@ export default function ForwardPage() {
                               key={title}
                               className="border border-divider rounded-lg overflow-hidden"
                             >
-                              <div className="bg-primary/10 dark:bg-primary/20 px-3 py-2 border-b border-divider">
+                              <div className="bg-primary-50 dark:bg-primary-900 px-3 py-2 border-b border-divider">
                                 <h3 className="text-sm font-semibold text-primary">
                                   {title}
                                 </h3>
@@ -6005,12 +6016,12 @@ export default function ForwardPage() {
                                     return (
                                       <tr
                                         key={index}
-                                        className={`hover:bg-default-50 dark:hover:bg-gray-700/50 ${
+                                        className={`hover:bg-default-50 dark:hover:bg-gray-700 ${
                                           isDiagnosing
-                                            ? "bg-warning-50 dark:bg-warning-900/20"
+                                            ? "bg-warning-50 dark:bg-warning-900"
                                             : isSuccess
                                               ? "bg-content1"
-                                              : "bg-danger-50 dark:bg-danger-900/30"
+                                              : "bg-danger-50 dark:bg-danger-900"
                                         }`}
                                       >
                                         <td className="px-3 py-2">
@@ -6175,7 +6186,7 @@ export default function ForwardPage() {
 
                           return (
                             <div key={title} className="space-y-2">
-                              <div className="px-2 py-1.5 bg-primary/10 dark:bg-primary/20 rounded-lg border border-primary/30">
+                              <div className="px-2 py-1.5 bg-primary-50 dark:bg-primary-900 rounded-lg border border-primary-300 dark:border-primary-700">
                                 <h3 className="text-sm font-semibold text-primary">
                                   {title}
                                 </h3>
@@ -6194,10 +6205,10 @@ export default function ForwardPage() {
                                     key={index}
                                     className={`border rounded-lg p-3 ${
                                       isDiagnosing
-                                        ? "border-warning-200 dark:border-warning-300/30 bg-warning-50 dark:bg-warning-900/20"
+                                        ? "border-warning-200 dark:border-warning-300/30 bg-warning-50 dark:bg-warning-900"
                                         : isSuccess
                                           ? "border-divider bg-content1"
-                                          : "border-danger-200 dark:border-danger-300/30 bg-danger-50 dark:bg-danger-900/30"
+                                          : "border-danger-200 dark:border-danger-300/30 bg-danger-50 dark:bg-danger-900"
                                     }`}
                                   >
                                     <div className="flex items-start gap-2 mb-2">

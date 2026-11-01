@@ -17,8 +17,10 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-default-100 hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
-        light: "bg-transparent hover:bg-default-100",
-        flat: "bg-default-100 text-foreground hover:bg-default-200",
+        // flat/light carry no background here: the bridge colour maps own
+        // the (Round 4 tray) background so text never lands on glass.
+        light: "",
+        flat: "",
       },
       size: {
         default: "h-9 px-4 py-2",

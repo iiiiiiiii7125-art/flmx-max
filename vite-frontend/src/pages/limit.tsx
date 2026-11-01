@@ -33,10 +33,7 @@ import {
 } from "@/api";
 import { PageLoadingState } from "@/components/page-state";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 
 interface SpeedLimitRule {
   id: number;
@@ -59,8 +56,8 @@ interface SpeedLimitForm {
 // forward.tsx 同范式逐条 ⚠️ 透出（如 nftables 隧道面「限速不生效」），
 // 此前 limit 页只报成功、warnings 在前端被丢弃。
 function toastResyncWarnings(res: unknown) {
-  const warnings = (res as { data?: { warnings?: unknown } })?.data
-    ?.warnings;
+  const warnings = (res as { data?: { warnings?: unknown } })?.data?.warnings;
+
   if (!Array.isArray(warnings)) return;
   warnings
     .map((item) => (typeof item === "string" ? item.trim() : ""))
@@ -211,6 +208,7 @@ export default function LimitPage({
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(modalOpen, !isEdit, rotateIdemKey);
 
@@ -342,7 +340,7 @@ export default function LimitPage({
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:text-indigo-400"
+                          className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleEdit(rule)}
@@ -350,7 +348,7 @@ export default function LimitPage({
                           编辑
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/30 dark:text-rose-400"
+                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-400"
                           size="sm"
                           variant="flat"
                           onPress={() => handleDelete(rule)}
@@ -454,7 +452,7 @@ export default function LimitPage({
         )
       ) : (
         /* 空状态 */
-        <Card className="shadow-sm bg-default-50/50">
+        <Card className="shadow-sm bg-default-50">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
               暂无限速规则
@@ -537,9 +535,7 @@ export default function LimitPage({
                         }))
                       }
                     />
-                    <span className="text-sm text-default-700">
-                      启用此规则
-                    </span>
+                    <span className="text-sm text-default-700">启用此规则</span>
                     <span className="text-xs text-default-500">
                       停用后规则不再生效，可随时重新启用
                     </span>

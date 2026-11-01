@@ -1,10 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  useIdemKey,
-  useRotateIdemKeyOnCreateOpen,
-} from "@/hooks/useIdemKey";
 import { toast } from "react-hot-toast";
 
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { copyWithToast } from "@/utils/clipboard";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
@@ -189,7 +186,10 @@ export default function PanelSharingPage() {
   };
 
   // 端口范围校验（与后端 peer-sharing 消费口径一致：1-65535 且 start<=end）
-  const validateSharePortRange = (start: number, end: number): string | null => {
+  const validateSharePortRange = (
+    start: number,
+    end: number,
+  ): string | null => {
     if (
       !Number.isInteger(start) ||
       !Number.isInteger(end) ||
@@ -285,6 +285,7 @@ export default function PanelSharingPage() {
 
   // R2X-004：创建表单幂等键（同表单复用、成功轮换）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(createShareOpen, true, rotateIdemKey);
 
@@ -335,16 +336,19 @@ export default function PanelSharingPage() {
     try {
       const expiryTime =
         Date.now() + shareForm.expiryDays * 24 * 60 * 60 * 1000;
-      const res = await createPeerShare({
-        name: shareForm.name,
-        nodeId,
-        maxBandwidth: limitMiB * MIB,
-        expiryTime: shareForm.expiryDays === 0 ? 0 : expiryTime,
-        portRangeStart: shareForm.portRangeStart,
-        portRangeEnd: shareForm.portRangeEnd,
-        allowedDomains: shareForm.allowedDomains,
-        allowedIps: shareForm.allowedIps,
-      }, idemKey);
+      const res = await createPeerShare(
+        {
+          name: shareForm.name,
+          nodeId,
+          maxBandwidth: limitMiB * MIB,
+          expiryTime: shareForm.expiryDays === 0 ? 0 : expiryTime,
+          portRangeStart: shareForm.portRangeStart,
+          portRangeEnd: shareForm.portRangeEnd,
+          allowedDomains: shareForm.allowedDomains,
+          allowedIps: shareForm.allowedIps,
+        },
+        idemKey,
+      );
 
       if (res.code === 0) {
         rotateIdemKey();
@@ -566,7 +570,7 @@ export default function PanelSharingPage() {
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50/60 dark:bg-default-100/20 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50 dark:bg-default-100 p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Provider 共享
@@ -590,7 +594,7 @@ export default function PanelSharingPage() {
                   加载中...
                 </div>
               ) : shares.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50/60 dark:bg-default-100/20 px-6 py-10 text-center">
+                <div className="rounded-lg border border-dashed border-divider bg-default-50 dark:bg-default-100 px-6 py-10 text-center">
                   <p className="text-base font-semibold text-foreground">
                     暂无分享
                   </p>
@@ -723,7 +727,7 @@ export default function PanelSharingPage() {
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50/60 dark:bg-default-100/20 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50 dark:bg-default-100 p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Consumer 接入
@@ -746,7 +750,7 @@ export default function PanelSharingPage() {
                   加载中...
                 </div>
               ) : remoteUsageNodes.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50/60 dark:bg-default-100/20 px-6 py-10 text-center">
+                <div className="rounded-lg border border-dashed border-divider bg-default-50 dark:bg-default-100 px-6 py-10 text-center">
                   <p className="text-base font-semibold text-foreground">
                     暂无远程节点占用记录
                   </p>
@@ -775,7 +779,7 @@ export default function PanelSharingPage() {
                       </CardHeader>
                       <CardBody className="text-sm space-y-2 pt-0 md:pt-0">
                         {node.syncError && (
-                          <div className="px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-100/10 text-warning-700 dark:text-warning-400 text-xs">
+                          <div className="px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-900 text-warning-700 dark:text-warning-400 text-xs">
                             {node.syncError === "provider_share_deleted"
                               ? "提供方已删除该分享"
                               : node.syncError === "provider_share_disabled"

@@ -650,7 +650,7 @@ export default function InboundPage() {
           aria-pressed={selectMode ? selected : undefined}
           className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
             selected
-              ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+              ? "border-primary bg-primary-50 dark:bg-primary-900"
               : "border-divider bg-content1 hover:bg-default-100"
           }`}
           role="button"
@@ -828,7 +828,7 @@ export default function InboundPage() {
         aria-pressed={selectMode ? selected : undefined}
         className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
           selected
-            ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+            ? "border-primary bg-primary-50 dark:bg-primary-900"
             : "border-divider bg-content1 hover:bg-default-100"
         }`}
         role="button"
@@ -1170,7 +1170,7 @@ export default function InboundPage() {
               )}
               {inbounds.length > 0 && (
                 <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/45"
+                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900 dark:text-sky-300 dark:hover:bg-sky-800"
                   size="sm"
                   variant="flat"
                   onPress={() => setSelectMode(true)}
@@ -1214,7 +1214,7 @@ export default function InboundPage() {
           </div>
 
           {selectMode && (
-            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background/95 px-3 py-2 shadow-sm backdrop-blur">
+            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background px-3 py-2 shadow-sm backdrop-blur">
               <span className="text-sm text-default-600">
                 已选 {selectedIds.size} 个
               </span>
@@ -1263,7 +1263,7 @@ export default function InboundPage() {
           )}
 
           {filtered.length === 0 ? (
-            <Card className="shadow-sm bg-default-50/50">
+            <Card className="shadow-sm bg-default-50">
               <CardBody className="text-center py-16 flex flex-col items-center justify-center gap-3">
                 <h3 className="text-lg font-medium">
                   {inbounds.length === 0 ? "暂无入站" : "没有匹配的入站"}

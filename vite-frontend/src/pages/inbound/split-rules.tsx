@@ -128,7 +128,7 @@ export function SplitRulesEditor({
               type="button"
               onClick={() => setOpen(isOpen ? null : i)}
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full tray-primary text-xs font-semibold">
                 {i + 1}
               </span>
               <span className="min-w-0 flex-1">

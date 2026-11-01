@@ -149,7 +149,7 @@ export function GroupHeader({
 }) {
   return (
     <button
-      className="flex w-full items-center gap-2 py-2 text-left"
+      className="flex w-full items-center gap-2 rounded-xl text-tray px-3 py-2 text-left"
       type="button"
       onClick={onToggle}
     >

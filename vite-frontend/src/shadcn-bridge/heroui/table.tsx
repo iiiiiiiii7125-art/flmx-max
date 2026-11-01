@@ -63,7 +63,7 @@ export function TableHeader({
   );
 
   return (
-    <thead className={cn("border-b bg-default-100/50", className)} {...props}>
+    <thead className={cn("border-b bg-default-100", className)} {...props}>
       {hasRow ? children : <TableRow>{children}</TableRow>}
     </thead>
   );
@@ -182,7 +182,7 @@ export const TableRow = React.forwardRef<
     <tr
       ref={ref}
       className={cn(
-        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-default-100/50",
+        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-default-100",
         trClassName,
         className,
       )}

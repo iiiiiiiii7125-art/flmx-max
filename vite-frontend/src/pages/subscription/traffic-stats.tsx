@@ -276,7 +276,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
           </div>
 
           <div className="overflow-hidden rounded-xl border border-divider">
-            <div className="grid grid-cols-[4.75rem_minmax(0,1fr)_4.5rem] gap-2 bg-default-100/60 px-3 py-1.5 text-xs text-default-500">
+            <div className="grid grid-cols-[4.75rem_minmax(0,1fr)_4.5rem] gap-2 bg-default-100 px-3 py-1.5 text-xs text-default-500">
               <span>时间</span>
               <span>下载 / 上传</span>
               <span className="text-right">合计</span>
