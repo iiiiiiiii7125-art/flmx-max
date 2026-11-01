@@ -187,11 +187,11 @@ function Metric({
         <span
           className={`truncate ${
             footTone === "danger"
-              ? "text-danger-700"
+              ? "tray-danger rounded-full px-1.5 py-0.5"
               : footTone === "warning"
-                ? "text-warning-600"
+                ? "tray-warning rounded-full px-1.5 py-0.5"
                 : footTone === "success"
-                  ? "text-success-700 dark:text-success-400"
+                  ? "tray-success rounded-full px-1.5 py-0.5"
                   : "text-foreground"
           }`}
         >
