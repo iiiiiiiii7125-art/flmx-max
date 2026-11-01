@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-gost/x/bypass"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/internal/util/download"
@@ -2012,6 +2013,76 @@ var upgradeDownloadTimeout = 4 * time.Minute
 // so tests can shrink it.
 var upgradeDownloadHeaderTimeout = 60 * time.Second
 
+var upgradeLookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+}
+
+// judgeUpgradeHost resolves host and judges every answer for the
+// self-upgrade download client (F2 caliber, shared with the
+// kernel fetch face in x/kernel/install.go): hardOnly applies
+// just the hard-deny layer (entry / same-origin hops); otherwise
+// the full non-public judgment applies (cross-host hops).
+func judgeUpgradeHost(ctx context.Context, host string, hardOnly bool) ([]net.IP, error) {
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		var err error
+		ips, err = upgradeLookupIP(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("下载地址无法解析，已拒绝: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if bypass.IsHardDenyIP(ip) {
+			return nil, fmt.Errorf("下载地址指向云元数据服务，已拒绝: %s", host)
+		}
+		if !hardOnly && bypass.IsNonPublicIP(ip) {
+			return nil, fmt.Errorf("下载地址指向非公网地址，已拒绝: %s", host)
+		}
+	}
+	return ips, nil
+}
+
+// upgradeDialFullContextKey carries the dial-time judgment layer
+// for one request of the upgrade client: true = full non-public
+// judgment (cross-host redirect hop), false/absent = entry layer
+// (hard-deny only). CheckRedirect stamps it per hop (round-5
+// L2-07/L2-15: the upgrade client used to have NO dial judgment
+// at all — a hostname allowlist over the default transport, so
+// ProxyFromEnvironment applied and any allowlisted name could
+// resolve or redirect to a private address and be dialed).
+type upgradeDialFullContextKey struct{}
+
+// upgradeDialContext pins the upgrade client's dial: re-resolve,
+// re-judge at the layer the request's hop was judged at, dial a
+// validated IP.
+func upgradeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	hardOnly := ctx.Value(upgradeDialFullContextKey{}) != true
+	ips, err := judgeUpgradeHost(ctx, host, hardOnly)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	var lastErr error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // newUpgradeDownloadClient builds the S-02 download client for
 // handleUpgradeAgent. The redirect allowlist covers GitHub hosts
 // plus the built-in mirror candidates' own hosts (KU4: downloads
@@ -2022,8 +2093,21 @@ var upgradeDownloadHeaderTimeout = 60 * time.Second
 // caller's context (see upgradeDownloadTimeout) and per-attempt
 // header patience in the transport, so no per-GET wall can kill a
 // slow body transfer mid-flight (R8-T-09).
+//
+// F2 outbound policy (round-5 L2-07), aligned with the kernel
+// fetch face: the transport never rides an environment proxy and
+// dials pinned, re-judged IPs (upgradeDialContext); redirect hops
+// additionally keep https from downgrading, are judged on the
+// hostname actually dialed (an explicit :443 no longer breaks the
+// allowlist comparison), and — beyond the host allowlist — a hop
+// back to the entry's own host is judged at the entry layer
+// (hard-deny only, so the privately addressed panel route's own
+// redirects keep working) while every cross-host hop gets the
+// full non-public judgment at BOTH the hop check and the dial.
 func newUpgradeDownloadClient(proxyHost string) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil // pinned dialing is meaningless via a proxy
+	tr.DialContext = upgradeDialContext
 	tr.ResponseHeaderTimeout = upgradeDownloadHeaderTimeout
 	mirrorHosts := download.MirrorHosts()
 	return &http.Client{
@@ -2032,19 +2116,47 @@ func newUpgradeDownloadClient(proxyHost string) *http.Client {
 			if len(via) >= 3 {
 				return fmt.Errorf("S-02: 重定向次数过多")
 			}
-			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
-			// githubusercontent.com 及其子域名（release 下载必经此域名）；
-			// 另允许内置镜像候选自身域名（镜像站内跳转）。
-			host := strings.ToLower(req.URL.Host)
-			if isGitHubDownloadHost(host) || (proxyHost != "" && host == proxyHost) {
-				return nil
-			}
-			for _, mh := range mirrorHosts {
-				if host == mh {
-					return nil
+			// https preservation: once any hop in the chain was
+			// https, no later hop may drop to http.
+			for _, v := range via {
+				if v.URL.Scheme == "https" && req.URL.Scheme != "https" {
+					return fmt.Errorf("S-02: 重定向降级到 http，已拒绝: %s", req.URL.Host)
 				}
 			}
-			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("S-02: 重定向 scheme 不支持，已拒绝: %s", req.URL.Scheme)
+			}
+			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
+			// githubusercontent.com 及其子域名（release 下载必经此域名）；
+			// 另允许内置镜像候选自身域名（镜像站内跳转）。比较一律
+			// 用 Hostname()（不带端口）：此前拿含端口的 URL.Host 比
+			// 对，github.com:443 形态会被误拒（L2-20 agent 面）。
+			hostname := strings.ToLower(req.URL.Hostname())
+			hostport := strings.ToLower(req.URL.Host)
+			allowed := isGitHubDownloadHost(hostname) || (proxyHost != "" && hostport == proxyHost)
+			if !allowed {
+				for _, mh := range mirrorHosts {
+					if hostname == mh {
+						allowed = true
+						break
+					}
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+			}
+			if len(via) > 0 && strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				if _, err := judgeUpgradeHost(req.Context(), hostname, true); err != nil {
+					return err
+				}
+				*req = *req.WithContext(context.WithValue(req.Context(), upgradeDialFullContextKey{}, false))
+				return nil
+			}
+			if _, err := judgeUpgradeHost(req.Context(), hostname, false); err != nil {
+				return err
+			}
+			*req = *req.WithContext(context.WithValue(req.Context(), upgradeDialFullContextKey{}, true))
+			return nil
 		},
 	}
 }
@@ -2194,9 +2306,30 @@ func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tm
 // legs cannot drift apart; the checksum leg itself is a tiny
 // file and deliberately does not resume.
 func downloadUpgradeBinary(ctx context.Context, client *http.Client, plan *download.Plan, directURL, tmpPath string, report func(percent int)) (int64, string, error) {
+	return downloadUpgradeBinaryChecked(ctx, client, plan, directURL, tmpPath, "", report)
+}
+
+// downloadUpgradeBinaryChecked is downloadUpgradeBinary with the
+// integrity check INSIDE each leg (round-5 L2-03): wantHash (the
+// panel expectedSha256 when present, else the already-fetched
+// .sha256 value — both known before the body leg starts) is
+// compared against the assembled bytes the moment a leg
+// completes; a route that delivered a complete-but-wrong body
+// loses the leg, its bytes are discarded (Reset), and the next
+// route restarts the file instead of the whole upgrade failing
+// with every other route untried — the geodata leg's caliber,
+// applied to the binary leg. wantHash == "" keeps the unchecked
+// shape (direct callers/tests); production always passes an
+// anchor because handleUpgradeAgent fetches the checksum first.
+func downloadUpgradeBinaryChecked(ctx context.Context, client *http.Client, plan *download.Plan, directURL, tmpPath, wantHash string, report func(percent int)) (int64, string, error) {
 	transfer := download.NewFileTransfer(tmpPath, maxAgentBinarySize, 0o700)
 	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		aerr := upgradeTransferAttempt(ctx, client, transfer, url, report)
+		if aerr == nil && wantHash != "" && !strings.EqualFold(transfer.Sum(), wantHash) {
+			got := transfer.Sum()
+			_ = transfer.Reset()
+			aerr = fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s（本线路作废，换线重下）", wantHash, got)
+		}
 		if aerr != nil {
 			fmt.Printf("⚠️ 下载线路 %s 失败 (%v)，已下载 %d bytes，按测速排名尝试下一线路（保留断点续传）\n", route.Name(), aerr, transfer.Size())
 		}
@@ -2224,6 +2357,9 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 		if watcher.Stalled() {
 			return "", download.ErrNoProgress
 		}
+		if watcher.TooSlow() {
+			return "", download.ErrTooSlow
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -2236,7 +2372,18 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 		if watcher.Stalled() {
 			return "", fmt.Errorf("读取校验文件失败: %w", download.ErrNoProgress)
 		}
+		if watcher.TooSlow() {
+			return "", fmt.Errorf("读取校验文件失败: %w", download.ErrTooSlow)
+		}
 		return "", err
+	}
+	// 腿内内容校验（round-5 L2-04）：探针（probeUpgradeRoute）对
+	// 同一内容做了 isSHA256Hex 判定，实拉此前只取首字段非空即
+	// 算成功——stage-3 静态尾的未探测线路回一个 200 垃圾首字段
+	// 就能赢下整腿、让事后比对整单失败。腿内同口径判定，垃圾
+	// 内容只废本腿、计划换线。
+	if !isSHA256Hex(hash) {
+		return "", fmt.Errorf("校验文件内容不是合法 SHA256")
 	}
 	return hash, nil
 }
@@ -2253,8 +2400,17 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 // body stalling after 200 aborted the whole upgrade with
 // ErrNoProgress and no retry, contradicting the A002 caliber.
 func downloadUpgradeChecksum(ctx context.Context, client *http.Client, plan *download.Plan, directURL string) (string, error) {
+	hash, _, err := downloadUpgradeChecksumRouted(ctx, client, plan, directURL)
+	return hash, err
+}
+
+// downloadUpgradeChecksumRouted is downloadUpgradeChecksum plus
+// the winning route (the anchor corroboration in
+// handleUpgradeAgent needs to know which route NOT to trust
+// alone, round-5 L2-08).
+func downloadUpgradeChecksumRouted(ctx context.Context, client *http.Client, plan *download.Plan, directURL string) (string, download.Route, error) {
 	var hash string
-	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
+	route, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		var aerr error
 		hash, aerr = fetchUpgradeChecksumAttempt(ctx, client, url)
 		if aerr != nil {
@@ -2263,10 +2419,45 @@ func downloadUpgradeChecksum(ctx context.Context, client *http.Client, plan *dow
 		return aerr
 	})
 	if err != nil {
-		return "", err
+		return "", download.Route{}, err
 	}
-	return hash, nil
+	return hash, route, nil
 }
+
+// corroborateUpgradeChecksum re-fetches the self-upgrade .sha256
+// through a route different from winner and requires the same
+// hash (round-5 L2-08). It runs only when the panel sent no
+// expectedSha256 — with a panel anchor the .sha256 is already a
+// mere cross-check against an out-of-band value. A second route
+// answering with a DIFFERENT hash aborts the upgrade; no second
+// route answering degrades to the single anchor with a log line
+// (single-route environments keep today's trust level).
+func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner download.Route, checksumURL, want string) error {
+	var routes []download.Route
+	for _, r := range download.AllRoutes() {
+		if r.Prefix != winner.Prefix {
+			routes = append(routes, r)
+		}
+	}
+	if len(routes) == 0 {
+		return nil
+	}
+	actx, cancel := context.WithTimeout(ctx, anchorCorroborateTimeout)
+	defer cancel()
+	got, err := downloadUpgradeChecksum(actx, client, download.NewStaticPlan(routes), checksumURL)
+	if err != nil {
+		fmt.Printf("⚠️ 升级校验锚跨线路复核不可用（其他线路均未给出校验值），按单锚继续: %v\n", err)
+		return nil
+	}
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("S-02: 校验文件经两条不同线路获取的结果不一致，已中止升级: %s != %s", got, want)
+	}
+	return nil
+}
+
+// anchorCorroborateTimeout bounds one anchor corroboration: a
+// cross-check on a tiny file, never worth the download budget.
+var anchorCorroborateTimeout = 20 * time.Second
 
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	jsonData, err := json.Marshal(data)
@@ -2329,7 +2520,20 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 
 	// 下载新版本二进制
 	const binaryPath = "/etc/flux_agent/flux_agent"
-	tmpPath := binaryPath + ".new"
+	// L2-05: 暂存路径必须每次升级唯一。此前固定为 binaryPath +
+	// ".new"，进程被杀/断电绕过清理后，下一次升级（不同版本资产）
+	// 会被 FileTransfer.init 无条件收养旧断点：旧前缀＋新后缀跨
+	// 版本拼装，只能靠最终哈希拦截、整次升级必废。唯一临时名让
+	// 断点收养只可能发生在同一次操作内（download.FileTransfer
+	// 的既定契约：callers stage into a fresh temp path per
+	// operation）。defer 删除兜底所有错误返回路径。
+	tmpFile, err := os.CreateTemp(filepath.Dir(binaryPath), ".flux_agent.upgrade-*")
+	if err != nil {
+		return fmt.Errorf("创建升级暂存文件失败: %v", err)
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	defer os.Remove(tmpPath)
 	backupPath := binaryPath + ".old"
 
 	// S-02: 限制重定向只允许 GitHub 官方域名与内置镜像候选域名，
@@ -2367,6 +2571,36 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		w.sendUpgradeProgress("downloading", 0, "下载线路测速未选出准入线路，按内置顺序逐个尝试")
 	}
 	fmt.Printf("📦 升级下载线路排名: %s\n", describeUpgradeRoutes(plan.Probed()))
+
+	// 校验先行（round-5 L2-03）：锚在本体下载之前定下，本体腿才
+	// 能在腿内校验（见 downloadUpgradeBinaryChecked）。两个锚源
+	// 都在此就绪：面板 expectedSha256（命令已带）与下载通道的
+	// .sha256（本步拉取）。校验腿与二进制腿同线路排名、同共享
+	// 预算（dlCtx, R8-T-09）——每次尝试是 GET+正文读取的整体、
+	// 自带进展看门狗（upgradeStallWindow），任一失败切下一排名
+	// 线路，全部失败才整单失败（R7-J-02 + R3-WDG-01 + Phase F
+	// 修复 + KU4 的口径不变，只是顺序由本体后移到本体之前）。
+	// S-02: Checksum 校验强制，拿不到校验值一律中止。
+	w.sendUpgradeProgress("verifying", 0, "获取校验文件...")
+	expectedHash, checksumRoute, err := downloadUpgradeChecksumRouted(dlCtx, httpClient, plan, checksumURL)
+	if err != nil {
+		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
+	}
+	// L2-08: 面板未下发 expectedSha256 时（旧面板/辨不出架构/
+	// 预热超时），.sha256 与本体同通道、无带外信任根——经一条
+	// 不同线路复核同一锚值，两线不一致即中止；面板锚在场时
+	// .sha256 本就是交叉核对，不必复核（见
+	// corroborateUpgradeChecksum）。
+	if expectedSha256 == "" {
+		if err := corroborateUpgradeChecksum(dlCtx, httpClient, checksumRoute, checksumURL, expectedHash); err != nil {
+			return err
+		}
+	}
+	anchor := expectedSha256
+	if anchor == "" {
+		anchor = expectedHash
+	}
+
 	// R7-J-02 + R3-WDG-01 + KU4: downloadUpgradeBinary 按测速排名
 	// 逐线路跑下载尝试，任一线路失败（含正文停滞被看门狗判失败）
 	// 自动切下一线路，口径见该函数注释。
@@ -2377,7 +2611,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 			w.sendUpgradeProgress("downloading", percent, fmt.Sprintf("下载中... %d%%", percent))
 		}
 	}
-	downloaded, actualHash, err := downloadUpgradeBinary(dlCtx, httpClient, plan, downloadURL, tmpPath, report)
+	downloaded, actualHash, err := downloadUpgradeBinaryChecked(dlCtx, httpClient, plan, downloadURL, tmpPath, anchor, report)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("下载升级包失败: %v", err)
@@ -2385,25 +2619,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 
 	w.sendUpgradeProgress("downloading", 100, fmt.Sprintf("下载完成 (%d bytes)", downloaded))
 
-	// S-02: Checksum 校验强制，不再允许为空或跳过
-	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
-	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-	// R7-J-02 + R3-WDG-01 + Phase F 修复 + KU4：校验腿经
-	// downloadUpgradeChecksum 与二进制腿同线路排名、同共享预算
-	// （dlCtx, R8-T-09）——每次尝试是 GET+正文读取的整体、自带
-	// 无进展看门狗（upgradeStallWindow），任一失败（含 200 头后
-	// 正文停滞被看门狗掐断）切下一排名线路，全部失败才整单失败。
-	// 此前正文读取在只管响应头阶段的 GET 回退之外，正文停滞即
-	// 整单 ErrNoProgress 终止、无回退（Phase F 实测自升级 90.5s
-	// 失败；对照形态见 fetchUpgradeChecksumAttempt）。
-	expectedHash, err := downloadUpgradeChecksum(dlCtx, httpClient, plan, checksumURL)
-	if err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
-	}
-	// 面板源二期：命令带了 expectedSha256 时它就是信任根（控制
-	// 通道下发），下载通道的 .sha256 退为交叉核对；未带时与旧
-	// 口径逐字一致（见 verifyUpgradeHashes）。
+	// S-02 最终门（语义不变）：面板源二期——命令带了
+	// expectedSha256 时它就是信任根（控制通道下发），下载通道的
+	// .sha256 退为交叉核对；未带时与旧口径逐字一致（见
+	// verifyUpgradeHashes）。腿内校验已按同一锚逐腿把关，此处
+	// 为整单兜底复核。
+	w.sendUpgradeProgress("verifying", 50, "校验文件完整性...")
 	if err := verifyUpgradeHashes(expectedSha256, expectedHash, actualHash); err != nil {
 		os.Remove(tmpPath)
 		return err
