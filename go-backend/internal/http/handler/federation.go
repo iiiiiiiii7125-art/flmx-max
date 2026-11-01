@@ -129,17 +129,10 @@ func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protoco
 		if auth := relayAuthConfig(target.RelayUsername, target.RelayPassword); auth != nil {
 			connector["auth"] = auth
 		}
-		if isTCPTunnelProtocol(targetProtocol) {
-			connector["metadata"] = map[string]interface{}{
-				"nodelay":               true,
-				"mux.keepaliveInterval": "15s",
-				"mux.keepaliveTimeout":  "45s",
-			}
-		}
-		if isKCPTunnelProtocol(targetProtocol) {
-			connector["metadata"] = map[string]interface{}{
-				"connectTimeout": "30s",
-			}
+		// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata，
+		// 防止两套生成面的 mux 参数漂移。
+		if connectorMetadata := tunnelRelayMetadata(targetProtocol); len(connectorMetadata) > 0 {
+			connector["metadata"] = connectorMetadata
 		}
 		nodeItems = append(nodeItems, map[string]interface{}{
 			"name":      fmt.Sprintf("node_%d", i+1),
@@ -343,17 +336,9 @@ func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName s
 		},
 		"listener": buildTunnelListenerConfig(protocol),
 	}
-	if isTCPTunnelProtocol(protocol) {
-		service["handler"].(map[string]interface{})["metadata"] = map[string]interface{}{
-			"nodelay":               true,
-			"mux.keepaliveInterval": "15s",
-			"mux.keepaliveTimeout":  "45s",
-		}
-	}
-	if isKCPTunnelProtocol(protocol) {
-		service["handler"].(map[string]interface{})["metadata"] = map[string]interface{}{
-			"connectTimeout": "30s",
-		}
+	// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata。
+	if handlerMetadata := tunnelRelayMetadata(protocol); len(handlerMetadata) > 0 {
+		service["handler"].(map[string]interface{})["metadata"] = handlerMetadata
 	}
 	if role == "middle" {
 		service["handler"].(map[string]interface{})["chain"] = chainName
@@ -1520,6 +1505,16 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// F-UDP-4: protocol 落入隧道记录后会作为段协议参与后续生成，
+	// 空值沿既有默认（tcp），非空必须落在合法集内并小写归一。
+	if strings.TrimSpace(req.Protocol) != "" {
+		if err := validateTunnelProtocol(req.Protocol); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		req.Protocol = normalizeTunnelProtocol(req.Protocol)
+	}
+
 	// D-03：分享端口段未设置（0-0）或半设置时 fail-closed，与
 	// pickPeerSharePort 同口径；此前仅凭 RemotePort 与段端比较，
 	// RemotePort=0 在 0-0 下两边都不成立而漏过，生成 Port=0 的 runtime。
@@ -1653,6 +1648,14 @@ func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Re
 	req.ResourceKey = strings.TrimSpace(req.ResourceKey)
 	if req.ResourceKey == "" {
 		response.WriteJSON(w, response.ErrDefault("resourceKey is required"))
+		return
+	}
+
+	// F-UDP-4: 预留的 protocol 将原样成为角色服务的 listener 类型，
+	// 落库前按合法集校验（空值沿既有默认 tls）并小写归一。
+	req.Protocol = normalizeTunnelProtocol(defaultString(req.Protocol, "tls"))
+	if err := validateTunnelProtocol(req.Protocol); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 
@@ -1802,6 +1805,27 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// F-UDP-4: 本次请求携带的 protocol（角色协议与每个 target 的
+	// 拨号协议）落库/生成前必须落在合法集内并小写归一；空值沿
+	// 既有继承语义（target 继承角色协议、角色协议继承预留值），
+	// 继承后的生效值在 runtime 载入后另行校验。
+	if strings.TrimSpace(req.Protocol) != "" {
+		if err := validateTunnelProtocol(req.Protocol); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		req.Protocol = normalizeTunnelProtocol(req.Protocol)
+	}
+	for i := range req.Targets {
+		if strings.TrimSpace(req.Targets[i].Protocol) != "" {
+			if err := validateTunnelProtocol(req.Targets[i].Protocol); err != nil {
+				response.WriteJSON(w, response.ErrDefault(err.Error()))
+				return
+			}
+			req.Targets[i].Protocol = normalizeTunnelProtocol(req.Targets[i].Protocol)
+		}
+	}
+
 	peerRoleRuntimeMu.Lock()
 	defer peerRoleRuntimeMu.Unlock()
 	share, err = h.repo.GetPeerShare(share.ID)
@@ -1822,6 +1846,13 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 	}
 	if runtime == nil || runtime.Status == 0 {
 		response.WriteJSON(w, response.ErrDefault("Reservation not found"))
+		return
+	}
+
+	// F-UDP-4: 生效协议（含修复前已落库的继承值）同样必须合法，
+	// 防止存量非法值绕过请求面校验继续直达 agent 生成。
+	if err := validateTunnelProtocol(defaultString(req.Protocol, runtime.Protocol)); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 
@@ -1895,7 +1926,7 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 	if req.Role == "middle" {
 		runtime.ChainName = federationRuntimeChainName(runtime.BindingID)
 	}
-	runtime.Protocol = defaultString(req.Protocol, runtime.Protocol)
+	runtime.Protocol = normalizeTunnelProtocol(defaultString(req.Protocol, runtime.Protocol))
 	runtime.Strategy = defaultString(req.Strategy, "round")
 	targetBytes, _ := json.Marshal(req.Targets)
 	runtime.Target = string(targetBytes)

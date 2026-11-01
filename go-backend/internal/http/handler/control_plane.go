@@ -1907,6 +1907,21 @@ func isUDPBasedProtocol(protocol string) bool {
 	return p == "kcp" || p == "udp" || p == "quic"
 }
 
+// nodeListenAddrForProtocol 按协议取节点的监听地址：UDP 族
+// （udp/kcp/quic）取 UDPListenAddr，其余取 TCPListenAddr。与
+// buildForwardServiceConfigs 的分取口径一致（F-UDP-6：链服务与联邦
+// 角色服务曾全协议绑 TCPListenAddr，两地址被配成不同值时绑错
+// 地址不可达）。
+func nodeListenAddrForProtocol(node *nodeRecord, protocol string) string {
+	if node == nil {
+		return ""
+	}
+	if isUDPBasedProtocol(protocol) {
+		return node.UDPListenAddr
+	}
+	return node.TCPListenAddr
+}
+
 func (h *Handler) pingViaNode(nodeID int64, ip string, port int, protocol string, options diagnosisExecOptions) (map[string]interface{}, error) {
 	if isUDPBasedProtocol(protocol) {
 		return h.udpPingViaNode(nodeID, ip, port, options)

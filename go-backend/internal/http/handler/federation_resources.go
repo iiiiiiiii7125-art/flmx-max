@@ -333,6 +333,9 @@ func (h *Handler) applyPeerShareResource(item repo.PeerShareResource) (ws.Comman
 			return result, err
 		}
 		if item.Kind == "service" {
+			// F-UDP-4 / VB2-002：下发前归一化 udp listener metadata，
+			// 防对端推送的裸 udp relay 服务重建 F-UDP-1 坏形态。
+			normalizePeerServiceUDPListenerMetadata(config)
 			result, err = h.sendNodeCommand(item.NodeID, "UpdateService", []interface{}{config}, false, false)
 		} else {
 			suffix := "Limiters"
@@ -719,6 +722,76 @@ var peerTunnelTransportTypes = map[string]bool{
 
 var peerChainConnectorTypes = map[string]bool{
 	"relay": true,
+}
+
+// F-UDP-4: 隧道段协议在本产品里同时充当链服务的 listener 类型与
+// 上一跳的 dialer 类型，故其合法集就是 D3-03 的 listener/dialer
+// 放行集 peerTunnelTransportTypes（转发 listener 的 tcp/udp ∪ 隧道
+// 协议全集）。注意不要改用前端隧道协议枚举或 D3-03 注释里的九值
+// 「隧道协议集」——那是不含 udp 的 UI/注释口径，而 udp 段经 F-UDP-1
+// 修复后是合法形态。此前 reserve-port / apply-role / tunnel/create
+// 与本地隧道创建面都对 protocol 零校验，任意字符串直达 agent 解析，
+// 注册表内的 sshd/dns/tun 等设计外类型可被实例化（与 D3-03 当年为
+// resources 路径封堵的是同一类型集）。
+// 校验按小写归一后查表，与 walkPeerResourceTypes 的 type 归一同
+// 口径；入口同时把存量值小写化（normalizeTunnelProtocol），使生成
+// 的 listener/dialer type 恒为注册表规范名。
+func isAllowedTunnelProtocol(protocol string) bool {
+	return peerTunnelTransportTypes[strings.ToLower(strings.TrimSpace(protocol))]
+}
+
+func validateTunnelProtocol(protocol string) error {
+	if strings.TrimSpace(protocol) == "" {
+		return fmt.Errorf("protocol is required")
+	}
+	if !isAllowedTunnelProtocol(protocol) {
+		return fmt.Errorf("protocol %q is not allowed", strings.TrimSpace(protocol))
+	}
+	return nil
+}
+
+func normalizeTunnelProtocol(protocol string) string {
+	return strings.ToLower(strings.TrimSpace(protocol))
+}
+
+// F-UDP-4 / VB2-002: resources 透传面只过 D3-03 类型白名单、不验
+// listener metadata——对端推送的 {handler:relay, listener:{type:udp}}
+// 服务若不带 keepAlive，会在提供方节点重建 F-UDP-1 的坏形态（会话
+// 首写后自毁、后续帧撞 bad version）。下发前按面板自身生成口径
+// 归一化：udp listener 缺 keepAlive 时补 true、缺 ttl 时补 30s；
+// handler 为 relay 时 keepAlive 强制为 true（relay-over-UDP 无
+// keepAlive 不是合法形态，显式 false 同样归一）。只改下发副本，
+// 存量 Config 原文不动；每次 apply 重演同一纯函数，结果确定。
+func normalizePeerServiceUDPListenerMetadata(config map[string]interface{}) {
+	listener, ok := config["listener"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(asString(listener["type"])), "udp") {
+		return
+	}
+	metadata, _ := listener["metadata"].(map[string]interface{})
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+		listener["metadata"] = metadata
+	}
+	handler, _ := config["handler"].(map[string]interface{})
+	handlerType := strings.ToLower(strings.TrimSpace(asString(handler["type"])))
+	hasKeepAlive, hasTTL := false, false
+	for key := range metadata {
+		if strings.EqualFold(key, "keepAlive") {
+			hasKeepAlive = true
+		}
+		if strings.EqualFold(key, "ttl") {
+			hasTTL = true
+		}
+	}
+	if !hasKeepAlive || handlerType == "relay" {
+		metadata["keepAlive"] = true
+	}
+	if !hasTTL {
+		metadata["ttl"] = "30s"
+	}
 }
 
 // validatePeerResourceTypes 递归走遍服务/链配置，凡出现 handler /
