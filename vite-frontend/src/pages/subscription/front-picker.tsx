@@ -1,10 +1,33 @@
+import axios from "axios";
+
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
 
 /**
+ * The panel origin text, resolved exactly like panelOrigin() in
+ * inbound/share.tsx (axios baseURL resolved against the page
+ * origin). It is re-implemented here instead of imported: share.tsx
+ * imports this picker, so importing it back would create a cycle.
+ * Keep the two in sync.
+ */
+function panelOriginText(): string {
+  const base = axios.defaults.baseURL || "";
+
+  try {
+    return new URL(base, window.location.origin).origin;
+  } catch {
+    return window.location.origin;
+  }
+}
+
+/**
  * Base picker for subscription link assembly: the panel origin
- * (value "") or one of the configured front bases. Renders nothing
- * when no front base is configured, so surfaces without fronts keep
- * their exact previous layout and behavior.
+ * (value "") or one of the configured front bases. The default is
+ * the panel origin itself, so there is no separate "panel domain"
+ * option: the select's placeholder option carries the panel origin
+ * text and doubles as the closed-state display for the default and
+ * as the way back to it. Renders nothing when no front base is
+ * configured, so surfaces without fronts keep their exact previous
+ * layout and behavior.
  */
 export function SubFrontPicker({
   fronts,
@@ -19,12 +42,13 @@ export function SubFrontPicker({
 
   return (
     <div className="flex items-center gap-2">
-      <span className="whitespace-nowrap text-xs text-default-500">
+      <span className="whitespace-nowrap text-xs font-medium text-default-600">
         链接地址
       </span>
       <Select
         aria-label="订阅链接地址"
         className="max-w-[280px]"
+        placeholder={panelOriginText()}
         selectedKeys={[value]}
         size="sm"
         onSelectionChange={(keys) => {
@@ -33,7 +57,6 @@ export function SubFrontPicker({
           onChange(selected ?? "");
         }}
       >
-        <SelectItem key="">面板域名</SelectItem>
         {fronts.map((front) => (
           <SelectItem key={front}>{front}</SelectItem>
         ))}
