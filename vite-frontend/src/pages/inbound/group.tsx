@@ -57,7 +57,7 @@ export function GroupToggle({
           className={`rounded-lg px-3 py-1 transition-colors ${
             value === key
               ? "bg-background shadow-sm font-medium"
-              : "text-default-500"
+              : "text-default-600"
           }`}
           type="button"
           onClick={() => onChange(key)}
@@ -154,12 +154,12 @@ export function GroupHeader({
       onClick={onToggle}
     >
       <ChevronDown
-        className={`h-4 w-4 shrink-0 text-default-500 transition-transform ${
+        className={`h-4 w-4 shrink-0 text-default-700 transition-transform ${
           collapsed ? "-rotate-90" : ""
         }`}
       />
       <span className="truncate text-sm font-semibold">{title}</span>
-      <span className="shrink-0 text-xs text-default-500">
+      <span className="shrink-0 text-xs font-medium text-default-700">
         {count} {unit}
       </span>
       {extra && <span className="ml-auto flex shrink-0 gap-1">{extra}</span>}

@@ -1439,14 +1439,15 @@ export default function SubscriptionPage() {
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-semibold">订阅</h1>
-          <p className="text-xs text-default-500">
+          <p className="text-xs text-default-600">
             每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式
           </p>
         </div>
         <Button
+          className="font-semibold"
           color="primary"
           size="sm"
-          variant="flat"
+          variant="solid"
           onPress={() => setDraft(draftFrom(undefined, sources))}
         >
           新建订阅

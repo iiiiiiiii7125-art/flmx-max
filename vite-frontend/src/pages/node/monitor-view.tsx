@@ -1904,10 +1904,10 @@ export function MonitorView({
                             <Chip color="primary" size="sm" variant="flat">
                               {resolvedActiveMonitor.type.toUpperCase()}
                             </Chip>
-                            <span className="font-mono text-xs text-default-500">
+                            <span className="font-mono text-xs text-default-600">
                               {resolvedActiveMonitor.target}
                             </span>
-                            <span className="text-xs text-default-500">
+                            <span className="text-xs text-default-600">
                               {`每 ${resolvedActiveMonitor.intervalSec || resolvedServiceMonitorLimits.defaultIntervalSec} 秒测试，30 秒上报`}
                             </span>
                             {activeLatestResult &&

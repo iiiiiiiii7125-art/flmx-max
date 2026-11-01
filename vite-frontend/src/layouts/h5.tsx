@@ -215,7 +215,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-col min-h-screen bg-mesh-gradient">
       {/* 顶部导航栏 */}
-      <header className="bg-white/60 dark:bg-zinc-950/55 backdrop-blur-[18px] backdrop-saturate-150 border-b border-white/50 dark:border-white/10 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
+      <header className="bg-white/25 dark:bg-zinc-950/35 backdrop-blur-[3px] backdrop-saturate-[1.6] backdrop-brightness-105 border-b border-white/45 dark:border-white/15 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
         <div className="flex items-center gap-2">
           <BrandLogo size={20} />
           <h1 className="text-sm font-bold text-foreground">
@@ -267,7 +267,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                     ? "text-primary dark:text-primary-400"
                     : isMonitorBlocked
                       ? "text-gray-500 dark:text-gray-400"
-                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                      : "text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
                 }
               `}
               onClick={() => handleTabClick(item.path)}

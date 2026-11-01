@@ -15,8 +15,9 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
 
   /* Refined Glass tokens: neutral zinc base, single indigo accent family
-     (indigo primary + violet secondary for the accent gradient), semantic
-     scales desaturated ~15%. */
+     (indigo primary + violet secondary for the accent gradient). Semantic
+     scales stay at full saturation — status colour is data, not decor
+     (Round 2: the Round 1 ~15% desaturation washed out status greens). */
   --background: #fafafa;
   --foreground: #18181b;
   --border: #e4e4e7;
@@ -59,46 +60,46 @@
   --secondary-800: #5b21b6;
   --secondary-900: #4c1d95;
 
-  --danger-50: #fbf3f3;
-  --danger-100: #f7e3e3;
-  --danger-200: #f0c6c6;
-  --danger-300: #e5a1a1;
-  --danger-400: #d97777;
-  --danger-500: #cf5555;
-  --danger-600: #b93e3e;
-  --danger-700: #9c3434;
-  --danger-800: #7f2d2d;
-  --danger-900: #662626;
+  --danger-50: #fef2f2;
+  --danger-100: #fee2e2;
+  --danger-200: #fecaca;
+  --danger-300: #fca5a5;
+  --danger-400: #f87171;
+  --danger-500: #ef4444;
+  --danger-600: #dc2626;
+  --danger-700: #b91c1c;
+  --danger-800: #991b1b;
+  --danger-900: #7f1d1d;
 
-  --success-50: #f2f8f3;
-  --success-100: #e0efe3;
-  --success-200: #c2dfc9;
-  --success-300: #98c7a4;
-  --success-400: #67ab7a;
-  --success-500: #478f5c;
-  --success-600: #37734a;
-  --success-700: #2d5c3d;
-  --success-800: #264a33;
-  --success-900: #1f3d2a;
+  --success-50: #f0fdf4;
+  --success-100: #dcfce7;
+  --success-200: #bbf7d0;
+  --success-300: #86efac;
+  --success-400: #4ade80;
+  --success-500: #22c55e;
+  --success-600: #16a34a;
+  --success-700: #15803d;
+  --success-800: #166534;
+  --success-900: #14532d;
 
-  --warning-50: #fbf7ea;
-  --warning-100: #f6ecc9;
-  --warning-200: #eeda9b;
-  --warning-300: #e4c368;
-  --warning-400: #d9a83f;
-  --warning-500: #c98f22;
-  --warning-600: #a9761c;
-  --warning-700: #875e18;
-  --warning-800: #6e4c15;
-  --warning-900: #5a3f13;
+  --warning-50: #fffbeb;
+  --warning-100: #fef3c7;
+  --warning-200: #fde68a;
+  --warning-300: #fcd34d;
+  --warning-400: #fbbf24;
+  --warning-500: #f59e0b;
+  --warning-600: #d97706;
+  --warning-700: #b45309;
+  --warning-800: #92400e;
+  --warning-900: #78350f;
 
   --primary: #4f46e5;
   --primary-foreground: #ffffff;
   --secondary: #7c3aed;
   --secondary-foreground: #ffffff;
-  --danger: #b93e3e;
-  --success: #37734a;
-  --warning: #a9761c;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
 }
 
 .dark {
@@ -124,9 +125,9 @@
 
   --primary: #6366f1;
   --secondary: #a78bfa;
-  --danger: #d95f5f;
-  --success: #5da876;
-  --warning: #d9a83f;
+  --danger: #ef4444;
+  --success: #22c55e;
+  --warning: #f59e0b;
 }
 
 html,
@@ -215,15 +216,35 @@ body {
   }
 }
 
-/* Refined Glass Variables — floating layers only (sidebar, top bar,
-   dialogs, stat/hero cards, H5 capsule nav). Data-dense surfaces use the
-   near-solid --content1 token instead. Translucency is tuned so the
-   wallpaper reads through cleanly; blur/saturate live in the
-   .glass-surface / .glass-card component classes below. */
+/* Clear Glass Variables (Round 2 — replaces the Round 1 frosted recipe:
+   blur 18px + tinted milk-glass read as a pink haze over the wallpaper and
+   shifted the whole palette). Clear glass is near-transparent: the
+   wallpaper shows through sharply, shape comes from edge light — a light
+   sheen gradient, a bright 1px border and a top inner highlight — not from
+   a milky fill. Floating layers only (sidebar, top bar, dialogs, stat/hero
+   cards, H5 capsule nav). Data-dense surfaces use the near-solid
+   --content1 token instead; text-dense cards use the .glass-card-strong
+   tier (see component classes below). */
 :root {
-  --glass-bg: rgba(255, 255, 255, 0.62);
-  --glass-border: rgba(255, 255, 255, 0.65);
-  --glass-card: rgba(255, 255, 255, 0.66);
+  --glass-bg: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.3),
+    rgb(255 255 255 / 0.1) 45%,
+    rgb(255 255 255 / 0.06)
+  );
+  --glass-border: rgb(255 255 255 / 0.45);
+  --glass-card: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.3),
+    rgb(255 255 255 / 0.1) 45%,
+    rgb(255 255 255 / 0.06)
+  );
+  --glass-card-strong: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.44),
+    rgb(255 255 255 / 0.38) 45%,
+    rgb(255 255 255 / 0.34)
+  );
   --glass-overlay: rgba(0, 0, 0, 0.3);
 
   --toaster-bg: rgb(255 255 255 / 0.85);
@@ -232,9 +253,25 @@ body {
 }
 
 .dark {
-  --glass-bg: rgba(24, 24, 27, 0.58);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-card: rgba(24, 24, 27, 0.6);
+  --glass-bg: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.13),
+    rgb(255 255 255 / 0.05) 45%,
+    rgb(255 255 255 / 0.03)
+  );
+  --glass-border: rgb(255 255 255 / 0.18);
+  --glass-card: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.13),
+    rgb(255 255 255 / 0.05) 45%,
+    rgb(255 255 255 / 0.03)
+  );
+  --glass-card-strong: linear-gradient(
+    160deg,
+    rgb(38 38 42 / 0.5),
+    rgb(28 28 31 / 0.44) 45%,
+    rgb(24 24 27 / 0.42)
+  );
 
   --toaster-bg: rgb(24 24 27 / 0.85);
   --toaster-color: #f4f4f5;
@@ -341,31 +378,59 @@ body {
 }
 
 @layer components {
-  /* Floating-layer glass: blur 18px + saturate 150%, translucent fill,
-     1px translucent edge, single top inner highlight. Shadow comes from
-     the shadow scale utilities at the call site. */
+  /* Clear glass, sparse-text tier (shells, dialogs, hero/stat cards):
+     near-zero blur so the wallpaper stays sharp, saturation/brightness
+     lift instead of a coloured fill, bright 1px edge + top inner
+     highlight, one soft outer shadow for float. */
   .glass-surface {
     background: var(--glass-bg);
-    -webkit-backdrop-filter: blur(18px) saturate(150%);
-    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(3px) saturate(160%) brightness(1.05);
+    backdrop-filter: blur(3px) saturate(160%) brightness(1.05);
     border: 1px solid var(--glass-border);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.45);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 8px 24px rgb(24 24 27 / 0.07);
   }
 
   .dark .glass-surface {
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.12),
+      0 8px 24px rgb(0 0 0 / 0.35);
   }
 
   .glass-card {
     background: var(--glass-card);
-    -webkit-backdrop-filter: blur(18px) saturate(150%);
-    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(3px) saturate(160%) brightness(1.05);
+    backdrop-filter: blur(3px) saturate(160%) brightness(1.05);
     border: 1px solid var(--glass-border);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.45);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 8px 24px rgb(24 24 27 / 0.07);
   }
 
   .dark .glass-card {
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.12),
+      0 8px 24px rgb(0 0 0 / 0.35);
+  }
+
+  /* Clear glass, text-dense tier (cards carrying small labels, bars and
+     timestamps): a neutral ~.34–.44 tint and 6px blur keep small text
+     seated, while staying far clearer than the old frosted recipe. */
+  .glass-card-strong {
+    background: var(--glass-card-strong);
+    -webkit-backdrop-filter: blur(6px) saturate(150%) brightness(1.03);
+    backdrop-filter: blur(6px) saturate(150%) brightness(1.03);
+    border: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 8px 24px rgb(24 24 27 / 0.07);
+  }
+
+  .dark .glass-card-strong {
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.12),
+      0 8px 24px rgb(0 0 0 / 0.35);
   }
 }
 

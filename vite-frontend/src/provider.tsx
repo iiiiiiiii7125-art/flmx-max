@@ -10,16 +10,18 @@ export interface ProvidersProps {
   children: React.ReactNode;
 }
 
-// Shared frosted surface for every toast type: the per-type style in
+// Shared clear-glass surface for every toast type: the per-type style in
 // react-hot-toast replaces rather than merges, so each type spreads this.
+// The near-solid --toaster-bg tint carries readability; the backdrop
+// filter matches the Round 2 clear-glass recipe.
 const toastSurfaceStyle = {
   background: "var(--toaster-bg)",
   color: "var(--toaster-color)",
   border: "1px solid var(--toaster-border)",
   borderRadius: 12,
   boxShadow: "0 6px 20px rgb(24 24 27 / 0.08)",
-  backdropFilter: "blur(18px) saturate(150%)",
-  WebkitBackdropFilter: "blur(18px) saturate(150%)",
+  backdropFilter: "blur(3px) saturate(160%) brightness(1.05)",
+  WebkitBackdropFilter: "blur(3px) saturate(160%) brightness(1.05)",
 } as const;
 
 export function Provider({ children }: ProvidersProps) {

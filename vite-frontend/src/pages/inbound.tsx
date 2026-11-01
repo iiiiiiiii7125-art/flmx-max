@@ -1107,14 +1107,16 @@ export default function InboundPage() {
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
               tab === t.key
                 ? "bg-background font-medium shadow-sm"
-                : "text-default-500"
+                : "text-default-600"
             }`}
             type="button"
             onClick={() => setTab(t.key)}
           >
             {t.label}
             {t.badge !== undefined && (
-              <span className="ml-1 text-xs text-default-400">{t.badge}</span>
+              <span className="ml-1 text-xs font-medium text-default-500">
+                {t.badge}
+              </span>
             )}
           </button>
         ))}
@@ -1199,10 +1201,11 @@ export default function InboundPage() {
                 导入
               </Button>
               <Button
+                className="font-semibold"
                 color="primary"
                 isDisabled={kernels.length === 0}
                 size="sm"
-                variant="flat"
+                variant="solid"
                 onPress={openCreate}
               >
                 新建入站

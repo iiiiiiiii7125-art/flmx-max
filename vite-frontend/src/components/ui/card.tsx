@@ -7,7 +7,7 @@ function Card({ className, style, ...props }: React.ComponentProps<"div">) {
     <div
       className={cn(
         "relative flex flex-col transition-[transform,box-shadow] duration-200 ease-refined hover:-translate-y-px hover:shadow-md",
-        "glass-card rounded-2xl text-card-foreground shadow-sm",
+        "glass-card-strong rounded-2xl text-card-foreground shadow-sm",
         className,
       )}
       data-slot="card"
@@ -51,7 +51,7 @@ function CardTitle({
 function CardDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <p
-      className={cn("text-sm text-default-500", className)}
+      className={cn("text-sm text-default-600", className)}
       data-slot="card-description"
       {...props}
     />
