@@ -49,14 +49,14 @@ export function SubFrontSettings({
       <p className="text-xs text-default-500">
         前置地址是订阅链接的备用入口：当面板域名被部分运营商阻断或烂路由时，用户可经前置地址拉取同一条订阅（前置只需把订阅路径反代回面板，token
         不变）。填协议 + 域名（可带端口），如
-        https://sub.0v0.dog，不要带路径。配置后，订阅管理、我的订阅等页面的链接旁会出现地址选择，可按前置地址复制链接；不配置则只用面板域名，与此前一致。
+        https://sub.example.com，必须带 https://、末尾不要斜杠、不要带路径。配置后，订阅管理、我的订阅等页面的链接旁会出现地址选择，可按前置地址复制链接；不配置则只用面板域名，与此前一致。
       </p>
       {rows.map((row, i) => (
         <div key={i} className="flex items-center gap-2">
           <Input
             aria-label={`前置地址 ${i + 1}`}
             className="flex-1"
-            placeholder="https://sub.0v0.dog"
+            placeholder="https://sub.example.com"
             size="sm"
             value={row}
             variant="bordered"

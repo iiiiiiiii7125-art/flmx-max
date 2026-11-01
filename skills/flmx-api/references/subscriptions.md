@@ -108,7 +108,7 @@ it renders that user's assigned view; without it, the subscription's full conten
 Serving is host-independent: the same `<token>` path works on any base that
 proxies back to the panel. The panel setting `subscription_front_urls`
 (config/update, validated on save) holds a JSON array of such front bases
-(origins only, e.g. `https://sub.0v0.dog`) for composing subscription links
+(origins only, e.g. `https://sub.example.com`) for composing subscription links
 when the panel domain is blocked for some carriers; the panel UI offers each
 configured base next to the panel origin on the subscription surfaces.
 
