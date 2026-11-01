@@ -36,12 +36,16 @@ function colorVariant(color: ChipColor) {
   return "default" as const;
 }
 
+// Round 6: the bright success/warning solids measured only ≈2.2/2.0
+// against white text — the -800 shades keep the solid-chip identity and
+// pair with white at ≈7.1 (target tier). Danger stays on the saturated
+// carrier (white ≈4.1, the sanctioned solid family).
 const solidColorClassMap: Record<ChipColor, string> = {
   default: "border-transparent bg-default-800 text-default-50",
   primary: "border-transparent bg-primary text-primary-foreground",
   secondary: "border-transparent bg-secondary text-secondary-foreground",
-  success: "border-transparent bg-success text-white",
-  warning: "border-transparent bg-warning text-white",
+  success: "border-transparent bg-success-800 text-white",
+  warning: "border-transparent bg-warning-800 text-white",
   danger: "border-transparent bg-danger text-white",
 };
 

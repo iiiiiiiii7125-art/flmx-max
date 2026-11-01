@@ -37,10 +37,10 @@ export function FieldContainer({
       ) : null}
       {children}
       {description ? (
-        <p className="text-xs text-foreground">{description}</p>
+        <p className="text-xs font-semibold text-foreground">{description}</p>
       ) : null}
       {isInvalid && errorMessage ? (
-        <p className="text-xs text-danger-700">{errorMessage}</p>
+        <p className="text-xs font-semibold text-danger-700">{errorMessage}</p>
       ) : null}
     </div>
   );
