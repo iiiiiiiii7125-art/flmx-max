@@ -177,10 +177,9 @@ func (h *Handler) buildRealmApplyPayload(k *model.NodeKernel, info kernel.Info, 
 	if err != nil {
 		return nil, "", err
 	}
+	// 1.7.7（KU5）：同 kernel 下发口径——不再带面板配置代理，proxy
+	// 恒为空，下载路线由 agent 侧内置候选自行测速直选（KU4）。
 	proxy := ""
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		proxy = proxyURL
-	}
 	download, err := kernel.ResolveDownload(info, k.Version, proxy)
 	if err != nil {
 		return nil, "", err

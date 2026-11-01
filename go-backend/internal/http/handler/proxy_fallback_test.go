@@ -11,9 +11,13 @@ import (
 	"go-backend/internal/kernel"
 )
 
-// F-029/F-059：版本发现三处孪生实现（节点侧 fetchGitHubReleases、重定向
-// 解析、内核 kernelReleaseVersions）补齐代理先行/直连降级，与面板侧
-// fetchSystemUpgradeReleases（U1-001）同口径。代理 URL 形态为
+// F-029/F-059 的「代理先行/直连降级」在 1.7.7 升级为内置候选测速
+// 直选（KU5，github_routes.go）：版本发现三处孪生实现（节点侧
+// fetchGitHubReleases、重定向解析、内核 kernelReleaseVersions）与
+// 面板侧 fetchSystemUpgradeReleases 同口径——直连优先短路、失败
+// 按代理排名续切、直连判死时殿后兜底。本文件的用例以
+// seedGitHubRoutesForTest 钉死路线状态（直连判死 + 指定代理序），
+// 断言尝试确实经指定代理/直连到达 stub。代理 URL 形态为
 // <proxy>/<完整目标 URL>，与 gh-proxy 约定一致。
 
 func failingUpstreamForTest(t *testing.T) *httptest.Server {
@@ -44,8 +48,9 @@ func TestFetchGitHubReleasesViaProxyWhenDirectFails(t *testing.T) {
 	}))
 	defer proxy.Close()
 	swapGitHubBasesForTest(t, direct.URL, direct.URL)
+	seedGitHubRoutesForTest(t, false, []string{proxy.URL})
 
-	releases, err := fetchGitHubReleasesWithProxy(50, proxy.URL)
+	releases, err := fetchGitHubReleases(50)
 	if err != nil {
 		t.Fatalf("直连失败时应经代理成功: %v", err)
 	}
@@ -68,8 +73,10 @@ func TestFetchGitHubReleasesFallsBackToDirectWhenProxyFails(t *testing.T) {
 	}))
 	defer direct.Close()
 	swapGitHubBasesForTest(t, direct.URL, direct.URL)
+	// 直连被探测判死时排在代理之后兜底：代理失败后仍应落到直连。
+	seedGitHubRoutesForTest(t, false, []string{proxy.URL})
 
-	releases, err := fetchGitHubReleasesWithProxy(50, proxy.URL)
+	releases, err := fetchGitHubReleases(50)
 	if err != nil {
 		t.Fatalf("代理失败时应降级直连: %v", err)
 	}
@@ -90,8 +97,9 @@ func TestResolveLatestTagByRedirectViaProxy(t *testing.T) {
 	}))
 	defer proxy.Close()
 	swapGitHubBasesForTest(t, direct.URL, direct.URL)
+	seedGitHubRoutesForTest(t, false, []string{proxy.URL})
 
-	tag, err := resolveLatestTagByRedirectWithProxy(proxy.URL)
+	tag, err := resolveLatestTagByRedirect()
 	if err != nil {
 		t.Fatalf("直连失败时重定向解析应经代理成功: %v", err)
 	}
@@ -113,12 +121,13 @@ func TestKernelReleaseVersionsViaProxyWhenDirectFails(t *testing.T) {
 	}))
 	defer proxy.Close()
 	swapGitHubBasesForTest(t, direct.URL, direct.URL)
+	seedGitHubRoutesForTest(t, false, []string{proxy.URL})
 
 	info, ok := kernel.Lookup(kernel.TypeSingbox)
 	if !ok {
 		t.Fatal("sing-box info missing")
 	}
-	items, err := kernelReleaseVersionsWithProxy(info, proxy.URL)
+	items, err := kernelReleaseVersions(info)
 	if err != nil {
 		t.Fatalf("直连失败时内核版本列表应经代理成功: %v", err)
 	}

@@ -256,51 +256,10 @@ func isAddressCharset(s string) bool {
 	return true
 }
 
-// shellMetaChars 是不得出现在无引号拼入 root 安装命令的值中的
-// shell 元字符集（R3 B04-001）：含命令分隔/替换/引用/重定向/通配
-// 与交互式 shell 的历史展开字符。
-const shellMetaChars = ";$`|&'\"()<>\\{}*!?#"
-
-// validateGithubProxyURL 校验 GitHub 代理地址（R3 B04-001）：该值在
-// 节点安装命令里以 PROXY_URL=%s 与 curl 前缀 %s/... 两处无引号拼入
-// 以 root 执行的命令。写面（normalizeAndValidateConfigValue）与消费
-// 面（getGithubProxyConfig 兜底）共用本谓词：全串不得含 shell 元字
-// 符或空白/控制字符；URL 必须可解析、scheme 为 http/https、无
-// userinfo/查询/片段（前缀型地址语义下查询只会破坏拼接路径）、
-// Host 过 isAddressCharset。空值合法（调用方回落默认）。
-func validateGithubProxyURL(value string) error {
-	raw := strings.TrimSpace(value)
-	if raw == "" {
-		return nil
-	}
-	for i := 0; i < len(raw); i++ {
-		c := raw[i]
-		if c <= ' ' || c == 0x7f || strings.ContainsRune(shellMetaChars, rune(c)) {
-			return fmt.Errorf("包含 shell 元字符或空白/控制字符")
-		}
-	}
-	candidate := raw
-	if !strings.Contains(candidate, "://") {
-		candidate = "https://" + candidate
-	}
-	u, err := url.Parse(candidate)
-	if err != nil {
-		return fmt.Errorf("URL 解析失败：%v", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("只允许 http/https 协议")
-	}
-	if u.User != nil {
-		return fmt.Errorf("不得包含用户信息")
-	}
-	if u.Host == "" || !isAddressCharset(u.Host) {
-		return fmt.Errorf("主机名包含非法字符")
-	}
-	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return fmt.Errorf("不得包含查询串或片段")
-	}
-	return nil
-}
+// 1.7.7（KU5）：validateGithubProxyURL 与 shellMetaChars 已随
+// 「开启 GitHub 加速」设置整体移除——该谓词的仅有消费者（写面校验
+// 与 getGithubProxyConfig 消费兜底）均已删除，安装命令不再拼入任
+// 何面板配置的代理值（候选清单为内置常量、逐项加引号）。
 
 // isAllNumericDottedHost 判断 host 是否为「全数字标签的点分形态」
 // （如 999.999.1.1、1.2.3.4.5）：这类值只能是 IPv4 字面量的笔误

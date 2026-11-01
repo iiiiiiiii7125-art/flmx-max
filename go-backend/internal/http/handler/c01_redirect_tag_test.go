@@ -86,9 +86,8 @@ func TestC01NodeInstallRejectsInvalidVersion(t *testing.T) {
 	if err := r.DB().Exec(`INSERT INTO vite_config(name, value, time) VALUES(?, ?, ?)`, "ip", "192.0.2.10:6366", now).Error; err != nil {
 		t.Fatalf("seed vite_config ip: %v", err)
 	}
-	if err := r.UpsertConfig("github_proxy_enabled", "false", now); err != nil {
-		t.Fatalf("disable github proxy: %v", err)
-	}
+	// 1.7.7：github_proxy_enabled 设置已整体移除，无需再写配置关代理；
+	// 路线由 swapGitHubBasesForTest 钉为直连-only。
 
 	// API 返回一个含 shell 元字符的 dev tag：dev 渠道按 releaseChannelFromTag
 	// 命中（beta 关键字），resolve 层原样返回；nodeInstall 必须拒。

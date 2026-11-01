@@ -50,7 +50,7 @@ func TestFinalL1ValidateNoEmptyLabelAddr(t *testing.T) {
 }
 
 // L1-F-08 机制单测：validateNoEmptyLabelURLHost（订阅源保存面与
-// github_proxy_url 配置键共用谓词）。
+// URL 型配置键共用谓词）。
 func TestFinalL1ValidateNoEmptyLabelURLHost(t *testing.T) {
 	cases := []struct {
 		raw     string
@@ -151,7 +151,10 @@ func TestFinalL1RealmStrategyRejectsEmptyLabel(t *testing.T) {
 }
 
 // L1-F-07 / L1-F-08：normalizeAndValidateConfigValue 对 panel_domain /
-// ip / github_proxy_url 三键补空标签判（修复前：default 直通原值）。
+// ip 两键与 URL 型代表键补空标签判（修复前：default 直通原值）。
+// 1.7.7（KU5）：原 URL 型代表 github_proxy_url 已随设置整体移除
+// （落 default 直通），改以 notify_webhook_url 为 URL 型代表（同走
+// validateNoEmptyLabelURLHost、错误含「空标签」）。
 func TestFinalL1NormalizeConfigRejectsEmptyLabel(t *testing.T) {
 	cases := []struct {
 		key, value string
@@ -172,12 +175,12 @@ func TestFinalL1NormalizeConfigRejectsEmptyLabel(t *testing.T) {
 		{"ip", "example.com:443", false},
 		{"ip", "203.0.113.9:443", false},
 		{"ip", "[2001:db8::1]:443", false},
-		// github_proxy_url（URL，L1-F-08 与 L1-F-07 同一函数一次写好）
-		{"github_proxy_url", "https://a..b/x", true},
-		{"github_proxy_url", "https://a...b/x", true},
-		{"github_proxy_url", "https://example.com/x", false},
-		{"github_proxy_url", "https://203.0.113.9/x", false},
-		{"github_proxy_url", "", false}, // 空值走可清空语义
+		// notify_webhook_url（URL 型代表，L1-F-08 与 L1-F-07 同一函数一次写好）
+		{"notify_webhook_url", "https://a..b/x", true},
+		{"notify_webhook_url", "https://a...b/x", true},
+		{"notify_webhook_url", "https://example.com/x", false},
+		{"notify_webhook_url", "https://203.0.113.9/x", false},
+		{"notify_webhook_url", "", false}, // 空值走可清空语义
 	}
 	for _, c := range cases {
 		got, err := normalizeAndValidateConfigValue(c.key, c.value)

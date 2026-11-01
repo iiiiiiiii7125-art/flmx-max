@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // GitHub API 限流回归（2026-10-20 实测）：未认证额度 60 次/小时/IP，
@@ -30,6 +31,35 @@ func swapGitHubBasesForTest(t *testing.T, api, html string) {
 	oldAPI, oldHTML := githubAPIBase, githubHTMLBase
 	githubAPIBase, githubHTMLBase = api, html
 	t.Cleanup(func() { githubAPIBase, githubHTMLBase = oldAPI, oldHTML })
+	// 1.7.7：换 stub 基址的用例一律钉直连-only 路线，避免真实候选
+	// 探测/尝试污染断言（命中计数、限流口径）；需要代理路线的用例
+	// 在 swap 之后再 seedGitHubRoutesForTest 覆盖。
+	seedGitHubRoutesForTest(t, true, nil)
+}
+
+// seedGitHubRoutesForTest 钉死面板侧直选的路线状态（1.7.7 KU5）：
+// directAlive 为直连探测结论，proxyOrder 为代理尝试序（nil 表示无
+// 代理尝试）；cleanup 恢复先前状态。探测缓存按新鲜处理，不触发
+// 任何真实网络探测。
+func seedGitHubRoutesForTest(t *testing.T, directAlive bool, proxyOrder []string) {
+	t.Helper()
+	githubRouteCache.Lock()
+	prevAt := githubRouteCache.at
+	prevDirectProbed, prevDirectAlive := githubRouteCache.directProbed, githubRouteCache.directAlive
+	prevProxiesProbed, prevProxyOrder := githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder
+	githubRouteCache.at = time.Now()
+	githubRouteCache.directProbed = true
+	githubRouteCache.directAlive = directAlive
+	githubRouteCache.proxiesProbed = true
+	githubRouteCache.proxyOrder = append([]string(nil), proxyOrder...)
+	githubRouteCache.Unlock()
+	t.Cleanup(func() {
+		githubRouteCache.Lock()
+		githubRouteCache.at = prevAt
+		githubRouteCache.directProbed, githubRouteCache.directAlive = prevDirectProbed, prevDirectAlive
+		githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder = prevProxiesProbed, prevProxyOrder
+		githubRouteCache.Unlock()
+	})
 }
 
 func TestFetchGitHubReleasesCachesSuccess(t *testing.T) {

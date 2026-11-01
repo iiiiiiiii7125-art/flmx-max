@@ -33,6 +33,8 @@ func stubReleasesAPI(t *testing.T, payload string) {
 	old := githubAPIBase
 	githubAPIBase = srv.URL
 	t.Cleanup(func() { githubAPIBase = old })
+	// 1.7.7：路线钉为直连-only，避免真实候选探测/尝试污染用例。
+	seedGitHubRoutesForTest(t, true, nil)
 }
 
 // 版本列表改为流式解码后，响应体积再大也不得失败：sing-box 的 releases

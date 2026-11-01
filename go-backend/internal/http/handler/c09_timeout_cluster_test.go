@@ -137,9 +137,7 @@ func c09CheckUpdatesStub(t *testing.T, redirectTag string) *Handler {
 		t.Fatalf("repo.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	if err := r.UpsertConfig("github_proxy_enabled", "false", time.Now().UnixMilli()); err != nil {
-		t.Fatalf("disable github proxy: %v", err)
-	}
+	// 1.7.7：github_proxy_enabled 设置已整体移除，无需再写配置关代理。
 	return &Handler{repo: r}
 }
 
@@ -219,15 +217,13 @@ func TestC09ReleasesCacheSharedBetweenFetchers(t *testing.T) {
 		t.Fatalf("repo.Open: %v", err)
 	}
 	defer func() { _ = r.Close() }()
-	if err := r.UpsertConfig("github_proxy_enabled", "false", time.Now().UnixMilli()); err != nil {
-		t.Fatalf("disable github proxy: %v", err)
-	}
+	// 1.7.7：github_proxy_enabled 设置已整体移除，无需再写配置关代理。
 	h := &Handler{repo: r}
 
 	// 节点侧先拉：面板侧随后必须命中同一条目，不再发第二次请求。
-	nodeSide, err := fetchGitHubReleasesWithProxy(50, "")
+	nodeSide, err := fetchGitHubReleases(50)
 	if err != nil {
-		t.Fatalf("fetchGitHubReleasesWithProxy: %v", err)
+		t.Fatalf("fetchGitHubReleases: %v", err)
 	}
 	panelSide, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
@@ -253,7 +249,7 @@ func TestC09ReleasesCacheSharedBetweenFetchers(t *testing.T) {
 	if _, err := h.fetchSystemUpgradeReleases(50); err != nil {
 		t.Fatalf("panel-first fetch: %v", err)
 	}
-	if _, err := fetchGitHubReleasesWithProxy(50, ""); err != nil {
+	if _, err := fetchGitHubReleases(50); err != nil {
 		t.Fatalf("node-second fetch: %v", err)
 	}
 	if got := hits.Load(); got != 2 {
@@ -280,7 +276,12 @@ func TestC09BatchUpgradeRejectsTooManyIDs(t *testing.T) {
 }
 
 func TestC09BatchCapArithmetic(t *testing.T) {
-	bound := (maxBatchUpgradeNodes + batchWorkers - 1) / batchWorkers * int(upgradeTimeout/time.Second)
+	// 1.7.7 一波口径：界 = 发现前奏上限 120s + 单节点 upgradeTimeout，
+	// 与 N 无关（不再按波次叠加）；上限钉 50（用户 2026-11-01 拍板）。
+	if maxBatchUpgradeNodes != 50 {
+		t.Fatalf("maxBatchUpgradeNodes = %d, want 50", maxBatchUpgradeNodes)
+	}
+	bound := 120 + int(upgradeTimeout/time.Second)
 	sv := int(nodeBatchUpgradeWriteDeadline / time.Second)
 	if bound >= sv {
 		t.Fatalf("batch bound %ds must stay below server write deadline %ds", bound, sv)
@@ -396,6 +397,8 @@ func c09DelayedReleasesStub(t *testing.T, delay time.Duration, hits *atomic.Int3
 	githubAPIBase = srv.URL
 	t.Cleanup(func() { githubAPIBase = old })
 	resetKernelVersionCache(t)
+	// 1.7.7：路线钉为直连-only，避免真实候选探测/尝试污染计时断言。
+	seedGitHubRoutesForTest(t, true, nil)
 }
 
 func TestC09KernelVersionsSingleflightMergesSameType(t *testing.T) {
@@ -414,7 +417,7 @@ func TestC09KernelVersionsSingleflightMergesSameType(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			items, err := kernelReleaseVersionsWithProxy(info, "")
+			items, err := kernelReleaseVersions(info)
 			if err == nil && len(items) != 1 {
 				err = fmt.Errorf("items = %d, want 1", len(items))
 			}
@@ -451,12 +454,12 @@ func TestC09KernelVersionsDifferentTypesParallel(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		_, errs[0] = kernelReleaseVersionsWithProxy(xray, "")
+		_, errs[0] = kernelReleaseVersions(xray)
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		_, errs[1] = kernelReleaseVersionsWithProxy(singbox, "")
+		_, errs[1] = kernelReleaseVersions(singbox)
 	}()
 	begin := time.Now()
 	close(start)

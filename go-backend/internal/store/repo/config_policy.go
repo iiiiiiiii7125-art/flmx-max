@@ -122,8 +122,10 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"captcha_enabled":         {},
 	"panel_domain":            {},
 	"ip":                      {},
-	"github_proxy_enabled":    {},
-	"github_proxy_url":        {},
+	// 1.7.7（KU5）：github_proxy_enabled / github_proxy_url 已随
+	// 「开启 GitHub 加速」设置整体移除，不再列入 authenticated
+	// 可读面——两键落默认 sensitive（非管理员不可读），已存值不
+	// 做破坏性迁移、仅不再读写。
 	"allow_local_remote_addr": {},
 	// 通知设置中的非凭据键（凭据键 notify_telegram_*/notify_webhook_url
 	// 在 sensitiveConfigKeys；日报台账键 notify_daily_last /

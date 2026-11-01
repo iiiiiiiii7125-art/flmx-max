@@ -975,21 +975,28 @@ func cloneYAMLNode(n *yaml.Node) *yaml.Node {
 	return &c
 }
 
-func (h *Handler) buildSystemUpgradeDownloadURL(version, filename string) string {
-	enabled, proxyURL := h.getGithubProxyConfig()
+// systemUpgradeDownloadURLs 是面板自升级资产的候选 URL 全表
+// （1.7.7 KU5）：按面板侧测速直选的当前路线序（gitHubRouteOrder：
+// 直连判活居首、代理排名殿后、直连判死殿后兜底）对同一资产拼全
+// 候选，downloadReleaseAsset 逐个尝试。原 buildSystemUpgrade
+// DownloadURL 只产出面板配置代理（或直连）一条 URL——设置移除后
+// 不再有单点配置，F-139 的「代理坏了无路可走」由全候选根除。
+func (h *Handler) systemUpgradeDownloadURLs(version, filename string) []string {
 	base := fmt.Sprintf("%s/%s/releases/download/%s/%s", strings.TrimRight(systemUpgradeReleaseBaseURL, "/"), githubRepo, version, filename)
-	if enabled {
-		return fmt.Sprintf("%s/%s", proxyURL, base)
+	order := gitHubRouteOrder()
+	urls := make([]string, 0, len(order))
+	for _, prefix := range order {
+		urls = append(urls, prefixURL(prefix, base))
 	}
-	return base
+	return urls
 }
 
 func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, error) {
 	if perPage <= 0 {
 		perPage = 20
 	}
-	// B05-004：与 fetchGitHubReleasesWithProxy 共用同一缓存键与同一
-	// 条目（releasesCacheKey ins upgrade.go）——旧实现两路同表异键
+	// B05-004：与 fetchGitHubReleases 共用同一缓存键与同一
+	// 条目（releasesCacheKey in upgrade.go）——旧实现两路同表异键
 	// （"sysapi:"/"api:"）永不互相命中，同一份列表冷缓存时向 GitHub
 	// 请求两遍，未认证配额双倍消耗。现两路都全量拉取
 	// releasesFetchPerPage 条存缓存、读取时各自 slice，本注释与实现
@@ -999,33 +1006,30 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 		return sliceReleases(releases, perPage), nil
 	}
 
-	// U1-006：超时 15s → 30s（经代理多一跳 + 50 条 release JSON，慢代理下 15s 偏紧）。
-	// C-02：走共用加固助手（钉死拨号 + 逐跳重定向复检）。
-	client := githubVersionFetchClient()
 	apiURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, releasesFetchPerPage)
 
-	// U1-001：代理开启时先试代理路径，失败降级直连。
-	// gh-proxy 类服务不一定转发 api.github.com（实测 ghfast.top 返回 403
-	// "Invalid input."），此前全链路无 fallback，版本发现直接整体失效。
-	paths := []string{apiURL}
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
-		paths = []string{fmt.Sprintf("%s/%s", proxyURL, apiURL), apiURL}
-	}
-
-	var lastErr error
-	for i, url := range paths {
-		releases, err := h.fetchSystemUpgradeReleasePage(client, url)
-		if err == nil {
-			if i > 0 {
-				log.Printf("system_upgrade: 代理版本API失败，已降级直连 api.github.com")
-			}
-			storeReleasesCache(cacheKey, releases)
-			return sliceReleases(releases, perPage), nil
+	// U1-001 的「代理先行失败降级直连」在 1.7.7 升级为内置候选测速
+	// 直选（KU5，github_routes.go）：直连优先短路、失败按代理探测
+	// 排名续切。gh-proxy 类服务不转发 api.github.com 时该候选自行
+	// 失败落到下一名，全链路不再系于单点配置。
+	// U1-006/C-02 口径不变：单次尝试客户端走共用加固助手（钉死拨
+	// 号 + 逐跳重定向复检），超时按段预算剩余量收紧（上限 30s）。
+	var releases []githubRelease
+	err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
+		client := githubVersionFetchClientWithTimeout(attemptTimeout)
+		rs, err := h.fetchSystemUpgradeReleasePage(client, prefixURL(prefix, apiURL))
+		if err != nil {
+			log.Printf("system_upgrade: 版本API请求失败（路线 %s）: %v", gitHubRouteLabel(prefix), err)
+			return err
 		}
-		log.Printf("system_upgrade: 版本API请求失败（尝试 %d/%d）url=%s: %v", i+1, len(paths), url, err)
-		lastErr = err
+		releases = rs
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("请求GitHub API失败（全部候选路线均已尝试）: %v", err)
 	}
-	return nil, fmt.Errorf("请求GitHub API失败（代理/直连均已尝试）: %v", lastErr)
+	storeReleasesCache(cacheKey, releases)
+	return sliceReleases(releases, perPage), nil
 }
 
 func (h *Handler) fetchSystemUpgradeReleasePage(client *http.Client, url string) ([]githubRelease, error) {
@@ -1058,11 +1062,11 @@ func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (st
 	releases, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
-		// F-029：重定向解析也走代理感知变体，与节点侧同口径。
+		// F-029：重定向解析与节点侧同口径（1.7.7 起同为内置直选）。
 		// J-03：兜底亦须过渠道过滤——稳定渠道只接受纯数字 tag，
 		// 命中 beta 时继续报 API 错误（与节点侧同口径）。
 		if normalizedChannel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirectWithProxy(h.githubProxyURLForFetch()); ferr == nil && releaseChannelFromTag(tag) == normalizedChannel {
+			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil && releaseChannelFromTag(tag) == normalizedChannel {
 				return tag, nil
 			}
 		}
@@ -1164,34 +1168,38 @@ func (e *systemUpgradeExecutor) startHelper(ctx context.Context, imageID, helper
 }
 
 func (h *Handler) downloadReleaseAsset(version, filename string) ([]byte, error) {
-	// F-139：buildSystemUpgradeDownloadURL 在代理开启时只产出代理 URL，
-	// 代理对该资产不可用时无直连重试（版本发现侧 U1-001 已有降级、资产
-	// 侧独缺）。候选按 [构建 URL（代理或直连）, 直连 URL] 依次尝试；
-	// 资产与 .sha256 必须同源同次取得——每个候选内部独立完成下载+校验，
-	// 不跨源混搭。
-	urls := []string{h.buildSystemUpgradeDownloadURL(version, filename)}
-	if enabled, _ := h.getGithubProxyConfig(); enabled {
-		direct := fmt.Sprintf("%s/%s/releases/download/%s/%s",
-			strings.TrimRight(systemUpgradeReleaseBaseURL, "/"), githubRepo, version, filename)
-		if direct != urls[0] {
-			urls = append(urls, direct)
-		}
-	}
+	// F-139：资产下载必须有多路线尝试（旧实现只产出面板配置代理的
+	// 单条 URL，代理对该资产不可用时无直连重试）。1.7.7（KU5）候
+	// 选 = systemUpgradeDownloadURLs 的全表（直选路线序，10 条）：
+	// 资产与 .sha256 必须同源同次取得——每个候选内部独立完成下载
+	// +校验，不跨源混搭；全候选共用 githubAssetDownloadBudget 总
+	// 预算，单候选沿 SecureFetch 的 60s 腿界（取两者较小者）。
+	ctx, cancel := context.WithTimeout(context.Background(), githubAssetDownloadBudget)
+	defer cancel()
 	var lastErr error
-	for _, url := range urls {
-		body, err := h.downloadReleaseAssetFrom(url, filename)
+	for _, url := range h.systemUpgradeDownloadURLs(version, filename) {
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, secureFetchTotalTimeout)
+		body, err := h.downloadReleaseAssetFromCtx(attemptCtx, url, filename)
+		attemptCancel()
 		if err == nil {
 			return body, nil
 		}
 		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
 	}
 	return nil, lastErr
 }
 
 func (h *Handler) downloadReleaseAssetFrom(url, filename string) ([]byte, error) {
-	// R5-B5 D16: 经 SecureFetch（SSRF 防护 + 大小限制 + 超时）。
 	ctx, cancel := context.WithTimeout(context.Background(), secureFetchTotalTimeout)
 	defer cancel()
+	return h.downloadReleaseAssetFromCtx(ctx, url, filename)
+}
+
+func (h *Handler) downloadReleaseAssetFromCtx(ctx context.Context, url, filename string) ([]byte, error) {
+	// R5-B5 D16: 经 SecureFetch（SSRF 防护 + 大小限制 + 超时）。
 	body, err := SecureFetch(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("下载%s失败: %v", filename, err)
@@ -1331,7 +1339,7 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 		// 中标注降级；dev 渠道与兜底失败保留原错误。J-03：兜底结果
 		// 仍须过渠道过滤（beta tag 不冒充稳定版）。
 		if channel == releaseChannelStable {
-			if tag, ferr := resolveLatestTagByRedirectWithProxy(h.githubProxyURLForFetch()); ferr == nil && releaseChannelFromTag(tag) == channel {
+			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil && releaseChannelFromTag(tag) == channel {
 				hasUpdate := false
 				if cmp, cerr := compareVersions(tag, current); cerr == nil && cmp > 0 {
 					hasUpdate = true
