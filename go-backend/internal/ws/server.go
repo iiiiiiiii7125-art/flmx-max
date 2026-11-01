@@ -1103,14 +1103,12 @@ func (s *Server) validateMonitorSession(userID int64, claims auth.Claims) bool {
 			return false
 		}
 	}
-	if s.repo == nil {
-		return false
-	}
-	allowed, err := s.repo.HasMonitorPermission(userID)
-	if err != nil || !allowed {
-		return false
-	}
-	return true
+	// 监控权限范围收窄（2026-11-01 用户拍板）：节点实时流（节点状态
+	// 与系统信息广播）只对管理员开放，监控权限不再准入 WS——普通
+	// 用户的隧道监控走 REST 并按其可达隧道过滤。校验通过后一律拒绝：
+	// 新连接在 ServeHTTP 准入处被拒，存量 monitor 会话在本函数的
+	// keepalive 复检（startKeepalive 调用点）时被关闭。
+	return false
 }
 
 func writeWSMessage(cw *connWrap, messageType int, payload []byte) error {

@@ -11,9 +11,11 @@ import (
 )
 
 // X-P1-3（R1 [I]-01 / V-01 / BC-03）：监控「查看权限」回归只读。
-// 被授予监控查看权限的普通用户可读监控数据，但 services 的
-// create/update/delete/run 四个写入口必须仅管理员可用（403）；
-// 管理员写入口照常成功（防过修）。
+// services 的 create/update/delete/run 四个写入口必须仅管理员可用
+// （403）；管理员写入口照常成功（防过修）。
+// 注：2026-11-01 监控权限范围收窄后，服务/节点读面亦仅管理员——
+// 本文中原「viewer 读 list/nodes 成功」断言已按新口径改为 403，
+// 隧道面的按用户过滤见 monitor_scope_test.go。
 func TestR1MonitorWriteRequiresAdmin(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "panel.db"))
 	if err != nil {
@@ -61,12 +63,13 @@ func TestR1MonitorWriteRequiresAdmin(t *testing.T) {
 		t.Fatalf("viewer must not create monitors, got %v err=%v", monitors, err)
 	}
 
-	// 同一 token 读监控数据仍成功（防过修：查看权限回归只读而非无权）。
-	if env := call(h.monitorServiceListHandler, http.MethodGet, "/api/v1/monitor/services", "", viewerID, 1); env.Code != 0 {
-		t.Fatalf("viewer read list must succeed, got code=%d msg=%q", env.Code, env.Msg)
+	// 范围收窄后同一 token 读服务/节点面同样 403（仅管理员）：
+	// 监控权限只覆盖本人隧道的监控数据，不再含服务与节点读面。
+	if env := call(h.monitorServiceListHandler, http.MethodGet, "/api/v1/monitor/services", "", viewerID, 1); env.Code != 403 {
+		t.Fatalf("viewer read list must be 403 after scope narrowing, got code=%d msg=%q", env.Code, env.Msg)
 	}
-	if env := call(h.monitorNodeListHandler, http.MethodGet, "/api/v1/monitor/nodes", "", viewerID, 1); env.Code != 0 {
-		t.Fatalf("viewer read nodes must succeed, got code=%d msg=%q", env.Code, env.Msg)
+	if env := call(h.monitorNodeListHandler, http.MethodGet, "/api/v1/monitor/nodes", "", viewerID, 1); env.Code != 403 {
+		t.Fatalf("viewer read nodes must be 403 after scope narrowing, got code=%d msg=%q", env.Code, env.Msg)
 	}
 
 	// 管理员写仍成功。

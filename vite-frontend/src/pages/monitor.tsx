@@ -47,7 +47,95 @@ export default function MonitorPage() {
   return getAdminFlag() ? <Navigate replace to="/node" /> : <MonitorOverview />;
 }
 
+// 监控权限范围收窄（2026-11-01 用户拍板）后按 /monitor/access 分流：
+// 管理员走原总览（节点＋服务监控＋隧道，行为与收窄前一致）；被授予
+// 监控权限的普通用户只看自己隧道的监控（TunnelMonitorView，数据由
+// 后端按可达隧道过滤），不渲染节点/服务区，也不再调用已收管理员的
+// 端点与节点实时流；无权限用户显示授权提示（h5 布局的同名 toast
+// 仍由 access 探针驱动，行为不变）。
 function MonitorOverview() {
+  const [accessState, setAccessState] = useState<
+    "loading" | "admin" | "user" | "denied"
+  >("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const res = await getMonitorAccess();
+
+        if (cancelled) return;
+        if (res.code === 0 && res.data) {
+          setAccessState(
+            res.data.admin ? "admin" : res.data.allowed ? "user" : "denied",
+          );
+
+          return;
+        }
+      } catch {
+        // 探针失败回落用户视图：后端逐面兜底鉴权与过滤。
+      }
+      if (!cancelled) setAccessState("user");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (accessState === "loading") return null;
+  if (accessState === "admin") return <AdminMonitorOverview />;
+  if (accessState === "denied") {
+    return (
+      <AnimatedPage className="px-3 lg:px-6 py-8">
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold">监控</h3>
+          </CardHeader>
+          <CardBody>
+            <div className="text-sm text-default-600">
+              暂无监控权限，请联系管理员授权
+            </div>
+          </CardBody>
+        </Card>
+      </AnimatedPage>
+    );
+  }
+
+  return <UserTunnelMonitorOverview />;
+}
+
+function UserTunnelMonitorOverview() {
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+
+  return (
+    <AnimatedPage className="px-3 lg:px-6 py-8">
+      <div className="mb-6 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold truncate">监控面板</h2>
+          </div>
+          <Button
+            isIconOnly
+            size="sm"
+            variant="flat"
+            onPress={() => setViewMode(viewMode === "list" ? "grid" : "list")}
+          >
+            {viewMode === "list" ? (
+              <LayoutGrid className="w-4 h-4" />
+            ) : (
+              <List className="w-4 h-4" />
+            )}
+          </Button>
+        </div>
+      </div>
+      <TunnelMonitorView viewMode={viewMode} />
+    </AnimatedPage>
+  );
+}
+
+function AdminMonitorOverview() {
   const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
