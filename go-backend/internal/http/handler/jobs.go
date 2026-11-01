@@ -27,8 +27,12 @@ func (h *Handler) StartBackgroundJobs() {
 	// DB-3：重连重测队列须在 jobsStarted 置位前就绪，onNodeOnline 的
 	// scheduleNodeReconnectProbe 在锁内读它。
 	h.reconnectProbes = newNodeReconnectProbeQueue()
-	h.jobsWG.Add(17)
+	h.jobsWG.Add(18)
 	h.jobsMu.Unlock()
+
+	// R4B03-001 启动清扫腿：同步复位上个进程周期残留的僵尸在线
+	// 标记（本地非 nftables 节点），赶在任何消费 status 的路径之前。
+	h.resetLocalNodeStatusesAtStartup()
 
 	// FIX2-B（V5-3）：存量联邦期望状态启动复检——同步执行、赶在任何
 	// 对账循环之前，危险存量先置 paused 再谈物化。
@@ -50,6 +54,9 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runKernelStatusLoop(ctx)
 	go h.runExternalProbeLoop(ctx)
 	go h.runNodeReconnectProbes(ctx, h.reconnectProbes, 5*time.Second)
+	// R4B03-001 周期对账腿：DB 在线但 WS 无会话且超过重连宽限的
+	// 本地非 nftables 节点复位为离线。
+	go h.runNodeStatusReconcileLoop(ctx)
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)

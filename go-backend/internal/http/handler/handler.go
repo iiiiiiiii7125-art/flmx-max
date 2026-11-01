@@ -612,11 +612,15 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	issueAt := tokenIssueTime(user.PasswordChangedAt)
 	if passwordWasLegacy {
+		// R4B01-002：rehash 是透明存储迁移、密码未变更，必须走
+		// MigrateUserPasswordHash——不得推进 password_changed_at
+		// 吊销既有会话。下方 issueAt=updatedAt+1 是旧写面下的签发
+		// 补偿，新写面下已冗余，保留以维持签发行为逐字等价。
 		updatedAt := time.Now().UnixMilli()
 		hashedPassword, err := security.HashPassword(req.Password)
 		if err != nil {
 			log.Printf("legacy password rehash skipped user_id=%d path=login err=%v", user.ID, err)
-		} else if err := h.repo.UpdateUserPassword(user.ID, hashedPassword, updatedAt); err != nil {
+		} else if err := h.repo.MigrateUserPasswordHash(user.ID, hashedPassword, updatedAt); err != nil {
 			log.Printf("legacy password rehash update skipped user_id=%d path=login err=%v", user.ID, err)
 		} else {
 			issueAt = time.UnixMilli(updatedAt + 1)
@@ -982,10 +986,14 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if passwordWasLegacy {
+		// R4B01-002：同 login 路径——透明 rehash 走
+		// MigrateUserPasswordHash，不推进 password_changed_at。
+		// 本路径不签发 token、无签发补偿可言，旧写面下一次只读
+		// 拉取即吊销该用户全部既有面板会话。
 		hashedPassword, err := security.HashPassword(password)
 		if err != nil {
 			log.Printf("legacy password rehash skipped user_id=%d path=sub_store err=%v", user.ID, err)
-		} else if err := h.repo.UpdateUserPassword(user.ID, hashedPassword, time.Now().UnixMilli()); err != nil {
+		} else if err := h.repo.MigrateUserPasswordHash(user.ID, hashedPassword, time.Now().UnixMilli()); err != nil {
 			log.Printf("legacy password rehash update skipped user_id=%d path=sub_store err=%v", user.ID, err)
 		}
 	}
@@ -2194,7 +2202,11 @@ func getOrCreateFlowCrypto(secret string) *security.AESCrypto {
 
 func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 	defer body.Close()
-	raw, err := io.ReadAll(body)
+	// R4B03-003：ReadAll 前以 MaxBytesReader 包裹与 decodeJSON/WS 同一
+	// 10MB 上限（旧实现无上限读入，持任一节点 secret 即可用超大请求
+	// 让面板内存随体大小线性膨胀）；超限返回 error，两调用方现有
+	// error 分支整批拒收（flowUpload 返非 ok、agent 可重报）。
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, body, 10<<20))
 	if err != nil {
 		return "", err
 	}

@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261101.02"
+SCRIPT_VERSION="20261101.03"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -609,6 +609,52 @@ docker_ipv6_usable() {
   [[ "$bridge_v6" == "true" ]]
 }
 
+# R4B11-001: 抽出 Caddyfile 中「指定域名站点块之外」的全部内容，供菜单 5
+# 保留式重写：其他站点块（含菜单 6 追加的订阅前置块）、全局选项块与块外
+# 行（注释/import 等）逐字保留，仅剔除地址命中 domain 的站点块（支持与
+# 菜单 6 幂等检查相同的多地址行与 scheme/端口写法）。按花括号深度切块，
+# 结构不完整的尾部内容按保留处理，宁可多留不可误删。
+caddyfile_without_site() {
+  local file="$1" domain="$2"
+  awk -v d="$domain" '
+    function flush_block(   line, n, parts, i, tok, keep) {
+      if (buf == "") return
+      keep = 1
+      if (first != "{") {
+        line = first
+        sub(/\{[[:space:]]*$/, "", line)
+        n = split(line, parts, /[[:space:],]+/)
+        for (i = 1; i <= n; i++) {
+          tok = parts[i]
+          sub(/^https?:\/\//, "", tok)
+          sub(/:[0-9]+$/, "", tok)
+          if (tok == d) { keep = 0; break }
+        }
+      }
+      if (keep) printf "%s", buf
+      buf = ""
+    }
+    {
+      line = $0
+      tmp = line; opens = gsub(/\{/, "{", tmp)
+      tmp = line; closes = gsub(/\}/, "}", tmp)
+      if (!inblock) {
+        if (opens > 0) {
+          first = line; buf = line "\n"; depth = opens - closes
+          if (depth <= 0) flush_block(); else inblock = 1
+        } else {
+          print line
+        }
+      } else {
+        buf = buf line "\n"
+        depth += opens - closes
+        if (depth <= 0) { flush_block(); inblock = 0 }
+      }
+    }
+    END { if (inblock) printf "%s", buf }
+  ' "$file"
+}
+
 # 配置域名反向代理（Caddy 自动 HTTPS）
 setup_domain_proxy() {
   echo "🌐 配置域名反向代理"
@@ -690,11 +736,18 @@ setup_domain_proxy() {
 
   # 写 Caddyfile（用 127.0.0.1 避免 docker-proxy IPv6 转发问题）
   echo "📝 配置 Caddy..."
+  # CADDYFILE_PATH 仅供测试夹具覆盖（与菜单 6 同钩子），默认即现行路径。
+  local caddyfile="${CADDYFILE_PATH:-/etc/caddy/Caddyfile}"
   # AUDIT-R1 (SCR-018): caddy 手动二进制安装时 /etc/caddy 不存在，
   # 此处 cat 会 No such file or directory。先建目录（包管理器安装自带该目录，无害）。
-  mkdir -p /etc/caddy
-  # 备份已有配置
-  [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
+  mkdir -p "$(dirname "$caddyfile")"
+  # 备份已有配置（保留备份路径供下方 validate/restart 失败回滚使用）
+  local caddyfile_bak=""
+  if [ -f "$caddyfile" ]; then
+    caddyfile_bak="${caddyfile}.bak.$(date +%s)"
+    cp "$caddyfile" "$caddyfile_bak"
+    echo "🗄️  已备份现有配置到 $caddyfile_bak"
+  fi
   # AUDIT-R1 (SCR-003): 菜单 5 是独立流程，不经过 get_config_params，
   # 此处 FRONTEND_PORT 恒未设置。改为从部署目录 .env 读取用户实际安装的
   # 前端端口（更新流程的 resolve_panel_deployment 已证明该信息可得）；
@@ -711,13 +764,53 @@ setup_domain_proxy() {
       fi
     done
   fi
-  cat > /etc/caddy/Caddyfile <<EOF
+  # R4B11-001: 保留式写入。旧实现整文件覆盖，会静默抹掉菜单 6 已追加的
+  # 订阅前置站点块（先 6 后 5 的运维序列下订阅前置随即失效、仅存于 .bak）。
+  # 改为按站点块合并：先从刚备份的旧文件中抽出面板域名之外的全部内容，
+  # 写完新的面板块后逐字附回，与菜单 6 的追加语义对齐。
+  local preserved_blocks=""
+  if [ -n "$caddyfile_bak" ]; then
+    preserved_blocks=$(caddyfile_without_site "$caddyfile_bak" "$DOMAIN")
+  fi
+  cat > "$caddyfile" <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
 }
 EOF
+  if [ -n "$preserved_blocks" ]; then
+    printf '%s\n' "$preserved_blocks" >> "$caddyfile"
+    echo "♻️ 已保留原配置中的其他站点块（订阅前置等配置不受本次修改影响）"
+  fi
 
-  systemctl restart caddy
+  # R4B11-002: 与菜单 6 同口径（SCR-020）先校验后生效：validate 不过即
+  # 回滚备份且不 restart；restart 本身失败时不得被 set -e 在下方
+  # is-active 检查之前吞掉——用 if 守卫接住返回码，失败即回滚坏文件、
+  # 尝试以旧配置恢复服务，并落到日志指引分支。
+  if command -v caddy &> /dev/null; then
+    if ! caddy validate --config "$caddyfile" > /dev/null 2>&1; then
+      if [ -n "$caddyfile_bak" ]; then
+        echo "❌ Caddy 配置校验失败，已回滚到 $caddyfile_bak ，未做任何生效变更"
+        cp "$caddyfile_bak" "$caddyfile"
+      else
+        echo "❌ Caddy 配置校验失败，未做任何生效变更"
+        rm -f "$caddyfile"
+      fi
+      return 1
+    fi
+    echo "✅ Caddy 配置校验通过"
+  fi
+
+  if ! systemctl restart caddy; then
+    echo "❌ Caddy 重启失败，正在回滚到之前的配置..."
+    if [ -n "$caddyfile_bak" ]; then
+      cp "$caddyfile_bak" "$caddyfile"
+    else
+      rm -f "$caddyfile"
+    fi
+    systemctl restart caddy || true
+    echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
+    return 1
+  fi
   sleep 3
 
   if systemctl is-active --quiet caddy; then
@@ -760,7 +853,7 @@ setup_subscription_front_domain() {
 
   # 前置检查：前置域名复用面板的 Caddy 与前端端口，要求菜单 5 已跑过
   # （Caddyfile 存在且至少含一个站点块）。CADDYFILE_PATH 仅供测试夹具
-  # 覆盖，默认即现行硬编码路径，菜单 5 不受影响。
+  # 覆盖，默认即现行硬编码路径，菜单 5 与本函数共用同一钩子。
   local caddyfile="${CADDYFILE_PATH:-/etc/caddy/Caddyfile}"
   if [ ! -f "$caddyfile" ]; then
     echo "❌ 未找到 $caddyfile ，请先运行菜单 5「配置域名反向代理（自动 HTTPS）」后再配置订阅前置域名"
@@ -816,7 +909,17 @@ EOF
     echo "✅ Caddy 配置校验通过"
   fi
 
-  systemctl restart caddy
+  # R4B11-002: restart 失败不得被 set -e 在下方 is-active 检查之前吞掉
+  # （原实现的日志指引分支在 restart 返回非 0 时永不可达）。用 if 守卫
+  # 接住返回码，失败即回滚到追加前的备份、尝试以旧配置恢复服务，并
+  # 落到日志指引分支——与上方 validate 失败回滚同口径。
+  if ! systemctl restart caddy; then
+    echo "❌ Caddy 重启失败，正在回滚到之前的配置..."
+    cp "$caddyfile_bak" "$caddyfile"
+    systemctl restart caddy || true
+    echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
+    return 1
+  fi
   sleep 3
 
   if systemctl is-active --quiet caddy; then
@@ -1819,7 +1922,24 @@ migrate_to_postgres() {
   fi
 
   echo "🔄 执行 pgloader 迁移..."
-  if ! docker run --rm --network gost-network -v sqlite_data:/sqlite dimitri/pgloader:latest pgloader "$pgloader_source" "postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}"; then
+  # R4B11-006: 目标连接串含 PG 口令，旧实现直接拼进 docker run 的进程
+  # 参数，迁移持续的数分钟内可被本机 ps / docker inspect 读到明文。
+  # 改走 pgloader 命令文件：连接串只落一张 0600 临时文件、只读挂载进
+  # 容器，docker run 参数里只剩文件路径；无论成败用后立即删除。
+  local pgloader_load_file pgloader_rc=0
+  pgloader_load_file=$(mktemp)
+  chmod 600 "$pgloader_load_file"
+  # F-R4-01: INTO 行尾的分号是 pgloader 命令文件的语句终止符，不可省——
+  # 缺失时现行 dimitri/pgloader:latest（3.6.7~devel）解析直接 KABOOM
+  # （ESRAP-PARSE-ERROR），整个迁移不可用（真机三变体判别实验已证）。
+  cat > "$pgloader_load_file" <<EOF
+LOAD DATABASE
+     FROM sqlite://${pgloader_source}
+     INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db};
+EOF
+  docker run --rm --network gost-network -v sqlite_data:/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
+  rm -f "$pgloader_load_file"
+  if [[ $pgloader_rc -ne 0 ]]; then
     echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm postgres_data 后重试）"
     echo "↩️ .env 尚未切换，正在恢复迁移前的 SQLite 服务..."
     $DOCKER_CMD up -d backend frontend || true

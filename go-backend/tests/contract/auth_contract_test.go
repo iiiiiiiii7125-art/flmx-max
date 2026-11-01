@@ -119,8 +119,11 @@ func TestLegacyPasswordMigratesOnLogin(t *testing.T) {
 	router.ServeHTTP(resp, req)
 	assertCode(t, resp, 0)
 	assertUserPasswordIsBcrypt(t, r, "legacy-login-user", "legacy-login-pass")
-	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-login-user"); changedAt <= legacyChangedAt {
-		t.Fatalf("expected password_changed_at to advance on login migration, got %d <= %d", changedAt, legacyChangedAt)
+	// R4B01-002: transparent legacy-hash migration must not advance
+	// password_changed_at — the password itself did not change, and
+	// advancing it would revoke every existing panel session of that user.
+	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-login-user"); changedAt != legacyChangedAt {
+		t.Fatalf("expected password_changed_at to remain unchanged on login migration, got %d want %d", changedAt, legacyChangedAt)
 	}
 }
 

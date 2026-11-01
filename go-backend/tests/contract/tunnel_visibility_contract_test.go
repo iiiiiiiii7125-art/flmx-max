@@ -89,7 +89,10 @@ func TestUserTunnelVisibleListContracts(t *testing.T) {
 		}
 	})
 
-	t.Run("normal user sees enabled assigned tunnels regardless of user_tunnel status", func(t *testing.T) {
+	// R4B02-001: the visible list honors user_tunnel.status — an assignment
+	// the admin disabled (enabledA, status=0) must not appear in the user's
+	// dropdown, matching the enforcement side (UserTunnelExistsByUserAndTunnel).
+	t.Run("normal user sees only enabled assigned tunnels with enabled user_tunnel status", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/tunnel/user/tunnel", nil)
 		req.Header.Set("Authorization", userToken)
 		res := httptest.NewRecorder()
@@ -105,8 +108,11 @@ func TestUserTunnelVisibleListContracts(t *testing.T) {
 		}
 
 		ids := collectTunnelIDs(t, out.Data)
-		if !ids[enabledA] || !ids[enabledB] {
-			t.Fatalf("expected enabled assigned tunnels for user, got %v", ids)
+		if !ids[enabledB] {
+			t.Fatalf("expected enabled assigned tunnel with enabled user_tunnel status for user, got %v", ids)
+		}
+		if ids[enabledA] {
+			t.Fatalf("did not expect tunnel whose user_tunnel assignment is disabled for user")
 		}
 		if ids[disabledC] {
 			t.Fatalf("did not expect disabled tunnel for user")

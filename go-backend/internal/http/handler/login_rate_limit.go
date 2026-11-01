@@ -223,6 +223,18 @@ var tightenedLoginIPs = struct {
 // tightenedIPRateLimitWindow 紧缩持续时间。
 const tightenedIPRateLimitWindow = 30 * time.Minute
 
+// tightenedLoginMaxEntries 紧缩集合容量上限（R4B01-001）：与同仓
+// 未认证可写内存表「上限+淘汰」口径对齐——登录 IP 桶/用户名桶各
+// 10000（loginRateLimitMaxBuckets/usernameRateLimitMaxBuckets）、
+// captcha verify 桶 10000、captcha 令牌池 1000、passkey pending
+// 池 1000（handler.go captchaTokenPoolMax 头注自述全集标准）。
+// 本集合键空间由远端源 IP 决定，此前无上限、无批量清扫：不再
+// 回访的 IP 条目永不删除，映射随不同源 IP 数无界增长，是全集
+// 唯一漏网。淘汰形态与 loginRateLimiter.evictIfNeededLocked
+// 一致：达上限写入新键时先批量清扫过期条目，仍满则淘汰到期
+// 最早者（全部条目窗口同长，到期序即写入序，等价 LRU 最旧）。
+const tightenedLoginMaxEntries = 10000
+
 func (l *loginRateLimiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -445,10 +457,46 @@ func (h *Handler) tightenIPRateLimit(clientIP string) {
 	if clientIP == "" {
 		return
 	}
+	now := time.Now()
 	tightenedLoginIPs.Lock()
 	defer tightenedLoginIPs.Unlock()
-	tightenedLoginIPs.m[clientIP] = time.Now().Add(tightenedIPRateLimitWindow)
+	if _, exists := tightenedLoginIPs.m[clientIP]; !exists {
+		evictTightenedLoginIPsIfNeededLocked(now)
+	}
+	tightenedLoginIPs.m[clientIP] = now.Add(tightenedIPRateLimitWindow)
 	log.Printf("login ip tightened ip=%s reason=username_bucket_triggered", clientIP)
+}
+
+// evictTightenedLoginIPsIfNeededLocked 在紧缩集合达容量上限时腾位
+// （R4B01-001，调用方须持 tightenedLoginIPs 锁）：先批量清扫全部
+// 过期条目；仍满则按到期时刻淘汰最早者并告警，与
+// loginRateLimiter.evictIfNeededLocked 同形态——绝不让新键无条件
+// 挤占，也绝不让 map 无界增长。未达上限时不做全表清扫（过期条目
+// 的同键惰性删除在 isIPTightened，语义不变）。
+func evictTightenedLoginIPsIfNeededLocked(now time.Time) {
+	if len(tightenedLoginIPs.m) < tightenedLoginMaxEntries {
+		return
+	}
+	for ip, expiry := range tightenedLoginIPs.m {
+		if now.After(expiry) {
+			delete(tightenedLoginIPs.m, ip)
+		}
+	}
+	for len(tightenedLoginIPs.m) >= tightenedLoginMaxEntries {
+		var evictKey string
+		var evictExpiry time.Time
+		first := true
+		for ip, expiry := range tightenedLoginIPs.m {
+			if first || expiry.Before(evictExpiry) {
+				evictKey, evictExpiry, first = ip, expiry, false
+			}
+		}
+		if evictKey == "" {
+			break
+		}
+		log.Printf("warning: tightened login IP set full (%d entries), evicting earliest-expiring entry", len(tightenedLoginIPs.m))
+		delete(tightenedLoginIPs.m, evictKey)
+	}
 }
 
 // isIPTightened 检查 IP 是否处于紧缩状态（过期自动清理）。

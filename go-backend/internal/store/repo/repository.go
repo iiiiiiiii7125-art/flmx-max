@@ -1143,6 +1143,39 @@ func (r *Repository) UpdateNodeStatus(nodeID int64, status int) error {
 	}).Error
 }
 
+// ResetLocalNodeStatusesAtStartup 在面板启动时批量复位本地节点的
+// 在线标记（R4B03-001）：进程重启后 WS 会话表为空，停机前残留的
+// status=1 全是僵尸值（断开 defer 在进程退出时不执行）；agent 重连
+// 会经 UpdateNodeOnline 立即置回 1，故复位不会误伤真实在线节点。
+// 范围与节点在线语义一致：仅 is_remote=0 且非 nftables 模式——
+// nftables 节点创建即 status=1、无 agent 会话语义，不在复位面内。
+func (r *Repository) ResetLocalNodeStatusesAtStartup() (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("is_remote = ? AND status = ? AND forward_mode <> ?", 0, 1, "nftables").
+		Updates(map[string]interface{}{
+			"status": 0, "updated_time": unixMilliNow(),
+		})
+	return res.RowsAffected, res.Error
+}
+
+// ListOnlineLocalNodes 返回 DB 中仍标记在线的本地节点（is_remote=0
+// 且 status=1），供周期对账以 WS 实时会话为准复位僵尸在线
+// （R4B03-001）。forward_mode 的 nftables 判定由调用方经
+// defaultNodeForwardMode 归一化后做，与全仓口径一致。
+func (r *Repository) ListOnlineLocalNodes() ([]model.Node, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var nodes []model.Node
+	if err := r.db.Where("is_remote = ? AND status = ?", 0, 1).Order("id ASC").Find(&nodes).Error; err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
 // ─── Flow ────────────────────────────────────────────────────────────
 
 func (r *Repository) AddFlow(forwardID, userID int64, userTunnelID int64, inFlow, outFlow int64) error {
@@ -1494,7 +1527,7 @@ func (r *Repository) ListUserAccessibleTunnels(userID int64) ([]map[string]inter
 	err := r.db.Model(&model.UserTunnel{}).
 		Select("tunnel.id, tunnel.name").
 		Joins("JOIN tunnel ON tunnel.id = user_tunnel.tunnel_id").
-		Where("user_tunnel.user_id = ? AND tunnel.status = 1", userID).
+		Where("user_tunnel.user_id = ? AND user_tunnel.status = 1 AND tunnel.status = 1", userID).
 		Order("tunnel.inx ASC, tunnel.id ASC").
 		Find(&rows).Error
 	if err != nil {
@@ -5789,6 +5822,23 @@ func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *impor
 			continue
 		}
 		value = normalizedValue
+		// R4B09-001：subscription_front_urls（1.7.7 KU6）走与保存面
+		// 同一实现 NormalizeSubscriptionFrontURLs（单点在本包
+		// subscription_front.go，保存面经 handler 委托别名共用），
+		// 坏值跳过 + warning、合法值归一后落库——此前该键无恢复面
+		// 校验，非规范值（带路径/查询、异源 scheme、超上限、未归一
+		// 大小写）经导入原文落库，绕过保存面单点，前端读面又只防御
+		// JSON 解析失败、条目不校验，含 token 的订阅链接会被组装到
+		// 未预期来源。
+		if strings.TrimSpace(name) == SubscriptionFrontURLsConfigKey {
+			normalizedFrontURLs, ferr := NormalizeSubscriptionFrontURLs(value)
+			if ferr != nil {
+				rep.skip("configs")
+				rep.warnf("备份恢复：配置 %q 的值 %q 无效（%v），已跳过未恢复", name, value, ferr)
+				continue
+			}
+			value = normalizedFrontURLs
+		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),

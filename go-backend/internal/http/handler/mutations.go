@@ -1000,7 +1000,18 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	usesNftablesRuntime := forwardMode == "nftables" || defaultNodeForwardMode(currentForwardMode) == "nftables"
-	if currentStatus == 1 && !usesNftablesRuntime && (newHTTP != currentHTTP || newTLS != currentTLS || newSocks != currentSocks) {
+	protocolChanged := newHTTP != currentHTTP || newTLS != currentTLS || newSocks != currentSocks
+	// R4B03-002（裁定方案①）：协议三开关是面板权威字段——本地节点
+	// 离线时旧口径跳过下发仍落库回成功，而节点重连握手会以 agent
+	// 本地值无条件覆回（UpdateNodeOnline），修改无声丢失。与前端
+	// 既定口径一致：本地节点不在线且三开关有变更时整单拒绝并点名，
+	// 不落库；其他字段的离线修改不受此门影响。远程节点无本地握手
+	// 覆写面，不在本机制范围内，保持原口径。
+	if protocolChanged && !usesNftablesRuntime && currentNode.IsRemote != 1 && currentStatus != 1 {
+		response.WriteJSON(w, response.ErrDefault("节点未在线，等待节点上线后再设置"))
+		return
+	}
+	if currentStatus == 1 && !usesNftablesRuntime && protocolChanged {
 		if err := h.applyNodeProtocolChange(id, newHTTP, newTLS, newSocks); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return

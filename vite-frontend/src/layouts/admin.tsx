@@ -489,7 +489,7 @@ export default function AdminLayout({
                     (isCollapsed ? (
                       <div className="mx-3 my-2 border-t border-default-200/70" />
                     ) : (
-                      <div className="px-3 pb-1 pt-3 text-[11px] font-medium tracking-wide text-default-400">
+                      <div className="px-3 pb-1 pt-3 text-[11px] font-medium tracking-wide text-default-600">
                         {item.section}
                       </div>
                     ))}

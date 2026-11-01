@@ -266,6 +266,16 @@ func (s *Server) IsNodeOnline(nodeID int64) bool {
 	return ok
 }
 
+// BroadcastNodeStatus 把节点状态变更推送给 admin/monitor 实时会话。
+// 供面板侧状态对账（R4B03-001）在复位 DB status 时与断开路径同口径
+// 广播，使前端在线呈现不必等下一次列表拉取。
+func (s *Server) BroadcastNodeStatus(nodeID int64, status int) {
+	if s == nil {
+		return
+	}
+	s.broadcastStatus(nodeID, status)
+}
+
 func (s *Server) SetNodeMetricHook(fn func(nodeID int64, info SystemInfo)) {
 	if s == nil {
 		return
