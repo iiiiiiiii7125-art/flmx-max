@@ -27,6 +27,12 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	if runtime.Role != "middle" && runtime.Role != "exit" {
 		return errors.New("invalid runtime role")
 	}
+	// F-UDP-4: 重连对账重下发不经 reserve/apply-role HTTP 入口，
+	// 在此对存量 protocol 做同一合法集校验，防修复前落库的非法值
+	// （如 sshd）绕过入口校验直达生成。
+	if err := validateTunnelProtocol(runtime.Protocol); err != nil {
+		return err
+	}
 	node, err := h.getNodeRecord(runtime.NodeID)
 	if err != nil {
 		return err
@@ -80,7 +86,9 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	// JoinHostPort：裸 IPv6 直拼会被误读，见 realm.go 同注释）。
 	// 注：不用裸 processServerAddress 包裹——它对 "host:port:port" 原样返回，
 	// 包了也修不了本处。
-	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(node.TCPListenAddr), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName)
+	// F-UDP-6：监听地址按协议分取（nodeListenAddrForProtocol）——
+	// udp/kcp 角色服务绑 UDPListenAddr，与转发面/本地链面同口径。
+	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, runtime.Protocol)), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName)
 	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
 		service["handler"].(map[string]interface{})["auth"] = auth
 	}

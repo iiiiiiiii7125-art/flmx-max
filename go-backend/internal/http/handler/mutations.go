@@ -6503,6 +6503,32 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		}
 	}
 
+	// F-UDP-4：段协议同时充当链服务的 listener 类型与上一跳的
+	// dialer 类型，非法值会直达 agent 解析（注册表内 sshd/tun 等
+	// 设计外类型可被实例化）。创建/更新共用本入口，在此按合法集
+	// （peerTunnelTransportTypes）统一校验并小写归一，与联邦面
+	// reserve/apply-role 同口径。
+	normalizeNodeProtocols := func(nodes []tunnelRuntimeNode) error {
+		for i := range nodes {
+			if !isAllowedTunnelProtocol(nodes[i].Protocol) {
+				return fmt.Errorf("不支持的隧道协议 %q", strings.TrimSpace(nodes[i].Protocol))
+			}
+			nodes[i].Protocol = normalizeTunnelProtocol(nodes[i].Protocol)
+		}
+		return nil
+	}
+	if err := normalizeNodeProtocols(state.InNodes); err != nil {
+		return nil, err
+	}
+	if err := normalizeNodeProtocols(state.OutNodes); err != nil {
+		return nil, err
+	}
+	for _, hop := range state.ChainHops {
+		if err := normalizeNodeProtocols(hop); err != nil {
+			return nil, err
+		}
+	}
+
 	return state, nil
 }
 
@@ -7484,6 +7510,32 @@ func isNodeUnreachableError(err error) bool {
 	return false
 }
 
+// tunnelRelayMetadata 是 relay connector/handler 在给定隧道协议下的
+// metadata 全集。本地链 builder（buildTunnelChainConfig /
+// buildTunnelChainServiceConfig）与联邦 builder
+// （buildFederationMiddleChainConfig / buildFederationServiceConfig）
+// 共用同一构造，防止两套生成面参数漂移——F-UDP-7：联邦面曾缺
+// mux.maxFrameSize / mux.maxStreamBuffer，其中 MaxStreamBuffer 有效
+// 值 64KB（库默认） vs 本地 2MB，联邦端作接收方时单流在途窗被压小。
+func tunnelRelayMetadata(protocol string) map[string]interface{} {
+	metadata := map[string]interface{}{}
+	if isTCPTunnelProtocol(protocol) {
+		metadata["nodelay"] = true
+		metadata["mux.keepaliveInterval"] = "15s"
+		metadata["mux.keepaliveTimeout"] = "45s"
+		metadata["mux.maxFrameSize"] = 32768
+		metadata["mux.maxStreamBuffer"] = 2097152
+	}
+	if isKCPTunnelProtocol(protocol) {
+		metadata["connectTimeout"] = "30s"
+		metadata["mux.keepaliveInterval"] = "15s"
+		metadata["mux.keepaliveTimeout"] = "45s"
+		metadata["mux.maxFrameSize"] = 32768
+		metadata["mux.maxStreamBuffer"] = 2097152
+	}
+	return metadata
+}
+
 func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string) (map[string]interface{}, error) {
 	fromNode := nodes[fromNodeID]
 	if fromNode == nil {
@@ -7517,22 +7569,7 @@ func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRu
 				connector["auth"] = auth
 			}
 		}
-		connectorMetadata := map[string]interface{}{}
-		if isTCPTunnelProtocol(protocol) {
-			connectorMetadata["nodelay"] = true
-			connectorMetadata["mux.keepaliveInterval"] = "15s"
-			connectorMetadata["mux.keepaliveTimeout"] = "45s"
-			connectorMetadata["mux.maxFrameSize"] = 32768
-			connectorMetadata["mux.maxStreamBuffer"] = 2097152
-		}
-		if isKCPTunnelProtocol(protocol) {
-			connectorMetadata["connectTimeout"] = "30s"
-			connectorMetadata["mux.keepaliveInterval"] = "15s"
-			connectorMetadata["mux.keepaliveTimeout"] = "45s"
-			connectorMetadata["mux.maxFrameSize"] = 32768
-			connectorMetadata["mux.maxStreamBuffer"] = 2097152
-		}
-		if len(connectorMetadata) > 0 {
+		if connectorMetadata := tunnelRelayMetadata(protocol); len(connectorMetadata) > 0 {
 			connector["metadata"] = connectorMetadata
 		}
 		nodeItems = append(nodeItems, map[string]interface{}{
@@ -7589,22 +7626,7 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 	handlerCfg := map[string]interface{}{
 		"type": "relay",
 	}
-	handlerMetadata := map[string]interface{}{}
-	if isTCPTunnelProtocol(protocol) {
-		handlerMetadata["nodelay"] = true
-		handlerMetadata["mux.keepaliveInterval"] = "15s"
-		handlerMetadata["mux.keepaliveTimeout"] = "45s"
-		handlerMetadata["mux.maxFrameSize"] = 32768
-		handlerMetadata["mux.maxStreamBuffer"] = 2097152
-	}
-	if isKCPTunnelProtocol(protocol) {
-		handlerMetadata["connectTimeout"] = "30s"
-		handlerMetadata["mux.keepaliveInterval"] = "15s"
-		handlerMetadata["mux.keepaliveTimeout"] = "45s"
-		handlerMetadata["mux.maxFrameSize"] = 32768
-		handlerMetadata["mux.maxStreamBuffer"] = 2097152
-	}
-	if len(handlerMetadata) > 0 {
+	if handlerMetadata := tunnelRelayMetadata(protocol); len(handlerMetadata) > 0 {
 		handlerCfg["metadata"] = handlerMetadata
 	}
 	if nextHopCandidateCount > 1 {
@@ -7612,7 +7634,8 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 	}
 	service := map[string]interface{}{
 		"name": fmt.Sprintf("tunnel_%d", tunnelID),
-		// 监听地址恒用节点自身的 TCPListenAddr：chainNode.ConnectIP 是拨号
+		// 监听地址用节点自身的监听地址（按协议分取，见
+		// nodeListenAddrForProtocol）：chainNode.ConnectIP 是拨号
 		// 语义（上一跳拨它到达本节点，见 buildTunnelChainConfig /
 		// selectTunnelDialHost），不是本节点的本地地址。CNIX/NAT 线路入口
 		// IP 在目标机上不可绑，拿它当监听地址 agent 必报
@@ -7620,7 +7643,7 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 		// R32-FIX-F01：监听地址先剥离 :port 再与链端口拼接（须用
 		// JoinHostPort：裸 IPv6 直拼会被 processServerAddress 误读，
 		// 见 realm.go 同注释）。
-		"addr":     processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(node.TCPListenAddr), "[]"), strconv.Itoa(chainNode.Port))),
+		"addr":     processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, protocol)), "[]"), strconv.Itoa(chainNode.Port))),
 		"handler":  handlerCfg,
 		"listener": buildTunnelListenerConfig(protocol),
 	}
@@ -7766,6 +7789,19 @@ func buildTunnelDialerConfig(protocol string) map[string]interface{} {
 func buildTunnelListenerConfig(protocol string) map[string]interface{} {
 	listener := map[string]interface{}{
 		"type": protocol,
+	}
+	if strings.EqualFold(strings.TrimSpace(protocol), "udp") {
+		// F-UDP-1: relay 是会话型协议，落在 UDP listener 上必须显式
+		// keepAlive——缺省 false 时 x/listener/udp 的会话 conn 首写后
+		// 自毁，后续帧被监听侧新建会话当 Request 头解析、报 bad
+		// version（专项定案，自引入即不合）。与
+		// buildForwardServiceConfigs 的 _udp 口径逐字一致
+		// （keepAlive:true + ttl 30s）。本地链中段/出口与联邦
+		// middle/exit 共用本 builder，一处收口覆盖全部会话型形态。
+		listener["metadata"] = map[string]interface{}{
+			"keepAlive": true,
+			"ttl":       "30s",
+		}
 	}
 	if isKCPTunnelProtocol(protocol) {
 		listener["metadata"] = map[string]interface{}{
