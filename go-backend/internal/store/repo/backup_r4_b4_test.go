@@ -8,16 +8,16 @@ import (
 )
 
 // R4 批 4 回归（repo 导入面）：
-//   - R4X-006：导入段授权收口落 repo 事务尾——部分导入 userTunnels
-//     不得复活已被停用组覆盖的授权、forwards 须验 UT 授权存否；
-//     同批全量恢复终态不变。
+//   - R4X-006（R5-FGRP 改版）：导入事务尾只保留转发授权收口——
+//     forwards 须验 UT 授权存否；userTunnels 不再按分组覆盖裁定
+//     （停用对覆盖的授权照常逐字落行），同批全量恢复终态不变。
 //   - G-S02 顺查：importPermissions grants 成员对应校验计 warning
 //     （写回仍按 R2X-037 父组键口径，不跳行）。
 
 // ─── R4X-006 事务尾收口 ─────────────────────────────────────────────────
 
-// b4SeedRevokedState 造「目标库现行撤销终态」：UG1 已停用（成员/
-// 权限对保留、grant 与 UT 已按停用口径清零，与 B5 断言同终态）。
+// b4SeedRevokedState 造停用组形态：UG1 已停用（成员/权限对保留、
+// 无任何 UT），供探针 C（停用对覆盖导入）与探针 D（无授权转发）共用。
 func b4SeedRevokedState(t *testing.T, r *Repository, now int64) {
 	t.Helper()
 	createRow(t, r, &model.User{ID: 2, User: "u2", Pwd: "x", RoleID: 1, Status: 1, CreatedTime: now})
@@ -30,10 +30,11 @@ func b4SeedRevokedState(t *testing.T, r *Repository, now int64) {
 	createRow(t, r, &model.GroupPermission{ID: 50, UserGroupID: 1, TunnelGroupID: 1, CreatedTime: now})
 }
 
-// 探针 C 转绿：部分导入 userTunnels 不得复活停用组覆盖下的授权
-// （跳过 + skipped + warning）；未被任何停用对覆盖的手工 UT 照常
-// 落行（防过修对照同批）。
-func TestR4B4_006_PartialUserTunnelsDoesNotResurrectRevoked(t *testing.T) {
+// 探针 C（R5-FGRP 改版）：部分导入 userTunnels 时，被停用对覆盖
+// 的授权与未被覆盖的手工 UT 一律逐字落行——无跳过、无撤销
+// skipped（旧「不得复活」裁定已删：停用从不撤销授权，导入的就
+// 是现行授权）。
+func TestR4B4_006_PartialUserTunnelsLandsVerbatimUnderDisabledPair(t *testing.T) {
 	now := time.Now().UnixMilli()
 	r := openBackupRepo(t, "b4-imp-ut.db")
 	b4SeedRevokedState(t, r, now)
@@ -49,24 +50,17 @@ func TestR4B4_006_PartialUserTunnelsDoesNotResurrectRevoked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("R4X-006 probe C: UT covered by a disabled permission pair must not be resurrected, got %d rows", n)
+	if n := countWhere(t, r, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: UT covered by a disabled permission pair must land verbatim, got %d rows", n)
 	}
 	if n := countWhere(t, r, "user_tunnel", "id = ?", 11); n != 1 {
 		t.Fatalf("manual UT not covered by any disabled pair must import as usual, got %d", n)
 	}
-	if result.UserTunnelsImported != 1 {
-		t.Fatalf("imported count must exclude the tail-skipped UT, got %d", result.UserTunnelsImported)
+	if result.UserTunnelsImported != 2 {
+		t.Fatalf("both UTs must count as imported, got %d", result.UserTunnelsImported)
 	}
-	totalSkipped := 0
-	for _, v := range result.SkippedRows {
-		totalSkipped += v
-	}
-	if totalSkipped != 1 {
-		t.Fatalf("tail skip must be counted in SkippedRows, got %v", result.SkippedRows)
-	}
-	if len(result.ImportWarnings) == 0 {
-		t.Fatalf("tail skip must be counted in ImportWarnings, got %v", result.ImportWarnings)
+	if result.SkippedRows["userTunnelsRevoked"] != 0 {
+		t.Fatalf("R5-FGRP: no revoked skip may be counted, got %v", result.SkippedRows)
 	}
 }
 
@@ -141,8 +135,8 @@ func TestR4B4_006_PartialForwardsRequireUserTunnel(t *testing.T) {
 }
 
 // 全量恢复终态不变（逐行对账）：停用组 + 其成员的手工 UT（无
-// grant）在整表恢复后必须原样存活——组状态本身来自备份时，事务
-// 尾收口不得按目标库口径误删；组建 UT + grant + forward 同理。
+// grant）在整表恢复后必须原样存活；组建 UT + grant + forward
+// 同理（R5-FGRP 后导入对授权行一律逐字落行，本例守恒不变）。
 func TestR4B4_006_FullRestoreFinalStateUnchanged(t *testing.T) {
 	now := time.Now().UnixMilli()
 	pwd := "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012"

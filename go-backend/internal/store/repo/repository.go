@@ -3400,30 +3400,10 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 	rep := newImportReport()
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		now := unixMilliNow()
-		// R4X-006：事务尾授权收口只裁定本次导入新落的行——先快照
-		// userTunnels / forwards 备份 id 在目标库的存量存在性，尾部
-		// 清扫据此区分「本次复活」与「存量行被刷新」（后者是目标库
-		// 现行数据，不在导入裁定范围内）。
-		preUserTunnelIDs := make(map[int64]bool)
-		if typeSet["userTunnels"] && len(backup.UserTunnels) > 0 {
-			ids := make([]int64, 0, len(backup.UserTunnels))
-			for _, ut := range backup.UserTunnels {
-				ids = append(ids, ut.ID)
-			}
-			var existing []int64
-			// T2-NEW-01：ids 为备份载荷全量，按块查避免 IN ? 变量
-			// 越界（跨块累加进同一集合，与单查等价）。
-			for _, chunk := range chunkInt64IDs(ids) {
-				var chunkExisting []int64
-				if err := tx.Model(&model.UserTunnel{}).Where("id IN ?", chunk).Pluck("id", &chunkExisting).Error; err != nil {
-					return fmt.Errorf("import pre-snapshot user tunnels failed: %w", err)
-				}
-				existing = append(existing, chunkExisting...)
-			}
-			for _, id := range existing {
-				preUserTunnelIDs[id] = true
-			}
-		}
+		// R4X-006：事务尾转发授权收口只裁定本次导入新落的行——先
+		// 快照 forwards 备份 id 在目标库的存量存在性，尾部清扫据此
+		// 区分「本次新落」与「存量行被刷新」（后者是目标库现行
+		// 数据，不在导入裁定范围内）。
 		preForwardIDs := make(map[int64]bool)
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
 			ids := make([]int64, 0, len(backup.Forwards))
@@ -3591,25 +3571,21 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.ServiceMonitorsImported = count
 		}
-		// R4X-006：全部段落库后做一次授权一致性收口（与 R2X-014
-		// speed 清扫同为事务尾落点）：段序 forwards 先于 userTunnels、
-		// permissions 在 groups 之后，段内即时校验会误伤同批全量
-		// 恢复，只有在事务尾以终态裁定才不误杀同批补写的授权。
-		var authUserTunnels []model.UserTunnelBackup
-		if typeSet["userTunnels"] {
-			authUserTunnels = backup.UserTunnels
-		}
+		// R4X-006：全部段落库后做一次转发授权收口（与 R2X-014
+		// speed 清扫同为事务尾落点）：段序 forwards 先于 userTunnels，
+		// 段内即时校验会误伤同批全量恢复，只有在事务尾以终态裁定
+		// 才不误杀同批补写的授权。用户隧道授权本身不再按分组状态
+		// 裁定（R5-FGRP：分组只限定分配范围，停用组对不撤销任何
+		// 授权），导入的授权行逐字落库。
 		var authForwards []model.ForwardBackup
 		if typeSet["forwards"] {
 			authForwards = backup.Forwards
 		}
-		if len(authUserTunnels) > 0 || len(authForwards) > 0 {
-			utSkipped, fwdSkipped, err := sweepImportedAuthorizationTx(tx, authUserTunnels, authForwards,
-				preUserTunnelIDs, preForwardIDs, typeSet["userGroups"] && typeSet["tunnelGroups"], rep)
+		if len(authForwards) > 0 {
+			fwdSkipped, err := sweepImportedAuthorizationTx(tx, authForwards, preForwardIDs, rep)
 			if err != nil {
 				return fmt.Errorf("import authorization sweep failed: %w", err)
 			}
-			result.UserTunnelsImported -= utSkipped
 			result.ForwardsImported -= fwdSkipped
 		}
 		// R2X-014：全部段落库后做一次 speed 引用清扫（限速段在段序
@@ -4429,147 +4405,18 @@ func restoreZeroValuedFloat(tx *gorm.DB, model interface{}, id int64, column str
 	return tx.Model(model).Where("id = ?", id).Update(column, 0.0).Error
 }
 
-// userTunnelCoveredByDisabledPairTx 判断 (userID, tunnelID) 是否被
-// 一个现行停用分组权限对覆盖：存在 group_permission 对，其
-// user_group 含该 user、tunnel_group 含该 tunnel，且任一侧组
-// status≠1。停用撤销的台账痕迹只剩成员/权限对/组状态三者（grant
-// 与 UT 已被撤销清零），这是事务尾唯一可用的现行撤销状态判据。
-func userTunnelCoveredByDisabledPairTx(tx *gorm.DB, userID, tunnelID int64) (bool, error) {
-	var n int64
-	err := tx.Model(&model.GroupPermission{}).
-		Joins("JOIN user_group ON user_group.id = group_permission.user_group_id").
-		Joins("JOIN tunnel_group ON tunnel_group.id = group_permission.tunnel_group_id").
-		Joins("JOIN user_group_user ON user_group_user.user_group_id = group_permission.user_group_id AND user_group_user.user_id = ?", userID).
-		Joins("JOIN tunnel_group_tunnel ON tunnel_group_tunnel.tunnel_group_id = group_permission.tunnel_group_id AND tunnel_group_tunnel.tunnel_id = ?", tunnelID).
-		Where("user_group.status <> 1 OR tunnel_group.status <> 1").
-		Count(&n).Error
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-// userTunnelCoveredByAnyPairTx 判断 (userID, tunnelID) 是否被任一
-// 现行分组权限对覆盖（不论组状态）：存在 group_permission 对，其
-// user_group 含该 user、tunnel_group 含该 tunnel。R5X-015 过渡
-// warning 的覆盖判据——差集/pair 撤销不留痕迹，现行数据下唯一可
-// 检的「该授权与分组体系有关联」信号就是权限对覆盖本身。
-func userTunnelCoveredByAnyPairTx(tx *gorm.DB, userID, tunnelID int64) (bool, error) {
-	var n int64
-	err := tx.Model(&model.GroupPermission{}).
-		Joins("JOIN user_group_user ON user_group_user.user_group_id = group_permission.user_group_id AND user_group_user.user_id = ?", userID).
-		Joins("JOIN tunnel_group_tunnel ON tunnel_group_tunnel.tunnel_group_id = group_permission.tunnel_group_id AND tunnel_group_tunnel.tunnel_id = ?", tunnelID).
-		Count(&n).Error
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-// sweepImportedAuthorizationTx 是 R4X-006 的导入段授权收口，落点为
-// repo 事务尾（verdicts §5 写死：段序 forwards 先于 userTunnels，
-// 段内即时校验会误伤同批全量恢复）。以全部段落库后的终态裁定：
+// sweepImportedAuthorizationTx 是导入段的事务尾转发授权收口：本次
+// 新落的转发若在终态下找不到对应 (user,tunnel) 的 user_tunnel 授权
+// 行（运行时 forwardCreate 本就被 ensureTunnelPermission 门控，无
+// 授权转发不可用），删除该行（含其端口/中转附属行，与
+// DeleteForwardCascade 同口径）并计 skipped + ImportWarnings。同批
+// userTunnels 段后落的授权在事务尾已可见，段序不误伤。
 //
-//   - userTunnels：本次新落的 UT 若无任何合法 grant 台账、且被目标库
-//     现行停用权限对覆盖，则它复活的是已被撤销的组授权（无台账、
-//     后续任何生命周期触点都不可见），删除该行并计 skipped +
-//     ImportWarnings。有合法 grant（存量或同批 permissions 段补写、
-//     且经 grantPairMembershipHoldsTx 验得成员对应成立，R6X-005）
-//     的行、未被停用对覆盖的手工行、存量行（导入前已存在、本次
-//     仅刷新）均不动；只有错位 grant 的行不构成豁免、按无台账
-//     继续裁定并计错位 warning。例外：userGroups 与 tunnelGroups 两段同批
-//     导入时，权限对的组状态/成员本身来自同一备份（全量恢复语
-//     义），终态以备份为准，不按目标库口径裁定。
-//     R5X-015 过渡 warning（定案缓做项，非关闭依据）：本次新落、
-//     无 grant、且现行无任何权限对覆盖的 UT 另增计一条通用
-//     warning——差集/pair 撤销无痕迹，此类行无法区分「曾授权后
-//     撤销」与「从未授权的手工行」，只能把静默复活降为有迹
-//     提示；行本身不删、不计 skipped。被任一权限对覆盖（启用对
-//     下的手工行、或组状态来自同批备份的停用对）的行不计。
-//   - forwards：本次新落的转发若在终态下找不到对应 (user,tunnel)
-//     的 user_tunnel 授权行（运行时 forwardCreate 本就被
-//     ensureTunnelPermission 门控，无授权转发不可用），删除该行
-//     （含其端口/中转附属行，与 DeleteForwardCascade 同口径）并
-//     计 skipped + ImportWarnings。同批 userTunnels 段后落的授权
-//     在事务尾已可见，段序不误伤。
-//
-// 返回被裁定跳过的行数，供 Import 回填 imported 计数。
-func sweepImportedAuthorizationTx(tx *gorm.DB, userTunnels []model.UserTunnelBackup, forwards []model.ForwardBackup, preUserTunnelIDs, preForwardIDs map[int64]bool, groupStateFromBackup bool, rep *importReport) (utSkipped, fwdSkipped int, err error) {
-	utUncovered := 0
-	utMisplacedGrant := 0
-	for _, ub := range userTunnels {
-		if preUserTunnelIDs[ub.ID] {
-			continue
-		}
-		var row model.UserTunnel
-		res := tx.Where("id = ?", ub.ID).Limit(1).Find(&row)
-		if res.Error != nil {
-			return utSkipped, fwdSkipped, res.Error
-		}
-		if res.RowsAffected == 0 {
-			continue // 身份引用校验已跳过，未落行
-		}
-		// R6X-005：豁免改逐条验对应——该 UT 的 grant 中任一条经
-		// grantPairMembershipHoldsTx 验得其权限对成员对应成立
-		// （grant 组对含该 user/tunnel）才构成合法台账豁免；
-		// 只有错位 grant（对应全假）时不得屏蔽停用对裁定，按
-		// 无 grant 继续走下方裁定，并汇总计一条错位 warning。
-		// 与 R4X-005 防误提升、R5X-014 写回硬门共用同一谓词。
-		var grantRows []model.GroupPermissionGrant
-		if err := tx.Where("user_tunnel_id = ?", row.ID).Find(&grantRows).Error; err != nil {
-			return utSkipped, fwdSkipped, err
-		}
-		legitGrant := false
-		for _, g := range grantRows {
-			holds, err := grantPairMembershipHoldsTx(tx, g.UserGroupID, g.TunnelGroupID, row.UserID, row.TunnelID)
-			if err != nil {
-				return utSkipped, fwdSkipped, err
-			}
-			if holds {
-				legitGrant = true
-				break
-			}
-		}
-		if legitGrant {
-			continue
-		}
-		if len(grantRows) > 0 {
-			utMisplacedGrant++
-		}
-		covered, err := userTunnelCoveredByDisabledPairTx(tx, row.UserID, row.TunnelID)
-		if err != nil {
-			return utSkipped, fwdSkipped, err
-		}
-		if covered && !groupStateFromBackup {
-			if err := tx.Where("id = ?", row.ID).Delete(&model.UserTunnel{}).Error; err != nil {
-				return utSkipped, fwdSkipped, err
-			}
-			rep.skip("userTunnelsRevoked")
-			utSkipped++
-			continue
-		}
-		if covered {
-			// 停用对覆盖但组状态来自同批备份（全量恢复豁免）：有
-			// 权限对覆盖，不计 R5X-015 无覆盖 warning。
-			continue
-		}
-		anyCover, err := userTunnelCoveredByAnyPairTx(tx, row.UserID, row.TunnelID)
-		if err != nil {
-			return utSkipped, fwdSkipped, err
-		}
-		if !anyCover {
-			utUncovered++
-		}
-	}
-	if utSkipped > 0 {
-		rep.warnf("备份恢复：%d 条用户隧道授权与目标库现行停用分组的撤销状态冲突（无授权台账、属已撤销的组授权），已按现行授权状态跳过未恢复", utSkipped)
-	}
-	if utUncovered > 0 {
-		rep.warnf("备份恢复：%d 条用户隧道授权在目标库中无授权台账、且现行无任何分组权限对覆盖，将以无台账授权存续，后续分组撤销对其不可见；若该授权曾以成员差集/权限对移除方式撤销，本次恢复无法识别（已知限制），请核对", utUncovered)
-	}
-	if utMisplacedGrant > 0 {
-		rep.warnf("备份恢复：%d 条用户隧道授权仅有成员对应不成立的错位 grant 台账，错位 grant 不构成停用对裁定的豁免，已按无合法授权台账继续裁定，请核对该授权来源", utMisplacedGrant)
-	}
+// R5-FGRP：用户隧道授权本身不再有任何分组口径的裁定——分组只
+// 限定分配范围，停用/删除分组、撤销组权限从不删除任何授权（旧
+// R4X-006「停用对覆盖即删除新导入授权」与 R5X-015 无台账 warning
+// 随组语义改版一并删除），导入的授权行逐字落库。
+func sweepImportedAuthorizationTx(tx *gorm.DB, forwards []model.ForwardBackup, preForwardIDs map[int64]bool, rep *importReport) (fwdSkipped int, err error) {
 	for _, fb := range forwards {
 		if preForwardIDs[fb.ID] {
 			continue
@@ -4577,14 +4424,14 @@ func sweepImportedAuthorizationTx(tx *gorm.DB, userTunnels []model.UserTunnelBac
 		var row model.Forward
 		res := tx.Where("id = ?", fb.ID).Limit(1).Find(&row)
 		if res.Error != nil {
-			return utSkipped, fwdSkipped, res.Error
+			return fwdSkipped, res.Error
 		}
 		if res.RowsAffected == 0 {
 			continue
 		}
 		var uts int64
 		if err := tx.Model(&model.UserTunnel{}).Where("user_id = ? AND tunnel_id = ?", row.UserID, row.TunnelID).Count(&uts).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if uts > 0 {
 			continue
@@ -4592,29 +4439,29 @@ func sweepImportedAuthorizationTx(tx *gorm.DB, userTunnels []model.UserTunnelBac
 		// 与 DeleteForwardCascade 同口径清理附属行（刚落库的转发
 		// 通常只有 ForwardPort，其余为存量同 id 残留的兜底）。
 		if err := tx.Where("forward_id = ?", row.ID).Delete(&model.NftCounterState{}).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if err := tx.Where("forward_id = ?", row.ID).Delete(&model.NftRuleBinding{}).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if err := tx.Where("forward_id = ?", row.ID).Delete(&model.NftPendingDelete{}).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if err := tx.Where("forward_id = ?", row.ID).Delete(&model.ForwardPort{}).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id = ?", row.ID)
 		if err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if err := tx.Where("forward_id = ?", row.ID).Delete(&model.NodeInboundRelay{}).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		if err := tx.Where("id = ?", row.ID).Delete(&model.Forward{}).Error; err != nil {
-			return utSkipped, fwdSkipped, err
+			return fwdSkipped, err
 		}
 		rep.skip("forwardsUnauthorized")
 		fwdSkipped++
@@ -4622,7 +4469,7 @@ func sweepImportedAuthorizationTx(tx *gorm.DB, userTunnels []model.UserTunnelBac
 	if fwdSkipped > 0 {
 		rep.warnf("备份恢复：%d 条转发在目标库中无对应用户隧道授权，已跳过未恢复", fwdSkipped)
 	}
-	return utSkipped, fwdSkipped, nil
+	return fwdSkipped, nil
 }
 
 // sweepDanglingSpeedRefsTx 清扫本轮导入 forwards/userTunnels 的悬空
@@ -5285,23 +5132,14 @@ func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelG
 		if err := deleteSameNameGroupTx(tx, &model.TunnelGroup{}, "tunnel_group_id", tg.Name, tg.ID, rep); err != nil {
 			return count, err
 		}
-		// R3X-005 facet (a)：成员替换前先读旧成员并按台账撤销被
-		// 移出隧道的组建授权（与运行时 groupTunnelAssign 差集撤销
-		// 同口径，复用 RevokeGroupGrantsForRemovedTunnelsTx 的候选
-		// 收集）；被撤销 UT 经 rep 回传 handler 清转发。
+		// R5-FGRP：成员替换只是范围记账——替换前只读旧成员数供
+		// R5X-017 记账；分组状态/成员变动不再撤销任何 user_tunnel
+		// 授权（旧 R3X-005 facet (a) 的差集撤销已随组语义改版删除）。
 		var prevTunnelIDs []int64
 		if err := tx.Model(&model.TunnelGroupTunnel{}).Where("tunnel_group_id = ?", tg.ID).Pluck("tunnel_id", &prevTunnelIDs).Error; err != nil {
 			return count, err
 		}
 		preDeletedMembers += int64(len(prevTunnelIDs))
-		revoked, err := r.RevokeGroupGrantsForRemovedTunnelsTx(tx, tg.ID, prevTunnelIDs, tg.Tunnels)
-		if err != nil {
-			return count, err
-		}
-		rep.addRevoked(revoked)
-		if len(revoked) > 0 {
-			rep.warnf("备份恢复：隧道分组 %q 成员替换已撤销 %d 条被移出隧道的组建授权（对应转发将按导入回执逐对清理）", tg.Name, len(revoked))
-		}
 		item := model.TunnelGroup{
 			ID:          tg.ID,
 			Name:        tg.Name,
@@ -5309,7 +5147,7 @@ func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelG
 			UpdatedTime: now,
 			Status:      tg.Status,
 		}
-		err = tx.Clauses(clause.OnConflict{
+		err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"name", "updated_time", "status"}),
 		}).Create(&item).Error
@@ -5333,19 +5171,8 @@ func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelG
 				return count, err
 			}
 		}
-		// R3X-005 facet (c)：导入落 status≠1 的组不保留其 grant——
-		// 与运行时停用撤销同口径统一收敛（成员替换撤销之后执行，
-		// 覆盖未被成员差集触及的剩余组建授权；手工 UT 不动）。
-		if tg.Status != 1 {
-			converged, err := r.RevokeGroupGrantsByGroupTx(tx, "tunnel_group", tg.ID)
-			if err != nil {
-				return count, err
-			}
-			rep.addRevoked(converged)
-			if len(converged) > 0 {
-				rep.warnf("备份恢复：隧道分组 %q 恢复为停用状态，已按停用口径收敛撤销其 %d 条组建授权", tg.Name, len(converged))
-			}
-		}
+		// R5-FGRP：导入落 status≠1 的组只恢复其范围记账，不再按
+		// 停用口径收敛任何授权（旧 R3X-005 facet (c) 已删除）。
 		count++
 	}
 	// R5X-017：预删>0 且本批成员跳过>0 时补 warning（口径同
@@ -5437,9 +5264,9 @@ func deleteSameNameGroupTx(tx *gorm.DB, groupModel interface{}, memberGroupColum
 				// R5X-005：合并去重不得直删 cb=1 行而丢组建来源——
 				// 两条同键 grant 并非真重复（cb 是复合唯一键外的语义
 				// 列），删行前先做来源 OR/提升：被删行 cb=1 且保留行
-				// cb=0 时把保留行提升为 cb=1，与 R4X-005 共享 helper
-				// 的 promoteCreatorFlagTx 同口径。否则继任组日后停用/
-				// 撤销时该 UT 不入候选、组建授权静默残留。
+				// cb=0 时把保留行提升为 cb=1。否则组建来源标记被
+				// 静默抹除、来源台账失真（R5-FGRP 后 cb 仅为来源
+				// 记账，此处保留为台账保真）。
 				if g.CreatedByGroup == 1 {
 					for _, s := range survivors {
 						if s.CreatedByGroup == 1 {
@@ -5491,23 +5318,14 @@ func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBa
 		if err := deleteSameNameGroupTx(tx, &model.UserGroup{}, "user_group_id", ug.Name, ug.ID, rep); err != nil {
 			return count, err
 		}
-		// R3X-005 facet (a)：成员替换前先读旧成员并按台账撤销被
-		// 移出成员的组建授权（与运行时 groupUserAssign 差集撤销
-		// 同口径，复用 RevokeGroupGrantsForRemovedUsersTx 的候选
-		// 收集）；被撤销 UT 经 rep 回传 handler 清转发。
+		// R5-FGRP：成员替换只是范围记账——替换前只读旧成员数供
+		// R5X-017 记账；不再撤销被移出成员的任何授权（旧 R3X-005
+		// facet (a) 的差集撤销已随组语义改版删除）。
 		var prevUserIDs []int64
 		if err := tx.Model(&model.UserGroupUser{}).Where("user_group_id = ?", ug.ID).Pluck("user_id", &prevUserIDs).Error; err != nil {
 			return count, err
 		}
 		preDeletedMembers += int64(len(prevUserIDs))
-		revoked, err := r.RevokeGroupGrantsForRemovedUsersTx(tx, ug.ID, prevUserIDs, ug.Users)
-		if err != nil {
-			return count, err
-		}
-		rep.addRevoked(revoked)
-		if len(revoked) > 0 {
-			rep.warnf("备份恢复：用户分组 %q 成员替换已撤销 %d 条被移出成员的组建授权（对应转发将按导入回执逐对清理）", ug.Name, len(revoked))
-		}
 		item := model.UserGroup{
 			ID:          ug.ID,
 			Name:        ug.Name,
@@ -5515,7 +5333,7 @@ func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBa
 			UpdatedTime: now,
 			Status:      ug.Status,
 		}
-		err = tx.Clauses(clause.OnConflict{
+		err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"name", "updated_time", "status"}),
 		}).Create(&item).Error
@@ -5539,18 +5357,9 @@ func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBa
 				return count, err
 			}
 		}
-		// R3X-005 facet (c)：导入落 status≠1 的组不保留其 grant
-		// （与隧道组段同口径统一收敛，见 importTunnelGroups）。
-		if ug.Status != 1 {
-			converged, err := r.RevokeGroupGrantsByGroupTx(tx, "user_group", ug.ID)
-			if err != nil {
-				return count, err
-			}
-			rep.addRevoked(converged)
-			if len(converged) > 0 {
-				rep.warnf("备份恢复：用户分组 %q 恢复为停用状态，已按停用口径收敛撤销其 %d 条组建授权", ug.Name, len(converged))
-			}
-		}
+		// R5-FGRP：导入落 status≠1 的组只恢复其范围记账，不再按
+		// 停用口径收敛任何授权（旧 R3X-005 facet (c) 已删除，
+		// 与隧道组段同口径，见 importTunnelGroups）。
 		count++
 	}
 	// R5X-017：预删>0 且本批成员跳过>0 时补 warning（口径同
@@ -5598,31 +5407,9 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 		if err != nil {
 			return count, err
 		}
-		// R3X-005 facet (c)：任一侧组 status≠1 时跳过该 pair 的
-		// grants 并计 warning（运行时 assign/sync 对停用组绝不产生
-		// grant，导入面同口径）；该 pair 在目标库的既有组建授权
-		// 一并按台账收敛撤销，导入后不留停用组的 grant。
-		ugStatus, _, err := getGroupStatusTx(tx, "user_group", p.UserGroupID)
-		if err != nil {
-			return count, err
-		}
-		tgStatus, _, err := getGroupStatusTx(tx, "tunnel_group", p.TunnelGroupID)
-		if err != nil {
-			return count, err
-		}
-		if ugStatus != 1 || tgStatus != 1 {
-			converged, err := r.RevokeGroupPermissionPairTx(tx, p.UserGroupID, p.TunnelGroupID)
-			if err != nil {
-				return count, err
-			}
-			rep.addRevoked(converged)
-			for range p.Grants {
-				rep.skip("permissionGrantsDisabled")
-			}
-			rep.warnf("备份恢复：权限 #%d 涉及停用分组（用户组 #%d 状态 %d / 隧道组 #%d 状态 %d），已跳过其 %d 条授权并收敛该权限对的既有组建授权 %d 条", p.ID, p.UserGroupID, ugStatus, p.TunnelGroupID, tgStatus, len(p.Grants), len(converged))
-			count++
-			continue
-		}
+		// R5-FGRP：台账只是来源记账——任一侧组停用时 grants 照常
+		// 按备份恢复，不跳过、不收敛（旧 R3X-005 facet (c) 的停用
+		// 跳过＋收敛撤销已随组语义改版删除）。
 		for _, g := range p.Grants {
 			// D4-03：grant 引用的 user_tunnel 不存在时跳过该条并计数。
 			utExists, err := rowExistsTx(tx, &model.UserTunnel{}, g.UserTunnelID)
@@ -5649,11 +5436,12 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 			// R5X-014 窄硬门案 A（verdicts §5.3 写死）：在上述口径
 			// 上仅对 cb=1 且对应不成立的行加硬门——写回时降级为
 			// cb=0 并以 warning 明示降级，使错位备份的组建标志
-			// 永不获得日后分组撤销连带删除手工 UT 的能力（防误
-			// 提升只封堵运行时提升一跳，封不住导入直接写回 cb=1
-			// 这一跳）；cb=0 行维持原 warning 原样。回执语义与
-			// H 域对齐一套：走 ImportWarnings、不计 SkippedRows、
-			// 行照常落库、PermissionsImported 计数不变。
+			// 不被写回为真：来源台账只记录成员对应成立的组展开
+			// 来源（R5-FGRP 后 cb 仅为来源记账、无任何连带删除
+			// 语义，此门保留为台账保真）；cb=0 行维持原 warning
+			// 原样。回执语义与 H 域对齐一套：走 ImportWarnings、
+			// 不计 SkippedRows、行照常落库、PermissionsImported
+			// 计数不变。
 			var utRow model.UserTunnel
 			if err := tx.Select("user_id", "tunnel_id").Where("id = ?", g.UserTunnelID).First(&utRow).Error; err != nil {
 				return count, err
@@ -5666,7 +5454,7 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 			if !holds {
 				if g.CreatedByGroup == 1 {
 					effectiveCB = 0
-					rep.warnf("备份恢复：权限 #%d 的授权 #%d 指向的用户隧道 #%d（用户 %d / 隧道 %d）与权限对成员对应关系不成立（用户不在用户组 #%d 成员内或隧道不在隧道组 #%d 成员内），其组建来源（created_by_group=1）已降级为普通登记来源（created_by_group=0）按父权限组写回，该授权不再具备随分组撤销连带删除用户隧道的能力，请核对该授权来源", p.ID, g.ID, g.UserTunnelID, utRow.UserID, utRow.TunnelID, p.UserGroupID, p.TunnelGroupID)
+					rep.warnf("备份恢复：权限 #%d 的授权 #%d 指向的用户隧道 #%d（用户 %d / 隧道 %d）与权限对成员对应关系不成立（用户不在用户组 #%d 成员内或隧道不在隧道组 #%d 成员内），其组建来源（created_by_group=1）已降级为普通登记来源（created_by_group=0）按父权限组写回，请核对该授权来源", p.ID, g.ID, g.UserTunnelID, utRow.UserID, utRow.TunnelID, p.UserGroupID, p.TunnelGroupID)
 				} else {
 					rep.warnf("备份恢复：权限 #%d 的授权 #%d 指向的用户隧道 #%d（用户 %d / 隧道 %d）与权限对成员对应关系不成立（用户不在用户组 #%d 成员内或隧道不在隧道组 #%d 成员内），已按父权限组写回，请核对该授权来源", p.ID, g.ID, g.UserTunnelID, utRow.UserID, utRow.TunnelID, p.UserGroupID, p.TunnelGroupID)
 				}
@@ -5678,8 +5466,8 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 			// 确立的口径，本点为同型第四份实现）：占位行任一
 			// cb=1 且本行有效 cb（effectiveCB，经 R5X-014 降级
 			// 判定后）为 0 时，把落库行提升为 cb=1 并以 warning
-			// 披露合并，否则组建来源被静默抹除、后续组撤销够
-			// 不着该 UT；effectiveCB==1 时合并无损、免 warning。
+			// 披露合并，否则组建来源标记被静默抹除、来源台账
+			// 失真；effectiveCB==1 时合并无损、免 warning。
 			var occupyingGrants []model.GroupPermissionGrant
 			if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND user_tunnel_id = ? AND id <> ?",
 				p.UserGroupID, p.TunnelGroupID, g.UserTunnelID, g.ID).
@@ -5690,7 +5478,7 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 				for _, occ := range occupyingGrants {
 					if occ.CreatedByGroup == 1 {
 						effectiveCB = 1
-						rep.warnf("备份恢复：权限 #%d 的授权 #%d 与目标库同键既有授权 #%d 合并，既有授权的组建来源（created_by_group=1）已合并保留至恢复行（created_by_group=1），后续分组撤销仍可达其用户隧道 #%d，请核对", p.ID, g.ID, occ.ID, g.UserTunnelID)
+						rep.warnf("备份恢复：权限 #%d 的授权 #%d 与目标库同键既有授权 #%d 合并，既有授权的组建来源（created_by_group=1）已合并保留至恢复行（created_by_group=1），请核对", p.ID, g.ID, occ.ID)
 						break
 					}
 				}

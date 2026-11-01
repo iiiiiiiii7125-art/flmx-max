@@ -2,22 +2,18 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 
-	"go-backend/internal/auth"
-	"go-backend/internal/http/middleware"
 	"go-backend/internal/store/repo"
 )
 
-// R1 批次 2（G 族）回归测试：分组授权撤销完整性、替换事务化、
-// 授权展开回执、groupIds 存在性校验、批量分配原子性。
+// R1 批次 2（G 族）回归测试：R5-FGRP 组语义（分组只限定分配
+// 范围、组操作不增删任何实体授权）、替换事务化、范围登记回执、
+// groupIds 存在性校验、批量分配原子性。
 
 type b2Fixture struct {
 	h *Handler
@@ -93,47 +89,25 @@ func (f *b2Fixture) post(t *testing.T, fn func(http.ResponseWriter, *http.Reques
 	return payload.Code, res.Body.String()
 }
 
-// assertRevokedT1 断言组建授权（隧道 1）已被撤销、转发已清、手工授权不受影响。
-func (f *b2Fixture) assertRevokedT1(t *testing.T) {
+// assertGrantsIntactT1 断言 R5-FGRP 语义：任一组操作之后，夹具的
+// 全部实体授权（组展开来源 UT10/UT13、手工 UT11/UT12）与转发
+// （20/21）逐行存续、隧道 1 权限照常可用。
+func (f *b2Fixture) assertGrantsIntactT1(t *testing.T) {
 	t.Helper()
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id IN (10, 13)`); n != 0 {
-		t.Fatalf("group-created user_tunnel for tunnel 1 still present: %d", n)
+	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id IN (10, 11, 12, 13)`); n != 4 {
+		t.Fatalf("R5-FGRP: all fixture user_tunnels must survive group operations, got %d", n)
 	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_tunnel_id IN (10, 13)`); n != 0 {
-		t.Fatalf("grant ledger rows for revoked user_tunnels remain: %d", n)
+	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id IN (20, 21)`); n != 2 {
+		t.Fatalf("R5-FGRP: forwards must survive group operations, got %d", n)
 	}
-	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 20`); n != 0 {
-		t.Fatalf("forward on revoked tunnel still present")
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 21`); n != 1 {
-		t.Fatalf("forward on manual tunnel must survive")
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id IN (11, 12)`); n != 2 {
-		t.Fatalf("manual user_tunnels must survive, got %d", n)
-	}
-	if err := f.h.ensureTunnelPermission(2, 1, 1); err == nil {
-		t.Fatalf("ensureTunnelPermission must reject revoked tunnel")
-	}
-	// forwardCreate(T) 应被权限门拒绝
-	raw, _ := json.Marshal(map[string]interface{}{"tunnelId": 1, "name": "x", "remoteAddr": "10.0.0.9:80"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/forward/create", bytes.NewReader(raw))
-	claims := auth.Claims{Sub: strconv.FormatInt(2, 10), RoleID: 1}
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ClaimsContextKey, claims))
-	res := httptest.NewRecorder()
-	f.h.forwardCreate(res, req)
-	var payload struct {
-		Code int `json:"code"`
-	}
-	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode forwardCreate response: %v", err)
-	}
-	if payload.Code == 0 {
-		t.Fatalf("forwardCreate on revoked tunnel must be rejected; body=%s", res.Body.String())
+	if err := f.h.ensureTunnelPermission(2, 1, 1); err != nil {
+		t.Fatalf("R5-FGRP: tunnel 1 permission must remain usable after group operations: %v", err)
 	}
 }
 
-// X-P1-2 路径①：userUpdate 改 groupIds 移出分组 → 撤销组建授权。
-func TestB2_XP12_UserUpdateRevokesGroupGrants(t *testing.T) {
+// X-P1-2 路径①（R5-FGRP 改版）：userUpdate 改 groupIds 移出分组
+// 只改成员记账——既有授权（含组展开来源的 UT10）与转发逐行保留。
+func TestB2_XP12_UserUpdateLeavesGrantsIntact(t *testing.T) {
 	f := seedB2Fixture(t)
 	if err := f.h.ensureTunnelPermission(2, 1, 1); err != nil {
 		t.Fatalf("precondition: user must hold tunnel 1 permission: %v", err)
@@ -142,52 +116,55 @@ func TestB2_XP12_UserUpdateRevokesGroupGrants(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("userUpdate code=%d body=%s", code, body)
 	}
-	// 只有 U2 被移出：UT10 撤销；U4 的 UT13 仍在组内应保留。
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 10`); n != 0 {
-		t.Fatalf("UT10 (group-created, user removed) must be revoked")
+	ids, err := f.r.GetUserGroupIDsByUserID(2)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("membership must be cleared, got %v err=%v", ids, err)
 	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 13`); n != 1 {
-		t.Fatalf("UT13 (user still in group) must survive")
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 20`); n != 0 {
-		t.Fatalf("forward on revoked tunnel must be cleaned")
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id IN (11, 12)`); n != 2 {
-		t.Fatalf("manual user_tunnels must survive")
-	}
-	if err := f.h.ensureTunnelPermission(2, 1, 1); err == nil {
-		t.Fatalf("ensureTunnelPermission must reject revoked tunnel")
-	}
+	f.assertGrantsIntactT1(t)
 }
 
-// X-P1-2 路径②：groupTunnelAssign 换隧道组成员（移除隧道 1）→ 撤销组建授权。
-func TestB2_XP12_GroupTunnelAssignRevokesGroupGrants(t *testing.T) {
+// X-P1-2 路径②（R5-FGRP 改版）：groupTunnelAssign 换隧道组成员
+// （移除隧道 1）只改范围记账——既有授权与转发逐行保留。
+func TestB2_XP12_GroupTunnelAssignLeavesGrantsIntact(t *testing.T) {
 	f := seedB2Fixture(t)
 	code, body := f.post(t, f.h.groupTunnelAssign, map[string]interface{}{"groupId": 1, "tunnelIds": []int64{3}})
 	if code != 0 {
 		t.Fatalf("groupTunnelAssign code=%d body=%s", code, body)
 	}
-	f.assertRevokedT1(t)
+	f.assertGrantsIntactT1(t)
 }
 
-// X-P1-2 路径③a：groupUserDelete 删用户组 → 撤销组建授权并清理转发。
-func TestB2_XP12_GroupUserDeleteRevokesGroupGrants(t *testing.T) {
+// X-P1-2 路径③a（R5-FGRP 改版）：groupUserDelete 删用户组只做记账
+// 级联（成员/权限对/台账行/组行）——既有授权与转发逐行保留。
+func TestB2_XP12_GroupUserDeleteLeavesGrantsIntact(t *testing.T) {
 	f := seedB2Fixture(t)
 	code, body := f.post(t, f.h.groupUserDelete, map[string]interface{}{"id": 1})
 	if code != 0 {
 		t.Fatalf("groupUserDelete code=%d body=%s", code, body)
 	}
-	f.assertRevokedT1(t)
+	f.assertGrantsIntactT1(t)
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_group_id = 1`); n != 0 {
+		t.Fatalf("deleted group's grant ledger rows must be cascade-cleared, got %d", n)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission WHERE user_group_id = 1`); n != 0 {
+		t.Fatalf("deleted group's permission rows must be cascade-cleared, got %d", n)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM user_group_user WHERE user_group_id = 1`); n != 0 {
+		t.Fatalf("deleted group's membership rows must be cascade-cleared, got %d", n)
+	}
 }
 
-// X-P1-2 路径③b：groupTunnelDelete 删隧道组 → 撤销组建授权并清理转发。
-func TestB2_XP12_GroupTunnelDeleteRevokesGroupGrants(t *testing.T) {
+// X-P1-2 路径③b（R5-FGRP 改版）：groupTunnelDelete 删隧道组同口径。
+func TestB2_XP12_GroupTunnelDeleteLeavesGrantsIntact(t *testing.T) {
 	f := seedB2Fixture(t)
 	code, body := f.post(t, f.h.groupTunnelDelete, map[string]interface{}{"id": 1})
 	if code != 0 {
 		t.Fatalf("groupTunnelDelete code=%d body=%s", code, body)
 	}
-	f.assertRevokedT1(t)
+	f.assertGrantsIntactT1(t)
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE tunnel_group_id = 1`); n != 0 {
+		t.Fatalf("deleted tunnel group's grant ledger rows must be cascade-cleared, got %d", n)
+	}
 }
 
 // X-P2-6：替换中途注入约束失败 → 成员保持原样且接口报错。
@@ -212,50 +189,42 @@ func TestB2_XP26_UserUpdateReplaceAtomicAndReported(t *testing.T) {
 	}
 }
 
-// X-P2-16：注入一条 grant 写失败 → 回执含失败条目；全失败报错。
-func TestB2_XP216_GroupPermissionAssignReportsGrantFailures(t *testing.T) {
-	setup := func(t *testing.T, trigger string) *b2Fixture {
-		f := seedB2Fixture(t)
-		stmts := []string{
-			`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(2, 'g-two', 1000, 1000, 1)`,
-			`INSERT INTO tunnel_group(id, name, created_time, updated_time, status) VALUES(2, 'tg-two', 1000, 1000, 1)`,
-			`INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx) VALUES(4, 't-four', 1, 1, 'tls', 1, 1000, 1000, 1, NULL, 0)`,
-			`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(2, 2, 1000)`,
-			`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(2, 4, 1000)`,
-			`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(2, 4, 1000)`,
-			`INSERT INTO user_tunnel(id, user_id, tunnel_id, num, flow, in_flow, out_flow, flow_reset_time, exp_time, status) VALUES(40, 2, 4, 10, 100, 0, 0, 0, 0, 1)`,
-			`INSERT INTO user_tunnel(id, user_id, tunnel_id, num, flow, in_flow, out_flow, flow_reset_time, exp_time, status) VALUES(41, 4, 4, 10, 100, 0, 0, 0, 0, 1)`,
-			trigger,
-		}
-		for _, s := range stmts {
-			if err := f.r.DB().Exec(s).Error; err != nil {
-				t.Fatalf("seed xp216: %v (%s)", err, s)
-			}
-		}
-		return f
+// X-P2-16（R5-FGRP 改版）：组授权只登记范围——回执不再有展开失败
+// 条目；授权后 group_permission 多一行、台账零新增、实体授权零变化
+// （成员对组内隧道不因授权自动获得任何 UT）。
+func TestB2_XP216_GroupPermissionAssignRegistersScopeOnly(t *testing.T) {
+	f := seedB2Fixture(t)
+	stmts := []string{
+		`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(2, 'g-two', 1000, 1000, 1)`,
+		`INSERT INTO tunnel_group(id, name, created_time, updated_time, status) VALUES(2, 'tg-two', 1000, 1000, 1)`,
+		`INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx) VALUES(4, 't-four', 1, 1, 'tls', 1, 1000, 1000, 1, NULL, 0)`,
+		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(2, 2, 1000)`,
+		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(2, 4, 1000)`,
+		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(2, 4, 1000)`,
 	}
-
-	t.Run("partial failure is listed in receipt", func(t *testing.T) {
-		f := setup(t, `CREATE TRIGGER fail_grant BEFORE INSERT ON group_permission_grant WHEN NEW.user_tunnel_id = 41 BEGIN SELECT RAISE(ABORT, 'injected grant failure'); END`)
-		code, body := f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 2, "tunnelGroupId": 2})
-		if code != 0 {
-			t.Fatalf("partial failure should still succeed overall, code=%d body=%s", code, body)
+	for _, s := range stmts {
+		if err := f.r.DB().Exec(s).Error; err != nil {
+			t.Fatalf("seed xp216: %v (%s)", err, s)
 		}
-		if !strings.Contains(body, "failures") || !strings.Contains(body, `"userId":4`) {
-			t.Fatalf("receipt must list the failed entry (userId=4); body=%s", body)
-		}
-		if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_group_id = 2 AND user_tunnel_id = 40`); n != 1 {
-			t.Fatalf("successful grant must be recorded")
-		}
-	})
-
-	t.Run("all failures are an error", func(t *testing.T) {
-		f := setup(t, `CREATE TRIGGER fail_grant_all BEFORE INSERT ON group_permission_grant WHEN NEW.user_tunnel_id IN (40, 41) BEGIN SELECT RAISE(ABORT, 'injected grant failure'); END`)
-		code, body := f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 2, "tunnelGroupId": 2})
-		if code == 0 {
-			t.Fatalf("all-failed assignment must return error; body=%s", body)
-		}
-	})
+	}
+	utBefore := f.count(t, `SELECT COUNT(*) FROM user_tunnel`)
+	grantBefore := f.count(t, `SELECT COUNT(*) FROM group_permission_grant`)
+	code, body := f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 2, "tunnelGroupId": 2})
+	if code != 0 {
+		t.Fatalf("groupPermissionAssign code=%d body=%s", code, body)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission WHERE user_group_id = 2 AND tunnel_group_id = 2`); n != 1 {
+		t.Fatalf("scope pair must be registered, got %d", n)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel`); n != utBefore {
+		t.Fatalf("R5-FGRP: group assign must not materialize any user_tunnel, before=%d after=%d", utBefore, n)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant`); n != grantBefore {
+		t.Fatalf("R5-FGRP: group assign must not write grant ledger rows, before=%d after=%d", grantBefore, n)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE tunnel_id = 4`); n != 0 {
+		t.Fatalf("R5-FGRP: no member may gain tunnel 4 from a group assign, got %d", n)
+	}
 }
 
 // X-P3-5：groupIds 含不存在的组 → 建/改用户报错且零落行。
@@ -295,6 +264,10 @@ func TestB2_XP322_UserTunnelBatchAssignAtomic(t *testing.T) {
 	stmts := []string{
 		`INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx) VALUES(5, 't-five', 1, 1, 'tls', 1, 1000, 1000, 1, NULL, 0)`,
 		`INSERT INTO tunnel(id, name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx) VALUES(6, 't-six', 1, 1, 'tls', 1, 1000, 1000, 1, NULL, 0)`,
+		// R5-FGRP：5/6 须先入 TG1 范围，否则批量在范围门即被拒、
+		// 触发器永不命中、原子性无从证明。
+		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(1, 5, 1000)`,
+		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(1, 6, 1000)`,
 		`CREATE TRIGGER fail_ut BEFORE INSERT ON user_tunnel WHEN NEW.tunnel_id = 6 BEGIN SELECT RAISE(ABORT, 'injected user_tunnel failure'); END`,
 	}
 	for _, s := range stmts {

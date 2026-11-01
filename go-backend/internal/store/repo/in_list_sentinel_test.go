@@ -45,6 +45,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_flow.go:GetFlowUploadForwardMetas":          {"chunkFlowUploadForwardIDs", "整表转发集，经 flow 专用分块器（500/块）分块"},
 	"repository_mutations.go:ListTunnelIPPreferences":       {"chunkInt64IDs", "整轮探测隧道集，已分块"},
 	"repository_mutations.go:validateIDsExistTx":            {"chunkInt64IDs", "请求载荷无上限，已分块"},
+	"repository_mutations.go:groupAssignmentScope":          {"chunkInt64IDs", "R5-FGRP 分配范围门：组归属/权限对集经本地 pluckChunked 分块"},
 	"repository_monitor_nodes.go:SetNodesLatencyTargets":    {"chunkInt64IDs", "R2 X01-001 已分块"},
 	"repository_nft_pending_delete.go:GetForwardStatusMap":  {"chunkInt64IDs", "请求载荷无上限，已分块"},
 	"repository_user_quota.go:ListUserQuotaViewsByUserIDs":  {"chunkInt64IDs", "整表用户集，已分块"},
@@ -68,9 +69,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_mutations.go:ListSoleSegmentTunnelsForNode":                   {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
 
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——
-	"repository_mutations.go:DeleteUserCascade":                    {"", "forwardIDs/userTunnelIDs 为 Select 子查询，X01 A 集已核"},
-	"repository_mutations.go:RevokeGroupGrantsForUserTx":           {"", "userTunnelIDs 为 Select 子查询"},
-	"repository_mutations.go:RevokeGroupGrantsForRemovedTunnelsTx": {"", "userTunnelIDs 为 Select 子查询"},
+	"repository_mutations.go:DeleteUserCascade": {"", "forwardIDs/userTunnelIDs 为 Select 子查询，X01 A 集已核"},
 
 	// —— 有界豁免（前提经 R3 复核仍成立，见 rescan.md）——
 	"repository.go:GetConfigsByNames":               {"", "全部调用方传代码字面量小清单（X01 A 集已核 5 处）"},
