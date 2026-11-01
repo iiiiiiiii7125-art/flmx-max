@@ -298,7 +298,7 @@ export function Select<T>({
       <div
         ref={listboxRef}
         className={cn(
-          "absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-md border border-divider bg-background p-2 shadow-md max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
+          "glass-surface absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
           placementClasses,
         )}
         id={`${generatedId}-listbox`}
@@ -369,7 +369,7 @@ export function Select<T>({
             aria-haspopup="listbox"
             aria-label={label ? undefined : ariaLabel}
             className={cn(
-              "flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-input bg-background px-3 py-2 text-left shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-input bg-content1 px-3 py-2 text-left transition-colors duration-150 ease-refined focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               isDisabled ? "cursor-not-allowed opacity-60" : "",
               classNames?.trigger,
             )}
@@ -403,7 +403,7 @@ export function Select<T>({
         <select
           aria-label={label ? undefined : ariaLabel}
           className={cn(
-            "w-full rounded-md border border-input bg-background px-3 py-2 text-foreground shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:[color-scheme:dark]",
+            "w-full rounded-lg border border-input bg-content1 px-3 py-2 text-foreground transition-colors duration-150 ease-refined focus:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:[color-scheme:dark]",
             sizeClass(size),
             classNames?.trigger,
             className,

@@ -225,12 +225,20 @@ body {
   --glass-border: rgba(255, 255, 255, 0.65);
   --glass-card: rgba(255, 255, 255, 0.66);
   --glass-overlay: rgba(0, 0, 0, 0.3);
+
+  --toaster-bg: rgb(255 255 255 / 0.85);
+  --toaster-color: #18181b;
+  --toaster-border: rgb(24 24 27 / 0.08);
 }
 
 .dark {
   --glass-bg: rgba(24, 24, 27, 0.58);
   --glass-border: rgba(255, 255, 255, 0.1);
   --glass-card: rgba(24, 24, 27, 0.6);
+
+  --toaster-bg: rgb(24 24 27 / 0.85);
+  --toaster-color: #f4f4f5;
+  --toaster-border: rgb(255 255 255 / 0.1);
 }
 
 /* Default background: plain light / dark colour. The built-in wallpaper is
