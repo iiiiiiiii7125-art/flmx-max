@@ -389,7 +389,7 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 	// （ghfast 回 403/落地页）被自动排除。g.Proxy 不再参与路由
 	// （面板 GitHub 加速设置已退役，路由由本机内置候选测速决定）；
 	// 返回的资产地址是直连形式，由 install 的计划负责选线。
-	plan := download.NewPlan(ctx, apiURL, apiProbe)
+	plan := download.NewPlan(ctx, apiURL, apiProbe, panelExtraRoutes()...)
 	var body strings.Builder
 	if err := fetchRanked(ctx, plan, apiURL, 4<<20, &body); err != nil {
 		return "", "", fmt.Errorf("查询 GitHub 发布信息失败: %v", err)
@@ -460,9 +460,9 @@ func install(d *Download, binDir string) error {
 	sumURL = directForm(sumURL)
 	var plan *download.Plan
 	if sumURL != "" {
-		plan = download.NewPlan(ctx, sumURL, checksumProbe)
+		plan = download.NewPlan(ctx, sumURL, checksumProbe, panelExtraRoutes()...)
 	} else {
-		plan = download.NewPlan(ctx, url, assetProbe)
+		plan = download.NewPlan(ctx, url, assetProbe, panelExtraRoutes()...)
 	}
 
 	// 本体下载走可续传的共享 transfer（download.FileTransfer，
