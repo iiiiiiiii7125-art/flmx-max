@@ -1929,10 +1929,13 @@ migrate_to_postgres() {
   local pgloader_load_file pgloader_rc=0
   pgloader_load_file=$(mktemp)
   chmod 600 "$pgloader_load_file"
+  # F-R4-01: INTO 行尾的分号是 pgloader 命令文件的语句终止符，不可省——
+  # 缺失时现行 dimitri/pgloader:latest（3.6.7~devel）解析直接 KABOOM
+  # （ESRAP-PARSE-ERROR），整个迁移不可用（真机三变体判别实验已证）。
   cat > "$pgloader_load_file" <<EOF
 LOAD DATABASE
      FROM sqlite://${pgloader_source}
-     INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}
+     INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db};
 EOF
   docker run --rm --network gost-network -v sqlite_data:/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
   rm -f "$pgloader_load_file"
