@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"go-backend/internal/auth"
+	"go-backend/internal/clientip"
 	"go-backend/internal/security"
 	"go-backend/internal/store/repo"
 )
@@ -311,12 +311,18 @@ func (s *Server) SetUserAuthStateLookup(fn func(userID int64) (*auth.UserAuthSta
 	s.mu.Unlock()
 }
 
+// wsClientIP 是 WS 鉴权失败限流的键（L8-F-02 / R5-FC）：与登录、
+// gh 镜像共用 internal/clientip 的可信代理链解析——标准反代部署
+// 下 RemoteAddr 恒为代理机地址，裸键会让全体客户端共用一个失败
+// 桶（一人狂试、全站握手被连带 429）。解析不出任何地址时记入
+// 共享 UnresolvedKey 桶并告警（fail-closed 记账），不跳过限流、
+// 也不以含端口的原始串为键（端口轮换即绕过）。
 func wsClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil || host == "" {
-		return r.RemoteAddr
+	if key, ok := clientip.RateLimitKey(r); ok {
+		return key
 	}
-	return host
+	log.Printf("warning: ws auth rate limit: cannot resolve client IP from RemoteAddr %q, accounting into shared bucket", r.RemoteAddr)
+	return clientip.UnresolvedKey
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

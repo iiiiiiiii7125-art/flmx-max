@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -393,8 +394,18 @@ func fetchLatestTagByRedirect(url string) (string, error) {
 }
 
 func fetchLatestTagByRedirectWithTimeout(url string, timeout time.Duration) (string, error) {
+	// L8-F-04 / R5-FC：不再用裸 http.Client——旧实现只校验重定向
+	// Location 的 host，实际请求（含候选代理前缀的 URL）的拨号
+	// 未钉死、解析结果未过任何 IP 判定，DNS 污染可把版本发现
+	// 引向内网地址。与版本列表面（C-02）同口径：钉死拨号 +
+	// 拨号期逐地址复判（secureFetchDialContext）；本函数语义
+	// 只取首个响应（ErrUseLastResponse），不跟随重定向。
 	client := &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext:     secureFetchDialContext,
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -559,6 +570,15 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// L2-10：同节点已有升级/回退在途时下发前即拒绝——不让第二条
+	// 命令进 agent 串行队列被首条的重启切断、回执误报失败。
+	// （同版本短路在上方已返回，不占登记。）
+	if existing, ok := h.tryAcquireNodeUpgradeOp(req.ID, "升级"); !ok {
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("该节点已有%s操作正在进行，请等待其完成后再试", existing)))
+		return
+	}
+	defer h.releaseNodeUpgradeOp(req.ID)
+
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
 	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL。
 	// 1.7.7（KU5）：不再下发面板配置的 proxyUrl——「开启 GitHub 加
@@ -693,6 +713,16 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		go func(index int, nodeID int64) {
 			defer wg.Done()
 
+			// L2-10：同节点互斥（与单节点升级/回退共用同一登记）：
+			// 在途节点逐条明确失败并说明原因，其余节点不受影响、
+			// 照常一波派发；不再让命令进 agent 队列被先行升级的
+			// 重启切断后误报成升级失败。
+			if existing, ok := h.tryAcquireNodeUpgradeOp(nodeID, "升级"); !ok {
+				results[index] = upgradeResult{ID: nodeID, Success: false, Message: fmt.Sprintf("该节点已有%s操作正在进行，已跳过", existing)}
+				return
+			}
+			defer h.releaseNodeUpgradeOp(nodeID)
+
 			// O9-005：目标版本低于该节点当前版本时拒绝（防误降级；有意降级请用 nodeRollback）
 			// A11-132-06：不可比版本同样 fail-closed 拒绝。
 			nodeArch := ""
@@ -816,6 +846,15 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// L2-10：与升级共用同节点在途登记——回退排在升级之后会被
+	// 升级的重启切断，回退本身也会误动刚替换的二进制，下发前
+	// 即拒绝并告知在途操作。
+	if existing, ok := h.tryAcquireNodeUpgradeOp(req.ID, "回退"); !ok {
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("该节点已有%s操作正在进行，请等待其完成后再试", existing)))
+		return
+	}
+	defer h.releaseNodeUpgradeOp(req.ID)
+
 	result, err := h.wsServer.SendCommand(req.ID, "RollbackAgent", map[string]interface{}{}, 30*time.Second)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("回退失败: %v", err)))
@@ -825,6 +864,45 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"message": result.Message,
 	}))
+}
+
+// --- 同节点升级类操作互斥（L2-10 / R5-FC）---
+
+// tryAcquireNodeUpgradeOp 登记一条同节点升级类操作（op 为
+// "升级"/"回退"展示名）；该节点已有操作在途时返回在途操作名与
+// false。三个下发入口（单节点升级、批量升级、节点回退）共用：
+// agent 侧 mutation 命令走单工串行队列，第二条命令不会被拒而是
+// 排队，首条升级的重启会把排队/执行中的第二条连进程一起杀掉、
+// 面板按 failPendingForNode 结算成失败——节点实际已被首条升级
+// 成功，整批回执却误报失败（回退排在升级后还会按 .old 语义回退
+// 刚替换的二进制）。改为下发前互斥：后到者明确被拒并告知在途
+// 操作，根本不进 agent 队列；前端守卫只是页内状态（多标签页/
+// 多管理员绕得过），后端登记才是收口。登记只覆盖命令在途期
+// （下发到回执/超时/断连结算），随面板进程重启清空（与
+// pendingUpgradeRedeploy 等记账同为内存态）。
+func (h *Handler) tryAcquireNodeUpgradeOp(nodeID int64, op string) (string, bool) {
+	if h == nil || nodeID <= 0 {
+		return "", true
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	if h.nodeUpgradeOps == nil {
+		h.nodeUpgradeOps = make(map[int64]string)
+	}
+	if existing, ok := h.nodeUpgradeOps[nodeID]; ok {
+		return existing, false
+	}
+	h.nodeUpgradeOps[nodeID] = op
+	return "", true
+}
+
+func (h *Handler) releaseNodeUpgradeOp(nodeID int64) {
+	if h == nil || nodeID <= 0 {
+		return
+	}
+	h.upgradeMu.Lock()
+	delete(h.nodeUpgradeOps, nodeID)
+	h.upgradeMu.Unlock()
 }
 
 func (h *Handler) markNodePendingUpgradeRedeploy(nodeID int64) {

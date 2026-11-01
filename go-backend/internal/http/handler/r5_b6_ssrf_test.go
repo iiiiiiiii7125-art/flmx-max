@@ -119,6 +119,9 @@ func TestR5B6ExternalUpdateDedupQueryFailureFailClosed(t *testing.T) {
 
 func setupGHMirrorStaleTag(t *testing.T, tag string, age time.Duration) *bytes.Buffer {
 	t.Helper()
+	// R5-FC（L8-F-04）：gh_mirror tag 查询已改钉死拨号，本地 stub
+	// 须显式放行回环段，使失败模式保持「上游 500」而非拨号被拒。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	// 上游恒 500、无 Location → lookup 必失败，迫使走 stale 回退分支。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -182,6 +185,7 @@ func TestR5B6GHMirrorLatestTagStaleWithinCap(t *testing.T) {
 
 func TestR5B6GHMirrorLatestTagNoCacheStillErrors(t *testing.T) {
 	// 无缓存组：上游失败且无缓存 → 返回查询错误（既有行为不变）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8") // R5-FC：钉死拨号下放行本地 stub
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))

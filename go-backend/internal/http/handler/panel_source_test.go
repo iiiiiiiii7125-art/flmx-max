@@ -80,6 +80,9 @@ func TestAgentArchFromReportedVersion(t *testing.T) {
 // 且恢复基址后还会敲真实 github.com。
 func swapGHMirrorGitHubBase(t *testing.T, base string) {
 	t.Helper()
+	// R5-FC（L8-F-04）：gh_mirror 上游已改钉死拨号守卫，本地 stub
+	// 须显式放行回环段（C-02 先例口径）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	savedBase := ghMirrorBases.github
 	ghMirrorBases.github = base
 	t.Cleanup(func() { ghMirrorBases.github = savedBase })

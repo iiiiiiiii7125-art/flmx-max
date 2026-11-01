@@ -107,6 +107,10 @@ type Handler struct {
 	upgradeMu              sync.Mutex
 	systemUpgradeMu        sync.Mutex
 	pendingUpgradeRedeploy map[int64]struct{}
+	// R5-FC（L2-10）：同节点升级类操作在途登记（nodeID → 操作展示名），
+	// 由 upgradeMu 保护；单节点升级 / 批量升级 / 节点回退三入口共用，
+	// 见 upgrade.go 的 tryAcquireNodeUpgradeOp。
+	nodeUpgradeOps map[int64]string
 	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
 	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
 	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
