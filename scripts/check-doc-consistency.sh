@@ -230,7 +230,12 @@ else
   sv_y=$(printf '%s' "$sv_value" | cut -c1-4)
   sv_m=$(printf '%s' "$sv_value" | cut -c5-6)
   sv_d=$(printf '%s' "$sv_value" | cut -c7-8)
-  if date -d "$sv_y-$sv_m-$sv_d" >/dev/null 2>&1; then
+  if ! date -d "2000-01-01" >/dev/null 2>&1; then
+    # BSD date 等不支持 GNU -d 的环境无从判定日期合法性：按本脚本
+    # 惯例（同上计数对账项）降级 PENDING，不硬失败；判定本身不变，
+    # 请在装有 GNU date 的环境复跑本门。
+    note_pend "SCRIPT_VERSION 门：当前环境 date 不支持 -d，日期合法性未核（$sv_value）；请在装有 GNU date 的环境复跑本门"
+  elif date -d "$sv_y-$sv_m-$sv_d" >/dev/null 2>&1; then
     note_ok "SCRIPT_VERSION 门：panel_install.sh 字面量格式合法（$sv_value，恰一处）"
   else
     note_fail "SCRIPT_VERSION 门：日期段不是合法年月日（$sv_value）"
