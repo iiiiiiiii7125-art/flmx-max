@@ -71,7 +71,9 @@ func TestInstallFallsBackToDirectWhenMirrorBlacklists(t *testing.T) {
 	}
 }
 
-// 镜像与直连都失败时，错误信息必须包含回退尝试，便于定位。
+// 全部线路都失败时，错误必须点名线路（TryPlan 的聚合口径），便于
+// 定位。KU4 (1.7.7) 前此处断言旧回退措辞「回退直连亦失败」；新形态
+// 下错误为「全部下载线路失败（直连: …）」。
 func TestInstallReportsFallbackFailure(t *testing.T) {
 	blocked := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusForbidden)
@@ -88,8 +90,8 @@ func TestInstallReportsFallbackFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("两条路径都 403 时安装必须失败")
 	}
-	if !strings.Contains(err.Error(), "回退直连亦失败") {
-		t.Fatalf("错误信息应提及回退尝试，实际: %v", err)
+	if !strings.Contains(err.Error(), "全部下载线路失败") || !strings.Contains(err.Error(), "直连") {
+		t.Fatalf("错误信息应点名失败线路，实际: %v", err)
 	}
 }
 
