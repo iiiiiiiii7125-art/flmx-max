@@ -127,7 +127,9 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
 
 ## GitHub 镜像代理
 
-面板内置了一个 GitHub 文件代理，地址是 `/api/v1/open_api/gh/`（面板域名后拼接，例如 `https://你的面板域名/api/v1/open_api/gh/...`），用于加速从 GitHub 下载内核、规则集等文件。节点安装内核时可以选择走这个代理，尤其适合 GitHub 直连慢的机器。
+面板保留了一个 GitHub 文件代理端点，地址是 `/api/v1/open_api/gh/`（面板域名后拼接，例如 `https://你的面板域名/api/v1/open_api/gh/...`）。这是一个供手动拼接使用的开放端点：外部工具、脚本可以经面板中转拉取下方白名单仓库的 GitHub 文件；早期版本节点的本地代理配置若仍指向这个端点，也继续可用。
+
+它与面板自身的下载路线无关：1.7.7 起，版本发现、节点安装/升级与内核下载都走内置候选自动测速直选（见下一节），不经过这个端点，面板里也没有供内核下载选择的代理选项。
 
 只代理白名单内的仓库：
 
@@ -143,6 +145,7 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
 | `blackmatrix7/ios_rule_script` | 分流规则脚本 |
 
 - 单个文件上限 300MB，总缓存上限 2GB，缓存目录随数据库路径自动推导
+- 按来源 IP 限流 60 次/分钟，超限返回 429
 - release tag 的文件永久缓存；`latest`、raw 文件和 API 响应按 TTL 刷新
 - GitHub 不可达时返回已缓存的旧副本，不会直接报错
 
