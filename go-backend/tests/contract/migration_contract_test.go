@@ -280,8 +280,11 @@ func TestLegacyPasswordMigratesOnSubStore(t *testing.T) {
 		t.Fatalf("expected body %q, got %q", expected, string(body))
 	}
 	assertUserPasswordIsBcrypt(t, r, "legacy-substore-user", "legacy-substore-pass")
-	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-substore-user"); changedAt <= legacyChangedAt {
-		t.Fatalf("expected password_changed_at to advance on sub-store migration, got %d <= %d", changedAt, legacyChangedAt)
+	// R4B01-002: transparent legacy-hash migration must not advance
+	// password_changed_at — the password itself did not change, and
+	// advancing it would revoke every existing panel session of that user.
+	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-substore-user"); changedAt != legacyChangedAt {
+		t.Fatalf("expected password_changed_at to remain unchanged on sub-store migration, got %d want %d", changedAt, legacyChangedAt)
 	}
 }
 
