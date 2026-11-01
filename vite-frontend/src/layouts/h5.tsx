@@ -215,7 +215,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-col min-h-screen bg-mesh-gradient">
       {/* 顶部导航栏 */}
-      <header className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-xl shadow-sm border-b border-white/80 dark:border-white/10 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
+      <header className="bg-white/60 dark:bg-zinc-950/55 backdrop-blur-[18px] backdrop-saturate-150 border-b border-white/50 dark:border-white/10 h-14 safe-top flex-shrink-0 flex items-center justify-between px-4 relative z-10">
         <div className="flex items-center gap-2">
           <BrandLogo size={20} />
           <h1 className="text-sm font-bold text-foreground">
@@ -229,11 +229,11 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
       {/* 主内容区域 */}
       <main className="flex-1">{children}</main>
 
-      {/* 用于给固定 Tabbar 腾出空间的占位元素 */}
-      <div aria-hidden className="h-[calc(4rem+var(--safe-area-bottom))]" />
+      {/* 用于给悬浮 Tabbar 胶囊腾出空间的占位元素 */}
+      <div aria-hidden className="h-[calc(5.75rem+var(--safe-area-bottom))]" />
 
-      {/* 底部Tabbar */}
-      <nav className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-2xl border-t border-white/80 dark:border-white/10 h-[calc(4rem+var(--safe-area-bottom))] flex-shrink-0 flex items-center justify-around px-2 fixed bottom-0 left-0 right-0 z-30">
+      {/* 底部Tabbar：悬浮玻璃胶囊 */}
+      <nav className="glass-surface fixed bottom-[calc(0.75rem+var(--safe-area-bottom))] left-3 right-3 z-30 flex flex-shrink-0 items-center justify-around rounded-full px-2 py-2 shadow-lg">
         {filteredTabItems.map((item) => {
           const isActive =
             location.pathname === item.path ||
@@ -258,12 +258,13 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
             <button
               key={item.path}
               className={`
-                flex flex-col items-center justify-center flex-1 h-full pb-[var(--safe-area-bottom)]
-                transition-colors duration-200 min-h-[44px]
+                flex flex-col items-center justify-center flex-1 rounded-full px-2 py-1.5
+                transition-colors duration-200 ease-refined min-h-[44px]
+                ${isActive ? "bg-primary/10 dark:bg-primary/15" : ""}
                 ${isMonitorBlocked ? "opacity-60" : ""}
                 ${
                   isActive
-                    ? "text-primary-600 dark:text-primary-400"
+                    ? "text-primary dark:text-primary-400"
                     : isMonitorBlocked
                       ? "text-gray-500 dark:text-gray-400"
                       : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -271,10 +272,18 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
               `}
               onClick={() => handleTabClick(item.path)}
             >
-              <div className="flex-shrink-0 mb-1">{item.icon}</div>
-              <span className="text-xs font-medium">
+              <div className="flex-shrink-0">{item.icon}</div>
+              <span className="text-xs font-medium leading-tight">
                 {(isAdmin && item.adminLabel) || item.label}
               </span>
+              <span
+                aria-hidden
+                className={`mt-0.5 h-1 w-4 rounded-full ${
+                  isActive
+                    ? "bg-gradient-to-r from-primary-500 to-secondary-500"
+                    : "bg-transparent"
+                }`}
+              />
             </button>
           );
         })}

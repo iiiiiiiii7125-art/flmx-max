@@ -8,7 +8,7 @@ export default function DefaultLayout({
   return (
     <div className="relative flex flex-col min-h-screen bg-mesh-gradient">
       <Navbar />
-      <main className="container mx-auto max-w-7xl px-4 sm:px-6 flex-grow pt-4 sm:pt-16">
+      <main className="container mx-auto max-w-7xl px-6 sm:px-8 flex-grow pt-6 sm:pt-10 animate-fade-in">
         {children}
       </main>
     </div>

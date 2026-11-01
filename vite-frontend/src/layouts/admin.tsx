@@ -435,7 +435,7 @@ export default function AdminLayout({
       {isMobile && mobileMenuVisible && (
         <button
           aria-label="关闭菜单"
-          className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40"
+          className="fixed inset-0 bg-black/40 z-40"
           type="button"
           onClick={hideMobileMenu}
         />
@@ -444,23 +444,22 @@ export default function AdminLayout({
       {/* 左侧菜单栏 */}
       <aside
         className={`
-        ${isMobile ? "fixed h-screen top-0 left-0 rounded-r-3xl" : "relative h-full rounded-3xl"}
+        ${isMobile ? "fixed h-screen top-0 left-0 rounded-r-2xl" : "relative h-full rounded-2xl"}
         ${isMobile && !mobileMenuVisible ? "-translate-x-full" : "translate-x-0"}
         ${isMobile ? "w-64" : isCollapsed ? "w-20" : "w-[260px]"}
-        bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl
-        shadow-[0_10px_30px_rgba(0,0,0,0.1)]
-        border border-white/80 dark:border-white/10
+        glass-surface
+        shadow-md
         z-50
-        transition-all duration-300 ease-in-out
+        transition-all duration-200 ease-refined
         flex flex-col flex-shrink-0      `}
       >
         {/* Logo 区域 */}
         <div className="px-6 py-8 flex items-center overflow-hidden whitespace-nowrap box-border">
-          <div className="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-primary text-white">
+          <div className="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-secondary-500 text-white">
             <BrandLogo size={24} />
           </div>
           <div
-            className={`transition-all duration-300 overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[180px] opacity-100 ml-3"}`}
+            className={`transition-all duration-200 overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[180px] opacity-100 ml-3"}`}
           >
             <h1 className="text-xl font-bold text-foreground overflow-hidden whitespace-nowrap text-ellipsis">
               {siteConfig.name}
@@ -496,7 +495,7 @@ export default function AdminLayout({
                   <motion.button
                     aria-disabled={isMonitorBlocked}
                     className={`
-                       w-full flex items-center px-3 py-2.5 rounded-2xl text-left
+                       w-full flex items-center px-3 py-2.5 rounded-xl text-left
                        relative min-h-[44px] overflow-hidden transition-colors
                        ${isMonitorBlocked ? "opacity-60" : ""}
                        ${
@@ -519,7 +518,7 @@ export default function AdminLayout({
                   >
                     {isActive && (
                       <motion.div
-                        className="absolute inset-0 rounded-2xl bg-white/60 dark:bg-white/10 backdrop-blur-xl shadow-[0_12px_36px_rgba(0,0,0,0.18)] border border-white dark:border-white/20"
+                        className="absolute inset-0 rounded-xl bg-primary/10 dark:bg-primary/15"
                         layoutId="sidebar-active"
                         transition={{
                           type: "spring",
@@ -530,7 +529,7 @@ export default function AdminLayout({
                     )}
                     {!isActive && (
                       <motion.div
-                        className="absolute inset-0 rounded-2xl bg-white/40 dark:bg-white/5 opacity-0"
+                        className="absolute inset-0 rounded-xl bg-default-900/[0.04] dark:bg-white/5 opacity-0"
                         transition={{ duration: 0.15 }}
                         whileHover={{ opacity: 1 }}
                       />
@@ -539,7 +538,7 @@ export default function AdminLayout({
                       {item.icon}
                     </div>
                     <div
-                      className={`transition-all duration-300 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}
+                      className={`transition-all duration-200 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}
                     >
                       <span className="relative z-10 whitespace-nowrap">
                         {item.label}
@@ -555,7 +554,7 @@ export default function AdminLayout({
         {/* 底部版权信息和折叠按钮 */}
         <div className="px-5 py-6 mt-auto flex-shrink-0 flex flex-col gap-4 overflow-hidden whitespace-nowrap box-border">
           <div
-            className={`transition-all duration-300 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[200px] opacity-100"}`}
+            className={`transition-all duration-200 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[200px] opacity-100"}`}
           >
             <VersionFooter
               poweredClassName="text-xs text-gray-400 dark:text-gray-500"
@@ -616,8 +615,8 @@ export default function AdminLayout({
         {isMobile && (
           <Button
             isIconOnly
-            className="absolute top-4 left-4 z-40 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-md shadow-sm border border-white/80 dark:border-white/10"
-            variant="flat"
+            className="absolute top-4 left-4 z-40 border border-white/50 bg-white/60 shadow-sm backdrop-blur-[18px] backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/55"
+            variant="light"
             onPress={toggleMobileMenu}
           >
             <svg
@@ -643,9 +642,9 @@ export default function AdminLayout({
               key={location.pathname}
               animate={{ opacity: 1, y: 0 }}
               className="h-full"
-              exit={{ opacity: 0, y: -6 }}
-              initial={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
+              exit={{ opacity: 0, y: -4 }}
+              initial={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.2, ease: [0.2, 0.7, 0.3, 1] }}
             >
               {children}
             </motion.div>
