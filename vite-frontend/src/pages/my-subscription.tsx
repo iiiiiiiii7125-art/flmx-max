@@ -6,6 +6,8 @@ import { getMyInbounds, getMySubscriptions, getSubInfo } from "@/api";
 import type { MySubscriptionItem } from "@/api";
 import type { InboundApiItem } from "@/api/types";
 import { copyWithToast } from "@/utils/clipboard";
+import { SubFrontPicker } from "@/pages/subscription/front-picker";
+import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import { formatTraffic } from "@/utils/traffic";
 import { QrCodeButton } from "@/pages/inbound/share";
 import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
@@ -44,6 +46,10 @@ export default function MySubscriptionPage() {
   // 而非 reject，.catch 兜不住，必须按返回 code 判失败）。
   const [loadError, setLoadError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // 订阅前置地址（KU6）：选中的链接组装 base，"" = 面板域名；未配置
+  // 前置时选择器不渲染，所有链接与此前逐字一致。
+  const fronts = useSubscriptionFrontURLs();
+  const [frontBase, setFrontBase] = useState("");
   // 展开了流量统计的分配订阅 id（同一时间只展开一条）。
   const [expandedTrafficId, setExpandedTrafficId] = useState<number | null>(
     null,
@@ -109,7 +115,7 @@ export default function MySubscriptionPage() {
 
   const subUrl = (format?: string, inboundId?: number, relayId?: number) => {
     if (!subPath || !data) return "";
-    let u = `${window.location.origin}${subPath}?user=${data.userId}`;
+    let u = `${frontBase || window.location.origin}${subPath}?user=${data.userId}`;
     if (data.sig) u += `&sig=${data.sig}`;
     if (format) u += `&format=${format}`;
     if (inboundId) u += `&inbound=${inboundId}`;
@@ -119,7 +125,7 @@ export default function MySubscriptionPage() {
 
   // 分配订阅的独立链接：path 自带 token，不带 ?user= 过滤。
   const assignedUrl = (s: MySubscriptionItem, format?: string) =>
-    `${window.location.origin}${s.path}${format ? `?format=${format}` : ""}`;
+    `${frontBase || window.location.origin}${s.path}${format ? `?format=${format}` : ""}`;
 
   const handleCopy = async (url: string, key: string, label: string) => {
     const ok = await copyWithToast(url, `${label} 已复制`);
@@ -238,6 +244,16 @@ export default function MySubscriptionPage() {
           管理员为你分配的代理订阅，点击复制链接导入客户端使用
         </p>
       </div>
+
+      {fronts.length > 0 && (
+        <div className="flex justify-end">
+          <SubFrontPicker
+            fronts={fronts}
+            value={frontBase}
+            onChange={setFrontBase}
+          />
+        </div>
+      )}
 
       {/* 分配给我的订阅（独立链接） */}
       {assigned.length > 0 && (

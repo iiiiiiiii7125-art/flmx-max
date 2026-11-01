@@ -11,6 +11,8 @@ import toast from "react-hot-toast";
 import { Copy, QrCode, RefreshCw } from "lucide-react";
 
 import { copyWithToast } from "@/utils/clipboard";
+import { SubFrontPicker } from "@/pages/subscription/front-picker";
+import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import {
   getInboundRelays,
   getInboundShare,
@@ -423,6 +425,10 @@ function InboundRelaySubList({
 
 export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[] }) {
   const [path, setPath] = useState("");
+  // 订阅前置地址（KU6）：选中的链接组装 base，"" = 面板域名；未配置
+  // 前置时选择器不渲染，url() 与此前逐字一致。
+  const fronts = useSubscriptionFrontURLs();
+  const [frontBase, setFrontBase] = useState("");
   const [showQr, setShowQr] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -450,7 +456,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
 
   const url = (format: string, inboundId?: number, relay?: string) => {
     if (!path) return "";
-    let u = `${panelOrigin()}${path}`;
+    let u = `${frontBase || panelOrigin()}${path}`;
     const params: string[] = [];
     if (inboundId) params.push(`inbound=${inboundId}`);
     if (relay) params.push(`relay=${relay}`);
@@ -502,6 +508,13 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
             </Button>
           </div>
         </div>
+        {fronts.length > 0 && (
+          <SubFrontPicker
+            fronts={fronts}
+            value={frontBase}
+            onChange={setFrontBase}
+          />
+        )}
         <div className="flex gap-2">
           <Button
             className="flex-1"

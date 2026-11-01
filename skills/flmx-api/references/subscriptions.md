@@ -105,6 +105,13 @@ Public subscription fetch (no login; the token is the credential — do not shar
 publicly). Returns the format matching the client UA. With `?user=<id>&sig=<sig>`
 it renders that user's assigned view; without it, the subscription's full content.
 
+Serving is host-independent: the same `<token>` path works on any base that
+proxies back to the panel. The panel setting `subscription_front_urls`
+(config/update, validated on save) holds a JSON array of such front bases
+(origins only, e.g. `https://sub.0v0.dog`) for composing subscription links
+when the panel domain is blocked for some carriers; the panel UI offers each
+configured base next to the panel origin on the subscription surfaces.
+
 ## POST /api/v1/open_api/sub_store
 
 Compatibility endpoint for external subscription tools: exchanges panel account
