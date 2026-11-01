@@ -5910,27 +5910,27 @@ export default function ForwardPage() {
                           总测试数
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-success-500/10 rounded-lg border border-success-500/25">
-                        <div className="text-2xl font-bold text-success-700">
+                      <div className="text-center p-3 tray-success rounded-lg">
+                        <div className="text-2xl font-bold text-success-900">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.success
                             : diagnosisResult.results.filter((r) => r.success)
                                 .length}
                         </div>
-                        <div className="text-xs font-semibold text-success-700 mt-1">
+                        <div className="text-xs font-semibold text-success-900 mt-1">
                           成功
                         </div>
                       </div>
-                      <div className="text-center p-3 bg-danger-500/10 rounded-lg border border-danger-500/25">
-                        <div className="text-2xl font-bold text-danger-700">
+                      <div className="text-center p-3 tray-danger rounded-lg">
+                        <div className="text-2xl font-bold text-danger-900">
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.failed
                             : diagnosisResult.results.filter((r) => !r.success)
                                 .length}
                         </div>
-                        <div className="text-xs font-semibold text-danger-700 mt-1">
+                        <div className="text-xs font-semibold text-danger-900 mt-1">
                           失败
                         </div>
                       </div>
@@ -6069,7 +6069,7 @@ export default function ForwardPage() {
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess ? (
-                                            <span className="font-semibold text-primary-700">
+                                            <span className="tray-primary inline-flex rounded-full px-2 py-0.5 text-xs font-semibold">
                                               {result.averageTime?.toFixed(0)}
                                             </span>
                                           ) : (
@@ -6081,10 +6081,10 @@ export default function ForwardPage() {
                                         <td className="px-3 py-2 text-center">
                                           {isSuccess ? (
                                             <span
-                                              className={`font-semibold ${
+                                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                                                 (result.packetLoss || 0) > 0
-                                                  ? "text-warning-700"
-                                                  : "text-success-700"
+                                                  ? "tray-warning"
+                                                  : "tray-success"
                                               }`}
                                             >
                                               {result.packetLoss?.toFixed(1)}%
@@ -6254,7 +6254,7 @@ export default function ForwardPage() {
                                     {isSuccess ? (
                                       <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-divider">
                                         <div className="text-center">
-                                          <div className="text-lg font-bold text-primary-700">
+                                          <div className="tray-primary inline-flex items-center rounded-full px-2.5 py-0.5 text-lg font-bold">
                                             {result.averageTime?.toFixed(0)}
                                           </div>
                                           <div className="text-xs font-semibold text-foreground">
@@ -6263,11 +6263,7 @@ export default function ForwardPage() {
                                         </div>
                                         <div className="text-center">
                                           <div
-                                            className={`text-lg font-bold ${
-                                              (result.packetLoss || 0) > 0
-                                                ? "text-warning-700"
-                                                : "text-success-700"
-                                            }`}
+                                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-lg font-bold ${(result.packetLoss || 0) > 0 ? "tray-warning" : "tray-success"}`}
                                           >
                                             {result.packetLoss?.toFixed(1)}%
                                           </div>

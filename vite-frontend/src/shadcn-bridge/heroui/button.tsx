@@ -97,41 +97,39 @@ const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
   danger: "bg-danger-800 text-white shadow-sm hover:bg-danger-700",
 };
 
+// Round 6: bordered labels sat directly on glass at -700, which the
+// rendered sampling put at ~2.5 over the wallpaper's dark streak. They
+// keep their outline identity but gain a white/25 blurred carrier and
+// the -800 label shade; hover lifts the carrier, not a colour wash.
 const borderedColorClassMap: Record<HeroButtonColor, string> = {
   default:
-    "border-default-300 text-default-700 hover:bg-white/40 dark:border-default-200 dark:text-default-600 dark:hover:bg-default-100",
+    "border-default-300 bg-white/25 backdrop-blur-[3px] text-default-800 hover:bg-white/40",
   primary:
-    "border-primary/50 text-primary-700 hover:bg-primary/5 dark:text-primary-300 dark:hover:bg-primary/10",
+    "border-primary/50 bg-white/25 backdrop-blur-[3px] text-primary-800 hover:bg-white/40",
   secondary:
-    "border-secondary/50 text-secondary-700 hover:bg-secondary/5 dark:text-secondary-300 dark:hover:bg-secondary/10",
+    "border-secondary/50 bg-white/25 backdrop-blur-[3px] text-secondary-800 hover:bg-white/40",
   success:
-    "border-success/50 text-success-700 hover:bg-success/5 dark:text-success-300 dark:hover:bg-success/10",
+    "border-success/50 bg-white/25 backdrop-blur-[3px] text-success-800 hover:bg-white/40",
   warning:
-    "border-warning/50 text-warning-700 hover:bg-warning/5 dark:text-warning-300 dark:hover:bg-warning/10",
+    "border-warning/50 bg-white/25 backdrop-blur-[3px] text-warning-800 hover:bg-white/40",
   danger:
-    "border-danger/50 text-danger-700 hover:bg-danger/5 dark:text-danger-300 dark:hover:bg-danger/10",
+    "border-danger/50 bg-white/25 backdrop-blur-[3px] text-danger-800 hover:bg-white/40",
 };
 
-// Round 6 wash standard: light buttons and the flat/solid defaults sit
-// on a translucent glass wash (white/30 + blur + white/50 edge) with a
-// -700/-800 label. Round 4 put light on the opaque white tray; rendered
-// on the wallpaper those trays read as solid white boards (the user's
-// Round 6 verdict), while the wash keeps the label on a light, blurred
-// carrier in both wallpaper regions. Flat semantic colours keep their
-// tint trays (chip-scale, tinted, never white).
+// Round 6 final verdict on light buttons: the glass-wash carrier was
+// tried first, but rendered sampling over the wallpaper's dark streak
+// put wash + semantic-label pairs at 2.2-4.4 local contrast — under the
+// floor. Light buttons therefore take the user-sanctioned tray fallback
+// (tinted solid tray + deepest label, >= 8 measured): the same tray
+// tokens as flat. Button scale is chip scale, not a board. The flat and
+// solid defaults keep the glass wash (near-black label, verified).
 const lightColorClassMap: Record<HeroButtonColor, string> = {
-  default:
-    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
-  primary:
-    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-primary-700",
-  secondary:
-    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-secondary-700",
-  success:
-    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-success-700",
-  warning:
-    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-warning-700",
-  danger:
-    "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-danger-700",
+  default: "tray-default shadow-sm",
+  primary: "tray-primary shadow-sm",
+  secondary: "tray-secondary shadow-sm",
+  success: "tray-success shadow-sm",
+  warning: "tray-warning shadow-sm",
+  danger: "tray-danger shadow-sm",
 };
 
 const flatColorClassMap: Record<HeroButtonColor, string> = {

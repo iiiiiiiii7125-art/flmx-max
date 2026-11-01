@@ -1699,7 +1699,7 @@ export default function ConfigPage() {
               <div key={item.key}>
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_2fr]">
                   <div className="space-y-1">
-                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                    <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                       {item.label}
                     </label>
                     {item.description && (
@@ -2029,7 +2029,7 @@ export default function ConfigPage() {
         <Card className="mt-4 border-warning-200 shadow-sm overflow-hidden [&>div]:bg-warning-500/10">
           <div className="h-10 flex items-center justify-center gap-2 text-warning-700 dark:text-warning-300">
             <div className="w-2 h-2 bg-warning-500 rounded-full animate-pulse flex-shrink-0" />
-            <span className="text-sm font-medium leading-none">
+            <span className="text-sm font-semibold leading-none">
               检测到配置变更，请记得保存您的修改
             </span>
           </div>
