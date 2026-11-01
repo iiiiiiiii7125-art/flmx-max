@@ -1143,6 +1143,39 @@ func (r *Repository) UpdateNodeStatus(nodeID int64, status int) error {
 	}).Error
 }
 
+// ResetLocalNodeStatusesAtStartup 在面板启动时批量复位本地节点的
+// 在线标记（R4B03-001）：进程重启后 WS 会话表为空，停机前残留的
+// status=1 全是僵尸值（断开 defer 在进程退出时不执行）；agent 重连
+// 会经 UpdateNodeOnline 立即置回 1，故复位不会误伤真实在线节点。
+// 范围与节点在线语义一致：仅 is_remote=0 且非 nftables 模式——
+// nftables 节点创建即 status=1、无 agent 会话语义，不在复位面内。
+func (r *Repository) ResetLocalNodeStatusesAtStartup() (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("is_remote = ? AND status = ? AND forward_mode <> ?", 0, 1, "nftables").
+		Updates(map[string]interface{}{
+			"status": 0, "updated_time": unixMilliNow(),
+		})
+	return res.RowsAffected, res.Error
+}
+
+// ListOnlineLocalNodes 返回 DB 中仍标记在线的本地节点（is_remote=0
+// 且 status=1），供周期对账以 WS 实时会话为准复位僵尸在线
+// （R4B03-001）。forward_mode 的 nftables 判定由调用方经
+// defaultNodeForwardMode 归一化后做，与全仓口径一致。
+func (r *Repository) ListOnlineLocalNodes() ([]model.Node, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var nodes []model.Node
+	if err := r.db.Where("is_remote = ? AND status = ?", 0, 1).Order("id ASC").Find(&nodes).Error; err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
 // ─── Flow ────────────────────────────────────────────────────────────
 
 func (r *Repository) AddFlow(forwardID, userID int64, userTunnelID int64, inFlow, outFlow int64) error {
