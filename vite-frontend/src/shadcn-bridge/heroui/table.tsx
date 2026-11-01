@@ -64,7 +64,7 @@ export function TableHeader({
 
   return (
     <thead
-      className={cn("border-b border-divider [&_tr]:bg-white/30", className)}
+      className={cn("border-b border-divider", className)}
       {...props}
     >
       {hasRow ? children : <TableRow>{children}</TableRow>}
@@ -100,7 +100,7 @@ export const TableBody = React.forwardRef<
     return (
       <tbody
         ref={ref}
-        className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+        className={className}
         {...props}
       >
         <tr>
@@ -117,7 +117,7 @@ export const TableBody = React.forwardRef<
       return (
         <tbody
           ref={ref}
-          className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+          className={className}
           {...props}
         >
           <tr>
@@ -132,7 +132,7 @@ export const TableBody = React.forwardRef<
     return (
       <tbody
         ref={ref}
-        className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+        className={className}
         {...props}
       >
         {items.map((item) => {
@@ -154,7 +154,7 @@ export const TableBody = React.forwardRef<
     return (
       <tbody
         ref={ref}
-        className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+        className={className}
         {...props}
       >
         <tr>
@@ -169,7 +169,7 @@ export const TableBody = React.forwardRef<
   return (
     <tbody
       ref={ref}
-      className={cn("[&_tr:nth-child(even)]:bg-white/20", className)}
+      className={className}
       {...props}
     >
       {typeof children === "function" ? null : children}
