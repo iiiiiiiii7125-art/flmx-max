@@ -925,7 +925,7 @@ export default function PanelSharingPage() {
               }}
             />
             <Input
-              description="限制使用此Token的来源面板域名，多个域名用逗号分隔，留空不限制"
+              description="限制使用此Token的来源面板域名，多个域名用逗号分隔，留空不限制。注：该域名由对端在请求头中自报、无密码学约束，持有Token者可自行填报，此项仅作来源过滤参考，不能替代Token保密与IP白名单"
               label="允许的域名 (可选)"
               placeholder="example.com, panel.test.com"
               value={shareForm.allowedDomains}
@@ -1034,7 +1034,7 @@ export default function PanelSharingPage() {
               }
             />
             <Input
-              description="限制使用此Token的来源面板域名，多个域名用逗号分隔，留空不限制"
+              description="限制使用此Token的来源面板域名，多个域名用逗号分隔，留空不限制。注：该域名由对端在请求头中自报、无密码学约束，持有Token者可自行填报，此项仅作来源过滤参考，不能替代Token保密与IP白名单"
               label="允许的域名 (可选)"
               placeholder="example.com, panel.test.com"
               value={editForm.allowedDomains}
