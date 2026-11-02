@@ -6433,8 +6433,10 @@ export default function ForwardPage() {
                         r.success === false && !r.diagnosing && !r.unverified,
                     ) && (
                       <div className="space-y-2 hidden md:block">
-                        <h4 className="text-sm font-semibold text-danger-700">
-                          失败详情
+                        <h4 className="text-sm font-semibold">
+                          <span className="inline-block rounded px-1.5 py-0.5 tray-danger">
+                            失败详情
+                          </span>
                         </h4>
                         <div className="space-y-2">
                           {diagnosisResult.results
@@ -6463,8 +6465,10 @@ export default function ForwardPage() {
                       (r) => r.unverified && !r.diagnosing,
                     ) && (
                       <div className="space-y-2 hidden md:block">
-                        <h4 className="text-sm font-semibold text-primary-700">
-                          未验证说明
+                        <h4 className="text-sm font-semibold">
+                          <span className="inline-block rounded px-1.5 py-0.5 tray-primary">
+                            未验证说明
+                          </span>
                         </h4>
                         <div className="space-y-2">
                           {diagnosisResult.results
@@ -6472,7 +6476,7 @@ export default function ForwardPage() {
                             .map((result, index) => (
                               <Alert
                                 key={index}
-                                className="text-xs font-semibold"
+                                className="text-xs font-semibold tray-primary"
                                 color="primary"
                                 description={
                                   result.message ||
