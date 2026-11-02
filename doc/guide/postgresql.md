@@ -261,22 +261,22 @@ docker exec -i flux-panel-postgres psql -U flux_panel flux_panel < backup_202601
 
 ### 定时备份（cron）
 
-创建备份脚本 `/opt/flmx-panel/backup.sh`（`/opt/flmx-panel` 是面板的部署目录）：
+先进入**面板部署目录**——即当初运行 `panel_install.sh` 安装 / 更新面板的目录（自检：在该目录 `ls` 应能看到 `docker-compose.yml` 与 `.env`）。不要凭印象写 `/opt/flmx-panel`：那是容器内的挂载点，宿主机部署目录由安装位置决定，装在别处（如家目录）时照抄会把备份落到真实部署树之外。在部署目录下创建备份脚本 `backup.sh`（脚本按自身所在目录定位备份目录，与面板自身的 `backups/` 约定同根）：
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/opt/flmx-panel/backups"
+BACKUP_DIR="$(cd "$(dirname "$0")" && pwd)/backups"
 mkdir -p "$BACKUP_DIR"
 docker exec flux-panel-postgres pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
 # 清理 30 天前的备份
 find "$BACKUP_DIR" -name "flmx_*.sql.gz" -mtime +30 -delete
 ```
 
-添加 cron 任务（每天凌晨 3 点执行）：
+添加 cron 任务（每天凌晨 3 点执行；把 `<部署目录>` 换成部署目录的实际绝对路径）：
 
 ```bash
-chmod +x /opt/flmx-panel/backup.sh
-echo "0 3 * * * /opt/flmx-panel/backup.sh" | crontab -
+chmod +x <部署目录>/backup.sh
+echo "0 3 * * * <部署目录>/backup.sh" | crontab -
 ```
 
 ---
