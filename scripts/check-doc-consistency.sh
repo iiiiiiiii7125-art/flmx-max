@@ -39,6 +39,17 @@
 #      与全部站内链接的目标锚点逐条对账，差集非空即失败。需 node
 #      运行时；无 node 时以 PENDING 显式报告未核（不计失败、不得
 #      静默跳过），判定本身不变。
+#   14. 前端 check 全集（A-F-01 常设门）：转跑
+#      vite-frontend/scripts/run-checks.mjs——机械枚举
+#      vite-frontend/scripts/check-*.mjs 全集逐个执行（纯 ENC 预设、
+#      敏感键、质量历史条、toPayload 设防、隧道质量开关、路由三清
+#      单、文字对比度），任一红即本门红。此前前端 check 无统一入
+#      口、门禁清单只跑仓库根 scripts/，check-pure-enc-preset 在集
+#      成树上红而无人看见，故立此转跑项；无 node 时以 PENDING 显
+#      式报告未核（不计失败、不得静默跳过），判定本身不变。前端
+#      check 需 vite-frontend 的 node_modules（typescript）：CI 前
+#      端 job 先 pnpm install 再跑本门，本地未装依赖时子脚本会以
+#      非零码失败并点名，按其输出先装依赖再复跑。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -266,6 +277,17 @@ if command -v node >/dev/null 2>&1; then
   fi
 else
   echo "PENDING: 站内锚点对账门未核（当前环境无 node 运行时）；请在装有 node 的环境复跑本门"
+fi
+
+# ── 14. 前端 check 全集（A-F-01 常设门，转跑 vite-frontend/scripts/run-checks.mjs）
+if command -v node >/dev/null 2>&1; then
+  if (cd vite-frontend && node scripts/run-checks.mjs); then
+    note_ok "前端 check 全集门：vite-frontend/scripts/check-*.mjs 全数通过"
+  else
+    note_fail "前端 check 全集门：存在失败项（见上）"
+  fi
+else
+  echo "PENDING: 前端 check 全集门未核（当前环境无 node 运行时）；请在装有 node 的环境复跑本门"
 fi
 
 echo "----"
