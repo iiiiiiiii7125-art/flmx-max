@@ -184,6 +184,20 @@ func TestPublicConfigGetAndAuthConfigContract(t *testing.T) {
 func TestOpenAPISubStoreContracts(t *testing.T) {
 	router, r := setupContractRouter(t, "contract-jwt-secret")
 
+	// Since R5 L8-F-01, sub_store is fail-closed for admins still on the
+	// seed default password. This contract verifies payload shapes, so
+	// rotate the seeded admin off the default password first; the
+	// rejection itself is covered by the handler-level
+	// sub_store_default_password_r5_test.go cases.
+	const adminPass = "contract-admin-pass"
+	adminHash, err := security.HashPassword(adminPass)
+	if err != nil {
+		t.Fatalf("hash admin password: %v", err)
+	}
+	if err := r.DB().Exec(`UPDATE user SET pwd = ? WHERE id = 1`, adminHash).Error; err != nil {
+		t.Fatalf("rotate seeded admin password: %v", err)
+	}
+
 	const tunnelFlowGB = int64(500)
 	const tunnelInFlow = int64(123)
 	const tunnelOutFlow = int64(456)
@@ -201,7 +215,7 @@ func TestOpenAPISubStoreContracts(t *testing.T) {
 	}
 
 	t.Run("default user subscription payload", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub_store?user=admin@user&pwd=admin@user", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub_store?user=admin@user&pwd=contract-admin-pass", nil)
 		resp := httptest.NewRecorder()
 
 		router.ServeHTTP(resp, req)
@@ -224,7 +238,7 @@ func TestOpenAPISubStoreContracts(t *testing.T) {
 	})
 
 	t.Run("tunnel scoped subscription payload", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub_store?user=admin@user&pwd=admin@user&tunnel="+strconv.FormatInt(tunnelID, 10), nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub_store?user=admin@user&pwd=contract-admin-pass&tunnel="+strconv.FormatInt(tunnelID, 10), nil)
 		resp := httptest.NewRecorder()
 
 		router.ServeHTTP(resp, req)
@@ -253,7 +267,7 @@ func TestOpenAPISubStoreContracts(t *testing.T) {
 	})
 
 	t.Run("missing tunnel returns contract error", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub_store?user=admin@user&pwd=admin@user&tunnel=999999", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub_store?user=admin@user&pwd=contract-admin-pass&tunnel=999999", nil)
 		resp := httptest.NewRecorder()
 
 		router.ServeHTTP(resp, req)
