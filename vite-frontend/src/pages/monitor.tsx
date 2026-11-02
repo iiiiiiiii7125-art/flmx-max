@@ -203,16 +203,34 @@ function AdminMonitorOverview() {
       if (!raw || typeof raw !== "object") return;
       const metric = raw as any;
 
-      setRealtimeNodeMetrics((prev) => ({
-        ...prev,
-        [nodeId]: {
-          cpuUsage: Number(metric.cpuUsage ?? metric.cpu_usage ?? 0),
-          netInSpeed: Number(metric.netInSpeed ?? metric.net_in_speed ?? 0),
-          netOutSpeed: Number(metric.netOutSpeed ?? metric.net_out_speed ?? 0),
-          tcpConns: Number(metric.tcpConns ?? metric.tcp_conns ?? 0),
-          udpConns: Number(metric.udpConns ?? metric.udp_conns ?? 0),
-        },
-      }));
+      setRealtimeNodeMetrics((prev) => {
+        // A-F-02: no `?? 0` — a field the frame omits falls back to the
+        // previous frame's value, and a field never reported stays
+        // undefined so the aggregates below can leave it out instead
+        // of counting a fabricated 0.
+        const prevMetric = prev[nodeId];
+        const num = (camel: string, snake: string) => {
+          const raw = metric[camel] ?? metric[snake];
+
+          if (raw === undefined || raw === null) return undefined;
+          const n = Number(raw);
+
+          return Number.isFinite(n) ? n : undefined;
+        };
+
+        return {
+          ...prev,
+          [nodeId]: {
+            cpuUsage: num("cpuUsage", "cpu_usage") ?? prevMetric?.cpuUsage,
+            netInSpeed:
+              num("netInSpeed", "net_in_speed") ?? prevMetric?.netInSpeed,
+            netOutSpeed:
+              num("netOutSpeed", "net_out_speed") ?? prevMetric?.netOutSpeed,
+            tcpConns: num("tcpConns", "tcp_conns") ?? prevMetric?.tcpConns,
+            udpConns: num("udpConns", "udp_conns") ?? prevMetric?.udpConns,
+          },
+        };
+      });
     }
   }, []);
 
@@ -306,6 +324,7 @@ function AdminMonitorOverview() {
 
   const aggregateMetrics = useMemo(() => {
     let totalCpu = 0;
+    let cpuReporters = 0;
     let totalConns = 0;
     let totalNetIn = 0;
     let totalNetOut = 0;
@@ -317,15 +336,23 @@ function AdminMonitorOverview() {
         const metric = realtimeNodeMetrics[node.id];
 
         if (metric) {
-          totalCpu += metric.cpuUsage;
-          totalConns += metric.tcpConns + metric.udpConns;
-          totalNetIn += metric.netInSpeed;
-          totalNetOut += metric.netOutSpeed;
+          // A-F-02: unreported figures are left out, never counted as
+          // 0 — the CPU average divides by the nodes that actually
+          // reported CPU, and the sums only add reported values (the
+          // `?? 0` here is the summation identity for an absent addend,
+          // not a displayed figure).
+          if (metric.cpuUsage !== undefined) {
+            totalCpu += metric.cpuUsage;
+            cpuReporters++;
+          }
+          totalConns += (metric.tcpConns ?? 0) + (metric.udpConns ?? 0);
+          totalNetIn += metric.netInSpeed ?? 0;
+          totalNetOut += metric.netOutSpeed ?? 0;
         }
       }
     });
 
-    const avgCpu = onlineCount > 0 ? totalCpu / onlineCount : 0;
+    const avgCpu = cpuReporters > 0 ? totalCpu / cpuReporters : 0;
 
     return {
       avgCpu,

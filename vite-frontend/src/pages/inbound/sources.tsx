@@ -114,10 +114,19 @@ function planText(userinfo: string): string {
     if (k && n && !Number.isNaN(Number(n))) v[k] = Number(n);
   }
   const parts: string[] = [];
-  const used = (v.upload ?? 0) + (v.download ?? 0);
 
-  if (v.total)
-    parts.push(`已用 ${formatTraffic(used)} / ${formatTraffic(v.total)}`);
+  if (v.total) {
+    // A-F-02 family: claim a used figure only when the header actually
+    // reported a counter — both counters absent means unreported, not
+    // zero usage.
+    if (v.upload !== undefined || v.download !== undefined) {
+      const used = (v.upload ?? 0) + (v.download ?? 0);
+
+      parts.push(`已用 ${formatTraffic(used)} / ${formatTraffic(v.total)}`);
+    } else {
+      parts.push(`总量 ${formatTraffic(v.total)}`);
+    }
+  }
   if (v.expire) {
     parts.push(`${new Date(v.expire * 1000).toLocaleDateString("zh-CN")} 到期`);
   }

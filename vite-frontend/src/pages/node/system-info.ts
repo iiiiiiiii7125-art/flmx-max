@@ -130,12 +130,21 @@ export const buildNodeSystemInfo = (
     downloadSpeed,
     uptime,
     diskUsage: raw.disk_usage === undefined ? undefined : toFloat(raw.disk_usage),
-    load1: toFloat(raw.load1),
-    load5: toFloat(raw.load5),
-    load15: toFloat(raw.load15),
-    tcpConns: toInteger(raw.tcp_conns),
-    udpConns: toInteger(raw.udp_conns),
-    netInSpeed: toInteger(raw.net_in_speed),
-    netOutSpeed: toInteger(raw.net_out_speed),
+    // Same undefined-preserving rule as the usage figures above
+    // (A-F-02 family): a snapshot that omits a key leaves it undefined
+    // instead of fabricating 0 — consumers read these through ?? chains
+    // (e.g. netOutSpeed ?? derived uploadSpeed), so a fabricated 0
+    // would also shadow the derived fallback.
+    load1: raw.load1 === undefined ? undefined : toFloat(raw.load1),
+    load5: raw.load5 === undefined ? undefined : toFloat(raw.load5),
+    load15: raw.load15 === undefined ? undefined : toFloat(raw.load15),
+    tcpConns: raw.tcp_conns === undefined ? undefined : toInteger(raw.tcp_conns),
+    udpConns: raw.udp_conns === undefined ? undefined : toInteger(raw.udp_conns),
+    netInSpeed:
+      raw.net_in_speed === undefined ? undefined : toInteger(raw.net_in_speed),
+    netOutSpeed:
+      raw.net_out_speed === undefined
+        ? undefined
+        : toInteger(raw.net_out_speed),
   };
 };

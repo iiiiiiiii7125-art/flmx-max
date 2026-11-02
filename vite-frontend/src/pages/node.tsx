@@ -589,6 +589,11 @@ export default function NodePage({
           return {
             ...node,
             connectionStatus: "online",
+            // A-F-03：整字面量同口径——每一项缺失都回落上次已上报值，
+            // 不得独缺。旧实现只有 cpu/memory 带回落：diskUsage/load
+            // 缺帧即变 undefined（磁盘条闪烁消失）、累计流量计数缺帧
+            // 归 0（把已知累计值清零）。计数/速率的 0 只作无上次值时
+            // 的初值兜底（类型为必填），不再覆盖已知值。
             systemInfo: {
               cpuUsage:
                 metric.cpuUsage ?? metric.cpu_usage ?? node.systemInfo?.cpuUsage,
@@ -597,19 +602,45 @@ export default function NodePage({
                 metric.memory_usage ??
                 node.systemInfo?.memoryUsage,
               uploadTraffic:
-                metric.netOutBytes ?? metric.bytes_transmitted ?? 0,
-              downloadTraffic: metric.netInBytes ?? metric.bytes_received ?? 0,
-              uploadSpeed: metric.netOutSpeed ?? metric.net_out_speed ?? 0,
-              downloadSpeed: metric.netInSpeed ?? metric.net_in_speed ?? 0,
+                metric.netOutBytes ??
+                metric.bytes_transmitted ??
+                node.systemInfo?.uploadTraffic ??
+                0,
+              downloadTraffic:
+                metric.netInBytes ??
+                metric.bytes_received ??
+                node.systemInfo?.downloadTraffic ??
+                0,
+              uploadSpeed:
+                metric.netOutSpeed ??
+                metric.net_out_speed ??
+                node.systemInfo?.uploadSpeed ??
+                0,
+              downloadSpeed:
+                metric.netInSpeed ??
+                metric.net_in_speed ??
+                node.systemInfo?.downloadSpeed ??
+                0,
               uptime: incomingUptime || node.systemInfo?.uptime || 0,
-              diskUsage: metric.diskUsage ?? metric.disk_usage,
-              load1: metric.load1,
-              load5: metric.load5,
-              load15: metric.load15,
-              tcpConns: metric.tcpConns ?? metric.tcp_conns,
-              udpConns: metric.udpConns ?? metric.udp_conns,
-              netInSpeed: metric.netInSpeed ?? metric.net_in_speed,
-              netOutSpeed: metric.netOutSpeed ?? metric.net_out_speed,
+              diskUsage:
+                metric.diskUsage ??
+                metric.disk_usage ??
+                node.systemInfo?.diskUsage,
+              load1: metric.load1 ?? node.systemInfo?.load1,
+              load5: metric.load5 ?? node.systemInfo?.load5,
+              load15: metric.load15 ?? node.systemInfo?.load15,
+              tcpConns:
+                metric.tcpConns ?? metric.tcp_conns ?? node.systemInfo?.tcpConns,
+              udpConns:
+                metric.udpConns ?? metric.udp_conns ?? node.systemInfo?.udpConns,
+              netInSpeed:
+                metric.netInSpeed ??
+                metric.net_in_speed ??
+                node.systemInfo?.netInSpeed,
+              netOutSpeed:
+                metric.netOutSpeed ??
+                metric.net_out_speed ??
+                node.systemInfo?.netOutSpeed,
             },
           };
         }),

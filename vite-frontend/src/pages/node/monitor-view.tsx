@@ -105,19 +105,39 @@ interface MonitorViewProps {
 
 type RealtimeNodeMetric = {
   receivedAt: number;
-  cpuUsage: number;
-  memoryUsage: number;
-  diskUsage: number;
-  netInBytes: number;
-  netOutBytes: number;
-  netInSpeed: number;
-  netOutSpeed: number;
-  load1: number;
-  load5: number;
-  load15: number;
-  tcpConns: number;
-  udpConns: number;
+  // Optional (A-F-02): a metric frame that omits a figure leaves it
+  // undefined — the card/list/detail surfaces hide it or show "-"
+  // instead of a fabricated 0. The normalization falls back to the
+  // previous frame's value first, so a once-reported figure stays
+  // sticky across partial frames (same rule as the node list merge).
+  cpuUsage?: number;
+  memoryUsage?: number;
+  diskUsage?: number;
+  netInBytes?: number;
+  netOutBytes?: number;
+  netInSpeed?: number;
+  netOutSpeed?: number;
+  load1?: number;
+  load5?: number;
+  load15?: number;
+  tcpConns?: number;
+  udpConns?: number;
   uptime: number;
+};
+
+// One metric-frame field, camelCase or snake_case spelling: a finite
+// number when the frame carries it, undefined when it does not.
+const metricNum = (
+  metric: Record<string, unknown>,
+  camel: string,
+  snake?: string,
+): number | undefined => {
+  const raw = metric[camel] ?? (snake ? metric[snake] : undefined);
+
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+
+  return Number.isFinite(n) ? n : undefined;
 };
 
 const isSupportedMonitorType = (t: string): t is "tcp" | "icmp" =>
@@ -241,28 +261,40 @@ function ServerCard({
             <div className="flex justify-between items-center text-xs font-semibold">
               <span className="text-foreground">CPU</span>
               <span className="font-mono font-medium">
-                {isOnline && metric ? `${metric.cpuUsage.toFixed(1)}%` : "-"}
+                {metric.cpuUsage !== undefined
+                  ? `${metric.cpuUsage.toFixed(1)}%`
+                  : "-"}
               </span>
             </div>
-            <Progress
-              className="h-1"
-              color={getColorByUsage(metric?.cpuUsage)}
-              value={isOnline && metric ? metric.cpuUsage : 0}
-            />
+            {metric.cpuUsage !== undefined ? (
+              <Progress
+                className="h-1"
+                color={getColorByUsage(metric.cpuUsage)}
+                value={metric.cpuUsage}
+              />
+            ) : (
+              <div className="h-1 rounded-full bg-default-100" />
+            )}
           </div>
           <div className="space-y-1.5 min-w-0">
             <div className="flex justify-between items-center text-xs font-semibold">
               <span className="text-foreground">内存</span>
               <span className="font-mono font-medium">
-                {isOnline && metric ? `${metric.memoryUsage.toFixed(1)}%` : "-"}
+                {metric.memoryUsage !== undefined
+                  ? `${metric.memoryUsage.toFixed(1)}%`
+                  : "-"}
               </span>
             </div>
-            <Progress
-              className="h-1"
-              color={getColorByUsage(metric?.memoryUsage)}
-              size="sm"
-              value={isOnline && metric ? metric.memoryUsage : 0}
-            />
+            {metric.memoryUsage !== undefined ? (
+              <Progress
+                className="h-1"
+                color={getColorByUsage(metric.memoryUsage)}
+                size="sm"
+                value={metric.memoryUsage}
+              />
+            ) : (
+              <div className="h-1 rounded-full bg-default-100" />
+            )}
           </div>
         </div>
 
@@ -273,7 +305,7 @@ function ServerCard({
               <span>上传</span>
             </div>
             <span className="font-mono text-xs font-semibold truncate">
-              {isOnline && metric
+              {metric.netOutSpeed !== undefined
                 ? formatBytesPerSecond(metric.netOutSpeed)
                 : "-"}
             </span>
@@ -285,7 +317,7 @@ function ServerCard({
               <span className="text-success-700 inline-block font-bold">↓</span>
             </div>
             <span className="font-mono text-xs font-semibold truncate">
-              {isOnline && metric
+              {metric.netInSpeed !== undefined
                 ? formatBytesPerSecond(metric.netInSpeed)
                 : "-"}
             </span>
@@ -302,7 +334,10 @@ function ServerCard({
           <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground shrink-0 ml-2">
             <Activity className="w-3.5 h-3.5 text-foreground" />
             <span className="font-mono">
-              Load: {metric ? metric.load1.toFixed(2) : "-"}
+              Load:{" "}
+              {metric && metric.load1 !== undefined
+                ? metric.load1.toFixed(2)
+                : "-"}
             </span>
           </div>
         </div>
@@ -693,22 +728,40 @@ export function MonitorView({
       const incomingUptime = Number(metric.uptime ?? 0);
 
       setRealtimeNodeMetrics((prev) => {
+        // A-F-02: no `?? 0` anywhere here — a field the frame omits
+        // falls back to the previous frame's value, and a field never
+        // reported stays undefined (hidden / "-" downstream), never a
+        // fabricated 0.
+        const prevMetric = prev[nodeId];
         const normalized: RealtimeNodeMetric = {
           receivedAt,
-          cpuUsage: Number(metric.cpuUsage ?? metric.cpu_usage ?? 0),
-          memoryUsage: Number(metric.memoryUsage ?? metric.memory_usage ?? 0),
-          diskUsage: Number(metric.diskUsage ?? metric.disk_usage ?? 0),
-          netInBytes: Number(metric.netInBytes ?? metric.bytes_received ?? 0),
-          netOutBytes: Number(
-            metric.netOutBytes ?? metric.bytes_transmitted ?? 0,
-          ),
-          netInSpeed: Number(metric.netInSpeed ?? metric.net_in_speed ?? 0),
-          netOutSpeed: Number(metric.netOutSpeed ?? metric.net_out_speed ?? 0),
-          load1: Number(metric.load1 ?? 0),
-          load5: Number(metric.load5 ?? 0),
-          load15: Number(metric.load15 ?? 0),
-          tcpConns: Number(metric.tcpConns ?? metric.tcp_conns ?? 0),
-          udpConns: Number(metric.udpConns ?? metric.udp_conns ?? 0),
+          cpuUsage:
+            metricNum(metric, "cpuUsage", "cpu_usage") ?? prevMetric?.cpuUsage,
+          memoryUsage:
+            metricNum(metric, "memoryUsage", "memory_usage") ??
+            prevMetric?.memoryUsage,
+          diskUsage:
+            metricNum(metric, "diskUsage", "disk_usage") ??
+            prevMetric?.diskUsage,
+          netInBytes:
+            metricNum(metric, "netInBytes", "bytes_received") ??
+            prevMetric?.netInBytes,
+          netOutBytes:
+            metricNum(metric, "netOutBytes", "bytes_transmitted") ??
+            prevMetric?.netOutBytes,
+          netInSpeed:
+            metricNum(metric, "netInSpeed", "net_in_speed") ??
+            prevMetric?.netInSpeed,
+          netOutSpeed:
+            metricNum(metric, "netOutSpeed", "net_out_speed") ??
+            prevMetric?.netOutSpeed,
+          load1: metricNum(metric, "load1") ?? prevMetric?.load1,
+          load5: metricNum(metric, "load5") ?? prevMetric?.load5,
+          load15: metricNum(metric, "load15") ?? prevMetric?.load15,
+          tcpConns:
+            metricNum(metric, "tcpConns", "tcp_conns") ?? prevMetric?.tcpConns,
+          udpConns:
+            metricNum(metric, "udpConns", "udp_conns") ?? prevMetric?.udpConns,
           uptime: incomingUptime || prev[nodeId]?.uptime || 0,
         };
 
@@ -1528,7 +1581,7 @@ export function MonitorView({
                           <div className="flex flex-col gap-2 py-1 text-xs font-semibold whitespace-nowrap">
                             <div className="flex items-center gap-1.5 font-mono">
                               <span className="w-[86px] text-right inline-block rounded px-1 py-0.5 tray-success">
-                                {isOnline && metric
+                                {isOnline && metric && metric.netOutSpeed !== undefined
                                   ? formatBytesPerSecond(metric.netOutSpeed)
                                   : "-"}
                               </span>
@@ -1541,7 +1594,7 @@ export function MonitorView({
                             </div>
                             <div className="flex items-center gap-1.5 font-mono">
                               <span className="w-[86px] text-right inline-block rounded px-1 py-0.5 tray-primary">
-                                {isOnline && metric
+                                {isOnline && metric && metric.netInSpeed !== undefined
                                   ? formatBytesPerSecond(metric.netInSpeed)
                                   : "-"}
                               </span>
@@ -1558,7 +1611,7 @@ export function MonitorView({
                           <div className="flex flex-col gap-2 py-1 text-xs font-semibold whitespace-nowrap">
                             <div className="flex items-center gap-1.5 font-mono text-foreground">
                               <span className="w-[86px] text-right inline-block">
-                                {isOnline && metric
+                                {isOnline && metric && metric.netOutBytes !== undefined
                                   ? formatBytes(metric.netOutBytes)
                                   : "-"}
                               </span>
@@ -1571,7 +1624,7 @@ export function MonitorView({
                             </div>
                             <div className="flex items-center gap-1.5 font-mono text-foreground">
                               <span className="w-[86px] text-right inline-block">
-                                {isOnline && metric
+                                {isOnline && metric && metric.netInBytes !== undefined
                                   ? formatBytes(metric.netInBytes)
                                   : "-"}
                               </span>
@@ -1594,16 +1647,22 @@ export function MonitorView({
                         <TableCell>
                           <div className="flex flex-col gap-1.5 text-xs font-semibold font-mono text-foreground">
                             <div>
-                              TCP {isOnline && metric ? metric.tcpConns : "-"}
+                              TCP{" "}
+                              {isOnline && metric && metric.tcpConns !== undefined
+                                ? metric.tcpConns
+                                : "-"}
                             </div>
                             <div>
-                              UDP {isOnline && metric ? metric.udpConns : "-"}
+                              UDP{" "}
+                              {isOnline && metric && metric.udpConns !== undefined
+                                ? metric.udpConns
+                                : "-"}
                             </div>
                           </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            {isOnline && metric ? (
+                            {isOnline && metric && metric.cpuUsage !== undefined ? (
                               <Progress
                                 className="w-[40px] md:w-[60px]"
                                 color={getColorByUsage(metric.cpuUsage)}
@@ -1614,7 +1673,7 @@ export function MonitorView({
                               <div className="w-[40px] md:w-[60px] h-2 rounded-full bg-default-100" />
                             )}
                             <span className="text-xs font-semibold font-mono w-9 text-right text-foreground">
-                              {isOnline && metric
+                              {isOnline && metric && metric.cpuUsage !== undefined
                                 ? `${metric.cpuUsage.toFixed(1)}%`
                                 : "-"}
                             </span>
@@ -1622,7 +1681,7 @@ export function MonitorView({
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            {isOnline && metric ? (
+                            {isOnline && metric && metric.memoryUsage !== undefined ? (
                               <Progress
                                 className="w-[40px] md:w-[60px]"
                                 color={getColorByUsage(metric.memoryUsage)}
@@ -1633,7 +1692,7 @@ export function MonitorView({
                               <div className="w-[40px] md:w-[60px] h-2 rounded-full bg-default-100" />
                             )}
                             <span className="text-xs font-semibold font-mono w-9 text-right text-foreground">
-                              {isOnline && metric
+                              {isOnline && metric && metric.memoryUsage !== undefined
                                 ? `${metric.memoryUsage.toFixed(1)}%`
                                 : "-"}
                             </span>
@@ -1641,7 +1700,7 @@ export function MonitorView({
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            {isOnline && metric ? (
+                            {isOnline && metric && metric.diskUsage !== undefined ? (
                               <Progress
                                 className="w-[40px] md:w-[60px]"
                                 color={getColorByUsage(metric.diskUsage)}
@@ -1652,7 +1711,7 @@ export function MonitorView({
                               <div className="w-[40px] md:w-[60px] h-2 rounded-full bg-default-100" />
                             )}
                             <span className="text-xs font-semibold font-mono w-9 text-right text-foreground">
-                              {isOnline && metric
+                              {isOnline && metric && metric.diskUsage !== undefined
                                 ? `${metric.diskUsage.toFixed(1)}%`
                                 : "-"}
                             </span>
@@ -1735,27 +1794,42 @@ export function MonitorView({
               {[
                 {
                   label: "CPU",
-                  value: `${detailRealtimeMetric.cpuUsage.toFixed(1)}%`,
+                  value:
+                    detailRealtimeMetric.cpuUsage !== undefined
+                      ? `${detailRealtimeMetric.cpuUsage.toFixed(1)}%`
+                      : "-",
                   color: getColorByUsage(detailRealtimeMetric.cpuUsage),
                 },
                 {
                   label: "内存",
-                  value: `${detailRealtimeMetric.memoryUsage.toFixed(1)}%`,
+                  value:
+                    detailRealtimeMetric.memoryUsage !== undefined
+                      ? `${detailRealtimeMetric.memoryUsage.toFixed(1)}%`
+                      : "-",
                   color: getColorByUsage(detailRealtimeMetric.memoryUsage),
                 },
                 {
                   label: "磁盘",
-                  value: `${detailRealtimeMetric.diskUsage.toFixed(1)}%`,
+                  value:
+                    detailRealtimeMetric.diskUsage !== undefined
+                      ? `${detailRealtimeMetric.diskUsage.toFixed(1)}%`
+                      : "-",
                   color: getColorByUsage(detailRealtimeMetric.diskUsage),
                 },
                 {
                   label: "↓ 下行速度",
-                  value: formatBytesPerSecond(detailRealtimeMetric.netInSpeed),
+                  value:
+                    detailRealtimeMetric.netInSpeed !== undefined
+                      ? formatBytesPerSecond(detailRealtimeMetric.netInSpeed)
+                      : "-",
                   color: "success" as const,
                 },
                 {
                   label: "↑ 上行速度",
-                  value: formatBytesPerSecond(detailRealtimeMetric.netOutSpeed),
+                  value:
+                    detailRealtimeMetric.netOutSpeed !== undefined
+                      ? formatBytesPerSecond(detailRealtimeMetric.netOutSpeed)
+                      : "-",
                   color: "primary" as const,
                 },
                 {
