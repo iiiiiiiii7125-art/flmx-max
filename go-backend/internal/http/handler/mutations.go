@@ -4637,6 +4637,23 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-1, "端口必须在 1-65535 范围内"))
 		return
 	}
+	// R2-005 / L4-01（2026-11-03 拍板锁死）：入口端口创建后永不换口
+	// （2026-10-30 定案）。此前同隧道三条 replace 路径与切隧道分支
+	// 共用同一 port 解析、显式提交的 inPort 被全量接受替换，与定案
+	// 及 resolveTunnelSegmentPort 头注口径不符。锁点收敛于此：显式
+	// 提交的 inPort 与存量入口端口任一行不一致即拒绝；未提交 inPort
+	// （回填存量 min 口）与提交同值照常放行，切隧道沿用存量口、
+	// 中间/出口段在隧道更新面按既有口径换口均不受影响。
+	if rawInPort, submitted := req["inPort"]; submitted {
+		if explicitPort := asInt(rawInPort, 0); explicitPort > 0 {
+			for _, fp := range oldPorts {
+				if fp.Port > 0 && fp.Port != explicitPort {
+					response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("入口端口不可变更：转发创建后入口端口固定为 %d，如需更换端口请删除该转发后重新创建", fp.Port)))
+					return
+				}
+			}
+		}
+	}
 	hasInIP := false
 	inIp := ""
 	if rawInIP, ok := req["inIp"]; ok {
