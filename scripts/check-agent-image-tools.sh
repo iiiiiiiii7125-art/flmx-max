@@ -20,6 +20,11 @@
 # agent 以相对路径加载 ./config.json、自卸载的清扫与标记都以该
 # 目录为锚，cd 目标漂移会让容器形态自卸载再次整体失效）。
 #
+# 再钉住 Dockerfile 的内核状态根锚点：ENV
+# FLMX_KERNEL_DIR=/etc/flmx_agent/kernels——内核二进制、state.json
+# 与 geodata 必须落挂载卷，缺了这行就回落到脚本形态的默认根，
+# 在镜像里只是容器可写层，容器一重建全部蒸发（R2-003）。
+#
 # 用法：check-agent-image-tools.sh [REPO_ROOT]（默认脚本所在仓库根）。
 # 退出码：0 = 工具集与入口不变量齐备；1 = 存在缺失；2 = 前提失效。
 set -u
@@ -64,8 +69,14 @@ if ! grep -Fq 'cd /etc/flmx_agent' "$ENTRYPOINT"; then
   FAIL=1
 fi
 
+# 内核状态根锚点逐行核对。
+if ! grep -Fq 'ENV FLMX_KERNEL_DIR=/etc/flmx_agent/kernels' "$DOCKERFILE"; then
+  echo "FAIL: Dockerfile lost the kernel state anchor: ENV FLMX_KERNEL_DIR=/etc/flmx_agent/kernels"
+  FAIL=1
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   exit 1
 fi
-echo "PASS: agent image tool set complete ($REQUIRED_PACKAGES) and entrypoint invariants intact"
+echo "PASS: agent image tool set complete ($REQUIRED_PACKAGES), entrypoint invariants and kernel state anchor intact"
 exit 0
