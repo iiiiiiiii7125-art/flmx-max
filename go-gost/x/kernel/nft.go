@@ -226,11 +226,15 @@ type allowGuard struct {
 
 // expandGuards collects the whitelists keyed by inbound. Entries were
 // validated as CIDRs; they are re-rendered from the parsed form so nothing
-// but an address can reach the nft script.
+// but an address can reach the nft script. The skip keys on the same
+// predicate as portsHaveWhitelist (len > 0): an empty allow list is the
+// same as an absent one — no restriction, no guard — so a payload
+// carrying "allow": [] cannot render a drop-all ruleset for a port the
+// guard classification does not treat as protected (C3-01).
 func expandGuards(ports []Port) map[int64]allowGuard {
 	guards := make(map[int64]allowGuard)
 	for _, p := range ports {
-		if p.Allow == nil {
+		if len(p.Allow) == 0 {
 			continue
 		}
 		g := guards[p.InboundID]
