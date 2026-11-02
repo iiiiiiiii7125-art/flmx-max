@@ -155,9 +155,12 @@ func TestBackupRoundTripsNodeExtraIPs(t *testing.T) {
 	}
 }
 
-// TestBackupTableCoverage 是防再漏的清单契约：库中每张业务表必须被分类为
-// 「由某个 BackupData 字段覆盖」或「明确排除并写明理由」。新表落库而未
-// 分类会直接红——F-004/F-030 这类"新表漏进备份清单"不得第三次发生。
+// TestBackupTableCoverage 是防再漏的清单契约（双向普查，AG-02 起）：
+// 库中每张业务表必须被分类为「由某个 BackupData 字段覆盖」或「明确
+// 排除并写明理由」，且分类表里的每个条目必须仍有实表对应——新表落
+// 库而未分类会直接红（F-004/F-030 这类"新表漏进备份清单"不得第三
+// 次发生），表被删/改名后登记残留成陈尸同样红（此前本门只查实表→
+// 登记单向，陈尸无门可守）。
 func TestBackupTableCoverage(t *testing.T) {
 	r := openBackupRepo(t, "cov.db")
 
@@ -234,16 +237,40 @@ func TestBackupTableCoverage(t *testing.T) {
 	if len(tables) == 0 {
 		t.Fatal("no tables found")
 	}
+	liveTables := make(map[string]bool, len(tables))
 	for _, table := range tables {
-		if key, ok := covered[table]; ok {
-			if !jsonKeys[key] {
-				t.Errorf("table %s registered as covered by BackupData key %q, but BackupData has no such json field", table, key)
-			}
+		liveTables[table] = true
+	}
+
+	// 正向（实表 → 登记）：每张实表必须被分类。
+	for _, table := range tables {
+		if _, ok := covered[table]; ok {
 			continue
 		}
 		if _, ok := excluded[table]; ok {
 			continue
 		}
 		t.Errorf("table %s is not classified for backup coverage — add it to covered (with export/import) or excluded (with a reason) in TestBackupTableCoverage", table)
+	}
+
+	// 反向（登记 → 实表，AG-02）：分类条目不得是陈尸——表已删/改名而
+	// 登记残留同样红；covered 与 excluded 交集是登记自相矛盾，一并
+	// 点名。covered 的 BackupData 键存在性对全部登记核对（不再只对
+	// 实表触发），陈尸指向已删的备份键同样在此现形。
+	for table, key := range covered {
+		if !jsonKeys[key] {
+			t.Errorf("table %s registered as covered by BackupData key %q, but BackupData has no such json field", table, key)
+		}
+		if _, dup := excluded[table]; dup {
+			t.Errorf("table %s is registered in both covered and excluded in TestBackupTableCoverage — pick exactly one classification", table)
+		}
+		if !liveTables[table] {
+			t.Errorf("table %s is classified for backup coverage but does not exist in the live schema — stale registration, remove it from TestBackupTableCoverage", table)
+		}
+	}
+	for table := range excluded {
+		if !liveTables[table] {
+			t.Errorf("table %s is classified as excluded from backup coverage but does not exist in the live schema — stale registration, remove it from TestBackupTableCoverage", table)
+		}
 	}
 }
