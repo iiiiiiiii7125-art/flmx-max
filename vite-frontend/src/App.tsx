@@ -20,20 +20,103 @@ import { useThemeContext } from "@/themes/context";
 import { PageLoadingState } from "@/components/page-state";
 
 // Pages load on first visit so the login screen does not wait for all of them.
-const ChangePasswordPage = lazy(() => import("@/pages/change-password"));
-const DashboardPage = lazy(() => import("@/pages/dashboard"));
-const MonitorPage = lazy(() => import("@/pages/monitor"));
-const MySubscriptionPage = lazy(() => import("@/pages/my-subscription"));
-const ForwardPage = lazy(() => import("@/pages/forward"));
-const TunnelPage = lazy(() => import("@/pages/tunnel"));
-const NodeHubPage = lazy(() => import("@/pages/node-hub"));
-const UserHubPage = lazy(() => import("@/pages/user-hub"));
-const ProfilePage = lazy(() => import("@/pages/profile"));
-const InboundPage = lazy(() => import("@/pages/inbound"));
-const RelayPage = lazy(() => import("@/pages/relay"));
-const SubscriptionPage = lazy(() => import("@/pages/subscription"));
-const ConfigPage = lazy(() => import("@/pages/config"));
-const PanelSharingPage = lazy(() => import("@/pages/panel-sharing"));
+const loadChangePasswordPage = () => import("@/pages/change-password");
+const loadDashboardPage = () => import("@/pages/dashboard");
+const loadMonitorPage = () => import("@/pages/monitor");
+const loadMySubscriptionPage = () => import("@/pages/my-subscription");
+const loadForwardPage = () => import("@/pages/forward");
+const loadTunnelPage = () => import("@/pages/tunnel");
+const loadNodeHubPage = () => import("@/pages/node-hub");
+const loadUserHubPage = () => import("@/pages/user-hub");
+const loadProfilePage = () => import("@/pages/profile");
+const loadInboundPage = () => import("@/pages/inbound");
+const loadRelayPage = () => import("@/pages/relay");
+const loadSubscriptionPage = () => import("@/pages/subscription");
+const loadConfigPage = () => import("@/pages/config");
+const loadPanelSharingPage = () => import("@/pages/panel-sharing");
+
+const ChangePasswordPage = lazy(loadChangePasswordPage);
+const DashboardPage = lazy(loadDashboardPage);
+const MonitorPage = lazy(loadMonitorPage);
+const MySubscriptionPage = lazy(loadMySubscriptionPage);
+const ForwardPage = lazy(loadForwardPage);
+const TunnelPage = lazy(loadTunnelPage);
+const NodeHubPage = lazy(loadNodeHubPage);
+const UserHubPage = lazy(loadUserHubPage);
+const ProfilePage = lazy(loadProfilePage);
+const InboundPage = lazy(loadInboundPage);
+const RelayPage = lazy(loadRelayPage);
+const SubscriptionPage = lazy(loadSubscriptionPage);
+const ConfigPage = lazy(loadConfigPage);
+const PanelSharingPage = lazy(loadPanelSharingPage);
+
+// After login, warm the remaining route chunks while the browser is idle
+// so the first navigation to each page does not wait on a download. The
+// loaders are the very same dynamic imports the lazy routes use, so a
+// warmed chunk is never fetched twice. Skipped on data-saver connections.
+const COMMON_ROUTE_LOADERS = [
+  loadDashboardPage,
+  loadMonitorPage,
+  loadMySubscriptionPage,
+  loadForwardPage,
+  loadProfilePage,
+  loadChangePasswordPage,
+];
+const ADMIN_ROUTE_LOADERS = [
+  loadTunnelPage,
+  loadNodeHubPage,
+  loadUserHubPage,
+  loadInboundPage,
+  loadRelayPage,
+  loadSubscriptionPage,
+  loadConfigPage,
+  loadPanelSharingPage,
+];
+
+let commonRoutePreloadScheduled = false;
+let adminRoutePreloadScheduled = false;
+
+const scheduleRoutePreload = () => {
+  const connection = (
+    navigator as Navigator & { connection?: { saveData?: boolean } }
+  ).connection;
+
+  if (connection?.saveData) {
+    return;
+  }
+
+  const schedule = (loaders: Array<() => Promise<unknown>>) => {
+    const run = () => {
+      loaders.forEach((load) => {
+        void load().catch(() => undefined);
+      });
+    };
+    const requestIdle = (
+      window as Window & {
+        requestIdleCallback?: (
+          callback: () => void,
+          options?: { timeout: number },
+        ) => number;
+      }
+    ).requestIdleCallback;
+
+    if (requestIdle) {
+      window.setTimeout(() => requestIdle(run, { timeout: 4000 }), 2000);
+    } else {
+      window.setTimeout(run, 2500);
+    }
+  };
+
+  if (!commonRoutePreloadScheduled) {
+    commonRoutePreloadScheduled = true;
+    schedule(COMMON_ROUTE_LOADERS);
+  }
+
+  if (isAdmin() && !adminRoutePreloadScheduled) {
+    adminRoutePreloadScheduled = true;
+    schedule(ADMIN_ROUTE_LOADERS);
+  }
+};
 
 const ProtectedRoute = ({
   children,
@@ -113,6 +196,32 @@ function App() {
       window.removeEventListener(SESSION_UPDATED_EVENT, handleSessionUpdate);
     };
   }, [location.pathname, navigate]);
+
+  // 登录后空闲预加载其余路由 chunk（见 scheduleRoutePreload）：挂载时已
+  // 登录（刷新/直达）与会话更新为已登录（刚登录成功）两种入口都覆盖。
+  useEffect(() => {
+    if (isLoggedIn()) {
+      scheduleRoutePreload();
+    }
+
+    const handlePreloadSessionUpdate = () => {
+      if (isLoggedIn()) {
+        scheduleRoutePreload();
+      }
+    };
+
+    window.addEventListener(
+      SESSION_UPDATED_EVENT,
+      handlePreloadSessionUpdate,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SESSION_UPDATED_EVENT,
+        handlePreloadSessionUpdate,
+      );
+    };
+  }, []);
 
   // 处理自定义背景图片
   useEffect(() => {
