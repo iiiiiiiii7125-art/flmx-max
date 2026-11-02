@@ -10,9 +10,10 @@
 ## 准备：个人账号的 classic token
 
 - 用**你个人 GitHub 账号**持有令牌（T-1 口径：不要求组织或机器人账号）。
+- 创建路径：GitHub 头像菜单 → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token (classic)**；**Note** 填用途名（如 `flmx-gist-backup`），**Expiration** 建议设一个期限、到期前回这里重新生成并更新到面板；权限只勾 **`gist`** 一项。生成的令牌只显示一次，立即复制。自检：回到 **Tokens (classic)** 列表能看到这枚令牌、且权限只有 `gist`，即创建正确。
 - 创建 classic personal access token，勾选 **`gist` 权限**（读写 Gist）。令牌权限过大时面板实际只会用它调五类 GitHub 请求：保存时校验、创建 Gist、更新同一 Gist、版本列表、版本内容；但仍建议只给 `gist`，不要顺手勾上 `repo` 等无关权限。
 - 保存设置时，面板会先向 GitHub 发一次 `GET /gists?per_page=1` 校验令牌可用，校验不通过不落库。请注意：这一步只校验“能调通 Gist 接口”，**不校验令牌是否恰好只有 `gist` 权限**，权限收敛靠创建令牌时自己把关。
-- 面板服务器需要能访问 `api.github.com`（默认基地址；可用环境变量改写，见[高级](#高级api-基地址)）。连不上 GitHub 时上传失败，失败信息写进状态里的 `lastError`，不会静默丢掉。
+- 面板服务器需要能访问 `api.github.com`（默认基地址；可用环境变量改写，见[高级](#高级-api-基地址)）。连不上 GitHub 时上传失败，失败信息写进状态里的 `lastError`，不会静默丢掉。
 
 ## 加密：必填，丢密码不可恢复
 
@@ -31,6 +32,7 @@
 ## 上传规则
 
 - 上传内容 = 与手动全量导出同一份备份（见[备份](./nodes.md#备份)），文件名 **`flmx-backup.json`**，Gist 描述为“FLMX 面板备份”，**私密 Gist（`public: false`）**。私密只表示不公开列出：**拿到 Gist 链接的人仍能看到备份内容**——这正是加密必填的原因，私密绝不等于加密。
+- 导出时配置键按分类过滤：**未分类的配置键**（例如经 API 写过的自定义键）按默认敏感口径被**静默剔除**、不进备份文件，导出回执也不逐项点名；导入方向则保留未分类键，双向口径不对称——经 API 写过自定义配置键的用户，不要指望它随备份迁移。
 - 首次上传创建新 Gist，以后每次上传 PATCH 同一个 Gist、产生一个新版本；若该 Gist 已在 GitHub 侧被删，PATCH 404 后面板会清空旧 id 并重新创建（历史版本随旧 Gist 一并消失，见[删除与断开](#删除与断开)）。
 - **未变化跳过**：面板对“去掉导出时间的稳定序列化 + 密码”算哈希，与上次上传的哈希相同则跳过、不产生新版本；手动“立即上传”同样不强制，不变时返回“内容没有变化，没有产生新版本”。
 - 单份备份明文超过 **20 MB** 拒绝上传；单次 GitHub 请求超时 60 秒，前端上传操作超时 120 秒。超大面板导出 + 上传可能超时，超时后 `lastError` 会记录，属可观测失败。
@@ -76,4 +78,4 @@
 
 ## 高级：API 基地址
 
-默认 `https://api.github.com`。测试或自托管 GitHub API 时可用环境变量改写：`FLMX_GIST_API_BASE` 优先，`FLVX_GIST_API_BASE` 兜底（旧名前缀兼容）。GitHub 请求头为 `Authorization: Bearer <token>`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28`、`User-Agent: flmx-panel`；其中令牌只发往 API 基地址同源的请求与官方 API 主机（`api.github.com`），大文件 `truncated=true` 时走 `raw_url` 再取的那一腿不带令牌；401 提示“令牌无效或已过期”，403 提示“需要 gist 权限或太频繁”。
+默认 `https://api.github.com`。测试或自托管 GitHub API 时可用环境变量改写：`FLMX_GIST_API_BASE` 优先，`FLVX_GIST_API_BASE` 兜底（旧名前缀兼容）。**设置位置与生效方法**与 `FLMX_FETCH_*` 同口径：它是**后端进程的环境变量**，随版 `docker-compose.yml` 的 `backend` 服务默认没有它的传递行，只写部署目录 `.env` 不会生效——需在 `docker-compose.yml` 的 `backend` 服务 `environment:` 段补上 `- FLMX_GIST_API_BASE=<地址>`（或 `- FLMX_GIST_API_BASE=${FLMX_GIST_API_BASE}` 再把值写进 `.env`），再执行 `docker compose up -d backend` 重建后端容器才生效；自检：`docker exec <后端容器> printenv FLMX_GIST_API_BASE` 能打印出所设值即已生效。GitHub 请求头为 `Authorization: Bearer <token>`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28`、`User-Agent: flmx-panel`；其中令牌只发往 API 基地址同源的请求与官方 API 主机（`api.github.com`），大文件 `truncated=true` 时走 `raw_url` 再取的那一腿不带令牌；401 提示“令牌无效或已过期”，403 提示“需要 gist 权限或太频繁”。

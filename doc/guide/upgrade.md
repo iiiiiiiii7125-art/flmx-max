@@ -10,7 +10,7 @@
 
 ### 面板自升级的下载校验（跨线路第二锚）
 
-面板自升级下载的每个 Release 资产（镜像清单、compose 文件等）都要过两道校验，脚本升级同口径（见本节末尾）：
+面板自升级经面板下载的资产（compose 文件）要过两道校验；前后端镜像不经面板下载、由 `docker compose pull` 从镜像仓库拉取，靠仓库的摘要（digest）机制保证完整性，不在双锚覆盖内。脚本升级同口径（见本节末尾）：
 
 - **第一锚（同源校验）**：资产与它的 `.sha256` 校验文件从**同一条线路、同一次下载**取得并比对，哈希对不上直接拒绝该线路。只靠这一锚有个缺口：某条线路若被污染，资产与校验文件会被一起替换、自洽地通过校验。
 - **第二锚（跨线路复核）**：某条线路胜出定版后，面板再从候选线路里**另一条不同的线路**重新取一次同一资产的 `.sha256`，与第一锚采信的校验值比对。两条线路独立给出同一个校验值，才算复核通过。
@@ -18,10 +18,10 @@
 
 撞见下面两种回执时的含义与处置：
 
-- **「校验文件经两条不同线路获取的结果不一致，已中止升级（…第二锚）」**：两条线路给出的校验值互相矛盾，说明至少一条线路上的内容不可信（镜像被篡改、缓存污染或同步错位都有可能）。此时升级被**硬中止、不换路重试**，面板保持原版本运行、不会进入拉镜像 / 重建步骤。处置：不要反复立即重试、更不要想办法绕过校验；先等一段时间再试（线路缓存同步后可能自行恢复），若多次重试仍在同一资产上中止，把回执里的资产名与两个哈希值留存下来排查线路，不要继续升级。
+- **「校验文件经两条不同线路获取的结果不一致，已中止升级（…第二锚）」**：两条线路给出的校验值互相矛盾，说明至少一条线路上的内容不可信（镜像被篡改、缓存污染或同步错位都有可能）。此时升级被**硬中止、不换路重试**，面板保持原版本运行、不会进入拉镜像 / 重建步骤。处置：不要反复立即重试、更不要想办法绕过校验；先等一段时间再试（线路缓存同步后可能自行恢复），若多次重试仍在同一资产上中止，把回执里的两个哈希值留存下来排查线路，不要继续升级。
 - **回执点名「跨线路锚复核已降级」**：其他线路都没能给出合法校验值（线路不可达、校验文件取不到等），没有第二条线路可复核。此时**不中止**，按第一锚（同源校验）的结果继续升级，回执里会以「跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续」明确点名。含义是这次升级只经过单锚校验、不是升级失败；可以正常完成，介意时可在网络恢复后留意后续升级是否仍点名降级——长期每次都降级说明候选线路整体可达性有问题，需要排查出站网络。
 
-**脚本侧同口径**：`panel_install.sh` 的首装、菜单更新与自更新三条链下载资产时同样执行跨线路复核（脚本内函数 `corroborate_download_anchor`）：异路给出不同哈希时在 stderr 报「跨线路锚复核失败：校验文件经两条不同线路获取的结果不一致，已中止」，**删除已下载文件并整单中止**；无异路可复核时在 stderr 点名「跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续」后继续。整个复核一轮共用 20 秒总界，不会显著拉长升级时间。唯一例外是运维显式设置 `FLMX_VERIFY_DOWNLOADS=0` 时校验被整体关闭、第二锚随第一锚一并跳过——这是显式逃生口，不是静默降级，不要在日常升级里设置它。
+**脚本侧同口径**：`panel_install.sh` 的首装、菜单更新与自更新三条链下载资产时同样执行跨线路复核（脚本内函数 `corroborate_download_anchor`）：异路给出不同哈希时在 stderr 报「跨线路锚复核失败：校验文件经两条不同线路获取的结果不一致，已中止（L8-F-02 第二锚）」，**删除已下载文件并整单中止**；无异路可复核时在 stderr 点名「跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（L8-F-02）」后继续。整个复核一轮共用 20 秒总界，不会显著拉长升级时间。唯一例外是运维显式设置 `FLMX_VERIFY_DOWNLOADS=0` 时校验被整体关闭、第二锚随第一锚一并跳过——这是显式逃生口，不是静默降级，不要在日常升级里设置它。
 
 > 节点 agent 升级侧有同一套第二锚口径，其期望哈希由面板预热下发，见下文「GitHub 镜像代理（面板源分发）」的「升级完整性」一条。
 
@@ -105,11 +105,24 @@ SQLEOF
 
 > 以上 SQL 中的前 4 条重复检查与代码启动预检逻辑（`runV1Precheck`）一致；`forward_port` 孤儿检查不在启动预检内，只包含在 `scripts/phase_a_dryrun.sql` 的 dry-run 清单中。最后一条是用户名**大小写折叠**重复检查，与 v5 迁移（`k10_v5_username_casefold_unique`，1.7.5 起）的预检同形，即 dry-run 清单的第 6b 节：1.7.5 起用户名判重不区分大小写，仅大小写不同的同名用户（如 `Admin` 与 `admin`）同样算重复，不清理会使折叠唯一索引降级缺席（见 §5）。
 
+> 注意：上面六条都是**计数定位**查询，只输出分组键与计数；§3 保留判据需要的明细列不在其中，清理前先用下面的明细查询把重复组逐行拉出来再对照 §3 判定。特别注意 `status` 是父表 `forward` 的列（经 `forward_id` 关联），`forward_port` 表本身**没有** status 列——在 forward_port 上按 status 过滤会直接报错。
+
+```bash
+sqlite3 /tmp/gost.db.bak << 'SQLEOF'
+.headers on
+.mode column
+SELECT fp.id, fp.node_id, fp.port, fp.forward_id, f.status FROM forward_port fp JOIN "forward" f ON f.id = fp.forward_id WHERE (fp.node_id, fp.port) IN (SELECT node_id, port FROM forward_port GROUP BY node_id, port HAVING COUNT(*) > 1) ORDER BY fp.node_id, fp.port, fp.forward_id;
+SELECT node_id, port, tunnel_id FROM chain_tunnel WHERE port > 0 AND (node_id, port) IN (SELECT node_id, port FROM chain_tunnel WHERE port > 0 GROUP BY node_id, port HAVING COUNT(*) > 1) ORDER BY node_id, port, tunnel_id;
+SELECT id, node_id, port, kernel_id, enabled FROM node_inbound WHERE kernel_id > 0 AND (node_id, port) IN (SELECT node_id, port FROM node_inbound WHERE kernel_id > 0 GROUP BY node_id, port HAVING COUNT(*) > 1) ORDER BY node_id, port, id;
+SELECT id, "user", status, created_time FROM "user" WHERE "user" IN (SELECT "user" FROM "user" GROUP BY "user" HAVING COUNT(*) > 1) OR LOWER("user") IN (SELECT LOWER("user") FROM "user" GROUP BY LOWER("user") HAVING COUNT(*) > 1) ORDER BY LOWER("user"), created_time;
+SQLEOF
+```
+
 ### 3. 清理步骤
 
 | 类型 | 保留 | 依据 |
 |------|------|------|
-| forward_port 重复 | status=1 的行；都有则保留 forward_id 最小 | 活跃优先 |
+| forward_port 重复 | forward.status=1 的行；都有则保留 forward_id 最小 | 活跃优先（status 是父表 forward 的列，forward_port 本身没有 status 列） |
 | forward_port 孤儿 | 删除 | 转发已不存在 |
 | chain_tunnel 重复 | tunnel_id 最小 | 先建优先 |
 | node_inbound 重复（仅 kernel_id > 0 的内核入站） | enabled=1；都有则 id 最小 | 启用优先；导入节点（kernel_id=0）同端口不同主机是合法数据，不要清理 |
@@ -155,7 +168,7 @@ docker start <backend容器>
 
 - **节点自升级、内核安装、geodata 下载**：agent 从自己配置里的面板地址（安装时的 `-a` 参数）派生出面板源线路，自动加入内置候选的并行测速排名——面板线路延迟低时胜出，健康机器的直连短路行为不变。地址只由 agent 从自身配置派生，面板无法在运行时给 agent 下发下载地址（安全边界）。
 - **新节点安装**：面板生成的安装命令把面板源排在候选表第一位；`install.sh` 本身也先单探面板源、通则独占使用。装机时唯一已证可达的目的地就是面板，国内机不再先撞 GitHub 直连。
-- **升级完整性**：面板下发升级命令前会先把目标版本双架构资产预热进镜像缓存，并随命令附上该版本的期望 SHA-256（取自面板已缓存并自验过的官方校验文件）；agent 下载后以它为校验基准，哈希不符直接拒绝升级并在回执中写明。期望哈希缺失时（旧面板、预热未命中）回退现行校验口径，不影响升级可用性。
+- **升级完整性**：面板下发升级命令前会先把目标版本双架构资产预热进镜像缓存，并随命令附上该版本的期望 SHA-256（取自面板镜像缓存的官方校验文件，经格式校验）；agent 下载后以它为校验基准，哈希不符直接拒绝升级并在回执中写明。期望哈希缺失时（旧面板、预热未命中）回退现行校验口径，不影响升级可用性。
 - **无需任何设置**：面板侧没有开关，节点侧也不用改配置；面板源线路与内置 9 代理＋直连受同一套测速、续切管辖（升级与内核下载的总预算是 240 秒，geodata 下载单独为 300 秒），面板镜像不可用时自动回落既有路线，不劣化现状。
 - **存量节点的自举边界（1.9.0 起）**：面板源线路是 **1.9.0 起的 agent 原生能力**——节点升级自 1.9.0 起原生支持走面板源。**1.8.x 及更早版本的存量 agent 尚无这条线路，无法用它给自己升级**（它认识的候选仍只有直连＋9 代理）。被墙的存量节点先这样到达新版：在面板里生成该节点的**安装命令**（现行 `install.sh` 已把面板源排在第一候选，装机全程可走面板源），在节点机上执行一次，装到 1.9.0 或更新版本（安装命令恒装所选渠道的最新版）；此后该节点的升级、内核与 geodata 下载全程可走面板源，不再依赖 GitHub 可达性。
 
@@ -187,3 +200,5 @@ docker start <backend容器>
 
 - `FLMX_FETCH_PRIVATE_ALLOWLIST=127.0.0.1/32`：仅放行指定 CIDR（推荐）
 - `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
+
+**设置位置与生效方法**：这两个变量是**后端进程的环境变量**，随版 `docker-compose.yml` 的 `backend` 服务默认**没有**它们的传递行——只把变量写进部署目录的 `.env` 文件不会进入后端容器、不会生效。需要在部署目录的 `docker-compose.yml` 里给 `backend` 服务的 `environment:` 段补上对应行（直接写字面量，或写 `- FLMX_FETCH_PRIVATE_ALLOWLIST=${FLMX_FETCH_PRIVATE_ALLOWLIST}` 再把值放进同目录 `.env`），然后执行 `docker compose up -d backend` 重建后端容器才生效。自检：`docker exec <后端容器> printenv FLMX_FETCH_PRIVATE_ALLOWLIST` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。同一口径适用于全部 `FLMX_FETCH_*` 与 `FLMX_GIST_API_BASE` 环境变量（见 [导入节点](./import.md#订阅源地址安全策略) 与 [Gist 备份](./gist-backup.md#高级-api-基地址)）。
