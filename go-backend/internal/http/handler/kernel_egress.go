@@ -11,14 +11,14 @@ import (
 // versionBelowPadded 与 versionBelow3 的区别：缺段按 0 补齐（"25.6"
 // 视为 25.6.0），无法解析时返回 false（不低于）。Xray prefer 门需要
 // 严格口径——25.6 必须拦下，不能沿用 versionBelow3 对两段版本号的宽松。
+// 四段及以上按前三段比较：多余段是发行版后缀而非语义版本的一部分
+// （parseVersionParts 同样接受任意段数），不得因段数多就无条件放行——
+// "25.5.15.9" 的前三段低于 25.5.16 下限，必须判低于。
 func versionBelowPadded(version string, major, minor, patch int) bool {
 	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
-	if len(parts) > 3 {
-		return false
-	}
 	nums := [3]int{}
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
+	for i := 0; i < len(parts) && i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
 		if err != nil {
 			return false
 		}
