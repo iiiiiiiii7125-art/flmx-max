@@ -31,7 +31,7 @@ node scripts/demo/check.mjs dist-demo   # CHROME=/path/to/chrome 指定浏览器
 
 新功能加了接口，失败信息会列出缺的路径：按上面的步骤重录，或者把新接口加进 `record_items.mjs`。新页面要加进 `check.mjs` 的页面列表。
 
-另两道对已入库 fixtures 的常设检查（发版门判读）：
+另两道对已入库 fixtures 的常设检查（发版门判读；BG-01/R2-026 起已接入常设自动面——`scripts/run-checks.mjs` 递归枚举含 demo 子目录，两道随前端 check 全集在 CI 每次运行，下面的命令仍可单独手工复跑）：
 
 ```bash
 node scripts/demo/check-shape-drift.mjs      # 声明形状：types.ts + api/index.ts 双源必填字段 × fixtures（R7X-007）

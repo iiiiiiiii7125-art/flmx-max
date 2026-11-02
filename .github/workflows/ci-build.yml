@@ -86,6 +86,25 @@ jobs:
           VITE_DEMO=true VITE_BASE=/flmx-max/demo/ pnpm exec vite build --outDir dist-demo
           CHROME="$(node -e "const { chromium } = require('playwright-core'); process.stdout.write(chromium.executablePath())")" node scripts/demo/check.mjs dist-demo
 
+  # BG-01 (R2-026): the timeout-budgets and private-ranges gates run in
+  # CI via check-doc-consistency.sh, but their mutation selftests were
+  # referenced only by the parent gates' comments — no execution point,
+  # so a gate that lost its teeth would fail silently. Wire both
+  # selftests here as direct runs, mirroring the agent-image pair in the
+  # frontend job. A dedicated job keeps the ~160s timeout-budgets
+  # selftest off the frontend job's critical path (it runs in parallel);
+  # both scripts need only bash + python3 on a bare checkout.
+  gate-selftests:
+    name: Gate Mutation Selftests (timeout budgets + private ranges)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run gate mutation selftests
+        run: |
+          bash scripts/check-private-ranges-selftest.sh
+          bash scripts/check-timeout-budgets-selftest.sh
+
   backend:
     name: Build Go Backend
     runs-on: ubuntu-latest
