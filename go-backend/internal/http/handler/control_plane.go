@@ -90,6 +90,28 @@ type diagnosisProgress struct {
 	Completed int `json:"completed"`
 	Success   int `json:"success"`
 	Failed    int `json:"failed"`
+	// Unverified 是 UDP 未验证项的单列计数（R6-L4-01）：未验证项
+	// 既不计成功也不计失败，成败聚合口径在 countDiagnosisResult
+	// 单点收口，流式/非流式/汇总三处共用。
+	Unverified int `json:"unverified,omitempty"`
+}
+
+// countDiagnosisResult 把一个结果项计入进度：Completed 恒 +1；
+// 未验证项（unverified=true）只进 Unverified 列、不参与成败；
+// 其余按 success 分成功/失败。全部诊断进度计数（runDiagnosis
+// WorkItems 的流式进度、summarizeDiagnosisProgress 的 done 汇总、
+// 转发流式 statusItems 前缀）必须经此单点，不得再各自按
+// success 二分——否则 UDP 项会被误计为失败（R6-L4-01）。
+func countDiagnosisResult(progress *diagnosisProgress, item map[string]interface{}) {
+	progress.Completed++
+	switch {
+	case asBool(item["unverified"], false):
+		progress.Unverified++
+	case asBool(item["success"], false):
+		progress.Success++
+	default:
+		progress.Failed++
+	}
 }
 
 type diagnosisItemEmitter func(index int, item map[string]interface{}, progress diagnosisProgress)
@@ -1741,12 +1763,7 @@ enqueueLoop:
 		if decorate := workItems[result.index].decorate; decorate != nil {
 			decorate(result.item)
 		}
-		progress.Completed++
-		if asBool(result.item["success"], false) {
-			progress.Success++
-		} else {
-			progress.Failed++
-		}
+		countDiagnosisResult(&progress, result.item)
 		if emitter != nil {
 			emitter(result.index, result.item, progress)
 		}
@@ -1832,6 +1849,21 @@ func (h *Handler) appendPathDiagnosis(results *[]map[string]interface{}, nodeCac
 		return
 	}
 
+	// R6-L4-01：UDP 探测不可实测（agent 只 Dial 不发包、无通用回声
+	// 协议），其 success/延迟/丢包都不是目标路径的测量值。本组装点
+	// 是全部手动诊断呈现面（目标腿/链腿/nft 协议集/联邦远端回传）
+	// 的唯一汇入口，在此单点把已执行 UDP 探测的结果收口为「未验证」
+	// 形态：agent 明确回 unverified 标记（新 agent）或回 success=true
+	// （老 agent 的 dial 成功）都收口；agent 回真实失败（DNS 解析
+	// 失败等探测前错误、success=false 且无标记）保持失败呈现——
+	// 那是与协议无关的目标错误，不是冒充实测。命令级失败
+	// （pingErr）同理保持失败（见上方分支）。
+	if isUDPBasedProtocol(protocol) && (asBool(pingData["unverified"], false) || asBool(pingData["success"], false)) {
+		markDiagnosisItemUnverified(item, protocol)
+		*results = append(*results, item)
+		return
+	}
+
 	success := asBool(pingData["success"], false)
 	item["success"] = success
 	item["averageTime"] = asFloat(pingData["averageTime"], 0)
@@ -1852,6 +1884,28 @@ func (h *Handler) appendPathDiagnosis(results *[]map[string]interface{}, nodeCac
 	}
 	item["message"] = message
 	*results = append(*results, item)
+}
+
+// diagnosisUDPUnverifiedMessage 是未验证项的规范文案（R6-L4-01）：
+// agent 契约、后端组装与前端呈现三层的「未验证」形态以此为准——
+// 未验证项 success=false 但不计成败、averageTime/packetLoss 为
+// null（未测），前端据 unverified 标记呈中性「未验证」托盘。
+const diagnosisUDPUnverifiedMessage = "UDP 无法实测连通性（无通用回声协议），本项未验证"
+
+// markDiagnosisItemUnverified 把一个已执行 UDP 探测的结果项收口
+// 为未验证形态（R6-L4-01 单点定义）：不得呈 success、不得携带
+// 伪造数值（延迟/丢包置 null）；链路段项的 metadata 原本不带
+// protocol，在此补上本腿协议以便呈现层区分（目标腿/nft 腿的
+// metadata 已带，不覆盖）。
+func markDiagnosisItemUnverified(item map[string]interface{}, protocol string) {
+	item["success"] = false
+	item["unverified"] = true
+	item["averageTime"] = nil
+	item["packetLoss"] = nil
+	item["message"] = diagnosisUDPUnverifiedMessage
+	if _, ok := item["protocol"]; !ok {
+		item["protocol"] = strings.ToLower(strings.TrimSpace(protocol))
+	}
 }
 
 func (h *Handler) appendChainHopDiagnosis(results *[]map[string]interface{}, nodeCache map[int64]*nodeRecord, fromNodeID int64, toNode chainNodeRecord, description string, metadata map[string]interface{}, ipPreference string, protocol string, options diagnosisExecOptions) {
@@ -2028,6 +2082,19 @@ func isUDPBasedProtocol(protocol string) bool {
 	return p == "kcp" || p == "udp" || p == "quic"
 }
 
+// chainSegmentProtocol 是段协议的统一判定口径：段行自身协议优先、
+// 为空回退隧道协议——与诊断 prepare 构造链腿工作项时的
+// defaultString(seg.Protocol, tunnel.Protocol) 逐字一致。质量探测
+// （tunnel_quality_prober）判定某段是否 UDP 协议段必须经此口径，
+// 不得另行只看段行字段（存量段行 protocol 可为空）。
+func chainSegmentProtocol(segmentProtocol, tunnelProtocol string) string {
+	p := strings.ToLower(strings.TrimSpace(segmentProtocol))
+	if p == "" {
+		p = strings.ToLower(strings.TrimSpace(tunnelProtocol))
+	}
+	return p
+}
+
 // nodeListenAddrForProtocol 按协议取节点的监听地址：UDP 族
 // （udp/kcp/quic）取 UDPListenAddr，其余取 TCPListenAddr。与
 // buildForwardServiceConfigs 的分取口径一致（F-UDP-6：链服务与联邦
@@ -2064,12 +2131,12 @@ func (h *Handler) udpPingViaNode(nodeID int64, ip string, port int, options diag
 	if options.pingTimeoutMS <= 0 {
 		options.pingTimeoutMS = int(diagnosisCommandTimeout / time.Millisecond)
 	}
-	res, err := h.sendNodeCommandWithTimeout(nodeID, "UdpPing", map[string]interface{}{
+	res, err := udpPingSend(h, nodeID, map[string]interface{}{
 		"ip":      ip,
 		"port":    port,
 		"count":   4,
 		"timeout": options.pingTimeoutMS,
-	}, options.commandTimeout, false, false)
+	}, options.commandTimeout)
 	if err != nil {
 		return nil, err
 	}

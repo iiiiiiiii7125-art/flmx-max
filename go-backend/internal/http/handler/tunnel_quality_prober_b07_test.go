@@ -121,7 +121,7 @@ func TestB07DeadExitNeverWinsBestExitSwitch(t *testing.T) {
 		30: {ID: 30, Status: 1, ServerIP: "10.0.0.30", ServerIPv4: "10.0.0.30", TCPListenAddr: "[::]"},
 		31: {ID: 31, Status: 1, ServerIP: "10.0.0.31", ServerIPv4: "10.0.0.31", TCPListenAddr: "[::]"},
 	}
-	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), p.pingNode)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), p.pingNode, "")
 	if len(scores) != 2 {
 		t.Fatalf("expected two scores, got %+v", scores)
 	}

@@ -88,6 +88,13 @@ var tcpPingSend = func(h *Handler, nodeID int64, data interface{}, timeout time.
 	return h.sendNodeCommandWithTimeout(nodeID, "TcpPing", data, timeout, false, false)
 }
 
+// udpPingSend is a variable so tests can stub the transport
+// (udpPingViaNode 的 UdpPing 命令发送面，与 tcpPingSend 对称；
+// R6-L4-01 的组装层测试经此桩注入 agent 报文形态）。
+var udpPingSend = func(h *Handler, nodeID int64, data interface{}, timeout time.Duration) (ws.CommandResult, error) {
+	return h.sendNodeCommandWithTimeout(nodeID, "UdpPing", data, timeout, false, false)
+}
+
 // sendTCPPing sends a TcpPing through the node's probe slot. Queueing and
 // execution share the timeout; a busy agent gets one retry inside whatever
 // budget remains.

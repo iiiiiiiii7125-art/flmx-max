@@ -629,10 +629,15 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
   return (
     <div className="flex min-w-max items-center py-2">
       {path.hops.map((hop, index) => {
+        // R6-L4-02：未测跳（UDP 协议段）的 -1/100 是未测哨兵而非
+        // 失败实测，走中性呈现，不染失败红、不报丢包。
+        const isUntested = hop.untested === true;
         const hasError =
-          Boolean(hop.errorMessage) || hop.latency < 0 || hop.loss > 0;
-        const colorClass =
-          hop.latency < 0 || hop.errorMessage
+          !isUntested &&
+          (Boolean(hop.errorMessage) || hop.latency < 0 || hop.loss > 0);
+        const colorClass = isUntested
+          ? "text-foreground"
+          : hop.latency < 0 || hop.errorMessage
             ? "text-danger-700"
             : hop.loss > 0
               ? "text-warning-700"
@@ -656,21 +661,27 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
               <span
                 className={`mb-1 text-[10px] font-semibold font-mono leading-none ${colorClass}`}
               >
-                {hop.latency >= 0 && !hop.errorMessage
-                  ? `${hop.latency.toFixed(0)}ms`
-                  : "超时"}
+                {isUntested
+                  ? "未测"
+                  : hop.latency >= 0 && !hop.errorMessage
+                    ? `${hop.latency.toFixed(0)}ms`
+                    : "超时"}
               </span>
               <div
-                className={`relative flex h-[2px] w-full items-center justify-end bg-default-200 ${hop.latency < 0 || hop.errorMessage ? "!bg-danger" : ""}`}
+                className={`relative flex h-[2px] w-full items-center justify-end bg-default-200 ${!isUntested && (hop.latency < 0 || hop.errorMessage) ? "!bg-danger" : ""}`}
               >
                 <ArrowRight
                   className={`absolute -right-2 z-10 h-3.5 w-3.5 rounded-full bg-background p-[1px] ${colorClass}`}
                 />
               </div>
               <span
-                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${hop.errorMessage || hop.loss > 0 ? "text-warning-700" : "text-foreground"}`}
+                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${!isUntested && (hop.errorMessage || hop.loss > 0) ? "text-warning-700" : "text-foreground"}`}
               >
-                {hop.errorMessage ? "探测失败" : `${hop.loss.toFixed(0)}% 丢包`}
+                {isUntested
+                  ? "UDP 未测"
+                  : hop.errorMessage
+                    ? "探测失败"
+                    : `${hop.loss.toFixed(0)}% 丢包`}
               </span>
             </div>
             <TopologyNodeChip

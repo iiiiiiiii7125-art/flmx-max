@@ -137,6 +137,11 @@ type TcpPingResponse struct {
 	PacketLoss   float64 `json:"packetLoss"`  // 连接失败率(%)
 	ErrorMessage string  `json:"errorMessage,omitempty"`
 	RequestId    string  `json:"requestId,omitempty"`
+	// Unverified 仅 UdpPing 使用（R6-L4-01）：UDP 无通用回声协议、
+	// 不可实测，拨号「成功」不构成连通性结论——置此标记且
+	// Success=false、AverageTime/PacketLoss 不回测量值，面板组装
+	// 层据此（或据老 agent 的 success=true）收口为未验证形态。
+	Unverified bool `json:"unverified,omitempty"`
 }
 
 // ServiceMonitorCheckRequest service monitor check request.
@@ -3499,14 +3504,25 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 	if err != nil {
 		response.Success = false
 		response.ErrorMessage = err.Error()
-	} else {
-		response.Success = true
+		// RM-VERIFY S5 观察②（UDP 腿同形态）：udpPingHost 失败时同样
+		// 返回实测 packetLoss=100，错误分支不得丢弃，理由同 handleTcpPing。
+		// 此类失败是探测前错误（DNS 解析失败/落点被拒/本地拨号错误），
+		// 与协议无关、是真实失败，不在未验证豁免内。
+		response.AverageTime = avgTime
+		response.PacketLoss = packetLoss
+		return response, nil
 	}
-	// RM-VERIFY S5 观察②（UDP 腿同形态）：udpPingHost 失败时同样
-	// 返回实测 packetLoss=100，错误分支不得丢弃，理由同 handleTcpPing。
-	// 注：此处只修组装回传，UDP 探测语义（只 Dial 不发包）不在本簇范围。
-	response.AverageTime = avgTime
-	response.PacketLoss = packetLoss
+
+	// R6-L4-01：udpPingHost 只 Dial 不发包（UDP 无通用回声协议），
+	// 其「成功」只说明本机能建 UDP socket，averageTime 是本地系统
+	// 调用耗时、packetLoss 恒 0——都不是目标路径的测量值，旧实现
+	// 将其作为 success+实测数值回传，面板呈现为「0ms/0% 优秀」，
+	// 与目标真实状态无关（死目标同呈成功）。自本版起：拨号无错
+	// 只用于区分「探测前失败」（上方分支）与「不可验证」，数值
+	// 一律不回，改回未验证标记，由面板组装层收口呈现。
+	response.Success = false
+	response.Unverified = true
+	response.ErrorMessage = "UDP 无通用回声协议，无法实测连通性"
 
 	return response, nil
 }

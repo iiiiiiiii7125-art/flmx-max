@@ -195,14 +195,21 @@ export interface TunnelDiagnosisApiItem {
   success: boolean;
   /** 流式诊断的起始帧标记（control_plane 起始项），页面本地类型早已自备（F-144）。 */
   diagnosing?: boolean;
+  /**
+   * UDP 未验证标记（R6-L4-01）：UDP 无通用回声协议、不可实测，后端
+   * 对 UDP 探测项恒以此形态回传——success=false 但不计成败，延迟/
+   * 丢包为 null（未测），呈现层须走中性「未验证」形态。
+   */
+  unverified?: boolean;
+  protocol?: string;
   description: string;
   nodeName: string;
   nodeId: string;
   targetIp: string;
   targetPort?: number;
   message?: string;
-  averageTime?: number;
-  packetLoss?: number;
+  averageTime?: number | null;
+  packetLoss?: number | null;
   fromChainType?: number;
   fromInx?: number;
   toChainType?: number;
@@ -672,6 +679,11 @@ export interface TunnelQualityHopApiItem {
   loss: number;
   targetIp?: string;
   targetPort?: number;
+  /**
+   * 未测标记（R6-L4-02）：UDP 协议段不可实测，latency/loss 为
+   * -1/100 未测哨兵而非失败实测，呈现层须走中性「未测」形态。
+   */
+  untested?: boolean;
 }
 
 export interface TunnelQualityCandidateHopApiItem
