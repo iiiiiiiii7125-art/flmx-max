@@ -32,17 +32,43 @@ func resumePayload(n int) []byte {
 	return p
 }
 
+// countingWriter counts bytes inside Write, i.e. ahead of
+// anything the client can observe. The previous shape — the
+// handler goroutine Add()ing to the counter after Write returns —
+// raced the client: a transfer can complete and the test can read
+// the counter before the handler goroutine is scheduled again,
+// yielding "last leg served 0 bytes" flakes on loaded runners
+// (observed in the R-INT integration run and the 1.9.2 CI run).
+type countingWriter struct {
+	http.ResponseWriter
+	served *atomic.Int64
+}
+
+func (cw countingWriter) Write(p []byte) (int, error) {
+	n, err := cw.ResponseWriter.Write(p)
+	if n > 0 {
+		cw.served.Add(int64(n))
+	}
+	return n, err
+}
+
+func (cw countingWriter) Flush() {
+	if fl, ok := cw.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
+}
+
 // dropBodyServer declares the full length, writes the first
 // dropAfter bytes, then returns (connection closes mid-body).
 func dropBodyServer(payload []byte, dropAfter int, served *atomic.Int64) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w = countingWriter{ResponseWriter: w, served: served}
 		w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		part := payload[:dropAfter]
 		if _, err := w.Write(part); err != nil {
 			return
 		}
-		served.Add(int64(len(part)))
 		if fl, ok := w.(http.Flusher); ok {
 			fl.Flush()
 		}
@@ -53,6 +79,7 @@ func dropBodyServer(payload []byte, dropAfter int, served *atomic.Int64) *httpte
 // Content-Range; without a Range header it serves the full body.
 func rangeCapableServer(payload []byte, served *atomic.Int64) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w = countingWriter{ResponseWriter: w, served: served}
 		start := 0
 		if rh := r.Header.Get("Range"); strings.HasPrefix(rh, "bytes=") {
 			if n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(rh, "bytes="), "-")); err == nil {
@@ -67,11 +94,7 @@ func rangeCapableServer(payload []byte, served *atomic.Int64) *httptest.Server {
 			w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
 			w.WriteHeader(http.StatusOK)
 		}
-		body := payload[start:]
-		if _, err := w.Write(body); err != nil {
-			return
-		}
-		served.Add(int64(len(body)))
+		_, _ = w.Write(payload[start:])
 	}))
 }
 
@@ -79,12 +102,10 @@ func rangeCapableServer(payload []byte, served *atomic.Int64) *httptest.Server {
 // any Range header (a mirror that cannot resume).
 func noRangeServer(payload []byte, served *atomic.Int64) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w = countingWriter{ResponseWriter: w, served: served}
 		w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(payload); err != nil {
-			return
-		}
-		served.Add(int64(len(payload)))
+		_, _ = w.Write(payload)
 	}))
 }
 
