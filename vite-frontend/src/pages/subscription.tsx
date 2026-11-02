@@ -409,7 +409,7 @@ function ChainRoleButtons({
                 : r === "relay"
                   ? "border-secondary-500/40 bg-secondary-500/10 text-secondary-700"
                   : "border-divider panel-inset text-foreground"
-              : "border-default-200 text-foreground hover:border-default-400 dark:border-default-100"
+              : "border-default-200 text-foreground hover:border-default-400"
           }`}
           type="button"
           onClick={() => onChange(r)}
@@ -1092,7 +1092,7 @@ function Editor({
             />
           </div>
           {(o.chainLanding || o.chainRelay) && (
-            <p className="rounded-xl bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700 dark:bg-warning-900">
+            <p className="rounded-xl bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700">
               现在用的是上面的关键词方式。在下面按来源设置角色后会改用按来源设置，关键词会被清空
             </p>
           )}

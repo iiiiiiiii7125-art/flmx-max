@@ -106,23 +106,23 @@ const KINDS: Record<
 
 const TONES = {
   blue: [
-    "bg-primary-100 dark:bg-primary-900",
-    "text-blue-600 dark:text-blue-400",
+    "bg-primary-100",
+    "text-blue-600",
     "bg-primary-500",
   ],
   green: [
-    "bg-green-100 dark:bg-green-900",
-    "text-green-600 dark:text-green-400",
+    "bg-green-100",
+    "text-green-600",
     "bg-green-500",
   ],
   purple: [
-    "bg-secondary-100 dark:bg-secondary-900",
-    "text-purple-600 dark:text-purple-400",
+    "bg-secondary-100",
+    "text-purple-600",
     "bg-secondary-500",
   ],
   orange: [
-    "bg-orange-100 dark:bg-orange-900",
-    "text-orange-600 dark:text-orange-400",
+    "bg-orange-100",
+    "text-orange-600",
     "bg-orange-500",
   ],
 } as const;
@@ -603,7 +603,7 @@ export function AdminOverview() {
                   数据加载失败，暂时无法判断
                 </p>
               ) : (
-                <p className="py-3 text-center text-sm text-success-700 dark:text-success-400">
+                <p className="py-3 text-center text-sm text-success-700">
                   一切正常
                 </p>
               )
@@ -781,7 +781,7 @@ export function AdminOverview() {
                       onClick={() => navigate(e.path)}
                     >
                       <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${e.kind === "节点" ? "tray-warning" : "bg-orange-500/10 text-orange-700 dark:bg-orange-900 dark:text-orange-300"}`}
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${e.kind === "节点" ? "tray-warning" : "bg-orange-500/10 text-orange-700"}`}
                       >
                         {e.kind}
                       </span>

@@ -340,7 +340,7 @@ export default function LimitPage({
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 dark:bg-indigo-950 dark:text-indigo-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20"
                           size="sm"
                           variant="flat"
                           onPress={() => handleEdit(rule)}
@@ -348,7 +348,7 @@ export default function LimitPage({
                           编辑
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 dark:bg-rose-950 dark:text-rose-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20"
                           size="sm"
                           variant="flat"
                           onPress={() => handleDelete(rule)}

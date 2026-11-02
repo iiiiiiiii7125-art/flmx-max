@@ -1175,13 +1175,13 @@ export default function ConfigPage() {
     return (
       <div className="mt-3 rounded-lg border border-divider panel-inset p-3">
         <p className="text-xs font-semibold text-foreground">实时预览</p>
-        <div className="mt-2 rounded-md border border-default-200 dark:border-default-100/30 bg-white dark:bg-black px-3 py-2">
+        <div className="mt-2 rounded-md border border-default-200 bg-white px-3 py-2">
           {key === "app_logo" ? (
             <div className="flex h-10 items-center gap-2">
               {showImage ? (
                 <img
                   alt="logo preview"
-                  className="h-7 w-7 rounded-sm border border-default-200 object-cover dark:border-default-100/30"
+                  className="h-7 w-7 rounded-sm border border-default-200 object-cover"
                   src={previewUrl}
                   onError={() =>
                     setPreviewLoadFailed((prev) => ({ ...prev, [key]: true }))
@@ -1191,7 +1191,7 @@ export default function ConfigPage() {
                   }
                 />
               ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-sm bg-default-200 text-[10px] font-semibold text-foreground dark:bg-default-700 dark:text-default-200">
+                <div className="flex h-7 w-7 items-center justify-center rounded-sm bg-default-200 text-[10px] font-semibold text-foreground">
                   LOGO
                 </div>
               )}
@@ -1214,7 +1214,7 @@ export default function ConfigPage() {
                   }
                 />
               ) : (
-                <div className="h-4 w-4 rounded-sm bg-default-300 dark:bg-default-600" />
+                <div className="h-4 w-4 rounded-sm bg-default-300" />
               )}
               <span className="truncate text-xs font-semibold text-default-700">
                 {appNamePreview}
@@ -1257,7 +1257,7 @@ export default function ConfigPage() {
         className={`rounded-lg border p-3 ${
           isChanged
             ? "border-warning-300"
-            : "border-default-200 dark:border-default-100/30"
+            : "border-default-200"
         }`}
       >
         <input
@@ -1718,7 +1718,7 @@ export default function ConfigPage() {
                   <span
                     className={`font-medium ${
                       isSelected
-                        ? "text-default-900 dark:text-default-100"
+                        ? "text-default-900"
                         : "text-default-700"
                     }`}
                   >
@@ -2125,7 +2125,7 @@ export default function ConfigPage() {
 
       {hasChanges && (
         <Card className="mt-4 border-warning-200 shadow-sm overflow-hidden [&>div]:bg-warning-500/10">
-          <div className="h-10 flex items-center justify-center gap-2 text-warning-700 dark:text-warning-300">
+          <div className="h-10 flex items-center justify-center gap-2 text-warning-700">
             <div className="w-2 h-2 bg-warning-500 rounded-full animate-pulse flex-shrink-0" />
             <span className="text-sm font-semibold leading-none">
               检测到配置变更，请记得保存您的修改
@@ -2387,7 +2387,7 @@ export default function ConfigPage() {
             <div className="space-y-3 text-sm text-default-700">
               <p>
                 即将导入文件
-                <span className="font-medium text-default-900 dark:text-default-100">
+                <span className="font-medium text-default-900">
                   {" "}
                   {pendingImport?.fileName || ""}{" "}
                 </span>
@@ -2446,7 +2446,7 @@ export default function ConfigPage() {
               <ModalBody>
                 <div className="space-y-3 text-sm text-default-700">
                   {/* P3-1：回显本次升级的目标版本，避免点了确认还不知道装到哪一版 */}
-                  <p className="font-medium text-default-900 dark:text-default-100">
+                  <p className="font-medium text-default-900">
                     {systemUpgradeSelectedVersion
                       ? `本次将升级到指定版本 ${systemUpgradeSelectedVersion}`
                       : systemUpgradeInfo?.latestVersion

@@ -401,7 +401,7 @@ export function Select<T>({
         <select
           aria-label={label ? undefined : ariaLabel}
           className={cn(
-            "w-full rounded-lg border border-input bg-content1 px-3 py-2 text-foreground transition-colors duration-150 ease-refined focus:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:[color-scheme:dark]",
+            "w-full rounded-lg border border-input bg-content1 px-3 py-2 text-foreground transition-colors duration-150 ease-refined focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             sizeClass(size),
             classNames?.trigger,
             className,

@@ -27,7 +27,7 @@ const ROUTES: Record<string, [string, string]> = {
   "电信 163": ["163", "bg-tray text-foreground"],
   "联通 9929": [
     "9929",
-    "bg-violet-500/15 text-violet-700 dark:text-violet-400",
+    "bg-violet-500/15 text-violet-700",
   ],
   "联通 4837": [
     "4837",

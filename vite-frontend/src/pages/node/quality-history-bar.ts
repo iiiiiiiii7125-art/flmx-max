@@ -8,7 +8,7 @@ export interface QualityHistoryBarStyle {
 }
 
 const QUALITY_BAR_NO_DATA: QualityHistoryBarStyle = {
-  colorClass: "bg-default-200 dark:bg-default-100/50",
+  colorClass: "bg-default-200",
   statusText: "无数据",
 };
 

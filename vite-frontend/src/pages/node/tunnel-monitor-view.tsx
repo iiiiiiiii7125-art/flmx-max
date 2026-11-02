@@ -182,7 +182,7 @@ function UptimeHistoryBar({
             return (
               <div
                 key={idx}
-                className="w-1.5 h-4 rounded-full bg-default-200 dark:bg-default-100"
+                className="w-1.5 h-4 rounded-full bg-default-200"
                 title="暂无数据"
               />
             );

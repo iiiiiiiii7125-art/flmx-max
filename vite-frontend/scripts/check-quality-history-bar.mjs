@@ -116,7 +116,7 @@ if (typeof classifyQualityHistoryBar === "function") {
   });
   delete type1OK.errorMessage;
   expectBar("③未测段无错误 → 中性无数据", type1OK, "entryToExit",
-    "bg-default-200 dark:bg-default-100/50", "无数据");
+    "bg-default-200", "无数据");
   expectBar("③实测段 → 优秀", type1OK, "exitToBing", "bg-success", "优秀");
 
   // ④ 整轮前置失败：两段皆哨兵 + 行错误。

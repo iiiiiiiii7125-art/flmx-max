@@ -245,7 +245,7 @@ const NodeCardContent = memo(function NodeCardContent({
                 </h3>
                 <div
                   className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0
-                  ${connectionStatusMeta.color === "success" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300"}
+                  ${connectionStatusMeta.color === "success" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}
                 `}
                   title={connectionStatusMeta.text}
                 >
@@ -292,7 +292,7 @@ const NodeCardContent = memo(function NodeCardContent({
                     />
                   </svg>
                   {hasRemark && (
-                    <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5 rounded-full border border-background bg-default-300 shadow-sm dark:bg-default-500" />
+                    <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5 rounded-full border border-background bg-default-300 shadow-sm" />
                   )}
                 </button>
                 <div

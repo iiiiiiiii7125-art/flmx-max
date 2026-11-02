@@ -560,7 +560,7 @@ export function InboundFormModal({
 
                 {form.nodeId && !installedKernel && (
                   <div className="flex items-center justify-between gap-3 rounded-xl bg-warning-500/10 px-3 py-2 text-sm font-medium">
-                    <span className="text-warning-700 dark:text-warning-400">
+                    <span className="text-warning-700">
                       该节点还没有安装 {kernelInfo?.name ?? form.kernelType}
                     </span>
                     <Button
