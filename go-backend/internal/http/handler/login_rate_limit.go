@@ -126,15 +126,27 @@ const tightenedIPRateLimitWindow = 30 * time.Minute
 // 最早者（全部条目窗口同长，到期序即写入序，等价 LRU 最旧）。
 const tightenedLoginMaxEntries = 10000
 
+// allow 是登录面的入口：键必须为纯 IP（rateLimitKeyForRequest
+// 口径），因为紧缩判定按纯 IP 键查 tightenedLoginIPs。非纯 IP 键
+// 或自有上限的限流器不得走此入口——紧缩集只存纯 IP 键，复合键
+// 查紧缩永不命中（R7-L8-02 指出的口径分叉），且登录信号触发的
+// 紧缩也不应外溢到其他面；这类限流器走 allowWithLimit 并自带
+// 上限，两条路径的差异在此钉死，不再靠调用方默契。
 func (l *loginRateLimiter) allow(key string, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	// R5-B5 D11-D13: 紧缩 IP 用更严格的阈值。
 	maxAttempts := loginRateLimitMaxAttempts
 	if isIPTightened(key) {
 		maxAttempts = tightenedLoginMaxAttempts
 	}
+	return l.allowWithLimit(key, now, maxAttempts)
+}
+
+// allowWithLimit 是与紧缩机制解耦的桶判定：只按调用方给定的
+// 上限计数，不查紧缩集。供键非纯 IP（如 sub_store 的 IP+用户
+// 名复合键）或上限独立于登录口径的限流器使用。
+func (l *loginRateLimiter) allowWithLimit(key string, now time.Time, maxAttempts int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	b, ok := l.buckets[key]
 	if !ok {

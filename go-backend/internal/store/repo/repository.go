@@ -1266,8 +1266,13 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"status": n.Status, "isRemote": n.IsRemote,
 			"forwardMode":             defaultNodeForwardMode(n.ForwardMode),
 			"remoteUrl":               nullableString(n.RemoteURL),
-			"remoteToken":             nullableString(n.RemoteToken),
-			"remoteConfig":            nullableString(n.RemoteConfig),
+			// R7-L8/F2-01：remoteToken 是联邦凭据，不得随节点列表
+			// DTO 下发（前端零消费，仅类型声明）。远端状态同步改经
+			// repo.ListRemoteNodes 在服务端内部取用（见 handler 的
+			// syncRemoteNodeStatuses），不借道列表 DTO。
+			// 全集复扫同族：remoteConfig 同为零消费（前端仅类型声
+			// 明、后端只走 DB 模型），且其 JSON 内嵌 D3-04 relay
+			// 凭据（relayUsername/relayPassword），一并删除下发。
 			"expiryReminderDismissed": n.ExpiryReminderDismissed,
 			"interfaceName":           nullableString(n.InterfaceName),
 			"sshConfig":               sshConfigByNodeID[n.ID],

@@ -27,6 +27,7 @@ func newSubStoreTestHandler(t *testing.T) *Handler {
 
 func resetSubStoreLimiterForTest() {
 	subStoreLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
+	subStoreIPAggregateLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
 }
 
 func decodeEnvelopeCode(t *testing.T, body []byte) int {
