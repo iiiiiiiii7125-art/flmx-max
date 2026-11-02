@@ -26,7 +26,6 @@ export function RollbackNodeModal({
 }: RollbackNodeModalProps) {
   return (
     <Modal
-      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -87,7 +86,6 @@ export function DeleteNodeModal({
 }: DeleteNodeModalProps) {
   return (
     <Modal
-      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -159,7 +157,6 @@ export function BatchDeleteNodesModal({
 }: BatchDeleteNodesModalProps) {
   return (
     <Modal
-      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}

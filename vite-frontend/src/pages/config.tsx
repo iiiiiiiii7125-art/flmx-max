@@ -1156,7 +1156,7 @@ export default function ConfigPage() {
     const showImage = previewUrl.length > 0 && !failed;
 
     return (
-      <div className="mt-3 rounded-lg border border-divider glass-inset p-3">
+      <div className="mt-3 rounded-lg border border-divider panel-inset p-3">
         <p className="text-xs font-semibold text-foreground">实时预览</p>
         <div className="mt-2 rounded-md border border-default-200 dark:border-default-100/30 bg-white dark:bg-black px-3 py-2">
           {key === "app_logo" ? (
@@ -1183,7 +1183,7 @@ export default function ConfigPage() {
               </span>
             </div>
           ) : (
-            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-divider glass-inset px-2">
+            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-divider panel-inset px-2">
               {showImage ? (
                 <img
                   alt="favicon preview"
@@ -1684,7 +1684,7 @@ export default function ConfigPage() {
                 className={`w-full px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer text-left ${
                   isSelected
                     ? "bg-primary-500/10 border-primary-300 shadow-sm"
-                    : "glass-card border-default-200 hover:border-primary-300 hover:shadow-sm"
+                    : "panel-card border-default-200 hover:border-primary-300"
                 }`}
                 type="button"
                 onClick={() => toggleTypeSelection(option.value, setTypes)}
@@ -1848,14 +1848,14 @@ export default function ConfigPage() {
                 当前后端数据库文件或实例占用空间，仅用于容量参考。
               </p>
             </div>
-            <div className="rounded-lg border border-divider glass-inset px-4 py-3 text-sm font-semibold text-default-800">
+            <div className="rounded-lg border border-divider panel-inset px-4 py-3 text-sm font-semibold text-default-800">
               {storageSummary}
             </div>
           </div>
 
           <Divider className="my-2" />
 
-          <div className="glass-card space-y-4 rounded-xl p-4">
+          <div className="panel-card space-y-4 rounded-xl p-4">
             <div className="space-y-1">
               <p className="text-sm font-medium text-foreground">面板自升级</p>
               <p className="text-xs font-semibold text-foreground">
@@ -1864,12 +1864,12 @@ export default function ConfigPage() {
             </div>
 
             {systemUpgradeLoading ? (
-              <div className="flex items-center gap-2 rounded-lg border border-divider glass-inset px-4 py-3 text-sm text-foreground">
+              <div className="flex items-center gap-2 rounded-lg border border-divider panel-inset px-4 py-3 text-sm text-foreground">
                 <Spinner size="sm" />
                 正在加载升级状态...
               </div>
             ) : (
-              <div className="space-y-4 rounded-lg border border-divider glass-inset px-4 py-4 text-sm text-foreground">
+              <div className="space-y-4 rounded-lg border border-divider panel-inset px-4 py-4 text-sm text-foreground">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <p className="text-xs font-semibold text-foreground">当前版本</p>
@@ -2282,7 +2282,6 @@ export default function ConfigPage() {
       </Card>
 
       <Modal
-        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -2314,7 +2313,6 @@ export default function ConfigPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -2346,7 +2344,6 @@ export default function ConfigPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -2405,7 +2402,6 @@ export default function ConfigPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}

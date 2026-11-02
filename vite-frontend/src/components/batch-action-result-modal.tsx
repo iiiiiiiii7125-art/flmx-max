@@ -111,7 +111,7 @@ export function BatchActionResultModal({
                         失败
                       </Chip>
                     </summary>
-                    <div className="mt-3 rounded-lg glass-inset p-3 text-sm leading-6 text-foreground">
+                    <div className="mt-3 rounded-lg panel-inset p-3 text-sm leading-6 text-foreground">
                       {getFailureReason(failure)}
                     </div>
                   </details>

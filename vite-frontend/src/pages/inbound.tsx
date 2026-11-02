@@ -653,7 +653,7 @@ export default function InboundPage() {
           className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
             selected
               ? "border-primary bg-primary-500/10"
-              : "glass-card hover:bg-white/40"
+              : "panel-card hover:bg-default-100"
           }`}
           role="button"
           tabIndex={0}
@@ -781,10 +781,10 @@ export default function InboundPage() {
           </div>
           {!item.external && (
             <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs font-semibold">
-              <div className="rounded-lg glass-inset py-1.5">
+              <div className="rounded-lg panel-inset py-1.5">
                 ↑ {formatTraffic(item.uploadBytes)}
               </div>
-              <div className="rounded-lg glass-inset py-1.5">
+              <div className="rounded-lg panel-inset py-1.5">
                 ↓ {formatTraffic(item.downloadBytes)}
               </div>
             </div>
@@ -831,7 +831,7 @@ export default function InboundPage() {
         className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
           selected
             ? "border-primary bg-primary-500/10"
-            : "glass-card hover:bg-white/40"
+            : "panel-card hover:bg-default-100"
         }`}
         role="button"
         tabIndex={0}
@@ -1102,7 +1102,7 @@ export default function InboundPage() {
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <div className="glass-surface mb-4 grid grid-cols-3 gap-1 rounded-xl p-1 sm:max-w-md">
+      <div className="panel-surface mb-4 grid grid-cols-3 gap-1 rounded-xl p-1 sm:max-w-md">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -1216,7 +1216,7 @@ export default function InboundPage() {
           </div>
 
           {selectMode && (
-            <div className="glass-surface sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2">
+            <div className="panel-surface sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2">
               <span className="text-sm text-foreground">
                 已选 {selectedIds.size} 个
               </span>
@@ -1587,7 +1587,6 @@ export default function InboundPage() {
       />
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(details)}
         placement="center"
@@ -1644,7 +1643,6 @@ export default function InboundPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(confirm)}
         placement="center"
@@ -1695,7 +1693,6 @@ export default function InboundPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={batchDeleteOpen}
         placement="center"

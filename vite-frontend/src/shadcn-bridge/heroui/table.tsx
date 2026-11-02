@@ -37,7 +37,7 @@ export function Table({
     >
       <div
         className={cn(
-          "glass-card w-full overflow-auto rounded-xl",
+          "panel-card w-full overflow-auto rounded-xl",
           classNames?.wrapper,
         )}
       >
@@ -205,7 +205,7 @@ export const TableRow = React.forwardRef<
     <tr
       ref={ref}
       className={cn(
-        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-white/40",
+        "border-b transition-colors duration-150 ease-refined last:border-b-0 hover:bg-default-100",
         trClassName,
         className,
       )}

@@ -43,7 +43,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0 rounded-xl glass-card px-3 py-2">
+      <div className="min-w-0 rounded-xl panel-card px-3 py-2">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && (
           <p className="mt-0.5 text-xs font-semibold text-foreground">
@@ -96,7 +96,7 @@ export function PageTabs<T extends string>({
 }) {
   return (
     <div
-      className="glass-surface mb-4 grid gap-1 rounded-xl p-1 sm:max-w-md"
+      className="panel-surface mb-4 grid gap-1 rounded-xl p-1 sm:max-w-md"
       role="tablist"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
     >
@@ -229,7 +229,7 @@ export function SelectionBar({
   onExit: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl glass-surface px-3 py-2 shadow-sm">
+    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl panel-surface px-3 py-2 shadow-sm">
       <span className="text-sm font-semibold text-foreground">
         已选 {count} 个
       </span>
@@ -339,8 +339,8 @@ export function ListRow({
         footer && !selectMode ? "flex-col" : "items-center"
       } ${
         selected
-          ? "glass-card border-primary bg-primary-500/10"
-          : "glass-card hover:bg-white/40"
+          ? "panel-card border-primary bg-primary-500/10"
+          : "panel-card hover:bg-default-100"
       }`}
       role="button"
       tabIndex={0}
@@ -377,7 +377,7 @@ export function ListGroup({
   return (
     <section className="space-y-2">
       {title && (
-        <h2 className="flex w-fit items-baseline gap-2 rounded-lg glass-surface px-2.5 py-1 text-sm font-semibold">
+        <h2 className="flex w-fit items-baseline gap-2 rounded-lg panel-surface px-2.5 py-1 text-sm font-semibold">
           {title}
           {count !== undefined && (
             <span className="text-xs font-semibold text-foreground">
@@ -399,7 +399,7 @@ export function EmptyHint({
   action?: PageAction;
 }) {
   return (
-    <div className="glass-card flex flex-col items-center gap-3 rounded-xl border-dashed px-4 py-8 text-center text-sm text-foreground">
+    <div className="panel-card flex flex-col items-center gap-3 rounded-xl border-dashed px-4 py-8 text-center text-sm text-foreground">
       <p>{text}</p>
       {action && (
         <Button

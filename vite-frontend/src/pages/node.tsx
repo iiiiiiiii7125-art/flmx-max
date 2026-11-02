@@ -2107,7 +2107,7 @@ export default function NodePage({
                                   <div className="group/info relative">
                                     <button
                                       aria-label={`查看节点信息，共 ${infoCount} 项`}
-                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 glass-inset text-foreground shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
+                                      className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 panel-inset text-foreground shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
                                       type="button"
                                       onFocus={(event) =>
                                         updateInfoPopoverPlacement(
@@ -2141,7 +2141,7 @@ export default function NodePage({
                                       )}
                                     </button>
                                     <div
-                                      className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl glass-surface p-3 opacity-0 shadow-lg transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
+                                      className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl panel-surface p-3 opacity-0 shadow-lg transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
                                         infoPlacement === "bottom"
                                           ? "right-0 top-[calc(100%+0.75rem)] translate-y-1 group-hover/info:translate-y-0 group-focus-within/info:translate-y-0"
                                           : "right-[calc(100%+0.75rem)] top-1/2 -translate-y-1/2 translate-x-1 group-hover/info:translate-x-0 group-focus-within/info:translate-x-0"
@@ -2178,7 +2178,7 @@ export default function NodePage({
                                                 {expiryMeta.label}
                                               </Chip>
                                             </div>
-                                            <div className="rounded-lg border border-divider/80 glass-inset px-3 py-2 text-xs font-semibold leading-5 text-default-700">
+                                            <div className="rounded-lg border border-divider/80 panel-inset px-3 py-2 text-xs font-semibold leading-5 text-default-700">
                                               {formatNodeRenewalTime(
                                                 expiryMeta.nextDueTime,
                                               )}
@@ -2192,7 +2192,7 @@ export default function NodePage({
                                               备注
                                             </div>
                                             <div
-                                              className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 glass-inset px-3 py-2 text-xs font-semibold leading-5 text-default-700 break-all [scrollbar-width:thin]"
+                                              className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 panel-inset px-3 py-2 text-xs font-semibold leading-5 text-default-700 break-all [scrollbar-width:thin]"
                                               title={node.remark?.trim()}
                                             >
                                               {node.remark?.trim()}
@@ -2309,7 +2309,7 @@ export default function NodePage({
                               <div className="space-y-3 mb-4">
                                 {remoteUsage ? (
                                   <>
-                                    <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5 space-y-2">
+                                    <div className="text-xs font-semibold rounded-md border border-divider panel-inset p-2.5 space-y-2">
                                       <div className="flex justify-between gap-2">
                                         <span className="text-foreground">
                                           远程地址
@@ -2357,7 +2357,7 @@ export default function NodePage({
                                       </div>
                                     </div>
 
-                                    <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5">
+                                    <div className="text-xs font-semibold rounded-md border border-divider panel-inset p-2.5">
                                       <div className="flex items-center justify-between mb-2">
                                         <span className="text-foreground">
                                           占用端口
@@ -2372,7 +2372,7 @@ export default function NodePage({
                                           )}
                                         </span>
                                       </div>
-                                      <div className="max-h-20 overflow-y-auto rounded glass-inset p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
+                                      <div className="max-h-20 overflow-y-auto rounded panel-inset p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
                                         {remoteUsage.usedPorts.length > 0 ? (
                                           <div className="flex flex-wrap gap-1">
                                             {remoteUsage.usedPorts.map(
@@ -2396,7 +2396,7 @@ export default function NodePage({
                                       </div>
                                     </div>
 
-                                    <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5">
+                                    <div className="text-xs font-semibold rounded-md border border-divider panel-inset p-2.5">
                                       <div className="flex items-center justify-between mb-2">
                                         <span className="text-foreground">
                                           绑定明细
@@ -2411,7 +2411,7 @@ export default function NodePage({
                                             (binding) => (
                                               <div
                                                 key={binding.bindingId}
-                                                className="rounded border border-default-200 glass-inset p-2"
+                                                className="rounded border border-default-200 panel-inset p-2"
                                               >
                                                 <div className="flex items-center justify-between gap-2">
                                                   <span
@@ -2447,7 +2447,7 @@ export default function NodePage({
                                     </div>
                                   </>
                                 ) : (
-                                  <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5 text-foreground">
+                                  <div className="text-xs font-semibold rounded-md border border-divider panel-inset p-2.5 text-foreground">
                                     暂未获取到远程占用数据
                                   </div>
                                 )}

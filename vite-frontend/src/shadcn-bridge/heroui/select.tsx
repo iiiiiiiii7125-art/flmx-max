@@ -298,7 +298,7 @@ export function Select<T>({
       <div
         ref={listboxRef}
         className={cn(
-          "glass-surface absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
+          "panel-surface absolute left-0 z-50 w-full space-y-1 overflow-y-auto rounded-xl p-2 shadow-lg max-h-56 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
           placementClasses,
         )}
         id={`${generatedId}-listbox`}
@@ -319,7 +319,7 @@ export function Select<T>({
                   "flex items-center gap-2 rounded-md px-2 py-1.5",
                   optionDisabled
                     ? "cursor-not-allowed opacity-60"
-                    : "hover:bg-white/40",
+                    : "hover:bg-default-100",
                 )}
               >
                 <BaseCheckbox

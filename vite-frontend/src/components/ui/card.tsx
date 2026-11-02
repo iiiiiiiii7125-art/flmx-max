@@ -11,14 +11,12 @@ function Card({
   return (
     <div
       className={cn(
-        "relative flex flex-col transition-[transform,box-shadow] duration-200 ease-refined hover:-translate-y-px hover:shadow-md",
-        // Round 5 (user anchor: the kernel page's node cards): a card is
-        // ONE clear-glass surface and its content sits directly on the
-        // glass — no opaque tray plate under card interiors. Readability
-        // comes from paired foreground colors on the glass (dark text in
-        // light mode, light text in dark mode); solid trays survive only
-        // on small elements (pills, chips, badges, primary buttons).
-        "glass-card rounded-2xl text-card-foreground shadow-sm",
+        "relative flex flex-col",
+        // Flat panel card (2026-11-03): ONE opaque surface, content sits
+        // directly on it; shape comes from the 1px divider border alone -
+        // no shadow, no hover lift. Solid trays survive only on small
+        // elements (pills, chips, badges, primary buttons).
+        "panel-card rounded-lg text-card-foreground",
         className,
       )}
       data-slot="card"

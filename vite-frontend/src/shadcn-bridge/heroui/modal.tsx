@@ -110,7 +110,10 @@ function mapSize(size: ModalSize | undefined) {
 }
 
 export interface ModalProps {
-  backdrop?: "blur" | "opaque" | "transparent";
+  // The flat-surface recipe has no blurred backdrop; the bridge never
+  // rendered one distinctly (the overlay is a plain dim layer), and the
+  // "blur" value was removed so call sites cannot ask for it back.
+  backdrop?: "opaque" | "transparent";
   children: React.ReactNode;
   className?: string;
   classNames?: Record<string, string>;

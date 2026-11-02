@@ -155,7 +155,7 @@ function Metric({
 
   return (
     <button
-      className="glass-card rounded-2xl p-4 text-left shadow-sm transition-shadow hover:shadow-md lg:p-5"
+      className="panel-card rounded-2xl p-4 text-left shadow-sm transition-shadow lg:p-5"
       type="button"
       onClick={onPress}
     >
@@ -217,7 +217,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="glass-card rounded-2xl p-4 shadow-sm lg:p-5">
+    <section className="panel-card rounded-2xl p-4 shadow-sm lg:p-5">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="text-sm font-semibold lg:text-base">{title}</h2>
         {badge}
@@ -691,7 +691,7 @@ export function AdminOverview() {
                   return (
                     <button
                       key={n.id}
-                      className="flex items-center gap-2.5 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-white/40"
+                      className="flex items-center gap-2.5 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-100"
                       type="button"
                       onClick={() => navigate("/node")}
                     >
@@ -727,7 +727,7 @@ export function AdminOverview() {
                   ["↓ 下载", down],
                 ] as Array<[string, number]>
               ).map(([label, bytes]) => (
-                <div key={label} className="rounded-xl glass-inset px-3 py-2">
+                <div key={label} className="rounded-xl panel-inset px-3 py-2">
                   <div className="text-xs font-semibold text-foreground">{label}</div>
                   <div className="font-mono text-base font-semibold">
                     {formatTraffic(bytes)}

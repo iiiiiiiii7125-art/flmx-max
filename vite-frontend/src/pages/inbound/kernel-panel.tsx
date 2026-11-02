@@ -294,7 +294,7 @@ export function KernelPanel({
     return (
       <div
         key={k.id}
-        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/40"
+        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-default-100"
         role="button"
         tabIndex={0}
         onClick={() => setSheetFor(k.id)}
@@ -472,7 +472,6 @@ export function KernelPanel({
       </ActionSheet>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={installOpen}
         placement="center"
@@ -658,7 +657,6 @@ export function KernelPanel({
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(logsFor)}
         placement="center"
@@ -684,7 +682,7 @@ export function KernelPanel({
                 )}
               </ModalHeader>
               <ModalBody>
-                <pre className="text-xs font-semibold whitespace-pre-wrap break-all bg-white/40 rounded-xl p-3 max-h-[60vh] overflow-auto">
+                <pre className="text-xs font-semibold whitespace-pre-wrap break-all bg-default-100 rounded-xl p-3 max-h-[60vh] overflow-auto">
                   {logsLoading
                     ? "加载中..."
                     : (logs?.logs ?? []).join("\n") || "暂无日志"}
@@ -707,7 +705,6 @@ export function KernelPanel({
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(removeTarget)}
         placement="center"
