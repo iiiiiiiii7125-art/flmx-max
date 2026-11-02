@@ -155,12 +155,12 @@ function Metric({
 
   return (
     <button
-      className="panel-card rounded-2xl p-4 text-left shadow-sm transition-shadow lg:p-5"
+      className="bg-content1 p-4 text-left lg:p-5"
       type="button"
       onClick={onPress}
     >
-      {/* Round 5 anchor (kernel page cards): one clear-glass surface,
-          content directly on the glass; only the icon chip is a tray. */}
+      {/* Headline metric cell of the hairline strip: content sits
+          directly on the flat surface; only the icon chip is a tray. */}
       <div className="flex items-center justify-between gap-2">
         <span className="truncate text-sm text-foreground">{label}</span>
         <span className={`flex-shrink-0 rounded-xl p-2 ${chip}`}>
@@ -481,7 +481,7 @@ export function AdminOverview() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-divider bg-divider lg:grid-cols-4">
         <Metric
           foot={
             nodes.length === 0

@@ -42,14 +42,15 @@ function Meter({ label, value }: { label: string; value?: number }) {
 }
 
 /**
- * A node's live resources on its list row or card (DA-1/DA-2, ported
- * from upstream flyx 3.3.30): CPU, memory and disk meters, the live
- * up/down rates and this month's traffic. The month figure is the
- * node's whole-NIC counter (system + forwarding + everything), NOT the
- * tunnel billing volume — the label says 网卡 to keep the two apart.
- * "row" sits at the end of a wide row, "footer" under the name on
- * compact rows (ours stays visible at every width: the list has no
- * wide variant), "card" in a node card.
+ * A node's live resources on its list row or card (DA-1/DA-2): CPU,
+ * memory and disk meters, the live up/down rates and this month's
+ * traffic. The month figure is the node's whole-NIC counter (system +
+ * forwarding + everything), NOT the tunnel billing volume — the label
+ * says 网卡 to keep the two apart. "row" sits at the end of a wide
+ * row, "footer" under the name on compact rows (ours stays visible at
+ * every width: the list has no wide variant), "card" in a node card.
+ * Meters are shown only for figures the node has actually reported:
+ * an unreported figure hides its meter instead of reading 0%.
  */
 export function NodeLiveStats({
   info,
@@ -63,13 +64,26 @@ export function NodeLiveStats({
 }) {
   const up = info ? (info.netOutSpeed ?? info.uploadSpeed) : undefined;
   const down = info ? (info.netInSpeed ?? info.downloadSpeed) : undefined;
-  const meters = (
-    <>
-      <Meter label="CPU" value={info?.cpuUsage} />
-      <Meter label="内存" value={info?.memoryUsage} />
-      <Meter label="磁盘" value={info?.diskUsage} />
-    </>
-  );
+  const meterEntries = (
+    [
+      ["CPU", info?.cpuUsage],
+      ["内存", info?.memoryUsage],
+      ["磁盘", info?.diskUsage],
+    ] as const
+  ).filter(([, v]) => v !== undefined);
+  const meters =
+    meterEntries.length > 0 ? (
+      <div
+        className="grid gap-3"
+        style={{
+          gridTemplateColumns: `repeat(${meterEntries.length}, minmax(0, 1fr))`,
+        }}
+      >
+        {meterEntries.map(([label, v]) => (
+          <Meter key={label} label={label} value={v} />
+        ))}
+      </div>
+    ) : null;
   const rate = (v?: number) => (v === undefined ? "—" : `${bytes(v)}/s`);
   const upIcon = <ArrowUp className="h-3 w-3 shrink-0 text-foreground" />;
   const downIcon = <ArrowDown className="h-3 w-3 shrink-0 text-foreground" />;
@@ -79,7 +93,7 @@ export function NodeLiveStats({
   if (variant !== "row") {
     return (
       <div className={`space-y-2 ${variant === "footer" ? "mt-2" : ""}`}>
-        <div className="grid grid-cols-3 gap-3">{meters}</div>
+        {meters}
         <div className="grid grid-cols-2 divide-x divide-divider rounded-lg py-1.5 text-[11px] font-semibold tabular-nums">
           <div className="min-w-0 px-2.5">
             <div className="text-[10px] font-semibold text-foreground">网速</div>
@@ -110,7 +124,7 @@ export function NodeLiveStats({
 
   return (
     <div className="hidden items-center gap-5 lg:flex">
-      <div className="grid w-60 grid-cols-3 gap-3">{meters}</div>
+      {meters ? <div className="w-60">{meters}</div> : null}
       <div className="w-24 space-y-0.5 text-[11px] font-semibold leading-tight tabular-nums">
         <div className="flex items-center gap-1">
           {upIcon}

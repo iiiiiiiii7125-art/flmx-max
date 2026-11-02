@@ -828,7 +828,7 @@ export default function InboundPage() {
       <div
         key={item.id}
         aria-pressed={selectMode ? selected : undefined}
-        className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
+        className={`group flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors ${
           selected
             ? "border-primary bg-primary-500/10"
             : "panel-card hover:bg-default-100"
@@ -1013,7 +1013,7 @@ export default function InboundPage() {
           <div>↓ {formatTraffic(item.downloadBytes)}</div>
         </div>
         <div
-          className={`hidden shrink-0 gap-1 ${selectMode ? "" : "md:flex"}`}
+          className={`hidden shrink-0 gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 ${selectMode ? "" : "md:flex"}`}
           role="presentation"
           onClick={(e) => e.stopPropagation()}
         >

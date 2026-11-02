@@ -724,7 +724,7 @@ function UserDashboard() {
           onDontShowAgain={dismissAnnouncementModal}
         />
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-6 lg:mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px overflow-hidden rounded-lg border border-divider bg-divider mb-6 lg:mb-8">
         <MetricCard
           icon={
             <svg

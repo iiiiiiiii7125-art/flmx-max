@@ -589,8 +589,12 @@ export default function NodePage({
             ...node,
             connectionStatus: "online",
             systemInfo: {
-              cpuUsage: metric.cpuUsage ?? metric.cpu_usage ?? 0,
-              memoryUsage: metric.memoryUsage ?? metric.memory_usage ?? 0,
+              cpuUsage:
+                metric.cpuUsage ?? metric.cpu_usage ?? node.systemInfo?.cpuUsage,
+              memoryUsage:
+                metric.memoryUsage ??
+                metric.memory_usage ??
+                node.systemInfo?.memoryUsage,
               uploadTraffic:
                 metric.netOutBytes ?? metric.bytes_transmitted ?? 0,
               downloadTraffic: metric.netInBytes ?? metric.bytes_received ?? 0,

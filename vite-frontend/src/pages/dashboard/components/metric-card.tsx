@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
-
 interface MetricCardProps {
   title: string;
   value: string | number;
@@ -10,6 +8,11 @@ interface MetricCardProps {
   bottomContent?: ReactNode;
 }
 
+/**
+ * One cell of the dashboard headline strip: the four figures share a
+ * single bordered block separated by hairlines (the parent grid paints
+ * the divider lines via gap-px), instead of four free-standing cards.
+ */
 export const MetricCard = ({
   title,
   value,
@@ -18,25 +21,19 @@ export const MetricCard = ({
   bottomContent,
 }: MetricCardProps) => {
   return (
-    <Card className="h-48 flex flex-col justify-between overflow-hidden">
-      {/* Round 5 anchor (kernel page cards): content sits directly on
-          the clear-glass card; only the icon chip is a solid tray. */}
-      <CardBody className="!p-4 md:!p-6 h-full flex flex-col justify-between overflow-visible">
-        <div className="flex flex-col space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-foreground truncate">
-              {title}
-            </p>
-            <div className={`p-2 rounded-xl flex-shrink-0 ${iconClassName}`}>
-              {icon}
-            </div>
-          </div>
-          <p className="text-2xl lg:text-3xl font-bold text-foreground truncate mt-2">
-            {value}
-          </p>
+    <div className="flex flex-col justify-between gap-3 bg-content1 p-4 lg:p-5">
+      <div className="flex items-center justify-between">
+        <p className="truncate text-sm font-medium text-foreground">
+          {title}
+        </p>
+        <div className={`flex-shrink-0 rounded-lg p-1.5 ${iconClassName}`}>
+          {icon}
         </div>
-        <div className="mt-auto pt-4">{bottomContent}</div>
-      </CardBody>
-    </Card>
+      </div>
+      <p className="truncate text-2xl font-bold text-foreground lg:text-3xl">
+        {value}
+      </p>
+      {bottomContent}
+    </div>
   );
 };

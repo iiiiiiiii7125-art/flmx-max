@@ -1,6 +1,8 @@
 export interface NodeSystemInfo {
-  cpuUsage: number;
-  memoryUsage: number;
+  // Optional: a node that has not reported a figure leaves it undefined,
+  // and the UI hides the meter instead of showing a fabricated 0%.
+  cpuUsage?: number;
+  memoryUsage?: number;
   uploadTraffic: number;
   downloadTraffic: number;
   uploadSpeed: number;
@@ -119,14 +121,15 @@ export const buildNodeSystemInfo = (
   }
 
   return {
-    cpuUsage: toFloat(raw.cpu_usage),
-    memoryUsage: toFloat(raw.memory_usage),
+    cpuUsage: raw.cpu_usage === undefined ? undefined : toFloat(raw.cpu_usage),
+    memoryUsage:
+      raw.memory_usage === undefined ? undefined : toFloat(raw.memory_usage),
     uploadTraffic,
     downloadTraffic,
     uploadSpeed,
     downloadSpeed,
     uptime,
-    diskUsage: toFloat(raw.disk_usage),
+    diskUsage: raw.disk_usage === undefined ? undefined : toFloat(raw.disk_usage),
     load1: toFloat(raw.load1),
     load5: toFloat(raw.load5),
     load15: toFloat(raw.load15),
