@@ -3388,9 +3388,13 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 		response.ErrorMessage = err.Error()
 	} else {
 		response.Success = true
-		response.AverageTime = avgTime
-		response.PacketLoss = packetLoss
 	}
+	// RM-VERIFY S5 观察②：tcpPingHost 在失败时同样返回实测值
+	// （全失败 packetLoss=100、DNS 失败同），错误分支不得丢弃——
+	// 旧组装只在成功分支赋值，死目标被呈现为 0% 丢包，与实测相反
+	// （L4-04 诊断数必须真实）。验证前置返回未执行探测、不在此列。
+	response.AverageTime = avgTime
+	response.PacketLoss = packetLoss
 
 	return response, nil
 }
@@ -3454,9 +3458,12 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 		response.ErrorMessage = err.Error()
 	} else {
 		response.Success = true
-		response.AverageTime = avgTime
-		response.PacketLoss = packetLoss
 	}
+	// RM-VERIFY S5 观察②（UDP 腿同形态）：udpPingHost 失败时同样
+	// 返回实测 packetLoss=100，错误分支不得丢弃，理由同 handleTcpPing。
+	// 注：此处只修组装回传，UDP 探测语义（只 Dial 不发包）不在本簇范围。
+	response.AverageTime = avgTime
+	response.PacketLoss = packetLoss
 
 	return response, nil
 }
