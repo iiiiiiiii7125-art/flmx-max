@@ -234,6 +234,16 @@ func snellTestRequest(t *testing.T, m *Manager) ApplyRequest {
 }
 
 func TestApplySnellRunsGuarded(t *testing.T) {
+	if os.Geteuid() != 0 {
+		// Applying with the foreign guard uid (65534) chowns the
+		// rendered configs to that uid and starts snell-server with
+		// its credential; both operations require root, so this
+		// end-to-end apply cannot run in non-root CI. The guard's
+		// rendering, derivation and chain behavior are covered
+		// root-free by TestSnellGuardScriptRendering,
+		// TestSnellGuardDerivation and TestSnellGuardChainDecisions.
+		t.Skip("guarded Snell apply with a foreign uid requires root (config chown + process credential)")
+	}
 	m, scripts := snellTestEnv(t)
 	req := snellTestRequest(t, m)
 	st, err := m.Apply(req)
