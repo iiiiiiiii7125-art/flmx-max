@@ -81,7 +81,11 @@ func TestBuildAgentRestartScriptSystemdHasLocalRollback(t *testing.T) {
 		"mv /etc/flux_agent/flux_agent.new /etc/flux_agent/flux_agent",
 		"systemctl start flux_agent",
 		"systemctl is-active --quiet flux_agent",
-		"cp /etc/flux_agent/flux_agent.old /etc/flux_agent/flux_agent", // local auto-rollback
+		// local auto-rollback: L2-02 staged it (mktemp sibling +
+		// verified copy + mv), the FRM4 shape — a direct cp onto
+		// the binary path is no longer the morphology.
+		"cp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
+		"mv \"$rollback_tmp\" /etc/flux_agent/flux_agent",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("systemd restart script missing %q:\n%s", want, script)
@@ -98,7 +102,10 @@ func TestBuildAgentRestartScriptOpenRC(t *testing.T) {
 		"rc-service flux_agent stop",
 		"mv /etc/flux_agent/flux_agent.new /etc/flux_agent/flux_agent",
 		"rc-service flux_agent start",
-		"cp /etc/flux_agent/flux_agent.old /etc/flux_agent/flux_agent",
+		// local auto-rollback, L2-02 staged morphology (see the
+		// systemd case above).
+		"cp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
+		"mv \"$rollback_tmp\" /etc/flux_agent/flux_agent",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("openrc restart script missing %q:\n%s", want, script)
