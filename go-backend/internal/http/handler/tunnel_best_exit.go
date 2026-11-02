@@ -185,13 +185,21 @@ func sortBestExitScores(scores []bestExitCandidateScore) {
 	})
 }
 
-func evaluateBestExitOwner(owner chainNodeRecord, exits []chainNodeRecord, nodes map[int64]*nodeRecord, ipPreference string, options diagnosisExecOptions, target tunnelProbeTarget, ping bestExitProbeFunc) []bestExitCandidateScore {
+func evaluateBestExitOwner(owner chainNodeRecord, exits []chainNodeRecord, nodes map[int64]*nodeRecord, ipPreference string, options diagnosisExecOptions, target tunnelProbeTarget, ping bestExitProbeFunc, defaultProtocol string) []bestExitCandidateScore {
 	scores := make([]bestExitCandidateScore, 0, len(exits))
 	if owner.NodeID <= 0 || len(exits) == 0 || ping == nil {
 		return scores
 	}
 	ownerNode := nodes[owner.NodeID]
 	for _, exit := range exits {
+		// R6-L4-02：UDP 协议段的出口不可实测（owner→出口腿是 UDP
+		// 监听，TCP 恒测必然失败）——整候选排除出评分样本，不喂
+		// 假失败：不产出失败分，也不让不可测出口在评分里与实测
+		// 出口同表竞争。全部出口皆 UDP 时 scores 为空，observeScores
+		// 走既有空样本路径（不清 applied、不切换）。
+		if isUDPBasedProtocol(chainSegmentProtocol(exit.Protocol, defaultProtocol)) {
+			continue
+		}
 		exitNode := nodes[exit.NodeID]
 		if !isTunnelProbeNodeOnline(ownerNode) {
 			scores = append(scores, failedBestExitCandidate(owner.NodeID, exit, "owner node offline"))

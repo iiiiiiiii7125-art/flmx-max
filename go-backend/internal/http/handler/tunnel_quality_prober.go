@@ -31,6 +31,12 @@ type TunnelQualityHop struct {
 	Loss         float64 `json:"loss"`
 	TargetIP     string  `json:"targetIp,omitempty"`
 	TargetPort   int     `json:"targetPort,omitempty"`
+	// Untested（R6-L4-02）：目标段为 UDP 协议段时本跳未实测——
+	// Latency/Loss 保持 -1/100 未测哨兵，但语义是「未测」而非
+	// 「探测失败」：不判快照失败、不进成败聚合，呈现层据此走
+	// 中性形态。候选跳（TunnelQualityCandidateHop 内嵌本结构）
+	// 同口径。
+	Untested bool `json:"untested,omitempty"`
 }
 
 type TunnelQualityCandidateHop struct {
@@ -507,8 +513,12 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 		pingCount:      1,
 		timeoutMessage: "探测超时",
 	}
+	// R6-L4-02：段协议判定与诊断面同口径（段行协议优先、回退隧道
+	// 协议，见 chainSegmentProtocol）；UDP 协议段的质量面处置在
+	// 主跳/候选跳/最优出口评分三处一致：记未测、不喂假失败。
+	defaultProtocol := strings.ToLower(strings.TrimSpace(tunnel.Protocol))
 	roundPinger := newBestExitRoundPinger(p.pingNode)
-	p.probeBestExitOwners(tunnelID, inNodes, midNodesGrouped, outNodes, ipPreference, options, probeTarget, roundPinger)
+	p.probeBestExitOwners(tunnelID, inNodes, midNodesGrouped, outNodes, ipPreference, options, probeTarget, roundPinger, defaultProtocol)
 
 	entry, _, entryOnline := p.firstOnlineChainNode(inNodes)
 	exit, _, exitOnline := p.firstOnlineChainNode(outNodes)
@@ -557,6 +567,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 		} else {
 			var totalLat float64
 			remainingSuccessProb := 1.0
+			measuredHops := 0
 
 			nodesInPath := make([]chainNodeRecord, 0, 2+len(midNodesGrouped))
 			nodesInPath = append(nodesInPath, entry)
@@ -609,12 +620,28 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				hop.TargetIP = targetIP
 				hop.TargetPort = targetPort
 
+				// R6-L4-02：目标段为 UDP 协议段时链服务是 UDP 监听，
+				// TCP 探测恒失败——旧实现恒记 -1/100 失败并判整快照
+				// 失败，健康的 UDP 链被恒读成死链（且与手动诊断面
+				// 对同一段的结论相反）。UDP 不可实测：本跳记未测
+				// （哨兵值＋Untested 标记），不探测、不判失败、不进
+				// 延迟/丢包聚合。节点可用性与地址解析失败在上方已
+				// 按面板侧事实先行处理，不在此豁免。
+				if isUDPBasedProtocol(chainSegmentProtocol(target.Protocol, defaultProtocol)) {
+					hop.Untested = true
+					hop.Latency = -1
+					hop.Loss = 100
+					primaryHops = append(primaryHops, hop)
+					continue
+				}
+
 				lat, loss, err := roundPinger(source.NodeID, targetIP, targetPort, options)
 				if err == nil {
 					hop.Latency = lat
 					hop.Loss = loss
 					totalLat += lat
 					remainingSuccessProb *= (1.0 - loss/100.0)
+					measuredHops++
 					primaryHops = append(primaryHops, hop)
 				} else {
 					probeOK = false
@@ -628,10 +655,14 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				}
 			}
 
-			if probeOK {
+			if probeOK && measuredHops > 0 {
+				// 聚合只含实测跳：未测（UDP）跳既不贡献延迟也不
+				// 拉高丢包（R6-L4-02）。全部跳未测时保持起步哨兵
+				// -1/100（与类型1「入口→出口段不存在」同形态），
+				// 不得以 0/0 冒充完美样本（B07-001）。
 				snap.EntryToExitLatency = totalLat
 				snap.EntryToExitLoss = (1.0 - remainingSuccessProb) * 100.0
-			} else {
+			} else if !probeOK {
 				snap.EntryToExitLatency = -1
 				snap.EntryToExitLoss = 100
 			}
@@ -684,6 +715,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 		options,
 		probeTarget,
 		roundPinger,
+		defaultProtocol,
 	)
 	if len(primaryHops) > 0 || len(candidateHops) > 0 {
 		details := tunnelQualityChainDetails{
@@ -712,6 +744,7 @@ func (p *tunnelQualityProber) probeTunnelCandidateHops(
 	options diagnosisExecOptions,
 	probeTarget tunnelProbeTarget,
 	ping bestExitProbeFunc,
+	defaultProtocol string,
 ) []TunnelQualityCandidateHop {
 	if p == nil || p.handler == nil || ping == nil {
 		return nil
@@ -738,6 +771,7 @@ func (p *tunnelQualityProber) probeTunnelCandidateHops(
 			ipPreference,
 			options,
 			ping,
+			defaultProtocol,
 		)...)
 	}
 	items = append(items, p.probePublicTargetCandidates(
@@ -760,6 +794,7 @@ func (p *tunnelQualityProber) probeCandidateGroupLinks(
 	ipPreference string,
 	options diagnosisExecOptions,
 	ping bestExitProbeFunc,
+	defaultProtocol string,
 ) []TunnelQualityCandidateHop {
 	items := make([]TunnelQualityCandidateHop, 0, len(fromGroup.nodes)*len(toGroup.nodes))
 	for _, source := range fromGroup.nodes {
@@ -801,6 +836,14 @@ func (p *tunnelQualityProber) probeCandidateGroupLinks(
 			}
 			item.TargetIP = targetIP
 			item.TargetPort = targetPort
+			// R6-L4-02：候选跳与主跳同口径——目标为 UDP 协议段时
+			// 记未测（哨兵＋Untested、无误差文案），不以 TCP 恒测
+			// 冒充失败样本。
+			if isUDPBasedProtocol(chainSegmentProtocol(target.Protocol, defaultProtocol)) {
+				item.Untested = true
+				items = append(items, item)
+				continue
+			}
 			latency, loss, probeErr := ping(source.NodeID, targetIP, targetPort, options)
 			if probeErr != nil {
 				// R6X-016：候选跳逐跳错误串与快照头同口径过归类函数；
@@ -881,7 +924,7 @@ func (p *tunnelQualityProber) firstOnlineChainNode(nodes []chainNodeRecord) (cha
 	return chainNodeRecord{}, nil, false
 }
 
-func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chainNodeRecord, chainHops [][]chainNodeRecord, outNodes []chainNodeRecord, ipPreference string, options diagnosisExecOptions, probeTarget tunnelProbeTarget, roundPinger bestExitProbeFunc) {
+func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chainNodeRecord, chainHops [][]chainNodeRecord, outNodes []chainNodeRecord, ipPreference string, options diagnosisExecOptions, probeTarget tunnelProbeTarget, roundPinger bestExitProbeFunc, defaultProtocol string) {
 	if p == nil || p.handler == nil || p.handler.bestExit == nil || len(outNodes) <= 1 {
 		return
 	}
@@ -913,7 +956,7 @@ func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chai
 		}
 		key := bestExitOwnerKey{TunnelID: tunnelID, OwnerNodeID: owner.NodeID}
 		p.handler.bestExit.ensureApplied(key, outNodes[0].NodeID, time.Now())
-		scores := evaluateBestExitOwner(owner, outNodes, nodeMap, ipPreference, options, probeTarget, roundPinger)
+		scores := evaluateBestExitOwner(owner, outNodes, nodeMap, ipPreference, options, probeTarget, roundPinger, defaultProtocol)
 		decision := p.handler.bestExit.observeScores(key, scores, time.Now())
 		if decision.Switch {
 			now := time.Now()

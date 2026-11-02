@@ -1,14 +1,21 @@
 export interface DiagnosisEntry {
   success?: boolean;
   diagnosing?: boolean;
+  /**
+   * UDP 未验证标记（R6-L4-01）：后端对 UDP 探测项恒以此形态回传
+   * （success=false、延迟/丢包为 null），呈现走中性「未验证」形态，
+   * 不计入成功/失败。
+   */
+  unverified?: boolean;
+  protocol?: string;
   description: string;
   nodeName: string;
   nodeId: string;
   targetIp: string;
   targetPort?: number;
   message?: string;
-  averageTime?: number;
-  packetLoss?: number;
+  averageTime?: number | null;
+  packetLoss?: number | null;
   fromChainType?: number;
   fromInx?: number;
   toChainType?: number;
@@ -58,13 +65,15 @@ export const buildDiagnosisFallbackResult = ({
 };
 
 export const getDiagnosisQualityDisplay = (
-  averageTime?: number,
-  packetLoss?: number,
+  averageTime?: number | null,
+  packetLoss?: number | null,
 ): {
   text: string;
   color: "success" | "primary" | "warning" | "danger";
 } | null => {
-  if (averageTime === undefined || packetLoss === undefined) {
+  // 未测值（undefined/null）不评级——null 若漏进数值比较会被强转
+  // 为 0 而误判「优秀」（R6-L4-01：UDP 未验证项恒为 null）。
+  if (averageTime == null || packetLoss == null) {
     return null;
   }
 
