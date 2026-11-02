@@ -16,7 +16,9 @@ import (
 // persistTraffic 把快照落盘进 spool（先落盘后清零），再发 spool 的
 // 待确认批次；面板回执确认后才清批次并推进序号。进程重启/崩溃后
 // 从 spool 续报，未确认流量不丢；面板游标回退等异常走三路自愈
-// （见 traffic_spool.go 的 recoverRejected）。
+// （见 traffic_spool.go 的 recoverRejected）；本机状态被外部回
+// 退致面板游标超前时，回执 cursor 触发 stream 轮换自愈（见
+// traffic_spool.go 的 confirmAck，C-C2-01）。
 type GlobalTrafficManager struct {
 	reportMu       sync.Mutex
 	spool          *trafficSpool
@@ -167,7 +169,8 @@ func (m *GlobalTrafficManager) collectAndReport() {
 		ctx = context.Background()
 	}
 	pending := *m.spool.state.Pending
-	if err := sendReliableTrafficReport(ctx, pending); err != nil {
+	panelCursor, err := sendReliableTrafficReport(ctx, pending)
+	if err != nil {
 		var rejection trafficReportRejection
 		if errors.As(err, &rejection) {
 			if recoverErr := m.spool.recoverRejected(rejection); recoverErr != nil {
@@ -177,17 +180,19 @@ func (m *GlobalTrafficManager) collectAndReport() {
 		fmt.Printf("❌ 全局流量上报失败: %v (批次: %d 个服务, stream=%s seq=%d)\n", err, len(pending.Items), pending.Stream, pending.Sequence)
 		return
 	}
-	// 面板已确认：先把「清批次＋推进序号」落盘再替换内存状态。
+	// 面板已确认：清批次＋推进序号先落盘再替换内存状态（confirmAck）。
 	// 落盘失败时内存仍保留待确认批次，下个周期重发——面板对同
-	// stream+seq+同内容判重放回确认，不会重复入账。
-	next := m.spool.state
-	next.Pending = nil
-	next.Next++
-	if err := m.spool.save(next); err != nil {
+	// stream+seq+同内容判重放回确认，不会重复入账。回执游标超
+	// 前于所发序号（本机状态被外部回退）时 confirmAck 轮换
+	// stream，已确认字节不重发、后续字节改走新 stream 入账。
+	rotated, err := m.spool.confirmAck(panelCursor)
+	if err != nil {
 		fmt.Printf("❌ 流量确认状态落盘失败: %v\n", err)
 		return
 	}
-	m.spool.state = next
+	if rotated {
+		fmt.Printf("⚠️ 面板流量游标(%d)超前于本机序号(%d)：spool 状态疑似被外部回退（整机快照恢复/旧备份还原/整目录克隆），已切换新 stream %s 重新入账；本批已确认流量不重发，后续流量改走新 stream\n", panelCursor, pending.Sequence, m.spool.state.Stream)
+	}
 }
 
 // persistTraffic 把内存计数快照落盘进 spool：只有落盘成功才清零

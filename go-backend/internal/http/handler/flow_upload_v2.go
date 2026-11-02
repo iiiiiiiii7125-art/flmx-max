@@ -25,6 +25,12 @@ import (
 //     agent 换新 stream、原字节重报；
 //   - 409 identity_conflict：同序号不同内容，agent 隔离留证不重放；
 //   - 400 invalid_batch：批次本身非法，agent 二分定位坏项。
+// 确认回执另带 cursor（判定后面板该 stream 的游标序号，纯附加
+// 字段，旧 agent 忽略）：序号严格小于游标的批次是 agent 状态被
+// 外部回退后的落后段（C-C2-01），面板只确认不入账并落
+// agent_state_behind 日志，agent 收到 cursor 超前于所发序号即
+// 轮换 stream 自愈；序号等于游标且摘要一致的真重放落
+// replay_exact 日志，两类在面板日志上可区分。
 // 旧 agent 继续走 v1，语义不变。
 
 type flowUploadV2Envelope struct {
@@ -108,7 +114,7 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	itemsJSON, _ := json.Marshal(envelope.Items)
 	digest := fmt.Sprintf("%x", sha256.Sum256(itemsJSON))
 	scope := fmt.Sprintf("flow:%d:%s", node.ID, envelope.Stream)
-	quotaViews, applied, err := h.repo.ApplyTrafficStreamAccounting(
+	quotaViews, ack, err := h.repo.ApplyTrafficStreamAccounting(
 		batch.flowDeltas, batch.quotaUsage, now, scope, envelope.Sequence, digest)
 	if err != nil {
 		var gap *repo.TrafficStreamGap
@@ -123,18 +129,36 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// 未入账确认的可观测（C-C2-01）：behind（序号 < 游标）与真
+	// 重放（序号 == 游标、摘要一致）落不同 class 的结构化日志；
+	// behind 段的字节数是「被确认但未在本请求入账」的规模——其
+	// 中已入账原批的重发本就该丢弃，回退后新计的同序号批次则
+	// 靠 agent 侧凭回执 cursor 切流止损，日志是面板侧唯一痕迹。
+	var batchBytes int64
+	for _, item := range envelope.Items {
+		batchBytes += item.U + item.D
+	}
+	switch {
+	case ack.Behind:
+		log.Printf("flow upload v2 ack not booked node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=agent_state_behind content_match=unverifiable_old_sequence",
+			node.ID, envelope.Stream, envelope.Sequence, ack.Cursor, len(envelope.Items), batchBytes)
+	case ack.Replay:
+		log.Printf("flow upload v2 ack not booked node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=replay_exact content_match=digest",
+			node.ID, envelope.Stream, envelope.Sequence, ack.Cursor, len(envelope.Items), batchBytes)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Stream   string `json:"stream"`
 		Sequence int64  `json:"sequence"`
-	}{envelope.Stream, envelope.Sequence})
+		Cursor   int64  `json:"cursor"`
+	}{envelope.Stream, envelope.Sequence, ack.Cursor})
 	// 确认回执先落到 agent，入账后副作用（可能触发慢速节点控制
 	// RPC）不阻塞确认——agent 超时未收到确认会重发，重放由游标
 	// 摘要判定、不重复入账。
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	if applied {
+	if ack.Applied {
 		h.runFlowUploadSideEffects(node.ID, batch, quotaViews)
 		h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
 	}

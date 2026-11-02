@@ -31,6 +31,19 @@ import (
 // 为每节点一批，即 agent 一个采样周期（5 秒）的待确认量；两
 // 状态在协议上不可区分，属已选自愈方案的固有取舍。根除需产品
 // 决策（游标随备份走，或面板侧留批次摘要供恢复后比对）。
+//
+// C-C2-01（R2-037 的镜像方向）：序号严格小于游标的批次此前被
+// 无条件按重放确认——agent spool 被整机快照恢复/旧备份还原/
+// 整目录克隆回退时，回退段逐批被「确认并清批」静默少计且零可
+// 观测。现在判定结果经 TrafficStreamAck 把游标位置与类别带回
+// handler：handler 对 behind 落结构化日志、并把游标写进确认回
+// 执，agent 据此当场轮换 stream，未入账字节改走新 stream 重新
+// 入账（已确认字节绝不重发，无双计通道）。可区分维度：序号 ==
+// 游标且摘要一致＝真重放（Replay）；序号 < 游标＝agent 状态落
+// 后（Behind）。不可区分维度：游标只存最新序号的摘要，旧序号
+// 批次的内容同一性无从复验——behind 批次究竟是「已入账原批的
+// 重发」还是「回退后新计的同序号批次」，面板判不了，两者都只
+// 确认不入账并同类落日志，由 agent 侧切流止损。
 
 // TrafficStreamCursor 记录一个上报 stream 的入账游标。
 type TrafficStreamCursor struct {
@@ -72,19 +85,30 @@ func (e *TrafficStreamGap) Error() string {
 	return fmt.Sprintf("traffic stream sequence gap: expected %d", e.Expected)
 }
 
+// TrafficStreamAck 是 ApplyTrafficStreamAccounting 的判定结果：
+// 除本批是否入账外，把判定后的游标位置与重放类别一并带回调用
+// 方——handler 据 Behind/Replay 落可区分的结构化日志，并把
+// Cursor 写进确认回执供 agent 识别自身状态落后（C-C2-01）。
+type TrafficStreamAck struct {
+	Applied bool  // 本批恰为下一序号、已入账
+	Replay  bool  // sequence == 游标且摘要一致：已入账批次的真重放
+	Behind  bool  // sequence < 游标：agent 状态落后于面板游标
+	Cursor  int64 // 判定后面板该 stream 的游标序号
+}
+
 // ApplyTrafficStreamAccounting 在单个事务内完成流游标判定＋入账：
 // 恰好下一序号才入账（deltas 与 quota 同 tx，复用 v1 的入账内层），
 // 并同 tx 推进游标；重放（同序号同摘要，或更旧序号）返回
-// applied=false 且无错误，调用方据此只回确认、不做入账后副作用。
-func (r *Repository) ApplyTrafficStreamAccounting(deltas []FlowUploadCounterDelta, quotaUsage map[int64]int64, now time.Time, scope string, sequence int64, digest string) (map[int64]*model.UserQuotaView, bool, error) {
+// Applied=false 且无错误，调用方据此只回确认、不做入账后副作用。
+func (r *Repository) ApplyTrafficStreamAccounting(deltas []FlowUploadCounterDelta, quotaUsage map[int64]int64, now time.Time, scope string, sequence int64, digest string) (map[int64]*model.UserQuotaView, TrafficStreamAck, error) {
 	if r == nil || r.db == nil {
-		return nil, false, errors.New("repository not initialized")
+		return nil, TrafficStreamAck{}, errors.New("repository not initialized")
 	}
 	if scope == "" || len(scope) > 200 || sequence <= 0 || len(digest) != 64 {
-		return nil, false, ErrTrafficStreamConflict
+		return nil, TrafficStreamAck{}, ErrTrafficStreamConflict
 	}
 	quotaViews := map[int64]*model.UserQuotaView{}
-	applied := false
+	ack := TrafficStreamAck{}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
 			Create(&TrafficStreamCursor{Scope: scope}).Error; err != nil {
@@ -99,7 +123,12 @@ func (r *Repository) ApplyTrafficStreamAccounting(deltas []FlowUploadCounterDelt
 			if sequence == cursor.Sequence && digest != cursor.Digest {
 				return ErrTrafficStreamConflict
 			}
-			return nil // 已入账的重放：确认即可，不再入账。
+			// 已入账段的确认：不入账。序号恰等于游标且摘要一致
+			// 是真重放；严格小于游标是 agent 状态落后（C-C2-01）。
+			ack.Cursor = cursor.Sequence
+			ack.Replay = sequence == cursor.Sequence
+			ack.Behind = sequence < cursor.Sequence
+			return nil
 		}
 		if sequence != cursor.Sequence+1 {
 			return &TrafficStreamGap{Expected: cursor.Sequence + 1}
@@ -121,11 +150,12 @@ func (r *Repository) ApplyTrafficStreamAccounting(deltas []FlowUploadCounterDelt
 			}).Error; err != nil {
 			return err
 		}
-		applied = true
+		ack.Applied = true
+		ack.Cursor = sequence
 		return nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, TrafficStreamAck{}, err
 	}
-	return quotaViews, applied, nil
+	return quotaViews, ack, nil
 }
