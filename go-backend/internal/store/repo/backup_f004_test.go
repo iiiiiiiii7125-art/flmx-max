@@ -206,6 +206,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"nft_rule_binding":           "nft 运行时状态，由 reconcile 按期望状态重建",
 		"nft_counter_state":          "nft 计数基线，运行时状态",
 		"nft_pending_delete":         "pending-delete 重试台账，运行时状态",
+		"node_uninstall":             "删服务器待卸载登记，运行时台账（180 天保留），非配置数据",
 		"node_seq":                   "agent 流量序号，运行时状态",
 		"statistics_flow":            "流量统计时序，非配置数据",
 		"node_metric":                "监控遥测时序",
