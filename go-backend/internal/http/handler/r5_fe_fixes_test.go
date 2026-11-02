@@ -16,7 +16,8 @@ import (
 )
 
 // Round 5 L4/L9 修复簇（FE）的回归测试：诊断真实性与覆盖面
-// （L4-04/05/06/07）、中转创建 fail-closed（L4-02）、删节点唯一
+// （L4-04/05/07；L4-06 的目标腿双协议断言已由 R7-028 改写为
+// 目标腿 TCP-only）、中转创建 fail-closed（L4-02）、删节点唯一
 // 入口/出口点名（L4-03）、订阅计量上限守卫（L4-08）、隧道游离段
 // 口沿用与回执（L9 观察 1）、撞口回执按来源措辞（L9 观察 2）。
 
@@ -105,8 +106,8 @@ func TestR5FEL4NftDiagnosisSuccessComesFromProbe(t *testing.T) {
 		t.Fatalf("diagnose forward: %v", err)
 	}
 	results, ok := payload["results"].([]map[string]interface{})
-	if !ok || len(results) != 2 {
-		t.Fatalf("expected tcp+udp probe results, got %#v", payload["results"])
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected a single TCP probe result (R7-028: target leg is TCP-only), got %#v", payload["results"])
 	}
 	var tcpItem map[string]interface{}
 	for _, item := range results {
@@ -190,19 +191,24 @@ func TestR5FEL4NftDiagnosisMissingBindingAndMultiEntry(t *testing.T) {
 		t.Fatalf("missing binding message must say 未下发, got %#v", node1Items[0]["message"])
 	}
 	node2Items := byNode["2"]
-	if len(node2Items) != 2 {
-		t.Fatalf("applied entry node2 must yield tcp+udp probe items, got %#v", node2Items)
+	if len(node2Items) != 1 {
+		t.Fatalf("applied entry node2 must yield a single TCP probe item (R7-028), got %#v", node2Items)
 	}
 	for _, item := range node2Items {
+		if item["protocol"] != "tcp" {
+			t.Fatalf("node2 probe item must be the TCP item (R7-028), got %#v", item)
+		}
 		if item["nftRuleStatus"] != runtimenft.StatusApplied || item["forwardMode"] != "nftables" {
 			t.Fatalf("node2 probe items must carry nft fields, got %#v", item)
 		}
 	}
 }
 
-// ---- L4-06：gost 目标腿双协议探测 ----
+// ---- R7-028（回退 L4-06）：gost 目标腿只测 TCP ----
+// L4-06 曾要求目标腿 tcp+udp 双项；R7-028 起目标腿恰一项 TCP——
+// agent UdpPing 只 Dial 不发包、测不了 UDP 通断，UDP 项无可信信息。
 
-func TestR5FEL4ForwardDiagnosisTargetLegProbesBothProtocols(t *testing.T) {
+func TestR7ForwardDiagnosisTargetLegTCPOnly(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	r := h.repo
@@ -215,15 +221,16 @@ func TestR5FEL4ForwardDiagnosisTargetLegProbesBothProtocols(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare type1 diagnosis: %v", err)
 	}
-	protos := map[string]bool{}
 	for _, item := range items {
-		protos[item.protocol] = true
-		if !strings.HasSuffix(item.description, "· "+strings.ToUpper(item.protocol)) {
-			t.Fatalf("target leg description must name its protocol, got %q", item.description)
+		if item.protocol != "tcp" {
+			t.Fatalf("R7-028: target leg must be TCP-only, got protocol %q in %#v", item.protocol, items)
+		}
+		if !strings.HasSuffix(item.description, "· TCP") {
+			t.Fatalf("target leg description must name TCP, got %q", item.description)
 		}
 	}
-	if len(items) != 2 || !protos["tcp"] || !protos["udp"] {
-		t.Fatalf("L4-06: type1 target leg must probe tcp+udp, got %#v", items)
+	if len(items) != 1 {
+		t.Fatalf("R7-028: type1 target leg must be exactly one TCP item, got %#v", items)
 	}
 
 	// type-2：出口→目标腿同口径。
@@ -249,15 +256,18 @@ func TestR5FEL4ForwardDiagnosisTargetLegProbesBothProtocols(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare type2 diagnosis: %v", err)
 	}
-	targetLegProtos := map[string]bool{}
+	targetLegCount := 0
 	for _, item := range items2 {
 		if item.hasChainHop {
 			continue
 		}
-		targetLegProtos[item.protocol] = true
+		targetLegCount++
+		if item.protocol != "tcp" {
+			t.Fatalf("R7-028: type2 exit->target leg must be TCP-only, got protocol %q in %#v", item.protocol, items2)
+		}
 	}
-	if !targetLegProtos["tcp"] || !targetLegProtos["udp"] {
-		t.Fatalf("L4-06: type2 exit->target leg must probe tcp+udp, got %#v", items2)
+	if targetLegCount != 1 {
+		t.Fatalf("R7-028: type2 exit->target leg must be exactly one TCP item, got %#v", items2)
 	}
 }
 

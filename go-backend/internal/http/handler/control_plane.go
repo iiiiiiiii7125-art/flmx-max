@@ -1092,24 +1092,6 @@ func (h *Handler) prepareForwardDiagnosisPlan(forward *forwardRecord) (*forwardD
 	return plan, nil
 }
 
-// parseNftBindingProtocols 解析 binding 的协议集（落库形态
-// "tcp,udp"），只认 tcp/udp；空/非法时按模型默认双协议。
-func parseNftBindingProtocols(raw string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, 2)
-	for _, part := range strings.Split(raw, ",") {
-		p := strings.ToLower(strings.TrimSpace(part))
-		if (p == "tcp" || p == "udp") && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	if len(out) == 0 {
-		return []string{"tcp", "udp"}
-	}
-	return out
-}
-
 // nftForwardDiagnosisPlan 是单个入口节点的 nft 转发诊断计划：
 // 规则未 applied 时只有 statusItem（既成失败项，不探测）；
 // applied 时只有 probeItems（真实探测项，结果项产出后经其
@@ -1201,11 +1183,15 @@ func (h *Handler) planNftablesForwardDiagnosis(forward *forwardRecord, nodeID in
 	// L4-04：规则已下发只说明数据面规则在位，不等于路径可达——旧
 	// 实现据此直接报 success 并伪造 packetLoss=0/averageTime=0，
 	// 与 gost 真实探测同表呈现，规则在位但目标不通时假阳性误导
-	// 排障。现在按 binding 协议集对每个目标做与 gost 入口→目标腿
-	// 相同的真实探测，success/averageTime/packetLoss 全部来自探测
-	// 结果，规则状态经 nftRuleStatus 与 message 前缀单独呈现——
-	// 字段并入与前缀由每个探测项的 decorate 在结果产出时生效
-	// （runDiagnosisWorkItems 统一调用），非流式/流式两面同形。
+	// 排障。现在对每个目标做与 gost 入口→目标腿相同的真实探测，
+	// success/averageTime/packetLoss 全部来自探测结果，规则状态经
+	// nftRuleStatus 与 message 前缀单独呈现——字段并入与前缀由每个
+	// 探测项的 decorate 在结果产出时生效（runDiagnosisWorkItems
+	// 统一调用），非流式/流式两面同形。
+	// R7-028：目标腿只测 TCP——不再按 binding 协议集逐协议生成探测
+	// 项（UDP 项不可实测、无可信信息，见
+	// appendTargetDiagnosisWorkItems）；binding 的协议集仍经
+	// nftFields 的 protocols 字段如实呈现。
 	decorate := func(item map[string]interface{}) {
 		for k, v := range nftFields {
 			item[k] = v
@@ -1216,49 +1202,44 @@ func (h *Handler) planNftablesForwardDiagnosis(forward *forwardRecord, nodeID in
 			item["message"] = "nftables 规则已下发"
 		}
 	}
-	workItems := make([]diagnosisWorkItem, 0, len(targets)*2)
+	workItems := make([]diagnosisWorkItem, 0, len(targets))
 	for _, tgt := range targets {
 		description := fmt.Sprintf("入口(%s)->目标(%s)", node.Name, defaultString(tgt.Address, targetAddr))
-		for _, proto := range parseNftBindingProtocols(protocols) {
-			workItems = append(workItems, diagnosisWorkItem{
-				fromNodeID:  nodeID,
-				targetIP:    tgt.IP,
-				targetPort:  tgt.Port,
-				description: fmt.Sprintf("%s · %s", description, strings.ToUpper(proto)),
-				protocol:    proto,
-				metadata: map[string]interface{}{
-					"fromChainType": 1,
-					"protocol":      proto,
-				},
-				decorate: decorate,
-			})
-		}
+		workItems = append(workItems, diagnosisWorkItem{
+			fromNodeID:  nodeID,
+			targetIP:    tgt.IP,
+			targetPort:  tgt.Port,
+			description: fmt.Sprintf("%s · TCP", description),
+			protocol:    "tcp",
+			metadata: map[string]interface{}{
+				"fromChainType": 1,
+				"protocol":      "tcp",
+			},
+			decorate: decorate,
+		})
 	}
 	return &nftForwardDiagnosisPlan{probeItems: workItems}, nil
 }
 
-// appendTargetDiagnosisWorkItems 为一条「节点→目标」腿生成 TCP 与
-// UDP 两个探测项（L4-06）。转发恒双协议服务目标：gost 面
-// buildForwardServiceConfigs 固定建 tcp+udp 两条服务、nftables 规则
-// 同口径。此前目标腿硬编码 TCP 探测，UDP-only 目标（DNS、游戏/语音
-// 服务器）必报失败而 UDP 转发实际正常——假阴性误导排障。两项以
-// description 后缀与 metadata.protocol 区分，各自呈现本协议的真实
-// 探测结果，不合并、不互相掩盖。
+// appendTargetDiagnosisWorkItems 为一条「节点→目标」腿生成单个 TCP
+// 探测项（R7-028，用户 2026-11-02 拍板，回退 L4-06 的双协议探测）。
+// L4-06 曾按转发恒双协议服务目标生成 TCP+UDP 两项，但 agent 的
+// UdpPing 只 Dial 不发包、测不了 UDP 通断，UDP 项无论何种结果都不
+// 携带可信信息，且在生产环境恒呈不通/未验证、误导排障——故目标腿
+// 只测 TCP。链路段 KCP/UDP 传输协议腿的「未验证」收口
+// （appendPathDiagnosis 单点）是隧道自身传输、与目标腿无关，不动。
 func appendTargetDiagnosisWorkItems(workItems []diagnosisWorkItem, fromNodeID int64, target diagnosisTarget, description string, fromChainType int) []diagnosisWorkItem {
-	for _, proto := range []string{"tcp", "udp"} {
-		workItems = append(workItems, diagnosisWorkItem{
-			fromNodeID:  fromNodeID,
-			targetIP:    target.IP,
-			targetPort:  target.Port,
-			description: fmt.Sprintf("%s · %s", description, strings.ToUpper(proto)),
-			protocol:    proto,
-			metadata: map[string]interface{}{
-				"fromChainType": fromChainType,
-				"protocol":      proto,
-			},
-		})
-	}
-	return workItems
+	return append(workItems, diagnosisWorkItem{
+		fromNodeID:  fromNodeID,
+		targetIP:    target.IP,
+		targetPort:  target.Port,
+		description: fmt.Sprintf("%s · TCP", description),
+		protocol:    "tcp",
+		metadata: map[string]interface{}{
+			"fromChainType": fromChainType,
+			"protocol":      "tcp",
+		},
+	})
 }
 
 func (h *Handler) prepareForwardDiagnosis(forward *forwardRecord) (string, []diagnosisWorkItem, error) {
@@ -1851,13 +1832,15 @@ func (h *Handler) appendPathDiagnosis(results *[]map[string]interface{}, nodeCac
 
 	// R6-L4-01：UDP 探测不可实测（agent 只 Dial 不发包、无通用回声
 	// 协议），其 success/延迟/丢包都不是目标路径的测量值。本组装点
-	// 是全部手动诊断呈现面（目标腿/链腿/nft 协议集/联邦远端回传）
+	// 是全部手动诊断呈现面（目标腿/链腿/nft 腿/联邦远端回传）
 	// 的唯一汇入口，在此单点把已执行 UDP 探测的结果收口为「未验证」
 	// 形态：agent 明确回 unverified 标记（新 agent）或回 success=true
 	// （老 agent 的 dial 成功）都收口；agent 回真实失败（DNS 解析
 	// 失败等探测前错误、success=false 且无标记）保持失败呈现——
 	// 那是与协议无关的目标错误，不是冒充实测。命令级失败
-	// （pingErr）同理保持失败（见上方分支）。
+	// （pingErr）同理保持失败（见上方分支）。R7-028 后目标腿与
+	// nft 腿只生成 TCP 项，本收口实际服务链路段 UDP 传输腿与
+	// 联邦远端回传的 UDP 结果。
 	if isUDPBasedProtocol(protocol) && (asBool(pingData["unverified"], false) || asBool(pingData["success"], false)) {
 		markDiagnosisItemUnverified(item, protocol)
 		*results = append(*results, item)
@@ -1899,7 +1882,7 @@ const diagnosisUDPUnverifiedMessage = "UDP 无法实测连通性（无通用回�
 // 由本处统一覆写为 null 后才出面板——零值不是测量值，任何直接
 // 消费 agent 原始报文的新面都须先判 unverified。链路段项的
 // metadata 原本不带 protocol，在此补上本腿协议以便呈现层区分
-// （目标腿/nft 腿的 metadata 已带，不覆盖）。
+// （已带 protocol 的腿项不覆盖）。
 func markDiagnosisItemUnverified(item map[string]interface{}, protocol string) {
 	item["success"] = false
 	item["unverified"] = true
