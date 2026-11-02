@@ -13,6 +13,20 @@
 // 断言范围只此三项：dark: 工具类与 html.dark CSS 的存量清理是另一条
 // 线（R2-027），本门不据此判红。
 //
+// C4-01 拓宽（修复轮 3）：断言①的旧实现以正则 [^)]* 截取实参串——首
+// 实在参为函数调用时其后的 'dark' 落在截取之外不可见，且等价再武装
+// 形态 classList.toggle('dark', ...) 整体不在扫描面（第三轮审计变异
+// 探针 M2/M3 实证双双 exit 0 绕过）。现实现：
+//   - 扫描面扩为 classList.add 与 classList.toggle 两方法；
+//   - 实参截取改括号配平扫描：跟踪括号深度、字符串（含模板字面量及
+//     其 ${} 表达式，内部字符串同样收集）与注释，嵌套实参不再截断；
+//   - toggle 只判第一实参（第二实参是 force 布尔、不是类名）；
+//   - 口径宁严勿漏：实参区内（含嵌套表达式）出现的 'dark' token 一律
+//     判红，与仓内文本钉族 fail-closed 取舍一致。
+// 变异钉死形态：add("dark")、add(f(), "dark")、add(`x ${"dark"}`)、
+// toggle("dark", true) 必须红；toggle("has-...", cond) 等现行形态与
+// 'darkness' 等非精确 token 必须绿。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-dark-mode-pinned.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -31,7 +45,7 @@ const check = (label, ok, detail = "") => {
   if (!ok) failures.push(label);
 };
 
-// ── ① src 内 classList.add 不得带 'dark' ─────────────────────────────
+// ── ① src 内 classList.add / toggle 不得带 'dark' ────────────────────
 const walk = (dir) => {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -42,31 +56,139 @@ const walk = (dir) => {
   return out;
 };
 
-const addOffenders = [];
+// 括号配平截取一个调用的实参区：text[openIdx] 必须是 '('。
+// 返回 { literals, firstArgLiterals, end }：literals 为实参区内全部
+// 字符串字面量的静态文本（模板字面量按 ${} 切段、表达式内字符串亦
+// 收集）；firstArgLiterals 为第一顶层逗号之前的子集；end 为匹配
+// ')' 之后的下标。
+const extractCallLiterals = (text, openIdx) => {
+  const literals = [];
+  const firstArgLiterals = [];
+  const n = text.length;
+  let topCommaSeen = false;
+  const pushLit = (s) => {
+    literals.push(s);
+    if (!topCommaSeen) firstArgLiterals.push(s);
+  };
+  // 扫描模板字面量 ${ ... } 内部：i 指向 '{' 后一字，返回匹配 '}' 后下标。
+  const scanTemplateExpr = (i) => {
+    let braceDepth = 1;
+    while (i < n && braceDepth > 0) {
+      const c = text[i];
+      if (c === '"' || c === "'" || c === "`") {
+        i = scanString(i, c);
+        continue;
+      }
+      if (c === "/" && text[i + 1] === "/") {
+        const e = text.indexOf("\n", i);
+        i = e < 0 ? n : e + 1;
+        continue;
+      }
+      if (c === "/" && text[i + 1] === "*") {
+        const e = text.indexOf("*/", i + 2);
+        i = e < 0 ? n : e + 2;
+        continue;
+      }
+      if (c === "{") braceDepth++;
+      else if (c === "}") {
+        braceDepth--;
+        if (braceDepth === 0) return i + 1;
+      }
+      i++;
+    }
+    return i;
+  };
+  // 扫描一个字符串字面量：i 指向开引号，返回闭引号后的下标。
+  const scanString = (i, quote) => {
+    let buf = "";
+    i++;
+    while (i < n) {
+      const c = text[i];
+      if (c === "\\") {
+        buf += text[i + 1] ?? "";
+        i += 2;
+        continue;
+      }
+      if (quote === "`" && c === "$" && text[i + 1] === "{") {
+        pushLit(buf);
+        buf = "";
+        i = scanTemplateExpr(i + 2);
+        continue;
+      }
+      if (c === quote) {
+        pushLit(buf);
+        return i + 1;
+      }
+      buf += c;
+      i++;
+    }
+    pushLit(buf);
+    return i;
+  };
+  let depth = 0;
+  let i = openIdx;
+  while (i < n) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i = scanString(i, c);
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      const e = text.indexOf("\n", i);
+      i = e < 0 ? n : e + 1;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const e = text.indexOf("*/", i + 2);
+      i = e < 0 ? n : e + 2;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      i++;
+      if (depth === 0) break;
+      continue;
+    } else if (c === "," && depth === 1) {
+      topCommaSeen = true;
+    }
+    i++;
+  }
+  return { literals, firstArgLiterals, end: i };
+};
+
+const darkOffenders = [];
 let addCallCount = 0;
+let toggleCallCount = 0;
 for (const file of walk(srcDir)) {
   const text = readFileSync(file, "utf8");
-  for (const m of text.matchAll(/classList\.add\s*\(([^)]*)\)/g)) {
-    addCallCount++;
-    const args = m[1];
-    // 取出每个字符串字面量，按空白切 token，精确匹配 'dark'。
-    const literals = [...args.matchAll(/["'`]([^"'`]*)["'`]/g)].map(
-      (x) => x[1],
+  for (const m of text.matchAll(/classList\.(add|toggle)\s*\(/g)) {
+    const method = m[1];
+    if (method === "add") addCallCount++;
+    else toggleCallCount++;
+    const { literals, firstArgLiterals, end } = extractCallLiterals(
+      text,
+      m.index + m[0].length - 1,
     );
-    const hasDark = literals.some((lit) =>
-      lit.split(/\s+/).includes("dark"),
-    );
+    // toggle 的类名只在第一实参；add 的每个实参都是类名。
+    const pool = method === "toggle" ? firstArgLiterals : literals;
+    // 字符串字面量按空白切 token，精确匹配 'dark'。
+    const hasDark = pool.some((lit) => lit.split(/\s+/).includes("dark"));
     if (hasDark) {
-      addOffenders.push(
-        `${file.slice(frontendDir.length + 1)}: classList.add(${args.trim()})`,
+      const callText = text
+        .slice(m.index, end)
+        .replace(/\s+/g, " ")
+        .slice(0, 100);
+      darkOffenders.push(
+        `${file.slice(frontendDir.length + 1)}: ${callText}`,
       );
     }
   }
 }
 check(
-  `① src 内 classList.add 不含 'dark'（实扫 ${addCallCount} 处调用）`,
-  addOffenders.length === 0,
-  addOffenders.join("; "),
+  `① src 内 classList.add/toggle 不含 'dark'（实扫 add ${addCallCount} 处、toggle ${toggleCallCount} 处调用）`,
+  darkOffenders.length === 0,
+  darkOffenders.join("; "),
 );
 
 // ── ② registry 两函数恒返回 "light" ──────────────────────────────────
