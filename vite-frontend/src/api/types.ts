@@ -278,6 +278,12 @@ export interface BatchOperationResult {
   pending?: BatchOperationFailure[];
   /** 批量同步的非致命告警（与单条 create/update 的 data.warnings 同义，后端 mutations.go batchOperationResult.Warnings；目前仅批量重下发/批量换隧道两处填充）（R3X-024）。 */
   warnings?: string[];
+  /** 批量删节点连带卸载 agent 的三态计数（仅请求带 uninstall 时由后端填充）：已确认卸载 / 离线待重连卸载 / agent 过旧不支持。 */
+  uninstalledCount?: number;
+  uninstallPendingCount?: number;
+  uninstallUnsupportedCount?: number;
+  /** 连带卸载的逐条告警（带节点名前缀，后端 batchOperationResult.UninstallWarnings）。 */
+  uninstallWarnings?: string[];
   [key: string]: unknown;
 }
 

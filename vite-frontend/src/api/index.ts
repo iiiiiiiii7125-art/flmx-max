@@ -229,11 +229,14 @@ export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
   Network.post("/node/update", data);
-export const deleteNode = (id: number) =>
-  Network.post<{ brokenReferrers?: string[]; brokenReferrerCount?: number }>(
-    "/node/delete",
-    { id },
-  );
+export const deleteNode = (id: number, uninstall = false) =>
+  Network.post<{
+    brokenReferrers?: string[];
+    brokenReferrerCount?: number;
+    /** 连带卸载三态：done 已确认卸载 / pending 离线待重连卸载 / unsupported agent 过旧。 */
+    uninstall?: "done" | "pending" | "unsupported";
+    uninstallWarnings?: string[];
+  }>("/node/delete", { id, uninstall });
 export const getNodeInstallCommand = (
   id: number,
   channel: ReleaseChannel = "stable",
@@ -512,8 +515,8 @@ export const batchResumeForwards = (ids: number[]) =>
   Network.post<BatchOperationResult>("/forward/batch-resume", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchDeleteTunnels = (ids: number[]) =>
   Network.post<BatchOperationResult>("/tunnel/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
-export const batchDeleteNodes = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/node/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
+export const batchDeleteNodes = (ids: number[], uninstall = false) =>
+  Network.post<BatchOperationResult>("/node/batch-delete", { ids, uninstall }, { timeout: batchCallTimeout(ids.length) });
 export const batchRedeployForwards = (ids: number[]) =>
   Network.post<BatchOperationResult>("/forward/batch-redeploy", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchRedeployTunnels = (ids: number[]) =>
