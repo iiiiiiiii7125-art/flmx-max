@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/scrypt"
 
@@ -189,7 +190,13 @@ func gistOpen(content []byte, password string) ([]byte, bool, error) {
 	if password == "" {
 		return nil, true, errText("这个版本是加密的，请输入上传时用的密码")
 	}
-	if env.KDF != "scrypt" || env.N <= 1 || env.N > 1<<20 || env.R <= 0 || env.R > 32 || env.P <= 0 || env.P > 16 {
+	// R2-046：scrypt 参数接受面收紧到写面剖面
+	// 附近——写侧固定 N=32768/r=8/p=1（本仓全历史与互通格式均为
+	// 此值），上限取 N≤2^16、r≤8、p≤4 留足头寸，内存上界
+	// 128·N·r ≈ 64 MiB。旧上限（2^20/32/16）下敌意信封可让管理
+	// 员触发的恢复走约 4 GiB 级分配；本校验在任何 KDF 计算之前，
+	// 越限即按格式错误拒绝。
+	if env.KDF != "scrypt" || env.N <= 1 || env.N > 1<<16 || env.R <= 0 || env.R > 8 || env.P <= 0 || env.P > 4 {
 		return nil, true, errText("不认识的加密格式")
 	}
 	salt, err1 := base64.StdEncoding.DecodeString(env.Salt)
@@ -883,7 +890,10 @@ func (h *Handler) gistBackupSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("自动上传间隔不正确"))
 		return
 	}
-	if len(req.Token) > 255 || strings.ContainsAny(req.Token, " \r\n\t") || len(req.Password) > 255 {
+	// R2-047：上限按字（rune）计，与 doc/guide/gist-backup.md 的
+	// 「255 字」一致——旧实现 len() 按字节，多字节密码约 86 字即
+	// 被拒。令牌为 ASCII、字数与字节数相等，行为不变。
+	if utf8.RuneCountInString(req.Token) > 255 || strings.ContainsAny(req.Token, " \r\n\t") || utf8.RuneCountInString(req.Password) > 255 {
 		response.WriteJSON(w, response.ErrDefault("令牌或密码格式不正确"))
 		return
 	}
