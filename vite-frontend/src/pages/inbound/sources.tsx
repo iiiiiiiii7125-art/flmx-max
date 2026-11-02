@@ -527,7 +527,7 @@ export function RemoteSourcesSection({
                   )}
                   <p className="text-xs font-semibold text-foreground">
                     {draft.kind === "url" ? "更新" : "重新上传"}
-                    时按名称对上已有节点：改了地址就跟着改（中转也跟着改），没了就移除；挂着中转的会保留
+                    时按名称对上已有节点（名称变了再按地址对）：改了地址就跟着改（中转也跟着改），没了就移除；挂着中转或被链式代理引用的会保留
                   </p>
                   <div className="space-y-1.5">
                     <p className="text-sm font-medium">用途</p>
