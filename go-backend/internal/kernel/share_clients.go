@@ -59,19 +59,28 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 		}
 	}
 	_, relays, chain := chainGroups(rendered)
-	proxies := []interface{}{}
+	var out []yamlNode
+	var expanded []bool
 	for i, e := range rendered {
 		if !chain || e.ChainRole != ChainRoleLanding {
-			proxies = append(proxies, nodes[i])
+			out = append(out, nodes[i])
+			expanded = append(expanded, false)
 			continue
 		}
 		for _, relay := range relays {
 			p := append(yamlNode{}, nodes[i]...)
-			if len(relays) > 1 {
+			multi := len(relays) > 1
+			if multi {
 				p[0] = yamlField{"name", chainedName(e.Name, relay)}
 			}
-			proxies = append(proxies, append(p, yamlField{"dialer-proxy", relay}))
+			out = append(out, append(p, yamlField{"dialer-proxy", relay}))
+			expanded = append(expanded, multi)
 		}
+	}
+	dedupeExpandedProxyNames(out, expanded)
+	proxies := make([]interface{}, len(out))
+	for i, n := range out {
+		proxies[i] = n
 	}
 	return marshalYAML(yamlNode{{"proxies", proxies}})
 }
@@ -93,25 +102,33 @@ func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, 
 		}
 	}
 	_, relays, chain := chainGroups(rendered)
-	proxies := []interface{}{}
-	names := []string{}
+	var out []yamlNode
+	var expanded, inGroups []bool
 	for i, e := range rendered {
 		if !chain || e.ChainRole != ChainRoleLanding {
-			proxies = append(proxies, nodes[i])
-			if listed(e, chain, opts) {
-				names = append(names, e.Name)
-			}
+			out = append(out, nodes[i])
+			expanded = append(expanded, false)
+			inGroups = append(inGroups, listed(e, chain, opts))
 			continue
 		}
 		for _, relay := range relays {
 			p := append(yamlNode{}, nodes[i]...)
-			name := e.Name
-			if len(relays) > 1 {
-				name = chainedName(e.Name, relay)
-				p[0] = yamlField{"name", name}
+			multi := len(relays) > 1
+			if multi {
+				p[0] = yamlField{"name", chainedName(e.Name, relay)}
 			}
-			proxies = append(proxies, append(p, yamlField{"dialer-proxy", relay}))
-			names = append(names, name)
+			out = append(out, append(p, yamlField{"dialer-proxy", relay}))
+			expanded = append(expanded, multi)
+			inGroups = append(inGroups, true)
+		}
+	}
+	finalNames := dedupeExpandedProxyNames(out, expanded)
+	proxies := make([]interface{}, len(out))
+	names := []string{}
+	for i, n := range out {
+		proxies[i] = n
+		if inGroups[i] {
+			names = append(names, finalNames[i])
 		}
 	}
 	return proxies, names
@@ -134,6 +151,65 @@ func hasVLESSEncryption(p Proxy) bool {
 // chainedName names the copy of a landing node dialed through one relay.
 func chainedName(landing, relay string) string {
 	return landing + "（经 " + relay + "）"
+}
+
+func proxyName(n yamlNode) string {
+	for _, f := range n {
+		if f.Key == "name" {
+			if s, ok := f.Value.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func setProxyName(n yamlNode, name string) {
+	for i, f := range n {
+		if f.Key == "name" {
+			n[i].Value = name
+			return
+		}
+	}
+}
+
+// dedupeExpandedProxyNames is the post-expansion name recheck
+// (R2-014/B-sub-01): chained expansion runs after uniqueNames, so a
+// generated copy name 「落地（经 中转）」can collide with a literal node
+// name and put two same-named proxies into one profile (the panel count
+// is by entry, so it then exceeds the distinct names a client gets).
+// Only the expanded copies are renamed, with the same " #N" suffix
+// algorithm as uniqueNamesExcept: pre-existing names are registered
+// first and never move, because dialer-proxy fields point at relay
+// names — renaming a relay would silently retarget every copy dialed
+// through it. Returns the final names in emission order.
+func dedupeExpandedProxyNames(nodes []yamlNode, expanded []bool) []string {
+	seen := map[string]bool{"direct": true, "DIRECT": true, "REJECT": true,
+		ChainLandingGroup: true, ChainRelayGroup: true}
+	names := make([]string, len(nodes))
+	for i, n := range nodes {
+		names[i] = proxyName(n)
+		if !expanded[i] {
+			seen[names[i]] = true
+		}
+	}
+	for i, n := range nodes {
+		if !expanded[i] {
+			continue
+		}
+		base := strings.TrimSpace(names[i])
+		if base == "" {
+			base = fmt.Sprintf("node-%d", i+1)
+		}
+		name := base
+		for k := 2; seen[name]; k++ {
+			name = fmt.Sprintf("%s #%d", base, k)
+		}
+		seen[name] = true
+		names[i] = name
+		setProxyName(n, name)
+	}
+	return names
 }
 
 // ---- Loon ----
