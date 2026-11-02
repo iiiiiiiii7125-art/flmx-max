@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261103.01"
+SCRIPT_VERSION="20261103.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1188,25 +1188,136 @@ is_own_panel_container() {
   [[ -n "$image" && "$image" == "$(panel_image_prefix)"* ]]
 }
 
-# 部署目录的 Compose 引用本面板镜像，才认这个目录是本面板的部署。
-is_own_panel_deploy_dir() {
-  [[ -f "$1/.env" && -f "$1/docker-compose.yml" ]] && grep -Fq "$(panel_image_prefix)" "$1/docker-compose.yml"
+# 提取 Compose 文件中全部 image: 行的值（一行一个，去引号与行尾
+# 注释）。归属判定只认这些字段值本身——注释、其他字符串里出现本
+# 面板镜像前缀不构成证据（AI-04：旧实现全文 grep 子串，注释即可
+# 伪造归属、抹除他人判定）。
+panel_compose_images() {
+  local file="$1" line value
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line; do
+    value="${line#*image:}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    case "$value" in
+      *" #"*) value="${value%% #*}"; value="${value%"${value##*[![:space:]]}"}" ;;
+    esac
+    if [[ ${#value} -ge 2 ]]; then
+      case "$value" in
+        \"*\") value="${value:1:${#value}-2}" ;;
+        \'*\') value="${value:1:${#value}-2}" ;;
+      esac
+    fi
+    [[ -n "$value" ]] && printf '%s\n' "$value"
+  done < <(grep -E '^[[:space:]]*image:' "$file" 2>/dev/null || true)
 }
 
-# 明确属于他人：Compose 写有镜像引用且无一在本面板镜像前缀下。
-# 完全无镜像引用时归属无从判定，不在此硬判（安装路径交 F-049 守卫：
-# 默认拒绝、显式强制须先备份 .env）。
+# Compose 是否写有 image: 行（build: 型 Compose 无此行）。
+panel_compose_has_image_refs() {
+  [[ -f "$1" ]] && grep -Eq '^[[:space:]]*image:' "$1"
+}
+
+# Compose 的 image: 行中是否有任一值引用本面板镜像（锚定解析：
+# 值已由 panel_compose_images 逐行提取，此处逐行做前缀比对——不用
+# 管道 grep，避免 pipefail 下 grep -q 提前退出让写入方吃 SIGPIPE
+# 把命中翻成未命中）。
+panel_compose_references_own_image() {
+  [[ -f "$1" ]] || return 1
+  local images prefix line
+  images=$(panel_compose_images "$1")
+  [[ -n "$images" ]] || return 1
+  prefix=$(panel_image_prefix)
+  while IFS= read -r line; do
+    case "$line" in
+      "$prefix"*) return 0 ;;
+    esac
+  done <<< "$images"
+  return 1
+}
+
+# Compose 写有 image: 行、且无一引用本面板镜像——镜像证据层面明确
+# 属于他人（与 panel_compose_references_own_image 同口径）。
+panel_compose_references_only_foreign_images() {
+  [[ -f "$1" ]] || return 1
+  panel_compose_has_image_refs "$1" || return 1
+  ! panel_compose_references_own_image "$1"
+}
+
+# 本面板后端容器名的已知全集：现行专属名、实例派生名（专属名-<实
+# 例 id>）、旧缺省名。注意旧缺省名与同机他方旧装的回退值同值：它
+# 只能说明「不据此判他人」，单独出现不足以证明归属（AI-01）。
+panel_backend_name_is_known_ours() {
+  case "$1" in
+    "$NEW_PANEL_BACKEND_CONTAINER"|"$NEW_PANEL_BACKEND_CONTAINER"-*|"$DEFAULT_PANEL_BACKEND_CONTAINER") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 专属名与实例派生名只有本面板新装会写，可作独立归属证据；旧缺省
+# 名不算（与他方旧装同值，须有镜像证据 corroborate）。
+panel_backend_name_is_exclusive_ours() {
+  case "$1" in
+    "$NEW_PANEL_BACKEND_CONTAINER"|"$NEW_PANEL_BACKEND_CONTAINER"-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 实例 id（AI-03）：同机多套本面板部署的身份区分因子。取值顺序：
+# 环境变量 FLMX_INSTANCE > 部署 .env 的 FLMX_INSTANCE 键。默认实例
+# （空）的一切派生名与历史逐字一致，存量部署无感。
+panel_instance_id() {
+  if [[ -n "${FLMX_INSTANCE:-}" ]]; then
+    printf '%s' "$FLMX_INSTANCE"
+    return 0
+  fi
+  get_env_var FLMX_INSTANCE "${PANEL_DEPLOY_DIR:-.}/.env" || true
+}
+
+panel_instance_suffix() {
+  local id
+  id=$(panel_instance_id)
+  if [[ -n "$id" ]]; then
+    printf -- '-%s' "$id"
+  fi
+}
+
+# 实例 id 进入容器/卷/网络/项目名，只允许 Compose/容器命名安全字符。
+panel_instance_id_is_valid() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+}
+
+# 部署目录的 Compose（只看 image: 行的值）引用本面板镜像，才认这
+# 个目录在文件证据上属于本面板。.env 不作合取条件：只有单文件的
+# 残缺部署同样要进入归属判定（AI-05）。
+is_own_panel_deploy_dir() {
+  panel_compose_references_own_image "$1/docker-compose.yml"
+}
+
+# 明确属于他人（任一成立即判；本面板镜像证据优先，Compose 引用本
+# 面板镜像的目录一律不判他人）：
+#   1) Compose 的 image: 行无一引用本面板镜像（锚定解析）；或
+#   2) .env 声明的后端容器名不属于本面板任何已知命名（专属名/实
+#      例派生名/旧缺省名之外），且 Compose 未引用本面板镜像。
+# 完全无镜像引用、又无他人身份声明时归属未证，不在此硬判——调用
+# 方按「归属未证」口径处理（安装默认拒绝、强制须先备份全部部署
+# 文件；迁移与 resolve 按归属证据链不成立即终止）。
 is_foreign_panel_deploy_dir() {
-  [[ -f "$1/.env" && -f "$1/docker-compose.yml" ]] || return 1
-  grep -Eq '^[[:space:]]*image:' "$1/docker-compose.yml" || return 1
-  ! grep -Fq "$(panel_image_prefix)" "$1/docker-compose.yml"
+  if panel_compose_references_own_image "$1/docker-compose.yml"; then
+    return 1
+  fi
+  if panel_compose_references_only_foreign_images "$1/docker-compose.yml"; then
+    return 0
+  fi
+  local declared
+  declared=$(get_env_var PANEL_BACKEND_CONTAINER "$1/.env" || true)
+  [[ -n "$declared" ]] && ! panel_backend_name_is_known_ours "$declared"
 }
 
 # 判定要管理的后端容器名。显式指定（环境变量或部署 .env 的
 # PANEL_BACKEND_CONTAINER）优先，作为非标准镜像来源存量部署的逃生
 # 口；未指定时：新名容器与旧名容器（须跑本面板镜像才认）同现则报错
-# 让用户指定；只有旧名且属自家时沿用旧名；都没有时返回新名（后续
-# 定位会以「找不到部署」失败，不会误认他人容器）。
+# 让用户指定；只有旧名且属自家时沿用旧名；都没有时返回（按实例派
+# 生的）新名（后续定位会以「找不到部署」失败，不会误认他人容器）。
 detect_panel_backend_container() {
   local configured="${PANEL_BACKEND_CONTAINER:-}"
   if [[ -z "$configured" ]]; then
@@ -1216,8 +1327,13 @@ detect_panel_backend_container() {
     printf '%s' "$configured"
     return 0
   fi
+  # 新装名按实例派生（AI-03）：取到实例 id 时探本实例的专属名，默
+  # 认实例即现行专属名、与历史逐字一致。新名属本面板专属命名空
+  # 间，按存在性认即可（停机中的自家容器也须能被定位；镜像归属由
+  # 后续守卫复核）；旧名与同机他方旧装共用，须再验运行镜像才认。
+  local new_name="${NEW_PANEL_BACKEND_CONTAINER}$(panel_instance_suffix)"
   local has_new="" has_legacy=""
-  if docker inspect "$NEW_PANEL_BACKEND_CONTAINER" >/dev/null 2>&1; then
+  if docker inspect "$new_name" >/dev/null 2>&1; then
     has_new=1
   fi
   if docker inspect "$DEFAULT_PANEL_BACKEND_CONTAINER" >/dev/null 2>&1 \
@@ -1225,7 +1341,7 @@ detect_panel_backend_container() {
     has_legacy=1
   fi
   if [[ -n "$has_new" && -n "$has_legacy" ]]; then
-    echo "❌ 同时发现两套面板后端容器（$NEW_PANEL_BACKEND_CONTAINER 与 $DEFAULT_PANEL_BACKEND_CONTAINER），无法自动判定要管理哪一套" >&2
+    echo "❌ 同时发现两套面板后端容器（$new_name 与 $DEFAULT_PANEL_BACKEND_CONTAINER），无法自动判定要管理哪一套" >&2
     echo "   请通过环境变量 PANEL_BACKEND_CONTAINER 指定要管理的实例后重试" >&2
     return 1
   fi
@@ -1233,31 +1349,59 @@ detect_panel_backend_container() {
     printf '%s' "$DEFAULT_PANEL_BACKEND_CONTAINER"
     return 0
   fi
-  printf '%s' "$NEW_PANEL_BACKEND_CONTAINER"
+  printf '%s' "$new_name"
 }
 
-# 部署目录归属判定（$1=目录，$2=后端容器名）：.env 显式写明后端容器
-# 名（新装身份）即归属声明；或 Compose 引用本面板镜像；或该后端容
-# 器正跑着本面板镜像。三者皆无 → 视作他人部署。
+# 部署目录归属判定（$1=目录，$2=后端容器名）。证据链，任一成立即
+# 判自家：
+#   1) 该后端容器正运行本面板镜像（实物证据）；
+#   2) 目录 Compose 的 image: 行引用本面板镜像（文件证据，锚定
+#      解析，注释/字符串不算）；
+#   3) .env 写有本面板专属后端名或实例派生名，且目录内无矛盾的镜
+#      像证据（Compose 写有他人镜像时以镜像证据为准，此项不成立）。
+# 旧实现的第一证据是「.env 存在任一非空 PANEL_BACKEND_CONTAINER
+# 值」——他方部署每次安装都写这个键（其旧模板回退值甚至与本面板
+# 旧缺省名同值），等于对他方全量放行（AI-01）；本面板旧版存量反
+# 而不写这个键。现口径下：只验键存在不作数；旧缺省名因与他方旧
+# 装同值、不作独立证据，必须有镜像证据 corroborate。自家非标准
+# 镜像来源部署仍可经环境变量显式指定后端容器名放行（resolve 的
+# backend_explicit 逃生口，不经本判定）。
 panel_deploy_dir_is_ours() {
-  if [[ -n "$(get_env_var PANEL_BACKEND_CONTAINER "$1/.env" || true)" ]]; then
+  if [[ -n "${2:-}" ]] && is_own_panel_container "$2"; then
     return 0
   fi
   if is_own_panel_deploy_dir "$1"; then
     return 0
   fi
-  is_own_panel_container "$2"
+  local declared
+  declared=$(get_env_var PANEL_BACKEND_CONTAINER "$1/.env" || true)
+  if [[ -n "$declared" ]] && panel_backend_name_is_exclusive_ours "$declared" \
+    && ! panel_compose_references_only_foreign_images "$1/docker-compose.yml"; then
+    return 0
+  fi
+  return 1
 }
 
 # 新装身份写入：把专属容器/卷/网络名写进 .env 并同步到当前进程变量。
+# 实例派生（AI-03）：取到实例 id 时全部派生名统一加后缀 -<id>，同
+# 机第二套本面板部署与第一套命名不相交；默认实例（无 id）写值与历
+# 史逐字一致，存量与单实例部署无感。实例 id 同时落盘 FLMX_INSTANCE，
+# 后续 resolve/detect/迁移按同一契约从 .env 读回。
 # 落盘的 Compose 若是旧版模板（无 FLMX_SQLITE_VOLUME 标记，资源名仍
-# 写死旧名），身份必须回退旧名才能与模板对上——装旧版也能跑。
+# 写死旧名），身份必须回退旧名才能与模板对上——装旧版也能跑；该分
+# 支命名由旧模板写死，实例后缀不生效（会显式告警，不静默假装隔离）。
 write_new_panel_identity() {
-  local backend="$NEW_PANEL_BACKEND_CONTAINER" frontend="$NEW_PANEL_FRONTEND_CONTAINER" postgres="$NEW_PANEL_POSTGRES_CONTAINER"
-  local sqlite_volume="flmx-sqlite-data" postgres_volume="flmx-postgres-data" network="flmx-network"
+  local suffix legacy_template=""
+  suffix=$(panel_instance_suffix)
+  local backend frontend postgres sqlite_volume postgres_volume network project_name=""
   if [[ -f docker-compose.yml ]] && ! grep -Fq 'FLMX_SQLITE_VOLUME' docker-compose.yml; then
+    legacy_template=1
     backend="$DEFAULT_PANEL_BACKEND_CONTAINER" frontend="vite-frontend" postgres="$DEFAULT_PANEL_POSTGRES_CONTAINER"
     sqlite_volume="sqlite_data" postgres_volume="postgres_data" network="gost-network"
+  else
+    backend="${NEW_PANEL_BACKEND_CONTAINER}${suffix}" frontend="${NEW_PANEL_FRONTEND_CONTAINER}${suffix}" postgres="${NEW_PANEL_POSTGRES_CONTAINER}${suffix}"
+    sqlite_volume="flmx-sqlite-data${suffix}" postgres_volume="flmx-postgres-data${suffix}" network="flmx-network${suffix}"
+    project_name="flmx-panel${suffix}"
   fi
   upsert_env_var .env PANEL_BACKEND_CONTAINER "$backend"
   upsert_env_var .env PANEL_FRONTEND_CONTAINER "$frontend"
@@ -1267,8 +1411,16 @@ write_new_panel_identity() {
   upsert_env_var .env FLMX_NETWORK "$network"
   # Compose 项目名同样用专属名（仅新模板分支；旧模板回退分支保持与
   # 旧脚本逐字一致的缺省项目名推导，不改动装旧版的行为）。
-  if [[ "$backend" == "$NEW_PANEL_BACKEND_CONTAINER" ]]; then
-    upsert_env_var .env COMPOSE_PROJECT_NAME "flmx-panel"
+  if [[ -z "$legacy_template" ]]; then
+    upsert_env_var .env COMPOSE_PROJECT_NAME "$project_name"
+  fi
+  local instance_id
+  instance_id=$(panel_instance_id)
+  if [[ -n "$instance_id" ]]; then
+    upsert_env_var .env FLMX_INSTANCE "$instance_id"
+    if [[ -n "$legacy_template" ]]; then
+      echo "⚠️ 目标版本的 Compose 模板使用旧版共享资源名，实例后缀不生效：该实例的容器/卷/网络仍用旧缺省名，同机请勿再并存第二套该版本部署"
+    fi
   fi
   PANEL_BACKEND_CONTAINER="$backend"
   PANEL_POSTGRES_CONTAINER="$postgres"
@@ -1375,7 +1527,7 @@ resolve_panel_deployment() {
   # 归属不成立一律终止、未做任何修改；确为自家部署但用了非标准
   # 镜像来源时，用 PANEL_BACKEND_CONTAINER 显式指定即放行。
   if [[ -z "$backend_explicit" ]] && ! panel_deploy_dir_is_ours "." "$backend_container"; then
-    echo "❌ 部署目录 $PANEL_DEPLOY_DIR 不属于本面板：其 Compose 未引用本面板镜像，后端容器 $backend_container 也未运行本面板镜像"
+    echo "❌ 部署目录 $PANEL_DEPLOY_DIR 不属于本面板：其 Compose 的 image 行未引用本面板镜像、.env 未声明本面板专属后端名，后端容器 $backend_container 也未运行本面板镜像"
     echo "   这可能是同机上另一套面板的部署目录，本脚本不会对其执行更新、迁移或卸载，未做任何修改。"
     echo "   如确为本面板部署（例如改用了自建镜像），请用 PANEL_BACKEND_CONTAINER=<后端容器名> 显式指定后重试。"
     return 1
@@ -2138,33 +2290,52 @@ get_config_params() {
 install_panel() {
   echo "🚀 开始安装面板..."
 
+  # 实例 id 合法性前置校验（AI-03）：id 会进入容器/卷/网络/项目名，
+  # 非法字符让 Compose 命名直接失败，先于一切动作拒绝。
+  if [[ -n "${FLMX_INSTANCE:-}" ]] && ! panel_instance_id_is_valid "$FLMX_INSTANCE"; then
+    echo "❌ FLMX_INSTANCE 不合法：$FLMX_INSTANCE（须以小写字母或数字开头，仅含小写字母、数字、- 与 _）"
+    return 1
+  fi
+
   # 共存守卫（C2-01）：当前目录已有部署文件且明确属于他人（Compose
-  # 写有镜像引用、无一在本面板镜像前缀下）时拒绝安装——那是同机另
-  # 一套面板的部署目录，在此安装必然覆写他人的 .env 与 Compose，
-  # 连强制重装也不放行。无镜像引用、归属无从判定时不硬判，交下方
+  # 的 image 行无一引用本面板镜像，或 .env 声明的后端名不属于本面
+  # 板任何已知命名）时拒绝安装——那是同机另一套面板的部署目录，
+  # 在此安装必然覆写他人的 .env 与 Compose，连强制重装也不放行。
+  # 归属未证（无镜像引用、如 build: 型 Compose）不硬判，交下方
   # F-049 守卫按「默认拒绝、显式强制先备份」处理。
   if is_foreign_panel_deploy_dir .; then
-    echo "❌ 当前目录已有一套不属于本面板的部署（其 Compose 未引用本面板镜像），拒绝在此安装，以免覆盖他人的部署文件"
+    echo "❌ 当前目录已有一套不属于本面板的部署（其 Compose 的 image 行未引用本面板镜像，或其 .env 声明的后端名不属于本面板），拒绝在此安装，以免覆盖他人的部署文件"
     echo "   请换一个空目录运行安装；若这是本面板自己的部署目录，请改用菜单「2. 更新面板」。"
     return 1
   fi
 
-  # F-049: 已有部署守卫。安装路径会重生成 POSTGRES_PASSWORD/JWT_SECRET
-  # 并无条件覆写 .env 与 docker-compose.yml；而 PG 数据卷里的口令只在
-  # 首次初始化时生效——在已部署机器上误走安装，.env 新口令与旧卷脱钩，
-  # 后端必然以 28P01 连不上库。检测到同目录已有部署时默认拒绝并引导
-  # 去更新；确需重装须显式 PANEL_FORCE_REINSTALL=1，且先备份原 .env。
-  if [[ -f .env && -f docker-compose.yml ]]; then
+  # F-049＋AI-05: 已有部署守卫。安装路径会重生成 POSTGRES_PASSWORD/
+  # JWT_SECRET 并无条件覆写 .env 与 docker-compose.yml；而 PG 数据
+  # 卷里的口令只在首次初始化时生效——在已部署机器上误走安装，.env
+  # 新口令与旧卷脱钩，后端必然以 28P01 连不上库。旧触发条件是
+  # 「.env 与 docker-compose.yml 同时存在」的合取：任一单文件残缺
+  # 态下两道守卫同时失效、覆写照常发生（AI-05）。现任一部署产物
+  # 存在即进入守卫：默认拒绝并引导去更新；确需重装须显式
+  # PANEL_FORCE_REINSTALL=1，且先把现存的 .env 与 docker-compose.yml
+  # 一并备份（旧实现只备份 .env，compose 的手工定制在覆写时无声丢失）。
+  if [[ -f .env || -f docker-compose.yml ]]; then
     if [[ "${PANEL_FORCE_REINSTALL:-}" != "1" ]]; then
-      echo "❌ 检测到当前目录已有面板部署（.env 与 docker-compose.yml 同时存在）"
-      echo "   如需升级请使用菜单「2. 更新面板」；继续安装将覆写 .env 并轮换密钥，"
+      echo "❌ 检测到当前目录已有面板部署文件（.env 与 docker-compose.yml 至少其一存在）"
+      echo "   如需升级请使用菜单「2. 更新面板」；继续安装将覆写部署文件并轮换密钥，"
       echo "   PostgreSQL 部署会因口令与数据卷脱钩而无法启动。"
-      echo "   确需重装请先自行备份 .env，或设置 PANEL_FORCE_REINSTALL=1 后重试。"
+      echo "   确需重装请先自行备份，或设置 PANEL_FORCE_REINSTALL=1 后重试（脚本会先备份现存的 .env 与 docker-compose.yml）。"
       return 1
     fi
-    local env_bak=".env.bak.$(date +%Y%m%d%H%M%S)"
-    cp .env "$env_bak"
-    echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 .env 到 $env_bak，继续重装"
+    local backup_ts
+    backup_ts=$(date +%Y%m%d%H%M%S)
+    if [[ -f .env ]]; then
+      cp .env ".env.bak.$backup_ts"
+      echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 .env 到 .env.bak.$backup_ts"
+    fi
+    if [[ -f docker-compose.yml ]]; then
+      cp docker-compose.yml "docker-compose.yml.bak.$backup_ts"
+      echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 docker-compose.yml 到 docker-compose.yml.bak.$backup_ts，继续重装"
+    fi
   fi
 
   ensure_compose_urls_initialized || return 1
@@ -2427,6 +2598,26 @@ migrate_to_postgres() {
     return 1
   fi
 
+  # 共存守卫（C2-01＋AI-02）：迁移要按名停容器、按名挂数据卷，归属
+  # 必须在任何下载/写入之前先定。旧实现守卫排在下方「缺 Compose 先
+  # 下载」之后——他人目录（只有 .env）会被先下载本面板 Compose、亲
+  # 手制造归属证据再通过守卫（自备证据旁路）；且旧守卫以
+  # is_foreign 为合取项，build: 型 Compose（无 image: 行）令其恒
+  # 假、守卫整体跳过。现与 resolve 同口径单判据：未显式指定后端容
+  # 器名时，归属证据链（容器实物镜像 / Compose 的 image 行 / .env
+  # 专属名声明）任一成立才放行；归属未证（含 build: 型、Compose
+  # 缺失且无其他证据）一律终止、未做任何修改，确为自家部署请显式
+  # 指定后重试。
+  if [[ -z "${PANEL_BACKEND_CONTAINER:-}" ]]; then
+    local migrate_backend_container
+    migrate_backend_container=$(detect_panel_backend_container || true)
+    if ! panel_deploy_dir_is_ours "." "$migrate_backend_container"; then
+      echo "❌ 当前目录的部署不属于本面板或归属无法证实（Compose 的 image 行未引用本面板镜像、.env 未声明本面板专属后端名、后端容器未运行本面板镜像），迁移终止，未做任何修改"
+      echo "   如确为本面板部署（例如改用了自建镜像），请用 PANEL_BACKEND_CONTAINER=<后端容器名> 显式指定后重试。"
+      return 1
+    fi
+  fi
+
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "⚠️ 未找到 docker-compose.yml 文件，正在下载..."
     ensure_compose_urls_initialized || return 1
@@ -2454,19 +2645,6 @@ migrate_to_postgres() {
     # R6-L8-F-01：同安装路径，落盘前补齐可信代理跳数传递行。
     ensure_compose_trusted_proxy_hops docker-compose.yml || true
     echo "✅ docker-compose.yml 下载完成"
-  fi
-
-  # 共存守卫（C2-01）：迁移要按名停容器、按名挂数据卷，当前目录的
-  # 部署明确属于他人（Compose 写有镜像引用、无一在本面板前缀下，
-  # 且无任何自家证据）时一律终止，不碰同机另一套面板的容器与
-  # 数据。归属无从判定（Compose 无镜像引用）时不硬判——操作者是
-  # 在本目录内主动执行迁移的，按既有迁移口径继续。
-  if [[ -z "${PANEL_BACKEND_CONTAINER:-}" ]] \
-    && is_foreign_panel_deploy_dir "." \
-    && ! panel_deploy_dir_is_ours "." "${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"; then
-    echo "❌ 当前目录的部署不属于本面板（其 Compose 未引用本面板镜像，后端容器也未运行本面板镜像），迁移终止，未做任何修改"
-    echo "   如确为本面板部署（例如改用了自建镜像），请用 PANEL_BACKEND_CONTAINER=<后端容器名> 显式指定后重试。"
-    return 1
   fi
 
   # 资源名：新装身份写在 .env 里，缺省回退旧名，存量部署行为不变。
@@ -2652,7 +2830,36 @@ uninstall_panel() {
   if ! check_docker noinstall; then
     # 没有 Docker 就不可能有容器化的面板部署：只清理本地残留配置文件，
     # 不为卸载反向安装 Docker，也不下载 compose 对空项目执行 down。
+    # 但删除必须限定在已判定归属的部署文件上（AI-09）：旧实现在当前
+    # 目录无条件 rm 两文件——他人部署残留在当前目录的配置文件会被无
+    # 声删掉，与卸载其余路径的守卫口径不一致。现口径：先列清单；
+    # 明确属于他人的一律不删；归属已证（Compose 的 image 行引用本
+    # 面板镜像或 .env 专属名声明）才直接删；归属未证须显式确认，
+    # 无输入（非交互）时不删。
     echo "未检测到 Docker，本机没有容器化的面板部署，无需卸载。"
+    if [[ ! -f docker-compose.yml && ! -f .env ]]; then
+      echo "当前目录没有残留的部署配置文件，无需清理。"
+      return 0
+    fi
+    echo "当前目录残留部署配置文件："
+    if [[ -f docker-compose.yml ]]; then
+      echo "  - docker-compose.yml"
+    fi
+    if [[ -f .env ]]; then
+      echo "  - .env"
+    fi
+    if is_foreign_panel_deploy_dir .; then
+      echo "❌ 上述文件明确属于另一套面板的部署（Compose 的 image 行未引用本面板镜像，或 .env 声明的后端名不属于本面板），本脚本不删除他人文件，未做任何修改。"
+      return 1
+    fi
+    if ! panel_deploy_dir_is_ours "." ""; then
+      local nodocker_confirm=""
+      read -p "无法确认上述文件属于本面板，仍要删除吗？(y/N): " nodocker_confirm || nodocker_confirm=""
+      if [[ "$nodocker_confirm" != "y" && "$nodocker_confirm" != "Y" ]]; then
+        echo "❌ 未确认，保留上述文件，未做任何修改"
+        return 0
+      fi
+    fi
     echo "🧹 清理残留配置文件..."
     rm -f docker-compose.yml .env
     echo "✅ 清理完成"
@@ -2695,11 +2902,11 @@ uninstall_panel() {
   echo "🧹 删除配置文件与备份产物..."
   rm -f docker-compose.yml .env
   # L2-14（R5-FD）：「删除所有数据」的承诺须闭合——更新备份目录
-  # backups/（含 .env 副本与完整 DB 备份）、.env 历史备份、PG 迁移
-  # 快照、SQLite 备份与更新中的 compose 临时文件均含密钥/全量数据，
-  # 一并清除，不留残口。
+  # backups/（含 .env 副本与完整 DB 备份）、.env 历史备份、强制重装
+  # 的 compose 备份、PG 迁移快照、SQLite 备份与更新中的 compose 临
+  # 时文件均含密钥/全量数据，一并清除，不留残口。
   rm -rf backups
-  rm -f .env.bak.* .env.pre-postgres-migration gost.db.bak
+  rm -f .env.bak.* docker-compose.yml.bak.* .env.pre-postgres-migration gost.db.bak
   rm -f .docker-compose.yml.update.* .docker-compose.yml.install.*
   echo "✅ 卸载完成"
 }
