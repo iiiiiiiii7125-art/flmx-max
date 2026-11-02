@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ type nftablesRuntimeManager interface {
 	Reconcile(ctx context.Context, cfg runtimenft.SSHConfig, plan runtimenft.NodePlan) (runtimenft.ApplyResult, error)
 	Clear(ctx context.Context, cfg runtimenft.SSHConfig) error
 	CollectCounters(ctx context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error)
+	SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error
 }
 
 func isNftablesForwardMode(mode string) bool {
@@ -402,6 +404,20 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 	if err != nil {
 		return err
 	}
+	// 暂停过滤先于 NAT reconcile 落地：封禁集先行，已建立连接在 DNAT
+	// 规则移除/重建的窗口内同样被 drop，不留继续转发的空档。封禁失败
+	// 即整次 sync 失败（与 D6 一致：数据面未达成则调用方不前进 DB），
+	// 避免出现「DB 显示暂停、流量实际还在跑」的静默缺口。封禁集独立
+	// 于主表，主表重建不影响它，故放在 drain 之前执行无碍计费口径。
+	blockedPorts, err := h.nftBlockedPorts(nodeID, exclude, include)
+	if err != nil {
+		return err
+	}
+	for _, port := range sortedBlockedPorts(blockedPorts) {
+		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, port, true); err != nil {
+			return err
+		}
+	}
 	// R5-B3 D1-004/D8: reconcile（delete table + nft -f）会清零全部计数器。
 	// 先 best-effort drain：CollectCounters → delta 落库，再重建。
 	// drain 失败不阻塞 apply（记 gap），重建后重新基线。
@@ -419,6 +435,17 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 		return err
 	}
 	h.markNftApplyFailed(nodeID, false)
+	// 恢复收敛：plan 内端口若残留封禁（节点离线期间在面板恢复、封禁
+	// 后未及解除、或端口曾被已删转发封禁后复用）一律解除，保证恢复
+	// 后规则清零、不残留。应封禁的端口不在 plan 内，不受影响。
+	for _, rule := range plan.Rules {
+		if blockedPorts[rule.InPort] {
+			continue
+		}
+		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, rule.InPort, false); err != nil {
+			return err
+		}
+	}
 	activeForwardIDs := make(map[int64]struct{}, len(plan.Rules))
 	for _, rule := range plan.Rules {
 		activeForwardIDs[rule.ForwardID] = struct{}{}
@@ -433,6 +460,67 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 		_ = h.repo.DeleteNftRuleBindingsByForward(binding.ForwardID)
 	}
 	return nil
+}
+
+// nftBlockedPorts 计算本次 sync 后该节点应处于封禁状态的入口端口集：
+//   - DB 中已暂停且在该节点有端口的转发（稳态来源：节点重启后封禁表
+//     丢失、或某次解除未落地，都靠任意一次 sync 重新封禁自愈）；
+//   - exclude 意图中的转发（D6 数据面优先：暂停先 reconcile 后写库，
+//     此刻 DB 仍为 active，靠意图补入，否则暂停瞬间封不上）。
+//
+// include 意图中的转发正在恢复，纵然 DB 仍记为 paused 也不封禁。
+// 端口按 forward_port 的节点归属过滤，隧道已改配置的转发不会把
+// 别的节点的端口封到本节点上。
+func (h *Handler) nftBlockedPorts(nodeID int64, exclude map[int64]bool, include []*forwardRecord) (map[int]bool, error) {
+	resumed := make(map[int64]bool, len(include))
+	for _, f := range include {
+		if f != nil {
+			resumed[f.ID] = true
+		}
+	}
+	blocked := make(map[int]bool)
+	addForwardPorts := func(forwardID int64) error {
+		ports, err := h.listForwardPorts(forwardID)
+		if err != nil {
+			return err
+		}
+		for _, fp := range ports {
+			if fp.NodeID == nodeID && fp.Port >= 1 && fp.Port <= 65535 {
+				blocked[fp.Port] = true
+			}
+		}
+		return nil
+	}
+	paused, err := h.repo.ListPausedForwardsByNode(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range paused {
+		if resumed[paused[i].ID] {
+			continue
+		}
+		if err := addForwardPorts(paused[i].ID); err != nil {
+			return nil, err
+		}
+	}
+	for id := range exclude {
+		if resumed[id] {
+			continue
+		}
+		if err := addForwardPorts(id); err != nil {
+			return nil, err
+		}
+	}
+	return blocked, nil
+}
+
+func sortedBlockedPorts(blocked map[int]bool) []int {
+	ports := make([]int, 0, len(blocked))
+	for port := range blocked {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports
 }
 
 func modelToRuleBindingInput(nodeID int64, rule runtimenft.Rule, hash string) repo.NftRuleBindingInput {

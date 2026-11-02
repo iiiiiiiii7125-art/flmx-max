@@ -170,6 +170,17 @@ func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runt
 	return m.inner.Clear(ctx, cfg)
 }
 
+// SetBlocked 切换暂停过滤表中的端口封禁状态。它是节点 nft 状态的写
+// 操作，必须经 per-node 锁与 Reconcile/Clear 串行（否则 Clear 删表与
+// SetBlocked 建表/加元素会互相覆盖）；但它不触碰主表与计数器，采集
+// 侧的 D18 脏读防护不依赖它，故不置 applying、不递增 gen。
+func (m *serializedNftManager) SetBlocked(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig, port int, blocked bool) error {
+	mu := m.lockFor(nodeID)
+	mu.Lock()
+	defer m.unlockFor(nodeID, mu)
+	return m.inner.SetBlocked(ctx, cfg, port, blocked)
+}
+
 func (m *serializedNftManager) CollectCounters(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error) {
 	// R5-B5B D18: 采集不获取写锁，允许与 reconcile 并发读。
 	// 脏读由 handler 层的 generation 检查兜底（见 collectNftablesNodeTraffic）。

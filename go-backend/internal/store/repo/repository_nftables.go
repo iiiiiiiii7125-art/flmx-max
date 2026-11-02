@@ -192,13 +192,25 @@ func (r *Repository) GetNodeForwardModeTx(tx *gorm.DB, nodeID int64) (string, er
 }
 
 func (r *Repository) ListActiveForwardsByNode(nodeID int64) ([]model.ForwardRecord, error) {
+	return r.listForwardsByNodeStatus(nodeID, model.ForwardStatusActive)
+}
+
+// ListPausedForwardsByNode lists the forwards paused on the node. The
+// nftables pause filter derives its blocked port set from this list on
+// every sync, so a node reboot or a missed unblock converges on the
+// next reconcile instead of leaving established flows running.
+func (r *Repository) ListPausedForwardsByNode(nodeID int64) ([]model.ForwardRecord, error) {
+	return r.listForwardsByNodeStatus(nodeID, model.ForwardStatusPaused)
+}
+
+func (r *Repository) listForwardsByNodeStatus(nodeID int64, status int) ([]model.ForwardRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
 	var forwards []model.Forward
 	err := r.db.Model(&model.Forward{}).
 		Joins("JOIN forward_port ON forward_port.forward_id = forward.id").
-		Where("forward_port.node_id = ? AND forward.status = 1", nodeID).
+		Where("forward_port.node_id = ? AND forward.status = ?", nodeID, status).
 		Order("forward.id ASC").
 		Distinct("forward.*").
 		Find(&forwards).Error

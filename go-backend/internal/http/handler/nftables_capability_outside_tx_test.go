@@ -53,6 +53,10 @@ func (m *blockingNftablesManager) CollectCounters(_ context.Context, _ runtimenf
 	return nil, nil
 }
 
+func (m *blockingNftablesManager) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool) error {
+	return nil
+}
+
 // runWithBlockedNftTest 在 manager.Test 阻塞期间验证并发 DB 写不被阻塞，
 // 然后释放 Test 并等待请求完成。返回 manager.Test 的总调用次数。
 func runWithBlockedNftTest(t *testing.T, h *Handler, manager *blockingNftablesManager, invoke func()) int64 {
