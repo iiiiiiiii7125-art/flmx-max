@@ -13,9 +13,12 @@ import (
 // snellMajor / snellServes / 宽松版三函数），使同一文件能在基线树上
 // 跑出红灯、修复树上转绿，作为先红后绿证据。
 
-// R2-016（B-sub-03，BC）：硬门对畸形具体版本串 fail-closed。台账点名
-// 两形态 × 两门：「25.9」过 ENC 门、「25.5.16-rc1」过 ENC 与 prefer 门
-// ——修复前两形态在两门均放行（宽松版解析失败/缺段不视为过低）。
+// R2-016（B-sub-03，BC）：硬门对畸形具体版本串 fail-closed。台账逐格
+// 点名：「25.9」过 ENC 门、「25.5.16-rc1」过 ENC 与 prefer 门——即
+// 「25.9」只点名 ENC 两门（自有门＋拨号门），prefer 门只点名 rc1 形
+// 态。prefer 对缺段形态按下限补 0 数值判定（下限 25.6.8，「25.9」补
+// 0 为 25.9.0 达标），与 ENC 门缺段拒绝分属两门语义，不矛盾；修复前
+// 被点名的格子均放行（宽松版解析失败/缺段不视为过低）。
 func TestHardGatesRejectMalformedVersions(t *testing.T) {
 	enc := &kernel.Inbound{Protocol: kernel.ProtocolVLESS,
 		Settings: kernel.Settings{EncryptionAuth: kernel.EncryptionAuthX25519}}
@@ -28,9 +31,11 @@ func TestHardGatesRejectMalformedVersions(t *testing.T) {
 		if msg := encDialGate(kernel.TypeXray, v, ep); msg == "" {
 			t.Errorf("ENC 拨号门：Xray %q 必须拒绝（fail-closed），却放行", v)
 		}
-		if err := validateOutboundIPVersion(kernel.TypeXray, v, kernel.OutboundPreferIPv4); err == nil {
-			t.Errorf("prefer 门：Xray %q 必须拒绝（fail-closed），却放行", v)
-		}
+	}
+	// prefer 门台账只点名 rc1 形态（段内带后缀）：须拒绝。「25.9」缺段
+	// 形态对 prefer 按下限补 0 数值判定，属下方放行集，两门语义不同。
+	if err := validateOutboundIPVersion(kernel.TypeXray, "25.5.16-rc1", kernel.OutboundPreferIPv4); err == nil {
+		t.Error("prefer 门：Xray \"25.5.16-rc1\" 必须拒绝（fail-closed），却放行")
 	}
 	// 防过修：合法形态与哨兵在两门维持原判。
 	for _, v := range []string{"25.9.5", "25.10.21", "26.10.21", "latest", ""} {
