@@ -119,12 +119,6 @@
         --toaster-border: #e5e7eb;
       }
       
-      html.dark {
-        --toaster-bg: #374151;
-        --toaster-color: #ffffff;
-        --toaster-border: #4b5563;
-      }
-      
       /* 默认浅色主题样式 */
       body {
         margin: 0;
@@ -135,12 +129,6 @@
         /* 禁用弹性滚动 */
         overscroll-behavior: none;
         -webkit-overflow-scrolling: touch;
-      }
-      
-      /* 暗色主题样式 */
-      html.dark body {
-        background-color: #000000;
-        color: #ffffff;
       }
       
       #root {
@@ -177,18 +165,10 @@
         background-color: #ffffff;
       }
       
-      .h5-mode.dark #root {
-        background-color: #000000;
-      }
-      
       .pc-mode #root {
         background-color: #ffffff;
       }
-      
-      .pc-mode.dark #root {
-        background-color: #000000;
-      }
-            
+
       /* 移动端滚动优化 */
       @media (max-width: 768px) {
         html, body {
