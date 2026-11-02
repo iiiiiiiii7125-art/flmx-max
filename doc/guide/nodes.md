@@ -40,7 +40,7 @@
 | AnyTLS | sing-box | |
 | SS2022 + ShadowTLS | sing-box | 仅 TCP |
 | NaïveProxy | sing-box | 需要域名和真实证书 |
-| Snell / Snell + ShadowTLS | Snell | Surge 专用 |
+| Snell / Snell + ShadowTLS | Snell / sing-box（≥1.14） | Surge 专用 |
 
 ### 证书
 

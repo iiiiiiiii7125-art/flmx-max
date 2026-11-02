@@ -79,9 +79,9 @@ const batchCallTimeout = (count: number): number =>
   Math.min(1_800_000, Math.max(120_000, Math.max(0, count) * 30_000));
 
 /**
- * 批量节点升级：后端 5 并发、每节点界 300s（upgradeTimeout），整批界为
- * ceil(n/5)×300s，服务端封顶 25 台（maxBatchUpgradeNodes，界 ≤1500s，
- * 写截止 1800s）。空版本时整批先付一次版本发现前奏（两段链 ≤120s，
+ * 批量节点升级：前端超时按旧波次口径放大取余量——每节点界 300s
+ * （upgradeTimeout），整批界按 ceil(n/5)×300s 估；服务端封顶 50 台
+ * （maxBatchUpgradeNodes），写截止 1800s。空版本时整批先付一次版本发现前奏（两段链 ≤120s，
  * 只在派发前解析一次），故前端按台数取「界 + 前奏 120s + 60s 余量」，
  * 下限 360s，上限与服务端写截止齐平 1800s（B05-002 前端面，R2-K2
  * 补计前奏；登记表 T031）。
