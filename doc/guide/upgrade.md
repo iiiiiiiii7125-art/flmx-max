@@ -33,6 +33,8 @@
 curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
+> 校验口径提示：上面这条（及下文「指定版本」一节的）手抄命令里，脚本与校验文件经**同一条线路**取得，只过第一锚（同源校验、单锚）；脚本运行起来之后的更新下载则按上文口径执行第二锚（跨线路复核、双锚）。手抄的第一跳只有单锚，介意这一跳线路可信度时，可参照 README 的跨线路取法、让脚本与校验文件分走两条线路取得后再比对。
+
 数据会保留，更新前会自动备份到部署目录的 `backups/`。
 
 > 升级本身不会更换 `JWT_SECRET`；若升级时手工轮换了 `.env` 的 `JWT_SECRET`，所有已登录会话都会失效需重新登录，全部带 `?user=&sig=` 的个人订阅链接也会一并失效（签名用的是同一密钥），用户需在面板里重新复制链接。
