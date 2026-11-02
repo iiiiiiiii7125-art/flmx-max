@@ -1831,6 +1831,146 @@ YAML
     || fail "R6-L8-F-01: list-form environment must gain a list-form hops entry"
 )
 
+test_ensure_compose_trusted_proxy_hops_list_form_comment_first() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      # 运行时开关
+      - DB_TYPE=sqlite
+      - SERVER_ADDR=:6365
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  # RB3-01：定形须跳过 environment 后的注释行——注入列表形而非
+  # 映射形（映射行混入序列表会把 YAML 写坏）。
+  grep -qF -- '      - FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "RB3-01: list-form environment with a leading comment must gain a list-form hops entry"
+  if grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ' "$work/docker-compose.yml"; then
+    fail "RB3-01: mapping-form hops line must not be injected into a list-form environment"
+  fi
+  assert_equals "1" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "RB3-01: hops line must be injected exactly once"
+)
+
+test_ensure_compose_trusted_proxy_hops_env_header_trailing_comment() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment: # 后端环境变量
+      DB_TYPE: sqlite
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  # RB3-02：environment 头行带行尾注释时旧正则不匹配、静默不注入。
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "RB3-02: environment header with a trailing comment must still receive the hops line"
+)
+
+test_ensure_compose_trusted_proxy_hops_decoy_string_elsewhere() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+# FLMX_TRUSTED_PROXY_HOPS 由 backend 段管理，此处仅注释提及
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+  frontend:
+    image: example/frontend:1.9.2
+    # frontend 段注释同样提到 FLMX_TRUSTED_PROXY_HOPS
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  # RB3-02：已有判定收窄在 backend 的 environment 块内，文件他处
+  # 的同名注释不得抑制注入（旧实现是文件全局 grep）。
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "RB3-02: decoy key strings elsewhere in the file must not suppress injection into backend environment"
+  assert_equals "3" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "RB3-02: exactly the two decoy mentions plus the injected line may carry the key string"
+)
+
+test_ensure_compose_trusted_proxy_hops_unrecognized_env_form_keeps_original() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment: ["DB_TYPE=sqlite"]
+YAML
+  cp "$work/docker-compose.yml" "$work/before.yml"
+
+  # RB3-01：无法识别的 environment 形态不得静默放行或写坏文件——
+  # 函数须返回非零、向 stderr 点名、原文件逐字保留。
+  local rc=0
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml" 2>"$work/stderr.txt" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    fail "RB3-01: an unrecognized environment form must make ensure return nonzero"
+  fi
+  grep -q 'FLMX_TRUSTED_PROXY_HOPS' "$work/stderr.txt" \
+    || fail "RB3-01: the degradation must be announced on stderr"
+  cmp -s "$work/before.yml" "$work/docker-compose.yml" \
+    || fail "RB3-01: a failed validation must leave the original compose byte-identical"
+)
+
+test_compose_hops_injection_problem_detects_form_mismatch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  # 映射形段内混入列表形传递行——模拟注入定形出错的坏产物。
+  cat > "$work/bad.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      - FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  cat > "$work/good.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+
+  # RB3-01：覆写前的结构校验须拦下形态不一致的产物并给出理由。
+  local problem
+  if problem=$(compose_hops_injection_problem "$work/bad.yml"); then
+    fail "RB3-01: validation must reject a list-form hops line inside a mapping-form environment"
+  fi
+  [[ -n "$problem" ]] \
+    || fail "RB3-01: validation must name the problem it found"
+  compose_hops_injection_problem "$work/good.yml" >/dev/null \
+    || fail "RB3-01: validation must accept a well-formed injected compose"
+)
+
 test_shipped_compose_templates_carry_hops_line() (
   set -euo pipefail
   local tpl
@@ -3510,6 +3650,11 @@ test_script_secret_surfaces_closed
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form
 test_ensure_compose_trusted_proxy_hops_keeps_existing_line
 test_ensure_compose_trusted_proxy_hops_list_form
+test_ensure_compose_trusted_proxy_hops_list_form_comment_first
+test_ensure_compose_trusted_proxy_hops_env_header_trailing_comment
+test_ensure_compose_trusted_proxy_hops_decoy_string_elsewhere
+test_ensure_compose_trusted_proxy_hops_unrecognized_env_form_keeps_original
+test_compose_hops_injection_problem_detects_form_mismatch
 test_shipped_compose_templates_carry_hops_line
 test_activate_panel_update_files_keeps_hops_line
 test_pgloader_command_file_terminated
