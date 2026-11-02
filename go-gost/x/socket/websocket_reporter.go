@@ -1902,8 +1902,16 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	}
 	// R4-N2：判活走 flmx_agent_health_ok 的两次采样（PID 稳定），
 	// 不再单次 is-active 采样——flap 窗口内的假活会跳过自动回滚。
-	fmt.Fprintf(&b, "mv %s %s; %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi",
-		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start)
+	// F-RM-01: the swap itself is guarded. An unchecked mv let a
+	// missing staging file (handler-side cleanup racing the script)
+	// flow into the health check on the OLD binary and log
+	// 'agent upgrade restart ok' — a false success. On swap failure
+	// the script removes any staging leftover (it owns the file
+	// after handoff), restarts the current binary, and logs the
+	// failure by name; 'restart ok' is only reachable past a
+	// successful mv.
+	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start, tmpPath, start)
 	return b.String(), nil
 }
 
@@ -2467,6 +2475,65 @@ func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner
 // cross-check on a tiny file, never worth the download budget.
 var anchorCorroborateTimeout = 20 * time.Second
 
+// upgradeStaging owns the lifecycle of the staged upgrade binary
+// across the handler → detached restart script boundary (F-RM-01).
+//
+// The handler creates and fills the staging file, but the consumer is
+// the restart script, which runs seconds AFTER the handler returns
+// (it sleeps, stops the service, then mv's the staging file into
+// place). Cleanup is therefore ownership-based, not defer-based:
+//
+//   - failure paths remove the file immediately (Discard, and the
+//     deferred Close as backstop), so failed attempts never pile up;
+//   - once the restart script has been launched, Handoff transfers
+//     ownership to it and Close becomes a no-op: the script's mv
+//     consumes the file on success, and the script removes it
+//     explicitly when the swap itself fails.
+//
+// FB's L2-05 fix registered an unconditional defer os.Remove on the
+// staging path; on the success path that deleted the staged binary
+// the moment the handler returned, the script's mv then failed with
+// "cannot stat", and the node came back on the old binary while the
+// panel held a success receipt (real-machine finding F-RM-01).
+type upgradeStaging struct {
+	path     string
+	handsOff bool
+}
+
+// newUpgradeStaging creates the per-attempt unique staging file
+// (L2-05: a fixed name let a later upgrade adopt a previous attempt's
+// partial download across versions; uniqueness keeps any resume
+// inside the single operation that created the file).
+func newUpgradeStaging(dir string) (*upgradeStaging, error) {
+	tmpFile, err := os.CreateTemp(dir, ".flux_agent.upgrade-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	return &upgradeStaging{path: tmpPath}, nil
+}
+
+// Path returns the staging file path handed to the download and to
+// the restart script.
+func (s *upgradeStaging) Path() string { return s.path }
+
+// Discard removes the staging file immediately (failure paths).
+// Idempotent: removing an already-removed path is not an error here.
+func (s *upgradeStaging) Discard() { _ = os.Remove(s.path) }
+
+// Handoff transfers ownership of the staging file to the launched
+// restart script; Close will no longer remove it.
+func (s *upgradeStaging) Handoff() { s.handsOff = true }
+
+// Close is the deferred backstop cleanup: it removes the staging
+// file unless ownership was handed off to the restart script.
+func (s *upgradeStaging) Close() {
+	if !s.handsOff {
+		s.Discard()
+	}
+}
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -2534,14 +2601,16 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 版本拼装，只能靠最终哈希拦截、整次升级必废。唯一临时名让
 	// 断点收养只可能发生在同一次操作内（download.FileTransfer
 	// 的既定契约：callers stage into a fresh temp path per
-	// operation）。defer 删除兜底所有错误返回路径。
-	tmpFile, err := os.CreateTemp(filepath.Dir(binaryPath), ".flux_agent.upgrade-*")
+	// operation）。清理按所有权走 upgradeStaging：失败路径即时删、
+	// defer Close 兜底未显式删的错误返回；成功路径在重启脚本启动
+	// 后 Handoff，暂存文件活过 handler 返回、由脚本 mv 消费
+	// （F-RM-01：无条件 defer 删除曾让脚本 mv 必然扑空、假成功）。
+	staging, err := newUpgradeStaging(filepath.Dir(binaryPath))
 	if err != nil {
 		return fmt.Errorf("创建升级暂存文件失败: %v", err)
 	}
-	tmpPath := tmpFile.Name()
-	_ = tmpFile.Close()
-	defer os.Remove(tmpPath)
+	tmpPath := staging.Path()
+	defer staging.Close()
 	backupPath := binaryPath + ".old"
 
 	// S-02: 限制重定向只允许 GitHub 官方域名与内置镜像候选域名，
@@ -2624,7 +2693,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 	downloaded, actualHash, err := downloadUpgradeBinaryChecked(dlCtx, httpClient, plan, downloadURL, tmpPath, anchor, report)
 	if err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return fmt.Errorf("下载升级包失败: %v", err)
 	}
 
@@ -2637,7 +2706,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 为整单兜底复核。
 	w.sendUpgradeProgress("verifying", 50, "校验文件完整性...")
 	if err := verifyUpgradeHashes(expectedSha256, expectedHash, actualHash); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	if expectedSha256 != "" {
@@ -2647,7 +2716,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	w.sendUpgradeProgress("verifying", 100, "校验通过")
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return fmt.Errorf("设置执行权限失败: %v", err)
 	}
 
@@ -2655,7 +2724,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 不证明新二进制在本机可执行（错架构/UPX 损坏/libc 不兼容）。
 	w.sendUpgradeProgress("installing", 30, "冒烟测试新版本...")
 	if err := smokeTestAgentBinary(tmpPath); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	fmt.Println("✅ 新版本二进制冒烟测试通过")
@@ -2665,7 +2734,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 旧实现吞掉写错误继续替换是节点变砖的直接原因。
 	w.sendUpgradeProgress("installing", 50, "备份旧版本...")
 	if err := backupCurrentAgentBinary(binaryPath, backupPath); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	fmt.Println("📦 旧版本已备份到", backupPath)
@@ -2680,18 +2749,22 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 不依赖面板连接）。
 	manager, err := detectServiceManager()
 	if err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	script, err := buildAgentRestartScriptFor(manager, tmpPath, binaryPath, backupPath)
 	if err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	if err := launchAgentControlScript(manager, script); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return fmt.Errorf("启动重启脚本失败: %v", err)
 	}
+	// F-RM-01: 脚本已启动，暂存文件的所有权移交脚本——它 sleep＋
+	// 停服务之后才 mv，handler 返回后必须仍在。Close 自此为空操作，
+	// 文件由脚本的 mv 消费（失败时脚本自行删除并在日志中点名）。
+	staging.Handoff()
 
 	w.sendUpgradeProgress("installing", 100, "重启中...")
 	fmt.Println("🔄 重启脚本已启动, Agent 将在 1 秒后重启...")
