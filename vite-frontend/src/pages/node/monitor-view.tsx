@@ -752,6 +752,13 @@ export function MonitorView({
   // handleDeleteMonitor 在途守卫（按监控项分键）：原生 confirm 关闭后
   // 按钮无 loading 态，同目标连点会二次下发删除。
   const deleteMonitorInFlightRef = useRef<Set<number>>(new Set());
+  // F-L6-01：立即检查的在途登记（ref 做入口同步复核，state 供调用点渲染
+  // 禁用/进行中态）；此前 handleRunMonitor 零守卫，一次探测未回期间经
+  // 下拉菜单/记录弹窗可重复下发、每次产生一条结果记录。
+  const runMonitorInFlightRef = useRef<Set<number>>(new Set());
+  const [runningMonitorIds, setRunningMonitorIds] = useState<Set<number>>(
+    new Set(),
+  );
 
   const loadMetrics = useCallback(
     async (nodeId: number, options?: { silent?: boolean }) => {
@@ -1219,6 +1226,9 @@ export function MonitorView({
   };
 
   const handleRunMonitor = async (id: number) => {
+    if (runMonitorInFlightRef.current.has(id)) return;
+    runMonitorInFlightRef.current.add(id);
+    setRunningMonitorIds((prev) => new Set(prev).add(id));
     try {
       // R8-T-08：把该监控配置的 timeoutSec 传给 API 层按公式定前端预算。
       const timeoutSec = serviceMonitors.find((m) => m.id === id)?.timeoutSec;
@@ -1264,6 +1274,15 @@ export function MonitorView({
       }
     } catch {
       toast.error("执行失败");
+    } finally {
+      runMonitorInFlightRef.current.delete(id);
+      setRunningMonitorIds((prev) => {
+        const next = new Set(prev);
+
+        next.delete(id);
+
+        return next;
+      });
     }
   };
 
@@ -1505,8 +1524,8 @@ export function MonitorView({
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-2 py-1 text-xs font-semibold whitespace-nowrap">
-                            <div className="flex items-center gap-1.5 font-mono text-success-700">
-                              <span className="w-[86px] text-right inline-block">
+                            <div className="flex items-center gap-1.5 font-mono">
+                              <span className="w-[86px] text-right inline-block rounded px-1 py-0.5 tray-success">
                                 {isOnline && metric
                                   ? formatBytesPerSecond(metric.netOutSpeed)
                                   : "-"}
@@ -1518,8 +1537,8 @@ export function MonitorView({
                                 />
                               </div>
                             </div>
-                            <div className="flex items-center gap-1.5 font-mono text-primary-700">
-                              <span className="w-[86px] text-right inline-block">
+                            <div className="flex items-center gap-1.5 font-mono">
+                              <span className="w-[86px] text-right inline-block rounded px-1 py-0.5 tray-primary">
                                 {isOnline && metric
                                   ? formatBytesPerSecond(metric.netInSpeed)
                                   : "-"}
@@ -1752,7 +1771,7 @@ export function MonitorView({
                       {item.label}
                     </span>
                     <span
-                      className={`text-sm font-semibold font-mono ${item.color === "danger" ? "text-danger-700" : item.color === "warning" ? "text-warning-700" : item.color === "success" ? "text-success-700" : item.color === "primary" ? "text-primary-700" : ""}`}
+                      className={`text-sm font-semibold font-mono ${item.color === "danger" ? "rounded px-1 py-0.5 tray-danger" : item.color === "warning" ? "rounded px-1 py-0.5 tray-warning" : item.color === "success" ? "rounded px-1 py-0.5 tray-success" : item.color === "primary" ? "rounded px-1 py-0.5 tray-primary" : ""}`}
                     >
                       {item.value}
                     </span>
@@ -1958,13 +1977,24 @@ export function MonitorView({
                             <DropdownMenu>
                               {canWrite && (
                                 <DropdownItem
+                                  className={
+                                    resolvedActiveMonitorId != null &&
+                                    runningMonitorIds.has(
+                                      resolvedActiveMonitorId,
+                                    )
+                                      ? "pointer-events-none opacity-50"
+                                      : undefined
+                                  }
                                   startContent={<Play className="w-4 h-4" />}
                                   onPress={() =>
                                     resolvedActiveMonitorId != null &&
                                     handleRunMonitor(resolvedActiveMonitorId)
                                   }
                                 >
-                                  立即检查
+                                  {resolvedActiveMonitorId != null &&
+                                  runningMonitorIds.has(resolvedActiveMonitorId)
+                                    ? "检查中…"
+                                    : "立即检查"}
                                 </DropdownItem>
                               )}
                               <DropdownItem
@@ -2132,6 +2162,14 @@ export function MonitorView({
                 </Select>
                 {canWrite && (
                   <Button
+                    isDisabled={
+                      resultsMonitorId != null &&
+                      runningMonitorIds.has(resultsMonitorId)
+                    }
+                    isLoading={
+                      resultsMonitorId != null &&
+                      runningMonitorIds.has(resultsMonitorId)
+                    }
                     size="sm"
                     variant="flat"
                     onPress={() =>

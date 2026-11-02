@@ -4209,12 +4209,12 @@ export default function TunnelPage() {
                                     ) : (
                                       <div className="mt-2 pt-2 border-t border-divider">
                                         <div
-                                          className={`text-xs font-semibold ${
+                                          className={`w-fit rounded px-1.5 py-0.5 text-xs font-semibold ${
                                             isDiagnosing
-                                              ? "text-warning-700"
+                                              ? "tray-warning"
                                               : isUnverified
-                                                ? "text-primary-700"
-                                                : "text-danger-700"
+                                                ? "tray-primary"
+                                                : "tray-danger"
                                           }`}
                                         >
                                           {isDiagnosing

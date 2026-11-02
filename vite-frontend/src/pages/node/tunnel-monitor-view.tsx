@@ -642,6 +642,16 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
             : hop.loss > 0
               ? "text-warning-700"
               : "text-success-700";
+        // L6-F01：延迟值与 FH 的 LatencyDisplay 同口径托盘化（裸 -700 小字
+        // 坐玻璃在壁纸暗区不达标）；colorClass 只保留给箭头图标（图形件）。
+        // 集成对账（G2×G4）：未测跳走 G2 的中性 tray-primary，不落失败红托盘。
+        const trayClass = isUntested
+          ? "tray-primary"
+          : hop.latency < 0 || hop.errorMessage
+            ? "tray-danger"
+            : hop.loss > 0
+              ? "tray-warning"
+              : "tray-success";
         const borderColor = hasError ? "border-danger" : "";
 
         return (
@@ -659,7 +669,7 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
               title={hop.errorMessage}
             >
               <span
-                className={`mb-1 text-[10px] font-semibold font-mono leading-none ${colorClass}`}
+                className={`mb-1 rounded px-1 py-0.5 text-[10px] font-semibold font-mono leading-none ${trayClass}`}
               >
                 {isUntested
                   ? "未测"
@@ -675,7 +685,7 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
                 />
               </div>
               <span
-                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${!isUntested && (hop.errorMessage || hop.loss > 0) ? "text-warning-700" : "text-foreground"}`}
+                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${!isUntested && (hop.errorMessage || hop.loss > 0) ? "rounded px-1 py-0.5 tray-warning" : "text-foreground"}`}
               >
                 {isUntested
                   ? "UDP 未测"
@@ -1315,7 +1325,7 @@ export function TunnelMonitorView({
                 入口 → 出口 丢包
               </span>
               <span
-                className={`text-sm font-semibold font-mono ${(quality?.entryToExitLoss ?? 0) > 0 && !entryToExitLossNA ? "text-warning-700" : ""}`}
+                className={`text-sm font-semibold font-mono ${(quality?.entryToExitLoss ?? 0) > 0 && !entryToExitLossNA ? "rounded px-1 py-0.5 tray-warning" : ""}`}
               >
                 {quality?.entryToExitLoss !== undefined && !entryToExitLossNA
                   ? `${quality.entryToExitLoss.toFixed(1)}%`
@@ -1332,7 +1342,7 @@ export function TunnelMonitorView({
                 出口 → 测试目标 丢包
               </span>
               <span
-                className={`text-sm font-semibold font-mono ${(quality?.exitToBingLoss ?? 0) > 0 ? "text-warning-700" : ""}`}
+                className={`text-sm font-semibold font-mono ${(quality?.exitToBingLoss ?? 0) > 0 ? "rounded px-1 py-0.5 tray-warning" : ""}`}
               >
                 {quality?.exitToBingLoss !== undefined
                   ? `${quality.exitToBingLoss.toFixed(1)}%`
