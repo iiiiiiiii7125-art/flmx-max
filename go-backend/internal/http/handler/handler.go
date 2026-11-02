@@ -1025,7 +1025,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 	headerValue := ""
 
 	if tunnel == "-1" {
-		headerValue = buildSubscriptionHeader(user.OutFlow, user.InFlow, flowLimitBytes(user.Flow, user.FlowMiB), user.ExpTime/1000)
+		headerValue = buildSubscriptionHeader(user.InFlow, user.OutFlow, flowLimitBytes(user.Flow, user.FlowMiB), user.ExpTime/1000)
 	} else {
 		tunnelID, parseErr := strconv.ParseInt(tunnel, 10, 64)
 		if parseErr != nil || tunnelID <= 0 {
@@ -1047,7 +1047,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		headerValue = buildSubscriptionHeader(ut.OutFlow, ut.InFlow, flowLimitBytes(ut.Flow, ut.FlowMiB), ut.ExpTime/1000)
+		headerValue = buildSubscriptionHeader(ut.InFlow, ut.OutFlow, flowLimitBytes(ut.Flow, ut.FlowMiB), ut.ExpTime/1000)
 	}
 
 	w.Header().Set("subscription-userinfo", headerValue)
@@ -1064,8 +1064,15 @@ func (h *Handler) errorPage(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>错误 404</title></head><body><div style='min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;'><div style='font-size:6rem;color:#333;font-weight:300;'>404</div><div style='font-size:1.2rem;color:#666;'>你推开了后端的大门，却发现里面只有寂寞。</div></div></body></html>"))
 }
 
+// buildSubscriptionHeader 组 Subscription-Userinfo 头：形参序即计量
+// 方向——upload 取 InFlow（客户端→远端字节 = 用户上传）、download 取
+// OutFlow（远端→客户端字节 = 用户下载），与 flow_upload_batch.go 的
+// N-01 方向钉死同口径。旧形态靠「调用点反序 + Sprintf 反序」两层抵消
+// 才得到正确值，任一层单独被「顺手修正」即静默翻转真实值；现两层已
+// 归正，整头数值由 TestR6G6SubStoreHeaderDirectionPinned 逐字钉死，
+// 勿再反序。
 func buildSubscriptionHeader(upload, download, total, expire int64) string {
-	return fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", download, upload, total, expire)
+	return fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", upload, download, total, expire)
 }
 
 func (h *Handler) userTunnelVisibleList(w http.ResponseWriter, r *http.Request) {
