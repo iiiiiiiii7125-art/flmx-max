@@ -1928,6 +1928,7 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 		return "", err
 	}
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
+	tmpTemplate := filepath.Join(filepath.Dir(binaryPath), ".flux_agent.rollback-XXXXXX")
 	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
 	// 在 flap 窗口内误报。
 	// FRM3: the copy itself is guarded, same caliber as the F-RM-01
@@ -1939,8 +1940,23 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 	// never happened. On copy failure the script restarts the
 	// current binary and logs the failure by name; 'rollback
 	// restart ok' is only reachable past a successful cp.
-	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; if cp %s %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be copied into place, keeping current version'; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
-		logPath, healthFn, stop, backupPath, binaryPath, start, start), nil
+	// FRM4: the guarded copy lands atomically, the same shape as
+	// the upgrade path's staged mv. FRM3's cp wrote straight onto
+	// the binary path, so a copy dying midway (e.g. disk full)
+	// left the CURRENT binary truncated: the failure branch could
+	// name the failure, but the node was already bricked. The
+	// script now stages the copy in a unique mktemp sibling of the
+	// binary (same directory, so the final mv is a same-filesystem
+	// atomic rename), proves the staged copy byte-identical to the
+	// backup with cmp — POSIX and present in both coreutils and
+	// BusyBox, unlike sha256sum, and strictly stronger than a size
+	// compare — and only then mv's it into place. Any failure
+	// before the mv leaves the current binary untouched, and the
+	// script removes the temp file it created. mktemp lands the
+	// file 0600 and cp onto an existing file keeps that mode, so
+	// the staged copy is chmod'ed back to 755 before the swap.
+	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
+		logPath, healthFn, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on

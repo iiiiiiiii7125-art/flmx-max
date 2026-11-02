@@ -77,7 +77,12 @@ func TestAgentRollbackScriptSwapGuardBothManagers(t *testing.T) {
 			t.Fatalf("buildAgentRollbackScriptFor %s: %v", manager, err)
 		}
 		for _, want := range []string{
-			"if cp /etc/flux_agent/flux_agent.old /etc/flux_agent/flux_agent; then",
+			// FRM4: the guarded copy is staged atomically — mktemp
+			// sibling, verified copy, mv into place.
+			"rollback_tmp=$(mktemp /etc/flux_agent/.flux_agent.rollback-XXXXXX)",
+			"cp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
+			"cmp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
+			"mv \"$rollback_tmp\" /etc/flux_agent/flux_agent",
 			"agent rollback swap failed",
 			"agent rollback aborted",
 		} {
@@ -85,9 +90,10 @@ func TestAgentRollbackScriptSwapGuardBothManagers(t *testing.T) {
 				t.Fatalf("%s rollback script missing %q:\n%s", manager, want, script)
 			}
 		}
-		// 'rollback restart ok' is only reachable past the cp guard.
-		if guard, ok := strings.Index(script, "if cp "), strings.Index(script, "rollback restart ok"); guard < 0 || ok < guard {
-			t.Fatalf("%s rollback script: 'rollback restart ok' must sit inside the cp guard:\n%s", manager, script)
+		// 'rollback restart ok' is only reachable past the staged
+		// swap guard.
+		if guard, ok := strings.Index(script, "if rollback_tmp=$(mktemp"), strings.Index(script, "rollback restart ok"); guard < 0 || ok < guard {
+			t.Fatalf("%s rollback script: 'rollback restart ok' must sit inside the staged swap guard:\n%s", manager, script)
 		}
 	}
 }
