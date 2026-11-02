@@ -608,22 +608,29 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 		return tunnelForwardMigrationPlan{}, errors.New("多入口隧道的转发不支持保留自定义监听IP，请先手动调整该规则")
 	}
 
+	// C-F3-01：保留节点（同属源/目标隧道入口集）逐节点沿用现口，
+	// targetPort（规范口）只用于真正新增的节点行；校验与本次迁移
+	// 内的端口预留同样逐节点按实际落库口径走，不再以单值口对全部
+	// 目标入口节点一刀切（异口转发的非 min 行曾被静默改口、且任意
+	// 迁移会先在单值校验处被误拒）。
+	oldPortByNode := forwardPortByNode(oldPorts)
 	for _, nodeID := range targetEntryNodes {
 		node, nodeErr := h.getNodeRecord(nodeID)
 		if nodeErr != nil {
 			return tunnelForwardMigrationPlan{}, nodeErr
 		}
-		if err := validateRemoteNodePort(node, targetPort); err != nil {
+		nodePort := forwardEntryPort(oldPortByNode, nodeID, targetPort)
+		if err := validateRemoteNodePort(node, nodePort); err != nil {
 			return tunnelForwardMigrationPlan{}, err
 		}
-		if err := validateLocalNodePort(node, targetPort); err != nil {
+		if err := validateLocalNodePort(node, nodePort); err != nil {
 			return tunnelForwardMigrationPlan{}, err
 		}
-		if err := h.validateForwardPortAvailability(node, targetPort, forward.ID); err != nil {
+		if err := h.validateForwardPortAvailability(node, nodePort, forward.ID); err != nil {
 			return tunnelForwardMigrationPlan{}, err
 		}
-		if reservedOnNode, ok := reservedPorts[nodeID]; ok && reservedOnNode[targetPort] {
-			return tunnelForwardMigrationPlan{}, fmt.Errorf("目标隧道入口节点端口 %d 已被本次迁移中的其他规则占用", targetPort)
+		if reservedOnNode, ok := reservedPorts[nodeID]; ok && reservedOnNode[nodePort] {
+			return tunnelForwardMigrationPlan{}, fmt.Errorf("目标隧道入口节点端口 %d 已被本次迁移中的其他规则占用", nodePort)
 		}
 	}
 
@@ -633,7 +640,7 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 			reservedOnNode = make(map[int]bool)
 			reservedPorts[nodeID] = reservedOnNode
 		}
-		reservedOnNode[targetPort] = true
+		reservedOnNode[forwardEntryPort(oldPortByNode, nodeID, targetPort)] = true
 	}
 
 	oldNodeIDs := forwardPortNodeIDs(oldPorts)
@@ -641,10 +648,10 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 	removedNodeIDs := diffInt64s(oldNodeIDs, newNodeIDs)
 	keptNodeIDs := diffInt64s(oldNodeIDs, removedNodeIDs)
 
-	previousPort := 0
-	if len(oldPorts) > 0 {
-		previousPort = oldPorts[0].Port
-	}
+	// portAdjusted 的「迁移前口」取对外规范口（MIN，与转发列表
+	// inPort 同源）：异口转发此前取首行口（id ASC）与规范口无关，
+	// 计数口径失真；同口转发下两者恒等、行为不变。
+	previousPort := pickForwardPortFromRecords(oldPorts)
 
 	// X-P2-4 ②：托管中转转发按目标隧道出口集重算 RemoteAddr，随迁移
 	// 落库并经 sync 重下发，不再只改端口沿用旧址；重算失败（如目标
@@ -702,7 +709,7 @@ func (h *Handler) applyTunnelDeleteForwardMigration(plan tunnelForwardMigrationP
 			return nil, err
 		}
 	}
-	if err := h.replaceForwardPorts(plan.forward.ID, plan.targetTunnelID, plan.targetPort, ""); err != nil {
+	if err := h.replaceForwardPorts(plan.forward.ID, plan.targetTunnelID, plan.targetPort, "", plan.oldPorts); err != nil {
 		h.rollbackForwardMutation(plan.forward, plan.oldPorts)
 		return nil, err
 	}

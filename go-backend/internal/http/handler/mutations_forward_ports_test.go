@@ -15,10 +15,13 @@ func TestBuildForwardPortEntriesWithPreservedInIP(t *testing.T) {
 		t.Fatalf("expected 3 entries, got %d", len(entries))
 	}
 
-	if entries[0].NodeID != 10 || entries[0].Port != 18080 || entries[0].InIP != "10.0.0.10" {
+	// C-F3-01 起端口逐节点沿用现口（同节点多行后行覆盖，与
+	// syncTunnelForwardsEntryPorts 的 oldPortByNode 同口径），只有
+	// 无存量行的节点 30 用传入的规范口 18080；InIP 保留口径不变。
+	if entries[0].NodeID != 10 || entries[0].Port != 10002 || entries[0].InIP != "10.0.0.10" {
 		t.Fatalf("unexpected first entry: %+v", entries[0])
 	}
-	if entries[1].NodeID != 20 || entries[1].Port != 18080 || entries[1].InIP != "10.0.0.20" {
+	if entries[1].NodeID != 20 || entries[1].Port != 10003 || entries[1].InIP != "10.0.0.20" {
 		t.Fatalf("unexpected second entry: %+v", entries[1])
 	}
 	if entries[2].NodeID != 30 || entries[2].Port != 18080 || entries[2].InIP != "" {
