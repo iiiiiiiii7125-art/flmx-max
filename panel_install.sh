@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261103.03"
+SCRIPT_VERSION="20261103.04"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1145,10 +1145,26 @@ get_env_var() {
   grep -m1 "^${key}=" "$file" | cut -d= -f2-
 }
 
+# DB_TYPE 归一：与后端接受口径逐字对齐——后端 New 与
+# validatePostgresPassword 均先 TrimSpace＋ToLower 再匹配
+# ""/sqlite/postgres/postgresql，别名 postgresql 与 postgres 等
+# 价。脚本侧一切 DB_TYPE 判定先过本归一，杜绝「后端与文档都接
+# 受、脚本更新却拒绝」的三方口径分家（B2-05）。
+normalize_db_type() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  v=$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')
+  if [[ "$v" == "postgresql" ]]; then
+    v="postgres"
+  fi
+  printf '%s' "$v"
+}
+
 get_current_db_type() {
   local db_type database_url
 
-  db_type=$(get_env_var "DB_TYPE" || true)
+  db_type=$(normalize_db_type "$(get_env_var "DB_TYPE" || true)")
   database_url=$(get_env_var "DATABASE_URL" || true)
 
   if [[ "$db_type" == "sqlite" ]]; then
@@ -1188,28 +1204,64 @@ is_own_panel_container() {
   [[ -n "$image" && "$image" == "$(panel_image_prefix)"* ]]
 }
 
-# 提取 Compose 文件中全部 image: 行的值（一行一个，去引号与行尾
-# 注释）。归属判定只认这些字段值本身——注释、其他字符串里出现本
-# 面板镜像前缀不构成证据（AI-04：旧实现全文 grep 子串，注释即可
-# 伪造归属、抹除他人判定）。
+# 从一行 image: 行文本中提取字段值（去首尾空白、引号与行尾注释）。
+panel_compose_image_value() {
+  local value="$1"
+  value="${value#*image:}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "$value" in
+    *" #"*) value="${value%% #*}"; value="${value%"${value##*[![:space:]]}"}" ;;
+  esac
+  if [[ ${#value} -ge 2 ]]; then
+    case "$value" in
+      \"*\") value="${value:1:${#value}-2}" ;;
+      \'*\') value="${value:1:${#value}-2}" ;;
+    esac
+  fi
+  printf '%s' "$value"
+}
+
+# 提取 Compose 文件中全部 image: 行的值（一行一个）。归属判定只认
+# 这些字段值本身——注释、其他字符串里出现本面板镜像前缀不构成证
+# 据（AI-04：旧实现全文 grep 子串，注释即可伪造归属、抹除他人判定）。
 panel_compose_images() {
   local file="$1" line value
   [[ -f "$file" ]] || return 0
   while IFS= read -r line; do
-    value="${line#*image:}"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    case "$value" in
-      *" #"*) value="${value%% #*}"; value="${value%"${value##*[![:space:]]}"}" ;;
-    esac
-    if [[ ${#value} -ge 2 ]]; then
-      case "$value" in
-        \"*\") value="${value:1:${#value}-2}" ;;
-        \'*\') value="${value:1:${#value}-2}" ;;
-      esac
-    fi
+    value=$(panel_compose_image_value "$line")
     [[ -n "$value" ]] && printf '%s\n' "$value"
   done < <(grep -E '^[[:space:]]*image:' "$file" 2>/dev/null || true)
+}
+
+# 提取 Compose 中指定服务段内的 image: 行值（一行一个）。解析口
+# 径：顶层 services: 段内、与首个服务名同缩进的裸键为服务名，其
+# 后更深缩进的行归当前服务；services: 之外（volumes/networks 等
+# 顶层段）与注释行一律不算。
+panel_compose_service_images() {
+  local file="$1" want="$2"
+  [[ -f "$file" ]] || return 0
+  local line stripped indent in_services=0 svc_indent=-1 current="" value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    stripped="${line#"${line%%[! ]*}"}"
+    [[ -z "$stripped" || "$stripped" == \#* ]] && continue
+    indent=$(( ${#line} - ${#stripped} ))
+    if (( indent == 0 )); then
+      if [[ "$stripped" == "services:"* ]]; then in_services=1; else in_services=0; fi
+      current=""
+      continue
+    fi
+    (( in_services )) || continue
+    if (( svc_indent < 0 )); then svc_indent=$indent; fi
+    if (( indent == svc_indent )) && [[ "$stripped" =~ ^[A-Za-z0-9._-]+:([[:space:]]*#.*)?$ ]]; then
+      current="${stripped%%:*}"
+      continue
+    fi
+    if [[ "$current" == "$want" && "$stripped" == image:* ]]; then
+      value=$(panel_compose_image_value "$stripped")
+      [[ -n "$value" ]] && printf '%s\n' "$value"
+    fi
+  done < "$file"
 }
 
 # Compose 是否写有 image: 行（build: 型 Compose 无此行）。
@@ -1217,14 +1269,18 @@ panel_compose_has_image_refs() {
   [[ -f "$1" ]] && grep -Eq '^[[:space:]]*image:' "$1"
 }
 
-# Compose 的 image: 行中是否有任一值引用本面板镜像（锚定解析：
-# 值已由 panel_compose_images 逐行提取，此处逐行做前缀比对——不用
-# 管道 grep，避免 pipefail 下 grep -q 提前退出让写入方吃 SIGPIPE
-# 把命中翻成未命中）。
+# Compose 的 backend 服务段的 image: 行中是否有任一值引用本面板
+# 镜像（锚定解析：值逐行提取后做前缀比对——不用管道 grep，避免
+# pipefail 下 grep -q 提前退出让写入方吃 SIGPIPE 把命中翻成未
+# 命中）。归属证据只认 backend 段：随仓模板与内容校验都把后端
+# 服务名钉死为 backend；其他服务（frontend/postgres/工具服务）
+# 借用本面板已发布镜像不构成整套部署的归属证据——旧实现「任一
+# 服务命中即判自家」会把他人 backend＋附属服务用我方镜像的混合
+# Compose 判成自家（B2-02）。
 panel_compose_references_own_image() {
   [[ -f "$1" ]] || return 1
   local images prefix line
-  images=$(panel_compose_images "$1")
+  images=$(panel_compose_service_images "$1" backend)
   [[ -n "$images" ]] || return 1
   prefix=$(panel_image_prefix)
   while IFS= read -r line; do
@@ -1235,29 +1291,38 @@ panel_compose_references_own_image() {
   return 1
 }
 
-# Compose 写有 image: 行、且无一引用本面板镜像——镜像证据层面明确
-# 属于他人（与 panel_compose_references_own_image 同口径）。
+# Compose 的 backend 服务段写有 image: 行、且无一引用本面板镜像
+# ——镜像证据层面明确属于他人（与 panel_compose_references_own_
+# image 同口径）。backend 段无 image: 行（build: 型）时镜像证据
+# 不成立、不在此硬判，与 build: 型的既有口径一致。
 panel_compose_references_only_foreign_images() {
   [[ -f "$1" ]] || return 1
-  panel_compose_has_image_refs "$1" || return 1
+  local images
+  images=$(panel_compose_service_images "$1" backend)
+  [[ -n "$images" ]] || return 1
   ! panel_compose_references_own_image "$1"
 }
 
 # 本面板后端容器名的已知全集：现行专属名、实例派生名（专属名-<实
 # 例 id>）、旧缺省名。注意旧缺省名与同机他方旧装的回退值同值：它
 # 只能说明「不据此判他人」，单独出现不足以证明归属（AI-01）。
+# 实例派生名的后缀必须过 panel_instance_id_is_valid：空后缀、非法
+# 字符、超 32 的名字任何安装都不可能产生，不计入已知全集（B2-03）。
 panel_backend_name_is_known_ours() {
   case "$1" in
-    "$NEW_PANEL_BACKEND_CONTAINER"|"$NEW_PANEL_BACKEND_CONTAINER"-*|"$DEFAULT_PANEL_BACKEND_CONTAINER") return 0 ;;
+    "$NEW_PANEL_BACKEND_CONTAINER"|"$DEFAULT_PANEL_BACKEND_CONTAINER") return 0 ;;
+    "$NEW_PANEL_BACKEND_CONTAINER"-*) panel_instance_id_is_valid "${1#"$NEW_PANEL_BACKEND_CONTAINER"-}" ;;
     *) return 1 ;;
   esac
 }
 
 # 专属名与实例派生名只有本面板新装会写，可作独立归属证据；旧缺省
-# 名不算（与他方旧装同值，须有镜像证据 corroborate）。
+# 名不算（与他方旧装同值，须有镜像证据 corroborate）。派生名后缀
+# 的合法性要求同 panel_backend_name_is_known_ours（B2-03）。
 panel_backend_name_is_exclusive_ours() {
   case "$1" in
-    "$NEW_PANEL_BACKEND_CONTAINER"|"$NEW_PANEL_BACKEND_CONTAINER"-*) return 0 ;;
+    "$NEW_PANEL_BACKEND_CONTAINER") return 0 ;;
+    "$NEW_PANEL_BACKEND_CONTAINER"-*) panel_instance_id_is_valid "${1#"$NEW_PANEL_BACKEND_CONTAINER"-}" ;;
     *) return 1 ;;
   esac
 }
@@ -1266,11 +1331,21 @@ panel_backend_name_is_exclusive_ours() {
 # 环境变量 FLMX_INSTANCE > 部署 .env 的 FLMX_INSTANCE 键。默认实例
 # （空）的一切派生名与历史逐字一致，存量部署无感。
 panel_instance_id() {
+  local id=""
   if [[ -n "${FLMX_INSTANCE:-}" ]]; then
-    printf '%s' "$FLMX_INSTANCE"
-    return 0
+    id="$FLMX_INSTANCE"
+  else
+    id=$(get_env_var FLMX_INSTANCE "${PANEL_DEPLOY_DIR:-.}/.env" || true)
   fi
-  get_env_var FLMX_INSTANCE "${PANEL_DEPLOY_DIR:-.}/.env" || true
+  # 读路径同样过契约白名单（B2-03）：.env 被手写/植入非法值（空
+  # 白、非法字符、超 32）时不得把垃圾 id 带进派生名——与后端
+  # validPanelInstanceID 的回退口径对齐，视为默认实例（空）并告
+  # 警。install 入口对环境变量形态另有硬拒绝，先于一切读路径。
+  if [[ -n "$id" ]] && ! panel_instance_id_is_valid "$id"; then
+    echo "⚠️ FLMX_INSTANCE 取值不合法（$id），已按默认实例处理；合法值须以小写字母或数字开头、仅含小写字母/数字/-/_、全长不超过 32" >&2
+    id=""
+  fi
+  printf '%s' "$id"
 }
 
 panel_instance_suffix() {
@@ -1296,9 +1371,10 @@ is_own_panel_deploy_dir() {
   panel_compose_references_own_image "$1/docker-compose.yml"
 }
 
-# 明确属于他人（任一成立即判；本面板镜像证据优先，Compose 引用本
-# 面板镜像的目录一律不判他人）：
-#   1) Compose 的 image: 行无一引用本面板镜像（锚定解析）；或
+# 明确属于他人（任一成立即判；本面板镜像证据优先，Compose 的
+# backend 段引用本面板镜像的目录一律不判他人）：
+#   1) Compose 的 backend 段 image: 行无一引用本面板镜像（锚定解
+#      析，段口径见 panel_compose_references_own_image/B2-02）；或
 #   2) .env 声明的后端容器名不属于本面板任何已知命名（专属名/实
 #      例派生名/旧缺省名之外），且 Compose 未引用本面板镜像。
 # 完全无镜像引用、又无他人身份声明时归属未证，不在此硬判——调用
@@ -1314,6 +1390,26 @@ is_foreign_panel_deploy_dir() {
   local declared
   declared=$(get_env_var PANEL_BACKEND_CONTAINER "$1/.env" || true)
   [[ -n "$declared" ]] && ! panel_backend_name_is_known_ours "$declared"
+}
+
+# 同机其他实例的后端容器名（一行一个）：专属名派生形态
+# flmx-panel-backend-<合法实例 id>，含已停止的容器（部署仍在、
+# 同样构成管理目标歧义）。后缀须过实例 id 白名单——非法后缀的名
+# 字不是任何实例的派生名，不计（与 B2-03 同口径）。
+panel_other_instance_backend_containers() {
+  local names name suffix
+  names=$(docker ps -a --format '{{.Names}}' 2>/dev/null || true)
+  [[ -n "$names" ]] || return 0
+  while IFS= read -r name; do
+    case "$name" in
+      "${NEW_PANEL_BACKEND_CONTAINER}"-*)
+        suffix="${name#"${NEW_PANEL_BACKEND_CONTAINER}"-}"
+        if panel_instance_id_is_valid "$suffix"; then
+          printf '%s\n' "$name"
+        fi
+        ;;
+    esac
+  done <<< "$names"
 }
 
 # 判定要管理的后端容器名。显式指定（环境变量或部署 .env 的
@@ -1343,6 +1439,19 @@ detect_panel_backend_container() {
     && is_own_panel_container "$DEFAULT_PANEL_BACKEND_CONTAINER"; then
     has_legacy=1
   fi
+  # 多实例歧义（B2-04）：无实例上下文时探到默认实例容器、但同机
+  # 另有实例派生名后端存在——从无关目录运行脚本的操作者多半意在
+  # 管理某个实例部署，静默定位到默认实例会把 update/uninstall 作
+  # 用到错误的一套上。与双名冲突同口径：报错并要求显式指定。
+  if [[ -z "$(panel_instance_suffix)" && -n "$has_new" ]]; then
+    local other_instances
+    other_instances=$(panel_other_instance_backend_containers || true)
+    if [[ -n "$other_instances" ]]; then
+      echo "❌ 本机同时存在默认实例（$new_name）与其他实例部署（$(printf '%s' "$other_instances" | tr '\n' ' '))，无法自动判定要管理哪一套" >&2
+      echo "   请通过环境变量 FLMX_INSTANCE 或 PANEL_BACKEND_CONTAINER 指定要管理的实例后重试" >&2
+      return 1
+    fi
+  fi
   if [[ -n "$has_new" && -n "$has_legacy" ]]; then
     echo "❌ 同时发现两套面板后端容器（$new_name 与 $DEFAULT_PANEL_BACKEND_CONTAINER），无法自动判定要管理哪一套" >&2
     echo "   请通过环境变量 PANEL_BACKEND_CONTAINER 指定要管理的实例后重试" >&2
@@ -1358,8 +1467,9 @@ detect_panel_backend_container() {
 # 部署目录归属判定（$1=目录，$2=后端容器名）。证据链，任一成立即
 # 判自家：
 #   1) 该后端容器正运行本面板镜像（实物证据）；
-#   2) 目录 Compose 的 image: 行引用本面板镜像（文件证据，锚定
-#      解析，注释/字符串不算）；
+#   2) 目录 Compose 的 backend 段 image: 行引用本面板镜像（文件
+#      证据，锚定解析，注释/字符串不算，其他服务的命中只作旁证、
+#      不单独成立，B2-02）；
 #   3) .env 写有本面板专属后端名或实例派生名，且目录内无矛盾的镜
 #      像证据（Compose 写有他人镜像时以镜像证据为准，此项不成立）。
 # 旧实现的第一证据是「.env 存在任一非空 PANEL_BACKEND_CONTAINER
@@ -1542,7 +1652,7 @@ run_panel_compose() {
 }
 
 validate_panel_update_environment() {
-  local key value backend_port frontend_port configured_db_type db_type database_url postgres_password
+  local key value backend_port frontend_port configured_db_type normalized_db_type db_type database_url postgres_password
 
   if [[ ! -f ".env" ]]; then
     echo "❌ 部署目录缺少 .env，更新终止"
@@ -1573,7 +1683,8 @@ validate_panel_update_environment() {
   fi
 
   configured_db_type=$(get_env_var "DB_TYPE" || true)
-  if [[ -n "$configured_db_type" && "$configured_db_type" != "sqlite" && "$configured_db_type" != "postgres" ]]; then
+  normalized_db_type=$(normalize_db_type "$configured_db_type")
+  if [[ -n "$normalized_db_type" && "$normalized_db_type" != "sqlite" && "$normalized_db_type" != "postgres" ]]; then
     echo "❌ DB_TYPE 仅支持 sqlite 或 postgres：$configured_db_type"
     return 1
   fi
@@ -2472,6 +2583,9 @@ update_panel() {
     return 1
   }
   resolve_panel_deployment || return 1
+  # 更新无确认环节，动手前把目标点名（实例身份体现在后端容器名
+  # 后缀上），与卸载确认同口径（B2-04）。
+  echo "🎯 本次更新目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
   validate_panel_update_environment || return 1
 
   CURRENT_DB_TYPE=$(get_current_db_type)
@@ -2890,7 +3004,8 @@ uninstall_panel() {
     return 1
   fi
 
-  read -p "确认卸载面板吗？此操作将停止并删除所有容器和数据 (y/N): " confirm
+  echo "🎯 本次卸载目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
+  read -p "确认卸载面板（部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}）吗？此操作将停止并删除该部署的所有容器和数据 (y/N): " confirm
   if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "❌ 取消卸载"
     return 0
