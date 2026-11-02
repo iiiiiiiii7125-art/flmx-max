@@ -1817,6 +1817,12 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		default:
 			return "", fmt.Errorf("隧道质量检测开关配置值无效")
 		}
+	case notifyConfigDailyHour:
+		// R2-048：日报发送时刻此前走 default 直通落库，越界值靠读
+		// 面静默回落默认 9 点，与同族值域键（监控三键）「保存期拒
+		// 绝」口径不齐。校验单点在 repo.NormalizeNotifyDailyHour，
+		// 恢复面同源共用（B14-002 口径）。
+		return repo.NormalizeNotifyDailyHour(value)
 	case monitoring.ConfigMonitorRetentionDays:
 		return monitoring.NormalizeMonitoringRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
