@@ -42,10 +42,10 @@
 curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
-国内机器 GitHub 直连慢的话，用代理加速下载：
+国内机器 GitHub 直连慢的话，可以让脚本本体走代理加速下载，但校验文件必须走 GitHub 直连获取——两条线路互相复核，代理无法同时替换脚本与校验值伪造出自洽的一对；校验不一致时 `sha256sum -c` 会失败并中止，不要绕过校验执行：
 
 ```bash
-curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://gcode.hostcentral.cc/https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 选 `1. 安装面板`，完成后访问 `http://服务器IP:6366`，默认账号 `admin@user` / `admin@user`，登录后请立即修改密码。

@@ -72,10 +72,10 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh -o install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
 ```
 
-Alpine Linux 最小化安装若未包含 `curl`，可使用系统自带的 `wget` 下载：
+Alpine Linux 最小化安装若未包含 `curl`，可使用系统自带的 `wget` 下载（与 curl 版同口径：先取校验文件、`sha256sum -c` 通过后才执行，校验失败不要绕过）：
 
 ```bash
-wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh && chmod +x install.sh && ./install.sh
+wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh && wget -O install.sh.sha256 https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
 ```
 
 脚本会在 Alpine 上自动安装 Bash、`curl` 和 CA 证书，并使用 OpenRC 注册、启动和管理 `flux_agent` 服务；其他受支持的 Linux 发行版继续使用 systemd。
