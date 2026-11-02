@@ -78,6 +78,11 @@ type SubOptions struct {
 	// info nodes for a live subscription, or the reason a stopped one
 	// no longer works. They are not part of the stored pipeline JSON.
 	Notices []string
+	// Templates 是管理员自备的客户端配置骨架，按槽位存模板正文
+	// （TemplateClash / TemplateSingbox / TemplateSurge / TemplateStash /
+	// TemplateShadowrocket，见 sub_template.go）。某格式选了模板就渲染
+	// 进骨架，而不是内置配置与 Rules；没选模板的格式与现状逐字一致。
+	Templates map[string]string
 }
 
 // SubscriptionProtocols is the known protocol set for subscription

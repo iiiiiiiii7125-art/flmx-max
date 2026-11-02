@@ -989,7 +989,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	// 403：改为只含一个原因占位节点的配置（见下），客户端据此换掉旧
 	// 列表并看到原因，而不是停在旧配置上无从知晓。
 	pipe := parsePipeline(sub.Options)
-	subOpts := pipe.options()
+	subOpts := h.subOptions(pipe)
 	// sing-box 客户端 ≥1.14 才下发 Snell 节点；UA 解析不出版本一律不给
 	// （fail-closed，老客户端拿到也渲染不了）。
 	subOpts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())

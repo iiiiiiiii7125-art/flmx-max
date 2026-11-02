@@ -568,6 +568,9 @@ type InboundsBackup struct {
 	// sources), so a subscription's groupIds keep pointing at the
 	// restored groups without a remap.
 	NodeGroups []NodeGroupBackup `json:"nodeGroups,omitempty"`
+	// 订阅模板随入站段备份：订阅 Options 按模板 id 引用模板，恢复时
+	// 先落模板再落订阅，悬空引用在导入订阅时剔除并计数披露。
+	Templates []SubscriptionTemplateBackup `json:"templates,omitempty"`
 	// Users are shared users from 3.0.10 backups; imported as share
 	// subscriptions.
 	Users []SubUserBackup `json:"users,omitempty"`
@@ -692,6 +695,18 @@ type RemoteSourceBackup struct {
 	Userinfo string `json:"userinfo,omitempty"`
 }
 
+type SubscriptionTemplateBackup struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Content       string `json:"content"`
+	BuilderConfig string `json:"builderConfig,omitempty"`
+	SourceURL     string `json:"sourceUrl,omitempty"`
+	LastFetch     int64  `json:"lastFetch,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
+	CreatedTime   int64  `json:"createdTime"`
+}
+
 type InboundRelayBackup struct {
 	ID          int64  `json:"id"`
 	InboundID   int64  `json:"inboundId"`
@@ -722,20 +737,20 @@ type SubscriptionCounterBackup struct {
 }
 
 type UserBackup struct {
-	ID                int64  `json:"id"`
-	User              string `json:"user"`
-	Pwd               string `json:"pwd"`
-	RoleID            int    `json:"roleId"`
-	ExpTime           int64  `json:"expTime"`
-	Flow              int64  `json:"flow"`
-	FlowMiB           int64  `json:"flowMiB,omitempty"`
-	InFlow            int64  `json:"inFlow"`
-	OutFlow           int64  `json:"outFlow"`
-	FlowResetTime     int64  `json:"flowResetTime"`
-	DailyQuotaGB      int64  `json:"dailyQuotaGB,omitempty"`
-	MonthlyQuotaGB    int64  `json:"monthlyQuotaGB,omitempty"`
-	DisabledByQuota   int    `json:"disabledByQuota,omitempty"`
-	QuotaDisabledAt   int64  `json:"quotaDisabledAt,omitempty"`
+	ID              int64  `json:"id"`
+	User            string `json:"user"`
+	Pwd             string `json:"pwd"`
+	RoleID          int    `json:"roleId"`
+	ExpTime         int64  `json:"expTime"`
+	Flow            int64  `json:"flow"`
+	FlowMiB         int64  `json:"flowMiB,omitempty"`
+	InFlow          int64  `json:"inFlow"`
+	OutFlow         int64  `json:"outFlow"`
+	FlowResetTime   int64  `json:"flowResetTime"`
+	DailyQuotaGB    int64  `json:"dailyQuotaGB,omitempty"`
+	MonthlyQuotaGB  int64  `json:"monthlyQuotaGB,omitempty"`
+	DisabledByQuota int    `json:"disabledByQuota,omitempty"`
+	QuotaDisabledAt int64  `json:"quotaDisabledAt,omitempty"`
 	// FIX132-C（D4-01）：配额已用量与暂停清单保真。旧备份无此四字段
 	// 时导入走旧口径（导入日窗口 + 已用量清零）；新备份原样恢复
 	// 窗口键与已用量（跨日恢复由配额视图的滚动归零兜底），暂停清单
@@ -997,6 +1012,7 @@ type ImportResult struct {
 	InboundSubscriptionCountersImported int `json:"inboundSubscriptionCountersImported"`
 	InboundSourcesImported              int `json:"inboundSourcesImported"`
 	InboundNodeGroupsImported           int `json:"inboundNodeGroupsImported"`
+	InboundTemplatesImported            int `json:"inboundTemplatesImported"`
 	InboundLegacyUsersImported          int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
@@ -1006,13 +1022,13 @@ type ImportResult struct {
 	// BUG-A2-4：订阅按 token 重建换 id 时分配经 subRemap 重写落位；
 	// 确实无法落位（目标订阅不存在）的分配被跳过并在此如实计数，
 	// 不再混入 UserSubscriptionsImported 假报成功。
-	UserSubscriptionsSkipped int         `json:"userSubscriptionsSkipped,omitempty"`
-	ServiceMonitorsImported  int         `json:"serviceMonitorsImported"`
+	UserSubscriptionsSkipped int `json:"userSubscriptionsSkipped,omitempty"`
+	ServiceMonitorsImported  int `json:"serviceMonitorsImported"`
 	// FIX132-C（A3-05）：SSH 配置与面板共享定义的恢复计数与受影响
 	// 节点清单——恢复后这些节点的数据面待重新校验下发，回执如实
 	// 披露（降级标记），不再静默降级。
-	NodeSSHConfigsImported int   `json:"nodeSSHConfigsImported"`
-	PeerSharesImported     int   `json:"peerSharesImported"`
+	NodeSSHConfigsImported int     `json:"nodeSSHConfigsImported"`
+	PeerSharesImported     int     `json:"peerSharesImported"`
 	RestoredSSHNodeIDs     []int64 `json:"restoredSSHNodeIds,omitempty"`
 	// FIX132-C（D4-03）：各段因引用不存在被跳过的行数（键为备份段
 	// 名），与 ImportWarnings 一起构成恢复回执的完整披露；订阅段的
@@ -1028,15 +1044,15 @@ type ImportResult struct {
 	// 重推的在线节点，RepushFailedNodeIDs 为重推失败的节点（失败不
 	// 静默：导入本身已成功，故失败只披露、不改写导入成功结论；
 	// 失败节点重连时经 onNodeOnline 全量重布再次收敛）。
-	RepushNodeIDs       []int64     `json:"repushNodeIds,omitempty"`
-	RepushFailedNodeIDs []int64     `json:"repushFailedNodeIds,omitempty"`
+	RepushNodeIDs       []int64 `json:"repushNodeIds,omitempty"`
+	RepushFailedNodeIDs []int64 `json:"repushFailedNodeIds,omitempty"`
 	// SEC-01：字段保留仅为 wire 兼容（旧客户端解析时字段缺席即为
 	// 空，omitempty 下不输出），后端永不赋值。导入前全量快照是整库
 	// 导出（含用户密码 hash、节点 secret、配置 token），一旦填入即
 	// 随回执泄露凭据；且 Import 失败时直接返回错误，从不用它回滚。
 	// 如需恢复导入前状态，须另走服务端留存快照 + 下载端点，不得
 	// 再把快照塞进导入回执。
-	AutoBackup          *BackupData `json:"autoBackup,omitempty"`
+	AutoBackup *BackupData `json:"autoBackup,omitempty"`
 }
 
 // ─── View Structs (used by Repository, not GORM models) ─────────────
@@ -1236,7 +1252,7 @@ type NodeLatencySample struct {
 func (NodeLatencySample) TableName() string { return "node_latency_sample" }
 
 type TunnelMetric struct {
-	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID int64 `gorm:"primaryKey;autoIncrement" json:"id"`
 	// FIX132-C（A3-S2）：(tunnel_id, node_id, timestamp) 的唯一性由
 	// v6 去重迁移的 uidx_tunnel_metric_bucket 单独持有，模型层不再
 	// 声明唯一索引——AutoMigrate 在去重迁移之前运行，存量重复桶行
@@ -1295,11 +1311,11 @@ type TunnelQuality struct {
 	ExitToBingLoss     float64 `gorm:"column:exit_to_bing_loss" json:"exitToBingLoss"`
 	// EntryToExitPartial（R8-024）：入口→出口总值为部分和（仅实测
 	// 跳、至少一跳未测）时为 1，与快照 EntryToExitPartialUntested 同义。
-	EntryToExitPartial int `gorm:"column:entry_to_exit_partial;not null;default:0" json:"entryToExitPartial"`
-	Success            int     `gorm:"not null;default:1" json:"success"`
-	ErrorMessage       string  `gorm:"column:error_message;type:text" json:"errorMessage,omitempty"`
-	Timestamp          int64   `gorm:"not null;index:idx_tunnel_quality_tunnel_time,priority:2;index:idx_tunnel_quality_time" json:"timestamp"`
-	ChainDetails       string  `gorm:"column:chain_details;type:text" json:"chainDetails,omitempty"`
+	EntryToExitPartial int    `gorm:"column:entry_to_exit_partial;not null;default:0" json:"entryToExitPartial"`
+	Success            int    `gorm:"not null;default:1" json:"success"`
+	ErrorMessage       string `gorm:"column:error_message;type:text" json:"errorMessage,omitempty"`
+	Timestamp          int64  `gorm:"not null;index:idx_tunnel_quality_tunnel_time,priority:2;index:idx_tunnel_quality_time" json:"timestamp"`
+	ChainDetails       string `gorm:"column:chain_details;type:text" json:"chainDetails,omitempty"`
 }
 
 func (TunnelQuality) TableName() string { return "tunnel_quality" }
@@ -1307,14 +1323,14 @@ func (TunnelQuality) TableName() string { return "tunnel_quality" }
 // PeerShareResource is the durable desired state for a namespaced peer command.
 // Rows are retained as tombstones until deletion has been acknowledged.
 type PeerShareResource struct {
-	ID                  int64  `gorm:"primaryKey;autoIncrement"`
-	ShareID             int64  `gorm:"column:share_id;not null;uniqueIndex:idx_peer_share_resource_key"`
-	NodeID              int64  `gorm:"column:node_id;not null;index"`
-	Kind                string `gorm:"type:text;not null;uniqueIndex:idx_peer_share_resource_key"`
-	OriginalName        string `gorm:"column:original_name;type:text;not null;uniqueIndex:idx_peer_share_resource_key"`
-	RuntimeName         string `gorm:"column:runtime_name;type:text;not null;index"`
-	LegacyNames         string `gorm:"column:legacy_names;type:text;not null;default:''"`
-	LegacyServiceBase   string `gorm:"column:legacy_service_base;type:text;not null;default:''"`
+	ID                int64  `gorm:"primaryKey;autoIncrement"`
+	ShareID           int64  `gorm:"column:share_id;not null;uniqueIndex:idx_peer_share_resource_key"`
+	NodeID            int64  `gorm:"column:node_id;not null;index"`
+	Kind              string `gorm:"type:text;not null;uniqueIndex:idx_peer_share_resource_key"`
+	OriginalName      string `gorm:"column:original_name;type:text;not null;uniqueIndex:idx_peer_share_resource_key"`
+	RuntimeName       string `gorm:"column:runtime_name;type:text;not null;index"`
+	LegacyNames       string `gorm:"column:legacy_names;type:text;not null;default:''"`
+	LegacyServiceBase string `gorm:"column:legacy_service_base;type:text;not null;default:''"`
 	// FIX132-C（R4-P1）：此列不得带 GORM 默认值。原 default:false
 	// 在 SQLite 建表渲染为 `numeric NOT NULL DEFAULT false`，
 	// pgloader 翻译到 PG 时以 22P02 拒绝、整条 SQLite→PG 官方迁移
@@ -1325,7 +1341,7 @@ type PeerShareResource struct {
 	// 均为「NOT NULL 无默认」，该表全部写入都经 GORM 显式带值
 	//（peer_share_resources.go 的 upsert），语义不变；存量
 	// numeric 列（0/1）读 bool 亦不受影响。
-	ReleaseLegacyFamily bool `gorm:"column:release_legacy_family;not null"`
+	ReleaseLegacyFamily bool   `gorm:"column:release_legacy_family;not null"`
 	Config              string `gorm:"type:text;not null;default:''"`
 	DesiredState        string `gorm:"column:desired_state;type:text;not null;default:'active'"`
 	Applied             int    `gorm:"not null;default:0"`

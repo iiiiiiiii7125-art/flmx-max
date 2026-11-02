@@ -489,6 +489,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeGroup{},
 		&model.SubscriptionCounter{},
 		&model.SubscriptionTraffic{},
+		&model.SubscriptionTemplate{},
 		&model.RemoteSource{},
 	}
 
@@ -1267,8 +1268,8 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"version":       nullableString(n.Version),
 			"http":          n.HTTP, "tls": n.TLS, "socks": n.Socks,
 			"status": n.Status, "isRemote": n.IsRemote,
-			"forwardMode":             defaultNodeForwardMode(n.ForwardMode),
-			"remoteUrl":               nullableString(n.RemoteURL),
+			"forwardMode": defaultNodeForwardMode(n.ForwardMode),
+			"remoteUrl":   nullableString(n.RemoteURL),
 			// R7-L8/F2-01：remoteToken 是联邦凭据，不得随节点列表
 			// DTO 下发（前端零消费，仅类型声明）。远端状态同步改经
 			// repo.ListRemoteNodes 在服务端内部取用（见 handler 的
@@ -3533,7 +3534,8 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.InboundSubscriptionsImported = counts.subscriptions
 			result.InboundSubscriptionCountersImported = counts.subscriptionCounter
 			result.InboundSourcesImported = counts.sources
-		result.InboundNodeGroupsImported = counts.groups
+			result.InboundNodeGroupsImported = counts.groups
+			result.InboundTemplatesImported = counts.templates
 			result.InboundLegacyUsersImported = counts.legacyUsers
 		}
 		// O7-001：导入 user_inbound 表（用户订阅分配关系）
@@ -6917,7 +6919,7 @@ func validateLatencyTargetsConfigValue(raw string) error {
 // icon). Empty values pass through unchanged (same as the save side
 // returning "" for empty, which the handler then treats as clear).
 const (
-	brandAssetDataURLPrefix    = "data:image/png;base64,"
+	brandAssetDataURLPrefix   = "data:image/png;base64,"
 	maxBrandAssetDataURLBytes = 1024 * 1024
 )
 

@@ -353,6 +353,7 @@ func (h *Handler) runRemoteSourceLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 		h.refreshDueRemoteSources(ctx, time.Now())
+		h.refreshDueTemplates(ctx, time.Now())
 	}
 }
 

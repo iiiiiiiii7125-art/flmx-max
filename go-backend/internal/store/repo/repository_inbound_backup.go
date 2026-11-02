@@ -323,6 +323,17 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			Options: g.Options, Inx: g.Inx, CreatedTime: g.CreatedTime,
 		})
 	}
+	var templates []model.SubscriptionTemplate
+	if err := r.db.Order("id ASC").Find(&templates).Error; err != nil {
+		return nil, err
+	}
+	for _, tp := range templates {
+		out.Templates = append(out.Templates, model.SubscriptionTemplateBackup{
+			ID: tp.ID, Name: tp.Name, Kind: tp.Kind, Content: tp.Content,
+			BuilderConfig: tp.BuilderConfig, SourceURL: tp.SourceURL,
+			LastFetch: tp.LastFetch, LastError: tp.LastError, CreatedTime: tp.CreatedTime,
+		})
+	}
 	return out, nil
 }
 
@@ -490,6 +501,7 @@ type inboundImportCounts struct {
 	subscriptionCounter int
 	sources             int
 	groups              int
+	templates           int
 	legacyUsers         int
 }
 
@@ -969,6 +981,71 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		counts.counters++
 	}
+	// Templates land before subscriptions: subscription Options carry
+	// template ids, and the reference pass below keeps a slot only when
+	// its template exists after this upsert (same dangling-reference
+	// discipline as the inbound refs pass — the slot is dropped, the
+	// subscription itself restores and renders built-in).
+	for _, tp := range b.Templates {
+		item := model.SubscriptionTemplate{
+			ID: tp.ID, Name: tp.Name, Kind: tp.Kind, Content: tp.Content,
+			BuilderConfig: tp.BuilderConfig, SourceURL: tp.SourceURL,
+			LastFetch: tp.LastFetch, LastError: tp.LastError,
+			CreatedTime: tp.CreatedTime, UpdatedTime: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "kind", "content", "builder_config", "source_url", "last_fetch", "last_error", "updated_time"}),
+		}).Create(&item).Error; err != nil {
+			return inboundImportCounts{}, err
+		}
+		counts.templates++
+	}
+	danglingTemplateRefs := 0
+	remapTemplateRefs := func(raw string) string {
+		if strings.TrimSpace(raw) == "" {
+			return raw
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &top); err != nil {
+			return raw
+		}
+		rawTpl, ok := top["templates"]
+		if !ok {
+			return raw
+		}
+		var slots map[string]int64
+		if err := json.Unmarshal(rawTpl, &slots); err != nil || len(slots) == 0 {
+			return raw
+		}
+		changed := false
+		for client, id := range slots {
+			if id <= 0 {
+				continue
+			}
+			exists, err := rowExistsTx(tx, &model.SubscriptionTemplate{}, id)
+			if err != nil || exists {
+				continue
+			}
+			delete(slots, client)
+			danglingTemplateRefs++
+			changed = true
+		}
+		if !changed {
+			return raw
+		}
+		encoded, err := json.Marshal(slots)
+		if err != nil {
+			return raw
+		}
+		top["templates"] = encoded
+		out, err := json.Marshal(top)
+		if err != nil {
+			return raw
+		}
+		return string(out)
+	}
+
 	// Subscriptions keep their links and credentials, matched by token.
 	// AppliedActive starts at 0 so the expiry loop pushes the active share
 	// subscriptions to the kernels.
@@ -1003,8 +1080,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
-			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, GroupIDs: sb.GroupIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
-			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
+			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, GroupIDs: sb.GroupIDs, Options: remapTemplateRefs(sb.Options), ExpireTime: sb.ExpireTime, Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, TrafficSince: sb.TrafficSince, PendingDelete: sb.PendingDelete,
 		}
@@ -1042,6 +1118,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if sb.ID > 0 && subRemap != nil {
 			subRemap[sb.ID] = item.ID
 		}
+	}
+
+	if danglingTemplateRefs > 0 {
+		rep.warnf("备份恢复：%d 处订阅的模板引用指向不存在的模板，已剔除对应槽位（订阅改走内置渲染），请在订阅编辑中重新选择模板", danglingTemplateRefs)
 	}
 
 	// A3-04：订阅计数基线随恢复落位。订阅 id 先经 subRemap 按 token

@@ -2,6 +2,7 @@ import type {
   NodeGroupItem,
   RemoteSourceItem,
   SubPipeline,
+  SubTemplateItem,
   SubPreviewItem,
   SubRuleGroup,
   SubscriptionDraft,
@@ -20,6 +21,7 @@ import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import {
   deleteSubscription,
   getInboundList,
+  getSubscriptionTemplates,
   getInboundRelays,
   getNodeGroups,
   getRemoteSources,
@@ -51,6 +53,7 @@ import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
 import { SUB_CLIENTS } from "@/pages/subscription/clients";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
+import { SubscriptionTemplatesModal } from "@/pages/subscription/templates";
 import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 
 const modalBase =
@@ -98,6 +101,8 @@ const EMPTY_PIPELINE: SubPipeline = {
   /** 中转范围：端点 ID（0=直连，>0=中转 ID）；空 = 全部端点。 */
   relayIds: [],
   infoNodes: false,
+  /** 订阅模板槽位 → 模板 ID；空 = 不用模板。 */
+  templates: {},
 };
 
 function toDateInput(ms: number): string {
@@ -446,6 +451,15 @@ function Editor({
     scriptError?: string;
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [templates, setTemplates] = useState<SubTemplateItem[]>([]);
+
+  useEffect(() => {
+    getSubscriptionTemplates()
+      .then((res) => {
+        if (res.code === 0) setTemplates(res.data ?? []);
+      })
+      .catch(() => {});
+  }, []);
   const o = draft.options;
   const setOpts = (patch: Partial<SubPipeline>) => {
     setDraft({ ...draft, options: { ...o, ...patch } });
@@ -1180,6 +1194,53 @@ function Editor({
             </div>
           )}
           <div className="space-y-1.5">
+            <p className="text-xs font-semibold">订阅模板</p>
+            <p className="text-xs font-semibold text-foreground">
+              选了模板的客户端按模板骨架下发（面板只填节点），分流规则对它不生效；
+              没选的照旧。在订阅页右上角「模板」里管理模板。
+            </p>
+            {(
+              [
+                ["clash", "Mihomo", "clash"],
+                ["singbox", "sing-box", "singbox"],
+                ["surge", "Surge", "surge"],
+                ["stash", "Stash", "clash"],
+                ["shadowrocket", "Shadowrocket", "clash"],
+              ] as Array<[string, string, string]>
+            ).map(([slot, label, kind]) => (
+              <div
+                key={slot}
+                className="flex items-center justify-between gap-2"
+              >
+                <label className="text-sm" htmlFor={`sub-tpl-${slot}`}>
+                  {label}
+                </label>
+                <select
+                  className="h-9 max-w-56 rounded-lg border border-divider bg-content1 px-2 text-sm"
+                  id={`sub-tpl-${slot}`}
+                  value={o.templates?.[slot] ?? 0}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    const next = { ...(o.templates ?? {}) };
+
+                    if (id > 0) next[slot] = id;
+                    else delete next[slot];
+                    setOpts({ templates: next });
+                  }}
+                >
+                  <option value={0}>不用模板</option>
+                  {templates
+                    .filter((t) => t.kind === kind)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-1.5">
             <p className="text-xs font-semibold">自定义脚本</p>
             <p className="text-xs font-semibold text-foreground">
               对处理后的节点再做筛选、改名、排序。写一个{" "}
@@ -1291,6 +1352,7 @@ export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"manage" | "assign" | "groups">("manage");
   const [groups, setGroups] = useState<NodeGroupItem[]>([]);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   // 移植自 kure29/flyx：订阅规则组（后端下发）。
@@ -1546,15 +1608,25 @@ export default function SubscriptionPage() {
             每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式
           </p>
         </div>
-        <Button
-          className="font-semibold"
-          color="primary"
-          size="sm"
-          variant="solid"
-          onPress={() => setDraft(draftFrom(undefined, sources))}
-        >
-          新建订阅
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            className="font-semibold"
+            size="sm"
+            variant="flat"
+            onPress={() => setTemplatesOpen(true)}
+          >
+            模板
+          </Button>
+          <Button
+            className="font-semibold"
+            color="primary"
+            size="sm"
+            variant="solid"
+            onPress={() => setDraft(draftFrom(undefined, sources))}
+          >
+            新建订阅
+          </Button>
+        </div>
       </div>
 
       {/* 订阅管理 / 订阅分配 Tab */}
@@ -1854,6 +1926,10 @@ export default function SubscriptionPage() {
           )}
         </ModalContent>
       </Modal>
+      <SubscriptionTemplatesModal
+        isOpen={templatesOpen}
+        onClose={() => setTemplatesOpen(false)}
+      />
     </AnimatedPage>
   );
 }
