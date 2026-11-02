@@ -1130,7 +1130,7 @@ export default function ConfigPage() {
               className="w-full max-h-48 object-cover opacity-80"
               src={bgImage}
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-4">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent flex items-end p-4">
               <span className="text-white text-sm font-medium">预览效果</span>
             </div>
           </div>
