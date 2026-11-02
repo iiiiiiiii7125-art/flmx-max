@@ -32,7 +32,7 @@ export default function PageWrapper({
         <div className="container mx-auto max-w-7xl px-3 lg:px-6 py-8">
           <div className="flex items-center justify-center h-64">
             <div className="flex items-center gap-3">
-              <div className="animate-spin h-5 w-5 border-2 border-gray-200 dark:border-gray-700 border-t-gray-600 dark:border-t-gray-300 rounded-full" />
+              <div className="animate-spin h-5 w-5 border-2 border-gray-200 border-t-gray-600 rounded-full" />
               <span className="text-foreground" />
             </div>
           </div>

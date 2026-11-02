@@ -251,7 +251,7 @@ export function NodeFormModal({
                   {form.forwardMode === "nftables" ? (
                     <div className="space-y-4 rounded-xl border border-warning-500/25 bg-warning-500/10 p-4">
                       <div>
-                        <div className="text-sm font-medium text-warning-700 dark:text-warning-300">
+                        <div className="text-sm font-medium text-warning-700">
                           SSH 配置
                         </div>
                         <div className="text-xs font-semibold text-foreground">

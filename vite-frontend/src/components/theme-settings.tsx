@@ -65,7 +65,7 @@ export const ThemeSettings: React.FC = () => {
                   className={`relative rounded-xl text-left transition-all duration-200 border-2 overflow-hidden ${
                     isActive
                       ? "border-primary shadow-lg shadow-primary/15 scale-[1.01]"
-                      : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
+                      : "border-gray-200 hover:border-gray-300"
                   }`}
                   type="button"
                   onClick={() => handleThemeSelect(theme.id)}

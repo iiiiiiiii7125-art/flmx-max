@@ -216,7 +216,7 @@ function UserDashboard() {
   const getExpStatus = (expTime?: string | number) => {
     if (!expTime)
       return {
-        color: "text-green-700 dark:text-green-400",
+        color: "text-green-700",
         bg: "bg-green-500/10 border-green-300",
         text: "永久",
       };
@@ -234,7 +234,7 @@ function UserDashboard() {
 
     if (expDate < now) {
       return {
-        color: "text-red-600 dark:text-red-400",
+        color: "text-red-600",
         bg: "bg-red-500/10 border-red-300",
         text: "已过期",
       };
@@ -245,19 +245,19 @@ function UserDashboard() {
 
     if (diffDays <= 7) {
       return {
-        color: "text-red-600 dark:text-red-400",
+        color: "text-red-600",
         bg: "bg-red-500/10 border-red-300",
         text: `${diffDays}天后过期`,
       };
     } else if (diffDays <= 30) {
       return {
-        color: "text-orange-700 dark:text-orange-400",
+        color: "text-orange-700",
         bg: "bg-orange-500/10 border-orange-300",
         text: `${diffDays}天后过期`,
       };
     } else {
       return {
-        color: "text-green-700 dark:text-green-400",
+        color: "text-green-700",
         bg: "bg-green-500/10 border-green-300",
         text: `${diffDays}天后过期`,
       };
@@ -322,7 +322,7 @@ function UserDashboard() {
     return (
       <div className="w-full">
         <div
-          className={`w-full bg-default-200 dark:bg-gray-800 rounded-full ${height}`}
+          className={`w-full bg-default-200 rounded-full ${height}`}
         >
           <div
             className={`${height} rounded-full transition-all duration-300 ${getUsageColor(percentage)}`}
@@ -730,14 +730,14 @@ function UserDashboard() {
           icon={
             <svg
               aria-hidden="true"
-              className="w-4 h-4 lg:w-5 lg:h-5 text-blue-600 dark:text-blue-400"
+              className="w-4 h-4 lg:w-5 lg:h-5 text-blue-600"
               fill="currentColor"
               viewBox="0 0 20 20"
             >
               <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
             </svg>
           }
-          iconClassName="bg-blue-100 dark:bg-blue-900"
+          iconClassName="bg-blue-100"
           title="总流量"
           value={formatFlowLimit(userInfo.flow, userInfo.flowMiB)}
         />
@@ -786,7 +786,7 @@ function UserDashboard() {
           icon={
             <svg
               aria-hidden="true"
-              className="w-4 h-4 lg:w-5 lg:h-5 text-green-600 dark:text-green-400"
+              className="w-4 h-4 lg:w-5 lg:h-5 text-green-600"
               fill="currentColor"
               viewBox="0 0 20 20"
             >
@@ -797,7 +797,7 @@ function UserDashboard() {
               />
             </svg>
           }
-          iconClassName="bg-green-100 dark:bg-green-900"
+          iconClassName="bg-green-100"
           title="已用流量"
           value={formatFlow(calculateUserTotalUsedFlow())}
         />
@@ -806,7 +806,7 @@ function UserDashboard() {
           icon={
             <svg
               aria-hidden="true"
-              className="w-4 h-4 lg:w-5 lg:h-5 text-purple-600 dark:text-purple-400"
+              className="w-4 h-4 lg:w-5 lg:h-5 text-purple-600"
               fill="currentColor"
               viewBox="0 0 20 20"
             >
@@ -817,7 +817,7 @@ function UserDashboard() {
               />
             </svg>
           }
-          iconClassName="bg-purple-100 dark:bg-purple-900"
+          iconClassName="bg-purple-100"
           title="规则配额"
           value={formatNumber(userInfo.num || 0)}
         />
@@ -841,7 +841,7 @@ function UserDashboard() {
           icon={
             <svg
               aria-hidden="true"
-              className="w-4 h-4 lg:w-5 lg:h-5 text-orange-600 dark:text-orange-400"
+              className="w-4 h-4 lg:w-5 lg:h-5 text-orange-600"
               fill="currentColor"
               viewBox="0 0 20 20"
             >
@@ -852,7 +852,7 @@ function UserDashboard() {
               />
             </svg>
           }
-          iconClassName="bg-orange-100 dark:bg-orange-900"
+          iconClassName="bg-orange-100"
           title="已用规则"
           value={forwardList.length}
         />
@@ -865,7 +865,7 @@ function UserDashboard() {
       />
 
       {isAdmin && nodeExpiryReminders.length > 0 && (
-        <Card className="mb-6 lg:mb-8 border-warning/30 shadow-sm dark:border-warning/20">
+        <Card className="mb-6 lg:mb-8 border-warning/30 shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full">
               <div className="flex items-center gap-2">
@@ -893,7 +893,7 @@ function UserDashboard() {
                   </p>
                 </div>
               </div>
-              <span className="inline-flex w-fit items-center rounded-full tray-warning px-3 py-1 text-xs font-semibold ring-1 ring-amber-200/80 dark:ring-amber-500/30">
+              <span className="inline-flex w-fit items-center rounded-full tray-warning px-3 py-1 text-xs font-semibold ring-1 ring-amber-200/80">
                 {nodeExpiryReminders.length} 个提醒
               </span>
             </div>
@@ -948,7 +948,7 @@ function UserDashboard() {
                   return (
                     <div
                       key={tunnel.id}
-                      className="border border-gray-200 dark:border-default-100 rounded-lg p-3 lg:p-4 transition-shadow"
+                      className="border border-gray-200 rounded-lg p-3 lg:p-4 transition-shadow"
                     >
                       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-3">
                         <div>
@@ -1156,17 +1156,17 @@ function UserDashboard() {
                             </div>
                           </div>
 
-                          <div className="pt-2 border-t border-gray-200 dark:border-default-200">
+                          <div className="pt-2 border-t border-gray-200">
                             <div className="grid grid-cols-3 gap-1 text-xs font-semibold">
                               <div className="text-center">
                                 <div className="text-foreground mb-1">上传</div>
-                                <div className="font-medium text-green-700 dark:text-green-400 truncate">
+                                <div className="font-medium text-green-700 truncate">
                                   {formatFlow(forward.inFlow || 0)}
                                 </div>
                               </div>
                               <div className="text-center">
                                 <div className="text-foreground mb-1">下载</div>
-                                <div className="font-medium text-orange-700 dark:text-orange-400 truncate">
+                                <div className="font-medium text-orange-700 truncate">
                                   {formatFlow(forward.outFlow || 0)}
                                 </div>
                               </div>
@@ -1214,7 +1214,7 @@ function UserDashboard() {
               {addressList.map((item) => (
                 <div
                   key={item.id}
-                  className="flex justify-between items-center p-3 border border-default-200 dark:border-default-100 rounded-lg"
+                  className="flex justify-between items-center p-3 border border-default-200 rounded-lg"
                 >
                   <code className="font-mono text-sm flex-1 mr-3 text-foreground">
                     {item.address}

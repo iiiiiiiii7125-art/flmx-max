@@ -12,9 +12,9 @@ const alertVariants = cva(
         // Round 4: semantic alerts ride the tint trays (opaque in both
         // themes; the old -50 tints kept their light shade in dark mode
         // and washed the light text out).
-        destructive: "border-danger-200 tray-danger dark:border-danger-800",
-        success: "border-success-200 tray-success dark:border-success-800",
-        warning: "border-warning-200 tray-warning dark:border-warning-800",
+        destructive: "border-danger-200 tray-danger",
+        success: "border-success-200 tray-success",
+        warning: "border-warning-200 tray-warning",
       },
     },
     defaultVariants: {

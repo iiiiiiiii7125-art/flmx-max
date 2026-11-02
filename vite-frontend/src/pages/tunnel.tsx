@@ -1986,8 +1986,8 @@ export default function TunnelPage() {
                   const typeDisplay = getTunnelTypeDisplay(tunnel.type);
                   const tunnelTypeChipClassName =
                     tunnel.type === 1
-                      ? "text-[10px] font-semibold h-5 bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900 dark:text-primary-200 dark:border-primary-700"
-                      : "text-[10px] font-semibold h-5 bg-success-100 text-success-800 border-success-300 dark:bg-success-900 dark:text-success-200 dark:border-success-700";
+                      ? "text-[10px] font-semibold h-5 bg-primary-100 text-primary-800 border-primary-300"
+                      : "text-[10px] font-semibold h-5 bg-success-100 text-success-800 border-success-300";
                   const bestExitStateContent = renderBestExitState(
                     tunnel.bestExitState,
                   );
@@ -2036,18 +2036,18 @@ export default function TunnelPage() {
                       <TableCell>
                         <div className="flex min-w-0 flex-col gap-1.5">
                           <div className="flex items-center gap-1.5 text-xs font-semibold">
-                            <span className="font-semibold text-primary-700 dark:text-primary-400">
+                            <span className="font-semibold text-primary-700">
                               {tunnel.inNodeId?.length || 0}入口
                             </span>
                             <span className="text-foreground">→</span>
-                            <span className="font-semibold text-secondary-700 dark:text-secondary-400">
+                            <span className="font-semibold text-secondary-700">
                               {tunnel.type === 2
                                 ? tunnel.chainNodes?.length || 0
                                 : 0}
                               跳
                             </span>
                             <span className="text-foreground">→</span>
-                            <span className="font-semibold text-success-700 dark:text-success-400">
+                            <span className="font-semibold text-success-700">
                               {tunnel.type === 2
                                 ? tunnel.outNodeId?.length || 0
                                 : tunnel.inNodeId?.length || 0}
@@ -2079,7 +2079,7 @@ export default function TunnelPage() {
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                           <Button
-                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 dark:bg-indigo-950 dark:text-indigo-400"
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20"
                             size="sm"
                             variant="flat"
                             onPress={() => handleEdit(tunnel)}
@@ -2087,7 +2087,7 @@ export default function TunnelPage() {
                             编辑
                           </Button>
                           <Button
-                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:bg-amber-950 dark:text-amber-400"
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-amber-500/10 text-amber-700 hover:bg-amber-500/20"
                             size="sm"
                             variant="flat"
                             onPress={() => handleDiagnose(tunnel)}
@@ -2095,7 +2095,7 @@ export default function TunnelPage() {
                             诊断
                           </Button>
                           <Button
-                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 dark:bg-rose-950 dark:text-rose-400"
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20"
                             size="sm"
                             variant="flat"
                             onPress={() => handleDelete(tunnel)}
@@ -2121,8 +2121,8 @@ export default function TunnelPage() {
                   const typeDisplay = getTunnelTypeDisplay(tunnel.type);
                   const tunnelTypeChipClassName =
                     tunnel.type === 1
-                      ? "text-xs font-semibold bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900 dark:text-primary-200 dark:border-primary-700"
-                      : "text-xs font-semibold bg-success-100 text-success-800 border-success-300 dark:bg-success-900 dark:text-success-200 dark:border-success-700";
+                      ? "text-xs font-semibold bg-primary-100 text-primary-800 border-primary-300"
+                      : "text-xs font-semibold bg-success-100 text-success-800 border-success-300";
                   const bestExitStateContent = renderBestExitState(
                     tunnel.bestExitState,
                   );
@@ -2201,7 +2201,7 @@ export default function TunnelPage() {
                                         fillRule="evenodd"
                                       />
                                     </svg>
-                                    <span className="font-semibold text-primary-700 dark:text-primary-400">
+                                    <span className="font-semibold text-primary-700">
                                       {tunnel.inNodeId?.length || 0}入口
                                     </span>
                                   </div>
@@ -2236,7 +2236,7 @@ export default function TunnelPage() {
                                         fillRule="evenodd"
                                       />
                                     </svg>
-                                    <span className="font-semibold text-secondary-700 dark:text-secondary-400">
+                                    <span className="font-semibold text-secondary-700">
                                       {tunnel.type === 2
                                         ? tunnel.chainNodes?.length || 0
                                         : 0}
@@ -2274,7 +2274,7 @@ export default function TunnelPage() {
                                         fillRule="evenodd"
                                       />
                                     </svg>
-                                    <span className="font-semibold text-success-700 dark:text-success-400">
+                                    <span className="font-semibold text-success-700">
                                       {tunnel.type === 2
                                         ? tunnel.outNodeId?.length || 0
                                         : tunnel.inNodeId?.length || 0}

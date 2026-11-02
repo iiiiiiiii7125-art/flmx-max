@@ -1305,7 +1305,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         <div className="flex items-center justify-center shrink-0 w-10 h-10 rounded-full bg-primary text-white font-bold text-sm relative">
                           {(user.name || user.user).slice(0, 2).toUpperCase()}
                           <span
-                            className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white dark:border-zinc-900 rounded-full ${userStatus.color === "success" ? "bg-success" : "bg-danger"}`}
+                            className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white rounded-full ${userStatus.color === "success" ? "bg-success" : "bg-danger"}`}
                           />
                         </div>
                         <div className="flex flex-col">
@@ -1403,7 +1403,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5 min-w-max">
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-950 dark:text-emerald-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20"
                           size="sm"
                           variant="flat"
                           onPress={() => handleManageTunnels(user)}
@@ -1411,7 +1411,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           权限
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:bg-amber-950 dark:text-amber-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-amber-500/10 text-amber-700 hover:bg-amber-500/20"
                           size="sm"
                           title="重置流量"
                           variant="flat"
@@ -1420,7 +1420,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           重置
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 dark:bg-indigo-950 dark:text-indigo-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20"
                           size="sm"
                           variant="flat"
                           onPress={() => handleEdit(user)}
@@ -1428,7 +1428,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                           编辑
                         </Button>
                         <Button
-                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 dark:bg-rose-950 dark:text-rose-400"
+                          className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20"
                           size="sm"
                           variant="flat"
                           onPress={() => handleDelete(user)}
@@ -1472,7 +1472,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         <div className="flex items-center justify-center shrink-0 w-10 h-10 rounded-full bg-primary text-white font-bold text-sm relative">
                           {(user.name || user.user).slice(0, 2).toUpperCase()}
                           <span
-                            className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white dark:border-zinc-900 rounded-full ${userStatus.color === "success" ? "bg-success" : "bg-danger"}`}
+                            className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white rounded-full ${userStatus.color === "success" ? "bg-success" : "bg-danger"}`}
                           />
                         </div>
                         <div className="flex flex-col min-w-0">
@@ -2061,7 +2061,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                                 }
                               />
                               <span
-                                className={`font-medium truncate ${isAssigned ? "text-foreground" : "text-default-700 dark:text-default-600"}`}
+                                className={`font-medium truncate ${isAssigned ? "text-foreground" : "text-default-700"}`}
                               >
                                 {tunnel.name}
                               </span>
@@ -2621,7 +2621,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                   该操作只会重置账号流量不会重置隧道权限流量，重置后该用户的上下行流量将归零，此操作不可撤销。
                 </p>
                 <div className="mt-2 p-2 bg-warning-500/10 rounded text-xs font-semibold">
-                  <div className="text-warning-700 dark:text-warning-300">
+                  <div className="text-warning-700">
                     当前流量使用情况：
                   </div>
                   <div className="mt-1 space-y-1">
@@ -2643,7 +2643,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                     </div>
                     <div className="flex justify-between font-medium">
                       <span>总计：</span>
-                      <span className="font-mono text-warning-700 dark:text-warning-300">
+                      <span className="font-mono text-warning-700">
                         {userToReset
                           ? formatFlow(calculateUserTotalUsedFlow(userToReset))
                           : "-"}
@@ -2714,7 +2714,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                   该操作只会重置隧道权限流量不会重置账号流量，重置后该隧道权限的上下行流量将归零，此操作不可撤销。
                 </p>
                 <div className="mt-2 p-2 bg-warning-500/10 rounded text-xs font-semibold">
-                  <div className="text-warning-700 dark:text-warning-300">
+                  <div className="text-warning-700">
                     当前流量使用情况：
                   </div>
                   <div className="mt-1 space-y-1">
@@ -2736,7 +2736,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                     </div>
                     <div className="flex justify-between font-medium">
                       <span>总计：</span>
-                      <span className="font-mono text-warning-700 dark:text-warning-300">
+                      <span className="font-mono text-warning-700">
                         {tunnelToReset
                           ? formatFlow(calculateTunnelUsedFlow(tunnelToReset))
                           : "-"}
