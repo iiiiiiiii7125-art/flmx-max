@@ -771,3 +771,72 @@ func TestWrapUpgradeDownloadError(t *testing.T) {
 		t.Fatal("nil error must stay nil")
 	}
 }
+
+// R8-075：状态查询只读幂等——POST 带 JSON body 与 GET 同形返回状态，
+// 不再以 -1「请求失败」收口；其他 method 仍拒绝。
+func TestSystemUpgradeStatusHandlerAcceptsPostWithBody(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(panelDeployDirEnv, dir)
+
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/upgrade/status", strings.NewReader(`{}`))
+	rr := httptest.NewRecorder()
+	h.systemUpgradeStatus(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, `"inProgress":false`) || !strings.Contains(body, `"code":0`) {
+		t.Fatalf("POST with body: expected OK envelope with inProgress=false, got %s", body)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/system/upgrade/status", nil)
+	rr = httptest.NewRecorder()
+	h.systemUpgradeStatus(rr, req)
+	if !strings.Contains(rr.Body.String(), `"code":-1`) {
+		t.Fatalf("DELETE: expected -1 envelope, got %s", rr.Body.String())
+	}
+}
+
+// R8-003：降级点名须随状态落盘、透传 helper 环境变量（JSON 转义后的
+// 内容），且 helper 脚本回写终态时保留 anchorNote 字段。
+func TestSystemUpgradeAnchorNotePlumbing(t *testing.T) {
+	note := "跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续"
+	exec := &systemUpgradeExecutor{
+		deployDir:         "/opt/flvx-panel",
+		backendContainer:  "flux-panel-backend",
+		upgradeVersion:    "1.9.5",
+		upgradeStartedAt:  "2026-11-02T00:00:00Z",
+		upgradeAnchorNote: note,
+	}
+	args, err := exec.buildHelperRunArgs("sha256:abc", "flvx-upgrade-helper")
+	if err != nil {
+		t.Fatalf("buildHelperRunArgs() error = %v", err)
+	}
+	raw, err := json.Marshal(note)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	wantEnv := "FLUX_UPGRADE_ANCHOR_NOTE=" + string(raw[1:len(raw)-1])
+	found := false
+	for _, a := range args {
+		if a == wantEnv {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("buildHelperRunArgs() missing %q in %#v", wantEnv, args)
+	}
+	if script := exec.helperScript(); !strings.Contains(script, "anchorNote") || !strings.Contains(script, "FLUX_UPGRADE_ANCHOR_NOTE") {
+		t.Fatal("helper script must preserve anchorNote on status rewrite")
+	}
+
+	// 状态落盘/读回往返保留点名。
+	dir := t.TempDir()
+	exec2 := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	if err := exec2.writeUpgradeStatus(systemUpgradeStatusData{
+		InProgress: true, Version: "1.9.5", StartedAt: "2026-11-02T00:00:00Z", AnchorNote: note,
+	}); err != nil {
+		t.Fatalf("writeUpgradeStatus() error = %v", err)
+	}
+	if got := exec2.readUpgradeStatus().AnchorNote; got != note {
+		t.Fatalf("readUpgradeStatus().AnchorNote = %q, want %q", got, note)
+	}
+}

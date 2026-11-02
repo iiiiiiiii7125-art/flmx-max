@@ -72,6 +72,10 @@ type systemUpgradeExecutor struct {
 	// helper 在结束/回滚时据此回写升级状态文件。
 	upgradeVersion   string
 	upgradeStartedAt string
+	// R8-003：本次升级的第二锚降级点名（双锚通过时为空），随升级状态
+	// 一并落盘并透传 helper 回写，使状态轮询面也能透出单锚/双锚区别
+	// （此前只进发起回执的 message、前端又不读，UI 无从区分）。
+	upgradeAnchorNote string
 	// composeProject is the Compose project the running containers belong
 	// to. It need not match the deploy directory's name (e.g. installed
 	// from /root, deployed in /opt/flvx-panel); without it Compose would
@@ -182,6 +186,9 @@ type systemUpgradeStatusData struct {
 	StartedAt  string `json:"startedAt,omitempty"`
 	Result     string `json:"result,omitempty"`
 	FinishedAt string `json:"finishedAt,omitempty"`
+	// R8-003：发起本次升级时的第二锚降级点名（单锚降级时非空）；由发起
+	// 路径写入、helper 终态回写时原样保留，状态端点据此透出。
+	AnchorNote string `json:"anchorNote,omitempty"`
 }
 
 func (e *systemUpgradeExecutor) statusPath() string {
@@ -567,8 +574,14 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
 write_status() {
   # B05-002：先写同目录临时文件再 mv 原子覆盖，避免后端在回写瞬间
   # 读到截断中的撕裂内容（旧实现 printf > 直接截断目标文件）。
-  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"}\n' \
-    "$1" "${FLUX_UPGRADE_VERSION:-}" "${FLUX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$STATUS_FILE.tmp"
+  # R8-003：透传的第二锚降级点名（已由面板侧 JSON 转义）原样保留进
+  # 终态，未透传时不写该字段。
+  anchor_field=""
+  if [ -n "${FLUX_UPGRADE_ANCHOR_NOTE:-}" ]; then
+    anchor_field=", \"anchorNote\": \"${FLUX_UPGRADE_ANCHOR_NOTE}\""
+  fi
+  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s}\n' \
+    "$1" "${FLUX_UPGRADE_VERSION:-}" "${FLUX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" > "$STATUS_FILE.tmp"
   chmod 600 "$STATUS_FILE.tmp" 2>/dev/null || true
   mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
@@ -737,6 +750,15 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 		args = append(args,
 			"-e", "FLUX_UPGRADE_VERSION="+e.upgradeVersion,
 			"-e", "FLUX_UPGRADE_STARTED_AT="+e.upgradeStartedAt)
+	}
+	// R8-003：透传第二锚降级点名（JSON 字符串转义后的内容、不含外层
+	// 引号），helper 回写终态时原样保留进状态文件；为空则不透传，
+	// helper 侧缺省不写 anchorNote 字段。
+	if e.upgradeAnchorNote != "" {
+		if raw, err := json.Marshal(e.upgradeAnchorNote); err == nil && len(raw) >= 2 {
+			args = append(args,
+				"-e", "FLUX_UPGRADE_ANCHOR_NOTE="+string(raw[1:len(raw)-1]))
+		}
 	}
 	return append(args,
 		"--entrypoint", "/bin/sh", imageID,
@@ -1747,10 +1769,13 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// U1-003：启动 helper 前落盘「升级中」状态，并透传给 helper 由其回写终态。
 	exec.upgradeVersion = version
 	exec.upgradeStartedAt = time.Now().UTC().Format(time.RFC3339)
+	// R8-003：降级点名随状态落盘并透传 helper，状态轮询面同步透出。
+	exec.upgradeAnchorNote = anchorNote
 	if err := exec.writeUpgradeStatus(systemUpgradeStatusData{
 		InProgress: true,
 		Version:    version,
 		StartedAt:  exec.upgradeStartedAt,
+		AnchorNote: anchorNote,
 	}); err != nil {
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -1770,6 +1795,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 			StartedAt:  exec.upgradeStartedAt,
 			Result:     "helper_start_failed",
 			FinishedAt: time.Now().UTC().Format(time.RFC3339),
+			AnchorNote: anchorNote,
 		})
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -1811,9 +1837,16 @@ func wrapUpgradeDownloadError(err error) error {
 // 折算——残留进行中状态折算为 inProgress=false + result="interrupted"，
 // 不再原样回吐与「可否再发起升级」分裂的口径。
 func (h *Handler) systemUpgradeStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	// R8-075：状态查询是只读幂等面——GET 与 POST 同形受理，POST 携带
+	// 的 body（如探测工具/脚本惯用的 `{}`）直接忽略，不再因 method 或
+	// body 形态返回 -1，与发布产物真机实证的契约不一致收口。
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
+	}
+	if r.Body != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 1<<20))
+		_ = r.Body.Close()
 	}
 	exec := newSystemUpgradeExecutor()
 	response.WriteJSON(w, response.OK(exec.assessUpgradeStatus(time.Now()).Status))
