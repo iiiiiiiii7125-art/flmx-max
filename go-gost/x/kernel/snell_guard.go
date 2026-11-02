@@ -24,10 +24,18 @@ import (
 //     as the agent user — they dial the admin-configured TLS camouflage
 //     server and the loopback Snell backend, never a client-chosen
 //     target) run as the dedicated system user flmx-snell;
-//   - the flmx_kernel nftables table drops that uid's egress packets to
-//     non-public destination ranges, by destination IP, so domain-named
-//     targets are covered the moment they are resolved, exactly like
-//     literal ones.
+//   - the flmx_kernel nftables table drops that uid's new outbound
+//     connections to non-public destination ranges, by destination IP,
+//     so domain-named targets are covered the moment they are resolved,
+//     exactly like literal ones. Packets belonging to an already
+//     established flow are exempt: they are the replies of a session a
+//     client opened to the Snell inbound, and a client on a private
+//     address (same LAN/VPC, loopback, or reached through a private
+//     relay hop) must not have its session killed by the destination
+//     check. The exemption cannot be used to reach a private target —
+//     a flow only becomes established after a reply was seen, and the
+//     opening packet of a guard-uid flow towards a non-public range is
+//     dropped, so such a flow never establishes.
 //
 // The drop set expands the product's canonical non-public definition
 // (the flmx-no-private bypass / netguard classifier: IsPrivate ∪
