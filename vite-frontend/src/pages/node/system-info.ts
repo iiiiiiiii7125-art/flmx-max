@@ -96,9 +96,23 @@ export const buildNodeSystemInfo = (
     return null;
   }
 
-  const uploadTraffic = toInteger(raw.bytes_transmitted);
-  const downloadTraffic = toInteger(raw.bytes_received);
-  const uptime = toInteger(raw.uptime);
+  // R2-050: the three counters follow the same keep-previous rule as
+  // the metric merge path in node.tsx ("frame ?? last ?? 0"). A frame
+  // that passes the >=3-key gate but omits the counters must not zero
+  // the node's cumulative traffic / uptime; fall back to the previous
+  // snapshot, and to 0 only when there is none.
+  const uploadTraffic =
+    raw.bytes_transmitted === undefined
+      ? (previous?.uploadTraffic ?? 0)
+      : toInteger(raw.bytes_transmitted);
+  const downloadTraffic =
+    raw.bytes_received === undefined
+      ? (previous?.downloadTraffic ?? 0)
+      : toInteger(raw.bytes_received);
+  const uptime =
+    raw.uptime === undefined
+      ? (previous?.uptime ?? 0)
+      : toInteger(raw.uptime);
 
   let uploadSpeed = 0;
   let downloadSpeed = 0;
