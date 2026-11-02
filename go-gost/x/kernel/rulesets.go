@@ -511,22 +511,41 @@ func (m *Manager) swapRuleSets(job ruleSetJob, staged []*remoteRuleSet) {
 	m.mu.Lock()
 	enabled := inst.req.Enabled
 	m.mu.Unlock()
+	restartSkipped := false
 	if enabled {
-		m.stopProcesses(inst)
-		m.startProcesses(inst)
-		if !m.waitStable(job.kernelType) {
-			for _, s := range swapped {
-				path := s.localPath(job.dir)
-				if hadOrig[s.tag] {
-					_ = os.Rename(path+".bak", path)
-				} else {
-					_ = os.Remove(path)
-				}
-			}
+		if err := m.restartGuardError(inst); err != nil {
+			// B-02 (A-03): same gate as the geodata updater — a
+			// guarded kernel must not restart while its rules cannot
+			// be installed. The running processes keep serving the
+			// rule sets they already loaded; the new files take
+			// effect at the next start once a sync succeeds again.
+			restartSkipped = true
+			m.logGeo(job.kernelType, "分流规则集已更新到磁盘，但 nft 规则同步失败，受保护内核未重启（继续按已加载数据运行）: "+err.Error())
+		} else {
 			m.stopProcesses(inst)
 			m.startProcesses(inst)
-			m.logGeo(job.kernelType, "新的分流规则集无法启动内核，已恢复原来的文件")
-			return
+			if !m.waitStable(job.kernelType) {
+				for _, s := range swapped {
+					path := s.localPath(job.dir)
+					if hadOrig[s.tag] {
+						_ = os.Rename(path+".bak", path)
+					} else {
+						_ = os.Remove(path)
+					}
+				}
+				m.stopProcesses(inst)
+				if err := m.restartGuardError(inst); err != nil {
+					// The restore-restart is gated too (A-03): the
+					// processes are already stopped here, so a failed
+					// sync leaves the guarded kernel down — the same
+					// fail-closed end state as Control start.
+					m.logGeo(job.kernelType, "恢复原文件后 nft 规则同步失败，受保护内核保持停止: "+err.Error())
+				} else {
+					m.startProcesses(inst)
+				}
+				m.logGeo(job.kernelType, "新的分流规则集无法启动内核，已恢复原来的文件")
+				return
+			}
 		}
 	}
 	var tags []string
@@ -534,5 +553,7 @@ func (m *Manager) swapRuleSets(job ruleSetJob, staged []*remoteRuleSet) {
 		_ = os.Remove(s.localPath(job.dir) + ".bak")
 		tags = append(tags, s.tag)
 	}
-	m.logGeo(job.kernelType, "分流规则集已更新: "+strings.Join(tags, ", "))
+	if !restartSkipped {
+		m.logGeo(job.kernelType, "分流规则集已更新: "+strings.Join(tags, ", "))
+	}
 }

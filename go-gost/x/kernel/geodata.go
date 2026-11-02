@@ -251,31 +251,53 @@ func (m *Manager) swapGeoFiles(job geoJob, staged []string) {
 	m.mu.Lock()
 	enabled := inst.req.Enabled
 	m.mu.Unlock()
+	restartSkipped := false
 	if enabled {
-		m.stopProcesses(inst)
-		m.startProcesses(inst)
-		// F-032 变体：与 Apply 同口径的持续存活探活，不再单点快照。
-		if !m.waitStable(job.kernelType) {
-			for _, name := range swapped {
-				path := filepath.Join(job.binDir, name)
-				if hadOrig[name] {
-					_ = os.Rename(path+".bak", path)
-				} else {
-					// 原文件此前不存在时没有 .bak 可恢复：删掉新文件，
-					// 否则坏文件会被静默留下（旧实现此路径失效）。
-					_ = os.Remove(path)
-				}
-			}
+		if err := m.restartGuardError(inst); err != nil {
+			// B-02 (A-03): a guarded kernel must not restart while
+			// its rules cannot be installed. The running processes
+			// keep serving the data they already loaded — a failed
+			// sync leaves the installed table untouched — and the
+			// new files are on disk, taking effect at the next start
+			// once a sync succeeds again.
+			restartSkipped = true
+			m.logGeo(job.kernelType, "分流数据已更新到磁盘，但 nft 规则同步失败，受保护内核未重启（继续按已加载数据运行）: "+err.Error())
+		} else {
 			m.stopProcesses(inst)
 			m.startProcesses(inst)
-			m.logGeo(job.kernelType, "新的分流数据无法启动内核，已恢复原来的文件")
-			return
+			// F-032 变体：与 Apply 同口径的持续存活探活，不再单点快照。
+			if !m.waitStable(job.kernelType) {
+				for _, name := range swapped {
+					path := filepath.Join(job.binDir, name)
+					if hadOrig[name] {
+						_ = os.Rename(path+".bak", path)
+					} else {
+						// 原文件此前不存在时没有 .bak 可恢复：删掉新文件，
+						// 否则坏文件会被静默留下（旧实现此路径失效）。
+						_ = os.Remove(path)
+					}
+				}
+				m.stopProcesses(inst)
+				if err := m.restartGuardError(inst); err != nil {
+					// The restore-restart is gated too (A-03): the
+					// processes are already stopped here, so a failed
+					// sync leaves the guarded kernel down — the same
+					// fail-closed end state as Control start.
+					m.logGeo(job.kernelType, "恢复原文件后 nft 规则同步失败，受保护内核保持停止: "+err.Error())
+				} else {
+					m.startProcesses(inst)
+				}
+				m.logGeo(job.kernelType, "新的分流数据无法启动内核，已恢复原来的文件")
+				return
+			}
 		}
 	}
 	for _, name := range swapped {
 		_ = os.Remove(filepath.Join(job.binDir, name+".bak"))
 	}
-	m.logGeo(job.kernelType, "分流数据已更新: "+strings.Join(swapped, ", "))
+	if !restartSkipped {
+		m.logGeo(job.kernelType, "分流数据已更新: "+strings.Join(swapped, ", "))
+	}
 }
 
 func (m *Manager) logGeo(kernelType, msg string) {

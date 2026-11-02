@@ -226,6 +226,33 @@ func (m *Manager) stopGuardedInstances(cur *instance, syncErr error) bool {
 	return curGuarded
 }
 
+// syncGuardBeforeRestart re-runs the full ruleset sync ahead of an
+// internal restart (geodata / rule-set refresh, supervisor relaunch)
+// that brings processes back up outside Apply/Control. The sync is
+// content-verified, so a table flushed or rewritten out-of-band is
+// rebuilt here instead of the restart silently running unguarded.
+func (m *Manager) syncGuardBeforeRestart() error {
+	m.mu.Lock()
+	guard := m.snellGuardForLocked(m.snellUID)
+	m.mu.Unlock()
+	return m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)
+}
+
+// restartGuardError gates an internal restart of inst: nil when the
+// restart may proceed, the sync error when it must not. Unguarded
+// kernels always pass — counting alone is best-effort. Guarded ones
+// (reqNeedsNftGuard, the B-02 predicate) pass only once the ruleset
+// sync succeeds, the same bar Control start applies.
+func (m *Manager) restartGuardError(inst *instance) error {
+	m.mu.Lock()
+	req := inst.req
+	m.mu.Unlock()
+	if !reqNeedsNftGuard(req) {
+		return nil
+	}
+	return m.syncGuardBeforeRestart()
+}
+
 // Apply installs (if needed), writes the configuration and makes the
 // processes match req.Enabled. Unchanged running kernels are left alone.
 func (m *Manager) Apply(req ApplyRequest) (State, error) {
@@ -425,7 +452,17 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		failed := lastLines(inst.logs, 5)
 		failure = fmt.Errorf("内核启动失败: %s", failed)
 		confirmed = false
-		if prevGood {
+		if prevGood && syncErr != nil && reqNeedsNftGuard(prev.req) {
+			// B-02 (A-02): startBlocked above keys on the NEW request,
+			// but the rollback target is the PREVIOUS one — and it is
+			// guarded by the same ruleset this sync just failed to
+			// install. Rolling back would start it unguarded for the
+			// whole probe window, only for the sweep below to stop it
+			// again. Skip the rollback and stay down (fail-closed),
+			// exactly as for a guarded new request.
+			failure = nftGuardFailure(prev.req, syncErr)
+			m.setErr(inst, failure)
+		} else if prevGood {
 			// The previous config is known-good: keep the node serving
 			// on it instead of leaving it down.
 			m.rollback(inst, runDir, prev)
@@ -579,6 +616,7 @@ func (m *Manager) startProcesses(inst *instance) {
 	runDir := m.runDir(inst.req.Type)
 	bins := inst.bins
 	kernelType := inst.req.Type
+	guarded := reqNeedsNftGuard(inst.req)
 	guardUID, guardGID := m.snellUID, m.snellGID
 	m.mu.Unlock()
 
@@ -591,6 +629,16 @@ func (m *Manager) startProcesses(inst *instance) {
 		}
 		p := newProcess(bin, expandArgs(spec.Args, runDir, filepath.Dir(bin)), runDir, inst.logs)
 		p.prefix = prefix
+		if guarded {
+			// B-02 (A-03): the supervisor's crash relaunch is a start
+			// like any other — a guarded kernel must not come back
+			// while its rules are not installed. The gate re-runs the
+			// content-verified sync before every relaunch; the first
+			// launch needs no gate because every caller of
+			// startProcesses already synced (or deliberately failed
+			// closed) before calling it.
+			p.relaunchGuard = m.syncGuardBeforeRestart
+		}
 		if kernelType == "snell" && isSnellServerSpec(spec.Name) {
 			// Snell egress guard: only snell-server itself drops to
 			// the guard user; shadow-tls fronts stay on the agent

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -365,6 +366,15 @@ func nftScriptGuard(rules []counterRule, guards map[int64]allowGuard, hops []hop
 type nftState struct {
 	Signature string `json:"signature"`
 	Epoch     string `json:"epoch"`
+	// Content is the fingerprint of the live table's rendered content
+	// (counter values masked) captured right after the last successful
+	// apply. The signature alone only proves what this process last
+	// TRIED to install; the fingerprint proves what the kernel table
+	// actually holds, so a table flushed or rewritten out-of-band is
+	// detected instead of trusted on existence alone. Empty for state
+	// files written before the fingerprint existed; the next apply
+	// re-arms it.
+	Content string `json:"content,omitempty"`
 }
 
 // nftCounters owns the flvx_kernel table. The epoch changes whenever the
@@ -384,9 +394,23 @@ func newNftCounters(baseDir string) *nftCounters {
 	return n
 }
 
-func (n *nftCounters) tableExists(ctx context.Context) bool {
-	_, err := nftRunner(ctx, "", "list", "table", "inet", nftTable)
-	return err == nil
+// counterValuesPattern matches the one volatile part of a rendered
+// table: the packet/byte counts of the named counters, which change
+// with traffic. Everything else in the rendering — chains, rules,
+// sets and their elements, counter names — is content.
+var counterValuesPattern = regexp.MustCompile(`packets [0-9]+ bytes [0-9]+`)
+
+// tableFingerprint hashes the live table's rendered content with the
+// counter values masked out. nft renders a given ruleset
+// deterministically, so the fingerprint changes exactly when the
+// table's rules, sets or structure change — no matter who changed
+// them — and stays stable while only traffic flows.
+func (n *nftCounters) tableFingerprint(ctx context.Context) (string, error) {
+	out, err := nftRunner(ctx, "", "list", "table", "inet", nftTable)
+	if err != nil {
+		return "", err
+	}
+	return hashString(counterValuesPattern.ReplaceAllString(string(out), "packets # bytes #")), nil
 }
 
 // removeTables 删除 agent 建的全部 nftables 表（计数/白名单主表、
@@ -460,15 +484,37 @@ func (n *nftCounters) syncGuard(ports []Port, users []int64, guard *snellGuard) 
 	script := nftScriptGuard(rules, expandGuards(ports), hops, users, guard)
 	sig := hashString(script)
 	hasContent := len(rules) > 0 || len(users) > 0 || guard != nil
-	if sig == n.state.Signature && (!hasContent || n.tableExists(ctx)) {
-		n.lastErr = ""
-		return nil
+	if sig == n.state.Signature {
+		if !hasContent {
+			n.lastErr = ""
+			return nil
+		}
+		// The signature only proves what this process last tried to
+		// install. The table lives in the kernel, outside the agent:
+		// it can be flushed or rewritten by other tools while guarded
+		// kernels keep running, and an existence check would never
+		// notice (A-03). Skip the re-apply only when the live content
+		// still matches the fingerprint captured at the last apply;
+		// anything else — missing table, unreadable table, tampered
+		// content, or a state file predating fingerprints — falls
+		// through to a full re-apply below.
+		if n.state.Content != "" {
+			if fp, err := n.tableFingerprint(ctx); err == nil && fp == n.state.Content {
+				n.lastErr = ""
+				return nil
+			}
+		}
 	}
 	if _, err := nftRunner(ctx, script, "-f", "-"); err != nil {
 		n.lastErr = err.Error()
 		return err
 	}
-	n.state = nftState{Signature: sig, Epoch: newEpoch()}
+	// Capture what the kernel actually holds now, so later syncs can
+	// verify content instead of existence. A failed capture leaves
+	// Content empty; the next sync then re-applies once and retries
+	// the capture — degraded, never wrongly trusted.
+	content, _ := n.tableFingerprint(ctx)
+	n.state = nftState{Signature: sig, Epoch: newEpoch(), Content: content}
 	if b, err := json.Marshal(n.state); err == nil {
 		_ = writeFileAtomic(n.statePath, b, 0o600)
 	}

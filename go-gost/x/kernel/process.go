@@ -67,6 +67,13 @@ type process struct {
 	credUID uint32
 	credGID uint32
 
+	// relaunchGuard, when set, is consulted before every supervisor
+	// relaunch — never before the first launch, which the caller
+	// already gated. A non-nil error keeps the process down for that
+	// backoff round; the gate is retried on the next round, so the
+	// process comes back on its own once the gate passes again.
+	relaunchGuard func() error
+
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	running   bool
@@ -98,9 +105,25 @@ func (p *process) start() {
 func (p *process) supervise() {
 	defer close(p.done)
 	backoff := time.Second
+	launched := false
 	for {
+		if launched && p.relaunchGuard != nil {
+			if err := p.relaunchGuard(); err != nil {
+				p.logs.add(p.prefix + "[flmx] 守卫规则未就绪，本轮不重启: " + err.Error())
+				select {
+				case <-p.stopCh:
+					return
+				case <-time.After(backoff):
+				}
+				if backoff *= 2; backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
+			}
+		}
 		began := time.Now()
 		err := p.runOnce()
+		launched = true
 		select {
 		case <-p.stopCh:
 			return
