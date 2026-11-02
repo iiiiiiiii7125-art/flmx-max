@@ -2162,6 +2162,79 @@ test_panel_download_verified_routed_failover() (
   assert_equals "1" "$(wc -l < "$calls_log")" "routed download should stop at the first successful route"
 )
 
+# L8-F-02 第二锚（panel_install.sh）：download_verified_routed 获胜
+# 后须经异路重取 .sha256 复核——异路同值放行、异路异值删档整单
+# 中止、异路全灭降级点名但不拦截。桩 curl 按 URL 前缀供数：
+# a.example 为获胜线路，b.example 为复核线路。
+anchor_fixture_setup() {
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  ROUTES_STAGE=2
+  ANCHOR_BODY="anchor-body-content"
+  ANCHOR_SHA_A=$(printf '%s' "$ANCHOR_BODY" | sha256sum | awk '{print $1}')
+  ANCHOR_SHA_B=$(printf '%s' "different-body" | sha256sum | awk '{print $1}')
+  ANCHOR_SHA_B_MODE="same"
+  ANCHOR_SHA_B_FAIL="0"
+  curl() {
+    local out="" url="" prev="" a
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      case "$a" in http*://*) url="$a" ;; esac
+      prev="$a"
+    done
+    case "$url" in
+      *.sha256)
+        case "$url" in
+          *b.example*)
+            if [[ "$ANCHOR_SHA_B_FAIL" == "1" ]]; then return 22; fi
+            if [[ "$ANCHOR_SHA_B_MODE" == "different" ]]; then
+              printf '%s' "$ANCHOR_SHA_B" > "$out"
+            else
+              printf '%s' "$ANCHOR_SHA_A" > "$out"
+            fi
+            ;;
+          *) printf '%s' "$ANCHOR_SHA_A" > "$out" ;;
+        esac
+        ;;
+      *) printf '%s' "$ANCHOR_BODY" > "$out" ;;
+    esac
+  }
+}
+
+test_panel_anchor_corroboration_passes() (
+  set -euo pipefail
+  anchor_fixture_setup
+  local dest
+  dest=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>/dev/null
+  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "anchor pass: body should land when the second route corroborates"
+)
+
+test_panel_anchor_corroboration_mismatch_aborts() (
+  set -euo pipefail
+  anchor_fixture_setup
+  ANCHOR_SHA_B_MODE="different"
+  local dest rc=0
+  dest=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>/dev/null || rc=$?
+  assert_equals "1" "$rc" "anchor mismatch: routed download must abort when the second route disagrees"
+  [[ ! -f "$dest" ]] || fail "anchor mismatch: staged file must be removed on abort"
+)
+
+test_panel_anchor_corroboration_degrades() (
+  set -euo pipefail
+  anchor_fixture_setup
+  ANCHOR_SHA_B_FAIL="1"
+  local dest errlog
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>"$errlog"
+  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "anchor degrade: body should still land when no second route answers"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "anchor degrade: degradation must be named on stderr"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet
 test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
@@ -3273,6 +3346,9 @@ test_install_script_routes_panel_first_when_panel_alive
 test_install_script_routes_panel_dead_falls_back
 test_install_script_panel_route_extends_on_download_failure
 test_panel_download_verified_routed_failover
+test_panel_anchor_corroboration_passes
+test_panel_anchor_corroboration_mismatch_aborts
+test_panel_anchor_corroboration_degrades
 test_update_flux_agent_downloads_without_prompt
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
 test_update_flux_agent_prints_online_confirmation_guidance

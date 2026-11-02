@@ -1354,9 +1354,88 @@ download_verified() {
   return 0
 }
 
+# corroborate_download_anchor <canonical URL> <dest> <获胜前缀>：
+# L8-F-02 第二锚（脚本面，与后端 system_upgrade 的
+# corroborateReleaseAssetChecksum、agent 侧 corroborateUpgrade
+# Checksum 同口径）：download_verified 的校验值与本体同源同次
+# 取得，单个镜像失陷即可自洽篡改（本体与 .sha256 一起换）。这
+# 里从路线表内与获胜线路不同的一条线路重取同一资产的 .sha256，
+# 与落盘本体的实际哈希（已由第一锚证明与获胜线路校验值一致）
+# 比对：
+#   - 异路给出不同的合法哈希 → 硬失败（返回 1），调用方删档整
+#     单中止，不换路重试；
+#   - 异路内容不是合法 64 位 SHA256 → 只废该路，继续问下一路；
+#   - 全部异路都给不出合法校验值 → 降级单锚继续（返回 0），并
+#     在 stderr 点名「跨线路锚复核已降级」。
+# 脚本面的边界（如实写明）：① 路线表只有一条时先按下载主流程
+# 同款机制 extend 补测一次（仅 stage 1 直连短路形态扩得动；
+# PROXY_ENABLED=false / PROXY_URL 覆盖是运维显式单路，无候选
+# 可扩，直接降级点名）；② 整轮复核共用 20s 总界（与 Go 两侧同
+# 值），逐路 --max-time 取剩余量与 10s 的较小者；③
+# FLMX_VERIFY_DOWNLOADS=0 时运维已整体关闭校验，第二锚随第一
+# 锚一并跳过（显式逃生口，不是静默降级）。
+corroborate_download_anchor() {
+  local url="$1" dest="$2" winner="$3"
+  local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
+  if [ "$verify" = "0" ]; then
+    return 0
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    # download_verified 在缺 sha256sum 时已 fail-closed 拒绝，能
+    # 走到这里只剩校验被改道等异常组合：无从复核，点名降级。
+    echo "⚠️ 跨线路锚复核已降级：缺少 sha256sum 无法复核校验值，按单锚继续（L8-F-02）" >&2
+    return 0
+  fi
+  local actual
+  actual=$(sha256sum "$dest" | awk '{print $1}')
+  local -a candidates=()
+  local prefix
+  for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+    [[ "$prefix" == "$winner" ]] && continue
+    candidates+=("$prefix")
+  done
+  if [[ ${#candidates[@]} -eq 0 ]] && extend_download_routes; then
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      [[ "$prefix" == "$winner" ]] && continue
+      candidates+=("$prefix")
+    done
+  fi
+  local deadline=$(( $(date +%s) + 20 ))
+  local got tmp remain max_time
+  for prefix in "${candidates[@]}"; do
+    remain=$(( deadline - $(date +%s) ))
+    if (( remain <= 0 )); then
+      break
+    fi
+    max_time=10
+    if (( remain < max_time )); then max_time=$remain; fi
+    tmp=$(mktemp) || continue
+    if curl -fsSL --connect-timeout 5 --max-time "$max_time" -o "$tmp" "$(route_url "$prefix" "$url").sha256" 2>/dev/null; then
+      got=$(awk '{print $1}' "$tmp" | tr -d ' \n' | tr 'A-F' 'a-f')
+      rm -f "$tmp"
+      if [[ "$got" =~ ^[0-9a-f]{64}$ ]]; then
+        if [[ "$got" != "$actual" ]]; then
+          echo "❌ 跨线路锚复核失败：校验文件经两条不同线路获取的结果不一致，已中止（L8-F-02 第二锚）" >&2
+          echo "   本体实际哈希（第一锚已验）: $actual" >&2
+          echo "   异路（${prefix:-直连}）校验值: $got" >&2
+          return 1
+        fi
+        echo "✅ 跨线路锚复核通过（第二线路: ${prefix:-直连}）" >&2
+        return 0
+      fi
+    else
+      rm -f "$tmp"
+    fi
+  done
+  echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（L8-F-02）" >&2
+  return 0
+}
+
 # download_verified_routed <canonical URL> <dest>：按内置路线表逐个
 # 以 download_verified 下载（资产 + .sha256 同源同腿、fail-closed
 # 口径不变），首个成功即用；阶段 1 路线全败时补测代理排名续切。
+# 获胜后另经 corroborate_download_anchor 异路复核第二锚
+# （L8-F-02）：不一致删档整单中止，降级仅点名不拦截。
 download_verified_routed() {
   local url="$1"
   local dest="$2"
@@ -1365,6 +1444,10 @@ download_verified_routed() {
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
       if download_verified "$(route_url "$prefix" "$url")" "$dest"; then
+        if ! corroborate_download_anchor "$url" "$dest" "$prefix"; then
+          rm -f "$dest"
+          return 1
+        fi
         return 0
       fi
     done
