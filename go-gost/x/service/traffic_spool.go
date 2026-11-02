@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // 流量可靠上报（spool）：待上报流量数值先落盘、面板确认后才清。
@@ -20,8 +21,9 @@ import (
 // 落盘（先落盘后清内存），面板回执与所发批次的 stream+sequence
 // 完全一致才清 Pending 并推进序号；进程重启后从 spool 续报。
 //
-// 身份隔离：spool 文件名由「面板地址＋节点 secret」哈希决定，换
-// 面板/换 secret 自动换文件，旧主人的流量不会扣到新主人头上。
+// 身份隔离：spool 文件名由「归一化面板地址＋节点 secret」哈希决
+// 定（TrafficSpoolIdentity），换面板/换 secret 自动换文件，旧主
+// 人的流量不会扣到新主人头上；同面板仅改地址写法不换文件。
 // stream 是每份 spool 的随机身份：面板按 (节点, stream) 记游标，
 // 序号只在同一 stream 内单调递进；面板备份恢复使游标回退时，
 // 经 reset_stream 换新 stream 原字节重报（见 recoverRejected）。
@@ -35,10 +37,10 @@ type trafficEnvelope struct {
 
 // trafficSpoolState 是 spool 文件的落盘形态。
 type trafficSpoolState struct {
-	Stream   string              `json:"stream"`
-	Next     int64               `json:"next"`
-	Pending  *trafficEnvelope    `json:"pending,omitempty"`
-	Buffered []TrafficReportItem `json:"buffered,omitempty"`
+	Stream   string                `json:"stream"`
+	Next     int64                 `json:"next"`
+	Pending  *trafficEnvelope      `json:"pending,omitempty"`
+	Buffered []TrafficReportItem   `json:"buffered,omitempty"`
 	Retry    [][]TrafficReportItem `json:"retry,omitempty"`
 }
 
@@ -49,17 +51,74 @@ type trafficSpool struct {
 
 var configuredTrafficSpool *trafficSpool
 
+// trafficSpoolFileName 是 spool 的生产命名派生（身份串的 sha256）：
+// 「换面板/换 secret 不串账」的隔离语义只此一处实现，派生一改、全
+// 部节点的 spool 选址都变——由 traffic_spool_identity_test 以金值
+// 钉死（审计 AG-07：此前测试全走注入路径，派生裸奔无人守）。
+func trafficSpoolFileName(identity string) string {
+	return fmt.Sprintf("flmx_traffic_%x.json", sha256.Sum256([]byte(identity)))
+}
+
+// TrafficSpoolIdentity 派生 spool 身份串：面板地址先经与上报 URL
+// 构建同源的 normalizeReportAddress 归一化（去 scheme、去路径、
+// 保留 host:port），再与 secret 拼接。此前身份直接用 config.Addr
+// 原文——同一面板改一下地址写法（补 scheme、加尾缀路径等）就被
+// 判为「换面板」，旧 spool 的未确认流量被静默弃置（审计 A-T-04）。
+// 归一化口径与 buildReportURLCandidates 逐字同源，不另写一份。
+func TrafficSpoolIdentity(addr, secret string) string {
+	normalized, _ := normalizeReportAddress(addr)
+	if normalized == "" {
+		normalized = strings.TrimSpace(addr)
+	}
+	return normalized + "\x00" + secret
+}
+
 // ConfigureTrafficSpool 在服务启动前选定 spool 文件（按身份隔离）。
 // 由主程序在加载 config.json 后调用；失败（文件损坏等）返回错误，
 // 调用方应拒绝启动——静默换新 spool 会丢掉未确认流量且无痕。
+// 选定后顺带扫描同目录其他身份的 spool 文件并逐个告警（见
+// findOrphanTrafficSpools）：地址归一化后仍可能因 secret 轮换等
+// 留下孤儿，其未确认流量不自动并账、须人工核对。
 func ConfigureTrafficSpool(dir, identity string) error {
-	path := filepath.Join(dir, fmt.Sprintf("flmx_traffic_%x.json", sha256.Sum256([]byte(identity))))
+	path := filepath.Join(dir, trafficSpoolFileName(identity))
 	spool, err := openTrafficSpool(path)
 	if err != nil {
 		return err
 	}
 	configuredTrafficSpool = spool
+	for _, orphan := range findOrphanTrafficSpools(dir, path) {
+		fmt.Printf("⚠️ 发现其他身份的流量 spool 文件 %s：其中的未确认流量不会自动上报，如系本节点旧地址/旧 secret 遗留，请人工核对处理\n", orphan)
+	}
 	return nil
+}
+
+// findOrphanTrafficSpools 枚举 dir 下不属于 ownPath 的 spool 文件
+// （返回带大小的点名串）。只点名不处置：孤儿批次的归属无法由本
+// 进程证明，自动删除可能销毁待确认流量、自动并账可能串账。隔离
+// 留证存档（.rejected-*.json）随所属 spool 的生命周期人工处置，
+// 不在此列；原子写的 .tmp 残留不以 .json 结尾、天然不入列。
+func findOrphanTrafficSpools(dir, ownPath string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var orphans []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "flmx_traffic_") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		if strings.Contains(name, ".rejected-") || filepath.Join(dir, name) == ownPath {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		orphans = append(orphans, fmt.Sprintf("%s（%d 字节）", name, info.Size()))
+	}
+	sort.Strings(orphans)
+	return orphans
 }
 
 func openTrafficSpool(path string) (*trafficSpool, error) {

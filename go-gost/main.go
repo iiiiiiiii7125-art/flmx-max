@@ -170,10 +170,13 @@ func main() {
 	if abs, err := filepath.Abs("config.json"); err == nil {
 		dir := filepath.Dir(abs)
 		service.SetSeqFilePath(filepath.Join(dir, "flmx_agent_seq.json"))
-		// 可靠上报 spool 与 seq 文件同级落盘，按「面板地址＋节点
-		// secret」身份隔离选文件。初始化失败（存量 spool 损坏等）
-		// 拒绝启动：静默换新 spool 会无痕丢掉未确认流量。
-		if err := service.ConfigureTrafficSpool(dir, config.Addr+"\x00"+config.Secret); err != nil {
+		// 可靠上报 spool 与 seq 文件同级落盘，按「归一化面板地址
+		// ＋节点 secret」身份隔离选文件（TrafficSpoolIdentity：同
+		// 面板改地址写法不换文件，换面板/换 secret 才换；遗留的
+		// 其他身份 spool 会被点名告警不自动处置）。初始化失败
+		// （存量 spool 损坏等）拒绝启动：静默换新 spool 会无痕
+		// 丢掉未确认流量。
+		if err := service.ConfigureTrafficSpool(dir, service.TrafficSpoolIdentity(config.Addr, config.Secret)); err != nil {
 			fmt.Printf("❌ 流量 spool 初始化失败，拒绝启动: %v\n", err)
 			os.Exit(1)
 		}
