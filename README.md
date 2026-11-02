@@ -14,12 +14,12 @@
 
 ## 功能
 
-- **多内核节点**：Xray、sing-box、Snell v4 / v5 / v6 按节点安装；VLESS Reality、Hysteria2（端口跳跃）、TUIC、AnyTLS、NaïveProxy、ShadowTLS 等模板一键创建
+- **多内核节点**：Xray、sing-box、Snell v4 / v5 / v6（v6 为 beta）按节点安装；VLESS Reality、Hysteria2（端口跳跃）、TUIC、AnyTLS、NaïveProxy、ShadowTLS 等模板一键创建
 - **证书**：自签、节点上的证书文件，或由 sing-box 自动申请（ACME，HTTP / Cloudflare / 阿里云 DNS 验证）
 - **对接中转**：端口转发、隧道转发（gost / realm 双引擎），或"前置 → IX → 落地"多跳线路；入站白名单、真实客户端 IP
 - **导入节点**：粘贴分享链接、Clash / sing-box / Surge 配置或订阅地址，别处搭好的节点也能对接中转
 - **订阅源**：订阅链接或直接上传订阅文件（Base64 / Clash / sing-box）接入，可标用途（普通 / 中转 / 落地）；链式代理可按整个订阅源设角色，机场改名增删自动跟上
-- **订阅**：多个订阅各自选落地、过滤、改名、加国旗、按地区分组，可分享给他人（独立凭据、到期自动断开）；按客户端自动返回 Clash / Mihomo、Stash、sing-box、Surge 或通用 base64（Snell 入站可下发到 Clash / Mihomo、Surge 与 sing-box 1.14+）；支持按入站（`?inbound=`）、按中转（`?relay=`）单独订阅
+- **订阅**：多个订阅各自选落地、过滤、改名、加国旗、按地区分组，可分享给他人（独立凭据、到期自动断开）；按客户端自动返回 Clash / Mihomo、sing-box、Shadowrocket、Loon、Quantumult X、Surge、Stash 或通用 base64（Snell 入站可下发到 Clash / Mihomo、Surge 与 sing-box 1.14+）；支持按入站（`?inbound=`）、按中转（`?relay=`）单独订阅
 - **入站分享地址**：每个入站可选自动 / 节点 IPv4 / 节点 IPv6 / 自定义域名，分享链接、订阅下发与链式下一跳统一按此地址生成
 - **订阅流量统计**：订阅详情与"我的订阅"里按小时 / 日 / 月看上下行曲线（整条订阅的合计流量），并标注统计起算日期
 - **订阅分配**：按订阅给用户分配访问权限（订阅管理里建好订阅后逐个分配给用户，删除订阅自动清除其分配关系）；每个订阅可用中转范围（relayIds）限定只包含直连或指定中转的线路；用户在"我的订阅"页只看到自己被分配的订阅链接（链接带防篡改签名）

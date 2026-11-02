@@ -116,7 +116,9 @@ configured base next to the panel origin on the subscription surfaces.
 
 Compatibility endpoint for external subscription tools: exchanges panel account
 credentials (`user` / `password` in the POST body, never in the URL) plus a tunnel
-name for that user's subscription content.
+name for a `Subscription-Userinfo` string for that user (upload / download /
+total / expire) — it does not return subscription content. Deprecated
+compatibility surface (Sunset 2027-01-17).
 
 ## GET /api/v1/open_api/gh/<url>
 

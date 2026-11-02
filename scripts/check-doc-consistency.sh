@@ -33,6 +33,12 @@
 #      面量缺失/重复/格式漂移会让脚本自更新静默失效。硬核：定义恰
 #      一处、格式 YYYYMMDD.NN 定宽、日期段为合法年月日。install.sh
 #      无此概念（版本跟随 PINNED_VERSION），不在本门。
+#   12. 站内锚点对账门（R8-L7-02 常设门）：VitePress 构建不校验锚点，
+#      链接 slug 写错时页面可达但落不到节。转跑
+#      scripts/check-doc-anchors.mjs：机械复算 doc 全部标题 id 集，
+#      与全部站内链接的目标锚点逐条对账，差集非空即失败。需 node
+#      运行时；无 node 时以 PENDING 显式报告未核（不计失败、不得
+#      静默跳过），判定本身不变。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -250,6 +256,17 @@ else
   sed 's/^/    /' /tmp/.private-ranges.out
 fi
 rm -f /tmp/.private-ranges.out
+
+# ── 13. 站内锚点对账（R8-L7-02 常设门，转跑 check-doc-anchors.mjs）
+if command -v node >/dev/null 2>&1; then
+  if node scripts/check-doc-anchors.mjs doc; then
+    note_ok "站内锚点对账门：doc 全部站内链接锚点命中标题 id 集"
+  else
+    note_fail "站内锚点对账门：存在失效锚点（见上）"
+  fi
+else
+  echo "PENDING: 站内锚点对账门未核（当前环境无 node 运行时）；请在装有 node 的环境复跑本门"
+fi
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then

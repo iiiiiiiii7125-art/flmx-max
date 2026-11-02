@@ -105,14 +105,21 @@ export function GistBackup() {
     clearToken?: boolean;
     clearPassword?: boolean;
   }): Promise<boolean> => {
-    // T-4：明文上传不放行——提交时明确拒绝。已存密码或本次新填密码
-    // 任一成立才放行；清除令牌（关闭 Gist 配置）本身不产生上传，故豁免。
+    // 保存口径与后端 gist_backup.go 逐字对齐：仅当「自动上传开启
+    // （间隔 > 0）且保存后令牌在位且保存后无密码」时才拒绝保存；
+    // 间隔关闭、或尚未填令牌时，留空密码保存放行（上传时仍会被拒，
+    // 见上传按钮的 hasPassword 门）。清除令牌本身不产生上传，豁免。
     // 注意：UI 已撤下「不再加密」入口，不再发送 clearPassword: true；
     // 字段保留仅为与 B1 后端 save 契约兼容。
-    const willHavePassword = Boolean(status?.encrypted) || password !== "";
+    const willHavePassword = patch.clearPassword
+      ? password !== ""
+      : Boolean(status?.encrypted) || password !== "";
+    const willHaveToken =
+      !patch.clearToken &&
+      (Boolean(status?.configured) || token.trim() !== "");
 
-    if (!patch.clearToken && !willHavePassword) {
-      toast.error("必须设置加密密码才能上传：请先填写加密密码");
+    if (intervalHours > 0 && willHaveToken && !willHavePassword) {
+      toast.error("请先填写加密密码，或将自动备份间隔设为不启用");
 
       return false;
     }
