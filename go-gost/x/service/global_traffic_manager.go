@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -10,15 +11,20 @@ import (
 )
 
 // GlobalTrafficManager 全局流量管理器（所有服务共享）
+//
+// 上报链（可靠上报 spool）：计数器只是采样缓冲，每个上报周期先经
+// persistTraffic 把快照落盘进 spool（先落盘后清零），再发 spool 的
+// 待确认批次；面板回执确认后才清批次并推进序号。进程重启/崩溃后
+// 从 spool 续报，未确认流量不丢；面板游标回退等异常走三路自愈
+// （见 traffic_spool.go 的 recoverRejected）。
 type GlobalTrafficManager struct {
+	reportMu       sync.Mutex
+	spool          *trafficSpool
 	mu             sync.RWMutex
 	serviceTraffic map[string]*ServiceTraffic // key: 服务名, value: 流量数据
 	ctx            context.Context
 	cancel         context.CancelFunc
 	reportTicker   *time.Ticker
-	// inflight 是待确认的冻结批次（A02-002）；非 nil 时
-	// collectAndReport 只重试它，不再快照新批次。
-	inflight *pendingBatch
 }
 
 // ServiceTraffic 单个服务的流量累积
@@ -27,25 +33,6 @@ type ServiceTraffic struct {
 	ServiceName string
 	UpBytes     int64 // 上行流量（累积）
 	DownBytes   int64 // 下行流量（累积）
-}
-
-// pendingItem 是一个服务在某批快照中的待上报计数。
-type pendingItem struct {
-	name string
-	up   int64
-	down int64
-}
-
-// pendingBatch 是一批已快照、已分配 seq、但尚未收到面板 ok 的
-// 冻结批次（A02-002）。seq 标识的是批次而不是尝试次：面板的幂等
-// 契约是「同 seq 重报」——面板已入账但响应丢失时，同 seq 重发被
-// 判重放回 ok 且不重复入账；面板未入账返非 ok，同 seq 重发才被
-// 入账一次。若每次重试都换新 seq，面板已入账的那批会被当作新
-// 批次二次入账。故批次一经快照即冻结：重试原样重发（同条目、
-// 同 seq），期间新计入的流量留在计数器里等本批确认后再组下一批。
-type pendingBatch struct {
-	items []pendingItem
-	seq   int64
 }
 
 var (
@@ -59,6 +46,7 @@ func GetGlobalTrafficManager() *GlobalTrafficManager {
 		ctx, cancel := context.WithCancel(context.Background())
 		globalManager = &GlobalTrafficManager{
 			serviceTraffic: make(map[string]*ServiceTraffic),
+			spool:          configuredTrafficSpool,
 			ctx:            ctx,
 			cancel:         cancel,
 			reportTicker:   time.NewTicker(5 * time.Second),
@@ -71,10 +59,16 @@ func GetGlobalTrafficManager() *GlobalTrafficManager {
 
 // AddTraffic 添加流量到指定服务（由各服务调用）
 func (m *GlobalTrafficManager) AddTraffic(serviceName string, upBytes, downBytes int64) {
-	if upBytes == 0 && downBytes == 0 {
+	if !registry.ServiceRegistry().IsRegistered(serviceName) {
 		return
 	}
-	if !registry.ServiceRegistry().IsRegistered(serviceName) {
+	m.addServiceTraffic(serviceName, upBytes, downBytes)
+}
+
+// addServiceTraffic 接受服务自身生命周期内的采样，包括监听已注销后
+// 仍在排空的连接——注销不等于字节不存在，照样要计费落盘。
+func (m *GlobalTrafficManager) addServiceTraffic(serviceName string, upBytes, downBytes int64) {
+	if upBytes == 0 && downBytes == 0 {
 		return
 	}
 
@@ -157,108 +151,110 @@ func (m *GlobalTrafficManager) startReporting() {
 	}
 }
 
-// collectAndReport 收集所有服务流量并合并上报
+// collectAndReport 落盘待上报流量并发送 spool 的待确认批次。
 func (m *GlobalTrafficManager) collectAndReport() {
-	m.mu.Lock()
-
-	// A02-002: 有待确认的冻结批次时只重试它——原样条目、原 seq。
-	// 不在此期间快照新批次：若把新流量并进同 seq 重发，面板一旦
-	// 已入账旧批便整包判重放回 ok，新流量会被随成功路径一起扣掉
-	// 而从未入账（静默漏计）；若换新 seq 重发旧批则二次入账。
-	if m.inflight == nil {
-		if len(m.serviceTraffic) == 0 {
-			m.mu.Unlock()
-			return
-		}
-
-		// R5-B6 D1-010: 先收集不上报（不清零），发送成功后再清零。
-		// 失败则保留，下次重试。
-		var pending []pendingItem
-
-		for name, traffic := range m.serviceTraffic {
-			traffic.mu.Lock()
-			up := traffic.UpBytes
-			down := traffic.DownBytes
-			// D1-010: 不在此处清零。
-			traffic.mu.Unlock()
-			isStale := !registry.ServiceRegistry().IsRegistered(name)
-
-			if up > 0 || down > 0 {
-				pending = append(pending, pendingItem{name: name, up: up, down: down})
-			}
-			if isStale && up == 0 && down == 0 {
-				// F-087: 无待上报流量时才可立即清理。有流量的 stale 条目
-				// 必须等发送成功后再删（见下方清零段）——旧实现先删后发，
-				// 发送失败时该批流量随条目一起永久丢失，违 D1-010 本意。
-				delete(m.serviceTraffic, name)
-			}
-		}
-
-		if len(pending) == 0 {
-			m.mu.Unlock()
-			return
-		}
-
-		// seq 在快照时分配一次并与批次绑定（A02-002）；重试复用
-		// 同一 seq 直至收到 ok 才组下一批、分配新 seq。
-		m.inflight = &pendingBatch{items: pending, seq: nextSeq()}
-	}
-
-	batch := m.inflight
-	m.mu.Unlock()
-
-	reportItems := make([]TrafficReportItem, 0, len(batch.items))
-	var totalUp, totalDown int64
-	for _, p := range batch.items {
-		reportItems = append(reportItems, TrafficReportItem{N: p.name, U: p.up, D: p.down})
-		totalUp += p.up
-		totalDown += p.down
-	}
-
-	// R5-B6 E-001: 携带 seq 上报。
-	seq := batch.seq
-	success, err := sendBatchTrafficReportWithSeq(m.ctx, reportItems, seq)
-	if err != nil {
-		fmt.Printf("❌ 全局流量上报失败: %v (总流量: ↑%d ↓%d, %d个服务, seq=%d)\n", err, totalUp, totalDown, len(reportItems), seq)
-		// D1-010: 失败不清零、批次不解冻，下次以同 seq 原样重试。
+	m.reportMu.Lock()
+	defer m.reportMu.Unlock()
+	if err := m.persistTraffic(); err != nil {
+		fmt.Printf("❌ 流量 spool 落盘失败: %v\n", err)
 		return
 	}
-
-	if !success {
-		fmt.Printf("⚠️ 全局流量上报未成功 (总流量: ↑%d ↓%d, %d个服务, seq=%d)\n", totalUp, totalDown, len(reportItems), seq)
+	if m.spool.state.Pending == nil {
 		return
 	}
-
-	// D1-010: 成功后才清零（只扣冻结批次的量，其间新计入的保留）。
-	m.mu.Lock()
-	pending := batch.items
-	for _, p := range pending {
-		if traffic, ok := m.serviceTraffic[p.name]; ok {
-			traffic.mu.Lock()
-			// 只减去已上报的部分（防止并发写入丢失）。
-			traffic.UpBytes -= p.up
-			traffic.DownBytes -= p.down
-			if traffic.UpBytes < 0 {
-				traffic.UpBytes = 0
-			}
-			if traffic.DownBytes < 0 {
-				traffic.DownBytes = 0
-			}
-			drained := traffic.UpBytes == 0 && traffic.DownBytes == 0
-			traffic.mu.Unlock()
-			// F-087: stale 服务在发送成功且计数清零后才移除条目；
-			// 发送失败走上方 return，条目与计数原样保留待重试。
-			if drained && !registry.ServiceRegistry().IsRegistered(p.name) {
-				delete(m.serviceTraffic, p.name)
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pending := *m.spool.state.Pending
+	if err := sendReliableTrafficReport(ctx, pending); err != nil {
+		var rejection trafficReportRejection
+		if errors.As(err, &rejection) {
+			if recoverErr := m.spool.recoverRejected(rejection); recoverErr != nil {
+				fmt.Printf("❌ 流量批次自愈落盘失败: %v\n", recoverErr)
 			}
 		}
+		fmt.Printf("❌ 全局流量上报失败: %v (批次: %d 个服务, stream=%s seq=%d)\n", err, len(pending.Items), pending.Stream, pending.Sequence)
+		return
 	}
-	// 本批已确认：解冻，下一轮快照新批次并分配新 seq（A02-002）。
-	m.inflight = nil
-	m.mu.Unlock()
+	// 面板已确认：先把「清批次＋推进序号」落盘再替换内存状态。
+	// 落盘失败时内存仍保留待确认批次，下个周期重发——面板对同
+	// stream+seq+同内容判重放回确认，不会重复入账。
+	next := m.spool.state
+	next.Pending = nil
+	next.Next++
+	if err := m.spool.save(next); err != nil {
+		fmt.Printf("❌ 流量确认状态落盘失败: %v\n", err)
+		return
+	}
+	m.spool.state = next
 }
 
-// Stop 停止全局流量管理器
+// persistTraffic 把内存计数快照落盘进 spool：只有落盘成功才清零
+// 计数（先落盘后清零）。待确认批次存在时新快照只进 Buffered 不
+// 并入待确认批次——重发必须与首发同 stream、同 seq、同字节，
+// 期间新计入的流量等本批确认后另组新批。二分恢复的 Retry 队列
+// 优先于 Buffered 组批。
+func (m *GlobalTrafficManager) persistTraffic() error {
+	if m.spool == nil {
+		if configuredTrafficSpool != nil {
+			m.spool = configuredTrafficSpool
+		} else {
+			var err error
+			m.spool, err = openTrafficSpool("")
+			if err != nil {
+				return err
+			}
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]TrafficReportItem, 0, len(m.serviceTraffic))
+	for name, traffic := range m.serviceTraffic {
+		traffic.mu.Lock()
+		up, down := traffic.UpBytes, traffic.DownBytes
+		traffic.mu.Unlock()
+		if up > 0 || down > 0 {
+			items = append(items, TrafficReportItem{N: name, U: up, D: down})
+		}
+	}
+	if len(items) == 0 && (m.spool.state.Pending != nil || (len(m.spool.state.Buffered) == 0 && len(m.spool.state.Retry) == 0)) {
+		return nil
+	}
+
+	next := m.spool.state
+	next.Buffered = mergeTrafficItems(next.Buffered, items)
+	if next.Pending == nil {
+		var batchItems []TrafficReportItem
+		if len(next.Retry) > 0 {
+			batchItems, next.Retry = next.Retry[0], next.Retry[1:]
+		} else {
+			batchItems, next.Buffered = next.Buffered, nil
+		}
+		if len(batchItems) > 0 {
+			next.Pending = &trafficEnvelope{Stream: next.Stream, Sequence: next.Next, Items: batchItems}
+		}
+	}
+	if err := m.spool.save(next); err != nil {
+		return err
+	}
+	m.spool.state = next
+	// 落盘成功才清零；已注销服务的条目此时可删——其字节已在
+	// spool 里，不会因删条目丢失（F-087 的保证由落盘接管）。
+	for name, traffic := range m.serviceTraffic {
+		traffic.mu.Lock()
+		traffic.UpBytes, traffic.DownBytes = 0, 0
+		traffic.mu.Unlock()
+		if !registry.ServiceRegistry().IsRegistered(name) {
+			delete(m.serviceTraffic, name)
+		}
+	}
+	return nil
+}
+
+// Stop 停止全局流量管理器：停 ticker 后把计数器里的尾量落盘进
+// spool（不在停机瞬间强行发送——面板同时不可达时发送必丢，落盘
+// 续报才是真不丢），下次启动由 collectAndReport 续报。
 func (m *GlobalTrafficManager) Stop() {
 	if m.reportTicker != nil {
 		m.reportTicker.Stop()
@@ -266,6 +262,11 @@ func (m *GlobalTrafficManager) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	m.reportMu.Lock()
+	if err := m.persistTraffic(); err != nil {
+		fmt.Printf("❌ 流量停机落盘失败: %v\n", err)
+	}
+	m.reportMu.Unlock()
 	fmt.Printf("🛑 全局流量管理器已停止\n")
 }
 

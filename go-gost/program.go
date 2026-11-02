@@ -242,12 +242,19 @@ func (p *program) Stop() error {
 	defer unlock()
 	p.stopped = true
 	p.stopRuntime()
+	// 停机收尾：stopRuntime 已逐服务 FlushTraffic 把尾量交进管理
+	// 器，这里停管理器并把全部未报流量落盘进 spool，下次启动续
+	// 报——正常升级/重启不再丢最后一段流量。
+	xservice.GetGlobalTrafficManager().Stop()
 	return nil
 }
 
 func (p *program) stopRuntime() {
-	for name := range registry.ServiceRegistry().GetAll() {
+	for name, svc := range registry.ServiceRegistry().GetAll() {
 		registry.ServiceRegistry().Unregister(name)
+		if flusher, ok := svc.(interface{ FlushTraffic() }); ok {
+			flusher.FlushTraffic()
+		}
 		logger.Default().Debugf("service %s shutdown", name)
 	}
 

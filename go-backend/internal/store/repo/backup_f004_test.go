@@ -207,6 +207,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"nft_counter_state":          "nft 计数基线，运行时状态",
 		"nft_pending_delete":         "pending-delete 重试台账，运行时状态",
 		"node_seq":                   "agent 流量序号，运行时状态",
+		"traffic_stream_cursor":      "可靠上报 v2 流游标，运行时状态；备份恢复后游标回退/缺失由 reset_stream 自愈闭环处理（agent 换 stream 原字节重报），随备份搬运反而会与 agent spool 状态错位",
 		"statistics_flow":            "流量统计时序，非配置数据",
 		"node_metric":                "监控遥测时序",
 		"node_traffic":               "节点网卡流量遥测时序，非配置数据（400 天保留，上报持续重建）",

@@ -496,6 +496,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/flow/test", h.flowTest)
 	mux.HandleFunc("/flow/config", h.flowConfig)
 	mux.HandleFunc("/flow/upload", h.flowUpload)
+	mux.HandleFunc("/flow/upload/v2", h.flowUploadV2)
 	mux.HandleFunc("/error", h.errorPage)
 }
 
