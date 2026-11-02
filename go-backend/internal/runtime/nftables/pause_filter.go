@@ -1,9 +1,12 @@
 package nftables
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 )
 
 // 暂停过滤独立成表，不并入主 NAT 表：
@@ -90,4 +93,82 @@ func (m *Manager) SetBlocked(ctx context.Context, cfg SSHConfig, port int, block
 		return errors.New("nftables runner does not support traffic blocking")
 	}
 	return runner.SetBlocked(ctx, cfg, port, blocked)
+}
+
+// ListBlockedPorts 读取节点当前封禁集（R2-038 对账清扫的读面）。
+// 暂停表不存在即无封禁，返回空集而非错误。
+func (r *SSHRunner) ListBlockedPorts(ctx context.Context, cfg SSHConfig) ([]int, error) {
+	raw, err := r.runOutput(ctx, cfg, buildListBlockedPortsCommand(nftBinary(cfg)))
+	if err != nil {
+		return nil, err
+	}
+	return ParseBlockedPortsJSON(raw)
+}
+
+func buildListBlockedPortsCommand(nft string) string {
+	// 表不存在时安静无输出（等价空集），与解除封禁同口径。
+	return "set -eu\n" +
+		"if " + nft + " list table inet " + pauseTableName + " >/dev/null 2>&1; then\n" +
+		nft + " -j list set inet " + pauseTableName + " " + pauseSetName + "\n" +
+		"fi"
+}
+
+// ParseBlockedPortsJSON 解析 `nft -j list set` 输出中 blocked_ports
+// 的元素集（升序）。空输出（表不存在）返回空集。元素只接受纯端口
+// 数字：本集只由 SetBlocked 逐个写入单端口，出现区间等异形元素
+// 说明集合被外部改动，返回错误让调用方整节点跳过本轮清扫，不做
+// 猜测性处理。
+func ParseBlockedPortsJSON(raw []byte) ([]int, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var doc struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse blocked ports output: %w", err)
+	}
+	for _, entry := range doc.Nftables {
+		rawSet, ok := entry["set"]
+		if !ok {
+			continue
+		}
+		var set struct {
+			Name string            `json:"name"`
+			Elem []json.RawMessage `json:"elem"`
+		}
+		if err := json.Unmarshal(rawSet, &set); err != nil {
+			return nil, fmt.Errorf("parse blocked ports set: %w", err)
+		}
+		if set.Name != pauseSetName {
+			continue
+		}
+		ports := make([]int, 0, len(set.Elem))
+		for _, rawElem := range set.Elem {
+			var port int
+			if err := json.Unmarshal(rawElem, &port); err != nil {
+				return nil, fmt.Errorf("blocked ports set holds a non-port element: %s", string(rawElem))
+			}
+			if port < 1 || port > 65535 {
+				return nil, fmt.Errorf("blocked ports set holds an out-of-range port: %d", port)
+			}
+			ports = append(ports, port)
+		}
+		sort.Ints(ports)
+		return ports, nil
+	}
+	return nil, errors.New("blocked ports set not found in nft output")
+}
+
+func (m *Manager) ListBlockedPorts(ctx context.Context, cfg SSHConfig) ([]int, error) {
+	if err := m.ensureInitialized(); err != nil {
+		return nil, err
+	}
+	runner, ok := m.runner.(interface {
+		ListBlockedPorts(context.Context, SSHConfig) ([]int, error)
+	})
+	if !ok {
+		return nil, errors.New("nftables runner does not support listing blocked ports")
+	}
+	return runner.ListBlockedPorts(ctx, cfg)
 }

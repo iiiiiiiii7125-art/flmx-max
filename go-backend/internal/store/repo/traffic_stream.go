@@ -24,6 +24,13 @@ import (
 //
 // 游标不进备份导出：备份恢复后游标回退/缺失正由 gap→reset_stream
 // 自愈闭环处理，不需要随备份搬运。
+//
+// R2-037 固有取舍（显式记录，本轮不动代码）：恢复后首触必然走
+// gap 路径，面板无从区分该批是「从未入账」还是「已入账但确认
+// 回执在网络上丢失」——后者会在新 stream 下二次入账。歧义上界
+// 为每节点一批，即 agent 一个采样周期（5 秒）的待确认量；两
+// 状态在协议上不可区分，属已选自愈方案的固有取舍。根除需产品
+// 决策（游标随备份走，或面板侧留批次摘要供恢复后比对）。
 
 // TrafficStreamCursor 记录一个上报 stream 的入账游标。
 type TrafficStreamCursor struct {
@@ -37,6 +44,25 @@ func (TrafficStreamCursor) TableName() string { return "traffic_stream_cursor" }
 
 // ErrTrafficStreamConflict 表示同 (scope, sequence) 已入账不同内容。
 var ErrTrafficStreamConflict = errors.New("traffic stream identity conflict")
+
+// DeleteStaleTrafficStreamCursors 删除 updated_time 早于 cutoffMs
+// 的游标行（R2-038 对账清扫）：节点每次换 stream 都在本表留一行，
+// 唯一删除点原是删节点级联，存活节点的孤儿行单调累积。按保留期
+// 删除是安全的：活跃 stream 每批入账都会刷新 updated_time，静默
+// 超过保留期的 stream 即使之后恢复上报，游标缺失也只触发一次
+// gap→reset_stream 自愈（agent 以新 stream 重报其待确认批次）；
+// 不产生超出 R2-037 固有歧义的新风险（上界仍是每节点一批）。
+// 返回删除行数。
+func (r *Repository) DeleteStaleTrafficStreamCursors(cutoffMs int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Where("updated_time < ?", cutoffMs).Delete(&TrafficStreamCursor{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
 
 // TrafficStreamGap 表示上报序号与游标不连续（预期 Expected 却收到
 // 更大的序号）：游标被备份恢复回退或整行丢失过。

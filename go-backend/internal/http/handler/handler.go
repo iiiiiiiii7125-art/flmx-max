@@ -85,6 +85,11 @@ type Handler struct {
 	jobsStarted bool
 	jobsWG      sync.WaitGroup
 
+	// R2-038：事件型状态对账清扫的小时级门（维护轮每分钟跑，
+	// 清扫低频即可，见 state_sweep.go）。
+	stateSweepMu   sync.Mutex
+	stateSweepLast time.Time
+
 	// FIX-D（D6-07）：通知派发有界队列 + worker 池状态（notify.go）。
 	notifyMu      sync.Mutex
 	notifyQueue   chan notifyJob

@@ -101,6 +101,8 @@ type blockingRunner struct {
 	blockedCalls     []fakeBlockedCall
 	clearBlocksCalls int
 	clearBlocksErr   error
+	listBlockedPorts []int
+	listBlockedErr   error
 }
 
 type fakeBlockedCall struct {
@@ -116,6 +118,82 @@ func (f *blockingRunner) SetBlocked(_ context.Context, _ SSHConfig, port int, bl
 func (f *blockingRunner) ClearBlocks(_ context.Context, _ SSHConfig) error {
 	f.clearBlocksCalls++
 	return f.clearBlocksErr
+}
+
+func (f *blockingRunner) ListBlockedPorts(_ context.Context, _ SSHConfig) ([]int, error) {
+	return f.listBlockedPorts, f.listBlockedErr
+}
+
+func TestBuildListBlockedPortsCommand(t *testing.T) {
+	cmd := buildListBlockedPortsCommand("nft")
+	for _, want := range []string{
+		"if nft list table inet flmx_quota >/dev/null 2>&1; then",
+		"nft -j list set inet flmx_quota blocked_ports",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("list blocked ports command missing %q:\n%s", want, cmd)
+		}
+	}
+	// 读面不得改动集合：不建表、不增删元素。
+	for _, bad := range []string{"add element", "delete element", "table inet flmx_quota {"} {
+		if strings.Contains(cmd, bad) {
+			t.Fatalf("list command must not mutate the set (%q):\n%s", bad, cmd)
+		}
+	}
+}
+
+func TestParseBlockedPortsJSON(t *testing.T) {
+	withElems := []byte(`{"nftables": [{"metainfo": {"version": "1.0.6", "json_schema_version": 1}}, {"set": {"family": "inet", "table": "flmx_quota", "name": "blocked_ports", "handle": 2, "type": "inet_service", "elem": [45002, 45001]}}]}`)
+	ports, err := ParseBlockedPortsJSON(withElems)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(ports) != 2 || ports[0] != 45001 || ports[1] != 45002 {
+		t.Fatalf("expected sorted [45001 45002], got %v", ports)
+	}
+
+	emptySet := []byte(`{"nftables": [{"metainfo": {"version": "1.0.6"}}, {"set": {"family": "inet", "table": "flmx_quota", "name": "blocked_ports", "handle": 2, "type": "inet_service"}}]}`)
+	ports, err = ParseBlockedPortsJSON(emptySet)
+	if err != nil || len(ports) != 0 {
+		t.Fatalf("empty set must parse to no ports, got %v err=%v", ports, err)
+	}
+
+	// 表不存在时命令无输出：空集而非错误。
+	ports, err = ParseBlockedPortsJSON(nil)
+	if err != nil || len(ports) != 0 {
+		t.Fatalf("empty output must parse to no ports, got %v err=%v", ports, err)
+	}
+
+	// 异形元素（区间）拒绝：集合被外部改动时整轮跳过，不猜测。
+	interval := []byte(`{"nftables": [{"set": {"family": "inet", "table": "flmx_quota", "name": "blocked_ports", "type": "inet_service", "elem": [{"range": [45001, 45010]}]}}]}`)
+	if _, err := ParseBlockedPortsJSON(interval); err == nil {
+		t.Fatal("interval element must be rejected")
+	}
+	if _, err := ParseBlockedPortsJSON([]byte("not json")); err == nil {
+		t.Fatal("malformed output must be rejected")
+	}
+	if _, err := ParseBlockedPortsJSON([]byte(`{"nftables": []}`)); err == nil {
+		t.Fatal("missing set entry must be rejected")
+	}
+}
+
+func TestManagerListBlockedPortsDelegatesToRunner(t *testing.T) {
+	runner := &blockingRunner{listBlockedPorts: []int{45001}}
+	manager := NewManager(runner)
+	ports, err := manager.ListBlockedPorts(context.Background(), SSHConfig{})
+	if err != nil {
+		t.Fatalf("ListBlockedPorts: %v", err)
+	}
+	if len(ports) != 1 || ports[0] != 45001 {
+		t.Fatalf("unexpected ports: %v", ports)
+	}
+}
+
+func TestManagerListBlockedPortsUnsupportedRunner(t *testing.T) {
+	manager := NewManager(&fakeRunner{})
+	if _, err := manager.ListBlockedPorts(context.Background(), SSHConfig{}); err == nil {
+		t.Fatal("expected error when runner lacks blocked-port listing")
+	}
 }
 
 func TestManagerSetBlockedDelegatesToRunner(t *testing.T) {

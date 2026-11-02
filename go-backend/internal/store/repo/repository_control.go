@@ -140,6 +140,28 @@ func (r *Repository) ListForwardIDsByNode(nodeID int64) ([]int64, error) {
 	return ids, nil
 }
 
+// ListForwardPortsByNode 返回节点上全部现存转发占用的入口端口
+// （任意状态，含暂停：暂停转发仍持有 forward_port 行）。R2-038
+// 封禁集对账清扫以此为「有主端口」全集。
+func (r *Repository) ListForwardPortsByNode(nodeID int64) ([]int, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ports []int
+	err := r.db.Model(&model.ForwardPort{}).
+		Where("forward_port.node_id = ?", nodeID).
+		Select("DISTINCT forward_port.port").
+		Order("forward_port.port ASC").
+		Pluck("forward_port.port", &ports).Error
+	if err != nil {
+		return nil, err
+	}
+	if ports == nil {
+		ports = make([]int, 0)
+	}
+	return ports, nil
+}
+
 func (r *Repository) ListForwardPorts(forwardID int64) ([]model.ForwardPortRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")

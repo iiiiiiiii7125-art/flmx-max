@@ -53,6 +53,10 @@ func (pcIntNftPassthrough) SetBlocked(_ context.Context, _ runtimenft.SSHConfig,
 	return nil
 }
 
+func (pcIntNftPassthrough) ListBlockedPorts(_ context.Context, _ runtimenft.SSHConfig) ([]int, error) {
+	return nil, nil
+}
+
 func pcIntSetup(t *testing.T) *r31FixF01Fixture {
 	t.Helper()
 	fx := setupR31FixF01(t)

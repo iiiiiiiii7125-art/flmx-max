@@ -181,6 +181,14 @@ func (m *serializedNftManager) SetBlocked(ctx context.Context, nodeID int64, cfg
 	return m.inner.SetBlocked(ctx, cfg, port, blocked)
 }
 
+// ListBlockedPorts 是只读采集，与 CollectCounters 同口径不取写锁
+// （D18 例外）：清扫的写操作（SetBlocked 解除）各自经锁串行；
+// 读到略旧的封禁集只会让本轮少清，误清由清扫谓词的 DB 归属
+// 复核兜底（见 nft_blocked_sweep.go）。
+func (m *serializedNftManager) ListBlockedPorts(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) ([]int, error) {
+	return m.inner.ListBlockedPorts(ctx, cfg)
+}
+
 func (m *serializedNftManager) CollectCounters(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error) {
 	// R5-B5B D18: 采集不获取写锁，允许与 reconcile 并发读。
 	// 脏读由 handler 层的 generation 检查兜底（见 collectNftablesNodeTraffic）。

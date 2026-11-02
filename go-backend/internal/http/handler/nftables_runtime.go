@@ -25,6 +25,7 @@ type nftablesRuntimeManager interface {
 	Clear(ctx context.Context, cfg runtimenft.SSHConfig) error
 	CollectCounters(ctx context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error)
 	SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error
+	ListBlockedPorts(ctx context.Context, cfg runtimenft.SSHConfig) ([]int, error)
 }
 
 func isNftablesForwardMode(mode string) bool {

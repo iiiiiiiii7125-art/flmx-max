@@ -53,6 +53,10 @@ func (m *blockingNftablesManager) CollectCounters(_ context.Context, _ runtimenf
 	return nil, nil
 }
 
+func (m *blockingNftablesManager) ListBlockedPorts(_ context.Context, _ runtimenft.SSHConfig) ([]int, error) {
+	return nil, nil
+}
+
 func (m *blockingNftablesManager) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool) error {
 	return nil
 }
