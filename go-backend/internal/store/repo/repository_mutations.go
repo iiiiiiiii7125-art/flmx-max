@@ -708,6 +708,13 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&NodeSeq{}).Error; err != nil {
 			return err
 		}
+		// 流量可靠上报 v2 的流游标没有 node_id 列，按 scope 前缀
+		// （flow:<nodeID>:<stream>，见 traffic_stream.go）归属节点，
+		// 一并补删，否则节点每次换 stream（重装/自愈）都在本表留
+		// 一行永久孤儿。前缀含结尾冒号，节点 12 不会误伤 123。
+		if err := tx.Where("scope LIKE ?", fmt.Sprintf("flow:%d:%%", nodeID)).Delete(&TrafficStreamCursor{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", nodeID).Delete(&model.Node{}).Error
 	})
 }
