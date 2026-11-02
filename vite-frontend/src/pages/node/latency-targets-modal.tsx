@@ -259,7 +259,7 @@ export function LatencyTargetsModal({
             </p>
           )}
           {batch && (
-            <p className="text-xs font-semibold text-warning-600">
+            <p className="text-xs font-semibold text-warning-700">
               保存后会覆盖这些节点原来的测试点设置。
             </p>
           )}

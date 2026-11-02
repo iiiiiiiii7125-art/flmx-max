@@ -5823,8 +5823,8 @@ export default function ForwardPage() {
                             <div
                               className={`text-xs font-semibold ${
                                 result.success
-                                  ? "text-success-600 dark:text-success-400"
-                                  : "text-danger-600 dark:text-danger-400"
+                                  ? "text-success-700"
+                                  : "text-danger-700"
                               }`}
                             >
                               {result.message}

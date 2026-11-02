@@ -599,7 +599,7 @@ export function AdminOverview() {
           >
             {groups.length === 0 ? (
               loadError ? (
-                <p className="py-3 text-center text-sm text-warning-600">
+                <p className="py-3 text-center text-sm text-warning-700">
                   数据加载失败，暂时无法判断
                 </p>
               ) : (
@@ -787,7 +787,7 @@ export function AdminOverview() {
                       </span>
                       <span className="min-w-0 flex-1 truncate">{e.name}</span>
                       <span
-                        className={`shrink-0 text-xs font-semibold ${days <= 3 ? "text-warning-600" : "text-foreground"}`}
+                        className={`shrink-0 text-xs font-semibold ${days <= 3 ? "text-warning-700" : "text-foreground"}`}
                       >
                         {daysLeft(e.at)}
                       </span>
