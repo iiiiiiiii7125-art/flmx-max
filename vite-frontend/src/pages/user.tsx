@@ -1978,7 +1978,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                       允许访问监控功能
                     </div>
                     <div className="text-xs font-semibold text-foreground mt-1">
-                      授予后，该用户可以访问监控页面并管理服务监控（TCP/ICMP）。
+                      授予后，该用户可以访问监控页面，查看自己可达隧道的隧道监控与隧道质量；节点监控与服务监控不对普通用户开放。
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
