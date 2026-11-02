@@ -161,7 +161,8 @@ func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error 
 // validateChainVersion is validateChain with the serving kernel's version,
 // so version-gated targets (Snell via sing-box needs 1.14+) are judged
 // against the version that will actually run them. An empty version is
-// not treated as too old (see versionBelow).
+// not treated as too old (the strict floor variants exempt it, see
+// versionFloorExempt).
 func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernelVersion string) error {
 	check := func(targetID int64, what string) error {
 		if targetID == row.ID {
@@ -194,7 +195,7 @@ func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernel
 		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, e.Host); err != nil {
 			return fmt.Errorf("%s：%w", what, err)
 		}
-		if err := kernel.CheckChainWith(kernelType, e, kernel.RenderOptions{SingboxSnell: !versionBelow(kernelVersion, 1, 14), SingboxNaive: !versionBelow(kernelVersion, 1, 13)}); err != nil {
+		if err := kernel.CheckChainWith(kernelType, e, kernel.RenderOptions{SingboxSnell: !versionBelowStrict(kernelVersion, 1, 14), SingboxNaive: !versionBelowStrict(kernelVersion, 1, 13)}); err != nil {
 			return fmt.Errorf("%s：%v", what, err)
 		}
 		return nil

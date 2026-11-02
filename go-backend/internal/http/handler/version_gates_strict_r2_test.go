@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"go-backend/internal/kernel"
+	"go-backend/internal/store/repo"
 )
 
 // 修复轮 2 · 版本门家族（R2-015/R2-016/R2-032）。本文件只用基线已有
@@ -76,6 +77,42 @@ func TestHardGatesRejectMalformedTwoSegmentFloors(t *testing.T) {
 	for _, v := range []string{"1.14", "1.14.3", "latest", ""} {
 		if msg := kernelVersionGate(kernel.TypeSingbox, v, acme); msg != "" {
 			t.Errorf("ACME 门：sing-box %q 须放行，got %q", v, msg)
+		}
+	}
+}
+
+// R2-016 同族复扫格：validateChainVersion 的 CheckChainWith 能力标志
+// （SingboxSnell/SingboxNaive）同样决定保存接受/拒绝，复扫时一并改走
+// 严格变体；空版本豁免（validateChain 的既有契约）必须原样保留。
+func TestValidateChainVersionMalformedVersionFailsClosed(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/chainstrict.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	snellNode := seedRelayTargetNode(t, r, "snell-node", "203.0.113.30")
+	snellKernel := seedChainKernel(t, r, snellNode, kernel.TypeSnell)
+	target := seedChainInbound(t, r, snellKernel, "snell-target", kernel.Inbound{
+		Protocol: kernel.ProtocolSnell, Port: 10001,
+		Settings: kernel.Settings{Password: "password123", SnellVersion: 5},
+	}, 0)
+	entryNode := seedRelayTargetNode(t, r, "entry-node", "198.51.100.9")
+	box := seedChainKernel(t, r, entryNode, kernel.TypeSingbox)
+	entry := seedChainInbound(t, r, box, "entry", kernel.Inbound{
+		Protocol: kernel.ProtocolShadowsocks, Port: 8388,
+	}, target.ID)
+
+	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.14-rc1"); err == nil || !strings.Contains(err.Error(), "1.14") {
+		t.Fatalf("malformed serving version must fail closed for a Snell target, got %v", err)
+	}
+	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.13.0"); err == nil {
+		t.Fatal("numerically-old serving version must stay rejected")
+	}
+	for _, v := range []string{"1.14.3", "", "latest"} {
+		if err := h.validateChainVersion(*entry, kernel.TypeSingbox, v); err != nil {
+			t.Fatalf("serving version %q must pass (empty/latest exemption preserved): %v", v, err)
 		}
 	}
 }
