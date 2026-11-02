@@ -55,6 +55,8 @@ import {
   MAX_TUNNEL_QUALITY_INTERVAL_SEC,
   MIN_TUNNEL_QUALITY_INTERVAL_SEC,
   parseTunnelQualityIntervalSeconds,
+  resolveTunnelQualityEnabled,
+  TUNNEL_QUALITY_ENABLED_CONFIG_KEY,
   TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
   validateTunnelQualityInterval,
 } from "@/config/tunnel-quality";
@@ -203,7 +205,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     label: "监控数据保留天数",
     placeholder: "7",
     description:
-      "统一清理节点指标、隧道流量、服务监控结果和隧道质量历史；默认 7 天。",
+      "按此天数清理节点指标、隧道指标、服务监控结果和隧道质量历史；默认 7 天。订阅流量小时桶（固定 400 天）与统计流量（固定 48 小时）为固定保留期，不受此设置影响。",
     type: "input",
   },
   {
@@ -277,7 +279,7 @@ const getInitialConfigs = (): Record<string, string> => {
     "cloudflare_site_key",
     "cloudflare_secret_key",
     "forward_compact_mode",
-    "monitor_tunnel_quality_enabled",
+    TUNNEL_QUALITY_ENABLED_CONFIG_KEY,
     TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
     "monitor_retention_days",
     "ip",
@@ -842,7 +844,7 @@ export default function ConfigPage() {
         if (
           changedKeys.some((key) =>
             [
-              "monitor_tunnel_quality_enabled",
+              TUNNEL_QUALITY_ENABLED_CONFIG_KEY,
               TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
             ].includes(key),
           )
@@ -850,7 +852,9 @@ export default function ConfigPage() {
           window.dispatchEvent(
             new CustomEvent("monitorTunnelQualityEnabledChanged", {
               detail: {
-                enabled: configs["monitor_tunnel_quality_enabled"] === "true",
+                // R8-018：与开关显示共用同一判读（缺失＝开启），
+                // 不许再写 === "true"——键未落库时会误报 false。
+                enabled: resolveSwitchSelected(TUNNEL_QUALITY_ENABLED_CONFIG_KEY),
                 intervalSec: parseTunnelQualityIntervalSeconds(
                   configs[TUNNEL_QUALITY_INTERVAL_CONFIG_KEY],
                 ),
@@ -875,11 +879,13 @@ export default function ConfigPage() {
   // captcha_enabled / allow_local_remote_addr 的后端消费者均按
   // === "true" 判读、缺失＝关闭，notify_enabled 同口径）。
   // 显示判读与后端对齐：只归一显示、不写库，用户首次拨动才落值。
-  const SWITCH_DEFAULT_ON_KEYS = new Set(["monitor_tunnel_quality_enabled"]);
+  const SWITCH_DEFAULT_ON_KEYS = new Set([TUNNEL_QUALITY_ENABLED_CONFIG_KEY]);
 
   const resolveSwitchSelected = (key: string): boolean => {
-    if (configs[key] === undefined && SWITCH_DEFAULT_ON_KEYS.has(key)) {
-      return true;
+    if (SWITCH_DEFAULT_ON_KEYS.has(key)) {
+      // 缺失＝开启族：与后端 !== "false" 判读逐字对齐（含保存广播，
+      // R8-018——四面共用 resolveTunnelQualityEnabled 单一判读点）。
+      return resolveTunnelQualityEnabled(configs[key]);
     }
 
     return configs[key] === "true";

@@ -62,6 +62,8 @@ import {
 import {
   DEFAULT_TUNNEL_QUALITY_INTERVAL_SEC,
   parseTunnelQualityIntervalSeconds,
+  resolveTunnelQualityEnabled,
+  TUNNEL_QUALITY_ENABLED_CONFIG_KEY,
   TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
   tunnelQualityIntervalLabel,
 } from "@/config/tunnel-quality";
@@ -71,7 +73,7 @@ interface TunnelMonitorViewProps {
 }
 
 const MONITOR_TUNNEL_QUALITY_ENABLED_CONFIG_KEY =
-  "monitor_tunnel_quality_enabled";
+  TUNNEL_QUALITY_ENABLED_CONFIG_KEY;
 const MONITOR_TUNNEL_QUALITY_ENABLED_EVENT =
   "monitorTunnelQualityEnabledChanged";
 const DEFAULT_PROBE_TARGET_LABEL = "www.bing.com:443";
@@ -888,9 +890,8 @@ export function TunnelMonitorView({
     ]);
 
     setMonitorTunnelQualityEnabled(
-      typeof enabledResponse?.data?.value === "string"
-        ? enabledResponse.data.value === "true"
-        : true,
+      // R8-018：与后端/config 页共用单一判读（缺失＝开启）。
+      resolveTunnelQualityEnabled(enabledResponse?.data?.value),
     );
     setTunnelQualityIntervalSec(
       parseTunnelQualityIntervalSeconds(intervalResponse?.data?.value),

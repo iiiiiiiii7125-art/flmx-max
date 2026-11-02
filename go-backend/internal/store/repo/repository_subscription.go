@@ -269,20 +269,11 @@ func (r *Repository) SaveSubscriptionWithResetTime(s *model.Subscription, resetT
 	})
 }
 
-func (r *Repository) DeleteSubscription(id int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("subscription_id = ?", id).Delete(&model.SubscriptionCounter{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("subscription_id = ?", id).Delete(&model.SubscriptionTraffic{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("id = ?", id).Delete(&model.Subscription{}).Error
-	})
-}
+// R8-053: the former DeleteSubscription (counters/buckets/row only, no
+// user_subscription assignment cleanup) was removed — it had no
+// production caller and its same-name-near-shape invited misuse that
+// would orphan assignment rows. Production deletion always goes
+// through DeleteSubscriptionWithAssignments (repository_user_subscription.go).
 
 func (r *Repository) UpdateSubscriptionApplied(id int64, active int) error {
 	if r == nil || r.db == nil {

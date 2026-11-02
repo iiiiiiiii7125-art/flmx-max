@@ -274,21 +274,16 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 			return err
 		}
 		forwardIDs := tx.Model(&model.Forward{}).Select("id").Where("user_id = ?", userID)
-		// F-076（A4-005）：补 nft_counter_state 清理。单删走
-		// DeleteForwardCascade、隧删与节点删均已在各自事务内内联
-		// 清理计数基线，唯独用户级联独漏——其转发的基线行会永久
-		// 残留为孤儿（forward_id 不复用，无计费影响，但表随删用户
-		// 单调膨胀）。注：预留的 DeleteNftCounterStatesByForward
-		// 非事务型（走 r.db），故此处与其它级联一致用 tx 内联删。
-		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
-			return err
-		}
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
-		// B4/F-057: 与 DeleteForwardCascade 对齐——删用户须同步清其转发的
-		// nft 台账三表与中转行，否则残留 pending 行会被后台重试循环反复
-		// 取出对不存在的 forward 报错。
+		// B4/F-057＋F-076（A4-005）: 与 DeleteForwardCascade 对齐——删用户
+		// 须同步清其转发的 nft 台账三表与中转行：计数基线不清会永久残留
+		// 为孤儿（forward_id 不复用，无计费影响，但表随删用户单调膨胀），
+		// pending 行不清会被后台重试循环反复取出对不存在的 forward 报错。
+		// 单删/隧删/节点删均已在各自事务内内联清理，唯独用户级联曾独漏；
+		// 预留的 DeleteNftCounterStatesByForward 非事务型（走 r.db），故
+		// 此处与其它级联一致用 tx 内联删（R8-052：三表各删一趟，勿重复）。
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NftCounterState{}).Error; err != nil {
 			return err
 		}

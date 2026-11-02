@@ -14,6 +14,7 @@ func TestConfigPolicy(t *testing.T) {
 		{name: "app_bg_image is public", key: "app_bg_image", want: ConfigAccessPublic},
 		{name: "app_bg_image_light is public", key: "app_bg_image_light", want: ConfigAccessPublic},
 		{name: "app_bg_image_dark is public", key: "app_bg_image_dark", want: ConfigAccessPublic},
+		{name: "login_bg_image is public", key: "login_bg_image", want: ConfigAccessPublic},
 		{name: "cloudflare_site_key is public", key: "cloudflare_site_key", want: ConfigAccessPublic},
 		{name: "is_commercial is public", key: "is_commercial", want: ConfigAccessPublic},
 		{name: "hide_footer_brand is public", key: "hide_footer_brand", want: ConfigAccessPublic},
@@ -33,7 +34,7 @@ func TestConfigPolicy(t *testing.T) {
 }
 
 func TestConfigPolicyHelpers(t *testing.T) {
-	publicKeys := []string{"app_name", "app_logo", "app_favicon", "app_bg_image", "app_bg_image_light", "app_bg_image_dark", "cloudflare_site_key", "is_commercial", "hide_footer_brand"}
+	publicKeys := []string{"app_name", "app_logo", "app_favicon", "app_bg_image", "app_bg_image_light", "app_bg_image_dark", "login_bg_image", "cloudflare_site_key", "is_commercial", "hide_footer_brand"}
 	for _, key := range publicKeys {
 		if !IsPublicConfigKey(key) {
 			t.Fatalf("expected %q to be public", key)
@@ -142,6 +143,135 @@ func TestSystemManagedConfigKeys(t *testing.T) {
 	for _, key := range []string{"jwt_secret", "cloudflare_secret_key", "app_name"} {
 		if IsSystemManagedConfigKey(key) {
 			t.Fatalf("did not expect %s to be system managed", key)
+		}
+	}
+}
+
+// R8-054: full-set reconciliation for every classification table in
+// config_policy.go. The sample-style tests above let login_bg_image
+// slip through: it sat in publicConfigKeys (and is consumed anonymously
+// by the login page) while no test enumerated it, so a future
+// misclassification would have turned nothing red. This test pins the
+// complete expected contents of all five tables — any key added,
+// removed, or moved between tables in config_policy.go fails here
+// until this enumeration is updated in the same change — and checks
+// every access-table key end-to-end through PolicyForConfig and the
+// Is* predicates.
+func TestConfigPolicyFullTableEnumeration(t *testing.T) {
+	keySet := func(keys ...string) map[string]struct{} {
+		set := make(map[string]struct{}, len(keys))
+		for _, key := range keys {
+			set[key] = struct{}{}
+		}
+
+		return set
+	}
+
+	wantPublic := keySet(
+		"app_bg_image", "app_bg_image_dark", "app_bg_image_light",
+		"app_favicon", "app_logo", "app_name", "cloudflare_site_key",
+		"hide_footer_brand", "is_commercial", "login_bg_image",
+	)
+	wantSensitive := keySet(
+		"cloudflare_secret_key", "gist_password", "gist_token",
+		"jwt_secret", "license_expiry", "license_key",
+		"license_machine_id", "machine_fingerprint", "node_sub_token",
+		"notify_telegram_api_base", "notify_telegram_bot_token",
+		"notify_telegram_chat_id", "notify_webhook_url",
+	)
+	wantAuthenticated := keySet(
+		"allow_local_remote_addr", "captcha_enabled",
+		"forward_compact_mode", "forward_group_collapsed_map",
+		"forward_group_order_map", "ip", "latency_targets",
+		"monitor_retention_days", "monitor_tunnel_quality_enabled",
+		"monitor_tunnel_quality_interval_sec", "notify_daily_hour",
+		"notify_enabled", "notify_events", "notify_latency_loss_pct",
+		"notify_latency_ms", "panel_domain",
+		"service_monitor_checker_scan_interval_sec",
+		"service_monitor_default_interval_sec",
+		"service_monitor_default_timeout_sec",
+		"service_monitor_max_timeout_sec",
+		"service_monitor_min_interval_sec",
+		"service_monitor_min_timeout_sec",
+		"service_monitor_worker_limit", "subscription_front_urls",
+	)
+	wantRequired := keySet(
+		"jwt_secret", "monitor_retention_days",
+		"monitor_tunnel_quality_enabled",
+		"monitor_tunnel_quality_interval_sec",
+	)
+	wantSystemManaged := keySet(
+		"gist_id", "gist_interval_hours", "gist_last_at",
+		"gist_last_error", "gist_last_hash", "gist_last_upload",
+		"gist_password", "gist_token", "is_commercial",
+		"license_expiry", "license_key", "license_machine_id",
+		"machine_fingerprint", "node_sub_token",
+	)
+
+	assertTable := func(name string, got, want map[string]struct{}) {
+		t.Helper()
+		for key := range want {
+			if _, ok := got[key]; !ok {
+				t.Fatalf("%s is missing key %q (update the table or this enumeration)", name, key)
+			}
+		}
+		for key := range got {
+			if _, ok := want[key]; !ok {
+				t.Fatalf("%s has unenumerated key %q (add it to this enumeration in the same change)", name, key)
+			}
+		}
+	}
+	assertTable("publicConfigKeys", publicConfigKeys, wantPublic)
+	assertTable("sensitiveConfigKeys", sensitiveConfigKeys, wantSensitive)
+	assertTable("authenticatedConfigKeys", authenticatedConfigKeys, wantAuthenticated)
+	assertTable("requiredConfigKeys", requiredConfigKeys, wantRequired)
+	assertTable("systemManagedConfigKeys", systemManagedConfigKeys, wantSystemManaged)
+
+	// Every access-table key must classify as its own table through the
+	// public entry point (the three access tables are disjoint, so the
+	// expected class is unambiguous).
+	assertPolicy := func(keys map[string]struct{}, want ConfigAccessPolicy) {
+		t.Helper()
+		for key := range keys {
+			if got := PolicyForConfig(key); got != want {
+				t.Fatalf("PolicyForConfig(%q) = %v, want %v", key, got, want)
+			}
+		}
+	}
+	assertPolicy(wantPublic, ConfigAccessPublic)
+	assertPolicy(wantSensitive, ConfigAccessSensitive)
+	assertPolicy(wantAuthenticated, ConfigAccessAuthenticated)
+
+	// The Is* predicates must agree with table membership over the
+	// union of all five tables.
+	union := keySet()
+	for _, table := range []map[string]struct{}{
+		wantPublic, wantSensitive, wantAuthenticated, wantRequired, wantSystemManaged,
+	} {
+		for key := range table {
+			union[key] = struct{}{}
+		}
+	}
+	member := func(table map[string]struct{}, key string) bool {
+		_, ok := table[key]
+
+		return ok
+	}
+	for key := range union {
+		if IsPublicConfigKey(key) != member(wantPublic, key) {
+			t.Fatalf("IsPublicConfigKey(%q) disagrees with publicConfigKeys", key)
+		}
+		if IsSensitiveConfigKey(key) != member(wantSensitive, key) {
+			t.Fatalf("IsSensitiveConfigKey(%q) disagrees with sensitiveConfigKeys", key)
+		}
+		if IsAuthenticatedConfigKey(key) != member(wantAuthenticated, key) {
+			t.Fatalf("IsAuthenticatedConfigKey(%q) disagrees with authenticatedConfigKeys", key)
+		}
+		if IsRequiredConfigKey(key) != member(wantRequired, key) {
+			t.Fatalf("IsRequiredConfigKey(%q) disagrees with requiredConfigKeys", key)
+		}
+		if IsSystemManagedConfigKey(key) != member(wantSystemManaged, key) {
+			t.Fatalf("IsSystemManagedConfigKey(%q) disagrees with systemManagedConfigKeys", key)
 		}
 	}
 }
