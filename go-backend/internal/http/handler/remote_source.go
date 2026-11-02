@@ -245,9 +245,21 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		}
 	}
 
+	// 完整性门：本轮出现任何解析/转换/写入错误时，「未匹配」不能证明
+	// 节点已被订阅源删除——未匹配旧节点连同其节点组引用一律保留，
+	// 等下一轮干净同步再裁决删除。批内去重（F-025）的重复条目提示
+	// 同样计入错误，这类轮次也推迟删除（保守方向）。门在删除循环
+	// 开始时按当时错误集判定；循环内守卫自身追加的错误不回溯影响
+	// 本轮其余行（与逐行 fail-closed 守卫并存）。
+	complete := len(res.Errors) == 0
+
 	deletedIDs := make(map[int64]bool)
 	for _, row := range mine {
 		if used[row.ID] {
+			continue
+		}
+		if !complete {
+			res.Kept++
 			continue
 		}
 		// R4X-007：守卫查询失败 fail-closed（与下方 chainReferrers
