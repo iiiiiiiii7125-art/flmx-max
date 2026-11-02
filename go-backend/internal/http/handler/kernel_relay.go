@@ -893,10 +893,6 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !subActive(sub, time.Now()) {
-		http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
-		return
-	}
 
 	// X-P3-2：别名解析与计数侧共用 subFormatAlias，防两处再分叉。
 	format := subFormatAlias(r.URL.Query().Get("format"))
@@ -938,7 +934,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 			rows = filterInboundRowsByUserAssignments(rows, userAssignments)
 		}
 	}
-	endpoints := h.subEndpoints(sub, rows)
+	endpoints := h.subRenderEndpoints(sub, rows)
 	// If ?user= is set, further restrict endpoints to the assigned relays:
 	// direct endpoints require a relayID=0 assignment; relay endpoints
 	// require an assignment for that specific relay.
@@ -963,27 +959,9 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoints = filtered
 	}
-	// F-080: 不再对"端点为 0"单设 503。此前同一"无可用节点"状态有两种
-	// 语义：端点 0 个返回 503，端点被目标格式全过滤却返回 200 空体。
-	// 503 会被订阅客户端当服务端故障：保留上一份节点列表（可能含已删
-	// 节点）并反复重试；统一为 200 + 该格式的空渲染，客户端以空列表
-	// 如实更新，下个周期有节点时自动恢复。停用/过期仍由前置检查以
-	// 403 明确表达，不受影响。
-	subOpts := parsePipeline(sub.Options).options()
-	// sing-box 客户端 ≥1.14 才下发 Snell 节点；UA 解析不出版本一律不给
-	// （fail-closed，老客户端拿到也渲染不了）。
-	subOpts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())
-	// R9X-005 连带格：sing-box 客户端 ≥1.13 才下发 Naive 节点；低于
-	// 1.13 略过该节点（其余节点照常下发），不整份拒绝。
-	subOpts.SingboxNaive = kernel.SingboxClientHasNaive(r.UserAgent())
-	body, contentType, err := kernel.Subscription(format, endpoints, subOpts)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
 	// A share subscription reports its own traffic and limit; the owner's
-	// reports the selected inbounds' traffic.
+	// reports the selected inbounds' traffic. The figures are the whole
+	// subscription's totals — the same ones the info nodes below show.
 	var up, down, total int64
 	expire := sub.ExpireTime / 1000
 	if isShare(sub) {
@@ -992,7 +970,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		// 非分享订阅：流量从入站汇总，总量取订阅的 TrafficLimit（0 表示不限量）
 		total = sub.TrafficLimit
 		want := map[int64]bool{}
-		for _, id := range subInboundIDs(sub, rows) {
+		for _, id := range h.subAllInboundIDs(sub, rows, nil) {
 			want[id] = true
 		}
 		for _, row := range rows {
@@ -1001,6 +979,35 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 				down += row.DownloadBytes
 			}
 		}
+	}
+
+	// F-080: 不再对"端点为 0"单设 503。此前同一"无可用节点"状态有两种
+	// 语义：端点 0 个返回 503，端点被目标格式全过滤却返回 200 空体。
+	// 503 会被订阅客户端当服务端故障：保留上一份节点列表（可能含已删
+	// 节点）并反复重试；统一为 200 + 该格式的空渲染，客户端以空列表
+	// 如实更新，下个周期有节点时自动恢复。停用/过期/超限同理不再回
+	// 403：改为只含一个原因占位节点的配置（见下），客户端据此换掉旧
+	// 列表并看到原因，而不是停在旧配置上无从知晓。
+	pipe := parsePipeline(sub.Options)
+	subOpts := pipe.options()
+	// sing-box 客户端 ≥1.14 才下发 Snell 节点；UA 解析不出版本一律不给
+	// （fail-closed，老客户端拿到也渲染不了）。
+	subOpts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())
+	// R9X-005 连带格：sing-box 客户端 ≥1.13 才下发 Naive 节点；低于
+	// 1.13 略过该节点（其余节点照常下发），不整份拒绝。
+	subOpts.SingboxNaive = kernel.SingboxClientHasNaive(r.UserAgent())
+	var body, contentType string
+	if reason := subInactiveReason(sub, time.Now()); reason != "" {
+		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{reason}})
+	} else {
+		if pipe.InfoNodes {
+			subOpts.Notices = kernel.InfoNotices(sub.ExpireTime, up+down, total)
+		}
+		body, contentType, err = kernel.Subscription(format, endpoints, subOpts)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")

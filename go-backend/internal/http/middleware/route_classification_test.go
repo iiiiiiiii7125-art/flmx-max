@@ -116,7 +116,7 @@ func pubOpt(p string) routeEntry {
 }
 func pubNA(p string) routeEntry { return routeEntry{p, classPublic, gateNonAPI} }
 
-// routeClassification 是全量注册路由的显式分类表（211 条）。
+// routeClassification 是全量注册路由的显式分类表（216 条）。
 // 新增路由时：先在 handler.go/router.go 注册，再来这里加一行
 // 分类；改某条路由的鉴权语义时同步改这里并让三表对位检查裁决。
 var routeClassification = []routeEntry{
@@ -186,7 +186,10 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/notify/test"),
 	adm("/api/v1/speed-limit/create"), adm("/api/v1/speed-limit/delete"),
 	adm("/api/v1/speed-limit/list"), adm("/api/v1/speed-limit/update"),
-	adm("/api/v1/subscription/delete"), adm("/api/v1/subscription/list"),
+	adm("/api/v1/subscription/delete"),
+	adm("/api/v1/subscription/group/delete"), adm("/api/v1/subscription/group/list"),
+	adm("/api/v1/subscription/group/order"), adm("/api/v1/subscription/group/preview"),
+	adm("/api/v1/subscription/group/save"), adm("/api/v1/subscription/list"),
 	adm("/api/v1/subscription/preview"), adm("/api/v1/subscription/reset"),
 	adm("/api/v1/subscription/reset-traffic"), adm("/api/v1/subscription/save"),
 	adm("/api/v1/subscription/source/delete"), adm("/api/v1/subscription/source/list"),

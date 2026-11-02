@@ -1182,6 +1182,8 @@ export interface SubPipeline {
   relayIds: number[];
   /** JavaScript `function operator(nodes)`，在其他步骤后运行。 */
   script: string;
+  /** 在节点列表最前面显示到期与流量的占位节点（给不显示订阅信息的客户端看）。 */
+  infoNodes: boolean;
 }
 /** 订阅规则组（后端下发）。 */
 export interface SubRuleGroup {
@@ -1197,6 +1199,8 @@ export interface SubscriptionItem {
   sourceAll: boolean;
   inboundIds: number[];
   sourceIds: number[];
+  /** 引用的节点组（有序）：组内节点按此顺序拼在自有来源之前。 */
+  groupIds: number[];
   sharedIds: number[];
   options: SubPipeline;
   expireTime: number;
@@ -1225,6 +1229,7 @@ export interface SubscriptionDraft {
   sourceAll: boolean;
   inboundIds: number[];
   sourceIds: number[];
+  groupIds: number[];
   options: SubPipeline;
   expireTime: number;
   enabled?: boolean;
@@ -1324,6 +1329,60 @@ export const previewSubscription = (data: SubscriptionDraft) =>
     // 预览区必须展示，避免用户以为节点被脚本吞掉。
     scriptError?: string;
   }>("/subscription/preview", data);
+
+/** 节点组流水线：订阅流水线的可复用子集（无链式/规则/地区分组）。 */
+export interface NodeGroupPipeline {
+  lines: "" | "relay" | "direct";
+  regions: string[];
+  protocols: string[];
+  include: string;
+  exclude: string;
+  rename: string;
+  addFlag: boolean;
+  prefix: string;
+  dedupe: boolean;
+  sort: "" | "name";
+  script: string;
+}
+export interface NodeGroupItem {
+  id: number;
+  name: string;
+  sourceAll: boolean;
+  inboundIds: number[];
+  sourceIds: number[];
+  options: NodeGroupPipeline;
+  nodeCount: number;
+  /** 引用了这个组的订阅。 */
+  subscriptions: Array<{ id: number; name: string }>;
+}
+export interface NodeGroupDraft {
+  id?: number;
+  name: string;
+  sourceAll: boolean;
+  inboundIds: number[];
+  sourceIds: number[];
+  options: NodeGroupPipeline;
+}
+export const getNodeGroups = () =>
+  Network.post<{ items: NodeGroupItem[]; regions: string[] }>(
+    "/subscription/group/list",
+  );
+export const saveNodeGroup = (data: NodeGroupDraft) =>
+  // 保存后要给引用了这个组的订阅重新下发凭据（与保存订阅同口径）。
+  Network.post<NodeGroupItem>("/subscription/group/save", data, {
+    timeout: 330_000,
+  });
+export const deleteNodeGroup = (id: number) =>
+  Network.post("/subscription/group/delete", { id }, { timeout: 330_000 });
+export const orderNodeGroups = (ids: number[]) =>
+  Network.post("/subscription/group/order", { ids });
+export const previewNodeGroup = (data: NodeGroupDraft) =>
+  Network.post<{
+    items: SubPreviewItem[];
+    total: number;
+    dropped: number;
+    scriptError?: string;
+  }>("/subscription/group/preview", data);
 
 export const testNotify = (data: {
   telegramToken: string;

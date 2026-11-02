@@ -61,6 +61,12 @@ type subPipeline struct {
 	// RelayIDs 是端点白名单（1.0.12 中转范围过滤）：空/nil = 不过滤（旧行为）；
 	// 非空时仅保留 RelayID 命中的端点，0 表示直连端点，N>0 表示该中转的端点。
 	RelayIDs []int64 `json:"relayIds,omitempty"`
+	// InfoNodes puts expiry / traffic placeholder nodes at the head of
+	// the rendered node list (kernel.InfoNotices), for clients that do
+	// not display the Subscription-Userinfo header. It is read by the
+	// fetch handler directly; options() does not map it (the notice
+	// texts are computed per fetch, not stored).
+	InfoNodes bool `json:"infoNodes"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
@@ -338,6 +344,21 @@ func subActive(s *model.Subscription, now time.Time) bool {
 	return s.Enabled == 1 && (s.ExpireTime == 0 || s.ExpireTime > now.UnixMilli()) && !subOverQuota(s)
 }
 
+// subInactiveReason is why the link no longer works, as the name of
+// the placeholder node served instead (see openSubscription); "" while
+// it is active.
+func subInactiveReason(s *model.Subscription, now time.Time) string {
+	switch {
+	case subActive(s, now):
+		return ""
+	case s.Enabled != 1:
+		return "⚠️ 订阅已停用，请联系管理员"
+	case subOverQuota(s):
+		return "⚠️ 流量已用完，请联系管理员"
+	}
+	return "⚠️ 订阅已过期，请联系管理员"
+}
+
 func subUsed(s *model.Subscription) int64 { return s.UploadBytes + s.DownloadBytes }
 
 func subOverQuota(s *model.Subscription) bool {
@@ -519,6 +540,7 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 		return nil
 	}
 	var rows []model.NodeInbound
+	memo := &companionGateMemo{}
 	out := map[int64][]kernel.User{}
 	for i := range subs {
 		s := &subs[i]
@@ -531,7 +553,7 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 				return nil
 			}
 		}
-		for _, id := range subInboundIDs(s, rows) {
+		for _, id := range h.subAllInboundIDs(s, rows, memo) {
 			out[id] = append(out[id], kernelUser(s))
 		}
 	}
@@ -579,6 +601,7 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 		return
 	}
 	var rows []model.NodeInbound
+	groupMemo := &companionGateMemo{}
 	for i := range subs {
 		s := &subs[i]
 		if s.PendingDelete == 1 {
@@ -607,7 +630,7 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 		}
 		// AUDIT-R8 (F7X-001): 下发失败时不更新 AppliedActive，留待下轮循环重试。
 		// 旧代码无条件更新，导致失败后永不重试（凭据撤销失效）。
-		if err := h.applyKernelsForInbounds(subInboundIDs(s, rows)); err != nil {
+		if err := h.applyKernelsForInbounds(h.subAllInboundIDs(s, rows, groupMemo)); err != nil {
 			log.Printf("subscription %d kernel push failed: %v", s.ID, err)
 		} else {
 			_ = h.repo.UpdateSubscriptionApplied(s.ID, active)
@@ -641,8 +664,17 @@ func (h *Handler) subEndpoints(s *model.Subscription, rows []model.NodeInbound) 
 // companion map — and with it the per-kernel payload rebuilds behind
 // the applied gate — is evaluated once, not once per consultation.
 func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) []kernel.Endpoint {
+	return h.subEndpointsForIDs(s, rows, memo, subInboundIDs(s, rows))
+}
+
+// subEndpointsForIDs is subEndpointsMemo for an explicit inbound id set
+// (a node group's sources): same endpoint building, credential stamping
+// and relay scope, driven by ids instead of the subscription's own
+// sources. s may be nil for a standalone group view; then no
+// credentials are stamped and no relay scope applies.
+func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo, ids []int64) []kernel.Endpoint {
 	want := map[int64]bool{}
-	for _, id := range subInboundIDs(s, rows) {
+	for _, id := range ids {
 		want[id] = true
 	}
 	selected := make([]model.NodeInbound, 0, len(want))
@@ -654,7 +686,7 @@ func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbou
 		}
 	}
 	endpoints, _ := h.inboundEndpoints(selected)
-	if isShare(s) {
+	if s != nil && isShare(s) {
 		ku := kernelUser(s)
 		companions := h.companionsByOrigin(memo)
 		kept := endpoints[:0]
@@ -691,6 +723,9 @@ func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbou
 			kept = append(kept, e)
 		}
 		endpoints = kept
+	}
+	if s == nil {
+		return endpoints
 	}
 	// 1.0.12: 中转范围过滤（Options.relayIds）。空 = 不过滤，保持旧行为。
 	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
@@ -779,6 +814,7 @@ type subscriptionView struct {
 	SourceAll  bool    `json:"sourceAll"`
 	InboundIDs []int64 `json:"inboundIds"`
 	SourceIDs  []int64 `json:"sourceIds"`
+	GroupIDs   []int64 `json:"groupIds"`
 	// SharedIDs are selected inbounds of a share subscription that can't
 	// carry per-user credentials (Snell, Shadowsocks, imported nodes).
 	SharedIDs  []int64     `json:"sharedIds"`
@@ -878,7 +914,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	if assignments != nil {
 		rows = filterInboundRowsByUserAssignments(rows, assignments)
 	}
-	ids := subInboundIDs(s, rows)
+	ids := h.subAllInboundIDs(s, rows, memo)
 	byID := make(map[int64]model.NodeInbound, len(rows))
 	for _, r := range rows {
 		byID[r.ID] = r
@@ -922,13 +958,17 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		// 1.14+ 口径含 Naive（≥1.13），与 SingboxSnell 同置 true。
 		countOpts.SingboxNaive = true
 	}
-	endpoints := h.subEndpointsMemo(s, rows, memo)
+	endpoints := h.subRenderEndpointsMemo(s, rows, memo)
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
+	groupIDs := parseIDList(s.GroupIDs)
+	if groupIDs == nil {
+		groupIDs = []int64{}
+	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
-		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
+		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, GroupIDs: groupIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
@@ -996,6 +1036,7 @@ type subscriptionRequest struct {
 	SourceAll  bool        `json:"sourceAll"`
 	InboundIDs []int64     `json:"inboundIds"`
 	SourceIDs  []int64     `json:"sourceIds"`
+	GroupIDs   []int64     `json:"groupIds"`
 	Options    subPipeline `json:"options"`
 	ExpireTime int64       `json:"expireTime"`
 	Enabled    *bool       `json:"enabled"`
@@ -1089,8 +1130,12 @@ func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]in
 		}
 	}
 	req.SourceIDs = sources
+	req.GroupIDs = normalizeGroupIDs(req.GroupIDs)
+	if len(req.GroupIDs) > 100 {
+		return nil, nil, errText("选的节点组太多（最多 100 个）")
+	}
 	chainSources := len(req.Options.ChainLandingSources) + len(req.Options.ChainRelaySources)
-	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 {
+	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 && len(req.GroupIDs) == 0 {
 		return nil, nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
 	return ids, excluded, nil
@@ -1121,6 +1166,10 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	if err := h.validateGroupIDs(req.GroupIDs); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	// X-P3-27（L-11-2）：新建分支接入 Idempotency-Key 机制（更新分支
 	// req.ID>0 不参与，更新本身按 ID 定位、无防重语义变化）。
 	if req.ID == 0 {
@@ -1142,7 +1191,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if isShare(s) {
-			before = subInboundIDs(s, rows)
+			before = h.subAllInboundIDs(s, rows, nil)
 		}
 	} else {
 		token, tokenErr := randomHex(16)
@@ -1170,6 +1219,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	s.SourceAll = boolToInt(req.SourceAll)
 	s.InboundIDs = formatIDList(ids)
 	s.SourceIDs = formatIDList(req.SourceIDs)
+	s.GroupIDs = formatOrderedIDList(req.GroupIDs)
 	opts, _ := json.Marshal(req.Options)
 	s.Options = string(opts)
 	s.ExpireTime = req.ExpireTime
@@ -1203,7 +1253,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	push := before
 	if isShare(s) {
-		push = append(push, subInboundIDs(s, rows)...)
+		push = append(push, h.subAllInboundIDs(s, rows, nil)...)
 	}
 	// B10-002：响应视图回填本次被排除的伴生入站，管理员可见。
 	view := h.subscriptionView(s, rows, now, req.Format)
@@ -1275,7 +1325,7 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 		if err != nil {
 			return err
 		}
-		push = subInboundIDs(s, rows)
+		push = h.subAllInboundIDs(s, rows, nil)
 	}
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		return err
@@ -1318,7 +1368,7 @@ func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []m
 	rows, _ = h.repo.ListNodeInbounds()
 	var push []int64
 	if isShare(s) {
-		push = subInboundIDs(s, rows)
+		push = h.subAllInboundIDs(s, rows, nil)
 	}
 	// AUDIT-R8 (R5R8-001): 凭据轮换后下发失败时，强制标记 AppliedActive=-1（需同步），
 	// 使 syncSubscriptions 循环的 active != AppliedActive 恒成立从而重试。
@@ -1423,10 +1473,14 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	if err := h.validateGroupIDs(req.GroupIDs); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	options, _ := json.Marshal(req.Options)
 	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs),
-		Options: string(options)}
-	source := h.subEndpoints(draft, rows)
+		GroupIDs: formatOrderedIDList(req.GroupIDs), Options: string(options)}
+	source := h.subRenderEndpoints(draft, rows)
 	opts := req.Options.options()
 	// F-024（O4-001 的另一半）：脚本出错时预览必须保留其他步骤的节点并
 	// 附带 scriptError——此前实现直接返回空 items + dropped=全部，与
@@ -1557,7 +1611,7 @@ func (h *Handler) canReadDefaultSubscription(userID int64, s *model.Subscription
 		return false, err
 	}
 	member := make(map[int64]bool, len(assigned))
-	for _, id := range subInboundIDs(s, rows) {
+	for _, id := range h.subAllInboundIDs(s, rows, nil) {
 		member[id] = true
 	}
 	for _, id := range assigned {

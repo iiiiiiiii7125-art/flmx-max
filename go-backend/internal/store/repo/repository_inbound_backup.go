@@ -307,10 +307,20 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	for _, sub := range subs {
 		out.Subscriptions = append(out.Subscriptions, model.SubscriptionBackup{
 			ID: sub.ID, Name: sub.Name, Kind: sub.Kind, Token: sub.Token, UUID: sub.UUID, Password: sub.Password,
-			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
+			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, GroupIDs: sub.GroupIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
 			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
 			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime, TrafficSince: sub.TrafficSince, PendingDelete: sub.PendingDelete,
+		})
+	}
+	var groups []model.NodeGroup
+	if err := r.db.Order("inx ASC, id ASC").Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		out.NodeGroups = append(out.NodeGroups, model.NodeGroupBackup{
+			ID: g.ID, Name: g.Name, SourceAll: g.SourceAll, InboundIDs: g.InboundIDs, SourceIDs: g.SourceIDs,
+			Options: g.Options, Inx: g.Inx, CreatedTime: g.CreatedTime,
 		})
 	}
 	return out, nil
@@ -479,6 +489,7 @@ type inboundImportCounts struct {
 	subscriptions       int
 	subscriptionCounter int
 	sources             int
+	groups              int
 	legacyUsers         int
 }
 
@@ -640,6 +651,24 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			return inboundImportCounts{}, err
 		}
 		counts.sources++
+	}
+
+	// Node groups after sources (their source ids point at them) and
+	// before subscriptions (their group ids point at the groups).
+	// Upserted by id, so restored subscriptions keep working group
+	// references without a remap.
+	for _, gb := range b.NodeGroups {
+		item := model.NodeGroup{
+			ID: gb.ID, Name: gb.Name, SourceAll: gb.SourceAll, InboundIDs: gb.InboundIDs, SourceIDs: gb.SourceIDs,
+			Options: gb.Options, Inx: gb.Inx, CreatedTime: gb.CreatedTime, UpdatedTime: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "source_all", "inbound_ids", "source_ids", "options", "inx", "updated_time"}),
+		}).Create(&item).Error; err != nil {
+			return inboundImportCounts{}, err
+		}
+		counts.groups++
 	}
 
 	for _, i := range b.Inbounds {
@@ -974,7 +1003,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
-			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
+			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, GroupIDs: sb.GroupIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
 			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, TrafficSince: sb.TrafficSince, PendingDelete: sb.PendingDelete,

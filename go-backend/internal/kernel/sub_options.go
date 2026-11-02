@@ -73,6 +73,11 @@ type SubOptions struct {
 	// 1.13 的客户端略过 Naive 节点（整表 FATAL 的替代处置，与 Snell
 	// 的 UA 略过同型），其余节点照常下发。
 	SingboxNaive bool
+	// Notices are placeholder nodes put first, after the other steps
+	// (see sub_notice.go). The handler fills them: expiry / traffic
+	// info nodes for a live subscription, or the reason a stopped one
+	// no longer works. They are not part of the stored pipeline JSON.
+	Notices []string
 }
 
 // SubscriptionProtocols is the known protocol set for subscription

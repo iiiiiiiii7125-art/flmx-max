@@ -564,6 +564,10 @@ type InboundsBackup struct {
 	// 同等待遇）；恢复时订阅 id 经 subRemap 按 token 落位。
 	SubscriptionCounters []SubscriptionCounterBackup `json:"subscriptionCounters,omitempty"`
 	Sources              []RemoteSourceBackup        `json:"sources,omitempty"`
+	// NodeGroups are upserted by id on import (like kernels and
+	// sources), so a subscription's groupIds keep pointing at the
+	// restored groups without a remap.
+	NodeGroups []NodeGroupBackup `json:"nodeGroups,omitempty"`
 	// Users are shared users from 3.0.10 backups; imported as share
 	// subscriptions.
 	Users []SubUserBackup `json:"users,omitempty"`
@@ -579,6 +583,7 @@ type SubscriptionBackup struct {
 	SourceAll   int    `json:"sourceAll"`
 	InboundIDs  string `json:"inboundIds"`
 	SourceIDs   string `json:"sourceIds,omitempty"`
+	GroupIDs    string `json:"groupIds,omitempty"`
 	Options     string `json:"options"`
 	ExpireTime  int64  `json:"expireTime"`
 	Enabled     int    `json:"enabled"`
@@ -595,6 +600,17 @@ type SubscriptionBackup struct {
 	ResetDay         int   `json:"resetDay,omitempty"`
 	TrafficResetTime int64 `json:"trafficResetTime,omitempty"`
 	TrafficSince     int64 `json:"trafficSince,omitempty"`
+}
+
+type NodeGroupBackup struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	SourceAll   int    `json:"sourceAll"`
+	InboundIDs  string `json:"inboundIds"`
+	SourceIDs   string `json:"sourceIds,omitempty"`
+	Options     string `json:"options"`
+	Inx         int    `json:"inx"`
+	CreatedTime int64  `json:"createdTime"`
 }
 
 type SubUserBackup struct {
@@ -980,6 +996,7 @@ type ImportResult struct {
 	InboundSubscriptionsImported        int `json:"inboundSubscriptionsImported"`
 	InboundSubscriptionCountersImported int `json:"inboundSubscriptionCountersImported"`
 	InboundSourcesImported              int `json:"inboundSourcesImported"`
+	InboundNodeGroupsImported           int `json:"inboundNodeGroupsImported"`
 	InboundLegacyUsersImported          int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
