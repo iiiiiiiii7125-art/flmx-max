@@ -62,16 +62,25 @@ type remoteSyncResult struct {
 	Added   int `json:"added"`
 	Updated int `json:"updated"`
 	Removed int `json:"removed"`
-	// Kept are nodes gone from the source that still have relays; they
-	// are left alone so the relays keep their target.
-	Kept   int      `json:"kept"`
-	Errors []string `json:"errors"`
+	// Kept are nodes gone from the source that still have relays (or
+	// chain references); they are left alone so the relays keep their
+	// target.
+	Kept int `json:"kept"`
+	// KeptStale are unmatched nodes kept only because this round was
+	// incomplete (the integrity gate deferred their deletion to the
+	// next clean round). Counted apart from Kept so the summary can
+	// name the reason.
+	KeptStale int      `json:"keptStale"`
+	Errors    []string `json:"errors"`
 }
 
 func (r remoteSyncResult) summary() string {
 	parts := []string{fmt.Sprintf("新增 %d", r.Added), fmt.Sprintf("更新 %d", r.Updated), fmt.Sprintf("移除 %d", r.Removed)}
 	if r.Kept > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个已不在订阅里但有中转，已保留", r.Kept))
+	}
+	if r.KeptStale > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个未匹配节点因本轮同步不完整，已保留待下轮确认", r.KeptStale))
 	}
 	return strings.Join(parts, "，")
 }
@@ -91,6 +100,18 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	remoteSourceMu.Lock()
 	defer remoteSourceMu.Unlock()
 	res := remoteSyncResult{Errors: []string{}}
+	// gateErrs 是完整性门的判定集：只有解析/转换/写入错误计入。展示
+	// 专用提示（F-025 重复条目）经 noticeErr 只进 Errors——重复条目每
+	// 个都被处理过（首条入册、余者跳过），不构成「本轮不完整」，计入
+	// 门会让含重复条目的源永远等不到干净轮、已下线节点永不回收。
+	gateErrs := 0
+	gateErr := func(msg string) {
+		res.Errors = append(res.Errors, msg)
+		gateErrs++
+	}
+	noticeErr := func(msg string) {
+		res.Errors = append(res.Errors, msg)
+	}
 	now := time.Now().UnixMilli()
 	fail := func(err error) (remoteSyncResult, error) {
 		_ = h.repo.UpdateRemoteSourceStatus(src.ID, map[string]interface{}{"last_fetch": now, "last_error": truncate(err.Error(), 500)})
@@ -120,9 +141,12 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	}
 	if len(nodes) > maxImportNodes {
 		nodes = nodes[:maxImportNodes]
-		res.Errors = append(res.Errors, fmt.Sprintf("只保留前 %d 个节点", maxImportNodes))
+		// 截断意味着确有条目未被处理，计入门（与 F-025 重复提示不同）。
+		gateErr(fmt.Sprintf("只保留前 %d 个节点", maxImportNodes))
 	}
-	res.Errors = append(res.Errors, parseErrs...)
+	for _, e := range parseErrs {
+		gateErr(e)
+	}
 
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
@@ -168,14 +192,14 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	for _, node := range nodes {
 		fresh, err := externalRow(node, src.RelayOnly == 1, now)
 		if err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
+			gateErr(fmt.Sprintf("%s：%v", node.Name, err))
 			continue
 		}
 		fresh.SourceID = src.ID
 		nameKey := "name:" + strings.ToLower(fresh.Name)
 		addrKey := "addr:" + externalKey(node.Host, node.Port)
 		if seen[nameKey] || seen[addrKey] {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
+			noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 			continue
 		}
 		seen[nameKey] = true
@@ -190,7 +214,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			err := h.repo.CreateNodeInbound(&fresh)
 			repo.ReleasePortAllocLock(portMu)
 			if err != nil {
-				res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
+				gateErr(fmt.Sprintf("%s：%v", node.Name, err))
 				continue
 			}
 			res.Added++
@@ -231,27 +255,30 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			return h.repo.SaveNodeInbound(row)
 		}()
 		if saveErr != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, saveErr))
+			gateErr(fmt.Sprintf("%s：%v", node.Name, saveErr))
 			continue
 		}
 		res.Updated++
 		if moved {
 			for _, p := range h.retargetRelays(row) {
-				res.Errors = append(res.Errors, row.Name+"："+p)
+				gateErr(row.Name + "：" + p)
 			}
 		}
 		for _, p := range h.applyChainReferrersIx(guardIx, row.ID) {
-			res.Errors = append(res.Errors, row.Name+"："+p)
+			gateErr(row.Name + "：" + p)
 		}
 	}
 
-	// 完整性门：本轮出现任何解析/转换/写入错误时，「未匹配」不能证明
-	// 节点已被订阅源删除——未匹配旧节点连同其节点组引用一律保留，
-	// 等下一轮干净同步再裁决删除。批内去重（F-025）的重复条目提示
-	// 同样计入错误，这类轮次也推迟删除（保守方向）。门在删除循环
-	// 开始时按当时错误集判定；循环内守卫自身追加的错误不回溯影响
-	// 本轮其余行（与逐行 fail-closed 守卫并存）。
-	complete := len(res.Errors) == 0
+	// 完整性门：本轮出现任何解析/转换/写入错误（gateErrs）时，「未
+	// 匹配」不能证明节点已被订阅源删除——未匹配旧节点连同其节点组
+	// 引用一律保留，等下一轮干净同步再裁决删除。判定集不含展示专用
+	// 提示：批内去重（F-025）的重复条目每个都被处理过（首条入册、
+	// 余者跳过），不是未处理条目，计入门会让这类源永远等不到干净
+	// 轮；超量截断则确有条目未处理，仍计入。门在删除循环开始时按
+	// 当时判定集判定；循环内守卫自身追加的错误不回溯影响本轮其余
+	// 行（与逐行 fail-closed 守卫并存）。门保留计入 KeptStale，与中
+	// 转/链式守卫保留（Kept）在计数与摘要上分开。
+	complete := gateErrs == 0
 
 	deletedIDs := make(map[int64]bool)
 	for _, row := range mine {
@@ -259,7 +286,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			continue
 		}
 		if !complete {
-			res.Kept++
+			res.KeptStale++
 			continue
 		}
 		// R4X-007：守卫查询失败 fail-closed（与下方 chainReferrers

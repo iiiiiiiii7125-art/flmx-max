@@ -1395,6 +1395,7 @@ export interface RemoteSyncResult {
   updated: number;
   removed: number;
   kept: number;
+  keptStale: number;
   errors: string[];
 }
 export const getRemoteSources = () =>

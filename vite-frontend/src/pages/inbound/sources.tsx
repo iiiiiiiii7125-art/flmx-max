@@ -129,6 +129,8 @@ export function syncText(r: RemoteSyncResult): string {
   const parts = [`新增 ${r.added}`, `更新 ${r.updated}`, `移除 ${r.removed}`];
 
   if (r.kept) parts.push(`${r.kept} 个已不在订阅里但有中转，已保留`);
+  if (r.keptStale)
+    parts.push(`${r.keptStale} 个未匹配节点因本轮同步不完整，已保留待下轮确认`);
   // R3X-025：逐节点同步失败明细（result.errors）必须带出条数 + 首条，
   // 不得只报计数、把部分失败报成全成功。
   if (r.errors?.length)
