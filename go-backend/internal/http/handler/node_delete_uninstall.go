@@ -34,9 +34,11 @@ var (
 	}
 )
 
-// prepareNodeAgentUninstall 是删节点漏斗的前置步：节点记录还在时取
-// 其 secret/名称执行卸载步。节点不存在时静默跳过（删除漏斗自会按
-// 原有口径处理），返回空状态。
+// prepareNodeAgentUninstall 是删节点漏斗的连带卸载步：调用方必须
+// 已通过 checkNodeDeleteGuards 守卫校验——守卫失败时整次删除中止、
+// 本步不得执行（在线下发触发 agent 自卸载，不可逆）。节点记录还
+// 在时取其 secret/名称执行卸载步。节点不存在时静默跳过（删除漏
+// 斗自会按原有口径处理），返回空状态。
 func (h *Handler) prepareNodeAgentUninstall(id int64) (string, []string) {
 	if h == nil || h.repo == nil {
 		return "", nil
