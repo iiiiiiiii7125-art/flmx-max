@@ -63,7 +63,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 ### 用面板生成的命令安装（推荐）
 
 1. **网站配置** 里填好“面板后端地址”，节点通过它回连面板：面板经 HTTPS（Caddy/nginx 反向代理）对外时必须填 `https://域名`（可带端口，与 `panel_install.sh` 配置域名反代时的提示一致），明文面板填 `http://面板IP:6365`。只填裸地址（不带 `https://` / `http://`）时，生成安装命令的连接方式取自你当前访问面板的方式，可能与节点回连面板的方式不一致，请优先写明 scheme；生成结果为明文 `ws://` 时面板会给出显式告警。
-2. **节点** 页新建节点，点击 **安装**，安装命令会复制到剪贴板（复制失败时会弹出命令框；若生成的是明文地址，会先弹出带告警的命令框，确认后再复制）
+2. **节点** 页新建节点，点击 **安装**，会打开安装命令弹窗，在弹窗里点 **复制** 按钮复制命令（复制按钮失效时可以手动选中命令文本复制）。若生成的命令用的是明文地址（`ws://`），点击安装时面板会先弹出明文告警提示、弹窗顶部也有常驻的告警横幅，确认无误后再复制使用
 3. 到节点服务器上以 root 执行
 
 ### 手动安装
@@ -185,7 +185,7 @@ sudo systemctl restart caddy
         - "127.0.0.1:6366:80"
   ```
   其中 `!override` 不可省略（省略时新旧两条映射会叠加、宿主端口必然冲突），且需要 Docker Compose 2.20 及以上。保存后在部署目录执行 `docker compose up -d frontend` 生效；自检：`docker compose ps` 里 frontend 的端口应显示为 `127.0.0.1:6366->80`，且从外网直接访问 `http://<服务器IP>:6366` 应不通、经域名访问正常。该 override 文件独立于 `docker-compose.yml`，脚本更新替换主 compose 文件时不会动它。
-- **反代开启访问日志时，先脱敏 query 再落盘**：面板的节点实时连接（`/system-info`）与流量上报（`/flow/*`）把凭据放在 URL 的 query 里——节点密钥是 `secret` 参数、面板监控会话是 `token` 参数（登录 JWT，有效期 7 天）。面板自身的请求日志只记路径、不记 query，但反代的访问日志默认记录完整 URL，开启后这些凭据会以明文写入日志文件，拿到日志即拿到可用凭据。Caddy 默认不记录请求日志（站点块没有 `log` 指令即不记），脚本菜单 5 生成的 Caddyfile 不带 `log`，无需处理；自行启用时在站点块里用 filter 编码删掉这两个 query 键：
+- **反代开启访问日志时，先脱敏 query 再落盘**：面板的节点实时连接（`/system-info`）与流量上报（`/flow/*`）把凭据放在 URL 的 query 里——两类凭据共用同一个 `secret` 参数：节点上报时它的值是节点密钥，浏览器打开节点实时连接时它的值是登录 JWT（有效期 7 天）；并不存在单独的 `token` 参数。面板自身的请求日志只记路径、不记 query，但反代的访问日志默认记录完整 URL，开启后这些凭据会以明文写入日志文件，拿到日志即拿到可用凭据。Caddy 默认不记录请求日志（站点块没有 `log` 指令即不记），脚本菜单 5 生成的 Caddyfile 不带 `log`，无需处理；自行启用时在站点块里用 filter 编码删掉 `secret` 这个 query 键（示例里顺带删的 `token` 是防御性冗余：当前没有接口用它传凭据，多删无害，防将来新增面漏网）：
   ```txt
   log {
       format filter {
@@ -201,7 +201,7 @@ sudo systemctl restart caddy
   log_format panel_no_query '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
   access_log /var/log/nginx/panel.access.log panel_no_query;
   ```
-  改完 `nginx -t` 校验并 reload，自检同上（日志中不应再出现 `secret=`、`token=`）。
+  改完 `nginx -t` 校验并 reload，自检同上（日志中不应再出现 `secret=`）。
 
 ### 登录限流与可信代理跳数
 
