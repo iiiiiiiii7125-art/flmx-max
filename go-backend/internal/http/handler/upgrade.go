@@ -684,6 +684,9 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		ID      int64  `json:"id"`
 		Success bool   `json:"success"`
 		Message string `json:"message"`
+		// R8-015：同版本短路（未下发命令）单独标记——Success=true 但
+		// 未下发，前端汇总不得计入「命令已发送到 N 个节点」。
+		AlreadyLatest bool `json:"alreadyLatest,omitempty"`
 	}
 
 	results := make([]upgradeResult, len(req.IDs))
@@ -741,7 +744,8 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 					}
 					if cmp == 0 {
 						// X-P3-29（L-11-4）：同版本短路，不下发不重启。
-						results[index] = upgradeResult{ID: nodeID, Success: true, Message: fmt.Sprintf("已是最新版本 %s，无需升级", version)}
+						// R8-015：带 AlreadyLatest 标记供前端汇总分开计数。
+						results[index] = upgradeResult{ID: nodeID, Success: true, AlreadyLatest: true, Message: fmt.Sprintf("已是最新版本 %s，无需升级", version)}
 						return
 					}
 				}
