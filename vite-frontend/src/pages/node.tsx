@@ -114,6 +114,7 @@ import {
   RollbackNodeModal,
 } from "@/pages/node/confirm-modals";
 import {
+  BATCH_UPGRADE_NODE_LIMIT,
   InstallCommandModal,
   UpgradeNodeModal,
 } from "@/pages/node/agent-modals";
@@ -1228,6 +1229,16 @@ export default function NodePage({
         return;
       }
 
+      // R8-013：超后端单批上限时提交前拦截并点名（弹窗保持打开），
+      // 不再等整单提交后才被后端拒绝。
+      if (selectedLocalIds.length > BATCH_UPGRADE_NODE_LIMIT) {
+        toast.error(
+          `单次批量升级最多 ${BATCH_UPGRADE_NODE_LIMIT} 台节点，当前已选 ${selectedLocalIds.length} 台本地节点，请减少选择后分批提交`,
+        );
+
+        return;
+      }
+
       setBatchUpgradeLoading(true);
       setUpgradeModalOpen(false);
       try {
@@ -1244,6 +1255,7 @@ export default function NodePage({
             ? ((res.data as any).results as Array<{
                 success?: boolean;
                 message?: string;
+                alreadyLatest?: boolean;
               }>)
             : [];
 
@@ -1253,17 +1265,35 @@ export default function NodePage({
             );
           } else {
             const failed = results.filter((item) => !item.success);
-            const succeeded = results.length - failed.length;
+            // R8-015：alreadyLatest 为同版本短路——回执 Success 但命令
+            // 未下发，汇总必须与「已下发」分开计数，不得计入已发送。
+            const skippedLatest = results.filter(
+              (item) => item.success && item.alreadyLatest,
+            );
+            const dispatched =
+              results.length - failed.length - skippedLatest.length;
+            const skippedNote =
+              skippedLatest.length > 0
+                ? `，另有 ${skippedLatest.length} 个已是最新版本（未下发）`
+                : "";
 
             if (failed.length === 0) {
-              toast.success(`批量升级命令已发送到 ${succeeded} 个节点`);
-            } else if (succeeded === 0) {
+              if (dispatched === 0) {
+                toast.success(
+                  `所选节点均已是最新版本（${skippedLatest.length} 个），未下发升级命令`,
+                );
+              } else {
+                toast.success(
+                  `批量升级命令已发送到 ${dispatched} 个节点${skippedNote}`,
+                );
+              }
+            } else if (dispatched === 0 && skippedLatest.length === 0) {
               toast.error(
                 `批量升级全部失败（${failed.length} 个节点）：${failed[0]?.message || "未知错误"}`,
               );
             } else {
               toast(
-                `批量升级部分失败：成功 ${succeeded} 个，失败 ${failed.length} 个，首条失败：${failed[0]?.message || "未知错误"}`,
+                `批量升级部分完成：已下发 ${dispatched} 个，失败 ${failed.length} 个${skippedNote}，首条失败：${failed[0]?.message || "未知错误"}`,
                 { icon: "⚠️", duration: 5000 },
               );
             }
@@ -2923,6 +2953,11 @@ export default function NodePage({
 
       {/* 版本选择升级模态框 */}
       <UpgradeNodeModal
+        batchLocalCount={
+          Array.from(selectedIds).filter(
+            (id) => nodeList.find((n) => n.id === id)?.isRemote !== 1,
+          ).length
+        }
         handleConfirmUpgrade={handleConfirmUpgrade}
         releases={releases}
         releasesLoading={releasesLoading}
