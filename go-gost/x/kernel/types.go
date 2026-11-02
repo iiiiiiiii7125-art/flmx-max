@@ -59,8 +59,9 @@ type Port struct {
 	InboundID int64  `json:"inboundId"`
 	Port      int    `json:"port"`
 	Network   string `json:"network"` // "tcp", "udp" or "tcp,udp"
-	// Allow, when present, restricts the port to these source CIDRs; every
-	// other packet to it is dropped. Absent means no restriction.
+	// Allow, when non-empty, restricts the port to these source CIDRs;
+	// every other packet to it is dropped. Absent or empty means no
+	// restriction (both ends of the guard chain key on len > 0).
 	Allow []string `json:"allow,omitempty"`
 	// HopFrom..HopTo (UDP) are redirected to Port: Hysteria2 port hopping.
 	HopFrom int `json:"hopFrom,omitempty"`
