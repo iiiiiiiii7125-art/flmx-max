@@ -109,7 +109,11 @@ export function InstallCommandModal({
                     <span className="font-semibold">服务器调优（特权容器）</span>
                     ：开启后容器以 --privileged 运行，面板的服务器调优
                     （BBR / sysctl / 内核模块加载）才能在容器内生效；不需要
-                    调优时保持关闭即可。
+                    调优时保持关闭即可。注意容器边界：容器内没有
+                    systemd，调优中依赖 systemd 持久化的步骤（写入
+                    sysctl 配置文件、开机自启类设置）在容器形态下不适用、
+                    不会生效，容器重建后需重新下发调优；这类持久化调优
+                    请改用脚本安装形态。
                   </div>
                 </div>
               ) : null}

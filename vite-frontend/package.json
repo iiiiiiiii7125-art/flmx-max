@@ -13,7 +13,13 @@
     "lint": "eslint --fix",
     "preview": "vite preview",
     "check:sensitive-keys": "node scripts/check-sensitive-keys.mjs",
-    "check:tunnel-quality-switch": "node scripts/check-tunnel-quality-switch.mjs"
+    "check:tunnel-quality-switch": "node scripts/check-tunnel-quality-switch.mjs",
+    "check:pure-enc-preset": "node scripts/check-pure-enc-preset.mjs",
+    "check:quality-history-bar": "node scripts/check-quality-history-bar.mjs",
+    "check:topayload-reality-guard": "node scripts/check-topayload-reality-guard.mjs",
+    "check:route-lists": "node scripts/check-route-lists.mjs",
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "check:all": "node scripts/run-checks.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
