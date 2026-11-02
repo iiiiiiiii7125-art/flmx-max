@@ -85,9 +85,11 @@
   --color-warning-900: var(--warning-900);
 }
 
-/* Refined Glass design tokens: system font stack, converged type scale
-   (12/13/14/16/20/24), radii (controls 12px, cards 20px), one soft
-   single-layer shadow scale, one motion curve. */
+/* Flat panel design tokens: system font stack, converged type scale
+   (12/13/14/16/20/24), radii (controls 12px, cards 20px), one motion
+   curve. The shadow scale is zeroed app-wide (2026-11-03 flat-surface
+   directive): shadow utilities stay valid classes but paint nothing,
+   so layering is carried by borders alone. */
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
@@ -112,9 +114,12 @@
   --radius-2xl: 1.25rem;
   --radius-3xl: 1.5rem;
 
-  --shadow-sm: 0 1px 2px rgb(24 24 27 / 0.05);
-  --shadow-md: 0 6px 20px rgb(24 24 27 / 0.08);
-  --shadow-lg: 0 16px 40px rgb(24 24 27 / 0.12);
+  --shadow-sm: 0 0 0 0 rgb(0 0 0 / 0);
+  --shadow-md: 0 0 0 0 rgb(0 0 0 / 0);
+  --shadow-lg: 0 0 0 0 rgb(0 0 0 / 0);
+  --shadow-xl: 0 0 0 0 rgb(0 0 0 / 0);
+  --shadow-2xl: 0 0 0 0 rgb(0 0 0 / 0);
+  --shadow-inner: 0 0 0 0 rgb(0 0 0 / 0);
 
   --ease-refined: cubic-bezier(0.2, 0.7, 0.3, 1);
 

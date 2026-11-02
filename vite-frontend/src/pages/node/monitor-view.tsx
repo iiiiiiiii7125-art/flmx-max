@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 
-import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
+import { ChartTooltip } from "@/components/chart-tooltip";
 import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { formatTraffic } from "@/utils/traffic";
 import {
@@ -175,13 +175,14 @@ const formatUptime = (seconds: number) => {
   return `${hours} 小时`;
 };
 
+// Colour only at threshold states: default below 60%, warning at
+// >= 60%, danger at >= 85%.
 const getColorByUsage = (usage?: number) => {
   if (usage === undefined || usage === null) return "default";
-  if (usage >= 90) return "danger";
-  if (usage >= 75) return "warning";
-  if (usage >= 50) return "primary";
+  if (usage >= 85) return "danger";
+  if (usage >= 60) return "warning";
 
-  return "success";
+  return "default";
 };
 
 function ServerCard({
@@ -199,7 +200,7 @@ function ServerCard({
 
   return (
     <Card
-      className="group relative hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
+      className="group relative transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
       onClick={onPress}
     >
       {/* Dynamic top gradient bar based on status */}
@@ -207,15 +208,10 @@ function ServerCard({
         className={`absolute top-0 left-0 right-0 h-1 ${isOnline ? "bg-success" : "bg-danger"}`}
       />
 
-      {/* Decorative background glow */}
-      <div
-        className={`absolute -right-8 -top-8 w-24 h-24 rounded-full blur-2xl opacity-10 transition-opacity group-hover:opacity-20 ${isOnline ? "bg-success" : "bg-danger"}`}
-      />
-
       <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="relative flex-shrink-0">
-            <div className="w-10 h-10 rounded-xl glass-inset flex items-center justify-center border border-divider">
+            <div className="w-10 h-10 rounded-xl panel-inset flex items-center justify-center border border-divider">
               <DistroIcon
                 className="w-5 h-5"
                 distro={distro}
@@ -238,6 +234,8 @@ function ServerCard({
       </CardHeader>
 
       <CardBody className="py-3 px-5 flex-1 flex flex-col justify-end gap-4 z-10 w-full overflow-hidden">
+        {isOnline && metric ? (
+          <>
         <div className="grid grid-cols-2 gap-5 w-full">
           <div className="space-y-1.5 min-w-0">
             <div className="flex justify-between items-center text-xs font-semibold">
@@ -268,7 +266,7 @@ function ServerCard({
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-2.5 rounded-lg glass-inset border border-divider mt-1 w-full">
+        <div className="flex items-center justify-between p-2.5 rounded-lg panel-inset border border-divider mt-1 w-full">
           <div className="flex flex-col gap-0.5 min-w-0 flex-1">
             <div className="flex items-center gap-1 text-[10px] font-semibold text-foreground">
               <span className="text-primary-700 inline-block font-bold">↑</span>
@@ -308,6 +306,8 @@ function ServerCard({
             </span>
           </div>
         </div>
+          </>
+        ) : null}
       </CardBody>
     </Card>
   );
@@ -519,7 +519,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
                   />
                   <Tooltip
                     content={
-                      <ChartGlassTooltip
+                      <ChartTooltip
                         formatEntry={(entry) => ({
                           name: String(entry.name ?? ""),
                           value: String(tooltipFormatter(entry.value) ?? ""),
@@ -1477,9 +1477,9 @@ export function MonitorView({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                  tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
+                  tr: "hover:bg-default-100  transition-colors",
                 }}
               >
                 <TableHeader>
@@ -1766,7 +1766,7 @@ export function MonitorView({
               ].map((item) => (
                 <Card
                   key={item.label}
-                  className="hover:shadow-md transition-shadow duration-200"
+                  className="transition-shadow duration-200"
                 >
                   <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
                     <span className="text-[11px] font-semibold text-foreground mb-1.5">
@@ -1942,15 +1942,15 @@ export function MonitorView({
 
                       {/* Active monitor info bar */}
                       {resolvedActiveMonitor && (
-                        <div className="glass-surface flex items-center justify-between gap-3 p-3 rounded-2xl shadow-sm">
+                        <div className="panel-surface flex items-center justify-between gap-3 p-3 rounded-2xl shadow-sm">
                           <div className="flex items-center gap-3 min-w-0 flex-wrap">
                             <Chip color="primary" size="sm" variant="flat">
                               {resolvedActiveMonitor.type.toUpperCase()}
                             </Chip>
-                            <span className="font-mono text-xs font-semibold text-foreground glass-surface rounded-full px-2 py-0.5">
+                            <span className="font-mono text-xs font-semibold text-foreground panel-surface rounded-full px-2 py-0.5">
                               {resolvedActiveMonitor.target}
                             </span>
-                            <span className="text-xs font-semibold text-foreground glass-surface rounded-full px-2 py-0.5">
+                            <span className="text-xs font-semibold text-foreground panel-surface rounded-full px-2 py-0.5">
                               {`每 ${resolvedActiveMonitor.intervalSec || resolvedServiceMonitorLimits.defaultIntervalSec} 秒测试，30 秒上报`}
                             </span>
                             {activeLatestResult &&
@@ -2068,7 +2068,7 @@ export function MonitorView({
                               />
                               <Tooltip
                                 content={
-                                  <ChartGlassTooltip
+                                  <ChartTooltip
                                     formatEntry={(entry) => ({
                                       name: "延迟",
                                       value: `${Number(entry.value).toFixed(0)}ms`,
@@ -2208,9 +2208,9 @@ export function MonitorView({
                 classNames={{
                   wrapper:
                     "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                   td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                  tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
+                  tr: "hover:bg-default-100  transition-colors",
                 }}
               >
                 <TableHeader>

@@ -292,10 +292,10 @@ function UserDashboard() {
   };
 
   const getUsageColor = (percentage: number) => {
-    if (percentage >= 90) return "bg-red-500 dark:bg-red-600";
-    if (percentage >= 70) return "bg-orange-500 dark:bg-orange-600";
+    if (percentage >= 85) return "bg-danger";
+    if (percentage >= 60) return "bg-warning";
 
-    return "bg-blue-500 dark:bg-blue-600";
+    return "bg-primary";
   };
 
   const renderProgressBar = (
@@ -309,10 +309,10 @@ function UserDashboard() {
       return (
         <div className="w-full">
           <div
-            className={`w-full bg-gradient-to-r from-primary-200 to-secondary-200 dark:from-primary-500/30 dark:to-secondary-500/30 rounded-full ${height}`}
+            className={`w-full bg-default-200 rounded-full ${height}`}
           >
             <div
-              className={`${height} bg-gradient-to-r from-primary-700 to-secondary-700 rounded-full w-full opacity-60`}
+              className={`${height} bg-primary-700 rounded-full w-full`}
             />
           </div>
         </div>
@@ -648,7 +648,7 @@ function UserDashboard() {
     <AnimatedPage className="px-3 lg:px-6 py-6">
       {/* 顶部个人状态和下拉菜单 */}
       <div className="flex justify-between items-center mb-4">
-        <div className="rounded-xl glass-card px-3 py-2">
+        <div className="rounded-xl panel-card px-3 py-2">
           <h1 className="text-lg font-semibold">概览</h1>
           <p className="text-xs font-semibold text-foreground">
             {username}，这里是你的流量和转发规则
@@ -659,7 +659,7 @@ function UserDashboard() {
             <DropdownTrigger>
               <Button
                 isIconOnly
-                className="rounded-full w-10 h-10 min-w-0 bg-gradient-to-br from-primary-700 to-secondary-700 text-white font-semibold text-sm shadow-sm"
+                className="rounded-full w-10 h-10 min-w-0 bg-primary-700 text-white font-semibold text-sm"
                 variant="solid"
               >
                 {username.slice(0, 2).toUpperCase()}
@@ -725,7 +725,7 @@ function UserDashboard() {
           onDontShowAgain={dismissAnnouncementModal}
         />
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-6 lg:mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px overflow-hidden rounded-lg border border-divider bg-divider mb-6 lg:mb-8">
         <MetricCard
           icon={
             <svg
@@ -948,7 +948,7 @@ function UserDashboard() {
                   return (
                     <div
                       key={tunnel.id}
-                      className="border border-gray-200 dark:border-default-100 rounded-lg p-3 lg:p-4 hover:shadow-md transition-shadow"
+                      className="border border-gray-200 dark:border-default-100 rounded-lg p-3 lg:p-4 transition-shadow"
                     >
                       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-3">
                         <div>
@@ -1091,7 +1091,7 @@ function UserDashboard() {
               {groupedForwards().map((group) => (
                 <div
                   key={group.tunnelName}
-                  className="glass-card rounded-xl p-3 lg:p-4 shadow-sm"
+                  className="panel-card rounded-xl p-3 lg:p-4 shadow-sm"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-foreground">
@@ -1106,7 +1106,7 @@ function UserDashboard() {
                     {group.forwards.map((forward) => (
                       <div
                         key={forward.id}
-                        className="glass-card rounded-lg p-3 hover:shadow-md transition-all duration-300"
+                        className="panel-card rounded-lg p-3 transition-all duration-300"
                       >
                         <div className="space-y-3">
                           <div>
@@ -1115,7 +1115,7 @@ function UserDashboard() {
                             </h4>
                             <div className="space-y-1">
                               <button
-                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-white/40 dark:hover:bg-white/50" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleIps(forward.inIp) ? "cursor-pointer hover:bg-default-100" : ""}`}
                                 disabled={!hasMultipleIps(forward.inIp)}
                                 title={formatInAddress(
                                   forward.inIp,
@@ -1136,7 +1136,7 @@ function UserDashboard() {
                                 ↓
                               </div>
                               <button
-                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-white/40 dark:hover:bg-white/50" : ""}`}
+                                className={`block px-2 py-1 bg-tray rounded-lg border border-divider font-mono text-xs font-semibold truncate text-foreground transition-all duration-300 ${hasMultipleRemoteAddresses(forward.remoteAddr) ? "cursor-pointer hover:bg-default-100" : ""}`}
                                 disabled={
                                   !hasMultipleRemoteAddresses(
                                     forward.remoteAddr,
@@ -1195,7 +1195,6 @@ function UserDashboard() {
 
       {/* 地址列表弹窗 */}
       <Modal
-        backdrop="blur"
         isOpen={addressModalOpen}
         placement="center"
         scrollBehavior="inside"

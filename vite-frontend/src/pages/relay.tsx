@@ -219,7 +219,7 @@ function LinesView() {
             return (
               <div
                 key={i.id}
-                className="glass-card flex flex-col gap-3 rounded-2xl p-4"
+                className="panel-card flex flex-col gap-3 rounded-2xl p-4"
               >
                 <div>
                   <div className="flex items-center gap-1.5">
@@ -245,7 +245,7 @@ function LinesView() {
                       return (
                         <div
                           key={l.id}
-                          className="rounded-xl glass-inset px-3 py-2"
+                          className="rounded-xl panel-inset px-3 py-2"
                         >
                           <div className="flex items-center gap-2 text-sm">
                             <span
@@ -307,7 +307,7 @@ function LinesView() {
             return (
               <div
                 key={i.id}
-                className="glass-card cursor-pointer rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
+                className="panel-card cursor-pointer rounded-xl px-3 py-2.5 transition-colors hover:bg-default-100"
                 role="button"
                 tabIndex={0}
                 onClick={() => setEditing(i)}
@@ -401,7 +401,7 @@ export default function RelayPage() {
   };
 
   const tabBar = (
-    <div className="glass-surface grid grid-cols-4 gap-1 rounded-xl p-1 sm:max-w-md">
+    <div className="panel-surface grid grid-cols-4 gap-1 rounded-xl p-1 sm:max-w-md">
       {TABS.map((t) => (
         <button
           key={t.key}

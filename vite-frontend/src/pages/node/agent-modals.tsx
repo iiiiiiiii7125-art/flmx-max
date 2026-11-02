@@ -62,7 +62,6 @@ export function InstallCommandModal({
 }: InstallCommandModalProps) {
   return (
     <Modal
-      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -212,7 +211,6 @@ export function UpgradeNodeModal({
 }: UpgradeNodeModalProps) {
   return (
     <Modal
-      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}

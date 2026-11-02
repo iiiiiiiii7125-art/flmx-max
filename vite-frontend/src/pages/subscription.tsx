@@ -408,7 +408,7 @@ function ChainRoleButtons({
                 ? "border-warning-500/40 bg-warning-500/10 text-warning-700"
                 : r === "relay"
                   ? "border-secondary-500/40 bg-secondary-500/10 text-secondary-700"
-                  : "border-divider glass-inset text-foreground"
+                  : "border-divider panel-inset text-foreground"
               : "border-default-200 text-foreground hover:border-default-400 dark:border-default-100"
           }`}
           type="button"
@@ -1523,7 +1523,7 @@ export default function SubscriptionPage() {
   const card = (s: SubscriptionItem) => (
     <div
       key={s.id}
-      className="glass-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
+      className="panel-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-default-100"
       role="button"
       tabIndex={0}
       onClick={() => setDetail(s)}
@@ -1632,7 +1632,7 @@ export default function SubscriptionPage() {
       </div>
 
       {/* 订阅管理 / 订阅分配 Tab */}
-      <div className="glass-surface grid grid-cols-3 gap-1 rounded-xl p-1">
+      <div className="panel-surface grid grid-cols-3 gap-1 rounded-xl p-1">
         {(
           [
             { key: "manage", label: "订阅管理" },
@@ -1698,7 +1698,6 @@ export default function SubscriptionPage() {
 
       {/* Detail: import into a client, copy links, actions. */}
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(detail) && !confirm}
         placement="center"
@@ -1719,7 +1718,7 @@ export default function SubscriptionPage() {
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
-                  <div className="space-y-2 rounded-xl glass-inset p-3">
+                  <div className="space-y-2 rounded-xl panel-inset p-3">
                     <Usage s={detail} />
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-foreground">
@@ -1796,7 +1795,7 @@ export default function SubscriptionPage() {
                       return (
                         <div
                           key={c.key}
-                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-white/40"
+                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-default-100"
                         >
                           <button
                             className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
@@ -1810,7 +1809,7 @@ export default function SubscriptionPage() {
                           </button>
                           <button
                             aria-label={`复制 ${c.label} 订阅链接`}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-foreground hover:bg-white/40 hover:text-foreground"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-foreground hover:bg-default-100 hover:text-foreground"
                             type="button"
                             onClick={() =>
                               copyText(link, `${c.label} 订阅已复制`)
@@ -1869,7 +1868,6 @@ export default function SubscriptionPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(draft)}
         placement="center"
@@ -1898,7 +1896,6 @@ export default function SubscriptionPage() {
       </Modal>
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(confirm)}
         placement="center"

@@ -16,7 +16,7 @@ export default defineConfig({
       // precached old UI — refreshes then show the old panel forever.
       registerType: "autoUpdate",
       injectRegister: "auto",
-      includeAssets: ["favicon.ico", "apple-touch-icon.png"],
+      includeAssets: ["favicon.svg", "favicon.ico", "apple-touch-icon.png"],
       manifest: {
         name: "FLMX",
         short_name: "FLMX",

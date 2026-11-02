@@ -8,7 +8,7 @@ const alertVariants = cva(
   {
     variants: {
       variant: {
-        default: "glass-card border-default-200 text-foreground",
+        default: "panel-card border-default-200 text-foreground",
         // Round 4: semantic alerts ride the tint trays (opaque in both
         // themes; the old -50 tints kept their light shade in dark mode
         // and washed the light text out).

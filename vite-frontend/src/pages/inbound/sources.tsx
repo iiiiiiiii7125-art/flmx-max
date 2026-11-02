@@ -288,7 +288,7 @@ export function RemoteSourcesSection({
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between">
-        <h2 className="w-fit rounded-lg glass-surface px-2.5 py-1 text-sm font-semibold text-foreground">
+        <h2 className="w-fit rounded-lg panel-surface px-2.5 py-1 text-sm font-semibold text-foreground">
           订阅源
         </h2>
         <Button
@@ -309,7 +309,7 @@ export function RemoteSourcesSection({
         </Button>
       </div>
       {sources.length === 0 ? (
-        <p className="glass-card rounded-xl px-3 py-4 text-center text-xs font-semibold text-foreground">
+        <p className="panel-card rounded-xl px-3 py-4 text-center text-xs font-semibold text-foreground">
           填机场或别人的订阅链接，或上传订阅文件：节点出现在“入站”里，可以给自建落地做前置中转，也能和自己的落地合并成一个订阅。在“导入”里粘贴订阅地址并打开“定时同步”也会存到这里
         </p>
       ) : (
@@ -320,7 +320,7 @@ export function RemoteSourcesSection({
             return (
               <div
                 key={s.id}
-                className="glass-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
+                className="panel-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-default-100"
                 role="button"
                 tabIndex={0}
                 onClick={() => setDraft(draftOf(s))}
@@ -434,7 +434,6 @@ export function RemoteSourcesSection({
       />
 
       <Modal
-        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(draft)}
         placement="center"
@@ -608,7 +607,7 @@ export function FilePick({
   return (
     <div className="space-y-1">
       <button
-        className="flex w-full items-center gap-2 rounded-xl border border-dashed border-divider px-3 py-3 text-left text-sm hover:bg-white/40"
+        className="flex w-full items-center gap-2 rounded-xl border border-dashed border-divider px-3 py-3 text-left text-sm hover:bg-default-100"
         type="button"
         onClick={() => input.current?.click()}
       >

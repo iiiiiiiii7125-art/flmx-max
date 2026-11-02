@@ -429,7 +429,7 @@ export default function AdminLayout({
 
   return (
     <div
-      className={`flex ${isMobile ? "min-h-screen p-0" : "h-screen p-6 gap-6"} bg-mesh-gradient overflow-hidden`}
+      className={`flex ${isMobile ? "min-h-screen p-0" : "h-screen"} bg-mesh-gradient overflow-hidden`}
     >
       {/* 移动端遮罩层 */}
       {isMobile && mobileMenuVisible && (
@@ -444,17 +444,17 @@ export default function AdminLayout({
       {/* 左侧菜单栏 */}
       <aside
         className={`
-        ${isMobile ? "fixed h-screen top-0 left-0 rounded-r-2xl" : "relative h-full rounded-2xl"}
+        ${isMobile ? "fixed h-screen top-0 left-0" : "relative h-full"}
         ${isMobile && !mobileMenuVisible ? "-translate-x-full" : "translate-x-0"}
         ${isMobile ? "w-64" : isCollapsed ? "w-20" : "w-[260px]"}
-        glass-surface
-        shadow-md
+        bg-content1
+        border-r border-divider
         z-50
         transition-all duration-200 ease-refined
         flex flex-col flex-shrink-0      `}
       >
         {/* Logo 区域 */}
-        <div className="mx-3 mt-5 mb-2 px-3 py-3 rounded-xl flex items-center overflow-hidden whitespace-nowrap box-border">
+        <div className="mx-3 mt-5 mb-2 px-3 py-3 flex items-center overflow-hidden whitespace-nowrap box-border">
           <div className="flex-shrink-0 flex items-center justify-center w-10 h-10">
             <BrandLogo size={24} />
           </div>
@@ -518,7 +518,7 @@ export default function AdminLayout({
                   >
                     {isActive && (
                       <motion.div
-                        className="absolute inset-0 rounded-xl bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm"
+                        className="absolute inset-0 rounded-xl bg-primary-700"
                         layoutId="sidebar-active"
                         transition={{
                           type: "spring",
@@ -529,7 +529,7 @@ export default function AdminLayout({
                     )}
                     {!isActive && (
                       <motion.div
-                        className="absolute inset-0 rounded-xl bg-default-900/[0.04] dark:bg-white/5 opacity-0"
+                        className="absolute inset-0 rounded-xl bg-default-100 opacity-0"
                         transition={{ duration: 0.15 }}
                         whileHover={{ opacity: 1 }}
                       />
@@ -554,7 +554,7 @@ export default function AdminLayout({
         {/* 底部版权信息和折叠按钮 */}
         <div className="px-5 py-6 mt-auto flex-shrink-0 flex flex-col gap-4 overflow-hidden whitespace-nowrap box-border">
           <div
-            className={`transition-all duration-200 overflow-hidden flex items-center rounded-full glass-surface px-3 py-1.5 w-fit ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[220px] opacity-100"}`}
+            className={`transition-all duration-200 overflow-hidden flex items-center rounded-full panel-surface px-3 py-1.5 w-fit ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[220px] opacity-100"}`}
           >
             <VersionFooter
               poweredClassName="text-xs font-semibold text-foreground"
@@ -654,7 +654,6 @@ export default function AdminLayout({
 
       {/* 修改密码弹窗 */}
       <Modal
-        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}

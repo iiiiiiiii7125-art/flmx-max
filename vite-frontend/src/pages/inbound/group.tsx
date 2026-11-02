@@ -147,7 +147,7 @@ export function GroupHeader({
 }) {
   return (
     <button
-      className="flex w-full items-center gap-2 rounded-xl glass-surface px-3 py-2 text-left"
+      className="flex w-full items-center gap-2 rounded-xl panel-surface px-3 py-2 text-left"
       type="button"
       onClick={onToggle}
     >

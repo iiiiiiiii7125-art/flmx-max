@@ -7,7 +7,7 @@ export interface ChartTooltipEntry {
   payload?: unknown;
 }
 
-interface ChartGlassTooltipProps {
+interface ChartTooltipProps {
   active?: boolean;
   payload?: ChartTooltipEntry[];
   label?: unknown;
@@ -16,25 +16,24 @@ interface ChartGlassTooltipProps {
 }
 
 /**
- * Shared glass tooltip for every recharts chart (Round 6 unification).
- * Replaces the former near-black contentStyle boxes so chart popups use
- * the same .glass-surface recipe as all other floating layers: foreground
- * text throughout, series identity carried by a saturated dot instead of
+ * Shared tooltip for every recharts chart. Chart popups use the same
+ * .panel-surface recipe as all other floating layers: foreground text
+ * throughout, series identity carried by a saturated dot instead of
  * pale series-colored text.
  */
-export function ChartGlassTooltip({
+export function ChartTooltip({
   active,
   payload,
   label,
   formatLabel,
   formatEntry,
-}: ChartGlassTooltipProps) {
+}: ChartTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
 
   const labelText = formatLabel ? formatLabel(label) : (label as ReactNode);
 
   return (
-    <div className="glass-surface rounded-xl px-3 py-2 text-xs font-semibold shadow-lg">
+    <div className="panel-surface rounded-xl px-3 py-2 text-xs font-semibold shadow-lg">
       {labelText !== undefined && labelText !== null && labelText !== "" && (
         <p className="font-semibold text-foreground">{labelText}</p>
       )}

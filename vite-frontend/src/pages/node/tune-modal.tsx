@@ -202,7 +202,6 @@ export function NodeTuneModal({
 
   return (
     <Modal
-      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -307,7 +306,7 @@ export function NodeTuneModal({
                           {job.percent}% · {job.message}
                         </p>
                         {job.logs && (
-                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white/40 p-2 font-mono text-[11px] font-semibold text-foreground">
+                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-default-100 p-2 font-mono text-[11px] font-semibold text-foreground">
                             {job.logs}
                           </pre>
                         )}
@@ -431,7 +430,7 @@ export function NodeTuneModal({
                                 {deepBudget} GB）
                               </span>
                             </label>
-                            <div className="space-y-1 rounded-lg glass-inset p-2">
+                            <div className="space-y-1 rounded-lg panel-inset p-2">
                               <p className="text-xs font-semibold text-foreground">
                                 单流探测未发现拐点时可用：填入你用多流
                                 sweep 实测的拐点附近整形值（如 4710

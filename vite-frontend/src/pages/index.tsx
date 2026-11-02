@@ -301,10 +301,10 @@ export default function IndexPage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-4 text-center py-4"
-          poweredClassName="text-xs font-semibold text-foreground mx-auto mt-1 w-fit glass-surface rounded-full px-3 py-0.5"
+          poweredClassName="text-xs font-semibold text-foreground mx-auto mt-1 w-fit panel-surface rounded-full px-3 py-0.5"
           updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={isWebView ? siteConfig.app_version : siteConfig.version}
-          versionClassName="text-xs font-semibold text-foreground mt-1 mx-auto w-fit glass-surface rounded-full px-3 py-1"
+          versionClassName="text-xs font-semibold text-foreground mt-1 mx-auto w-fit panel-surface rounded-full px-3 py-1"
         />
 
         {/* 验证码弹层 */}
@@ -312,7 +312,7 @@ export default function IndexPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             {/* 背景遮罩层 - 模糊效果，暗黑模式下更深 */}
             <button
-              className="absolute inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm captcha-backdrop-enter"
+              className="absolute inset-0 bg-black/60 captcha-backdrop-enter"
               type="button"
               onClick={() => {
                 setShowCaptcha(false);
@@ -326,7 +326,7 @@ export default function IndexPage() {
               }}
             />
             {/* 验证码容器 */}
-            <div className="glass-surface mb-4 relative z-50 p-6 rounded-lg shadow-xl">
+            <div className="panel-surface mb-4 relative z-50 p-6 rounded-lg shadow-xl">
               <div className="mb-4 text-center text-sm font-medium text-foreground">
                 请完成安全验证
               </div>
