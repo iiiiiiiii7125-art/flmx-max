@@ -79,7 +79,10 @@ func passwordVerifyCensus(t *testing.T) map[string][2]bool {
 					if x.Name == "security" && sel.Sel.Name == "VerifyPassword" {
 						callsVerify = true
 					}
-					if x.Name == "subStoreLimiter" && sel.Sel.Name == "allow" {
+					// R7-L8-02 后 sub_store 的守卫是复合桶＋IP 聚合
+					// 桶两次 allowWithLimit 调用（与紧缩解耦的入口）；
+					// allow 为其旧形态，两个名字都认。
+					if x.Name == "subStoreLimiter" && (sel.Sel.Name == "allow" || sel.Sel.Name == "allowWithLimit") {
 						hasGuard = true
 					}
 				}

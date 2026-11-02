@@ -944,6 +944,21 @@ func (h *Handler) speedLimitList(w http.ResponseWriter, r *http.Request) {
 // 键 = 真实客户端 IP + 用户名，避免攻击者耗尽 login 桶锁死正常登录。
 var subStoreLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
 
+// R7-L8-02：复合键（IP+用户名）按对计数，单 IP 轮换用户名跨账号
+// 喷洒在 IP 维度不聚合——在复合桶之外并行一条纯 IP 聚合桶（与
+// login 面「IP 桶＋用户名信号」双键并行同形态），只封顶单 IP 的
+// 喷洒总量。上限远宽于复合键的 10/min：正常同 NAT 多用户各自
+// 拉取远达不到，聚合桶耗尽也只拒 sub_store 本面——两个桶都独立
+// 于 login 桶，刷 sub_store 锁不死同 NAT 的正常登录（原复合键
+// 设计要保的隔离不变）。两桶均走 allowWithLimit：不查登录紧缩
+// 集（紧缩是 login 面的信号机制，复合键查它永不命中、纯 IP 键
+// 查它则会把登录信号外溢进本面，两头都错位）。
+var subStoreIPAggregateLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
+
+// subStoreIPAggregateMaxAttempts 是纯 IP 聚合桶的每分钟上限
+// （窗口与 loginRateLimiter 共用 loginRateLimitWindow）。
+const subStoreIPAggregateMaxAttempts = 100
+
 const subStoreSunsetHTTPDate = "Sun, 17 Jan 2027 00:00:00 GMT"
 
 func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
@@ -998,7 +1013,15 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 	// 解析 + UnresolvedKey 共享桶），不再以含端口的原始 RemoteAddr
 	// 为键；下方失败审计日志的 ip 亦同此口径。
 	ipStr := rateLimitKeyForRequest(r, "sub_store rate limit")
-	if !subStoreLimiter.allow(ipStr+"\x00"+strings.ToLower(username), time.Now()) {
+	now := time.Now()
+	if !subStoreLimiter.allowWithLimit(ipStr+"\x00"+strings.ToLower(username), now, loginRateLimitMaxAttempts) {
+		w.Header().Set("Retry-After", "60")
+		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
+		return
+	}
+	// R7-L8-02：纯 IP 聚合桶封顶轮换用户名的跨账号喷洒总量；
+	// 与复合桶任一命中即拒，计数口径与复合桶一致（每次尝试都计）。
+	if !subStoreIPAggregateLimiter.allowWithLimit(ipStr, now, subStoreIPAggregateMaxAttempts) {
 		w.Header().Set("Retry-After", "60")
 		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
 		return
