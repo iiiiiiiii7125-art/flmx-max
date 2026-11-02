@@ -23,6 +23,18 @@ const (
 // 网络失败/回执丢失——后者原样重试，前者走 recoverRejected 自愈）。
 type trafficReportRejection string
 
+// reliableReportURL 把 v1 上报候选 URL 改写为 v2 端点，只替换尾段
+// 路径：候选 URL 的地址形态（含反代路径前缀等）与 v1 完全同源，
+// 整段覆盖 Path 会把前缀丢掉、v2 永远得不到确认（审计 A-T-07）。
+// 尾段不是 /flow/upload 的未知形态保持整段覆盖的旧行为兜底。
+func reliableReportURL(parsed *url.URL) {
+	if strings.HasSuffix(parsed.Path, "/flow/upload") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/flow/upload") + "/flow/upload/v2"
+		return
+	}
+	parsed.Path = "/flow/upload/v2"
+}
+
 func (e trafficReportRejection) Error() string { return "traffic batch rejected: " + string(e) }
 
 // sendReliableTrafficReport 把一个 spool 批次发往 /flow/upload/v2。
@@ -50,7 +62,7 @@ func sendReliableTrafficReport(ctx context.Context, batch trafficEnvelope) error
 		if err != nil || parsed.Host == "" {
 			continue
 		}
-		parsed.Path = "/flow/upload/v2"
+		reliableReportURL(parsed)
 		targetURL := parsed.String()
 		displayURL := sanitizeReportURL(targetURL)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(requestBody))
