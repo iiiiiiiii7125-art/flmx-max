@@ -259,13 +259,15 @@ export interface ThemePackage {
   // ── Styling ────────────────────────────────────────────────────────────────
 
   /**
-   * CSS variable token overrides.  Provide `light`, `dark`, or both.
-   * Only the variables you specify will be overridden; all others keep
-   * the default values from `globals.css`.
+   * CSS variable token overrides.  LIGHT-ONLY: the app has no dark
+   * mode, so the `light` set is the only token set — and it is
+   * required whenever `tokens` is provided (a package whose tokens
+   * lack a light set is rejected at registration).  Only the
+   * variables you specify will be overridden; all others keep the
+   * default values from `globals.css`.
    */
   tokens?: {
-    light?: ThemeTokens;
-    dark?: ThemeTokens;
+    light: ThemeTokens;
   };
 
   /**

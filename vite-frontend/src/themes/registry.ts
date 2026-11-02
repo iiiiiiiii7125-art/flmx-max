@@ -59,10 +59,45 @@ function notify() {
 // ─── public API ──────────────────────────────────────────────────────────────
 
 /**
+ * Validate a theme package against the format contract.  Returns a
+ * human-readable rejection reason, or null when the package is valid.
+ *
+ * LIGHT-ONLY contract: dark mode was removed app-wide, so a package
+ * that provides `tokens` MUST provide the `light` token set.  A
+ * dark-only package is rejected outright — there is no dark fallback
+ * to read colours from, and silently injecting nothing while
+ * pretending activation succeeded would hide the mistake.  A package
+ * without `tokens` at all (component/layout/page overrides only) is
+ * fine: the `tokens` field itself stays optional.
+ */
+export function validateThemePackage(pkg: ThemePackage): string | null {
+  if (pkg.tokens != null && pkg.tokens.light == null) {
+    return (
+      `theme "${pkg.id}" provides tokens but no light token set ` +
+      `(tokens.light is required; dark-only token sets are not accepted)`
+    );
+  }
+
+  return null;
+}
+
+/**
  * Register a theme package.  Call this for every theme you want available.
  * Registering a theme with an existing id replaces the previous one.
+ * Packages that fail validateThemePackage are rejected: they are not
+ * registered (so they never appear in the picker and can never be
+ * activated), the rejection is logged with the reason, and any
+ * previously registered theme with the same id stays in place.
  */
 export function registerTheme(pkg: ThemePackage): void {
+  const problem = validateThemePackage(pkg);
+
+  if (problem != null) {
+    console.error(`[flmx-theme] registerTheme rejected: ${problem}`);
+
+    return;
+  }
+
   installed.set(pkg.id, pkg);
   notify();
 }
@@ -149,7 +184,7 @@ export function activateTheme(id: string): void {
   activeId = id;
 
   // Inject tokens (LIGHT-ONLY: always the light token set)
-  const tokens = pkg.tokens?.light ?? pkg.tokens?.dark;
+  const tokens = pkg.tokens?.light;
 
   if (tokens) injectTokens(tokens);
 
@@ -209,7 +244,7 @@ export function reapplyActiveTheme(): void {
     if (!pkg) return;
 
     clearInjectedTokens();
-    const tokens = pkg.tokens?.light ?? pkg.tokens?.dark;
+    const tokens = pkg.tokens?.light;
 
     if (tokens) injectTokens(tokens);
 

@@ -42,16 +42,12 @@ const myTheme: ThemePackage = {
   version: "1.0.0",         // 版本号
   description: "一个自定义主题",
 
-  // CSS 变量覆盖
+  // CSS 变量覆盖（只有 light 集，必填——见下方「CSS 变量覆盖」节的硬性规则）
   tokens: {
     light: {
       "--primary": "#ff6600",
       "--primary-foreground": "#ffffff",
       "--background": "#fafafa",
-    },
-    dark: {
-      "--primary": "#ff8833",
-      "--background": "#1a1a2e",
     },
   },
 };
@@ -109,13 +105,16 @@ tokens: {
     // 圆角
     "--radius": "0.5rem",
   },
-  dark: {
-    // 暗色模式下的覆盖...
-  },
 }
 ```
 
 > **提示**: 你不需要定义所有变量，只定义你想修改的，其余沿用默认值。
+
+> **硬性规则：light 集必填**。全站已删除深色模式，前端只读取 `tokens.light`，类型上 `tokens` 也只有 `light` 一个成员。
+>
+> - 提供 `tokens` 时**必须**提供 `light` 集。只有暗色集、或 `tokens` 里缺 `light` 的主题包，会在注册（`registerTheme`）时被**拒绝**：浏览器控制台报错并点名缺失的 light 集，主题不会出现在设置页的主题列表中，也无法被激活；同 id 已注册的合法主题不会被顶掉。
+> - 完全不提供 `tokens` 是可以的：只覆盖组件/布局/页面的主题不需要 token 集。
+> - 旧主题若还带暗色集，请把配色迁入 `light` 集后删除暗色集，否则主题会被拒绝、无法使用。
 
 ### 原始 CSS 注入
 

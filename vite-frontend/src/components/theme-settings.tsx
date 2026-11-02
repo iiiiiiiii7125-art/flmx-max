@@ -51,7 +51,7 @@ export const ThemeSettings: React.FC = () => {
             {themes.map((theme) => {
               const isActive = activeThemeId === theme.id;
               // LIGHT-ONLY: previews always show the light token set
-              const previewTokens = theme.tokens?.light ?? theme.tokens?.dark;
+              const previewTokens = theme.tokens?.light;
 
               const primary = previewTokens?.["--primary"] ?? "#2563eb";
               const secondary = previewTokens?.["--secondary"] ?? "#6366f1";
