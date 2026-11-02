@@ -43,6 +43,7 @@ import {
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
+import { ChevronDown } from "lucide-react";
 
 interface Props {
   isOpen: boolean;
@@ -138,11 +139,18 @@ export function InboundFormModal({
     }
   };
   const [saving, setSaving] = useState(false);
+  // D-03 fold: everything past node/kernel/template + name/port lives
+  // behind this one toggle. Edit opens it (existing values must stay
+  // visible); create opens it only if the seed values are non-default.
+  const seedReachesAdvanced = (f: InboundForm) =>
+    f.outboundIpStrategy !== "auto" ||
+    f.shareAddressMode !== "auto" ||
+    f.connIdleSeconds !== "";
   const [showAdvanced, setShowAdvanced] = useState(
-    initial.outboundIpStrategy !== "auto" ||
-      initial.shareAddressMode !== "auto" ||
-      initial.connIdleSeconds !== "",
+    Boolean(initial.id) || seedReachesAdvanced(initial),
   );
+  // Visible feedback when a preset fills fields inside the folded area.
+  const [presetNote, setPresetNote] = useState("");
   const isEdit = Boolean(initial.id);
 
   // Reset when the parent opens the modal with a different item.
@@ -150,11 +158,8 @@ export function InboundFormModal({
     setInitialKey(initial);
     setForm(initial);
     setConnIdleBeforeUnlimited("");
-    setShowAdvanced(
-      initial.outboundIpStrategy !== "auto" ||
-        initial.shareAddressMode !== "auto" ||
-        initial.connIdleSeconds !== "",
-    );
+    setShowAdvanced(Boolean(initial.id) || seedReachesAdvanced(initial));
+    setPresetNote("");
   }
 
   const set = <K extends keyof InboundForm>(key: K, value: InboundForm[K]) =>
@@ -201,6 +206,8 @@ export function InboundFormModal({
   const changeKernel = (kernelType: string) => {
     const info = caps?.kernels.find((k) => k.type === kernelType);
     const first = presetsFor(caps, kernelType)[0];
+
+    if (first) setPresetNote(first.label);
 
     setForm((prev) => {
       const next: InboundForm = {
@@ -403,6 +410,9 @@ export function InboundFormModal({
     const err = validate();
 
     if (err) {
+      // Most validated fields live in the folded area; opening it keeps
+      // "submit does nothing" from happening behind a closed fold.
+      setShowAdvanced(true);
       toast.error(err);
 
       return;
@@ -585,9 +595,10 @@ export function InboundFormModal({
                                 : "border-divider hover:bg-default-100"
                             }`}
                             type="button"
-                            onClick={() =>
-                              setForm((prev) => applyPreset(prev, p, caps))
-                            }
+                            onClick={() => {
+                              setForm((prev) => applyPreset(prev, p, caps));
+                              setPresetNote(p.label);
+                            }}
                           >
                             <div className="text-sm font-medium">{p.label}</div>
                             <div className="text-xs font-semibold text-foreground">
@@ -618,6 +629,30 @@ export function InboundFormModal({
                   />
                 </div>
 
+                <button
+                  aria-expanded={showAdvanced}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-100"
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                >
+                  <span className="text-sm font-medium">
+                    高级设置
+                    <span className="ml-2 text-xs font-semibold text-foreground">
+                      协议、传输、UUID、密钥、监听与中转；留空自动生成
+                    </span>
+                  </span>
+                  <ChevronDown
+                    className={`h-4 w-4 shrink-0 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {presetNote && !showAdvanced && (
+                  <p className="text-xs font-semibold text-foreground">
+                    已套用「{presetNote}
+                    」：协议、传输与安全等字段在高级设置中，展开可查看或修改。
+                  </p>
+                )}
+                {showAdvanced && (
+                  <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <Select
                     label="协议"
@@ -761,9 +796,10 @@ export function InboundFormModal({
                         tabIndex={0}
                         title="一键填入 IEPL 专用（纯 ENC）配置：VLESS / TCP / 安全无 / ML-KEM-768 后量子认证 / xorpub 外观，无 SNI、不启用 Vision 流控，并勾选空闲超时「不限」。只填表单，不创建。"
                         variant="flat"
-                        onClick={() =>
-                          setForm((prev) => applyPureEncPreset(prev))
-                        }
+                        onClick={() => {
+                          setForm((prev) => applyPureEncPreset(prev));
+                          setPresetNote("IEPL专用");
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
@@ -1211,15 +1247,7 @@ export function InboundFormModal({
                   </div>
                 )}
 
-                <button
-                  className="text-sm text-primary-700"
-                  type="button"
-                  onClick={() => setShowAdvanced((v) => !v)}
-                >
-                  {showAdvanced ? "收起高级选项" : "展开高级选项"}
-                </button>
-                {showAdvanced && (
-                  <div className="space-y-3">
+                <div className="space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Input
                         description="默认 :: 监听所有地址；127.0.0.1 仅本机（配合隧道中转）"
@@ -1452,6 +1480,7 @@ export function InboundFormModal({
                       variant="bordered"
                       onChange={(e) => set("extra", e.target.value)}
                     />
+                </div>
                   </div>
                 )}
               </div>
