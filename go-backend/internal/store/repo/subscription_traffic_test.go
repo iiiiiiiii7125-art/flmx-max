@@ -83,8 +83,9 @@ func TestApplySubscriptionCounterSamplesWritesHourlyTraffic(t *testing.T) {
 	}
 }
 
-// #88：删订阅必须同事务清桶行——repo 直删与生产硬删路径
-// （DeleteSubscriptionWithAssignments）两条都要清。
+// #88＋R8-053：删订阅必须同事务清桶行与分配行。repo 层只保留生产
+// 路径 DeleteSubscriptionWithAssignments 一条——曾有的不清分配变体
+// DeleteSubscription 已删除（无生产调用、同名近形易误用留孤儿分配）。
 func TestDeleteSubscriptionClearsTrafficBuckets(t *testing.T) {
 	r, err := Open(filepath.Join(t.TempDir(), "sub-traffic-del.db"))
 	if err != nil {
@@ -114,11 +115,26 @@ func TestDeleteSubscriptionClearsTrafficBuckets(t *testing.T) {
 	a := mk("tok-a")
 	b := mk("tok-b")
 
-	if err := r.DeleteSubscription(a.ID); err != nil {
+	// 给 a 挂一条分配行：删除后必须随订阅同事务清掉，不留孤儿。
+	if err := r.DB().Create(&model.UserSubscription{
+		UserID: 7, SubscriptionID: a.ID, CreatedTime: 1700000000000,
+	}).Error; err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+
+	if err := r.DeleteSubscriptionWithAssignments(a.ID); err != nil {
 		t.Fatalf("delete a: %v", err)
 	}
 	if rows, _ := r.ListSubscriptionTraffic(a.ID, 0); len(rows) != 0 {
-		t.Fatalf("DeleteSubscription left %d traffic rows", len(rows))
+		t.Fatalf("DeleteSubscriptionWithAssignments left %d traffic rows", len(rows))
+	}
+	var assignmentCount int64
+	if err := r.DB().Model(&model.UserSubscription{}).
+		Where("subscription_id = ?", a.ID).Count(&assignmentCount).Error; err != nil {
+		t.Fatalf("count assignments: %v", err)
+	}
+	if assignmentCount != 0 {
+		t.Fatalf("DeleteSubscriptionWithAssignments left %d assignment rows", assignmentCount)
 	}
 	if err := r.DeleteSubscriptionWithAssignments(b.ID); err != nil {
 		t.Fatalf("delete b: %v", err)
