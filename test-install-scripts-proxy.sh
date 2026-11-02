@@ -1359,7 +1359,12 @@ test_install_panel_refuses_existing_deployment() (
     POSTGRES_PASSWORD="brandnew"; JWT_SECRET="brandnewsecret"
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
-  download_verified() { return 0; }
+  # R8-011: install 落盘前新增 compose 内容校验——夹具须写出含
+  # backend/frontend 的最小 compose，docker 桩须应答 --services。
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
   # R8-J-C: install_panel 完成块前新增 wait_for_backend_healthy 把关，
   # 夹具以恒成功桩承接（本例验的是 F-049 守卫，不验健康等待本身）。
   wait_for_backend_healthy() { return 0; }
@@ -1367,7 +1372,12 @@ test_install_panel_refuses_existing_deployment() (
   configure_docker_ipv6() { return 0; }
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
-  docker() { return 0; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+    esac
+    return 0
+  }
 
   local rc="0"
   ( cd "$work" && install_panel >/dev/null 2>&1 ) || rc="$?"
@@ -1407,12 +1417,22 @@ test_install_panel_waits_for_backend_health() (
     POSTGRES_PASSWORD="pw"; JWT_SECRET="secret"
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
-  download_verified() { return 0; }
+  # R8-011: 同 F-049 夹具——内容校验需要真实落盘的最小 compose 与
+  # docker 桩的 --services 应答，否则健康等待把关轮不到执行。
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
   check_ipv6_support() { return 1; }
   configure_docker_ipv6() { return 0; }
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
-  docker() { return 0; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+    esac
+    return 0
+  }
 
   # 健康等待失败：不得宣称部署完成
   wait_for_backend_healthy() { return 1; }
@@ -1429,11 +1449,15 @@ test_install_panel_waits_for_backend_health() (
   grep -q "logs backend" "$out_log" || \
     fail "R8-J-C: health-gate failure must print a docker compose logs pointer"
 
-  # 健康等待通过：正常印成功块
+  # 健康等待通过：正常印成功块。R8-011 后 compose 会真实落盘，第一
+  # 相跑完目录内已有完整部署，第二相须换新目录，否则会先被 F-049
+  # 已有部署守卫拦截（与健康把关无关）。
   wait_for_backend_healthy() { return 0; }
   rc="0"
   out_log="$work/ok.log"
-  ( cd "$work" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  local work_ok
+  work_ok=$(mktemp -d)
+  ( cd "$work_ok" && install_panel >"$out_log" 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "R8-J-C: install_panel should succeed once the backend is healthy"
   grep -q "部署完成" "$out_log" || \
     fail "R8-J-C: success block should be printed after the health gate passes"
@@ -2058,6 +2082,110 @@ test_shipped_compose_templates_carry_hops_line() (
     grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$tpl" \
       || fail "R6-L8-F-01: shipped template $tpl must carry the FLMX_TRUSTED_PROXY_HOPS passthrough line with default 2"
   done
+)
+
+# R8-011 的 run_panel_compose 桩：config -q 以「含 services: 且无
+# INVALID-YAML 标记」模拟解析成功，config --services 按两空格缩进的
+# 服务键抽取（与 shipped 模板的实际排版一致）。
+r8_011_stub_compose() {
+  local file="" mode=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f) file="$2"; shift 2 ;;
+      -q) mode="quiet"; shift ;;
+      --services) mode="services"; shift ;;
+      *) shift ;;
+    esac
+  done
+  case "$mode" in
+    quiet)
+      ! grep -q 'INVALID-YAML' "$file" && grep -q '^services:' "$file"
+      ;;
+    services)
+      awk '/^services:/{in_s=1; next} /^[^ ]/{in_s=0} in_s && /^  [A-Za-z0-9_-]+:/{name=$1; sub(/:$/, "", name); print name}' "$file"
+      ;;
+  esac
+}
+
+test_validate_panel_compose_content_accepts_shipped_templates() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  run_panel_compose() { r8_011_stub_compose "$@"; }
+
+  local tpl
+  for tpl in "$ROOT_DIR/docker-compose-v4.yml" "$ROOT_DIR/docker-compose-v6.yml"; do
+    validate_panel_compose_content "$tpl" "1.9.4" \
+      || fail "R8-011: shipped template $tpl must pass compose content validation"
+  done
+)
+
+test_validate_panel_compose_content_rejects_bad_files() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  run_panel_compose() { r8_011_stub_compose "$@"; }
+
+  local work
+  work=$(mktemp -d)
+
+  cat > "$work/only-backend.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.4
+YAML
+  if validate_panel_compose_content "$work/only-backend.yml" "1.9.4"; then
+    fail "R8-011: compose without a frontend service must be rejected"
+  fi
+
+  cat > "$work/invalid.yml" <<'YAML'
+services:
+  backend: [INVALID-YAML
+YAML
+  if validate_panel_compose_content "$work/invalid.yml" "1.9.4"; then
+    fail "R8-011: unparsable compose must be rejected"
+  fi
+
+  cat > "$work/good.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.4
+  frontend:
+    image: example/frontend:1.9.4
+YAML
+  validate_panel_compose_content "$work/good.yml" "1.9.4" \
+    || fail "R8-011: compose with backend+frontend must pass"
+)
+
+test_validate_panel_update_compose_uses_content_validation() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  run_panel_compose() { r8_011_stub_compose "$@"; }
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/candidate.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.4
+YAML
+
+  UPDATE_COMPOSE_CANDIDATE="$work/candidate.yml"
+  LATEST_VERSION="1.9.4"
+  if validate_panel_update_compose; then
+    fail "R8-011: update validation must reject a candidate missing the frontend service"
+  fi
+
+  cat > "$work/candidate.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.4
+  frontend:
+    image: example/frontend:1.9.4
+YAML
+  validate_panel_update_compose \
+    || fail "R8-011: update validation must accept a candidate with backend+frontend"
 )
 
 test_activate_panel_update_files_keeps_hops_line() (
@@ -3739,6 +3867,9 @@ test_ensure_compose_trusted_proxy_hops_decoy_string_elsewhere
 test_ensure_compose_trusted_proxy_hops_unrecognized_env_form_keeps_original
 test_compose_hops_injection_problem_detects_form_mismatch
 test_shipped_compose_templates_carry_hops_line
+test_validate_panel_compose_content_accepts_shipped_templates
+test_validate_panel_compose_content_rejects_bad_files
+test_validate_panel_update_compose_uses_content_validation
 test_activate_panel_update_files_keeps_hops_line
 test_pgloader_command_file_terminated
 test_tcpkill_missing_warns_instead_of_silent
