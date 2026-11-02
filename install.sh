@@ -452,12 +452,79 @@ build_download_url() {
     echo "https://github.com/${REPO}/releases/download/${RESOLVED_VERSION}/gost-${ARCH}"
 }
 
+# corroborate_binary_anchor <获胜前缀> <第一锚期望哈希>：R7-002 第二锚
+# （与 panel_install.sh 的 corroborate_download_anchor、面板自升级的
+# corroborateReleaseAssetChecksum、agent 侧 corroborateUpgradeChecksum
+# 同口径）：verify_downloaded_binary 的校验值由实际下载地址派生、与
+# 本体恒同路线同源，单个作恶线路即可给出自洽的（假二进制，假
+# .sha256）对。这里在定版后从路线表内与获胜线路不同的一条线路重取
+# 同一资产的 .sha256，与第一锚已采信的期望哈希比对：
+#   - 异路给出不同的合法哈希 → 硬失败（返回 1），调用方丢弃 .part
+#     整轮切线/失败，不拿该二进制落地；
+#   - 异路内容不是合法 64 位 SHA256 → 只废该路，继续问下一路；
+#   - 全部异路都给不出合法校验值 → 降级单锚继续（返回 0），并在
+#     stderr 点名「跨线路锚复核已降级」。
+# 边界（如实写明）：① 路线表只有一条时先按下载主流程同款机制
+# extend 补测一次（面板源独占/直连短路形态扩得动；PROXY_URL 覆盖与
+# PROXY_ENABLED=false 是运维显式单路，extend 不动、无候选可扩，
+# 直接降级点名）；② 整轮复核共用 20s 总界（与 Go 两侧及
+# panel_install.sh 同值），逐路 --max-time 取剩余量与 10s 的较小
+# 者；③ 本函数只依赖脚本内置路线表（DOWNLOAD_ROUTES /
+# DOWNLOAD_URL），手动裸跑 install.sh 同样生效，不依赖面板注入。
+corroborate_binary_anchor() {
+  local winner="$1" expected="$2"
+  local -a candidates=()
+  local prefix
+  for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+    [[ "$prefix" == "$winner" ]] && continue
+    candidates+=("$prefix")
+  done
+  if [[ ${#candidates[@]} -eq 0 ]] && extend_download_routes; then
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      [[ "$prefix" == "$winner" ]] && continue
+      candidates+=("$prefix")
+    done
+  fi
+  local deadline=$(( $(date +%s) + 20 ))
+  local got tmp remain max_time
+  for prefix in "${candidates[@]}"; do
+    remain=$(( deadline - $(date +%s) ))
+    if (( remain <= 0 )); then
+      break
+    fi
+    max_time=10
+    if (( remain < max_time )); then max_time=$remain; fi
+    tmp=$(mktemp) || continue
+    if curl -fsSL --connect-timeout 5 --max-time "$max_time" -o "$tmp" "$(route_url "$prefix" "$DOWNLOAD_URL").sha256" 2>/dev/null; then
+      got=$(awk '{print $1}' "$tmp" | tr -d ' \n' | tr 'A-F' 'a-f')
+      rm -f "$tmp"
+      if [[ "$got" =~ ^[0-9a-f]{64}$ ]]; then
+        if [[ "$got" != "$expected" ]]; then
+          echo "❌ 跨线路锚复核失败：二进制校验值经两条不同线路获取的结果不一致，拒绝安装（R7-002 第二锚）" >&2
+          echo "   第一锚校验值（已验）: $expected" >&2
+          echo "   异路（${prefix:-直连}）校验值: $got" >&2
+          return 1
+        fi
+        echo "✅ 跨线路锚复核通过（第二线路: ${prefix:-直连}）"
+        return 0
+      fi
+    else
+      rm -f "$tmp"
+    fi
+  done
+  echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）" >&2
+  return 0
+}
+
 # H-01: Release 与二进制同目录发布 .sha256，下载后必须强校验。
 # 校验 URL 从实际下载地址派生（追加 .sha256），代理/直连/file 均适用。
 # 校验文件缺失时直接拒绝安装（fail-closed），不允许未校验的 root 二进制落地。
+# R7-002: 同源比对只是第一锚——通过后还须经 corroborate_binary_anchor
+# 异路复核第二锚（见上），异值拒绝、降级点名。
 verify_downloaded_binary() {
     local binary_file="$1"
     local download_url="$2"
+    local winner_prefix="${3:-}"
     if ! command -v sha256sum >/dev/null 2>&1; then
         echo "❌ 系统缺少 sha256sum，无法校验二进制完整性，拒绝继续。"
         return 1
@@ -514,12 +581,19 @@ verify_downloaded_binary() {
         return 1
     fi
     echo "✅ SHA256 校验通过"
+    # R7-002 第二锚：第一锚的期望值与本体同路同源，定版后须异路
+    # 重取 .sha256 复核同一期望值；异值拒绝（调用方丢弃 .part），
+    # 无异路应答降级点名后继续。
+    if ! corroborate_binary_anchor "$winner_prefix" "$expected"; then
+        return 1
+    fi
     return 0
 }
 
 # download_agent_binary <目标路径>：按路线表逐个下载 agent 二进制，
 # 每条路线内完成下载 + 同源 .sha256 校验（verify_downloaded_binary
-# 从实际路线 URL 派生校验地址），首个全过者即用；下载错误/校验
+# 从实际路线 URL 派生校验地址＝第一锚，再经 corroborate_binary_anchor
+# 异路复核＝R7-002 第二锚），首个全过者即用；下载错误/校验
 # 失败/无进展（--speed-limit/--speed-time 看门狗）自动切下一名，
 # 不需要重跑脚本。DOWNLOAD_URL 恒为无前缀的 canonical 地址，路线
 # 前缀只在实际请求时拼（route_url）。
@@ -551,7 +625,7 @@ download_agent_binary() {
         return 1
       fi
       if curl -fL -C - --connect-timeout 10 --max-time "$remain" --speed-limit 1024 --speed-time 30 "$url" -o "$part" && [[ -s "$part" ]]; then
-        if verify_downloaded_binary "$part" "$url"; then
+        if verify_downloaded_binary "$part" "$url" "$prefix"; then
           mv -f "$part" "$dest"
           echo "✅ 下载完成（路线: ${prefix:-直连}）"
           return 0
