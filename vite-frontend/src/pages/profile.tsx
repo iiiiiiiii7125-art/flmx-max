@@ -371,6 +371,14 @@ export default function ProfilePage() {
                       }))
                     }
                   />
+                  {/* R6-L8-F-05：改密与签名密钥轮换是两回事，就地明示，
+                      防止泄露事件时误以为改密即可吊销伪造令牌。 */}
+                  <p className="text-xs font-semibold text-foreground">
+                    注意：修改账号密码不会轮换面板的 JWT
+                    签名密钥，签名密钥泄露后改密也无法吊销已伪造的令牌。轮换方法：修改部署目录
+                    .env 中的 JWT_SECRET 后重建后端（未设置该变量时，删除数据库同级目录下的
+                    jwt_secret 文件并重启，后端会生成新密钥）；轮换后全部现有会话失效。
+                  </p>
                 </div>
               </ModalBody>
               <ModalFooter>

@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261102.02"
+SCRIPT_VERSION="20261102.03"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1546,8 +1546,48 @@ preserve_compose_networks() {
   fi
 }
 
+# R6-L8-F-01：脚本默认拓扑是 Caddy → 前端端口 → 前端 nginx → 后端，
+# 链上共两跳，后端的可信代理跳数必须为 2；缺失时登录限流键会收敛
+# 到前端网关条目、全站共用一桶（未认证者可持续锁死全站登录）。
+# 新版模板已自带 FLMX_TRUSTED_PROXY_HOPS 传递行（默认 :-2），但定版
+# 安装/更新下载的可能是旧版资产（无此行），故在 compose 落盘前统一
+# 补行：backend 的 environment 段缺该键才注入（映射/列表两种形态
+# 各按其形），已有则原样不动。best-effort：任何一步失败都不阻断
+# 安装/更新本身（行为不劣于此前的整份覆写），注入后以 grep 复核
+# 确认才替换原文件。
+# 用法：ensure_compose_trusted_proxy_hops <compose文件>
+ensure_compose_trusted_proxy_hops() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  grep -q 'FLMX_TRUSTED_PROXY_HOPS' "$file" && return 0
+
+  local tmp
+  tmp=$(mktemp) || return 0
+  if ! awk '
+    /^  backend:[[:space:]]*$/ { in_backend=1; print; next }
+    in_backend && /^  [a-zA-Z]/ { in_backend=0 }
+    in_backend && /^    environment:[[:space:]]*$/ && !done { pending=1; print; next }
+    pending {
+      if ($0 ~ /^      - /) print "      - FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}"
+      else print "      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}"
+      done=1; pending=0; print; next
+    }
+    { print }
+  ' "$file" > "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if grep -q 'FLMX_TRUSTED_PROXY_HOPS' "$tmp"; then
+    cat "$tmp" > "$file"
+    echo "🔐 已为后端补入 FLMX_TRUSTED_PROXY_HOPS 传递行（默认拓扑两跳，可在 .env 覆盖）"
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
 activate_panel_update_files() {
   preserve_compose_networks "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml
+  ensure_compose_trusted_proxy_hops "$UPDATE_COMPOSE_CANDIDATE"
   if ! chmod 0644 "$UPDATE_COMPOSE_CANDIDATE" || ! mv "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml; then
     echo "❌ 替换 Compose 配置失败"
     return 1
@@ -1791,6 +1831,9 @@ install_panel() {
     echo "❌ 下载 Compose 配置失败，安装终止: $DOCKER_COMPOSE_URL"
     return 1
   fi
+  # R6-L8-F-01：旧版资产模板可能没有可信代理跳数传递行，落盘前补齐
+  # （新版模板自带、此步自动跳过）。
+  ensure_compose_trusted_proxy_hops docker-compose.yml
   echo "✅ 文件准备完成"
 
   cat > .env <<EOF
@@ -2006,6 +2049,8 @@ migrate_to_postgres() {
       echo "❌ 下载 Compose 配置失败，迁移终止: $DOCKER_COMPOSE_URL"
       return 1
     fi
+    # R6-L8-F-01：同安装路径，落盘前补齐可信代理跳数传递行。
+    ensure_compose_trusted_proxy_hops docker-compose.yml
     echo "✅ docker-compose.yml 下载完成"
   fi
 
