@@ -25,6 +25,7 @@ const (
 type v2Ack struct {
 	Stream   string `json:"stream"`
 	Sequence int64  `json:"sequence"`
+	Cursor   int64  `json:"cursor"`
 	Error    string `json:"error"`
 }
 
