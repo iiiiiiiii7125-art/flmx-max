@@ -85,6 +85,11 @@ type Handler struct {
 	jobsStarted bool
 	jobsWG      sync.WaitGroup
 
+	// R2-038：事件型状态对账清扫的小时级门（维护轮每分钟跑，
+	// 清扫低频即可，见 state_sweep.go）。
+	stateSweepMu   sync.Mutex
+	stateSweepLast time.Time
+
 	// FIX-D（D6-07）：通知派发有界队列 + worker 池状态（notify.go）。
 	notifyMu      sync.Mutex
 	notifyQueue   chan notifyJob
@@ -1560,7 +1565,16 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 					_, _ = w.Write([]byte("error"))
 					return
 				}
-				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				batch, batchErr := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				if batchErr != nil {
+					// R2-019：归属查询失败与 metas 失败同口径整批
+					// 拒收返非 ok——不入账、seq 未推进，同 seq
+					// 重报可入账。
+					log.Printf("flow upload ownership lookup failed node_id=%d err=%v", node.ID, batchErr)
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					_, _ = w.Write([]byte("error"))
+					return
+				}
 				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
 				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
 					if errors.Is(applyErr, repo.ErrSeqReplay) {

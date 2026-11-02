@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +44,12 @@ type fakeNftablesManager struct {
 	blockErr     error
 	blockedCalls []fakeBlockedCall
 	ops          []string
+	// listBlockedErr fails ListBlockedPorts; blockedSet is the fake's
+	// view of the node-side pause set (successful SetBlocked calls
+	// maintain it).
+	listBlockedErr error
+	listBlockedHit int
+	blockedSet     map[int]bool
 }
 
 type fakeBlockedCall struct {
@@ -90,7 +97,55 @@ func (f *fakeNftablesManager) SetBlocked(_ context.Context, cfg runtimenft.SSHCo
 	f.lastConfig = cfg
 	f.blockedCalls = append(f.blockedCalls, fakeBlockedCall{port: port, blocked: blocked})
 	f.ops = append(f.ops, fmt.Sprintf("block:%d:%t", port, blocked))
-	return f.blockErr
+	if f.blockErr != nil {
+		return f.blockErr
+	}
+	if f.blockedSet == nil {
+		f.blockedSet = make(map[int]bool)
+	}
+	if blocked {
+		f.blockedSet[port] = true
+	} else {
+		delete(f.blockedSet, port)
+	}
+	return nil
+}
+
+func (f *fakeNftablesManager) ListBlockedPorts(_ context.Context, cfg runtimenft.SSHConfig) ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listBlockedHit++
+	f.lastConfig = cfg
+	if f.listBlockedErr != nil {
+		return nil, f.listBlockedErr
+	}
+	return f.blockedSetPortsLocked(), nil
+}
+
+func (f *fakeNftablesManager) blockedSetPortsLocked() []int {
+	ports := make([]int, 0, len(f.blockedSet))
+	for port := range f.blockedSet {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+// blockedSetPorts returns the fake's current node-side pause set.
+func (f *fakeNftablesManager) blockedSetPorts() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.blockedSetPortsLocked()
+}
+
+// seedBlockedSet replaces the fake's node-side pause set.
+func (f *fakeNftablesManager) seedBlockedSet(ports ...int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockedSet = make(map[int]bool, len(ports))
+	for _, port := range ports {
+		f.blockedSet[port] = true
+	}
 }
 
 func (f *fakeNftablesManager) blockedCallList() []fakeBlockedCall {

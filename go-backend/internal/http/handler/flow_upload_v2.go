@@ -96,7 +96,15 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 		reject(http.StatusBadRequest, "invalid_batch")
 		return
 	}
-	batch := h.buildNodeFlowUploadBatch(node.ID, envelope.Items, metas)
+	batch, batchErr := h.buildNodeFlowUploadBatch(node.ID, envelope.Items, metas)
+	if batchErr != nil {
+		// R2-019：归属查询失败与 metas 失败同口径整批拒收（503、
+		// 非确认回执）——不入账、不推进游标，agent 保留待确认
+		// 批次、同 stream 同序号重报可入账。
+		log.Printf("flow upload v2 ownership lookup failed node_id=%d err=%v", node.ID, batchErr)
+		http.Error(w, "traffic upload not committed", http.StatusServiceUnavailable)
+		return
+	}
 	itemsJSON, _ := json.Marshal(envelope.Items)
 	digest := fmt.Sprintf("%x", sha256.Sum256(itemsJSON))
 	scope := fmt.Sprintf("flow:%d:%s", node.ID, envelope.Stream)

@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// mustBuildNodeFlowUploadBatch 是 R2-019 后归属用例的统一入口：
+// buildNodeFlowUploadBatch 现在返回 error，本文件及同包既有归属
+// 用例的库都是健康的，查询出错即测试失败。
+func mustBuildNodeFlowUploadBatch(t *testing.T, h *Handler, nodeID int64, items []flowItem, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
+	t.Helper()
+	batch, err := h.buildNodeFlowUploadBatch(nodeID, items, metas)
+	if err != nil {
+		t.Fatalf("buildNodeFlowUploadBatch node_id=%d: %v", nodeID, err)
+	}
+	return batch
+}
+
 func TestFlowOwnershipSharedFlowDoesNotChargeLocalCollision(t *testing.T) {
 	a := newCleanupAgent(t)
 	shareID := a.addRuntime(t, "70_1_0", 1, 1, 1, time.Now())
@@ -22,7 +34,7 @@ func TestFlowOwnershipSharedFlowDoesNotChargeLocalCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.h.applyFlowUploadBatch(1, a.h.buildNodeFlowUploadBatch(1, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, metas), time.Now())
+	a.h.applyFlowUploadBatch(1, mustBuildNodeFlowUploadBatch(t, a.h, 1, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, metas), time.Now())
 	var local model.Forward
 	if err := a.h.repo.DB().First(&local, 70).Error; err != nil {
 		t.Fatal(err)
@@ -51,7 +63,7 @@ func TestFlowOwnershipScopedServiceRequiresStoredNodeOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, nodeID := range []int64{2, 1} {
-		batch := a.h.buildNodeFlowUploadBatch(nodeID, []flowItem{{N: name, U: 120, D: 80}}, nil)
+		batch := mustBuildNodeFlowUploadBatch(t, a.h, nodeID, []flowItem{{N: name, U: 120, D: 80}}, nil)
 		a.h.applyFlowUploadBatch(nodeID, batch, time.Now())
 		share, err := a.h.repo.GetPeerShare(shareID)
 		if err != nil {
@@ -111,7 +123,7 @@ func TestFlowOwnershipAmbiguousLegacyNameDoesNotDebitEitherOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch := a.h.buildNodeFlowUploadBatch(1, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, metas)
+	batch := mustBuildNodeFlowUploadBatch(t, a.h, 1, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, metas)
 	a.h.applyFlowUploadBatch(1, batch, time.Now())
 	share, err := a.h.repo.GetPeerShare(shareID)
 	if err != nil {
@@ -164,7 +176,7 @@ func TestFlowOwnershipLocalForwardRequiresReportingNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, nodeID := range []int64{1, 2} {
-		batch := a.h.buildNodeFlowUploadBatch(nodeID, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, metas)
+		batch := mustBuildNodeFlowUploadBatch(t, a.h, nodeID, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, metas)
 		a.h.applyFlowUploadBatch(nodeID, batch, time.Now())
 		var forward model.Forward
 		if err := a.h.repo.DB().First(&forward, 70).Error; err != nil {
@@ -229,7 +241,7 @@ func TestFlowOwnershipDoesNotCrossNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Node 2 has no shared runtime. It reports the same local numeric service name.
-	a.h.applyFlowUploadBatch(2, a.h.buildNodeFlowUploadBatch(2, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, nil), time.Now())
+	a.h.applyFlowUploadBatch(2, mustBuildNodeFlowUploadBatch(t, a.h, 2, []flowItem{{N: "70_1_0_tcp", U: 120, D: 80}}, nil), time.Now())
 	a.probe(t)
 	share, err = a.h.repo.GetPeerShare(shareID)
 	if err != nil {
@@ -257,14 +269,14 @@ func TestFlowOwnershipLegacyBranchOverflowGuard(t *testing.T) {
 	shareID := a.addRuntime(t, "70_1_0", 1, 1, 1, time.Now())
 
 	// Per-item U+D overflow: MaxInt64 + 1 must be discarded, not wrapped.
-	batch := a.h.buildNodeFlowUploadBatch(1, []flowItem{{N: "70_1_0_tcp", U: math.MaxInt64, D: 1}}, nil)
+	batch := mustBuildNodeFlowUploadBatch(t, a.h, 1, []flowItem{{N: "70_1_0_tcp", U: math.MaxInt64, D: 1}}, nil)
 	if got := batch.peerShareUsage[shareID]; got != 0 {
 		t.Fatalf("expected per-item overflowing legacy usage to be discarded, got %d", got)
 	}
 
 	// Running-total overflow: the first item lands exactly, the second
 	// identical item must be discarded instead of wrapping the total.
-	batch = a.h.buildNodeFlowUploadBatch(1, []flowItem{
+	batch = mustBuildNodeFlowUploadBatch(t, a.h, 1, []flowItem{
 		{N: "70_1_0_tcp", U: math.MaxInt64 - 10, D: 0},
 		{N: "70_1_0_tcp", U: math.MaxInt64 - 10, D: 0},
 	}, nil)

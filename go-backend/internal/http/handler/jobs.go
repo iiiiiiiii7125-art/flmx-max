@@ -422,6 +422,9 @@ func (h *Handler) runResetAndExpiryJob(now time.Time) {
 	h.reconcileUserQuotaEnforcement(now)
 	h.disableExpiredUsers(now.UnixMilli())
 	h.disableExpiredUserTunnels(now.UnixMilli())
+	// R2-038：事件型状态对账清扫（内部有小时级门，失败不影响
+	// 上面任何一步，见 state_sweep.go）。
+	h.sweepEventStates(now)
 }
 
 func (h *Handler) resetMonthlyFlow(now time.Time) {
