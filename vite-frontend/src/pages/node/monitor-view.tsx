@@ -1952,6 +1952,7 @@ export function MonitorView({
                               {`每 ${resolvedActiveMonitor.intervalSec || resolvedServiceMonitorLimits.defaultIntervalSec} 秒测试，30 秒上报`}
                             </span>
                             {activeLatestResult &&
+                            activeLatestResult.success === 1 &&
                             Number.isFinite(activeLatestResult.latencyMs) ? (
                               <span className="font-mono text-xs font-semibold tray-success rounded-full px-2 py-0.5">
                                 {activeLatestResult.latencyMs.toFixed(0)}ms

@@ -53,6 +53,12 @@ type latencyPoint struct {
 	LatencyMs int64   `json:"latencyMs,omitempty"`
 	LossPct   float64 `json:"lossPct,omitempty"`
 	Error     string  `json:"error,omitempty"`
+	// Untested marks a point that was deliberately not measured
+	// (R7-006: a relay path whose legs are all UDP protocol
+	// segments). OK stays false but the point carries no error
+	// and no latency value; presentation renders it neutrally
+	// as untested instead of unreachable.
+	Untested bool `json:"untested,omitempty"`
 	// Route names the return route to this point (node_route.go).
 	Route string `json:"route,omitempty"`
 	// RouteV6 is a dual-stack node's IPv6 return route.
