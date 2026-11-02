@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -225,6 +226,15 @@ func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now 
 		log.Printf("flow upload accounting failed node_id=%d err=%v", nodeID, err)
 		return err
 	}
+	h.runFlowUploadSideEffects(nodeID, batch, quotaViews)
+	return nil
+}
+
+// runFlowUploadSideEffects 是入账提交后的副作用面（配额强制、策略
+// 执行、孤儿清理、peer-share 结算）：只应在批次确实入账后调用。
+// v1（applyFlowUploadBatch）与 v2（flowUploadV2 的 applied 分支）
+// 共用，保证两条上报路径入账后的面板行为一致。
+func (h *Handler) runFlowUploadSideEffects(nodeID int64, batch flowUploadBatch, quotaViews map[int64]*model.UserQuotaView) {
 	for userID, quota := range quotaViews {
 		h.enforceUserQuotaIfNeeded(userID, quota)
 	}
@@ -253,5 +263,4 @@ func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now 
 	for shareID, delta := range batch.peerShareUsage {
 		h.addPeerShareFlow(nodeID, shareID, delta)
 	}
-	return nil
 }
