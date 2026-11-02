@@ -246,6 +246,46 @@ func mergeTrafficItems(groups ...[]TrafficReportItem) []TrafficReportItem {
 	return out
 }
 
+// confirmAck 在面板确认当前待确认批次后推进 spool 状态：清批次，
+// 并落盘成功后才替换内存状态（落盘失败保留 Pending，下个周期重
+// 发，面板按摘要判重放不双计）。
+//
+// C-C2-01 自愈：回执游标 panelCursor 严格大于所发序号时，说明面
+// 板已入账过本 stream 更靠后的批次、而本机 spool 状态被外部回
+// 退（整机快照恢复/旧备份还原/整目录克隆双写）——继续沿旧
+// stream 推进，Next 追平游标前的每个新批次都会被面板按「已入
+// 账重放」只确认不入账、静默少计。故此时照常清除已确认批次
+// （绝不重发——它在面板侧已有入账记录，重发即双计），但当场
+// 轮换 stream：Buffered/Retry 里的未入账字节与后续新批次改走
+// 新 stream、从序号 1 重新入账。轮换只影响未确认字节，与
+// reset_stream 的「拒收批次原字节换流重报」本质不同，无双计
+// 通道。panelCursor 为 0（旧面板回执无 cursor 字段）或不大于
+// 所发序号时行为与此前完全一致（Next++）。返回是否发生了轮换。
+func (s *trafficSpool) confirmAck(panelCursor int64) (bool, error) {
+	pending := s.state.Pending
+	if pending == nil {
+		return false, nil
+	}
+	next := s.state
+	next.Pending = nil
+	rotated := false
+	if panelCursor > pending.Sequence {
+		var id [16]byte
+		if _, err := rand.Read(id[:]); err != nil {
+			return false, err
+		}
+		next.Stream, next.Next = hex.EncodeToString(id[:]), 1
+		rotated = true
+	} else {
+		next.Next++
+	}
+	if err := s.save(next); err != nil {
+		return false, err
+	}
+	s.state = next
+	return rotated, nil
+}
+
 // recoverRejected 处理面板的三路拒绝。新状态落盘成功后才替换内存
 // 状态，绝不在落盘前改动待确认批次的身份。
 //   - reset_stream：面板游标丢失/回退（备份恢复等）——换新 stream

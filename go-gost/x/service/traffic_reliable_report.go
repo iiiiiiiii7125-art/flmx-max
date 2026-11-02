@@ -38,21 +38,24 @@ func reliableReportURL(parsed *url.URL) {
 func (e trafficReportRejection) Error() string { return "traffic batch rejected: " + string(e) }
 
 // sendReliableTrafficReport 把一个 spool 批次发往 /flow/upload/v2。
-// 返回 nil 仅当面板回执的 stream+sequence 与所发批次完全一致且无
-// error；三路拒绝以 trafficReportRejection 返回；其余失败（网络、
-// 回执不匹配、旧面板无此端点）返回普通错误，批次保留下个周期原样
-// 重发。加密沿用 F-089 fail-closed：加密器缺失直接报错不发明文。
-func sendReliableTrafficReport(ctx context.Context, batch trafficEnvelope) error {
+// 返回的 int64 是确认回执带的面板游标位置（C-C2-01）：新面板在
+// 确认回执里附加 cursor 字段（判定后该 stream 的游标序号），旧
+// 面板无此字段时为 0。error 为 nil 仅当面板回执的 stream+sequence
+// 与所发批次完全一致且无 error；三路拒绝以 trafficReportRejection
+// 返回；其余失败（网络、回执不匹配、旧面板无此端点）返回普通
+// 错误，批次保留下个周期原样重发。加密沿用 F-089 fail-closed：
+// 加密器缺失直接报错不发明文。
+func sendReliableTrafficReport(ctx context.Context, batch trafficEnvelope) (int64, error) {
 	if httpReportURL == "" {
-		return fmt.Errorf("流量上报URL未设置")
+		return 0, fmt.Errorf("流量上报URL未设置")
 	}
 	jsonData, err := json.Marshal(batch)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	requestBody, err := encryptReportPayload(jsonData)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	urls := prioritizeURLs(strings.Split(httpReportURL, ","), loadPreferredURL(&preferredUploadURL))
@@ -67,7 +70,7 @@ func sendReliableTrafficReport(ctx context.Context, batch trafficEnvelope) error
 		displayURL := sanitizeReportURL(targetURL)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(requestBody))
 		if err != nil {
-			return err
+			return 0, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "GOST-Traffic-Reporter/2.0")
@@ -80,6 +83,7 @@ func sendReliableTrafficReport(ctx context.Context, batch trafficEnvelope) error
 		var ack struct {
 			Stream   string `json:"stream"`
 			Sequence int64  `json:"sequence"`
+			Cursor   int64  `json:"cursor"`
 			Error    string `json:"error"`
 		}
 		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&ack)
@@ -88,15 +92,15 @@ func sendReliableTrafficReport(ctx context.Context, batch trafficEnvelope) error
 			rejection := trafficReportRejection(ack.Error)
 			switch {
 			case resp.StatusCode == http.StatusConflict && (rejection == trafficRejectionResetStream || rejection == trafficRejectionIdentityConflict):
-				return rejection
+				return 0, rejection
 			case resp.StatusCode == http.StatusBadRequest && rejection == trafficRejectionInvalidBatch:
-				return rejection
+				return 0, rejection
 			case resp.StatusCode == http.StatusOK && ack.Error == "":
 				storePreferredURL(&preferredUploadURL, target)
-				return nil
+				return ack.Cursor, nil
 			}
 		}
 		errs = append(errs, fmt.Sprintf("%s => HTTP %d, 回执与批次不匹配或面板未确认", displayURL, resp.StatusCode))
 	}
-	return fmt.Errorf("流量批次未获面板确认，保留待重试: %s", strings.Join(errs, " | "))
+	return 0, fmt.Errorf("流量批次未获面板确认，保留待重试: %s", strings.Join(errs, " | "))
 }
