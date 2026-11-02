@@ -1587,6 +1587,18 @@ const (
 	agentComposeBaseDir    = "/opt/docker/flmx-agent"
 )
 
+// agentContainerDataDir 是数据卷在容器内的挂载点，恒为无后缀的
+// 镜像锚点：Dockerfile 的 WORKDIR、entrypoint 的 cd 目标与 ENV
+// FLMX_KERNEL_DIR 三处都钉在 /etc/flmx_agent，agent 的全部状态
+// 根（config.json、gost.json、seq/spool、内核根、调优根、自卸载
+// 锚）都由容器内工作目录与该 ENV 派生。实例后缀只落在宿主机一
+// 侧：生成命令把宿主机数据目录（可带后缀）挂到这个固定锚点，
+// 而不是同路径挂载——同路径挂载在后缀形态下会把卷挂到无人查看
+// 的目录，agent 在镜像层的空目录里读不到 config.json 而崩溃循
+// 环、状态根全落卷外（C-F2-01）。默认实例下宿主机目录与锚点
+// 同值，生成命令与历史逐字一致。
+const agentContainerDataDir = agentDataBaseDir
+
 // panelInstanceEnv 是面板实例键的环境变量名：同机多面板部署时，
 // 安装脚本为每个面板实例写不同的值进各自后端的运行环境。
 const panelInstanceEnv = "FLMX_INSTANCE"
@@ -1684,7 +1696,7 @@ func buildNodeDockerInstallCommand(version, agentAddr, secret string, privileged
 		` && docker run -d --name ` + containerName +
 		` --network host --cap-add NET_ADMIN` + priv +
 		` --restart unless-stopped` +
-		` -v ` + dataDir + `:` + dataDir +
+		` -v ` + dataDir + `:` + agentContainerDataDir +
 		` ` + agentImageRef(version)
 }
 
@@ -1709,7 +1721,7 @@ func buildNodeDockerComposeInstallCommand(version, agentAddr, secret string, pri
       - NET_ADMIN` + priv + `
     restart: unless-stopped
     volumes:
-      - ` + dataDir + `:` + dataDir + `
+      - ` + dataDir + `:` + agentContainerDataDir + `
 `
 	return agentConfigWriteStep(agentAddr, secret) +
 		` && mkdir -p ` + composeDir +

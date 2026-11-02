@@ -11,10 +11,20 @@ import (
 // （/etc/flux_agent、flux_agent）零共用，保证多面板同机共存时不
 // 接管、不误删；脚本形态的命令生成不受本组函数影响。
 //
-// 实例派生：面板实例键 FLMX_INSTANCE 非空时，容器名、数据目录与
-// Compose 落位统一加后缀 -<实例键>，使同机的第二个面板不覆写第
-// 一个面板的 agent config、不 rm 它的容器；为空（默认）时生成的
-// 命令与定版字面量逐字一致（黄金用例钉死）。
+// 实例派生：面板实例键 FLMX_INSTANCE 非空时，容器名、宿主机数据
+// 目录与 Compose 落位统一加后缀 -<实例键>，使同机的第二个面板不
+// 覆写第一个面板的 agent config、不 rm 它的容器；为空（默认）时
+// 生成的命令与定版字面量逐字一致（黄金用例钉死）。
+//
+// 挂载契约（C-F2-01）：后缀只落在宿主机一侧——卷的容器内挂载点
+// 恒为镜像锚点 /etc/flmx_agent（Dockerfile WORKDIR、entrypoint
+// 的 cd 目标、ENV FLMX_KERNEL_DIR 三处钉死），因为 agent 的全部
+// 状态根（config.json、gost.json、seq/spool、内核根、调优根、
+// 自卸载锚）都由容器内工作目录与该 ENV 派生。同路径挂载
+// （-v /etc/flmx_agent-east:/etc/flmx_agent-east）会把卷挂到无人
+// 查看的目录：agent 在镜像层的空 /etc/flmx_agent 里读不到
+// config.json 而崩溃循环、状态根全落卷外。默认实例下宿主机目录
+// 与锚点同值，两种写法生成的命令逐字一致。
 
 func TestNormalizeNodeInstallMode(t *testing.T) {
 	cases := []struct {
@@ -183,7 +193,7 @@ func TestBuildNodeDockerCommandsWithInstance(t *testing.T) {
 		"chmod 600 /etc/flmx_agent-east/config.json",
 		"docker rm -f flmx-agent-east",
 		"docker run -d --name flmx-agent-east --network host",
-		"-v /etc/flmx_agent-east:/etc/flmx_agent-east ",
+		"-v /etc/flmx_agent-east:/etc/flmx_agent ",
 	} {
 		if !strings.Contains(dockerCmd, want) {
 			t.Fatalf("instance docker command missing %q:\n%s", want, dockerCmd)
@@ -196,9 +206,18 @@ func TestBuildNodeDockerCommandsWithInstance(t *testing.T) {
 		"docker rm -f flmx-agent>",
 		"--name flmx-agent ",
 		"-v /etc/flmx_agent:",
+		"flmx_agent-east:/etc/flmx_agent-east",
 	} {
 		if strings.Contains(dockerCmd, banned) {
 			t.Fatalf("instance docker command still references default resource %q:\n%s", banned, dockerCmd)
+		}
+	}
+	// 挂载结构断言：源＝宿主机后缀目录、目标＝镜像锚点（无特权与
+	// 特权两种形态共用同一挂载段）。
+	for _, cmd := range []string{dockerCmd, buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", true)} {
+		src, dst := dockerMountSourceTarget(t, cmd)
+		if src != "/etc/flmx_agent-east" || dst != agentDataBaseDir {
+			t.Fatalf("instance docker mount = %q -> %q, want /etc/flmx_agent-east -> %q:\n%s", src, dst, agentDataBaseDir, cmd)
 		}
 	}
 
@@ -209,7 +228,7 @@ func TestBuildNodeDockerCommandsWithInstance(t *testing.T) {
 		"docker compose -f /opt/docker/flmx-agent-east/docker-compose.yaml up -d",
 		"  flmx-agent-east:\n",
 		"    container_name: flmx-agent-east\n",
-		"      - /etc/flmx_agent-east:/etc/flmx_agent-east\n",
+		"      - /etc/flmx_agent-east:/etc/flmx_agent\n",
 	} {
 		if !strings.Contains(composeCmd, want) {
 			t.Fatalf("instance compose command missing %q:\n%s", want, composeCmd)
@@ -220,11 +239,59 @@ func TestBuildNodeDockerCommandsWithInstance(t *testing.T) {
 		"  flmx-agent:\n",
 		"    container_name: flmx-agent\n",
 		"      - /etc/flmx_agent:",
+		"flmx_agent-east:/etc/flmx_agent-east",
 	} {
 		if strings.Contains(composeCmd, banned) {
 			t.Fatalf("instance compose command still references default resource %q:\n%s", banned, composeCmd)
 		}
 	}
+	// 挂载结构断言（compose 卷行）：源＝宿主机后缀目录、目标＝镜
+	// 像锚点；特权形态同断。
+	for _, cmd := range []string{composeCmd, buildNodeDockerComposeInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", true)} {
+		src, dst := composeMountSourceTarget(t, cmd)
+		if src != "/etc/flmx_agent-east" || dst != agentDataBaseDir {
+			t.Fatalf("instance compose mount = %q -> %q, want /etc/flmx_agent-east -> %q:\n%s", src, dst, agentDataBaseDir, cmd)
+		}
+	}
+}
+
+// dockerMountSourceTarget 抽取 docker run 命令里 -v 的源与目标。
+func dockerMountSourceTarget(t *testing.T, cmd string) (string, string) {
+	t.Helper()
+	i := strings.Index(cmd, " -v ")
+	if i < 0 {
+		t.Fatalf("command has no -v mount:\n%s", cmd)
+	}
+	rest := cmd[i+len(" -v "):]
+	j := strings.IndexByte(rest, ' ')
+	if j < 0 {
+		t.Fatalf("cannot parse -v mount in:\n%s", cmd)
+	}
+	src, dst, ok := strings.Cut(rest[:j], ":")
+	if !ok {
+		t.Fatalf("malformed -v mount %q in:\n%s", rest[:j], cmd)
+	}
+	return src, dst
+}
+
+// composeMountSourceTarget 抽取 compose 卷行的源与目标。
+func composeMountSourceTarget(t *testing.T, cmd string) (string, string) {
+	t.Helper()
+	const marker = "    volumes:\n      - "
+	i := strings.Index(cmd, marker)
+	if i < 0 {
+		t.Fatalf("command has no compose volume line:\n%s", cmd)
+	}
+	rest := cmd[i+len(marker):]
+	j := strings.IndexByte(rest, '\n')
+	if j < 0 {
+		t.Fatalf("cannot parse compose volume line in:\n%s", cmd)
+	}
+	src, dst, ok := strings.Cut(rest[:j], ":")
+	if !ok {
+		t.Fatalf("malformed compose volume %q in:\n%s", rest[:j], cmd)
+	}
+	return src, dst
 }
 
 // 实例键不合规：整体回退默认实例命名，畸形值不得漏进命令。
