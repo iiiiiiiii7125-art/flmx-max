@@ -147,6 +147,12 @@ export function KernelPanel({
 
       if (res.code === 0) {
         toast.success("内核已安装并启动");
+        // R8-005: the envelope warning (e.g. Xray below 26.5.9 has no
+        // built-in private-range block) must be surfaced, never
+        // silently dropped.
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
         setInstallOpen(false);
       } else {
         toast.error(res.msg || "安装失败", { duration: 8000 });
