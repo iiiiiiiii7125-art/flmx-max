@@ -8,6 +8,7 @@ package handler
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -119,6 +120,91 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 		}
 		if actual.Seconds() != want {
 			t.Errorf("timeout budget drift: Go constant %s = %v, registry says %gs — update code and registry together", sym, actual, want)
+		}
+	}
+}
+
+// R7-005 值钉：systemUpgradeAnchorTimeout 是跨线路锚复核机制的第三
+// 份拷贝（面板侧，与 agent 侧 x/kernel、x/socket 的
+// anchorCorroborateTimeout 同值同口径），R6 登记时漏在门外——任一
+// 侧单独改值全部旧门皆绿。本测试三面钉死：① 本包常量恒为 20s；
+// ② 登记表 T004 行注记必须点名「systemUpgradeAnchorTimeout 20s」；
+// ③ 以正则解析 agent 两份拷贝的声明值，必须与本包常量相等（与
+// x/kernel 门的跨包钉法同形）。任一侧改值，本门或 agent 侧门必红。
+func TestR7SystemUpgradeAnchorTimeoutPinnedAcrossCopies(t *testing.T) {
+	if systemUpgradeAnchorTimeout != 20*time.Second {
+		t.Fatalf("systemUpgradeAnchorTimeout = %v, registry T004 names 20s — update code and registry together", systemUpgradeAnchorTimeout)
+	}
+
+	regPath := filepath.Join("..", "..", "..", "..", "doc", "audit", "timeout-budgets.tsv")
+	reg, err := os.ReadFile(regPath)
+	if err != nil {
+		t.Fatalf("read timeout budget registry %s: %v", regPath, err)
+	}
+	foundT004 := false
+	for _, line := range strings.Split(string(reg), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 18 || f[0] != "T004" {
+			continue
+		}
+		foundT004 = true
+		if !strings.Contains(f[17], "systemUpgradeAnchorTimeout 20s") {
+			t.Fatal("registry T004 note no longer names systemUpgradeAnchorTimeout 20s — the R7-005 registration must stay explicit")
+		}
+	}
+	if !foundT004 {
+		t.Fatal("registry row T004 missing")
+	}
+
+	decl := regexp.MustCompile(`anchorCorroborateTimeout = (\d+) \* time\.Second`)
+	twins := map[string]string{
+		"x/kernel/install.go":            filepath.Join("..", "..", "..", "..", "go-gost", "x", "kernel", "install.go"),
+		"x/socket/websocket_reporter.go": filepath.Join("..", "..", "..", "..", "go-gost", "x", "socket", "websocket_reporter.go"),
+	}
+	for name, path := range twins {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read agent twin %s: %v", name, err)
+		}
+		m := decl.FindSubmatch(raw)
+		if m == nil {
+			t.Fatalf("anchorCorroborateTimeout declaration not found in %s — if its spelling changed, update this gate with it", name)
+		}
+		twin, err := strconv.ParseInt(string(m[1]), 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s anchorCorroborateTimeout: %v", name, err)
+		}
+		if twin != int64(systemUpgradeAnchorTimeout/time.Second) {
+			t.Fatalf("anchor timeout copies drifted: panel systemUpgradeAnchorTimeout = %v, %s = %ds — all copies must stay equal", systemUpgradeAnchorTimeout, name, twin)
+		}
+	}
+
+	// 脚本侧三份字面量拷贝（R7-002/R7-005 全集收口，登记于 tsv 表
+	// 头段）：panel_install.sh 与 install.sh 的 corroborate 轮截止
+	// `local deadline=$(( $(date +%s) + N ))`、生成安装命令内的
+	// `dl=$(( $(date +%s) + N ))`。每文件必须恰好一处且与 Go 三份
+	// 拷贝同值——脚本侧单独改值或新增第七份拷贝，本门即红。
+	shellDecl := regexp.MustCompile(`(?:local deadline|dl)=\$\(\( \$\(date \+%s\) \+ (\d+) \)`)
+	shellCopies := map[string]string{
+		"panel_install.sh corroborate_download_anchor": filepath.Join("..", "..", "..", "..", "panel_install.sh"),
+		"install.sh corroborate_binary_anchor":         filepath.Join("..", "..", "..", "..", "install.sh"),
+		"mutations.go generated install command":       "mutations.go",
+	}
+	for name, path := range shellCopies {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read shell anchor copy %s: %v", name, err)
+		}
+		ms := shellDecl.FindAllSubmatch(raw, -1)
+		if len(ms) != 1 {
+			t.Fatalf("%s: found %d anchor deadline literals, want exactly 1 — a new copy must be registered and pinned here first", name, len(ms))
+		}
+		v, err := strconv.ParseInt(string(ms[0][1]), 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s anchor deadline: %v", name, err)
+		}
+		if v != int64(systemUpgradeAnchorTimeout/time.Second) {
+			t.Fatalf("anchor timeout copies drifted: panel systemUpgradeAnchorTimeout = %v, %s = %ds — all six copies must stay equal", systemUpgradeAnchorTimeout, name, v)
 		}
 	}
 }

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +21,7 @@ func TestPanelMirrorPrefixFromAgentAddr(t *testing.T) {
 		{"wss://panel.example.com", "https://panel.example.com/api/v1/open_api/gh"},
 		{"wss://panel.example.com:8443", "https://panel.example.com:8443/api/v1/open_api/gh"},
 		{"ws://10.0.0.8:6365", "http://10.0.0.8:6365/api/v1/open_api/gh"},
-		{"panel.example.com", ""},        // 无显式 scheme 不派生（归一化产物恒带 scheme）
+		{"panel.example.com", ""},         // 无显式 scheme 不派生（归一化产物恒带 scheme）
 		{"https://panel.example.com", ""}, // agentAddr 只会是 ws/wss 形态
 		{"", ""},
 	}
@@ -55,12 +59,148 @@ func TestBuildNodeInstallCommandPanelCandidateFirst(t *testing.T) {
 	}
 }
 
+// R7-002 段 A 行为门：把 buildNodeInstallCommand 生成的命令在桩
+// curl 下真跑——第二锚三态（异路同值放行 / 异路异值硬中止且脚本
+// 不执行 / 全部异路无应答降级点名后放行）逐态断言，而非只查命令
+// 文本含某子串。桩 curl 按 URL 前缀把请求映射到 panel/direct/
+// ghfast 三个服务目录，其余候选一律 22 失败（模拟不可达）。
+type nodeInstallStubRoute struct {
+	script  string // 空 = 该线路不提供 install.sh
+	shaOf   string // .sha256 内容取此字符串的哈希；空且 script 非空时取 script 本身
+	shaOnly bool   // 只提供 .sha256（第二锚只需校验文件）
+}
+
+func runNodeInstallCommandWithStub(t *testing.T, routes map[string]nodeInstallStubRoute) (string, error) {
+	t.Helper()
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	serveDir := filepath.Join(root, "serve")
+	workDir := filepath.Join(root, "work")
+	for _, d := range []string{binDir, serveDir, workDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for key, r := range routes {
+		dir := filepath.Join(serveDir, key)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if r.script != "" && !r.shaOnly {
+			if err := os.WriteFile(filepath.Join(dir, "install.sh"), []byte(r.script), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		hashOf := r.shaOf
+		if hashOf == "" {
+			hashOf = r.script
+		}
+		if hashOf != "" {
+			sum := fmt.Sprintf("%x", sha256.Sum256([]byte(hashOf)))
+			if err := os.WriteFile(filepath.Join(dir, "install.sh.sha256"), []byte(sum+"  install.sh\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stub := `#!/bin/bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2;;
+    --connect-timeout|--max-time) shift 2;;
+    -*) shift;;
+    *) url="$1"; shift;;
+  esac
+done
+key=""
+case "$url" in
+  *"/api/v1/open_api/gh/"*) key="panel";;
+  "https://ghfast.top/"*) key="ghfast";;
+  "https://github.com/"*) key="direct";;
+  *) exit 22;;
+esac
+f="$STUB_SERVE/$key/${url##*/}"
+[ -f "$f" ] || exit 22
+cp "$f" "$out"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "curl"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", buildNodeInstallCommand("1.8.0", "wss://panel.example.com:8443", "secret-x"))
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_SERVE="+serveDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if _, statErr := os.Stat(filepath.Join(workDir, "executed.marker")); statErr == nil {
+		return string(out) + "\n<<executed>>", err
+	}
+	return string(out), err
+}
+
+func TestBuildNodeInstallCommandSecondAnchor(t *testing.T) {
+	goodScript := "#!/bin/sh\ntouch ./executed.marker\n"
+	otherScript := "#!/bin/sh\necho tampered\n"
+
+	t.Run("cross-route-agree-executes", func(t *testing.T) {
+		out, err := runNodeInstallCommandWithStub(t, map[string]nodeInstallStubRoute{
+			"panel":  {script: goodScript},
+			"direct": {script: goodScript},
+		})
+		if err != nil {
+			t.Fatalf("异路同值应放行执行, err=%v out=%q", err, out)
+		}
+		if !strings.Contains(out, "<<executed>>") || !strings.Contains(out, "跨线路锚复核通过") {
+			t.Fatalf("应经第二锚复核通过并执行脚本, out=%q", out)
+		}
+	})
+
+	t.Run("cross-route-mismatch-aborts", func(t *testing.T) {
+		out, err := runNodeInstallCommandWithStub(t, map[string]nodeInstallStubRoute{
+			"panel":  {script: goodScript},
+			"direct": {shaOf: otherScript, shaOnly: true},
+		})
+		if err == nil {
+			t.Fatalf("异路异值必须硬中止, out=%q", out)
+		}
+		if strings.Contains(out, "<<executed>>") || !strings.Contains(out, "跨线路锚复核失败") {
+			t.Fatalf("异值时脚本不得执行且须点名失败, out=%q", out)
+		}
+	})
+
+	t.Run("no-cross-route-answer-degrades-with-note", func(t *testing.T) {
+		out, err := runNodeInstallCommandWithStub(t, map[string]nodeInstallStubRoute{
+			"panel": {script: goodScript},
+		})
+		if err != nil {
+			t.Fatalf("无异路应答应降级放行, err=%v out=%q", err, out)
+		}
+		if !strings.Contains(out, "<<executed>>") || !strings.Contains(out, "跨线路锚复核已降级") {
+			t.Fatalf("降级须点名且脚本仍执行, out=%q", out)
+		}
+	})
+
+	t.Run("direct-winner-mismatch-aborts", func(t *testing.T) {
+		out, err := runNodeInstallCommandWithStub(t, map[string]nodeInstallStubRoute{
+			"direct": {script: goodScript},
+			"ghfast": {shaOf: otherScript, shaOnly: true},
+		})
+		if err == nil {
+			t.Fatalf("直连定版后异路异值必须硬中止, out=%q", out)
+		}
+		if strings.Contains(out, "<<executed>>") || !strings.Contains(out, "跨线路锚复核失败") {
+			t.Fatalf("异值时脚本不得执行且须点名失败, out=%q", out)
+		}
+	})
+}
+
 func TestAgentArchFromReportedVersion(t *testing.T) {
 	cases := []struct{ v, want string }{
 		{"1.8.0 (debian/amd64)", "amd64"},
 		{"1.8.0 (alpine/arm64)", "arm64"},
 		{"1.7.9 (debian/arm64)", "arm64"},
-		{"1.8.0", ""},               // 无后缀
+		{"1.8.0", ""},                // 无后缀
 		{"1.8.0 (debian/s390x)", ""}, // 未知架构不带哈希
 		{"", ""},
 		{"dev", ""},

@@ -1456,14 +1456,15 @@ func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
 // 直连，github_routes.go），按「直连优先、其后代理清单原序」的顺
 // 序逐个试取：每个候选先取 install.sh.sha256 并校验内容为 64 位
 // 十六进制哈希（真实目标判活，防代理落地页假活），再从同一候选
-// 取 install.sh 本体；首个两件齐备的候选即停，随后仍过 F-060 的
-// sha256sum 同源比对才 chmod 执行。全部候选失败则整条命令失败
-// （ok 恒为 0、test 中止），不执行任何已下载内容。
+// 取 install.sh 本体；首个两件齐备的候选即停（获胜候选记入 w），
+// 随后过 F-060 的 sha256sum 比对（第一锚）与 R7-002 的跨线路复核
+// （第二锚）才 chmod 执行。全部候选失败则整条命令失败（ok 恒为
+// 0、test 中止），不执行任何已下载内容。
 //
 // 面板源一期③：候选表最前面 prepend 面板源（由 agentAddr 派生，
 // 见 panelMirrorPrefixFromAgentAddr）——新节点此刻唯一已证可达
 // 的目的地就是面板本身，国内机经面板拉 install.sh 不再先撞
-// GitHub 直连；面板候选与其余候选受同一套 F-060 校验约束，镜
+// GitHub 直连；面板候选与其余候选受同一套双锚校验约束，镜
 // 像回源失败时端点回 502、命令自动顺延下一候选，不劣化现状。
 //
 // 脚本本体内的二进制下载由 install.sh 内置测速直选负责（同候选
@@ -1471,11 +1472,23 @@ func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
 // 环境变量 PROXY_URL 时脚本仍将其作手动覆盖（见 install.sh）。
 //
 // F-060：生成的命令此前对将以 root 执行的 install.sh 本体零校验
-// （curl -L 连 HTTP 错误都会把错误页存下来执行）。现在与全仓
+// （curl -L 连 HTTP 错误都会把错误页存下来执行）。当时与全仓
 // fail-closed 标准对齐：同下 release 的 install.sh.sha256（流水线
 // 为每个脚本资产生成，内容为纯哈希），sha256sum 比对通过才 chmod
-// 执行；任一步失败整条 && 链中止。校验锚与被校验文件同源同版本，
-// 与 download_verified 的信任模型一致（防传输篡改/新旧混杂）。
+// 执行；任一步失败整条 && 链中止。
+//
+// R7-002（L8-F-02 同族残留收口）：F-060 的第一锚与被校验文件同源
+// 同次取得，单个作恶候选即可给出自洽的（假脚本，假 .sha256）对
+// ——这正是产品其余下载面已升级掉的旧信任模型（panel_install.sh
+// 的 corroborate_download_anchor、面板自升级的
+// corroborateReleaseAssetChecksum、agent 侧 corroborate 均为
+// 「同源第一锚＋异路第二锚」）。生成命令内同步补第二锚，与四面
+// 同语义：定版后从候选表内另一候选重取 install.sh.sha256，与落
+// 盘本体的实际哈希比对——异路给出不同的合法哈希即硬中止（不
+// 执行、不换路重试）；异路内容非合法哈希只废该路、继续问下一
+// 路；全部异路都给不出合法校验值则降级单锚继续，并在命令输出
+// 中点名「跨线路锚复核已降级」。复核整轮共用 20s 总界、逐路
+// --max-time 取剩余量与 10s 的较小者（与四面总界口径一致）。
 func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
 	routes := make([]string, 0, len(githubFetchProxyCandidates)+2)
@@ -1488,10 +1501,22 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	for _, prefix := range routes {
 		quoted = append(quoted, `"`+prefix+`"`)
 	}
+	routeList := strings.Join(quoted, " ")
 	base := "https://github.com/" + githubRepo + "/releases/download/" + version
-	return `ok=0; for p in ` + strings.Join(quoted, " ") + `; do u="${p:+$p/}` + base + `"; ` +
-		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; break; fi; done; test "$ok" = 1` +
+	// R7-002 第二锚（shell 段，语义见函数头注）：a = 落盘本体实际
+	// 哈希（第一锚已证其等于获胜候选的校验值）；anchor 三态——
+	// 0=尚无异路给出合法校验值、1=异路同值复核通过、2=异路异值。
+	// 组末以 [ "$anchor" != 2 ] 收口：异值令整条 && 链中止。
+	corroborateStep := ` && { a=$(sha256sum ./install.sh | awk '{print $1}'); anchor=0; dl=$(( $(date +%s) + 20 )); ` +
+		`for q in ` + routeList + `; do [ "$q" = "$w" ] && continue; r=$(( dl - $(date +%s) )); [ "$r" -gt 0 ] || break; m=10; [ "$r" -lt 10 ] && m=$r; ` +
+		`curl -fsSL --connect-timeout 5 --max-time "$m" "${q:+$q/}` + base + `/install.sh.sha256" -o ./install.sh.sha256.alt 2>/dev/null || continue; ` +
+		`g=$(awk '{print $1}' ./install.sh.sha256.alt | tr 'A-F' 'a-f'); case "$g" in ''|*[!0-9a-f]*) continue;; esac; [ "${#g}" = 64 ] || continue; ` +
+		`if [ "$g" != "$a" ]; then echo "❌ 跨线路锚复核失败：install.sh 的校验值经两条不同线路获取的结果不一致，已中止安装（R7-002 第二锚）" >&2; anchor=2; else echo "✅ 跨线路锚复核通过（第二线路: ${q:-直连}）"; anchor=1; fi; break; done; ` +
+		`rm -f ./install.sh.sha256.alt; if [ "$anchor" = 0 ]; then echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）"; fi; [ "$anchor" != 2 ]; }`
+	return `ok=0; w=""; for p in ` + routeList + `; do u="${p:+$p/}` + base + `"; ` +
+		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; w="$p"; break; fi; done; test "$ok" = 1` +
 		verifyStep +
+		corroborateStep +
 		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + agentAddr + ` -s ` + secret
 }
 
