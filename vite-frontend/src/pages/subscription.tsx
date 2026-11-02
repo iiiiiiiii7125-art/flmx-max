@@ -12,7 +12,7 @@ import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { ArrowDown, ArrowUp, ChevronDown, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Copy, QrCode } from "lucide-react";
 
 import SubscriptionAssignSection from "./subscription/assign";
 import NodeGroupsSection from "./subscription/node-groups";
@@ -34,7 +34,7 @@ import {
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
-import { copyText, panelOrigin } from "@/pages/inbound/share";
+import { copyText, panelOrigin, QrImage } from "@/pages/inbound/share";
 import { SubFrontPicker } from "@/pages/subscription/front-picker";
 import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -1362,6 +1362,8 @@ export default function SubscriptionPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
+  // 详情弹窗内展开的订阅二维码（按订阅 id 记，切换订阅自动收起）
+  const [qrDetailId, setQrDetailId] = useState<number | null>(null);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [resettingTraffic, setResettingTraffic] = useState(false);
@@ -1742,15 +1744,39 @@ export default function SubscriptionPage() {
                     <h3 className="text-sm font-semibold">流量统计</h3>
                     <SubTrafficStats id={detail.id} />
                   </div>
-                  <Button
-                    className="w-full"
-                    color="primary"
-                    startContent={<Copy className="h-4 w-4" />}
-                    variant="flat"
-                    onPress={() => copyText(url(detail), "订阅链接已复制")}
-                  >
-                    复制订阅链接（自动识别客户端）
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      className="flex-1"
+                      color="primary"
+                      startContent={<Copy className="h-4 w-4" />}
+                      variant="flat"
+                      onPress={() => copyText(url(detail), "订阅链接已复制")}
+                    >
+                      复制订阅链接（自动识别客户端）
+                    </Button>
+                    <Button
+                      aria-label={
+                        qrDetailId === detail.id
+                          ? "收起订阅二维码"
+                          : "显示订阅二维码"
+                      }
+                      color={qrDetailId === detail.id ? "primary" : "default"}
+                      isIconOnly
+                      variant="flat"
+                      onPress={() =>
+                        setQrDetailId(
+                          qrDetailId === detail.id ? null : detail.id,
+                        )
+                      }
+                    >
+                      <QrCode className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {qrDetailId === detail.id && (
+                    <div className="flex justify-center py-1">
+                      <QrImage text={url(detail)} />
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {SUB_CLIENTS.map((c) => {
                       const link = url(detail, c.format);

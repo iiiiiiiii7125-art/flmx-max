@@ -6,6 +6,7 @@ import {
   type NodeRenewalCycle,
 } from "@/pages/node/renewal";
 import { Node, NodeExpiryState } from "@/pages/node/types";
+import { formatTraffic } from "@/utils/traffic";
 
 /** Expiry, realtime-merge and sortable-row helpers for the node page (no React state). */
 export const NODE_FALLBACK_REFRESH_INTERVAL_MS = 15000;
@@ -73,11 +74,97 @@ export const getNodeExpiryMeta = (
   };
 };
 
+export const formatSpeed = (bytesPerSecond: number): string => {
+  if (bytesPerSecond === 0) return "0 B/s";
+
+  const k = 1024;
+  const sizes = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
+  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+
+  return (
+    parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+  );
+};
+
+export const formatUptime = (seconds: number): string => {
+  if (seconds === 0) return "-";
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}天${hours}小时`;
+  } else if (hours > 0) {
+    return `${hours}小时${minutes}分钟`;
+  } else {
+    return `${minutes}分钟`;
+  }
+};
+
+export const formatFlow = (bytes: number): string => {
+  return formatTraffic(bytes);
+};
+
+export const formatChainType = (chainType: number, hopInx: number) => {
+  if (chainType === 1) {
+    return "入口节点";
+  }
+  if (chainType === 2) {
+    return `中继跳点 #${hopInx}`;
+  }
+  if (chainType === 3) {
+    return "出口节点";
+  }
+
+  return "未知链路";
+};
+
+const isPlainDataObject = (
+  value: unknown,
+): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Deep equality over JSON-shaped values (API payloads and the plain
+ * derived objects hung off a Node). Used to keep node object references
+ * stable across polls when nothing actually changed, so memoized list
+ * rows can skip re-rendering.
+ */
+const sameDataValue = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) {
+    return true;
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return (
+      a.length === b.length &&
+      a.every((item, index) => sameDataValue(item, b[index]))
+    );
+  }
+
+  if (isPlainDataObject(a) && isPlainDataObject(b)) {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+
+    return (
+      aKeys.length === bKeys.length &&
+      aKeys.every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(b, key) &&
+          sameDataValue(a[key], b[key]),
+      )
+    );
+  }
+
+  return false;
+};
+
 export const mergeNodeRealtimeState = (
   incomingNode: Node,
   existingNode?: Node,
 ): Node => {
-  return {
+  const merged: Node = {
     ...incomingNode,
     systemInfo: existingNode?.systemInfo ?? incomingNode.systemInfo ?? null,
     copyLoading: existingNode?.copyLoading ?? incomingNode.copyLoading ?? false,
@@ -86,6 +173,15 @@ export const mergeNodeRealtimeState = (
     rollbackLoading:
       existingNode?.rollbackLoading ?? incomingNode.rollbackLoading ?? false,
   };
+
+  // Poll responses rebuild every node object from JSON; when the merged
+  // result carries exactly the data the existing object already has, keep
+  // the existing reference so unchanged rows do not re-render.
+  if (existingNode && sameDataValue(merged, existingNode)) {
+    return existingNode;
+  }
+
+  return merged;
 };
 
 export const SortableItem = ({
