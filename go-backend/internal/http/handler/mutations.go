@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -1563,16 +1564,73 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 // 形态的 legacy 落位（/etc/flux_agent、flux_agent 服务）零共用：
 // 同一台机器可同时跑脚本装的 agent、其他面板的 agent 与容器装的
 // agent，互不接管、互不误删。
+//
+// 多面板同机时再进一步：本面板的实例键（环境变量 FLMX_INSTANCE，
+// 由面板安装脚本写入后端运行环境）非空时，容器名、数据目录与
+// Compose 落位统一加后缀 -<实例键>（见 agentContainerName 等派生
+// 函数）——否则两个面板生成的命令会同名同目录，后装的覆写先装
+// 的 config 并 rm 重建其容器、把节点劫持到自己名下。实例键为空
+// （单面板默认）时派生结果与本节的历史字面量逐字一致。
 const (
 	nodeInstallModeScript        = "script"
 	nodeInstallModeDocker        = "docker"
 	nodeInstallModeDockerCompose = "docker-compose"
 
-	agentContainerName = "flmx-agent"
-	agentDataDir       = "/etc/flmx_agent"
-	agentComposeDir    = "/opt/docker/flmx-agent"
-	agentImageName     = "flmx-agent"
+	agentImageName = "flmx-agent"
 )
+
+// 容器形态资源基名（无实例后缀的形态）；实际资源名由下方派生
+// 函数按实例键拼接。
+const (
+	agentContainerBaseName = "flmx-agent"
+	agentDataBaseDir       = "/etc/flmx_agent"
+	agentComposeBaseDir    = "/opt/docker/flmx-agent"
+)
+
+// panelInstanceEnv 是面板实例键的环境变量名：同机多面板部署时，
+// 安装脚本为每个面板实例写不同的值进各自后端的运行环境。
+const panelInstanceEnv = "FLMX_INSTANCE"
+
+// panelInstanceID 返回本面板的实例键。口径：小写字母/数字开头，
+// 其后可含小写字母、数字、连字符与下划线，全长 ≤32——该值将拼进
+// 容器名与宿主机路径，必须先过白名单校验，杜绝路径穿越与命令
+// 注入。未设置或不合规一律按默认实例（空）处理。
+func panelInstanceID() string {
+	id := strings.TrimSpace(os.Getenv(panelInstanceEnv))
+	if !validPanelInstanceID(id) {
+		return ""
+	}
+	return id
+}
+
+func validPanelInstanceID(id string) bool {
+	if id == "" || len(id) > 32 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z' || c >= '0' && c <= '9':
+		case (c == '-' || c == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// agentInstanceSuffix 是容器形态资源的实例后缀：默认实例为空串
+// （资源名与历史逐字一致），多面板实例为 "-<实例键>"。
+func agentInstanceSuffix() string {
+	if id := panelInstanceID(); id != "" {
+		return "-" + id
+	}
+	return ""
+}
+
+func agentContainerName() string { return agentContainerBaseName + agentInstanceSuffix() }
+func agentDataDir() string       { return agentDataBaseDir + agentInstanceSuffix() }
+func agentComposeDir() string    { return agentComposeBaseDir + agentInstanceSuffix() }
 
 // normalizeNodeInstallMode 归一安装方式；空值按脚本形态（与历史
 // 请求完全一致）。未知值返回 ok=false，handler 拒绝生成命令。
@@ -1604,9 +1662,10 @@ func agentImageRef(version string) string {
 // 宽松权限落盘。addr 在 handler 侧已过格式校验、secret 为库内
 // 取值，与脚本形态同一插值口径。
 func agentConfigWriteStep(agentAddr, secret string) string {
-	return `mkdir -p ` + agentDataDir +
-		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' '` + agentAddr + `' '` + secret + `' > ` + agentDataDir + `/config.json)` +
-		` && chmod 600 ` + agentDataDir + `/config.json`
+	dataDir := agentDataDir()
+	return `mkdir -p ` + dataDir +
+		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' '` + agentAddr + `' '` + secret + `' > ` + dataDir + `/config.json)` +
+		` && chmod 600 ` + dataDir + `/config.json`
 }
 
 // buildNodeDockerInstallCommand 生成 Docker 形态安装命令：写配置 →
@@ -1618,12 +1677,14 @@ func buildNodeDockerInstallCommand(version, agentAddr, secret string, privileged
 	if privileged {
 		priv = " --privileged"
 	}
+	containerName := agentContainerName()
+	dataDir := agentDataDir()
 	return agentConfigWriteStep(agentAddr, secret) +
-		` && { docker rm -f ` + agentContainerName + ` >/dev/null 2>&1 || true; }` +
-		` && docker run -d --name ` + agentContainerName +
+		` && { docker rm -f ` + containerName + ` >/dev/null 2>&1 || true; }` +
+		` && docker run -d --name ` + containerName +
 		` --network host --cap-add NET_ADMIN` + priv +
 		` --restart unless-stopped` +
-		` -v ` + agentDataDir + `:` + agentDataDir +
+		` -v ` + dataDir + `:` + dataDir +
 		` ` + agentImageRef(version)
 }
 
@@ -1636,20 +1697,23 @@ func buildNodeDockerComposeInstallCommand(version, agentAddr, secret string, pri
 	if privileged {
 		priv = "\n    privileged: true"
 	}
+	containerName := agentContainerName()
+	dataDir := agentDataDir()
+	composeDir := agentComposeDir()
 	compose := `services:
-  ` + agentContainerName + `:
+  ` + containerName + `:
     image: ` + agentImageRef(version) + `
-    container_name: ` + agentContainerName + `
+    container_name: ` + containerName + `
     network_mode: host
     cap_add:
       - NET_ADMIN` + priv + `
     restart: unless-stopped
     volumes:
-      - ` + agentDataDir + `:` + agentDataDir + `
+      - ` + dataDir + `:` + dataDir + `
 `
 	return agentConfigWriteStep(agentAddr, secret) +
-		` && mkdir -p ` + agentComposeDir +
-		` && cat > ` + agentComposeDir + `/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f ` + agentComposeDir + `/docker-compose.yaml up -d
+		` && mkdir -p ` + composeDir +
+		` && cat > ` + composeDir + `/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f ` + composeDir + `/docker-compose.yaml up -d
 ` + compose + `FLMX_AGENT_COMPOSE_EOF
 `
 }

@@ -55,6 +55,16 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: bash scripts/check-doc-consistency.sh
 
+      # AG-03: the agent image tool set is an exec dependency of the
+      # container form; dropping a package stays green everywhere
+      # else and only breaks on real machines. Gate + mutation
+      # selftest, mirroring the check-private-ranges pair.
+      - name: Check agent image tools
+        working-directory: ${{ github.workspace }}
+        run: |
+          bash scripts/check-agent-image-tools.sh
+          bash scripts/check-agent-image-tools-selftest.sh
+
       - name: Build
         run: pnpm run build
 
