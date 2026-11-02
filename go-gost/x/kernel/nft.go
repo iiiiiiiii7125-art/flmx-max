@@ -199,6 +199,25 @@ func expandHops(ports []Port) []hopRule {
 	return hops
 }
 
+// portsHaveWhitelist reports whether any port is restricted to a
+// source whitelist. A whitelisted port is only protected while its
+// rules are actually installed in the nft table, so unlike traffic
+// counting a whitelist makes the sync security-critical.
+func portsHaveWhitelist(ports []Port) bool {
+	for _, p := range ports {
+		if len(p.Allow) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// reqHasWhitelist reports whether an enabled request carries at least
+// one whitelisted port.
+func reqHasWhitelist(req ApplyRequest) bool {
+	return req.Enabled && portsHaveWhitelist(req.Ports)
+}
+
 // allowGuard is the source whitelist of one inbound, split by family.
 type allowGuard struct {
 	v4, v6 []string
@@ -387,6 +406,10 @@ func (n *nftCounters) syncGuard(ports []Port, users []int64, guard *snellGuard) 
 		if guard != nil {
 			n.lastErr = "Snell 私网拦截需要 nftables: " + err.Error()
 			return fmt.Errorf("Snell 私网拦截需要 nftables: %v", err)
+		}
+		if portsHaveWhitelist(ports) {
+			n.lastErr = "入站白名单需要 nftables: " + err.Error()
+			return fmt.Errorf("入站白名单需要 nftables: %v", err)
 		}
 		n.lastErr = "未安装 nftables，无法统计流量"
 		return nil
