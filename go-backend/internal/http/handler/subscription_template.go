@@ -263,7 +263,10 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 	sample := "全部节点"
 	if req.SubscriptionID > 0 {
 		if s, err := h.repo.GetSubscription(req.SubscriptionID); err == nil && s != nil {
-			nodes, opts, sample = h.subEndpoints(s, rows), parsePipeline(s.Options).options(), s.Name
+			// 与订阅 preview 同口径取渲染集（含节点组拼接）：只取自有
+			// 来源会让组订阅在挑模板时看不到组节点、误判自动组收不到
+			// 节点。
+			nodes, opts, sample = h.subRenderEndpoints(s, rows), parsePipeline(s.Options).options(), s.Name
 		}
 	}
 	var names []string
