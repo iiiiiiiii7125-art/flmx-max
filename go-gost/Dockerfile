@@ -16,11 +16,27 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} env ${TARGETARCH:+GOARCH=${TARGETARCH}} go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/flmx-agent .
 
 FROM debian:bookworm-slim
-# Runtime tools the agent shells out to: nft (kernel nftables rules),
-# modprobe (tuning module loads), tcpkill (port release). procps is not
-# needed: tuning writes /proc/sys directly.
+# Runtime tools the agent shells out to:
+#   nft (nftables)     kernel nftables rules
+#   modprobe (kmod)    tuning module loads
+#   tcpkill (dsniff)   port release
+#   ip/tc (iproute2), pkill (procps), iperf3
+#                      the tuning engine's hard dependency list
+#                      (prepareTuneEngine's LookPath set, together with
+#                      bash/timeout/awk from the base image). They are
+#                      preinstalled so tuning never has to apt-install
+#                      at run time — an offline node or a read-only
+#                      layer would otherwise fail tuning outright.
+# This tool set is pinned by scripts/check-agent-image-tools.sh; do
+# not drop a package without updating that gate.
+#
+# Container boundary: this image has no systemd. Tuning steps that
+# persist through a systemd unit (flmx-tuning-qdisc.service) are
+# skipped in container form, and runtime sysctl writes only take
+# effect in privileged containers. Forwarding, nftables guards and
+# the Snell user guard behave exactly as in the script form.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates nftables kmod dsniff \
+      ca-certificates nftables kmod dsniff iproute2 procps iperf3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/flmx-agent /usr/local/bin/flmx-agent
@@ -32,7 +48,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # as the script install's data directory. Install commands mount the
 # host's own-named data directory here; the legacy shared directory of
 # the script form is never used, so both forms (and other panels) can
-# coexist on one host.
+# coexist on one host. The host-side directory may carry a per-panel
+# instance suffix (for multiple panels on one host); the in-container
+# path is always /etc/flmx_agent, and the entrypoint cd's here — the
+# agent's data-directory anchor (self-uninstall wipe + marker) relies
+# on that, so the entrypoint's cd target must not change.
 WORKDIR /etc/flmx_agent
 
 # Same runtime tuning knob as the script form's systemd unit.

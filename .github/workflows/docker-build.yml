@@ -261,6 +261,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # AG-03：构建前先过镜像工具集门——工具包是 agent 在容器内
+      # 的 exec 依赖，缺包构建仍成功、真机才炸，必须在推镜像前红。
+      - name: Check agent image tools
+        run: bash scripts/check-agent-image-tools.sh
+
       # 节点容器安装形态（Docker / Docker Compose）的 agent 镜像：
       # 纯增量 job，不进 create-release 的 needs —— 镜像构建失败不
       # 阻断既有 12 项发版资产；面板生成的容器安装命令引用此镜像。
