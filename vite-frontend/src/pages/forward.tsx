@@ -4012,7 +4012,7 @@ export default function ForwardPage() {
             {/* 地址信息 */}
             <div className="space-y-1">
               <button
-                className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
+                className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.inIp)
                     ? "hover:bg-default-100"
                     : ""
@@ -4052,7 +4052,7 @@ export default function ForwardPage() {
               </button>
 
               <button
-                className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
+                className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 transition-colors duration-200 ${
                   hasMultipleAddresses(forward.remoteAddr)
                     ? "hover:bg-default-100"
                     : ""
@@ -5462,7 +5462,7 @@ export default function ForwardPage() {
               {addressList.map((item) => (
                 <div
                   key={item.id}
-                  className="flex justify-between items-center p-3 border border-default-200 dark:border-default-100 rounded-lg"
+                  className="flex justify-between items-center p-3 border border-default-200 rounded-lg"
                 >
                   <code className="font-mono text-sm flex-1 mr-3 text-foreground">
                     {item.address}
@@ -5809,8 +5809,8 @@ export default function ForwardPage() {
                               <span
                                 className={`text-xs font-semibold ${
                                   result.success
-                                    ? "text-success-700 dark:text-success-300"
-                                    : "text-danger-700 dark:text-danger-300"
+                                    ? "text-success-700"
+                                    : "text-danger-700"
                                 }`}
                               >
                                 {result.success ? "成功" : "失败"}
