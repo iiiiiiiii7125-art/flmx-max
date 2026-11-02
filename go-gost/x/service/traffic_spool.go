@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // 流量可靠上报（spool）：待上报流量数值先落盘、面板确认后才清。
@@ -89,14 +90,18 @@ func ConfigureTrafficSpool(dir, identity string) error {
 	for _, orphan := range findOrphanTrafficSpools(dir, path) {
 		fmt.Printf("⚠️ 发现其他身份的流量 spool 文件 %s：其中的未确认流量不会自动上报，如系本节点旧地址/旧 secret 遗留，请人工核对处理\n", orphan)
 	}
+	for _, name := range sweepRejectedTrafficArchives(dir, time.Now()) {
+		fmt.Printf("🧹 流量隔离留证 %s 已超出保留上限（%d 天 / 最新 %d 份），已清理\n", name, int(rejectedArchiveMaxAge/(24*time.Hour)), rejectedArchiveMaxCount)
+	}
 	return nil
 }
 
 // findOrphanTrafficSpools 枚举 dir 下不属于 ownPath 的 spool 文件
 // （返回带大小的点名串）。只点名不处置：孤儿批次的归属无法由本
 // 进程证明，自动删除可能销毁待确认流量、自动并账可能串账。隔离
-// 留证存档（.rejected-*.json）随所属 spool 的生命周期人工处置，
-// 不在此列；原子写的 .tmp 残留不以 .json 结尾、天然不入列。
+// 留证存档（.rejected-*.json）不算孤儿，不在此列——它们由
+// sweepRejectedTrafficArchives 按保留上限老化清理；原子写的 .tmp
+// 残留不以 .json 结尾、天然不入列。
 func findOrphanTrafficSpools(dir, ownPath string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -119,6 +124,55 @@ func findOrphanTrafficSpools(dir, ownPath string) []string {
 	}
 	sort.Strings(orphans)
 	return orphans
+}
+
+// 隔离留证的老化上限：回执冲突时被隔离的批次存档（.rejected-*.json）
+// 是排障证据，保留 30 天且至多最新 100 份；超出即清。此前它们被
+// 孤儿扫描显式排除、只靠人工处置，冲突频发的节点上会无声累积
+// （R2-038 实例三）。
+const (
+	rejectedArchiveMaxAge   = 30 * 24 * time.Hour
+	rejectedArchiveMaxCount = 100
+)
+
+// sweepRejectedTrafficArchives 删除 dir 下超出保留上限的隔离留证
+// 存档，返回实际删除的文件名。识别口径与孤儿扫描一致（flmx_traffic_
+// 前缀＋.rejected- 标记＋.json 后缀）。只动留证存档：孤儿 spool 本体
+// 仍只点名不删除。尽力而为——单个删除失败只跳过，绝不阻断启动。
+func sweepRejectedTrafficArchives(dir string, now time.Time) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	type archive struct {
+		name string
+		mod  time.Time
+	}
+	var archives []archive
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "flmx_traffic_") || !strings.Contains(name, ".rejected-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		archives = append(archives, archive{name: name, mod: info.ModTime()})
+	}
+	// Newest first: index >= cap keeps only the newest cap entries.
+	sort.Slice(archives, func(i, j int) bool { return archives[i].mod.After(archives[j].mod) })
+	var removed []string
+	for i, a := range archives {
+		if i < rejectedArchiveMaxCount && now.Sub(a.mod) <= rejectedArchiveMaxAge {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, a.name)); err == nil {
+			removed = append(removed, a.name)
+		}
+	}
+	sort.Strings(removed)
+	return removed
 }
 
 func openTrafficSpool(path string) (*trafficSpool, error) {
