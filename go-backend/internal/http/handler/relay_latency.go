@@ -44,6 +44,10 @@ type relayLatency struct {
 	EntryNodeID int64      `json:"entryNodeId,omitempty"`
 	Hops        []relayHop `json:"hops"`
 	PathMs      int64      `json:"pathMs,omitempty"`
+	// PartialUntested（R8-024）：PathMs 只累加实测腿、且至少一腿
+	// 未测时为真——PathMs 是部分和，不是完整路径值，呈现层据此
+	// 与全实测总值区分（点位级同名标记同步置位）。
+	PartialUntested bool `json:"partialUntested,omitempty"`
 }
 
 type relayLatencyStore struct {
@@ -228,6 +232,10 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 		out.PathMs += hop.LatencyMs
 		pathLoss = combineLoss(pathLoss, hop.LossPct)
 	}
+	// R8-024：部分未测——总值（PathMs 与点位值）只含实测腿，必须
+	// 带可机读的不完整标记，不得与全实测总值同形呈现。
+	partial := measuredHops > 0 && untestedHops > 0
+	out.PartialUntested = partial
 	var points []latencyPoint
 	if entry != nil && len(entry.Points) > 0 {
 		// RB3-01：全腿未测时参考点分支同守卫——路径贡献恒 0，
@@ -247,17 +255,22 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 				p.OK = true
 				p.LatencyMs = pt.LatencyMs + out.PathMs
 				p.LossPct = combineLoss(pt.LossPct, pathLoss)
+				if partial {
+					p.PartialUntested = true
+				}
 			}
 			points = append(points, p)
 		}
 	} else {
 		p := latencyPoint{Name: relayPathPointName, OK: pathOK, Error: pathErr}
 		switch {
-		case pathOK && measuredHops == 0 && untestedHops > 0:
-			// 全腿未测：没有任何实测延迟可报，不得以 PathMs=0
-			// 冒充 1ms 完美样本（与质量探测全未测保持哨兵同
-			// 口径，R7-006）。点位记未测、数值留空，呈现层走
-			// 中性「未测」形态。
+		case pathOK && measuredHops == 0:
+			// 无任何实测腿：全腿未测（untestedHops>0）或零腿
+			// 路径（untestedHops==0，如 type-2 回环落地＋零链路
+			// 段，R8-048）。两者都没有实测延迟可报，不得以
+			// PathMs=0 冒充 1ms 完美样本（与质量探测对「段不
+			// 存在/未测」用哨兵区分的同仓纪律一致，R7-006）。
+			// 点位记未测、数值留空，呈现层走中性「未测」形态。
 			p.OK = false
 			p.Untested = true
 			p.Error = ""
@@ -266,18 +279,39 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 			if p.LatencyMs < 1 {
 				p.LatencyMs = 1
 			}
+			if partial {
+				p.PartialUntested = true
+			}
 		}
 		points = []latencyPoint{p}
 	}
 	probe := latencyProbe(points, now)
 	if !pathOK {
 		probe.Error = pathErr
-	} else if len(points) == 1 && points[0].Untested {
+	} else if allPointsUntested(points) {
 		// latencyProbe 对无 OK 点位填的默认误差文案不适用于未测。
+		// R8-020：清除条件按参考点数量泛化——全部点位未测即清
+		// （RB3-01 的清理原先只匹配单点形态，多参考点时顶层
+		// 残留「测试点都连不上」与点位未测语义自相矛盾）。点位
+		// 自身实测失败（Error 非空、Untested 为假）不被豁免。
 		probe.Error = ""
 	}
 	out.externalProbe = probe
 	return out
+}
+
+// allPointsUntested reports whether every point was deliberately left
+// unmeasured: no point answered and no point carries a real failure.
+func allPointsUntested(points []latencyPoint) bool {
+	if len(points) == 0 {
+		return false
+	}
+	for _, p := range points {
+		if !p.Untested {
+			return false
+		}
+	}
+	return true
 }
 
 // probeRelayLatency measures the given relay lines (all when ids is

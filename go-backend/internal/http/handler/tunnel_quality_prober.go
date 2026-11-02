@@ -67,11 +67,16 @@ type tunnelQualitySnapshot struct {
 	EntryToExitLoss    float64 `json:"entryToExitLoss"`
 	ExitToBingLoss     float64 `json:"exitToBingLoss"`
 	Success            bool    `json:"success"`
-	ErrorMessage       string  `json:"errorMessage,omitempty"`
-	Timestamp          int64   `json:"timestamp"`
-	ChainDetails       string  `json:"chainDetails,omitempty"`
-	ProbeTargetHost    string  `json:"probeTargetHost,omitempty"`
-	ProbeTargetPort    int     `json:"probeTargetPort,omitempty"`
+	// EntryToExitPartialUntested（R8-024）：入口→出口聚合只含
+	// 实测跳、至少一跳未测（UDP 协议段）时为真——该总值是部分和，
+	// 呈现层须与全实测总值区分。落库列 entry_to_exit_partial 同步
+	// 持久化，历史行同带此标记。
+	EntryToExitPartialUntested bool   `json:"entryToExitPartialUntested,omitempty"`
+	ErrorMessage               string `json:"errorMessage,omitempty"`
+	Timestamp                  int64  `json:"timestamp"`
+	ChainDetails               string `json:"chainDetails,omitempty"`
+	ProbeTargetHost            string `json:"probeTargetHost,omitempty"`
+	ProbeTargetPort            int    `json:"probeTargetPort,omitempty"`
 
 	// internal fields for db reporting
 	lastDBWrite int64 `json:"-"`
@@ -568,6 +573,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 			var totalLat float64
 			remainingSuccessProb := 1.0
 			measuredHops := 0
+			untestedHops := 0
 
 			nodesInPath := make([]chainNodeRecord, 0, 2+len(midNodesGrouped))
 			nodesInPath = append(nodesInPath, entry)
@@ -631,6 +637,7 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 					hop.Untested = true
 					hop.Latency = -1
 					hop.Loss = 100
+					untestedHops++
 					primaryHops = append(primaryHops, hop)
 					continue
 				}
@@ -662,6 +669,10 @@ func (p *tunnelQualityProber) probeTunnel(tunnelID int64) {
 				// 不得以 0/0 冒充完美样本（B07-001）。
 				snap.EntryToExitLatency = totalLat
 				snap.EntryToExitLoss = (1.0 - remainingSuccessProb) * 100.0
+				// R8-024：混合形态（有实测跳＋有未测跳）时总值是
+				// 部分和，必须在聚合层留不完整标记——逐跳明细有
+				// 未测披露、聚合层此前没有，与全实测同形呈现。
+				snap.EntryToExitPartialUntested = untestedHops > 0
 			} else if !probeOK {
 				snap.EntryToExitLatency = -1
 				snap.EntryToExitLoss = 100
@@ -1065,6 +1076,10 @@ func (p *tunnelQualityProber) storeResult(snap *tunnelQualitySnapshot) {
 	if snap.Success {
 		successInt = 1
 	}
+	partialInt := 0
+	if snap.EntryToExitPartialUntested {
+		partialInt = 1
+	}
 
 	q := &model.TunnelQuality{
 		TunnelID:           snap.TunnelID,
@@ -1072,6 +1087,7 @@ func (p *tunnelQualityProber) storeResult(snap *tunnelQualitySnapshot) {
 		ExitToBingLatency:  snap.ExitToBingLatency,
 		EntryToExitLoss:    snap.EntryToExitLoss,
 		ExitToBingLoss:     snap.ExitToBingLoss,
+		EntryToExitPartial: partialInt,
 		Success:            successInt,
 		ErrorMessage:       snap.ErrorMessage,
 		Timestamp:          snap.Timestamp,

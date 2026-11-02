@@ -17,6 +17,10 @@ function RelayPath({ latency }: { latency: RelayLatency }) {
         {pathOnly
           ? "入口到落地的各段延迟"
           : `= ${latency.entry ?? "入口"} 到测试点 + 下面各段`}
+        {/* 部分未测（R8-024）：总值仅含实测段，与逐腿「未测」披露呼应。 */}
+        {latency.partialUntested && (
+          <span className="ml-1">（部分段未测，总值仅含实测段）</span>
+        )}
       </div>
       {latency.hops.map((h, i) => (
         <div

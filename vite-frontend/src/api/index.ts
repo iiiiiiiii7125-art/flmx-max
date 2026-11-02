@@ -970,6 +970,7 @@ export const getMonitorTunnelQualityHistory = async (
         exitToBingLatency: item.exitToBingLatency,
         entryToExitLoss: item.entryToExitLoss,
         exitToBingLoss: item.exitToBingLoss,
+        entryToExitPartialUntested: (item.entryToExitPartial ?? 0) !== 0,
         success: item.success !== 0,
         errorMessage: item.errorMessage,
         timestamp: item.timestamp,

@@ -1276,6 +1276,9 @@ type TunnelQuality struct {
 	ExitToBingLatency  float64 `gorm:"column:exit_to_bing_latency" json:"exitToBingLatency"`
 	EntryToExitLoss    float64 `gorm:"column:entry_to_exit_loss" json:"entryToExitLoss"`
 	ExitToBingLoss     float64 `gorm:"column:exit_to_bing_loss" json:"exitToBingLoss"`
+	// EntryToExitPartial（R8-024）：入口→出口总值为部分和（仅实测
+	// 跳、至少一跳未测）时为 1，与快照 EntryToExitPartialUntested 同义。
+	EntryToExitPartial int `gorm:"column:entry_to_exit_partial;not null;default:0" json:"entryToExitPartial"`
 	Success            int     `gorm:"not null;default:1" json:"success"`
 	ErrorMessage       string  `gorm:"column:error_message;type:text" json:"errorMessage,omitempty"`
 	Timestamp          int64   `gorm:"not null;index:idx_tunnel_quality_tunnel_time,priority:2;index:idx_tunnel_quality_time" json:"timestamp"`

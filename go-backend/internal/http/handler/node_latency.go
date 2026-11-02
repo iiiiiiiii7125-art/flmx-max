@@ -59,6 +59,12 @@ type latencyPoint struct {
 	// and no latency value; presentation renders it neutrally
 	// as untested instead of unreachable.
 	Untested bool `json:"untested,omitempty"`
+	// PartialUntested marks an OK point whose value sums only the
+	// measured legs of its path: at least one leg was measured and
+	// at least one was deliberately left untested (R8-024), so the
+	// value is a partial sum and must stay distinguishable from a
+	// fully measured total in presentation.
+	PartialUntested bool `json:"partialUntested,omitempty"`
 	// Route names the return route to this point (node_route.go).
 	Route string `json:"route,omitempty"`
 	// RouteV6 is a dual-stack node's IPv6 return route.

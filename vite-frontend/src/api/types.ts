@@ -709,6 +709,8 @@ export interface TunnelQualityApiItem {
   exitToBingLatency: number;
   entryToExitLoss: number;
   exitToBingLoss: number;
+  /** 部分未测标记（R8-024）：入口→出口总值只含实测跳、至少一跳未测时为真。 */
+  entryToExitPartialUntested?: boolean;
   probeTargetHost?: string;
   probeTargetPort?: number;
   success: boolean;
@@ -725,6 +727,8 @@ export interface TunnelQualityHistoryApiItem {
   exitToBingLatency: number;
   entryToExitLoss: number;
   exitToBingLoss: number;
+  /** 部分未测标记（R8-024）：1 = 入口→出口总值为部分和（落库列原样）。 */
+  entryToExitPartial?: number;
   success: number;
   errorMessage?: string;
   timestamp: number;
@@ -885,6 +889,11 @@ export interface InboundProbePoint {
   error?: string;
   /** 未测标记（R7-006）：未实测点位，ok=false 但非不通，走中性呈现。 */
   untested?: boolean;
+  /**
+   * 部分未测标记（R8-024）：点位值只含实测腿、至少一腿未测，总值
+   * 为部分和，呈现须与全实测总值区分（如附「部分未测」注记）。
+   */
+  partialUntested?: boolean;
   /** 到该测试点的回程路由，如"电信 CN2 GIA"（第四批填充）。 */
   route?: string;
   /** The IPv6 return route of a dual-stack node, when traced. */
@@ -1042,6 +1051,8 @@ export interface RelayLatency extends InboundProbe {
   entryNodeId?: number;
   hops: RelayHop[];
   pathMs?: number;
+  /** 部分未测标记（R8-024）：pathMs 只含实测腿、至少一腿未测时为真。 */
+  partialUntested?: boolean;
 }
 
 export interface SubInfoApiData {

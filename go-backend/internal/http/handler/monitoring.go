@@ -328,12 +328,14 @@ func (h *Handler) monitorTunnelQualityHandler(w http.ResponseWriter, r *http.Req
 			ExitToBingLatency:  q.ExitToBingLatency,
 			EntryToExitLoss:    q.EntryToExitLoss,
 			ExitToBingLoss:     q.ExitToBingLoss,
-			Success:            q.Success == 1,
-			ErrorMessage:       q.ErrorMessage,
-			Timestamp:          q.Timestamp,
-			ChainDetails:       q.ChainDetails,
-			ProbeTargetHost:    target.Host,
-			ProbeTargetPort:    target.Port,
+			// R8-024：部分未测标记随落库列回读，快照面与写入时同口径。
+			EntryToExitPartialUntested: q.EntryToExitPartial != 0,
+			Success:                    q.Success == 1,
+			ErrorMessage:               q.ErrorMessage,
+			Timestamp:                  q.Timestamp,
+			ChainDetails:               q.ChainDetails,
+			ProbeTargetHost:            target.Host,
+			ProbeTargetPort:            target.Port,
 		})
 	}
 	response.WriteJSON(w, response.OK(snapshots))
