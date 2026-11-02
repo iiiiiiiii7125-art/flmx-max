@@ -49,6 +49,10 @@ func (pcIntNftPassthrough) CollectCounters(_ context.Context, _ runtimenft.SSHCo
 	return nil, nil
 }
 
+func (pcIntNftPassthrough) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool) error {
+	return nil
+}
+
 func pcIntSetup(t *testing.T) *r31FixF01Fixture {
 	t.Helper()
 	fx := setupR31FixF01(t)

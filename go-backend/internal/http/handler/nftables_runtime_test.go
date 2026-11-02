@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -37,6 +38,16 @@ type fakeNftablesManager struct {
 	counterSamples []runtimenft.CounterSample
 	lastConfig     runtimenft.SSHConfig
 	lastPlan       runtimenft.NodePlan
+	// blockErr fails every SetBlocked call; blockedCalls/ops record the
+	// pause-filter operations and their order relative to Reconcile.
+	blockErr     error
+	blockedCalls []fakeBlockedCall
+	ops          []string
+}
+
+type fakeBlockedCall struct {
+	port    int
+	blocked bool
 }
 
 func (f *fakeNftablesManager) Test(_ context.Context, cfg runtimenft.SSHConfig) error {
@@ -50,6 +61,7 @@ func (f *fakeNftablesManager) Reconcile(_ context.Context, cfg runtimenft.SSHCon
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reconcileHit++
+	f.ops = append(f.ops, "reconcile")
 	f.lastConfig = cfg
 	f.lastPlan = plan
 	if f.reconcileHook != nil {
@@ -70,6 +82,27 @@ func (f *fakeNftablesManager) Clear(context.Context, runtimenft.SSHConfig) error
 	defer f.mu.Unlock()
 	f.clearHit++
 	return f.clearErr
+}
+
+func (f *fakeNftablesManager) SetBlocked(_ context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastConfig = cfg
+	f.blockedCalls = append(f.blockedCalls, fakeBlockedCall{port: port, blocked: blocked})
+	f.ops = append(f.ops, fmt.Sprintf("block:%d:%t", port, blocked))
+	return f.blockErr
+}
+
+func (f *fakeNftablesManager) blockedCallList() []fakeBlockedCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeBlockedCall(nil), f.blockedCalls...)
+}
+
+func (f *fakeNftablesManager) opList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ops...)
 }
 
 func (f *fakeNftablesManager) CollectCounters(_ context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error) {

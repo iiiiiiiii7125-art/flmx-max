@@ -143,6 +143,10 @@ func (m *failFirstReconcileManager) CollectCounters(ctx context.Context, cfg run
 	return m.inner.CollectCounters(ctx, cfg)
 }
 
+func (m *failFirstReconcileManager) SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error {
+	return m.inner.SetBlocked(ctx, cfg, port, blocked)
+}
+
 // TestFix2AEnforceQuotaConcurrentInvariant 是 V2-02 的并发探针：多路
 // 入账同刻对同一用户并发执法（首轮 reconcile 失败制造分叉的
 // pausedSet），最终不变量：实际 paused 集合 == PausedForwardIDs
