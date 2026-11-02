@@ -1544,6 +1544,108 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + agentAddr + ` -s ` + secret
 }
 
+// ---------------------------------------------------------------------
+// 节点容器安装形态（Docker / Docker Compose）
+//
+// 与脚本形态并列的可选安装方式：agent 镜像由发版流水线随面板镜像
+// 一同构建发布（flmx-agent），安装命令把与脚本形态同格式的
+// config.json 写到我方自有数据目录后，以 host 网络 + NET_ADMIN
+// 拉起容器。全部资源走自有命名（容器 flmx-agent、数据目录
+// /etc/flmx_agent、Compose 落位 /opt/docker/flmx-agent），与脚本
+// 形态的 legacy 落位（/etc/flux_agent、flux_agent 服务）零共用：
+// 同一台机器可同时跑脚本装的 agent、其他面板的 agent 与容器装的
+// agent，互不接管、互不误删。
+const (
+	nodeInstallModeScript        = "script"
+	nodeInstallModeDocker        = "docker"
+	nodeInstallModeDockerCompose = "docker-compose"
+
+	agentContainerName = "flmx-agent"
+	agentDataDir       = "/etc/flmx_agent"
+	agentComposeDir    = "/opt/docker/flmx-agent"
+	agentImageName     = "flmx-agent"
+)
+
+// normalizeNodeInstallMode 归一安装方式；空值按脚本形态（与历史
+// 请求完全一致）。未知值返回 ok=false，handler 拒绝生成命令。
+func normalizeNodeInstallMode(mode string) (string, bool) {
+	switch strings.TrimSpace(mode) {
+	case "", nodeInstallModeScript:
+		return nodeInstallModeScript, true
+	case nodeInstallModeDocker:
+		return nodeInstallModeDocker, true
+	case nodeInstallModeDockerCompose:
+		return nodeInstallModeDockerCompose, true
+	}
+	return "", false
+}
+
+// agentImageRef 是容器形态使用的 agent 镜像引用：与面板镜像同仓
+// （ghcr.io/<owner>/flmx-agent:<version>），owner 取自 githubRepo。
+func agentImageRef(version string) string {
+	owner := githubRepo
+	if i := strings.Index(owner, "/"); i >= 0 {
+		owner = owner[:i]
+	}
+	return "ghcr.io/" + strings.ToLower(owner) + "/" + agentImageName + ":" + version
+}
+
+// agentConfigWriteStep 生成把 config.json 写入宿主机数据目录的命令
+// 段：格式与 install.sh write_flux_agent_config 的默认形态一致
+// （addr/secret 两字段），umask 077 + chmod 600 保证 secret 不经
+// 宽松权限落盘。addr 在 handler 侧已过格式校验、secret 为库内
+// 取值，与脚本形态同一插值口径。
+func agentConfigWriteStep(agentAddr, secret string) string {
+	return `mkdir -p ` + agentDataDir +
+		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' '` + agentAddr + `' '` + secret + `' > ` + agentDataDir + `/config.json)` +
+		` && chmod 600 ` + agentDataDir + `/config.json`
+}
+
+// buildNodeDockerInstallCommand 生成 Docker 形态安装命令：写配置 →
+// 移除同名旧容器（仅我方容器名，重跑即重建，兼作升级/重装路径）→
+// docker run。privileged 时附加 --privileged（服务器调优需要：
+// sysctl 写入与 modprobe 在非特权容器内不可用）。
+func buildNodeDockerInstallCommand(version, agentAddr, secret string, privileged bool) string {
+	priv := ""
+	if privileged {
+		priv = " --privileged"
+	}
+	return agentConfigWriteStep(agentAddr, secret) +
+		` && { docker rm -f ` + agentContainerName + ` >/dev/null 2>&1 || true; }` +
+		` && docker run -d --name ` + agentContainerName +
+		` --network host --cap-add NET_ADMIN` + priv +
+		` --restart unless-stopped` +
+		` -v ` + agentDataDir + `:` + agentDataDir +
+		` ` + agentImageRef(version)
+}
+
+// buildNodeDockerComposeInstallCommand 生成 Compose 形态安装命令：
+// 写配置 → 把 compose 文件写到固定落位（文件内无 secret，secret 只
+// 在数据目录的 config.json 中）→ docker compose up -d。改调优开关
+// 时重新获取命令重跑即可，只重写这一个 compose 文件。
+func buildNodeDockerComposeInstallCommand(version, agentAddr, secret string, privileged bool) string {
+	priv := ""
+	if privileged {
+		priv = "\n    privileged: true"
+	}
+	compose := `services:
+  ` + agentContainerName + `:
+    image: ` + agentImageRef(version) + `
+    container_name: ` + agentContainerName + `
+    network_mode: host
+    cap_add:
+      - NET_ADMIN` + priv + `
+    restart: unless-stopped
+    volumes:
+      - ` + agentDataDir + `:` + agentDataDir + `
+`
+	return agentConfigWriteStep(agentAddr, secret) +
+		` && mkdir -p ` + agentComposeDir +
+		` && cat > ` + agentComposeDir + `/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f ` + agentComposeDir + `/docker-compose.yaml up -d
+` + compose + `FLMX_AGENT_COMPOSE_EOF
+`
+}
+
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	// C059：版本发现两段链（API 60s + 重定向兜底 60s）后端界 120s，
 	// 此前独缺 extendWriteDeadline 而与全局 WriteTimeout 120s 恰等，
@@ -1559,6 +1661,11 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID      int64  `json:"id"`
 		Channel string `json:"channel"`
+		// Mode 选择安装形态：空/script 为脚本形态（历史行为不变），
+		// docker / docker-compose 为容器形态；Privileged 仅容器形态
+		// 消费（服务器调优需要特权容器）。
+		Mode       string `json:"mode"`
+		Privileged bool   `json:"privileged"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -1566,6 +1673,11 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("参数错误"))
+		return
+	}
+	mode, modeOK := normalizeNodeInstallMode(req.Mode)
+	if !modeOK {
+		response.WriteJSON(w, response.ErrDefault("安装方式无效"))
 		return
 	}
 
@@ -1613,7 +1725,15 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX2-C #2：节点 addr 归一为显式 scheme（见 normalizeNodeInstallAddr）。
 	agentAddr := normalizeNodeInstallAddr(panelAddr, panelRequestScheme(r))
-	cmd := buildNodeInstallCommand(version, agentAddr, secret)
+	var cmd string
+	switch mode {
+	case nodeInstallModeDocker:
+		cmd = buildNodeDockerInstallCommand(version, agentAddr, secret, req.Privileged)
+	case nodeInstallModeDockerCompose:
+		cmd = buildNodeDockerComposeInstallCommand(version, agentAddr, secret, req.Privileged)
+	default:
+		cmd = buildNodeInstallCommand(version, agentAddr, secret)
+	}
 	// R7-J-01 (non-BC part): a plaintext ws:// result must not leave
 	// silently — carry the explicit warning in the envelope. The
 	// command string above is generated exactly as before.

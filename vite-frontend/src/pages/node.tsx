@@ -49,6 +49,7 @@ import {
   getPeerRemoteUsageList,
   dismissNodeExpiryReminder,
   probeNodeLatency,
+  type NodeInstallMode,
   type ReleaseChannel,
 } from "@/api";
 import { LatencyCell, probePoints } from "@/components/latency-cell";
@@ -72,7 +73,6 @@ import {
   getConnectionStatusMeta,
   getRemoteSyncErrorMessage,
 } from "@/pages/node/display";
-import { tryCopyInstallCommand } from "@/pages/node/install-command";
 import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { copyWithToast } from "@/utils/clipboard";
 import {
@@ -350,6 +350,10 @@ export default function NodePage({
   const [installCommand, setInstallCommand] = useState("");
   const [installWarning, setInstallWarning] = useState("");
   const [currentNodeName, setCurrentNodeName] = useState("");
+  const [installNodeId, setInstallNodeId] = useState<number | null>(null);
+  const [installMode, setInstallMode] = useState<NodeInstallMode>("script");
+  const [installPrivileged, setInstallPrivileged] = useState(false);
+  const [installModeLoading, setInstallModeLoading] = useState(false);
 
   // 升级相关状态
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
@@ -1052,53 +1056,60 @@ export default function NodePage({
     }
   };
 
-  // Only the stable channel is published, so there is nothing to choose.
-  const openInstallSelector = (node: Node) =>
-    handleCopyInstallCommand(node, "stable");
-
-  // 复制安装命令
-  const handleCopyInstallCommand = async (
-    node: Node,
-    channel: ReleaseChannel,
+  // 拉取指定安装形态的命令（Only the stable channel is published）。
+  const fetchInstallCommand = async (
+    nodeId: number,
+    mode: NodeInstallMode,
+    privileged: boolean,
   ) => {
-    setNodeList((prev) =>
-      prev.map((n) => (n.id === node.id ? { ...n, copyLoading: true } : n)),
-    );
-
+    setInstallModeLoading(true);
     try {
-      const res = await getNodeInstallCommand(node.id, channel);
+      const res = await getNodeInstallCommand(nodeId, "stable", mode, privileged);
 
       if (res.code === 0 && res.data) {
+        setInstallCommand(res.data);
+        setInstallWarning(res.warning ?? "");
         // R7-J-01: a plaintext (ws://) install address must be shown
         // explicitly BEFORE the command is copied/used — never let it
-        // go straight to the clipboard in silence.
+        // be used in silence; the modal renders it as a banner too.
         if (res.warning) {
-          setInstallCommand(res.data);
-          setInstallWarning(res.warning);
-          setCurrentNodeName(node.name);
-          setInstallCommandModal(true);
           toast.error(res.warning, { duration: 8000 });
-        } else {
-          setInstallWarning("");
-          const copied = await tryCopyInstallCommand(res.data);
-
-          if (copied) {
-            toast.success("安装命令已复制到剪贴板");
-          } else {
-            setInstallCommand(res.data);
-            setCurrentNodeName(node.name);
-            setInstallCommandModal(true);
-          }
         }
       } else {
+        setInstallCommand("");
         toast.error(res.msg || "获取安装命令失败");
       }
     } catch {
+      setInstallCommand("");
       toast.error("获取安装命令失败");
     } finally {
-      setNodeList((prev) =>
-        prev.map((n) => (n.id === node.id ? { ...n, copyLoading: false } : n)),
-      );
+      setInstallModeLoading(false);
+    }
+  };
+
+  // 打开安装窗：默认脚本形态，方式/调优切换时重新拉取对应命令。
+  const openInstallSelector = (node: Node) => {
+    setCurrentNodeName(node.name);
+    setInstallNodeId(node.id);
+    setInstallMode("script");
+    setInstallPrivileged(false);
+    setInstallCommand("");
+    setInstallWarning("");
+    setInstallCommandModal(true);
+    void fetchInstallCommand(node.id, "script", false);
+  };
+
+  const handleInstallModeChange = (mode: NodeInstallMode) => {
+    setInstallMode(mode);
+    if (installNodeId != null) {
+      void fetchInstallCommand(installNodeId, mode, installPrivileged);
+    }
+  };
+
+  const handleInstallPrivilegedChange = (privileged: boolean) => {
+    setInstallPrivileged(privileged);
+    if (installNodeId != null) {
+      void fetchInstallCommand(installNodeId, installMode, privileged);
     }
   };
 
@@ -2989,8 +3000,13 @@ export default function NodePage({
         handleManualCopy={handleManualCopy}
         installCommand={installCommand}
         installCommandModal={installCommandModal}
+        installMode={installMode}
+        installModeLoading={installModeLoading}
+        installPrivileged={installPrivileged}
         installWarning={installWarning}
         setInstallCommandModal={setInstallCommandModal}
+        onInstallModeChange={handleInstallModeChange}
+        onInstallPrivilegedChange={handleInstallPrivilegedChange}
       />
 
       {/* 版本选择升级模态框 */}

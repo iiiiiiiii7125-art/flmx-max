@@ -240,6 +240,43 @@ jobs:
             -t ${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION} \
             ./go-backend
 
+  build-agent:
+    name: Build & Push Agent Image
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 节点容器安装形态（Docker / Docker Compose）的 agent 镜像：
+      # 纯增量 job，不进 create-release 的 needs —— 镜像构建失败不
+      # 阻断既有 12 项发版资产；面板生成的容器安装命令引用此镜像。
+      - name: Build and push Agent Docker images
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          OWNER="${{ needs.check-version.outputs.image_owner }}"
+
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION=${VERSION} \
+            --push \
+            -t ${{ env.REGISTRY }}/${OWNER}/flmx-agent:latest \
+            -t ${{ env.REGISTRY }}/${OWNER}/flmx-agent:${VERSION} \
+            ./go-gost
+
   create-release:
     name: Create Release (Tag Only)
     needs: [check-version, build-gost, build-vite, build-go-backend]
@@ -378,6 +415,9 @@ jobs:
 
           # Frontend
           docker pull ${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:${VERSION}
+
+          # Agent (node container install form)
+          docker pull ${{ env.REGISTRY }}/${OWNER}/flmx-agent:${VERSION}
           \`\`\`
 
           ## 🚀 Quick Install

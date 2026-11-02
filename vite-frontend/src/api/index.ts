@@ -237,14 +237,23 @@ export const deleteNode = (id: number, uninstall = false) =>
     uninstall?: "done" | "pending" | "unsupported";
     uninstallWarnings?: string[];
   }>("/node/delete", { id, uninstall });
+/** 节点安装形态：脚本 / Docker / Docker Compose（容器形态需 privileged 配合服务器调优）。 */
+export type NodeInstallMode = "script" | "docker" | "docker-compose";
+
 export const getNodeInstallCommand = (
   id: number,
   channel: ReleaseChannel = "stable",
+  mode: NodeInstallMode = "script",
+  privileged: boolean = false,
 ) =>
   // C059：/node/install 生成命令前无条件走版本发现两段链（API 60s +
   // 重定向兜底 60s），后端界 120s，与 /system/version（C080）同型，
   // 前端 150s、服务端放宽 180s（原走默认 30s 必被前端先行中止）。
-  Network.post<string>("/node/install", { id, channel }, { timeout: 150_000 });
+  Network.post<string>(
+    "/node/install",
+    { id, channel, mode, privileged },
+    { timeout: 150_000 },
+  );
 export const updateNodeOrder = (data: {
   nodes: Array<{ id: number; inx: number }>;
 }) => Network.post("/node/update-order", data);
