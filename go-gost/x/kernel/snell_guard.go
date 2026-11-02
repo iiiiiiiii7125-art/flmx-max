@@ -202,21 +202,31 @@ func ensureSnellGuardUser(ctx context.Context) (uid, gid uint32, err error) {
 	return uid, gid, nil
 }
 
-// isSnellServerSpec reports whether a process spec is an actual
-// snell-server process (as opposed to a shadow-tls front). The panel
-// renders one "snell-<inboundID>" process per Snell inbound.
-func isSnellServerSpec(name string) bool {
-	return strings.HasPrefix(name, "snell-")
+// isSnellServerSpec reports whether a process spec runs the
+// snell-server itself, as opposed to a shadow-tls front. Specs are
+// told apart by which binary they run, not by the rendered name:
+// the panel starts one main-binary process (Bin == "", i.e. the
+// kernel binary — for a Snell kernel that IS snell-server) per
+// inbound, and fronts are extra binaries (Bin == "shadow-tls").
+// Keying the guard posture and the credential drop on the name
+// prefix made both hinge on a naming convention — a rename on
+// either side would disarm them together, silently (R2-030). The
+// legacy front name stays as a negative belt only: a main-binary
+// spec carrying a front name is not treated as a server.
+func isSnellServerSpec(spec ProcessSpec) bool {
+	return spec.Bin == "" && !strings.HasPrefix(spec.Name, "stls-")
 }
 
 // reqHasSnellServer reports whether the request runs at least one
-// snell-server process when enabled.
+// snell-server process when enabled. The kernel type gates the
+// predicate; processSpecs' fallback shape (a single main-binary
+// process named after the type) is a server by the same rule.
 func reqHasSnellServer(req ApplyRequest) bool {
 	if req.Type != "snell" || !req.Enabled {
 		return false
 	}
 	for _, spec := range req.processSpecs() {
-		if isSnellServerSpec(spec.Name) {
+		if isSnellServerSpec(spec) {
 			return true
 		}
 	}

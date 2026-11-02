@@ -198,12 +198,8 @@ func TestManagerLifecycle(t *testing.T) {
 		t.Fatalf("re-applying the running config: %+v %v", st, err)
 	}
 
-	// Disable stops the process.
-	st, err = m.Apply(applyRequest(srv, `{"v":3}`, false))
-	if err != nil || st.Running {
-		t.Fatalf("disabled kernel still running: %+v %v", st, err)
-	}
-
+	// Counters are read from the live table while the kernel is
+	// enabled.
 	rec.listOut = `{"nftables":[{"metainfo":{}},{"counter":{"family":"inet","name":"in_7_tcp","table":"flmx_kernel","packets":3,"bytes":1200}},{"counter":{"family":"inet","name":"out_7_tcp","table":"flmx_kernel","bytes":99}},{"counter":{"name":"in_9_tcp","table":"other","bytes":5}}]}`
 	status := m.Status("xray")
 	if !status.NftAvailable || len(status.Counters) != 2 || status.Epoch == "" {
@@ -214,6 +210,20 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 	if len(status.Kernels) != 1 || len(status.Kernels[0].Logs) == 0 {
 		t.Fatalf("logs missing: %+v", status.Kernels)
+	}
+
+	// Disable stops the process and withdraws its rules (R2-001):
+	// with the only kernel disabled, the table — counters included —
+	// is gone, exactly as after a remove.
+	st, err = m.Apply(applyRequest(srv, `{"v":3}`, false))
+	if err != nil || st.Running {
+		t.Fatalf("disabled kernel still running: %+v %v", st, err)
+	}
+	if status = m.Status("xray"); len(status.Counters) != 0 || status.Epoch != "" {
+		t.Fatalf("disabled kernel's counters must be withdrawn with its rules: %+v", status)
+	}
+	if last := rec.scripts[len(rec.scripts)-1]; strings.Contains(last, "chain input") {
+		t.Fatalf("after disabling the only kernel the table must be dropped: %s", last)
 	}
 
 	// Restore on a fresh manager re-uses the installed binary.
