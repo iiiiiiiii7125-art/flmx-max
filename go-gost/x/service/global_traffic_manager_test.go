@@ -2,14 +2,9 @@ package service
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/go-gost/x/internal/util/crypto"
 )
 
 func TestGlobalTrafficManagerRemoveServicesDropsCachedEntries(t *testing.T) {
@@ -64,49 +59,27 @@ func TestGlobalTrafficManagerCollectAndReportDropsStaleEntriesAfterReporting(t *
 		httpAESCrypto = origAESCrypto
 	}()
 
-	httpReportURL = "http://panel.example.com/flow/upload?secret=abc"
-	// F-089 后加密器缺失即拒绝发送，本用例装真实加密器并解密后断言。
-	c, err := crypto.NewAESCrypto("abc")
+	// F-089 后加密器缺失即拒绝发送，桩装真实加密器并解密后断言。
+	captured := stubV2Panel(t, "abc", func(env trafficEnvelope) (*http.Response, error) {
+		return v2AckResponse(env)
+	})
+
+	spool, err := openTrafficSpool("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpAESCrypto = c
-
-	var requestBody string
-	reportDo = func(_ context.Context, req *http.Request, _ time.Duration) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("read request body: %v", err)
-		}
-		var wrapper struct {
-			Encrypted bool   `json:"encrypted"`
-			Data      string `json:"data"`
-		}
-		if jerr := json.Unmarshal(body, &wrapper); jerr != nil || !wrapper.Encrypted {
-			t.Fatalf("上报必须是加密信封: %v %s", jerr, body)
-		}
-		plain, derr := c.Decrypt(wrapper.Data)
-		if derr != nil {
-			t.Fatalf("decrypt report body: %v", derr)
-		}
-		requestBody = string(plain)
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("ok")),
-		}, nil
-	}
-
 	m := &GlobalTrafficManager{
 		serviceTraffic: map[string]*ServiceTraffic{
 			"stale-service": {ServiceName: "stale-service", UpBytes: 10, DownBytes: 20},
 		},
-		ctx: context.Background(),
+		spool: spool,
+		ctx:   context.Background(),
 	}
 
 	m.collectAndReport()
 
-	if !strings.Contains(requestBody, "stale-service") {
-		t.Fatalf("expected pending stale traffic to be reported first, body=%s", requestBody)
+	if len(*captured) != 1 || !strings.Contains((*captured)[0].raw, "stale-service") {
+		t.Fatalf("expected pending stale traffic to be reported first, got %+v", *captured)
 	}
 	if _, ok := m.serviceTraffic["stale-service"]; ok {
 		t.Fatalf("expected stale traffic entry to be removed after report collection")

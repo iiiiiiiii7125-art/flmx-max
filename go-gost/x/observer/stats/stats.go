@@ -86,6 +86,19 @@ func (s *Stats) ResetTraffic(reportedInputBytes, reportedOutputBytes uint64) {
 	s.outputBytes.Add(-reportedOutputBytes)
 }
 
+// TakeTraffic atomically swaps the pending traffic counters to zero
+// and returns their values. Concurrent Add calls land in either this
+// snapshot or the next one and are never overwritten — unlike the old
+// Get-then-Store remainder contract (see ResetTraffic's A02-004 note,
+// kept for compatibility). Periodic sampling and the shutdown flush
+// both take through here, so a byte is handed to the collector once.
+func (s *Stats) TakeTraffic() (input, output uint64) {
+	if s == nil {
+		return 0, 0
+	}
+	return s.inputBytes.Swap(0), s.outputBytes.Swap(0)
+}
+
 func (s *Stats) Reset() {
 	s.updated.Store(false)
 	s.totalConns.Store(0)

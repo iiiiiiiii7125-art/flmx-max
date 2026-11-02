@@ -5,16 +5,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-gost/x/internal/util/crypto"
 )
 
-// F-087 回归：stale（已注销）服务的最后一批流量，上报失败时必须保留
-// 待下一轮重试，不得在发送前就从 map 删除——先删后发、发送失败即
-// 静默丢失（违 D1-010「失败则保留」本意）。
+// F-087 回归（可靠上报 spool 版）：stale（已注销）服务的最后一批
+// 流量不得静默丢失。旧实现是内存冻结批次：条目先删后发、发送失败
+// 即永久丢失。现保证由 spool 落盘接管——计数快照先落盘进待确认
+// 批次（先落盘后清内存），发送失败时字节仍在 spool 里待下一轮
+// 重发，内存条目删与不删不再决定生死。
 func TestCollectAndReportKeepsStaleEntryWhenReportFails(t *testing.T) {
 	origReportDo := reportDo
 	origReportURL := httpReportURL
@@ -25,46 +26,47 @@ func TestCollectAndReportKeepsStaleEntryWhenReportFails(t *testing.T) {
 		httpAESCrypto = origAESCrypto
 	}()
 
-	c, err := crypto.NewAESCrypto("test-secret")
+	ack := false
+	captured := stubV2Panel(t, "test-secret", func(env trafficEnvelope) (*http.Response, error) {
+		if !ack {
+			return nil, errors.New("panel unreachable")
+		}
+		return v2AckResponse(env)
+	})
+
+	spoolPath := filepath.Join(t.TempDir(), "spool.json")
+	spool, err := openTrafficSpool(spoolPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpAESCrypto = c
-	httpReportURL = "http://panel.example.com/flow/upload?secret=abc"
-
-	// 第一轮：上报通道失败。
-	reportDo = func(_ context.Context, _ *http.Request, _ time.Duration) (*http.Response, error) {
-		return nil, errors.New("panel unreachable")
-	}
-
 	m := &GlobalTrafficManager{
 		serviceTraffic: map[string]*ServiceTraffic{
 			"stale-service": {ServiceName: "stale-service", UpBytes: 10, DownBytes: 20},
 		},
-		ctx: context.Background(),
+		spool: spool,
+		ctx:   context.Background(),
 	}
 
+	// 第一轮：上报通道失败。字节必须已落盘在 spool 待确认批次里。
 	m.collectAndReport()
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", len(*captured))
+	}
+	reopened, err := openTrafficSpool(spoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := reopened.state.Pending
+	if pending == nil || len(pending.Items) != 1 ||
+		pending.Items[0].N != "stale-service" || pending.Items[0].U != 10 || pending.Items[0].D != 20 {
+		t.Fatalf("上报失败后 stale 流量应落盘在 spool 待确认批次: %+v", pending)
+	}
 
-	entry, ok := m.serviceTraffic["stale-service"]
-	if !ok {
-		t.Fatal("上报失败后 stale 条目被删除，该批流量永久丢失")
-	}
-	if entry.UpBytes != 10 || entry.DownBytes != 20 {
-		t.Fatalf("上报失败后计数被改动: up=%d down=%d, want 10/20", entry.UpBytes, entry.DownBytes)
-	}
-
-	// 第二轮：上报成功，条目才应被清理。
-	reportDo = func(_ context.Context, _ *http.Request, _ time.Duration) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("ok")),
-		}, nil
-	}
+	// 第二轮：上报成功，待确认批次排空。
+	ack = true
 	m.collectAndReport()
-
-	if _, ok := m.serviceTraffic["stale-service"]; ok {
-		t.Fatal("上报成功后 stale 条目应被清理")
+	if m.spool.state.Pending != nil {
+		t.Fatal("上报成功后待确认批次应排空")
 	}
 }
 

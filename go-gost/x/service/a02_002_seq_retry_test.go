@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,37 +13,32 @@ import (
 	"github.com/go-gost/x/internal/util/crypto"
 )
 
-// A02-002 回归：同一批计数的重试必须原样重发（同条目、同 seq）。
-// 面板契约是「同 seq 重报」：已入账批次的重放回 ok 不重复入账，
-// 未入账批次返非 ok 待同 seq 重发。旧实现每次尝试都 nextSeq 换
-// 新号——面板已入账但响应丢失时，同批被当新批次二次入账。
+// A02-002 回归（可靠上报 spool 版）：同一批计数的重试必须原样重发
+// （同 stream、同 sequence、同字节）。面板契约是「同身份重报」：
+// 已入账批次的重放回确认不重复入账，未入账批次待原样重发。旧 v1
+// 实现每次尝试都 nextSeq 换新号——面板已入账但响应丢失时，同批被
+// 当新批次二次入账；且批次只活在内存，进程死亡即丢。现批次先落盘
+// spool 才发送：重试读的是 spool 里的待确认批次，期间新计入的
+// 流量只进 Buffered、不污染重发批次，确认后另组新批（sequence+1）。
 
-type capturedReport struct {
-	seq  int64
-	body string
+type capturedEnvelope struct {
+	raw string
+	env trafficEnvelope
 }
 
-func TestCollectAndReportRetriesFrozenBatchWithSameSeq(t *testing.T) {
-	origReportDo := reportDo
-	origReportURL := httpReportURL
-	origAESCrypto := httpAESCrypto
-	defer func() {
-		reportDo = origReportDo
-		httpReportURL = origReportURL
-		httpAESCrypto = origAESCrypto
-	}()
-
-	c, err := crypto.NewAESCrypto("test-secret")
+// stubV2Panel 安装一个脚本化 v2 面板桩：解密请求信封、记录明文，
+// 再按 respond 决定回执（网络错误/确认/拒绝）。返回捕获列表指针。
+func stubV2Panel(t *testing.T, secret string, respond func(env trafficEnvelope) (*http.Response, error)) *[]capturedEnvelope {
+	t.Helper()
+	c, err := crypto.NewAESCrypto(secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	httpAESCrypto = c
-	httpReportURL = "http://panel.example.com/flow/upload?secret=<redacted>"
+	httpReportURL = "http://panel.example.com/flow/upload?secret=" + secret
 
-	var captured []capturedReport
-	failNext := true
+	captured := &[]capturedEnvelope{}
 	reportDo = func(_ context.Context, req *http.Request, _ time.Duration) (*http.Response, error) {
-		seq, _ := strconv.ParseInt(req.Header.Get("X-Flmx-Seq"), 10, 64)
 		raw, err := io.ReadAll(req.Body)
 		if err != nil {
 			t.Fatalf("read body: %v", err)
@@ -60,80 +54,109 @@ func TestCollectAndReportRetriesFrozenBatchWithSameSeq(t *testing.T) {
 		if derr != nil {
 			t.Fatalf("decrypt: %v", derr)
 		}
-		captured = append(captured, capturedReport{seq: seq, body: string(plain)})
+		var env trafficEnvelope
+		if jerr := json.Unmarshal(plain, &env); jerr != nil {
+			t.Fatalf("decrypt 后必须是 v2 信封: %v", jerr)
+		}
+		*captured = append(*captured, capturedEnvelope{raw: string(plain), env: env})
+		return respond(env)
+	}
+	return captured
+}
+
+func v2AckResponse(env trafficEnvelope) (*http.Response, error) {
+	body, _ := json.Marshal(map[string]any{"stream": env.Stream, "sequence": env.Sequence})
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(string(body))),
+	}, nil
+}
+
+func TestCollectAndReportRetriesFrozenBatchWithSameSeq(t *testing.T) {
+	origReportDo := reportDo
+	origReportURL := httpReportURL
+	origAESCrypto := httpAESCrypto
+	defer func() {
+		reportDo = origReportDo
+		httpReportURL = origReportURL
+		httpAESCrypto = origAESCrypto
+	}()
+
+	failNext := true
+	captured := stubV2Panel(t, "test-secret", func(env trafficEnvelope) (*http.Response, error) {
 		if failNext {
 			// 模拟「面板已处理但响应丢失」：agent 侧只看到失败。
 			return nil, errors.New("response lost")
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("ok")),
-		}, nil
-	}
+		return v2AckResponse(env)
+	})
 
+	spool, err := openTrafficSpool("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := &GlobalTrafficManager{
 		serviceTraffic: map[string]*ServiceTraffic{
 			"svc-seq": {ServiceName: "svc-seq", UpBytes: 1111, DownBytes: 2222},
 		},
-		ctx: context.Background(),
+		spool: spool,
+		ctx:   context.Background(),
 	}
 
-	// 尝试 1：失败。计数保留、批次冻结。
+	// 尝试 1：失败。批次已落盘冻结，计数快照已转入 spool（内存清零
+	// 不等于丢失——数值在 spool 里）。
 	m.collectAndReport()
-	if len(captured) != 1 {
-		t.Fatalf("expected 1 attempt, got %d", len(captured))
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", len(*captured))
 	}
-	seq1 := captured[0].seq
-	if up, down := m.GetServiceTraffic("svc-seq"); up != 1111 || down != 2222 {
-		t.Fatalf("失败后计数被改动: %d/%d", up, down)
+	first := (*captured)[0]
+	if first.env.Sequence != 1 {
+		t.Fatalf("首批 sequence 应为 1, got %d", first.env.Sequence)
+	}
+	if m.spool.state.Pending == nil || len(m.spool.state.Pending.Items) != 1 ||
+		m.spool.state.Pending.Items[0].U != 1111 || m.spool.state.Pending.Items[0].D != 2222 {
+		t.Fatalf("失败后待确认批次应冻结在 spool: %+v", m.spool.state.Pending)
 	}
 
 	// 冻结期间新计入流量：不得并入重发批次。
-	entry := m.serviceTraffic["svc-seq"]
-	entry.mu.Lock()
-	entry.UpBytes += 5
-	entry.DownBytes += 5
-	entry.mu.Unlock()
+	m.addServiceTraffic("svc-seq", 5, 5)
 
-	// 尝试 2：仍失败。必须同 seq、同 body（1111/2222，不含 +5）。
+	// 尝试 2：仍失败。必须同 stream、同 sequence、同字节。
 	m.collectAndReport()
-	if len(captured) != 2 {
-		t.Fatalf("expected 2 attempts, got %d", len(captured))
+	if len(*captured) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", len(*captured))
 	}
-	if captured[1].seq != seq1 {
-		t.Fatalf("重试换了 seq: %d -> %d，同批将被面板二次入账", seq1, captured[1].seq)
-	}
-	if captured[1].body != captured[0].body {
-		t.Fatalf("重试 body 与首发不一致:\n%s\n%s", captured[0].body, captured[1].body)
-	}
-	if !strings.Contains(captured[1].body, "1111") || strings.Contains(captured[1].body, "1116") {
-		t.Fatalf("冻结批次被新流量污染: %s", captured[1].body)
+	if (*captured)[1].raw != first.raw {
+		t.Fatalf("重试字节与首发不一致:\n%s\n%s", first.raw, (*captured)[1].raw)
 	}
 
-	// 尝试 3：成功（面板或判重放回 ok、或首次入账）。只扣冻结量，
-	// 冻结期间新计入的 5/5 保留待下一批。
+	// 尝试 3：成功确认。待确认批次清除，序号推进到 2。
 	failNext = false
 	m.collectAndReport()
-	if len(captured) != 3 || captured[2].seq != seq1 {
-		t.Fatalf("成功尝试应仍为同 seq: %+v", captured)
+	if len(*captured) != 3 || (*captured)[2].raw != first.raw {
+		t.Fatalf("成功尝试应仍为同一批次原样重发: %+v", *captured)
 	}
-	if up, down := m.GetServiceTraffic("svc-seq"); up != 5 || down != 5 {
-		t.Fatalf("成功后应只剩冻结期新增的 5/5, got %d/%d", up, down)
+	if m.spool.state.Pending != nil {
+		t.Fatalf("确认后待确认批次应清除, got %+v", m.spool.state.Pending)
+	}
+	if m.spool.state.Next != 2 {
+		t.Fatalf("确认后 Next 应为 2, got %d", m.spool.state.Next)
 	}
 
-	// 尝试 4：新批次、新 seq（恰好 +1）、body 只含 5/5。
+	// 尝试 4：新批次、sequence=2、只含冻结期间新增的 5/5。
 	m.collectAndReport()
-	if len(captured) != 4 {
-		t.Fatalf("expected 4 attempts, got %d", len(captured))
+	if len(*captured) != 4 {
+		t.Fatalf("expected 4 attempts, got %d", len(*captured))
 	}
-	if captured[3].seq != seq1+1 {
-		t.Fatalf("新批次 seq 应为 %d, got %d", seq1+1, captured[3].seq)
+	second := (*captured)[3]
+	if second.env.Sequence != 2 || second.env.Stream != first.env.Stream {
+		t.Fatalf("新批次应同 stream sequence=2, got stream=%s seq=%d", second.env.Stream, second.env.Sequence)
 	}
-	if !strings.Contains(captured[3].body, `"u":5`) || !strings.Contains(captured[3].body, `"d":5`) {
-		t.Fatalf("新批次 body 应为 5/5: %s", captured[3].body)
+	if len(second.env.Items) != 1 || second.env.Items[0].U != 5 || second.env.Items[0].D != 5 {
+		t.Fatalf("新批次应只含 5/5: %+v", second.env.Items)
 	}
-	if up, down := m.GetServiceTraffic("svc-seq"); up != 0 || down != 0 {
-		t.Fatalf("全部上报后计数应清零: %d/%d", up, down)
+	if m.spool.state.Pending != nil || len(m.spool.state.Buffered) != 0 {
+		t.Fatalf("全部确认后 spool 应排空: %+v", m.spool.state)
 	}
 }
 
@@ -147,38 +170,43 @@ func TestCollectAndReportNonOKResponseKeepsBatchFrozen(t *testing.T) {
 		httpAESCrypto = origAESCrypto
 	}()
 
-	c, err := crypto.NewAESCrypto("test-secret")
+	ack := false
+	captured := stubV2Panel(t, "test-secret", func(env trafficEnvelope) (*http.Response, error) {
+		if !ack {
+			// 面板未入账时回非确认响应（纯文本 error）：agent 不得
+			// 当作确认清批次。
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("error")),
+			}, nil
+		}
+		return v2AckResponse(env)
+	})
+
+	spool, err := openTrafficSpool("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpAESCrypto = c
-	httpReportURL = "http://panel.example.com/flow/upload?secret=<redacted>"
-
-	var seqs []int64
-	reportDo = func(_ context.Context, req *http.Request, _ time.Duration) (*http.Response, error) {
-		seq, _ := strconv.ParseInt(req.Header.Get("X-Flmx-Seq"), 10, 64)
-		seqs = append(seqs, seq)
-		_, _ = io.ReadAll(req.Body)
-		// 面板未入账时返非 ok（body 非 "ok"）。
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("error")),
-		}, nil
-	}
-
 	m := &GlobalTrafficManager{
 		serviceTraffic: map[string]*ServiceTraffic{
 			"svc-seq2": {ServiceName: "svc-seq2", UpBytes: 7, DownBytes: 8},
 		},
-		ctx: context.Background(),
+		spool: spool,
+		ctx:   context.Background(),
 	}
 
 	m.collectAndReport()
 	m.collectAndReport()
-	if len(seqs) != 2 || seqs[0] != seqs[1] {
-		t.Fatalf("非 ok 响应后重试必须复用同 seq, got %v", seqs)
+	if len(*captured) != 2 || (*captured)[0].raw != (*captured)[1].raw {
+		t.Fatalf("非确认响应后重试必须原样重发, got %+v", *captured)
 	}
-	if up, down := m.GetServiceTraffic("svc-seq2"); up != 7 || down != 8 {
-		t.Fatalf("非 ok 后计数被改动: %d/%d", up, down)
+	if m.spool.state.Pending == nil {
+		t.Fatal("非确认响应后待确认批次被清除")
+	}
+
+	ack = true
+	m.collectAndReport()
+	if m.spool.state.Pending != nil {
+		t.Fatal("收到确认后待确认批次应清除")
 	}
 }

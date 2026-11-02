@@ -177,6 +177,26 @@ func (s *defaultService) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
+// FlushTraffic 把服务 stats 里尚未被周期采样换出的字节原子换出并
+// 交给全局管理器。停机时由 program.stopRuntime 在注销服务时调用：
+// 最后一批不足一个采样周期的字节不再滞留在服务 stats 里随进程
+// 消失，而是进管理器计数并由管理器 Stop 落盘进 spool 续报。
+// 与周期采样共用 TakeTraffic，同一字节只会被换出一次。
+func (s *defaultService) FlushTraffic() {
+	if s.options.observer == nil {
+		return
+	}
+	st, ok := s.status.Stats().(*xstats.Stats)
+	if !ok || st == nil {
+		return
+	}
+	input, output := st.TakeTraffic()
+	if input == 0 && output == 0 {
+		return
+	}
+	GetGlobalTrafficManager().addServiceTraffic(s.name, int64(output), int64(input))
+}
+
 func (s *defaultService) Serve() error {
 
 	s.execCmds("post-up", s.options.postUp)
@@ -404,6 +424,13 @@ func (s *defaultService) observeStats(ctx context.Context) {
 			if isUpdated {
 				inputBytes := st.Get(stats.KindInputBytes)
 				outputBytes := st.Get(stats.KindOutputBytes)
+				// 流量字节以 TakeTraffic 原子换出：换出量即本周期
+				// 增量（计数器此前只保留未采样量，与旧 Get+按快照
+				// 扣减的事件口径一致），且与 FlushTraffic 的停机
+				// 换出互斥——同一字节只会被一方换走，不重不漏。
+				if localStats, ok := st.(*xstats.Stats); ok {
+					inputBytes, outputBytes = localStats.TakeTraffic()
+				}
 
 				evs := []observer.Event{
 					xstats.StatsEvent{
@@ -433,16 +460,7 @@ func (s *defaultService) observeStats(ctx context.Context) {
 				// 理解（见 observer/stats/wrapper 的同注）。
 				if outputBytes > 0 || inputBytes > 0 {
 					globalManager := GetGlobalTrafficManager()
-					globalManager.AddTraffic(s.name, int64(outputBytes), int64(inputBytes))
-
-					// 扣减已转移到全局管理器的快照量（因为已经记录到
-					// 全局管理器中）。A02-004：ResetTraffic 按快照量
-					// 原子扣减，此处直接传快照值——旧写法传
-					// 「Get-快照」的剩余值由其 Store 回写，本次 Get
-					// 与 Store 之间新计入的字节会被覆盖丢失。
-					if xstats, ok := st.(*xstats.Stats); ok {
-						xstats.ResetTraffic(inputBytes, outputBytes)
-					}
+					globalManager.addServiceTraffic(s.name, int64(outputBytes), int64(inputBytes))
 				}
 
 				if err := s.options.observer.Observe(ctx, evs); err != nil {

@@ -156,7 +156,15 @@ func main() {
 	// 内核 state.json 同级的持久目录），不再放 os.TempDir()——/tmp
 	// 被清空后 seq 归零会被面板按重放静默丢弃、流量漏计。
 	if abs, err := filepath.Abs("config.json"); err == nil {
-		service.SetSeqFilePath(filepath.Join(filepath.Dir(abs), "flmx_agent_seq.json"))
+		dir := filepath.Dir(abs)
+		service.SetSeqFilePath(filepath.Join(dir, "flmx_agent_seq.json"))
+		// 可靠上报 spool 与 seq 文件同级落盘，按「面板地址＋节点
+		// secret」身份隔离选文件。初始化失败（存量 spool 损坏等）
+		// 拒绝启动：静默换新 spool 会无痕丢掉未确认流量。
+		if err := service.ConfigureTrafficSpool(dir, config.Addr+"\x00"+config.Secret); err != nil {
+			fmt.Printf("❌ 流量 spool 初始化失败，拒绝启动: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	p := &program{
