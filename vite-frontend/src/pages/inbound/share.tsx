@@ -5,7 +5,7 @@ import type {
 } from "@/api/types";
 
 import QRCode from "qrcode";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, QrCode, RefreshCw } from "lucide-react";
 
@@ -425,6 +425,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
   const [showQr, setShowQr] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const resetInFlightRef = useRef(false);
   const [expandedInbound, setExpandedInbound] = useState<number | null>(null);
 
   const load = (reset = false) =>
@@ -459,6 +460,10 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
   };
 
   const doReset = async () => {
+    // F-L6-01 自复扫补遗：重置是令牌轮换（非幂等），双发竞态下界面展示的
+    // 地址可能被后一道重置作废；此前只有 resetting 渲染状态，补 ref 复核。
+    if (resetInFlightRef.current) return;
+    resetInFlightRef.current = true;
     setResetting(true);
     try {
       if (await load(true)) {
@@ -466,6 +471,7 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
         setResetOpen(false);
       }
     } finally {
+      resetInFlightRef.current = false;
       setResetting(false);
     }
   };

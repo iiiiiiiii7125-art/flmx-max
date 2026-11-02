@@ -75,6 +75,11 @@ export function NodeTuneModal({
     manualMbps <= 100000;
   const aliveRef = useRef(true);
   const prevRunningRef = useRef(false);
+  // F-L6-01（状态-only 面处置）：run 此前只有 busy 渲染状态。启动类动作
+  // （auto/deep/restoreAuto）会在后端建任务，双发的效果不像置位/重置那样
+  // 从前端可证收敛，故补入口同步复核（只覆盖下发瞬间，任务本身的在途由
+  // jobRunning 轮询面接管）。
+  const runInFlightRef = useRef(false);
 
   const job = status?.job;
   const jobRunning = job?.state === "running";
@@ -157,7 +162,8 @@ export function NodeTuneModal({
     maxTrafficGB?: number,
     manualShapeMbps?: number,
   ) => {
-    if (!node) return;
+    if (!node || runInFlightRef.current) return;
+    runInFlightRef.current = true;
     setBusy(action);
     try {
       const res = await nodeTune(
@@ -189,6 +195,7 @@ export function NodeTuneModal({
     } catch {
       if (aliveRef.current) toast.error("调优失败");
     } finally {
+      runInFlightRef.current = false;
       if (aliveRef.current) setBusy("");
     }
   };

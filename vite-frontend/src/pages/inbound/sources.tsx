@@ -151,6 +151,8 @@ export function RemoteSourcesSection({
   const [deleting, setDeleting] = useState(false);
   // A file source being updated from the list's upload button.
   const reupload = useRef<RemoteSourceItem | null>(null);
+  // F-L6-01：删除订阅源下发的在途标记（见 remove）。
+  const removeInFlightRef = useRef(false);
   const reuploadInput = useRef<HTMLInputElement>(null);
 
   const report = (res: {
@@ -257,7 +259,10 @@ export function RemoteSourcesSection({
   };
 
   const remove = async (keepNodes: boolean) => {
-    if (!draft?.id) return;
+    // F-L6-01：入口同步复核。deleting 只是渲染状态，连点在渲染提交前可
+    // 对同一订阅源双发删除；ref 在下发瞬间拦截。
+    if (!draft?.id || removeInFlightRef.current) return;
+    removeInFlightRef.current = true;
     setDeleting(true);
     try {
       const res = await deleteRemoteSource(draft.id, keepNodes);
@@ -273,6 +278,7 @@ export function RemoteSourcesSection({
       setDraft(null);
       await onChanged();
     } finally {
+      removeInFlightRef.current = false;
       setDeleting(false);
     }
   };
