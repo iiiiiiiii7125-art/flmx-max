@@ -566,11 +566,21 @@ export function KernelPanel({
                         }))
                       }
                     >
-                      {pinnedVersions.map((v) => (
-                        <SelectItem key={v} textValue={v}>
-                          {v}
-                        </SelectItem>
-                      ))}
+                      {pinnedVersions.map((v) => {
+                        // Snell 6.0.0 is beta and serves v6 inbounds only
+                        // (doc/guide/nodes.md version table); label it in
+                        // the picker like prereleases are labelled below.
+                        const label =
+                          installForm.kernelType === "snell" && v === "6.0.0"
+                            ? `${v}（beta，仅 v6 入站可用）`
+                            : v;
+
+                        return (
+                          <SelectItem key={v} textValue={label}>
+                            {label}
+                          </SelectItem>
+                        );
+                      })}
                     </Select>
                   ) : (
                     <>

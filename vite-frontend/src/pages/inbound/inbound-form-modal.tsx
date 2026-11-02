@@ -1322,7 +1322,7 @@ export function InboundFormModal({
                     {form.kernelType !== "xray" &&
                       form.connIdleSeconds.trim() !== "" && (
                         <div className="flex items-center justify-between gap-2 rounded-lg border border-divider glass-inset px-3 py-2">
-                          <p className="text-xs font-semibold text-warning-600">
+                          <p className="text-xs font-semibold text-warning-700">
                             该入站为非 Xray 内核，存量空闲超时{" "}
                             {form.connIdleSeconds === "-1"
                               ? "不限"

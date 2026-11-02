@@ -4461,7 +4461,7 @@ export default function ForwardPage() {
         viewMode === "grouped" ? (
           sortedForwards.length > 0 ? (
             <>
-              <div className="flex items-center justify-between px-1 mb-3">
+              <div className="flex items-center justify-between rounded-lg glass-surface px-2.5 py-1 mb-3">
                 <span className="text-sm font-semibold text-foreground">
                   全部规则
                 </span>
@@ -4565,7 +4565,7 @@ export default function ForwardPage() {
           )
         ) : sortedForwards.length > 0 ? (
           <>
-            <div className="flex items-center justify-between px-1 mb-3">
+            <div className="flex items-center justify-between rounded-lg glass-surface px-2.5 py-1 mb-3">
               <span className="text-sm font-semibold text-foreground">
                 全部规则
               </span>
@@ -4886,7 +4886,7 @@ export default function ForwardPage() {
                 key={`direct-group-${group.userId}-${group.userName}`}
                 className="space-y-3"
               >
-                <div className="flex items-center justify-between px-1">
+                <div className="flex items-center justify-between rounded-lg glass-surface px-2.5 py-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">
                       {group.userName}
@@ -5828,7 +5828,7 @@ export default function ForwardPage() {
                             <div
                               className={`text-xs font-semibold ${
                                 result.success
-                                  ? "text-success-600 dark:text-success-400"
+                                  ? "text-success-700 dark:text-success-400"
                                   : "text-danger-600 dark:text-danger-400"
                               }`}
                             >
