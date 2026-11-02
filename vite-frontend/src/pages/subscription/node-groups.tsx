@@ -158,7 +158,6 @@ function GroupEditor({
 
   return (
     <Modal
-      backdrop="blur"
       classNames={{ base: modalBase }}
       isOpen={true}
       placement="center"
@@ -589,8 +588,7 @@ export default function NodeGroupsSection({
       )}
 
       <Modal
-        backdrop="blur"
-        classNames={{ base: modalBase }}
+          classNames={{ base: modalBase }}
         isOpen={Boolean(confirmDelete)}
         placement="center"
         onOpenChange={(open) => !open && setConfirmDelete(null)}
