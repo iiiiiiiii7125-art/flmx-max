@@ -102,6 +102,10 @@ export function InstallCommandModal({
   );
 }
 
+// R8-013：与后端 maxBatchUpgradeNodes 对齐的单批升级上限——选择面
+// 提示、超限禁用确认、提交前再预检（后端仍整单校验）。
+export const BATCH_UPGRADE_NODE_LIMIT = 50;
+
 export interface UpgradeNodeModalProps {
   handleConfirmUpgrade: () => Promise<void>;
   releases: {
@@ -113,6 +117,8 @@ export interface UpgradeNodeModalProps {
   }[];
   releasesLoading: boolean;
   selectedIds: Set<number>;
+  /** R8-013：已选中的本地节点数（远程节点提交时会被过滤，预检按此数） */
+  batchLocalCount?: number;
   selectedVersion: string;
   setSelectedVersion: Dispatch<SetStateAction<string>>;
   setUpgradeModalOpen: Dispatch<SetStateAction<boolean>>;
@@ -126,6 +132,7 @@ export function UpgradeNodeModal({
   releases,
   releasesLoading,
   selectedIds,
+  batchLocalCount,
   selectedVersion,
   setSelectedVersion,
   setUpgradeModalOpen,
@@ -199,6 +206,21 @@ export function UpgradeNodeModal({
                       ? `将升级到版本 ${selectedVersion}`
                       : "未选择版本，将自动使用最新版"}
                   </p>
+                  {upgradeTarget === "batch" && (
+                    <p
+                      className={
+                        (batchLocalCount ?? 0) > BATCH_UPGRADE_NODE_LIMIT
+                          ? "text-sm font-semibold text-danger-700"
+                          : "text-sm text-foreground"
+                      }
+                    >
+                      本次将升级 {batchLocalCount ?? 0}
+                      台本地节点（单次批量上限 {BATCH_UPGRADE_NODE_LIMIT} 台）
+                      {(batchLocalCount ?? 0) > BATCH_UPGRADE_NODE_LIMIT
+                        ? "，已超限，请减少选择后分批提交"
+                        : ""}
+                    </p>
+                  )}
                 </div>
               )}
             </ModalBody>
@@ -208,7 +230,11 @@ export function UpgradeNodeModal({
               </Button>
               <Button
                 color="warning"
-                isDisabled={releasesLoading}
+                isDisabled={
+                  releasesLoading ||
+                  (upgradeTarget === "batch" &&
+                    (batchLocalCount ?? 0) > BATCH_UPGRADE_NODE_LIMIT)
+                }
                 onPress={handleConfirmUpgrade}
               >
                 确认升级

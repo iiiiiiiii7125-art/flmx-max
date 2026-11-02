@@ -636,6 +636,8 @@ export interface SystemUpgradeStatusApiData {
   /** 后端落盘的升级终态：success / rolled_back / aborted / helper_start_failed */
   result?: string;
   finishedAt?: string;
+  /** R8-003：本次升级的第二锚降级点名（单锚降级时非空、双锚通过时缺省） */
+  anchorNote?: string;
 }
 
 export interface MonitorNodeApiItem {

@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261102.04"
+SCRIPT_VERSION="20261102.05"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1061,7 +1061,7 @@ EOF
     echo "      永不命中，规则会静默失效。"
     echo "      可选收紧：再用 And 加一个「主机名 等于 $SUB_DOMAIN」的条件，把规则只作用于前置域名。"
     echo "   3）在面板里保存前置地址（以下四步缺一不可，漏了任何一步设置都不会生效）："
-    echo "      ① 打开面板 → 左侧菜单进入「设置」页 → 找到「订阅前置地址」卡片；"
+    echo "      ① 打开面板 → 左侧菜单进入「网站配置」页 → 找到「订阅前置地址」卡片；"
     echo "      ② 点卡片里的「添加前置地址」按钮——该卡片初始没有任何输入框，"
     echo "         必须先点这个按钮，页面上才会出现一行新的输入框；"
     echo "      ③ 在新出现的输入框中填入 https://$SUB_DOMAIN ：必须带 https:// 、"
@@ -1474,9 +1474,34 @@ download_panel_update_compose() {
   fi
 }
 
+# R8-011：compose 内容校验的唯一实现，与 upgrade.md 面板节「落盘前
+# 内容校验」四要件对齐——合法 YAML 且可被 compose 解析（config -q）、
+# 含 services、且包含预期的 backend 与 frontend 两个服务
+# （config --services 逐行精确匹配）。旧实现更新路径只有 config -q
+# （不验两服务存在），首装/迁移路径更是下载直落盘、零内容校验，坏
+# compose 只在 up 拉起时才暴露。三条落盘路径（首装/菜单更新/迁移补
+# 下载）共用此函数，不许再各写一份弱化版。
+validate_panel_compose_content() {
+  local file="$1"
+  local version="$2"
+  local services
+  if ! FLUX_VERSION="$version" run_panel_compose -f "$file" config -q; then
+    return 1
+  fi
+  if ! services=$(FLUX_VERSION="$version" run_panel_compose -f "$file" config --services 2>/dev/null); then
+    return 1
+  fi
+  if ! printf '%s\n' "$services" | grep -qx "backend"; then
+    return 1
+  fi
+  if ! printf '%s\n' "$services" | grep -qx "frontend"; then
+    return 1
+  fi
+}
+
 validate_panel_update_compose() {
-  if ! FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" config -q; then
-    echo "❌ 新 Compose 配置校验失败，更新终止"
+  if ! validate_panel_compose_content "$UPDATE_COMPOSE_CANDIDATE" "$LATEST_VERSION"; then
+    echo "❌ 新 Compose 配置校验失败（须为合法 Compose 文件且包含 backend 与 frontend 服务），更新终止"
     return 1
   fi
 }
@@ -2010,8 +2035,23 @@ install_panel() {
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
   # R8-J-A 附带清理：不再靠 set -e 隐式中止，显式判返回值并给出
   # 路径信息，与更新路径（download_panel_update_compose）的口径对齐。
-  if ! download_verified_routed "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+  # R8-011：先落候选文件、过 validate_panel_compose_content 内容校验
+  # 才转正落盘（与更新路径同口径），不再下载直落 docker-compose.yml。
+  local compose_candidate
+  compose_candidate=$(mktemp "./.docker-compose.yml.install.XXXXXX") || return 1
+  if ! download_verified_routed "$DOCKER_COMPOSE_URL" "$compose_candidate"; then
+    rm -f "$compose_candidate"
     echo "❌ 下载 Compose 配置失败，安装终止: $DOCKER_COMPOSE_URL"
+    return 1
+  fi
+  if ! validate_panel_compose_content "$compose_candidate" "$RESOLVED_VERSION"; then
+    rm -f "$compose_candidate"
+    echo "❌ 下载的 Compose 配置内容校验失败（须为合法 Compose 文件且包含 backend 与 frontend 服务），安装终止"
+    return 1
+  fi
+  if ! chmod 0644 "$compose_candidate" || ! mv "$compose_candidate" docker-compose.yml; then
+    rm -f "$compose_candidate"
+    echo "❌ 写入 Compose 配置失败，安装终止"
     return 1
   fi
   # R6-L8-F-01：旧版资产模板可能没有可信代理跳数传递行，落盘前补齐
@@ -2228,8 +2268,22 @@ migrate_to_postgres() {
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
     # R8-J-A 附带清理：显式判返回值（原靠 set -e 隐式中止，无路径信息）。
-    if ! download_verified_routed "$DOCKER_COMPOSE_URL" docker-compose.yml; then
+    # R8-011：与首装同口径——先落候选、过内容校验才转正落盘。
+    local migrate_compose_candidate
+    migrate_compose_candidate=$(mktemp "./.docker-compose.yml.install.XXXXXX") || return 1
+    if ! download_verified_routed "$DOCKER_COMPOSE_URL" "$migrate_compose_candidate"; then
+      rm -f "$migrate_compose_candidate"
       echo "❌ 下载 Compose 配置失败，迁移终止: $DOCKER_COMPOSE_URL"
+      return 1
+    fi
+    if ! validate_panel_compose_content "$migrate_compose_candidate" "${RESOLVED_VERSION:-}"; then
+      rm -f "$migrate_compose_candidate"
+      echo "❌ 下载的 Compose 配置内容校验失败（须为合法 Compose 文件且包含 backend 与 frontend 服务），迁移终止"
+      return 1
+    fi
+    if ! chmod 0644 "$migrate_compose_candidate" || ! mv "$migrate_compose_candidate" docker-compose.yml; then
+      rm -f "$migrate_compose_candidate"
+      echo "❌ 写入 Compose 配置失败，迁移终止"
       return 1
     fi
     # R6-L8-F-01：同安装路径，落盘前补齐可信代理跳数传递行。
@@ -2450,7 +2504,7 @@ uninstall_panel() {
   # 一并清除，不留残口。
   rm -rf backups
   rm -f .env.bak.* .env.pre-postgres-migration gost.db.bak
-  rm -f .docker-compose.yml.update.*
+  rm -f .docker-compose.yml.update.* .docker-compose.yml.install.*
   echo "✅ 卸载完成"
 }
 
