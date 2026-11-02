@@ -868,7 +868,20 @@ export default function ConfigPage() {
     }
   };
 
+  // 后端「缺失＝开启」的开关键全集（枚举核对 1.9.3：config 页全部
+  // switch 键中仅此一键属此族——后端 prober 与
+  // isTunnelQualityMonitoringEnabled 均按 != "false" 判读，键缺失时
+  // 探测实际在跑；其余键 hide_footer_brand / forward_compact_mode /
+  // captcha_enabled / allow_local_remote_addr 的后端消费者均按
+  // === "true" 判读、缺失＝关闭，notify_enabled 同口径）。
+  // 显示判读与后端对齐：只归一显示、不写库，用户首次拨动才落值。
+  const SWITCH_DEFAULT_ON_KEYS = new Set(["monitor_tunnel_quality_enabled"]);
+
   const resolveSwitchSelected = (key: string): boolean => {
+    if (configs[key] === undefined && SWITCH_DEFAULT_ON_KEYS.has(key)) {
+      return true;
+    }
+
     return configs[key] === "true";
   };
 
@@ -887,7 +900,15 @@ export default function ConfigPage() {
       return true;
     }
 
-    return configs[item.dependsOn] === item.dependsValue;
+    // 依赖项的可见性与开关显示同口径：缺失＝开启的键在未保存时按
+    // "true" 判读（如探测间隔项随质量检测开关的默认开启一同显示）。
+    const dependsRaw = configs[item.dependsOn];
+    const dependsEffective =
+      dependsRaw === undefined && SWITCH_DEFAULT_ON_KEYS.has(item.dependsOn)
+        ? "true"
+        : dependsRaw;
+
+    return dependsEffective === item.dependsValue;
   };
 
   const getBrandInputRef = (key: BrandPreviewKey) => {

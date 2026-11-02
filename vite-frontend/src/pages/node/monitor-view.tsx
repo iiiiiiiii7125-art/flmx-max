@@ -492,8 +492,10 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
             <RefreshCw className="w-6 h-6 animate-spin" />
           </div>
         ) : error ? (
-          <div className="text-center py-8 text-danger-700 text-sm">
-            {error}
+          <div className="text-center py-8 text-sm">
+            <span className="inline-block rounded-md px-3 py-1.5 font-semibold tray-danger">
+              {error}
+            </span>
           </div>
         ) : data.length > 0 ? (
           <>
@@ -2247,7 +2249,7 @@ export function MonitorView({
                         <span
                           className={
                             r.errorMessage
-                              ? "text-danger-700 text-xs font-semibold"
+                              ? "rounded px-1 py-0.5 tray-danger text-xs font-semibold"
                               : "text-foreground text-xs font-semibold"
                           }
                         >

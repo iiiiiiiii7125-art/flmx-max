@@ -287,8 +287,10 @@ const QualityChartCard = React.memo(function QualityChartCard({
             <RefreshCw className="w-6 h-6 animate-spin" />
           </div>
         ) : error ? (
-          <div className="text-center py-8 text-danger-700 text-sm">
-            {error}
+          <div className="text-center py-8 text-sm">
+            <span className="inline-block rounded-md px-3 py-1.5 font-semibold tray-danger">
+              {error}
+            </span>
           </div>
         ) : data.length > 0 ? (
           <div className="h-64">
@@ -424,8 +426,10 @@ const TrafficChartCard = React.memo(function TrafficChartCard({
             <RefreshCw className="w-6 h-6 animate-spin" />
           </div>
         ) : error ? (
-          <div className="text-center py-8 text-danger-700 text-sm">
-            {error}
+          <div className="text-center py-8 text-sm">
+            <span className="inline-block rounded-md px-3 py-1.5 font-semibold tray-danger">
+              {error}
+            </span>
           </div>
         ) : data.length > 0 ? (
           <div className="h-64">
@@ -1375,7 +1379,9 @@ export function TunnelMonitorView({
             </span>
           )}
           {quality?.errorMessage && (
-            <span className="text-danger-700 ml-2">{quality.errorMessage}</span>
+            <span className="rounded px-1 py-0.5 tray-danger ml-2">
+              {quality.errorMessage}
+            </span>
           )}
         </div>
 
@@ -1536,7 +1542,7 @@ export function TunnelMonitorView({
 
                   <div className="flex justify-between items-center pt-2 border-t border-divider/50">
                     {quality?.errorMessage ? (
-                      <span className="text-[11px] font-semibold text-danger-700 truncate">
+                      <span className="text-[11px] font-semibold rounded px-1 py-0.5 tray-danger truncate">
                         {quality.errorMessage}
                       </span>
                     ) : quality?.timestamp ? (
