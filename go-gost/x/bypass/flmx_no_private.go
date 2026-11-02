@@ -31,12 +31,12 @@ const NoPrivateBypassName = "flmx-no-private"
 var nonPublicCIDRs = func() []*net.IPNet {
 	var out []*net.IPNet
 	for _, s := range []string{
-		"0.0.0.0/8",      // "this host on this network" (RFC 791)
-		"100.64.0.0/10",  // shared address space / CGNAT (RFC 6598)
-		"192.0.0.0/24",   // IETF protocol assignments (RFC 6890)
-		"198.18.0.0/15",  // benchmarking (RFC 2544)
-		"240.0.0.0/4",    // reserved, incl. 255.255.255.255 (RFC 1112)
-		"100::/64", // discard-only (RFC 6666)
+		"0.0.0.0/8",     // "this host on this network" (RFC 791)
+		"100.64.0.0/10", // shared address space / CGNAT (RFC 6598)
+		"192.0.0.0/24",  // IETF protocol assignments (RFC 6890)
+		"198.18.0.0/15", // benchmarking (RFC 2544)
+		"240.0.0.0/4",   // reserved, incl. 255.255.255.255 (RFC 1112)
+		"100::/64",      // discard-only (RFC 6666)
 		// NOTE: no ::ffff:0:0/96 entry — IPv4-mapped addresses are
 		// normalized via To4 in isNonPublicIP before matching, and a
 		// mapped CIDR here would collapse to 0.0.0.0 in ParseCIDR and

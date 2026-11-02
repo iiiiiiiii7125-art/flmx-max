@@ -117,14 +117,19 @@ docker logs flux-panel-postgres
 
 ### 手动方式：按步骤迁移
 
+> 📌 **本节（及 §六、§七）命令里的容器名、卷名、网络名一律以部署目录 `.env` 的实际值为准**，不要照抄模板回退名。涉及的键共五个：`PANEL_BACKEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`。安装脚本部署的默认值依次是 `flmx-panel-backend`、`flmx-panel-postgres`、`flmx-sqlite-data`、`flmx-postgres-data`、`flmx-network`（多实例部署各名再带 `-<实例 id>` 后缀）。模板回退名（`flux-panel-backend`、`flux-panel-postgres`、`sqlite_data`、`postgres_data`、`gost-network`）只在 `.env` 没有写这些键的部署上成立——即按 §三手工自备 `.env` 且未补这些键的情形；脚本安装的部署 `.env` 必然写有这五键，照抄回退名只会得到 `No such container/volume/network`。自检：在部署目录执行 `grep -E '^(PANEL_BACKEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，五行齐全即以下各步先 `source .env` 再用变量的写法可直接用。
+
 ### 1. 备份 SQLite 数据
 
 ```bash
+# 在部署目录执行，先加载 .env 取卷名（取值来源见上方注记）
+source .env
+
 # 停止所有服务
 docker compose down
 
 # 备份 SQLite 数据文件到当前目录
-docker run --rm -v sqlite_data:/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"
+docker run --rm -v "$FLMX_SQLITE_VOLUME":/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"
 ```
 
 ### 2. 配置 PostgreSQL 环境变量
@@ -140,8 +145,9 @@ docker compose up -d postgres
 等待 PostgreSQL 完全就绪：
 
 ```bash
-# 检查 PostgreSQL 健康状态
-docker inspect --format='{{.State.Health.Status}}' flux-panel-postgres
+# 检查 PostgreSQL 健康状态（容器名取 .env 的 PANEL_POSTGRES_CONTAINER）
+source .env
+docker inspect --format='{{.State.Health.Status}}' "$PANEL_POSTGRES_CONTAINER"
 # 输出 "healthy" 表示就绪
 ```
 
@@ -158,8 +164,8 @@ LOAD DATABASE
      INTO postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB};
 EOF
 docker run --rm \
-  --network gost-network \
-  -v sqlite_data:/sqlite \
+  --network "$FLMX_NETWORK" \
+  -v "$FLMX_SQLITE_VOLUME":/sqlite \
   -v /tmp/flmx-migrate.load:/tmp/flmx-migrate.load:ro \
   dimitri/pgloader:latest \
   pgloader /tmp/flmx-migrate.load
@@ -180,7 +186,8 @@ FATAL Failed to create the schema
 整条迁移会在建表阶段失败、一行数据都搬不过去（全库仅此一列有此问题）。脚本菜单的一键迁移已自动处理，手动迁移时先把库 dump 出来、只改这一列的默认值再重建一份副本，用副本迁移：
 
 ```bash
-docker run --rm -v sqlite_data:/sqlite alpine sh -c '
+source .env
+docker run --rm -v "$FLMX_SQLITE_VOLUME":/sqlite alpine sh -c '
   apk add --no-cache sqlite >/dev/null 2>&1
   sqlite3 /sqlite/gost.db .dump > /tmp/dump.sql
   sed "/CREATE TABLE.*peer_share_resource/,/);/ s/DEFAULT false/DEFAULT 0/g" /tmp/dump.sql > /tmp/dump-fixed.sql
@@ -251,12 +258,15 @@ docker compose up -d backend frontend
 
 ### 逻辑备份（pg_dump）
 
+以下命令在部署目录执行、先 `source .env`，容器名取 `$PANEL_POSTGRES_CONTAINER`（取值来源见 §四手动迁移开头的注记；脚本安装默认 `flmx-panel-postgres`）：
+
 ```bash
+source .env
 # 备份（在 Docker 环境下）
-docker exec flux-panel-postgres pg_dump -U flux_panel flux_panel > backup_$(date +%Y%m%d_%H%M%S).sql
+docker exec "$PANEL_POSTGRES_CONTAINER" pg_dump -U flux_panel flux_panel > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # 恢复
-docker exec -i flux-panel-postgres psql -U flux_panel flux_panel < backup_20260101_120000.sql
+docker exec -i "$PANEL_POSTGRES_CONTAINER" psql -U flux_panel flux_panel < backup_20260101_120000.sql
 ```
 
 ### 定时备份（cron）
@@ -267,7 +277,9 @@ docker exec -i flux-panel-postgres psql -U flux_panel flux_panel < backup_202601
 #!/bin/bash
 BACKUP_DIR="$(cd "$(dirname "$0")" && pwd)/backups"
 mkdir -p "$BACKUP_DIR"
-docker exec flux-panel-postgres pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
+# 容器名以脚本同目录（部署目录）.env 的 PANEL_POSTGRES_CONTAINER 为准，缺该键时回退模板名
+PG_CONTAINER=$(sed -n 's/^PANEL_POSTGRES_CONTAINER=//p' "$(dirname "$0")/.env" | tail -n 1)
+docker exec "${PG_CONTAINER:-flux-panel-postgres}" pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
 # 清理 30 天前的备份
 find "$BACKUP_DIR" -name "flmx_*.sql.gz" -mtime +30 -delete
 ```
@@ -294,16 +306,17 @@ echo "0 3 * * * <部署目录>/backup.sh" | crontab -
 
 **A**: 
 1. 确认 PostgreSQL 容器已完全就绪（状态为 `healthy`）。
-2. 确认 `--network gost-network` 参数正确，使 pgloader 容器与 PostgreSQL 在同一网络中。
+2. 确认 `--network` 参数填的是部署 `.env` 里 `FLMX_NETWORK` 的值（脚本安装默认 `flmx-network`；只有 `.env` 未写该键的手工部署才是 `gost-network`），使 pgloader 容器与 PostgreSQL 在同一网络中。
 3. 如果数据库已有表结构，pgloader 可能会报冲突。可以先清空目标数据库后重试。
 4. 若报 `invalid input syntax for type numeric: "false"`，是 1.3.2 及更早版本库的已知兼容问题，见上方「迁移被 `release_legacy_family` 堵住时」。
 
 ### Q: 如何查看当前使用的数据库类型？
 
-**A**: 查看后端容器的 `DB_TYPE` 环境变量：
+**A**: 查看后端容器的 `DB_TYPE` 环境变量（容器名取部署 `.env` 的 `PANEL_BACKEND_CONTAINER`，脚本安装默认 `flmx-panel-backend`）：
 
 ```bash
-docker exec flux-panel-backend printenv DB_TYPE
+source .env
+docker exec "$PANEL_BACKEND_CONTAINER" printenv DB_TYPE
 ```
 
 ### Q: 可以同时使用 SQLite 和 PostgreSQL 吗？
@@ -312,8 +325,9 @@ docker exec flux-panel-backend printenv DB_TYPE
 
 ### Q: PostgreSQL 数据存储在哪里？
 
-**A**: 在 Docker Compose 部署中，PostgreSQL 数据存储在名为 `postgres_data` 的 Docker Volume 中。可以通过以下命令查看：
+**A**: 在 Docker Compose 部署中，PostgreSQL 数据存储在一个 Docker Volume 中，卷名以部署 `.env` 的 `FLMX_POSTGRES_VOLUME` 为准（脚本安装默认 `flmx-postgres-data`，多实例部署带实例后缀；只有 `.env` 未写该键的手工部署才回退为 `postgres_data`）。可以通过以下命令查看：
 
 ```bash
-docker volume inspect postgres_data
+source .env
+docker volume inspect "$FLMX_POSTGRES_VOLUME"
 ```

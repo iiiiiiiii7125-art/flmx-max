@@ -205,7 +205,7 @@ func TestHealPersistedChainsLimitersCleanIsNoop(t *testing.T) {
 }
 
 // R18-INT（集成裁定）：RLimiters 进自愈。loader.Load 会加载 cfg.RLimiters
-//（loader.go:218-221），第二个同名项在 RateLimiterRegistry.Register 处
+// （loader.go:218-221），第二个同名项在 RateLimiterRegistry.Register 处
 // 报 registry: duplicate object、agent 退出——与链/限流器毒化同型。
 func TestDeduplicateRLimitersRemovesDuplicates(t *testing.T) {
 	cfg := &Config{RLimiters: []*LimiterConfig{

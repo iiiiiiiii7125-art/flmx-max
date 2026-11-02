@@ -16,7 +16,7 @@ type metadata struct {
 	handshakeTimeout time.Duration
 	maxIdleTimeout   time.Duration
 
-	backlog                int
+	backlog int
 }
 
 func (l *icmpListener) parseMetadata(md mdata.Metadata) (err error) {

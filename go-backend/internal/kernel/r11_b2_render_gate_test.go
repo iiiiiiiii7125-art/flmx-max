@@ -59,17 +59,17 @@ func r11b2QX(t *testing.T, e Endpoint) (string, bool) {
 
 func r11b2Garbage() map[string]Endpoint {
 	return map[string]Endpoint{
-		"A2-01 vmess fp bogus": r11b2EP(Proxy{"type": "vmess", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "cipher": "auto", "tls": true, "servername": "a.example.com", "client-fingerprint": "bogus123"}),
-		"A2-01 trojan fp bogus": r11b2EP(Proxy{"type": "trojan", "server": "203.0.113.10", "port": 443, "password": "pw", "tls": true, "sni": "a.example.com", "client-fingerprint": "bogus123"}),
-		"A2-01 anytls fp bogus": r11b2EP(Proxy{"type": "anytls", "server": "203.0.113.10", "port": 443, "password": "pw", "sni": "a.example.com", "client-fingerprint": "bogus123"}),
-		"A2-02 trojan xhttp bogus": r11b2EP(Proxy{"type": "trojan", "server": "203.0.113.10", "port": 443, "password": "pw", "tls": true, "sni": "a.example.com", "network": "xhttp", "xhttp-opts": map[string]interface{}{"path": "/xh", "mode": "bogus"}}),
-		"A2-03 ss plugin bogus": r11b2EP(Proxy{"type": "ss", "server": "203.0.113.10", "port": 443, "cipher": "aes-128-gcm", "password": "pw", "plugin": "obfs", "plugin-opts": map[string]interface{}{"mode": "bogus", "host": "bing.com"}}),
-		"A2-04 snell obfs bogus": r11b2EP(Proxy{"type": "snell", "server": "203.0.113.10", "port": 443, "psk": "psk12345678", "version": 4, "obfs-opts": map[string]interface{}{"mode": "bogus", "host": "bing.com"}}),
-		"A2-05 vmess cipher bogus": r11b2EP(Proxy{"type": "vmess", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "cipher": "bogus"}),
-		"A2-07 hy2 obfs bogus": r11b2EP(Proxy{"type": "hysteria2", "server": "203.0.113.10", "port": 443, "password": "pw", "obfs": "bogus", "obfs-password": "opw"}),
-		"A2-08 tuic cc bogus": r11b2EP(Proxy{"type": "tuic", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "password": "pw", "congestion-controller": "bogus"}),
-		"A2-11 vless reality badsid": r11b2EP(Proxy{"type": "vless", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "tls": true, "servername": "a.example.com", "reality-opts": map[string]interface{}{"public-key": r11b2PBK, "short-id": "0123ABCD"}}),
-		"A2-11 vless reality badpbk": r11b2EP(Proxy{"type": "vless", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "tls": true, "servername": "a.example.com", "reality-opts": map[string]interface{}{"public-key": "not-base64!!!", "short-id": "0123abcd"}}),
+		"A2-01 vmess fp bogus":        r11b2EP(Proxy{"type": "vmess", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "cipher": "auto", "tls": true, "servername": "a.example.com", "client-fingerprint": "bogus123"}),
+		"A2-01 trojan fp bogus":       r11b2EP(Proxy{"type": "trojan", "server": "203.0.113.10", "port": 443, "password": "pw", "tls": true, "sni": "a.example.com", "client-fingerprint": "bogus123"}),
+		"A2-01 anytls fp bogus":       r11b2EP(Proxy{"type": "anytls", "server": "203.0.113.10", "port": 443, "password": "pw", "sni": "a.example.com", "client-fingerprint": "bogus123"}),
+		"A2-02 trojan xhttp bogus":    r11b2EP(Proxy{"type": "trojan", "server": "203.0.113.10", "port": 443, "password": "pw", "tls": true, "sni": "a.example.com", "network": "xhttp", "xhttp-opts": map[string]interface{}{"path": "/xh", "mode": "bogus"}}),
+		"A2-03 ss plugin bogus":       r11b2EP(Proxy{"type": "ss", "server": "203.0.113.10", "port": 443, "cipher": "aes-128-gcm", "password": "pw", "plugin": "obfs", "plugin-opts": map[string]interface{}{"mode": "bogus", "host": "bing.com"}}),
+		"A2-04 snell obfs bogus":      r11b2EP(Proxy{"type": "snell", "server": "203.0.113.10", "port": 443, "psk": "psk12345678", "version": 4, "obfs-opts": map[string]interface{}{"mode": "bogus", "host": "bing.com"}}),
+		"A2-05 vmess cipher bogus":    r11b2EP(Proxy{"type": "vmess", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "cipher": "bogus"}),
+		"A2-07 hy2 obfs bogus":        r11b2EP(Proxy{"type": "hysteria2", "server": "203.0.113.10", "port": 443, "password": "pw", "obfs": "bogus", "obfs-password": "opw"}),
+		"A2-08 tuic cc bogus":         r11b2EP(Proxy{"type": "tuic", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "password": "pw", "congestion-controller": "bogus"}),
+		"A2-11 vless reality badsid":  r11b2EP(Proxy{"type": "vless", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "tls": true, "servername": "a.example.com", "reality-opts": map[string]interface{}{"public-key": r11b2PBK, "short-id": "0123ABCD"}}),
+		"A2-11 vless reality badpbk":  r11b2EP(Proxy{"type": "vless", "server": "203.0.113.10", "port": 443, "uuid": r11b2UUID, "tls": true, "servername": "a.example.com", "reality-opts": map[string]interface{}{"public-key": "not-base64!!!", "short-id": "0123abcd"}}),
 		"A2-11 trojan reality badsid": r11b2EP(Proxy{"type": "trojan", "server": "203.0.113.10", "port": 443, "password": "pw", "tls": true, "sni": "a.example.com", "reality-opts": map[string]interface{}{"public-key": r11b2PBK, "short-id": "0123ABCD"}}),
 	}
 }

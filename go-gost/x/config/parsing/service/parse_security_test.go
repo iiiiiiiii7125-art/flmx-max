@@ -32,7 +32,7 @@ func TestParseServiceRejectsShellHooks(t *testing.T) {
 }
 
 // 无 hook 的普通 service 不应被误伤：必须能通过 hook 检查
-//（测试环境未注册 listener，后续阶段报错是预期的，只要不是 hook 拒绝）。
+// （测试环境未注册 listener，后续阶段报错是预期的，只要不是 hook 拒绝）。
 func TestParseServiceAllowsNoHooks(t *testing.T) {
 	cfg := &config.ServiceConfig{
 		Name:     "test",

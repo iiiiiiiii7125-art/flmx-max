@@ -62,9 +62,9 @@ func TestFinalL1ValidateNoEmptyLabelURLHost(t *testing.T) {
 		{"https://example.com/x", false},
 		{"https://203.0.113.9/x", false},
 		{"https://user@example.com/x", false}, // userinfo 不影响 hostname
-		{"", false},           // 空值由调用方另行处理
-		{"not a url", false},  // 解析失败不由本谓词拒
-		{"https://", false},    // 无 hostname，不由本谓词拒
+		{"", false},                           // 空值由调用方另行处理
+		{"not a url", false},                  // 解析失败不由本谓词拒
+		{"https://", false},                   // 无 hostname，不由本谓词拒
 	}
 	for _, c := range cases {
 		err := validateNoEmptyLabelURLHost(c.raw)
@@ -85,7 +85,7 @@ func TestFinalL1ForwardCreateAdminRejectsEmptyLabelTarget(t *testing.T) {
 	code, msg := callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "empty-label-single",
 		"remoteAddr": "a..b:80",
-		"inPort": 30009, "strategy": "fifo",
+		"inPort":     30009, "strategy": "fifo",
 	})
 	if code == 0 {
 		t.Fatalf("L1-F-06: admin forwardCreate remoteAddr=a..b:80 must be rejected, got success")
@@ -98,7 +98,7 @@ func TestFinalL1ForwardCreateAdminRejectsEmptyLabelTarget(t *testing.T) {
 	code, msg = callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "empty-label-triple",
 		"remoteAddr": "a...b:443",
-		"inPort": 30010, "strategy": "fifo",
+		"inPort":     30010, "strategy": "fifo",
 	})
 	if code == 0 {
 		t.Fatalf("L1-F-06: admin forwardCreate remoteAddr=a...b:443 must be rejected, got success")
@@ -111,7 +111,7 @@ func TestFinalL1ForwardCreateAdminRejectsEmptyLabelTarget(t *testing.T) {
 	code, msg = callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "empty-label-multi",
 		"remoteAddr": "203.0.113.5:443,a..b:80",
-		"inPort": 30011, "strategy": "round",
+		"inPort":     30011, "strategy": "round",
 	})
 	if code == 0 {
 		t.Fatalf("L1-F-06: admin forwardCreate multi-target with a..b must be rejected, got success")

@@ -66,15 +66,15 @@ func TestR8B1ENCGrammarGarbageStillRejected(t *testing.T) {
 	pub32 := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 	pad := "100-111-1111.75-0-111.50-0-3333"
 	bad := []string{
-		"mlkem768x25519plus.garbage.0rtt." + pub32,        // 4 段坏 mode
-		"mlkem768x25519plus.native.2rtt." + pub32,         // 4 段坏 rtt
-		"mlkem768x25519plus.native.600s." + pub32,         // 4 段服务端形（ticket 占 rtt 位）
-		"mlkem768x25519plus.native.0rtt.AAAA",             // 4 段坏认证段（长度）
-		"mlkem768x25519plus.native.0rtt.!!!",              // 4 段坏认证段（非 base64）
-		"mlkem768x25519plus.native.0rtt",                  // 3 段缺认证段
-		"mlkem768x25519plus.native.0rtt.garbage." + pub32, // 5 段坏填充（既有格）
-		"mlkem768x25519plus.native.0rtt." + pad + ".AAAA", // 既有格：坏认证段长度
-		"mlkem768x25519plus.native.600s." + pad + "." + pub32, // 既有格：服务端形 ticket 段
+		"mlkem768x25519plus.garbage.0rtt." + pub32,                                                         // 4 段坏 mode
+		"mlkem768x25519plus.native.2rtt." + pub32,                                                          // 4 段坏 rtt
+		"mlkem768x25519plus.native.600s." + pub32,                                                          // 4 段服务端形（ticket 占 rtt 位）
+		"mlkem768x25519plus.native.0rtt.AAAA",                                                              // 4 段坏认证段（长度）
+		"mlkem768x25519plus.native.0rtt.!!!",                                                               // 4 段坏认证段（非 base64）
+		"mlkem768x25519plus.native.0rtt",                                                                   // 3 段缺认证段
+		"mlkem768x25519plus.native.0rtt.garbage." + pub32,                                                  // 5 段坏填充（既有格）
+		"mlkem768x25519plus.native.0rtt." + pad + ".AAAA",                                                  // 既有格：坏认证段长度
+		"mlkem768x25519plus.native.600s." + pad + "." + pub32,                                              // 既有格：服务端形 ticket 段
 		Settings{EncryptionAuth: EncryptionAuthX25519, EncryptionSecret: mustSecret(t)}.DecryptionString(), // 服务端形整串
 	}
 	for _, enc := range bad {

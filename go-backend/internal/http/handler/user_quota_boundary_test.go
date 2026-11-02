@@ -13,9 +13,9 @@ func TestIsUserQuotaExceededBoundary(t *testing.T) {
 	const gb = int64(1024 * 1024 * 1024)
 
 	tests := []struct {
-		name  string
-		view  *model.UserQuotaView
-		want  bool
+		name string
+		view *model.UserQuotaView
+		want bool
 	}{
 		{"nil view", nil, false},
 		{"no limits", &model.UserQuotaView{}, false},

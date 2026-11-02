@@ -24,6 +24,7 @@ var httpAESCrypto *crypto.AESCrypto // 新增：HTTP上报加密器
 var reportURLPreferenceMutex sync.RWMutex
 var preferredUploadURL string
 var preferredConfigURL string
+
 // reportHTTPClient 构造上报用 HTTP 客户端（A01-001）。此前 reportDo
 // 用裸客户端默认跟随重定向（最多 10 次、任意主机）：307/308 会把
 // 加密上报体原样带到异机，且异机回的 "ok" 会被当作面板确认——

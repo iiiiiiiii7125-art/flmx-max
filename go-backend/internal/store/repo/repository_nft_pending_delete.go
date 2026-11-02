@@ -341,4 +341,3 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 	}
 	return nil, nil
 }
-

@@ -84,4 +84,3 @@ func TestTunnelUpdatePreservesExplicitInIP(t *testing.T) {
 		t.Fatalf("A9-05: explicit inIp overwritten on edit, got %q want 203.0.113.99", inIP)
 	}
 }
-

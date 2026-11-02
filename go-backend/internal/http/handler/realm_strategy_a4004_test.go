@@ -54,7 +54,7 @@ func TestForwardCreateRealmRejectsUnsupportedStrategy(t *testing.T) {
 	code, msg := callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "multi-fifo",
 		"remoteAddr": "203.0.113.5:443,203.0.113.6:443",
-		"inPort": 30005, "strategy": "fifo",
+		"inPort":     30005, "strategy": "fifo",
 	})
 	if code == 0 {
 		t.Fatalf("A4-004: realm multi-target fifo create must be rejected, got success")
@@ -67,7 +67,7 @@ func TestForwardCreateRealmRejectsUnsupportedStrategy(t *testing.T) {
 	code, _ = callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "multi-rand",
 		"remoteAddr": "203.0.113.5:443,203.0.113.6:443",
-		"inPort": 30006, "strategy": "rand",
+		"inPort":     30006, "strategy": "rand",
 	})
 	if code == 0 {
 		t.Fatalf("A4-004: realm multi-target rand create must be rejected, got success")
@@ -77,7 +77,7 @@ func TestForwardCreateRealmRejectsUnsupportedStrategy(t *testing.T) {
 	code, msg = callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "multi-round",
 		"remoteAddr": "203.0.113.5:443,203.0.113.6:443",
-		"inPort": 30007, "strategy": "round",
+		"inPort":     30007, "strategy": "round",
 	})
 	if code != 0 {
 		t.Fatalf("realm multi-target round create must succeed, code=%d msg=%s", code, msg)
@@ -87,7 +87,7 @@ func TestForwardCreateRealmRejectsUnsupportedStrategy(t *testing.T) {
 	code, msg = callForwardCreate(t, h, map[string]interface{}{
 		"tunnelId": tunnelID, "name": "single-fifo",
 		"remoteAddr": "203.0.113.5:443",
-		"inPort": 30008, "strategy": "fifo",
+		"inPort":     30008, "strategy": "fifo",
 	})
 	if code != 0 {
 		t.Fatalf("realm single-target fifo create must succeed, code=%d msg=%s", code, msg)

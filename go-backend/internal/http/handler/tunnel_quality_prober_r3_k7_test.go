@@ -125,34 +125,34 @@ func TestR3K7ProbeTargetResolversAgree(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name: "bare v4 ServerIP",
-			from: v4From,
-			to:   &nodeRecord{ID: 30, ServerIP: "203.0.113.10"},
+			name:     "bare v4 ServerIP",
+			from:     v4From,
+			to:       &nodeRecord{ID: 30, ServerIP: "203.0.113.10"},
 			wantHost: "203.0.113.10", wantPort: 443,
 		},
 		{
-			name: "ported ServerIP stripped by pick",
-			from: v4From,
-			to:   &nodeRecord{ID: 30, ServerIP: "203.0.113.10:6366"},
-			wantHost: "203.0.113.10", wantPort: 443,
-		},
-		{
-			name:     "preferred port wins",
+			name:     "ported ServerIP stripped by pick",
 			from:     v4From,
 			to:       &nodeRecord{ID: 30, ServerIP: "203.0.113.10:6366"},
-			preferred: 30030,
-			wantHost: "203.0.113.10", wantPort: 30030,
+			wantHost: "203.0.113.10", wantPort: 443,
 		},
 		{
-			name: "bracketed v6 with port",
-			from: v6From,
-			to:   &nodeRecord{ID: 30, ServerIP: "[2001:db8::30]:6366"},
+			name:      "preferred port wins",
+			from:      v4From,
+			to:        &nodeRecord{ID: 30, ServerIP: "203.0.113.10:6366"},
+			preferred: 30030,
+			wantHost:  "203.0.113.10", wantPort: 30030,
+		},
+		{
+			name:     "bracketed v6 with port",
+			from:     v6From,
+			to:       &nodeRecord{ID: 30, ServerIP: "[2001:db8::30]:6366"},
 			wantHost: "2001:db8::30", wantPort: 443,
 		},
 		{
-			name: "hostname ServerIP",
-			from: v4From,
-			to:   &nodeRecord{ID: 30, ServerIP: "node.example.com"},
+			name:     "hostname ServerIP",
+			from:     v4From,
+			to:       &nodeRecord{ID: 30, ServerIP: "node.example.com"},
 			wantHost: "node.example.com", wantPort: 443,
 		},
 		{
@@ -165,9 +165,9 @@ func TestR3K7ProbeTargetResolversAgree(t *testing.T) {
 			wantHost:     "10.0.0.30", wantPort: 443,
 		},
 		{
-			name: "nil from falls back to stripped ServerIP",
-			from: nil,
-			to:   &nodeRecord{ID: 30, ServerIP: "203.0.113.10:6366"},
+			name:     "nil from falls back to stripped ServerIP",
+			from:     nil,
+			to:       &nodeRecord{ID: 30, ServerIP: "203.0.113.10:6366"},
 			wantHost: "203.0.113.10", wantPort: 443,
 		},
 		{

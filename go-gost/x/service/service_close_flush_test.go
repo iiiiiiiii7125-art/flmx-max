@@ -22,10 +22,10 @@ import (
 
 type fakeCloseListener struct{ closed bool }
 
-func (f *fakeCloseListener) Init(metadata.Metadata) error     { return nil }
-func (f *fakeCloseListener) Accept() (net.Conn, error)        { return nil, errors.New("closed") }
-func (f *fakeCloseListener) Addr() net.Addr                   { return nil }
-func (f *fakeCloseListener) Close() error                     { f.closed = true; return nil }
+func (f *fakeCloseListener) Init(metadata.Metadata) error { return nil }
+func (f *fakeCloseListener) Accept() (net.Conn, error)    { return nil, errors.New("closed") }
+func (f *fakeCloseListener) Addr() net.Addr               { return nil }
+func (f *fakeCloseListener) Close() error                 { f.closed = true; return nil }
 
 type fakeCloseHandler struct{}
 

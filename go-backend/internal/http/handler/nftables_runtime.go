@@ -652,7 +652,7 @@ func (h *Handler) nodeNftablesReconcile(w http.ResponseWriter, r *http.Request) 
 }
 
 // nftPendingDeleteList 是补充 E 的管理员可观测入口：列出所有待清理转发
-//（含节点、重试次数、下次重试时间、最后失败原因）。
+// （含节点、重试次数、下次重试时间、最后失败原因）。
 func (h *Handler) nftPendingDeleteList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))

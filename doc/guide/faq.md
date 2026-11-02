@@ -9,7 +9,7 @@
 ### 面板无法访问 (Connection Refused)？
 1. 检查防火墙是否放行了前端端口（默认 `6366`）。
 2. 检查容器是否正常运行: `docker ps`。
-3. 查看容器日志: `docker logs flux-panel-backend` 或 `docker logs vite-frontend`。
+3. 查看容器日志:容器名以部署目录 `.env` 的 `PANEL_BACKEND_CONTAINER` / `PANEL_FRONTEND_CONTAINER` 为准(脚本安装默认 `flmx-panel-backend` / `flmx-panel-frontend`)。在部署目录执行 `docker logs "$(sed -n 's/^PANEL_BACKEND_CONTAINER=//p' .env)"`,前端容器把键名换成 `PANEL_FRONTEND_CONTAINER` 即可。旧模板部署的 `.env` 里这两键的值就是旧名 `flux-panel-backend` / `vite-frontend`,同一条命令照样取得到。
 
 ### 节点显示离线？
 1. 检查节点服务器与面板服务器之间的网络连通性。
@@ -35,8 +35,8 @@
 
 ### PostgreSQL 容器启动失败？
 1. 检查 `DATABASE_URL` 里内嵌的口令：后端校验的是 `DATABASE_URL` 的口令（它从不读 `POSTGRES_PASSWORD` 本身），该口令为空、**或仍是默认值 `flux_panel_change_me` / `postgres`** 时，1.2.0 起后端会直接拒绝启动。`POSTGRES_PASSWORD` 是数据库容器初始化用的变量，两处口令要保持一致，只改一处同样起不来。
-2. 查看容器日志：`docker logs flux-panel-postgres`。
-3. 如果是首次启动后修改了密码，需要删除旧的数据卷重新初始化：`docker volume rm postgres_data`。
+2. 查看容器日志:容器名以部署目录 `.env` 的 `PANEL_POSTGRES_CONTAINER` 为准(脚本安装默认 `flmx-panel-postgres`)。在部署目录执行 `docker logs "$(sed -n 's/^PANEL_POSTGRES_CONTAINER=//p' .env)"`。
+3. 如果是首次启动后修改了密码，需要删除旧的数据卷重新初始化:卷名以 `.env` 的 `FLMX_POSTGRES_VOLUME` 为准(脚本安装默认 `flmx-postgres-data`),执行 `docker volume rm "$(sed -n 's/^FLMX_POSTGRES_VOLUME=//p' .env)"`。旧模板部署这两键的值即旧名 `flux-panel-postgres` / `postgres_data`。
 
 ## 节点与订阅
 

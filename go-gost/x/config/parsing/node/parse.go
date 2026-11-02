@@ -219,7 +219,7 @@ func ParseNode(hop string, cfg *config.NodeConfig, log logger.Logger) (*chain.No
 		rewriteURL := cfg.HTTP.RewriteURL
 		if rewriteURL == nil {
 			rewriteURL = cfg.HTTP.Rewrite
-		} 
+		}
 		for _, v := range rewriteURL {
 			if pattern, _ := regexp.Compile(v.Match); pattern != nil {
 				settings.RewriteURL = append(settings.RewriteURL, chain.HTTPURLRewriteSetting{

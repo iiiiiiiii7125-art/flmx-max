@@ -79,7 +79,7 @@ func TestKU11NormalizePeerServiceRelayHandlerBind(t *testing.T) {
 	t.Run("relay 已有 bind：显式值不动", func(t *testing.T) {
 		for _, explicit := range []interface{}{true, false} {
 			config := map[string]interface{}{
-				"handler": map[string]interface{}{"type": "relay", "metadata": map[string]interface{}{"bind": explicit, "nodelay": true}},
+				"handler":  map[string]interface{}{"type": "relay", "metadata": map[string]interface{}{"bind": explicit, "nodelay": true}},
 				"listener": map[string]interface{}{"type": "udp", "metadata": map[string]interface{}{"keepAlive": true, "ttl": "30s"}},
 			}
 			normalizePeerServiceUDPListenerMetadata(config)
