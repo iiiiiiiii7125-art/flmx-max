@@ -675,6 +675,15 @@ func (m *Manager) Status(logsFor string) Status {
 	return out
 }
 
+// Uninstall stops every kernel and removes the agent's nftables tables,
+// whose counters, whitelists and port hopping would otherwise outlive
+// the agent in the kernel. Used when the panel deletes this server and
+// asks the agent to remove itself.
+func (m *Manager) Uninstall() error {
+	m.Shutdown()
+	return m.nft.removeTables()
+}
+
 // Shutdown stops every kernel process; the persisted state is kept so the
 // next agent start restores them.
 func (m *Manager) Shutdown() {

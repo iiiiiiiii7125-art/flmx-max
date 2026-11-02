@@ -131,6 +131,13 @@ func logStartupFailure(stage string, err error) {
 }
 
 func main() {
+	// 已被面板卸载（容器形态留有标记）：配置已清除，先于配置加载
+	// 拦截，空转等待人工删除容器。
+	if socket.AgentUninstalled() {
+		idleAfterUninstall()
+		return
+	}
+
 	// 加载配置文件
 	config, err := LoadConfig("config.json")
 	if err != nil {

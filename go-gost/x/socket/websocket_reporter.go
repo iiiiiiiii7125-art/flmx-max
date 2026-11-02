@@ -1320,6 +1320,12 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = "RollbackAgentResponse"
 		// needSaveConfig = false (默认值)
 
+	// 面板删除服务器时卸载 Agent（先回复，再异步卸载）
+	case "UninstallAgent":
+		err = w.handleUninstallAgent()
+		response.Type = "UninstallAgentResponse"
+		// needSaveConfig = false (默认值)
+
 	// 代理内核（Xray / sing-box / Snell）相关命令，由 kernel.Manager 自行串行化
 	case "KernelApply", "KernelControl", "KernelStatus":
 		response.Type = cmd.Type + "Response"
