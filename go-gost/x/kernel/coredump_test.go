@@ -43,27 +43,35 @@ func TestRemoveCoreDumps(t *testing.T) {
 	coreLE := writeCoreFile(t, dir, "core", elfHeader(false, etCore))
 	corePID := writeCoreFile(t, dir, "core.1234", elfHeader(false, etCore))
 	coreBE := writeCoreFile(t, dir, "core.77", elfHeader(true, etCore))
-	plainNamedCore := writeCoreFile(t, dir, "core.88", []byte("just a text file named like a core"))
-	execNamedCore := writeCoreFile(t, dir, "core.99", elfHeader(false, etExec))
+	// R2-031: core_pattern shapes carrying %e and friends put the
+	// executable name next to the "core" component; verified ELF
+	// cores in those shapes are swept too — including a plain
+	// "core.txt", which the old digits-only pattern also spared.
+	coreExe := writeCoreFile(t, dir, "core.xray.1234", elfHeader(false, etCore))
+	exeCore := writeCoreFile(t, dir, "xray.core", elfHeader(false, etCore))
 	otherName := writeCoreFile(t, dir, "core.txt", elfHeader(false, etCore))
+	plainNamedCore := writeCoreFile(t, dir, "core.88", []byte("just a text file named like a core"))
+	textExeCore := writeCoreFile(t, dir, "core.sing-box.77", []byte("a log file, not a core dump"))
+	execNamedCore := writeCoreFile(t, dir, "core.99", elfHeader(false, etExec))
 	prefixName := writeCoreFile(t, dir, "mycore", elfHeader(false, etCore))
+	substrName := writeCoreFile(t, dir, "coreutils", elfHeader(false, etCore))
 	if err := os.Mkdir(filepath.Join(dir, "core.55"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	removed, freed := RemoveCoreDumps(dir)
-	if removed != 3 {
-		t.Fatalf("removed = %d, want 3 (core, core.1234, core.77)", removed)
+	if removed != 6 {
+		t.Fatalf("removed = %d, want 6 (core, core.1234, core.77, core.xray.1234, xray.core, core.txt)", removed)
 	}
-	if want := int64(3 * 64); freed != want {
+	if want := int64(6 * 64); freed != want {
 		t.Fatalf("freed = %d, want %d", freed, want)
 	}
-	for _, gone := range []string{coreLE, corePID, coreBE} {
+	for _, gone := range []string{coreLE, corePID, coreBE, coreExe, exeCore, otherName} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Fatalf("verified core dump %s must be deleted", gone)
 		}
 	}
-	for _, kept := range []string{plainNamedCore, execNamedCore, otherName, prefixName} {
+	for _, kept := range []string{plainNamedCore, textExeCore, execNamedCore, prefixName, substrName} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Fatalf("non-core file %s must be kept: %v", kept, err)
 		}
