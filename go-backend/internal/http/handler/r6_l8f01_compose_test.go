@@ -14,12 +14,17 @@ import (
 // 保留（存量显式值）或再生（模板标准行）。缺行 + 代码默认 1 跳与
 // 脚本默认两跳拓扑错配，登录限流键会收敛为全站共用一桶。
 
+// 集成对账（G3a×G3b）：夹具须含 backend＋frontend 两服务——G3b 的
+// validateComposeAsset 要求候选资产含两预期服务，只有 backend 的
+// 夹具会在 replaceCompose 全链测试里被内容校验正当拒绝。
 const r6ComposeCandidateNoHops = `services:
   backend:
     image: example/backend:1.9.3
     environment:
       DB_TYPE: sqlite
       SERVER_ADDR: :6365
+  frontend:
+    image: example/frontend:1.9.3
 networks:
   gost-network:
     name: gost-network
@@ -31,6 +36,8 @@ const r6ComposeExistingNoHops = `services:
     environment:
       DB_TYPE: sqlite
       SERVER_ADDR: :6365
+  frontend:
+    image: example/frontend:1.9.2
 networks:
   gost-network:
     name: gost-network
