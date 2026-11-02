@@ -216,7 +216,7 @@ function UserDashboard() {
   const getExpStatus = (expTime?: string | number) => {
     if (!expTime)
       return {
-        color: "text-green-600 dark:text-green-400",
+        color: "text-green-700 dark:text-green-400",
         bg: "bg-green-500/10 border-green-300",
         text: "永久",
       };
@@ -251,13 +251,13 @@ function UserDashboard() {
       };
     } else if (diffDays <= 30) {
       return {
-        color: "text-orange-600 dark:text-orange-400",
+        color: "text-orange-700 dark:text-orange-400",
         bg: "bg-orange-500/10 border-orange-300",
         text: `${diffDays}天后过期`,
       };
     } else {
       return {
-        color: "text-green-600 dark:text-green-400",
+        color: "text-green-700 dark:text-green-400",
         bg: "bg-green-500/10 border-green-300",
         text: `${diffDays}天后过期`,
       };
@@ -1159,13 +1159,13 @@ function UserDashboard() {
                             <div className="grid grid-cols-3 gap-1 text-xs font-semibold">
                               <div className="text-center">
                                 <div className="text-foreground mb-1">上传</div>
-                                <div className="font-medium text-green-600 dark:text-green-400 truncate">
+                                <div className="font-medium text-green-700 dark:text-green-400 truncate">
                                   {formatFlow(forward.inFlow || 0)}
                                 </div>
                               </div>
                               <div className="text-center">
                                 <div className="text-foreground mb-1">下载</div>
-                                <div className="font-medium text-orange-600 dark:text-orange-400 truncate">
+                                <div className="font-medium text-orange-700 dark:text-orange-400 truncate">
                                   {formatFlow(forward.outFlow || 0)}
                                 </div>
                               </div>

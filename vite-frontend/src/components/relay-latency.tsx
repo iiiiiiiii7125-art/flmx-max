@@ -37,7 +37,7 @@ function RelayPath({ latency }: { latency: RelayLatency }) {
         </div>
       ))}
       {latency.hops.length === 0 && latency.error && (
-        <div className="text-rose-600">{latency.error}</div>
+        <div className="text-rose-700">{latency.error}</div>
       )}
     </div>
   );

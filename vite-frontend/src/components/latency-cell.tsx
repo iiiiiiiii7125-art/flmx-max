@@ -309,7 +309,7 @@ export function LatencyCell({
                 {note ? `${note} · ` : ""}
                 {more > 0 ? `共 ${points.length} 个 · ` : ""}
                 {hiddenBad > 0 && (
-                  <span className="text-rose-600">{hiddenBad} 个异常 · </span>
+                  <span className="text-rose-700">{hiddenBad} 个异常 · </span>
                 )}
                 {probe ? ago(probe.checkedAt) : ""}
               </span>

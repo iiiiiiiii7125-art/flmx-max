@@ -232,7 +232,7 @@ export function NodeTuneModal({
                 </div>
               ) : !automatic ? (
                 <div className="space-y-2 py-4">
-                  <p className="text-sm text-warning-600">
+                  <p className="text-sm text-warning-700">
                     这台服务器的 Agent
                     不支持自动调优，请先升级服务器 Agent。
                   </p>
@@ -392,7 +392,7 @@ export function NodeTuneModal({
                     {deepReady && detection ? (
                       <div className="space-y-1.5">
                         {detection.estimatedGB <= 0 ? (
-                          <p className="text-xs font-semibold text-warning-600">
+                          <p className="text-xs font-semibold text-warning-700">
                             无法估算流量，请先跑自动调优。
                           </p>
                         ) : (
@@ -411,7 +411,7 @@ export function NodeTuneModal({
                             留下的结果），请先跑一次自动调优。
                           </p>
                         ) : detection.estimatedGB > 1000 ? (
-                          <p className="text-xs font-semibold text-warning-600">
+                          <p className="text-xs font-semibold text-warning-700">
                             预计流量超过 1000 GB 上限，不会启动扫描。
                           </p>
                         ) : (

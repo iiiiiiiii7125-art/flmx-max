@@ -44,12 +44,12 @@ const ROUTES: Record<string, [string, string]> = {
 };
 
 const NET_CLASS: Record<string, string> = {
-  CN2: "text-amber-600",
+  CN2: "text-amber-700",
   "163": "text-foreground",
-  "4837": "text-sky-600",
+  "4837": "text-sky-700",
   "9929": "text-violet-600",
-  CMIN2: "text-emerald-600",
-  CMI: "text-teal-600",
+  CMIN2: "text-emerald-700",
+  CMI: "text-teal-700",
   CT: "text-foreground",
 };
 
@@ -225,7 +225,7 @@ export function RouteModal({
                           </span>
                         )}
                         {leg.error ? (
-                          <span className="min-w-0 text-xs font-semibold text-rose-600">
+                          <span className="min-w-0 text-xs font-semibold text-rose-700">
                             {leg.error}
                           </span>
                         ) : leg.route && leg.route !== "未识别" ? (
