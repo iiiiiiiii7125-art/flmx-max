@@ -2093,7 +2093,7 @@ func (h *Handler) kernelVersions(w http.ResponseWriter, r *http.Request) {
 // versionBelow reports whether a concrete "x.y[.z]" version is older than
 // major.minor; "latest" and unparsable versions are not.
 func versionBelow(version string, major, minor int) bool {
-	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
+	parts := strings.SplitN(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".", 3)
 	if len(parts) < 2 {
 		return false
 	}
@@ -2110,7 +2110,7 @@ func versionBelow(version string, major, minor int) bool {
 // 比较（与 versionBelowPadded 同口径）：旧实现 SplitN 限 3 段会把第三段
 // 拼成 "5.1" 解析失败、对四段串无条件放行，"25.9.4.9" 能绕过 25.9.5 下限。
 func versionBelow3(version string, major, minor, patch int) bool {
-	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
 	if len(parts) < 3 {
 		return false
 	}
@@ -2129,23 +2129,83 @@ func versionBelow3(version string, major, minor, patch int) bool {
 	return pa < patch
 }
 
+// versionFloorExempt 报告一个版本串是否不携带可判定的具体版本：
+// 空串（无版本上下文，见 validateChainVersion 的既有契约）与 "latest"
+// 哨兵（用户显式选最新版，normalizeKernelVersion 的落盘形态）。两类
+// 在宽松版与严格版下都不视为过低。
+func versionFloorExempt(version string) bool {
+	v := strings.TrimSpace(version)
+	return v == "" || strings.EqualFold(v, "latest")
+}
+
+// versionBelowStrict / versionBelow3Strict 是硬门专用的严格变体
+// （R2-016/B-sub-03，BC）：宽松版对解析失败与缺段一律「不视为过低」，
+// 畸形的具体版本串（"25.9" 缺修订段、"25.5.16-rc1" 段内带后缀——两者
+// 都能通过 normalizeKernelVersion 的字符集校验、真实可达）会因此白过
+// 能力下限。严格变体要求版本完整解析（所需段数齐全且全为数字）才进
+// 入数值比较，解析失败/缺段一律视为低于下限（fail-closed）；豁免集
+// 见 versionFloorExempt。宽松版本体与软性消费点（渲染塑形、警告面）
+// 不动，硬门清单与软面登记见修复报告。
+func versionBelowStrict(version string, major, minor int) bool {
+	if versionFloorExempt(version) {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".", 3)
+	if len(parts) < 2 {
+		return true
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return ma < major || (ma == major && mi < minor)
+}
+
+// versionBelow3Strict 是 versionBelow3 的严格变体；四段及以上仍按
+// 前三段比较（与 A-sub-01 修复口径一致）。
+func versionBelow3Strict(version string, major, minor, patch int) bool {
+	if versionFloorExempt(version) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
+	if len(parts) < 3 {
+		return true
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	pa, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return true
+	}
+	if ma != major {
+		return ma < major
+	}
+	if mi != minor {
+		return mi < minor
+	}
+	return pa < patch
+}
+
 // kernelVersionGate 是入站对内核版本的硬性要求（单一真源）：入站保存
 // （inboundSave）、内核换版（kernelInstall）与下发前复检
 // （buildKernelApplyPayload）三处共用同一口径，避免"修一处漏一处"
 // （F-021：此前只有保存期查 AnyTLS/ACME 两门，换版与复检均未覆盖）。
 // 返回空串表示通过；非空为拒绝原因（不含入站名，调用方按上下文包装）。
-// "latest" 与不可解析版本按 versionBelow 既有语义不视为过低、不拦。
+// 本门是硬门：自 R2-016 起各下限走严格变体——"latest" 与空串维持既
+// 有豁免，畸形/缺段的具体版本串 fail-closed 不再放行（此前按
+// versionBelow 宽松语义一律不拦，口径变更属 BC）。
 func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
-	if in.Security.CertMode == kernel.CertModeACME && versionBelow(version, 1, 14) {
+	if in.Security.CertMode == kernel.CertModeACME && versionBelowStrict(version, 1, 14) {
 		return fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", version)
 	}
-	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelow(version, 1, 12) {
+	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelowStrict(version, 1, 12) {
 		return fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", version)
 	}
-	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelow(version, 1, 14) {
+	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelowStrict(version, 1, 14) {
 		return fmt.Sprintf("sing-box 内置 Snell 需要 1.14 及以上，节点安装的是 %s", version)
 	}
-	if in.Settings.EncryptionEnabled() && versionBelow3(version, 25, 9, 5) {
+	if in.Settings.EncryptionEnabled() && versionBelow3Strict(version, 25, 9, 5) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
 	}
 	// 出站 IP 策略版本门（S4）：策略字段随入站一同进入 gate，保存/复检/
@@ -2185,11 +2245,12 @@ func xrayPrivateBlockWarning(kernelType, version string) string {
 
 // encDialGate 是 R2X-007 的 ENC 拨号侧版本门：链式/分流目标带 VLESS
 // 加密时，拨号方内核同样需要 Xray 25.9.5+——ENC 不只是服务端属性。
-// 版本比较与入站自有门（kernelVersionGate）同用 versionBelow3，保持
-// 单一口径；保存（validateChainVersion）、下发（buildKernelApplyPayload）
-// 与换版扫描（checkKernelVersionGates）三面共用。返回空串表示通过。
+// 版本比较与入站自有门（kernelVersionGate）同用严格变体
+// versionBelow3Strict（R2-016），保持单一口径；保存（validateChainVersion）、
+// 下发（buildKernelApplyPayload）与换版扫描（checkKernelVersionGates）
+// 三面共用。返回空串表示通过。
 func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
-	if e == nil || kernelType != kernel.TypeXray || !versionBelow3(version, 25, 9, 5) || !e.HasVLESSEncryption() {
+	if e == nil || kernelType != kernel.TypeXray || !versionBelow3Strict(version, 25, 9, 5) || !e.HasVLESSEncryption() {
 		return ""
 	}
 	return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
@@ -2202,7 +2263,7 @@ func encDialGate(kernelType, version string, e *kernel.Endpoint) string {
 // （buildKernelApplyPayload）与换版扫描（checkKernelVersionGates）
 // 三面共用同一口径；返回空串表示通过。
 func naiveDialGate(kernelType, version string, e *kernel.Endpoint) string {
-	if e == nil || kernelType != kernel.TypeSingbox || !versionBelow(version, 1, 13) || !kernel.IsNaiveEndpoint(*e) {
+	if e == nil || kernelType != kernel.TypeSingbox || !versionBelowStrict(version, 1, 13) || !kernel.IsNaiveEndpoint(*e) {
 		return ""
 	}
 	return fmt.Sprintf("sing-box 1.13 及以上才能连接 Naive 节点，节点安装的是 %s", version)
@@ -2255,7 +2316,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		}
 		// 经 Snell 节点出站（链式/分流目标）的入站同样要求 sing-box
 		// 1.14+；目标入站不在本内核上，gate 看不到，须单独扫描（S4）。
-		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 14) {
+		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 14) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && t.Protocol == kernel.ProtocolSnell {
 					return fmt.Errorf("入站 %s 经 Snell 节点 %s 出站，需要 sing-box 1.14 及以上，不能安装 %s", row.Name, t.Name, version)
@@ -2265,7 +2326,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		// R9X-005：经 Naive 节点出站（链式/分流目标）的入站同样要求
 		// sing-box 1.13+；目标入站不在本内核上，gate 看不到，须单独
 		// 扫描（仿上方 Snell 扫描块）。
-		if kernelType == kernel.TypeSingbox && versionBelow(version, 1, 13) {
+		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowIsNaive(t) {
 					return fmt.Errorf("入站 %s 经 Naive 节点 %s 出站，需要 sing-box 1.13 及以上，不能安装 %s", row.Name, t.Name, version)
@@ -2275,7 +2336,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		// R2X-007：经 ENC 节点出站（链式/分流目标）的入站同样要求拨号
 		// 内核 Xray 25.9.5+；目标入站不在本内核上，gate 看不到，须单独
 		// 扫描（仿上方 Snell 扫描块）。
-		if kernelType == kernel.TypeXray && versionBelow3(version, 25, 9, 5) {
+		if kernelType == kernel.TypeXray && versionBelow3Strict(version, 25, 9, 5) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowHasENC(t) {
 					return fmt.Errorf("入站 %s 经 VLESS 加密节点 %s 出站，需要 Xray 25.9.5 及以上，不能安装 %s", row.Name, t.Name, version)
@@ -2287,12 +2348,20 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 }
 
 // snellMajor returns the protocol major version a Snell binary serves.
+// R2-015（B-sub-02）：旧实现只认 "4."/"6." 前缀，其余形态（"v6.0.0"、
+// 裸 "6"、"10.0.0"）一律默认 5——真 6.x 以这类形态进入会被判成 5.x
+// 口径（放行 v4/v5、误拦 v6）。现按版本家族通例健壮解析：TrimSpace、
+// 剥一个可选的小写 "v" 前缀（与 normalizeKernelVersion 同口径，家族
+// 只认小写 v、不扩），取首段数字。无法解析（空、"latest"、非数字
+// 首段）保守回退 5 并保持既有判定：5 的口径接 v4/v5、对 v6 客户端
+// 明确报错，好过把未知版本当成更新大版本放行。
 func snellMajor(version string) int {
-	switch {
-	case strings.HasPrefix(version, "4."):
-		return 4
-	case strings.HasPrefix(version, "6."):
-		return 6
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if i := strings.IndexByte(v, '.'); i >= 0 {
+		v = v[:i]
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
 	}
 	return 5
 }
