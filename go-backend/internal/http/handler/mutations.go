@@ -4708,7 +4708,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		removedNodeIDs = diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs = diffInt64s(oldNodeIDs, removedNodeIDs)
 	}
-	if err := h.validateForwardEntryNodes(fwdEntryNodes, port, id); err != nil {
+	// C-F3-01：占用/范围校验按逐节点实际落库口径走——已有行的入口
+	// 节点按其现口校验（异口转发不再被规范口的范围/占用误拒），无行
+	// 的新节点按规范口 port 校验。
+	oldPortByNode := forwardPortByNode(oldPorts)
+	if err := h.validateForwardEntryNodesWithPortFunc(fwdEntryNodes, func(nodeID int64) int {
+		return forwardEntryPort(oldPortByNode, nodeID, port)
+	}, id); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4747,9 +4753,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if hasInIP {
-		err = h.replaceForwardPorts(id, tunnelID, port, inIp)
+		err = h.replaceForwardPorts(id, tunnelID, port, inIp, oldPorts)
 	} else if tunnelID != forward.TunnelID {
-		err = h.replaceForwardPorts(id, tunnelID, port, "")
+		err = h.replaceForwardPorts(id, tunnelID, port, "", oldPorts)
 	} else {
 		err = h.replaceForwardPortsPreservingInIP(id, tunnelID, port, oldPorts)
 	}
@@ -5603,6 +5609,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// C6-01：ForwardIDs 的 valid 条目先去重（与 idsFromBodyWithInvalid
+	// 同口径）——重复 id 第二条必然命中下方「规则已在目标隧道中」
+	// 记一条与实际副作用相反的假失败；invalid 条目仍逐条计失败。
+	req.ForwardIDs = dedupeValidBatchIDs(req.ForwardIDs)
 	actorUserID, actorRole, err := userRoleFromRequest(r)
 	if err != nil {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
@@ -5713,6 +5723,10 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		newNodeIDs := uniqueInt64s(bctEntryNodes)
 		removedNodeIDs := diffInt64s(oldNodeIDs, newNodeIDs)
 		keptNodeIDs := diffInt64s(oldNodeIDs, removedNodeIDs)
+		// C-F3-01：保留节点（同属新旧隧道入口集）逐节点沿用现口，
+		// 规范口 p 只用于真正新增的节点行；校验同样逐节点按实际
+		// 落库口径走，不再以单值口对全部入口节点一刀切。
+		oldPortByNode := forwardPortByNode(oldPorts)
 		portRangeOk := true
 		var portRangeErr error
 		for _, nid := range bctEntryNodes {
@@ -5722,17 +5736,18 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 				portRangeOk = false
 				break
 			}
-			if validateErr := validateRemoteNodePort(nd, p); validateErr != nil {
+			nodePort := forwardEntryPort(oldPortByNode, nid, p)
+			if validateErr := validateRemoteNodePort(nd, nodePort); validateErr != nil {
 				portRangeOk = false
 				portRangeErr = validateErr
 				break
 			}
-			if validateErr := validateLocalNodePort(nd, p); validateErr != nil {
+			if validateErr := validateLocalNodePort(nd, nodePort); validateErr != nil {
 				portRangeOk = false
 				portRangeErr = validateErr
 				break
 			}
-			if validateErr := h.validateForwardPortAvailability(nd, p, id); validateErr != nil {
+			if validateErr := h.validateForwardPortAvailability(nd, nodePort, id); validateErr != nil {
 				portRangeOk = false
 				portRangeErr = validateErr
 				break
@@ -5767,7 +5782,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		// 补偿（rollbackForwardMutation）仅保留给提交后的取行/下发失败。
 		bctEntries := make([]forwardPortReplaceEntry, len(bctEntryNodes))
 		for i, nid := range bctEntryNodes {
-			bctEntries[i] = forwardPortReplaceEntry{NodeID: nid, Port: p, InIP: ""}
+			bctEntries[i] = forwardPortReplaceEntry{NodeID: nid, Port: forwardEntryPort(oldPortByNode, nid, p), InIP: ""}
 		}
 		if err := h.repo.ChangeForwardTunnelAndPorts(id, req.TargetTunnelID, effectiveRemoteAddr, bctEntries, time.Now().UnixMilli()); err != nil {
 			fail++
@@ -8775,6 +8790,33 @@ type forwardPortReplaceEntry = struct {
 	InIP   string
 }
 
+// forwardPortByNode 索引转发当前 forward_port 行的 node→port，与
+// syncTunnelForwardsEntryPorts 的 oldPortByNode 同口径（同节点多行
+// 时后行覆盖；行序为 ListForwardPorts 的 id ASC）。
+func forwardPortByNode(oldPorts []forwardPortRecord) map[int64]int {
+	byNode := make(map[int64]int, len(oldPorts))
+	for _, fp := range oldPorts {
+		if fp.NodeID > 0 && fp.Port > 0 {
+			byNode[fp.NodeID] = fp.Port
+		}
+	}
+	return byNode
+}
+
+// forwardEntryPort 是 C-F3-01 的逐节点定口：已有行的入口节点沿用
+// 该节点现口（2026-10-30 定案「入口端口创建后永不换口」），无行的
+// 新节点才用规范口 fallback（MIN 口／迁移目标口）。异口行（同
+// forward 不同入口节点不同口）的产生面是隧道新增入口节点时规范
+// 口超新节点规格随机落口与备份导入逐行保真——任何以规范口单值
+// 重建全行集的更新路径都会把非 min 行静默改口，故全部重建面必须
+// 经此函数逐节点定口。
+func forwardEntryPort(portByNode map[int64]int, nodeID int64, fallbackPort int) int {
+	if port, ok := portByNode[nodeID]; ok {
+		return port
+	}
+	return fallbackPort
+}
+
 func buildForwardPortEntriesWithPreservedInIP(entryNodeIDs []int64, oldPorts []forwardPortRecord, port int) []forwardPortReplaceEntry {
 	preservedByNode := make(map[int64]string)
 	for _, fp := range oldPorts {
@@ -8788,11 +8830,12 @@ func buildForwardPortEntriesWithPreservedInIP(entryNodeIDs []int64, oldPorts []f
 		}
 	}
 
+	portByNode := forwardPortByNode(oldPorts)
 	entries := make([]forwardPortReplaceEntry, 0, len(entryNodeIDs))
 	for _, nid := range entryNodeIDs {
 		entries = append(entries, forwardPortReplaceEntry{
 			NodeID: nid,
-			Port:   port,
+			Port:   forwardEntryPort(portByNode, nid, port),
 			InIP:   preservedByNode[nid],
 		})
 	}
@@ -8800,14 +8843,15 @@ func buildForwardPortEntriesWithPreservedInIP(entryNodeIDs []int64, oldPorts []f
 	return entries
 }
 
-func (h *Handler) replaceForwardPorts(forwardID, tunnelID int64, port int, inIp string) error {
+func (h *Handler) replaceForwardPorts(forwardID, tunnelID int64, port int, inIp string, oldPorts []forwardPortRecord) error {
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnelID)
 	if err != nil {
 		return err
 	}
+	portByNode := forwardPortByNode(oldPorts)
 	entries := make([]forwardPortReplaceEntry, len(entryNodes))
 	for i, nid := range entryNodes {
-		entries[i] = forwardPortReplaceEntry{NodeID: nid, Port: port, InIP: inIp}
+		entries[i] = forwardPortReplaceEntry{NodeID: nid, Port: forwardEntryPort(portByNode, nid, port), InIP: inIp}
 	}
 	return h.repo.ReplaceForwardPorts(forwardID, entries)
 }
@@ -9661,6 +9705,13 @@ func idsFromBody(r *http.Request, w http.ResponseWriter) []int64 {
 // 下 {"ids":[0]} 会得到 successCount=0/failCount=0 的全成功回执）。
 // valid 保持升序（与 idsFromBody 一致）；invalid 按请求顺序保留。
 // 解析失败时已写出错误回执，valid 返回 nil，调用方直接 return。
+//
+// C6-01：valid 段排序后同样过 uniqueInt64s（与 idsFromBody 的
+// R2-040 口径一致）——重复 valid id 指向同一实体、不是两次独立
+// 的客户端错误，不去重时删除面第二次迭代必然撞上已删行记虚假
+// 失败、暂停/重部署面重复执行并重复计数、nft 恢复面配额预留按
+// 条目重复自增挤占同批相异条目。invalid 段一字不动：B08-003 的
+// 逐条计数契约只覆盖该段。
 func idsFromBodyWithInvalid(r *http.Request, w http.ResponseWriter) (valid []int64, invalid []int64) {
 	raw, ok := parseIDsFromBody(r, w)
 	if !ok {
@@ -9676,7 +9727,27 @@ func idsFromBodyWithInvalid(r *http.Request, w http.ResponseWriter) (valid []int
 		}
 	}
 	sort.Slice(valid, func(i, j int) bool { return valid[i] < valid[j] })
-	return valid, invalid
+	return uniqueInt64s(valid), invalid
+}
+
+// dedupeValidBatchIDs 对自有 id 列表字段的批量请求（如
+// forwardBatchChangeTunnel 的 ForwardIDs）做 valid 段去重，保留
+// 首次出现顺序；invalid 条目（id<=0）原样保留、仍由调用方逐条计
+// 失败（B08-003）。与 idsFromBodyWithInvalid 的 C6-01 口径一致：
+// 重复 valid id 不是两次独立的客户端错误。
+func dedupeValidBatchIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 func nullableText(s string) interface{} {
@@ -9810,11 +9881,22 @@ func validateLocalNodePort(node *nodeRecord, port int) error {
 // 读取失败 fail-closed 直接报错——create/update 旧实现 continue
 // 跳过校验仍落库，与 batch 的整条失败口径分叉，现统一。
 func (h *Handler) validateForwardEntryNodes(entryNodes []int64, port int, currentForwardID int64) error {
+	return h.validateForwardEntryNodesWithPortFunc(entryNodes, func(int64) int { return port }, currentForwardID)
+}
+
+// validateForwardEntryNodesWithPortFunc 是 validateForwardEntryNodes
+// 的逐节点定口变体（C-F3-01）：每个入口节点按 portForNode 给出的
+// 该节点实际落库端口做远程范围/本地规格/占用校验，使异口转发的
+// 保留节点按现口受检、新节点按规范口受检，不再以单值口对全节点
+// 一刀切（单值口在非 min 节点越规格或被占时，未换口的编辑会被误
+// 拒且无自愈路径）。
+func (h *Handler) validateForwardEntryNodesWithPortFunc(entryNodes []int64, portForNode func(nodeID int64) int, currentForwardID int64) error {
 	for _, nodeID := range entryNodes {
 		node, nodeErr := h.getNodeRecord(nodeID)
 		if nodeErr != nil {
 			return nodeErr
 		}
+		port := portForNode(nodeID)
 		if err := validateRemoteNodePort(node, port); err != nil {
 			return err
 		}
