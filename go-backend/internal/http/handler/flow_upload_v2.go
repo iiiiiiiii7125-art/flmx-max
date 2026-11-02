@@ -38,14 +38,30 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+	// R8-060 同族补齐（审计 A-T-01）：v2 与 v1/flowConfig 共用同一
+	// 鉴权失败限流器——本端点此前裸注册、无预检无记账，未知 secret
+	// 的每次尝试都无界查库且不喂共享限流器，攻击者可专打 v2 面绕
+	// 开整套节流。达上限的来源不再查库，回包与未知 secret 同形
+	// （401 纯文本、非确认回执）：agent 解码不到 stream+sequence
+	// 确认即按普通失败保留批次、下周期重报，与 v1 节流口径一致。
+	failKey, throttled := h.flowAuthThrottleKey(r)
+	if throttled {
+		log.Printf("flow upload v2 auth throttled")
+		http.Error(w, "invalid node", http.StatusUnauthorized)
+		return
+	}
 	secret := r.URL.Query().Get("secret")
 	node, err := h.repo.GetNodeBySecret(secret)
 	if err != nil {
+		// 与 v1 flowUpload 同位：查库失败同样记账（v1 吞 err 后以
+		// node==nil 记账，效果相同）。
+		h.recordFlowAuthFailure(failKey)
 		log.Printf("flow upload v2 node lookup failed err=%v", err)
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if node == nil {
+		h.recordFlowAuthFailure(failKey)
 		http.Error(w, "invalid node", http.StatusUnauthorized)
 		return
 	}

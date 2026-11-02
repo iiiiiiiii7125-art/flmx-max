@@ -178,10 +178,12 @@ func (s *defaultService) Addr() net.Addr {
 }
 
 // FlushTraffic 把服务 stats 里尚未被周期采样换出的字节原子换出并
-// 交给全局管理器。停机时由 program.stopRuntime 在注销服务时调用：
-// 最后一批不足一个采样周期的字节不再滞留在服务 stats 里随进程
-// 消失，而是进管理器计数并由管理器 Stop 落盘进 spool 续报。
-// 与周期采样共用 TakeTraffic，同一字节只会被换出一次。
+// 交给全局管理器。调用点：服务 Close 自身（一切卸载路径的收口）、
+// program.stopRuntime 的两遍承接、loader 换代卸载点——最后一批
+// 不足一个采样周期的字节不再滞留在服务 stats 里随对象/进程消
+// 失，而是进管理器计数并由管理器落盘进 spool 续报。与周期采样
+// 共用 TakeTraffic，同一字节只会被换出一次，多点重复调用恒为
+// 零副作用。
 func (s *defaultService) FlushTraffic() {
 	if s.options.observer == nil {
 		return
@@ -195,6 +197,29 @@ func (s *defaultService) FlushTraffic() {
 		return
 	}
 	GetGlobalTrafficManager().addServiceTraffic(s.name, int64(output), int64(input))
+}
+
+// FlushServicesTraffic 把一组服务 stats 里尚未被周期采样换出的尾
+// 量逐个交进全局管理器（与周期采样共用 TakeTraffic 出口，同一字
+// 节只换出一次）。
+func FlushServicesTraffic(services map[string]service.Service) {
+	for _, svc := range services {
+		if flusher, ok := svc.(interface{ FlushTraffic() }); ok {
+			flusher.FlushTraffic()
+		}
+	}
+}
+
+// FlushServicesTrafficTwice 两遍换出：第一遍之后留一个收敛窗口再
+// 换第二遍，承接第一遍之后才计入 stats 的尾量（采样来源已关停
+// 后、排空中的连接写入的最后字节）。停机路径专用，顺序编排见
+// program.stopRuntime（先全集注销关源、再两遍换出）。
+func FlushServicesTrafficTwice(services map[string]service.Service, settle time.Duration) {
+	FlushServicesTraffic(services)
+	if settle > 0 {
+		time.Sleep(settle)
+	}
+	FlushServicesTraffic(services)
 }
 
 func (s *defaultService) Serve() error {
@@ -343,6 +368,17 @@ func (s *defaultService) Status() *Status {
 }
 
 func (s *defaultService) Close() error {
+	// 服务关闭即终局（注销/换代/暂停/删除都经此路或 Unregister
+	// 连带至此）：先把 stats 里未被周期采样换出的尾量交进全局管
+	// 理器再关——否则最后一截（不足一个采样周期）流量随 stats
+	// 对象丢弃。此前只有 program.stopRuntime 在停机时显式调用
+	// FlushTraffic，面板/API 驱动的服务换代、删除、暂停卸载全都
+	// 漏了这一截（与审计 A-T-03 在 reload 链立案的漏承接同机制，
+	// loader 卸载点已另行补齐；此处收口到关闭动作本身，使全部服
+	// 务卸载路径差集归零）。重复 Close 时 TakeTraffic 恒为零，
+	// 无副作用。
+	s.FlushTraffic()
+
 	s.execCmds("pre-down", s.options.preDown)
 	defer s.execCmds("post-down", s.options.postDown)
 

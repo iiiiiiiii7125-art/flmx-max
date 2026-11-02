@@ -242,21 +242,33 @@ func (p *program) Stop() error {
 	defer unlock()
 	p.stopped = true
 	p.stopRuntime()
-	// 停机收尾：stopRuntime 已逐服务 FlushTraffic 把尾量交进管理
-	// 器，这里停管理器并把全部未报流量落盘进 spool，下次启动续
-	// 报——正常升级/重启不再丢最后一段流量。
+	// 停机收尾：stopRuntime 已关采样来源并两遍 FlushTraffic 把尾
+	// 量交进管理器，这里停管理器并把全部未报流量落盘进 spool，
+	// 下次启动续报——正常升级/重启只余「第二遍换出后仍未排空的
+	// 连接在退出前计入的亚秒级尾量」这一残余窗口（审计 A-T-02）。
 	xservice.GetGlobalTrafficManager().Stop()
 	return nil
 }
 
+// stopRuntimeSettle 是停机两遍 FlushTraffic 之间的收敛等待：监听
+// 关闭后，排空中的连接与采样协程仍可能把最后字节计入 stats 或投
+// 递进管理器，给它们一个短暂窗口再做第二遍换出。
+var stopRuntimeSettle = 200 * time.Millisecond
+
 func (p *program) stopRuntime() {
-	for name, svc := range registry.ServiceRegistry().GetAll() {
+	services := registry.ServiceRegistry().GetAll()
+	// 先全集注销：Unregister 连带 Close 监听与 handler（采样来源
+	// 随 Serve 返回而停、新连接不再进入），再两遍 FlushTraffic
+	// 承接尾量——第一遍换出关闭前已计入 stats 的量，第二遍承接
+	// 关闭排空期间新计入的量。旧顺序逐服务「注销＋换出」交错进
+	// 行：先换出的服务在后续服务处理期间新计入的尾量无人再换、
+	// 随进程退出丢失（审计 A-T-02）。残余例外只有第二遍换出后
+	// 仍未排空的连接在进程退出前计入的字节，量级为亚秒级尾量。
+	for name := range services {
 		registry.ServiceRegistry().Unregister(name)
-		if flusher, ok := svc.(interface{ FlushTraffic() }); ok {
-			flusher.FlushTraffic()
-		}
 		logger.Default().Debugf("service %s shutdown", name)
 	}
+	xservice.FlushServicesTrafficTwice(services, stopRuntimeSettle)
 
 	if p.srvApi != nil {
 		p.srvApi.Close()
