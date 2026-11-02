@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,6 +42,11 @@ type Manager struct {
 	restoreOnce sync.Once
 	instances   map[string]*instance
 	nft         *nftCounters
+
+	// Snell egress guard identity (snell_guard.go), resolved when a
+	// Snell apply first needs it and reused by Control start.
+	snellUID uint32
+	snellGID uint32
 }
 
 var (
@@ -182,6 +188,27 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 	m.mu.Unlock()
 
+	// Snell egress guard (snell_guard.go): an enabled Snell request
+	// must never start unguarded, so the guard's prerequisites — the
+	// dedicated user and nftables — are hard prerequisites of the
+	// apply itself, checked before any download or process starts.
+	needGuard := reqHasSnellServer(req)
+	if needGuard {
+		uid, gid, err := ensureSnellGuardUser(context.Background())
+		if err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+		if err := nftAvailable(); err != nil {
+			err = fmt.Errorf("Snell 私网拦截需要 nftables，本机不可用: %v", err)
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+		m.mu.Lock()
+		m.snellUID, m.snellGID = uid, gid
+		m.mu.Unlock()
+	}
+
 	binDir := m.binDir(req.Type, req.Version)
 	bins := map[string]string{}
 	mainBin, err := m.ensureBinary(inst, req.Type+" "+req.Version, req.Download, binDir)
@@ -205,6 +232,15 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.setErr(inst, err)
 		return m.state(req.Type, false), err
 	}
+	if needGuard {
+		// snell-server runs as the guard user and must be able to
+		// reach its binary and its config under the agent's 0700
+		// directories: make the path ancestors traverse-only.
+		if err := chmodTraverseAncestors(m.baseDir, binDir); err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+	}
 	files := req.Files
 	if req.Type == "singbox" {
 		// FN34: localize the config's remote rule sets (downloaded
@@ -225,6 +261,15 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			content = fix(f.Name, content)
 		}
 		if err := writeFileAtomic(filepath.Join(runDir, f.Name), []byte(content), 0o600); err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+	}
+	if needGuard {
+		m.mu.Lock()
+		uid, gid := m.snellUID, m.snellGID
+		m.mu.Unlock()
+		if err := fixSnellRunPerms(runDir, files, uid, gid); err != nil {
 			m.setErr(inst, err)
 			return m.state(req.Type, false), err
 		}
@@ -294,15 +339,30 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	// The nft sync runs before persist: for a Snell apply its failure
+	// is fatal (the just-started snell-server processes would run
+	// unguarded), so the apply is torn down and never confirmed.
+	m.mu.Lock()
+	guardUID := m.snellUID
+	m.mu.Unlock()
+	guard := m.snellGuardFor(guardUID)
+	syncErr := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)
+	if syncErr != nil {
+		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
+		if needGuard {
+			m.stopProcesses(inst)
+			failure = fmt.Errorf("Snell 私网拦截规则下发失败，已停止 Snell（不允许无拦截运行）: %v", syncErr)
+			m.setErr(inst, failure)
+			confirmed = false
+		}
+	}
+
 	if confirmed {
 		m.persist()
 	} else {
 		// F-032: 未确认可用的坏配置不得 persist 固化，否则 agent
 		// 重启 Restore 会反复拉起坏配置；保留上一次的持久状态。
 		inst.logs.add("[flmx] 新配置未确认可用，未写入持久状态；重启后将恢复上一次的配置")
-	}
-	if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
-		inst.logs.add("[flmx] 流量计数规则同步失败: " + err.Error())
 	}
 	return m.state(req.Type, false), failure
 }
@@ -325,6 +385,21 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 		} else {
 			_ = writeFileAtomic(path, content, 0o600)
 		}
+	}
+	if reqHasSnellServer(prev.req) {
+		// Restored configs are root-owned again after the rewrite;
+		// hand them back to the guard user before the processes
+		// start or snell-server cannot read its own config.
+		m.mu.Lock()
+		uid, gid := m.snellUID, m.snellGID
+		m.mu.Unlock()
+		files := make([]File, 0, len(prev.files))
+		for name, content := range prev.files {
+			if content != nil {
+				files = append(files, File{Name: name})
+			}
+		}
+		_ = fixSnellRunPerms(runDir, files, uid, gid)
 	}
 	m.mu.Lock()
 	inst.req = prev.req
@@ -401,6 +476,8 @@ func (m *Manager) startProcesses(inst *instance) {
 	specs := inst.req.processSpecs()
 	runDir := m.runDir(inst.req.Type)
 	bins := inst.bins
+	kernelType := inst.req.Type
+	guardUID, guardGID := m.snellUID, m.snellGID
 	m.mu.Unlock()
 
 	procs := make([]*process, 0, len(specs))
@@ -412,6 +489,12 @@ func (m *Manager) startProcesses(inst *instance) {
 		}
 		p := newProcess(bin, expandArgs(spec.Args, runDir, filepath.Dir(bin)), runDir, inst.logs)
 		p.prefix = prefix
+		if kernelType == "snell" && isSnellServerSpec(spec.Name) {
+			// Snell egress guard: only snell-server itself drops to
+			// the guard user; shadow-tls fronts stay on the agent
+			// identity (they dial admin-configured targets only).
+			p.credUID, p.credGID = guardUID, guardGID
+		}
 		procs = append(procs, p)
 	}
 	m.mu.Lock()
@@ -458,7 +541,10 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 			_ = os.RemoveAll(filepath.Join(m.baseDir, kernelType))
 		}
 		m.persist()
-		if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
+		m.mu.Lock()
+		guard := m.snellGuardForLocked(m.snellUID)
+		m.mu.Unlock()
+		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -474,6 +560,23 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		inst.req.Enabled = false
 		m.mu.Unlock()
 	case "start", "restart":
+		if reqHasSnellServer(inst.req) {
+			// Same hard prerequisites as Apply: no guard identity or
+			// no nftables means Snell must not come up at all.
+			uid, gid, err := ensureSnellGuardUser(context.Background())
+			if err != nil {
+				m.setErr(inst, err)
+				return m.state(kernelType, false), err
+			}
+			if err := nftAvailable(); err != nil {
+				err = fmt.Errorf("Snell 私网拦截需要 nftables，本机不可用: %v", err)
+				m.setErr(inst, err)
+				return m.state(kernelType, false), err
+			}
+			m.mu.Lock()
+			m.snellUID, m.snellGID = uid, gid
+			m.mu.Unlock()
+		}
 		m.stopProcesses(inst)
 		m.mu.Lock()
 		inst.req.Enabled = true
@@ -487,6 +590,21 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		}
 	default:
 		return State{}, fmt.Errorf("未知操作: %s", action)
+	}
+	// Keep the guard rules in lockstep with the lifecycle: stopping or
+	// removing Snell must leave no rules behind, starting must restore
+	// them. A sync failure here is surfaced, not swallowed.
+	m.mu.Lock()
+	guard := m.snellGuardForLocked(m.snellUID)
+	m.mu.Unlock()
+	if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+		if action == "start" || action == "restart" {
+			m.stopProcesses(inst)
+			ferr := fmt.Errorf("Snell 私网拦截规则下发失败，已停止 Snell（不允许无拦截运行）: %v", err)
+			m.setErr(inst, ferr)
+			return m.state(kernelType, false), ferr
+		}
+		return m.state(kernelType, false), err
 	}
 	m.persist()
 	return m.state(kernelType, false), nil
