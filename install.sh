@@ -796,16 +796,60 @@ json_escape() {
   printf '%s' "$value"
 }
 
-# 从既有 config.json 里取 addr（无文件/无字段时回空）。
+# json_escape 的逆操作：把 JSON 字符串字面值还原为原始文本。
+# 不同 JSON 生成器对同一地址的转义风格不同（例如把斜杠写成转义
+# 形式、把冒号写成 unicode 转义），逐字比较前必须先归一化，否则
+# 自家 agent 会被误判为他人（AI-10）。单遍左到右解码，解出的
+# 字符不再二次展开。
+json_unescape() {
+  local value="$1" out="" ch next hex
+  local i=0
+  while (( i < ${#value} )); do
+    ch=${value:i:1}
+    if [[ "$ch" == '\' ]] && (( i + 1 < ${#value} )); then
+      next=${value:i+1:1}
+      case "$next" in
+        '/') out+='/'; i=$((i + 2)) ;;
+        '\') out+='\'; i=$((i + 2)) ;;
+        '"') out+='"'; i=$((i + 2)) ;;
+        n) out+=$'\n'; i=$((i + 2)) ;;
+        r) out+=$'\r'; i=$((i + 2)) ;;
+        t) out+=$'\t'; i=$((i + 2)) ;;
+        b) out+=$'\b'; i=$((i + 2)) ;;
+        f) out+=$'\f'; i=$((i + 2)) ;;
+        u)
+          hex=${value:i+2:4}
+          if [[ "$hex" =~ ^[0-9a-fA-F]{4}$ ]] && (( 16#$hex < 128 )); then
+            out+=$(printf "\\$(printf '%03o' "$((16#$hex))")")
+            i=$((i + 6))
+          else
+            out+="$ch"
+            i=$((i + 1))
+          fi
+          ;;
+        *) out+="$ch"; i=$((i + 1)) ;;
+      esac
+    else
+      out+="$ch"
+      i=$((i + 1))
+    fi
+  done
+  printf '%s' "$out"
+}
+
+# 从既有 config.json 里取 addr（无文件/无字段时回空）。返回值已做
+# JSON 反转义归一化（json_unescape），与原始地址文本同口径，可直接
+# 与 SERVER_ADDR 比对。
 agent_config_addr() {
   local config="$1/config.json" addr=""
   [[ -f "$config" ]] || return 0
   addr=$(grep -o '"addr"[[:space:]]*:[[:space:]]*"[^"]*"' "$config" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
-  printf '%s' "$addr"
+  json_unescape "$addr"
 }
 
 # 共存守卫（C2-02）：$INSTALL_DIR 已有 agent 时，只有其 config 的
-# addr 与本次面板地址逐字相等才认作本面板的旧 agent、允许就地覆盖
+# addr 经 JSON 转义归一化后与本次面板地址逐字相等，才认作本面板
+# 的旧 agent、允许就地覆盖
 # 安装；不相等（或无法判定）一律视为其他面板的 agent——不覆写其
 # config、不删其文件、不停其服务。面板地址变更过的存量节点可在交
 # 互终端人工确认接管；非交互执行（面板一键命令 -a/-s）直接终止并
@@ -815,7 +859,7 @@ guard_agent_dir_ownership() {
   [[ -e "$INSTALL_DIR/config.json" || -e "$INSTALL_DIR/flux_agent" ]] || return 0
   local old_addr
   old_addr=$(agent_config_addr "$INSTALL_DIR")
-  if [[ -n "$old_addr" && -n "$SERVER_ADDR" && "$old_addr" == "$(json_escape "$SERVER_ADDR")" ]]; then
+  if [[ -n "$old_addr" && -n "$SERVER_ADDR" && "$old_addr" == "$SERVER_ADDR" ]]; then
     return 0
   fi
   if [[ "${FLMX_AGENT_TAKEOVER:-}" == "1" ]]; then
@@ -823,6 +867,7 @@ guard_agent_dir_ownership() {
     return 0
   fi
   echo "⚠️ $INSTALL_DIR 已存在一个 agent，其连接地址为 ${old_addr:-无法读取}，与本次面板地址 ${SERVER_ADDR:-未提供} 不一致。"
+  echo "   （地址比对已做 JSON 转义归一化，写法差异不会造成误判。）"
   echo "   它可能属于其他面板；继续安装会覆写它的配置、把它改连到本面板，本脚本不会未经确认这样做。"
   if [[ -t 0 ]]; then
     local confirm
@@ -833,6 +878,44 @@ guard_agent_dir_ownership() {
   fi
   echo "❌ 安装终止：未改动 $INSTALL_DIR 中的任何文件。"
   echo "   如确认该 agent 属于本面板（例如面板换过地址），请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。"
+  return 1
+}
+
+# 菜单更新/卸载的归属守卫（AI-06）：菜单上下文没有「本次面板地址」
+# 可与既有 agent 逐字比对（更新/卸载不接收 -a/-s 参数），无法直接
+# 沿用 install 守卫的相等判据；但判定部件必须同口径复用、不另造
+# 第二套：同样以 agent_config_addr 读现存连接地址（含转义归一化）、
+# 同样提供 FLMX_AGENT_TAKEOVER=1 逃生口并留痕、同样只接受交互终
+# 端的人工确认、非交互一律拒绝（fail-closed）。若调用方恰带有面
+# 板地址（如先以 -a 单独传入再进菜单）且与现存 addr 相等，按
+# install 守卫同一判据认作本面板旧 agent、静默放行。其余情形一律
+# 先明示当前连接地址、再要求显式确认——该 agent 可能属于其他面
+# 板，更新会替换其二进制、卸载会将其整体删除，绝不静默执行。
+# $1=动作名（更新/卸载），$2=继续执行的后果说明。
+guard_agent_dir_ownership_menu() {
+  local action="$1" consequence="$2"
+  [[ -e "$INSTALL_DIR/config.json" || -e "$INSTALL_DIR/flux_agent" ]] || return 0
+  local old_addr
+  old_addr=$(agent_config_addr "$INSTALL_DIR")
+  if [[ -n "$old_addr" && -n "${SERVER_ADDR:-}" && "$old_addr" == "$SERVER_ADDR" ]]; then
+    return 0
+  fi
+  if [[ "${FLMX_AGENT_TAKEOVER:-}" == "1" ]]; then
+    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认对 $INSTALL_DIR 执行${action}（当前连接地址：${old_addr:-无法读取}）"
+    return 0
+  fi
+  echo "⚠️ $INSTALL_DIR 中已有 agent，当前连接地址为 ${old_addr:-无法读取}。"
+  echo "   （地址读取已做 JSON 转义归一化，写法差异不会造成误判。）"
+  echo "   它可能属于其他面板；${consequence}"
+  if [[ -t 0 ]]; then
+    local confirm
+    read -p "确认该 agent 属于本面板并继续${action}吗？(y/N): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+      return 0
+    fi
+  fi
+  echo "❌ ${action}终止：未改动 $INSTALL_DIR 中的任何文件。"
+  echo "   如确认该 agent 属于本面板，请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。"
   return 1
 }
 
@@ -1358,7 +1441,11 @@ flux_agent_installed_version() {
 # 更新功能
 update_flux_agent() {
   echo "🔄 开始更新 flux_agent..."
-  
+
+  # 归属守卫（AI-06）：在下载、停服、替换二进制之前先判定既有
+  # agent 的归属；无法确认属于本面板时终止，不留任何改动。
+  guard_agent_dir_ownership_menu "更新" "继续更新会把它的二进制替换为本面板的构建版本（连接地址不变、仍连其所属面板）。" || return 1
+
   if [[ ! -d "$INSTALL_DIR" ]]; then
     echo "❌ flux_agent 未安装，请先选择安装。"
     return 1
@@ -1468,6 +1555,11 @@ rollback_flux_agent() {
 # 卸载功能
 uninstall_flux_agent() {
   echo "🗑️ 开始卸载 flux_agent..."
+
+  # 归属守卫（AI-06）：在停服、删文件之前先判定既有 agent 的归
+  # 属并明示当前连接地址；无法确认属于本面板时终止，不留改动。
+  guard_agent_dir_ownership_menu "卸载" "继续卸载会停止并删除它，该节点将从其所属面板掉线。" || return 1
+
   ensure_service_manager || return 1
   
   read -p "确认卸载 flux_agent 吗？此操作将删除所有相关文件 (y/N): " confirm
