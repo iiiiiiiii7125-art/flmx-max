@@ -5,7 +5,7 @@ import (
 )
 
 // R7-001 full-set gate: the private guard invariant — the
-// unconditional ip_is_private -> reject rule at the first non-sniff
+// unconditional canonical ip_cidr -> reject rule at the first non-sniff
 // position, plus its fallthrough twin closing the list — is
 // asserted over the mechanically derived matrix of the sing-box
 // render surface, not just the audited cases:
@@ -33,14 +33,14 @@ func assertGuardDominates(t *testing.T, label string, cfg map[string]interface{}
 		head++
 	}
 	isUnconditionalReject := func(m map[string]interface{}) bool {
-		return len(m) == 2 && m["ip_is_private"] == true && m["action"] == "reject"
+		return isPrivateGuardRule(m)
 	}
 	if head >= len(rules) || !isUnconditionalReject(rules[head].(map[string]interface{})) {
 		t.Fatalf("%s: private guard not at the first non-sniff position %d: %v", label, head, rules)
 	}
 	// Exactly two unconditional copies exist: the head guard and the
 	// domain form's fallthrough reject (the tail, shape-checked by
-	// the S1(b) gate below). Every other ip_is_private reject is a
+	// the S1(b) gate below). Every other guard-shaped reject is a
 	// conditioned pair half.
 	unconditional := 0
 	for _, r := range rules {

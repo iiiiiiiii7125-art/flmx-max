@@ -26,10 +26,10 @@ func TestIPv4OnlyMixedInbounds(t *testing.T) {
 			if kt == TypeXray {
 				want[0] = "block"
 			} else {
-				// R7-001: the ip_is_private guard precedes the family block.
+				// R7-001: the private-range guard precedes the family block.
 				want = append([]string{"reject"}, want...)
 				famIdx = 1
-				if guard := rules[0].(map[string]interface{}); guard["ip_is_private"] != true || guard["action"] != "reject" {
+				if guard := rules[0].(map[string]interface{}); !isPrivateGuardRule(guard) {
 					t.Fatalf("private guard must stay first: %v", guard)
 				}
 			}
@@ -125,7 +125,7 @@ func TestIPv6OnlyAlongsideIPv4AndAutomatic(t *testing.T) {
 			if kt == TypeXray {
 				want[0], want[3] = "block", "block"
 			} else {
-				// R7-001: the ip_is_private guard precedes both family blocks.
+				// R7-001: the private-range guard precedes both family blocks.
 				want = append([]string{"reject"}, want...)
 				famIdx = 1
 			}
@@ -247,7 +247,7 @@ func TestIPv4OnlyShadowTLSAndValidation(t *testing.T) {
 		OutboundIPStrategy: OutboundIPv4Only}
 	cfg := renderJSON(t, TypeSingbox, []Inbound{in})
 	rules := cfg["route"].(map[string]interface{})["rules"].([]interface{})
-	// R7-001: rules[0] is the ip_is_private guard (no inbound tag); the
+	// R7-001: rules[0] is the private-range guard (no inbound tag); the
 	// first inbound-scoped rule must still cover both the ShadowTLS
 	// front and its decrypted backend.
 	var got interface{}
@@ -353,10 +353,10 @@ func TestPreferredEgressRoutingAndFallback(t *testing.T) {
 				rules := cfg[routeKey].(map[string]interface{})["rules"].([]interface{})
 				for _, value := range rules {
 					rule := value.(map[string]interface{})
-					// R7-001: the sing-box ip_is_private guard is a
+					// R7-001: the sing-box private-range guard is a
 					// private-range reject, not a family preference
 					// rejection; it is exempt from this scan.
-					if rule["ip_is_private"] == true {
+					if isSingboxPrivateRejectRule(rule) {
 						continue
 					}
 					if rule["action"] == "reject" || rule[outKey] == "block" {

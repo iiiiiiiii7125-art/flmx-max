@@ -69,23 +69,56 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 // (R7-001): sing-box has no equivalent of Xray freedom's built-in
 // defaultBlockPrivateRule, so without this rule every sing-box inbound
 // could reach the node's private addresses and the cloud metadata
-// address 169.254.169.254 directly. sing-box documents ip_is_private
-// as matching non-public IPs (RFC1918, loopback, link-local including
-// 169.254/16, CGNAT, ULA, ...), the same destination set the Xray rule
-// blocks. The rule carries no inbound or user restriction, so it
-// covers every inbound this render emits. This is the literal form;
-// the same rule object also serves as the reject half of the domain
-// form in guardSingboxDomainExits.
+// address 169.254.169.254 directly. The guard matches the product's
+// canonical non-public range set (private_ranges.go — the same set
+// the Snell agent guard enforces) spelled out as ip_cidr ranges. It
+// deliberately does not use sing-box's ip_is_private predicate: that
+// predicate delegates to Go netip's notion of "public", which misses
+// the CGNAT range 100.64.0.0/10, the benchmarking range
+// 198.18.0.0/15 and several other special-purpose ranges the
+// canonical set blocks (R8-004 / R8-022) — the predicate's own
+// documentation mentions CGNAT, but the addresses are judged public
+// and were let through. The rule carries no inbound or user
+// restriction, so it covers every inbound this render emits. This is
+// the literal form; the same rule object also serves as the reject
+// half of the domain form in guardSingboxDomainExits, so both forms
+// match the identical full range set.
 func singboxPrivateRejectRule() obj {
-	return obj{"ip_is_private": true, "action": "reject"}
+	set := guardPrivateCIDRs()
+	cidrs := make([]interface{}, len(set))
+	for i, c := range set {
+		cidrs[i] = c
+	}
+	return obj{"ip_cidr": cidrs, "action": "reject"}
 }
 
 // isSingboxPrivateRejectRule identifies the guard rule above; the
 // outbound IP policy pass (egress.go) uses it to keep the guard ahead
-// of the rules it reorders.
+// of the rules it reorders. A user split rule also carries ip_cidr,
+// but it selects an outbound instead of rejecting, and never with
+// exactly the canonical set — both halves are checked.
 func isSingboxPrivateRejectRule(rule obj) bool {
-	private, _ := rule["ip_is_private"].(bool)
-	return private && rule["action"] == "reject"
+	if rule["action"] != "reject" {
+		return false
+	}
+	raw, ok := rule["ip_cidr"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return false
+	}
+	want := map[string]bool{}
+	for _, c := range guardPrivateCIDRs() {
+		want[c] = true
+	}
+	if len(raw) != len(want) {
+		return false
+	}
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok || !want[s] {
+			return false
+		}
+	}
+	return true
 }
 
 // singboxGuardRules returns the route rules with the private-range
@@ -97,7 +130,7 @@ func isSingboxPrivateRejectRule(rule obj) bool {
 // to it). Sniff rules stay in front of the guard: sniffing is not a
 // final action, it only enriches the connection for the rules that
 // follow, mirroring the client configs in share.go where the sniff
-// rule precedes the ip_is_private rule.
+// rule precedes the private-range rule.
 func singboxGuardRules(rules []interface{}) []interface{} {
 	var sniff, rest []interface{}
 	for _, r := range rules {
@@ -149,7 +182,7 @@ func singboxPrivateResolveRule() obj {
 // public and private addresses. One unconditional pair closes the
 // list for the connections no rule matched, which leave through the
 // final. The reject half is the head guard's own rule, so the literal
-// and domain forms stay a single predicate: ip_is_private -> reject.
+// and domain forms stay a single rule: canonical ip_cidr set -> reject.
 func guardSingboxDomainExits(cfg obj) {
 	route, _ := cfg["route"].(obj)
 	if route == nil {
@@ -181,7 +214,21 @@ func guardSingboxDomainExits(cfg obj) {
 // singboxExitGuardPair returns the resolve + reject pair guarding one
 // direct-exit rule: both halves copy the rule's conditions (everything
 // but its outbound and action), so they match exactly the connections
-// the rule itself would match.
+// the rule itself would match. The reject half's ip_cidr needs care
+// when the anchor itself carries an ip_cidr condition (IP-policy and
+// split clones do): the pair must reject exactly the anchor-bound
+// connections whose resolved address is non-public — the conjunction
+// the ip_is_private predicate used to express via its own key. With
+// the range set spelled out in the same ip_cidr field, the
+// conjunction is the intersection of the anchor's ranges with the
+// canonical set, computed by guardCIDRIntersection. Copying the
+// anchor's list verbatim would replace the guard set (a public anchor
+// range would disarm the guard and be rejected itself); dropping it
+// would let the pair fire for connections a later chain rule should
+// have taken to the far end. When the intersection is empty the pair
+// can never fire — the anchor only routes to public ranges — so no
+// pair is emitted at all; a private destination that somehow reaches
+// past the anchor is still caught by the fallthrough pair.
 func singboxExitGuardPair(anchor obj) []interface{} {
 	resolve := singboxPrivateResolveRule()
 	reject := singboxPrivateRejectRule()
@@ -190,9 +237,41 @@ func singboxExitGuardPair(anchor obj) []interface{} {
 			continue
 		}
 		resolve[key] = value
+		if key == "ip_cidr" {
+			continue
+		}
 		reject[key] = value
 	}
+	if raw, ok := anchor["ip_cidr"]; ok {
+		inter := guardCIDRIntersection(cidrsOf(raw))
+		if len(inter) == 0 {
+			return nil
+		}
+		cidrs := make([]interface{}, len(inter))
+		for i, c := range inter {
+			cidrs[i] = c
+		}
+		reject["ip_cidr"] = cidrs
+	}
 	return []interface{}{resolve, reject}
+}
+
+// cidrsOf flattens a rendered ip_cidr value (built as []string by the
+// split renderer, []interface{} elsewhere) into plain strings.
+func cidrsOf(raw interface{}) []string {
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // acmeProviders shares one ACME certificate provider per domain + challenge

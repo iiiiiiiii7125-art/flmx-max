@@ -7,8 +7,38 @@ import (
 
 // R7-001: sing-box renders must reject private destinations like the
 // Xray freedom outbound does (D-GEO-01). The guard is a route rule
-// {"ip_is_private": true, "action": "reject"} ahead of every chained,
-// split and per-user rule, present even when no other rule exists.
+// {"ip_cidr": <canonical set>, "action": "reject"} ahead of every
+// chained, split and per-user rule, present even when no other rule
+// exists. (R8-004: the guard spells out the canonical range set —
+// private_ranges.go — instead of the ip_is_private predicate, whose
+// netip-based coverage silently missed CGNAT and other ranges.)
+
+// isPrivateGuardRule reports whether a rendered rule is the
+// private-range guard: a reject carrying exactly the canonical
+// ip_cidr set and nothing else.
+func isPrivateGuardRule(m map[string]interface{}) bool {
+	if len(m) != 2 || m["action"] != "reject" {
+		return false
+	}
+	raw, ok := m["ip_cidr"].([]interface{})
+	if !ok {
+		return false
+	}
+	want := map[string]bool{}
+	for _, c := range guardPrivateCIDRs() {
+		want[c] = true
+	}
+	if len(raw) != len(want) {
+		return false
+	}
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok || !want[s] {
+			return false
+		}
+	}
+	return true
+}
 
 func g1RouteRules(t *testing.T, cfg map[string]interface{}) []interface{} {
 	t.Helper()
@@ -25,7 +55,7 @@ func g1RouteRules(t *testing.T, cfg map[string]interface{}) []interface{} {
 func privateGuardIndex(rules []interface{}) int {
 	for i, r := range rules {
 		m := r.(map[string]interface{})
-		if m["ip_is_private"] == true && m["action"] == "reject" {
+		if isPrivateGuardRule(m) {
 			return i
 		}
 	}
@@ -50,8 +80,8 @@ func TestSingboxPrivateGuardPlainInbound(t *testing.T) {
 			t.Fatalf("inbound %d (%s): guard plus fallthrough pair expected, got %v", in.ID, in.Protocol, rules)
 		}
 		guard := rules[0].(map[string]interface{})
-		if len(guard) != 2 || guard["ip_is_private"] != true || guard["action"] != "reject" {
-			t.Fatalf("inbound %d: guard must be exactly ip_is_private -> reject, got %v", in.ID, guard)
+		if !isPrivateGuardRule(guard) {
+			t.Fatalf("inbound %d: guard must be exactly the canonical ip_cidr set -> reject, got %v", in.ID, guard)
 		}
 	}
 }
@@ -89,6 +119,9 @@ func TestSingboxPrivateGuardPrecedesSplitAndUserRules(t *testing.T) {
 	found := false
 	for _, r := range rules {
 		m := r.(map[string]interface{})
+		if isPrivateGuardRule(m) {
+			continue // R8-004: the guard itself carries 10.0.0.0/8 now
+		}
 		if cidrs, ok := m["ip_cidr"].([]interface{}); ok {
 			for _, c := range cidrs {
 				if c == "10.0.0.0/8" {
@@ -145,8 +178,8 @@ func TestSingboxPrivateGuardSurvivesOutboundIPPolicy(t *testing.T) {
 
 func TestXrayRenderHasNoSingboxGuard(t *testing.T) {
 	// Xray blocks private destinations inside freedom itself; its
-	// render must not gain the sing-box rule (or any ip_is_private
-	// field) as a side effect of this fix.
+	// render must not gain the sing-box rule (an ip_is_private field,
+	// or the canonical set's ip_cidr form) as a side effect.
 	for _, in := range []Inbound{
 		{ID: 1, Protocol: ProtocolVLESS, Port: 443, Settings: Settings{UUID: "00000000-0000-4000-8000-000000000000"}},
 		splitInbound(),
@@ -155,7 +188,7 @@ func TestXrayRenderHasNoSingboxGuard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(r.Files[0].Content, "ip_is_private") {
+		if strings.Contains(r.Files[0].Content, "ip_is_private") || strings.Contains(r.Files[0].Content, "100.64.0.0/10") {
 			t.Fatalf("xray render must stay free of the sing-box guard:\n%s", r.Files[0].Content)
 		}
 	}
