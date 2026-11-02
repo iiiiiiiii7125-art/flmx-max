@@ -13,8 +13,10 @@ function Card({
       className={cn(
         "relative flex flex-col",
         // Flat panel card (2026-11-03): ONE opaque surface, content sits
-        // directly on it; shape comes from the 1px divider border alone -
-        // no shadow, no hover lift. Solid trays survive only on small
+        // directly on it; shape comes from the 1px divider border. The
+        // base adds no elevation shadow of its own and no hover lift -
+        // callers may still pass shadow-* through className, which the
+        // flat recipe allows. Solid trays survive only on small
         // elements (pills, chips, badges, primary buttons).
         "panel-card rounded-lg text-card-foreground",
         className,
