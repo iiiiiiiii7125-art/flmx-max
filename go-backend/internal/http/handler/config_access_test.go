@@ -103,19 +103,52 @@ func TestConfigGetRejectsSensitiveKeysWithoutAuth(t *testing.T) {
 	assertHandlerCodeMsg(t, resp, 403, "禁止访问敏感配置")
 }
 
+// 其余 sensitive 键（如 cloudflare_secret_key）管理员可读仍是既有
+// 行为；jwt_secret 已由 R6-L8-F-05 单独收紧，见
+// TestConfigGetNeverReturnsJWTSecret。
 func TestConfigGetAllowsSensitiveKeysForAdmin(t *testing.T) {
 	router, r := setupConfigAccessTestRouter(t)
 	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
-	seedConfigValue(t, r, "jwt_secret", "jwt-secret")
+	seedConfigValue(t, r, "cloudflare_secret_key", "turnstile-secret")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"jwt_secret"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"cloudflare_secret_key"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", adminToken)
 	resp := httptest.NewRecorder()
 
 	router.ServeHTTP(resp, req)
 
-	assertHandlerConfigValue(t, resp, "jwt_secret", "jwt-secret")
+	assertHandlerConfigValue(t, resp, "cloudflare_secret_key", "turnstile-secret")
+}
+
+// R6-L8-F-05：jwt_secret 与 Gist 凭据同口径——管理员经 config/get
+// 亦不得读回本体（跨用户凭据：泄露后可离线伪造任意用户令牌，
+// 且改密不影响该秘密），config/list 侧同步缺席。写路径不变
+// （TestConfigUpdateAllowsSensitiveKeysForAdmin 仍以 jwt_secret
+// 验证管理员可写）。
+func TestConfigGetNeverReturnsJWTSecret(t *testing.T) {
+	router, r := setupConfigAccessTestRouter(t)
+	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
+	seedConfigValue(t, r, "jwt_secret", "jwt-secret-body")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"jwt_secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", adminToken)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	assertHandlerCodeMsg(t, resp, 403, "禁止访问 JWT 签名密钥")
+	if strings.Contains(resp.Body.String(), "jwt-secret-body") {
+		t.Fatalf("config/get response must not contain the jwt secret: %s", resp.Body.String())
+	}
+
+	// 对照：config/list 对管理员亦缺席该键、本体不出现在响应中。
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/config/list", nil)
+	req.Header.Set("Authorization", adminToken)
+	resp = httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if strings.Contains(resp.Body.String(), "jwt-secret-body") || strings.Contains(resp.Body.String(), "jwt_secret") {
+		t.Fatalf("config/list must not contain jwt_secret: %s", resp.Body.String())
+	}
 }
 
 func TestConfigGetNeverReturnsLicenseCredentials(t *testing.T) {
@@ -136,9 +169,10 @@ func TestConfigGetNeverReturnsLicenseCredentials(t *testing.T) {
 
 // R14-F01（R14-X-01 / A3-01 / A8-01）：管理员经单键 config/get 亦不得
 // 读回 gist_token / gist_password 明文，与 config/list 侧 delete +
-// gist/status tokenHint-only 设计对齐。边界：其余 sensitive 键
-// （如 jwt_secret）管理员可读是既有行为，见
-// TestConfigGetAllowsSensitiveKeysForAdmin，本项不动。
+// gist/status tokenHint-only 设计对齐。边界：其余 sensitive 键管理
+// 员可读是既有行为，见 TestConfigGetAllowsSensitiveKeysForAdmin；
+// jwt_secret 当时同列既有行为，后由 R6-L8-F-05 按同一口径单独
+// 收紧，见 TestConfigGetNeverReturnsJWTSecret。
 func TestConfigGetNeverReturnsGistCredentials(t *testing.T) {
 	router, r := setupConfigAccessTestRouter(t)
 	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
