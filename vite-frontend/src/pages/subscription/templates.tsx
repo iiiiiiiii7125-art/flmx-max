@@ -269,7 +269,7 @@ export function SubscriptionTemplatesModal({
       isOpen={isOpen}
       placement="center"
       scrollBehavior="inside"
-      size="3xl"
+      size="4xl"
       onOpenChange={(open) => !open && onClose()}
     >
       <ModalContent>
@@ -479,7 +479,7 @@ export function SubscriptionTemplatesModal({
                       </p>
                       {edit.id !== undefined && edit.content && (
                         <Textarea
-                          isReadOnly
+                          readOnly
                           className="font-mono text-xs"
                           label="当前内容（上次成功下载）"
                           minRows={8}
@@ -549,7 +549,7 @@ export function SubscriptionTemplatesModal({
                           生成的配置
                         </summary>
                         <Textarea
-                          isReadOnly
+                          readOnly
                           className="mt-1 font-mono text-xs"
                           minRows={10}
                           value={check.content}
