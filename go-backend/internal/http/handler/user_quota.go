@@ -294,6 +294,37 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 	}
 }
 
+// reconcileUserQuotaEnforcement is the periodic backstop for quota
+// enforcement. Enforcement is normally driven by traffic accounting
+// (the three ingestion paths call enforceUserQuotaIfNeeded), so a
+// user whose pause attempt failed — node offline, nft reconcile
+// error — and who then produces no further accounting would
+// otherwise stay unpaused until the next report happens to arrive.
+// The maintenance round re-runs enforcement for every user who is
+// still over quota; enforceUserQuotaIfNeeded re-reads the view under
+// the per-user lock and its incremental semantics make repeat runs
+// no-ops once every forward is paused, so this stays cheap.
+func (h *Handler) reconcileUserQuotaEnforcement(now time.Time) {
+	if h == nil || h.repo == nil {
+		return
+	}
+	userIDs, err := h.repo.ListUserQuotaUserIDs()
+	if err != nil {
+		log.Printf("quota enforcement reconcile failed op=list err=%v", err)
+		return
+	}
+	for _, userID := range userIDs {
+		view, err := h.repo.GetUserQuotaView(userID, now)
+		if err != nil || view == nil {
+			continue
+		}
+		if !isUserQuotaExceeded(view) {
+			continue
+		}
+		h.enforceUserQuotaIfNeeded(userID, view)
+	}
+}
+
 func (h *Handler) resetUserQuotaWindows(now time.Time) {
 	if h == nil || h.repo == nil {
 		return

@@ -42,7 +42,7 @@ func (h *Handler) StartBackgroundJobs() {
 	h.ensureNotifyDispatcher()
 
 	go h.runHourlyStatsLoop(ctx)
-	go h.runDailyMaintenanceLoop(ctx)
+	go h.runResetAndExpiryLoop(ctx)
 	go h.runNodeRenewalCycleLoop(ctx)
 	go h.runMetricsIngestion(ctx)
 	go h.runHealthChecks(ctx)
@@ -321,19 +321,44 @@ func (h *Handler) runHourlyStatsLoop(ctx context.Context) {
 	}
 }
 
-func (h *Handler) runDailyMaintenanceLoop(ctx context.Context) {
+// resetAndExpiryInterval is the cadence of the reset/expiry
+// maintenance loop. This round used to run once a day (a timer aimed
+// at 00:00:05), so an expired user kept running until the next daily
+// pass — up to almost 24h past expiry — and a monthly reset missed
+// while the panel was down waited just as long to be caught up. The
+// loop now runs once at startup and then ticks every minute. Every
+// step of the round is safe at this frequency: the monthly flow reset
+// is due-based with an exactly-once marker (monthlyFlowDue), the
+// quota window roll is day/month-key based, the quota enforcement
+// reconcile is incremental, and the expiry lists only return rows
+// that are still active.
+var resetAndExpiryInterval = time.Minute
+
+func (h *Handler) runResetAndExpiryLoop(ctx context.Context) {
 	defer h.jobsWG.Done()
 
+	interval := resetAndExpiryInterval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+
+	// Startup pass: catch up whatever came due while the process was
+	// down (a missed monthly reset day, users who expired during the
+	// outage) instead of waiting for the first tick.
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		h.runResetAndExpiryJob(time.Now())
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
-		wait := durationUntilNextDailyMaintenance(time.Now())
-		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
 			return
-		case <-timer.C:
+		case <-ticker.C:
 			h.runResetAndExpiryJob(time.Now())
 		}
 	}
@@ -341,14 +366,6 @@ func (h *Handler) runDailyMaintenanceLoop(ctx context.Context) {
 
 func durationUntilNextHour(now time.Time) time.Duration {
 	next := now.Truncate(time.Hour).Add(time.Hour)
-	return next.Sub(now)
-}
-
-func durationUntilNextDailyMaintenance(now time.Time) time.Duration {
-	next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 5, 0, now.Location())
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
-	}
 	return next.Sub(now)
 }
 
@@ -402,6 +419,7 @@ func (h *Handler) runResetAndExpiryJob(now time.Time) {
 
 	h.resetMonthlyFlow(now)
 	h.resetUserQuotaWindows(now)
+	h.reconcileUserQuotaEnforcement(now)
 	h.disableExpiredUsers(now.UnixMilli())
 	h.disableExpiredUserTunnels(now.UnixMilli())
 }
