@@ -824,9 +824,50 @@ func (e *systemUpgradeExecutor) restoreUpgradeBackups(paths ...string) error {
 	return nil
 }
 
+// expectedComposeServices 是面板自升级 compose 资产必须包含的
+// 核心服务名（随版发布的 docker-compose-v4/v6.yml 两模板共有：
+// backend + frontend；postgres 两模板亦有，但属可替换的数据面，
+// 不作硬性要求，避免模板将来去掉内置库时误杀合法资产）。
+var expectedComposeServices = []string{"backend", "frontend"}
+
+// validateComposeAsset 是 replaceCompose 的落盘前内容校验段
+// （L8-F-06 之外的 L8-F-02 修复，G3b 负责本段）：下载来的 compose
+// 此前除网络段保留外整份原文落盘、零内容校验——同源锚一旦被绕
+// 过（或第二锚降级时单锚失陷），任意内容都会被 helper 以宿主
+// docker 权限执行。这里只做最小结构校验：YAML 可解析、根为
+// mapping、含 services 且包含预期服务名；不合即中止、旧 compose
+// 保持不动。深层语义（镜像钉死等）不在本门范围，资产完整性由
+// 下载段的双锚校验和负责。
+func validateComposeAsset(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("compose 资产不是合法 YAML: %v", err)
+	}
+	root := mappingRoot(&doc)
+	if root == nil {
+		return fmt.Errorf("compose 资产结构非法：根节点不是 mapping")
+	}
+	services := yamlMappingChild(root, "services")
+	if services == nil || services.Kind != yaml.MappingNode || len(services.Content) == 0 {
+		return fmt.Errorf("compose 资产缺少 services 定义")
+	}
+	for _, name := range expectedComposeServices {
+		if yamlMappingChild(services, name) == nil {
+			return fmt.Errorf("compose 资产缺少预期服务 %q", name)
+		}
+	}
+	return nil
+}
+
 func (e *systemUpgradeExecutor) replaceCompose(path string, data []byte) error {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return fmt.Errorf("compose asset is empty")
+	}
+	// L8-F-02 内容校验段（G3b）：落盘前先过最小结构校验，不合即
+	// 中止保旧 compose；校验对象是下载原文，网络段保留合并发生
+	// 在其后（preserveComposeNetworks 只动 networks 段）。
+	if err := validateComposeAsset(data); err != nil {
+		return err
 	}
 	mode, err := fileModeOrDefault(path, 0o644)
 	if err != nil {
@@ -1293,29 +1334,87 @@ func (e *systemUpgradeExecutor) startHelper(ctx context.Context, imageID, helper
 	return containerID, nil
 }
 
-func (h *Handler) downloadReleaseAsset(version, filename string) ([]byte, error) {
+// downloadReleaseAsset 下载并校验一个 release 资产，返回资产
+// 本体与锚复核说明（单锚降级时非空、须由调用方点名进升级回执
+// 与日志；双锚通过时为空）。
+func (h *Handler) downloadReleaseAsset(version, filename string) ([]byte, string, error) {
 	// F-139：资产下载必须有多路线尝试（旧实现只产出面板配置代理的
 	// 单条 URL，代理对该资产不可用时无直连重试）。1.7.7（KU5）候
 	// 选 = systemUpgradeDownloadURLs 的全表（直选路线序，10 条）：
 	// 资产与 .sha256 必须同源同次取得——每个候选内部独立完成下载
 	// +校验，不跨源混搭；全候选共用 githubAssetDownloadBudget 总
 	// 预算，单候选沿 SecureFetch 的 60s 腿界（取两者较小者）。
+	// L8-F-02：同源校验只是第一锚——获胜候选定版后必须再经
+	// corroborateReleaseAssetChecksum 从异路复核同一校验值，不一
+	// 致硬失败中止（不换路重试），无异路可复核时降级单锚并把降
+	// 级说明交回调用方点名。
 	ctx, cancel := context.WithTimeout(context.Background(), githubAssetDownloadBudget)
 	defer cancel()
+	urls := h.systemUpgradeDownloadURLs(version, filename)
 	var lastErr error
-	for _, url := range h.systemUpgradeDownloadURLs(version, filename) {
+	for i, url := range urls {
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, secureFetchTotalTimeout)
-		body, err := h.downloadReleaseAssetFromCtx(attemptCtx, url, filename)
+		body, want, err := h.downloadReleaseAssetAttempt(attemptCtx, url, filename)
 		attemptCancel()
 		if err == nil {
-			return body, nil
+			note, cerr := h.corroborateReleaseAssetChecksum(ctx, urls, i, filename, want)
+			if cerr != nil {
+				return nil, "", cerr
+			}
+			return body, note, nil
 		}
 		lastErr = err
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return nil, lastErr
+	return nil, "", lastErr
+}
+
+// systemUpgradeAnchorTimeout 是跨线路锚复核一轮的总界
+// （L8-F-02）：与 agent 侧 anchorCorroborateTimeout 同值同口径
+// ——复核对象只是小校验文件，逐候选尝试共用此界；且复核整体仍
+// 在 githubAssetDownloadBudget 总预算内完成，不新增端点时限
+// （T004 的 240s 界不变）。
+var systemUpgradeAnchorTimeout = 20 * time.Second
+
+// corroborateReleaseAssetChecksum 是面板自升级的第二锚
+// （L8-F-02，与 agent 侧 corroborateUpgradeChecksum 同口径）：
+// 获胜候选的 .sha256 与资产同源同次取得，单个镜像失陷即可自洽
+// 篡改（资产与校验一起换）。这里从候选集内与获胜线路不同的另
+// 一条线路重取同一资产的 .sha256 比对：任一异路给出不同哈希即
+// 硬失败中止；异路给出的内容不是合法 SHA256 时只废该路、继续
+// 问下一路（与 agent 腿内口径一致）；全部异路都给不出合法校验
+// 值（或候选集只有一条线路）时降级为单锚继续，并返回必须点名
+// 进升级回执/日志的降级说明。返回空串表示复核通过。
+func (h *Handler) corroborateReleaseAssetChecksum(ctx context.Context, urls []string, winner int, filename, want string) (string, error) {
+	actx, cancel := context.WithTimeout(ctx, systemUpgradeAnchorTimeout)
+	defer cancel()
+	var lastErr error
+	for i, url := range urls {
+		if i == winner {
+			continue
+		}
+		shaBody, err := SecureFetch(actx, url+".sha256")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		got := strings.TrimSpace(strings.Split(string(shaBody), " ")[0])
+		if !ghMirrorSHA256Hex.MatchString(got) {
+			lastErr = fmt.Errorf("%s 的校验文件内容不是合法 SHA256", filename)
+			continue
+		}
+		if !strings.EqualFold(got, want) {
+			return "", fmt.Errorf("校验文件经两条不同线路获取的结果不一致，已中止升级（L8-F-02 第二锚）: %s != %s", got, want)
+		}
+		return "", nil
+	}
+	note := "跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续"
+	if lastErr != nil {
+		note = fmt.Sprintf("%s（%v）", note, lastErr)
+	}
+	return note, nil
 }
 
 func (h *Handler) downloadReleaseAssetFrom(url, filename string) ([]byte, error) {
@@ -1325,26 +1424,35 @@ func (h *Handler) downloadReleaseAssetFrom(url, filename string) ([]byte, error)
 }
 
 func (h *Handler) downloadReleaseAssetFromCtx(ctx context.Context, url, filename string) ([]byte, error) {
+	body, _, err := h.downloadReleaseAssetAttempt(ctx, url, filename)
+	return body, err
+}
+
+// downloadReleaseAssetAttempt 是单候选下载腿：资产与 .sha256
+// 同源同次取得并比对（R5-B5 D16 口径不变），额外回传该腿采信
+// 的期望哈希，供 downloadReleaseAsset 做跨线路第二锚复核
+// （L8-F-02）。
+func (h *Handler) downloadReleaseAssetAttempt(ctx context.Context, url, filename string) ([]byte, string, error) {
 	// R5-B5 D16: 经 SecureFetch（SSRF 防护 + 大小限制 + 超时）。
 	body, err := SecureFetch(ctx, url)
 	if err != nil {
-		return nil, fmt.Errorf("下载%s失败: %v", filename, err)
+		return nil, "", fmt.Errorf("下载%s失败: %v", filename, err)
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		return nil, fmt.Errorf("下载%s内容为空", filename)
+		return nil, "", fmt.Errorf("下载%s内容为空", filename)
 	}
 	// R5-B5 D16: 校验和缺失即 fail-closed（与 H-01 对 gost 二进制的标准一致）。
 	shaURL := url + ".sha256"
 	shaBody, err := SecureFetch(ctx, shaURL)
 	if err != nil {
-		return nil, fmt.Errorf("下载%s的校验文件失败（fail-closed）: %v", filename, err)
+		return nil, "", fmt.Errorf("下载%s的校验文件失败（fail-closed）: %v", filename, err)
 	}
 	expected := strings.TrimSpace(strings.Split(string(shaBody), " ")[0])
 	actual := fmt.Sprintf("%x", sha256.Sum256(body))
 	if !hmac.Equal([]byte(expected), []byte(actual)) {
-		return nil, fmt.Errorf("%s校验失败：期望 %s，实际 %s", filename, expected, actual)
+		return nil, "", fmt.Errorf("%s校验失败：期望 %s，实际 %s", filename, expected, actual)
 	}
-	return body, nil
+	return body, expected, nil
 }
 
 func releasesForChannel(releases []githubRelease, channel string) []systemUpgradeReleaseData {
@@ -1602,10 +1710,15 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	composeAsset := exec.selectComposeAsset(composeData)
-	newCompose, err := h.downloadReleaseAsset(version, composeAsset)
+	newCompose, anchorNote, err := h.downloadReleaseAsset(version, composeAsset)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, wrapUpgradeDownloadError(err).Error()))
 		return
+	}
+	// L8-F-02：单锚降级必须在升级回执与日志里点名（与 agent 侧
+	// RV2-03 同口径：降级不能只剩面板本地不可见的痕迹）。
+	if anchorNote != "" {
+		log.Printf("systemUpgrade: %s（资产 %s，目标版本 %s）", anchorNote, composeAsset, version)
 	}
 	if _, err := exec.backupFile(composePath); err != nil {
 		response.WriteJSON(w, response.Err(-2, "备份compose失败: "+err.Error()))
@@ -1665,13 +1778,17 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	message := systemUpgradeMessage
+	if anchorNote != "" {
+		message += "（" + anchorNote + "）"
+	}
 	response.WriteJSON(w, response.OK(systemUpgradeRunData{
 		Version:         version,
 		Channel:         channel,
 		ComposeAsset:    composeAsset,
 		HelperContainer: helperContainer,
 		BackendImageID:  imageID,
-		Message:         systemUpgradeMessage,
+		Message:         message,
 	}))
 }
 

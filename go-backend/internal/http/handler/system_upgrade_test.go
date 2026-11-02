@@ -82,7 +82,7 @@ func TestDownloadReleaseAssetRejectsOversizedBody(t *testing.T) {
 	t.Cleanup(func() { secureFetchMaxBody = originalMax })
 
 	h := &Handler{}
-	_, err := h.downloadReleaseAsset("2.1.9", "docker-compose-v4.yml")
+	_, _, err := h.downloadReleaseAsset("2.1.9", "docker-compose-v4.yml")
 	if err == nil || !strings.Contains(err.Error(), "response too large") {
 		t.Fatalf("downloadReleaseAsset() error = %v, want SecureFetch oversized error", err)
 	}
@@ -737,9 +737,14 @@ func TestDownloadReleaseAssetFallsBackToDirectWhenProxyFails(t *testing.T) {
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
 
 	h := &Handler{}
-	body, err := h.downloadReleaseAsset("9.9.9", "docker-compose-v4.yml")
+	body, note, err := h.downloadReleaseAsset("9.9.9", "docker-compose-v4.yml")
 	if err != nil {
 		t.Fatalf("代理失败时应降级直连下载资产: %v", err)
+	}
+	// L8-F-02：直连获胜后唯一的异路（代理）已死，第二锚无从复核，
+	// 必须以降级说明交回（单锚继续），不得静默。
+	if !strings.Contains(note, "跨线路锚复核已降级") {
+		t.Fatalf("anchor note = %q, want named degradation (only other route is dead)", note)
 	}
 	if string(body) != string(content) {
 		t.Fatalf("asset body = %q, want %q", body, content)
