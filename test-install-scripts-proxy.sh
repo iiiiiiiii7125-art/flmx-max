@@ -1758,6 +1758,125 @@ YAML
     || fail "activate_panel_update_files must still bump FLUX_VERSION"
 )
 
+test_ensure_compose_trusted_proxy_hops_injects_mapping_form() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      SERVER_ADDR: :6365
+  frontend:
+    image: example/frontend:1.9.2
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "R6-L8-F-01: generated compose must carry the FLMX_TRUSTED_PROXY_HOPS passthrough line"
+  assert_equals "1" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "R6-L8-F-01: hops line must be injected exactly once"
+
+  # 幂等：再跑一次不得重复注入。
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+  assert_equals "1" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "R6-L8-F-01: ensure must be idempotent"
+)
+
+test_ensure_compose_trusted_proxy_hops_keeps_existing_line() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.3
+    environment:
+      DB_TYPE: sqlite
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  cp "$work/docker-compose.yml" "$work/before.yml"
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  cmp -s "$work/before.yml" "$work/docker-compose.yml" \
+    || fail "R6-L8-F-01: a compose already carrying the hops line must pass through unchanged"
+)
+
+test_ensure_compose_trusted_proxy_hops_list_form() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      - DB_TYPE=sqlite
+      - SERVER_ADDR=:6365
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  grep -qF -- '- FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "R6-L8-F-01: list-form environment must gain a list-form hops entry"
+)
+
+test_shipped_compose_templates_carry_hops_line() (
+  set -euo pipefail
+  local tpl
+  for tpl in "$ROOT_DIR/docker-compose-v4.yml" "$ROOT_DIR/docker-compose-v6.yml"; do
+    grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$tpl" \
+      || fail "R6-L8-F-01: shipped template $tpl must carry the FLMX_TRUSTED_PROXY_HOPS passthrough line with default 2"
+  done
+)
+
+test_activate_panel_update_files_keeps_hops_line() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'FLUX_VERSION=1.9.2\nJWT_SECRET=x\n' > .env
+  # 存量 compose 带显式跳数行；候选是无此行的旧版资产——覆写后该行
+  # 必须仍在（标准行再生），不得被整份覆写冲掉。
+  cat > docker-compose.yml <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  cat > candidate.yml <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.3
+    environment:
+      DB_TYPE: sqlite
+      SERVER_ADDR: :6365
+YAML
+
+  UPDATE_COMPOSE_CANDIDATE="$work/candidate.yml"
+  LATEST_VERSION="1.9.3"
+  activate_panel_update_files
+
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' docker-compose.yml \
+    || fail "R6-L8-F-01: self-upgrade overwrite must keep the FLMX_TRUSTED_PROXY_HOPS line"
+  grep -q "example/backend:1.9.3" docker-compose.yml \
+    || fail "R6-L8-F-01: update candidate content must otherwise be written"
+)
+
 test_get_deployed_panel_version_parses_image_tag() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -3312,6 +3431,11 @@ test_install_flux_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
 test_main_requires_root
 test_script_secret_surfaces_closed
+test_ensure_compose_trusted_proxy_hops_injects_mapping_form
+test_ensure_compose_trusted_proxy_hops_keeps_existing_line
+test_ensure_compose_trusted_proxy_hops_list_form
+test_shipped_compose_templates_carry_hops_line
+test_activate_panel_update_files_keeps_hops_line
 test_pgloader_command_file_terminated
 test_tcpkill_missing_warns_instead_of_silent
 
