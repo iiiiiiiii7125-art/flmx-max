@@ -28,6 +28,11 @@ type Subscription struct {
 	// SourceIDs (comma separated) adds every node of these remote sources,
 	// including ones a later refresh brings.
 	SourceIDs string `gorm:"column:source_ids;type:text;not null;default:''"`
+	// GroupIDs (comma separated, in order) are the node groups whose
+	// processed nodes are spliced in front of the subscription's own
+	// sources when it is rendered. Groups are a reuse layer: the
+	// subscription's own sources and pipeline keep working unchanged.
+	GroupIDs string `gorm:"column:group_ids;type:text;not null;default:''"`
 	// Options is the JSON processing pipeline.
 	Options string `gorm:"type:text;not null;default:''"`
 	// ExpireTime is unix ms; 0 never expires.
@@ -62,6 +67,27 @@ type Subscription struct {
 }
 
 func (Subscription) TableName() string { return "subscription" }
+
+// NodeGroup is a reusable, named node selection plus processing pipeline
+// (see kernel.SubOptions). Subscriptions reference groups in order and
+// splice their processed nodes into the rendered list, so one filter /
+// rename / sort recipe can be maintained once and shared by many
+// subscriptions. The group's sources resolve exactly like a
+// subscription's: SourceAll takes every inbound, otherwise InboundIDs
+// plus every node of the remote sources in SourceIDs.
+type NodeGroup struct {
+	ID          int64  `gorm:"primaryKey;autoIncrement"`
+	Name        string `gorm:"type:varchar(100);not null"`
+	SourceAll   int    `gorm:"column:source_all;not null;default:0"`
+	InboundIDs  string `gorm:"column:inbound_ids;type:text;not null;default:''"`
+	SourceIDs   string `gorm:"column:source_ids;type:text;not null;default:''"`
+	Options     string `gorm:"type:text;not null;default:''"`
+	Inx         int    `gorm:"not null;default:0"`
+	CreatedTime int64  `gorm:"column:created_time;not null"`
+	UpdatedTime int64  `gorm:"column:updated_time;not null"`
+}
+
+func (NodeGroup) TableName() string { return "node_group" }
 
 // SubscriptionCounter remembers the last cumulative per-user counter seen
 // from a node, so the next sample adds only the difference.
