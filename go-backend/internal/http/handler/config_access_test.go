@@ -146,6 +146,17 @@ func TestConfigGetNeverReturnsThirdPartyCredentials(t *testing.T) {
 		"notify_webhook_url":        "https://hooks.example.com/r7-secret",
 		"notify_telegram_api_base":  "https://tg-proxy.example.com/r7-secret",
 	}
+	// 门禁登记：生产关闭集 thirdPartyCredentialConfigKeys 必须与
+	// 本测试的期望集逐一相等——增删生产清单而不同步本测试即红，
+	// 且下方逐键断言直接覆盖生产清单全集，不靠第二份拷贝对齐。
+	if len(thirdPartyCredentialConfigKeys) != len(secrets) {
+		t.Fatalf("thirdPartyCredentialConfigKeys = %v, want exactly the %d keys pinned by this test", thirdPartyCredentialConfigKeys, len(secrets))
+	}
+	for _, key := range thirdPartyCredentialConfigKeys {
+		if _, ok := secrets[key]; !ok {
+			t.Fatalf("thirdPartyCredentialConfigKeys contains unpinned key %q — extend this test's expected set", key)
+		}
+	}
 	for name, value := range secrets {
 		seedConfigValue(t, r, name, value)
 	}

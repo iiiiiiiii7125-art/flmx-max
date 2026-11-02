@@ -478,6 +478,12 @@ func (h *Handler) federationShareList(w http.ResponseWriter, r *http.Request) {
 	items := make([]peerShareListItem, 0, len(shares))
 	for i := range shares {
 		share := shares[i]
+		// R7-014 全集复扫同族：share 的 relay 凭据（D3-04）前端零
+		// 消费（管理页只消费 token 作展示/复制，凭据经 Connect 协
+		// 议面下发给消费方当事人），不得随列表 DTO 回传——置空
+		// 副本字段后再序列化，落库值与 Connect 下发不受影响。
+		share.RelayUsername = ""
+		share.RelayPassword = ""
 		runtimes, err := h.repo.ListActivePeerShareRuntimesByShareID(share.ID)
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))

@@ -23,7 +23,6 @@ export interface NodeApiItem {
   socks?: number;
   isRemote?: number;
   remoteUrl?: string | null;
-  remoteConfig?: string | null;
   interfaceName?: string | null;
   expiryReminderDismissed?: number;
   syncError?: string;

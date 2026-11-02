@@ -39,6 +39,9 @@ func TestNodeListOmitsRemoteTokenAndSyncStillWorks(t *testing.T) {
 		Status: 0, IsRemote: 1,
 		RemoteURL:   sql.NullString{String: peer.URL, Valid: true},
 		RemoteToken: sql.NullString{String: peerToken, Valid: true},
+		// 全集复扫同族：RemoteConfig 内嵌 D3-04 relay 凭据，随
+		// remoteToken 一并不得下发。
+		RemoteConfig: sql.NullString{String: `{"shareId":7,"relayUsername":"share_r7","relayPassword":"relay-password-r7-g4"}`, Valid: true},
 	}
 	if err := r.DB().Create(&node).Error; err != nil {
 		t.Fatalf("create remote node: %v", err)
@@ -51,6 +54,9 @@ func TestNodeListOmitsRemoteTokenAndSyncStillWorks(t *testing.T) {
 	}
 	if strings.Contains(body, "remoteToken") {
 		t.Fatalf("node/list response still carries remoteToken key: %s", body)
+	}
+	if strings.Contains(body, "remoteConfig") || strings.Contains(body, "relay-password-r7-g4") {
+		t.Fatalf("node/list response still carries remoteConfig / relay credential: %s", body)
 	}
 
 	var env struct {
@@ -73,6 +79,39 @@ func TestNodeListOmitsRemoteTokenAndSyncStillWorks(t *testing.T) {
 	// remoteUrl 不是凭据，列表呈现口径不变。
 	if env.Data[0]["remoteUrl"] != peer.URL {
 		t.Fatalf("remoteUrl = %v, want %q", env.Data[0]["remoteUrl"], peer.URL)
+	}
+}
+
+// R7-014 全集复扫同族：/federation/share/list 嵌整行 PeerShare
+// 序列化，D3-04 relay 凭据前端零消费（管理页只消费 token 作展示
+// /复制），不得随列表回传；token 本身有真消费，必须保留；落库
+// 凭据不得被列表读取改动（Connect 协议面下发不受影响）。
+func TestFederationShareListOmitsRelayCredentials(t *testing.T) {
+	h, r := setupLatencyHandler(t, "")
+	share := model.PeerShare{
+		Name: "r7-share", NodeID: 1, Token: "share-token-r7-g4",
+		PortRangeStart: 20000, PortRangeEnd: 20010, IsActive: 1,
+		RelayUsername: "share_r7_list", RelayPassword: "relay-password-share-list-r7",
+		CreatedTime: 1, UpdatedTime: 1,
+	}
+	if err := r.DB().Create(&share).Error; err != nil {
+		t.Fatalf("create share: %v", err)
+	}
+
+	res := postJSONToHandler(t, h.federationShareList, map[string]interface{}{})
+	body := res.Body.String()
+	if strings.Contains(body, "relay-password-share-list-r7") || strings.Contains(body, "share_r7_list") {
+		t.Fatalf("share/list response leaks relay credentials: %s", body)
+	}
+	if !strings.Contains(body, "share-token-r7-g4") {
+		t.Fatalf("share/list must keep the management token (frontend display/copy): %s", body)
+	}
+	stored, err := r.GetPeerShare(share.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("reload share: %v", err)
+	}
+	if stored.RelayPassword != "relay-password-share-list-r7" {
+		t.Fatal("share/list read must not mutate stored relay credentials")
 	}
 }
 
