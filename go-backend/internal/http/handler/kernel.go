@@ -2106,9 +2106,11 @@ func versionBelow(version string, major, minor int) bool {
 }
 
 // versionBelow3 是 versionBelow 的三段版（Xray 的 25.9.5 这类下限需要精确到
-// 修订号）；"latest" 与不可解析的版本同样不视为过低。
+// 修订号）；"latest" 与不可解析的版本同样不视为过低。四段及以上按前三段
+// 比较（与 versionBelowPadded 同口径）：旧实现 SplitN 限 3 段会把第三段
+// 拼成 "5.1" 解析失败、对四段串无条件放行，"25.9.4.9" 能绕过 25.9.5 下限。
 func versionBelow3(version string, major, minor, patch int) bool {
-	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
 	if len(parts) < 3 {
 		return false
 	}

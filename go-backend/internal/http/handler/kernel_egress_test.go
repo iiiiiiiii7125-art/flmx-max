@@ -89,3 +89,49 @@ func TestXrayPreferredEgressVersion(t *testing.T) {
 		t.Fatalf("strict policies must keep supporting older Xray: %v", err)
 	}
 }
+
+// 四段版本号必须按前三段参与下限比较，不得因段数多被无条件放行：
+// versionBelowPadded 的两个调用点（PQ 门 25.5.16 与 prefer 门 25.6.8）
+// 及同族 versionBelow3（25.9.5 等下限）同口径。
+func TestVersionBelowFourSegmentVersions(t *testing.T) {
+	for _, tc := range []struct {
+		version           string
+		major, minor, pat int
+		want              bool
+	}{
+		{"25.6.7.9", 25, 6, 8, true},   // 前三段低于 prefer 门
+		{"25.6.8.0", 25, 6, 8, false},  // 前三段恰达 prefer 门
+		{"25.6.9.1", 25, 6, 8, false},  // 前三段高于 prefer 门
+		{"25.5.15.9", 25, 5, 16, true}, // 前三段低于 PQ 门
+		{"25.5.16.1", 25, 5, 16, false},
+		{"25.6", 25, 6, 8, true},    // 缺段补 0 的既有口径不变
+		{"25.6.8", 25, 6, 8, false}, // 三段口径不变
+		{"latest", 25, 6, 8, false}, // 不可解析不视为过低（既有口径）
+		{"25.6.x", 25, 6, 8, false}, // 前三段内不可解析同样不视为过低
+	} {
+		if got := versionBelowPadded(tc.version, tc.major, tc.minor, tc.pat); got != tc.want {
+			t.Errorf("versionBelowPadded(%q, %d, %d, %d) = %v, want %v", tc.version, tc.major, tc.minor, tc.pat, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{
+		{"25.9.4.9", true},  // 四段：前三段低于 25.9.5 下限（旧实现无条件放行）
+		{"25.9.5.1", false}, // 四段：前三段恰达下限
+		{"25.9.5", false},   // 三段口径不变
+		{"25.9.4", true},
+		{"25.9", false}, // 不足三段不视为过低（既有口径）
+	} {
+		if got := versionBelow3(tc.version, 25, 9, 5); got != tc.want {
+			t.Errorf("versionBelow3(%q, 25, 9, 5) = %v, want %v", tc.version, got, tc.want)
+		}
+	}
+	// prefer 门端到端：四段低版本必须被拦。
+	if err := validateOutboundIPVersion(kernel.TypeXray, "25.6.7.9", kernel.OutboundPreferIPv4); err == nil {
+		t.Fatal("four-segment 25.6.7.9 must be rejected by the prefer gate")
+	}
+	if err := validateOutboundIPVersion(kernel.TypeXray, "25.6.8.2", kernel.OutboundPreferIPv4); err != nil {
+		t.Fatalf("four-segment 25.6.8.2 must pass the prefer gate: %v", err)
+	}
+}

@@ -16,11 +16,14 @@ func TestKernelSupportsPostQuantumRealityGate(t *testing.T) {
 		version    string
 		want       bool
 	}{
-		{kernel.TypeXray, "25.5.16", true},  // 门槛版本本身
-		{kernel.TypeXray, "25.6.8", true},   // 高于门槛
-		{kernel.TypeXray, "v25.10.4", true}, // v 前缀可解析
-		{kernel.TypeXray, "25.5.15", false}, // 低一号
-		{kernel.TypeXray, "25.5", false},    // 补齐为 25.5.0，仍低于门槛
+		{kernel.TypeXray, "25.5.16", true},    // 门槛版本本身
+		{kernel.TypeXray, "25.6.8", true},     // 高于门槛
+		{kernel.TypeXray, "v25.10.4", true},   // v 前缀可解析
+		{kernel.TypeXray, "25.5.15", false},   // 低一号
+		{kernel.TypeXray, "25.5.15.9", false}, // 四段：按前三段比较，仍低于门槛
+		{kernel.TypeXray, "25.5.16.1", true},  // 四段：前三段达门槛
+		{kernel.TypeXray, "24.1.2.3", false},  // 四段：主版本已低于门槛
+		{kernel.TypeXray, "25.5", false},      // 补齐为 25.5.0，仍低于门槛
 		{kernel.TypeXray, "24.12.31", false},
 		{kernel.TypeXray, "", false},       // 未知版本不算
 		{kernel.TypeXray, "latest", false}, // 不可解析不算
