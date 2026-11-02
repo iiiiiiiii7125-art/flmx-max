@@ -1905,6 +1905,9 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// R2-040（B-node-05）：去重——同一 ID 第二次迭代时节点已删，
+	// 会被记成「节点不存在」假失败，与同批成功计数自相矛盾。
+	ids = uniqueInt64s(ids)
 	uninstall := asBool(batchReq["uninstall"], false)
 	// A2-05（=A9-04 后端半）：逐条收集成败并以 batchOperationResult
 	// 回执（与 forward/tunnel/inbound 批量接口同口径）。旧实现吞掉全部
@@ -9616,7 +9619,11 @@ func idsFromBody(r *http.Request, w http.ResponseWriter) []int64 {
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
+	// R2-040：去重（与 nodeBatchUpgrade 的 uniqueInt64s 口径对齐）。
+	// 全部调用面都是对 id 集合的批处理（入站批删/隧道批删/隧道批量
+	// 重部署），重复 id 无语义：不去重时删除面第二次迭代必然撞上
+	// 已删行、记一条虚假失败，重部署面则重复执行并重复计数。
+	return uniqueInt64s(ids)
 }
 
 // idsFromBodyWithInvalid 与 idsFromBody 同源解析，但把 id<=0 的条目
