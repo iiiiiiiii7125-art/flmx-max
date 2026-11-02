@@ -131,6 +131,11 @@ func logStartupFailure(stage string, err error) {
 }
 
 func main() {
+	// Core dump hygiene (coredump.go): never produce core files, and
+	// sweep any stockpile left in the data directories by earlier
+	// crashes before doing anything else.
+	sweepCoreDumps()
+
 	// 加载配置文件
 	config, err := LoadConfig("config.json")
 	if err != nil {
