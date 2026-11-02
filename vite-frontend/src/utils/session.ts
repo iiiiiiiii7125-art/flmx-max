@@ -1,6 +1,11 @@
 import { purgeSensitiveConfigCache } from "@/config/sensitive-keys";
 
-import { getRoleIdFromToken, getUsernameFromToken, isTokenValid } from "./jwt";
+import {
+  getRoleIdFromToken,
+  getUserIdFromToken,
+  getUsernameFromToken,
+  isTokenValid,
+} from "./jwt";
 
 // N-002：角色/管理员标志不再单独写入 localStorage（role_id/admin 键可被
 // 控制台任意篡改，前端 UI 门控会因此失真）。统一从 JWT 解析：
@@ -40,6 +45,16 @@ export const getRoleId = (): number | null => {
   }
 
   return getRoleIdFromToken(token);
+};
+
+export const getUserId = (): number | null => {
+  const token = getToken();
+
+  if (!token || !isTokenValid(token)) {
+    return null;
+  }
+
+  return getUserIdFromToken(token);
 };
 
 export const getSessionName = (): string | null => {

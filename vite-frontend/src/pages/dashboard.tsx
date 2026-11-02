@@ -715,7 +715,8 @@ function UserDashboard() {
       {announcement && <AnnouncementBanner announcement={announcement} />}
       {announcement && (
         // R7-F5-03：关闭即落已读——onClose 与「不再提示」同走
-        // dismissAnnouncementModal（写 flmx_announcement_seen_time），
+        // dismissAnnouncementModal（写按用户分键的
+        // flmx_announcement_seen_time:<userId>，R8-044），
         // 公告内容更新（update_time 变大）后仍会重新弹窗。
         <AnnouncementModal
           announcement={announcement}

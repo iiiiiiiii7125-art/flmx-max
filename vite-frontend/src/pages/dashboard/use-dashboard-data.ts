@@ -10,7 +10,7 @@ import {
   type AnnouncementData,
 } from "@/api";
 import { getNodeRenewalSnapshot } from "@/pages/node/renewal";
-import { getAdminFlag } from "@/utils/session";
+import { getAdminFlag, getUserId } from "@/utils/session";
 
 export interface DashboardUserInfo {
   flow: number;
@@ -76,6 +76,22 @@ const normalizeDashboardRenewalCycle = (
 const DASHBOARD_POLL_INTERVAL_MS = 5000;
 const EXPIRATION_NOTIFICATION_STORAGE_KEY =
   "dashboard:last-expiration-notification";
+
+// R8-044：公告已读标记按用户分键——旧版全局单键
+// flmx_announcement_seen_time 让同一浏览器先后登录的两个账号共用
+// 已读状态，先登录者关掉弹窗后，后登录者看不到该版公告弹窗。
+// 现按 JWT 用户 ID 分键；取不到用户 ID（token 不可用）时回落旧键名
+// 保持原行为。旧键仅作回落名保留、不再被已识别用户读写，既有值
+// 不会引发错误（升级后各用户首次会重新看到当前版公告一次）。
+const ANNOUNCEMENT_SEEN_STORAGE_KEY = "flmx_announcement_seen_time";
+
+const announcementSeenStorageKey = (): string => {
+  const userId = getUserId();
+
+  return userId === null
+    ? ANNOUNCEMENT_SEEN_STORAGE_KEY
+    : `${ANNOUNCEMENT_SEEN_STORAGE_KEY}:${userId}`;
+};
 
 const buildExpirationNotificationKey = (
   userInfo: DashboardUserInfo,
@@ -362,7 +378,7 @@ export const useDashboardData = (): DashboardDataState => {
 
         try {
           const storedTimeStr = localStorage.getItem(
-            "flmx_announcement_seen_time",
+            announcementSeenStorageKey(),
           );
           const storedTime = storedTimeStr ? parseInt(storedTimeStr, 10) : 0;
           const updateTime = res.data.update_time || 0;
@@ -388,7 +404,7 @@ export const useDashboardData = (): DashboardDataState => {
     if (announcement && announcement.update_time) {
       try {
         localStorage.setItem(
-          "flmx_announcement_seen_time",
+          announcementSeenStorageKey(),
           announcement.update_time.toString(),
         );
       } catch {
