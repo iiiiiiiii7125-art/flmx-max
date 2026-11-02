@@ -189,19 +189,19 @@ sudo systemctl restart caddy
 
 | 你的拓扑 | 跳数设置 |
 |---|---|
-| Caddy → 前端 → 后端（`panel_install.sh` 默认：脚本生成的 Caddy 配置反代的是**前端端口**，再由前端容器的 nginx 把 API 请求转给后端，链上共两跳；按本文手工配 Caddy 反代前端端口同理） | `FLMX_TRUSTED_PROXY_HOPS=2`（**必须显式设置**；默认值 1 在此拓扑下是错的） |
-| nginx（frontend 容器）→ 后端（docker 默认、没有 Caddy） | `1`（默认，可不设） |
-| Caddy 直接反代**后端端口**（自备配置、绕过前端容器） | `1`（默认，可不设） |
+| Caddy → 前端 → 后端（`panel_install.sh` 默认：脚本生成的 Caddy 配置反代的是**前端端口**，再由前端容器的 nginx 把 API 请求转给后端，链上共两跳；按本文手工配 Caddy 反代前端端口同理） | `2`（随版模板默认即 2，**开箱即对、无需任何设置**） |
+| nginx（frontend 容器）→ 后端（docker 默认、没有 Caddy） | `1`（须在 `.env` 显式覆盖，见下） |
+| Caddy 直接反代**后端端口**（自备配置、绕过前端容器） | `1`（须在 `.env` 显式覆盖，见下） |
 
-设置方法（以设成 2 为例）：在部署目录的 `docker-compose.yml` 里给 backend 服务的 `environment:` 加一行传递（与文件中 `FLMX_WEBAUTHN_ORIGIN` 一行同式）：
+随版 compose 模板（`docker-compose-v4.yml` / `docker-compose-v6.yml`）的 backend `environment:` 已自带传递行，默认就是默认拓扑的两跳：
 
 ```yaml
-      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-}
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
 ```
 
-再在同目录 `.env` 里写 `FLMX_TRUSTED_PROXY_HOPS=2`，然后 `docker compose up -d backend` 重建后端生效。**只写 `.env`、不加上面那行传递，变量进不了后端进程、不会生效。** 面板更新可能用模板覆盖 `docker-compose.yml`，更新后按下面的自检核对一次：生效值变回 1 就说明传递行被覆盖了，需要重新加。
+`panel_install.sh` 安装、更新与迁移时都会保证这行存在（旧 compose 缺行时自动补入），面板自升级覆写 compose 时也会保留这行与已显式设置的值——所以默认拓扑下什么都不用做。**自定义拓扑的覆盖方法**：在部署目录的 `.env` 里写一行 `FLMX_TRUSTED_PROXY_HOPS=<你的跳数>`（如单跳写 `=1`），然后 `docker compose up -d backend` 重建后端生效；可填值就是链上可信代理的跳数（正整数）。**防错警告**：只有用随版模板或脚本安装时传递行才必然存在；若你手工自备 compose，请照上面那行原样加进 backend 的 `environment:`——只写 `.env`、没有传递行，变量进不了后端进程、不会生效，此时会回落到后端代码默认值 1。
 
-跳数配少了，限流键会取到代理自己的 IP（多用户共享一个桶）：脚本默认拓扑若漏设 `=2`、沿用默认 1，全体登录用户会共用同一个 10 次/分钟的桶，别人连续输错几次密码就能把所有人的正常登录连带限流（返回 429）。配多了，
+跳数配少了，限流键会取到代理自己的 IP（多用户共享一个桶）：例如两跳拓扑下生效值是 1（手工 compose 丢了传递行、或把 `.env` 误设成 1），全体登录用户会共用同一个 10 次/分钟的桶，别人连续输错几次密码就能把所有人的正常登录连带限流（返回 429）。配多了，
 面板会拒绝信任 XFF、回退到直连对端 IP（同样是代理 IP、共享桶），并
 在日志里告警提示检查配置。两种配错都不会取到攻击者伪造的条目。**自检**：后端启动日志会打印 `proxy trust: FLMX_TRUSTED_PROXY_HOPS=<生效值>`，请核对它与你的实际拓扑一致；出现「多人共用一个桶」式的连带 429 时先查这个生效值。面板直连公网（无代理）时忽略 XFF。
 
