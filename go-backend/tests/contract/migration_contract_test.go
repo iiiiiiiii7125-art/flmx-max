@@ -429,13 +429,31 @@ func TestBackupExportImportRestoreContracts(t *testing.T) {
 		t.Fatalf("generate user token: %v", err)
 	}
 
-	key := "backup_contract_key"
+	// Round-trip key must be a classified, exportable config key:
+	// since RB4-01 the backup export filter treats unclassified keys
+	// as sensitive by default (PolicyForConfig), so an arbitrary key
+	// no longer appears in exports. app_name is classified public and
+	// is the same carrier the repo backup tests use.
+	key := "app_name"
 	if err := r.DB().Exec(`
 		INSERT INTO vite_config(name, value, time)
 		VALUES(?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET value = excluded.value, time = excluded.time
 	`, key, "v1", time.Now().UnixMilli()).Error; err != nil {
 		t.Fatalf("seed config for backup contract: %v", err)
+	}
+
+	// Unclassified keys stay out of backup exports under the
+	// default-sensitive export policy (RB4-01); the import side
+	// deliberately still restores them (direction split), which is
+	// not what this probe asserts.
+	unclassifiedKey := "backup_contract_key"
+	if err := r.DB().Exec(`
+		INSERT INTO vite_config(name, value, time)
+		VALUES(?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET value = excluded.value, time = excluded.time
+	`, unclassifiedKey, "v1", time.Now().UnixMilli()).Error; err != nil {
+		t.Fatalf("seed unclassified config for backup contract: %v", err)
 	}
 
 	t.Run("non-admin is blocked on backup export", func(t *testing.T) {
@@ -454,6 +472,9 @@ func TestBackupExportImportRestoreContracts(t *testing.T) {
 		}
 		if _, ok := payloadA.Configs[key]; !ok {
 			t.Fatalf("expected %q in exported configs", key)
+		}
+		if _, ok := payloadA.Configs[unclassifiedKey]; ok {
+			t.Fatalf("expected unclassified key %q to be withheld from exported configs", unclassifiedKey)
 		}
 
 		payloadB := exportBackupPayload(t, router, "/api/v1/api/v1/backup/export", adminToken)
