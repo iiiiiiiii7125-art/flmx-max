@@ -835,8 +835,14 @@ func (e *systemUpgradeExecutor) replaceCompose(path string, data []byte) error {
 	// FIX2-C #1（V6-01）：整份覆写前把存量 compose 的网络名与子网
 	// 搬进候选（见 preserveComposeNetworks）。存量文件读不到（首装
 	// 等）时按候选原样写。
+	// R6-L8-F-01：同一覆写点再保 FLMX_TRUSTED_PROXY_HOPS 传递行
+	// （见 ensureComposeTrustedProxyHops）——存量显式值优先搬入，
+	// 两侧皆无则再生模板标准行，防自升级把跳数配置冲回缺失。
 	if existing, readErr := os.ReadFile(path); readErr == nil {
 		data = preserveComposeNetworks(existing, data)
+		data = ensureComposeTrustedProxyHops(existing, data)
+	} else {
+		data = ensureComposeTrustedProxyHops(nil, data)
 	}
 	return writeFileWithMode(path, data, mode)
 }
@@ -909,6 +915,126 @@ func preserveComposeNetworks(existing, candidate []byte) []byte {
 		return candidate
 	}
 	return out
+}
+
+// trustedProxyHopsEnvKey / trustedProxyHopsComposeLine 是
+// R6-L8-F-01 的标准传递行，与随版 compose 模板（docker-compose-
+// v4/v6.yml）逐字一致：默认拓扑（Caddy → 前端 nginx → 后端）两跳
+// 即 2，部署可在 .env 以同名变量覆盖。
+const trustedProxyHopsEnvKey = "FLMX_TRUSTED_PROXY_HOPS"
+const trustedProxyHopsComposeValue = "${FLMX_TRUSTED_PROXY_HOPS:-2}"
+
+// ensureComposeTrustedProxyHops 保证待写入的新 compose 的 backend
+// environment 带 FLMX_TRUSTED_PROXY_HOPS（R6-L8-F-01）。
+//
+// 背景：该变量缺失时后端按代码默认 1 跳解析 XFF，而脚本默认拓扑
+// 恒为两跳——登录限流键收敛到前端网关条目、全站共用一桶，未认证
+// 者可持续锁死全站登录。自升级整份覆写 compose 会把部署手工补的
+// 传递行冲掉，故在此与 preserveComposeNetworks 同点兜底：
+//   - 候选已带该键（新版模板）→ 原样返回（含字节不变）；
+//   - 候选缺、存量带显式值 → 把存量的条目整条搬入（值优先于默认）；
+//   - 两侧皆缺 → 注入模板标准行 ${FLMX_TRUSTED_PROXY_HOPS:-2}。
+//
+// environment 的映射与列表（- KEY=value）两种写法都处理；任一侧
+// 解析失败、或候选无 services.backend.environment 结构时，候选
+// 原样返回（不比现状更糟）。
+func ensureComposeTrustedProxyHops(existing, candidate []byte) []byte {
+	var candidateDoc yaml.Node
+	if err := yaml.Unmarshal(candidate, &candidateDoc); err != nil {
+		return candidate
+	}
+	candidateEnv := composeBackendEnvironment(&candidateDoc)
+	if candidateEnv == nil {
+		return candidate
+	}
+	if composeEnvHasKey(candidateEnv, trustedProxyHopsEnvKey) {
+		return candidate
+	}
+
+	// 候选缺键：优先搬存量的显式条目（映射值节点或列表条目原文）。
+	var existingValue *yaml.Node
+	var existingItem string
+	if len(existing) > 0 {
+		var existingDoc yaml.Node
+		if err := yaml.Unmarshal(existing, &existingDoc); err == nil {
+			if existingEnv := composeBackendEnvironment(&existingDoc); existingEnv != nil {
+				existingValue = yamlMappingChild(existingEnv, trustedProxyHopsEnvKey)
+				existingItem = composeEnvListItem(existingEnv, trustedProxyHopsEnvKey)
+			}
+		}
+	}
+
+	switch candidateEnv.Kind {
+	case yaml.MappingNode:
+		value := existingValue
+		if value == nil {
+			if existingItem != "" {
+				// 存量是列表写法 KEY=value：取 = 右侧作映射值。
+				if _, v, ok := strings.Cut(existingItem, "="); ok {
+					value = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v}
+				}
+			}
+		}
+		if value == nil {
+			value = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: trustedProxyHopsComposeValue}
+		} else {
+			value = cloneYAMLNode(value)
+		}
+		setYAMLMappingValue(candidateEnv, trustedProxyHopsEnvKey, value)
+	case yaml.SequenceNode:
+		item := existingItem
+		if item == "" && existingValue != nil {
+			item = trustedProxyHopsEnvKey + "=" + existingValue.Value
+		}
+		if item == "" {
+			item = trustedProxyHopsEnvKey + "=" + trustedProxyHopsComposeValue
+		}
+		candidateEnv.Content = append(candidateEnv.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: item})
+	default:
+		return candidate
+	}
+	out, err := yaml.Marshal(&candidateDoc)
+	if err != nil {
+		return candidate
+	}
+	return out
+}
+
+// composeBackendEnvironment 定位 services.backend.environment 节点
+// （无此结构返回 nil）。
+func composeBackendEnvironment(doc *yaml.Node) *yaml.Node {
+	services := yamlMappingChild(mappingRoot(doc), "services")
+	backend := yamlMappingChild(services, "backend")
+	return yamlMappingChild(backend, "environment")
+}
+
+// composeEnvHasKey 报告 environment（映射或列表写法）是否已设 key。
+func composeEnvHasKey(env *yaml.Node, key string) bool {
+	switch env.Kind {
+	case yaml.MappingNode:
+		return yamlMappingChild(env, key) != nil
+	case yaml.SequenceNode:
+		return composeEnvListItem(env, key) != ""
+	}
+	return false
+}
+
+// composeEnvListItem 在列表写法 environment 中取 key 的整条条目
+// （"KEY=value" 原文；无则 ""）。
+func composeEnvListItem(env *yaml.Node, key string) string {
+	if env == nil || env.Kind != yaml.SequenceNode {
+		return ""
+	}
+	for _, item := range env.Content {
+		if item.Kind != yaml.ScalarNode {
+			continue
+		}
+		if k, _, ok := strings.Cut(item.Value, "="); ok && k == key {
+			return item.Value
+		}
+	}
+	return ""
 }
 
 // mappingRoot 返回 YAML 文档的根 mapping（非 mapping 时 nil）。
