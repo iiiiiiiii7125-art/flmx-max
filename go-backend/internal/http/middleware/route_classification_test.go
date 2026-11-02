@@ -69,6 +69,11 @@ import (
 // Access 的真管理员面 → 管理员（gateHandler)，/error 与
 // /system-info 是非 /api/ 自理面 → 公开面（gateNonAPI)，其余
 // 34 条 → 普通用户（gateLogin)。
+//
+// 注：本节与上文 R8-023 段的条数（211/189/20/144/46 等）是立门
+// 时点（L1/L8 期）的推导记录，冻结备查、不要随现行计数回改；
+// 现行条数以 TestRouteClassificationCensus 的日志输出为准
+// （AG-01 口径：活计数不写死在注释里）。
 
 type routeClass int
 
@@ -116,7 +121,11 @@ func pubOpt(p string) routeEntry {
 }
 func pubNA(p string) routeEntry { return routeEntry{p, classPublic, gateNonAPI} }
 
-// routeClassification 是全量注册路由的显式分类表（216 条）。
+// routeClassification 是全量注册路由的显式分类表。条数不在注释
+// 写死：由 TestRouteClassificationCensus 机械普查并在日志输出，
+// 注释里的裸数字无门可守、只会静默漂移（AG-01 教训：此处曾写
+// 216、实数已涨过其上而无人察觉；同族计数一律改用 K11-COUNT
+// 标记形态或不写数字）。
 // 新增路由时：先在 handler.go/router.go 注册，再来这里加一行
 // 分类；改某条路由的鉴权语义时同步改这里并让三表对位检查裁决。
 var routeClassification = []routeEntry{

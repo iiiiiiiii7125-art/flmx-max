@@ -158,15 +158,17 @@ jobs:
   # F-008：全量 go test 门禁。此前 CI 只有 build + 单条 PG 契约用例，
   # B0 盘点的 10 个基线失败长期无人拦。纳入 go-backend 与 go-gost 两
   # 个模块。
-  # X02-004（审计闭环 Round 1 / C17）：go-gost/x 不再整模块排除。x 共
-  # 207 个包，其中 30 个带测试文件，现以 -short 全量纳入本 job；宿主机
+  # X02-004（审计闭环 Round 1 / C17）：go-gost/x 不再整模块排除，现以
+  # -short 全量纳入本 job；宿主机
   # 依赖的实机校验腿已在用例内自带能力探测门（TestNftScriptPortHopping
   # 的 fib 探测 F-091、TestNftScriptWhitelist 的 nft -c 可用性探测），
   # 环境不支持时只跳实机腿、脚本内容断言照常执行。FLMX 自研包必测
   # 清单（不得再被排除）：x/socket、x/kernel、x/bypass、x/service、
-  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余 175 个
+  # x/chain、x/config(+loader/parsing)。已知覆盖缺口登记：其余
   # 包无任何测试文件（继承上游的协议处理面包），属已知缺口、非本 job
-  # 引入，新增 FLMX 改动落到无测试包时须同步补测试。
+  # 引入，新增 FLMX 改动落到无测试包时须同步补测试。包总数与带测试
+  # 包数不在散文里写死（AG-01：此处散文计数曾与实数漂移、而同文件
+  # 的标记计数安然无恙），一律以下行 K11-COUNT 标记为唯一声称源。
   # [K11-COUNT:x-tested=32] [K11-COUNT:x-untested=175] 上行包计数由
   # scripts/check-doc-consistency.sh 第 10 项以 go list 机械对账
   # （R3-K11 / X02-002），增减包或测试文件须同步更新数字与标记。

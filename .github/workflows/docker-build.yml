@@ -263,7 +263,7 @@ jobs:
 
       # 节点容器安装形态（Docker / Docker Compose）的 agent 镜像：
       # 纯增量 job，不进 create-release 的 needs —— 镜像构建失败不
-      # 阻断既有 12 项发版资产；面板生成的容器安装命令引用此镜像。
+      # 阻断既有发版资产；面板生成的容器安装命令引用此镜像。
       - name: Build and push Agent Docker images
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
