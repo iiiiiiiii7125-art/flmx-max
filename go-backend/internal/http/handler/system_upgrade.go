@@ -545,6 +545,10 @@ func (e *systemUpgradeExecutor) capability(ctx context.Context) systemUpgradeCap
 	}
 	if _, err := e.currentBackendImage(ctx); err != nil {
 		reasons = append(reasons, err.Error())
+	} else if err := e.verifyBackendImageOwnership(ctx); err != nil {
+		// R2-006（AI-08）：镜像 ID 可读只证明同名容器存在，不证明
+		// 它跑的是本面板的镜像——归属断言不过同样不可升级。
+		reasons = append(reasons, err.Error())
 	}
 
 	return systemUpgradeCapabilityData{
@@ -1338,6 +1342,66 @@ func (e *systemUpgradeExecutor) currentBackendImage(ctx context.Context) (string
 		return "", fmt.Errorf("backend image id is empty")
 	}
 	return imageID, nil
+}
+
+// panelImageRefPrefix 是本项目全部发布镜像的注册表前缀：
+// ghcr.io/<仓库 owner>/，owner 取自 githubRepo（与 agentImageRef
+// 同派生）。与 panel_install.sh 的 panel_image_prefix 同口径——
+// 脚本侧共存守卫以此为归属根：名字会撞，镜像归属不会。面板内
+// 升级的身份断言必须与之用同一根，否则两侧对同一部署的归属
+// 判断会分家。
+func panelImageRefPrefix() string {
+	owner := githubRepo
+	if i := strings.Index(owner, "/"); i >= 0 {
+		owner = owner[:i]
+	}
+	return "ghcr.io/" + strings.ToLower(owner) + "/"
+}
+
+// panelImageRefOwned 判定一个镜像引用是否在本项目发布前缀下
+// （前缀级判定：同前缀的旧名镜像同样算自家，与脚本侧一致）。
+func panelImageRefOwned(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	return ref != "" && strings.HasPrefix(ref, panelImageRefPrefix())
+}
+
+// backendImageRef 返回后端容器创建时使用的镜像引用
+// （.Config.Image，如 ghcr.io/<owner>/flmx-flux-panel-backend:1.9.4）。
+// 与 currentBackendImage 返回的解析后镜像 ID 不同：归属断言必须
+// 看引用本身——镜像 ID 只证明某个镜像存在，无法区分同机同名的
+// 他方部署。
+func (e *systemUpgradeExecutor) backendImageRef(ctx context.Context) (string, error) {
+	if err := validateBackendContainerName(e.backendContainer); err != nil {
+		return "", err
+	}
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Config.Image}}", e.backendContainer).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("inspect backend image ref failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	ref := strings.TrimSpace(string(out))
+	if ref == "" {
+		return "", fmt.Errorf("backend image ref is empty")
+	}
+	return ref, nil
+}
+
+// verifyBackendImageOwnership 是 R2-006（AI-08）的镜像归属断言：
+// 所 inspect 的容器必须确实在跑本项目发布的镜像。构造器在 env
+// 透传丢失时回退共享旧名 flux-panel-backend，同机他方旧装的同名
+// 容器只凭名字与镜像 ID 会被误认成本面板后端——helper 随后将以
+// 他方镜像在本方部署目录上执行升级脚本。引用不在本仓前缀下即
+// 拒绝，并指引脚本更新路径（脚本侧有自己的归属守卫，是这类
+// 部署完成升级的正道）。inspect 失败与现行 currentBackendImage
+// 同口径 fail-closed。
+func (e *systemUpgradeExecutor) verifyBackendImageOwnership(ctx context.Context) error {
+	ref, err := e.backendImageRef(ctx)
+	if err != nil {
+		return err
+	}
+	if !panelImageRefOwned(ref) {
+		return fmt.Errorf("后端容器镜像 %s 不属于本面板（发布前缀 %s），已拒绝面板内升级：该容器可能属于同机其他面板或自备镜像部署。请在服务器上进入部署目录运行安装脚本并选择“更新面板”完成升级", ref, panelImageRefPrefix())
+	}
+	return nil
 }
 
 func (e *systemUpgradeExecutor) startHelper(ctx context.Context, imageID, helperName string) (string, error) {
