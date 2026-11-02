@@ -796,6 +796,46 @@ json_escape() {
   printf '%s' "$value"
 }
 
+# 从既有 config.json 里取 addr（无文件/无字段时回空）。
+agent_config_addr() {
+  local config="$1/config.json" addr=""
+  [[ -f "$config" ]] || return 0
+  addr=$(grep -o '"addr"[[:space:]]*:[[:space:]]*"[^"]*"' "$config" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
+  printf '%s' "$addr"
+}
+
+# 共存守卫（C2-02）：$INSTALL_DIR 已有 agent 时，只有其 config 的
+# addr 与本次面板地址逐字相等才认作本面板的旧 agent、允许就地覆盖
+# 安装；不相等（或无法判定）一律视为其他面板的 agent——不覆写其
+# config、不删其文件、不停其服务。面板地址变更过的存量节点可在交
+# 互终端人工确认接管；非交互执行（面板一键命令 -a/-s）直接终止并
+# 说明，绝不静默接管。显式逃生口：FLMX_AGENT_TAKEOVER=1 表示运维
+# 已确认归属后自担接管。
+guard_agent_dir_ownership() {
+  [[ -e "$INSTALL_DIR/config.json" || -e "$INSTALL_DIR/flux_agent" ]] || return 0
+  local old_addr
+  old_addr=$(agent_config_addr "$INSTALL_DIR")
+  if [[ -n "$old_addr" && -n "$SERVER_ADDR" && "$old_addr" == "$(json_escape "$SERVER_ADDR")" ]]; then
+    return 0
+  fi
+  if [[ "${FLMX_AGENT_TAKEOVER:-}" == "1" ]]; then
+    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认接管 $INSTALL_DIR（原连接地址：${old_addr:-未知}）"
+    return 0
+  fi
+  echo "⚠️ $INSTALL_DIR 已存在一个 agent，其连接地址为 ${old_addr:-无法读取}，与本次面板地址 ${SERVER_ADDR:-未提供} 不一致。"
+  echo "   它可能属于其他面板；继续安装会覆写它的配置、把它改连到本面板，本脚本不会未经确认这样做。"
+  if [[ -t 0 ]]; then
+    local confirm
+    read -p "确认该 agent 就是本面板的旧 agent（例如面板换过地址）并继续安装吗？(y/N): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+      return 0
+    fi
+  fi
+  echo "❌ 安装终止：未改动 $INSTALL_DIR 中的任何文件。"
+  echo "   如确认该 agent 属于本面板（例如面板换过地址），请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。"
+  return 1
+}
+
 write_flux_agent_config() {
   local path="$1"
   # GitHub 代理落盘口径（1.7.7）：agent 的下载路由恒由内置候选测速
@@ -1152,6 +1192,10 @@ install_flux_agent() {
   ensure_download_url_initialized || exit 1
 
   get_config_params
+
+  # 共存守卫（C2-02）：在下载、停服、写文件之前先判定既有 agent 的
+  # 归属；不属于本面板时终止，不留任何改动。
+  guard_agent_dir_ownership || exit 1
 
   # 检查并安装 tcpkill
   check_and_install_tcpkill
