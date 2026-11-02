@@ -75,7 +75,7 @@ func TestSingboxSnellChainCoversBackend(t *testing.T) {
 	in := singboxSnellInbounds(t)[2]
 	in.Via = &Endpoint{}
 	cfg := renderJSON(t, TypeSingbox, []Inbound{in})
-	// R7-001: rules[0] is the ip_is_private guard; the chain-blocked
+	// R7-001: rules[0] is the private-range guard; the chain-blocked
 	// reject for this inbound follows it.
 	rule := cfg["route"].(map[string]interface{})["rules"].([]interface{})[1].(map[string]interface{})
 	tags := rule["inbound"].([]interface{})

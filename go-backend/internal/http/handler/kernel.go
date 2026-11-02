@@ -422,6 +422,13 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("内核已登记，但下发失败: "+err.Error()))
 		return
 	}
+	// R8-005: an explicitly old Xray (< 26.5.9) installs fine but has
+	// no built-in private-range block; name that on the success
+	// envelope instead of letting it stay silent.
+	if warning := xrayPrivateBlockWarning(info.Type, version); warning != "" {
+		response.WriteJSON(w, response.OKWithWarning(nil, warning))
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -2153,6 +2160,25 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 		}
 	}
 	return ""
+}
+
+// xrayPrivateBlockVersion 是 Xray 内置私网拦截的版本下限：freedom 的
+// defaultBlockPrivateRule 自 26.5.9 才引入，此前版本对私网目标直通。
+const xrayPrivateBlockVersion = "26.5.9"
+
+// xrayPrivateBlockWarning 是 R8-005 的安装提示：Xray 低于 26.5.9 时
+// 没有 freedom 内置私网拦截，经其入站可达节点内网与云元数据地址。
+// 这不是 kernelVersionGate 的硬门——硬门会把 ENC 的 25.9.5 下限整个
+// 吞掉（任何 <25.9.5 亦 <26.5.9），且剥夺存量旧版节点的全部下发能力，
+// 属能力移除级变更；此处只在管理员主动选版的安装面点名提示（经
+// envelope warning 通道下发，前端必须展示），文档口径见 faq.md。
+// 返回空串表示无需提示（非 Xray / 版本达标 / latest / 不可解析，
+// 与 versionBelow3 既有语义一致）。
+func xrayPrivateBlockWarning(kernelType, version string) string {
+	if kernelType != kernel.TypeXray || !versionBelow3(version, 26, 5, 9) {
+		return ""
+	}
+	return fmt.Sprintf("警告：Xray %s 低于 %s，没有 freedom 内置私网拦截——经该内核的入站可达节点内网与云元数据地址（169.254.169.254 等）。建议改装 %s 及以上版本；确需使用此版本时，请知悉该节点不具备私网拦截。", version, xrayPrivateBlockVersion, xrayPrivateBlockVersion)
 }
 
 // encDialGate 是 R2X-007 的 ENC 拨号侧版本门：链式/分流目标带 VLESS

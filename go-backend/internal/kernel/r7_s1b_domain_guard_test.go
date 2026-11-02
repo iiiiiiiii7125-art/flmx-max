@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"net/netip"
 	"reflect"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 // R7-001 domain form (RM8 S1(b)): the head guard only matches
 // IP-literal destinations, so domain destinations that resolve to
 // private addresses slipped past it to the direct exit. The render
-// now pairs a route "resolve" action with the same ip_is_private
+// now pairs a route "resolve" action with the same private-range
 // reject rule ahead of every direct-exit rule (matcher-conditioned,
 // so chained and split-proxy traffic keeps its domain and resolves
 // at the far end) plus one unconditional pair for the final
@@ -49,7 +50,7 @@ func s1bIsResolve(rule map[string]interface{}) bool {
 
 // s1bPairMember reports whether rules[i] belongs to a domain-guard
 // pair (or the fallthrough pair): every resolve rule in a render is
-// a pair half, and an ip_is_private reject is a pair half when it
+// a pair half, and a guard-shaped reject is a pair half when it
 // carries conditions or closes the list behind the bare resolve.
 // The unconditional head guard is not a member. Sequence-style
 // assertions in the older chain/egress/split tests skip members so
@@ -60,7 +61,7 @@ func s1bPairMember(rules []interface{}, i int) bool {
 	if m["action"] == "resolve" {
 		return true
 	}
-	if m["action"] == "reject" && m["ip_is_private"] == true {
+	if s1bIsReject(m) {
 		if len(m) > 2 {
 			return true
 		}
@@ -72,13 +73,98 @@ func s1bPairMember(rules []interface{}, i int) bool {
 	return false
 }
 
+// s1bIsReject reports whether a rule is a guard reject: an action
+// reject whose ip_cidr is a non-empty subset of the canonical guard
+// set. A pair half carries the intersection of its anchor's own
+// ip_cidr condition with the set (R8-004), so a subset — not only the
+// full set — is the guard shape here; the head guard and the
+// fallthrough reject carry the full set and are pinned exactly by
+// the G1 tests.
 func s1bIsReject(rule map[string]interface{}) bool {
-	return rule["action"] == "reject" && rule["ip_is_private"] == true
+	if rule["action"] != "reject" {
+		return false
+	}
+	raw, ok := rule["ip_cidr"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return false
+	}
+	canon := map[string]bool{}
+	for _, c := range guardPrivateCIDRs() {
+		canon[c] = true
+	}
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok || !canon[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// s1bAnchorCIDRs returns a rule's own ip_cidr condition strings, or
+// nil when the rule carries none.
+func s1bAnchorCIDRs(rule map[string]interface{}) []string {
+	raw, ok := rule["ip_cidr"].([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// s1bCIDRIntersection independently recomputes (test-side, netip)
+// the overlap of the given CIDRs with the canonical guard set.
+func s1bCIDRIntersection(cidrs []string) []string {
+	var canon []netip.Prefix
+	for _, g := range guardPrivateCIDRs() {
+		if p, err := netip.ParsePrefix(g); err == nil {
+			canon = append(canon, p.Masked())
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range cidrs {
+		p, err := netip.ParsePrefix(c)
+		if err != nil {
+			continue
+		}
+		p = p.Masked()
+		for _, g := range canon {
+			var inter netip.Prefix
+			switch {
+			case g.Bits() <= p.Bits() && g.Contains(p.Addr()):
+				inter = p
+			case p.Bits() <= g.Bits() && p.Contains(g.Addr()):
+				inter = g
+			default:
+				continue
+			}
+			if s := inter.String(); !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// s1bPairExempt reports whether a direct-exit rule needs no guard
+// pair: it carries an ip_cidr condition disjoint from the canonical
+// set, so it can only route to public ranges and the render emits no
+// pair for it (the fallthrough pair still closes the list).
+func s1bPairExempt(rule map[string]interface{}) bool {
+	ac := s1bAnchorCIDRs(rule)
+	return ac != nil && len(s1bCIDRIntersection(ac)) == 0
 }
 
 // s1bAssertPair checks that rules[i-2] and rules[i-1] form the guard
 // pair of the direct-exit rule at i: a resolve and a reject carrying
-// exactly the anchor's conditions (the reject plus ip_is_private).
+// exactly the anchor's conditions (the reject plus the ip_cidr set).
 func s1bAssertPair(t *testing.T, rules []interface{}, i int) {
 	t.Helper()
 	anchor := rules[i].(map[string]interface{})
@@ -94,9 +180,29 @@ func s1bAssertPair(t *testing.T, rules []interface{}, i int) {
 		t.Fatalf("rule %d: resolve conditions %v must equal the anchor's %v", i, s1bMatchers(resolve), want)
 	}
 	rejectMatchers := s1bMatchers(reject)
-	delete(rejectMatchers, "ip_is_private")
-	if want := s1bMatchers(anchor); !reflect.DeepEqual(rejectMatchers, want) {
-		t.Fatalf("rule %d: reject conditions %v must equal the anchor's %v plus ip_is_private", i, rejectMatchers, want)
+	delete(rejectMatchers, "ip_cidr")
+	want := s1bMatchers(anchor)
+	delete(want, "ip_cidr")
+	if !reflect.DeepEqual(rejectMatchers, want) {
+		t.Fatalf("rule %d: reject conditions %v must equal the anchor's %v plus the ip_cidr set", i, rejectMatchers, want)
+	}
+	// The reject's ip_cidr is the anchor's own ip_cidr condition
+	// intersected with the canonical set — the full set when the
+	// anchor carries no ip_cidr condition.
+	wantCIDRs := guardPrivateCIDRs()
+	if ac := s1bAnchorCIDRs(anchor); ac != nil {
+		wantCIDRs = s1bCIDRIntersection(ac)
+	}
+	gotSet := map[string]bool{}
+	for _, s := range s1bAnchorCIDRs(reject) {
+		gotSet[s] = true
+	}
+	wantSet := map[string]bool{}
+	for _, s := range wantCIDRs {
+		wantSet[s] = true
+	}
+	if !reflect.DeepEqual(gotSet, wantSet) {
+		t.Fatalf("rule %d: reject ip_cidr %v must be the anchor∩c​anonical intersection %v", i, gotSet, wantSet)
 	}
 	if _, leaked := resolve["outbound"]; leaked {
 		t.Fatalf("rule %d: resolve half must not select an outbound: %v", i, resolve)
@@ -104,9 +210,11 @@ func s1bAssertPair(t *testing.T, rules []interface{}, i int) {
 }
 
 // s1bAssertDomainGuard is the standing gate over a rendered sing-box
-// config: every direct-exit rule carries its conditioned pair, no
-// other rule gains one, and the list ends with the unconditional
-// fallthrough pair behind a "direct" final.
+// config: every direct-exit rule carries its conditioned pair (one
+// exemption: a direct-exit rule whose own ip_cidr condition is
+// disjoint from the canonical set can only route to public ranges
+// and gets no pair), no other rule gains one, and the list ends with
+// the unconditional fallthrough pair behind a "direct" final.
 func s1bAssertDomainGuard(t *testing.T, cfg map[string]interface{}) {
 	t.Helper()
 	rules := g1RouteRules(t, cfg)
@@ -116,6 +224,9 @@ func s1bAssertDomainGuard(t *testing.T, cfg map[string]interface{}) {
 		rule := v.(map[string]interface{})
 		tag, _ := rule["outbound"].(string)
 		if tag != "" && direct[tag] {
+			if s1bPairExempt(rule) {
+				continue // public-only ip_cidr anchor: no pair by design
+			}
 			if i < 2 {
 				t.Fatalf("direct rule %d has no room for its guard pair: %v", i, rules)
 			}
@@ -131,7 +242,7 @@ func s1bAssertDomainGuard(t *testing.T, cfg map[string]interface{}) {
 		t.Fatalf("fallthrough resolve must be unconditional, got conditions %v", tail)
 	}
 	if tail := s1bMatchers(rules[n-1].(map[string]interface{})); len(tail) != 1 {
-		t.Fatalf("fallthrough reject must carry only ip_is_private, got %v", tail)
+		t.Fatalf("fallthrough reject must carry only the ip_cidr set, got %v", tail)
 	}
 	resolves := 0
 	for _, v := range rules {

@@ -242,6 +242,15 @@ else
   fi
 fi
 
+# ── 12. 私网段集常设门（R8-004 / R8-022）：转跑 check-private-ranges.sh
+if bash scripts/check-private-ranges.sh > /tmp/.private-ranges.out 2>&1; then
+  note_ok "私网拦截正本段集两处拷贝逐段一致（$(grep -oP 'private-ranges: \K[0-9]+' /tmp/.private-ranges.out) 段）"
+else
+  note_fail "私网拦截正本段集两处拷贝不一致（明细见下）"
+  sed 's/^/    /' /tmp/.private-ranges.out
+fi
+rm -f /tmp/.private-ranges.out
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS（known-pending 项不计失败）"
