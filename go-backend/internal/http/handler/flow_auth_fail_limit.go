@@ -9,7 +9,10 @@ import (
 // R8-060（R8-L5-06）：/flow/config 与 /flow/upload 以节点 secret 鉴权，
 // 此前无任何失败节流，未知 secret 的每次尝试都直达 GetNodeBySecret
 // 查库——与同为节点 secret 面、已有失败限流的 /system-info WS 面
-// （wsAuthFailLimiter，D2-03）口径不一致。本限流与 WS 面同口径：
+// （wsAuthFailLimiter，D2-03）口径不一致。/flow/upload/v2 上线时漏
+// 接本限流（审计 A-T-01），已按同一谓词补齐：凡以节点 secret 为唯
+// 一凭据的 agent 面端点，必须接入本限流（预检＋失败记账）。本限流
+// 与 WS 面同口径：
 //   - 只对「未知 secret」失败计数，有效 secret 的正常上报永不计数、
 //     不受影响（WS 限流器同款设计目标）；
 //   - 按来源 IP 固定窗口计数，上限与窗口与 WS 面同值（60 次/分钟）；
@@ -17,7 +20,8 @@ import (
 //     解析，与登录/gh/WS 同口径；解析不出记共享桶 fail-closed）；
 //   - 命中上限后不再查库，回包与未知 secret 时同形：flowUpload 回
 //     "error"（agent 保留批次、稍后重报）、flowConfig 回 "ok" 且不
-//     处理 body，两面线协议均不变。
+//     处理 body、flowUploadV2 回 401 纯文本（非确认回执，agent 保
+//     留批次），三面线协议均不变。
 const (
 	flowAuthFailWindow       = time.Minute
 	flowAuthFailMaxPerWindow = 60
