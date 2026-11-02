@@ -103,22 +103,105 @@ func TestConfigGetRejectsSensitiveKeysWithoutAuth(t *testing.T) {
 	assertHandlerCodeMsg(t, resp, 403, "禁止访问敏感配置")
 }
 
-// 其余 sensitive 键（如 cloudflare_secret_key）管理员可读仍是既有
-// 行为；jwt_secret 已由 R6-L8-F-05 单独收紧，见
-// TestConfigGetNeverReturnsJWTSecret。
+// 未落入任何关闭集的 sensitive 键管理员可读仍是既有行为：
+// license_expiry（到期日）、notify_telegram_chat_id（标识符）、
+// node_sub_token（legacy 键）经 R7-L8-03 评估明示不在关闭范围，
+// 本测试把这一边界钉死——关多了（误伤三键）与关少了（四凭据键
+// 漏关，见 TestConfigGetNeverReturnsThirdPartyCredentials）都红。
+// jwt_secret 已由 R6-L8-F-05 单独收紧，见
+// TestConfigGetNeverReturnsJWTSecret；cloudflare_secret_key 原为
+// 本测试的样本键，已随 R7-L8-03 关闭。
 func TestConfigGetAllowsSensitiveKeysForAdmin(t *testing.T) {
 	router, r := setupConfigAccessTestRouter(t)
 	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
-	seedConfigValue(t, r, "cloudflare_secret_key", "turnstile-secret")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"cloudflare_secret_key"}`))
-	req.Header.Set("Content-Type", "application/json")
+	for name, value := range map[string]string{
+		"license_expiry":          "2027-01-01",
+		"notify_telegram_chat_id": "123456789",
+		"node_sub_token":          "legacy-sub-token",
+	} {
+		seedConfigValue(t, r, name, value)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", adminToken)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		assertHandlerConfigValue(t, resp, name, value)
+	}
+}
+
+// R7-L8-03：第三方凭据读面关闭——cloudflare_secret_key、
+// notify_telegram_bot_token、notify_webhook_url、
+// notify_telegram_api_base 与 jwt/gist/license 六键同口径：
+// config/get 对管理员亦 403、config/list 对管理员亦删除，本体
+// 绝不出现在任何响应中。非管理员/匿名维持既有 sensitive 守卫
+// 403。写路径不变（管理员可写仍由
+// TestConfigUpdateAllowsCloudflareSecretKeyWrite 等用例钉住）。
+func TestConfigGetNeverReturnsThirdPartyCredentials(t *testing.T) {
+	router, r := setupConfigAccessTestRouter(t)
+	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
+	secrets := map[string]string{
+		"cloudflare_secret_key":     "turnstile-secret-r7",
+		"notify_telegram_bot_token": "123456:bot-token-r7",
+		"notify_webhook_url":        "https://hooks.example.com/r7-secret",
+		"notify_telegram_api_base":  "https://tg-proxy.example.com/r7-secret",
+	}
+	for name, value := range secrets {
+		seedConfigValue(t, r, name, value)
+	}
+	// 对照组：不在关闭范围的三键须仍在管理员 list 中出现。
+	seedConfigValue(t, r, "license_expiry", "2027-01-01")
+	seedConfigValue(t, r, "notify_telegram_chat_id", "123456789")
+	seedConfigValue(t, r, "node_sub_token", "legacy-sub-token")
+
+	for name := range secrets {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", adminToken)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		assertHandlerCodeMsg(t, resp, 403, "禁止访问第三方凭据")
+		if strings.Contains(resp.Body.String(), secrets[name]) {
+			t.Fatalf("config/get %s response must not contain the credential: %s", name, resp.Body.String())
+		}
+
+		// 非管理员与匿名：既有 PolicyForConfig 敏感守卫 403，口径不变。
+		userToken := mustGenerateConfigAccessToken(t, 2, "normal_user", 1)
+		for _, token := range []string{userToken, ""} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
+			req.Header.Set("Content-Type", "application/json")
+			if token != "" {
+				req.Header.Set("Authorization", token)
+			}
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			assertHandlerCodeMsg(t, resp, 403, "禁止访问敏感配置")
+		}
+	}
+
+	// config/list：管理员亦缺席四键、本体不出现在响应中；对照三键在场。
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/list", nil)
 	req.Header.Set("Authorization", adminToken)
 	resp := httptest.NewRecorder()
-
 	router.ServeHTTP(resp, req)
-
-	assertHandlerConfigValue(t, resp, "cloudflare_secret_key", "turnstile-secret")
+	body := resp.Body.String()
+	for name, value := range secrets {
+		if strings.Contains(body, name) || strings.Contains(body, value) {
+			t.Fatalf("config/list must not contain %s or its value: %s", name, body)
+		}
+	}
+	var out struct {
+		Code int               `json:"code"`
+		Data map[string]string `json:"data"`
+	}
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&out); err != nil {
+		t.Fatalf("decode config/list: %v", err)
+	}
+	for _, name := range []string{"license_expiry", "notify_telegram_chat_id", "node_sub_token"} {
+		if _, ok := out.Data[name]; !ok {
+			t.Fatalf("config/list must still contain non-closed key %s: %s", name, body)
+		}
+	}
 }
 
 // R6-L8-F-05：jwt_secret 与 Gist 凭据同口径——管理员经 config/get

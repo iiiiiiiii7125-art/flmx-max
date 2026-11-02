@@ -657,6 +657,27 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
+// thirdPartyCredentialConfigKeys 是 R7-L8-03 关闭读面的第三方凭
+// 据键全集：getConfigByName 对全角色 403、getConfigs 对全角色
+// delete，两面共用本清单防口径漂移（jwt/gist/license 三组关闭集
+// 在彼时各自成对硬编码，本组起改单一清单）。键名口径与
+// repo/config_policy.go 的 sensitiveConfigKeys 同步。
+var thirdPartyCredentialConfigKeys = []string{
+	"cloudflare_secret_key",
+	notifyConfigTGToken,
+	notifyConfigTGAPIBase,
+	notifyConfigWebhookURL,
+}
+
+func isThirdPartyCredentialConfigKey(name string) bool {
+	for _, key := range thirdPartyCredentialConfigKeys {
+		if name == key {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -717,6 +738,20 @@ func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R7-L8-03：第三方凭据同口径关闭读面——cloudflare_secret_key 与
+	// 通知三凭据（telegram bot token / webhook url / telegram
+	// api_base）都是可独立使用的第三方永久凭据，管理员会话被窃时
+	// 与 jwt_secret 同样可被兑换成面板外的长期访问，故即使对管理
+	// 员也不经 config/get 回本体（getConfigs 侧同步 delete，见
+	// thirdPartyCredentialConfigKeys）。写入路径不变；前端表单改
+	// hint/写-only 形态（不回填、留空保留、显式清除）。敏感度显著
+	// 更低的三键不在关闭范围：license_expiry（到期日）、
+	// notify_telegram_chat_id（标识符）、node_sub_token（legacy 键）。
+	if isThirdPartyCredentialConfigKey(configName) {
+		response.WriteJSON(w, response.Err(403, "禁止访问第三方凭据"))
+		return
+	}
+
 	cfg, err := h.repo.GetConfigByName(configName)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -761,6 +796,11 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 	// R6-L8-F-05：jwt_secret 同口径——管理员经 config/list 亦不回
 	// 本体（与 getConfigByName 侧的 403 成对，理由见彼处注释）。
 	delete(cfgMap, "jwt_secret")
+	// R7-L8-03：第三方凭据同口径——管理员经 config/list 亦不回本
+	// 体（与 getConfigByName 侧的 403 成对，理由见彼处注释）。
+	for _, key := range thirdPartyCredentialConfigKeys {
+		delete(cfgMap, key)
+	}
 	response.WriteJSON(w, response.OK(cfgMap))
 }
 

@@ -92,6 +92,10 @@ interface ConfigItem {
   placeholder?: string;
   description?: string;
   type: "input" | "password" | "switch" | "select" | "bg_image";
+  // 写-only 凭据字段（R7-L8-03）：后端 config/get 对全角色 403、
+  // config/list 删除该键，表单永不回填已保存值——留空＝保留、
+  // 输入＝替换、显式清除并保存＝删除已保存值（gist tokenHint 形态）。
+  writeOnly?: boolean;
   options?: { label: string; value: string; description?: string }[];
   dependsOn?: string; // 依赖的配置项key
   dependsValue?: string; // 依赖的配置项值
@@ -220,11 +224,14 @@ const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: "cloudflare_secret_key",
     label: "Cloudflare Secret Key",
-    placeholder: "请输入 Cloudflare Secret Key",
-    description: "Cloudflare Turnstile 密钥",
+    placeholder: "留空表示保留已保存的密钥，输入新密钥替换",
+    description: "Cloudflare Turnstile 密钥（仅写入，保存后不再回显）",
     // F-116：密钥字段必须掩码显示，此前以明文 text 渲染（后端
     // config_policy 也将其列为敏感键，前端显示口径须一致）。
+    // R7-L8-03：读面已关闭（config/get 全角色 403、config/list
+    // 删除），表单改 writeOnly hint 形态，不再回填已保存值。
     type: "password",
+    writeOnly: true,
     dependsOn: "captcha_enabled",
     dependsValue: "true",
   },
@@ -1336,9 +1343,9 @@ export default function ConfigPage() {
         );
       }
 
-      case "password":
+      case "password": {
         // F-116：敏感字段掩码渲染，与普通 input 共用变更处理。
-        return (
+        const passwordInput = (
           <Input
             classNames={{
               input: "text-sm",
@@ -1354,6 +1361,42 @@ export default function ConfigPage() {
             onChange={(e) => handleConfigChange(item.key, e.target.value)}
           />
         );
+
+        if (!item.writeOnly) {
+          return passwordInput;
+        }
+
+        // R7-L8-03 写-only 形态：后端不再下发已保存值，configs 里
+        // 该键缺席＝未改动（留空保留）；输入非空＝替换；键在场且
+        // 为空＝已显式清除（或输入后删空），保存时以空值下发删除
+        // 已保存值（后端对该键按可清除键处理）。
+        const draft = configs[item.key];
+        const clearPending = item.key in configs && (draft ?? "") === "";
+
+        return (
+          <div className="space-y-1">
+            {passwordInput}
+            <p className="text-xs font-semibold text-foreground">
+              {clearPending ? (
+                "保存后将删除已保存的值"
+              ) : draft ? (
+                "保存后替换已保存的值，保存后不再回显"
+              ) : (
+                <>
+                  已保存的值不会回显，留空表示保留 ·{" "}
+                  <button
+                    className="text-danger-700"
+                    type="button"
+                    onClick={() => handleConfigChange(item.key, "")}
+                  >
+                    清除已保存的值
+                  </button>
+                </>
+              )}
+            </p>
+          </div>
+        );
+      }
 
       case "switch":
         return (
