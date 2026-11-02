@@ -39,7 +39,11 @@ func seedSEC01Credentials(t *testing.T, r *repo.Repository) {
 		"sec01-node", sec01MarkerNodeSecret, "198.51.100.99", "198.51.100.99", now, now).Error; err != nil {
 		t.Fatalf("create node: %v", err)
 	}
-	if err := r.UpsertConfigs(map[string]string{"sec01_probe_key": sec01MarkerToken}, now); err != nil {
+	// sec01_probe_key 是未分类键：其值（凭据形标记）供回执泄漏断言；
+	// RB4-01 起未分类键默认敏感、不进任何备份产物，故快照留存断言
+	// 的状态标记另经已分类键 app_name（public、导出保留）承载同一
+	// 标记值——快照含导入前状态、回执不含标记，两条断言口径不变。
+	if err := r.UpsertConfigs(map[string]string{"sec01_probe_key": sec01MarkerToken, "app_name": sec01MarkerToken}, now); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 }
