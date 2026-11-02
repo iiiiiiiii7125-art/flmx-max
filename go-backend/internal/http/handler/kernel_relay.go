@@ -697,6 +697,22 @@ func (h *Handler) removeInboundRelays(inboundID int64) {
 
 // ---- share links & subscription ----
 
+// kernelSupportsPostQuantumReality reports whether a kernel can run the
+// X25519MLKEM768 Reality key exchange: Xray only, with an installed
+// version that parses and is at least 25.5.16 (the first Xray release
+// with ML-KEM-768 Reality support). An unknown or unparseable installed
+// version never qualifies — advertising PQ to a kernel that cannot do
+// it would break the handshake.
+func kernelSupportsPostQuantumReality(k *model.NodeKernel) bool {
+	if k == nil || k.KernelType != kernel.TypeXray {
+		return false
+	}
+	if _, err := parseVersionParts(k.InstalledVersion); err != nil {
+		return false
+	}
+	return !versionBelowPadded(k.InstalledVersion, 25, 5, 16)
+}
+
 // inboundEndpoints lists every address clients can use for the inbounds:
 // the landing node directly (unless relay-only or local-only) and each
 // relay entry.
@@ -711,6 +727,22 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		byInbound[rel.InboundID] = append(byInbound[rel.InboundID], rel)
 	}
 	nodes := make(map[int64]*model.Node)
+	// Per-kernel cache for the post-quantum Reality gate: many inbounds
+	// share one kernel, and the lookup hits the DB.
+	pqByKernel := make(map[int64]bool)
+	pqFor := func(kernelID int64) bool {
+		if v, ok := pqByKernel[kernelID]; ok {
+			return v
+		}
+		v := false
+		if kernelID > 0 {
+			if k, err := h.repo.GetNodeKernel(kernelID); err == nil {
+				v = kernelSupportsPostQuantumReality(k)
+			}
+		}
+		pqByKernel[kernelID] = v
+		return v
+	}
 
 	var endpoints []kernel.Endpoint
 	var kinds []string
@@ -740,6 +772,11 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 			nodes[row.NodeID] = node
 		}
 		proxy := importedProxy(&row)
+		// The PQ Reality marker belongs to the landing inbound's hosting
+		// kernel; imported nodes (proxy != nil, no local kernel) never
+		// carry it.
+		postQuantum := proxy == nil && in.Protocol == kernel.ProtocolVLESS &&
+			in.Security.Type == kernel.SecurityReality && pqFor(row.KernelID)
 		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
 			host := inboundShareAddress(&row, node)
 			mode := inboundShareMode(&row)
@@ -766,7 +803,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				// ServerIP 的使用不在此列。
 				log.Printf("inboundEndpoints: invalid share host for inbound ID %d (node %d), mode %s, skipping endpoint", row.ID, row.NodeID, mode)
 			default:
-				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy, SourceID: row.SourceID})
+				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy, SourceID: row.SourceID, PostQuantumReality: postQuantum})
 				kinds = append(kinds, "direct")
 			}
 		}
@@ -797,7 +834,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 					log.Printf("inboundEndpoints: invalid relay entry host for relay ID %d (inbound %d), skipping entry", rel.ID, row.ID)
 					continue
 				}
-				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy, SourceID: row.SourceID, RelayID: rel.ID})
+				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy, SourceID: row.SourceID, RelayID: rel.ID, PostQuantumReality: postQuantum})
 				kinds = append(kinds, "relay")
 			}
 		}
