@@ -389,6 +389,22 @@ func (n *nftCounters) tableExists(ctx context.Context) bool {
 	return err == nil
 }
 
+// removeTables 删除 agent 建的全部 nftables 表（计数/白名单主表、
+// 改名前的旧表、端口跳跃探针表），供 agent 卸载时调用：表驻留在
+// 内核里，不随进程退出消失，必须在进程还活着时显式删掉。脚本沿用
+// nftScriptGuard 的「先建空表再删」惯例，表不存在时也不报错。
+func (n *nftCounters) removeTables() error {
+	var b strings.Builder
+	for _, table := range []string{nftTable, legacyNFTTable, nftHopProbeTable} {
+		fmt.Fprintf(&b, "table inet %s {}\n", table)
+		fmt.Fprintf(&b, "delete table inet %s\n", table)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := nftRunner(ctx, b.String(), "-f", "-")
+	return err
+}
+
 func (n *nftCounters) sync(ports []Port, users []int64) error {
 	return n.syncGuard(ports, users, nil)
 }

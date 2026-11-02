@@ -989,15 +989,30 @@ export default function NodePage({
     }
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = async (uninstall: boolean) => {
     if (!nodeToDelete || deleteLoading) return;
 
     setDeleteLoading(true);
     try {
-      const res = await deleteNode(nodeToDelete.id);
+      const res = await deleteNode(nodeToDelete.id, uninstall);
 
       if (res.code === 0) {
         toast.success("删除成功");
+        // 连带卸载回执：离线待卸载单独播报；告警（过旧/未确认等）
+        // 由后端逐条点名，前端原样呈现不吞。
+        const uninstallWarnings = res.data?.uninstallWarnings ?? [];
+
+        if (uninstallWarnings.length > 0) {
+          toast(uninstallWarnings.join("；"), {
+            icon: "⚠️",
+            duration: 6000,
+          });
+        } else if (res.data?.uninstall === "pending") {
+          toast("节点当前离线，已登记：它下次连接面板时将自动卸载 agent", {
+            icon: "🕒",
+            duration: 5000,
+          });
+        }
         const returned = res.data?.brokenReferrers ?? [];
 
         if (returned.length > 0) {
@@ -1677,11 +1692,11 @@ export default function NodePage({
     setSelectedIds(new Set());
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = async (uninstall: boolean) => {
     if (selectedIds.size === 0 || batchLoading) return;
     setBatchLoading(true);
     try {
-      const res = await batchDeleteNodes(Array.from(selectedIds));
+      const res = await batchDeleteNodes(Array.from(selectedIds), uninstall);
 
       if (res.code === 0) {
         const result = res.data as
@@ -1745,6 +1760,33 @@ export default function NodePage({
             });
           }
           await loadNodes({ silent: true });
+        }
+        // 连带卸载三态汇总播报（仅请求带 uninstall 时后端才填充）。
+        if (uninstall && result) {
+          const parts: string[] = [];
+
+          if (result.uninstalledCount) {
+            parts.push(`${result.uninstalledCount} 个节点的 agent 正在卸载`);
+          }
+          if (result.uninstallPendingCount) {
+            parts.push(
+              `${result.uninstallPendingCount} 个离线节点将在下次连接时自动卸载`,
+            );
+          }
+          if (result.uninstallUnsupportedCount) {
+            parts.push(
+              `${result.uninstallUnsupportedCount} 个节点的 agent 版本过旧、需手动卸载`,
+            );
+          }
+          if (parts.length > 0) {
+            toast(parts.join("；"), { icon: "🗑️", duration: 6000 });
+          }
+          if (result.uninstallWarnings && result.uninstallWarnings.length > 0) {
+            toast(result.uninstallWarnings.join("；"), {
+              icon: "⚠️",
+              duration: 6000,
+            });
+          }
         }
         setSelectedIds(new Set());
         setBatchDeleteModalOpen(false);

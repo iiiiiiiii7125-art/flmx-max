@@ -1325,9 +1325,25 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	id := idFromBody(r, w)
-	if id <= 0 {
+	// 请求体在此一次解码：除 id 外还要读 uninstall 标记（旧客户端不带
+	// 该字段时 asBool 回落 false，行为与此前完全一致）。
+	var req map[string]interface{}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
+	}
+	id := asInt64(req["id"], 0)
+	if id <= 0 {
+		response.WriteJSON(w, response.ErrDefault("参数错误"))
+		return
+	}
+	// 连带卸载必须赶在删记录之前：记录删除后 secret 与在线会话都不
+	// 复存在，既下发不了命令也登记不了待卸载。卸载步的失败只进
+	// uninstallWarnings，不中止删除（见 node_delete_uninstall.go）。
+	uninstallState := ""
+	var uninstallWarnings []string
+	if asBool(req["uninstall"], false) {
+		uninstallState, uninstallWarnings = h.prepareNodeAgentUninstall(id)
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
@@ -1350,12 +1366,20 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if soleRoleWarnings == nil {
 		soleRoleWarnings = []string{}
 	}
-	response.WriteJSON(w, response.OK(map[string]interface{}{
+	deleteResp := map[string]interface{}{
 		"brokenReferrers":     brokenReferrers,
 		"brokenReferrerCount": len(brokenReferrers),
 		// L4-03：唯一入口/出口点名（新增字段，向后兼容）。
 		"soleRoleWarnings": soleRoleWarnings,
-	}))
+	}
+	// 连带卸载三态回执（新增字段，仅请求带 uninstall 时出现，向后兼容）。
+	if uninstallState != "" {
+		deleteResp["uninstall"] = uninstallState
+	}
+	if len(uninstallWarnings) > 0 {
+		deleteResp["uninstallWarnings"] = uninstallWarnings
+	}
+	response.WriteJSON(w, response.OK(deleteResp))
 }
 
 // panelRequestScheme 推断本次管理请求所见的面板实际服务方式
@@ -1670,10 +1694,26 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	ids := idsFromBody(r, w)
-	if ids == nil {
+	// 请求体在此一次解码（与 idsFromBody 同口径：ids 为空报错、过滤
+	// <=0、升序），另读 uninstall 标记供连带卸载步使用。
+	var batchReq map[string]interface{}
+	if err := decodeJSON(r.Body, &batchReq); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	rawIDs := asAnySlice(batchReq["ids"])
+	if len(rawIDs) == 0 {
+		response.WriteJSON(w, response.ErrDefault("ids不能为空"))
+		return
+	}
+	ids := make([]int64, 0, len(rawIDs))
+	for _, x := range rawIDs {
+		if id := asInt64(x, 0); id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	uninstall := asBool(batchReq["uninstall"], false)
 	// A2-05（=A9-04 后端半）：逐条收集成败并以 batchOperationResult
 	// 回执（与 forward/tunnel/inbound 批量接口同口径）。旧实现吞掉全部
 	// 错误恒 OKEmpty，前端只能按选中数虚报全成功、失败节点刷新后
@@ -1690,6 +1730,9 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// L4-03：唯一入口/出口点名同 funnel 汇总（同文案只报一次）。
 	var soleRoleWarnings []string
 	seenSoleRole := make(map[string]struct{})
+	// 连带卸载三态聚合（仅请求带 uninstall 时填充）。
+	uninstalledCount, uninstallPendingCount, uninstallUnsupportedCount := 0, 0, 0
+	var uninstallWarnings []string
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1700,6 +1743,20 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			fail++
 			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
 			continue
+		}
+		// 连带卸载前置步（同单删：赶在删记录前下发/登记，失败只进
+		// warnings 不中止删除）。
+		if uninstall {
+			state, warns := h.prepareNodeAgentUninstall(id)
+			switch state {
+			case nodeUninstallDone:
+				uninstalledCount++
+			case nodeUninstallPending:
+				uninstallPendingCount++
+			case nodeUninstallUnsupported:
+				uninstallUnsupportedCount++
+			}
+			uninstallWarnings = append(uninstallWarnings, warns...)
 		}
 		nodeReferrers, nodeSoleWarnings, delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
@@ -1728,7 +1785,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstalledCount: uninstalledCount, UninstallPendingCount: uninstallPendingCount, UninstallUnsupportedCount: uninstallUnsupportedCount, UninstallWarnings: uninstallWarnings}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -3656,6 +3713,13 @@ type batchOperationResult struct {
 	// L4-03：批量删节点的「唯一入口/出口」点名清单（与单删的
 	// soleRoleWarnings 同名字段/同口径）；仅删节点批量入口填充。
 	SoleRoleWarnings []string `json:"soleRoleWarnings,omitempty"`
+	// 删节点连带卸载 agent 的三态聚合计数与告警（与单删的 uninstall /
+	// uninstallWarnings 同口径）；仅批量删节点入口在请求带 uninstall
+	// 时填充，omitempty 向后兼容。
+	UninstalledCount          int      `json:"uninstalledCount,omitempty"`
+	UninstallPendingCount     int      `json:"uninstallPendingCount,omitempty"`
+	UninstallUnsupportedCount int      `json:"uninstallUnsupportedCount,omitempty"`
+	UninstallWarnings         []string `json:"uninstallWarnings,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {

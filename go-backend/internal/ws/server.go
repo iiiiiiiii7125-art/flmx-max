@@ -345,6 +345,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if typeVal == "1" {
 		node, err := s.repo.GetNodeBySecret(secret)
 		if err != nil || node == nil {
+			// 节点记录已删不等于直接拒绝：删服务器时 agent 离线会留下
+			// 待卸载登记，这类重连由卸载通道接管（不注册为节点）。
+			if s.serveUninstalledNode(w, r, secret) {
+				return
+			}
 			forbidden()
 			return
 		}
