@@ -1,7 +1,7 @@
 services:
   backend:
     image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:${FLUX_VERSION:-latest}
-    container_name: flux-panel-backend
+    container_name: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -24,7 +24,7 @@ services:
       TZ: Asia/Shanghai
       FLUX_VERSION: ${FLUX_VERSION:-dev}
       PANEL_DEPLOY_DIR: /opt/flmx-panel
-      PANEL_BACKEND_CONTAINER: flux-panel-backend
+      PANEL_BACKEND_CONTAINER: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
     ports:
       - "${BACKEND_PORT}:6365"
     volumes:
@@ -44,7 +44,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: flux-panel-postgres
+    container_name: ${PANEL_POSTGRES_CONTAINER:-flux-panel-postgres}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -68,7 +68,7 @@ services:
 
   frontend:
     image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:${FLUX_VERSION:-latest}
-    container_name: vite-frontend
+    container_name: ${PANEL_FRONTEND_CONTAINER:-vite-frontend}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -97,16 +97,16 @@ services:
 
 volumes:
   sqlite_data:
-    name: sqlite_data
+    name: ${FLMX_SQLITE_VOLUME:-sqlite_data}
     driver: local
   postgres_data:
-    name: postgres_data
+    name: ${FLMX_POSTGRES_VOLUME:-postgres_data}
     driver: local
 
 
 networks:
   gost-network:
-    name: gost-network
+    name: ${FLMX_NETWORK:-gost-network}
     driver: bridge
     ipam:
       config:

@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261102.05"
+SCRIPT_VERSION="20261103.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -112,6 +112,12 @@ PROXY_ENABLED="${PROXY_ENABLED:-}"
 PROXY_URL="${PROXY_URL:-}"
 DEFAULT_PANEL_BACKEND_CONTAINER="flux-panel-backend"
 DEFAULT_PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
+# 共存身份（C2-01/C2-06）：新装使用本面板专属资源名，不再与同机其他
+# 面板的缺省名相撞；存量部署仍用上面的旧名（缺省回退，见 compose 的
+# ${PANEL_*_CONTAINER:-旧名} 与 resolve 的归属判定），升级不改名、不动卷。
+NEW_PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+NEW_PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+NEW_PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
 PANEL_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 # ---- 内置 GitHub 下载候选与测速直选（1.7.7）----
@@ -1166,8 +1172,128 @@ get_container_compose_label() {
   printf '%s' "$value"
 }
 
+# 本面板镜像统一发布在 ghcr.io/<仓库 owner>/ 下；同机其他面板（同源
+# 旧名体系）的镜像不在此前缀下。这是共存判定的根：名字会撞，镜像
+# 归属不会。
+panel_image_prefix() {
+  local owner="${REPO%%/*}"
+  printf 'ghcr.io/%s/' "$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+}
+
+# 容器跑的镜像属于本面板才算自家容器。同名容器跑他人镜像时一律
+# 视为不存在/不属于本面板，任何路径不得对其动手。
+is_own_panel_container() {
+  local image
+  image=$(docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null || true)
+  [[ -n "$image" && "$image" == "$(panel_image_prefix)"* ]]
+}
+
+# 部署目录的 Compose 引用本面板镜像，才认这个目录是本面板的部署。
+is_own_panel_deploy_dir() {
+  [[ -f "$1/.env" && -f "$1/docker-compose.yml" ]] && grep -Fq "$(panel_image_prefix)" "$1/docker-compose.yml"
+}
+
+# 判定要管理的后端容器名。显式指定（环境变量或部署 .env 的
+# PANEL_BACKEND_CONTAINER）优先，作为非标准镜像来源存量部署的逃生
+# 口；未指定时：新名容器与旧名容器（须跑本面板镜像才认）同现则报错
+# 让用户指定；只有旧名且属自家时沿用旧名；都没有时返回新名（后续
+# 定位会以「找不到部署」失败，不会误认他人容器）。
+detect_panel_backend_container() {
+  local configured="${PANEL_BACKEND_CONTAINER:-}"
+  if [[ -z "$configured" ]]; then
+    configured=$(get_env_var PANEL_BACKEND_CONTAINER "${PANEL_DEPLOY_DIR:-.}/.env" || true)
+  fi
+  if [[ -n "$configured" ]]; then
+    printf '%s' "$configured"
+    return 0
+  fi
+  local has_new="" has_legacy=""
+  if docker inspect "$NEW_PANEL_BACKEND_CONTAINER" >/dev/null 2>&1; then
+    has_new=1
+  fi
+  if docker inspect "$DEFAULT_PANEL_BACKEND_CONTAINER" >/dev/null 2>&1 \
+    && is_own_panel_container "$DEFAULT_PANEL_BACKEND_CONTAINER"; then
+    has_legacy=1
+  fi
+  if [[ -n "$has_new" && -n "$has_legacy" ]]; then
+    echo "❌ 同时发现两套面板后端容器（$NEW_PANEL_BACKEND_CONTAINER 与 $DEFAULT_PANEL_BACKEND_CONTAINER），无法自动判定要管理哪一套" >&2
+    echo "   请通过环境变量 PANEL_BACKEND_CONTAINER 指定要管理的实例后重试" >&2
+    return 1
+  fi
+  if [[ -n "$has_legacy" ]]; then
+    printf '%s' "$DEFAULT_PANEL_BACKEND_CONTAINER"
+    return 0
+  fi
+  printf '%s' "$NEW_PANEL_BACKEND_CONTAINER"
+}
+
+# 部署目录归属判定（$1=目录，$2=后端容器名）：.env 显式写明后端容器
+# 名（新装身份）即归属声明；或 Compose 引用本面板镜像；或该后端容
+# 器正跑着本面板镜像。三者皆无 → 视作他人部署。
+panel_deploy_dir_is_ours() {
+  if [[ -n "$(get_env_var PANEL_BACKEND_CONTAINER "$1/.env" || true)" ]]; then
+    return 0
+  fi
+  if is_own_panel_deploy_dir "$1"; then
+    return 0
+  fi
+  is_own_panel_container "$2"
+}
+
+# 新装身份写入：把专属容器/卷/网络名写进 .env 并同步到当前进程变量。
+# 落盘的 Compose 若是旧版模板（无 FLMX_SQLITE_VOLUME 标记，资源名仍
+# 写死旧名），身份必须回退旧名才能与模板对上——装旧版也能跑。
+write_new_panel_identity() {
+  local backend="$NEW_PANEL_BACKEND_CONTAINER" frontend="$NEW_PANEL_FRONTEND_CONTAINER" postgres="$NEW_PANEL_POSTGRES_CONTAINER"
+  local sqlite_volume="flmx-sqlite-data" postgres_volume="flmx-postgres-data" network="flmx-network"
+  if [[ -f docker-compose.yml ]] && ! grep -Fq 'FLMX_SQLITE_VOLUME' docker-compose.yml; then
+    backend="$DEFAULT_PANEL_BACKEND_CONTAINER" frontend="vite-frontend" postgres="$DEFAULT_PANEL_POSTGRES_CONTAINER"
+    sqlite_volume="sqlite_data" postgres_volume="postgres_data" network="gost-network"
+  fi
+  upsert_env_var .env PANEL_BACKEND_CONTAINER "$backend"
+  upsert_env_var .env PANEL_FRONTEND_CONTAINER "$frontend"
+  upsert_env_var .env PANEL_POSTGRES_CONTAINER "$postgres"
+  upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume"
+  upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume"
+  upsert_env_var .env FLMX_NETWORK "$network"
+  # Compose 项目名同样用专属名（仅新模板分支；旧模板回退分支保持与
+  # 旧脚本逐字一致的缺省项目名推导，不改动装旧版的行为）。
+  if [[ "$backend" == "$NEW_PANEL_BACKEND_CONTAINER" ]]; then
+    upsert_env_var .env COMPOSE_PROJECT_NAME "flmx-panel"
+  fi
+  PANEL_BACKEND_CONTAINER="$backend"
+  PANEL_POSTGRES_CONTAINER="$postgres"
+  PANEL_FRONTEND_CONTAINER="$frontend"
+  export PANEL_BACKEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_FRONTEND_CONTAINER
+}
+
+# 资源名读取（迁移路径用）：优先部署 .env 的新装身份，缺省回退旧名，
+# 存量部署行为与改名前逐字一致。
+panel_sqlite_volume_name() {
+  local v
+  v=$(get_env_var FLMX_SQLITE_VOLUME || true)
+  printf '%s' "${v:-sqlite_data}"
+}
+
+panel_postgres_volume_name() {
+  local v
+  v=$(get_env_var FLMX_POSTGRES_VOLUME || true)
+  printf '%s' "${v:-postgres_data}"
+}
+
+panel_network_name() {
+  local v
+  v=$(get_env_var FLMX_NETWORK || true)
+  printf '%s' "${v:-gost-network}"
+}
+
 resolve_panel_deployment() {
-  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local backend_explicit=""
+  if [[ -n "${PANEL_BACKEND_CONTAINER:-}" ]]; then
+    backend_explicit=1
+  fi
+  local backend_container
+  backend_container=$(detect_panel_backend_container) || return 1
   local requested_dir="${PANEL_DEPLOY_DIR:-}"
   local label_dir label_project deploy_dir project_name
 
@@ -1217,9 +1343,12 @@ resolve_panel_deployment() {
 
   PANEL_DEPLOY_DIR="$deploy_dir"
   PANEL_BACKEND_CONTAINER="$backend_container"
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(get_env_var PANEL_POSTGRES_CONTAINER "$deploy_dir/.env" || true)}"
   PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-$(get_env_var PANEL_FRONTEND_CONTAINER "$deploy_dir/.env" || true)}"
+  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-vite-frontend}"
   PANEL_COMPOSE_PROJECT="$project_name"
-  export PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_COMPOSE_PROJECT
+  export PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_COMPOSE_PROJECT
   if [[ -n "$project_name" ]]; then
     COMPOSE_PROJECT_NAME="$project_name"
     export COMPOSE_PROJECT_NAME
@@ -1229,6 +1358,18 @@ resolve_panel_deployment() {
   echo "📁 部署目录：$PANEL_DEPLOY_DIR"
   if [[ -n "$PANEL_COMPOSE_PROJECT" ]]; then
     echo "📦 Compose 项目：$PANEL_COMPOSE_PROJECT"
+  fi
+
+  # 共存守卫（C2-01）：未显式指定后端容器名时，定位到的目录必须确
+  # 属本面板。目录定位只靠标签/当前目录，同机另一套面板的部署目录
+  # 同样能被定位到——更新/迁移/卸载若在此动手就是误伤他人部署。
+  # 归属不成立一律终止、未做任何修改；确为自家部署但用了非标准
+  # 镜像来源时，用 PANEL_BACKEND_CONTAINER 显式指定即放行。
+  if [[ -z "$backend_explicit" ]] && ! panel_deploy_dir_is_ours "." "$backend_container"; then
+    echo "❌ 部署目录 $PANEL_DEPLOY_DIR 不属于本面板：其 Compose 未引用本面板镜像，后端容器 $backend_container 也未运行本面板镜像"
+    echo "   这可能是同机上另一套面板的部署目录，本脚本不会对其执行更新、迁移或卸载，未做任何修改。"
+    echo "   如确为本面板部署（例如改用了自建镜像），请用 PANEL_BACKEND_CONTAINER=<后端容器名> 显式指定后重试。"
+    return 1
   fi
 }
 
@@ -1988,6 +2129,15 @@ get_config_params() {
 install_panel() {
   echo "🚀 开始安装面板..."
 
+  # 共存守卫（C2-01）：当前目录已有部署文件但不属于本面板（Compose
+  # 未引用本面板镜像）时拒绝安装——那可能是同机另一套面板的部署目
+  # 录，在此安装必然覆写他人的 .env 与 Compose，连强制重装也不放行。
+  if [[ -f .env && -f docker-compose.yml ]] && ! is_own_panel_deploy_dir .; then
+    echo "❌ 当前目录已有一套不属于本面板的部署（其 Compose 未引用本面板镜像），拒绝在此安装，以免覆盖他人的部署文件"
+    echo "   请换一个空目录运行安装；若这是本面板自己的部署目录，请改用菜单「2. 更新面板」。"
+    return 1
+  fi
+
   # F-049: 已有部署守卫。安装路径会重生成 POSTGRES_PASSWORD/JWT_SECRET
   # 并无条件覆写 .env 与 docker-compose.yml；而 PG 数据卷里的口令只在
   # 首次初始化时生效——在已部署机器上误走安装，.env 新口令与旧卷脱钩，
@@ -2073,6 +2223,10 @@ POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 EOF
   chmod 600 .env # M-01: .env 含 JWT_SECRET/数据库密码，禁止全局可读
+
+  # 共存身份（C2-01/C2-06）：新装把专属容器/卷/网络名写入 .env，
+  # Compose 据此命名，与同机其他面板的缺省名不再相撞。
+  write_new_panel_identity
 
   echo "🚀 启动 docker 服务..."
   if [[ "$DB_TYPE" == "postgres" ]]; then
@@ -2291,6 +2445,26 @@ migrate_to_postgres() {
     echo "✅ docker-compose.yml 下载完成"
   fi
 
+  # 共存守卫（C2-01）：迁移要按名停容器、按名挂数据卷，当前目录的
+  # 部署不属于本面板时一律终止（归属判定与 resolve_panel_deployment
+  # 同口径），不碰同机另一套面板的容器与数据。
+  if [[ -z "${PANEL_BACKEND_CONTAINER:-}" ]] \
+    && ! panel_deploy_dir_is_ours "." "${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"; then
+    echo "❌ 当前目录的部署不属于本面板（其 Compose 未引用本面板镜像，后端容器也未运行本面板镜像），迁移终止，未做任何修改"
+    echo "   如确为本面板部署（例如改用了自建镜像），请用 PANEL_BACKEND_CONTAINER=<后端容器名> 显式指定后重试。"
+    return 1
+  fi
+
+  # 资源名：新装身份写在 .env 里，缺省回退旧名，存量部署行为不变。
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$(get_env_var PANEL_BACKEND_CONTAINER || true)}"
+  backend_container="${backend_container:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local frontend_container="${PANEL_FRONTEND_CONTAINER:-$(get_env_var PANEL_FRONTEND_CONTAINER || true)}"
+  frontend_container="${frontend_container:-vite-frontend}"
+  local sqlite_volume postgres_volume network_name
+  sqlite_volume=$(panel_sqlite_volume_name)
+  postgres_volume=$(panel_postgres_volume_name)
+  network_name=$(panel_network_name)
+
   current_db_type=$(get_current_db_type)
   if [[ "$current_db_type" == "postgres" ]]; then
     echo "ℹ️ 当前已使用 PostgreSQL，无需迁移"
@@ -2337,8 +2511,8 @@ migrate_to_postgres() {
   upsert_env_var ".env" "POSTGRES_PASSWORD" "$postgres_password"
 
   echo "🛑 停止当前服务..."
-  docker stop -t 30 flux-panel-backend 2>/dev/null || true
-  docker stop -t 10 vite-frontend 2>/dev/null || true
+  docker stop -t 30 "$backend_container" 2>/dev/null || true
+  docker stop -t 10 "$frontend_container" 2>/dev/null || true
   echo "⏳ 等待数据同步..."
   sleep 5
   if ! $DOCKER_CMD down; then
@@ -2348,7 +2522,7 @@ migrate_to_postgres() {
   fi
 
   echo "💾 备份 SQLite 数据到当前目录..."
-  if ! docker run --rm -v sqlite_data:/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
+  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
     echo "❌ SQLite 备份失败，迁移终止，正在恢复迁移前状态..."
     migrate_restore_snapshot
     return 1
@@ -2373,7 +2547,7 @@ migrate_to_postgres() {
   # 双保险；模型已修复的版本里该文本不存在，替换不命中、照常迁移）。
   pgloader_source="/sqlite/gost.db"
   echo "🧹 预处理 SQLite 副本（release_legacy_family 默认值兼容）..."
-  if docker run --rm -v sqlite_data:/sqlite alpine sh -c '
+  if docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c '
     set -e
     apk add --no-cache sqlite >/dev/null 2>&1
     sqlite3 /sqlite/gost.db .dump > /tmp/dump.sql
@@ -2406,10 +2580,10 @@ LOAD DATABASE
      FROM sqlite://${pgloader_source}
      INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db};
 EOF
-  docker run --rm --network gost-network -v sqlite_data:/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
+  docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
   rm -f "$pgloader_load_file"
   if [[ $pgloader_rc -ne 0 ]]; then
-    echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm postgres_data 后重试）"
+    echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm $postgres_volume 后重试）"
     echo "↩️ 正在恢复迁移前的 .env 与 SQLite 服务..."
     migrate_restore_snapshot
     return 1
@@ -2429,7 +2603,7 @@ EOF
     if wait_for_backend_healthy; then
       echo "✅ 已回滚：面板恢复为迁移前的 SQLite 部署（数据未动）。请排查 PostgreSQL 侧问题后重试迁移"
     else
-      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为迁移前快照的内容（快照已删除），SQLite 数据在 sqlite_data 卷中未动"
+      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为迁移前快照的内容（快照已删除），SQLite 数据在 $sqlite_volume 卷中未动"
     fi
     return 1
   fi
@@ -2446,13 +2620,13 @@ EOF
     if wait_for_backend_healthy; then
       echo "✅ 已回滚：面板恢复为迁移前的 SQLite 部署（数据未动）。请排查 PostgreSQL 侧问题后重试迁移"
     else
-      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为迁移前快照的内容（快照已删除），SQLite 数据在 sqlite_data 卷中未动"
+      echo "❌ 回滚后服务仍未恢复，请人工检查：.env 已恢复为迁移前快照的内容（快照已删除），SQLite 数据在 $sqlite_volume 卷中未动"
     fi
     return 1
   fi
 
   rm -f "$env_snapshot"
-  docker run --rm -v sqlite_data:/sqlite alpine rm -f /sqlite/gost-migrate.db 2>/dev/null || true
+  docker run --rm -v "$sqlite_volume":/sqlite alpine rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   echo "✅ SQLite -> PostgreSQL 迁移完成"
 }
 
@@ -2481,6 +2655,14 @@ uninstall_panel() {
   fi
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "❌ 部署目录 $PANEL_DEPLOY_DIR 缺少 docker-compose.yml，卸载终止（未删除任何内容）"
+    return 1
+  fi
+  # 共存守卫（C2-01）：缺 .env 时 Compose 会回退到与同机其他面板相同
+  # 的缺省容器/卷名，down --volumes 可能误删他人的数据卷。归属凭据
+  # 不全一律终止，先于任何确认与删除。
+  if [[ ! -f ".env" ]]; then
+    echo "❌ 部署目录 $PANEL_DEPLOY_DIR 缺少 .env，无法确认要删除的容器和数据卷属于本面板，卸载终止（未删除任何内容）"
+    echo "   缺少 .env 时 Compose 会回退到缺省资源名，可能误伤同机上另一套面板的数据卷；请先恢复该部署的 .env 后重试。"
     return 1
   fi
 
