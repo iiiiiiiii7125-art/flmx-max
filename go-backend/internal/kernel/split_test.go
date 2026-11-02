@@ -87,6 +87,7 @@ func TestSplitSingboxWithChain(t *testing.T) {
 	got := strings.Join(ruleTargets(rules, "outbound"), ",")
 	want := strings.Join([]string{
 		"sniff",
+		"reject",                     // R7-001: the ip_is_private guard, right after sniff
 		"via-1-s1-u7(u)", "via-1-s1", // rule sets (netflix + cn)
 		"reject(u)", "reject", // ads rule set
 		"reject(u)", "reject", // bt

@@ -40,25 +40,72 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 		rules = append(rules, obj{"auth_user": []string{User{ID: id}.Name()}, "outbound": tag})
 	}
 	cfg["outbounds"] = outbounds
-	if len(rules) > 0 {
-		route := obj{"rules": rules, "final": "direct"}
-		if defs := singboxRuleSets(sets, opts); len(defs) > 0 {
-			// sing-box downloads the 分流 rule sets itself and keeps them in
-			// the cache file across restarts.
-			route["rule_set"] = defs
-			cfg["experimental"] = obj{"cache_file": obj{"enabled": true, "path": "cache.db"}}
-			if opts.SingboxHTTPClient {
-				cfg["http_clients"] = []interface{}{obj{"tag": ruleSetHTTPClient}}
-			}
+	// The route is always rendered: even an inbound with no chain, split
+	// or counted user still needs the private-range guard below.
+	route := obj{"rules": singboxGuardRules(rules), "final": "direct"}
+	if defs := singboxRuleSets(sets, opts); len(defs) > 0 {
+		// sing-box downloads the 分流 rule sets itself and keeps them in
+		// the cache file across restarts.
+		route["rule_set"] = defs
+		cfg["experimental"] = obj{"cache_file": obj{"enabled": true, "path": "cache.db"}}
+		if opts.SingboxHTTPClient {
+			cfg["http_clients"] = []interface{}{obj{"tag": ruleSetHTTPClient}}
 		}
-		cfg["route"] = route
 	}
+	cfg["route"] = route
 	// preferGoDNS 传 false：我方无 GoDNS 特性（见 S4 方案 2.5 注，启用 IP
 	// 策略的入站在无 systemd-resolved 的节点上解析走默认 local resolver）。
 	if err := applyOutboundIPPolicies(TypeSingbox, cfg, inbounds, false); err != nil {
 		return "", err
 	}
 	return marshalConfig(cfg)
+}
+
+// singboxPrivateRejectRule is the node-side private-range guard
+// (R7-001): sing-box has no equivalent of Xray freedom's built-in
+// defaultBlockPrivateRule, so without this rule every sing-box inbound
+// could reach the node's private addresses and the cloud metadata
+// address 169.254.169.254 directly. sing-box documents ip_is_private
+// as matching non-public IPs (RFC1918, loopback, link-local including
+// 169.254/16, CGNAT, ULA, ...), the same destination set the Xray rule
+// blocks. The rule carries no inbound or user restriction, so it
+// covers every inbound this render emits.
+func singboxPrivateRejectRule() obj {
+	return obj{"ip_is_private": true, "action": "reject"}
+}
+
+// isSingboxPrivateRejectRule identifies the guard rule above; the
+// outbound IP policy pass (egress.go) uses it to keep the guard ahead
+// of the rules it reorders.
+func isSingboxPrivateRejectRule(rule obj) bool {
+	private, _ := rule["ip_is_private"].(bool)
+	return private && rule["action"] == "reject"
+}
+
+// singboxGuardRules returns the route rules with the private-range
+// guard in force. Xray blocks private destinations inside the freedom
+// outbound, after routing, so no routing rule — chained, split or
+// per-user — can steer a private destination anywhere; the sing-box
+// equivalent is a reject rule ahead of every routing rule those
+// features emit (a user split rule pointing at a private target loses
+// to it). Sniff rules stay in front of the guard: sniffing is not a
+// final action, it only enriches the connection for the rules that
+// follow, mirroring the client configs in share.go where the sniff
+// rule precedes the ip_is_private rule.
+func singboxGuardRules(rules []interface{}) []interface{} {
+	var sniff, rest []interface{}
+	for _, r := range rules {
+		if rule, ok := r.(obj); ok && rule["action"] == "sniff" {
+			sniff = append(sniff, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+	out := make([]interface{}, 0, len(rules)+1)
+	out = append(out, sniff...)
+	out = append(out, singboxPrivateRejectRule())
+	out = append(out, rest...)
+	return out
 }
 
 // acmeProviders shares one ACME certificate provider per domain + challenge

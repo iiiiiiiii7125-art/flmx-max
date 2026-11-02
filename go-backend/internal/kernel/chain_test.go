@@ -61,7 +61,8 @@ func TestChainSingboxImportedProxy(t *testing.T) {
 	}
 	route := cfg["route"].(map[string]interface{})
 	got := strings.Join(ruleOutbounds(route["rules"].([]interface{}), "outbound"), ",")
-	if got != "via-1-u7,via-1,flmx-u7" || route["final"] != "direct" {
+	// R7-001: the ip_is_private reject guard precedes the chain rules.
+	if got != "reject,via-1-u7,via-1,flmx-u7" || route["final"] != "direct" {
 		t.Fatalf("rule order: %s", got)
 	}
 }
@@ -116,7 +117,9 @@ func TestChainBlockedWhenTargetGone(t *testing.T) {
 		Security: Security{Type: SecurityShadowTLS, SNI: "www.example.com", ShadowTLSPassword: "stlspassword"},
 		Via:      &Endpoint{}}
 	cfg := renderJSON(t, TypeSingbox, []Inbound{in})
-	rule := cfg["route"].(map[string]interface{})["rules"].([]interface{})[0].(map[string]interface{})
+	// R7-001: rules[0] is the ip_is_private guard; the chain-blocked
+	// reject for this inbound follows it.
+	rule := cfg["route"].(map[string]interface{})["rules"].([]interface{})[1].(map[string]interface{})
 	if rule["action"] != "reject" || len(rule["inbound"].([]interface{})) != 2 {
 		t.Fatalf("sing-box must reject both the ShadowTLS front and its backend: %v", rule)
 	}

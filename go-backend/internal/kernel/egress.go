@@ -288,10 +288,14 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 		}
 	}
 	// User-wide rules must stay after the new inbound-scoped fallbacks.
+	// The sing-box private-range guard (R7-001) is a preprocess rule
+	// like sniff: it has no inbound tag, so the shared bucket below
+	// would demote it behind every scoped rule and let a split or chain
+	// rule steer private destinations past it.
 	var preprocess, scoped, shared []interface{}
 	for i, value := range rules {
 		rule := value.(obj)
-		if rule["action"] == "sniff" {
+		if rule["action"] == "sniff" || isSingboxPrivateRejectRule(rule) {
 			preprocess = append(preprocess, value)
 		} else if rule[inboundKey] == nil {
 			shared = append(shared, value)

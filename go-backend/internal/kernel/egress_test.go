@@ -22,13 +22,21 @@ func TestIPv4OnlyMixedInbounds(t *testing.T) {
 			}
 			rules := cfg[routeKey].(map[string]interface{})["rules"].([]interface{})
 			want := []string{"reject", "ipv4-in-1-flmx-u7", "ipv4-in-1-direct", "flmx-u7"}
+			famIdx := 0
 			if kt == TypeXray {
 				want[0] = "block"
+			} else {
+				// R7-001: the ip_is_private guard precedes the family block.
+				want = append([]string{"reject"}, want...)
+				famIdx = 1
+				if guard := rules[0].(map[string]interface{}); guard["ip_is_private"] != true || guard["action"] != "reject" {
+					t.Fatalf("private guard must stay first: %v", guard)
+				}
 			}
 			if got := ruleOutbounds(rules, obKey); !reflect.DeepEqual(got, want) {
 				t.Fatalf("scoped rules must precede shared user routing: %v", got)
 			}
-			first := rules[0].(map[string]interface{})
+			first := rules[famIdx].(map[string]interface{})
 			if kt == TypeXray {
 				if !reflect.DeepEqual(first["ip"], []interface{}{"::/0"}) {
 					t.Fatalf("IPv6 destinations must be blocked: %v", first)
@@ -113,13 +121,18 @@ func TestIPv6OnlyAlongsideIPv4AndAutomatic(t *testing.T) {
 			// Each strict inbound rejects the other family right before
 			// its direct rules.
 			want := []string{"reject", "ipv6-in-1-flmx-u7", "ipv6-in-1-direct", "reject", "ipv4-in-2-flmx-u7", "ipv4-in-2-direct", "flmx-u7"}
+			famIdx := 0
 			if kt == TypeXray {
 				want[0], want[3] = "block", "block"
+			} else {
+				// R7-001: the ip_is_private guard precedes both family blocks.
+				want = append([]string{"reject"}, want...)
+				famIdx = 1
 			}
 			if got := ruleOutbounds(rules, obKey); !reflect.DeepEqual(got, want) {
 				t.Fatalf("mixed policies must stay scoped ahead of user-wide routing: %v", got)
 			}
-			first := rules[0].(map[string]interface{})
+			first := rules[famIdx].(map[string]interface{})
 			if !reflect.DeepEqual(first[inKey], []interface{}{"in-1"}) {
 				t.Fatalf("IPv4 rejection leaked to another inbound: %v", first)
 			}
@@ -234,7 +247,17 @@ func TestIPv4OnlyShadowTLSAndValidation(t *testing.T) {
 		OutboundIPStrategy: OutboundIPv4Only}
 	cfg := renderJSON(t, TypeSingbox, []Inbound{in})
 	rules := cfg["route"].(map[string]interface{})["rules"].([]interface{})
-	if got := rules[0].(map[string]interface{})["inbound"]; !reflect.DeepEqual(got, []interface{}{"in-3", "in-3-ss"}) {
+	// R7-001: rules[0] is the ip_is_private guard (no inbound tag); the
+	// first inbound-scoped rule must still cover both the ShadowTLS
+	// front and its decrypted backend.
+	var got interface{}
+	for _, r := range rules {
+		if v, ok := r.(map[string]interface{})["inbound"]; ok {
+			got = v
+			break
+		}
+	}
+	if !reflect.DeepEqual(got, []interface{}{"in-3", "in-3-ss"}) {
 		t.Fatalf("both ShadowTLS and decrypted traffic must be covered: %v", got)
 	}
 	for _, tt := range []struct{ kernel, policy string }{{TypeSnell, OutboundIPv4Only}, {TypeXray, "invalid_policy"}} {
@@ -330,6 +353,12 @@ func TestPreferredEgressRoutingAndFallback(t *testing.T) {
 				rules := cfg[routeKey].(map[string]interface{})["rules"].([]interface{})
 				for _, value := range rules {
 					rule := value.(map[string]interface{})
+					// R7-001: the sing-box ip_is_private guard is a
+					// private-range reject, not a family preference
+					// rejection; it is exempt from this scan.
+					if rule["ip_is_private"] == true {
+						continue
+					}
 					if rule["action"] == "reject" || rule[outKey] == "block" {
 						t.Fatalf("preference must not reject the other family: %v", rule)
 					}
