@@ -1405,7 +1405,7 @@ func lockPortAllocForEntries(entries []struct {
 }
 
 // replaceForwardPortsTx 是 ReplaceForwardPorts 的事务内核心：删旧口、
-// 锁内三表占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
+// 锁内四源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
 // 窗口，旧端口已在本事务内删除、自占用天然排除）、插入新口。
 func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries []struct {
 	NodeID int64
@@ -2129,7 +2129,7 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	_, proxyProtocolSend = normalizeForwardProxyProtocol(proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	var forwardID int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// B4/F-013: 锁内三表复检（同 ReplaceForwardPorts）。handler 预检
+		// B4/F-013: 锁内四源复检（同 ReplaceForwardPorts）。handler 预检
 		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
 		for _, nodeID := range entryNodeIDs {
 			occupied, err := r.HasOtherForwardOnNodePortTx(tx, nodeID, port, 0)

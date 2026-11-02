@@ -40,10 +40,15 @@ const (
 const UnresolvedKey = "unresolved"
 
 // TrustedProxyHops 读取 FLMX_TRUSTED_PROXY_HOPS，默认 1。
-// 脚本默认拓扑是 Caddy → 前端 → 后端（panel_install.sh 生成的 Caddy
-// 配置反代的是前端端口，再由前端容器 nginx 把 API 请求转给后端），
-// 链上共两跳，必须显式设为 2；默认值 1 只适用于面板直连或单跳
-// 反代，并见部署文档（doc/guide/install.md 登录限流一节）。
+// 代码默认保持 1：裸进程/自定义部署的拓扑对二进制不可知，默认
+// 只按最保守的单跳假设解析。脚本默认拓扑是 Caddy → 前端 → 后端
+// （panel_install.sh 生成的 Caddy 配置反代的是前端端口，再由前端
+// 容器 nginx 把 API 请求转给后端），链上共两跳——该拓扑由交付面
+// 保证取 2（R6-L8-F-01：随版 compose 模板自带
+// FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2} 传递行，
+// 安装脚本落盘前补行，面板自升级覆写 compose 时保留/再生该行），
+// 部署亦可在 .env 显式覆盖。非标准拓扑（直连、单跳反代）按实际
+// 跳数设置，见部署文档（doc/guide/install.md 登录限流一节）。
 func TrustedProxyHops() int {
 	raw := strings.TrimSpace(config.GetEnvAny("FLMX_TRUSTED_PROXY_HOPS", "FLVX_TRUSTED_PROXY_HOPS"))
 	if raw == "" {

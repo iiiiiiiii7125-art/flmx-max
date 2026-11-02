@@ -1758,6 +1758,265 @@ YAML
     || fail "activate_panel_update_files must still bump FLUX_VERSION"
 )
 
+test_ensure_compose_trusted_proxy_hops_injects_mapping_form() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      SERVER_ADDR: :6365
+  frontend:
+    image: example/frontend:1.9.2
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "R6-L8-F-01: generated compose must carry the FLMX_TRUSTED_PROXY_HOPS passthrough line"
+  assert_equals "1" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "R6-L8-F-01: hops line must be injected exactly once"
+
+  # 幂等：再跑一次不得重复注入。
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+  assert_equals "1" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "R6-L8-F-01: ensure must be idempotent"
+)
+
+test_ensure_compose_trusted_proxy_hops_keeps_existing_line() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.3
+    environment:
+      DB_TYPE: sqlite
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  cp "$work/docker-compose.yml" "$work/before.yml"
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  cmp -s "$work/before.yml" "$work/docker-compose.yml" \
+    || fail "R6-L8-F-01: a compose already carrying the hops line must pass through unchanged"
+)
+
+test_ensure_compose_trusted_proxy_hops_list_form() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      - DB_TYPE=sqlite
+      - SERVER_ADDR=:6365
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  grep -qF -- '- FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "R6-L8-F-01: list-form environment must gain a list-form hops entry"
+)
+
+test_ensure_compose_trusted_proxy_hops_list_form_comment_first() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      # 运行时开关
+      - DB_TYPE=sqlite
+      - SERVER_ADDR=:6365
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  # RB3-01：定形须跳过 environment 后的注释行——注入列表形而非
+  # 映射形（映射行混入序列表会把 YAML 写坏）。
+  grep -qF -- '      - FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "RB3-01: list-form environment with a leading comment must gain a list-form hops entry"
+  if grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ' "$work/docker-compose.yml"; then
+    fail "RB3-01: mapping-form hops line must not be injected into a list-form environment"
+  fi
+  assert_equals "1" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "RB3-01: hops line must be injected exactly once"
+)
+
+test_ensure_compose_trusted_proxy_hops_env_header_trailing_comment() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment: # 后端环境变量
+      DB_TYPE: sqlite
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  # RB3-02：environment 头行带行尾注释时旧正则不匹配、静默不注入。
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "RB3-02: environment header with a trailing comment must still receive the hops line"
+)
+
+test_ensure_compose_trusted_proxy_hops_decoy_string_elsewhere() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+# FLMX_TRUSTED_PROXY_HOPS 由 backend 段管理，此处仅注释提及
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+  frontend:
+    image: example/frontend:1.9.2
+    # frontend 段注释同样提到 FLMX_TRUSTED_PROXY_HOPS
+YAML
+
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml"
+
+  # RB3-02：已有判定收窄在 backend 的 environment 块内，文件他处
+  # 的同名注释不得抑制注入（旧实现是文件全局 grep）。
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$work/docker-compose.yml" \
+    || fail "RB3-02: decoy key strings elsewhere in the file must not suppress injection into backend environment"
+  assert_equals "3" "$(grep -c 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml")" \
+    "RB3-02: exactly the two decoy mentions plus the injected line may carry the key string"
+)
+
+test_ensure_compose_trusted_proxy_hops_unrecognized_env_form_keeps_original() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cat > "$work/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment: ["DB_TYPE=sqlite"]
+YAML
+  cp "$work/docker-compose.yml" "$work/before.yml"
+
+  # RB3-01：无法识别的 environment 形态不得静默放行或写坏文件——
+  # 函数须返回非零、向 stderr 点名、原文件逐字保留。
+  local rc=0
+  ensure_compose_trusted_proxy_hops "$work/docker-compose.yml" 2>"$work/stderr.txt" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    fail "RB3-01: an unrecognized environment form must make ensure return nonzero"
+  fi
+  grep -q 'FLMX_TRUSTED_PROXY_HOPS' "$work/stderr.txt" \
+    || fail "RB3-01: the degradation must be announced on stderr"
+  cmp -s "$work/before.yml" "$work/docker-compose.yml" \
+    || fail "RB3-01: a failed validation must leave the original compose byte-identical"
+)
+
+test_compose_hops_injection_problem_detects_form_mismatch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  # 映射形段内混入列表形传递行——模拟注入定形出错的坏产物。
+  cat > "$work/bad.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      - FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  cat > "$work/good.yml" <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+
+  # RB3-01：覆写前的结构校验须拦下形态不一致的产物并给出理由。
+  local problem
+  if problem=$(compose_hops_injection_problem "$work/bad.yml"); then
+    fail "RB3-01: validation must reject a list-form hops line inside a mapping-form environment"
+  fi
+  [[ -n "$problem" ]] \
+    || fail "RB3-01: validation must name the problem it found"
+  compose_hops_injection_problem "$work/good.yml" >/dev/null \
+    || fail "RB3-01: validation must accept a well-formed injected compose"
+)
+
+test_shipped_compose_templates_carry_hops_line() (
+  set -euo pipefail
+  local tpl
+  for tpl in "$ROOT_DIR/docker-compose-v4.yml" "$ROOT_DIR/docker-compose-v6.yml"; do
+    grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' "$tpl" \
+      || fail "R6-L8-F-01: shipped template $tpl must carry the FLMX_TRUSTED_PROXY_HOPS passthrough line with default 2"
+  done
+)
+
+test_activate_panel_update_files_keeps_hops_line() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'FLUX_VERSION=1.9.2\nJWT_SECRET=x\n' > .env
+  # 存量 compose 带显式跳数行；候选是无此行的旧版资产——覆写后该行
+  # 必须仍在（标准行再生），不得被整份覆写冲掉。
+  cat > docker-compose.yml <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.2
+    environment:
+      DB_TYPE: sqlite
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  cat > candidate.yml <<'YAML'
+services:
+  backend:
+    image: example/backend:1.9.3
+    environment:
+      DB_TYPE: sqlite
+      SERVER_ADDR: :6365
+YAML
+
+  UPDATE_COMPOSE_CANDIDATE="$work/candidate.yml"
+  LATEST_VERSION="1.9.3"
+  activate_panel_update_files
+
+  grep -qF 'FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}' docker-compose.yml \
+    || fail "R6-L8-F-01: self-upgrade overwrite must keep the FLMX_TRUSTED_PROXY_HOPS line"
+  grep -q "example/backend:1.9.3" docker-compose.yml \
+    || fail "R6-L8-F-01: update candidate content must otherwise be written"
+)
+
 test_get_deployed_panel_version_parses_image_tag() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -2160,6 +2419,79 @@ test_panel_download_verified_routed_failover() (
     "$(head -n1 "$calls_log")" \
     "routed download should try the fastest probed proxy first when direct is dead"
   assert_equals "1" "$(wc -l < "$calls_log")" "routed download should stop at the first successful route"
+)
+
+# L8-F-02 第二锚（panel_install.sh）：download_verified_routed 获胜
+# 后须经异路重取 .sha256 复核——异路同值放行、异路异值删档整单
+# 中止、异路全灭降级点名但不拦截。桩 curl 按 URL 前缀供数：
+# a.example 为获胜线路，b.example 为复核线路。
+anchor_fixture_setup() {
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  ROUTES_STAGE=2
+  ANCHOR_BODY="anchor-body-content"
+  ANCHOR_SHA_A=$(printf '%s' "$ANCHOR_BODY" | sha256sum | awk '{print $1}')
+  ANCHOR_SHA_B=$(printf '%s' "different-body" | sha256sum | awk '{print $1}')
+  ANCHOR_SHA_B_MODE="same"
+  ANCHOR_SHA_B_FAIL="0"
+  curl() {
+    local out="" url="" prev="" a
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      case "$a" in http*://*) url="$a" ;; esac
+      prev="$a"
+    done
+    case "$url" in
+      *.sha256)
+        case "$url" in
+          *b.example*)
+            if [[ "$ANCHOR_SHA_B_FAIL" == "1" ]]; then return 22; fi
+            if [[ "$ANCHOR_SHA_B_MODE" == "different" ]]; then
+              printf '%s' "$ANCHOR_SHA_B" > "$out"
+            else
+              printf '%s' "$ANCHOR_SHA_A" > "$out"
+            fi
+            ;;
+          *) printf '%s' "$ANCHOR_SHA_A" > "$out" ;;
+        esac
+        ;;
+      *) printf '%s' "$ANCHOR_BODY" > "$out" ;;
+    esac
+  }
+}
+
+test_panel_anchor_corroboration_passes() (
+  set -euo pipefail
+  anchor_fixture_setup
+  local dest
+  dest=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>/dev/null
+  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "anchor pass: body should land when the second route corroborates"
+)
+
+test_panel_anchor_corroboration_mismatch_aborts() (
+  set -euo pipefail
+  anchor_fixture_setup
+  ANCHOR_SHA_B_MODE="different"
+  local dest rc=0
+  dest=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>/dev/null || rc=$?
+  assert_equals "1" "$rc" "anchor mismatch: routed download must abort when the second route disagrees"
+  [[ ! -f "$dest" ]] || fail "anchor mismatch: staged file must be removed on abort"
+)
+
+test_panel_anchor_corroboration_degrades() (
+  set -euo pipefail
+  anchor_fixture_setup
+  ANCHOR_SHA_B_FAIL="1"
+  local dest errlog
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>"$errlog"
+  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "anchor degrade: body should still land when no second route answers"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "anchor degrade: degradation must be named on stderr"
 )
 
 test_preserve_compose_networks_keeps_existing_subnet
@@ -3273,6 +3605,9 @@ test_install_script_routes_panel_first_when_panel_alive
 test_install_script_routes_panel_dead_falls_back
 test_install_script_panel_route_extends_on_download_failure
 test_panel_download_verified_routed_failover
+test_panel_anchor_corroboration_passes
+test_panel_anchor_corroboration_mismatch_aborts
+test_panel_anchor_corroboration_degrades
 test_update_flux_agent_downloads_without_prompt
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
 test_update_flux_agent_prints_online_confirmation_guidance
@@ -3312,6 +3647,16 @@ test_install_flux_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
 test_main_requires_root
 test_script_secret_surfaces_closed
+test_ensure_compose_trusted_proxy_hops_injects_mapping_form
+test_ensure_compose_trusted_proxy_hops_keeps_existing_line
+test_ensure_compose_trusted_proxy_hops_list_form
+test_ensure_compose_trusted_proxy_hops_list_form_comment_first
+test_ensure_compose_trusted_proxy_hops_env_header_trailing_comment
+test_ensure_compose_trusted_proxy_hops_decoy_string_elsewhere
+test_ensure_compose_trusted_proxy_hops_unrecognized_env_form_keeps_original
+test_compose_hops_injection_problem_detects_form_mismatch
+test_shipped_compose_templates_carry_hops_line
+test_activate_panel_update_files_keeps_hops_line
 test_pgloader_command_file_terminated
 test_tcpkill_missing_warns_instead_of_silent
 

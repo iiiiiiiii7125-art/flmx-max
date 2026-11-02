@@ -137,6 +137,14 @@ type TcpPingResponse struct {
 	PacketLoss   float64 `json:"packetLoss"`  // 连接失败率(%)
 	ErrorMessage string  `json:"errorMessage,omitempty"`
 	RequestId    string  `json:"requestId,omitempty"`
+	// Unverified 仅 UdpPing 使用（R6-L4-01）：UDP 无通用回声协议、
+	// 不可实测，拨号「成功」不构成连通性结论——置此标记且
+	// Success=false。AverageTime/PacketLoss 在此形态下不承载测
+	// 量值：本结构体字段无 omitempty，线上恒序列化为零值，面板
+	// 组装层收口时统一覆写为 null 后才出面板——零值不是测量值，
+	// 任何直接消费本报文的面都须先判本标记。面板组装层据此
+	// （或据老 agent 的 success=true）收口为未验证形态。
+	Unverified bool `json:"unverified,omitempty"`
 }
 
 // ServiceMonitorCheckRequest service monitor check request.
@@ -1910,8 +1918,23 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	// after handoff), restarts the current binary, and logs the
 	// failure by name; 'restart ok' is only reachable past a
 	// successful mv.
-	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
-		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start, tmpPath, start)
+	// L2-02 (round-6): the auto-rollback leg below gets the same
+	// treatment FRM4 gave the manual rollback script. It used to
+	// cp the backup straight onto the binary path, unchecked: a
+	// copy dying midway truncated the NEW binary, a copy against
+	// the still-running new binary could fail ETXTBSY, and either
+	// way the start + health check ran on whatever was in place
+	// and could log 'rollback succeeded' for a rollback that never
+	// happened. The leg now stops the service first (the failed
+	// health check does not prove the new process is gone), stages
+	// the copy in a unique mktemp sibling of the binary, proves it
+	// byte-identical with cmp, and only then mv's it into place;
+	// any failure before the mv leaves the new binary untouched,
+	// is logged by name, and 'rollback succeeded' stays reachable
+	// only past the staged swap.
+	rollbackTmpTemplate := filepath.Join(filepath.Dir(binaryPath), ".flux_agent.upgrade-rollback-XXXXXX")
+	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then %s; sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+		tmpPath, binaryPath, start, backupPath, stop, rollbackTmpTemplate, backupPath, backupPath, binaryPath, start, start, tmpPath, start)
 	return b.String(), nil
 }
 
@@ -2498,6 +2521,9 @@ func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner
 
 // anchorCorroborateTimeout bounds one anchor corroboration: a
 // cross-check on a tiny file, never worth the download budget.
+// Registered in doc/audit/timeout-budgets.tsv (A002 note, L2-01);
+// the x/kernel twin is pinned equal by gate tests in both
+// packages.
 var anchorCorroborateTimeout = 20 * time.Second
 
 // upgradeStaging owns the lifecycle of the staged upgrade binary
@@ -3481,14 +3507,27 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 	if err != nil {
 		response.Success = false
 		response.ErrorMessage = err.Error()
-	} else {
-		response.Success = true
+		// RM-VERIFY S5 观察②（UDP 腿同形态）：udpPingHost 失败时同样
+		// 返回实测 packetLoss=100，错误分支不得丢弃，理由同 handleTcpPing。
+		// 此类失败是探测前错误（DNS 解析失败/落点被拒/本地拨号错误），
+		// 与协议无关、是真实失败，不在未验证豁免内。
+		response.AverageTime = avgTime
+		response.PacketLoss = packetLoss
+		return response, nil
 	}
-	// RM-VERIFY S5 观察②（UDP 腿同形态）：udpPingHost 失败时同样
-	// 返回实测 packetLoss=100，错误分支不得丢弃，理由同 handleTcpPing。
-	// 注：此处只修组装回传，UDP 探测语义（只 Dial 不发包）不在本簇范围。
-	response.AverageTime = avgTime
-	response.PacketLoss = packetLoss
+
+	// R6-L4-01：udpPingHost 只 Dial 不发包（UDP 无通用回声协议），
+	// 其「成功」只说明本机能建 UDP socket，averageTime 是本地系统
+	// 调用耗时、packetLoss 恒 0——都不是目标路径的测量值，旧实现
+	// 将其作为 success+实测数值回传，面板呈现为「0ms/0% 优秀」，
+	// 与目标真实状态无关（死目标同呈成功）。自本版起：拨号无错
+	// 只用于区分「探测前失败」（上方分支）与「不可验证」，改回未
+	// 验证标记（Success=false）；数值字段不承载测量值——结构体
+	// 字段无 omitempty，线上恒为零值，由面板组装层收口时覆写为
+	// null 后才出面板（见面板 markDiagnosisItemUnverified）。
+	response.Success = false
+	response.Unverified = true
+	response.ErrorMessage = "UDP 无通用回声协议，无法实测连通性"
 
 	return response, nil
 }

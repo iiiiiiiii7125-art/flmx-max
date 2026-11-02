@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261102.02"
+SCRIPT_VERSION="20261102.03"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1354,9 +1354,88 @@ download_verified() {
   return 0
 }
 
+# corroborate_download_anchor <canonical URL> <dest> <获胜前缀>：
+# L8-F-02 第二锚（脚本面，与后端 system_upgrade 的
+# corroborateReleaseAssetChecksum、agent 侧 corroborateUpgrade
+# Checksum 同口径）：download_verified 的校验值与本体同源同次
+# 取得，单个镜像失陷即可自洽篡改（本体与 .sha256 一起换）。这
+# 里从路线表内与获胜线路不同的一条线路重取同一资产的 .sha256，
+# 与落盘本体的实际哈希（已由第一锚证明与获胜线路校验值一致）
+# 比对：
+#   - 异路给出不同的合法哈希 → 硬失败（返回 1），调用方删档整
+#     单中止，不换路重试；
+#   - 异路内容不是合法 64 位 SHA256 → 只废该路，继续问下一路；
+#   - 全部异路都给不出合法校验值 → 降级单锚继续（返回 0），并
+#     在 stderr 点名「跨线路锚复核已降级」。
+# 脚本面的边界（如实写明）：① 路线表只有一条时先按下载主流程
+# 同款机制 extend 补测一次（仅 stage 1 直连短路形态扩得动；
+# PROXY_ENABLED=false / PROXY_URL 覆盖是运维显式单路，无候选
+# 可扩，直接降级点名）；② 整轮复核共用 20s 总界（与 Go 两侧同
+# 值），逐路 --max-time 取剩余量与 10s 的较小者；③
+# FLMX_VERIFY_DOWNLOADS=0 时运维已整体关闭校验，第二锚随第一
+# 锚一并跳过（显式逃生口，不是静默降级）。
+corroborate_download_anchor() {
+  local url="$1" dest="$2" winner="$3"
+  local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
+  if [ "$verify" = "0" ]; then
+    return 0
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    # download_verified 在缺 sha256sum 时已 fail-closed 拒绝，能
+    # 走到这里只剩校验被改道等异常组合：无从复核，点名降级。
+    echo "⚠️ 跨线路锚复核已降级：缺少 sha256sum 无法复核校验值，按单锚继续（L8-F-02）" >&2
+    return 0
+  fi
+  local actual
+  actual=$(sha256sum "$dest" | awk '{print $1}')
+  local -a candidates=()
+  local prefix
+  for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+    [[ "$prefix" == "$winner" ]] && continue
+    candidates+=("$prefix")
+  done
+  if [[ ${#candidates[@]} -eq 0 ]] && extend_download_routes; then
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      [[ "$prefix" == "$winner" ]] && continue
+      candidates+=("$prefix")
+    done
+  fi
+  local deadline=$(( $(date +%s) + 20 ))
+  local got tmp remain max_time
+  for prefix in "${candidates[@]}"; do
+    remain=$(( deadline - $(date +%s) ))
+    if (( remain <= 0 )); then
+      break
+    fi
+    max_time=10
+    if (( remain < max_time )); then max_time=$remain; fi
+    tmp=$(mktemp) || continue
+    if curl -fsSL --connect-timeout 5 --max-time "$max_time" -o "$tmp" "$(route_url "$prefix" "$url").sha256" 2>/dev/null; then
+      got=$(awk '{print $1}' "$tmp" | tr -d ' \n' | tr 'A-F' 'a-f')
+      rm -f "$tmp"
+      if [[ "$got" =~ ^[0-9a-f]{64}$ ]]; then
+        if [[ "$got" != "$actual" ]]; then
+          echo "❌ 跨线路锚复核失败：校验文件经两条不同线路获取的结果不一致，已中止（L8-F-02 第二锚）" >&2
+          echo "   本体实际哈希（第一锚已验）: $actual" >&2
+          echo "   异路（${prefix:-直连}）校验值: $got" >&2
+          return 1
+        fi
+        echo "✅ 跨线路锚复核通过（第二线路: ${prefix:-直连}）" >&2
+        return 0
+      fi
+    else
+      rm -f "$tmp"
+    fi
+  done
+  echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（L8-F-02）" >&2
+  return 0
+}
+
 # download_verified_routed <canonical URL> <dest>：按内置路线表逐个
 # 以 download_verified 下载（资产 + .sha256 同源同腿、fail-closed
 # 口径不变），首个成功即用；阶段 1 路线全败时补测代理排名续切。
+# 获胜后另经 corroborate_download_anchor 异路复核第二锚
+# （L8-F-02）：不一致删档整单中止，降级仅点名不拦截。
 download_verified_routed() {
   local url="$1"
   local dest="$2"
@@ -1365,6 +1444,10 @@ download_verified_routed() {
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
       if download_verified "$(route_url "$prefix" "$url")" "$dest"; then
+        if ! corroborate_download_anchor "$url" "$dest" "$prefix"; then
+          rm -f "$dest"
+          return 1
+        fi
         return 0
       fi
     done
@@ -1546,8 +1629,148 @@ preserve_compose_networks() {
   fi
 }
 
+# compose_backend_env_has_hops_line <compose文件>
+# backend 服务的 environment 块内（非注释条目）已带
+# FLMX_TRUSTED_PROXY_HOPS 键时返回 0，否则返回 1。判定收窄在
+# 块内：文件他处的同名字符串（注释、其他服务段）不算数——旧实现
+# 是文件全局 grep，他处出现该串即误判已有、静默不注入（RB3-02）。
+compose_backend_env_has_hops_line() {
+  awk '
+    function indent_of(line) { match(line, /^[[:space:]]*/); return RLENGTH }
+    BEGIN { in_backend=0; in_env=0; found=0 }
+    {
+      if (!in_backend) {
+        if ($0 ~ /^  backend:([[:space:]]+(#.*)?)?$/) in_backend=1
+        next
+      }
+      if ($0 ~ /^[^[:space:]#]/ || $0 ~ /^  [^[:space:]#]/) { in_backend=0; in_env=0; next }
+      if (!in_env) {
+        if ($0 ~ /^    environment:([[:space:]]+(#.*)?)?$/) in_env=1
+        next
+      }
+      if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+      if (indent_of($0) <= 4) { in_env=0; next }
+      if ($0 ~ /^[[:space:]]*(-[[:space:]]+)?FLMX_TRUSTED_PROXY_HOPS[[:space:]]*[:=]/) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$1"
+}
+
+# compose_hops_injection_problem <compose文件>
+# 校验 backend environment 块内 FLMX_TRUSTED_PROXY_HOPS 注入产物
+# 的结构合法性：合法时无输出、返回 0；不合法时把问题描述输出到
+# stdout 并返回 1。检查项：段存在、块内恰有一条传递行、其缩进与
+# 形态（列表/映射）和段内首条条目一致。
+compose_hops_injection_problem() {
+  awk '
+    function indent_of(line) { match(line, /^[[:space:]]*/); return RLENGTH }
+    BEGIN { in_backend=0; in_env=0; seen_env=0; key_count=0; key_form=""; key_indent=-1; entry_form=""; entry_indent=-1 }
+    {
+      if (!in_backend) {
+        if ($0 ~ /^  backend:([[:space:]]+(#.*)?)?$/) in_backend=1
+        next
+      }
+      if ($0 ~ /^[^[:space:]#]/ || $0 ~ /^  [^[:space:]#]/) { in_backend=0; in_env=0; next }
+      if (!in_env) {
+        if ($0 ~ /^    environment:([[:space:]]+(#.*)?)?$/) { in_env=1; seen_env=1 }
+        next
+      }
+      if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+      ind = indent_of($0)
+      if (ind <= 4) { in_env=0; next }
+      form = ($0 ~ /^[[:space:]]*-[[:space:]]/) ? "list" : "map"
+      if (entry_indent < 0) { entry_indent=ind; entry_form=form }
+      if ($0 ~ /FLMX_TRUSTED_PROXY_HOPS/) { key_count++; key_form=form; key_indent=ind }
+    }
+    END {
+      if (!seen_env) { print "backend 服务缺少可识别的 environment 段"; exit 1 }
+      if (key_count == 0) { print "environment 段内没有 FLMX_TRUSTED_PROXY_HOPS 传递行"; exit 1 }
+      if (key_count > 1) { print "environment 段内 FLMX_TRUSTED_PROXY_HOPS 传递行重复"; exit 1 }
+      if (key_indent != entry_indent) { print "传递行缩进与 environment 段内条目不一致"; exit 1 }
+      if (key_form != entry_form) { print "传递行形态（列表/映射）与 environment 段内条目不一致"; exit 1 }
+      exit 0
+    }
+  ' "$1"
+}
+
+# R6-L8-F-01：脚本默认拓扑是 Caddy → 前端端口 → 前端 nginx → 后端，
+# 链上共两跳，后端的可信代理跳数必须为 2；缺失时登录限流键会收敛
+# 到前端网关条目、全站共用一桶（未认证者可持续锁死全站登录）。
+# 新版模板已自带 FLMX_TRUSTED_PROXY_HOPS 传递行（默认 :-2），但定版
+# 安装/更新下载的可能是旧版资产（无此行），故在 compose 落盘前统一
+# 补行：backend 的 environment 段缺该键才注入（映射/列表两种形态
+# 各按其形），已有则原样不动。best-effort：失败不阻断安装/更新
+# 本身（调用点以 || true 承接返回值），但不许静默——任何降级都
+# 向 stderr 点名。判定与校验口径（RB3-01/RB3-02）：
+# - 已有判定收窄在 backend 的 environment 块内（见上方助手）；
+# - 定形跳过 environment: 后的注释行与空行，以第一条真实条目定
+#   列表/映射形；environment: 头行容忍行尾注释；
+# - 注入产物先过结构校验（见上方助手）才覆写原文件，校验不过
+#   原文件逐字保留、本函数返回非零。
+# 用法：ensure_compose_trusted_proxy_hops <compose文件>
+ensure_compose_trusted_proxy_hops() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  if compose_backend_env_has_hops_line "$file"; then
+    return 0
+  fi
+
+  local tmp
+  tmp=$(mktemp) || {
+    echo "⚠️ 无法创建临时文件，FLMX_TRUSTED_PROXY_HOPS 补行未执行（$file）" >&2
+    return 1
+  }
+  if ! awk '
+    function indent_of(line) { match(line, /^[[:space:]]*/); return RLENGTH }
+    BEGIN { in_backend=0; pending=0; done=0 }
+    {
+      if (done) { print; next }
+      if (!in_backend) {
+        if ($0 ~ /^  backend:([[:space:]]+(#.*)?)?$/) in_backend=1
+        print; next
+      }
+      if ($0 ~ /^[^[:space:]#]/ || $0 ~ /^  [^[:space:]#]/) {
+        if (pending) { print "      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}"; done=1; pending=0 }
+        in_backend=0
+        print; next
+      }
+      if (!pending && $0 ~ /^    environment:([[:space:]]+(#.*)?)?$/) { pending=1; print; next }
+      if (pending) {
+        if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) { print; next }
+        ind = indent_of($0)
+        if (ind > 4) {
+          if ($0 ~ /^[[:space:]]*-[[:space:]]/) printf "%s- FLMX_TRUSTED_PROXY_HOPS=${FLMX_TRUSTED_PROXY_HOPS:-2}\n", substr($0, 1, ind)
+          else printf "%sFLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}\n", substr($0, 1, ind)
+          done=1; pending=0
+          print; next
+        }
+        print "      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}"
+        done=1; pending=0
+        print; next
+      }
+      print
+    }
+    END { if (pending) print "      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}" }
+  ' "$file" > "$tmp"; then
+    rm -f "$tmp"
+    echo "⚠️ 解析 compose 失败，FLMX_TRUSTED_PROXY_HOPS 补行未执行（$file）" >&2
+    return 1
+  fi
+  local problem
+  if ! problem=$(compose_hops_injection_problem "$tmp"); then
+    rm -f "$tmp"
+    echo "⚠️ FLMX_TRUSTED_PROXY_HOPS 补行未通过结构校验（${problem}），已保留原 compose 不变（$file）；默认拓扑下后端可信代理跳数可能不正确，请人工检查该文件的 backend environment 段" >&2
+    return 1
+  fi
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+  echo "🔐 已为后端补入 FLMX_TRUSTED_PROXY_HOPS 传递行（默认拓扑两跳，可在 .env 覆盖）"
+  return 0
+}
+
 activate_panel_update_files() {
   preserve_compose_networks "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml
+  ensure_compose_trusted_proxy_hops "$UPDATE_COMPOSE_CANDIDATE" || true
   if ! chmod 0644 "$UPDATE_COMPOSE_CANDIDATE" || ! mv "$UPDATE_COMPOSE_CANDIDATE" docker-compose.yml; then
     echo "❌ 替换 Compose 配置失败"
     return 1
@@ -1791,6 +2014,9 @@ install_panel() {
     echo "❌ 下载 Compose 配置失败，安装终止: $DOCKER_COMPOSE_URL"
     return 1
   fi
+  # R6-L8-F-01：旧版资产模板可能没有可信代理跳数传递行，落盘前补齐
+  # （新版模板自带、此步自动跳过）。
+  ensure_compose_trusted_proxy_hops docker-compose.yml || true
   echo "✅ 文件准备完成"
 
   cat > .env <<EOF
@@ -2006,6 +2232,8 @@ migrate_to_postgres() {
       echo "❌ 下载 Compose 配置失败，迁移终止: $DOCKER_COMPOSE_URL"
       return 1
     fi
+    # R6-L8-F-01：同安装路径，落盘前补齐可信代理跳数传递行。
+    ensure_compose_trusted_proxy_hops docker-compose.yml || true
     echo "✅ docker-compose.yml 下载完成"
   fi
 

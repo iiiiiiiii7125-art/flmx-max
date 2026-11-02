@@ -378,7 +378,7 @@ func TestEvaluateBestExitOwnerScoresAllCandidates(t *testing.T) {
 		}
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger, "")
 	if len(scores) != 2 {
 		t.Fatalf("expected two scores, got %+v", scores)
 	}
@@ -399,7 +399,7 @@ func TestEvaluateBestExitOwnerSkipsOfflineCandidate(t *testing.T) {
 		return 0, 100, nil
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), ping)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), ping, "")
 	if len(scores) != 1 || scores[0].Success {
 		t.Fatalf("expected one failed offline candidate, got %+v", scores)
 	}
@@ -419,7 +419,7 @@ func TestEvaluateBestExitOwnerUsesConfiguredPublicProbeTarget(t *testing.T) {
 		return 10, 0, nil
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, target, ping)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, target, ping, "")
 	if len(scores) != 1 || !scores[0].Success {
 		t.Fatalf("expected successful score, got %+v", scores)
 	}
@@ -444,7 +444,7 @@ func TestEvaluateBestExitOwnerMarksCandidateFailedWhenOwnerToExitFails(t *testin
 		return 0, 100, errBestExitProbeForTest
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger, "")
 	if len(scores) != 1 || scores[0].Success {
 		t.Fatalf("expected failed candidate, got %+v", scores)
 	}
@@ -467,7 +467,7 @@ func TestEvaluateBestExitOwnerMarksCandidateFailedWhenTargetResolutionFails(t *t
 		return 0, 100, nil
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger, "")
 	if len(scores) != 1 || scores[0].Success {
 		t.Fatalf("expected failed candidate, got %+v", scores)
 	}
@@ -492,7 +492,7 @@ func TestEvaluateBestExitOwnerProbesPortedAddressViaFallback(t *testing.T) {
 		return 15, 0, nil
 	}
 
-	scores := evaluateBestExitOwner(owner, exits, nodes, "v4", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger)
+	scores := evaluateBestExitOwner(owner, exits, nodes, "v4", diagnosisExecOptions{}, defaultTunnelProbeTarget(), pinger, "")
 	if len(scores) != 1 || !scores[0].Success {
 		t.Fatalf("ported-address exit must be scored via fallback, got %+v", scores)
 	}

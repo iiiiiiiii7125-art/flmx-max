@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 import { testNotify } from "@/api";
@@ -96,6 +96,7 @@ export function NotifyCard({
   onChange,
 }: NotifyCardProps) {
   const [testing, setTesting] = useState(false);
+  const testInFlightRef = useRef(false);
   const enabled = configs.notify_enabled === "true";
   const rawEvents = (configs.notify_events ?? "").trim();
   // Empty means every event, so new installs get all of them.
@@ -123,6 +124,10 @@ export function NotifyCard({
   };
 
   const runTest = async () => {
+    // F-L6-01 自复扫补遗：每次下发都真实发送一条外部通知，双发即重复
+    // 发送；此前只有 testing 渲染状态，补 ref 入口复核。
+    if (testInFlightRef.current) return;
+    testInFlightRef.current = true;
     setTesting(true);
     try {
       const res = await testNotify({
@@ -140,6 +145,7 @@ export function NotifyCard({
     } catch {
       toast.error("发送失败");
     } finally {
+      testInFlightRef.current = false;
       setTesting(false);
     }
   };

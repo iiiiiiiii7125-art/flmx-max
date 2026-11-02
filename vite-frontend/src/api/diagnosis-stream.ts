@@ -22,6 +22,8 @@ export interface DiagnosisStreamProgress {
   completed: number;
   success: number;
   failed: number;
+  /** UDP 未验证项数：不计入成功/失败（R6-L4-01，后端单列）。 */
+  unverified: number;
   timedOut?: boolean;
 }
 
@@ -63,6 +65,7 @@ const normalizeProgress = (
   const completed = Number(candidate.completed);
   const success = Number(candidate.success);
   const failed = Number(candidate.failed);
+  const unverified = Number(candidate.unverified);
 
   return {
     total: Number.isFinite(total) && total >= 0 ? total : fallback.total,
@@ -73,6 +76,10 @@ const normalizeProgress = (
     success:
       Number.isFinite(success) && success >= 0 ? success : fallback.success,
     failed: Number.isFinite(failed) && failed >= 0 ? failed : fallback.failed,
+    unverified:
+      Number.isFinite(unverified) && unverified >= 0
+        ? unverified
+        : fallback.unverified,
     timedOut:
       typeof candidate.timedOut === "boolean"
         ? candidate.timedOut
@@ -159,6 +166,7 @@ const runDiagnosisStream = async ({
     completed: 0,
     success: 0,
     failed: 0,
+    unverified: 0,
   };
 
   const timeoutController = new AbortController();

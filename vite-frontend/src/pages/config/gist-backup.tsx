@@ -1,6 +1,6 @@
 import type { GistBackupStatus, GistBackupVersion } from "@/api";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 import {
@@ -71,6 +71,12 @@ export function GistBackup() {
   const [versionsError, setVersionsError] = useState("");
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreVersion, setRestoreVersion] = useState("");
+  // F-L6-01：恢复下发的在途标记。弹窗确认按钮的 restoring 是渲染状态，
+  // 连点在渲染提交前可双发；restore 本体以 ref 做入口同步复核。
+  const restoreInFlightRef = useRef(false);
+  // 同上（自复扫补遗）：upload 亦为只有渲染状态的下发面，每次下发都在
+  // Gist 产生一个新版本，非全量替换保存类，一并补入口同步复核。
+  const uploadInFlightRef = useRef(false);
 
   const apply = (s: GistBackupStatus) => {
     setStatus(s);
@@ -133,10 +139,12 @@ export function GistBackup() {
   };
 
   const upload = async () => {
-    // 未保存的改动先保存，上传用最新设置。
-    if (dirty && !(await save({}))) return;
-    setUploading(true);
+    if (uploadInFlightRef.current) return;
+    uploadInFlightRef.current = true;
     try {
+      // 未保存的改动先保存，上传用最新设置。
+      if (dirty && !(await save({}))) return;
+      setUploading(true);
       const res = await uploadGistBackup();
 
       if (res.code !== 0 || !res.data) {
@@ -151,6 +159,7 @@ export function GistBackup() {
       if (res.data.result.uploaded) toast.success("已上传到 Gist");
       else toast(res.data.result.message);
     } finally {
+      uploadInFlightRef.current = false;
       setUploading(false);
     }
   };
@@ -202,19 +211,26 @@ export function GistBackup() {
     version: string,
     password: string,
   ): Promise<boolean> => {
-    if (dirty && !(await save({}))) return false;
+    // F-L6-01：入口同步复核必须在第一个 await（save）之前落位。
+    if (restoreInFlightRef.current) return false;
+    restoreInFlightRef.current = true;
+    try {
+      if (dirty && !(await save({}))) return false;
 
-    const res = await restoreGistBackup({ version, password });
+      const res = await restoreGistBackup({ version, password });
 
-    if (res.code !== 0) {
-      toast.error(res.msg || "恢复失败");
+      if (res.code !== 0) {
+        toast.error(res.msg || "恢复失败");
 
-      return false;
+        return false;
+      }
+      toast.success("已从 Gist 恢复，页面即将刷新");
+      window.setTimeout(() => window.location.reload(), 1500);
+
+      return true;
+    } finally {
+      restoreInFlightRef.current = false;
     }
-    toast.success("已从 Gist 恢复，页面即将刷新");
-    window.setTimeout(() => window.location.reload(), 1500);
-
-    return true;
   };
 
   const failed = status.lastError !== "";

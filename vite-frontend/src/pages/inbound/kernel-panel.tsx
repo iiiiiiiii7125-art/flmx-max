@@ -79,6 +79,19 @@ export function KernelPanel({
   });
   const [installing, setInstalling] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // F-L6-01：下发入口同步复核。busy/installing 是渲染状态，连点/回车连击在
+  // 渲染提交前存在同目标双发窗口；用按操作键分键的 ref 在下发瞬间拦截，
+  // 键与 busy 字面量同形（install / <id>-<action> / <id>-remove）。
+  const opInFlightRef = useRef<Set<string>>(new Set());
+  const beginOp = (key: string) => {
+    if (opInFlightRef.current.has(key)) return false;
+    opInFlightRef.current.add(key);
+
+    return true;
+  };
+  const endOp = (key: string) => {
+    opInFlightRef.current.delete(key);
+  };
   const [logsFor, setLogsFor] = useState<KernelApiItem | null>(null);
   // 日志请求序号：连点两个内核时，迟到的旧日志不得落到新内核标题下
   const logsSeqRef = useRef(0);
@@ -123,6 +136,7 @@ export function KernelPanel({
 
       return;
     }
+    if (!beginOp("install")) return;
     setInstalling(true);
     try {
       const res = await installKernel({
@@ -139,6 +153,7 @@ export function KernelPanel({
       }
       onChanged();
     } finally {
+      endOp("install");
       setInstalling(false);
     }
   };
@@ -147,7 +162,10 @@ export function KernelPanel({
     k: KernelApiItem,
     action: "start" | "stop" | "restart",
   ) => {
-    setBusy(`${k.id}-${action}`);
+    const opKey = `${k.id}-${action}`;
+
+    if (!beginOp(opKey)) return;
+    setBusy(opKey);
     try {
       const res = await controlKernel(k.id, action);
 
@@ -158,6 +176,7 @@ export function KernelPanel({
       }
       onChanged();
     } finally {
+      endOp(opKey);
       setBusy(null);
     }
   };
@@ -189,7 +208,10 @@ export function KernelPanel({
 
   const doRemove = async (force: boolean) => {
     if (!removeTarget) return;
-    setBusy(`${removeTarget.id}-remove`);
+    const opKey = `${removeTarget.id}-remove`;
+
+    if (!beginOp(opKey)) return;
+    setBusy(opKey);
     try {
       const res = await controlKernel(removeTarget.id, "remove", force);
 
@@ -217,6 +239,7 @@ export function KernelPanel({
         toast.error(res.msg || "卸载失败");
       }
     } finally {
+      endOp(opKey);
       setBusy(null);
     }
   };

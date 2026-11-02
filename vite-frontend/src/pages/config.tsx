@@ -390,6 +390,8 @@ export default function ConfigPage() {
   const [systemUpgradeStatus, setSystemUpgradeStatus] =
     useState<SystemUpgradeStatusApiData | null>(null);
   const systemUpgradePollRef = useRef<number | null>(null);
+  // F-L6-01：备份导入下发的在途标记（入口同步复核用，见 executePendingImport）。
+  const importInFlightRef = useRef(false);
   const [previewLoadFailed, setPreviewLoadFailed] = useState<
     Partial<Record<BrandPreviewKey, boolean>>
   >({});
@@ -1467,7 +1469,10 @@ export default function ConfigPage() {
   };
 
   const executePendingImport = async () => {
-    if (!pendingImport) return;
+    // F-L6-01：入口同步复核。importing 只是渲染状态，确认按钮连点在渲染
+    // 提交前可双发两道并发导入（导入无 idemKey 兜底）；ref 在下发瞬间拦截。
+    if (!pendingImport || importInFlightRef.current) return;
+    importInFlightRef.current = true;
 
     setImporting(true);
     try {
@@ -1522,6 +1527,7 @@ export default function ConfigPage() {
     } catch {
       toast.error("导入失败，请检查文件格式");
     } finally {
+      importInFlightRef.current = false;
       setImporting(false);
     }
   };

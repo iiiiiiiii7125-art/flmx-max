@@ -44,12 +44,7 @@ func writeDiagnosisStreamEvent(encoder *json.Encoder, flusher http.Flusher, even
 func summarizeDiagnosisProgress(results []map[string]interface{}) diagnosisProgress {
 	progress := diagnosisProgress{Total: len(results)}
 	for _, item := range results {
-		progress.Completed++
-		if asBool(item["success"], false) {
-			progress.Success++
-		} else {
-			progress.Failed++
-		}
+		countDiagnosisResult(&progress, item)
 	}
 	return progress
 }
@@ -282,22 +277,18 @@ func (h *Handler) streamForwardDiagnosisRuntime(ctx context.Context, cancel cont
 
 	progress := diagnosisProgress{Total: total}
 	for i, item := range plan.statusItems {
-		progress.Completed++
-		if asBool(item["success"], false) {
-			progress.Success++
-		} else {
-			progress.Failed++
-		}
+		countDiagnosisResult(&progress, item)
 		writeItem(i, item, progress)
 	}
 	base := progress
 	offset := len(plan.statusItems)
 	emitter := func(index int, item map[string]interface{}, probeProgress diagnosisProgress) {
 		writeItem(offset+index, item, diagnosisProgress{
-			Total:     total,
-			Completed: base.Completed + probeProgress.Completed,
-			Success:   base.Success + probeProgress.Success,
-			Failed:    base.Failed + probeProgress.Failed,
+			Total:      total,
+			Completed:  base.Completed + probeProgress.Completed,
+			Success:    base.Success + probeProgress.Success,
+			Failed:     base.Failed + probeProgress.Failed,
+			Unverified: base.Unverified + probeProgress.Unverified,
 		})
 	}
 	probeResults := h.runDiagnosisWorkItems(ctx, plan.workItems, emitter)

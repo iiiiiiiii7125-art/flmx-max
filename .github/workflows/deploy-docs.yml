@@ -42,11 +42,22 @@ jobs:
       # force_orphan, so a skipped demo build would delete the demo.
       - name: Build demo
         working-directory: vite-frontend
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm install -g pnpm@10.28.1
           pnpm install --frozen-lockfile
+          # F-L6-02: the demo footer must name the latest published release.
+          # git describe only finds the nearest tag reachable from HEAD, so
+          # it lags whenever the newest release tag is not an ancestor of
+          # the checked-out commit; ask the Releases API instead and fall
+          # back to git describe only if the API is unreachable.
+          APP_VERSION="$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [ -z "$APP_VERSION" ] || [ "$APP_VERSION" = "null" ]; then
+            APP_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo dev)"
+          fi
           VITE_DEMO=true VITE_BASE=/flmx-max/demo/ \
-          VITE_APP_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo dev)" \
+          VITE_APP_VERSION="$APP_VERSION" \
           VITE_GITHUB_REPO="https://github.com/${{ github.repository }}" \
             pnpm exec vite build --outDir ../doc/.vitepress/dist/demo --emptyOutDir
 

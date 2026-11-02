@@ -629,14 +629,29 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
   return (
     <div className="flex min-w-max items-center py-2">
       {path.hops.map((hop, index) => {
+        // R6-L4-02：未测跳（UDP 协议段）的 -1/100 是未测哨兵而非
+        // 失败实测，走中性呈现，不染失败红、不报丢包。
+        const isUntested = hop.untested === true;
         const hasError =
-          Boolean(hop.errorMessage) || hop.latency < 0 || hop.loss > 0;
-        const colorClass =
-          hop.latency < 0 || hop.errorMessage
+          !isUntested &&
+          (Boolean(hop.errorMessage) || hop.latency < 0 || hop.loss > 0);
+        const colorClass = isUntested
+          ? "text-foreground"
+          : hop.latency < 0 || hop.errorMessage
             ? "text-danger-700"
             : hop.loss > 0
               ? "text-warning-700"
               : "text-success-700";
+        // L6-F01：延迟值与 FH 的 LatencyDisplay 同口径托盘化（裸 -700 小字
+        // 坐玻璃在壁纸暗区不达标）；colorClass 只保留给箭头图标（图形件）。
+        // 集成对账（G2×G4）：未测跳走 G2 的中性 tray-primary，不落失败红托盘。
+        const trayClass = isUntested
+          ? "tray-primary"
+          : hop.latency < 0 || hop.errorMessage
+            ? "tray-danger"
+            : hop.loss > 0
+              ? "tray-warning"
+              : "tray-success";
         const borderColor = hasError ? "border-danger" : "";
 
         return (
@@ -654,23 +669,29 @@ function TunnelTopologyPathRow({ path }: { path: TunnelTopologyPath }) {
               title={hop.errorMessage}
             >
               <span
-                className={`mb-1 text-[10px] font-semibold font-mono leading-none ${colorClass}`}
+                className={`mb-1 rounded px-1 py-0.5 text-[10px] font-semibold font-mono leading-none ${trayClass}`}
               >
-                {hop.latency >= 0 && !hop.errorMessage
-                  ? `${hop.latency.toFixed(0)}ms`
-                  : "超时"}
+                {isUntested
+                  ? "未测"
+                  : hop.latency >= 0 && !hop.errorMessage
+                    ? `${hop.latency.toFixed(0)}ms`
+                    : "超时"}
               </span>
               <div
-                className={`relative flex h-[2px] w-full items-center justify-end bg-default-200 ${hop.latency < 0 || hop.errorMessage ? "!bg-danger" : ""}`}
+                className={`relative flex h-[2px] w-full items-center justify-end bg-default-200 ${!isUntested && (hop.latency < 0 || hop.errorMessage) ? "!bg-danger" : ""}`}
               >
                 <ArrowRight
                   className={`absolute -right-2 z-10 h-3.5 w-3.5 rounded-full bg-background p-[1px] ${colorClass}`}
                 />
               </div>
               <span
-                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${hop.errorMessage || hop.loss > 0 ? "text-warning-700" : "text-foreground"}`}
+                className={`mt-1.5 text-[10px] font-semibold font-mono leading-none ${!isUntested && (hop.errorMessage || hop.loss > 0) ? "rounded px-1 py-0.5 tray-warning" : "text-foreground"}`}
               >
-                {hop.errorMessage ? "探测失败" : `${hop.loss.toFixed(0)}% 丢包`}
+                {isUntested
+                  ? "UDP 未测"
+                  : hop.errorMessage
+                    ? "探测失败"
+                    : `${hop.loss.toFixed(0)}% 丢包`}
               </span>
             </div>
             <TopologyNodeChip
@@ -1304,7 +1325,7 @@ export function TunnelMonitorView({
                 入口 → 出口 丢包
               </span>
               <span
-                className={`text-sm font-semibold font-mono ${(quality?.entryToExitLoss ?? 0) > 0 && !entryToExitLossNA ? "text-warning-700" : ""}`}
+                className={`text-sm font-semibold font-mono ${(quality?.entryToExitLoss ?? 0) > 0 && !entryToExitLossNA ? "rounded px-1 py-0.5 tray-warning" : ""}`}
               >
                 {quality?.entryToExitLoss !== undefined && !entryToExitLossNA
                   ? `${quality.entryToExitLoss.toFixed(1)}%`
@@ -1321,7 +1342,7 @@ export function TunnelMonitorView({
                 出口 → 测试目标 丢包
               </span>
               <span
-                className={`text-sm font-semibold font-mono ${(quality?.exitToBingLoss ?? 0) > 0 ? "text-warning-700" : ""}`}
+                className={`text-sm font-semibold font-mono ${(quality?.exitToBingLoss ?? 0) > 0 ? "rounded px-1 py-0.5 tray-warning" : ""}`}
               >
                 {quality?.exitToBingLoss !== undefined
                   ? `${quality.exitToBingLoss.toFixed(1)}%`

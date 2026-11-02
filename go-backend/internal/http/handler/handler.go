@@ -552,12 +552,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	// 触发后：验证码启用则强制 captcha（下方已有）；未启用则收紧该 IP 阈值。
 	// 无论用户名是否存在都计数，避免用行为差异做用户名枚举。
 	captchaEnabledForSignal, _ := h.captchaEnabled()
-	clientIPStr := ""
-	if ip := loginClientIP(r); ip != nil {
-		clientIPStr = ip.String()
-	} else {
-		clientIPStr = r.RemoteAddr
-	}
+	// R6-L8-F-04：用户名信号 IP 与限流键同收口（rateLimitKeyForRequest），
+	// 不再以含端口的原始 RemoteAddr 记账（紧缩集合的键同理）。
+	clientIPStr := rateLimitKeyForRequest(r, "login username signal")
 	h.checkLoginUsernameRateLimit(req.Username, clientIPStr, captchaEnabledForSignal)
 	if strings.TrimSpace(req.Password) == "" {
 		response.WriteJSON(w, response.ErrDefault("密码不能为空"))
@@ -701,10 +698,22 @@ func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 	// 员也不经 config/get 下发，与 getConfigs（config/list）侧 delete
 	// + gist/status 仅 tokenHint 的设计对齐。置于敏感/登录守卫之后，
 	// 故只收紧此前唯一漏防的管理员读路径；非管理员与匿名仍走既有
-	// 403「禁止访问敏感配置」/ 401 口径。边界：只动这两键，其余
-	// sensitive 键（如 jwt_secret）管理员可读是既有行为，不动。
+	// 403「禁止访问敏感配置」/ 401 口径。
 	if configName == gistConfigToken || configName == gistConfigPassword {
 		response.WriteJSON(w, response.Err(403, "禁止访问 Gist 凭据，请经 gist/status 查看"))
+		return
+	}
+
+	// R6-L8-F-05：jwt_secret 与 Gist 凭据同口径——即使对管理员也不
+	// 经 config/get 回本体（getConfigs 侧同步 delete）。它与 Gist
+	// 凭据不同，是跨用户凭据：经管理员会话泄露后可离线为任意用户
+	// 伪造令牌，且改密不影响该秘密（中间件只比对 iat 与
+	// PasswordChangedAt），须轮换签名密钥本身才止血，故读面与
+	// license 凭据一样彻底关闭；轮换走部署面（.env 的 JWT_SECRET
+	// 或数据库同级 jwt_secret 文件，见 internal/config），不经本
+	// 接口。其余 sensitive 键管理员可读仍是既有行为，不动。
+	if configName == "jwt_secret" {
+		response.WriteJSON(w, response.Err(403, "禁止访问 JWT 签名密钥"))
 		return
 	}
 
@@ -749,6 +758,9 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 	// 下发（与上游一致）；读取走专用的 gist/status 端点（仅 tokenHint）。
 	delete(cfgMap, gistConfigToken)
 	delete(cfgMap, gistConfigPassword)
+	// R6-L8-F-05：jwt_secret 同口径——管理员经 config/list 亦不回
+	// 本体（与 getConfigByName 侧的 403 成对，理由见彼处注释）。
+	delete(cfgMap, "jwt_secret")
 	response.WriteJSON(w, response.OK(cfgMap))
 }
 
@@ -941,16 +953,11 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 独立限流（不与 login 共用桶）：键 = 真实客户端 IP + 用户名
-	clientIP := loginClientIP(r)
-	ipStr := ""
-	if clientIP != nil {
-		ipStr = clientIP.String()
-	} else if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
-		ipStr = parsed.String()
-	} else {
-		ipStr = r.RemoteAddr
-	}
+	// 独立限流（不与 login 共用桶）：键 = 真实客户端 IP + 用户名。
+	// R6-L8-F-04：IP 段走 rateLimitKeyForRequest 收口（clientip 两级
+	// 解析 + UnresolvedKey 共享桶），不再以含端口的原始 RemoteAddr
+	// 为键；下方失败审计日志的 ip 亦同此口径。
+	ipStr := rateLimitKeyForRequest(r, "sub_store rate limit")
 	if !subStoreLimiter.allow(ipStr+"\x00"+strings.ToLower(username), time.Now()) {
 		w.Header().Set("Retry-After", "60")
 		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
@@ -1025,7 +1032,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 	headerValue := ""
 
 	if tunnel == "-1" {
-		headerValue = buildSubscriptionHeader(user.OutFlow, user.InFlow, flowLimitBytes(user.Flow, user.FlowMiB), user.ExpTime/1000)
+		headerValue = buildSubscriptionHeader(user.InFlow, user.OutFlow, flowLimitBytes(user.Flow, user.FlowMiB), user.ExpTime/1000)
 	} else {
 		tunnelID, parseErr := strconv.ParseInt(tunnel, 10, 64)
 		if parseErr != nil || tunnelID <= 0 {
@@ -1047,7 +1054,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		headerValue = buildSubscriptionHeader(ut.OutFlow, ut.InFlow, flowLimitBytes(ut.Flow, ut.FlowMiB), ut.ExpTime/1000)
+		headerValue = buildSubscriptionHeader(ut.InFlow, ut.OutFlow, flowLimitBytes(ut.Flow, ut.FlowMiB), ut.ExpTime/1000)
 	}
 
 	w.Header().Set("subscription-userinfo", headerValue)
@@ -1064,8 +1071,15 @@ func (h *Handler) errorPage(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>错误 404</title></head><body><div style='min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;'><div style='font-size:6rem;color:#333;font-weight:300;'>404</div><div style='font-size:1.2rem;color:#666;'>你推开了后端的大门，却发现里面只有寂寞。</div></div></body></html>"))
 }
 
+// buildSubscriptionHeader 组 Subscription-Userinfo 头：形参序即计量
+// 方向——upload 取 InFlow（客户端→远端字节 = 用户上传）、download 取
+// OutFlow（远端→客户端字节 = 用户下载），与 flow_upload_batch.go 的
+// N-01 方向钉死同口径。旧形态靠「调用点反序 + Sprintf 反序」两层抵消
+// 才得到正确值，任一层单独被「顺手修正」即静默翻转真实值；现两层已
+// 归正，整头数值由 TestR6G6SubStoreHeaderDirectionPinned 逐字钉死，
+// 勿再反序。
 func buildSubscriptionHeader(upload, download, total, expire int64) string {
-	return fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", download, upload, total, expire)
+	return fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", upload, download, total, expire)
 }
 
 func (h *Handler) userTunnelVisibleList(w http.ResponseWriter, r *http.Request) {
@@ -1278,15 +1292,9 @@ func (h *Handler) checkCaptchaVerifyRateLimit(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) allowCaptchaVerify(r *http.Request) bool {
-	ip := loginClientIP(r)
-	key := ""
-	if ip != nil {
-		key = ip.String()
-	} else if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
-		key = parsed.String()
-	} else {
-		key = r.RemoteAddr
-	}
+	// R6-L8-F-04：与登录限流同收口（rateLimitKeyForRequest），
+	// 第三级回退不再用含端口的原始 RemoteAddr。
+	key := rateLimitKeyForRequest(r, "captcha verify rate limit")
 	now := time.Now()
 	h.captchaVerifyMu.Lock()
 	defer h.captchaVerifyMu.Unlock()

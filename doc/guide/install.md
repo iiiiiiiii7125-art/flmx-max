@@ -21,6 +21,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 **安装过程中会提示输入以下信息：**
 - **前端端口**: 默认为 `6366`
 - **后端端口**: 默认为 `6365`
+- **数据库类型**: `1` 为 SQLite（默认）、`2` 为 PostgreSQL；选 PostgreSQL 时脚本会自动生成数据库口令与连接串，不用另外准备
 
 脚本会自动检测系统是否支持 IPv6，并自动配置 Docker 的 IPv6 支持。
 
@@ -95,7 +96,7 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - 回到面板 **节点管理** 页面，该节点状态应显示为 **在线**——这是唯一算数的上线判据。
 - systemd 查看状态: `systemctl status flux_agent`
 - Alpine/OpenRC 查看状态: `rc-service flux_agent status`
-- 若面板未显示在线，在节点服务器执行 `journalctl -u flux_agent -n 100` 查看 agent 的 WebSocket 连接日志（地址 scheme 是否与面板对外方式一致、是否被 308/握手拒绝等都会写在日志里），再对照下一节排查。
+- 若面板未显示在线，看 agent 的 WebSocket 连接日志（地址 scheme 是否与面板对外方式一致、是否被 308/握手拒绝等都会写在日志里），再对照下一节排查：systemd 节点执行 `journalctl -u flux_agent -n 100`；Alpine/OpenRC 节点没有 journald，日志在文件 `/var/log/flux_agent.log`（错误日志 `/var/log/flux_agent.err.log`），用 `tail -n 100 /var/log/flux_agent.log` 查看。
 
 ### 节点连不上：地址写法与时钟（1.3.4 起）
 
@@ -172,10 +173,14 @@ sudo systemctl restart caddy
 
 - 确保域名已正确解析到服务器 IP。
 - 确保服务器防火墙放行了 **80** 和 **443** 端口（Caddy 自动申请证书需要）。
-- 使用 Caddy 反向代理后，可以在 `.env` 中将前端端口改为仅监听本地，避免直接暴露：
+- 使用 Caddy 反向代理后，可以让前端端口只监听本机，避免绕过域名直接暴露。**不要**把 `.env` 的 `FRONTEND_PORT` 写成 `127.0.0.1:6366` 这种「IP:端口」形态：该字段必须是纯数字端口，写成这种形态后脚本更新会直接报「FRONTEND_PORT 不是有效端口」并终止，脚本菜单 5 / 6 读端口时也会解析失败、静默回退到 6366（自定义端口时 Caddy 会反代到错的端口）。正确做法是 `FRONTEND_PORT` 保持纯数字，另在**部署目录**（放 `docker-compose.yml` 与 `.env` 的目录）新建 `docker-compose.override.yml`，把端口映射覆盖为仅本机绑定（映射里的宿主端口与 `.env` 的 `FRONTEND_PORT` 保持一致）：
+  ```yaml
+  services:
+    frontend:
+      ports: !override
+        - "127.0.0.1:6366:80"
   ```
-  FRONTEND_PORT=127.0.0.1:6366
-  ```
+  其中 `!override` 不可省略（省略时新旧两条映射会叠加、宿主端口必然冲突），且需要 Docker Compose 2.20 及以上。保存后在部署目录执行 `docker compose up -d frontend` 生效；自检：`docker compose ps` 里 frontend 的端口应显示为 `127.0.0.1:6366->80`，且从外网直接访问 `http://<服务器IP>:6366` 应不通、经域名访问正常。该 override 文件独立于 `docker-compose.yml`，脚本更新替换主 compose 文件时不会动它。
 
 ### 登录限流与可信代理跳数
 
@@ -184,19 +189,19 @@ sudo systemctl restart caddy
 
 | 你的拓扑 | 跳数设置 |
 |---|---|
-| Caddy → 前端 → 后端（`panel_install.sh` 默认：脚本生成的 Caddy 配置反代的是**前端端口**，再由前端容器的 nginx 把 API 请求转给后端，链上共两跳；按本文手工配 Caddy 反代前端端口同理） | `FLMX_TRUSTED_PROXY_HOPS=2`（**必须显式设置**；默认值 1 在此拓扑下是错的） |
-| nginx（frontend 容器）→ 后端（docker 默认、没有 Caddy） | `1`（默认，可不设） |
-| Caddy 直接反代**后端端口**（自备配置、绕过前端容器） | `1`（默认，可不设） |
+| Caddy → 前端 → 后端（`panel_install.sh` 默认：脚本生成的 Caddy 配置反代的是**前端端口**，再由前端容器的 nginx 把 API 请求转给后端，链上共两跳；按本文手工配 Caddy 反代前端端口同理） | `2`（随版模板默认即 2，**开箱即对、无需任何设置**） |
+| nginx（frontend 容器）→ 后端（docker 默认、没有 Caddy） | `1`（须在 `.env` 显式覆盖，见下） |
+| Caddy 直接反代**后端端口**（自备配置、绕过前端容器） | `1`（须在 `.env` 显式覆盖，见下） |
 
-设置方法（以设成 2 为例）：在部署目录的 `docker-compose.yml` 里给 backend 服务的 `environment:` 加一行传递（与文件中 `FLMX_WEBAUTHN_ORIGIN` 一行同式）：
+随版 compose 模板（`docker-compose-v4.yml` / `docker-compose-v6.yml`）的 backend `environment:` 已自带传递行，默认就是默认拓扑的两跳：
 
 ```yaml
-      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-}
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
 ```
 
-再在同目录 `.env` 里写 `FLMX_TRUSTED_PROXY_HOPS=2`，然后 `docker compose up -d backend` 重建后端生效。**只写 `.env`、不加上面那行传递，变量进不了后端进程、不会生效。** 面板更新可能用模板覆盖 `docker-compose.yml`，更新后按下面的自检核对一次：生效值变回 1 就说明传递行被覆盖了，需要重新加。
+`panel_install.sh` 安装、更新与迁移时都会保证这行存在（旧 compose 缺行时自动补入），面板自升级覆写 compose 时也会保留这行与已显式设置的值——所以默认拓扑下什么都不用做。**自定义拓扑的覆盖方法**：在部署目录的 `.env` 里写一行 `FLMX_TRUSTED_PROXY_HOPS=<你的跳数>`（如单跳写 `=1`），然后 `docker compose up -d backend` 重建后端生效；可填值就是链上可信代理的跳数（正整数）。**防错警告**：只有用随版模板或脚本安装时传递行才必然存在；若你手工自备 compose，请照上面那行原样加进 backend 的 `environment:`——只写 `.env`、没有传递行，变量进不了后端进程、不会生效，此时会回落到后端代码默认值 1。
 
-跳数配少了，限流键会取到代理自己的 IP（多用户共享一个桶）：脚本默认拓扑若漏设 `=2`、沿用默认 1，全体登录用户会共用同一个 10 次/分钟的桶，别人连续输错几次密码就能把所有人的正常登录连带限流（返回 429）。配多了，
+跳数配少了，限流键会取到代理自己的 IP（多用户共享一个桶）：例如两跳拓扑下生效值是 1（手工 compose 丢了传递行、或把 `.env` 误设成 1），全体登录用户会共用同一个 10 次/分钟的桶，别人连续输错几次密码就能把所有人的正常登录连带限流（返回 429）。配多了，
 面板会拒绝信任 XFF、回退到直连对端 IP（同样是代理 IP、共享桶），并
 在日志里告警提示检查配置。两种配错都不会取到攻击者伪造的条目。**自检**：后端启动日志会打印 `proxy trust: FLMX_TRUSTED_PROXY_HOPS=<生效值>`，请核对它与你的实际拓扑一致；出现「多人共用一个桶」式的连带 429 时先查这个生效值。面板直连公网（无代理）时忽略 XFF。
 
@@ -222,6 +227,6 @@ sudo systemctl restart caddy
 
 ### 登录验证码（Cloudflare Turnstile）
 
-在 **网站配置 → 基本设置** 里可以开启登录验证码，三项缺一不可：先打开 **启用验证码** 开关，再填入 **Cloudflare Site Key** 与 **Cloudflare Secret Key**（只填两把钥匙、不打开开关，不会生效）。开启后，登录页会出现人机验证，登录请求必须携带有效验证结果才会被处理。未配置密钥时该功能不启用、登录流程与原来一致。Turnstile 密钥只存面板配置、仅管理员可见；它同时影响上文的限流收紧逻辑（启用验证码后，用户名信号不再触发 IP 收紧）。
+在 **网站配置 → 基本设置** 里可以开启登录验证码，三项缺一不可：先打开 **启用验证码** 开关，再填入 **Cloudflare Site Key** 与 **Cloudflare Secret Key**（只填两把钥匙、不打开开关，不会生效）。开启后，登录页会出现人机验证，登录请求必须携带有效验证结果才会被处理。未配置密钥时该功能不启用、登录流程与原来一致。两把钥匙的区别要分清：**Secret Key** 是敏感凭据，只存面板配置、仅管理员可见（配置页掩码显示）；**Site Key** 按 Turnstile 的设计本来就是公开值，会随登录页下发、在未登录的浏览器里渲染验证组件，公开它没有安全影响。它同时影响上文的限流收紧逻辑（启用验证码后，用户名信号不再触发 IP 收紧）。
 
 升级见 [升级](./upgrade.md)。

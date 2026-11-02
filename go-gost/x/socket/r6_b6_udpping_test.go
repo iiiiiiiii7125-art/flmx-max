@@ -59,9 +59,12 @@ func TestR6B6HandleUdpPingAllowsPublicPrivateTargets(t *testing.T) {
 
 // 防过修正向格：本机政策放行地址（私网/ULA 接口地址，判定复用产品
 // 谓词 tcpPingLiteralTargetDenied 防漂移，与 tcp_ping_queue_test 的
-// localPingTargetIP 同口径）上的 UDP 监听目标应探测成功，与修复前
-// 一致；本机无可用地址时 Skip。
-func TestR6B6HandleUdpPingPrivateListenerSucceeds(t *testing.T) {
+// localPingTargetIP 同口径）上的 UDP 监听目标不得被政策拒绝。
+// 成功口径经 R6-L4-01 改版：UDP 只 Dial 不发包、不可实测，拨通不
+// 再回 success（旧断言「应探测成功」作废），改回未验证形态
+// （Success=false＋Unverified=true、无伪造数值）；本机无可用地址
+// 时 Skip。
+func TestR6B6HandleUdpPingPrivateListenerUnverifiedNotDenied(t *testing.T) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		t.Skipf("cannot enumerate interfaces: %v", err)
@@ -95,8 +98,8 @@ func TestR6B6HandleUdpPingPrivateListenerSucceeds(t *testing.T) {
 			t.Fatalf("policy-allowed local address %s must not be policy-denied, got %q", ip.String(), resp.ErrorMessage)
 		}
 		tried = true
-		if resp.Success {
-			return // 正向格成立
+		if resp.Unverified {
+			return // 正向格成立：放行且可拨 → 未验证形态（R6-L4-01）
 		}
 		// 该地址在当前沙箱不可自拨（如出口拦截），换下一个候选。
 	}

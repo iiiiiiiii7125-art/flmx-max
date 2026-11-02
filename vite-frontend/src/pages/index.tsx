@@ -327,7 +327,7 @@ export default function IndexPage() {
             />
             {/* 验证码容器 */}
             <div className="glass-surface mb-4 relative z-50 p-6 rounded-lg shadow-xl">
-              <div className="mb-4 text-center text-sm font-medium text-foreground dark:text-gray-200">
+              <div className="mb-4 text-center text-sm font-medium text-foreground">
                 请完成安全验证
               </div>
               <div className="flex justify-center">

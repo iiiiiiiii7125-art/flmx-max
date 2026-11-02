@@ -475,7 +475,9 @@ func fetchRanked(ctx context.Context, plan *download.Plan, directURL string, lim
 
 // anchorCorroborateTimeout bounds one anchor corroboration: it is
 // a cross-check on a small file, never worth the whole-operation
-// budget. A var so tests can shrink it.
+// budget. A var so tests can shrink it. Registered in
+// doc/audit/timeout-budgets.tsv (A001 note, L2-01); the x/socket
+// twin is pinned equal by gate tests in both packages.
 var anchorCorroborateTimeout = 20 * time.Second
 
 // corroborateAnchorPlan returns a plan over every built-in route

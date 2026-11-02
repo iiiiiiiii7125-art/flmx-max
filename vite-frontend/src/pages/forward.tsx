@@ -1421,6 +1421,7 @@ export default function ForwardPage() {
     completed: 0,
     success: 0,
     failed: 0,
+    unverified: 0,
     timedOut: false,
   });
   const diagnosisAbortRef = useRef<AbortController | null>(null);
@@ -1444,6 +1445,8 @@ export default function ForwardPage() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importData, setImportData] = useState("");
   const [importLoading, setImportLoading] = useState(false);
+  // RB4-01：批量导入在途标记（入口同步复核用，见 executeImport）。
+  const importInFlightRef = useRef(false);
   const [importFormat, setImportFormat] = useState<ImportFormat>("flmx");
   const [selectedTunnelForImport, setSelectedTunnelForImport] = useState<
     number | null
@@ -2633,6 +2636,7 @@ export default function ForwardPage() {
       completed: 0,
       success: 0,
       failed: 0,
+      unverified: 0,
       timedOut: false,
     });
     setDiagnosisResult({
@@ -2708,6 +2712,7 @@ export default function ForwardPage() {
               completed: progress.completed,
               success: progress.success,
               failed: progress.failed,
+              unverified: progress.unverified,
               timedOut: Boolean(progress.timedOut),
             });
           },
@@ -2717,6 +2722,7 @@ export default function ForwardPage() {
               completed: progress.completed,
               success: progress.success,
               failed: progress.failed,
+              unverified: progress.unverified,
               timedOut: Boolean(progress.timedOut),
             });
           },
@@ -2735,7 +2741,12 @@ export default function ForwardPage() {
           const successCount = resultData.results.filter(
             (r) => r.success,
           ).length;
-          const failedCount = resultData.results.length - successCount;
+          // R6-L4-01：未验证项（UDP）不计入失败，与流式口径一致。
+          const unverifiedCount = resultData.results.filter(
+            (r) => r.unverified,
+          ).length;
+          const failedCount =
+            resultData.results.length - successCount - unverifiedCount;
 
           setDiagnosisResult(resultData);
           setDiagnosisProgress({
@@ -2743,6 +2754,7 @@ export default function ForwardPage() {
             completed: resultData.results.length,
             success: successCount,
             failed: failedCount,
+            unverified: unverifiedCount,
             timedOut: false,
           });
         } else {
@@ -2760,6 +2772,7 @@ export default function ForwardPage() {
             completed: 1,
             success: 0,
             failed: 1,
+            unverified: 0,
             timedOut: false,
           });
         }
@@ -2791,6 +2804,7 @@ export default function ForwardPage() {
         completed: 1,
         success: 0,
         failed: 1,
+        unverified: 0,
         timedOut: false,
       });
     } finally {
@@ -2922,6 +2936,12 @@ export default function ForwardPage() {
 
   // 执行导入
   const executeImport = async () => {
+    // RB4-01：入口同步复核。importLoading 只是渲染状态，连点在渲染
+    // 提交前可双发整轮导入；而逐行创建每行一把新 idemKey，整轮重发
+    // 不被服务端去重、会整批重复创建——ref 在下发瞬间拦截（下方两处
+    // 同步校验无 await，判重到置位之间不存在双发窗口）。
+    if (importInFlightRef.current) return;
+
     if (!importData.trim()) {
       toast.error("请输入要导入的数据");
 
@@ -2934,6 +2954,7 @@ export default function ForwardPage() {
       return;
     }
 
+    importInFlightRef.current = true;
     setImportLoading(true);
     setImportResults([]);
 
@@ -3139,6 +3160,7 @@ export default function ForwardPage() {
     } catch {
       toast.error("导入过程中发生错误");
     } finally {
+      importInFlightRef.current = false;
       setImportLoading(false);
     }
   };
@@ -5907,7 +5929,14 @@ export default function ForwardPage() {
                     )}
 
                     {/* 统计摘要 */}
-                    <div className="grid grid-cols-3 gap-3">
+                    <div
+                      className={`grid ${
+                        diagnosisProgress.unverified > 0 ||
+                        diagnosisResult.results.some((r) => r.unverified)
+                          ? "grid-cols-4"
+                          : "grid-cols-3"
+                      } gap-3`}
+                    >
                       <div className="text-center p-3 glass-inset rounded-lg border border-divider">
                         <div className="text-2xl font-bold text-foreground">
                           {diagnosisProgress.total > 0
@@ -5935,13 +5964,30 @@ export default function ForwardPage() {
                           {diagnosisProgress.completed > 0 ||
                           diagnosisProgress.total > 0
                             ? diagnosisProgress.failed
-                            : diagnosisResult.results.filter((r) => !r.success)
-                                .length}
+                            : diagnosisResult.results.filter(
+                                (r) => !r.success && !r.unverified,
+                              ).length}
                         </div>
                         <div className="text-xs font-semibold text-danger-900 mt-1">
                           失败
                         </div>
                       </div>
+                      {(diagnosisProgress.unverified > 0 ||
+                        diagnosisResult.results.some((r) => r.unverified)) && (
+                        <div className="text-center p-3 tray-primary rounded-lg">
+                          <div className="text-2xl font-bold text-primary-900">
+                            {diagnosisProgress.completed > 0 ||
+                            diagnosisProgress.total > 0
+                              ? diagnosisProgress.unverified
+                              : diagnosisResult.results.filter(
+                                  (r) => r.unverified,
+                                ).length}
+                          </div>
+                          <div className="text-xs font-semibold text-primary-900 mt-1">
+                            未验证
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* 桌面端表格展示 */}
@@ -6013,6 +6059,10 @@ export default function ForwardPage() {
                                       result.diagnosing,
                                     );
                                     const isSuccess = result.success === true;
+                                    // R6-L4-01：UDP 未验证项走中性形态，
+                                    // 不染失败红、不给成败图标。
+                                    const isUnverified =
+                                      result.unverified === true;
                                     const quality =
                                       getForwardDiagnosisQualityDisplay(
                                         result.averageTime,
@@ -6025,7 +6075,7 @@ export default function ForwardPage() {
                                         className={`hover:bg-white/40 ${
                                           isDiagnosing
                                             ? "bg-warning-500/10"
-                                            : isSuccess
+                                            : isSuccess || isUnverified
                                               ? ""
                                               : "bg-danger-500/10"
                                         }`}
@@ -6039,10 +6089,16 @@ export default function ForwardPage() {
                                                 className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${
                                                   isSuccess
                                                     ? "bg-success-800 text-white"
-                                                    : "bg-danger-800 text-white"
+                                                    : isUnverified
+                                                      ? "tray-primary"
+                                                      : "bg-danger-800 text-white"
                                                 }`}
                                               >
-                                                {isSuccess ? "✓" : "✗"}
+                                                {isSuccess
+                                                  ? "✓"
+                                                  : isUnverified
+                                                    ? "?"
+                                                    : "✗"}
                                               </span>
                                             )}
                                             <div className="flex-1 min-w-0">
@@ -6061,22 +6117,30 @@ export default function ForwardPage() {
                                             color={
                                               isDiagnosing
                                                 ? "warning"
-                                                : isSuccess
-                                                  ? "success"
-                                                  : "danger"
+                                                : isUnverified
+                                                  ? "primary"
+                                                  : isSuccess
+                                                    ? "success"
+                                                    : "danger"
                                             }
                                             size="sm"
                                             variant="flat"
                                           >
                                             {isDiagnosing
                                               ? "诊断中"
-                                              : isSuccess
-                                                ? "成功"
-                                                : "失败"}
+                                              : isUnverified
+                                                ? "未验证"
+                                                : isSuccess
+                                                  ? "成功"
+                                                  : "失败"}
                                           </Chip>
                                         </td>
                                         <td className="px-3 py-2 text-center">
-                                          {isSuccess ? (
+                                          {isUnverified ? (
+                                            <span className="tray-primary inline-flex rounded-full px-2 py-0.5 text-xs font-semibold">
+                                              未验证
+                                            </span>
+                                          ) : isSuccess ? (
                                             <span className="tray-primary inline-flex rounded-full px-2 py-0.5 text-xs font-semibold">
                                               {result.averageTime?.toFixed(0)}
                                             </span>
@@ -6200,6 +6264,9 @@ export default function ForwardPage() {
                               {results.map((result, index) => {
                                 const isDiagnosing = Boolean(result.diagnosing);
                                 const isSuccess = result.success === true;
+                                // R6-L4-01：UDP 未验证项走中性形态。
+                                const isUnverified =
+                                  result.unverified === true;
                                 const quality =
                                   getForwardDiagnosisQualityDisplay(
                                     result.averageTime,
@@ -6212,7 +6279,7 @@ export default function ForwardPage() {
                                     className={`border rounded-lg p-3 ${
                                       isDiagnosing
                                         ? "border-warning-200 bg-warning-500/10"
-                                        : isSuccess
+                                        : isSuccess || isUnverified
                                           ? "border-divider glass-inset"
                                           : "border-danger-200 bg-danger-500/10"
                                     }`}
@@ -6225,10 +6292,16 @@ export default function ForwardPage() {
                                           className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
                                             isSuccess
                                               ? "bg-success-800 text-white"
-                                              : "bg-danger-800 text-white"
+                                              : isUnverified
+                                                ? "tray-primary"
+                                                : "bg-danger-800 text-white"
                                           }`}
                                         >
-                                          {isSuccess ? "✓" : "✗"}
+                                          {isSuccess
+                                            ? "✓"
+                                            : isUnverified
+                                              ? "?"
+                                              : "✗"}
                                         </span>
                                       )}
                                       <div className="flex-1 min-w-0">
@@ -6244,18 +6317,22 @@ export default function ForwardPage() {
                                         color={
                                           isDiagnosing
                                             ? "warning"
-                                            : isSuccess
-                                              ? "success"
-                                              : "danger"
+                                            : isUnverified
+                                              ? "primary"
+                                              : isSuccess
+                                                ? "success"
+                                                : "danger"
                                         }
                                         size="sm"
                                         variant="flat"
                                       >
                                         {isDiagnosing
                                           ? "诊断中"
-                                          : isSuccess
-                                            ? "成功"
-                                            : "失败"}
+                                          : isUnverified
+                                            ? "未验证"
+                                            : isSuccess
+                                              ? "成功"
+                                              : "失败"}
                                       </Chip>
                                     </div>
 
@@ -6300,10 +6377,12 @@ export default function ForwardPage() {
                                     ) : (
                                       <div className="mt-2 pt-2 border-t border-divider">
                                         <div
-                                          className={`text-xs font-semibold ${
+                                          className={`w-fit rounded px-1.5 py-0.5 text-xs font-semibold ${
                                             isDiagnosing
-                                              ? "text-warning-700"
-                                              : "text-danger-700"
+                                              ? "tray-warning"
+                                              : isUnverified
+                                                ? "tray-primary"
+                                                : "tray-danger"
                                           }`}
                                         >
                                           {isDiagnosing
@@ -6350,7 +6429,8 @@ export default function ForwardPage() {
 
                     {/* 失败详情（仅桌面端显示，移动端已在卡片中显示） */}
                     {diagnosisResult.results.some(
-                      (r) => r.success === false && !r.diagnosing,
+                      (r) =>
+                        r.success === false && !r.diagnosing && !r.unverified,
                     ) && (
                       <div className="space-y-2 hidden md:block">
                         <h4 className="text-sm font-semibold text-danger-700">
@@ -6358,13 +6438,46 @@ export default function ForwardPage() {
                         </h4>
                         <div className="space-y-2">
                           {diagnosisResult.results
-                            .filter((r) => r.success === false && !r.diagnosing)
+                            .filter(
+                              (r) =>
+                                r.success === false &&
+                                !r.diagnosing &&
+                                !r.unverified,
+                            )
                             .map((result, index) => (
                               <Alert
                                 key={index}
                                 className="text-xs font-semibold"
                                 color="danger"
                                 description={result.message || "连接失败"}
+                                title={result.description}
+                                variant="flat"
+                              />
+                            ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 未验证说明（R6-L4-01：UDP 项不入失败详情，单列中性说明） */}
+                    {diagnosisResult.results.some(
+                      (r) => r.unverified && !r.diagnosing,
+                    ) && (
+                      <div className="space-y-2 hidden md:block">
+                        <h4 className="text-sm font-semibold text-primary-700">
+                          未验证说明
+                        </h4>
+                        <div className="space-y-2">
+                          {diagnosisResult.results
+                            .filter((r) => r.unverified && !r.diagnosing)
+                            .map((result, index) => (
+                              <Alert
+                                key={index}
+                                className="text-xs font-semibold"
+                                color="primary"
+                                description={
+                                  result.message ||
+                                  "UDP 无通用回声协议，无法实测连通性"
+                                }
                                 title={result.description}
                                 variant="flat"
                               />

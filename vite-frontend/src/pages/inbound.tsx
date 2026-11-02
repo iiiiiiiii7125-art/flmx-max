@@ -479,7 +479,9 @@ export default function InboundPage() {
   };
 
   const runBatchDelete = async () => {
-    if (selectedIds.size === 0) return;
+    // F-L6-01 自复扫补遗：与 forward/tunnel 批量删除同口径补入口复核
+    // （此前只有确认按钮的 isLoading 渲染状态）。
+    if (selectedIds.size === 0 || batchDeleting) return;
     setBatchDeleting(true);
     try {
       const res = await batchDeleteInbounds([...selectedIds]);
@@ -523,7 +525,7 @@ export default function InboundPage() {
   };
 
   const runBatchToggle = async (enabled: boolean) => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchToggling) return;
     setBatchToggling(true);
     try {
       const res = await batchToggleInbounds([...selectedIds], enabled);
