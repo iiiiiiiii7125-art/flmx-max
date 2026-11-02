@@ -72,6 +72,10 @@ type Handler struct {
 	// 桶分开计量，形态对齐 loginRateLimiter：窗口计数 + 上限淘汰）。
 	captchaVerifyMu      sync.Mutex
 	captchaVerifyBuckets map[string]*loginAttemptBucket
+	// R8-060：/flow/* 节点 secret 鉴权失败限流（与 /system-info WS
+	// 面同口径，见 flow_auth_fail_limit.go）；惰性初始化。
+	flowAuthFailMu sync.Mutex
+	flowAuthFail   *flowAuthFailLimiter
 	passkeyMu            sync.Mutex
 	passkeyPending       map[string]passkeyCeremony
 
@@ -1411,9 +1415,18 @@ func (h *Handler) flowTest(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) flowConfig(w http.ResponseWriter, r *http.Request) {
+	// R8-060：鉴权失败已达上限的来源不再查库，回包与未知 secret
+	// 同形（"ok"、不处理 body）。
+	failKey, throttled := h.flowAuthThrottleKey(r)
+	if throttled {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
 	secret := r.URL.Query().Get("secret")
 	node, err := h.repo.GetNodeBySecret(secret)
 	if err != nil || node == nil {
+		h.recordFlowAuthFailure(failKey)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
 		return
@@ -1446,9 +1459,19 @@ func parseFlowSeqFromHeaders(r *http.Request) *int64 {
 }
 
 func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
+	// R8-060：鉴权失败已达上限的来源不再查库，回包与未知 secret
+	// 同形（非 ok，agent 保留批次稍后重报）。不记 secret。
+	failKey, throttled := h.flowAuthThrottleKey(r)
+	if throttled {
+		log.Printf("flow upload auth throttled")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("error"))
+		return
+	}
 	secret := r.URL.Query().Get("secret")
 	node, _ := h.repo.GetNodeBySecret(secret)
 	if node == nil {
+		h.recordFlowAuthFailure(failKey)
 		// F-01：未知 secret 整批拒收返非 ok（原回 ok 使 agent 清零、
 		// 该批流量永久丢失且零日志）。secret 本身不记日志。
 		log.Printf("flow upload unknown secret")
