@@ -1169,6 +1169,12 @@ export interface SubPipeline {
   relayIds: number[];
   /** JavaScript `function operator(nodes)`，在其他步骤后运行。 */
   script: string;
+  /**
+   * 订阅模板：按客户端槽位（clash / singbox / surge / stash /
+   * shadowrocket）选模板 ID；选了模板的格式渲染进模板骨架，
+   * 不再走内置分流规则。空 = 不用模板。
+   */
+  templates?: Record<string, number>;
 }
 /** 订阅规则组（后端下发）。 */
 export interface SubRuleGroup {
@@ -1247,6 +1253,104 @@ export const saveSubscription = (data: SubscriptionDraft, idemKey?: string) =>
   });
 export const deleteSubscription = (id: number) =>
   Network.post("/subscription/delete", { id });
+
+/** 订阅模板格式（骨架所属客户端）。 */
+export type SubTemplateKind = "clash" | "singbox" | "surge";
+/** 订阅里可选模板的客户端槽位；stash / shadowrocket 用 clash 模板。 */
+export type SubTemplateSlot =
+  | "clash"
+  | "singbox"
+  | "surge"
+  | "stash"
+  | "shadowrocket";
+
+export interface TemplateBuilderGroup {
+  name: string;
+  type: string;
+  filter: string;
+}
+export interface TemplateBuilderRule {
+  type: string;
+  value: string;
+  target: string;
+}
+/** 可视化构建器的配方（与后端 kernel.TemplateBuilder 对应）。 */
+export interface TemplateBuilder {
+  serviceGroups?: boolean;
+  version: number;
+  preset: string;
+  groups: TemplateBuilderGroup[];
+  rules: TemplateBuilderRule[];
+  final: string;
+}
+export interface SubTemplateItem {
+  id: number;
+  name: string;
+  kind: SubTemplateKind;
+  content: string;
+  sourceUrl: string;
+  lastFetch: number;
+  lastError: string;
+  updatedTime: number;
+  usedBy: number;
+  groups: number;
+  autoGroups: number;
+  rules: number;
+  builder?: TemplateBuilder;
+}
+export interface SubTemplateDraft {
+  id?: number;
+  name: string;
+  kind: SubTemplateKind;
+  content?: string;
+  sourceUrl?: string;
+  builder?: TemplateBuilder;
+  subscriptionId?: number;
+}
+export interface TemplateRuleCategoryItem {
+  key: string;
+  name: string;
+  target: string;
+  presets: string[];
+}
+export interface TemplateCheckGroup {
+  name: string;
+  type: string;
+  proxies: string[];
+  auto: boolean;
+  nodes: string[];
+  filterError?: string;
+}
+export interface TemplateCheckResult {
+  summary: {
+    groups: TemplateCheckGroup[];
+    rules: number;
+    providers: number;
+    warnings: string[];
+  };
+  serviceGroups: Array<{
+    key: string;
+    name: string;
+    target: string;
+    members: string[];
+  }>;
+  autoGroups: number;
+  sample: string;
+  nodes: number;
+  content: string;
+}
+export const getSubscriptionTemplates = () =>
+  Network.post<SubTemplateItem[]>("/subscription/template/list");
+export const getTemplateCatalog = () =>
+  Network.post<TemplateRuleCategoryItem[]>("/subscription/template/catalog");
+export const saveSubscriptionTemplate = (data: SubTemplateDraft) =>
+  Network.post<SubTemplateItem>("/subscription/template/save", data);
+export const checkSubscriptionTemplate = (data: SubTemplateDraft) =>
+  Network.post<TemplateCheckResult>("/subscription/template/check", data);
+export const refreshSubscriptionTemplate = (id: number) =>
+  Network.post<SubTemplateItem>("/subscription/template/refresh", { id });
+export const deleteSubscriptionTemplate = (id: number) =>
+  Network.post("/subscription/template/delete", { id });
 export const resetSubscription = (id: number) =>
   Network.post<SubscriptionItem>("/subscription/reset", { id });
 export type RemoteSourceRole = "" | "relay" | "landing";
