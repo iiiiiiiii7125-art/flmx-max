@@ -735,7 +735,18 @@ export default function ConfigPage() {
       if (response.code === 0 && response.data) {
         setSystemUpgradeModalOpen(false);
         setSystemUpgradeSelectedVersion("");
-        toast.success("升级已开始，约 1 分钟后刷新页面", { duration: 8000 });
+        // R8-003：成功分支必须透出后端回执 message——第二锚降级点名
+        // 只在该字段里（message = 固定文案＋「（降级点名）」），固定
+        // toast 会把单锚/双锚的区别吞掉，upgrade.md 的点名宣称在 UI
+        // 不成立。无 message 时才回退固定文案。
+        const receiptMessage = response.data.message?.trim();
+
+        toast.success(
+          receiptMessage
+            ? `${receiptMessage}，约 1 分钟后刷新页面`
+            : "升级已开始，约 1 分钟后刷新页面",
+          { duration: 8000 },
+        );
         // P3-2：随后轮询后端升级状态，卡片会展示进行中与最终结果
         startSystemUpgradePolling();
       } else {
@@ -1964,6 +1975,16 @@ export default function ConfigPage() {
                       {systemUpgradeStatus.finishedAt
                         ? `（${formatStatusTime(systemUpgradeStatus.finishedAt)}）`
                         : ""}
+                    </p>
+                  </div>
+                )}
+
+                {/* R8-003：状态轮询面同步透出第二锚降级点名（后端随状态
+                    落盘），使刷新/重启后面板上仍能区分单锚与双锚升级 */}
+                {systemUpgradeStatus?.anchorNote && (
+                  <div className="rounded-lg border border-warning-500/25 bg-warning-500/10 px-4 py-3 font-medium text-warning-800">
+                    <p className="text-xs font-semibold">
+                      本次升级校验提示：{systemUpgradeStatus.anchorNote}
                     </p>
                   </div>
                 )}
