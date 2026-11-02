@@ -152,6 +152,13 @@
       {
         "action": "reject",
         "ip_is_private": true
+      },
+      {
+        "action": "resolve"
+      },
+      {
+        "action": "reject",
+        "ip_is_private": true
       }
     ]
   }

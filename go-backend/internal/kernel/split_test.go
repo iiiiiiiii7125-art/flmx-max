@@ -20,7 +20,11 @@ func splitInbound() Inbound {
 
 func ruleTargets(rules []interface{}, key string) []string {
 	var out []string
-	for _, r := range rules {
+	for i, r := range rules {
+		// S1(b): skip domain-guard pair halves (see ruleOutbounds).
+		if s1bPairMember(rules, i) {
+			continue
+		}
 		m := r.(map[string]interface{})
 		t, _ := m[key].(string)
 		if a, ok := m["action"].(string); ok {

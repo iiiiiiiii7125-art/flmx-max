@@ -363,7 +363,14 @@ func TestPreferredEgressRoutingAndFallback(t *testing.T) {
 						t.Fatalf("preference must not reject the other family: %v", rule)
 					}
 				}
-				if last := rules[len(rules)-1].(map[string]interface{}); last[outKey] != "flmx-u7" {
+				// S1(b): the list closes with the domain guard's
+				// fallthrough pair; the last routing rule before it
+				// must be the global user routing.
+				lastIdx := len(rules) - 1
+				for lastIdx > 0 && s1bPairMember(rules, lastIdx) {
+					lastIdx--
+				}
+				if last := rules[lastIdx].(map[string]interface{}); last[outKey] != "flmx-u7" {
 					t.Fatalf("global user routing must follow inbound-scoped preference: %v", last)
 				}
 				shared := outboundByTag(cfg, "flmx-u7")
@@ -471,7 +478,16 @@ func assertFamilyBlocksOnlyDirect(t *testing.T, kt string, rules []interface{}, 
 		if i+1 >= len(rules) {
 			t.Fatalf("family block %d is last", i)
 		}
-		next, _ := rules[i+1].(map[string]interface{})[obKey].(string)
+		// S1(b): the direct rule's domain-guard pair may sit between
+		// the family block and the direct rule itself.
+		next := ""
+		for j := i + 1; j < len(rules); j++ {
+			if s1bPairMember(rules, j) {
+				continue
+			}
+			next, _ = rules[j].(map[string]interface{})[obKey].(string)
+			break
+		}
 		if !strings.HasPrefix(next, directPrefix) {
 			t.Fatalf("family block %d precedes %q, not a direct rule", i, next)
 		}

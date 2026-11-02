@@ -30,7 +30,12 @@ func outboundByTag(cfg map[string]interface{}, tag string) map[string]interface{
 
 func ruleOutbounds(rules []interface{}, key string) []string {
 	var out []string
-	for _, r := range rules {
+	for i, r := range rules {
+		// S1(b): domain-guard pair halves are not routing decisions;
+		// their placement is gated by the r7_s1b tests.
+		if s1bPairMember(rules, i) {
+			continue
+		}
 		m := r.(map[string]interface{})
 		if v, ok := m[key].(string); ok {
 			out = append(out, v)

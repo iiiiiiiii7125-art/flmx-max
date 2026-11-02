@@ -58,6 +58,10 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	if err := applyOutboundIPPolicies(TypeSingbox, cfg, inbounds, false); err != nil {
 		return "", err
 	}
+	// The domain form of the guard runs last: it reads the final rule
+	// list (the IP policy pass reorders and appends rules) and the
+	// final outbound set.
+	guardSingboxDomainExits(cfg)
 	return marshalConfig(cfg)
 }
 
@@ -69,7 +73,9 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 // as matching non-public IPs (RFC1918, loopback, link-local including
 // 169.254/16, CGNAT, ULA, ...), the same destination set the Xray rule
 // blocks. The rule carries no inbound or user restriction, so it
-// covers every inbound this render emits.
+// covers every inbound this render emits. This is the literal form;
+// the same rule object also serves as the reject half of the domain
+// form in guardSingboxDomainExits.
 func singboxPrivateRejectRule() obj {
 	return obj{"ip_is_private": true, "action": "reject"}
 }
@@ -106,6 +112,87 @@ func singboxGuardRules(rules []interface{}) []interface{} {
 	out = append(out, singboxPrivateRejectRule())
 	out = append(out, rest...)
 	return out
+}
+
+// singboxPrivateResolveRule resolves a domain destination so the
+// reject rule paired with it can match the resolved addresses.
+// sing-box evaluates route rules against the literal destination: a
+// domain destination carries no IP, so the head guard above only ever
+// sees IP-literal destinations (RM8 S1(b): a Shadowsocks inbound
+// reached private and metadata addresses through nip.io names while
+// literal probes were rejected). The resolve action stores the
+// addresses in the routing context for the rules that follow; it is
+// not a final action and does not change the destination itself.
+func singboxPrivateResolveRule() obj {
+	return obj{"action": "resolve"}
+}
+
+// guardSingboxDomainExits extends the private-range guard to domain
+// destinations on every local exit of the rendered config. A domain
+// destination is only dangerous where this node resolves it: the
+// direct outbounds (the default one, the per-user marked ones, the
+// outbound-IP-policy clones) and the route final, which this render
+// always pins to "direct". Chained and split-proxy outbounds receive
+// the domain unchanged and resolve at the far end — the same split
+// Xray makes, whose freedom block likewise only governs the local
+// exit — so they must not be resolved here: a leading unconditional
+// resolve rule would hand every chain outbound a locally resolved IP
+// instead of the domain (verified against sing-box 1.14.4).
+//
+// For each rule that selects a direct outbound, an identically
+// conditioned resolve + reject pair is inserted immediately ahead of
+// it: the pair fires exactly for the connections that rule would take
+// (any other connection fails the copied conditions and falls through
+// with its domain intact), and the reject half matches when any
+// resolved address is private — a mixed A/AAAA answer with one
+// private address is rejected as a whole, as is an answer that mixes
+// public and private addresses. One unconditional pair closes the
+// list for the connections no rule matched, which leave through the
+// final. The reject half is the head guard's own rule, so the literal
+// and domain forms stay a single predicate: ip_is_private -> reject.
+func guardSingboxDomainExits(cfg obj) {
+	route, _ := cfg["route"].(obj)
+	if route == nil {
+		return
+	}
+	rules, _ := route["rules"].([]interface{})
+	outbounds, _ := cfg["outbounds"].([]interface{})
+	direct := map[string]bool{}
+	for _, v := range outbounds {
+		if ob, ok := v.(obj); ok && ob["type"] == "direct" {
+			if tag, ok := ob["tag"].(string); ok && tag != "" {
+				direct[tag] = true
+			}
+		}
+	}
+	guarded := make([]interface{}, 0, len(rules)*3+2)
+	for _, v := range rules {
+		if rule, ok := v.(obj); ok {
+			if tag, ok := rule["outbound"].(string); ok && direct[tag] {
+				guarded = append(guarded, singboxExitGuardPair(rule)...)
+			}
+		}
+		guarded = append(guarded, v)
+	}
+	guarded = append(guarded, singboxPrivateResolveRule(), singboxPrivateRejectRule())
+	route["rules"] = guarded
+}
+
+// singboxExitGuardPair returns the resolve + reject pair guarding one
+// direct-exit rule: both halves copy the rule's conditions (everything
+// but its outbound and action), so they match exactly the connections
+// the rule itself would match.
+func singboxExitGuardPair(anchor obj) []interface{} {
+	resolve := singboxPrivateResolveRule()
+	reject := singboxPrivateRejectRule()
+	for key, value := range anchor {
+		if key == "outbound" || key == "action" {
+			continue
+		}
+		resolve[key] = value
+		reject[key] = value
+	}
+	return []interface{}{resolve, reject}
 }
 
 // acmeProviders shares one ACME certificate provider per domain + challenge

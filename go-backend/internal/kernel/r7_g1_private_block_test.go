@@ -44,8 +44,10 @@ func TestSingboxPrivateGuardPlainInbound(t *testing.T) {
 	} {
 		cfg := renderJSON(t, TypeSingbox, []Inbound{in})
 		rules := g1RouteRules(t, cfg)
-		if len(rules) != 1 {
-			t.Fatalf("inbound %d (%s): only the guard rule expected, got %v", in.ID, in.Protocol, rules)
+		// The head guard plus the unconditional resolve + reject pair
+		// the domain form (S1(b)) appends for the final fallthrough.
+		if len(rules) != 3 {
+			t.Fatalf("inbound %d (%s): guard plus fallthrough pair expected, got %v", in.ID, in.Protocol, rules)
 		}
 		guard := rules[0].(map[string]interface{})
 		if len(guard) != 2 || guard["ip_is_private"] != true || guard["action"] != "reject" {
