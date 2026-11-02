@@ -392,6 +392,10 @@ func (h *Handler) kernelConfigApplied(k *model.NodeKernel) bool {
 type companionGateMemo struct {
 	byOrigin map[int64]kernel.Inbound
 	loaded   bool
+	// groups caches the node-group map for one request / build, like
+	// byOrigin caches the companion map (see nodeGroupsByID).
+	groups       map[int64]*model.NodeGroup
+	groupsLoaded bool
 }
 
 // companionsByOrigin returns the live-companion map, evaluating the
