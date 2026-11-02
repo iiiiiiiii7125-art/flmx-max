@@ -359,6 +359,52 @@ func TestRelayLatencyAllUDPLegsPathPointIsUntested(t *testing.T) {
 	}
 }
 
+// RB3-01: with reference points configured, an all-untested path must
+// mark the reference points untested as well. The entry point's own
+// measured value is not a path measurement: before this guard the
+// reference-point branch reported OK with the entry value alone
+// (path contribution is always 0 for untested legs), presenting an
+// unmeasured path as a healthy latency sample. The no-reference-point
+// branch above already had the guard; this pins the same verdict on
+// the reference-point branch.
+func TestRelayLatencyAllUDPLegsReferencePointsAreUntested(t *testing.T) {
+	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
+	front := mustCreateRelayNode(t, r, "front", "198.51.100.1")
+	landing := mustCreateRelayNode(t, r, "landing", "203.0.113.10")
+
+	// Exit on the landing itself: the single chain leg is the whole path.
+	id := mustCreateRelayLine(t, r, "all-udp-ref", 2, "127.0.0.1:443", front, nil, landing)
+	setChainRowProtocol(t, r, landing, "udp")
+
+	calls := stubLatencyPing(t, func(_ int64, host string) (map[string]interface{}, error) {
+		if host != "ct.example.com" {
+			return nil, fmt.Errorf("unexpected ping %s", host)
+		}
+		return okPing(40), nil
+	})
+	if _, err := h.probeNodeLatency(context.Background(), []int64{front}, probeRoundTargeted); err != nil {
+		t.Fatal(err)
+	}
+	*calls = nil
+	res, err := h.probeRelayLatency(context.Background(), []int64{id}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("untested legs were probed: %v", *calls)
+	}
+	got := res[id]
+	if len(got.Hops) != 1 || !got.Hops[0].Untested {
+		t.Fatalf("hops = %+v", got.Hops)
+	}
+	if len(got.Points) != 1 || !got.Points[0].Untested || got.Points[0].OK || got.Points[0].LatencyMs != 0 || got.Points[0].Error != "" {
+		t.Fatalf("reference point = %+v, want untested with no value/error", got.Points)
+	}
+	if got.PathMs != 0 || got.Error != "" {
+		t.Fatalf("relay = pathMs %d err %q, want 0 and no error", got.PathMs, got.Error)
+	}
+}
+
 // The UDP family is kcp/udp/quic (isUDPBasedProtocol): a quic
 // segment leg gets the same untested treatment as kcp/udp.
 // Note: the empty-segment → tunnel-protocol fallback inside

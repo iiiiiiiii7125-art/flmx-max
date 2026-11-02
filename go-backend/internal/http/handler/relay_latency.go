@@ -230,6 +230,10 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 	}
 	var points []latencyPoint
 	if entry != nil && len(entry.Points) > 0 {
+		// RB3-01：全腿未测时参考点分支同守卫——路径贡献恒 0，
+		// 入口点自身的实测值不是路径延迟，不得以 OK 点位冒充
+		// 实测（与下方无参考点分支的全未测守卫同口径）。
+		allUntested := pathOK && measuredHops == 0 && untestedHops > 0
 		for _, pt := range entry.Points {
 			p := latencyPoint{Name: pt.Name, Pinned: pt.Pinned, Route: pt.Route}
 			switch {
@@ -237,6 +241,8 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 				p.Error = pt.Error
 			case !pathOK:
 				p.Error = "线路不通"
+			case allUntested:
+				p.Untested = true
 			default:
 				p.OK = true
 				p.LatencyMs = pt.LatencyMs + out.PathMs
