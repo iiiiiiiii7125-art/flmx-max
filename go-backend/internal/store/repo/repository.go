@@ -5523,11 +5523,13 @@ func importPermissions(r *Repository, tx *gorm.DB, permissions []model.Permissio
 }
 
 // normalizeImportedMonitoringConfigValue 是 B14-002 的恢复面校验落点：
-// 保存面 normalizeAndValidateConfigValue（handler）对监控三键的校验在
-// 恢复面等价复刻——监控开关枚举 true/false（归一为小写）、保留天数与
-// 探测间隔走 monitoring.Normalize* 可解析性（归一为标准整数串）。
+// 保存面 normalizeAndValidateConfigValue（handler）的等价校验在
+// 恢复面复刻——监控开关枚举 true/false（归一为小写）、保留天数与
+// 探测间隔走 monitoring.Normalize* 可解析性（归一为标准整数串）；
+// R2-048 起 notify_daily_hour（0–23 值域）同入本面，走同包单点
+// NormalizeNotifyDailyHour，与其保存面 case 共用同一实现。
 // 与保存面同源的 Normalize* 是唯一校验源，不另写一份范围常量；
-// 非监控键原样返回。返回归一后的值（与保存面落库形态一致）。
+// 未列名键原样返回。返回归一后的值（与保存面落库形态一致）。
 func normalizeImportedMonitoringConfigValue(name, value string) (string, error) {
 	switch name {
 	case "monitor_tunnel_quality_enabled":
@@ -5542,6 +5544,8 @@ func normalizeImportedMonitoringConfigValue(name, value string) (string, error) 
 		return monitoring.NormalizeMonitoringRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
 		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
+	case NotifyDailyHourConfigKey:
+		return NormalizeNotifyDailyHour(value)
 	}
 	return value, nil
 }
