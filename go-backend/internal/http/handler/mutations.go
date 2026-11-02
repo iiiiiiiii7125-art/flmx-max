@@ -1337,6 +1337,14 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("参数错误"))
 		return
 	}
+	// 漏斗三段：守卫校验 → 连带卸载 → 级联删除。守卫 fail-closed，
+	// 必须先于卸载步：卸载含不可逆的在线自卸载下发与待卸载登记，
+	// 若守卫随后中止删除，会留下「记录还在、agent 已卸载」。
+	guard, guardErr := h.checkNodeDeleteGuards(id)
+	if guardErr != nil {
+		response.WriteJSON(w, response.Err(-2, guardErr.Error()))
+		return
+	}
 	// 连带卸载必须赶在删记录之前：记录删除后 secret 与在线会话都不
 	// 复存在，既下发不了命令也登记不了待卸载。卸载步的失败只进
 	// uninstallWarnings，不中止删除（见 node_delete_uninstall.go）。
@@ -1347,7 +1355,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
-	brokenEntries, soleRoleWarnings, err := h.deleteNodeByID(id)
+	brokenEntries, soleRoleWarnings, err := h.deleteNodeByIDAfterGuards(id, guard)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1864,21 +1872,24 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
 			continue
 		}
-		// 连带卸载前置步（同单删：赶在删记录前下发/登记，失败只进
-		// warnings 不中止删除）。
+		// 守卫校验先行（与单删同一三段口径）：守卫失败即记失败并
+		// 跳过该节点——不得先执行连带卸载、再发现删不掉。
+		guard, guardErr := h.checkNodeDeleteGuards(id)
+		if guardErr != nil {
+			fail++
+			failures = appendBatchFailure(failures, id, nodeName, guardErr)
+			continue
+		}
+		// 连带卸载步（同单删：赶在删记录前下发/登记，失败只进
+		// warnings 不中止删除）。三态先暂存，删除成功后才计入聚合
+		// 计数（见级联成功后的 switch）。
+		var uninstallState string
 		if uninstall {
 			state, warns := h.prepareNodeAgentUninstall(id)
-			switch state {
-			case nodeUninstallDone:
-				uninstalledCount++
-			case nodeUninstallPending:
-				uninstallPendingCount++
-			case nodeUninstallUnsupported:
-				uninstallUnsupportedCount++
-			}
+			uninstallState = state
 			uninstallWarnings = append(uninstallWarnings, warns...)
 		}
-		nodeReferrers, nodeSoleWarnings, delErr := h.deleteNodeByID(id)
+		nodeReferrers, nodeSoleWarnings, delErr := h.deleteNodeByIDAfterGuards(id, guard)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
@@ -1888,6 +1899,16 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			fail++
 			failures = appendBatchFailure(failures, id, nodeName, delErr)
 			continue
+		}
+		// 卸载计数在删除成功后才累加：旧实现删除前累加，删除失败
+		// 的节点会同时计入 fail 与卸载计数，回执自相矛盾。
+		switch uninstallState {
+		case nodeUninstallDone:
+			uninstalledCount++
+		case nodeUninstallPending:
+			uninstallPendingCount++
+		case nodeUninstallUnsupported:
+			uninstallUnsupportedCount++
 		}
 		for _, referrer := range nodeReferrers {
 			if _, dup := seenReferrer[referrer.ID]; dup {
@@ -8341,14 +8362,38 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // 唯一入口或唯一出口时，级联删其全部链路段行会让该隧道结构残缺，
 // 此前无任何回执点名（brokenReferrers 只覆盖跨节点入站引用），现
 // 在删除前查明、随回执显式披露（删除语义不变，仍尽力而为）。
+// 漏斗分三段：守卫校验（checkNodeDeleteGuards，fail-closed）→
+// 调用方的连带动作（如连带卸载，见 nodeDelete/nodeBatchDelete）→
+// 级联段（deleteNodeByIDAfterGuards）。本函数是无连带动作时的组合
+// 入口（创建补偿删除用），语义与分段前一致。
 func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error) {
-	var brokenReferrers []nodeCrossReferrer
-	var soleRoleWarnings []string
-	// R3X-017（E3-03）：删节点此前从不刷新白名单——走共用漏斗，级联
-	// 删前收集受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点
-	// 入站为链式出站目标，见 inboundIDsAffectedByNodeDelete），级联
-	// 删后统一刷新；单删与 nodeBatchDelete 共用本 funnel 同步受益。
-	var affectedInboundIDs []int64
+	guard, err := h.checkNodeDeleteGuards(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return h.deleteNodeByIDAfterGuards(id, guard)
+}
+
+// nodeDeleteGuard 是删节点漏斗第一段（守卫校验）的产物：跨节点
+// 引用清单、唯一角色点名、级联删后要刷新的受影响入站集合。
+type nodeDeleteGuard struct {
+	brokenReferrers    []nodeCrossReferrer
+	soleRoleWarnings   []string
+	affectedInboundIDs []int64
+}
+
+// checkNodeDeleteGuards 是漏斗的守卫校验段：任一守卫查询失败即
+// fail-closed 返回错误、整次删除中止。单删/批删入口必须先取守卫、
+// 全过之后才许执行连带卸载等不可逆的附带动作（在线 agent 自卸载
+// 下发、待卸载登记），最后才进 deleteNodeByIDAfterGuards 的级联
+// 段——顺序颠倒时守卫中止会留下「节点记录还在、agent 已不可逆
+// 自卸载」的撕裂状态。
+// R3X-017（E3-03）：删节点此前从不刷新白名单——级联删前在此收集
+// 受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点入站为链式
+// 出站目标，见 inboundIDsAffectedByNodeDelete），级联删后由
+// AfterGuards 统一刷新；单删与 nodeBatchDelete 共用本漏斗同步受益。
+func (h *Handler) checkNodeDeleteGuards(id int64) (*nodeDeleteGuard, error) {
+	guard := &nodeDeleteGuard{}
 	if h != nil && h.repo != nil {
 		// R3X-015：跨节点引用守卫查询失败 fail-closed——清单不可信
 		// 时中止删除并上抛（单删/批删/创建补偿三入口同受此约束），
@@ -8358,27 +8403,27 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error
 		// NodeIDs 重载，删一个节点即 O(目标数+全表行数) 次全表扫描。
 		targets, targetErr := h.repo.ListNodeInboundsByNode(id)
 		if targetErr != nil {
-			return nil, nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
+			return nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
 		}
 		ix, ixErr := h.loadChainRefIndex()
 		if ixErr != nil {
 			if len(targets) > 0 {
 				// 与逐目标 chainReferrers 首败的失败形态一致。
-				return nil, nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
+				return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
 			}
-			return nil, nil, ixErr
+			return nil, ixErr
 		}
-		brokenReferrers = h.nodeCrossReferrersIx(targets, id, ix)
+		guard.brokenReferrers = h.nodeCrossReferrersIx(targets, id, ix)
 		// 同 R3X-015 口径：受影响入站收集失败同样中止删除。
 		affected, collectErr := h.inboundIDsAffectedByNodeDeleteIx(id, ix)
 		if collectErr != nil {
-			return nil, nil, collectErr
+			return nil, collectErr
 		}
-		affectedInboundIDs = affected
+		guard.affectedInboundIDs = affected
 		// L4-03：唯一入口/出口点名收集，同守卫口径 fail-closed。
 		soleRoles, soleErr := h.repo.ListSoleSegmentTunnelsForNode(id)
 		if soleErr != nil {
-			return nil, nil, soleErr
+			return nil, soleErr
 		}
 		if len(soleRoles) > 0 {
 			nodeName := fmt.Sprintf("节点 %d", id)
@@ -8394,10 +8439,21 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error
 				if tunnelName == "" {
 					tunnelName = fmt.Sprintf("隧道 %d", sr.TunnelID)
 				}
-				soleRoleWarnings = append(soleRoleWarnings,
+				guard.soleRoleWarnings = append(guard.soleRoleWarnings,
 					fmt.Sprintf("隧道 %s 将失去唯一%s（%s 被删除后该隧道无%s节点）", tunnelName, role, nodeName, role))
 			}
 		}
+	}
+	return guard, nil
+}
+
+// deleteNodeByIDAfterGuards 是漏斗后段：数据面尽力清理 + DB 级联
+// + 收尾（端口锁表、WS 会话、白名单刷新）。guard 须来自
+// checkNodeDeleteGuards 且校验已全过；传 nil 时按空守卫处理（仅
+// 内部兜底，正常入口不走）。
+func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([]nodeCrossReferrer, []string, error) {
+	if guard == nil {
+		guard = &nodeDeleteGuard{}
 	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
@@ -8429,9 +8485,9 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error
 	if h.wsServer != nil {
 		h.wsServer.DisconnectNode(id)
 	}
-	// R3X-017：级联删后统一刷新（漏斗收尾，见函数头收集段）。
-	h.refreshInboundWhitelists(affectedInboundIDs)
-	return brokenReferrers, soleRoleWarnings, nil
+	// R3X-017：级联删后统一刷新（漏斗收尾，见守卫段收集）。
+	h.refreshInboundWhitelists(guard.affectedInboundIDs)
+	return guard.brokenReferrers, guard.soleRoleWarnings, nil
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {
