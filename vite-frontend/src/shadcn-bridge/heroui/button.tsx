@@ -133,7 +133,8 @@ const flatColorClassMap: Record<HeroButtonColor, string> = {
 };
 
 // The "shadow" variant name is kept for API compatibility; under the
-// flat-surface directive it paints no shadow and matches solid.
+// flat-surface recipe this variant is painted flat (empty class map)
+// and matches the solid look.
 const shadowColorClassMap: Record<HeroButtonColor, string> = {
   default: "",
   primary: "",

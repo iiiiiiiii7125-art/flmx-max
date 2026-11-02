@@ -5056,16 +5056,22 @@ export default function ForwardPage() {
                     ))}
                   </Select>
 
+                  {/* R2-005：入口端口创建后永不换口（2026-10-30 定案，
+                      2026-11-03 拍板锁死编辑面）——编辑时只读展示，
+                      后端 forwardUpdate 同步拒绝变更（F2-G 路）。 */}
                   <Input
                     description={
-                      currentTunnelPortRange
-                        ? `指定入口端口，留空自动分配 (允许范围: ${currentTunnelPortRange.min}-${currentTunnelPortRange.max})`
-                        : "指定入口端口，留空则从节点可用端口中自动分配"
+                      isEdit
+                        ? "入口端口在创建时确定，创建后不可修改；如需换口请删除后重新创建"
+                        : currentTunnelPortRange
+                          ? `指定入口端口，留空自动分配 (允许范围: ${currentTunnelPortRange.min}-${currentTunnelPortRange.max})`
+                          : "指定入口端口，留空则从节点可用端口中自动分配"
                     }
                     errorMessage={errors.inPort}
                     isInvalid={!!errors.inPort}
                     label="入口端口"
                     placeholder="留空则自动分配可用端口"
+                    readOnly={isEdit}
                     type="number"
                     value={form.inPort !== null ? form.inPort.toString() : ""}
                     variant="bordered"

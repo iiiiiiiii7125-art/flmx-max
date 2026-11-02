@@ -13,8 +13,10 @@ export interface ProvidersProps {
 // Shared toast surface for every toast type: the per-type style in
 // react-hot-toast replaces rather than merges, so each type spreads this.
 // Flat recipe (2026-11-03): --toaster-bg is solid white and
-// --toaster-color the near-black foreground - no shadow, no backdrop
+// --toaster-color the near-black foreground - opaque, no backdrop
 // filter, the same panel surface as every other floating layer.
+// The toast itself opts out of elevation shadow (boxShadow: none
+// below); the recipe permits shadows elsewhere and mandates none.
 const toastSurfaceStyle = {
   background: "var(--toaster-bg)",
   color: "var(--toaster-color)",

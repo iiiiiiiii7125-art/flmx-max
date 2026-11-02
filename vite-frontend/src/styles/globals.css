@@ -229,9 +229,11 @@ body {
 
 /* Flat surface tokens (2026-11-03, user directive: the glass language
    is removed app-wide). Surfaces are opaque; shape comes from a 1px
-   divider border and hairline separators only - no translucency, no
-   backdrop blur, no gradient sheen, no shadow. The toaster rides the
-   same flat recipe as every other floating layer. */
+   divider border and hairline separators - no translucency, no
+   backdrop blur, no gradient sheen. What is banned is the glass
+   transparency only: elevation shadows stay allowed, and cards and
+   floating layers may carry shadow-sm/md/lg/xl. The toaster rides
+   the same flat recipe as every other floating layer. */
 :root {
   --toaster-bg: #ffffff;
   --toaster-color: #18181b;
@@ -282,10 +284,12 @@ body {
 
 @layer components {
   /* Flat panel surfaces: opaque white, one 1px divider border, no
-     shadow, no backdrop filter. .panel-surface is the floating-layer
-     tier (shells, dialogs, popovers), .panel-card the in-page card
-     tier, .panel-inset the recessed block inside a card (stat blocks,
-     detail boards, info boxes) on the lightest neutral fill. */
+     backdrop filter. Callers may layer an elevation shadow on top
+     (shadow-* utilities); the recipe bans translucency, not shadow.
+     .panel-surface is the floating-layer tier (shells, dialogs,
+     popovers), .panel-card the in-page card tier, .panel-inset the
+     recessed block inside a card (stat blocks, detail boards, info
+     boxes) on the lightest neutral fill. */
   .panel-surface {
     background: var(--content1);
     border: 1px solid var(--divider);

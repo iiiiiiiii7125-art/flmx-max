@@ -34,10 +34,10 @@ export const AnnouncementBanner = ({
             </svg>
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-[15px] font-semibold text-blue-900 dark:text-blue-100 tracking-wide mb-1 sm:mb-1.5 mt-1.5">
+            <h3 className="text-[15px] font-semibold text-primary-900 dark:text-blue-100 tracking-wide mb-1 sm:mb-1.5 mt-1.5">
               公告
             </h3>
-            <div className="text-sm text-blue-800 dark:text-blue-100 break-words leading-relaxed">
+            <div className="text-sm text-primary-800 dark:text-blue-100 break-words leading-relaxed">
               <AnnouncementMarkdown
                 components={{
                   p: ({ children }) => (
