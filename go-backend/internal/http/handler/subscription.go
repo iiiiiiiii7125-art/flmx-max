@@ -61,6 +61,12 @@ type subPipeline struct {
 	// RelayIDs 是端点白名单（1.0.12 中转范围过滤）：空/nil = 不过滤（旧行为）；
 	// 非空时仅保留 RelayID 命中的端点，0 表示直连端点，N>0 表示该中转的端点。
 	RelayIDs []int64 `json:"relayIds,omitempty"`
+	// Templates 按客户端槽位选订阅模板（kernel.TemplateClash /
+	// TemplateSingbox / TemplateSurge / TemplateStash /
+	// TemplateShadowrocket → 模板 ID）。选了模板的格式渲染进模板骨架，
+	// 不再走内置配置与 Rules；模板正文在渲染时按 ID 加载（见
+	// Handler.subOptions），不落订阅行。
+	Templates map[string]int64 `json:"templates,omitempty"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
@@ -212,6 +218,16 @@ func (p *subPipeline) normalize() error {
 		}
 		p.RelayIDs = clean
 	}
+	// 模板槽位归一化：只保留已知槽位与正 ID，未知槽位静默丢弃（与
+	// Regions/Protocols 的修剪口径一致）；模板存在性与格式匹配在
+	// 保存时由 checkPipelineTemplates 校验。
+	templates := map[string]int64{}
+	for _, slot := range kernel.TemplateSlots {
+		if id := p.Templates[slot]; id > 0 {
+			templates[slot] = id
+		}
+	}
+	p.Templates = templates
 	return p.options().Validate()
 }
 
@@ -242,6 +258,9 @@ func parsePipeline(raw string) subPipeline {
 	}
 	if p.ChainRelaySources == nil {
 		p.ChainRelaySources = []int64{}
+	}
+	if p.Templates == nil {
+		p.Templates = map[string]int64{}
 	}
 	return p
 }
@@ -1118,6 +1137,10 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := h.checkPipelineTemplates(req.Options); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}

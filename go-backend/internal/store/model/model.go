@@ -564,6 +564,9 @@ type InboundsBackup struct {
 	// 同等待遇）；恢复时订阅 id 经 subRemap 按 token 落位。
 	SubscriptionCounters []SubscriptionCounterBackup `json:"subscriptionCounters,omitempty"`
 	Sources              []RemoteSourceBackup        `json:"sources,omitempty"`
+	// 订阅模板随入站段备份：订阅 Options 按模板 id 引用模板，恢复时
+	// 先落模板再落订阅，悬空引用在导入订阅时剔除并计数披露。
+	Templates []SubscriptionTemplateBackup `json:"templates,omitempty"`
 	// Users are shared users from 3.0.10 backups; imported as share
 	// subscriptions.
 	Users []SubUserBackup `json:"users,omitempty"`
@@ -674,6 +677,18 @@ type RemoteSourceBackup struct {
 	// FIX2-B（D4-04）：机场套餐 Subscription-Userinfo 随备份往返；
 	// file 源无刷新自愈，丢失即永久。
 	Userinfo string `json:"userinfo,omitempty"`
+}
+
+type SubscriptionTemplateBackup struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Content       string `json:"content"`
+	BuilderConfig string `json:"builderConfig,omitempty"`
+	SourceURL     string `json:"sourceUrl,omitempty"`
+	LastFetch     int64  `json:"lastFetch,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
+	CreatedTime   int64  `json:"createdTime"`
 }
 
 type InboundRelayBackup struct {
@@ -980,6 +995,7 @@ type ImportResult struct {
 	InboundSubscriptionsImported        int `json:"inboundSubscriptionsImported"`
 	InboundSubscriptionCountersImported int `json:"inboundSubscriptionCountersImported"`
 	InboundSourcesImported              int `json:"inboundSourcesImported"`
+	InboundTemplatesImported            int `json:"inboundTemplatesImported"`
 	InboundLegacyUsersImported          int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`

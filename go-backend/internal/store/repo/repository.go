@@ -486,6 +486,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.Subscription{},
 		&model.SubscriptionCounter{},
 		&model.SubscriptionTraffic{},
+		&model.SubscriptionTemplate{},
 		&model.RemoteSource{},
 	}
 
@@ -3530,6 +3531,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.InboundSubscriptionsImported = counts.subscriptions
 			result.InboundSubscriptionCountersImported = counts.subscriptionCounter
 			result.InboundSourcesImported = counts.sources
+			result.InboundTemplatesImported = counts.templates
 			result.InboundLegacyUsersImported = counts.legacyUsers
 		}
 		// O7-001：导入 user_inbound 表（用户订阅分配关系）

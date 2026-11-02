@@ -63,6 +63,29 @@ type Subscription struct {
 
 func (Subscription) TableName() string { return "subscription" }
 
+// SubscriptionTemplate is an admin-supplied Mihomo / sing-box / Surge
+// profile skeleton that subscriptions render their nodes into (see
+// kernel/sub_template.go). Content is the saved profile text; for
+// builder-made templates BuilderConfig keeps the recipe so the editor
+// can reopen it (the saved Content is what clients get). SourceURL
+// templates are re-downloaded once a day; a failed refresh keeps the
+// last good Content and records LastError.
+type SubscriptionTemplate struct {
+	ID   int64  `gorm:"primaryKey;autoIncrement"`
+	Name string `gorm:"type:varchar(100);not null"`
+	// Kind is kernel.TemplateClash, TemplateSingbox or TemplateSurge.
+	Kind          string `gorm:"type:varchar(20);not null"`
+	Content       string `gorm:"type:text;not null;default:''"`
+	BuilderConfig string `gorm:"column:builder_config;type:text;not null;default:''"`
+	SourceURL     string `gorm:"column:source_url;type:text;not null;default:''"`
+	LastFetch     int64  `gorm:"column:last_fetch;not null;default:0"`
+	LastError     string `gorm:"column:last_error;type:text;not null;default:''"`
+	CreatedTime   int64  `gorm:"column:created_time;not null"`
+	UpdatedTime   int64  `gorm:"column:updated_time;not null"`
+}
+
+func (SubscriptionTemplate) TableName() string { return "subscription_template" }
+
 // SubscriptionCounter remembers the last cumulative per-user counter seen
 // from a node, so the next sample adds only the difference.
 type SubscriptionCounter struct {
