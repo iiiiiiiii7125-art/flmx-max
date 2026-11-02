@@ -303,6 +303,128 @@ func TestApplySnellRunsGuarded(t *testing.T) {
 	}
 }
 
+// R8-021: the guard ruleset must already be loaded when a
+// snell-server process launches — on Apply and on Control start
+// alike. The nft stub records the guard's presence in a marker file
+// (present exactly while the loaded ruleset carries the guard sets);
+// the fake snell-server snapshots that marker at launch. This test
+// runs with the caller's own uid as the guard identity so it needs
+// no root.
+func TestSnellGuardInstalledBeforeProcessStart(t *testing.T) {
+	dir := t.TempDir()
+	// The fake server runs as the guard uid: the observation files
+	// live in a world-writable corner of the temp tree.
+	obsDir := filepath.Join(dir, "obs")
+	if err := os.MkdirAll(obsDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(obsDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(obsDir, "guard-loaded")
+	observed := filepath.Join(obsDir, "observed")
+
+	oldRunner, oldAvail := nftRunner, nftAvailable
+	nftRunner = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "-f" {
+			if strings.Contains(stdin, "snell_priv") {
+				_ = os.WriteFile(marker, []byte("1"), 0o644)
+			} else {
+				_ = os.Remove(marker)
+			}
+		}
+		return []byte("table inet flmx_kernel {}"), nil
+	}
+	nftAvailable = func() error { return nil }
+	oldLookup, oldCreate := lookupSnellGuardUser, createSnellGuardUser
+	// The guard identity must be a non-zero uid (snellGuardFor treats
+	// 0 as "no identity"); when the test itself runs as root, borrow
+	// 65534 like snellTestEnv does — root can chown and setuid to it.
+	guardUID, guardGID := uint32(os.Getuid()), uint32(os.Getgid())
+	if guardUID == 0 {
+		guardUID, guardGID = 65534, 65534
+	}
+	lookupSnellGuardUser = func() (uint32, uint32, error) {
+		return guardUID, guardGID, nil
+	}
+	createSnellGuardUser = func(context.Context) error { return nil }
+	oldResolvers := systemResolvers
+	systemResolvers = func() []string { return nil }
+	t.Cleanup(func() {
+		nftRunner, nftAvailable = oldRunner, oldAvail
+		lookupSnellGuardUser, createSnellGuardUser = oldLookup, oldCreate
+		systemResolvers = oldResolvers
+	})
+
+	// The guard uid must be able to traverse into the tree, as it can
+	// on a real node where the ancestors are world-traversable.
+	for _, d := range []string{filepath.Dir(dir), dir, filepath.Join(dir, "base")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewManager(filepath.Join(dir, "base"))
+	binDir := m.binDir("snell", "4.1.1")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"if [ -f \"" + marker + "\" ]; then echo guarded > \"" + observed + "\"; else echo unguarded > \"" + observed + "\"; fi\n" +
+		"if [ \"$1\" = \"-v\" ]; then echo 'snell-server 4.1.1'; exit 0; fi\n" +
+		"exec sleep 3600\n"
+	bin := filepath.Join(binDir, "snell-server")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	req := ApplyRequest{
+		Type: "snell", Version: "4.1.1", Enabled: true,
+		Download:  &Download{URL: "https://example.invalid/snell.zip", BinName: "snell-server", Archive: "raw"},
+		Files:     []File{{Name: "snell-7.conf", Content: "listen = 0.0.0.0:25021\npsk = test-psk\n"}},
+		Processes: []ProcessSpec{{Name: "snell-7", Bin: "", Args: []string{"-c", "{RUN_DIR}/snell-7.conf"}}},
+		Ports:     []Port{{InboundID: 7, Port: 25021, Network: "tcp"}},
+	}
+	defer func() { _, _ = m.Control("snell", "remove") }()
+
+	readObserved := func() string {
+		b, err := os.ReadFile(observed)
+		if err != nil {
+			t.Fatalf("fake snell-server never launched: %v", err)
+		}
+		return strings.TrimSpace(string(b))
+	}
+
+	if _, err := m.Apply(req); err != nil {
+		t.Fatalf("apply snell: %v", err)
+	}
+	if got := readObserved(); got != "guarded" {
+		t.Fatalf("Apply started snell-server before the guard was loaded (observed %q)", got)
+	}
+
+	// Stop strips the guard from the table; the next start must load
+	// it again before the process comes up.
+	if _, err := m.Control("snell", "stop"); err != nil {
+		t.Fatalf("control stop: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("guard marker must be gone after stop stripped the ruleset")
+	}
+	if err := os.Remove(observed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Control("snell", "start"); err != nil {
+		t.Fatalf("control start: %v", err)
+	}
+	if got := readObserved(); got != "guarded" {
+		t.Fatalf("Control start launched snell-server before the guard was loaded (observed %q)", got)
+	}
+}
+
 func TestApplySnellFailsWithoutNft(t *testing.T) {
 	m, _ := snellTestEnv(t)
 	nftAvailable = func() error { return fmt.Errorf("nft 不存在") }

@@ -209,6 +209,32 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	if needGuard {
+		// R8-021: install the guard BEFORE any snell-server process
+		// starts. The sync used to run only at the end of the apply,
+		// leaving a seconds-wide window — first enable, stop→start,
+		// and Restore after a node reboot (the nft table is gone
+		// then) — in which a freshly started snell-server ran
+		// unguarded. The table rebuild is a single atomic nft
+		// transaction and the guard content depends only on the
+		// guard uid and the system resolvers, not on this apply's
+		// files or processes, so it can go first; the sync at the
+		// end still runs and finalizes the counter rules (a no-op
+		// when nothing changed). Failing here means no process was
+		// started at all. If a later step fails, the guard simply
+		// stays installed with no snell-server running under it —
+		// harmless, and the next sync cleans it up.
+		m.mu.Lock()
+		guardUID := m.snellUID
+		m.mu.Unlock()
+		guard := &snellGuard{UID: guardUID, Resolvers: systemResolvers()}
+		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+			err = fmt.Errorf("Snell 私网拦截规则下发失败，未启动 Snell（不允许无拦截运行）: %v", err)
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+	}
+
 	binDir := m.binDir(req.Type, req.Version)
 	bins := map[string]string{}
 	mainBin, err := m.ensureBinary(inst, req.Type+" "+req.Version, req.Download, binDir)
@@ -560,7 +586,14 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		inst.req.Enabled = false
 		m.mu.Unlock()
 	case "start", "restart":
-		if reqHasSnellServer(inst.req) {
+		// reqHasSnellServer keys on Enabled, which a preceding stop
+		// left false: judge the request as the start will leave it,
+		// or the prerequisites and the guard pre-sync below are both
+		// skipped exactly on the stop→start path.
+		startReq := inst.req
+		startReq.Enabled = true
+		hasSnell := reqHasSnellServer(startReq)
+		if hasSnell {
 			// Same hard prerequisites as Apply: no guard identity or
 			// no nftables means Snell must not come up at all.
 			uid, gid, err := ensureSnellGuardUser(context.Background())
@@ -577,10 +610,23 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 			m.snellUID, m.snellGID = uid, gid
 			m.mu.Unlock()
 		}
-		m.stopProcesses(inst)
 		m.mu.Lock()
 		inst.req.Enabled = true
+		guard := m.snellGuardForLocked(m.snellUID)
 		m.mu.Unlock()
+		if hasSnell {
+			// R8-021: same ordering as Apply — the guard goes back in
+			// BEFORE the processes come up (stop has stripped it from
+			// the table, and after a node reboot the table is gone
+			// entirely). The sync after the switch still runs and is
+			// a no-op when nothing changed.
+			if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+				ferr := fmt.Errorf("Snell 私网拦截规则下发失败，未启动 Snell（不允许无拦截运行）: %v", err)
+				m.setErr(inst, ferr)
+				return m.state(kernelType, false), ferr
+			}
+		}
+		m.stopProcesses(inst)
 		m.startProcesses(inst)
 		m.waitStable(kernelType)
 		if m.state(kernelType, false).Running {
