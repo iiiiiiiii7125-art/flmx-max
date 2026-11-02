@@ -3490,7 +3490,10 @@ test_panel_migrate_postgres_rollbacks() (
   work=$(mktemp -d)
   cd "$work"
   printf 'JWT_SECRET=test-secret\nDB_TYPE=sqlite\nPOSTGRES_DB=flux_panel\nPOSTGRES_USER=flux_panel\nPOSTGRES_PASSWORD=test-pg-pass\n' > .env
-  printf 'services: {}\n' > docker-compose.yml
+  # 夹具须是真实自家部署形态：迁移守卫（AI-02 后与 resolve 同口径）
+  # 按 Compose 的 image 行判归属，空 compose 会被判归属未证而拒绝，
+  # 与本例要验的回滚面无关。
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > docker-compose.yml
   cp .env env-original
 
   local flags="$work/flags"
@@ -3548,6 +3551,427 @@ test_panel_migrate_postgres_rollbacks() (
   assert_equals "0" "$rc" "L2-02: migration should succeed when every step succeeds"
   grep -q '^DB_TYPE=postgres' .env || fail "L2-02: successful migration must switch .env to postgres"
   [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: successful migration must delete the env snapshot"
+)
+
+# AI-01/AI-02/AI-04/AI-05: 共存守卫归属谓词矩阵——守卫函数本体真实
+# 执行（判定本体不许桩替换），docker 以桩承接容器实物证据。关键格：
+# 他方新装形态（.env 写他人后端名＋他人镜像）与他方旧装形态（.env
+# 后端名与本面板旧缺省名同值＋他人镜像）都必须判他人、不得判自家
+# （AI-01）；注释含本面板前缀不得伪造归属（AI-04）；build: 型与单
+# 文件残缺态归属未证（两谓词皆否，交调用方按未证口径处理）。
+test_panel_ownership_predicates_matrix() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  FIXTURE_CONTAINER_IMAGE=""
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      printf '%s\n' "$FIXTURE_CONTAINER_IMAGE"
+      return 0
+    fi
+    return 0
+  }
+
+  ours_rc() {
+    if panel_deploy_dir_is_ours "$1" "${2:-flmx-panel-backend}" >/dev/null 2>&1; then echo 0; else echo 1; fi
+  }
+  foreign_rc() {
+    if is_foreign_panel_deploy_dir "$1" >/dev/null 2>&1; then echo 0; else echo 1; fi
+  }
+  mk_fixture() {
+    local dir
+    dir=$(mktemp -d)
+    if [[ "$1" != "-" ]]; then printf '%s\n' "$1" > "$dir/.env"; fi
+    if [[ "$2" != "-" ]]; then printf '%s\n' "$2" > "$dir/docker-compose.yml"; fi
+    printf '%s' "$dir"
+  }
+
+  local own_compose foreign_compose comment_compose build_compose
+  own_compose='services:
+  backend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test
+  frontend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test'
+  foreign_compose='services:
+  backend:
+    image: ghcr.io/other-owner/other-panel-backend:v-test
+  postgres:
+    image: postgres:16-alpine'
+  comment_compose='services:
+  backend:
+    image: ghcr.io/other-owner/other-panel-backend:v-test
+# previously used ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend here'
+  build_compose='services:
+  backend:
+    build: .'
+
+  local d
+  # A 他方新装形态：判他人、不判自家
+  FIXTURE_CONTAINER_IMAGE='ghcr.io/other-owner/other-panel-backend:v-test'
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=other-panel-backend' "$foreign_compose")
+  assert_equals "0" "$(foreign_rc "$d")" "AI-01: foreign deployment (declared foreign name + foreign images) must be foreign"
+  assert_equals "1" "$(ours_rc "$d")" "AI-01: foreign deployment must not be ours"
+  # A2 他方旧装形态：.env 后端名与本面板旧缺省名同值——只验值不得判自家
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flux-panel-backend' "$foreign_compose")
+  assert_equals "0" "$(foreign_rc "$d")" "AI-01: legacy-named foreign deployment must be foreign"
+  assert_equals "1" "$(ours_rc "$d")" "AI-01: legacy default name alone must not prove ownership"
+  # B build: 型：归属未证（两谓词皆否）
+  FIXTURE_CONTAINER_IMAGE=''
+  d=$(mk_fixture 'JWT_SECRET=x' "$build_compose")
+  assert_equals "1" "$(foreign_rc "$d")" "AI-02: build: compose must not be hard-judged foreign"
+  assert_equals "1" "$(ours_rc "$d")" "AI-02: build: compose must not prove ownership"
+  # C 注释伪造：全文出现本面板前缀不算证据
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=other-panel-backend' "$comment_compose")
+  assert_equals "0" "$(foreign_rc "$d")" "AI-04: a comment mentioning our image prefix must not erase foreignness"
+  assert_equals "1" "$(ours_rc "$d")" "AI-04: a comment mentioning our image prefix must not prove ownership"
+  # D 仅 compose（他人镜像）：判他人（旧双文件合取口径下漏守）
+  d=$(mk_fixture '-' "$foreign_compose")
+  assert_equals "0" "$(foreign_rc "$d")" "AI-05: compose-only foreign deployment must be foreign"
+  # E 仅 .env（声明他人后端名）：判他人
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=other-panel-backend' '-')
+  assert_equals "0" "$(foreign_rc "$d")" "AI-05: env-only deployment declaring a foreign backend name must be foreign"
+  # F 自家新装形态：判自家、不判他人
+  FIXTURE_CONTAINER_IMAGE='ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test'
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flmx-panel-backend' "$own_compose")
+  assert_equals "1" "$(foreign_rc "$d")" "own new deployment must not be foreign"
+  assert_equals "0" "$(ours_rc "$d")" "own new deployment must be ours"
+  # G 自家存量形态（.env 无身份键、Compose 引用本面板镜像、容器已不在）
+  FIXTURE_CONTAINER_IMAGE=''
+  d=$(mk_fixture 'JWT_SECRET=x' "$own_compose")
+  assert_equals "0" "$(ours_rc "$d")" "own legacy deployment must be ours via compose image evidence"
+  # H Compose 缺失但 .env 声明专属名、容器已不在：判自家
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flmx-panel-backend' '-')
+  assert_equals "0" "$(ours_rc "$d")" "declared exclusive name without contradicting images must prove ownership"
+  assert_equals "1" "$(foreign_rc "$d")" "declared exclusive name must not be foreign"
+  # I 声明专属名但 Compose 是他人镜像：镜像证据优先，不判自家
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flmx-panel-backend' "$foreign_compose")
+  assert_equals "1" "$(ours_rc "$d")" "foreign compose images must override a declared exclusive name"
+  assert_equals "0" "$(foreign_rc "$d")" "foreign compose images must be foreign even with a declared exclusive name"
+  # J 文件面归属未证、但后端容器正运行本面板镜像：实物证据判自家
+  FIXTURE_CONTAINER_IMAGE='ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test'
+  d=$(mk_fixture 'JWT_SECRET=x' "$build_compose")
+  assert_equals "0" "$(ours_rc "$d")" "a backend container running our image must prove ownership"
+  # K 实例派生名声明：判自家
+  FIXTURE_CONTAINER_IMAGE=''
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flmx-panel-backend-b2
+FLMX_INSTANCE=b2' '-')
+  assert_equals "0" "$(ours_rc "$d")" "instance-derived backend name must prove ownership"
+  # L 空目录：两谓词皆否
+  d=$(mk_fixture '-' '-')
+  assert_equals "1" "$(foreign_rc "$d")" "empty dir must not be foreign"
+  assert_equals "1" "$(ours_rc "$d")" "empty dir must not be ours"
+)
+
+# AI-01: resolve（update/uninstall 共用入口）对他方部署必须在守卫处
+# 终止——夹具为他方新装形态（.env 写他人后端名、Compose 他人镜像、
+# 容器标签指向该目录、容器跑他人镜像），旧实现被「键存在」第一证
+# 据放行、会按本面板更新/卸载接管他方部署。
+test_panel_resolve_refuses_foreign_panel_deployment() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local foreign_dir
+  foreign_dir=$(mktemp -d)
+  foreign_dir=$(cd "$foreign_dir" && pwd -P)
+  printf 'PANEL_BACKEND_CONTAINER=other-panel-backend\nJWT_SECRET=test\n' > "$foreign_dir/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/other-owner/other-panel-backend:v-test\n' > "$foreign_dir/docker-compose.yml"
+
+  unset PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER COMPOSE_PROJECT_NAME FLMX_INSTANCE
+  FIXTURE_DIR="$foreign_dir"
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *working_dir*) printf '%s\n' "$FIXTURE_DIR" ;;
+        *Config.Image*) printf '%s\n' "ghcr.io/other-owner/other-panel-backend:v-test" ;;
+        *) printf '%s\n' "other-panel" ;;
+      esac
+      return 0
+    fi
+    if [[ "$1" == "inspect" && "$2" == "flmx-panel-backend" ]]; then
+      return 1
+    fi
+    return 0
+  }
+
+  local rc="0" out
+  out=$(resolve_panel_deployment 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "AI-01: resolve must refuse a foreign panel deployment"
+  [[ "$out" == *"不属于本面板"* ]] || fail "AI-01: resolve refusal must name the ownership failure"
+)
+
+# AI-03: 实例部署（FLMX_INSTANCE=b2）经 resolve 定位并管理本实例的
+# 后端容器，身份自 .env 读回、与契约一致。
+test_panel_resolve_accepts_instance_deployment() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  dir=$(cd "$dir" && pwd -P)
+  printf 'PANEL_BACKEND_CONTAINER=flmx-panel-backend-b2\nFLMX_INSTANCE=b2\nJWT_SECRET=test\n' > "$dir/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$dir/docker-compose.yml"
+  cd "$dir"
+
+  unset PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER COMPOSE_PROJECT_NAME
+  FIXTURE_DIR="$dir"
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *working_dir*) printf '%s\n' "$FIXTURE_DIR" ;;
+        *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test" ;;
+        *) printf '%s\n' "flmx-panel-b2" ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+
+  resolve_panel_deployment >/dev/null
+  assert_equals "$dir" "$PANEL_DEPLOY_DIR" "AI-03: resolve must locate the instance deployment"
+  assert_equals "flmx-panel-backend-b2" "$PANEL_BACKEND_CONTAINER" "AI-03: resolve must manage the instance backend container"
+)
+
+# AI-02: migrate 守卫必须前置于任何下载/写入——S6（只有他人 .env、
+# 无 Compose）旧实现先下载本面板 Compose 制造证据再过守卫，现不得
+# 发生下载、不得落 Compose；S4（build: 型）旧合取守卫整体跳过，
+# 现按归属未证终止；自家存量形态守卫放行、迁移走通（正向对照）。
+test_panel_migrate_guard_precedes_download() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER FLMX_INSTANCE PANEL_DEPLOY_DIR
+  check_docker() { DOCKER_CMD="fixture_compose"; return 0; }
+  fixture_compose() { return 0; }
+  docker() { return 0; }
+  wait_for_postgres_healthy() { return 0; }
+  wait_for_backend_healthy() { return 0; }
+  sleep() { :; }
+  MIGRATE_DOWNLOADS=$(mktemp)
+  download_verified_routed() { echo "routed" >> "$MIGRATE_DOWNLOADS"; return 0; }
+  download_verified() { echo "plain" >> "$MIGRATE_DOWNLOADS"; return 0; }
+
+  local s6 rc="0"
+  s6=$(mktemp -d)
+  printf 'PANEL_BACKEND_CONTAINER=other-panel-backend\nJWT_SECRET=x\nDB_TYPE=sqlite\n' > "$s6/.env"
+  ( cd "$s6" && migrate_to_postgres >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "AI-02: migrate must refuse a foreign env-only deployment"
+  [[ ! -e "$s6/docker-compose.yml" ]] || fail "AI-02: migrate must not download a compose file before the ownership guard"
+  [[ ! -s "$MIGRATE_DOWNLOADS" ]] || fail "AI-02: migrate guard must run before any download"
+
+  local s4
+  s4=$(mktemp -d)
+  printf 'JWT_SECRET=x\nDB_TYPE=sqlite\n' > "$s4/.env"
+  printf 'services:\n  backend:\n    build: .\n' > "$s4/docker-compose.yml"
+  rc="0"
+  ( cd "$s4" && migrate_to_postgres >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "AI-02: migrate must refuse a build: deployment whose ownership is unproven"
+
+  local own
+  own=$(mktemp -d)
+  printf 'JWT_SECRET=test-secret\nDB_TYPE=sqlite\nPOSTGRES_DB=flux_panel\nPOSTGRES_USER=flux_panel\nPOSTGRES_PASSWORD=test-pg-pass\n' > "$own/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$own/docker-compose.yml"
+  rc="0"
+  ( cd "$own" && migrate_to_postgres >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-02: migrate must proceed for an own deployment (compose image evidence)"
+  grep -q '^DB_TYPE=postgres' "$own/.env" || fail "AI-02: own-deployment migration must complete the DB switch"
+)
+
+# AI-05: install 守卫对单文件残缺态同样设防——仅他人 Compose 时硬
+# 拒（旧双文件合取口径无守卫直接覆写）；仅他人 .env（声明他人后端
+# 名）时强制重装也不放行；归属未证的单文件/双文件残留默认拒绝，
+# 强制放行时 .env 与 docker-compose.yml 一并备份（旧实现只备份
+# .env，compose 定制在覆写时无声丢失）。
+test_panel_install_guards_single_file_and_backups() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+    POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="brandnew"; JWT_SECRET="brandnewsecret"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  wait_for_backend_healthy() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+    esac
+    return 0
+  }
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+
+  local rc d
+  # S7: 仅他人 Compose——硬拒、文件不动
+  d=$(mktemp -d)
+  printf 'services:\n  backend:\n    image: ghcr.io/other-owner/other-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && install_panel >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "AI-05: install must refuse a compose-only foreign deployment"
+  grep -q 'other-owner' "$d/docker-compose.yml" || fail "AI-05: foreign compose must stay untouched"
+
+  # S6: 仅他人 .env（声明他人后端名）——强制重装也不得放行
+  d=$(mktemp -d)
+  printf 'PANEL_BACKEND_CONTAINER=other-panel-backend\nJWT_SECRET=keepme\n' > "$d/.env"
+  rc="0"
+  ( cd "$d" && PANEL_FORCE_REINSTALL=1 install_panel >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "AI-05: install must hard-refuse an env-only foreign deployment even with PANEL_FORCE_REINSTALL=1"
+  grep -q 'keepme' "$d/.env" || fail "AI-05: foreign .env must stay untouched"
+
+  # 单文件未证（仅 Compose、无镜像引用）：默认拒；强制放行先备份该 Compose
+  d=$(mktemp -d)
+  printf 'services: {}\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && install_panel >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "AI-05: install must refuse a single-file leftover deployment by default"
+  rc="0"
+  ( cd "$d" && PANEL_FORCE_REINSTALL=1 install_panel >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-05: forced reinstall should proceed for an unproven single-file leftover"
+  ls "$d"/docker-compose.yml.bak.* >/dev/null 2>&1 || fail "AI-05: forced reinstall must back up the existing compose"
+  grep -q 'services: {}' "$d"/docker-compose.yml.bak.* || fail "AI-05: compose backup must contain the original content"
+
+  # S8: 双文件未证 + 强制：.env 与 Compose 一并备份
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=keepme\n' > "$d/.env"
+  printf 'services: {}\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && PANEL_FORCE_REINSTALL=1 install_panel >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-05: forced reinstall should proceed for an unproven deployment"
+  ls "$d"/.env.bak.* >/dev/null 2>&1 || fail "AI-05: forced reinstall must back up .env"
+  ls "$d"/docker-compose.yml.bak.* >/dev/null 2>&1 || fail "AI-05: forced reinstall must back up docker-compose.yml too"
+)
+
+# AI-09: 无 Docker 分支的卸载清理必须按归属判定删文件——明确属他
+# 人的残留文件不删并返回 1；已证属自家的直接清理（不依赖确认输
+# 入）；归属未证须显式确认，拒绝确认时保留、无输入时不删。
+test_panel_uninstall_without_docker_respects_ownership() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  check_docker() { return 1; }
+
+  local rc d
+  # 他人残留：不删、返回 1
+  d=$(mktemp -d)
+  printf 'PANEL_BACKEND_CONTAINER=other-panel-backend\nJWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/other-owner/other-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && uninstall_panel </dev/null >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "AI-09: no-docker uninstall must refuse files of a foreign deployment"
+  [[ -e "$d/.env" && -e "$d/docker-compose.yml" ]] || fail "AI-09: foreign files must stay untouched"
+
+  # 自家残留（Compose 引用本面板镜像）：直接清理
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && uninstall_panel </dev/null >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-09: no-docker uninstall should clean an own deployment without prompting"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "AI-09: own leftover files must be removed"
+
+  # 归属未证：拒绝确认 → 保留；确认 → 删除
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services: {}\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "n" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-09: declining the confirmation should be a clean no-op"
+  [[ -e "$d/.env" && -e "$d/docker-compose.yml" ]] || fail "AI-09: unproven files must stay when confirmation is declined"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "y" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-09: confirming should clean unproven leftover files"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "AI-09: confirmed unproven files must be removed"
+
+  # 空目录：无文件可清、直接返回 0
+  d=$(mktemp -d)
+  rc="0"
+  ( cd "$d" && uninstall_panel </dev/null >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-09: no-docker uninstall on an empty dir should be a no-op success"
+)
+
+# AI-03: 实例级身份——默认实例写值与历史逐字一致（存量无感）；实
+# 例 b2 的全部派生名（容器/卷/网络/项目）统一加后缀 -b2 且与默认
+# 实例不相交，FLMX_INSTANCE 落盘供后续路径按同一契约读回；旧模板
+# 回退分支保持旧名且对实例后缀不生效显式告警；detect 按派生名探
+# 容器；非法实例 id 在安装入口前置拒绝、不落文件。
+test_panel_instance_identity_naming() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local d1 d2 d3
+  d1=$(mktemp -d)
+  d2=$(mktemp -d)
+  d3=$(mktemp -d)
+  cp "$ROOT_DIR/docker-compose-v4.yml" "$d1/docker-compose.yml"
+  cp "$ROOT_DIR/docker-compose-v4.yml" "$d2/docker-compose.yml"
+  printf 'services: {}\n' > "$d3/docker-compose.yml"
+
+  ( cd "$d1" && write_new_panel_identity >/dev/null )
+  assert_equals "flmx-panel-backend" "$(get_env_var PANEL_BACKEND_CONTAINER "$d1/.env")" "AI-03: default backend name must stay unchanged"
+  assert_equals "flmx-panel-frontend" "$(get_env_var PANEL_FRONTEND_CONTAINER "$d1/.env")" "AI-03: default frontend name must stay unchanged"
+  assert_equals "flmx-panel-postgres" "$(get_env_var PANEL_POSTGRES_CONTAINER "$d1/.env")" "AI-03: default postgres name must stay unchanged"
+  assert_equals "flmx-sqlite-data" "$(get_env_var FLMX_SQLITE_VOLUME "$d1/.env")" "AI-03: default sqlite volume must stay unchanged"
+  assert_equals "flmx-postgres-data" "$(get_env_var FLMX_POSTGRES_VOLUME "$d1/.env")" "AI-03: default postgres volume must stay unchanged"
+  assert_equals "flmx-network" "$(get_env_var FLMX_NETWORK "$d1/.env")" "AI-03: default network must stay unchanged"
+  assert_equals "flmx-panel" "$(get_env_var COMPOSE_PROJECT_NAME "$d1/.env")" "AI-03: default project must stay unchanged"
+  assert_equals "" "$(get_env_var FLMX_INSTANCE "$d1/.env")" "AI-03: default instance must not record an instance id"
+
+  ( cd "$d2" && FLMX_INSTANCE=b2 write_new_panel_identity >/dev/null )
+  assert_equals "flmx-panel-backend-b2" "$(get_env_var PANEL_BACKEND_CONTAINER "$d2/.env")" "AI-03: instance backend name must be suffixed"
+  assert_equals "flmx-panel-frontend-b2" "$(get_env_var PANEL_FRONTEND_CONTAINER "$d2/.env")" "AI-03: instance frontend name must be suffixed"
+  assert_equals "flmx-panel-postgres-b2" "$(get_env_var PANEL_POSTGRES_CONTAINER "$d2/.env")" "AI-03: instance postgres name must be suffixed"
+  assert_equals "flmx-sqlite-data-b2" "$(get_env_var FLMX_SQLITE_VOLUME "$d2/.env")" "AI-03: instance sqlite volume must be suffixed"
+  assert_equals "flmx-postgres-data-b2" "$(get_env_var FLMX_POSTGRES_VOLUME "$d2/.env")" "AI-03: instance postgres volume must be suffixed"
+  assert_equals "flmx-network-b2" "$(get_env_var FLMX_NETWORK "$d2/.env")" "AI-03: instance network must be suffixed"
+  assert_equals "flmx-panel-b2" "$(get_env_var COMPOSE_PROJECT_NAME "$d2/.env")" "AI-03: instance project must be suffixed"
+  assert_equals "b2" "$(get_env_var FLMX_INSTANCE "$d2/.env")" "AI-03: instance id must be recorded in .env"
+
+  local key v1 v2
+  for key in PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER FLMX_SQLITE_VOLUME FLMX_POSTGRES_VOLUME FLMX_NETWORK COMPOSE_PROJECT_NAME; do
+    v1=$(get_env_var "$key" "$d1/.env")
+    v2=$(get_env_var "$key" "$d2/.env")
+    [[ "$v1" != "$v2" ]] || fail "AI-03: instance naming must be disjoint from the default instance ($key=$v1)"
+  done
+
+  local legacy_out
+  legacy_out=$( cd "$d3" && FLMX_INSTANCE=b2 write_new_panel_identity 2>&1 )
+  assert_equals "flux-panel-backend" "$(get_env_var PANEL_BACKEND_CONTAINER "$d3/.env")" "AI-03: legacy template branch must keep legacy names"
+  assert_equals "sqlite_data" "$(get_env_var FLMX_SQLITE_VOLUME "$d3/.env")" "AI-03: legacy template branch must keep legacy volumes"
+  [[ "$legacy_out" == *"实例后缀不生效"* ]] || fail "AI-03: legacy template branch must warn that instance isolation does not apply"
+
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "flmx-panel-backend-b2" ]]; then
+      return 0
+    fi
+    if [[ "$1" == "inspect" ]]; then
+      return 1
+    fi
+    return 0
+  }
+  local empty_dir detected
+  empty_dir=$(mktemp -d)
+  detected=$( cd "$empty_dir" && FLMX_INSTANCE=b2 PANEL_DEPLOY_DIR="$empty_dir" detect_panel_backend_container )
+  assert_equals "flmx-panel-backend-b2" "$detected" "AI-03: detect must probe the instance-derived backend name"
+
+  local bad rc="0"
+  bad=$(mktemp -d)
+  ( cd "$bad" && FLMX_INSTANCE='Bad!' install_panel >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "AI-03: install must reject an invalid FLMX_INSTANCE"
+  [[ ! -e "$bad/.env" && ! -e "$bad/docker-compose.yml" ]] || fail "AI-03: invalid instance id must not create deployment files"
 )
 
 # L2-12（R5-FD）：update_panel 必须走 VERSION > FLUX_VERSION >
@@ -3611,6 +4035,7 @@ test_panel_uninstall_locates_deployment_and_cleans_artifacts() (
   mkdir -p "$deploy_dir/backups"
   printf 'JWT_SECRET=test\n' > "$deploy_dir/backups/panel-update-x.env"
   printf 'JWT_SECRET=test\n' > "$deploy_dir/.env.bak.123"
+  printf 'services: {}\n' > "$deploy_dir/docker-compose.yml.bak.123"
   printf 'db' > "$deploy_dir/gost.db.bak"
   printf 'JWT_SECRET=test\n' > "$deploy_dir/.env.pre-postgres-migration"
 
@@ -3633,6 +4058,7 @@ test_panel_uninstall_locates_deployment_and_cleans_artifacts() (
   [[ ! -e "$deploy_dir/.env" ]] || fail "L2-14: .env must be removed"
   [[ ! -e "$deploy_dir/backups" ]] || fail "L2-14: backups/ (env copies + DB backups) must be removed"
   [[ ! -e "$deploy_dir/.env.bak.123" ]] || fail "L2-14: .env.bak.* must be removed"
+  [[ ! -e "$deploy_dir/docker-compose.yml.bak.123" ]] || fail "L2-14: docker-compose.yml.bak.* (forced-reinstall backups) must be removed"
   [[ ! -e "$deploy_dir/gost.db.bak" ]] || fail "L2-14: gost.db.bak must be removed"
   [[ ! -e "$deploy_dir/.env.pre-postgres-migration" ]] || fail "L2-14: the PG migration snapshot must be removed"
   grep -q "卸载完成" "$other_dir/uninstall.log" || fail "L2-14: completion must be reported after real removal"
@@ -3803,6 +4229,13 @@ test_install_script_download_resumes_across_routes
 test_install_script_resolve_budget_enforced
 test_install_script_uppercase_sha256_accepted
 test_panel_migrate_postgres_rollbacks
+test_panel_ownership_predicates_matrix
+test_panel_resolve_refuses_foreign_panel_deployment
+test_panel_resolve_accepts_instance_deployment
+test_panel_migrate_guard_precedes_download
+test_panel_install_guards_single_file_and_backups
+test_panel_uninstall_without_docker_respects_ownership
+test_panel_instance_identity_naming
 test_panel_update_honors_version_priority_chain
 test_panel_uninstall_locates_deployment_and_cleans_artifacts
 test_panel_download_verified_uses_timeouts
