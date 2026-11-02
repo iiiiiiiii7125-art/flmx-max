@@ -186,6 +186,27 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 	}
 }
 
+// tuningStateDir is the tuning state root (original-value backup,
+// applied params, tcpfit engine state — everything under
+// tuneStatePath derives from it). It anchors to the agent data
+// directory in both install forms, with the same rule as the kernel
+// root (R2-003/R2-020): the script form's data directory is
+// /etc/flux_agent; in the container form the working directory is
+// the mounted data directory (the entrypoint pins it there, next to
+// config.json). Before this, the container form wrote the whole
+// state tree into /etc/flux_agent inside the ephemeral container
+// layer, so a container rebuild silently dropped it. The resolution
+// runs once at package init; the working directory is fixed by then
+// (entrypoint cd / unit WorkingDirectory) and nothing chdirs later.
+func tuningStateDir() string {
+	if InContainer() {
+		if wd, err := os.Getwd(); err == nil && filepath.IsAbs(wd) {
+			return wd
+		}
+	}
+	return "/etc/flux_agent"
+}
+
 // Paths are variables so tests can use a temporary tree.
 var (
 	tuneProcRoot = "/proc/sys"
@@ -193,8 +214,8 @@ var (
 	// 改名前的调优文件路径：应用/还原时顺带删除。99-flmx 在字典序上
 	// 先于 99-flvx 加载，残留旧文件会在开机时静默覆盖新值，必须清理。
 	legacyTuneConfPath = "/etc/sysctl.d/99-flvx-tuning.conf"
-	tuneBackupPath     = "/etc/flux_agent/tuning-backup.json"
-	tuneParamsPath     = "/etc/flux_agent/tuning-params.json"
+	tuneBackupPath     = filepath.Join(tuningStateDir(), "tuning-backup.json")
+	tuneParamsPath     = filepath.Join(tuningStateDir(), "tuning-params.json")
 	tuneMeminfo        = "/proc/meminfo"
 	// tuneBBRModule loads tcp_bbr at boot, before sysctl sets it.
 	tuneBBRModule = "/etc/modules-load.d/flmx-bbr.conf"
