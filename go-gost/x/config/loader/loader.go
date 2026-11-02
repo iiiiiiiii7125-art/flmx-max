@@ -32,6 +32,22 @@ func Load(cfg *config.Config) error {
 	return defaultLoader.Load(cfg)
 }
 
+// unloadService 注销服务前先把其 stats 里尚未被周期采样换出的尾
+// 量交进全局流量管理器：换代/回滚卸载旧服务时旧 stats 对象随服务
+// 一并丢弃，不先 FlushTraffic 则每被换代服务最后一截（不足一个
+// 采样周期）的流量静默丢失（审计 A-T-03；停机路径的同款承接见
+// program.stopRuntime）。接口断言与 stopRuntime 同款，不引依赖；
+// 默认服务实现另在 Close 自身收口（x/service），此处为卸载点的
+// 显式承接，覆盖一切实现 FlushTraffic 的服务类型，重复换出恒零。
+func unloadService(name string) {
+	if svc := registry.ServiceRegistry().Get(name); svc != nil {
+		if flusher, ok := svc.(interface{ FlushTraffic() }); ok {
+			flusher.FlushTraffic()
+		}
+	}
+	registry.ServiceRegistry().Unregister(name)
+}
+
 // Reload replaces the runtime and commits the config only after it starts.
 // The caller must hold config.LockMutation, including while parsing cfg, so the
 // rollback snapshot includes every previously acknowledged runtime command.
@@ -42,7 +58,7 @@ func Reload(cfg *config.Config, run func(*config.Config) error) error {
 	if err := apply(cfg, run); err != nil {
 		// A failed partial load may have left both old and new listeners behind.
 		for name := range registry.ServiceRegistry().GetAll() {
-			registry.ServiceRegistry().Unregister(name)
+			unloadService(name)
 		}
 		if rollbackErr := apply(previous, run); rollbackErr != nil {
 			return fmt.Errorf("reload failed: %w; restore previous config failed: %v", err, rollbackErr)
@@ -313,7 +329,7 @@ func register(cfg *config.Config) error {
 	}
 
 	for name := range registry.ServiceRegistry().GetAll() {
-		registry.ServiceRegistry().Unregister(name)
+		unloadService(name)
 	}
 	for _, svcCfg := range cfg.Services {
 		if svcCfg == nil {
