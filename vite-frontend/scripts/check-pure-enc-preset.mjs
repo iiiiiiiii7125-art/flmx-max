@@ -137,6 +137,87 @@ if (typeof applyPureEncPreset === "function") {
 
 // ⑤ CHG-01（S-21）标签面源码断言：三文件「IEPL专用」在位且红色、
 //    旧文案与独立快捷标签差集 ∅。
+//
+// 截块必须结构化（A-F-01）：旧实现以「<Chip 起 900 字符内出现标签
+// 文案」的定长窗口计数，基线块长 896（余量 4），D-03 给 onClick 增
+// 一行 setPresetNote 后块长 951、窗口溢出误判标签缺失——门禁脆弱而
+// 非功能缺陷。此处按 JSX 结构截块：开标签的结束「>」须跳过引号与
+// 表达式大括号（onClick={() => ...} 内的「>」不是标签结束），块以
+// 真实 </Chip> 收尾，块长不再设上限。
+const extractChipBlocks = (text) => {
+  const blocks = [];
+  const openRe = /<Chip\b/g;
+  let m;
+
+  while ((m = openRe.exec(text)) !== null) {
+    const start = m.index;
+    let i = start + "<Chip".length;
+    let depth = 0;
+    let quote = null;
+    let openEnd = -1;
+
+    for (; i < text.length; i++) {
+      const c = text[i];
+
+      if (quote) {
+        if (c === quote && text[i - 1] !== "\\") quote = null;
+      } else if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+      } else if (c === "{") {
+        depth++;
+      } else if (c === "}") {
+        depth--;
+      } else if (c === ">" && depth === 0) {
+        openEnd = i;
+        break;
+      }
+    }
+    if (openEnd < 0) break;
+    const openTag = text.slice(start, openEnd + 1);
+
+    if (openTag.endsWith("/>")) {
+      blocks.push({ openTag, inner: "" });
+      continue;
+    }
+    const closeStart = text.indexOf("</Chip>", openEnd);
+
+    if (closeStart < 0) break;
+    blocks.push({ openTag, inner: text.slice(openEnd + 1, closeStart) });
+    openRe.lastIndex = closeStart + "</Chip>".length;
+  }
+
+  return blocks;
+};
+
+// 截取包含 pos 的最近一层 {...} 对象字面量（大括号配平；该区域的
+// 字符串与注释内不出现裸大括号）。
+const enclosingObject = (text, pos) => {
+  let depth = 0;
+  let start = -1;
+
+  for (let i = pos; i >= 0; i--) {
+    if (text[i] === "}") depth++;
+    else if (text[i] === "{") {
+      if (depth === 0) {
+        start = i;
+        break;
+      }
+      depth--;
+    }
+  }
+  if (start < 0) return null;
+  depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+
+  return null;
+};
+
 const labelFiles = [
   { rel: "src/pages/inbound/inbound-form-modal.tsx", count: 1 },
   { rel: "src/pages/inbound.tsx", count: 3 },
@@ -144,7 +225,10 @@ const labelFiles = [
 ];
 for (const { rel, count } of labelFiles) {
   const text = readFileSync(join(frontendDir, rel), "utf8");
-  const hits = [...text.matchAll(/<Chip\b[\s\S]{0,900}?IEPL专用\s*<\/Chip>/g)];
+  const hits = extractChipBlocks(text).filter((b) =>
+    b.inner.includes("IEPL专用"),
+  );
+
   check(
     `${rel}：「IEPL专用」标签 ${count} 处`,
     hits.length === count,
@@ -152,7 +236,7 @@ for (const { rel, count } of labelFiles) {
   );
   check(
     `${rel}：「IEPL专用」标签均为红色（danger）`,
-    hits.every((m) => m[0].includes('color="danger"')),
+    hits.every((b) => b.openTag.includes('color="danger"')),
     "存在非 danger 的 IEPL专用 标签",
   );
 }
@@ -168,10 +252,16 @@ check(
 // S-21 已定口径（单一判据）：ENC 开关自动填充产生的同样是纯 ENC
 // 形态（ENC 开 + 安全无），不得写入 Vision——native 外观的那组自动
 // 填充里 flowVision 必须为 false、且不得出现 flowVision: true。
+// 判定对象是包含该字段的整个对象字面量（结构化截取，同 A-F-01：
+// 旧实现以 200 字符定长窗口衔接两字段，实距 166、余量 34，同族脆弱）。
+const nativePos = formText.indexOf('encryptionMode: "native",');
+const nativeBlock = nativePos >= 0 ? enclosingObject(formText, nativePos) : null;
+
 check(
   "ENC 开关自动填充不写入 Vision 流控",
-  /encryptionMode: "native",[\s\S]{0,200}?flowVision: false/.test(formText) &&
-    !/encryptionMode: "native",[\s\S]{0,200}?flowVision: true/.test(formText),
+  nativeBlock !== null &&
+    nativeBlock.includes("flowVision: false") &&
+    !nativeBlock.includes("flowVision: true"),
   "开关自动填充块（native 组）未以 flowVision: false 落定",
 );
 // ⑥ payload 级断言（presets.ts 的 visionAllowed/toPayload，import 均为
