@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261103.02"
+SCRIPT_VERSION="20261103.03"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1282,8 +1282,11 @@ panel_instance_suffix() {
 }
 
 # 实例 id 进入容器/卷/网络/项目名，只允许 Compose/容器命名安全字符。
+# 本谓词与后端消费侧的实例 id 白名单（生成节点容器安装命令时校验）
+# 是同一契约的两侧：字符集与全长上限（32）必须逐字一致，任一侧放
+# 宽而另一侧不跟，脚本派生名与后端派生名即分家。
 panel_instance_id_is_valid() {
-  [[ "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+  [[ ${#1} -le 32 && "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
 }
 
 # 部署目录的 Compose（只看 image: 行的值）引用本面板镜像，才认这
@@ -2293,7 +2296,7 @@ install_panel() {
   # 实例 id 合法性前置校验（AI-03）：id 会进入容器/卷/网络/项目名，
   # 非法字符让 Compose 命名直接失败，先于一切动作拒绝。
   if [[ -n "${FLMX_INSTANCE:-}" ]] && ! panel_instance_id_is_valid "$FLMX_INSTANCE"; then
-    echo "❌ FLMX_INSTANCE 不合法：$FLMX_INSTANCE（须以小写字母或数字开头，仅含小写字母、数字、- 与 _）"
+    echo "❌ FLMX_INSTANCE 不合法：$FLMX_INSTANCE（须以小写字母或数字开头，仅含小写字母、数字、- 与 _，全长不超过 32 个字符）"
     return 1
   fi
 

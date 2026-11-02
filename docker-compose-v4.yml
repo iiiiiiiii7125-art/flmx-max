@@ -25,6 +25,9 @@ services:
       FLUX_VERSION: ${FLUX_VERSION:-dev}
       PANEL_DEPLOY_DIR: /opt/flmx-panel
       PANEL_BACKEND_CONTAINER: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
+      # AI-03：实例 id 须透传进后端进程，后端据此派生本实例的节点
+      # 容器名/数据目录；默认实例 .env 无此键、替换为空，不影响存量。
+      FLMX_INSTANCE: ${FLMX_INSTANCE:-}
     ports:
       - "${BACKEND_PORT}:6365"
     volumes:
