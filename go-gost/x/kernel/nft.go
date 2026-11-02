@@ -300,8 +300,17 @@ func nftScriptGuard(rules []counterRule, guards map[int64]allowGuard, hops []hop
 	if guard != nil {
 		// Snell egress guard (see snell_guard.go): the system resolvers
 		// stay reachable on DNS ports so domain targets keep resolving;
-		// every other packet from the guard uid to a non-public range is
-		// dropped by destination IP, whatever name it came from.
+		// packets of an already established flow pass (they are replies
+		// to sessions a client opened TO the Snell inbound — that client
+		// may itself sit on a private address, and its source address
+		// must not make the session's replies look like a private
+		// target); every other packet from the guard uid to a
+		// non-public range is dropped by destination IP, whatever name
+		// it came from. The established exemption cannot open a private
+		// target: a flow reaches the established state only after a
+		// reply packet was seen, and the guard uid's opening packet
+		// towards a non-public range is dropped below before it can
+		// leave the host, so no such flow ever gets there.
 		for _, r := range guard.Resolvers {
 			fam := "ip"
 			if strings.Contains(r, ":") {
@@ -310,6 +319,7 @@ func nftScriptGuard(rules []counterRule, guards map[int64]allowGuard, hops []hop
 			fmt.Fprintf(&b, "\t\tmeta skuid %d %s daddr %s udp dport 53 accept\n", guard.UID, fam, r)
 			fmt.Fprintf(&b, "\t\tmeta skuid %d %s daddr %s tcp dport { 53, 853 } accept\n", guard.UID, fam, r)
 		}
+		fmt.Fprintf(&b, "\t\tmeta skuid %d ct state established,related accept\n", guard.UID)
 		fmt.Fprintf(&b, "\t\tmeta skuid %d ip daddr @snell_priv4 drop\n", guard.UID)
 		fmt.Fprintf(&b, "\t\tmeta skuid %d ip6 daddr @snell_priv6 drop\n", guard.UID)
 	}

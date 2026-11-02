@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,7 @@ func TestSnellGuardScriptRendering(t *testing.T) {
 	for _, want := range []string{
 		"set snell_priv4", "set snell_priv6",
 		"169.254.0.0/16", "fc00::/7",
+		"meta skuid 997 ct state established,related accept",
 		"meta skuid 997 ip daddr @snell_priv4 drop",
 		"meta skuid 997 ip6 daddr @snell_priv6 drop",
 		"meta skuid 997 ip daddr 127.0.0.53 udp dport 53 accept",
@@ -114,6 +116,15 @@ func TestSnellGuardScriptRendering(t *testing.T) {
 		if at := strings.Index(script, "daddr "+r); at < 0 || at > dropAt {
 			t.Errorf("resolver exemption for %s must come before the drop rules", r)
 		}
+	}
+	// The established-flow exemption must precede BOTH drops or replies
+	// to private-addressed clients are dropped with the targets.
+	ctAt := strings.Index(script, "ct state established,related accept")
+	if ctAt < 0 || ctAt > dropAt {
+		t.Errorf("established exemption must come before the v4 drop rule")
+	}
+	if drop6At := strings.Index(script, "@snell_priv6 drop"); ctAt < 0 || ctAt > drop6At {
+		t.Errorf("established exemption must come before the v6 drop rule")
 	}
 	// A script without a guard is byte-identical to the legacy script:
 	// nodes without Snell see zero change.
@@ -213,7 +224,7 @@ func snellTestRequest(t *testing.T, m *Manager) ApplyRequest {
 	}
 	return ApplyRequest{
 		Type: "snell", Version: "4.1.1", Enabled: true,
-		Download:  &Download{URL: "https://example.invalid/snell.zip", BinName: "snell-server", Archive: "raw"},
+		Download: &Download{URL: "https://example.invalid/snell.zip", BinName: "snell-server", Archive: "raw"},
 		Files:    []File{{Name: "snell-7.conf", Content: "listen = 0.0.0.0:25021\npsk = test-psk\n"}},
 		Processes: []ProcessSpec{
 			{Name: "snell-7", Bin: "", Args: []string{"-c", "{RUN_DIR}/snell-7.conf"}},
@@ -243,7 +254,7 @@ func TestApplySnellRunsGuarded(t *testing.T) {
 		t.Fatal("no nft script was loaded")
 	}
 	last := (*scripts)[len(*scripts)-1]
-	for _, want := range []string{"meta skuid 65534 ip daddr @snell_priv4 drop", "meta skuid 65534 ip daddr 127.0.0.53 udp dport 53 accept"} {
+	for _, want := range []string{"meta skuid 65534 ip daddr @snell_priv4 drop", "meta skuid 65534 ip daddr 127.0.0.53 udp dport 53 accept", "meta skuid 65534 ct state established,related accept"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("applied ruleset missing %q:\n%s", want, last)
 		}
@@ -350,5 +361,163 @@ func TestSnellGuardDerivation(t *testing.T) {
 	m.mu.Unlock()
 	if g := m.snellGuardFor(65534); g != nil {
 		t.Fatal("front-only instance must not derive a guard")
+	}
+}
+
+// guardPacket is one synthetic packet in the output chain, described
+// the way conntrack + the socket layer present it to the filter: the
+// owning uid, the conntrack state, and the destination.
+type guardPacket struct {
+	uid   uint32
+	state string // new | established | related
+	daddr string
+	proto string // tcp | udp
+	dport int
+}
+
+// guardChainVerdict walks the rendered output chain's guard rules in
+// order and returns the first verdict ("accept" / "drop") matching the
+// packet, or "pass" when no guard rule matches (the packet falls
+// through to the counters and the chain's accept policy). A guard
+// rule whose shape this evaluator does not understand fails the test:
+// a new rule form must be taught here so the matrix stays a faithful
+// model of the chain, not a stale copy of it.
+func guardChainVerdict(t *testing.T, script string, pkt guardPacket) string {
+	t.Helper()
+	start := strings.Index(script, "\tchain output {")
+	if start < 0 {
+		t.Fatal("rendered script has no output chain")
+	}
+	section := script[start:]
+	if end := strings.Index(section, "\n\t}\n"); end >= 0 {
+		section = section[:end]
+	}
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "meta skuid") {
+			continue // counters and marks are not guard rules
+		}
+		if !strings.Contains(line, fmt.Sprintf("meta skuid %d ", pkt.uid)) {
+			continue // another uid's rules never match this packet
+		}
+		verdict := ""
+		switch {
+		case strings.HasSuffix(line, " accept"):
+			verdict = "accept"
+		case strings.HasSuffix(line, " drop"):
+			verdict = "drop"
+		default:
+			t.Fatalf("guard rule without a verdict: %q", line)
+		}
+		if at := strings.Index(line, "ct state "); at >= 0 {
+			states := strings.Fields(line[at+len("ct state "):])[0]
+			hit := false
+			for _, s := range strings.Split(states, ",") {
+				if s == pkt.state {
+					hit = true
+				}
+			}
+			if hit {
+				return verdict
+			}
+			continue
+		}
+		dAt := strings.Index(line, " daddr ")
+		if dAt < 0 {
+			t.Fatalf("unrecognized guard rule shape: %q", line)
+		}
+		dst := strings.Fields(line[dAt+len(" daddr "):])[0]
+		switch {
+		case dst == "@snell_priv4":
+			if strings.Contains(pkt.daddr, ":") || !ipInAny(pkt.daddr, snellPrivateV4) {
+				continue
+			}
+		case dst == "@snell_priv6":
+			if !strings.Contains(pkt.daddr, ":") || !ipInAny(pkt.daddr, snellPrivateV6All()) {
+				continue
+			}
+		default:
+			// Literal resolver exemption: exact address, protocol and
+			// port set must all match.
+			want := net.ParseIP(dst)
+			got := net.ParseIP(pkt.daddr)
+			if want == nil || got == nil || !want.Equal(got) {
+				continue
+			}
+			if !strings.Contains(line, " "+pkt.proto+" ") {
+				continue
+			}
+			ports := map[int]bool{}
+			if strings.Contains(line, "dport { ") {
+				inner := line[strings.Index(line, "dport { ")+len("dport { "):]
+				inner = inner[:strings.Index(inner, " }")]
+				for _, p := range strings.Split(inner, ", ") {
+					n, err := strconv.Atoi(p)
+					if err != nil {
+						t.Fatalf("bad dport set in guard rule %q", line)
+					}
+					ports[n] = true
+				}
+			} else if strings.Contains(line, "dport ") {
+				n, err := strconv.Atoi(strings.Fields(line[strings.Index(line, "dport "):])[1])
+				if err != nil {
+					t.Fatalf("bad dport in guard rule %q", line)
+				}
+				ports[n] = true
+			} else {
+				t.Fatalf("resolver rule without a dport: %q", line)
+			}
+			if !ports[pkt.dport] {
+				continue
+			}
+		}
+		return verdict
+	}
+	return "pass"
+}
+
+// TestSnellGuardChainDecisions is the probe matrix over the rendered
+// output chain: the same packet shapes RM9 probed live, decided by
+// the rules themselves. It pins the two directions of the contract at
+// once — new connections from the guard uid to non-public targets are
+// dropped in literal, domain-resolved and mapped form, while packets
+// of established sessions (incl. replies to clients whose own address
+// is private: same LAN/VPC, loopback, private relay hops) pass.
+func TestSnellGuardChainDecisions(t *testing.T) {
+	guard := &snellGuard{UID: 65534, Resolvers: []string{"127.0.0.53"}}
+	script := nftScriptGuard(nil, nil, nil, nil, guard)
+	cases := []struct {
+		name string
+		pkt  guardPacket
+		want string
+	}{
+		// New outbound connections to non-public targets: dropped,
+		// whatever form the target took (a domain target is probed by
+		// the address it resolved to — the packet layer sees no name).
+		{"new private literal", guardPacket{65534, "new", "172.31.245.1", "tcp", 18082}, "drop"},
+		{"new metadata literal", guardPacket{65534, "new", "169.254.169.254", "tcp", 80}, "drop"},
+		{"new resolved private", guardPacket{65534, "new", "10.0.0.9", "tcp", 443}, "drop"},
+		{"new mapped metadata", guardPacket{65534, "new", "::ffff:169.254.169.254", "tcp", 80}, "drop"},
+		{"new v6 link-local", guardPacket{65534, "new", "fe80::1", "udp", 9999}, "drop"},
+		{"new loopback non-dns port", guardPacket{65534, "new", "127.0.0.53", "tcp", 443}, "drop"},
+		// Established/related flows pass even when the destination is
+		// private: those packets are replies to a client that opened a
+		// session TO the inbound, not a connection snell-server opened.
+		{"reply to private-source client", guardPacket{65534, "established", "172.31.245.11", "tcp", 54321}, "accept"},
+		{"udp reply to LAN client", guardPacket{65534, "established", "192.168.7.20", "udp", 40000}, "accept"},
+		{"related to RFC1918 peer", guardPacket{65534, "related", "10.2.3.4", "tcp", 12345}, "accept"},
+		{"reply in mapped form", guardPacket{65534, "established", "::ffff:192.168.0.20", "tcp", 50000}, "accept"},
+		{"reply to public client", guardPacket{65534, "established", "93.184.216.34", "tcp", 443}, "accept"},
+		// The resolver exemption stays exact, and public targets are
+		// never the guard's business.
+		{"resolver udp 53", guardPacket{65534, "new", "127.0.0.53", "udp", 53}, "accept"},
+		{"resolver tcp 853", guardPacket{65534, "new", "127.0.0.53", "tcp", 853}, "accept"},
+		{"new public target", guardPacket{65534, "new", "93.184.216.34", "tcp", 443}, "pass"},
+		{"other uid private target", guardPacket{1234, "new", "10.0.0.1", "tcp", 80}, "pass"},
+	}
+	for _, c := range cases {
+		if got := guardChainVerdict(t, script, c.pkt); got != c.want {
+			t.Errorf("%s: packet %+v decided %q, want %q", c.name, c.pkt, got, c.want)
+		}
 	}
 }
