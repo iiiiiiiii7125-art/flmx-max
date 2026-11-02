@@ -26,7 +26,7 @@ func TestFinalL1F05NodeMonitorTargetRejectsEmptyLabel(t *testing.T) {
 		{"tcp", "nonexistent.invalid:80"}, // 解析失败仍不拒存（节点侧 DNS 可能可解析）
 		{"icmp", "nonexistent.invalid"},
 		{"tcp", "8.8.8.8:53"},
-		{"tcp", "127.0.0.1:8080"}, // 回环放行（节点监控本机服务）
+		{"tcp", "127.0.0.1:8080"},  // 回环放行（节点监控本机服务）
 		{"tcp", "192.168.1.1:443"}, // LAN 放行
 		{"tcp", "[::1]:8080"},
 		{"tcp", "[2001:db8::1]:80"},

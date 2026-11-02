@@ -14,6 +14,7 @@ import (
 //   - list-form values were fmt.Sprint-stringified to "[...]" and then
 //     rejected as malformed, and the rejection message named the
 //     stringified form instead of the original value.
+//
 // The fix routes the read through firstHeaderHostValue (canonical Host
 // first, then host, then EqualFold fallback, all list-aware); the
 // transport-level direct "host" fallback is unchanged.

@@ -47,7 +47,7 @@ func TestUserDeleteCleansForwardDataPlaneContract(t *testing.T) {
 		t.Fatalf("user delete: expected success, got code=%d msg=%q", out.Code, out.Msg)
 	}
 	base := fmt.Sprintf("%d_2_0", forwardID)
-	if !rec.sawService(base+"_tcp") {
+	if !rec.sawService(base + "_tcp") {
 		t.Fatalf("F-057: user delete never sent DeleteService for %s_tcp; recorded=%v", base, rec.services)
 	}
 	if got := mustQueryInt(t, repo, `SELECT COUNT(*) FROM forward WHERE id = ?`, forwardID); got != 0 {
@@ -77,7 +77,7 @@ func TestNodeDeleteCleansForwardServicesOnNodeContract(t *testing.T) {
 		t.Fatalf("node delete: expected success, got code=%d msg=%q", out.Code, out.Msg)
 	}
 	base := fmt.Sprintf("%d_2_0", forwardID)
-	if !rec.sawService(base+"_tcp") {
+	if !rec.sawService(base + "_tcp") {
 		t.Fatalf("F-056: node delete never sent DeleteService for %s_tcp; recorded=%v", base, rec.services)
 	}
 	if got := mustQueryInt(t, repo, `SELECT COUNT(*) FROM node WHERE id = ?`, nodeID); got != 0 {

@@ -77,4 +77,3 @@ func TestR2K1MigrateConfigKeyCaseShadows(t *testing.T) {
 		t.Fatalf("count after second run = %d err=%v, want 3", n, err)
 	}
 }
-

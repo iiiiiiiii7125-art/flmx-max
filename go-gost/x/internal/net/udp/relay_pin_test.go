@@ -68,11 +68,11 @@ func (c *fakePacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	}
 	return len(b), nil
 }
-func (c *fakePacketConn) Close() error                       { return nil }
-func (c *fakePacketConn) LocalAddr() net.Addr                { return fakeAddr("0.0.0.0:0") }
-func (c *fakePacketConn) SetDeadline(time.Time) error        { return nil }
-func (c *fakePacketConn) SetReadDeadline(time.Time) error    { return nil }
-func (c *fakePacketConn) SetWriteDeadline(time.Time) error   { return nil }
+func (c *fakePacketConn) Close() error                     { return nil }
+func (c *fakePacketConn) LocalAddr() net.Addr              { return fakeAddr("0.0.0.0:0") }
+func (c *fakePacketConn) SetDeadline(time.Time) error      { return nil }
+func (c *fakePacketConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *fakePacketConn) SetWriteDeadline(time.Time) error { return nil }
 func (c *fakePacketConn) writtenAddrs() []net.Addr {
 	c.mu.Lock()
 	defer c.mu.Unlock()

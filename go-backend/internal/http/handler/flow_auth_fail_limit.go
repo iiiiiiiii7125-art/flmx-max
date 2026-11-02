@@ -109,5 +109,3 @@ func (h *Handler) flowAuthThrottleKey(r *http.Request) (key string, throttled bo
 func (h *Handler) recordFlowAuthFailure(key string) {
 	h.flowFailLimiter().recordFailure(key, time.Now())
 }
-
-

@@ -28,14 +28,14 @@ func TestValidateFederationDiagnoseTargetW3(t *testing.T) {
 	// 字面 IP：内网/保留段一律拒绝。
 	for _, ip := range []string{
 		"10.0.0.1", "192.168.1.1", "172.16.0.1", // RFC1918
-		"127.0.0.1",        // 回环
-		"169.254.169.254",  // 链路本地/云元数据
-		"fc00::1",          // ULA
-		"::ffff:10.0.0.1",  // IPv4-mapped 内网
+		"127.0.0.1",       // 回环
+		"169.254.169.254", // 链路本地/云元数据
+		"fc00::1",         // ULA
+		"::ffff:10.0.0.1", // IPv4-mapped 内网
 		"::ffff:192.168.0.1",
-		"0.1.2.3",   // 0.0.0.0/8（F-023 回归）
-		"fe80::1",   // 链路本地 v6
-		"::1",       // 回环 v6
+		"0.1.2.3",    // 0.0.0.0/8（F-023 回归）
+		"fe80::1",    // 链路本地 v6
+		"::1",        // 回环 v6
 		"100.64.0.1", // CGNAT（isPrivateIP 口径内）
 	} {
 		if _, err := validateFederationDiagnoseTarget(ip, 4); err == nil {

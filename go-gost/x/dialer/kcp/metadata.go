@@ -5,8 +5,8 @@ import (
 	"time"
 
 	mdata "github.com/go-gost/core/metadata"
-	mdutil "github.com/go-gost/x/metadata/util"
 	kcp_util "github.com/go-gost/x/internal/util/kcp"
+	mdutil "github.com/go-gost/x/metadata/util"
 )
 
 type metadata struct {
@@ -47,44 +47,44 @@ func (d *kcpDialer) parseMetadata(md mdata.Metadata) (err error) {
 
 	if md != nil {
 		if md.IsExists("kcp.tcp") {
-		d.md.config.TCP = mdutil.GetBool(md, "kcp.tcp")
-	}
-	if md.IsExists("kcp.key") {
-		d.md.config.Key = mdutil.GetString(md, "kcp.key")
-	}
-	if md.IsExists("kcp.crypt") {
-		d.md.config.Crypt = mdutil.GetString(md, "kcp.crypt")
-	}
-	if md.IsExists("kcp.mode") {
-		d.md.config.Mode = mdutil.GetString(md, "kcp.mode")
-	}
-	if md.IsExists("kcp.keepalive") {
-		d.md.config.KeepAlive = mdutil.GetInt(md, "kcp.keepalive")
-	}
-	if md.IsExists("kcp.interval") {
-		d.md.config.Interval = mdutil.GetInt(md, "kcp.interval")
-	}
-	if md.IsExists("kcp.mtu") {
-		d.md.config.MTU = mdutil.GetInt(md, "kcp.mtu")
-	}
-	if md.IsExists("kcp.rcvwnd") {
-		d.md.config.RcvWnd = mdutil.GetInt(md, "kcp.rcvwnd")
-	}
-	if md.IsExists("kcp.sndwnd") {
-		d.md.config.SndWnd = mdutil.GetInt(md, "kcp.sndwnd")
-	}
-	if md.IsExists("kcp.sockbuf") {
-		d.md.config.SockBuf = mdutil.GetInt(md, "kcp.sockbuf")
-	}
-	if md.IsExists("kcp.smuxver") {
-		d.md.config.SmuxVer = mdutil.GetInt(md, "kcp.smuxver")
-	}
-	if md.IsExists("kcp.smuxbuf") {
-		d.md.config.SmuxBuf = mdutil.GetInt(md, "kcp.smuxbuf")
-	}
-	if md.IsExists("kcp.streambuf") {
-		d.md.config.StreamBuf = mdutil.GetInt(md, "kcp.streambuf")
-	}
+			d.md.config.TCP = mdutil.GetBool(md, "kcp.tcp")
+		}
+		if md.IsExists("kcp.key") {
+			d.md.config.Key = mdutil.GetString(md, "kcp.key")
+		}
+		if md.IsExists("kcp.crypt") {
+			d.md.config.Crypt = mdutil.GetString(md, "kcp.crypt")
+		}
+		if md.IsExists("kcp.mode") {
+			d.md.config.Mode = mdutil.GetString(md, "kcp.mode")
+		}
+		if md.IsExists("kcp.keepalive") {
+			d.md.config.KeepAlive = mdutil.GetInt(md, "kcp.keepalive")
+		}
+		if md.IsExists("kcp.interval") {
+			d.md.config.Interval = mdutil.GetInt(md, "kcp.interval")
+		}
+		if md.IsExists("kcp.mtu") {
+			d.md.config.MTU = mdutil.GetInt(md, "kcp.mtu")
+		}
+		if md.IsExists("kcp.rcvwnd") {
+			d.md.config.RcvWnd = mdutil.GetInt(md, "kcp.rcvwnd")
+		}
+		if md.IsExists("kcp.sndwnd") {
+			d.md.config.SndWnd = mdutil.GetInt(md, "kcp.sndwnd")
+		}
+		if md.IsExists("kcp.sockbuf") {
+			d.md.config.SockBuf = mdutil.GetInt(md, "kcp.sockbuf")
+		}
+		if md.IsExists("kcp.smuxver") {
+			d.md.config.SmuxVer = mdutil.GetInt(md, "kcp.smuxver")
+		}
+		if md.IsExists("kcp.smuxbuf") {
+			d.md.config.SmuxBuf = mdutil.GetInt(md, "kcp.smuxbuf")
+		}
+		if md.IsExists("kcp.streambuf") {
+			d.md.config.StreamBuf = mdutil.GetInt(md, "kcp.streambuf")
+		}
 		if md.IsExists("kcp.nocomp") {
 			d.md.config.NoComp = mdutil.GetBool(md, "kcp.nocomp")
 		}

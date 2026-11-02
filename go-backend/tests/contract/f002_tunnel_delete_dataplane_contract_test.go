@@ -129,7 +129,9 @@ func TestTunnelDeleteSendsDeleteServiceForForwardsContract(t *testing.T) {
 	}
 
 	run("delete-with-forwards", "/api/v1/tunnel/delete-with-forwards",
-		func(id int64) map[string]interface{} { return map[string]interface{}{"id": id, "action": "delete_forwards"} }, "f002-secret-dwf")
+		func(id int64) map[string]interface{} {
+			return map[string]interface{}{"id": id, "action": "delete_forwards"}
+		}, "f002-secret-dwf")
 	run("plain-delete", "/api/v1/tunnel/delete",
 		func(id int64) map[string]interface{} { return map[string]interface{}{"id": id} }, "f002-secret-plain")
 	run("batch-delete", "/api/v1/tunnel/batch-delete",

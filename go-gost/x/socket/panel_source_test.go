@@ -23,7 +23,7 @@ func TestDerivePanelOriginTable(t *testing.T) {
 		{"ws://panel.example.com", "http://panel.example.com", true},
 		{"https://panel.example.com", "https://panel.example.com", true},
 		{"http://panel.example.com", "http://panel.example.com", true},
-		{"panel.example.com", "https://panel.example.com", true},              // 裸地址默认 https，不降级
+		{"panel.example.com", "https://panel.example.com", true},                 // 裸地址默认 https，不降级
 		{"wss://panel.example.com:8443", "https://panel.example.com:8443", true}, // 非标准端口保留
 		{"ws://10.0.0.8:6365", "http://10.0.0.8:6365", true},
 		{"https://panel.example.com/sub/path?x=1", "https://panel.example.com", true}, // 路径/query 丢弃，只剩 origin

@@ -70,7 +70,7 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 			status.Required = true
 			status.Guide = "doc/guide/upgrade.md#从旧版本升级"
 			status.Tables = append(status.Tables, DuplicateDetail{
-				Table: "node_inbound",
+				Table:  "node_inbound",
 				Sample: "索引 " + nodeInboundIndexName + " 仍为全量唯一定义，v2 部分索引迁移待处理（通常是 kernel 入站存在同节点同端口重复，需先清理）",
 			})
 		}

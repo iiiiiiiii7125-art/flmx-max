@@ -105,7 +105,7 @@ proxies:
 	}
 	// 合法对照：同形 host=example.com / www.bing.com 须放行。
 	good := map[string]string{
-		"uri-obfs-host": "ss://" + ssUser + "@203.0.113.10:8388/?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#x",
+		"uri-obfs-host":         "ss://" + ssUser + "@203.0.113.10:8388/?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#x",
 		"surge-snell-obfs-host": "SN1 = snell, 203.0.113.10, 6160, psk=psk-aaaaaaaa, obfs=http, obfs-host=example.com",
 		"clash-plugin-opts-host": `
 proxies:

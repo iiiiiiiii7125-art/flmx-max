@@ -10,9 +10,9 @@ import (
 
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/metadata"
-	mdutil "github.com/go-gost/x/metadata/util"
 	"github.com/go-gost/core/selector"
 	ctxvalue "github.com/go-gost/x/ctx"
+	mdutil "github.com/go-gost/x/metadata/util"
 )
 
 type roundRobinStrategy[T any] struct {

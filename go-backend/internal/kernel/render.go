@@ -158,7 +158,7 @@ var extraProtectedTopKeys = map[string]bool{
 // （安全层与传输形态）；sockopt 等增量子键不在其列。
 var extraProtectedStreamSubKeys = map[string]bool{
 	"security": true, "tlsSettings": true, "realitySettings": true,
-	"network": true,
+	"network":    true,
 	"wsSettings": true, "grpcSettings": true, "xhttpSettings": true,
 	"splithttpSettings": true, "tcpSettings": true, "kcpSettings": true,
 	"quicSettings": true, "httpupgradeSettings": true,

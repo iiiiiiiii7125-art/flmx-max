@@ -91,7 +91,7 @@ func TestBatch2K01StoredPoisonedSkippedAtRender(t *testing.T) {
 		{"type": "vless", "server": "1.2.3.4", "port": 443, "uuid": manualUUID,
 			"tls": true, "servername": "www.microsoft.com", "client-fingerprint": "chrome",
 			"reality-opts": map[string]interface{}{"public-key": manualFixPBK, "short-id": "ab12"},
-			"network": "ws", "ws-opts": map[string]interface{}{"path": "/ws"}},
+			"network":      "ws", "ws-opts": map[string]interface{}{"path": "/ws"}},
 	}
 	for i, p := range poisoned {
 		e := Endpoint{Name: "k01-poisoned", Host: "1.2.3.4", Port: 443, Direct: true, Proxy: p}
@@ -134,7 +134,7 @@ func TestBatch2K01StoredPoisonedSkippedAtRender(t *testing.T) {
 	grpcLegal := Proxy{"type": "vless", "server": "1.2.3.4", "port": 443, "uuid": manualUUID,
 		"tls": true, "servername": "www.microsoft.com", "client-fingerprint": "chrome",
 		"reality-opts": map[string]interface{}{"public-key": manualFixPBK, "short-id": "ab12"},
-		"network": "grpc", "grpc-opts": map[string]interface{}{"grpc-service-name": "svc"}}
+		"network":      "grpc", "grpc-opts": map[string]interface{}{"grpc-service-name": "svc"}}
 	ge := Endpoint{Name: "k01-legal-grpc", Host: "1.2.3.4", Port: 443, Direct: true, Proxy: grpcLegal}
 	sb, sg, ln, qx, uri = b2FaceResults(ge)
 	if !(sb && !sg && !ln && !qx && uri) {
@@ -154,7 +154,7 @@ func TestBatch2K01StoredPoisonedSkippedAtRender(t *testing.T) {
 	xhttpLegal := Proxy{"type": "vless", "server": "1.2.3.4", "port": 443, "uuid": manualUUID,
 		"tls": true, "servername": "www.microsoft.com", "client-fingerprint": "chrome",
 		"reality-opts": map[string]interface{}{"public-key": manualFixPBK, "short-id": "ab12"},
-		"network": "xhttp", "xhttp-opts": map[string]interface{}{"path": "/xhttp", "mode": "auto"}}
+		"network":      "xhttp", "xhttp-opts": map[string]interface{}{"path": "/xhttp", "mode": "auto"}}
 	xe := Endpoint{Name: "k01-legal-xhttp", Host: "1.2.3.4", Port: 443, Direct: true, Proxy: xhttpLegal}
 	sb, sg, ln, qx, uri = b2FaceResults(xe)
 	if !(!sb && !sg && !ln && !qx && uri) {

@@ -31,11 +31,11 @@ type metadata struct {
 	sniffingWebsocket           bool
 	sniffingWebsocketSampleRate float64
 
-	directTunnel           bool
-	tunnelTTL              time.Duration
-	ingress                ingress.Ingress
-	sd                     sd.SD
-	muxCfg                 *mux.Config
+	directTunnel bool
+	tunnelTTL    time.Duration
+	ingress      ingress.Ingress
+	sd           sd.SD
+	muxCfg       *mux.Config
 
 	observerPeriod       time.Duration
 	observerResetTraffic bool

@@ -128,7 +128,7 @@ func TestNginxCredentialLocationsDisableAccessLog(t *testing.T) {
 
 // R4-N3 回归：access_log 关掉只堵了一半——nginx 全局 error_log（warn）
 // 在上游故障时会把完整请求行（含 ?secret=<节点密钥>）写进 error 日志
-//（真机实证：后端重启窗口累计 15 条）。携带凭据的 location 必须再把
+// （真机实证：后端重启窗口累计 15 条）。携带凭据的 location 必须再把
 // 本块 error_log 降到 crit：上游类故障消息是 error 级，crit 级只保留
 // crit/alert/emerg（这类消息不含请求行）。独立文件方案不成立——密钥
 // 仍明文落盘、只是换个文件。诊断损失限于这五个端点，且后端自身日志

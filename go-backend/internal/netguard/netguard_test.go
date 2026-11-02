@@ -12,12 +12,12 @@ import (
 // HardDenyOnly（notify)、HardDenyOrLoopback（导入主机/probe）。
 
 type matrixRow struct {
-	addr        string
-	publicOnly  bool
-	allowOff    bool // PolicyAllowPrivate, allowPrivate=false
-	allowOn     bool // PolicyAllowPrivate, allowPrivate=true
-	hardOnly    bool // PolicyHardDenyOnly
-	hardOrLoop  bool // PolicyHardDenyOrLoopback
+	addr       string
+	publicOnly bool
+	allowOff   bool // PolicyAllowPrivate, allowPrivate=false
+	allowOn    bool // PolicyAllowPrivate, allowPrivate=true
+	hardOnly   bool // PolicyHardDenyOnly
+	hardOrLoop bool // PolicyHardDenyOrLoopback
 }
 
 // 连带断言调整（R3 批1单独登记）：R3X-010 使 PolicyHardDenyOrLoopback
@@ -90,10 +90,10 @@ func TestNetguardMatrix(t *testing.T) {
 	for _, row := range matrix {
 		a := netip.MustParseAddr(row.addr)
 		checks := []struct {
-			name    string
-			policy  Policy
-			allow   bool
-			want    bool
+			name   string
+			policy Policy
+			allow  bool
+			want   bool
 		}{
 			{"PublicOnly", PolicyPublicOnly, false, row.publicOnly},
 			{"AllowPrivate/off", PolicyAllowPrivate, false, row.allowOff},

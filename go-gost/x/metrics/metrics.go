@@ -29,7 +29,7 @@ const (
 
 var (
 	defaultMetrics metrics.Metrics = NewMetrics()
-	enabled atomic.Bool
+	enabled        atomic.Bool
 )
 
 func Enable(b bool) {

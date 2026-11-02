@@ -32,8 +32,8 @@ func TestR2B1ParseImportLoopbackAliasesRejected(t *testing.T) {
 func TestR2B1ValidateImportHostHardDenyLiterals(t *testing.T) {
 	for _, host := range []string{
 		"169.254.169.254", "169.254.0.23", "169.254.1.1", // 169.254/16 整段硬拒（R2X-043/026 口径）
-		"100.100.100.200",   // 阿里云元数据精确集
-		"fd00:ec2::254",     // EC2 IPv6 元数据精确集
+		"100.100.100.200",        // 阿里云元数据精确集
+		"fd00:ec2::254",          // EC2 IPv6 元数据精确集
 		"::ffff:169.254.169.254", // mapped 形态不得绕过
 		"64:ff9b::a9fe:a9fe",     // NAT64 内嵌元数据
 	} {

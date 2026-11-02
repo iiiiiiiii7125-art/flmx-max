@@ -11,14 +11,14 @@ import "testing"
 
 func TestFix2CAgentSupportsNoPrivateBypass(t *testing.T) {
 	cases := map[string]bool{
-		"1.3.4":  true,
-		"1.3.3":  false, // 1.3.3 为前端缓存紧急版，agent 未带内置 bypass
-		"1.3.2":  false,
-		"v1.3.4": true,
-		"1.4.0":  true,
-		"1.2.0":  false,
-		"":       false,
-		"dev":    false,
+		"1.3.4":   true,
+		"1.3.3":   false, // 1.3.3 为前端缓存紧急版，agent 未带内置 bypass
+		"1.3.2":   false,
+		"v1.3.4":  true,
+		"1.4.0":   true,
+		"1.2.0":   false,
+		"":        false,
+		"dev":     false,
 		"garbage": false,
 	}
 	for version, want := range cases {

@@ -44,15 +44,15 @@ func r7ProbeCall(t *testing.T) func(map[string]interface{}) (int, string) {
 func TestR7C02PanelProbeRejectsNonPublicSpeedtestURL(t *testing.T) {
 	call := r7ProbeCall(t)
 	for _, u := range []string{
-		"http://169.254.169.254/latest",          // metadata literal (hard deny)
-		"http://127.0.0.1:8080/file.bin",         // loopback
-		"http://10.0.0.5/file.bin",               // RFC1918
-		"http://192.168.1.10/file.bin",           // RFC1918
-		"http://example.com@169.254.169.254/f",   // userinfo masking, real host = metadata
-		"http://[64:ff9b::a9fe:a9fe]/f",          // NAT64-embedded metadata
-		"http://[2002:a9fe:a9fe::]/f",            // 6to4-embedded metadata
-		"http://[64:ff9b:1::1]/f",                // local NAT64 segment
-		"https://0.0.0.0/f",                      // unspecified
+		"http://169.254.169.254/latest",        // metadata literal (hard deny)
+		"http://127.0.0.1:8080/file.bin",       // loopback
+		"http://10.0.0.5/file.bin",             // RFC1918
+		"http://192.168.1.10/file.bin",         // RFC1918
+		"http://example.com@169.254.169.254/f", // userinfo masking, real host = metadata
+		"http://[64:ff9b::a9fe:a9fe]/f",        // NAT64-embedded metadata
+		"http://[2002:a9fe:a9fe::]/f",          // 6to4-embedded metadata
+		"http://[64:ff9b:1::1]/f",              // local NAT64 segment
+		"https://0.0.0.0/f",                    // unspecified
 	} {
 		code, msg := call(map[string]interface{}{"speedtestURL": u})
 		if code == 0 || !strings.Contains(msg, "已拒绝") {

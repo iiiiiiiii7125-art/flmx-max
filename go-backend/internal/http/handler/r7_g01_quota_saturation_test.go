@@ -39,7 +39,7 @@ func TestR7G01QuotaPredicateWrapValues(t *testing.T) {
 		// Largest non-wrapping limit keeps exact semantics.
 		{"daily 2^33-1 GB zero usage", &model.UserQuotaView{DailyLimitGB: (1 << 33) - 1, DailyUsedBytes: 0}, false},
 		{"daily 2^33-1 GB exact usage", &model.UserQuotaView{DailyLimitGB: (1 << 33) - 1, DailyUsedBytes: ((1 << 33) - 1) * gb}, true},
-		{"daily 2^33-1 GB one byte below", &model.UserQuotaView{DailyLimitGB: (1 << 33) - 1, DailyUsedBytes: ((1 << 33) - 1) * gb - 1}, false},
+		{"daily 2^33-1 GB one byte below", &model.UserQuotaView{DailyLimitGB: (1 << 33) - 1, DailyUsedBytes: ((1<<33)-1)*gb - 1}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -23,7 +23,7 @@ func NewAESCrypto(secret string) (*AESCrypto, error) {
 
 	// 使用 SHA256 将密码转换为 32 字节密钥
 	hash := sha256.Sum256([]byte(secret))
-	
+
 	return &AESCrypto{
 		key: hash[:],
 	}, nil
@@ -121,4 +121,4 @@ func (a *AESCrypto) DecryptString(encryptedData string) (string, error) {
 		return "", err
 	}
 	return string(plaintext), nil
-} 
+}

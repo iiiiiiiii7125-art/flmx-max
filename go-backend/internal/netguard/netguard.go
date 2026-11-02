@@ -52,15 +52,15 @@ func (c Class) String() string {
 
 // Result 是一次分类的完整结论。
 type Result struct {
-	Input      netip.Addr // 原始输入
-	Normalized netip.Addr // Unmap 后的输入（翻译前）
-	Effective  netip.Addr // 判定口径地址：翻译地址为其内嵌 IPv4，其余同 Normalized
-	Translated bool       // 是否经 NAT64 /96 或 6to4 提取
-	Translation string    // "nat64" / "6to4" / ""（本地 NAT64 不提取，见 LocalNAT64）
-	LocalNAT64 bool       // 命中 64:ff9b:1::/48 本地 NAT64 前缀（整段 NonPublic）
-	HardDeny   bool       // 硬拒层命中（永在任何放行判定之前）
-	HardReason string     // "metadata" / "link_local_segment" / "unspecified" / "nat64_local" / "invalid"
-	Class      Class      // Effective 的分类（LocalNAT64 时为 ClassReserved）
+	Input       netip.Addr // 原始输入
+	Normalized  netip.Addr // Unmap 后的输入（翻译前）
+	Effective   netip.Addr // 判定口径地址：翻译地址为其内嵌 IPv4，其余同 Normalized
+	Translated  bool       // 是否经 NAT64 /96 或 6to4 提取
+	Translation string     // "nat64" / "6to4" / ""（本地 NAT64 不提取，见 LocalNAT64）
+	LocalNAT64  bool       // 命中 64:ff9b:1::/48 本地 NAT64 前缀（整段 NonPublic）
+	HardDeny    bool       // 硬拒层命中（永在任何放行判定之前）
+	HardReason  string     // "metadata" / "link_local_segment" / "unspecified" / "nat64_local" / "invalid"
+	Class       Class      // Effective 的分类（LocalNAT64 时为 ClassReserved）
 }
 
 // IsPublic 报告该地址是否为（内嵌）公网地址。

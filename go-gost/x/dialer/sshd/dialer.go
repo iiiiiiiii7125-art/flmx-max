@@ -3,9 +3,9 @@ package sshd
 import (
 	"context"
 	"net"
+	"os"
 	"sync"
 	"time"
-	"os"
 
 	"github.com/go-gost/core/dialer"
 	md "github.com/go-gost/core/metadata"

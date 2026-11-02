@@ -305,17 +305,17 @@ func connectR4B6FailingServiceAgent(t *testing.T, ts *httptest.Server, secret st
 }
 
 type r4b6UTScenario struct {
-	h         *Handler
-	repo      *repo.Repository
-	server    *ws.Server
-	tunnelID  int64
-	nodeAID   int64
-	nodeBID   int64
-	forward1  int64
-	forward2  int64
-	nodeARC   *r1b3CommandRecorder
-	speedOld  int64
-	speedNew  int64
+	h        *Handler
+	repo     *repo.Repository
+	server   *ws.Server
+	tunnelID int64
+	nodeAID  int64
+	nodeBID  int64
+	forward1 int64
+	forward2 int64
+	nodeARC  *r1b3CommandRecorder
+	speedOld int64
+	speedNew int64
 }
 
 // setupR4B6UTScenario：type-1 隧道双入口（A/B）；user 1 的两条转发

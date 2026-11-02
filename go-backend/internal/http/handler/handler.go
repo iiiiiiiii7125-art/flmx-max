@@ -76,8 +76,8 @@ type Handler struct {
 	// 面同口径，见 flow_auth_fail_limit.go）；惰性初始化。
 	flowAuthFailMu sync.Mutex
 	flowAuthFail   *flowAuthFailLimiter
-	passkeyMu            sync.Mutex
-	passkeyPending       map[string]passkeyCeremony
+	passkeyMu      sync.Mutex
+	passkeyPending map[string]passkeyCeremony
 
 	jobsMu      sync.Mutex
 	jobsCtx     context.Context

@@ -1052,10 +1052,10 @@ func TestAuthPeerAllowedIPs(t *testing.T) {
 	now := time.Now().UnixMilli()
 
 	tests := []struct {
-		name        string
-		allowedIPs  string
-		remoteAddr  string
-		xff         string
+		name       string
+		allowedIPs string
+		remoteAddr string
+		xff        string
 		// R5-B2 D5: 联邦默认只用 RemoteAddr；仅显式配置可信代理 CIDR 才采信 XFF
 		trustedProxiesEnv string
 		wantAllowed       bool

@@ -13,8 +13,8 @@ import (
 )
 
 type metadata struct {
-	readTimeout            time.Duration
-	hash                   string
+	readTimeout time.Duration
+	hash        string
 
 	observerPeriod       time.Duration
 	observerResetTraffic bool
