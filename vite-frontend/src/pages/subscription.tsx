@@ -1,4 +1,5 @@
 import type {
+  NodeGroupItem,
   RemoteSourceItem,
   SubPipeline,
   SubPreviewItem,
@@ -10,15 +11,17 @@ import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { ChevronDown, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Copy } from "lucide-react";
 
 import SubscriptionAssignSection from "./subscription/assign";
+import NodeGroupsSection from "./subscription/node-groups";
 
 import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import {
   deleteSubscription,
   getInboundList,
   getInboundRelays,
+  getNodeGroups,
   getRemoteSources,
   getSubscriptions,
   previewSubscription,
@@ -94,6 +97,7 @@ const EMPTY_PIPELINE: SubPipeline = {
   script: "",
   /** 中转范围：端点 ID（0=直连，>0=中转 ID）；空 = 全部端点。 */
   relayIds: [],
+  infoNodes: false,
 };
 
 function toDateInput(ms: number): string {
@@ -316,6 +320,7 @@ function draftFrom(
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
+      groupIds: [],
       // Sources marked with a 用途 set up the chain by default: relay
       // sources relay, landing sources and the own nodes are the exits.
       options: {
@@ -341,6 +346,7 @@ function draftFrom(
     sourceAll: s.sourceAll,
     inboundIds: s.inboundIds,
     sourceIds: s.sourceIds ?? [],
+    groupIds: s.groupIds ?? [],
     options: {
       ...EMPTY_PIPELINE,
       ...s.options,
@@ -415,6 +421,7 @@ function Editor({
   setDraft,
   inbounds,
   sources,
+  groups,
   regions,
   ruleGroups,
   saving,
@@ -425,6 +432,7 @@ function Editor({
   setDraft: (d: Draft) => void;
   inbounds: InboundApiItem[];
   sources: RemoteSourceItem[];
+  groups: NodeGroupItem[];
   regions: string[];
   ruleGroups: SubRuleGroup[];
   saving: boolean;
@@ -784,6 +792,90 @@ function Editor({
 
         <Section
           collapsible
+          defaultOpen={draft.groupIds.length > 0}
+          hint="节点组是存在「节点组」页里的共用规则：组内节点按勾选顺序拼在上面来源的节点前面，多个订阅可以共用同一组"
+          summary={
+            draft.groupIds.length
+              ? `已选 ${draft.groupIds.length} 个组`
+              : "未引用"
+          }
+          title="节点组"
+        >
+          {groups.length === 0 ? (
+            <p className="text-xs font-semibold text-foreground">
+              还没有节点组。先到「节点组」页建好，再回来勾选引用。
+            </p>
+          ) : (
+            <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-divider p-2">
+              {groups.map((g) => {
+                const at = draft.groupIds.indexOf(g.id);
+                const picked = at >= 0;
+
+                return (
+                  <div
+                    key={g.id}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <Checkbox
+                      className="min-w-0"
+                      isSelected={picked}
+                      onValueChange={(on) =>
+                        set({
+                          groupIds: on
+                            ? [...draft.groupIds, g.id]
+                            : draft.groupIds.filter((x) => x !== g.id),
+                        })
+                      }
+                    >
+                      <span className="text-sm">{g.name}</span>
+                      <span className="ml-1 text-xs font-semibold text-foreground">
+                        {g.nodeCount} 个节点
+                        {picked && ` · 第 ${at + 1} 个`}
+                      </span>
+                    </Checkbox>
+                    {picked && (
+                      <span className="flex shrink-0 gap-1">
+                        <Button
+                          isIconOnly
+                          aria-label="上移"
+                          isDisabled={at === 0}
+                          size="sm"
+                          variant="flat"
+                          onPress={() => {
+                            const next = [...draft.groupIds];
+
+                            [next[at - 1], next[at]] = [next[at], next[at - 1]];
+                            set({ groupIds: next });
+                          }}
+                        >
+                          <ArrowUp size={14} />
+                        </Button>
+                        <Button
+                          isIconOnly
+                          aria-label="下移"
+                          isDisabled={at === draft.groupIds.length - 1}
+                          size="sm"
+                          variant="flat"
+                          onPress={() => {
+                            const next = [...draft.groupIds];
+
+                            [next[at], next[at + 1]] = [next[at + 1], next[at]];
+                            set({ groupIds: next });
+                          }}
+                        >
+                          <ArrowDown size={14} />
+                        </Button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Section>
+
+        <Section
+          collapsible
           defaultOpen={o.relayIds.length > 0}
           hint="默认包含所选落地的全部端点（直连 + 所有中转）；开始勾选后只保留选中的端点，与旧的按中转分配粒度一致"
           summary={
@@ -950,6 +1042,13 @@ function Editor({
             label="按地区分组"
             value={o.regionGroups}
             onChange={(regionGroups) => setOpts({ regionGroups })}
+          />
+          <ToggleRow
+            hint="在节点列表最前面加占位节点显示到期日与剩余流量，给不显示订阅信息的客户端看"
+            id="sub-info-nodes"
+            label="显示到期与流量节点"
+            value={o.infoNodes}
+            onChange={(infoNodes) => setOpts({ infoNodes })}
           />
         </Section>
 
@@ -1190,7 +1289,8 @@ function Editor({
 
 export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"manage" | "assign">("manage");
+  const [tab, setTab] = useState<"manage" | "assign" | "groups">("manage");
+  const [groups, setGroups] = useState<NodeGroupItem[]>([]);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   // 移植自 kure29/flyx：订阅规则组（后端下发）。
@@ -1210,13 +1310,15 @@ export default function SubscriptionPage() {
 
   const load = useCallback(async () => {
     try {
-      const [subRes, inRes, srcRes] = await Promise.all([
+      const [subRes, inRes, srcRes, grpRes] = await Promise.all([
         getSubscriptions(),
         getInboundList(),
         getRemoteSources(),
+        getNodeGroups(),
       ]);
 
       if (srcRes.code === 0) setSources(srcRes.data ?? []);
+      if (grpRes.code === 0 && grpRes.data) setGroups(grpRes.data.items ?? []);
 
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
@@ -1456,11 +1558,12 @@ export default function SubscriptionPage() {
       </div>
 
       {/* 订阅管理 / 订阅分配 Tab */}
-      <div className="glass-surface grid grid-cols-2 gap-1 rounded-xl p-1">
+      <div className="glass-surface grid grid-cols-3 gap-1 rounded-xl p-1">
         {(
           [
             { key: "manage", label: "订阅管理" },
             { key: "assign", label: "订阅分配" },
+            { key: "groups", label: "节点组" },
           ] as const
         ).map((t) => (
           <button
@@ -1488,6 +1591,15 @@ export default function SubscriptionPage() {
       )}
 
       {tab === "assign" ? <SubscriptionAssignSection /> : <></>}
+      {tab === "groups" && (
+        <NodeGroupsSection
+          groups={groups}
+          inbounds={inbounds}
+          regions={regions}
+          sources={sources}
+          onChanged={load}
+        />
+      )}
       {tab === "manage" && (
         <>
           {inbounds.length === 0 && (
@@ -1672,6 +1784,7 @@ export default function SubscriptionPage() {
             draft && (
               <Editor
                 draft={draft}
+                groups={groups}
                 inbounds={inbounds}
                 regions={regions}
                 ruleGroups={ruleGroups}
