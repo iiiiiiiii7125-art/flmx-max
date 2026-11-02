@@ -230,6 +230,21 @@ func (r *Repository) ListUserQuotaViewsByUserIDs(userIDs []int64, now time.Time)
 	return out, nil
 }
 
+// ListUserQuotaUserIDs returns the IDs of every user carrying a
+// user_quota row — the population the periodic quota-enforcement
+// reconcile sweeps. Rows are created on first accounting or config
+// write, so users without any quota state are not listed.
+func (r *Repository) ListUserQuotaUserIDs() ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	if err := r.db.Model(&model.UserQuota{}).Pluck("user_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (r *Repository) GetUserQuotaView(userID int64, now time.Time) (*model.UserQuotaView, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
