@@ -1930,8 +1930,17 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
 	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
 	// 在 flap 窗口内误报。
-	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi",
-		logPath, healthFn, stop, backupPath, binaryPath, start), nil
+	// FRM3: the copy itself is guarded, same caliber as the F-RM-01
+	// upgrade swap. The handler stats the backup before launching,
+	// but the script copies seconds later (after sleep + service
+	// stop); an unchecked cp let a vanished or unreadable backup
+	// flow into the health check on the CURRENT binary and log
+	// 'rollback restart ok' — a false success for a rollback that
+	// never happened. On copy failure the script restarts the
+	// current binary and logs the failure by name; 'rollback
+	// restart ok' is only reachable past a successful cp.
+	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; if cp %s %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be copied into place, keeping current version'; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
+		logPath, healthFn, stop, backupPath, binaryPath, start, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
