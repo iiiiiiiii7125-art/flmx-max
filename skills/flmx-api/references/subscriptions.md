@@ -61,6 +61,61 @@ Trigger an immediate sync of a source.
 
 Delete a source.
 
+## POST /api/v1/subscription/group/list
+
+List node groups. A group is a reusable, named node selection plus processing
+pipeline (same source and Options shape as a subscription); subscriptions
+reference groups in order and splice their processed nodes into the rendered
+list, so one recipe can be shared by many subscriptions.
+
+## POST /api/v1/subscription/group/save
+
+Create or update a node group. Saving re-pushes credentials for every
+subscription that references the group.
+
+## POST /api/v1/subscription/group/delete
+
+Delete a node group. Referencing subscriptions keep the (now dangling) id and
+render without the group; credentials on the group's inbounds are withdrawn.
+
+## POST /api/v1/subscription/group/order
+
+Set the display order of node groups.
+
+## POST /api/v1/subscription/group/preview
+
+Preview a group's processed node list without saving.
+
+## POST /api/v1/subscription/template/list
+
+List subscription templates: admin-supplied Mihomo / sing-box / Surge profile
+skeletons that subscriptions render their nodes into instead of the built-in
+profile for that client format.
+
+## POST /api/v1/subscription/template/catalog
+
+List the built-in rule-category catalog offered by the visual template builder.
+
+## POST /api/v1/subscription/template/check
+
+Validate a template draft without saving. A draft carrying a source URL is
+downloaded for validation.
+
+## POST /api/v1/subscription/template/save
+
+Create or update a template (raw content, visual-builder config, or a source
+URL that is downloaded on save and refreshed daily; a failed refresh keeps the
+last good content).
+
+## POST /api/v1/subscription/template/refresh
+
+Re-download a URL-sourced template immediately.
+
+## POST /api/v1/subscription/template/delete
+
+Delete a template. Subscriptions referencing it fall back to the built-in
+profile for that format.
+
 ## POST /api/v1/user-subscription/list
 
 List per-subscription user assignments (admin). This is the current (1.0.12+)

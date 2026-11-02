@@ -520,6 +520,7 @@ func (h *Handler) nodeGroupSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
+	extendWriteDeadline(w, kernelApplyWriteDeadline)
 	id := idFromBody(r, w)
 	if id <= 0 {
 		return
