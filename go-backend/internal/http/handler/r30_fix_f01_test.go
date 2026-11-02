@@ -142,11 +142,15 @@ func TestR30FixF01ForwardCreateStripsBracketedV6InIP(t *testing.T) {
 func TestR30FixF01ForwardUpdateStripsPortedInIP(t *testing.T) {
 	fx := setupR30FixF01(t, "198.51.100.77")
 	id := fx.createForward(t, "r30-f01-upd", "198.51.100.77", 30001)
+	// R2-005 / L4-01（2026-11-03 拍板）：入口端口创建后不可变更，
+	// 本用例原以 inPort=30002 改口成功钉 intake 剥离——改口路径已
+	// 锁死，现以同值 inPort=30001 提交钉同一 intake 行为；改口拒绝
+	// 由 fix2_tunnellock_r2005_test.go 钉死。
 	res := httptest.NewRecorder()
 	fx.h.forwardUpdate(res, newAuthenticatedJSONRequest(t, map[string]interface{}{
 		"id":       id,
 		"tunnelId": fx.tunnelID,
-		"inPort":   30002,
+		"inPort":   30001,
 		"inIp":     "198.51.100.77:8443",
 	}))
 	var out struct {
@@ -162,7 +166,7 @@ func TestR30FixF01ForwardUpdateStripsPortedInIP(t *testing.T) {
 	if got := fx.storedInIP(t, id); got != "198.51.100.77" {
 		t.Errorf("CELL-B forward_port.in_ip = %q, want %q (ported inIp stored verbatim via forwardUpdate)", got, "198.51.100.77")
 	}
-	fx.checkDownstreamAddrs(t, id, 30002, "198.51.100.77:30002")
+	fx.checkDownstreamAddrs(t, id, 30001, "198.51.100.77:30001")
 }
 
 func TestR30FixF01ForwardCreateStripsExtraIPsPortedInIP(t *testing.T) {
