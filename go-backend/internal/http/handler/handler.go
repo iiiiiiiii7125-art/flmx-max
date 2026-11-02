@@ -543,6 +543,17 @@ func tokenIssueTime(passwordChangedAt int64) time.Time {
 	return now
 }
 
+// respondInternalError 是未鉴权可达面的内部错误统一出口
+// （R2-021，与联邦面 O12-001 同口径）：原始错误只记服务端日志，
+// 调用方只见通用文案——仓储/DB 错误原文（SQLite 锁与表结构、
+// PG 的 SQL 片段）不得回给尚未通过任何鉴权的调用方。未鉴权面
+// 禁止 err.Error() 直出的回归门见 middleware 包
+// TestUnauthenticatedRawErrorGate。
+func respondInternalError(w http.ResponseWriter, op string, err error) {
+	log.Printf("%s: %v", op, err)
+	response.WriteJSON(w, response.Err(-2, "Internal error"))
+}
+
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -579,7 +590,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 	captchaEnabled, err := h.captchaEnabled()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "login: captchaEnabled failed", err)
 		return
 	}
 	// R5-B2 D2: 已删除 X-FLVX-API-Client 自声明头旁路；验证码开启时无例外。
@@ -606,7 +617,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetUserByUsername(req.Username)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "login: GetUserByUsername failed", err)
 		return
 	}
 	if user == nil {
@@ -659,7 +670,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		token, err = auth.GenerateTokenAt(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
 	}
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "login: GenerateToken failed", err)
 		return
 	}
 
@@ -770,7 +781,7 @@ func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := h.repo.GetConfigByName(configName)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "getConfigByName: GetConfigByName failed", err)
 		return
 	}
 	if cfg == nil {
@@ -1054,7 +1065,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetUserByUsername(username)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "sub_store: GetUserByUsername failed", err)
 		return
 	}
 	if user == nil {
@@ -1121,7 +1132,7 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 
 		ut, err := h.repo.GetUserTunnelByID(tunnelID)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "sub_store: GetUserTunnelByID failed", err)
 			return
 		}
 		if ut == nil {
@@ -1290,7 +1301,7 @@ func (h *Handler) checkCaptcha(w http.ResponseWriter, r *http.Request) {
 
 	enabled, err := h.captchaEnabled()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "checkCaptcha: captchaEnabled failed", err)
 		return
 	}
 	if enabled {
@@ -1326,7 +1337,7 @@ func (h *Handler) captchaVerify(w http.ResponseWriter, r *http.Request) {
 
 	secretCfg, err := h.repo.GetConfigByName("cloudflare_secret_key")
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "captchaVerify: GetConfigByName failed", err)
 		return
 	}
 	if secretCfg == nil || strings.TrimSpace(secretCfg.Value) == "" {

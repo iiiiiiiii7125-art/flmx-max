@@ -33,7 +33,9 @@ func (h *Handler) getPublicConfigByName(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg, err := h.repo.GetConfigByName(configName)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-021：本面完全公开，仓储错误原文不得直出（与 login 等
+		// 未鉴权面同口径，原始错误只记日志）。
+		respondInternalError(w, "getPublicConfigByName: GetConfigByName failed", err)
 		return
 	}
 	if cfg == nil {
