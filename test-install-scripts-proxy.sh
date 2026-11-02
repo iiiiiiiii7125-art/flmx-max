@@ -616,7 +616,21 @@ EOF
   SECRET="secret"
   DOWNLOAD_URL="https://example.com/gost"
 
-  local cleanup_called="0"
+  # BD-01＋B2-07：本用例自基线起被双层遮蔽、对所命名的机制零判
+  # 别力——① 旧夹具只有二进制、无 config，归属守卫先行拒绝，名
+  # 义路径（下载失败保 legacy gost）从未进入，三断言由拒绝路径
+  # 同形满足；② cleanup 桩把标记赋给变量、而调用在子 shell 内，
+  # 赋值必然丢失，断言结构性不可红。现夹具补自家 config.json
+  # （addr 与 SERVER_ADDR 相同，守卫正当放行——与 update 孪生用
+  # 例的 TAKEOVER 声明同为「操作者已确认归属」口径），桩一律写
+  # 标记文件、断言读文件。install_flux_agent 的失败路径用 exit
+  # 而非 return，调用仍须留在子 shell 内，标记文件是唯一能穿出
+  # 子 shell 的观测面；curl 标记兼作「名义路径确已到达下载步」
+  # 的正向证据（守卫拒绝时 curl 调用恒为 0 次）。
+  cat > "$INSTALL_DIR/config.json" <<'EOF'
+{"addr": "panel.example.com:443", "secret": "secret"}
+EOF
+
   local rc="0"
 
   ask_proxy_config() { :; }
@@ -624,15 +638,16 @@ EOF
   get_config_params() { :; }
   check_and_install_tcpkill() { :; }
   cleanup_legacy_gost_installation() {
-    cleanup_called="1"
+    touch "$INSTALL_DIR/.cleanup_called"
   }
   systemctl() { return 0; }
-  curl() { return 0; }
+  curl() { echo call >> "$INSTALL_DIR/.curl_calls"; return 0; }
 
   ( install_flux_agent >/dev/null ) || rc="$?"
 
   assert_equals "1" "$rc" "install_flux_agent should fail when the download artifact is missing"
-  assert_equals "0" "$cleanup_called" "install_flux_agent should preserve legacy gost when download fails"
+  [[ -f "$INSTALL_DIR/.curl_calls" ]] || fail "install_flux_agent should reach the download step with its own config (guard pass), not exit at the ownership guard"
+  [[ ! -e "$INSTALL_DIR/.cleanup_called" ]] || fail "install_flux_agent should preserve legacy gost when download fails"
   [[ -f "$INSTALL_DIR/flux_agent" ]] || fail "install_flux_agent should keep the existing flux_agent binary when download fails"
 )
 
@@ -4103,6 +4118,60 @@ FLMX_INSTANCE=b2' '-')
   d=$(mk_fixture '-' '-')
   assert_equals "1" "$(foreign_rc "$d")" "empty dir must not be foreign"
   assert_equals "1" "$(ours_rc "$d")" "empty dir must not be ours"
+  # M1 他人 backend＋工具服务借用我方 agent 镜像：镜像证据只认
+  # backend 段，附属服务的命中不判自家、他人 backend 判他人
+  FIXTURE_CONTAINER_IMAGE=''
+  d=$(mk_fixture '-' 'services:
+  backend:
+    image: ghcr.io/other-owner/other-panel-backend:v-test
+  tools:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-agent:v-test')
+  assert_equals "1" "$(ours_rc "$d")" "B2-02: a sidecar using our agent image must not prove ownership of a foreign backend"
+  assert_equals "0" "$(foreign_rc "$d")" "B2-02: a foreign backend must be foreign even when a sidecar uses our image"
+  # M2 他人 backend＋我方 frontend 镜像：同口径
+  d=$(mk_fixture '-' 'services:
+  backend:
+    image: ghcr.io/other-owner/other-panel-backend:v-test
+  frontend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test')
+  assert_equals "1" "$(ours_rc "$d")" "B2-02: our frontend image must not prove ownership of a foreign backend"
+  assert_equals "0" "$(foreign_rc "$d")" "B2-02: foreign backend + our frontend image must be foreign"
+  # M3 自家 backend＋他人 frontend：backend 段命中即判自家
+  d=$(mk_fixture '-' 'services:
+  backend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test
+  frontend:
+    image: ghcr.io/other-owner/other-frontend:v-test')
+  assert_equals "0" "$(ours_rc "$d")" "B2-02: our backend image must prove ownership regardless of other services"
+  assert_equals "1" "$(foreign_rc "$d")" "B2-02: our backend image must not be foreign"
+  # M4 名为 backend-tools 的服务不是 backend 段
+  d=$(mk_fixture '-' 'services:
+  backend:
+    image: ghcr.io/other-owner/other-panel-backend:v-test
+  backend-tools:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test')
+  assert_equals "1" "$(ours_rc "$d")" "B2-02: a service named backend-tools is not the backend segment"
+  assert_equals "0" "$(foreign_rc "$d")" "B2-02: backend-tools using our backend image must not erase foreignness"
+  # M5 backend 段 image 带引号与行尾注释：仍按段口径正确提取
+  d=$(mk_fixture '-' 'services:
+  backend:
+    image: "ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test" # pinned
+  frontend:
+    image: ghcr.io/other-owner/other-frontend:v-test')
+  assert_equals "0" "$(ours_rc "$d")" "B2-02: a quoted backend image with a trailing comment must be parsed"
+  # N 专属名证据（证据 3）的派生后缀必须合法：空后缀/非法字符/
+  # 超 32 的名字任何安装都不可能产生，不作归属证据（B2-03）
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flmx-panel-backend-' '-')
+  assert_equals "1" "$(ours_rc "$d")" "B2-03: an empty instance suffix must not prove ownership"
+  d=$(mk_fixture 'PANEL_BACKEND_CONTAINER=flmx-panel-backend-Bad_Id' '-')
+  assert_equals "1" "$(ours_rc "$d")" "B2-03: an invalid-char instance suffix must not prove ownership"
+  local a40n a32n
+  a40n=$(printf 'a%.0s' $(seq 1 40))
+  d=$(mk_fixture "PANEL_BACKEND_CONTAINER=flmx-panel-backend-$a40n" '-')
+  assert_equals "1" "$(ours_rc "$d")" "B2-03: an over-32 instance suffix must not prove ownership"
+  a32n=$(printf 'a%.0s' $(seq 1 32))
+  d=$(mk_fixture "PANEL_BACKEND_CONTAINER=flmx-panel-backend-$a32n" '-')
+  assert_equals "0" "$(ours_rc "$d")" "B2-03: a 32-char instance suffix must still prove ownership"
 )
 
 # AI-01: resolve（update/uninstall 共用入口）对他方部署必须在守卫处
@@ -4463,6 +4532,133 @@ test_panel_instance_contract_matches_backend_whitelist() (
     fail "instance contract: the v6 compose template must pass FLMX_INSTANCE to the backend"
 )
 
+# B2-03：实例 id 的读路径必须过契约白名单——.env/环境变量里的非
+# 法值（非法字符、超 32）不得被带进派生名，按后端 validPanel-
+# InstanceID 的回退口径视为空（默认实例）并告警；合法值原样读
+# 回。install 入口对环境变量形态的硬拒绝不变（由
+# test_panel_instance_identity_naming 钉住）。
+test_panel_instance_id_read_path_validates() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+
+  printf 'FLMX_INSTANCE=east\n' > "$dir/.env"
+  assert_equals "east" "$( ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" panel_instance_id ) 2>/dev/null )" \
+    "B2-03: a valid instance id from .env must be read back"
+  assert_equals "-east" "$( ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" panel_instance_suffix ) 2>/dev/null )" \
+    "B2-03: a valid instance id must derive its suffix"
+
+  printf 'FLMX_INSTANCE=Bad Id!\n' > "$dir/.env"
+  assert_equals "" "$( ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" panel_instance_id ) 2>/dev/null )" \
+    "B2-03: an invalid instance id from .env must fall back to the default instance"
+  assert_equals "" "$( ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" panel_instance_suffix ) 2>/dev/null )" \
+    "B2-03: an invalid instance id must not derive a suffix"
+  ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" panel_instance_id >/dev/null 2>"$dir/warn" )
+  grep -q "不合法" "$dir/warn" || fail "B2-03: an invalid instance id must warn on the read path"
+
+  local a40
+  a40=$(printf 'a%.0s' $(seq 1 40))
+  printf 'FLMX_INSTANCE=%s\n' "$a40" > "$dir/.env"
+  assert_equals "" "$( ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" panel_instance_id ) 2>/dev/null )" \
+    "B2-03: an over-32 instance id from .env must fall back to the default instance"
+
+  assert_equals "" "$(FLMX_INSTANCE='East' PANEL_DEPLOY_DIR="$dir" panel_instance_id 2>/dev/null)" \
+    "B2-03: an invalid instance id from the environment must fall back to the default instance on read paths"
+  assert_equals "east" "$(FLMX_INSTANCE='east' PANEL_DEPLOY_DIR="$dir" panel_instance_id 2>/dev/null)" \
+    "B2-03: a valid instance id from the environment must be read back"
+)
+
+# B2-04：同机多实例时，无实例上下文的 detect 探到默认实例、却另
+# 有实例派生名后端存在，必须像双名冲突一样报错要求显式指定，不
+# 得静默定位默认实例；默认实例单独存在、只有实例存在、显式实例
+# 上下文、.env 已声明容器名、非法后缀仿冒名五景行为不变。
+test_panel_detect_refuses_multi_instance_ambiguity() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER COMPOSE_PROJECT_NAME
+  FIXTURE_NAMES=""
+  docker() {
+    case "$1" in
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case " $FIXTURE_NAMES " in *" $4 "*) printf 'ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n'; return 0 ;; *) return 1 ;; esac
+        fi
+        case " $FIXTURE_NAMES " in *" $2 "*) return 0 ;; *) return 1 ;; esac
+        ;;
+      ps) printf '%s\n' $FIXTURE_NAMES ;;
+      *) return 0 ;;
+    esac
+  }
+
+  local dir rc out
+  dir=$(mktemp -d)
+
+  FIXTURE_NAMES="flmx-panel-backend flmx-panel-backend-east"
+  rc="0"; out=$( cd "$dir" && ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" detect_panel_backend_container ) 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "B2-04: detect must refuse when a default and an instance backend coexist without context"
+  [[ "$out" == *"FLMX_INSTANCE"* ]] || fail "B2-04: the ambiguity refusal must name the explicit-selection escape hatch"
+
+  FIXTURE_NAMES="flmx-panel-backend"
+  out=$( cd "$dir" && ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" detect_panel_backend_container ) 2>/dev/null )
+  assert_equals "flmx-panel-backend" "$out" "B2-04: a lone default instance must still be detected"
+
+  FIXTURE_NAMES="flmx-panel-backend-east"
+  out=$( cd "$dir" && ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" detect_panel_backend_container ) 2>/dev/null )
+  assert_equals "flmx-panel-backend" "$out" "B2-04: an instance-only host must not be reported as ambiguous"
+
+  FIXTURE_NAMES="flmx-panel-backend flmx-panel-backend-east"
+  out=$( cd "$dir" && FLMX_INSTANCE=east PANEL_DEPLOY_DIR="$dir" detect_panel_backend_container 2>/dev/null )
+  assert_equals "flmx-panel-backend-east" "$out" "B2-04: an explicit instance context must probe its own backend"
+
+  printf 'PANEL_BACKEND_CONTAINER=flmx-panel-backend\n' > "$dir/.env"
+  out=$( cd "$dir" && ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" detect_panel_backend_container ) 2>/dev/null )
+  assert_equals "flmx-panel-backend" "$out" "B2-04: a declared backend container must win without ambiguity checks"
+
+  rm -f "$dir/.env"
+  FIXTURE_NAMES="flmx-panel-backend flmx-panel-backend-Bad_Id"
+  out=$( cd "$dir" && ( unset FLMX_INSTANCE; PANEL_DEPLOY_DIR="$dir" detect_panel_backend_container ) 2>/dev/null )
+  assert_equals "flmx-panel-backend" "$out" "B2-04: an invalid-suffix lookalike must not count as an instance"
+)
+
+# B2-05：DB_TYPE 的别名与大小写必须与后端接受集同口径——后端
+# TrimSpace＋ToLower 后接受 sqlite/postgres/postgresql（空＝
+# sqlite），脚本的 get_current_db_type 与更新校验曾只认原样小写
+# sqlite/postgres，按 postgresql.md 填 postgresql 的手工 PG 部
+# 署被脚本更新直接拒绝。不支持的值仍须拒绝。
+test_panel_db_type_aliases_match_backend() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  cd "$dir"
+  printf 'services: {}\n' > docker-compose.yml
+  DOCKER_CMD="true"
+
+  local v
+  for v in postgresql Postgres POSTGRES PostgreSQL; do
+    printf 'DB_TYPE=%s\n' "$v" > .env
+    assert_equals "postgres" "$(get_current_db_type)" "B2-05: DB_TYPE=$v must be read as postgres like the backend does"
+  done
+  printf 'DB_TYPE=SQLite\n' > .env
+  assert_equals "sqlite" "$(get_current_db_type)" "B2-05: DB_TYPE case must not matter for sqlite either"
+  printf 'DB_TYPE=\n' > .env
+  assert_equals "sqlite" "$(get_current_db_type)" "B2-05: an empty DB_TYPE must stay sqlite"
+
+  validate_with_db_type() {
+    printf 'JWT_SECRET=x\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=%s\nDATABASE_URL=postgres://u:p@h/db\nPOSTGRES_PASSWORD=pw\n' "$1" > .env
+    local rc="0"
+    validate_panel_update_environment >/dev/null 2>&1 || rc="$?"
+    printf '%s' "$rc"
+  }
+  assert_equals "0" "$(validate_with_db_type postgresql)" "B2-05: update validation must accept the postgresql alias"
+  assert_equals "0" "$(validate_with_db_type Postgres)" "B2-05: update validation must accept case variants"
+  assert_equals "1" "$(validate_with_db_type mysql)" "B2-05: update validation must still reject unsupported DB_TYPE values"
+)
+
 # L2-12（R5-FD）：update_panel 必须走 VERSION > FLUX_VERSION >
 # PINNED_VERSION > latest 优先级链——旧实现只认 VERSION，FLUX_VERSION
 # /PINNED 定版被静默吞掉直升 latest（桩 latest=9.9.9 不得被选中），
@@ -4492,6 +4688,7 @@ test_panel_update_honors_version_priority_chain() (
   FLUX_VERSION="1.5.0"
   PINNED_VERSION=""
   update_panel >"$log" 2>&1 || fail "L2-12: update should succeed with FLUX_VERSION pinned"
+  grep -q "本次更新目标" "$log" || fail "B2-04: update must name its target deployment before mutating anything"
   assert_equals "1.5.0" "$LATEST_VERSION" "L2-12: FLUX_VERSION must win over latest"
   grep -q "FLUX_VERSION" "$log" || fail "L2-12: the pinned version source must be named in the output"
 
@@ -4551,6 +4748,7 @@ test_panel_uninstall_locates_deployment_and_cleans_artifacts() (
   [[ ! -e "$deploy_dir/gost.db.bak" ]] || fail "L2-14: gost.db.bak must be removed"
   [[ ! -e "$deploy_dir/.env.pre-postgres-migration" ]] || fail "L2-14: the PG migration snapshot must be removed"
   grep -q "卸载完成" "$other_dir/uninstall.log" || fail "L2-14: completion must be reported after real removal"
+  grep -q "部署目录：$deploy_dir" "$other_dir/uninstall.log" || fail "B2-04: the uninstall confirmation must name the deployment directory it is about to delete"
 
   printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
   printf 'JWT_SECRET=test\n' > "$deploy_dir/.env"
@@ -4726,6 +4924,9 @@ test_panel_install_guards_single_file_and_backups
 test_panel_uninstall_without_docker_respects_ownership
 test_panel_instance_identity_naming
 test_panel_instance_contract_matches_backend_whitelist
+test_panel_instance_id_read_path_validates
+test_panel_detect_refuses_multi_instance_ambiguity
+test_panel_db_type_aliases_match_backend
 test_panel_update_honors_version_priority_chain
 test_panel_uninstall_locates_deployment_and_cleans_artifacts
 test_panel_download_verified_uses_timeouts
