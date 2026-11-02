@@ -428,7 +428,7 @@ func TestInstallIntegrityRules(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "bin")
-			err := install(&tc.d, dir)
+			err := install(&tc.d, dir, nil)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("install: %v", err)

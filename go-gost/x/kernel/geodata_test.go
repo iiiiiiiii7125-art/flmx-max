@@ -43,7 +43,7 @@ func TestStageGeoFileFallsBackToDirectWhenMirrorFails(t *testing.T) {
 		URL:         mirror.URL + "/" + direct.URL + "/geosite.dat",
 		ChecksumURL: mirror.URL + "/" + direct.URL + "/geosite.dat.sha256sum",
 	}
-	changed, err := stageGeoFile(context.Background(), binDir, f, nil)
+	changed, err := stageGeoFile(context.Background(), binDir, f, nil, nil)
 	if err != nil {
 		t.Fatalf("镜像失败时应回退直连: %v", err)
 	}

@@ -212,7 +212,7 @@ func TestR3B4DeleteNodeChainDialerRefreshesWhitelist(t *testing.T) {
 		t.Fatalf("setup: initial allow must contain the chain dialer IP, got %v", initial)
 	}
 
-	if _, err := h.deleteNodeByID(chainNodeID); err != nil {
+	if _, _, err := h.deleteNodeByID(chainNodeID); err != nil {
 		t.Fatalf("deleteNodeByID failed: %v", err)
 	}
 	fresh := probe.newAllowsSince(baseline)

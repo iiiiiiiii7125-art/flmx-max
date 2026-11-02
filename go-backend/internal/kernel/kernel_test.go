@@ -73,16 +73,81 @@ func TestNormalizeRejectsUnsupportedCombos(t *testing.T) {
 	}
 }
 
-func TestNormalizeDropsVisionWhereUnsupported(t *testing.T) {
+// F-L3-01: flow 在组合不成立时必须显式拒绝并点名，不再静默清零。
+func TestNormalizeRejectsVisionWhereUnsupported(t *testing.T) {
 	in := Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportWS}, Security: Security{Type: SecurityNone}, Settings: Settings{Flow: FlowVision}}
+	err := Normalize(TypeXray, &in)
+	if err == nil {
+		t.Fatal("vision on ws must be rejected, not silently cleared")
+	}
+	if !strings.Contains(err.Error(), "Vision") {
+		t.Fatalf("error must name the rejected feature: %v", err)
+	}
+	// WS 无 flow 时归一化照常（路径默认值填充不受影响）。
+	in.Settings.Flow = ""
 	if err := Normalize(TypeXray, &in); err != nil {
 		t.Fatal(err)
 	}
-	if in.Settings.Flow != "" {
-		t.Fatalf("vision must be cleared on ws: %q", in.Settings.Flow)
-	}
 	if !strings.HasPrefix(in.Transport.Path, "/") {
 		t.Fatalf("ws path default: %q", in.Transport.Path)
+	}
+}
+
+// F-L3-01: 两条触达路径——① API 直调携带不成立的 flow 组合；
+// ② 编辑既有 Vision 入站改传输/安全层后重新保存。全部必须拒绝。
+func TestNormalizeFlowValidation(t *testing.T) {
+	reject := []struct {
+		name string
+		in   Inbound
+	}{
+		{"api vless ws tls vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportWS}, Security: Security{Type: SecurityTLS, SNI: "cdn.example.com"}, Settings: Settings{Flow: FlowVision}}},
+		{"api vless ws none vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportWS}, Security: Security{Type: SecurityNone}, Settings: Settings{Flow: FlowVision}}},
+		{"api vless xhttp tls vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportXHTTP}, Security: Security{Type: SecurityTLS, SNI: "cdn.example.com"}, Settings: Settings{Flow: FlowVision}}},
+		{"api vless grpc reality vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportGRPC}, Security: Security{Type: SecurityReality}, Settings: Settings{Flow: FlowVision}}},
+		{"api vless tcp none no-enc vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityNone}, Settings: Settings{Flow: FlowVision}}},
+		{"api vless unknown flow value", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityReality}, Settings: Settings{Flow: "xtls-rprx-vision-udp443"}}},
+		{"api vmess with flow", Inbound{Protocol: ProtocolVMess, Port: 1, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityTLS, SNI: "cdn.example.com"}, Settings: Settings{Flow: FlowVision}}},
+	}
+	for _, tc := range reject {
+		t.Run(tc.name, func(t *testing.T) {
+			in := tc.in
+			if err := Normalize(TypeXray, &in); err == nil {
+				t.Fatalf("expected rejection for %+v", tc.in)
+			}
+		})
+	}
+
+	accept := []struct {
+		name string
+		in   Inbound
+	}{
+		{"vless tcp reality vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityReality}, Settings: Settings{Flow: FlowVision}}},
+		{"vless tcp tls vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityTLS, SNI: "cdn.example.com"}, Settings: Settings{Flow: FlowVision}}},
+		{"vless tcp none enc vision", Inbound{Protocol: ProtocolVLESS, Port: 1, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityNone}, Settings: Settings{Flow: FlowVision, EncryptionAuth: EncryptionAuthMLKEM}}},
+	}
+	for _, tc := range accept {
+		t.Run(tc.name, func(t *testing.T) {
+			in := tc.in
+			if err := Normalize(TypeXray, &in); err != nil {
+				t.Fatalf("valid vision combo rejected: %v", err)
+			}
+			if in.Settings.Flow != FlowVision {
+				t.Fatalf("vision flow must survive: %q", in.Settings.Flow)
+			}
+		})
+	}
+
+	// 路径②：既有 VLESS+TCP+Reality+Vision 入站先合法落形，编辑时
+	// 改传输为 WS（+TLS）再保存——必须拒绝，而不是静默丢 Vision。
+	stored := Inbound{Protocol: ProtocolVLESS, Port: 443, Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityReality}, Settings: Settings{Flow: FlowVision}}
+	if err := Normalize(TypeXray, &stored); err != nil {
+		t.Fatalf("stored vision inbound must normalize: %v", err)
+	}
+	edited := stored
+	edited.Transport = Transport{Type: TransportWS, Path: "/ws"}
+	edited.Security = Security{Type: SecurityTLS, SNI: "cdn.example.com"}
+	if err := Normalize(TypeXray, &edited); err == nil {
+		t.Fatal("editing a vision inbound onto ws must be rejected, not silently downgraded")
 	}
 }
 

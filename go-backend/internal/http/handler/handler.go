@@ -107,6 +107,10 @@ type Handler struct {
 	upgradeMu              sync.Mutex
 	systemUpgradeMu        sync.Mutex
 	pendingUpgradeRedeploy map[int64]struct{}
+	// R5-FC（L2-10）：同节点升级类操作在途登记（nodeID → 操作展示名），
+	// 由 upgradeMu 保护；单节点升级 / 批量升级 / 节点回退三入口共用，
+	// 见 upgrade.go 的 tryAcquireNodeUpgradeOp。
+	nodeUpgradeOps map[int64]string
 	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
 	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
 	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
@@ -983,6 +987,19 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 	// 存量 status∉{0,1} 的僵尸行不得再取得本人用量。
 	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
+		return
+	}
+	// L8-F-01（Round 5）：补种子默认口令门，与 login / passkey 登录
+	// 同口径。isStoredDefaultPassword 是「管理员仍用默认口令 ⇒ 不得
+	// 获得完整能力」的单一裁决点：login 命中只签发受限 token、
+	// passkey 登录同口径；本面是裸口令鉴权、不签发 token，无受限
+	// 形态可给，命中即拒——否则种子默认口令（源码公开、零猜测
+	// 成本）可直接兑换本接口的完整能力，绕过强制改密。本判定在
+	// 口令已验通过之后，非枚举面；拒绝经下方 authOK=false 的失败
+	// 审计通道留痕。
+	if isStoredDefaultPassword(user.RoleID, user.Pwd) {
+		log.Printf("sub_store rejected: stored default password still in use user=%q ip=%s", username, ipStr)
+		response.WriteJSON(w, response.ErrDefault("账号仍在使用默认密码，请先登录面板修改密码"))
 		return
 	}
 	if passwordWasLegacy {

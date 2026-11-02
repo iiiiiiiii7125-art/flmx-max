@@ -86,6 +86,7 @@ func (m *Manager) Restore() {
 	m.restoreOnce.Do(func() {
 		m.restore()
 		m.startGeoUpdater()
+		m.startRuleSetUpdater()
 	})
 }
 
@@ -153,7 +154,11 @@ func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir st
 		return path, nil
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] 安装 %s", label))
-	if err := install(d, dir); err != nil {
+	// RV2-03: anchor-corroboration degradations land in this
+	// instance's log ring — the surface the panel shows for the
+	// kernel — not only in the agent's stdout.
+	note := func(msg string) { inst.logs.add("[flmx] " + msg) }
+	if err := install(d, dir, note); err != nil {
 		return "", fmt.Errorf("安装 %s 失败: %v", label, err)
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] %s 安装完成", label))
@@ -200,9 +205,21 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.setErr(inst, err)
 		return m.state(req.Type, false), err
 	}
-	prevFiles := readFiles(runDir, req.Files)
+	files := req.Files
+	if req.Type == "singbox" {
+		// FN34: localize the config's remote rule sets (downloaded
+		// through the probe-selected plan) before anything is
+		// written; on failure the previous files stay untouched.
+		localized, lerr := m.localizeSingboxRuleSets(inst, req, runDir)
+		if lerr != nil {
+			m.setErr(inst, lerr)
+			return m.state(req.Type, false), lerr
+		}
+		files = localized
+	}
+	prevFiles := readFiles(runDir, files)
 	fix := adapters[req.Type].fixFile
-	for _, f := range req.Files {
+	for _, f := range files {
 		content := f.Content
 		if fix != nil {
 			content = fix(f.Name, content)

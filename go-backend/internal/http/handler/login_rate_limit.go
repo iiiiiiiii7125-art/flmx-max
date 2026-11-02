@@ -1,26 +1,29 @@
 package handler
 
 import (
-	"go-backend/internal/config"
 	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"go-backend/internal/clientip"
 	"go-backend/internal/http/response"
 )
 
 // R5-B2 A-001: 登录限流信任模型重写。
 //
 // 背景：旧实现取 XFF 最左条目，且把回环/私网 RemoteAddr 一律视为可信代理。
-// 在默认反向代理部署（Caddy/nginx → 127.0.0.1:6365）下，攻击者每请求伪造
+// 在脚本默认反向代理部署（Caddy → 前端 nginx → 后端 127.0.0.1:6365，共两跳）下，攻击者每请求伪造
 // 不同的最左 XFF 即得全新限流桶，M-04 形同虚设。
 //
-// 本文件只负责浏览器侧（login）。联邦侧（federation AllowedIPs）是另一种
-// 信任模型，解析逻辑在 federation.go 中分开实现，两者不共用函数。
+// 本文件负责浏览器侧（login）的限流桶与检查入口。客户端 IP 的
+// 可信代理链解析已收口到 internal/clientip（R5-FC）：登录、
+// gh 镜像、WS 鉴权失败三面共用同一解析（见 clientip 包注释）。
+// 联邦侧（federation AllowedIPs）是另一种信任模型，其链长判定
+// 逻辑仍在 federation.go 内独立实现，仅借用 clientip 的切分/
+// 计数原语与跳数配置。
 
 const (
 	loginRateLimitWindow      = time.Minute
@@ -38,162 +41,50 @@ const (
 	usernameBackoffBase          = time.Minute
 	usernameBackoffMax           = 30 * time.Minute
 
-	maxXFFHeaderBytes = 4096
-	maxXFFEntries     = 64
+	// XFF 解析上限的正本在 internal/clientip（限流三面共用），
+	// 此处别名保留供本包存量引用与回归测试。
+	maxXFFHeaderBytes = clientip.MaxXFFHeaderBytes
+	maxXFFEntries     = clientip.MaxXFFEntries
 
 	// K-003: 用户名桶触发后的渐进式延迟上限。
 	loginProgressiveDelayMax = 5 * time.Second
 )
 
 // TrustedProxyHops 读取 FLMX_TRUSTED_PROXY_HOPS，默认 1。
-// 覆盖两种默认拓扑：panel_install.sh 的 Caddy→backend，
-// docker-compose 的 nginx(frontend 容器)→backend。
-// 多一跳（如 Caddy→nginx→backend）请设为 2，并见部署文档。
+// 实现正本在 internal/clientip（限流三面共用：登录 / gh 镜像 /
+// WS 鉴权失败），此处保留同名入口供本包存量调用（含联邦侧借用
+// 跳数配置——其信任模型仍独立，见 federation.go）。
 func TrustedProxyHops() int {
-	raw := strings.TrimSpace(config.GetEnvAny("FLMX_TRUSTED_PROXY_HOPS", "FLVX_TRUSTED_PROXY_HOPS"))
-	if raw == "" {
-		return 1
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		log.Printf("warning: invalid FLMX_TRUSTED_PROXY_HOPS=%q, using 1", raw)
-		return 1
-	}
-	if n > 16 {
-		log.Printf("warning: FLMX_TRUSTED_PROXY_HOPS=%d too large, capped at 16", n)
-		return 16
-	}
-	return n
+	return clientip.TrustedProxyHops()
 }
 
-// trustedXFFRun 从右向左数 XFF 内连续的可信代理条目数（不含直接对端）。
-// 左侧预置条目（攻击者可控）不在此列——信任边界不可由左侧预置移动。
-// 判定谓词由调用方给：浏览器侧用 isTrustedProxyIP（回环/私网/
-// 链路本地），联邦侧用“落在已配置可信 CIDR 内”。
+// trustedXFFRun / trustedXFFChainLen / splitXFFEntries 的实现正本
+// 在 internal/clientip，此处薄封装保留供联邦侧与回归测试沿用
+// 既有名字。语义见 clientip 包注释（右锚、超配 fail-closed）。
 func trustedXFFRun(entries []string, isTrusted func(net.IP) bool) int {
-	run := 0
-	for i := len(entries) - 1; i >= 0; i-- {
-		ip := parseIPLiteral(entries[i])
-		if ip == nil || !isTrusted(ip) {
-			break
-		}
-		run++
-	}
-	return run
+	return clientip.TrustedXFFRun(entries, isTrusted)
 }
 
-// trustedXFFChainLen 推导实际可信代理链长 P。
-//
-// XFF 由可信代理逐跳追加：每跳代理追加一个条目（它看到的上游 IP），
-// 故从右向左连续的可信代理 IP 条目数 + 直接对端（RemoteAddr 本身
-// 就是一跳可信代理）= 实际可信代理数 P。
-//
-// 用途：调用方以 hops <= P 为采信 XFF 的前提；hops > P 即超配，
-// 须 fail-closed 回 RemoteAddr，不得取到预置条目（R24-X-01）。
-// 注意：P 中的 +1 是「对端即代理」的假设。浏览器侧援用该假设的
-// 前提是直接对端已先按类型判别为回环/私网代理对端（B01-001 收窄
-// 口径，见 loginClientIP）；公网直连对端根本不进入本推导。联邦侧
-// 对端可信由显式 CIDR 配置背书，同理成立。
 func trustedXFFChainLen(entries []string, isTrusted func(net.IP) bool) int {
-	return trustedXFFRun(entries, isTrusted) + 1 // +1：直接对端 RemoteAddr 本身就是一跳可信代理
+	return clientip.TrustedXFFChainLen(entries, isTrusted)
+}
+
+func splitXFFEntries(raw string) []string {
+	return clientip.SplitXFFEntries(raw)
 }
 
 // loginClientIP 浏览器侧客户端 IP 解析（登录限流用）。
 //
-// 信任模型：只有当直接对端（RemoteAddr）落在可信代理范围
-// （回环/私网/链路本地，即本机或内网的反向代理）时才采信 XFF；
-// 公网直连时忽略 XFF（此时 XFF 完全可能是伪造的）。
-//
-// XFF 从右按可信跳数解析：最后 hops 个条目视为可信代理追加，
-// 其前一个条目是第一跳可信代理实际看到的客户端 IP。
-// 链长不足（拓扑与跳数配置不符）或选中条目非法时，回退到 RemoteAddr，
-// 绝不因单一条目非法就信任整条链。
-// R24-X-01：链长按可信条目计量，不按总条目数计量——hops 超过实际
-// 可信代理链长（trustedXFFChainLen）时 fail-closed 回 RemoteAddr，
-// 信任边界不可由攻击者预置的左侧条目移动。
-// B01-001（收窄口径，取代 v1 的 run==0 一律 fail-closed）：判别点
-// 是直接对端本身的类型，而非链内可信条目数。
-//   - 直接对端为公网地址：请求未经任何本机/内网代理到达后端，
-//     XFF 整条只能是对端自填、完全不可信——由下方首行分支整体
-//     忽略，限流键恒为 RemoteAddr，轮换自填在此被杀。v1 曾以
-//     run==0 一律 fail-closed 封堵，但默认单跳反代拓扑（Caddy/
-//     nginx 同机→后端 127.0.0.1）的真实链同样 run==0，误伤后
-//     限流粒度退化为代理 IP 共享桶（一人连错、全站 429），代价
-//     比原缺陷在该拓扑下的影响更实，故收窄。
-//   - 直接对端落在回环/私网：对端是本机或容器网络里的代理，
-//     沿用 hops 索引解析 + 超配 fail-closed（R24-X-01 不变）。
-//     追加型代理把真实客户端 IP 追加在 XFF 右侧，索引天然锚定
-//     在该条目上；攻击者在左侧预置的伪造条目无法移动限流键。
-//
-// 残余：对端同为回环/私网、却根本没有代理的直连客户端（内网
-// 直达后端端口、同机进程直达）与单跳代理链在协议层不可区分，
-// 其自填条目仍可能被索引选中——这是保住默认单跳拓扑按真实
-// 客户端 IP 限流粒度的既定取舍；后端端口不应暴露在不可信的
-// 私网直达范围内。
+// 信任模型与实现正本在 internal/clientip（R5-FC 收口：登录 /
+// gh 镜像 / WS 鉴权失败三面共用同一解析）：只有当直接对端
+// （RemoteAddr）落在可信代理范围（回环/私网/链路本地，即本机或
+// 内网的反向代理）时才采信 XFF；公网直连时忽略 XFF（此时 XFF
+// 完全可能是伪造的）。XFF 从右按可信跳数解析，链长不足或跳数
+// 超配（R24-X-01）时 fail-closed 回 RemoteAddr——B01-001 收窄
+// 口径与残余取舍（同机/内网直达与单跳代理链协议层不可区分）
+// 见 clientip.FromRequest 的包内说明与本文件头注。
 func loginClientIP(r *http.Request) net.IP {
-	remoteIP := parseIPLiteral(r.RemoteAddr)
-	if !isTrustedProxyIP(remoteIP) {
-		return remoteIP // 直连：忽略 XFF
-	}
-	entries := splitXFFEntries(r.Header.Get("X-Forwarded-For"))
-	if len(entries) == 0 {
-		return remoteIP
-	}
-	hops := TrustedProxyHops()
-	if hops <= 0 {
-		return remoteIP
-	}
-	// 至此直接对端已判别为回环/私网代理对端（公网对端在首行已
-	// 忽略 XFF 返回，见 B01-001 收窄口径），以下按索引解析。
-	run := trustedXFFRun(entries, isTrustedProxyIP)
-	// R24-X-01：hops 超配（大于实际可信代理链长）时，idx = len-hops
-	// 会落在攻击者可控的左侧预置条目上。先夹紧：超配即 fail-closed。
-	if chainLen := run + 1; hops > chainLen {
-		log.Printf("warning: XFF has %d entries but trusted proxy chain is %d hops (FLMX_TRUSTED_PROXY_HOPS=%d); ignoring XFF (fail-closed), using RemoteAddr", len(entries), chainLen, hops)
-		return remoteIP
-	}
-	idx := len(entries) - hops
-	if idx < 0 {
-		// K-004: 链长 < 配置跳数：实际拓扑少于配置，可信条目不足。
-		// 旧逻辑取最左条目（fail-open）：攻击者可控的 XFF 任意条目都可能被
-		// 当作客户端 IP，限流桶随之可任意伪造。改为 fail-closed：
-		// 不信任 XFF任何条目，回退 RemoteAddr，并告警提示检查配置。
-		log.Printf("warning: XFF has %d entries but FLMX_TRUSTED_PROXY_HOPS=%d; ignoring XFF (fail-closed), using RemoteAddr", len(entries), hops)
-		return remoteIP
-	}
-	if ip := parseIPLiteral(entries[idx]); ip != nil {
-		return ip
-	}
-	return remoteIP
-}
-
-// splitXFFEntries 健壮切分 XFF：去空白/引号，跳过空条目，
-// 超长头整体视为不可信（返回 nil），条目数封顶。
-// 注意：只做切分，不做单个条目的合法性判定，留给 parseIPLiteral。
-//
-// R2 B01-001：条目数超上限时截断必须保右弃左（右锚）。可信代理把
-// 真实客户端条目追加在 XFF 最右侧，消费方（loginClientIP /
-// federationClientIP）一律从右按跳数索引；旧实现保留最左 64 条，
-// 攻击者塞满 ≥65 条即可把代理追加的真实条目挤出保留集，限流键落到
-// 其自填的第 64 条上、轮换即绕过。头部总长已由 maxXFFHeaderBytes
-// 封顶，全量收集后再截尾无无界分配风险。
-func splitXFFEntries(raw string) []string {
-	if len(raw) > maxXFFHeaderBytes {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.Trim(strings.TrimSpace(p), "\"")
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	if len(out) > maxXFFEntries {
-		out = out[len(out)-maxXFFEntries:]
-	}
-	return out
+	return clientip.FromRequest(r)
 }
 
 // ---------------------------------------------------------------------------

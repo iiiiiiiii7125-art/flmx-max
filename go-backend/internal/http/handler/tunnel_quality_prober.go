@@ -960,8 +960,10 @@ func (p *tunnelQualityProber) tcpPingNode(nodeID int64, ip string, port int, opt
 	}
 
 	// B07-001：agent 数据面全失败时命令本身 err=nil、报文 success=false，
-	// 且 AverageTime/PacketLoss 为零值——只看数值会把死链路读成
-	// 0ms/0% 丢包的完美样本并喂给最优出口评分（诊断面
+	// 数值字段不可单独作判据：FRM2 前组装层会丢弃探测算出的
+	// PacketLoss、失败报文呈零值，只看数值会把死链路读成 0ms/0%
+	// 丢包的完美样本并喂给最优出口评分；FRM2 后失败报文已如实携带
+	// PacketLoss（全失败=100），但分类口径不变（诊断面
 	// appendPathDiagnosis 与延迟面 latencyPointFrom 均查 success，
 	// 此前唯独质量面漏查）。success=false 一律归类为探测失败，
 	// 错误文案与延迟面同口径取 errorMessage。

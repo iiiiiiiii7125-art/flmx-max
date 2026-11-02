@@ -489,6 +489,26 @@ func (h *Handler) activeUsersByInbound(now time.Time) map[int64][]kernel.User {
 	return out
 }
 
+// uncountableSubWarned dedupes the L4-08 over-capacity warning:
+// rawActiveUsersByInbound runs on every kernel push / sync cycle, so
+// the warning fires once per subscription id per process, not per push.
+var uncountableSubWarned sync.Map
+
+// warnUncountableSubscription logs loudly, once per subscription,
+// when an active share subscription's id exceeds the socket-mark
+// metering capacity (kernel.MaxUserMarkID): markedUsers drops it, so
+// its traffic is never metered and its TrafficLimit never triggers.
+// Before L4-08 this drop was silent apart from a code comment.
+func warnUncountableSubscription(s *model.Subscription) {
+	if s == nil || s.ID <= kernel.MaxUserMarkID {
+		return
+	}
+	if _, loaded := uncountableSubWarned.LoadOrStore(s.ID, struct{}{}); loaded {
+		return
+	}
+	log.Printf("subscription metering capacity exceeded: subscription_id=%d name=%q exceeds the per-user mark limit %d; this subscription's traffic will NOT be metered and its traffic limit will NOT trigger (L4-08)", s.ID, s.Name, kernel.MaxUserMarkID)
+}
+
 // rawActiveUsersByInbound is activeUsersByInbound before the SS
 // companion remap: users are keyed by the inbound the subscription
 // sources (the origin). Metering reconcile reads demand from this form.
@@ -505,6 +525,7 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 		if !isShare(s) || !subActive(s, now) {
 			continue
 		}
+		warnUncountableSubscription(s)
 		if rows == nil {
 			if rows, err = h.repo.ListNodeInbounds(); err != nil {
 				return nil
@@ -784,6 +805,11 @@ type subscriptionView struct {
 	// （B-06：伴生入站不能作订阅源，B10-002：排除须对管理员可见）。
 	// 仅 subscriptionSave 的响应回填；列表等其他视图恒空、omitempty 不出现。
 	ExcludedCompanionIDs []int64 `json:"excludedCompanionIds,omitempty"`
+	// MeteringUnsupported（L4-08）：订阅 ID 超出 socket mark 计量
+	// 编码上限（kernel.MaxUserMarkID）时为 true——该订阅的流量永不
+	// 计量、TrafficLimit 永不触发，须对管理员显式可见，不许静默。
+	// 视图构建单点回填，列表/保存/详情同口径。
+	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
 }
 
 // subFormatAlias resolves format aliases shared by the pull side
@@ -907,6 +933,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s), RelayIDs: relayIDs,
+		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
 	}
 }
 
@@ -1478,7 +1505,7 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if roleID != 0 {
-			allowed, err := h.canReadDefaultSubscription(userID, s.ID)
+			allowed, err := h.canReadDefaultSubscription(userID, s)
 			if err != nil {
 				response.WriteJSON(w, response.Err(-2, err.Error()))
 				return
@@ -1498,20 +1525,45 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 // canReadDefaultSubscription 判断普通用户是否有权读取默认订阅 token：
 // 被分配了该订阅（1.0.12 user_subscription），或持有旧入站分配
 // （user_inbound——「我的订阅」存量 ?user=+sig 回退链靠本端点的 path
-// 拼链接，分配为空集时 openSubscription 本就过滤为空，见 X1 §7）。
-func (h *Handler) canReadDefaultSubscription(userID, subscriptionID int64) (bool, error) {
+// 拼链接，见 X1 §7）且至少一条分配入站属于该订阅。
+//
+// L1-F01（Round 5）：旧实现第二条腿只看「有任意一条 user_inbound 行」，
+// 不问该入站属不属于默认订阅——仅在其他订阅下有分配（错位分配）、或
+// 分配行指向不存在入站的用户，都能拿到默认订阅裸 token，不带 ?user=
+// 拉全量，绕过 ?user=&sig= 按分配过滤面。现收紧为与拉取侧同一成员
+// 口径：分配入站 ∩ subInboundIDs(订阅) 非空才放行（subInboundIDs 是
+// 拉取侧成员判定的唯一收口——SourceAll 全量、否则显式列表＋来源派生、
+// 伴生行不计；分配键与 filterInboundRowsByUserAssignments 同为 origin
+// 入站 id，含中转分配行）。
+func (h *Handler) canReadDefaultSubscription(userID int64, s *model.Subscription) (bool, error) {
 	ids, err := h.repo.ListUserSubscriptionIDs(userID)
 	if err != nil {
 		return false, err
 	}
 	for _, id := range ids {
-		if id == subscriptionID {
+		if id == s.ID {
 			return true, nil
 		}
 	}
-	legacy, err := h.repo.ListUserInboundIDs(userID)
+	assigned, err := h.repo.ListUserInboundIDs(userID)
 	if err != nil {
 		return false, err
 	}
-	return len(legacy) > 0, nil
+	if len(assigned) == 0 {
+		return false, nil
+	}
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		return false, err
+	}
+	member := make(map[int64]bool, len(assigned))
+	for _, id := range subInboundIDs(s, rows) {
+		member[id] = true
+	}
+	for _, id := range assigned {
+		if member[id] {
+			return true, nil
+		}
+	}
+	return false, nil
 }

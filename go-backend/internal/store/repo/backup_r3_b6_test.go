@@ -9,13 +9,13 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// R3 批 6 回归：备份导入生命周期与引用处置（R3X-005 三 facet、
-// R3X-023、卫生项 H-S01）。
+// R3 批 6 回归：备份导入生命周期与引用处置（R3X-005、R3X-023、
+// 卫生项 H-S01）。
 //
-// facet (a) 路线定死（本批）：成员替换撤销的 UT 经 ImportResult 新增
-// 字段 revokedUserTunnels 回传 handler 清转发（与运行时全部撤销路径
-// 同口径），不用「回执明示待清理」的弱路线。本文件的 revoked 断言
-// 走结果 JSON 线格式（userId/tunnelId），与字段的线上契约一致。
+// R5-FGRP 改版：导入不再有任何分组口径的撤销 facet——成员替换、
+// 停用组导入、停用对的权限导入都只做记账与逐字落行，既有授权与
+// 台账一律保留。ImportResult 的 revokedUserTunnels 线格式保留
+// （userId/tunnelId），但分组面恒为空，本文件的断言据此核对。
 
 type b6RevokedPair struct {
 	UserID   int64 `json:"userId"`
@@ -54,9 +54,9 @@ func b6SeedGroupDeps(t *testing.T, r *Repository, now int64) {
 	createRow(t, r, &model.Tunnel{ID: 2, Name: "t2", TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
 }
 
-// R3X-005 facet (a) 用户组侧：成员替换必须在替换前按台账撤销被移出
-// 成员的组建授权（红：UT10/grant 原样保留、回执无撤销清单）。
-func TestR3B6ImportUserGroupsMemberReplacementRevokes(t *testing.T) {
+// R3X-005 facet (a) 用户组侧（R5-FGRP 改版）：成员替换只换成员
+// 行——被移出成员的组建授权与台账逐行保留、回执无撤销清单。
+func TestR3B6ImportUserGroupsMemberReplacementKeepsGrants(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dest := openBackupRepo(t, "b6-faceta-user.db")
 	b6SeedGroupDeps(t, dest, now)
@@ -87,22 +87,22 @@ func TestR3B6ImportUserGroupsMemberReplacementRevokes(t *testing.T) {
 	if n := countWhere(t, dest, "user_group_user", "user_group_id = ? AND user_id = ?", 1, 2); n != 0 {
 		t.Fatalf("member row for removed user 2 must be replaced away, got %d", n)
 	}
-	if n := countWhere(t, dest, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("R3X-005(a): group-created UT of removed member must be revoked, got %d rows", n)
+	if n := countWhere(t, dest, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: group-created UT of removed member must survive import member replacement, got %d rows", n)
 	}
-	if n := countWhere(t, dest, "group_permission_grant", "user_tunnel_id = ?", 10); n != 0 {
-		t.Fatalf("R3X-005(a): grant ledger of removed member must be revoked, got %d rows", n)
+	if n := countWhere(t, dest, "group_permission_grant", "user_tunnel_id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: grant ledger of removed member must survive, got %d rows", n)
 	}
 	if n := countWhere(t, dest, "user_tunnel", "id = ?", 11); n != 1 {
 		t.Fatalf("manual UT of remaining member must survive, got %d", n)
 	}
-	if pairs := b6RevokedPairs(t, result); !b6HasPair(pairs, 2, 1) {
-		t.Fatalf("R3X-005(a): revoked UT must be returned via revokedUserTunnels for handler forward cleanup, got %v (raw result %+v)", pairs, result)
+	if pairs := b6RevokedPairs(t, result); len(pairs) != 0 {
+		t.Fatalf("R5-FGRP: import must not report revoked UTs for group facets, got %v (raw result %+v)", pairs, result)
 	}
 }
 
-// R3X-005 facet (a) 隧道组侧：成员替换同口径撤销被移出隧道的组建授权。
-func TestR3B6ImportTunnelGroupsMemberReplacementRevokes(t *testing.T) {
+// R3X-005 facet (a) 隧道组侧（R5-FGRP 改版）：同口径——只换成员行。
+func TestR3B6ImportTunnelGroupsMemberReplacementKeepsGrants(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dest := openBackupRepo(t, "b6-faceta-tunnel.db")
 	b6SeedGroupDeps(t, dest, now)
@@ -126,17 +126,17 @@ func TestR3B6ImportTunnelGroupsMemberReplacementRevokes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if n := countWhere(t, dest, "user_tunnel", "id = ?", 13); n != 0 {
-		t.Fatalf("R3X-005(a): group-created UT of removed tunnel must be revoked, got %d rows", n)
+	if n := countWhere(t, dest, "user_tunnel", "id = ?", 13); n != 1 {
+		t.Fatalf("R5-FGRP: group-created UT of removed tunnel must survive import member replacement, got %d rows", n)
 	}
-	if n := countWhere(t, dest, "group_permission_grant", "user_tunnel_id = ?", 13); n != 0 {
-		t.Fatalf("R3X-005(a): grant ledger of removed tunnel must be revoked, got %d rows", n)
+	if n := countWhere(t, dest, "group_permission_grant", "user_tunnel_id = ?", 13); n != 1 {
+		t.Fatalf("R5-FGRP: grant ledger of removed tunnel must survive, got %d rows", n)
 	}
 	if n := countWhere(t, dest, "user_tunnel", "id = ?", 12); n != 1 {
 		t.Fatalf("UT of remaining tunnel must survive, got %d", n)
 	}
-	if pairs := b6RevokedPairs(t, result); !b6HasPair(pairs, 2, 2) {
-		t.Fatalf("R3X-005(a): revoked UT must be returned via revokedUserTunnels, got %v", pairs)
+	if pairs := b6RevokedPairs(t, result); len(pairs) != 0 {
+		t.Fatalf("R5-FGRP: import must not report revoked UTs for group facets, got %v", pairs)
 	}
 }
 
@@ -235,9 +235,9 @@ func TestR3B6ImportSameNameRepointMergesDuplicates(t *testing.T) {
 	}
 }
 
-// R3X-005 facet (c) 组段面：导入把组置 status=0 时，其组建授权必须
-// 统一收敛撤销（红：status=0 而 grants/UT 全数存续）；手工 UT 不动。
-func TestR3B6ImportDisabledUserGroupConvergesGrants(t *testing.T) {
+// R3X-005 facet (c) 组段面（R5-FGRP 改版）：导入把组置 status=0
+// 只落状态——组建授权与台账全数存续、回执无撤销清单；手工 UT 不动。
+func TestR3B6ImportDisabledUserGroupKeepsGrants(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dest := openBackupRepo(t, "b6-facetc-group.db")
 	b6SeedGroupDeps(t, dest, now)
@@ -268,24 +268,24 @@ func TestR3B6ImportDisabledUserGroupConvergesGrants(t *testing.T) {
 	if grp.Status != 0 {
 		t.Fatalf("group status must be restored as 0, got %d", grp.Status)
 	}
-	if n := countWhere(t, dest, "group_permission_grant", "user_tunnel_id = ?", 10); n != 0 {
-		t.Fatalf("R3X-005(c): disabled group must not keep its group-created grants, got %d", n)
+	if n := countWhere(t, dest, "group_permission_grant", "user_tunnel_id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: disabled group's grant ledger must survive import, got %d", n)
 	}
-	if n := countWhere(t, dest, "user_tunnel", "id = ?", 10); n != 0 {
-		t.Fatalf("R3X-005(c): group-created UT of disabled group must be revoked on import convergence, got %d", n)
+	if n := countWhere(t, dest, "user_tunnel", "id = ?", 10); n != 1 {
+		t.Fatalf("R5-FGRP: group-created UT of disabled group must survive import, got %d", n)
 	}
 	if n := countWhere(t, dest, "user_tunnel", "id = ?", 11); n != 1 {
-		t.Fatalf("manual UT must survive disabled-group convergence, got %d", n)
+		t.Fatalf("manual UT must survive disabled-group import, got %d", n)
 	}
-	if pairs := b6RevokedPairs(t, result); !b6HasPair(pairs, 2, 1) {
-		t.Fatalf("R3X-005(c): converged UT must be returned via revokedUserTunnels, got %v", pairs)
+	if pairs := b6RevokedPairs(t, result); len(pairs) != 0 {
+		t.Fatalf("R5-FGRP: import must not report revoked UTs for group facets, got %v", pairs)
 	}
 }
 
-// R3X-005 facet (c) 权限段面：任一侧组 status≠1 时跳过该 pair 的
-// grants 并计 warning，且该 pair 的既有组建授权一并收敛（红：
-// 停用对的 grant 直接落库、既有 grant 原样保留、零警告）。
-func TestR3B6ImportPermissionsSkipsDisabledPair(t *testing.T) {
+// R3X-005 facet (c) 权限段面（R5-FGRP 改版）：任一侧组停用时该
+// pair 的 grants 照常逐字导入、既有 grant 原样保留——停用不再
+// 跳过、不再收敛。
+func TestR3B6ImportPermissionsDisabledPairImportsVerbatim(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dest := openBackupRepo(t, "b6-facetc-perm.db")
 	b6SeedGroupDeps(t, dest, now)
@@ -310,23 +310,20 @@ func TestR3B6ImportPermissionsSkipsDisabledPair(t *testing.T) {
 	if result.PermissionsImported != 1 {
 		t.Fatalf("permission pair itself must still import, got %d", result.PermissionsImported)
 	}
-	if n := countWhere(t, dest, "group_permission_grant", "id = ?", 60); n != 0 {
-		t.Fatalf("R3X-005(c): grants of a disabled pair must be skipped, got %d rows", n)
+	if n := countWhere(t, dest, "group_permission_grant", "id = ?", 60); n != 1 {
+		t.Fatalf("R5-FGRP: grants of a disabled pair must import verbatim, got %d rows", n)
 	}
-	if n := countWhere(t, dest, "group_permission_grant", "id = ?", 59); n != 0 {
-		t.Fatalf("R3X-005(c): pre-existing grants of a disabled pair must converge (be revoked), got %d rows", n)
+	if n := countWhere(t, dest, "group_permission_grant", "id = ?", 59); n != 1 {
+		t.Fatalf("R5-FGRP: pre-existing grants of a disabled pair must be retained, got %d rows", n)
 	}
-	if n := countWhere(t, dest, "user_tunnel", "id = ?", 11); n != 0 {
-		t.Fatalf("R3X-005(c): group-created UT behind the revoked pre-existing grant must be revoked, got %d", n)
+	if n := countWhere(t, dest, "user_tunnel", "id = ?", 11); n != 1 {
+		t.Fatalf("R5-FGRP: UT behind the pre-existing grant must survive, got %d", n)
 	}
 	if n := countWhere(t, dest, "user_tunnel", "id = ?", 10); n != 1 {
-		t.Fatalf("UT referenced only by the skipped backup grant must survive, got %d", n)
+		t.Fatalf("UT referenced by the backup grant must survive, got %d", n)
 	}
-	if !b8WarningsContain(result.ImportWarnings, "停用") {
-		t.Fatalf("R3X-005(c): skipping a disabled pair must be counted in ImportWarnings, got %v", result.ImportWarnings)
-	}
-	if pairs := b6RevokedPairs(t, result); !b6HasPair(pairs, 4, 1) {
-		t.Fatalf("R3X-005(c): converged UT must be returned via revokedUserTunnels, got %v", pairs)
+	if pairs := b6RevokedPairs(t, result); len(pairs) != 0 {
+		t.Fatalf("R5-FGRP: import must not report revoked UTs for group facets, got %v", pairs)
 	}
 }
 

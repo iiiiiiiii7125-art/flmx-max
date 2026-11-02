@@ -28,6 +28,11 @@
 #      x 包计数需 go 工具链（go list）：CI 的 frontend job 跑本门时
 #      GitHub 托管镜像自带 go；本地无 go 时该子项以 PENDING 显式报告
 #      未核（不计失败、不得静默跳过），TestPostgres 子项纯 grep、恒硬核。
+#   11. panel_install.sh SCRIPT_VERSION 字面量门（L2-30 常设门）：
+#      self_update_check 以 SCRIPT_VERSION 相等为「无更新」短路，字
+#      面量缺失/重复/格式漂移会让脚本自更新静默失效。硬核：定义恰
+#      一处、格式 YYYYMMDD.NN 定宽、日期段为合法年月日。install.sh
+#      无此概念（版本跟随 PINNED_VERSION），不在本门。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -212,6 +217,29 @@ if command -v go >/dev/null 2>&1; then
   fi
 else
   note_pend "计数对账：当前环境无 go 工具链，x 模块包计数未核（TestPostgres 子项已硬核）；请在装有 Go 的环境复跑本门"
+fi
+
+# ── 11. panel_install.sh SCRIPT_VERSION 字面量门（L2-30）
+sv_count=$(grep -c '^SCRIPT_VERSION="' panel_install.sh)
+sv_value=$(grep -o '^SCRIPT_VERSION="[^"]*"' panel_install.sh | head -n1 | sed 's/^SCRIPT_VERSION="//; s/"$//')
+if [ "$sv_count" != "1" ]; then
+  note_fail "SCRIPT_VERSION 门：panel_install.sh 中定义应恰一处，实数 $sv_count"
+elif ! printf '%s' "$sv_value" | grep -qE '^[0-9]{8}\.[0-9]{2}$'; then
+  note_fail "SCRIPT_VERSION 门：字面量格式须为 YYYYMMDD.NN 定宽，实际「$sv_value」"
+else
+  sv_y=$(printf '%s' "$sv_value" | cut -c1-4)
+  sv_m=$(printf '%s' "$sv_value" | cut -c5-6)
+  sv_d=$(printf '%s' "$sv_value" | cut -c7-8)
+  if ! date -d "2000-01-01" >/dev/null 2>&1; then
+    # BSD date 等不支持 GNU -d 的环境无从判定日期合法性：按本脚本
+    # 惯例（同上计数对账项）降级 PENDING，不硬失败；判定本身不变，
+    # 请在装有 GNU date 的环境复跑本门。
+    note_pend "SCRIPT_VERSION 门：当前环境 date 不支持 -d，日期合法性未核（$sv_value）；请在装有 GNU date 的环境复跑本门"
+  elif date -d "$sv_y-$sv_m-$sv_d" >/dev/null 2>&1; then
+    note_ok "SCRIPT_VERSION 门：panel_install.sh 字面量格式合法（$sv_value，恰一处）"
+  else
+    note_fail "SCRIPT_VERSION 门：日期段不是合法年月日（$sv_value）"
+  fi
 fi
 
 echo "----"

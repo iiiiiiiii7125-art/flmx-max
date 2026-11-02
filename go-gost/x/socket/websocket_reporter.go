@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-gost/x/bypass"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/internal/util/download"
@@ -1901,8 +1902,16 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	}
 	// R4-N2：判活走 flmx_agent_health_ok 的两次采样（PID 稳定），
 	// 不再单次 is-active 采样——flap 窗口内的假活会跳过自动回滚。
-	fmt.Fprintf(&b, "mv %s %s; %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi",
-		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start)
+	// F-RM-01: the swap itself is guarded. An unchecked mv let a
+	// missing staging file (handler-side cleanup racing the script)
+	// flow into the health check on the OLD binary and log
+	// 'agent upgrade restart ok' — a false success. On swap failure
+	// the script removes any staging leftover (it owns the file
+	// after handoff), restarts the current binary, and logs the
+	// failure by name; 'restart ok' is only reachable past a
+	// successful mv.
+	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start, tmpPath, start)
 	return b.String(), nil
 }
 
@@ -1919,10 +1928,35 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 		return "", err
 	}
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
+	tmpTemplate := filepath.Join(filepath.Dir(binaryPath), ".flux_agent.rollback-XXXXXX")
 	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
 	// 在 flap 窗口内误报。
-	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi",
-		logPath, healthFn, stop, backupPath, binaryPath, start), nil
+	// FRM3: the copy itself is guarded, same caliber as the F-RM-01
+	// upgrade swap. The handler stats the backup before launching,
+	// but the script copies seconds later (after sleep + service
+	// stop); an unchecked cp let a vanished or unreadable backup
+	// flow into the health check on the CURRENT binary and log
+	// 'rollback restart ok' — a false success for a rollback that
+	// never happened. On copy failure the script restarts the
+	// current binary and logs the failure by name; 'rollback
+	// restart ok' is only reachable past a successful cp.
+	// FRM4: the guarded copy lands atomically, the same shape as
+	// the upgrade path's staged mv. FRM3's cp wrote straight onto
+	// the binary path, so a copy dying midway (e.g. disk full)
+	// left the CURRENT binary truncated: the failure branch could
+	// name the failure, but the node was already bricked. The
+	// script now stages the copy in a unique mktemp sibling of the
+	// binary (same directory, so the final mv is a same-filesystem
+	// atomic rename), proves the staged copy byte-identical to the
+	// backup with cmp — POSIX and present in both coreutils and
+	// BusyBox, unlike sha256sum, and strictly stronger than a size
+	// compare — and only then mv's it into place. Any failure
+	// before the mv leaves the current binary untouched, and the
+	// script removes the temp file it created. mktemp lands the
+	// file 0600 and cp onto an existing file keeps that mode, so
+	// the staged copy is chmod'ed back to 755 before the swap.
+	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
+		logPath, healthFn, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
@@ -2012,6 +2046,76 @@ var upgradeDownloadTimeout = 4 * time.Minute
 // so tests can shrink it.
 var upgradeDownloadHeaderTimeout = 60 * time.Second
 
+var upgradeLookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+}
+
+// judgeUpgradeHost resolves host and judges every answer for the
+// self-upgrade download client (F2 caliber, shared with the
+// kernel fetch face in x/kernel/install.go): hardOnly applies
+// just the hard-deny layer (entry / same-origin hops); otherwise
+// the full non-public judgment applies (cross-host hops).
+func judgeUpgradeHost(ctx context.Context, host string, hardOnly bool) ([]net.IP, error) {
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		var err error
+		ips, err = upgradeLookupIP(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("下载地址无法解析，已拒绝: %s", host)
+		}
+	}
+	for _, ip := range ips {
+		if bypass.IsHardDenyIP(ip) {
+			return nil, fmt.Errorf("下载地址指向云元数据服务，已拒绝: %s", host)
+		}
+		if !hardOnly && bypass.IsNonPublicIP(ip) {
+			return nil, fmt.Errorf("下载地址指向非公网地址，已拒绝: %s", host)
+		}
+	}
+	return ips, nil
+}
+
+// upgradeDialFullContextKey carries the dial-time judgment layer
+// for one request of the upgrade client: true = full non-public
+// judgment (cross-host redirect hop), false/absent = entry layer
+// (hard-deny only). CheckRedirect stamps it per hop (round-5
+// L2-07/L2-15: the upgrade client used to have NO dial judgment
+// at all — a hostname allowlist over the default transport, so
+// ProxyFromEnvironment applied and any allowlisted name could
+// resolve or redirect to a private address and be dialed).
+type upgradeDialFullContextKey struct{}
+
+// upgradeDialContext pins the upgrade client's dial: re-resolve,
+// re-judge at the layer the request's hop was judged at, dial a
+// validated IP.
+func upgradeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	hardOnly := ctx.Value(upgradeDialFullContextKey{}) != true
+	ips, err := judgeUpgradeHost(ctx, host, hardOnly)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	var lastErr error
+	for _, ip := range ips {
+		dialIP := ip
+		if ip4 := ip.To4(); ip4 != nil {
+			dialIP = ip4
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // newUpgradeDownloadClient builds the S-02 download client for
 // handleUpgradeAgent. The redirect allowlist covers GitHub hosts
 // plus the built-in mirror candidates' own hosts (KU4: downloads
@@ -2022,8 +2126,21 @@ var upgradeDownloadHeaderTimeout = 60 * time.Second
 // caller's context (see upgradeDownloadTimeout) and per-attempt
 // header patience in the transport, so no per-GET wall can kill a
 // slow body transfer mid-flight (R8-T-09).
+//
+// F2 outbound policy (round-5 L2-07), aligned with the kernel
+// fetch face: the transport never rides an environment proxy and
+// dials pinned, re-judged IPs (upgradeDialContext); redirect hops
+// additionally keep https from downgrading, are judged on the
+// hostname actually dialed (an explicit :443 no longer breaks the
+// allowlist comparison), and — beyond the host allowlist — a hop
+// back to the entry's own host is judged at the entry layer
+// (hard-deny only, so the privately addressed panel route's own
+// redirects keep working) while every cross-host hop gets the
+// full non-public judgment at BOTH the hop check and the dial.
 func newUpgradeDownloadClient(proxyHost string) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil // pinned dialing is meaningless via a proxy
+	tr.DialContext = upgradeDialContext
 	tr.ResponseHeaderTimeout = upgradeDownloadHeaderTimeout
 	mirrorHosts := download.MirrorHosts()
 	return &http.Client{
@@ -2032,19 +2149,47 @@ func newUpgradeDownloadClient(proxyHost string) *http.Client {
 			if len(via) >= 3 {
 				return fmt.Errorf("S-02: 重定向次数过多")
 			}
-			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
-			// githubusercontent.com 及其子域名（release 下载必经此域名）；
-			// 另允许内置镜像候选自身域名（镜像站内跳转）。
-			host := strings.ToLower(req.URL.Host)
-			if isGitHubDownloadHost(host) || (proxyHost != "" && host == proxyHost) {
-				return nil
-			}
-			for _, mh := range mirrorHosts {
-				if host == mh {
-					return nil
+			// https preservation: once any hop in the chain was
+			// https, no later hop may drop to http.
+			for _, v := range via {
+				if v.URL.Scheme == "https" && req.URL.Scheme != "https" {
+					return fmt.Errorf("S-02: 重定向降级到 http，已拒绝: %s", req.URL.Host)
 				}
 			}
-			return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("S-02: 重定向 scheme 不支持，已拒绝: %s", req.URL.Scheme)
+			}
+			// 只允许 GitHub 官方域名：github.com 及其子域名、资产 CDN
+			// githubusercontent.com 及其子域名（release 下载必经此域名）；
+			// 另允许内置镜像候选自身域名（镜像站内跳转）。比较一律
+			// 用 Hostname()（不带端口）：此前拿含端口的 URL.Host 比
+			// 对，github.com:443 形态会被误拒（L2-20 agent 面）。
+			hostname := strings.ToLower(req.URL.Hostname())
+			hostport := strings.ToLower(req.URL.Host)
+			allowed := isGitHubDownloadHost(hostname) || (proxyHost != "" && hostport == proxyHost)
+			if !allowed {
+				for _, mh := range mirrorHosts {
+					if hostname == mh {
+						allowed = true
+						break
+					}
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("S-02: 重定向到非 GitHub 域名被拒绝: %s", req.URL.Host)
+			}
+			if len(via) > 0 && strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				if _, err := judgeUpgradeHost(req.Context(), hostname, true); err != nil {
+					return err
+				}
+				*req = *req.WithContext(context.WithValue(req.Context(), upgradeDialFullContextKey{}, false))
+				return nil
+			}
+			if _, err := judgeUpgradeHost(req.Context(), hostname, false); err != nil {
+				return err
+			}
+			*req = *req.WithContext(context.WithValue(req.Context(), upgradeDialFullContextKey{}, true))
+			return nil
 		},
 	}
 }
@@ -2194,9 +2339,30 @@ func downloadUpgradeAttempt(ctx context.Context, client *http.Client, rawURL, tm
 // legs cannot drift apart; the checksum leg itself is a tiny
 // file and deliberately does not resume.
 func downloadUpgradeBinary(ctx context.Context, client *http.Client, plan *download.Plan, directURL, tmpPath string, report func(percent int)) (int64, string, error) {
+	return downloadUpgradeBinaryChecked(ctx, client, plan, directURL, tmpPath, "", report)
+}
+
+// downloadUpgradeBinaryChecked is downloadUpgradeBinary with the
+// integrity check INSIDE each leg (round-5 L2-03): wantHash (the
+// panel expectedSha256 when present, else the already-fetched
+// .sha256 value — both known before the body leg starts) is
+// compared against the assembled bytes the moment a leg
+// completes; a route that delivered a complete-but-wrong body
+// loses the leg, its bytes are discarded (Reset), and the next
+// route restarts the file instead of the whole upgrade failing
+// with every other route untried — the geodata leg's caliber,
+// applied to the binary leg. wantHash == "" keeps the unchecked
+// shape (direct callers/tests); production always passes an
+// anchor because handleUpgradeAgent fetches the checksum first.
+func downloadUpgradeBinaryChecked(ctx context.Context, client *http.Client, plan *download.Plan, directURL, tmpPath, wantHash string, report func(percent int)) (int64, string, error) {
 	transfer := download.NewFileTransfer(tmpPath, maxAgentBinarySize, 0o700)
 	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		aerr := upgradeTransferAttempt(ctx, client, transfer, url, report)
+		if aerr == nil && wantHash != "" && !strings.EqualFold(transfer.Sum(), wantHash) {
+			got := transfer.Sum()
+			_ = transfer.Reset()
+			aerr = fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s（本线路作废，换线重下）", wantHash, got)
+		}
 		if aerr != nil {
 			fmt.Printf("⚠️ 下载线路 %s 失败 (%v)，已下载 %d bytes，按测速排名尝试下一线路（保留断点续传）\n", route.Name(), aerr, transfer.Size())
 		}
@@ -2224,6 +2390,9 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 		if watcher.Stalled() {
 			return "", download.ErrNoProgress
 		}
+		if watcher.TooSlow() {
+			return "", download.ErrTooSlow
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -2236,7 +2405,18 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 		if watcher.Stalled() {
 			return "", fmt.Errorf("读取校验文件失败: %w", download.ErrNoProgress)
 		}
+		if watcher.TooSlow() {
+			return "", fmt.Errorf("读取校验文件失败: %w", download.ErrTooSlow)
+		}
 		return "", err
+	}
+	// 腿内内容校验（round-5 L2-04）：探针（probeUpgradeRoute）对
+	// 同一内容做了 isSHA256Hex 判定，实拉此前只取首字段非空即
+	// 算成功——stage-3 静态尾的未探测线路回一个 200 垃圾首字段
+	// 就能赢下整腿、让事后比对整单失败。腿内同口径判定，垃圾
+	// 内容只废本腿、计划换线。
+	if !isSHA256Hex(hash) {
+		return "", fmt.Errorf("校验文件内容不是合法 SHA256")
 	}
 	return hash, nil
 }
@@ -2253,8 +2433,17 @@ func fetchUpgradeChecksumAttempt(ctx context.Context, client *http.Client, rawUR
 // body stalling after 200 aborted the whole upgrade with
 // ErrNoProgress and no retry, contradicting the A002 caliber.
 func downloadUpgradeChecksum(ctx context.Context, client *http.Client, plan *download.Plan, directURL string) (string, error) {
+	hash, _, err := downloadUpgradeChecksumRouted(ctx, client, plan, directURL)
+	return hash, err
+}
+
+// downloadUpgradeChecksumRouted is downloadUpgradeChecksum plus
+// the winning route (the anchor corroboration in
+// handleUpgradeAgent needs to know which route NOT to trust
+// alone, round-5 L2-08).
+func downloadUpgradeChecksumRouted(ctx context.Context, client *http.Client, plan *download.Plan, directURL string) (string, download.Route, error) {
 	var hash string
-	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
+	route, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		var aerr error
 		hash, aerr = fetchUpgradeChecksumAttempt(ctx, client, url)
 		if aerr != nil {
@@ -2263,9 +2452,111 @@ func downloadUpgradeChecksum(ctx context.Context, client *http.Client, plan *dow
 		return aerr
 	})
 	if err != nil {
-		return "", err
+		return "", download.Route{}, err
 	}
-	return hash, nil
+	return hash, route, nil
+}
+
+// corroborateUpgradeChecksum re-fetches the self-upgrade .sha256
+// through a route different from winner and requires the same
+// hash (round-5 L2-08). It runs only when the panel sent no
+// expectedSha256 — with a panel anchor the .sha256 is already a
+// mere cross-check against an out-of-band value. A second route
+// answering with a DIFFERENT hash aborts the upgrade; no second
+// route answering degrades to the single anchor (single-route
+// environments keep today's trust level), announced through
+// note — the caller's panel-visible surface (RV2-03: the upgrade
+// progress channel), not only the agent's stdout; a nil note
+// falls back to stdout.
+func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner download.Route, checksumURL, want string, note func(string)) error {
+	var routes []download.Route
+	for _, r := range download.AllRoutes() {
+		if r.Prefix != winner.Prefix {
+			routes = append(routes, r)
+		}
+	}
+	if len(routes) == 0 {
+		return nil
+	}
+	actx, cancel := context.WithTimeout(ctx, anchorCorroborateTimeout)
+	defer cancel()
+	got, err := downloadUpgradeChecksum(actx, client, download.NewStaticPlan(routes), checksumURL)
+	if err != nil {
+		msg := fmt.Sprintf("跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续（%v）", err)
+		if note != nil {
+			note(msg)
+		} else {
+			fmt.Printf("⚠️ %s\n", msg)
+		}
+		return nil
+	}
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("S-02: 校验文件经两条不同线路获取的结果不一致，已中止升级: %s != %s", got, want)
+	}
+	return nil
+}
+
+// anchorCorroborateTimeout bounds one anchor corroboration: a
+// cross-check on a tiny file, never worth the download budget.
+var anchorCorroborateTimeout = 20 * time.Second
+
+// upgradeStaging owns the lifecycle of the staged upgrade binary
+// across the handler → detached restart script boundary (F-RM-01).
+//
+// The handler creates and fills the staging file, but the consumer is
+// the restart script, which runs seconds AFTER the handler returns
+// (it sleeps, stops the service, then mv's the staging file into
+// place). Cleanup is therefore ownership-based, not defer-based:
+//
+//   - failure paths remove the file immediately (Discard, and the
+//     deferred Close as backstop), so failed attempts never pile up;
+//   - once the restart script has been launched, Handoff transfers
+//     ownership to it and Close becomes a no-op: the script's mv
+//     consumes the file on success, and the script removes it
+//     explicitly when the swap itself fails.
+//
+// FB's L2-05 fix registered an unconditional defer os.Remove on the
+// staging path; on the success path that deleted the staged binary
+// the moment the handler returned, the script's mv then failed with
+// "cannot stat", and the node came back on the old binary while the
+// panel held a success receipt (real-machine finding F-RM-01).
+type upgradeStaging struct {
+	path     string
+	handsOff bool
+}
+
+// newUpgradeStaging creates the per-attempt unique staging file
+// (L2-05: a fixed name let a later upgrade adopt a previous attempt's
+// partial download across versions; uniqueness keeps any resume
+// inside the single operation that created the file).
+func newUpgradeStaging(dir string) (*upgradeStaging, error) {
+	tmpFile, err := os.CreateTemp(dir, ".flux_agent.upgrade-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	return &upgradeStaging{path: tmpPath}, nil
+}
+
+// Path returns the staging file path handed to the download and to
+// the restart script.
+func (s *upgradeStaging) Path() string { return s.path }
+
+// Discard removes the staging file immediately (failure paths).
+// Idempotent: removing an already-removed path is not an error here.
+func (s *upgradeStaging) Discard() { _ = os.Remove(s.path) }
+
+// Handoff transfers ownership of the staging file to the launched
+// restart script; Close will no longer remove it.
+func (s *upgradeStaging) Handoff() { s.handsOff = true }
+
+// Close is the deferred backstop cleanup: it removes the staging
+// file unless ownership was handed off to the restart script.
+func (s *upgradeStaging) Close() {
+	if !s.handsOff {
+		s.Discard()
+	}
 }
 
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
@@ -2329,7 +2620,22 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 
 	// 下载新版本二进制
 	const binaryPath = "/etc/flux_agent/flux_agent"
-	tmpPath := binaryPath + ".new"
+	// L2-05: 暂存路径必须每次升级唯一。此前固定为 binaryPath +
+	// ".new"，进程被杀/断电绕过清理后，下一次升级（不同版本资产）
+	// 会被 FileTransfer.init 无条件收养旧断点：旧前缀＋新后缀跨
+	// 版本拼装，只能靠最终哈希拦截、整次升级必废。唯一临时名让
+	// 断点收养只可能发生在同一次操作内（download.FileTransfer
+	// 的既定契约：callers stage into a fresh temp path per
+	// operation）。清理按所有权走 upgradeStaging：失败路径即时删、
+	// defer Close 兜底未显式删的错误返回；成功路径在重启脚本启动
+	// 后 Handoff，暂存文件活过 handler 返回、由脚本 mv 消费
+	// （F-RM-01：无条件 defer 删除曾让脚本 mv 必然扑空、假成功）。
+	staging, err := newUpgradeStaging(filepath.Dir(binaryPath))
+	if err != nil {
+		return fmt.Errorf("创建升级暂存文件失败: %v", err)
+	}
+	tmpPath := staging.Path()
+	defer staging.Close()
 	backupPath := binaryPath + ".old"
 
 	// S-02: 限制重定向只允许 GitHub 官方域名与内置镜像候选域名，
@@ -2367,6 +2673,39 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		w.sendUpgradeProgress("downloading", 0, "下载线路测速未选出准入线路，按内置顺序逐个尝试")
 	}
 	fmt.Printf("📦 升级下载线路排名: %s\n", describeUpgradeRoutes(plan.Probed()))
+
+	// 校验先行（round-5 L2-03）：锚在本体下载之前定下，本体腿才
+	// 能在腿内校验（见 downloadUpgradeBinaryChecked）。两个锚源
+	// 都在此就绪：面板 expectedSha256（命令已带）与下载通道的
+	// .sha256（本步拉取）。校验腿与二进制腿同线路排名、同共享
+	// 预算（dlCtx, R8-T-09）——每次尝试是 GET+正文读取的整体、
+	// 自带进展看门狗（upgradeStallWindow），任一失败切下一排名
+	// 线路，全部失败才整单失败（R7-J-02 + R3-WDG-01 + Phase F
+	// 修复 + KU4 的口径不变，只是顺序由本体后移到本体之前）。
+	// S-02: Checksum 校验强制，拿不到校验值一律中止。
+	w.sendUpgradeProgress("verifying", 0, "获取校验文件...")
+	expectedHash, checksumRoute, err := downloadUpgradeChecksumRouted(dlCtx, httpClient, plan, checksumURL)
+	if err != nil {
+		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
+	}
+	// L2-08: 面板未下发 expectedSha256 时（旧面板/辨不出架构/
+	// 预热超时），.sha256 与本体同通道、无带外信任根——经一条
+	// 不同线路复核同一锚值，两线不一致即中止；面板锚在场时
+	// .sha256 本就是交叉核对，不必复核（见
+	// corroborateUpgradeChecksum）。
+	if expectedSha256 == "" {
+		// RV2-03: a corroboration degradation is reported on the
+		// upgrade progress channel (panel-visible), not stdout only.
+		note := func(msg string) { w.sendUpgradeProgress("verifying", 0, msg) }
+		if err := corroborateUpgradeChecksum(dlCtx, httpClient, checksumRoute, checksumURL, expectedHash, note); err != nil {
+			return err
+		}
+	}
+	anchor := expectedSha256
+	if anchor == "" {
+		anchor = expectedHash
+	}
+
 	// R7-J-02 + R3-WDG-01 + KU4: downloadUpgradeBinary 按测速排名
 	// 逐线路跑下载尝试，任一线路失败（含正文停滞被看门狗判失败）
 	// 自动切下一线路，口径见该函数注释。
@@ -2377,35 +2716,22 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 			w.sendUpgradeProgress("downloading", percent, fmt.Sprintf("下载中... %d%%", percent))
 		}
 	}
-	downloaded, actualHash, err := downloadUpgradeBinary(dlCtx, httpClient, plan, downloadURL, tmpPath, report)
+	downloaded, actualHash, err := downloadUpgradeBinaryChecked(dlCtx, httpClient, plan, downloadURL, tmpPath, anchor, report)
 	if err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return fmt.Errorf("下载升级包失败: %v", err)
 	}
 
 	w.sendUpgradeProgress("downloading", 100, fmt.Sprintf("下载完成 (%d bytes)", downloaded))
 
-	// S-02: Checksum 校验强制，不再允许为空或跳过
-	// 若拿不到 checksum 或校验失败，一律中止并删除临时文件
-	w.sendUpgradeProgress("verifying", 0, "校验文件完整性...")
-	// R7-J-02 + R3-WDG-01 + Phase F 修复 + KU4：校验腿经
-	// downloadUpgradeChecksum 与二进制腿同线路排名、同共享预算
-	// （dlCtx, R8-T-09）——每次尝试是 GET+正文读取的整体、自带
-	// 无进展看门狗（upgradeStallWindow），任一失败（含 200 头后
-	// 正文停滞被看门狗掐断）切下一排名线路，全部失败才整单失败。
-	// 此前正文读取在只管响应头阶段的 GET 回退之外，正文停滞即
-	// 整单 ErrNoProgress 终止、无回退（Phase F 实测自升级 90.5s
-	// 失败；对照形态见 fetchUpgradeChecksumAttempt）。
-	expectedHash, err := downloadUpgradeChecksum(dlCtx, httpClient, plan, checksumURL)
-	if err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("S-02: 获取校验值失败: %v", err)
-	}
-	// 面板源二期：命令带了 expectedSha256 时它就是信任根（控制
-	// 通道下发），下载通道的 .sha256 退为交叉核对；未带时与旧
-	// 口径逐字一致（见 verifyUpgradeHashes）。
+	// S-02 最终门（语义不变）：面板源二期——命令带了
+	// expectedSha256 时它就是信任根（控制通道下发），下载通道的
+	// .sha256 退为交叉核对；未带时与旧口径逐字一致（见
+	// verifyUpgradeHashes）。腿内校验已按同一锚逐腿把关，此处
+	// 为整单兜底复核。
+	w.sendUpgradeProgress("verifying", 50, "校验文件完整性...")
 	if err := verifyUpgradeHashes(expectedSha256, expectedHash, actualHash); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	if expectedSha256 != "" {
@@ -2415,7 +2741,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	w.sendUpgradeProgress("verifying", 100, "校验通过")
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return fmt.Errorf("设置执行权限失败: %v", err)
 	}
 
@@ -2423,7 +2749,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 不证明新二进制在本机可执行（错架构/UPX 损坏/libc 不兼容）。
 	w.sendUpgradeProgress("installing", 30, "冒烟测试新版本...")
 	if err := smokeTestAgentBinary(tmpPath); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	fmt.Println("✅ 新版本二进制冒烟测试通过")
@@ -2433,7 +2759,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 旧实现吞掉写错误继续替换是节点变砖的直接原因。
 	w.sendUpgradeProgress("installing", 50, "备份旧版本...")
 	if err := backupCurrentAgentBinary(binaryPath, backupPath); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	fmt.Println("📦 旧版本已备份到", backupPath)
@@ -2448,18 +2774,22 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 不依赖面板连接）。
 	manager, err := detectServiceManager()
 	if err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	script, err := buildAgentRestartScriptFor(manager, tmpPath, binaryPath, backupPath)
 	if err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return err
 	}
 	if err := launchAgentControlScript(manager, script); err != nil {
-		os.Remove(tmpPath)
+		staging.Discard()
 		return fmt.Errorf("启动重启脚本失败: %v", err)
 	}
+	// F-RM-01: 脚本已启动，暂存文件的所有权移交脚本——它 sleep＋
+	// 停服务之后才 mv，handler 返回后必须仍在。Close 自此为空操作，
+	// 文件由脚本的 mv 消费（失败时脚本自行删除并在日志中点名）。
+	staging.Handoff()
 
 	w.sendUpgradeProgress("installing", 100, "重启中...")
 	fmt.Println("🔄 重启脚本已启动, Agent 将在 1 秒后重启...")
@@ -3083,9 +3413,13 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 		response.ErrorMessage = err.Error()
 	} else {
 		response.Success = true
-		response.AverageTime = avgTime
-		response.PacketLoss = packetLoss
 	}
+	// RM-VERIFY S5 观察②：tcpPingHost 在失败时同样返回实测值
+	// （全失败 packetLoss=100、DNS 失败同），错误分支不得丢弃——
+	// 旧组装只在成功分支赋值，死目标被呈现为 0% 丢包，与实测相反
+	// （L4-04 诊断数必须真实）。验证前置返回未执行探测、不在此列。
+	response.AverageTime = avgTime
+	response.PacketLoss = packetLoss
 
 	return response, nil
 }
@@ -3149,9 +3483,12 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 		response.ErrorMessage = err.Error()
 	} else {
 		response.Success = true
-		response.AverageTime = avgTime
-		response.PacketLoss = packetLoss
 	}
+	// RM-VERIFY S5 观察②（UDP 腿同形态）：udpPingHost 失败时同样
+	// 返回实测 packetLoss=100，错误分支不得丢弃，理由同 handleTcpPing。
+	// 注：此处只修组装回传，UDP 探测语义（只 Dial 不发包）不在本簇范围。
+	response.AverageTime = avgTime
+	response.PacketLoss = packetLoss
 
 	return response, nil
 }

@@ -557,18 +557,31 @@ func TestDiagnoseForwardRuntimeReturnsNftablesRuleStatus(t *testing.T) {
 		t.Fatalf("diagnose forward: %v", err)
 	}
 	results, ok := payload["results"].([]map[string]interface{})
-	if !ok || len(results) != 1 {
-		t.Fatalf("expected one nftables diagnosis result, got %#v", payload["results"])
+	if !ok {
+		t.Fatalf("expected nftables diagnosis results, got %#v", payload["results"])
 	}
-	result := results[0]
-	if result["forwardMode"] != "nftables" || result["nftRuleStatus"] != runtimenft.StatusApplied {
-		t.Fatalf("expected nftables applied result, got %#v", result)
+	// L4-04：applied 不再直接报成功——按 binding 协议集（tcp,udp）
+	// 逐协议真实探测。本夹具节点无 agent 在线，探测必失败：两项均
+	// 应为失败、数值来自探测，且 message 带规则已下发前缀；旧行为
+	// 是 1 项 success=true + packetLoss 伪造为 0。
+	if len(results) != 2 {
+		t.Fatalf("expected one probe result per binding protocol, got %#v", results)
 	}
-	if result["success"] != true {
-		t.Fatalf("expected nftables diagnosis success, got %#v", result)
+	protocols := map[string]bool{}
+	for _, result := range results {
+		if result["forwardMode"] != "nftables" || result["nftRuleStatus"] != runtimenft.StatusApplied {
+			t.Fatalf("expected nftables applied result, got %#v", result)
+		}
+		if result["success"] != false {
+			t.Fatalf("applied status alone must not report success (probe failed: node offline), got %#v", result)
+		}
+		if !strings.Contains(asString(result["message"]), "已下发") {
+			t.Fatalf("expected applied message prefix, got %#v", result["message"])
+		}
+		protocols[asString(result["protocol"])] = true
 	}
-	if !strings.Contains(asString(result["message"]), "已下发") {
-		t.Fatalf("expected applied message, got %#v", result["message"])
+	if !protocols["tcp"] || !protocols["udp"] {
+		t.Fatalf("expected tcp+udp probe results, got %#v", results)
 	}
 }
 

@@ -379,6 +379,25 @@ func (r *Repository) GetTunnelName(tunnelID int64) (string, error) {
 	return name, nil
 }
 
+// GetTunnelNameTx is GetTunnelName inside a caller transaction. The
+// R5-FGRP scope gate calls it on the batch-assignment path, where the
+// pool handle would deadlock against the open transaction (SQLite
+// MaxOpenConns(1)).
+func (r *Repository) GetTunnelNameTx(tx *gorm.DB, tunnelID int64) (string, error) {
+	if tx == nil {
+		return r.GetTunnelName(tunnelID)
+	}
+	var name string
+	err := tx.Model(&model.Tunnel{}).Where("id = ?", tunnelID).Pluck("name", &name).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	return name, nil
+}
+
 func (r *Repository) ListChainNodesForTunnel(tunnelID int64) ([]model.ChainNodeRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")

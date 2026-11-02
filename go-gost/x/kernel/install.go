@@ -100,9 +100,19 @@ func resolveArch(d *Download) (string, error) {
 //     while the very same 301 is harmless on the upgrade path
 //     (GATE F2). Cross-host hops keep the full judgment, so the
 //     SSRF line does not move.
-//   - The dial is pinned and re-judges the hard-deny layer on the
-//     IPs it actually dials, so rebinding cannot swap in a metadata
-//     target between the hop check and the connect.
+//   - The dial is pinned and re-judges on the IPs it actually
+//     dials, at the SAME layer the request's position in the
+//     redirect chain was judged at (round-5 L2-15: the dial used
+//     to re-judge hard-deny only even for cross-host hops the
+//     redirect check had fully judged, leaving a DNS-rebinding
+//     window between hop check and connect — the probe face in
+//     x/socket/outbound_guard.go never had this gap). CheckRedirect
+//     stamps the required layer into the request context (see
+//     fetchDialFullContextKey); the entry dial and same-origin
+//     hops re-judge the entry layer (hard-deny), cross-host hops
+//     re-judge the full non-public layer, so rebinding cannot
+//     swap in a metadata OR private target between the hop check
+//     and the connect.
 
 var fetchLookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
 	return net.DefaultResolver.LookupIP(ctx, "ip", host)
@@ -149,14 +159,24 @@ func validateFetchEntryURL(ctx context.Context, raw string) error {
 	return err
 }
 
-// fetchDialContext pins the dial: re-resolve, re-judge the hard-deny
-// layer, dial a validated IP.
+// fetchDialFullContextKey carries the dial-time judgment layer
+// for one request: true = full non-public judgment (the request
+// is a cross-host redirect hop), false/absent = entry layer
+// (hard-deny only). CheckRedirect stamps it per hop; without the
+// stamp a later hop would inherit the entry layer even though its
+// own hop check ran the full judgment (L2-15).
+type fetchDialFullContextKey struct{}
+
+// fetchDialContext pins the dial: re-resolve, re-judge at the
+// layer the request's hop was judged at (see the context key
+// above), dial a validated IP.
 func fetchDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
-	ips, err := judgeFetchHost(ctx, host, true)
+	hardOnly := ctx.Value(fetchDialFullContextKey{}) != true
+	ips, err := judgeFetchHost(ctx, host, hardOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -208,25 +228,49 @@ func fetchHTTPClient() *http.Client {
 			// for every privately addressed panel (GATE F2).
 			// Cross-host hops keep the full non-public judgment.
 			if len(via) > 0 && strings.EqualFold(req.URL.Host, via[0].URL.Host) {
-				_, err := judgeFetchHost(req.Context(), host, true)
+				if _, err := judgeFetchHost(req.Context(), host, true); err != nil {
+					return err
+				}
+				*req = *req.WithContext(context.WithValue(req.Context(), fetchDialFullContextKey{}, false))
+				return nil
+			}
+			if _, err := judgeFetchHost(req.Context(), host, false); err != nil {
 				return err
 			}
-			_, err := judgeFetchHost(req.Context(), host, false)
-			return err
+			// The dial for this hop must re-judge at the same full
+			// layer (L2-15); stamp it into the request context the
+			// transport dials with.
+			*req = *req.WithContext(context.WithValue(req.Context(), fetchDialFullContextKey{}, true))
+			return nil
 		},
 	}
+}
+
+// watchFailure renders a fetch failure under the attempt's
+// watchdog: whichever progress judgment fired (WDG-01 stall /
+// WDG-02 trickle) replaces the raw transport error, so callers
+// (and their fallback logic) see the watchdog's verdict.
+func watchFailure(watcher *download.Watcher, stage string, err error) error {
+	if watcher.Stalled() {
+		return fmt.Errorf("%s: %w", stage, download.ErrNoProgress)
+	}
+	if watcher.TooSlow() {
+		return fmt.Errorf("%s: %w", stage, download.ErrTooSlow)
+	}
+	return fmt.Errorf("%s: %v", stage, err)
 }
 
 func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 	if err := validateFetchEntryURL(ctx, url); err != nil {
 		return err
 	}
-	// R3-WDG-01: no-progress watchdog for this attempt. The watch
-	// starts now, so a peer that never sends headers trips it too;
-	// body bytes count as progress via the wrapped writer. On a
-	// stall the derived context is cancelled and the attempt fails
-	// with download.ErrNoProgress, leaving the caller's fallback
-	// sequence (mirror strip / next file) its remaining budget.
+	// R3-WDG-01/WDG-02: progress watchdog for this attempt. The
+	// watch starts now, so a peer that never sends headers trips
+	// it too; body bytes count as progress via the wrapped writer.
+	// On a stall (ErrNoProgress) or a below-floor trickle
+	// (ErrTooSlow) the derived context is cancelled and the
+	// attempt fails, leaving the caller's fallback sequence
+	// (mirror strip / next file) its remaining budget.
 	watcher := download.NewWatcher(fetchStallWindow)
 	ctx, stopWatch := watcher.Watch(ctx)
 	defer stopWatch()
@@ -236,21 +280,21 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 	}
 	resp, err := fetchHTTPClient().Do(req)
 	if err != nil {
-		if watcher.Stalled() {
-			return fmt.Errorf("下载失败: %w", download.ErrNoProgress)
-		}
-		return fmt.Errorf("下载失败: %v", err)
+		return watchFailure(watcher, "下载失败", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载失败: HTTP %d (%s)", resp.StatusCode, url)
 	}
+	// RV2-01: with the total known, the watchdog's trickle
+	// judgment projects against the caller's deadline instead of
+	// the fixed floor (see download.Watcher.SetGoal).
+	if resp.ContentLength > 0 {
+		watcher.SetGoal(resp.ContentLength)
+	}
 	n, err := io.Copy(watcher.Writer(w), io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		if watcher.Stalled() {
-			return fmt.Errorf("下载中断: %w", download.ErrNoProgress)
-		}
-		return fmt.Errorf("下载中断: %v", err)
+		return watchFailure(watcher, "下载中断", err)
 	}
 	if n > limit {
 		return fmt.Errorf("下载文件过大")
@@ -345,7 +389,13 @@ func apiProbe(ctx context.Context, url string) error {
 // assetProbe is the light admission probe for operations with no
 // small companion file: the route must answer the asset URL
 // itself with 200; only the first bytes are read, so the cost
-// stays bounded by the probe context the plan wraps it in.
+// stays bounded by the probe context the plan wraps it in. A 200
+// alone never admitted a route elsewhere in this package, and it
+// does not here either (round-5 L2-16): a mirror answering its
+// HTML landing page for the asset path is fake-alive, so an HTML
+// content type rejects the route. The pinned hash still backstops
+// the body itself — this only keeps junk routes out of the
+// ranking and off the first body leg.
 func assetProbe(ctx context.Context, url string) error {
 	if err := validateFetchEntryURL(ctx, url); err != nil {
 		return err
@@ -362,8 +412,38 @@ func assetProbe(ctx context.Context, url string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载失败: HTTP %d (%s)", resp.StatusCode, url)
 	}
+	if ct := strings.ToLower(resp.Header.Get("Content-Type")); strings.HasPrefix(ct, "text/html") {
+		return fmt.Errorf("资产探针返回 HTML 落地页（假活），已拒绝: %s", url)
+	}
 	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return err
+}
+
+// validateChecksumContent is the in-leg content judgment for
+// checksum legs (round-5 L2-04): the fetched bytes must contain a
+// parseable SHA-256, exactly the admission rule checksumProbe
+// applies at probe time — applied again inside the leg, because
+// stage-3 static-tail routes were never probed and a route probed
+// for one leg can still serve junk for another.
+func validateChecksumContent(b []byte) error {
+	if _, ok := parseChecksum(string(b)); !ok {
+		return fmt.Errorf("校验文件内容无可解析的 SHA256")
+	}
+	return nil
+}
+
+// validateReleaseJSON is the in-leg content judgment for GitHub
+// API legs (round-5 L2-04): the fetched bytes must parse as a
+// release JSON carrying a tag, the apiProbe admission rule.
+func validateReleaseJSON(b []byte) error {
+	var rel githubReleaseJSON
+	if err := json.Unmarshal(b, &rel); err != nil {
+		return fmt.Errorf("发布信息不可解析: %v", err)
+	}
+	if rel.TagName == "" {
+		return fmt.Errorf("发布信息缺少 tag_name")
+	}
+	return nil
 }
 
 // fetchRanked fetches a small file (checksum / API response) over
@@ -371,16 +451,93 @@ func assetProbe(ctx context.Context, url string) error {
 // and is written to w only on success, so a failed attempt never
 // leaves partial content behind (the deleted
 // fetchWithMirrorFallback contract, generalized to the plan).
-func fetchRanked(ctx context.Context, plan *download.Plan, directURL string, limit int64, w io.Writer) error {
-	_, err := download.TryPlan(plan, directURL, func(route download.Route, url string) error {
+// validate, when non-nil, judges the content INSIDE the leg
+// (round-5 L2-04): a route that answers 200 with unusable content
+// loses the leg and the plan moves on, instead of the leg
+// "succeeding" and the caller's after-the-fact parse failing the
+// whole operation with every other route untried. Returns the
+// winning route (the anchor corroboration below needs it).
+func fetchRanked(ctx context.Context, plan *download.Plan, directURL string, limit int64, validate func([]byte) error, w io.Writer) (download.Route, error) {
+	return download.TryPlan(plan, directURL, func(route download.Route, url string) error {
 		var buf bytes.Buffer
 		if err := fetch(ctx, url, limit, &buf); err != nil {
 			return err
 		}
+		if validate != nil {
+			if err := validate(buf.Bytes()); err != nil {
+				return err
+			}
+		}
 		_, err := io.Copy(w, &buf)
 		return err
 	})
-	return err
+}
+
+// anchorCorroborateTimeout bounds one anchor corroboration: it is
+// a cross-check on a small file, never worth the whole-operation
+// budget. A var so tests can shrink it.
+var anchorCorroborateTimeout = 20 * time.Second
+
+// corroborateAnchorPlan returns a plan over every built-in route
+// EXCEPT winner (round-5 L2-08), or nil when no other route
+// exists. The checksum/API anchor of a kernel or geo download
+// otherwise rides the same channel as the file it vouches for: a
+// single malicious or hijacked mirror that wins both legs can
+// serve a self-consistent fake (binary, digest) pair and the
+// agent installs and runs it. Re-fetching the anchor through a
+// DIFFERENT route and requiring the same digest means one route
+// alone can no longer forge the pair. The panel-source extra
+// route is deliberately not in this set (download.AllRoutes is
+// the built-in candidate list): when winner IS the panel route,
+// every built-in qualifies as "different"; when winner is a
+// built-in, it is the one excluded.
+func corroborateAnchorPlan(winner download.Route) *download.Plan {
+	var routes []download.Route
+	for _, r := range download.AllRoutes() {
+		if r.Prefix != winner.Prefix {
+			routes = append(routes, r)
+		}
+	}
+	if len(routes) == 0 {
+		return nil
+	}
+	return download.NewStaticPlan(routes)
+}
+
+// corroborateAnchorDigest re-fetches the anchor behind directURL
+// through a route different from winner and requires the SAME
+// digest. fetchOne runs one anchor fetch over a given plan and
+// extracts the digest. Verdicts: a second route answering with a
+// DIFFERENT digest is a hard failure (the caller must refuse the
+// install); a second route not answering at all (every other
+// route dead) degrades to the single anchor — single-route
+// environments keep today's trust level instead of losing
+// installs, and the residual risk is exactly that case. The
+// degradation is announced through note, the caller's
+// panel-visible log surface (RV2-03: a security control silently
+// weakening must not exist only in the agent's stdout); a nil
+// note falls back to stdout for callers without a surface.
+func corroborateAnchorDigest(ctx context.Context, winner download.Route, directURL string, fetchOne func(context.Context, *download.Plan) (string, error), want string, note func(string)) error {
+	alt := corroborateAnchorPlan(winner)
+	if alt == nil {
+		return nil
+	}
+	actx, cancel := context.WithTimeout(ctx, anchorCorroborateTimeout)
+	defer cancel()
+	got, err := fetchOne(actx, alt)
+	if err != nil {
+		msg := fmt.Sprintf("跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（%v）", err)
+		if note != nil {
+			note(msg)
+		} else {
+			fmt.Printf("⚠️ %s\n", msg)
+		}
+		return nil
+	}
+	if got != want {
+		return fmt.Errorf("校验值经两条不同线路获取的结果不一致，拒绝安装: %s != %s", got, want)
+	}
+	return nil
 }
 
 // githubAPIBase is a variable so tests can point it at a local server.
@@ -397,7 +554,9 @@ type githubReleaseJSON struct {
 
 // resolveGitHub fills in the download URL and digest of a release asset from
 // the GitHub API (the asset "digest" field is "sha256:<hex>").
-func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, digest string, err error) {
+// note is the caller's panel-visible log surface for the anchor
+// corroboration's degradation notice (RV2-03); nil logs to stdout.
+func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string, note func(string)) (url, digest string, err error) {
 	path := "latest"
 	if g.Tag != "" {
 		path = "tags/" + g.Tag
@@ -411,7 +570,8 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 	// 返回的资产地址是直连形式，由 install 的计划负责选线。
 	plan := download.NewPlan(ctx, apiURL, apiProbe, panelExtraRoutes()...)
 	var body strings.Builder
-	if err := fetchRanked(ctx, plan, apiURL, 4<<20, &body); err != nil {
+	winner, err := fetchRanked(ctx, plan, apiURL, 4<<20, validateReleaseJSON, &body)
+	if err != nil {
 		return "", "", fmt.Errorf("查询 GitHub 发布信息失败: %v", err)
 	}
 	var rel githubReleaseJSON
@@ -420,23 +580,51 @@ func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, dig
 	}
 	version := strings.TrimPrefix(rel.TagName, "v")
 	name := strings.NewReplacer("{VERSION}", version, "{ARCH}", arch).Replace(g.Asset)
+	url, digest, err = releaseAssetDigest(&rel, name)
+	if err != nil {
+		return "", "", err
+	}
+	// L2-08: the API digest is the body's only trust anchor and it
+	// arrived over the same route system the body will use —
+	// corroborate it through a different route before trusting it.
+	if err := corroborateAnchorDigest(ctx, winner, apiURL, func(actx context.Context, alt *download.Plan) (string, error) {
+		var altBody strings.Builder
+		if _, err := fetchRanked(actx, alt, apiURL, 4<<20, validateReleaseJSON, &altBody); err != nil {
+			return "", err
+		}
+		var altRel githubReleaseJSON
+		if err := json.Unmarshal([]byte(altBody.String()), &altRel); err != nil {
+			return "", err
+		}
+		_, altDigest, err := releaseAssetDigest(&altRel, name)
+		return altDigest, err
+	}, digest, note); err != nil {
+		return "", "", err
+	}
+	return url, digest, nil
+}
+
+// releaseAssetDigest finds asset name in a parsed release JSON
+// and returns its download URL and normalized SHA-256 digest.
+func releaseAssetDigest(rel *githubReleaseJSON, name string) (string, string, error) {
 	for _, a := range rel.Assets {
 		if a.Name != name {
 			continue
 		}
-		digest = strings.ToLower(strings.TrimPrefix(a.Digest, "sha256:"))
+		digest := strings.ToLower(strings.TrimPrefix(a.Digest, "sha256:"))
 		if !sha256HexPattern.MatchString(digest) || len(digest) != 64 {
 			return "", "", fmt.Errorf("GitHub 未提供 %s 的校验值", name)
 		}
-		url = a.BrowserDownloadURL
-		return url, digest, nil
+		return a.BrowserDownloadURL, digest, nil
 	}
 	return "", "", fmt.Errorf("发布 %s 中没有文件 %s", rel.TagName, name)
 }
 
 // install downloads, verifies and unpacks a binary into binDir. It refuses to
-// install anything whose SHA-256 it cannot establish.
-func install(d *Download, binDir string) error {
+// install anything whose SHA-256 it cannot establish. note is the
+// caller's panel-visible log surface for the anchor
+// corroboration's degradation notice (RV2-03); nil logs to stdout.
+func install(d *Download, binDir string, note func(string)) error {
 	arch, err := resolveArch(d)
 	if err != nil {
 		return err
@@ -449,7 +637,7 @@ func install(d *Download, binDir string) error {
 	defer cancel()
 
 	if d.GitHub != nil && (strings.Contains(url, "{VERSION}") || url == "" || (want == "" && sumURL == "")) {
-		ghURL, digest, err := resolveGitHub(ctx, d.GitHub, arch)
+		ghURL, digest, err := resolveGitHub(ctx, d.GitHub, arch, note)
 		if err != nil {
 			return err
 		}
@@ -485,29 +673,55 @@ func install(d *Download, binDir string) error {
 		plan = download.NewPlan(ctx, url, assetProbe, panelExtraRoutes()...)
 	}
 
-	// 本体下载走可续传的共享 transfer（download.FileTransfer，
-	// 1.7.12）：一条线路中途失败时已落盘字节保留，下一线路以
-	// Range 续传，不再每腿从 0 重下（慢节点在整程预算内被首腿
-	// 涓流饿死的修复口径，与 agent 自升级同源）。哈希由 transfer
-	// 持续累计，成功后与 want 的比对口径不变。
-	transfer := download.NewFileTransfer(tmp.Name(), maxDownloadBytes, 0o600)
-	if _, err := download.TryPlan(plan, url, func(route download.Route, u string) error {
-		return fetchFileResume(ctx, transfer, u)
-	}); err != nil {
-		return err
-	}
+	// 校验先行（round-5 L2-03）：want 在本体下载之前总是已知——
+	// 钉死哈希 / API digest 已在上方定下，只剩 sumURL 形态，此处
+	// 先把校验文件拉回来（腿内内容校验＋跨线路锚复核，L2-04 /
+	// L2-08）。此前本体下完才比对：一条线路给出「完整但错误」的
+	// 内容即整单失败、其余线路永不尝试。
 	if want == "" {
 		var sb strings.Builder
-		if err := fetchRanked(ctx, plan, sumURL, 64<<10, &sb); err != nil {
+		winner, err := fetchRanked(ctx, plan, sumURL, 64<<10, validateChecksumContent, &sb)
+		if err != nil {
 			return fmt.Errorf("获取校验文件失败: %v", err)
 		}
 		var ok bool
 		if want, ok = parseChecksum(sb.String()); !ok {
 			return fmt.Errorf("校验文件中没有 SHA256")
 		}
+		if err := corroborateAnchorDigest(ctx, winner, sumURL, func(actx context.Context, alt *download.Plan) (string, error) {
+			var altSB strings.Builder
+			if _, err := fetchRanked(actx, alt, sumURL, 64<<10, validateChecksumContent, &altSB); err != nil {
+				return "", err
+			}
+			altWant, ok := parseChecksum(altSB.String())
+			if !ok {
+				return "", fmt.Errorf("校验文件中没有 SHA256")
+			}
+			return altWant, nil
+		}, want, note); err != nil {
+			return err
+		}
 	}
-	if got := transfer.Sum(); got != want {
-		return fmt.Errorf("SHA256 校验失败: %s != %s", got, want)
+
+	// 本体下载走可续传的共享 transfer（download.FileTransfer，
+	// 1.7.12）：一条线路中途失败时已落盘字节保留，下一线路以
+	// Range 续传，不再每腿从 0 重下（慢节点在整程预算内被首腿
+	// 涓流饿死的修复口径，与 agent 自升级同源）。哈希由 transfer
+	// 持续累计，并在每条腿内与 want 比对（L2-03，与 geodata 的
+	// 腿内比对同口径）：某条线路下完但组装哈希不符时丢弃断点
+	// （Reset），由下一线路从 0 重下，而不是整单失败。
+	transfer := download.NewFileTransfer(tmp.Name(), maxDownloadBytes, 0o600)
+	if _, err := download.TryPlan(plan, url, func(route download.Route, u string) error {
+		if err := fetchFileResume(ctx, transfer, u); err != nil {
+			return err
+		}
+		if got := transfer.Sum(); got != want {
+			_ = transfer.Reset()
+			return fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s（本线路作废，换线重下）", want, got)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	staging := binDir + ".staging"

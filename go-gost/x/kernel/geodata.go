@@ -83,7 +83,10 @@ func (m *Manager) UpdateGeoData(ctx context.Context) {
 	m.mu.Unlock()
 
 	for _, job := range jobs {
-		staged, err := stageGeoFiles(ctx, job.binDir, job.files)
+		// RV2-03: anchor-corroboration degradations surface in the
+		// instance log (the panel-visible kernel log), not stdout.
+		note := func(msg string) { m.logGeo(job.kernelType, msg) }
+		staged, err := stageGeoFiles(ctx, job.binDir, job.files, note)
 		if err != nil {
 			m.logGeo(job.kernelType, "分流数据更新失败: "+err.Error())
 		}
@@ -103,7 +106,7 @@ func (m *Manager) UpdateGeoData(ctx context.Context) {
 // fallback leg) is recorded and the round continues with the
 // remaining files; one stalled file must not starve the whole
 // round. The round ctx itself stays a single 5-minute budget.
-func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]string, error) {
+func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile, note func(string)) ([]string, error) {
 	// KU4 (1.7.7): one probe plan per round, shared by every file
 	// (probe target: the first file's checksum URL) — routes are
 	// measured once per operation, not per file.
@@ -114,7 +117,7 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 	var staged []string
 	var errs []string
 	for _, f := range files {
-		changed, err := stageGeoFile(ctx, binDir, f, plan)
+		changed, err := stageGeoFile(ctx, binDir, f, plan, note)
 		if err != nil {
 			errs = append(errs, f.Name+": "+err.Error())
 			continue
@@ -129,19 +132,37 @@ func stageGeoFiles(ctx context.Context, binDir string, files []GeoFile) ([]strin
 	return staged, nil
 }
 
-func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.Plan) (bool, error) {
+func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.Plan, note func(string)) (bool, error) {
 	if plan == nil {
 		plan = download.NewPlan(ctx, directForm(f.ChecksumURL), checksumProbe, panelExtraRoutes()...)
 	}
 	var sumBody strings.Builder
 	// F-139 口径、KU4 (1.7.7) 形态：校验文件走本轮共享的测速计划
-	// （替代原 fetchWithMirrorFallback 的镜像->直连双试）。
-	if err := fetchRanked(ctx, plan, directForm(f.ChecksumURL), 4096, &sumBody); err != nil {
+	// （替代原 fetchWithMirrorFallback 的镜像->直连双试）。读取
+	// 上限与探针口径同为 64KiB（round-5 L2-17：此前实拉限 4096
+	// 而探针放行 64KiB，校验文件落在 4–64KB 区间时探针判活、
+	// 实拉却在每条线路报「文件过大」，整轮确定性失败）；内容在
+	// 腿内校验（L2-04），并经不同线路复核锚值（L2-08）。
+	winner, err := fetchRanked(ctx, plan, directForm(f.ChecksumURL), 64<<10, validateChecksumContent, &sumBody)
+	if err != nil {
 		return false, err
 	}
 	want, ok := parseChecksum(sumBody.String())
 	if !ok {
 		return false, errors.New("校验文件中没有 SHA256")
+	}
+	if err := corroborateAnchorDigest(ctx, winner, directForm(f.ChecksumURL), func(actx context.Context, alt *download.Plan) (string, error) {
+		var altBody strings.Builder
+		if _, err := fetchRanked(actx, alt, directForm(f.ChecksumURL), 64<<10, validateChecksumContent, &altBody); err != nil {
+			return "", err
+		}
+		altWant, ok := parseChecksum(altBody.String())
+		if !ok {
+			return "", errors.New("校验文件中没有 SHA256")
+		}
+		return altWant, nil
+	}, want, note); err != nil {
+		return false, err
 	}
 	path := filepath.Join(binDir, f.Name)
 	if have, err := fileSHA256(path); err == nil && have == want {
@@ -155,7 +176,7 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.
 	// 校验回退口径。
 	tmp := path + ".new"
 	transfer := download.NewFileTransfer(tmp, geoMaxSize, 0o644)
-	_, err := download.TryPlan(plan, directForm(f.URL), func(route download.Route, u string) error {
+	_, err = download.TryPlan(plan, directForm(f.URL), func(route download.Route, u string) error {
 		if err := fetchFileResume(ctx, transfer, u); err != nil {
 			return err
 		}

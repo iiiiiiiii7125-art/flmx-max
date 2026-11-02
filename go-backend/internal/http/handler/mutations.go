@@ -176,11 +176,8 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 分组父权限同步是提交后的副作用，不纳入事务。
-	for _, gid := range groupIDs {
-		_ = h.syncPermissionsByUserGroup(gid)
-	}
-
+	// R5-FGRP：分组只是分配范围记账——建用户时登记成员关系即止，
+	// 不再按组权限展开任何隧道授权（旧「分组父权限同步」已删除）。
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -325,8 +322,8 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		hasUpdateGroupIDs = true
 		// B03-001（R3 K4）：同 userCreate——原始值 fail-closed 前置
 		// 检查（本块为 R2X-036 校验前置段，仍在首写之前）。此前
-		// [-5] 被 asInt64Slice 过滤为空集，替换语义清空该用户全部
-		// 分组归属并连带撤销组授权却回成功（repo 侧
+		// [-5] 被 asInt64Slice 过滤为空集，替换语义会把该用户全部
+		// 分组归属静默清空却回成功（repo 侧
 		// ReplaceUserGroupsByUserIDTx 另有同守卫兜底）。
 		if bad := nonPositiveRawIDs(groupIDsRaw); len(bad) > 0 {
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("成员ID非法: %v", bad)))
@@ -431,37 +428,23 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if hasUpdateGroupIDs {
 		newGroupIDs := updateGroupIDs
-		// X-P2-6 + X-P1-2①：分组替换与「被移出分组的组建授权撤销」在同一
-		// 事务内完成；replaceErr 必须上抛，不再吞错回成功。
+		// X-P2-6：分组成员替换在事务内完成；replaceErr 必须上抛，
+		// 不再吞错回成功。R5-FGRP：成员变动只是范围记账——被移出
+		// 分组不再连带撤销任何隧道授权、加入分组也不再展开授权
+		// （旧 X-P1-2① 撤销与父权限同步已随组语义改版删除）。
 		tx := h.repo.BeginTx()
 		if tx == nil || tx.Error != nil {
 			response.WriteJSON(w, response.Err(-2, "database unavailable"))
 			return
 		}
 		defer func() { tx.Rollback() }()
-		affected, removed, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now)
-		if replaceErr != nil {
+		if _, _, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now); replaceErr != nil {
 			response.WriteJSON(w, response.Err(-2, replaceErr.Error()))
 			return
-		}
-		var revokedPairs []repo.RevokedUserTunnelPair
-		for _, gid := range removed {
-			pairs, revokeErr := h.repo.RevokeGroupGrantsForUserTx(tx, gid, id)
-			if revokeErr != nil {
-				response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
-				return
-			}
-			revokedPairs = append(revokedPairs, pairs...)
 		}
 		if err := tx.Commit().Error; err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
-		}
-		for _, pair := range revokedPairs {
-			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-		}
-		for _, gid := range affected {
-			_ = h.syncPermissionsByUserGroup(gid)
 		}
 	}
 	if oldUser.MaxConn != maxConn {
@@ -892,7 +875,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
 		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
 		// 路此前缺）。补偿失败只记日志：原错误仍须回给调用方。
-		if _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+		if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1348,7 +1331,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
-	brokenEntries, err := h.deleteNodeByID(id)
+	brokenEntries, soleRoleWarnings, err := h.deleteNodeByID(id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1364,9 +1347,14 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range brokenEntries {
 		brokenReferrers = append(brokenReferrers, entry.Display)
 	}
+	if soleRoleWarnings == nil {
+		soleRoleWarnings = []string{}
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"brokenReferrers":     brokenReferrers,
 		"brokenReferrerCount": len(brokenReferrers),
+		// L4-03：唯一入口/出口点名（新增字段，向后兼容）。
+		"soleRoleWarnings": soleRoleWarnings,
 	}))
 }
 
@@ -1674,6 +1662,9 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// 同节点的两个不同引用方显示串相同会被吞掉一条。
 	var brokenReferrers []string
 	seenReferrer := make(map[int64]struct{})
+	// L4-03：唯一入口/出口点名同 funnel 汇总（同文案只报一次）。
+	var soleRoleWarnings []string
+	seenSoleRole := make(map[string]struct{})
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -1685,7 +1676,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailureReason(failures, id, nodeName, "节点不存在")
 			continue
 		}
-		nodeReferrers, delErr := h.deleteNodeByID(id)
+		nodeReferrers, nodeSoleWarnings, delErr := h.deleteNodeByID(id)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
@@ -1703,9 +1694,16 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			seenReferrer[referrer.ID] = struct{}{}
 			brokenReferrers = append(brokenReferrers, referrer.Display)
 		}
+		for _, warning := range nodeSoleWarnings {
+			if _, dup := seenSoleRole[warning]; dup {
+				continue
+			}
+			seenSoleRole[warning] = struct{}{}
+			soleRoleWarnings = append(soleRoleWarnings, warning)
+		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -2652,6 +2650,12 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		for _, hop := range runtimeState.ChainHops {
 			finalPortNodes = append(finalPortNodes, hop...)
 		}
+		// L9 观察 1：type-1 游离段口不在 OutNodes/ChainHops 里，从
+		// SegmentPorts 补入提交段复检（与验证段同口径，堵两段之间
+		// 被并发占用的窗口；重复条目排除本隧道后恒通过，无副作用）。
+		for key, port := range runtimeState.SegmentPorts {
+			finalPortNodes = append(finalPortNodes, tunnelRuntimeNode{NodeID: key.nodeID, Port: port})
+		}
 		for _, n := range finalPortNodes {
 			if n.Port <= 0 {
 				continue
@@ -3032,18 +3036,47 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 	}
 }
 
+// forwardPortConflictMessage 按统一四源谓词给出的占用来源措辞
+// （L9 观察 2）：入站/链路段/联邦预留占用不得误报为「已被其他转发
+// 占用」——归因错误会让排障找错对象。conflict 为 nil（来源不可知）
+// 时退回不点名的「已被占用」。
+func forwardPortConflictMessage(node *nodeRecord, port int, conflict *repo.ForwardPortConflict) string {
+	if conflict != nil {
+		name := strings.TrimSpace(conflict.Name)
+		switch conflict.Source {
+		case repo.PortSourceInbound:
+			if name != "" {
+				return fmt.Sprintf("节点 %s 端口 %d 已被入站 %s 占用", node.Name, port, name)
+			}
+			return fmt.Sprintf("节点 %s 端口 %d 已被入站占用", node.Name, port)
+		case repo.PortSourceChain:
+			if name != "" {
+				return fmt.Sprintf("节点 %s 端口 %d 已被隧道 %s 的链路段占用", node.Name, port, name)
+			}
+			return fmt.Sprintf("节点 %s 端口 %d 已被隧道链路段占用", node.Name, port)
+		case repo.PortSourcePeer:
+			return fmt.Sprintf("节点 %s 端口 %d 已被联邦共享预留占用", node.Name, port)
+		}
+	}
+	return fmt.Sprintf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
+}
+
 func (h *Handler) validateForwardPortAvailabilityTx(tx *gorm.DB, node *nodeRecord, port int, currentForwardID int64) error {
 	if h == nil || h.repo == nil || tx == nil || node == nil || port <= 0 {
 		return nil
 	}
-	occupied, err := h.repo.HasOtherForwardOnNodePortTx(tx, node.ID, port, currentForwardID)
+	conflict, err := h.repo.FindOtherForwardOnNodePortTx(tx, node.ID, port, currentForwardID)
 	if err != nil {
 		return err
 	}
-	if occupied {
-		return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
+	if conflict == nil {
+		return nil
 	}
-	return nil
+	if conflict.Source == repo.PortSourceForward && conflict.Status == model.ForwardStatusPendingDelete {
+		return fmt.Errorf("节点 %s 端口 %d 正等待节点清理（转发 %s），请稍后重试或联系管理员",
+			node.Name, port, conflict.Name)
+	}
+	return errors.New(forwardPortConflictMessage(node, port, conflict))
 }
 
 func (h *Handler) validateTunnelEntryPortConflictsForNewEntriesTx(tx *gorm.DB, tunnelID int64, oldEntryNodeIDs, newEntryNodeIDs []int64) error {
@@ -3573,6 +3606,9 @@ type batchOperationResult struct {
 	// R2X-045：批量删节点打断的跨节点引用清单（与单删的
 	// brokenReferrers 同名字段/同口径）；仅删节点批量入口填充。
 	BrokenReferrers []string `json:"brokenReferrers,omitempty"`
+	// L4-03：批量删节点的「唯一入口/出口」点名清单（与单删的
+	// soleRoleWarnings 同名字段/同口径）；仅删节点批量入口填充。
+	SoleRoleWarnings []string `json:"soleRoleWarnings,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -5694,29 +5730,17 @@ func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { tx.Rollback() }()
-	// X-P1-2②：替换前取旧成员差集，被移出隧道的组建授权在同一事务内撤销。
-	previousTunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroupTx(tx, req.GroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
+	// R5-FGRP：隧道入组/出组只是范围记账——成员替换即止，不再按
+	// 差集撤销任何隧道授权、不再同步展开（旧 X-P1-2② 撤销与父
+	// 权限同步已随组语义改版删除）。
 	if err := h.repo.ReplaceTunnelGroupMembersTx(tx, req.GroupID, req.TunnelIDs, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	revokedPairs, revokeErr := h.repo.RevokeGroupGrantsForRemovedTunnelsTx(tx, req.GroupID, previousTunnelIDs, req.TunnelIDs)
-	if revokeErr != nil {
-		response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
-	_ = h.syncPermissionsByTunnelGroup(req.GroupID)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -5738,28 +5762,17 @@ func (h *Handler) groupUserAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { tx.Rollback() }()
-	previousUserIDs, err := h.repo.ListUserIDsByUserGroupTx(tx, req.GroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
+	// R5-FGRP：成员增减只是范围记账——替换即止，不再按差集撤销
+	// 被移出成员的任何隧道授权、不再同步展开（与 groupTunnelAssign
+	// 同口径，旧差集撤销与父权限同步已随组语义改版删除）。
 	if err := h.repo.ReplaceUserGroupMembersTx(tx, req.GroupID, req.UserIDs, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	revokedPairs, revokeErr := h.repo.RevokeGroupGrantsForRemovedUsersTx(tx, req.GroupID, previousUserIDs, req.UserIDs)
-	if revokeErr != nil {
-		response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
-	_ = h.syncPermissionsByUserGroup(req.GroupID)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -5799,37 +5812,12 @@ func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	// R2X-036（G-S02 子项，校验/读取前置档）：展开所需的两份成员名单在
-	// Insert 之前预读，读失败零落库；Insert 后用预读名单展开，不再重读。
-	userIDs, err := h.repo.ListUserIDsByUserGroup(req.UserGroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(req.TunnelGroupID)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
+	// R5-FGRP：组权限只是范围登记——Insert 即止，不再把组内用户
+	// ×组内隧道展开成实体授权、不触发任何转发下发。该范围只在
+	// 日后给组内用户逐个分配隧道时，由 upsertUserTunnelDB 的
+	// 分组范围门执法（超范围分配显式拒绝并点名）。
 	if err := h.repo.InsertGroupPermission(req.UserGroupID, req.TunnelGroupID, time.Now().UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	// X-P2-16：展开失败不再静默——部分失败在回执逐条列明，全失败报错。
-	result, applyErr := h.applyGroupPermissionWithLists(req.UserGroupID, req.TunnelGroupID, userIDs, tunnelIDs)
-	if applyErr != nil {
-		response.WriteJSON(w, response.Err(-2, applyErr.Error()))
-		return
-	}
-	if len(result.Failures) > 0 {
-		if result.Succeeded == 0 {
-			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("权限分配失败: %v", result.Failures[0].Error)))
-			return
-		}
-		response.WriteJSON(w, response.OK(map[string]interface{}{
-			"message":  "权限分配部分失败",
-			"failures": result.Failures,
-		}))
 		return
 	}
 	response.WriteJSON(w, response.OK("权限分配成功"))
@@ -5847,7 +5835,7 @@ func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) 
 	}
 	defer func() { tx.Rollback() }()
 
-	ug, tg, exists, err := h.repo.GetGroupPermissionPairByIDTx(tx, id)
+	_, _, exists, err := h.repo.GetGroupPermissionPairByIDTx(tx, id)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -5861,26 +5849,17 @@ func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// R5-FGRP：撤权只是删范围登记行——不再按台账撤销任何实体
+	// 授权、不清理转发（旧 pair 撤销已随组语义改版删除）。范围
+	// 收缩只影响之后的新分配。
 	if err := h.repo.DeleteGroupPermissionByIDTx(tx, id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	var revokedPairs []repo.RevokedUserTunnelPair
-	if exists {
-		var revokeErr error
-		revokedPairs, revokeErr = h.repo.RevokeGroupPermissionPairTx(tx, ug, tg)
-		if revokeErr != nil {
-			response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
-			return
-		}
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -5920,8 +5899,8 @@ func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table stri
 		return
 	}
 	// R4X-012: status 枚举 {0,1}（与 user 族同口径）——非法值直存会造出
-	// 既非启用又非停用的「僵尸组」：sync/分配面按 !=1 不展开、撤销谓词
-	// 按 ==0 不触发，两头不靠。
+	// 既非启用又非停用的「僵尸组」：分配范围门按 !=1 不计入约束、
+	// 停用记账又不触发，两头不靠。
 	if status := asInt(req["status"], 1); status != 0 && status != 1 {
 		response.WriteJSON(w, response.ErrDefault("分组状态只能为 0 或 1"))
 		return
@@ -5954,13 +5933,10 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
 		return
 	}
-	// R2X-013（BC-R2-02）：停用开始执法。先在事务内读旧行：结果状态为
-	// 停用时在同一事务内按 grant 台账撤销该组组建授权（手工授权不动，
-	// 级联候选收集复用删组同款逻辑），提交后清理被撤销授权的转发；
-	// 0→1 时走既有 sync 按成员关系补发。
-	// R3X-004（R2X-013 重开半）：撤销按「电平」而非「转换沿」触发——
-	// 0→0 保存（停用组改名等）只要仍有台账同样收敛撤销，与 sync 侧的
-	// applyGroupPermission 收敛互为双触点；无台账时撤销为空操作。
+	// R5-FGRP（取代 R2X-013/R3X-004 的停用执法）：停用/启用只是
+	// 范围记账的状态位——停用使该组不再产生分配范围约束，启用使
+	// 其恢复，两种方向都不新建、不删除任何实体授权、不清理转发
+	// （旧「停用按台账撤销＋启用 sync 补发」已随组语义改版删除）。
 	// R3X-020：presence 语义（对照 userUpdate 正本）——req 缺 name/
 	// status key 时以旧行现值填充，不再把缺省 status 当 1 启用停用组、
 	// 不再把缺省 name 清空。
@@ -5988,8 +5964,8 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		newStatus = asInt(req["status"], oldStatus)
 	}
 	// R4X-012: presence 回填后仍须过 create 同口径校验——显式空名拒绝
-	// （缺席已由旧行回填）、status 枚举 {0,1}；校验在落库与撤销之前，
-	// 拒绝即整单不生效（存量授权不得被非法更新连带收敛）。
+	// （缺席已由旧行回填）、status 枚举 {0,1}；校验在落库之前，
+	// 拒绝即整单不生效。
 	if newName == "" {
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
 		return
@@ -6012,30 +5988,9 @@ func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table stri
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	var revokedPairs []repo.RevokedUserTunnelPair
-	// R4X-012: 撤销谓词与全族对齐为 !=1（原 ==0）——存量非法 status
-	// （校验上线前已落库）在此收敛撤销，sync 侧 !=1 收敛兜底同口径。
-	if newStatus != 1 {
-		var revokeErr error
-		revokedPairs, revokeErr = h.repo.RevokeGroupGrantsByGroupTx(tx, table, id)
-		if revokeErr != nil {
-			response.WriteJSON(w, response.Err(-2, revokeErr.Error()))
-			return
-		}
-	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
-	if oldStatus == 0 && newStatus == 1 {
-		if table == "user_group" {
-			_ = h.syncPermissionsByUserGroup(id)
-		} else {
-			_ = h.syncPermissionsByTunnelGroup(id)
-		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -6045,160 +6000,14 @@ func (h *Handler) groupDelete(w http.ResponseWriter, r *http.Request, table stri
 	if id <= 0 {
 		return
 	}
-	// X-P1-2③：删组在删台账前先收集该组全部组建授权并撤销、清理转发，
-	// 否则台账删除后残留授权无从追溯。
-	revokedPairs, err := h.repo.GroupDeleteCascadeWithRevoke(table, id)
-	if err != nil {
+	// R5-FGRP：删组只删组与范围记账行（成员/权限对/台账），不再
+	// 撤销任何实体授权、不清理转发（旧 X-P1-2③ 的级联撤销已随
+	// 组语义改版删除）；已分配授权的增删只走用户分配面。
+	if err := h.repo.GroupDeleteCascade(table, id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	for _, pair := range revokedPairs {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-	}
 	response.WriteJSON(w, response.OKEmpty())
-}
-
-// groupGrantFailure is one failed entry of a group-permission expansion
-// (X-P2-16): the expansion no longer swallows per-entry failures.
-type groupGrantFailure struct {
-	UserID   int64  `json:"userId"`
-	TunnelID int64  `json:"tunnelId"`
-	Error    string `json:"error"`
-}
-
-type groupApplyResult struct {
-	Succeeded int
-	Failures  []groupGrantFailure
-	// RevokedPairs carries user_tunnels revoked by the R3X-004 disabled-
-	// side convergence below, so sync callers can clean their forwards.
-	RevokedPairs []repo.RevokedUserTunnelPair
-}
-
-func (h *Handler) applyGroupPermission(userGroupID, tunnelGroupID int64) (groupApplyResult, error) {
-	var result groupApplyResult
-	// R2X-013: expansion skips a pair when either side's group is not
-	// enabled (status != 1) — disabled groups never materialize grants,
-	// including for pre-existing pairs synced after the fact.
-	// R3X-004 (R2X-013 reopened half): skipping is not enough for stock
-	// formed before the disable — when either side is disabled, converge
-	// that group's ledger instead: revoke every grant recorded under it
-	// (manual user_tunnels are untouched, as RevokeGroupGrantsByGroupTx
-	// only orphans group-created rows) and report the revoked pairs so
-	// the caller can clean up their forwards. This makes sync a real
-	// retroactive-revocation touchpoint (BC-R2-02), not just a gate on
-	// new grants.
-	type groupRef struct {
-		table string
-		id    int64
-	}
-	var disabled []groupRef
-	for _, g := range []groupRef{
-		{"user_group", userGroupID},
-		{"tunnel_group", tunnelGroupID},
-	} {
-		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
-		if gErr != nil {
-			return result, gErr
-		}
-		if !gExists {
-			return result, nil
-		}
-		if gStatus != 1 {
-			disabled = append(disabled, g)
-		}
-	}
-	if len(disabled) > 0 {
-		for _, g := range disabled {
-			pairs, revokeErr := h.repo.RevokeGroupGrantsByGroup(g.table, g.id)
-			if revokeErr != nil {
-				return result, revokeErr
-			}
-			result.RevokedPairs = append(result.RevokedPairs, pairs...)
-		}
-		return result, nil
-	}
-	userIDs, err := h.repo.ListUserIDsByUserGroup(userGroupID)
-	if err != nil {
-		return result, err
-	}
-	tunnelIDs, err := h.repo.ListTunnelIDsByTunnelGroup(tunnelGroupID)
-	if err != nil {
-		return result, err
-	}
-	return h.applyGroupPermissionWithLists(userGroupID, tunnelGroupID, userIDs, tunnelIDs)
-}
-
-// applyGroupPermissionWithLists expands one group-permission pair from
-// caller-supplied member lists (R2X-036: groupPermissionAssign pre-reads
-// both lists before inserting the permission row, so a read failure can
-// no longer strand a persisted pair with no expansion).
-func (h *Handler) applyGroupPermissionWithLists(userGroupID, tunnelGroupID int64, userIDs, tunnelIDs []int64) (groupApplyResult, error) {
-	var result groupApplyResult
-	for _, uid := range userIDs {
-		for _, tid := range tunnelIDs {
-			utID, created, err := h.repo.EnsureUserTunnelGrant(uid, tid)
-			if err != nil {
-				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
-				continue
-			}
-			createdByGroup := 0
-			if created {
-				createdByGroup = 1
-			}
-			if err := h.repo.InsertGroupPermissionGrant(userGroupID, tunnelGroupID, utID, createdByGroup, time.Now().UnixMilli()); err != nil {
-				result.Failures = append(result.Failures, groupGrantFailure{UserID: uid, TunnelID: tid, Error: err.Error()})
-				continue
-			}
-			result.Succeeded++
-		}
-	}
-	return result, nil
-}
-
-func (h *Handler) syncPermissionsByUserGroup(userGroupID int64) error {
-	pairs, err := h.repo.ListGroupPermissionPairsByUserGroup(userGroupID)
-	if err != nil {
-		return err
-	}
-	for _, p := range pairs {
-		result, applyErr := h.applyGroupPermission(p[0], p[1])
-		if applyErr != nil {
-			log.Printf("sync permissions by user group %d failed: %v", userGroupID, applyErr)
-			continue
-		}
-		// R3X-004: pairs revoked by the disabled-side convergence lose
-		// their forwards, exactly like the groupUpdate revoke path.
-		for _, pair := range result.RevokedPairs {
-			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-		}
-		for _, f := range result.Failures {
-			log.Printf("sync permissions by user group %d: grant failed user=%d tunnel=%d err=%s", userGroupID, f.UserID, f.TunnelID, f.Error)
-		}
-	}
-	return nil
-}
-
-func (h *Handler) syncPermissionsByTunnelGroup(tunnelGroupID int64) error {
-	pairs, err := h.repo.ListGroupPermissionPairsByTunnelGroup(tunnelGroupID)
-	if err != nil {
-		return err
-	}
-	for _, p := range pairs {
-		result, applyErr := h.applyGroupPermission(p[0], p[1])
-		if applyErr != nil {
-			log.Printf("sync permissions by tunnel group %d failed: %v", tunnelGroupID, applyErr)
-			continue
-		}
-		// R3X-004: pairs revoked by the disabled-side convergence lose
-		// their forwards, exactly like the groupUpdate revoke path.
-		for _, pair := range result.RevokedPairs {
-			h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
-		}
-		for _, f := range result.Failures {
-			log.Printf("sync permissions by tunnel group %d: grant failed user=%d tunnel=%d err=%s", tunnelGroupID, f.UserID, f.TunnelID, f.Error)
-		}
-	}
-	return nil
 }
 
 type tunnelRuntimeNode struct {
@@ -6234,6 +6043,15 @@ type tunnelCreateState struct {
 	// prepare (P01-002), so tunnelUpdate can surface them in the
 	// receipt's warnings instead of drifting ports silently.
 	PortChanges []tunnelPortChange
+	// SegmentPorts records the port prepare resolved for every
+	// non-entry segment slot present in the request, keyed by
+	// (chainType, inx, nodeID) — the same identity
+	// replaceTunnelChainsTx persists. applyTunnelPortsToRequest
+	// writes them back into the request so the persisted rows carry
+	// exactly prepare's ports for every tunnel type, including
+	// type-1 tunnels whose segment rows prepare builds no runtime
+	// topology for (L9 观察 1).
+	SegmentPorts map[tunnelChainPortKey]int
 }
 
 // tunnelChainPortKey identifies one non-entry segment slot of a tunnel
@@ -6355,13 +6173,165 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 	return port, nil
 }
 
+// detachedSegmentPortConflictError 为游离显式段口的占用拒绝生成
+// 点名来源的文案（RV3-02，与 L9 观察 2 的 forwardPortConflictMessage
+// 同口径：入站/链路段/联邦预留占用不得误报为「已被其他转发占用」）。
+// 来源判定走统一谓词 NodePortOccupantTx，排除集与触发拒绝的
+// NodePortOccupiedForTunnelTx 完全一致（本隧道链路行不算占用），
+// 保证点名的来源就是触发拒绝的来源。
+func (h *Handler) detachedSegmentPortConflictError(tx *gorm.DB, nodeID int64, node *nodeRecord, port int, excludeTunnelID int64) error {
+	nodeName := ""
+	if node != nil {
+		nodeName = strings.TrimSpace(node.Name)
+	}
+	if nodeName == "" {
+		nodeName = strconv.FormatInt(nodeID, 10)
+	}
+	var excl repo.PortExclusions
+	if excludeTunnelID > 0 {
+		excl.TunnelIDs = []int64{excludeTunnelID}
+	}
+	source, err := h.repo.NodePortOccupantTx(tx, nodeID, port, excl)
+	if err != nil {
+		return err
+	}
+	switch source {
+	case repo.PortSourceInbound:
+		return fmt.Errorf("节点 %s 端口 %d 已被入站占用", nodeName, port)
+	case repo.PortSourceChain:
+		return fmt.Errorf("节点 %s 端口 %d 已被隧道链路段占用", nodeName, port)
+	case repo.PortSourcePeer:
+		return fmt.Errorf("节点 %s 端口 %d 已被联邦共享预留占用", nodeName, port)
+	case repo.PortSourceForward:
+		return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", nodeName, port)
+	}
+	return fmt.Errorf("节点 %s 端口 %d 已被占用", nodeName, port)
+}
+
+// prepareDetachedSegmentPorts resolves ports for the non-entry
+// segment rows of a non-type-2 tunnel request (L9 观察 1). These rows
+// never enter the runtime topology (state.OutNodes/ChainHops stay
+// empty for type 1), but replaceTunnelChainsTx persists them for
+// every tunnel type — so their ports must go through the same
+// discipline as type-2 segments:
+//   - omitted port on update: reuse the persisted port while legal,
+//     re-pick only when unusable, and record the move in
+//     state.PortChanges so the receipt warns (P01-002);
+//   - explicit port: range (1-65535) and four-source occupancy are
+//     checked here — the same position type-2 explicit ports get
+//     in validateExplicitPort (B4/F-015), minus the node-spec
+//     (port pool) check. The spec check stays exempt: the pool
+//     does not constrain these detached rows, and out-of-pool
+//     segment ports are legitimate stock (pinned by the C001
+//     latent-guard and R2B2 idempotency tests — their 29000/29001
+//     requests are in-range and unoccupied, so the two restored
+//     checks do not touch them). The occupancy check is the only
+//     gate on the create path: tunnelUpdate re-checks occupancy
+//     in its commit segment, tunnelCreate has no such recheck,
+//     and replaceTunnelChainsTx persists explicit ports verbatim
+//     (the chain_tunnel (node_id, port) unique index only catches
+//     chain-vs-chain collisions, as a raw DB error);
+//   - the resolved port lands in state.SegmentPorts so
+//     applyTunnelPortsToRequest writes it back and
+//     replaceTunnelChainsTx persists prepare's port instead of
+//     silently re-picking its own random one.
+//
+// Node records are loaded best-effort (for the receipt's node
+// names in port-change warnings); an unreadable record keeps the
+// historical tolerance for these detached rows instead of failing
+// the whole save, but an omitted port still resolves through the
+// shared segment-port machinery.
+func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interface{}, state *tunnelCreateState, excludeTunnelID int64) error {
+	outRaw := asMapSlice(req["outNodeId"])
+	chainRaw := asAnySlice(req["chainNodes"])
+	if len(outRaw) == 0 && len(chainRaw) == 0 {
+		return nil
+	}
+	existingPorts := map[tunnelChainPortKey]int{}
+	existingPortsByNode := map[int64]tunnelChainNodePort{}
+	if excludeTunnelID > 0 {
+		var err error
+		existingPorts, existingPortsByNode, err = h.existingTunnelChainPorts(tx, excludeTunnelID)
+		if err != nil {
+			return err
+		}
+	}
+	allocated := map[int64]int{}
+	resolve := func(item map[string]interface{}, chainType int, inx int) error {
+		nodeID := asInt64(item["nodeId"], 0)
+		if nodeID <= 0 {
+			return nil
+		}
+		if _, ok := state.Nodes[nodeID]; !ok {
+			if node, nErr := h.repo.GetNodeRecordTx(tx, nodeID); nErr == nil && node != nil {
+				state.Nodes[nodeID] = node
+			}
+		}
+		port := asInt(item["port"], 0)
+		if port > 0 {
+			// RV3-02：显式口恢复范围＋四源占用两检（规格/端口池检
+			// 保持豁免，见函数头注）。范围检与 validateExplicitPort
+			// 同位、无条件；占用检按节点远端性分流（远端节点的口
+			// 不在本地端口空间，与 validateExplicitPort 对远端跳
+			// 过占用检同口径），远端判定走 IsRemoteNodeTx 而非尽力
+			// 而为的节点记录缓存——记录读不到时占用检照常执行，
+			// 不重蹈「无检落库」。
+			if port > 65535 {
+				return fmt.Errorf("端口 %d 超出有效范围 1-65535", port)
+			}
+			isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
+			if remoteErr != nil {
+				return remoteErr
+			}
+			if !isRemote {
+				occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
+				if err != nil {
+					return err
+				}
+				if occupied {
+					return h.detachedSegmentPortConflictError(tx, nodeID, state.Nodes[nodeID], port, excludeTunnelID)
+				}
+			}
+			state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = port
+			return nil
+		}
+		isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
+		if remoteErr != nil {
+			return remoteErr
+		}
+		if isRemote {
+			return nil
+		}
+		resolved, err := h.resolveTunnelSegmentPort(tx, state, nodeID, chainType, inx, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
+		if err != nil {
+			return err
+		}
+		state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = resolved
+		return nil
+	}
+	for idx, item := range outRaw {
+		if err := resolve(item, 3, idx+1); err != nil {
+			return err
+		}
+	}
+	for hopIdx, hopRaw := range chainRaw {
+		for _, item := range asMapSlice(hopRaw) {
+			if err := resolve(item, 2, hopIdx+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface{}, tunnelType int, excludeTunnelID int64) (*tunnelCreateState, error) {
 	state := &tunnelCreateState{
-		Type:      tunnelType,
-		InNodes:   make([]tunnelRuntimeNode, 0),
-		ChainHops: make([][]tunnelRuntimeNode, 0),
-		OutNodes:  make([]tunnelRuntimeNode, 0),
-		Nodes:     make(map[int64]*nodeRecord),
+		Type:         tunnelType,
+		InNodes:      make([]tunnelRuntimeNode, 0),
+		ChainHops:    make([][]tunnelRuntimeNode, 0),
+		OutNodes:     make([]tunnelRuntimeNode, 0),
+		Nodes:        make(map[int64]*nodeRecord),
+		SegmentPorts: make(map[tunnelChainPortKey]int),
 	}
 	nodeIDs := make([]int64, 0)
 
@@ -6421,6 +6391,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 					}
 				}
 			}
+			if port > 0 {
+				state.SegmentPorts[tunnelChainPortKey{chainType: 3, inx: idx + 1, nodeID: nodeID}] = port
+			}
 			state.OutNodes = append(state.OutNodes, tunnelRuntimeNode{
 				NodeID:    nodeID,
 				Protocol:  defaultString(asString(item["protocol"]), "tls"),
@@ -6456,6 +6429,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 						}
 					}
 				}
+				if port > 0 {
+					state.SegmentPorts[tunnelChainPortKey{chainType: 2, inx: hopIdx + 1, nodeID: nodeID}] = port
+				}
 				hop = append(hop, tunnelRuntimeNode{
 					NodeID:    nodeID,
 					Protocol:  defaultString(asString(item["protocol"]), "tls"),
@@ -6469,6 +6445,17 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			if len(hop) > 0 {
 				state.ChainHops = append(state.ChainHops, hop)
 			}
+		}
+	} else {
+		// L9 观察 1：非 type-2 隧道的 outNodeId/chainNodes 行不进运行
+		// 时拓扑，但 replaceTunnelChainsTx 照样落库。此前 prepare 不
+		// 解析这些行的端口：更新时省略 port 的行在落库兜底被随机重
+		// 挑（与 P01-002「缺省沿用现口、重挑必回执警示」口径不符，
+		// 且无任何 PortChanges 记录）。在此解析（缺省沿用/重挑
+		// ＋记录，显式口过范围＋四源占用两检、规格检豁免），
+		// 结果经 SegmentPorts 回写请求后落库。
+		if err := h.prepareDetachedSegmentPorts(tx, req, state, excludeTunnelID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -6773,6 +6760,29 @@ func applyTunnelPortsToRequest(req map[string]interface{}, state *tunnelCreateSt
 			nodeID := asInt64(item["nodeId"], 0)
 			if port, ok := chainPorts[nodeID]; ok && port > 0 {
 				item["port"] = port
+			}
+		}
+	}
+
+	// L9 观察 1：按 (chainType, inx, nodeID) 精确回写 prepare 解析的
+	// 全部段口。按节点回写覆盖不到 type-1 的游离段行（不在
+	// state.OutNodes/ChainHops 里），省略 port 的行到
+	// replaceTunnelChainsTx 时仍是 0、被随机重挑且无回执警示；
+	// 精确键与落库迭代同序（outNodeId→3、chainNodes 组序→2），
+	// 回写值与 prepare 定型值逐行一致。
+	if len(state.SegmentPorts) > 0 {
+		for idx, item := range asMapSlice(req["outNodeId"]) {
+			nodeID := asInt64(item["nodeId"], 0)
+			if port, ok := state.SegmentPorts[tunnelChainPortKey{chainType: 3, inx: idx + 1, nodeID: nodeID}]; ok && port > 0 {
+				item["port"] = port
+			}
+		}
+		for hopIdx, hopRaw := range asAnySlice(req["chainNodes"]) {
+			for _, item := range asMapSlice(hopRaw) {
+				nodeID := asInt64(item["nodeId"], 0)
+				if port, ok := state.SegmentPorts[tunnelChainPortKey{chainType: 2, inx: hopIdx + 1, nodeID: nodeID}]; ok && port > 0 {
+					item["port"] = port
+				}
 			}
 		}
 	}
@@ -8096,8 +8106,13 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 // 方（单删/批删/创建补偿三入口共用此 funnel）。删除语义不变。
 // R3X-014：清单元素为 (引用方入站 ID, 显示串) 结构，供批量入口按 ID
 // 合并；单删入口在响应层投影回 []string，响应契约不变。
-func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
+// L4-03：第二返回值是「唯一入口/出口」点名清单——本节点是某隧道
+// 唯一入口或唯一出口时，级联删其全部链路段行会让该隧道结构残缺，
+// 此前无任何回执点名（brokenReferrers 只覆盖跨节点入站引用），现
+// 在删除前查明、随回执显式披露（删除语义不变，仍尽力而为）。
+func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error) {
 	var brokenReferrers []nodeCrossReferrer
+	var soleRoleWarnings []string
 	// R3X-017（E3-03）：删节点此前从不刷新白名单——走共用漏斗，级联
 	// 删前收集受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点
 	// 入站为链式出站目标，见 inboundIDsAffectedByNodeDelete），级联
@@ -8112,23 +8127,46 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 		// NodeIDs 重载，删一个节点即 O(目标数+全表行数) 次全表扫描。
 		targets, targetErr := h.repo.ListNodeInboundsByNode(id)
 		if targetErr != nil {
-			return nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
+			return nil, nil, fmt.Errorf("查询节点 %d 的入站失败: %w", id, targetErr)
 		}
 		ix, ixErr := h.loadChainRefIndex()
 		if ixErr != nil {
 			if len(targets) > 0 {
 				// 与逐目标 chainReferrers 首败的失败形态一致。
-				return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
+				return nil, nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targets[0].ID, ixErr)
 			}
-			return nil, ixErr
+			return nil, nil, ixErr
 		}
 		brokenReferrers = h.nodeCrossReferrersIx(targets, id, ix)
 		// 同 R3X-015 口径：受影响入站收集失败同样中止删除。
 		affected, collectErr := h.inboundIDsAffectedByNodeDeleteIx(id, ix)
 		if collectErr != nil {
-			return nil, collectErr
+			return nil, nil, collectErr
 		}
 		affectedInboundIDs = affected
+		// L4-03：唯一入口/出口点名收集，同守卫口径 fail-closed。
+		soleRoles, soleErr := h.repo.ListSoleSegmentTunnelsForNode(id)
+		if soleErr != nil {
+			return nil, nil, soleErr
+		}
+		if len(soleRoles) > 0 {
+			nodeName := fmt.Sprintf("节点 %d", id)
+			if n, nErr := h.repo.GetNodeRecord(id); nErr == nil && n != nil && strings.TrimSpace(n.Name) != "" {
+				nodeName = "节点 " + n.Name
+			}
+			for _, sr := range soleRoles {
+				role := "入口"
+				if sr.ChainType == 3 {
+					role = "出口"
+				}
+				tunnelName := strings.TrimSpace(sr.TunnelName)
+				if tunnelName == "" {
+					tunnelName = fmt.Sprintf("隧道 %d", sr.TunnelID)
+				}
+				soleRoleWarnings = append(soleRoleWarnings,
+					fmt.Sprintf("隧道 %s 将失去唯一%s（%s 被删除后该隧道无%s节点）", tunnelName, role, nodeName, role))
+			}
+		}
 	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
@@ -8151,7 +8189,7 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 		}
 	}
 	if err := h.repo.DeleteNodeCascade(id); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
@@ -8162,7 +8200,7 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, error) {
 	}
 	// R3X-017：级联删后统一刷新（漏斗收尾，见函数头收集段）。
 	h.refreshInboundWhitelists(affectedInboundIDs)
-	return brokenReferrers, nil
+	return brokenReferrers, soleRoleWarnings, nil
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {
@@ -8494,6 +8532,43 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 	return nil
 }
 
+// checkGroupAssignmentScope enforces the R5-FGRP group scope on NEW
+// user-tunnel assignments (the single chokepoint shared by single and
+// batch assignment): when the user's enabled user groups hold group
+// permissions, the assignable set is the union of the authorized
+// tunnel groups' tunnels, and assigning a tunnel outside it is an
+// explicit rejection naming the tunnel — groups define the selectable
+// range only, they never grant anything by themselves. Users without
+// constraining pairs assign freely. Existing rows (the update branch
+// of upsertUserTunnelDB) are not gated: editing a grant that already
+// exists is not a new assignment.
+func (h *Handler) checkGroupAssignmentScope(tx *gorm.DB, userID, tunnelID int64) error {
+	var constrained bool
+	var scope map[int64]struct{}
+	var err error
+	if tx != nil {
+		constrained, scope, err = h.repo.GroupAssignmentScopeTx(tx, userID)
+	} else {
+		constrained, scope, err = h.repo.GroupAssignmentScope(userID)
+	}
+	if err != nil {
+		return err
+	}
+	if !constrained {
+		return nil
+	}
+	if _, ok := scope[tunnelID]; ok {
+		return nil
+	}
+	// 点名取隧道名必须走同一事务（批量路径）：连接池句柄会被未决
+	// 事务占住（SQLite MaxOpenConns(1)），池上查询将死锁。
+	name, nameErr := h.repo.GetTunnelNameTx(tx, tunnelID)
+	if nameErr != nil || name == "" {
+		return fmt.Errorf("隧道 #%d 不在该用户所属分组的授权范围内，无法分配（分组仅限定可分配范围，请先调整分组权限或分组成员）", tunnelID)
+	}
+	return fmt.Errorf("隧道「%s」(#%d) 不在该用户所属分组的授权范围内，无法分配（分组仅限定可分配范围，请先调整分组权限或分组成员）", name, tunnelID)
+}
+
 // upsertUserTunnelDB performs only the DB portion of a user-tunnel
 // assignment. With tx == nil it writes directly (single assignment); with a
 // tx it participates in the caller's transaction (X-P3-22 batch assignment).
@@ -8577,6 +8652,11 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 	}
 
 	if lookupErr == sql.ErrNoRows {
+		// R5-FGRP 分组范围门：新建授权时执法（单条与批量分配共用
+		// 本落点）；命中范围外即整单拒绝，批量时整批回滚不落半批。
+		if err := h.checkGroupAssignmentScope(tx, userID, tunnelID); err != nil {
+			return nil, err
+		}
 		if reqFlow < 0 || reqNum < 0 || reqExpTime < 0 || reqFlowReset < 0 {
 			var uFlow, uExp, uReset int64
 			var uNum int
@@ -9378,7 +9458,8 @@ func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, cu
 		return fmt.Errorf("节点 %s 端口 %d 正等待节点清理（转发 %s），请稍后重试或联系管理员",
 			node.Name, port, conflict.Name)
 	}
-	return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
+	// L9 观察 2：按占用来源措辞，入站/链路段/联邦预留不再误报转发占用。
+	return errors.New(forwardPortConflictMessage(node, port, conflict))
 }
 
 func parsePortRangeMinMax(input string) (int, int) {

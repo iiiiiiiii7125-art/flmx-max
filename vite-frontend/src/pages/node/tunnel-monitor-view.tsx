@@ -124,14 +124,16 @@ function LatencyDisplay({
     return <span className="text-foreground">-</span>;
   }
   const ms = value.toFixed(0);
-  let colorClass = "text-success-700";
+  let trayClass = "tray-success";
 
-  if (value > 200) colorClass = "text-danger-700";
-  else if (value > 100) colorClass = "text-warning-700";
-  else if (value > 50) colorClass = "text-primary-700";
+  if (value > 200) trayClass = "tray-danger";
+  else if (value > 100) trayClass = "tray-warning";
+  else if (value > 50) trayClass = "tray-primary";
 
   return (
-    <span className={`font-mono text-xs font-semibold ${colorClass}`}>
+    <span
+      className={`font-mono text-xs font-semibold rounded px-1 py-0.5 ${trayClass}`}
+    >
       {ms}ms
     </span>
   );

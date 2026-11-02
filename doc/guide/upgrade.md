@@ -2,7 +2,7 @@
 
 ## 面板内升级
 
-**推荐升级顺序：先备份 → 先停 agent（节点侧）→ 换面板 → 再启 agent。** 该顺序同样适用于下面的脚本升级：升级前先备份（网站配置 → 数据备份与恢复 → 下载备份；脚本升级会在更新前自动备份到部署目录的 `backups/`），再到每个节点上停掉 agent（`systemctl stop flux_agent`），换完面板后重新启动 agent（`systemctl start flux_agent`）。不停 agent 直接换面板时，在线 agent 会在面板重建期间重试/重连（有重连对账兜底），但面板与 agent 版本会短暂不一致。
+**推荐升级顺序：先备份 → 先停 agent（节点侧）→ 换面板 → 再启 agent。** 该顺序同样适用于下面的脚本升级：升级前先备份（网站配置 → 数据备份与恢复 → 下载备份；脚本升级会在更新前自动备份到部署目录的 `backups/`），再到每个节点上停掉 agent（systemd 节点：`systemctl stop flux_agent`；Alpine / OpenRC 节点：`rc-service flux_agent stop`），换完面板后重新启动 agent（`systemctl start flux_agent` / `rc-service flux_agent start`）。不停 agent 直接换面板时，在线 agent 会在面板重建期间重试/重连（有重连对账兜底），但面板与 agent 版本会短暂不一致。
 
 **网站配置** → **面板自升级** → **检查更新** → **立即升级**。
 
@@ -26,10 +26,11 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 ## 指定版本
 
-到 [Releases](https://github.com/iiiiiiiii7125-art/flmx-max/releases) 复制对应版本的命令，例如：
+到 [Releases](https://github.com/iiiiiiiii7125-art/flmx-max/releases) 找到目标版本，把下面命令里的 `<目标版本号>` 换成该版本号再执行（不要带着占位符原样执行）：
 
 ```bash
-curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/1.0.1/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/1.0.1/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
+VERSION=<目标版本号>
+curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/$VERSION/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/$VERSION/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 ## 降级到旧版本（手动）
@@ -113,12 +114,18 @@ docker logs <backend容器> 2>&1 | grep -i migration
 
 ### 6. 回滚
 
+在**宿主机**上执行。注意 `/app/data/gost.db` 是后端**容器内**的路径，宿主机上没有这个文件——直接在宿主机跑 `sqlite3 /app/data/gost.db …` 只会在错误位置新建一个空库、回滚实际不发生。先停后端，把数据库复制出来、改完再放回去（`<backend容器>` 的查法见 §1）：
+
 ```bash
-sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_forward_port_node_port;"
-sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_chain_tunnel_node_port;"
-sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_node_inbound_node_port;"
-sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_unique;"
-sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
+docker stop <backend容器>
+docker cp <backend容器>:/app/data/gost.db /tmp/gost.db
+sqlite3 /tmp/gost.db "DROP INDEX IF EXISTS idx_forward_port_node_port;"
+sqlite3 /tmp/gost.db "DROP INDEX IF EXISTS idx_chain_tunnel_node_port;"
+sqlite3 /tmp/gost.db "DROP INDEX IF EXISTS idx_node_inbound_node_port;"
+sqlite3 /tmp/gost.db "DROP INDEX IF EXISTS idx_user_username_unique;"
+sqlite3 /tmp/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
+docker cp /tmp/gost.db <backend容器>:/app/data/gost.db
+docker start <backend容器>
 ```
 
 ### 7. 停用用户名释放
@@ -132,7 +139,7 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
 - **节点自升级、内核安装、geodata 下载**：agent 从自己配置里的面板地址（安装时的 `-a` 参数）派生出面板源线路，自动加入内置候选的并行测速排名——面板线路延迟低时胜出，健康机器的直连短路行为不变。地址只由 agent 从自身配置派生，面板无法在运行时给 agent 下发下载地址（安全边界）。
 - **新节点安装**：面板生成的安装命令把面板源排在候选表第一位；`install.sh` 本身也先单探面板源、通则独占使用。装机时唯一已证可达的目的地就是面板，国内机不再先撞 GitHub 直连。
 - **升级完整性**：面板下发升级命令前会先把目标版本双架构资产预热进镜像缓存，并随命令附上该版本的期望 SHA-256（取自面板已缓存并自验过的官方校验文件）；agent 下载后以它为校验基准，哈希不符直接拒绝升级并在回执中写明。期望哈希缺失时（旧面板、预热未命中）回退现行校验口径，不影响升级可用性。
-- **无需任何设置**：面板侧没有开关，节点侧也不用改配置；面板源线路与内置 9 代理＋直连受同一套测速、续切与 240 秒升级总预算管辖，面板镜像不可用时自动回落既有路线，不劣化现状。
+- **无需任何设置**：面板侧没有开关，节点侧也不用改配置；面板源线路与内置 9 代理＋直连受同一套测速、续切管辖（升级与内核下载的总预算是 240 秒，geodata 下载单独为 300 秒），面板镜像不可用时自动回落既有路线，不劣化现状。
 - **存量节点的自举边界（1.9.0 起）**：面板源线路是 **1.9.0 起的 agent 原生能力**——节点升级自 1.9.0 起原生支持走面板源。**1.8.x 及更早版本的存量 agent 尚无这条线路，无法用它给自己升级**（它认识的候选仍只有直连＋9 代理）。被墙的存量节点先这样到达新版：在面板里生成该节点的**安装命令**（现行 `install.sh` 已把面板源排在第一候选，装机全程可走面板源），在节点机上执行一次装到 1.9.0；此后该节点的升级、内核与 geodata 下载全程可走面板源，不再依赖 GitHub 可达性。
 
 该端点同时保留手动拼接用法：外部工具、脚本可以经面板中转拉取下方白名单仓库的 GitHub 文件；早期版本节点的本地代理配置若仍指向这个端点，也继续可用。注意它与面板自身的版本发现路线无关：版本发现、内核版本列表走面板侧直选（见下一节），不经过这个端点。
@@ -153,11 +160,11 @@ sqlite3 /app/data/gost.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
 - 单个文件上限 300MB，总缓存上限 2GB，缓存目录随数据库路径自动推导
 - 按来源 IP 限流 60 次/分钟，超限返回 429
 - release tag 的文件永久缓存；`latest`、raw 文件和 API 响应按 TTL 刷新
-- GitHub 不可达时返回已缓存的旧副本，不会直接报错
+- GitHub 不可达时的兜底分内容类型：release tag 的文件永久缓存、直接用缓存副本；`latest`、raw 文件与 API 响应这类可变内容在 TTL 过期后最多用 24 小时内的旧副本兜底，超过 24 小时仍不可达时会返回下载错误（502），不会无限期发旧内容
 
 ### 版本发现与下载路线（1.7.7 起）
 
-系统设置里的「开启 GitHub 加速」已整体移除。内核版本列表、节点升级版本列表、面板自升级版本发现，以及节点安装/升级与内核下载，都改走**内置候选自动测速直选**：候选为 9 个内置代理前缀加直连，先单独探测直连（以真实目标可解析为准），直连通就直连；直连不通才并行探测代理、按延迟选最快，选中路线中途失败按排名自动续切。无需、也无法在面板里再配置加速地址；已保存的旧加速配置不再被读取。
+系统设置里的「开启 GitHub 加速」已整体移除。内核版本列表、节点升级版本列表、面板自升级版本发现，以及节点安装/升级与内核下载，都改走**内置候选自动测速直选**：候选为 9 个内置代理前缀加直连，先单独探测直连（以真实目标可解析为准），直连不通才并行探测代理、按延迟选最快，选中路线中途失败按排名自动续切。其中「直连通就直连」有一条 agent 侧边界：节点升级、内核与 geodata 下载在 agent 侧执行时，直连虽然判活、但探测延迟超过 800ms 的**不算短路**，会与 9 个代理同场按延迟排名、可能改走更快的代理；面板侧的版本发现没有这条阈值，判活即直连。无需、也无法在面板里再配置加速地址；已保存的旧加速配置不再被读取。
 
 版本发现与订阅源共用同一套出站安全策略：重定向逐跳复检，云元数据地址（`169.254.169.254`）在任何配置下都被拒绝，私网/回环/链路本地目标默认拒绝。内置候选均为公网地址、正常情况下不受影响；若部署环境的 DNS 把候选域名解析到内网地址，版本列表会报错，须显式放行：
 

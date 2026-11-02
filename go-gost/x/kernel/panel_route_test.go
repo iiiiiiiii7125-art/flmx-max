@@ -104,7 +104,7 @@ func TestInstallViaPanelRouteWhenDirectDead(t *testing.T) {
 		BinName:     "xray",
 	}
 	binDir := filepath.Join(t.TempDir(), "xray")
-	if err := install(d, binDir); err != nil {
+	if err := install(d, binDir, nil); err != nil {
 		t.Fatalf("直连已死时应经面板线路完成安装, 实际失败: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(binDir, "xray"))
@@ -145,7 +145,7 @@ func TestStageGeoFilesViaPanelRoute(t *testing.T) {
 		URL:         deadURL + "/geosite.dat",
 		ChecksumURL: deadURL + "/geosite.dat.sha256",
 	}}
-	staged, err := stageGeoFiles(context.Background(), binDir, files)
+	staged, err := stageGeoFiles(context.Background(), binDir, files, nil)
 	if err != nil {
 		t.Fatalf("直连已死时 geodata 应经面板线路完成, 实际失败: %v", err)
 	}

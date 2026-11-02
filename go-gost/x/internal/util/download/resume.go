@@ -126,9 +126,10 @@ func (t *FileTransfer) init() error {
 //   - A body that breaks mid-transfer keeps the bytes it managed
 //     to persist; the returned error fails the leg and the next
 //     route resumes after them.
-//   - No-progress is the caller's watchdog's call, exactly like
-//     the other attempt shapes: watcher (may be nil) feeds on
-//     every chunk and a stall surfaces as ErrNoProgress.
+//   - Progress judgment is the caller's watchdog's call, exactly
+//     like the other attempt shapes: watcher (may be nil) feeds
+//     on every chunk; a stall surfaces as ErrNoProgress and a
+//     below-floor trickle as ErrTooSlow (WDG-01/WDG-02).
 //
 // report, when non-nil, receives (persistedBytes, totalBytes)
 // after every chunk whenever the total is known.
@@ -154,6 +155,9 @@ func (t *FileTransfer) Attempt(ctx context.Context, watcher *Watcher, do func(*h
 	if err != nil {
 		if watcher.Stalled() {
 			return ErrNoProgress
+		}
+		if watcher.TooSlow() {
+			return ErrTooSlow
 		}
 		return err
 	}
@@ -206,6 +210,17 @@ func (t *FileTransfer) Attempt(ctx context.Context, watcher *Watcher, do func(*h
 		return fmt.Errorf("定位已下载文件失败: %v", err)
 	}
 
+	// RV2-01: the total is known now — report this attempt's
+	// remaining bytes to the watchdog, so its trickle judgment
+	// projects against the operation deadline (carried by ctx)
+	// instead of the fixed rate floor: a slow leg that can still
+	// finish inside the budget is no longer condemned, a leg that
+	// cannot is condemned just as early. An unknown total
+	// (chunked body) leaves the fixed floor in charge.
+	if total > 0 {
+		watcher.SetGoal(total - t.have)
+	}
+
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buf)
@@ -229,6 +244,9 @@ func (t *FileTransfer) Attempt(ctx context.Context, watcher *Watcher, do func(*h
 			}
 			if watcher.Stalled() {
 				return fmt.Errorf("读取响应正文失败: %w", ErrNoProgress)
+			}
+			if watcher.TooSlow() {
+				return fmt.Errorf("读取响应正文失败: %w", ErrTooSlow)
 			}
 			return fmt.Errorf("读取响应正文失败: %v", readErr)
 		}

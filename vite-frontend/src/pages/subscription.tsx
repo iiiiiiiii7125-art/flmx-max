@@ -1327,7 +1327,7 @@ export default function SubscriptionPage() {
   };
 
   const runConfirm = async () => {
-    if (!detail || !confirm) return;
+    if (!detail || !confirm || saving) return;
     setSaving(true);
     try {
       const res =

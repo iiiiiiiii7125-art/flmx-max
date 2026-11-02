@@ -106,7 +106,10 @@ import {
   isValidForwardDestAddress,
   parseNyFormatData,
 } from "@/pages/forward/import-format";
-import { buildForwardOrder, FORWARD_ORDER_KEY } from "@/pages/forward/order";
+import {
+  buildForwardOrder,
+  buildForwardOrderLocalKey,
+} from "@/pages/forward/order";
 import { PageLoadingState } from "@/components/page-state";
 // import { useMobileBreakpoint } from "@/hooks/useMobileBreakpoint";
 import { saveOrder } from "@/utils/order-storage";
@@ -327,6 +330,11 @@ const buildForwardGroupOrderLocalKey = (tokenUserId: number): string => {
 
 const buildForwardGroupCollapsedLocalKey = (tokenUserId: number): string => {
   return `${FORWARD_GROUP_COLLAPSED_LOCAL_STORAGE_PREFIX}:u:${tokenUserId}`;
+};
+
+// F-L5-03：列表排序键同样按登录用户分键（与上方分组键同口径）。
+const forwardOrderLocalKey = (): string => {
+  return buildForwardOrderLocalKey(JwtUtil.getUserIdFromToken());
 };
 
 const parsePreferenceMap = <T,>(
@@ -2064,7 +2072,7 @@ export default function ForwardPage() {
       setForwardOrder(order);
 
       if (fromDatabase) {
-        saveOrder(FORWARD_ORDER_KEY, order);
+        saveOrder(buildForwardOrderLocalKey(currentUserId), order);
       }
     },
     [mergeFederationShareFlow],
@@ -2328,7 +2336,7 @@ export default function ForwardPage() {
   };
 
   const confirmResetFlow = async () => {
-    if (!forwardToResetFlow) return;
+    if (!forwardToResetFlow || resetFlowLoading) return;
 
     setResetFlowLoading(true);
     try {
@@ -2353,7 +2361,7 @@ export default function ForwardPage() {
 
   // 确认删除规则
   const confirmDelete = async () => {
-    if (!forwardToDelete) return;
+    if (!forwardToDelete || deleteLoading) return;
 
     setDeleteLoading(true);
     try {
@@ -2369,7 +2377,7 @@ export default function ForwardPage() {
         setForwardOrder((prev) => {
           const next = prev.filter((id) => id !== forwardToDelete.id);
 
-          saveOrder(FORWARD_ORDER_KEY, next);
+          saveOrder(forwardOrderLocalKey(), next);
 
           return next;
         });
@@ -2399,7 +2407,7 @@ export default function ForwardPage() {
             setForwardOrder((prev) => {
               const next = prev.filter((id) => id !== forwardToDelete.id);
 
-              saveOrder(FORWARD_ORDER_KEY, next);
+              saveOrder(forwardOrderLocalKey(), next);
 
               return next;
             });
@@ -3266,7 +3274,7 @@ export default function ForwardPage() {
 
       if (!compactMode) {
         setForwardOrder(newOrder);
-        saveOrder(FORWARD_ORDER_KEY, newOrder);
+        saveOrder(forwardOrderLocalKey(), newOrder);
       }
 
       // 持久化到数据库
@@ -3299,14 +3307,14 @@ export default function ForwardPage() {
           // 保存失败回滚乐观更新的本地顺序（状态 + localStorage），与 DB 保持一致
           if (!compactMode) {
             setForwardOrder(currentOrder);
-            saveOrder(FORWARD_ORDER_KEY, currentOrder);
+            saveOrder(forwardOrderLocalKey(), currentOrder);
           }
           toast.error("保存排序失败：" + (response.msg || "未知错误"));
         }
       } catch {
         if (!compactMode) {
           setForwardOrder(currentOrder);
-          saveOrder(FORWARD_ORDER_KEY, currentOrder);
+          saveOrder(forwardOrderLocalKey(), currentOrder);
         }
         toast.error("保存排序失败，请重试");
       }
@@ -3364,7 +3372,7 @@ export default function ForwardPage() {
   );
 
   const handleBatchDelete = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchLoading) return;
     setBatchLoading(true);
     setBatchProgress({
       active: true,
@@ -3396,7 +3404,7 @@ export default function ForwardPage() {
   };
 
   const handleBatchToggleService = async (enable: boolean) => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchLoading) return;
     setBatchLoading(true);
     setBatchProgress({
       active: true,
@@ -3428,7 +3436,7 @@ export default function ForwardPage() {
   };
 
   const handleBatchRedeploy = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchLoading) return;
     setBatchLoading(true);
     setBatchProgress({
       active: true,
@@ -3459,7 +3467,7 @@ export default function ForwardPage() {
   };
 
   const handleBatchChangeTunnel = async () => {
-    if (selectedIds.size === 0 || !batchTargetTunnelId) return;
+    if (selectedIds.size === 0 || !batchTargetTunnelId || batchLoading) return;
     setBatchLoading(true);
     setBatchProgress({
       active: true,
@@ -5974,8 +5982,8 @@ export default function ForwardPage() {
                               key={title}
                               className="border border-divider rounded-lg overflow-hidden"
                             >
-                              <div className="bg-primary-500/10 px-3 py-2 border-b border-divider">
-                                <h3 className="text-sm font-semibold text-primary-700">
+                              <div className="tray-primary px-3 py-2 border-b border-divider">
+                                <h3 className="text-sm font-semibold">
                                   {title}
                                 </h3>
                               </div>
@@ -6184,8 +6192,8 @@ export default function ForwardPage() {
 
                           return (
                             <div key={title} className="space-y-2">
-                              <div className="px-2 py-1.5 bg-primary-500/10 rounded-lg border border-primary-500/30">
-                                <h3 className="text-sm font-semibold text-primary-700">
+                              <div className="px-2 py-1.5 tray-primary rounded-lg">
+                                <h3 className="text-sm font-semibold">
                                   {title}
                                 </h3>
                               </div>

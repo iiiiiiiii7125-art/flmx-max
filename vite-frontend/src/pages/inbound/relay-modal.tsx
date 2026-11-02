@@ -188,7 +188,7 @@ export function RelayModal({
   };
 
   const remove = async (force: boolean) => {
-    if (!removing) return;
+    if (!removing || removeLoading) return;
     setRemoveLoading(true);
     try {
       const res = await deleteInboundRelay(removing.id, force);

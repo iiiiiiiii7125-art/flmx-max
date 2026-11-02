@@ -431,7 +431,6 @@ export const useDashboardData = (): DashboardDataState => {
     if (adminFlag) {
       void loadNodeExpiryData();
     }
-    localStorage.setItem("e", "/dashboard");
 
     return () => {
       isMountedRef.current = false;

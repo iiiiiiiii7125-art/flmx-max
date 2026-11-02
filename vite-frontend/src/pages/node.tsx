@@ -92,6 +92,7 @@ import {
 } from "@/utils/latency-targets";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
+import { JwtUtil } from "@/utils/jwt";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
   Node,
@@ -119,6 +120,26 @@ import {
 import { NodeFilterModal } from "@/pages/node/filter-modal";
 import { BatchActionResultModal } from "@/components/batch-action-result-modal";
 import { extractBatchFailures } from "@/api/error-message";
+
+const NODE_ORDER_KEY = "node-order";
+
+// F-L5-03 同族：节点排序键同样按登录用户分键（与 forward/tunnel 的
+// `:u:<id>` 口径一致），避免同一浏览器多账号登录时排序互相串扰。
+const nodeOrderLocalKey = (): string => {
+  const userId = JwtUtil.getUserIdFromToken();
+
+  return userId ? `${NODE_ORDER_KEY}:u:${userId}` : NODE_ORDER_KEY;
+};
+
+// 读取时分键下尚无存量则回退读一次旧全局键（升级迁移，写入只写分键）。
+const nodeOrderLoadKey = (): string => {
+  const scopedKey = nodeOrderLocalKey();
+
+  return scopedKey === NODE_ORDER_KEY ||
+    localStorage.getItem(scopedKey) !== null
+    ? scopedKey
+    : NODE_ORDER_KEY;
+};
 
 interface BatchResultModalState {
   failures: BatchOperationFailure[];
@@ -462,7 +483,7 @@ export default function NodePage({
         } else {
           setNodeOrder(
             loadStoredOrder(
-              "node-order",
+              nodeOrderLoadKey(),
               nodesData.map((n) => n.id),
             ),
           );
@@ -968,7 +989,7 @@ export default function NodePage({
   };
 
   const confirmDelete = async () => {
-    if (!nodeToDelete) return;
+    if (!nodeToDelete || deleteLoading) return;
 
     setDeleteLoading(true);
     try {
@@ -1570,7 +1591,7 @@ export default function NodePage({
 
     setNodeOrder(newOrder);
 
-    saveOrder("node-order", newOrder);
+    saveOrder(nodeOrderLocalKey(), newOrder);
 
     // 持久化到数据库
     try {
@@ -1627,7 +1648,7 @@ export default function NodePage({
   };
 
   const handleBatchDelete = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || batchLoading) return;
     setBatchLoading(true);
     try {
       const res = await batchDeleteNodes(Array.from(selectedIds));

@@ -418,7 +418,7 @@ export default function InboundPage() {
   };
 
   const runConfirm = async () => {
-    if (!confirm) return;
+    if (!confirm || confirmLoading) return;
     setConfirmLoading(true);
     try {
       const { action, item } = confirm;

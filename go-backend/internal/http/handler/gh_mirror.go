@@ -2,11 +2,12 @@ package handler
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-backend/internal/clientip"
 )
 
 // 面板的 GitHub 镜像。/api/v1/open_api/gh/<GitHub 地址> 用法与公开的
@@ -142,9 +145,25 @@ type ghMirrorUpstream struct {
 	tagPage bool
 }
 
+// ghMirrorPinnedTransport 是镜像上游抓取的钉死拨号传输层
+// （L8-F-04 / R5-FC）：与版本发现的加固客户端（C-02）同口径——
+// 拨号时重解析并逐地址复判（硬拒层恒拒、非公网须显式 allowlist
+// 放行），解析结果钉死后拨号，消除「仅校验 host 名、拨号时被
+// DNS 污染/重绑定引向内网」的残留面；不走环境代理（与
+// githubVersionFetchClient 一致）。上游恒为固定 GitHub 主机，
+// 正常解析必为公网，allowlist 仅为本机 stub/特殊部署的逃生口。
+func ghMirrorPinnedTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: secureFetchDialContext,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+}
+
 var (
 	ghMirrorDir   = "" // set from DB_PATH; tests point it elsewhere
-	ghMirrorHTTP  = &http.Client{Timeout: 10 * time.Minute, CheckRedirect: ghMirrorCheckRedirect}
+	ghMirrorHTTP  = &http.Client{Timeout: 10 * time.Minute, CheckRedirect: ghMirrorCheckRedirect, Transport: ghMirrorPinnedTransport()}
 	ghMirrorBases = struct{ github, api, raw string }{"https://github.com", "https://api.github.com", "https://raw.githubusercontent.com"}
 
 	ghMirrorFlightMu sync.Mutex
@@ -181,10 +200,40 @@ func ghMirrorLastAttempt(path string) (time.Time, bool) {
 	return at, ok
 }
 
+// ghMirrorAttemptsMax 是 stale 节流表的容量上限（L2-22）。白名单内
+// 可造的互异 URL 无界（raw 任意路径、API tag 变体），旧实现条目随
+// 进程生命单调增长——与同仓限流桶/缓存目录「上限＋淘汰」口径对齐：
+// 达上限写入新键时先清扫超过 stale 年龄上限的条目（节流窗口最长
+// 6h，远小于 24h，删除不改变节流语义），仍满则按时间淘汰最早者。
+const ghMirrorAttemptsMax = 10000
+
 func ghMirrorRecordAttempt(path string) {
 	ghMirrorAttemptMu.Lock()
+	defer ghMirrorAttemptMu.Unlock()
+	if _, ok := ghMirrorAttempts[path]; !ok && len(ghMirrorAttempts) >= ghMirrorAttemptsMax {
+		now := time.Now()
+		for p, at := range ghMirrorAttempts {
+			if now.Sub(at) > ghMirrorMaxStaleAge {
+				delete(ghMirrorAttempts, p)
+			}
+		}
+		for len(ghMirrorAttempts) >= ghMirrorAttemptsMax {
+			var oldestPath string
+			var oldestAt time.Time
+			first := true
+			for p, at := range ghMirrorAttempts {
+				if first || at.Before(oldestAt) {
+					oldestPath, oldestAt, first = p, at, false
+				}
+			}
+			if oldestPath == "" {
+				break
+			}
+			log.Printf("warning: gh_mirror attempt table full (%d entries), evicting oldest entry", len(ghMirrorAttempts))
+			delete(ghMirrorAttempts, oldestPath)
+		}
+	}
 	ghMirrorAttempts[path] = time.Now()
-	ghMirrorAttemptMu.Unlock()
 }
 
 func ghMirrorClearAttempt(path string) {
@@ -198,7 +247,13 @@ func ghMirrorCheckRedirect(req *http.Request, via []*http.Request) error {
 		return fmt.Errorf("too many redirects")
 	}
 	host := strings.ToLower(req.URL.Hostname())
-	if host == "github.com" || strings.HasSuffix(host, ".githubusercontent.com") {
+	// L2-20（后端面）：GitHub 自家主机全集——镜像本体直取的三个
+	// 基址主机与 github.com 之间存在合法互跳（仓库改名、raw 内容
+	// 跳转），旧白名单只有 github.com＋*.githubusercontent.com，
+	// 跳到 api/raw/codeload 会被误拒（可用性死角）。放行的仍只是
+	// GitHub 自家主机名，且拨号层另有钉死复判（ghMirrorPinnedTransport），
+	// 主机名放行不等于地址放行。
+	if host == "github.com" || host == "api.github.com" || host == "raw.githubusercontent.com" || host == "codeload.github.com" || strings.HasSuffix(host, ".githubusercontent.com") {
 		return nil
 	}
 	return fmt.Errorf("redirect to %s refused", host)
@@ -273,12 +328,21 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// J-002：开放代理限流，防带宽/磁盘被刷。
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		if !ghMirrorAllow(host) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
+	// J-002：开放代理限流，防带宽/磁盘被刷。键走可信代理链解析
+	// （clientip，与登录限流同口径，R5-FC / L2-09）：标准反代部署
+	// 下 RemoteAddr 恒为代理机地址，裸键等于全站共用一桶——50 台
+	// 批量升级走面板源（每台探针+二进制+校验 ≥3 次）会自触发
+	// 429，公网访客抢占亦可封死全体节点。解析不出地址时记入共享
+	// 桶 fail-closed 并告警，不再像旧实现那样 SplitHostPort 失败
+	// 即整段跳过限流（fail-open）。
+	rateKey, resolved := clientip.RateLimitKey(r)
+	if !resolved {
+		log.Printf("gh_mirror: 无法从 RemoteAddr %q 解析客户端地址，限流记入共享桶（fail-closed）", r.RemoteAddr)
+		rateKey = clientip.UnresolvedKey
+	}
+	if !ghMirrorAllow(rateKey) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
 	}
 	up, err := parseGHMirrorPath(strings.TrimPrefix(r.URL.Path, ghMirrorPath), r.URL.RawQuery)
 	if err != nil {
@@ -337,6 +401,29 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", st.ModTime(), f)
 }
 
+// ghMirrorValidateTagLocation 校验 releases/latest 重定向 Location
+// 的主机：绝对地址必须与 ghMirrorBases.github 同主机（相对地址
+// 无 host、按基址继承，放行），与版本发现面的
+// validateRedirectLocationHost（C-01）同口径、基址换成本镜像的
+// github 基址（测试可指向本地 stub）。
+func ghMirrorValidateTagLocation(loc string) error {
+	u, err := url.Parse(loc)
+	if err != nil {
+		return fmt.Errorf("重定向地址解析失败: %v", err)
+	}
+	if u.Host == "" {
+		return nil
+	}
+	base, err := url.Parse(ghMirrorBases.github)
+	if err != nil {
+		return fmt.Errorf("GitHub 基址配置无效: %v", err)
+	}
+	if !strings.EqualFold(u.Hostname(), base.Hostname()) {
+		return fmt.Errorf("重定向地址主机不受信任: %q", u.Host)
+	}
+	return nil
+}
+
 // ghMirrorLatestTag 从 GitHub 对 …/releases/latest（或给定文件时
 // …/releases/latest/download/<file>）的重定向中读出最新 release 的 tag；
 // 这两处不像 API 那样限流。结果短暂缓存。
@@ -349,8 +436,11 @@ func ghMirrorLatestTag(repo, file string) (string, error) {
 		return cached.tag, nil
 	}
 
+	// L8-F-04：tag 查询客户端同走钉死拨号（ghMirrorPinnedTransport），
+	// 不再裸 http.Client 只看 Location 字符串。
 	client := &http.Client{
 		Timeout:       15 * time.Second,
+		Transport:     ghMirrorPinnedTransport(),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	lookup := func(path, marker string) (string, error) {
@@ -359,9 +449,17 @@ func ghMirrorLatestTag(repo, file string) (string, error) {
 			return "", err
 		}
 		resp.Body.Close()
-		_, rest, found := strings.Cut(resp.Header.Get("Location"), marker)
+		loc := resp.Header.Get("Location")
+		// L2-19：Location 主机必须与 github 基址同源（相对地址无
+		// host 时按基址主机继承，放行）——旧实现只按 marker 切串
+		// 取 tag，上游/中间人把 Location 指向站外时照单全收；与
+		// 版本发现面（validateRedirectLocationHost，C-01）同口径。
+		if err := ghMirrorValidateTagLocation(loc); err != nil {
+			return "", err
+		}
+		_, rest, found := strings.Cut(loc, marker)
 		tag, _, _ := strings.Cut(rest, "/")
-		if !found || !ghMirrorSegment.MatchString(tag) {
+		if !found || !redirectTagPattern.MatchString(tag) {
 			return "", fmt.Errorf("GitHub 返回 %d", resp.StatusCode)
 		}
 		return tag, nil
@@ -515,10 +613,56 @@ func ghMirrorDownload(rawURL, path string) error {
 	if resp.ContentLength >= 0 && n != resp.ContentLength {
 		return fmt.Errorf("面板下载 GitHub 文件不完整")
 	}
+	// L8-F-04：API 面的响应在入缓存前做基本内容校验——镜像的
+	// API JSON 是版本元数据，下游（内核版本列表等）按 JSON 解码
+	// 消费；上游被污染/DNS 被劫持时返回的落地页 HTML 若原样入
+	// 缓存，会在 fresh 期内持续毒化消费方。仅 API 基址的下载
+	// 走本校验（二进制/raw 不受影响），且体积另有 API 专用上限，
+	// 防把 300MB 级内容当 JSON 读入。
+	if strings.HasPrefix(rawURL, ghMirrorBases.api) {
+		if err := ghMirrorValidateAPIContent(tmp.Name(), n); err != nil {
+			return err
+		}
+	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
 	ghMirrorPrune(dir, path)
+	return nil
+}
+
+// ghMirrorMaxAPIContent 是镜像 API 面单响应的内容校验上限：
+// GitHub releases API 单页（per_page≤100）正常在数 MB 内，32MB
+// 留足余量；超过即按异常内容拒绝入缓存（与文件面 300MB 上限
+// 分开，防大文件被当 JSON 全量读入）。
+const ghMirrorMaxAPIContent = 32 << 20
+
+// ghMirrorValidateAPIContent 校验已下载到 path 的 API 响应是合法
+// JSON 且顶层为对象/数组（releases API 的两种形态）。校验失败
+// 返回错误，调用方不落缓存。（按路径重开：下载侧的临时文件在
+// 校验点已 Close，不可复用其句柄做 Seek。）
+func ghMirrorValidateAPIContent(path string, size int64) error {
+	if size > ghMirrorMaxAPIContent {
+		return fmt.Errorf("GitHub API 响应过大（%d 字节），已拒绝入缓存", size)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("校验 GitHub API 响应失败: %v", err)
+	}
+	defer f.Close()
+	dec := json.NewDecoder(io.LimitReader(f, ghMirrorMaxAPIContent+1))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return fmt.Errorf("GitHub API 响应不是合法 JSON，已拒绝入缓存: %v", err)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return fmt.Errorf("GitHub API 响应顶层不是对象/数组，已拒绝入缓存")
+	}
+	// 尾随非空白内容同样判非法（防 JSON+落地页拼接的污染形态）。
+	if dec.More() {
+		return fmt.Errorf("GitHub API 响应含尾随内容，已拒绝入缓存")
+	}
 	return nil
 }
 

@@ -125,7 +125,7 @@ func TestR3WDGFetchRankedStallFallsBackToDirect(t *testing.T) {
 	var buf bytes.Buffer
 	start := time.Now()
 	plan := download.NewStaticPlan([]download.Route{{Prefix: mirror.URL}, {}})
-	err := fetchRanked(ctx, plan, direct.URL+"/file", 1<<20, &buf)
+	_, err := fetchRanked(ctx, plan, direct.URL+"/file", 1<<20, nil, &buf)
 	if err != nil {
 		t.Fatalf("stalled mirror must fall back to direct, got: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestR3WDGGeoRoundContinuesAfterStalledFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	start := time.Now()
-	staged, err := stageGeoFiles(ctx, binDir, files)
+	staged, err := stageGeoFiles(ctx, binDir, files, nil)
 	elapsed := time.Since(start)
 	if err == nil || !strings.Contains(err.Error(), "geosite.dat") {
 		t.Fatalf("round error = %v, want it to name the stalled geosite.dat only", err)
