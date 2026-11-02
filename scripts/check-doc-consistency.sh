@@ -3,7 +3,7 @@
 #
 # 覆盖：
 #   1. nodes.md 订阅格式表 XHTTP 行 vs kernel/share.go 实际渲染（xhttp-opts）
-#   2. skills/flmx-api 接口清单 vs handler.go 路由表 diff（整域缺失即失败）
+#   2. skills/flmx-api 接口清单 vs handler.go＋router.go 路由集 diff（整域缺失即失败）
 #   3. 技能包版本字面量三处一致（SKILL.md / package.json / doc/ai-skill.md 发布示例）
 #   4. install.md 维护菜单 vs panel_install.sh show_menu 实际菜单
 #   5. install.md Caddy 示例反代目标 vs 脚本刻意使用的 127.0.0.1
@@ -67,18 +67,32 @@ else
   note_fail "share.go 未找到 xhttp-opts（检查前提失效，请人工复核）"
 fi
 
-# ── 2. 技能包接口覆盖：handler.go 全部 /api/v1 路由必须在技能包或 ai-skill.md 中被引用
+# ── 2. 技能包接口覆盖：注册面全部 /api/v1 路由必须在技能包或 ai-skill.md 中被引用
 HANDLER="go-backend/internal/http/handler/handler.go"
+ROUTER="go-backend/internal/http/router.go"
 GH_MIRROR_GO="go-backend/internal/http/handler/gh_mirror.go"
-# 路由提取三路并集：
-#  (a) 逐行字面量 mux.HandleFunc("/api/v1/...", ...)
+# 路由提取四路并集：
+#  (a) 逐行字面量 mux.HandleFunc("/api/v1/...", ...)——handler.go 与
+#      router.go 两文件同扫（AG-04 起扩面：此前只扫 handler.go，
+#      router.go 若新增 /api/v1 注册，AST 分类普查会强制其分类、
+#      本门却不红，技能覆盖完备性靠约定兜底；router.go 现有注册
+#      仅 /system-info 一条 mux.Handle，非 /api/v1 不入集）；
+#  (a2) router.go 的 mux.Handle("...", ...) 字面量同理（与分类普查
+#      的 .Handle/.HandleFunc 双算口径对齐）；
 #  (b) 路由表清单行 {"/api/v1/...", h.<fn>}——B14-002 起备份端点改由同一
 #      清单循环注册，逐行字面量提取识别不到表行（Phase E 补齐此路）；
 #  (c) 表行派生的双前缀别名：循环体对每个表行另注册 "/api/v1"+path，
 #      与表行同源派生——删一行则规范路径与其别名同时从路由集消失，
 #      门禁两侧（未覆盖/幽灵）都应点名报红。
+# 残余依赖（AG-04 明示）：本门是文本提取，只认字面量形态；注册面
+# 之所以不会绕开本门，是因为 AST 分类普查（route_classification_
+# test.go）以文件清扫＋非字面量白名单逐一相等守住「注册只许出现
+# 在 handler.go/router.go 且必须字面量」——若将来有人放宽那道门
+# 的注册面规则，必须同步扩本门提取面，否则技能覆盖会静默漏检。
 table_routes=$(grep -oP '\{\s*"\K/api/v1/[^"]+(?="\s*,\s*h\.)' "$HANDLER" | sort -u)
 routes=$( { grep -oP 'mux\.HandleFunc\("\K[^"]+' "$HANDLER";
+            grep -oP 'mux\.HandleFunc\("\K[^"]+' "$ROUTER";
+            grep -oP 'mux\.Handle\("\K[^"]+' "$ROUTER";
             echo "$table_routes";
             echo "$table_routes" | grep . | sed 's|^|/api/v1|';
             grep -oP 'ghMirrorPath\s*=\s*"\K[^"]+' "$GH_MIRROR_GO"; } | grep '^/api/v1/' | sort -u )
@@ -89,7 +103,7 @@ if [ -n "$missing" ]; then
   note_fail "技能包未覆盖 $n 条路由："
   echo "$missing" | sed 's/^/    - /'
 else
-  note_ok "技能包覆盖 handler.go 全部 $(echo "$routes" | wc -l) 条 /api/v1 路由"
+  note_ok "技能包覆盖 handler.go＋router.go 全部 $(echo "$routes" | wc -l) 条 /api/v1 路由"
 fi
 # 反向：技能包不得引用不存在的路由（幽灵接口）
 ghost=$(comm -13 <(echo "$routes") <(echo "$refs"))
