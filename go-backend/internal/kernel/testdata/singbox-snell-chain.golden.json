@@ -48,6 +48,10 @@
     "final": "direct",
     "rules": [
       {
+        "action": "reject",
+        "ip_is_private": true
+      },
+      {
         "inbound": [
           "in-5"
         ],

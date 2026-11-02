@@ -75,7 +75,9 @@ func TestSingboxSnellChainCoversBackend(t *testing.T) {
 	in := singboxSnellInbounds(t)[2]
 	in.Via = &Endpoint{}
 	cfg := renderJSON(t, TypeSingbox, []Inbound{in})
-	rule := cfg["route"].(map[string]interface{})["rules"].([]interface{})[0].(map[string]interface{})
+	// R7-001: rules[0] is the ip_is_private guard; the chain-blocked
+	// reject for this inbound follows it.
+	rule := cfg["route"].(map[string]interface{})["rules"].([]interface{})[1].(map[string]interface{})
 	tags := rule["inbound"].([]interface{})
 	if rule["action"] != "reject" || len(tags) != 2 || tags[1] != "in-3-snell" {
 		t.Fatalf("the ShadowTLS front and its Snell backend route together: %v", rule)
