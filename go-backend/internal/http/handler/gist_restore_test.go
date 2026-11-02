@@ -259,7 +259,7 @@ func TestGistRestoreEncryptedRoundTrip(t *testing.T) {
 }
 
 // 恢复不得覆盖 Gist 凭据：备份 configs 段即使夹带 gist_* 键，
-// importConfigs 的 FilterBackupConfigs 也须将其滤掉。
+// importConfigs 的导入面过滤（filterRestoreConfigs）也须将其滤掉。
 func TestGistRestoreDoesNotOverwriteGistCredentials(t *testing.T) {
 	h := setupGistTest(t)
 	r := gistTestRepo(t, h)
