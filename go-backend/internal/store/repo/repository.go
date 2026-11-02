@@ -5644,6 +5644,18 @@ func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *impor
 			}
 			value = normalizedFrontURLs
 		}
+		// C-F5-01（LEDGER3）：配置键 ip 走保存面等价地址语法门（见
+		// validatePanelInstallAddrForRestore）——此前恢复面只有上方
+		// 空标签谓词，含空格/下划线/双端口/分号等保存面必拒形态原
+		// 样落库，11 键双面差集恰此一键。坏值跳过 + warning，口径
+		// 与本循环其余值域键一致。
+		if strings.TrimSpace(name) == "ip" {
+			if err := validatePanelInstallAddrForRestore(value); err != nil {
+				rep.skip("configs")
+				rep.warnf("备份恢复：配置 %q 的值 %q 无效（%v），已跳过未恢复", name, value, err)
+				continue
+			}
+		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"value", "time"}),
@@ -6949,6 +6961,111 @@ func validateBrandAssetConfigValue(raw string) error {
 		return errors.New("品牌图片数据格式无效")
 	}
 	return nil
+}
+
+// ─── C-F5-01（LEDGER3）：配置键 ip 的恢复面地址语法门 ──────────
+// repo 层不能 import handler，故此处镜像保存面 ip 分支的第二段谓词
+// handler.validatePanelInstallAddr → handler.IsValidNodeAddress
+// （第一段空标签判已由 configValueHasEmptyLabelHost 镜像覆盖）。
+// 此前恢复面只有空标签谓词：含空格/下划线/双端口/分号等保存面必拒
+// 形态经备份导入原样落库，违 B14-002「恢复面与保存面同口径」。
+// 两份实现以同源语料锁定：handler 侧 TestF3DConfigIPSaveSideCorpus
+// 与本包 TestF3DValidatePanelInstallAddrRestoreCorpus 逐条同 verdict。
+
+// validatePanelInstallAddrForRestore mirrors handler.
+// validatePanelInstallAddr: trim, empty passes (clearable), one
+// optional scheme prefix is stripped, the remainder must be a valid
+// bare host/IP or single host:port.
+func validatePanelInstallAddrForRestore(panelAddr string) error {
+	raw := strings.TrimSpace(panelAddr)
+	if raw == "" {
+		return nil
+	}
+	if idx := strings.Index(raw, "://"); idx > 0 {
+		raw = raw[idx+3:]
+	}
+	return isValidNodeAddressForRestore(raw)
+}
+
+// isValidNodeAddressForRestore mirrors handler.IsValidNodeAddress
+// step for step: no scheme/path/query, no structural characters
+// (kernel.HostHasStructuralChars, already shared), address charset
+// (letters, digits, hyphen, dot, colon, brackets, % zone id), IP
+// literals pass via netip, host:port port must be numeric 1-65535,
+// hostname must not carry an empty label, and an all-numeric dotted
+// host must parse as IPv4. Like the save side it does no DNS
+// resolution and no IP policy: loopback/RFC1918 storable-ness is
+// unchanged.
+func isValidNodeAddressForRestore(addr string) error {
+	addr = strings.TrimSpace(addr)
+	if strings.Contains(addr, "://") {
+		return fmt.Errorf("address must not contain scheme (e.g. http://)")
+	}
+	if strings.ContainsAny(addr, "/?") {
+		return fmt.Errorf("address must not contain path or query parameters")
+	}
+	if kernel.HostHasStructuralChars(addr) {
+		return fmt.Errorf("address must not contain @, #, commas, whitespace or control characters")
+	}
+	if !isNodeAddressCharset(addr) {
+		return fmt.Errorf("address must contain only letters, digits, hyphens, dots, colons, brackets or %% (IPv6 zone id)")
+	}
+	if _, err := netip.ParseAddr(addr); err == nil {
+		return nil
+	}
+	host := addr
+	port := ""
+	hasPort := false
+	if h, p, err := net.SplitHostPort(addr); err == nil {
+		host, port, hasPort = h, p, true
+	} else if !strings.Contains(err.Error(), "missing port in address") {
+		return fmt.Errorf("invalid address format")
+	}
+	if hasPort {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("address port must be a number between 1 and 65535")
+		}
+	}
+	if kernel.HasEmptyLabel(host) {
+		return fmt.Errorf("address contains an empty DNS label (e.g. \"a..b\")")
+	}
+	if isAllNumericDottedHost(host) {
+		if _, err := netip.ParseAddr(host); err != nil {
+			return fmt.Errorf("invalid IPv4 address")
+		}
+	}
+	return nil
+}
+
+// isNodeAddressCharset mirrors handler.isAddressCharset (R3 B04-001).
+func isNodeAddressCharset(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-' || c == '.' || c == ':' || c == '[' || c == ']' || c == '%':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isAllNumericDottedHost mirrors handler.isAllNumericDottedHost.
+func isAllNumericDottedHost(host string) bool {
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	for _, r := range host {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // validateLatencyTargetHostPort mirrors the format layer of
