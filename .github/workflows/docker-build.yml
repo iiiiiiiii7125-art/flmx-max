@@ -59,9 +59,25 @@ jobs:
           echo "should_build=true" >> $GITHUB_OUTPUT
           echo "should_build_gost=true" >> $GITHUB_OUTPUT
 
+  # C4-02（第三轮再审计）：发版路径门禁前置校验。本 workflow 的触发
+  # （tag push + workflow_dispatch）与 ci-build（分支 push + PR）不相交，
+  # 改前本 workflow 的 job 里只有 build-agent 跑一门
+  # check-agent-image-tools，其余 21 门、Go 全量测试、PG 契约、安装
+  # 脚本套件与 e2e API 子集在发版路径上都没有执行点——给从未过 CI 的
+  # 提交打 tag（或从任意分支 workflow_dispatch）可直达发版构建。此
+  # job 以 reusable workflow 原样调用 ci-build.yml 的全部 job 定义
+  # （不复制步骤、与分支 CI 零漂移），下方四个 build job 与
+  # create-release 全部 needs 它，发版路径绕不过去。被调用 workflow
+  # 的 job 不引用任何自定义 secret，checkout 只需 contents: read。
+  verify:
+    name: Verify (full CI gate suite via ci-build)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-build.yml
+
   build-gost:
     name: Build & Compress GOST Binary
-    needs: check-version
+    needs: [check-version, verify]
     if: needs.check-version.outputs.should_build_gost == 'true'
     runs-on: ubuntu-latest
     # F-125: 只读源码 + artifact 上传（走 Actions runtime，不需要
@@ -148,7 +164,7 @@ jobs:
 
   build-vite:
     name: Build & Push Vite Frontend
-    needs: check-version
+    needs: [check-version, verify]
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -189,7 +205,7 @@ jobs:
 
   build-go-backend:
     name: Build & Push Go Backend
-    needs: check-version
+    needs: [check-version, verify]
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -242,7 +258,7 @@ jobs:
 
   build-agent:
     name: Build & Push Agent Image
-    needs: check-version
+    needs: [check-version, verify]
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -284,7 +300,7 @@ jobs:
 
   create-release:
     name: Create Release (Tag Only)
-    needs: [check-version, build-gost, build-vite, build-go-backend]
+    needs: [check-version, verify, build-gost, build-vite, build-go-backend]
     if: needs.check-version.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     permissions:

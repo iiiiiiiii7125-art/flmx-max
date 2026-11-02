@@ -5,6 +5,12 @@ on:
     branches: ['**']
   pull_request:
     branches: ['**']
+  # C4-02: docker-build.yml (tag / workflow_dispatch release path) calls
+  # this workflow as its pre-build verify job, so a release build runs
+  # the identical gate/test suite defined below instead of relying on
+  # the out-of-repo convention that tags are only cut from CI-green
+  # branch tips. Adding workflow_call does not change push/PR runs.
+  workflow_call:
 
 jobs:
   install-scripts:
