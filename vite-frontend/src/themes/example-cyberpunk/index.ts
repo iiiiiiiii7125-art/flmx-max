@@ -2,7 +2,7 @@
  * Example Theme: Cyberpunk
  * ========================
  * A neon-cyberpunk dark theme that demonstrates ALL override capabilities:
- *   ✅ CSS tokens (full dark palette)
+ *   ✅ CSS tokens (full palette, declared in the light token set)
  *   ✅ Raw CSS (neon glow effects, custom animations, font-face)
  *   ✅ Component override (custom Button with glow)
  *   ✅ Lifecycle hooks
@@ -25,7 +25,8 @@ const cyberpunkTheme: ThemePackage = {
   // ── CSS Tokens ────────────────────────────────────────────────────────────
   tokens: {
     light: {
-      // This theme is dark-only, so the light tokens just fall through to dark
+      // Dark-styled palette, declared in the light token set — the only
+      // token set the app reads (dark mode was removed app-wide)
       "--background": "#0a0a1a",
       "--foreground": "#e0e0ff",
       "--border": "#2a2a4a",
@@ -38,46 +39,6 @@ const cyberpunkTheme: ThemePackage = {
       "--primary-foreground": "#ffffff",
       "--secondary": "#00ffff",
       "--secondary-foreground": "#000000",
-      "--danger": "#ff3366",
-      "--success": "#00ff88",
-      "--warning": "#ffaa00",
-    },
-    dark: {
-      "--background": "#0a0a1a",
-      "--foreground": "#e0e0ff",
-      "--border": "#2a2a4a",
-      "--input": "#1a1a3a",
-      "--ring": "#ff00ff",
-      "--content1": "#12122a",
-      "--divider": "#2a2a4a",
-
-      "--default-50": "#0d0d20",
-      "--default-100": "#14142e",
-      "--default-200": "#1e1e3c",
-      "--default-300": "#2a2a4a",
-      "--default-400": "#4a4a6a",
-      "--default-500": "#7a7a9a",
-      "--default-600": "#9a9aba",
-      "--default-700": "#babada",
-      "--default-800": "#dadaf0",
-      "--default-900": "#f0f0ff",
-
-      "--primary": "#ff00ff",
-      "--primary-foreground": "#ffffff",
-      "--primary-50": "#1a001a",
-      "--primary-100": "#330033",
-      "--primary-200": "#660066",
-      "--primary-300": "#990099",
-      "--primary-400": "#cc00cc",
-      "--primary-500": "#ff00ff",
-      "--primary-600": "#ff33ff",
-      "--primary-700": "#ff66ff",
-      "--primary-800": "#ff99ff",
-      "--primary-900": "#ffccff",
-
-      "--secondary": "#00ffff",
-      "--secondary-foreground": "#000000",
-
       "--danger": "#ff3366",
       "--success": "#00ff88",
       "--warning": "#ffaa00",

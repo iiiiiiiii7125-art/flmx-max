@@ -102,33 +102,6 @@ const defaultTheme: ThemePackage = {
       "--warning-800": "#92400e",
       "--warning-900": "#78350f",
     },
-
-    dark: {
-      "--background": "#0b1020",
-      "--foreground": "#f3f4f6",
-      "--border": "#334155",
-      "--input": "#475569",
-      "--ring": "#60a5fa",
-      "--content1": "#111827",
-      "--divider": "#334155",
-
-      "--default-50": "#0f172a",
-      "--default-100": "#1e293b",
-      "--default-200": "#334155",
-      "--default-300": "#475569",
-      "--default-400": "#64748b",
-      "--default-500": "#94a3b8",
-      "--default-600": "#cbd5e1",
-      "--default-700": "#e2e8f0",
-      "--default-800": "#f1f5f9",
-      "--default-900": "#f8fafc",
-
-      "--primary": "#3b82f6",
-      "--secondary": "#818cf8",
-      "--danger": "#ef4444",
-      "--success": "#22c55e",
-      "--warning": "#f59e0b",
-    },
   },
 
   // No component/layout/page overrides — uses all defaults.
