@@ -103,14 +103,19 @@ func TestSubscriptionContract(t *testing.T) {
 		past := time.Now().Add(-time.Hour).UnixMilli()
 		kernelContractPost(t, router, admin, "/api/v1/subscription/save",
 			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(past)+`}`)
-		if code, _, _ := sub(path); code != http.StatusForbidden {
-			t.Fatalf("expired: %d", code)
+		// E-05 (port351): an expired subscription no longer answers 403;
+		// it renders 200 with only a reason placeholder node, so clients
+		// replace the stale list and show why it stopped working. The
+		// real credentials must not leak into that rendering.
+		if code, body, _ := sub(path); code != 200 || strings.Contains(body, "vless://"+uuid+"@") {
+			t.Fatalf("expired: %d %s", code, body)
 		}
 		future := time.Now().Add(48 * time.Hour).UnixMilli()
 		kernelContractPost(t, router, admin, "/api/v1/subscription/save",
 			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"enabled":false}`)
-		if code, _, _ := sub(path); code != http.StatusForbidden {
-			t.Fatalf("disabled: %d", code)
+		// E-05 (port351): disabled renders 200 + reason placeholder, not 403.
+		if code, body, _ := sub(path); code != 200 || strings.Contains(body, "vless://"+uuid+"@") {
+			t.Fatalf("disabled: %d %s", code, body)
 		}
 		kernelContractPost(t, router, admin, "/api/v1/subscription/save",
 			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"enabled":true}`)
@@ -142,8 +147,10 @@ func TestSubscriptionContract(t *testing.T) {
 			t.Fatalf("share traffic header: %d %s", code, hdr)
 		}
 		_ = r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{{SubscriptionID: id, Direction: "down", Bytes: 900}}, time.Now().UnixMilli())
-		if code, _, _ := sub(path); code != http.StatusForbidden {
-			t.Fatalf("over the limit: %d", code)
+		// E-05 (port351): over the traffic limit renders 200 + reason
+		// placeholder, not 403.
+		if code, body, _ := sub(path); code != 200 || strings.Contains(body, "vless://"+uuid+"@") {
+			t.Fatalf("over the limit: %d %s", code, body)
 		}
 		out = kernelContractPost(t, router, admin, "/api/v1/subscription/reset-traffic", `{"id":`+jsonInt64(id)+`}`)
 		if v := out.Data.(map[string]interface{}); out.Code != 0 || valueAsInt(v["downloadBytes"]) != 0 || v["active"] != true {
