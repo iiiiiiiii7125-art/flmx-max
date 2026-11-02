@@ -28,6 +28,15 @@ import (
 //      第 1 步的枚举与清扫正则都只认字面量，此类注册对它们不
 //      可见，只能靠白名单逐一相等兜底，多一处/少一处即红。
 //
+// R7-L8-01（RB3-03 残留）：第 1 步清扫与第 4 步白名单扫描原先
+// 只覆盖 handler.go 与 router.go——第三个文件里的非字面量注册
+// 对枚举/清扫/白名单全不可见（字面量注册则会被清扫的文件面规
+// 则逮住）。现两道扫描都改走 scanRouteRegistrationCallSites 的
+// 全后端整树调用点普查（任何文件的 .Handle/.HandleFunc 调用点
+// 无一例外进入扫描，字面量与非字面量同覆盖），白名单键改用
+// 相对 backend 根的路径，第三文件新增任何注册（字面量撞文件
+// 面规则、非字面量撞白名单逐一相等）都点名报红。
+//
 // 分类口径与 L1 的 211 条机械清单对齐（L8 报告 §④的「~180 条」
 // 是 handler.go Register 段的约数；差额逐项为：handler.go 字面
 // 量 189 条 + 备份循环双前缀展开 20 条 + ghMirrorPath 常量 1 条
@@ -212,12 +221,10 @@ var routeClassification = []routeEntry{
 }
 
 var (
-	reHandleFuncLiteral = regexp.MustCompile(`\.HandleFunc\("([^"]+)"`)
-	reHandleLiteral     = regexp.MustCompile(`\.Handle\("([^"]+)"`)
-	reMuxLiteral        = regexp.MustCompile(`mux\.HandleFunc\("([^"]+)",`)
-	reMuxHandle         = regexp.MustCompile(`mux\.Handle\("([^"]+)",`)
-	reBackupEntry       = regexp.MustCompile(`\{"(/api/v1/backup/[^"]+)",`)
-	reGHMirrorConst     = regexp.MustCompile(`ghMirrorPath\s*=\s*"([^"]+)"`)
+	reMuxLiteral    = regexp.MustCompile(`mux\.HandleFunc\("([^"]+)",`)
+	reMuxHandle     = regexp.MustCompile(`mux\.Handle\("([^"]+)",`)
+	reBackupEntry   = regexp.MustCompile(`\{"(/api/v1/backup/[^"]+)",`)
+	reGHMirrorConst = regexp.MustCompile(`ghMirrorPath\s*=\s*"([^"]+)"`)
 )
 
 // enumerateRegisteredRoutes 机械枚举全量注册路由，并清扫注册面
@@ -262,42 +269,26 @@ func enumerateRegisteredRoutes(t *testing.T) map[string]bool {
 		routes[m[1]] = true
 	}
 
-	// 5) 注册面清扫：全后端（非测试文件）里带字面量路径的
-	//    .Handle/.HandleFunc 只许出现在 handler.go 与 router.go，
-	//    且清扫所得字面量集必须被上面的枚举覆盖（防换个接收者
-	//    名字在别处注册绕过普查）。
+	// 5) 注册面清扫：全后端整树调用点普查（scanRouteRegistration
+	//    CallSites，非测试文件）里带字面量路径的 .Handle/.HandleFunc
+	//    只许出现在 handler.go 与 router.go，且清扫所得字面量集
+	//    必须被上面的枚举覆盖（防换个接收者名字在别处注册绕过
+	//    普查）。非字面量调用点不在此判，由白名单测试逐一相等
+	//    兜底——同为整树扫描，第三文件两类注册都无处遁形。
 	allowed := map[string]bool{
-		filepath.Clean(handlerPath): true,
-		filepath.Clean(routerPath):  true,
+		"internal/http/handler/handler.go": true,
+		"internal/http/router.go":          true,
 	}
 	swept := map[string]bool{}
-	err := filepath.Walk(backendRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	for _, site := range scanRouteRegistrationCallSites(t, backendRoot) {
+		if !site.literal {
+			continue
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
+		if !allowed[site.relFile] {
+			t.Errorf("census: route registration surface outside handler.go/router.go: %s:%d", site.relFile, site.line)
+			continue
 		}
-		data, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
-		src := string(data)
-		hits := append(reHandleFuncLiteral.FindAllStringSubmatch(src, -1), reHandleLiteral.FindAllStringSubmatch(src, -1)...)
-		if len(hits) == 0 {
-			return nil
-		}
-		if !allowed[filepath.Clean(path)] {
-			t.Errorf("census: route registration surface outside handler.go/router.go: %s", path)
-			return nil
-		}
-		for _, m := range hits {
-			swept[m[1]] = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("census: walk backend tree: %v", err)
+		swept[site.pattern] = true
 	}
 	for p := range swept {
 		if p == "/api/v1" {
@@ -322,31 +313,92 @@ func readFileForCensus(t *testing.T, path string) string {
 
 var reHandleCallStart = regexp.MustCompile(`\.Handle(?:Func)?\(`)
 
+// regCallSite 是整树普查到的一处 .Handle/.HandleFunc 调用点。
+type regCallSite struct {
+	relFile string // 相对 backend 根的路径（slash 分隔）
+	line    int
+	arg     string // 首参原文（空白归一化）；无顶层逗号（单参调用）为空串
+	literal bool   // 首参是否为纯字符串字面量
+	pattern string // literal 时的字面量值
+}
+
+// scanRouteRegistrationCallSites 整树普查全后端（非测试文件）的
+// 全部 .Handle/.HandleFunc 调用点（R7-L8-01）：不预设注册只发
+// 生在哪两个文件——任何文件里的调用点都进入结果，文件面规则
+// （清扫）与白名单逐一相等都在这份全集上判定。测试文件除外：
+// 测试自建的 mux 从不接生产 router（handler 包测试以自有 mux
+// 调 Register 的情形，其注册点仍是 handler.go 的生产调用点，
+// 已在普查内）。
+func scanRouteRegistrationCallSites(t *testing.T, backendRoot string) []regCallSite {
+	t.Helper()
+	var sites []regCallSite
+	err := filepath.Walk(backendRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		rel, rerr := filepath.Rel(backendRoot, path)
+		if rerr != nil {
+			return rerr
+		}
+		src := string(data)
+		rel = filepath.ToSlash(rel)
+		for _, loc := range reHandleCallStart.FindAllStringIndex(src, -1) {
+			arg := strings.Join(strings.Fields(firstCallArg(src, loc[1])), " ")
+			site := regCallSite{
+				relFile: rel,
+				line:    strings.Count(src[:loc[0]], "\n") + 1,
+				arg:     arg,
+			}
+			if isPureStringLiteral(arg) {
+				site.literal = true
+				if v, uerr := strconv.Unquote(arg); uerr == nil {
+					site.pattern = v
+				} else {
+					site.pattern = strings.Trim(arg, `"`)
+				}
+			}
+			sites = append(sites, site)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("census: walk backend tree: %v", err)
+	}
+	return sites
+}
+
 // nonLiteralRegSite 是一处「首参非纯字符串字面量」的注册调用点
-// 登记：file 为所在文件基名，arg 为首参表达式（空白归一化后），
-// note 说明该调用点注册的路径如何被 enumerateRegisteredRoutes
-// 的特例展开覆盖。
+// 登记：file 为相对 backend 根的路径，arg 为首参表达式（空白
+// 归一化后），note 说明该调用点注册的路径如何被
+// enumerateRegisteredRoutes 的特例展开覆盖。
 type nonLiteralRegSite struct {
 	file string
 	arg  string
 	note string
 }
 
-// nonLiteralRegistrationWhitelist 是 handler.go / router.go 内全
-// 部非常量注册调用点的显式白名单（RB3-03）。新增此类注册时：
+// nonLiteralRegistrationWhitelist 是全后端全部非常量注册调用点
+// 的显式白名单（RB3-03，R7-L8-01 起整树口径）。新增此类注册时：
 // 先在此登记（含覆盖口径说明），再让 enumerateRegisteredRoutes
 // 的特例展开覆盖其路径、并在 routeClassification 里归类。
 var nonLiteralRegistrationWhitelist = []nonLiteralRegSite{
 	{
-		"handler.go", "route.path",
+		"internal/http/handler/handler.go", "route.path",
 		"备份端点循环注册：路径取自同一清单条目，枚举第 2 步以 reBackupEntry 展开清单（原前缀＋/api/v1 双前缀）覆盖其全部路径",
 	},
 	{
-		"handler.go", `"/api/v1"+route.path`,
+		"internal/http/handler/handler.go", `"/api/v1"+route.path`,
 		"备份端点循环的双前缀别名注册：与上一处同一清单、同一展开口径",
 	},
 	{
-		"handler.go", "ghMirrorPath",
+		"internal/http/handler/handler.go", "ghMirrorPath",
 		"GitHub 镜像代理注册：路径为 gh_mirror.go 的 ghMirrorPath 常量，枚举第 3 步以 reGHMirrorConst 提取常量值覆盖",
 	},
 }
@@ -403,29 +455,21 @@ func isPureStringLiteral(arg string) bool {
 	return false
 }
 
-// TestRouteRegistrationNonLiteralWhitelist 机械扫描 handler.go
-// 与 router.go 的全部 .Handle/.HandleFunc 调用点：首参非纯字符
-// 串字面量的集合必须与 nonLiteralRegistrationWhitelist 逐一
-// 相等——多一处（新非常量注册未登记）或少一处（登记已失效）
-// 都点名报红（RB3-03)。
+// TestRouteRegistrationNonLiteralWhitelist 机械扫描全后端整树
+// 的全部 .Handle/.HandleFunc 调用点（R7-L8-01 起整树口径，原
+// 先只开 handler.go/router.go 两文件，第三文件的非字面量注册
+// 全盲）：首参非纯字符串字面量的集合必须与
+// nonLiteralRegistrationWhitelist 逐一相等——多一处（新非常量
+// 注册未登记）或少一处（登记已失效）都点名报红（RB3-03)。
 func TestRouteRegistrationNonLiteralWhitelist(t *testing.T) {
 	backendRoot := filepath.Join("..", "..", "..")
-	files := map[string]string{
-		"handler.go": filepath.Join(backendRoot, "internal", "http", "handler", "handler.go"),
-		"router.go":  filepath.Join(backendRoot, "internal", "http", "router.go"),
-	}
 
 	found := map[string]string{} // key: file + "\x00" + arg → 定位 file:line
-	for base, path := range files {
-		src := readFileForCensus(t, path)
-		for _, loc := range reHandleCallStart.FindAllStringIndex(src, -1) {
-			arg := strings.Join(strings.Fields(firstCallArg(src, loc[1])), " ")
-			if arg == "" || isPureStringLiteral(arg) {
-				continue
-			}
-			line := strings.Count(src[:loc[0]], "\n") + 1
-			found[base+"\x00"+arg] = base + ":" + strconv.Itoa(line)
+	for _, site := range scanRouteRegistrationCallSites(t, backendRoot) {
+		if site.arg == "" || site.literal {
+			continue
 		}
+		found[site.relFile+"\x00"+site.arg] = site.relFile + ":" + strconv.Itoa(site.line)
 	}
 
 	allowed := map[string]nonLiteralRegSite{}
