@@ -4,8 +4,9 @@ import (
 	"testing"
 )
 
-// R7-001 full-set gate: the private guard invariant — exactly one
-// ip_is_private -> reject rule, preceded only by sniff rules — is
+// R7-001 full-set gate: the private guard invariant — the
+// unconditional ip_is_private -> reject rule at the first non-sniff
+// position, plus its fallthrough twin closing the list — is
 // asserted over the mechanically derived matrix of the sing-box
 // render surface, not just the audited cases:
 //   - protocols: the nine sing-box entries of capabilities.go
@@ -18,24 +19,39 @@ import (
 //     form, and the empty render.
 // A future render path or rule constructor that emits a sing-box
 // route rule ahead of the guard, or drops it, fails this gate.
+// Since S1(b) the same reject also appears as the conditioned half
+// of a resolve pair ahead of direct exits; those copies carry at
+// least one condition and are structure-checked by
+// s1bAssertDomainGuard, which this gate also runs on every case.
 
 func assertGuardDominates(t *testing.T, label string, cfg map[string]interface{}) {
 	t.Helper()
 	rules := g1RouteRules(t, cfg)
-	guards := 0
-	for i, r := range rules {
-		m := r.(map[string]interface{})
-		if m["ip_is_private"] == true && m["action"] == "reject" {
-			guards++
-			continue
-		}
-		if guards == 0 && m["action"] != "sniff" {
-			t.Fatalf("%s: rule %d precedes the private guard: %v (all rules: %v)", label, i, m, rules)
+	// The head guard sits at the first non-sniff position.
+	head := 0
+	for head < len(rules) && rules[head].(map[string]interface{})["action"] == "sniff" {
+		head++
+	}
+	isUnconditionalReject := func(m map[string]interface{}) bool {
+		return len(m) == 2 && m["ip_is_private"] == true && m["action"] == "reject"
+	}
+	if head >= len(rules) || !isUnconditionalReject(rules[head].(map[string]interface{})) {
+		t.Fatalf("%s: private guard not at the first non-sniff position %d: %v", label, head, rules)
+	}
+	// Exactly two unconditional copies exist: the head guard and the
+	// domain form's fallthrough reject (the tail, shape-checked by
+	// the S1(b) gate below). Every other ip_is_private reject is a
+	// conditioned pair half.
+	unconditional := 0
+	for _, r := range rules {
+		if isUnconditionalReject(r.(map[string]interface{})) {
+			unconditional++
 		}
 	}
-	if guards != 1 {
-		t.Fatalf("%s: want exactly one private guard, got %d: %v", label, guards, rules)
+	if unconditional != 2 {
+		t.Fatalf("%s: want the head guard plus the fallthrough reject, got %d unconditional copies: %v", label, unconditional, rules)
 	}
+	s1bAssertDomainGuard(t, cfg)
 }
 
 func g1MatrixInbounds() []Inbound {
