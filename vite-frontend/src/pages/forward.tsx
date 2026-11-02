@@ -6300,10 +6300,10 @@ export default function ForwardPage() {
                                     ) : (
                                       <div className="mt-2 pt-2 border-t border-divider">
                                         <div
-                                          className={`text-xs font-semibold ${
+                                          className={`w-fit rounded px-1.5 py-0.5 text-xs font-semibold ${
                                             isDiagnosing
-                                              ? "text-warning-700"
-                                              : "text-danger-700"
+                                              ? "tray-warning"
+                                              : "tray-danger"
                                           }`}
                                         >
                                           {isDiagnosing
