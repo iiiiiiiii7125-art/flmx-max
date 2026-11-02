@@ -58,4 +58,14 @@ WORKDIR /etc/flmx_agent
 # Same runtime tuning knob as the script form's systemd unit.
 ENV GODEBUG=disablethp=1
 
+# Kernel state anchor: downloaded kernel binaries, their run configs,
+# state.json and geodata live under the kernel root. Pin it inside
+# the data directory (the mounted volume) so container rebuilds keep
+# installed kernels; the built-in default root belongs to the script
+# form's data directory, which in this image is only the ephemeral
+# container layer. kernel.ResolveBaseDir also falls back to the
+# working directory in container form if this is ever stripped, but
+# the image pins it so every container start method agrees.
+ENV FLMX_KERNEL_DIR=/etc/flmx_agent/kernels
+
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/go-gost/x/kernel"
 )
@@ -59,14 +58,10 @@ func coreSweepDirs() []string {
 	if exe, err := os.Executable(); err == nil {
 		add(filepath.Dir(exe))
 	}
-	// Mirror kernel.Default's base dir resolution.
-	base := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
-	if base == "" {
-		base = strings.TrimSpace(os.Getenv("FLVX_KERNEL_DIR"))
-	}
-	if base == "" {
-		base = "/etc/flux_agent/kernels"
-	}
+	// The kernel root comes from kernel.ResolveBaseDir — the single
+	// resolution Default() applies. It used to be mirrored here by
+	// hand; two copies of the rule could drift apart.
+	base := kernel.ResolveBaseDir()
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return dirs

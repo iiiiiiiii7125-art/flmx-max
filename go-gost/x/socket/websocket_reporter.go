@@ -2591,7 +2591,20 @@ func (s *upgradeStaging) Close() {
 	}
 }
 
+// upgradeInContainer is the container-form seam for the upgrade and
+// rollback handlers, mirroring uninstallInContainer.
+var upgradeInContainer = InContainer
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
+	// R2-004: the container form has no binary at the script layout
+	// path and no service manager — panel-driven upgrade can never
+	// apply. Refuse up front with a receipt that names the correct
+	// path, before any staging file, download or progress report:
+	// upgrading a container node means rebuilding the container from
+	// a fresh install command.
+	if upgradeInContainer() {
+		return fmt.Errorf("容器形态节点无法通过面板升级：请在面板的节点安装弹窗重新获取 Docker/Compose 安装命令并在节点上重跑，即可完成升级")
+	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("序列化数据失败: %v", err)
@@ -2829,6 +2842,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 }
 
 func (w *WebSocketReporter) handleRollbackAgent(data interface{}) error {
+	// R2-004: same container-form refusal as handleUpgradeAgent —
+	// there is no script-layout backup to roll back to; the previous
+	// version is restored by re-running its install command.
+	if upgradeInContainer() {
+		return fmt.Errorf("容器形态节点无法通过面板回退：请在面板的节点安装弹窗重新获取目标版本的 Docker/Compose 安装命令并在节点上重跑")
+	}
 	const binaryPath = "/etc/flux_agent/flux_agent"
 	backupPath := binaryPath + ".old"
 

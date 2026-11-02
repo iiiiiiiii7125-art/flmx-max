@@ -54,18 +54,67 @@ var (
 	defaultManagerOnce sync.Once
 )
 
-// Default returns the process-wide manager rooted at FLMX_KERNEL_DIR
-// (legacy FLVX_KERNEL_DIR still honored) or /etc/flux_agent/kernels.
+// Container-form detection for the kernel-root fallback in
+// ResolveBaseDir. It mirrors socket.InContainer (/.dockerenv marker
+// or a container runtime name in the cgroup path); x/kernel cannot
+// import x/socket (socket imports kernel), so the probe lives here
+// too and both sides must keep the same notion of "container form".
+// The seams are variables so tests can pin every resolution branch.
+var (
+	kernelContainerMarkerPath = "/.dockerenv"
+	kernelContainerCgroupPath = "/proc/self/cgroup"
+	detectKernelContainer     = probeKernelContainer
+	kernelWorkDir             = os.Getwd
+)
+
+func probeKernelContainer() bool {
+	if _, err := os.Stat(kernelContainerMarkerPath); err == nil {
+		return true
+	}
+	b, err := os.ReadFile(kernelContainerCgroupPath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.Contains(line, "docker") || strings.Contains(line, "lxc") || strings.Contains(line, "kubepods") || strings.Contains(line, "containerd") {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveBaseDir resolves the kernel state root:
+//
+//  1. FLMX_KERNEL_DIR, then legacy FLVX_KERNEL_DIR, when set —
+//     explicit configuration always wins. The container image pins
+//     FLMX_KERNEL_DIR to the data volume for exactly this reason.
+//  2. In the container form, <working directory>/kernels: the
+//     entrypoint pins the working directory to the mounted data
+//     directory that also holds config.json, so kernel binaries,
+//     state.json and geodata persist across container rebuilds
+//     instead of dying with the container's writable layer.
+//  3. The script form's defaultBaseDir — its data directory,
+//     unchanged.
+func ResolveBaseDir() string {
+	dir := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
+	if dir == "" {
+		dir = strings.TrimSpace(os.Getenv("FLVX_KERNEL_DIR"))
+	}
+	if dir != "" {
+		return dir
+	}
+	if detectKernelContainer() {
+		if wd, err := kernelWorkDir(); err == nil && filepath.IsAbs(wd) {
+			return filepath.Join(wd, "kernels")
+		}
+	}
+	return defaultBaseDir
+}
+
+// Default returns the process-wide manager rooted at ResolveBaseDir().
 func Default() *Manager {
 	defaultManagerOnce.Do(func() {
-		dir := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
-		if dir == "" {
-			dir = strings.TrimSpace(os.Getenv("FLVX_KERNEL_DIR"))
-		}
-		if dir == "" {
-			dir = defaultBaseDir
-		}
-		defaultManager = NewManager(dir)
+		defaultManager = NewManager(ResolveBaseDir())
 	})
 	return defaultManager
 }
