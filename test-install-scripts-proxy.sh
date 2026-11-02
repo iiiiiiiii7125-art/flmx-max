@@ -29,6 +29,18 @@ load_script_without_main() {
   rm -f "$temp_file"
 }
 
+# 在伪终端下运行给定的 harness 脚本并喂入输入，返回其退出码。
+# 归属守卫的交互确认分支以 [[ -t 0 ]] 为判据，管道 stdin 覆盖不到，
+# 必须借 util-linux 的 script 分配 pty 才能真实覆盖（AI-07）。
+pty_run() {
+  local input="$1"
+  local harness="$2"
+
+  command -v script >/dev/null 2>&1 || \
+    fail "pty_run requires util-linux 'script' for interactive guard coverage"
+  printf '%s' "$input" | script -qec "bash \"$harness\"" /dev/null >/dev/null 2>&1
+}
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -89,6 +101,10 @@ test_install_script_builds_canonical_download_url() (
 test_update_flux_agent_downloads_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
+  # 确认归属，专测更新机制本身。
+  FLMX_AGENT_TAKEOVER="1"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
@@ -171,6 +187,10 @@ test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
 test_update_flux_agent_prints_online_confirmation_guidance() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
+  # 确认归属，专测更新机制本身。
+  FLMX_AGENT_TAKEOVER="1"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
@@ -306,6 +326,10 @@ test_update_flux_agent_rolls_back_flapping_binary() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
+  # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
+  # 确认归属，专测更新机制本身。
+  FLMX_AGENT_TAKEOVER="1"
+
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
   FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
@@ -417,6 +441,10 @@ test_update_flux_agent_rejects_downgrade() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
+  # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
+  # 确认归属，专测更新机制本身。
+  FLMX_AGENT_TAKEOVER="1"
+
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
   cat > "$INSTALL_DIR/flux_agent" <<'EOF'
@@ -454,6 +482,10 @@ EOF
 test_update_flux_agent_allows_higher_and_incomparable() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
+  # 确认归属，专测更新机制本身。
+  FLMX_AGENT_TAKEOVER="1"
 
   SERVICE_MANAGER="systemd"
 
@@ -608,6 +640,10 @@ test_update_flux_agent_preserves_legacy_gost_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
+  # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
+  # 确认归属，专测更新机制本身。
+  FLMX_AGENT_TAKEOVER="1"
+
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
   cat > "$INSTALL_DIR/flux_agent" <<'EOF'
@@ -640,6 +676,413 @@ EOF
   assert_equals "1" "$rc" "update_flux_agent should fail when the download artifact is missing"
   assert_equals "0" "$cleanup_called" "update_flux_agent should preserve legacy gost when download fails"
   [[ ! -f "$INSTALL_DIR/flux_agent.new" ]] || fail "update_flux_agent should remove stale download artifacts before retrying"
+)
+
+# AI-10：agent_config_addr 必须把 JSON 转义写法归一化为原始地址，
+# 否则异风格生成器写出的自家 config 会被归属守卫误判为他人。
+test_agent_config_addr_normalizes_json_escapes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+
+  assert_equals "" "$(agent_config_addr "$dir")" \
+    "AI-10: agent_config_addr should be empty without config.json"
+
+  printf '%s' '{"addr": "https://panel.example.com:443", "secret": "x"}' > "$dir/config.json"
+  assert_equals "https://panel.example.com:443" "$(agent_config_addr "$dir")" \
+    "AI-10: agent_config_addr should return a plain addr verbatim"
+
+  printf '%s' '{"addr": "https:\/\/panel.example.com:443", "secret": "x"}' > "$dir/config.json"
+  assert_equals "https://panel.example.com:443" "$(agent_config_addr "$dir")" \
+    "AI-10: agent_config_addr should decode escaped slashes"
+
+  printf '%s' '{"addr": "https://panel.example.com\u003a443", "secret": "x"}' > "$dir/config.json"
+  assert_equals "https://panel.example.com:443" "$(agent_config_addr "$dir")" \
+    "AI-10: agent_config_addr should decode unicode escapes"
+
+  printf '%s' '{"secret": "x"}' > "$dir/config.json"
+  assert_equals "" "$(agent_config_addr "$dir")" \
+    "AI-10: agent_config_addr should be empty when addr is absent"
+)
+
+# AI-07（节点侧）：install 认领守卫的形态矩阵随仓落地——自家三种
+# 写法放行、他人两种写法拒绝、不可判定拒绝、空目录放行、TAKEOVER
+# 放行留痕、交互 y 放行 / n 拒绝，全部走真实守卫函数，拒绝时既有
+# 文件逐字不动。
+test_guard_agent_dir_ownership_matrix() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  INSTALL_DIR=$(mktemp -d)
+  SERVER_ADDR="https://mine.example.com:443"
+  SECRET="test-secret"
+
+  local rc="0" out="" before="" harness=""
+  run_guard() {
+    rc="0"
+    out=$(guard_agent_dir_ownership </dev/null 2>&1) || rc="$?"
+  }
+  set_config() { printf '%s' "$1" > "$INSTALL_DIR/config.json"; }
+  set_binary() { printf 'binary-bytes' > "$INSTALL_DIR/flux_agent"; }
+
+  # 空目录 → 放行
+  run_guard
+  assert_equals "0" "$rc" "AI-07: guard should pass on an empty dir"
+
+  # 自家·原文 → 放行
+  set_config '{"addr": "https://mine.example.com:443", "secret": "x"}'
+  set_binary
+  run_guard
+  assert_equals "0" "$rc" "AI-07: guard should pass when addr matches verbatim"
+
+  # 自家·斜杠转义写法 → 放行（AI-10）
+  set_config '{"addr": "https:\/\/mine.example.com:443", "secret": "x"}'
+  run_guard
+  assert_equals "0" "$rc" "AI-10: guard should pass when addr uses escaped slashes"
+
+  # 自家·unicode 转义写法 → 放行（AI-10）
+  set_config '{"addr": "https://mine.example.com\u003a443", "secret": "x"}'
+  run_guard
+  assert_equals "0" "$rc" "AI-10: guard should pass when addr uses unicode escapes"
+
+  # 他人·原文 → 拒绝且文件逐字不动
+  set_config '{"addr": "https://other.example.com:443", "secret": "x"}'
+  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")
+  run_guard
+  assert_equals "1" "$rc" "AI-07: guard should refuse a foreign addr"
+  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")" \
+    "AI-07: guard refusal must not touch existing files"
+
+  # 他人·转义写法 → 归一化后仍是他人，拒绝
+  set_config '{"addr": "https:\/\/other.example.com:443", "secret": "x"}'
+  run_guard
+  assert_equals "1" "$rc" "AI-10: guard should still refuse a foreign addr in escaped spelling"
+
+  # 不可判定（config 无 addr）→ 拒绝
+  set_config '{"secret": "x"}'
+  run_guard
+  assert_equals "1" "$rc" "AI-07: guard should refuse when addr is unreadable"
+
+  # 不可判定（二进制痕迹、无 config）→ 拒绝
+  rm -f "$INSTALL_DIR/config.json"
+  run_guard
+  assert_equals "1" "$rc" "AI-07: guard should refuse a binary-only trace"
+
+  # TAKEOVER → 放行且留痕
+  set_config '{"addr": "https://other.example.com:443", "secret": "x"}'
+  rc="0"
+  out=$(FLMX_AGENT_TAKEOVER="1" guard_agent_dir_ownership </dev/null 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "AI-07: guard should pass with FLMX_AGENT_TAKEOVER=1"
+  [[ "$out" == *"FLMX_AGENT_TAKEOVER=1"* ]] || \
+    fail "AI-07: takeover pass should leave a trace line"
+
+  # 交互确认（pty）：y 放行 / n 拒绝
+  export GUARD_TEST_DIR="$INSTALL_DIR"
+  export GUARD_TEST_ADDR="$SERVER_ADDR"
+  harness="$INSTALL_DIR/guard-harness.sh"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh"
+    cat <<'STUBEOF'
+INSTALL_DIR="$GUARD_TEST_DIR"
+SERVER_ADDR="$GUARD_TEST_ADDR"
+SECRET="x"
+guard_agent_dir_ownership
+STUBEOF
+  } > "$harness"
+  rc="0"; pty_run $'y\n' "$harness" || rc="$?"
+  assert_equals "0" "$rc" "AI-07: guard should pass on interactive y"
+  rc="0"; pty_run $'n\n' "$harness" || rc="$?"
+  assert_equals "1" "$rc" "AI-07: guard should refuse on interactive n"
+)
+
+# AI-06：菜单更新入口归属守卫——他人 agent 非交互拒绝（守卫在
+# 下载之前：下载标记不得出现、既有文件逐字不动、输出明示当前连
+# 接地址）；不可判定同样拒绝。
+test_update_flux_agent_refuses_unowned_agent() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  SERVER_ADDR=""
+
+  local state_dir
+  state_dir=$(mktemp -d)
+
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+
+  curl() { echo called >> "$state_dir/curl-called"; return 0; }
+  check_and_install_tcpkill() { :; }
+  systemctl() { return 0; }
+
+  local rc="0" out
+  out=$(mktemp)
+
+  # 他人 agent（config addr 为其他面板）
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  local before
+  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")
+  rc="0"
+  update_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "AI-06: menu update should refuse a foreign agent"
+  [[ ! -f "$state_dir/curl-called" ]] || \
+    fail "AI-06: menu update refusal must happen before any download"
+  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")" \
+    "AI-06: menu update refusal must not touch existing files"
+  grep -q "other.example.com:443" "$out" || \
+    fail "AI-06: menu update refusal should disclose the current panel address"
+
+  # 不可判定（config 无 addr）
+  printf '%s' '{"secret": "x"}' > "$INSTALL_DIR/config.json"
+  rc="0"
+  update_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "AI-06: menu update should refuse when ownership is undecidable"
+  [[ ! -f "$state_dir/curl-called" ]] || \
+    fail "AI-06: menu update refusal must happen before any download"
+)
+
+# AI-06：菜单更新守卫的放行形态——TAKEOVER 显式确认放行、调用方
+# 带有与现存 addr 相同的面板地址时静默放行，两者都走完整更新。
+test_update_flux_agent_menu_guard_pass_forms() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+
+  run_confirmed_update() {
+    INSTALL_DIR=$(mktemp -d)
+    FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+    : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+    cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+    chmod +x "$INSTALL_DIR/flux_agent"
+    printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+
+    ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
+    ensure_download_url_initialized() {
+      RESOLVED_VERSION="1.3.5"
+      DOWNLOAD_URL="https://example.com/gost"
+    }
+    check_and_install_tcpkill() { :; }
+    cleanup_legacy_gost_installation() { :; }
+    sleep() { :; }
+    systemctl() {
+      if [[ "$*" == *MainPID* ]]; then echo 4242; fi
+      return 0
+    }
+    curl() {
+      local output="" url="" prev=""
+      for a in "$@"; do
+        if [[ "$prev" == "-o" ]]; then output="$a"; fi
+        case "$a" in http*) url="$a";; esac
+        prev="$a"
+      done
+      local body='#!/bin/bash
+echo "new version"'
+      if [[ "$url" == *.sha256 ]]; then
+        printf '%s\n' "$body" | sha256sum | awk '{print $1"  gost"}' > "$output"
+        return 0
+      fi
+      printf '%s\n' "$body" > "$output"; chmod +x "$output"
+    }
+
+    local rc="0"
+    update_flux_agent </dev/null >/dev/null 2>&1 || rc="$?"
+    assert_equals "0" "$rc" "AI-06: update should proceed in an ownership-confirmed form"
+    grep -q "new version" "$INSTALL_DIR/flux_agent" || \
+      fail "AI-06: binary should be replaced after a confirmed update"
+  }
+
+  # TAKEOVER 放行（现存 addr 与本面板无关亦可，由操作者断言归属）
+  SERVER_ADDR=""
+  FLMX_AGENT_TAKEOVER="1" run_confirmed_update
+
+  # 调用方带有相同面板地址 → 静默放行（无需 TAKEOVER）
+  SERVER_ADDR="https://other.example.com:443"
+  run_confirmed_update
+)
+
+# AI-06：菜单更新守卫的交互形态（pty）——明示地址后 y 放行走完
+# 更新、n 拒绝且下载不得发生、二进制逐字不动。
+test_update_flux_agent_menu_guard_interactive() (
+  set -euo pipefail
+
+  local work
+  work=$(mktemp -d)
+  local agent_dir="$work/agent"
+  mkdir -p "$agent_dir"
+  cat > "$agent_dir/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+  chmod +x "$agent_dir/flux_agent"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$agent_dir/config.json"
+
+  export GUARD_TEST_DIR="$agent_dir"
+  export GUARD_TEST_WORK="$work"
+  local harness="$work/update-harness.sh"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh"
+    cat <<'STUBEOF'
+INSTALL_DIR="$GUARD_TEST_DIR"
+SERVICE_MANAGER="systemd"
+SERVER_ADDR=""
+ensure_download_url_initialized() { RESOLVED_VERSION="1.3.5"; DOWNLOAD_URL="https://example.com/gost"; }
+download_agent_binary() {
+  printf '%s\n' '#!/bin/bash' 'echo "new version"' > "$1"
+  chmod +x "$1"
+  echo called >> "$GUARD_TEST_WORK/download-called"
+}
+check_and_install_tcpkill() { :; }
+cleanup_legacy_gost_installation() { :; }
+flux_agent_service_exists() { return 1; }
+start_flux_agent_service() { :; }
+flux_agent_health_ok() { return 0; }
+sleep() { :; }
+update_flux_agent
+STUBEOF
+  } > "$harness"
+
+  local rc="0"
+  pty_run $'y\n' "$harness" || rc="$?"
+  assert_equals "0" "$rc" "AI-06: interactive y should let menu update proceed"
+  [[ -f "$work/download-called" ]] || \
+    fail "AI-06: update should reach the download step after interactive y"
+  grep -q "new version" "$agent_dir/flux_agent" || \
+    fail "AI-06: binary should be replaced after interactive y"
+
+  # 复位为他人 agent 初始状态，n 必须拒绝且零改动
+  cat > "$agent_dir/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+  chmod +x "$agent_dir/flux_agent"
+  rm -f "$work/download-called"
+  local before
+  before=$(sha256sum "$agent_dir/config.json" "$agent_dir/flux_agent")
+  rc="0"
+  pty_run $'n\n' "$harness" || rc="$?"
+  assert_equals "1" "$rc" "AI-06: interactive n should refuse menu update"
+  [[ ! -f "$work/download-called" ]] || \
+    fail "AI-06: update must not download after interactive n"
+  assert_equals "$before" "$(sha256sum "$agent_dir/config.json" "$agent_dir/flux_agent")" \
+    "AI-06: interactive n must not touch existing files"
+)
+
+# AI-06：菜单卸载入口归属守卫——他人/不可判定 agent 非交互拒绝
+# （目录与文件逐字不动、输出明示当前连接地址）。
+test_uninstall_flux_agent_refuses_unowned_agent() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  SERVER_ADDR=""
+
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+echo "old version"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+
+  systemctl() { return 0; }
+
+  local rc="0" out
+  out=$(mktemp)
+
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  local before
+  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")
+  rc="0"
+  uninstall_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "AI-06: menu uninstall should refuse a foreign agent"
+  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")" \
+    "AI-06: menu uninstall refusal must not touch existing files"
+  grep -q "other.example.com:443" "$out" || \
+    fail "AI-06: menu uninstall refusal should disclose the current panel address"
+
+  printf '%s' '{"secret": "x"}' > "$INSTALL_DIR/config.json"
+  rc="0"
+  uninstall_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "AI-06: menu uninstall should refuse when ownership is undecidable"
+  [[ -f "$INSTALL_DIR/config.json" ]] || \
+    fail "AI-06: menu uninstall refusal must keep the install dir intact"
+)
+
+# AI-06：菜单卸载守卫的放行形态——TAKEOVER 留痕放行（其后仍有常
+# 规确认）；交互（pty）先过守卫确认、再过常规确认才执行卸载，
+# 守卫处答 n 即终止且目录不动。
+test_uninstall_flux_agent_menu_guard_pass_forms() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  systemctl() { return 0; }
+
+  # TAKEOVER + 常规确认 y → 卸载执行、目录删除、输出含留痕
+  INSTALL_DIR=$(mktemp -d)
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+
+  local rc="0" out
+  out=$(mktemp)
+  rc="0"
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "AI-06: uninstall should proceed with TAKEOVER plus confirm"
+  [[ ! -d "$INSTALL_DIR" ]] || \
+    fail "AI-06: install dir should be removed after a confirmed uninstall"
+  grep -q "FLMX_AGENT_TAKEOVER=1" "$out" || \
+    fail "AI-06: takeover uninstall should leave a trace line"
+
+  # pty：守卫确认 y + 常规确认 y → 执行卸载
+  local work
+  work=$(mktemp -d)
+  local agent_dir="$work/agent"
+  mkdir -p "$agent_dir"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$agent_dir/config.json"
+  printf 'binary' > "$agent_dir/flux_agent"
+
+  export GUARD_TEST_DIR="$agent_dir"
+  local harness="$work/uninstall-harness.sh"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh"
+    cat <<'STUBEOF'
+INSTALL_DIR="$GUARD_TEST_DIR"
+FLUX_AGENT_SYSTEMD_SERVICE_FILE="$GUARD_TEST_DIR/flux_agent.service"
+SERVICE_MANAGER="systemd"
+SERVER_ADDR=""
+flux_agent_service_exists() { return 1; }
+uninstall_flux_agent
+STUBEOF
+  } > "$harness"
+
+  rc="0"
+  pty_run $'y\ny\n' "$harness" || rc="$?"
+  assert_equals "0" "$rc" "AI-06: interactive y/y should let menu uninstall proceed"
+  [[ ! -d "$agent_dir" ]] || \
+    fail "AI-06: install dir should be removed after interactive y/y"
+
+  # pty：守卫确认 n → 终止，目录不动（常规确认不会被问到）
+  mkdir -p "$agent_dir"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$agent_dir/config.json"
+  printf 'binary' > "$agent_dir/flux_agent"
+  rc="0"
+  pty_run $'n\n' "$harness" || rc="$?"
+  assert_equals "1" "$rc" "AI-06: interactive n should refuse menu uninstall"
+  [[ -f "$agent_dir/config.json" ]] || \
+    fail "AI-06: install dir must stay intact after interactive n"
 )
 
 test_install_flux_agent_writes_json_safe_config() (
@@ -4270,6 +4713,13 @@ test_update_flux_agent_allows_higher_and_incomparable
 test_main_propagates_operation_exit_codes
 test_install_flux_agent_preserves_legacy_gost_when_download_fails
 test_update_flux_agent_preserves_legacy_gost_when_download_fails
+test_agent_config_addr_normalizes_json_escapes
+test_guard_agent_dir_ownership_matrix
+test_update_flux_agent_refuses_unowned_agent
+test_update_flux_agent_menu_guard_pass_forms
+test_update_flux_agent_menu_guard_interactive
+test_uninstall_flux_agent_refuses_unowned_agent
+test_uninstall_flux_agent_menu_guard_pass_forms
 test_install_flux_agent_writes_json_safe_config
 test_install_script_bootstraps_bash_for_alpine
 test_install_flux_agent_uses_openrc
