@@ -724,6 +724,24 @@ func FormatForUserAgent(ua string) string {
 // Subscription renders every supported endpoint in the requested format and
 // returns the body with its content type.
 func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string, string, error) {
+	// Stash 读 Mihomo 模板：自己没选时沿用 Mihomo 的模板，但模板里有
+	// 只有 Mihomo 能读的 .mrs 规则集时不沿用，改走内置渲染。
+	if format == FormatStash && strings.TrimSpace(opts.Templates[TemplateStash]) == "" {
+		if tpl := opts.Templates[TemplateClash]; strings.TrimSpace(tpl) != "" && !clashTemplateUsesMRS(tpl) {
+			opts.Templates = mergeTemplates(opts.Templates, TemplateStash, tpl)
+		}
+	}
+	if slot := templateFor(format); slot != "" && strings.TrimSpace(opts.Templates[slot]) != "" {
+		tpl, kind := opts.Templates[slot], TemplateKindOf(slot)
+		endpoints = uniqueNamesExcept(ApplySubOptions(endpoints, opts), templateGroupNames(kind, tpl))
+		body, err := templateProfile(slot, tpl, endpoints, opts)
+		if err != nil {
+			return "", "", fmt.Errorf("订阅模板出错：%v", err)
+		}
+		contentType := map[string]string{TemplateClash: "text/yaml; charset=utf-8",
+			TemplateSingbox: "application/json; charset=utf-8", TemplateSurge: "text/plain; charset=utf-8"}[kind]
+		return body, contentType, nil
+	}
 	endpoints = uniqueNames(ApplySubOptions(endpoints, opts), opts.Rules)
 	groups := opts.RegionGroups || opts.Rules
 	switch format {
@@ -1049,6 +1067,31 @@ func uniqueNames(endpoints []Endpoint, rules bool) []Endpoint {
 	}
 	for _, r := range regions {
 		seen[r.name] = true
+	}
+	for i, e := range endpoints {
+		base := strings.TrimSpace(e.Name)
+		if base == "" {
+			base = fmt.Sprintf("node-%d", i+1)
+		}
+		name := base
+		for n := 2; seen[name]; n++ {
+			name = fmt.Sprintf("%s #%d", base, n)
+		}
+		seen[name] = true
+		e.Name = name
+		out[i] = e
+	}
+	return out
+}
+
+// uniqueNamesExcept suffixes duplicate names and names in taken (the group
+// names of a subscription template, which node names must not shadow).
+func uniqueNamesExcept(endpoints []Endpoint, taken []string) []Endpoint {
+	out := make([]Endpoint, len(endpoints))
+	seen := map[string]bool{"direct": true, "DIRECT": true, "REJECT": true,
+		ChainLandingGroup: true, ChainRelayGroup: true}
+	for _, n := range taken {
+		seen[n] = true
 	}
 	for i, e := range endpoints {
 		base := strings.TrimSpace(e.Name)
