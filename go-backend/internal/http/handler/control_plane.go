@@ -1894,9 +1894,12 @@ const diagnosisUDPUnverifiedMessage = "UDP 无法实测连通性（无通用回�
 
 // markDiagnosisItemUnverified 把一个已执行 UDP 探测的结果项收口
 // 为未验证形态（R6-L4-01 单点定义）：不得呈 success、不得携带
-// 伪造数值（延迟/丢包置 null）；链路段项的 metadata 原本不带
-// protocol，在此补上本腿协议以便呈现层区分（目标腿/nft 腿的
-// metadata 已带，不覆盖）。
+// 伪造数值（延迟/丢包置 null）。agent 线上报文的数值字段在此
+// 形态下只是零值（agent 侧结构体字段无 omitempty、恒序列化），
+// 由本处统一覆写为 null 后才出面板——零值不是测量值，任何直接
+// 消费 agent 原始报文的新面都须先判 unverified。链路段项的
+// metadata 原本不带 protocol，在此补上本腿协议以便呈现层区分
+// （目标腿/nft 腿的 metadata 已带，不覆盖）。
 func markDiagnosisItemUnverified(item map[string]interface{}, protocol string) {
 	item["success"] = false
 	item["unverified"] = true

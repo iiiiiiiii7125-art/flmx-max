@@ -139,8 +139,11 @@ type TcpPingResponse struct {
 	RequestId    string  `json:"requestId,omitempty"`
 	// Unverified 仅 UdpPing 使用（R6-L4-01）：UDP 无通用回声协议、
 	// 不可实测，拨号「成功」不构成连通性结论——置此标记且
-	// Success=false、AverageTime/PacketLoss 不回测量值，面板组装
-	// 层据此（或据老 agent 的 success=true）收口为未验证形态。
+	// Success=false。AverageTime/PacketLoss 在此形态下不承载测
+	// 量值：本结构体字段无 omitempty，线上恒序列化为零值，面板
+	// 组装层收口时统一覆写为 null 后才出面板——零值不是测量值，
+	// 任何直接消费本报文的面都须先判本标记。面板组装层据此
+	// （或据老 agent 的 success=true）收口为未验证形态。
 	Unverified bool `json:"unverified,omitempty"`
 }
 
@@ -3518,8 +3521,10 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 	// 调用耗时、packetLoss 恒 0——都不是目标路径的测量值，旧实现
 	// 将其作为 success+实测数值回传，面板呈现为「0ms/0% 优秀」，
 	// 与目标真实状态无关（死目标同呈成功）。自本版起：拨号无错
-	// 只用于区分「探测前失败」（上方分支）与「不可验证」，数值
-	// 一律不回，改回未验证标记，由面板组装层收口呈现。
+	// 只用于区分「探测前失败」（上方分支）与「不可验证」，改回未
+	// 验证标记（Success=false）；数值字段不承载测量值——结构体
+	// 字段无 omitempty，线上恒为零值，由面板组装层收口时覆写为
+	// null 后才出面板（见面板 markDiagnosisItemUnverified）。
 	response.Success = false
 	response.Unverified = true
 	response.ErrorMessage = "UDP 无通用回声协议，无法实测连通性"
