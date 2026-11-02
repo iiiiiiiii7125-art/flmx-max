@@ -724,7 +724,7 @@ func FormatForUserAgent(ua string) string {
 // Subscription renders every supported endpoint in the requested format and
 // returns the body with its content type.
 func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string, string, error) {
-	endpoints = uniqueNames(ApplySubOptions(endpoints, opts), opts.Rules)
+	endpoints = uniqueNames(withNotices(ApplySubOptions(endpoints, opts), opts), opts.Rules)
 	groups := opts.RegionGroups || opts.Rules
 	switch format {
 	case FormatBase64:
