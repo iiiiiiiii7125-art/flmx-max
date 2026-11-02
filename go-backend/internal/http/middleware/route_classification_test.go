@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,10 @@ import (
 //   3. 每条分类必须与中间件三表（shouldSkip / requiresAdmin /
 //      allowsOptionalAuth）的实际判定对位，对不上即红——分类
 //      不是自说自话的标签，而是与执行面互相钉死。
+//   4. 首参非字符串字面量的注册调用点（常量/变量名注册）必须
+//      逐一登记在 nonLiteralRegistrationWhitelist（RB3-03）：
+//      第 1 步的枚举与清扫正则都只认字面量，此类注册对它们不
+//      可见，只能靠白名单逐一相等兜底，多一处/少一处即红。
 //
 // 分类口径与 L1 的 211 条机械清单对齐（L8 报告 §④的「~180 条」
 // 是 handler.go Register 段的约数；差额逐项为：handler.go 字面
@@ -313,6 +318,136 @@ func readFileForCensus(t *testing.T, path string) string {
 		t.Fatalf("census: read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+var reHandleCallStart = regexp.MustCompile(`\.Handle(?:Func)?\(`)
+
+// nonLiteralRegSite 是一处「首参非纯字符串字面量」的注册调用点
+// 登记：file 为所在文件基名，arg 为首参表达式（空白归一化后），
+// note 说明该调用点注册的路径如何被 enumerateRegisteredRoutes
+// 的特例展开覆盖。
+type nonLiteralRegSite struct {
+	file string
+	arg  string
+	note string
+}
+
+// nonLiteralRegistrationWhitelist 是 handler.go / router.go 内全
+// 部非常量注册调用点的显式白名单（RB3-03）。新增此类注册时：
+// 先在此登记（含覆盖口径说明），再让 enumerateRegisteredRoutes
+// 的特例展开覆盖其路径、并在 routeClassification 里归类。
+var nonLiteralRegistrationWhitelist = []nonLiteralRegSite{
+	{
+		"handler.go", "route.path",
+		"备份端点循环注册：路径取自同一清单条目，枚举第 2 步以 reBackupEntry 展开清单（原前缀＋/api/v1 双前缀）覆盖其全部路径",
+	},
+	{
+		"handler.go", `"/api/v1"+route.path`,
+		"备份端点循环的双前缀别名注册：与上一处同一清单、同一展开口径",
+	},
+	{
+		"handler.go", "ghMirrorPath",
+		"GitHub 镜像代理注册：路径为 gh_mirror.go 的 ghMirrorPath 常量，枚举第 3 步以 reGHMirrorConst 提取常量值覆盖",
+	},
+}
+
+// firstCallArg 返回 src 自 pos 起（紧跟调用左括号）的第一个实参
+// 原文：扫描到括号深度回到 0 之前的第一个顶层逗号为止，字符串
+// 内的逗号与括号不计。无顶层逗号（单参调用）时返回空串。
+func firstCallArg(src string, pos int) string {
+	depth := 1
+	inStr := false
+	for i := pos; i < len(src); i++ {
+		c := src[i]
+		if inStr {
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return ""
+			}
+		case ',':
+			if depth == 1 {
+				return src[pos:i]
+			}
+		}
+	}
+	return ""
+}
+
+// isPureStringLiteral 判 arg 是否恰为一个字符串字面量（闭引号即
+// 结尾），拼接表达式 `"/api/v1"+route.path` 不算纯字面量。
+func isPureStringLiteral(arg string) bool {
+	if len(arg) < 2 || arg[0] != '"' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case '\\':
+			i++
+		case '"':
+			return i == len(arg)-1
+		}
+	}
+	return false
+}
+
+// TestRouteRegistrationNonLiteralWhitelist 机械扫描 handler.go
+// 与 router.go 的全部 .Handle/.HandleFunc 调用点：首参非纯字符
+// 串字面量的集合必须与 nonLiteralRegistrationWhitelist 逐一
+// 相等——多一处（新非常量注册未登记）或少一处（登记已失效）
+// 都点名报红（RB3-03)。
+func TestRouteRegistrationNonLiteralWhitelist(t *testing.T) {
+	backendRoot := filepath.Join("..", "..", "..")
+	files := map[string]string{
+		"handler.go": filepath.Join(backendRoot, "internal", "http", "handler", "handler.go"),
+		"router.go":  filepath.Join(backendRoot, "internal", "http", "router.go"),
+	}
+
+	found := map[string]string{} // key: file + "\x00" + arg → 定位 file:line
+	for base, path := range files {
+		src := readFileForCensus(t, path)
+		for _, loc := range reHandleCallStart.FindAllStringIndex(src, -1) {
+			arg := strings.Join(strings.Fields(firstCallArg(src, loc[1])), " ")
+			if arg == "" || isPureStringLiteral(arg) {
+				continue
+			}
+			line := strings.Count(src[:loc[0]], "\n") + 1
+			found[base+"\x00"+arg] = base + ":" + strconv.Itoa(line)
+		}
+	}
+
+	allowed := map[string]nonLiteralRegSite{}
+	for _, s := range nonLiteralRegistrationWhitelist {
+		key := s.file + "\x00" + s.arg
+		if _, dup := allowed[key]; dup {
+			t.Errorf("non-literal registration whitelist has duplicate entry %q in %s", s.arg, s.file)
+		}
+		allowed[key] = s
+	}
+	for key, at := range found {
+		if _, ok := allowed[key]; !ok {
+			arg := strings.SplitN(key, "\x00", 2)[1]
+			t.Errorf("non-literal route registration at %s (first arg %s) is NOT in nonLiteralRegistrationWhitelist — "+
+				"register it there with a note on how its paths are enumerated, or use a plain string literal (RB3-03 gate)", at, arg)
+		}
+	}
+	for key, s := range allowed {
+		if _, ok := found[key]; !ok {
+			t.Errorf("non-literal registration whitelist entry %q in %s no longer matches any call site — remove it (RB3-03 gate)", s.arg, s.file)
+		}
+	}
 }
 
 func TestRouteClassificationCensus(t *testing.T) {
