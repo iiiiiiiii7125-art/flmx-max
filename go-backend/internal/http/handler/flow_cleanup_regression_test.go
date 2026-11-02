@@ -35,7 +35,11 @@ func applyFlowItemViaFormalEntry(h *Handler, nodeID int64, item flowItem) {
 	if err != nil {
 		metas = nil
 	}
-	h.applyFlowUploadBatch(nodeID, h.buildNodeFlowUploadBatch(nodeID, []flowItem{item}, metas), time.Now())
+	// 本助手无 *testing.T 且只在健康测试库上驱动：归属查询出错时
+	// 按零批次继续（与 metas 失败置 nil 同口径的驱动层宽容）；
+	// 生产拒收口径由 flow_upload_ownership_failclosed_test.go 钉死。
+	batch, _ := h.buildNodeFlowUploadBatch(nodeID, []flowItem{item}, metas)
+	h.applyFlowUploadBatch(nodeID, batch, time.Now())
 }
 
 type cleanupAgentCommand struct {
@@ -249,7 +253,10 @@ func runCleanupPath(h *Handler, mode string, names []string) {
 			applyFlowItemViaFormalEntry(h, 1, item)
 		}
 	case "batch":
-		h.applyFlowUploadBatch(1, h.buildNodeFlowUploadBatch(1, items, nil), time.Now())
+		// 同 applyFlowItemViaFormalEntry：驱动层宽容，健康库上不
+		// 应出错；拒收口径由专门的 fail-closed 用例钉死。
+		batch, _ := h.buildNodeFlowUploadBatch(1, items, nil)
+		h.applyFlowUploadBatch(1, batch, time.Now())
 	case "config":
 		h.cleanOrphanedServices(1, services)
 	}

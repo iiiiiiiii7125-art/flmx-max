@@ -1560,7 +1560,16 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 					_, _ = w.Write([]byte("error"))
 					return
 				}
-				batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				batch, batchErr := h.buildNodeFlowUploadBatch(node.ID, items, metas)
+				if batchErr != nil {
+					// R2-019：归属查询失败与 metas 失败同口径整批
+					// 拒收返非 ok——不入账、seq 未推进，同 seq
+					// 重报可入账。
+					log.Printf("flow upload ownership lookup failed node_id=%d err=%v", node.ID, batchErr)
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					_, _ = w.Write([]byte("error"))
+					return
+				}
 				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
 				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
 					if errors.Is(applyErr, repo.ErrSeqReplay) {
