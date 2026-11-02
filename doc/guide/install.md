@@ -185,6 +185,23 @@ sudo systemctl restart caddy
         - "127.0.0.1:6366:80"
   ```
   其中 `!override` 不可省略（省略时新旧两条映射会叠加、宿主端口必然冲突），且需要 Docker Compose 2.20 及以上。保存后在部署目录执行 `docker compose up -d frontend` 生效；自检：`docker compose ps` 里 frontend 的端口应显示为 `127.0.0.1:6366->80`，且从外网直接访问 `http://<服务器IP>:6366` 应不通、经域名访问正常。该 override 文件独立于 `docker-compose.yml`，脚本更新替换主 compose 文件时不会动它。
+- **反代开启访问日志时，先脱敏 query 再落盘**：面板的节点实时连接（`/system-info`）与流量上报（`/flow/*`）把凭据放在 URL 的 query 里——节点密钥是 `secret` 参数、面板监控会话是 `token` 参数（登录 JWT，有效期 7 天）。面板自身的请求日志只记路径、不记 query，但反代的访问日志默认记录完整 URL，开启后这些凭据会以明文写入日志文件，拿到日志即拿到可用凭据。Caddy 默认不记录请求日志（站点块没有 `log` 指令即不记），脚本菜单 5 生成的 Caddyfile 不带 `log`，无需处理；自行启用时在站点块里用 filter 编码删掉这两个 query 键：
+  ```txt
+  log {
+      format filter {
+          request>uri query {
+              delete secret
+              delete token
+          }
+      }
+  }
+  ```
+  改完先 `caddy validate --config /etc/caddy/Caddyfile` 校验、再重启 Caddy，自检：在日志文件里执行 `grep -c 'secret=' <日志文件>` 应为 0。用 nginx 时同理：默认 `combined` 格式的 `$request` 含完整 URL，不要对面板站点使用含 `$request`、`$request_uri` 或 `$args` 的日志格式——或直接 `access_log off;`，或定义只记不带 query 的 `$uri` 的格式并引用它：
+  ```nginx
+  log_format panel_no_query '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
+  access_log /var/log/nginx/panel.access.log panel_no_query;
+  ```
+  改完 `nginx -t` 校验并 reload，自检同上（日志中不应再出现 `secret=`、`token=`）。
 
 ### 登录限流与可信代理跳数
 
