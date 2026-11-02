@@ -1910,8 +1910,23 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	// after handoff), restarts the current binary, and logs the
 	// failure by name; 'restart ok' is only reachable past a
 	// successful mv.
-	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then cp %s %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
-		tmpPath, binaryPath, start, backupPath, backupPath, binaryPath, start, tmpPath, start)
+	// L2-02 (round-6): the auto-rollback leg below gets the same
+	// treatment FRM4 gave the manual rollback script. It used to
+	// cp the backup straight onto the binary path, unchecked: a
+	// copy dying midway truncated the NEW binary, a copy against
+	// the still-running new binary could fail ETXTBSY, and either
+	// way the start + health check ran on whatever was in place
+	// and could log 'rollback succeeded' for a rollback that never
+	// happened. The leg now stops the service first (the failed
+	// health check does not prove the new process is gone), stages
+	// the copy in a unique mktemp sibling of the binary, proves it
+	// byte-identical with cmp, and only then mv's it into place;
+	// any failure before the mv leaves the new binary untouched,
+	// is logged by name, and 'rollback succeeded' stays reachable
+	// only past the staged swap.
+	rollbackTmpTemplate := filepath.Join(filepath.Dir(binaryPath), ".flux_agent.upgrade-rollback-XXXXXX")
+	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then %s; sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+		tmpPath, binaryPath, start, backupPath, stop, rollbackTmpTemplate, backupPath, backupPath, binaryPath, start, start, tmpPath, start)
 	return b.String(), nil
 }
 
@@ -2498,6 +2513,9 @@ func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner
 
 // anchorCorroborateTimeout bounds one anchor corroboration: a
 // cross-check on a tiny file, never worth the download budget.
+// Registered in doc/audit/timeout-budgets.tsv (A002 note, L2-01);
+// the x/kernel twin is pinned equal by gate tests in both
+// packages.
 var anchorCorroborateTimeout = 20 * time.Second
 
 // upgradeStaging owns the lifecycle of the staged upgrade binary
