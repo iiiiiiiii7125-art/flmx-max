@@ -154,10 +154,13 @@ function UptimeHistoryBar({
   history = [],
   type,
   latestValue,
+  latestPartialUntested,
 }: {
   history: TunnelQualityApiItem[];
   type: "entryToExit" | "exitToBing";
   latestValue?: number;
+  /** 部分未测（R8-024）：最新入口→出口总值为部分和时在数值旁标注。 */
+  latestPartialUntested?: boolean;
 }) {
   const bars = [...Array(UPTIME_KUMA_BARS_COUNT)].map((_, i) => {
     const historyIndex = history.length - UPTIME_KUMA_BARS_COUNT + i;
@@ -203,8 +206,13 @@ function UptimeHistoryBar({
           );
         })}
       </div>
-      <div>
+      <div className="flex items-baseline gap-1.5">
         <LatencyDisplay value={latestValue} />
+        {type === "entryToExit" && latestPartialUntested && (
+          <span className="text-[10px] font-semibold text-foreground">
+            部分未测
+          </span>
+        )}
       </div>
     </div>
   );
@@ -1306,6 +1314,12 @@ export function TunnelMonitorView({
                 loading={qualityLoading}
                 value={quality?.entryToExitLatency}
               />
+              {/* 部分未测（R8-024）：总值仅含实测跳，须与全实测总值区分。 */}
+              {quality?.entryToExitPartialUntested && (
+                <span className="mt-1 text-[10px] font-semibold text-foreground">
+                  部分未测（仅含实测段）
+                </span>
+              )}
             </CardBody>
           </Card>
           <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
@@ -1335,6 +1349,12 @@ export function TunnelMonitorView({
                   ? `${quality.entryToExitLoss.toFixed(1)}%`
                   : "-"}
               </span>
+              {/* 部分未测（R8-024）：丢包聚合与延迟同为部分和。 */}
+              {quality?.entryToExitPartialUntested && (
+                <span className="mt-1 text-[10px] font-semibold text-foreground">
+                  部分未测（仅含实测段）
+                </span>
+              )}
             </CardBody>
           </Card>
           <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
@@ -1517,6 +1537,9 @@ export function TunnelMonitorView({
                       </div>
                       <UptimeHistoryBar
                         history={qualityHistoryMap[tunnel.id]}
+                        latestPartialUntested={
+                          quality?.entryToExitPartialUntested
+                        }
                         latestValue={quality?.entryToExitLatency}
                         type="entryToExit"
                       />
@@ -1618,6 +1641,9 @@ export function TunnelMonitorView({
                     <TableCell>
                       <UptimeHistoryBar
                         history={qualityHistoryMap[tunnel.id]}
+                        latestPartialUntested={
+                          quality?.entryToExitPartialUntested
+                        }
                         latestValue={quality?.entryToExitLatency}
                         type="entryToExit"
                       />

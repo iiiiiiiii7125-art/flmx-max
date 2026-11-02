@@ -34,6 +34,12 @@ const QUALITY_BAR_ERROR: QualityHistoryBarStyle = {
  *     得涂绿冒充优秀、也不得按哨兵 100% 丢包涂红）。
  *
  * errorMessage 本身只由调用方拼进 tooltip 作整行补充，不参与着色。
+ *
+ * 部分未测（R8-024）：入口→出口段带 entryToExitPartialUntested 时，
+ * 本段总值只含实测跳（至少一跳未测）——着色仍按实测值走梯度，但
+ * 状态文案必须附「部分未测」，不得与全实测行同形（旧实现无此标记，
+ * 部分未测行被读作完整路径值）。出口→目标段是单跳实测、无此形态。
+ *
  * 本模块只允许 import type，供 scripts/check-quality-history-bar.mjs
  * 在 Node 里转译执行做回归断言。
  */
@@ -48,15 +54,20 @@ export function classifyQualityHistoryBar(
   if (latency < 0) {
     return q.errorMessage ? QUALITY_BAR_ERROR : QUALITY_BAR_NO_DATA;
   }
+  const partialNote =
+    isEntry && q.entryToExitPartialUntested ? "（部分未测）" : "";
   if (loss !== undefined && loss > 0) {
-    return { colorClass: "bg-danger", statusText: `丢包 ${loss.toFixed(1)}%` };
+    return {
+      colorClass: "bg-danger",
+      statusText: `丢包 ${loss.toFixed(1)}%${partialNote}`,
+    };
   }
   if (latency > 200) {
-    return { colorClass: "bg-danger", statusText: "极差" };
+    return { colorClass: "bg-danger", statusText: `极差${partialNote}` };
   }
   if (latency > 100) {
-    return { colorClass: "bg-warning", statusText: "较差" };
+    return { colorClass: "bg-warning", statusText: `较差${partialNote}` };
   }
 
-  return { colorClass: "bg-success", statusText: "优秀" };
+  return { colorClass: "bg-success", statusText: `优秀${partialNote}` };
 }

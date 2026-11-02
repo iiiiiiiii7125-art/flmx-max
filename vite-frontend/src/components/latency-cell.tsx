@@ -158,6 +158,10 @@ function Pill({
         </span>
       )}
       <span className="font-mono">{valueText(point)}</span>
+      {/* 部分未测（R8-024）：总值只含实测腿，必须与全实测总值可区分。 */}
+      {point.ok && point.partialUntested && (
+        <span className="font-sans opacity-80">部分未测</span>
+      )}
       {loss > 0 && <span className="font-mono opacity-80">丢{loss}%</span>}
     </span>
   );
@@ -188,6 +192,11 @@ function Tile({
       </span>
       <span className="flex w-full items-baseline gap-1 whitespace-nowrap font-mono text-sm font-semibold">
         {valueText(point)}
+        {point.ok && point.partialUntested && (
+          <span className="font-sans text-[10px] font-semibold opacity-80">
+            部分未测
+          </span>
+        )}
         {loss > 0 && (
           <span className="text-[10px] font-semibold opacity-80">丢{loss}%</span>
         )}
@@ -379,6 +388,11 @@ export function LatencyCell({
                     {p.ok && (
                       <span className="ml-2 text-foreground">
                         丢包 {p.lossPct ?? 0}%
+                      </span>
+                    )}
+                    {p.ok && p.partialUntested && (
+                      <span className="ml-2 font-sans text-foreground">
+                        部分未测
                       </span>
                     )}
                   </span>

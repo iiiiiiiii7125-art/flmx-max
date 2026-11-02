@@ -16,6 +16,8 @@
 //      出口段，-1/100 哨兵、无 errorMessage）→ 中性「无数据」；
 //   ④ 整轮失败（两段皆哨兵 + errorMessage）→ 两段皆「错误」；
 //   ⑤ 实测着色梯度不变：丢包红、>200ms 极差红、>100ms 较差黄。
+//   ⑥ 部分未测（R8-024）：入口段部分和行着色仍按实测值，但状态
+//      文案附「（部分未测）」，与全实测行可区分；出口段不受影响。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-quality-history-bar.mjs
@@ -132,6 +134,30 @@ if (typeof classifyQualityHistoryBar === "function") {
   const awful = row({ exitToBingLatency: 250, exitToBingLoss: 0, success: true });
   delete awful.errorMessage;
   expectBar("⑤250ms → 红/极差", awful, "exitToBing", "bg-danger", "极差");
+
+  // ⑥ 部分未测（R8-024）：入口段总值为部分和——着色按实测值、
+  // 文案附部分未测；同行出口段与无标记行不受影响。
+  const partial = row({
+    entryToExitLatency: 30,
+    entryToExitLoss: 0,
+    entryToExitPartialUntested: true,
+    exitToBingLatency: 40,
+    exitToBingLoss: 0,
+    success: true,
+  });
+  delete partial.errorMessage;
+  expectBar("⑥部分未测入口段 → 绿/优秀（部分未测）", partial, "entryToExit",
+    "bg-success", "优秀（部分未测）");
+  expectBar("⑥同行出口段不附注记", partial, "exitToBing", "bg-success", "优秀");
+  const partialSlow = row({
+    entryToExitLatency: 150,
+    entryToExitLoss: 0,
+    entryToExitPartialUntested: true,
+    success: true,
+  });
+  delete partialSlow.errorMessage;
+  expectBar("⑥部分未测较差段 → 黄/较差（部分未测）", partialSlow, "entryToExit",
+    "bg-warning", "较差（部分未测）");
 }
 
 if (failures.length > 0) {
