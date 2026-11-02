@@ -86,9 +86,12 @@ func worker(id int, args []string, ctx *context.Context, ret *int) {
 	}
 }
 
-func init() {
-	var printVersion bool
+var printVersion bool
 
+func init() {
+	// Registration only — parsing lives in main (parseCommandLine).
+	// The flag set, defaults and usages are exactly the ones the
+	// agent has always taken (pinned by TestAgentFlagSetAndDefaults).
 	flag.Var(&services, "L", "service list")
 	flag.Var(&nodes, "F", "chain node list")
 	flag.StringVar(&cfgFile, "C", "", "configuration file")
@@ -98,13 +101,28 @@ func init() {
 	flag.BoolVar(&trace, "DD", false, "trace mode")
 	flag.StringVar(&apiAddr, "api", "", "api service address")
 	flag.StringVar(&metricsAddr, "metrics", "", "metrics service address")
+}
+
+// parseCommandLine parses the flags registered in init and reports
+// whether -V asked for the version banner, in which case the
+// caller exits before doing anything else.
+//
+// Parsing runs from main, not from the init above (R2-013 / BD-03):
+// flag.Parse in init kills any test binary for this package — the
+// -test.* flags are not registered yet at init time — which left
+// the root package with no program-level tests at all. Registering
+// in init is harmless; parsing is the part that had to move. The
+// worker multiplexing in the other init is unaffected: forked
+// workers land here in their own main and parse their sub-args.
+func parseCommandLine() bool {
 	flag.Parse()
 
 	if printVersion {
 		fmt.Fprintf(os.Stdout, "gost %s (%s %s/%s)\n",
 			version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
-		os.Exit(0)
+		return true
 	}
+	return false
 }
 
 // R17-C (R17-X-01): startup failures must stay diagnosable even when the
@@ -131,6 +149,10 @@ func logStartupFailure(stage string, err error) {
 }
 
 func main() {
+	if parseCommandLine() {
+		return
+	}
+
 	// Core dump hygiene (coredump.go): never produce core files, and
 	// sweep any stockpile left in the data directories by earlier
 	// crashes before doing anything else.

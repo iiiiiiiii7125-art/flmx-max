@@ -393,14 +393,16 @@ func TestProcessRelaunchGuardPassesAfterRecovery(t *testing.T) {
 	t.Fatalf("process must relaunch once the gate passes, runs=%d", countMarkerLines(t, marker, "run"))
 }
 
-// A-03 wiring: startProcesses attaches the relaunch gate to guarded
-// instances' processes only; unguarded processes keep the bare
-// supervisor behavior.
+// A-03 wiring, R2-002 form: every process carries the relaunch
+// gate, but the gate judges the instance's posture at relaunch
+// time — a guarded instance's process is blocked while its rules
+// cannot be installed, an unguarded one's gate passes unconditionally
+// (the bare supervisor behavior, preserved behaviorally).
 func TestGuardedProcessesCarryRelaunchGuard(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as fake kernel")
 	}
-	stubWhitelistNft(t)
+	stub := stubWhitelistNft(t)
 	m := NewManager(t.TempDir())
 	t.Cleanup(m.Shutdown)
 	marker := filepath.Join(t.TempDir(), "starts")
@@ -426,8 +428,19 @@ func TestGuardedProcessesCarryRelaunchGuard(t *testing.T) {
 	m.mu.Lock()
 	pprocs := m.instances["singbox"].procs
 	m.mu.Unlock()
-	if len(pprocs) == 0 || pprocs[0].relaunchGuard != nil {
-		t.Fatal("unguarded kernel processes must not carry the relaunch guard")
+	if len(pprocs) == 0 || pprocs[0].relaunchGuard == nil {
+		t.Fatal("every process must carry the posture gate (R2-002)")
+	}
+
+	// With the table gone and loads failing, the guarded gate must
+	// refuse the relaunch while the unguarded gate still passes.
+	stub.tableGone = true
+	stub.failLoad = true
+	if err := gprocs[0].relaunchGuard(); err == nil {
+		t.Fatal("guarded kernel's relaunch gate must fail while its rules cannot be installed")
+	}
+	if err := pprocs[0].relaunchGuard(); err != nil {
+		t.Fatalf("unguarded kernel's relaunch gate must pass unconditionally, got %v", err)
 	}
 }
 

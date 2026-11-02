@@ -133,11 +133,21 @@ func (m *Manager) persist() {
 	_ = writeFileAtomic(m.statePath(), b, 0o600)
 }
 
+// allPorts and allUserMarks derive the nft desired state. Only
+// enabled instances contribute: a stopped or disabled kernel must
+// leave none of its rules behind — its whitelist drop rules would
+// otherwise outlive it indefinitely and silently discard traffic
+// for whatever later binds the port, and its counters would keep
+// attributing that traffic to the disabled inbound (R2-001). The
+// Enabled predicate matches reqHasWhitelist / reqHasSnellServer.
 func (m *Manager) allPorts() []Port {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ports []Port
 	for _, inst := range m.instances {
+		if !inst.req.Enabled {
+			continue
+		}
 		ports = append(ports, inst.req.Ports...)
 	}
 	return ports
@@ -148,6 +158,9 @@ func (m *Manager) allUserMarks() []int64 {
 	defer m.mu.Unlock()
 	var ids []int64
 	for _, inst := range m.instances {
+		if !inst.req.Enabled {
+			continue
+		}
 		ids = append(ids, inst.req.UserMarks...)
 	}
 	return ids
@@ -616,7 +629,6 @@ func (m *Manager) startProcesses(inst *instance) {
 	runDir := m.runDir(inst.req.Type)
 	bins := inst.bins
 	kernelType := inst.req.Type
-	guarded := reqNeedsNftGuard(inst.req)
 	guardUID, guardGID := m.snellUID, m.snellGID
 	m.mu.Unlock()
 
@@ -629,17 +641,26 @@ func (m *Manager) startProcesses(inst *instance) {
 		}
 		p := newProcess(bin, expandArgs(spec.Args, runDir, filepath.Dir(bin)), runDir, inst.logs)
 		p.prefix = prefix
-		if guarded {
-			// B-02 (A-03): the supervisor's crash relaunch is a start
-			// like any other — a guarded kernel must not come back
-			// while its rules are not installed. The gate re-runs the
-			// content-verified sync before every relaunch; the first
-			// launch needs no gate because every caller of
-			// startProcesses already synced (or deliberately failed
-			// closed) before calling it.
-			p.relaunchGuard = m.syncGuardBeforeRestart
-		}
-		if kernelType == "snell" && isSnellServerSpec(spec.Name) {
+		// B-02 (A-03): the supervisor's crash relaunch is a start
+		// like any other — a guarded kernel must not come back while
+		// its rules are not installed. The gate re-runs the
+		// content-verified sync before every relaunch; the first
+		// launch needs no gate because every caller of
+		// startProcesses already synced (or deliberately failed
+		// closed) before calling it.
+		//
+		// R2-002: the gate is attached to EVERY process and judges
+		// the instance's CURRENT posture at relaunch time
+		// (restartGuardError reads inst.req then), never the posture
+		// frozen at process creation. Apply's rebuild predicate does
+		// not watch Ports/Allow, so adding a whitelist to a running
+		// kernel under an unchanged hash keeps the process object —
+		// a creation-time binding left exactly that surviving
+		// process ungated for its whole generation. For an unguarded
+		// posture the gate is a no-op pass, so unguarded kernels keep
+		// the bare supervisor behavior.
+		p.relaunchGuard = func() error { return m.restartGuardError(inst) }
+		if kernelType == "snell" && isSnellServerSpec(spec) {
 			// Snell egress guard: only snell-server itself drops to
 			// the guard user; shadow-tls fronts stay on the agent
 			// identity (they dial admin-configured targets only).
@@ -752,11 +773,23 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 			return m.state(kernelType, false), ferr
 		}
 		m.startProcesses(inst)
-		m.waitStable(kernelType)
-		if m.state(kernelType, false).Running {
+		// R2-029: the probe result is the receipt. Apply reports
+		// this same event as an error; Control used to discard it
+		// and return success for a kernel that died inside the
+		// probe window. Enabled stays persisted either way (the
+		// persist below is unconditional), so a later Control start
+		// and the Restore self-heal retry exactly as before — only
+		// the receipt now tells the truth.
+		stable := m.waitStable(kernelType)
+		if stable && m.state(kernelType, false).Running {
 			m.mu.Lock()
 			inst.goodHash = inst.req.Hash
 			m.mu.Unlock()
+		} else {
+			ferr := fmt.Errorf("内核启动失败: %s", lastLines(inst.logs, 5))
+			m.setErr(inst, ferr)
+			m.persist()
+			return m.state(kernelType, false), ferr
 		}
 	default:
 		return State{}, fmt.Errorf("未知操作: %s", action)
