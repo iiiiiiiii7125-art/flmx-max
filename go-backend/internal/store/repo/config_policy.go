@@ -119,9 +119,9 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"service_monitor_default_timeout_sec":       {},
 	"service_monitor_max_timeout_sec":           {},
 	// 面板设置（config 页）：开关与地址类，无凭据。
-	"captcha_enabled":         {},
-	"panel_domain":            {},
-	"ip":                      {},
+	"captcha_enabled": {},
+	"panel_domain":    {},
+	"ip":              {},
 	// 订阅前置地址（KU6）：链接组装层设置（前置 base 列表），无凭据；
 	// 普通用户的「我的订阅」页也要读它组装前置链接，故同
 	// panel_domain 一样归 authenticated（已登录可读）。
@@ -245,13 +245,48 @@ func isBackupRuntimeExcludedConfigKey(name string) bool {
 	return ok
 }
 
+// backupFilterExemptConfigKeyPrefixes 是备份过滤的设计豁免前缀族
+// （RB4-01）：这些键按 PolicyForConfig 落默认 sensitive，但其值是
+// 必须随备份往返的运行时语义数据而非凭据。豁免只按本登记逐前缀
+// 匹配（键名先归一），新增豁免必须在此显式登记并注明理由——此前
+// pending_realm_settle 族靠「不在过滤明单内」隐式保留，过滤改用
+// 默认敏感口径后若无此显式豁免会被误杀。
+//   - pending_realm_settle:（X-P3-34）：realm 引擎切换的待结算标记
+//     （handler/realm.go pendingRealmSettleKey 生成），恢复旧备份
+//     时丢失即丢结算；值为标记 JSON，非凭据。
+var backupFilterExemptConfigKeyPrefixes = []string{
+	"pending_realm_settle:",
+}
+
+func isBackupFilterExemptConfigKey(name string) bool {
+	normalized := normalizeConfigKey(name)
+	for _, prefix := range backupFilterExemptConfigKeyPrefixes {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func FilterBackupConfigs(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return map[string]string{}
 	}
 	out := make(map[string]string, len(in))
 	for name, value := range in {
-		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
+		if isBackupFilterExemptConfigKey(name) {
+			out[name] = value
+			continue
+		}
+		// RB4-01：过滤判据与读路径同源——PolicyForConfig 判
+		// sensitive（含未分类键的默认敏感）一律不进备份明文，不再
+		// 只靠 sensitive 明单。此前仅靠默认落入 sensitive 的键
+		// （1.7.7 移除后存量残留的 github_proxy_*、管理员可写的任意
+		// 未知键）会明文进备份，与读路径的默认敏感口径矛盾。
+		// systemManaged 与运行时台账两组排除保持不变（其中
+		// is_commercial 等键 PolicyForConfig 判 public，仍须靠
+		// systemManaged 排除）。
+		if PolicyForConfig(name) == ConfigAccessSensitive || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
 			continue
 		}
 		out[name] = value

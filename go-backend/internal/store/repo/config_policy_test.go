@@ -86,6 +86,53 @@ func TestFilterBackupConfigsOmitsLicenseState(t *testing.T) {
 	}
 }
 
+// RB4-01: the backup filter must follow PolicyForConfig's
+// default-sensitive verdict, not only the explicit sensitive list.
+// Keys that are sensitive only by the default rule — legacy keys left
+// in stored configs after their setting was removed (github_proxy_*,
+// removed wholesale in 1.7.7; proxy URLs commonly embed user:pass) and
+// arbitrary unknown keys an admin can write — must not ride into
+// backup exports in plaintext.
+func TestFilterBackupConfigsFiltersDefaultSensitiveKeys(t *testing.T) {
+	for _, key := range []string{"github_proxy_url", "github_proxy_enabled", "totally_unknown_credential_key"} {
+		if PolicyForConfig(key) != ConfigAccessSensitive {
+			t.Fatalf("precondition: %s must classify sensitive via the default rule", key)
+		}
+		if IsSensitiveConfigKey(key) || IsSystemManagedConfigKey(key) || isBackupRuntimeExcludedConfigKey(key) {
+			t.Fatalf("precondition: %s must reach the filter only via the default-sensitive rule", key)
+		}
+	}
+	filtered := FilterBackupConfigs(map[string]string{
+		"github_proxy_url":               "http://user:pass@proxy.example:8080",
+		"github_proxy_enabled":           "true",
+		"totally_unknown_credential_key": "s3cret",
+	})
+	if len(filtered) != 0 {
+		t.Fatalf("default-sensitive keys must be filtered out of backups: %+v", filtered)
+	}
+}
+
+// RB4-01 companion: the pending_realm_settle:<nodeID> family is
+// sensitive only by the default rule, but its values are realm
+// settlement markers that must round-trip with backups (X-P3-34).
+// They survive via the explicit prefix exemption in
+// FilterBackupConfigs — losing them would drop settlements on
+// restore. Legitimate classified configs ride along unchanged.
+func TestFilterBackupConfigsKeepsRealmSettleMarkers(t *testing.T) {
+	filtered := FilterBackupConfigs(map[string]string{
+		"app_name":                "Brand",
+		"notify_daily_hour":       "9",
+		"pending_realm_settle:42": `{"debt":1}`,
+		"pending_realm_settle:7":  `{"debt":2}`,
+	})
+	if len(filtered) != 4 {
+		t.Fatalf("realm settle markers and legitimate configs must be kept: %+v", filtered)
+	}
+	if filtered["pending_realm_settle:42"] != `{"debt":1}` || filtered["pending_realm_settle:7"] != `{"debt":2}` {
+		t.Fatalf("realm settle markers changed: %+v", filtered)
+	}
+}
+
 func TestSystemManagedConfigKeys(t *testing.T) {
 	for _, key := range []string{"license_key", "license_expiry", "license_machine_id", "is_commercial", "machine_fingerprint"} {
 		if !IsSystemManagedConfigKey(key) {
