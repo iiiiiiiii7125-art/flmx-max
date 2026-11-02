@@ -453,6 +453,7 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 		t.Skip("shell scripts")
 	}
 	stubNft(t)
+	stubSnellGuardIdentity(t)
 	main := []byte("#!/bin/sh\nif [ \"$1\" = \"-v\" ]; then echo 'snell-server v5.0.1'; exit 0; fi\necho \"main $2\"\nexec sleep 300\n")
 	extra := []byte("#!/bin/sh\necho \"front $*\"\nexec sleep 300\n")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

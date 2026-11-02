@@ -61,6 +61,12 @@ type process struct {
 	logs   *logRing
 	prefix string // prepended to output lines when a kernel runs several processes
 
+	// credUID/credGID, when credUID > 0, run the child as that user
+	// instead of the agent's own (Snell egress guard, see
+	// snell_guard.go). Zero means inherit.
+	credUID uint32
+	credGID uint32
+
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	running   bool
@@ -127,7 +133,7 @@ func (p *process) supervise() {
 func (p *process) runOnce() error {
 	cmd := exec.Command(p.bin, p.args...)
 	cmd.Dir = p.dir
-	cmd.SysProcAttr = sysProcAttr()
+	cmd.SysProcAttr = sysProcAttrFor(p.credUID, p.credGID)
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
