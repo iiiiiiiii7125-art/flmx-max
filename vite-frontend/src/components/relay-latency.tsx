@@ -29,7 +29,7 @@ function RelayPath({ latency }: { latency: RelayLatency }) {
           <span
             className={`shrink-0 ${TONE[pointTone({ name: "", ...h })][0].split(" ")[1]}`}
           >
-            {h.ok ? `${h.latencyMs} ms` : h.error || "不通"}
+            {h.untested ? "未测" : h.ok ? `${h.latencyMs} ms` : h.error || "不通"}
             {h.ok && (h.lossPct ?? 0) > 0 && (
               <span className="ml-1 text-foreground">丢 {h.lossPct}%</span>
             )}

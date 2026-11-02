@@ -74,7 +74,6 @@ function UserDashboard() {
     isAdmin,
     announcement,
     isAnnouncementModalOpen,
-    setIsAnnouncementModalOpen,
     dismissAnnouncementModal,
   } = useDashboardData();
 
@@ -715,10 +714,13 @@ function UserDashboard() {
       </div>
       {announcement && <AnnouncementBanner announcement={announcement} />}
       {announcement && (
+        // R7-F5-03：关闭即落已读——onClose 与「不再提示」同走
+        // dismissAnnouncementModal（写 flmx_announcement_seen_time），
+        // 公告内容更新（update_time 变大）后仍会重新弹窗。
         <AnnouncementModal
           announcement={announcement}
           isOpen={isAnnouncementModalOpen}
-          onClose={() => setIsAnnouncementModalOpen(false)}
+          onClose={dismissAnnouncementModal}
           onDontShowAgain={dismissAnnouncementModal}
         />
       )}

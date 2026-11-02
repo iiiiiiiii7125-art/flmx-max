@@ -162,6 +162,49 @@ export function NotifyCard({
     />
   );
 
+  // R7-L8-03 写-only 凭据字段：后端 config/get 对全角色 403、
+  // config/list 删除这三键，表单永不回填已保存值（gist tokenHint
+  // 形态）——configs 里该键缺席＝未改动（留空保留）；输入非空＝
+  // 替换；键在场且为空＝已显式清除（或输入后删空），保存时以空
+  // 值下发删除已保存值（后端对三键按可清除键处理）。发送测试时
+  // 留空由后端回退到已保存值（notify/test 的 saved 回退口径）。
+  const credentialInput = (key: string, placeholder: string, type = "text") => {
+    const draft = configs[key];
+    const clearPending = key in configs && (draft ?? "") === "";
+
+    return (
+      <div className="space-y-1">
+        <Input
+          classNames={{ input: "text-sm", inputWrapper: changedClass(key) }}
+          placeholder={placeholder}
+          size="md"
+          type={type}
+          value={draft ?? ""}
+          variant="bordered"
+          onChange={(e) => onChange(key, e.target.value.trim())}
+        />
+        <p className="text-xs font-semibold text-foreground">
+          {clearPending ? (
+            "保存后将删除已保存的值"
+          ) : draft ? (
+            "保存后替换已保存的值，保存后不再回显"
+          ) : (
+            <>
+              已保存的值不会回显，留空表示保留 ·{" "}
+              <button
+                className="text-danger-700"
+                type="button"
+                onClick={() => onChange(key, "")}
+              >
+                清除已保存的值
+              </button>
+            </>
+          )}
+        </p>
+      </div>
+    );
+  };
+
   return (
     <Card className="mt-6 shadow-md">
       <CardHeader className="pb-6">
@@ -196,16 +239,23 @@ export function NotifyCard({
           description="找 @BotFather 创建机器人拿到 Token；给机器人发一条消息后，用 @userinfobot 查自己的 Chat ID（群组 ID 以 -100 开头）"
           label="Telegram Bot Token"
         >
-          {input("notify_telegram_bot_token", "123456:ABC-DEF…", "password")}
+          {credentialInput(
+            "notify_telegram_bot_token",
+            "留空保留已保存的 Token，输入新 Token 替换",
+            "password",
+          )}
         </Field>
         <Field label="Telegram Chat ID">
           {input("notify_telegram_chat_id", "例如 123456789")}
         </Field>
         <Field
-          description="面板服务器连不上 Telegram 时，填一个反代地址；留空使用官方地址"
+          description="面板服务器连不上 Telegram 时，填一个反代地址；从未保存过或清除后使用官方地址"
           label="Telegram API 地址（可选）"
         >
-          {input("notify_telegram_api_base", "https://api.telegram.org")}
+          {credentialInput(
+            "notify_telegram_api_base",
+            "留空保留已保存的地址，输入新地址替换",
+          )}
         </Field>
 
         <Divider />
@@ -213,7 +263,10 @@ export function NotifyCard({
           description='以 POST JSON 发送：{"event","title","message","text","time","app"}，可对接企业微信、钉钉、Bark 等的转发服务'
           label="Webhook 地址"
         >
-          {input("notify_webhook_url", "https://example.com/hook")}
+          {credentialInput(
+            "notify_webhook_url",
+            "留空保留已保存的地址，输入新地址替换",
+          )}
         </Field>
 
         <Divider />
@@ -310,7 +363,7 @@ export function NotifyCard({
 
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-divider/50 pt-6">
           <span className="text-xs font-semibold text-foreground">
-            测试会用当前填写的内容，不用先保存
+            测试会用当前填写的内容（凭据留空则用已保存的值），不用先保存
           </span>
           <Button
             color="primary"

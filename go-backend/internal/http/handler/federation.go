@@ -478,6 +478,12 @@ func (h *Handler) federationShareList(w http.ResponseWriter, r *http.Request) {
 	items := make([]peerShareListItem, 0, len(shares))
 	for i := range shares {
 		share := shares[i]
+		// R7-014 全集复扫同族：share 的 relay 凭据（D3-04）前端零
+		// 消费（管理页只消费 token 作展示/复制，凭据经 Connect 协
+		// 议面下发给消费方当事人），不得随列表 DTO 回传——置空
+		// 副本字段后再序列化，落库值与 Connect 下发不受影响。
+		share.RelayUsername = ""
+		share.RelayPassword = ""
 		runtimes, err := h.repo.ListActivePeerShareRuntimesByShareID(share.ID)
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -2723,16 +2729,35 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 		remoteToken string
 	}
 
-	var remotes []remoteEntry
+	// R7-F2-01：列表 DTO 已不再回传 remoteToken（凭据最小暴露面），
+	// 同步所需的 URL/令牌改经 repo.ListRemoteNodes 在服务端内部按
+	// 节点 ID 取用，不再借道下发给前端的列表项。
+	indexByID := make(map[int64]int, len(items))
+	hasRemote := false
 	for i, item := range items {
-		isRemote, _ := item["isRemote"].(int)
-		if isRemote != 1 {
+		if isRemote, _ := item["isRemote"].(int); isRemote == 1 {
+			hasRemote = true
+		}
+		if id, _ := item["id"].(int64); id > 0 {
+			indexByID[id] = i
+		}
+	}
+	if !hasRemote {
+		return
+	}
+	rows, err := h.repo.ListRemoteNodes()
+	if err != nil {
+		log.Printf("sync remote node statuses: list remote nodes: %v", err)
+		return
+	}
+	var remotes []remoteEntry
+	for _, row := range rows {
+		i, ok := indexByID[row.ID]
+		if !ok {
 			continue
 		}
-		url, _ := item["remoteUrl"].(string)
-		token, _ := item["remoteToken"].(string)
-		url = strings.TrimSpace(url)
-		token = strings.TrimSpace(token)
+		url := strings.TrimSpace(row.RemoteURL.String)
+		token := strings.TrimSpace(row.RemoteToken.String)
 		if url == "" || token == "" {
 			continue
 		}

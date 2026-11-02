@@ -1641,6 +1641,86 @@ test_download_verified_retries_transient_checksum_failure() (
   [[ -f "$dest" ]] || fail "R8-J-A: verified body must be kept after a retried checksum fetch"
 )
 
+# R7-002 第二锚（install.sh 段 B）：download_agent_binary 的第一锚
+# 校验值由下载地址派生、恒同源——定版后须经异路重取 .sha256 复核：
+# 异路同值放行、异路异值整轮拒绝、异路无应答降级点名但不拦截。
+# 桩 curl 按 URL 前缀供数：a.example 为获胜线路，b.example 为复核
+# 线路（其 .sha256 模式由 BIN_ANCHOR_B_MODE 控制）。
+bin_anchor_fixture_setup() {
+  load_script_without_main "$ROOT_DIR/install.sh"
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_URL="https://github.com/example/gost-amd64"
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  ROUTES_STAGE=2
+  BIN_ANCHOR_BODY="agent-binary-body"
+  BIN_ANCHOR_SHA_A=$(printf '%s' "$BIN_ANCHOR_BODY" | sha256sum | awk '{print $1}')
+  BIN_ANCHOR_SHA_B=$(printf '%s' "different-body" | sha256sum | awk '{print $1}')
+  BIN_ANCHOR_B_MODE="same"
+  curl() {
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    case "$url" in
+      *.sha256)
+        case "$url" in
+          *b.example*)
+            case "$BIN_ANCHOR_B_MODE" in
+              different) printf '%s' "$BIN_ANCHOR_SHA_B" > "$output" ;;
+              fail) return 22 ;;
+              *) printf '%s' "$BIN_ANCHOR_SHA_A" > "$output" ;;
+            esac
+            ;;
+          *) printf '%s' "$BIN_ANCHOR_SHA_A" > "$output" ;;
+        esac
+        ;;
+      *) printf '%s' "$BIN_ANCHOR_BODY" > "$output" ;;
+    esac
+  }
+}
+
+test_install_script_binary_anchor_passes() (
+  set -euo pipefail
+  bin_anchor_fixture_setup
+  local dest
+  dest=$(mktemp)
+  download_agent_binary "$dest" 2>/dev/null
+  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "binary anchor pass: binary should land when the second route corroborates"
+)
+
+test_install_script_binary_anchor_mismatch_rejects() (
+  set -euo pipefail
+  bin_anchor_fixture_setup
+  BIN_ANCHOR_B_MODE="different"
+  local dest rc=0
+  dest=$(mktemp -u)
+  download_agent_binary "$dest" 2>/dev/null || rc=$?
+  assert_equals "1" "$rc" "binary anchor mismatch: download must fail when the second route disagrees"
+  [[ ! -f "$dest" ]] || fail "binary anchor mismatch: binary must not land on anchor disagreement"
+)
+
+test_install_script_binary_anchor_degrades() (
+  set -euo pipefail
+  bin_anchor_fixture_setup
+  BIN_ANCHOR_B_MODE="fail"
+  local dest errlog
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  download_agent_binary "$dest" 2>"$errlog"
+  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "binary anchor degrade: binary should still land when no second route answers"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "binary anchor degrade: degradation must be named on stderr"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -3608,6 +3688,9 @@ test_panel_download_verified_routed_failover
 test_panel_anchor_corroboration_passes
 test_panel_anchor_corroboration_mismatch_aborts
 test_panel_anchor_corroboration_degrades
+test_install_script_binary_anchor_passes
+test_install_script_binary_anchor_mismatch_rejects
+test_install_script_binary_anchor_degrades
 test_update_flux_agent_downloads_without_prompt
 test_update_flux_agent_skips_proxy_prompt_when_not_installed
 test_update_flux_agent_prints_online_confirmation_guidance

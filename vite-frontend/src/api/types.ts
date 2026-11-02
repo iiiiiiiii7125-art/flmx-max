@@ -23,8 +23,6 @@ export interface NodeApiItem {
   socks?: number;
   isRemote?: number;
   remoteUrl?: string | null;
-  remoteToken?: string | null;
-  remoteConfig?: string | null;
   interfaceName?: string | null;
   expiryReminderDismissed?: number;
   syncError?: string;
@@ -885,6 +883,8 @@ export interface InboundProbePoint {
   latencyMs?: number;
   lossPct?: number;
   error?: string;
+  /** 未测标记（R7-006）：未实测点位，ok=false 但非不通，走中性呈现。 */
+  untested?: boolean;
   /** 到该测试点的回程路由，如"电信 CN2 GIA"（第四批填充）。 */
   route?: string;
   /** The IPv6 return route of a dual-stack node, when traced. */
@@ -1025,6 +1025,11 @@ export interface RelayHop {
   latencyMs?: number;
   lossPct?: number;
   error?: string;
+  /**
+   * 未测标记（R7-006）：目标段为 UDP 基协议段时本腿未实测，
+   * ok=false 是未测而非不通，呈现层须走中性「未测」形态。
+   */
+  untested?: boolean;
 }
 
 /**

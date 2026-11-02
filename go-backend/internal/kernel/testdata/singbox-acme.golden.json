@@ -85,5 +85,21 @@
       "tag": "direct",
       "type": "direct"
     }
-  ]
+  ],
+  "route": {
+    "final": "direct",
+    "rules": [
+      {
+        "action": "reject",
+        "ip_is_private": true
+      },
+      {
+        "action": "resolve"
+      },
+      {
+        "action": "reject",
+        "ip_is_private": true
+      }
+    ]
+  }
 }

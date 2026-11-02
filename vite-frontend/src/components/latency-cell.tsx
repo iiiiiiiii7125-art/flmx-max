@@ -43,6 +43,8 @@ const RANK: Record<Tone, number> = {
 };
 
 export function pointTone(p: InboundProbePoint): Tone {
+  // 未测点位（R7-006）走中性色，不得染失败红冒充不通。
+  if (p.untested) return "default";
   if (!p.ok) return "danger";
   const ms = p.latencyMs ?? 0;
   const loss = p.lossPct ?? 0;
@@ -70,7 +72,8 @@ export function probePoints(probe?: InboundProbe): InboundProbePoint[] {
 }
 
 // Unreachable sorts above any latency of the same red tone.
-const rank = (p: InboundProbePoint) => (p.ok ? RANK[pointTone(p)] : 4);
+const rank = (p: InboundProbePoint) =>
+  p.untested ? 0 : p.ok ? RANK[pointTone(p)] : 4;
 
 /** Positive when a looks worse than b: unreachable, worse tone, slower. */
 const compare = (a: InboundProbePoint, b: InboundProbePoint) =>
@@ -123,6 +126,7 @@ function ago(ts: number) {
 }
 
 function valueText(p: InboundProbePoint) {
+  if (p.untested) return "未测";
   return p.ok ? `${p.latencyMs} ms` : p.error || "连不上";
 }
 

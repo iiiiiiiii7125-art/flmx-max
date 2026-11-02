@@ -92,6 +92,10 @@ interface ConfigItem {
   placeholder?: string;
   description?: string;
   type: "input" | "password" | "switch" | "select" | "bg_image";
+  // 写-only 凭据字段（R7-L8-03）：后端 config/get 对全角色 403、
+  // config/list 删除该键，表单永不回填已保存值——留空＝保留、
+  // 输入＝替换、显式清除并保存＝删除已保存值（gist tokenHint 形态）。
+  writeOnly?: boolean;
   options?: { label: string; value: string; description?: string }[];
   dependsOn?: string; // 依赖的配置项key
   dependsValue?: string; // 依赖的配置项值
@@ -220,11 +224,14 @@ const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: "cloudflare_secret_key",
     label: "Cloudflare Secret Key",
-    placeholder: "请输入 Cloudflare Secret Key",
-    description: "Cloudflare Turnstile 密钥",
+    placeholder: "留空表示保留已保存的密钥，输入新密钥替换",
+    description: "Cloudflare Turnstile 密钥（仅写入，保存后不再回显）",
     // F-116：密钥字段必须掩码显示，此前以明文 text 渲染（后端
     // config_policy 也将其列为敏感键，前端显示口径须一致）。
+    // R7-L8-03：读面已关闭（config/get 全角色 403、config/list
+    // 删除），表单改 writeOnly hint 形态，不再回填已保存值。
     type: "password",
+    writeOnly: true,
     dependsOn: "captcha_enabled",
     dependsValue: "true",
   },
@@ -861,7 +868,20 @@ export default function ConfigPage() {
     }
   };
 
+  // 后端「缺失＝开启」的开关键全集（枚举核对 1.9.3：config 页全部
+  // switch 键中仅此一键属此族——后端 prober 与
+  // isTunnelQualityMonitoringEnabled 均按 != "false" 判读，键缺失时
+  // 探测实际在跑；其余键 hide_footer_brand / forward_compact_mode /
+  // captcha_enabled / allow_local_remote_addr 的后端消费者均按
+  // === "true" 判读、缺失＝关闭，notify_enabled 同口径）。
+  // 显示判读与后端对齐：只归一显示、不写库，用户首次拨动才落值。
+  const SWITCH_DEFAULT_ON_KEYS = new Set(["monitor_tunnel_quality_enabled"]);
+
   const resolveSwitchSelected = (key: string): boolean => {
+    if (configs[key] === undefined && SWITCH_DEFAULT_ON_KEYS.has(key)) {
+      return true;
+    }
+
     return configs[key] === "true";
   };
 
@@ -880,7 +900,15 @@ export default function ConfigPage() {
       return true;
     }
 
-    return configs[item.dependsOn] === item.dependsValue;
+    // 依赖项的可见性与开关显示同口径：缺失＝开启的键在未保存时按
+    // "true" 判读（如探测间隔项随质量检测开关的默认开启一同显示）。
+    const dependsRaw = configs[item.dependsOn];
+    const dependsEffective =
+      dependsRaw === undefined && SWITCH_DEFAULT_ON_KEYS.has(item.dependsOn)
+        ? "true"
+        : dependsRaw;
+
+    return dependsEffective === item.dependsValue;
   };
 
   const getBrandInputRef = (key: BrandPreviewKey) => {
@@ -1336,9 +1364,9 @@ export default function ConfigPage() {
         );
       }
 
-      case "password":
+      case "password": {
         // F-116：敏感字段掩码渲染，与普通 input 共用变更处理。
-        return (
+        const passwordInput = (
           <Input
             classNames={{
               input: "text-sm",
@@ -1354,6 +1382,42 @@ export default function ConfigPage() {
             onChange={(e) => handleConfigChange(item.key, e.target.value)}
           />
         );
+
+        if (!item.writeOnly) {
+          return passwordInput;
+        }
+
+        // R7-L8-03 写-only 形态：后端不再下发已保存值，configs 里
+        // 该键缺席＝未改动（留空保留）；输入非空＝替换；键在场且
+        // 为空＝已显式清除（或输入后删空），保存时以空值下发删除
+        // 已保存值（后端对该键按可清除键处理）。
+        const draft = configs[item.key];
+        const clearPending = item.key in configs && (draft ?? "") === "";
+
+        return (
+          <div className="space-y-1">
+            {passwordInput}
+            <p className="text-xs font-semibold text-foreground">
+              {clearPending ? (
+                "保存后将删除已保存的值"
+              ) : draft ? (
+                "保存后替换已保存的值，保存后不再回显"
+              ) : (
+                <>
+                  已保存的值不会回显，留空表示保留 ·{" "}
+                  <button
+                    className="text-danger-700"
+                    type="button"
+                    onClick={() => handleConfigChange(item.key, "")}
+                  >
+                    清除已保存的值
+                  </button>
+                </>
+              )}
+            </p>
+          </div>
+        );
+      }
 
       case "switch":
         return (

@@ -114,8 +114,14 @@ func TestSEC01BC01ImportRetainsServerSideSnapshot(t *testing.T) {
 	if err := json.Unmarshal(data, &snap); err != nil {
 		t.Fatalf("snapshot is not valid BackupData JSON: %v", err)
 	}
-	if snap.Configs["sec01_probe_key"] != sec01MarkerToken {
-		t.Fatalf("snapshot must hold pre-import state (sec01_probe_key marker), got %q", snap.Configs["sec01_probe_key"])
+	if snap.Configs["app_name"] != sec01MarkerToken {
+		t.Fatalf("snapshot must hold pre-import state (app_name marker), got %q", snap.Configs["app_name"])
+	}
+	// RB4-01：未分类键按 PolicyForConfig 默认敏感，不得进备份产物
+	// （快照同为可下载的备份产物）——sec01_probe_key 承载同一标记
+	// 值，但键未分类，快照中必须已被滤除。
+	if _, ok := snap.Configs["sec01_probe_key"]; ok {
+		t.Fatal("RB4-01: unclassified config keys must not ride into backup artifacts")
 	}
 	if _, ok := snap.Configs["imported_probe_key"]; ok {
 		t.Fatal("snapshot must be pre-import state, must not contain the newly imported key")
@@ -158,7 +164,8 @@ func TestSEC01BC01ImportRetainsServerSideSnapshot(t *testing.T) {
 	if !bytes.Equal(dlRec.Body.Bytes(), data) {
 		t.Fatal("downloaded bytes must equal the retained snapshot file bytes")
 	}
-	// 下载出的快照本身含导入前凭据（这是其用途）；回执不含（上文已断言）。
+	// 下载出的快照本身含导入前状态标记（经已分类键承载，RB4-01
+	// 后未分类键不进备份产物）；回执不含（上文已断言）。
 	if !strings.Contains(dlRec.Body.String(), sec01MarkerToken) {
 		t.Fatal("downloaded snapshot must contain the pre-import marker (it is the pre-import state)")
 	}
@@ -342,12 +349,13 @@ func TestSEC01BC01SnapshotFailureWarnsAndContinuesImport(t *testing.T) {
 		t.Fatalf("importWarnings must disclose the snapshot failure, got %v", result.ImportWarnings)
 	}
 
-	// DB 已被改写：新导入的键存在（导入未被快照失败中断）。
-	backup, err := r.ExportAllContext(context.Background())
+	// DB 已被改写：新导入的键存在（导入未被快照失败中断）。直接
+	// 读库核对落库事实，不经导出面（导出过滤口径与落库无关）。
+	cfg, err := r.GetConfigByName("imported_probe_key")
 	if err != nil {
-		t.Fatalf("export after import: %v", err)
+		t.Fatalf("get imported config: %v", err)
 	}
-	if _, ok := backup.Configs["imported_probe_key"]; !ok {
+	if cfg == nil || cfg.Value != "plain-value" {
 		t.Fatal("import must proceed and modify the DB when snapshot save fails (O7-010)")
 	}
 

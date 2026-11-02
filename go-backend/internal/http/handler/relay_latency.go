@@ -28,6 +28,12 @@ type relayHop struct {
 	LatencyMs int64   `json:"latencyMs,omitempty"`
 	LossPct   float64 `json:"lossPct,omitempty"`
 	Error     string  `json:"error,omitempty"`
+	// Untested（R7-006）：目标段为 UDP 基协议段时本腿未实测——
+	// 段服务在该口只绑 UDP、无 TCP 监听，TcpPing 恒失败并不代表
+	// 线路不通。与质量探测 TunnelQualityHop.Untested 同口径：
+	// 不探测、不判不通、不进 pathOK/延迟/丢包聚合，呈现层据此
+	// 走中性「未测」形态。
+	Untested bool `json:"untested,omitempty"`
 }
 
 // relayLatency is a relay line's estimated latency to each reference point
@@ -94,6 +100,12 @@ type relayLeg struct {
 	port     int
 	// err is set when the leg cannot be measured (shared node, no address).
 	err string
+	// untested marks a leg whose target segment is a UDP-based
+	// protocol segment (R7-006): it is never probed and never
+	// judged down. Panel-side facts (offline/shared/resolve
+	// failure) still land in err and take precedence, mirroring
+	// the quality prober's ordering.
+	untested bool
 }
 
 type relayPlan struct {
@@ -125,6 +137,10 @@ func (h *Handler) planRelayPath(rw repo.InboundRelayView, landing string, cache 
 	prev := inNodes[0]
 	leg := func(to chainNodeRecord) relayLeg {
 		l := relayLeg{fromID: prev.NodeID, fromName: prev.NodeName, toName: to.NodeName}
+		// R7-006：段协议判定与质量探测/诊断面同族同口径（段行协议
+		// 优先、回退隧道协议，见 chainSegmentProtocol）；UDP 基
+		// 协议段腿按未测处置，不以 TcpPing 恒测冒充不通。
+		l.untested = isUDPBasedProtocol(chainSegmentProtocol(to.Protocol, tunnel.Protocol))
 		fromNode, _ := h.cachedNode(cache, prev.NodeID)
 		toNode, err := h.cachedNode(cache, to.NodeID)
 		if err != nil {
@@ -166,6 +182,13 @@ func (h *Handler) planRelayPath(rw repo.InboundRelayView, landing string, cache 
 	if ip := net.ParseIP(host); tunnel.Type == 2 && ip != nil && ip.IsLoopback() {
 		return plan
 	}
+	// R7-006 末腿裁定（出口→落地目标）：目标协议不带入本腿是数据
+	// 本身决定的——转发记录（forward 表）没有协议字段，同一转发
+	// 的目标口可同时承载 TCP 与 UDP（nft 绑定默认 tcp,udp 双协
+	// 议），目标协议是逐连接属性而非线路属性，plan 侧无任何可信
+	// 数据源可判其是否为 UDP 服务。为一条低危呈现问题给转发加
+	// 协议字段/改产品语义成本不合理，故末腿维持 TcpPing 实测；
+	// 链路段腿（目标行 Protocol 可信）已按未测处置。
 	plan.legs = append(plan.legs, relayLeg{fromID: prev.NodeID, fromName: prev.NodeName, toName: landing, host: host, port: port})
 	return plan
 }
@@ -185,7 +208,15 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 		return out
 	}
 	pathOK, pathLoss, pathErr := true, 0.0, ""
+	measuredHops, untestedHops := 0, 0
 	for _, hop := range hops {
+		// R7-006：未测腿（UDP 协议段）不判不通、不进 pathOK 判定、
+		// 不贡献延迟/丢包——与质量探测聚合口径一致。带 Error 的
+		// 腿是面板侧事实（离线/共享/解析失败），不被未测豁免。
+		if hop.Untested && hop.Error == "" {
+			untestedHops++
+			continue
+		}
 		if !hop.OK {
 			pathOK = false
 			if pathErr == "" {
@@ -193,11 +224,16 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 			}
 			continue
 		}
+		measuredHops++
 		out.PathMs += hop.LatencyMs
 		pathLoss = combineLoss(pathLoss, hop.LossPct)
 	}
 	var points []latencyPoint
 	if entry != nil && len(entry.Points) > 0 {
+		// RB3-01：全腿未测时参考点分支同守卫——路径贡献恒 0，
+		// 入口点自身的实测值不是路径延迟，不得以 OK 点位冒充
+		// 实测（与下方无参考点分支的全未测守卫同口径）。
+		allUntested := pathOK && measuredHops == 0 && untestedHops > 0
 		for _, pt := range entry.Points {
 			p := latencyPoint{Name: pt.Name, Pinned: pt.Pinned, Route: pt.Route}
 			switch {
@@ -205,6 +241,8 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 				p.Error = pt.Error
 			case !pathOK:
 				p.Error = "线路不通"
+			case allUntested:
+				p.Untested = true
 			default:
 				p.OK = true
 				p.LatencyMs = pt.LatencyMs + out.PathMs
@@ -214,7 +252,16 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 		}
 	} else {
 		p := latencyPoint{Name: relayPathPointName, OK: pathOK, Error: pathErr}
-		if pathOK {
+		switch {
+		case pathOK && measuredHops == 0 && untestedHops > 0:
+			// 全腿未测：没有任何实测延迟可报，不得以 PathMs=0
+			// 冒充 1ms 完美样本（与质量探测全未测保持哨兵同
+			// 口径，R7-006）。点位记未测、数值留空，呈现层走
+			// 中性「未测」形态。
+			p.OK = false
+			p.Untested = true
+			p.Error = ""
+		case pathOK:
 			p.LatencyMs, p.LossPct = out.PathMs, pathLoss
 			if p.LatencyMs < 1 {
 				p.LatencyMs = 1
@@ -225,6 +272,9 @@ func relayLatencyFrom(plan relayPlan, hops []relayHop, entry *externalProbe, now
 	probe := latencyProbe(points, now)
 	if !pathOK {
 		probe.Error = pathErr
+	} else if len(points) == 1 && points[0].Untested {
+		// latencyProbe 对无 OK 点位填的默认误差文案不适用于未测。
+		probe.Error = ""
 	}
 	out.externalProbe = probe
 	return out
@@ -298,6 +348,12 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64, fullReplac
 		for i, l := range plan.legs {
 			hop := relayHop{From: l.fromName, To: l.toName, Error: l.err}
 			if l.err != "" {
+				hops[id][i] = hop
+				continue
+			}
+			// R7-006：UDP 协议段腿不派发 TcpPing 探测，直接记未测。
+			if l.untested {
+				hop.Untested = true
 				hops[id][i] = hop
 				continue
 			}

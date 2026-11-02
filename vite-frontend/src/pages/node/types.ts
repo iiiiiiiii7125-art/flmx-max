@@ -42,8 +42,6 @@ export interface Node {
     sudoMode?: "none" | "sudo" | "sudo_su";
   } | null;
   remoteUrl?: string | null;
-  remoteToken?: string | null;
-  remoteConfig?: string | null;
   interfaceName?: string | null;
   syncError?: string;
   connectionStatus: "online" | "offline";

@@ -217,18 +217,18 @@ func TestRV3NftStreamDiagnosisAppliedIncludesProbeResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare plan: %v", err)
 	}
-	if len(plan.statusItems) != 0 || len(plan.workItems) != 2 {
-		t.Fatalf("applied binding must plan tcp+udp probes and no status items, got status=%d probes=%d", len(plan.statusItems), len(plan.workItems))
+	if len(plan.statusItems) != 0 || len(plan.workItems) != 1 {
+		t.Fatalf("applied binding must plan a single TCP probe (R7-028) and no status items, got status=%d probes=%d", len(plan.statusItems), len(plan.workItems))
 	}
 
 	events := frv3RunForwardStream(t, h, plan)
 	total, startItems := frv3StreamStart(t, events)
-	if total != 2 || len(startItems) != 2 {
-		t.Fatalf("start must announce both probe items, got total=%d items=%#v", total, startItems)
+	if total != 1 || len(startItems) != 1 {
+		t.Fatalf("start must announce the single probe item, got total=%d items=%#v", total, startItems)
 	}
 	items := frv3StreamItems(t, events)
-	if len(items) != 2 {
-		t.Fatalf("expected tcp+udp streamed probe items, got %d", len(items))
+	if len(items) != 1 {
+		t.Fatalf("expected the single streamed TCP probe item, got %d", len(items))
 	}
 	var tcpItem *frv3StreamItemData
 	for i := range items {
@@ -252,14 +252,15 @@ func TestRV3NftStreamDiagnosisAppliedIncludesProbeResults(t *testing.T) {
 		t.Fatalf("streamed probe message must carry the rule-state prefix, got %#v", tcpItem.Result["message"])
 	}
 	done := frv3StreamDone(t, events)
-	if done.Total != 2 || done.Completed != 2 {
-		t.Fatalf("done progress must cover both probes, got %+v", done)
+	if done.Total != 1 || done.Completed != 1 {
+		t.Fatalf("done progress must cover the single probe, got %+v", done)
 	}
 }
 
-// ---- RV3-01：非 nft 转发流式行为不变（无 status 项、走 gost 探测腿） ----
+// ---- RV3-01：非 nft 转发流式无 status 项、走 gost 探测腿；
+// ---- 目标腿口径随 R7-028 改为恰一项 TCP（原双项断言就此改写） ----
 
-func TestRV3NonNftStreamDiagnosisUnchanged(t *testing.T) {
+func TestRV3NonNftStreamDiagnosisTargetLegTCPOnly(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler
 	r := h.repo
@@ -278,14 +279,17 @@ func TestRV3NonNftStreamDiagnosisUnchanged(t *testing.T) {
 	if len(plan.statusItems) != 0 {
 		t.Fatalf("non-nft forward must have no status items, got %#v", plan.statusItems)
 	}
-	if len(plan.workItems) != 2 {
-		t.Fatalf("non-nft type-1 forward must plan tcp+udp target legs, got %d", len(plan.workItems))
+	if len(plan.workItems) != 1 {
+		t.Fatalf("non-nft type-1 forward must plan a single TCP target leg (R7-028), got %d", len(plan.workItems))
+	}
+	if plan.workItems[0].protocol != "tcp" {
+		t.Fatalf("non-nft target leg must be TCP (R7-028), got %q", plan.workItems[0].protocol)
 	}
 
 	events := frv3RunForwardStream(t, h, plan)
 	items := frv3StreamItems(t, events)
-	if len(items) != 2 {
-		t.Fatalf("expected two streamed probe items, got %d", len(items))
+	if len(items) != 1 {
+		t.Fatalf("expected one streamed probe item, got %d", len(items))
 	}
 	for _, item := range items {
 		if _, ok := item.Result["forwardMode"]; ok {
@@ -293,7 +297,7 @@ func TestRV3NonNftStreamDiagnosisUnchanged(t *testing.T) {
 		}
 	}
 	done := frv3StreamDone(t, events)
-	if done.Total != 2 || done.Completed != 2 {
-		t.Fatalf("done progress must cover both legs, got %+v", done)
+	if done.Total != 1 || done.Completed != 1 {
+		t.Fatalf("done progress must cover the single leg, got %+v", done)
 	}
 }
