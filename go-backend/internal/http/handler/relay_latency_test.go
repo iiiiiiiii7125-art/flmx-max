@@ -222,3 +222,169 @@ func TestLatencyTargetsAllowThirty(t *testing.T) {
 		t.Fatal("31 points must be refused")
 	}
 }
+
+// --- R7-006: UDP protocol segment legs are untested, never judged down ---
+
+func setChainRowProtocol(t *testing.T, r *repo.Repository, nodeID int64, proto string) {
+	t.Helper()
+	if err := r.DB().Exec(`UPDATE chain_tunnel SET protocol = ? WHERE node_id = ?`, proto, nodeID).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Mixed chain: the UDP (kcp) hop leg must not be probed and must not
+// fail the line; the TCP legs keep their measured behaviour and only
+// they sum into the path.
+func TestRelayLatencyUDPSegmentLegIsUntestedNotDown(t *testing.T) {
+	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
+	front := mustCreateRelayNode(t, r, "front", "198.51.100.1")
+	ix := mustCreateRelayNode(t, r, "ix", "198.51.100.2")
+	landing := mustCreateRelayNode(t, r, "landing", "203.0.113.10")
+
+	id := mustCreateRelayLine(t, r, "mixed-udp", 2, "203.0.113.10:443", front, []int64{ix}, landing)
+	setChainRowProtocol(t, r, ix, "kcp")
+
+	legs := map[string]float64{
+		"ct.example.com:80":  40, // front → reference point
+		"203.0.113.10:31000": 25, // ix → landing (tunnel port, TCP)
+		"203.0.113.10:443":   30, // landing → target (TCP)
+	}
+	old := nodeLatencyPing
+	t.Cleanup(func() { nodeLatencyPing = old })
+	var mu sync.Mutex
+	var calls []string
+	nodeLatencyPing = func(_ *Handler, nodeID int64, host string, port int) (map[string]interface{}, error) {
+		addr := fmt.Sprintf("%s:%d", host, port)
+		mu.Lock()
+		calls = append(calls, addr)
+		mu.Unlock()
+		ms, ok := legs[addr]
+		if !ok {
+			return nil, fmt.Errorf("unexpected ping %s", addr)
+		}
+		return okPing(ms), nil
+	}
+
+	if _, err := h.probeNodeLatency(context.Background(), []int64{front}, probeRoundTargeted); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	res, err := h.probeRelayLatency(context.Background(), []int64{id}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range calls {
+		if c == "198.51.100.2:32000" {
+			t.Fatalf("UDP segment leg was TcpPing-probed: %v", calls)
+		}
+	}
+	got := res[id]
+	if len(got.Hops) != 3 {
+		t.Fatalf("hops = %+v", got.Hops)
+	}
+	if !got.Hops[0].Untested || got.Hops[0].OK || got.Hops[0].Error != "" || got.Hops[0].LatencyMs != 0 {
+		t.Fatalf("UDP hop = %+v, want untested with no verdict/value", got.Hops[0])
+	}
+	if !got.Hops[1].OK || !got.Hops[2].OK || got.Hops[1].Untested || got.Hops[2].Untested {
+		t.Fatalf("TCP hops changed behaviour: %+v", got.Hops)
+	}
+	if got.PathMs != 55 {
+		t.Fatalf("PathMs = %d, want 55 (measured TCP legs only)", got.PathMs)
+	}
+	if len(got.Points) != 1 || !got.Points[0].OK || got.Points[0].LatencyMs != 95 || got.Error != "" {
+		t.Fatalf("points = %+v err=%q, want OK 95ms (40 entry + 55 path)", got.Points, got.Error)
+	}
+}
+
+// An untested leg must not mask a real failure on a measured leg.
+func TestRelayLatencyUDPLegDoesNotMaskBrokenTCPLeg(t *testing.T) {
+	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
+	front := mustCreateRelayNode(t, r, "front", "198.51.100.1")
+	ix := mustCreateRelayNode(t, r, "ix", "198.51.100.2")
+	landing := mustCreateRelayNode(t, r, "landing", "203.0.113.10")
+
+	id := mustCreateRelayLine(t, r, "udp-plus-broken", 2, "203.0.113.10:443", front, []int64{ix}, landing)
+	setChainRowProtocol(t, r, ix, "udp")
+
+	stubLatencyPing(t, func(_ int64, host string) (map[string]interface{}, error) {
+		if host == "203.0.113.10" {
+			return nil, errors.New("node gone")
+		}
+		return okPing(10), nil
+	})
+	if _, err := h.probeNodeLatency(context.Background(), nil, probeRoundScheduled); err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.probeRelayLatency(context.Background(), []int64{id}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res[id]
+	if got.OK || got.Points[0].OK || got.Points[0].Error != "线路不通" || !strings.Contains(got.Error, "ix →") {
+		t.Fatalf("broken TCP leg behind UDP leg = %+v", got)
+	}
+	if !got.Hops[0].Untested {
+		t.Fatalf("UDP hop lost its untested mark: %+v", got.Hops[0])
+	}
+}
+
+// All legs untested and no reference points: the path point must be
+// reported untested with no fabricated latency, and nothing is probed.
+func TestRelayLatencyAllUDPLegsPathPointIsUntested(t *testing.T) {
+	h, r := setupLatencyHandler(t, "")
+	front := mustCreateRelayNode(t, r, "front", "198.51.100.1")
+	landing := mustCreateRelayNode(t, r, "landing", "203.0.113.10")
+
+	// Exit on the landing itself: the single chain leg is the whole path.
+	id := mustCreateRelayLine(t, r, "all-udp", 2, "127.0.0.1:443", front, nil, landing)
+	setChainRowProtocol(t, r, landing, "udp")
+
+	calls := stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) { return okPing(1), nil })
+	res, err := h.probeRelayLatency(context.Background(), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("untested legs were probed: %v", *calls)
+	}
+	got := res[id]
+	if len(got.Hops) != 1 || !got.Hops[0].Untested {
+		t.Fatalf("hops = %+v", got.Hops)
+	}
+	if len(got.Points) != 1 || !got.Points[0].Untested || got.Points[0].OK || got.Points[0].LatencyMs != 0 || got.Points[0].Error != "" {
+		t.Fatalf("path point = %+v, want untested with no value/error", got.Points)
+	}
+	if got.PathMs != 0 || got.Error != "" {
+		t.Fatalf("relay = pathMs %d err %q, want 0 and no error", got.PathMs, got.Error)
+	}
+}
+
+// The UDP family is kcp/udp/quic (isUDPBasedProtocol): a quic
+// segment leg gets the same untested treatment as kcp/udp.
+// Note: the empty-segment → tunnel-protocol fallback inside
+// chainSegmentProtocol is not separately exercised here because
+// ListChainNodesForTunnelTx normalizes an empty stored segment
+// protocol to "tls" before any consumer sees it — the relay path
+// and the quality prober read the same rows through the same
+// repo method and judge them with the same function, so their
+// verdicts cannot diverge.
+func TestRelayLatencyQUICSegmentLegIsUntested(t *testing.T) {
+	h, r := setupLatencyHandler(t, "")
+	front := mustCreateRelayNode(t, r, "front", "198.51.100.1")
+	landing := mustCreateRelayNode(t, r, "landing", "203.0.113.10")
+
+	id := mustCreateRelayLine(t, r, "quic-leg", 2, "127.0.0.1:443", front, nil, landing)
+	setChainRowProtocol(t, r, landing, "quic")
+
+	calls := stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) { return okPing(1), nil })
+	res, err := h.probeRelayLatency(context.Background(), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("quic legs were probed: %v", *calls)
+	}
+	if got := res[id]; len(got.Hops) != 1 || !got.Hops[0].Untested {
+		t.Fatalf("hops = %+v, want the quic leg untested", got.Hops)
+	}
+}
