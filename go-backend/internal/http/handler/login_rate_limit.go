@@ -321,20 +321,25 @@ func (l *loginUsernameLimiter) evictIfNeededLocked(now time.Time) {
 // 对 handler 暴露的检查入口
 // ---------------------------------------------------------------------------
 
+// rateLimitKeyForRequest 是本包限流键的统一收口（R6-L8-F-04）：
+// 走 clientip.RateLimitKey（可信代理链解析 → RemoteAddr 纯 IP 两
+// 级，与 gh 镜像面、WS 面同口径）；两级皆无时记入
+// clientip.UnresolvedKey 共享桶并告警（fail-closed 记账），绝不
+// 以含端口的原始 RemoteAddr 为键——端口轮换即可换桶绕过。此前
+// 登录、sub_store、captcha verify 与 login 的用户名信号 IP 各自
+// 维护「解析 → 纯 IP → 原始 RemoteAddr」的三级回退链，末端形态
+// 与 clientip 契约相悖，现统一经本助手，新增限流面直接调用。
+func rateLimitKeyForRequest(r *http.Request, surface string) string {
+	if key, ok := clientip.RateLimitKey(r); ok {
+		return key
+	}
+	log.Printf("%s: 无法从 RemoteAddr %q 解析客户端地址，限流记入共享桶（fail-closed）", surface, r.RemoteAddr)
+	return clientip.UnresolvedKey
+}
+
 // checkLoginRateLimit IP 维度限流，命中时直接写 429 并返回 false。
 func (h *Handler) checkLoginRateLimit(w http.ResponseWriter, r *http.Request) bool {
-	ip := loginClientIP(r)
-	key := ""
-	if ip != nil {
-		key = ip.String()
-	} else {
-		// R-001: 降级时提取纯 IP，不含端口（防端口轮换绕过）
-		if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
-			key = parsed.String()
-		} else {
-			key = r.RemoteAddr
-		}
-	}
+	key := rateLimitKeyForRequest(r, "login rate limit")
 	if !globalLoginLimiter.allow(key, time.Now()) {
 		w.Header().Set("Retry-After", "60")
 		response.WriteJSON(w, response.Err(429, "登录尝试过于频繁，请稍后再试"))

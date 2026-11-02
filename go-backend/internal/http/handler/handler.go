@@ -552,12 +552,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	// 触发后：验证码启用则强制 captcha（下方已有）；未启用则收紧该 IP 阈值。
 	// 无论用户名是否存在都计数，避免用行为差异做用户名枚举。
 	captchaEnabledForSignal, _ := h.captchaEnabled()
-	clientIPStr := ""
-	if ip := loginClientIP(r); ip != nil {
-		clientIPStr = ip.String()
-	} else {
-		clientIPStr = r.RemoteAddr
-	}
+	// R6-L8-F-04：用户名信号 IP 与限流键同收口（rateLimitKeyForRequest），
+	// 不再以含端口的原始 RemoteAddr 记账（紧缩集合的键同理）。
+	clientIPStr := rateLimitKeyForRequest(r, "login username signal")
 	h.checkLoginUsernameRateLimit(req.Username, clientIPStr, captchaEnabledForSignal)
 	if strings.TrimSpace(req.Password) == "" {
 		response.WriteJSON(w, response.ErrDefault("密码不能为空"))
@@ -941,16 +938,11 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 独立限流（不与 login 共用桶）：键 = 真实客户端 IP + 用户名
-	clientIP := loginClientIP(r)
-	ipStr := ""
-	if clientIP != nil {
-		ipStr = clientIP.String()
-	} else if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
-		ipStr = parsed.String()
-	} else {
-		ipStr = r.RemoteAddr
-	}
+	// 独立限流（不与 login 共用桶）：键 = 真实客户端 IP + 用户名。
+	// R6-L8-F-04：IP 段走 rateLimitKeyForRequest 收口（clientip 两级
+	// 解析 + UnresolvedKey 共享桶），不再以含端口的原始 RemoteAddr
+	// 为键；下方失败审计日志的 ip 亦同此口径。
+	ipStr := rateLimitKeyForRequest(r, "sub_store rate limit")
 	if !subStoreLimiter.allow(ipStr+"\x00"+strings.ToLower(username), time.Now()) {
 		w.Header().Set("Retry-After", "60")
 		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
@@ -1278,15 +1270,9 @@ func (h *Handler) checkCaptchaVerifyRateLimit(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) allowCaptchaVerify(r *http.Request) bool {
-	ip := loginClientIP(r)
-	key := ""
-	if ip != nil {
-		key = ip.String()
-	} else if parsed := parseIPLiteral(r.RemoteAddr); parsed != nil {
-		key = parsed.String()
-	} else {
-		key = r.RemoteAddr
-	}
+	// R6-L8-F-04：与登录限流同收口（rateLimitKeyForRequest），
+	// 第三级回退不再用含端口的原始 RemoteAddr。
+	key := rateLimitKeyForRequest(r, "captcha verify rate limit")
 	now := time.Now()
 	h.captchaVerifyMu.Lock()
 	defer h.captchaVerifyMu.Unlock()
