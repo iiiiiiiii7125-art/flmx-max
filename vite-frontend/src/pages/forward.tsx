@@ -1445,6 +1445,8 @@ export default function ForwardPage() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importData, setImportData] = useState("");
   const [importLoading, setImportLoading] = useState(false);
+  // RB4-01：批量导入在途标记（入口同步复核用，见 executeImport）。
+  const importInFlightRef = useRef(false);
   const [importFormat, setImportFormat] = useState<ImportFormat>("flmx");
   const [selectedTunnelForImport, setSelectedTunnelForImport] = useState<
     number | null
@@ -2934,6 +2936,12 @@ export default function ForwardPage() {
 
   // 执行导入
   const executeImport = async () => {
+    // RB4-01：入口同步复核。importLoading 只是渲染状态，连点在渲染
+    // 提交前可双发整轮导入；而逐行创建每行一把新 idemKey，整轮重发
+    // 不被服务端去重、会整批重复创建——ref 在下发瞬间拦截（下方两处
+    // 同步校验无 await，判重到置位之间不存在双发窗口）。
+    if (importInFlightRef.current) return;
+
     if (!importData.trim()) {
       toast.error("请输入要导入的数据");
 
@@ -2946,6 +2954,7 @@ export default function ForwardPage() {
       return;
     }
 
+    importInFlightRef.current = true;
     setImportLoading(true);
     setImportResults([]);
 
@@ -3151,6 +3160,7 @@ export default function ForwardPage() {
     } catch {
       toast.error("导入过程中发生错误");
     } finally {
+      importInFlightRef.current = false;
       setImportLoading(false);
     }
   };
