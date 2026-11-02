@@ -172,7 +172,13 @@ function computeBrokenReferrers(
     if (deletedNodeIds.has(ib.nodeId) || seen.has(ib.id)) continue;
     const targets = [
       ib.outboundId,
-      ...(ib.splitRules || []).map((rule) => rule.outboundId ?? 0),
+      // R2-039：与后端 outboundTargets 同口径——只计 SplitProxy
+      // （action === "proxy"）规则；direct/block 规则残留的非零
+      // outboundId 不是有效引用，不得计入打断清单（此前口径过宽、
+      // 只多报）。谓词由 check-split-referrer-filter.mjs 钉死。
+      ...(ib.splitRules || [])
+        .filter((rule) => rule.action === "proxy")
+        .map((rule) => rule.outboundId ?? 0),
     ];
 
     if (targets.some((target) => target > 0 && targetIds.has(target))) {
