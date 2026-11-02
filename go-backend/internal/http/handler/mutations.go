@@ -2784,8 +2784,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// relay 逐条重算 RemoteAddr，变更则落库 + 重下发，失败汇入
 	// warnings 随成功回执带出（不静默）。
 	relayResyncWarnings := h.resyncManagedRelayRemoteAddrsForTunnel(id)
+	// R8-019：入口转发端口同步（下方入口集变更分支执行）的失败与
+	// 其他后置失败同口径进回执 warnings，不静默。此闭包只在同步
+	// 执行之后被调用，读取的是届时值。
+	var entryPortSyncWarnings []string
 	respondTunnelUpdateOK := func() {
 		warnings := append(append([]string{}, portChangeWarnings...), relayResyncWarnings...)
+		warnings = append(warnings, entryPortSyncWarnings...)
 		if len(warnings) > 0 {
 			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"warnings": warnings}})
 			return
@@ -2796,7 +2801,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
 		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
-		h.syncTunnelForwardsEntryPorts(id, newEntryNodeIDs)
+		entryPortSyncWarnings = h.syncTunnelForwardsEntryPorts(id, newEntryNodeIDs)
 	}
 
 	if typeVal == 2 {
@@ -3151,19 +3156,30 @@ func (h *Handler) validateTunnelEntryPortConflictsForNewEntriesTx(tx *gorm.DB, t
 	return nil
 }
 
-func (h *Handler) syncTunnelForwardsEntryPorts(tunnelID int64, entryNodeIDs []int64) {
+// syncTunnelForwardsEntryPorts re-syncs the tunnel's forwards onto the
+// (new) entry node set after a tunnel update commits. It returns one
+// warning per forward whose sync failed (R8-019): the caller folds them
+// into the update receipt so a "saved" response never silently hides a
+// forward that has no listener on the new entry set — the same
+// non-silent rule the other post-commit steps in tunnelUpdate follow.
+func (h *Handler) syncTunnelForwardsEntryPorts(tunnelID int64, entryNodeIDs []int64) []string {
 	if h == nil || h.repo == nil || tunnelID <= 0 {
-		return
+		return nil
 	}
 	entryNodeIDs = uniqueInt64s(entryNodeIDs)
 	if len(entryNodeIDs) == 0 {
-		return
+		return nil
 	}
 
 	forwards, err := h.listForwardsByTunnel(tunnelID)
-	if err != nil || len(forwards) == 0 {
-		return
+	if err != nil {
+		log.Printf("sync tunnel forwards entry ports failed tunnel_id=%d stage=list forwards err=%v", tunnelID, err)
+		return []string{fmt.Sprintf("隧道名下转发入口端口同步失败：%v", err)}
 	}
+	if len(forwards) == 0 {
+		return nil
+	}
+	var warnings []string
 
 	allowInIP := len(entryNodeIDs) == 1
 	for i := range forwards {
@@ -3173,6 +3189,7 @@ func (h *Handler) syncTunnelForwardsEntryPorts(tunnelID int64, entryNodeIDs []in
 		}
 		oldPorts, err := h.listForwardPorts(f.ID)
 		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("转发 %s 入口端口同步失败：%v", f.Name, err))
 			continue
 		}
 		referencePort := pickForwardPortFromRecords(oldPorts)
@@ -3220,10 +3237,15 @@ func (h *Handler) syncTunnelForwardsEntryPorts(tunnelID int64, entryNodeIDs []in
 		// ReplaceForwardPorts 已在自身锁内三表复检（F-013），失败必须
 		// 留痕：记录 tunnel/forward 以便排查（本函数是提交后同步，无
 		// 法再回滚隧道更新，但绝不静默）。
+		// R8-019：留痕之外还要让管理员在更新回执里看见——日志加返回值
+		// warnings 双通道（回执组装见 tunnelUpdate 的
+		// entryPortSyncWarnings），「成功回执 ≠ 已同步」就此消除。
 		if err := h.repo.ReplaceForwardPorts(f.ID, entries); err != nil {
 			log.Printf("sync tunnel forwards entry ports failed tunnel_id=%d forward_id=%d err=%v", tunnelID, f.ID, err)
+			warnings = append(warnings, fmt.Sprintf("转发 %s 入口端口同步失败：%v", f.Name, err))
 		}
 	}
+	return warnings
 }
 
 // resolvePortForNewEntryNode determines the port for a forward on a newly added
