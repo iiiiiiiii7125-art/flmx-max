@@ -170,9 +170,12 @@ func TestReconcileNodeOnlineStatuses(t *testing.T) {
 	stopOnline := startKR1MockNode(t, srv.URL, "r4-online-secret", nil)
 	defer stopOnline()
 	waitForCondition(t, 10*time.Second, func() bool { return h.wsServer.IsNodeOnline(onlineID) }, "online mock node connected")
-	if got := kr1NodeStatus(t, r, onlineID); got != 1 {
-		t.Fatalf("mock 握手后在线节点 status = %d, want 1", got)
-	}
+	// 会话登记（IsNodeOnline）与 DB status 落盘是两步异步动作，一次性
+	// 读 DB 会与落盘竞速（CI 高负载下偶发读到 0）；改为轮询等落盘。
+	waitForCondition(t, 10*time.Second, func() bool {
+		node, err := r.GetNodeByID(onlineID)
+		return err == nil && node != nil && node.Status == 1
+	}, "online node status persisted as 1")
 
 	offlineSince := make(map[int64]time.Time)
 	t0 := time.Now()
