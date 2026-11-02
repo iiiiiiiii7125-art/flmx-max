@@ -1193,6 +1193,15 @@ is_own_panel_deploy_dir() {
   [[ -f "$1/.env" && -f "$1/docker-compose.yml" ]] && grep -Fq "$(panel_image_prefix)" "$1/docker-compose.yml"
 }
 
+# 明确属于他人：Compose 写有镜像引用且无一在本面板镜像前缀下。
+# 完全无镜像引用时归属无从判定，不在此硬判（安装路径交 F-049 守卫：
+# 默认拒绝、显式强制须先备份 .env）。
+is_foreign_panel_deploy_dir() {
+  [[ -f "$1/.env" && -f "$1/docker-compose.yml" ]] || return 1
+  grep -Eq '^[[:space:]]*image:' "$1/docker-compose.yml" || return 1
+  ! grep -Fq "$(panel_image_prefix)" "$1/docker-compose.yml"
+}
+
 # 判定要管理的后端容器名。显式指定（环境变量或部署 .env 的
 # PANEL_BACKEND_CONTAINER）优先，作为非标准镜像来源存量部署的逃生
 # 口；未指定时：新名容器与旧名容器（须跑本面板镜像才认）同现则报错
@@ -2129,10 +2138,12 @@ get_config_params() {
 install_panel() {
   echo "🚀 开始安装面板..."
 
-  # 共存守卫（C2-01）：当前目录已有部署文件但不属于本面板（Compose
-  # 未引用本面板镜像）时拒绝安装——那可能是同机另一套面板的部署目
-  # 录，在此安装必然覆写他人的 .env 与 Compose，连强制重装也不放行。
-  if [[ -f .env && -f docker-compose.yml ]] && ! is_own_panel_deploy_dir .; then
+  # 共存守卫（C2-01）：当前目录已有部署文件且明确属于他人（Compose
+  # 写有镜像引用、无一在本面板镜像前缀下）时拒绝安装——那是同机另
+  # 一套面板的部署目录，在此安装必然覆写他人的 .env 与 Compose，
+  # 连强制重装也不放行。无镜像引用、归属无从判定时不硬判，交下方
+  # F-049 守卫按「默认拒绝、显式强制先备份」处理。
+  if is_foreign_panel_deploy_dir .; then
     echo "❌ 当前目录已有一套不属于本面板的部署（其 Compose 未引用本面板镜像），拒绝在此安装，以免覆盖他人的部署文件"
     echo "   请换一个空目录运行安装；若这是本面板自己的部署目录，请改用菜单「2. 更新面板」。"
     return 1
@@ -2446,9 +2457,12 @@ migrate_to_postgres() {
   fi
 
   # 共存守卫（C2-01）：迁移要按名停容器、按名挂数据卷，当前目录的
-  # 部署不属于本面板时一律终止（归属判定与 resolve_panel_deployment
-  # 同口径），不碰同机另一套面板的容器与数据。
+  # 部署明确属于他人（Compose 写有镜像引用、无一在本面板前缀下，
+  # 且无任何自家证据）时一律终止，不碰同机另一套面板的容器与
+  # 数据。归属无从判定（Compose 无镜像引用）时不硬判——操作者是
+  # 在本目录内主动执行迁移的，按既有迁移口径继续。
   if [[ -z "${PANEL_BACKEND_CONTAINER:-}" ]] \
+    && is_foreign_panel_deploy_dir "." \
     && ! panel_deploy_dir_is_ours "." "${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"; then
     echo "❌ 当前目录的部署不属于本面板（其 Compose 未引用本面板镜像，后端容器也未运行本面板镜像），迁移终止，未做任何修改"
     echo "   如确为本面板部署（例如改用了自建镜像），请用 PANEL_BACKEND_CONTAINER=<后端容器名> 显式指定后重试。"

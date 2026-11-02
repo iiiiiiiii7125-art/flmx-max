@@ -1085,9 +1085,16 @@ test_resolve_panel_deployment_uses_container_labels() (
     if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
       case "$3" in
         *working_dir*) printf '%s\n' "$expected_dir" ;;
+        *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flvx-flux-panel-backend:latest" ;;
         *) printf '%s\n' "flvx-panel" ;;
       esac
+      return 0
     fi
+    # 只有存量后端容器存在；新名容器不存在（否则会判为两代同现）。
+    if [[ "$1" == "inspect" && "$2" == "flmx-panel-backend" ]]; then
+      return 1
+    fi
+    return 0
   }
 
   resolve_panel_deployment >/dev/null
