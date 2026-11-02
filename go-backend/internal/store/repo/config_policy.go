@@ -245,12 +245,13 @@ func isBackupRuntimeExcludedConfigKey(name string) bool {
 	return ok
 }
 
-// backupFilterExemptConfigKeyPrefixes 是备份过滤的设计豁免前缀族
-// （RB4-01）：这些键按 PolicyForConfig 落默认 sensitive，但其值是
-// 必须随备份往返的运行时语义数据而非凭据。豁免只按本登记逐前缀
-// 匹配（键名先归一），新增豁免必须在此显式登记并注明理由——此前
-// pending_realm_settle 族靠「不在过滤明单内」隐式保留，过滤改用
-// 默认敏感口径后若无此显式豁免会被误杀。
+// backupFilterExemptConfigKeyPrefixes 是备份**导出**过滤的设计
+// 豁免前缀族（RB4-01）：这些键按 PolicyForConfig 落默认 sensitive，
+// 但其值是必须随备份往返的运行时语义数据而非凭据。豁免只按本
+// 登记逐前缀匹配（键名先归一），新增豁免必须在此显式登记并注明
+// 理由——此前 pending_realm_settle 族靠「不在过滤明单内」隐式
+// 保留，导出过滤改用默认敏感口径后若无此显式豁免会被误杀
+// （导入面不叠加默认敏感口径、本就保留，不经此豁免）。
 //   - pending_realm_settle:（X-P3-34）：realm 引擎切换的待结算标记
 //     （handler/realm.go pendingRealmSettleKey 生成），恢复旧备份
 //     时丢失即丢结算；值为标记 JSON，非凭据。
@@ -268,30 +269,55 @@ func isBackupFilterExemptConfigKey(name string) bool {
 	return false
 }
 
-func FilterBackupConfigs(in map[string]string) map[string]string {
+// filterBackupConfigSet 是备份 configs 段过滤的共用骨架：凭据
+// 明单、systemManaged（凭据与 Gist 设置/运行态）与运行时台账三组
+// 恒排除；excludeDefaultSensitive 决定是否再叠加 PolicyForConfig
+// 的默认敏感口径（导出面叠加、导入面不叠加，见两包装函数注释）。
+func filterBackupConfigSet(in map[string]string, excludeDefaultSensitive bool) map[string]string {
 	if len(in) == 0 {
 		return map[string]string{}
 	}
 	out := make(map[string]string, len(in))
 	for name, value := range in {
-		if isBackupFilterExemptConfigKey(name) {
-			out[name] = value
+		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
 			continue
 		}
-		// RB4-01：过滤判据与读路径同源——PolicyForConfig 判
-		// sensitive（含未分类键的默认敏感）一律不进备份明文，不再
-		// 只靠 sensitive 明单。此前仅靠默认落入 sensitive 的键
-		// （1.7.7 移除后存量残留的 github_proxy_*、管理员可写的任意
-		// 未知键）会明文进备份，与读路径的默认敏感口径矛盾。
-		// systemManaged 与运行时台账两组排除保持不变（其中
-		// is_commercial 等键 PolicyForConfig 判 public，仍须靠
-		// systemManaged 排除）。
-		if PolicyForConfig(name) == ConfigAccessSensitive || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
-			continue
+		if excludeDefaultSensitive {
+			if isBackupFilterExemptConfigKey(name) {
+				out[name] = value
+				continue
+			}
+			// RB4-01：导出面判据与读路径同源——PolicyForConfig
+			// 判 sensitive（含未分类键的默认敏感）一律不进备份
+			// 明文。此前仅靠默认落入 sensitive 的键（1.7.7 移除
+			// 后存量残留的 github_proxy_*、管理员可写的任意未知
+			// 键）会明文进备份，与读路径的默认敏感口径矛盾。
+			if PolicyForConfig(name) == ConfigAccessSensitive {
+				continue
+			}
 		}
 		out[name] = value
 	}
 	return out
+}
+
+// FilterBackupConfigs 是备份**导出**面（本地备份导出与 Gist 上传
+// 共用同一过滤）的 configs 段过滤：在共用骨架上叠加
+// PolicyForConfig 的默认敏感口径——未知/legacy 键不进备份明文；
+// 设计豁免前缀族（pending_realm_settle:*）显式保留。
+func FilterBackupConfigs(in map[string]string) map[string]string {
+	return filterBackupConfigSet(in, true)
+}
+
+// filterRestoreConfigs 是备份**导入**面（importConfigs）的 configs
+// 段过滤：只走共用骨架，不叠加默认敏感口径。备份文件已在管理员
+// 手中，导入面的职责是阻止凭据/系统态/运行时台账被备份复活
+// 覆盖，而不是分类未知键——跨版本备份里的未分类键必须原样恢复
+// （R3 K5 钉死：custom_probe_key / ok_key / plain_key 均须落库），
+// 其落库后的读出仍由读路径 PolicyForConfig 收口，不因恢复而扩大
+// 暴露。若与导出面共用默认敏感口径，旧备份迁移会静默丢设置。
+func filterRestoreConfigs(in map[string]string) map[string]string {
+	return filterBackupConfigSet(in, false)
 }
 
 func normalizeConfigKey(name string) string {

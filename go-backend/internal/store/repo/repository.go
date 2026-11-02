@@ -5541,7 +5541,9 @@ func normalizeImportedMonitoringConfigValue(name, value string) (string, error) 
 }
 
 func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *importReport) (int, error) {
-	configs = FilterBackupConfigs(configs)
+	// RB4-01：导入面走 filterRestoreConfigs（只排凭据/系统态/台账，
+	// 不叠加导出面的默认敏感口径），未知键按 R3 K5 口径原样恢复。
+	configs = filterRestoreConfigs(configs)
 	// R3 B14-001：落库前对每个键执行 NormalizeConfigKey 归一并按归一
 	// 键合并——导入面此前以原始键名直接落库，Round 2 B14-001 的影子
 	// 行缺陷（UI 两写面已修）在导入面复发：变体键落库成读不到的影子

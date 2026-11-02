@@ -1073,8 +1073,8 @@ var gistRestoreTypes = []string{
 // gistVersionContent：版本校验→取版本文件→truncated 经 raw_url 再取
 // →gistOpen 解密，双认 flyx/flmx 信封）→JSON 解码为 BackupData 且
 // Version 非空才继续→Import（16 段全集，其 1.0 版本门与 configs 段
-// FilterBackupConfigs 过滤仍在：Gist 设置与凭据既不出备份、即使夹带
-// 也被滤掉，恢复不覆盖当前 Gist 设置）→与现有 backupImport 完全相同
+// 导入过滤仍在：Gist 设置与凭据既不出备份、即使夹带也被导入面
+// filterRestoreConfigs 滤掉，恢复不覆盖当前 Gist 设置）→与现有 backupImport 完全相同
 // 的导入尾钩子全集 runBackupImportTailHooks（计量对账、configs 缓存
 // 失效、内核 reconcile、撤销清理、转发重推含 FINAL-P2-1 七段谓词）。
 // SEC-01：恢复前不再做全量自动备份导出、回执不再含 autoBackup 快照
