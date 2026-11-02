@@ -33,6 +33,33 @@ func versionBelowPadded(version string, major, minor, patch int) bool {
 	return nums[2] < patch
 }
 
+// versionBelowPaddedStrict 是 versionBelowPadded 的硬门严格变体
+// （R2-016/B-sub-03，BC）：缺段仍按 0 补齐（"25.6" = 25.6.0，prefer
+// 门既有严格口径不变），但任一已出现段不可解析（如 "25.5.16-rc1"
+// 的第三段）即视为低于下限、不再 fail-open；空串与 "latest" 的豁免
+// 见 versionFloorExempt。四段及以上仍按前三段比较。
+func versionBelowPaddedStrict(version string, major, minor, patch int) bool {
+	if versionFloorExempt(version) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
+	nums := [3]int{}
+	for i := 0; i < len(parts) && i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return true
+		}
+		nums[i] = n
+	}
+	if nums[0] != major {
+		return nums[0] < major
+	}
+	if nums[1] != minor {
+		return nums[1] < minor
+	}
+	return nums[2] < patch
+}
+
 // validateOutboundIPVersion 是出站 IP 策略的版本门（S4 移植）：sing-box
 // 任何非 auto 策略需要 1.12+；Xray 的 prefer 回退需要 25.6.8+（Happy
 // Eyeballs 引入版本），严格模式无版本下限。除在保存/分流保存处显式调用
@@ -42,10 +69,10 @@ func validateOutboundIPVersion(kernelType, version, strategy string) error {
 	if err != nil {
 		return err
 	}
-	if policy != kernel.OutboundIPAuto && kernelType == kernel.TypeSingbox && versionBelow(version, 1, 12) {
+	if policy != kernel.OutboundIPAuto && kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 12) {
 		return fmt.Errorf("限制出站 IP 需要 sing-box 1.12 及以上，节点安装的是 %s", version)
 	}
-	if (policy == kernel.OutboundPreferIPv4 || policy == kernel.OutboundPreferIPv6) && kernelType == kernel.TypeXray && versionBelowPadded(version, 25, 6, 8) {
+	if (policy == kernel.OutboundPreferIPv4 || policy == kernel.OutboundPreferIPv6) && kernelType == kernel.TypeXray && versionBelowPaddedStrict(version, 25, 6, 8) {
 		return fmt.Errorf("优先 IP 自动回退需要 Xray 25.6.8 及以上，节点安装的是 %s", version)
 	}
 	return nil

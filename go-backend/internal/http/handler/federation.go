@@ -1421,12 +1421,17 @@ func federationConsumerVersionWarning(consumerVersion string) string {
 	}
 	// R4-N1：对端自述版本可能带后缀（如 fullVersion 形态），按首段
 	// 语义版本判定；提取失败维持「不可解析不臆断」口径、不警告。
+	// R2-033（B-sub-05）：两处失败原先静默吞掉——本函数是
+	// compareVersions 家族唯一吞错消费点，运维侧连「为什么没警告」
+	// 都无从查起。现各落一条警告日志，判定与返回值不变（仍不警告）。
 	rep, ok := extractLeadingSemver(v)
 	if !ok {
+		log.Printf("federation: consumer version %q has no leading semantic version, version warning skipped", v)
 		return ""
 	}
 	cmp, err := compareVersions(rep, federationRelayAuthPanelVersion)
 	if err != nil {
+		log.Printf("federation: consumer version compare failed for %q: %v, version warning skipped", v, err)
 		return ""
 	}
 	if cmp < 0 {

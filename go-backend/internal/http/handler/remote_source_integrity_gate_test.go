@@ -166,14 +166,17 @@ func TestSyncIntegrityGateDuplicateSourceRecyclesRemovedNode(t *testing.T) {
 }
 
 // 超量截断与重复提示不同：截断意味着确有条目未被处理，仍计入门、
-// 推迟删除，计数进 KeptStale。
+// 推迟删除，计数进 KeptStale。夹具须为真溢出：R2-017 后截断在批内
+// 去重之后判定，地址/名称任一键重复都不算唯一——本夹具 501 条的
+// 名称与地址两键全互异（旧夹具地址每 250 条重复一次、按去重键只
+// 有 251 个唯一，不再构成溢出，已随 R2-017 改夹具）。
 func TestSyncIntegrityGateTruncationStillDefersDeletion(t *testing.T) {
 	r, h, src, old := integrityGateSetup(t)
 
 	var b strings.Builder
 	b.WriteString(integrityLinkA + "\n")
 	for i := 0; i < maxImportNodes; i++ {
-		fmt.Fprintf(&b, "vless://11111111-2222-3333-4444-555555555555@198.51.100.%d:443?security=none#bulk-%d\n", i%250+1, i)
+		fmt.Fprintf(&b, "vless://11111111-2222-3333-4444-555555555555@198.51.%d.%d:443?security=none#bulk-%d\n", i/250+1, i%250+1, i)
 	}
 	res, err := h.syncRemoteSource(context.Background(), src, b.String())
 	if err != nil {
