@@ -60,7 +60,8 @@ func seedExternalRow(t *testing.T, r *repo.Repository, link string, sourceID int
 }
 
 // R4 批7 · R4X-007 主点：syncRemoteSource 删除守卫 ListInboundRelays
-// 查询失败必须 fail-closed（记 res.Errors + Kept + 不删），与紧邻
+// 查询失败必须 fail-closed（记 res.Errors + 保留计数 + 不删；该计数
+// 自修复轮 2 R2-018 起单独计 KeptUnknown，不再混入 Kept），与紧邻
 // chainReferrers 已修分支同形。故障注入：改名 forward 表——
 // ListInboundRelays（JOIN forward）必失败，而 ListNodeInbounds /
 // chainReferrers / DeleteNodeInbound 均不触 forward 表，恰好隔离
@@ -125,8 +126,10 @@ func TestR4B7SyncKeepsRelayedNodeWhenRelayQueryFails(t *testing.T) {
 	if relayCount != 1 || assignCount != 1 {
 		t.Fatalf("relay/assignment rows must survive, got relay=%d assign=%d", relayCount, assignCount)
 	}
-	if res.Kept < 1 {
-		t.Fatalf("res.Kept = %d, want >= 1", res.Kept)
+	// R2-018：守卫查询失败单独计 KeptUnknown（摘要不得再称「有中
+	// 转」），本断言随之改口径；保留事实本身（不删、记错）不变。
+	if res.KeptUnknown < 1 || res.Kept != 0 {
+		t.Fatalf("res.KeptUnknown = %d, res.Kept = %d, want keptUnknown >= 1 and kept == 0", res.KeptUnknown, res.Kept)
 	}
 	joined := strings.Join(res.Errors, " | ")
 	if !strings.Contains(joined, "node-victim") {

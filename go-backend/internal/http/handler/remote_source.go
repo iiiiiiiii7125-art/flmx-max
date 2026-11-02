@@ -66,6 +66,11 @@ type remoteSyncResult struct {
 	// chain references); they are left alone so the relays keep their
 	// target.
 	Kept int `json:"kept"`
+	// KeptUnknown are unmatched nodes kept because the relay guard
+	// query itself failed: whether they still have relays is unknown
+	// (fail-closed keep). Counted apart from Kept so the summary does
+	// not claim "has relays" for them (R2-018/B-sub-07).
+	KeptUnknown int `json:"keptUnknown"`
 	// KeptStale are unmatched nodes kept only because this round was
 	// incomplete (the integrity gate deferred their deletion to the
 	// next clean round). Counted apart from Kept so the summary can
@@ -78,6 +83,9 @@ func (r remoteSyncResult) summary() string {
 	parts := []string{fmt.Sprintf("新增 %d", r.Added), fmt.Sprintf("更新 %d", r.Updated), fmt.Sprintf("移除 %d", r.Removed)}
 	if r.Kept > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个已不在订阅里但有中转，已保留", r.Kept))
+	}
+	if r.KeptUnknown > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个已不在订阅里的节点因中转查询失败无法确认，已保留待下轮确认", r.KeptUnknown))
 	}
 	if r.KeptStale > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个未匹配节点因本轮同步不完整，已保留待下轮确认", r.KeptStale))
@@ -138,6 +146,28 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		// An empty answer is more likely a provider hiccup than a plan
 		// without servers: keep the current nodes.
 		return fail(fmt.Errorf("%s", msg))
+	}
+	// R2-017（B-sub-06）：截断判定改在批内去重之后。旧口径按解析后
+	// 原始条数判，溢出部分纯为重复条目时（501 条/500 唯一）每轮恒触
+	// 发截断门、下线节点永不回收。去重键与主循环的 F-025 判定同口径
+	// （名称取与 fresh 同款的截断后小写、地址取 externalKey），被跳
+	// 过的重复条目在此即发同一条展示提示；主循环的 seen 判定保留作
+	// 第二道防线（口径一致、正常轮次不再触发）。
+	{
+		seenPre := map[string]bool{}
+		unique := make([]kernel.ImportedNode, 0, len(nodes))
+		for _, node := range nodes {
+			nameKey := "name:" + strings.ToLower(truncateRunes(node.Name, 100))
+			addrKey := "addr:" + externalKey(node.Host, node.Port)
+			if seenPre[nameKey] || seenPre[addrKey] {
+				noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
+				continue
+			}
+			seenPre[nameKey] = true
+			seenPre[addrKey] = true
+			unique = append(unique, node)
+		}
+		nodes = unique
 	}
 	if len(nodes) > maxImportNodes {
 		nodes = nodes[:maxImportNodes]
@@ -295,8 +325,11 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		// 删除决策漏改的紧邻一行）。
 		relays, relErr := h.repo.ListInboundRelays(row.ID)
 		if relErr != nil {
+			// R2-018（B-sub-07）：此分支里中转存在性恰是未知（查询
+			// 失败），单独计 KeptUnknown，摘要不得与「有中转，已保留」
+			// 混同。
 			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", row.Name, relErr))
-			res.Kept++
+			res.KeptUnknown++
 			continue
 		}
 		if len(relays) > 0 {
