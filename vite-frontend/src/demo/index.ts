@@ -151,7 +151,22 @@ function diagnoseAnswer(
         : "",
   );
   const [targetIp, targetPort] = target.split(":");
-  const result = {
+  // UDP-family chain segments (kcp/udp/quic) cannot be measured by the
+  // panel's UDP probe: since R6-L4-01 the real payload marks such rows
+  // unverified (success=false, averageTime/packetLoss null) instead of
+  // fabricating numbers. Mirror that shape (the panel's
+  // markDiagnosisItemUnverified) when the diagnosed tunnel rides one,
+  // so the demo shows the neutral unverified presentation.
+  const chainProtocols = [
+    ...((tunnelOf?.inNodeId as Array<{ protocol?: string }> | undefined) ??
+      []),
+    ...((tunnelOf?.outNodeId as Array<{ protocol?: string }> | undefined) ??
+      []),
+  ].map((e) => String(e.protocol ?? "").toLowerCase());
+  const udpProtocol = forward
+    ? undefined
+    : chainProtocols.find((p) => p === "kcp" || p === "udp" || p === "quic");
+  const baseResult = {
     success: true,
     description: forward ? "转发目标连通性" : "隧道连通性",
     nodeName: String(nodeName),
@@ -166,6 +181,17 @@ function diagnoseAnswer(
     fromChainType: 1,
     fromInx: 0,
   };
+  const result = udpProtocol
+    ? {
+        ...baseResult,
+        success: false,
+        unverified: true,
+        averageTime: null,
+        packetLoss: null,
+        message: "UDP 无法实测连通性（无通用回声协议），本项未验证",
+        protocol: udpProtocol,
+      }
+    : baseResult;
   const data = forward
     ? { forwardName: name, timestamp: Date.now(), results: [result] }
     : {
