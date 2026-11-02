@@ -4417,6 +4417,52 @@ test_panel_instance_identity_naming() (
   [[ ! -e "$bad/.env" && ! -e "$bad/docker-compose.yml" ]] || fail "AI-03: invalid instance id must not create deployment files"
 )
 
+# FLMX_INSTANCE 跨侧契约：脚本侧校验（panel_instance_id_is_valid）
+# 与后端消费侧白名单（panelInstanceID：同字符集、全长 ≤32）必须逐
+# 值一致——任一侧放宽而另一侧不跟，脚本派生名与后端派生名即分家。
+# 金值表与后端 TestPanelInstanceID 的用例表同源；空白修剪是后端单
+# 侧宽容（脚本侧安装入口对空白直接拒绝——'ea st' 已在非法集内），
+# 不入本表比对。后缀形态与后端派生同形（空实例无后缀、非空 -<id>）；
+# 随仓 compose 模板必须把 FLMX_INSTANCE 透传进后端容器环境，否则
+# 后端进程读不到实例键、节点侧派生永不生效。
+test_panel_instance_contract_matches_backend_whitelist() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local v
+  for v in east panel-2 a_b 0 z; do
+    panel_instance_id_is_valid "$v" || fail "instance contract: '$v' must be valid"
+  done
+  local a32 a33
+  a32=$(printf 'a%.0s' $(seq 1 32))
+  a33=$(printf 'a%.0s' $(seq 1 33))
+  [[ ${#a32} -eq 32 && ${#a33} -eq 33 ]] || fail "instance contract: gold length construction broken"
+  panel_instance_id_is_valid "$a32" || fail "instance contract: a 32-char id must be valid"
+  if panel_instance_id_is_valid "$a33"; then
+    fail "instance contract: a 33-char id must be invalid (backend consumer caps at 32)"
+  fi
+  for v in East -east _east 'ea st' ea/st ea.st ../x 'Bad!'; do
+    if panel_instance_id_is_valid "$v"; then
+      fail "instance contract: '$v' must be invalid"
+    fi
+  done
+  if panel_instance_id_is_valid ""; then
+    fail "instance contract: an empty id must be invalid as a value (empty means default instance)"
+  fi
+
+  local empty_dir
+  empty_dir=$(mktemp -d)
+  assert_equals "" "$(FLMX_INSTANCE="" PANEL_DEPLOY_DIR="$empty_dir" panel_instance_suffix)" \
+    "instance contract: the default instance must have no suffix"
+  assert_equals "-east" "$(FLMX_INSTANCE=east panel_instance_suffix)" \
+    "instance contract: the suffix form must be -<id>"
+
+  grep -q 'FLMX_INSTANCE: ${FLMX_INSTANCE:-}' "$ROOT_DIR/docker-compose-v4.yml" || \
+    fail "instance contract: the v4 compose template must pass FLMX_INSTANCE to the backend"
+  grep -q 'FLMX_INSTANCE: ${FLMX_INSTANCE:-}' "$ROOT_DIR/docker-compose-v6.yml" || \
+    fail "instance contract: the v6 compose template must pass FLMX_INSTANCE to the backend"
+)
+
 # L2-12（R5-FD）：update_panel 必须走 VERSION > FLUX_VERSION >
 # PINNED_VERSION > latest 优先级链——旧实现只认 VERSION，FLUX_VERSION
 # /PINNED 定版被静默吞掉直升 latest（桩 latest=9.9.9 不得被选中），
@@ -4679,6 +4725,7 @@ test_panel_migrate_guard_precedes_download
 test_panel_install_guards_single_file_and_backups
 test_panel_uninstall_without_docker_respects_ownership
 test_panel_instance_identity_naming
+test_panel_instance_contract_matches_backend_whitelist
 test_panel_update_honors_version_priority_chain
 test_panel_uninstall_locates_deployment_and_cleans_artifacts
 test_panel_download_verified_uses_timeouts
