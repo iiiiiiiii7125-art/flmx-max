@@ -942,6 +942,10 @@ WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/flux_agent
 Environment=GODEBUG=disablethp=1
 Restart=on-failure
+# Core dumps of the agent or its helpers must never pile up in the
+# data directory (the binary also zeroes RLIMIT_CORE itself at
+# startup and sweeps stockpiled core files, see go-gost/coredump.go).
+LimitCORE=0
 # R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
 # discarded the agent's startup logs, so a poisoned gost.json left no
 # diagnosable failure reason. Journal keeps them queryable via

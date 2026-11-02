@@ -171,6 +171,61 @@ func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir st
 	return path, nil
 }
 
+// reqNeedsNftGuard reports whether an enabled request's security
+// posture depends on the nft ruleset being installed: a Snell server
+// (private-egress guard) or any port carrying a source whitelist.
+// Such a kernel must never run while its rules are missing — the
+// panel would show the protection on while nothing enforces it.
+func reqNeedsNftGuard(req ApplyRequest) bool {
+	return reqHasSnellServer(req) || reqHasWhitelist(req)
+}
+
+// nftGuardFailure builds the fail-closed error surfaced when the nft
+// rules a kernel depends on could not be installed and the kernel was
+// therefore kept (or put) down.
+func nftGuardFailure(req ApplyRequest, err error) error {
+	switch {
+	case reqHasSnellServer(req):
+		return fmt.Errorf("Snell 私网拦截规则下发失败，已停止 Snell（不允许无拦截运行）: %v", err)
+	case reqHasWhitelist(req):
+		return fmt.Errorf("入站白名单规则同步失败，已停止受保护内核（不允许无白名单运行）: %v", err)
+	default:
+		return fmt.Errorf("流量计数规则同步失败，内核未启动: %v", err)
+	}
+}
+
+// stopGuardedInstances stops every enabled instance whose security
+// posture depends on the nft ruleset after a failed sync: the failed
+// table generation carries their rules too, so any of them still
+// running is unguarded. It reports whether cur itself is such an
+// instance; cur's processes are stopped as well, but its error is the
+// caller's to set.
+func (m *Manager) stopGuardedInstances(cur *instance, syncErr error) bool {
+	type ent struct {
+		inst *instance
+		req  ApplyRequest
+	}
+	m.mu.Lock()
+	ents := make([]ent, 0, len(m.instances))
+	for _, in := range m.instances {
+		ents = append(ents, ent{in, in.req})
+	}
+	m.mu.Unlock()
+	curGuarded := false
+	for _, e := range ents {
+		if !reqNeedsNftGuard(e.req) {
+			continue
+		}
+		m.stopProcesses(e.inst)
+		if e.inst == cur {
+			curGuarded = true
+			continue
+		}
+		m.setErr(e.inst, nftGuardFailure(e.req, syncErr))
+	}
+	return curGuarded
+}
+
 // Apply installs (if needed), writes the configuration and makes the
 // processes match req.Enabled. Unchanged running kernels are left alone.
 func (m *Manager) Apply(req ApplyRequest) (State, error) {
@@ -326,21 +381,47 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	// The nft sync runs BEFORE any process starts: the ruleset carries
+	// the traffic counters, the inbound whitelists and the Snell egress
+	// guard. Counting alone is best-effort, but a kernel guarded by the
+	// ruleset (reqNeedsNftGuard) must never listen while its rules are
+	// not installed, so a failed sync blocks its start outright.
+	m.mu.Lock()
+	guardUID := m.snellUID
+	m.mu.Unlock()
+	guard := m.snellGuardFor(guardUID)
+	syncErr := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)
+	if syncErr != nil {
+		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
+	}
+	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
+
 	stable := true
 	switch {
 	case !req.Enabled:
 		m.stopProcesses(inst)
 	case changed || !running:
 		m.stopProcesses(inst)
-		m.startProcesses(inst)
-		// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
-		// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
-		stable = m.waitStable(req.Type)
+		if !startBlocked {
+			m.startProcesses(inst)
+			// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
+			// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
+			stable = m.waitStable(req.Type)
+		} else {
+			stable = false
+		}
 	}
 
 	var failure error
 	confirmed := true
-	if req.Enabled && (!stable || !m.state(req.Type, false).Running) {
+	if startBlocked {
+		// No rollback either: the previous configuration is guarded by
+		// the same missing ruleset, so serving it would be just as
+		// unprotected. The apply is torn down and never confirmed.
+		failure = nftGuardFailure(req, syncErr)
+		m.setErr(inst, failure)
+		confirmed = false
+	} else if req.Enabled && (!stable || !m.state(req.Type, false).Running) {
 		failed := lastLines(inst.logs, 5)
 		failure = fmt.Errorf("内核启动失败: %s", failed)
 		confirmed = false
@@ -365,22 +446,17 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
-	// The nft sync runs before persist: for a Snell apply its failure
-	// is fatal (the just-started snell-server processes would run
-	// unguarded), so the apply is torn down and never confirmed.
-	m.mu.Lock()
-	guardUID := m.snellUID
-	m.mu.Unlock()
-	guard := m.snellGuardFor(guardUID)
-	syncErr := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)
-	if syncErr != nil {
-		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
-		if needGuard {
-			m.stopProcesses(inst)
-			failure = fmt.Errorf("Snell 私网拦截规则下发失败，已停止 Snell（不允许无拦截运行）: %v", syncErr)
+	// The failed table generation carries every other instance's
+	// rules too: any guarded kernel still running — this one left
+	// unchanged, or a previous guarded instance — is unguarded now
+	// and must stop. When this apply's own kernel is stopped by the
+	// sweep, the apply must not confirm either.
+	if syncErr != nil && m.stopGuardedInstances(inst, syncErr) && !startBlocked {
+		if failure == nil {
+			failure = nftGuardFailure(req, syncErr)
 			m.setErr(inst, failure)
-			confirmed = false
 		}
+		confirmed = false
 	}
 
 	if confirmed {
@@ -614,19 +690,19 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		inst.req.Enabled = true
 		guard := m.snellGuardForLocked(m.snellUID)
 		m.mu.Unlock()
-		if hasSnell {
-			// R8-021: same ordering as Apply — the guard goes back in
-			// BEFORE the processes come up (stop has stripped it from
-			// the table, and after a node reboot the table is gone
-			// entirely). The sync after the switch still runs and is
-			// a no-op when nothing changed.
-			if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
-				ferr := fmt.Errorf("Snell 私网拦截规则下发失败，未启动 Snell（不允许无拦截运行）: %v", err)
-				m.setErr(inst, ferr)
-				return m.state(kernelType, false), ferr
-			}
-		}
 		m.stopProcesses(inst)
+		// Sync before start, as in Apply (B-02, R8-021): a guarded
+		// kernel (Snell egress guard or an inbound whitelist) must
+		// never listen before its rules are installed — a preceding
+		// stop stripped them from the table, and after a node reboot
+		// the table is gone entirely — so the guard goes back in
+		// after stopping and before starting, and a failed sync
+		// leaves the kernel stopped instead of running unguarded.
+		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+			ferr := nftGuardFailure(inst.req, err)
+			m.setErr(inst, ferr)
+			return m.state(kernelType, false), ferr
+		}
 		m.startProcesses(inst)
 		m.waitStable(kernelType)
 		if m.state(kernelType, false).Running {
@@ -637,20 +713,16 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 	default:
 		return State{}, fmt.Errorf("未知操作: %s", action)
 	}
-	// Keep the guard rules in lockstep with the lifecycle: stopping or
-	// removing Snell must leave no rules behind, starting must restore
-	// them. A sync failure here is surfaced, not swallowed.
-	m.mu.Lock()
-	guard := m.snellGuardForLocked(m.snellUID)
-	m.mu.Unlock()
-	if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
-		if action == "start" || action == "restart" {
-			m.stopProcesses(inst)
-			ferr := fmt.Errorf("Snell 私网拦截规则下发失败，已停止 Snell（不允许无拦截运行）: %v", err)
-			m.setErr(inst, ferr)
-			return m.state(kernelType, false), ferr
+	if action == "stop" {
+		// Keep the rules in lockstep with the lifecycle: stopping a
+		// kernel must leave none of its rules behind. A sync failure
+		// here is surfaced, not swallowed.
+		m.mu.Lock()
+		guard := m.snellGuardForLocked(m.snellUID)
+		m.mu.Unlock()
+		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+			return m.state(kernelType, false), err
 		}
-		return m.state(kernelType, false), err
 	}
 	m.persist()
 	return m.state(kernelType, false), nil
