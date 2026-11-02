@@ -38,6 +38,12 @@ type Endpoint struct {
 	// the companion, and CompanionOf keeps the origin inbound's id (the
 	// id assignments and filters are written against).
 	CompanionOf int64
+	// PostQuantumReality marks a VLESS+Reality endpoint whose hosting
+	// Xray kernel supports the X25519MLKEM768 Reality key exchange
+	// (25.5.16+). It is computed at endpoint assembly time from the
+	// hosting kernel's installed version; only the Mihomo renderer
+	// consumes it (support-x25519mlkem768 in reality-opts).
+	PostQuantumReality bool
 }
 
 // hopRange is the port-hopping range clients may use for this endpoint.
@@ -326,6 +332,9 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 			ro := yamlNode{{"public-key", sec.RealityPublicKey}}
 			if len(sec.RealityShortIDs) > 0 {
 				ro = append(ro, yamlField{"short-id", sec.RealityShortIDs[0]})
+			}
+			if in.Protocol == ProtocolVLESS && e.PostQuantumReality {
+				ro = append(ro, yamlField{"support-x25519mlkem768", true})
 			}
 			p = append(p, yamlField{"reality-opts", ro})
 		}
