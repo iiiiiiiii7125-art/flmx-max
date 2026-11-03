@@ -2187,23 +2187,6 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	return forwardID, err
 }
 
-func (r *Repository) BatchUpdateForwardStatus(ids []int64, status int) (int, int) {
-	if r == nil || r.db == nil {
-		return 0, len(ids)
-	}
-	s := 0
-	f := 0
-	now := time.Now().UnixMilli()
-	for _, id := range ids {
-		if err := r.db.Model(&model.Forward{}).Where("id = ?", id).Updates(map[string]interface{}{"status": status, "updated_time": now}).Error; err != nil {
-			f++
-		} else {
-			s++
-		}
-	}
-	return s, f
-}
-
 // InsertTunnelTx 是 tunnelCreate 提交段的落库函数（R2X-049 补批13）：
 // 在提交事务内先复检同名、再建行并回填 ID。tunnelCreate 的第一道
 // 检查在任何锁/事务之外，其后隔着验证段与可达秒级的联邦 HTTP 才到

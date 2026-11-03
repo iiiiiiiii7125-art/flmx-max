@@ -392,6 +392,114 @@ func TestRestoreBackupPreservesOriginalFileMode(t *testing.T) {
 	}
 }
 
+// I-C3-03(b) 钉格（fix10 S5）：.env 族写点（updateEnvVersion 的
+// .env 改写、backupFile 的 .upgrade.bak、restoreBackup 的恢复写）的
+// mode 口径是「继承但封顶 0600」：(继承值 &^ 077) | 0600。此前只继
+// 承不收紧——运维手工建的 0644 .env（含 JWT_SECRET/数据库口令）经
+// 自升级改写后原样保持 0644、长期全局可读，无任何一面纠正。
+func TestUpdateEnvVersionCapsLooseModeAt0600(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("FLUX_VERSION=2.1.8\nJWT_SECRET=test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chmod(envPath, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	if err := exec.updateEnvVersion(envPath, "2.1.9"); err != nil {
+		t.Fatalf("updateEnvVersion() error = %v", err)
+	}
+
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("env mode after rewrite = %o, want 0600 (inherit-but-cap)", got)
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "FLUX_VERSION=2.1.9\nJWT_SECRET=test\n"; string(data) != want {
+		t.Fatalf("env content = %q, want %q (content bytes must be unchanged by the mode cap)", string(data), want)
+	}
+}
+
+func TestUpgradeBackupCapsLooseModeAt0600(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("FLUX_VERSION=2.1.8\nJWT_SECRET=test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	backupPath, err := exec.backupFile(path)
+	if err != nil {
+		t.Fatalf("backupFile() error = %v", err)
+	}
+
+	info, err := os.Stat(backupPath)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf(".upgrade.bak mode = %o, want 0600 (inherit-but-cap)", got)
+	}
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "FLUX_VERSION=2.1.8\nJWT_SECRET=test\n"; string(data) != want {
+		t.Fatalf("backup content = %q, want %q", string(data), want)
+	}
+}
+
+func TestRestoreBackupCapsLooseModeAt0600(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("FLUX_VERSION=2.1.8\nJWT_SECRET=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	backupPath, err := exec.backupFile(path)
+	if err != nil {
+		t.Fatalf("backupFile() error = %v", err)
+	}
+	// 模拟一份权限宽松的存量备份（旧口径下 0644 的 .env 备出的
+	// .upgrade.bak 即此形态）：恢复不得把宽松权限带回目标文件。
+	if err := os.Chmod(backupPath, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if err := exec.restoreBackup(path); err != nil {
+		t.Fatalf("restoreBackup() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("restored mode = %o, want 0600 (inherit-but-cap)", got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "FLUX_VERSION=2.1.8\nJWT_SECRET=test\n"; string(data) != want {
+		t.Fatalf("restored content = %q, want %q", string(data), want)
+	}
+}
+
 // I-C3-02 钉格：自升级的部署文件写点（.env 版本行改写、.upgrade.bak
 // 备份与恢复）全部走原子写（同目录临时文件 + Rename）。可观察契约：
 // 写完内容与权限精确、部署目录不留 .tmp-* 临时残形；原非原子直写
