@@ -1058,6 +1058,21 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
 		return
 	}
+	// C1-03（1.9.5 发版后审计）：用户名维度全局桶——与 login 共用
+	// globalLoginUsernameLimiter（同一批账号口令的尝试必须跨面
+	// 聚合：此前两桶键都含 IP，轮换源 IP 即可对单账号线性放大
+	// 猜测预算）。计数口径与 login 一致（每次尝试都计、无论用户
+	// 是否存在、成功后由 noteLoginUsernameSuccess 清桶）。login
+	// 面该桶只作信号（升级验证码强度），本面无验证码可升级，
+	// 故触发即硬拒 429：单账号全局预算封顶为既有口径的 30 次/
+	// 10 分钟——合法订阅客户端的拉取远低于此；代价是持续喷洒
+	// 期间该账号在本面（存量兼容面）被一并挡下至窗口滚动，
+	// login 面不受影响（其用户名桶仍只作信号、永不硬拒）。
+	if globalLoginUsernameLimiter.recordAttempt(username, now) {
+		w.Header().Set("Retry-After", "60")
+		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
+		return
+	}
 
 	authOK := false
 	defer func() {
@@ -1117,6 +1132,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	authOK = true
+	// C1-03：与 login 同口径——鉴权成功清除该用户名的限流状态，
+	// 正常用户的历史失败计数不累积误伤后续拉取。
+	h.noteLoginUsernameSuccess(username)
 
 	// R10X-005（T1）：total 必须经 flowLimitBytes(Flow, FlowMiB) 按字节
 	// 精确下发，与执法面同值——旧读法 Flow×1GiB 忽略 FlowMiB，非整 GiB
