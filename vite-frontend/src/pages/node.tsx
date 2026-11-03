@@ -1011,6 +1011,12 @@ export default function NodePage({
             icon: "🕒",
             duration: 5000,
           });
+        } else if (res.data?.uninstall === "done") {
+          // 在线已确认卸载：与批量三态汇总同口径点名「正在卸载」。
+          toast("该节点的 agent 正在卸载", {
+            icon: "🗑️",
+            duration: 5000,
+          });
         }
         const returned = res.data?.brokenReferrers ?? [];
 
@@ -1019,6 +1025,15 @@ export default function NodePage({
             `删除打断了 ${returned.length} 个跨节点引用：${returned.join("、")}`,
             { icon: "⚠️", duration: 5000 },
           );
+        }
+        // 唯一入口/出口点名：后端已逐条回传，原样呈现不吞。
+        const soleRoleWarnings = res.data?.soleRoleWarnings ?? [];
+
+        if (soleRoleWarnings.length > 0) {
+          toast(soleRoleWarnings.join("；"), {
+            icon: "⚠️",
+            duration: 6000,
+          });
         }
         setNodeList((prev) => prev.filter((n) => n.id !== nodeToDelete.id));
         setDeleteModalOpen(false);
@@ -1711,6 +1726,15 @@ export default function NodePage({
               `删除打断了 ${returnedBroken.length} 个跨节点引用：${returnedBroken.join("、")}`,
               { icon: "⚠️", duration: 5000 },
             );
+          }
+          // 唯一入口/出口点名：后端已逐条回传，原样呈现不吞。
+          const returnedSoleRole = result?.soleRoleWarnings ?? [];
+
+          if (returnedSoleRole.length > 0) {
+            toast(returnedSoleRole.join("；"), {
+              icon: "⚠️",
+              duration: 6000,
+            });
           }
         } else {
           // 后端未给逐条回执时不按选中数虚报全成功：以服务器列表为准刷新，
