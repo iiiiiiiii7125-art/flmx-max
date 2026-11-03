@@ -1970,6 +1970,11 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// R2-040（B-node-05）：去重——同一 ID 第二次迭代时节点已删，
 	// 会被记成「节点不存在」假失败，与同批成功计数自相矛盾。
 	ids = uniqueInt64s(ids)
+	// R10-08：本面自有解析不走 idsFromBody，去重后同口径计数帽
+	// （见 maxBatchIDs）。
+	if !checkBatchIDsCap(w, len(ids)) {
+		return
+	}
 	uninstall := asBool(batchReq["uninstall"], false)
 	// A2-05（=A9-04 后端半）：逐条收集成败并以 batchOperationResult
 	// 回执（与 forward/tunnel/inbound 批量接口同口径）。旧实现吞掉全部
@@ -4119,6 +4124,12 @@ func (h *Handler) userTunnelBatchAssign(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R10-08：本面逐条 upsert＋逐条同步（与 idsFromBody 族同为逐条
+	// 工作面），条目数同口径计数帽（见 maxBatchIDs；本面不去重，
+	// 按提交条数计）。
+	if !checkBatchIDsCap(w, len(req.Tunnels)) {
+		return
+	}
 	// X-P3-22：整批单事务（对齐 SetUserSubscriptions 模式）——任一条目
 	// DB 失败整批回滚，不再逐条顺序提交留下半批生效。数据面同步在提交后
 	// 逐条执行；同步失败时整批按 upsertUserTunnel 的补偿语义回滚 DB 变更
@@ -4412,6 +4423,12 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// R10-09（I-F2-02）：段数帽同为格式层判定，管理员面同样在此
+	// 拒绝（豁免的只是下方 netguard 段校验）。
+	if err := validateRemoteAddrSegmentCount(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	if roleID != 0 && !h.allowLocalRemoteAddr() {
 		if err := IsSafeRemoteAddr(remoteAddr); err != nil {
 			response.WriteJSON(w, response.Err(403, err.Error()))
@@ -4628,6 +4645,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// 是回填后的合并值：提交纯分隔符直接命中；存量若已是零目标
 	// （修复前落库的坏行），任何编辑也须先补正目标。
 	if err := validateRemoteAddrHasTargets(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	// R10-09（I-F2-02）：段数帽与创建面同口径、同为格式层判定，
+	// 对回填后的合并值判定（存量超帽行任何编辑须先削减目标，
+	// 与上方零目标口径一致）。
+	if err := validateRemoteAddrSegmentCount(remoteAddr); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -5702,6 +5726,12 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	// 同口径）——重复 id 第二条必然命中下方「规则已在目标隧道中」
 	// 记一条与实际副作用相反的假失败；invalid 条目仍逐条计失败。
 	req.ForwardIDs = dedupeValidBatchIDs(req.ForwardIDs)
+	// R10-08：本面自有字段不走 idsFromBody 系，去重后同口径计数
+	// 帽（见 maxBatchIDs；invalid 条目逐条计失败、同属工作量，
+	// 与 idsFromBodyWithInvalid 的合计口径一致）。
+	if !checkBatchIDsCap(w, len(req.ForwardIDs)) {
+		return
+	}
 	actorUserID, actorRole, err := userRoleFromRequest(r)
 	if err != nil {
 		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
@@ -9833,6 +9863,29 @@ func asInt64FromBodyKey(r *http.Request, w http.ResponseWriter, key string) int6
 	return id
 }
 
+// maxBatchIDs 是批量端点单次请求的 ID 条数上限（R10-08/I-F2-01）。
+// 此前只有 node/batch-upgrade 有帽（maxBatchUpgradeNodes=50，资源
+// 理由的在仓先例），其余批量路由只受 10MB 请求体兜底（约 120 万个
+// 短 ID/请求），而各 handler 逐条执行真实工作（级联删除、数据面
+// 清理/重部署、逐条权限校验）并逐条累积失败明细——5 万个不存在
+// ID 的 forward 批删实测 58s＋2.1MB 回执，普通用户可达。帽落在
+// 各解析点的去重之后（重复条目不占额度），与批量升级的 50 帽
+// 并存（彼更严、先行判定、原样保留）。
+const maxBatchIDs = 1000
+
+// checkBatchIDsCap 在批量入口完成其 ID 列表归一（去重/过滤）后
+// 校验条数；超限时写出点名拒绝回执并返回 false，调用方直接
+// return。n 传归一后的条数（idsFromBody 系为去重后 valid 数；
+// idsFromBodyWithInvalid 系为去重后 valid＋invalid 总数——invalid
+// 条目同样逐条生成失败明细，计入工作量）。
+func checkBatchIDsCap(w http.ResponseWriter, n int) bool {
+	if n > maxBatchIDs {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("单次批量操作最多 %d 条，请分批提交", maxBatchIDs)))
+		return false
+	}
+	return true
+}
+
 // parseIDsFromBody 解析批量请求体的 ids 数组（原始值，含 <=0
 // 条目）；失败时已写出错误回执，ok=false，调用方直接 return。
 func parseIDsFromBody(r *http.Request, w http.ResponseWriter) (ids []int64, ok bool) {
@@ -9873,7 +9926,13 @@ func idsFromBody(r *http.Request, w http.ResponseWriter) []int64 {
 	// 全部调用面都是对 id 集合的批处理（入站批删/隧道批删/隧道批量
 	// 重部署），重复 id 无语义：不去重时删除面第二次迭代必然撞上
 	// 已删行、记一条虚假失败，重部署面则重复执行并重复计数。
-	return uniqueInt64s(ids)
+	ids = uniqueInt64s(ids)
+	// R10-08：去重后计数帽（见 maxBatchIDs）。超限时已写出拒绝
+	// 回执，返回 nil 与解析失败同口径，调用方直接 return。
+	if !checkBatchIDsCap(w, len(ids)) {
+		return nil
+	}
+	return ids
 }
 
 // idsFromBodyWithInvalid 与 idsFromBody 同源解析，但把 id<=0 的条目
@@ -9904,7 +9963,14 @@ func idsFromBodyWithInvalid(r *http.Request, w http.ResponseWriter) (valid []int
 		}
 	}
 	sort.Slice(valid, func(i, j int) bool { return valid[i] < valid[j] })
-	return uniqueInt64s(valid), invalid
+	valid = uniqueInt64s(valid)
+	// R10-08：计数帽（见 maxBatchIDs）——valid 去重后与 invalid
+	// 合计计数（invalid 逐条生成失败明细、同属逐条工作量）。
+	// 超限时已写出拒绝回执，返回 (nil, nil) 与解析失败同口径。
+	if !checkBatchIDsCap(w, len(valid)+len(invalid)) {
+		return nil, nil
+	}
+	return valid, invalid
 }
 
 // dedupeValidBatchIDs 对自有 id 列表字段的批量请求（如
