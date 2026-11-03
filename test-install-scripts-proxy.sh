@@ -1362,6 +1362,73 @@ test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent() (
   fi
 )
 
+# R2F2-D01：整形前队列备份丢失（只有 shape.sh、没有
+# original-qdisc.sh）时脚本卸载的口径——队列整形明确点名未能恢
+# 复（不假装已恢复），但 sysctl 原值仍按 tuning-backup.json 写
+# 回、宿主调优文件集仍删净、卸载整体成功。与面板连带自卸载的
+# agent 侧同场景同口径（go-gost/x/socket 的 cleanup/preflight）。
+test_uninstall_flux_agent_host_cleanup_queue_backup_lost() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR/tcpfit" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")" \
+    "$(dirname "$FLMX_TUNING_BBR_MODULE_FILE")" "$(dirname "$FLMX_TUNING_QDISC_UNIT_FILE")" \
+    "$FLMX_PROC_SYS_DIR/net/ipv4" "$FLMX_PROC_SYS_DIR/net/core"
+
+  printf 'bbr\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control"
+  printf '999999\n' > "$FLMX_PROC_SYS_DIR/net/core/rmem_max"
+  cat > "$INSTALL_DIR/tuning-backup.json" <<'JSON'
+{
+  "net.core.rmem_max": "212992",
+  "net.ipv4.tcp_congestion_control": "cubic"
+}
+JSON
+  # 只有整形脚本、没有整形前队列备份——本用例的场景。
+  echo '#!/bin/bash' > "$INSTALL_DIR/tcpfit/shape.sh"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  echo 'net.core.rmem_max = 999999' > "$FLMX_TUNING_SYSCTL_CONF"
+  echo 'legacy' > "$FLMX_TUNING_SYSCTL_CONF_LEGACY"
+  echo 'tcp_bbr' > "$FLMX_TUNING_BBR_MODULE_FILE"
+  echo '[Unit]' > "$FLMX_TUNING_QDISC_UNIT_FILE"
+  echo '[Unit]' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+
+  local systemctl_calls="$work/systemctl-calls" nft_input="$work/nft-input"
+  : > "$systemctl_calls"
+  systemctl() { echo "$*" >> "$systemctl_calls"; return 0; }
+  nft() { cat > "$nft_input"; return 0; }
+
+  local rc="0" out
+  out=$(mktemp)
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R2F2-D01: uninstall with a lost queue backup should still succeed"
+  grep -q '找不到整形前的队列备份' "$out" || \
+    fail "R2F2-D01: the unrestorable queue shaping must be named in the receipt"
+  [[ ! -d "$INSTALL_DIR" ]] || fail "R2F2-D01: install dir should be removed"
+  assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
+    "R2F2-D01: sysctl values should still be restored from the tuning backup"
+  assert_equals "212992" "$(cat "$FLMX_PROC_SYS_DIR/net/core/rmem_max")" \
+    "R2F2-D01: sysctl rmem_max should still be restored from the tuning backup"
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R2F2-D01: 99-flmx-tuning.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]] || fail "R2F2-D01: legacy 99-flvx-tuning.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_BBR_MODULE_FILE" ]] || fail "R2F2-D01: flmx-bbr.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_QDISC_UNIT_FILE" ]] || fail "R2F2-D01: flmx-tuning-qdisc.service should be removed"
+  grep -q 'disable --now flmx-tuning-qdisc.service' "$systemctl_calls" || \
+    fail "R2F2-D01: qdisc unit should be disabled before removal"
+)
+
 test_install_flux_agent_writes_json_safe_config() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -6618,6 +6685,7 @@ test_uninstall_flux_agent_refuses_unowned_agent
 test_uninstall_flux_agent_menu_guard_pass_forms
 test_uninstall_flux_agent_cleans_host_tuning_residue
 test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent
+test_uninstall_flux_agent_host_cleanup_queue_backup_lost
 test_install_flux_agent_writes_json_safe_config
 test_install_script_bootstraps_bash_for_alpine
 test_install_flux_agent_uses_openrc

@@ -1329,9 +1329,11 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = "RollbackAgentResponse"
 		// needSaveConfig = false (默认值)
 
-	// 面板删除服务器时卸载 Agent（先回复，再异步卸载）
+	// 面板删除服务器时卸载 Agent（先回复，再异步卸载）；回执
+	// data 携带调优恢复预检 warnings（R2F2-D01），与
+	// RollbackAgent 的 data 回执同形态。
 	case "UninstallAgent":
-		err = w.handleUninstallAgent()
+		response.Data, err = w.handleUninstallAgent()
 		response.Type = "UninstallAgentResponse"
 		// needSaveConfig = false (默认值)
 

@@ -36,13 +36,20 @@ func seedUninstallNode(t *testing.T, r *repo.Repository, name, secret string) *m
 // 替换在线判定/命令下发接缝；sendErr 为命令下发结果。
 func stubNodeAgentChannel(t *testing.T, online bool, sendErr error) {
 	t.Helper()
+	stubNodeAgentChannelWarnings(t, online, nil, sendErr)
+}
+
+// stubNodeAgentChannelWarnings 同 stubNodeAgentChannel，另让命令
+// 回执携带 agent 点名的 warnings（R2F2-D01 的回执披露面）。
+func stubNodeAgentChannelWarnings(t *testing.T, online bool, replyWarnings []string, sendErr error) {
+	t.Helper()
 	origOnline, origSend := nodeAgentIsOnline, nodeAgentSendCommand
 	nodeAgentIsOnline = func(h *Handler, nodeID int64) bool { return online }
-	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) error {
+	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) ([]string, error) {
 		if cmdType != "UninstallAgent" {
 			t.Errorf("unexpected command type %q", cmdType)
 		}
-		return sendErr
+		return replyWarnings, sendErr
 	}
 	t.Cleanup(func() {
 		nodeAgentIsOnline, nodeAgentSendCommand = origOnline, origSend
@@ -74,6 +81,45 @@ func TestUninstallNodeAgentDone(t *testing.T) {
 	}
 	if row := pendingRow(t, r, "secret-done"); row != nil {
 		t.Fatalf("done must not register a pending row: %+v", row)
+	}
+}
+
+// R2F2-D01：在线且 agent 确认，但回执 data 点名了调优恢复将失败
+// （队列备份丢失＋宿主文件清单）→ 状态仍为 done，warnings 必须带
+// 节点名原样透传，回执不得是纯成功；不留待卸载登记。
+func TestUninstallNodeAgentDoneWithAgentWarnings(t *testing.T) {
+	r := openUninstallHandlerRepo(t)
+	h := New(r, "test-secret")
+	node := seedUninstallNode(t, r, "tuned-node", "secret-tuned")
+	agentWarning := "调优恢复将失败：整形前的队列备份已丢失，队列整形与调优参数无法随卸载恢复（重启后随状态消散）；卸载时会删除宿主调优文件：/etc/sysctl.d/99-flmx-tuning.conf"
+	stubNodeAgentChannelWarnings(t, true, []string{agentWarning}, nil)
+
+	state, warnings := h.prepareNodeAgentUninstall(node.ID)
+	if state != nodeUninstallDone {
+		t.Fatalf("state = %q, want done", state)
+	}
+	if len(warnings) != 1 || warnings[0] != "tuned-node："+agentWarning {
+		t.Fatalf("warnings = %v, want the agent warning named with the node name", warnings)
+	}
+	if row := pendingRow(t, r, "secret-tuned"); row != nil {
+		t.Fatalf("done with warnings must not register a pending row: %+v", row)
+	}
+}
+
+// 回执 warnings 提取：只收非空字符串条目，其余形态一律忽略（披
+// 露面不能反过来让删除失败）。
+func TestAgentReplyWarnings(t *testing.T) {
+	if got := agentReplyWarnings(nil); got != nil {
+		t.Fatalf("nil data: got %v", got)
+	}
+	if got := agentReplyWarnings(map[string]interface{}{"warnings": "nope"}); got != nil {
+		t.Fatalf("non-list warnings: got %v", got)
+	}
+	got := agentReplyWarnings(map[string]interface{}{
+		"warnings": []interface{}{"甲", "", "  ", 42, "乙"},
+	})
+	if len(got) != 2 || got[0] != "甲" || got[1] != "乙" {
+		t.Fatalf("got %v, want [甲 乙]", got)
 	}
 }
 
