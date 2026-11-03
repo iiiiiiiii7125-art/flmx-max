@@ -65,6 +65,23 @@ LEGACY_GOST_SERVICE_FILE_LIB="/lib/systemd/system/gost.service"
 LEGACY_GOST_SERVICE_FILE_USR_LIB="/usr/lib/systemd/system/gost.service"
 SERVICE_MANAGER="${SERVICE_MANAGER:-}"
 
+# 宿主级调优残留路径：agent 运行时写在安装目录之外的文件，与 agent
+# 侧 go-gost/x/socket/tuning.go 的路径常量一一对应（tuneConfPath /
+# legacyTuneConfPath / tuneBBRModule / tuneShapeUnitPath）。脚本卸载
+# 必须与面板自卸载路径（runAgentUninstall）对齐清理这些文件，见
+# uninstall_flux_agent_host_cleanup。做成变量以便测试夹具改指临时
+# 目录。
+FLMX_TUNING_SYSCTL_CONF="/etc/sysctl.d/99-flmx-tuning.conf"
+FLMX_TUNING_SYSCTL_CONF_LEGACY="/etc/sysctl.d/99-flvx-tuning.conf"
+FLMX_TUNING_BBR_MODULE_FILE="/etc/modules-load.d/flmx-bbr.conf"
+FLMX_TUNING_QDISC_UNIT_FILE="/etc/systemd/system/flmx-tuning-qdisc.service"
+FLMX_TUNING_QDISC_UNIT="flmx-tuning-qdisc.service"
+FLMX_PROC_SYS_DIR="/proc/sys"
+# agent 自建 nft 表全集，与 agent 侧 x/kernel/nft.go 的 removeTables
+# 逐字对齐（计数/白名单主表、改名前的旧表、端口跳跃探针表）。表驻
+# 留在内核里、不随进程退出消失，必须在卸载时显式删除。
+FLMX_AGENT_NFT_TABLES="flmx_kernel flvx_kernel flmx_hop_probe"
+
 # GitHub 下载路线配置（1.7.7）：默认走内置候选测速直选（见下方
 # PROXY_CANDIDATES 与 ensure_download_routes），不再交互询问、不再
 # 读面板的「GitHub 加速」设置（该设置已整体移除）。环境变量仅作
@@ -1552,6 +1569,136 @@ rollback_flux_agent() {
   fi
 }
 
+# R6-02：脚本卸载与面板自卸载路径（go-gost/x/socket/uninstall.go
+# 的 runAgentUninstall）对齐的宿主清理。面板路径在删安装目录之前
+# 依次：恢复调优（回放整形前队列 original-qdisc.sh、按
+# tuning-backup.json 逐键写回 sysctl 原值、删宿主文件）→ 停内核
+# 并删 agent 自建 nft 三表 → 才停服务删目录。旧脚本卸载只有停服
+# 删目录，残留后果：调优 sysctl conf 与 qdisc unit 开机自动重放、
+# nft 白名单 DROP 规则比所有者长寿（R2-001 危害形态）、
+# tuning-backup.json 随目录删除后原值永久不可恢复、同机重装还会
+# 把已调优值当作原值再备份。本函数在服务已停、安装目录未删时执
+# 行同一清理全集。口径与面板路径一致：逐项尽力而为，单项失败只
+# 告警并逐项列明、不中断后续项；全部以「存在才处理」为前提，重
+# 复执行只剩跳过、无副作用（幂等）。
+# 归属圈定：只处理带 flmx 标识的自有产物（路径常量与三张表名均
+# 为本产品专名，legacy flvx 名是本产品改名前的自有旧名、与面板
+# 路径的删除集逐字一致），不触碰同机其他程序的文件。
+uninstall_flux_agent_host_cleanup() {
+  local failures=0
+  local engine_dir="$INSTALL_DIR/tcpfit"
+  local backup_file="$INSTALL_DIR/tuning-backup.json"
+
+  # 1) 队列整形恢复：有整形前队列备份（original-qdisc.sh）则回
+  # 放，与面板路径 restoreTuneQueues 执行的是同一份脚本。只有
+  # 整形脚本、没有原队列备份时队列无法恢复（面板路径在此情形
+  # 拒绝恢复以保配置；脚本卸载的目录即将删除、保配置无从谈起，
+  # 故明确告警并继续其余清理——运行时整形在重启后随 tc 状态消
+  # 散，不留开机重放面）。
+  if [[ -f "$engine_dir/original-qdisc.sh" ]]; then
+    if bash "$engine_dir/original-qdisc.sh" >/dev/null 2>&1; then
+      echo "🧹 已恢复整形前的出口队列"
+    else
+      failures=$((failures + 1))
+      echo "⚠️ 整形前队列恢复脚本执行失败，请人工检查 tc qdisc 状态"
+    fi
+  elif [[ -f "$engine_dir/shape.sh" ]]; then
+    failures=$((failures + 1))
+    echo "⚠️ 找不到整形前的队列备份，当前队列整形未能恢复（重启后随 tc 状态消散）"
+  fi
+
+  # 2) sysctl 原值恢复：tuning-backup.json 是 {键: 原值} 的 JSON
+  # 对象（agent 的 applyTuning 首次调优时备份、恢复时逐键写回
+  # /proc/sys 后删除备份）。必须赶在删安装目录之前读它，否则原
+  # 值随备份一并丢失。键名只接受字母/数字/点/下划线（sysctl 键
+  # 的字符集），且只写 /proc/sys 下已存在的叶子文件——备份内容
+  # 永远拼不出任意路径。备份存在却解析不出任何键值对时按损坏
+  # 告警（与 agent 侧「备份损坏即停」的 fail-closed 口径同向，
+  # 只是卸载不因此中断）。
+  if [[ -f "$backup_file" ]]; then
+    local pairs=0 restored=0 unsupported=0
+    local key="" value="" target=""
+    while IFS=$'\t' read -r key value; do
+      [[ -n "$key" ]] || continue
+      pairs=$((pairs + 1))
+      target="$FLMX_PROC_SYS_DIR/${key//.//}"
+      if [[ ! -f "$target" ]]; then
+        unsupported=$((unsupported + 1))
+        continue
+      fi
+      if { printf '%s\n' "$value" > "$target"; } 2>/dev/null; then
+        restored=$((restored + 1))
+      else
+        failures=$((failures + 1))
+        echo "⚠️ sysctl 参数恢复失败: $key"
+      fi
+    done < <(grep -oE '"[A-Za-z0-9_.]+": *"[^"]*"' "$backup_file" 2>/dev/null | sed -e 's/^"//' -e 's/"$//' -e 's/": *"/\t/')
+    if [[ "$pairs" -eq 0 ]]; then
+      failures=$((failures + 1))
+      echo "⚠️ 调优原值备份无法解析，调优参数未能恢复: $backup_file"
+    elif [[ "$restored" -gt 0 || "$unsupported" -gt 0 ]]; then
+      echo "🧹 已按调优备份恢复 sysctl 原值（${restored} 项生效，${unsupported} 项本机内核不支持已跳过）"
+    fi
+  fi
+
+  # 3) 宿主调优文件：sysctl conf（现行＋改名前 legacy）、BBR 开机
+  # 加载 conf。删掉后调优值不再开机重放；运行时值已在第 2 步恢
+  # 复（无备份时运行时值保留至重启，与面板路径无备份时同口径）。
+  local host_file=""
+  for host_file in "$FLMX_TUNING_SYSCTL_CONF" "$FLMX_TUNING_SYSCTL_CONF_LEGACY" "$FLMX_TUNING_BBR_MODULE_FILE"; do
+    if [[ -e "$host_file" ]]; then
+      if rm -f "$host_file"; then
+        echo "🧹 删除调优宿主文件: $host_file"
+      else
+        failures=$((failures + 1))
+        echo "⚠️ 删除调优宿主文件失败: $host_file"
+      fi
+    fi
+  done
+
+  # 4) 队列整形 systemd unit：先 disable --now 再删文件，否则它
+  # 在下次开机仍会去执行安装目录里已被删除的整形脚本（悬空启用
+  # 项）。OpenRC 形态没有这个 unit，文件不存在即跳过。
+  if [[ -e "$FLMX_TUNING_QDISC_UNIT_FILE" ]]; then
+    if [[ "${SERVICE_MANAGER:-}" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
+      systemctl disable --now "$FLMX_TUNING_QDISC_UNIT" 2>/dev/null || true
+    fi
+    if rm -f "$FLMX_TUNING_QDISC_UNIT_FILE"; then
+      echo "🧹 删除队列整形服务: $FLMX_TUNING_QDISC_UNIT_FILE"
+      if [[ "${SERVICE_MANAGER:-}" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+      fi
+    else
+      failures=$((failures + 1))
+      echo "⚠️ 删除队列整形服务失败: $FLMX_TUNING_QDISC_UNIT_FILE"
+    fi
+  fi
+
+  # 5) agent 自建 nft 三表：沿用 agent 侧 removeTables 的「先建空
+  # 表再删」惯例，表不存在时整条脚本也成功（幂等）。没有 nft 命
+  # 令时删不了表，明确提示残留与人工清理法，不假装已清理。
+  if command -v nft >/dev/null 2>&1; then
+    local nft_script="" table=""
+    for table in $FLMX_AGENT_NFT_TABLES; do
+      nft_script+="table inet ${table} {}"$'\n'
+      nft_script+="delete table inet ${table}"$'\n'
+    done
+    if printf '%s' "$nft_script" | nft -f - >/dev/null 2>&1; then
+      echo "🧹 已删除 agent 自建 nft 表: $FLMX_AGENT_NFT_TABLES"
+    else
+      failures=$((failures + 1))
+      echo "⚠️ nft 表删除失败，表会残留至宿主机重启或人工清理（nft delete table inet <表名>）: $FLMX_AGENT_NFT_TABLES"
+    fi
+  else
+    echo "ℹ️ 未找到 nft 命令，跳过 nft 表清理（如曾建表，表会残留至宿主机重启，或装回 nftables 后人工删除）: $FLMX_AGENT_NFT_TABLES"
+  fi
+
+  if [[ "$failures" -gt 0 ]]; then
+    echo "⚠️ 宿主清理有 ${failures} 项未完成（见上 ⚠️ 行），其余卸载步骤继续执行"
+  fi
+  return 0
+}
+
 # 卸载功能
 uninstall_flux_agent() {
   echo "🗑️ 开始卸载 flux_agent..."
@@ -1562,7 +1709,7 @@ uninstall_flux_agent() {
 
   ensure_service_manager || return 1
   
-  read -p "确认卸载 flux_agent 吗？此操作将删除所有相关文件 (y/N): " confirm
+  read -p "确认卸载 flux_agent 吗？将停止服务，并删除安装目录、agent 服务文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数 (y/N): " confirm
   if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "❌ 取消卸载"
     return 0
@@ -1574,6 +1721,12 @@ uninstall_flux_agent() {
     stop_flux_agent_service
     disable_flux_agent_service
   fi
+
+  # R6-02：宿主级残留清理（恢复调优原值与队列、删调优宿主文件
+  # 与队列整形 unit、删 agent 自建 nft 表），与面板自卸载路径对
+  # 齐。必须在删安装目录之前执行：调优原值备份 tuning-backup.json
+  # 与队列回放脚本都在安装目录里，目录删掉原值就永久丢失。
+  uninstall_flux_agent_host_cleanup
 
   # 删除服务文件
   if [[ -f "$FLUX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLUX_AGENT_OPENRC_SERVICE_FILE" ]]; then
