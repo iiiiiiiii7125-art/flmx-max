@@ -75,8 +75,12 @@ type remoteSyncResult struct {
 	// incomplete (the integrity gate deferred their deletion to the
 	// next clean round). Counted apart from Kept so the summary can
 	// name the reason.
-	KeptStale int      `json:"keptStale"`
-	Errors    []string `json:"errors"`
+	KeptStale int `json:"keptStale"`
+	// Shielded are source entries skipped because an admin deleted the
+	// node by hand and the deletion shield (R10-04) keeps it deleted:
+	// the entry is not re-created this round.
+	Shielded int      `json:"shielded"`
+	Errors   []string `json:"errors"`
 }
 
 func (r remoteSyncResult) summary() string {
@@ -90,7 +94,33 @@ func (r remoteSyncResult) summary() string {
 	if r.KeptStale > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个未匹配节点因本轮同步不完整，已保留待下轮确认", r.KeptStale))
 	}
+	if r.Shielded > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个节点已手工删除屏蔽，本轮同步未恢复", r.Shielded))
+	}
 	return strings.Join(parts, "，")
+}
+
+// importedNameKey / importedAddrKey are the two keys a source entry is
+// matched by: the name key is case-insensitive over the truncated name,
+// the address key is the externalKey form. The sync's in-batch dedup,
+// its existing-row indexes and the deletion shield's identity tuple all
+// derive from these two definitions — there is no second identity
+// semantics for imported nodes.
+func importedNameKey(name string) string {
+	return "name:" + strings.ToLower(truncateRunes(name, 100))
+}
+
+func importedAddrKey(host string, port int) string {
+	return "addr:" + externalKey(host, port)
+}
+
+// importedIdentityKey is the deletion-shield identity tuple (R10-04):
+// the composite of the same name and address keys the sync matches
+// existing rows by. Renaming or moving the source entry changes the
+// tuple, so the changed entry is a new node the shield does not cover;
+// an entry identical in both is the same node and stays deleted.
+func importedIdentityKey(name, host string, port int) string {
+	return importedNameKey(name) + "|" + importedAddrKey(host, port)
 }
 
 func sameImported(row *model.NodeInbound, node kernel.ImportedNode, extra string) bool {
@@ -157,8 +187,8 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		seenPre := map[string]bool{}
 		unique := make([]kernel.ImportedNode, 0, len(nodes))
 		for _, node := range nodes {
-			nameKey := "name:" + strings.ToLower(truncateRunes(node.Name, 100))
-			addrKey := "addr:" + externalKey(node.Host, node.Port)
+			nameKey := importedNameKey(node.Name)
+			addrKey := importedAddrKey(node.Host, node.Port)
 			if seenPre[nameKey] || seenPre[addrKey] {
 				noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 				continue
@@ -181,6 +211,17 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
 		return fail(err)
+	}
+	// R10-04：本源的删除屏蔽集（管理员手工删过的导入节点）。查询失
+	// 败 fail-closed 中止整轮——屏蔽读不到时照常新建会把已删节点静
+	// 默复活，与守卫查询失败同口径。
+	shieldRows, err := h.repo.ListRemoteSourceShields(src.ID)
+	if err != nil {
+		return fail(err)
+	}
+	shielded := make(map[string]bool, len(shieldRows))
+	for _, s := range shieldRows {
+		shielded[s.IdentityKey] = true
 	}
 	// X04-001：本轮同步的链式引用查询（更新分支重下发、移除分支守卫）
 	// 共用这份已加载快照的索引——旧实现逐行经 chainReferrers /
@@ -226,8 +267,8 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			continue
 		}
 		fresh.SourceID = src.ID
-		nameKey := "name:" + strings.ToLower(fresh.Name)
-		addrKey := "addr:" + externalKey(node.Host, node.Port)
+		nameKey := importedNameKey(fresh.Name)
+		addrKey := importedAddrKey(node.Host, node.Port)
 		if seen[nameKey] || seen[addrKey] {
 			noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 			continue
@@ -239,6 +280,16 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			row = take(byAddr[externalKey(node.Host, node.Port)])
 		}
 		if row == nil {
+			// R10-04：命中删除屏蔽的条目不新建——管理员手工删过的
+			// 节点不被同步复活。按身份元组判（importedIdentityKey），
+			// 改名/改址后的条目是新元组、不在此列。只计数点名，不
+			// 计入完整性门：该条目已被处理（有意跳过），计入门会
+			// 让含屏蔽条目的源永远等不到干净轮、下线节点永不回收
+			// （与 F-025 重复提示同理）。
+			if shielded[importedIdentityKey(node.Name, node.Host, node.Port)] {
+				res.Shielded++
+				continue
+			}
 			// AUDIT-R3 (F2X-001): per-node 端口分配锁（CreateNodeInbound 内部已去锁）。
 			portMu := repo.AcquirePortAllocLock(fresh.NodeID)
 			err := h.repo.CreateNodeInbound(&fresh)
@@ -647,6 +698,22 @@ func (h *Handler) remoteSourceRefresh(w http.ResponseWriter, r *http.Request) {
 	h.respondRemoteSync(w, r.Context(), src, "")
 }
 
+// shieldDeletedImportedRow登记一条删除屏蔽（R10-04）：管理员手工删除
+// 带源的导入行后，其身份元组记入该源的屏蔽集，订阅源后续同步不再
+// 自动恢复它。无源行（SourceID<=0，普通手工导入）没有会复活它的同
+// 步，跳过。单删与批删共用本助手。
+func (h *Handler) shieldDeletedImportedRow(row *model.NodeInbound) error {
+	if row == nil || row.SourceID <= 0 {
+		return nil
+	}
+	return h.repo.AddRemoteSourceShield(&model.RemoteSourceShield{
+		SourceID:    row.SourceID,
+		IdentityKey: importedIdentityKey(row.Name, row.Listen, row.Port),
+		Name:        row.Name,
+		CreatedTime: time.Now().UnixMilli(),
+	})
+}
+
 // remoteSourceDelete removes a source and, unless keepNodes is set, its
 // nodes (with their relays).
 func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
@@ -708,6 +775,12 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	// R10-04：删除屏蔽随源删除而清（keepNodes 与连节点删两路同口径）；
+	// 在删源行之前清、失败中止——屏蔽不得比源本身活得久。
+	if err := h.repo.DeleteRemoteSourceShields(req.ID); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
 	}
 	if err := h.repo.DeleteRemoteSource(req.ID); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))

@@ -4,6 +4,8 @@ import (
 	"errors"
 
 	"go-backend/internal/store/model"
+
+	"gorm.io/gorm/clause"
 )
 
 func (r *Repository) ListRemoteSources() ([]model.RemoteSource, error) {
@@ -54,6 +56,37 @@ func (r *Repository) DeleteRemoteSource(id int64) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Where("id = ?", id).Delete(&model.RemoteSource{}).Error
+}
+
+// AddRemoteSourceShield records a manually deleted imported node in the
+// source's shield registry (R10-04). Idempotent on (source, identity):
+// re-deleting a node whose tuple is already shielded is a no-op.
+func (r *Repository) AddRemoteSourceShield(s *model.RemoteSourceShield) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "source_id"}, {Name: "identity_key"}},
+		DoNothing: true,
+	}).Create(s).Error
+}
+
+func (r *Repository) ListRemoteSourceShields(sourceID int64) ([]model.RemoteSourceShield, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var out []model.RemoteSourceShield
+	err := r.db.Where("source_id = ?", sourceID).Order("id ASC").Find(&out).Error
+	return out, err
+}
+
+// DeleteRemoteSourceShields clears a source's shield registry; called
+// when the source itself is deleted (the registry must not outlive it).
+func (r *Repository) DeleteRemoteSourceShields(sourceID int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Where("source_id = ?", sourceID).Delete(&model.RemoteSourceShield{}).Error
 }
 
 // DetachSourceInbounds keeps a deleted source's nodes as plain imports.

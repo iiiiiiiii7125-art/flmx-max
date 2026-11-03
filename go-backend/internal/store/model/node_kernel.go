@@ -118,6 +118,25 @@ type RemoteSource struct {
 
 func (RemoteSource) TableName() string { return "remote_source" }
 
+// RemoteSourceShield records an imported node an admin deleted by hand
+// from a remote source (R10-04). A refresh must not silently resurrect
+// it: the sync's create branch skips entries whose identity tuple is
+// shielded for that source. The identity key is the composite of the
+// same name/address keys the sync matches existing rows by (see
+// handler importedIdentityKey), so renaming or moving the source entry
+// makes it a new tuple that is no longer shielded. Shields are removed
+// together with their source.
+type RemoteSourceShield struct {
+	ID          int64  `gorm:"primaryKey;autoIncrement"`
+	SourceID    int64  `gorm:"column:source_id;not null;uniqueIndex:idx_remote_source_shield_key"`
+	IdentityKey string `gorm:"column:identity_key;type:text;not null;uniqueIndex:idx_remote_source_shield_key"`
+	// Name is the deleted row's display name, kept for diagnostics.
+	Name        string `gorm:"type:varchar(100);not null;default:''"`
+	CreatedTime int64  `gorm:"column:created_time;not null"`
+}
+
+func (RemoteSourceShield) TableName() string { return "remote_source_shield" }
+
 const (
 	RemoteSourceURL  = "url"
 	RemoteSourceFile = "file"
