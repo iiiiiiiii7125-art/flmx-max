@@ -198,13 +198,17 @@ body {
   }
 }
 
-/* Text Tray tokens (Round 4 — "透明壳＋实色字托"): the glass shell
-   stays the global surface, but no text may sit directly on glass or
-   wallpaper. Every text-bearing element rides an opaque tray: --tray for
-   neutral plates, --tray-<color> for semantic-tinted plates (bridge
-   Button flat/light, Badge/Chip tints). One definition point — pages
-   reference the .tray-plate / .tray-* classes or the bg-tray utility,
-   never hand-mixed rgba tints. */
+/* Text Tray tokens (Round 4 — "透明壳＋实色字托"): small pieces —
+   pills, chips, badges, flat/light buttons — ride an opaque tray
+   instead of sitting on glass: --tray for neutral plates,
+   --tray-<color> for semantic-tinted plates (bridge Button flat/light,
+   Badge/Chip tints). One definition point — pages reference the
+   .tray-plate / .tray-* classes or the bg-tray utility, never
+   hand-mixed rgba tints. Body text is NOT tray-bound: it sits directly
+   on the matte glass in --foreground (the contrast gate's glass grid
+   holds it at >= 4.5 on every cell, >= 7 at mid stops), and semantic
+   signal text inside glass carriers is deepened by the glass-context
+   rules at the bottom of this file (see --glass-text-* below). */
 :root {
   --tray: #ffffff;
   --tray-foreground: #18181b;
@@ -222,11 +226,35 @@ body {
   --tray-warning-hover: #fde68a;
   --tray-warning-foreground: #78350f;
   --tray-danger: #fee2e2;
-  --tray-danger-hover: #fecaca;
+  --tray-danger-hover: #fecfcf;
   --tray-danger-foreground: #7f1d1d;
   --tray-default: #f4f4f5;
   --tray-default-hover: #e4e4e7;
   --tray-default-foreground: #3f3f46;
+}
+
+/* Glass-context semantic text shades (R2-S1-01 remediation): one deep
+   shade per colour family, used ONLY by the glass-context override
+   rules in @layer utilities at the bottom of this file. Each value is
+   computed so the shade holds >= 4.5 on the worst glass cell (card
+   floor stop over pure black, ~5.9) and >= 7 at the card mid stop —
+   the same discipline --foreground is gated to. The raw ladder shades
+   (--<family>-700 etc.) keep their values for opaque surfaces, where
+   the 25 pinned pairs apply; they are never deepened globally, so
+   solid fills and borders keep their identity everywhere. */
+:root {
+  --glass-text-primary: #18144a;
+  --glass-text-secondary: #260e4c;
+  --glass-text-success: #062210;
+  --glass-text-warning: #311602;
+  --glass-text-danger: #3e0909;
+  --glass-text-rose: #3f0614;
+  --glass-text-orange: #361203;
+  --glass-text-sky: #011f30;
+  --glass-text-emerald: #012219;
+  --glass-text-blue: #091946;
+  --glass-text-purple: #2b0c47;
+  --glass-text-teal: #04211f;
 }
 
 /* Matte Glass Variables (2026-11-04, user directive: the glass language
@@ -242,8 +270,10 @@ body {
    black backdrop): the card floor stop 0.60 composites to ~6.2:1, the
    mid stop 0.66 to ~7:1, the surface floor 0.70 to ~7.9:1 — body text
    holds the 4.5 floor on any wallpaper and the 7 target at mid stops,
-   and small text never rides glass at all: it sits on the opaque tray
-   system (see the Text Tray tokens above). check-contrast.mjs recomputes
+   and small text is carried by the opaque tray system or, for
+   semantic signal text, by the glass-context deep shades
+   (--glass-text-*, bottom of this file) — never by the raw semantic
+   ladder shades, whose worst glass cell is 1.76. check-contrast.mjs recomputes
    these composite pairs; do not lower a stop without re-running it.
    --content1 survives only as the fill of small form controls (inputs,
    select triggers), never as a surface. The toaster is a floating layer
@@ -318,6 +348,230 @@ body {
 }
 
 @layer utilities {
+  /* Glass-context semantic text (R2-S1-01 remediation): inside a
+     glass carrier (card / floating surface / inset / splitted
+     accordion item), semantic-ladder text classes render in the
+     family's deep --glass-text-* shade instead of the raw ladder
+     shade. The raw shades bottom out at 1.76 on the worst glass cell
+     (success/warning-700 over the card floor stop on a black
+     wallpaper region); the deep shades hold >= 4.5 on every glass
+     cell and >= 7 at the card mid stop. Only the text colour is
+     overridden — backgrounds and borders keep the ladder shades, so
+     solid semantic buttons keep their identity inside modals too.
+     check-contrast.mjs censuses every semantic text class in src
+     against this block (fail-closed: a family/shade/variant outside
+     the covered set fails the gate) and recomputes the full grid.
+     GLASS-TEXT-OVERRIDES:BEGIN */
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-primary-500, .text-primary-600, .text-primary-700, .text-primary-800, .text-primary-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-primary-500, .text-primary-600, .text-primary-700, .text-primary-800, .text-primary-900) {
+    color: var(--glass-text-primary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-primary-500, .hover\:text-primary-600, .hover\:text-primary-700, .hover\:text-primary-800, .hover\:text-primary-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-primary-500, .hover\:text-primary-600, .hover\:text-primary-700, .hover\:text-primary-800, .hover\:text-primary-900):hover {
+    color: var(--glass-text-primary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-primary-500, .focus\:text-primary-600, .focus\:text-primary-700, .focus\:text-primary-800, .focus\:text-primary-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-primary-500, .focus\:text-primary-600, .focus\:text-primary-700, .focus\:text-primary-800, .focus\:text-primary-900):focus {
+    color: var(--glass-text-primary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-secondary-500, .text-secondary-600, .text-secondary-700, .text-secondary-800, .text-secondary-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-secondary-500, .text-secondary-600, .text-secondary-700, .text-secondary-800, .text-secondary-900) {
+    color: var(--glass-text-secondary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-secondary-500, .hover\:text-secondary-600, .hover\:text-secondary-700, .hover\:text-secondary-800, .hover\:text-secondary-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-secondary-500, .hover\:text-secondary-600, .hover\:text-secondary-700, .hover\:text-secondary-800, .hover\:text-secondary-900):hover {
+    color: var(--glass-text-secondary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-secondary-500, .focus\:text-secondary-600, .focus\:text-secondary-700, .focus\:text-secondary-800, .focus\:text-secondary-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-secondary-500, .focus\:text-secondary-600, .focus\:text-secondary-700, .focus\:text-secondary-800, .focus\:text-secondary-900):focus {
+    color: var(--glass-text-secondary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-success-500, .text-success-600, .text-success-700, .text-success-800, .text-success-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-success-500, .text-success-600, .text-success-700, .text-success-800, .text-success-900) {
+    color: var(--glass-text-success);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-success-500, .hover\:text-success-600, .hover\:text-success-700, .hover\:text-success-800, .hover\:text-success-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-success-500, .hover\:text-success-600, .hover\:text-success-700, .hover\:text-success-800, .hover\:text-success-900):hover {
+    color: var(--glass-text-success);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-success-500, .focus\:text-success-600, .focus\:text-success-700, .focus\:text-success-800, .focus\:text-success-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-success-500, .focus\:text-success-600, .focus\:text-success-700, .focus\:text-success-800, .focus\:text-success-900):focus {
+    color: var(--glass-text-success);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-warning-500, .text-warning-600, .text-warning-700, .text-warning-800, .text-warning-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-warning-500, .text-warning-600, .text-warning-700, .text-warning-800, .text-warning-900) {
+    color: var(--glass-text-warning);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-warning-500, .hover\:text-warning-600, .hover\:text-warning-700, .hover\:text-warning-800, .hover\:text-warning-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-warning-500, .hover\:text-warning-600, .hover\:text-warning-700, .hover\:text-warning-800, .hover\:text-warning-900):hover {
+    color: var(--glass-text-warning);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-warning-500, .focus\:text-warning-600, .focus\:text-warning-700, .focus\:text-warning-800, .focus\:text-warning-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-warning-500, .focus\:text-warning-600, .focus\:text-warning-700, .focus\:text-warning-800, .focus\:text-warning-900):focus {
+    color: var(--glass-text-warning);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-danger-500, .text-danger-600, .text-danger-700, .text-danger-800, .text-danger-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-danger-500, .text-danger-600, .text-danger-700, .text-danger-800, .text-danger-900) {
+    color: var(--glass-text-danger);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-danger-500, .hover\:text-danger-600, .hover\:text-danger-700, .hover\:text-danger-800, .hover\:text-danger-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-danger-500, .hover\:text-danger-600, .hover\:text-danger-700, .hover\:text-danger-800, .hover\:text-danger-900):hover {
+    color: var(--glass-text-danger);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-danger-500, .focus\:text-danger-600, .focus\:text-danger-700, .focus\:text-danger-800, .focus\:text-danger-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-danger-500, .focus\:text-danger-600, .focus\:text-danger-700, .focus\:text-danger-800, .focus\:text-danger-900):focus {
+    color: var(--glass-text-danger);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-rose-500, .text-rose-600, .text-rose-700, .text-rose-800, .text-rose-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-rose-500, .text-rose-600, .text-rose-700, .text-rose-800, .text-rose-900) {
+    color: var(--glass-text-rose);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-rose-500, .hover\:text-rose-600, .hover\:text-rose-700, .hover\:text-rose-800, .hover\:text-rose-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-rose-500, .hover\:text-rose-600, .hover\:text-rose-700, .hover\:text-rose-800, .hover\:text-rose-900):hover {
+    color: var(--glass-text-rose);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-rose-500, .focus\:text-rose-600, .focus\:text-rose-700, .focus\:text-rose-800, .focus\:text-rose-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-rose-500, .focus\:text-rose-600, .focus\:text-rose-700, .focus\:text-rose-800, .focus\:text-rose-900):focus {
+    color: var(--glass-text-rose);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-orange-500, .text-orange-600, .text-orange-700, .text-orange-800, .text-orange-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-orange-500, .text-orange-600, .text-orange-700, .text-orange-800, .text-orange-900) {
+    color: var(--glass-text-orange);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-orange-500, .hover\:text-orange-600, .hover\:text-orange-700, .hover\:text-orange-800, .hover\:text-orange-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-orange-500, .hover\:text-orange-600, .hover\:text-orange-700, .hover\:text-orange-800, .hover\:text-orange-900):hover {
+    color: var(--glass-text-orange);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-orange-500, .focus\:text-orange-600, .focus\:text-orange-700, .focus\:text-orange-800, .focus\:text-orange-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-orange-500, .focus\:text-orange-600, .focus\:text-orange-700, .focus\:text-orange-800, .focus\:text-orange-900):focus {
+    color: var(--glass-text-orange);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-sky-500, .text-sky-600, .text-sky-700, .text-sky-800, .text-sky-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-sky-500, .text-sky-600, .text-sky-700, .text-sky-800, .text-sky-900) {
+    color: var(--glass-text-sky);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-sky-500, .hover\:text-sky-600, .hover\:text-sky-700, .hover\:text-sky-800, .hover\:text-sky-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-sky-500, .hover\:text-sky-600, .hover\:text-sky-700, .hover\:text-sky-800, .hover\:text-sky-900):hover {
+    color: var(--glass-text-sky);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-sky-500, .focus\:text-sky-600, .focus\:text-sky-700, .focus\:text-sky-800, .focus\:text-sky-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-sky-500, .focus\:text-sky-600, .focus\:text-sky-700, .focus\:text-sky-800, .focus\:text-sky-900):focus {
+    color: var(--glass-text-sky);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-emerald-500, .text-emerald-600, .text-emerald-700, .text-emerald-800, .text-emerald-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-emerald-500, .text-emerald-600, .text-emerald-700, .text-emerald-800, .text-emerald-900) {
+    color: var(--glass-text-emerald);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-emerald-500, .hover\:text-emerald-600, .hover\:text-emerald-700, .hover\:text-emerald-800, .hover\:text-emerald-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-emerald-500, .hover\:text-emerald-600, .hover\:text-emerald-700, .hover\:text-emerald-800, .hover\:text-emerald-900):hover {
+    color: var(--glass-text-emerald);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-emerald-500, .focus\:text-emerald-600, .focus\:text-emerald-700, .focus\:text-emerald-800, .focus\:text-emerald-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-emerald-500, .focus\:text-emerald-600, .focus\:text-emerald-700, .focus\:text-emerald-800, .focus\:text-emerald-900):focus {
+    color: var(--glass-text-emerald);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-blue-500, .text-blue-600, .text-blue-700, .text-blue-800, .text-blue-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-blue-500, .text-blue-600, .text-blue-700, .text-blue-800, .text-blue-900) {
+    color: var(--glass-text-blue);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-blue-500, .hover\:text-blue-600, .hover\:text-blue-700, .hover\:text-blue-800, .hover\:text-blue-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-blue-500, .hover\:text-blue-600, .hover\:text-blue-700, .hover\:text-blue-800, .hover\:text-blue-900):hover {
+    color: var(--glass-text-blue);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-blue-500, .focus\:text-blue-600, .focus\:text-blue-700, .focus\:text-blue-800, .focus\:text-blue-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-blue-500, .focus\:text-blue-600, .focus\:text-blue-700, .focus\:text-blue-800, .focus\:text-blue-900):focus {
+    color: var(--glass-text-blue);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-purple-500, .text-purple-600, .text-purple-700, .text-purple-800, .text-purple-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-purple-500, .text-purple-600, .text-purple-700, .text-purple-800, .text-purple-900) {
+    color: var(--glass-text-purple);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-purple-500, .hover\:text-purple-600, .hover\:text-purple-700, .hover\:text-purple-800, .hover\:text-purple-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-purple-500, .hover\:text-purple-600, .hover\:text-purple-700, .hover\:text-purple-800, .hover\:text-purple-900):hover {
+    color: var(--glass-text-purple);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-purple-500, .focus\:text-purple-600, .focus\:text-purple-700, .focus\:text-purple-800, .focus\:text-purple-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-purple-500, .focus\:text-purple-600, .focus\:text-purple-700, .focus\:text-purple-800, .focus\:text-purple-900):focus {
+    color: var(--glass-text-purple);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-teal-500, .text-teal-600, .text-teal-700, .text-teal-800, .text-teal-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-teal-500, .text-teal-600, .text-teal-700, .text-teal-800, .text-teal-900) {
+    color: var(--glass-text-teal);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-teal-500, .hover\:text-teal-600, .hover\:text-teal-700, .hover\:text-teal-800, .hover\:text-teal-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-teal-500, .hover\:text-teal-600, .hover\:text-teal-700, .hover\:text-teal-800, .hover\:text-teal-900):hover {
+    color: var(--glass-text-teal);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-teal-500, .focus\:text-teal-600, .focus\:text-teal-700, .focus\:text-teal-800, .focus\:text-teal-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-teal-500, .focus\:text-teal-600, .focus\:text-teal-700, .focus\:text-teal-800, .focus\:text-teal-900):focus {
+    color: var(--glass-text-teal);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-indigo-500, .text-indigo-600, .text-indigo-700, .text-indigo-800, .text-indigo-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-indigo-500, .text-indigo-600, .text-indigo-700, .text-indigo-800, .text-indigo-900) {
+    color: var(--glass-text-primary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-indigo-500, .hover\:text-indigo-600, .hover\:text-indigo-700, .hover\:text-indigo-800, .hover\:text-indigo-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-indigo-500, .hover\:text-indigo-600, .hover\:text-indigo-700, .hover\:text-indigo-800, .hover\:text-indigo-900):hover {
+    color: var(--glass-text-primary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-indigo-500, .focus\:text-indigo-600, .focus\:text-indigo-700, .focus\:text-indigo-800, .focus\:text-indigo-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-indigo-500, .focus\:text-indigo-600, .focus\:text-indigo-700, .focus\:text-indigo-800, .focus\:text-indigo-900):focus {
+    color: var(--glass-text-primary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-violet-500, .text-violet-600, .text-violet-700, .text-violet-800, .text-violet-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-violet-500, .text-violet-600, .text-violet-700, .text-violet-800, .text-violet-900) {
+    color: var(--glass-text-secondary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-violet-500, .hover\:text-violet-600, .hover\:text-violet-700, .hover\:text-violet-800, .hover\:text-violet-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-violet-500, .hover\:text-violet-600, .hover\:text-violet-700, .hover\:text-violet-800, .hover\:text-violet-900):hover {
+    color: var(--glass-text-secondary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-violet-500, .focus\:text-violet-600, .focus\:text-violet-700, .focus\:text-violet-800, .focus\:text-violet-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-violet-500, .focus\:text-violet-600, .focus\:text-violet-700, .focus\:text-violet-800, .focus\:text-violet-900):focus {
+    color: var(--glass-text-secondary);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-green-500, .text-green-600, .text-green-700, .text-green-800, .text-green-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-green-500, .text-green-600, .text-green-700, .text-green-800, .text-green-900) {
+    color: var(--glass-text-success);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-green-500, .hover\:text-green-600, .hover\:text-green-700, .hover\:text-green-800, .hover\:text-green-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-green-500, .hover\:text-green-600, .hover\:text-green-700, .hover\:text-green-800, .hover\:text-green-900):hover {
+    color: var(--glass-text-success);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-green-500, .focus\:text-green-600, .focus\:text-green-700, .focus\:text-green-800, .focus\:text-green-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-green-500, .focus\:text-green-600, .focus\:text-green-700, .focus\:text-green-800, .focus\:text-green-900):focus {
+    color: var(--glass-text-success);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-amber-500, .text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-amber-500, .text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900) {
+    color: var(--glass-text-warning);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-amber-500, .hover\:text-amber-600, .hover\:text-amber-700, .hover\:text-amber-800, .hover\:text-amber-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-amber-500, .hover\:text-amber-600, .hover\:text-amber-700, .hover\:text-amber-800, .hover\:text-amber-900):hover {
+    color: var(--glass-text-warning);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-amber-500, .focus\:text-amber-600, .focus\:text-amber-700, .focus\:text-amber-800, .focus\:text-amber-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-amber-500, .focus\:text-amber-600, .focus\:text-amber-700, .focus\:text-amber-800, .focus\:text-amber-900):focus {
+    color: var(--glass-text-warning);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.text-red-500, .text-red-600, .text-red-700, .text-red-800, .text-red-900),
+  :is(.glass-card, .glass-surface, .glass-inset):is(.text-red-500, .text-red-600, .text-red-700, .text-red-800, .text-red-900) {
+    color: var(--glass-text-danger);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.hover\:text-red-500, .hover\:text-red-600, .hover\:text-red-700, .hover\:text-red-800, .hover\:text-red-900):hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.hover\:text-red-500, .hover\:text-red-600, .hover\:text-red-700, .hover\:text-red-800, .hover\:text-red-900):hover {
+    color: var(--glass-text-danger);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) :is(.focus\:text-red-500, .focus\:text-red-600, .focus\:text-red-700, .focus\:text-red-800, .focus\:text-red-900):focus,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.focus\:text-red-500, .focus\:text-red-600, .focus\:text-red-700, .focus\:text-red-800, .focus\:text-red-900):focus {
+    color: var(--glass-text-danger);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) .text-warning,
+  :is(.glass-card, .glass-surface, .glass-inset).text-warning {
+    color: var(--glass-text-warning);
+  }
+  /* GLASS-TEXT-OVERRIDES:END */
+
   .scrollbar-hide {
     /* IE and Edge */
     -ms-overflow-style: none;
