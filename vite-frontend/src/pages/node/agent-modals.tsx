@@ -95,7 +95,7 @@ export function InstallCommandModal({
                   </Button>
                 ))}
               </div>
-              <p className="text-xs text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 {INSTALL_MODE_DESCRIPTIONS[installMode]}
               </p>
               {installMode !== "script" ? (
@@ -105,7 +105,7 @@ export function InstallCommandModal({
                     size="sm"
                     onValueChange={onInstallPrivilegedChange}
                   />
-                  <div className="text-xs text-foreground">
+                  <div className="text-xs font-semibold text-foreground">
                     <span className="font-semibold">服务器调优（特权容器）</span>
                     ：开启后容器以 --privileged 运行，面板的服务器调优
                     （BBR / sysctl / 内核模块加载）才能在容器内生效；不需要
