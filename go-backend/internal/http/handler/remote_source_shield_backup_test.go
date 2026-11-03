@@ -132,7 +132,8 @@ func TestImportDisclosesRemovedNodeGroupsAndGroupIDs(t *testing.T) {
 	if restored == nil {
 		t.Fatalf("subscription itself must restore, got rows %v", subs)
 	}
-	if restored.GroupIDs != "" {
-		t.Fatalf("restored subscription must not carry groupIds, got %q", restored.GroupIDs)
-	}
+	// The restored row cannot carry groupIds: model.Subscription no
+	// longer has a GroupIDs field at all (removed with the node-group
+	// feature), so the guarantee is structural; the disclosure side is
+	// asserted above via the import warnings.
 }
