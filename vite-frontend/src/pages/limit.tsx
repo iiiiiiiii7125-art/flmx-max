@@ -307,9 +307,9 @@ export default function LimitPage({
               classNames={{
                 wrapper:
                   "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                th: "bg-transparent text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                 td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                tr: "hover:bg-default-100  transition-colors",
+                tr: "hover:bg-white/40 transition-colors",
               }}
             >
               <TableHeader>
@@ -466,6 +466,7 @@ export default function LimitPage({
 
       {/* 新增/编辑模态框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -558,6 +559,7 @@ export default function LimitPage({
 
       {/* 删除确认模态框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}

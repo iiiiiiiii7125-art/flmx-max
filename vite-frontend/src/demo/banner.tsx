@@ -23,12 +23,12 @@ export function DemoBanner() {
   }
 
   return (
-    <div className="panel-surface fixed bottom-[84px] right-3 z-[60] w-[min(20rem,calc(100vw-24px))] rounded-2xl p-3 text-xs font-semibold shadow-xl lg:bottom-4">
+    <div className="glass-surface fixed bottom-[84px] right-3 z-[60] w-[min(20rem,calc(100vw-24px))] rounded-2xl p-3 text-xs font-semibold shadow-xl lg:bottom-4">
       <div className="mb-1 flex items-center justify-between">
         <span className="font-semibold text-sm">FLMX 在线演示</span>
         <button
           aria-label="收起"
-          className="rounded p-1 text-foreground hover:bg-default-100"
+          className="rounded p-1 text-foreground hover:bg-white/40"
           type="button"
           onClick={() => setOpen(false)}
         >
@@ -40,7 +40,7 @@ export function DemoBanner() {
       </p>
       <div className="mt-2 flex gap-2">
         <button
-          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-tray px-2 py-1.5 hover:bg-default-100"
+          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-tray px-2 py-1.5 hover:bg-white/40"
           type="button"
           onClick={() => switchDemoRole(role === "admin" ? "user" : "admin")}
         >

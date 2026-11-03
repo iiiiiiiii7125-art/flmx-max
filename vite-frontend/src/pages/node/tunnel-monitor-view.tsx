@@ -38,7 +38,7 @@ import toast from "react-hot-toast";
 
 import { classifyQualityHistoryBar } from "./quality-history-bar";
 
-import { ChartTooltip } from "@/components/chart-tooltip";
+import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
 import { formatTraffic } from "@/utils/traffic";
 import {
   getMonitorTunnels,
@@ -333,7 +333,7 @@ const QualityChartCard = React.memo(function QualityChartCard({
                 />
                 <Tooltip
                   content={
-                    <ChartTooltip
+                    <ChartGlassTooltip
                       formatEntry={(entry) => {
                         const n = Number(entry.value);
                         const label =
@@ -462,7 +462,7 @@ const TrafficChartCard = React.memo(function TrafficChartCard({
                 />
                 <Tooltip
                   content={
-                    <ChartTooltip
+                    <ChartGlassTooltip
                       formatEntry={(entry) => ({
                         name: String(entry.name ?? ""),
                         value: String(yFormatter(entry.value)),
@@ -1305,7 +1305,7 @@ export function TunnelMonitorView({
 
         {/* Quality KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="border border-divider/60 shadow-sm transition-shadow">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span className="text-[11px] font-semibold text-foreground mb-1.5 flex items-center gap-1">
                 <Zap className="w-3 h-3" />
@@ -1323,7 +1323,7 @@ export function TunnelMonitorView({
               )}
             </CardBody>
           </Card>
-          <Card className="border border-divider/60 shadow-sm transition-shadow">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span
                 className="text-[11px] font-semibold text-foreground mb-1.5 flex items-center gap-1"
@@ -1338,7 +1338,7 @@ export function TunnelMonitorView({
               />
             </CardBody>
           </Card>
-          <Card className="border border-divider/60 shadow-sm transition-shadow">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span className="text-[11px] font-semibold text-foreground mb-1.5">
                 入口 → 出口 丢包
@@ -1358,7 +1358,7 @@ export function TunnelMonitorView({
               )}
             </CardBody>
           </Card>
-          <Card className="border border-divider/60 shadow-sm transition-shadow">
+          <Card className="border border-divider/60 shadow-sm hover:shadow-md transition-shadow">
             <CardBody className="py-3 px-4 flex flex-col items-center justify-center min-h-[5rem]">
               <span
                 className="text-[11px] font-semibold text-foreground mb-1.5"
@@ -1494,16 +1494,20 @@ export function TunnelMonitorView({
             return (
               <Card
                 key={tunnel.id}
-                className="group relative overflow-hidden h-full flex flex-col cursor-pointer"
+                className="group relative overflow-hidden shadow-sm hover:-translate-y-px hover:shadow-md transition-[transform,box-shadow] duration-200 ease-refined h-full flex flex-col cursor-pointer"
                 onClick={() => setDetailTunnelId(tunnel.id)}
               >
                 <div
                   className={`absolute top-0 left-0 right-0 h-1 ${isEnabled ? "bg-success" : "bg-danger"}`}
                 />
+                <div
+                  className={`absolute -right-8 -top-8 w-24 h-24 rounded-full blur-2xl opacity-10 transition-opacity group-hover:opacity-20 ${isEnabled ? "bg-success" : "bg-danger"}`}
+                />
+
                 <CardHeader className="pb-2 pt-5 px-5 flex flex-row justify-between items-start gap-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative flex-shrink-0">
-                      <div className="w-10 h-10 rounded-xl panel-inset flex items-center justify-center border border-divider">
+                      <div className="w-10 h-10 rounded-xl glass-inset flex items-center justify-center border border-divider">
                         <ArrowRightLeft
                           className={`w-5 h-5 ${isEnabled ? "text-success-700" : "text-danger-700"}`}
                         />
@@ -1597,9 +1601,9 @@ export function TunnelMonitorView({
             classNames={{
               wrapper:
                 "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-              th: "bg-transparent text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+              th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
               td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-              tr: "hover:bg-default-100  transition-colors",
+              tr: "hover:bg-white/40 transition-colors",
             }}
           >
             <TableHeader>

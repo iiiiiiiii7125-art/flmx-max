@@ -59,8 +59,8 @@ export function TargetButton({
 
   return (
     <button
-      className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors active:bg-default-100 ${
-        missing ? "border-danger/50 panel-card" : "panel-card"
+      className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors active:bg-white/40 ${
+        missing ? "border-danger/50 glass-card" : "glass-card"
       }`}
       type="button"
       onClick={onPress}
@@ -120,7 +120,7 @@ export function TargetPicker({
   const row = (k: TargetKey, name: string, sub?: string) => (
     <button
       key={k}
-      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left hover:bg-default-100 active:bg-default-100"
+      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left hover:bg-white/40 active:bg-white/40"
       type="button"
       onClick={() => {
         onPick(k);
@@ -140,6 +140,7 @@ export function TargetPicker({
 
   return (
     <Modal
+      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -155,7 +156,7 @@ export function TargetPicker({
         <ModalHeader className="flex items-center gap-2">
           <button
             aria-label="返回"
-            className="rounded-lg p-1 text-foreground hover:bg-default-100"
+            className="rounded-lg p-1 text-foreground hover:bg-white/40"
             type="button"
             onClick={close}
           >
@@ -176,7 +177,7 @@ export function TargetPicker({
         )}
         <ModalBody className="space-y-1 pb-4">
           {!q && (
-            <div className="rounded-xl panel-inset">
+            <div className="rounded-xl glass-inset">
               {row("direct", "直连", "从本节点出去")}
               {withBlock && row("block", "阻断", "丢弃匹配的流量")}
             </div>
@@ -184,7 +185,7 @@ export function TargetPicker({
           {groups.map((g) => (
             <div key={g} className="pt-2">
               <p className="px-3 pb-1 text-xs font-semibold text-foreground">{g}</p>
-              <div className="rounded-xl panel-inset">
+              <div className="rounded-xl glass-inset">
                 {shown
                   .filter((t) => targetSource(t) === g)
                   .map((t) => row(String(t.id), t.name))}

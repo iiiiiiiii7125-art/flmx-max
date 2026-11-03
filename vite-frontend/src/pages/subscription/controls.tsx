@@ -15,7 +15,7 @@ export function Segmented<T extends string>({
 }) {
   return (
     <div
-      className="panel-surface grid gap-1 rounded-xl p-1 text-sm"
+      className="glass-surface grid gap-1 rounded-xl p-1 text-sm"
       style={{
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
       }}
@@ -95,7 +95,7 @@ export function EditorTabs<T extends string>({
 }) {
   return (
     <div
-      className="panel-surface grid gap-1 rounded-xl p-1"
+      className="glass-surface grid gap-1 rounded-xl p-1"
       role="tablist"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
     >

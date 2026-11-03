@@ -13,7 +13,7 @@ import {
 } from "recharts";
 
 import { getNodeLatencyHistory } from "@/api";
-import { ChartTooltip } from "@/components/chart-tooltip";
+import { ChartGlassTooltip } from "@/components/chart-glass-tooltip";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import {
   Modal,
@@ -112,6 +112,7 @@ export function LatencyTrendModal({
 
   return (
     <Modal
+      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -179,7 +180,7 @@ export function LatencyTrendModal({
                   />
                   <Tooltip
                     content={
-                      <ChartTooltip
+                      <ChartGlassTooltip
                         formatEntry={(entry) => {
                           const loss = Number(
                             (entry.payload as Record<string, unknown>)?.[

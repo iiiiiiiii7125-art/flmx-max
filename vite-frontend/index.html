@@ -19,7 +19,7 @@
       // 防止暗黑模式闪烁：在页面加载前立即应用系统主题
       (function() {
         // 页面最早阶段应用缓存 favicon，避免默认图标闪烁
-        const defaultFavicon = '/favicon.svg';
+        const defaultFavicon = '/favicon.ico';
         let cachedFavicon = '';
 
         try {
@@ -70,8 +70,6 @@
         faviconLink.href = faviconHref;
         if (faviconHref.startsWith('data:image/png')) {
           faviconLink.type = 'image/png';
-        } else if (faviconHref.endsWith('.svg')) {
-          faviconLink.type = 'image/svg+xml';
         } else {
           faviconLink.removeAttribute('type');
         }
@@ -86,8 +84,6 @@
         shortcutIconLink.href = faviconHref;
         if (faviconHref.startsWith('data:image/png')) {
           shortcutIconLink.type = 'image/png';
-        } else if (faviconHref.endsWith('.svg')) {
-          shortcutIconLink.type = 'image/svg+xml';
         } else {
           shortcutIconLink.removeAttribute('type');
         }

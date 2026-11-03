@@ -45,6 +45,7 @@ export function NodeFormModal({
 }: NodeFormModalProps) {
   return (
     <Modal
+      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -511,7 +512,7 @@ export function NodeFormModal({
                       className={`grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-md border border-divider ${protocolControlsDisabled ? "opacity-70" : ""}`}
                     >
                       {/* HTTP tile */}
-                      <div className="px-3 py-3 rounded-lg panel-inset border border-divider hover:border-primary-200 transition-colors">
+                      <div className="px-3 py-3 rounded-lg glass-inset border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -552,7 +553,7 @@ export function NodeFormModal({
                       </div>
 
                       {/* TLS tile */}
-                      <div className="px-3 py-3 rounded-lg panel-inset border border-divider hover:border-primary-200 transition-colors">
+                      <div className="px-3 py-3 rounded-lg glass-inset border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"
@@ -590,7 +591,7 @@ export function NodeFormModal({
                       </div>
 
                       {/* SOCKS tile */}
-                      <div className="px-3 py-3 rounded-lg panel-inset border border-divider hover:border-primary-200 transition-colors">
+                      <div className="px-3 py-3 rounded-lg glass-inset border border-divider hover:border-primary-200 transition-colors">
                         <div className="flex items-center gap-2 mb-2">
                           <svg
                             aria-hidden="true"

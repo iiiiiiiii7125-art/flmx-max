@@ -24,9 +24,10 @@
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
 
-  /* Flat panel tokens: neutral zinc base, single indigo accent family.
-     Semantic scales stay at full saturation — status colour is data,
-     not decor, and appears only at warning/danger thresholds. */
+  /* Refined Glass tokens: neutral zinc base, single indigo accent family
+     (indigo primary + violet secondary for the accent gradient). Semantic
+     scales stay at full saturation — status colour is data, not decor
+     (Round 2: the Round 1 ~15% desaturation washed out status greens). */
   --background: #fafafa;
   --foreground: #18181b;
   --border: #e4e4e7;
@@ -197,12 +198,13 @@ body {
   }
 }
 
-/* Text Tray tokens: small elements (chips, badges, pills, light/flat
-   buttons) ride a tinted solid plate — --tray for neutral plates,
-   --tray-<color> for semantic-tinted plates (bridge Button flat/light,
-   Badge/Chip tints), each paired with its deepest-shade foreground.
-   One definition point — pages reference the .tray-plate / .tray-*
-   classes or the bg-tray utility, never hand-mixed rgba tints. */
+/* Text Tray tokens (Round 4 — "透明壳＋实色字托"): the glass shell
+   stays the global surface, but no text may sit directly on glass or
+   wallpaper. Every text-bearing element rides an opaque tray: --tray for
+   neutral plates, --tray-<color> for semantic-tinted plates (bridge
+   Button flat/light, Badge/Chip tints). One definition point — pages
+   reference the .tray-plate / .tray-* classes or the bg-tray utility,
+   never hand-mixed rgba tints. */
 :root {
   --tray: #ffffff;
   --tray-foreground: #18181b;
@@ -227,25 +229,92 @@ body {
   --tray-default-foreground: #3f3f46;
 }
 
-/* Flat surface tokens (2026-11-03, user directive: the glass language
-   is removed app-wide). Surfaces are opaque; shape comes from a 1px
-   divider border and hairline separators - no translucency, no
-   backdrop blur, no gradient sheen. What is banned is the glass
-   transparency only: elevation shadows stay allowed, and cards and
-   floating layers may carry shadow-sm/md/lg/xl. The toaster rides
-   the same flat recipe as every other floating layer. */
+/* Matte Glass Variables (2026-11-04, user directive: the glass language
+   is restored, at MODERATE transparency — the 1.9.4-era clear-glass stops
+   (white 0.30 -> 0.06, blur 3px) were too transparent: the wallpaper sat
+   under body text at near-full sharpness. Matte glass raises every stop
+   and the blur by an order of magnitude, so the wallpaper reads as
+   ambience, never as a text substrate:
+     card tier    (--glass-card): white 0.78 -> 0.66 @45% -> 0.60, blur 14px
+     surface tier (--glass-bg):   white 0.85 -> 0.75 @45% -> 0.70, blur 18px
+     inset tier   (.glass-inset): white 0.50 -> 0.35 @55% -> 0.28, blur 10px
+   Worst-case arithmetic (WCAG luminance, --foreground #18181b over a pure
+   black backdrop): the card floor stop 0.60 composites to ~6.2:1, the
+   mid stop 0.66 to ~7:1, the surface floor 0.70 to ~7.9:1 — body text
+   holds the 4.5 floor on any wallpaper and the 7 target at mid stops,
+   and small text never rides glass at all: it sits on the opaque tray
+   system (see the Text Tray tokens above). check-contrast.mjs recomputes
+   these composite pairs; do not lower a stop without re-running it.
+   --content1 survives only as the fill of small form controls (inputs,
+   select triggers), never as a surface. The toaster is a floating layer
+   and rides the surface tier. */
 :root {
-  --toaster-bg: #ffffff;
+  --glass-bg: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.85),
+    rgb(255 255 255 / 0.75) 45%,
+    rgb(255 255 255 / 0.7)
+  );
+  --glass-border: rgb(255 255 255 / 0.55);
+  --glass-card: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.78),
+    rgb(255 255 255 / 0.66) 45%,
+    rgb(255 255 255 / 0.6)
+  );
+  --glass-overlay: rgba(0, 0, 0, 0.3);
+
+  --toaster-bg: linear-gradient(160deg, rgb(255 255 255 / 0.85), rgb(255 255 255 / 0.75) 45%, rgb(255 255 255 / 0.7));
   --toaster-color: #18181b;
-  --toaster-border: var(--divider);
+  --toaster-border: rgb(24 24 27 / 0.08);
 }
 
-/* App background: one plain light colour everywhere. The wallpaper and
-   custom-image background modes went away with the glass surfaces -
-   the stored background settings stay in place but no longer paint
-   anything, and the root classes App.tsx toggles for them are inert. */
+/* Default background: plain light / dark colour. The built-in wallpaper is
+   opt-in (app_bg_image = "wallpaper"), custom images via has-custom-bg. */
 .bg-mesh-gradient {
-  background-color: var(--background);
+  background-color: #fafafa;
+  position: relative;
+  z-index: 0;
+}
+
+.bg-mesh-gradient::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+:root.has-wallpaper-bg .bg-mesh-gradient::before {
+  background: url('/images/bg-light.jpg') no-repeat center center;
+  background-size: cover;
+}
+
+/* The two :root.has-theme-bg paint rules from the 1.9.4 stylesheet are
+   deliberately NOT restored: App.tsx now strips the has-theme-bg class
+   unconditionally and the mode resolution has no theme-image path left,
+   so the rules would be dead. Registered as an informed omission. */
+
+:root.has-custom-bg .bg-mesh-gradient {
+  background-image: none !important;
+  background-color: var(--custom-bg-color, transparent) !important;
+}
+
+:root.has-custom-bg .bg-mesh-gradient::before {
+  background-image: var(--custom-bg-image, none) !important;
+  background-size: cover !important;
+  background-position: center center !important;
+  background-repeat: no-repeat !important;
+}
+
+/* 移动端竖屏：壁纸按宽度铺满时上下裁切过多，改为靠上显示，人物主体更容易露出 */
+@media (max-width: 640px) {
+  :root.has-custom-bg .bg-mesh-gradient::before {
+    background-position: center 25% !important;
+  }
 }
 
 @layer utilities {
@@ -261,7 +330,7 @@ body {
 }
 
 
-/* Base layer: typography order. */
+/* Refined Glass base layer: typography order + floating-layer surfaces. */
 @layer base {
   body {
     font-family: var(--font-sans);
@@ -283,38 +352,69 @@ body {
 }
 
 @layer components {
-  /* Flat panel surfaces: opaque white, one 1px divider border, no
-     backdrop filter. Callers may layer an elevation shadow on top
-     (shadow-* utilities); the recipe bans translucency, not shadow.
-     .panel-surface is the floating-layer tier (shells, dialogs,
-     popovers), .panel-card the in-page card tier, .panel-inset the
-     recessed block inside a card (stat blocks, detail boards, info
-     boxes) on the lightest neutral fill. */
-  .panel-surface {
-    background: var(--content1);
-    border: 1px solid var(--divider);
+  /* Matte glass, floating-layer tier (shells, dialogs, popovers):
+     stops 0.85 -> 0.75 -> 0.70 with blur(18px), so the wallpaper behind
+     a floating layer is homogenised ambience; saturation lift instead
+     of a coloured fill, bright 1px edge + top inner highlight, one soft
+     outer shadow for float. */
+  .glass-surface {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    border: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 16px 40px rgb(24 24 27 / 0.12);
   }
 
-  .panel-card {
-    background: var(--content1);
-    border: 1px solid var(--divider);
+  /* Matte glass, in-page card tier: stops 0.78 -> 0.66 -> 0.60 with
+     blur(14px). The 0.60 floor stop keeps body text at ~6.2:1 even over
+     a pure-black wallpaper region; trays carry small text as always. */
+  .glass-card {
+    background: var(--glass-card);
+    -webkit-backdrop-filter: blur(14px) saturate(150%) brightness(1.02);
+    backdrop-filter: blur(14px) saturate(150%) brightness(1.02);
+    border: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 8px 24px rgb(24 24 27 / 0.08);
   }
 
-  .panel-inset {
-    background: var(--default-50);
-    border: 1px solid var(--divider);
+  /* Glass inset: the recessed inner panel that sits INSIDE a glass
+     card — stat blocks, detail boards, info boxes. Same recipe family
+     as .glass-card but a lower white stop (.50 -> .28), so the rendered
+     result reads as a translucent recess in the card, never as a white
+     board: the inset compounds with the card's own stops instead of
+     stacking a second opaque slab. Any surface that still needs a
+     truly opaque light carrier is a registered functional tray
+     (code/log viewers, QR), not an inset. */
+  .glass-inset {
+    background: linear-gradient(
+      160deg,
+      rgb(255 255 255 / 0.5),
+      rgb(255 255 255 / 0.35) 55%,
+      rgb(255 255 255 / 0.28)
+    );
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+    backdrop-filter: blur(10px) saturate(140%);
+    border: 1px solid rgb(255 255 255 / 0.5);
   }
 
-  /* Bridge accordion "splitted" items are panel cards. Written against
-     the same tokens as .panel-card (not a second recipe): a component
+  /* Bridge accordion "splitted" items are glass cards. Written against
+     the same tokens as .glass-card (not a second recipe): a component
      class cannot be applied through a Tailwind arbitrary variant. */
   .accordion-splitted > [data-slot="accordion-item"] {
-    background: var(--content1);
-    border: 1px solid var(--divider);
+    background: var(--glass-card);
+    -webkit-backdrop-filter: blur(14px) saturate(150%) brightness(1.02);
+    backdrop-filter: blur(14px) saturate(150%) brightness(1.02);
+    border: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 8px 24px rgb(24 24 27 / 0.08);
   }
 
-  /* Text Trays: opaque plates for small elements (bars, pills, rows).
-     .tray-plate is the neutral plate;
+  /* Text Trays (Round 4): opaque plates that carry text over glass or
+     wallpaper. .tray-plate is the neutral plate (bars, pills, rows);
      .tray-<color> pairs a solid semantic tint with a contrast-checked
      foreground and hover shade — the single definition point for the
      bridge Button flat/light maps and the Badge/Chip tint variants, so
@@ -332,6 +432,7 @@ body {
     background: var(--tray);
     color: var(--tray-foreground);
     border: 1px solid var(--tray-border);
+    box-shadow: 0 1px 2px rgb(24 24 27 / 0.05);
   }
 
   .tray-default {

@@ -43,8 +43,8 @@ export function Alert({
 }: AlertProps) {
   return (
     <BaseAlert
-      // The old flat variant forced a 15% bg opacity (translucent alert
-      // text); alerts always ride the opaque tray.
+      // Round 4: the old flat variant forced a 15% bg opacity (translucent
+      // alert text over glass); alerts always ride the opaque tray now.
       className={undefined}
       variant={mapVariant(color)}
       {...props}

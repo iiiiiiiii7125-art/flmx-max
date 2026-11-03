@@ -148,7 +148,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
             ["合计", shown ? shown.up + shown.down : undefined, "", ""],
           ] as Array<[string, number | undefined, string, string]>
         ).map(([label, value, color, textColor]) => (
-          <div key={label} className="rounded-xl panel-inset px-3 py-2">
+          <div key={label} className="rounded-xl glass-inset px-3 py-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
               {color && (
                 <span
@@ -207,7 +207,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
                     if (!active || !p) return null;
 
                     return (
-                      <div className="panel-surface rounded-xl px-3 py-2 text-xs font-semibold shadow-lg">
+                      <div className="glass-surface rounded-xl px-3 py-2 text-xs font-semibold shadow-lg">
                         <p className="font-medium">{p.long}</p>
                         <p className={`mt-1 ${DOWN_TEXT}`}>
                           下载 {bytes(p.down)}

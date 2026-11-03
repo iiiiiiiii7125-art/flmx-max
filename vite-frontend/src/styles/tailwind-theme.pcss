@@ -85,11 +85,9 @@
   --color-warning-900: var(--warning-900);
 }
 
-/* Flat panel design tokens: system font stack, converged type scale
-   (12/13/14/16/20/24), radii (controls 12px, cards 20px), one motion
-   curve. The shadow scale is zeroed app-wide (2026-11-03 flat-surface
-   directive): shadow utilities stay valid classes but paint nothing,
-   so layering is carried by borders alone. */
+/* Refined Glass design tokens: system font stack, converged type scale
+   (12/13/14/16/20/24), radii (controls 12px, cards 20px), one soft
+   single-layer shadow scale, one motion curve. */
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
@@ -114,12 +112,15 @@
   --radius-2xl: 1.25rem;
   --radius-3xl: 1.5rem;
 
-  --shadow-sm: 0 0 0 0 rgb(0 0 0 / 0);
-  --shadow-md: 0 0 0 0 rgb(0 0 0 / 0);
-  --shadow-lg: 0 0 0 0 rgb(0 0 0 / 0);
-  --shadow-xl: 0 0 0 0 rgb(0 0 0 / 0);
-  --shadow-2xl: 0 0 0 0 rgb(0 0 0 / 0);
-  --shadow-inner: 0 0 0 0 rgb(0 0 0 / 0);
+  --shadow-sm: 0 1px 2px rgb(24 24 27 / 0.05);
+  --shadow-md: 0 6px 20px rgb(24 24 27 / 0.08);
+  --shadow-lg: 0 16px 40px rgb(24 24 27 / 0.12);
+  /* xl/2xl/inner did not exist in the 1.9.4 theme; the flat era zeroed
+     them. On the glass restore they get same-family soft values instead
+     of falling back to Tailwind's heavier defaults. */
+  --shadow-xl: 0 24px 48px rgb(24 24 27 / 0.14);
+  --shadow-2xl: 0 32px 64px rgb(24 24 27 / 0.16);
+  --shadow-inner: inset 0 2px 4px rgb(24 24 27 / 0.05);
 
   --ease-refined: cubic-bezier(0.2, 0.7, 0.3, 1);
 
