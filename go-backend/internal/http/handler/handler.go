@@ -2521,8 +2521,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// 可达数十 MB，10MB 的通用上限会误拒合法备份。nginx 侧已放行 50m（SCR-002），
 	// 此处 100MB 与面板规模对齐；仍为有界值，防内存耗尽 DoS。
 	if err := decodeJSONWithLimit(r.Body, &req, 100<<20); err != nil {
-		// J-008：错误码统一为 -2（原混用 500 与 -2）
-		response.WriteJSON(w, response.Err(-2, "请求参数错误"))
+		// J-008：导入面其余失败统一为 -2；唯请求体解码失败的文案
+		// 「请求参数错误」按全局同文案口径用 ErrDefault（-1），与
+		// decodeJSON 全部调用点同码（R9-14）。
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
 
