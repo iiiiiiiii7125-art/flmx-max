@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -297,7 +298,23 @@ func (m *Manager) syncGuardBeforeRestart() error {
 	m.mu.Lock()
 	guard := m.snellGuardForLocked(m.snellUID)
 	m.mu.Unlock()
-	return m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)
+	gate, _ := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard))
+	return gate
+}
+
+// isolateHopSync splits a port-hop failure off a guard sync result
+// (R2-F2-E02): when an old kernel rejects every hop rule, the main
+// ruleset has still been applied, so the sync counts as successful
+// for every gating decision and the returned gate error is nil; the
+// hop failure comes back separately so the caller can surface it by
+// name (instance log) instead of blocking a start or misreporting it
+// as a whitelist/guard sync failure.
+func isolateHopSync(err error) (gate error, hopNote string) {
+	var he *hopRulesError
+	if errors.As(err, &he) {
+		return nil, he.Error()
+	}
+	return err, ""
 }
 
 // restartGuardError gates an internal restart of inst: nil when the
@@ -372,19 +389,38 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		guardUID := m.snellUID
 		m.mu.Unlock()
 		guard := &snellGuard{UID: guardUID, Resolvers: systemResolvers()}
-		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+		if err, hopNote := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
 			err = fmt.Errorf("Snell 私网拦截规则下发失败，未启动 Snell（不允许无拦截运行）: %v", err)
 			m.setErr(inst, err)
 			return m.state(req.Type, false), err
+		} else if hopNote != "" {
+			inst.logs.add("[flmx] " + hopNote)
 		}
 	}
 
 	binDir := m.binDir(req.Type, req.Version)
 	bins := map[string]string{}
+	// R2-F2-A2: a request carrying the unresolved "latest" sentinel can
+	// never prove the binary on disk is current — the version-keyed
+	// directory makes ensureBinary skip the download, which used to
+	// turn "install the latest" into a silent no-op. The panel now
+	// resolves "latest" to a concrete version before dispatch; when an
+	// unresolved request still arrives (older panel, restored state)
+	// and a binary is already present, name the skip in the instance
+	// log instead of letting the apply read as an upgrade.
+	unresolvedVersion := req.Version == "" || strings.EqualFold(req.Version, "latest")
+	binPresent := false
+	if req.Download != nil && req.Download.BinName != "" {
+		_, statErr := os.Stat(filepath.Join(binDir, req.Download.BinName))
+		binPresent = statErr == nil
+	}
 	mainBin, err := m.ensureBinary(inst, req.Type+" "+req.Version, req.Download, binDir)
 	if err != nil {
 		m.setErr(inst, err)
 		return m.state(req.Type, false), err
+	}
+	if unresolvedVersion && binPresent {
+		inst.logs.add("[flmx] 请求版本为 latest 且二进制已存在，本次未重新下载；实际运行版本以状态上报为准，升级请在面板选择具体版本")
 	}
 	bins[""] = mainBin
 	for _, e := range req.Extras {
@@ -479,7 +515,13 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	guardUID := m.snellUID
 	m.mu.Unlock()
 	guard := m.snellGuardFor(guardUID)
-	syncErr := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)
+	syncErr, hopNote := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard))
+	if hopNote != "" {
+		// R2-F2-E02: the main ruleset is in place; only port hopping
+		// is ineffective. Name it as what it is — never as a guard
+		// sync failure — and let the kernel start.
+		inst.logs.add("[flmx] " + hopNote)
+	}
 	if syncErr != nil {
 		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
 	}
@@ -831,7 +873,9 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		m.mu.Lock()
 		guard := m.snellGuardForLocked(m.snellUID)
 		m.mu.Unlock()
-		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+		// A hop-only failure does not make the removal fail: the
+		// remaining ruleset synced fine (R2-F2-E02).
+		if err, _ := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -883,10 +927,12 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		// the table is gone entirely — so the guard goes back in
 		// after stopping and before starting, and a failed sync
 		// leaves the kernel stopped instead of running unguarded.
-		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+		if err, hopNote := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
 			ferr := nftGuardFailure(inst.req, err)
 			m.setErr(inst, ferr)
 			return m.state(kernelType, false), ferr
+		} else if hopNote != "" {
+			inst.logs.add("[flmx] " + hopNote)
 		}
 		m.startProcesses(inst)
 		// R2-029: the probe result is the receipt. Apply reports
@@ -917,7 +963,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		m.mu.Lock()
 		guard := m.snellGuardForLocked(m.snellUID)
 		m.mu.Unlock()
-		if err := m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard); err != nil {
+		if err, _ := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
 			return m.state(kernelType, false), err
 		}
 	}

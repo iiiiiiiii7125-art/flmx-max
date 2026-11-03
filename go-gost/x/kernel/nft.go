@@ -437,6 +437,19 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 	return n.syncGuard(ports, users, nil)
 }
 
+// hopRulesError reports that every port-hop rule was rejected by the
+// kernel (typically an old kernel without nft_fib) while the main
+// ruleset — traffic counters, inbound whitelists, the Snell egress
+// guard — was applied successfully. syncGuard returns it so the
+// failure stays named and per-rule, but it is not a ruleset failure:
+// port hopping is a reachability nicety outside the security posture,
+// so gating callers must not block a kernel start on it or report it
+// as a whitelist/guard sync failure (R2-F2-E02). Manager call sites
+// split it off with isolateHopSync.
+type hopRulesError struct{ msg string }
+
+func (e *hopRulesError) Error() string { return e.msg }
+
 // syncGuard is sync with the Snell egress guard folded into the same
 // atomic table rebuild. Unlike traffic counting (best-effort: a node
 // without nftables just loses its counters), the guard is a security
@@ -480,8 +493,8 @@ func (n *nftCounters) syncGuard(ports []Port, users []int64, guard *snellGuard) 
 			for i, s := range skipped {
 				parts[i] = s.String()
 			}
-			hopErr = fmt.Errorf("全部 %d 条 hop 规则被内核拒绝，端口跳跃未生效（计数与白名单规则已照常下发）: %s",
-				len(skipped), strings.Join(parts, "; "))
+			hopErr = &hopRulesError{msg: fmt.Sprintf("全部 %d 条 hop 规则被内核拒绝，端口跳跃未生效（计数与白名单规则已照常下发）: %s",
+				len(skipped), strings.Join(parts, "; "))}
 		}
 	}
 
