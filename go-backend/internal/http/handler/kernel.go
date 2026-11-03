@@ -494,6 +494,15 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "restart":
+		// R10-05（I-F3-04）：已停用内核不得走 restart——agent 侧
+		// Control 对 restart 一律置 Enabled=true 并拉起进程，面板
+		// DB 仍 enabled=0，两侧状态就此分叉（靠下次 apply 才收敛、
+		// 状态回读自相矛盾）。停用态须先 start（落库 enabled=1），
+		// restart 在此点名拒绝；守卫落面板面，agent 语义不动。
+		if k.Enabled == 0 {
+			response.WriteJSON(w, response.ErrDefault("内核已停用，请先启动"))
+			return
+		}
 		unlock := lockKernelApply(k.ID)
 		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
 			"type": k.KernelType, "action": "restart",
@@ -1450,26 +1459,146 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if ids == nil {
 		return
 	}
-	s := 0
-	f := 0
-	failures := make([]batchFailureDetail, 0)
-	var targetIDs []int64
-	kernelIDs := make([]int64, 0)
-	seenKernel := make(map[int64]bool)
-	// X04-001：整批守卫共用一份全表快照——旧实现逐条 chainInUseMessage
-	// 与 chainReferrers 各重载一次全表，批量删即 O(条数) 次全表扫描。
-	// 批内已删行从引用方里滤除，与逐条现查口径一致（现查时先删的行
-	// 已不在表中，不会出现在后续条目的引用方里）。
-	var guardIx *chainRefIndex
-	var guardIxErr error
-	guardIxTried := false
-	loadGuardIx := func() (*chainRefIndex, error) {
-		if !guardIxTried {
-			guardIxTried = true
-			guardIx, guardIxErr = h.loadChainRefIndex()
-		}
-		return guardIx, guardIxErr
+	// R10-11（I-C4-01）：两段式批删。旧实现逐条顺序处理、批内豁免
+	// batchDeletesReferrers 按**请求集**判：目标 A 的引用方 B 只要
+	// 在请求集内，A 的守卫与落库前复检都放行；B 随后因批外引用独
+	// 立失败而存活时，A 已先行删除、B 的出站悬空、数据面丢弃其流
+	// 量，且回执无一处点名被打断的 B→A 引用。现分两段：
+	//   段一（结果集守卫）：不动任何数据，按「引用方确将同批删
+	//   除才豁免」求最大可删集——一条入站可删 ⟺ 它的全部引用方
+	//   都可删；批外引用、批内不可删的引用方都点名记失败。
+	//   段二（删除）：按引用拓扑序（先删引用方、后删被引用方）
+	//   逐条执行，逐条仍走 R9-08 落库前新鲜复检（批次处理期间新
+	//   保存的引用不在段一快照内，复检以现行引用集为据：仍存活
+	//   的引用方一律拦，不再按请求集豁免）。
+	// 回执 failures 按请求序组装（failAt 以请求位索引），与旧逐条
+	// 顺序处理的回执顺序一致。
+	type batchDelItem struct {
+		pos    int
+		id     int64
+		row    *model.NodeInbound
+		failed bool
 	}
+	items := make([]*batchDelItem, 0, len(ids))
+	failAt := make(map[int]batchFailureDetail, len(ids))
+	recordFailure := func(it *batchDelItem, detail batchFailureDetail) {
+		it.failed = true
+		failAt[it.pos] = detail
+	}
+	failureReason := func(id int64, name, reason string) batchFailureDetail {
+		return appendBatchFailureReason(nil, id, name, reason)[0]
+	}
+	failureErr := func(id int64, name string, err error) batchFailureDetail {
+		return appendBatchFailure(nil, id, name, err)[0]
+	}
+	// 预检：行不存在/伴生行按旧口径逐条记失败，不入两段流程。
+	for pos, id := range ids {
+		row, err := h.repo.GetNodeInbound(id)
+		it := &batchDelItem{pos: pos, id: id}
+		if err != nil || row == nil {
+			recordFailure(it, failureReason(id, "", "节点服务不存在"))
+			continue
+		}
+		it.row = row
+		if row.CompanionOf > 0 {
+			recordFailure(it, failureReason(id, row.Name, "计量伴生入站由系统管理，不能单独删除"))
+			continue
+		}
+		items = append(items, it)
+	}
+
+	// 段一：整批共用一份全表快照（X04-001：一轮一载，避免 O(条数)
+	// 次全表扫描）。R3X-015：守卫查询失败 fail-closed——全批记失败、
+	// 不删除，不得把查询失败读作无引用或「引用方全在批内」。
+	planned := make(map[int64]bool, len(items))
+	var snapIx *chainRefIndex
+	if len(items) > 0 {
+		ix, guardErr := h.loadChainRefIndex()
+		if guardErr != nil {
+			for _, it := range items {
+				recordFailure(it, failureErr(it.id, it.row.Name, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", it.id, guardErr)))
+			}
+		} else {
+			snapIx = ix
+			for _, it := range items {
+				planned[it.id] = true
+			}
+			// 最大可删集（不动点）：任一条目的引用方落在可删集外
+			// （批外行、预检失败行、已被剔出的批内行），该条目即
+			// 不可删；剔出会连带其被引用方，迭代至稳定。
+			for changed := true; changed; {
+				changed = false
+				for _, it := range items {
+					if !planned[it.id] {
+						continue
+					}
+					for _, ref := range ix.referrers(it.id) {
+						if !planned[ref.ID] {
+							planned[it.id] = false
+							changed = true
+							break
+						}
+					}
+				}
+			}
+			// 不可删条目逐条记失败，点名真正拦住它的引用方（仍存
+			// 活者）——含「引用方在批内但自身被批外引用挡下」的
+			// 连带格，被打断的引用关系在回执里有落点。
+			for _, it := range items {
+				if planned[it.id] {
+					continue
+				}
+				var blockers []model.NodeInbound
+				for _, ref := range ix.referrers(it.id) {
+					if !planned[ref.ID] {
+						blockers = append(blockers, ref)
+					}
+				}
+				recordFailure(it, failureReason(it.id, it.row.Name, h.chainInUseMessageFromRefs(it.row, blockers)))
+			}
+		}
+	}
+
+	// 删除序：引用拓扑（引用方先于被引用方），请求序作同层tie-break；
+	// 批内互引成环时整环同批删、环内退回请求序（尾部统一 apply，
+	// 环内中间态不下发）。
+	ordered := make([]*batchDelItem, 0, len(items))
+	if snapIx != nil {
+		placed := make(map[int64]bool, len(items))
+		var remaining []*batchDelItem
+		for _, it := range items {
+			if planned[it.id] {
+				remaining = append(remaining, it)
+			}
+		}
+		for len(remaining) > 0 {
+			var deferred []*batchDelItem
+			progress := false
+			for _, it := range remaining {
+				ready := true
+				for _, ref := range snapIx.referrers(it.id) {
+					if planned[ref.ID] && !placed[ref.ID] {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					ordered = append(ordered, it)
+					placed[it.id] = true
+					progress = true
+				} else {
+					deferred = append(deferred, it)
+				}
+			}
+			if !progress {
+				ordered = append(ordered, deferred...)
+				break
+			}
+			remaining = deferred
+		}
+	}
+
+	// 段二：逐条删除。deletedIDs 供复检滤除本批已删引用方。
 	deletedIDs := make(map[int64]bool)
 	liveRefs := func(ix *chainRefIndex, targetID int64) []model.NodeInbound {
 		refs := ix.referrers(targetID)
@@ -1484,73 +1613,47 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		return out
 	}
-	for _, id := range ids {
-		row, err := h.repo.GetNodeInbound(id)
-		if err != nil || row == nil {
-			f++
-			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
-			continue
+	s := 0
+	var targetIDs []int64
+	kernelIDs := make([]int64, 0)
+	seenKernel := make(map[int64]bool)
+	markKernel := func(row *model.NodeInbound) {
+		if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+			seenKernel[row.KernelID] = true
+			kernelIDs = append(kernelIDs, row.KernelID)
 		}
-		if row.CompanionOf > 0 {
-			f++
-			failures = appendBatchFailureReason(failures, id, row.Name, "计量伴生入站由系统管理，不能单独删除")
-			continue
-		}
-		// R3X-015：守卫查询失败 fail-closed——该条记失败、不删除，
-		// 不得把查询失败读作无引用或「引用方全在批内」。
-		ix, guardErr := loadGuardIx()
-		if guardErr != nil {
-			f++
-			failures = appendBatchFailure(failures, id, row.Name, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", id, guardErr))
-			continue
-		}
-		refs := liveRefs(ix, id)
-		if msg := h.chainInUseMessageFromRefs(row, refs); msg != "" {
-			if !batchDeletesReferrers(ids, refs) {
-				f++
-				failures = appendBatchFailureReason(failures, id, row.Name, msg)
-				continue
-			}
-		}
+	}
+	for _, it := range ordered {
+		id, row := it.id, it.row
 		h.removeInboundRelays(id)
-		// R9-08（I-F2-03）：落库前按最终引用集复检——整批共用快照在
-		// 首项时定格，批次处理期间新保存的引用不在快照内。此处逐
-		// 条现查新鲜引用集，批语义不变（批内已删引用由 liveRefs
-		// 滤除、引用方全在删除集内仍放行）；命中则该条记失败并点
-		// 名，按删除失败同口径把其内核汇入末尾 apply 集（relay 已
-		// 清、allow 按现行 DB 重算，理由同下方 R5X-004(e)）；查询
-		// 失败 fail-closed，同守卫口径。
+		// R9-08（I-F2-03）：落库前按最终引用集复检——段一快照在批
+		// 次开始时定格，批次处理期间新保存的引用不在快照内。此处
+		// 逐条现查新鲜引用集：批内已删引用方由 liveRefs 滤除，其
+		// 余仍存活的引用方一律拦并点名（R10-11 起不再按请求集豁
+		// 免——段一已保证排在本条之前的批内引用方都先删，若此刻
+		// 仍有批内引用方存活，只可能是处理期间新保存的引用，按
+		// 批外引用同口径拦）；命中则该条记失败，按删除失败同口
+		// 径把其内核汇入末尾 apply 集（relay 已清、allow 按现行
+		// DB 重算，理由同下方 R5X-004(e)）；查询失败 fail-closed，
+		// 同守卫口径。
 		freshIx, freshErr := h.loadChainRefIndex()
 		if freshErr != nil {
-			f++
-			failures = appendBatchFailure(failures, id, row.Name, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", id, freshErr))
-			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
-				seenKernel[row.KernelID] = true
-				kernelIDs = append(kernelIDs, row.KernelID)
-			}
+			recordFailure(it, failureErr(id, row.Name, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", id, freshErr)))
+			markKernel(row)
 			continue
 		}
-		freshRefs := liveRefs(freshIx, id)
-		if msg := h.chainInUseMessageFromRefs(row, freshRefs); msg != "" && !batchDeletesReferrers(ids, freshRefs) {
-			f++
-			failures = appendBatchFailureReason(failures, id, row.Name, msg)
-			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
-				seenKernel[row.KernelID] = true
-				kernelIDs = append(kernelIDs, row.KernelID)
-			}
+		if msg := h.chainInUseMessageFromRefs(row, liveRefs(freshIx, id)); msg != "" {
+			recordFailure(it, failureReason(id, row.Name, msg))
+			markKernel(row)
 			continue
 		}
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
-			f++
-			failures = appendBatchFailure(failures, id, row.Name, err)
+			recordFailure(it, failureErr(id, row.Name, err))
 			// R5X-004(e)：失败项的 relay 已删而入站尚存——把该入站
 			// 所在内核汇入末尾统一 apply 集，使其 allow 按现行 DB
 			// 重算（与成功项同一下发面）。targetIDs 不汇入：本入站
 			// （拨号方）尚存、其出站目标的 allow 不受 relay 删除影响。
-			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
-				seenKernel[row.KernelID] = true
-				kernelIDs = append(kernelIDs, row.KernelID)
-			}
+			markKernel(row)
 			continue
 		}
 		// E6-S1 同型补齐：伴生连带删除同样移至本行删除成功之后
@@ -1558,11 +1661,14 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		h.deleteCompanionOf(id)
 		deletedIDs[id] = true
 		s++
-		if !isExternalInbound(row) && !seenKernel[row.KernelID] {
-			seenKernel[row.KernelID] = true
-			kernelIDs = append(kernelIDs, row.KernelID)
-		}
+		markKernel(row)
 		targetIDs = append(targetIDs, outboundTargets(*row)...)
+	}
+	failures := make([]batchFailureDetail, 0, len(failAt))
+	for pos := range ids {
+		if detail, ok := failAt[pos]; ok {
+			failures = append(failures, detail)
+		}
 	}
 	msg := "操作成功"
 	for _, kernelID := range kernelIDs {
@@ -1576,7 +1682,7 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.R{
 		Code: 0,
 		Msg:  msg,
-		Data: batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures},
+		Data: batchOperationResult{SuccessCount: s, FailCount: len(failures), Failures: failures},
 		TS:   time.Now().UnixMilli(),
 	})
 }

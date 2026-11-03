@@ -438,8 +438,8 @@ func (h *Handler) nodeCrossReferrersIx(targets []model.NodeInbound, nodeID int64
 
 // kernelChainGuard 是 R1 X-P2-2（D-R1-02，按 V-03）的卸载守卫：对内核的
 // 全部入站逐个跑 chainReferrers，收集「内核之外」的引用方（同内核入站
-// 互相引用不算被断——它们随卸载一并删除，与 inboundBatchDelete 的
-// batchDeletesReferrers 口径一致）。返回去重后的引用方入站名与按
+// 互相引用不算被断——它们随同一次卸载操作一并删除，不存在逐条独立
+// 成败留下的悬空）。返回去重后的引用方入站名与按
 // chainInUseMessage 口径拼装的说明（无外部引用时说明为空）。
 func (h *Handler) kernelChainGuard(kernelID int64) (referrerNames []string, message string, err error) {
 	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
@@ -573,21 +573,6 @@ func (h *Handler) chainDialerNodeIDs(inboundID int64) ([]int64, error) {
 		}
 	}
 	return ids, nil
-}
-
-// batchDeletesReferrers reports whether a batch delete also removes every
-// inbound chained through a target, so the target may go too.
-func batchDeletesReferrers(ids []int64, refs []model.NodeInbound) bool {
-	deleting := make(map[int64]bool, len(ids))
-	for _, id := range ids {
-		deleting[id] = true
-	}
-	for _, r := range refs {
-		if !deleting[r.ID] {
-			return false
-		}
-	}
-	return true
 }
 
 // changedTargets lists the targets in only one of before and after, once
