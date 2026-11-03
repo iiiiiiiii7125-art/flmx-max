@@ -28,12 +28,6 @@ export interface User {
   maxConn?: number;
 }
 
-export interface UserGroup {
-  id: number;
-  name: string;
-  status: number;
-}
-
 export interface UserForm {
   id?: number;
   name?: string;
@@ -47,7 +41,6 @@ export interface UserForm {
   expTime: Date | null;
   flowResetTime: number;
   maxConn?: number;
-  groupIds?: number[];
 }
 
 export interface UserTunnel {

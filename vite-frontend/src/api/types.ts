@@ -158,36 +158,8 @@ export interface SpeedLimitApiItem {
   [key: string]: unknown;
 }
 
-export interface TunnelGroupApiItem {
-  id: number;
-  name: string;
-  status: number;
-  tunnelIds: number[];
-  tunnelNames: string[];
-  createdTime: number;
-  [key: string]: unknown;
-}
 
-export interface UserGroupApiItem {
-  id: number;
-  name: string;
-  status: number;
-  userIds: number[];
-  userNames: string[];
-  createdTime: number;
-  [key: string]: unknown;
-}
 
-export interface GroupPermissionApiItem {
-  id: number;
-  userGroupId: number;
-  /** 左连接无匹配（组已删）时后端下发 null（F-062）。 */
-  userGroupName: string | null;
-  tunnelGroupId: number;
-  tunnelGroupName: string | null;
-  createdTime: number;
-  [key: string]: unknown;
-}
 
 export interface TunnelDiagnosisApiItem {
   success: boolean;

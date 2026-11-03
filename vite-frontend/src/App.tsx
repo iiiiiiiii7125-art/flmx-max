@@ -366,14 +366,6 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute adminOnly={true} useSimpleLayout={true}>
-              <UserHubPage />
-            </ProtectedRoute>
-          }
-          path="/group"
-        />
-        <Route
-          element={
             <ProtectedRoute>
               <ProfilePage />
             </ProtectedRoute>

@@ -253,9 +253,6 @@ const BACKUP_TYPE_OPTIONS = [
   { value: "forwards", label: "规则" },
   { value: "userTunnels", label: "用户隧道权限" },
   { value: "speedLimits", label: "限速规则" },
-  { value: "tunnelGroups", label: "隧道分组" },
-  { value: "userGroups", label: "用户分组" },
-  { value: "permissions", label: "分组权限" },
   { value: "configs", label: "系统配置" },
   { value: "inbounds", label: "内核与入站" },
   // 后端 ExportPartial/Import 早已支持，前端清单曾漏列致「全选」仍丢三表（F-026）。

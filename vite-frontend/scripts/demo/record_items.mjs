@@ -27,9 +27,6 @@ await call(tok, "POST", "backup/gist/status", {});
 // warns "[demo] not recorded" and the config walk fails. Record the seed
 // panel's honest answer (no import has run, so no snapshot exists).
 await call(tok, "GET", "backup/import-auto-backup/status");
-await call(tok, "POST", "group/user/list");
-await call(tok, "POST", "group/tunnel/list");
-await call(tok, "POST", "group/permission/list");
 const nodes = (await call(tok, "POST", "node/list")).data;
 // R5X-007: the node page calls this unconditionally on mount; without a
 // recording the demo adapter warns "[demo] not recorded" and CI fails.
@@ -46,7 +43,6 @@ for (const n of nodes) {
 for (const i of inbounds) { await call(tok, "POST", "inbound/share", { id: i.id }); await call(tok, "POST", "inbound/relay/list", { inboundId: i.id }); }
 for (const k of (Array.isArray(kernels) ? kernels : kernels.items ?? [])) await call(tok, "POST", "kernel/logs", { id: k.id });
 for (const u of users) {
-  await call(tok, "POST", "user/groups", { id: u.id });
   await call(tok, "POST", "tunnel/user/list", { userId: u.id });
   await call(tok, "POST", "user-subscription/list", { userId: u.id });
 }

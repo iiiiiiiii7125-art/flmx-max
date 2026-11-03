@@ -246,7 +246,6 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                 "/node",
                 "/monitor",
                 "/user",
-                "/group",
                 "/limit",
                 "/config",
                 "/panel-sharing",

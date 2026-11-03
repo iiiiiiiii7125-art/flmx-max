@@ -2,7 +2,6 @@ import type {
   BatchOperationResult,
   ForwardDiagnosisApiData,
   ForwardApiItem,
-  GroupPermissionApiItem,
   NodeReleaseApiItem,
   NodeApiItem,
   SpeedLimitApiItem,
@@ -11,9 +10,7 @@ import type {
   TunnelDeletePreviewApiData,
   TunnelDeleteWithForwardsApiData,
   TunnelDiagnosisApiData,
-  TunnelGroupApiItem,
   UserApiItem,
-  UserGroupApiItem,
   UserListQuery,
   UserPackageInfoApiData,
   UserTunnelPermissionApiItem,
@@ -438,9 +435,6 @@ export const resetUserFlow = (data: { id: number; type: number }) =>
 export const resetUserQuota = (data: UserQuotaResetPayload) =>
   Network.post("/user/quota/reset", data);
 
-export const getUserGroups = (id: number) =>
-  Network.post<number[]>("/user/groups", { id });
-
 // 网站配置相关接口
 export const getConfigs = () =>
   Network.post<Record<string, string>>("/config/list");
@@ -540,52 +534,6 @@ export const batchChangeTunnel = (data: {
     { timeout: batchCallTimeout(data.forwardIds.length) },
   );
 
-// 分组与权限分配接口
-export const getTunnelGroupList = () =>
-  Network.post<TunnelGroupApiItem[]>("/group/tunnel/list");
-export const createTunnelGroup = (
-  data: { name: string; status?: number },
-  idemKey?: string,
-) => Network.post("/group/tunnel/create", data, { idemKey });
-export const updateTunnelGroup = (data: {
-  id: number;
-  name: string;
-  status?: number;
-}) => Network.post("/group/tunnel/update", data);
-export const deleteTunnelGroup = (id: number) =>
-  Network.post("/group/tunnel/delete", { id });
-export const assignTunnelsToGroup = (data: {
-  groupId: number;
-  tunnelIds: number[];
-}) => Network.post("/group/tunnel/assign", data);
-
-export const getUserGroupList = () =>
-  Network.post<UserGroupApiItem[]>("/group/user/list");
-export const createUserGroup = (
-  data: { name: string; status?: number },
-  idemKey?: string,
-) => Network.post("/group/user/create", data, { idemKey });
-export const updateUserGroup = (data: {
-  id: number;
-  name: string;
-  status?: number;
-}) => Network.post("/group/user/update", data);
-export const deleteUserGroup = (id: number) =>
-  Network.post("/group/user/delete", { id });
-export const assignUsersToGroup = (data: {
-  groupId: number;
-  userIds: number[];
-}) => Network.post("/group/user/assign", data);
-
-export const getGroupPermissionList = () =>
-  Network.post<GroupPermissionApiItem[]>("/group/permission/list");
-export const assignGroupPermission = (data: {
-  userGroupId: number;
-  tunnelGroupId: number;
-}) => Network.post("/group/permission/assign", data);
-export const removeGroupPermission = (id: number) =>
-  Network.post("/group/permission/remove", { id });
-
 // 面板共享 (Federation) 接口
 export const getPeerShareList = () =>
   Network.post<Array<Record<string, unknown>>>("/federation/share/list");
@@ -628,9 +576,6 @@ export interface BackupTypes {
   forwards?: boolean;
   userTunnels?: boolean;
   speedLimits?: boolean;
-  tunnelGroups?: boolean;
-  userGroups?: boolean;
-  permissions?: boolean;
   configs?: boolean;
   inbounds?: boolean;
   // 后端 ExportPartial/Import 早已支持，前端清单曾漏列（F-026）。

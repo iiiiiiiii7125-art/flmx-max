@@ -78,7 +78,7 @@ await session("admin", "admin@user", "demo-admin-123", [
   ["/node", [click("香港 HKT"), chain(tab("内核"))]],
   ["/inbound", [click("香港 Reality"), chain(mainClick("订阅", { exact: true })), chain(mainClick("订阅源"))]],
   ["/relay", [click("上海移动 → 香港")]],
-  ["/forward"], ["/tunnel"], ["/limit"], ["/user", [click("xiaoming")]], ["/group"], ["/panel-sharing"],
+  ["/forward"], ["/tunnel"], ["/limit"], ["/user", [click("xiaoming")]], ["/panel-sharing"],
   // R6X-022: no ["/monitor"] step for admins — since the DA-1 IA merge
   // admins are redirected to /node, so the step only ever re-recorded
   // the node page (dead step). The user session below owns /monitor.

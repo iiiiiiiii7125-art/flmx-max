@@ -1,5 +1,5 @@
 """Step 2: tunnels (incl. a realm-engine one, Lane C), relays, forwards,
-users, limits, groups, latency points."""
+users, limits, latency points."""
 import json, sqlite3, sys, time, urllib.request, random
 B = "http://127.0.0.1:16370/api/v1"; DB = sys.argv[1]; st = json.load(open(DB + ".seed.json"))
 tok, ids = st["token"], st["ids"]
@@ -49,7 +49,7 @@ for (tid, entry, port, iname, title) in [
     x("INSERT INTO node_inbound_relay(inbound_id, forward_id, name, share_host, managed, created_time) VALUES(?,?,?,'',1,?)", (iid, fid, title, now))
 db.commit()
 
-# users, limits, groups
+# users, limits
 api("/speed-limit/create", {"name": "100 Mbps", "speed": 100, "tunnelId": t_sh, "tunnelName": "上海移动 端口转发"})
 api("/speed-limit/create", {"name": "不限速", "speed": 99999, "tunnelId": t_sh, "tunnelName": "上海移动 端口转发"})
 exp = now + 86400000 * 180
@@ -73,9 +73,6 @@ forward(t_iplc, gz, 32101, "198.51.100.60:443", "阿强 · 游戏加速", (users
 x("UPDATE user SET in_flow = ?, out_flow = ? WHERE user = 'xiaoming'", (35 * G, 8 * G))
 x("UPDATE user SET in_flow = ?, out_flow = ? WHERE user = 'aqiang'", (61 * G, 12 * G))
 db.commit()
-api("/group/user/create", {"name": "VIP 用户"}); api("/group/user/create", {"name": "普通用户"})
-api("/group/tunnel/create", {"name": "精品线路"})
-
 # latency targets
 targets = [
     {"name": "北京电信", "host": "bj-ct.example.com", "port": 80, "enabled": True, "pinned": True},
