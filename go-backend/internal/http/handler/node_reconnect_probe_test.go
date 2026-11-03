@@ -1,10 +1,9 @@
 package handler
 
-// DB-3/DB-4（移植自 kure29/flyx 3.3.33，按我方探测面改写）：重连重测
-// 受影响集、worker 静默合并、定向探测不计 inbound_down streak、慢轮次
-// 结果不覆写新轮次。上游同名测试依赖其自建入站 reach 探测面
-// （probeInboundReach/reachDial），我方对应面是外部入站探测
-// （probeExternalInbounds），故断言口径按我方结构重写。
+// DB-3/DB-4：重连重测受影响集、worker 静默合并、定向探测不计
+// inbound_down streak、慢轮次结果不覆写新轮次。断言口径按我方探测面
+// 结构：入站可达面为外部入站探测（probeExternalInbounds），
+// 无自建 reach 探测面（probeInboundReach/reachDial）。
 
 import (
 	"context"

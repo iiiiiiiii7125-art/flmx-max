@@ -107,7 +107,7 @@ type CommandMessage struct {
 	Data      interface{} `json:"data"`
 	RequestId string      `json:"requestId,omitempty"`
 	// TimeoutMS 是面板下发 TcpPing 时附带的整体超时预算（毫秒，
-	// DB-5 移植自 kure29/flyx 3.3.33）；老面板不发此字段（0），
+	// DB-5）；老面板不发此字段（0），
 	// 此时节点侧排队预算回退 reporterReadWait。
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 }
@@ -176,7 +176,7 @@ const (
 	maxBackoff                  = 2 * time.Minute  // 重连最大退避
 	defaultMetricReportInterval = 5 * time.Second
 	maxConcurrentTCPPings       = 8
-	// DB-5（移植自 kure29/flyx 3.3.33）：TcpPing 不再抢槽即弃，改入队
+	// DB-5：TcpPing 不再抢槽即弃，改入队
 	// 等待 worker 执行，队列深度给突发轮次留缓冲。
 	maxQueuedTCPPings         = 256
 	maxConcurrentReadCommands = 16
@@ -1273,7 +1273,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Data = tcpPingResult
 		// needSaveConfig = false (默认值)
 
-	// 节点调优：读取 / 应用 sysctl 网络参数（移植自 kure29/flyx）
+	// 节点调优：读取 / 应用 sysctl 网络参数
 	case "TuneStatus", "TuneApply", "TuneProbe", "TuneStart", "TuneCancel":
 		response.Type = cmd.Type + "Response"
 		if cmd.Type == "TuneProbe" {
@@ -1298,7 +1298,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = "UdpPingResponse"
 		response.Data = udpPingResult
 
-	// 路由追踪（只读，回程线路识别用，移植自 kure29/flyx）
+	// 路由追踪（只读，回程线路识别用）
 	case "Traceroute":
 		var traceResult TracerouteResponse
 		traceResult, err = w.handleTraceroute(cmd.Data)
@@ -3728,7 +3728,7 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 
 	// 执行TCP ping操作
 	avgTime, packetLoss, err := tcpPingHost(ctx, req.IP, req.Port, req.Count, req.Timeout)
-	// DB-5（移植自 kure29/flyx 3.3.33）：预算耗尽/取消导致的失败以
+	// DB-5：预算耗尽/取消导致的失败以
 	// 命令级错误回明确原因；已有部分成功结果时 err 为 nil，照常回
 	// 部分结果（取消不抹掉已测得的 attempts）。
 	if err != nil && ctx.Err() != nil {

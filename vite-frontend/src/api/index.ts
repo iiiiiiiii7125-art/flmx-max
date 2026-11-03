@@ -1069,7 +1069,7 @@ export interface SubPipeline {
   /** Client-side chain: names matching chainLanding dial through the relay group. */
   chainLanding: string;
   chainRelay: string;
-  /** 路由规则、DNS 与所选服务组（Mihomo / sing-box / Surge），移植自 kure29/flyx。 */
+  /** 路由规则、DNS 与所选服务组（Mihomo / sing-box / Surge）。 */
   rules: boolean;
   ruleGroups: string[];
   /** 链式代理所选节点，按 pipeline 处理前的原名。 */
@@ -1516,7 +1516,7 @@ export const getMySubscriptionTraffic = (
     "/user/subscription/traffic",
     trafficQuery(id, range),
   );
-/** 立即探测节点到延迟测试点的延迟（移植自 kure29/flyx）。 */
+/** 立即探测节点到延迟测试点的延迟。 */
 export const probeNodeLatency = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(
     "/node/latency/probe",
@@ -1634,7 +1634,7 @@ export type NodeTuneAction =
   | "deep"
   | "cancel"
   | "restoreAuto";
-/** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认（移植自 kure29/flyx）。
+/** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认。
  * line 原样透传给 agent；旧 agent 忽略未知字段走固定值，是否支持以
  * status 回包有无 params 判定（lineSupported = Boolean(status?.params)，
  * 与上游同款），不比较 agent 版本号。旧调优弹窗不传 line，行为与之前一致。 */

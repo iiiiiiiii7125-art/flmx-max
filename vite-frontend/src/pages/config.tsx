@@ -2142,7 +2142,7 @@ export default function ConfigPage() {
         onChange={handleConfigChange}
       />
 
-      {/* 移植自 kure29/flyx：延迟测试点配置（仅管理员可见） */}
+      {/* 延迟测试点配置（仅管理员可见） */}
       {isAdmin() && (
         <Card className="mt-6 shadow-md" id="latency-targets">
           <CardHeader className="pb-2">

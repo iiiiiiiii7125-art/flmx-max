@@ -85,7 +85,7 @@ const EMPTY_PIPELINE: SubPipeline = {
   regionGroups: false,
   chainLanding: "",
   chainRelay: "",
-  // 移植自 kure29/flyx：订阅规则、链式代理多选、脚本。
+  // 订阅规则、链式代理多选、脚本。
   rules: false,
   ruleGroups: [],
   chainLandingNames: [],
@@ -382,7 +382,7 @@ function toPayload(d: Draft): SubscriptionDraft {
 
 type ChainRole = "" | "landing" | "relay";
 
-/** 不用 / 落地 / 中转：给整个订阅源设链式角色（一期）。移植自 kure29/flyx。 */
+/** 不用 / 落地 / 中转：给整个订阅源设链式角色（一期）。 */
 function ChainRoleButtons({
   value,
   onChange,
@@ -1272,7 +1272,7 @@ export default function SubscriptionPage() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
-  // 移植自 kure29/flyx：订阅规则组（后端下发）。
+  // 订阅规则组（后端下发）。
   const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);

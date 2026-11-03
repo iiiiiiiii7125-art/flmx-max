@@ -17,7 +17,7 @@ import (
 )
 
 // Hours land in the viewer's local days and months; older ones are left
-// out.（移植自上游 3.3.29 subscription_traffic_test，断言不变。）
+// out.
 func TestSubTrafficBuckets(t *testing.T) {
 	cst := time.FixedZone("", 8*3600)
 	now := time.Date(2026, 3, 2, 10, 30, 0, 0, cst)

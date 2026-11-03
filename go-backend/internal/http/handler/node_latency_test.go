@@ -125,8 +125,8 @@ func TestProbeNodeLatencyMeasuresOnlineLocalNodes(t *testing.T) {
 	}
 }
 
-// TestLatencyPointPreservesFailureReason 移植自 kure29/flyx 3.3.33
-// (DB-5):失败原因分类逐例对位——排队/繁忙/离线/超时/取消各有其文案,
+// TestLatencyPointPreservesFailureReason（DB-5）：失败原因分类
+// 逐例对位——排队/繁忙/离线/超时/取消各有其文案，
 // agent 回的 errorMessage 除 DNS 与全失败外原文透出。
 func TestLatencyPointPreservesFailureReason(t *testing.T) {
 	for _, tt := range []struct {

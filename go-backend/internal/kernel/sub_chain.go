@@ -54,7 +54,7 @@ func markChain(endpoints []Endpoint, opts SubOptions) []Endpoint {
 
 // chainMatchers 区分落地和中转节点：有多选名称、来源或自建落地时，名字
 // 优先，否则按来源（含每源名称筛选）或归属判定；没有这些时用旧的名称
-// 表达式。未设置时返回 nil。移植自 kure29/flyx。
+// 表达式。未设置时返回 nil。
 func chainMatchers(opts SubOptions) (func(Endpoint) bool, func(Endpoint) bool) {
 	if len(opts.ChainLandingNames) > 0 || len(opts.ChainRelayNames) > 0 || len(opts.ChainLandingSources) > 0 ||
 		len(opts.ChainRelaySources) > 0 || opts.ChainLandingOwn {

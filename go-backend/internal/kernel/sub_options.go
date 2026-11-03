@@ -38,7 +38,6 @@ type SubOptions struct {
 	// ChainLandingNames / ChainRelayNames 按名称多选（新）：流水线之前按
 	// Endpoint.Original 精确匹配；ChainLanding / ChainRelay 是旧的表达式
 	// （如 Include），没有多选时继续兼容使用。落地节点经中转组拨号（见 markChain）。
-	// 移植自 kure29/flyx。
 	ChainLandingNames []string
 	ChainRelayNames   []string
 	ChainLanding      string
@@ -337,7 +336,6 @@ func applySubOptions(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) 
 	}
 	// 脚本执行失败时保留其他步骤的结果；错误经返回值带出（编辑器/预览
 	// 显示），不再靠 SubScriptError 重跑一遍流水线才知道（F-024）。
-	// 移植自 kure29/flyx。
 	scripted, scriptErr := ApplySubScript(out, opts.Script)
 	if scriptErr == nil {
 		out = scripted
@@ -347,7 +345,6 @@ func applySubOptions(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) 
 }
 
 // SubScriptError 返回订阅脚本在这些节点上执行时的错误（如果有）。
-// 移植自 kure29/flyx。
 func SubScriptError(endpoints []Endpoint, opts SubOptions) error {
 	_, err := applySubOptions(endpoints, opts)
 	return err

@@ -104,8 +104,8 @@ func TestRemoteSourceContract(t *testing.T) {
 	}
 }
 
-// 移植自上游 3.3.29 TestFileSourceChainContract：以文件上传的机场源按源
-// 做链式中转——改名后仍是中转、隐藏中转不进节点名单、按源筛选+DropUnused
+// TestFileSourceChainContract：以文件上传的机场源按源做链式中转——
+// 改名后仍是中转、隐藏中转不进节点名单、按源筛选+DropUnused
 // 与筛选修剪（只保留链内来源）在拉取侧全程成立。
 func TestFileSourceChainContract(t *testing.T) {
 	secret := "contract-jwt-secret"

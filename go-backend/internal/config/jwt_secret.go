@@ -24,7 +24,7 @@ const jwtSecretFileName = "jwt_secret"
 // 这保证重启后旧 token 仍有效。FromEnv 的临时生成逻辑保留作为兜底
 // （如文件不可写时，仍使用内存中的临时密钥）。
 //
-// 移植自 kure29/flyx，适配：通过 JWTEphemeral 标志判断是否为临时密钥，
+// 适配说明：通过 JWTEphemeral 标志判断是否为临时密钥，
 // 而非检查 JWTSecret 是否为空（我们的 FromEnv 总会生成临时密钥）。
 func EnsureJWTSecret(cfg *Config) (generated bool, err error) {
 	// 环境变量已配置，或已经是持久化密钥，无需处理。

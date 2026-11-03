@@ -7,7 +7,7 @@ export interface Node {
   id: number;
   inx?: number;
   name: string;
-  /** 节点到各延迟测试点的延迟（移植自 kure29/flyx）。 */
+  /** 节点到各延迟测试点的延迟。 */
   latency?: InboundProbe;
   /** 节点自选的测试点；null 表示跟随全局默认。 */
   latencyTargets?: { points: string[]; pinned: string[] } | null;

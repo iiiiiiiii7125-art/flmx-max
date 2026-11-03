@@ -9,7 +9,7 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// Share address resolution (DB-2, ported from upstream 3.3.33): an
+// Share address resolution (DB-2): an
 // inbound's share/subscription address comes from its ShareAddressMode —
 // auto (the node's default address), the node's IPv4, the node's IPv6,
 // or a custom host (ShareHost). The mode only picks the address source;

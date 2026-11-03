@@ -21,8 +21,7 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 
-// PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42，
-// 仅上传侧；从 Gist 恢复不在本轮范围，恢复仍走手动导入流程）。
+// PORT-3342/B1：备份上传 GitHub Gist。
 // PORT-3342/G-frontend（在 B1 前端基础上补齐）：Gist 版本列表展示
 // （最近 10 个）+ 恢复弹窗 UI；恢复执行已由 G-recovery 接线
 // （见 RESTORE_WIRING_PENDING = false 与弹窗确认按钮的 onRestore）。

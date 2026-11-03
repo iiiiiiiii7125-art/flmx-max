@@ -869,7 +869,7 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 			lines = append(lines, ChainLandingGroup+" = select, "+strings.Join(landing, ", "),
 				ChainRelayGroup+" = select, "+strings.Join(relay, ", "))
 		}
-		// 移植自 kure29/flyx：规则模式时追加规则策略组并替换规则。
+		// 规则模式时追加规则策略组并替换规则。
 		rules := []string{"GEOIP,LAN,DIRECT", "FINAL,节点选择"}
 		if opts.Rules {
 			// rulePolicyGroups 的成员模板引用「自动选择」，Surge 分支必须
@@ -955,7 +955,7 @@ func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions, stash
 		selectList = []interface{}{"DIRECT"}
 		autoList = []interface{}{"DIRECT"}
 	}
-	// 移植自 kure29/flyx：规则模式时注入策略组、规则提供方与规则。
+	// 规则模式时注入策略组、规则提供方与规则。
 	ruleGroups := []interface{}{}
 	rules := []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}
 	var providers yamlNode
@@ -1055,7 +1055,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 		map[string]interface{}{"type": "urltest", "tag": "自动选择", "outbounds": autoList,
 			"url": "https://www.gstatic.com/generate_204", "interval": "5m"},
 	}, append(chainOutbounds, regionOutbounds...)...)
-	// 移植自 kure29/flyx：规则模式时追加规则策略组。
+	// 规则模式时追加规则策略组。
 	if opts.Rules {
 		var regionList []string
 		for _, g := range regionGroups(plain) {
@@ -1090,7 +1090,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 			},
 		},
 	}
-	// 移植自 kure29/flyx：规则模式时注入 sing-box 规则、规则集与 DNS。
+	// 规则模式时注入 sing-box 规则、规则集与 DNS。
 	if opts.Rules {
 		rules, sets, dns := singboxRules(opts)
 		route := cfg["route"].(map[string]interface{})
@@ -1109,7 +1109,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 
 // uniqueNames suffixes duplicate endpoint names; Clash proxy names and
 // sing-box tags must be unique or the whole profile is rejected.
-// 移植自 kure29/flyx：rules 为 true 时预留规则组名，避免节点重名冲突。
+// rules 为 true 时预留规则组名，避免节点重名冲突。
 func uniqueNames(endpoints []Endpoint, rules bool) []Endpoint {
 	out := make([]Endpoint, len(endpoints))
 	seen := map[string]bool{"节点选择": true, "自动选择": true, "direct": true, "DIRECT": true, "REJECT": true,

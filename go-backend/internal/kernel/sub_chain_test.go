@@ -93,9 +93,9 @@ func TestMarkChainClearsOneSidedMatch(t *testing.T) {
 	}
 }
 
-// 移植自上游 3.3.29 TestSubscriptionChainBySource（模板组部分除外——
-// 我方无订阅模板子系统，见 DELTA 2.3 不移植清单）：机场源为自建节点做
-// 中转；不用名单与点名覆盖来源判定，隐藏的中转不进任何普通名单。
+// TestSubscriptionChainBySource（模板组部分除外——我方无订阅模板
+// 子系统）：机场源为自建节点做中转；不用名单与点名覆盖来源判定，
+// 隐藏的中转不进任何普通名单。
 func TestSubscriptionChainBySource(t *testing.T) {
 	eps := namedEndpoints("自建 美国", "机场 香港", "机场 日本", "机场 新加坡")
 	for i := 1; i < len(eps); i++ {
@@ -145,8 +145,8 @@ func TestSubscriptionChainBySource(t *testing.T) {
 	}
 }
 
-// 移植自上游 3.3.29 TestSubscriptionChainSourceFilter：只有机场里匹配
-// 筛选的节点做中转；ChainDropUnused 把其余节点移出订阅，自建与点名保留。
+// TestSubscriptionChainSourceFilter：只有机场里匹配筛选的节点做
+// 中转；ChainDropUnused 把其余节点移出订阅，自建与点名保留。
 func TestSubscriptionChainSourceFilter(t *testing.T) {
 	eps := namedEndpoints("自建 美国", "香港 IEPL 01 1.5x", "日本 IEPL 01", "美国 普通 01", "台湾 01")
 	for i := 1; i < len(eps); i++ {

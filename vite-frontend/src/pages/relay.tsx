@@ -95,11 +95,11 @@ function LinesView() {
     load();
   }, [load]);
 
-  // DB-3（移植自 kure29/flyx 3.3.33）：中转线路延迟只随列表回包
+  // DB-3：中转线路延迟只随列表回包
   // 更新——15 秒可见性轮询让重连重测/定时轮次的结果及时显现。
   useVisiblePolling(useCallback(() => load({ silent: true }), [load]));
 
-  /** 移植自 kure29/flyx：测中转线路的分段延迟（Lane D），结果按线路 id 合并回列表。 */
+  /** 测中转线路的分段延迟（Lane D），结果按线路 id 合并回列表。 */
   const probe = useCallback(
     async (ids: number[]) => {
       const busy = ids.length > 0 ? ids : relays.map((r) => r.id);

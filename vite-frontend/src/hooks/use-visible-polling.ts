@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
  * online. Probe results change every few minutes (or after a reconnect), so
  * 15 seconds keeps them current without loading the panel.
  *
- * 移植自 kure29/flyx 3.3.33（DB-3）：节点/入站/中转三页共用——页面
+ * DB-3：节点/入站/中转三页共用——页面
  * 不可见或离线时不轮询，回前台/恢复联网立即补一次，防重入。
  */
 export function useVisiblePolling(

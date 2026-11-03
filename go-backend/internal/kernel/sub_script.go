@@ -25,7 +25,6 @@ import (
 //
 // 每个节点是一个普通对象；只有变更的 name 会被采纳，其他字段只读。
 // 脚本运行在裸 goja 虚拟机中（无网络、文件、定时器），scriptTimeout 后强制停止。
-// 移植自 kure29/flyx。
 
 const (
 	scriptTimeout   = time.Second

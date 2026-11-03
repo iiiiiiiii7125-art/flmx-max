@@ -147,20 +147,20 @@ type Handler struct {
 
 	qualityProber  *tunnelQualityProber
 	externalProbes *externalProbeStore
-	// 移植自 kure29/flyx：节点延迟测试点测量结果缓存。
+	// 节点延迟测试点测量结果缓存。
 	nodeLatency *nodeLatencyStore
-	// 移植自 kure29/flyx：节点回程路由追踪结果缓存。
+	// 节点回程路由追踪结果缓存。
 	nodeRoutes *nodeRouteStore
-	// 移植自 kure29/flyx：延迟连续劣化告警的连击计数（node_latency_history.go）。
+	// 延迟连续劣化告警的连击计数（node_latency_history.go）。
 	latencyAlerts *latencyAlertTracker
 	relayLatency  *relayLatencyStore
 	notifier      *notifier
 	bestExit      *bestExitManager
 
-	// 移植自 kure29/flyx 3.3.30/3.3.33（DA-6/DB-5）：每节点 TcpPing
+	// DA-6/DB-5：每节点 TcpPing
 	// 并发槽位（队列与执行共用超时预算，见 node_ping_slots.go）。
 	pingSlots *nodePingSlots
-	// 移植自 kure29/flyx 3.3.33（DB-3）：节点重连后自动重测队列
+	// DB-3：节点重连后自动重测队列
 	// （见 node_reconnect_probe.go），由 StartBackgroundJobs 创建。
 	reconnectProbes *nodeReconnectProbeQueue
 	// R1-B-04：内核在节点保持在线时单独重启的检测基线（agent 状态
@@ -347,16 +347,16 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/node/upgrade", h.nodeUpgrade)
 	mux.HandleFunc("/api/v1/node/batch-upgrade", h.nodeBatchUpgrade)
 	mux.HandleFunc("/api/v1/node/rollback", h.nodeRollback)
-	// 移植自 kure29/flyx：节点延迟测试。
+	// 节点延迟测试。
 	mux.HandleFunc("/api/v1/node/latency/probe", h.nodeLatencyProbe)
 	mux.HandleFunc("/api/v1/node/latency/targets", h.nodeLatencyTargetsSet)
 	mux.HandleFunc("/api/v1/node/latency/history", h.nodeLatencyHistory)
-	// 移植自 kure29/flyx：节点网络调优。
+	// 节点网络调优。
 	mux.HandleFunc("/api/v1/node/tune", h.nodeTune)
-	// 移植自 kure29/flyx：回程路由追踪。
+	// 回程路由追踪。
 	mux.HandleFunc("/api/v1/node/route", h.nodeRouteGet)
 	mux.HandleFunc("/api/v1/node/route/probe", h.nodeRouteProbe)
-	// 移植自 kure29/flyx：GitHub 镜像代理。
+	// GitHub 镜像代理。
 	mux.HandleFunc(ghMirrorPath, h.githubMirror)
 	mux.HandleFunc("/api/v1/node/releases", h.listReleases)
 	mux.HandleFunc("/api/v1/node/nftables/test", h.nodeNftablesTest)

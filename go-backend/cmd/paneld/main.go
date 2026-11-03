@@ -20,7 +20,7 @@ import (
 
 func main() {
 	cfg := config.FromEnv()
-	// 移植自 kure29/flyx：JWT 密钥持久化。未设 JWT_SECRET 时，优先从
+	// JWT 密钥持久化。未设 JWT_SECRET 时，优先从
 	// <DBPath 同级>/jwt_secret 文件加载，没有则生成并写入（0600），
 	// 保证重启后旧 token 仍有效。失败时回退到 FromEnv 的临时密钥。
 	if generated, err := config.EnsureJWTSecret(&cfg); err != nil {

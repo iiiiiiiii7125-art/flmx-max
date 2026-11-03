@@ -8,7 +8,6 @@ import "strings"
 // Mihomo 读 MetaCubeX .mrs，Stash 读同一规则集的 YAML 格式，sing-box（1.12+）读 .srs；
 // Surge / Loon / Quantumult X / Shadowrocket 读 blackmatrix7 列表。
 // 开启规则后，Loon / QX / Shadowrocket 输出完整配置而非节点列表（见 share_clients.go）。
-// 移植自 kure29/flyx。
 
 const (
 	ruleDirectGroup = "全球直连"

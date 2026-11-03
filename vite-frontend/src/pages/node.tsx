@@ -688,7 +688,7 @@ export default function NodePage({
     setSelectedIds(new Set());
   }, [activeTab]);
 
-  // DB-3（移植自 kure29/flyx 3.3.33）：指标走 WebSocket 实时推送，
+  // DB-3：指标走 WebSocket 实时推送，
   // 但节点延迟缓存只在 node/list 里——无论 WS 是否连通都按 15 秒
   // 可见性轮询静默刷新（含 WS 断线时的兜底），节点重连重测的结果
   // 最迟 15 秒内出现在卡片上。
@@ -1550,7 +1550,7 @@ export default function NodePage({
   };
 
   // 处理拖拽结束
-  // 移植自 kure29/flyx：立即探测节点到延迟测试点的延迟。
+  // 立即探测节点到延迟测试点的延迟。
   const probeNode = async (id: number) => {
     setProbingIds((prev) => new Set(prev).add(id));
     try {

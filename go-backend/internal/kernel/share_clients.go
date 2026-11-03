@@ -87,7 +87,7 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 
 // shadowrocketProxies renders Clash proxies for Shadowrocket, expanding
 // chained landing nodes into one copy per relay. Names are returned in
-// the same order. 移植自 kure29/flyx（供规则模式的 shadowrocketConfig 用）。
+// the same order（供规则模式的 shadowrocketConfig 用）。
 //
 // A5-03：proxies 保留全部条目（中转条目是落地副本 dialer-proxy 的指向
 // 目标，删之整链悬空，与 Clash 把中转保留在 proxies 同口径）；names
@@ -135,14 +135,12 @@ func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, 
 }
 
 // shadowrocketSkips reports nodes Shadowrocket cannot express.
-// 移植自 kure29/flyx。
 func shadowrocketSkips(p Proxy) bool {
 	return hasVLESSEncryption(p) || p.Type() == "wireguard"
 }
 
 // hasVLESSEncryption reports whether a VLESS proxy sets a non-none
 // encryption (which Shadowrocket/Loon cannot express).
-// 移植自 kure29/flyx。
 func hasVLESSEncryption(p Proxy) bool {
 	enc := p.str("encryption")
 	return enc != "" && enc != "none"
@@ -599,8 +597,7 @@ func qxLine(p Proxy) (string, bool) {
 	return kind + "=" + strings.Join(append(parts, "tag="+tag), ", "), true
 }
 
-// qxName returns the Quantumult X-safe node name.
-// 移植自 kure29/flyx（供规则模式的 qxConfig 用）。
+// qxName 返回 Quantumult X 安全的节点名（供规则模式的 qxConfig 用）。
 func qxName(p Proxy) string {
 	return strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
 }

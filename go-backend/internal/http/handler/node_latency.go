@@ -28,7 +28,7 @@ const (
 	latencyParallel         = 16
 	// O1-004/J-003：空 IDs 全量探测时收敛上限，防止大规模节点下无确认的出站风暴
 	maxProbeAllNodes = 50
-	// DB-5（移植自 kure29/flyx 3.3.33）：单节点一轮探测按 agent 槽位
+	// DB-5：单节点一轮探测按 agent 槽位
 	// 分波——命令超时须容纳全部波次串行排队的最坏耗时。
 	latencyAgentParallel  = agentTCPPingLimit
 	latencyPingWaves      = (latencyParallel + latencyAgentParallel - 1) / latencyAgentParallel
@@ -228,7 +228,7 @@ func (s *nodeLatencyStore) replace(results map[int64]externalProbe, all bool) {
 }
 
 // replaceRound is replace gated per entry by probeRounds: stale rounds
-// cannot overwrite fresher values（DB-4，移植自 kure29/flyx 3.3.33）。
+// cannot overwrite fresher values（DB-4）。
 func (s *nodeLatencyStore) replaceRound(results map[int64]externalProbe, all bool, started int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -272,7 +272,7 @@ var nodeLatencyPing = func(h *Handler, nodeID int64, host string, port int) (map
 
 // latencyCommandError turns a failed TcpPing command into the reason the
 // operator should see: queueing, a busy or offline node, or a timeout
-// （DB-5 失败原因分类，移植自 kure29/flyx 3.3.33）。
+// （DB-5 失败原因分类）。
 func latencyCommandError(err error) string {
 	if errors.Is(err, errTCPPingQueueTimeout) {
 		return errTCPPingQueueTimeout.Error()

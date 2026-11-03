@@ -82,7 +82,7 @@ export function ToggleRow({
 /**
  * 编辑器的页面标签：圆角分段条，标签等宽分布。在手机上不滚动，
  * 每页都是一触即达；标签保持简短（两个字）。
- * 移植自 kure29/flyx（订阅规则页用）。
+ * 订阅规则页用。
  */
 export function EditorTabs<T extends string>({
   value,

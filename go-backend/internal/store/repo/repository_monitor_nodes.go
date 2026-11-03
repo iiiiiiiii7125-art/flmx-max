@@ -20,7 +20,6 @@ func (r *Repository) ListMonitorNodes() ([]model.Node, error) {
 }
 
 // SetNodesLatencyTargets 存储节点自选的延迟测试点（"" 表示跟随全局默认）。
-// 移植自 kure29/flyx。
 //
 // R2 X01-001（硬化）：被调层按 chunkInt64IDs 分块，与 IN 分块家族
 // 口径对齐——当前唯一批量调用方有 200 条硬上限、影响不可达，但

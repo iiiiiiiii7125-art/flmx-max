@@ -349,7 +349,7 @@ export default function InboundPage() {
     loadData(true);
   }, [loadData]);
 
-  // DB-3（移植自 kure29/flyx 3.3.33）：15 秒可见性轮询（原 30 秒
+  // DB-3：15 秒可见性轮询（原 30 秒
   // 无条件轮询）——页面隐藏/离线时不刷，回前台立即补一次。
   useVisiblePolling(useCallback(() => loadData(false), [loadData]));
 

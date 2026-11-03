@@ -32,13 +32,13 @@ type externalProbe struct {
 	LatencyMs int64  `json:"latencyMs,omitempty"`
 	Error     string `json:"error,omitempty"`
 	CheckedAt int64  `json:"checkedAt"`
-	// Points 是节点到各延迟测试点的延迟（node_latency.go 移植自 kure29/flyx）。
+	// Points 是节点到各延迟测试点的延迟（见 node_latency.go）。
 	Points []latencyPoint `json:"points,omitempty"`
 }
 
 // probeRounds remembers when each stored result's round started so a
-// slower older round cannot overwrite a newer round's values（移植自
-// kure29/flyx 3.3.33，DB-4 三个探测存储共用）。
+// slower older round cannot overwrite a newer round's values
+// （DB-4，三个探测存储共用）。
 type probeRounds map[int64]int64
 
 // take records started for id and reports whether a write from that round
@@ -289,7 +289,7 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64, round 
 	}
 	h.externalProbes.replaceRound(results, round.fullReplace(), started)
 
-	// DB-4（移植自 kure29/flyx 3.3.33）：非定时轮（手动检测/节点重连
+	// DB-4：非定时轮（手动检测/节点重连
 	// 重测/人工全量）只刷新缓存，不计入 inbound_down 告警 streak；
 	// streak 与跃迁通知只由定时轮（probeRoundScheduled）驱动
 	// （track 段）。轮次语义由 round 显式声明，不再由 len(ids)

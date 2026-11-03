@@ -857,7 +857,7 @@ export interface InboundProbe {
   from?: string;
   error?: string;
   checkedAt: number;
-  /** 各测试点的延迟结果（节点延迟功能，移植自 kure29/flyx）。 */
+  /** 各测试点的延迟结果（节点延迟功能）。 */
   points?: InboundProbePoint[];
 }
 
