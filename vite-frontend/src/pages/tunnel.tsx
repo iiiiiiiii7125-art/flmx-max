@@ -758,14 +758,35 @@ export default function TunnelPage() {
       if (response.code === 0) {
         const deleteResult = (response.data || null) as {
           warnings?: string[];
+          deletedForwardCount?: number;
+          migratedCount?: number;
+          portAdjustedCount?: number;
         } | null;
 
-        if ((deleteResult?.warnings?.length ?? 0) > 0) {
-          toast.success(
-            `删除成功，另有 ${deleteResult?.warnings?.length ?? 0} 条节点清理提示`,
+        // R2-C5-05：连带处置计数与清理提示全文呈现，不再只报条数。
+        const countParts: string[] = [];
+
+        if ((deleteResult?.deletedForwardCount ?? 0) > 0) {
+          countParts.push(
+            `连带删除转发 ${deleteResult?.deletedForwardCount} 条`,
           );
-        } else {
-          toast.success("删除成功");
+        }
+        if ((deleteResult?.migratedCount ?? 0) > 0) {
+          countParts.push(`转发已迁移 ${deleteResult?.migratedCount} 条`);
+        }
+        if ((deleteResult?.portAdjustedCount ?? 0) > 0) {
+          countParts.push(`端口已调整 ${deleteResult?.portAdjustedCount} 条`);
+        }
+        toast.success(
+          countParts.length > 0
+            ? `删除成功（${countParts.join("，")}）`
+            : "删除成功",
+        );
+        if ((deleteResult?.warnings?.length ?? 0) > 0) {
+          toast(deleteResult?.warnings?.join("；") ?? "", {
+            icon: "⚠️",
+            duration: 8000,
+          });
         }
         setDeleteModalOpen(false);
         setTunnels((prev) =>
@@ -1454,13 +1475,33 @@ export default function TunnelPage() {
           successCount: number;
           failCount: number;
           warnings?: string[];
+          deletedForwardCount?: number;
+          migratedCount?: number;
+          portAdjustedCount?: number;
         };
-        const warningCount = result?.warnings?.length ?? 0;
+        const batchWarnings = result?.warnings ?? [];
+
+        // R2-C5-05：节点清理提示与删除结果相互独立，全文呈现
+        // （部分失败时同样呈现，不被失败明细弹窗吞掉）。
+        if (batchWarnings.length > 0) {
+          toast(batchWarnings.join("；"), { icon: "⚠️", duration: 8000 });
+        }
 
         if (result.failCount === 0) {
+          const countParts: string[] = [];
+
+          if ((result.deletedForwardCount ?? 0) > 0) {
+            countParts.push(`连带删除转发 ${result.deletedForwardCount} 条`);
+          }
+          if ((result.migratedCount ?? 0) > 0) {
+            countParts.push(`转发已迁移 ${result.migratedCount} 条`);
+          }
+          if ((result.portAdjustedCount ?? 0) > 0) {
+            countParts.push(`端口已调整 ${result.portAdjustedCount} 条`);
+          }
           toast.success(
-            warningCount > 0
-              ? `成功删除 ${result.successCount} 项，另有 ${warningCount} 条节点清理提示`
+            countParts.length > 0
+              ? `成功删除 ${result.successCount} 项（${countParts.join("，")}）`
               : `成功删除 ${result.successCount} 项`,
           );
           setBatchProgress({

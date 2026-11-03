@@ -100,6 +100,10 @@ interface RemoteUsageNode {
   bindings: RemoteUsageBinding[];
   activeBindingNum: number;
   syncError?: string;
+  // FIX2-B：对端面板版本与版本提示（旧对端为空），此前类型未声明、
+  // 卡片未渲染，对端版本问题在 UI 无提示（R2-C5-02）。
+  panelVersion?: string;
+  versionWarning?: string;
 }
 
 const MAX_SAFE_BANDWIDTH_MIB = Math.floor(Number.MAX_SAFE_INTEGER / MIB);
@@ -789,7 +793,15 @@ export default function PanelSharingPage() {
                                   : `远程同步失败: ${node.syncError}`}
                           </div>
                         )}
+                        {node.versionWarning && (
+                          <div className="px-2 py-1.5 rounded-md bg-warning-500/10 text-warning-700 text-xs font-semibold">
+                            {node.versionWarning}
+                          </div>
+                        )}
                         {node.remoteUrl && <p>远程地址: {node.remoteUrl}</p>}
+                        {node.panelVersion && (
+                          <p>对端面板版本: {node.panelVersion}</p>
+                        )}
                         <p>共享ID: {node.shareId || "-"}</p>
                         <p>
                           端口范围:{" "}
