@@ -92,6 +92,12 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("订阅不存在（ID %d）", id)))
 			return
 		}
+		// S7（I-F3-06）：墓碑订阅同样拒绝分配——行即将硬删，此时写入
+		// 的分配只是等删除事务清理的悬空行，管理员却会以为已分配。
+		if sub.PendingDelete == 1 {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("订阅删除中，无法分配（ID %d）", id)))
+			return
+		}
 	}
 	if err := h.repo.SetUserSubscriptions(req.UserID, req.SubscriptionIDs); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
