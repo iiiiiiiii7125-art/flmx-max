@@ -23,7 +23,13 @@
 //                                      函数名以 prefix 开头的数量
 //   doc-extract strlit <file> <value>  file 中存在字符串字面量其
 //                                      值恰为 value 时退出 0
-// 退出码：0 成功（strlit 为「找到」）；1 strlit 未找到；
+//   doc-extract keyemit <file> <type> <value>
+//                                      file 中存在「以 value 为键
+//                                      的 <type> 复合字面量、且该字
+//                                      面量位于 append(...) 实参子
+//                                      树内」（即渲染发射点形态）时
+//                                      退出 0
+// 退出码：0 成功（strlit/keyemit 为「找到」）；1 未找到；
 // 2 用法/IO/解析错误；3 events 集中存在 notifyEvent* 声明其值
 // 不是 [a-z_]+ 形态（前提异常，交由门点名）。
 package main
@@ -232,9 +238,76 @@ func cmdStrLit(file, want string) int {
 	return 1
 }
 
+// cmdKeyEmit 是 strlit 的发射点形态（修复轮 9，I-C6-03 处置）：
+// strlit 只证「值恰等的字符串字面量在文件中存在」——未用变量持
+// 同值字面量一行即满足、不证发射（原 H-C4-06）。doc §1 的前提
+// 是「share.go 渲染输出 xhttp-opts」，其真实发射形态是渲染函数
+// 把 yamlField{"xhttp-opts", …} 追加进待输出的字段表。本子命令
+// 把前提钉到该形态：值为键（复合字面量首元）的 <typeName> 复合
+// 字面量、且整段位于 append(...) 调用的实参子树内（嵌套的
+// yamlNode{{"host",…}} 同在实参内、同样入集）。未用变量、单独
+// 的 yamlField 赋值（未追加）均不满足；删除发射行同样失效。要
+// 再造满足点须伪造一条 append 发射调用——构造形态与真实发射
+// 同形，其残面按伪造渲染调用计、与收益不成比例，不另设防。
+func cmdKeyEmit(file, typeName, want string) int {
+	f, err := parseFile(file)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	found := false
+	appendDepth := 0
+	var appendStack []bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if n == nil {
+			// Inspect 以 nil 回调标记离开节点：与进入时压栈的
+			// append 标记配对弹出（见下方压栈约定）。
+			if len(appendStack) > 0 {
+				if appendStack[len(appendStack)-1] {
+					appendDepth--
+				}
+				appendStack = appendStack[:len(appendStack)-1]
+			}
+			return false
+		}
+		isAppendCall := false
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "append" {
+				isAppendCall = true
+			}
+		}
+		appendStack = append(appendStack, isAppendCall)
+		if isAppendCall {
+			appendDepth++
+		}
+		if appendDepth > 0 {
+			if lit, ok := n.(*ast.CompositeLit); ok && len(lit.Elts) > 0 {
+				if id, ok := lit.Type.(*ast.Ident); ok && id.Name == typeName {
+					if key, ok := lit.Elts[0].(*ast.BasicLit); ok &&
+						key.Kind == token.STRING {
+						if val, err := strconv.Unquote(key.Value); err == nil &&
+							val == want {
+							found = true
+							return false
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+	if found {
+		return 0
+	}
+	return 1
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: doc-extract <events|testfns|strlit> ...")
+		fmt.Fprintln(os.Stderr, "usage: doc-extract <events|testfns|strlit|keyemit> ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -256,6 +329,12 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(cmdStrLit(os.Args[2], os.Args[3]))
+	case "keyemit":
+		if len(os.Args) != 5 {
+			fmt.Fprintln(os.Stderr, "usage: doc-extract keyemit <file> <type> <value>")
+			os.Exit(2)
+		}
+		os.Exit(cmdKeyEmit(os.Args[2], os.Args[3], os.Args[4]))
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", os.Args[1])
 		os.Exit(2)

@@ -28,6 +28,17 @@
 // 去重。文本形态（注释引链、死分支、字符串拷贝）自此与判定无
 // 关。
 //
+// 调用点绑定（修复轮 9，I-C6-04 复跑裁定）：轮 7 的按名定位只证
+// 「同名声明存在且行为正确」，不证「弹窗实际调用的就是它」——
+// 第九轮复跑原构造坐实：真身改名（computeBrokenReferrersImpl）
+// 并翻转谓词、两处弹窗调用随改名，旧名下植入行为正确的同名替
+// 身，旧门七格全过而弹窗走的是翻转后的真身。第八轮「调用方按
+// 名调用、定位到的即行为本体」的判语对该构造不成立（被定位者
+// 零调用、是死代码）。本轮补绑定断言：被定位声明必须在本文件
+// 内有声明体外的活调用点（字面恒假死分支内的调用不算）——真
+// 身改名后旧名或消失（声明数 0 报红）或只剩无引用的替身（本断
+// 言报红），改名翻谓词自此无处遁形。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-split-referrer-filter.mjs
 // 退出码 0 = 通过，非 0 = 失败。
@@ -75,6 +86,69 @@ check(
   decls.length === 1,
   `实测 ${decls.length} 份`,
 );
+
+// 调用点绑定（I-C6-04）：被定位声明须在声明体外有活调用点。恒
+// 假死分支（if (false) 的 then 支、if (true) 的 else 支、三元恒
+// 定支、false && 右侧）内的调用不计——死代码里的调用与替身一
+// 样不构成行为本体证据。
+if (decls.length === 1) {
+  const decl = decls[0];
+  const dead = (e) => {
+    while (ts.isParenthesizedExpression(e)) e = e.expression;
+    if (e.kind === ts.SyntaxKind.FalseKeyword) return "false";
+    if (e.kind === ts.SyntaxKind.TrueKeyword) return "true";
+    if (
+      ts.isPrefixUnaryExpression(e) &&
+      e.operator === ts.SyntaxKind.ExclamationToken
+    ) {
+      const v = dead(e.operand);
+
+      return v === "false" ? "true" : v === "true" ? "false" : null;
+    }
+    return null;
+  };
+  let liveCalls = 0;
+  const visit = (node) => {
+    if (node === decl) return; // 声明体内（含递归自调用）不计
+    if (ts.isIfStatement(node)) {
+      visit(node.expression);
+      const c = dead(node.expression);
+      if (c !== "false") visit(node.thenStatement);
+      if (c !== "true" && node.elseStatement) visit(node.elseStatement);
+      return;
+    }
+    if (ts.isConditionalExpression(node)) {
+      visit(node.condition);
+      const c = dead(node.condition);
+      if (c !== "false") visit(node.whenTrue);
+      if (c !== "true") visit(node.whenFalse);
+      return;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+      dead(node.left) === "false"
+    ) {
+      visit(node.left);
+      return;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "computeBrokenReferrers"
+    ) {
+      liveCalls++;
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sf);
+  check(
+    "computeBrokenReferrers 在 node.tsx 内有声明体外的活调用点（调用点绑定）",
+    liveCalls >= 1,
+    `实测 ${liveCalls} 处——被定位声明无活调用时它只是同名替身，弹窗行为本体不在门内`,
+  );
+}
 
 let fn = null;
 if (decls.length === 1) {

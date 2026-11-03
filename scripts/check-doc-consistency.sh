@@ -125,11 +125,17 @@ sh_strip_comments() {
 #    share.go 的 AST 中存在值恰为 xhttp-opts 的字符串字面量（注
 #    释、原始字符串内的键名形文本均不是字面量节点）；发射行删除
 #    时前提失效、整节按 fail-closed 报红。无 go 时 PENDING 未核。
+#    第九轮（I-C6-03）再迁发射点断言：strlit 只证字面量存在——未
+#    用变量持同值字面量一行即满足、不证发射（原 H-C4-06，历轮迁
+#    移只换提取基底、断言逻辑型未变）。现前提＝keyemit：以
+#    xhttp-opts 为键的 yamlField 复合字面量位于 append(...) 实参
+#    子树内（share.go 渲染的真实发射形态）；未用变量与未追加的
+#    yamlField 赋值均不满足，删发射行同样失效。
 SHARE_GO="go-backend/internal/kernel/share.go"
 NODES_MD="doc/guide/nodes.md"
 xhttp_premise=""
 if [ -n "$DOC_EXTRACT" ]; then
-  if "$DOC_EXTRACT" strlit "$SHARE_GO" "xhttp-opts" >/dev/null 2>&1; then
+  if "$DOC_EXTRACT" keyemit "$SHARE_GO" "yamlField" "xhttp-opts" >/dev/null 2>&1; then
     xhttp_premise="yes"
   else
     xhttp_premise="no"
