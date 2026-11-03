@@ -14,8 +14,9 @@
 //   - helper 参数：按顶层变量声明名定位（模板字符串里的同名文
 //     本不是声明），从其初始化表达式的 Math.min/Math.max 调用
 //     结构读 cap/floor；
-//   - 调用点普查：按导出声明逐个遍历 AST，自首个 Network./axios.
-//     调用点起找首个 timeout 属性赋值，按初始化表达式形态分类
+//   - 调用点普查：按导出声明逐个遍历 AST，在声明内全部
+//     Network./axios. 调用点各自的实参内按 timeout 属性赋值取证
+//     后合并（修复轮 9 起，见下），按初始化表达式形态分类
 //     （助手调用/Math.max/静态数值），与旧 fe_extract 输出同口径；
 //   - network.ts 默认值：取 timeout ?? <数字> 的 ?? 右值（全点须
 //     一致，不一致单独报 netdefault-multi 交门点名）；
@@ -43,6 +44,32 @@
 //      文件顶层 helper 声明时才记 formula；同名遮蔽/跨文件同名
 //      一律落 otherexpr 交门点名。另：export { x } 列表形态导出
 //      的同文件声明同入普查（此前脱集、靠格点查找失败兜底）。
+//
+// 绑定口径续（修复轮 9，R9-23/24/25 / I-C4-08/09/10）：轮 8 的
+// 绑定建模仍有三处「首个/首参」残余，第九轮变异实证均可逃逸：
+//   ④ 调用点普查改全调用合并：censusDecl 旧实现只取声明内 AST
+//      先序首个 Network./axios. 调用取证，同导出的第二个调用
+//      （哪怕是被 return 的生效调用）永不入普查——诱饵首调用携
+//      登记公式、真调用携 999s 字面量时提取与基线逐字相同。现
+//      逐调用取证后合并：无取证的调用不稀释；具体证据去重后
+//      唯一则取之；两种以上具体证据（同声明内 timeout 分歧、
+//      登记表一行无从对账）或任一调用 otherexpr → 整声明记
+//      otherexpr 交门点名（fail-closed）。
+//   ⑤ 配置标识符解析落同一作用域纪律：旧走查不认形参绑定——
+//      形参遮蔽顶层同名对象时仍回落 topDecls 取证（运行时生效
+//      的是形参默认值、提取却报顶层值，rollbackNode 实证）。
+//      现走查逐层定绑定：先遇形参绑定则以其默认值（对象字面
+//      量时）取证、无可用默认值则不取证；到达源文件时仅当
+//      resolveBinding 确证 "top" 才用 topDecls，"other"（被遮
+//      蔽）绝不回落。与 ③ 的 formula 分类同标准。
+//   ⑥ helper 参数改全部实参入读集：旧实现只读 Math.min 实参 0
+//      （cap）与 Math.max 实参 0（floor），Math.max 的其余实参
+//      （舰队增长项本体）从不入读——增长项被整体替换为静态值
+//      后 cap/floor 纹丝不动。现逐个实参分类：Math.min 第三起
+//      实参静态值压低 cap、动态值令结构不可静态求值；Math.max
+//      静态实参参与 floor 取大，且至少须有一个动态增长项在
+//      场——增长项缺失即助手退化为常量、非登记的公式形态，
+//      不输出该 helper 行、由门以「参数无法提取」点名。
 //
 // 用法：node scripts/timeout-fe-extract.mjs <REPO_ROOT>
 // 输出（TSV）：
@@ -335,13 +362,28 @@ const helperParamsOf = (expr) => {
     minCall = mins[0];
   }
   if (!minCall || minCall.arguments.length < 2) return null;
-  const cap = numEval(minCall.arguments[0]);
+  // 全部实参入读集（修复轮 9，R9-25）：见文件头注 ⑥。
+  let cap = numEval(minCall.arguments[0]);
+  if (cap === null) return null;
+  for (let k = 2; k < minCall.arguments.length; k++) {
+    const extra = numEval(minCall.arguments[k]);
+    if (extra === null) return null;
+    if (extra < cap) cap = extra;
+  }
   const floorArg = unwrap(minCall.arguments[1]);
-  const floor =
-    floorArg && isMathCall(floorArg, "max")
-      ? numEval(floorArg.arguments[0])
-      : null;
-  if (cap === null || floor === null) return null;
+  if (!floorArg || !isMathCall(floorArg, "max")) return null;
+  if (floorArg.arguments.length < 2) return null;
+  let floor = null;
+  let hasDynamic = false;
+  for (let k = 0; k < floorArg.arguments.length; k++) {
+    const v = numEval(floorArg.arguments[k]);
+    if (v === null) {
+      hasDynamic = true;
+    } else if (floor === null || v > floor) {
+      floor = v;
+    }
+  }
+  if (floor === null || !hasDynamic) return null;
   return [cap, floor];
 };
 
@@ -433,25 +475,66 @@ const scanConfigObject = (obj) => {
   return sawOpaque ? ["otherexpr", ""] : null;
 };
 
-// 单个导出声明的 timeout 形态：定位首个 Network./axios. 调用，
-// 只在该调用自身内取证（实参对象字面量、或以标识符传参时解析
-// 到的声明对象字面量）；调用之外一概不看。
-const censusDecl = (declNode) => {
-  const ordered = [];
-  const collect = (n) => {
-    ordered.push(n);
-    ts.forEachChild(n, collect);
-  };
-  collect(declNode);
-  const callNode = ordered.find(
-    (n) =>
-      ts.isCallExpression(n) &&
-      ts.isPropertyAccessExpression(n.expression) &&
-      ts.isIdentifier(n.expression.expression) &&
-      (n.expression.expression.text === "Network" ||
-        n.expression.expression.text === "axios"),
-  );
-  if (!callNode) return ["none", ""];
+// 引入参数绑定的函数样节点（与 scopeBinds 的函数面同集）。
+const isFunctionLikeNode = (n) =>
+  ts.isFunctionDeclaration(n) ||
+  ts.isFunctionExpression(n) ||
+  ts.isArrowFunction(n) ||
+  ts.isMethodDeclaration(n) ||
+  ts.isConstructorDeclaration(n) ||
+  ts.isGetAccessor(n) ||
+  ts.isSetAccessor(n);
+
+// paramDefaultFor(fn, name)：fn 的形参是否绑定 name；绑定且形参
+// 本人是标识符时给出其默认初始化式（无默认则 init=null）；解构
+// 形参的元素默认值不是配置对象本体，按无可用默认值论。
+const paramDefaultFor = (fn, name) => {
+  for (const p of fn.parameters) {
+    if (ts.isIdentifier(p.name)) {
+      if (p.name.text === name) return { found: true, init: p.initializer ?? null };
+    } else if (boundNames(p.name).has(name)) {
+      return { found: true, init: null };
+    }
+  }
+  return { found: false, init: null };
+};
+
+// resolveConfigObject(ident)：配置标识符按词法作用域逐层定绑
+// 定，返回其对象字面量初始化式（无则 null）。作用域纪律见文件
+// 头注 ⑤：形参绑定先于一切回落、被遮蔽的名字绝不回落顶层。
+const resolveConfigObject = (a) => {
+  let node = a;
+  while (node.parent) {
+    const p = node.parent;
+    if (isFunctionLikeNode(p)) {
+      const pr = paramDefaultFor(p, a.text);
+      if (pr.found) {
+        if (!pr.init) return null;
+        const init = unwrap(pr.init);
+        return ts.isObjectLiteralExpression(init) ? init : null;
+      }
+    } else if (ts.isVariableDeclaration(p) && boundNames(p.name).has(a.text)) {
+      if (!p.initializer) return null;
+      const init = unwrap(p.initializer);
+      return ts.isObjectLiteralExpression(init) ? init : null;
+    } else if (ts.isSourceFile(p)) {
+      if (resolveBinding(a.text, a) !== "top") return null;
+      const decl = topDecls.get(a.text);
+      if (!decl || !ts.isVariableDeclaration(decl) || !decl.initializer) {
+        return null;
+      }
+      const init = unwrap(decl.initializer);
+      return ts.isObjectLiteralExpression(init) ? init : null;
+    }
+    node = p;
+  }
+  return null;
+};
+
+// 单个 Network./axios. 调用的 timeout 取证：只在该调用自身内取
+// 证（实参对象字面量、或以标识符传参时解析到的声明对象字面
+// 量）；调用之外一概不看（R8-05 调用内绑定）。
+const evidenceOfCall = (callNode) => {
   let sawOpaque = false;
   for (const arg of callNode.arguments) {
     const a = unwrap(arg);
@@ -465,36 +548,55 @@ const censusDecl = (declNode) => {
         return r;
       }
     } else if (ts.isIdentifier(a)) {
-      // 配置以标识符传参：解析到其声明的对象字面量初始化式。
+      // 配置以标识符传参：按作用域解析到其声明的对象字面量
+      // （resolveConfigObject，作用域纪律见文件头注 ⑤）。
       if (resolveBinding(a.text, a) !== "none") {
-        let node = a;
-        let decl = null;
-        while (node.parent && !decl) {
-          const p = node.parent;
-          if (ts.isVariableDeclaration(p) && boundNames(p.name).has(a.text)) {
-            decl = p;
-          } else if (ts.isSourceFile(p)) {
-            decl = topDecls.get(a.text) ?? null;
-          }
-          node = p;
-        }
-        if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
-          const init = unwrap(decl.initializer);
-          if (ts.isObjectLiteralExpression(init)) {
-            const r = scanConfigObject(init);
-            if (r) {
-              if (r[0] === "otherexpr") {
-                sawOpaque = true;
-                continue;
-              }
-              return r;
+        const configObj = resolveConfigObject(a);
+        if (configObj) {
+          const r = scanConfigObject(configObj);
+          if (r) {
+            if (r[0] === "otherexpr") {
+              sawOpaque = true;
+              continue;
             }
+            return r;
           }
         }
       }
     }
   }
   return sawOpaque ? ["otherexpr", ""] : ["none", ""];
+};
+
+// 单个导出声明的 timeout 形态：声明内全部 Network./axios. 调
+// 用逐个取证后合并（修复轮 9，R9-23，合并口径见文件头注 ④）。
+const censusDecl = (declNode) => {
+  const ordered = [];
+  const collect = (n) => {
+    ordered.push(n);
+    ts.forEachChild(n, collect);
+  };
+  collect(declNode);
+  const callNodes = ordered.filter(
+    (n) =>
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      (n.expression.expression.text === "Network" ||
+        n.expression.expression.text === "axios"),
+  );
+  if (callNodes.length === 0) return ["none", ""];
+  let concrete = null;
+  for (const cn of callNodes) {
+    const ev = evidenceOfCall(cn);
+    if (ev[0] === "otherexpr") return ["otherexpr", ""];
+    if (ev[0] === "none") continue;
+    if (concrete && (concrete[0] !== ev[0] || concrete[1] !== ev[1])) {
+      return ["otherexpr", ""];
+    }
+    concrete = ev;
+  }
+  return concrete ?? ["none", ""];
 };
 
 const emittedCalls = new Set();

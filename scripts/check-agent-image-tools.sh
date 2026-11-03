@@ -65,6 +65,21 @@
 # 按覆盖 FAIL 点名——快照管到达 exec 的链、存活值管文件尾，
 # 任一与钉值不符即红。
 #
+# 字符串载体与快照语义（修复轮 9，R9-21/22 / I-C4-06/07）：
+# 轮 8 的模型边界外还有两形可洗绿：①字符串求值启动载体——
+# eval '…' 与 sh -c '…' 的载荷是整段命令文本、被扫描器收作单
+# 一 token，载体头既非包装器名单也非 exec/cd/ulimit，整段不
+# 可见；且文件内无裸 exec 时门旧实现静默回落存活值（顶层好
+# 值）判绿，运行时两锚全灭。现：eval / sh 系 -c 的载荷点名
+# exec/cd/ulimit 任一者、点命令 . /source（同壳执行、内容在
+# 文件外）一律按模型外形态 FAIL 点名；且全流无 exec 启动点
+# 时不再回落存活值，同样以「未见启动点」FAIL 点名
+# （fail-closed）。②多 exec 快照改 shell 首者胜：旧实现逐
+# exec 覆写快照（末者胜），坏链先 exec、好链后置覆写即可判
+# 绿；shell 语义下首个成功 exec 即替换进程、其后永不执行，
+# 现快照只取首个 exec 时点、后续 exec 不再覆写（其后的存活
+# 赋值仍受文件尾纪律约束）。
+#
 # 用法：check-agent-image-tools.sh [REPO_ROOT]（默认脚本所在仓库根）。
 # 退出码：0 = 工具集与入口不变量齐备；1 = 存在缺失；2 = 前提失效。
 set -u
@@ -133,9 +148,10 @@ done
 
 # 入口不变量按命令流生效值核对（R8-04）：扫描器逐字切分命令序
 # 列、在 exec 时点快照沿链生效的 cd / ulimit -c（模型见文件头注
-# ）。输出四行（exec 快照 ulimit/cd、流尾存活 ulimit/cd；无
-# exec 时首两行即存活值）；模型外 exec 形态输出
-# __UNPARSEABLE__ ＋命中的命令段文本。
+# ）。输出四行（exec 快照 ulimit/cd、流尾存活 ulimit/cd）；模型
+# 外 exec 形态、字符串求值启动载体（R9-21）与全流无启动点
+# （R9-21）输出 __UNPARSEABLE__ ＋命中的命令段文本（无启动点
+# 时为固定标记句）。
 ENTRY_EFF="$(printf '%s\n' "$ENTRYPOINT_CODE" | awk '
   BEGIN {
     sp = 1; cdv[1] = ""; ulv[1] = ""; substf[1] = 0; fid[1] = 1; fidseq = 1
@@ -151,6 +167,18 @@ ENTRY_EFF="$(printf '%s\n' "$ENTRYPOINT_CODE" | awk '
   function endtok() {
     if (intok) { seg = seg (seg == "" ? "" : "\034") tok; tok = ""; intok = 0 }
   }
+  function hasanchor(t,    m, parts, k) {
+    # 载荷文本内是否点名 exec/cd/ulimit 任一锚点词（按非标识符
+    # 字符切词后整词比对）。
+    m = split(t, parts, "[^A-Za-z0-9_]+")
+    for (k = 1; k <= m; k++) {
+      if (parts[k] == "exec" || parts[k] == "cd" || parts[k] == "ulimit") return 1
+    }
+    return 0
+  }
+  function isshell(h) {
+    return h == "sh" || h == "bash" || h == "dash" || h == "ash" || h == "ksh" || h == "zsh" || h ~ /\/(sh|bash|dash|ash|ksh|zsh)$/
+  }
   function process(    n, i, j, head, segtext) {
     if (seg == "") return
     n = split(seg, pt, "\034")
@@ -165,6 +193,27 @@ ENTRY_EFF="$(printf '%s\n' "$ENTRYPOINT_CODE" | awk '
       i++
       if (i > n) return
       head = pt[i]
+    }
+    # 字符串求值启动载体（修复轮 9，R9-21）：eval / sh 系 -c 的
+    # 载荷整段不可见、. /source 同壳执行而内容在文件外——载荷
+    # 点名锚点词（点命令无载荷可读、一律）即按模型外形态点名，
+    # 不静默放行。无锚点的 -c 载荷（如直接以路径启动 agent）
+    # 若构成唯一启动面，由 END 的「无启动点」规则兜底点名。
+    if (head == "eval") {
+      for (j = i + 1; j <= n; j++) {
+        if (hasanchor(pt[j]) && unpar == "") unpar = segtext
+      }
+      return
+    }
+    if (head == "." || head == "source") {
+      if (unpar == "") unpar = segtext
+      return
+    }
+    if (isshell(head)) {
+      for (j = i + 1; j < n; j++) {
+        if (pt[j] == "-c" && hasanchor(pt[j + 1]) && unpar == "") unpar = segtext
+      }
+      return
     }
     if (head in wrap) {
       for (j = i + 1; j <= n; j++) {
@@ -183,7 +232,10 @@ ENTRY_EFF="$(printf '%s\n' "$ENTRYPOINT_CODE" | awk '
       for (j = 1; j <= sp; j++) {
         if (substf[j]) { if (unpar == "") unpar = segtext; return }
       }
-      snap_ul = ulv[sp]; snap_cd = cdv[sp]; have_snap = 1
+      # 快照首者胜（修复轮 9，R9-22）：首个 exec 即替换进程，
+      # 后续 exec 永不执行、不再覆写快照（其后的赋值仍由流尾
+      # 存活纪律约束）。
+      if (!have_snap) { snap_ul = ulv[sp]; snap_cd = cdv[sp]; have_snap = 1 }
       return
     }
     if (head == "cd") {
@@ -305,7 +357,10 @@ ENTRY_EFF="$(printf '%s\n' "$ENTRYPOINT_CODE" | awk '
     } else if (have_snap) {
       printf "%s\n%s\n%s\n%s\n", snap_ul, snap_cd, surv_ul, surv_cd
     } else {
-      printf "%s\n%s\n\n\n", surv_ul, surv_cd
+      # 无启动点不回落存活值（修复轮 9，R9-21）：全流未见 exec
+      # 启动点时入口的实际启动形态在模型外，按前提异常点名，
+      # 不以顶层存活的好值静默判绿。
+      printf "__UNPARSEABLE__\n%s\n", "(no exec launch point found in the entrypoint command flow)"
     }
   }
 ')"
