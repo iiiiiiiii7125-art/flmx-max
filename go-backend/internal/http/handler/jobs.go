@@ -385,6 +385,7 @@ func (h *Handler) runStatisticsFlowJob(now time.Time) {
 
 	users, err := h.repo.ListAllUserFlowSnapshots()
 	if err != nil {
+		log.Printf("statistics flow job failed op=list err=%v", err)
 		return
 	}
 
@@ -443,6 +444,7 @@ func (h *Handler) resetMonthlyFlow(now time.Time) {
 func (h *Handler) disableExpiredUsers(nowMs int64) {
 	userIDs, err := h.repo.ListExpiredActiveUserIDs(nowMs)
 	if err != nil {
+		log.Printf("expired user disable failed op=list err=%v", err)
 		return
 	}
 
@@ -451,13 +453,16 @@ func (h *Handler) disableExpiredUsers(nowMs int64) {
 		if err == nil {
 			h.pauseForwardRecords(forwards, nowMs)
 		}
-		_ = h.repo.DisableUser(userID)
+		if err := h.repo.DisableUser(userID); err != nil {
+			log.Printf("expired user disable failed op=disable user_id=%d err=%v", userID, err)
+		}
 	}
 }
 
 func (h *Handler) disableExpiredUserTunnels(nowMs int64) {
 	items, err := h.repo.ListExpiredActiveUserTunnels(nowMs)
 	if err != nil {
+		log.Printf("expired user tunnel disable failed op=list err=%v", err)
 		return
 	}
 
@@ -466,7 +471,9 @@ func (h *Handler) disableExpiredUserTunnels(nowMs int64) {
 		if err == nil {
 			h.pauseForwardRecords(forwards, nowMs)
 		}
-		_ = h.repo.DisableUserTunnel(item.ID)
+		if err := h.repo.DisableUserTunnel(item.ID); err != nil {
+			log.Printf("expired user tunnel disable failed op=disable id=%d err=%v", item.ID, err)
+		}
 	}
 }
 
@@ -500,6 +507,7 @@ func (h *Handler) runNodeRenewalCycleJob(now time.Time) {
 
 	advanced, err := h.repo.AdvanceNodeRenewalCycles(now.UnixMilli())
 	if err != nil {
+		log.Printf("node renewal cycle job failed op=advance err=%v", err)
 		return
 	}
 

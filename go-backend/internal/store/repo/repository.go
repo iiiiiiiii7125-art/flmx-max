@@ -706,7 +706,9 @@ func seedData(db *gorm.DB) {
 		} else {
 			adminPwd, err := security.HashPassword("admin@user")
 			if err != nil {
-				log.Printf("seed admin password hash failed: %v", err)
+				// 与上方占用分支同标准：不得静默跳过。ERROR 日志 + API 状态可见。
+				adminBootstrapRequired = true
+				log.Printf("ERROR: seed admin password hash failed: %v. 面板缺少管理员账号，需人工处理。", err)
 			} else {
 				adminUser := model.User{
 					ID: 1, User: "admin@user", Pwd: adminPwd,

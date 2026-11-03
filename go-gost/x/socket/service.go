@@ -637,12 +637,14 @@ func rollbackPausedServices(pausedServices []struct {
 		// 重新解析并启动服务
 		svc, err := parser.ParseService(pss.serviceConfig)
 		if err != nil {
-			continue // 回滚失败，记录日志但继续处理其他服务
+			logger.Default().Errorf("rollback paused services: failed to re-parse service %s: %v", pss.name, err)
+			continue // 回滚失败，已记录日志，继续处理其他服务
 		}
 
 		if err := registry.ServiceRegistry().Register(pss.name, svc); err != nil {
+			logger.Default().Errorf("rollback paused services: failed to re-register service %s: %v", pss.name, err)
 			svc.Close()
-			continue // 回滚失败，记录日志但继续处理其他服务
+			continue // 回滚失败，已记录日志，继续处理其他服务
 		}
 
 		go svc.Serve()
