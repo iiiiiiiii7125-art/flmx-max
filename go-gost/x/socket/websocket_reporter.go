@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1316,7 +1318,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 
 	// 回退 Agent 到旧版本
 	case "RollbackAgent":
-		err = w.handleRollbackAgent(cmd.Data)
+		response.Data, err = w.handleRollbackAgent(cmd.Data)
 		response.Type = "RollbackAgentResponse"
 		// needSaveConfig = false (默认值)
 
@@ -2021,6 +2023,163 @@ func backupCurrentAgentBinary(binaryPath, backupPath string) error {
 		return fmt.Errorf("写入旧版本备份失败: %v", err)
 	}
 	return nil
+}
+
+// --- Rollback backup pairing (R6-05) ---
+//
+// The panel upgrade path and the install.sh script update path both
+// replace the agent binary, but only the panel path maintains the
+// rollback backup (flux_agent.old): a script update replaces the
+// binary and deletes its own .bak on success, so .old silently
+// becomes one generation staler than the rollback handler assumes
+// (panel upgrade A->B, script update B->C, panel rollback lands on
+// A, skipping B) — and the rollback receipt never named the landing
+// version. The pairing record written next to the backup at
+// panel-upgrade time makes the two paths mutually aware: it pins
+// the backup's content hash and the hash + version of the binary
+// installed alongside it. At rollback time the current binary must
+// still be that paired install; anything else means another path
+// replaced the binary in between, and the rollback is refused with
+// every version named instead of silently crossing a generation.
+// Backups written before this record existed carry no pairing:
+// they still roll back (the fleet's existing backups must not be
+// stranded), the receipt names the landing version, and the
+// generation is reported as unverified.
+type agentBackupMeta struct {
+	BackupSHA256     string `json:"backupSha256"`
+	InstalledVersion string `json:"installedVersion"`
+	InstalledSHA256  string `json:"installedSha256"`
+}
+
+func agentBackupMetaPath(backupPath string) string { return backupPath + ".meta" }
+
+func writeAgentBackupMeta(backupPath string, meta *agentBackupMeta) error {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(agentBackupMetaPath(backupPath), data, 0644)
+}
+
+// readAgentBackupMeta returns nil when no usable pairing record
+// exists (legacy backup, unreadable or malformed file): absence of
+// a record is not an error, it only downgrades the generation
+// verdict to unverified.
+func readAgentBackupMeta(backupPath string) *agentBackupMeta {
+	data, err := os.ReadFile(agentBackupMetaPath(backupPath))
+	if err != nil {
+		return nil
+	}
+	var meta agentBackupMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil
+	}
+	if meta.BackupSHA256 == "" || meta.InstalledSHA256 == "" {
+		return nil
+	}
+	return &meta
+}
+
+func hashFileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// probeAgentBinaryVersion runs path -V and parses the version out
+// of the "gost <version> (<go version> <os>/<arch>)" banner the
+// agent prints for -V. The upgrade smoke test only checks
+// executability; the rollback pre-flight also needs the version so
+// the receipt can name the landing point.
+func probeAgentBinaryVersion(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-V").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s -V 执行失败: %v, 输出: %s", path, err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 || fields[0] != "gost" {
+		return "", fmt.Errorf("%s -V 输出无法解析: %s", path, strings.TrimSpace(string(out)))
+	}
+	return fields[1], nil
+}
+
+// Rollback generations reported in the RollbackAgent response data.
+const (
+	// rollbackGenerationPrevious: the backup is the immediately
+	// previous generation, verified against the pairing record.
+	rollbackGenerationPrevious = "previous"
+	// rollbackGenerationLegacy: the backup predates pairing
+	// records; its generation is unverified.
+	rollbackGenerationLegacy = "legacy-unknown"
+)
+
+type agentRollbackPlan struct {
+	FromVersion string
+	ToVersion   string
+	Generation  string
+}
+
+func displayVersion(v string) string {
+	if v == "" {
+		return "未知"
+	}
+	return v
+}
+
+// planAgentRollback is the pre-flight for a manual panel rollback:
+// it decides, before any script is launched, whether the backup at
+// backupPath may replace the binary at binaryPath, and what the
+// receipt must name. See agentBackupMeta for the pairing semantics.
+func planAgentRollback(binaryPath, backupPath string) (*agentRollbackPlan, error) {
+	if _, err := os.Stat(backupPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("没有可用的备份文件，无法回退")
+		}
+		return nil, fmt.Errorf("检查备份文件失败: %v", err)
+	}
+	// The landing version must be nameable in the receipt, and a
+	// backup that cannot execute -V would leave the node running a
+	// binary that cannot start (the rollback script has no second
+	// fallback), so an unverifiable backup refuses up front — the
+	// same caliber as the upgrade path's pre-swap smoke test.
+	toVersion, err := probeAgentBinaryVersion(backupPath)
+	if err != nil {
+		return nil, fmt.Errorf("回退备份校验失败，拒绝回退: %v", err)
+	}
+	plan := &agentRollbackPlan{ToVersion: toVersion, Generation: rollbackGenerationLegacy}
+	if v, err := probeAgentBinaryVersion(binaryPath); err == nil {
+		plan.FromVersion = v
+	}
+	backupHash, err := hashFileSHA256(backupPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取回退备份失败: %v", err)
+	}
+	currentHash, err := hashFileSHA256(binaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取当前二进制失败: %v", err)
+	}
+	if currentHash == backupHash {
+		return nil, fmt.Errorf("当前二进制与回退备份相同（版本 %s），已在备份版本，无需回退", toVersion)
+	}
+	if meta := readAgentBackupMeta(backupPath); meta != nil {
+		if backupHash != meta.BackupSHA256 {
+			return nil, fmt.Errorf("回退备份与配对记录不一致（备份在生成后被替换），拒绝回退；当前版本 %s，备份版本 %s", displayVersion(plan.FromVersion), toVersion)
+		}
+		if currentHash != meta.InstalledSHA256 {
+			return nil, fmt.Errorf("回退备份不是紧邻上一代：该备份生成于面板升级到 %s 时，当前二进制（版本 %s）其后已被其他方式更新，回退将跨过一代直接回到 %s，已拒绝；如需回到 %s，请用面板的节点安装命令重新安装该版本", displayVersion(meta.InstalledVersion), displayVersion(plan.FromVersion), toVersion, toVersion)
+		}
+		plan.Generation = rollbackGenerationPrevious
+	}
+	return plan, nil
 }
 
 // maxAgentChecksumSize bounds the checksum download (D1-08): the body is a
@@ -2809,6 +2968,27 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 	fmt.Println("📦 旧版本已备份到", backupPath)
 
+	// R6-05: pair the backup with the binary being installed (see
+	// agentBackupMeta), so a later rollback can prove the backup is
+	// still the immediately previous generation even if another
+	// path (install.sh script update) replaced the binary in
+	// between. Failure aborts the upgrade with the same caliber as
+	// a backup failure — an unpairable backup would leave the
+	// rollback generation verdict unprovable. Only runs when a
+	// backup actually exists (a first install has nothing to pair).
+	if _, err := os.Stat(backupPath); err == nil {
+		backupHash, herr := hashFileSHA256(backupPath)
+		if herr != nil {
+			staging.Discard()
+			return fmt.Errorf("计算回退备份校验值失败: %v", herr)
+		}
+		meta := &agentBackupMeta{BackupSHA256: backupHash, InstalledVersion: version, InstalledSHA256: actualHash}
+		if err := writeAgentBackupMeta(backupPath, meta); err != nil {
+			staging.Discard()
+			return fmt.Errorf("写入回退备份配对记录失败: %v", err)
+		}
+	}
+
 	w.sendUpgradeProgress("installing", 80, "准备重启...")
 	fmt.Printf("✅ 升级包下载完成 (%d bytes), 准备重启...\n", downloaded)
 
@@ -2841,19 +3021,23 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	return nil
 }
 
-func (w *WebSocketReporter) handleRollbackAgent(data interface{}) error {
+func (w *WebSocketReporter) handleRollbackAgent(data interface{}) (map[string]interface{}, error) {
 	// R2-004: same container-form refusal as handleUpgradeAgent —
 	// there is no script-layout backup to roll back to; the previous
 	// version is restored by re-running its install command.
 	if upgradeInContainer() {
-		return fmt.Errorf("容器形态节点无法通过面板回退：请在面板的节点安装弹窗重新获取目标版本的 Docker/Compose 安装命令并在节点上重跑")
+		return nil, fmt.Errorf("容器形态节点无法通过面板回退：请在面板的节点安装弹窗重新获取目标版本的 Docker/Compose 安装命令并在节点上重跑")
 	}
 	const binaryPath = "/etc/flux_agent/flux_agent"
 	backupPath := binaryPath + ".old"
 
-	// 检查备份文件是否存在
-	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
-		return fmt.Errorf("没有可用的备份文件，无法回退")
+	// R6-05: the pre-flight decides whether the backup may be used
+	// at all (generation pairing vs. cross-path replacement, see
+	// planAgentRollback) and what the receipt must name, before any
+	// script is launched.
+	plan, err := planAgentRollback(binaryPath, backupPath)
+	if err != nil {
+		return nil, err
 	}
 
 	fmt.Println("🔄 开始回退到旧版本...")
@@ -2861,18 +3045,22 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) error {
 	// 执行回退脚本（与升级同一套 init 分发，A11-132-01）
 	manager, err := detectServiceManager()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	script, err := buildAgentRollbackScriptFor(manager, backupPath, binaryPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := launchAgentControlScript(manager, script); err != nil {
-		return fmt.Errorf("启动回退脚本失败: %v", err)
+		return nil, fmt.Errorf("启动回退脚本失败: %v", err)
 	}
 
 	fmt.Println("🔄 回退脚本已启动, Agent 将在 1 秒后重启...")
-	return nil
+	return map[string]interface{}{
+		"fromVersion":      plan.FromVersion,
+		"toVersion":        plan.ToVersion,
+		"backupGeneration": plan.Generation,
+	}, nil
 }
 
 // buildAgentRestartScript is the systemd variant of
