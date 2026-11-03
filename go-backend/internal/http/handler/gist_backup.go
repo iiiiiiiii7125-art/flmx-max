@@ -864,7 +864,8 @@ func (h *Handler) gistBackupStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // gistBackupSave 保存 Gist 设置：空令牌/空密码 = 保留已存值，
-// clearToken/clearPassword = 清除（清除令牌即关闭自动上传）。
+// clearToken/clearPassword = 清除（清除令牌即关闭自动上传，且
+// 间隔同步归零落库，见下方 R3-F6-O2）。
 // 新令牌先向 GitHub 校验可用才落库；间隔只接受 gistIntervals 白名单。
 func (h *Handler) gistBackupSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -929,7 +930,15 @@ func (h *Handler) gistBackupSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请先填写加密密码，或将自动备份间隔设为不启用"))
 		return
 	}
-	fields := map[string]string{gistConfigInterval: strconv.Itoa(req.IntervalHours)}
+	// R3-F6-O2：清除令牌时已存间隔同步归零——否则日后重新填回
+	// 令牌，自动上传会按残存间隔静默复活，与「清除令牌即关闭
+	// 自动上传」的字面语义不符（无令牌期间 gistDue 恒 false，
+	// 本改动不改变该期间行为）。
+	intervalHours := req.IntervalHours
+	if req.ClearToken {
+		intervalHours = 0
+	}
+	fields := map[string]string{gistConfigInterval: strconv.Itoa(intervalHours)}
 	switch {
 	case req.ClearToken:
 		fields[gistConfigToken] = ""
@@ -979,8 +988,10 @@ type gistVersionView struct {
 
 // gistBackupVersions 列出 Gist history 最近 10 个版本（version +
 // committedAt ms）。只列版本、不下载内容，故不需要加密密码；
-// 令牌与 gist_id 缺失时明确报错。restore 端点归 G-恢复链批，
-// 本端点不触发任何导入。
+// 令牌与 gist_id 缺失时明确报错。恢复走 gistBackupRestore：
+// 经 gistVersionContent 取内容解密后走与本地导入同一条尾链
+// （ImportContext + runBackupImportTailHooks）；本端点自身
+// 不触发任何导入。
 func (h *Handler) gistBackupVersions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -1024,12 +1035,12 @@ func (h *Handler) gistBackupVersions(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(map[string]interface{}{"versions": versions}))
 }
 
-// gistVersionContent 取指定版本的 Gist 备份文件内容并解密，供未来
-// G-恢复链批复用；本批不接恢复导入链（不调用 Import、不触
-// backup_import_repush.go、不触发任何尾钩子）。
-// version 校验与上游 restore 一致：限 64 字、禁 /?#；文件缺失、
-// 大文件 raw_url 再取、加密信封解密均在此处理，返回
-// (plain, encrypted, err)。
+// gistVersionContent 取指定版本的 Gist 备份文件内容并解密，
+// 是 gistBackupRestore 的取数腿：恢复端点解密后经
+// ImportContext 落库并触发导入尾钩子全集
+// runBackupImportTailHooks（与本地导入同一条尾链）。
+// version 校验：限 64 字、禁 /?#；文件缺失、大文件 raw_url
+// 再取、加密信封解密均在此处理，返回 (plain, encrypted, err)。
 func gistVersionContent(ctx context.Context, token, id, version, password string) ([]byte, bool, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, false, errText("请先填写 GitHub 令牌")

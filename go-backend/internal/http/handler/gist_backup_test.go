@@ -437,6 +437,57 @@ func TestGistSaveAndStatusHandlers(t *testing.T) {
 	}
 }
 
+// R3-F6-O2：清除令牌时已存间隔同步归零落库——即使请求体仍带着
+// 旧间隔值，清令牌后落库间隔必须为 0，日后重新填回令牌不得按
+// 残存间隔静默复活自动上传。
+func TestGistSaveClearTokenZeroesInterval(t *testing.T) {
+	h := setupGistTest(t)
+	newMockGistServer(t, func(w http.ResponseWriter, req *http.Request, rec *mockGistServer) {
+		if req.Method == http.MethodGet && req.URL.Path == "/gists" {
+			writeJSON(w, 200, []interface{}{})
+			return
+		}
+		writeJSON(w, 404, map[string]interface{}{"message": "not found"})
+	})
+
+	// 先保存令牌+密码+24 小时间隔。
+	rec := httptest.NewRecorder()
+	h.gistBackupSave(rec, adminRequest(t, http.MethodPost, "/api/v1/backup/gist/save",
+		[]byte(`{"token":"test-token-1234567890","password":"enc-pw","intervalHours":24}`)))
+	if code, _, _ := decodeGistEnvelope(t, rec); code != 0 {
+		t.Fatalf("initial save code = %d body=%s", code, rec.Body.String())
+	}
+	if got := h.gistConfig()[gistConfigInterval]; got != "24" {
+		t.Fatalf("stored interval after save = %q, want 24", got)
+	}
+
+	// 清除令牌（请求体仍回显旧间隔 24）：落库间隔必须归零、令牌清空。
+	rec = httptest.NewRecorder()
+	h.gistBackupSave(rec, adminRequest(t, http.MethodPost, "/api/v1/backup/gist/save",
+		[]byte(`{"clearToken":true,"intervalHours":24}`)))
+	code, _, data := decodeGistEnvelope(t, rec)
+	if code != 0 {
+		t.Fatalf("clear save code = %d body=%s", code, rec.Body.String())
+	}
+	var st gistStatusView
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if st.Configured {
+		t.Fatalf("token must be cleared, status = %+v", st)
+	}
+	if st.IntervalHours != 0 {
+		t.Fatalf("status interval after clear = %d, want 0", st.IntervalHours)
+	}
+	cfg := h.gistConfig()
+	if cfg[gistConfigToken] != "" {
+		t.Fatalf("stored token must be empty, got %q", cfg[gistConfigToken])
+	}
+	if cfg[gistConfigInterval] != "0" {
+		t.Fatalf("stored interval after clear = %q, want \"0\"", cfg[gistConfigInterval])
+	}
+}
+
 // R14-F02（REA-P3-1 / A3-02）：gist/save 保存端守卫——保存后终态若
 // interval>0 且无密码在位（未设密码或本次清密码）且令牌在位，则拒绝
 // 保存。令牌未设时 gistDue 恒 false、自动循环不可达，仍按既有口径放行。
