@@ -45,6 +45,15 @@
 //      light 集部分键为 undefined、其余为实值的包属合法部分集
 //      （未定义键由 injectTokens 跳过、其余照常注入，未给出的
 //      token 走回退），不得被新校验误伤。
+//   ⑫ 「有效值＝非空字符串」收口（R7-12 / G-C5-01＋G-C5-02 登记
+//      组）：谓词由「不为 undefined」收严为「字符串且 trim 后非
+//      空」——空串（setProperty(name,"") 等价移除属性）与纯空白
+//      （剥空后 var() 替换计算值无效）此前计数为 1、可注册可激
+//      活、可同 id 顶掉合法包而实际注入 0；类型契约之外的运行时
+//      形态（值 null／数字／布尔／对象、light 为数组——注入键
+//      "0" 被浏览器忽略）同结局。此次一并钉死：全部同拒并点名、
+//      被拒包不得激活、同 id 不顶替；空串与实值混合的部分集计数
+//      ≥1 仍属合法，不得误伤。
 //
 // 提取面（修复轮 6，R6-C4-10 机制处置）：断言⑨的 globals 侧旧实现
 // 以正则合并 :root 块、无注释剥离——在 :root 块内给改过的 token
@@ -479,6 +488,109 @@ registerTheme(partialUndefPkg);
 check(
   "light 部分 undefined 的合法部分集仍可注册（不误伤）",
   getTheme("ok-partial-undef") === partialUndefPkg,
+);
+
+// ─── ⑫ R7-12：空串/纯空白与类型外形态（G-C5-01＋G-C5-02 登记组） ─────────
+
+const emptyStrLightPkg = {
+  ...base,
+  id: "bad-empty-str-light",
+  tokens: { light: { "--primary": "" } },
+};
+const blankStrLightPkg = {
+  ...base,
+  id: "bad-blank-str-light",
+  tokens: { light: { "--primary": "   " } },
+};
+const nullValLightPkg = {
+  ...base,
+  id: "bad-null-val-light",
+  tokens: { light: { "--primary": null } },
+};
+const zeroValLightPkg = {
+  ...base,
+  id: "bad-zero-val-light",
+  tokens: { light: { "--primary": 0 } },
+};
+const falseValLightPkg = {
+  ...base,
+  id: "bad-false-val-light",
+  tokens: { light: { "--primary": false } },
+};
+const objValLightPkg = {
+  ...base,
+  id: "bad-obj-val-light",
+  tokens: { light: { "--primary": { hex: "#123456" } } },
+};
+const arrayLightPkg = {
+  ...base,
+  id: "bad-array-light",
+  tokens: { light: ["#ffffff"] },
+};
+const mixedBlankPkg = {
+  ...base,
+  id: "ok-mixed-blank",
+  tokens: { light: { "--primary": "", "--secondary": "#abcdef" } },
+};
+const blankValPkgs = [
+  ["空串", emptyStrLightPkg],
+  ["纯空白", blankStrLightPkg],
+  ["null 值（类型外）", nullValLightPkg],
+  ["数字 0 值（类型外）", zeroValLightPkg],
+  ["布尔 false 值（类型外）", falseValLightPkg],
+  ["对象值（类型外）", objValLightPkg],
+  ["数组（类型外）", arrayLightPkg],
+];
+
+if (typeof validateThemePackage === "function") {
+  for (const [label, pkg] of blankValPkgs) {
+    check(
+      `validateThemePackage：light 仅${label} → 点名缺 light（R7-12）`,
+      /light/.test(validateThemePackage(pkg) ?? ""),
+      `实得 ${JSON.stringify(validateThemePackage(pkg))}`,
+    );
+  }
+  check(
+    "validateThemePackage：空串＋实值混合 → 通过（合法部分集）",
+    validateThemePackage(mixedBlankPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(mixedBlankPkg))}`,
+  );
+}
+
+for (const [label, pkg] of blankValPkgs) {
+  registerTheme(pkg);
+  check(
+    `light 仅${label}的主题包被拒注册（R7-12）`,
+    getTheme(pkg.id) === undefined &&
+      errorLog.some((m) => m.includes(pkg.id) && /light/.test(m)),
+    `捕获到: ${JSON.stringify(errorLog)}`,
+  );
+}
+
+activateTheme("bad-empty-str-light");
+activateTheme("bad-blank-str-light");
+check(
+  "被拒的空串/纯空白包无法激活（active 仍为 null，不装作成功）",
+  getActiveThemeId() === null,
+  `实得 ${JSON.stringify(getActiveThemeId())}`,
+);
+
+registerTheme({ ...emptyStrLightPkg, id: "ok-light" });
+check(
+  "同 id 空串包不能顶掉已注册的合法包（R7-12）",
+  getTheme("ok-light") === lightPkg,
+);
+
+registerTheme({ ...blankStrLightPkg, id: "ok-light" });
+check(
+  "同 id 纯空白包不能顶掉已注册的合法包（R7-12）",
+  getTheme("ok-light") === lightPkg,
+);
+
+registerTheme(mixedBlankPkg);
+check(
+  "空串与实值混合的部分集仍可注册（不误伤）",
+  getTheme("ok-mixed-blank") === mixedBlankPkg,
 );
 
 registerTheme(noTokensPkg);
