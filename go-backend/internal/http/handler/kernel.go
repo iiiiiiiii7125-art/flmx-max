@@ -1090,6 +1090,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
+	// F2-N2-01：链式/分流目标的字面 IP 族冲突校验读 row.OutboundIPStrategy
+	// （validateChainVersion），而本单新策略此时只在 in 上——applyInboundToModel
+	// 在校验之后才落 row，同单收紧会被存量旧策略放行、落库后渲染期把链式
+	// 出站判 unreachable 静默丢流量（同单放宽则被旧策略误拒）。校验前先把
+	// 经 Normalize 的本单策略同步进 row，与 inboundSplitSave（先写 row
+	// 再校验）口径对齐。更新未携带策略时 in 即存量值，同步为恒等、无副作用。
+	row.OutboundIPStrategy = in.OutboundIPStrategy
 	prevTargets := outboundTargets(row)
 	if err := h.setInboundRouting(&row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
 		releasePortAlloc()
