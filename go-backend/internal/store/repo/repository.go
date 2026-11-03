@@ -3401,6 +3401,14 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		typeSet[t] = true
 	}
 
+	// R10-10：bcrypt 预算校验——进事务与端口预检之前整单拒绝
+	// （见 ValidateBackupImportUserHashBudget；两个 handler 入口
+	// 已在取单飞锁前先行同判，此处为 repo 层单一收口，覆盖全部
+	// Import 调用方）。
+	if err := ValidateBackupImportUserHashBudget(backup, types); err != nil {
+		return nil, err
+	}
+
 	// B4/F-055: 端口预检 + per-node 锁（见 repository_backup_precheck.go）。
 	claims := backupClaims(backup, typeSet)
 	releasePortLocks := lockBackupPortNodes(claims)
@@ -3763,9 +3771,59 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 	return count, nil
 }
 
+// importUserPasswordNeedsHash 报告备份用户行在导入时是否需要新
+// 做一次 bcrypt 哈希——normalizeImportedUserPassword 的分流谓词
+// 与 R10-10 预算统计的单一定义点：$2 前缀（bcrypt 家族）原样保
+// 留，其余（明文、legacy MD5、空串）一律走哈希路径。注意谓词
+// 在 TrimSpace 之后判定（与 normalizeImportedUserPassword 本体
+// 同序），预算统计对原始 Pwd 判定——带首尾空白的 $2 行在本体被
+// 剥空白后不哈希、预算侧从严计为需哈希，方向为高估、从严。
+func importUserPasswordNeedsHash(password string) bool {
+	return !strings.HasPrefix(password, "$2")
+}
+
+// MaxImportUserPasswordHashes 是单次备份导入允许触发新 bcrypt
+// 哈希的用户行数上限（R10-10/I-F2-03）。合法备份恒携 $2 哈希、
+// 永不触发；非哈希行逐行 cost-10 哈希（实测 300–900ms/行），此前
+// 无帽——约 2MB 的构造备份即可在单飞锁＋30 分钟 detached 事务内
+// 把整单预算烧满后回滚。超限在校验相位整单点名拒绝。
+const MaxImportUserPasswordHashes = 1000
+
+// ValidateBackupImportUserHashBudget 统计所选段为 users 时备份中
+// 需重新哈希口令的用户行数，超限返回错误。Repository.Import 在
+// 进事务前调用；本地导入与 Gist 恢复两个 handler 入口在取
+// backupImportMu 之前亦先行调用，使拒绝不占锁、不进事务、
+// 不烧任何哈希。计数只看口令形态（逐行是否最终被跳过由
+// importUsers 的行级校验另判，预算从严计全集）。
+func ValidateBackupImportUserHashBudget(backup *model.BackupData, types []string) error {
+	if backup == nil {
+		return nil
+	}
+	selected := false
+	for _, t := range types {
+		if t == "users" {
+			selected = true
+			break
+		}
+	}
+	if !selected {
+		return nil
+	}
+	need := 0
+	for _, u := range backup.Users {
+		if importUserPasswordNeedsHash(u.Pwd) {
+			need++
+		}
+	}
+	if need > MaxImportUserPasswordHashes {
+		return fmt.Errorf("备份中需重新哈希密码的用户行数 %d 超过单次上限 %d，请分批导入", need, MaxImportUserPasswordHashes)
+	}
+	return nil
+}
+
 func normalizeImportedUserPassword(password string, status int) (string, int, error) {
 	password = strings.TrimSpace(password)
-	if strings.HasPrefix(password, "$2") {
+	if !importUserPasswordNeedsHash(password) {
 		return password, status, nil
 	}
 	if security.IsLegacyPasswordHash(password) || password == "" {

@@ -2549,6 +2549,17 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R10-10（I-F2-03）：bcrypt 预算校验前置于单飞锁——构造备份的
+	// 非哈希口令行逐行 cost-10 哈希，此前无帽时一单即可在锁内把
+	// 30 分钟导入预算烧满。超限在此整单拒绝：不占锁、不进事务、
+	// 不烧哈希（repo.Import 进事务前同判收口，见 repo 层
+	// ValidateBackupImportUserHashBudget）。
+	if err := repo.ValidateBackupImportUserHashBudget(&req.BackupData, req.Types); err != nil {
+		// J-008：错误码统一为 -2
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
 	// SEC-01 BC-01 (b)：在 ImportContext 改写 DB 之前生成导入前快照
 	// 并落盘。生成失败时只记警告并继续导入（O7-010）：若当前库已损坏
 	// 致 ExportAll 失败，用户正是最需要从完好备份恢复的场景，失败即

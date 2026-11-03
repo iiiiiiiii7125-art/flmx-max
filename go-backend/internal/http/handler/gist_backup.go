@@ -29,6 +29,7 @@ import (
 	"go-backend/internal/http/response"
 	"go-backend/internal/netguard"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 // PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42
@@ -1149,6 +1150,13 @@ func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
 	// 写入相位。准备相位中止（关页/断网）则整单不启动、无副作用。
 	if err := r.Context().Err(); err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("恢复已取消: %v", err)))
+		return
+	}
+	// R10-10（I-F2-03）：与本地导入同口径——bcrypt 预算校验前置于
+	// 单飞锁，超限整单拒绝、不占锁不进事务（见 repo 层
+	// ValidateBackupImportUserHashBudget）。
+	if err := repo.ValidateBackupImportUserHashBudget(&backup, gistRestoreTypes); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	// 与本地导入共用同一把进程内互斥（backupImportMu）：解绑后关页

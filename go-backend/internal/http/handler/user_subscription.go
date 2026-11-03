@@ -61,6 +61,11 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R10-08：本面不走 idsFromBody 系，下方逐条 GetSubscription
+	// 校验属逐条工作面，提交条数同口径计数帽（见 maxBatchIDs）。
+	if !checkBatchIDsCap(w, len(req.SubscriptionIDs)) {
+		return
+	}
 	// R2X-012: the assigned user must exist too — the subscription side
 	// was already validated below, but a phantom user silently accepted
 	// (and persisted) the assignment.

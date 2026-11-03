@@ -1603,6 +1603,11 @@ func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("ids不能为空"))
 		return
 	}
+	// R10-08：本面自有解析不走 idsFromBody，同口径计数帽（见
+	// maxBatchIDs；本面不去重，按提交条数计）。
+	if !checkBatchIDsCap(w, len(req.IDs)) {
+		return
+	}
 	s := 0
 	f := 0
 	failures := make([]batchFailureDetail, 0)

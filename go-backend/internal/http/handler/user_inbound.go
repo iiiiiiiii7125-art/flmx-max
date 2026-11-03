@@ -162,6 +162,12 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 			inboundIDsToCheck = append(inboundIDsToCheck, a.InboundID)
 		}
 	}
+	// R10-08：本面不走 idsFromBody 系，下方逐条存在性/伴生校验属
+	// 逐条工作面，实际格式（assignments 或 legacy ids）的条数同
+	// 口径计数帽（见 maxBatchIDs）。
+	if !checkBatchIDsCap(w, len(inboundIDsToCheck)) {
+		return
+	}
 	if err := h.repo.ValidateIDsExist("inbound", inboundIDsToCheck); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

@@ -128,6 +128,11 @@ func (h *Handler) tunnelBatchDeletePreview(w http.ResponseWriter, r *http.Reques
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// R10-08：本面自有解析不走 idsFromBody，同口径计数帽（见
+	// maxBatchIDs；按提交条数计）。
+	if !checkBatchIDsCap(w, len(req.IDs)) {
+		return
+	}
 
 	preview, err := h.buildTunnelBatchDeletePreview(req.IDs)
 	if err != nil {
@@ -219,6 +224,11 @@ func (h *Handler) tunnelBatchDeleteWithForwards(w http.ResponseWriter, r *http.R
 	normalizedIDs := normalizeTunnelIDs(req.IDs)
 	if len(normalizedIDs) == 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	// R10-08：本面自有解析不走 idsFromBody，归一（过滤＋去重）后
+	// 同口径计数帽（见 maxBatchIDs）。
+	if !checkBatchIDsCap(w, len(normalizedIDs)) {
 		return
 	}
 

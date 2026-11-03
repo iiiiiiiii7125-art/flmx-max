@@ -23,6 +23,32 @@ func init() {
 	client.SetSafetyBypassFunc(func() bool { return DisableSafeRemoteAddrCheckForTesting })
 }
 
+// maxRemoteAddrSegments 是转发目标地址的段数上限（R10-09/I-F2-02，
+// 与订阅条目 ids 帽 100 同量级）。此前段数无门：普通用户一条创建
+// 请求即可让面板对攻击者控制的域名发起万级顺序 DNS 解析，且落库
+// 后消费侧按段数全量展开下发。计数口径为 splitRemoteParts 的输出
+// 段数（切分＋去空段后）；写面在创建/更新两面无条件判定（见
+// validateRemoteAddrSegmentCount），管理员豁免的只是 netguard 段
+// 校验、不是段数帽。
+const maxRemoteAddrSegments = 100
+
+// validateRemoteAddrSegmentCount 是段数帽的单一判定点：
+// forwardCreate/forwardUpdate 在零目标格式判之后无条件调用（与
+// R7-04 的零目标判同为格式层判定、与角色/开关无关）。不并入
+// validateRemoteAddrHasTargets——彼与恢复面镜像
+// remoteAddrHasNoTargets 同定义（仅零目标），并入即破坏双边对齐。
+func validateRemoteAddrSegmentCount(addr string) error {
+	if n := len(splitRemoteParts(addr)); n > maxRemoteAddrSegments {
+		return fmt.Errorf("转发目标地址段数不能超过 %d 个（当前 %d 个）", maxRemoteAddrSegments, n)
+	}
+	return nil
+}
+
+// safeRemoteLookupIP 是 checkSingleRemoteAddr 的解析点（与
+// federationDiagnoseLookupIP 同形态的可注入点，供计数型钉格在不
+// 依赖真实 DNS 的前提下验证 R10-09 的按主机名 memo 化）。
+var safeRemoteLookupIP = net.LookupIP
+
 // IsSafeRemoteAddr checks if a given address is safe to connect to (prevents SSRF/Open Proxy).
 // It resolves domains to IPs to prevent DNS rebinding attacks pointing to internal networks.
 // Supports multiple addresses separated by commas or newlines (one per line).
@@ -39,8 +65,13 @@ func IsSafeRemoteAddr(addr string) error {
 		return nil
 	}
 
+	// R10-09：单次调用内按主机名 memo 化解析——同一主机名重复出现
+	// 的段只解析一次（判据只取决于主机名的解析集，与端口无关；
+	// 错误文案仍逐段以原段呈现）。此前逐段 LookupIP、不去重无缓存，
+	// 同名 N 段即 N 次顺序外发查询、全程堵在请求内。
+	resolutions := make(map[string][]net.IP)
 	for _, part := range splitRemoteParts(addr) {
-		if err := checkSingleRemoteAddr(part); err != nil {
+		if err := checkSingleRemoteAddrMemo(part, resolutions); err != nil {
 			return err
 		}
 	}
@@ -144,6 +175,15 @@ func splitRemoteParts(addr string) []string {
 
 // checkSingleRemoteAddr validates a single address.
 func checkSingleRemoteAddr(addr string) error {
+	return checkSingleRemoteAddrMemo(addr, nil)
+}
+
+// checkSingleRemoteAddrMemo 是 checkSingleRemoteAddr 的 memo 化
+// 形态（R10-09）：resolutions 非 nil 时按主机名缓存本次调用内的
+// 解析结果，同名段不再重复外发解析；判据与错误文案逐字不变。
+// 解析失败不入缓存——IsSafeRemoteAddr 首个失败即整单返回，缓存
+// 误差结果无后续消费者。
+func checkSingleRemoteAddrMemo(addr string, resolutions map[string][]net.IP) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		if strings.Contains(err.Error(), "missing port in address") {
@@ -153,9 +193,16 @@ func checkSingleRemoteAddr(addr string) error {
 		}
 	}
 
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("could not resolve address %q: %v", addr, err)
+	ips, cached := resolutions[host]
+	if !cached {
+		var lookupErr error
+		ips, lookupErr = safeRemoteLookupIP(host)
+		if lookupErr != nil {
+			return fmt.Errorf("could not resolve address %q: %v", addr, lookupErr)
+		}
+		if resolutions != nil {
+			resolutions[host] = ips
+		}
 	}
 
 	for _, ip := range ips {
