@@ -63,19 +63,35 @@ function notify() {
  * human-readable rejection reason, or null when the package is valid.
  *
  * LIGHT-ONLY contract: dark mode was removed app-wide, so a package
- * that provides `tokens` MUST provide the `light` token set.  A
+ * that provides `tokens` MUST provide a usable `light` token set.  A
  * dark-only package is rejected outright — there is no dark fallback
  * to read colours from, and silently injecting nothing while
- * pretending activation succeeded would hide the mistake.  A package
- * without `tokens` at all (component/layout/page overrides only) is
- * fine: the `tokens` field itself stays optional.
+ * pretending activation succeeded would hide the mistake.  "Usable"
+ * means at least one token with a defined value: a light set that is
+ * present but empty (`light: {}`) or whose values are all `undefined`
+ * (injectTokens skips undefined values, so it would inject nothing)
+ * counts as no light set at all and is rejected the same way.  A
+ * light set that mixes undefined entries with real values is a valid
+ * partial set — the undefined entries are skipped and the rest fall
+ * back as usual.  A package without `tokens` at all (component /
+ * layout / page overrides only) is fine: the `tokens` field itself
+ * stays optional.
  */
 export function validateThemePackage(pkg: ThemePackage): string | null {
-  if (pkg.tokens != null && pkg.tokens.light == null) {
-    return (
-      `theme "${pkg.id}" provides tokens but no light token set ` +
-      `(tokens.light is required; dark-only token sets are not accepted)`
-    );
+  if (pkg.tokens != null) {
+    const light = pkg.tokens.light;
+    const usableCount =
+      light != null
+        ? Object.values(light).filter((value) => value !== undefined).length
+        : 0;
+
+    if (usableCount === 0) {
+      return (
+        `theme "${pkg.id}" provides tokens but no usable light token set ` +
+        `(tokens.light must define at least one token with a value; ` +
+        `missing, empty, and all-undefined light sets are not accepted)`
+      );
+    }
   }
 
   return null;
