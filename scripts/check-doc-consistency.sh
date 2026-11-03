@@ -27,7 +27,9 @@
 #      「新增 4 个 PG 契约用例、文档仍写 6 个」的静默漂移复发）。
 #      x 包计数需 go 工具链（go list）：CI 的 frontend job 跑本门时
 #      GitHub 托管镜像自带 go；本地无 go 时该子项以 PENDING 显式报告
-#      未核（不计失败、不得静默跳过），TestPostgres 子项纯 grep、恒硬核。
+#      未核（不计失败、不得静默跳过）。TestPostgres 子项自修复轮 7
+#      起同理由 doc-extract 按编译集（go/ast＋构建约束）统计，无
+#      go 时同样 PENDING 未核（R7-27；此前为纯 grep 恒硬核）。
 #   11. panel_install.sh SCRIPT_VERSION 字面量门（L2-30 常设门）：
 #      self_update_check 以 SCRIPT_VERSION 相等为「无更新」短路，字
 #      面量缺失/重复/格式漂移会让脚本自更新静默失效。硬核：定义恰
@@ -60,44 +62,57 @@ note_fail() { echo "FAIL: $*"; FAIL=1; }
 note_ok()   { echo "OK:   $*"; }
 note_pend() { echo "PENDING(known, F-064): $*"; }
 
-# go_strip：Go 词法剥注释（awk 状态机，跨行携带块注释/原始字符串
-# 状态；字符串、原始字符串、符文字面量内容原样保留，注释整体丢
-# 弃）。本脚本凡以 grep 对 Go 源码计数/取集/验前提者（§1 前提、
-# §7 事件集、§10(a) 计数）一律只对剥离后的代码面判定——注释掉
-# 的代码行与删除同效、注释里的字面量拷贝不构成满足点（修复轮 6
-# 机制处置，R6-C4-12/13/14）。
-go_strip() {
+# 提取助手 doc-extract（修复轮 7，R7-27 / G-C4-10 机制处置）：
+# §1 前提、§7 事件集、§10(a) 计数原以 awk 词法剥注释（go_strip）
+# ＋grep 提取——剥离器保留原始字符串内容、文件枚举不认构建约
+# 束，原始字符串里的声明形文本与 //go:build ignore 文件的文本
+# 都能冒充编译集成员（把真实常量/函数搬进原始字符串、调用点改
+# 字面量，集合与计数不变而真身已漂移）。本轮改走真解析器：
+# scripts/doc-extract.go 以 go/ast 取声明、go/build 按构建约束
+# 定文件集（即编译集本身）。无 go 工具链时三项以 PENDING 显式
+# 报告未核（口径与 §10(b)/§12/§14 一致，不计失败、不得静默跳
+# 过）；go 在场但助手构建失败属门禁自身缺陷，按前提失效硬红。
+# go_strip 随三处提取面迁毕一并退役。
+DOC_EXTRACT=""
+EXTRACT_TMP=""
+if command -v go >/dev/null 2>&1; then
+  EXTRACT_TMP="$(mktemp -d)"
+  trap 'rm -rf "$EXTRACT_TMP"' EXIT
+  if go build -o "$EXTRACT_TMP/doc-extract" scripts/doc-extract.go 2>/dev/null; then
+    DOC_EXTRACT="$EXTRACT_TMP/doc-extract"
+  fi
+fi
+
+# sh_strip_comments：shell 词法剥注释（awk 状态机：单引号、双引
+# 号、反斜杠转义；# 仅在词首——行首或空白/分隔符之后——起注
+# 释）。供 §4 菜单提取：注释掉的 echo 行整体消失、与删除同效
+# （修复轮 7，R7-08 / G-C4-02：§4 是轮 6 迁移时的枚举漏项，
+# 当时只迁了 §1/§7/§10(a) 的 Go 面、本节 shell 面未迁）。
+sh_strip_comments() {
   awk '
-    BEGIN { st = 0; q = sprintf("%c", 39) }
+    BEGIN { sq = sprintf("%c", 39) }
     {
-      line = $0; out = ""; n = length(line)
+      line = $0; out = ""; n = length(line); st = 0
       for (i = 1; i <= n; i++) {
         c = substr(line, i, 1); nx = substr(line, i + 1, 1)
         if (st == 0) {
-          if (c == "/" && nx == "/") { st = 1; i++; continue }
-          if (c == "/" && nx == "*") { st = 2; i++; continue }
-          if (c == "\"") st = 3
-          else if (c == "`") st = 4
-          else if (c == q) st = 5
-          out = out c
+          if (c == "#") {
+            prev = (i == 1) ? " " : substr(line, i - 1, 1)
+            if (prev ~ /[[:space:];|&()]/) break
+            out = out c
+          } else if (c == sq) { st = 1; out = out c }
+          else if (c == "\"") { st = 2; out = out c }
+          else if (c == "\\") { out = out c nx; i++ }
+          else out = out c
         } else if (st == 1) {
-          break
+          out = out c
+          if (c == sq) st = 0
         } else if (st == 2) {
-          if (c == "*" && nx == "/") { st = 0; i++ }
-        } else if (st == 3) {
           out = out c
           if (c == "\\") { out = out nx; i++ }
           else if (c == "\"") st = 0
-        } else if (st == 4) {
-          out = out c
-          if (c == "`") st = 0
-        } else if (st == 5) {
-          out = out c
-          if (c == "\\") { out = out nx; i++ }
-          else if (c == q) st = 0
         }
       }
-      if (st == 1) st = 0
       print out
     }'
 }
@@ -105,13 +120,26 @@ go_strip() {
 # ── 1. XHTTP：share.go 输出 xhttp-opts 时，nodes.md 的 Clash/Shadowrocket 行不得再列 XHTTP 为「不包含」
 #    前提沿革：初版无引号 grep 被注释散文提及自满足（R5-03 同族）；
 #    第五轮改引号化 grep 后，第六轮复证把注释里的键名加上引号即可
-#    再满足（R6-C4-12）——逐形态收紧关不死。本轮按机制处置：前提
-#    只对 go_strip 剥注释后的代码面判定 '"xhttp-opts"' 字面量在位，
-#    注释提及（无论带不带引号）整体不在证据面内；发射行删除时前
-#    提失效、整节按 fail-closed 报红。
+#    再满足（R6-C4-12）——逐形态收紧关不死。第六轮改对 go_strip
+#    剥注释后的代码面判定；第七轮（R7-27）再迁真解析器：前提＝
+#    share.go 的 AST 中存在值恰为 xhttp-opts 的字符串字面量（注
+#    释、原始字符串内的键名形文本均不是字面量节点）；发射行删除
+#    时前提失效、整节按 fail-closed 报红。无 go 时 PENDING 未核。
 SHARE_GO="go-backend/internal/kernel/share.go"
 NODES_MD="doc/guide/nodes.md"
-if go_strip < "$SHARE_GO" | grep -q '"xhttp-opts"'; then
+xhttp_premise=""
+if [ -n "$DOC_EXTRACT" ]; then
+  if "$DOC_EXTRACT" strlit "$SHARE_GO" "xhttp-opts" >/dev/null 2>&1; then
+    xhttp_premise="yes"
+  else
+    xhttp_premise="no"
+  fi
+elif command -v go >/dev/null 2>&1; then
+  note_fail "XHTTP 前提失效：doc-extract 助手构建失败，share.go 发射面未核（请人工复核）"
+else
+  echo "PENDING: XHTTP 前提未核（当前环境无 go 工具链，share.go 的 xhttp-opts 发射需 AST 提取）；请在装有 Go 的环境复跑本门"
+fi
+if [ "$xhttp_premise" = "yes" ]; then
   for row in "Clash / Mihomo" "Shadowrocket"; do
     line=$(grep -F "| $row |" "$NODES_MD" | head -1)
     if [ -z "$line" ]; then
@@ -122,7 +150,7 @@ if go_strip < "$SHARE_GO" | grep -q '"xhttp-opts"'; then
       note_ok "nodes.md「$row」行与 share.go 的 XHTTP 渲染一致"
     fi
   done
-else
+elif [ "$xhttp_premise" = "no" ]; then
   note_fail "share.go 未找到 xhttp-opts（检查前提失效，请人工复核）"
 fi
 
@@ -182,7 +210,9 @@ else
 fi
 
 # ── 4. 维护菜单：install.md 清单 vs panel_install.sh show_menu
-menu_script=$(sed -n '/^show_menu()/,/^}/p' panel_install.sh | grep -oP 'echo "\K[0-9]+\. [^"]+' | sort)
+# 脚本侧先经 shell 词法剥注释再提取（R7-08）：注释掉的菜单行与
+# 删除同效，不再以原文形态留在提取面内。
+menu_script=$(sed -n '/^show_menu()/,/^}/p' panel_install.sh | sh_strip_comments | grep -oP 'echo "\K[0-9]+\. [^"]+' | sort)
 menu_doc=$(sed -n '/### 维护菜单/,/^## /p' doc/guide/install.md | grep -oP '^[0-9]+\. .*' | sed 's/[[:space:]]*$//' | sort)
 if [ "$menu_script" = "$menu_doc" ]; then
   note_ok "install.md 维护菜单与 panel_install.sh 一致（$(echo "$menu_script" | wc -l) 项）"
@@ -212,11 +242,30 @@ fi
 # 中以 "- `event`" 开头的那一行的全部反引号取值（首个 `event` 本身除外，
 # 含行尾以「测试消息是 `test`」形式列出的 test）。
 NOTIFY_MD="doc/guide/notify.md"
-# 代码侧事件集只对剥注释后的代码面枚举（R6-C4-14：注释掉的常量
-# 行不再计入事件集）。
-code_events=$(for f in $(find go-backend/internal/http/handler -name '*.go' ! -name '*_test.go' | sort); do go_strip < "$f"; done | grep -oP 'notifyEvent[A-Za-z]+\s*=\s*"\K[a-z_]+' | sort -u)
+# 代码侧事件集由 doc-extract 按编译集枚举（R7-27：go/ast 取包级
+# notifyEvent* 字符串常量的值、go/build 按构建约束定文件集；
+# 注释掉的常量行、原始字符串里的声明形文本、构建排除文件均不
+# 入集——R6-C4-14 的注释口径并入编译集口径）。助手异常（值非
+# [a-z_]+ 形态等）按前提失效硬红；无 go 时 PENDING 未核。
+code_events=""
+events_state="ok"
+if [ -n "$DOC_EXTRACT" ]; then
+  if ! code_events=$("$DOC_EXTRACT" events go-backend/internal/http/handler 2>"$EXTRACT_TMP/events.err"); then
+    events_state="broken"
+  fi
+elif command -v go >/dev/null 2>&1; then
+  events_state="buildfail"
+else
+  events_state="nogo"
+fi
 doc_events=$(grep -P '^- `event`' "$NOTIFY_MD" | grep -oP '`[a-z_]+`' | tr -d '`' | grep -vx event | sort -u)
-if [ -z "$code_events" ] || [ -z "$doc_events" ]; then
+if [ "$events_state" = "nogo" ]; then
+  echo "PENDING: notify.md event 枚举未核（当前环境无 go 工具链，代码 notifyEvent* 常量全集需编译集提取）；请在装有 Go 的环境复跑本门"
+elif [ "$events_state" = "buildfail" ]; then
+  note_fail "notify.md event 枚举检查前提失效：doc-extract 助手构建失败（请人工复核）"
+elif [ "$events_state" = "broken" ]; then
+  note_fail "notify.md event 枚举检查前提失效：doc-extract 提取异常（$(cat "$EXTRACT_TMP/events.err")）"
+elif [ -z "$code_events" ] || [ -z "$doc_events" ]; then
   note_fail "notify.md event 枚举检查前提失效（代码常量集或文档枚举为空，请人工复核）"
 elif [ "$code_events" = "$doc_events" ]; then
   note_ok "notify.md event 枚举与代码 notifyEvent* 常量全集一致（$(echo "$code_events" | wc -l) 项）"
@@ -267,16 +316,27 @@ fi
 # ── 10. 易漂移计数对账（X05-OPT-01 / R3-K11）：TestPostgres* 用例数 + x 包计数
 # 声称值只认 [K11-COUNT:<键>=<数字>] 标记（可多处声明，各处须彼此一致且等于实数）。
 # (a) TestPostgres* 契约用例数：文档声称 vs tests/contract 的 func TestPostgres* 实数。
-# 计数只对剥注释后的代码面、按顶层函数行首锚定（R6-C4-13：注释掉
-# 的测试函数不参与编译运行，不再计入实数）。
-tp_actual=$(for f in go-backend/tests/contract/*_test.go; do go_strip < "$f"; done | grep -c '^func TestPostgres' | tr -d ' ')
+# 计数由 doc-extract 按编译集统计（R7-27：go/ast 数顶层 FuncDecl、
+# go/build 按构建约束定文件集；注释掉的测试函数、原始字符串里
+# 的函数形文本、构建排除文件均不计入——R6-C4-13 的注释口径并
+# 入编译集口径）。无 go 时 PENDING 未核（口径同 §10(b)）。
+tp_actual=""
+if [ -n "$DOC_EXTRACT" ]; then
+  tp_actual=$("$DOC_EXTRACT" testfns go-backend/tests/contract TestPostgres 2>/dev/null | tr -d ' ')
+elif command -v go >/dev/null 2>&1; then
+  note_fail "计数对账前提失效：doc-extract 助手构建失败，TestPostgres* 用例数未核"
+else
+  echo "PENDING: 计数对账 TestPostgres* 子项未核（当前环境无 go 工具链，用例数需编译集提取）；请在装有 Go 的环境复跑本门"
+fi
 tp_claims=$(grep -rhoP '\[K11-COUNT:testpostgres=\K[0-9]+' doc/guide/postgresql.md AGENTS.md 2>/dev/null | sort -u)
-if [ -z "$tp_actual" ] || [ "$tp_actual" = "0" ]; then
+if [ -z "$DOC_EXTRACT" ]; then
+  : # 未核处置已在上方按环境分流报告（PENDING 或构建失败硬红）。
+elif [ -z "$tp_actual" ] || [ "$tp_actual" = "0" ]; then
   note_fail "计数对账前提失效：go-backend/tests/contract 未数到 TestPostgres* 用例"
 elif [ -z "$tp_claims" ]; then
   note_fail "计数对账：doc/guide/postgresql.md 与 AGENTS.md 未声明 [K11-COUNT:testpostgres=N] 标记（实数 $tp_actual，裸数字计数不受门守）"
 elif [ "$tp_claims" != "$tp_actual" ]; then
-  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（剥注释后 grep -c '^func TestPostgres' go-backend/tests/contract）"
+  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（doc-extract 编译集统计 go-backend/tests/contract）"
 else
   note_ok "计数对账：TestPostgres* 用例数文档声称与实数一致（$tp_actual）"
 fi
@@ -299,7 +359,7 @@ if command -v go >/dev/null 2>&1; then
     fi
   fi
 else
-  note_pend "计数对账：当前环境无 go 工具链，x 模块包计数未核（TestPostgres 子项已硬核）；请在装有 Go 的环境复跑本门"
+  note_pend "计数对账：当前环境无 go 工具链，x 模块包计数未核（TestPostgres 子项已在 (a) 处单独 PENDING）；请在装有 Go 的环境复跑本门"
 fi
 
 # ── 11. panel_install.sh SCRIPT_VERSION 字面量门（L2-30）
