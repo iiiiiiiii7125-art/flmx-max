@@ -21,18 +21,41 @@ const (
 const nodeUninstallCommandTimeout = 15 * time.Second
 
 // 在线判定与命令下发的接缝：生产走 Handler 的 WS 服务，测试可替换。
+// 命令下发返回 agent 回执 data 里的 warnings 文本集（可为 nil）：
+// agent 在回执里点名披露的事项（如调优恢复将失败＋宿主文件清单，
+// R2F2-D01）须进删除回执，不得被纯成功吞掉。
 var (
 	nodeAgentIsOnline = func(h *Handler, nodeID int64) bool {
 		return h != nil && h.wsServer != nil && h.wsServer.IsNodeOnline(nodeID)
 	}
-	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) error {
+	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) ([]string, error) {
 		if h == nil || h.wsServer == nil {
-			return errors.New("节点不在线")
+			return nil, errors.New("节点不在线")
 		}
-		_, err := h.wsServer.SendCommand(nodeID, cmdType, nil, timeout)
-		return err
+		result, err := h.wsServer.SendCommand(nodeID, cmdType, nil, timeout)
+		if err != nil {
+			return nil, err
+		}
+		return agentReplyWarnings(result.Data), nil
 	}
 )
+
+// agentReplyWarnings 提取 agent 命令回执 data 里的 warnings 文本
+// 集。形态不对的条目忽略——回执披露是尽力而为的告知面，不能反
+// 过来让删除失败。
+func agentReplyWarnings(data map[string]interface{}) []string {
+	raw, ok := data["warnings"].([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, item := range raw {
+		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // prepareNodeAgentUninstall 是删节点漏斗的连带卸载步：调用方必须
 // 已通过 checkNodeDeleteGuards 守卫校验——守卫失败时整次删除中止、
@@ -52,7 +75,8 @@ func (h *Handler) prepareNodeAgentUninstall(id int64) (string, []string) {
 
 // uninstallNodeAgent 让一台即将被删除的节点 agent 自卸载：
 //   - 在线：下发 UninstallAgent 命令。agent 先回执再异步卸载自身，
-//     回执成功即 done；回「未知命令」说明 agent 太旧、无此能力，记
+//     回执成功即 done（回执 data 点名的 warnings 随删除回执披露，
+//     不算纯成功）；回「未知命令」说明 agent 太旧、无此能力，记
 //     unsupported 并点名人工卸载（不登记待卸载——重连拦截问它也只会
 //     再回未知命令，但登记表由 WS 侧在回执后清除，不会无限重复）；
 //   - 离线或下发未确认：按 secret 登记待卸载，agent 下次连接面板时
@@ -66,8 +90,14 @@ func (h *Handler) uninstallNodeAgent(node *model.Node) (string, []string) {
 		warnings = append(warnings, node.Name+"："+fmt.Sprintf(format, args...))
 	}
 	if nodeAgentIsOnline(h, node.ID) {
-		err := nodeAgentSendCommand(h, node.ID, "UninstallAgent", nodeUninstallCommandTimeout)
+		replyWarnings, err := nodeAgentSendCommand(h, node.ID, "UninstallAgent", nodeUninstallCommandTimeout)
 		if err == nil {
+			// agent 回执点名的事项（如调优恢复将失败）随删除回执
+			// 披露：状态仍是 done（agent 已确认、正在自卸载），
+			// 但回执不是纯成功（R2F2-D01）。
+			for _, text := range replyWarnings {
+				warn("%s", text)
+			}
 			return nodeUninstallDone, warnings
 		}
 		if strings.Contains(err.Error(), "未知命令") {

@@ -16,6 +16,28 @@ import (
 // uninstallReplyTimeout 是待卸载 agent 重连后等待其卸载回执的上限。
 const uninstallReplyTimeout = 30 * time.Second
 
+// uninstallReplyWarnings 提取 agent 卸载回执 data 里的 warnings
+// 文本集；data 缺失或形态不对时返回 nil（披露是尽力而为，不因
+// 此影响登记清除等主流程）。
+func uninstallReplyWarnings(data json.RawMessage) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	var parsed struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil
+	}
+	var out []string
+	for _, s := range parsed.Warnings {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // serveUninstalledNode 处理「服务器已删、agent 当时离线」的重连：
 // 该 secret 有待卸载登记时，不把它注册为节点，而是直接下发
 // UninstallAgent 命令并等回执。返回 false 表示与本函数无关（无登记
@@ -74,6 +96,12 @@ func (s *Server) serveUninstalledNode(w http.ResponseWriter, r *http.Request, se
 		switch {
 		case resp.Success:
 			log.Printf("deleted node %q: agent uninstalled itself after reconnecting", pending.NodeName)
+			// agent 回执点名的事项（如调优恢复将失败＋宿主文件清
+			// 单，R2F2-D01）逐条进日志：重连路径没有用户回执可
+			// 挂，日志是这条路径唯一的披露面。
+			for _, text := range uninstallReplyWarnings(resp.Data) {
+				log.Printf("deleted node %q: agent uninstall warning: %s", pending.NodeName, text)
+			}
 		case strings.Contains(resp.Message, "未知命令"):
 			log.Printf("deleted node %q: agent is too old to uninstall itself; remove it manually on the server", pending.NodeName)
 		default:

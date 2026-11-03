@@ -45,6 +45,11 @@ var (
 	uninstallInContainer   = InContainer
 	uninstallDetectManager = detectServiceManager
 	uninstallLaunchScript  = launchAgentControlScript
+	// 宿主调优文件清理与回执预检（R2F2-D01）：清理集与 install.sh
+	// 的 uninstall_flux_agent_host_cleanup 同文件集、同口径。
+	uninstallHostTuningCleanup = cleanupHostTuningFiles
+	uninstallTuningPreflight   = assessUninstallTuning
+	uninstallLegacyFootprint   = legacyGostFootprintPresent
 )
 
 // agentDataDir 返回数据目录，即 config.json 所在目录：主程序以
@@ -82,21 +87,48 @@ func AgentUninstalled() bool {
 // handleUninstallAgent 先返回（派发层随即回执面板），卸载在协程里
 // 延迟执行，避免回执还没发出去连接就被自己的卸载动作掐断。重复
 // 下发只执行一次。
-func (w *WebSocketReporter) handleUninstallAgent() error {
+//
+// 回执 data 携带预检 warnings（R2F2-D01）：调优恢复的 fail-closed
+// 早退条件（整形前队列备份丢失＋整形仍在）在下发时即可确定性判
+// 定——恢复必然失败时先在回执里点名，面板据此不报纯成功；实际
+// 卸载仍照常执行（恢复尝试＋宿主文件清理＋逐项日志）。
+func (w *WebSocketReporter) handleUninstallAgent() (interface{}, error) {
 	if !uninstallStarted.CompareAndSwap(false, true) {
-		return nil
+		return nil, nil
+	}
+	var data interface{}
+	if warnings := uninstallTuningPreflight().warnings(); len(warnings) > 0 {
+		data = map[string]interface{}{"warnings": warnings}
 	}
 	go func() {
 		time.Sleep(time.Second)
 		runAgentUninstall()
 	}()
-	return nil
+	return data, nil
 }
 
 func runAgentUninstall() {
 	fmt.Println("🗑️ 面板已删除此服务器，开始卸载 agent...")
-	if err := uninstallRestoreTuning(); err != nil {
-		fmt.Printf("⚠️ 恢复调优前的系统参数失败: %v\n", err)
+	restoreErr := uninstallRestoreTuning()
+	if restoreErr != nil {
+		fmt.Printf("⚠️ 恢复调优前的系统参数失败: %v\n", restoreErr)
+	}
+	// 宿主调优文件删除集（R2F2-D01）：恢复成功时这批文件已由恢复
+	// 路径处理，本步为空转核对；恢复失败/早退时由本步兜底删除，
+	// 防止 sysctl conf 开机重放调优值、qdisc unit 在安装目录删除
+	// 后悬空。逐项结果打进日志，不静默。
+	cleanup := uninstallHostTuningCleanup()
+	for _, path := range cleanup.Removed {
+		fmt.Printf("🧹 删除调优宿主文件: %s\n", path)
+	}
+	for _, item := range cleanup.Skipped {
+		fmt.Printf("⚠️ 跳过删除调优宿主文件: %s\n", item)
+	}
+	for _, item := range cleanup.Failed {
+		fmt.Printf("⚠️ 删除调优宿主文件失败: %s\n", item)
+	}
+	if restoreErr != nil && len(cleanup.Failed) > 0 {
+		fmt.Printf("⚠️ 调优恢复失败且以下宿主调优文件未能删除，卸载后仍有残留：%s\n", strings.Join(cleanup.Failed, "、"))
 	}
 	if err := uninstallKernels(); err != nil {
 		fmt.Printf("⚠️ 清理内核和 nftables 规则失败: %v\n", err)
@@ -133,13 +165,204 @@ func runAgentUninstall() {
 
 // restoreTuningForUninstall 把调优改过的系统参数恢复到调优前的值：
 // 先取消进行中的调优任务，再拿调优操作锁走既有恢复路径。
+//
+// 卸载语义与面板「恢复调优」功能不同（R2F2-D01）：恢复路径
+// fail-closed 早退（如整形前队列备份丢失）是为保配置，而卸载时
+// 安装目录（含原值备份）即将被删，错过这次 sysctl 原值就没有恢
+// 复机会。故整形恢复失败后，只要原值备份还在，就单独走
+// applyTuning 把 sysctl 原值写回（与 install.sh 宿主清理第 2 步
+// 同口径：队列备份丢失时仍按 tuning-backup.json 恢复 sysctl）；
+// 备份不在时不调 applyTuning——无可写回，且其顺带删除 legacy
+// conf 的副作用会绕过宿主清理的归属守卫。
 func restoreTuningForUninstall() error {
 	cancelTuneJob()
 	tuningOperation.Lock()
 	defer tuningOperation.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	return restoreAutomaticTuning(ctx)
+	err := restoreAutomaticTuning(ctx)
+	if err == nil {
+		return nil
+	}
+	if _, statErr := os.Stat(tuneBackupPath); statErr != nil {
+		return err
+	}
+	if _, ferr := applyTuning(nil, savedTuneParams()); ferr != nil {
+		return fmt.Errorf("%v；sysctl 参数单独恢复亦失败：%v", err, ferr)
+	}
+	return fmt.Errorf("%v（sysctl 参数已按原值备份单独恢复）", err)
+}
+
+// hostTuningCleanupReport 是宿主调优文件清理的逐项结果：Removed
+// 已删除、Skipped 因归属守卫跳过（条目内含路径与原因）、Failed
+// 删除失败（条目内含路径与错误）。
+type hostTuningCleanupReport struct {
+	Removed []string
+	Skipped []string
+	Failed  []string
+}
+
+// hostTuningFileSet 是 agent 写到宿主机（安装/数据目录之外）的调
+// 优文件全集，与 install.sh 的 FLMX_TUNING_* 变量逐项对应：
+//   - tuneConfPath：sysctl.d 调优值，开机重放；
+//   - tuneBBRModule：modules-load.d 的 tcp_bbr 开机加载；
+//   - tuneShapeUnitPath()：qdisc 整形 unit，ExecStart 指向安装目
+//     录里的 shape.sh，目录删后即悬空；
+//   - legacyTuneConfPath：改名前同作用的 sysctl conf。
+//
+// 前三件按名即 FLMX 自有、无条件删；legacy 件与旧谱系 agent 同
+// 名共用，按归属口径条件删（见 cleanupHostTuningFiles）。
+func hostTuningFileSet() []string {
+	set := []string{tuneConfPath, tuneBBRModule, tuneShapeUnitPath()}
+	if legacyTuneConfPath != tuneConfPath {
+		set = append(set, legacyTuneConfPath)
+	}
+	return set
+}
+
+// cleanupHostTuningFiles 删除宿主调优文件集，与 install.sh 的
+// uninstall_flux_agent_host_cleanup 同口径：qdisc unit 先
+// disable --now 再删文件并 daemon-reload（否则悬空启用项在下次
+// 开机仍会执行已删的 shape.sh）；legacy conf 在检测到旧式 gost
+// 足迹时跳过并点名披露（可能由同机另一安装持有，C4-F02 归属口
+// 径），无足迹时按本产品旧装遗留删除。逐项尽力而为：单项失败
+// 只记入 Failed，不中断其余项。
+func cleanupHostTuningFiles() hostTuningCleanupReport {
+	var rep hostTuningCleanupReport
+	remove := func(path string) {
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				return
+			}
+			rep.Failed = append(rep.Failed, fmt.Sprintf("%s（%v）", path, err))
+			return
+		}
+		rep.Removed = append(rep.Removed, path)
+	}
+	exists := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+
+	unit := tuneShapeUnitPath()
+	if exists(unit) {
+		systemd := !uninstallInContainer() && commandExists("systemctl")
+		if systemd {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, _ = tuneCommand(ctx, "systemctl", "disable", "--now", "flmx-tuning-qdisc.service")
+			cancel()
+		}
+		remove(unit)
+		removed := false
+		for _, path := range rep.Removed {
+			if path == unit {
+				removed = true
+			}
+		}
+		if systemd && removed {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, _ = tuneCommand(ctx, "systemctl", "daemon-reload")
+			cancel()
+		}
+	}
+	remove(tuneConfPath)
+	remove(tuneBBRModule)
+	if legacyTuneConfPath != tuneConfPath && exists(legacyTuneConfPath) {
+		if uninstallLegacyFootprint() {
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s（检测到旧式 gost agent 足迹，可能由其持有；如确认属本产品旧装可人工删除）", legacyTuneConfPath))
+		} else {
+			remove(legacyTuneConfPath)
+		}
+	}
+	return rep
+}
+
+// legacyGostServiceFilePaths 与 legacyGostDirPath 是旧式 gost 足
+// 迹的落点（与 install.sh 的 LEGACY_GOST_SERVICE_FILE_* /
+// LEGACY_GOST_CONFIG_DIR 对应），变量形态供单测指向临时树。
+var (
+	legacyGostServiceFilePaths = []string{
+		"/etc/systemd/system/gost.service",
+		"/lib/systemd/system/gost.service",
+		"/usr/lib/systemd/system/gost.service",
+	}
+	legacyGostDirPath = "/etc/gost"
+)
+
+// legacyGostFootprintPresent 是 install.sh
+// legacy_gost_footprint_present 的 agent 侧同口径实现：任一候选
+// gost.service 命中指纹（WorkingDirectory 指向旧配置目录，且
+// ExecStart 为旧目录二进制，或 /usr/local/bin 形态且旧配置两件
+// 齐备），或旧配置目录里有 gost 二进制/连接配置，即认足迹在。
+func legacyGostFootprintPresent() bool {
+	fileExists := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	for _, path := range legacyGostServiceFilePaths {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		s := string(b)
+		if !strings.Contains(s, "WorkingDirectory="+legacyGostDirPath) {
+			continue
+		}
+		if strings.Contains(s, "ExecStart="+filepath.Join(legacyGostDirPath, "gost")) {
+			return true
+		}
+		if strings.Contains(s, "ExecStart=/usr/local/bin/gost") &&
+			fileExists(filepath.Join(legacyGostDirPath, "config.json")) &&
+			fileExists(filepath.Join(legacyGostDirPath, "gost.json")) {
+			return true
+		}
+	}
+	return fileExists(filepath.Join(legacyGostDirPath, "gost")) ||
+		fileExists(filepath.Join(legacyGostDirPath, "config.json"))
+}
+
+// uninstallTuningAssessment 是回执预检结果：RestoreBlocked 为恢
+// 复必然 fail-closed 早退的确定性判定，HostFiles 为当前在位的
+// 宿主调优文件（卸载时将随清理集删除）。
+type uninstallTuningAssessment struct {
+	RestoreBlocked bool
+	HostFiles      []string
+}
+
+// assessUninstallTuning 只读盘面、不动任何状态。与
+// restoreAutomaticTuning 的早退同谓词：整形前队列备份
+// （original-qdisc.sh）丢失、而整形脚本或整形 unit 仍在位时，
+// 恢复必然在 applyTuning 之前早退——这是卸载回执唯一能确定性
+// 预告的恢复失败，其余失败（写回被拒等）只能在执行后由日志点
+// 名，不在此预告。
+func assessUninstallTuning() uninstallTuningAssessment {
+	var a uninstallTuningAssessment
+	for _, path := range hostTuningFileSet() {
+		if _, err := os.Stat(path); err == nil {
+			a.HostFiles = append(a.HostFiles, path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tuneEngineDir(), "original-qdisc.sh")); os.IsNotExist(err) {
+		_, shapeErr := os.Stat(filepath.Join(tuneEngineDir(), "shape.sh"))
+		_, unitErr := os.Stat(tuneShapeUnitPath())
+		if shapeErr == nil || unitErr == nil {
+			a.RestoreBlocked = true
+		}
+	}
+	return a
+}
+
+// warnings 把预检结论渲染成回执 warnings：恢复未被确定性阻断
+// 时为空（回执保持既有纯成功形态）。
+func (a uninstallTuningAssessment) warnings() []string {
+	if !a.RestoreBlocked {
+		return nil
+	}
+	msg := "调优恢复将失败：整形前的队列备份已丢失，队列整形与调优参数无法随卸载恢复（重启后随状态消散）"
+	if len(a.HostFiles) > 0 {
+		msg += "；卸载时会删除宿主调优文件：" + strings.Join(a.HostFiles, "、")
+	}
+	return []string{msg}
 }
 
 // buildAgentUninstallScript 构建自卸载脚本：停服务 → 取消自启并删

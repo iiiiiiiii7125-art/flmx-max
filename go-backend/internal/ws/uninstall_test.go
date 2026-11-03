@@ -183,3 +183,21 @@ func TestServeUninstalledNodeNotPendingStaysForbidden(t *testing.T) {
 		t.Fatalf("expected 403, got %v", resp)
 	}
 }
+
+// R2F2-D01：卸载回执 data 的 warnings 提取——重连路径靠它把
+// agent 点名的调优恢复失败写进日志；形态不对一律返回 nil。
+func TestUninstallReplyWarnings(t *testing.T) {
+	if got := uninstallReplyWarnings(nil); got != nil {
+		t.Fatalf("nil data: got %v", got)
+	}
+	if got := uninstallReplyWarnings(json.RawMessage(`{"other":1}`)); got != nil {
+		t.Fatalf("no warnings key: got %v", got)
+	}
+	if got := uninstallReplyWarnings(json.RawMessage(`not json`)); got != nil {
+		t.Fatalf("malformed data: got %v", got)
+	}
+	got := uninstallReplyWarnings(json.RawMessage(`{"warnings":["调优恢复将失败","", "x"]}`))
+	if len(got) != 2 || got[0] != "调优恢复将失败" || got[1] != "x" {
+		t.Fatalf("got %v, want the two non-empty warnings", got)
+	}
+}

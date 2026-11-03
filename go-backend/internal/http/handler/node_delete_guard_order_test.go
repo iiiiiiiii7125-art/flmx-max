@@ -21,9 +21,9 @@ func stubCountingNodeAgentChannel(t *testing.T, online bool, sends *int) {
 	t.Helper()
 	origOnline, origSend := nodeAgentIsOnline, nodeAgentSendCommand
 	nodeAgentIsOnline = func(h *Handler, nodeID int64) bool { return online }
-	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) error {
+	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) ([]string, error) {
 		*sends++
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() {
 		nodeAgentIsOnline, nodeAgentSendCommand = origOnline, origSend

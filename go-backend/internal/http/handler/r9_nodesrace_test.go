@@ -546,13 +546,13 @@ func TestR9NodeDeleteRecheckNamesLateReferrer(t *testing.T) {
 	origOnline, origSend := nodeAgentIsOnline, nodeAgentSendCommand
 	inserted := false
 	nodeAgentIsOnline = func(h *Handler, nodeID int64) bool { return true }
-	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) error {
+	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) ([]string, error) {
 		if !inserted {
 			inserted = true
 			_ = seedChainInbound(t, r, frontXray, "late-ref", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 8443,
 				Security: kernel.Security{Type: kernel.SecurityNone}}, target.ID)
 		}
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() { nodeAgentIsOnline, nodeAgentSendCommand = origOnline, origSend })
 
