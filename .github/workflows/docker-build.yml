@@ -283,8 +283,9 @@ jobs:
         run: bash scripts/check-agent-image-tools.sh
 
       # 节点容器安装形态（Docker / Docker Compose）的 agent 镜像：
-      # 纯增量 job，不进 create-release 的 needs —— 镜像构建失败不
-      # 阻断既有发版资产；面板生成的容器安装命令引用此镜像。
+      # 已进 create-release 的 needs（C4-F03）—— 发版说明与面板生
+      # 成的容器安装命令都引用此版本镜像，构建失败必须阻断发版，
+      # 不再靠发版执行者人工核对 GHCR 兜底。
       - name: Build and push Agent Docker images
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
@@ -300,7 +301,7 @@ jobs:
 
   create-release:
     name: Create Release (Tag Only)
-    needs: [check-version, verify, build-gost, build-vite, build-go-backend]
+    needs: [check-version, verify, build-gost, build-vite, build-go-backend, build-agent]
     if: needs.check-version.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     permissions:
