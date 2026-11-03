@@ -245,7 +245,10 @@ func clashProxyMihomo(e Endpoint) (yamlNode, bool) {
 
 func clashProxy(e Endpoint, mihomo bool) (yamlNode, bool) {
 	if e.Proxy != nil {
-		return proxyClash(e)
+		// Imported nodes split by format too (R10-01): the clash
+		// format applies the Mihomo acceptance gate inside
+		// proxyClashFor; Stash/Shadowrocket keep the shared render.
+		return proxyClashFor(e, mihomo)
 	}
 	in := e.Inbound
 	if in.Protocol == ProtocolNaive {

@@ -124,9 +124,12 @@ DIRECT-ish = direct
 	if !ok || !strings.Contains(line, "psk=abc, version=4") || !strings.Contains(line, "shadow-tls-password=sp") {
 		t.Fatalf("snell surge line: %s", line)
 	}
-	// B1 订正（1.3.1）：原断言称 Mihomo 无 Snell v4、要求 proxyClash 丢弃
-	// 该节点；Mihomo v1.19.32 的 NewSnell 接受 v1-v4 并把 v5 归一到 4，
-	// 该节点（Surge 导入的 v4 + ShadowTLS）现在必须渲染且带 obfs-opts。
+	// B1 订正（1.3.1）：原断言称客户端无 Snell v4、要求 proxyClash 丢弃
+	// 该节点；proxyClash 是 Stash/Shadowrocket 面口径（其原生客户端
+	// 公开支持 v4），该节点（Surge 导入的 v4 + ShadowTLS）在此必须
+	// 渲染且带 obfs-opts。clash（Mihomo）格式另经 R10-01 接受域门
+	// （官方 1.19.16/1.19.17 实测 v4 与 shadow-tls 均整份拒绝），
+	// 不经本函数口径（见 snell_clash_split_r9_test.go 的 R10 钉格）。
 	snellClash, ok := proxyClash(Endpoint{Name: "Snell", Host: "1.2.3.4", Port: 6160, Proxy: nodes[0].Proxy})
 	if !ok {
 		t.Fatal("Mihomo renders Snell v4 (B1)")

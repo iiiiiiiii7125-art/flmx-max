@@ -78,6 +78,11 @@ func TestR2B5SnellRenderersVersionDomain(t *testing.T) {
 		-1: {false, 0}, 1: {true, 1}, 2: {true, 2}, 3: {true, 3}, 4: {true, 4},
 		5: {true, 4}, 6: {false, 0}, 7: {false, 0}, 99: {false, 0},
 	}
+	// R10-01：clash 格式（Mihomo 接受域门）纯版本格的在场期望。
+	mihomoCountWant := map[int]bool{
+		-1: false, 0: true, 1: true, 2: true, 3: true,
+		4: false, 5: false, 6: false, 7: false, 99: false,
+	}
 	surgeWant := map[int]want{
 		-1: {false, 0}, 1: {true, 1}, 2: {true, 2}, 3: {true, 3}, 4: {true, 4},
 		5: {true, 5}, 6: {true, 6}, 7: {false, 0}, 99: {false, 0},
@@ -110,8 +115,16 @@ func TestR2B5SnellRenderersVersionDomain(t *testing.T) {
 					t.Fatalf("v=%d clash: version=%d want %d", v, got, w.version)
 				}
 			}
-			if got := SubscriptionNodeCount(FormatClash, []Endpoint{e}, SubOptions{}); (got == 1) != w.ok {
-				t.Fatalf("v=%d clash count=%d, renderer ok=%v", v, got, w.ok)
+			// proxyClash 是 Stash/Shadowrocket 面口径，计数一致对
+			// FormatStash 验。本格原对 FormatClash 验同口径——该前
+			// 提自 R10-01 起作废：clash 格式计数经接受域门（clash-
+			// ProxyMihomo），纯版本格的门后期望为 {0,1,2,3 在场，
+			// 4/5 与其余略过}，由下方 mihomoCountWant 逐格钉。
+			if got := SubscriptionNodeCount(FormatStash, []Endpoint{e}, SubOptions{}); (got == 1) != w.ok {
+				t.Fatalf("v=%d stash count=%d, renderer ok=%v", v, got, w.ok)
+			}
+			if got := SubscriptionNodeCount(FormatClash, []Endpoint{e}, SubOptions{}); (got == 1) != mihomoCountWant[v] {
+				t.Fatalf("v=%d clash count=%d, mihomo gate want kept=%v", v, got, mihomoCountWant[v])
 			}
 		}
 		if w, covered := surgeWant[v]; covered {
