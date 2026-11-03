@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -114,28 +115,34 @@ func TestW2GistRestoreWritePhaseSurvivesClientAbort(t *testing.T) {
 		h.gistBackupRestore(rec, req)
 	}()
 
-	// 等下载被取走，再轮询共用互斥：handler 抢到 backupImportMu 即
-	// 已越过相位边界、进入写入相位（锁在 ImportContext 全程持有）。
-	// 以锁状态作判别信号，不用固定 sleep 猜相位——30k 用户的解析
-	// 耗时随机器负载变化，sleep 会把 cancel 落进准备相位（解析中），
-	// 那属于「写入前取消」的另一格语义，不是本用例要验的形态。
+	// 等下载被取走，再等恢复前快照落盘：R7-06 后恢复路与本地
+	// 导入同构——backupImportMu 在快照子相位即已持有，锁状态不
+	// 再能区分相位；快照文件发布（rename）是快照相位结束的确
+	// 定性信号（与本地导入 CB14 用例同口径）。信号后再稍过相
+	// 位边界才 cancel，不用固定 sleep 猜准备相位——30k 用户的
+	// 解析耗时随机器负载变化，sleep 会把 cancel 落进准备相位
+	//（解析中），那属于「写入前取消」的另一格语义，不是本用
+	// 例要验的形态。
 	select {
 	case <-served:
 	case <-time.After(2 * time.Minute):
 		t.Fatal("gist download never happened")
 	}
+	snapPath := h.importAutoBackupPath()
+	if snapPath == "" {
+		t.Fatal("snapshot path unavailable in fixture")
+	}
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
-		if h.backupImportMu.TryLock() {
-			h.backupImportMu.Unlock()
-			if time.Now().After(deadline) {
-				t.Fatal("gist restore never entered its write phase")
-			}
-			time.Sleep(2 * time.Millisecond)
-			continue
+		if _, err := os.Stat(snapPath); err == nil {
+			break
 		}
-		break
+		if time.Now().After(deadline) {
+			t.Fatal("gist restore never published its pre-restore snapshot")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
+	time.Sleep(50 * time.Millisecond)
 	cancel()
 
 	select {

@@ -156,10 +156,11 @@ func TestGistRestoreRunsFullTailHooksAndRepushesOnlineNode(t *testing.T) {
 	}
 }
 
-// O7-010 旧语义已随 SEC-01 废止：恢复前不再做自动备份导出，恢复
-// 路径彻底不依赖 ExportAll。本测试保留为独立性守卫：即使 ExportAll
-// 已损坏（删掉末段 service_monitor 表），恢复仍须成功、且回执不含
-// AutoBackup。
+// R7-06：恢复前与本地导入同口径生成服务端快照，快照生成依赖
+// ExportAll。本测试为快照失败披露格：即使 ExportAll 已损坏（删掉
+// 末段 service_monitor 表），快照生成失败后按 O7-010 警告续行——
+// 恢复仍须成功、回执不含 AutoBackup 本体、且 ImportWarnings 必须
+// 披露快照失败（本地导入回执同文案）。
 func TestGistRestoreAutoBackupFailureContinuesImport(t *testing.T) {
 	h := setupGistTest(t)
 	r := gistTestRepo(t, h)
@@ -193,6 +194,15 @@ func TestGistRestoreAutoBackupFailureContinuesImport(t *testing.T) {
 	}
 	if result.AutoBackup != nil {
 		t.Fatal("SEC-01: AutoBackup must be absent from the restore receipt")
+	}
+	disclosed := false
+	for _, w := range result.ImportWarnings {
+		if strings.Contains(w, "导入前自动备份失败") {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Fatalf("R7-06/O7-010: snapshot failure must be disclosed via ImportWarnings, got %v", result.ImportWarnings)
 	}
 }
 
