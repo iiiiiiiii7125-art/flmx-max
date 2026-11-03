@@ -53,7 +53,7 @@ export const ThemeSettings: React.FC = () => {
               // LIGHT-ONLY: previews always show the light token set
               const previewTokens = theme.tokens?.light;
 
-              const primary = previewTokens?.["--primary"] ?? "#2563eb";
+              const primary = previewTokens?.["--primary"] ?? "#4f46e5";
               const secondary = previewTokens?.["--secondary"] ?? "#6366f1";
               const success = previewTokens?.["--success"] ?? "#16a34a";
               const danger = previewTokens?.["--danger"] ?? "#dc2626";

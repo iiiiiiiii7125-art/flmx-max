@@ -29,6 +29,13 @@
 //      types.ts 的 tokens 类型无 dark 成员且 light 为必填成员；
 //      两内置主题包无 dark token 数据集；themes/README.md 无
 //      dark token 集示例。
+//   ⑨ 默认主题包 light 集与 globals.css :root 的共享 token 集相异
+//      集＝∅（R4-02 / R3-RES-01）：该包头注声称 token 与 globals.css
+//      一致、激活后与未改装一致；R2-049 换色按「页面渲染面」推导
+//      全集时整套蓝色板在此漏网，修复轮 4 按裁定 A 逐值对齐后在
+//      此钉死——包 light 集声明的每个 token 必须在 globals.css 的
+//      :root 中存在且逐值相同，任一漂移（改包不改 globals、或反之
+//      只改 globals 一面）即红。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-theme-light-required.mjs
@@ -237,6 +244,45 @@ registerTheme(noTokensPkg);
 check("无 tokens 的包（仅组件覆盖面）仍可注册", getTheme("ok-no-tokens") === noTokensPkg);
 
 console.error = origError;
+
+// ─── ⑨ 默认包色板与 globals.css :root 对齐（R4-02 永久回归门） ────────────
+
+// 合并 globals.css 全部 :root 块（文件序、后声明胜出，与级联同义）。
+const globalsSrc = readSrc("src/styles/globals.css");
+const globalsTokens = {};
+
+for (const block of globalsSrc.matchAll(/:root\s*\{([^}]*)\}/g)) {
+  for (const decl of block[1].matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    globalsTokens[decl[1]] = decl[2].trim().toLowerCase();
+  }
+}
+
+// 默认包只有 import type，转译后取 exports.default 的真实 light 集。
+const { outputText: defaultOut } = ts.transpileModule(defaultSrc, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2020,
+  },
+});
+const defaultMod = { exports: {} };
+
+new Function("module", "exports", "require", defaultOut)(
+  defaultMod,
+  defaultMod.exports,
+  require,
+);
+const defaultLight = defaultMod.exports.default?.tokens?.light ?? {};
+const drift = Object.entries(defaultLight).filter(
+  ([k, v]) => globalsTokens[k] !== String(v).trim().toLowerCase(),
+);
+
+check(
+  "默认主题包 light 集与 globals.css :root 相异集＝∅（R4-02 对齐钉）",
+  Object.keys(defaultLight).length > 0 && drift.length === 0,
+  drift
+    .map(([k, v]) => `${k}: 包=${v} globals=${globalsTokens[k] ?? "<缺>"}`)
+    .join("; "),
+);
 
 if (failures.length > 0) {
   console.log(`\n${failures.length} 项断言失败`);
