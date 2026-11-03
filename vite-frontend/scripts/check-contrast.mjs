@@ -17,6 +17,17 @@
 // 顺序合并声明（后声明胜出，与级联同义），与头注「解析 :root
 // token 实值」的口径一致；注释存档不再构成满足点。
 //
+// 级联条件口径（修复轮 7，R7-09 / G-C4-03 机制处置）：轮 6 的块合
+// 并对块的上下文无条件——把改浅的新值写进无条件 :root、再在文件
+// 尾追加一个永假 @media 块存档旧值 :root，后声明胜出仍按旧值算
+// 全过，而真实渲染用的是新值。现提取改为级联求值：解析规则时追
+// 踪 at-rule 上下文，仅无条件 :root（顶层、或仅被 @layer 包裹）
+// 的声明入集；@media/@supports/@container 等条件块（含未知块级
+// at-rule）整棵子树排除。胜出顺序按 CSS 级联：!important 层级
+// 高于普通级；普通级中无层声明高于 @layer 内声明、层间按首次提
+// 及顺序后者胜；同级按源码顺序后者胜。token 只存在于条件块时
+// 视为未定义（fail-closed，断言点名缺失）。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-contrast.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -75,29 +86,161 @@ const stripCssComments = (src) => {
   return out.join("");
 };
 
-// 只取 :root { } 块（括号配平）内的声明，按文件顺序合并、后声明
-// 胜出（与 CSS 级联同义）；块外声明与注释均不入集。
-const tokens = {};
-const code = stripCssComments(css);
-for (const m of code.matchAll(/:root\s*\{/g)) {
-  const open = m.index + m[0].length - 1;
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}") {
-      depth--;
-      if (depth === 0) {
-        end = i;
-        break;
+// 级联求值（R7-09）：跟踪 at-rule 上下文，只让无条件 :root 的
+// 声明参与胜出竞争；条件块子树整棵排除。返回 token → 生效值
+// （原文值，含非 hex 形态——调用方按需过滤）。
+const resolveRootTokens = (code) => {
+  const layerOrder = new Map();
+  let layerSeq = 0;
+  const noteLayers = (namesText) => {
+    for (const part of namesText.split(",")) {
+      const name = part.trim();
+      if (name && !layerOrder.has(name)) layerOrder.set(name, layerSeq++);
+    }
+  };
+  const winners = new Map();
+  let srcIdx = 0;
+  const rankCmp = (a, b) => {
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
+  };
+  const consider = (name, value, important, layerName) => {
+    const layered = layerName != null;
+    const lo = layered ? (layerOrder.get(layerName) ?? 0) : 0;
+    // 普通级：无层 > 有层（层间后提及者胜）；!important 级反转：
+    // 有层 > 无层（层间先提及者胜）。同级同层按源码顺序后者胜。
+    const rank = important
+      ? [1, layered ? 1 : 0, -lo, srcIdx]
+      : [0, layered ? 0 : 1, lo, srcIdx];
+    srcIdx++;
+    const cur = winners.get(name);
+    if (!cur || rankCmp(rank, cur.rank) > 0) winners.set(name, { rank, value });
+  };
+  const parseDecls = (body, layerName) => {
+    let i = 0;
+    const n = body.length;
+    while (i < n) {
+      let depth = 0;
+      let q = null;
+      const start = i;
+      while (i < n) {
+        const c = body[i];
+        if (q) {
+          if (c === "\\") i++;
+          else if (c === q) q = null;
+          i++;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; i++; continue; }
+        if (c === "(") depth++;
+        else if (c === ")") depth--;
+        else if (c === ";" && depth === 0) break;
+        i++;
+      }
+      const decl = body.slice(start, i).trim();
+      i++;
+      const m = decl.match(/^(--[a-zA-Z0-9-]+)\s*:\s*([\s\S]+)$/);
+      if (!m) continue;
+      let value = m[2].trim();
+      let important = false;
+      const im = value.match(/!\s*important\s*$/i);
+      if (im) {
+        important = true;
+        value = value.slice(0, im.index).trim();
+      }
+      consider(m[1], value, important, layerName);
+    }
+  };
+  const walk = (text, frames) => {
+    let i = 0;
+    const n = text.length;
+    while (i < n) {
+      let pre = "";
+      let depth = 0;
+      let q = null;
+      let term = null;
+      while (i < n) {
+        const c = text[i];
+        if (q) {
+          pre += c;
+          if (c === "\\") { pre += text[i + 1] ?? ""; i += 2; continue; }
+          if (c === q) q = null;
+          i++;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; pre += c; i++; continue; }
+        if (c === "(") depth++;
+        else if (c === ")") depth--;
+        if (depth === 0 && (c === "{" || c === ";" || c === "}")) {
+          term = c;
+          i++;
+          break;
+        }
+        pre += c;
+        i++;
+      }
+      const prelude = pre.trim();
+      if (term === null || term === "}") break;
+      if (term === ";") {
+        if (/^@layer\b/i.test(prelude)) {
+          noteLayers(prelude.replace(/^@layer\b/i, ""));
+        }
+        continue;
+      }
+      const open = i - 1;
+      let d = 0;
+      let end = -1;
+      q = null;
+      for (let j = open; j < n; j++) {
+        const c = text[j];
+        if (q) {
+          if (c === "\\") j++;
+          else if (c === q) q = null;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; continue; }
+        if (c === "{") d++;
+        else if (c === "}") {
+          d--;
+          if (d === 0) { end = j; break; }
+        }
+      }
+      if (end < 0) break;
+      const body = text.slice(open + 1, end);
+      i = end + 1;
+      if (/^@layer\b/i.test(prelude)) {
+        const names = prelude.replace(/^@layer\b/i, "").trim();
+        noteLayers(names);
+        const name = names.split(",")[0].trim() || null;
+        walk(body, [...frames, { type: "layer", name }]);
+      } else if (prelude.startsWith("@")) {
+        // 条件 at-rule（@media/@supports/@container/@document/未知
+        // 块级 at-rule）：子树整棵排除，不入 token 集。
+        continue;
+      } else {
+        if (frames.some((f) => f.type === "cond")) continue;
+        const layerFrame = [...frames]
+          .reverse()
+          .find((f) => f.type === "layer");
+        if (prelude.split(",").some((s) => s.trim() === ":root")) {
+          parseDecls(body, layerFrame ? layerFrame.name : null);
+        }
+        walk(body, frames);
       }
     }
-  }
-  if (end < 0) continue;
-  const block = code.slice(open + 1, end);
-  for (const d of block.matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/g)) {
-    tokens[d[1]] = d[2].toLowerCase();
-  }
+  };
+  walk(code, []);
+  const out = {};
+  for (const [k, v] of winners) out[k] = v.value;
+  return out;
+};
+
+const resolved = resolveRootTokens(stripCssComments(css));
+const tokens = {};
+for (const [k, v] of Object.entries(resolved)) {
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) tokens[k] = v.toLowerCase();
 }
 
 const failures = [];
@@ -161,7 +304,11 @@ for (const [fg, bg, pinned] of PAIRS) {
   const bgHex = bg.startsWith("#") ? bg : tokens[bg];
 
   if (!fgHex || !bgHex) {
-    check(`${fg} on ${bg}`, false, "token 未在 globals.css 中找到");
+    check(
+      `${fg} on ${bg}`,
+      false,
+      "token 未在 globals.css 的无条件 :root 中解析到 #rrggbb 生效值",
+    );
 
     continue;
   }

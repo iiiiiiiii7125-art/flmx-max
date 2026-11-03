@@ -6,8 +6,12 @@
 # FLMX_KERNEL_DIR 的 ENV 行），断言门禁必须 FAIL 且点名该项。
 # 若哪天断言规则被误删/改坏，本自检先红。
 #
+# 修复轮 7（R7-07）追加变体 6–8：锚行之后追加覆盖行（ENV 末值
+# 覆盖、ulimit -c unlimited 覆盖、cd /tmp 覆盖），钉死三锚点的
+# 生效值口径——存在性锚在追加形态下全绿即为自检红。
+#
 # 用法：check-agent-image-tools-selftest.sh（无参数，作用于本仓库）。
-# 退出码：0 = 基线 PASS 且两变体均被抓；1 = 任一断言不成立。
+# 退出码：0 = 基线 PASS 且全部变体均被抓；1 = 任一断言不成立。
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -83,6 +87,43 @@ if grep -q 'FLMX_KERNEL_DIR' "$TMP/v5.log"; then
   echo "OK: variant 5 caught and named"
 else
   echo "FAIL: variant 5 caught but the missing anchor was not named"; sed 's/^/    /' "$TMP/v5.log"; exit 1
+fi
+
+cp "$ROOT/go-gost/Dockerfile" "$MIR/go-gost/Dockerfile"
+
+echo "== variant 6: append an overriding ENV at the Dockerfile tail must FAIL and name it (R7-07) =="
+printf '\nENV FLMX_KERNEL_DIR=/tmp/elsewhere\n' >> "$MIR/go-gost/Dockerfile"
+if bash "$GATE" "$MIR" > "$TMP/v6.log" 2>&1; then
+  echo "FAIL: variant 6 was not caught (appended ENV override still counted as anchored)"; exit 1
+fi
+if grep -q 'FLMX_KERNEL_DIR' "$TMP/v6.log"; then
+  echo "OK: variant 6 caught and named"
+else
+  echo "FAIL: variant 6 caught but the overridden anchor was not named"; sed 's/^/    /' "$TMP/v6.log"; exit 1
+fi
+cp "$ROOT/go-gost/Dockerfile" "$MIR/go-gost/Dockerfile"
+
+echo "== variant 7: append ulimit -c unlimited after the guard line must FAIL and name it (R7-07) =="
+printf 'ulimit -c unlimited\n' >> "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v7.log" 2>&1; then
+  echo "FAIL: variant 7 was not caught (appended ulimit override still counted as guarded)"; exit 1
+fi
+if grep -q 'ulimit -c 0' "$TMP/v7.log"; then
+  echo "OK: variant 7 caught and named"
+else
+  echo "FAIL: variant 7 caught but the overridden guard was not named"; sed 's/^/    /' "$TMP/v7.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 8: append cd /tmp after the anchor line must FAIL and name it (R7-07) =="
+printf 'cd /tmp\n' >> "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v8.log" 2>&1; then
+  echo "FAIL: variant 8 was not caught (appended cd override still counted as anchored)"; exit 1
+fi
+if grep -q 'cd /etc/flmx_agent' "$TMP/v8.log"; then
+  echo "OK: variant 8 caught and named"
+else
+  echo "FAIL: variant 8 caught but the overridden anchor was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1
 fi
 
 echo "SELFTEST PASS: baseline green, all variants caught and named"
