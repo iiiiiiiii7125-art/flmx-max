@@ -67,29 +67,38 @@ function notify() {
  * dark-only package is rejected outright — there is no dark fallback
  * to read colours from, and silently injecting nothing while
  * pretending activation succeeded would hide the mistake.  "Usable"
- * means at least one token with a defined value: a light set that is
- * present but empty (`light: {}`) or whose values are all `undefined`
- * (injectTokens skips undefined values, so it would inject nothing)
- * counts as no light set at all and is rejected the same way.  A
- * light set that mixes undefined entries with real values is a valid
- * partial set — the undefined entries are skipped and the rest fall
- * back as usual.  A package without `tokens` at all (component /
- * layout / page overrides only) is fine: the `tokens` field itself
- * stays optional.
+ * means at least one token whose value is a non-blank string: a
+ * light set that is present but empty (`light: {}`), whose values
+ * are all `undefined` (injectTokens skips undefined values, so it
+ * would inject nothing), or whose values are all empty/whitespace
+ * strings (`setProperty(name, "")` removes the property, and a
+ * whitespace-only value computes to nothing after var()
+ * substitution) counts as no light set at all and is rejected the
+ * same way.  Runtime values outside the type contract (null,
+ * numbers, booleans, objects) and a non-map `light` (e.g. an array,
+ * whose entries would inject under numeric keys the browser
+ * ignores) likewise count as no usable value.  A light set that
+ * mixes unusable entries with real values is a valid partial set —
+ * the unusable entries are skipped and the rest fall back as usual.
+ * A package without `tokens` at all (component / layout / page
+ * overrides only) is fine: the `tokens` field itself stays optional.
  */
 export function validateThemePackage(pkg: ThemePackage): string | null {
   if (pkg.tokens != null) {
     const light = pkg.tokens.light;
     const usableCount =
-      light != null
-        ? Object.values(light).filter((value) => value !== undefined).length
+      light != null && !Array.isArray(light)
+        ? Object.values(light).filter(
+            (value) => typeof value === "string" && value.trim() !== "",
+          ).length
         : 0;
 
     if (usableCount === 0) {
       return (
         `theme "${pkg.id}" provides tokens but no usable light token set ` +
-        `(tokens.light must define at least one token with a value; ` +
-        `missing, empty, and all-undefined light sets are not accepted)`
+        `(tokens.light must define at least one token with a non-empty ` +
+        `string value; missing, empty, all-undefined, and blank-valued ` +
+        `light sets are not accepted)`
       );
     }
   }
