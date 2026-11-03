@@ -19,7 +19,7 @@
  *   C5  UpdatePasswordPayload：confirmPassword / newUsername 必填
  *       （后端 changePasswordRequest 两者空值即拒绝）。
  *   C6  幻影/缺失字段簇：types.ts 各 interface 的禁入字段与必备字段。
- *   C7  页面本地类型副本同步：limit.tsx / group.tsx /
+ *   C7  页面本地类型副本同步：limit.tsx /
  *       dashboard/use-dashboard-data.ts / forward.tsx / node.tsx /
  *       src/types/index.ts 中与线缆类型同形的本地声明不得保留旧错误。
  *
@@ -53,7 +53,20 @@ const root =
   process.argv[2] ||
   join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const read = (rel) => readFileSync(join(root, rel), "utf8");
+// 读取面缺失即点名失败（R2-C6-01）：登记面引用的文件被删（如三件套
+// 移除时的 pages/group.tsx）时，旧实现以未捕获 ENOENT 崩溃、吞掉崩
+// 溃点之后的全部检查与汇总。现统一在此点名并以失败码退出——文件缺
+// 失本身就是登记与代码漂移，必须红且点名，不得以堆栈代替结论。
+const read = (rel) => {
+  try {
+    return readFileSync(join(root, rel), "utf8");
+  } catch (e) {
+    console.error(
+      `FAIL 读取面: ${rel} 读取失败（${e.code || e.message}）——登记引用的文件不存在或不可读，先核登记与代码是否同步`,
+    );
+    process.exit(1);
+  }
+};
 
 const require = createRequire(import.meta.url);
 let ts;
@@ -288,13 +301,15 @@ function goFuncSpan(source, signature) {
 }
 
 /* ---------------- C1: nullable 贯彻 ---------------- */
+// 登记表随功能移除同步（R2-C6-01）：分组三件套移除后 ListGroupPermissions
+// 已删，本表对应行与 C7 的 group.tsx 副本校验一并摘除；新增 List* 出口
+// 时在此登记，删功能时同步删行——残行会令本门在当前树上恒红。
 const listToInterface = {
   ListNodes: "NodeApiItem",
   ListUsers: "UserApiItem",
   ListSpeedLimits: "SpeedLimitApiItem",
   ListForwards: "ForwardApiItem",
   ListTunnels: "TunnelApiItem",
-  ListGroupPermissions: "GroupPermissionApiItem",
 };
 
 for (const [fn, iface] of Object.entries(listToInterface)) {
@@ -597,9 +612,6 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   // limit.tsx 本地 SpeedLimitRule（与 SpeedLimitApiItem 同形）
   check(`${FE}/pages/limit.tsx`, "SpeedLimitRule", "createdTime", { mustNotContain: "string" });
   check(`${FE}/pages/limit.tsx`, "SpeedLimitRule", "updatedTime", { mustNull: true, mustNotContain: "string" });
-  // group.tsx 本地 GroupPermission（名称可为 null，渲染处已有 || id 兜底）
-  check(`${FE}/pages/group.tsx`, "GroupPermission", "userGroupName", { mustNull: true });
-  check(`${FE}/pages/group.tsx`, "GroupPermission", "tunnelGroupName", { mustNull: true });
   // dashboard 本地 DashboardUserInfo（expTime 后端 int64 毫秒）
   check(`${FE}/pages/dashboard/use-dashboard-data.ts`, "DashboardUserInfo", "expTime", { mustNotContain: "string" });
   // forward.tsx 本地 Tunnel（由 getTunnelList 直接赋值，inIp 可为 null）
