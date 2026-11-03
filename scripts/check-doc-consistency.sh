@@ -276,7 +276,7 @@ if [ -z "$tp_actual" ] || [ "$tp_actual" = "0" ]; then
 elif [ -z "$tp_claims" ]; then
   note_fail "计数对账：doc/guide/postgresql.md 与 AGENTS.md 未声明 [K11-COUNT:testpostgres=N] 标记（实数 $tp_actual，裸数字计数不受门守）"
 elif [ "$tp_claims" != "$tp_actual" ]; then
-  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（grep 'func TestPostgres' go-backend/tests/contract）"
+  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（剥注释后 grep -c '^func TestPostgres' go-backend/tests/contract）"
 else
   note_ok "计数对账：TestPostgres* 用例数文档声称与实数一致（$tp_actual）"
 fi
