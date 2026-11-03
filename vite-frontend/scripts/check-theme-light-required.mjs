@@ -53,6 +53,14 @@
 // 释（注释里的回退形态提及不算数、也不能靠注释拷贝满足/干扰判
 // 定），行为断言 ①–⑦ 的转译执行面不变。
 //
+// 级联条件口径（修复轮 7，R7-10 / G-C4-04 机制处置）：⑨的 globals
+// 侧合并与 check-contrast 同机制同处置——改按级联求值：仅无条件
+// :root（顶层或仅被 @layer 包裹）的声明入集，@media/@supports
+// 等条件块整棵子树排除，胜出顺序按 !important/层级/源码序的级
+// 联规则；旧正则合并另有首个 } 截断块体的缺陷（无括号配平），
+// 本轮一并随求值器退役。本文件仅动⑨的 globals 提取机制，谓词
+// 断言不在本轮改动面。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-theme-light-required.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -480,15 +488,163 @@ console.error = origError;
 
 // ─── ⑨ 默认包色板与 globals.css :root 对齐（R4-02 永久回归门） ────────────
 
-// 合并 globals.css 全部 :root 块（文件序、后声明胜出，与级联同义）。
-// 先剥 CSS 注释：块内注释存档的旧值声明不再参与合并（R6-C4-10）。
+// globals.css 的 :root token 按级联求值取生效值（R7-10）：先剥
+// CSS 注释（块内注释存档的旧值声明不参与，R6-C4-10），再跟踪
+// at-rule 上下文——仅无条件 :root（顶层、或仅被 @layer 包裹）
+// 的声明参与胜出竞争，@media/@supports/@container 等条件块
+// （含未知块级 at-rule）整棵子树排除；胜出顺序：!important 级
+// 高于普通级，普通级无层高于 @layer 内（层间按首次提及顺序后
+// 者胜）、!important 级反之，同级同层按源码序后者胜。与
+// check-contrast.mjs 的 resolveRootTokens 同口径（各门自含、
+// 不跨文件引用）。
+const resolveRootTokens = (code) => {
+  const layerOrder = new Map();
+  let layerSeq = 0;
+  const noteLayers = (namesText) => {
+    for (const part of namesText.split(",")) {
+      const name = part.trim();
+      if (name && !layerOrder.has(name)) layerOrder.set(name, layerSeq++);
+    }
+  };
+  const winners = new Map();
+  let srcIdx = 0;
+  const rankCmp = (a, b) => {
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
+  };
+  const consider = (name, value, important, layerName) => {
+    const layered = layerName != null;
+    const lo = layered ? (layerOrder.get(layerName) ?? 0) : 0;
+    const rank = important
+      ? [1, layered ? 1 : 0, -lo, srcIdx]
+      : [0, layered ? 0 : 1, lo, srcIdx];
+    srcIdx++;
+    const cur = winners.get(name);
+    if (!cur || rankCmp(rank, cur.rank) > 0) winners.set(name, { rank, value });
+  };
+  const parseDecls = (body, layerName) => {
+    let i = 0;
+    const n = body.length;
+    while (i < n) {
+      let depth = 0;
+      let q = null;
+      const start = i;
+      while (i < n) {
+        const c = body[i];
+        if (q) {
+          if (c === "\\") i++;
+          else if (c === q) q = null;
+          i++;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; i++; continue; }
+        if (c === "(") depth++;
+        else if (c === ")") depth--;
+        else if (c === ";" && depth === 0) break;
+        i++;
+      }
+      const decl = body.slice(start, i).trim();
+      i++;
+      const m = decl.match(/^(--[a-zA-Z0-9-]+)\s*:\s*([\s\S]+)$/);
+      if (!m) continue;
+      let value = m[2].trim();
+      let important = false;
+      const im = value.match(/!\s*important\s*$/i);
+      if (im) {
+        important = true;
+        value = value.slice(0, im.index).trim();
+      }
+      consider(m[1], value, important, layerName);
+    }
+  };
+  const walk = (text, frames) => {
+    let i = 0;
+    const n = text.length;
+    while (i < n) {
+      let pre = "";
+      let depth = 0;
+      let q = null;
+      let term = null;
+      while (i < n) {
+        const c = text[i];
+        if (q) {
+          pre += c;
+          if (c === "\\") { pre += text[i + 1] ?? ""; i += 2; continue; }
+          if (c === q) q = null;
+          i++;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; pre += c; i++; continue; }
+        if (c === "(") depth++;
+        else if (c === ")") depth--;
+        if (depth === 0 && (c === "{" || c === ";" || c === "}")) {
+          term = c;
+          i++;
+          break;
+        }
+        pre += c;
+        i++;
+      }
+      const prelude = pre.trim();
+      if (term === null || term === "}") break;
+      if (term === ";") {
+        if (/^@layer\b/i.test(prelude)) {
+          noteLayers(prelude.replace(/^@layer\b/i, ""));
+        }
+        continue;
+      }
+      const open = i - 1;
+      let d = 0;
+      let end = -1;
+      q = null;
+      for (let j = open; j < n; j++) {
+        const c = text[j];
+        if (q) {
+          if (c === "\\") j++;
+          else if (c === q) q = null;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; continue; }
+        if (c === "{") d++;
+        else if (c === "}") {
+          d--;
+          if (d === 0) { end = j; break; }
+        }
+      }
+      if (end < 0) break;
+      const body = text.slice(open + 1, end);
+      i = end + 1;
+      if (/^@layer\b/i.test(prelude)) {
+        const names = prelude.replace(/^@layer\b/i, "").trim();
+        noteLayers(names);
+        const name = names.split(",")[0].trim() || null;
+        walk(body, [...frames, { type: "layer", name }]);
+      } else if (prelude.startsWith("@")) {
+        continue;
+      } else {
+        if (frames.some((f) => f.type === "cond")) continue;
+        const layerFrame = [...frames]
+          .reverse()
+          .find((f) => f.type === "layer");
+        if (prelude.split(",").some((s) => s.trim() === ":root")) {
+          parseDecls(body, layerFrame ? layerFrame.name : null);
+        }
+        walk(body, frames);
+      }
+    }
+  };
+  walk(code, []);
+  const out = {};
+  for (const [k, v] of winners) out[k] = v.value;
+  return out;
+};
+
 const globalsSrc = stripCssComments(readSrc("src/styles/globals.css"));
 const globalsTokens = {};
-
-for (const block of globalsSrc.matchAll(/:root\s*\{([^}]*)\}/g)) {
-  for (const decl of block[1].matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
-    globalsTokens[decl[1]] = decl[2].trim().toLowerCase();
-  }
+for (const [k, v] of Object.entries(resolveRootTokens(globalsSrc))) {
+  globalsTokens[k] = v.trim().toLowerCase();
 }
 
 // 默认包只有 import type，转译后取 exports.default 的真实 light 集。
