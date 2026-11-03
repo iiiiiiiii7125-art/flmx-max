@@ -17,7 +17,7 @@ const HELP: Record<string, string> = {
   "/limit": "分配隧道权限时可选的带宽上限",
 };
 
-/** Users with the groups and speed limits used when granting them tunnels. */
+/** Users and the speed limits used when granting them tunnels. */
 export default function UserHubPage() {
   const location = useLocation();
   const navigate = useNavigate();

@@ -320,10 +320,10 @@ export interface UserMutationPayload {
   pwd?: string;
   status?: number;
   flow?: number;
-  // R2X-042（K-05）：补后端实读的 flowMiB/groupIds（此前只能靠 any 透传）；
+  // R2X-042（K-05）：补后端实读的 flowMiB（此前只能靠 any 透传）；
   // 删后端从不读的 name/tunnelFlow 死字段（tunnelFlow 是 user-tunnel 字段）。
+  // groupIds 已随分组三件套移除删除：后端 userCreate/userUpdate 不再读。
   flowMiB?: number;
-  groupIds?: number[];
   num?: number;
   /** 只收毫秒时间戳数字：字符串会被后端 asInt64 解析失败后静默回退默认到期（F-144）。 */
   expTime?: number;

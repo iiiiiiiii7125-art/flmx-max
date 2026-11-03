@@ -45,6 +45,7 @@ import {
 import { BackIcon, SettingsIcon } from "@/components/icons";
 import { NotifyCard } from "@/pages/config/notify-card";
 import { GistBackup } from "@/pages/config/gist-backup";
+import { BackupImportReceiptPanel } from "@/pages/config/import-receipt";
 import { LatencySettings } from "@/pages/config/latency-card";
 import { SubFrontSettings } from "@/pages/config/sub-front-card";
 import { ThemeSettings } from "@/components/theme-settings";
@@ -358,6 +359,11 @@ export default function ConfigPage() {
   // 出现，点击走服务端下载端点。快照过期后服务端自动清理。
   const [importAutoBackupStatus, setImportAutoBackupStatus] =
     useState<ImportAutoBackupStatus | null>(null);
+  // 最近一次本地导入的完整回执（R2-C5-01）：toast 只报计数摘要，
+  // 回执全文（警告逐条点名、屏蔽恢复数、SSH/重推节点清单）在导入区
+  // 下方的披露面呈现，不随弹窗关闭丢失。
+  const [lastImportReceipt, setLastImportReceipt] =
+    useState<Record<string, unknown> | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -1596,6 +1602,8 @@ export default function ConfigPage() {
           .join("，");
 
         toast.success(summary);
+        // 回执全文留置披露面（importWarnings 逐条文本等，见导入区下方）。
+        setLastImportReceipt(data);
         void loadImportAutoBackupStatus();
         setImportTypes([]);
         setImportFileName("");
@@ -1937,6 +1945,53 @@ export default function ConfigPage() {
                         <li key={reason}>{reason}</li>
                       ))}
                     </ul>
+                  </div>
+                )}
+
+                {/* R2-C5-04：待清理重复行（唯一索引迁移被挡）如实呈现：
+                    后端 /system/version 带结构化 pendingMigrations，此前
+                    前端已加载零渲染，管理员只能靠文档/SQL 发现。 */}
+                {systemUpgradeInfo?.pendingMigrations?.required && (
+                  <div className="rounded-lg border border-warning-300 bg-warning-500/10 px-4 py-3 text-warning-800">
+                    <p className="text-xs font-semibold">
+                      有待处理的数据清理：重复行挡住唯一索引迁移
+                    </p>
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs font-semibold">
+                      {(systemUpgradeInfo.pendingMigrations.tables ?? []).map(
+                        (t) => (
+                          <li key={`${t.table}-${t.sample ?? ""}`}>
+                            表 {t.table}：
+                            {t.duplicateGroups > 0
+                              ? `${t.duplicateGroups} 组重复`
+                              : "索引定义待处理"}
+                            {t.sample ? `（示例：${t.sample}）` : ""}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                    <p className="mt-2 text-xs font-semibold">
+                      处置：按升级指南清理上述重复行后重启面板，迁移会自动完成
+                      {systemUpgradeInfo.pendingMigrations.guide
+                        ? `（指引：${systemUpgradeInfo.pendingMigrations.guide}）`
+                        : ""}
+                      。清理前请先备份数据库。
+                    </p>
+                  </div>
+                )}
+
+                {/* R2-C5-04：管理员账号缺失（默认管理员 id=1 缺失且
+                    admin@user 已被占用）——后端只打 ERROR 日志并经
+                    /system/version 暴露，此前前端零渲染。系统不会自动
+                    提权任何账号，必须人工处理。 */}
+                {systemUpgradeInfo?.adminBootstrapRequired && (
+                  <div className="rounded-lg border border-danger-300 bg-danger-500/10 px-4 py-3 text-danger-800">
+                    <p className="text-xs font-semibold">
+                      面板缺少管理员账号，需人工处理
+                    </p>
+                    <p className="mt-2 text-xs font-semibold">
+                      默认管理员账号缺失且用户名 admin@user
+                      已被其他账号占用，系统不会自动补建、也不会把任何现有账号提权为管理员。处置办法：把占用该用户名的账号改名或删除后重启面板，系统会自动补建默认管理员；或停面板后经数据库直接补建管理员账号（重复行清理口径见 doc/guide/upgrade.md）。
+                    </p>
                   </div>
                 )}
 
@@ -2294,6 +2349,13 @@ export default function ConfigPage() {
                   下载导入前自动备份
                 </Button>
               </div>
+            )}
+            {lastImportReceipt && (
+              <BackupImportReceiptPanel
+                data={lastImportReceipt}
+                title="最近一次导入结果"
+                onClose={() => setLastImportReceipt(null)}
+              />
             )}
           </div>
 

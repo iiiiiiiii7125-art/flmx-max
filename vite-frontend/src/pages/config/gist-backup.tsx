@@ -10,6 +10,7 @@ import {
   saveGistBackup,
   uploadGistBackup,
 } from "@/api";
+import { BackupImportReceiptPanel } from "@/pages/config/import-receipt";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import {
@@ -35,6 +36,11 @@ import {
 // restoreGistBackup（POST /backup/gist/restore），后端走我方导入尾钩子
 // 全集与 16 段全集；此前 G-frontend 占位态的 true 已由本批打开。
 const RESTORE_WIRING_PENDING = false;
+
+// R2-C5-01＝R2-F6-01：Gist 恢复成功后页面会整页刷新（恢复可能使用户
+// 掉线），回执先暂存 sessionStorage，刷新后由本组件读出呈现并清除，
+// 保证被删段点名等披露不随刷新丢失。
+const GIST_RESTORE_RECEIPT_KEY = "flmx-gist-restore-receipt";
 
 const INTERVALS: Array<[number, string]> = [
   [0, "关闭"],
@@ -71,6 +77,9 @@ export function GistBackup() {
   const [versionsError, setVersionsError] = useState("");
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreVersion, setRestoreVersion] = useState("");
+  // 最近一次 Gist 恢复的完整回执（经 sessionStorage 跨整页刷新留存）。
+  const [restoreReceipt, setRestoreReceipt] =
+    useState<Record<string, unknown> | null>(null);
   // F-L6-01：恢复下发的在途标记。弹窗确认按钮的 restoring 是渲染状态，
   // 连点在渲染提交前可双发；restore 本体以 ref 做入口同步复核。
   const restoreInFlightRef = useRef(false);
@@ -91,7 +100,37 @@ export function GistBackup() {
     });
   }, []);
 
-  if (!status) return null;
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(GIST_RESTORE_RECEIPT_KEY);
+
+      if (raw) {
+        window.sessionStorage.removeItem(GIST_RESTORE_RECEIPT_KEY);
+        const parsed: unknown = JSON.parse(raw);
+
+        if (parsed && typeof parsed === "object") {
+          setRestoreReceipt(parsed as Record<string, unknown>);
+        }
+      }
+    } catch {
+      // sessionStorage 不可用/内容损坏时静默：回执披露让位于页面可用性。
+    }
+  }, []);
+
+  if (!status) {
+    // 状态未加载（含恢复后掉线未重新登录）时，若有留存回执仍先呈现，
+    // 不让披露被状态加载失败吞掉。
+    return restoreReceipt ? (
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">上传到 GitHub Gist</h3>
+        <BackupImportReceiptPanel
+          data={restoreReceipt}
+          title="最近一次 Gist 恢复结果"
+          onClose={() => setRestoreReceipt(null)}
+        />
+      </div>
+    ) : null;
+  }
 
   const dirty =
     token.trim() !== "" ||
@@ -231,6 +270,16 @@ export function GistBackup() {
 
         return false;
       }
+      // 回执全文（importWarnings 点名、屏蔽恢复数、节点清单）随刷新
+      // 留存，刷新后在本区顶部呈现（R2-C5-01＝R2-F6-01）。
+      try {
+        window.sessionStorage.setItem(
+          GIST_RESTORE_RECEIPT_KEY,
+          JSON.stringify(res.data ?? {}),
+        );
+      } catch {
+        // 暂存失败不阻断恢复成功口径。
+      }
       toast.success("已从 Gist 恢复，页面即将刷新");
       window.setTimeout(() => window.location.reload(), 1500);
 
@@ -245,6 +294,13 @@ export function GistBackup() {
   return (
     <div className="space-y-4">
       <h3 className="text-lg font-medium">上传到 GitHub Gist</h3>
+      {restoreReceipt && (
+        <BackupImportReceiptPanel
+          data={restoreReceipt}
+          title="最近一次 Gist 恢复结果"
+          onClose={() => setRestoreReceipt(null)}
+        />
+      )}
       <p className="text-sm text-foreground">
         全量备份加密后上传到私有 Gist，同一 Gist 每次上传产生
         一个新版本；自动上传默认关闭。明文上传不放行：必须设置加密密码
