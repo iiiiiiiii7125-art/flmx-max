@@ -8851,6 +8851,7 @@ func (h *Handler) pickTunnelPort(tunnelID int64) (int, error) {
 	for _, nodeID := range entryNodes {
 		portRange, err := h.repo.GetNodePortRange(nodeID)
 		if err != nil {
+			log.Printf("pickTunnelPort: skipped entry node node_id=%d stage=port_range err=%v", nodeID, err)
 			continue
 		}
 		if portRange == "" {
@@ -8859,11 +8860,13 @@ func (h *Handler) pickTunnelPort(tunnelID int64) (int, error) {
 
 		nodePorts, err := parsePorts(portRange)
 		if err != nil {
+			log.Printf("pickTunnelPort: skipped entry node node_id=%d stage=parse_ports err=%v", nodeID, err)
 			continue
 		}
 
 		used, err := h.getUsedPorts(nodeID)
 		if err != nil {
+			log.Printf("pickTunnelPort: skipped entry node node_id=%d stage=used_ports err=%v", nodeID, err)
 			continue
 		}
 		evaluated++
