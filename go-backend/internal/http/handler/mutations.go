@@ -6942,16 +6942,20 @@ func (h *Handler) federationLocalDomain() string {
 	return strings.TrimSpace(cfg.Value)
 }
 
-// ensureRemoteNodeRelayAuth 是消费方凭据自愈（D3-04）：升级前导入
-// 的远端节点 RemoteConfig 没有 relay 凭据，缺失时向提供方做一次
-// Connect 刷新并合并写回 DB 与内存副本。best-effort：失败保留存量
-// 值继续下发——目标服务若已强制鉴权，缺凭据的连接会在提供方被拒
-// 并显形为隧道错误，不会静默放行。
+// ensureRemoteNodeRelayAuth 是消费方凭据自愈（D3-04）：下发前向
+// 提供方做一次 Connect，按现行凭据合并刷新 RemoteConfig 并写回 DB
+// 与内存副本。D3-04 初版只在本地密码为空（升级前导入的存量节点）时
+// 才刷新；R2-F3-01：提供方从旧备份恢复到空库后凭据被重新补发，
+// 消费方持旧的非空凭据时旧实现永不刷新、数据面无限期被 relay 鉴权
+// 拒绝而控制面无感——现改为每次下发前都比对刷新（与用量同步的无
+// 条件覆写同口径，经 mergeRemoteConnectCredentials 合并落盘），刷
+// 新后本次下发即以新凭据继续，构成一次重试。best-effort：Connect
+// 失败记日志并保留存量值继续下发——提供方不可达会在后续运行时调
+// 用处显形为隧道错误，凭据失效另由节点状态同步面同口径自愈并以
+// syncError 披露；目标服务若已强制鉴权，旧凭据会在提供方被拒，不
+// 会静默放行。
 func (h *Handler) ensureRemoteNodeRelayAuth(fc *client.FederationClient, node *nodeRecord, localDomain string) {
 	if node == nil || node.IsRemote != 1 {
-		return
-	}
-	if _, password := parseRemoteShareRelayAuth(node.RemoteConfig); password != "" {
 		return
 	}
 	remoteURL := strings.TrimSpace(node.RemoteURL)
@@ -6960,26 +6964,18 @@ func (h *Handler) ensureRemoteNodeRelayAuth(fc *client.FederationClient, node *n
 		return
 	}
 	info, err := fc.Connect(remoteURL, remoteToken, localDomain)
-	if err != nil || info == nil || strings.TrimSpace(info.RelayPassword) == "" {
+	if err != nil {
+		log.Printf("federation credential self-heal: connect remote node %d (%s) before tunnel apply: %v", node.ID, nodeDisplayName(node), err)
+		return
+	}
+	if info == nil {
 		return
 	}
 	// FIX2-B（V5-3）：版本提示记日志、对端版本随凭据自愈一并留痕。
 	logFederationVersionWarning(info)
-	cfg := map[string]interface{}{}
-	if raw := strings.TrimSpace(node.RemoteConfig); raw != "" {
-		_ = json.Unmarshal([]byte(raw), &cfg)
+	if updated, changed := h.mergeRemoteConnectCredentials(node.ID, node.RemoteConfig, info); changed {
+		node.RemoteConfig = updated
 	}
-	cfg["relayUsername"] = info.RelayUsername
-	cfg["relayPassword"] = info.RelayPassword
-	if strings.TrimSpace(info.PanelVersion) != "" {
-		cfg["panelVersion"] = info.PanelVersion
-	}
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		return
-	}
-	node.RemoteConfig = string(data)
-	_ = h.repo.UpdateNodeRemoteConfig(node.ID, string(data))
 }
 
 func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain string) ([]repo.FederationTunnelBinding, []federationRuntimeReleaseRef, error) {

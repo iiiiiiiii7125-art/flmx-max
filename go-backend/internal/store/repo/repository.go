@@ -2098,6 +2098,26 @@ func (r *Repository) ListActivePeerShareRuntimesByShareID(shareID int64) ([]mode
 	return out, nil
 }
 
+// ListPeerShareRuntimesByShareID returns every runtime row of a share
+// regardless of status, including already-released rows. Share-delete
+// cleanup uses it to recover federation tunnel IDs from tunnel/create
+// resource keys even after the runtimes themselves were released, so a
+// provider-renamed federation tunnel is still found (R2-F3-02).
+func (r *Repository) ListPeerShareRuntimesByShareID(shareID int64) ([]model.PeerShareRuntime, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var out []model.PeerShareRuntime
+	err := r.db.Where("share_id = ?", shareID).Order("port ASC, id ASC").Find(&out).Error
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = make([]model.PeerShareRuntime, 0)
+	}
+	return out, nil
+}
+
 func (r *Repository) ListActivePeerShareRuntimePorts(shareID int64, nodeID int64) ([]int, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
