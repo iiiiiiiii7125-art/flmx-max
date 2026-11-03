@@ -409,6 +409,149 @@ sleep 4; exit 1'
     fail "X-P2-11: service should be active after rollback"
 )
 
+# R9-02: 更新链的备份步注入 ENOSPC——cp 桩仅对 .bak 目标失败。
+# 旧实现 cp 无返回码检查：无陈旧 .bak 时替换照常、回滚无源、坏二
+# 进制留活（P2a）；有陈旧 .bak 时静默跨代回滚且回执报成功（P2b）。
+# 新实现必须在替换前中止：当前二进制逐字未动、回执点名备份失败、
+# 不得出现回滚成功字样。夹具主体与 X-P2-11 flap 夹具同构（新二进
+# 制为 flap 形态，旧实现下必达回滚分支）。
+agent_update_backup_fail_fixture() {
+  local mode="$1"
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  FLMX_AGENT_TAKEOVER="1"
+  SERVICE_MANAGER="systemd"
+  FIXTURE_DIR=$(mktemp -d)
+  INSTALL_DIR="$FIXTURE_DIR/agent"
+  mkdir -p "$INSTALL_DIR"
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
+echo "old good"
+EOF
+  chmod +x "$INSTALL_DIR/flux_agent"
+  if [[ "$mode" == "stale" ]]; then
+    cat > "$INSTALL_DIR/flux_agent.bak" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "-V" ]]; then echo "gost 0.9.0 (go1.25 linux/amd64)"; exit 0; fi
+echo "stale good"
+EOF
+    chmod +x "$INSTALL_DIR/flux_agent.bak"
+  fi
+  STATE_DIR="$FIXTURE_DIR/state"
+  mkdir -p "$STATE_DIR"
+  echo good > "$STATE_DIR/mode"
+  echo 0 > "$STATE_DIR/active_cnt"
+
+  ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
+  ensure_download_url_initialized() {
+    RESOLVED_VERSION="1.3.5"
+    DOWNLOAD_URL="https://example.com/gost"
+  }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  sleep() { :; }
+  systemctl() {
+    case "$1" in
+      start)
+        echo 0 > "$STATE_DIR/active_cnt"
+        if grep -q FLAP_MARKER "$INSTALL_DIR/flux_agent"; then
+          echo flap > "$STATE_DIR/mode"
+        else
+          echo good > "$STATE_DIR/mode"
+        fi
+        return 0 ;;
+      show)
+        echo 4242; return 0 ;;
+      is-active)
+        if [[ "$(cat "$STATE_DIR/mode")" == "flap" ]]; then
+          local n
+          n=$(cat "$STATE_DIR/active_cnt"); n=$((n+1)); echo "$n" > "$STATE_DIR/active_cnt"
+          [[ "$n" -le 1 ]]
+          return $?
+        fi
+        return 0 ;;
+      list-units)
+        echo "flux_agent.service loaded active running"; return 0 ;;
+      *) return 0 ;;
+    esac
+  }
+  curl() {
+    local output="" url="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then output="$a"; fi
+      case "$a" in http*) url="$a";; esac
+      prev="$a"
+    done
+    local body='#!/bin/bash
+# FLAP_MARKER
+if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.5 (go1.25 linux/amd64)"; exit 0; fi
+sleep 4; exit 1'
+    if [[ "$url" == *.sha256 ]]; then
+      printf '%s\n' "$body" | sha256sum | awk '{print $1"  gost"}' > "$output"
+      return 0
+    fi
+    printf '%s\n' "$body" > "$output"; chmod +x "$output"
+  }
+  cp() {
+    local last="${@: -1}"
+    if [[ "$last" == *.bak ]]; then
+      echo "cp: cannot create regular file '$last': No space left on device" >&2
+      return 1
+    fi
+    command cp "$@"
+  }
+
+  local rc="0"
+  update_flux_agent > "$FIXTURE_DIR/out.log" 2>&1 || rc="$?"
+  echo "$rc" > "$FIXTURE_DIR/rc"
+  echo "$FIXTURE_DIR"
+}
+
+test_update_flux_agent_aborts_when_backup_fails() (
+  set -euo pipefail
+  local dir rc
+  dir=$(agent_update_backup_fail_fixture nostale)
+  rc=$(cat "$dir/rc")
+  assert_equals "1" "$rc" "R9-02: update must abort when the backup copy fails"
+  grep -q "old good" "$dir/agent/flux_agent" || \
+    fail "R9-02: current binary must remain the pre-update version when the backup fails (no stale .bak existed)"
+  grep -q "备份当前版本失败" "$dir/out.log" || \
+    fail "R9-02: receipt must name the backup failure"
+  grep -q "已中止更新" "$dir/out.log" || \
+    fail "R9-02: receipt must state the update was aborted before replacement"
+  if grep -q "已回滚到旧版本并重启成功" "$dir/out.log"; then
+    fail "R9-02: receipt must not claim a rollback success that has no source"
+  fi
+  if grep -q "更新完成" "$dir/out.log"; then
+    fail "R9-02: receipt must not claim update success after an aborted backup"
+  fi
+  [[ ! -f "$dir/agent/flux_agent.bak" ]] || \
+    fail "R9-02: no .bak may remain after an aborted backup"
+)
+
+test_update_flux_agent_aborts_when_backup_fails_with_stale_bak() (
+  set -euo pipefail
+  local dir rc
+  dir=$(agent_update_backup_fail_fixture stale)
+  rc=$(cat "$dir/rc")
+  assert_equals "1" "$rc" "R9-02: update must abort when the backup copy fails even with a stale .bak present"
+  grep -q "old good" "$dir/agent/flux_agent" || \
+    fail "R9-02: current binary must remain the pre-update version; the stale .bak must not be rolled back across generations"
+  if grep -q "stale good" "$dir/agent/flux_agent"; then
+    fail "R9-02: stale .bak content must never become the running binary after a failed backup"
+  fi
+  grep -q "备份当前版本失败" "$dir/out.log" || \
+    fail "R9-02: receipt must name the backup failure"
+  if grep -q "已回滚到旧版本并重启成功" "$dir/out.log"; then
+    fail "R9-02: receipt must not report a cross-generation rollback as success"
+  fi
+  [[ ! -f "$dir/agent/flux_agent.bak" ]] || \
+    fail "R9-02: the untrusted .bak must be removed after an aborted backup"
+)
+
 # X-P2-12 (J-02): extract_leading_semver 与 Go 侧 extractLeadingSemver
 # 同规则：真实 -V 形态（gost 前缀）、fullVersion 形态、v 前缀、dev
 # 透传；粘连后缀与垃圾串提取失败（调用方按不可比放行）。
@@ -1647,6 +1790,51 @@ test_update_panel_downloads_without_prompt() (
     "update_panel should validate, back up, and pull before activating the update"
 )
 
+# R9-03（菜单 2 面）: 更新前备份失败时回执必须点名中止；且仅当后
+# 端容器不存在（首装未完成、容器从未创建的半成品状态）时才点名
+# 唯一出口 PANEL_FORCE_REINSTALL=1 并写明用法——容器存在的常规
+# 部署备份失败（磁盘/权限）不得被误导去强制重装。旧实现备份失败
+# 静默 return 1，两相均无点名（本用例对旧代码必红）。
+test_update_panel_backup_failure_names_force_reinstall_only_when_container_missing() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  resolve_latest_release_tag() { echo "v-test"; }
+  download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
+  validate_panel_update_compose() { :; }
+  create_panel_update_backup() { return 1; }
+  check_ipv6_support() { return 1; }
+
+  # 相一：后端容器不存在（半成品状态）→ 点名唯一出口与用法
+  docker() { return 1; }
+  local rc="0" log1 log2
+  log1=$(mktemp)
+  update_panel >"$log1" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R9-03: update must abort when the pre-update backup fails"
+  grep -q "更新前备份失败，更新已中止" "$log1" || \
+    fail "R9-03: backup failure receipt must state the update was aborted"
+  grep -q "后端容器不存在" "$log1" || \
+    fail "R9-03: receipt must name the missing-container state when the backend container does not exist"
+  grep -q "PANEL_FORCE_REINSTALL=1 bash panel_install.sh" "$log1" || \
+    fail "R9-03: receipt must name the force-reinstall exit with its invocation form"
+
+  # 相二：后端容器存在 → 只报中止、不得点名强制重装
+  docker() { return 0; }
+  rc="0"
+  log2=$(mktemp)
+  update_panel >"$log2" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R9-03: update must abort when the pre-update backup fails (container present)"
+  grep -q "更新前备份失败，更新已中止" "$log2" || \
+    fail "R9-03: backup failure receipt must state the update was aborted (container present)"
+  if grep -q "PANEL_FORCE_REINSTALL" "$log2"; then
+    fail "R9-03: force-reinstall must not be named when the backend container exists (not the remedy for ordinary backup failures)"
+  fi
+)
+
 test_resolve_panel_deployment_uses_container_labels() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -1697,6 +1885,46 @@ test_validate_panel_update_environment_rejects_empty_required_values() (
   assert_equals "1" "$rc" "update should reject an empty JWT secret before touching the running service"
 )
 
+# I-F1-05: FRONTEND_PORT 引号值两面统一判读。同一份写了
+# FRONTEND_PORT="7399" 的 .env：菜单面（resolve_caddy_frontend_port）
+# 不得再剥引号静默正常化采纳（须点名无效并回退默认），更新面
+# （validate_panel_update_environment）维持拒绝；无引号合法值两面
+# 同采。旧实现菜单面剥引号采纳 7399（本用例对旧代码必红）。
+test_frontend_port_quoted_value_consistent_across_faces() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local deploy rc="0"
+  deploy=$(mktemp -d)
+  printf 'JWT_SECRET=x\nBACKEND_PORT=6365\nFRONTEND_PORT="7399"\nDB_TYPE=sqlite\n' > "$deploy/.env"
+  printf 'services: {}\n' > "$deploy/docker-compose.yml"
+  cd "$deploy"
+  DOCKER_CMD="true"
+
+  # 菜单面：不采纳引号值、点名无效、回退默认 6366
+  PANEL_DEPLOY_DIR="$deploy"
+  FRONTEND_PORT=""
+  resolve_caddy_frontend_port > menu.log 2>&1
+  assert_equals "6366" "$FRONTEND_PORT" "I-F1-05: menu face must not silently normalize a quoted FRONTEND_PORT"
+  grep -q "不是有效端口" menu.log || \
+    fail "I-F1-05: menu face must name the invalid quoted value instead of skipping it silently"
+
+  # 更新面：同一文件拒绝终止
+  validate_panel_update_environment > validate.log 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "I-F1-05: update face must reject the quoted FRONTEND_PORT"
+  grep -q "FRONTEND_PORT 不是有效端口" validate.log || \
+    fail "I-F1-05: update face rejection must name FRONTEND_PORT"
+
+  # 对照：无引号合法值两面同采
+  printf 'JWT_SECRET=x\nBACKEND_PORT=6365\nFRONTEND_PORT=7399\nDB_TYPE=sqlite\n' > "$deploy/.env"
+  FRONTEND_PORT=""
+  resolve_caddy_frontend_port > menu2.log 2>&1
+  assert_equals "7399" "$FRONTEND_PORT" "I-F1-05: menu face must adopt an unquoted valid port"
+  rc="0"
+  validate_panel_update_environment >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "I-F1-05: update face must accept an unquoted valid port"
+)
+
 test_backup_sqlite_for_update_pauses_copies_and_unpauses() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -1717,6 +1945,92 @@ test_backup_sqlite_for_update_pauses_copies_and_unpauses() (
   calls=$(cat "$log_path")
 
   assert_equals " pause cp unpause" "$calls" "SQLite backup should pause writes, copy the database volume, then resume the backend"
+)
+
+# R9-11: SQLite 备份必须排除可弃的 github-cache（单份最高约 2GB
+# 纯缓存），DB 本体与 jwt_secret 照常入备。旧实现整目录复制、
+# github-cache 在档（本用例对旧代码必红）。
+test_backup_sqlite_for_update_excludes_github_cache() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local destination
+  destination=$(mktemp -d)/sqlite
+  PANEL_BACKEND_CONTAINER="flux-panel-backend"
+  docker() {
+    case "$1" in
+      inspect) printf 'true\n' ;;
+      cp)
+        local target="${@: -1}"
+        mkdir -p "$target/github-cache"
+        printf 'db-bytes' > "$target/gost.db"
+        printf 'secret' > "$target/jwt_secret"
+        printf 'cache-blob' > "$target/github-cache/blob"
+        ;;
+      *) return 0 ;;
+    esac
+  }
+
+  backup_sqlite_for_update "$destination" >/dev/null
+  [[ -f "$destination/gost.db" ]] || \
+    fail "R9-11: SQLite backup must contain the database file"
+  [[ -f "$destination/jwt_secret" ]] || \
+    fail "R9-11: SQLite backup must contain jwt_secret"
+  [[ ! -e "$destination/github-cache" ]] || \
+    fail "R9-11: SQLite backup must exclude the disposable github-cache directory"
+)
+
+# R9-11: 更新备份保留轮换——连打 K+2 次（K=3）后 backups/ 恰剩
+# 最近 3 份、最旧两份被删、最新一份在位。旧实现无轮换、留 5 份
+# （本用例对旧代码必红）。
+test_create_panel_update_backup_rotates_to_keep() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local deploy i
+  deploy=$(mktemp -d)
+  PANEL_DEPLOY_DIR="$deploy"
+  printf 'JWT_SECRET=x\n' > "$deploy/.env"
+  printf 'services: {}\n' > "$deploy/docker-compose.yml"
+  cd "$deploy"
+  backup_sqlite_for_update() { mkdir -p "$1"; printf 'db' > "$1/gost.db"; }
+  backup_postgres_for_update() { printf 'sql' > "$1"; }
+
+  local -a names=()
+  for i in 1 2 3 4 5; do
+    create_panel_update_backup sqlite >/dev/null
+    names+=("$(basename "$UPDATE_BACKUP_DIR")")
+    sleep 1
+  done
+
+  assert_equals "3" "$(ls -d "$deploy"/backups/panel-update-* | wc -l)" \
+    "R9-11: update backups must rotate down to the retention keep count after K+2 updates"
+  [[ ! -e "$deploy/backups/${names[0]}" && ! -e "$deploy/backups/${names[1]}" ]] || \
+    fail "R9-11: the two oldest update backups must be pruned"
+  [[ -d "$deploy/backups/${names[2]}" && -d "$deploy/backups/${names[3]}" && -d "$deploy/backups/${names[4]}" ]] || \
+    fail "R9-11: the three newest update backups (including the just-created one) must survive rotation"
+)
+
+# R9-11: 强制重装的带时间戳备份家族（.env.bak.<ts>）与更新备份同
+# 轮换口径——prune_timestamped_backups 按名（时间戳序）只保留最
+# 近 keep 份。旧实现无此函数（本用例对旧代码必红）。
+test_prune_timestamped_backups_keeps_newest() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work ts
+  work=$(mktemp -d)
+  cd "$work"
+  for ts in 20260101000001 20260101000002 20260101000003 20260101000004 20260101000005; do
+    printf 'x' > ".env.bak.$ts"
+  done
+  prune_timestamped_backups 3 .env.bak.*
+  assert_equals "3" "$(ls .env.bak.* | wc -l)" \
+    "R9-11: timestamped backups must rotate down to the keep count"
+  [[ -f .env.bak.20260101000003 && -f .env.bak.20260101000004 && -f .env.bak.20260101000005 ]] || \
+    fail "R9-11: the newest timestamped backups must survive rotation"
+  [[ ! -e .env.bak.20260101000001 && ! -e .env.bak.20260101000002 ]] || \
+    fail "R9-11: the oldest timestamped backups must be pruned"
 )
 
 test_panel_install_script_accepts_proxy_url_env_without_prompt() (
@@ -1879,6 +2193,87 @@ test_panel_install_self_update_rejects_pin_mismatch() {
 test_panel_install_self_update_rejects_downgrade
 test_panel_install_self_update_rejects_unpinned
 test_panel_install_self_update_rejects_pin_mismatch
+
+# R9-04: 自更新覆写失败时 $0 必须逐字不动。cat 桩仅对覆写形态注
+# 入 ENOSPC（参数是已下载的新脚本副本：内容含哨兵标记、且不是夹
+# 具源文件本身）；shell 重定向在 cat 运行前已执行——旧实现
+# cat > $0 会先把 $0 截断为 0 字节（本用例对旧代码必红），新实
+# 现写同目录临时文件、比对后 rename，$0 不动且回执成立。
+panel_self_update_overwrite_fail_fixture() {
+  local work stubbin good_script
+  work=$(mktemp -d)
+  stubbin=$(mktemp -d)
+  good_script="$work/good_panel.sh"
+  cat > "$good_script" <<EOF
+#!/bin/bash
+SCRIPT_VERSION="99999999.99"
+PINNED_VERSION="9.9.9"
+echo "updated" > "\$SELF_UPDATE_SENTINEL"
+EOF
+  STUB_SHA256=$(sha256sum "$good_script" | awk '{print $1}')
+  export STUB_SHA256
+  export STUB_GOOD_SCRIPT="$good_script"
+  REAL_CAT=$(command -v cat)
+  export REAL_CAT
+  cat > "$stubbin/curl" <<'EOF'
+#!/bin/bash
+out=""; url=""; want_effective=0
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  a="${args[i]}"
+  case "$a" in
+    -o) out="${args[i+1]}" ;;
+    *url_effective*) want_effective=1 ;;
+    http*://*) url="$a" ;;
+  esac
+done
+if [[ "$want_effective" == "1" ]]; then
+  printf 'https://github.com/iiiiiiiii7125-art/flmx-max/releases/tag/9.9.9'
+  exit 0
+fi
+case "$url" in
+  *.sha256*)
+    if [[ -n "$out" ]]; then printf '%s' "$STUB_SHA256" > "$out"; else printf '%s' "$STUB_SHA256"; fi
+    ;;
+  *panel_install.sh*)
+    if [[ -n "$out" ]]; then cat "$STUB_GOOD_SCRIPT" > "$out"; else cat "$STUB_GOOD_SCRIPT"; fi
+    ;;
+  *)
+    exit 22
+    ;;
+esac
+exit 0
+EOF
+  cat > "$stubbin/cat" <<'EOF'
+#!/bin/bash
+for a in "$@"; do
+  if [[ -f "$a" && "$a" != "$STUB_GOOD_SCRIPT" ]] && grep -q 'SELF_UPDATE_SENTINEL' "$a" 2>/dev/null; then
+    echo "cat: write error: No space left on device" >&2
+    exit 1
+  fi
+done
+exec "$REAL_CAT" "$@"
+EOF
+  chmod +x "$stubbin/curl" "$stubbin/cat"
+  cp "$ROOT_DIR/panel_install.sh" "$work/panel_install.sh"
+  export SELF_UPDATE_SENTINEL="$work/sentinel"
+  rm -f "$SELF_UPDATE_SENTINEL"
+  ( cd "$work" && printf '6\n' | PATH="$stubbin:$PATH" PROXY_ENABLED=false bash ./panel_install.sh > "$work/run.log" 2>&1 ) || true
+  echo "$work"
+}
+
+test_panel_install_self_update_overwrite_failure_keeps_script() {
+  local work
+  work=$(panel_self_update_overwrite_fail_fixture)
+  [[ ! -f "$work/sentinel" ]] || fail "R9-04: a failed overwrite must not execute the new script (sentinel present)"
+  cmp -s "$ROOT_DIR/panel_install.sh" "$work/panel_install.sh" || \
+    fail "R9-04: \$0 must remain byte-identical when the self-update overwrite fails"
+  grep -q "自动更新失败，继续使用当前版本" "$work/run.log" || \
+    fail "R9-04: the failure receipt must be printed (and is now true: the current script is intact)"
+  echo "ok: self-update overwrite failure keeps current script intact"
+}
+
+test_panel_install_self_update_overwrite_failure_keeps_script
 
 # F-048: install 路径下载失败时不得先停/禁用已有服务（与 update 路径同序）。
 test_install_flux_agent_keeps_service_when_download_fails() (
@@ -2045,6 +2440,127 @@ test_install_panel_waits_for_backend_health() (
   assert_equals "0" "$rc" "R8-J-C: install_panel should succeed once the backend is healthy"
   grep -q "部署完成" "$out_log" || \
     fail "R8-J-C: success block should be printed after the health gate passes"
+)
+
+# R9-03（菜单 1 面）: F-049 守卫的拒绝回执除提及变量外，必须写明
+# 强制重装的具体用法（终端命令形态＋选菜单 1），且点明首装半成
+# 品状态只能走此出口。旧回执只有「设置 … 后重试」的泛述、无命
+# 令形态（本用例对旧代码必红）。
+test_install_panel_refusal_names_force_reinstall_usage() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0"
+  work=$(mktemp -d)
+  printf 'JWT_SECRET=keepme\nPOSTGRES_PASSWORD=keeppw\n' > "$work/.env"
+  printf 'services: {}\n' > "$work/docker-compose.yml"
+
+  ( cd "$work" && install_panel > refuse.log 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "R9-03: install_panel must still refuse when a deployment exists"
+  grep -q "PANEL_FORCE_REINSTALL=1 bash panel_install.sh" "$work/refuse.log" || \
+    fail "R9-03: refusal receipt must name the force-reinstall invocation form"
+  grep -q "安装面板" "$work/refuse.log" || \
+    fail "R9-03: refusal receipt must say to re-run and choose the install menu entry"
+  grep -q "keepme" "$work/.env" || fail "R9-03: refusal must not modify the existing .env"
+)
+
+# R9-03（首装失败面）: 首装在 up 步失败（容器从未创建）必须落回
+# 执：宣告部署未完成、点名唯一出口与用法，不得靠 set -e 静默退
+# 出。旧实现裸 up 调用、失败零指引（本用例对旧代码必红）。
+test_install_panel_up_failure_names_force_reinstall() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0"
+  work=$(mktemp -d)
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+    POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="pw"; JWT_SECRET="secret"
+  }
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+      *" up "*) return 1 ;;
+    esac
+    return 0
+  }
+  wait_for_backend_healthy() { return 1; }
+
+  ( cd "$work" && install_panel > up-fail.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R9-03: install_panel must fail when compose up fails"
+  grep -q "部署未完成" "$work/up-fail.log" || \
+    fail "R9-03: up failure must print a deployment-incomplete receipt instead of dying silently under set -e"
+  grep -q "PANEL_FORCE_REINSTALL=1 bash panel_install.sh" "$work/up-fail.log" || \
+    fail "R9-03: up failure receipt must name the force-reinstall exit with its invocation form"
+  if grep -q "🎉" "$work/up-fail.log"; then
+    fail "R9-03: success block must not be printed when compose up fails"
+  fi
+)
+
+# I-F1-06: install_panel 的 PG 健康等待失败必须与同函数后端支同
+# 形：宣告部署未完成＋logs 指引＋后续路径，且中止在后端启动之
+# 前。旧实现裸调用、失败只有等待函数自身的超时两行（本用例对旧
+# 代码必红）。
+test_install_panel_postgres_health_failure_has_guidance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0"
+  work=$(mktemp -d)
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="postgres"; DATABASE_URL="postgresql://flux_panel:pw@postgres:5432/flux_panel?sslmode=disable"
+    POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="pw"; JWT_SECRET="secret"
+  }
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+    esac
+    return 0
+  }
+  wait_for_postgres_healthy() { return 1; }
+  wait_for_backend_healthy() { return 0; }
+
+  ( cd "$work" && install_panel > pg-fail.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "I-F1-06: install_panel must fail when PostgreSQL never becomes healthy"
+  grep -q "部署未完成：PostgreSQL 未通过健康检查" "$work/pg-fail.log" || \
+    fail "I-F1-06: PG health failure must print a deployment-incomplete receipt like the backend branch"
+  grep -q "logs postgres" "$work/pg-fail.log" || \
+    fail "I-F1-06: PG health failure must print a logs pointer like the backend branch"
+  if grep -q "🎉" "$work/pg-fail.log"; then
+    fail "I-F1-06: success block must not be printed when the PG health gate fails"
+  fi
 )
 
 # F-050: Docker 安装脚本未通过 pin 校验时不得执行（哨兵法）。
@@ -3755,6 +4271,92 @@ test_panel_menu6_restart_failure_rolls_back_with_guidance() (
     fail "R4B11-002: menu 6 restart failure must reach the journalctl guidance branch"
   diff -q "$FIXTURE_DIR/expected-good" "$CADDYFILE_PATH" >/dev/null || \
     fail "R4B11-002: menu 6 must roll back the appended block when restart fails"
+)
+
+# R9-05 夹具：菜单 5 的 Caddy 自动安装路径（caddy 不在 PATH、
+# apt-get/gpg/curl 全桩）。官方源 GPG 指纹恒验过（走官方源安装
+# 支）；源列表内容由 CADDY_LIST_MODE 切换（truncated=截断体、
+# valid=完整 deb 行）；装 caddy 本体恒失败以落到失败路径。
+# CADDY_LIST_PATH 钩子把落盘点重定向进临时目录（与 CADDYFILE_PATH
+# 同钩子口径，不碰真实 /etc）。
+panel_caddy_install_fixture_env() {
+  FIXTURE_DIR=$(mktemp -d)
+  export CADDYFILE_PATH="$FIXTURE_DIR/Caddyfile"
+  export CADDY_LIST_PATH="$FIXTURE_DIR/caddy-stable.list"
+  sleep() { :; }
+  getent() { printf '203.0.113.10 %s\n' "$2"; }
+  get_public_ip() { printf '203.0.113.10'; }
+  systemctl() { return 0; }
+  gpg() {
+    case " $* " in
+      *" --show-keys "*) printf 'fpr:::::::::65760C51EDEA2017CEA2CA15155B6D79CA56EA34:\n' ;;
+    esac
+    return 0
+  }
+  curl() {
+    local out="" url="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      case "$a" in http*) url="$a";; esac
+      prev="$a"
+    done
+    case "$url" in
+      *gpg.key)
+        printf 'dummy-key-material' > "$out" ;;
+      *debian.deb.txt)
+        if [[ "${CADDY_LIST_MODE:-truncated}" == "valid" ]]; then
+          printf 'deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian bookworm main\n' > "$out"
+        else
+          printf 'deb https://dl.cloudsmith.io/public/caddy/stable/deb/debi' > "$out"
+        fi ;;
+      *) return 22 ;;
+    esac
+    return 0
+  }
+  apt-get() {
+    if [[ "$1" == "install" && " $* " == *" caddy "* ]]; then
+      return 1
+    fi
+    return 0
+  }
+}
+
+# R9-05（截断体）: HTTP 200 的截断源列表不得落盘——落盘前验形态，
+# 不完整即点名并按未写入处置。旧实现只验非空、截断体照常落盘
+# （本用例对旧代码必红）。
+test_panel_menu5_caddy_list_truncated_not_landed() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddy_install_fixture_env
+  CADDY_LIST_MODE="truncated"
+
+  local rc="0" log="$FIXTURE_DIR/menu5-truncated.log"
+  setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R9-05: menu 5 must fail when Caddy cannot be installed"
+  grep -q "内容不完整" "$log" || \
+    fail "R9-05: a truncated source list must be named as incomplete instead of being landed silently"
+  grep -q "未写入 apt 源文件" "$log" || \
+    fail "R9-05: receipt must state the malformed list was not written to the apt sources"
+  [[ ! -f "$CADDY_LIST_PATH" ]] || \
+    fail "R9-05: truncated source list must not be landed in the apt sources directory"
+)
+
+# R9-05（落盘后失败清理）: 形态完整的源列表落盘后若安装随即失
+# 败，本次写入的列表必须被删除并点名，不得留盘污染后续全部
+# apt 操作。旧实现失败路径从不清理（本用例对旧代码必红）。
+test_panel_menu5_caddy_list_removed_when_install_fails() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddy_install_fixture_env
+  CADDY_LIST_MODE="valid"
+
+  local rc="0" log="$FIXTURE_DIR/menu5-landed-fail.log"
+  setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R9-05: menu 5 must fail when the Caddy install fails after the list landed"
+  grep -q "已删除本次写入的官方源列表" "$log" || \
+    fail "R9-05: install failure must remove the source list this run landed and name the removal"
+  [[ ! -f "$CADDY_LIST_PATH" ]] || \
+    fail "R9-05: the source list landed by this run must not remain after a failed install"
 )
 
 # R4B11-003: 安装路径判活改双采样后，flap 服务（第一次采样活、第二
@@ -5607,6 +6209,8 @@ test_update_flux_agent_skips_proxy_prompt_when_not_installed
 test_update_flux_agent_prints_online_confirmation_guidance
 test_flux_agent_health_ok_requires_stable_pid
 test_update_flux_agent_rolls_back_flapping_binary
+test_update_flux_agent_aborts_when_backup_fails
+test_update_flux_agent_aborts_when_backup_fails_with_stale_bak
 test_extract_leading_semver_matches_go_rules
 test_update_flux_agent_rejects_downgrade
 test_update_flux_agent_allows_higher_and_incomparable
@@ -5633,9 +6237,17 @@ test_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_can_disable_proxy
 test_panel_install_script_builds_canonical_compose_urls
 test_update_panel_downloads_without_prompt
+test_update_panel_backup_failure_names_force_reinstall_only_when_container_missing
 test_resolve_panel_deployment_uses_container_labels
 test_validate_panel_update_environment_rejects_empty_required_values
+test_frontend_port_quoted_value_consistent_across_faces
 test_backup_sqlite_for_update_pauses_copies_and_unpauses
+test_backup_sqlite_for_update_excludes_github_cache
+test_create_panel_update_backup_rotates_to_keep
+test_prune_timestamped_backups_keeps_newest
+test_install_panel_refusal_names_force_reinstall_usage
+test_install_panel_up_failure_names_force_reinstall
+test_install_panel_postgres_health_failure_has_guidance
 test_panel_install_script_uses_builtin_routes_by_default
 test_panel_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_ignores_eof_without_prompt
@@ -5646,6 +6258,8 @@ test_panel_menu5_preserves_front_block_after_menu6
 test_panel_menu5_rolls_back_on_validate_failure
 test_panel_menu5_restart_failure_rolls_back_with_guidance
 test_panel_menu6_restart_failure_rolls_back_with_guidance
+test_panel_menu5_caddy_list_truncated_not_landed
+test_panel_menu5_caddy_list_removed_when_install_fails
 test_install_flux_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
 test_main_requires_root
