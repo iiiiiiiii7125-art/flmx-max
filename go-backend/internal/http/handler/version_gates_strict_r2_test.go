@@ -86,6 +86,93 @@ func TestHardGatesRejectMalformedTwoSegmentFloors(t *testing.T) {
 	}
 }
 
+// R4-06（D-F5-01，BC）：两段下限硬门的第三段后缀格——严格变体此前
+// 只解析前两段，"1.14.0-rc1" 这类第三段带后缀的畸形串能白过 ACME
+// （1.14）/AnyTLS（1.12）/Snell（1.14）/出站 IP 策略（1.12）/Naive
+// 拨号（1.13）全部两段硬门，与同族「在席段后缀一律拒」不一致。本
+// 用例逐门钉死拒绝，并以纯数字第三段形态作防过修对照；链路能力标
+// 志与换版扫描同经严格变体、一并钉死。
+func TestHardGatesRejectThirdSegmentSuffixOnTwoSegmentFloors(t *testing.T) {
+	acme := &kernel.Inbound{Protocol: kernel.ProtocolVLESS}
+	acme.Security.CertMode = kernel.CertModeACME
+	anytls := &kernel.Inbound{Protocol: kernel.ProtocolAnyTLS}
+	snell := &kernel.Inbound{Protocol: kernel.ProtocolSnell}
+
+	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0-rc1", acme); msg == "" {
+		t.Error("ACME 门：sing-box \"1.14.0-rc1\" 第三段带后缀必须拒绝，却放行")
+	}
+	if msg := kernelVersionGate(kernel.TypeSingbox, "1.12.0-rc1", anytls); msg == "" {
+		t.Error("AnyTLS 门：sing-box \"1.12.0-rc1\" 第三段带后缀必须拒绝，却放行")
+	}
+	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0-rc1", snell); msg == "" {
+		t.Error("Snell 门：sing-box \"1.14.0-rc1\" 第三段带后缀必须拒绝，却放行")
+	}
+	if err := validateOutboundIPVersion(kernel.TypeSingbox, "1.12.0-rc1", kernel.OutboundIPv4Only); err == nil {
+		t.Error("出站 IP 策略门：sing-box \"1.12.0-rc1\" 第三段带后缀必须拒绝，却放行")
+	}
+	naive := &kernel.Endpoint{Inbound: kernel.Inbound{Protocol: kernel.ProtocolNaive}}
+	if msg := naiveDialGate(kernel.TypeSingbox, "1.13.0-rc1", naive); msg == "" {
+		t.Error("Naive 拨号门：sing-box \"1.13.0-rc1\" 第三段带后缀必须拒绝，却放行")
+	}
+	// 防过修：纯数字第三段在各门维持原判。
+	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0", acme); msg != "" {
+		t.Errorf("ACME 门：sing-box \"1.14.0\" 须放行，got %q", msg)
+	}
+	if msg := kernelVersionGate(kernel.TypeSingbox, "1.12.0", anytls); msg != "" {
+		t.Errorf("AnyTLS 门：sing-box \"1.12.0\" 须放行，got %q", msg)
+	}
+	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0", snell); msg != "" {
+		t.Errorf("Snell 门：sing-box \"1.14.0\" 须放行，got %q", msg)
+	}
+	if err := validateOutboundIPVersion(kernel.TypeSingbox, "1.12.0", kernel.OutboundIPv4Only); err != nil {
+		t.Errorf("出站 IP 策略门：sing-box \"1.12.0\" 须放行，got %v", err)
+	}
+	if msg := naiveDialGate(kernel.TypeSingbox, "1.13.0", naive); msg != "" {
+		t.Errorf("Naive 拨号门：sing-box \"1.13.0\" 须放行，got %q", msg)
+	}
+
+	// 链路能力标志面（kernel_chain.go 的 SingboxSnell 标志同走严格
+	// 变体）：经 Snell 目标的链在 "1.14.0-rc1" 必须 fail-closed。
+	r, err := repo.Open(t.TempDir() + "/gatesuffix.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+	snellNode := seedRelayTargetNode(t, r, "snell-node", "203.0.113.30")
+	snellKernel := seedChainKernel(t, r, snellNode, kernel.TypeSnell)
+	target := seedChainInbound(t, r, snellKernel, "snell-target", kernel.Inbound{
+		Protocol: kernel.ProtocolSnell, Port: 10001,
+		Settings: kernel.Settings{Password: "password123", SnellVersion: 5},
+	}, 0)
+	entryNode := seedRelayTargetNode(t, r, "entry-node", "198.51.100.9")
+	box := seedChainKernel(t, r, entryNode, kernel.TypeSingbox)
+	entry := seedChainInbound(t, r, box, "entry", kernel.Inbound{
+		Protocol: kernel.ProtocolShadowsocks, Port: 8388,
+	}, target.ID)
+	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.14.0-rc1"); err == nil || !strings.Contains(err.Error(), "1.14") {
+		t.Fatalf("链路校验：\"1.14.0-rc1\" 必须 fail-closed，got %v", err)
+	}
+	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.14.0"); err != nil {
+		t.Fatalf("链路校验：\"1.14.0\" 须放行，got %v", err)
+	}
+
+	// 换版扫描面：内核上挂 AnyTLS 入站时以 "1.12.0-rc1" 换版必须被
+	// checkKernelVersionGates 拦下（经 kernelVersionGate 同口径）。
+	scanNode := seedRelayTargetNode(t, r, "scan-node", "192.0.2.9")
+	scanBox := seedChainKernel(t, r, scanNode, kernel.TypeSingbox)
+	seedChainInbound(t, r, scanBox, "scan-anytls", kernel.Inbound{
+		Protocol: kernel.ProtocolAnyTLS, Port: 8443,
+		Settings: kernel.Settings{Password: "password123"},
+	}, 0)
+	if err := h.checkKernelVersionGates(scanBox.ID, kernel.TypeSingbox, "1.12.0-rc1"); err == nil || !strings.Contains(err.Error(), "1.12") {
+		t.Fatalf("换版扫描：\"1.12.0-rc1\" 必须拒绝，got %v", err)
+	}
+	if err := h.checkKernelVersionGates(scanBox.ID, kernel.TypeSingbox, "1.12.0"); err != nil {
+		t.Fatalf("换版扫描：\"1.12.0\" 须放行，got %v", err)
+	}
+}
+
 // R2-016 同族复扫格：validateChainVersion 的 CheckChainWith 能力标志
 // （SingboxSnell/SingboxNaive）同样决定保存接受/拒绝，复扫时一并改走
 // 严格变体；空版本豁免（validateChain 的既有契约）必须原样保留。

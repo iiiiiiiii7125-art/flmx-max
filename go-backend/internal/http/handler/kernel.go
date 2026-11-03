@@ -2143,7 +2143,9 @@ func versionFloorExempt(version string) bool {
 // 畸形的具体版本串（"25.9" 缺修订段、"25.5.16-rc1" 段内带后缀——两者
 // 都能通过 normalizeKernelVersion 的字符集校验、真实可达）会因此白过
 // 能力下限。严格变体要求版本完整解析（所需段数齐全且全为数字）才进
-// 入数值比较，解析失败/缺段一律视为低于下限（fail-closed）；豁免集
+// 入数值比较，解析失败/缺段一律视为低于下限（fail-closed）；两段变
+// 体对在席的第三段（语义段）同样校验纯数字，第四段起按发行后缀忽
+// 略（R4-06）；豁免集
 // 见 versionFloorExempt。消费点全集已逐个分类：各接受-拒绝门、换版
 // 扫描、链路校验与渲染能力标志均走严格变体；宽松版仅余两处有意保
 // 留——xrayPrivateBlockWarning（纯警告面，R8-005 既定口径）与
@@ -2153,7 +2155,7 @@ func versionBelowStrict(version string, major, minor int) bool {
 	if versionFloorExempt(version) {
 		return false
 	}
-	parts := strings.SplitN(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".", 3)
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
 	if len(parts) < 2 {
 		return true
 	}
@@ -2161,6 +2163,15 @@ func versionBelowStrict(version string, major, minor int) bool {
 	mi, err2 := strconv.Atoi(parts[1])
 	if err1 != nil || err2 != nil {
 		return true
+	}
+	// 第三段是语义段（修订号）而非发行后缀：在席即须同为纯数字，
+	// 否则 "1.14.0-rc1" 会被当作 1.14 达标白过两段下限（R4-06，
+	// D-F5-01）。第四段起按家族契约忽略（与 versionBelow3Strict /
+	// versionBelowPaddedStrict 的「四段按前三段」一致）。
+	if len(parts) >= 3 {
+		if _, err := strconv.Atoi(parts[2]); err != nil {
+			return true
+		}
 	}
 	return ma < major || (ma == major && mi < minor)
 }
